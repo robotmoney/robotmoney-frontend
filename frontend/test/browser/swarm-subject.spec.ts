@@ -783,7 +783,7 @@ test("the latest recommendation carries its session's reading and vote, and its 
 
   // SIGNAL, on the session page: dots on one percentile axis.
   const signal = page.locator(".rr-context");
-  await expect(signal.locator(".sig__l")).toHaveText(["Composite", "Macro", "On-chain", "Factor"]);
+  await expect(signal.locator(".sig__l")).toHaveText(["Composite", "Macro", "On-chain", "Equity factor"]);
   await expect(signal.locator(".sig__v")).toHaveText(["83rd", "90th", "56th", "68th"]);
   await expect(signal.locator(".sig__row").first().locator(".sig__dot")).toHaveAttribute("style", /left:\s*83\.2%/);
   // On the published method factor is context, not an input, and is drawn so.
@@ -837,7 +837,7 @@ test("on a v0 archive reading, factor is drawn as the input it was", async ({ pa
   // Its composite averaged macro, on-chain AND factor, so saying "factor is
   // context" here would be wrong.
   const signal = page.locator(".rr-context");
-  await expect(signal.locator(".sig__l")).toHaveText(["Composite", "Macro", "On-chain", "Factor"]);
+  await expect(signal.locator(".sig__l")).toHaveText(["Composite", "Macro", "On-chain", "Equity factor"]);
   await expect(signal.locator(".sig__row").nth(3)).not.toHaveClass(/is-context/);
   await expect(signal.locator(".rr-note")).not.toContainText("factor not in composite");
 

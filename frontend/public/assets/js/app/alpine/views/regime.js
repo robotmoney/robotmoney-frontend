@@ -7,7 +7,7 @@ import { enhanceHeadings } from "../../lib/heading-anchors.js";
 import { fmtUsdCompact } from "../lib/dash-format.js";
 import { sessionBrief } from "../../lib/session-brief.js";
 import { PALETTE, SERIES, REGIME } from "../../lib/chart-theme.js";
-import { denseDays, sampleDays, yScale, lineChartSvg, bandRuns, dateTicks, nearestSample, logTicks } from "../../lib/line-chart.js";
+import { denseDays, sampleDays, yScale, lineChartSvg, bandRuns, dateTicks, nearestSample, logTicks, dragWindow } from "../../lib/line-chart.js";
 import {
   alignToDates,
   STRATEGY_STYLE,
@@ -53,6 +53,9 @@ const HISTORY_SERIES = [["composite", "Composite"], ["macro", "Macro"], ["onchai
 // for the history chart, one per market for the backtests. Held in component
 // data they would be read back through Alpine's proxies on every render.
 const HIST_MEMO = { key: null, m: null };
+const DAYS_MEMO = { key: null, days: [] };
+// The narrowest window the navigator allows, in days.
+const MIN_WINDOW = 14;
 const BT_MEMO = new Map();
 
 // Arrow keys step the crosshair through the drawn readings; Home and End jump
@@ -122,6 +125,11 @@ export function registerRegimeView(Alpine) {
     btMarket: "eth",
     // The backtest chart's range; the whole backtest to start.
     btRange: "all",
+    // A window dragged on a chart's navigator, as day indices over the whole
+    // history ({ from, to }), or null while a range chip sets it.
+    histWin: null,
+    btWin: null,
+    _drag: null,
     // Crosshair positions (an index into the drawn readings) and the line a
     // legend hover focuses, per chart.
     histAt: null,
@@ -294,6 +302,15 @@ export function registerRegimeView(Alpine) {
     // never as type or a filled area, so the regime card's label stays in the
     // text colour beside its dot.
     regimeColor(r) { return REGIME[String(r || "").replace(/-/g, "_")] || REGIME.neutral; },
+    // The provenance line in words. The transform is what the percentile ranks
+    // (the raw level, or its change); the sign is which way is risk-on.
+    transformLabel(t) {
+      return ({ level: "Level", change30: "30-day change", change90: "90-day change", trend_50_200: "50d/200d trend" })[t] || String(t || "").replace(/_/g, " ");
+    },
+    signLabel(s) { return s == null ? "" : s >= 0 ? "Higher reads risk-on" : "Higher reads risk-off"; },
+    // A reading's lean as a round dot: green at or above its median, beacon
+    // below. The same dot ends its sparkline.
+    leanDot(v) { return `background:${this.signedColor(v)}`; },
     fmtSign(s) { return s == null ? "—" : (s >= 0 ? "+" : "") + s; },
     sourceLabel(s) { return SOURCE_LABEL[s] || s || "—"; },
     // Row-level provenance badge label (issue #397): which AnalyticsDataSource
@@ -397,14 +414,19 @@ export function registerRegimeView(Alpine) {
       const yAt = (v) => pad + (1 - v) * (H - 2 * pad);
       let last = null;
       for (let k = vals.length - 1; k >= 0; k--) { if (typeof vals[k] === "number" && isFinite(vals[k])) { last = vals[k]; break; } }
-      const stroke = this.signedColor(last);
+      // The line in a neutral stroke: it is the reading over two years, up is
+      // risk-on. The dot at its end takes the lean of the latest reading (the
+      // same dot as the percentile beside it), so a line can climb and still
+      // end on the risk-off side of its median.
+      const stroke = "rgba(242,244,249,0.5)";
+      const dot = this.signedColor(last);
       const pts = []; let lastX = pad, lastY = yAt(0.5);
       vals.forEach((v, i) => { if (typeof v === "number" && isFinite(v)) { const px = xAt(i), py = yAt(v); pts.push(px.toFixed(1) + "," + py.toFixed(1)); lastX = px; lastY = py; } });
       const mid = yAt(0.5).toFixed(1);
       return '<svg class="rv__spark-svg" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" aria-hidden="true">'
         + '<line x1="' + pad + '" y1="' + mid + '" x2="' + (W - pad) + '" y2="' + mid + '" stroke="' + PALETTE.border + '" stroke-width="0.5" stroke-dasharray="2 2"/>'
         + '<polyline points="' + pts.join(" ") + '" fill="none" stroke="' + stroke + '" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round"/>'
-        + '<circle cx="' + lastX.toFixed(1) + '" cy="' + lastY.toFixed(1) + '" r="1.5" fill="' + stroke + '"/>'
+        + '<circle cx="' + lastX.toFixed(1) + '" cy="' + lastY.toFixed(1) + '" r="2.25" fill="' + dot + '"/>'
         + '</svg>';
     },
 
@@ -564,7 +586,25 @@ export function registerRegimeView(Alpine) {
       return HISTORY_SERIES.filter(([k]) => k !== "factor" || hasFactor).map(([key, label]) => ({ key, label, color: STRATEGY_STYLE[key].color }));
     },
     toggleSeries(key) { this.series[key] = !this.series[key]; },
-    setRange(id) { this.range = id; this.histAt = null; },
+    setRange(id) { this.range = id; this.histWin = null; this.histAt = null; },
+    // Every calendar day of the history, once per history.
+    _allDays() {
+      const h = this.history;
+      const key = `${h.length}|${h[0]?.date}|${h[h.length - 1]?.date}`;
+      if (DAYS_MEMO.key !== key) { DAYS_MEMO.key = key; DAYS_MEMO.days = denseDays(h.map((r) => r.date)); }
+      return DAYS_MEMO.days;
+    },
+    // A chart's window over the whole history, [from, to] as day indices:
+    // the dragged one, else the chip's.
+    _win(which) {
+      const all = this._allDays();
+      const w = this[which + "Win"];
+      if (w) return [w.from, w.to];
+      const start = this._rangeStartFor(which === "hist" ? this.range : this.btRange, all[all.length - 1]);
+      const from = start ? Math.max(0, all.findIndex((d) => d >= start)) : 0;
+      return [from, Math.max(0, all.length - 1)];
+    },
+    chipOn(which, id) { return !this[which + "Win"] && (which === "hist" ? this.range : this.btRange) === id; },
     // The first day the range shows, or null for the whole history.
     _rangeStart(last) { return this._rangeStartFor(this.range, last); },
     _rangeStartFor(id, last) {
@@ -577,11 +617,11 @@ export function registerRegimeView(Alpine) {
     // (lines, bands, ticks, crosshair) in the same render.
     _hist() {
       const h = this.history;
-      const key = `${h.length}|${h[0]?.date}|${h[h.length - 1]?.date}|${this.range}`;
+      const [from, to] = this._win("hist");
+      const key = `${h.length}|${h[0]?.date}|${h[h.length - 1]?.date}|${from}|${to}`;
       if (HIST_MEMO.key === key) return HIST_MEMO.m;
-      const all = denseDays(h.map((r) => r.date));
-      const start = this._rangeStart(all[all.length - 1]);
-      const days = start ? all.filter((d) => d >= start) : all;
+      const all = this._allDays();
+      const days = all.slice(from, to + 1);
       const byDate = new Map(h.map((r) => [r.date, r]));
       const idx = sampleDays(days.length, WEEKLY_AFTER_DAYS);
       const read = { composite: (r) => r.composite, macro: (r) => this._idx(r, "macro"), onchain: (r) => this._idx(r, "onchain"), factor: (r) => this._idx(r, "factor") };
@@ -668,7 +708,76 @@ export function registerRegimeView(Alpine) {
     },
     marketLabel(bt) { return bt.title.replace(/^Backtest · /, "").replace(/SP500/g, "S&P 500"); },
     setMarket(key) { this.btMarket = key; this.btAt = null; this.btFocus = null; },
-    setBtRange(id) { this.btRange = id; this.btAt = null; },
+    setBtRange(id) { this.btRange = id; this.btWin = null; this.btAt = null; },
+
+    // ── the range navigator: the whole history in miniature, with the window
+    // on show; drag either end, or the window itself, as on a price chart.
+    navModel(which) {
+      const all = this._allDays();
+      const n = all.length;
+      const [from, to] = this._win(which);
+      const pct = (i) => (i / Math.max(1, n - 1)) * 100;
+      return { n, from, to, left: pct(from), width: pct(to) - pct(from), fromLabel: this.dateLong(all[from]), toLabel: this.dateLong(all[to]), ticks: dateTicks(all).filter((t) => !t.cls) };
+    },
+    navSvg(which) {
+      const all = this._allDays();
+      if (all.length < 2) return "";
+      const idx = sampleDays(all.length, 60);
+      if (which === "hist") {
+        const byDate = new Map(this.history.map((r) => [r.date, r]));
+        return lineChartSvg({ n: all.length, y: (v) => v, series: [{ token: "nav", color: "rgba(242,244,249,0.45)", width: 1, points: idx.map((i) => { const v = byDate.get(all[i])?.composite; return { i, v: v == null ? null : +v }; }) }] });
+      }
+      const curve = this.latest?.backtest?.[this.btMarket]?.composite?.equity_curve || [];
+      const pos = new Map(all.map((d, i) => [d, i]));
+      const pts = curve.filter((p) => pos.has(p.date)).map((p) => ({ i: pos.get(p.date), v: +p.value }));
+      const vals = pts.map((p) => p.v).filter((v) => v > 0);
+      if (!vals.length) return "";
+      const f = yScale({ min: Math.min(...vals) * 0.95, max: Math.max(...vals) * 1.05, log: true });
+      return lineChartSvg({ n: all.length, y: f, series: [{ token: "nav", color: "rgba(242,244,249,0.45)", width: 1, points: pts }] });
+    },
+    _navAt(ev, el) {
+      const n = this._allDays().length;
+      const r = el.getBoundingClientRect();
+      return ((ev.clientX - r.left) / Math.max(1, r.width)) * Math.max(1, n - 1);
+    },
+    navStart(which, ev) {
+      const el = ev.currentTarget;
+      const n = this._allDays().length;
+      if (n < MIN_WINDOW + 1) return;
+      const at = this._navAt(ev, el);
+      let [from, to] = this._win(which);
+      let grab = ev.target?.closest?.("[data-grab]")?.getAttribute("data-grab") || "";
+      if (!grab) {
+        // Outside the window: it moves there, centred on the pointer.
+        const width = to - from;
+        const start = Math.max(0, Math.min(n - 1 - width, Math.round(at - width / 2)));
+        from = start; to = start + width;
+        this[which + "Win"] = { from, to };
+        grab = "pan";
+      }
+      this._drag = { which, grab, offset: at - from };
+      el.setPointerCapture?.(ev.pointerId);
+      ev.preventDefault();
+    },
+    navMove(which, ev) {
+      const d = this._drag;
+      if (!d || d.which !== which) return;
+      const [from, to] = this._win(which);
+      const [f, t] = dragWindow(d.grab, this._navAt(ev, ev.currentTarget), { from, to, offset: d.offset, n: this._allDays().length, min: MIN_WINDOW });
+      if (f !== from || t !== to) { this[which + "Win"] = { from: f, to: t }; this[which + "At"] = null; }
+    },
+    navEnd() { this._drag = null; },
+    // Arrow keys move an end by a day, with Shift by a month.
+    navKey(which, grab, ev) {
+      const step = ev.shiftKey ? 30 : 1;
+      const dir = ev.key === "ArrowRight" ? 1 : ev.key === "ArrowLeft" ? -1 : 0;
+      if (!dir) return;
+      ev.preventDefault();
+      const [from, to] = this._win(which);
+      const at = (grab === "from" ? from : to) + dir * step;
+      const [f, t] = dragWindow(grab, at, { from, to, offset: 0, n: this._allDays().length, min: MIN_WINDOW });
+      this[which + "Win"] = { from: f, to: t };
+    },
     // One market's curves over the chosen range. The engine keeps one point a
     // month (the month-end value), so each line is drawn through those points,
     // on the same calendar-day axis as the history. Short of the whole
@@ -677,11 +786,11 @@ export function registerRegimeView(Alpine) {
     // backtest.
     _bt(key) {
       const h = this.history;
-      const cacheKey = `${key}|${h.length}|${h[h.length - 1]?.date}|${!!this.latest?.backtest}|${this.btRange}`;
+      const [from, to] = this._win("bt");
+      const cacheKey = `${key}|${h.length}|${h[h.length - 1]?.date}|${!!this.latest?.backtest}|${from}|${to}`;
       if (BT_MEMO.has(cacheKey)) return BT_MEMO.get(cacheKey);
-      const all = denseDays(h.map((r) => r.date));
-      const start = this._rangeStartFor(this.btRange, all[all.length - 1]);
-      const days = start ? all.filter((d) => d >= start) : all;
+      const all = this._allDays();
+      const days = all.slice(from, to + 1);
       const pos = new Map(days.map((d, i) => [d, i]));
       const byDate = new Map(h.map((r) => [r.date, r]));
       const strategies = this.latest?.backtest?.[key] || {};
@@ -689,7 +798,7 @@ export function registerRegimeView(Alpine) {
       const idxSet = new Set();
       for (const sk of keys) for (const pt of strategies[sk].equity_curve) if (pos.has(pt.date)) idxSet.add(pos.get(pt.date));
       const idx = [...idxSet].sort((a, b) => a - b);
-      const rebased = this.btRange !== "all";
+      const rebased = from > 0;
       const lines = keys.map((sk) => {
         const at = new Map(strategies[sk].equity_curve.map((pt) => [pt.date, pt.value]));
         let vals = idx.map((i) => { const v = at.get(days[i]); return v == null ? null : +v; });
@@ -702,12 +811,36 @@ export function registerRegimeView(Alpine) {
       const min = lo * 0.92, max = hi * 1.08;
       const regimes = days.map((d) => byDate.get(d)?.regime ?? null);
       const m = { days, n: days.length, idx, lines, min, max, rebased, from: idx.length ? days[idx[0]] : null, runs: bandRuns(regimes), ticks: dateTicks(days) };
+      if (BT_MEMO.size > 24) BT_MEMO.clear();
       BT_MEMO.set(cacheKey, m);
       return m;
     },
-    btMeta(key) {
+    // What the chart shows, in a sentence: the value of $1 over time, from
+    // the backtest's start or, over a shorter range, from that range's first
+    // month-end.
+    btIntro(key) {
       const m = this._bt(key);
-      return m.rebased && m.from ? `Month-end values, rebased to $1 on ${this.dateLong(m.from)}` : "Month-end values";
+      const from = m.from ? this.dateLong(m.from) : "the start";
+      return `What $1 put into each strategy on ${from} was worth at each month-end after. Log scale: an equal step up or down is the same percentage move.`;
+    },
+    money(v) {
+      if (v == null || !isFinite(v)) return "—";
+      const n = +v;
+      return "$" + (Number.isInteger(n) ? String(n) : n.toFixed(2));
+    },
+    // Signed returns read as deltas: green up, --color-warn down.
+    deltaColor(v) { return v == null || Math.abs(v) < 0.0005 ? PALETTE.textMuted : v > 0 ? SERIES.emerald : PALETTE.warn; },
+    // The table's columns, each with what it means.
+    btColumns() {
+      return [
+        { key: "final", label: "$1 became", tip: "What $1 put in at the start was worth at the end, after trading costs." },
+        { key: "cagr", label: "CAGR", tip: "Compound annual growth rate: the steady yearly return that ends at the same place." },
+        { key: "in", label: "In-sample", tip: "CAGR from May 2018 to January 2024, the years the indicators and their parameters were chosen on." },
+        { key: "out", label: "Out-of-sample", tip: "CAGR from February 2024 on, which the method never saw while it was being built." },
+        { key: "sharpe", label: "Sharpe", tip: "Return per unit of volatility, a year at a time. Higher means more return for the same ups and downs." },
+        { key: "dd", label: "Max DD", tip: "Maximum drawdown: the largest fall from a peak to the low after it." , end: true },
+        { key: "trades", label: "Trades", tip: "How many times the strategy changed what it holds. The baselines never trade.", end: true },
+      ];
     },
     btSvg(key) {
       if (this.btMarket !== key || this.btEmptyTitle(key)) return "";
@@ -724,7 +857,7 @@ export function registerRegimeView(Alpine) {
       if (this.btMarket !== key || this.btEmptyTitle(key)) return [];
       const m = this._bt(key);
       const f = yScale({ min: m.min, max: m.max, log: true });
-      return logTicks(m.min, m.max).map((v) => ({ key: v, top: (1 - f(v)) * 100, label: (v < 10 ? (Number(v.toFixed(1)) === v ? v.toFixed(1) : v.toFixed(2)) : v.toFixed(0)) + "×" }));
+      return logTicks(m.min, m.max).map((v) => ({ key: v, top: (1 - f(v)) * 100, label: this.money(v) }));
     },
     btXTicks(key) { return this.btMarket === key && !this.btEmptyTitle(key) ? this._bt(key).ticks : []; },
     btLegend(key) {
@@ -732,7 +865,7 @@ export function registerRegimeView(Alpine) {
       return m.lines.map((l) => {
         let last = null;
         for (let k = l.values.length - 1; k >= 0; k--) if (l.values[k] != null) { last = l.values[k]; break; }
-        return { key: l.token, id: key + ":" + l.token, label: l.label, color: l.color, dash: l.dash, on: !this.btHidden[key + ":" + l.token], value: last == null ? "—" : last.toFixed(2) + "×" };
+        return { key: l.token, id: key + ":" + l.token, label: l.label, color: l.color, dash: l.dash, on: !this.btHidden[key + ":" + l.token], value: this.money(last) };
       });
     },
     toggleBt(id) { this.btHidden[id] = !this.btHidden[id]; },
@@ -745,7 +878,7 @@ export function registerRegimeView(Alpine) {
       const i = m.idx[k];
       if (i == null) return null;
       const r = this.history.find((h) => h.date === m.days[i]);
-      const items = m.lines.filter((l) => !this.btHidden[key + ":" + l.token]).map((l) => ({ token: l.token, label: l.label, color: l.color, value: l.values[k] == null ? "—" : l.values[k].toFixed(2) + "×" }));
+      const items = m.lines.filter((l) => !this.btHidden[key + ":" + l.token]).map((l) => ({ token: l.token, label: l.label, color: l.color, value: this.money(l.values[k]) }));
       return { left: (i / Math.max(1, m.n - 1)) * 100, date: this.dateLong(m.days[i]), regime: r?.regime ? this.regimeLabel(r.regime) : "", regimeColor: this.regimeColor(r?.regime), items };
     },
     btLabel(key) {

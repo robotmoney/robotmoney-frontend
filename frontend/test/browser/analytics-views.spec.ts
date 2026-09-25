@@ -336,7 +336,8 @@ test("regime history chart: toggles redraw it, ranges set its span, weekly past 
   expect(s.days).toBe(366);
   expect(s.composite).toBe(366);
   expect(s.bands).toBeGreaterThan(0);
-  await expect(page.locator("#history-sec .rv__chart-meta")).toHaveText("Daily");
+  // The axis says the span by its form: months across a year.
+  await expect(page.locator("#history-sec .rr-area__x span").first()).toHaveText(/^[A-Z][a-z]{2}( '\d\d)?$/);
 
   await page.getByRole("button", { name: "Regime bands" }).click();
   expect((await state()).bands).toBe(0);
@@ -355,7 +356,18 @@ test("regime history chart: toggles redraw it, ranges set its span, weekly past 
   s = await state();
   expect(s.days).toBe(1097);
   expect(s.composite).toBe(157);
-  await expect(page.locator("#history-sec .rv__chart-meta")).toHaveText("One reading a week");
+  await expect(page.locator("#history-sec .rr-area__x span").first()).toHaveText(/^(Jan '\d\d|[A-Z][a-z]{2})$/);
+
+  // The navigator's handles move the window: a week off the start from the
+  // keyboard, and the chips let go of it.
+  const from = page.locator("#history-sec .rv__nav-h.is-from");
+  await from.focus();
+  await page.keyboard.press("Shift+ArrowRight");
+  s = await state();
+  expect(s.days).toBe(1097 - 30);
+  await expect(page.locator("#history-sec .rm-chip[aria-pressed=true]")).toHaveCount(0);
+  await page.locator("#history-sec .rm-chip", { hasText: /^1Y$/ }).click();
+  expect((await state()).days).toBe(366);
 
   // The crosshair reads the day under the pointer.
   const plot = page.locator("#history-sec .rr-area__plot");

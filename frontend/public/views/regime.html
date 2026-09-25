@@ -85,9 +85,12 @@
           </div>
           <div class="rr-split rr-split--rule rv__today">
             <div>
-              <p class="rv__today-k">Top-line regime<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the top-line regime">i</button><span class="rm-tip__bub" role="tooltip" x-text="regimeTip()"></span></span></p>
+              <p class="rv__today-k">Top-line regime</p>
               <p class="rr-stat__v rv__today-v"><i class="rv__regime-dot" :style="`background:${regimeColor(latest.regime)}`" aria-hidden="true"></i><span x-text="regimeLabel(latest.regime)"></span></p>
               <p class="rr-stat__sub">Composite <b x-text="latest.composite == null ? '—' : latest.composite.toFixed(2)"></b> · <span x-text="ordinalPct(latest.compositePercentile)"></span> percentile over 3 years</p>
+              <!-- How the reading is made, in the open: the thresholds from the
+                   snapshot (bucketPct), the smoothing from the method. -->
+              <p class="rv__today-copy">The composite averages the macro and on-chain panels, then ranks the result against its own last three years. Below the <span x-text="ordinalPct(bucketPct('risk_off') / 100)"></span> percentile it reads risk-off, above the <span x-text="ordinalPct(bucketPct('risk_on') / 100)"></span> risk-on, and neutral in between. The label changes after five trading days in a new band, or at once on a one-day move beyond 2σ.</p>
             </div>
             <!-- The session page's Market context component: each reading on
                  its own three-year percentile track, the cuts where the reading
@@ -139,7 +142,7 @@
             <h2 class="rr-sec__h" id="history">History</h2>
             <div class="rm-chips" role="group" aria-label="Time range">
               <template x-for="r in ranges" :key="r.id">
-                <button type="button" class="rm-chip" :aria-pressed="range === r.id ? 'true' : 'false'" @click="setRange(r.id)" x-text="r.label"></button>
+                <button type="button" class="rm-chip" :aria-pressed="chipOn('hist', r.id) ? 'true' : 'false'" @click="setRange(r.id)" x-text="r.label"></button>
               </template>
             </div>
           </div>
@@ -148,12 +151,6 @@
           </template>
           <template x-if="!historyEmpty()">
             <figure class="rr-area rv__fig" :data-days="historyDays()">
-              <figcaption class="rr-area__head">
-                <div class="rv__fig-t">
-                  <h3 class="rr-subhead__h rr-subhead__h--minor">Composite and panel indices, 0 to 1</h3>
-                  <span class="rr-sec__aside rv__chart-meta" x-text="historyWeekly() ? 'One reading a week' : 'Daily'"></span>
-                </div>
-              </figcaption>
               <div class="rr-area__frame">
                 <div class="rr-area__y" aria-hidden="true">
                   <template x-for="t in historyYTicks()" :key="t.key"><span :style="`top:${t.top}%`" x-text="t.label"></span></template>
@@ -182,6 +179,24 @@
                   <template x-for="t in historyXTicks()" :key="t.key"><span :class="t.cls" :style="`left:${t.left}%`" x-text="t.label"></span></template>
                 </div>
               </div>
+              <!-- The range navigator: the whole history in miniature under the
+                   chart, the window on show between two handles. Drag an end
+                   or the window; the chips above set it too. The axis labels
+                   say the span by their form. -->
+              <div class="rv__nav" @pointerdown="navStart('hist', $event)" @pointermove="navMove('hist', $event)" @pointerup="navEnd()" @pointercancel="navEnd()">
+                <div class="rv__nav-plot">
+                  <div class="rr-area__svg" x-html="navSvg('hist')"></div>
+                  <i class="rv__nav-shade" :style="`left:0;width:${navModel('hist').left}%`"></i>
+                  <i class="rv__nav-shade" :style="`left:${navModel('hist').left + navModel('hist').width}%;right:0`"></i>
+                  <div class="rv__nav-win" data-grab="pan" :style="`left:${navModel('hist').left}%;width:${navModel('hist').width}%`">
+                    <button type="button" class="rv__nav-h is-from" data-grab="from" :aria-label="`Start of the range: ${navModel('hist').fromLabel}`" @keydown="navKey('hist', 'from', $event)"></button>
+                    <button type="button" class="rv__nav-h is-to" data-grab="to" :aria-label="`End of the range: ${navModel('hist').toLabel}`" @keydown="navKey('hist', 'to', $event)"></button>
+                  </div>
+                </div>
+                <div class="rv__nav-x" aria-hidden="true">
+                  <template x-for="t in navModel('hist').ticks" :key="t.key"><span :style="`left:${t.left}%`" x-text="t.label"></span></template>
+                </div>
+              </div>
               <ul class="rr-area__legend rv__legend-list">
                 <template x-for="l in historyLegend()" :key="l.key">
                   <li :class="{ 'is-muted': histFocus && histFocus !== l.key, 'is-off': !l.on }" @pointerenter="histFocus = l.on ? l.key : null" @pointerleave="histFocus = null">
@@ -193,7 +208,7 @@
                   </li>
                 </template>
                 <li class="rv__lg-bands" :class="{ 'is-off': !visible.bands }">
-                  <button type="button" class="rv__lg" :aria-pressed="visible.bands ? 'true' : 'false'" @click="toggle('bands')">Regime bands</button>
+                  <button type="button" class="rv__tgl" :aria-pressed="visible.bands ? 'true' : 'false'" @click="toggle('bands')"><i class="rv__tgl-box" aria-hidden="true"></i>Regime bands</button>
                   <span class="rv__lg-key">
                     <template x-for="r in bgLegend()" :key="r.label">
                       <span class="rv__legend-item"><span class="rv__legend-swatch" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>
@@ -222,7 +237,8 @@
             </div>
           </div>
           <template x-for="p in panelsList()" :key="p">
-            <div class="rv__panel" :id="`panel-${p}`" role="tabpanel" :aria-labelledby="`tab-${p}`" x-show="panelTab === p">
+            <div class="rv__panel" :id="`panel-${p}`" role="tabpanel" :aria-labelledby="`tab-${p}`" x-show="panelTab === p"
+                 x-transition:enter="rv-fade" x-transition:enter-start="rv-fade--from" x-transition:enter-end="rv-fade--to">
               <div class="rr-subhead">
                 <h3 class="rr-subhead__h" :id="slug(panelLabel(p) + ' panel')"><span x-text="panelLabel(p) + ' panel'"></span></h3>
               </div>
@@ -233,7 +249,7 @@
                     <!-- The Risk-on and Weight headers carry the .rm-tip explainer
                          for what a one-word header cannot hold. The sparkline
                          plots the SAME series as the Risk-on column. -->
-                    <tr><th scope="col">Indicator</th><th scope="col">2 years</th><th scope="col" class="rv__num">Last</th><th scope="col" class="rv__num"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text" type="button">Risk-on</button><span class="rm-tip__bub" role="tooltip">Where this indicator sits in its own trailing 3-year range, <b>0</b> to <b>100</b>. Ranks are flipped where needed, so high means risk-on in every row. The 2 years column plots the same number, monthly.</span></span></th><th scope="col" class="rv__num"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text" type="button">Weight</button><span class="rm-tip__bub" role="tooltip">Share of the panel index this indicator carries. The more a reading echoes the rest of the panel, the less it counts. Each panel sums to 100%.</span></span></th></tr>
+                    <tr><th scope="col">Indicator</th><th scope="col"><span class="rm-tip rm-tip--label"><button class="rm-tip__btn rm-tip__btn--text" type="button">2 years</button><span class="rm-tip__bub" role="tooltip">The percentile month by month for two years, up is risk-on. The dashed line is the 50th; the dot is today's reading.</span></span></th><th scope="col" class="rv__num">Last</th><th scope="col" class="rv__num"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text" type="button">Percentile</button><span class="rm-tip__bub" role="tooltip">Where today's reading sits in its own last 3 years. Ranks are flipped where needed, so a higher percentile leans risk-on in every row, and the dot is green from the 50th up. An indicator has no regime of its own: only the composite reads risk-on, neutral or risk-off. The 2 years line plots the same percentile, monthly.</span></span></th><th scope="col" class="rv__num"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text" type="button">Weight</button><span class="rm-tip__bub" role="tooltip">Share of the panel index this indicator carries. The more a reading echoes the rest of the panel, the less it counts. Each panel sums to 100%.</span></span></th></tr>
                   </thead>
                   <tbody>
                     <template x-for="ind in indicatorsIn(p)" :key="ind.id">
@@ -248,14 +264,14 @@
                           <small class="rv__ind-src">
                             <template x-if="ind.source_url"><a :href="ind.source_url" target="_blank" rel="noopener" x-text="sourceLabel(ind.source)"></a></template>
                             <template x-if="!ind.source_url"><span x-text="sourceLabel(ind.source)"></span></template>
-                            · <span x-text="ind.transform"></span> · sign <span x-text="fmtSign(ind.sign)"></span>
+                            · <span x-text="transformLabel(ind.transform)"></span> · <span class="rv__sign" :class="ind.sign >= 0 ? 'is-on' : 'is-off'" x-text="signLabel(ind.sign)"></span>
                           </small>
                         </th>
                         <td class="rv__spark" x-html="sparklineSvg(ind.sparkline)"></td>
                         <td class="rv__num" x-text="fmtLast(ind)"></td>
-                        <!-- The figure in the text colour; its lean is the
-                             sparkline's stroke beside it (signedColor). -->
-                        <td class="rv__num" x-text="fmtSigned(ind.signed_percentile)"></td>
+                        <!-- The percentile as the Market context prints it, its
+                             lean as a round dot (the dot that ends the line). -->
+                        <td class="rv__num"><span class="rv__lean"><i :style="leanDot(ind.signed_percentile)" aria-hidden="true"></i><span x-text="ind.signed_percentile == null ? '—' : ordinalPct(ind.signed_percentile)"></span></span></td>
                         <td class="rv__num rv__muted" x-text="fmtWeight(ind.panel_weight)"></td>
                       </tr>
                     </template>
@@ -338,7 +354,8 @@
             <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h">No data available</p></div>
           </template>
           <template x-for="bt in backtests()" :key="bt.key">
-            <div class="rv__market" :id="`market-${bt.key}`" x-show="btMarket === bt.key && hasBacktest(bt.key)">
+            <div class="rv__market" :id="`market-${bt.key}`" x-show="btMarket === bt.key && hasBacktest(bt.key)"
+                 x-transition:enter="rv-fade" x-transition:enter-start="rv-fade--from" x-transition:enter-end="rv-fade--to">
               <div class="rr-subhead">
                 <h3 class="rr-subhead__h" :id="slug(bt.title)"><span x-text="bt.title"></span></h3>
               </div>
@@ -351,6 +368,11 @@
                 <span class="rr-meta__i">In-sample<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What in-sample means">i</button><span class="rm-tip__bub" role="tooltip">The years the indicators and their parameters were chosen on. A strategy should look good here; it was fitted to it.</span></span> <b x-text="`${btWindow(bt.key).start} to ${btWindow(bt.key).inEnd}`"></b></span>
                 <span class="rr-meta__i">Out-of-sample<span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="What out-of-sample means">i</button><span class="rm-tip__bub" role="tooltip">Everything since, which the method never saw while it was being built. The test of whether it holds up.</span></span> <b x-text="`${btWindow(bt.key).outStart} to ${btWindow(bt.key).end}`"></b></span>
               </div>
+              <!-- The rule every regime-driven strategy in the table follows: what
+                   it holds in each regime. Which reading it follows is its own
+                   (the composite, one panel, or a combination); the two
+                   baselines hold one mix throughout. -->
+              <p class="rv__bt-k">What a strategy holds in each regime</p>
               <div class="rv__bt-weights">
                 <template x-for="state in ['risk_off', 'neutral', 'risk_on']" :key="state">
                   <span class="rv__bt-weight"><span class="rv__pie-wrap" x-html="statePie(bt.weights[state])"></span> <span x-text="regimeLabel(state) + ' · ' + describeWeights(bt.weights[state])"></span></span>
@@ -359,16 +381,21 @@
               <div class="rr-tablewrap">
                 <table class="rr-table rv__bt-table">
                   <thead>
-                    <tr><th scope="col">Strategy</th><th scope="col" class="rv__num">×</th><th scope="col" class="rv__num">CAGR</th><th scope="col" class="rv__num">In-sample</th><th scope="col" class="rv__num">Out-of-sample</th><th scope="col" class="rv__num">Sharpe</th><th scope="col" class="rv__num">Max DD</th><th scope="col" class="rv__num">Trades</th></tr>
+                    <tr>
+                      <th scope="col">Strategy</th>
+                      <template x-for="c in btColumns()" :key="c.key">
+                        <th scope="col" class="rv__num"><span class="rm-tip rm-tip--label" :class="{ 'rm-tip--end': c.end }"><button class="rm-tip__btn rm-tip__btn--text" type="button" x-text="c.label"></button><span class="rm-tip__bub" role="tooltip" x-text="c.tip"></span></span></th>
+                      </template>
+                    </tr>
                   </thead>
                   <tbody>
                     <template x-for="row in backtestRows(bt)" :key="row.key">
                       <tr :class="{ 'rv__bt-baseline': row.baseline }">
                         <th scope="row"><span x-text="row.label"></span><small x-text="row.desc"></small></th>
-                        <td class="rv__num" x-text="fmtNum2(row.s.final_value)"></td>
-                        <td class="rv__num" x-text="fmtPctSigned(row.s.cagr)"></td>
-                        <td class="rv__num rv__muted" x-text="fmtPctSigned(row.s.cagr_in_sample)"></td>
-                        <td class="rv__num rv__muted" x-text="fmtPctSigned(row.s.cagr_out_sample)"></td>
+                        <td class="rv__num" x-text="money(row.s.final_value)"></td>
+                        <td class="rv__num" :style="`color:${deltaColor(row.s.cagr)}`" x-text="fmtPctSigned(row.s.cagr)"></td>
+                        <td class="rv__num" :style="`color:${deltaColor(row.s.cagr_in_sample)}`" x-text="fmtPctSigned(row.s.cagr_in_sample)"></td>
+                        <td class="rv__num" :style="`color:${deltaColor(row.s.cagr_out_sample)}`" x-text="fmtPctSigned(row.s.cagr_out_sample)"></td>
                         <td class="rv__num" x-text="fmtNum2(row.s.sharpe)"></td>
                         <td class="rv__num" :style="`color:${ddColor(row.s.max_drawdown)}`" x-text="fmtPctUnsigned(row.s.max_drawdown)"></td>
                         <td class="rv__num rv__muted" x-text="tradesText(row)"></td>
@@ -384,12 +411,12 @@
                 <figure class="rr-area rv__fig" :data-bt="bt.key">
                   <figcaption class="rr-area__head">
                     <div class="rv__fig-t">
-                      <h4 class="rr-subhead__h rr-subhead__h--minor">Growth of $1, log scale</h4>
-                      <span class="rr-sec__aside" x-text="btMeta(bt.key)"></span>
+                      <h4 class="rr-subhead__h rr-subhead__h--minor">Growth of $1</h4>
+                      <p class="rv__fig-d" x-text="btIntro(bt.key)"></p>
                     </div>
                     <div class="rm-chips" role="group" aria-label="Backtest range">
                       <template x-for="r in ranges" :key="r.id">
-                        <button type="button" class="rm-chip" :aria-pressed="btRange === r.id ? 'true' : 'false'" @click="setBtRange(r.id)" x-text="r.label"></button>
+                        <button type="button" class="rm-chip" :aria-pressed="chipOn('bt', r.id) ? 'true' : 'false'" @click="setBtRange(r.id)" x-text="r.label"></button>
                       </template>
                     </div>
                   </figcaption>
@@ -421,6 +448,24 @@
                       <template x-for="t in btXTicks(bt.key)" :key="t.key"><span :class="t.cls" :style="`left:${t.left}%`" x-text="t.label"></span></template>
                     </div>
                   </div>
+                <!-- The range navigator: the whole history in miniature under the
+                     chart, the window on show between two handles. Drag an end
+                     or the window; the chips above set it too. The axis labels
+                     say the span by their form. -->
+                <div class="rv__nav" @pointerdown="navStart('bt', $event)" @pointermove="navMove('bt', $event)" @pointerup="navEnd()" @pointercancel="navEnd()">
+                  <div class="rv__nav-plot">
+                    <div class="rr-area__svg" x-html="navSvg('bt')"></div>
+                    <i class="rv__nav-shade" :style="`left:0;width:${navModel('bt').left}%`"></i>
+                    <i class="rv__nav-shade" :style="`left:${navModel('bt').left + navModel('bt').width}%;right:0`"></i>
+                    <div class="rv__nav-win" data-grab="pan" :style="`left:${navModel('bt').left}%;width:${navModel('bt').width}%`">
+                      <button type="button" class="rv__nav-h is-from" data-grab="from" :aria-label="`Start of the range: ${navModel('bt').fromLabel}`" @keydown="navKey('bt', 'from', $event)"></button>
+                      <button type="button" class="rv__nav-h is-to" data-grab="to" :aria-label="`End of the range: ${navModel('bt').toLabel}`" @keydown="navKey('bt', 'to', $event)"></button>
+                    </div>
+                  </div>
+                  <div class="rv__nav-x" aria-hidden="true">
+                    <template x-for="t in navModel('bt').ticks" :key="t.key"><span :style="`left:${t.left}%`" x-text="t.label"></span></template>
+                  </div>
+                </div>
                   <ul class="rr-area__legend rv__legend-list">
                     <template x-for="l in btLegend(bt.key)" :key="l.id">
                       <li :class="{ 'is-muted': btFocus && btFocus !== l.key, 'is-off': !l.on }" @pointerenter="btFocus = l.on ? l.key : null" @pointerleave="btFocus = null">
