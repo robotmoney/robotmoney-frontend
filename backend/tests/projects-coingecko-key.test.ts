@@ -140,3 +140,31 @@ describe("a failed CoinGecko call never carries the key", () => {
     }
   }
 });
+
+describe("a malformed key is refused before it can reach a header error", () => {
+  // Bun's fetch rejects a header value with a control character and echoes the
+  // value in its error text. The live source must refuse such a key first, so
+  // the degraded run's log and job_runs row never carry it.
+  for (const [label, bad] of [["LF", `${KEY}\nX`], ["CR", `${KEY}\rX`], ["NUL", `${KEY}\u0000X`], ["space", `${KEY} X`]] as const) {
+    test(`an inner ${label} → rejects without calling CoinGecko and without the key in the error`, async () => {
+      process.env.COINGECKO_API_KEY = bad;
+      stubFetch(200, []);
+
+      let caught: unknown;
+      try {
+        await liveProjectsDataSource.coinGeckoMarkets(["virtual-protocol"]);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(Error);
+      expect(calls.length).toBe(0);
+      const message = (caught as Error).message;
+      expect(message).toContain("COINGECKO_API_KEY");
+      expect(message).toContain("pro-api.coingecko.com");
+      expect(message).not.toContain(KEY);
+      expect(String((caught as Error).stack ?? "")).not.toContain(KEY);
+      expect(logged.join("\n")).not.toContain(KEY);
+    });
+  }
+});

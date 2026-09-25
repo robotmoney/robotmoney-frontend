@@ -60,6 +60,16 @@ function coinGeckoEndpoint(rawKey: string | undefined = process.env.COINGECKO_AP
   const key = (rawKey ?? "").trim();
   const headers: Record<string, string> = { accept: "application/json" };
   if (!key) return { tier: "public", base: CG_PUBLIC_BASE, host: new URL(CG_PUBLIC_BASE).host, headers };
+  // A key with a control character inside it (a stray CR/LF from a pasted
+  // secret) makes fetch throw "Header ... has invalid value: '<key>'", which
+  // the degraded run would copy into the log and job_runs. Refuse it here
+  // with an error that names the variable and host, never the value.
+  if (!/^[\x21-\x7e]+$/.test(key)) {
+    throw new Error(
+      `COINGECKO_API_KEY is not a valid header value (non-printable or non-ASCII character); ` +
+        `not calling ${new URL(CG_PRO_BASE).host}`,
+    );
+  }
   headers["x-cg-pro-api-key"] = key;
   return { tier: "pro", base: CG_PRO_BASE, host: new URL(CG_PRO_BASE).host, headers };
 }
