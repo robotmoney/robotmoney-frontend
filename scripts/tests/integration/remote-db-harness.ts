@@ -24,6 +24,8 @@ import { instancePaths, SERVICE_TOKEN_HOLDERS } from "../../lib/smoke-state.ts";
 export const repoRoot = join(import.meta.dir, "..", "..", "..");
 const BACKEND = join(repoRoot, "backend");
 const DB = "robotmoney";
+/** The container's own superuser, doadmin's stand-in; a throwaway container's, never an operator's. */
+const SUPERUSER_PASSWORD = "unused-superuser";
 
 function sh(argv: string[], stdin?: string): { code: number; out: string } {
   const r = Bun.spawnSync(argv, { stdin: stdin === undefined ? "ignore" : Buffer.from(stdin), stdout: "pipe", stderr: "pipe" });
@@ -36,10 +38,13 @@ export interface RemoteDb {
   readonly database: string;
   readonly passwords: Readonly<Record<"rm_owner" | "rm_app" | "rm_worker" | "rm_readonly", string>>;
   /** SQL as the container's superuser (doadmin's stand-in); returns its unaligned output. */
-  superuser(sql: string): string;
+  superuser(sql: string, database?: string): string;
+  /** The superuser's URL for `database` (default: the provisioned one), over the bridge address. */
+  superuserUrl(database?: string): string;
   setIdentity(kind: "production" | "rehearsal" | null): void;
-  /** A fresh operator: a HOME whose .env holds exactly the §3 keys, a state root, a roster file. */
-  operator(name: string, extraEnvLines?: readonly string[]): Operator;
+  /** A fresh operator: a HOME whose .env holds exactly the §3 keys, a state root, a roster file.
+   *  `database` names another database on the same server (default: the provisioned one). */
+  operator(name: string, extraEnvLines?: readonly string[], database?: string): Operator;
   close(): void;
 }
 
@@ -62,14 +67,14 @@ export async function startRemoteDb(label: string): Promise<RemoteDb> {
   const container = `rm_it_remote_${label}_${randomBytes(4).toString("hex")}`;
   const run = sh([
     "docker", "run", "-d", "--rm", "--name", container, "--label", `robotmoney.test=${label}`,
-    "-e", "POSTGRES_PASSWORD=unused-superuser", "-e", `POSTGRES_DB=${DB}`, "-p", `${host}::5432`, POSTGRES_IMAGE,
+    "-e", `POSTGRES_PASSWORD=${SUPERUSER_PASSWORD}`, "-e", `POSTGRES_DB=${DB}`, "-p", `${host}::5432`, POSTGRES_IMAGE,
   ]);
   if (run.code !== 0) throw new Error(`docker run failed: ${run.out}`);
   const port = Number(sh(["docker", "inspect", "-f", '{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}', container]).out.trim());
   const work = mkdtempSync(join(tmpdir(), `rm-remote-${label}-`));
 
-  const superuser = (sql: string): string => {
-    const r = sh(["docker", "exec", "-i", container, "psql", "-X", "-q", "-At", "-U", "postgres", "-d", DB, "-v", "ON_ERROR_STOP=1", "-f", "-"], sql);
+  const superuser = (sql: string, database = DB): string => {
+    const r = sh(["docker", "exec", "-i", container, "psql", "-X", "-q", "-At", "-U", "postgres", "-d", database, "-v", "ON_ERROR_STOP=1", "-f", "-"], sql);
     if (r.code !== 0) throw new Error(`superuser SQL failed: ${r.out}`);
     return r.out.trim();
   };
@@ -103,6 +108,7 @@ export async function startRemoteDb(label: string): Promise<RemoteDb> {
     database: DB,
     passwords,
     superuser,
+    superuserUrl: (database = DB) => `postgres://postgres:${SUPERUSER_PASSWORD}@${host}:${port}/${database}?sslmode=disable`,
     setIdentity(kind) {
       superuser(
         kind === null
@@ -110,7 +116,7 @@ export async function startRemoteDb(label: string): Promise<RemoteDb> {
           : `DELETE FROM deployment_identity; INSERT INTO deployment_identity (kind) VALUES ('${kind}');`,
       );
     },
-    operator(name, extraEnvLines = []) {
+    operator(name, extraEnvLines = [], database = DB) {
       const home = join(work, `home-${name}-${++operators}`);
       const root = join(work, `state-${name}-${operators}`);
       mkdirSync(home, { recursive: true });
@@ -120,7 +126,7 @@ export async function startRemoteDb(label: string): Promise<RemoteDb> {
         [
           `host = ${host}`,
           `port = ${port}`,
-          `database = ${DB}`,
+          `database = ${database}`,
           "sslmode = disable",
           `rm_app = ${passwords.rm_app}`,
           `rm_worker = ${passwords.rm_worker}`,

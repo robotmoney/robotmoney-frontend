@@ -35,7 +35,7 @@
 //              production dump that predates 0063 — takes the identity-first
 //              pass instead (localDumpIdentityFirst, D55 (9), (10)): 0063 and
 //              `rehearsal` in one fenced transaction, only on the container
-//              this run restored, only over loopback, never under
+//              this run restored, never over a remote connection, never under
 //              RM_ENV=prod, only from the production baseline ledger.
 //   migrate    `--migrate`: migrateCommand as the `smoke_flag` caller — gates,
 //              owner password (smoke's generated one locally, typed on a
@@ -149,8 +149,13 @@ async function main(): Promise<PrepareResult> {
       }
 
       case "enroll": {
-        const { enrollAsRehearsal, isLoopbackHost, transactionIdentityStore } = await import("../../scripts/lib/smoke-identity.ts");
-        const remote = request.connection !== "local" || !isLoopbackHost(request.target.host);
+        const { enrollAsRehearsal, transactionIdentityStore } = await import("../../scripts/lib/smoke-identity.ts");
+        // Remote is the CONNECTION's kind (§5), not the address's: the Postgres
+        // a `--local dump` restores is smoke's own container, published on the
+        // Docker bridge address so the stack's containers reach it too
+        // (scripts/lib/restore-container.ts). That it is the container this
+        // run restored is proved by the pass itself (proveRestoredByThisPlan).
+        const remote = request.connection !== "local" || request.credentials.source !== "instance";
         // A dump restored from a database that predates 0063 has no table to
         // write `rehearsal` into: that is the `--local dump` identity-first
         // pass (D55 (9), (10)), and it proves its own guards first.
@@ -266,18 +271,18 @@ async function main(): Promise<PrepareResult> {
  * Its guards, each checked here for itself, in this order, before anything is
  * written — and none of them relaxable by any input:
  *   1. NEVER REMOTE. A remote connection refuses whatever RM_ENV, password or
- *      acknowledgement says: the request's connection must be local, its
- *      target a loopback address, and its owner password the one smoke
- *      generated for the instance (§5). The identity write itself refuses a
+ *      acknowledgement says: the request's connection must be local and its
+ *      owner password the one smoke generated for the instance (§5). The identity write itself refuses a
  *      remote store too (enrollAsRehearsal), so the rule holds twice.
  *   2. NOT PROD. `RM_ENV=prod` refuses (§4.3: prod never runs on a database
  *      smoke owns; enrollAsRehearsal refuses it again).
  *   3. THE COPY THIS RUN RESTORED. The instance's stack record names the
  *      restored container; this plan's open journal has its `restore`
  *      preparation committed; and the address the request connects to is the
- *      one Docker published for that container. A loopback port is bound by
- *      one listener, so a connection there reaches that container and no
- *      other database.
+ *      one Docker published for that container. A published host port is
+ *      bound by one listener, so a connection there reaches that container
+ *      and no other database — which is what makes a `local` claim about any
+ *      other address (a remote server) refuse here.
  *   4. THE BASELINE. The restored ledger equals one SUPPORTED_RELEASES
  *      baseline exactly (D55 (8)). A dump with any other pre-identity ledger
  *      refuses, naming how it differs.
@@ -298,7 +303,7 @@ async function localDumpIdentityFirst(
   if (remote || request.credentials.source !== "instance") {
     refuse(
       `its connection is remote (${request.target.host}:${request.target.port}, ${request.connection}). The pass runs ` +
-        "only on the Postgres container this smoke run restored, over loopback, with the owner password smoke " +
+        "only on the Postgres container this smoke run restored, with the owner password smoke " +
         "generated; a remote connection refuses whatever RM_ENV, password or acknowledgement says.",
     );
   }

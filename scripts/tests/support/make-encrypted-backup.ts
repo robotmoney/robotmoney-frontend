@@ -9,18 +9,23 @@
 // its own, and everything it writes lives in a temp directory removed by
 // close(). The passphrase is generated per backup. Nothing secret is committed.
 //
-// THE SOURCE DATABASE, one of two:
+// THE SOURCE DATABASE, one of three:
 //
-//   v0.5.0               the v0.5.0 tag's schema. Production's ledger is this
-//                        plus 0062_rm_readonly_sequence_select.sql (D55 (8),
-//                        corrected 2026-09-25), so this source is one file
-//                        short of the production baseline. Rebuilt from the
-//                        release's OWN migration bytes by the release's own
-//                        runner loop — the same reconstruction, from the same
-//                        fixture, as backend/tests/upgrade-from-release.test.ts
-//                        (one transaction per file, `SET LOCAL ROLE rm_owner`
-//                        from 0054 on, a ledger row per file). It predates 0063,
-//                        so it has NO deployment_identity table.
+//   baseline             production's observed ledger, the one supported
+//                        baseline (D55 (8), backend/src/db/supported-releases.ts):
+//                        the v0.5.0 tag's 72 files plus
+//                        0062_rm_readonly_sequence_select.sql with the c3a68812
+//                        bytes production ran (backend/tests/fixtures/releases/
+//                        production-2026-09-25/). What a capture of today's
+//                        production restores. It predates 0063, so it has NO
+//                        deployment_identity table.
+//   v0.5.0               the v0.5.0 tag's schema alone: one file short of the
+//                        production baseline, the "any other pre-identity
+//                        ledger" a `--local dump` refuses (D55 (10)).
+// Both are rebuilt from their OWN migration bytes by the release's own runner
+// loop — the same reconstruction, from the same fixtures, as
+// backend/tests/upgrade-from-release.test.ts (one transaction per file,
+// `SET LOCAL ROLE rm_owner` from 0054 on, a ledger row per file).
 //   production-identity  the branch's schema, bootstrapped from the snapshot BY
 //                        rm_owner through the real bootstrapBlankDatabase, then
 //                        enrolled `production` through rm_owner — a database as
@@ -50,12 +55,13 @@ const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const BACKEND = join(REPO_ROOT, "backend");
 const MIGRATIONS_DIR = join(BACKEND, "migrations");
 const RELEASE_DIR = join(BACKEND, "tests", "fixtures", "releases", "v0.5.0");
+const BASELINE_DIR = join(BACKEND, "tests", "fixtures", "releases", "production-2026-09-25");
 const DB = "robotmoney";
 
 /** The `comments.page` of the row every source carries, so a restore can be shown to carry data. */
 export const MARKER_PAGE = "rm-dump-lifecycle-marker";
 
-export type BackupSource = "v0.5.0" | "production-identity";
+export type BackupSource = "baseline" | "v0.5.0" | "production-identity";
 
 export interface EncryptedBackup {
   /** The backup directory: what `--local dump=<dir>` names. */
@@ -69,9 +75,10 @@ export interface EncryptedBackup {
   /** The source server's major version, which wrote the archive. */
   readonly serverMajor: number;
   /**
-   * v0.5.0 only: smoke:capture's own dump (pg_dump as rm_readonly, read-only)
-   * attempted against the source before the superuser workaround, with its
-   * exit and output. `null` for a source that was captured as rm_readonly.
+   * v0.5.0 and baseline: smoke:capture's own dump (pg_dump as rm_readonly,
+   * read-only) attempted against the source before the superuser workaround,
+   * with its exit and output. `null` for a source that was captured as
+   * rm_readonly.
    */
   readonly readonlyCapture: { readonly ok: boolean; readonly out: string } | null;
   /** Remove the directory (and the source container, if it is still up). */
@@ -93,18 +100,30 @@ function must(what: string, r: { code: number; out: string }): void {
   if (r.code !== 0) throw new Error(`make-encrypted-backup: ${what} failed (exit ${r.code}): ${r.out.slice(-2000)}`);
 }
 
-/** v0.5.0's migration list, each file's bytes as the tag had them (verbatim copy when the branch edited it). */
-function releaseMigrations(): { file: string; path: string }[] {
+/**
+ * A release-shaped source's migration list, in filename order, each file's
+ * bytes as its target ran them: v0.5.0's from the tag (the verbatim copy when
+ * the branch edited it), and — for the baseline — the out-of-band file's
+ * archived bytes (baseline.json).
+ */
+function releaseMigrations(source: "baseline" | "v0.5.0"): { file: string; path: string }[] {
   const release = JSON.parse(readFileSync(join(RELEASE_DIR, "release.json"), "utf8")) as { migrations: { file: string; sha256: string }[] };
-  return release.migrations.map(({ file, sha256 }) => {
-    const pinned = join(RELEASE_DIR, "migrations", file);
-    const path = existsSync(pinned) ? pinned : join(MIGRATIONS_DIR, file);
-    const actual = createHash("sha256").update(readFileSync(path)).digest("hex");
-    // The same guard upgrade-from-release.test.ts's first test is: a release
-    // schema rebuilt from bytes the release never had is not the release.
-    if (actual !== sha256) throw new Error(`make-encrypted-backup: ${file} no longer matches v0.5.0's recorded sha256 and has no verbatim copy`);
-    return { file, path };
-  });
+  const outOfBand =
+    source === "baseline"
+      ? (JSON.parse(readFileSync(join(BASELINE_DIR, "baseline.json"), "utf8")) as { outOfBand: { file: string; sha256: string }[] }).outOfBand
+      : [];
+  const verbatim = source === "baseline" ? [join(BASELINE_DIR, "migrations"), join(RELEASE_DIR, "migrations")] : [join(RELEASE_DIR, "migrations")];
+  return [...release.migrations, ...outOfBand]
+    .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))
+    .map(({ file, sha256 }) => {
+      const pinned = verbatim.map((dir) => join(dir, file)).find((path) => existsSync(path));
+      const path = pinned ?? join(MIGRATIONS_DIR, file);
+      const actual = createHash("sha256").update(readFileSync(path)).digest("hex");
+      // The same guard upgrade-from-release.test.ts's first test is: a release
+      // schema rebuilt from bytes the release never had is not the release.
+      if (actual !== sha256) throw new Error(`make-encrypted-backup: ${file} no longer matches its recorded sha256 and has no verbatim copy`);
+      return { file, path };
+    });
 }
 
 /**
@@ -119,7 +138,7 @@ import { readFileSync } from "node:fs";
 const spec = JSON.parse(process.env.RM_BACKUP_SPEC);
 const su = postgres(process.env.RM_BACKUP_SUPERUSER_URL, { max: 1, onnotice: () => {} });
 try {
-  if (spec.source === "v0.5.0") {
+  if (spec.source !== "production-identity") {
     // v0.5.0's runner loop (backend/src/db/migrate.ts at the tag), exactly as
     // upgrade-from-release.test.ts's applyAsReleaseRunner models it.
     await su.unsafe("CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())");
@@ -156,6 +175,44 @@ try {
 process.exit(0);
 `;
 
+/** Run BUILD_SOURCE against `superUrl`'s database. */
+function buildSource(
+  superUrl: string,
+  spec: { source: BackupSource; database: string; passwords: Record<string, string>; ownerUrl: string },
+): void {
+  const full = { ...spec, marker: MARKER_PAGE, migrations: spec.source === "production-identity" ? [] : releaseMigrations(spec.source) };
+  const built = Bun.spawnSync(["bun", "-e", BUILD_SOURCE], {
+    cwd: BACKEND,
+    env: {
+      PATH: process.env.PATH ?? "",
+      HOME: process.env.HOME ?? "",
+      // backend/src/config.ts validates at import; the snapshot loader is
+      // reached through it. The throwaway superuser, never an operator's URL.
+      DATABASE_URL: superUrl,
+      RM_ENV: "stage",
+      RM_BACKUP_SUPERUSER_URL: superUrl,
+      RM_BACKUP_SPEC: JSON.stringify(full),
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  must("building the source database", { code: built.exitCode ?? -1, out: `${built.stdout.toString()}${built.stderr.toString()}` });
+}
+
+/**
+ * Build a release-shaped database (`baseline` or `v0.5.0`) in place, through
+ * `superUrl` — a superuser on a database of the caller's own, whose four roles
+ * already exist. The same construction the backup's source gets, without the
+ * capture: for a test that needs production's pre-identity state on a server
+ * it reaches as a REMOTE one (scripts/tests/integration/remote-db-harness.ts).
+ * The release's 0053 leaves rm_owner NOLOGIN, as it left production; the
+ * caller performs §9.1 step 1 if it needs the login.
+ */
+export function buildReleaseDatabase(superUrl: string, source: "baseline" | "v0.5.0"): void {
+  const database = decodeURIComponent(new URL(superUrl).pathname.slice(1));
+  buildSource(superUrl, { source, database, passwords: {}, ownerUrl: "" });
+}
+
 /**
  * Build a disposable source database, capture it as §5.1/§5.2 do, and return
  * the backup directory. Throws, naming the step, on any failure; the source
@@ -191,30 +248,7 @@ export async function makeEncryptedBackup(source: BackupSource): Promise<Encrypt
     );
     const superUrl = `postgres://postgres:${superPassword}@127.0.0.1:${port}/${DB}?sslmode=disable`;
     const ownerUrl = `postgres://rm_owner:${passwords.rm_owner}@127.0.0.1:${port}/${DB}?sslmode=disable`;
-    const spec = {
-      source,
-      database: DB,
-      marker: MARKER_PAGE,
-      passwords,
-      ownerUrl,
-      migrations: source === "v0.5.0" ? releaseMigrations() : [],
-    };
-    const built = Bun.spawnSync(["bun", "-e", BUILD_SOURCE], {
-      cwd: BACKEND,
-      env: {
-        PATH: process.env.PATH ?? "",
-        HOME: process.env.HOME ?? "",
-        // backend/src/config.ts validates at import; the snapshot loader is
-        // reached through it. The throwaway superuser, never an operator's URL.
-        DATABASE_URL: superUrl,
-        RM_ENV: "stage",
-        RM_BACKUP_SUPERUSER_URL: superUrl,
-        RM_BACKUP_SPEC: JSON.stringify(spec),
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    must("building the source database", { code: built.exitCode ?? -1, out: `${built.stdout.toString()}${built.stderr.toString()}` });
+    buildSource(superUrl, { source, database: DB, passwords, ownerUrl });
 
     // What the source holds, read before the capture, for the tests to hold the restore to.
     const q = (sql: string) => sh(["docker", "exec", container, "psql", "-X", "-U", "postgres", "-d", DB, "-Atc", sql]);
@@ -222,7 +256,7 @@ export async function makeEncryptedBackup(source: BackupSource): Promise<Encrypt
     const identityRead = q("SELECT CASE WHEN to_regclass('public.deployment_identity') IS NULL THEN '' ELSE (SELECT kind FROM deployment_identity) END").stdout.trim();
     const identity = identityRead === "production" ? "production" : null;
     if (source === "production-identity" && identity !== "production") throw new Error(`make-encrypted-backup: the source reads identity ${identityRead || "(none)"}, not production`);
-    if (source === "v0.5.0" && identityRead !== "") throw new Error("make-encrypted-backup: a v0.5.0 source must predate 0063's deployment_identity");
+    if (source !== "production-identity" && identityRead !== "") throw new Error(`make-encrypted-backup: a ${source} source must predate 0063's deployment_identity`);
 
     // THE CAPTURE — smoke:capture's two commands, read-only, as rm_readonly
     // (the container's local socket trusts it, which is all a dump inside it
@@ -238,14 +272,20 @@ export async function makeEncryptedBackup(source: BackupSource): Promise<Encrypt
     // backup, because it dumps as rm_readonly. So the rm_readonly dump is
     // attempted first and its outcome is returned (readonlyCapture), for the
     // dump-lifecycle test to hold the #699 gap visible.
+    //
+    // The baseline is dumped as the superuser too (issue #1026, the
+    // w5-identity-first brief): it is the source these tests hold to a
+    // production capture, and the dumping role leaves no trace in a
+    // --no-owner --no-privileges archive. Its rm_readonly attempt is still
+    // made and returned.
     const readOnly = ["-e", "PGOPTIONS=-c default_transaction_read_only=on"];
     let readonlyCapture: { ok: boolean; out: string } | null = null;
-    if (source === "v0.5.0") {
+    if (source !== "production-identity") {
       const attempt = sh(["docker", "exec", ...readOnly, container, "pg_dump", "-U", "rm_readonly", "-d", DB, "--format=custom", "--compress=9", "--no-owner", "--no-privileges", "--file=/tmp/rm-readonly-attempt.dump"]);
       readonlyCapture = { ok: attempt.code === 0, out: attempt.out };
       sh(["docker", "exec", container, "rm", "-f", "/tmp/rm-readonly-attempt.dump"]);
     }
-    const dumpRole = source === "v0.5.0" ? "postgres" : "rm_readonly";
+    const dumpRole = source === "production-identity" ? "rm_readonly" : "postgres";
     const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
     const dumpPlain = join(dir, `rm-preupgrade-${stamp}.dump`);
     const globalsPlain = join(dir, `rm-globals-${stamp}.sql`);
