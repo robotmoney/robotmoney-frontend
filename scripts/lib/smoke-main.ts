@@ -10,7 +10,7 @@ import { dropShellMigrationCredential, shadowingStackEnvWarnings, smokePassthrou
 import { resolveBackupFiles } from "./restore-container.ts";
 import { resolveDeploymentPolicy, resolveRmEnv } from "./smoke-env-policy.ts";
 import { requireRehearsalTarget } from "./smoke-identity.ts";
-import { dumpOwnershipSql, hostReadTargetState, instanceRolePasswords, localSuperuserSql, prepareChildEnv, roleUrl, runPrepareStep, superuserSqlSettled, type HostTarget, type PrepareStep } from "./smoke-database.ts";
+import { dumpOwnershipSql, hostReadTargetState, instanceRolePasswords, localSuperuserSql, operatorTerminal, prepareChildEnv, roleUrl, runPrepareStep, superuserSqlSettled, type HostTarget, type PrepareStep } from "./smoke-database.ts";
 import { acquireTargetLock, assertStillHeld, readTargetState, type TargetLock, type TargetState } from "../../backend/src/db/target-lock.ts";
 import type { GeneratedRolePasswords } from "./smoke-state.ts";
 import { assertSmokeTwinIsTarget, bringUpTwin, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration, smokeTwinUrlFromContainer, smokeTwinVolumeName } from "./smoke-twin.ts";
@@ -174,9 +174,10 @@ for (const warning of stalePortEnvWarnings(process.env)) console.warn(`[smoke] $
 // to be forwarded, which pointed the worker lanes at a `postgres` host a twin boot
 // does not have — see smoke-compose-env.ts.
 for (const warning of shadowingStackEnvWarnings(process.env)) console.warn(`[smoke] ${warning}`);
-// And the migration credential: only this process may set it, for one migrate
-// run (below). An exported one is dropped HERE, before twinMigrationCredential()
-// or the remote prompt assigns the real one, and before extraComposeEnv reads it.
+// And a migration credential: nothing in this boot reads one from the
+// environment (the migrate run logs in as rm_owner with the generated or the
+// typed password, on the host). An exported one is dropped HERE, before
+// anything could read it or hand it on.
 {
   const dropped = dropShellMigrationCredential(process.env);
   if (dropped) console.warn(`[smoke] ${dropped}`);
@@ -591,9 +592,11 @@ function urlPassword(url: string | undefined): string[] {
  * Every secret value this run holds, for the by-value redaction check at every
  * plan choke point (computePlanId, renderPlan, openJournal, writeReceipt). The
  * shape heuristic alone misses a shapeless secret, which is why the VALUES are
- * passed. Role passwords: the instance's saved set (§5), a remote URL's, a
- * restored dump's (added once it is restored). The owner password: a typed
- * `--migrate` credential, and the saved `rm_owner`. Service tokens: admin,
+ * passed. Role passwords: the instance's saved set (§5, rm_owner's included),
+ * the remote database's three from `~/.env`, a restored dump's superuser
+ * (added once it is restored). A TYPED owner password never enters this
+ * process at all: the preparation child that prompts for it uses it and exits
+ * (backend/scripts/smoke-prepare.ts). Service tokens: admin,
  * automation, analytics. Participant keys: every credential-file entry's key,
  * bearer and model key.
  */
@@ -602,7 +605,8 @@ const runSecrets: string[] = [
   automationToken,
   analyticsToken,
   ...urlPassword(dataPath.kind === "external" ? dataPath.url : undefined),
-  ...urlPassword(process.env.MIGRATE_DATABASE_URL),
+  ...urlPassword(remote?.readerUrl),
+  ...urlPassword(remote?.workerUrl),
   ...(() => {
     if (!existsSync(paths.rolePasswordsFile)) return [];
     try {
@@ -1281,7 +1285,7 @@ async function main(): Promise<void> {
     lock: { backendPid: targetLock!.backendPid, holder: targetLock!.holder },
     stateDir: paths.dir,
     // §5: "No terminal prompt exists in local modes"; a remote run prompts only on a terminal.
-    nonInteractive: !process.stdin.isTTY,
+    nonInteractive: !operatorTerminal(),
     ...(note ? { note } : {}),
   });
   const prepare = async (action: PrepareStep["action"], note?: string): Promise<Record<string, unknown>> => {

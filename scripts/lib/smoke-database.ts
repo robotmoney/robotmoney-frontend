@@ -257,6 +257,16 @@ export async function superuserSqlSettled(
 }
 
 /**
+ * Whether an operator is at a terminal to answer a remote preparation's
+ * rm_owner prompt and its `y/n` (§8.5). Not a TUI decision — `bun smoke` draws
+ * none (§1) — only whether a prompt may be asked at all: without a terminal a
+ * remote `--migrate` or `--seed` refuses rather than wait on nobody.
+ */
+export function operatorTerminal(): boolean {
+  return process.stdin.isTTY === true;
+}
+
+/**
  * The environment a preparation child runs with: what `bun` and the backend
  * modules need to start, and nothing else. Never the boot's own environment,
  * which may carry an operator's DATABASE_URL or tokens; the child builds every

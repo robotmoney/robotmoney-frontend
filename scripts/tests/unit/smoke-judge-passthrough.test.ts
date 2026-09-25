@@ -1,63 +1,49 @@
-// THE JUDGE'S TRANSPORT SETTINGS NO LONGER REACH THE STACK (D52, issue #1026).
+// NO JUDGE SETTING OF ANY KIND REACHES THE STACK (D52, D55 (3); issue #1026).
 //
 // F4/T18 once put SWARM_JUDGE_TIMEOUT_MS and SWARM_JUDGE_BASE_URL on
 // DEMO_COMPOSE_PASSTHROUGH, because `api` ran the judge inline and an exported
 // budget reached nothing without them. The judge is a participant now: it takes
 // its model key and its transport from credential.json, and `api` interpolates
-// neither setting (docker-compose.yml). Forwarding them would carry a value to
-// no service, so this suite now pins that they are NOT forwarded.
+// neither setting (docker-compose.yml).
+//
+// C-27 then added the test-only judge FAULT-INJECTION lever
+// (SWARM_JUDGE_FAULT_INJECTION and its acceptance opt-in) to the list, so an
+// operator could arm it through the documented boot. D55 (3) retires that
+// lever: docker-compose.yml no longer hands either variable to `api`, and the
+// passthrough no longer names them. This suite pins that neither the judge's
+// transport nor the lever is forwarded — an exported value reaches no container.
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { DEMO_COMPOSE_PASSTHROUGH, smokePassthroughEnv } from "../../lib/smoke-compose-passthrough.ts";
 
-describe("judge transport settings are not forwarded: no stack service judges", () => {
-  test.each(["SWARM_JUDGE_TIMEOUT_MS", "SWARM_JUDGE_BASE_URL", "OPENCODE_API_KEY"])("%s is NOT on DEMO_COMPOSE_PASSTHROUGH", (key) => {
+const RETIRED_JUDGE_KEYS = [
+  "SWARM_JUDGE_TIMEOUT_MS",
+  "SWARM_JUDGE_BASE_URL",
+  "OPENCODE_API_KEY",
+  // D55 (3): the fault-injection lever is retired from the stack.
+  "SWARM_JUDGE_FAULT_INJECTION",
+  "SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN",
+] as const;
+
+describe("judge settings are not forwarded: no stack service judges, and the fault-injection lever is retired", () => {
+  test.each([...RETIRED_JUDGE_KEYS])("%s is NOT on DEMO_COMPOSE_PASSTHROUGH", (key) => {
     expect(DEMO_COMPOSE_PASSTHROUGH as readonly string[]).not.toContain(key);
   });
 
   test("an exported value never reaches the compose environment", () => {
-    const out = smokePassthroughEnv({
-      SWARM_JUDGE_TIMEOUT_MS: "240000",
-      SWARM_JUDGE_BASE_URL: "https://opencode.ai/zen/v1",
-      OPENCODE_API_KEY: "sk-planted",
-    });
-    expect(out).not.toHaveProperty("SWARM_JUDGE_TIMEOUT_MS");
-    expect(out).not.toHaveProperty("SWARM_JUDGE_BASE_URL");
-    expect(out).not.toHaveProperty("OPENCODE_API_KEY");
+    const out = smokePassthroughEnv(Object.fromEntries(RETIRED_JUDGE_KEYS.map((key) => [key, "1"])));
+    for (const key of RETIRED_JUDGE_KEYS) expect(out).not.toHaveProperty(key);
   });
 
-  test("red control: a key that IS on the list does survive, so the check above is not vacuous", () => {
-    expect(smokePassthroughEnv({ SWARM_JUDGE_FAULT_INJECTION: "1" })).toHaveProperty("SWARM_JUDGE_FAULT_INJECTION", "1");
-  });
-});
-
-// C-27 — THE FAULT-INJECTION LEVER MUST BE REACHABLE THROUGH THE DOCUMENTED
-// BOOT, the gap SWARM_JUDGE_TIMEOUT_MS once had and the same fix shape.
-// `docker-compose.yml` interpolates `SWARM_JUDGE_FAULT_INJECTION` and
-// `SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN` into api and worker-swarm,
-// but until DEMO_COMPOSE_PASSTHROUGH named them an operator exporting either
-// got an EMPTY variable in the container and every judging (and every arm
-// attempt) silently refused with `flag_absent`.
-describe("judge fault-injection flags reach the stack through the documented boot", () => {
-  test.each(["SWARM_JUDGE_FAULT_INJECTION", "SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN"])(
-    "%s is on DEMO_COMPOSE_PASSTHROUGH",
-    (key) => {
-      expect(DEMO_COMPOSE_PASSTHROUGH as readonly string[]).toContain(key);
-    },
-  );
-
-  test("exported fault-injection flags survive into the compose environment", () => {
-    const out = smokePassthroughEnv({
-      SWARM_JUDGE_FAULT_INJECTION: "1",
-      SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN: "1",
-    });
-    expect(out.SWARM_JUDGE_FAULT_INJECTION).toBe("1");
-    expect(out.SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN).toBe("1");
+  test("red control: a key that IS on the list does survive, so the checks above are not vacuous", () => {
+    expect(smokePassthroughEnv({ PROJECTS_SOURCE: "live" })).toHaveProperty("PROJECTS_SOURCE", "live");
   });
 
-  test("unset fault-injection flags still pass nothing, so the lever stays inert by default", () => {
-    const out = smokePassthroughEnv({});
-    expect(out).not.toHaveProperty("SWARM_JUDGE_FAULT_INJECTION");
-    expect(out).not.toHaveProperty("SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN");
+  test("docker-compose.yml interpolates neither fault-injection variable into any service", () => {
+    const compose = readFileSync(join(import.meta.dir, "..", "..", "..", "docker-compose.yml"), "utf8");
+    const code = compose.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
+    expect(code).not.toContain("SWARM_JUDGE_FAULT_INJECTION");
   });
 });
 
@@ -68,5 +54,4 @@ describe("judge fault-injection flags reach the stack through the documented boo
 // the ABSOLUTE DEADLINE the API stores when judging is requested
 // (system-scheduler-spec.md §4.4), which no constant in this repository may
 // restate — §9: "a judging deadline is stored by the API when judging is
-// requested and is never restarted". The two settings above still have to reach
-// the containers, which is what the rest of this file grades.
+// requested and is never restarted".

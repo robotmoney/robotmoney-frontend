@@ -1307,6 +1307,25 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
     expect([...ENV_FILE_ALLOWED_KEYS].sort()).toEqual([...new Set(expected)].sort());
   });
 
+  test("criterion 150: the checkout's .env.example — the ~/.env template — passes check 4 on PROD with no finding at all", async () => {
+    // The template an operator copies to $HOME/.env holds exactly the §3 keys
+    // (everything else in it is commented reference), so a production host
+    // built from it boots. Read by the real check, from the real file.
+    const template = join(import.meta.dir, "..", "..", ".env.example");
+    const result = await checkEnvCredentials(context({ env: "prod", connection: "remote", envFilePath: template }));
+    expect(result.findings).toEqual([]);
+  });
+
+  test("criterion 150, red control: the SAME template with one more key refuses on prod and warns on stage", async () => {
+    const template = readFileSync(join(import.meta.dir, "..", "..", ".env.example"), "utf8");
+    const envFilePath = writeEnvFile("template-plus-model-key.env", [...template.split("\n"), "OPENCODE_API_KEY = sk-planted"]);
+    const prod = await checkEnvCredentials(context({ env: "prod", connection: "remote", envFilePath }));
+    expect(prod.findings.map((f) => f.severity)).toEqual(["refuse"]);
+    expect(prod.findings[0]?.message).toContain("OPENCODE_API_KEY");
+    const stage = await checkEnvCredentials(context({ env: "stage", connection: "remote", envFilePath }));
+    expect(stage.findings.map((f) => f.severity)).toEqual(["warn"]);
+  });
+
   test("the file preflight reads by default is env-role.ts's $HOME/.env", () => {
     expect(homeEnvPath("/home/deployer")).toBe(homeEnvFilePath("/home/deployer"));
     expect(homeEnvPath()).toBe(homeEnvFilePath());

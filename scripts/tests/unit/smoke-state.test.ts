@@ -747,7 +747,7 @@ describe("two instances on one host: each command acts only on the named one (cr
   function run(root: string, script: string, args: string[]): { code: number; out: string } {
     const r = Bun.spawnSync(["bun", "--no-env-file", join(repoRoot, "scripts", script), ...args], {
       cwd: repoRoot,
-      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, DOCKER_HOST: DEAD_DOCKER, RM_ENV: "smoke", AGENT_MODEL: "free" },
+      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, DOCKER_HOST: DEAD_DOCKER, RM_ENV: "stage", AGENT_MODEL: "free" },
       stdout: "pipe",
       stderr: "pipe",
     });

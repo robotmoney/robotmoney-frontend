@@ -108,29 +108,27 @@ describe("planTwin — refusals", () => {
   });
 });
 
-describe("resolveZenKey — $HOME/.env is the only file consulted", () => {
-  test("the process environment overrides (how CI and a one-off shell supply it)", () => {
+describe("resolveZenKey — the process environment only; ~/.env holds no model key (spec §3, #1026)", () => {
+  test("the process environment supplies it (how CI and a one-off shell supply it)", () => {
     const r = resolveZenKey({ OPENCODE_API_KEY: "zen-from-env" });
     expect(r).toEqual({ key: "zen-from-env", source: "process environment" });
   });
 
-  test("blank in the environment is not a key — it falls through to the file", () => {
-    const r = resolveZenKey({ OPENCODE_API_KEY: "   " });
-    // Either the host has a real $HOME/.env (source names it) or it errors —
-    // never "process environment", which is what a blank must not resolve to.
-    expect("source" in r ? r.source : "error").not.toBe("process environment");
+  test("blank in the environment is not a key, and nothing falls back to a file", () => {
+    const r = resolveZenKey({ OPENCODE_API_KEY: "   ", HOME: "/nowhere" });
+    expect("error" in r).toBe(true);
   });
 
-  test("the error names $HOME/.env, never a repo-root .env", () => {
-    const r = resolveZenKey({ HOME: "/nowhere" });
-    if ("key" in r) {
-      // This checkout has a real $HOME/.env; the contract is still that the
-      // file it names is that one and never a repo-root ./.env.
-      expect(r.source).toBe(READONLY_ENV_FILE);
-      return;
+  test("a $HOME/.env holding OPENCODE_API_KEY is NOT read: the error names the environment and the §3 rule", () => {
+    // This host's own $HOME/.env may well hold a key; the contract is that it
+    // is never consulted, whatever it holds.
+    const r = resolveZenKey({});
+    expect("error" in r).toBe(true);
+    if ("error" in r) {
+      expect(r.error).toContain("not set in this command's environment");
+      expect(r.error).toContain(READONLY_ENV_FILE);
+      expect(r.error).toMatch(/never read from .*holds only the §3 keys/);
     }
-    expect(r.error).toContain(READONLY_ENV_FILE);
-    expect(r.error).toMatch(/single credential file for this family, never a repo-root \.env/);
   });
 
   test("it refuses rather than substituting a keyless model", () => {

@@ -234,31 +234,31 @@ describe("red control: the graders catch the pre-#456 shape", () => {
   });
 });
 
-describe("schema currency is checked on every path that skips migrate (criterion 28)", () => {
-  // The decision is bootPreflightPlan() in smoke-db-mode.ts, executed by
-  // smoke-db-mode.test.ts. What is pinned here is that the boot USES it: the
-  // preflight hook is installed whenever the plan has a step, compose-postgres
-  // paths included, and nothing keys the schema check on the remote path.
-  const remoteOnlySchemaCheck = (src: string) => /kind === "external" && !migrates\) refuseIfSchemaBehind/.test(src);
-  const preflightFromPlan = (src: string) =>
-    /preflight: preflightPlan\.classify \|\| preflightPlan\.schemaCurrent \? classifyDatabase : undefined/.test(src);
+describe("schema currency is checked on every path (criterion 28)", () => {
+  // The per-path one-shots this block used to pin (bootPreflightPlan choosing
+  // schema-current.ts and db-preflight.ts's classification) are superseded
+  // (#1026 w3-lifecycle-db): every boot runs the FULL §7 preflight after its
+  // preparation, and check 3 asks of any database whether its schema matches
+  // its manifest and whether the booting code supports it — on every path,
+  // `--migrate` or not. What is pinned here is that the boot RUNS it
+  // unconditionally, before replacing any service, and that nothing keys it on
+  // a path or on `--migrate`.
+  const preflightStep = (src: string) =>
+    /await begin\("preflight", null\);\s*\n\s*const detail = await prepare\("preflight"\);/.test(src);
+  const conditional = (src: string) => /if \([^)]*(migrates|composePostgres|kind === "external")[^)]*\)\s*\{?\s*[^\n]*prepare\("preflight"\)/.test(src);
 
-  test("the preflight hook comes from bootPreflightPlan, not from composePostgres", () => {
-    expect(smokeMain).toContain("bootPreflightPlan({ composePostgres, seeds, migrates })");
-    expect(preflightFromPlan(smokeMain)).toBe(true);
-    expect(smokeMain).not.toContain("preflight: composePostgres ? undefined");
+  test("the full preflight runs before `replace`, on every path", () => {
+    expect(preflightStep(smokeMain)).toBe(true);
+    expect(smokeMain.indexOf('prepare("preflight")')).toBeLessThan(smokeMain.indexOf('begin("replace", null)'));
   });
 
-  test("the schema check is not keyed on the remote path", () => {
-    expect(remoteOnlySchemaCheck(smokeMain)).toBe(false);
-    expect(smokeMain).toContain("if (preflightPlan.schemaCurrent) refuseStaleSchema();");
+  test("the preflight is not keyed on the remote path or on --migrate", () => {
+    expect(conditional(smokeMain)).toBe(false);
+    expect(smokeMain).not.toContain("bootPreflightPlan(");
   });
 
-  test("red control: the pre-fix wiring is caught", () => {
-    const prefix =
-      '    if (dataPath.kind === "external" && !migrates) refuseIfSchemaBehind(stack.compose, log);\n' +
-      "    preflight: composePostgres ? undefined : classifyDatabase,\n";
-    expect(remoteOnlySchemaCheck(prefix)).toBe(true);
-    expect(preflightFromPlan(prefix)).toBe(false);
+  test("red control: a preflight keyed on the remote path is caught", () => {
+    const keyed = '    if (dataPath.kind === "external") { const detail = await prepare("preflight");\n';
+    expect(conditional(keyed)).toBe(true);
   });
 });

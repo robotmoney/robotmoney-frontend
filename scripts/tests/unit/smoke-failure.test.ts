@@ -123,7 +123,7 @@ describe("a failed boot's printed report (it replaced the failure pane)", () => 
       ["bun", "--no-env-file", join(repoRoot, "scripts", "smoke.ts"), "--local", "blank", "--instance", "rm_local_failreport", "--credentials", credentials],
       {
         cwd: repoRoot,
-        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, DOCKER_HOST: "tcp://127.0.0.1:1", RM_ENV: "smoke", AGENT_MODEL: "free" },
+        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, DOCKER_HOST: "tcp://127.0.0.1:1", RM_ENV: "stage", AGENT_MODEL: "free" },
         stdout: "pipe",
         stderr: "pipe",
       },
