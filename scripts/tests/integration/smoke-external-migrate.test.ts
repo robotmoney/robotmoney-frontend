@@ -37,7 +37,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { instancePaths } from "../../lib/smoke-state.ts";
 import { readJournal } from "../../lib/smoke-journal.ts";
-import { onTerminal, repoRoot, startRemoteDb, type Operator, type RemoteDb } from "./remote-db-harness.ts";
+import { holdTokenFiles, onTerminal, repoRoot, startRemoteDb, type Operator, type RemoteDb } from "./remote-db-harness.ts";
 
 let db: RemoteDb;
 
@@ -50,6 +50,7 @@ afterAll(() => db?.close());
 const instanceOf = (name: string) => `rm_it_remote_${name}`;
 
 function bootArgv(op: Operator, name: string): string[] {
+  holdTokenFiles(op, instanceOf(name));
   return ["bun", "--no-env-file", "scripts/smoke.ts", "--migrate", "--instance", instanceOf(name), "--credentials", op.roster, "--lock-timeout", "10"];
 }
 
@@ -154,10 +155,13 @@ describe("`bun smoke --migrate` on a remote REHEARSAL, on a terminal: prompt, wa
       await boot.type(`${db.passwords.rm_owner}\r`);
       await boot.waitFor("type y to continue");
       await boot.type("y\r");
-      await boot.waitFor("phase: prepare (assemble)", 180_000);
-      // Ctrl-C AT THE TERMINAL: the kernel signals the whole foreground
-      // process group. The assembly child runs in its own group and finishes;
-      // the boot stops at the next boundary.
+      await boot.waitFor("[smoke:migrate]", 180_000);
+      // Ctrl-C AT THE TERMINAL, while the migrate run is going: the kernel
+      // signals the whole foreground process group. The preparation child
+      // ignores it and finishes (backend/scripts/smoke-prepare.ts); the boot
+      // stops at the next boundary. (The site is assembled BEFORE the lock and
+      // the prompt — smoke spec §13.3 — so the migrate run is the step in
+      // flight here.)
       await boot.type("\x03");
       const code = await boot.exited();
       expect(code).toBe(130);
@@ -168,9 +172,9 @@ describe("`bun smoke --migrate` on a remote REHEARSAL, on a terminal: prompt, wa
     const paths = instancePaths(op.root, instanceOf("yes_y"));
     const journal = readJournal(paths)!;
     const records = journal.phases.map((r) => [r.phase, r.step, r.status]);
-    expect(records).toContainEqual(["prepare", "migrate", "committed"]);
     // The step running when Ctrl-C arrived was not killed by it: it committed,
     // and the stop was journaled at the boundary after it.
+    expect(records).toContainEqual(["prepare", "migrate", "committed"]);
     expect(records).toContainEqual(["prepare", "assemble", "committed"]);
     expect(journal.phases.at(-1)?.status).toBe("interrupted");
 

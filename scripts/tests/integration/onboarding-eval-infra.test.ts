@@ -520,14 +520,17 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
           // retired `subject`/`open`/`brief` dispatcher actions stood in for
           // (issue #1026). No scheduler runs in the core profile, so the test
           // opens the epoch itself.
-          const admin = async (route: string, input: Record<string, unknown>, expected = 200) => {
+          // The subject is the operator's (the `admin` right); the epoch
+          // transition is system-scheduler's (`lifecycle_transitions`), so it
+          // is presented with that holder's own token (smoke spec §3).
+          const admin = async (route: string, input: Record<string, unknown>, expected = 200, token = operatorToken!) => {
             const res = await fetch(
               `${stack!.backendUrl}${route}`,
               {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
-                  "X-Automation-Token": operatorToken!,
+                  "X-Automation-Token": token,
                 },
                 body: JSON.stringify(input),
               },
@@ -541,7 +544,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
           await admin(ROUTES.swarm.admin.subjects, {
             id: subjectId, name: "Identity Continuity Fixture", recommendationType: "bucket_weights",
           }, 201);
-          const epoch = await admin(ROUTES.swarm.admin.epochOpen, { subjectId }, 201);
+          const epoch = await admin(ROUTES.swarm.admin.epochOpen, { subjectId }, 201, readServiceToken(stackInstance!.paths, "system-scheduler"));
           const opened = { id: epoch.sessionId as string };
 
           // The only deterministic seam is external model prose. The
@@ -733,7 +736,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         composeSpawnEnv: stack!.spawnEnv,
         modelConfig: keyless,
         backendUrl: stack!.backendUrl,
-        automationToken: operatorToken!,
+        operatorToken: operatorToken!,
       };
       const identity = await ensureMemberIdentity(rail, { memberId, name: "Rails Check", lens: "infra" });
       expect(typeof identity.freshToken).toBe("string");

@@ -17,8 +17,9 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { POSTGRES_IMAGE } from "../../lib/postgres-image.ts";
+import { instancePaths, SERVICE_TOKEN_HOLDERS } from "../../lib/smoke-state.ts";
 
 export const repoRoot = join(import.meta.dir, "..", "..", "..");
 const BACKEND = join(repoRoot, "backend");
@@ -142,6 +143,23 @@ export async function startRemoteDb(label: string): Promise<RemoteDb> {
       rmSync(work, { recursive: true, force: true });
     },
   };
+}
+
+/**
+ * The instance's three token files, as `bun scripts/prod-init.ts
+ * provision-tokens` leaves them (smoke spec §5). A remote boot refuses without
+ * them before its target read (criterion 43,
+ * scripts/tests/integration/smoke-remote-tokens.test.ts, which drives that
+ * refusal itself). The boots here are about the §4.3 matrix and the migrate
+ * run, and none of them runs far enough to present a token, so placeholders
+ * stand in for the provisioned files.
+ */
+export function holdTokenFiles(op: Operator, instance: string): void {
+  const paths = instancePaths(op.root, instance);
+  for (const holder of SERVICE_TOKEN_HOLDERS) {
+    mkdirSync(dirname(paths.tokenFiles[holder]), { recursive: true, mode: 0o700 });
+    writeFileSync(paths.tokenFiles[holder], `rmat_placeholder_${holder}\n`, { mode: 0o600 });
+  }
 }
 
 /** A boot on a pseudo-terminal, driven by what appears on it. */

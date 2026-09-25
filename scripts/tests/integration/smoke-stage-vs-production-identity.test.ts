@@ -51,9 +51,9 @@ import {
   type BootHarness,
   type RunningBoot,
 } from "./smoke-boot-harness.ts";
-import { onTerminal, repoRoot, startRemoteDb, type Operator, type RemoteDb } from "./remote-db-harness.ts";
+import { holdTokenFiles, onTerminal, repoRoot, startRemoteDb, type Operator, type RemoteDb } from "./remote-db-harness.ts";
 import { makeEncryptedBackup } from "../support/make-encrypted-backup.ts";
-import { instancePaths, readStackState } from "../../lib/smoke-state.ts";
+import { instancePaths, PRODUCTION_INSTANCE, readStackState } from "../../lib/smoke-state.ts";
 import { readJournal } from "../../lib/smoke-journal.ts";
 import { smokeTwinUrlFromContainer } from "../../lib/smoke-twin.ts";
 
@@ -68,13 +68,16 @@ beforeAll(async () => {
 afterAll(() => db?.close());
 
 function remoteArgv(op: Operator, instance: string | null, extra: readonly string[] = [], lockTimeoutSeconds = 10): string[] {
+  holdTokenFiles(op, instance ?? PRODUCTION_INSTANCE);
   return ["bun", "--no-env-file", "scripts/smoke.ts", ...(instance ? ["--instance", instance] : []), "--credentials", op.roster, "--lock-timeout", String(lockTimeoutSeconds), ...extra];
 }
 
 /**
  * A row that depends on the target's answer refuses UNDER the target lock: the
  * journal's last record is the `lock` preparation, failed, and no step after it
- * began — no image assembled, no container started, no owner prompt.
+ * began — no site placed, no image built, no preflight, no container replaced,
+ * no owner prompt. (Assembly and the web compatibility decision run BEFORE the
+ * lock by design, smoke spec §13.3, and write only the checkout's `_static`.)
  */
 function expectRefusedAtTheLock(op: Operator, instance: string, out: string): void {
   const journal = readJournal(instancePaths(op.root, instance));
@@ -82,7 +85,9 @@ function expectRefusedAtTheLock(op: Operator, instance: string, out: string): vo
   const last = journal!.phases.at(-1)!;
   expect([last.phase, last.step, last.status]).toEqual(["prepare", "lock", "failed"]);
   expect(out).toContain("target lock held");
-  expect(out).not.toContain("phase: prepare (assemble)");
+  for (const after of ["phase: prepare (site)", "phase: prepare (images)", "phase: preflight", "phase: replace"]) {
+    expect(out).not.toContain(after);
+  }
   expect(out).not.toContain("rm_owner password");
 }
 
@@ -255,7 +260,9 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
       await pumps;
       expect(code).not.toBe(0);
       expect(out).toContain("deployment_identity is production, but the plan was built against rehearsal");
-      expect(out).not.toContain("phase: prepare (assemble)");
+      for (const after of ["phase: prepare (site)", "phase: prepare (images)", "phase: preflight", "phase: replace"]) {
+        expect(out).not.toContain(after);
+      }
     } finally {
       if (proc.exitCode === null) proc.kill("SIGKILL");
       await held.lock.release();
@@ -342,8 +349,15 @@ describe("§4.3 local rows — a real `bun smoke` against its own Postgres", () 
       expect(boot.output()).toContain("RM_ENV=stage, deployment_identity rehearsal");
       expect(boot.output()).toContain("target lock held");
       expect(boot.output()).not.toContain("refusing");
+      // The site is assembled and its web compatibility decided BEFORE the
+      // first mutation of the target (smoke spec §13.3, D54), so those two
+      // read-only steps sit between the restore and the lock.
       const steps = journalNow(x)!.phases.map((p) => `${p.phase}:${p.step ?? ""}:${p.status}`);
-      expect(steps.slice(0, 5)).toEqual(["plan::committed", "prepare:instance:committed", "prepare:restore:committed", "prepare:lock:committed", "prepare:enroll:committed"]);
+      expect(steps.slice(0, 7)).toEqual([
+        "plan::committed", "prepare:instance:committed", "prepare:restore:committed",
+        "prepare:assemble:committed", "prepare:web-compat:committed",
+        "prepare:lock:committed", "prepare:enroll:committed",
+      ]);
       // The restored copy's own answer: the production row is gone, rehearsal is written by rm_owner.
       const url = smokeTwinUrlFromContainer(readStackState(x.paths)!.smokeTwinContainer!)!;
       const read = Bun.spawnSync(["psql", "-X", "-At", url, "-c", "SELECT string_agg(kind || ':' || written_by, ',') FROM deployment_identity"], { stdout: "pipe", stderr: "pipe" });
@@ -400,8 +414,14 @@ describe("§4.3 local rows — a real `bun smoke` against its own Postgres", () 
       expect(current.output()).toContain("a reattached volume gets no weaker policy than a remote");
       const last = journalNow(h!)!.phases.at(-1)!;
       expect([last.phase, last.step, last.status]).toEqual(["prepare", "lock", "failed"]);
-      // Nothing past the lock ran: no application service was started.
-      expect(current.output()).not.toContain("phase: prepare (assemble)");
+      // Nothing past the lock ran: no site placed, no image built, no
+      // preflight, no application service replaced. (Assembly and the web
+      // compatibility decision run BEFORE the lock by design — smoke spec
+      // §13.3 takes that decision before the first mutation of the target —
+      // and write nothing but the checkout's `_static`.)
+      for (const after of ["phase: prepare (site)", "phase: prepare (images)", "phase: preflight", "phase: replace"]) {
+        expect(current.output()).not.toContain(after);
+      }
     }, BOOT_TIMEOUT_MS);
   }
 });
