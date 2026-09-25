@@ -161,6 +161,8 @@ describe("adopted sessions count when this boot judged them", () => {
     const src = require("node:fs").readFileSync(require("node:path").join(import.meta.dir, "../../twin-gate.ts"), "utf8") as string;
     expect(src).toContain("WHERE s.convened_at >= '${t0}'::timestamptz");
     expect(src).toContain("OR EXISTS (SELECT 1 FROM swarm_session_judgements j WHERE j.session_id = s.id AND j.created_at >= '${t0}'::timestamptz)");
+    // An adopted session this boot published WITHOUT a judgement must be graded, not hidden.
+    expect(src).toContain("OR s.published_at >= '${t0}'::timestamptz");
   });
 });
 

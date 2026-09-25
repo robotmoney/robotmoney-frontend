@@ -309,10 +309,12 @@ function sessionRows(container: string, t0: string): SessionRow[] {
        FROM swarm_sessions s
       WHERE s.convened_at >= '${t0}'::timestamptz
          -- A session production opened and this boot ADOPTED (round 1 of a
-         -- twin) counts too, when this boot judged it: a judgement row created
-         -- after T0 cannot come from the dump, and the adopted session ran the
-         -- whole path here (brief, takes, judge, publish). Counting it lets one
-         -- round prove the release instead of two.
+         -- twin) counts too: it ran the whole path here (brief, takes, judge,
+         -- publish). It is admitted by what THIS boot did to it — published it,
+         -- or judged it — never by whether it was judged: the R4.8 run on
+         -- 2026-09-25 published an adopted session with NO judgement, and a
+         -- judged-only filter hid exactly that session from this check.
+         OR s.published_at >= '${t0}'::timestamptz
          OR EXISTS (SELECT 1 FROM swarm_session_judgements j WHERE j.session_id = s.id AND j.created_at >= '${t0}'::timestamptz)
       ORDER BY s.convened_at`,
   ).map(([id, subject, state, age, takes, judged, receipt]) => ({
