@@ -17,6 +17,29 @@ const ORIGIN = "https://robotmoney.network";
 const SITE_NAME = "Robot Money";
 const OG_IMAGE = ORIGIN + "/assets/og-image.png";
 
+// The Organization node the shell's own JSON-LD defines (index.html). Route
+// structured data refers to it by this @id and repeats its name and url, so a
+// reader that does not merge the two script blocks still gets a named author.
+const ORG = {
+  "@type": "Organization",
+  "@id": ORIGIN + "/#org",
+  name: SITE_NAME,
+  url: ORIGIN,
+  logo: ORIGIN + "/assets/icon-512.png",
+};
+
+// The last revision of the research pages (RM-134): their dateModified in the
+// structured data below and their <lastmod> in sitemap.xml, which
+// seo-research.test.ts holds to this value. Move both together.
+const RESEARCH_REVISED = "2026-09-24";
+
+// The regime classifier's public data, for the /regime Dataset's download:
+// ROUTES.dashboards.regimeSnapshots in contract/src/routes.js, on the site's
+// own origin (seo-research.test.ts checks the two agree). `range=3650` because
+// the default answer is the last 180 days, and the Dataset's coverage is the
+// whole history, which starts on 2018-05-15.
+const REGIME_DATA_URL = ORIGIN + "/api/dashboards/regime-snapshots?range=3650";
+
 // The shell's own robots directive (index.html). A route may override it with a
 // `robots` key below; every other route is restored to this on navigation, so a
 // noindex route can never leak its directive onto the next one.
@@ -24,7 +47,28 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
 
 // route -> { title, description }. Titles are unique and <= 60 chars; meta
 // descriptions are 120-155 chars, grounded in each page's real copy.
-/** @type {Record<string, { title: string; description: string; robots?: string }>} */
+//
+// A research page (RM-134) also carries:
+//   name       the page's own short name: what citeTitle() returns and what
+//              its breadcrumb says. Titles there are "<name>: <qualifier> |
+//              Robot Money", and a text citing the page reads the name alone.
+//   type       its schema.org type, which picks the JSON-LD routeStructuredData()
+//              builds and og:type ("article" for the article types).
+//   published  the date the blog index gives the piece, when it gives one.
+//   modified   the last revision (RESEARCH_REVISED).
+/**
+ * @typedef {{
+ *   title: string;
+ *   description: string;
+ *   robots?: string;
+ *   name?: string;
+ *   headline?: string;
+ *   type?: "Dataset" | "TechArticle" | "BlogPosting" | "CollectionPage";
+ *   published?: string;
+ *   modified?: string;
+ * }} RouteMeta
+ */
+/** @type {Record<string, RouteMeta>} */
 const META = {
   "/": {
     title: "Robot Money — Autonomous Treasury for the Agent Economy",
@@ -76,8 +120,11 @@ const META = {
     description: "Track Robot Money's historical AUM and allocation since inception. Daily portfolio snapshots across all strategy wallets, drawn from live onchain data.",
   },
   "/regime": {
-    title: "Market Regime Classifier — Robot Money",
-    description: "Robot Money's live regime classifier blends macro, onchain, and equity-factor panels into a daily cross-asset risk-on/risk-off score, recomputed every 24h.",
+    title: "Regime Classifier: Daily Risk-On or Risk-Off | Robot Money",
+    name: "Regime Classifier",
+    description: "A daily cross-asset reading of risk-on or risk-off: the mean of a macro panel and an on-chain panel, recomputed every 24 hours from open data, with backtests.",
+    type: "Dataset",
+    modified: RESEARCH_REVISED,
   },
   "/swarm": {
     title: "AI Investment Swarm — Robot Money",
@@ -145,32 +192,62 @@ const META = {
     description: "Robot Money's visualizations hub links to live views: the regime classifier, USDC vault allocation, and the AI Investment Swarm, updating on Base.",
     robots: "noindex, follow",
   },
+  // The blog index is the site's research index: every research piece is a
+  // row on it, so it is also the "Research" step of every research breadcrumb.
   "/blog": {
-    title: "Robot Money Blog — Research & Vault Updates",
-    description: "Research and announcements from Robot Money: market-regime signals, treasury-allocation backtests, smart-contract risk studies, and USDC vault updates on Base.",
+    title: "Blog: Research and Announcements | Robot Money",
+    name: "Blog",
+    description: "Research and announcements from Robot Money: market regime signals, treasury allocation backtests, DeFi exploit case studies and partnership news.",
+    type: "CollectionPage",
+    modified: RESEARCH_REVISED,
   },
   // The research pages below carried real titles on production and were
   // inheriting the home page's here, so every one of them shared a title and a
-  // description in search results and link unfurls.
+  // description in search results and link unfurls. `published` is the date
+  // each one's row on the blog index gives.
   "/smart-contract-risks": {
-    title: "Smart Contract Risks — How DeFi Vaults Get Exploited",
-    description: "A field guide to DeFi vault exploits from 2020 to 2026: chronological case studies with the financial impact, the parties involved, and the precise technical attack vector for each.",
+    title: "Smart Contract Risks: How Vaults Get Exploited | Robot Money",
+    name: "Smart Contract Risks",
+    headline: "Smart Contract Risks: How DeFi Vaults Get Exploited",
+    description: "A field guide to DeFi vault exploits from 2016 to 2026: dated case studies with the financial impact, the parties involved and the technical attack vector.",
+    type: "TechArticle",
+    published: "2026-04-02",
+    modified: RESEARCH_REVISED,
   },
   "/regime-detection": {
-    title: "Regime Detection — Prior Art, Methods and Data Sources",
-    description: "A model-agnostic survey of cross-asset regime detection: institutional prior art, quantitative methods, the indicator universe, data infrastructure, and a recommended starting architecture.",
+    title: "Regime Detection: Prior Art, Methods and Data | Robot Money",
+    name: "Regime Detection",
+    headline: "Regime Detection: Prior Art, Methods and Data Sources",
+    description: "A model-agnostic survey of cross-asset regime detection: institutional prior art, quantitative methods, the indicator universe and the data sources behind it.",
+    type: "TechArticle",
+    published: "2026-04-24",
+    modified: RESEARCH_REVISED,
   },
+  // Not on the blog index, so no published date.
   "/regime/indicators": {
-    title: "The 26 Indicators Behind the Regime Classifier",
-    description: "Plain-language explanation of every indicator in the Robot Money regime composite: what each one is, how it is derived, and how to read it, with the numeric thresholds that matter.",
-  },
-  "/research/late-cycle-signals": {
-    title: "Late-Cycle Signals — How Late in the Rally Are We?",
-    description: "Four slow-moving gauges rebuilt from free data: index concentration, M&A activity, broker-dealer margin debt, and consumer sentiment, read against prior market peaks.",
+    title: "The 26 Regime Indicators, Explained | Robot Money",
+    name: "The 26 Regime Indicators",
+    description: "Every regime indicator in plain language: what it is, how it is derived and how to read it. 18 macro and on-chain indicators feed the composite; 8 add context.",
+    type: "TechArticle",
+    modified: RESEARCH_REVISED,
   },
   "/research/channel-divergence": {
-    title: "Channel Divergence — Is the Macro-to-Crypto Channel Breaking?",
-    description: "Three transmission indicators that measure whether risk-on macro conditions are still reaching crypto: BTC beta to risk appetite, BTC/Nasdaq relative strength, and the stablecoin flow proxy.",
+    title: "Channel Divergence: Is Macro Reaching Crypto? | Robot Money",
+    name: "Channel Divergence",
+    headline: "Channel Divergence: Is the Macro-to-Crypto Channel Breaking?",
+    description: "Three indicators that test whether risk-on macro still reaches crypto: Bitcoin's beta to risk appetite, Bitcoin against the Nasdaq, and a stablecoin flow proxy.",
+    type: "TechArticle",
+    published: "2026-06-12",
+    modified: RESEARCH_REVISED,
+  },
+  "/research/late-cycle-signals": {
+    title: "Late-Cycle Signals: How Late Is the Rally? | Robot Money",
+    name: "Late-Cycle Signals",
+    headline: "Late-Cycle Signals: How Late in the Rally Are We?",
+    description: "Four slow-moving gauges rebuilt from free data: index concentration, M&A activity, broker-dealer margin debt and consumer sentiment, read against past peaks.",
+    type: "TechArticle",
+    published: "2026-06-12",
+    modified: RESEARCH_REVISED,
   },
   // Placeholder stubs kept alive so links out of /changelog do not 404
   // (views/{flow-field,regime_2panel,tech-proposal-march-16}.html). They are
@@ -189,7 +266,7 @@ const META = {
   },
   "/regime_2panel": {
     title: "Regime Classifier, 2-panel reference — Robot Money",
-    description: "The original two-panel regime classifier, macro and on-chain indicators only, preserved for reference. The current three-panel composite lives at /regime.",
+    description: "A placeholder for the original two-panel regime classifier, macro and on-chain indicators only, kept for reference. The live classifier is on the regime page.",
     robots: "noindex, follow",
   },
   "/tech-proposal-march-16": {
@@ -299,21 +376,77 @@ const SECTIONS = [
   { prefix: "/media", suffix: "Robot Money Media" },
 ];
 
-// A post's own title, as its page's h1 reads (views/blog/<slug>.html). A
-// section page otherwise takes a title made from its slug, which turned
-// "Conservative vs aggressive: combining macro and on-chain regime signals"
-// into "Regime Conservative Aggressive" in the tab, in link unfurls, and
-// wherever a swarm text cites the post by its path (citeTitle below).
-/** @type {Record<string, string>} */
-const BLOG_TITLES = {
-  "ai-ate-the-bull-market": "AI ate the bull market",
-  "announcement": "The Institute for Zero-Human Companies and Lex Sokolin's Generative Ventures Are Building Robot Money",
-  "honest-backtesting-weights": "Backtesting honestly: what survives when you remove hindsight",
-  "peaq-partnership": "peaq Announces Partnership with Robot Money",
-  "regime-conservative-aggressive": "Conservative vs aggressive: combining macro and on-chain regime signals",
-  "regime-eq-vs-base": "Adding an equity factor panel: how the 3-panel /regime improves on the legacy 2-panel",
-  "treasury-allocation": "Treasury Allocation for On-Chain Businesses",
+// The blog posts (views/blog/<slug>.html). A section page otherwise takes a
+// title made from its slug, which turned "Conservative vs aggressive:
+// combining macro and on-chain regime signals" into "Regime Conservative
+// Aggressive" in the tab, in link unfurls, and wherever a swarm text cites the
+// post by its path (citeTitle below).
+//
+// `name` is the post's title cut to fit a 60-character <title> beside
+// " | Robot Money", and what a citing text reads; `headline` is the post's own
+// h1, which the BlogPosting carries (schema.org caps it at 110 characters);
+// `published` is the date on the post's row in the blog index.
+/** @type {Record<string, { name: string; headline: string; description: string; published: string }>} */
+const BLOG_POSTS = {
+  "ai-ate-the-bull-market": {
+    name: "AI ate the bull market",
+    headline: "AI ate the bull market",
+    description: "Stocks rallied in 2025 and 2026 and Bitcoin did not. Seven free-data indicators show the marginal risk dollar moving to AI stocks and away from Bitcoin.",
+    published: "2026-06-12",
+  },
+  "regime-eq-vs-base": {
+    name: "Adding an equity factor panel: 3 panels vs 2",
+    headline: "Adding an equity factor panel: how the 3-panel regime classifier improves on the legacy 2-panel",
+    description: "A backtest of the 3-panel regime classifier (macro, on-chain, equity factor) against the legacy 2-panel one: same 8 years, same point-in-time weights.",
+    published: "2026-05-31",
+  },
+  "honest-backtesting-weights": {
+    name: "Backtesting honestly: point-in-time weights",
+    headline: "Backtesting honestly: what survives when you remove hindsight",
+    description: "Our regime backtest weighted its indicators with full-history hindsight. We rebuilt the weights point-in-time, re-ran every comparison and report what held up.",
+    published: "2026-05-15",
+  },
+  "regime-conservative-aggressive": {
+    name: "Conservative vs aggressive regime signals",
+    headline: "Conservative vs aggressive: combining macro and on-chain regime signals",
+    description: "Most regime classifiers average macro and on-chain panels. We backtest two alternatives over 8 years of ETH and cash: conservative and aggressive rules.",
+    published: "2026-05-13",
+  },
+  "treasury-allocation": {
+    name: "Treasury Allocation for On-Chain Businesses",
+    headline: "Treasury Allocation for On-Chain Businesses",
+    description: "An 8-year backtest comparing regime-based allocation, HODL and stable yield across a full market cycle, for businesses that hold their treasury on-chain.",
+    published: "2026-05-12",
+  },
+  "peaq-partnership": {
+    name: "peaq Announces Partnership with Robot Money",
+    headline: "peaq Announces Partnership with Robot Money",
+    description: "peaq and Robot Money partner to bring autonomous treasury management to 3.3M+ machines on the peaq network. A Hong Kong robo-farm is the first robot to invest.",
+    published: "2026-03-27",
+  },
+  "announcement": {
+    name: "ZHC and Generative Ventures Build Robot Money",
+    headline: "The Institute for Zero-Human Companies and Lex Sokolin's Generative Ventures Are Building Robot Money",
+    description: "The Institute for Zero-Human Companies and Lex Sokolin's Generative Ventures are building Robot Money: a managed USDC vault on Base for AI agents and humans.",
+    published: "2026-03-11",
+  },
 };
+
+/** @type {Record<string, RouteMeta>} */
+const POST_META = Object.fromEntries(
+  Object.entries(BLOG_POSTS).map(([slug, p]) => [
+    "/blog/" + slug,
+    {
+      title: `${p.name} | ${SITE_NAME}`,
+      name: p.name,
+      headline: p.headline,
+      description: p.description,
+      type: "BlogPosting",
+      published: p.published,
+      modified: RESEARCH_REVISED,
+    },
+  ]),
+);
 
 // Legacy path aliases, mirroring every content-serving rewrite `viewFor()`
 // performs in routes.js (issue #263 pass 2's /committee -> /swarm rename, plus
@@ -458,7 +591,7 @@ export function canonicalUrlFor(pathname) {
 
 /**
  * @param {string} pathname
- * @returns {{ title: string; description: string; robots?: string }}
+ * @returns {RouteMeta}
  */
 export function metaFor(pathname) {
   // Resolved through the alias table so a legacy path describes itself as the
@@ -466,10 +599,11 @@ export function metaFor(pathname) {
   // NOT_FOUND_META ("Page Not Found", noindex) while rendering a real member.
   const p = canonicalPath(pathname);
   if (META[p]) return META[p];
+  if (POST_META[p]) return POST_META[p];
   for (const { prefix, suffix } of SECTIONS) {
     if (p === prefix || p.startsWith(prefix + "/")) {
       const seg = p.split("/").filter(Boolean).pop();
-      const name = (prefix === "/blog" && BLOG_TITLES[seg || ""]) || titleize(seg || "");
+      const name = titleize(seg || "");
       return {
         title: name ? `${name} — ${suffix}` : suffix,
         description: (META[prefix] || META["/"]).description,
@@ -505,18 +639,155 @@ export function metaFor(pathname) {
 }
 
 /**
- * A page's own name, for text that cites it by path: the title before its
- * " — " qualifier ("Smart Contract Risks — How DeFi Vaults Get Exploited"
- * cites as "Smart Contract Risks"), through the alias table, so
- * /articles/treasury-allocation cites as the post it renders. "" for a path
- * the site has no page for, which the caller then shows as written.
+ * A page's own name, for text that cites it by path: its `name` where it has
+ * one ("Smart Contract Risks: How Vaults Get Exploited | Robot Money" cites as
+ * "Smart Contract Risks"), otherwise the title before its em dash or " | "
+ * qualifier, through the alias table, so /articles/treasury-allocation cites
+ * as the post it renders. "" for a path the site has no page for, which the
+ * caller then shows as written.
  * @param {string} pathname
  * @returns {string}
  */
 export function citeTitle(pathname) {
   if (!isKnownPage(pathname)) return "";
+  const m = metaFor(pathname);
+  if (m.name) return m.name;
   // Titles qualify their name after " — " or " | " ("Agent Skills | Robot Money").
-  return String(metaFor(pathname).title || "").split(/\s+[—|]\s+/)[0].trim();
+  return String(m.title || "").split(/\s+[\u2014|]\s+/)[0].trim();
+}
+
+// The types og:type calls an article; everything else is a website.
+const ARTICLE_TYPES = new Set(["BlogPosting", "TechArticle", "Article"]);
+
+/**
+ * @param {RouteMeta} m
+ * @returns {"article" | "website"}
+ */
+function ogTypeFor(m) {
+  return m.type && ARTICLE_TYPES.has(m.type) ? "article" : "website";
+}
+
+/**
+ * Every research page with a date on the blog index, newest first: the blog's
+ * CollectionPage lists these, and blog/feed.xml carries one item for each.
+ * Ties keep table order.
+ * @returns {{ path: string; meta: RouteMeta }[]}
+ */
+export function researchIndex() {
+  return [...Object.entries(META), ...Object.entries(POST_META)]
+    .filter(([, m]) => m.published)
+    .map(([path, meta]) => ({ path, meta }))
+    .sort((a, b) => String(b.meta.published).localeCompare(String(a.meta.published)));
+}
+
+/**
+ * The research pages this module describes with structured data, by path.
+ * @returns {string[]}
+ */
+export function researchRoutes() {
+  return [...Object.entries(META), ...Object.entries(POST_META)].filter(([, m]) => m.type).map(([path]) => path);
+}
+
+/**
+ * The schema.org JSON-LD for a route, or null when the route has none.
+ *
+ * Only the research pages carry any (their `type` in META or POST_META), and
+ * every value in it comes from those tables, never from the request path: the
+ * api's shell fallback hands renderMeta() arbitrary paths, and nothing it
+ * could put in a URL reaches this output.
+ *
+ * One @graph: the page's own node (a Dataset for the regime classifier, a
+ * TechArticle for a reference or research page, a BlogPosting for a post, a
+ * CollectionPage for the blog index) and a BreadcrumbList. The blog index is
+ * the "Research" step because it is the only page that lists the research; a
+ * post's trail is Home > Research > post rather than a separate "Blog" step,
+ * which would name the same URL twice.
+ *
+ * @param {string} pathname
+ * @returns {Record<string, unknown> | null}
+ */
+export function routeStructuredData(pathname) {
+  const p = canonicalPath(pathname);
+  const m = META[p] || POST_META[p];
+  if (!m || !m.type) return null;
+  const url = ORIGIN + p;
+  const name = m.name || String(m.title).split(/\s+\|\s+/)[0];
+  const researchUrl = ORIGIN + "/blog";
+
+  const trail = [{ name: "Home", url: ORIGIN + "/" }, { name: "Research", url: researchUrl }];
+  if (p !== "/blog") trail.push({ name, url });
+  const breadcrumb = {
+    "@type": "BreadcrumbList",
+    "@id": url + "#breadcrumb",
+    itemListElement: trail.map((c, i) => ({ "@type": "ListItem", position: i + 1, name: c.name, item: c.url })),
+  };
+
+  /** @type {Record<string, unknown>} */
+  let node;
+  if (m.type === "Dataset") {
+    node = {
+      "@type": "Dataset",
+      "@id": url + "#dataset",
+      name: `${SITE_NAME} ${name}`,
+      description: m.description,
+      url,
+      creator: ORG,
+      publisher: ORG,
+      temporalCoverage: "2018-05-15/..",
+      isAccessibleForFree: true,
+      variableMeasured: ["composite", "compositePercentile", "regime"],
+      distribution: [{ "@type": "DataDownload", encodingFormat: "application/json", contentUrl: REGIME_DATA_URL }],
+    };
+  } else if (m.type === "CollectionPage") {
+    node = {
+      "@type": "CollectionPage",
+      "@id": url + "#page",
+      name: `${SITE_NAME} ${name}`,
+      description: m.description,
+      url,
+      isPartOf: { "@id": ORIGIN + "/#website" },
+      publisher: ORG,
+      dateModified: m.modified,
+      mainEntity: {
+        "@type": "ItemList",
+        itemListElement: researchIndex().map((e, i) => ({
+          "@type": "ListItem",
+          position: i + 1,
+          url: ORIGIN + e.path,
+          name: e.meta.headline || e.meta.name,
+        })),
+      },
+    };
+  } else {
+    node = {
+      "@type": m.type,
+      "@id": url + "#article",
+      headline: m.headline || name,
+      description: m.description,
+      url,
+      mainEntityOfPage: { "@type": "WebPage", "@id": url },
+      image: OG_IMAGE,
+      ...(m.published ? { datePublished: m.published } : {}),
+      dateModified: m.modified,
+      author: ORG,
+      publisher: ORG,
+      isPartOf: { "@id": ORIGIN + "/#website" },
+      inLanguage: "en",
+    };
+  }
+  return { "@context": "https://schema.org", "@graph": [node, breadcrumb] };
+}
+
+/**
+ * routeStructuredData() as the text of a <script type="application/ld+json">:
+ * "" when the route has none. Every "<" is written as <, which JSON reads
+ * back as the same character, so no value can close the script element.
+ * @param {string} pathname
+ * @returns {string}
+ */
+export function routeStructuredDataJson(pathname) {
+  const ld = routeStructuredData(pathname);
+  return ld ? JSON.stringify(ld).replace(/</g, "\\u003c") : "";
 }
 
 /**
@@ -568,9 +839,27 @@ export function applyRouteMeta(pathname) {
   upsert("meta", "property", "og:site_name", "content", SITE_NAME);
   upsert("meta", "property", "og:image", "content", OG_IMAGE);
 
+  upsert("meta", "property", "og:type", "content", ogTypeFor(m));
+
   upsert("meta", "name", "twitter:title", "content", m.title);
   upsert("meta", "name", "twitter:description", "content", m.description);
   upsert("meta", "name", "twitter:image", "content", OG_IMAGE);
+
+  // The route's structured data: written for a research page, and removed on
+  // every other route so one page's Article never describes the next.
+  const ld = routeStructuredDataJson(p);
+  let script = document.head.querySelector("script[data-route-ld]");
+  if (!ld) {
+    script?.remove();
+  } else {
+    if (!script) {
+      script = document.createElement("script");
+      script.setAttribute("type", "application/ld+json");
+      script.setAttribute("data-route-ld", "");
+      document.head.appendChild(script);
+    }
+    script.textContent = ld;
+  }
 }
 
 /**
@@ -645,6 +934,11 @@ function escapeHtml(str) {
  * replace is a no-op when its pattern does not match, so an unexpected shell
  * degrades to today's behaviour instead of producing malformed head markup.
  *
+ * The one element it does add is a research page's JSON-LD, as
+ * `<script type="application/ld+json" data-route-ld>` just before </head>
+ * (routeStructuredDataJson). Any copy already in the input is dropped first,
+ * so the output carries exactly one, and a route without structured data none.
+ *
  * @param {string} shellHtml the shell document
  * @param {string} pathname the route being served
  * @returns {string}
@@ -679,11 +973,18 @@ export function renderMeta(shellHtml, pathname) {
     [/(<meta property="og:url" content=")[^"]*(")/, url],
     [/(<meta name="twitter:title" content=")[^"]*(")/, titleAttr],
     [/(<meta name="twitter:description" content=")[^"]*(")/, description],
+    [/(<meta property="og:type" content=")[^"]*(")/, ogTypeFor(m)],
   ];
 
   let html = shellHtml.replace(/<title>[^<]*<\/title>/, () => `<title>${title}</title>`);
   for (const [pattern, value] of TAGS) {
     html = html.replace(pattern, (_match, open, close) => `${open}${value}${close}`);
+  }
+
+  html = html.replace(/\s*<script type="application\/ld\+json" data-route-ld>[\s\S]*?<\/script>/g, "");
+  const ld = routeStructuredDataJson(pathname);
+  if (ld) {
+    html = html.replace(/(\s*)<\/head>/, (_match, space) => `\n    <script type="application/ld+json" data-route-ld>${ld}</script>${space}</head>`);
   }
   return html;
 }

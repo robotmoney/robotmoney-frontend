@@ -522,16 +522,14 @@
    removed from views.css. Regime-DOMAIN styling (hero, backtests, correlations,
    sparklines, posbars, indicator cells, pie, methodology) stays in views.css. */
 
-/* eyebrow (kicker) */
+/* eyebrow (kicker): mono caps in the muted text colour at the site's 0.11em
+   label tracking, as on the research-record pages. Cyan is a line, never a run
+   of type, so no eyebrow carries it: the --accent modifier is retired, and
+   --quiet now matches the base, kept only because pages still name it. */
 .rm-eyebrow, .rv__eyebrow, .sv__eyebrow {
   font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.3em; color: var(--color-accent);
+  letter-spacing: 0.11em; color: var(--color-text-muted);
 }
-.rm-eyebrow--accent, .rv__eyebrow--accent { color: var(--color-accent); }
-/* The base above is cyan AND there is an --accent modifier setting the same
-   colour, which is what a base that was once neutral looks like after drift:
-   the modifier became a no-op. --quiet is the opt-out until the base itself is
-   flipped and every page audited for what actually needs the accent. */
 .rm-eyebrow--quiet, .sv__eyebrow--quiet { color: var(--color-text-muted); }
 
 /* A member's role, the same pill wherever a role shows (the roster, a
@@ -589,17 +587,18 @@
 
 /* /regime row-level provenance badge (issue #397): which data source wrote the
    served snapshot. Stacks under the as-of label, right-aligned to match. 'live'
-   reads neutral (the healthy default); 'hermetic'/'fixture'/'seed' read amber
-   (the existing non-live warn tone, matching .alloc-aum__prov on /allocation)
-   since they mean the served data is not this run's real production fetch. */
+   reads quiet (the healthy default); 'hermetic'/'fixture'/'seed' step up to
+   the text colour on a brighter edge, since they mean the served data is not
+   this run's real production fetch. The words carry it, with no hue and no
+   fill: it was warn text on an amber wash, two hues on one badge. */
 .rv__asof-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 0.3rem; }
 .rv__prov {
   font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.15em; padding: 0.2rem 0.5rem; border-radius: var(--radius);
+  letter-spacing: 0.11em; padding: 0.2rem 0.5rem; border-radius: var(--radius);
   border: 1px solid var(--color-border); color: var(--color-text-muted);
 }
 .rv__prov--hermetic, .rv__prov--fixture, .rv__prov--seed {
-  color: var(--color-warn); border-color: rgba(232, 166, 64, 0.4); background: rgba(232, 166, 64, 0.08);
+  color: var(--color-text); border-color: var(--color-text-muted);
 }
 
 /* summary / stat card grid + card */
@@ -608,7 +607,7 @@
   background: rgba(16, 20, 28, 0.4); border: 1px solid var(--color-border);
   border-radius: var(--radius); padding: 1rem; display: flex; flex-direction: column;
 }
-.rm-card-eyebrow, .rv__card-eyebrow { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-muted); }
+.rm-card-eyebrow, .rv__card-eyebrow { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-muted); }
 .rm-card-val, .rv__card-val { font-size: 1.9rem; font-weight: 500; margin-top: 0.35rem; color: var(--color-text); font-family: var(--font-mono); }
 .rm-card-foot, .rv__card-foot { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-muted); margin-top: 0.55rem; }
 
@@ -616,7 +615,7 @@
 .rm-chartcard, .rv__chart-card { border: 1px solid var(--color-border); border-radius: var(--radius); padding: 1rem; background: rgba(16, 20, 28, 0.4); }
 .rm-chartcard-head, .rv__chart-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.7rem; margin-bottom: 0.7rem; }
 .rm-chartcard-title-group, .rv__chart-title-group { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-.rm-chartcard-title, .rv__chart-title { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-muted); }
+.rm-chartcard-title, .rv__chart-title { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-muted); }
 .rm-chart, .rv__chart { height: 260px; background: transparent; border: 0; border-radius: 0; padding: 0; margin: 0; }
 
 /* toggle chips: the button family's mono caps at the label size, square. A
@@ -747,6 +746,68 @@
   .rm-tip--end .rm-tip__bub[data-open="1"] { transform: translateY(0); }
 }
 @media (prefers-reduced-motion: reduce) { .rm-tip__bub { transition: opacity 0.01s; } }
+
+/* ─── Section links ────────────────────────────────────────────────────────
+   The "#" lib/heading-anchors.js appends to each h2/h3 with an id, on a page
+   whose content root carries data-anchors. Scoped under #view on purpose: the
+   per-view <style> blocks load after this sheet and style every `a` in their
+   prose, and the id outranks them without !important.
+
+   The glyph is generated content, so the heading's text is unchanged for
+   anything that reads it, and the link's name is its aria-label. The word
+   joiner in front of it keeps it on the line of the heading's last word: an
+   orphaned "#" on a line of its own reads as a stray character.
+
+   "Copied" is a small bubble in the tooltip skin (.rm-tip__bub), right-aligned
+   to the glyph so it grows leftwards into the heading and never past the page
+   edge on a phone. It opens BELOW the glyph: the click has just scrolled the
+   heading to 6rem from the top, and above it the bubble sat under the nav.
+
+   Every fragment target on these pages clears the fixed nav, not only the
+   headings: the glossary's links land on its indicator sections (#T10Y2Y).
+   The router's fragmentTop() reads this margin too, so a link followed in the
+   page and one arriving from another page stop at the same place. */
+#view [data-anchors] :is(h2, h3)[id], #view [data-anchors] [id] { scroll-margin-top: 6rem; }
+#view [data-anchors] .rm-hlink {
+  position: relative;
+  margin-left: 0.45em;
+  padding: 0.3rem 0.2rem;
+  font-family: var(--font-mono); font-size: 0.8125rem; font-weight: 400; font-style: normal;
+  line-height: 1; letter-spacing: 0; text-transform: none;
+  vertical-align: middle;
+  color: var(--color-text-muted);
+  text-decoration: none; border: 0; border-radius: 0; background: none;
+  opacity: 0;
+  transition: opacity 0.14s ease, color 0.14s ease;
+}
+#view [data-anchors] .rm-hlink::before { content: "\2060#"; content: "\2060#" / ""; }
+#view [data-anchors] :is(h2, h3):hover > .rm-hlink,
+#view [data-anchors] .rm-hlink:focus-visible,
+#view [data-anchors] .rm-hlink.is-copied { opacity: 1; }
+#view [data-anchors] .rm-hlink:hover { color: var(--color-text-soft); text-decoration: none; }
+#view [data-anchors] .rm-hlink:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
+/* No hover on a touch screen, so nothing would ever reveal it: always there,
+   faintly, and full strength once tapped. */
+@media (hover: none) {
+  #view [data-anchors] .rm-hlink { opacity: 0.5; }
+}
+#view [data-anchors] .rm-hlink::after {
+  content: "Copied"; content: "Copied" / "";
+  position: absolute; right: 0; top: calc(100% + 4px);
+  padding: 0.25rem 0.45rem;
+  background: var(--color-surface); border: 1px solid var(--color-border-light); border-radius: 0;
+  font-family: var(--font-mono); font-size: 0.6875rem; line-height: 1.2; letter-spacing: 0.04em;
+  color: var(--color-text-muted); white-space: nowrap;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translateY(-3px);
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0s linear 0.14s;
+}
+#view [data-anchors] .rm-hlink.is-copied::after {
+  opacity: 1; visibility: visible; transform: none; transition-delay: 0s;
+}
+@media (prefers-reduced-motion: reduce) {
+  #view [data-anchors] .rm-hlink, #view [data-anchors] .rm-hlink::after { transition: none; }
+}
 
 /* ─── Session phase ────────────────────────────────────────────────────────
    One treatment for "what phase is this session in", so /swarm, the apply
@@ -1093,7 +1154,8 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
    inline stylesheet still owns its size/genart; this only fixes the anchor.
    !important is used deliberately: the per-page inline <style> is injected
    after this shared sheet and would otherwise win the cascade. */
-.a2-hero, .sv__hero, .rv__hero, .tok__hero, .md-hero, .cl__hero, .sk__head {
+.a2-hero, .sv__hero, .rv__hero, .tok__hero, .md-hero, .cl__hero, .sk__head,
+.blog-idx__hero {
   /* Top-aligned, not centred. Centring looks right on any one page but breaks
      the thing this rule exists for: these blocks are different heights (a lede
      wraps to one line on /tokenomics and three on /projects), so centring made
@@ -1103,7 +1165,7 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
   position: relative;
 }
 .a2-hero__inner, .sv__hero-inner, .rv__hero-inner, .tok__hero-inner,
-.md-hero__inner, .cl__hero-inner, .sk__head-inner {
+.md-hero__inner, .cl__hero-inner, .sk__head-inner, .blog-idx__hero-inner {
   /* 10rem rather than the original 8rem: it sits a typical block near the
      middle of the band instead of high in it, which was the complaint, while
      keeping every headline on the identical offset. */
@@ -1129,7 +1191,8 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
    lose to the !important above; only their margins are page-specific. */
 .sk__title, .rv__title, .tok__h1, .a2-hero__title,
 .md-hero__title, .cl__h1, .sv__title,
-.sv__detail-title, .ap-hero__title, .alh__title {
+.sv__detail-title, .ap-hero__title, .alh__title,
+.blog-idx__title, .ri__title, .stub__title, .rs__title {
   font-family: var(--font-display) !important;
   font-weight: 700 !important;
   font-size: clamp(2.5rem, 4.2vw, 3.75rem) !important;
@@ -1142,10 +1205,28 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
    (.vp__title left this list with views/vault.html, which RM-115 retired into
    /allocation's `#vault` section.) */
 .sk__title, .rv__title, .tok__h1, .a2-hero__title,
-.md-hero__title, .cl__h1, .sv__title {
+.md-hero__title, .cl__h1, .sv__title,
+.blog-idx__title, .ri__title, .stub__title, .rs__title {
   /* /regime and /swarm carried an 8px top margin, which is enough to read
      as a jump when the headline is otherwise pinned to the same offset. */
   margin-top: 0 !important;
+}
+
+/* ── Research documents ──
+   /regime/indicators (.ri), the .stub documents (/smart-contract-risks,
+   /regime-detection, /research/late-cycle-signals and the archived stubs) and
+   /research/channel-divergence (.rs) have no hero band: the head sits on the
+   page, a mono eyebrow over the title. Their own sheets pinned the EYEBROW at
+   10rem on desktop, which put the headline 33px lower than on every hero page,
+   and at another offset on a phone. Here the eyebrow hangs above the pinned
+   offset and the headline itself lands at 10rem at every width. 1.6875rem is
+   the eyebrow's one line (10px at 1.5) plus its 0.75rem gap, both fixed here
+   so the sum holds. */
+.ri, .stub, .rs { padding-top: calc(10rem - 1.6875rem) !important; }
+.ri__eyebrow, .stub__eyebrow, .rs__eyebrow {
+  font-size: 10px !important;
+  line-height: 1.5 !important;
+  margin: 0 0 0.75rem !important;
 }
 
 /* ── Hero legibility ──
@@ -1160,7 +1241,7 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
    apply page already defines for long copy. Together they take /media to about
    7.9:1 while leaving the art plainly visible. */
 .a2-hero__viz, .sv__hero-field, .rv__hero-art, .tok__hero-art,
-.md-hero__art, .cl__hero-art, .sk__head-viz {
+.md-hero__art, .cl__hero-art, .sk__head-viz, .blog-idx__hero-art {
   z-index: 0;
 }
 /* ::before, not ::after. Four of these heroes already define their own ::after
@@ -1168,7 +1249,7 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
    sheet, so an ::after veil here loses the cascade on exactly the pages whose
    art is busiest. No hero defines a ::before. */
 .a2-hero::before, .sv__hero::before, .rv__hero::before, .tok__hero::before,
-.md-hero::before, .cl__hero::before, .sk__head::before {
+.md-hero::before, .cl__hero::before, .sk__head::before, .blog-idx__hero::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -1177,6 +1258,6 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
   z-index: 0;
 }
 .a2-hero__lede, .sv__lede, .rv__hero-sub, .tok__lede,
-.md-hero__lede, .cl__lede, .sk__lede {
+.md-hero__lede, .cl__lede, .sk__lede, .blog-idx__lede {
   color: #aeb6c6 !important;
 }

@@ -287,6 +287,26 @@ test("the tag filter counts pending entries with the rest", async ({ page }) => 
   }
 });
 
+// RM-132: one image width down the log. "Allocation against the target" is the
+// reference; page captures and Mermaid diagrams take it too, rather than
+// running to the full column.
+test("every figure takes the log's one image width", async ({ page }) => {
+  await openChangelog(page);
+  const widths = await page.evaluate(() => {
+    const doc = (document.querySelector("#frame") as HTMLIFrameElement).contentDocument!;
+    const ref = doc.querySelector('[id$="allocation-against-the-target"] .cl__media') as HTMLElement;
+    return {
+      ref: Math.round(ref.getBoundingClientRect().width),
+      all: [...doc.querySelectorAll(".cl__media")]
+        .map((f) => Math.round((f as HTMLElement).getBoundingClientRect().width))
+        .filter((w) => w > 0),
+    };
+  });
+  expect(widths.ref).toBeGreaterThan(300);
+  expect(widths.all.length).toBeGreaterThanOrEqual(10);
+  for (const w of widths.all) expect(w).toBe(widths.ref);
+});
+
 test("captures load as real images, and permalinks are the titles", async ({ page }) => {
   const frame = await openChangelog(page);
 

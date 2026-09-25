@@ -6,7 +6,7 @@
 // worthwhile follow-up, not a drive-by.
 import { api, ROUTES, path } from "../lib/api.js";
 import { assetDot, subjectDot, resolveTokenColors } from "./views/shared.js";
-import { CATEGORICAL, SERIES } from "../lib/chart-theme.js";
+import { CATEGORICAL, SERIES, REGIME } from "../lib/chart-theme.js";
 import { forgetApplication, rememberApplication } from "../lib/application-memory.js";
 import { SWARM_DISCLAIMER } from "../lib/swarm-disclaimer.js";
 import { memberAvatarMarkup } from "../lib/member-mark.js";
@@ -538,10 +538,11 @@ export const helpers = {
   // looked the same as the two that agreed. Same ends as STANCE_COLORS (Pool
   // green for the constructive end, Beacon for the attention end, slate
   // neutral), carried by a <=8px dot rather than coloured text: Beacon is a
-  // POINT in the covenant, never a run of type.
+  // POINT in the covenant, never a run of type. The hues are REGIME in
+  // lib/chart-theme.js, the one regime palette /regime and the blog share.
   regimeColor(regime) {
     const key = String(regime || "").replace(/-/g, "_");
-    return ({ risk_on: "#10b981", neutral: "#7e889e", risk_off: "#ff7a29" })[key] || "#7e889e";
+    return REGIME[key] || REGIME.neutral;
   },
   // A 0-1 percentile as "71st". The backdrop panel prints percentiles as bare
   // integers next to a bar, where "71" could as easily be a score or a count;
@@ -2887,6 +2888,9 @@ export function registerStaticViews(Alpine) {
     // A judge's record: its public judgements, newest first. A judge files no
     // takes, so its page lists these where a member's lists takes.
     judgements: [],
+    // Whether the judgements are served at all (RM-130): a release without
+    // #1017 serves none, and then the record is left out, not called empty.
+    judgementsServed: false,
     // subject id → the subject record's name. A take row carries the name its
     // session was filed under, which can lag a rename; /swarm and the subject
     // page print the record's name, so this page does too.
@@ -2965,8 +2969,11 @@ export function registerStaticViews(Alpine) {
             setCanonicalUrl(canonicalUrlFor(`/swarm/members/${this.member.handle}`), routeAtEntry);
           }
         }
-        if (isJudge(this.member)) this.judgements = await loadMemberJudgements(memberId);
-        else this.rows = await this.loadRows(memberId);
+        if (isJudge(this.member)) {
+          const judgements = await loadMemberJudgements(memberId);
+          this.judgementsServed = judgements !== null;
+          this.judgements = judgements || [];
+        } else this.rows = await this.loadRows(memberId);
         try {
           const ids = [...new Set([...this.rows.map((r) => r.session.subjectId), ...this.judgements.map((j) => j.subjectId)].filter(Boolean))];
           const subs = await Promise.all(ids.map(async (id) => (await api.get(path(ROUTES.swarm.subject, { id })).then(camelSubject).catch(() => null)) || loadArchiveSubject(id).catch(() => null)));
@@ -3461,7 +3468,9 @@ export function registerStaticViews(Alpine) {
     async loadJudgements() {
       const s = this.session;
       if (this.source !== "api" || !s?.id || s.state !== "published" || !s.swarmRecommendation?.judge) return;
-      this.judgements = await loadSessionJudgements(s.id);
+      // Not served (RM-130) reads as none: the opinion the recommendation
+      // carries still shows, with no way to a judgement page.
+      this.judgements = (await loadSessionJudgements(s.id)) || [];
     },
     isFramework() { return this.subject?.source?.type === "framework"; },
     subjectHref() {

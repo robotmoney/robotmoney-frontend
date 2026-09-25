@@ -1,43 +1,41 @@
-<!-- /blog/regime-eq-vs-base — static port of the Next.js page.tsx.
+<!-- /blog/regime-eq-vs-base: static port of the Next.js page.tsx.
      Numbers baked from public/data/regime-eq-comparison.json (asof 2026-05-30).
      The three charts below render from that same committed fixture via the
      regimeEqCompareCharts() factory (alpine/views/blog-charts.js), registered
-     at boot in alpine/views.js — same pattern as views/regime.js's canvases. -->
-<article class="blog-root" x-data="regimeEqCompareCharts()" x-init="load()">
+     at boot in alpine/views.js, the same pattern as views/regime.js's canvases. -->
+<article class="blog-root" x-data="regimeEqCompareCharts()" x-init="load()" data-anchors>
   <a href="/blog" class="blog-back">&larr; Back to Blog</a>
 
   <header class="blog-header">
     <div class="blog-meta">
-      <span class="blog-badge">Research</span>
-      <time datetime="2026-05-30" class="blog-date">2026-05-30</time>
+      <span class="rm-role">Research</span>
+      <time datetime="2026-05-30" class="blog-date">May 30, 2026</time>
     </div>
-    <h1 class="blog-title">
-      <span class="blog-title-serif">Adding an equity factor panel:</span>
-      <span class="blog-gradient">how the 3-panel /regime improves on the legacy 2-panel</span>
-    </h1>
+    <h1 class="blog-title">Adding an equity factor panel: how the 3-panel regime classifier improves on the legacy 2-panel</h1>
     <p class="blog-lede">
       The base regime classifier reads macro and on-chain. The new dashboard adds an
       equity factor panel as a co-equal third input. Same window, same data, same
-      point-in-time weighting &mdash; and on every test portfolio, the augmented composite
+      point-in-time weighting, and on every test portfolio the augmented composite
       earns a better Sharpe and a higher final value.
     </p>
     <div class="blog-subline">
       Macro 8 &middot; On-chain 10 &middot; Equity factor 8 &middot; 8-year backtest,
       walk-forward inverse-correlation weights
     </div>
+    <p class="rr-note blog-note-line">
+      Research note: not investment advice, not a financial product, and not an offer to buy
+      or sell any security or digital asset. Robot Money publishes this as research and is not
+      a registered investment advisor. Every figure is a hypothetical backtest from historical
+      data, not live trading or fund returns. The weights are point-in-time with no look-ahead,
+      but the choice of indicators and parameters benefits from hindsight. Past performance,
+      especially backtested, does not predict future results. Live methodology and snapshots
+      are on the <a href="/regime">regime page</a> (the current default, 3 panels) and the
+      <a href="/regime_2panel">2-panel reference</a>. <a href="/disclaimer">Full disclaimer</a>
+    </p>
   </header>
 
-  <div class="blog-note">
-    <strong>Research note &mdash; not financial advice, not a financial product.</strong>
-    All numbers in this post are backtest results computed from historical data,
-    point-in-time weights, no look-ahead. Past performance &mdash; especially backtested
-    &mdash; does not predict future results. Live methodology and snapshots at
-    <a href="/regime">/regime</a> (current default, 3 panels) and
-    <a href="/regime_2panel">/regime_2panel</a> (legacy 2-panel reference).
-  </div>
-
   <div class="blog-prose">
-    <h2>The headline</h2>
+    <h2 id="the-headline">The headline</h2>
     <p>
       Adding the equity factor panel to the composite improves all three portfolios
       measurably and consistently. Final multiples rise, CAGR is higher, Sharpe edges up,
@@ -50,8 +48,8 @@
         <thead>
           <tr>
             <th class="blog-th-left">Portfolio</th>
-            <th class="blog-th-right">/regime_2panel (legacy)</th>
-            <th class="blog-th-right blog-th-accent">/regime (3-panel current)</th>
+            <th class="blog-th-right">Legacy 2-panel</th>
+            <th class="blog-th-right blog-th-lead">3-panel (current)</th>
             <th class="blog-th-right blog-th-dim">&Delta;</th>
           </tr>
         </thead>
@@ -59,19 +57,19 @@
           <tr>
             <td>ETH / cash</td>
             <td class="blog-td-num">9.79&times; &middot; sh 0.78 &middot; -62%</td>
-            <td class="blog-td-num blog-td-accent">10.04&times; &middot; sh 0.79 &middot; -61%</td>
+            <td class="blog-td-num blog-td-lead">10.04&times; &middot; sh 0.79 &middot; -61%</td>
             <td class="blog-td-num blog-td-dim">+0.24&times; &middot; +0.01</td>
           </tr>
           <tr>
             <td>SP500 / cash</td>
             <td class="blog-td-num">1.98&times; &middot; sh 0.87 &middot; -21%</td>
-            <td class="blog-td-num blog-td-accent">2.20&times; &middot; sh 0.89 &middot; -25%</td>
+            <td class="blog-td-num blog-td-lead">2.20&times; &middot; sh 0.89 &middot; -25%</td>
             <td class="blog-td-num blog-td-dim">+0.22&times; &middot; +0.02</td>
           </tr>
           <tr>
             <td>Mixed 50/50</td>
             <td class="blog-td-num">6.14&times; &middot; sh 0.89 &middot; -36%</td>
-            <td class="blog-td-num blog-td-accent">6.81&times; &middot; sh 0.90 &middot; -42%</td>
+            <td class="blog-td-num blog-td-lead">6.81&times; &middot; sh 0.90 &middot; -42%</td>
             <td class="blog-td-num blog-td-dim">+0.67&times; &middot; +0.01</td>
           </tr>
         </tbody>
@@ -83,36 +81,35 @@
     </div>
 
     <p>
-      The 2-panel composite was already strong &mdash; beating buy-and-hold on Sharpe across
+      The 2-panel composite was already strong, beating buy-and-hold on Sharpe across
       all three portfolios. Adding the factor panel takes a strong baseline and pushes
       it further: <strong>+1.5%</strong> CAGR on SP500, <strong>+1.6%</strong> on
       the mixed 50/50, with Sharpe holding or improving in both.
     </p>
 
-    <h2>Equity curves, side by side</h2>
+    <h2 id="equity-curves-side-by-side">Equity curves, side by side</h2>
     <p>
       Same starting capital, same backtest engine, same cost assumptions, across three
-      classifiers: the 3-panel /regime composite, the legacy /regime_2panel base, and the
+      classifiers: the 3-panel composite, the legacy 2-panel base, and the
       factor panel run as a <em>standalone</em> classifier, which is worth watching for
       reasons covered below.
     </p>
     <figure class="blog-figure">
-      <div class="blog-figure-label">Equity curves &mdash; 3-panel /regime vs legacy 2-panel vs factor-alone</div>
+      <div class="blog-figure-label">Equity curves: 3-panel composite vs legacy 2-panel vs factor alone</div>
       <div class="blog-figure-chart"><canvas x-ref="equity"></canvas></div>
       <p class="blog-figure-caption">
         The augmented composite edges out the legacy base across the full
-        8-year window; the standalone factor panel runs hottest of all. Live
-        snapshots at <a href="/regime">/regime</a> and
-        <a href="/regime_2panel">/regime_2panel</a>.
+        8-year window; the standalone factor panel runs hottest of all. Live snapshots are on
+        the <a href="/regime">regime page</a> and the <a href="/regime_2panel">2-panel reference</a>.
       </p>
     </figure>
 
-    <h2>The factor panel is the strongest single signal in this sample</h2>
+    <h2 id="the-factor-panel-is-the-strongest-single-signal-in-this-sample">The factor panel is the strongest single signal in this sample</h2>
     <p>
       This is the result that surprised us most. We expected the equity panel to be
       additive on top of macro + on-chain. What the backtest actually shows is that
       <strong>
-        the factor panel by itself &mdash; ignoring macro and on-chain entirely &mdash;
+        the factor panel by itself, ignoring macro and on-chain entirely,
         produces the highest single-panel Sharpe in two of the three portfolios, including
         the diversified Mixed sleeve where it hits 1.03.
       </strong>
@@ -120,21 +117,21 @@
       composite (0.90) on the same portfolio.
     </p>
     <figure class="blog-figure">
-      <div class="blog-figure-label">Sharpe by panel &mdash; macro / on-chain / factor / composites</div>
+      <div class="blog-figure-label">Sharpe by panel: macro / on-chain / factor / composites</div>
       <div class="blog-figure-chart"><canvas x-ref="sharpe"></canvas></div>
       <p class="blog-figure-caption">
         The standalone factor panel posts the highest single-panel Sharpe in two of three
-        portfolios &mdash; topping both composites on the Mixed sleeve (1.03 vs 0.89 / 0.90).
+        portfolios, topping both composites on the Mixed sleeve (1.03 vs 0.89 / 0.90).
       </p>
     </figure>
     <p>
       Read this carefully: the factor panel is not a small additive tweak. It&rsquo;s
       carrying more information about cross-asset risk regimes than either macro or
-      on-chain on a per-panel basis. That&rsquo;s a strong statement and worth pressing on
-      &mdash; we&rsquo;ll address why this might be coherent below.
+      on-chain on a per-panel basis. That&rsquo;s a strong statement and worth pressing on.
+      We&rsquo;ll address why this might be coherent below.
     </p>
 
-    <h2>The composite, over time</h2>
+    <h2 id="the-composite-over-time">The composite, over time</h2>
     <p>
       The augmented composite tracks the base composite closely but diverges meaningfully
       around inflection points. Across the full window the two composites assign the same
@@ -143,7 +140,7 @@
       index repeatedly leads the base composite into and out of risk-on territory.
     </p>
     <figure class="blog-figure">
-      <div class="blog-figure-label">Composite regime index over time &mdash; 3-panel vs 2-panel vs factor</div>
+      <div class="blog-figure-label">Composite regime index over time: 3-panel vs 2-panel vs factor</div>
       <div class="blog-figure-chart"><canvas x-ref="index"></canvas></div>
       <p class="blog-figure-caption">
         The two composites agree on ~80% of days; the factor panel index frequently
@@ -151,7 +148,7 @@
       </p>
     </figure>
 
-    <h2>The augmented classifier spends more time in markets</h2>
+    <h2 id="the-augmented-classifier-spends-more-time-in-markets">The augmented classifier spends more time in markets</h2>
     <p>
       One of the cleanest ways to read the difference is to count days. Both arms see
       the same 8 years; the only thing that varies is how they label those days.
@@ -162,41 +159,41 @@
         <thead>
           <tr>
             <th class="blog-th-left">Classifier</th>
-            <th class="blog-th-right blog-th-accent">% Risk-on</th>
-            <th class="blog-th-right blog-th-muted">% Neutral</th>
-            <th class="blog-th-right blog-th-warn">% Risk-off</th>
+            <th class="blog-th-right">% Risk-on</th>
+            <th class="blog-th-right">% Neutral</th>
+            <th class="blog-th-right">% Risk-off</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td>/regime_2panel (legacy)</td>
-            <td class="blog-td-num blog-td-accent">40%</td>
-            <td class="blog-td-num blog-td-muted">30%</td>
-            <td class="blog-td-num blog-td-warn">30%</td>
+            <td>Legacy 2-panel</td>
+            <td class="blog-td-num">40%</td>
+            <td class="blog-td-num">30%</td>
+            <td class="blog-td-num">30%</td>
           </tr>
           <tr>
-            <td>/regime (3-panel current)</td>
-            <td class="blog-td-num blog-td-accent">45%</td>
-            <td class="blog-td-num blog-td-muted">27%</td>
-            <td class="blog-td-num blog-td-warn">28%</td>
+            <td class="blog-td-lead">3-panel (current)</td>
+            <td class="blog-td-num blog-td-lead">45%</td>
+            <td class="blog-td-num blog-td-lead">27%</td>
+            <td class="blog-td-num blog-td-lead">28%</td>
           </tr>
           <tr>
             <td>Factor panel alone</td>
-            <td class="blog-td-num blog-td-accent">41%</td>
-            <td class="blog-td-num blog-td-muted">32%</td>
-            <td class="blog-td-num blog-td-warn">27%</td>
+            <td class="blog-td-num">41%</td>
+            <td class="blog-td-num">32%</td>
+            <td class="blog-td-num">27%</td>
           </tr>
           <tr>
             <td>Macro panel alone</td>
-            <td class="blog-td-num blog-td-accent">40%</td>
-            <td class="blog-td-num blog-td-muted">34%</td>
-            <td class="blog-td-num blog-td-warn">26%</td>
+            <td class="blog-td-num">40%</td>
+            <td class="blog-td-num">34%</td>
+            <td class="blog-td-num">26%</td>
           </tr>
           <tr>
             <td>On-chain panel alone</td>
-            <td class="blog-td-num blog-td-accent">36%</td>
-            <td class="blog-td-num blog-td-muted">24%</td>
-            <td class="blog-td-num blog-td-warn">40%</td>
+            <td class="blog-td-num">36%</td>
+            <td class="blog-td-num">24%</td>
+            <td class="blog-td-num">40%</td>
           </tr>
         </tbody>
       </table>
@@ -210,11 +207,11 @@
       still comes out ahead.
     </p>
 
-    <h2>Where the gains land &mdash; phase by phase</h2>
+    <h2 id="where-the-gains-land-phase-by-phase">Where the gains land, phase by phase</h2>
     <p>
       The 8-year compound number can hide as much as it reveals. Splitting the window
-      into market phases shows when the augmented composite is contributing and when it
-      isn&rsquo;t &mdash; and which periods drive the cumulative edge.
+      into market phases shows when the augmented composite is contributing, when it
+      isn&rsquo;t, and which periods drive the cumulative edge.
     </p>
 
     <div class="blog-table-wrap">
@@ -223,8 +220,8 @@
         <thead>
           <tr>
             <th class="blog-th-left">Phase</th>
-            <th class="blog-th-right">/regime_2panel</th>
-            <th class="blog-th-right blog-th-accent">/regime</th>
+            <th class="blog-th-right">2-panel</th>
+            <th class="blog-th-right blog-th-lead">3-panel</th>
             <th class="blog-th-right">Factor alone</th>
             <th class="blog-th-right blog-th-dim">HODL</th>
           </tr>
@@ -233,35 +230,35 @@
           <tr>
             <td>Pre-2020 + COVID</td>
             <td class="blog-td-num">+61.1%<span class="blog-td-sub"> / -54%</span></td>
-            <td class="blog-td-num blog-td-accent">+58.3%<span class="blog-td-sub"> / -61%</span></td>
+            <td class="blog-td-num blog-td-lead">+58.3%<span class="blog-td-sub"> / -61%</span></td>
             <td class="blog-td-num">+54.3%<span class="blog-td-sub"> / -57%</span></td>
             <td class="blog-td-num">+1.5%<span class="blog-td-sub"> / -88%</span></td>
           </tr>
           <tr>
             <td>2021 mania</td>
             <td class="blog-td-num">+630.9%<span class="blog-td-sub"> / -57%</span></td>
-            <td class="blog-td-num blog-td-accent">+566.6%<span class="blog-td-sub"> / -57%</span></td>
+            <td class="blog-td-num blog-td-lead">+566.6%<span class="blog-td-sub"> / -57%</span></td>
             <td class="blog-td-num">+640.5%<span class="blog-td-sub"> / -37%</span></td>
             <td class="blog-td-num">+645.5%<span class="blog-td-sub"> / -57%</span></td>
           </tr>
           <tr>
             <td>2022 drawdown</td>
             <td class="blog-td-num">-28.8%<span class="blog-td-sub"> / -41%</span></td>
-            <td class="blog-td-num blog-td-accent">-29.8%<span class="blog-td-sub"> / -34%</span></td>
+            <td class="blog-td-num blog-td-lead">-29.8%<span class="blog-td-sub"> / -34%</span></td>
             <td class="blog-td-num">-4.3%<span class="blog-td-sub"> / -10%</span></td>
             <td class="blog-td-num">-71.3%<span class="blog-td-sub"> / -79%</span></td>
           </tr>
           <tr>
             <td>Recovery</td>
             <td class="blog-td-num">+7.2%<span class="blog-td-sub"> / -8%</span></td>
-            <td class="blog-td-num blog-td-accent">-1.4%<span class="blog-td-sub"> / -13%</span></td>
+            <td class="blog-td-num blog-td-lead">-1.4%<span class="blog-td-sub"> / -13%</span></td>
             <td class="blog-td-num">+18.8%<span class="blog-td-sub"> / -15%</span></td>
             <td class="blog-td-num">+81.4%<span class="blog-td-sub"> / -27%</span></td>
           </tr>
           <tr>
             <td>Recent</td>
             <td class="blog-td-num">-19.3%<span class="blog-td-sub"> / -62%</span></td>
-            <td class="blog-td-num blog-td-accent">-9.7%<span class="blog-td-sub"> / -61%</span></td>
+            <td class="blog-td-num blog-td-lead">-9.7%<span class="blog-td-sub"> / -61%</span></td>
             <td class="blog-td-num">-7.1%<span class="blog-td-sub"> / -61%</span></td>
             <td class="blog-td-num">-5.1%<span class="blog-td-sub"> / -64%</span></td>
           </tr>
@@ -275,8 +272,8 @@
         <thead>
           <tr>
             <th class="blog-th-left">Phase</th>
-            <th class="blog-th-right">/regime_2panel</th>
-            <th class="blog-th-right blog-th-accent">/regime</th>
+            <th class="blog-th-right">2-panel</th>
+            <th class="blog-th-right blog-th-lead">3-panel</th>
             <th class="blog-th-right">Factor alone</th>
             <th class="blog-th-right blog-th-dim">HODL</th>
           </tr>
@@ -285,35 +282,35 @@
           <tr>
             <td>Pre-2020 + COVID</td>
             <td class="blog-td-num">+12.3%<span class="blog-td-sub"> / -21%</span></td>
-            <td class="blog-td-num blog-td-accent">+12.5%<span class="blog-td-sub"> / -25%</span></td>
+            <td class="blog-td-num blog-td-lead">+12.5%<span class="blog-td-sub"> / -25%</span></td>
             <td class="blog-td-num">+5.3%<span class="blog-td-sub"> / -27%</span></td>
             <td class="blog-td-num">+13.2%<span class="blog-td-sub"> / -34%</span></td>
           </tr>
           <tr>
             <td>2021 mania</td>
             <td class="blog-td-num">+22.8%<span class="blog-td-sub"> / -5%</span></td>
-            <td class="blog-td-num blog-td-accent">+23.4%<span class="blog-td-sub"> / -5%</span></td>
+            <td class="blog-td-num blog-td-lead">+23.4%<span class="blog-td-sub"> / -5%</span></td>
             <td class="blog-td-num">+19.2%<span class="blog-td-sub"> / -5%</span></td>
             <td class="blog-td-num">+23.8%<span class="blog-td-sub"> / -5%</span></td>
           </tr>
           <tr>
             <td>2022 drawdown</td>
             <td class="blog-td-num">+1.2%<span class="blog-td-sub"> / -7%</span></td>
-            <td class="blog-td-num blog-td-accent">-1.7%<span class="blog-td-sub"> / -6%</span></td>
+            <td class="blog-td-num blog-td-lead">-1.7%<span class="blog-td-sub"> / -6%</span></td>
             <td class="blog-td-num">+3.6%<span class="blog-td-sub"> / -1%</span></td>
             <td class="blog-td-num">-14.8%<span class="blog-td-sub"> / -25%</span></td>
           </tr>
           <tr>
             <td>Recovery</td>
             <td class="blog-td-num">+4.5%<span class="blog-td-sub"> / -2%</span></td>
-            <td class="blog-td-num blog-td-accent">+4.1%<span class="blog-td-sub"> / -4%</span></td>
+            <td class="blog-td-num blog-td-lead">+4.1%<span class="blog-td-sub"> / -4%</span></td>
             <td class="blog-td-num">+8.0%<span class="blog-td-sub"> / -5%</span></td>
             <td class="blog-td-num">+23.9%<span class="blog-td-sub"> / -10%</span></td>
           </tr>
           <tr>
             <td>Recent</td>
             <td class="blog-td-num">+5.7%<span class="blog-td-sub"> / -12%</span></td>
-            <td class="blog-td-num blog-td-accent">+12.0%<span class="blog-td-sub"> / -15%</span></td>
+            <td class="blog-td-num blog-td-lead">+12.0%<span class="blog-td-sub"> / -15%</span></td>
             <td class="blog-td-num">+15.8%<span class="blog-td-sub"> / -13%</span></td>
             <td class="blog-td-num">+21.2%<span class="blog-td-sub"> / -19%</span></td>
           </tr>
@@ -327,8 +324,8 @@
         <thead>
           <tr>
             <th class="blog-th-left">Phase</th>
-            <th class="blog-th-right">/regime_2panel</th>
-            <th class="blog-th-right blog-th-accent">/regime</th>
+            <th class="blog-th-right">2-panel</th>
+            <th class="blog-th-right blog-th-lead">3-panel</th>
             <th class="blog-th-right">Factor alone</th>
             <th class="blog-th-right blog-th-dim">HODL</th>
           </tr>
@@ -337,35 +334,35 @@
           <tr>
             <td>Pre-2020 + COVID</td>
             <td class="blog-td-num">+40.6%<span class="blog-td-sub"> / -29%</span></td>
-            <td class="blog-td-num blog-td-accent">+41.2%<span class="blog-td-sub"> / -42%</span></td>
+            <td class="blog-td-num blog-td-lead">+41.2%<span class="blog-td-sub"> / -42%</span></td>
             <td class="blog-td-num">+33.4%<span class="blog-td-sub"> / -41%</span></td>
             <td class="blog-td-num">+18.5%<span class="blog-td-sub"> / -64%</span></td>
           </tr>
           <tr>
             <td>2021 mania</td>
             <td class="blog-td-num">+246.5%<span class="blog-td-sub"> / -30%</span></td>
-            <td class="blog-td-num blog-td-accent">+231.3%<span class="blog-td-sub"> / -30%</span></td>
+            <td class="blog-td-num blog-td-lead">+231.3%<span class="blog-td-sub"> / -30%</span></td>
             <td class="blog-td-num">+226.9%<span class="blog-td-sub"> / -19%</span></td>
             <td class="blog-td-num">+251.4%<span class="blog-td-sub"> / -30%</span></td>
           </tr>
           <tr>
             <td>2022 drawdown</td>
             <td class="blog-td-num">-14.3%<span class="blog-td-sub"> / -23%</span></td>
-            <td class="blog-td-num blog-td-accent">-16.6%<span class="blog-td-sub"> / -20%</span></td>
+            <td class="blog-td-num blog-td-lead">-16.6%<span class="blog-td-sub"> / -20%</span></td>
             <td class="blog-td-num">-0.3%<span class="blog-td-sub"> / -5%</span></td>
             <td class="blog-td-num">-46.7%<span class="blog-td-sub"> / -57%</span></td>
           </tr>
           <tr>
             <td>Recovery</td>
             <td class="blog-td-num">+6.1%<span class="blog-td-sub"> / -4%</span></td>
-            <td class="blog-td-num blog-td-accent">+1.7%<span class="blog-td-sub"> / -7%</span></td>
+            <td class="blog-td-num blog-td-lead">+1.7%<span class="blog-td-sub"> / -7%</span></td>
             <td class="blog-td-num">+14.2%<span class="blog-td-sub"> / -7%</span></td>
             <td class="blog-td-num">+54.1%<span class="blog-td-sub"> / -14%</span></td>
           </tr>
           <tr>
             <td>Recent</td>
             <td class="blog-td-num">-4.8%<span class="blog-td-sub"> / -36%</span></td>
-            <td class="blog-td-num blog-td-accent">+4.1%<span class="blog-td-sub"> / -38%</span></td>
+            <td class="blog-td-num blog-td-lead">+4.1%<span class="blog-td-sub"> / -38%</span></td>
             <td class="blog-td-num">+7.9%<span class="blog-td-sub"> / -36%</span></td>
             <td class="blog-td-num">+13.0%<span class="blog-td-sub"> / -44%</span></td>
           </tr>
@@ -378,25 +375,25 @@
       <strong>2021 mania</strong> phases the factor-augmented composite captures
       materially more upside than the base, and the factor panel alone is the strongest
       of any classifier in those phases. The defensive 2022 phase is when the base
-      composite (with macro + on-chain) does slightly better &mdash; that&rsquo;s on-chain
+      composite (with macro + on-chain) does slightly better: that&rsquo;s on-chain
       earning its keep by flagging the crypto-specific stress that equity factors
       wouldn&rsquo;t see.
     </p>
 
-    <h2>Why have equity signals been so determinative this era?</h2>
+    <h2 id="why-have-equity-signals-been-so-determinative-this-era">Why have equity signals been so determinative this era?</h2>
     <p>
       The eight years this backtest covers are an unusually equity-dominated stretch
       for crypto. From the 2020 COVID liquidity flood onward, ETH&rsquo;s correlation
-      with the NASDAQ has run consistently above 0.5 &mdash; sometimes well above. Bitcoin
+      with the NASDAQ has run consistently above 0.5, sometimes well above. Bitcoin
       and ether have traded as <em>long-duration risk assets</em>, sensitive to the
       same financial-conditions impulse that moves the largest equity-style baskets.
       That&rsquo;s a structural shift from the 2017&ndash;2019 era when crypto moved on its
       own narratives.
     </p>
     <p>
-      In a regime like this, equity-style signals &mdash; high-beta vs low-vol leadership,
-      momentum, growth versus value, sector rotation between defensives and cyclicals
-      &mdash; carry information about the same thing crypto is responding to. The factor
+      In a regime like this, equity-style signals (high-beta vs low-vol leadership,
+      momentum, growth versus value, sector rotation between defensives and cyclicals)
+      carry information about the same thing crypto is responding to. The factor
       panel is not predicting crypto. It&rsquo;s reading the same risk-appetite
       environment that crypto inherits, just with a higher signal-to-noise ratio
       because equities have deeper, more efficient price discovery.
@@ -407,25 +404,25 @@
       market. The equity factor panel reads the <em>downstream behavioral response</em>
       of price-setters who have already digested those macro inputs and are committing
       capital. In a fast-moving market, the behavioral response leads the
-      fundamentals-based read by days to weeks &mdash; and that lead is what shows up as
+      fundamentals-based read by days to weeks, and that lead is what shows up as
       improved CAGR and Sharpe in the backtest.
     </p>
 
-    <h2>Doesn&rsquo;t this contradict efficient markets?</h2>
+    <h2 id="doesnt-this-contradict-efficient-markets">Doesn&rsquo;t this contradict efficient markets?</h2>
     <p>
       Worth addressing directly: the classifier doesn&rsquo;t predict returns. It
-      predicts <em>volatility regime</em>. Volatility clusters &mdash; Engle&rsquo;s GARCH and
+      predicts <em>volatility regime</em>. Volatility clusters: Engle&rsquo;s GARCH and
       Hamilton&rsquo;s regime-switching literature are some of the most replicated
       findings in finance. EMH says returns are unpredictable; it does not say risk is
       unpredictable. The classifier exploits the part of market behavior that
       <em>is</em> predictable, then improves terminal wealth through compounding
       asymmetry (a 50% drawdown requires a 100% recovery). Lower variance and shallower
       drawdowns produce a higher geometric return for the same arithmetic expected
-      return, by Jensen&rsquo;s inequality. That&rsquo;s not alpha &mdash; that&rsquo;s real
+      return, by Jensen&rsquo;s inequality. That&rsquo;s not alpha. It is real
       money to a path-dependent investor.
     </p>
 
-    <h2>Honest caveats</h2>
+    <h2 id="honest-caveats">Honest caveats</h2>
     <ul class="blog-list blog-list-muted">
       <li>
         <strong>Single era.</strong> 2018&ndash;2026 covers roughly two crypto cycles and one
@@ -459,38 +456,30 @@
         indicators are Yahoo ETF-ratio reads (rock-solid). Shiller CAPE is sourced from
         the Shiller spreadsheet mirror with a multpl.com fallback. The two reclassified
         indicators (SPX 50/200 trend, IWM/SPY breadth) have been in the dataset since
-        day one &mdash; moving them to the factor panel doesn&rsquo;t introduce new data
+        day one, so moving them to the factor panel doesn&rsquo;t introduce new data
         risk.
       </li>
     </ul>
 
-    <h2>What we&rsquo;re doing about it</h2>
+    <h2 id="what-were-doing-about-it">What we&rsquo;re doing about it</h2>
     <p>
-      The 3-panel classifier is now the default at <a href="/regime">/regime</a>, with the
-      legacy 2-panel version preserved as a reference at
-      <a href="/regime_2panel">/regime_2panel</a>. Both update every 24 hours from the same
-      fetcher, both compute point-in-time so neither has look-ahead, both publish their full
-      methodology, data sources, and historical snapshots openly. Side-by-side. So you can
-      watch the comparison evolve in real time, on real data, without revisions.
+      The 3-panel classifier is now the default on the <a href="/regime">regime page</a>, with
+      the legacy 2-panel version preserved as a <a href="/regime_2panel">reference</a>. Both
+      update every 24 hours from the same fetcher, both compute point-in-time so neither has
+      look-ahead, and both publish their full methodology, data sources, and historical
+      snapshots openly, side by side, so you can watch the comparison evolve in real time, on
+      real data, without revisions.
     </p>
     <p>
       The data here makes a strong case that incorporating equity-market readings
       improves cross-asset regime classification in the current market era. The
-      factor-alone result &mdash; best single-panel Sharpe in two of three portfolios &mdash;
+      factor-alone result (best single-panel Sharpe in two of three portfolios)
       is the headline. Whether the regime continues to reward equity-style signals as
       heavily over the next eight years is the question this analysis can&rsquo;t answer,
-      and is exactly the kind of thing the live published dashboards exist to test in real
+      and is exactly the kind of thing the live regime page exists to test in real
       time.
     </p>
 
-    <div class="blog-disclaimer">
-      <strong>Disclaimer.</strong> All performance figures are backtest results, not live
-      trading or fund returns. Backtests are hypothetical, benefit from hindsight in the
-      choice of indicators and parameters even when point-in-time in the weighting, and are
-      not predictive of future results. Nothing here is investment advice or an offer to buy
-      or sell any security or digital asset. Robot Money operates this as published research;
-      it is not a registered investment advisor.
-    </div>
   </div>
 
   <div class="blog-back-wrap">
@@ -504,6 +493,7 @@
     margin: 0 auto;
     padding: 8rem 1.5rem 5rem;
     font-family: var(--font-sans);
+    font-size: 0.9375rem;
     color: var(--color-text);
     line-height: 1.7;
   }
@@ -513,7 +503,7 @@
     font-family: var(--font-mono);
     font-size: 0.7rem;
     text-transform: uppercase;
-    letter-spacing: 0.2em;
+    letter-spacing: 0.11em;
     color: var(--color-text-muted);
     text-decoration: none;
     padding-bottom: 0.25rem;
@@ -523,41 +513,26 @@
   .blog-back:hover { color: var(--color-text); border-bottom-color: var(--color-text); }
   .blog-header { margin-bottom: 3rem; }
   .blog-meta { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem; }
-  .blog-badge {
-    padding: 0.25rem 0.625rem;
-    font-family: var(--font-mono);
-    font-size: 0.625rem;
-    text-transform: uppercase;
-    letter-spacing: 0.2em;
-    color: var(--color-accent);
-    border: 1px solid rgba(0, 229, 255, 0.3);
-    background: rgba(0, 229, 255, 0.05);
-  }
   .blog-date {
     font-family: var(--font-mono);
     font-size: 0.625rem;
     text-transform: uppercase;
-    letter-spacing: 0.2em;
+    letter-spacing: 0.11em;
     color: var(--color-text-muted);
   }
   .blog-title {
+    font-family: var(--font-display);
+    font-weight: 700;
+    text-transform: uppercase;
     font-size: clamp(2rem, 6vw, 3rem);
     line-height: 1.1;
     letter-spacing: -0.01em;
-    margin: 0 0 1.5rem;
-    font-weight: 400;
-  }
-  .blog-title-serif { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; }
-  .blog-gradient {
-    font-weight: 700;
-    font-family: var(--font-display);
-    text-transform: uppercase;
-    letter-spacing: -0.01em;
     color: var(--color-text);
+    margin: 0 0 1.5rem;
   }
   .blog-lede {
     font-size: 1.125rem;
-    color: var(--color-text-muted);
+    color: var(--color-text-soft);
     line-height: 1.7;
     margin: 0 0 1rem;
   }
@@ -566,17 +541,8 @@
     font-size: 0.6875rem;
     color: var(--color-text-muted);
   }
-  .blog-note {
-    margin-bottom: 3rem;
-    padding: 1rem;
-    border: 1px solid rgba(255, 102, 68, 0.4);
-    background: rgba(255, 102, 68, 0.06);
-    font-family: var(--font-mono);
-    font-size: 0.6875rem;
-    line-height: 1.7;
-    color: var(--color-text-muted);
-  }
-  .blog-note strong { color: var(--color-warn); }
+  /* The research note is one quiet line under the head: no box, no hue. */
+  .blog-note-line { margin-top: 1.25rem; }
   .blog-prose h2 {
     font-family: var(--font-display);
     font-weight: 700;
@@ -587,8 +553,8 @@
     margin: 2.5rem 0 1rem;
     color: var(--color-text);
   }
-  .blog-prose p { color: var(--color-text-muted); margin: 0 0 1rem; }
-  .blog-prose a, .blog-note a, .blog-disclaimer a {
+  .blog-prose p { color: var(--color-text-soft); margin: 0 0 1rem; }
+  .blog-prose a, .blog-note-line a {
     color: var(--color-link);
     text-decoration: underline;
     text-decoration-color: var(--color-link-line);
@@ -596,11 +562,11 @@
     text-underline-offset: 0.2em;
     transition: text-decoration-color 0.2s ease;
   }
-  .blog-prose a:hover, .blog-note a:hover, .blog-disclaimer a:hover { text-decoration-color: var(--color-link); }
+  .blog-prose a:hover, .blog-note-line a:hover { text-decoration-color: var(--color-link); }
   .blog-prose strong { color: var(--color-text); font-weight: 600; }
   .blog-prose em { font-style: italic; }
   .blog-list {
-    color: var(--color-text-muted);
+    color: var(--color-text-soft);
     padding-left: 1.25rem;
     margin: 0 0 1.5rem;
     list-style: disc;
@@ -616,7 +582,7 @@
     font-family: var(--font-mono);
     font-size: 0.75rem;
     text-transform: uppercase;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.11em;
     color: var(--color-text);
     margin-bottom: 0.5rem;
   }
@@ -645,17 +611,13 @@
   }
   .blog-th-left { text-align: left; padding-left: 0.75rem; }
   .blog-th-right { text-align: right; }
-  .blog-th-accent { color: var(--color-accent); }
-  .blog-th-muted { color: var(--color-text-muted); }
-  .blog-th-warn { color: var(--color-warn); }
+  .blog-th-lead { color: var(--color-text); }
   .blog-th-dim { color: var(--color-text-muted); }
   .blog-table tbody tr { border-top: 1px solid var(--color-border); }
   .blog-table td { padding: 0.625rem 0.5rem; color: var(--color-text); }
   .blog-table td:first-child { padding-left: 0.75rem; }
   .blog-td-num { text-align: right; font-family: var(--font-mono); }
-  .blog-td-accent { color: var(--color-accent); }
-  .blog-td-muted { color: var(--color-text-muted); }
-  .blog-td-warn { color: var(--color-warn); }
+  .blog-td-lead { color: var(--color-text); font-weight: 500; }
   .blog-td-dim { color: var(--color-text-muted); }
   .blog-td-sub { font-size: 0.625rem; color: var(--color-text-muted); }
   .blog-table-note {
@@ -671,16 +633,6 @@
     margin-bottom: 0.5rem;
     padding-left: 0.25rem;
   }
-  .blog-disclaimer {
-    margin-top: 3rem;
-    padding: 1.5rem;
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    font-size: 0.75rem;
-    color: var(--color-text-muted);
-    line-height: 1.7;
-  }
-  .blog-disclaimer strong { color: var(--color-text); }
   .blog-back-wrap {
     margin-top: 4rem;
     padding-top: 3rem;
