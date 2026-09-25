@@ -93,7 +93,7 @@ One protocol for every tool that mutates or deploys against a database: `bun smo
 
 **`rm_owner` is `LOGIN`.** Its password is typed at the terminal for the one run that needs it and never stored.
 
-**Only `rm_owner` may `DELETE` or `TRUNCATE`** ([D55](../decisions.md#d55) (6)). No runtime role — `rm_app`, `rm_worker`, `rm_readonly` — holds `DELETE` or `TRUNCATE` on any table, append-only or not. Runtime code never removes a row. Where it deletes today, it is redesigned into one of three shapes: a tombstone column every read filters on; a read that filters out expired rows, with pruning left to an `rm_owner` run; or an upsert that replaces the row in place. Security revocations stay immediately effective: a revoked key, token or membership is refused on the next request, because the revoking transaction writes the tombstone, never because a later prune removed a row. Preflight check 2 enforces the grant half (§7).
+**Only `rm_owner` may `DELETE` or `TRUNCATE`** ([D55](../decisions.md#d55) (6)). No runtime role — `rm_app`, `rm_worker`, `rm_readonly` — holds `DELETE` or `TRUNCATE` on any table, append-only or not. Runtime code never removes a row. Where it deletes today, it is redesigned into one of three shapes: a tombstone column every read filters on; a read that filters out expired rows, with pruning left to an `rm_owner` run; or an upsert that replaces the row in place. Security revocations stay immediately effective: a revoked key, token or membership is refused on the next request, because the revoking transaction writes the tombstone, never because a later prune removed a row. Preflight check 2 enforces the grant half (§7). Two constraints bind the redesign. A table that unauthenticated requests write stays bounded with no `rm_owner` run: WebAuthn challenges use a fixed set of 32 slots, overwritten oldest-first under `CHALLENGE_ISSUE_LOCK` and consumed by a single-use conditional `UPDATE`. No release ships code that writes a revocation or consumption tombstone unless the same release carries the `compat: breaking` migration that revokes runtime `DELETE`, so code that ignores the tombstone can never boot beside it. Pruning is a manual, receipted `rm_owner` command with a 7-day minimum window, which never removes a security tombstone or audit history ([D55](../decisions.md#d55) (12), scheduler spec §6.3).
 
 **`~/.env`** is the deploying user's home-directory file, outside every checkout. It holds exactly these keys and nothing else: the remote connection (host, port, dbname); the runtime role passwords `rm_app`, `rm_worker` and `rm_readonly`; `RM_ENV`; and `RM_CREDENTIALS`. It must not contain `rm_owner`, `doadmin`, a superuser token, a service token, a signing key or a model key; preflight enforces the list (§7 check 4). Args override env: any `--local` mode (§5) makes smoke ignore every remote connection value.
 
@@ -115,7 +115,7 @@ Values: `prod`, `stage`. Stage, test, and CI are isomorphic and share `stage`. `
 
 ### 4.2 `deployment_identity` (target enrollment)
 
-A one-row table in the database, `deployment_identity.kind ∈ {production, rehearsal}`, writable only by `rm_owner`. `production` is written once by production initialization (§9.1). `rehearsal` is written by every `--local blank` bootstrap, every `--local dump` restore, and every restore of a production dump into a remote database, which must end by writing `rehearsal` through `rm_owner` before any stage tool connects.
+A one-row table in the database, `deployment_identity.kind ∈ {production, rehearsal}`, writable only by `rm_owner`. `production` is written once by production initialization (§9.1). `rehearsal` is written by every `--local blank` bootstrap, every `--local dump` restore, and every restore of a production dump into a remote database, which must end by writing `rehearsal` through `rm_owner` before any stage tool connects. A remote twin restored from a pre-0063 production dump is prepared through the twin tooling's existing `--migrate` (`scripts/smoke-twin.ts`, `scripts/lib/smoke-twin-rehearsal.ts`), in this sequence: restore; then the identity-first pass, which applies 0063 and writes `rehearsal` in one transaction (§4.3); then the remaining migrations. All of it happens before any other stage tool connects ([D55](../decisions.md#d55) (10)).
 
 It marks what the target is enrolled for. It is an accidental-target safeguard, not proof the data is disposable: its protection rests on the write restriction and on the restore procedure being pointed at the right database.
 
@@ -135,7 +135,13 @@ It marks what the target is enrolled for. It is an accidental-target safeguard, 
 | unset | `--local` | as `stage` | warn `RM_ENV not set, running as stage`, proceed |
 | other | any | any | refuse |
 
-**One exception, for one command, once.** `bun run migrate` may run against a production database that has no `deployment_identity` row, or no table, exactly once: the first production migrate of §9.1, under every guard listed there ([D55](../decisions.md#d55) (5)). No boot, no `bun smoke` and no other tool has that exception, and every later run requires the row.
+**Three named exceptions for a database with no identity row** ([D55](../decisions.md#d55) (5), (9), (10)). Only these three passes may run against a database with no `deployment_identity` row, or no table. Each applies `0063_deployment_identity` before any other pending migration.
+
+- **Production first pass** (`bun run migrate`, §9.1). A remote connection, `RM_ENV=prod`, a typed `rm_owner` password and an explicit `y`. It writes `production`.
+- **`--local dump` preparation** (`bun smoke`, §5). Only on the Postgres container the same run created and restored. `RM_ENV` must not be `prod`, and it uses the owner password smoke generated. It writes `rehearsal`. It checks for itself that its connection is that local container, and it refuses any remote connection whatever `RM_ENV`, password or acknowledgement says.
+- **Remote twin restore** (the twin tooling's `--migrate`, §4.2). Only on the database the same twin run restored, as that run's own journal or receipt proves. `RM_ENV` must not be `prod`. It writes `rehearsal`. It refuses any target the run did not restore itself.
+
+All three share three rules. 0063's DDL, its `schema_migrations` row and the identity row commit in one fenced transaction (§2). Before the pass, the ledger must equal the production baseline of §9.1. Out-of-order 0063 is refused outside these passes. No boot and no other tool has an exception, and every later run requires the row.
 
 **Rehearsal-only preparation:** `--migrate`, `--seed`, `--spoof-keys` require `rehearsal` in addition to their own guards.
 
@@ -280,7 +286,7 @@ In production an upgrade is an operator intervention: `bun run migrate`, prompti
 
 **Order.** When every pending migration is `additive`, the operator runs `bun run migrate` against the running stack, then `bun smoke --static-port` with the new images; the old code keeps serving because it supports the additive state (§8.4). When any pending migration is `breaking`, the operator runs `bun smoke:down`, then `bun run migrate`, then `bun smoke --static-port`, so no old service runs against the breaking state. The release's runbook names which case applies.
 
-`--migrate` is a convenience for stage, test, and CI, where the database and the boot happen in one step. It refuses on `RM_ENV=prod` or `deployment_identity ≠ rehearsal`. In local modes it uses the owner password smoke generated. On a remote connection it prompts for `rm_owner`, warns, and asks `y/n`. It runs the migrate run of §8.3.
+`--migrate` is a convenience for stage, test, and CI, where the database and the boot happen in one step. It refuses on `RM_ENV=prod` or `deployment_identity ≠ rehearsal`, except that it carries the two rehearsal passes of §4.3 on a database with no identity row. In local modes it uses the owner password smoke generated. On a remote connection it prompts for `rm_owner`, warns, and asks `y/n`. It runs the migrate run of §8.3.
 
 ## 9. Production
 
@@ -295,16 +301,21 @@ In production an upgrade is an operator intervention: `bun run migrate`, prompti
 
 **The first production migrate runs before the identity row exists** ([D55](../decisions.md#d55) (5)). Production's ledger is v0.5.0's 72 files plus `0062_rm_readonly_sequence_select.sql`, which predates the `deployment_identity` table (0063) and the manifest (0064), and every migrate run otherwise refuses a database with no identity row. So the first `bun run migrate`, which carries steps 2 and 3, may run once with no row, or no table, only when every one of these holds:
 
+- a remote connection;
 - `RM_ENV=prod`;
-- the ledger's filename list is exactly equal to the filename list of one `SUPPORTED_RELEASES` entry (today one: production's observed 73-name ledger, v0.5.0 plus `0062_rm_readonly_sequence_select` with the c3a68812 SQL, [D55](../decisions.md#d55) (8)): no file missing, none extra, none renamed. A pure v0.5.0 ledger is one file less and refuses;
+- the ledger's filename list is exactly equal to the filename list of one `SUPPORTED_RELEASES` entry (today one: production's observed 73-name ledger, v0.5.0 plus `0062_rm_readonly_sequence_select` with the c3a68812 SQL, which Lucas confirmed on 2026-09-25, [D55](../decisions.md#d55) (8)): no file missing, none extra, none renamed. A pure v0.5.0 ledger is one file less and refuses;
 - the operator types the `rm_owner` password at the terminal;
 - the operator answers an explicit `y`.
 
 It takes the target lock (§2) like every other mutation. Its receipt records the pre-identity state: that no identity row existed, the supported release the ledger matched, and that ledger's filename list. From then on every run of every tool requires the row, and the exception is never available again on that database. A ledger that matches no supported release, a partly migrated ledger, an `RM_ENV` other than `prod`, a missing owner password or any answer but `y` refuses and changes nothing.
 
-**Identity first** ([D55](../decisions.md#d55) (9)). The guarded pass applies `0063_deployment_identity` before any other pending migration, out of filename order. Step 4's row, `production`, commits in the same transaction as 0063. The pass then applies the remaining pending migrations in filename order. An interruption at any point after 0063 commits leaves the row in place, so a rerun takes the normal path and resumes from the first unapplied migration (§8.3). An interruption before 0063 commits leaves the ledger on the baseline, and a rerun takes the guarded pass again. Out-of-order apply of 0063 happens only in this guarded pass; the runner refuses it anywhere else.
+**Identity first** ([D55](../decisions.md#d55) (9)). The guarded pass applies `0063_deployment_identity` before any other pending migration, out of filename order. 0063's DDL, its `schema_migrations` row and step 4's row, `production`, commit in one fenced transaction. The remaining pending migrations then take the normal path in filename order.
 
-**A production dump takes the same path** ([D55](../decisions.md#d55) (10)). A `--local dump` whose restored ledger equals the production baseline has no `deployment_identity` table either. Its preparation applies 0063 first and writes `rehearsal` in the same transaction, before any other pending migration, and the rest take the normal path. It needs no `RM_ENV=prod`, typed password or `y`: smoke owns the container and generated the owner password (§5). A dump with any other pre-identity ledger refuses.
+**The normal path accepts the state the pass leaves.** Production lacks six files below 0063: `0056_swarm_judge_requires_model`, `0057_swarm_judge_policy_stamp`, `0058_swarm_judge_fault_injection`, `0059_swarm_judgement_completion_usage`, `0061_rm_worker_wallet_backfill_grant` and `0062_rm_worker_analytics_ledger_read_grant`. The normal path may apply a pending file that sorts below a recorded 0063 only when the identity row exists and the rest of the ledger equals the baseline plus 0063, plus any files applied after it. Every other out-of-order state refuses.
+
+So an interruption at any point after 0063 commits leaves the row in place, and a rerun takes the normal path and resumes from the first unapplied migration (§8.3), the six lower files included. An interruption before 0063 commits leaves the ledger on the baseline, and a rerun takes the guarded pass again. Out-of-order apply of 0063 happens only in the three passes of §4.3; the runner refuses it anywhere else.
+
+**A production dump takes the same path** ([D55](../decisions.md#d55) (10)). A dump restored from production has no `deployment_identity` table either. A `--local dump` whose restored ledger equals the production baseline is prepared by smoke: it applies 0063 first and writes `rehearsal` in the same transaction, before any other pending migration, and the rest take the normal path. It needs no `RM_ENV=prod`, typed password or `y`: smoke owns the container and generated the owner password (§5). A remote twin takes the same order through the twin tooling's `--migrate` (§4.2). Each rehearsal pass keeps the guards of §4.3. A dump with any other pre-identity ledger refuses.
 
 ### 9.2 Every boot
 
@@ -353,8 +364,14 @@ Each is an executable release gate. Cutover requires all three workstreams green
 - Denylist: runtime role with `rm_owner` membership, object ownership, or `DELETE` or `TRUNCATE` on any table fails preflight.
 - No runtime path deletes: a revoked key, token or membership is refused on its next request with no `DELETE` issued, and an expired row stops being served before any prune runs.
 - First production migrate: with no `deployment_identity` row and a ledger exactly equal to the production baseline (the 73-name ledger of §9.1), `RM_ENV=prod`, a typed `rm_owner` and `y` migrate once and receipt the pre-identity state. A ledger with one file more or less (a pure v0.5.0 ledger included), `RM_ENV=stage`, a missing owner password, or any answer but `y` refuses and changes nothing. A second run with no row still refuses.
-- Identity first: the guarded pass applies 0063 and commits `production` with it before any other migration. Kill it after 0063 and before the rest: the rerun takes the normal path and resumes. Kill any migrate between two commits: the rerun resumes. Applying 0063 out of order outside the guarded pass refuses.
-- A `--local dump` whose ledger equals the production baseline applies 0063 first, writes `rehearsal` in the same transaction, and boots; a dump with any other pre-identity ledger refuses.
+- Identity first: the production pass applies 0063 and commits its DDL, its ledger row and `production` in the same transaction, before any other migration. Kill any migrate between two commits: the rerun resumes. Applying 0063 out of order outside the three passes of §4.3 refuses.
+- Kill and rerun, for each of the three passes: kill it before 0063 commits, and the rerun takes the pass again; kill it after 0063, and the rerun resumes through the normal path and applies the six files below 0063 (§9.1).
+- The normal path applies a pending file below a recorded 0063 only when the identity row exists and the rest of the ledger equals the baseline plus 0063, plus files applied after it; every other out-of-order state refuses.
+- A `--local dump` whose ledger equals the production baseline applies 0063 first, writes `rehearsal` in the same transaction, and boots; a dump with any other pre-identity ledger refuses. Pointed at a remote connection, the local dump preparation refuses, whatever `RM_ENV`, password or acknowledgement says.
+- A remote twin restored from a pre-0063 production dump runs restore, then 0063 with `rehearsal` in one transaction, then the rest, all before any other stage tool connects. The twin pass refuses a target its own run did not restore, and it refuses `RM_ENV=prod`.
+- More than 32 unauthenticated WebAuthn option requests leave the challenge row count at 32.
+- Code built before the `compat: breaking` migration that revokes runtime `DELETE` refuses to boot after it.
+- The prune command takes a typed `rm_owner` and writes a receipt. It never removes a row younger than 7 days, a security tombstone or audit history.
 - `rm_app` can `UPDATE` only the `final` column of `swarm_recommendations`.
 - Production baseline: a live schema that differs from the snapshot blocks the first manifest publication.
 - Registry structurally enforced; execution under each role on a disposable database.
@@ -458,3 +475,14 @@ Decided with the owner on 2026-09-25 and recorded as [D55](../decisions.md#d55).
 | §9.1 | step 4 wrote `production` after the first migrate run | the guarded pass applies 0063 first and commits `production` in its transaction, then the rest; an interruption after 0063 resumes through the normal path; out-of-order 0063 only in that pass (D55 (9)) |
 | §9.1 | a production dump's `rehearsal` write had no table to land in | a `--local dump` whose ledger equals the production baseline takes the same identity-first path and writes `rehearsal` (D55 (10)) |
 | §10 | first-migrate gate matched a v0.5.0 ledger | it matches the 73-name baseline; gates added for the identity-first pass, a kill after 0063, and the identity-first dump (D55 (8)–(10)) |
+
+Corrected the same day, after a review of the recorded D55 answers against the owner's own words ([D55](../decisions.md#d55), the corrections of 2026-09-25).
+
+| clause | said before | says now |
+|---|---|---|
+| §3 | the delete redesign's constraints and the prune unstated | unauthenticated-write tables stay bounded without `rm_owner` (32 WebAuthn challenge slots); no tombstone ships ahead of the breaking revoke; pruning is a manual, receipted `rm_owner` command with a 7-day minimum window (D55 (6), (12)) |
+| §4.2 | a remote restore writes `rehearsal` before a stage tool connects | a remote twin from a pre-0063 dump runs through the twin tooling's `--migrate`: restore, then 0063 with `rehearsal` in one transaction, then the rest (D55 (10)) |
+| §4.3 | one exception, for `bun run migrate`, once | three named exceptions: the production first pass, the `--local dump` preparation and the remote twin restore, each with its own guard; one fenced transaction for 0063's DDL, its ledger row and the identity row; the ledger must equal the baseline; out-of-order 0063 refused elsewhere (D55 (5), (9), (10)) |
+| §8.5 | `--migrate` always refuses without `rehearsal` | it carries the two rehearsal passes of §4.3 on a database with no identity row |
+| §9.1 | the normal path "resumes" after 0063; the baseline credited to an owner ruling | the normal path accepts files below a recorded 0063 only in the exact state a pass leaves; the first pass also needs a remote connection; the 73-name baseline is Lucas's confirmed call (D55 (8), (9)) |
+| §10 W2 | identity-first and dump gates only | adds kill-and-rerun gates for each pass, the normal-path acceptance rule, the local pass refusing a remote connection, the remote twin sequence and its target check, the 32-slot challenge bound, the pre-revoke boot refusal and the prune command |

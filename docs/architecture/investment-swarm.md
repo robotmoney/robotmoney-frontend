@@ -140,9 +140,9 @@ collecting → window_closed → aggregated → [judging → judged] → publish
   scheduler turns an epoch over; there is no operator early turnover, and the
   operator admin token is refused on every epoch lifecycle route
   ([D55](../decisions.md#d55)). Only an admin deactivates a subject, as a
-  subject edit; the scheduler never does. The deactivation closes the open
-  epoch in the same transaction and opens no successor, and the scheduler
-  settles the closed epoch from `subject.changed` (§4.5).
+  subject edit; the scheduler never does. The deactivation closes no epoch:
+  the open window runs to its close, the scheduler's turnover at that boundary
+  opens no successor, and the scheduler settles the closed epoch (§4.5).
 - **Settlement** of N is independent of N+1's window and of every other
   subject (§4.4): **aggregate** (deterministic rollup **over the takes
   actually posted**; absences stay absent; **no host-authored takes**) →

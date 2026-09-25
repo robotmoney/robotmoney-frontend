@@ -297,11 +297,12 @@ Acceptance:
   `framework` requires an empty wallet array; `rpc` requires at least one wallet.
 - `linkedMemberId`, when present, must reference an existing member.
 - Deactivation is an admin subject edit, and only an admin makes it; the
-  scheduler never deactivates ([D55](../decisions.md#d55)). In one
-  transaction it sets `status = 'inactive'`, closes the topic's open epoch
-  (recording absences as a boundary would) and opens no successor. The
-  scheduler then settles that closed epoch to `published` from
-  `subject.changed`
+  scheduler never deactivates ([D55](../decisions.md#d55)). It sets
+  `status = 'inactive'` and publishes `subject.changed`. It does not close the
+  topic's open epoch: the window runs to its close and takes are accepted
+  until then. At the boundary the scheduler turns the epoch over with no
+  successor and settles it to `published`. A reactivation inside the open
+  window opens nothing
   ([scheduler spec §4.5](../technical/system-scheduler-spec.md#45-deactivating-a-subject)).
   Old sessions, briefs, snapshots, and recommendations are unchanged.
 - Edits require the current `version`; a stale version returns 409.
@@ -386,8 +387,9 @@ Only `system-scheduler` drives the epoch lifecycle
 ([D55](../decisions.md#d55)). There is no manual turnover, no early close and
 no hand-fired settlement step. The operator admin token holds only the `admin`
 right, and every epoch lifecycle route refuses it. Deactivating a topic
-(US-C1) is a subject edit, not a transition: it closes the open epoch and opens
-none, and the scheduler settles what it closed. The transition contract
+(US-C1) is a subject edit, not a transition: it closes no epoch, the open
+window runs to its boundary, and the scheduler's turnover there opens no
+successor. The transition contract
 lives in
 [scheduler spec §§4–5](../technical/system-scheduler-spec.md#4-the-session-lifecycle).
 This surface shows the transitions that contract produced. Summary:
@@ -702,7 +704,7 @@ state is 409, accepted queue work is 202, and successful synchronous mutation is
 | `GET /api/admin/swarm/overview` | session/member/topic summary |
 | `GET/POST /api/admin/swarm/subjects` | list/create topics |
 | `GET/PATCH /api/admin/swarm/subjects/:id` | topic detail/edit, including the epoch duration; detail carries the current `collecting` session and its `window_closes_at` |
-| `POST /api/admin/swarm/subjects/:id/deactivate` | deactivate topic: closes and settles its open epoch, opens no successor |
+| `POST /api/admin/swarm/subjects/:id/deactivate` | deactivate topic: sets it inactive; its open window runs to its close, and the scheduler's turnover there opens no successor |
 | `GET /api/admin/swarm/members` | all statuses/applications |
 | `GET /api/admin/swarm/members/:id` | private admin member projection |
 | `POST /api/admin/swarm/members` | manual active member add — `{ name, publicKey, lens?, contact? }`; the id is GENERATED (`crypto.randomUUID()`) and returned as `member.id`, and a body carrying `memberId` is refused with 400 (issue #690) |
@@ -913,7 +915,8 @@ Add tests proving:
   original result;
 - finalize decides `judged` / `no_consensus` / `not_judged` from stored
   instants and is refused early under `enforce` with no eligible consensus;
-- deactivating a topic closes and settles its open epoch and opens none;
+- deactivating a topic leaves its open window collecting until its boundary,
+  where the turnover opens no successor;
   the scheduler-side gates themselves are
   [scheduler spec §10](../technical/system-scheduler-spec.md#10-acceptance-gates);
 - member changes after session creation do not alter historical quorum;

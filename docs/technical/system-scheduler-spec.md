@@ -63,20 +63,20 @@ No environment variable sets them. No seed command sets them. No boot overwrites
 
 ### 2.4 Never disabled
 
-There is no on/off state for scheduling. An admin activating a subject leads the scheduler to open its first epoch (§3). A subject that must stop running epochs is deactivated by an admin; the deactivation closes its open epoch, and the scheduler settles it (§4.5). Activation and deactivation are admin subject edits, never scheduler actions ([D55](../decisions.md#d55)).
+There is no on/off state for scheduling. An admin activating a subject leads the scheduler to open its first epoch (§3). A subject that must stop running epochs is deactivated by an admin; its open window runs to its close, and the scheduler turns it over at the boundary with no successor and settles it (§4.5). Activation and deactivation are admin subject edits, never scheduler actions ([D55](../decisions.md#d55)).
 
 ## 3. The clock
 
-`system-scheduler` is the clock. It holds one timer per active subject: the instant that subject's current epoch closes. It also holds one timer per session in `judging`: that session's judging deadline (§4.4). On start, and on every rebuild, it performs a **full read** through the API:
+`system-scheduler` is the clock. It holds one boundary timer per `collecting` session: the instant that session's window closes. A session whose subject has been deactivated keeps its timer until its boundary (§4.5). It also holds one timer per session in `judging`: that session's judging deadline (§4.4). On start, and on every rebuild, it performs a **full read** through the API:
 
 1. Every active subject, with its scheduling columns (§2.2).
-2. Every session in `collecting`, with its `window_closes_at`.
-3. **Every session that is closed but not yet `published`** — in `window_closed`, `aggregated`, `judging` or `judged` — with its state, and for `judging` its recorded deadline. A recovered `judged` session proceeds straight to finalize. This includes sessions whose subject has since been deactivated; deactivation closes an epoch but settlement still has to finish.
+2. Every session in `collecting`, with its `window_closes_at`, including one whose subject has since been deactivated.
+3. **Every session that is closed but not yet `published`** — in `window_closed`, `aggregated`, `judging` or `judged` — with its state, and for `judging` its recorded deadline. A recovered `judged` session proceeds straight to finalize. This includes sessions whose subject has since been deactivated; a window left open by a deactivation still turns over at its boundary, and its settlement still has to finish.
 4. The stream cursor the API returns with the read (§6.3).
 
 Then it sets a boundary timer per collecting session, a deadline timer per judging session, resumes every unfinished settlement from its recorded state, opens an epoch for every active subject that has none, and waits until the earliest timer. Fire it. Recompute. Repeat.
 
-**An active subject with no session in `collecting` is opened immediately** as part of the rebuild — a fresh database, a subject activated while the scheduler was down, a subject deactivated and re-activated. Nothing else opens a first epoch.
+**An active subject with no session in `collecting` is opened immediately** as part of the rebuild — a fresh database, a subject activated while the scheduler was down, a subject deactivated, turned over with no successor and then re-activated. A first epoch is opened by the rebuild, or by the scheduler on an activation's `subject.changed`, and by nothing else. A subject re-activated while its window is still open already has a `collecting` session, so nothing opens (§4.5).
 
 It fires at the instant. It does not poll the API on an interval. It does not tick.
 
@@ -117,11 +117,11 @@ The window is the only scheduled part of a session's life. The judging deadline 
 
 ### 4.3 The boundary
 
-When a session's boundary timer fires, `system-scheduler` makes one API call: **turn over**, naming the epoch it intends to close — `expected_session_id`. The API, in one transaction and behind the state guard (§5): checks that the named session is the subject's current `collecting` session; closes it (`collecting → window_closed`, recording an `absent` event for each seated member with no take received before `window_closes_at`); opens epoch N+1 with its close set by the turnover rule of §2.2; and records the turnover. The scheduler then sets the subject's boundary timer to the new `window_closes_at` and starts settlement of N (§4.4).
+When a session's boundary timer fires, `system-scheduler` makes one API call: **turn over**, naming the epoch it intends to close — `expected_session_id`. The API, in one transaction and behind the state guard (§5): checks that the named session is the subject's current `collecting` session; closes it (`collecting → window_closed`, recording an `absent` event for each seated member with no take received before `window_closes_at`); opens epoch N+1 with its close set by the turnover rule of §2.2, but only if the subject is active at that instant; and records the turnover. The scheduler then sets the subject's boundary timer to the new `window_closes_at`, or drops it when no N+1 opened, and starts settlement of N (§4.4).
 
 **Turnover is bound to the epoch, never to "whatever is open."** If the named session is no longer the current collecting one — because this call is a retry after a lost response, because a stale timer fired after a turnover this scheduler did not make, or because a second scheduler got there first — the API returns the original turnover's result if it has one, or a reasoned no-op. It never closes the successor. This is what makes a repeated boundary safe under §5 and §10.
 
-Turnover is the only way an epoch closes while its subject stays active, and `system-scheduler` is the only caller that turns an epoch over ([D55](../decisions.md#d55)). There is no operator or admin early turnover. The operator admin token holds only the `admin` right, and every epoch lifecycle route refuses it (§7). A turnover the scheduler learns of only by event (§6.2) — a second scheduler's, or its own whose response was lost — is treated exactly as one it saw complete.
+Turnover is the only way an epoch closes, whether its subject is active or not, and `system-scheduler` is the only caller that turns an epoch over ([D55](../decisions.md#d55)). There is no operator or admin early turnover. The operator admin token holds only the `admin` right, and every epoch lifecycle route refuses it (§7). A turnover the scheduler learns of only by event (§6.2) — a second scheduler's, or its own whose response was lost — is treated exactly as one it saw complete.
 
 ### 4.4 Settlement
 
@@ -159,9 +159,15 @@ Then it publishes. A repeated finalize returns the outcome already decided; it n
 
 **Only an admin deactivates a subject, and the scheduler never does** ([D55](../decisions.md#d55)). Deactivation is an admin subject edit made under the `admin` right, not an epoch lifecycle transition. The scheduler's token holds no `admin` right, so it cannot make the edit. The `epochs/*` lifecycle routes stay scheduler-only, and none of them deactivates.
 
-In one transaction the deactivation sets the subject inactive, closes its open epoch (recording absences as in §4.3), opens no new one, and publishes `subject.changed`. Settlement of that closed epoch proceeds and must finish; §3 step 3 includes it in every rebuild. The scheduler drops the subject's boundary timer on the `subject.changed` event and settles the closed epoch through the ordinary settlement transitions (§4.4).
+**The window runs to its close** ([D55](../decisions.md#d55) (4)). A deactivation only sets the subject inactive and publishes `subject.changed`. It does not close the open epoch. No admin or operator early close exists.
 
-Activation is the mirror case. It is also an admin subject edit, and it opens no session. It publishes `subject.changed`, and the scheduler opens the first epoch from that event (§3, §6.2).
+- The open window stays open until its grid boundary, and takes are accepted until then (§4.2).
+- The scheduler keeps that session's boundary timer. At the boundary it turns the epoch over as usual (§4.3): the turnover closes the session, records absences and opens no successor, because the subject is inactive. The scheduler then settles the closed epoch through the ordinary settlement transitions (§4.4). §3 steps 2 and 3 include the session in every rebuild until it is `published`.
+- A reactivation while that window is still open opens nothing, because the subject already has a `collecting` session. The boundary then finds the subject active and opens N+1 as usual.
+
+Activation is the mirror case. It is also an admin subject edit, and it opens no session. It publishes `subject.changed`. When the subject has no `collecting` session, the scheduler opens its first epoch from that event (§3, §6.2).
+
+This keeps §4.3 whole: only the scheduler moves the state machine. A deactivation that closed the window would be an early close, and deactivating then reactivating would be the early turnover this spec forbids, in two calls.
 
 ### 4.6 Transition calls that fail
 
@@ -183,7 +189,7 @@ Every transition endpoint checks the session's current state — and, for turnov
 
 ### 6.1 Two kinds of work
 
-- **Timed work** fires at an instant the clock already knows. There is one scheduled kind: the epoch boundary, one per active subject. The clock fires it directly; the API sends nothing, because the scheduler already holds the instant. The judging deadline (§4.4) is also a timer the scheduler holds, reconstructed from the instant the API stored, but it is a timeout inside settlement, not a schedule.
+- **Timed work** fires at an instant the clock already knows. There is one scheduled kind: the epoch boundary, one per `collecting` session. The clock fires it directly; the API sends nothing, because the scheduler already holds the instant. The judging deadline (§4.4) is also a timer the scheduler holds, reconstructed from the instant the API stored, but it is a timeout inside settlement, not a schedule.
 - **Event-driven work** fires because something happened. Settlement is driven by the scheduler as the direct consequence of a turnover — one whose response it received, or one it learned of only by event (a second scheduler's, or its own whose response was lost) — and advanced by the `session.judged` event. A change to a subject's scheduling columns is itself an event.
 
 ### 6.2 Change events
@@ -192,7 +198,7 @@ Any write that alters what the scheduler is waiting on is published by the API a
 
 | event | cause | scheduler does |
 |---|---|---|
-| `subject.changed` | a scheduling column changed (§2.2), or an admin activated or deactivated the subject (§4.5) | re-reads that subject; on activation opens its first epoch (§3); on deactivation drops its boundary timer and settles the epoch the deactivation closed (§4.5) |
+| `subject.changed` | a scheduling column changed (§2.2), or an admin activated or deactivated the subject (§4.5) | re-reads that subject; on activation opens its first epoch when it has no `collecting` session (§3); on deactivation keeps the open session's boundary timer, so the boundary turns it over with no successor (§4.5) |
 | `epoch.turned_over` | epoch N closed and N+1 opened — by this scheduler's boundary, or by a second scheduler | sets that subject's boundary timer to the new `window_closes_at`; settles N if it is not already settling |
 | `session.judged` | the judges' consensus was recorded | proceeds to finalize (§4.4) |
 
@@ -202,13 +208,14 @@ A duration change takes effect at the **next** boundary: the current window keep
 
 **The read/stream handoff.** A full read is a consistent snapshot, and the API returns with it a **cursor**: the sequence number of the last event committed before that snapshot. The scheduler then subscribes from that cursor. Every committed change that the snapshot does not reflect has a sequence number above the cursor, and the API delivers those in order. Writes that land while the read is in flight are therefore either in the snapshot or on the stream, never lost between the two. The scheduler applies only events above its cursor and ignores any at or below it as duplicates.
 
-- **Transport** ([D55](../decisions.md#d55) (11)). The subscription is a WebSocket, not a server-sent-events (`text/event-stream`) response. The API watches the socket's outbound buffered amount. When a subscriber stops reading and that backlog passes its bound, the API sends one `resync` frame and closes the socket. It never drops an event to make room.
+- **Transport** ([D55](../decisions.md#d55) (11)). The subscription is a WebSocket, not a server-sent-events (`text/event-stream`) response. This is a transport preference: a two-way keepalive and an explicit close code. The SSE path lost no data, because a subscriber that fell behind already got `resync` and did a full read. The API watches the socket's outbound buffered amount. When a subscriber stops reading and that backlog passes its bound, the API sends one `resync` frame and closes the socket. It never drops an event to make room.
+- **Authorization.** The scheduler's token rides only in the upgrade request's `Authorization` header, never in the URL. The API re-authorizes it against the token store at every keepalive, and closes the socket when the token is revoked or rotated. This stream is the scheduler's alone; the judge subscription (§12) keeps its own transport until its own decision moves it.
 - **Sequence numbers** are monotonic across the API's event log, not per connection. A reconnect that subscribes from an old cursor receives everything above it, in order.
 - **Gapless, in commit order.** Each event takes its number by incrementing one counter row inside the transaction that makes the change. The row lock serializes event-writing transactions, so numbers are assigned in commit order and a rolled-back transaction leaves no hole. A database sequence must not be used: it assigns numbers at insert time, so a later number can commit first and move a subscriber's cursor past an earlier one still in flight, which the subscriber would then drop as a duplicate. The full read takes its cursor from the counter value visible in its own snapshot.
 - **Duplicates** (a sequence number at or below the last applied) are ignored.
 - **A gap** — a sequence number that is not the last applied plus one — means the copy is no longer provably current. Stop, full read, rebuild.
-- **Retention** ([D55](../decisions.md#d55) (12)). No runtime role may delete from the event log. Only `rm_owner` prunes it, and the prune is bounded by a time window only: it deletes events older than the retention window, 7 days by default and configurable. It keeps no per-subscriber cursor record and does not wait for the oldest cursor in use, which the API cannot know while a scheduler is down. A subscriber whose cursor is below the retained range gets resync-and-close.
-- **Resync.** If the API cannot serve from the requested cursor — its buffer for this subscriber overflowed, the cursor is below the retained range, or the cursor is above the log's head — it sends one `resync` frame and closes the connection, and the scheduler treats that as downtime (§3.2): full read, rebuild. The API never silently skips.
+- **Retention** ([D55](../decisions.md#d55) (12)). No runtime role may delete from the event log. Only a manual, receipted operator command prunes it: a planned root `prune` script, run through `bun run`. It takes a typed `rm_owner` password, runs fenced under the target lock (`smoke-production-spec.md` §2), and runs at each upgrade or on a runbook cadence. Nothing schedules it. It deletes only events older than a retention window of at least 7 days. The window is a floor, not a schedule. The command keeps no per-subscriber cursor record and does not wait for the oldest cursor in use, which the API cannot know while a scheduler is down. This supersedes D52's retention bullet and D53 (2)'s bound of the oldest servable cursor.
+- **Resync.** If the API cannot serve from the requested cursor — its buffer for this subscriber overflowed, the cursor is below the retained floor (`log_truncated`), or the cursor is above the log's head — it sends one `resync` frame and closes the connection, and the scheduler treats that as downtime (§3.2): full read, rebuild. The API never silently skips. A pruned log is safe for this reason: a subscriber that missed events rebuilds rather than skipping them.
 - **Silent failure detection.** The connection carries a transport-level keepalive (WebSocket ping/pong). A missed keepalive is a dropped connection under §3.1. This is a transport frame, not an API call, and not a read of business state; §10's no-API-call gate is stated accordingly.
 - **The keepalive carries the head sequence.** Each keepalive from the API includes the sequence number of the last event it committed. A scheduler whose last-applied number is below that head has missed an event with no later event to expose the gap; it treats this exactly like a gap — stop, full read, rebuild. This closes the one loss sequence numbers alone cannot detect: the final event before a quiet period. It costs nothing beyond a number on a frame the protocol already requires, and it is not a read of business state.
 - **A dropped connection** is reconnected with backoff and followed by a full read. The scheduler does not replay from its last cursor after a drop; it rebuilds. Rebuilding is cheap and provably correct; replay would have to be proven complete.
@@ -248,7 +255,7 @@ The same `system-scheduler` image and code run in production, stage, test and CI
 - A submission after `window_closes_at` is refused regardless of state.
 - Turnover is bound to a named epoch and never retargets its successor.
 - Only `system-scheduler` drives the epoch lifecycle transitions: open, turnover and settlement. No operator or admin early turnover exists, and the operator admin token is refused on every epoch lifecycle route.
-- Only an admin subject edit activates or deactivates a subject. The scheduler never deactivates, and its token is refused on the subject edit routes. A deactivation closes the open epoch in the transaction that sets the subject inactive.
+- Only an admin subject edit activates or deactivates a subject. The scheduler never deactivates, and its token is refused on the subject edit routes. A deactivation closes no epoch: the open window runs to its boundary, and that turnover opens no successor.
 - `system-scheduler` never polls the API on an interval, and never re-reads on a timer. Failure-triggered, bounded retries are not polling.
 - The clock is either provably current or rebuilding. There is no third state.
 - Every change to what the clock waits on is an event on the stream, sequenced in the transaction that made the change.
@@ -282,7 +289,10 @@ Timing gates distinguish **dispatch** (the scheduler issued the call at the inst
 - A turnover this scheduler did not make (a second scheduler's), learned of only by `epoch.turned_over`, is settled and followed exactly as the scheduler's own boundary would be: N is settled to `published`, N+1's window closes on the grid (§2.2), the scheduler's timer moves to that instant, and the scheduler fires no turnover of its own on top.
 - The operator admin token is refused on every epoch lifecycle route — open, turnover, each settlement step — and changes nothing.
 - Killing `system-scheduler` mid-window and restarting it after the window instant fires the boundary once on rebuild; a window that should have turned over three times during the outage turns over once.
-- An admin deactivating a subject closes its open epoch in the same transaction that sets the subject inactive, opens no new one, and the scheduler settles the closed epoch to `published` from `subject.changed`.
+- An admin deactivating a subject leaves its open window `collecting`: a take submitted after the deactivation and before `window_closes_at` is accepted. At the boundary the scheduler turns the epoch over, the turnover opens no successor, and the scheduler settles the closed epoch to `published`. No transaction but that turnover closes the window.
+- Re-activating a subject while its window is still open opens no session; the boundary then opens N+1 as usual. Re-activating it after the no-successor turnover opens its first epoch from `subject.changed`.
+- **Prune below a cursor:** with the log pruned past a subscriber's cursor, a subscription from that cursor gets one `resync` frame (`log_truncated`) and a close, and the scheduler rebuilds. The prune refuses to remove an event younger than 7 days.
+- **Socket authorization:** revoking or rotating the scheduler's token closes its open socket at the next keepalive; a token offered in the URL is refused.
 - The scheduler's token is refused on the subject activate and deactivate routes and changes nothing; no `epochs/*` route deactivates a subject.
 - **Handoff:** a turnover this scheduler did not make (a second scheduler's), committed between this scheduler's full read and its subscription, is delivered on the stream above the cursor, not lost.
 - **Silent stall:** stall the connection without closing it — the missed keepalive is detected, the scheduler rebuilds, and no stale timer fires.
@@ -374,3 +384,14 @@ Amended again the same day with D55 (11) and (12): the stream's transport and it
 | §6.3 | the transport unnamed; the served response was `text/event-stream` | the subscription is a WebSocket; a subscriber whose outbound backlog passes its bound gets one `resync` frame and a close, never a dropped event (D55 (11)) |
 | §6.3 | the log is retained at least as far back as the oldest cursor the API may still be asked to serve | only `rm_owner` prunes, bounded by a time window only (7 days by default, configurable); a cursor below the retained range gets resync-and-close (D55 (12)) |
 | §6.3 | resync when the buffer overflowed or the cursor is above head | also when the cursor is below the retained range; every resync closes the connection |
+
+Corrected the same day, after a review of the recorded D55 answers against the owner's own words ([D55](../decisions.md#d55), the corrections of 2026-09-25).
+
+| clause | said before | says now |
+|---|---|---|
+| §2.4, §4.5 | the deactivation closes the open epoch in the same transaction that sets the subject inactive | the window runs to its close: the deactivation only sets the subject inactive and publishes `subject.changed`; the scheduler turns the epoch over at its boundary with no successor and settles it; a reactivation inside the open window opens nothing (D55 (4)) |
+| §3 | one timer per active subject; "nothing else opens a first epoch" | one boundary timer per `collecting` session; a first epoch is opened by the rebuild, or by the scheduler on an activation's `subject.changed`, and by nothing else |
+| §4.3, §6.1, §6.2 | turnover always opens N+1; the timer is dropped on deactivation | turnover opens N+1 only for an active subject; the timer is kept until the boundary |
+| §6.3 | the WebSocket's reason unstated beyond its backlog | a transport preference (two-way keepalive, explicit close code); the token only in the upgrade's `Authorization` header, re-authorized at every keepalive; the scheduler stream only (D55 (11)) |
+| §6.3 | the `rm_owner` prune keeps a 7-day default window, configurable | a manual, receipted `rm_owner` command at each upgrade or on a runbook cadence, with a 7-day minimum window; a cursor below the floor gets resync-and-close (`log_truncated`); supersedes D52's retention bullet and D53 (2) (D55 (12)) |
+| §9, §10 | a deactivation closes the open epoch in its own transaction | a deactivation closes no epoch; gates added for takes after deactivation, reactivation inside the window, a prune below a cursor, and socket authorization |
