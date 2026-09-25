@@ -333,6 +333,12 @@ describe("§4.3 local rows — a real `bun smoke` against its own Postgres", () 
       boot.proc.kill("SIGINT");
       // Stopped by the test after the enrollment, never refused by the matrix.
       expect(await boot.exited).toBe(130);
+      // A PLAN check only: this is the plan summary (smoke-journal.ts
+      // renderTarget), printed before the restore. It says nothing about what
+      // the matrix read. At lock time the restored row still says `production`,
+      // and the matrix allows it because the connection is local
+      // (backend/src/deploy-policy.ts). The proof that the matrix passed is the
+      // journal below: lock committed, then enroll committed.
       expect(boot.output()).toContain("RM_ENV=stage, deployment_identity rehearsal");
       expect(boot.output()).toContain("target lock held");
       expect(boot.output()).not.toContain("refusing");

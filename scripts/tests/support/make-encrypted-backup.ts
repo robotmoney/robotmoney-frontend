@@ -66,6 +66,12 @@ export interface EncryptedBackup {
   readonly identity: "production" | null;
   /** The source server's major version, which wrote the archive. */
   readonly serverMajor: number;
+  /**
+   * v0.5.0 only: smoke:capture's own dump (pg_dump as rm_readonly, read-only)
+   * attempted against the source before the superuser workaround, with its
+   * exit and output. `null` for a source that was captured as rm_readonly.
+   */
+  readonly readonlyCapture: { readonly ok: boolean; readonly out: string } | null;
   /** Remove the directory (and the source container, if it is still up). */
   close(): void;
 }
@@ -224,11 +230,23 @@ export async function makeEncryptedBackup(source: BackupSource): Promise<Encrypt
     // rm_readonly fails on a v0.5.0 database. That source is dumped as its
     // superuser (doadmin's stand-in); with --no-owner --no-privileges the
     // dumping role leaves no trace in the archive.
+    //
+    // OPEN GAP (issue #1026 criterion 13): the superuser dump is a WORKAROUND.
+    // `bun smoke:capture` of today's v0.5.0 production cannot produce this
+    // backup, because it dumps as rm_readonly. So the rm_readonly dump is
+    // attempted first and its outcome is returned (readonlyCapture), for the
+    // dump-lifecycle test to hold the #699 gap visible.
+    const readOnly = ["-e", "PGOPTIONS=-c default_transaction_read_only=on"];
+    let readonlyCapture: { ok: boolean; out: string } | null = null;
+    if (source === "v0.5.0") {
+      const attempt = sh(["docker", "exec", ...readOnly, container, "pg_dump", "-U", "rm_readonly", "-d", DB, "--format=custom", "--compress=9", "--no-owner", "--no-privileges", "--file=/tmp/rm-readonly-attempt.dump"]);
+      readonlyCapture = { ok: attempt.code === 0, out: attempt.out };
+      sh(["docker", "exec", container, "rm", "-f", "/tmp/rm-readonly-attempt.dump"]);
+    }
     const dumpRole = source === "v0.5.0" ? "postgres" : "rm_readonly";
     const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
     const dumpPlain = join(dir, `rm-preupgrade-${stamp}.dump`);
     const globalsPlain = join(dir, `rm-globals-${stamp}.sql`);
-    const readOnly = ["-e", "PGOPTIONS=-c default_transaction_read_only=on"];
     try {
       must(
         `pg_dump (as ${dumpRole}, read-only)`,
@@ -264,6 +282,7 @@ export async function makeEncryptedBackup(source: BackupSource): Promise<Encrypt
       ledger,
       identity,
       serverMajor,
+      readonlyCapture,
       close() {
         cleanupContainer();
         rmSync(dir, { recursive: true, force: true });
