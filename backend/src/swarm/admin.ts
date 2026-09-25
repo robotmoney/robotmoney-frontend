@@ -383,6 +383,52 @@ export async function deactivateSubjectAdmin(
   });
 }
 
+/**
+ * Re-activate a subject: `inactive → active`, versioned like deactivate.
+ *
+ * A SUBJECT EDIT, NOT AN EPOCH ROUTE (D55 (4)). Scheduler spec §2.4:
+ * "Activating a subject opens its first epoch (§3)", and §3 says who does the
+ * opening: "An active subject with no session in `collecting` is opened
+ * immediately as part of the rebuild — ... a subject deactivated and
+ * re-activated. Nothing else opens a first epoch." So this flips the status
+ * and publishes `subject.changed` with reason `activated` (§6.2: "on
+ * activation opens its first epoch"), and opens NO session. `system-scheduler`
+ * opens it from the event through `openEpoch`, which places the window on the
+ * subject's grid. An admin path that opened the epoch itself would be the
+ * operator lifecycle lever D55 removed.
+ *
+ * Same transaction as the status flip (§9): the clock is never told about an
+ * activation that rolled back, and never misses one that committed.
+ *
+ * Refusals: 404 for an unknown subject, 409 `stale_version` for a version the
+ * caller did not read, 409 `already_active` for a subject that is active —
+ * re-publishing the event for it would ask the scheduler to open an epoch it
+ * already holds.
+ */
+export async function activateSubjectAdmin(
+  id: string,
+  expectedVersion: number,
+  actor: Actor = ADMIN_ACTOR,
+): Promise<AdminResult> {
+  return sql.begin(async (tx) => {
+    const row = (await tx`SELECT * FROM swarm_subjects WHERE id = ${id} FOR NO KEY UPDATE`)[0];
+    if (!row) return err(404, "subject not found");
+    if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
+    if (row.status === "active") return err(409, "already_active");
+    const upd = await tx`
+      UPDATE swarm_subjects SET status = 'active', version = version + 1, updated_at = now()
+      WHERE id = ${id} AND version = ${expectedVersion}
+      RETURNING *`;
+    if (upd.length === 0) return err(409, "stale_version");
+    await appendStreamEvent(tx, "subject.changed", {
+      subjectId: id,
+      payload: { reason: "activated", ...schedulingPayload(upd[0]) },
+    });
+    await audit(actor, "subject_activate", { subjectId: id }, tx);
+    return { ok: true, status: 200, subject: toSubjectAdmin(upd[0]) };
+  });
+}
+
 // ── Members ─────────────────────────────────────────────────────────────────
 export async function listMembersAdmin() {
   const rows = await sql`SELECT * FROM swarm_members ORDER BY id`;

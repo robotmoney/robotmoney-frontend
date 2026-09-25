@@ -252,13 +252,8 @@ export const APPEND_ONLY_TABLES = [
   "regime_snapshots",
   "schema_migrations",
   "analytics_overwrite_events",
-  // Issue #1026 W4: the epoch scheduler's two logs. `swarm_stream_events` is
-  // the log §6.3's gap rule rests on — a deleted row IS a gap, and one the
-  // scheduler cannot tell from a lost frame. `swarm_scheduler_jobs` holds the
-  // idempotency keys, and a guarantee that disappears when the work finishes
-  // lets the same key back in as fresh work (migration 0070's header).
-  "swarm_stream_events",
-  "swarm_scheduler_jobs",
+  // Issue #1026 W4's two scheduler logs were here, opted in by 0072, and have
+  // both left: see APPEND_ONLY_RELEASED below for where each went and why.
 ] as const;
 
 export type AppendOnlyTable = (typeof APPEND_ONLY_TABLES)[number];
@@ -273,9 +268,9 @@ export type AppendOnlyTable = (typeof APPEND_ONLY_TABLES)[number];
 export const APPEND_ONLY_MIGRATION = "0032_append_only_history.sql";
 
 /** Every migration that declares a protected-table array, in apply order. The
- *  union of their arrays must equal APPEND_ONLY_TABLES — pinned by an executed
- *  test, because a table added to one list and not the other is a table nobody
- *  protects. */
+ *  union of their arrays, less APPEND_ONLY_RELEASED, must equal
+ *  APPEND_ONLY_TABLES — pinned by an executed test, because a table added to
+ *  one list and not the other is a table nobody protects. */
 export const APPEND_ONLY_MIGRATIONS = [
   "0032_append_only_history.sql",
   "0040_swarm_judgements_append_only.sql",
@@ -332,12 +327,36 @@ export const APPEND_ONLY_TABLE_MIGRATION: Record<
   // written: 0056 both CREATES this table and installs its own ENABLE ALWAYS
   // triggers, so it is its own opt-in migration.
   analytics_overwrite_events: "0056_analytics_overwrite_events.sql",
-  // 0068 and 0070 CREATED these two; 0072 is what opts them in, so 0072 is the
-  // migration a database must have reached before the guard expects triggers on
-  // them. Pointing at their creating migration instead would make every
-  // database between 0068 and 0072 report a disarmed guard.
-  swarm_stream_events: "0072_drop_swarm_schedules.sql",
-  swarm_scheduler_jobs: "0072_drop_swarm_schedules.sql",
+};
+
+/**
+ * Tables a migration once opted in and a LATER migration took out again, each
+ * by a decision that says so. An applied migration is frozen, so 0072's array
+ * still names both of these; this record is what lets the union pin above tell
+ * "released on purpose, by this file" from "forgotten". A table appears here
+ * only with the migration that removed its triggers, and never also in
+ * APPEND_ONLY_TABLES.
+ *
+ *  - `swarm_stream_events` — D53 (2): the retention rule of scheduler spec §6.3
+ *    (D52) lets rm_owner prune rows below the oldest servable cursor, which the
+ *    0032 triggers refused for every role. Migration 0080 drops them. DELETE
+ *    and TRUNCATE stay revoked from rm_app and rm_worker, re-asserted by
+ *    backend/schema/grants.sql's `runtime_delete_revoked` list and refused by
+ *    preflight check 2 (RUNTIME_DELETE_REVOKED_TABLES in ./preflight.ts).
+ *  - `swarm_scheduler_jobs` — scheduler spec §6.3 as amended by D52: no job
+ *    pushes. Migration 0079 drops the table, and its triggers with it.
+ */
+export const APPEND_ONLY_RELEASED: Readonly<
+  Record<string, { readonly declaredBy: (typeof APPEND_ONLY_MIGRATIONS)[number]; readonly releasedBy: string }>
+> = {
+  swarm_stream_events: {
+    declaredBy: "0072_drop_swarm_schedules.sql",
+    releasedBy: "0080_stream_events_grant_only.sql",
+  },
+  swarm_scheduler_jobs: {
+    declaredBy: "0072_drop_swarm_schedules.sql",
+    releasedBy: "0079_drop_swarm_scheduler_jobs.sql",
+  },
 };
 
 /** The two trigger names migration 0032 installs on each protected table. */

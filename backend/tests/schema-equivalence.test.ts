@@ -217,53 +217,6 @@ const DELETE_REVOKED = new Set<string>([
 // fix for a red run here: the fix is grants.sql / snapshot.sql (see each
 // cause's `fix`), after which the entry is deleted.
 
-/** Cause A: rm_worker's privileges on each relation, as the migrated side holds
- *  them, grouped by privilege list. The snapshot side grants rm_worker nothing. */
-const RM_WORKER_ONLY_IN_MIGRATIONS: Readonly<Record<string, readonly string[]>> = {
-  "SELECT": [
-    "admin_credential", "admin_passkey", "admin_session", "admin_webauthn_challenge", "agent_activity_log",
-    "allocation_framework", "analytics_artifacts", "analytics_data_vintages", "analytics_data_vintages_id_seq",
-    "analytics_ledger_methodology_versions", "analytics_ledger_methodology_versions_id_seq",
-    "analytics_ledger_run_events", "analytics_ledger_run_events_id_seq", "analytics_ledger_runs",
-    "analytics_ledger_runs_id_seq", "analytics_output_snapshots", "analytics_output_snapshots_id_seq",
-    "analytics_overwrite_events_id_seq", "analytics_parity_observations", "analytics_parity_observations_id_seq",
-    "analytics_read_mode", "analytics_report_snapshots", "analytics_report_snapshots_id_seq", "analytics_runs",
-    "analytics_stage_runs", "analytics_submissions", "analytics_vintage_members", "analytics_vintage_members_id_seq",
-    "audit_log", "buyback_scan_state", "buyback_swaps", "comments", "prices", "raw_indicator_history",
-    "regime_indicators", "regime_snapshots", "research_pipeline_artifacts", "research_pipeline_runs",
-    "research_pipeline_stages", "research_pipeline_warnings", "research_signals", "source_acquisition_events",
-    "source_acquisition_events_id_seq", "source_acquisitions", "source_fetches", "source_payloads",
-    "source_value_versions", "source_value_versions_id_seq", "swarm_agent_health_events", "swarm_applications",
-    "swarm_brief_revisions", "swarm_brief_revisions_id_seq", "swarm_briefs", "swarm_claim_challenges",
-    "swarm_consensus_receipts", "swarm_judge_config", "swarm_judge_fault_injection", "swarm_member_avatars",
-    "swarm_member_keys", "swarm_members", "swarm_memos", "swarm_recommendations", "swarm_scheduler_jobs",
-    "swarm_scheduler_jobs_id_seq", "swarm_session_events", "swarm_session_judgements", "swarm_session_members",
-    "swarm_sessions", "swarm_stream_events", "swarm_subject_snapshots", "swarm_subjects", "swarm_waitlist",
-    "vault_apy", "vault_tvl", "wallet_aum_snapshot_runs", "wallet_balance_sample_evidence", "wallet_balances",
-    "wallet_sleeve_sample_evidence",
-  ],
-  "SELECT, USAGE": [
-    "analytics_artifacts_id_seq", "analytics_stage_runs_id_seq", "audit_log_id_seq", "buyback_swaps_id_seq",
-    "committee_agent_health_events_id_seq", "committee_member_keys_id_seq", "committee_memos_id_seq",
-    "committee_session_events_id_seq", "job_runs_id_seq", "job_schedules_id_seq", "jobs_id_seq", "prices_id_seq",
-    "regime_indicators_id_seq", "research_pipeline_artifacts_id_seq", "research_pipeline_runs_id_seq",
-    "research_pipeline_stages_id_seq", "research_pipeline_warnings_id_seq", "research_signals_id_seq",
-    "swarm_session_judgements_id_seq", "vault_adapter_samples_id_seq", "vault_share_price_history_id_seq",
-    "vault_tvl_id_seq", "wallet_aum_snapshot_runs_run_id_seq", "wallet_balance_sample_evidence_evidence_id_seq",
-    "wallet_balance_samples_id_seq", "wallet_balances_id_seq", "wallet_sleeve_sample_evidence_evidence_id_seq",
-    "wallet_sleeve_samples_id_seq",
-  ],
-  "INSERT, SELECT, UPDATE": [
-    "asset_price_floors", "asset_prices",
-  ],
-  "DELETE, INSERT, SELECT, UPDATE": [
-    "agent_revenue_daily", "agent_vaults", "chain_address_floors", "chain_day_blocks", "daily_agent_snapshots",
-    "daily_coin_snapshots", "daily_tvl_snapshots", "daily_wallet_snapshots", "job_runs", "job_schedules", "jobs",
-    "lobster_coins", "openclaw_agents", "projects", "tracked_wallets", "vault_adapter_samples",
-    "vault_share_price_history", "wallet_backfill_state", "wallet_balance_samples", "wallet_sleeve_samples",
-  ],
-};
-
 /** Cause B: the tables on which the migrated side keeps 0053's rm_app DELETE
  *  and the snapshot side has none. */
 const RM_APP_DELETE_ONLY_IN_MIGRATIONS: readonly string[] = [
@@ -310,9 +263,6 @@ const COMMENTS_ONLY_IN_MIGRATIONS: readonly string[] = [
   "pg_class public.swarm_recommendations.final",
   "pg_class public.swarm_recommendations.report_snapshot_id",
   "pg_class public.swarm_recommendations.signing_key_id",
-  "pg_class public.swarm_scheduler_jobs",
-  "pg_class public.swarm_scheduler_jobs.acked_at",
-  "pg_class public.swarm_scheduler_jobs.idempotency_key",
   "pg_class public.swarm_session_judgements",
   "pg_class public.swarm_session_judgements.applied",
   "pg_class public.swarm_session_judgements.applied_skipped_reason",
@@ -343,58 +293,19 @@ const COMMENTS_ONLY_IN_MIGRATIONS: readonly string[] = [
   "pg_proc public.rm_append_only_guard()",
 ];
 
-/** Expand a `{ "PRIV, PRIV": [relation, ...] }` record into relation -> items. */
-function recordedItems(grantee: string, grouped: Readonly<Record<string, readonly string[]>>): Map<string, string[]> {
-  const out = new Map<string, string[]>();
-  for (const [privileges, relations] of Object.entries(grouped)) {
-    const items = privileges.split(", ").map((p) => `${grantee}:${p} by rm_owner`);
-    for (const relation of relations) {
-      if (out.has(relation)) throw new Error(`${relation} is recorded twice for ${grantee}`);
-      out.set(relation, items);
-    }
-  }
-  return out;
-}
-
 const DATABASE_LOGIN = new URL(config.databaseUrl).username;
 
 const CAUSES: readonly DriftCause[] = [
   {
-    id: "A: the snapshot grants rm_worker nothing",
-    fix:
-      "backend/schema/grants.sql:166-167 says rm_worker's grants are 'an allowlist maintained by migrations " +
-      "0054/0061/0062 and are not widened here', and snapshot.sql carries no grants — so a blank bootstrap " +
-      "(`--local blank`) leaves rm_worker with no privilege on any table or sequence. Carry the 0054/0061/0062/0068 " +
-      "allowlist in grants.sql so reconciliation re-asserts it.",
-    kind: "acl",
-    grantee: "rm_worker",
-    relations: recordedItems("rm_worker", RM_WORKER_ONLY_IN_MIGRATIONS),
-  },
-  {
     id: "B: 0053's rm_app DELETE survives on the ordinary tables that existed at 0053, and the snapshot never grants it",
     fix:
       "backend/migrations/0053_database_role_taxonomy.sql:146 grants rm_app DELETE on all tables; " +
-      "backend/schema/grants.sql:151 grants ordinary tables SELECT, INSERT, UPDATE and neither grants nor revokes " +
+      "backend/schema/grants.sql's ordinary sweep grants SELECT, INSERT, UPDATE and neither grants nor revokes " +
       "DELETE. A migrated database therefore keeps DELETE and a blank one never has it. Decide which is " +
       "intended and make grants.sql assert it both ways.",
     kind: "acl",
     grantee: "rm_app",
     relations: new Map(RM_APP_DELETE_ONLY_IN_MIGRATIONS.map((table) => [table, ["rm_app:DELETE by rm_owner"]])),
-  },
-  {
-    id: "C: the immutable-ledger trigger functions keep PUBLIC EXECUTE in the snapshot",
-    fix:
-      "0057/0058/0059/0060 REVOKE EXECUTE ... FROM PUBLIC on their guard functions; the snapshot declaration " +
-      "excludes grants and grants.sql does not re-assert the revoke. Add it to grants.sql.",
-    kind: "exact",
-    items: [
-      "rm_analytics_cutover_immutable()",
-      "rm_analytics_output_ledger_immutable()",
-      "rm_analytics_overwrite_event_immutable()",
-      "rm_analytics_run_ledger_immutable()",
-      "rm_capture_analytics_overwrite()",
-      "rm_source_ledger_immutable()",
-    ].map((fn) => ({ key: `acl function public.${fn}`, migrated: "rm_owner:EXECUTE by rm_owner", snapshot: "<default>" })),
   },
   {
     id: "E: default privileges differ between the migrations and grants.sql",
@@ -577,10 +488,10 @@ describe("blank + all migrations = the snapshot (spec §8.4)", () => {
     //   * rm_app DELETE on an ORDINARY table cause B does not record — a
     //     pattern ("any rm_app DELETE outside the append-only set") would
     //     explain it;
-    //   * rm_worker UPDATE on swarm_recommendations, where cause A records
-    //     SELECT only — a pattern ("strip every rm_worker item") would
-    //     explain it;
-    //   * rm_worker ALL on a relation cause A records nothing for;
+    //   * rm_worker UPDATE on swarm_recommendations, where both sides now
+    //     hold SELECT only (grants.sql re-asserts rm_worker's grants) — a
+    //     pattern ("strip every rm_worker item") would explain it;
+    //   * rm_worker ALL on a relation no cause records anything for;
     //   * a comment on an object cause F does not record;
     //   * a new index.
     let planted: DriftItem[] = [];

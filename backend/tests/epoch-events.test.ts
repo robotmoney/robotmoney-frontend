@@ -21,9 +21,11 @@
 // notice, unacked job pushes — is W4.4's, and nothing in this file depends on
 // it.
 import { test, expect } from "bun:test";
+import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import * as epoch from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
+import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject, rid, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
 import { inHouseJudge } from "./support/stub-judge.ts";
@@ -180,6 +182,58 @@ test("a subject's duration change publishes subject.changed, and so do create an
   expect(Object.keys(rows[1].payload).sort()).toEqual(
     ["epochAnchor", "epochDurationSeconds", "judgingDurationSeconds", "reason"],
   );
+});
+
+test("re-activation publishes subject.changed with reason `activated`, in the same transaction as the flip", async () => {
+  // §6.2: `subject.changed` — "a scheduling column changed (§2.2), or subject
+  // activated / deactivated"; the scheduler "on activation opens its first
+  // epoch (§3)". The event is the ONLY thing activation does besides the flip:
+  // no session appears (epoch-open.test.ts owns that half).
+  const id = await activeSubject("ev_activate", 600);
+  const [{ version }] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${id}`;
+  expect((await admin.deactivateSubjectAdmin(id, version)).status).toBe(200);
+  const head = await epoch.streamHeadSequence();
+
+  const activated = await admin.activateSubjectAdmin(id, version + 1);
+  expect(activated.status).toBe(200);
+  const rows = await eventsAbove(head);
+  expect(rows.map((r) => [r.kind, r.subject_id, r.payload.reason])).toEqual([["subject.changed", id, "activated"]]);
+  expect(Number(rows[0].seq)).toBe(head + 1);
+  expect(Object.keys(rows[0].payload).sort()).toEqual(
+    ["epochAnchor", "epochDurationSeconds", "judgingDurationSeconds", "reason"],
+  );
+  expect(rows[0].payload.epochDurationSeconds).toBe(600);
+
+  // A refused activation (already active) publishes nothing.
+  const again = await admin.activateSubjectAdmin(id, version + 2);
+  expect(again.status).toBe(409);
+  expect((await eventsAbove(head)).length).toBe(1);
+});
+
+test("the admin route activates a subject, versioned, and opens no session", async () => {
+  const id = await activeSubject("ev_activate_route", 600);
+  const [{ version }] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${id}`;
+  expect((await admin.deactivateSubjectAdmin(id, version)).status).toBe(200);
+  const path = ROUTES.swarm.admin.subjectActivate.replace(":id", encodeURIComponent(id));
+  const cfg = { adminToken: "admin-secret", automationToken: null, allowInsecure: false };
+  const call = (token: string | null, body: unknown) =>
+    handleSwarmAdmin(
+      new Request(`http://test${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { "X-Admin-Token": token } : {}) },
+        body: JSON.stringify(body),
+      }),
+      new URL(`http://test${path}`),
+      cfg,
+    );
+  // An admin edit: no credential, no activation.
+  expect((await call(null, { expectedVersion: version + 1 }))?.status).toBe(403);
+  expect((await call("admin-secret", {}))?.status).toBe(400);
+  const res = await call("admin-secret", { expectedVersion: version + 1 });
+  expect(res?.status).toBe(200);
+  const [{ status }] = await sql<{ status: string }[]>`SELECT status FROM swarm_subjects WHERE id = ${id}`;
+  expect(status).toBe("active");
+  expect((await sql`SELECT id FROM swarm_sessions WHERE subject_id = ${id}`).length).toBe(0);
 });
 
 test("a change to the anchor or the judging duration alone publishes subject.changed too", async () => {

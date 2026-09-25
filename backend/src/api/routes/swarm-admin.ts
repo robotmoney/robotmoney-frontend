@@ -224,12 +224,15 @@ export async function handleSwarmAdmin(
       if (!parsed) return { status: 400, body: { error: "id and name required" } };
       return fromResult(await admin.createSubjectAdmin(parsed));
     }
-    if (segs.length === 3 && (segs[2] === "update" || segs[2] === "deactivate")) {
+    if (segs.length === 3 && (segs[2] === "update" || segs[2] === "deactivate" || segs[2] === "activate")) {
       const id = decodeURIComponent(segs[1]!);
       const b = (await readJsonObject(req)) ?? {};
       const expectedVersion = parseExpectedVersion(b);
       if (expectedVersion == null) return { status: 400, body: { error: "expectedVersion (integer >= 1) required" } };
       if (segs[2] === "deactivate") return fromResult(await admin.deactivateSubjectAdmin(id, expectedVersion));
+      // A subject edit (D55 (4)): flips the status and publishes
+      // `subject.changed`; the scheduler, not this route, opens the epoch.
+      if (segs[2] === "activate") return fromResult(await admin.activateSubjectAdmin(id, expectedVersion));
       const { expectedVersion: _ev, ...patch } = b as Record<string, unknown>;
       return fromResult(await admin.updateSubjectAdmin(id, expectedVersion, patch as any));
     }

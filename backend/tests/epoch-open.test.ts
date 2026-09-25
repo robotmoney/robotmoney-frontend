@@ -219,6 +219,54 @@ test("deactivating a subject closes its open epoch and opens no successor", asyn
   expect(all.length).toBe(1);
 });
 
+test("re-activating a subject opens NO session until the scheduler acts, and the scheduler's open is a fresh on-grid epoch", async () => {
+  // §2.4: "Activating a subject opens its first epoch (§3)" — and §3 says who:
+  // "An active subject with no session in `collecting` is opened immediately
+  // as part of the rebuild — ... a subject deactivated and re-activated.
+  // Nothing else opens a first epoch." D55 (4): activation is a subject edit
+  // through the admin API, never an epoch route.
+  const subjectId = await activeSubject("open_reactivate", 600);
+  const first = await epoch.openEpoch(subjectId);
+  if (!first.ok) throw new Error("openEpoch failed");
+  const [{ version }] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${subjectId}`;
+  expect((await admin.deactivateSubjectAdmin(subjectId, version)).status).toBe(200);
+  const before = (await sql`SELECT id FROM swarm_sessions WHERE subject_id = ${subjectId}`).length;
+
+  const activated = await admin.activateSubjectAdmin(subjectId, version + 1);
+  expect(activated.status).toBe(200);
+  expect((activated as any).subject.status).toBe("active");
+  expect((activated as any).subject.version).toBe(version + 2);
+  // Zero new sessions: the flip published an event and stopped there.
+  expect((await sql`SELECT id FROM swarm_sessions WHERE subject_id = ${subjectId}`).length).toBe(before);
+  expect((await collectingSessions(subjectId)).length).toBe(0);
+
+  // The scheduler's act — `openEpoch`, what it calls on `subject.changed` —
+  // opens exactly one, closing on the subject's grid.
+  const reopened = await epoch.openEpoch(subjectId);
+  expect(reopened.ok).toBe(true);
+  if (!reopened.ok) return;
+  expect(reopened.sessionId).not.toBe(first.sessionId);
+  expect((await collectingSessions(subjectId)).length).toBe(1);
+  const [grid] = await sql<{ exact: boolean }[]>`
+    SELECT (extract(epoch FROM (s.window_closes_at - t.epoch_anchor)) / t.epoch_duration_seconds)
+             = floor(extract(epoch FROM (s.window_closes_at - t.epoch_anchor)) / t.epoch_duration_seconds) AS exact
+      FROM swarm_sessions s JOIN swarm_subjects t ON t.id = s.subject_id
+     WHERE s.id = ${reopened.sessionId}`;
+  expect(grid.exact).toBe(true);
+});
+
+test("activation is refused for an active subject, a stale version and an unknown subject — and opens nothing", async () => {
+  const subjectId = await activeSubject("open_activate_refused", 600);
+  const [{ version }] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${subjectId}`;
+  const already = await admin.activateSubjectAdmin(subjectId, version);
+  expect({ status: already.status, error: already.error }).toEqual({ status: 409, error: "already_active" });
+  expect((await admin.deactivateSubjectAdmin(subjectId, version)).status).toBe(200);
+  const stale = await admin.activateSubjectAdmin(subjectId, version);
+  expect({ status: stale.status, error: stale.error }).toEqual({ status: 409, error: "stale_version" });
+  expect((await admin.activateSubjectAdmin(rid("open_activate_missing"), 1)).status).toBe(404);
+  expect((await sql`SELECT id FROM swarm_sessions WHERE subject_id = ${subjectId}`).length).toBe(0);
+});
+
 test("deactivating a subject with no open epoch is an ordinary deactivation", async () => {
   const subjectId = await activeSubject("open_deactivate_idle", 600);
   const [{ version }] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${subjectId}`;

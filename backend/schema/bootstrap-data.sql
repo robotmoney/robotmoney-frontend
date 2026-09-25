@@ -82,6 +82,13 @@ INSERT INTO public.swarm_judge_fault_injection (id, enabled, body, remaining, se
 
 
 --
+-- Data for Name: swarm_stream_head; Type: TABLE DATA; Schema: public; Owner: rm_owner
+--
+
+INSERT INTO public.swarm_stream_head (id, seq) VALUES (true, 0);
+
+
+--
 -- Name: job_schedules_id_seq; Type: SEQUENCE SET; Schema: public; Owner: rm_owner
 --
 

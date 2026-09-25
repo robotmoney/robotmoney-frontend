@@ -232,6 +232,13 @@ INSERT INTO swarm_members (id, status, name, handle, role) VALUES
   ('m-alpha', 'active', 'Alpha', 'alpha', 'member'),
   ('m-beta',  'active', 'Beta',  'beta',  'member'),
   ('m-judge', 'active', 'Judge', 'judge-one', 'judge');
+INSERT INTO swarm_members (id, status, name, handle, role, operator) VALUES
+  ('m-forged',  'active', 'Forged',  'forged',  'member', 'robotmoney'),
+  ('m-partner', 'active', 'Partner', 'partner', 'member', 'peaq');
+INSERT INTO audit_log (actor, action, scope) VALUES
+  ('m-forged',  'update_profile', '{"memberId":"m-forged"}'),
+  ('m-partner', 'update_profile', '{"memberId":"m-partner"}'),
+  ('admin',     'member_update',  '{"memberId":"m-partner","fields":["operator"]}');
 INSERT INTO swarm_subjects (id, name) VALUES ('subj-1', 'Subject One');
 INSERT INTO swarm_sessions (id, subject_id, subject_name, state, window_closes_at, convened_at, published_at) VALUES
   ('${SESSION_PUBLISHED}', 'subj-1', 'Subject One', 'published',  '2026-09-01T12:00:00Z', '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'),
@@ -444,7 +451,9 @@ for (const tag of SUPPORTED_RELEASES) {
       expect(await rows(db`SELECT id, status, name, handle, role FROM swarm_members ORDER BY id`)).toEqual([
         { id: "m-alpha", status: "active", name: "Alpha", handle: "alpha", role: "member" },
         { id: "m-beta", status: "active", name: "Beta", handle: "beta", role: "member" },
+        { id: "m-forged", status: "active", name: "Forged", handle: "forged", role: "member" },
         { id: "m-judge", status: "active", name: "Judge", handle: "judge-one", role: "judge" },
+        { id: "m-partner", status: "active", name: "Partner", handle: "partner", role: "member" },
       ]);
       expect(await rows(db`SELECT id, name, status FROM swarm_subjects`)).toEqual([
         { id: "subj-1", name: "Subject One", status: "active" },
@@ -529,6 +538,28 @@ for (const tag of SUPPORTED_RELEASES) {
         { dedupe_key: "rel-retired-history", kind: scheduleKinds[0], status: "succeeded" },
         { dedupe_key: "rel-vault", kind: "vault.sample_share_price", status: "pending" },
       ]);
+    });
+
+    test("a self-written operator is cleared and recorded; an admin-written one is kept (0083, D55 (2))", async () => {
+      // The release's own code logged a member's profile write as
+      // `update_profile` with only { memberId }, so `m-forged`'s `robotmoney`
+      // is a self-write with no admin behind it. `m-partner` also self-wrote,
+      // but an admin wrote its operator afterwards.
+      expect(await rows(db`SELECT id, operator FROM swarm_members WHERE id IN ('m-forged', 'm-partner') ORDER BY id`))
+        .toEqual([
+          { id: "m-forged", operator: null },
+          { id: "m-partner", operator: "peaq" },
+        ]);
+      expect(
+        await rows(db`
+          SELECT target_id, before_state FROM audit_log
+           WHERE actor = 'migration 0083' AND action = 'member_operator_cleared' ORDER BY target_id`),
+      ).toEqual([{ target_id: "m-forged", before_state: { operator: "robotmoney" } }]);
+    });
+
+    test("the event log is numbered from its counter row, seeded from the log, and the job ledger is gone (0079-0081)", async () => {
+      expect(await rows(db`SELECT id, seq::int AS seq FROM swarm_stream_head`)).toEqual([{ id: true, seq: 0 }]);
+      expect(await rows(db`SELECT to_regclass('public.swarm_scheduler_jobs')::text AS reg`)).toEqual([{ reg: null }]);
     });
 
     test("a judge enabled with no model is switched off, never left to judge with nothing (0056)", async () => {

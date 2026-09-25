@@ -70,7 +70,6 @@ export const ROUTES: {
     scheduler: {
       fullRead: string;
       subscribe: string;
-      jobAck: string;
     };
     participants: {
       pending: string;
@@ -93,6 +92,7 @@ export const ROUTES: {
       subjects: string;
       subjectUpdate: string;
       subjectDeactivate: string;
+      subjectActivate: string;
       epochOpen: string;
       epochTurnover: string;
       epochAggregate: string;

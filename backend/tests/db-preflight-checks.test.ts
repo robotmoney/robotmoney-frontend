@@ -801,7 +801,7 @@ describe("check 2 fails before the append-only grant transition and passes after
     expect(scoped((await checkPrivileges(sql, context({ roles: WRITERS }))).findings)).toEqual([]);
   });
 
-  test("the transition's arrays cover every APPEND_ONLY_TABLES entry — no append-only table can skip it", () => {
+  test("the transition's arrays cover every APPEND_ONLY_TABLES entry — no append-only table can skip it", async () => {
     // 0065 revokes on the 0032-era set and 0072 on the two scheduler logs. A
     // table added to APPEND_ONLY_TABLES without a revoking migration would
     // pass every test above that builds its own grants, and still hold 0053's
@@ -821,7 +821,16 @@ describe("check 2 fails before the append-only grant transition and passes after
     // not APPEND_ONLY_TABLES: a table the transition revokes on must stay one
     // check 2 refuses a DELETE grant on.
     const protectedSet = new Set(protectedFromDeletion());
-    expect([...union].filter((table) => !protectedSet.has(table))).toEqual([]);
+    // A table the transition revoked on and a later migration DROPPED
+    // (`swarm_scheduler_jobs`, 0079: no job pushes) holds no grant to refuse.
+    // It is exempt only while it does not exist in the migrated schema.
+    const dropped = new Set<string>();
+    for (const table of union) {
+      const [row] = (await sql`SELECT to_regclass(${`public.${table}`})::text AS reg`) as unknown as { reg: string | null }[];
+      if (row!.reg === null) dropped.add(table);
+    }
+    expect([...dropped]).toEqual(["swarm_scheduler_jobs"]);
+    expect([...union].filter((table) => !protectedSet.has(table) && !dropped.has(table))).toEqual([]);
   });
 
   test("check 2 refuses a runtime-role DELETE grant on swarm_stream_events whether or not it is append-only (D53 (2))", async () => {
@@ -1111,7 +1120,9 @@ describe("check 3a — every §8.1 object class, against a real snapshot bootstr
       await db.unsafe("ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT DELETE ON TABLES TO rm_app");
       const message = naming(await integrity(db), "default privileges for rm_owner in schema public on tables");
       expect(message).toContain("differs from the installed manifest — privileges:");
-      expect(message).toContain("rm_app=arwd/rm_owner");
+      // rm_app's default is SELECT alone (0053's no-default-write rule, which
+      // grants.sql now keeps), so the planted DELETE reads as `rd`.
+      expect(message).toContain("rm_app=rd/rm_owner");
     });
   });
 

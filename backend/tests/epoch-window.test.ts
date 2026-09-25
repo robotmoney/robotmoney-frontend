@@ -218,8 +218,9 @@ test("a take that read N before a turnover committed AHEAD of N's stored close, 
   // operator's early turnover, but the scheduler's timer runs on its own clock,
   // not the database's (§4.2), so a turnover can still commit while N's stored
   // close is minutes ahead. That is the case held here. The turnover is held
-  // open AFTER it has closed N and recorded its absences: the test takes the
-  // stream-event advisory lock the turnover needs for `epoch.turned_over`.
+  // open AFTER it has closed N and recorded its absences: the test holds the
+  // stream's counter row (`swarm_stream_head`, migration 0081), which the
+  // turnover must lock to number `epoch.turned_over`.
   // While it waits, the take reads N as the newest session (N+1 is not yet
   // committed), passes every early check — the window is minutes from closing
   // — and blocks on N's row. Then the turnover commits. RED CONTROL: before
@@ -228,11 +229,13 @@ test("a take that read N before a turnover committed AHEAD of N's stored close, 
   // absences disagreed and the take post-dated aggregation's input.
   const { subjectId, sessionId, date } = await openedEpoch("win_early_turnover");
   const m = await activeMember();
-  const waiting = async (locktypes: string[]) => {
+  // Both waits are row-lock waits now, so they are told apart by count: the
+  // turnover's is the first ungranted lock, the take's the second.
+  const waiting = async (atLeast: number) => {
     for (let i = 0; i < 500; i += 1) {
       const [w] = await sql<{ n: number }[]>`
-        SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND locktype = ANY(${locktypes})`;
-      if (Number(w?.n ?? 0) > 0) return true;
+        SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND locktype = ANY(${["transactionid", "tuple"]})`;
+      if (Number(w?.n ?? 0) >= atLeast) return true;
       await Bun.sleep(10);
     }
     return false;
@@ -243,11 +246,11 @@ test("a take that read N before a turnover committed AHEAD of N's stored close, 
   let turnoverWaited = false;
   let takeWaited = false;
   await sql.begin(async (hold) => {
-    await hold`SELECT pg_advisory_xact_lock(hashtextextended('swarm_stream_events', 0))`;
+    await hold`SELECT seq FROM swarm_stream_head FOR UPDATE`;
     turnover = epoch.turnOverEpoch(subjectId, sessionId);
-    turnoverWaited = await waiting(["advisory"]);
+    turnoverWaited = await waiting(1);
     take = submitTake(m, date, subjectId);
-    takeWaited = await waiting(["transactionid", "tuple"]);
+    takeWaited = await waiting(2);
   });
   const [turned, r] = await Promise.all([turnover, take]);
   expect(turnoverWaited, "the turnover must have closed N and be waiting to publish its event").toBe(true);
