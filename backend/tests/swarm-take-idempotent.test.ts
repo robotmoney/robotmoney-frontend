@@ -73,6 +73,11 @@ async function member(): Promise<Container & { publicKey: string }> {
   return { memberId, token: r.token, privateKey, publicKey: publicKeyB64 };
 }
 
+/**
+ * Open an epoch for a fresh subject. Call it AFTER creating the members a test
+ * submits as: an epoch seats every active member when it opens, and a member
+ * activated mid-epoch joins the next one (admin-surface.md US-C3).
+ */
 async function openEpoch(prefix: string) {
   const subjectId = await activeSubject(prefix, 3600);
   const opened = await ic.openEpoch(subjectId);
@@ -124,8 +129,8 @@ const finals = async (sessionId: string, memberId: string) =>
 // ── 130 / 127: a retry is identified by its signed nonce ────────────────────
 
 test("a retry of the identical signed submission returns the EXISTING record — 200, alreadySubmitted, same id, no row added", async () => {
-  const { subjectId, sessionId, date } = await openEpoch("retry");
   const m = await member();
+  const { subjectId, sessionId, date } = await openEpoch("retry");
   const bytes = await sign(m, date, subjectId, "the take");
 
   const first = await send(m.token, bytes);
@@ -144,8 +149,8 @@ test("a retry of the identical signed submission returns the EXISTING record —
 });
 
 test("a retry still returns the existing record after the window closed and the epoch turned over — the resend settles, it is not refused", async () => {
-  const { subjectId, sessionId, date } = await openEpoch("retry_late");
   const m = await member();
+  const { subjectId, sessionId, date } = await openEpoch("retry_late");
   const bytes = await sign(m, date, subjectId, "filed in time");
   const first = await send(m.token, bytes);
   expect(first.status).toBe(201);
@@ -162,8 +167,8 @@ test("a retry still returns the existing record after the window closed and the 
 });
 
 test("a recorded nonce under DIFFERENT signed bytes is a replay: 409, no row, and no signature work", async () => {
-  const { subjectId, sessionId, date } = await openEpoch("replay");
   const m = await member();
+  const { subjectId, sessionId, date } = await openEpoch("replay");
   const nonce = rid("fixed");
   expect((await send(m.token, await sign(m, date, subjectId, "original", nonce))).status).toBe(201);
 
@@ -179,8 +184,8 @@ test("a recorded nonce under DIFFERENT signed bytes is a replay: 409, no row, an
 });
 
 test("a NEW nonce is an amendment: a new row, marked final, and the prior take unset — in the accepting transaction", async () => {
-  const { subjectId, sessionId, date } = await openEpoch("amend");
   const m = await member();
+  const { subjectId, sessionId, date } = await openEpoch("amend");
   const a = await send(m.token, await sign(m, date, subjectId, "first read"));
   expect(a.status).toBe(201);
   const before = (await takeRows(sessionId, m.memberId))[0]!;
@@ -212,8 +217,8 @@ test("a NEW nonce is an amendment: a new row, marked final, and the prior take u
 });
 
 test("content is refused by GRANT — rm_app may UPDATE only `final` — and an amendment deletes nothing", async () => {
-  const { subjectId, sessionId, date } = await openEpoch("grant");
   const m = await member();
+  const { subjectId, sessionId, date } = await openEpoch("grant");
   await send(m.token, await sign(m, date, subjectId, "one"));
   await send(m.token, await sign(m, date, subjectId, "two"));
   const [{ id }] = await sql<{ id: string }[]>`
@@ -254,8 +259,8 @@ test("every read that means 'the session's takes' selects on the FINAL flag, not
   // below must return "revision one". Under normal operation the two agree —
   // the accepting trigger marks the newest final — which is exactly why only a
   // disagreement can tell which one a read uses.
-  const { subjectId, sessionId, date } = await openEpoch("flag_reads");
   const m = await member();
+  const { subjectId, sessionId, date } = await openEpoch("flag_reads");
   await send(m.token, await sign(m, date, subjectId, "revision one"));
   await send(m.token, await sign(m, date, subjectId, "revision two"));
   await sql.begin(async (tx) => {
@@ -285,8 +290,8 @@ test("every read that means 'the session's takes' selects on the FINAL flag, not
 // ── 129: the window, not the storage state, freezes a take ──────────────────
 
 test("a member amends twice while the window is open; after window_closes_at a third is refused even though turnover is late", async () => {
-  const { subjectId, sessionId, date } = await openEpoch("window");
   const m = await member();
+  const { subjectId, sessionId, date } = await openEpoch("window");
   for (const body of ["first", "second", "third"]) {
     expect((await send(m.token, await sign(m, date, subjectId, body))).status).toBe(201);
   }
@@ -320,8 +325,8 @@ test("a member amends twice while the window is open; after window_closes_at a t
 // ── 127 / 126: races ────────────────────────────────────────────────────────
 
 test("two amendments racing through the route are BOTH accepted, in order, and leave exactly one final take", async () => {
-  const { subjectId, sessionId, date } = await openEpoch("race");
   const m = await member();
+  const { subjectId, sessionId, date } = await openEpoch("race");
   expect((await send(m.token, await sign(m, date, subjectId, "opening take"))).status).toBe(201);
 
   // Two containers, one member, each with its own nonce, sent at once.
@@ -346,8 +351,8 @@ test("two amendments racing through the route are BOTH accepted, in order, and l
 });
 
 test("two copies of ONE signed submission racing add one row, and both are answered with the same record", async () => {
-  const { subjectId, sessionId, date } = await openEpoch("race_same");
   const m = await member();
+  const { subjectId, sessionId, date } = await openEpoch("race_same");
   const bytes = await sign(m, date, subjectId, "sent twice at once");
   const [a, b] = await Promise.all([send(m.token, bytes), send(m.token, bytes)]);
   expect([a.status, b.status].sort()).toEqual([200, 201]);
@@ -356,8 +361,8 @@ test("two copies of ONE signed submission racing add one row, and both are answe
 });
 
 test("an old and a new container holding DIFFERENT tokens for one member, overlapping across a key rebind, leave ONE final take; an identical retry adds no row", async () => {
-  const { subjectId, sessionId, date } = await openEpoch("overlap");
   const m = await member();
+  const { subjectId, sessionId, date } = await openEpoch("overlap");
   const oldContainer: Container = { memberId: m.memberId, token: m.token, privateKey: m.privateKey };
 
   // The old container files its take.
@@ -425,8 +430,8 @@ async function assertHistoryVerifies(subjectId: string, sessionId: string, membe
 
 for (const rebind of ["rotateMemberKeyAdmin", "registerMember"] as const) {
   test(`after ${rebind} to a NEW key, old takes still verify everywhere, and a new take signed with the superseded key is 403 with no row`, async () => {
-    const { subjectId, sessionId, date } = await openEpoch(`rebind_${rebind}`);
     const m = await member();
+    const { subjectId, sessionId, date } = await openEpoch(`rebind_${rebind}`);
     const r1 = await send(m.token, await sign(m, date, subjectId, "signed with key one"));
     const r2 = await send(m.token, await sign(m, date, subjectId, "also key one"));
     expect([r1.status, r2.status]).toEqual([201, 201]);

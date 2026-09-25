@@ -22,7 +22,6 @@ import {
   appendStreamEvent,
   closeEpochForDeactivation,
   listJudgements,
-  seatInCollectingEpochsTx,
   sessionJudgeFingerprint,
 } from "./domain.ts";
 // Issue #562 — the one implementation of "what handle does this name get".
@@ -611,9 +610,6 @@ export async function addMemberAdmin(input: ManualMemberInput, actor: Actor = AD
         UPDATE swarm_members SET handle = ${handle} WHERE id = ${memberId} RETURNING *`;
       await tx`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash)
                VALUES (${memberId}, ${input.publicKey}, true, ${hashKey(token)})`;
-      // Seated in any epoch still collecting, like every other admission
-      // (domain.ts seatInCollectingEpochsTx).
-      await seatInCollectingEpochsTx(tx, memberId);
       await audit(actor, "member_manual_add", { memberId, handle }, tx);
       return { ok: true, status: 201, member: toMemberAdmin(derived[0]), token };
     });
@@ -686,18 +682,13 @@ export async function setMemberRoleAdmin(
       WHERE id = ${memberId} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
-    // Rosters of epochs still collecting are live, so the standing no-take
-    // rule is reflected immediately: a new judge is excused from them (it will
-    // file no take and must not be recorded absent), and a judge returned to
-    // the member role is seated in them. Rosters of closed epochs are
-    // historical snapshots and are never rewritten.
+    // Scheduled rosters are still mutable, so the standing no-take rule is
+    // reflected immediately. Later rosters are historical snapshots.
     if (role === "judge") {
       await tx`
         UPDATE swarm_session_members sm SET status = 'excused', excused_at = now(), reason = 'member holds judge role'
         FROM swarm_sessions s
-        WHERE sm.session_id = s.id AND sm.member_id = ${memberId} AND s.state IN ('scheduled', 'collecting') AND sm.status = 'expected'`;
-    } else {
-      await seatInCollectingEpochsTx(tx, memberId);
+        WHERE sm.session_id = s.id AND sm.member_id = ${memberId} AND s.state = 'scheduled' AND sm.status = 'expected'`;
     }
     await audit(actor, role === "judge" ? "member_grant_judge" : "member_revoke_judge", { memberId, role }, tx);
     return { ok: true, status: 200, member: toMemberAdmin(upd[0]) };
@@ -901,7 +892,6 @@ export async function reactivateMemberAdmin(
     await tx`UPDATE swarm_member_keys SET active = false WHERE member_id = ${memberId} AND active = true`;
     const token = `tok_${memberId}_${crypto.randomUUID()}`;
     await tx`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash) VALUES (${memberId}, ${lastKey.public_key}, true, ${hashKey(token)})`;
-    await seatInCollectingEpochsTx(tx, memberId);
     await audit(actor, "member_reactivate", { memberId }, tx);
     return { ok: true, status: 200, member: toMemberAdmin(upd[0]), token };
   });
@@ -1029,8 +1019,8 @@ export async function uploadMemberAvatarAdmin(
 // scheduler spec has no `scheduled` state (§4.1: a session is `collecting` from
 // its first instant). Its route already answered 410. The roster snapshot it
 // took is now taken by the epoch itself (domain.ts insertEpoch), in the
-// transaction that opens it, and a member activated mid-epoch is seated by its
-// activation (domain.ts seatInCollectingEpochsTx).
+// transaction that opens it; a member activated afterwards joins the next
+// epoch (docs/architecture/admin-surface.md US-C3).
 
 // ── Roster add/excuse/restore (only before collecting begins) ──────────────
 // Backed by the CANONICAL swarm_session_members table (issue #150). Status

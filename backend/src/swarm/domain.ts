@@ -1023,11 +1023,11 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
     };
   }
   // Roster gate (issue #152, AC6). An epoch seats its expected roster in the
-  // transaction that opens it (insertEpoch), and a member activated while an
-  // epoch is collecting is seated in it by the same transaction that activates
-  // it (seatInCollectingEpochsTx). When a session has roster rows, only a member
-  // with a non-excused ('expected') row on it may submit — this is what makes
-  // the roster authoritative rather than advisory, and it is the same set
+  // transaction that opens it (insertEpoch), and the roster is immutable from
+  // then on: a member activated mid-epoch joins the next one (admin-surface.md
+  // US-C3). When a session has roster rows, only a member with a non-excused
+  // ('expected') row on it may submit — this is what makes the roster
+  // authoritative rather than advisory, and it is the same set
   // loadFrozenTakeSet counts and recordAbsencesTx records absences against.
   // Sessions with NO roster rows are the legacy fixture path (openSession) and
   // are unaffected: this check is a no-op for them.
@@ -1579,7 +1579,6 @@ async function activateMemberTx(memberId: string, role: "member" | "judge") {
       SET status = 'active', role = ${role}, handle = ${handle}, activated_at = now(), version = version + 1, updated_at = now()
       WHERE id = ${memberId}`;
     await tx`UPDATE swarm_applications SET status = 'approved', reviewed_at = now() WHERE member_id = ${memberId} AND status = 'pending'`;
-    await seatInCollectingEpochsTx(tx, memberId);
     await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'activate_member', ${tx.json({ memberId, handle })})`;
     return {
       ok: true,
@@ -1783,7 +1782,6 @@ export async function registerMember(input: { memberId: string; name: string; le
       await tx`UPDATE swarm_member_keys SET active = false WHERE member_id = ${input.memberId} AND active = true`;
       await tx`INSERT INTO swarm_member_keys (member_id, public_key, token_hash)
                VALUES (${input.memberId}, ${input.publicKey}, ${hashKey(token)})`;
-      await seatInCollectingEpochsTx(tx, input.memberId);
       return { memberId: input.memberId, token };
     });
   } catch (e) {
@@ -2715,8 +2713,8 @@ export async function loadFrozenTakeSet(sessionId: string, h: DbHandle = sql): P
   // handle/name correction as normal permitted operation — so reading
   // `swarm_members.name` live meant a rename MOVED the digest of an unchanged
   // take set, which is a digest binding a fact the opinion was not derived
-  // from. `swarm_session_members.member_name` is the snapshot
-  // insertEpoch (or an activation seating the member) froze at seating time and is `NOT NULL`,
+  // from. `swarm_session_members.member_name` is the snapshot insertEpoch
+  // froze at seating time and is `NOT NULL`,
   // so the COALESCE falls through only for a session with NO roster snapshot at
   // all — the legacy/smoke `openSession` path, whose behaviour is unchanged,
   // exactly as the `rosterRows.length > 0` fallback below leaves it.
@@ -3404,8 +3402,11 @@ async function insertEpoch(
   // in the transaction that opens the epoch: the rule the retired admin
   // session create used, with name and lens denormalised at seating time
   // (loadFrozenTakeSet digests the frozen name, issue #765). Judges hold no
-  // seat: they file no take (§4.4). A member activated later, while this epoch
-  // is still collecting, is seated by its activation (seatInCollectingEpochsTx).
+  // seat: they file no take (§4.4). The roster is immutable from this instant,
+  // because the session is already `collecting`: a member activated afterwards
+  // joins the NEXT epoch (docs/architecture/admin-surface.md US-C3), which is
+  // what keeps who may submit, whose take counts and who is recorded absent one
+  // set, fixed when the window opened.
   await tx`
     INSERT INTO swarm_session_members (session_id, member_id, member_name, member_lens, status)
     SELECT ${session.id}, m.id, m.name, m.lens, 'expected'
@@ -3425,36 +3426,6 @@ async function insertEpoch(
     windowClosesAt,
     created: true,
   };
-}
-
-/**
- * Seat a member who just became an active `member` in every epoch still
- * collecting, in the caller's transaction.
- *
- * WHY. insertEpoch freezes the roster at open, and submitRecommendation refuses
- * a member who is not on a session's roster. Without this, a member activated
- * a minute after an epoch opened could not file a take until the next epoch —
- * and if it could, loadFrozenTakeSet would drop the take from aggregation,
- * because the frozen roster is also the take filter. Seating at activation
- * keeps the three sets one set: who may submit, whose take counts, and who is
- * recorded absent at turnover.
- *
- * ONLY ROSTERED SESSIONS. A session with no roster rows is the legacy fixture
- * path (openSession), which has always admitted any active member; seating
- * one member there would turn it into a one-member roster and refuse everyone
- * else. The `EXISTS` keeps that path exactly as it was.
- *
- * Idempotent: a member already seated, or excused, keeps its row.
- */
-export async function seatInCollectingEpochsTx(tx: DbHandle, memberId: string): Promise<void> {
-  await tx`
-    INSERT INTO swarm_session_members (session_id, member_id, member_name, member_lens, status)
-    SELECT s.id, m.id, m.name, m.lens, 'expected'
-      FROM swarm_sessions s
-      JOIN swarm_members m ON m.id = ${memberId} AND m.status = 'active' AND m.role = 'member'
-     WHERE s.state = 'collecting'
-       AND EXISTS (SELECT 1 FROM swarm_session_members x WHERE x.session_id = s.id)
-    ON CONFLICT (session_id, member_id) DO NOTHING`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

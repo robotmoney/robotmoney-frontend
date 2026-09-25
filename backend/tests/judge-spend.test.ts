@@ -29,13 +29,14 @@ useCleanDatabasePerTest(import.meta.file);
 
 /** A session in `judging` with one take on file, and the judge that owes it. */
 async function judgingSession(prefix: string): Promise<{ sessionId: string; judge: TestJudge }> {
-  // The judge is seated BEFORE the epoch opens, so it holds no take seat.
+  // Both exist BEFORE the epoch opens: the member is seated by the open, and
+  // the judge — already holding the judge role — holds no take seat.
   const judge = await seatJudge({ prefix: `${prefix}_judge` });
+  const m = await activeMember();
   const subjectId = await activeSubject(prefix, 3600);
   await enforceJudging();
   const opened = await ic.openEpoch(subjectId);
   if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);
-  const m = await activeMember();
   const took = await submitTake(m, sessionDate(await sessionRow(opened.sessionId)), subjectId, { body: "a take to judge" });
   if (!took.ok) throw new Error(`submitTake: ${JSON.stringify(took)}`);
   const turned = await ic.turnOverEpoch(subjectId, opened.sessionId);

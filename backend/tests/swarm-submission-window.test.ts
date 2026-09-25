@@ -91,6 +91,9 @@ async function runLifecycle(sessionId: string) {
 
 test("a take submitted BETWEEN sessions is accepted and routed to the session it belongs to", async () => {
   const subj = await activeSubject("gap", 600);
+  // Active BEFORE the epochs open: an epoch seats its roster at open and a
+  // member activated afterwards joins the next one (admin-surface.md US-C3).
+  const m = await activeMember();
 
   // Epoch A opens and its advertised deadline passes. Turnover then runs, as
   // the scheduler's boundary timer does.
@@ -113,7 +116,6 @@ test("a take submitted BETWEEN sessions is accepted and routed to the session it
   expect(future).toBe(true);
   expect((await sessionRow(a)).state).toBe("window_closed");
 
-  const m = await activeMember();
   const res = await submit(m, sessionDate(bRow), subj);
   expect(res.status).toBe(201);
   if (!("recommendationId" in res)) throw new Error(`submission failed: ${JSON.stringify(res)}`);
@@ -171,6 +173,8 @@ test("a turnover that commits AHEAD of the stored close rejects no take — the 
   // member arriving after that close is never told `not open` and never loses
   // its take.
   const subj = await activeSubject("early", 600);
+  // Active before the epochs open, so it holds a seat in both (US-C3).
+  const m = await activeMember();
   const opened = await ic.openEpoch(subj);
   if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);
   const a = opened.sessionId;
@@ -180,7 +184,6 @@ test("a turnover that commits AHEAD of the stored close rejects no take — the 
     SELECT state, window_closes_at > clock_timestamp() AS still_future FROM swarm_sessions WHERE id = ${a}`;
   expect(closed).toEqual({ state: "window_closed", still_future: true });
 
-  const m = await activeMember();
   const res = await submit(m, sessionDate(await sessionRow(turned.openedSessionId)), subj);
   expect(res.status).toBe(201);
   if (!("recommendationId" in res)) throw new Error(`submission failed: ${JSON.stringify(res)}`);

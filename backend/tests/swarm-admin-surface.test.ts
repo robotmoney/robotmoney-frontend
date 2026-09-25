@@ -383,16 +383,10 @@ test("submission: a member off the frozen roster (or excused) is rejected; a ros
   const subjectId = await activeSubject();
   const onRoster = await activeMember("onroster");
   const excused = await activeMember("excused");
-  // OFF THE ROSTER. Every admission path seats a member in the epochs still
-  // collecting (domain.ts seatInCollectingEpochsTx), so no API path produces
-  // an active member missing from a collecting epoch's roster; the roster gate
-  // is defence in depth. The state is planted: a member that held the judge
-  // role when the epoch opened (judges hold no seat) and whose role was then
-  // changed underneath the admin path that would have seated it.
-  const offRoster = await activeMember("offroster");
-  await sql`UPDATE swarm_members SET role = 'judge' WHERE id = ${offRoster.id}`;
   const { sessionId, date } = await openedEpoch(subjectId);
-  await sql`UPDATE swarm_members SET role = 'member' WHERE id = ${offRoster.id}`;
+  // OFF THE ROSTER: activated after the epoch opened, so it joins the NEXT
+  // epoch (docs/architecture/admin-surface.md US-C3) and holds no seat here.
+  const offRoster = await activeMember("offroster");
   expect((await admin.rosterExcuseAdmin(sessionId, excused.id, admin.ADMIN_ACTOR, { force: true })).status).toBe(200);
 
   const okSub = await ic.submitRecommendation(onRoster.token, await signedSubmission(onRoster, date, subjectId));
@@ -423,12 +417,12 @@ test("aggregate: quorum denominator is the frozen roster (excluding excused), no
   const turned = await ic.turnOverEpoch(subjectId, sessionId);
   expect(turned.ok).toBe(true);
 
-  // A member activated after the close is seated in the SUCCESSOR, which is
-  // still collecting — never in the closed epoch being aggregated.
+  // A member activated after the close holds no seat in the closed epoch, nor
+  // in the successor the turnover already opened: it joins the next epoch.
   const late = await activeMember("agg-c-after-close");
   if (turned.ok) {
     const successorRoster = (await admin.getSessionRoster(turned.openedSessionId)).map((r: any) => r.member_id);
-    expect(successorRoster).toContain(late.id);
+    expect(successorRoster).not.toContain(late.id);
   }
   expect((await admin.getSessionRoster(sessionId)).map((r: any) => r.member_id)).not.toContain(late.id);
 

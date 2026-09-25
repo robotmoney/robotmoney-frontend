@@ -84,6 +84,20 @@ test("a session drops out of the queue once the member has taken it, once its in
   expect(await ids()).toEqual([turned.openedSessionId]);
 });
 
+test("a member activated after an epoch opened is not sent to it — it joins the next epoch (US-C3)", async () => {
+  const seated = await activeMember();
+  const { subjectId, sessionId } = await openedEpoch("pending_late_joiner");
+  const late = await activeMember();
+  const ids = async (m: typeof seated) => ((await poll(m.token, m.id)).body.pending as { sessionId: string }[]).map((p) => p.sessionId);
+  // RED CONTROL: the seated member is sent to it.
+  expect(await ids(seated)).toEqual([sessionId]);
+  expect(await ids(late)).toEqual([]);
+  // Once the epoch turns over, the successor seats the late member and offers it.
+  const turned = await ic.turnOverEpoch(subjectId, sessionId);
+  if (!turned.ok) throw new Error(`turnOverEpoch: ${JSON.stringify(turned)}`);
+  expect(await ids(late)).toEqual([turned.openedSessionId]);
+});
+
 test("an excused member is not sent to a session it may not submit to", async () => {
   const m = await activeMember();
   const { sessionId } = await openedEpoch("pending_excused");

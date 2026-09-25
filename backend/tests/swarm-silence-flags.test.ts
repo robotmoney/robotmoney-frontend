@@ -129,13 +129,13 @@ test("never_submitted: a single take anywhere clears the flag, even after N elig
 test("never_submitted: a session the member was never seated in does not count toward N", async () => {
   const subjectId = await activeSubject();
   // Seat the member for only N-1 of the N sessions by activating it AFTER the
-  // first epoch has closed — an epoch seats whoever is active when it opens
-  // (and a member activated while it is still collecting), so this member is
-  // absent from session 1's swarm_session_members entirely (not merely
-  // non-submitting).
-  const [first] = await convene(subjectId, 2);
+  // first epoch opened — an epoch seats whoever is active when it opens and a
+  // member activated afterwards joins the next one (admin-surface.md US-C3),
+  // so this member is absent from session 1's swarm_session_members entirely
+  // (not merely non-submitting).
+  const [first] = await convene(subjectId, 1);
   const lateJoiner = await activeMember("late-joiner");
-  await convene(subjectId, N - 2);
+  await convene(subjectId, N - 1);
   const seatedIn = await sql<{ session_id: string }[]>`
     SELECT session_id FROM swarm_session_members WHERE member_id = ${lateJoiner.id}`;
   expect(seatedIn.map((r) => String(r.session_id))).not.toContain(String(first));

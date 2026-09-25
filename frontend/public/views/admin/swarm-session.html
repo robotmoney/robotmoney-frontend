@@ -1,15 +1,16 @@
 <!-- Admin — session detail (/admin/swarm/sessions/:id): UTC-first timeline,
-     roster matrix (expected/excused/submitted/absent) with a per-member
-     recommendation disclosure, read-only aggregate, and guarded lifecycle
-     action controls. No control here can edit or delete an accepted
-     recommendation. Issue #159. Buildless — factory registered at boot
-     (alpine/views/admin/swarm-session.js).
+     the lifecycle the scheduler drove the session through (observe-only:
+     system-scheduler is the only caller of the epoch transitions, D55 decision
+     4, admin-surface.md US-C4), roster matrix (expected/excused/submitted/
+     absent) with a per-member recommendation disclosure, and read-only
+     aggregate. No control here fires a transition or edits or deletes an
+     accepted recommendation. Issue #159. Buildless — factory registered at
+     boot (alpine/views/admin/swarm-session.js).
 
      Reconciled to the real backend (issue #152/PR #169) per PR #172 review:
      dropped "Linked jobs" (no session-scoped job read exists), the
      nonce/signature/canonicalPayload disclosure (never returned by any
-     route), the "publish_brief"/"reopen_window" pseudo-actions (only
-     cancel/close/reopen/aggregate/publish are real HTTP actions), and the
+     route), the "publish_brief"/"reopen_window" pseudo-actions, and the
      briefOpensAt/publishAt/version timeline fields (no GET route exposes
      them). The aggregate section now reads the persisted
      swarmRecommendation/synthesis columns instead of a fabricated DTO. -->
@@ -51,36 +52,20 @@
           <dt>Published</dt><dd x-text="session.publishedAt ? fmtUtc(session.publishedAt) : '—'"></dd>
         </dl>
 
-        <!-- ── Lifecycle actions — only server-legal transitions are enabled ── -->
-        <h2 class="adm-h2">Actions</h2>
-        <div class="adm-toolbar">
-          <template x-for="action in ['close', 'reopen', 'aggregate', 'judge', 'publish', 'cancel']" :key="action">
-            <button type="button" class="adm-btn" :class="!isLegalAction(action) && 'adm-btn--ghost'"
-              :disabled="!isLegalAction(action)" @click="openActionConfirm(action)"
-              :data-testid="'session-action-' + action">
-              <span x-text="actionLabel(action)"></span>
-            </button>
-          </template>
-        </div>
-        <p x-show="actionResult" class="adm-dim" data-testid="action-result">
-          <span x-show="actionResult?.state">New state: <span x-text="actionResult?.state"></span></span>
-          <span x-show="actionResult?.idempotent"> (idempotent: already in this state, no change made)</span>
+        <!-- ── Lifecycle — observe-only: the steps the scheduler made ────── -->
+        <h2 class="adm-h2">Lifecycle</h2>
+        <p class="adm-dim" data-testid="lifecycle-observe-only">
+          Driven by <code>system-scheduler</code> alone. An admin observes these transitions
+          and cannot fire one.
         </p>
-        <p x-show="actionError" x-text="actionError" class="rm-error" data-testid="action-error"></p>
-
-        <div x-show="actionConfirm" x-cloak class="adm-modal" data-testid="session-action-confirm">
-          <div class="adm-modal__panel">
-            <h3>Confirm <span x-text="actionConfirm ? actionLabel(actionConfirm.action) : ''"></span></h3>
-            <label class="adm-field">
-              <span>Reason</span>
-              <textarea x-model="actionConfirm.reason" class="adm-input" rows="2" placeholder="10–500 characters" data-testid="action-reason"></textarea>
-            </label>
-            <div class="adm-toolbar">
-              <button type="button" class="adm-btn" :disabled="actionSubmitting" @click="submitActionConfirm()" data-testid="action-confirm-submit">Confirm</button>
-              <button type="button" class="adm-btn adm-btn--ghost" @click="cancelActionConfirm()">Cancel</button>
-            </div>
-          </div>
-        </div>
+        <ol class="adm-bullet-list" data-testid="lifecycle-steps">
+          <template x-for="step in lifecycleSteps()" :key="step.state">
+            <li :data-testid="'lifecycle-step-' + step.state" :data-status="step.status">
+              <span :class="stepClass(step.status)" x-text="step.status"></span>
+              <span x-text="step.label"></span>
+            </li>
+          </template>
+        </ol>
 
         <!-- ── Roster matrix ─────────────────────────────────────────────── -->
         <h2 class="adm-h2">Roster (<span x-text="(session.roster || []).length"></span>)</h2>
@@ -270,7 +255,7 @@
         </template>
 
         <!-- ── Aggregate (read-only; persisted onto the session row by the
-             `aggregate` action — no edit/delete control exists) ──────────── -->
+             scheduler's aggregate step — no edit/delete control exists) ─── -->
         <template x-if="aggregate()">
           <div>
             <h2 class="adm-h2">Aggregate</h2>

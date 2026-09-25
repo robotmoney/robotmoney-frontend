@@ -9,7 +9,10 @@
 //   * AT RUNTIME, every transition an epoch can go through — open, turnover,
 //     settlement, an admin's deactivation and re-activation, a member joining
 //     mid-epoch — is driven against a clean database, and no session row and
-//     no session event ever carries `scheduled`.
+//     no session event ever carries `scheduled`. The same run proves the
+//     epoch's roster (scheduler spec §4.3, admin-surface.md US-C3): seated at
+//     open, immutable from that instant, absences recorded against it at
+//     turnover, and a member activated mid-epoch seated in the NEXT epoch.
 //   * IN THE SOURCE, every SQL statement under backend/src that writes
 //     `swarm_sessions` with the literal `'scheduled'` is found by parsing, and
 //     the set of writers is pinned. The retired admin session create
@@ -80,30 +83,42 @@ function scheduledWriters(): string[] {
 
 test("at runtime: open, take, mid-epoch join, turnover, settlement, deactivation and re-activation never write `scheduled`", async () => {
   await setJudgeMode("off");
-  const early = await activeMember();
+  const filer = await activeMember();
+  const silent = await activeMember();
   const subjectId = await activeSubject("no_scheduled", 3600);
 
   const opened = await ic.openEpoch(subjectId);
   expect(opened.ok).toBe(true);
   if (!opened.ok) return;
   expect((await sessionRow(opened.sessionId)).state).toBe("collecting");
+  const seatedIn = async (sessionId: string) => (await sql<{ member_id: string }[]>`
+    SELECT member_id FROM swarm_session_members WHERE session_id = ${sessionId} AND status = 'expected'`)
+    .map((r) => r.member_id).sort();
+  // The epoch seated every active member in the transaction that opened it.
+  expect(await seatedIn(opened.sessionId)).toEqual([filer.id, silent.id].sort());
+  const date = sessionDate(await sessionRow(opened.sessionId));
+  expect((await submitTake(filer, date, subjectId)).ok).toBe(true);
 
-  // A member activated mid-epoch is seated in it by its activation.
+  // A member activated mid-epoch holds NO seat in it — the roster is immutable
+  // from the open (US-C3) — so its take is refused, and it is not counted.
   const late = await activeMember();
-  const seated = await sql<{ member_id: string }[]>`
-    SELECT member_id FROM swarm_session_members WHERE session_id = ${opened.sessionId} AND status = 'expected'`;
-  expect(seated.map((r) => r.member_id).sort()).toEqual([early.id, late.id].sort());
-  expect((await submitTake(late, sessionDate(await sessionRow(opened.sessionId)), subjectId)).ok).toBe(true);
+  expect(await seatedIn(opened.sessionId)).toEqual([filer.id, silent.id].sort());
+  expect(await submitTake(late, date, subjectId)).toMatchObject({
+    ok: false, status: 403, error: "member is not on this session's expected roster",
+  });
 
   // The boundary: N closes with its absences recorded against the seated
-  // roster (§4.3) — the early member filed nothing — and N+1 opens collecting.
+  // roster (§4.3) — the silent member filed nothing; the late one was never
+  // seated, so it is not absent — and N+1 opens collecting, seating all three.
   const turned = await ic.turnOverEpoch(subjectId, opened.sessionId);
   expect(turned.ok).toBe(true);
   if (!turned.ok) return;
   const absent = await sql<{ member_id: string }[]>`
     SELECT member_id FROM swarm_agent_health_events WHERE session_id = ${opened.sessionId} AND event_type = 'absent'`;
-  expect(absent.map((r) => r.member_id)).toEqual([early.id]);
+  expect(absent.map((r) => r.member_id)).toEqual([silent.id]);
   expect((await sessionRow(turned.openedSessionId)).state).toBe("collecting");
+  expect(await seatedIn(turned.openedSessionId)).toEqual([filer.id, silent.id, late.id].sort());
+  expect((await submitTake(late, sessionDate(await sessionRow(turned.openedSessionId)), subjectId)).ok).toBe(true);
 
   // Settlement of N under judge mode `off`.
   expect((await ic.aggregateEpoch(opened.sessionId)).ok).toBe(true);
