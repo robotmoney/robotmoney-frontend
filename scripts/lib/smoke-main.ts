@@ -21,6 +21,7 @@ import {
   stageCadenceApplies,
   type SubjectCadencePlan,
 } from "./smoke-schedule.ts";
+import { runSessionScheduler } from "./swarm/session-scheduler.ts";
 import {
   admissionRecord,
   ADMISSION_RECORD_FILE,
@@ -1510,11 +1511,10 @@ async function main(): Promise<void> {
   }
 
   // Each subject runs on its OWN schedule (own interval + a stagger offset) so woon
-  // and mav appear in separate panes on separate cadences. Execution is SERIALIZED
-  // (run the earliest-due subject, then reschedule just that one) so two swarm
-  // sessions never run concurrently and race on the shared member roster. runSession
-  // with sessionIndex>0 self-seeds the (subject, regime) for its date, so no subject
-  // needs pre-seeding here.
+  // and mav appear in separate panes on separate cadences. How many subjects run
+  // AT ONCE is cadence.maxConcurrentSessions (production: one); the roster race
+  // that once forced one is closed in swarm/agent.ts and swarm/session.ts. See
+  // swarm/session-scheduler.ts. runSession self-seeds (subject, regime) per date.
   // The TIMETABLE is decided by the pure planner in scripts/lib/smoke-schedule.ts
   // (unit-tested in scripts/tests/unit/smoke-schedule.test.ts; also the source of
   // the nightly LIVE smoke's deadline — issue #128). This loop keeps only the
@@ -1599,55 +1599,49 @@ async function main(): Promise<void> {
     automationToken,
   };
 
-
-
-  async function swarmDriver(): Promise<void> {
-    for (;;) {
-      // Pick the earliest-due subject and wait until its slot.
-      const due = schedules.reduce((a, b) => (b.nextAt < a.nextAt ? b : a));
-      const wait = due.nextAt - Date.now();
-      if (wait > 0) await sleep(wait);
-      const subject = due.subject;
-      const c = state.swarms[subject.id];
-      // NO DATE IS COMPUTED HERE. This used to be
-      // `sessionDateFor(Date.now(), due.runs)` — today plus one synthetic day
-      // per run — invented so repeat sessions would not collide on the old
-      // UNIQUE(date, subject_id), and propped up by a boot-time TRUNCATE of all
-      // session history whenever the smoke wanted "today" back. Both are gone:
-      // runSession() opens the session first and reads its date back from the
-      // row Postgres stamped (convened_at, migration 0022), so the only clock
-      // that dates a session is the database's.
-      log(`swarm → ${subject.id} (convening; the database dates the session)`);
-      c.members = {};
-      c.nextAt = 0; // running now → pane shows "running…"
-      try {
-        const res = await e2e.runSession(subject, due.runs + 1, {
-          rail: sessionRail,
-          members: sessionMembers, cadence, twin: twinRoster,
-          // The STANDING loop needs this as much as the first session does.
-          // Omitting it made runSession fall back to "simulation" and write
-          // smoke fixtures over archive-restored subjects — see session.ts.
-          initializer: scenario.initializer,
-          onProgress: tuiActive ? swarmProgress(state, subject.id, log) : undefined,
-        });
-        c.publishedCount++;
-        const synth: string = res?.pub?.session?.synthesis ?? "";
-        const date: string = res?.pub?.session?.date ?? "(unknown)";
-        c.history.push({ date, synthesis: synth });
-        if (c.history.length > 4) c.history.shift();
-        log(`swarm published ${date}/${subject.id}`);
-      } catch (err) {
-        log(`swarm session failed (stack still running): ${err instanceof Error ? err.message : err}`);
-      }
-      due.runs++;
-      // Next slot comes from the PLAN (self-correcting, no drift), never from a
-      // literal here; clamped to "not in the past" so a session that overran its
-      // slot reschedules immediately instead of firing a backlog.
-      due.nextAt = Math.max(plannedRunAt(due.plan, due.runs), Date.now());
-      c.nextAt = due.nextAt;
+  async function runSubjectSession(i: number): Promise<void> {
+    const due = schedules[i]!;
+    const subject = due.subject;
+    const c = state.swarms[subject.id];
+    // NO DATE IS COMPUTED HERE (the old synthetic `today + runs days` and the
+    // TRUNCATE propping it up are gone): runSession() opens the session and
+    // reads its date back from the row Postgres stamped (convened_at, 0022).
+    log(`swarm → ${subject.id} (convening; the database dates the session)`);
+    c.members = {};
+    c.nextAt = 0; // running now → pane shows "running…"
+    try {
+      const res = await e2e.runSession(subject, due.runs + 1, {
+        rail: sessionRail,
+        // Read at SESSION START: reassigned at boot, appended by onboarding.
+        members: sessionMembers, cadence, twin: twinRoster,
+        // The STANDING loop needs this as much as the first session does.
+        // Omitting it made runSession fall back to "simulation" and write
+        // smoke fixtures over archive-restored subjects — see session.ts.
+        initializer: scenario.initializer,
+        onProgress: tuiActive ? swarmProgress(state, subject.id, log) : undefined,
+      });
+      c.publishedCount++;
+      const synth: string = res?.pub?.session?.synthesis ?? "";
+      const date: string = res?.pub?.session?.date ?? "(unknown)";
+      c.history.push({ date, synthesis: synth });
+      if (c.history.length > 4) c.history.shift();
+      log(`swarm published ${date}/${subject.id}`);
+    } catch (err) {
+      log(`swarm session failed (stack still running): ${subject.id}: ${err instanceof Error ? err.message : err}`);
     }
+    due.runs++;
+    // Next slot comes from the PLAN (self-correcting, no drift), clamped to
+    // "not in the past": a session outlasts its slot (window == interval), so
+    // the subject re-convenes the moment it publishes — no idle between sessions.
+    due.nextAt = Math.max(plannedRunAt(due.plan, due.runs), Date.now());
+    c.nextAt = due.nextAt;
   }
-  void swarmDriver();
+  void runSessionScheduler({
+    subjects: schedules,
+    maxConcurrent: cadence.maxConcurrentSessions,
+    runOne: runSubjectSession,
+    onError: (i, err) => log(`swarm session failed (stack still running): ${schedules[i]?.subject.id}: ${err instanceof Error ? err.message : err}`),
+  });
 
   // ── Periodic new-member onboarding (§11 R8: real-inference eval) ─────────
   // Every admission launches ONE vanilla OpenCode member-agent container

@@ -2033,6 +2033,16 @@ async function main() {
   await admin("subject", subjects[0], rail.automationToken);
 
   // Session 1: today's subject
+  //
+  // SEQUENTIAL ON PURPOSE, whatever cadence.maxConcurrentSessions says. The
+  // standing driver's cap is about INDEPENDENT subjects; these two sessions are
+  // not independent, and running them concurrently would change what this
+  // entry point proves: session 2's brief carries session 1's synthesis
+  // (prevOutcome — the rotation-awareness check), eos joins the roster BETWEEN
+  // them, and runJudgeRoleCoverage flips the GLOBAL judge mode to `shadow` for
+  // session 2 only, which would leak into a concurrent session 1 that is meant
+  // to run at the shipped `off`. What CI does get from the fast profile is the
+  // member fan-out (cadence.memberConcurrency, via runSession).
   const s1 = await runSession(subjects[0], 1, { rail, members, initializer: "simulation", cadence });
 
   // ── New member added mid-run ──────────────────────────────────────────────

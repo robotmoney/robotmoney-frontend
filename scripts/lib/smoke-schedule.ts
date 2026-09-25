@@ -616,7 +616,7 @@ export function plannedRunAt(plan: SubjectCadencePlan, runs: number): number {
 }
 
 // ── The session scheduler's decision (concurrent sessions, one code path) ────
-// smoke-main.ts's swarmDriver keeps only the I/O: it asks subjectsToStart which
+// swarm/session-scheduler.ts keeps only the I/O: it asks subjectsToStart which
 // subjects to convene now, starts them without awaiting, and sleeps until
 // nextSchedulerWakeAt or until a running session ends, whichever is first. The
 // decision lives HERE, pure, because smoke-main.ts cannot be imported by a test.
