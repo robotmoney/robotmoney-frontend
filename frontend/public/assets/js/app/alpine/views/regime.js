@@ -343,9 +343,17 @@ export function registerRegimeView(Alpine) {
     // snapshot payload until now. Snapshots persisted before that carry no
     // description and are never rewritten, so the sign-only text stays as the
     // fallback rather than leaving those rows with an empty bubble.
+    // The row's tip: what the indicator is, in the description's first
+    // sentence. A tip is three lines at most; the whole account is on the
+    // indicators page the name links to, and the sign has its own tip.
     indicatorTooltip(ind) {
       if (!ind || !ind.description) return this.signTooltip(ind?.sign, ind?.name ?? "this indicator");
-      return `${ind.description} ${this.signClause(ind.sign)}`;
+      const d = String(ind.description).trim();
+      const m = d.match(/^.*?[.!?](?=\s|$)/);
+      const first = m ? m[0] : d;
+      if (first.length <= 180) return first;
+      const cut = first.slice(0, 176);
+      return cut.slice(0, cut.lastIndexOf(" ")) + "…";
     },
     // An indicator name, split so the info glyph cannot be orphaned on a line
     // of its own. CSS puts a soft wrap opportunity on both sides of an atomic
@@ -366,10 +374,8 @@ export function registerRegimeView(Alpine) {
     },
     // Fallback for pre-`description` snapshots (see indicatorTooltip).
     signTooltip(sign, name) {
-      if (sign == null || sign >= 0) {
-        return `Sign +1: a rising ${name} reads as risk-on, so its percentile is used as is. A high reading means risk-on for every indicator.`;
-      }
-      return `Sign −1: a rising ${name} reads as risk-off, so its percentile is flipped (1 − percentile) before averaging. A high reading means risk-on for every indicator.`;
+      if (sign == null || sign >= 0) return `Sign +1: a rising ${name} reads as risk-on.`;
+      return `Sign −1: a rising ${name} reads as risk-off, so its percentile is flipped.`;
     },
     // Component methodology footer: bucket thresholds as integer percentiles.
     // The live snapshot can carry no thresholds (bucketThresholds null), which
@@ -489,7 +495,7 @@ export function registerRegimeView(Alpine) {
       const hi = `a high ${row.toLowerCase()} reading`;
       const says = h === "now"
         ? (r > 0 ? `The index has run high when ${name} is high.` : `The index has run high when ${name} is low.`)
-        : (r > 0 ? `${hi[0].toUpperCase() + hi.slice(1)} has come before stronger ${name} returns over the ${parseInt(h, 10)} days after.` : `${hi[0].toUpperCase() + hi.slice(1)} has come before weaker ${name} returns over the ${parseInt(h, 10)} days after.`);
+        : (r > 0 ? `${hi[0].toUpperCase() + hi.slice(1)} has come before stronger ${name} returns.` : `${hi[0].toUpperCase() + hi.slice(1)} has come before weaker ${name} returns.`);
       return `${head} ${says}${n}`;
     },
     corrCell(idx, asset, h) { return h === "now" ? this.conCell(idx, asset) : this.fwdCell(idx, asset + "_" + h); },

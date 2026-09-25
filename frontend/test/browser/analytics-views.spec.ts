@@ -199,10 +199,11 @@ test("regime panel rows link out to the glossary, the prose and the upstream sou
   await expect(row.locator(".rv__ind-head a")).toHaveCount(1);
   await expect(row.locator(".rv__ind-head .rm-tip__btn")).toHaveCount(1);
 
-  // The tooltip leads with what the indicator IS, then its orientation.
+  // The tooltip says what the indicator IS, in one sentence; its sign is the
+  // +1 / −1 on the row's provenance line, with a tip of its own.
   const tip = row.locator(".rv__ind-head .rm-tip__bub");
   await expect(tip).toContainText("10-year and 2-year US Treasury yields");
-  await expect(tip).toContainText("Sign +1");
+  await expect(row.locator(".rv__sign")).toHaveText("+1");
 
   // The provenance line's source label is a real link to the upstream series.
   await expect(row.locator(".rv__ind-src a")).toHaveAttribute(
