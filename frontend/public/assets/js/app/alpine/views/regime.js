@@ -5,6 +5,7 @@ import { api, ROUTES } from "../../lib/api.js";
 import { scrollToFragment } from "../../router.js";
 import { enhanceHeadings } from "../../lib/heading-anchors.js";
 import { fmtUsdCompact } from "../lib/dash-format.js";
+import { sessionBrief } from "../../lib/session-brief.js";
 import { PALETTE, SERIES, REGIME } from "../../lib/chart-theme.js";
 import { denseDays, sampleDays, yScale, lineChartSvg, bandRuns, dateTicks, nearestSample, logTicks } from "../../lib/line-chart.js";
 import {
@@ -79,6 +80,11 @@ const PANEL_TIP = {
   factor: { noun: "equity factor", count: 8, reads: "trend, breadth, momentum, style, valuation", role: "Tracked for context and left out of the composite." },
 };
 
+// The panel readings draw with the session page's Market context component
+// (lib/session-brief.js): the same rows, track, cuts and tips, fed today's
+// snapshot instead of a session's. Only its signal half is taken.
+const BRIEF = sessionBrief();
+
 export function registerRegimeView(Alpine) {
   // ── Regime classification ────────────────────────────────────────────────
   Alpine.data("regimeView", () => ({
@@ -102,10 +108,20 @@ export function registerRegimeView(Alpine) {
     fullLoaded: false,
     // The indicator panel on show; a #panel-<key> link opens its own.
     panelTab: "macro",
+    // Market context (lib/session-brief.js), fed the latest snapshot.
+    backdrop: null,
+    backdropDate: "",
+    backdropV0: false,
+    setBackdrop: BRIEF.setBackdrop,
+    signalRows: BRIEF.signalRows,
+    signalZones: BRIEF.signalZones,
+    signalCuts: BRIEF.signalCuts,
     // Hidden strategy lines on the backtest charts, "<market>:<strategy>".
     btHidden: {},
     // The market on show in Backtests; a link to a market's heading opens it.
     btMarket: "eth",
+    // The backtest chart's range; the whole backtest to start.
+    btRange: "all",
     // Crosshair positions (an index into the drawn readings) and the line a
     // legend hover focuses, per chart.
     histAt: null,
@@ -156,6 +172,7 @@ export function registerRegimeView(Alpine) {
     },
     _apply(data) {
       this.latest = data.latest;
+      this.setBackdrop(data.latest, { date: data.latest?.date });
       this.history = data.history || [];
       this.staleness = data.staleness || null;
     },
@@ -259,6 +276,16 @@ export function registerRegimeView(Alpine) {
       const rem100 = n % 100;
       if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
       return `${n}${({ 1: "st", 2: "nd", 3: "rd" })[n % 10] || "th"}`;
+    },
+    // The names the Market context markup reads.
+    ordinal(p) { return this.ordinalPct(p); },
+    fmtNum(v, d = 2) { return v == null || !isFinite(v) ? "—" : (+v).toFixed(d); },
+    // A row's tip: its label and value (the composite, or the panel's index),
+    // its percentile, and its reading.
+    signalTip(r) {
+      const v = r.key === "composite" ? this.latest?.composite : this.latest?.[r.key + "Index"];
+      const name = r.key === "composite" ? "Composite" : `${this.panelLabel(r.key)} index`;
+      return [v == null ? name : `${name} ${this.fmtNum(v)}`, `${this.ordinal(r.pct)} percentile`, r.kind === "context" ? "" : (r.regime ? this.regimeLabel(r.regime) : "")].filter(Boolean).join(" · ");
     },
     fmtWeight(w) { return w == null ? "—" : (w * 100).toFixed(1) + "%"; },
     regimeLabel(r) { return r == null ? "—" : ({ risk_off: "Risk-off", neutral: "Neutral", risk_on: "Risk-on" }[r] || String(r).replace(/_/g, "-")); },
@@ -539,8 +566,9 @@ export function registerRegimeView(Alpine) {
     toggleSeries(key) { this.series[key] = !this.series[key]; },
     setRange(id) { this.range = id; this.histAt = null; },
     // The first day the range shows, or null for the whole history.
-    _rangeStart(last) {
-      const r = RANGES.find((x) => x.id === this.range);
+    _rangeStart(last) { return this._rangeStartFor(this.range, last); },
+    _rangeStartFor(id, last) {
+      const r = RANGES.find((x) => x.id === id);
       if (!r || r.id === "all" || !last) return null;
       if (r.id === "ytd") return last.slice(0, 4) + "-01-01";
       return new Date(Date.parse(last + "T00:00:00Z") - r.days * 86_400_000).toISOString().slice(0, 10);
@@ -630,27 +658,56 @@ export function registerRegimeView(Alpine) {
 
     // Backtests: one market at a time behind the switch, every market's
     // table still in the page.
+    // The backtest's own windows. The split is the engine's
+    // BACKTEST_IN_SAMPLE_END (backend/src/analytics/analyze/backtest.ts,
+    // 2024-01-31); the ends are the strategy's own start and end dates.
+    btWindow(key) {
+      const s = this.latest?.backtest?.[key]?.composite || Object.values(this.latest?.backtest?.[key] || {})[0] || {};
+      const my = (d) => { const t = Date.parse(String(d) + "T00:00:00Z"); return isFinite(t) ? new Date(t).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" }) : "—"; };
+      return { start: my(s.start_date), end: my(s.end_date), inEnd: "Jan 2024", outStart: "Feb 2024" };
+    },
     marketLabel(bt) { return bt.title.replace(/^Backtest · /, "").replace(/SP500/g, "S&P 500"); },
     setMarket(key) { this.btMarket = key; this.btAt = null; this.btFocus = null; },
+    setBtRange(id) { this.btRange = id; this.btAt = null; },
+    // One market's curves over the chosen range. The engine keeps one point a
+    // month (the month-end value), so each line is drawn through those points,
+    // on the same calendar-day axis as the history. Short of the whole
+    // backtest, each curve is rebased to $1 at its first point in the range,
+    // so the chart reads as growth over that range; the table stays the whole
+    // backtest.
     _bt(key) {
       const h = this.history;
-      const cacheKey = `${key}|${h.length}|${h[h.length - 1]?.date}|${!!this.latest?.backtest}`;
+      const cacheKey = `${key}|${h.length}|${h[h.length - 1]?.date}|${!!this.latest?.backtest}|${this.btRange}`;
       if (BT_MEMO.has(cacheKey)) return BT_MEMO.get(cacheKey);
-      const days = denseDays(h.map((r) => r.date));
+      const all = denseDays(h.map((r) => r.date));
+      const start = this._rangeStartFor(this.btRange, all[all.length - 1]);
+      const days = start ? all.filter((d) => d >= start) : all;
+      const pos = new Map(days.map((d, i) => [d, i]));
       const byDate = new Map(h.map((r) => [r.date, r]));
-      const idx = sampleDays(days.length, WEEKLY_AFTER_DAYS);
       const strategies = this.latest?.backtest?.[key] || {};
-      const lines = this._curveKeys(key).map((sk) => {
-        const a = alignToDates(strategies[sk].equity_curve, days);
+      const keys = this._curveKeys(key);
+      const idxSet = new Set();
+      for (const sk of keys) for (const pt of strategies[sk].equity_curve) if (pos.has(pt.date)) idxSet.add(pos.get(pt.date));
+      const idx = [...idxSet].sort((a, b) => a - b);
+      const rebased = this.btRange !== "all";
+      const lines = keys.map((sk) => {
+        const at = new Map(strategies[sk].equity_curve.map((pt) => [pt.date, pt.value]));
+        let vals = idx.map((i) => { const v = at.get(days[i]); return v == null ? null : +v; });
+        if (rebased) { const first = vals.find((v) => v != null && v > 0); vals = vals.map((v) => (v == null || !first ? null : v / first)); }
         const st = STRATEGY_STYLE[sk];
-        return { token: sk, label: st.label, color: st.color, baseline: !!st.baseline, dash: st.baseline ? (st.dash || [4, 3]) : null, values: idx.map((i) => (a[i] == null ? null : +a[i])) };
+        return { token: sk, label: st.label, color: st.color, baseline: !!st.baseline, dash: st.baseline ? (st.dash || [4, 3]) : null, values: vals };
       });
-      const all = lines.flatMap((l) => l.values).filter((v) => v > 0);
-      const min = all.length ? Math.min(...all) * 0.9 : 0.1, max = all.length ? Math.max(...all) * 1.1 : 10;
+      const flat = lines.flatMap((l) => l.values).filter((v) => v > 0);
+      const lo = flat.length ? Math.min(...flat) : 0.1, hi = flat.length ? Math.max(...flat) : 10;
+      const min = lo * 0.92, max = hi * 1.08;
       const regimes = days.map((d) => byDate.get(d)?.regime ?? null);
-      const m = { days, n: days.length, idx, lines, min, max, runs: bandRuns(regimes), ticks: dateTicks(days) };
+      const m = { days, n: days.length, idx, lines, min, max, rebased, from: idx.length ? days[idx[0]] : null, runs: bandRuns(regimes), ticks: dateTicks(days) };
       BT_MEMO.set(cacheKey, m);
       return m;
+    },
+    btMeta(key) {
+      const m = this._bt(key);
+      return m.rebased && m.from ? `Month-end values, rebased to $1 on ${this.dateLong(m.from)}` : "Month-end values";
     },
     btSvg(key) {
       if (this.btMarket !== key || this.btEmptyTitle(key)) return "";
@@ -667,7 +724,7 @@ export function registerRegimeView(Alpine) {
       if (this.btMarket !== key || this.btEmptyTitle(key)) return [];
       const m = this._bt(key);
       const f = yScale({ min: m.min, max: m.max, log: true });
-      return logTicks(m.min, m.max).map((v) => ({ key: v, top: (1 - f(v)) * 100, label: (v < 10 ? v.toFixed(1) : v.toFixed(0)) + "×" }));
+      return logTicks(m.min, m.max).map((v) => ({ key: v, top: (1 - f(v)) * 100, label: (v < 10 ? (Number(v.toFixed(1)) === v ? v.toFixed(1) : v.toFixed(2)) : v.toFixed(0)) + "×" }));
     },
     btXTicks(key) { return this.btMarket === key && !this.btEmptyTitle(key) ? this._bt(key).ticks : []; },
     btLegend(key) {
@@ -694,7 +751,7 @@ export function registerRegimeView(Alpine) {
     btLabel(key) {
       const m = this._bt(key);
       if (!m.n) return "";
-      return `Growth of $1 under each strategy, log scale, ${this.dateLong(m.days[0])} to ${this.dateLong(m.days[m.n - 1])}, one reading a week, the composite regime shaded behind. Use the arrow keys to step through the readings.`;
+      return `Growth of $1 under each strategy, log scale, ${this.dateLong(m.days[0])} to ${this.dateLong(m.days[m.n - 1])}, month-end values${m.rebased ? ", rebased at the start of the range" : ""}, the composite regime shaded behind. Use the arrow keys to step through the readings.`;
     },
     // A dashed baseline's legend key: a short run of its line.
     dashKey(color, dash) {
