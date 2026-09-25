@@ -48,9 +48,13 @@
 // ── WHAT THIS MODULE MUST NOT DO ────────────────────────────────────────────
 // It never starts or stops a container itself: it computes a desired-state
 // plan and hands it to the caller (`smoke-main.ts`). It holds no database
-// credential. It never writes the credential file — provisioning is an
-// operator act (spec §9.2), not a side effect of a boot.
-import { readFileSync, statSync } from "node:fs";
+// credential. A boot never writes the credential file — provisioning is an
+// operator act (spec §9.2), not a side effect of a boot. Its one writer,
+// writeCredentialBearer, is called only by the operator's production
+// initialization step 6 (`bun scripts/prod-init.ts rebind-members`, §9.1).
+import { randomBytes } from "node:crypto";
+import { closeSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 /**
  * A participant's signing identity: the Ed25519 public key the API holds and
@@ -744,4 +748,49 @@ export function rosterPlanLines(entries: readonly RosterEntry[]): string[] {
   // Name and kind only. A plan is pasted into issues and chat logs, and a
   // public key is still an identity an onlooker can correlate.
   return entries.map((e) => `${e.kind} ${e.name}`);
+}
+
+/**
+ * Write one entry's API bearer into the credential file, atomically — the ONE
+ * writer of this file, and not a boot's: production initialization step 6
+ * (spec §9.1, `bun scripts/prod-init.ts rebind-members`) rotates each seated
+ * member through the admin `rotate-key` route and records the bearer the route
+ * returns "into that member's entry".
+ *
+ * Only `bearer` changes. The file is validated before the write (a malformed
+ * file is refused, never rewritten into shape), every other field of every
+ * entry is carried over as it was, and the new text is written to a temporary
+ * file beside it — same mode as the original, synced — and renamed over it, so
+ * a reader sees the old file or the new one and never a partial one. The new
+ * text is validated again before the rename.
+ *
+ * Refusal cases: the file refuses to load; the named entry does not exist in
+ * the named namespace; the bearer is empty.
+ */
+export function writeCredentialBearer(path: string, kind: ParticipantKind, name: string, bearer: string): void {
+  if (bearer.trim() === "") throw new Error(`refusing to write an empty bearer for ${kind} "${name}" into ${path}`);
+  const before = loadCredentialFile(path);
+  const namespace = kind === "agent" ? "agents" : "judges";
+  if (!(name in (kind === "agent" ? before.agents : before.judges))) {
+    throw new Error(`${path} has no ${namespace} entry "${name}"; rebind writes only an entry the file already holds`);
+  }
+  const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, Record<string, Record<string, unknown>>>;
+  raw[namespace]![name]!.bearer = bearer;
+  const text = `${JSON.stringify(raw, null, 2)}\n`;
+  parseCredentialFile(text, path);
+  const mode = statSync(path).mode & 0o777;
+  const temp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
+  const fd = openSync(temp, "wx", mode);
+  try {
+    writeSync(fd, text);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  try {
+    renameSync(temp, path);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    throw error;
+  }
 }

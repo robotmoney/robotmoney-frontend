@@ -25,26 +25,43 @@
 // hand-written fixture would keep passing while smoke read `undefined` and
 // treated it as false, or worse, as absent-and-therefore-fine.
 //
-// WHAT THIS FILE DOES NOT PROVE. It does not prove a real scheduler container
-// serves this over HTTP, and it does not prove `bun smoke` consumes it — as of
-// this change nothing on smoke's boot path imports the gate at all (smoke marks
-// `system-scheduler` healthy when compose `up` returns). The integration file
-// scripts/tests/integration/smoke-readiness-scheduler.test.ts carries the same
-// gate over real sockets, not over smoke; wiring it into `bun smoke`, and the
-// e2e gate that would prove it, are later parts of #1026. The no-restart check
-// below greps this helper only, which is honest only while smoke's readiness
-// path is this helper.
+// THE WHOLE GATE (§6.3 "Other services' readiness", D52, criterion 41) is
+// graded here too: api /health, the pipeline worker's startup checks, the
+// producer's authentication and seed command, each a named result, and the
+// wait that ends at once on a failure no wait can fix. `bun smoke` consumes it
+// through scripts/lib/smoke-readiness-probes.ts (the reads) and this module
+// (the verdict); the wiring and the no-restart property of the REAL readiness
+// path are asserted at the bottom, over the probes' command runner. The runtime
+// proof — the real scheduler container over real sockets, and a real boot's
+// receipt — is scripts/tests/integration/smoke-readiness-scheduler.test.ts.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { healthPayload } from "../../lib/system-scheduler/health.ts";
 import type { SchedulerHealth } from "../../lib/system-scheduler/types.ts";
 import {
+  awaitReadiness,
+  evaluateReadiness,
   evaluateSchedulerReadiness,
   fetchSchedulerHealth,
+  lastStartupPreflightLine,
+  parseStartupPreflightLine,
+  READINESS_CHECKS,
   schedulerReadinessPassed,
   SCHEDULER_READINESS_CHECKS,
+  SERVICE_READINESS_CHECKS,
+  terminalReadinessFailure,
+  type ReadinessObservation,
 } from "../../lib/smoke-readiness-scheduler.ts";
+import {
+  makeReadinessObserver,
+  parseProducerHealth,
+  PRODUCER_AUTHENTICATED_PHASES,
+  READ_ONLY_DOCKER_SUBCOMMANDS,
+  readOnlyRunner,
+  type ProbeRunner,
+} from "../../lib/smoke-readiness-probes.ts";
+import { evaluateHeartbeat } from "../../../backend/src/ops/heartbeat.ts";
 
 const REPO = join(import.meta.dir, "..", "..", "..");
 
@@ -285,5 +302,265 @@ describe("smoke never restarts the scheduler container (§6.3)", () => {
     const text = readFileSync(join(REPO, "scripts/lib/smoke-readiness-scheduler.ts"), "utf8");
     expect(text).toContain("operator");
     expect(text).toContain("§6.3");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The whole gate: §6.3 "Other services' readiness" (criterion 41)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** An observation where everything holds; each case breaks one thing. */
+function allGood(over: Partial<ReadinessObservation> = {}): ReadinessObservation {
+  return {
+    apiHealth: { ok: true, detail: "http://127.0.0.1:1/health answered 200" },
+    scheduler: health(),
+    subjects: { active: ["woon"], collecting: ["woon"] },
+    workers: [
+      { service: "worker-analytics", health: "healthy", line: { kind: "passed" } },
+      { service: "worker-research", health: "healthy", line: { kind: "passed" } },
+    ],
+    producer: { health: "healthy", phase: "armed", authenticated: true, detail: "heartbeat phase=armed" },
+    seed: { completed: true, detail: "exited 0" },
+    ...over,
+  };
+}
+
+const passOf = (checks: { check: string; pass: boolean }[], name: string) => checks.find((c) => c.check === name)?.pass;
+
+describe("readiness is every §6.3 condition, each a named result for the receipt", () => {
+  test("the named checks are exactly the four service checks and the five scheduler checks", () => {
+    expect([...READINESS_CHECKS]).toEqual([...SERVICE_READINESS_CHECKS, ...SCHEDULER_READINESS_CHECKS]);
+    expect([...SERVICE_READINESS_CHECKS]).toEqual(["api-health", "pipeline-worker-startup", "analytics-producer-authenticated", "analytics-producer-seed"]);
+    const checks = evaluateReadiness(allGood());
+    expect(checks.map((c) => c.check)).toEqual([...READINESS_CHECKS]);
+    expect(checks.every((c) => c.pass)).toBe(true);
+  });
+
+  test("each condition failing alone fails readiness under its own name", () => {
+    const cases: [Partial<ReadinessObservation>, string][] = [
+      [{ apiHealth: { ok: false, detail: "answered 503" } }, "api-health"],
+      [{ workers: [{ service: "worker-analytics", health: "starting", line: null }] }, "pipeline-worker-startup"],
+      [{ workers: [{ service: "worker-analytics", health: "unhealthy", line: { kind: "refused", detail: "check 2: rm_worker holds DELETE" } }] }, "pipeline-worker-startup"],
+      [{ workers: [] }, "pipeline-worker-startup"],
+      [{ producer: { health: "unhealthy", phase: null, authenticated: false, detail: "exited: credential rejected" } }, "analytics-producer-authenticated"],
+      [{ producer: { health: "healthy", phase: "boot", authenticated: false, detail: "phase=boot" } }, "analytics-producer-authenticated"],
+      [{ seed: { completed: false, detail: "exit 1" } }, "analytics-producer-seed"],
+      [{ scheduler: null }, "scheduler-authenticated"],
+      [{ subjects: null }, "epoch-per-active-subject"],
+    ];
+    for (const [over, name] of cases) {
+      const checks = evaluateReadiness(allGood(over));
+      expect({ name, pass: passOf(checks, name) }).toEqual({ name, pass: false });
+      expect(checks.filter((c) => !c.pass).length).toBeGreaterThan(0);
+    }
+  });
+
+  test("a worker's startup checks pass only on its `startup_preflight: passed` line AND a healthy container", () => {
+    // §7.2 as agreed with the worker: no heartbeat until checks 1-3 pass, so a
+    // healthy container with no line yet, or a line with no health, is not yet.
+    expect(passOf(evaluateReadiness(allGood({ workers: [{ service: "w", health: "healthy", line: null }] })), "pipeline-worker-startup")).toBe(false);
+    expect(passOf(evaluateReadiness(allGood({ workers: [{ service: "w", health: "starting", line: { kind: "passed" } }] })), "pipeline-worker-startup")).toBe(false);
+  });
+
+  test("the worker's two lines parse exactly; anything else is not a startup verdict", () => {
+    expect(parseStartupPreflightLine("startup_preflight: passed")).toEqual({ kind: "passed" });
+    expect(parseStartupPreflightLine("2026-09-25 worker-1 | startup_preflight: refused check 2: rm_worker holds DELETE on runs")).toEqual({
+      kind: "refused",
+      detail: "check 2: rm_worker holds DELETE on runs",
+    });
+    expect(parseStartupPreflightLine("startup_preflight passed")).toBeNull();
+    expect(lastStartupPreflightLine("boot\nstartup_preflight: refused check 1: bad password\nretry\nstartup_preflight: passed\n")).toEqual({ kind: "passed" });
+    expect(lastStartupPreflightLine("nothing yet\n")).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The producer's authentication is its heartbeat PHASE, not its container health
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The producer writes a `boot` record (staleAfterMs 180s) BEFORE waitForApi
+// presents its token (backend/src/producer/index.ts startProducerSchedules), so
+// its container is `healthy` while it has authenticated nothing. The fixtures
+// below are Docker's `.State.Health` carrying the line the REAL healthcheck
+// prints (backend/src/ops/healthcheck.ts: `ok: <reason> [<path>]`), with the
+// reason made by the REAL evaluateHeartbeat over a real record — a renamed
+// `phase=` on the producing side breaks this file.
+describe("analytics-producer-authenticated reads the heartbeat phase the producer writes only after its token authenticated", () => {
+  const now = 1_800_000_000_000;
+  const line = (phase: string) => {
+    const verdict = evaluateHeartbeat(JSON.stringify({ ts: now - 2_000, staleAfterMs: 180_000, writer: "analytics-producer", phase, detail: "x" }), now);
+    return `${verdict.healthy ? "ok" : "STALE"}: ${verdict.reason} [/tmp/heartbeat.json]\n`;
+  };
+  const dockerHealth = (status: string, entries: { exit: number; out: string }[]) =>
+    JSON.stringify({ Status: status, FailingStreak: 0, Log: entries.map((e) => ({ Start: "", End: "", ExitCode: e.exit, Output: e.out })) });
+
+  test("RED CONTROL: a healthy container whose last check printed phase=boot has NOT authenticated", () => {
+    const r = parseProducerHealth(dockerHealth("healthy", [{ exit: 0, out: line("boot") }]));
+    expect(r.health).toBe("healthy");
+    expect(r.phase).toBe("boot");
+    expect(r.authenticated).toBe(false);
+    const checks = evaluateReadiness(allGood({ producer: r }));
+    expect(passOf(checks, "analytics-producer-authenticated")).toBe(false);
+    expect(checks.find((c) => c.check === "analytics-producer-authenticated")!.detail).toContain("has not yet authenticated");
+  });
+
+  test("each post-authentication phase passes, on a passing check of a healthy container", () => {
+    expect([...PRODUCER_AUTHENTICATED_PHASES]).toEqual(["busy", "armed"]);
+    for (const phase of PRODUCER_AUTHENTICATED_PHASES) {
+      const r = parseProducerHealth(dockerHealth("healthy", [{ exit: 0, out: line("boot") }, { exit: 0, out: line(phase) }]));
+      expect({ phase, authenticated: r.authenticated }).toEqual({ phase, authenticated: true });
+      expect(passOf(evaluateReadiness(allGood({ producer: r })), "analytics-producer-authenticated")).toBe(true);
+    }
+  });
+
+  test("the LAST check decides: an armed record followed by a failing check is not authenticated", () => {
+    const r = parseProducerHealth(dockerHealth("unhealthy", [{ exit: 0, out: line("armed") }, { exit: 1, out: "STALE: no heartbeat file — the work loop has never reported progress [/tmp/h]" }]));
+    expect(r.authenticated).toBe(false);
+  });
+
+  test("no healthcheck yet, no health state, or unparseable output is not authenticated", () => {
+    expect(parseProducerHealth(dockerHealth("starting", [])).authenticated).toBe(false);
+    expect(parseProducerHealth("null").authenticated).toBe(false);
+    expect(parseProducerHealth("not json").authenticated).toBe(false);
+  });
+});
+
+describe("the wait: every check or a failure no wait can fix, and nothing in between", () => {
+  const clock = () => {
+    let now = 0;
+    return { now: () => now, sleep: async (ms: number) => void (now += ms) };
+  };
+
+  test("it waits for a slow condition and passes when everything holds", async () => {
+    const c = clock();
+    let polls = 0;
+    const verdict = await awaitReadiness(async () => (++polls < 3 ? allGood({ subjects: { active: ["woon"], collecting: [] } }) : allGood()), {
+      timeoutMs: 60_000, pollMs: 5_000, now: c.now, sleep: c.sleep,
+    });
+    expect(verdict.passed).toBe(true);
+    expect(polls).toBe(3);
+  });
+
+  test("exhausted work ends the wait AT ONCE and fails, naming the operator's restart — no retry, no restart", async () => {
+    const c = clock();
+    let polls = 0;
+    const exhausted = health({ exhausted: [{ item: "turnover:woon", subjectId: "woon", lastError: "503", attempts: 5, exhaustedAtMs: 0 }] });
+    const verdict = await awaitReadiness(async () => {
+      polls++;
+      return allGood({ scheduler: exhausted });
+    }, { timeoutMs: 60_000, pollMs: 5_000, now: c.now, sleep: c.sleep });
+    expect(verdict.passed).toBe(false);
+    expect(polls).toBe(1);
+    expect(verdict.reason).toContain("restart the instance's system-scheduler");
+    // `collecting` rows alone establish nothing: the epoch check itself passed.
+    expect(passOf(verdict.checks, "epoch-per-active-subject")).toBe(true);
+  });
+
+  test("a rejected scheduler token, a refused worker and a failed seed are terminal too", () => {
+    expect(terminalReadinessFailure(allGood({ scheduler: health({ authenticated: false, lastError: "API rejected the automation token (HTTP 401)" }) }))).toContain("re-provision");
+    expect(terminalReadinessFailure(allGood({ workers: [{ service: "worker-analytics", health: "unhealthy", line: { kind: "refused", detail: "check 3: in_progress" } }] }))).toContain("worker-analytics refused its startup checks");
+    expect(terminalReadinessFailure(allGood({ seed: { completed: false, detail: "exit 1" } }))).toContain("seed command did not complete");
+    // An unreachable API is NOT terminal: the scheduler's connect loop brings it in.
+    expect(terminalReadinessFailure(allGood({ scheduler: health({ authenticated: false, lastError: "API unreachable" }) }))).toBeNull();
+  });
+
+  test("the deadline fails with every check still failing named", async () => {
+    const c = clock();
+    const verdict = await awaitReadiness(async () => allGood({ apiHealth: { ok: false, detail: "answered 502" } }), {
+      timeoutMs: 20_000, pollMs: 5_000, now: c.now, sleep: c.sleep,
+    });
+    expect(verdict.passed).toBe(false);
+    expect(verdict.reason).toContain("api-health (answered 502)");
+  });
+});
+
+describe("the REAL readiness path issues read-only docker commands only — smoke never restarts a container (§6.3)", () => {
+  /** A runner that answers like a daemon with every service healthy, and records every argv. */
+  function recordingRunner(seen: string[][], over: { restartTried?: boolean } = {}): ProbeRunner {
+    return (args) => {
+      seen.push([...args]);
+      if (args.includes("port")) return { exitCode: 0, stdout: "127.0.0.1:41999\n", stderr: "" };
+      if (args[0] === "ps") return { exitCode: 0, stdout: `${args.find((a) => a.startsWith("label=com.docker.compose.service="))!.split("=").at(-1)}-id\n`, stderr: "" };
+      if (args[0] === "inspect" && args.includes("{{json .State.Health}}")) {
+        return { exitCode: 0, stdout: JSON.stringify({ Status: "healthy", Log: [{ ExitCode: 0, Output: "ok: progress 1s ago (budget 120s) — analytics-producer phase=armed x [/tmp/h]" }] }), stderr: "" };
+      }
+      if (args[0] === "inspect") return { exitCode: 0, stdout: "healthy\n", stderr: "" };
+      if (args[0] === "logs") return { exitCode: 0, stdout: "startup_preflight: passed\n", stderr: "" };
+      if (over.restartTried !== undefined) over.restartTried = true;
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+  }
+  const exhausted = healthPayload({
+    authenticated: true, streamSynchronized: true, initialRebuildComplete: true, healthy: false, lastError: "turnover exhausted",
+    exhausted: [{ item: "turnover:woon", subjectId: "woon", lastError: "503", attempts: 5, exhaustedAtMs: 0 }],
+    timers: { boundaries: 1, deadlines: 0 },
+  });
+  const fakeFetch = (schedulerBody: unknown) => (async (url: string | URL | Request) => {
+    const u = String(url);
+    if (u.endsWith("/health") && u.includes(":41999")) return new Response(JSON.stringify(schedulerBody), { status: 503 });
+    if (u.includes("/api/swarm/admin/subjects")) return new Response(JSON.stringify({ subjects: [{ id: "woon", status: "active" }] }));
+    if (u.includes("/api/swarm/sessions")) return new Response(JSON.stringify({ sessions: [{ subjectId: "woon", state: "collecting" }] }));
+    return new Response("ok");
+  }) as typeof fetch;
+
+  test("with exhausted work, readiness fails through the real observer and every docker argv was a read", async () => {
+    const seen: string[][] = [];
+    const observe = makeReadinessObserver({
+      project: "rm_smoke_stack_x",
+      composePrefix: ["compose", "--env-file", "/dev/null", "-p", "rm_smoke_stack_x", "-f", "docker-compose.yml"],
+      apiUrl: "http://127.0.0.1:41998",
+      operatorToken: "rmat_operator",
+      workerServices: ["worker-analytics"],
+      producerService: "analytics-producer",
+      schedulerService: "system-scheduler",
+      seed: () => ({ completed: true, detail: "exited 0" }),
+      run: recordingRunner(seen),
+      fetchImpl: fakeFetch(exhausted),
+    });
+    const verdict = await awaitReadiness(observe, { timeoutMs: 60_000, pollMs: 1, sleep: async () => {} });
+    expect(verdict.passed).toBe(false);
+    expect(verdict.reason).toContain("exhausted work");
+    // The producer's authentication came from its heartbeat phase over `inspect`.
+    expect(passOf(verdict.checks, "analytics-producer-authenticated")).toBe(true);
+    expect(seen.some((argv) => argv[0] === "inspect" && argv.includes("{{json .State.Health}}"))).toBe(true);
+    expect(seen.length).toBeGreaterThan(0);
+    for (const argv of seen) {
+      const sub = argv[0] === "compose" ? `compose ${argv.find((a, i) => i > 0 && !a.startsWith("-") && !["-p", "-f", "--env-file"].includes(argv[i - 1]!))}` : argv[0];
+      expect({ argv: argv.join(" "), read: (READ_ONLY_DOCKER_SUBCOMMANDS as readonly string[]).includes(sub!) }).toEqual({ argv: argv.join(" "), read: true });
+      expect(argv).not.toContain("restart");
+    }
+  });
+
+  test("red control: the guard refuses a restart, stop or up before it reaches the daemon, and passes a read", () => {
+    const reached: string[] = [];
+    const run = readOnlyRunner((args) => {
+      reached.push(args.join(" "));
+      return { exitCode: 0, stdout: "", stderr: "" };
+    });
+    for (const argv of [["restart", "rm_x-system-scheduler-1"], ["compose", "-p", "p", "restart", "system-scheduler"], ["compose", "-p", "p", "up", "-d"], ["stop", "c"]]) {
+      expect(() => run(argv)).toThrow("read-only docker commands only");
+    }
+    expect(reached).toEqual([]);
+    run(["compose", "--env-file", "/dev/null", "-p", "p", "port", "system-scheduler", "8090"]);
+    run(["inspect", "c"]);
+    expect(reached.length).toBe(2);
+    // …and the probes module spells no mutating subcommand at all.
+    const src = readFileSync(join(REPO, "scripts/lib/smoke-readiness-probes.ts"), "utf8");
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\n)\s*\/\/.*/g, "");
+    expect(code).not.toMatch(/["'](restart|stop|kill|rm|up|start)["']/);
+  });
+
+  test("smoke-main's readiness path is this observer and this gate, and names no restart", () => {
+    const smokeMain = readFileSync(join(REPO, "scripts/lib/smoke-main.ts"), "utf8");
+    const at = smokeMain.indexOf("const observeReadiness = makeReadinessObserver(");
+    expect(at).toBeGreaterThan(-1);
+    expect(smokeMain.indexOf("await awaitReadiness(observeReadiness", at)).toBeGreaterThan(at);
+    // The receipt's readiness is the gate's checks, not a fixed list.
+    expect(smokeMain).toContain("const readiness = verdict.checks;");
+    expect(smokeMain).toContain("if (!verdict.passed) throw new Error(`readiness failed: ${verdict.reason}`);");
+    const code = smokeMain.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\n)\s*\/\/.*/g, "");
+    expect(code).not.toMatch(/["']restart["']/);
+    // The green-on-container-up list is gone.
+    expect(code).not.toContain('check: "website-server-health", pass: true');
   });
 });

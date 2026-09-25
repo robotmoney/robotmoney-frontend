@@ -27,20 +27,26 @@
 // `scripts/system-scheduler.ts` runs, so the socket each rebuild opens is the
 // real `SchedulerHttpApi.subscribe` over a real connection.
 //
-// IT DOES NOT PROVE that `bun smoke` consumes this. As of this change nothing
-// in smoke's boot path imports `scripts/lib/smoke-readiness-scheduler.ts`:
-// smoke marks `system-scheduler` healthy when compose `up` returns, without
-// reading /health. Wiring the gate into `bun smoke` is a later part of #1026,
-// and until it lands this file is evidence about the gate's code, not about
-// smoke's behaviour.
+// `bun smoke` CONSUMES THIS GATE (#1026 W4): its readiness reads the
+// scheduler's published /health through `fetchSchedulerHealth` and judges it
+// with the same functions, beside api /health, the pipeline worker's startup
+// checks and the producer's authentication and seed
+// (scripts/lib/smoke-readiness-probes.ts, smoke-readiness-scheduler.ts). The
+// runtime proofs of that are elsewhere, against real processes:
+// scripts/tests/integration/smoke-lifecycle.test.ts (a real boot: the real
+// scheduler container runs healthy on its provisioned token, and the receipt
+// carries every condition as a passed, named result) and
+// scripts/tests/integration/scheduler-api-runtime.test.ts (the real scheduler
+// process against the real API and Postgres, including a re-provisioned token
+// that leaves the running scheduler unhealthy until it is restarted, and a
+// turnover the real scheduler EXHAUSTS against a frozen database, which smoke's
+// real observer and gate then fail on their first poll, naming the item, with
+// read-only docker argv and no restart).
 //
-// NOR DOES IT PROVE that a real `system-scheduler` container boots against a
-// real API and a real Postgres. There is no container here, no database, and
-// the API is a Bun server implementing the epoch routes in memory. That is the
-// `[e2e]` gate on the issue and it is NOT satisfied by this file.
-// (`system-scheduler-image.test.ts` boots the image, but only far enough to
-// prove the entrypoint resolves and refuses without its token file.) The API's own behaviour is owned by `backend/tests/api-event-stream.test.ts`
-// and `backend/tests/epoch-*.test.ts`, which run against real Postgres.
+// THIS FILE stays what it was: the socket hops, against a Bun server that
+// implements the epoch routes in memory. The API's own behaviour is owned by
+// `backend/tests/api-event-stream.test.ts` and `backend/tests/epoch-*.test.ts`,
+// which run against real Postgres.
 //
 // The in-memory API is deliberately thin — it serves what the real handlers
 // serve and guards nothing — because its job here is to be a SOCKET, not a

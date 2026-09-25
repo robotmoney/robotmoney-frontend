@@ -19,9 +19,16 @@
 //     image's own entrypoint, holding one credential: an automation token file.
 //     Its environment carries no database URL at all (§7).
 //
-// The scheduler's token is provisioned BY HAND into the API's token store with
-// the backend's own `provisionAutomationToken` — the same row the boot writes
-// (smoke spec §3) — because the boot's provisioning path is a later wave's.
+// The three service tokens are provisioned by the ONE module that writes them
+// (backend/scripts/provision-tokens.ts, the same call `bun smoke`'s `prepare
+// (tokens)` and `bun scripts/prod-init.ts provision-tokens` make), into files a
+// holder reads: the scheduler its own, the test's admin calls the operator's.
+// No env token reaches the API (smoke spec §3, D52).
+//
+// RE-PROVISIONING is the last case (criterion 96's runtime half): the REAL
+// scheduler process, holding the old token, is refused on its next request,
+// reports `token rejected` on /health and stays unhealthy until it is
+// restarted — while every other holder's token stays valid.
 //
 // Every assertion reads the database through `psql` inside the Postgres
 // container, and every write the test makes goes through the API's own HTTP
@@ -37,16 +44,17 @@
 // scheduler; it does not bypass the scheduler."
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { canonicalizeSubmission, ROUTES } from "@robotmoney/contract";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { POSTGRES_IMAGE } from "../../lib/postgres-image.ts";
+import { awaitReadiness } from "../../lib/smoke-readiness-scheduler.ts";
+import { makeReadinessObserver, READ_ONLY_DOCKER_SUBCOMMANDS, type ProbeRunner } from "../../lib/smoke-readiness-probes.ts";
 import { dockerLabelFlags, resolveStackEnvironment, stackLabels, stackProjectName } from "../../stack/naming.ts";
 
 const REPO = join(import.meta.dir, "..", "..", "..");
 const BACKEND = join(REPO, "backend");
-const ADMIN_TOKEN = "it-runtime-admin-token";
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -67,10 +75,18 @@ let healthPort = 0;
 let databaseUrl = "";
 let stateDir = "";
 let tokenFile = "";
+/** This instance's three token files, as provisioning writes them. */
+let tokenFiles: Record<"system-scheduler" | "analytics-producer" | "operator", string> = {
+  "system-scheduler": "",
+  "analytics-producer": "",
+  operator: "",
+};
+/** The operator's token (the admin right), read from its file. */
+let operatorToken = "";
 // A SECOND scheduler's token. D55: only `system-scheduler` turns an epoch over,
 // and the operator admin token is refused on every epoch lifecycle route. So a
 // turnover the running scheduler did not make is driven with this token, the
-// way a second scheduler would, never with ADMIN_TOKEN.
+// way a second scheduler would, never with the operator's.
 let secondSchedulerToken = "";
 let api: ReturnType<typeof Bun.spawn> | null = null;
 let scheduler: ReturnType<typeof Bun.spawn> | null = null;
@@ -127,6 +143,33 @@ async function runBackend(code: string): Promise<string> {
   return out.trim();
 }
 
+/**
+ * Provision this instance's holders through the provisioning entry module, the
+ * secrets landing in `tokenFiles`. All three by default; one holder is a
+ * rotation of that holder alone.
+ */
+async function provision(holders?: readonly string[]): Promise<void> {
+  await runBackend(`
+    const { provisionServiceTokens } = await import("./scripts/provision-tokens.ts");
+    await provisionServiceTokens({
+      ownerUrl: process.env.DATABASE_URL,
+      instance: "it-runtime",
+      tokenFiles: ${JSON.stringify(tokenFiles)},
+      ${holders ? `holders: ${JSON.stringify(holders)},` : ""}
+    });
+    process.exit(0);`);
+}
+
+/** The scheduler's /health, parsed; null when it does not answer. */
+async function schedulerHealth(): Promise<{ status: number; body: { healthy: boolean; authenticated: boolean; lastError: string | null } } | null> {
+  try {
+    const r = await fetch(`http://127.0.0.1:${healthPort}/health`, { signal: AbortSignal.timeout(2_000) });
+    return { status: r.status, body: (await r.json()) as { healthy: boolean; authenticated: boolean; lastError: string | null } };
+  } catch {
+    return null;
+  }
+}
+
 async function startScheduler(): Promise<void> {
   scheduler = Bun.spawn(["bun", "scripts/system-scheduler.ts"], {
     cwd: REPO,
@@ -166,7 +209,7 @@ async function secondSchedulerPost(path: string, body: unknown): Promise<{ statu
 async function adminPost(path: string, body: unknown): Promise<{ status: number; body: any }> {
   const r = await fetch(`http://127.0.0.1:${apiPort}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Admin-Token": ADMIN_TOKEN },
+    headers: { "Content-Type": "application/json", "X-Automation-Token": operatorToken },
     body: JSON.stringify(body),
   });
   return { status: r.status, body: await r.json().catch(() => null) };
@@ -232,7 +275,12 @@ beforeAll(async () => {
   if ([pgPort, apiPort, healthPort].includes(48787)) throw new Error("refusing to bind :48787");
   databaseUrl = `postgres://robotmoney:robotmoney@127.0.0.1:${pgPort}/robotmoney`;
   stateDir = mkdtempSync(join(tmpdir(), "sched-rt-"));
-  tokenFile = join(stateDir, "system-scheduler.token");
+  tokenFile = join(stateDir, "tokens", "system-scheduler", "token");
+  tokenFiles = {
+    "system-scheduler": tokenFile,
+    "analytics-producer": join(stateDir, "tokens", "analytics-producer", "token"),
+    operator: join(stateDir, "tokens", "operator", "token"),
+  };
 
   const up = Bun.spawnSync([
     "docker", "run", "-d", "--rm", "--name", pgName,
@@ -247,11 +295,8 @@ beforeAll(async () => {
     const { migrate } = await import("./src/db/migrate.ts");
     const { seed } = await import("./src/db/seed.ts");
     await migrate(); await seed(); process.exit(0);`);
-  const token = await runBackend(`
-    const { provisionAutomationToken } = await import("./src/db/automation-tokens.ts");
-    const r = await provisionAutomationToken("it-runtime", ["read_subjects", "read_sessions", "lifecycle_transitions"]);
-    console.log(r.token); process.exit(0);`);
-  writeFileSync(tokenFile, `${token.split("\n").pop()}\n`, { mode: 0o600 });
+  await provision();
+  operatorToken = readFileSync(tokenFiles.operator, "utf8").trim();
   const second = await runBackend(`
     const { provisionAutomationToken } = await import("./src/db/automation-tokens.ts");
     const r = await provisionAutomationToken("it-runtime-second", ["read_subjects", "read_sessions", "lifecycle_transitions"]);
@@ -260,7 +305,7 @@ beforeAll(async () => {
 
   api = Bun.spawn(["bun", "run", "src/api/index.ts"], {
     cwd: BACKEND,
-    env: { ...baseEnv(), DATABASE_URL: databaseUrl, API_PORT: String(apiPort), RM_ENV: "ephemeral", ADMIN_TOKEN },
+    env: { ...baseEnv(), DATABASE_URL: databaseUrl, API_PORT: String(apiPort), RM_ENV: "ephemeral" },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -530,4 +575,154 @@ describe("the real scheduler drives the real API (§3, §4)", () => {
       await adminPost("/api/swarm/admin/judge", { mode: "off" });
     }
   }, 150_000);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Criterion 96, runtime half: re-provisioning rejects the old token, the RUNNING
+// scheduler is unhealthy until restarted, and no other holder is disturbed.
+// Last in the file: it restarts the scheduler.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("re-provisioning the scheduler's token (smoke spec §3: rotation is a re-provision and a restart)", () => {
+  test("the old token is refused on its next request, the running scheduler reports it until restarted, every other token stays valid", async () => {
+    const before = await schedulerHealth();
+    expect(before?.status).toBe(200);
+    const oldToken = readFileSync(tokenFile, "utf8").trim();
+    const operatorBefore = readFileSync(tokenFiles.operator, "utf8").trim();
+    const producerBefore = readFileSync(tokenFiles["analytics-producer"], "utf8").trim();
+
+    // Rotate the scheduler's holder alone, through the provisioning module.
+    await provision(["system-scheduler"]);
+    const newToken = readFileSync(tokenFile, "utf8").trim();
+    expect(newToken).not.toBe(oldToken);
+
+    // The old token is refused on its next request — no grace window.
+    const fullRead = (token: string) =>
+      fetch(`http://127.0.0.1:${apiPort}${ROUTES.swarm.scheduler.fullRead}`, { headers: { "X-Automation-Token": token } }).then((r) => r.status);
+    expect([401, 403]).toContain(await fullRead(oldToken));
+    expect(await fullRead(newToken)).toBe(200);
+
+    // The RUNNING process still holds the old token: the API closed its
+    // subscription on the rotation, its rebuild's full read is refused, and it
+    // reports the rejection — not an unreachable API — on /health.
+    let rejected: Awaited<ReturnType<typeof schedulerHealth>> = null;
+    for (const deadline = Date.now() + 60_000; Date.now() < deadline; await Bun.sleep(250)) {
+      const h = await schedulerHealth();
+      if (h && h.status === 503 && !h.body.authenticated && /reject/i.test(h.body.lastError ?? "")) {
+        rejected = h;
+        break;
+      }
+    }
+    if (rejected === null) {
+      throw new Error(`the running scheduler never reported its token rejected\n--- process logs ---\n${logs.slice(-60).join("\n")}`);
+    }
+    expect(rejected.body.healthy).toBe(false);
+    // …and it STAYS unhealthy: nothing in the process clears a rejection, even
+    // though the new token is already on disk.
+    await Bun.sleep(3_000);
+    const still = await schedulerHealth();
+    expect({ status: still?.status, authenticated: still?.body.authenticated }).toEqual({ status: 503, authenticated: false });
+
+    // One instance's provisioning never invalidates another's, and a holder's
+    // rotation never invalidates the other holders'.
+    expect(await fullRead(secondSchedulerToken)).toBe(200);
+    expect(readFileSync(tokenFiles.operator, "utf8").trim()).toBe(operatorBefore);
+    expect(readFileSync(tokenFiles["analytics-producer"], "utf8").trim()).toBe(producerBefore);
+    const hash = (t: string) => new Bun.CryptoHasher("sha256").update(t).digest("hex");
+    expect(psql(`SELECT holder FROM automation_tokens WHERE token_hash IN (${lit(hash(operatorBefore))}, ${lit(hash(producerBefore))}) ORDER BY holder`))
+      .toBe("analytics-producer\noperator");
+    expect(psql(`SELECT count(*) FROM automation_tokens WHERE token_hash = ${lit(hash(oldToken))}`)).toBe("0");
+
+    // The restart is the recovery: a new process reads the new file and is healthy.
+    await stopScheduler();
+    await startScheduler();
+    expect((await schedulerHealth())?.status).toBe(200);
+  }, 120_000);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EXHAUSTED WORK FAILS SMOKE'S READINESS AT ONCE, AND SMOKE RESTARTS NOTHING
+// (smoke spec §6.3, criterion 27's runtime half)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The REAL scheduler process meets an unreachable dependency: Postgres is
+// frozen (`docker pause`) just before a turnover instant, so the API cannot
+// answer the turnover and every attempt times out. The scheduler exhausts its
+// §4.6 retry budget and reports the item on its REAL /health. Smoke's REAL
+// readiness path — makeReadinessObserver over awaitReadiness — then reads that
+// endpoint and must fail on the first poll, naming the item, having issued only
+// read docker argv. The docker runner is a recorder that answers like a daemon
+// (the scheduler here is a host process, so `compose port` is answered with
+// its real health port); every HTTP read is real.
+describe("a scheduler with exhausted work fails smoke's readiness at once, with no restart (§6.3)", () => {
+  test("the real scheduler exhausts a turnover against a frozen database; the real observer fails on its first poll", async () => {
+    const id = `rt_exhaust_${crypto.randomUUID().slice(0, 6)}`;
+    await createSubject(id, 8);
+    const [open] = await waitFor("the scheduler to open the first epoch", () => {
+      const c = collectingOf(id);
+      return c.length === 1 ? c : null;
+    });
+    // Freeze the database a moment before the turnover instant.
+    const untilCloseMs = Number(psql(`SELECT floor(extract(epoch FROM window_closes_at - clock_timestamp()) * 1000) FROM swarm_sessions WHERE id = ${lit(open!.id)}`));
+    await Bun.sleep(Math.max(0, untilCloseMs - 1_500));
+    expect(Bun.spawnSync(["docker", "pause", pgName]).exitCode).toBe(0);
+    try {
+      // §4.6: five attempts, 20s each at most, with backoff between them.
+      let exhausted: { item: string }[] = [];
+      for (const deadline = Date.now() + 200_000; Date.now() < deadline && exhausted.length === 0; await Bun.sleep(1_000)) {
+        const r = await fetch(`http://127.0.0.1:${healthPort}/health`, { signal: AbortSignal.timeout(2_000) }).then((x) => x.json()).catch(() => null) as { exhausted?: { item: string }[] } | null;
+        exhausted = r?.exhausted ?? [];
+      }
+      if (exhausted.length === 0) {
+        throw new Error(`the scheduler never reported exhausted work\n--- process logs ---\n${logs.slice(-60).join("\n")}`);
+      }
+
+      const seen: string[][] = [];
+      const run: ProbeRunner = (args) => {
+        seen.push([...args]);
+        if (args.includes("port")) return { exitCode: 0, stdout: `127.0.0.1:${healthPort}\n`, stderr: "" };
+        if (args[0] === "ps") return { exitCode: 0, stdout: "container-id\n", stderr: "" };
+        if (args[0] === "inspect" && args.includes("{{json .State.Health}}")) {
+          return { exitCode: 0, stdout: JSON.stringify({ Status: "healthy", Log: [{ ExitCode: 0, Output: "ok: progress 1s ago — analytics-producer phase=armed" }] }), stderr: "" };
+        }
+        if (args[0] === "inspect") return { exitCode: 0, stdout: "healthy\n", stderr: "" };
+        if (args[0] === "logs") return { exitCode: 0, stdout: "startup_preflight: passed\n", stderr: "" };
+        return { exitCode: 1, stdout: "", stderr: `unexpected docker ${args.join(" ")}` };
+      };
+      const observe = makeReadinessObserver({
+        project: "rm_it_sched_rt",
+        composePrefix: ["compose", "--env-file", "/dev/null", "-p", "rm_it_sched_rt", "-f", "docker-compose.yml"],
+        apiUrl: `http://127.0.0.1:${apiPort}`,
+        operatorToken,
+        workerServices: ["worker-analytics"],
+        producerService: "analytics-producer",
+        schedulerService: "system-scheduler",
+        seed: () => ({ completed: true, detail: "exited 0" }),
+        run,
+      });
+      let polls = 0;
+      const verdict = await awaitReadiness(async () => {
+        polls++;
+        return observe();
+      }, { timeoutMs: 120_000, pollMs: 1_000 });
+      expect(verdict.passed).toBe(false);
+      expect(polls).toBe(1);
+      expect(verdict.reason).toContain("exhausted work");
+      for (const item of exhausted) expect(verdict.reason).toContain(item.item);
+      expect(verdict.checks.find((c) => c.check === "scheduler-no-exhausted-work")?.pass).toBe(false);
+      for (const argv of seen) {
+        const sub = argv[0] === "compose" ? `compose ${argv.find((a, i) => i > 0 && !a.startsWith("-") && !["-p", "-f", "--env-file"].includes(argv[i - 1]!))}` : argv[0];
+        expect({ argv: argv.join(" "), read: (READ_ONLY_DOCKER_SUBCOMMANDS as readonly string[]).includes(sub!) }).toEqual({ argv: argv.join(" "), read: true });
+        expect(argv).not.toContain("restart");
+      }
+      // The scheduler process was left exactly as it was: still running, still exhausted.
+      expect(scheduler?.exitCode ?? null).toBeNull();
+      const after = await fetch(`http://127.0.0.1:${healthPort}/health`).then((x) => x.json()) as { exhausted: unknown[] };
+      expect(after.exhausted.length).toBeGreaterThan(0);
+    } finally {
+      Bun.spawnSync(["docker", "unpause", pgName]);
+    }
+    // The operator's recovery (§6.3): restart the scheduler once the dependency is back.
+    await stopScheduler();
+    await startScheduler();
+  }, 300_000);
 });

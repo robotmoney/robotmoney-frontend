@@ -5,22 +5,38 @@
 //      on the pgdata volume, and a `--pg-data`-style bind override merges by target
 //      path to REPLACE the named-volume mount (so no named volume is used in bind mode).
 //
-//   2. An EXECUTED proof that boots ONLY postgres (never the api/worker, so NO
-//      external providers / API quota are touched — respects the smoke's quota rule):
-//      `down` (no -v) KEEPS the labeled volume, a re-`up` RESUMES the same data, and
-//      `smoke:clean`'s real label-scoped removal then deletes exactly that volume.
+//   2. An EXECUTED proof through the operator's own commands (criterion 28): a real
+//      `bun smoke --local blank`, `smoke:down`, then `bun smoke --local volume` on the
+//      same instance reattaches its volume, authenticates with the saved role
+//      passwords, reuses the saved service tokens and reaches readiness with the
+//      data the first boot left. (It replaces a postgres-only compose up/down that
+//      proved a volume survives `down` but never that an instance comes back.)
 //
 // Docker is a hard dependency of this repo's test harness; a missing docker CLI fails
 // loudly here — never a silent skip (test-coverage policy). Every executed test
 // force-cleans its own project + volume in a finally/afterAll so it can never leak.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createServer } from "node:net";
-import type { AddressInfo } from "node:net";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listSmokeVolumes, makeDockerRunner, purgeSmokeEvalContainers, removeSmokeVolumes } from "../../lib/smoke-volumes.ts";
+import { ROUTES } from "@robotmoney/contract";
+import { readReceipt } from "../../lib/smoke-journal.ts";
+import { readStackState, SERVICE_TOKEN_HOLDERS } from "../../lib/smoke-state.ts";
 import { resolveStackEnvironment, stackProjectName } from "../../stack/naming.ts";
+import {
+  bootFailureReport,
+  BOOT_TIMEOUT_MS,
+  containerEnv,
+  containerIdentity,
+  harness,
+  journalNow,
+  runCommand,
+  spawnBoot,
+  teardown,
+  volumeExists,
+  type BootHarness,
+  type RunningBoot,
+} from "./smoke-boot-harness.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 const BASE = ["-f", "docker-compose.yml", "-f", "docker-compose.smoke.yml"];
@@ -49,29 +65,12 @@ function composeEnv(extra: Record<string, string> = {}): Record<string, string> 
     // scripts/stack/ports.ts).
     WEB_PORT: "18789",
     POSTGRES_PORT: "15432",
-    ANALYTICS_TOKEN_FILE_HOST: "/dev/null", // compose-config/lifecycle fixture; no producer execution
     // Required by docker-compose.yml (smoke spec §1.1: the instance's state directory has no
     // checkout fallback). Only postgres runs here, and it mounts neither.
     RM_INSTANCE: "rm_local_vollifecycle",
     RM_INSTANCE_STATE_DIR: "/var/empty/rm_local_vollifecycle",
     ...extra,
   };
-}
-
-function compose(args: string[], env: Record<string, string>): { code: number; out: string; err: string } {
-  const r = Bun.spawnSync(["docker", "compose", ...BASE, ...args], { cwd: repoRoot, env, stdout: "pipe", stderr: "pipe" });
-  return { code: r.exitCode ?? -1, out: new TextDecoder().decode(r.stdout), err: new TextDecoder().decode(r.stderr) };
-}
-
-async function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.on("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const p = (s.address() as AddressInfo).port;
-      s.close(() => resolve(p));
-    });
-  });
 }
 
 // --- 1. OFFLINE compose-config -------------------------------------------------
@@ -226,80 +225,92 @@ describe("--pg-data bind override merges by target (offline)", () => {
   });
 });
 
-// --- 2. EXECUTED proof (postgres only) -----------------------------------------
+// --- 2. EXECUTED proof: a real `--local blank`, `smoke:down`, `--local volume` --
+//
+// Criterion 28 (smoke spec §5, §10 W1 "`volume` reuse after restart"): "`--local
+// blank`, `smoke:down`, then `--local volume` reattaches the volume,
+// authenticates with the saved passwords, reuses the saved token, and reaches
+// readiness with prior data present." Driven through the operator's own
+// commands on one instance of its own. No overlay is generated for the
+// reattach (it is the instance's own volume), and nothing here logs in as the
+// local superuser: the prior data is written and read back through the api,
+// which runs as rm_app with the instance's saved password.
 
-// Force-clean this test's project + volume no matter how the run ended.
+let vh: BootHarness | undefined;
+let vboot: RunningBoot | undefined;
+
 afterAll(() => {
-  try {
-    purgeSmokeEvalContainers(makeDockerRunner(composeEnv()), { project });
-  } catch {}
-  compose(["down", "-v"], composeEnv());
-  makeDockerRunner(composeEnv())(["volume", "rm", "-f", pgVolume]);
-}, 30_000);
+  if (vh) teardown(vh, vboot);
+}, 300_000);
 
-function psql(env: Record<string, string>, sql: string): { code: number; out: string; err: string } {
-  const r = Bun.spawnSync(
-    ["docker", "compose", ...BASE, "exec", "-T", "postgres", "psql", "-U", "robotmoney", "-d", "robotmoney", "-tAc", sql],
-    { cwd: repoRoot, env, stdout: "pipe", stderr: "pipe" },
-  );
-  return {
-    code: r.exitCode ?? -1,
-    out: new TextDecoder().decode(r.stdout).trim(),
-    err: new TextDecoder().decode(r.stderr).trim(),
-  };
+/** The api's host port the instance's stack record names. */
+function apiUrl(h: BootHarness): string {
+  const state = readStackState(h.paths);
+  if (!state?.apiPort) throw new Error(`instance ${h.instance} records no api port`);
+  return `http://127.0.0.1:${state.apiPort}`;
 }
 
-function waitPgReady(env: Record<string, string>, timeoutMs = 60_000): void {
-  const deadline = Date.now() + timeoutMs;
-  let lastError = "";
-  while (Date.now() < deadline) {
-    // pg_isready accepts the entrypoint's temporary server before its configured
-    // database is queryable. Prove the actual database is ready, so a busy CI
-    // runner cannot race initdb and then fail the very next statement.
-    const r = psql(env, "SELECT 1;");
-    if (r.code === 0 && r.out === "1") return;
-    lastError = r.err || r.out || `exit ${r.code}`;
-    Bun.sleepSync(1000);
-  }
-  throw new Error(`postgres did not accept a query within the deadline: ${lastError}`);
-}
+const tokenSnapshot = (h: BootHarness) =>
+  Object.fromEntries(SERVICE_TOKEN_HOLDERS.map((holder) => [holder, readFileSync(h.paths.tokenFiles[holder], "utf8").trim()]));
 
-describe("teardown keeps the volume; resume converges; smoke:clean reclaims it (executed)", () => {
+describe("`--local blank`, `smoke:down`, `--local volume`: the same data, passwords and tokens (criterion 28)", () => {
   test(
-    "down (no -v) keeps labeled pgdata, re-up resumes marker, clean removes exactly it",
+    "the reattached instance authenticates with its saved passwords and token and reaches readiness with the prior data",
     async () => {
-      const env = composeEnv({ POSTGRES_PORT: String(await freePort()) });
-      const run = makeDockerRunner(env);
+      vh = harness("vollife");
+      // 1. A fresh blank instance, to readiness.
+      vboot = spawnBoot(vh);
+      const first = await vboot.exited;
+      expect({ first, tail: first === 0 ? "" : bootFailureReport(vboot) }).toEqual({ first: 0, tail: "" });
+      const passwords = readFileSync(vh.paths.rolePasswordsFile, "utf8");
+      const tokens = tokenSnapshot(vh);
+      const volume = readStackState(vh.paths)!.pgVolume!;
 
-      // Boot postgres only (no api/worker → no external providers touched).
-      expect(compose(["up", "-d", "postgres"], env).code).toBe(0);
-      waitPgReady(env);
+      // 2. Prior data, written THROUGH THE API as the operator (smoke spec §3:
+      //    the admin right) — the api holds rm_app, never the superuser.
+      const subjectId = `volprobe${Math.random().toString(16).slice(2, 8)}`;
+      const created = await fetch(`${apiUrl(vh)}${ROUTES.swarm.admin.subjects}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Automation-Token": tokens.operator! },
+        body: JSON.stringify({ id: subjectId, name: "Volume Probe", recommendationType: "bucket_weights", epochDuration: 3600 }),
+      });
+      expect({ status: created.status, body: created.ok ? "" : await created.text() }).toEqual({ status: 201, body: "" });
 
-      // Write a marker so we can prove the data (not just the volume) survives.
-      expect(psql(env, "CREATE TABLE resume_probe(x int); INSERT INTO resume_probe VALUES (42);").code).toBe(0);
+      // 3. smoke:down keeps the volume, the passwords and the tokens.
+      const down = runCommand(vh, "smoke-down.ts", ["--instance", vh.instance]);
+      expect({ code: down.code, out: down.code === 0 ? "" : down.out }).toEqual({ code: 0, out: "" });
+      expect(Object.keys(containerIdentity(vh.project))).toEqual([]);
+      expect(volumeExists(volume)).toBe(true);
+      expect(tokenSnapshot(vh)).toEqual(tokens);
 
-      // Teardown = down WITHOUT -v → the volume must remain.
-      expect(compose(["down"], env).code).toBe(0);
-      const afterDown = listSmokeVolumes(run, { project });
-      expect(afterDown.map((v) => v.name)).toContain(pgVolume);
-
-      // Resume: same project/volume → the marker row is still there.
-      expect(compose(["up", "-d", "postgres"], env).code).toBe(0);
-      waitPgReady(env);
-      expect(psql(env, "SELECT x FROM resume_probe;").out).toBe("42");
-
-      // smoke:clean can't remove an in-use volume → loud skip while up.
-      expect(compose(["down"], env).code).toBe(0); // stop first so it's free
-      const found = listSmokeVolumes(run, { project });
-      expect(found.map((v) => v.name)).toContain(pgVolume);
-      const { removed, skipped } = removeSmokeVolumes(run, found.map((v) => v.name));
-      expect(removed).toContain(pgVolume);
-      expect(skipped).toEqual([]);
-
-      // Scoped reclaim leaves zero for this project (the CI-leak guarantee).
-      expect(listSmokeVolumes(run, { project })).toEqual([]);
+      // 4. `--local volume` on the same instance: reattach, to readiness again.
+      vboot = spawnBoot(vh, [], { local: "volume" });
+      const second = await vboot.exited;
+      const text = vboot.output();
+      expect({ second, tail: second === 0 ? "" : bootFailureReport(vboot) }).toEqual({ second: 0, tail: "" });
+      expect(text).toContain(`target: local volume on volume ${volume}`);
+      // The instance's OWN volume: no reattach overlay was generated.
+      expect(existsSync(join(vh.paths.overlaysDir, "reattach.yml"))).toBe(false);
+      // Saved passwords reused: the file is byte-for-byte the first boot's, and
+      // the api authenticated with them (it answered the reads below as rm_app).
+      expect(readFileSync(vh.paths.rolePasswordsFile, "utf8")).toBe(passwords);
+      expect(containerEnv(vh.project, "api", "DATABASE_URL")?.includes("rm_app")).toBe(true);
+      // Saved tokens reused: no `prepare (tokens)` on this plan, the files
+      // unchanged, and the scheduler authenticated with its file against the
+      // row the reattached volume holds.
+      expect(tokenSnapshot(vh)).toEqual(tokens);
+      expect((journalNow(vh)?.phases ?? []).some((r) => r.phase === "prepare" && r.step === "tokens")).toBe(false);
+      const receipt = readReceipt(vh.paths)!;
+      expect(receipt.plan.target).toMatchObject({ kind: "local", mode: "volume", volume });
+      for (const check of receipt.readiness) expect({ check: check.check, pass: check.pass }).toEqual({ check: check.check, pass: true });
+      expect(receipt.readiness.find((c) => c.check === "scheduler-authenticated")?.pass).toBe(true);
+      // Prior data present, read back through the api.
+      const listed = await fetch(`${apiUrl(vh)}${ROUTES.swarm.admin.subjects}`, { headers: { "X-Automation-Token": tokens.operator! } });
+      expect(listed.status).toBe(200);
+      const subjects = ((await listed.json()) as { subjects: { id: string }[] }).subjects.map((s) => s.id);
+      expect(subjects).toContain(subjectId);
     },
-    120_000,
+    BOOT_TIMEOUT_MS * 2,
   );
 });
 

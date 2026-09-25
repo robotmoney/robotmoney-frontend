@@ -43,10 +43,12 @@ pods:
 # from credential.json (smoke spec §6.1, §6.2), and participants are not part
 # of this stack. The secret slot is removed rather than left for a future pod
 # to pick up by accident.
-# ADMIN_TOKEN / AUTOMATION_TOKEN /
-# ANALYTICS_TOKEN are intentionally NOT declared here: their generation
-# ownership (stack `generate` vs. the credential doctor) is an open decision
-# (devops#7 / scaffold-stack.md §0.1) this issue does not resolve.
+# NO SERVICE TOKEN IS DECLARED (smoke spec §3, D52). The operator's admin
+# token, the scheduler's and the analytics producer's are each a row in the
+# api's automation-token store (hash and rights) plus a per-instance file the
+# boot places in the instance's state directory; the api validates every bearer
+# against its store and holds no shared secret. There is nothing for `stack
+# generate` to own.
 #
 # BASE_RPC_URL is declared here but deliberately NOT wired into any pod
 # composefile's environment: block yet. docker-compose.yml does not forward

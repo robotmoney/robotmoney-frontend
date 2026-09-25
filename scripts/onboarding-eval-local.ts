@@ -31,12 +31,12 @@ import {
   createStack,
   DEFAULT_COMPOSE_FILES,
   DEFAULT_STACK_DATABASE,
-  generateStackCredentials,
   resolveStackEnvironment,
   stackProjectName,
   STAGE_WEB_PORT,
 } from "./stack/index.ts";
 import { throwawayInstance } from "./lib/smoke-state.ts";
+import { readServiceToken } from "./lib/smoke-secret.ts";
 
 export interface AdmissionEvalCaseOptions {
   repoRoot?: string;
@@ -128,7 +128,6 @@ const telemetry = createOnboardingTelemetry(
   },
   [{ value: identity.contact, placeholder: "<contact redacted>" }],
 );
-const credentials = generateStackCredentials();
 // The compose model needs a state directory outside the checkout
 // (RM_INSTANCE_STATE_DIR; smoke spec §1.1). An eval is not a deployment
 // instance, so it gets a throwaway one, removed with the stack.
@@ -140,7 +139,6 @@ const stack = createStack(
     profile: "core",
     composeFiles: DEFAULT_COMPOSE_FILES,
     database: DEFAULT_STACK_DATABASE,
-    credentials,
     environment: stackEnvironment,
     instance: { name: instance.name, stateDir: instance.stateDir },
   },
@@ -202,7 +200,9 @@ try {
     composeProject: project,
     composeFiles: DEFAULT_COMPOSE_FILES,
     backendUrl: stack.backendUrl,
-    automationToken: credentials.automationToken,
+    // The operator's service token, provisioned into this eval's throwaway
+    // instance by stack.up() (smoke spec §3: the admin right).
+    automationToken: readServiceToken(instance.paths, "operator"),
     composeSpawnEnv: stack.spawnEnv,
     identity,
     env,

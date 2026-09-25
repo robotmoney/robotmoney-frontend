@@ -1,56 +1,54 @@
-// The test scripts/lib/swarm/session.ts:30 has always CITED but which never
-// existed. Found by the citation gate added alongside the D23 cost-class split
-// (scripts/tests/unit/test-path-citations.test.ts): the comment promised this
-// file was "unit-testable hermetically" and named it, yet nothing was ever
-// written, so the polarity it documents — the one thing standing between the
-// smoke driver and a mislabelled security posture — had zero executed
-// assertions.
+// NO INSECURE MODE IN THE SESSION DRIVER — D52 (1), issue #1026 W4.
 //
-// What is being pinned: regimeWriteInsecure() must MIRROR the backend's
-// regime-write gate, which is backend/src/api/auth.ts:41-43's isAnalyticsWriter:
+// The file that once pinned regimeWriteInsecure()'s opt-in polarity now pins
+// its replacement: there is no insecure gate to mirror. The driver's cross-role
+// probes (scripts/lib/swarm/session.ts 5c: a member token on the regime write;
+// 5d: a member token on an epoch turnover, the scheduler's
+// `lifecycle_transitions` right, D55 (4)) ASSERT the refusal through
+// assertRoleRefused instead of logging "insecure mode — gate open", and
+// `bun smoke` no longer hands the driver RM_ALLOW_INSECURE.
 //
-//   cfg.analyticsToken ? secretEq(bearer, analyticsToken) : cfg.allowInsecure
-//
-// i.e. the gate opens for an unauthenticated writer only when insecure mode is
-// explicitly opted INTO *and* no analytics credential is configured. Hence
-// `RM_ALLOW_INSECURE === "1" && !ANALYTICS_TOKEN`. SECURE BY DEFAULT: unset means
-// enforced, so a drift toward opt-OUT polarity (the classic inversion bug) is
-// caught here rather than in a smoke log line that quietly lies about the posture.
-//
-// Pure: an injected env record, no process.env mutation, no network, no Docker.
+// Pure: no network, no Docker.
 import { describe, expect, test } from "bun:test";
-import { regimeWriteInsecure } from "../../lib/swarm/session.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { assertRoleRefused } from "../../lib/swarm/session.ts";
 
-describe("regimeWriteInsecure — opt-IN polarity, mirroring backend isAnalyticsWriter", () => {
-  test("SECURE BY DEFAULT: an empty environment reports ENFORCED, not insecure", () => {
-    expect(regimeWriteInsecure({})).toBe(false);
+const REPO = join(import.meta.dir, "..", "..", "..");
+const code = (file: string) =>
+  readFileSync(join(REPO, file), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\n)\s*\/\/.*/g, "");
+
+describe("assertRoleRefused: only 401/403 is a refusal", () => {
+  test("401 and 403 pass", () => {
+    expect(() => assertRoleRefused("x", 401)).not.toThrow();
+    expect(() => assertRoleRefused("x", 403)).not.toThrow();
   });
 
-  test("insecure ONLY on the explicit opt-in RM_ALLOW_INSECURE=1", () => {
-    expect(regimeWriteInsecure({ RM_ALLOW_INSECURE: "1" })).toBe(true);
+  test("RED CONTROL: the old open-gate answer (400: authorization passed, payload rejected) throws", () => {
+    expect(() => assertRoleRefused("member token on the regime write", 400)).toThrow("the role gate let it through");
   });
 
-  test("a configured ANALYTICS_TOKEN closes the gate even with the opt-in set", () => {
-    // Mirrors auth.ts: with a token configured, the writer must authenticate —
-    // allowInsecure is not consulted at all.
-    expect(regimeWriteInsecure({ RM_ALLOW_INSECURE: "1", ANALYTICS_TOKEN: "t" })).toBe(false);
+  test("every other status is authorization passing, and throws", () => {
+    for (const status of [200, 201, 202, 204, 404, 409, 422, 500, 503]) {
+      expect(() => assertRoleRefused("x", status)).toThrow(`got ${status}`);
+    }
+  });
+});
+
+describe("the driver asserts both role gates and carries no insecure mode", () => {
+  test("5c and 5d go through assertRoleRefused; no gate-open log survives", () => {
+    const session = code("scripts/lib/swarm/session.ts");
+    expect(session).toContain('assertRoleRefused("member token on the regime write", regimeWriteRes.status)');
+    expect(session).toContain('assertRoleRefused("member token on the epoch turnover", adminCloseRes.status)');
+    expect(session).not.toContain("gate open");
+    expect(session).not.toContain("RM_ALLOW_INSECURE");
   });
 
-  test("ANALYTICS_TOKEN alone is still enforced", () => {
-    expect(regimeWriteInsecure({ ANALYTICS_TOKEN: "t" })).toBe(false);
-  });
-
-  // Near-miss values are the whole reason this is `=== "1"` and not truthiness:
-  // an opt-in that accepts "true"/"0"/"" is an opt-in that fires by accident.
-  for (const value of ["0", "true", "yes", "", "01", " 1"]) {
-    test(`RM_ALLOW_INSECURE=${JSON.stringify(value)} does NOT open the gate — only the exact "1" does`, () => {
-      expect(regimeWriteInsecure({ RM_ALLOW_INSECURE: value })).toBe(false);
-    });
-  }
-
-  test("an empty ANALYTICS_TOKEN is not a configured credential — it must not mask the opt-in", () => {
-    // `!""` is true, so the gate stays open; asserted so the falsy-vs-absent
-    // distinction is a decision on the record rather than an accident.
-    expect(regimeWriteInsecure({ RM_ALLOW_INSECURE: "1", ANALYTICS_TOKEN: "" })).toBe(true);
+  test("`bun smoke` spawns the session driver without RM_ALLOW_INSECURE", () => {
+    const smokeMain = code("scripts/lib/smoke-main.ts");
+    const at = smokeMain.indexOf('await run(["bun", "run", "scripts/lib/swarm/session.ts"]');
+    expect(at).toBeGreaterThan(-1);
+    const call = smokeMain.slice(at, smokeMain.indexOf('"swarm session")', at));
+    expect(call).not.toContain("RM_ALLOW_INSECURE");
   });
 });

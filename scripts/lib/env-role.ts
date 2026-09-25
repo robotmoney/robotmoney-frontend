@@ -72,6 +72,23 @@ export const HOME_ENV_FILE = ".env";
 /** The discrete connection tokens a DigitalOcean panel prints. */
 export const CONNECTION_TOKENS = ["host", "port", "database", "sslmode"] as const;
 
+/**
+ * The two spellings of the database-name token. The DigitalOcean panel prints
+ * `database`; spec §3 lists `dbname`, and preflight check 4 accepts both. A
+ * reader that knew only one would pass a `~/.env` check 4 accepts and then
+ * fail to connect, so every reader goes through {@link databaseName}.
+ */
+export const DATABASE_NAME_KEYS = ["database", "dbname"] as const;
+
+/** The database name from either spelling, `database` first; undefined when neither is set. */
+export function databaseName(env: Record<string, string | undefined>): string | undefined {
+  for (const key of DATABASE_NAME_KEYS) {
+    const value = env[key];
+    if (value !== undefined && value !== "") return value;
+  }
+  return undefined;
+}
+
 /** The role taxonomy this family can assemble. */
 export const ROLES = ["rm_app", "rm_worker", "rm_readonly"] as const;
 
@@ -142,7 +159,7 @@ export function redactPostgresUrl(url: string): string {
  */
 export function urlForRole(env: Record<string, string>, role: string): string | undefined {
   const host = env.host;
-  const database = env.database;
+  const database = databaseName(env);
   const password = env[role]?.toString();
   if (!host || !database || !password) return undefined;
   const port = env.port ?? "5432";

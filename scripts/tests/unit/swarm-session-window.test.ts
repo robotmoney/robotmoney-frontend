@@ -247,17 +247,18 @@ const sessionCode = sessionSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\n)\
 /**
  * Ordered positions of runSession's lifecycle landmarks; -1 when absent.
  *
- * The five queue enqueues these used to name are gone (issue #1026 W4). The
- * landmarks are now the epoch transitions of system-scheduler-spec.md §4:
- * `epochs/open` publishes the brief with the window (§4.1), and `epochs/turnover`
- * is what closes it (§4.3).
+ * The five queue enqueues these used to name are gone (issue #1026 W4), and so
+ * are the epoch transitions that replaced them: D55 (4) makes system-scheduler
+ * the only caller of open, turnover and settlement. The landmarks are now what
+ * the driver OBSERVES of the real scheduler (system-scheduler-spec.md §8): the
+ * epoch it opened (§4.1), and the settlement that follows the boundary (§4.3).
  */
 export function lifecycleOrder(src: string) {
   return {
-    open: src.indexOf("await openEpoch(subject.id, rail.automationToken)"),
+    open: src.indexOf("await waitForSchedulerEpoch(subject.id,"),
     settle: src.indexOf("const settled = await mapSettledWithConcurrency("),
     windowWait: src.indexOf("await waitUntilWindowCloses("),
-    close: src.indexOf("await turnOverEpoch(subject.id, sessionId, rail.automationToken)"),
+    close: src.indexOf("await waitForSettlement("),
   };
 }
 
@@ -268,7 +269,7 @@ describe("runSession closes on the WINDOW, not on its own agents settling", () =
     for (const [name, at] of Object.entries(order)) expect(`${name}:${at >= 0}`).toBe(`${name}:true`);
   });
 
-  test("the window wait sits between agent settlement and the turnover that closes it", () => {
+  test("the window wait sits between agent settlement and the scheduler's boundary the driver then watches", () => {
     expect(order.settle).toBeLessThan(order.windowWait);
     expect(order.windowWait).toBeLessThan(order.close);
   });
@@ -279,7 +280,7 @@ describe("runSession closes on the WINDOW, not on its own agents settling", () =
     // expressible any more, and §2.3 makes the admin subject update the only way
     // the column changes.
     expect(sessionSrc).toContain("const epochSeconds = epochDurationSecondsFor(cadence);");
-    expect(sessionSrc).toContain("await setSubjectEpochDuration(subject.id, epochSeconds, rail.automationToken);");
+    expect(sessionSrc).toContain("await setSubjectEpochDuration(subject.id, epochSeconds, rail.operatorToken);");
     const setAt = sessionSrc.indexOf("await setSubjectEpochDuration(subject.id, epochSeconds");
     expect(setAt).toBeGreaterThan(-1);
     expect(setAt).toBeLessThan(order.open);
@@ -305,13 +306,13 @@ describe("runSession closes on the WINDOW, not on its own agents settling", () =
     expect(sessionSrc).toContain("maxWaitMs: windowWaitCeilingMs(cadence)");
   });
 
-  test("adoption is READ OFF the open call's answer, not decided by a pre-check", () => {
-    // §4.3's turnover opens the successor, so this subject's next epoch is
-    // already open before the driver asks for one; §4.1 answers that directly —
-    // "the second call returns it", with `created: false`. A "does one exist?"
-    // read followed by an open would be the same race with a window in the
-    // middle of it, which is what the uniqueness constraint exists to close.
-    expect(sessionSrc).toContain("const adopted = !opened.created;");
+  test("the epoch is the SCHEDULER's: the driver waits for it and opens nothing (D55 (4), scheduler spec §8)", () => {
+    // §4.1: the scheduler opens the first epoch from the subject's
+    // `subject.changed`, and §4.3's turnover opens every successor. The driver
+    // reads the one it opened; it has no open call to adopt an answer from.
+    expect(sessionSrc).toContain("const sessionId = opened.sessionId;");
+    expect(sessionCode).not.toContain("openEpoch(");
+    expect(sessionCode).not.toContain("turnOverEpoch(");
     expect(sessionCode).not.toContain("waitForSubjectSession");
   });
 
@@ -350,7 +351,7 @@ describe("red controls: the order grader must REPORT a regression", () => {
     // actually change the source.
     const broken = sessionSrc.replace(
       /const closedWindow = /,
-      'await turnOverEpoch(subject.id, sessionId, rail.automationToken);\n  const closedWindow = ',
+      'await waitForSettlement(sessionId, { maxWaitMs: 1 });\n  const closedWindow = ',
     );
     expect(broken).not.toBe(sessionSrc);
     const o = lifecycleOrder(broken);
@@ -364,11 +365,11 @@ describe("red controls: the order grader must REPORT a regression", () => {
 
   test("it catches the duration being set from a literal instead of the profile", () => {
     const broken = sessionSrc.replace(
-      "await setSubjectEpochDuration(subject.id, epochSeconds, rail.automationToken);",
-      "await setSubjectEpochDuration(subject.id, 3600, rail.automationToken);",
+      "await setSubjectEpochDuration(subject.id, epochSeconds, rail.operatorToken);",
+      "await setSubjectEpochDuration(subject.id, 3600, rail.operatorToken);",
     );
     expect(broken).not.toBe(sessionSrc);
-    expect(broken).not.toContain("await setSubjectEpochDuration(subject.id, epochSeconds, rail.automationToken);");
+    expect(broken).not.toContain("await setSubjectEpochDuration(subject.id, epochSeconds, rail.operatorToken);");
     expect(sessionSrc.length).toBeGreaterThan(1000); // the scan is over real text
   });
 });

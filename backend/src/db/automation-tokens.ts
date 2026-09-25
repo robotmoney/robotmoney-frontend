@@ -11,11 +11,11 @@
 // plaintext reaches the database. `provisionAutomationToken` returns the secret
 // exactly once, to whoever asked for it, and the row it wrote cannot reproduce
 // it. The delivery half — writing that secret into the instance's state
-// directory as a file — is the boot's (smoke spec §3/§5/§9.1), W1's criterion,
-// and deliberately not this module's business.
+// directory as a file — belongs to backend/scripts/provision-tokens.ts, the one
+// entry module that calls this (smoke spec §3/§5/§9.1).
 import { randomBytes } from "node:crypto";
 import { sql } from "./client.ts";
-import { on, registerQuery } from "./registry.ts";
+import { on, registerQuery, type RegistryDb } from "./registry.ts";
 import { hashKey } from "../lib/keys.ts";
 
 /**
@@ -71,13 +71,10 @@ export interface AutomationGrant {
  * same authorized preparation that writes `deployment_identity`" (§3), and
  * that table is "writable only by `rm_owner`" (§4.2).
  *
- * NO ENTRY MODULE CALLS `provisionAutomationToken` YET. The preparation step
- * that will (§3, §5, §9.1) is W4's to wire, so until then this module names
- * itself as the caller. That is a placeholder the wiring must replace with its
- * own module id, not a claim that anything reaches the write today. The
- * placeholder is admitted only because tests/db-registry.test.ts lists this
- * site on its dated UNWIRED_SITES backlog; any other declaration naming its
- * own non-runnable module as caller fails that test.
+ * The one entry module that reaches the write is backend/scripts/provision-tokens.ts:
+ * `bun smoke`'s `prepare (tokens)` step for `--local blank`/`dump` (§5) and
+ * `bun scripts/prod-init.ts provision-tokens` (§9.1 step 5), each inside the
+ * mutation fence on the connection performing the write (§2).
  */
 const provisionToken = registerQuery({
   role: "rm_owner",
@@ -86,7 +83,7 @@ const provisionToken = registerQuery({
   privileges: ["INSERT", "UPDATE", "SELECT"],
   site: "src/db/automation-tokens:provisionAutomationToken",
   purpose: "Provision or rotate one holder's automation token on one instance, storing only its hash.",
-  callers: ["src/db/automation-tokens"],
+  callers: ["scripts/provision-tokens"],
   probe: {
     statement: `INSERT INTO automation_tokens (instance, holder, token_hash, rights)
       VALUES ($1, $2, $3, $4::text[])
@@ -127,12 +124,17 @@ const TOKEN_PREFIX = "rmat_";
  * `holder` defaults to `system-scheduler`, the store's only holder before
  * migration 0078, so existing callers keep their meaning.
  *
+ * `db` is the handle the write runs on. The provisioning entry module passes
+ * its fenced `rm_owner` transaction (§2: every mutation "runs in a transaction
+ * that first takes `pg_advisory_xact_lock` … on the connection performing
+ * it"); without one the write goes to the process pool.
+ *
  * Returns the secret ONCE. It is not stored and cannot be recovered.
  */
 export async function provisionAutomationToken(
   instance: string,
   rights: readonly AutomationRight[],
-  options: { holder?: AutomationHolder } = {},
+  options: { holder?: AutomationHolder; db?: RegistryDb } = {},
 ): Promise<{ instance: string; holder: AutomationHolder; token: string; rights: AutomationRight[] }> {
   const holder = options.holder ?? "system-scheduler";
   if (!(AUTOMATION_HOLDERS as readonly string[]).includes(holder)) {
@@ -158,7 +160,7 @@ export async function provisionAutomationToken(
   }
   const unique = [...new Set(rights)];
   const token = `${TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
-  await on(sql, provisionToken)`
+  await on(options.db ?? sql, provisionToken)`
     INSERT INTO automation_tokens (instance, holder, token_hash, rights)
     VALUES (${instance}, ${holder}, ${hashKey(token)}, ${unique})
     ON CONFLICT (instance, holder) DO UPDATE

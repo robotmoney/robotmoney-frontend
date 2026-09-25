@@ -40,6 +40,8 @@ import {
   type StackStateRecord,
 } from "./lib/smoke-state.ts";
 import { readJournal, readReceipt, type Journal, type Receipt } from "./lib/smoke-journal.ts";
+import { fetchSchedulerHealth, renderSchedulerHealthLine, type SchedulerHealthReport } from "./lib/smoke-readiness-scheduler.ts";
+import { SCHEDULER_HEALTH_PORT } from "./lib/smoke-readiness-probes.ts";
 
 /** Everything the report is computed from. Plain data, so it renders with Docker unreachable. */
 export interface StatusInput {
@@ -58,6 +60,13 @@ export interface StatusInput {
    * reported as "nothing running".
    */
   readonly derivedProject?: string;
+  /**
+   * The scheduler's health endpoint, read NOW (smoke spec §6.3): its report,
+   * `null` when the endpoint answered nothing readable, `not-running` when the
+   * scheduler publishes no health port (it is not up). Absent: not asked (the
+   * daemon could not be reached). Shown beside the receipt, which is history.
+   */
+  readonly schedulerHealth?: SchedulerHealthReport | null | "not-running";
 }
 
 /** One service's standing after a run, relative to what ran when replacement began (§1.4). */
@@ -130,7 +139,7 @@ export function statusReport(input: StatusInput): string[] {
   }
 
   if (receipt !== null && receiptIsCurrent(journal, receipt)) {
-    lines.push(`[smoke:status] source: receipt — reached readiness under plan ${receipt.planId} at ${receipt.writtenAt}`);
+    lines.push(`[smoke:status] source: receipt (HISTORY) — reached readiness under plan ${receipt.planId} at ${receipt.writtenAt}`);
     const tail = receipt.schema.migrations.at(-1);
     lines.push(`[smoke:status]   schema: manifest ${receipt.schema.manifestHash}; ${receipt.schema.migrations.length} migration(s)${tail ? `, ending ${tail}` : ""}`);
     for (const check of receipt.preflight) lines.push(`[smoke:status]   preflight ${check.check}: ${check.pass ? "pass" : "FAIL"} (${check.detail})`);
@@ -168,6 +177,7 @@ export function statusReport(input: StatusInput): string[] {
   } else {
     lines.push("[smoke:status] No receipt and no journal: this instance has no recorded run.");
   }
+  lines.push(...schedulerNowLines(input.schedulerHealth));
 
   const s = input.stack;
   if (s === null) {
@@ -185,6 +195,30 @@ export function statusReport(input: StatusInput): string[] {
     else if (mode === "smoke-twin") lines.push(`[smoke:status]   pg data: TWIN volume ${s.smokeTwinVolume ?? "(unrecorded)"} — a copy of production; reclaim with bun run smoke:clean`);
     else lines.push(`[smoke:status]   pg data: volume ${s.pgVolume ?? `${s.project}_pgdata`}  (kept on smoke:down; reattach: bun smoke --local volume --instance ${input.instance})`);
     if (s.logFile) lines.push(`[smoke:status]   log file: ${s.logFile}`);
+  }
+  return lines;
+}
+
+/**
+ * The scheduler's health NOW, beside the receipt's history (smoke spec §6.3:
+ * "`smoke:status` and the TUI show the receipt as history and the health
+ * endpoint as now, side by side, including any degradation with its subject or
+ * session and last error"). Each exhausted item gets its own line, so the
+ * operator reads which subject or session and why before restarting anything —
+ * the restart is theirs.
+ */
+export function schedulerNowLines(health: StatusInput["schedulerHealth"]): string[] {
+  if (health === undefined) return ["[smoke:status] now: scheduler health not asked (the daemon could not be reached)"];
+  if (health === "not-running") return ["[smoke:status] now: system-scheduler is NOT RUNNING (it publishes no health port)"];
+  const lines = [`[smoke:status] now: ${renderSchedulerHealthLine(health)}`];
+  if (health === null) return lines;
+  if (health.lastError) lines.push(`[smoke:status]   last error: ${health.lastError}`);
+  for (const item of health.exhausted) {
+    const who = [item.subjectId ? `subject ${item.subjectId}` : null, item.sessionId ? `session ${item.sessionId}` : null].filter(Boolean).join(", ");
+    lines.push(
+      `[smoke:status]   DEGRADED ${item.item}${who ? ` (${who})` : ""}: ${item.lastError} — after ${item.attempts} attempt(s); ` +
+        "restart this instance's system-scheduler once the dependency is back",
+    );
   }
   return lines;
 }
@@ -212,7 +246,7 @@ function liveServices(project: string, env: Record<string, string | undefined>):
   return out;
 }
 
-export function main(argv: readonly string[], env: Record<string, string | undefined>): number {
+export async function main(argv: readonly string[], env: Record<string, string | undefined>): Promise<number> {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const repoRoot = join(scriptDir, "..");
   let paths: InstancePaths;
@@ -238,23 +272,31 @@ export function main(argv: readonly string[], env: Record<string, string | undef
     console.error(`[smoke:status] ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
-  for (const line of statusReport(input)) console.log(line);
-
   // The LIVE ports and containers come from the daemon, never from the record:
   // a record is history, and reporting its port as "the smoke is at :N" sends
   // the operator to a dead or foreign port.
-  if (input.stack !== null && input.live !== null) {
-    const dockerEnv = {
-      ...buildSmokeLifecycleComposeEnv(input.stack, env),
-      ...instanceComposeEnv({ name: input.instance, stateDir: paths.dir }),
+  const dockerEnv = input.stack === null ? null : {
+    ...buildSmokeLifecycleComposeEnv(input.stack, env),
+    ...instanceComposeEnv({ name: input.instance, stateDir: paths.dir }),
+  };
+  const port = (service: string, containerPort: number): number | undefined => {
+    const r = Bun.spawnSync(["docker", "compose", "--env-file", "/dev/null", ...portArgs(service, containerPort)], {
+      cwd: repoRoot, env: dockerEnv!, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    if (r.exitCode !== 0) return undefined;
+    try { return parseComposePortOutput(r.stdout.toString(), service, containerPort); } catch { return undefined; }
+  };
+  // The scheduler's own answer, now (§6.3): its loopback health port.
+  if (dockerEnv !== null && input.live !== null) {
+    const healthPort = port("system-scheduler", SCHEDULER_HEALTH_PORT);
+    input = {
+      ...input,
+      schedulerHealth: healthPort === undefined ? "not-running" : await fetchSchedulerHealth(`http://127.0.0.1:${healthPort}/health`),
     };
-    const port = (service: string, containerPort: number): number | undefined => {
-      const r = Bun.spawnSync(["docker", "compose", "--env-file", "/dev/null", ...portArgs(service, containerPort)], {
-        cwd: repoRoot, env: dockerEnv, stdin: "ignore", stdout: "pipe", stderr: "pipe",
-      });
-      if (r.exitCode !== 0) return undefined;
-      try { return parseComposePortOutput(r.stdout.toString(), service, containerPort); } catch { return undefined; }
-    };
+  }
+  for (const line of statusReport(input)) console.log(line);
+
+  if (dockerEnv !== null && input.live !== null) {
     const web = port("website-server", WEBSITE_SERVER_CONTAINER_PORT);
     const api = port("api", API_CONTAINER_PORT);
     console.log(`[smoke:status]   now: web ${web === undefined ? "NOT RUNNING" : `http://127.0.0.1:${web}/`}  api ${api === undefined ? "NOT RUNNING" : `:${api}`}`);
@@ -265,5 +307,5 @@ export function main(argv: readonly string[], env: Record<string, string | undef
 }
 
 if (import.meta.main) {
-  process.exit(main(process.argv.slice(2), process.env));
+  process.exit(await main(process.argv.slice(2), process.env));
 }

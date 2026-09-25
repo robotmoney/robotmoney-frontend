@@ -394,7 +394,6 @@ describe("a --local boot hands compose no remote connection (criterion 32, spawn
     profile: "full",
     composeFiles: ["docker-compose.yml", "docker-compose.smoke.yml"],
     database: { ...DEFAULT_STACK_DATABASE, roleUrls: LOCAL_ROLES },
-    credentials: { adminToken: "a", automationToken: "b", analyticsToken: "c", analyticsTokenFile: "/tmp/tok" },
     environment: { class: "local", hash: "c32c32c32c" },
     rmEnv: "stage",
     extraComposeEnv: { ...smokePassthroughEnv(env) },

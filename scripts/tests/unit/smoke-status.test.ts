@@ -23,7 +23,8 @@ import {
   type StateExpectations,
 } from "../../lib/smoke-journal.ts";
 import { instancePaths, instanceStackProject, type InstancePaths } from "../../lib/smoke-state.ts";
-import { classifyServices, statusReport } from "../../smoke-status.ts";
+import { classifyServices, schedulerNowLines, statusReport } from "../../smoke-status.ts";
+import { healthPayload } from "../../lib/system-scheduler/health.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const OLD = `sha256:${"1".repeat(64)}`;
@@ -127,7 +128,7 @@ describe("the receipt is read back (§1.4, criterion 29)", () => {
       live: { api: NEW, "website-server": NEW },
       lockHolder: null,
     }).join("\n");
-    expect(lines).toContain(`source: receipt — reached readiness under plan ${receipt.planId}`);
+    expect(lines).toContain(`source: receipt (HISTORY) — reached readiness under plan ${receipt.planId}`);
     expect(lines).toContain(`schema: manifest ${receipt.schema.manifestHash}; 2 migration(s), ending 0078_automation_token_holders.sql`);
     expect(lines).toContain("preflight schema-current: pass (schema is current: 78 migration(s) applied)");
     expect(lines).toContain("readiness api-health: pass");
@@ -142,6 +143,48 @@ describe("the receipt is read back (§1.4, criterion 29)", () => {
       instance: "rm_local_one", stateDir: paths.dir, journal: readJournal(paths), receipt: readReceipt(paths), stack: null, live: {}, lockHolder: null,
     }).join("\n");
     expect(lines).toContain("service api: 222222222222 at readiness — NOT RUNNING now");
+  });
+
+  // §6.3: "`smoke:status` and the TUI show the receipt as history and the
+  // health endpoint as now, side by side, including any degradation with its
+  // subject or session and last error." The health below is built by the REAL
+  // producer of the wire shape (healthPayload), so a renamed field breaks here.
+  test("a passing receipt beside a DEGRADED scheduler now: both shown, the degradation with subject, session and last error", async () => {
+    const root = freshRoot();
+    const paths = instancePaths(root, "rm_local_one", { create: true });
+    await completedRun(paths, "rm_local_one");
+    const now = healthPayload({
+      authenticated: true,
+      streamSynchronized: true,
+      initialRebuildComplete: true,
+      exhausted: [{ item: "turnover:woon", subjectId: "woon", sessionId: "s-42", lastError: "503 upstream unavailable", attempts: 5, exhaustedAtMs: 0 }],
+      healthy: false,
+      lastError: "turnover:woon exhausted",
+      timers: { boundaries: 1, deadlines: 0 },
+    });
+    const lines = statusReport({
+      instance: "rm_local_one", stateDir: paths.dir, journal: readJournal(paths), receipt: readReceipt(paths), stack: null, live: {}, lockHolder: null,
+      schedulerHealth: now,
+    });
+    const text = lines.join("\n");
+    const history = lines.findIndex((l) => l.includes("source: receipt (HISTORY)"));
+    const current = lines.findIndex((l) => l.includes("now: scheduler health: UNHEALTHY"));
+    expect(history).toBeGreaterThan(-1);
+    expect(current).toBeGreaterThan(history);
+    expect(text).toContain("DEGRADED turnover:woon (subject woon, session s-42): 503 upstream unavailable — after 5 attempt(s)");
+    expect(text).toContain("last error: turnover:woon exhausted");
+    expect(text).toContain("restart this instance's system-scheduler");
+  });
+
+  test("a scheduler that is not running, and one whose endpoint is unreadable, are said so — never as healthy", () => {
+    expect(schedulerNowLines("not-running").join("\n")).toContain("NOT RUNNING");
+    expect(schedulerNowLines(null).join("\n")).toContain("scheduler health: unreadable");
+    expect(schedulerNowLines(undefined).join("\n")).toContain("not asked");
+    const healthy = healthPayload({
+      authenticated: true, streamSynchronized: true, initialRebuildComplete: true, exhausted: [], healthy: true, lastError: null,
+      timers: { boundaries: 2, deadlines: 0 },
+    });
+    expect(schedulerNowLines(healthy)).toEqual(["[smoke:status] now: scheduler health: healthy (2 boundary timer(s), 0 judging deadline(s))"]);
   });
 });
 

@@ -5,26 +5,17 @@
 // second session's brief references the first session's outcome, smokenstrating
 // rotation awareness.
 //
-// THE LIFECYCLE IS FIVE SYNCHRONOUS ADMIN CALLS, NOT A QUEUE (issue #1026 W4).
-// It used to be five `swarm.*` queue jobs driven through `admin enqueue-job`,
-// plus an out-of-band `swarm.judge`. Every one of those handlers and the `swarm`
-// worker lane are gone, and so is the endpoint that queued them. What replaces
-// them is the epoch lifecycle of docs/technical/system-scheduler-spec.md §4 —
-// `epochs/open`, `epochs/turnover`, `epochs/aggregate`,
-// `epochs/request-judging`, `epochs/finalize` — each a state-guarded transition
-// that has COMMITTED by the time it answers (§5). That single fact is why most
-// of this file's former state polling is gone: a wait for a transition the
-// response already reported can never fail, and a wait that cannot fail hides
-// the missing transition it was supposed to catch.
-//
-// WHAT THIS DRIVER IS, RELATIVE TO `system-scheduler`. It is not the clock. §8
-// says a test that needs a fast lifecycle "sets short epoch durations and runs
-// the real scheduler"; this driver sets the duration the same way (§2.3, the
-// admin subject update) and then drives the transitions itself, because it also
-// has to interleave member containers, fixtures and assertions between them.
-// Nothing here polls on an interval in the sense §9 forbids — that invariant is
-// about `system-scheduler`, and the two waits that survive are both on something
-// genuinely asynchronous.
+// THE LIFECYCLE IS THE SCHEDULER'S, AND THIS DRIVER ONLY OBSERVES IT (issue
+// #1026 W4, D55 (4)). It used to drive the five epoch transitions itself —
+// `epochs/open`, `turnover`, `aggregate`, `request-judging`, `finalize` — with a
+// shared automation token. Those routes now accept only `system-scheduler`'s
+// `lifecycle_transitions` right, and system-scheduler-spec.md §8 says what a
+// test does instead: it "sets short epoch and judging durations and runs the
+// real scheduler; it does not bypass the scheduler." So this driver sets the
+// subject's epoch duration through the admin API (the operator's `admin`
+// right), waits for the epoch the REAL scheduler opens, runs its members
+// inside that window, and watches the scheduler settle it. Its own polls are
+// on public reads; §9's no-polling rule is the scheduler's, not a driver's.
 //
 // This module replaces the retired mcp/src/e2e.ts. Only the per-member
 // participation (./agent.ts) and the standalone main()'s former MCP-OAuth
@@ -39,37 +30,19 @@ import { generateKeyPair } from "./crypto.ts";
 // The one builder for a compose prefix — argv topology AND the `--env-file`
 // that keeps the repo's own `.env` out of an interpolated container.
 import { composeArgs } from "../../stack/config.ts";
-// The epoch routes' RESPONSE SHAPES, from the module that already states them
-// for `system-scheduler` (scripts/lib/system-scheduler/types.ts). A type-only
-// import: this driver does not use that container's HTTP client — it has its
-// own credential handling and its own failure policy — but the two must not
-// drift about what `epochs/turnover` returns, and a second hand-written copy of
-// these five interfaces is exactly how they would.
-import type {
-  AggregateBody,
-  FinalizeBody,
-  OpenBody,
-  RequestJudgingBody,
-  TurnoverBody,
-} from "../system-scheduler/types.ts";
+import { operatorTokenFromEnv } from "../operator-token.ts";
 
 export function backendUrl(): string {
   return process.env.BACKEND_URL ?? "http://localhost:8787";
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// The 5c/5d cross-role log lines below used to be annotated by an env-mirror
-// helper (regimeWriteInsecure) that required this HARNESS process to hold the
-// producer credential just to describe the stack's posture. Retired (issue
-// #361 Phase 4): the annotations now derive from the server's OBSERVED
-// response status — strictly more truthful, and the analytics credential never
-// reaches this driver at all (it belongs to the producer and its verifier).
-// Keep the pure mirror exported for the hermetic polarity guard: callers must
-// inject an environment explicitly, so production session code cannot use it
-// as a reason to inspect or inherit the producer's credential.
-export function regimeWriteInsecure(env: Record<string, string | undefined>): boolean {
-  return env.RM_ALLOW_INSECURE === "1" && !env.ANALYTICS_TOKEN;
-}
+// The 5c/5d cross-role log lines below derive their annotation from the
+// server's OBSERVED response status (issue #361 Phase 4), never from a mirror
+// of the api's configuration: the analytics credential never reaches this
+// driver (it belongs to the producer), and since D52 there is no env credential
+// or insecure fallback left for a mirror to describe — every service bearer is
+// validated against the api's token store.
 
 // Run `fn` over `items` with at most `limit` invocations in flight, returning
 // results in INPUT order as PromiseSettledResult — like Promise.allSettled but
@@ -320,13 +293,26 @@ export const DEMO_SUBJECTS: readonly SessionSubject[] = Object.freeze([
 // (SWARM_ROSTER_CAP) — the mirror this module used to carry is gone;
 // consumers (scripts/lib/smoke-main.ts, backend domain) import the contract.
 
-// `token` lets an in-process caller pass the dedicated automation credential
-// explicitly instead of relying on a process.env mutation shared across the
-// same process. The fallback stays for this module's standalone entry point,
-// which runs as its own child process with AUTOMATION_TOKEN in its spawn env.
-export function getAutomationHeaders(token?: string): Record<string, string> {
-  const automationToken = token ?? process.env.AUTOMATION_TOKEN;
-  return automationToken ? { "X-Automation-Token": automationToken } : {};
+// The OPERATOR'S service token (smoke spec §3: the admin right) on an admin
+// call. An in-process caller passes it explicitly. This module's standalone
+// entry point runs as its own child process and reads it from the file
+// RM_OPERATOR_TOKEN_FILE names (scripts/lib/operator-token.ts) — the file's
+// path is in its environment, never the token.
+export function operatorHeaders(token?: string): Record<string, string> {
+  const operatorToken = token ?? operatorTokenFromEnv(process.env);
+  return operatorToken ? { "X-Automation-Token": operatorToken } : {};
+}
+
+/**
+ * A role-gated route answered a caller that lacks the right: only 401 or 403
+ * is a refusal. Anything else — a 400 from payload validation, a 2xx, a 404
+ * past the gate — means authorization PASSED, which since D52 (1) (no insecure
+ * gate) is a security failure the session must stop on, not a log line.
+ */
+export function assertRoleRefused(what: string, status: number): void {
+  if (status !== 401 && status !== 403) {
+    throw new Error(`${what}: expected 401/403 (refused for want of the right), got ${status} — the role gate let it through`);
+  }
 }
 
 async function responseJson<T = any>(response: Response): Promise<T> {
@@ -377,8 +363,8 @@ export function sessionEmitter(
     onProgress?.({ type: "session", state, sessionId, subject, date, ...extra });
 }
 
-export async function admin(action: string, body: unknown = {}, automationToken?: string) {
-  return (await adminCall(action, body, automationToken)).body;
+export async function admin(action: string, body: unknown = {}, operatorToken?: string) {
+  return (await adminCall(action, body, operatorToken)).body;
 }
 
 /**
@@ -395,102 +381,169 @@ export async function admin(action: string, body: unknown = {}, automationToken?
 export async function adminCall(
   action: string,
   body: unknown = {},
-  automationToken?: string,
+  operatorToken?: string,
 ): Promise<{ ok: boolean; status: number; body: any }> {
   const r = await fetch(`${backendUrl()}${routePath(ROUTES.swarm.admin.action, { action })}`, {
-    method: "POST", headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) }, body: JSON.stringify(body),
+    method: "POST", headers: { "Content-Type": "application/json", ...operatorHeaders(operatorToken) }, body: JSON.stringify(body),
   });
   return { ok: r.ok, status: r.status, body: await responseJson(r) };
 }
 
-// ── The epoch lifecycle (system-scheduler-spec.md §4) ───────────────────────
+// ── The epoch lifecycle is the scheduler's (system-scheduler-spec.md §4, §8) ─
 //
-// Five POSTs under `/api/swarm/admin/epochs/`, each a state-guarded transition
-// that has committed by the time it answers. There is no queue behind any of
-// them and nothing to wait for afterwards.
+// This driver makes NO lifecycle transition. D55 (4): "system-scheduler is the
+// only caller of the epoch lifecycle transitions (open, turnover, and
+// settlement: aggregate, request-judging, finalize)", and every
+// `/api/swarm/admin/epochs/*` route refuses any credential but the scheduler's
+// `lifecycle_transitions` right. §8 says what a test does instead: it "sets
+// short epoch and judging durations and runs the real scheduler; it does not
+// bypass the scheduler." So the driver sets the subject's duration through the
+// admin API, then OBSERVES — the epoch the scheduler opens, the window closing,
+// the settlement the scheduler runs — through the public session reads.
 //
-// §5 IS THE WHOLE REASON THESE RETURN A UNION RATHER THAN THROWING. "Where the
-// transition has already happened, the guard returns the original result rather
-// than a bare refusal, so a caller can tell 'already done' from 'not allowed.'"
-// An already-done answer is `{ ok: true, … }` carrying `created: false`,
-// `replayed: true` or `transitioned: false` — a SUCCESS this driver continues
-// from — while a reasoned refusal is `{ ok: false, status, error }`. Collapsing
-// the two into an exception would lose exactly the distinction the guard exists
-// to draw, and would make a re-run of an interrupted smoke fail on its first
-// step.
+// Polling a public read here is allowed: §9's "never polls the API on an
+// interval" is an invariant of `system-scheduler`, whose design is the stream,
+// and a test driver is not the scheduler.
 
-/** A reasoned refusal (§4.6): final, carrying the machine-readable reason. */
-export interface EpochRefusal {
-  ok: false;
-  status: number;
-  error: string;
+/** How often the driver re-reads a session it is waiting on. */
+export const OBSERVE_POLL_MS = 2_000;
+/** Slack past a short epoch for the scheduler to open its successor or settle. */
+export const OBSERVE_GRACE_MS = 30_000;
+
+/** One `collecting` session as the public list reports it. */
+export interface CollectingEpoch {
+  sessionId: string;
+  date: string;
+  windowClosesAt: string | null;
 }
 
-export type EpochResult<T> = ({ ok: true; status: number } & T) | EpochRefusal;
+export interface EpochAdoptionPlan {
+  /** adopt = this is the epoch to run; wait = none yet; abort = refuse, loudly. */
+  action: "adopt" | "wait" | "abort";
+  reason: string;
+}
 
-/** POST one epoch transition and hand back the API's own envelope, unflattened. */
-async function epochCall<T>(
-  route: string,
-  body: Record<string, unknown>,
-  automationToken?: string,
-): Promise<EpochResult<T>> {
-  const r = await fetch(`${backendUrl()}${route}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
-    body: JSON.stringify(body),
-  });
-  const parsed = await responseJson<Record<string, unknown>>(r).catch(() => ({}) as Record<string, unknown>);
-  if (!r.ok) {
-    const error = typeof parsed.error === "string" ? parsed.error : `http_${r.status}`;
-    return { ok: false, status: r.status, error };
+/**
+ * PURE. Decide whether the collecting epoch the scheduler holds for a subject is
+ * one this driver can run a session in.
+ *
+ * The driver cannot shorten an epoch: there is no early turnover (scheduler spec
+ * §9), and turnover is the scheduler's. So an epoch the scheduler opened under a
+ * LONGER duration — before the admin update took effect — would keep this
+ * driver waiting for that whole window. That is refused, naming the instant,
+ * rather than waited out until a job timeout kills it.
+ */
+export function planEpochAdoption(
+  serverNowMs: number,
+  epoch: CollectingEpoch | null,
+  limits: { epochSeconds: number; graceMs?: number },
+): EpochAdoptionPlan {
+  if (epoch === null) return { action: "wait", reason: "the scheduler has not opened an epoch for this subject yet" };
+  const closesAt = epoch.windowClosesAt ? Date.parse(epoch.windowClosesAt) : NaN;
+  if (!Number.isFinite(closesAt)) {
+    return { action: "abort", reason: `session ${epoch.sessionId} advertises no parseable windowClosesAt (${epoch.windowClosesAt})` };
   }
-  return { ok: true, status: r.status, ...(parsed as T) };
-}
-
-/** Throw on a refusal, naming the route and the reason (§4.6: reasoned, final, not retried). */
-function requireEpoch<T>(what: string, result: EpochResult<T>): { ok: true; status: number } & T {
-  if (!result.ok) {
-    throw new Error(
-      `${what} was refused (HTTP ${result.status}): ${result.error} — a reasoned refusal is final ` +
-        "(system-scheduler-spec.md §4.6), so the driver stops here rather than retrying into it",
-    );
+  const bound = serverNowMs + limits.epochSeconds * 1000 + (limits.graceMs ?? OBSERVE_GRACE_MS);
+  if (closesAt > bound) {
+    return {
+      action: "abort",
+      reason:
+        `session ${epoch.sessionId}'s window closes at ${epoch.windowClosesAt}, beyond this subject's ` +
+        `${limits.epochSeconds}s epoch — the scheduler opened it under a longer duration, and nothing but the ` +
+        "scheduler turns an epoch over (scheduler spec §9), so the driver will not wait it out",
+    };
   }
-  return result;
+  return { action: "adopt", reason: `session ${epoch.sessionId} is collecting until ${epoch.windowClosesAt}` };
 }
 
-/** §4.1 — create the session, publish its brief and set `window_closes_at`, in one transaction. */
-export function openEpoch(subjectId: string, automationToken?: string): Promise<EpochResult<OpenBody>> {
-  return epochCall<OpenBody>(ROUTES.swarm.admin.epochOpen, { subjectId }, automationToken);
+/** The subject's `collecting` session and the API's clock, in one round trip; null epoch when there is none. */
+export async function readCollectingEpoch(subjectId: string): Promise<{ epoch: CollectingEpoch | null; serverNowMs: number | null }> {
+  const r = await fetch(`${backendUrl()}${ROUTES.swarm.sessions}?state=collecting&subject=${encodeURIComponent(subjectId)}&limit=5`);
+  const header = r.headers.get("date");
+  const headerMs = header ? Date.parse(header) : NaN;
+  if (!r.ok) throw new Error(`GET ${ROUTES.swarm.sessions}?state=collecting&subject=${subjectId} -> HTTP ${r.status}`);
+  const body = await responseJson<{ sessions?: { id: string; date: string; state: string; windowClosesAt: string | null }[] }>(r);
+  const row = (body.sessions ?? []).find((s) => s.state === "collecting");
+  return {
+    epoch: row ? { sessionId: String(row.id), date: String(row.date), windowClosesAt: row.windowClosesAt ?? null } : null,
+    serverNowMs: Number.isFinite(headerMs) ? headerMs : null,
+  };
 }
 
-/** §4.3 — close the NAMED epoch and open its successor, in one transaction. */
-export function turnOverEpoch(
+export interface ObserveDeps {
+  readEpoch?: (subjectId: string) => Promise<{ epoch: CollectingEpoch | null; serverNowMs: number | null }>;
+  readState?: (sessionId: string) => Promise<string | null>;
+  wait?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
+
+/**
+ * Wait for the REAL scheduler to open this subject's epoch (§4.1: it opens the
+ * first epoch from the subject's `subject.changed`), then return it. Throws at
+ * the ceiling, or on an epoch this driver cannot run a session in.
+ */
+export async function waitForSchedulerEpoch(
   subjectId: string,
-  expectedSessionId: string,
-  automationToken?: string,
-): Promise<EpochResult<TurnoverBody>> {
-  // The epoch is named, always. §4.3: "Turnover is bound to the epoch, never to
-  // 'whatever is open.'" There is deliberately no overload that omits it.
-  return epochCall<TurnoverBody>(
-    ROUTES.swarm.admin.epochTurnover,
-    { subjectId, expectedSessionId },
-    automationToken,
-  );
+  limits: { epochSeconds: number; maxWaitMs: number },
+  deps: ObserveDeps = {},
+): Promise<CollectingEpoch> {
+  const readEpoch = deps.readEpoch ?? readCollectingEpoch;
+  const wait = deps.wait ?? sleep;
+  const now = deps.now ?? Date.now;
+  const startedAt = now();
+  for (;;) {
+    const { epoch, serverNowMs } = await readEpoch(subjectId);
+    const plan = planEpochAdoption(serverNowMs ?? now(), epoch, { epochSeconds: limits.epochSeconds });
+    if (plan.action === "adopt") return epoch!;
+    if (plan.action === "abort") throw new Error(`subject ${subjectId}: ${plan.reason}`);
+    if (now() - startedAt >= limits.maxWaitMs) {
+      throw new Error(
+        `subject ${subjectId}: the scheduler opened no epoch within ${Math.round(limits.maxWaitMs / 1000)}s — ` +
+          "is system-scheduler running and authenticated? (bun smoke:status shows its health)",
+      );
+    }
+    await wait(OBSERVE_POLL_MS);
+  }
 }
 
-/** §4.4 step 1 — roll the signed takes up into the recommendation. */
-export function aggregateEpoch(sessionId: string, automationToken?: string): Promise<EpochResult<AggregateBody>> {
-  return epochCall<AggregateBody>(ROUTES.swarm.admin.epochAggregate, { sessionId }, automationToken);
-}
+/** The settled states, in the order the scheduler moves a session through them (§4.3, §4.4). */
+export const SETTLEMENT_STATES = ["window_closed", "aggregated", "judging", "judged", "published"] as const;
 
-/** §4.4 step 2 under `enforce` — record the request and return the STORED absolute deadline. */
-export function requestJudging(sessionId: string, automationToken?: string): Promise<EpochResult<RequestJudgingBody>> {
-  return epochCall<RequestJudgingBody>(ROUTES.swarm.admin.epochRequestJudging, { sessionId }, automationToken);
-}
-
-/** §4.4 step 3 — decide the judging outcome from stored instants, then publish. */
-export function finalizeEpoch(sessionId: string, automationToken?: string): Promise<EpochResult<FinalizeBody>> {
-  return epochCall<FinalizeBody>(ROUTES.swarm.admin.epochFinalize, { sessionId }, automationToken);
+/**
+ * Wait for the scheduler to settle a session whose window has closed — turnover,
+ * aggregate, judging when the captured mode asks for it, finalize — and report
+ * every state it was seen in, in order. `published` is the end; a
+ * `no_consensus` or `not_judged` outcome is published too and is not a failure
+ * (§4.4). Throws at the ceiling: a session the scheduler never settles is a
+ * scheduler that is not working, and the readiness gate and `smoke:status`
+ * say why.
+ */
+export async function waitForSettlement(
+  sessionId: string,
+  limits: { maxWaitMs: number },
+  deps: ObserveDeps = {},
+  onState?: (state: string) => void,
+): Promise<{ states: string[]; waitedMs: number }> {
+  const readState = deps.readState ?? readSessionState;
+  const wait = deps.wait ?? sleep;
+  const now = deps.now ?? Date.now;
+  const startedAt = now();
+  const states: string[] = [];
+  for (;;) {
+    const state = await readState(sessionId);
+    if (state !== null && state !== states[states.length - 1]) {
+      states.push(state);
+      onState?.(state);
+    }
+    if (state === "published") return { states, waitedMs: now() - startedAt };
+    if (now() - startedAt >= limits.maxWaitMs) {
+      throw new Error(
+        `session ${sessionId} was not settled within ${Math.round(limits.maxWaitMs / 1000)}s ` +
+          `(states seen: ${states.join(" → ") || "none"}) — settlement is system-scheduler's, so its health says why`,
+      );
+    }
+    await wait(OBSERVE_POLL_MS);
+  }
 }
 
 // ── The subject's one scheduling parameter (§2.2, §2.3) ─────────────────────
@@ -543,12 +596,12 @@ export function epochDurationSecondsFor(cadence: SmokeCadence): number {
  */
 export async function ensureSubjectViaAdmin(
   subject: SessionSubject,
-  automationToken?: string,
+  operatorToken?: string,
   opts: { recommendationType?: string; epochDurationSeconds?: number } = {},
 ): Promise<{ created: boolean }> {
   const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.subjects}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
+    headers: { "Content-Type": "application/json", ...operatorHeaders(operatorToken) },
     body: JSON.stringify({
       id: subject.id,
       name: subject.name,
@@ -581,10 +634,10 @@ export async function ensureSubjectViaAdmin(
 export async function setSubjectEpochDuration(
   subjectId: string,
   seconds: number,
-  automationToken?: string,
+  operatorToken?: string,
 ): Promise<void> {
   const listRes = await fetch(`${backendUrl()}${ROUTES.swarm.admin.subjects}`, {
-    headers: getAutomationHeaders(automationToken),
+    headers: operatorHeaders(operatorToken),
   });
   if (!listRes.ok) throw new Error(`GET ${ROUTES.swarm.admin.subjects} -> ${listRes.status}`);
   const body = await responseJson<{
@@ -601,7 +654,7 @@ export async function setSubjectEpochDuration(
   const p = routePath(ROUTES.swarm.admin.subjectUpdate, { id: subjectId });
   const r = await fetch(`${backendUrl()}${p}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
+    headers: { "Content-Type": "application/json", ...operatorHeaders(operatorToken) },
     body: JSON.stringify({ expectedVersion: subject.version, epochDuration: seconds }),
   });
   if (!r.ok) throw new Error(`POST ${p} {epochDuration:${seconds}} -> ${r.status}: ${await r.text()}`);
@@ -667,9 +720,9 @@ export interface RosterMember {
 }
 
 /** The full roster (every status), or null when it cannot be read. */
-export async function rosterMembers(targetUrl: string = backendUrl(), automationToken?: string): Promise<RosterMember[] | null> {
+export async function rosterMembers(targetUrl: string = backendUrl(), operatorToken?: string): Promise<RosterMember[] | null> {
   try {
-    const r = await fetch(`${targetUrl}${ROUTES.swarm.admin.members}`, { headers: getAutomationHeaders(automationToken) });
+    const r = await fetch(`${targetUrl}${ROUTES.swarm.admin.members}`, { headers: operatorHeaders(operatorToken) });
     if (!r.ok) throw new Error(`GET ${ROUTES.swarm.admin.members} -> ${r.status}`);
     const body = await responseJson(r) as {
       members?: { id?: string; handle?: string; name?: string; lens?: string | null; status?: string }[];
@@ -691,8 +744,8 @@ export async function rosterMembers(targetUrl: string = backendUrl(), automation
 }
 
 /** Lower-cased names on the roster, or null when the roster cannot be read. */
-export async function existingMemberNames(targetUrl: string = backendUrl(), automationToken?: string): Promise<Set<string> | null> {
-  const members = await rosterMembers(targetUrl, automationToken);
+export async function existingMemberNames(targetUrl: string = backendUrl(), operatorToken?: string): Promise<Set<string> | null> {
+  const members = await rosterMembers(targetUrl, operatorToken);
   if (members === null) {
     console.error(
       "[e2e] existingMemberNames: roster unreadable — cannot prove a newcomer name is unused; " +
@@ -959,31 +1012,6 @@ export async function waitUntilWindowCloses(
 }
 
 /**
- * The judge's runtime mode, read from the switch itself
- * (`GET /api/swarm/admin/judge`, `swarm_judge_config.mode`).
- *
- * Returns `null` when the switch cannot be read, and NEVER a guess: `off` and
- * "unknown" have to stay distinguishable because runJudgeStep branches on them
- * differently, and a mislabelled `off` would make the driver wait two minutes
- * per session for a judging that is never coming.
- */
-export async function readJudgeMode(automationToken?: string): Promise<string | null> {
-  try {
-    const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.judgeConfig}`, {
-      headers: getAutomationHeaders(automationToken),
-    });
-    if (!r.ok) throw new Error(`GET ${ROUTES.swarm.admin.judgeConfig} -> ${r.status}`);
-    const body = await responseJson<{ judge?: { mode?: unknown } }>(r);
-    return typeof body.judge?.mode === "string" ? body.judge.mode : null;
-  } catch (err) {
-    console.error(
-      `[e2e] judge mode read failed — the judging is still queued, but this driver cannot wait for it: ${err instanceof Error ? err.message : err}`,
-    );
-    return null;
-  }
-}
-
-/**
  * How many judgement rows this session has on the append-only record
  * (issue #806). Read only on the expiry path, to tell an operator which of two
  * very different things happened. Never throws: it exists to make a log line
@@ -991,14 +1019,14 @@ export async function readJudgeMode(automationToken?: string): Promise<string | 
  */
 export async function countJudgements(
   sessionId: string | number,
-  automationToken?: string,
+  operatorToken?: string,
   opts?: { signal?: AbortSignal; timeoutMs?: number },
 ): Promise<number | null> {
   try {
     const signal = opts?.signal ?? AbortSignal.timeout(opts?.timeoutMs ?? 5_000);
     const r = await fetch(
       `${backendUrl()}${routePath(ROUTES.swarm.admin.sessionJudgements, { id: String(sessionId) })}`,
-      { headers: getAutomationHeaders(automationToken), signal },
+      { headers: operatorHeaders(operatorToken), signal },
     );
     if (!r.ok) return null;
     const body = await responseJson<{ judgements?: unknown[] }>(r);
@@ -1008,39 +1036,13 @@ export async function countJudgements(
   }
 }
 
-// ── Waiting for a judgement, which is the ONE asynchronous step left ────────
+// ── What the judging did, read off the record after publish ────────────────
 //
-// §4.4 under `enforce`: the API "records the request instant and the absolute
-// deadline … and pushes the request to the judge participants", and the
-// scheduler "waits for either `session.judged` or its deadline timer, whichever
-// first, and then calls finalize."
-//
-// THIS DRIVER HAS NO EVENT STREAM, so it polls the session state for `judged`
-// instead of holding a subscription. That is allowed: §9's "never polls the API
-// on an interval" is an invariant of `system-scheduler`, whose whole design is
-// the stream, and §11 says the no-polling rule "applies to the scheduler, not to
-// participants." A test driver is neither. What it may NOT do is shorten the
-// wait: §4.4's finalize is time-guarded, and "with no eligible consensus it
-// refuses finalize as a reasoned no-op until the deadline has passed", so giving
-// up before the STORED deadline would only earn a refusal. The deadline the API
-// returned is therefore the bound — never a locally chosen ceiling, and never a
-// fabricated judgement to escape it.
+// The driver requests no judging (that is `request-judging`, a lifecycle
+// transition, and the scheduler's alone — D55 (4)). What it can still say is
+// what the published record holds: a judgement on file, and who authored it.
 
-export interface JudgementWaitOutcome {
-  /** True when the session reached `judged` before the stored deadline. */
-  judged: boolean;
-  /** Why the wait ended — a landed consensus, or the deadline the API stored. */
-  reason: "judged" | "deadline";
-  waitedMs: number;
-}
-
-export interface JudgementWaitDeps {
-  readState?: (sessionId: string) => Promise<string | null>;
-  wait?: (ms: number) => Promise<void>;
-  now?: () => number;
-}
-
-/** The session's current lifecycle state, or null when it cannot be read. */
+/** The session's lifecycle state, or null when it cannot be read. */
 export async function readSessionState(sessionId: string): Promise<string | null> {
   try {
     const r = await fetch(`${backendUrl()}${routePath(ROUTES.swarm.sessionById, { id: sessionId })}`);
@@ -1052,261 +1054,25 @@ export async function readSessionState(sessionId: string): Promise<string | null
   }
 }
 
-/** How often the judgement poll re-reads the session. */
-export const JUDGEMENT_POLL_MS = 2_000;
-
-/**
- * Block until the session reaches `judged`, or the API's STORED deadline
- * passes — whichever comes first (§4.4).
- *
- * Never throws. Both endings are legitimate: a consensus that landed, and one
- * that did not. §4.4 is explicit that the second is published as `no_consensus`
- * and "nothing is fabricated", so the caller finalizes either way and the API
- * decides the outcome from its own stored instants.
- */
-export async function waitForJudgement(
-  sessionId: string,
-  deadlineAtIso: string,
-  deps: JudgementWaitDeps = {},
-): Promise<JudgementWaitOutcome> {
-  const readState = deps.readState ?? readSessionState;
-  const wait = deps.wait ?? sleep;
-  const now = deps.now ?? Date.now;
-  const startedAt = now();
-  const deadline = Date.parse(deadlineAtIso);
-  if (!Number.isFinite(deadline)) {
-    throw new Error(
-      `request-judging returned deadlineAt '${deadlineAtIso}', which is not a parseable instant — ` +
-        "the driver will not substitute a deadline of its own (§9: the stored deadline is never restarted)",
-    );
-  }
-  for (;;) {
-    const state = await readState(sessionId);
-    // `judged` is the lifecycle state a session holds between consensus being
-    // recorded and finalize (§4.4); `published` means something already
-    // finalized it, which is equally a reason to stop waiting.
-    if (state === "judged" || state === "published") {
-      return { judged: true, reason: "judged", waitedMs: now() - startedAt };
-    }
-    const remaining = deadline - now();
-    if (remaining <= 0) return { judged: false, reason: "deadline", waitedMs: now() - startedAt };
-    await wait(Math.min(remaining, JUDGEMENT_POLL_MS));
-  }
-}
-
-/**
- * What the judge step actually did, as the driver observed it (issue #817).
- *
- * This is a RETURN VALUE THAT HAS TO BE READ. It used to be discarded at
- * runSession's call site, which is why a session that recorded a judgement was
- * indistinguishable, on the progress stream, from one that judged nothing:
- * every session emitted `aggregated` and then `published`.
- *
- * `recorded` is the judgement-row count, and it is read ONLY on the deadline
- * path (that is the only path that has to tell "no consensus arrived" apart
- * from "a judgement landed and the state read missed it"). It is `null`
- * everywhere else — including on the success path, where `judged` already says
- * the judging landed — and `null` also means "the record could not be read",
- * which is deliberately not the same as `0`.
- */
-export interface JudgeStepOutcome {
-  /**
-   * The judge mode CAPTURED AT TURNOVER, not the one the switch reads now.
-   *
-   * §4.4: "Judge mode is captured at turnover. The session records the judge
-   * mode in force … at the instant it closes. An admin changing the mode
-   * afterwards affects later sessions, never one already settling." So this
-   * comes off the turnover response, and the driver no longer reads the
-   * `swarm_judge_config` switch to decide what this session's judging is —
-   * that read raced the operator and could brief this step on a mode this
-   * session was never settling under.
-   */
-  mode: JudgeMode;
-  /** True when judging was requested — `enforce` only, never `off` (§4.4). */
-  requested: boolean;
-  waitedForJudged: boolean;
-  judged: boolean;
+/** The judgement record of a published session, as the driver read it. */
+export interface JudgeObservation {
+  /** Judgement rows on the record; null when the record could not be read. */
   recorded: number | null;
-  /** The API's STORED absolute deadline, when one was issued (§4.4). */
-  deadlineAt: string | null;
-  /**
-   * WHO AUTHORED THE OPINION — "model", or a pre-#969 "fallback" (issue #969).
-   * `judged (enforce)` was the strongest thing this stream could say, and it is
-   * true of a judging that never happened: before #969 a session with no judge
-   * model recorded template prose and transitioned exactly like a real one.
-   * Null when unreadable, which is reported as unreadable rather than assumed
-   * good.
-   */
-  source?: string | null;
+  /** WHO AUTHORED the in-force opinion ("model"), or null when unreadable or absent. */
+  source: string | null;
 }
 
 /**
- * The two modes a SESSION can be settling under — §4.4, D48.
- *
- * `shadow` is absent on purpose. `swarm_judge_config.mode` still accepts it for
- * the historical rows, but `currentJudgeMode` (backend/src/swarm/domain.ts)
- * reduces it to `off` when it stamps the closing session, because D48 forbids
- * creating new shadow judgements. A driver carrying a third value here would be
- * describing a state no session can hold.
+ * Whether the PROGRESS STREAM reports a judgement for this session, and whose
+ * (issue #817, #969). A judgement on the record is the only thing that fires
+ * it: `not_judged` (mode `off`, §4.4 — never a failure) and `no_consensus`
+ * both leave the record empty and the stream silent, so neither invents a
+ * verdict. A judgement exists only under `enforce`, so that is the mode it
+ * reports.
  */
-export type JudgeMode = "off" | "enforce";
-
-/**
- * Whether a judge outcome is something the PROGRESS STREAM must report, and
- * under which mode (issue #817).
- *
- * Three things an operator watching a session go by has to be able to tell
- * apart, and before this they all rendered as `aggregated -> published`:
- *
- *   1. `off` — the shipped default, and §4.4's "this is not a failure and is
- *      never presented as one". Nothing was judged and nothing should be
- *      claimed: this returns null, so the stream stays silent and
- *      `not_judged` remains distinguishable from a judgement that landed.
- *   2. `enforce` with a judgement on the record — the event fires, carrying the
- *      mode, because it is a different fact about the session than silence.
- *   3. a wait that reached the deadline with NOTHING recorded — §4.4's
- *      `no_consensus`. No judging landed, so no event: the stream says exactly
- *      what the log says, and neither invents a verdict.
- *
- * The landing test is `judged || recorded > 0`, NOT `judged` alone. A consensus
- * recorded at or before the stored deadline is eligible however late this
- * driver's state read noticed it (§10: "eligibility is decided by stored time,
- * not event arrival"), so an event keyed on the poll's opinion rather than on
- * the record would contradict the outcome finalize goes on to publish.
- */
-export function judgedProgress(outcome: JudgeStepOutcome): { judgeMode: string; judgeSource?: string } | null {
-  if (outcome.mode !== "enforce") return null;
-  const landed = outcome.judged || (outcome.recorded ?? 0) > 0;
-  if (!landed) return null;
-  // The source rides along so the TUI can say WHO SPOKE, not merely that the
-  // session reached `judged` (issue #969).
-  return outcome.source ? { judgeMode: outcome.mode, judgeSource: outcome.source } : { judgeMode: outcome.mode };
-}
-
-/** Injection seam for runJudgeStep's effects. Real callers pass none. */
-export interface JudgeStepDeps {
-  readProvenance?: () => Promise<{ source: string | null; fallbackReason: string | null; model: string | null }>;
-  requestJudging?: () => Promise<EpochResult<RequestJudgingBody>>;
-  waitForJudgement?: (deadlineAt: string) => Promise<JudgementWaitOutcome>;
-  countJudgements?: () => Promise<number | null>;
-  log?: (line: string) => void;
-}
-
-/**
- * The judge step of the settlement chain — §4.4 step 2, between the aggregate
- * it reads and the finalize it must precede.
- *
- * IT BRANCHES ON THE MODE THE SESSION CAPTURED, and on nothing else.
- *
- * `off`: no judging is requested and nothing waits. §4.4 states it flatly —
- * "`aggregated → publish` directly, with judging outcome `not_judged`. This is
- * not a failure and is never presented as one." So there is no queued job that
- * drains as a skip any more, no wait to burn and no log line apologising for a
- * judge that was never asked.
- *
- * `enforce`: request judging, which stores the absolute deadline and pushes the
- * request to the judge participants; wait for a landed consensus or that
- * deadline; return. Finalize is the caller's, because finalize is what decides
- * the outcome and the caller is what publishes.
- *
- * WHY IT DOES NOT THROW WHEN NOTHING LANDS. `no_consensus` is an OUTCOME, not a
- * failure (§4.4: "a session with no consensus says so"), and the API decides it
- * from stored instants whatever this driver believes. Throwing here would turn
- * a legitimately published session into a red smoke run.
- *
- * WHY A `judge_mode_off` REFUSAL IS NOT ONE EITHER. Under `off` this step never
- * calls request-judging at all, so the refusal can only be reached when the
- * captured mode and the API's view disagree — a real disagreement worth naming
- * in the log, but one whose correct handling is the same as `off`: publish
- * through with `not_judged` rather than wedging the cadence.
- */
-export async function runJudgeStep(
-  sessionId: string,
-  judgeMode: JudgeMode,
-  automationToken?: string,
-  deps: JudgeStepDeps = {},
-): Promise<JudgeStepOutcome> {
-  const request = deps.requestJudging ?? (() => requestJudging(sessionId, automationToken));
-  const waitFor = deps.waitForJudgement ?? ((deadlineAt: string) => waitForJudgement(sessionId, deadlineAt));
-  const judgementCount = deps.countJudgements ?? (() => countJudgements(sessionId, automationToken));
-  const readProvenance = deps.readProvenance
-    ?? (() => latestJudgementProvenance(sessionId, automationToken).catch(() => ({ source: null, fallbackReason: null, model: null })));
-  const log = deps.log ?? ((line: string) => console.log(line));
-
-  const idle = (note: string): JudgeStepOutcome => {
-    log(note);
-    return { mode: "off", requested: false, waitedForJudged: false, judged: false, recorded: null, deadlineAt: null };
-  };
-
-  if (judgeMode !== "enforce") {
-    return idle(
-      "  judge mode=off at turnover — no judging is requested and nothing waits; the session publishes " +
-        "with outcome not_judged (§4.4), which is not a failure",
-    );
-  }
-
-  const requested = await request();
-  if (!requested.ok) {
-    if (requested.error === "judge_mode_off") {
-      return idle(
-        `  request-judging refused judge_mode_off for session ${sessionId} although turnover captured ` +
-          "`enforce` — the stored mode is what settles this session, so it publishes as not_judged",
-      );
-    }
-    // Any other refusal is a reasoned, final one (§4.6) about a transition the
-    // driver believed was legal. It is not survivable the way a missing
-    // consensus is: nothing was requested, so nothing can land, and continuing
-    // would publish a session whose judging step silently did not happen.
-    throw new Error(
-      `request-judging for session ${sessionId} was refused (HTTP ${requested.status}): ${requested.error}`,
-    );
-  }
-
-  const deadlineAt = requested.deadlineAt;
-  log(
-    `  judging requested (mode=enforce, deadline ${deadlineAt}` +
-      `${requested.transitioned ? "" : ", already requested — the STORED deadline is returned unchanged"})`,
-  );
-  const waited = await waitFor(deadlineAt);
-  if (waited.judged) {
-    // WHO SPOKE, not just that something did. A `source` other than "model" on
-    // a post-#969 stack means a pre-#969 row is still in force; either way the
-    // operator reads it here instead of inferring it from the mode.
-    const provenance = await readProvenance();
-    log(
-      `  judged after ${Math.round(waited.waitedMs / 1000)}s (source=${provenance.source ?? "unreadable"}` +
-        `${provenance.model ? `, model=${provenance.model}` : ""}` +
-        `${provenance.fallbackReason ? `, ${provenance.fallbackReason}` : ""})`,
-    );
-    return {
-      mode: "enforce", requested: true, waitedForJudged: true, judged: true,
-      recorded: null, deadlineAt, source: provenance.source,
-    };
-  }
-
-  // THE DEADLINE PASSED. Read the record, because the state poll and the record
-  // can legitimately disagree: §10 says "a consensus recorded before the stored
-  // deadline whose `session.judged` event arrives after it yields `judged`", so
-  // a row may be on file that this driver's last read had not yet seen.
-  // Finalize will decide from the stored instants regardless; the log just says
-  // which of the two it is looking at.
-  const recorded = await judgementCount();
-  const record = recorded == null
-    ? "could not read the judgement record"
-    : recorded > 0
-      ? `${recorded} judgement row(s) ARE recorded — finalize decides eligibility from the stored acceptance ` +
-        "instant against the stored deadline, not from when this driver noticed"
-      : "NO judgement row was recorded — finalize will publish this session as no_consensus, with no certificate " +
-        "and nothing fabricated (§4.4)";
-  log(
-    `  judging deadline ${deadlineAt} reached after ${Math.round(waited.waitedMs / 1000)}s without a landed ` +
-      `consensus — ${record}`,
-  );
-  const provenance = recorded != null && recorded > 0 ? await readProvenance() : { source: null };
-  return {
-    mode: "enforce", requested: true, waitedForJudged: true, judged: false,
-    recorded, deadlineAt, source: provenance.source,
-  };
+export function judgedProgress(o: JudgeObservation): { judgeMode: string; judgeSource?: string } | null {
+  if ((o.recorded ?? 0) <= 0) return null;
+  return o.source ? { judgeMode: "enforce", judgeSource: o.source } : { judgeMode: "enforce" };
 }
 
 export type ProducerComposeRail = Pick<
@@ -1381,11 +1147,11 @@ export async function runRegimeClassify(
 /** The in-force judgement's provenance: did a MODEL author it, or a template? */
 export async function latestJudgementProvenance(
   sessionId: string | number,
-  automationToken?: string,
+  operatorToken?: string,
 ): Promise<{ source: string | null; fallbackReason: string | null; model: string | null }> {
   const r = await fetch(
     `${backendUrl()}${routePath(ROUTES.swarm.admin.sessionJudgements, { id: String(sessionId) })}`,
-    { headers: getAutomationHeaders(automationToken) },
+    { headers: operatorHeaders(operatorToken) },
   );
   if (!r.ok) throw new Error(`GET sessionJudgements ${sessionId} -> ${r.status}`);
   const body = await responseJson<{
@@ -1417,8 +1183,9 @@ export async function runSession(
     // option would have left every caller passing a value that reaches nothing.
     rail?: SessionRail;
     /**
-     * Is this a `--db smoke-twin` boot? Only the window wait reads it — see the
-     * adopted-window branch below.
+     * Is this a `--local dump` boot? Carried for the caller's log only: a twin's
+     * restored epoch is the scheduler's to turn over like any other, so the
+     * driver waits its window out or refuses it (planEpochAdoption).
      */
     twin?: boolean;
     onProgress?: SessionProgress;
@@ -1468,34 +1235,24 @@ export async function runSession(
   // subject route, which publishes `subject.changed` (§6.2) — the retired
   // `subject` dispatcher action wrote an active subject the scheduler never
   // heard of.
-  await ensureSubjectViaAdmin(subject, rail.automationToken, { epochDurationSeconds: epochSeconds });
-  // THE WINDOW LENGTH IS A COLUMN ON THE SUBJECT NOW (§2.2, §2.3), set through
-  // the admin API before the epoch that will use it is opened. It used to be a
-  // `windowMinutes` argument on every `publish_brief`, which meant two sessions
-  // of one subject could advertise different windows and nothing recorded which
-  // was intended. §8 names this as the supported way to make a test fast: "a
-  // test that needs a fast lifecycle sets short epoch durations". The value is
-  // the cadence profile's own window — the same number the old argument carried.
-  await setSubjectEpochDuration(subject.id, epochSeconds, rail.automationToken);
-  // §4.1 — ONE CALL CREATES THE SESSION, PUBLISHES ITS BRIEF AND SETS THE
-  // WINDOW. There is no `scheduled` state any more and no separate brief step,
-  // so the session is `collecting` from its first instant and there is nothing
-  // to wait for: the transaction committed before this returned.
-  //
-  // IT IS ALSO HOW AN EPOCH ALREADY IN PROGRESS IS ADOPTED, with no pre-check.
-  // Turnover opens the successor (§4.3), so from the second session onward this
-  // subject's next epoch is ALREADY open before this driver asks for one — and a
-  // driver that restarts mid-window meets the same thing. §4.1 answers it
-  // directly: the uniqueness constraint "makes two concurrent first-openings for
-  // one subject yield one session; the second call returns it", with
-  // `created: false`. Reading the answer is strictly better than a "does one
-  // exist?" read followed by an open, which is that same race with a window in
-  // the middle of it.
-  const opened = requireEpoch(`epochs/open for subject '${subject.id}'`, await openEpoch(subject.id, rail.automationToken));
+  await ensureSubjectViaAdmin(subject, rail.operatorToken, { epochDurationSeconds: epochSeconds });
+  // THE WINDOW LENGTH IS A COLUMN ON THE SUBJECT (§2.2, §2.3), set through the
+  // admin API — §8's supported way to make a test fast: "a test that needs a
+  // fast lifecycle sets short epoch and judging durations and runs the real
+  // scheduler". A no-op when the stored duration already matches.
+  await setSubjectEpochDuration(subject.id, epochSeconds, rail.operatorToken);
+  // §4.1 — THE SCHEDULER OPENS THE EPOCH, from the subject's `subject.changed`
+  // (or on its rebuild), in one transaction that creates the session, publishes
+  // its brief and sets the window. This driver waits for it; it opens nothing.
+  // From the second session of a subject onward the epoch is the successor the
+  // scheduler's own turnover opened (§4.3), which is the same wait.
+  const opened = await waitForSchedulerEpoch(subject.id, {
+    epochSeconds,
+    maxWaitMs: epochSeconds * 1000 + OBSERVE_GRACE_MS * 2,
+  });
   const sessionId = opened.sessionId;
-  const adopted = !opened.created;
-  // The date is Postgres's, read back from the row the open created (migration
-  // 0022) — never computed here.
+  // The date is Postgres's, read back from the row the scheduler's open created
+  // (migration 0022) — never computed here.
   const date: string = await readSessionDate(sessionId);
   const tag = `[session ${sessionIndex}: ${date}/${subject.id}]`;
   console.log(`\n${tag}`);
@@ -1540,31 +1297,15 @@ export async function runSession(
   // subjects' own ids. A restored subject already carries its snapshot, so
   // there is nothing to seed (issue #537).
   if (opts.initializer === "simulation") {
-    await admin("subject_fixtures", { id: subject.id, name: subject.name, date }, rail.automationToken);
+    await admin("subject_fixtures", { id: subject.id, name: subject.name, date }, rail.operatorToken);
   }
 
   // NO `scheduled` EVENT. §4.1: "There is no `scheduled` state and no 'brief
-  // opens later.'" The stream used to emit one between the open and the brief,
-  // and emitting it now would put a state on the operator's screen that no
-  // session can ever be read back in.
-  if (adopted) {
-    console.log(
-      `${tag} session ${sessionId}: ADOPTING an epoch already open — turnover opened it (§4.3), and its ` +
-        `advertised windowClosesAt ${opened.windowClosesAt} is left exactly as published, never extended`,
-    );
-  } else {
-    // ASSERTED, NOT AWAITED. `epochs/open` answers `state: "collecting"` from a
-    // transaction that has committed, so the state poll that used to follow it
-    // could only ever pass on its first iteration. Checking the body instead
-    // keeps the claim and drops the wait that could not fail.
-    if (opened.state !== "collecting") {
-      throw new Error(`${tag} epochs/open returned state '${opened.state}', expected 'collecting' (§4.1)`);
-    }
-    console.log(
-      `${tag} session ${sessionId}: brief published, window open for ${epochSeconds}s ` +
-        `(closes ${opened.windowClosesAt})`,
-    );
-  }
+  // opens later.'" The scheduler's open committed the session as `collecting`.
+  console.log(
+    `${tag} session ${sessionId}: the scheduler's epoch, collecting until ${opened.windowClosesAt} ` +
+      `(epoch duration ${epochSeconds}s)`,
+  );
   emitSession("collecting", sessionId);
 
   // Enroll the no-show (own container + persistent keystore — the harness
@@ -1622,84 +1363,35 @@ export async function runSession(
   // waitUntilWindowCloses — and it throws rather than closing early if the two
   // cannot be reconciled.
   //
-  // A TWIN THAT ADOPTED PRODUCTION'S EPOCH IS THE ONE EXCEPTION, and it is not
-  // an exception to the promise — it is the absence of one. The deadline on an
-  // adopted session was advertised by PRODUCTION, to production's members,
-  // and arrived here inside a restored dump; this boot promised nobody
-  // anything, and the members it seats are all in this process. Honouring it
-  // means a twin cannot answer "does the judge run?" for another six hours —
-  // and worse, planWindowWait ABORTS rather than waits when the remaining
-  // window exceeds its ceiling ("refusing to wait (it would hang)"), so the
-  // session stalls instead of completing. That is exactly how the standing
-  // twin published no judgement and no receipt for weeks.
-  //
-  // So on a twin, an ADOPTED window is closed as soon as this boot's own seats
-  // have filed. A window this boot published is still waited out in full, on
-  // both twins and everything else: that one IS a promise.
-  const skipAdoptedWindow = Boolean(opts.twin) && adopted;
-  const closedWindow = skipAdoptedWindow
-    ? { waitedMs: 0, reason: "twin adopted production's epoch — its deadline was advertised by another deployment, to members this boot does not seat" }
-    : await waitUntilWindowCloses(sessionId, tag, { maxWaitMs: windowWaitCeilingMs(cadence) });
+  const closedWindow = await waitUntilWindowCloses(sessionId, tag, { maxWaitMs: windowWaitCeilingMs(cadence) });
   console.log(
     `${tag} window elapsed after ${Math.round(closedWindow.waitedMs / 1000)}s — ${closedWindow.reason}`,
   );
-  // §4.3 — THE BOUNDARY. One call, BOUND TO THIS EPOCH: it closes `sessionId`
-  // (recording an `absent` for each seated member with no take before
-  // `window_closes_at`) and opens N+1, in one transaction. Naming the epoch is
-  // what makes it safe to repeat — "if the named session is no longer the
-  // current collecting one … it never closes the successor" — so a re-run of an
-  // interrupted smoke replays the original result instead of closing the fresh
-  // window this same call just opened.
-  //
-  // The state poll that used to follow the close is gone with the queue: the
-  // close committed inside this transaction, so a poll for it afterwards could
-  // not fail and could not report anything the response has not already said.
-  const turned = requireEpoch(`epochs/turnover for session ${sessionId}`, await turnOverEpoch(subject.id, sessionId, rail.automationToken));
-  console.log(
-    `${tag} epoch closed${turned.replayed ? " (replayed — this turnover had already happened)" : ""}; ` +
-      `successor ${turned.openedSessionId} is open until ${turned.windowClosesAt}`,
+  // §4.3, §4.4 — THE SCHEDULER TURNS THE EPOCH OVER AND SETTLES IT: the
+  // boundary closes this session (recording `absent` for each seated member
+  // with no take) and opens the successor; then aggregate, judging when the
+  // mode captured at turnover asks for it, and finalize, which decides the
+  // outcome from stored instants. The driver watches each state go by. A
+  // `no_consensus` or `not_judged` outcome is published and is not a failure.
+  const settlement = await waitForSettlement(
+    sessionId,
+    { maxWaitMs: OBSERVE_GRACE_MS * 4 + epochSeconds * 1000 },
+    {},
+    (state) => {
+      // `judged` and `published` are announced below, from the record, in
+      // that order — so the stream reads aggregated → judged → published.
+      if (state !== "collecting" && state !== "judged" && state !== "published") emitSession(state, sessionId);
+    },
   );
-  emitSession("window_closed", sessionId);
-
-  // §4.4 step 1. `transitioned: false` is the idempotent success a resumed
-  // settlement gets (§5), not a refusal — the session is `aggregated` either way.
-  const aggregated = requireEpoch(`epochs/aggregate for session ${sessionId}`, await aggregateEpoch(sessionId, rail.automationToken));
-  if (aggregated.state !== "aggregated") {
-    throw new Error(`${tag} epochs/aggregate returned state '${aggregated.state}', expected 'aggregated'`);
-  }
-  emitSession("aggregated", sessionId);
-
-  // §4.4 step 2. The judge sits HERE — between the rollup it reads and the
-  // finalize that publishes. The MODE IS THE ONE THE TURNOVER CAPTURED, not one
-  // this driver re-reads off the switch: §4.4 pins the mode to the instant the
-  // session closed, so an admin flipping it mid-settlement cannot reach this
-  // session. Under `off` this returns at once with nothing requested.
-  const judgeOutcome = await runJudgeStep(sessionId, turned.judgeMode, rail.automationToken);
-  // AND THE STREAM HAS TO SAY SO (issue #817). This return used to be dropped
-  // on the floor, so the one surface an operator actually watches went
-  // `aggregated -> published` whether the soak had recorded a judgement or
-  // judged nothing at all — which is the same thing as the judge not running.
-  // `judgedProgress` decides from the RECORD, not from the wait's opinion: it
-  // stays silent at the shipped `off`, and it still fires for a consensus that
-  // was on file when the deadline came round — §10 decides eligibility from the
-  // stored acceptance instant, never from when this driver noticed.
-  const judged = judgedProgress(judgeOutcome);
+  console.log(`${tag} settled by the scheduler after ${Math.round(settlement.waitedMs / 1000)}s: ${settlement.states.join(" → ")}`);
+  // WHAT THE JUDGING DID, from the record (issue #817, #969): a judgement on
+  // file, and who authored it. Silent when there is none.
+  const recorded = await countJudgements(sessionId, rail.operatorToken);
+  const provenance = (recorded ?? 0) > 0
+    ? await latestJudgementProvenance(sessionId, rail.operatorToken).catch(() => ({ source: null, fallbackReason: null, model: null }))
+    : { source: null };
+  const judged = judgedProgress({ recorded, source: provenance.source });
   if (judged) emitSession("judged", sessionId, judged);
-
-  // §4.4 step 3 — FINALIZE DECIDES THE OUTCOME AND PUBLISHES, in one call, from
-  // stored instants. The driver does not compute the outcome and does not pass
-  // one: "the API compares the stored consensus acceptance instant (if a
-  // consensus was recorded) against the stored deadline."
-  //
-  // The lane-aware publish wait that used to follow is gone with the lane. So is
-  // the plain state poll: `published` is this call's own committed result, and
-  // `no_consensus` is one of the three outcomes it may legitimately publish
-  // (§4.4), never a failure for this driver to raise.
-  const published = requireEpoch(`epochs/finalize for session ${sessionId}`, await finalizeEpoch(sessionId, rail.automationToken));
-  console.log(
-    `${tag} finalized: outcome=${published.outcome}` +
-      `${published.replayed ? " (replayed — the outcome was already decided)" : ""}`,
-  );
   emitSession("published", sessionId);
 
   // BY ID. `getSession(date, subjectId)` answers with "the LATEST session that
@@ -1784,7 +1476,7 @@ async function main() {
   // along with the endpoint behind it — an ephemeral database is deleted or
   // inspected whole, and no bring-up may TRUNCATE rows it did not create.
   await runRegimeClassify(today, rail);
-  await ensureSubjectViaAdmin(subjects[0], rail.automationToken, { epochDurationSeconds: epochDurationSecondsFor(cadence) });
+  await ensureSubjectViaAdmin(subjects[0], rail.operatorToken, { epochDurationSeconds: epochDurationSecondsFor(cadence) });
 
   // Session 1: today's subject
   await runSession(subjects[0], 1, { rail, members, initializer: "simulation", cadence });
@@ -1802,12 +1494,13 @@ async function main() {
   console.log(`\n  new member eos: joins the roster — enrolls in its own container at session 2`);
 
   // ── Cross-role denial assertions ─────────────────────────────────────────
-  // Register a test member and verify identity-layer checks (always enforced
-  // regardless of RM_ALLOW_INSECURE). The smoke runs in insecure mode so role
-  // gates on regime write (analyticsProvider) and admin lifecycle (privileged)
-  // are open — the identity-layer submit checks are the universal enforcement.
+  // Register a test member and verify both layers: the identity-layer submit
+  // checks (5a, 5b) and the role gates (5c, 5d). D52 (1) retired the insecure
+  // gate, so a member token on the regime write (the analytics-producer's
+  // right) or on an epoch transition (the scheduler's `lifecycle_transitions`
+  // right, D55 (4)) is refused — asserted, not logged.
   const testReg = await fetch(`${backendUrl()}${ROUTES.swarm.register}`, {
-    method: "POST", headers: { "Content-Type": "application/json", ...getAutomationHeaders() },
+    method: "POST", headers: { "Content-Type": "application/json", ...operatorHeaders() },
     body: JSON.stringify({ memberId: "cross-role-test", name: "Cross Role Test", publicKey: (await generateKeyPair()).publicKeyB64 }),
   }).then(responseJson);
   const testToken: string = testReg.token;
@@ -1830,30 +1523,26 @@ async function main() {
   const mismatchOk = mismatchRes.status === 403 && String(mismatchRes.error).includes("token/member mismatch");
   if (!mismatchOk) throw new Error(`expected 403 token/member mismatch, got ${mismatchRes.status}`);
 
-  // 5c. Known member token calling regime write (would be 403 with
-  // ANALYTICS_TOKEN set; in insecure mode the gate is open so we document
-  // the expected behaviour rather than assert a specific status).
+  // 5c. A known member token on the regime write — the analytics-producer's
+  // right, never a member's. The body has the retired trigger shape on
+  // purpose: a 400 would be positive evidence that authorization PASSED and
+  // payload validation ran, so only 401/403 counts as refused.
   const regimeWriteRes = await fetch(`${backendUrl()}${ROUTES.swarm.regime}`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
     body: JSON.stringify({ asof: today }),
   });
-  // A member token can only get past the analytics-role check when that gate
-  // is open. The body intentionally has the retired trigger shape, so 400 is
-  // positive evidence that authorization passed and payload validation ran;
-  // 403 is the enforced-role result. Observe that boundary instead of reading
-  // ANALYTICS_TOKEN in this harness process.
-  const regimeGateOpen = regimeWriteRes.status !== 403;
-  console.log(`  cross-role: member → regime write → ${regimeWriteRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
+  console.log(`  cross-role: member → regime write → ${regimeWriteRes.status}`);
+  assertRoleRefused("member token on the regime write", regimeWriteRes.status);
 
-  // 5d. Known member token calling a lifecycle transition (same insecure-mode
-  // caveat). The epoch turnover, not the retired `close` action: it is the
-  // route that actually closes a window now (§4.3), so it is the one whose
-  // gate is worth observing.
+  // 5d. A known member token on an epoch transition — the scheduler's
+  // `lifecycle_transitions` right alone (D55 (4)). The turnover, not the
+  // retired `close` action: it is the route that closes a window now (§4.3).
   const adminCloseRes = await fetch(`${backendUrl()}${ROUTES.swarm.admin.epochTurnover}`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
     body: JSON.stringify({ subjectId: "cross-role-probe", expectedSessionId: "00000000-0000-4000-8000-000000000000" }),
   });
-  console.log(`  cross-role: member → epoch turnover → ${adminCloseRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
+  console.log(`  cross-role: member → epoch turnover → ${adminCloseRes.status}`);
+  assertRoleRefused("member token on the epoch turnover", adminCloseRes.status);
 
   // NO JUDGE COVERAGE HERE (issue #1026, D48/D53). This used to grant `themis`
   // the judge role and flip `swarm_judge_config.mode` to `enforce` around

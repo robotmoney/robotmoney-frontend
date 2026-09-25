@@ -60,7 +60,6 @@ describe("smokePassthroughEnv", () => {
         ...DEFAULT_STACK_DATABASE,
         roleUrls: { app: "postgres://rm_app:a@postgres:5432/robotmoney", worker: "postgres://rm_worker:w@postgres:5432/robotmoney" },
       },
-      credentials: { adminToken: "a", automationToken: "b", analyticsToken: "c" },
       environment: { class: "local", hash: "0123456789" },
       rmEnv: "stage",
       extraComposeEnv: smokePassthroughEnv({ WORKER_DATABASE_URL: "postgres://rm_worker:shell@elsewhere:5432/x" }),
@@ -82,7 +81,6 @@ describe("smokePassthroughEnv", () => {
       profile: "core",
       composeFiles: DEFAULT_COMPOSE_FILES,
       database: DEFAULT_STACK_DATABASE,
-      credentials: { adminToken: "a", automationToken: "b", analyticsToken: "c" },
       environment: { class: "local", hash: "0123456789" },
       rmEnv: "prod",
     };
@@ -375,7 +373,6 @@ describe("buildComposeEnv carries the deployment instance (criterion 113)", () =
     profile: "core",
     composeFiles: DEFAULT_COMPOSE_FILES,
     database: DEFAULT_STACK_DATABASE,
-    credentials: { adminToken: "a", automationToken: "b", analyticsToken: "c" },
     environment: { class: "local", hash: "0123456789" },
   };
   const stateDir = "/home/op/.local/state/robotmoney-smoke/rm_local_abc";

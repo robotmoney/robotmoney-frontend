@@ -442,9 +442,11 @@ describe("docker compose config — smoke data path resolution", () => {
     });
   });
 
-  test("the complete compose model parses without an analytics token file", () => {
+  test("the complete compose model parses with no token of any kind in its environment (spec §3, D52)", () => {
     const cfg = composeConfig({});
-    expect(cfg.secrets?.analytics_token?.file).toBe("/dev/null");
+    // No shared `analytics_token` secret any more: each holder mounts its own
+    // token directory from the instance's state directory.
+    expect(cfg.secrets ?? {}).toEqual({});
     expect(cfg.services["postgres"]).toBeDefined();
     expect(cfg.services["api"]).toBeDefined();
   });
@@ -555,14 +557,22 @@ describe("member-agent compose template — zero ambient model configuration", (
     expect("AGENT_MODEL" in env).toBe(false);
   });
 
-  test("analytics secret is mounted into the producer, never the member-agent", () => {
-    const tokenPath = "/tmp/robotmoney-smoke-session-secrets/analytics-token";
-    const cfg = composeConfig({ ANALYTICS_TOKEN_FILE_HOST: tokenPath });
-    expect(cfg.secrets?.analytics_token?.file).toBe(tokenPath);
-    expect(cfg.services["analytics-producer"]?.environment?.ANALYTICS_TOKEN_FILE).toBe("/run/secrets/analytics_token");
-    expect(cfg.services["analytics-producer"]?.secrets?.map((s) => s.source)).toContain("analytics_token");
-    expect(cfg.services["member-agent"]?.secrets ?? []).toEqual([]);
-    expect(JSON.stringify(cfg.services["member-agent"]?.volumes ?? [])).not.toContain(tokenPath);
+  test("the producer's own token directory is mounted into the producer (and its analytics client), never the member-agent or the api", () => {
+    const cfg = composeConfig({});
+    const holderDir = "tokens/analytics-producer";
+    expect(cfg.services["analytics-producer"]?.environment?.ANALYTICS_TOKEN_FILE).toBe("/run/rm-token/token");
+    const mounts = (svc: string) => JSON.stringify(cfg.services[svc]?.volumes ?? []);
+    expect(mounts("analytics-producer")).toContain(holderDir);
+    expect(mounts("worker-analytics")).toContain(holderDir);
+    for (const svc of ["member-agent", "api", "system-scheduler", "worker-research", "website-server"]) {
+      expect({ svc, mounted: mounts(svc).includes(holderDir) }).toEqual({ svc, mounted: false });
+    }
+    // The scheduler mounts its own holder's directory and nothing else of the instance.
+    expect(mounts("system-scheduler")).toContain("tokens/system-scheduler");
+    for (const svc of Object.keys(cfg.services)) {
+      expect({ svc, secrets: cfg.services[svc]?.secrets ?? [] }).toEqual({ svc, secrets: [] });
+      expect({ svc, operator: mounts(svc).includes("tokens/operator") }).toEqual({ svc, operator: false });
+    }
   });
 });
 
@@ -626,7 +636,9 @@ describe("smoke-specific behavior is selected by explicit orchestration", () => 
     expect(smokeMain).toContain("if (seeds && !committedSteps.has(\"prepare:seed\"))");
     expect(smokeMain).toContain("const migrates = requestsMigrate(process.argv);");
     expect(smokeMain).toContain("const seeds = shouldSeed(process.argv);");
-    expect(smokeMain).toContain("initialize: seeds ? initializeScenario : undefined");
+    // The producer's seed command runs on EVERY boot, not only under --seed:
+    // readiness requires it complete (§6.3, D52), and it is idempotent.
+    expect(smokeMain).toContain("initialize: producerSeed");
     // Retired: smoke no longer calls prod-bootstrap.ts's archive-adopt pipeline
     // for any boot, twin included — a twin is already fully populated by its
     // restore and has nothing for an initializer to create.

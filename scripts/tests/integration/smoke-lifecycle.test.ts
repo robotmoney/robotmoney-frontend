@@ -28,12 +28,22 @@
 //   (44, smoke half) the receipt's preflight is the full §7 registry, all seven
 //                 checks, run by the boot and passed;
 //   (28, roles)   the api runs as rm_app and the pipeline worker as rm_worker;
-//                 no container holds the local superuser.
+//                 no container holds the local superuser;
+//   criteria 31, 96, 27, 41 (runtime)  the boot provisioned the three service
+//                 tokens as its journaled `prepare (tokens)` step — a hash and
+//                 the holder's rights in the store, the secret only in the
+//                 holder's 0600 file — the REAL system-scheduler container read
+//                 its file and runs healthy and authenticated, no service holds
+//                 a token in its environment, and the receipt carries every
+//                 §6.3 readiness condition as a named, passed result.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertPlanRedacted, DEPLOYMENT_PHASES, readReceipt, type DeploymentPlan } from "../../lib/smoke-journal.ts";
-import { instancePaths } from "../../lib/smoke-state.ts";
+import { instancePaths, SERVICE_TOKEN_HOLDERS } from "../../lib/smoke-state.ts";
+import { READINESS_CHECKS } from "../../lib/smoke-readiness-scheduler.ts";
+import { createHash } from "node:crypto";
+import { statSync } from "node:fs";
 import {
   bootArgs,
   bootQuery,
@@ -80,6 +90,7 @@ let duringStatus = { code: -1, out: "" };
 let duringTui = { code: -1, out: "" };
 let serviceTokens: string[] = [];
 let containersAfterExit: Record<string, string> = {};
+let schedulerHealthAfterExit = "";
 
 beforeAll(async () => {
   h = harness("lifecycle");
@@ -111,16 +122,26 @@ beforeAll(async () => {
 
   exitCode = await boot.exited;
   containersAfterExit = projectContainers(h.project);
-  serviceTokens = [
-    containerEnv(h.project, "api", "ADMIN_TOKEN"),
-    containerEnv(h.project, "api", "AUTOMATION_TOKEN"),
-    existsSync(h.paths.tokenFiles["analytics-producer"]) ? readFileSync(h.paths.tokenFiles["analytics-producer"], "utf8").trim() : undefined,
-  ].filter((t): t is string => typeof t === "string" && t.length > 0);
+  schedulerHealthAfterExit = containerHealthStatus(h.project, "system-scheduler");
+  serviceTokens = SERVICE_TOKEN_HOLDERS.map((holder) =>
+    existsSync(h.paths.tokenFiles[holder]) ? readFileSync(h.paths.tokenFiles[holder], "utf8").trim() : undefined,
+  ).filter((t): t is string => typeof t === "string" && t.length > 0);
 }, BOOT_TIMEOUT_MS);
 
 afterAll(() => {
   if (h) teardown(h, boot);
 }, 300_000);
+
+/** A service container's Docker health status (`healthy`, `unhealthy`, `starting`), or `absent`. */
+function containerHealthStatus(project: string, service: string): string {
+  const id = Bun.spawnSync(
+    ["docker", "ps", "-q", "--filter", `label=com.docker.compose.project=${project}`, "--filter", `label=com.docker.compose.service=${service}`],
+    { stdout: "pipe" },
+  ).stdout.toString().trim().split("\n")[0];
+  if (!id) return "absent";
+  return Bun.spawnSync(["docker", "inspect", "--format", "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}", id], { stdout: "pipe" })
+    .stdout.toString().trim();
+}
 
 /** The plan block exactly as the boot printed it. */
 function printedPlan(): string {
@@ -143,14 +164,57 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
     }
   });
 
-  test("KNOWN GAP (wave 4): system-scheduler outlives the boot as a container, but is not asserted running", () => {
-    // The scheduler exists and was not torn down with the process. Whether it
-    // RUNS is not claimed here: it crash-loops on "automation token file not
-    // found" until wave 4 provisions its token file (criterion 113's mount is
-    // in place; the token is not). This is recorded, not folded into "alive".
-    const state = containersAfterExit["system-scheduler"] ?? "absent";
-    expect(state).not.toBe("absent");
-    console.log(`[smoke-lifecycle] system-scheduler state after the boot exited: ${state} (wave-4 gap; not asserted running)`);
+  test("criterion 31 (routed from wave 3): system-scheduler RUNS healthy after the boot exits — it read its provisioned token", () => {
+    // It used to crash-loop on "automation token file not found". The boot's
+    // `prepare (tokens)` step wrote the file; the REAL container read it
+    // through its read-only mount, authenticated, and answers healthy.
+    expect(containersAfterExit["system-scheduler"]).toBe("running");
+    expect(schedulerHealthAfterExit).toBe("healthy");
+    for (const service of ["analytics-producer", "worker-analytics"]) {
+      expect({ service, state: containersAfterExit[service] ?? "absent" }).toEqual({ service, state: "running" });
+    }
+  });
+
+  test("criteria 31, 96: three token files, the hash and the holder's rights in the store, no token in any environment", () => {
+    // Journaled as its own preparation step (§5), after the database was enrolled.
+    const steps = journalNow(h)!.phases.filter((r) => r.phase === "prepare").map((r) => `${r.step}:${r.status}`);
+    expect(steps).toContain("tokens:committed");
+    expect(steps.indexOf("tokens:committed")).toBeGreaterThan(steps.indexOf("bootstrap:committed"));
+    const rights: Record<string, string> = {
+      "system-scheduler": "lifecycle_transitions,read_sessions,read_subjects",
+      "analytics-producer": "analytics_ingestion",
+      operator: "admin",
+    };
+    for (const holder of SERVICE_TOKEN_HOLDERS) {
+      const file = h.paths.tokenFiles[holder];
+      expect({ holder, mode: statSync(file).mode & 0o777 }).toEqual({ holder, mode: 0o600 });
+      expect({ holder, dirMode: statSync(h.paths.tokenDirs[holder]).mode & 0o777 }).toEqual({ holder, dirMode: 0o700 });
+      const secret = readFileSync(file, "utf8").trim();
+      const hash = createHash("sha256").update(secret).digest("hex");
+      // The store holds the hash and the rights — and never the secret.
+      const row = bootQuery(h.project, `SELECT holder || '|' || array_to_string(ARRAY(SELECT unnest(rights) ORDER BY 1), ',') FROM automation_tokens WHERE token_hash = '${hash}'`);
+      expect({ holder, row }).toEqual({ holder, row: `${holder}|${rights[holder]}` });
+      expect(bootQuery(h.project, `SELECT count(*) FROM automation_tokens WHERE token_hash = '${secret.replace(/'/g, "''")}' OR instance = '${secret.replace(/'/g, "''")}'`)).toBe("0");
+    }
+    expect(bootQuery(h.project, `SELECT count(*) FROM automation_tokens WHERE instance = '${h.instance}'`)).toBe("3");
+    // No service carries a token in its environment (smoke spec §3, D52).
+    for (const service of ["api", "worker-analytics", "worker-research", "system-scheduler", "analytics-producer", "website-server"]) {
+      for (const key of ["ADMIN_TOKEN", "AUTOMATION_TOKEN", "ANALYTICS_TOKEN"]) {
+        expect({ service, key, value: containerEnv(h.project, service, key) ?? null }).toEqual({ service, key, value: null });
+      }
+    }
+    expect(containerEnv(h.project, "system-scheduler", "SCHEDULER_TOKEN_FILE")).toBe("/run/rm-token/token");
+    expect(containerEnv(h.project, "analytics-producer", "ANALYTICS_TOKEN_FILE")).toBe("/run/rm-token/token");
+    expect(containerEnv(h.project, "api", "ANALYTICS_TOKEN_FILE") ?? null).toBeNull();
+  });
+
+  test("criteria 27, 41: the receipt carries every §6.3 readiness condition as a named, passed result", () => {
+    const receipt = readReceipt(h.paths)!;
+    expect(receipt.readiness.map((c) => c.check)).toEqual([...READINESS_CHECKS]);
+    for (const check of receipt.readiness) expect({ check: check.check, pass: check.pass }).toEqual({ check: check.check, pass: true });
+    // The green-on-container-up list is gone: no readiness entry is just "healthy (compose --wait)".
+    expect(JSON.stringify(receipt.readiness)).not.toContain("compose --wait");
+    expect(receipt.readiness.find((c) => c.check === "scheduler-authenticated")!.detail).toContain("authenticated");
   });
 
   test("criterion 20: the plan is printed before the first mutation, and the journal's phase order proves it", () => {
@@ -309,7 +373,7 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
   });
 
   test("criterion 40: every state file is under the instance directory, and the checkout's .agents/ is untouched", () => {
-    for (const file of [h.paths.journalFile, h.paths.receiptFile, h.paths.stackStateFile, h.paths.logFile, h.paths.tokenFiles["analytics-producer"]]) {
+    for (const file of [h.paths.journalFile, h.paths.receiptFile, h.paths.stackStateFile, h.paths.logFile, ...Object.values(h.paths.tokenFiles)]) {
       expect({ file, exists: existsSync(file) }).toEqual({ file, exists: true });
     }
     expect(existsSync(join(h.paths.webDir, "current"))).toBe(true);
@@ -346,7 +410,7 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
     const receipt = readReceipt(h.paths)!;
     const status = runCommand(h, "smoke-status.ts", ["--instance", h.instance]);
     expect(status.code).toBe(0);
-    expect(status.out).toContain(`source: receipt — reached readiness under plan ${receipt.planId}`);
+    expect(status.out).toContain(`source: receipt (HISTORY) — reached readiness under plan ${receipt.planId}`);
     const tail = receipt.schema.migrations.at(-1)!;
     expect(status.out).toContain(`schema: manifest ${receipt.schema.manifestHash}; ${receipt.schema.migrations.length} migration(s), ending ${tail}`);
     expect(receipt.preflight.length).toBeGreaterThan(0);

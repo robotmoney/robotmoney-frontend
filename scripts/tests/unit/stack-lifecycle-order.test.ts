@@ -26,7 +26,6 @@ const config: StackConfig = {
   profile: "core",
   composeFiles: ["docker-compose.yml"],
   database: { user: "u", password: "p", name: "d" },
-  credentials: { adminToken: "admin", automationToken: "automation", analyticsToken: "analytics" },
   environment: { class: "ci", hash: "0123456789" },
 };
 
@@ -172,7 +171,6 @@ test("a deferred provider service starts after initialization and waits for heal
   const fullConfig: StackConfig = {
     ...config,
     profile: "full",
-    credentials: { ...config.credentials, analyticsTokenFile: "/etc/hosts" },
   };
   const stack = createStack(fullConfig, {
     runtime: fakeRuntime(rec, {

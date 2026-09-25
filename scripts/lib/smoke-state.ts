@@ -834,8 +834,6 @@ export interface StackStateRecord {
   readonly dbUser: string;
   readonly dbPassword: string;
   readonly dbName: string;
-  /** Path only, never the value. */
-  readonly analyticsTokenFile?: string;
   readonly logFile: string;
   /** The named volume the data lives in, for a compose-owned Postgres. */
   readonly pgVolume?: string;

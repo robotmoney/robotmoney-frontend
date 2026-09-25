@@ -15,11 +15,18 @@
 //   A3  `--local volume --instance A` reattaches A's OWN saved volume.
 //
 // After every step, B is exactly as it was: the same container ids, each still
-// running and never restarted (same start time), its volume present, and its
-// journal and receipt byte-for-byte unchanged.
+// running and never restarted (same start time — system-scheduler included, now
+// that it holds a provisioned token and no longer crash-loops), its volume
+// present, and its journal and receipt byte-for-byte unchanged.
+//
+// And the service tokens (spec §3, §5; criterion 31): the two instances hold
+// DIFFERENT token files, and A's are never rotated — not by the resume of its
+// interrupted plan (the same plan id reuses its committed `prepare (tokens)`),
+// and not by `smoke:down` then `--local volume` (volume reuses the saved ones).
 import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { DEPLOYMENT_PHASES, readReceipt } from "../../lib/smoke-journal.ts";
+import { SERVICE_TOKEN_HOLDERS } from "../../lib/smoke-state.ts";
 import {
   BOOT_TIMEOUT_MS,
   containerIdentity,
@@ -54,10 +61,12 @@ function bNow(): NonNullable<typeof bBaseline> {
   };
 }
 
-// system-scheduler crash-loops until wave 4 provisions its token file (the
-// known gap smoke-lifecycle.test.ts records), so Docker restarts it on its own
-// and its start time moves: for it, only the container id is compared.
-const CRASH_LOOPING = new Set(["system-scheduler"]);
+/** An instance's three token files, by holder. */
+function tokensOf(h: BootHarness): Record<string, string> {
+  return Object.fromEntries(SERVICE_TOKEN_HOLDERS.map((holder) => [holder, readFileSync(h.paths.tokenFiles[holder], "utf8").trim()]));
+}
+/** A's tokens as its first boot provisioned them: every later step must keep them. */
+let aTokens: Record<string, string> | undefined;
 
 function expectBUntouched(step: string): void {
   const now = bNow();
@@ -66,7 +75,7 @@ function expectBUntouched(step: string): void {
   for (const [service, was] of Object.entries(base)) {
     const is = now.containers[service];
     expect({ step, service, id: is?.id }).toEqual({ step, service, id: was.id });
-    if (!CRASH_LOOPING.has(service) && was.state === "running") {
+    if (was.state === "running") {
       expect({ step, service, state: is?.state, startedAt: is?.startedAt }).toEqual({ step, service, state: "running", startedAt: was.startedAt });
     }
   }
@@ -99,6 +108,13 @@ describe("two real instances on one host: each operation acts only on the named 
     expect(DEPLOYMENT_PHASES.indexOf(interrupted.phases.at(-1)!.phase)).toBeGreaterThanOrEqual(DEPLOYMENT_PHASES.indexOf("replace"));
     expect(interrupted.phases.at(-1)!.status).toBe("interrupted");
     expectBUntouched("after A was interrupted");
+    // Its tokens were provisioned before replacement began, and are A's own.
+    expect(interrupted.phases.some((r) => r.phase === "prepare" && r.step === "tokens" && r.status === "committed")).toBe(true);
+    aTokens = tokensOf(a!);
+    const bTokens = tokensOf(b!);
+    for (const holder of SERVICE_TOKEN_HOLDERS) {
+      expect({ holder, shared: aTokens[holder] === bTokens[holder] }).toEqual({ holder, shared: false });
+    }
 
     current = spawnBoot(a!);
     const code = await current.exited;
@@ -111,6 +127,9 @@ describe("two real instances on one host: each operation acts only on the named 
     // A's own stack is up under A's project, beside B's.
     expect(containerIdentity(a!.project).api?.state).toBe("running");
     expectBUntouched("after A resumed to readiness");
+    // The same plan id never rotates: the resume reused the committed step.
+    expect(tokensOf(a!)).toEqual(aTokens!);
+    expect(resumed.phases.filter((r) => r.phase === "prepare" && r.step === "tokens").length).toBe(1);
   }, BOOT_TIMEOUT_MS * 2);
 
   test("smoke:status --instance A reports A's project and never B's", () => {
@@ -141,5 +160,8 @@ describe("two real instances on one host: each operation acts only on the named 
     expect(text).not.toContain(`${b!.project}_pgdata`);
     expect(containerIdentity(a!.project).api?.state).toBe("running");
     expectBUntouched("after A reattached its volume");
+    // `--local volume` reuses the instance's saved tokens and mints none.
+    expect(tokensOf(a!)).toEqual(aTokens!);
+    expect((journalNow(a!)?.phases ?? []).some((r) => r.phase === "prepare" && r.step === "tokens")).toBe(false);
   }, BOOT_TIMEOUT_MS);
 });

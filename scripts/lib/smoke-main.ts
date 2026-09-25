@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { resolveSmokeEnv } from "./smoke-env.ts";
 import { hostname } from "node:os";
 import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
-import { homeEnvFilePath, urlForRole } from "./env-role.ts";
+import { databaseName, homeEnvFilePath, urlForRole } from "./env-role.ts";
 import { bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
 import { dropShellMigrationCredential, shadowingStackEnvWarnings, smokePassthroughEnv, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
 import { resolveBackupFiles } from "./restore-container.ts";
@@ -16,7 +16,12 @@ import type { GeneratedRolePasswords } from "./smoke-state.ts";
 import { assertSmokeTwinIsTarget, bringUpTwin, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration, smokeTwinUrlFromContainer, smokeTwinVolumeName } from "./smoke-twin.ts";
 import { teardownContainer } from "./restore-container.ts";
 import { listSmokeVolumes, makeDockerRunner, purgeSmokeEvalContainers, removeSmokeVolumes } from "./smoke-volumes.ts";
-import { provisionSmokeAnalyticsToken, removeSmokeAnalyticsToken } from "./smoke-secret.ts";
+import { OPERATOR_TOKEN_FILE_ENV } from "./operator-token.ts";
+import { readServiceToken, runTokenProvisioning, tokenReuseRefusal } from "./smoke-secret.ts";
+import { awaitReadiness, READINESS_POLL_MS, READINESS_TIMEOUT_MS, type GateCheck } from "./smoke-readiness-scheduler.ts";
+import { makeReadinessObserver } from "./smoke-readiness-probes.ts";
+import { readWebCompatPlan, webCompatRefusal } from "./smoke-web-compat.ts";
+import { readContractVersion } from "./api-range.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
 import { renderCadenceLine, resolveSmokeCadenceForBoot, stageCadenceApplies } from "./smoke-cadence.ts";
 import {
@@ -39,8 +44,8 @@ import {
   createStack,
   DEFAULT_STACK_DATABASE,
   describePortHolders,
+  composeArgs,
   dockerClientHostEnv,
-  generateStackCredentials,
   hostBackendUrl,
   internalDatabaseUrl,
   makeCommandRunner,
@@ -55,6 +60,7 @@ import {
   type StackEvent,
   type StackHostPorts,
   type StackStep,
+  WORKER_LANE_SERVICES,
 } from "../stack/index.ts";
 import { gitRunner, resolveSourceIdentities } from "../stack/source-identity.ts";
 import { ROUTES } from "@robotmoney/contract";
@@ -67,6 +73,7 @@ import {
   readRolePasswords,
   readStackState,
   resolveInstance,
+  SERVICE_TOKEN_HOLDERS,
   stateRoot,
   writeStackState,
   type DeploymentLock,
@@ -459,7 +466,7 @@ const remote = dataPath.kind === "external"
       if (!readerUrl || !workerUrl) {
         return fatal(`the remote database needs rm_readonly and rm_worker lines in ${homeEnvFilePath()} (spec §3), beside the connection values and rm_app.`);
       }
-      const target: HostTarget = { host: homeEnv.host!, port: Number(homeEnv.port ?? "5432"), database: homeEnv.database!, sslmode: homeEnv.sslmode ?? "require" };
+      const target: HostTarget = { host: homeEnv.host!, port: Number(homeEnv.port ?? "5432"), database: databaseName(homeEnv)!, sslmode: homeEnv.sslmode ?? "require" };
       return { readerUrl, workerUrl, target };
     })()
   : undefined;
@@ -492,28 +499,33 @@ const reattachOverlay = reattachedVolume && reattachedVolume !== instanceVolume 
 const composeFilesRun = [composeFilesBase, dataPathOverlay, reattachOverlay, imagesOverride].filter(Boolean).join(":");
 const researchKeys = ["channel-divergence", "late-cycle-signals"];
 
-// Admin dashboard password (/admin — the task-queue jobs dashboard, guarded by
-// ADMIN_TOKEN) and the automation token: FRESH random secrets every launch.
-// Issue #456: they used to be published by mutating process.env on THIS
-// process. They are threaded EXPLICITLY instead: every in-process consumer
-// takes an `automationToken` parameter, and every genuine child process gets an
-// explicit `AUTOMATION_TOKEN: automationToken` entry object — never via
-// `...process.env` inheriting a value this process mutated onto itself. Never
-// printed, never in the stack record, never in the plan. Minted by the shared
-// stack config's generateStackCredentials() so every consumer mints them
-// identically.
-const credentials = generateStackCredentials();
-const adminPassword = credentials.adminToken;
-const automationToken = credentials.automationToken;
-// Analytics-provider bearer credential (issue #106): the api verifies it, the
-// worker and producer submit with it. Handed to compose as a Docker secret FILE
-// in the instance's own token directory (smoke-secret.ts), written by the
-// `instance` preparation after the plan, never in the environment.
-const analyticsToken = credentials.analyticsToken;
-const analyticsTokenFile = paths.tokenFiles["analytics-producer"];
-credentials.analyticsTokenFile = analyticsTokenFile;
-process.env.ANALYTICS_TOKEN_FILE_HOST = analyticsTokenFile;
-delete process.env.ANALYTICS_TOKEN;
+// THE THREE SERVICE TOKENS (spec §3, §5). Nothing here mints one: each is a
+// per-instance file under `tokens/<holder>/`, provisioned once by the one entry
+// module that writes the token store (backend/scripts/provision-tokens.ts) and
+// mounted into its holder alone. `--local blank|dump` provisions them as the
+// journaled `prepare (tokens)` step below. A remote target and a `--local
+// volume` reattach NEVER mint: they reuse the files the instance holds, and
+// absent files refuse HERE, before any mutation — a remote target's tokens come
+// only from an explicit `bun scripts/prod-init.ts provision-tokens` (§5,
+// criterion 43). This process reads the operator's token (the admin right) for
+// its own admin calls and hands a child only the file's PATH.
+if (remote || (requestedDataPath.kind === "ephemeral" && requestedDataPath.reattach)) {
+  const refusal = tokenReuseRefusal(paths, remote ? "remote" : "volume");
+  if (refusal) fatal(refusal);
+}
+/** Every token file the instance holds right now, for the by-value redaction below. */
+const heldTokens = (): string[] =>
+  SERVICE_TOKEN_HOLDERS.flatMap((holder) => {
+    try {
+      return [readServiceToken(paths, holder)];
+    } catch {
+      return [];
+    }
+  });
+/** The operator's token (§3: the admin routes), read when an admin call needs it. */
+const operatorToken = (): string => readServiceToken(paths, "operator");
+/** A child that makes admin calls gets the operator token's PATH, never its value. */
+const operatorTokenEnv = (): Record<string, string> => ({ [OPERATOR_TOKEN_FILE_ENV]: paths.tokenFiles.operator });
 
 // Model + credential before anything is provisioned (AC-MODEL-01) — what the
 // standing stack refuses, and why: scripts/lib/smoke-inference-preflight.ts.
@@ -599,14 +611,12 @@ function urlPassword(url: string | undefined): string[] {
  * the remote database's three from `~/.env`, a restored dump's superuser
  * (added once it is restored). A TYPED owner password never enters this
  * process at all: the preparation child that prompts for it uses it and exits
- * (backend/scripts/smoke-prepare.ts). Service tokens: admin,
- * automation, analytics. Participant keys: every credential-file entry's key,
- * bearer and model key.
+ * (backend/scripts/smoke-prepare.ts). Service tokens: whatever the instance
+ * already holds, plus each one `prepare (tokens)` provisions. Participant keys:
+ * every credential-file entry's key, bearer and model key.
  */
 const runSecrets: string[] = [
-  adminPassword,
-  automationToken,
-  analyticsToken,
+  ...heldTokens(),
   ...urlPassword(dataPath.kind === "external" ? dataPath.url : undefined),
   ...urlPassword(remote?.readerUrl),
   ...urlPassword(remote?.workerUrl),
@@ -755,7 +765,6 @@ function makeStackConfig(): StackConfig {
     profile: "full", // core (postgres + api) + the worker lanes, scheduler and producer
     composeFiles: composeFilesRun.split(":"),
     database: databaseFor(dataPath),
-    credentials,
     environment: stackEnvironment,
     rmEnv: stackRmEnv,
     // §4.4: never allow-insecure under RM_ENV=prod (refuseWeakeningFlagsOnProd).
@@ -830,9 +839,6 @@ function cleanup(): void {
   }
   console.log("\n[smoke] tearing down (keeping postgres data)…");
   const r = downStack ? downStack() : dockerCompose(["down"], false);
-  if (r.exitCode === 0 && !removeSmokeAnalyticsToken(analyticsTokenFile, paths)) {
-    console.log(`[smoke] WARNING: refused unsafe analytics-token cleanup path ${analyticsTokenFile}`);
-  }
   // The smoke-twin goes LAST, after the stack has stopped talking to it. Its VOLUME
   // survives on purpose (the ephemeral-pgdata contract); smoke:clean reclaims it.
   if (smokeTwinContainer) {
@@ -907,8 +913,6 @@ function writeStateFile(): void {
     dbUser: composePostgres ? DB_USER : `(${dataPath.kind} — see the banner)`,
     dbPassword: composePostgres ? DB_PASSWORD : `(${dataPath.kind} — see the banner)`,
     dbName: composePostgres ? DB_NAME : `(${dataPath.kind} — see the banner)`,
-    // Path only (never the bearer value), so smoke:down can remove it.
-    analyticsTokenFile,
     logFile,
     // Data location: the volume a blank boot created, or the one a `--local
     // volume` boot reattached. `--local volume` with no name reattaches exactly
@@ -1057,6 +1061,14 @@ async function observeSchema(): Promise<{ ledger: string[]; manifestHash: string
 // --- Orchestration --------------------------------------------------------
 /** Thrown at a phase boundary after a SIGINT/SIGTERM, once the stop is journaled (§1.4). */
 class StoppedAtBoundary extends Error {}
+/**
+ * A refusal taken before this boot's first write to anything: the target, the
+ * live site, or a container (§13.3's web-compat refusal). The failure path
+ * journals it and exits non-zero, and — unlike a startup failure — stops no
+ * writer and tears nothing down: every container running is the PREVIOUS
+ * deployment's, and the refusal exists to leave it exactly as it was.
+ */
+class RefusedBeforeAnyWrite extends Error {}
 
 const EMPTY_OUTCOME: PhaseOutcome = {
   migrationsApplied: [],
@@ -1185,8 +1197,8 @@ async function main(): Promise<void> {
 
   // ── Preparation that precedes the stack ───────────────────────────────────
   // The instance's generated files: the four role passwords of a Postgres this
-  // boot owns (§5), the analytics bearer (§3: a file in the instance's state
-  // directory, per holder) and the compose overlays.
+  // boot owns (§5) and the compose overlays. The service tokens are the
+  // `prepare (tokens)` step's, once the database is enrolled.
   await begin("prepare", "instance");
   // The stack record FIRST, before any compose call or container: the compose
   // project is fixed by the instance, and `smoke:status` / `smoke:down` find a
@@ -1197,7 +1209,6 @@ async function main(): Promise<void> {
     rolePasswords = instanceRolePasswords(paths, mode);
     runSecrets.push(...Object.values(rolePasswords));
   }
-  provisionSmokeAnalyticsToken(paths, analyticsToken);
   if (dataPathOverlay && dataPath.kind !== "smoke-twin") writeFileSync(dataPathOverlay, dataPathOverlayYaml(dataPath));
   if (reattachOverlay && reattachedVolume) {
     const overrideFile = reattachOverlay;
@@ -1246,7 +1257,7 @@ async function main(): Promise<void> {
   }
 
   // ── The bring-up IS scripts/stack's bring-up (§11.3 E5) ──────────────────
-  // database → assemble → site → build → preflight → services → /health, in ONE
+  // assemble → database → site → build → preflight → services → /health, in ONE
   // shared implementation. The smoke contributes the `full` profile, the
   // database half (prepareDatabase), the narration, and — through beforeStep —
   // its phase boundaries.
@@ -1368,20 +1379,49 @@ async function main(): Promise<void> {
       await prepare("seed");
       await commit();
     }
+    // THE THREE SERVICE TOKENS (§3, §5): provisioned unattended for a database
+    // this boot created or restored, once per plan — a rerun of the same plan
+    // finds the step committed and reuses the files, never rotating them
+    // (§1.3). Every other boot reuses the instance's files and never mints.
+    if ((mode === "blank" || mode === "dump") && !committedSteps.has("prepare:tokens")) {
+      await begin("prepare", "tokens");
+      const provisioned = await runTokenProvisioning(repoRoot, {
+        instance: instance.name,
+        stateRoot: statesRoot,
+        target: hostTarget!,
+        lock: { backendPid: targetLock!.backendPid, holder: targetLock!.holder },
+        stateDir: paths.dir,
+      }, prepareChildEnv(process.env));
+      if (!provisioned.ok) throw new Error(`tokens: ${provisioned.error}`);
+      runSecrets.push(...heldTokens());
+      log(`service tokens provisioned for ${provisioned.holders.join(", ")} (hash and rights in the token store; secrets in ${paths.tokensDir})`);
+      await commit();
+    } else {
+      const refusal = tokenReuseRefusal(paths, remote ? "remote" : "volume");
+      if (refusal) throw new Error(refusal);
+    }
   }
 
-  // The simulation analytics seed is the analytics-producer's own seed command,
-  // a client of the running api: it belongs to READINESS (§6.3, "analytics-
-  // producer ... completed its seed command"). Simulation data only — does not
-  // restore the retired v0 archive.
-  async function initializeScenario(): Promise<void> {
-    log("simulation analytics seed…");
-    await stack.composeAsync(
-      ["run", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "seed"],
-      "simulation analytics seed",
-      { stdout: outFd, stderr: errFd },
-    );
-    log("simulation analytics initialized (archive omitted)");
+  // The analytics-producer's own seed command, a client of the running api
+  // that authenticates with the producer's token: it belongs to READINESS on
+  // EVERY boot (§6.3: "`analytics-producer` to have authenticated with its
+  // token and completed its seed command"), not only under `--seed`. It is
+  // idempotent (the EDGAR bootstrap and a research refresh). Its outcome is a
+  // named readiness result, so a failure is recorded, not thrown past.
+  let seedOutcome = { completed: false, detail: "the analytics-producer seed command has not run" };
+  async function producerSeed(): Promise<void> {
+    log("analytics-producer seed command…");
+    try {
+      await stack.composeAsync(
+        ["run", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "seed"],
+        "analytics-producer seed",
+        { stdout: outFd, stderr: errFd },
+      );
+      seedOutcome = { completed: true, detail: "`src/producer/index.ts seed` exited 0 with the producer's token" };
+    } catch (err) {
+      seedOutcome = { completed: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+    log(`analytics-producer seed: ${seedOutcome.completed ? "complete" : `FAILED — ${seedOutcome.detail}`}`);
   }
 
   // The phase boundaries, hung on the stack's own steps. Each ends the open
@@ -1390,10 +1430,25 @@ async function main(): Promise<void> {
     if (stackStep === "assemble") {
       await commit();
       await begin("prepare", "assemble");
+    } else if (stackStep === "database") {
+      // §13.3, D54: BEFORE THE FIRST MUTATION OF THE TARGET — no role, no
+      // lock, no migrate, no seed, no token — the site that will serve this
+      // plan's api (the one it deploys, else the live one) must admit this
+      // tree's API version. stack.up assembles `_static` before this boundary
+      // precisely so the decision can be taken here. A refusal leaves the
+      // database, the live site and every container as they were.
+      await commit();
+      await begin("prepare", "web-compat");
+      const compat = readWebCompatPlan(paths.webDir, join(repoRoot, "_static"), readContractVersion(repoRoot));
+      const refusal = webCompatRefusal(compat);
+      if (refusal) throw new RefusedBeforeAnyWrite(refusal);
+      log(`web compat: API ${compat.apiVersion} is inside ${(compat.deploys ?? compat.live)!.siteId}'s range (${(compat.deploys ?? compat.live)!.range})`);
+      await commit();
     } else if (stackStep === "site") {
       // W7: the assembled `_static` becomes this instance's current site
       // (stack.ts places it; scripts/lib/smoke-site.ts). A switch of `current`
-      // changes what a running website-server serves, so it is journaled.
+      // changes what a running website-server serves, so it is journaled. The
+      // compat decision was taken at the `database` boundary, before any write.
       await commit();
       await begin("prepare", "site");
     } else if (stackStep === "build") {
@@ -1440,18 +1495,43 @@ async function main(): Promise<void> {
     // migrate run); the stack's legacy in-container migrate step never runs.
     prepareDatabase,
     migrate: false,
-    initialize: seeds ? initializeScenario : undefined, deferredServices: ["analytics-producer"],
+    initialize: producerSeed, deferredServices: ["analytics-producer"],
     beforeStep,
   }));
 
   // ── Readiness (§6.3) and the receipt (§1.4) ─────────────────────────────
-  const readiness: { check: string; pass: boolean; detail: string }[] = [
-    { check: "api-health", pass: true, detail: `${hostBackendUrl(apiPort)}/health answered ok` },
-    { check: "website-server-health", pass: true, detail: `${backendUrl}/health answered ok` },
-    { check: "analytics-producer", pass: true, detail: "started and healthy (compose --wait)" },
-    ...(seeds ? [{ check: "analytics-producer-seed", pass: true, detail: "the simulation analytics seed completed" }] : []),
-  ];
+  // Every condition of §6.3, each a named result, read from its own authority
+  // (scripts/lib/smoke-readiness-probes.ts) and judged by one gate
+  // (smoke-readiness-scheduler.ts). Containers being up proves none of them.
+  // The gate only reads: a scheduler with exhausted work fails readiness and
+  // is left exactly as it is — the restart is the operator's (§6.3).
   writeStateFile();
+  const observeReadiness = makeReadinessObserver({
+    project,
+    composePrefix: composeArgs(project, composeFilesRun.split(":")),
+    apiUrl: hostBackendUrl(apiPort),
+    operatorToken: operatorToken(),
+    workerServices: [...WORKER_LANE_SERVICES],
+    producerService: "analytics-producer",
+    schedulerService: "system-scheduler",
+    seed: () => seedOutcome,
+    run: (args) => {
+      const r = Bun.spawnSync(["docker", ...args], { env: dockerEnv!, stdout: "pipe", stderr: "pipe" });
+      return { exitCode: r.exitCode ?? -1, stdout: r.stdout.toString(), stderr: r.stderr.toString() };
+    },
+  });
+  let lastLine = "";
+  const verdict = await awaitReadiness(observeReadiness, {
+    timeoutMs: READINESS_TIMEOUT_MS,
+    pollMs: READINESS_POLL_MS,
+    onPoll: (checks: readonly GateCheck[]) => {
+      const line = `readiness: ${checks.filter((c) => c.pass).length}/${checks.length} — waiting on ${checks.filter((c) => !c.pass).map((c) => c.check).join(", ") || "nothing"}`;
+      if (line !== lastLine) log((lastLine = line));
+    },
+  });
+  for (const c of verdict.checks) log(`  readiness ${c.check}: ${c.pass ? "pass" : "FAIL"} — ${c.detail}`);
+  if (!verdict.passed) throw new Error(`readiness failed: ${verdict.reason}`);
+  const readiness = verdict.checks;
 
   if (!process.env.CI) {
     // Non-fatal, as it always was: data freshness is logged, never a boot failure.
@@ -1554,7 +1634,7 @@ async function runCiScenario(stack: Stack): Promise<never> {
     console.log("\n[smoke] dump: running one live swarm session with the restored personas…");
     process.env.BACKEND_URL = backendUrl;
     const session = await import(join(repoRoot, "scripts", "lib", "swarm", "session.ts"));
-    const roster = await session.rosterMembers(undefined, automationToken);
+    const roster = await session.rosterMembers(undefined, operatorToken());
     if (roster === null) throw new Error("dump restored no readable IC roster");
     const members = adoptRestoredRoster(scenario, roster, undefined, { twin: true, seatAllActive: seatAllRestored });
     const rail = {
@@ -1565,7 +1645,7 @@ async function runCiScenario(stack: Stack): Promise<never> {
       backendUrl,
       modelConfig: resolveModelConfig(process.env, { standingStack: staticPortMode }),
       onboardedHomes: new Map<string, { volume: string; passphrase?: string }>(),
-      automationToken,
+      operatorToken: operatorToken(),
     };
     await session.runSession(scenario.subjects[0]!, 1, { rail, members, initializer: "adopt", cadence });
 
@@ -1576,25 +1656,26 @@ async function runCiScenario(stack: Stack): Promise<never> {
   }
 
   if (process.env.CI && dataPath.kind !== "smoke-twin") {
-    // RM_ALLOW_INSECURE=1: docker-compose.smoke.yml runs the api with this flag,
-    // so the session driver is told explicitly (it is secure-by-default). The
+    // No RM_ALLOW_INSECURE: D52 (1) retired the insecure gate, and the driver
+    // presents the operator's token for its admin calls and asserts that a
+    // member token is REFUSED on the role-gated routes (session.ts 5c/5d). The
     // stack's exact compose env + COMPOSE_FILE ride along because the driver
     // launches one member-agent CONTAINER per present member (issue #361), and
     // its `docker compose run` children must re-resolve the same compose model.
     console.log("\n[smoke] running swarm session…");
     await run(["bun", "run", "scripts/lib/swarm/session.ts"], repoRoot,
-      { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, AUTOMATION_TOKEN: automationToken, RM_ALLOW_INSECURE: "1" } as Record<string, string>, "swarm session");
+      { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, ...operatorTokenEnv() } as Record<string, string>, "swarm session");
 
     // Issue #209: the repo-native single-member starter against this live stack,
     // including its two missing-credential guards. (D21: REST is the only transport.)
     console.log("[smoke] running starter swarm agent (REST)…");
-    const starterEnv = { ...process.env, BACKEND_URL: backendUrl, AUTOMATION_TOKEN: automationToken } as Record<string, string>;
+    const starterEnv = { ...process.env, BACKEND_URL: backendUrl, ...operatorTokenEnv() } as Record<string, string>;
     const { BACKEND_URL: _missingBackend, ...withoutBackendUrl } = starterEnv;
     await expectRunFailure(["bun", "run", "scripts/starter-swarm-agent.ts", "--transport=rest", "--e2e"], repoRoot,
       withoutBackendUrl, "starter swarm agent missing BACKEND_URL guard");
-    const { AUTOMATION_TOKEN: _missingAutomation, ...withoutAutomationToken } = starterEnv;
+    const { [OPERATOR_TOKEN_FILE_ENV]: _missingOperator, ...withoutOperatorToken } = starterEnv;
     await expectRunFailure(["bun", "run", "scripts/starter-swarm-agent.ts", "--transport=rest", "--e2e"], repoRoot,
-      withoutAutomationToken, "starter swarm agent missing AUTOMATION_TOKEN guard");
+      withoutOperatorToken, `starter swarm agent missing ${OPERATOR_TOKEN_FILE_ENV} guard`);
     await run(["bun", "run", "scripts/starter-swarm-agent.ts", "--transport=rest", "--e2e"], repoRoot,
       starterEnv, "starter swarm agent REST live-stack exercise");
 
@@ -1604,7 +1685,7 @@ async function runCiScenario(stack: Stack): Promise<never> {
 
     console.log("[smoke] running browser checks…");
     await run(["bun", "run", "test:browser"], repoRoot,
-      { ...process.env, BACKEND_URL: backendUrl, ADMIN_TOKEN: adminPassword } as Record<string, string>, "browser checks");
+      { ...process.env, BACKEND_URL: backendUrl, ...operatorTokenEnv() } as Record<string, string>, "browser checks");
 
     // LIVE steady-state smoke (issue #128): assert published swarm sessions, a
     // fresh regime snapshot, wallet/vault provenance live, both research
@@ -1626,7 +1707,7 @@ async function runCiScenario(stack: Stack): Promise<never> {
     if (process.env.RMPC_RELEASE_E2E === "1") {
       console.log("\n[smoke] running rmpc release e2e driver…");
       await run(["bun", "run", "scripts/rmpc-release-e2e.ts"], repoRoot,
-        { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, AUTOMATION_TOKEN: automationToken } as Record<string, string>, "rmpc release e2e");
+        { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, ...operatorTokenEnv() } as Record<string, string>, "rmpc release e2e");
     }
 
     // Additive, env-gated REAL-INFERENCE onboarding admission sweep (§11 R8),
@@ -1655,7 +1736,7 @@ async function runCiScenario(stack: Stack): Promise<never> {
             composeProject: project,
             composeFiles: composeFilesRun.split(":"),
             backendUrl,
-            automationToken,
+            automationToken: operatorToken(),
             composeSpawnEnv: stack.spawnEnv,
             env: { ...process.env, AGENT_MODEL: model },
             onEvent: (msg) => console.log(`[smoke] onboarding-real-eval[${model}]: ${msg}`),
@@ -1728,6 +1809,15 @@ main().catch(async (err) => {
     try { await journal.endPhase("failed", em); } catch { /* the error below is the one to report */ }
   }
   await releaseTargetLock();
+
+  // A refusal before this boot's first write: nothing of this plan ran, and
+  // every running container is the previous deployment's. Stopping its writers
+  // (below) would take down the live service over a boot that changed nothing.
+  if (err instanceof RefusedBeforeAnyWrite) {
+    console.error(`[smoke] refused: ${em}`);
+    console.error("[smoke] nothing was changed: the database, the live site and every running container are as they were.");
+    process.exit(1);
+  }
 
   // CI tears the stack down, which also stops the writers, and must exit
   // non-zero for the job to fail.

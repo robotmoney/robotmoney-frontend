@@ -39,18 +39,10 @@ services:
       # budget. Blank default = unset inside the container (fail-closed).
       RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: ${RM_ALLOW_HANDLE_NAMESPACE_VIOLATION:-}
       PG_NAMESPACE_GUARD_TIMEOUT_MS: ${PG_NAMESPACE_GUARD_TIMEOUT_MS:-}
-      # ADMIN_TOKEN / AUTOMATION_TOKEN / ANALYTICS_TOKEN generation ownership
-      # is an open decision (devops#7) — not declared as a stack secret here,
-      # forwarded the same unset-by-default way docker-compose.yml does.
-      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
-      AUTOMATION_TOKEN: ${AUTOMATION_TOKEN:-}
-      # Analytics-provider bearer credential (issue #106). stack has no
-      # docker-secrets-file mechanism of its own; producer/index.ts:23 already
-      # accepts the plain-env form, which is what docker-compose.yml's field
-      # guide records as the intended shape once file secrets are dropped
-      # (stack-orchestrator.md §6) — so this is the bare var, not
-      # ANALYTICS_TOKEN_FILE.
-      ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}
+      # No service token (smoke spec §3, D52): the api validates every
+      # service bearer against its own automation-token store, so it holds
+      # no shared secret to compare against — the same absence
+      # docker-compose.yml's api service states.
       # Passkey relying-party origin/host (issue #617).
       WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-}
       WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
