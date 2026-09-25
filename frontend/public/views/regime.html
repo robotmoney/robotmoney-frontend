@@ -113,33 +113,46 @@
           </template>
         </div>
 
-        <!-- Full-history composite chart. composite/macro/on-chain/factor lines
-             are always drawn; only the regime bands, S&P 500 and ETH overlays
-             toggle (S&P/ETH only appear when the price extras exist). -->
+        <!-- History chart: the composite and its panel indices over a chosen
+             range. The chips are its legend: each index line, the regime bands,
+             and the S&P 500 / ETH overlays (only when the price extras exist).
+             The range chips pick the span; beyond a year the lines take one
+             reading a week while the bands stay day by day. -->
         <div class="rv__chart-card">
           <div class="rv__chart-head">
             <div class="rv__chart-title-group">
-              <span class="rv__chart-title">Full history</span>
-              <template x-if="visible.bands">
-                <span class="rv__legend">
-                  <template x-for="r in bgLegend()" :key="r.label">
-                    <span class="rv__legend-item"><span class="rv__legend-swatch" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>
-                  </template>
-                </span>
+              <span class="rv__chart-title">History</span>
+              <span class="rv__chart-meta" x-text="historyWeekly() ? 'One reading a week' : 'Daily'"></span>
+            </div>
+            <div class="rv__chips" role="group" aria-label="Time range">
+              <template x-for="r in ranges" :key="r.id">
+                <button type="button" class="rv__chip" :aria-pressed="range === r.id ? 'true' : 'false'" @click="setRange(r.id)" x-text="r.label"></button>
               </template>
             </div>
-            <div class="rv__chips">
+          </div>
+          <div class="rv__chart-legend">
+            <div class="rv__chips" role="group" aria-label="Lines">
               <!-- On and off is the chip's own state, white when on, as every
-                   chip on the site; the dot is the series' colour on the chart.
-                   The bands are not a series, so their chip has no dot: the
-                   key beside the title names their colours. -->
-              <button type="button" class="rv__chip" :aria-pressed="visible.bands ? 'true' : 'false'" @click="toggle('bands')">Regime bands</button>
+                   chip on the site; the dot is the series' colour on the chart. -->
+              <template x-for="sr in historySeries()" :key="sr.key">
+                <button type="button" class="rv__chip" :aria-pressed="series[sr.key] ? 'true' : 'false'" @click="toggleSeries(sr.key)"><i class="rv__chip-dot" data-mark="series" :style="`background:${sr.color}`" aria-hidden="true"></i><span x-text="sr.label"></span></button>
+              </template>
               <template x-if="hasSpx()">
                 <button type="button" class="rv__chip" :aria-pressed="visible.spx ? 'true' : 'false'" @click="toggle('spx')"><i class="rv__chip-dot" data-mark="series" :style="`background:${overlayColor('spx')}`" aria-hidden="true"></i>S&amp;P 500</button>
               </template>
               <template x-if="hasEth()">
                 <button type="button" class="rv__chip" :aria-pressed="visible.eth ? 'true' : 'false'" @click="toggle('eth')"><i class="rv__chip-dot" data-mark="series" :style="`background:${overlayColor('eth')}`" aria-hidden="true"></i>ETH</button>
               </template>
+            </div>
+            <div class="rv__chips rv__chips--bands" role="group" aria-label="Regime bands">
+              <!-- The bands are not a series, so their chip has no dot: the
+                   key beside it names their three treatments. -->
+              <button type="button" class="rv__chip" :aria-pressed="visible.bands ? 'true' : 'false'" @click="toggle('bands')">Regime bands</button>
+              <span class="rv__legend" :class="{ 'is-off': !visible.bands }">
+                <template x-for="r in bgLegend()" :key="r.label">
+                  <span class="rv__legend-item"><span class="rv__legend-swatch" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>
+                </template>
+              </span>
             </div>
           </div>
           <!-- Positioned for the empty state laid over the canvas's box. -->
@@ -151,14 +164,24 @@
           </div>
         </div>
 
-        <!-- Per-panel indicator tables -->
-        <!-- No column-count class: the grid auto-fits as many ~396px tracks as the
-             page can hold, so the panel count no longer has to be spelled out here. -->
+        <!-- Per-panel indicator tables, one at a time behind tabs: macro first.
+             Every panel stays in the page (x-show), so a #panel-<key> link from
+             a session page, or any id inside a card, opens its own tab. -->
         <div class="rv__panels">
+          <div class="rv__chips rv__tabs" role="tablist" aria-label="Indicator panels">
+            <template x-for="p in panelsList()" :key="p">
+              <button type="button" class="rv__chip" role="tab" :id="`tab-${p}`" :aria-controls="`panel-${p}`" :aria-selected="panelTab === p ? 'true' : 'false'" :aria-pressed="panelTab === p ? 'true' : 'false'" :tabindex="panelTab === p ? 0 : -1" @click="setPanelTab(p)"
+                      @keydown.arrow-right.prevent="const l = panelsList(); setPanelTab(l[(l.indexOf(p) + 1) % l.length]); $nextTick(() => document.getElementById(`tab-${panelTab}`)?.focus())"
+                      @keydown.arrow-left.prevent="const l = panelsList(); setPanelTab(l[(l.indexOf(p) + l.length - 1) % l.length]); $nextTick(() => document.getElementById(`tab-${panelTab}`)?.focus())">
+                <span x-text="panelLabel(p)"></span> <span class="rv__tab-n" x-text="indicatorsIn(p).length || ''"></span>
+              </button>
+            </template>
+          </div>
           <template x-for="p in panelsList()" :key="p">
-            <div class="rv__panel-card" :id="`panel-${p}`">
+            <div class="rv__panel-card" :id="`panel-${p}`" role="tabpanel" :aria-labelledby="`tab-${p}`" x-show="panelTab === p">
               <div class="rv__panel-card-head">
                 <h3 class="rv__panel-card-title" :id="slug(panelLabel(p) + ' panel')"><span x-text="panelLabel(p) + ' panel'"></span></h3>
+                <p class="rv__panel-card-lede" x-text="panelTip(p)"></p>
               </div>
               <table class="rv__table">
                 <thead>
@@ -215,44 +238,37 @@
               <h3 class="rv__panel-card-title" id="predictive-power-alignment">Predictive power &amp; alignment</h3>
               <span class="rv__panel-card-meta" x-text="corrSampleMeta()"></span>
             </div>
-            <!-- Each table scrolls inside its own box: at 390px the forward
-                 table is ~600px wide and the card's overflow hid every ETH
-                 column with nothing to show they were there. -->
-            <template x-if="hasForward()">
-              <div class="rv__table-scroll">
-                <table class="rv__table rv__corr-table">
-                  <thead>
-                    <tr><th>Index → forward return</th><template x-for="c in fwdCols()" :key="c[0]"><th class="rv__num" x-text="c[1]"></th></template></tr>
-                  </thead>
-                  <tbody>
-                    <template x-for="row in corrRows()" :key="'f' + row[0]">
-                      <tr>
-                        <td x-text="row[1]"></td>
-                        <template x-for="c in fwdCols()" :key="c[0]"><td class="rv__num" :style="`color:${rhoColor(fwdCell(row[0], c[0]))}`" :title="rhoTitle(fwdCell(row[0], c[0]))" x-text="rhoText(fwdCell(row[0], c[0]))"></td></template>
-                      </tr>
-                    </template>
-                  </tbody>
-                </table>
-              </div>
-            </template>
-            <template x-if="hasConcurrent()">
-              <div class="rv__table-scroll">
-                <table class="rv__table rv__corr-table">
-                  <thead>
-                    <tr><th>Index ↔ current price (alignment)</th><template x-for="c in conCols()" :key="c[0]"><th class="rv__num" x-text="c[1]"></th></template><th class="rv__num"></th><th class="rv__num"></th><th class="rv__num"></th><th class="rv__num"></th></tr>
-                  </thead>
-                  <tbody>
-                    <template x-for="row in corrRows()" :key="'c' + row[0]">
-                      <tr>
-                        <td x-text="row[1]"></td>
-                        <template x-for="c in conCols()" :key="c[0]"><td class="rv__num" :style="`color:${rhoColor(conCell(row[0], c[0]))}`" :title="rhoTitle(conCell(row[0], c[0]))" x-text="rhoText(conCell(row[0], c[0]))"></td></template>
-                        <td></td><td></td><td></td><td></td>
-                      </tr>
-                    </template>
-                  </tbody>
-                </table>
-              </div>
-            </template>
+            <!-- One table: per asset, today's alignment, then the correlation
+                 with the return over the next 30, 90 and 180 days. Each cell is
+                 the figure and a signed bar from the centre line. It scrolls
+                 inside its own box on a phone, with the index names pinned. -->
+            <p class="rv__corr-key">ρ is a rank correlation, from −1 to +1. <strong>Today</strong> is whether the index moves with the price now. <strong>30, 90 and 180 days</strong> is whether a high reading came before a rise over the days that followed. Near 0 means no relation.</p>
+            <div class="rv__table-scroll">
+              <table class="rv__table rv__corr-table">
+                <thead>
+                  <tr>
+                    <th rowspan="2" class="rv__corr-idx">Index</th>
+                    <template x-for="a in corrAssets()" :key="a[0]"><th class="rv__corr-group" :colspan="corrHorizons().length" x-text="a[1]"></th></template>
+                  </tr>
+                  <tr>
+                    <template x-for="c in corrColumns()" :key="c.id"><th class="rv__num" :class="{ 'rv__corr-start': c.first }" x-text="c.label"></th></template>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="row in corrRows()" :key="row[0]">
+                    <tr>
+                      <th scope="row" class="rv__corr-idx" x-text="row[1]"></th>
+                      <template x-for="c in corrColumns()" :key="row[0] + c.id">
+                        <td class="rv__num rv__rho" :class="{ 'rv__corr-start': c.first }" :title="rhoTitle(corrCell(row[0], c.asset, c.h))">
+                          <span class="rv__rho-fig" :style="`color:${rhoColor(corrCell(row[0], c.asset, c.h))}`" x-text="rhoText(corrCell(row[0], c.asset, c.h))"></span>
+                          <span class="rv__rho-bar" aria-hidden="true"><i :style="rhoBarStyle(corrCell(row[0], c.asset, c.h))"></i></span>
+                        </td>
+                      </template>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
             <div class="rv__foot">
               <p><strong>Forward:</strong> ρ = rank correlation between today's index level and the asset's log return over the next {30, 90, 180} calendar days, evaluated daily over the trailing window. The predictive measure.</p>
               <p><strong>Alignment:</strong> ρ between today's index and today's log-price. It checks whether the panel tracks the asset right now and predicts nothing. Price-derived indicators (the S&amp;P 500 trend and IWM/SPY breadth in the equity factor panel; the BTC/ETH ratio and the ETH trend in on-chain) inflate it by construction.</p>
@@ -304,6 +320,11 @@
                     <span class="rv__legend-item"><span class="rv__legend-swatch" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>
                   </template>
                 </span>
+              </div>
+              <div class="rv__chips rv__bt-chips" role="group" :aria-label="`${bt.title} lines`">
+                <template x-for="c in btSeries(bt.key)" :key="c.id">
+                  <button type="button" class="rv__chip" :aria-pressed="c.on ? 'true' : 'false'" @click="toggleBt(bt.key, c.id)"><span x-html="c.swatch"></span><span x-text="c.label"></span></button>
+                </template>
               </div>
               <div class="rv__bt-chart" style="position:relative">
                 <canvas :data-bt="bt.key"></canvas>
