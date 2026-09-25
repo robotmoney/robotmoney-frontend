@@ -85,10 +85,12 @@ async function activePlainMember(): Promise<TestMember> {
  */
 async function judgingSession(prefix: string): Promise<{ sessionId: string; deadlineAt: string }> {
   await setJudgeMode("enforce");
+  // The author exists BEFORE the epoch opens, so the epoch seats it: the
+  // roster is fixed at open, and a member activated afterwards is refused.
+  author ??= await activeMember();
   const subjectId = await activeSubject(prefix, 600);
   const opened = await epoch.openEpoch(subjectId);
   if (!opened.ok) throw new Error("openEpoch failed");
-  author ??= await activeMember();
   const took = await submitTake(author, sessionDate(await sessionRow(opened.sessionId)), subjectId, { body: `a take on ${prefix}` });
   if (took.status !== 201) throw new Error(`submitTake failed: ${JSON.stringify(took)}`);
   const turned = await epoch.turnOverEpoch(subjectId, opened.sessionId);

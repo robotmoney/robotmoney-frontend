@@ -1,5 +1,6 @@
 <!-- Admin — topic detail (/admin/swarm/subjects/:id): edit with optimistic
-     concurrency and deactivate. Issue #159. Buildless — factory registered at
+     concurrency, deactivate and activate (admin subject edits, D55 decision 4).
+     Issue #159. Buildless — factory registered at
      boot (alpine/views/admin/swarm-subject.js). -->
 <section class="container adm" x-data="adminSwarmSubject" x-init="init()">
 
@@ -44,12 +45,13 @@
         <div class="adm-toolbar">
           <button type="button" class="adm-btn" @click="startEdit()" data-testid="topic-edit-toggle">Edit</button>
           <button type="button" class="adm-btn adm-btn--ghost" x-show="topic.status === 'active'" @click="openDeactivate()" data-testid="topic-deactivate-toggle">Deactivate</button>
+          <button type="button" class="adm-btn adm-btn--ghost" x-show="topic.status !== 'active'" @click="openActivate()" data-testid="topic-activate-toggle">Activate</button>
         </div>
 
         <div x-show="deactivateOpen" x-cloak class="adm-modal" data-testid="deactivate-confirm">
           <div class="adm-modal__panel">
             <h3>Deactivate <span x-text="topic.name"></span>?</h3>
-            <p class="adm-dim">Prevents new sessions. Existing sessions, briefs, snapshots, and recommendations are unchanged.</p>
+            <p class="adm-dim">Closes the topic's open session (absences recorded) and opens no new one; the scheduler settles what it closed. Briefs, snapshots, and recommendations are unchanged.</p>
             <label class="adm-field">
               <span>Reason</span>
               <textarea x-model="deactivateReason" class="adm-input" rows="2" placeholder="10–500 characters" data-testid="deactivate-reason"></textarea>
@@ -58,6 +60,22 @@
             <div class="adm-toolbar">
               <button type="button" class="adm-btn" :disabled="submitting" @click="confirmDeactivate()" data-testid="deactivate-confirm-submit">Confirm deactivate</button>
               <button type="button" class="adm-btn adm-btn--ghost" @click="cancelDeactivate()">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <div x-show="activateOpen" x-cloak class="adm-modal" data-testid="activate-confirm">
+          <div class="adm-modal__panel">
+            <h3>Activate <span x-text="topic.name"></span>?</h3>
+            <p class="adm-dim">Opens no session itself: the scheduler opens the topic's first session on its schedule.</p>
+            <label class="adm-field">
+              <span>Reason</span>
+              <textarea x-model="activateReason" class="adm-input" rows="2" placeholder="10–500 characters" data-testid="activate-reason"></textarea>
+            </label>
+            <span x-show="activateError" x-text="activateError" class="rm-error" data-testid="activate-error"></span>
+            <div class="adm-toolbar">
+              <button type="button" class="adm-btn" :disabled="submitting" @click="confirmActivate()" data-testid="activate-confirm-submit">Confirm activate</button>
+              <button type="button" class="adm-btn adm-btn--ghost" @click="cancelActivate()">Cancel</button>
             </div>
           </div>
         </div>

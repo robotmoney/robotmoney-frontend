@@ -161,33 +161,34 @@ export { SWARM_ROSTER_CAP };
 // conjunct on the INSERT itself so a race cannot slip past the read.
 export { SWARM_TAKE_REVISION_CAP };
 
-// THE STATES IN WHICH A TAKE MAY STILL BE AMENDED — an ALLOWLIST, and that is
-// the whole point of it (issue #757 review).
+// THE WINDOW IS WHAT FREEZES A TAKE (D51, scheduler spec §4.2).
 //
-// This was written as a denylist ("refuse when aggregated or published"), which
-// was exhaustive of the post-aggregation states ON THE DAY IT WAS WRITTEN. #752
-// then added `judged` between `aggregated` and `published`, and the denylist
-// silently reopened the amendment window on a session whose weight vector and
-// whose verbatim take prose had ALREADY been frozen by aggregateSession() and
-// were about to be published unchanged (publishSession is an unconditional
-// UPDATE that does not re-aggregate). The result would be a published session
-// whose `weights` are not meanTakeWeights() over its own take set and whose
-// `disagreements[].positions[].view` quotes a body the member has withdrawn —
-// the exact defect the gate exists to prevent.
+// There used to be a state ALLOWLIST here, `TAKES_AMENDABLE_STATES`, deciding
+// whether a member's SECOND take was accepted while a FIRST take was governed by
+// the advertised instant alone. It encoded the pre-epoch lifecycle, where an
+// admin `close` could move a session out of `collecting` before its advertised
+// deadline and the two rules had to be told apart. The epoch model has no such
+// close: a session is `collecting` from its first instant until turnover or
+// deactivation. So D51's rule is one rule for every take, first or amendment: a
+// take lands while its session is `collecting` AND the database clock is before
+// `window_closes_at`, both read inside the accepting statement (the INSERT in
+// submitRecommendation). A second list that could disagree with that statement
+// was the defect, so it is gone rather than kept in step.
+
+// THE ONE DEFAULT FOR A TAKE'S `revision` (D51, criterion 128).
 //
-// As an allowlist, a state added to swarm_sessions later is FROZEN by default.
-// Reopening the window for a new state is then a deliberate edit here, next to
-// this paragraph, rather than an omission somewhere else.
-//
-// `scheduled` is included for completeness (no take can exist yet, so the
-// amendment branch is unreachable from it); `window_closed` is included because
-// #570 keeps the advertised deadline authoritative right up to its instant even
-// after an early close.
-export const TAKES_AMENDABLE_STATES: ReadonlySet<string> = new Set([
-  "scheduled",
-  "collecting",
-  "window_closed",
-]);
+// `revision` is hashed into the judge's `inputs_digest` and signed into the
+// consensus receipt, so every path that reads a take must resolve an absent
+// value to the SAME number, or one take set yields two digests. Migration 0028
+// made the column `NOT NULL DEFAULT 1` and backfilled every row to 1, so 1 is
+// the only value that agrees with the database; the judge input once used 0.
+// Every reader goes through takeRevision(): judgeInputFromFrozen here, toTake
+// in projections.ts, and the receipt assembler in consensus-receipt.ts.
+export const TAKE_REVISION_DEFAULT = 1;
+
+export function takeRevision(value: unknown): number {
+  return value == null ? TAKE_REVISION_DEFAULT : Number(value);
+}
 
 // ── Reads ─────────────────────────────────────────────────────────────────
 // Issue #782: `status: 'active'` on a member row means the SEAT is live, not
@@ -505,12 +506,12 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   // the cursor's row-comparison predicate, so pages are stable even as new
   // sessions are inserted between requests.
   // Two per-row facts a history row needs without fetching each session
-  // (issue #991): how many members filed (distinct members, not revisions),
-  // and the target the session's own brief carried. Bounded by LIMIT, so they
-  // run for at most one page of rows.
+  // (issue #991): how many members filed (one final take per member, D51, not
+  // revisions), and the target the session's own brief carried. Bounded by
+  // LIMIT, so they run for at most one page of rows.
   const rows = await sql`
     SELECT *, generated_at::text AS cursor_generated_at,
-      (SELECT count(DISTINCT member_id)::int FROM swarm_recommendations r WHERE r.session_id = swarm_sessions.id) AS take_count,
+      (SELECT count(*)::int FROM swarm_recommendations r WHERE r.session_id = swarm_sessions.id AND r.final) AS take_count,
       (SELECT b.body->'allocation' FROM swarm_briefs b WHERE b.session_id = swarm_sessions.id) AS reference_allocation
     FROM swarm_sessions ${where}
     ORDER BY date DESC, generated_at DESC, id DESC
@@ -552,30 +553,28 @@ export async function getMemberTakes(memberId: string, limit?: number) {
   // preference; see resolveMemberRow's note.)
   const member = await getMember(memberId);
   if (!member) return { takes: [] };
-  // LATEST-PER-SESSION (issue #573). Already scoped to one member, so the
-  // latest-per-member rule collapses to "the highest revision in each session".
+  // THE FINAL TAKE PER SESSION (D51). Already scoped to one member, so "the
+  // session's takes" collapses to this member's one final take in each session.
   // A member that amended twice must contribute ONE row to its own record page,
   // not three — and the LIMIT is a count of sessions, so without this it would
-  // silently start returning fewer sessions than asked for.
+  // silently start returning fewer sessions than asked for. The flag, not
+  // `ORDER BY revision`, says which row counts: the partial unique index
+  // `swarm_recommendations_one_final_per_member` (migration 0075) makes it one.
   const rows = await sql`
-    SELECT * FROM (
-      SELECT DISTINCT ON (r.session_id)
-             r.id, r.member_id, m.handle AS member_handle, m.name AS member_name,
-             r.stance, r.confidence, r.body,
-             r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
-             s.date AS session_date, s.generated_at AS session_generated_at,
-             s.subject_id, s.subject_name, s.state AS session_state,
-             ${signingPublicKeySql()} AS public_key
+    SELECT r.id, r.member_id, m.handle AS member_handle, m.name AS member_name,
+           r.stance, r.confidence, r.body,
+           r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
+           s.date AS session_date, s.generated_at AS session_generated_at,
+           s.subject_id, s.subject_name, s.state AS session_state,
+           ${signingPublicKeySql()} AS public_key
       FROM swarm_recommendations r
       JOIN swarm_sessions s ON s.id = r.session_id
       JOIN swarm_members m ON m.id = r.member_id
-      -- One member, by the immutable id getMember resolved the caller's public
-      -- reference to (handle OR legacy id — issue #593 keeps both addressable).
-      WHERE r.member_id = ${member.id}
-      ORDER BY r.session_id, r.revision DESC
-    ) latest
-    ORDER BY latest.session_date DESC, latest.session_generated_at DESC
-    LIMIT ${cappedLimit}`;
+     -- One member, by the immutable id getMember resolved the caller's public
+     -- reference to (handle OR legacy id — issue #593 keeps both addressable).
+     WHERE r.member_id = ${member.id} AND r.final
+     ORDER BY s.date DESC, s.generated_at DESC
+     LIMIT ${cappedLimit}`;
   const takes = await Promise.all(rows.map(async (row) => ({
     sessionDate: day(row.session_date),
     subjectId: row.subject_id,
@@ -629,30 +628,29 @@ export async function getSessionById(
 
 // The shared body of both lookups above: a session row plus its verified takes.
 //
-// LATEST-PER-MEMBER (issue #573). A member may now file several revisions in one
-// session (migration 0028 relaxed `UNIQUE (session_id, member_id)`), each its own
-// immutable signed row. This is a session's CURRENT reading, so it resolves to
-// exactly one take per member — the highest revision. Without the `DISTINCT ON`
-// the session page would render one card per revision, and its stance/confidence
-// table would count one member several times.
+// ONE FINAL TAKE PER MEMBER (D51). A member may file several takes in one
+// session while its window is open (migration 0028 relaxed `UNIQUE (session_id,
+// member_id)`), each its own immutable signed row. This is a session's CURRENT
+// reading, so it selects the rows flagged final — exactly one per member, which
+// the partial unique index `swarm_recommendations_one_final_per_member`
+// (migration 0075) makes structural. Without the flag the session page would
+// render one card per amendment, and its stance/confidence table would count
+// one member several times.
 //
-// Superseded revisions are not lost and are not hidden: each keeps its own
+// Superseded takes are not lost and are not hidden: each keeps its own
 // permalink and its own verification receipt (getTakeReceipt below), which is
 // the whole point of the append-only model. They are simply not what "the
 // session's takes" means.
 async function withTakes(s: Record<string, unknown>) {
   const takes = await sql`
-    SELECT * FROM (
-      SELECT DISTINCT ON (r.member_id)
-             r.id, r.member_id, m.handle AS member_handle, m.name AS member_name,
-             r.stance, r.confidence, r.body,
-             r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
-             ${signingPublicKeySql()} AS public_key
+    SELECT r.id, r.member_id, m.handle AS member_handle, m.name AS member_name,
+           r.stance, r.confidence, r.body,
+           r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
+           ${signingPublicKeySql()} AS public_key
       FROM swarm_recommendations r
       JOIN swarm_members m ON m.id = r.member_id
-      WHERE r.session_id = ${s.id as string}
-      ORDER BY r.member_id, r.revision DESC
-    ) latest ORDER BY latest.received_at`;
+     WHERE r.session_id = ${s.id as string} AND r.final
+     ORDER BY r.received_at`;
   return { session: toSession(s), takes: await Promise.all(takes.map(toVerifiedTake)) };
 }
 
@@ -689,12 +687,17 @@ export async function getTakeReceipt(id: string) {
   // revision exists and can follow it. This is the alternative to the in-place
   // model, where the same URL would have silently started serving different
   // prose under an unchanged (or lying) `Filed <time>`.
+  //
+  // The pointer names the member's FINAL take in the session (D51), read off the
+  // flag: a row that is not final has been superseded by the one that is, and a
+  // final row points nowhere.
   const superseding = (await sql<{ id: string; revision: number; received_at: unknown }[]>`
     SELECT id, revision, received_at FROM swarm_recommendations
     WHERE session_id = ${row.session_id as string}
       AND member_id = ${row.member_id as string}
-      AND revision > ${Number(row.revision ?? 1)}
-    ORDER BY revision DESC LIMIT 1`)[0];
+      AND final
+      AND id <> ${row.id as string}
+    LIMIT 1`)[0];
 
   const take = await toVerifiedTake(row);
   const memoId = hostedMemoId(take.memoUrl ?? null);
@@ -803,12 +806,125 @@ export interface SubmissionInput {
   signature: string;
 }
 
-export async function submitRecommendation(token: string, sub: SubmissionInput) {
+/** A take already recorded under a member's nonce — the identity of a retry (D52). */
+interface RecordedSubmission {
+  id: string;
+  signature: string;
+  verified: boolean;
+  revision: number;
+  final: boolean;
+}
+
+async function recordedSubmission(memberId: string, nonce: string): Promise<RecordedSubmission | null> {
+  const [row] = await sql<{ id: string; signature: string; verified: boolean; revision: number; final: boolean }[]>`
+    SELECT id, signature, verified, revision, final FROM swarm_recommendations
+     WHERE member_id = ${memberId} AND nonce = ${nonce} LIMIT 1`;
+  return row
+    ? { id: String(row.id), signature: row.signature, verified: row.verified === true, revision: takeRevision(row.revision), final: row.final === true }
+    : null;
+}
+
+/**
+ * The answer to a retry: the EXISTING record, as success (smoke spec §6.2).
+ *
+ * 200, not 201 — nothing was created. `final` says whether this take is still
+ * the member's counting take: a retry that arrives after the member amended
+ * returns its own row, which is no longer final, and says so.
+ */
+function alreadySubmitted(row: RecordedSubmission) {
+  return {
+    ok: true as const,
+    status: 200,
+    alreadySubmitted: true,
+    recommendationId: row.id,
+    verified: row.verified,
+    revision: row.revision,
+    final: row.final,
+  };
+}
+
+/**
+ * Whether a signature the ACTIVE key refused verifies under one of the member's
+ * superseded keys (smoke spec §6.4). Keys are deactivated, never deleted
+ * (issue #697), so every key a member ever held is still on file to ask.
+ */
+async function verifiesUnderSupersededKey(
+  memberId: string,
+  activePublicKey: string,
+  sub: SubmissionInput,
+): Promise<boolean> {
+  const keys = await sql<{ public_key: string }[]>`
+    SELECT DISTINCT public_key FROM swarm_member_keys
+     WHERE member_id = ${memberId} AND NOT active AND public_key <> ${activePublicKey}`;
+  for (const k of keys) {
+    if (await verifySubmissionSignature(sub, sub.signature, k.public_key)) return true;
+  }
+  return false;
+}
+
+/**
+ * What a submission answers. `alreadySubmitted` is true on a retry (200, the
+ * existing record) and false on an acceptance (201, a new row); `final` says
+ * whether the returned take is the member's counting take right now.
+ *
+ * `error` and `verified` are readable on either branch (absent where they do
+ * not apply), so a caller can assert on them without narrowing first; the rest
+ * of the success fields narrow with `"recommendationId" in result`.
+ */
+export type SubmitTakeResult =
+  | {
+      ok: true;
+      status: number;
+      alreadySubmitted: boolean;
+      recommendationId: string;
+      verified: boolean;
+      revision: number;
+      final: boolean;
+      error?: undefined;
+    }
+  | { ok: false; status: number; error: string; verified?: undefined };
+
+export async function submitRecommendation(token: string, sub: SubmissionInput): Promise<SubmitTakeResult> {
   const memberId = await memberIdForToken(token);
   if (!memberId) return { ok: false, status: 401, error: "unknown member token" };
   if (memberId !== sub.memberId) return { ok: false, status: 403, error: "token/member mismatch" };
   const member = (await sql<{ role: string }[]>`SELECT role FROM swarm_members WHERE id = ${memberId}`)[0];
   if (member?.role === "judge") return { ok: false, status: 403, error: "judge_role_cannot_submit_takes" };
+
+  // ── A RETRY IS IDENTIFIED BY ITS SIGNED NONCE (D52, smoke spec §6.2) ────────
+  //
+  // "A resubmission whose nonce is already recorded for that member and session
+  // is a retry: it returns the existing record and the participant treats it as
+  // success." A participant writes its signed submission to its workspace BEFORE
+  // sending it, so a crash-restart resends the SAME bytes — and that resend may
+  // arrive after the window closed, after a turnover, or after the member
+  // amended. None of those changes what the answer is: the take was accepted
+  // once, and this is that take. So the lookup comes FIRST, ahead of every
+  // window, state and cap check, and it answers 200 with the recorded row
+  // rather than a 409 that names no record (the participant reads
+  // `alreadySubmitted`, `recommendationId` and `verified` —
+  // scripts/agent/participant/take-runner.ts).
+  //
+  // THE SAME BYTES, NOT MERELY THE SAME NONCE. Ed25519 signatures are
+  // deterministic, and the signature covers the nonce, the subject, the date and
+  // the content, so an equal signature is an equal submission. A recorded nonce
+  // under DIFFERENT signed bytes is not a retry of anything: it is a replay of a
+  // spent nonce, refused as it always was (the `UNIQUE (member_id, nonce)`
+  // constraint stays the authority), and it is refused here, before the
+  // Ed25519 verify, so a looping agent pays one indexed lookup for it.
+  //
+  // NOTHING IS WRITTEN on either branch: an identical retry adds no row, and a
+  // replay adds no row (D51: "a retry of the same submission returns the
+  // existing record rather than adding a row").
+  const recorded = await recordedSubmission(memberId, sub.nonce);
+  if (recorded) {
+    if (recorded.signature === sub.signature) return alreadySubmitted(recorded);
+    return {
+      ok: false,
+      status: 409,
+      error: "nonce already used by this member for different signed bytes (replay); mint a fresh nonce to amend",
+    };
+  }
 
   // Resolve the session by WHICH ONE IS COLLECTING for this subject, not by the
   // date the member signed. Since migration 0022 a subject may convene several
@@ -856,7 +972,9 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   // that closes N, so the newest session is always the collecting one. What
   // the conjunct refuses is a take into an epoch that turnover or deactivation
   // already closed, and it answers `submission window closed` — the same "you
-  // are too late" as the instant — never `not open`.
+  // are too late" as the instant — never `not open`. The early check below
+  // reads the same two facts (state and instant) so a late take is refused
+  // before the signature work; the INSERT's conjuncts remain the authority.
   //
   // Signed-date agreement. A stale agent that woke with yesterday's brief must
   // not have its take filed against today's session.
@@ -867,7 +985,9 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
       error: `signed date ${sub.date} does not match the open session for ${sub.subjectId} (${day(session.date)})`,
     };
   }
-  if (session.window_passed === true) return { ok: false, status: 409, error: "submission window closed" };
+  if (session.window_passed === true || session.state !== "collecting") {
+    return { ok: false, status: 409, error: "submission window closed" };
+  }
 
 // Report-snapshot binding (issue #978 AC6). Once this session's brief is
   // bound to an analytics report snapshot, every take must name the SAME
@@ -902,18 +1022,27 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
       error: `reportSnapshotId does not match this session's brief (expected ${boundReportSnapshotId})`,
     };
   }
-  // Roster gate (issue #152, AC6): sessions created through the admin surface
-  // (swarm/admin.ts createSessionAdmin) carry a FROZEN expected roster in
-  // the canonical swarm_session_members table (issue #150's migration),
-  // snapshotted at creation time. When one exists, only a member with a
-  // non-excused ('expected') row on it may submit — this is what makes the
-  // roster authoritative rather than advisory. Sessions with NO roster rows
-  // are the legacy/smoke path (swarm/domain.ts openSession, used by the
-  // worker and the pre-#152 admin dispatcher) and are unaffected: this check
-  // is a no-op for them, so existing behavior is preserved exactly.
+  // Roster gate (issue #152, AC6). An epoch seats its expected roster in the
+  // transaction that opens it (insertEpoch), and the roster is immutable from
+  // then on: a member activated mid-epoch joins the next one (admin-surface.md
+  // US-C3). When a session has roster rows, only a member with a non-excused
+  // ('expected') row on it may submit — this is what makes the roster
+  // authoritative rather than advisory, and it is the same set
+  // loadFrozenTakeSet counts and recordAbsencesTx records absences against.
+  //
+  // THE BYPASS IS KEYED ON THE SESSION'S ORIGIN, NOT ON AN EMPTY ROSTER. The
+  // legacy two-step fixture path (openSession, then publishBrief) seats no
+  // roster, and publishBrief stamps `brief_opens_at` when it opens that
+  // session's window — the "brief opens later" shape §4.1 retired. Only such a
+  // row skips the gate. An epoch (insertEpoch) never has `brief_opens_at`, so
+  // an epoch opened while no member was active has an EMPTY roster that still
+  // gates: a member activated mid-epoch is refused here and is not offered the
+  // session by pendingTakesFor. Keying on `rosterRows.length === 0` let that
+  // member submit into an epoch it was never seated in.
+  const legacyUnrostered = session.brief_opens_at != null;
   const rosterRows = await sql<{ status: string }[]>`
     SELECT status FROM swarm_session_members WHERE session_id = ${session.id}`;
-  if (rosterRows.length > 0) {
+  if (rosterRows.length > 0 || !legacyUnrostered) {
     const mine = (await sql<{ status: string }[]>`
       SELECT status FROM swarm_session_members WHERE session_id = ${session.id} AND member_id = ${memberId}`)[0];
     if (!mine) return { ok: false, status: 403, error: "member is not on this session's expected roster" };
@@ -946,54 +1075,22 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   const priorCount = priorRow?.n ?? 0;
   const latestRevision = priorRow?.latest ?? 0;
 
-  if (priorCount > 0) {
-    // AMENDMENT-ONLY GATE — deliberately not applied to a first take. See
-    // TAKES_AMENDABLE_STATES above for why this is an ALLOWLIST.
-    //
-    // `aggregateSession` copies take prose VERBATIM into
-    // `swarm_recommendation.disagreements[].positions[].view` and is never
-    // recomputed (`publishSession` is an unconditional UPDATE that does not
-    // re-aggregate). So an amendment landing after aggregation yields a
-    // published session quoting a body the member's current take no longer
-    // carries. Confining amendment to the pre-aggregation window is what
-    // avoids that without making aggregation re-entrant.
-    //
-    // It is amendment-only because #570 made the advertised deadline the whole
-    // of the timing contract for a FIRST take: `closeWindow` may flip a
-    // session to window_closed/aggregated before its advertised
-    // `window_closes_at`, and a member promised that deadline still gets its
-    // take in. That contract is unchanged here — pinned by
-    // backend/tests/swarm-submission-window.test.ts ("closing the window EARLY
-    // no longer rejects takes"). An amendment is the strictly newer ask, so it
-    // is the one that yields.
-    if (!TAKES_AMENDABLE_STATES.has(session.state)) {
-      return {
-        ok: false,
-        status: 409,
-        error: `amendment window closed (session already ${session.state}); the take on file stands`,
-      };
-    }
-    if (priorCount >= SWARM_TAKE_REVISION_CAP) {
-      return {
-        ok: false,
-        status: 409,
-        error: `amendment cap reached (${SWARM_TAKE_REVISION_CAP} takes per member per session)`,
-      };
-    }
+  // An AMENDMENT is a new nonce inside the window (D51, D52), and it meets the
+  // same window as a first take: the state and instant checked above and again
+  // on the INSERT. No second, state-keyed amendment gate exists (see the note
+  // where TAKES_AMENDABLE_STATES used to be). What an amendment still meets
+  // that a first take cannot is the cap.
+  if (priorCount >= SWARM_TAKE_REVISION_CAP) {
+    return {
+      ok: false,
+      status: 409,
+      error: `amendment cap reached (${SWARM_TAKE_REVISION_CAP} takes per member per session)`,
+    };
   }
 
-  // Nonce replay, refused here rather than by the `UNIQUE (member_id, nonce)`
-  // violation at the bottom. That constraint is untouched and still the
-  // authority; this is the same answer, one indexed lookup earlier, and it is
-  // now DISTINGUISHABLE from the amendment refusals above — the old text
-  // ("already submitted (member/nonce or session/member)") named two causes
-  // because one 409 covered both, and neither cause exists in that form now.
-  const replayed = await sql<{ one: number }[]>`
-    SELECT 1 AS one FROM swarm_recommendations
-    WHERE member_id = ${memberId} AND nonce = ${sub.nonce} LIMIT 1`;
-  if (replayed.length > 0) {
-    return { ok: false, status: 409, error: "nonce already used by this member (replay); mint a fresh nonce to amend" };
-  }
+  // A replayed nonce never reaches this point: the retry lookup at the top of
+  // this function answers it, one indexed lookup in, before the session is
+  // even resolved.
 
   // ── THE ALLOCATION ASK IS ENFORCED WHERE IT IS STILL RECOVERABLE (T17/D4) ─
   //
@@ -1054,9 +1151,28 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     // stdout. Record it on the durable, queryable event log — AFTER the
     // session and member are already resolved above — with a bounded,
     // redacted detail (never the raw signature/public key/payload).
+    //
+    // A SUPERSEDED KEY IS NAMED AS ONE (smoke spec §6.4, criterion 148). A key
+    // rebind — rotateMemberKeyAdmin, registerMember's re-registration,
+    // `--spoof-keys` — leaves an old container holding the old private key for
+    // a while, and the spec's promise is that "the server rejects submissions
+    // signed with a superseded key, so the worst case is a refused take". A
+    // tampered payload and a superseded key are different facts with different
+    // remedies (fix the bytes, versus restart on the current credential), so
+    // the second is told apart: the signature is checked against the member's
+    // inactive keys, and one that verifies answers 403 with no row written.
+    // Only on this failure path, so the happy path pays for one verify.
+    const superseded = await verifiesUnderSupersededKey(memberId, key.publicKey, sub);
     await recordAgentHealthEvent("rejected_signature", session.id, memberId, {
-      reason: "signature verification failed",
+      reason: superseded ? "signed with a superseded key" : "signature verification failed",
     });
+    if (superseded) {
+      return {
+        ok: false,
+        status: 403,
+        error: "signing_key_superseded: this take is signed with a key the member no longer holds active; sign with the current key",
+      };
+    }
     return { ok: false, status: 400, error: "signature verification failed" };
   }
 
@@ -1098,19 +1214,40 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     // during a turnover waits for it and is then judged against the clock as
     // it reads AFTER the wait.
     //
-    // REVISION IS COMPUTED IN SQL, not from the `latestRevision` read above, so
-    // two racing submits cannot both file "revision 2" off the same stale read.
-    // Under READ COMMITTED that is still not sufficient on its own — which is
-    // exactly what `UNIQUE (session_id, member_id, revision)` (migration 0028)
-    // is for: one of the two racers loses on the constraint and is answered
-    // with a 409 in the catch below, and NO in-place edit of the winner's row
-    // ever happens.
+    // ONE MEMBER'S TAKES IN ONE SESSION ARE ACCEPTED ONE AT A TIME (D51, §6.2).
+    // Two submissions from one member can race: an old and a new container
+    // overlapping across a roster change, each with its own token and nonce.
+    // Both are intentional amendments and both are accepted, in order, so the
+    // later one is final. A transaction-scoped advisory lock keyed on
+    // (session, member) serialises them after the session's `FOR SHARE`: the
+    // second waits, and its INSERT then reads the first's committed row. Takes
+    // from DIFFERENT members never share a key, so they never wait on each
+    // other, and nothing here waits on a turnover that is itself waiting on
+    // this transaction.
+    //
+    // REVISION IS COMPUTED IN SQL, inside that lock, not from the
+    // `latestRevision` read above, so a racer cannot file "revision 2" off a
+    // stale read. `UNIQUE (session_id, member_id, revision)` (migration 0028)
+    // stays the authority beneath the lock: a writer that skipped it would
+    // lose on the constraint and be answered with a 409 in the catch below, and
+    // NO in-place edit of the winner's content ever happens.
+    //
+    // THE FINAL FLAG IS SET BY THE DATABASE, not here. Migration 0075's
+    // BEFORE INSERT trigger clears the member's previous final take and marks
+    // the new row final when it is the newest revision — which, inside the
+    // lock, it always is. One implementation of D51's acceptance rule, in the
+    // statement that accepts the take; the partial unique index beneath it
+    // makes two final takes impossible whatever races. This INSERT carries no
+    // `ON CONFLICT` clause, and must never gain one: the trigger runs before
+    // the conflict check, so a skipped row would leave the member with no
+    // final take at all.
     //
     // The cap is re-checked here as a conjunct for the same reason — the count
     // above is a read, this is the write. `latestRevision` is used only to make
     // the two-statement path explainable in the audit row.
     const rows = await sql.begin(async (tx) => {
       await tx`SELECT id FROM swarm_sessions WHERE id = ${session.id} FOR SHARE`;
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`swarm_recommendations:${session.id}:${memberId}`}, 0))`;
       return await tx`
         INSERT INTO swarm_recommendations
           (session_id, member_id, subject_id, date, nonce, stance, confidence, body, memo_url, payload, signature, verified, revision, signing_key_id, report_snapshot_id, received_at)
@@ -1125,7 +1262,7 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
           AND (s.window_closes_at IS NULL OR s.window_closes_at > c.at)
           AND (SELECT count(*) FROM swarm_recommendations r
                WHERE r.session_id = s.id AND r.member_id = ${memberId}) < ${SWARM_TAKE_REVISION_CAP}
-        RETURNING id, revision`;
+        RETURNING id, revision, final`;
     });
     if (rows.length === 0) {
       // Two kinds of conjunct can zero this out, and they are not the same
@@ -1147,7 +1284,15 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     }
     const revision = Number(rows[0].revision);
     await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, ${revision > 1 ? "amend_recommendation" : "submit_recommendation"}, ${sql.json({ sessionId: session.id, revision, supersedes: revision > 1 ? latestRevision : null })})`;
-    return { ok: true, status: 201, recommendationId: rows[0].id, verified: true, revision };
+    return {
+      ok: true,
+      status: 201,
+      alreadySubmitted: false,
+      recommendationId: String(rows[0].id),
+      verified: true,
+      revision,
+      final: rows[0].final === true,
+    };
   } catch (e: any) {
     const message = String(e?.message ?? e);
     // A reportSnapshotId naming a row that does not exist trips the FK on
@@ -1160,12 +1305,70 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
       // Which constraint lost tells the agent what to do next, and the two
       // answers are opposite: re-mint a nonce, or simply retry.
       const constraint = String(e?.constraint_name ?? e?.constraint ?? "") + " " + message;
-      if (constraint.includes("member_id_nonce"))
-        return { ok: false, status: 409, error: "nonce already used by this member (replay); mint a fresh nonce to amend" };
+      if (constraint.includes("member_id_nonce")) {
+        // Two copies of ONE signed submission raced past the lookup at the top
+        // and this one lost: it is the same retry, answered the same way.
+        const winner = await recordedSubmission(memberId, sub.nonce);
+        if (winner && winner.signature === sub.signature) return alreadySubmitted(winner);
+        return { ok: false, status: 409, error: "nonce already used by this member for different signed bytes (replay); mint a fresh nonce to amend" };
+      }
       return { ok: false, status: 409, error: "a concurrent submission from this member won the same revision; retry" };
     }
     throw e;
   }
+}
+
+// ── Pending takes: what an agent participant polls (smoke spec §6.2) ────────
+//
+// "Agents poll. An agent polls the API for `collecting` sessions it has not yet
+// taken, submits, and sleeps." This is that poll's answer, and it is the same
+// set the take path would accept a FIRST take into — so an agent is never sent
+// to author a take the API will refuse on arrival:
+//
+//   * the session is `collecting` and the database clock is before its
+//     `window_closes_at` (§4.2), the two conjuncts of the take INSERT;
+//   * the member may submit to it: the session has no roster (the legacy
+//     fixture path), or the member holds an `expected` seat on it — the
+//     roster gate of submitRecommendation;
+//   * the member has no take in it yet. A member that wants to AMEND does so
+//     on its own initiative; the queue offers each session once, which is what
+//     keeps a polling loop from re-authoring the same session forever.
+//
+// Soonest close first, so the one take a participant has in flight (§6.2) is
+// the one that would otherwise be lost first. An empty list is "no work", and
+// it is a list, never null: scripts/agent/participant/main.ts reads
+// `{ pending: PendingWork[] }` and refuses any other shape.
+export interface PendingTake {
+  sessionId: string;
+  subjectId: string;
+  date: string;
+  windowClosesAt: string | null;
+}
+
+export async function pendingTakesFor(memberId: string): Promise<PendingTake[]> {
+  const rows = await sql<{ id: string; subject_id: string; date: unknown; window_closes_at: unknown }[]>`
+    SELECT s.id, s.subject_id, s.date, s.window_closes_at
+      FROM swarm_sessions s
+     WHERE s.state = 'collecting'
+       AND (s.window_closes_at IS NULL OR s.window_closes_at > clock_timestamp())
+       AND (
+         -- Only the legacy two-step fixture path (brief_opens_at stamped by
+         -- publishBrief) is unrostered. An epoch with an empty roster offers
+         -- itself to nobody: the same rule as the take path's roster gate.
+         (s.brief_opens_at IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM swarm_session_members x WHERE x.session_id = s.id))
+         OR EXISTS (SELECT 1 FROM swarm_session_members sm
+                     WHERE sm.session_id = s.id AND sm.member_id = ${memberId} AND sm.status = 'expected')
+       )
+       AND NOT EXISTS (SELECT 1 FROM swarm_recommendations r
+                        WHERE r.session_id = s.id AND r.member_id = ${memberId})
+     ORDER BY s.window_closes_at NULLS LAST, s.id`;
+  return rows.map((r) => ({
+    sessionId: String(r.id),
+    subjectId: r.subject_id,
+    date: day(r.date),
+    windowClosesAt: instant(r.window_closes_at),
+  }));
 }
 
 // ── Onboarding: apply (public, signed) → activate (admin) ───────────────────
@@ -2048,7 +2251,13 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
               ON CONFLICT (session_id) DO UPDATE SET
                 body = (EXCLUDED.body - 'allocation') || CASE WHEN swarm_briefs.body ? 'allocation' THEN jsonb_build_object('allocation', swarm_briefs.body->'allocation') ELSE '{}'::jsonb END,
                 report_snapshot_id = EXCLUDED.report_snapshot_id`;
-    await tx`UPDATE swarm_sessions SET state = 'collecting', window_closes_at = ${closes} WHERE id = ${sessionId}`;
+    // `brief_opens_at` records that this session's brief opened AFTER it was
+    // convened — the legacy two-step shape. The take path's roster gate and
+    // pendingTakesFor treat only such a row as unrostered; an epoch never has
+    // it (insertEpoch opens the window in the transaction that convenes).
+    await tx`UPDATE swarm_sessions SET state = 'collecting', window_closes_at = ${closes},
+                    brief_opens_at = COALESCE(brief_opens_at, clock_timestamp())
+              WHERE id = ${sessionId}`;
   });
   return { sessionId, state: "collecting", windowClosesAt };
 }
@@ -2506,11 +2715,15 @@ export interface FrozenTakeSet {
 export async function loadFrozenTakeSet(sessionId: string, h: DbHandle = sql): Promise<FrozenTakeSet | null> {
   const s = (await h`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
   if (!s) return null;
-  // LATEST-PER-MEMBER (issue #573), for the same reason as withTakes above and
-  // one more that is specific to this function: aggregation copies take prose
-  // VERBATIM into `swarm_recommendation.disagreements[].positions[].view`. A
-  // superseded body reaching that snapshot would publish, permanently, a
-  // sentence the member has already withdrawn.
+  // THE FINAL TAKE PER MEMBER (D51), for the same reason as withTakes above
+  // and one more that is specific to this function: aggregation copies take
+  // prose VERBATIM into `swarm_recommendation.disagreements[].positions[].view`.
+  // A superseded body reaching that snapshot would publish, permanently, a
+  // sentence the member has already withdrawn. The set is selected on the
+  // flag, never by ordering on `revision`: the flag is what the accepting
+  // transaction set, and migration 0075's partial unique index makes it one row
+  // per member, so the aggregator, the judge's digest and the receipt all read
+  // the one take per member that counts.
   // The outer `ORDER BY received_at` is the ordering this query has always had
   // and the tie-break the disagreement ladder below sorts on top of; only the
   // row SET changes here.
@@ -2519,8 +2732,8 @@ export async function loadFrozenTakeSet(sessionId: string, h: DbHandle = sql): P
   // handle/name correction as normal permitted operation — so reading
   // `swarm_members.name` live meant a rename MOVED the digest of an unchanged
   // take set, which is a digest binding a fact the opinion was not derived
-  // from. `swarm_session_members.member_name` is the snapshot
-  // createSessionAdmin/rosterAddAdmin froze at seating time and is `NOT NULL`,
+  // from. `swarm_session_members.member_name` is the snapshot insertEpoch
+  // froze at seating time and is `NOT NULL`,
   // so the COALESCE falls through only for a session with NO roster snapshot at
   // all — the legacy/smoke `openSession` path, whose behaviour is unchanged,
   // exactly as the `rosterRows.length > 0` fallback below leaves it.
@@ -2537,24 +2750,21 @@ export async function loadFrozenTakeSet(sessionId: string, h: DbHandle = sql): P
   // the same binding from opposite ends.
   //
   // THESE TWO COLUMNS CANNOT FAN THE RESULT OUT. Both are plain columns of
-  // `swarm_recommendations r` — the table `DISTINCT ON (r.member_id)` already
-  // drives — so they add no join and no row. The cardinality argument is
+  // `swarm_recommendations r` — the table the `r.final` filter already drives,
+  // one row per member — so they add no join and no row. The cardinality argument is
   // entirely #765's `LEFT JOIN`, which matches at most once because
   // `swarm_session_members` is `PRIMARY KEY (session_id, member_id)` and the
   // join pins both halves of that key.
   const takeRows = await h`
-    SELECT * FROM (
-      SELECT DISTINCT ON (r.member_id)
-             r.member_id, r.stance, r.confidence, r.body, r.payload, r.revision,
-             r.signature, r.nonce,
-             r.received_at, COALESCE(sm.member_name, m.name) AS member_name
+    SELECT r.member_id, r.stance, r.confidence, r.body, r.payload, r.revision,
+           r.signature, r.nonce,
+           r.received_at, COALESCE(sm.member_name, m.name) AS member_name
       FROM swarm_recommendations r
       JOIN swarm_members m ON m.id = r.member_id
       LEFT JOIN swarm_session_members sm
         ON sm.session_id = r.session_id AND sm.member_id = r.member_id
-      WHERE r.session_id = ${sessionId}
-      ORDER BY r.member_id, r.revision DESC
-    ) latest ORDER BY latest.received_at`;
+     WHERE r.session_id = ${sessionId} AND r.final
+     ORDER BY r.received_at`;
   // Denominator (issue #152, AC6): prefer the session's FROZEN roster
   // (swarm_session_members, non-excused rows) over live swarm_members
   // so a member added/removed AFTER the session was created never rewrites an
@@ -2606,7 +2816,7 @@ export async function judgeInputFromFrozen(
   const takes: JudgeTake[] = frozen.takes.map((t: any) => ({
     member_id: String(t.member_id),
     member_name: t.member_name == null ? null : String(t.member_name),
-    revision: Number(t.revision ?? 0),
+    revision: takeRevision(t.revision),
     stance: String(t.stance ?? ""),
     confidence: t.confidence == null ? null : Number(t.confidence),
     body: typeof t.body === "string" ? t.body : "",
@@ -3203,6 +3413,24 @@ async function insertEpoch(
     VALUES (${subject.id}, ${subject.name ?? subject.id}, 'collecting', ${closesAt}::text::timestamptz)
     RETURNING *`;
   const windowClosesAt = new Date(session.window_closes_at).toISOString();
+  // THE EPOCH'S SEATED ROSTER, frozen at open (scheduler spec §4.3). Turnover
+  // records "an `absent` event for each seated member with no take received
+  // before `window_closes_at`", and recordAbsencesTx reads the seated members
+  // from swarm_session_members — so an epoch that seats nobody records no
+  // absence, ever. Every active member with the `member` role is seated here,
+  // in the transaction that opens the epoch: the rule the retired admin
+  // session create used, with name and lens denormalised at seating time
+  // (loadFrozenTakeSet digests the frozen name, issue #765). Judges hold no
+  // seat: they file no take (§4.4). The roster is immutable from this instant,
+  // because the session is already `collecting`: a member activated afterwards
+  // joins the NEXT epoch (docs/architecture/admin-surface.md US-C3), which is
+  // what keeps who may submit, whose take counts and who is recorded absent one
+  // set, fixed when the window opened.
+  await tx`
+    INSERT INTO swarm_session_members (session_id, member_id, member_name, member_lens, status)
+    SELECT ${session.id}, m.id, m.name, m.lens, 'expected'
+      FROM swarm_members m
+     WHERE m.status = 'active' AND m.role = 'member'`;
   const { body, reportSnapshotId } = await buildBriefBody(session, windowClosesAt, undefined, tx);
   await appendBriefRevision(String(session.id), body, reportSnapshotId, tx);
   await tx`INSERT INTO swarm_briefs (session_id, date, subject_id, body, report_snapshot_id)
@@ -4402,6 +4630,63 @@ export interface JudgementSubmission {
   inputsDigest?: unknown;
   nonce?: unknown;
   signature?: unknown;
+  /**
+   * What the model call cost, as the participant measured it (D55 decision 3,
+   * R19): `{ inputTokens?, outputTokens?, totalTokens?, costUsd? }`. Optional;
+   * absent stores NULL in every spend column. NOT covered by `signature`: it is
+   * spend accounting about the call, not part of what the judge attests.
+   */
+  usage?: unknown;
+}
+
+/** A judgement's validated spend, one field per `usage_*` column (migration 0059). */
+export interface JudgementUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  costUsd: number | null;
+}
+
+// THE BOUNDS ARE SANITY, NOT BUDGET. The token columns are `integer`, and no
+// single judging call comes near ten million tokens; the cost column is
+// `numeric(18, 8)`, and no single call costs ten thousand dollars. A value past
+// either is a participant bug or a hostile client, and it is refused rather
+// than stored as the session's spend.
+const USAGE_MAX_TOKENS = 10_000_000;
+const USAGE_MAX_COST_USD = 10_000;
+const USAGE_FIELDS = ["inputTokens", "outputTokens", "totalTokens", "costUsd"] as const;
+
+/**
+ * Validate a judgement's `usage` block (D55 decision 3).
+ *
+ * Absent (`undefined` or `null`) is valid and means "not reported": every
+ * column stays NULL, never 0, because a zero would claim the call was free.
+ * Present, it must be an object naming only the four fields; each field is
+ * absent/null or a finite, non-negative, bounded number, and the token counts
+ * are whole. Anything else refuses the WHOLE judgement with
+ * `usage_malformed:<field>` — a judgement is one record, and storing it with
+ * its spend silently dropped would make R19's total quietly wrong.
+ */
+export function parseJudgementUsage(
+  raw: unknown,
+): { ok: true; usage: JudgementUsage | null } | { ok: false; error: string } {
+  if (raw === undefined || raw === null) return { ok: true, usage: null };
+  if (typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "usage_malformed:not_an_object" };
+  const record = raw as Record<string, unknown>;
+  const unknownField = Object.keys(record).find((k) => !(USAGE_FIELDS as readonly string[]).includes(k));
+  if (unknownField) return { ok: false, error: `usage_malformed:unknown_field:${unknownField.slice(0, 40)}` };
+  const usage: JudgementUsage = { inputTokens: null, outputTokens: null, totalTokens: null, costUsd: null };
+  for (const field of USAGE_FIELDS) {
+    const v = record[field];
+    if (v === undefined || v === null) continue;
+    const isTokens = field !== "costUsd";
+    const max = isTokens ? USAGE_MAX_TOKENS : USAGE_MAX_COST_USD;
+    if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > max || (isTokens && !Number.isInteger(v))) {
+      return { ok: false, error: `usage_malformed:${field}` };
+    }
+    usage[field] = v;
+  }
+  return { ok: true, usage };
 }
 
 export type SubmitJudgementResult =
@@ -4557,6 +4842,11 @@ export async function submitJudgement(
   if (nonce === null) return refuseSubmission(400, "nonce_required");
   const signature = boundedText(input.signature, 200);
   if (signature === null) return refuseSubmission(400, "signature_required");
+  // Spend is validated with the rest of the body, before the verify and before
+  // any row: a malformed block refuses the judgement and writes nothing.
+  const usageCheck = parseJudgementUsage(input.usage);
+  if (!usageCheck.ok) return refuseSubmission(400, usageCheck.error);
+  const usage = usageCheck.usage;
 
   // ── SIGNED BY THIS MEMBER'S ACTIVE KEY ─────────────────────────────────────
   // The same key resolution a take uses (`activeKeyFor`) and the same
@@ -4709,11 +4999,14 @@ export async function submitJudgement(
       INSERT INTO swarm_session_judgements
         (session_id, mode, source, model, prompt_hash, inputs_digest, digest_scheme, take_count, min_takes,
          applied, applied_skipped_reason, dropped_positions, dropped_disagreements,
-         judged_by, judged_by_member_id, opinion)
+         judged_by, judged_by_member_id, opinion,
+         usage_input_tokens, usage_output_tokens, usage_total_tokens, usage_cost_usd)
       VALUES (${sessionId}, 'enforce', 'model', ${model}, ${promptHash}, ${claimedDigest}, ${DIGEST_SCHEME},
               ${judged.takes.length}, ${judged.minTakes}, ${applied}, ${skipped},
               ${drops.positions}, ${drops.disagreements},
-              ${memberId}, ${memberId}, ${sql.json(parsed as any)})
+              ${memberId}, ${memberId}, ${sql.json(parsed as any)},
+              ${usage?.inputTokens ?? null}, ${usage?.outputTokens ?? null},
+              ${usage?.totalTokens ?? null}, ${usage?.costUsd ?? null})
       RETURNING id`;
     const judgementId = Number(row.id);
     // The signature is kept beside the row it authorizes, so "which key signed

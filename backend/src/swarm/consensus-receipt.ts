@@ -45,7 +45,7 @@ import spec from "@robotmoney/contract/fixtures/consensus-receipt.canonicalizati
 import schema from "@robotmoney/contract/fixtures/consensus-receipt.schema.json" with { type: "json" };
 import { sql } from "../db/client.ts";
 import { verifyDetachedSignature } from "../lib/signing.ts";
-import { judgeInputFromFrozen, loadFrozenTakeSet, normalizedTakeWeights } from "./domain.ts";
+import { judgeInputFromFrozen, loadFrozenTakeSet, normalizedTakeWeights, takeRevision } from "./domain.ts";
 import { inputsDigest, type JudgeOpinion } from "./judge.ts";
 
 /** One contributing analyst, as the assembler needs them. */
@@ -592,11 +592,12 @@ async function loadAssemblyInput(
   }
 
   // ── 2. THE ROLLUP DESCRIBES THE TAKES THAT EXIST NOW ──────────────────────
-  // A member filing their FIRST take after aggregation is deliberate, supported
-  // behaviour: the timing contract is the advertised `window_closes_at`
-  // TIMESTAMP and not the state (domain.ts submitRecommendation), so only
-  // AMENDMENTS are confined to TAKES_AMENDABLE_STATES. The rollup written at
-  // aggregation then describes one member fewer than the take set does.
+  // Under the epoch model a take lands only while its session is `collecting`
+  // and before `window_closes_at` (D51, domain.ts submitRecommendation), so a
+  // take can no longer arrive after aggregation. Sessions convened under the
+  // pre-epoch lifecycle could take a member's FIRST take after an early close,
+  // and the rollup written at aggregation then describes one member fewer than
+  // the take set does. That history still reaches this assembler.
   //
   // Assembly was already refused in that case — but as `semantics_invalid` with
   // "stances: counts do not sum to quorum.submitted" and "release_safety:
@@ -607,7 +608,7 @@ async function loadAssemblyInput(
     throw new ConsensusReceiptRefusal(
       "session_not_reaggregated",
       `session ${sessionId} now has ${frozen.takes.length} take(s) but its rollup was computed over ${rolledUp} — re-aggregate and re-judge the session, then publish the receipt. ` +
-        "A member may file a FIRST take up to the advertised window_closes_at whatever state the session is in, so this is ordinary product behaviour rather than corruption.",
+        "A session convened before the epoch model could take a member's FIRST take after an early close, so this is recorded history rather than corruption.",
     );
   }
 
@@ -838,7 +839,7 @@ async function loadAssemblyInput(
       signature,
       public_key: publicKey,
       nonce: String(take.nonce ?? (payload as { nonce?: unknown }).nonce ?? ""),
-      revision: Number(take.revision ?? 1),
+      revision: takeRevision(take.revision),
     });
   }
 

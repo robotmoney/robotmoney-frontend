@@ -31,6 +31,12 @@ import {
 // make the next test's admission a spurious 409.
 useCleanDatabasePerTest(import.meta.file);
 
+/**
+ * Open an epoch. Create the members a test submits as BEFORE calling it: an
+ * epoch seats the active members when it opens, and its roster (even an empty
+ * one) is immutable from then on (admin-surface.md US-C3), so a member
+ * activated afterwards is refused with 403.
+ */
 async function openedEpoch(prefix: string, durationSeconds = 600) {
   const subjectId = await activeSubject(prefix, durationSeconds);
   const r = await epoch.openEpoch(subjectId);
@@ -40,8 +46,8 @@ async function openedEpoch(prefix: string, durationSeconds = 600) {
 }
 
 test("a take just before window_closes_at is accepted", async () => {
-  const { subjectId, sessionId, date } = await openedEpoch("win_before");
   const m = await activeMember();
+  const { subjectId, sessionId, date } = await openedEpoch("win_before");
   const r = await submitTake(m, date, subjectId);
   expect(r.ok).toBe(true);
   const rows = await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${sessionId}`;
@@ -49,8 +55,8 @@ test("a take just before window_closes_at is accepted", async () => {
 });
 
 test("a take after window_closes_at is refused even though the session is still collecting", async () => {
-  const { subjectId, sessionId, date } = await openedEpoch("win_after");
   const m = await activeMember();
+  const { subjectId, sessionId, date } = await openedEpoch("win_after");
   // Turnover is DELAYED: the instant has passed, the state has not moved.
   await sql`UPDATE swarm_sessions SET window_closes_at = now() - interval '1 second' WHERE id = ${sessionId}`;
   expect((await sessionRow(sessionId)).state).toBe("collecting");
@@ -99,8 +105,8 @@ test("ONE CLOCK: a take whose transaction began before window_closes_at but reac
   // row lock while the window is still open; the lock is held until the
   // DATABASE clock is past the close; then the take reaches its check. Under
   // `now()` — the transaction's start — it would still read as on time.
-  const { subjectId, sessionId, date } = await openedEpoch("win_slow_tx");
   const m = await activeMember();
+  const { subjectId, sessionId, date } = await openedEpoch("win_slow_tx");
   await sql`UPDATE swarm_sessions SET window_closes_at = clock_timestamp() + interval '1500 milliseconds'
              WHERE id = ${sessionId}`;
 
@@ -145,8 +151,8 @@ test("received_at is the instant the take was ACCEPTED, read off the database cl
   // turnover-shaped lock and was then accepted carries an instant AFTER the
   // lock was released; the column's `now()` default would stamp the
   // transaction's start, before it.
-  const { subjectId, sessionId, date } = await openedEpoch("win_received_at");
   const m = await activeMember();
+  const { subjectId, sessionId, date } = await openedEpoch("win_received_at");
   const { result, sawWaiter, releasedAt } = await whileSessionRowHeld(
     sessionId,
     () => submitTake(m, date, subjectId),
@@ -171,8 +177,8 @@ test("a past-close take is refused THROUGHOUT an exhausted turnover, and the nex
   // "refuses submissions after `window_closes_at` throughout". The scheduler's
   // side of exhaustion is system-scheduler-recovery.test.ts; this is the API's
   // side of the same state — collecting, past its close, no turnover.
-  const { subjectId, sessionId, date } = await openedEpoch("win_exhausted");
   const m = await activeMember();
+  const { subjectId, sessionId, date } = await openedEpoch("win_exhausted");
   await sql`UPDATE swarm_sessions SET window_closes_at = clock_timestamp() - interval '1 second' WHERE id = ${sessionId}`;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const r = await submitTake(m, date, subjectId);
@@ -199,8 +205,8 @@ test("a take after DEACTIVATION is refused, though the closed epoch's stored clo
   // does not move `window_closes_at`. RED CONTROL: before the INSERT carried
   // `s.state = 'collecting'`, this take returned 201 and one row landed in the
   // closed session, after its absences had been recorded.
-  const { subjectId, sessionId, date } = await openedEpoch("win_deactivated");
   const m = await activeMember();
+  const { subjectId, sessionId, date } = await openedEpoch("win_deactivated");
   const [subject] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${subjectId}`;
   const deactivated = await admin.deactivateSubjectAdmin(subjectId, Number(subject.version));
   expect(deactivated.ok).toBe(true);
@@ -227,8 +233,8 @@ test("a take that read N before a turnover committed AHEAD of N's stored close, 
   // the INSERT carried `s.state = 'collecting'`, the take was then inserted
   // into N after its absences were recorded, so accepted takes and recorded
   // absences disagreed and the take post-dated aggregation's input.
-  const { subjectId, sessionId, date } = await openedEpoch("win_early_turnover");
   const m = await activeMember();
+  const { subjectId, sessionId, date } = await openedEpoch("win_early_turnover");
   // Both waits are row-lock waits now, so they are told apart by count: the
   // turnover's is the first ungranted lock, the take's the second.
   const waiting = async (atLeast: number) => {

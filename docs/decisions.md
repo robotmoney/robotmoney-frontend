@@ -3737,9 +3737,10 @@ feature returns under any of its old names.
 
 ## D51 — A member's newest take is the final one; submitting unsets the prior (Lucas, 2026-09-24)
 
-**Status.** Accepted 2026-09-24; not yet implemented. Supersedes [D49](#d49),
-which was wrong about the storage rule. Restores the substance of
-[D33](#d33) with an explicit marker in place of an implicit read.
+**Status.** Accepted 2026-09-24; implemented 2026-09-25 under issue #1026
+(see **Implemented** below). Supersedes [D49](#d49), which was wrong about the
+storage rule. Restores the substance of [D33](#d33) with an explicit marker in
+place of an implicit read, and retires D33's state-keyed amendment gate.
 
 **Decision.** A member may submit more than once while its session's
 submission window is open. Every submission is a new immutable row in
@@ -3789,6 +3790,27 @@ the accepting transaction; resolve reads and `loadFrozenTakeSet` from the flag
 instead of `ORDER BY revision DESC`; keep `swarm-take-revisions.test.ts` and
 extend it for the flag. Tracked under the deployment refactor issue (#1026),
 W3.
+
+**Implemented.** Migration 0075 added the flag, the backfill, the partial
+unique index `(session_id, member_id) WHERE final`, the `UPDATE (final)`-only
+grant to `rm_app`, and the `BEFORE INSERT` trigger that marks the newest
+revision final and unsets the member's prior one. That trigger is the one
+implementation of the acceptance rule: `submitRecommendation`
+(`backend/src/swarm/domain.ts`) inserts inside a transaction that holds the
+session row `FOR SHARE` and a per-(session, member) advisory lock, so racing
+amendments from overlapping containers are accepted in order and the later one
+is final. Every read that means "the session's takes" selects `WHERE final`:
+`loadFrozenTakeSet`, the session read, the member's record page, the session
+list's take count and the permalink's forward pointer. A resubmitted nonce with
+the same signed bytes returns the existing record with HTTP 200 and
+`alreadySubmitted: true` (smoke spec §6.2); the same nonce under other bytes is
+refused as a replay. One rule freezes every take, first or amendment: the
+session is `collecting` and the database clock is before `window_closes_at`
+(scheduler spec §4.2); D33's `TAKES_AMENDABLE_STATES` allowlist is removed. The
+single `revision` default is `TAKE_REVISION_DEFAULT = 1`, read through
+`takeRevision()` by the judge input, the projection and the receipt. Proved by
+`backend/tests/swarm-take-idempotent.test.ts`, `swarm-take-revisions.test.ts`
+and `consensus-receipt-judge-roundtrip.test.ts`.
 
 ## D52 — File credentials are final, the smoke spec governs the whole stack, and epochs close on a grid (Lucas, 2026-09-24)
 

@@ -38,10 +38,13 @@ import {
   validateReceipt,
 } from "@robotmoney/contract";
 import {
-  parseJudgeResponse, renderJudgePrompt,
+  inputsDigest, parseJudgeResponse, renderJudgePrompt,
   type JudgeInput, type JudgeOpinion,
 } from "../src/swarm/judge.ts";
 import { runJudge } from "../../scripts/agent/participant/judge-runner.ts";
+import { judgeInputFromFrozen, TAKE_REVISION_DEFAULT, takeRevision, type FrozenTakeSet } from "../src/swarm/domain.ts";
+import { toTake } from "../src/swarm/projections.ts";
+import type { DbHandle } from "../src/db/client.ts";
 
 const FIXTURES = join(import.meta.dir, "../../contract/src/__fixtures__");
 const readJson = (name: string): any => JSON.parse(readFileSync(join(FIXTURES, name), "utf8"));
@@ -253,4 +256,59 @@ test("every JudgeOpinion field has a receipt field, and the receipt invents none
   expect(Object.keys(opinion.disagreements[0].positions[0]).sort()).toEqual(
     Object.keys(schema.definitions.disagreement.properties.positions.items.properties).sort(),
   );
+});
+
+// ── ONE REVISION DEFAULT, ONE DIGEST (criterion 128, D51) ───────────────────
+//
+// D51: "Two paths already default `revision` differently, `?? 0` in
+// `judge-session.ts` and `?? 1` in `projections.ts` and `consensus-receipt.ts`.
+// The same take set can therefore produce two different digests." The judge's
+// input is now built in domain.ts (`judgeInputFromFrozen`, served to the
+// participant judge, which signs `inputsDigest` over exactly that object), and
+// every reader resolves an absent revision through `takeRevision()`.
+test("a take with an ABSENT revision digests exactly as one at the database default, and every path reads the same value", async () => {
+  // judgeInputFromFrozen reads the session's brief through the handle it is
+  // given; this one has no brief to return, and touches no database.
+  const noBrief = (async () => []) as unknown as DbHandle;
+  const frozenFor = (revision: unknown): FrozenTakeSet => ({
+    session: {
+      id: input.sessionId,
+      date: input.date,
+      subject_id: input.subjectId,
+      subject_name: input.subjectLabel,
+      swarm_recommendation: { stances: input.byStance, meanConfidence: input.meanConfidence },
+      regime_summary: null,
+    },
+    takes: input.takes.map((t) => ({ ...t, revision })),
+    activeMembers: input.takes.map((t) => ({ id: t.member_id })),
+    rosterFrozen: false,
+  });
+
+  const absent = await judgeInputFromFrozen(frozenFor(undefined), input.minTakes, noBrief);
+  const nulled = await judgeInputFromFrozen(frozenFor(null), input.minTakes, noBrief);
+  const atDefault = await judgeInputFromFrozen(frozenFor(TAKE_REVISION_DEFAULT), input.minTakes, noBrief);
+  expect(TAKE_REVISION_DEFAULT).toBe(1); // migration 0028: `revision integer NOT NULL DEFAULT 1`
+  expect(absent.takes.map((t) => t.revision)).toEqual([1, 1]);
+  expect(inputsDigest(absent)).toBe(inputsDigest(atDefault));
+  expect(inputsDigest(nulled)).toBe(inputsDigest(atDefault));
+
+  // RED CONTROL: the retired `?? 0` default is a DIFFERENT digest, so the
+  // equality above is the one-default property, not a digest blind to revision.
+  const atZero = await judgeInputFromFrozen(frozenFor(0), input.minTakes, noBrief);
+  expect(inputsDigest(atZero)).not.toBe(inputsDigest(absent));
+
+  // The public projection (and so the served session and receipt page) and
+  // the consensus receipt's analyst entry read the same default.
+  const row = { id: "t1", member_id: "analyst-alpha", member_name: "Alpha", stance: "constructive", body: ALPHA_BODY, verified: true };
+  expect(toTake(row).revision).toBe(absent.takes[0]!.revision);
+  expect(toTake({ ...row, revision: null }).revision).toBe(absent.takes[0]!.revision);
+  expect(takeRevision(undefined)).toBe(absent.takes[0]!.revision);
+
+  // And no reader spells its own default: every `revision` fallback in the
+  // three digest paths goes through takeRevision().
+  for (const file of ["src/swarm/domain.ts", "src/swarm/projections.ts", "src/swarm/consensus-receipt.ts"]) {
+    const text = readFileSync(join(import.meta.dir, "..", file), "utf8");
+    expect(text, file).not.toMatch(/revision\s*\?\?\s*\d/);
+    expect(text, file).not.toMatch(/revision\s*==\s*null\s*\?\s*\d/);
+  }
 });

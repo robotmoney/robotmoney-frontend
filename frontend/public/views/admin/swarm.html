@@ -1,6 +1,8 @@
 <!-- Admin — swarm operations overview (/admin/swarm)
-     Topics, members, and sessions in one tabbed surface, plus topic create,
-     member manual-add (one-time credential reveal), and session scheduling.
+     Topics, members, and sessions in one tabbed surface, plus topic create
+     and member manual-add (one-time credential reveal). Sessions are observed
+     here, never created: system-scheduler opens and turns over every epoch
+     (D55 decision 4, admin-surface.md US-C4).
      Password-gated by the same rm_admin_token as /admin. Buildless: the
      adminSwarmOverview() factory (alpine/views/admin/swarm-overview.js)
      is registered at boot; the router injects this fragment via innerHTML so
@@ -12,7 +14,7 @@
     <span class="rm-eyebrow rm-eyebrow--accent">Operations</span>
     <h1 class="adm-title">Swarm Operations</h1>
     <p class="adm-lede">
-      Manage topics, members, and session scheduling. Guarded by the
+      Manage topics and members, and observe sessions. Guarded by the
       <code>ADMIN_TOKEN</code> secret.
     </p>
   </header>
@@ -223,51 +225,11 @@
 
     <!-- ── Sessions ───────────────────────────────────────────────────── -->
     <section x-show="tab === 'sessions'" x-cloak>
-      <div class="adm-toolbar">
-        <span class="adm-toolbar__spacer"></span>
-        <button type="button" class="adm-btn" @click="showSessionForm = !showSessionForm" data-testid="new-session-toggle">Schedule session</button>
-      </div>
-
-      <form x-show="showSessionForm" x-cloak @submit.prevent="submitSession()" class="adm-form" data-testid="session-form">
-        <label class="adm-field">
-          <span>Topic</span>
-          <select x-model="sessionForm.subjectId" class="adm-input" data-testid="session-subject">
-            <option value="">Select an active topic…</option>
-            <template x-for="t in activeTopics()" :key="t.id">
-              <option :value="t.id" x-text="t.name"></option>
-            </template>
-          </select>
-          <span x-show="sessionErrors.subjectId" x-text="sessionErrors.subjectId" class="rm-error"></span>
-        </label>
-        <label class="adm-field">
-          <span>Session date (UTC)</span>
-          <input type="date" x-model="sessionForm.date" class="adm-input" data-testid="session-date" />
-          <span x-show="sessionErrors.date" x-text="sessionErrors.date" class="rm-error"></span>
-        </label>
-        <label class="adm-field">
-          <span>Brief opens at (ISO instant)</span>
-          <input type="text" x-model="sessionForm.briefOpensAt" class="adm-input" placeholder="2026-07-20T14:00:00Z" data-testid="session-brief-opens" />
-        </label>
-        <label class="adm-field">
-          <span>Window closes at (ISO instant)</span>
-          <input type="text" x-model="sessionForm.windowClosesAt" class="adm-input" placeholder="2026-07-20T20:00:00Z" data-testid="session-window-closes" />
-        </label>
-        <label class="adm-field">
-          <span>Publish at (ISO instant)</span>
-          <input type="text" x-model="sessionForm.publishAt" class="adm-input" placeholder="2026-07-20T21:00:00Z" data-testid="session-publish-at" />
-        </label>
-        <span x-show="sessionErrors.order" x-text="sessionErrors.order" class="rm-error"></span>
-        <label class="adm-field">
-          <span>Reason</span>
-          <textarea x-model="sessionForm.reason" class="adm-input" rows="2" placeholder="10–500 characters" data-testid="session-reason"></textarea>
-          <span x-show="sessionErrors.reason" x-text="sessionErrors.reason" class="rm-error"></span>
-        </label>
-        <span x-show="sessionErrors.form" x-text="sessionErrors.form" class="rm-error adm-msg"></span>
-        <div class="adm-toolbar">
-          <button type="submit" class="adm-btn" :disabled="sessionSubmitting" data-testid="session-submit">Schedule</button>
-          <button type="button" class="adm-btn adm-btn--ghost" @click="showSessionForm = false">Cancel</button>
-        </div>
-      </form>
+      <p class="adm-dim" data-testid="sessions-observe-only">
+        Sessions are opened, turned over and settled by <code>system-scheduler</code>
+        on each topic's schedule. This list observes them; nothing here starts,
+        closes or publishes a session.
+      </p>
 
       <div class="rm-table-scroll">
         <table class="rm-table adm-table">
@@ -281,7 +243,7 @@
                 <td x-text="fmtUtc(s.windowClosesAt)"></td>
               </tr>
             </template>
-            <tr x-show="sessions.length === 0"><td class="adm-dim" colspan="4">No sessions scheduled.</td></tr>
+            <tr x-show="sessions.length === 0"><td class="adm-dim" colspan="4">No sessions yet.</td></tr>
           </tbody>
         </table>
       </div>

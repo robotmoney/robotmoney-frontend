@@ -107,18 +107,11 @@ export const ROUTES: {
       memberRotateKey: string;
       memberRole: string;
       memberAvatar: string;
-      sessionCreate: string;
       sessionRoster: string;
       sessionJudgements: string;
       rosterAdd: string;
       rosterExcuse: string;
       rosterRestore: string;
-      sessionCancel: string;
-      sessionClose: string;
-      sessionReopen: string;
-      sessionAggregate: string;
-      sessionPublish: string;
-      sessionJudge: string;
       judgeConfig: string;
       sessionConsensusReceipt: string;
       audit: string;
@@ -160,3 +153,42 @@ export const ROUTES: {
     researchRerun: string;
   };
 };
+
+/** One item of `GET ROUTES.swarm.participants.pending` (smoke-production-spec.md §6.2). */
+export interface ParticipantPendingWork {
+  sessionId: string;
+  subjectId: string;
+  date: string;
+  windowClosesAt: string | null;
+}
+
+/** The pending route's body: a list, empty when there is no work — never null. */
+export interface ParticipantPendingResponse {
+  pending: ParticipantPendingWork[];
+}
+
+/**
+ * The spend of the model call behind a judgement, as the participant measured
+ * it (D55 decision 3, R19). Every field optional; an absent field is stored as
+ * NULL, never 0. Token counts are whole and non-negative; costUsd is
+ * non-negative. Not covered by the judgement's signature.
+ */
+export interface ParticipantJudgementUsage {
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  totalTokens?: number | null;
+  costUsd?: number | null;
+}
+
+/** `POST ROUTES.swarm.participants.judgement` body, signed over `canonicalizeJudgement`. */
+export interface ParticipantJudgementBody {
+  sessionId: string;
+  /** The model's raw answer text; the API parses it. */
+  opinion: string;
+  model: string;
+  promptHash: string;
+  inputsDigest: string;
+  nonce: string;
+  signature: string;
+  usage?: ParticipantJudgementUsage;
+}

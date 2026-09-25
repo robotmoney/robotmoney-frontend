@@ -363,3 +363,28 @@ test("admin-live: swarm subjects/members lists load the real 'subjects'/'members
     await expect(memberRows).toHaveCount(activeMembers.length);
   }
 });
+
+// ── Sessions are observed, not driven (issue #1026, D55 decision 4) ─────────
+// The admin session create and the cancel/close/reopen/aggregate/judge/publish
+// verbs were retired from the contract; the LIVE API answers 410 on each so a
+// client built against an older contract is told the verb is gone, not that
+// the URL is wrong. The admin UI offers none of them: its Sessions tab is an
+// observe-only list (docs/architecture/admin-surface.md US-C4).
+test("admin-live: the retired session verbs answer 410 on the live API, and the Sessions tab offers no control", async ({ page, request }) => {
+  const someSession = crypto.randomUUID();
+  const retired = [
+    "/api/swarm/admin/sessions",
+    ...["cancel", "close", "reopen", "aggregate", "judge", "publish"].map((verb) => `/api/swarm/admin/sessions/${someSession}/${verb}`),
+  ];
+  for (const path of retired) {
+    const res = await request.post(path, { headers: { "X-Admin-Token": ADMIN_PASSWORD }, data: {} });
+    expect(res.status(), path).toBe(410);
+  }
+
+  await login(page);
+  await page.goto("/admin/swarm");
+  await expect(page.getByRole("heading", { name: "Swarm Operations" })).toBeVisible();
+  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  await expect(page.getByTestId("sessions-observe-only")).toBeVisible();
+  await expect(page.getByTestId("new-session-toggle")).toHaveCount(0);
+});

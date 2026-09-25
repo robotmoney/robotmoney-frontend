@@ -314,3 +314,37 @@ test("GET /api/swarm/sessions answers nextSessionAt from the EPOCH, never from j
     expect(body.nextSessionAt).not.toBe(stale.toISOString());
   }
 });
+
+test("nextSessionAt is NULL — present, never omitted — when no window is open, whatever job_schedules says", async () => {
+  // The null branch of getNextSwarmSession (domain.ts): "no known next
+  // session", the honest answer while no subject has an open window — here,
+  // because the only open epoch's subject was deactivated (§4.5), which closes
+  // the epoch and opens no successor.
+  await sql`UPDATE swarm_sessions SET state = 'window_closed' WHERE state = 'collecting'`;
+  const subjectId = await activeSubject("open_next_null", 3600);
+  const opened = await epoch.openEpoch(subjectId);
+  expect(opened.ok).toBe(true);
+  if (!opened.ok) return;
+  // RED CONTROL: with the window open, the field names its close.
+  expect(await epoch.getNextSwarmSessionAt()).toBe(opened.windowClosesAt);
+
+  const [subject] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${subjectId}`;
+  const deactivated = await admin.deactivateSubjectAdmin(subjectId, Number(subject!.version));
+  expect(deactivated.ok).toBe(true);
+  expect(await collectingSessions(subjectId)).toEqual([]);
+
+  // Schedule rows that WOULD answer if the field still read them.
+  const planted = await sql`UPDATE job_schedules SET enabled = true, next_run_at = ${new Date(Date.now() + 5 * 60_000)} RETURNING id`;
+  expect(planted.length).toBeGreaterThan(0);
+
+  expect(await epoch.getNextSwarmSessionAt()).toBeNull();
+  expect(await epoch.getNextSwarmSession()).toBeNull();
+  for (const url of ["http://test/api/swarm/sessions", "http://test/api/swarm/sessions?full=1"]) {
+    const req = new Request(url);
+    const res = await handleSwarm(req, new URL(req.url));
+    expect((res as { status: number }).status).toBe(200);
+    const body = (res as { body: { nextSessionAt: string | null } }).body;
+    expect("nextSessionAt" in body).toBe(true);
+    expect(body.nextSessionAt).toBeNull();
+  }
+});

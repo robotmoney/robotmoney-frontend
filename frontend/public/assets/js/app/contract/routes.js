@@ -230,9 +230,17 @@ export const ROUTES = {
       // work" — a client-side constant cannot be compared against the server's
       // route table, and nothing did. It belongs here, where both sides read
       // the same string.
-      pending: "/api/swarm/participants/pending", // GET ?member=<id> (member bearer) → { pending: PendingWork | null }
+      // GET ?member=<id> (member bearer) → { pending: PendingWork[] }: every
+      // `collecting` session this member may still file a first take into,
+      // soonest close first; an empty list is "no work". Each item is
+      // { sessionId, subjectId, date, windowClosesAt }.
+      pending: "/api/swarm/participants/pending",
       judgeSubscribe: "/api/swarm/participants/judge/subscribe", // GET (judge bearer) → text/event-stream: pending | keepalive
-      judgement: "/api/swarm/participants/judgement", // POST (judge bearer) { sessionId, opinion, … }
+      // POST (judge bearer) { sessionId, opinion, model, promptHash,
+      // inputsDigest, nonce, signature, usage? } — `usage` is the model call's
+      // spend { inputTokens?, outputTokens?, totalTokens?, costUsd? } (D55
+      // decision 3), outside the signed bytes.
+      judgement: "/api/swarm/participants/judgement",
     },
 
     // Admin lifecycle (X-Admin-Token). The backend registers ONE dispatcher at
@@ -299,7 +307,12 @@ export const ROUTES = {
       // (issue #625) needs to prefer it over the derived mark.
       memberAvatar: "/api/swarm/admin/members/:id/avatar",
 
-      sessionCreate: "/api/swarm/admin/sessions", // POST — UTC-validated, snapshots the roster, enqueues 5 scoped jobs
+      // NO SESSION VERBS (issue #1026, D55 decision 4). The admin session
+      // create and the cancel/close/reopen/aggregate/publish/judge verbs are
+      // retired: `system-scheduler` is the only caller of the epoch lifecycle,
+      // and an admin observes sessions (docs/architecture/admin-surface.md
+      // US-C4). The API answers 410 on those paths for a client built against
+      // an older contract.
       sessionRoster: "/api/swarm/admin/sessions/:id/roster", // GET — the frozen expected roster
       // GET ?limit= — the shadow soak's read path (issue #767). Every judge run
       // for one session, newest first, plus which one is in force: mode,
@@ -313,16 +326,9 @@ export const ROUTES = {
       // logged as `roster_excuse_forced` with the operator's reason).
       rosterExcuse: "/api/swarm/admin/sessions/:id/roster/excuse",
       rosterRestore: "/api/swarm/admin/sessions/:id/roster/restore", // POST { memberId } — before collecting only
-      sessionCancel: "/api/swarm/admin/sessions/:id/cancel", // POST — versioned guarded transition
-      sessionClose: "/api/swarm/admin/sessions/:id/close", // POST — versioned guarded transition
-      sessionReopen: "/api/swarm/admin/sessions/:id/reopen", // POST — versioned guarded transition
-      sessionAggregate: "/api/swarm/admin/sessions/:id/aggregate", // POST — versioned guarded transition
-      sessionPublish: "/api/swarm/admin/sessions/:id/publish", // POST — versioned guarded transition
-      // Consensus judge (issue #752). `sessionJudge` moves aggregated -> judged
-      // and records the opinion; `judgeConfig` is the runtime switch (GET reads
-      // it, POST { mode, minTakes } sets it) that lets an operator take the
-      // judge off published sessions WITHOUT a redeploy.
-      sessionJudge: "/api/swarm/admin/sessions/:id/judge", // POST — versioned guarded transition
+      // Consensus judge (issue #752). `judgeConfig` is the runtime switch (GET
+      // reads it, POST { mode, minTakes } sets it) that lets an operator take
+      // the judge off published sessions WITHOUT a redeploy.
       judgeConfig: "/api/swarm/admin/judge", // GET | POST { mode: off|enforce, minTakes } — `shadow` retired (D53 (1))
       // Assemble, sign-collect and PUBLISH the consensus receipt for a judged
       // session (issue #754). Immutable once published: a second POST returns

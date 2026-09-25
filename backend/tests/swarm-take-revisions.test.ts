@@ -10,7 +10,11 @@
 //      are unchanged after the amendment — the property the whole signature
 //      apparatus exists to provide, and the one an in-place UPDATE would have
 //      destroyed.
-//   2. Latest-per-member on every read that means "the session's takes".
+//   2. One FINAL take per member on every read that means "the session's
+//      takes" (D51): the accepting transaction marks the new take final and
+//      unsets the prior one (migration 0075's trigger), and reads select on
+//      the flag. swarm-take-idempotent.test.ts proves the reads use the flag
+//      rather than revision order.
 //   3. Participation and quorum from DISTINCT MEMBERS, not `takes.length`.
 //      Unfixed this publishes participation above 100%.
 //   4. Every revision verifies INDEPENDENTLY, superseded ones included. A
@@ -21,6 +25,11 @@
 //   6. The cap caps, AND the refusal lands BEFORE the Ed25519 verify. The
 //      ordering is the requirement, not an optimisation — see the ordering test
 //      for how it is proved behaviourally rather than by reading a comment.
+//   7. ONE WINDOW FOR EVERY TAKE (D51, scheduler spec §4.2). A take — first or
+//      amendment — lands while its session is `collecting` and before
+//      `window_closes_at`. There is no second, state-keyed amendment gate;
+//      the tests in section 2 used to pin one (`TAKES_AMENDABLE_STATES`) and
+//      now pin that the window alone decides.
 import { test, expect, beforeEach } from "bun:test";
 import * as ic from "../src/swarm/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
@@ -29,6 +38,7 @@ import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { activeSubject, sessionRow } from "./support/epoch-fixtures.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
 // A session reaches `judged` the way it does in production since issue #1026:
 // a seated judge participant submits a signed judgement (support/stub-judge.ts).
@@ -121,8 +131,8 @@ const takeReceipt = async (id: string) => {
 };
 
 const rows = (sessionId: string, memberId: string) => sql<
-  { id: string; revision: number; body: string; signature: string; payload: any; received_at: Date }[]
->`SELECT id, revision, body, signature, payload, received_at FROM swarm_recommendations
+  { id: string; revision: number; final: boolean; body: string; signature: string; payload: any; received_at: Date }[]
+>`SELECT id, revision, final, body, signature, payload, received_at FROM swarm_recommendations
   WHERE session_id = ${sessionId} AND member_id = ${memberId} ORDER BY revision`;
 
 // ── 1. The model: append, never edit ────────────────────────────────────────
@@ -156,6 +166,11 @@ test("amendment inside the window is ACCEPTED, becomes the latest, and APPENDS �
   expect(new Date(after[0]!.received_at).getTime()).toBe(new Date(before.received_at).getTime());
   expect(after[1]!.revision).toBe(2);
   expect(after[1]!.id).not.toBe(before.id);
+  // D51: accepting the amendment marked it final and unset the prior take, in
+  // the same transaction — exactly one final take, and it is the new one. The
+  // flag is the ONLY thing about the superseded row that moved.
+  expect(before.final).toBe(true);
+  expect(after.map((r) => r.final)).toEqual([false, true]);
 
   // The session read resolves to ONE take for this member — the latest.
   const detail = await ic.getSession(date, subj);
@@ -240,8 +255,8 @@ test("a superseded permalink keeps RESOLVING, keeps showing the bytes that were 
 
 test("amendment OUTSIDE the window is refused — both after the advertised deadline and after aggregation", async () => {
   // (a) The advertised deadline has passed. Rewriting the stored deadline is
-  // the suite's only honest lever: it is compared against Postgres now(), so no
-  // fake clock can move it.
+  // the suite's only honest lever: it is compared against the database clock,
+  // so no fake clock can move it.
   const a = await openCollectingSession("late-amend");
   const ma = await activeMember();
   expect((await submit(ma, a.date, a.subj, { body: "in time" })).status).toBe(201);
@@ -251,14 +266,13 @@ test("amendment OUTSIDE the window is refused — both after the advertised dead
   expect((late as { error: string }).error).toBe("submission window closed");
   expect(await rows(a.session.id, ma.id)).toHaveLength(1);
 
-  // (b) The session has been AGGREGATED. This is the case the advertised
-  // deadline does not cover, because closeWindow may run before it: #570
-  // deliberately keeps a FIRST take acceptable right up to the advertised
-  // instant even after an early close, so the deadline alone cannot protect the
-  // snapshot. aggregateSession copies take prose VERBATIM into
+  // (b) The session has been AGGREGATED while its stored deadline is still in
+  // the future. aggregateSession copies take prose VERBATIM into
   // swarm_recommendation.disagreements[].positions[].view and is never
   // recomputed, so an amendment landing here would leave a published session
-  // quoting a body the member has withdrawn.
+  // quoting a body the member has withdrawn. The session left `collecting`
+  // when it closed, and that is the window's own conjunct (§4.2), so the
+  // refusal is the window's — the same answer as (a), not a second gate.
   const b = await openCollectingSession("aggregated-amend");
   const mb = await activeMember();
   expect((await submit(mb, b.date, b.subj, { body: "the take of record" })).status).toBe(201);
@@ -266,14 +280,13 @@ test("amendment OUTSIDE the window is refused — both after the advertised dead
   await ic.aggregateSession(b.session.id);
   const state = (await sql`SELECT state, window_closes_at FROM swarm_sessions WHERE id = ${b.session.id}`)[0] as any;
   expect(state.state).toBe("aggregated");
-  // The deadline has NOT passed — proving this refusal comes from the
-  // aggregation gate and not from the window comparison.
+  // The deadline has NOT passed — proving this refusal comes from the closed
+  // window's state and not from the instant.
   expect(new Date(state.window_closes_at).getTime()).toBeGreaterThan(Date.now());
 
   const afterAggregate = await submit(mb, b.date, b.subj, { body: "second thoughts" });
   expect(afterAggregate.status).toBe(409);
-  expect((afterAggregate as { error: string }).error).toContain("amendment window closed");
-  expect((afterAggregate as { error: string }).error).toContain("aggregated");
+  expect((afterAggregate as { error: string }).error).toBe("submission window closed");
   expect(await rows(b.session.id, mb.id)).toHaveLength(1);
 
   // And the published snapshot still quotes exactly what is on file.
@@ -281,15 +294,14 @@ test("amendment OUTSIDE the window is refused — both after the advertised dead
   expect(JSON.stringify(rec.swarm_recommendation)).not.toContain("second thoughts");
 });
 
-test("the amendment gate is an ALLOWLIST: `judged` freezes takes exactly as `aggregated` does (#752)", async () => {
-  // THE REGRESSION THIS EXISTS FOR. The gate used to read
+test("`judged` freezes takes exactly as `aggregated` does (#752) — by the window, which only `collecting` opens", async () => {
+  // THE REGRESSION THIS EXISTS FOR. The amendment gate once read
   // `state === "aggregated" || state === "published"` — exhaustive of the
   // post-aggregation states on the day it was written. #752 inserted `judged`
   // between them, and the denylist stopped matching: a member could amend a
   // take on a session whose weight vector and whose verbatim take prose were
-  // already frozen, and `publishSession` is an unconditional UPDATE that does
-  // not re-aggregate. The published session would then carry `weights` that are
-  // NOT meanTakeWeights() over its own take set, and quote a withdrawn body.
+  // already frozen. The window now admits a take only in `collecting`, so no
+  // state added later can reopen it.
   const { subj, session, date } = await openCollectingSession("judged-amend");
   const m = await activeMember();
   expect((await submit(m, date, subj, { body: "the take of record" })).status).toBe(201);
@@ -301,45 +313,53 @@ test("the amendment gate is an ALLOWLIST: `judged` freezes takes exactly as `agg
   const row = (await sql`SELECT state, window_closes_at FROM swarm_sessions WHERE id = ${session.id}`)[0] as any;
   expect(row.state).toBe("judged");
   // The advertised deadline has NOT passed, so this refusal can only come from
-  // the state gate — the same proof shape the `aggregated` case uses.
+  // the state conjunct — the same proof shape the `aggregated` case uses.
   expect(new Date(row.window_closes_at).getTime()).toBeGreaterThan(Date.now());
 
   const amend = await submit(m, date, subj, { body: "second thoughts" });
   expect(amend.status).toBe(409);
-  expect((amend as { error: string }).error).toContain("amendment window closed");
-  expect((amend as { error: string }).error).toContain("judged");
+  expect((amend as { error: string }).error).toBe("submission window closed");
   expect(await rows(session.id, m.id)).toHaveLength(1);
 
   const rec = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${session.id}`)[0] as any;
   expect(JSON.stringify(rec.swarm_recommendation)).not.toContain("second thoughts");
 });
 
-test("every session state is EXPLICITLY either amendable or frozen — a new state cannot be an omission", () => {
-  // The allowlist's whole point: a state added to the lifecycle is frozen by
-  // default. This walks the lifecycle's own table rather than a literal, so
-  // adding a row to TRANSITIONS without deciding about amendment shows up here.
+test("every session state other than `collecting` refuses an amendment inside the advertised deadline — a new state cannot be an omission", async () => {
+  // The old allowlist's whole point, kept: a state added to the lifecycle is
+  // frozen by default. It is now a property of the window rather than of a
+  // list, so it is proved by submitting into each state rather than by reading
+  // a set. This walks the lifecycle's own table, so adding a row to
+  // TRANSITIONS is covered the moment it exists.
   expect(admin.SESSION_STATES.length).toBeGreaterThan(0);
+  expect(admin.SESSION_STATES).toContain("collecting");
   for (const state of admin.SESSION_STATES) {
-    const amendable = ic.TAKES_AMENDABLE_STATES.has(state);
-    // The post-aggregation states — the ones whose take set is already frozen
-    // into a snapshot nothing recomputes — must every one of them be frozen.
-    if (["aggregated", "judged", "published", "cancelled"].includes(state)) {
-      expect(amendable, `${state} must NOT be amendable`).toBe(false);
+    const { subj, session, date } = await openCollectingSession(`state-${state}`);
+    const m = await activeMember();
+    expect((await submit(m, date, subj, { body: "on file" })).status).toBe(201);
+    // Test lever: put the session in `state` with its deadline still an hour
+    // away, so only the state can refuse.
+    await sql`UPDATE swarm_sessions SET state = ${state} WHERE id = ${session.id}`;
+    const amend = await submit(m, date, subj, { body: `amended in ${state}` });
+    if (state === "collecting") {
+      // RED CONTROL: the probe can accept, so the refusals below are real.
+      expect(amend.status, state).toBe(201);
+      expect(await rows(session.id, m.id)).toHaveLength(2);
+    } else {
+      expect(amend.status, state).toBe(409);
+      expect((amend as { error: string }).error, state).toBe("submission window closed");
+      expect(await rows(session.id, m.id)).toHaveLength(1);
     }
   }
-  // And the set is exactly what the domain layer declares, so a reader of one
-  // file does not have to trust a comment in another.
-  expect([...ic.TAKES_AMENDABLE_STATES].sort()).toEqual(["collecting", "scheduled", "window_closed"]);
 });
 
-test("the aggregation gate is AMENDMENT-ONLY: a first take after aggregation is refused by the WINDOW, never by the amendment freeze (#570, #1026)", async () => {
-  // The regression this guards (#570): implementing the gate as "no submits
-  // once aggregated" would answer a member that had not yet spoken with the
-  // AMENDMENT refusal, which tells it "the take on file stands" when there is
-  // none. The epoch model (system-scheduler-spec.md §4.2: takes land "while a
-  // session is `collecting` and now is before its `window_closes_at`") now
-  // refuses that first take too, because the epoch is closed. What this pins is
-  // WHICH refusal it gets: the window's "you are too late", not the freeze.
+test("after aggregation a first take and an amendment get the SAME refusal — one window for both (#570, D51)", async () => {
+  // #570's regression: implementing a freeze as "no submits once aggregated"
+  // answered a member that had not yet spoken with the AMENDMENT refusal,
+  // which told it "the take on file stands" when there was none. D51 removed
+  // the amendment-only gate altogether, so there is one answer and it is the
+  // window's "you are too late" (system-scheduler-spec.md §4.2), for the
+  // latecomer and for the member already on file alike.
   const { subj, session, date } = await openCollectingSession("first-after-agg");
   const seated = await activeMember();
   expect((await submit(seated, date, subj, { body: "early bird" })).status).toBe(201);
@@ -353,12 +373,36 @@ test("the aggregation gate is AMENDMENT-ONLY: a first take after aggregation is 
   expect((first as { error?: string }).error).not.toContain("amendment");
   expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${session.id} AND member_id = ${latecomer.id}`).length).toBe(0);
 
-  // RED CONTROL for the error assertion: the same session answers an
-  // AMENDMENT from the member already on file with the freeze, so the two
-  // refusals are distinguishable and the one above is not the freeze.
   const amend = await submit(seated, date, subj, { body: "second thoughts" });
   expect(amend.status).toBe(409);
-  expect((amend as { error?: string }).error).toContain("amendment window closed");
+  expect((amend as { error?: string }).error).toBe("submission window closed");
+  expect(await rows(session.id, seated.id)).toHaveLength(1);
+});
+
+test("amend twice while the window is open, then a third after window_closes_at is refused even though turnover is late — the last accepted take stays final", async () => {
+  // The criterion-129 shape on the epoch path: the advertised instant, not the
+  // storage state, is what freezes a take. The session stays `collecting`
+  // past its close (the scheduler's turnover is late, §4.6), and the take is
+  // still refused, because §4.2 binds participants to the instant.
+  // The member exists before the epoch opens, so the epoch seats it (US-C3).
+  const m = await activeMember();
+  const subj = await activeSubject("amend-late", 3600);
+  const opened = await ic.openEpoch(subj);
+  if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);
+  const date = sessionDate(await sessionRow(opened.sessionId));
+  expect((await submit(m, date, subj, { body: "first" })).status).toBe(201);
+  expect((await submit(m, date, subj, { body: "amended once" })).status).toBe(201);
+  expect((await submit(m, date, subj, { body: "amended twice" })).status).toBe(201);
+
+  await sql`UPDATE swarm_sessions SET window_closes_at = clock_timestamp() - interval '1 second' WHERE id = ${opened.sessionId}`;
+  expect((await sessionRow(opened.sessionId)).state).toBe("collecting");
+  const late = await submit(m, date, subj, { body: "after the close" });
+  expect(late.status).toBe(409);
+  expect((late as { error: string }).error).toBe("submission window closed");
+
+  const all = await rows(opened.sessionId, m.id);
+  expect(all.map((r) => [r.revision, r.final])).toEqual([[1, false], [2, false], [3, true]]);
+  expect(all.find((r) => r.final)!.body).toBe("amended twice");
 });
 
 // ── 3. The bound ────────────────────────────────────────────────────────────
@@ -444,28 +488,34 @@ test("THE CHEAP PATH: the cap is refused BEFORE the Ed25519 verify, not after", 
   expect((await healthEvents(underCap.id))[0]!.n).toBe(1);
 });
 
-test("nonce replay is refused before the verify too, and says something different from the cap", async () => {
-  const { subj, date } = await openCollectingSession("replay");
+test("a replayed nonce is answered before the verify too: the same bytes are a retry, other bytes a refusal, and neither says `cap`", async () => {
+  const { subj, session, date } = await openCollectingSession("replay");
   const m = await activeMember();
   const nonce = rid("fixed");
-  expect((await submit(m, date, subj, { nonce, body: "first" })).status).toBe(201);
+  const first = await submit(m, date, subj, { nonce, body: "first" });
+  expect(first.status).toBe(201);
 
+  // The SAME signed bytes are a retry (D52, smoke spec §6.2): the existing
+  // record, 200, no row — never a refusal the participant cannot act on.
   const replayed = await submit(m, date, subj, { nonce, body: "first" });
-  expect(replayed.status).toBe(409);
-  expect((replayed as { error: string }).error).toContain("nonce already used");
-  expect((replayed as { error: string }).error).not.toContain("cap");
+  expect(replayed.status).toBe(200);
+  expect((replayed as { alreadySubmitted?: boolean }).alreadySubmitted).toBe(true);
+  expect((replayed as { recommendationId?: string }).recommendationId).toBe((first as { recommendationId?: string }).recommendationId);
+  expect(await rows(session.id, m.id)).toHaveLength(1);
 
-  // Same nonce, INVALID signature: still the nonce answer, and the verify's
-  // health event never fires — the same cheap-path proof as the cap.
+  // Same nonce, INVALID signature: the nonce answer, and the verify's health
+  // event never fires — the same cheap-path proof as the cap.
   const sub = { memberId: m.id, date, subjectId: subj, nonce, stance: "neutral", confidence: 0.5, body: "forged" };
   const badSig = await signMessage(canonicalizeSubmission({ ...sub, body: "different bytes" }), m.privateKey);
   const replayedForgery = await ic.submitRecommendation(m.token, { ...sub, signature: badSig });
   expect(replayedForgery.status).toBe(409);
   expect((replayedForgery as { error: string }).error).toContain("nonce already used");
+  expect((replayedForgery as { error: string }).error).not.toContain("cap");
   const events = await sql<{ n: number }[]>`
     SELECT count(*)::int AS n FROM swarm_agent_health_events
     WHERE member_id = ${m.id} AND event_type = 'rejected_signature'`;
   expect(events[0]!.n).toBe(0);
+  expect(await rows(session.id, m.id)).toHaveLength(1);
 });
 
 // ── 4. Participation and quorum ─────────────────────────────────────────────

@@ -91,6 +91,9 @@ async function runLifecycle(sessionId: string) {
 
 test("a take submitted BETWEEN sessions is accepted and routed to the session it belongs to", async () => {
   const subj = await activeSubject("gap", 600);
+  // Active BEFORE the epochs open: an epoch seats its roster at open and a
+  // member activated afterwards joins the next one (admin-surface.md US-C3).
+  const m = await activeMember();
 
   // Epoch A opens and its advertised deadline passes. Turnover then runs, as
   // the scheduler's boundary timer does.
@@ -113,7 +116,6 @@ test("a take submitted BETWEEN sessions is accepted and routed to the session it
   expect(future).toBe(true);
   expect((await sessionRow(a)).state).toBe("window_closed");
 
-  const m = await activeMember();
   const res = await submit(m, sessionDate(bRow), subj);
   expect(res.status).toBe(201);
   if (!("recommendationId" in res)) throw new Error(`submission failed: ${JSON.stringify(res)}`);
@@ -145,7 +147,7 @@ test("the same take is still accepted once the brief IS published — the deadli
   expect((await submit(m, sessionDate(s), subj)).status).toBe(201);
 });
 
-test("an ELAPSED window still refuses, and that is now the only timing refusal", async () => {
+test("an ELAPSED window still refuses, with `submission window closed` and never `not open`", async () => {
   const subj = rid("late");
   await ensureProseSubject(subj, "Late Subject");
   const s = await ic.openSession(subj);
@@ -171,6 +173,8 @@ test("a turnover that commits AHEAD of the stored close rejects no take — the 
   // member arriving after that close is never told `not open` and never loses
   // its take.
   const subj = await activeSubject("early", 600);
+  // Active before the epochs open, so it holds a seat in both (US-C3).
+  const m = await activeMember();
   const opened = await ic.openEpoch(subj);
   if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);
   const a = opened.sessionId;
@@ -180,7 +184,6 @@ test("a turnover that commits AHEAD of the stored close rejects no take — the 
     SELECT state, window_closes_at > clock_timestamp() AS still_future FROM swarm_sessions WHERE id = ${a}`;
   expect(closed).toEqual({ state: "window_closed", still_future: true });
 
-  const m = await activeMember();
   const res = await submit(m, sessionDate(await sessionRow(turned.openedSessionId)), subj);
   expect(res.status).toBe(201);
   if (!("recommendationId" in res)) throw new Error(`submission failed: ${JSON.stringify(res)}`);
@@ -208,11 +211,17 @@ test("a fresh nonce from the same member is an AMENDMENT, not a duplicate — an
   const second = await submit(m, sessionDate(s), subj, { nonce: rid("second") });
   expect(second.status).toBe(201);
   expect((second as { revision?: number }).revision).toBe(2);
-  // Reused nonce → still refused. This is the constraint that did NOT move,
+  // Reused nonce, SAME signed bytes → a retry (D52, smoke spec §6.2): the
+  // existing record, 200, no row. This is the constraint that did NOT move,
   // and it is what makes a naive worker retry idempotent.
   const replayed = await submit(m, sessionDate(s), subj, { nonce });
-  expect(replayed.status).toBe(409);
-  expect((replayed as { error: string }).error).toContain("nonce already used");
+  expect(replayed.status).toBe(200);
+  expect((replayed as { alreadySubmitted?: boolean }).alreadySubmitted).toBe(true);
+  // Reused nonce, DIFFERENT bytes → still refused as a replay.
+  const reused = await submit(m, sessionDate(s), subj, { nonce, stance: "bearish" });
+  expect(reused.status).toBe(409);
+  expect((reused as { error: string }).error).toContain("nonce already used");
+  expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${s.id} AND member_id = ${m.id}`).length).toBe(2);
 
   // …and the SCHEMA says both of those things, so neither can pass on a
   // coincidence of ordering. The old blanket (session_id, member_id) unique is

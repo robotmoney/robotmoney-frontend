@@ -9,13 +9,23 @@
 //
 // Runs against the ephemeral Postgres from tests/preload.ts (already fully
 // migrated).
+//
+// SESSIONS ARE EPOCHS (issue #1026, D55 decision 4). There is no admin session
+// create any more: `system-scheduler` opens and turns over epochs, and an epoch
+// is `collecting` from its first instant with its roster seated in the same
+// transaction (domain.ts insertEpoch). The session tests below build sessions
+// that way. What pinned the retired create's own input validation — the
+// degenerate-window test (MIN_SESSION_STEP_MS) and the UTC-date and
+// instant-ordering half of the creation test — was deleted with that feature,
+// which D55 decision 4 retired; the creation test keeps its roster and
+// no-jobs halves against the epoch open.
 import { expect, test } from "bun:test";
 import * as admin from "../src/swarm/admin.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeApplication, canonicalizeSubmission } from "@robotmoney/contract";
-import { useCleanDatabase } from "./support/clean-db.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -29,9 +39,11 @@ async function signedApply(name: string) {
   return { memberId: (applied as { memberId: string }).memberId, applied };
 }
 
-// Own database per file, cloned from the migrated template — the roster this
-// file admits into is its own, with no reset of anyone else's rows.
-useCleanDatabase(import.meta.file);
+// Own database per TEST, cloned from the migrated template — the roster each
+// test admits into is its own, with no reset of anyone else's rows. Per test,
+// not per file: every epoch seats the whole active roster and SWARM_ROSTER_CAP
+// bounds it, so members admitted by one test would fill the next test's seats.
+useCleanDatabasePerTest(import.meta.file);
 
 async function activeMember(name = "member") {
   const id = rid("m");
@@ -56,16 +68,13 @@ async function signedSubmission(m: { id: string; privateKey: CryptoKey }, date: 
   return { ...sub, signature };
 }
 
-// Valid, correctly-ordered briefOpensAt < windowClosesAt < publishAt for a
-// given UTC calendar date, matching docs/architecture.md §6.3's
-// SessionCreateRequest shape.
-function sessionTimes(date: string) {
-  return {
-    date,
-    briefOpensAt: `${date}T09:00:00Z`,
-    windowClosesAt: `${date}T10:00:00Z`,
-    publishAt: `${date}T10:05:00Z`,
-  };
+/** Open an epoch — the only way a session is convened (§4.1). */
+async function openedEpoch(subjectId: string) {
+  const opened = await ic.openEpoch(subjectId);
+  if (!opened.ok) throw new Error(`openEpoch(${subjectId}) failed: ${JSON.stringify(opened)}`);
+  const [row] = await sql<{ date: Date | string }[]>`SELECT date FROM swarm_sessions WHERE id = ${opened.sessionId}`;
+  const date = row!.date instanceof Date ? row!.date.toISOString().slice(0, 10) : String(row!.date).slice(0, 10);
+  return { sessionId: opened.sessionId, date };
 }
 
 // ── AC2: topic create/edit/deactivate — versioned, immutable id, stale_version ──
@@ -111,10 +120,7 @@ test("topics: renaming a subject backfills subject_name onto its existing sessio
   const id = rid("topic");
   await admin.createSubjectAdmin({ id, name: "Old Name" });
 
-  const date = "2026-08-15";
-  const created = await admin.createSessionAdmin({ ...sessionTimes(date), subjectId: id });
-  expect(created.status).toBe(201);
-  const sessionId = (created as any).session.id as string;
+  const { sessionId } = await openedEpoch(id);
 
   const before = (await sql`SELECT subject_name FROM swarm_sessions WHERE id = ${sessionId}`)[0];
   expect(before.subject_name).toBe("Old Name");
@@ -282,108 +288,46 @@ test("members: application review approve/reject", async () => {
   expect((await admin.deactivateMemberAdmin(memberId, 2)).status).toBe(200);
 });
 
-// ── AC4 (session creation): UTC validation, roster snapshot, 5 dedup jobs ──
-test("session creation: rejects bad date, timestamp ordering, date/briefOpensAt mismatch, inactive topic; snapshots the active roster; enqueues NOTHING", async () => {
+// ── AC4 (session creation): the epoch opens, snapshots the roster, enqueues nothing ──
+test("epoch open: refuses an inactive or unknown subject; snapshots the active roster; enqueues NOTHING", async () => {
   const subjectId = await activeSubject();
   const m1 = await activeMember("m1");
   const m2 = await activeMember("m2");
 
-  expect((await admin.createSessionAdmin({ ...sessionTimes("2026-08-01"), subjectId, date: "not-a-date" })).status).toBe(400);
-  expect(
-    (await admin.createSessionAdmin({ date: "2026-08-01", subjectId, briefOpensAt: "2026-08-02T09:00:00Z", windowClosesAt: "2026-08-01T10:00:00Z", publishAt: "2026-08-01T10:05:00Z" }))
-      .status,
-  ).toBe(400); // date mismatch (briefOpensAt is 08-02, date is 08-01)
-  expect(
-    (await admin.createSessionAdmin({ date: "2026-08-01", subjectId, briefOpensAt: "2026-08-01T10:00:00Z", windowClosesAt: "2026-08-01T09:00:00Z", publishAt: "2026-08-01T10:05:00Z" }))
-      .status,
-  ).toBe(400); // bad ordering (windowClosesAt before briefOpensAt)
-
   const inactiveSubject = rid("inact");
   await sql`INSERT INTO swarm_subjects (id, status, name) VALUES (${inactiveSubject}, 'inactive', 'Inactive')`;
-  expect((await admin.createSessionAdmin({ ...sessionTimes("2026-08-01"), subjectId: inactiveSubject })).status).toBe(409);
+  expect(await ic.openEpoch(inactiveSubject)).toMatchObject({ ok: false, status: 409, error: "subject_not_active" });
+  expect(await ic.openEpoch(rid("nope"))).toMatchObject({ ok: false, status: 404, error: "subject_not_found" });
 
-  const date = "2026-08-01";
-  const created = await admin.createSessionAdmin({ ...sessionTimes(date), subjectId });
-  expect(created.status).toBe(201);
-  // This suite shares one swarm (no tenant isolation, by design) with
-  // other test files that also register active members and never deactivate
-  // them, so the roster snapshot legitimately includes more than JUST m1/m2
-  // when the full suite runs together — assert containment, not exact size.
-  expect((created as any).rosterSize).toBeGreaterThanOrEqual(2);
-  const sessionId = (created as any).session.id as string;
+  const opened = await ic.openEpoch(subjectId);
+  expect(opened.ok).toBe(true);
+  if (!opened.ok) return;
+  expect(opened.status).toBe(201);
+  const sessionId = opened.sessionId;
+  expect((await sql`SELECT state FROM swarm_sessions WHERE id = ${sessionId}`)[0]!.state).toBe("collecting");
 
+  // This test has a database of its own, so the snapshot is exactly the two
+  // active members, each `expected`.
   const roster = await admin.getSessionRoster(sessionId);
-  const rosterIds = roster.map((r: any) => r.member_id);
-  expect(rosterIds).toEqual(expect.arrayContaining([m1.id, m2.id]));
+  expect(roster.map((r: any) => [r.member_id, r.status]).sort())
+    .toEqual([[m1.id, "expected"], [m2.id, "expected"]].sort());
 
-  // NO LIFECYCLE JOBS (issue #1026 W4). This call used to enqueue five
+  // NO LIFECYCLE JOBS (issue #1026 W4). Session creation used to enqueue five
   // session-scoped rows — publish_brief, close_window, aggregate, judge,
   // publish — each with its own `run_after`. Scheduler spec §4.4 removes the
   // scheduled lifecycle entirely: a session is `collecting` from its first
   // instant, the boundary is a timer `system-scheduler` holds, and settlement
   // is "a chain the scheduler drives through the API, each step as soon as the
-  // previous one returns". The assertion is inverted rather than deleted,
-  // because "no swarm job is enqueued here" is the property that has to keep
-  // holding while the old path is dismantled.
+  // previous one returns". The assertion is kept inverted, because "no swarm
+  // job is enqueued here" is the property that has to keep holding.
   const swarmJobs = await sql<{ kind: string }[]>`
     SELECT kind FROM jobs WHERE payload->>'sessionId' = ${sessionId}`;
   expect(swarmJobs.map((j) => j.kind)).toEqual([]);
 
-  // Recreating the still-scheduled session is still idempotent.
-  const again = await admin.createSessionAdmin({ ...sessionTimes(date), subjectId });
-  expect(again.status).toBe(200);
+  // Opening again returns the open epoch (§4.1) and still enqueues nothing.
+  const again = await ic.openEpoch(subjectId);
+  expect(again).toMatchObject({ ok: true, status: 200, sessionId, created: false });
   expect((await sql`SELECT id FROM jobs WHERE payload->>'sessionId' = ${sessionId}`).length).toBe(0);
-});
-
-
-// DEGENERATE WINDOWS are now REFUSED, not clamped (issues #767, #806).
-//
-// #767 clamped both intermediate instants downward from publish so a window too
-// narrow to hold three of them collapsed instead of inverting. That kept the
-// sequence monotonic, and left a session whose `aggregate` and `judge` share an
-// identical `run_after` — at which point their claim order is a tiebreak rather
-// than a schedule, and the judge can drain after the publish it must beat.
-// #806 states the requirement in validation instead: MIN_SESSION_STEP_MS
-// between each pair. The clamp is kept, because the property (monotonic, never
-// crossing) is not the same thing as the input bound that gives it room.
-test("session create: a window too narrow to order aggregate/judge/publish is REFUSED, and the narrowest legal one is strict", async () => {
-  const subjectId = await activeSubject();
-  const date = "2026-08-23";
-  const tooNarrow = await admin.createSessionAdmin({
-    date, subjectId,
-    briefOpensAt: `${date}T09:00:00Z`,
-    windowClosesAt: `${date}T10:00:00Z`,
-    publishAt: `${date}T10:00:01Z`, // one second: cannot hold three instants
-  });
-  expect(tooNarrow.status).toBe(400);
-  expect(String((tooNarrow as any).error)).toContain("windowClosesAt and publishAt");
-  // …and the collection window itself is bounded on the same terms.
-  const noWindow = await admin.createSessionAdmin({
-    date, subjectId,
-    briefOpensAt: `${date}T10:00:00.000Z`,
-    windowClosesAt: `${date}T10:00:00.001Z`,
-    publishAt: `${date}T10:05:00Z`,
-  });
-  expect(noWindow.status).toBe(400);
-  expect(String((noWindow as any).error)).toContain("collection window");
-  // The narrowest LEGAL window: MIN_SESSION_STEP_MS on both gaps, and the four
-  // instants are strictly ordered — no pair collapses onto another.
-  const legal = await admin.createSessionAdmin({
-    date: "2026-08-24", subjectId,
-    briefOpensAt: "2026-08-24T09:59:57Z",
-    windowClosesAt: "2026-08-24T10:00:00Z",
-    publishAt: "2026-08-24T10:00:03Z",
-  });
-  expect(legal.status).toBe(201);
-  // The instants themselves are what the bound protects now: there are no
-  // lifecycle jobs left to order (issue #1026 W4), but a session still STORES
-  // the three instants an admin declared and a one-millisecond window is still
-  // not a window.
-  const legalId = (legal as any).session.id as string;
-  const [stored] = await sql<{ brief_opens_at: Date; window_closes_at: Date; publish_at: Date }[]>`
-    SELECT brief_opens_at, window_closes_at, publish_at FROM swarm_sessions WHERE id = ${legalId}`;
-  expect(new Date(stored.brief_opens_at).getTime()).toBeLessThan(new Date(stored.window_closes_at).getTime());
-  expect(new Date(stored.window_closes_at).getTime()).toBeLessThan(new Date(stored.publish_at).getTime());
 });
 
 // REMOVED WITH THE FIVE-JOB ENQUEUE (issue #1026 W4).
@@ -406,38 +350,54 @@ test("session create: a window too narrow to order aggregate/judge/publish is RE
 test("roster: add/excuse/restore work pre-collection and are blocked after collecting starts", async () => {
   const subjectId = await activeSubject();
   const m1 = await activeMember("r1");
-  const created = await admin.createSessionAdmin({ ...sessionTimes("2026-08-05"), subjectId });
-  const sessionId = (created as any).session.id as string;
 
-  const m2 = await activeMember("r2"); // registered AFTER creation — not on the frozen snapshot
-  const add = await admin.rosterAddAdmin(sessionId, m2.id);
-  expect(add.status).toBe(200);
-  const excuse = await admin.rosterExcuseAdmin(sessionId, m1.id);
-  expect(excuse.status).toBe(200);
-  const restore = await admin.rosterRestoreAdmin(sessionId, m1.id);
-  expect(restore.status).toBe(200);
+  // PRE-COLLECTION. No path convenes a `scheduled` session any more (an epoch
+  // is born `collecting`), but the roster edits still answer for one, and a
+  // legacy row of that shape can exist in a migrated database. The row is
+  // written here directly for that reason, with m1 seated as the retired
+  // create would have seated it.
+  const [legacy] = await sql<{ id: string }[]>`
+    INSERT INTO swarm_sessions (subject_id, subject_name, state) VALUES (${subjectId}, ${subjectId}, 'scheduled')
+    RETURNING id`;
+  const legacyId = String(legacy!.id);
+  await sql`INSERT INTO swarm_session_members (session_id, member_id, member_name, status)
+            VALUES (${legacyId}, ${m1.id}, 'r1', 'expected')`;
+  const m2 = await activeMember("r2"); // not on the legacy snapshot
+  expect((await admin.rosterAddAdmin(legacyId, m2.id)).status).toBe(200);
+  expect((await admin.rosterExcuseAdmin(legacyId, m1.id)).status).toBe(200);
+  expect((await admin.rosterRestoreAdmin(legacyId, m1.id)).status).toBe(200);
 
-  // Move the session into collecting, then roster edits are locked.
-  await ic.publishBrief(sessionId, 60);
+  // COLLECTING: an epoch's roster is locked from its first instant.
+  const subjectB = await activeSubject();
+  const { sessionId } = await openedEpoch(subjectB);
   expect((await admin.rosterAddAdmin(sessionId, m2.id)).status).toBe(409);
   expect((await admin.rosterExcuseAdmin(sessionId, m1.id)).status).toBe(409);
   expect((await admin.rosterRestoreAdmin(sessionId, m1.id)).status).toBe(409);
+  // RED CONTROL for the lock: the audited forced excusal is the one edit a
+  // collecting roster takes, so the 409s above are the lock, not a bad id.
+  expect((await admin.rosterExcuseAdmin(sessionId, m1.id, admin.ADMIN_ACTOR, { force: true })).status).toBe(200);
 });
 
 // ── AC6: submission requires an expected roster row; excused is rejected ───
 test("submission: a member off the frozen roster (or excused) is rejected; a roster member succeeds", async () => {
   const subjectId = await activeSubject();
   const onRoster = await activeMember("onroster");
-  const created = await admin.createSessionAdmin({ ...sessionTimes("2026-08-06"), subjectId });
-  const sessionId = (created as any).session.id as string;
-  const offRoster = await activeMember("offroster"); // registered after snapshot
-  await ic.publishBrief(sessionId, 60);
+  const excused = await activeMember("excused");
+  const { sessionId, date } = await openedEpoch(subjectId);
+  // OFF THE ROSTER: activated after the epoch opened, so it joins the NEXT
+  // epoch (docs/architecture/admin-surface.md US-C3) and holds no seat here.
+  const offRoster = await activeMember("offroster");
+  expect((await admin.rosterExcuseAdmin(sessionId, excused.id, admin.ADMIN_ACTOR, { force: true })).status).toBe(200);
 
-  const okSub = await ic.submitRecommendation(onRoster.token, await signedSubmission(onRoster, "2026-08-06", subjectId));
+  const okSub = await ic.submitRecommendation(onRoster.token, await signedSubmission(onRoster, date, subjectId));
   expect(okSub.status).toBe(201);
 
-  const rejected = await ic.submitRecommendation(offRoster.token, await signedSubmission(offRoster, "2026-08-06", subjectId));
+  const rejected = await ic.submitRecommendation(offRoster.token, await signedSubmission(offRoster, date, subjectId));
   expect(rejected.status).toBe(403);
+  expect((rejected as { error: string }).error).toContain("not on this session's expected roster");
+  const refusedExcused = await ic.submitRecommendation(excused.token, await signedSubmission(excused, date, subjectId));
+  expect(refusedExcused.status).toBe(403);
+  expect((refusedExcused as { error: string }).error).toContain("excused");
 });
 
 // ── AC6: aggregate denominators use non-excused roster snapshot rows ───────
@@ -445,28 +405,32 @@ test("aggregate: quorum denominator is the frozen roster (excluding excused), no
   const subjectId = await activeSubject();
   const a = await activeMember("agg-a");
   const b = await activeMember("agg-b");
-  const created = await admin.createSessionAdmin({ ...sessionTimes("2026-08-07"), subjectId });
-  const sessionId = (created as any).session.id as string;
-  // The roster snapshot legitimately includes every OTHER globally-active
-  // member too (this suite shares one swarm with other test files) — the
-  // invariant under test is relative: excusing b removes exactly one from
-  // the denominator, and a member who joins AFTER the snapshot (or who is
-  // simply never added) never inflates it.
+  const { sessionId, date } = await openedEpoch(subjectId);
+  // The roster snapshot legitimately includes every OTHER active member of this
+  // file too — the invariant under test is relative: excusing b removes exactly
+  // one from the denominator, and a member who joins AFTER the epoch closed
+  // never inflates it.
   const rosterTotal = (await admin.getSessionRoster(sessionId)).length;
 
-  // Excuse b BEFORE collecting; a third member joins live but is never added
-  // to the roster, so it must not inflate the denominator.
-  await admin.rosterExcuseAdmin(sessionId, b.id);
-  await activeMember("agg-c-not-on-roster");
+  await admin.rosterExcuseAdmin(sessionId, b.id, admin.ADMIN_ACTOR, { force: true });
+  await ic.submitRecommendation(a.token, await signedSubmission(a, date, subjectId));
+  const turned = await ic.turnOverEpoch(subjectId, sessionId);
+  expect(turned.ok).toBe(true);
 
-  await ic.publishBrief(sessionId, 60);
-  await ic.submitRecommendation(a.token, await signedSubmission(a, "2026-08-07", subjectId));
-  await ic.closeWindow(sessionId);
+  // A member activated after the close holds no seat in the closed epoch, nor
+  // in the successor the turnover already opened: it joins the next epoch.
+  const late = await activeMember("agg-c-after-close");
+  if (turned.ok) {
+    const successorRoster = (await admin.getSessionRoster(turned.openedSessionId)).map((r: any) => r.member_id);
+    expect(successorRoster).not.toContain(late.id);
+  }
+  expect((await admin.getSessionRoster(sessionId)).map((r: any) => r.member_id)).not.toContain(late.id);
+
   const rollup = await ic.aggregateSession(sessionId);
 
   // Denominator is (rosterTotal - 1) — everyone snapshotted MINUS the one
   // excused member `b` — never the live active-member count (which would
-  // additionally include the post-snapshot "agg-c-not-on-roster" member).
+  // additionally include the post-close member).
   expect(rollup.quorum.active).toBe(rosterTotal - 1);
   expect(rollup.quorum.submitted).toBe(1);
   expect(rollup.quorum.absent).toBe(rosterTotal - 1 - 1);
@@ -476,15 +440,14 @@ test("aggregate: quorum denominator is the frozen roster (excluding excused), no
 test("guarded lifecycle: legal transitions succeed with one event+audit row; illegal/terminal/stale are rejected; repeats are idempotent", async () => {
   const subjectId = await activeSubject();
   await activeMember("lc1");
-  const created = await admin.createSessionAdmin({ ...sessionTimes("2026-08-08"), subjectId });
-  const sessionId = (created as any).session.id as string;
+  const { sessionId } = await openedEpoch(subjectId);
 
   const auditCountFor = async (toState: string) =>
     Number((await sql`SELECT count(*)::int AS n FROM audit_log WHERE action = 'session_transition' AND scope->>'sessionId' = ${sessionId} AND scope->>'to' = ${toState}`)[0].n);
   const eventCountFor = async (toState: string) =>
     Number((await sql`SELECT count(*)::int AS n FROM swarm_session_events WHERE session_id = ${sessionId} AND to_state = ${toState}`)[0].n);
 
-  // Illegal: cannot aggregate directly from 'scheduled'.
+  // Illegal: cannot aggregate directly from 'collecting'.
   const illegal = await admin.aggregateSessionAdmin(sessionId, 1);
   expect(illegal.status).toBe(409);
   expect((illegal as any).error).toContain("illegal_transition");
@@ -494,8 +457,7 @@ test("guarded lifecycle: legal transitions succeed with one event+audit row; ill
   expect(stale.status).toBe(409);
   expect((stale as any).error).toBe("stale_version");
 
-  // Legal: scheduled -> collecting (via publishBrief's own write) then admin close.
-  await ic.publishBrief(sessionId, 60);
+  // Legal: collecting -> window_closed (the epoch is born collecting, §4.1).
   const close = await admin.closeSessionAdmin(sessionId, 1);
   expect(close.status).toBe(200);
   expect((close as any).session.state).toBe("window_closed");
@@ -538,8 +500,7 @@ test("guarded lifecycle: legal transitions succeed with one event+audit row; ill
 
 test("guarded lifecycle: cancel is legal from a non-terminal state and is itself terminal", async () => {
   const subjectId = await activeSubject();
-  const created = await admin.createSessionAdmin({ ...sessionTimes("2026-08-09"), subjectId });
-  const sessionId = (created as any).session.id as string;
+  const { sessionId } = await openedEpoch(subjectId);
   const cancel = await admin.cancelSessionAdmin(sessionId, 1, admin.ADMIN_ACTOR, "operator error");
   expect(cancel.status).toBe(200);
   expect((cancel as any).session.state).toBe("cancelled");

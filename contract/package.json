@@ -1,6 +1,6 @@
 {
   "name": "@robotmoney/contract",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "HTTP API contract shared by the robotmoney frontend and backend. Types + route paths only, zero runtime deps.",
   "type": "module",
   "main": "src/index.js",
