@@ -228,7 +228,7 @@
   },
   {
     "id": "known-producer-api-stale-socket",
-    "match": "\\[analytics-producer\\] (indicator catch-up: could not read recent raw-history gap dates|regime failed): The socket connection was closed unexpectedly",
+    "match": "\\[analytics-producer\\] (indicator catch-up|regime failed): .*The socket connection was closed unexpectedly",
     "class": "known-issue",
     "issue": "producer-api-stale-socket (pre-existing in v0.5.0)",
     "reason": "The analytics producer's first call to the api after a long idle gap fails on a closed kept-alive socket (production 2026-09-25 21:30 and 21:31, 29 min after its previous call; the api logged nothing and did not restart). The producer skips that pass and retries on its next schedule.",
