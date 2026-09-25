@@ -307,10 +307,24 @@ export function registerRegimeView(Alpine) {
     transformLabel(t) {
       return ({ level: "Level", change30: "30-day change", change90: "90-day change", trend_50_200: "50d/200d trend" })[t] || String(t || "").replace(/_/g, " ");
     },
-    signLabel(s) { return s == null ? "" : s >= 0 ? "Higher reads risk-on" : "Higher reads risk-off"; },
+    signText(s) { return s == null ? "" : s >= 0 ? "+1" : "\u22121"; },
+    signTip(s) { return s == null ? "" : s >= 0 ? "+1: a higher value leans risk-on." : "\u22121: a higher value leans risk-off, so its percentile is flipped."; },
     // A reading's lean as a round dot: green at or above its median, beacon
-    // below. The same dot ends its sparkline.
+    // below. Its tip says it in words.
     leanDot(v) { return `background:${this.signedColor(v)}`; },
+    leanTip(v) {
+      if (v == null || !isFinite(v)) return "No reading.";
+      return `${this.ordinalPct(v)} percentile of its last 3 years: ${v >= 0.5 ? "at or above its median, leaning risk-on" : "below its median, leaning risk-off"}.`;
+    },
+    // What an indicator's weight means: its share of its panel index, and so
+    // of the composite, which is half macro and half on-chain.
+    weightTip(ind) {
+      const w = ind?.panel_weight;
+      if (w == null || !isFinite(w)) return "";
+      const panel = this.panelLabel(ind.panel).toLowerCase();
+      if (ind.panel === "factor") return `${(w * 100).toFixed(1)}% of the ${panel} index, which is left out of the composite.`;
+      return `${(w * 100).toFixed(1)}% of the ${panel} index, and so ${(w * 50).toFixed(1)}% of the composite.`;
+    },
     fmtSign(s) { return s == null ? "—" : (s >= 0 ? "+" : "") + s; },
     sourceLabel(s) { return SOURCE_LABEL[s] || s || "—"; },
     // Row-level provenance badge label (issue #397): which AnalyticsDataSource
@@ -414,12 +428,17 @@ export function registerRegimeView(Alpine) {
       const yAt = (v) => pad + (1 - v) * (H - 2 * pad);
       let last = null;
       for (let k = vals.length - 1; k >= 0; k--) { if (typeof vals[k] === "number" && isFinite(vals[k])) { last = vals[k]; break; } }
-      // The line in a neutral stroke: it is the reading over two years, up is
-      // risk-on. The dot at its end takes the lean of the latest reading (the
-      // same dot as the percentile beside it), so a line can climb and still
-      // end on the risk-off side of its median.
-      const stroke = "rgba(242,244,249,0.5)";
-      const dot = this.signedColor(last);
+      // The line takes the colour of its own direction over the two years:
+      // green as it climbs, --color-warn as it falls, slate when it ends
+      // within 5 points of where it began. It plots the percentile flipped
+      // where needed, so climbing is always toward risk-on. Its colour used to
+      // be the latest reading's side of the median, which read as a line going
+      // up drawn orange.
+      let first = null;
+      for (const v of vals) { if (typeof v === "number" && isFinite(v)) { first = v; break; } }
+      const move = last != null && first != null ? last - first : 0;
+      const stroke = move >= 0.05 ? SERIES.emerald : move <= -0.05 ? PALETTE.warn : SERIES.slate;
+      const dot = stroke;
       const pts = []; let lastX = pad, lastY = yAt(0.5);
       vals.forEach((v, i) => { if (typeof v === "number" && isFinite(v)) { const px = xAt(i), py = yAt(v); pts.push(px.toFixed(1) + "," + py.toFixed(1)); lastX = px; lastY = py; } });
       const mid = yAt(0.5).toFixed(1);

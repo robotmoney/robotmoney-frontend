@@ -249,7 +249,7 @@
                     <!-- The Risk-on and Weight headers carry the .rm-tip explainer
                          for what a one-word header cannot hold. The sparkline
                          plots the SAME series as the Risk-on column. -->
-                    <tr><th scope="col">Indicator</th><th scope="col"><span class="rm-tip rm-tip--label"><button class="rm-tip__btn rm-tip__btn--text" type="button">2 years</button><span class="rm-tip__bub" role="tooltip">The percentile month by month for two years, up is risk-on. The dashed line is the 50th; the dot is today's reading.</span></span></th><th scope="col" class="rv__num">Last</th><th scope="col" class="rv__num"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text" type="button">Percentile</button><span class="rm-tip__bub" role="tooltip">Where today's reading sits in its own last 3 years. Ranks are flipped where needed, so a higher percentile leans risk-on in every row, and the dot is green from the 50th up. An indicator has no regime of its own: only the composite reads risk-on, neutral or risk-off. The 2 years line plots the same percentile, monthly.</span></span></th><th scope="col" class="rv__num"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text" type="button">Weight</button><span class="rm-tip__bub" role="tooltip">Share of the panel index this indicator carries. The more a reading echoes the rest of the panel, the less it counts. Each panel sums to 100%.</span></span></th></tr>
+                    <tr><th scope="col">Indicator</th><th scope="col"><span class="rm-tip rm-tip--label"><button class="rm-tip__btn rm-tip__btn--text" type="button">2 years</button><span class="rm-tip__bub" role="tooltip">The percentile month by month for two years, flipped where needed so up is always toward risk-on. Green as it climbs, orange as it falls. The dashed line is the 50th.</span></span></th><th scope="col" class="rv__num">Last</th><th scope="col" class="rv__num"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text" type="button">Percentile</button><span class="rm-tip__bub" role="tooltip">Where today's reading sits in its own last 3 years. Ranks are flipped where needed, so a higher percentile leans risk-on in every row, and the dot is green from the 50th up. An indicator has no regime of its own: only the composite reads risk-on, neutral or risk-off. The 2 years line plots the same percentile, monthly.</span></span></th><th scope="col" class="rv__num"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text" type="button">Weight</button><span class="rm-tip__bub" role="tooltip">The indicator's share of its panel index; each panel sums to 100%. The macro and on-chain indices are half of the composite each, so half this weight is its share of the composite. The more a reading echoes the rest of the panel, the less it counts.</span></span></th></tr>
                   </thead>
                   <tbody>
                     <template x-for="ind in indicatorsIn(p)" :key="ind.id">
@@ -264,15 +264,15 @@
                           <small class="rv__ind-src">
                             <template x-if="ind.source_url"><a :href="ind.source_url" target="_blank" rel="noopener" x-text="sourceLabel(ind.source)"></a></template>
                             <template x-if="!ind.source_url"><span x-text="sourceLabel(ind.source)"></span></template>
-                            · <span x-text="transformLabel(ind.transform)"></span> · <span class="rv__sign" :class="ind.sign >= 0 ? 'is-on' : 'is-off'" x-text="signLabel(ind.sign)"></span>
+                            · <span x-text="transformLabel(ind.transform)"></span> · <span class="rv__sign" :class="ind.sign >= 0 ? 'is-on' : 'is-off'" :title="signTip(ind.sign)" x-text="signText(ind.sign)"></span>
                           </small>
                         </th>
                         <td class="rv__spark" x-html="sparklineSvg(ind.sparkline)"></td>
                         <td class="rv__num" x-text="fmtLast(ind)"></td>
                         <!-- The percentile as the Market context prints it, its
                              lean as a round dot (the dot that ends the line). -->
-                        <td class="rv__num"><span class="rv__lean"><i :style="leanDot(ind.signed_percentile)" aria-hidden="true"></i><span x-text="ind.signed_percentile == null ? '—' : ordinalPct(ind.signed_percentile)"></span></span></td>
-                        <td class="rv__num rv__muted" x-text="fmtWeight(ind.panel_weight)"></td>
+                        <td class="rv__num"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text rv__cellbtn" type="button"><span class="rv__lean"><i :style="leanDot(ind.signed_percentile)" aria-hidden="true"></i><span x-text="ind.signed_percentile == null ? '—' : ordinalPct(ind.signed_percentile)"></span></span></button><span class="rm-tip__bub" role="tooltip" x-text="leanTip(ind.signed_percentile)"></span></span></td>
+                        <td class="rv__num rv__muted"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text rv__cellbtn" type="button" x-text="fmtWeight(ind.panel_weight)"></button><span class="rm-tip__bub" role="tooltip" x-text="weightTip(ind)"></span></span></td>
                       </tr>
                     </template>
                   </tbody>
