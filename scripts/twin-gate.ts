@@ -287,7 +287,15 @@ function sessionRows(container: string, t0: string): SessionRow[] {
             EXISTS (SELECT 1 FROM swarm_session_judgements j WHERE j.session_id = s.id
                       AND j.source = 'model' AND j.mode = 'enforce' AND j.applied),
             EXISTS (SELECT 1 FROM swarm_consensus_receipts r WHERE r.session_id = s.id)
-       FROM swarm_sessions s WHERE s.convened_at >= '${t0}'::timestamptz ORDER BY s.convened_at`,
+       FROM swarm_sessions s
+      WHERE s.convened_at >= '${t0}'::timestamptz
+         -- A session production opened and this boot ADOPTED (round 1 of a
+         -- twin) counts too, when this boot judged it: a judgement row created
+         -- after T0 cannot come from the dump, and the adopted session ran the
+         -- whole path here (brief, takes, judge, publish). Counting it lets one
+         -- round prove the release instead of two.
+         OR EXISTS (SELECT 1 FROM swarm_session_judgements j WHERE j.session_id = s.id AND j.created_at >= '${t0}'::timestamptz)
+      ORDER BY s.convened_at`,
   ).map(([id, subject, state, age, takes, judged, receipt]) => ({
     id: id!, subject: subject!, state: state!, ageMin: Number(age), takes: Number(takes), judged: judged === "t", receipt: receipt === "t",
   }));
@@ -397,7 +405,7 @@ export function renderReport(r: GateReport): string {
   out.push(`| Waivers | ${r.args.waive.length ? r.args.waive.map((w) => `\`${w}\``).join(", ") : "none"} |`, "");
   out.push(`## Checks`, "", `| # | Check | Result | Detail |`, `|---|---|---|---|`);
   r.checks.forEach((c, i) => out.push(`| ${i + 1} | ${c.title} | **${c.status}** | ${c.detail.join("<br>").replace(/\|/g, "\\|") || "—"} |`));
-  out.push("", `## Sessions convened after T0 (database)`, "", `| Session | Subject | State | Takes | Judged (model/enforce) | Receipt |`, `|---|---|---|---|---|---|`);
+  out.push("", `## Sessions convened or judged after T0 (database)`, "", `| Session | Subject | State | Takes | Judged (model/enforce) | Receipt |`, `|---|---|---|---|---|---|`);
   for (const s of r.sessions) out.push(`| \`${s.id}\` | ${s.subject} | ${s.state} | ${s.takes} | ${s.judged ? "yes" : "no"} | ${s.receipt ? "yes" : "no"} |`);
   if (r.sessions.length === 0) out.push(`| — | — | — | — | — | — |`);
   out.push("", `## Sessions the driver logged as published`, "", `| Subject | State | Takes | Judge |`, `|---|---|---|---|`);
@@ -454,7 +462,7 @@ async function main(): Promise<number> {
   const add = (id: string, title: string, failures: string[], detail: string[], warn = false) =>
     checks.push({ id, title, status: failures.length ? "FAIL" : warn ? "WARN" : "PASS", detail: [...failures, ...detail] });
 
-  add("sessions", "Every subject published a judged, attended session convened after T0 (database)", verdict.failures,
+  add("sessions", "Every subject published a judged, attended session convened or judged after T0 (database)", verdict.failures,
     [`${[...verdict.publishedBySubject].map(([s, n]) => `${s}: ${n} published`).join("; ")}`, `active analysts ${active} (judges file no takes)`]);
 
   const driverLines: string[] = [];

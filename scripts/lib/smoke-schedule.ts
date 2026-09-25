@@ -397,9 +397,11 @@ export function assertProductionConstants(
  * INSIDE its window, and that step fetches live market data; on 2026-09-25 a
  * rate-limited source (geckoterminal HTTP 429, five retries) consumed the whole
  * 2-minute window before any member started, every member got `409 submission
- * window closed`, and the session published with no takes. The driver closes a
- * window early once every seated member has submitted, so a wider window costs
- * nothing when members are quick. CI's fast profile is untouched.
+ * window closed`, and the session published with no takes.
+ *
+ * The driver waits out every window it publishes, in full (only a twin's
+ * ADOPTED window is not its own to wait out, see session.ts). CI's fast
+ * profile is untouched.
  */
 export const TWIN_WINDOW_MS = 6 * 60_000;
 

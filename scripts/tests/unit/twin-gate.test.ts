@@ -155,3 +155,11 @@ describe("the report — the document the runbook files", () => {
     expect(parseGateArgs(["--report", "/tmp/r.md"])).toMatchObject({ report: "/tmp/r.md" });
   });
 });
+
+describe("adopted sessions count when this boot judged them", () => {
+  test("the session query admits a pre-T0 session only through a judgement created after T0", () => {
+    const src = require("node:fs").readFileSync(require("node:path").join(import.meta.dir, "../../twin-gate.ts"), "utf8") as string;
+    expect(src).toContain("WHERE s.convened_at >= '${t0}'::timestamptz");
+    expect(src).toContain("OR EXISTS (SELECT 1 FROM swarm_session_judgements j WHERE j.session_id = s.id AND j.created_at >= '${t0}'::timestamptz)");
+  });
+});
