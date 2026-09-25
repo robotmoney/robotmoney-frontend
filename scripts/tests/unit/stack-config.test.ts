@@ -234,28 +234,6 @@ describe("argv builders", () => {
     ]);
   });
 
-  test("upArgs scales a service it starts — `--scale worker-swarm=4` for the smoke's swarm lane", () => {
-    expect(upArgs(["api", "worker-swarm"], { scale: { "worker-swarm": 4 } })).toEqual([
-      "up", "-d", "--scale", "worker-swarm=4", "api", "worker-swarm",
-    ]);
-    // Production's one worker is stated too, not omitted: one code path.
-    expect(upArgs(["worker-swarm"], { scale: { "worker-swarm": 1 } })).toEqual([
-      "up", "-d", "--scale", "worker-swarm=1", "worker-swarm",
-    ]);
-  });
-
-  test("upArgs never scales a service the call does not start", () => {
-    expect(upArgs(["postgres"], { scale: { "worker-swarm": 4 } })).toEqual(["up", "-d", "postgres"]);
-    expect(upArgs(["analytics-producer"], { wait: true, waitTimeoutSeconds: 600, scale: { "worker-swarm": 4 } }))
-      .toEqual(["up", "-d", "--wait", "--wait-timeout", "600", "analytics-producer"]);
-  });
-
-  test("upArgs refuses a replica count that is not a whole number of at least 1", () => {
-    for (const bad of [0, -1, 1.5, Number.NaN]) {
-      expect(() => upArgs(["worker-swarm"], { scale: { "worker-swarm": bad } })).toThrow(/whole number of at least 1/);
-    }
-  });
-
   test("downArgs is a plain `down` unless volumes/orphans are explicitly requested", () => {
     expect(downArgs()).toEqual(["down"]);
     expect(downArgs({ removeVolumes: true, removeOrphans: true })).toEqual(["down", "--volumes", "--remove-orphans"]);

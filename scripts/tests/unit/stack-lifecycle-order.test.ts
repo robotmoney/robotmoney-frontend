@@ -212,35 +212,3 @@ test("up() without an initializer still completes through the health gate", asyn
   expect(rec.events).toContain("health:done");
   expect(rec.events).not.toContain("initialize:done");
 });
-
-// `--scale` (the swarm lane's replica count is a cadence value — see
-// SmokeCadence.swarmWorkers) rides ONLY on the `up` call that starts the
-// scaled service. `core` has no worker lanes, so `api` stands in for one here;
-// the argv shape itself is upArgs's and is pinned in stack-config.test.ts.
-test("up({ scale }) scales a service on the call that starts it, and only there", async () => {
-  const rec: Recorded = { events: [], probes: 0 };
-  const ups: string[][] = [];
-  await stackFor(rec, {
-    async run(argv) {
-      if (argv.includes("up")) ups.push(argv.slice(argv.indexOf("up")));
-      return 0;
-    },
-  }).up({ scale: { api: 3 } });
-
-  expect(ups.find((a) => a.includes("postgres"))).toEqual(["up", "-d", "postgres"]);
-  expect(ups.find((a) => a.includes("api"))).toEqual(["up", "-d", "--scale", "api=3", "api", "website-server"]);
-});
-
-test("up({ scale }) refuses a service the profile does not run — before anything is built", async () => {
-  const rec: Recorded = { events: [], probes: 0 };
-  let anythingRan = false;
-  await expect(
-    stackFor(rec, {
-      async run() {
-        anythingRan = true;
-        return 0;
-      },
-    }).up({ scale: { "worker-swarm": 4 } }),
-  ).rejects.toThrow(/scaled services are not in the core profile: worker-swarm/);
-  expect(anythingRan).toBe(false);
-});

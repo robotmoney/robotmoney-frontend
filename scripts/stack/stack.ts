@@ -89,10 +89,6 @@ export interface StackUpOptions {
    * durable input. They are started with Compose's health barrier so a caller
    * cannot consume a process still busy with boot-time catch-up. */
   deferredServices?: string[];
-  /** Replicas per service (`docker compose up --scale`), applied on whichever
-   * `up` call starts that service. Omitted services run compose's default of
-   * one. See upArgs in ./config.ts. */
-  scale?: Readonly<Record<string, number>>;
   pgTimeoutMs?: number;
   healthTimeoutMs?: number;
 }
@@ -376,14 +372,6 @@ export function createStack(
 
   async function up(upOpts: StackUpOptions = {}): Promise<StackHostPorts> {
     assertFullStackProducerCredential(cfg);
-    // A replica count for a service this profile does not run is a typo or a
-    // stale caller, and it would otherwise be dropped silently by upArgs (which
-    // only scales what a call starts). Refused here, before anything is built
-    // or written, like an unknown deferred service below.
-    const unknownScaled = Object.keys(upOpts.scale ?? {}).filter((s) => !services.includes(s));
-    if (unknownScaled.length > 0) {
-      throw new Error(`scaled services are not in the ${cfg.profile} profile: ${unknownScaled.join(", ")}`);
-    }
     assertDockerAvailable();
     await assembleStaticDir();
     await build();
@@ -396,7 +384,7 @@ export function createStack(
       // diagnostic than anything a pre-flight ping here could synthesize.
       emit({ phase: "postgres", status: "done", detail: "external (managed) — no container started" });
     } else {
-      await composeAsync(upArgs(["postgres"], { scale: upOpts.scale }), "start postgres");
+      await composeAsync(upArgs(["postgres"]), "start postgres");
       await waitForPostgres(upOpts.pgTimeoutMs);
       emit({ phase: "postgres", status: "done" });
     }
@@ -416,7 +404,7 @@ export function createStack(
     }
     const rest = services.filter((s) => s !== "postgres" && !requestedDeferred.has(s));
     emit({ phase: "services", status: "start", detail: rest.join(", ") });
-    await composeAsync(upArgs(rest, { scale: upOpts.scale }), "start services");
+    await composeAsync(upArgs(rest), "start services");
     emit({ phase: "services", status: "done", detail: rest.join(", ") });
 
     // Only NOW do the host ports exist. Everything downstream — the health
@@ -458,7 +446,7 @@ export function createStack(
       const deferred = [...requestedDeferred];
       emit({ phase: "services", status: "start", detail: deferred.join(", ") });
       await composeAsync(
-        upArgs(deferred, { wait: true, waitTimeoutSeconds: 600, scale: upOpts.scale }),
+        upArgs(deferred, { wait: true, waitTimeoutSeconds: 600 }),
         `start deferred services ${deferred.join(" ")}`,
       );
       emit({ phase: "services", status: "done", detail: deferred.join(", ") });

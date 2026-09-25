@@ -8,7 +8,6 @@
 // owned by this worker back to 'pending' — a stopped worker never leaves an
 // orphaned 'running' row, and the ownership-guarded terminal writes in loop.ts
 // discard a hung handler's eventual result (no duplicate job_runs).
-import { hostname } from "node:os";
 import { config } from "../config.ts";
 import { processOneJob, releaseOwnedJobs } from "./loop.ts";
 import { tickScheduler } from "./scheduler.ts";
@@ -18,7 +17,7 @@ import { heartbeatPath, schedulerHeartbeatPath, writeHeartbeat } from "../ops/he
 
 export interface WorkerOptions {
   lane: Lane;
-  /** Owner id for locked_by/logs. Default: WORKER_ID env, else `<lane>-<hostname>-<pid>`. */
+  /** Owner id for locked_by/logs. Default: WORKER_ID env, else `<lane>-<pid>`. */
   workerId?: string;
   idlePollMs?: number;
   schedulerTickMs?: number;
@@ -72,28 +71,12 @@ export interface WorkerHandle {
   drained(timeoutMs?: number): Promise<void>;
 }
 
-/** `<lane>-<hostname>-<pid>` — unique per container replica (see startWorker). */
-export function defaultWorkerId(laneName: string, host: string = hostname(), pid: number = process.pid): string {
-  return `${laneName}-${host}-${pid}`;
-}
-
 export function startWorker(opts: WorkerOptions): WorkerHandle {
   const lane = opts.lane;
   // Lane-aware worker id: an explicit WORKER_ID wins, otherwise the id carries
   // the lane name so locked_by, logs, and the admin jobs dashboard all show
   // WHICH lane owns a job.
-  //
-  // AND THE HOSTNAME, because the pid alone is not unique across containers.
-  // The worker is the container's own entrypoint, so it is pid 1 in EVERY
-  // container: `swarm-1` for each replica once the smoke runs several
-  // worker-swarm replicas (`--scale worker-swarm=N`, a cadence value). Two
-  // replicas sharing an id would defeat every ownership guard in loop.ts —
-  // one replica's shutdown `releaseOwnedJobs` would hand another replica's
-  // in-flight job back to `pending`, and a reaped zombie's terminal write would
-  // pass the `locked_by = workerId` check of the replica that re-claimed it.
-  // Docker sets a container's hostname to its own id, so `<lane>-<host>-<pid>`
-  // is unique per replica; outside Docker it is simply more descriptive.
-  const workerId = opts.workerId ?? process.env.WORKER_ID ?? defaultWorkerId(lane.name);
+  const workerId = opts.workerId ?? process.env.WORKER_ID ?? `${lane.name}-${process.pid}`;
   const idlePollMs = opts.idlePollMs ?? Number(process.env.WORKER_IDLE_POLL_MS ?? 2000);
   const schedulerTickMs = opts.schedulerTickMs ?? Number(process.env.SCHEDULER_TICK_MS ?? 30_000);
   const reaperTickMs = opts.reaperTickMs ?? Number(process.env.REAPER_TICK_MS ?? 60_000);

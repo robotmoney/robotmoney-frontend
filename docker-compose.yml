@@ -54,8 +54,7 @@
 #   analytics-producer — owns regime/research timers and submits over REST; no
 #                        DATABASE_URL or admin credential.
 # WORKER_LANE is REQUIRED by the worker entry (fails loudly when empty/unknown);
-# WORKER_ID defaults to `<lane>-<hostname>-<pid>` (unique per container — the
-# pid alone is 1 in every replica of a scaled lane — and lane-visible in
+# WORKER_ID defaults to `<lane>-<pid>` (unique per container, lane-visible in
 # locked_by/logs/admin dashboard). The producer is not a queue lane.
 # Container log retention. Docker's json-file driver defaults to UNBOUNDED: a
 # standing demo left up for days grows one log file per container until the host
