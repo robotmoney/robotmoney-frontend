@@ -136,8 +136,10 @@ collecting → window_closed → aggregated → [judging → judged] → publish
   `expected_session_id`. In one transaction the API closes N (recording one
   durable `absent` agent-health event per seated member with no take, §9.4.1),
   opens N+1, and records the turnover. Turnover is bound to the named epoch;
-  a retry or a stale timer never closes the successor (§4.3). An operator
-  ending a window early uses the same endpoint. Deactivating a subject closes
+  a retry or a stale timer never closes the successor (§4.3). Only the
+  scheduler turns an epoch over; there is no operator early turnover, and the
+  operator admin token is refused on every epoch lifecycle route
+  ([D55](../decisions.md#d55)). Deactivating a subject closes
   and settles its open epoch and opens no successor (§4.5).
 - **Settlement** of N is independent of N+1's window and of every other
   subject (§4.4): **aggregate** (deterministic rollup **over the takes

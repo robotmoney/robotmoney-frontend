@@ -1,6 +1,6 @@
 # System scheduler spec
 
-> **Status: second draft, 2026-09-23; amended 2026-09-24 (§13). Prescriptive.** This document describes
+> **Status: second draft, 2026-09-23; amended 2026-09-24 and 2026-09-25 (§13). Prescriptive.** This document describes
 > the scheduling architecture the system is to have. It does not describe the
 > current implementation and does not inherit from it. Where it conflicts with
 > code, the code is what changes. It sits beside
@@ -48,7 +48,7 @@ The duration columns carry their unit as a suffix in the schema: `epoch_duration
 
 The grid keeps windows from drifting. A late turnover does not push later windows back, and a daily subject anchored after the analytics producer's 22:30 UTC regime refresh closes after it every day.
 
-- **Turnover.** Epoch N+1 closes at the first grid instant after N's `window_closes_at` — on an unchanged grid, exactly `window_closes_at + epoch_duration`. If that instant has already passed, it closes at the first grid instant after now instead. Missed slots are skipped, never opened (§3.2). An operator's early turnover (§4.3) follows the same rule, so the next window runs to the grid instant after the early-closed window's scheduled close and is longer than one duration.
+- **Turnover.** Epoch N+1 closes at the first grid instant after N's `window_closes_at` — on an unchanged grid, exactly `window_closes_at + epoch_duration`. If that instant has already passed, it closes at the first grid instant after now instead. Missed slots are skipped, never opened (§3.2).
 - **First epoch.** An epoch opened with no predecessor (a fresh database, an activation, a reactivation) closes at the first grid instant at least **half of `epoch_duration`** after now; if the next instant is nearer than that, it closes at the one after. Its window is therefore between half a duration and one and a half, never a sliver. Without the floor, a subject activated moments before a grid instant would open a window nobody can submit into and then publish a session recording every seated member absent.
 - **Duration change.** Changing `epoch_duration` through the admin API also sets `epoch_anchor` to the current window's `window_closes_at`, in the same transaction; a subject with no open window keeps its anchor. The current window is unchanged, and the grid continues from its close with the new spacing.
 
@@ -119,9 +119,9 @@ The window is the only scheduled part of a session's life. The judging deadline 
 
 When a session's boundary timer fires, `system-scheduler` makes one API call: **turn over**, naming the epoch it intends to close — `expected_session_id`. The API, in one transaction and behind the state guard (§5): checks that the named session is the subject's current `collecting` session; closes it (`collecting → window_closed`, recording an `absent` event for each seated member with no take received before `window_closes_at`); opens epoch N+1 with its close set by the turnover rule of §2.2; and records the turnover. The scheduler then sets the subject's boundary timer to the new `window_closes_at` and starts settlement of N (§4.4).
 
-**Turnover is bound to the epoch, never to "whatever is open."** If the named session is no longer the current collecting one — because this call is a retry after a lost response, because a stale timer fired after an operator's early turnover, or because a second scheduler got there first — the API returns the original turnover's result if it has one, or a reasoned no-op. It never closes the successor. This is what makes a repeated boundary safe under §5 and §10.
+**Turnover is bound to the epoch, never to "whatever is open."** If the named session is no longer the current collecting one — because this call is a retry after a lost response, because a stale timer fired after a turnover this scheduler did not make, or because a second scheduler got there first — the API returns the original turnover's result if it has one, or a reasoned no-op. It never closes the successor. This is what makes a repeated boundary safe under §5 and §10.
 
-Turnover is the only way an epoch closes while its subject stays active. An operator ending a window early does it through the same endpoint with the same `expected_session_id`; the scheduler learns of it by event (§6.2) and treats it exactly as it treats its own.
+Turnover is the only way an epoch closes while its subject stays active, and `system-scheduler` is the only caller that turns an epoch over ([D55](../decisions.md#d55)). There is no operator or admin early turnover. The operator admin token holds only the `admin` right, and every epoch lifecycle route refuses it (§7). A turnover the scheduler learns of only by event (§6.2) — a second scheduler's, or its own whose response was lost — is treated exactly as one it saw complete.
 
 ### 4.4 Settlement
 
@@ -173,14 +173,14 @@ These retries are triggered by a failure and are bounded. They are not polling.
 
 ## 5. Transitions are state-guarded
 
-Every transition endpoint checks the session's current state — and, for turnover, the named epoch — before acting, and refuses as a no-op with a reason if the transition is not valid. This is what makes the clock safe: a boundary fired twice, a settlement resumed after downtime, a stale timer, a second scheduler, and an operator firing a step by hand all reach the same guard. Where the transition has already happened, the guard returns the original result rather than a bare refusal, so a caller can tell "already done" from "not allowed."
+Every transition endpoint checks the session's current state — and, for turnover, the named epoch — before acting, and refuses as a no-op with a reason if the transition is not valid. This is what makes the clock safe: a boundary fired twice, a settlement resumed after downtime, a stale timer, a second scheduler, and a retry after a lost response all reach the same guard. Where the transition has already happened, the guard returns the original result rather than a bare refusal, so a caller can tell "already done" from "not allowed."
 
 ## 6. Timed work, event-driven work, and the stream
 
 ### 6.1 Two kinds of work
 
 - **Timed work** fires at an instant the clock already knows. There is one scheduled kind: the epoch boundary, one per active subject. The clock fires it directly; the API sends nothing, because the scheduler already holds the instant. The judging deadline (§4.4) is also a timer the scheduler holds, reconstructed from the instant the API stored, but it is a timeout inside settlement, not a schedule.
-- **Event-driven work** fires because something happened. Settlement is driven by the scheduler as the direct consequence of a turnover — its own, or an operator's — and advanced by the `session.judged` event. An operator triggering a step is event-driven. A change to a subject's scheduling columns is itself an event.
+- **Event-driven work** fires because something happened. Settlement is driven by the scheduler as the direct consequence of a turnover — one whose response it received, or one it learned of only by event (a second scheduler's, or its own whose response was lost) — and advanced by the `session.judged` event. A change to a subject's scheduling columns is itself an event.
 
 ### 6.2 Change events
 
@@ -189,7 +189,7 @@ Any write that alters what the scheduler is waiting on is published by the API a
 | event | cause | scheduler does |
 |---|---|---|
 | `subject.changed` | a scheduling column changed (§2.2), or subject activated / deactivated | re-reads that subject; on activation opens its first epoch (§3); on deactivation drops its boundary timer and settles the closed epoch (§4.5) |
-| `epoch.turned_over` | epoch N closed and N+1 opened — by the boundary or by an operator | sets that subject's boundary timer to the new `window_closes_at`; settles N if it is not already settling |
+| `epoch.turned_over` | epoch N closed and N+1 opened — by this scheduler's boundary, or by a second scheduler | sets that subject's boundary timer to the new `window_closes_at`; settles N if it is not already settling |
 | `session.judged` | the judges' consensus was recorded | proceeds to finalize (§4.4) |
 
 A duration change takes effect at the **next** boundary: the current window keeps the `window_closes_at` it was opened with, the grid is re-anchored at that instant (§2.2), and the epoch opened at that boundary uses the new duration. A change to `epoch_anchor` alone likewise leaves the current window alone and moves the grid from the next boundary. A change to `judging_duration` applies to sessions that close afterwards (§4.4).
@@ -222,7 +222,7 @@ There are four kinds of credential in this system, and they must not be confused
 | **Database** — a Postgres role password | that the process may open a database connection | the API and the pipeline worker, at runtime | `~/.env` (`smoke-production-spec.md` §3) |
 | **Model** — a third-party LLM key (e.g. `OPENCODE_API_KEY`) | that the holder may call a model vendor | participants that call a model: agents, judges | each participant's own `credential.json` entry, delivered to its container only |
 
-`system-scheduler` holds exactly one: an **API credential**, an automation token with the rights to read subjects and sessions and to perform lifecycle transitions. It signs nothing, so it has no signing key and no entry in `credential.json`. It never touches the database, so it has no role password. It calls no model, so it has no model key. It holds no Docker socket.
+`system-scheduler` holds exactly one: an **API credential**, an automation token with the rights to read subjects and sessions and to perform lifecycle transitions. It is the only credential those transitions accept: the operator admin token holds only the `admin` right, and every epoch lifecycle route refuses it ([D55](../decisions.md#d55)). It signs nothing, so it has no signing key and no entry in `credential.json`. It never touches the database, so it has no role password. It calls no model, so it has no model key. It holds no Docker socket.
 
 How that automation token is issued, validated, delivered and rotated is defined in `smoke-production-spec.md`: §3 for the token store and delivery, §9.1 for production, §5 for rehearsal (blank, dump, volume and remote rehearsal targets). Every environment in §8 obtains it by one of those two paths; none reuses another's.
 
@@ -242,6 +242,7 @@ The same `system-scheduler` image and code run in production, stage, test and CI
 - The submission window is the only scheduled part of a session. Settlement is never scheduled; the judging deadline is a timeout inside it.
 - A submission after `window_closes_at` is refused regardless of state.
 - Turnover is bound to a named epoch and never retargets its successor.
+- Only `system-scheduler` drives the lifecycle transitions. No operator or admin early turnover exists, and the operator admin token is refused on every epoch lifecycle route.
 - `system-scheduler` never polls the API on an interval, and never re-reads on a timer. Failure-triggered, bounded retries are not polling.
 - The clock is either provably current or rebuilding. There is no third state.
 - Every change to what the clock waits on is an event on the stream, sequenced in the transaction that made the change.
@@ -256,7 +257,7 @@ Timing gates distinguish **dispatch** (the scheduler issued the call at the inst
 - A blank-database boot sets every subject's `epoch_duration`, `epoch_anchor` and `judging_duration` from the snapshot; a boot on a populated database changes none of them.
 - No service other than `api` and the pipeline worker carries a database credential in any composition, asserted by rendering the compose config; `system-scheduler` carries none.
 - For an active subject, closing epoch N and opening N+1 happen in one transaction; turnover is dispatched within one second of `window_closes_at`; the new session's `window_closes_at` is the first grid instant after N's close, and a first epoch closes at the first grid instant after its open instant.
-- **Epoch binding:** drop a successful turnover's response and retry; fire a stale timer after an operator's early turnover; race two schedulers against the same epoch. Each yields exactly one successor and one reasoned no-op or replayed result; N+1 is never closed by a retry aimed at N.
+- **Epoch binding:** drop a successful turnover's response and retry; fire a stale timer after a turnover this scheduler did not make; race two schedulers against the same epoch. Each yields exactly one successor and one reasoned no-op or replayed result; N+1 is never closed by a retry aimed at N.
 - Two concurrent first-openings for one subject yield one `collecting` session.
 - Two subjects with different durations turn over independently at their own instants.
 - **No drift:** a turnover dispatched late still gives N+1 a close on the grid; after ten epochs each close equals `epoch_anchor + k × epoch_duration` exactly.
@@ -272,10 +273,11 @@ Timing gates distinguish **dispatch** (the scheduler issued the call at the inst
 - **Isolation:** a judge wait on one session, and a failed transition on another, delay no subject's boundary and no other session's settlement. Both happen between transactions, never inside one; transitions contend only on the event counter, for the duration of a database write (§9).
 - Transient aggregate failure with a healthy stream is retried and succeeds; a refusal with a reason is not retried.
 - Activating a subject, or booting a blank database with active subjects, opens an epoch for each with no operator action; activation during scheduler downtime yields one fresh epoch on rebuild, not backdated.
-- An operator turning over an epoch early through the admin API settles it and opens the next exactly as the boundary would, the new window closes on the grid instant after the early-closed window's scheduled close, and the scheduler's timer moves to that instant.
+- A turnover this scheduler did not make (a second scheduler's), learned of only by `epoch.turned_over`, is settled and followed exactly as the scheduler's own boundary would be: N is settled to `published`, N+1's window closes on the grid (§2.2), the scheduler's timer moves to that instant, and the scheduler fires no turnover of its own on top.
+- The operator admin token is refused on every epoch lifecycle route — open, turnover, each settlement step — and changes nothing.
 - Killing `system-scheduler` mid-window and restarting it after the window instant fires the boundary once on rebuild; a window that should have turned over three times during the outage turns over once.
 - Deactivating a subject closes and settles its open epoch and opens no new one.
-- **Handoff:** a turnover committed by an operator between the scheduler's full read and its subscription is delivered on the stream above the cursor, not lost.
+- **Handoff:** a turnover this scheduler did not make (a second scheduler's), committed between this scheduler's full read and its subscription, is delivered on the stream above the cursor, not lost.
 - **Silent stall:** stall the connection without closing it — the missed keepalive is detected, the scheduler rebuilds, and no stale timer fires.
 - **Final-event loss:** drop one application event at the API-to-scheduler hop while keepalives keep flowing, with no later event to follow it. The next keepalive's head sequence exceeds the scheduler's last-applied number; that alone triggers the rebuild, and the rebuilt state reflects the dropped change. The test asserts the trigger was the head-sequence mismatch, not a manually induced rebuild.
 - **Early finalize:** under `enforce`, calling finalize before the deadline with no eligible consensus is refused with a reason and changes nothing; calling it before the deadline with an eligible consensus publishes `judged`; calling it at the deadline instant with a consensus recorded at that instant publishes `judged`.
@@ -316,7 +318,9 @@ Adopting this document superseded these clauses of `smoke-production-spec.md`. T
 
 The companion's participant model — agents polling for a new window, judges subscribing for judging requests — is defined in its §6.2. The judge subscription is its own connection and its own contract: the API serves pending `judging` sessions as state on every connect, so it does not depend on this document's cursor-and-sequence stream (§6.3), which exists for the scheduler alone.
 
-## 13. Amendments (2026-09-24)
+## 13. Amendments
+
+### 2026-09-24
 
 Decided with the owner on 2026-09-24 and recorded as [D52](../decisions.md#d52). Each row records what changed so the edit is auditable from this document alone.
 
@@ -332,3 +336,15 @@ Decided with the owner on 2026-09-24 and recorded as [D52](../decisions.md#d52).
 | §2.2 | a first epoch may be arbitrarily short | a first epoch's window is at least half a duration, so activation timing cannot publish an unusable session |
 | §9, §10 | the counter serializes transitions while the isolation gate implies none | a transition transaction never spans a network or model call, so the counter serializes only database work |
 
+### 2026-09-25
+
+Decided with the owner on 2026-09-25 and recorded as [D55](../decisions.md#d55): only `system-scheduler` drives the lifecycle transitions. Each row records what changed so the edit is auditable from this document alone.
+
+| clause | said before | says now |
+|---|---|---|
+| §2.2 | an operator's early turnover follows the turnover rule and yields a window longer than one duration | removed; no early turnover exists |
+| §4.3 | an operator ends a window early through the turnover endpoint; the scheduler learns of it by event | only `system-scheduler` turns an epoch over; the operator admin token holds only `admin` and every epoch lifecycle route refuses it; a turnover learned of only by event is a second scheduler's or a lost response's |
+| §4.3, §5 | a stale timer after an operator's early turnover; an operator firing a step by hand | a stale timer after a turnover this scheduler did not make; a retry after a lost response |
+| §6.1, §6.2 | settlement follows the scheduler's own turnover or an operator's; an operator triggering a step is event-driven; `epoch.turned_over` is caused by the boundary or an operator | settlement follows a turnover whose response the scheduler received or one it learned of only by event; `epoch.turned_over` is caused by this scheduler's boundary or a second scheduler |
+| §7, §9 | the operator admin token's rights on lifecycle routes unstated | the scheduler's token is the only credential the lifecycle transitions accept; a new invariant says so |
+| §10 | gates exercised an operator's early turnover (epoch binding, event-learned turnover, handoff) | the same gates run against a turnover this scheduler did not make; a new gate asserts the operator admin token is refused on every epoch lifecycle route |

@@ -43,12 +43,12 @@ lifecycle, the scheduler spec governs and this list only summarizes it:
   the `ADMIN_TOKEN` environment variable is retired.
   Role-based admin accounts are out of scope for this phase.
 - Keep the buildless Alpine frontend and the frontend-to-backend HTTP boundary.
-- Research and queue admin requests still go through the Postgres queue. Swarm
-  lifecycle actions do not: an admin action calls the same state-guarded API
-  transition that `system-scheduler` calls (turn over with
-  `expected_session_id`, aggregate, request judging, finalize), and the API
-  performs it as one transaction
-  ([scheduler spec §5](../technical/system-scheduler-spec.md#5-transitions-are-state-guarded)).
+- Research and queue admin requests still go through the Postgres queue. The
+  swarm lifecycle is not an admin action at all: only `system-scheduler`
+  drives it (open, turn over, aggregate, request judging, finalize), and the
+  operator admin token holds only the `admin` right, which every epoch
+  lifecycle route refuses ([D55](../decisions.md#d55),
+  [scheduler spec §4.3](../technical/system-scheduler-spec.md#43-the-boundary)).
   The browser never runs domain operations itself.
 - Preserve accepted swarm recommendations as append-only signed records.
   Admins cannot edit or delete them. Under [D51](../decisions.md#d51) a member
@@ -370,34 +370,35 @@ Acceptance:
   timestamps; five one-off `swarm.*` jobs; `MIN_SESSION_STEP_MS` clamps) is
   what shipped before the scheduler and is not a target requirement.
 
-### US-C4 — Operate guarded swarm transitions
+### US-C4 — Observe guarded swarm transitions
 
-As a swarm manager, I can fire a lifecycle step by hand without creating
-impossible state.
+As a swarm manager, I can see every lifecycle transition the scheduler made,
+and I cannot fire one myself.
 
-The transition contract lives in
-[scheduler spec §§4–5](../technical/system-scheduler-spec.md#4-the-session-lifecycle);
-this surface exposes those same endpoints and adds nothing to them. Summary:
+Only `system-scheduler` drives the epoch lifecycle
+([D55](../decisions.md#d55)). There is no manual turnover, no early close and
+no hand-fired settlement step. The operator admin token holds only the `admin`
+right, and every epoch lifecycle route refuses it. The transition contract
+lives in
+[scheduler spec §§4–5](../technical/system-scheduler-spec.md#4-the-session-lifecycle).
+This surface shows the transitions that contract produced. Summary:
 
-| Action | Effect | Guard |
+| Transition | Effect | Guard |
 |---|---|---|
 | turn over (`expected_session_id`) | closes the named `collecting` session (absences recorded), opens the next epoch, records the turnover — one transaction | the named session must be the topic's current `collecting` one; otherwise the original result or a reasoned no-op (§4.3) |
 | aggregate | `window_closed → aggregated`, deterministic, over accepted takes only | state guard (§5) |
 | request judging | `aggregated → judging`; stores the absolute deadline | mode captured at turnover is `enforce`; under `off` finalize is called directly (§4.4) |
 | finalize | decides the outcome from stored instants and publishes: `→ published` | state-guarded and time-guarded: under `enforce` with no eligible consensus it refuses until the deadline (§4.4) |
 
-An operator ending a window early is a turnover with the same
-`expected_session_id`; it is not a distinct "early close" and never targets
-the successor. There is no reopen, no cancel and no `shadow` mode in the
-target ([D48](../decisions.md#d48)). Every other call returns 409 with a
-reason. A repeated call for a transition that already happened returns the
-original result; it must not rewrite timestamps.
+There is no reopen, no cancel and no `shadow` mode in the target
+([D48](../decisions.md#d48)). A repeated call for a transition that already
+happened returns the original result. It must not rewrite timestamps.
 `published` is terminal.
 
-Manual actions are synchronous calls to the same state-guarded API endpoints
-the scheduler uses; they return the transition's result, not a job id. The
-scheduler learns of them by event (`epoch.turned_over`, `session.judged`) and
-continues the chain (scheduler spec §6.2).
+A step that is stuck is the scheduler's degraded state, which its health
+surface names with the item and the last error. The operator's recovery is to
+restart `system-scheduler`, which rebuilds and resumes the item
+([scheduler spec §4.6](../technical/system-scheduler-spec.md#46-transition-calls-that-fail)).
 
 ### US-C5 — Inspect member datapoints and aggregation
 
@@ -704,7 +705,6 @@ state is 409, accepted queue work is 202, and successful synchronous mutation is
 | `POST /api/admin/swarm/members/:id/reject` | reject application |
 | `GET /api/admin/swarm/sessions` | list sessions (no create: the scheduler opens sessions) |
 | `GET /api/admin/swarm/sessions/:id` | complete operational session DTO: state, events, captured judge mode, judging deadline, judging outcome |
-| `POST /api/admin/swarm/sessions/:id/actions/:action` | fire one state-guarded transition synchronously (`turn_over`, `aggregate`, `request_judging`, `finalize`) |
 | `GET /api/admin/audit` | filtered append-only audit list |
 
 Mutation request and response shapes are fixed as follows. Unknown fields are
@@ -771,12 +771,8 @@ type MemberStatusRequest = {
 // No SessionCreateRequest and no RosterPatchRequest: sessions are opened by
 // system-scheduler and the roster is frozen at open (US-C3).
 
-type SessionActionRequest = {
-  version: number;
-  action: "turn_over" | "aggregate" | "request_judging" | "finalize";
-  expectedSessionId?: string; // required for turn_over; the epoch being closed
-  reason?: AdminReason; // required for a manual turn_over before window_closes_at
-};
+// No SessionActionRequest: only system-scheduler fires lifecycle transitions,
+// and the operator admin token is refused on every epoch route (D55).
 
 type TopicDeactivateRequest = { version: number; reason: AdminReason };
 type DeadJobRetryRequest = { reason: AdminReason };
@@ -791,14 +787,11 @@ an API response table. Enqueued operations return
 `{ jobId, auditRequestId, existing: boolean }` with status 202. A 409 response is
 `{ error, code: "stale_version" | "invalid_transition" | "duplicate", current? }`.
 
-A manual lifecycle action calls the same state-guarded transition endpoint
-that `system-scheduler` calls and returns its result synchronously with
-status 200. A transition that already happened returns the original result
-(the API distinguishes "already done" from "not allowed"); an invalid one is
-409 `invalid_transition` with a reason. No queue job is created. The scheduler
-receives the change on the event stream and continues settlement; the
-operator does not drive later steps by hand unless a step is stuck
-([scheduler spec §§4.6, 5, 6.2](../technical/system-scheduler-spec.md#46-transition-calls-that-fail)).
+No admin route fires a lifecycle transition. The operator admin token holds
+only the `admin` right, and every epoch lifecycle route refuses it
+([D55](../decisions.md#d55)). A stuck step is recovered by restarting
+`system-scheduler`
+([scheduler spec §4.6](../technical/system-scheduler-spec.md#46-transition-calls-that-fail)).
 
 The generic existing `/api/swarm/admin/:action` endpoints remain for smoke
 compatibility but the new browser must not call them. Mark `reset` and
@@ -987,7 +980,7 @@ swarm/research route regresses, production admin and telemetry routes fail
 closed, a research job can be traced through all six stages, and a swarm
 manager can create a topic and set its schedule, manage members,
 observe the current epoch and each session's state and judging outcome,
-inspect every accepted member datapoint, fire guarded lifecycle transitions,
-and explain every mutation from the audit log.
+inspect every accepted member datapoint, see every lifecycle transition the
+scheduler made, and explain every mutation from the audit log.
 
 ---
