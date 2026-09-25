@@ -12,7 +12,7 @@
 // then turn each over into the next. An epoch seats every active member in the
 // transaction that opens it (domain.ts insertEpoch), which is the eligibility
 // record silence is counted from.
-import { expect, test } from "bun:test";
+import { beforeEach, expect, test } from "bun:test";
 import * as admin from "../src/swarm/admin.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { sql } from "../src/db/client.ts";
@@ -21,13 +21,20 @@ import { canonicalizeSubmission } from "@robotmoney/contract";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { activeSubject as epochSubject, sessionDate, sessionRow } from "./support/epoch-fixtures.ts";
-
-const INSECURE = { adminToken: null, allowInsecure: true } as const;
+import { provisionOperatorToken } from "./support/automation-auth.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 const N = admin.SWARM_SILENCE_THRESHOLD_SESSIONS;
 
 useCleanDatabasePerTest(import.meta.file);
+
+// The admin route is opened by the operator's store token (smoke spec §3,
+// D52 (1)); there is no insecure mode. Per test, because each test gets its
+// own database (the clone hook above runs first).
+let OPERATOR = "";
+beforeEach(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 
 // addMemberAdmin, not registerMember: it sets activated_at = now() at
 // creation (registerMember, the smoke/e2e shortcut most other swarm tests use,
@@ -201,9 +208,8 @@ test("the admin members-list route serves silenceFlags alongside members, keyed 
   await convene(subjectId, N);
 
   const res = await handleSwarmAdmin(
-    new Request("http://x/api/swarm/admin/members", { method: "GET" }),
+    new Request("http://x/api/swarm/admin/members", { method: "GET", headers: { "X-Admin-Token": OPERATOR } }),
     new URL("http://x/api/swarm/admin/members"),
-    INSECURE,
   );
   expect(res?.status).toBe(200);
   const body = res!.body as { members: unknown[]; silenceFlags: Record<string, unknown> };

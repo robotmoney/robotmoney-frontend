@@ -99,7 +99,18 @@ const lookupToken = registerQuery({
   privileges: ["SELECT"],
   site: "src/db/automation-tokens:lookupAutomationToken",
   purpose: "Resolve a presented automation token to its grant by hash, for the routes that check a right.",
-  callers: ["src/api/routes/swarm-admin", "src/api/routes/swarm-stream"],
+  // Every route that authorizes through src/api/auth.ts reaches this lookup:
+  // isPrivileged (the operator's `admin` right) and the analytics/scheduler
+  // right checks all resolve the presented token here (D52 (1)).
+  callers: [
+    "src/api/routes/admin",
+    "src/api/routes/admin-webauthn",
+    "src/api/routes/analytics",
+    "src/api/routes/projects",
+    "src/api/routes/swarm",
+    "src/api/routes/swarm-admin",
+    "src/api/routes/swarm-stream",
+  ],
   probe: {
     statement: "SELECT instance, holder, rights FROM automation_tokens WHERE token_hash = $1",
     params: ["0000000000000000000000000000000000000000000000000000000000000000"],
