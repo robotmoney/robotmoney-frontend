@@ -51,6 +51,80 @@
 // reached judging with no captured mode is read as `enforce` from its stored
 // deadline, the same rule the three judging transitions apply.
 import { sql as defaultSql, type DbHandle } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
+
+// Registered queries (smoke-production-spec.md §7.1). The detector is read by
+// the admin overview only. The scan reads five relations, so it declares five
+// times; each probe exercises its own relation the way the scan reads it.
+const ADMIN_ROUTE = "src/api/routes/admin";
+const SAMPLE_SESSION = "00000000-0000-0000-0000-000000000000";
+
+const readPolicy = registerQuery({
+  role: "rm_app",
+  object: "swarm_judge_config",
+  privileges: ["SELECT"],
+  site: "src/swarm/receipt-gap:detectMissingReceiptSessions.policy",
+  purpose: "Read today's judge mode and min_takes for the missing-receipt report header, and the scan's policy stamp.",
+  callers: [ADMIN_ROUTE],
+  probe: { statement: "SELECT mode, min_takes, updated_at, policy_updated_at FROM swarm_judge_config WHERE id = 1" },
+});
+
+const scanSessions = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/receipt-gap:detectMissingReceiptSessions.sessions",
+  purpose: "Scan recently published sessions, with their captured judge mode and outcome, for a missing receipt.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: `SELECT s.id, s.subject_id, s.published_at, s.judging_outcome, s.judge_mode, s.judging_deadline_at
+      FROM swarm_sessions s
+      WHERE s.state = 'published' AND s.published_at IS NOT NULL AND s.published_at >= $1::timestamptz
+      ORDER BY s.published_at DESC`,
+    params: ["2026-01-01T00:00:00Z"],
+  },
+});
+
+const scanTakes = registerQuery({
+  role: "rm_app",
+  object: "swarm_recommendations",
+  privileges: ["SELECT"],
+  site: "src/swarm/receipt-gap:detectMissingReceiptSessions.takes",
+  purpose: "Count each candidate session's distinct verified takers.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: `SELECT count(DISTINCT r.member_id)::int AS take_count FROM swarm_recommendations r
+      WHERE r.session_id = $1::uuid AND r.verified`,
+    params: [SAMPLE_SESSION],
+  },
+});
+
+const scanJudgements = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/swarm/receipt-gap:detectMissingReceiptSessions.judgements",
+  purpose: "Read the session's own judgement record, enforce preferred, as the mode and threshold that applied.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: `SELECT mode, min_takes FROM swarm_session_judgements WHERE session_id = $1::uuid
+      ORDER BY (mode = 'enforce') DESC, id DESC LIMIT 1`,
+    params: [SAMPLE_SESSION],
+  },
+});
+
+const scanReceipts = registerQuery({
+  role: "rm_app",
+  object: "swarm_consensus_receipts",
+  privileges: ["SELECT"],
+  site: "src/swarm/receipt-gap:detectMissingReceiptSessions.receipts",
+  purpose: "Test whether a candidate session already has a consensus receipt.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: "SELECT 1 FROM swarm_consensus_receipts rc WHERE rc.session_id = $1::uuid",
+    params: [SAMPLE_SESSION],
+  },
+});
 
 /**
  * How far back to look. A published session that has been receiptless for a
@@ -149,15 +223,17 @@ export async function detectMissingReceiptSessions(
   now: Date = new Date(),
   lookbackDays: number = MISSING_RECEIPT_LOOKBACK_DAYS,
 ): Promise<MissingReceiptReport> {
-  const cfg = (await db`SELECT mode, min_takes, updated_at FROM swarm_judge_config WHERE id = 1`)[0] as
-    | { mode: string; min_takes: number; updated_at: Date | string | null }
-    | undefined;
+  const [cfg] = await on(db, readPolicy)<{ mode: string; min_takes: number; updated_at: Date | string | null }>`
+    SELECT mode, min_takes, updated_at FROM swarm_judge_config WHERE id = 1`;
   // A legacy `shadow` is `off` for every purpose (D53).
   const judgeMode = cfg?.mode === "enforce" ? "enforce" : "off";
   const minTakes = Number(cfg?.min_takes ?? 3);
 
   const since = new Date(now.getTime() - lookbackDays * 86_400_000);
-  const rows = (await db`
+  const rows = await on(db, scanSessions, readPolicy, scanTakes, scanJudgements, scanReceipts)<{
+    id: string; subject_id: string; published_at: Date | string; take_count: number;
+    judging_outcome: string | null; mode_applied: string; min_takes_applied: number; elig_takes: boolean;
+  }>`
     WITH cfg AS (SELECT mode, min_takes, policy_updated_at FROM swarm_judge_config WHERE id = 1),
     candidate AS (
       SELECT s.id, s.subject_id, s.published_at, s.judging_outcome, t.take_count,
@@ -221,10 +297,7 @@ export async function detectMissingReceiptSessions(
        --     right, independent of any threshold, and recorded on the session
        --     so no later config change can move it.
        OR judge_failed
-     ORDER BY published_at DESC`) as unknown as {
-      id: string; subject_id: string; published_at: Date | string; take_count: number;
-      judging_outcome: string | null; mode_applied: string; min_takes_applied: number; elig_takes: boolean;
-    }[];
+     ORDER BY published_at DESC`;
 
   return {
     judgeMode,

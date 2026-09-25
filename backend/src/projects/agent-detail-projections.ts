@@ -27,9 +27,99 @@
 // items (P1.6/P1.7), and per D10's "never render a button that does
 // nothing" precedent this issue does not stub either as a dead control.
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import type { AgentDetail, AgentEvidence, AgentVaultSummary, AgentWalletSummary } from "@robotmoney/contract";
 
 export type { AgentDetail };
+
+// Registered queries (smoke-production-spec.md §7.1), all reads reached only
+// through GET /api/dashboards/agents/:id. The agent read joins its project,
+// so it declares both relations.
+const DASHBOARDS = "src/api/routes/dashboards";
+const SAMPLE_ID = "00000000-0000-0000-0000-000000000000";
+
+const detailAgent = registerQuery({
+  role: "rm_app",
+  object: "openclaw_agents",
+  privileges: ["SELECT"],
+  site: "src/projects/agent-detail-projections:fetchAgentDetail.agent",
+  purpose: "Read one agent's detail columns by id.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT a.id, a.name, a.protocol_standard, a.x402_score, a.x402_txn_count, a.x402_resources_count,
+             a.x402_volume_usd, a.cumulative_revenue_usd, a.productivity_score, a.is_active,
+             a.wallet_address, a.source_confidence, a.enriched_at, a.created_at, a.project_id
+      FROM openclaw_agents a WHERE a.id = $1::uuid`,
+    params: [SAMPLE_ID],
+  },
+});
+
+const detailProject = registerQuery({
+  role: "rm_app",
+  object: "projects",
+  privileges: ["SELECT"],
+  site: "src/projects/agent-detail-projections:fetchAgentDetail.project",
+  purpose: "Join the agent's project overview and links, which the agent read LEFT JOINs.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: "SELECT p.id, p.overview_short, p.website_url, p.twitter_handle FROM projects p WHERE p.id = $1::uuid",
+    params: [SAMPLE_ID],
+  },
+});
+
+const detailRevenue = registerQuery({
+  role: "rm_app",
+  object: "agent_revenue_daily",
+  privileges: ["SELECT"],
+  site: "src/projects/agent-detail-projections:fetchAgentDetail.revenue",
+  purpose: "Read the agent's last 30 days of daily revenue.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT revenue_date::text AS revenue_date, revenue_usd FROM agent_revenue_daily
+      WHERE agent_id = $1::uuid AND revenue_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const detailSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_agent_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/agent-detail-projections:fetchAgentDetail.snapshots",
+  purpose: "Read the agent's daily x402 volume snapshots for its sparkline.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT snapshot_date::text AS snapshot_date, x402_volume_usd FROM daily_agent_snapshots
+      WHERE agent_id = $1::uuid AND snapshot_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const detailWallets = registerQuery({
+  role: "rm_app",
+  object: "tracked_wallets",
+  privileges: ["SELECT"],
+  site: "src/projects/agent-detail-projections:fetchAgentDetail.wallets",
+  purpose: "Read the tracked wallets of the agent's project.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: "SELECT id, label, address, chain, balance_usd FROM tracked_wallets WHERE project_id = $1::uuid",
+    params: [SAMPLE_ID],
+  },
+});
+
+const detailVaults = registerQuery({
+  role: "rm_app",
+  object: "agent_vaults",
+  privileges: ["SELECT"],
+  site: "src/projects/agent-detail-projections:fetchAgentDetail.vaults",
+  purpose: "Read the vaults of the agent's project.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: "SELECT id, name, strategy_type, tvl_usd, yield_apy FROM agent_vaults WHERE project_id = $1::uuid",
+    params: [SAMPLE_ID],
+  },
+});
 
 // openclaw_agents.id is a `uuid PRIMARY KEY` — pre-validating the shape means
 // an arbitrary/malformed :id segment (e.g. the dash-shell smoke test's
@@ -99,7 +189,7 @@ const STALE_DAYS = 60;
 export async function fetchAgentDetail(id: string): Promise<AgentDetail | null> {
   if (!UUID_RE.test(id)) return null;
 
-  const [agent] = await sql`
+  const [agent] = await on(sql, detailAgent, detailProject)`
     SELECT a.id, a.name, a.protocol_standard, a.x402_score, a.x402_txn_count, a.x402_resources_count,
            a.x402_volume_usd, a.cumulative_revenue_usd, a.productivity_score, a.is_active,
            a.wallet_address, a.source_confidence, a.enriched_at, a.created_at, a.project_id,
@@ -114,15 +204,15 @@ export async function fetchAgentDetail(id: string): Promise<AgentDetail | null> 
   const cutoff182 = since(7 * WEEKS);
 
   const [revenueRows, snapRows, wallets, vaults] = await Promise.all([
-    sql`SELECT revenue_date::text AS revenue_date, revenue_usd FROM agent_revenue_daily
+    on(sql, detailRevenue)`SELECT revenue_date::text AS revenue_date, revenue_usd FROM agent_revenue_daily
         WHERE agent_id = ${id} AND revenue_date >= ${cutoff30}`,
-    sql`SELECT snapshot_date::text AS snapshot_date, x402_volume_usd FROM daily_agent_snapshots
+    on(sql, detailSnapshots)`SELECT snapshot_date::text AS snapshot_date, x402_volume_usd FROM daily_agent_snapshots
         WHERE agent_id = ${id} AND snapshot_date >= ${cutoff182}`,
     agent.project_id
-      ? sql`SELECT id, label, address, chain, balance_usd FROM tracked_wallets WHERE project_id = ${agent.project_id as string}`
+      ? on(sql, detailWallets)`SELECT id, label, address, chain, balance_usd FROM tracked_wallets WHERE project_id = ${agent.project_id as string}`
       : Promise.resolve([] as Record<string, unknown>[]),
     agent.project_id
-      ? sql`SELECT id, name, strategy_type, tvl_usd, yield_apy FROM agent_vaults WHERE project_id = ${agent.project_id as string}`
+      ? on(sql, detailVaults)`SELECT id, name, strategy_type, tvl_usd, yield_apy FROM agent_vaults WHERE project_id = ${agent.project_id as string}`
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
 

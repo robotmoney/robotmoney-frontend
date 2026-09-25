@@ -8,11 +8,84 @@
 // (#384) / agents-projections.ts (#385) — same directory, same "thin route
 // over a projection module" split, one file per phase-2 feed.
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import type {
   CoinsListResponse,
   VaultsListResponse,
   WalletsListResponse,
 } from "@robotmoney/contract";
+
+// Registered queries (smoke-production-spec.md §7.1), all reads, all reached
+// only through the dashboards routes. The vaults read joins the managing
+// agent, so it declares both relations.
+const DASHBOARDS = "src/api/routes/dashboards";
+
+const coinsList = registerQuery({
+  role: "rm_app",
+  object: "lobster_coins",
+  privileges: ["SELECT"],
+  site: "src/projects/coins-vaults-wallets-projections:fetchCoinsList",
+  purpose: "Read every active coin, market cap first, for GET /api/dashboards/coins.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT id, name, ticker, market_cap, price_usd, volume_24h, percent_change_24h, chain, refreshed_at
+      FROM lobster_coins WHERE is_active = true ORDER BY market_cap DESC NULLS LAST`,
+  },
+});
+
+const vaultsList = registerQuery({
+  role: "rm_app",
+  object: "agent_vaults",
+  privileges: ["SELECT"],
+  site: "src/projects/coins-vaults-wallets-projections:fetchVaultsList",
+  purpose: "Read every active agent vault, TVL first, for GET /api/dashboards/vaults.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT v.id, v.project_id, v.name, v.strategy_type, v.protocol, v.chain, v.data_source, v.tvl_usd,
+             v.yield_apy, v.refreshed_at
+      FROM agent_vaults v WHERE v.is_active = true ORDER BY v.tvl_usd DESC NULLS LAST`,
+  },
+});
+
+const vaultsManagingAgent = registerQuery({
+  role: "rm_app",
+  object: "openclaw_agents",
+  privileges: ["SELECT"],
+  site: "src/projects/coins-vaults-wallets-projections:fetchVaultsList.agent",
+  purpose: "Name each vault's managing agent, the project's oldest active agent, which the vaults read sub-selects.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT a.name FROM openclaw_agents a WHERE a.project_id = $1::uuid AND a.is_active = true
+      ORDER BY a.created_at ASC LIMIT 1`,
+    params: ["00000000-0000-0000-0000-000000000000"],
+  },
+});
+
+const trackedWallets = registerQuery({
+  role: "rm_app",
+  object: "tracked_wallets",
+  privileges: ["SELECT"],
+  site: "src/projects/coins-vaults-wallets-projections:fetchWalletsList.tracked",
+  purpose: "Read every active tracked wallet for GET /api/dashboards/wallets.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT id, label, chain, balance_usd, address, last_tx_at, refreshed_at
+      FROM tracked_wallets WHERE is_active = true`,
+  },
+});
+
+const agentWalletsList = registerQuery({
+  role: "rm_app",
+  object: "openclaw_agents",
+  privileges: ["SELECT"],
+  site: "src/projects/coins-vaults-wallets-projections:fetchWalletsList.agents",
+  purpose: "Read every active agent carrying a wallet address, merged into the wallets directory.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT id, name, wallet_address, protocol_standard, enriched_at
+      FROM openclaw_agents WHERE is_active = true AND wallet_address IS NOT NULL`,
+  },
+});
 
 // Freshness budgets mirror projects/projections.ts's #346 pattern, keyed off
 // the SAME pipeline schedules (db/seed.ts): projects.refresh_coins runs
@@ -46,7 +119,7 @@ function iso(v: unknown): string | null {
 // applied server-side so a client with JS disabled still sees a sane order;
 // the Alpine view re-sorts interactively over this same array.
 export async function fetchCoinsList(): Promise<CoinsListResponse> {
-  const rows = await sql`
+  const rows = await on(sql, coinsList)`
     SELECT id, name, ticker, market_cap, price_usd, volume_24h, percent_change_24h, chain, refreshed_at
     FROM lobster_coins
     WHERE is_active = true
@@ -76,7 +149,7 @@ export async function fetchCoinsList(): Promise<CoinsListResponse> {
 // best-effort join to that project's oldest active agent, a documented
 // approximation, never a fabricated name.
 export async function fetchVaultsList(): Promise<VaultsListResponse> {
-  const rows = await sql`
+  const rows = await on(sql, vaultsList, vaultsManagingAgent)`
     SELECT v.id, v.name, v.strategy_type, v.protocol, v.chain, v.data_source, v.tvl_usd, v.yield_apy, v.refreshed_at,
            (
              SELECT a.name FROM openclaw_agents a
@@ -113,9 +186,9 @@ export async function fetchVaultsList(): Promise<VaultsListResponse> {
 // the more specific, purpose-tracked record) when both name the same address.
 export async function fetchWalletsList(): Promise<WalletsListResponse> {
   const [tracked, agentWallets] = await Promise.all([
-    sql`SELECT id, label, chain, balance_usd, address, last_tx_at, refreshed_at
+    on(sql, trackedWallets)`SELECT id, label, chain, balance_usd, address, last_tx_at, refreshed_at
         FROM tracked_wallets WHERE is_active = true`,
-    sql`SELECT id, name, wallet_address, protocol_standard, enriched_at
+    on(sql, agentWalletsList)`SELECT id, name, wallet_address, protocol_standard, enriched_at
         FROM openclaw_agents WHERE is_active = true AND wallet_address IS NOT NULL`,
   ]);
 
