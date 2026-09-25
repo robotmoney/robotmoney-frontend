@@ -105,21 +105,48 @@ export function bandRuns(states) {
 }
 
 /**
- * Date ticks at month starts, thinned to every second month, every half year
- * or every year as the span grows. Every other one is `is-mid`, which a phone
- * hides, so a narrow axis keeps half of them.
+ * Date ticks that say the span by their own form, as a price chart's do: days
+ * ("Sep 8") across a few weeks, the 1st and 15th across a few months, months
+ * ("Mar", January as "Jan '26") across a year or two, and years beyond. Every
+ * other one is `is-mid`, which a phone hides, so a narrow axis keeps half.
  * @param {string[]} days
  */
 export function dateTicks(days) {
   const n = days.length;
-  const step = n <= 200 ? 1 : n <= 400 ? 2 : n <= 1200 ? 6 : 12;
+  const mon = (/** @type {string} */ d) => MONTHS[Number(d.slice(5, 7)) - 1];
+  const dd = (/** @type {string} */ d) => Number(d.slice(8, 10));
+  /** @type {{ i: number, label: string }[]} */
   const out = [];
-  days.forEach((d, i) => { if (d.endsWith("-01") && (Number(d.slice(5, 7)) - 1) % step === 0) out.push(i); });
-  return out.map((i, k) => {
-    const d = days[i], y = d.slice(0, 4), m = MONTHS[Number(d.slice(5, 7)) - 1];
-    const label = n > 1200 ? y : d.slice(5, 7) === "01" ? `${m} ${y}` : m;
-    return { key: d, i, left: (i / Math.max(1, n - 1)) * 100, label, cls: k % 2 ? "is-mid" : "" };
+  days.forEach((d, i) => {
+    if (n <= 45) {
+      if ((n - 1 - i) % 7 === 0) out.push({ i, label: `${mon(d)} ${dd(d)}` });
+    } else if (n <= 120) {
+      if (dd(d) === 1 || dd(d) === 15) out.push({ i, label: `${mon(d)} ${dd(d)}` });
+    } else if (n <= 1200) {
+      const step = n <= 250 ? 1 : n <= 500 ? 2 : 3;
+      if (dd(d) === 1 && (Number(d.slice(5, 7)) - 1) % step === 0) out.push({ i, label: d.slice(5, 7) === "01" ? `Jan '${d.slice(2, 4)}` : mon(d) });
+    } else if (d.slice(5) === "01-01") {
+      out.push({ i, label: d.slice(0, 4) });
+    }
   });
+  return out.map((t, k) => ({ key: days[t.i], i: t.i, left: (t.i / Math.max(1, n - 1)) * 100, label: t.label, cls: k % 2 ? "is-mid" : "" }));
+}
+
+/**
+ * A window over the whole axis, dragged by either end or by its middle: the
+ * range navigator under a chart. Returns the new [from, to] day indices for a
+ * pointer at `at` (a day index), given what was grabbed and where.
+ * @param {"from" | "to" | "pan"} grab @param {number} at
+ * @param {{ from: number, to: number, offset: number, n: number, min: number }} w
+ */
+export function dragWindow(grab, at, { from, to, offset, n, min }) {
+  const last = n - 1;
+  const clamp = (/** @type {number} */ v) => Math.max(0, Math.min(last, Math.round(v)));
+  if (grab === "from") return [Math.min(clamp(at), to - min), to];
+  if (grab === "to") return [from, Math.max(clamp(at), from + min)];
+  const width = to - from;
+  const start = Math.max(0, Math.min(last - width, Math.round(at - offset)));
+  return [start, start + width];
 }
 
 /**
