@@ -346,7 +346,7 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
     const receipt = readReceipt(h.paths)!;
     const status = runCommand(h, "smoke-status.ts", ["--instance", h.instance]);
     expect(status.code).toBe(0);
-    expect(status.out).toContain(`source: receipt — reached readiness under plan ${receipt.planId}`);
+    expect(status.out).toContain(`source: receipt (HISTORY) — reached readiness under plan ${receipt.planId}`);
     const tail = receipt.schema.migrations.at(-1)!;
     expect(status.out).toContain(`schema: manifest ${receipt.schema.manifestHash}; ${receipt.schema.migrations.length} migration(s), ending ${tail}`);
     expect(receipt.preflight.length).toBeGreaterThan(0);

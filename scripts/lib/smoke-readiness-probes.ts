@@ -72,7 +72,7 @@ export interface ReadinessProbeConfig {
 }
 
 /** Refuse any docker argv that is not a read, before it runs. */
-function guarded(run: ProbeRunner): ProbeRunner {
+export function readOnlyRunner(run: ProbeRunner): ProbeRunner {
   return (args) => {
     const head = args[0] === "compose" ? `compose ${args.find((a, i) => i > 0 && !a.startsWith("-") && !isFlagValue(args, i)) ?? ""}` : args[0];
     if (!(READ_ONLY_DOCKER_SUBCOMMANDS as readonly string[]).includes(head ?? "")) {
@@ -150,7 +150,7 @@ export function schedulerHealthUrl(run: ProbeRunner, composePrefix: readonly str
 
 /** A function that reads one full observation, each fact from its authority. */
 export function makeReadinessObserver(cfg: ReadinessProbeConfig): () => Promise<ReadinessObservation> {
-  const run = guarded(cfg.run);
+  const run = readOnlyRunner(cfg.run);
   const fetchImpl = cfg.fetchImpl ?? fetch;
   return async () => {
     const apiHealth = await fetchImpl(`${cfg.apiUrl}/health`, { signal: AbortSignal.timeout(10_000) })
