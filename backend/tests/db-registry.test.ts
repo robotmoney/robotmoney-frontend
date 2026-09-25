@@ -316,8 +316,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
   // prevent. The only legal edit is a deletion.
   const RAW_SQL_ALLOWLIST: readonly string[] = [
     "src/admin/overview",
-    "src/analytics/cutover/ledger-current",
-    "src/analytics/cutover/parity",
     "src/analytics/store/output-snapshot-store",
     "src/analytics/store/regime-store",
     "src/analytics/store/run-ledger-store",
@@ -333,10 +331,8 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "src/ops/wallet-snapshot-manifest",
     "src/projects/dossier-projections",
     "src/projects/entities-projections",
-    "src/projects/leaderboard-projections",
     "src/projects/list2-projections",
     "src/projects/profile-projections",
-    "src/projects/projections",
     "src/projects/smoke-seed",
     "src/swarm/admin",
     "src/swarm/consensus-receipt",

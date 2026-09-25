@@ -11,6 +11,128 @@ import {
   ledgerCurrentRegimeSnapshots,
   ledgerCurrentResearchSignals,
 } from "./ledger-current.ts";
+import { on, registerQuery } from "../../db/registry.ts";
+
+// Registered queries (smoke-production-spec.md §7.1). The sweep runs only
+// behind the analytics parity route (the worker triggers it over HTTP, never
+// through this module), so every site names that one caller.
+const PARITY_ROUTE = "src/api/routes/analytics";
+const SAMPLE_SESSION = "00000000-0000-0000-0000-000000000000";
+
+const settledAsofs = registerQuery({
+  role: "rm_app",
+  object: "analytics_report_snapshots",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/parity:settledAsofDates",
+  purpose: "List the as-of dates whose report snapshot has settled, so an in-flight day is not compared.",
+  callers: [PARITY_ROUTE],
+  probe: { statement: "SELECT DISTINCT asof::text AS asof FROM analytics_report_snapshots" },
+});
+
+const migrationAppliedAt = registerQuery({
+  role: "rm_app",
+  object: "schema_migrations",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/parity:migrationAppliedAt",
+  purpose: "Read when a ledger migration was applied, the instant from which its rows are comparable.",
+  callers: [PARITY_ROUTE],
+  probe: {
+    statement: "SELECT EXTRACT(EPOCH FROM applied_at) AS applied_epoch FROM schema_migrations WHERE name = $1",
+    params: ["0061_source_value_provenance.sql"],
+  },
+});
+
+const legacyRawHistory = registerQuery({
+  role: "rm_app",
+  object: "raw_indicator_history",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/parity:checkRawIndicatorHistoryParity",
+  purpose: "Read the whole compatibility raw-indicator floor, source included, in one statement.",
+  callers: [PARITY_ROUTE],
+  probe: { statement: "SELECT indicator, date::text AS date, value, source FROM raw_indicator_history ORDER BY indicator, date" },
+});
+
+const legacyRegime = registerQuery({
+  role: "rm_app",
+  object: "regime_snapshots",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/parity:checkRegimeSnapshotsParity",
+  purpose: "Read the compatibility regime table's compared columns.",
+  callers: [PARITY_ROUTE],
+  probe: { statement: "SELECT date::text AS date, composite, regime FROM regime_snapshots ORDER BY date" },
+});
+
+const legacyResearch = registerQuery({
+  role: "rm_app",
+  object: "research_signals",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/parity:checkResearchSignalsParity",
+  purpose: "Read the compatibility research table.",
+  callers: [PARITY_ROUTE],
+  probe: { statement: "SELECT signal_key, date::text AS date, payload FROM research_signals ORDER BY signal_key, date" },
+});
+
+const legacyBriefs = registerQuery({
+  role: "rm_app",
+  object: "swarm_briefs",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/parity:checkSwarmBriefsParity.briefs",
+  purpose: "Read every session-keyed compatibility brief with its creation time.",
+  callers: [PARITY_ROUTE],
+  probe: {
+    statement: `SELECT session_id, body, EXTRACT(EPOCH FROM created_at) * 1000 AS created_ms
+      FROM swarm_briefs WHERE session_id IS NOT NULL`,
+  },
+});
+
+const ledgerBriefSessions = registerQuery({
+  role: "rm_app",
+  object: "swarm_brief_revisions",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/parity:checkSwarmBriefsParity.sessions",
+  purpose: "List every session the brief ledger holds a revision for.",
+  callers: [PARITY_ROUTE],
+  probe: { statement: "SELECT DISTINCT session_id FROM swarm_brief_revisions" },
+});
+
+const ledgerBriefBody = registerQuery({
+  role: "rm_app",
+  object: "swarm_brief_revisions",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/parity:checkSwarmBriefsParity.body",
+  purpose: "Read one session's newest brief revision body.",
+  callers: [PARITY_ROUTE],
+  probe: {
+    statement: "SELECT body_bytes FROM swarm_brief_revisions WHERE session_id = $1::uuid ORDER BY revision DESC LIMIT 1",
+    params: [SAMPLE_SESSION],
+  },
+});
+
+const insertObservation = registerQuery({
+  role: "rm_app",
+  object: "analytics_parity_observations",
+  // SELECT because of RETURNING. The table is immutable: never UPDATE,
+  // DELETE or TRUNCATE (D53 decision 6).
+  privileges: ["INSERT", "SELECT"],
+  site: "src/analytics/cutover/parity:recordParityObservation",
+  purpose: "Append one immutable parity observation, which the cutover gate later reads.",
+  callers: [PARITY_ROUTE],
+  probe: {
+    statement: `INSERT INTO analytics_parity_observations
+        (domain, legacy_row_count, ledger_row_count, legacy_checksum, ledger_checksum, matched, detail)
+      VALUES ($1, $2::integer, $3::integer, $4, $5, $6::boolean, $7::jsonb)
+      RETURNING id`,
+    params: [
+      "regime_snapshots",
+      0,
+      0,
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      true,
+      "{\"mismatches\":[]}",
+    ],
+  },
+});
 
 export type ParityDomain = "raw_indicator_history" | "regime_snapshots" | "research_signals" | "swarm_briefs";
 
@@ -71,7 +193,7 @@ function checksumOf(rows: readonly Record<string, unknown>[]): string {
 // still blocks cutover exactly as AC2 requires — this only ever REMOVES a
 // transient false positive, never a real one.
 async function settledAsofDates(db: DbHandle): Promise<Set<string>> {
-  const rows = (await db`SELECT DISTINCT asof::text AS asof FROM analytics_report_snapshots`) as unknown as { asof: string }[];
+  const rows = await on(db, settledAsofs)<{ asof: string }>`SELECT DISTINCT asof::text AS asof FROM analytics_report_snapshots`;
   return new Set(rows.map((r) => r.asof));
 }
 
@@ -159,10 +281,10 @@ function rawKey(indicator: string, date: string): string {
 const PROVENANCE_MIGRATION = "0061_source_value_provenance.sql";
 
 async function provenanceComparableFromMs(db: DbHandle): Promise<number | null> {
-  const rows = (await db`
+  const rows = await on(db, migrationAppliedAt)<{ applied_epoch: string | number }>`
     SELECT EXTRACT(EPOCH FROM applied_at) AS applied_epoch
     FROM schema_migrations WHERE name = ${PROVENANCE_MIGRATION}
-  `) as unknown as { applied_epoch: string | number }[];
+  `;
   if (rows.length === 0) return null; // 0061 unapplied here: the column cannot exist
   return Math.round(Number(rows[0]!.applied_epoch) * 1000);
 }
@@ -173,15 +295,15 @@ export async function checkRawIndicatorHistoryParity(db: DbHandle = sql): Promis
   // rewrite (analytics/index.ts's saveRawHistory) and record a spurious — and,
   // because analytics_parity_observations is append-only, PERMANENT —
   // matched:false.
-  const legacyRows = (await db`
-    SELECT indicator, date::text AS date, value, source
-    FROM raw_indicator_history
-    ORDER BY indicator, date`) as unknown as {
+  const legacyRows = await on(db, legacyRawHistory)<{
     indicator: string;
     date: string;
     value: number;
     source: string | null;
-  }[];
+  }>`
+    SELECT indicator, date::text AS date, value, source
+    FROM raw_indicator_history
+    ORDER BY indicator, date`;
   const ledgerPoints = await ledgerCurrentRawIndicatorHistory(db);
   const comparableFromMs = await provenanceComparableFromMs(db);
   const comparableSource = new Set<string>();
@@ -215,11 +337,11 @@ export async function checkRawIndicatorHistoryParity(db: DbHandle = sql): Promis
 
 export async function checkRegimeSnapshotsParity(db: DbHandle = sql): Promise<ParityResult> {
   const settled = await settledAsofDates(db);
-  const legacyRows = (await db`SELECT date::text AS date, composite, regime FROM regime_snapshots ORDER BY date`) as unknown as {
+  const legacyRows = await on(db, legacyRegime)<{
     date: string;
     composite: string | number | null;
     regime: string | null;
-  }[];
+  }>`SELECT date::text AS date, composite, regime FROM regime_snapshots ORDER BY date`;
   const legacy = new Map<string, Record<string, unknown>>();
   for (const r of legacyRows) {
     if (!settled.has(r.date)) continue; // in-flight day — see settledAsofDates
@@ -236,11 +358,11 @@ export async function checkRegimeSnapshotsParity(db: DbHandle = sql): Promise<Pa
 
 export async function checkResearchSignalsParity(db: DbHandle = sql): Promise<ParityResult> {
   const settled = await settledAsofDates(db);
-  const legacyRows = (await db`SELECT signal_key, date::text AS date, payload FROM research_signals ORDER BY signal_key, date`) as unknown as {
+  const legacyRows = await on(db, legacyResearch)<{
     signal_key: string;
     date: string;
     payload: unknown;
-  }[];
+  }>`SELECT signal_key, date::text AS date, payload FROM research_signals ORDER BY signal_key, date`;
   const legacy = new Map<string, Record<string, unknown>>();
   for (const r of legacyRows) {
     if (!settled.has(r.date)) continue; // in-flight day - see settledAsofDates
@@ -286,10 +408,10 @@ export async function checkResearchSignalsParity(db: DbHandle = sql): Promise<Pa
 const BRIEF_LEDGER_MIGRATION = "0059_analytics_output_and_report_snapshots.sql";
 
 async function briefLedgerFromMs(db: DbHandle): Promise<number | null> {
-  const rows = (await db`
+  const rows = await on(db, migrationAppliedAt)<{ applied_epoch: string | number }>`
     SELECT EXTRACT(EPOCH FROM applied_at) AS applied_epoch
     FROM schema_migrations WHERE name = ${BRIEF_LEDGER_MIGRATION}
-  `) as unknown as { applied_epoch: string | number }[];
+  `;
   if (rows.length === 0) return null; // 0059 unapplied here: the ledger table cannot exist
   return Math.round(Number(rows[0]!.applied_epoch) * 1000);
 }
@@ -302,13 +424,13 @@ export async function checkSwarmBriefsParity(db: DbHandle = sql): Promise<Parity
     // requires a MINIMUM observation count and window before it will arm.
     return buildResult("swarm_briefs", new Map(), new Map());
   }
-  const legacyRows = (await db`
-    SELECT session_id, body, EXTRACT(EPOCH FROM created_at) * 1000 AS created_ms
-    FROM swarm_briefs WHERE session_id IS NOT NULL`) as unknown as {
+  const legacyRows = await on(db, legacyBriefs)<{
     session_id: string;
     body: unknown;
     created_ms: string | number;
-  }[];
+  }>`
+    SELECT session_id, body, EXTRACT(EPOCH FROM created_at) * 1000 AS created_ms
+    FROM swarm_briefs WHERE session_id IS NOT NULL`;
   const legacy = new Map<string, Record<string, unknown>>();
   // Sessions whose compatibility row predates the ledger: dropped from BOTH
   // sides below, never from one.
@@ -320,15 +442,15 @@ export async function checkSwarmBriefsParity(db: DbHandle = sql): Promise<Parity
     }
     legacy.set(r.session_id, { sessionId: r.session_id, body: r.body });
   }
-  const ledgerRows = (await db`
+  const ledgerRows = await on(db, ledgerBriefSessions)<{ session_id: string }>`
     SELECT DISTINCT session_id FROM swarm_brief_revisions
-  `) as unknown as { session_id: string }[];
+  `;
   const ledger = new Map<string, Record<string, unknown>>();
   for (const row of ledgerRows) {
     if (preLedger.has(row.session_id)) continue; // symmetric with the legacy filter above
-    const [rev] = (await db`
+    const [rev] = await on(db, ledgerBriefBody)<{ body_bytes: Buffer }>`
       SELECT body_bytes FROM swarm_brief_revisions WHERE session_id = ${row.session_id} ORDER BY revision DESC LIMIT 1
-    `) as unknown as { body_bytes: Buffer }[];
+    `;
     if (!rev) continue;
     ledger.set(row.session_id, { sessionId: row.session_id, body: JSON.parse(rev.body_bytes.toString("utf8")) });
   }
@@ -360,14 +482,14 @@ export async function checkDomainParity(domain: ParityDomain, db: DbHandle = sql
 // (migration 0060) — so a re-check after fixing a mismatch is a fresh,
 // separately-timestamped data point, never an edit of the failed one.
 export async function recordParityObservation(result: ParityResult, db: DbHandle = sql): Promise<string> {
-  const [row] = (await db`
+  const [row] = await on(db, insertObservation)<{ id: string }>`
     INSERT INTO analytics_parity_observations
       (domain, legacy_row_count, ledger_row_count, legacy_checksum, ledger_checksum, matched, detail)
     VALUES (${result.domain}, ${result.legacyRowCount}, ${result.ledgerRowCount},
             ${result.legacyChecksum}, ${result.ledgerChecksum}, ${result.matched},
             ${db.json(({ mismatches: result.mismatches } as unknown) as never)})
     RETURNING id
-  `) as unknown as { id: string }[];
+  `;
   return String(row!.id);
 }
 
