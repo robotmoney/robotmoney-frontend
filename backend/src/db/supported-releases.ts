@@ -3,11 +3,12 @@
 // matches a pre-identity ledger against (D55 (5), (8)).
 //
 // Governed by smoke-production-spec.md §8.4 ("an upgrade from a populated
-// database of each supported release (`SUPPORTED_RELEASES`: v0.5.0 alone)
+// database of each supported release (`SUPPORTED_RELEASES`: production's
+// observed 73-name ledger, v0.5.0 plus `0062_rm_readonly_sequence_select`)
 // passes its data assertions") and §9.1 ("The first production migrate runs
-// before the identity row exists"). The spec's "v0.5.0 alone" predates the
-// production ledger read below; the baseline is that ledger (see WHICH
-// BASELINE), and the spec and D55 (8) are amended to say so.
+// before the identity row exists"). The spec and D55 (8) first said "v0.5.0
+// alone", before the production ledger read below; both were amended on
+// 2026-09-25 to name that ledger (see WHICH BASELINE).
 //
 // WHY THE FILENAME LIST, AND NOT A TAG OR A NUMBER. §8.1: "the exact filename
 // list of the migrations it embodies (a number alone is not an identity)". This

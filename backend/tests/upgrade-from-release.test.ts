@@ -9,8 +9,8 @@
 // SUPPORTED_RELEASES (backend/src/db/supported-releases.ts) is one baseline:
 // production's observed ledger, read 2026-09-25 — the 72 files of v0.5.0 plus
 // 0062_rm_readonly_sequence_select.sql, applied out of band from the archived
-// 0.5.x line on 2026-09-22 (owner-ruled ground truth; it supersedes D55 (8)'s
-// "v0.5.0 alone"). An upgrade path from anything else is one no database will
+// 0.5.x line on 2026-09-22 (owner-ruled ground truth; D55 (8), corrected on
+// 2026-09-25, names it, where its first text said "v0.5.0 alone"). An upgrade path from anything else is one no database will
 // take. That module pins the baseline's filename list; the tests below fail
 // when it disagrees with the observed ledger in
 // fixtures/releases/production-2026-09-25/baseline.json or with v0.5.0's

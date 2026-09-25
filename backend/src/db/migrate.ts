@@ -1,6 +1,9 @@
 // Minimal forward-only migration runner. Applies every backend/migrations/*.sql
-// in filename order exactly once, tracked in schema_migrations. Idempotent:
-// safe to run on every boot (ephemeral CI, smoke, or prod).
+// in filename order exactly once, tracked in schema_migrations. Idempotent.
+// It takes no target lock, fence, manifest or receipt, so it is for local dev,
+// tests and ephemeral CI only. Production migrates through `bun run migrate`
+// (scripts/migrate.ts, smoke-production-spec.md §8.5); prod-bootstrap no
+// longer calls this runner.
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

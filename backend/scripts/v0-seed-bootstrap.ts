@@ -67,9 +67,10 @@ import { on, registerQuery } from "../src/db/registry.ts";
 
 // ── Registered queries (smoke-production-spec.md §7.1) ─────────────────────
 //
-// The backfill runs on the credential that migrates: prod-bootstrap calls it
-// as its second step, holding `rm_owner`, and the direct run
-// (`bun run v0-seed:bootstrap`) is the same operator action. So every site
+// The backfill is an owner's one-time operator action. prod-bootstrap calls
+// it as its step 2, after the operator's own `bun run migrate` and with
+// DATABASE_URL naming `rm_owner`; prod-bootstrap never migrates. The direct
+// run (`bun run v0-seed:bootstrap`) is the same operator action. So every site
 // declares `rm_owner`. Every table here is append-only; nothing below deletes.
 // Each INSERT probe inserts from a query yielding no row, which still needs
 // (and is checked for) INSERT on every listed column without inventing the
@@ -504,7 +505,7 @@ async function processMember(m: V0Member, drifts: Drift[]): Promise<RowOutcome> 
   // own; it deliberately leaves voice_md null (the manifests keep the voice
   // document beside them) and never writes `submit`. On a deployment that
   // seats the live roster before this backfill runs — the order `bun run
-  // prod-bootstrap` itself produces, since step 1's migrate() calls seed() —
+  // prod-bootstrap` itself produces, since its step 1b runs seed() first —
   // athena and robotmoney already exist with those two columns empty, and
   // without this the archive's own values are reported as drift on rows
   // nobody edited (issue #540).

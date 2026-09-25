@@ -24,8 +24,9 @@ export interface SeedProvenanceRow {
 
 // Both statements are registered queries (smoke-production-spec.md §7.1). The
 // operator CLI reaches them directly and through prod-bootstrap's
-// seed-provenance:verify step. Both run as `rm_owner`: prod-bootstrap migrates
-// on the same credential, and backend/schema/grants.sql gives `rm_app` no
+// seed-provenance:verify step. Both run as `rm_owner`: the operator runs
+// prod-bootstrap with DATABASE_URL naming `rm_owner` (it never migrates;
+// `bun run migrate` does), and backend/schema/grants.sql gives `rm_app` no
 // DELETE on ordinary tables, so the --clean DELETE is an owner's statement.
 const CALLERS = ["scripts/seed-provenance-verify", "scripts/prod-bootstrap"];
 

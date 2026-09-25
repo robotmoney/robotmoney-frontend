@@ -105,6 +105,13 @@
 // ledger no longer equals the release's afterwards and the exception is never
 // available again on that database.
 //
+// NOT YET THE DECIDED ORDER. D55 (9) (2026-09-25) makes this pass apply 0063
+// first, commit the identity row in 0063's transaction, and only then apply the
+// rest, so an interruption after 0063 resumes through the normal path
+// (smoke-production-spec.md §9.1). Today the pass applies every pending file in
+// filename order and writes no row. A later package on issue #1026 implements
+// the new order.
+//
 // ─────────────────────────────────────────────────────────────────────────────
 // THE JOURNAL
 // ─────────────────────────────────────────────────────────────────────────────

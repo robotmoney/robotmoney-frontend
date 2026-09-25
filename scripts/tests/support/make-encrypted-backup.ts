@@ -11,8 +11,10 @@
 //
 // THE SOURCE DATABASE, one of two:
 //
-//   v0.5.0               the schema production runs today (D55 (8):
-//                        SUPPORTED_RELEASES is v0.5.0 alone), rebuilt from the
+//   v0.5.0               the v0.5.0 tag's schema. Production's ledger is this
+//                        plus 0062_rm_readonly_sequence_select.sql (D55 (8),
+//                        corrected 2026-09-25), so this source is one file
+//                        short of the production baseline. Rebuilt from the
 //                        release's OWN migration bytes by the release's own
 //                        runner loop — the same reconstruction, from the same
 //                        fixture, as backend/tests/upgrade-from-release.test.ts

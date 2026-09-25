@@ -1,10 +1,15 @@
 // The first production migrate — smoke-production-spec.md §10 W2, verbatim:
 //
 //   "First production migrate: with no `deployment_identity` row and a ledger
-//   exactly equal to v0.5.0's, `RM_ENV=prod`, a typed `rm_owner` and `y`
-//   migrate once and receipt the pre-identity state. A ledger with one file
-//   more or less, `RM_ENV=stage`, a missing owner password, or any answer but
-//   `y` refuses and changes nothing. A second run with no row still refuses."
+//   exactly equal to the production baseline (the 73-name ledger of §9.1),
+//   `RM_ENV=prod`, a typed `rm_owner` and `y` migrate once and receipt the
+//   pre-identity state. A ledger with one file more or less (a pure v0.5.0
+//   ledger included), `RM_ENV=stage`, a missing owner password, or any answer
+//   but `y` refuses and changes nothing. A second run with no row still
+//   refuses."
+//
+// The identity-first order of the same gate's next bullet (D55 (9)) is not
+// implemented yet, so nothing here asserts it.
 //
 // Governed by §4.3's one exception and §9.1 ("The first production migrate
 // runs before the identity row exists"), D55 (5) and (8); implemented by
