@@ -37,7 +37,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SMOKE_SUBJECTS } from "./lib/smoke-mode.ts";
 import { classify, inventory, inventoryVerdict, renderInventory, validateRules, type ClassifiedGroup, type InventoryMode, type RawLine } from "./lib/gate/log-inventory.ts";
-import { containerLogs, dbQuery, projectContainers, sh, type ContainerState } from "./lib/gate/io.ts";
+import { containerLogs, dbQuery, memberSessionLogs, projectContainers, sh, type ContainerState } from "./lib/gate/io.ts";
 import { CLASSIFICATIONS_PATH, evaluateDriverSessions, evaluateSessions, parseDriverSessions, type CheckRecord, type SessionRow } from "./twin-gate.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -263,6 +263,7 @@ async function main(): Promise<number> {
   const sources = [
     ...containers.map((c) => ({ source: c.name, lines: containerLogs(c.name, since) })),
     ...(driverLines.length ? [{ source: `driver: ${args.driverLog}`, lines: driverLines }] : []),
+    ...memberSessionLogs(dirname(dirname(stateFile)), state.project, Date.parse(since)),
   ];
   const classified: ClassifiedGroup[] = classify(sources.flatMap(({ source, lines }) => inventory(source, lines)), rules);
   const inv = inventoryVerdict(classified, args.mode);

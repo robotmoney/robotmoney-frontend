@@ -2,7 +2,8 @@
 // and read-only database queries. Everything here runs ON the host being
 // graded — stage-2 for a twin, the production droplet for production.
 
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import type { RawLine } from "./log-inventory.ts";
 
 export function sh(cmd: string[]): { code: number; out: string } {
@@ -44,6 +45,33 @@ export function containerLogs(name: string, since: string): RawLine[] {
 /** A plain log file (the host driver's tee'd output) as raw lines. */
 export function fileLines(path: string): RawLine[] {
   return readFileSync(path, "utf8").split("\n").filter(Boolean).map((text) => ({ ts: null, text }));
+}
+
+/**
+ * Every member container's own stderr for sessions run since `sinceMs`, one
+ * source per member. A member container is removed when it exits, and the
+ * driver log keeps only a truncated transcript tail, so a member's real failure
+ * (an inference timeout, a refused take) exists ONLY in the artifact the driver
+ * keeps at `.agents/swarm-sessions/<project>/<session>/<member>/<run>/stderr.log`.
+ * On 2026-09-25 a member's "inference timed out after 120000ms" was in no log
+ * either gate read.
+ */
+export function memberSessionLogs(repoRoot: string, project: string, sinceMs: number): { source: string; lines: RawLine[] }[] {
+  const root = join(repoRoot, ".agents", "swarm-sessions", project);
+  if (!existsSync(root)) return [];
+  const byMember = new Map<string, RawLine[]>();
+  const dirs = (p: string) => readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+  for (const session of dirs(root)) {
+    for (const member of dirs(join(root, session))) {
+      for (const run of dirs(join(root, session, member))) {
+        const file = join(root, session, member, run, "stderr.log");
+        if (!existsSync(file) || statSync(file).mtimeMs < sinceMs) continue;
+        const lines = fileLines(file);
+        byMember.set(member, [...(byMember.get(member) ?? []), ...lines]);
+      }
+    }
+  }
+  return [...byMember].map(([member, lines]) => ({ source: `member: ${member}`, lines }));
 }
 
 /**

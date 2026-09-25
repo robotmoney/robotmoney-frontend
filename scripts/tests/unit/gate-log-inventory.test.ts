@@ -99,3 +99,26 @@ describe("the committed classification file", () => {
     expect(g.map((x) => x.rule?.class)).toEqual(["known-issue", "known-issue"]);
   });
 });
+
+describe("member session logs", () => {
+  test("every member's stderr since T0 is a source; older runs are not", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, utimesSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { memberSessionLogs } = await import("../../lib/gate/io.ts");
+    const root = mkdtempSync(join(tmpdir(), "gate-members-"));
+    const run = (session: string, member: string, text: string, ageMs: number) => {
+      const dir = join(root, ".agents", "swarm-sessions", "proj", session, member, `${member}-run`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "stderr.log"), text);
+      const t = new Date(Date.now() - ageMs);
+      utimesSync(join(dir, "stderr.log"), t, t);
+    };
+    run("s1", "m1", "member-session-client failed: opencode inference timed out after 120000ms\n", 0);
+    run("s2", "m1", "ok\n", 0);
+    run("s0", "m2", "an old failure\n", 3_600_000);
+    const sources = memberSessionLogs(root, "proj", Date.now() - 60_000);
+    expect(sources.map((s) => s.source)).toEqual(["member: m1"]);
+    expect(sources[0]!.lines.map((l) => l.text)).toContain("member-session-client failed: opencode inference timed out after 120000ms");
+    expect(memberSessionLogs(root, "absent-project", 0)).toEqual([]);
+  });
+});

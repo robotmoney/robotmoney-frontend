@@ -48,7 +48,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SMOKE_SUBJECTS } from "./lib/smoke-mode.ts";
 import { classify, inventory, inventoryVerdict, renderInventory, validateRules, type ClassifiedGroup, type RawLine } from "./lib/gate/log-inventory.ts";
-import { containerLogs } from "./lib/gate/io.ts";
+import { containerLogs, memberSessionLogs } from "./lib/gate/io.ts";
 
 /** The committed error classifications both gates grade against. */
 export const CLASSIFICATIONS_PATH = join(dirname(fileURLToPath(import.meta.url)), "lib", "gate", "log-classifications.json");
@@ -493,6 +493,7 @@ async function main(): Promise<number> {
     ...containers.map((c) => ({ source: c.name, lines: containerLogs(c.name, t0) })),
     { source: state.smokeTwinContainer, lines: containerLogs(state.smokeTwinContainer, t0) },
     ...(parsed.driverLog && driverLines.length ? [{ source: `driver: ${parsed.driverLog}`, lines: driverLines.map((text) => ({ ts: null, text })) }] : []),
+    ...memberSessionLogs(repoRoot, state.project, Date.parse(t0)),
   ];
   const logScans: LogScan[] = sources.map(({ source, lines }) => scanLog(source, lines.map((l) => l.text), parsed.waive));
   const rules = validateRules(JSON.parse(readFileSync(CLASSIFICATIONS_PATH, "utf8")));
