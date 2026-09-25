@@ -295,6 +295,33 @@ export function listRunningParticipants(project: string, run: DockerRun): Runnin
 }
 
 /**
+ * Every participant container of `project`, by container name, mapped to its
+ * Docker container id. Compared before and after `applyParticipantPlan`, it
+ * tells a KEPT service compose left alone (same id) from one compose recreated
+ * because its image or env file changed (new id), so the receipt never reports
+ * a recreated participant as untouched.
+ *
+ * Refusals: Docker cannot be asked (the same rule as listRunningParticipants).
+ */
+export function participantContainerIds(project: string, run: DockerRun): Map<string, string> {
+  const r = run([
+    "ps", "-a",
+    "--filter", `label=com.docker.compose.project=${project}`,
+    "--filter", `label=${PARTICIPANT_LABEL}=1`,
+    "--format", "{{.Names}}\t{{.ID}}",
+  ]);
+  if (r.exitCode !== 0) {
+    throw new Error(`could not ask Docker for the participant container ids of ${project}: ${r.stderr.trim() || `exit ${r.exitCode}`}`);
+  }
+  const ids = new Map<string, string>();
+  for (const line of r.stdout.split("\n")) {
+    const [name = "", id = ""] = line.trim().split("\t");
+    if (name !== "" && id !== "") ids.set(name, id);
+  }
+  return ids;
+}
+
+/**
  * The database's role for every member, as the running API reports it on the
  * admin members route (`swarm_members.role`), for credential-file.ts's role
  * check (spec §6.1, D52). Read with the operator's service token (§3), over

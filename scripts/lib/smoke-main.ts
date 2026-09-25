@@ -102,7 +102,7 @@ import {
 } from "./smoke-journal.ts";
 import { CredentialFileRefusal, loadCredentialFile, planParticipants, resolveCredentialPath, type CredentialEntry, type CredentialPathResolution } from "./swarm/credential-file.ts";
 import { runSpoofRebind, SpoofKeysRefusal, spoofKeysRequest } from "./swarm/spoof-keys.ts";
-import { applyParticipantPlan, fetchMemberRoles, listRunningParticipants, renderParticipantServices, writeParticipantFiles, type DockerRun } from "./participant-compose.ts";
+import { applyParticipantPlan, fetchMemberRoles, listRunningParticipants, participantContainerIds, renderParticipantServices, writeParticipantFiles, type DockerRun } from "./participant-compose.ts";
 import { ZEN_API_BASE_URL } from "./opencode-key.ts";
 import { resolveAgentModel, ZEN_PREFIX } from "./model-registry.ts";
 
@@ -1139,7 +1139,7 @@ let targetLock: TargetLock | undefined;
 interface ParticipantsReconciled {
   started: string[];
   stopped: string[];
-  receipt: { kind: string; name: string; generation: string | null; action: "started" | "kept" }[];
+  receipt: { kind: string; name: string; generation: string | null; action: "started" | "kept" | "recreated" }[];
 }
 let participantsReconciled: ParticipantsReconciled | undefined;
 
@@ -1177,19 +1177,38 @@ async function reconcileParticipants(apiUrl: string): Promise<ParticipantsReconc
     image: apiImage,
   });
   writeParticipantFiles(rendered, envDir, overlay);
+  // `compose up` covers the kept services too, and compose recreates one whose
+  // image or env file changed. The container ids before and after tell a kept
+  // container from a recreated one, so the receipt never calls a replaced
+  // participant untouched.
+  const idsBefore = participantContainerIds(project, dockerRunIn(process.env));
   applyParticipantPlan(planned, rendered.services.map((s) => s.service), {
     project,
     composeFiles: [...composeFilesRun.split(":"), overlay],
     run: dockerRunIn(dockerEnv!),
   });
+  const idsAfter = planned.keep.length > 0 ? participantContainerIds(project, dockerRunIn(process.env)) : new Map<string, string>();
   const tag = (p: { kind: string; name: string }) => `${p.kind}:${p.name}`;
-  log(`participants: started ${planned.start.map(tag).join(", ") || "none"}; kept ${planned.keep.map(tag).join(", ") || "none"}; stopped ${planned.stop.map(tag).join(", ") || "none"}`);
+  const containerOf = new Map(running.map((p) => [tag(p), p.containerName]));
+  const recreated = new Set(
+    planned.keep.map(tag).filter((t) => {
+      const name = containerOf.get(t);
+      return name !== undefined && idsBefore.get(name) !== idsAfter.get(name);
+    }),
+  );
+  const started = planned.start.map(tag);
+  // A REPLACED participant (a spoof generation change) is both stopped and
+  // started; it is running afterwards, so it is not journaled as stopped — the
+  // resume projection adds the started and then deletes the stopped, and
+  // listing it in both would drop a running participant from the expected set.
+  const stopped = planned.stop.map(tag).filter((t) => !started.includes(t));
+  log(`participants: started ${started.join(", ") || "none"}; kept ${planned.keep.map(tag).filter((t) => !recreated.has(t)).join(", ") || "none"}; recreated ${[...recreated].join(", ") || "none"}; stopped ${stopped.join(", ") || "none"}`);
   return {
-    started: planned.start.map(tag),
-    stopped: planned.stop.map(tag),
+    started,
+    stopped,
     receipt: [
       ...planned.start.map((e) => ({ kind: e.kind, name: e.name, generation: e.generation ?? null, action: "started" as const })),
-      ...planned.keep.map((e) => ({ kind: e.kind, name: e.name, generation: e.generation ?? null, action: "kept" as const })),
+      ...planned.keep.map((e) => ({ kind: e.kind, name: e.name, generation: e.generation ?? null, action: recreated.has(tag(e)) ? ("recreated" as const) : ("kept" as const) })),
     ],
   };
 }
