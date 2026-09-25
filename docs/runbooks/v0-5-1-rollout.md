@@ -54,10 +54,11 @@ here with the reason, because R8 will fail on it.
 | ID | Defect (evidence) | Proposed fix in this release | Decision |
 |---|---|---|---|
 | D1 | `swarm_judge_config` = `enforce` / `model NULL` → 3 dead `swarm.judge` (`model_unconfigured`) in 24 h; 1 session published in 48 h | R6.5: set the model through the admin judge-config route (a data write, not a migration) | ☐ |
-| D2 | `rm_worker` lacks INSERT/UPDATE/DELETE on `wallet_backfill_state`, `chain_day_blocks`, `chain_address_floors` → 288 dead `wallet.backfill_window` in 24 h | R6.2: manual grant through `scripts/ops/provision-db-role-taxonomy.sh` (the release line's rule: grants are provisioning, not migrations) **[TO BUILD: add the three grants to the script]** | ☐ |
+| D2 | `rm_worker` lacks INSERT/UPDATE/DELETE on `wallet_backfill_state`, `chain_day_blocks` (and, before the archived 0062, `chain_address_floors`) → 288 dead `wallet.backfill_window` in 24 h. Main fixed it as migration `0061_rm_worker_wallet_backfill_grant`; the archive did not | R6.2: manual grant through `scripts/ops/provision-db-role-taxonomy.sh` (the release line's rule: grants are provisioning, not migrations) **[TO BUILD: add the three grants to the script]** | ☐ |
 | D3 | Member agents return empty transcripts (`opencode/deepseek-v4-flash`); production sessions get 3 of 8 takes; the twin had 14 `no_takes` judge deaths in 3 h | Choose: change the member model, or accept partial attendance and lower `--min-attendance` with a recorded reason | ☐ |
 | D4 | `unsupported Unicode escape sequence` on parity-observation writes; 24 dead `analytics.parity_sweep` | Fix in code, or waive in R4.4/R7.2 with `--waive` and a recorded reason | ☐ |
 | D5 | Production runs `RM_ENV=smoke`, so `config.ts`'s production-only credential checks never fire | Out of scope for 0.5.1 unless the owner says otherwise; record it | ☐ |
+| D6 | Production's `schema_migrations` records `0062_rm_readonly_sequence_select.sql` (73 rows); v0.5.0/v0.5.1 code has no `0062` file. `migrate()` ignores the extra row, so nothing breaks, but code and database disagree and a fresh environment never gets the `rm_readonly` sequence grant | Carry the archived `0062` file unchanged: already recorded in production, so **it does not run there**; it only makes code match the database | ☐ |
 
 ## 2. Roles and evidence
 
@@ -97,7 +98,7 @@ runs R2.1–R2.5 as one receipt; until it exists, run the SQL by hand.
 | R2.3 | `SELECT kind, status, count(*) FROM jobs WHERE created_at > now() - interval '24 hours' GROUP BY 1,2` | record; today: dead wallet.backfill_window ×288, analytics.parity_sweep ×24, swarm.judge ×3 | full table |
 | R2.4 | `SELECT has_table_privilege('rm_worker', t, 'INSERT') FROM unnest(array['wallet_backfill_state','chain_day_blocks','chain_address_floors']) t` | today: false (D2) | row |
 | R2.5 | `SELECT subject_id, state, convened_at, published_at FROM swarm_sessions WHERE convened_at > now() - interval '72 hours' ORDER BY convened_at` plus takes per session (`count(DISTINCT member_id) FROM swarm_memos`) | record; list every session not `published` | table |
-| R2.6 | `SELECT name FROM schema_migrations ORDER BY name` | 0001…0061 as recorded; save as `baseline-migrations.txt` | file hash |
+| R2.6 | `SELECT name FROM schema_migrations ORDER BY name` | 73 rows ending `0062_rm_readonly_sequence_select.sql` (applied out of band from the abandoned 0.5.x work; see D6); save as `baseline-migrations.txt` | file hash |
 | R2.7 | `docker inspect rm_prod-api-1 --format '{{.RestartCount}} {{.State.StartedAt}}'`; `docker logs --since 24h rm_prod-api-1 2>&1 \| grep -cE 'REFUSING the boot\|— DEAD\|JudgeUnavailable'` | record | counts |
 | R2.8 | `SELECT pg_size_pretty(pg_database_size(current_database()))` | record (6.5 GB on 2026-09-25) | size |
 
