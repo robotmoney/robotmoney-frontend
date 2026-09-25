@@ -156,12 +156,19 @@ subject, with nothing dead and nothing in the logs.
 | R4.8 | Judge fidelity: on the twin, set `swarm_judge_config.model` to NULL (production's value), run one session, confirm `twin:gate` **fails** with `JudgeUnavailable`; restore the model | the gate catches production's defect | output |
 | R4.9 | Tear the twin down: stop the `smoke:twin` process, then R4.1's wipe | 0 containers. A twin left running spends inference credit on every session: on 2026-09-24 one ran overnight until the account returned HTTP 402 on 1,065 member calls | time |
 
-**What R4 does not prove.** The twin restores a dump, so it never meets a
-session that production opened and the new driver must adopt mid-window
-(`session.ts` adopts a `collecting` session instead of opening a second one,
-issue 570). The 2026-09-25 twin held no open session at all. Production will
-hold one per subject at R6.3, because its window is as long as its interval.
-R6.2a lists them and R8.4 proves each one closes.
+**What R4 proves about the cutover handover, and what it does not.** The new
+driver adopts a subject's open session instead of opening a second one
+(`session.ts`, issue 570). On 2026-09-25 production's open sessions were all
+`scheduled`, none `collecting`: treasury (convened 2026-09-24 15:17), woon
+(12:17), allocation (13:47) and vault (16:47), each opened by a run whose
+`publish_brief` never landed. The dump carried those four, and the twin's
+round 1 adopted all four, published their briefs, collected 6–7 of 8 takes,
+judged them under `enforce`, and published them. That is the handover
+production will make, rehearsed on production's own rows. What no twin can
+rehearse is adopting a `collecting` session: on a twin the driver skips an
+adopted window by design, where production waits it out. The driver runs one
+session at a time, so at most one session can be `collecting` at R6.3. R6.2a
+checks for it.
 
 R4.8 exists because the v0.5.0 rehearsal could not fail on the defect that
 broke production. A rehearsal gate that has never been seen to fail is not
@@ -187,7 +194,7 @@ driver: while it is down, no session advances.
 |---|---|---|---|
 | R6.1 | Announce the window; confirm R3 backup (it is the only way back from a migration) and R5 tag | — | time |
 | R6.2 | Confirm both credentials without printing them: `grep -cE '^(MIGRATE_DATABASE_URL\|OPENCODE_API_KEY)=.' /root/robotmoney-frontend/.env` | `2`: the R6.4 boot migrates with the first, and the judge pays with the second (the driver forwards it; compose never reads `.env` itself) | count |
-| R6.2a | The sessions R6.3 will interrupt: `bun run --cwd /root/rm-gate-$RC_SHA prod:gate -- --mode baseline --state-file /root/robotmoney-frontend/.agents/smoke-state.json --report /root/prod-gate-reports/R6-precut-$RC_SHA.md` and copy every session in `scheduled` or `collecting` into the rollout report | every open session listed, with its id and window close | the list |
+| R6.2a | The sessions R6.3 will interrupt: `bun run --cwd /root/rm-gate-$RC_SHA prod:gate -- --mode baseline --state-file /root/robotmoney-frontend/.agents/smoke-state.json --report /root/prod-gate-reports/R6-precut-$RC_SHA.md` and copy every session in `scheduled` or `collecting` into the rollout report | every open session listed, with its id, state and window close. Every one is `scheduled` (the rehearsed handover). If one is `collecting`, wait for it to publish before R6.3, or record an owner waiver: that branch has no rehearsal | the list |
 | R6.3 | `tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_current_command}'` to find the pane running `bun` (on 2026-09-25: window `0:1` has two panes); `tmux attach -t 0`; Ctrl-C the running `smoke:archive` in that pane; wait for its teardown; then `cd /root/robotmoney-frontend && bun run smoke:status && docker compose ls` | `rm_prod` gone | output |
 | R6.4 | `git status --porcelain` shows nothing tracked (only `?? .codex/` on 2026-09-25); `git fetch origin --tags && git checkout v0.5.1-rc.N && git rev-parse HEAD` (must equal `RC_SHA`); `bun install --force && bun install --force --cwd backend`; `echo "CI=[$CI]"` (must be empty); then, in tmux: `SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui 2>&1 \| tee /root/smoke-archive-v0.5.1.log`. `--no-tui` is required: without it there is no driver log, and R7/R8 cannot grade the driver (the v0.5.0 driver runs with its TUI, so no driver log exists today) | READY printed within 15 min; `GET /health` 200; production T0 = READY time. No READY in 15 min, or a migration error, is a STOP → R9 | T0, first 200 log lines |
 | R6.5 | Migrations applied: `grep -E 'migrated: 00' /root/smoke-archive-v0.5.1.log`; then R2.7 again, and `SELECT mode, model, third_party_enabled FROM swarm_judge_config` | log shows `migrated: 0061_rm_worker_wallet_backfill_grant.sql` and `migrated: 0063_swarm_judge_model_default.sql` and **no** `0062`; judge = `enforce` / `opencode/deepseek-v4-flash` / `false`; R2.7 = all `true`; `docker exec rm_prod-worker-swarm-1 sh -c 'test -n "$OPENCODE_API_KEY" && echo key-set'` prints `key-set` | lines, rows |
