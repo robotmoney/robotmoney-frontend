@@ -32,10 +32,16 @@
 //      and anything else means the probe no longer matches the schema.
 //   5. EXACTNESS. A probe that needed nothing (`SELECT 1`) would pass for any
 //      role, so each probe is also run as a scratch LOGIN role holding ONLY
-//      the declared privileges on ONLY the declared object (must succeed), and
-//      then once per declared privilege with that one privilege taken away
-//      (must fail with 42501). That is what makes the probe a proof of the
-//      declaration rather than a statement that happens to run.
+//      what the declarations of its `on(...)` call declare (for a JOIN, each
+//      joined relation's same-role declaration; must succeed), and then once
+//      per privilege THIS declaration lists with that one privilege taken
+//      away (must fail with 42501). That is what makes the probe a proof of
+//      the declaration rather than a statement that happens to run.
+//   6. THE PROBE IS THE CALL SITE. Steps 4 and 5 prove the probe; the static
+//      section below proves the probe is the statement the call site issues:
+//      every `on(...)` template is read from source, and the probe must
+//      reduce to the same token form. A site whose templates differ must be
+//      split, so no declaration stands for a statement it was never run as.
 //
 // PROBE_PENDING below is the dated backlog of registered sites whose owner
 // module had no probe when this test landed. It only shrinks.
@@ -88,7 +94,14 @@ const PROBE_PENDING_CEILING = 11;
  * as sites are added. Lower it only in the change that deletes a registering
  * module, saying which.
  */
-const EXECUTED_FLOOR = 194;
+const EXECUTED_FLOOR = 204;
+
+/**
+ * The number of `on(...)` call sites the static reader resolved when it was
+ * last extended (a JOIN is one call site naming several declarations, so this
+ * is below the site count). Same rule as EXECUTED_FLOOR.
+ */
+const CALL_SITE_FLOOR = 210;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Static enumeration: what the source says is registered.
@@ -132,6 +145,331 @@ function entryImports(entry: string): string[] {
 
 const API_ENTRY = join(SRC, "api", "index.ts");
 const WORKER_ENTRY = join(SRC, "worker", "index.ts");
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Static: the statement each call site really issues, and whether the probe IS it.
+//
+// Running a probe as its declared role proves the probe, not the call site. A
+// probe is a string written next to the declaration, so without this section
+// a call site could add RETURNING, ON CONFLICT DO UPDATE, FOR UPDATE, a JOIN or
+// a WHERE — every one of which changes the privileges the statement needs —
+// and the execution below would stay green on the old text. So every `on(...)`
+// call site is read from source and reduced to a token FORM, the probe is
+// reduced the same way, and the two must be equal. One site may serve several
+// templates only when they all reduce to the same form (the two retry
+// branches of the job settle differ only in a bound value); a site whose
+// templates differ in any token must be split into one site per statement.
+//
+// THE REDUCTION, which is the whole list of ways a probe may differ from its
+// template (each is privilege-neutral: table grants cannot see it):
+//   - whitespace, `--` and `/* */` comments, and keyword/identifier case;
+//   - a bound value: a template `${expr}` and a probe `$n` both become VALUE,
+//     and so does a literal NULL (a bound value may be null);
+//   - a cast on a bound value (`$1::uuid`, `${x}::integer`) is dropped;
+//   - `IN (v, ...)` and `IN ${sql(list)}` both become `IN LIST`;
+//   - postgres.js helper spans are expanded as postgres.js expands them:
+//     `${db(rows, "a", "b")}` is `(a, b) VALUES (VALUE, VALUE)`, and a
+//     one-argument helper outside `IN` (`SET ${sql(column)} = ...`) is one
+//     identifier, matched by any identifier in the probe;
+//   - in the probe only, `INSERT INTO t (cols) SELECT <values> WHERE false`
+//     is the written form of `INSERT INTO t (cols) VALUES (<values>)`: it
+//     plans (and so checks) the same INSERT without needing a parent row for
+//     a foreign key on a blank database.
+// Anything else — a helper call nested inside a span, a tagged template in a
+// span, a statement text that is not a literal — is refused as unreadable.
+//
+// CATALOG-ONLY STATEMENTS. A statement whose every FROM/JOIN names
+// information_schema or pg_catalog needs no table privilege on any relation
+// in `public`, so no declaration governs it and no probe can prove it; it is
+// skipped by the form rule and pinned by exact list below.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VALUE = "\u0000VALUE";
+const LIST = "\u0000LIST";
+const IDENT = "\u0000IDENT";
+const MARK = { value: "\u0000VALUE\u0000", list: "\u0000LIST\u0000", ident: "\u0000IDENT\u0000" } as const;
+
+/** SQL text (with sentinel marks where spans were) → tokens. */
+function lexSql(text: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i]!;
+    const rest = text.slice(i);
+    if (/\s/.test(c)) i++;
+    else if (rest.startsWith("--")) i = text.indexOf("\n", i) < 0 ? text.length : text.indexOf("\n", i);
+    else if (rest.startsWith("/*")) i = text.indexOf("*/", i + 2) < 0 ? text.length : text.indexOf("*/", i + 2) + 2;
+    else if (c === "\u0000") {
+      const m = /^\u0000(VALUE|LIST|IDENT)\u0000/.exec(rest)!;
+      out.push(`\u0000${m[1]}`);
+      i += m[0].length;
+    } else if (c === "'") {
+      let j = i + 1;
+      while (j < text.length && !(text[j] === "'" && text[j + 1] !== "'")) j += text[j] === "'" ? 2 : 1;
+      out.push(text.slice(i, j + 1));
+      i = j + 1;
+    } else if (c === '"') {
+      const j = text.indexOf('"', i + 1);
+      out.push(text.slice(i, j + 1));
+      i = j + 1;
+    } else if (/^\$\d/.test(rest)) {
+      out.push(VALUE);
+      i += /^\$\d+/.exec(rest)![0].length;
+    } else {
+      const m = /^[A-Za-z_][A-Za-z0-9_$]*/.exec(rest) ?? /^\d+(?:\.\d+)?/.exec(rest) ?? /^(?:::|<=|>=|<>|!=|->>|->|\|\||[^\s])/.exec(rest)!;
+      out.push(/^[A-Za-z_]/.test(m[0]) ? m[0].toLowerCase() : m[0]);
+      i += m[0].length;
+    }
+  }
+  return out;
+}
+
+/** The probe-only rewrite: `INSERT INTO t (cols) SELECT v... WHERE false` → `... VALUES (v...)`. */
+function foldInsertSelectWhereFalse(t: string[]): string[] {
+  if (t[0] !== "insert" || t[1] !== "into") return t;
+  let i = 3;
+  while (t[i] === ".") i += 2;
+  if (t[i] !== "(") return t;
+  let depth = 0;
+  let close = i;
+  for (; close < t.length; close++) {
+    if (t[close] === "(") depth++;
+    else if (t[close] === ")" && --depth === 0) break;
+  }
+  if (t[close + 1] !== "select") return t;
+  depth = 0;
+  for (let k = close + 2; k < t.length; k++) {
+    if (t[k] === "(") depth++;
+    else if (t[k] === ")") depth--;
+    else if (depth === 0 && t[k] === "where") {
+      if (t[k + 1] !== "false") return t;
+      return [...t.slice(0, close + 1), "values", "(", ...t.slice(close + 2, k), ")", ...t.slice(k + 2)];
+    } else if (depth === 0 && t[k] === "from") return t;
+  }
+  return t;
+}
+
+/** The privilege-neutral reductions both sides share (see the section header). */
+function reduceForm(tokens: string[]): string[] {
+  const t = tokens.map((tok) => (tok === "null" ? VALUE : tok));
+  const out: string[] = [];
+  for (let i = 0; i < t.length; i++) {
+    if (t[i] === "in" && t[i + 1] === "(" && t[i + 2] === VALUE) {
+      let j = i + 3;
+      while (t[j] === "," && t[j + 1] === VALUE) j += 2;
+      if (t[j] === ")") {
+        out.push("in", LIST);
+        i = j;
+        continue;
+      }
+    }
+    out.push(t[i]!);
+    if (t[i] === VALUE) {
+      while (t[i + 1] === "::" && /^[a-z_]/.test(t[i + 2] ?? "")) {
+        i += 2;
+        while (t[i + 1] === "[" && t[i + 2] === "]") i += 2;
+      }
+    }
+  }
+  return out;
+}
+
+function probeForm(statement: string): string[] {
+  return reduceForm(foldInsertSelectWhereFalse(reduceForm(lexSql(statement))));
+}
+
+function sameForm(template: readonly string[], probe: readonly string[]): boolean {
+  return (
+    template.length === probe.length &&
+    template.every((tok, i) => tok === probe[i] || (tok === IDENT && /^[a-z_"]/.test(probe[i]!)))
+  );
+}
+
+const showForm = (form: readonly string[]): string => form.join(" ").replace(/\u0000/g, "");
+
+/** One `on(...)` call site as the source writes it. */
+interface CallSiteStatement {
+  /** backend-relative file:line. */
+  readonly where: string;
+  /** The registered sites named in the `on(...)` call, primary first. */
+  readonly sites: readonly string[];
+  /** The reduced token form; empty when `unreadable` is set. */
+  readonly form: readonly string[];
+  /** Every FROM/JOIN names information_schema or pg_catalog. */
+  readonly catalogOnly: boolean;
+  /** Why the statement text could not be read, if it could not. */
+  readonly unreadable?: string;
+}
+
+/** Every FROM/JOIN target is a catalog schema, and nothing is written. */
+function isCatalogOnly(form: readonly string[]): boolean {
+  if (form.some((tok) => ["insert", "update", "delete", "truncate"].includes(tok))) return false;
+  const targets = form.flatMap((tok, i) => (tok === "from" || tok === "join" ? [form[i + 1] ?? ""] : []));
+  return targets.length > 0 && targets.every((target) => target === "information_schema" || target === "pg_catalog");
+}
+
+function isOnCall(node: ts.Node): node is ts.CallExpression {
+  return ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "on";
+}
+
+/**
+ * Every `on(...)` statement under src/ and scripts/, resolved to the sites it
+ * names. A query argument must be a module-level `const x = registerQuery({
+ * site: "<literal>", ... })` in the same file, so the site is read, not guessed.
+ */
+function callSiteStatements(): CallSiteStatement[] {
+  const found: CallSiteStatement[] = [];
+  for (const file of [...tsFilesUnder(SRC), ...tsFilesUnder(SCRIPTS)]) {
+    if (file === REGISTRY_FILE) continue;
+    const text = readFileSync(file, "utf8");
+    if (!/\bon\(/.test(text) || !text.includes("registry.ts")) continue;
+    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    const rel = file.slice(BACKEND.length + 1);
+    const sites = new Map<string, string>();
+    const consts = new Map<string, ts.Expression>();
+    const handles = new Set<string>(["sql"]);
+    const collect = (node: ts.Node): void => {
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+        consts.set(node.name.text, node.initializer);
+        const init = node.initializer;
+        if (ts.isCallExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === "registerQuery") {
+          const arg = init.arguments[0];
+          const siteProp =
+            arg && ts.isObjectLiteralExpression(arg)
+              ? arg.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === "site")
+              : undefined;
+          if (siteProp && (ts.isStringLiteral(siteProp.initializer) || ts.isNoSubstitutionTemplateLiteral(siteProp.initializer))) {
+            sites.set(node.name.text, siteProp.initializer.text);
+          }
+        }
+      }
+      if (isOnCall(node) && node.arguments[0] && ts.isIdentifier(node.arguments[0])) handles.add(node.arguments[0].text);
+      ts.forEachChild(node, collect);
+    };
+    collect(source);
+
+    /** Constant text: a literal, or a template/const/one-argument wrapper of constant text. */
+    const constantText = (expr: ts.Expression, depth = 0): string | undefined => {
+      if (depth > 8) return undefined;
+      if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) return expr.text;
+      if (ts.isParenthesizedExpression(expr)) return constantText(expr.expression, depth + 1);
+      if (ts.isIdentifier(expr)) {
+        const init = consts.get(expr.text);
+        return init ? constantText(init, depth + 1) : undefined;
+      }
+      if (ts.isTemplateExpression(expr)) {
+        let out = expr.head.text;
+        for (const span of expr.templateSpans) {
+          const part = constantText(span.expression, depth + 1);
+          if (part === undefined) return undefined;
+          out += part + span.literal.text;
+        }
+        return out;
+      }
+      // A strings-array builder (`((text) => [text] as TemplateStringsArray)(TEXT)`).
+      if (ts.isCallExpression(expr) && expr.arguments.length === 1) return constantText(expr.arguments[0]!, depth + 1);
+      return undefined;
+    };
+
+    const isHelperCall = (e: ts.Node): e is ts.CallExpression =>
+      ts.isCallExpression(e) && ts.isIdentifier(e.expression) && handles.has(e.expression.text);
+    const containsFragment = (e: ts.Node): boolean => {
+      let hit = false;
+      const walk = (n: ts.Node): void => {
+        if (isHelperCall(n) || ts.isTaggedTemplateExpression(n)) hit = true;
+        else ts.forEachChild(n, walk);
+      };
+      walk(e);
+      return hit;
+    };
+
+    const visit = (node: ts.Node): void => {
+      if (isOnCall(node) && node.arguments.length >= 2) {
+        const line = source.getLineAndCharacterOfPosition(node.getStart()).line + 1;
+        const where = `${rel}:${line}`;
+        const named = node.arguments.slice(1).map((a) => (ts.isIdentifier(a) ? sites.get(a.text) : undefined));
+        const parent = node.parent;
+        let form: string[] = [];
+        let unreadable: string | undefined;
+        if (named.some((s) => s === undefined)) {
+          unreadable = "a query argument is not a same-file `const x = registerQuery({ site: \"...\" })`";
+        } else if (ts.isTaggedTemplateExpression(parent) && parent.tag === node) {
+          const tpl = parent.template;
+          if (ts.isNoSubstitutionTemplateLiteral(tpl)) form = reduceForm(lexSql(tpl.text));
+          else {
+            let sqlText = tpl.head.text;
+            for (const span of tpl.templateSpans) {
+              const e = span.expression;
+              let mark: string = MARK.value;
+              if (isHelperCall(e)) {
+                const columns = e.arguments.slice(1);
+                const before = lexSql(sqlText).at(-1);
+                if (columns.length > 0 && columns.every((a) => ts.isStringLiteral(a))) {
+                  const names = columns.map((a) => (a as ts.StringLiteral).text);
+                  mark = `(${names.join(", ")}) VALUES (${names.map(() => MARK.value).join(", ")})`;
+                } else if (before === "in") mark = MARK.list;
+                else mark = MARK.ident;
+              } else if (containsFragment(e)) {
+                unreadable = `the span \${${e.getText()}} nests a helper call or tagged template the checker cannot expand`;
+              }
+              sqlText += ` ${mark} ${span.literal.text}`;
+            }
+            form = reduceForm(lexSql(sqlText));
+          }
+        } else if (ts.isCallExpression(parent) && parent.expression === node && parent.arguments.length === 1) {
+          const constant = constantText(parent.arguments[0]!);
+          if (constant === undefined) unreadable = "the strings array is not constant text";
+          else form = reduceForm(lexSql(constant));
+        } else {
+          unreadable = "on(...) is neither a template tag nor called with a constant strings array";
+        }
+        found.push({
+          where,
+          sites: named.map((s) => s ?? "?"),
+          form: unreadable ? [] : form,
+          catalogOnly: !unreadable && isCatalogOnly(form),
+          ...(unreadable ? { unreadable } : {}),
+        });
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  return found;
+}
+
+/**
+ * Every way `site`'s probe fails to be its call sites' statement, as sentences.
+ * Empty means the probe reduces to the same form as every template the site is
+ * named in, and all of those templates reduce to one form.
+ */
+function probeMismatches(site: string, probeStatement: string, statements: readonly CallSiteStatement[]): string[] {
+  const mine = statements.filter((st) => st.sites.includes(site) && !st.catalogOnly);
+  if (mine.length === 0) return [`${site}: no on(...) call site issues it`];
+  const forms = new Map<string, CallSiteStatement[]>();
+  for (const st of mine) forms.set(showForm(st.form), [...(forms.get(showForm(st.form)) ?? []), st]);
+  if (forms.size > 1) {
+    return [
+      `${site}: one declaration serves ${forms.size} different statements ` +
+        `(${[...forms.values()].map((sts) => sts.map((st) => st.where).join("+")).join(", ")}) — give each its own site`,
+    ];
+  }
+  const template = mine[0]!.form;
+  const probe = probeForm(probeStatement);
+  if (sameForm(template, probe)) return [];
+  return [`${site}: probe is not the statement at ${mine.map((st) => st.where).join(", ")}\n  statement: ${showForm(template)}\n  probe:     ${showForm(probe)}`];
+}
+
+/**
+ * The CATALOG-ONLY statements, pinned by value: each runs through a registered
+ * site but reads nothing in `public`, so neither the form rule nor a probe can
+ * say anything about it. A new one is an edit here, never a silent skip.
+ */
+const CATALOG_ONLY_STATEMENTS: readonly string[] = [
+  // The readiness half of the boot re-check: does swarm_members.handle exist
+  // yet (the pair scan it gates is the site's probe)?
+  "src/db/handle-namespace:handleNamespaceConflicts.runtime+src/db/handle-namespace:handleNamespaceConflicts.owner",
+];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The disposable database and the role logins.
@@ -243,45 +581,58 @@ async function runProbe(db: postgres.Sql<{}>, probe: NonNullable<QueryDeclaratio
   return { ok: false, code: "no-rollback", message: "the probe transaction committed instead of rolling back" };
 }
 
-/** Grant exactly `privileges` on `object` to the scratch role, and nothing else. */
-async function scratchHolds(object: string, privileges: readonly TablePrivilege[]): Promise<void> {
-  await admin.unsafe(`REVOKE ALL ON public.${object} FROM ${SCRATCH}`);
-  if (privileges.length > 0) await admin.unsafe(`GRANT ${privileges.join(", ")} ON public.${object} TO ${SCRATCH}`);
+/** Grant the scratch role exactly `held` (relation → privileges), and nothing else. */
+async function scratchHolds(held: ReadonlyMap<string, readonly TablePrivilege[]>): Promise<void> {
+  for (const [object, privileges] of held) {
+    await admin.unsafe(`REVOKE ALL ON public.${object} FROM ${SCRATCH}`);
+    if (privileges.length > 0) await admin.unsafe(`GRANT ${privileges.join(", ")} ON public.${object} TO ${SCRATCH}`);
+  }
 }
 
 /**
  * Every way `declaration` fails, as sentences naming the site: the probe as the
  * declared role, then the exactness pair (see the file header). Empty means
  * the declaration is proved.
+ *
+ * `group` is every declaration named in the same `on(...)` call as this one
+ * (itself included). A probe is the call site's whole statement (see the
+ * static section above), so a JOIN's probe touches every joined relation: the
+ * scratch role is handed what the SAME-ROLE members of the group declare, and
+ * only this declaration's own privileges are then taken away one at a time.
+ * A group member of another role is the same statement reached from another
+ * program, and is proved by its own run.
  */
-async function executeSite(declaration: QueryDeclaration): Promise<string[]> {
+async function executeSite(declaration: QueryDeclaration, group: readonly QueryDeclaration[] = [declaration]): Promise<string[]> {
   const probe = declaration.probe;
   if (!probe) return [`${declaration.site}: has no probe`];
   const failures: string[] = [];
   const as = await runProbe(login(declaration.role), probe);
   if (!as.ok) failures.push(`${declaration.site}: as ${declaration.role} → ${as.code} ${as.message}`);
 
+  const held = new Map<string, TablePrivilege[]>();
+  for (const member of [declaration, ...group]) {
+    if (member.role !== declaration.role) continue;
+    held.set(member.object, [...new Set([...(held.get(member.object) ?? []), ...member.privileges])]);
+  }
+  const heldText = [...held].map(([object, privileges]) => `${privileges.join(", ")} on ${object}`).join("; ");
   try {
-    await scratchHolds(declaration.object, declaration.privileges);
+    await scratchHolds(held);
     const exact = await runProbe(login(SCRATCH), probe);
-    if (!exact.ok) {
-      failures.push(
-        `${declaration.site}: needs more than ${declaration.privileges.join(", ")} on ${declaration.object} ` +
-          `→ ${exact.code} ${exact.message}`,
-      );
-    }
+    if (!exact.ok) failures.push(`${declaration.site}: needs more than ${heldText} → ${exact.code} ${exact.message}`);
     for (const dropped of declaration.privileges) {
-      await scratchHolds(declaration.object, declaration.privileges.filter((p) => p !== dropped));
-      const without = await runProbe(login(SCRATCH), probe);
-      if (without.ok || without.code !== "42501") {
+      const without = new Map(held);
+      without.set(declaration.object, held.get(declaration.object)!.filter((p) => p !== dropped));
+      await scratchHolds(without);
+      const outcome = await runProbe(login(SCRATCH), probe);
+      if (outcome.ok || outcome.code !== "42501") {
         failures.push(
           `${declaration.site}: declares ${dropped} on ${declaration.object} but its probe ` +
-            (without.ok ? "runs without it" : `fails with ${without.code}, not 42501, without it: ${without.message}`),
+            (outcome.ok ? "runs without it" : `fails with ${outcome.code}, not 42501, without it: ${outcome.message}`),
         );
       }
     }
   } finally {
-    await admin.unsafe(`REVOKE ALL ON public.${declaration.object} FROM ${SCRATCH}`);
+    for (const object of held.keys()) await admin.unsafe(`REVOKE ALL ON public.${object} FROM ${SCRATCH}`);
   }
   return failures;
 }
@@ -367,10 +718,15 @@ describe("every registered query runs as its declared role on a disposable datab
   test("each probe succeeds as its declared LOGIN role, and needs exactly the declared privileges", async () => {
     const { sites } = await childSites();
     const probed = sites.filter((s) => s.probe);
+    const bySite = new Map(sites.map((s) => [s.site, s]));
+    const statements = callSiteStatements().filter((st) => !st.catalogOnly && !st.unreadable);
     const failures: string[] = [];
     const ranBy = new Map<RmRole, number>();
     for (const declaration of probed) {
-      failures.push(...(await executeSite(declaration)));
+      const group = [
+        ...new Set(statements.filter((st) => st.sites.includes(declaration.site)).flatMap((st) => st.sites)),
+      ].map((site) => bySite.get(site)!);
+      failures.push(...(await executeSite(declaration, group)));
       ranBy.set(declaration.role, (ranBy.get(declaration.role) ?? 0) + 1);
     }
     // The message is the deliverable: each line names the site, the role and
@@ -381,6 +737,32 @@ describe("every registered query runs as its declared role on a disposable datab
     expect(probed.length).toBeGreaterThanOrEqual(EXECUTED_FLOOR);
     expect([...ranBy.values()].reduce((a, b) => a + b, 0)).toBe(probed.length);
   }, 120_000);
+
+  test("every on(...) call site is readable and names only registered sites", async () => {
+    const { sites } = await childSites();
+    const registered = new Set(sites.map((s) => s.site));
+    const statements = callSiteStatements();
+    // Non-vacuous: the scan reads the call sites the registry serves.
+    expect(statements.length).toBeGreaterThanOrEqual(CALL_SITE_FLOOR);
+    expect(statements.filter((st) => st.unreadable).map((st) => `${st.where}: ${st.unreadable}`)).toEqual([]);
+    expect(statements.flatMap((st) => st.sites.filter((site) => !registered.has(site)).map((site) => `${st.where}: ${site}`))).toEqual([]);
+    // Every registered site is issued somewhere: a declaration no statement
+    // uses proves nothing about any statement.
+    const issued = new Set(statements.flatMap((st) => st.sites));
+    expect([...registered].filter((site) => !issued.has(site))).toEqual([]);
+    // The catalog-only exemption is exactly the pinned list.
+    expect(statements.filter((st) => st.catalogOnly).map((st) => st.sites.join("+")).sort()).toEqual([...CATALOG_ONLY_STATEMENTS].sort());
+  });
+
+  test("every probe IS its call site's statement, and each site serves one statement", async () => {
+    const { sites } = await childSites();
+    const statements = callSiteStatements();
+    const probed = sites.filter((s) => s.probe);
+    const mismatches = probed.flatMap((s) => probeMismatches(s.site, s.probe!.statement, statements));
+    expect(mismatches).toEqual([]);
+    // Non-vacuous: every probed site was compared against at least one template.
+    expect(probed.length).toBeGreaterThanOrEqual(EXECUTED_FLOOR);
+  });
 
   test("each login really is the declared role, not a superuser", async () => {
     for (const role of [...ROLES, SCRATCH]) {
@@ -445,5 +827,63 @@ describe("RED CONTROL — a declaration the role's grants do not cover fails wit
       },
     });
     expect(short.some((f) => f.startsWith("tests/db-registry-execution:short: needs more than INSERT on comments → 42501"))).toBe(true);
+  });
+});
+
+describe("RED CONTROL — a probe that is not its call site's statement is refused", () => {
+  const site = "src/api/routes/comments:createComment.insert";
+
+  async function realProbe(): Promise<string> {
+    const { sites } = await childSites();
+    const statement = sites.find((s) => s.site === site)?.probe?.statement;
+    expect(statement).toBeDefined();
+    return statement!;
+  }
+
+  test("the real probe matches, so the controls below fail for the edit alone", async () => {
+    expect(probeMismatches(site, await realProbe(), callSiteStatements())).toEqual([]);
+  });
+
+  test("dropping the RETURNING the call site carries is named", async () => {
+    const probe = (await realProbe()).replace(/\s+RETURNING[\s\S]*$/i, "");
+    const out = probeMismatches(site, probe, callSiteStatements());
+    expect(out.length).toBe(1);
+    expect(out[0]!.startsWith(`${site}: probe is not the statement at src/api/routes/comments.ts:`)).toBe(true);
+  });
+
+  test("a call site that gains ON CONFLICT DO UPDATE, or FOR UPDATE, no longer matches its probe", async () => {
+    const statements = callSiteStatements();
+    const probe = await realProbe();
+    const edited = (suffix: string): CallSiteStatement[] =>
+      statements.map((st) => (st.sites.includes(site) ? { ...st, form: reduceForm([...st.form, ...lexSql(suffix)]) } : st));
+    expect(probeMismatches(site, probe, edited(" ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content"))).toHaveLength(1);
+    const listSite = "src/api/routes/comments:listComments";
+    const { sites } = await childSites();
+    const listProbe = sites.find((s) => s.site === listSite)!.probe!.statement;
+    expect(probeMismatches(listSite, listProbe, statements)).toEqual([]);
+    const locked = statements.map((st) => (st.sites.includes(listSite) ? { ...st, form: reduceForm([...st.form, "for", "update"]) } : st));
+    expect(probeMismatches(listSite, listProbe, locked)).toHaveLength(1);
+  });
+
+  test("one declaration serving two different statements is refused, whatever its probe", async () => {
+    const statements = callSiteStatements();
+    const mine = statements.find((st) => st.sites.includes(site))!;
+    const twin: CallSiteStatement = { ...mine, where: "src/api/routes/comments.ts:0", form: reduceForm([...mine.form.slice(0, -2)]) };
+    const out = probeMismatches(site, await realProbe(), [...statements, twin]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain("one declaration serves 2 different statements");
+  });
+
+  test("a span the checker cannot expand makes the call site unreadable, not skipped", () => {
+    // The reducer's own vocabulary: a nested helper is a fragment, and a
+    // fragment is exactly where RETURNING or FOR UPDATE could hide.
+    expect(reduceForm(lexSql("SELECT id FROM t WHERE a IN ($1, $2) AND b = $3::int"))).toEqual(
+      reduceForm(lexSql(`select ID from T where a in ${MARK.list} and b = ${MARK.value}`)),
+    );
+    expect(probeForm("INSERT INTO t (a, b) SELECT $1, NULL::jsonb WHERE false RETURNING id")).toEqual(
+      reduceForm(lexSql(`INSERT INTO t (a, b) VALUES (${MARK.value}, ${MARK.value}) RETURNING id`)),
+    );
+    // WHERE false is the ONLY SELECT form accepted as VALUES.
+    expect(probeForm("INSERT INTO t (a) SELECT $1 FROM u")).not.toEqual(reduceForm(lexSql(`INSERT INTO t (a) VALUES (${MARK.value})`)));
   });
 });
