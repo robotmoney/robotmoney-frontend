@@ -1029,11 +1029,20 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   // ('expected') row on it may submit — this is what makes the roster
   // authoritative rather than advisory, and it is the same set
   // loadFrozenTakeSet counts and recordAbsencesTx records absences against.
-  // Sessions with NO roster rows are the legacy fixture path (openSession) and
-  // are unaffected: this check is a no-op for them.
+  //
+  // THE BYPASS IS KEYED ON THE SESSION'S ORIGIN, NOT ON AN EMPTY ROSTER. The
+  // legacy two-step fixture path (openSession, then publishBrief) seats no
+  // roster, and publishBrief stamps `brief_opens_at` when it opens that
+  // session's window — the "brief opens later" shape §4.1 retired. Only such a
+  // row skips the gate. An epoch (insertEpoch) never has `brief_opens_at`, so
+  // an epoch opened while no member was active has an EMPTY roster that still
+  // gates: a member activated mid-epoch is refused here and is not offered the
+  // session by pendingTakesFor. Keying on `rosterRows.length === 0` let that
+  // member submit into an epoch it was never seated in.
+  const legacyUnrostered = session.brief_opens_at != null;
   const rosterRows = await sql<{ status: string }[]>`
     SELECT status FROM swarm_session_members WHERE session_id = ${session.id}`;
-  if (rosterRows.length > 0) {
+  if (rosterRows.length > 0 || !legacyUnrostered) {
     const mine = (await sql<{ status: string }[]>`
       SELECT status FROM swarm_session_members WHERE session_id = ${session.id} AND member_id = ${memberId}`)[0];
     if (!mine) return { ok: false, status: 403, error: "member is not on this session's expected roster" };
@@ -1343,7 +1352,11 @@ export async function pendingTakesFor(memberId: string): Promise<PendingTake[]> 
      WHERE s.state = 'collecting'
        AND (s.window_closes_at IS NULL OR s.window_closes_at > clock_timestamp())
        AND (
-         NOT EXISTS (SELECT 1 FROM swarm_session_members x WHERE x.session_id = s.id)
+         -- Only the legacy two-step fixture path (brief_opens_at stamped by
+         -- publishBrief) is unrostered. An epoch with an empty roster offers
+         -- itself to nobody: the same rule as the take path's roster gate.
+         (s.brief_opens_at IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM swarm_session_members x WHERE x.session_id = s.id))
          OR EXISTS (SELECT 1 FROM swarm_session_members sm
                      WHERE sm.session_id = s.id AND sm.member_id = ${memberId} AND sm.status = 'expected')
        )
@@ -2238,7 +2251,13 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
               ON CONFLICT (session_id) DO UPDATE SET
                 body = (EXCLUDED.body - 'allocation') || CASE WHEN swarm_briefs.body ? 'allocation' THEN jsonb_build_object('allocation', swarm_briefs.body->'allocation') ELSE '{}'::jsonb END,
                 report_snapshot_id = EXCLUDED.report_snapshot_id`;
-    await tx`UPDATE swarm_sessions SET state = 'collecting', window_closes_at = ${closes} WHERE id = ${sessionId}`;
+    // `brief_opens_at` records that this session's brief opened AFTER it was
+    // convened — the legacy two-step shape. The take path's roster gate and
+    // pendingTakesFor treat only such a row as unrostered; an epoch never has
+    // it (insertEpoch opens the window in the transaction that convenes).
+    await tx`UPDATE swarm_sessions SET state = 'collecting', window_closes_at = ${closes},
+                    brief_opens_at = COALESCE(brief_opens_at, clock_timestamp())
+              WHERE id = ${sessionId}`;
   });
   return { sessionId, state: "collecting", windowClosesAt };
 }

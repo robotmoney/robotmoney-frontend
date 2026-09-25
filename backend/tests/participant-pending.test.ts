@@ -98,6 +98,34 @@ test("a member activated after an epoch opened is not sent to it — it joins th
   expect(await ids(late)).toEqual([turned.openedSessionId]);
 });
 
+test("an epoch opened with NO active member seats an empty roster that still gates: a member activated mid-epoch gets 403 and an empty queue", async () => {
+  // The roster gate used to skip every session with zero roster rows (the
+  // legacy fixture path). An epoch opened while nobody was active has zero
+  // rows too, so a member activated afterwards could submit into it and was
+  // offered it — the immutable-roster rule (US-C3) broken by an empty roster.
+  const { subjectId, sessionId, date } = await openedEpoch("pending_empty_roster");
+  const [{ seats }] = await sql<{ seats: number }[]>`
+    SELECT count(*)::int AS seats FROM swarm_session_members WHERE session_id = ${sessionId}`;
+  expect(seats).toBe(0);
+
+  const late = await activeMember();
+  expect((await poll(late.token, late.id)).body).toEqual({ pending: [] });
+  expect(await submitTake(late, date, subjectId)).toMatchObject({
+    ok: false, status: 403, error: "member is not on this session's expected roster",
+  });
+  const [{ takes }] = await sql<{ takes: number }[]>`
+    SELECT count(*)::int AS takes FROM swarm_recommendations WHERE session_id = ${sessionId}`;
+  expect(takes).toBe(0);
+
+  // RED CONTROL: the successor seats the member, so the refusal above is the
+  // empty roster, not a member that cannot submit at all.
+  const turned = await ic.turnOverEpoch(subjectId, sessionId);
+  if (!turned.ok) throw new Error(`turnOverEpoch: ${JSON.stringify(turned)}`);
+  const pending = (await poll(late.token, late.id)).body.pending as { sessionId: string; date: string }[];
+  expect(pending.map((p) => p.sessionId)).toEqual([turned.openedSessionId]);
+  expect((await submitTake(late, pending[0]!.date, subjectId)).ok).toBe(true);
+});
+
 test("an excused member is not sent to a session it may not submit to", async () => {
   const m = await activeMember();
   const { sessionId } = await openedEpoch("pending_excused");

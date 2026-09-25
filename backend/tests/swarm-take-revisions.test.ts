@@ -384,11 +384,12 @@ test("amend twice while the window is open, then a third after window_closes_at 
   // storage state, is what freezes a take. The session stays `collecting`
   // past its close (the scheduler's turnover is late, §4.6), and the take is
   // still refused, because §4.2 binds participants to the instant.
+  // The member exists before the epoch opens, so the epoch seats it (US-C3).
+  const m = await activeMember();
   const subj = await activeSubject("amend-late", 3600);
   const opened = await ic.openEpoch(subj);
   if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);
   const date = sessionDate(await sessionRow(opened.sessionId));
-  const m = await activeMember();
   expect((await submit(m, date, subj, { body: "first" })).status).toBe(201);
   expect((await submit(m, date, subj, { body: "amended once" })).status).toBe(201);
   expect((await submit(m, date, subj, { body: "amended twice" })).status).toBe(201);
