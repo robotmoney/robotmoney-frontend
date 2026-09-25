@@ -621,12 +621,17 @@
 /* toggle chips: the button family's mono caps at the label size, square. A
    selected chip is edged and lettered in --color-text, never cyan. */
 .rm-chips, .rv__chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+/* Sized as the swarm page's filter chips (.mp-chip): a 34px target, the same
+   padding, and a selected chip on the surface ground. One chip, whichever
+   page it is on. */
 .rm-chip, .rv__chip {
+  display: inline-flex; align-items: center; gap: 0.42rem; min-height: 34px;
   font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.1em;
-  padding: 0.25rem 0.5rem; border-radius: var(--radius); border: 1px solid var(--color-border);
+  padding: 0.3rem 0.62rem; border-radius: var(--radius); border: 1px solid var(--color-border);
   color: var(--color-text-muted); background: transparent; cursor: pointer; transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
-.rm-chip[aria-pressed="true"], .rv__chip[aria-pressed="true"] { border-color: var(--color-text); color: var(--color-text); }
+.rm-chip:hover, .rv__chip:hover { color: var(--color-text); border-color: var(--color-border-light); }
+.rm-chip[aria-pressed="true"], .rv__chip[aria-pressed="true"] { border-color: var(--color-text); color: var(--color-text); background: var(--color-surface); }
 /* A chart overlay's chip carries its series' colour as a dot, not as its own
    border or label; off, the dot recedes with the label. */
 .rv__chip-dot { display: inline-block; width: 0.5rem; height: 0.5rem; margin-right: 0.5rem; vertical-align: 0.05em; }

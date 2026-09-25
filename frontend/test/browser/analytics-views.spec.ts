@@ -129,21 +129,30 @@ test("regime dashboard renders 3 panels, sparklines, correlations + backtests (e
 
   // Hero title + live-composite header.
   await expect(page.locator(".rv__title")).toContainText("Regime");
-  await expect(page.locator(".rv__dash-title")).toContainText("Daily regime classification");
+  await expect(page.locator("#daily-regime-classification")).toContainText("Daily regime classification");
 
   // Summary cards: the top-line regime pill + one index card per panel (4 total
   // for the eq snapshot). The regime card shows the composite level in its foot.
-  await expect(page.locator(".rv__cards .rv__card")).toHaveCount(4);
-  await expect(page.locator(".rv__card--regime")).toContainText(latest.composite!.toFixed(2));
+  // Today: the top-line regime with the composite under it, and one index row
+  // per panel (3 for the eq snapshot).
+  await expect(page.locator("#composite .rv__today-v")).toBeVisible();
+  await expect(page.locator("#composite")).toContainText(latest.composite!.toFixed(2));
+  // The session page's Market context: the composite, then one row per panel.
+  await expect(page.locator("#composite .sig__row")).toHaveCount(4);
 
   // All three panel tables render (headers carry just the panel title now, matching
   // the source PanelTable), including the equity factor panel (eq snapshot only).
-  const panels = page.locator(".rv__panel-card");
+  // One at a time, behind tabs: macro first, the others one click away.
+  const panels = page.locator(".rv__panel");
   await expect(panels).toHaveCount(3);
-  await expect(page.locator(".rv__panel-card", { hasText: "Macro panel" })).toBeVisible();
-  await expect(page.locator(".rv__panel-card", { hasText: "Equity factor panel" })).toBeVisible();
+  await expect(page.locator(".rv__panel", { hasText: "Macro panel" })).toBeVisible();
+  await expect(page.locator(".rv__panel", { hasText: "Equity factor panel" })).toBeHidden();
+  await page.getByRole("tab", { name: /Equity factor/ }).click();
+  await expect(page.locator(".rv__panel", { hasText: "Equity factor panel" })).toBeVisible();
+  await expect(page.locator(".rv__panel", { hasText: "Macro panel" })).toBeHidden();
+  await page.getByRole("tab", { name: /Macro/ }).click();
   // The macro panel index surfaces in its summary index card (value to 2dp).
-  await expect(page.locator(".rv__cards")).toContainText(latest.macroIndex!.toFixed(2));
+  await expect(page.locator("#composite")).toContainText(latest.macroIndex!.toFixed(2));
 
   // Per-indicator inline-SVG sparklines render (the enrichment).
   await expect(page.locator(".rv__spark-svg").first()).toBeVisible();
@@ -153,13 +162,18 @@ test("regime dashboard renders 3 panels, sparklines, correlations + backtests (e
   await expect(page.locator(".rv__ind-name", { hasText: "yield curve" }).first()).toBeVisible();
 
   // Predictive-power table + all three backtest cards (eth / sp500 / mixed).
-  await expect(page.locator(".rv__corr-card")).toHaveCount(1);
-  await expect(page.locator(".rv__corr-card")).toContainText("Predictive power");
-  await expect(page.locator(".rv__bt-card:visible")).toHaveCount(3);
-  await expect(page.locator(".rv__bt-card", { hasText: "Backtest · ETH / cash" })).toBeVisible();
+  await expect(page.locator("#predictive-power")).toHaveCount(1);
+  await expect(page.locator("#predictive-power")).toContainText("Predictive power");
+  // All three markets are in the page, one on show behind the switch.
+  await expect(page.locator(".rv__market")).toHaveCount(3);
+  await expect(page.locator(".rv__market:visible")).toHaveCount(1);
+  await expect(page.locator(".rv__market", { hasText: "Backtest · ETH / cash" })).toBeVisible();
+  await page.getByRole("button", { name: "S&P 500 / cash" }).click();
+  await expect(page.locator(".rv__market", { hasText: "Backtest · SP500 / cash" })).toBeVisible();
 
-  // Charts instantiate: full-history canvas + one equity-curve canvas per backtest.
-  expect(await page.locator("canvas").count()).toBeGreaterThanOrEqual(4);
+  // The charts draw on the site's own chart: the history and the market on show.
+  await expect(page.locator(".rr-area__plot:visible")).toHaveCount(2);
+  expect(await page.locator("#history-sec .rr-area__svg polyline").count()).toBeGreaterThanOrEqual(4);
 });
 
 // The panel row's three ways out to more detail. Each one was inert before:
@@ -174,20 +188,22 @@ test("regime panel rows link out to the glossary, the prose and the upstream sou
   await page.goto("/");
   await navigate(page, "/regime");
 
-  const row = page.locator(".rv__panel-card", { hasText: "Macro panel" })
+  const row = page.locator(".rv__panel", { hasText: "Macro panel" })
     .locator("tbody tr", { hasText: "10y–2y yield curve" });
 
   // The NAME is the link, and it lands on that indicator's own section.
   const name = row.locator("a.rv__ind-name");
   await expect(name).toHaveAttribute("href", "/regime/indicators#T10Y2Y");
   await expect(name).toContainText("10y–2y yield curve");
-  // One link over name + glyph, not two to the same place.
-  await expect(row.locator(".rv__ind-tipwrap a")).toHaveCount(1);
+  // The name is the one link; the (i) beside it is the tip, not a second link.
+  await expect(row.locator(".rv__ind-head a")).toHaveCount(1);
+  await expect(row.locator(".rv__ind-head .rm-tip__btn")).toHaveCount(1);
 
-  // The tooltip leads with what the indicator IS, then its orientation.
-  const tip = row.locator(".rv__tip");
+  // The tooltip says what the indicator IS, in one sentence; its sign is the
+  // +1 / −1 on the row's provenance line, with a tip of its own.
+  const tip = row.locator(".rv__ind-head .rm-tip__bub");
   await expect(tip).toContainText("10-year and 2-year US Treasury yields");
-  await expect(tip).toContainText("Sign +1");
+  await expect(row.locator(".rv__sign")).toHaveText("+1");
 
   // The provenance line's source label is a real link to the upstream series.
   await expect(row.locator(".rv__ind-src a")).toHaveAttribute(
@@ -224,14 +240,15 @@ test("regime view surfaces the Equity factor panel even when `panels` is null (d
 
   // THREE panel index summary cards (macro + on-chain + equity factor) — plus the
   // top-line regime card = 4 total, exactly the happy-path count despite null panels.
-  await expect(page.locator(".rv__cards .rv__card")).toHaveCount(4);
-  const indexCards = page.locator(".rv__card:not(.rv__card--regime)");
+  await expect(page.locator("#composite .rv__today-v")).toBeVisible();
+  const indexCards = page.locator("#composite .sig__row:not(#index-composite)");
   await expect(indexCards).toHaveCount(3);
-  await expect(page.locator(".rv__card-eyebrow", { hasText: "Equity factor index" })).toBeVisible();
+  await expect(page.locator("#index-factor")).toBeVisible();
 
   // And all three per-panel tables render, including the equity factor panel.
-  await expect(page.locator(".rv__panel-card")).toHaveCount(3);
-  await expect(page.locator(".rv__panel-card", { hasText: "Equity factor panel" })).toBeVisible();
+  await expect(page.locator(".rv__panel")).toHaveCount(3);
+  await page.getByRole("tab", { name: /Equity factor/ }).click();
+  await expect(page.locator(".rv__panel", { hasText: "Equity factor panel" })).toBeVisible();
 });
 
 // issue #624: regime.js shared wallet-perf.js's pre-fix category-axis defect —
@@ -258,43 +275,135 @@ test("regime history chart occupies proportional horizontal space across a gap a
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(dto) }));
   await page.goto("/");
   await navigate(page, "/regime");
-  await expect(page.locator('canvas[x-ref="chart"]')).toBeVisible();
+  await expect(page.locator("#history-sec .rr-area__plot")).toBeVisible();
+  // The whole history, where the hole is. It is past a year, so the lines
+  // take one reading a week; the axis is still one unit per calendar day.
+  await page.locator("#history-sec .rm-chip", { hasText: /^All$/ }).click();
 
   const expectedDenseDays = Math.round(
     (Date.parse(dto.history[dto.history.length - 1]!.date) - Date.parse(dto.history[0]!.date)) / 86_400_000,
   ) + 1; // inclusive of both endpoints
 
-  const chartState = await page.evaluate(() => {
-    const canvas = document.querySelector('canvas[x-ref="chart"]') as HTMLCanvasElement;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const chart = (window as any).Chart.getChart(canvas);
-    return {
-      labelCount: chart.data.labels.length,
-      spanGaps: chart.data.datasets.map((d: { spanGaps: unknown }) => d.spanGaps),
-      datasetsData: chart.data.datasets.map((d: { data: (number | null)[] }) => d.data),
-    };
+  const state = await page.evaluate(() => {
+    const fig = document.querySelector("#history-sec figure") as HTMLElement;
+    const lines = [...fig.querySelectorAll(".rr-area__svg polyline")].map((l) => ({
+      token: l.getAttribute("data-token"),
+      xs: (l.getAttribute("points") || "").trim().split(/\s+/).map((pt) => Number(pt.split(",")[0])),
+    }));
+    return { days: Number(fig.dataset.days), lines };
   });
 
-  // The core assertion: the axis is a DENSE calendar (one slot per real
+  // The core assertion: the axis is a DENSE calendar (one unit per real
   // calendar day across the full span), not a sparse array of only the
-  // persisted points — this is what makes the 30-day hole occupy 30 slots of
-  // horizontal space instead of collapsing to a single step.
-  expect(chartState.labelCount).toBe(expectedDenseDays);
-  expect(chartState.labelCount).toBeGreaterThan(dto.history.length);
+  // persisted points, so the 30-day hole takes 30 days of horizontal space
+  // instead of collapsing to a single step.
+  expect(state.days).toBe(expectedDenseDays);
+  expect(state.days).toBeGreaterThan(dto.history.length);
 
-  // spanGaps must be false on every history-chart series — a `true`/`undefined`
-  // config would let Chart.js bridge the gap with an interpolated line.
-  for (const sg of chartState.spanGaps) expect(sg).toBe(false);
-
-  // The synthesized gap-region index (a calendar day strictly between the two
-  // persisted dates on either side of the hole) must be `null` in every
-  // dataset — a real discontinuity, never a fabricated/interpolated value. The
-  // vendored snapshot's daily history is contiguous before the excision, so
-  // dense-axis index === original array index up through GAP_START_INDEX.
-  const midGapIndex = GAP_START_INDEX + Math.floor(GAP_DAYS / 2);
-  for (const data of chartState.datasetsData) {
-    expect(data[midGapIndex]).toBeNull();
+  // Every line breaks at the hole: more than one run per series, and no drawn
+  // point strictly inside it (a real discontinuity, never an interpolated
+  // value). The vendored snapshot's daily history is contiguous before the
+  // excision, so the day index equals the original array index up through
+  // GAP_START_INDEX.
+  const toDay = (x: number) => (x / 1000) * (state.days - 1);
+  for (const token of ["composite", "macro", "onchain"]) {
+    const runs = state.lines.filter((l) => l.token === token);
+    expect(runs.length, token).toBeGreaterThan(1);
+    for (const r of runs) for (const x of r.xs) {
+      const d = toDay(x);
+      expect(d > GAP_START_INDEX + 0.5 && d < GAP_START_INDEX + GAP_DAYS - 1.5, `${token} point at day ${d}`).toBe(false);
+    }
   }
+});
+
+// The history chart's controls redraw it, and past a year the lines are
+// weekly while the bands stay day by day.
+test("regime history chart: toggles redraw it, ranges set its span, weekly past a year", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/regime");
+  const fig = page.locator("#history-sec figure");
+  await expect(fig).toBeVisible();
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  const state = () => fig.evaluate((f) => ({
+    days: Number((f as HTMLElement).dataset.days),
+    bands: f.querySelectorAll(".rv__bands i").length,
+    composite: [...f.querySelectorAll('.rr-area__svg polyline[data-token="composite"]')].reduce((n, l) => n + (l.getAttribute("points") || "").trim().split(/\s+/).length, 0),
+    macro: f.querySelectorAll('.rr-area__svg polyline[data-token="macro"]').length,
+  }));
+
+  // One year by default, a point a day.
+  let s = await state();
+  expect(s.days).toBe(366);
+  expect(s.composite).toBe(366);
+  expect(s.bands).toBeGreaterThan(0);
+  // The axis says the span by its form: months across a year.
+  await expect(page.locator("#history-sec .rr-area__x span").first()).toHaveText(/^[A-Z][a-z]{2}( '\d\d)?$/);
+
+  await page.locator("#history-sec").getByRole("button", { name: "Regime bands" }).click();
+  expect((await state()).bands).toBe(0);
+  await page.locator("#history-sec").getByRole("button", { name: "Regime bands" }).click();
+  expect((await state()).bands).toBeGreaterThan(0);
+
+  const macro = page.locator("#history-sec .rv__lg", { hasText: "Macro" });
+  await macro.click();
+  expect((await state()).macro).toBe(0);
+  await expect(macro).toHaveAttribute("aria-pressed", "false");
+  await macro.click();
+  expect((await state()).macro).toBeGreaterThan(0);
+
+  // Past a year the lines are weekly and the bands stay daily.
+  await page.locator("#history-sec .rm-chip", { hasText: /^3Y$/ }).click();
+  s = await state();
+  expect(s.days).toBe(1097);
+  expect(s.composite).toBe(157);
+  await expect(page.locator("#history-sec .rr-area__x span").first()).toHaveText(/^(Jan '\d\d|[A-Z][a-z]{2})$/);
+
+  // The navigator's handles move the window: a week off the start from the
+  // keyboard, and the chips let go of it.
+  const from = page.locator("#history-sec .rv__nav-h.is-from");
+  await from.focus();
+  await page.keyboard.press("Shift+ArrowRight");
+  s = await state();
+  expect(s.days).toBe(1097 - 30);
+  await expect(page.locator("#history-sec .rm-chip[aria-pressed=true]")).toHaveCount(0);
+  await page.locator("#history-sec .rm-chip", { hasText: /^1Y$/ }).click();
+  expect((await state()).days).toBe(366);
+
+  // The crosshair reads the day under the pointer.
+  const plot = page.locator("#history-sec .rr-area__plot");
+  const box = (await plot.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator("#history-sec .rr-area__tip li")).toHaveCount(4);
+  expect(errors).toEqual([]);
+});
+
+// Every predictive-power figure says what it means in words, from its own
+// sign and whether it clears the 0.15 noise line.
+test("each predictive-power figure carries its reading in words", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/regime");
+  const tips = page.locator("#predictive-power .rv__rho .rm-tip__bub");
+  expect(await tips.count()).toBeGreaterThan(10);
+  const texts = await tips.allTextContents();
+  for (const t of texts) expect(t).toMatch(/: (no reading|[−+]?\d\.\d\d)\./);
+  expect(texts.some((t) => t.includes("no relation beyond noise"))).toBe(true);
+  // The notes read open under the table, every one of them.
+  await expect(page.locator("#corr-notes")).toBeVisible();
+  await expect(page.locator("#corr-notes")).toContainText("Effective independent observations");
+});
+
+// A link to a panel opens its tab: session pages link their market context
+// rows to #panel-<key>.
+test("a link to a regime panel opens that panel's tab", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/regime#panel-onchain");
+  await expect(page.locator("#panel-onchain")).toBeVisible();
+  await expect(page.locator("#panel-macro")).toBeHidden();
+  await expect(page.getByRole("tab", { name: /On-chain/ })).toHaveAttribute("aria-selected", "true");
 });
 
 test("channel-divergence view renders the Stablecoin-vs-QQQ-flow gauge with value + read", async ({ page }) => {
@@ -438,7 +547,7 @@ test("regime dashboard shows a loud staleness banner when the API reports stale 
   await expect(banner).toContainText("15 days old");
   await expect(banner).toContainText("2026-06-29");
   // The charts still render beneath the warning (data is shown, just flagged).
-  await expect(page.locator(".rv__dash-title")).toBeVisible();
+  await expect(page.locator("#daily-regime-classification")).toBeVisible();
 });
 
 test("regime dashboard hides the staleness banner when data is fresh", async ({ page }) => {
@@ -449,7 +558,7 @@ test("regime dashboard hides the staleness banner when data is fresh", async ({ 
   await page.goto("/");
   await navigate(page, "/regime");
 
-  await expect(page.locator(".rv__dash-title")).toBeVisible();
+  await expect(page.locator("#daily-regime-classification")).toBeVisible();
   await expect(page.locator(".rv__stale")).toBeHidden();
 });
 
@@ -482,6 +591,6 @@ test("regime dashboard hides the provenance badge when the API reports no source
   await page.goto("/");
   await navigate(page, "/regime");
 
-  await expect(page.locator(".rv__dash-title")).toBeVisible();
+  await expect(page.locator("#daily-regime-classification")).toBeVisible();
   await expect(page.locator(".rv__prov")).toBeHidden();
 });

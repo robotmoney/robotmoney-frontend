@@ -94,7 +94,7 @@ export function sessionBrief() {
           ? "Eight equity factor signals, in the composite of this older reading."
           : "Eight equity factor signals, shown for context. Not in the composite.",
       };
-      for (const [key, label] of [["macro", "Macro"], ["onchain", "On-chain"], ["factor", "Factor"]]) {
+      for (const [key, label] of [["macro", "Macro"], ["onchain", "On-chain"], ["factor", "Equity factor"]]) {
         const pct = b[key];
         if (pct === null) continue;
         const kind = key === "factor" && !this.backdropV0 ? "context" : "input";

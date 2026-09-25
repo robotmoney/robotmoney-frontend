@@ -129,21 +129,11 @@
    .rm-chip / .rm-legend / .rm-legend-item / .rm-legend-swatch). */
 
 /* panel + generic tables */
-/* Column count is chosen where a panel table actually fits, which the old rule
-   did not do: it went three-across at 768px and stayed there, putting a ~390px
-   table in a 230px card, and the card's `overflow: hidden` then quietly ate the
-   Weight column rather than showing anything was missing. Every laptop under
-   about 1250px had been reading a four-column table.
-   Three across needs 3 × 392px + 2 gaps inside the 1216px content box, which
-   arrives at a 1264px viewport; two across needs 2 × 396px, which arrives at
-   860px. `minmax(0, 1fr)` rather than `1fr` so a track is exactly its share and
-   a wide table can never widen the grid past the page (the clip used to be what
-   prevented that — see .rv__panel-card). Breakpoints, not auto-fit: auto-fit
-   picks its own count from the same numbers, and one stray pixel of padding
-   would silently drop the page from three columns to two. */
-.rv__panels { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
-@media (min-width: 860px) { .rv__panels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (min-width: 1264px) { .rv__panels { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+/* One panel at a time, behind the tabs above it: at three across a panel
+   table had ~396px and gave up padding to fit; alone it has the page. */
+.rv__panels { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
+.rv__tabs { gap: 0.4rem; }
+.rv__tab-n { color: var(--color-text-muted); margin-left: 0.35rem; }
 .rv__corr-card, .rv__bt-card { border: 1px solid var(--color-border); border-radius: var(--radius); overflow: hidden; }
 /* Not `overflow: hidden`, unlike its two siblings: this card is the only one
    holding tooltips, and both kinds are absolutely positioned — the header
@@ -177,6 +167,145 @@
 .rv__panel-card-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; padding: 0.72rem 1rem; border-bottom: 1px solid var(--color-border); background: rgba(16, 20, 28, 0.4); }
 .rv__panel-card-title { font-size: 0.9rem; font-weight: 500; margin: 0; }
 .rv__panel-card-meta { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-muted); }
+.rv__panel-card-lede { flex-basis: 100%; margin: 0; font-size: 0.8rem; line-height: 1.5; color: var(--color-text-soft); }
+
+/* ── Regime page on the research-record system (.rr-*) ───────────────────
+   Sections, the site's chart (.rr-area) and its tables (.rr-table), as the
+   vault, allocation and subject pages draw them. Only what those do not
+   already carry lives here. */
+.rv__body.rr .rv__dash { display: block; }
+/* As .sv__body does: a hidden tip laid out past the edge must not widen the page. */
+.rv__body.rr { overflow-x: clip; }
+/* Tips here are three lines at most: wide enough to hold about 180
+   characters in three, and the copy written to that. */
+.rv .rm-tip__bub { width: min(24rem, 80vw); max-width: min(24rem, calc(100vw - 2rem)); }
+/* Today: the reading as the figure, the panel indices on a track beside it. */
+.rv__today-k { display: flex; align-items: center; margin: 0 0 0.75rem; font-family: var(--font-mono); font-size: 0.625rem;
+  text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-muted); }
+.rv__today-v { display: flex; align-items: center; gap: 0.75rem; font-family: var(--font-display); font-weight: 700; text-transform: uppercase; }
+.rv__today-v .rv__regime-dot { width: 0.625rem; height: 0.625rem; }
+.rv__today .rr-stat__sub b { font-family: var(--font-mono); font-weight: 400; color: var(--color-text); }
+.rv__context .rr-context__head { margin-bottom: 0.5rem; }
+.rv__today-copy { margin: 1.5rem 0 0; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
+
+/* The range navigator: the whole history in miniature under a chart, the
+   window on show between two handles. Aligned with the plot, past the y axis. */
+.rv__nav { margin: 0.5rem 0 0 2.75rem; touch-action: none; user-select: none; }
+.rv__nav-plot { position: relative; height: 2.75rem; border: 1px solid var(--color-border); cursor: pointer; }
+.rv__nav-shade { position: absolute; top: 0; bottom: 0; display: block; background: rgba(6, 8, 12, 0.62); pointer-events: none; }
+.rv__nav-win { position: absolute; top: -1px; bottom: -1px; border: 1px solid var(--color-text-muted); background: rgba(242, 244, 249, 0.04); cursor: grab; }
+.rv__nav-win:active { cursor: grabbing; }
+.rv__nav-h { position: absolute; top: 50%; width: 0.625rem; height: 1.5rem; padding: 0; transform: translate(-50%, -50%);
+  background: var(--color-surface-light); border: 1px solid var(--color-text-muted); cursor: ew-resize; }
+.rv__nav-h::after { content: ""; position: absolute; left: 50%; top: 0.375rem; bottom: 0.375rem; width: 1px; background: var(--color-text-muted); }
+.rv__nav-h.is-from { left: 0; }
+.rv__nav-h.is-to { left: 100%; }
+.rv__nav-h:hover, .rv__nav-h:focus-visible { border-color: var(--color-text); }
+.rv__nav-x { position: relative; height: 1.25rem; }
+.rv__nav-x span { position: absolute; top: 0.25rem; transform: translateX(-50%); font-family: var(--font-mono); font-size: 0.625rem; color: var(--color-text-muted); white-space: nowrap; }
+.rv__nav + .rr-area__legend { margin-top: 1.25rem; }
+
+/* A panel switched in fades up; the one switched out goes at once, so the two
+   never stack. */
+.rv-fade { transition: opacity 220ms var(--ease-out-expo), transform 220ms var(--ease-out-expo); }
+.rv-fade--from { opacity: 0; transform: translateY(4px); }
+.rv-fade--to { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) { .rv-fade { transition: none; } }
+
+/* A reading's lean, as the Market context marks it: a round dot. */
+.rv__ind-head { display: inline-flex; align-items: center; flex-wrap: wrap; }
+.rv__ind-head .rv__ind-name { font-size: 0.875rem; }
+.rv__lean { display: inline-flex; align-items: center; justify-content: flex-end; gap: 0.45rem; }
+.rv__lean i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.rv__sign { font-family: var(--font-mono); }
+.rv__sign.is-on { color: var(--color-green); }
+.rv__sign.is-off { color: var(--color-warn); }
+/* A figure that carries a tip: the figure itself, undecorated; hovering or
+   tapping it opens the tip. Header tips are the (i) icon. */
+.rv__cellbtn { text-decoration: none !important; font-family: var(--font-mono); cursor: default; }
+
+/* The chart's bands: HTML strips under the lines, so the hatch tile keeps its
+   angle however the plot stretches. */
+.rv__bands { position: absolute; inset: 0; pointer-events: none; }
+.rv__bands i { position: absolute; top: 0; bottom: 0; display: block; }
+.rv__fig .rr-area__tip { min-width: 13rem; }
+.rv__tip-reg { display: inline-flex; align-items: center; gap: 0.4rem; font-family: var(--font-sans); color: var(--color-text-soft); }
+.rv__tip-reg i { width: 7px; height: 7px; border-radius: 50%; }
+/* The legend: each line a button (hover focuses it, a click switches it) with
+   its latest value; the band key closes the row. */
+.rv__legend-list { align-items: center; }
+.rv__legend-list li { transition: opacity 160ms var(--ease-out-expo); }
+.rv__legend-list li.is-off { opacity: 0.4; }
+.rv__lg { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; }
+.rv__lg i { width: 0.4375rem; height: 0.4375rem; flex: none; }
+.rv__lg b { font-weight: 400; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.rv__lg-dash { display: inline-flex; }
+.rv__lg-bands { margin-left: auto; gap: 0.75rem !important; }
+/* The bands' switch: a square that fills when on, a toggle rather than a link. */
+.rv__tgl { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; white-space: nowrap; }
+.rv__tgl-box { width: 0.625rem; height: 0.625rem; border: 1px solid var(--color-text-muted); flex: none; transition: background 160ms var(--ease-out-expo), border-color 160ms var(--ease-out-expo); }
+.rv__tgl[aria-pressed="true"] .rv__tgl-box { background: var(--color-text); border-color: var(--color-text); }
+.rv__tgl:hover .rv__tgl-box { border-color: var(--color-text); }
+.rv__lg-k { color: var(--color-text-muted); }
+.rv__lg-key { display: inline-flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; color: var(--color-text-muted); }
+.rv__lg-key .rv__legend-item, .rv__lg, .rv__lg-k { white-space: nowrap; }
+.rv__lg-key .rv__legend-swatch { width: 10px; height: 10px; }
+
+/* Panels and tables on .rr-table. */
+.rv__panel-lede { margin: -0.25rem 0 1rem; font-size: 0.8125rem; line-height: 1.6; color: var(--color-text-soft); }
+.rr-table .rv__num { text-align: right; }
+.rv__ptable .rv__ind-cell { display: table-cell; }
+.rv__ptable .rv__ind-cell .rv__ind-src { display: block; margin-top: 0.25rem; }
+.rv__ptable .rv__spark { width: 5rem; }
+.rv__bt-table tbody th small { max-width: 24rem; }
+.rv__bt-baseline th, .rv__bt-baseline td { color: var(--color-text-muted); }
+.rv__market .rv__bt-weights { margin: 0 0 2rem; }
+.rv__market .rv__bt-k { margin-top: 2rem; }
+.rv__market .rr-area, .rv__market .rr-empty { margin-top: 1.5rem; }
+/* "How to read this": open, under its table or chart, in the note type. */
+.rv__howto { margin-top: 1.75rem; }
+.rv__howto .rr-subhead__h { margin-bottom: 0.625rem; }
+.rv__howto p { margin: 0 0 0.625rem; font-size: 0.8125rem; line-height: 1.65; color: var(--color-text-muted); }
+.rv__howto p:last-child { margin-bottom: 0; }
+.rv__howto strong { color: var(--color-text-soft); font-weight: 500; }
+.rv__fig-t { flex: 1 1 22rem; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 1rem; }
+.rr-area__head > .rm-chips { align-self: flex-start; }
+.rv__bt-facts { margin: 0 0 1.25rem; }
+.rv__bt-k { margin: 0 0 0.625rem; font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-muted); }
+.rv__fig-d { flex-basis: 100%; margin: 0.25rem 0 0; font-size: 0.8125rem; line-height: 1.6; color: var(--color-text-muted); }
+
+/* Methodology: the panels table in prose type, the method as key and value
+   rows, then the reading list. */
+.rv__method-lead { margin: 0 0 2rem; font-size: 0.9375rem; line-height: 1.7; color: var(--color-text-soft); }
+#methodology-sec .rr-subhead__h { margin: 2.25rem 0 1rem; }
+.rv__mtable { min-width: 52rem; }
+.rv__mtable td { font-family: var(--font-sans); font-size: 0.8125rem; line-height: 1.55; vertical-align: top; }
+.rv__mtable tbody th { vertical-align: top; white-space: nowrap; }
+.rv__mtable td:last-child { white-space: nowrap; }
+.rv__method-note { margin: 1rem 0 0; font-size: 0.8125rem; line-height: 1.65; color: var(--color-text-muted); }
+.rv__mdl > div { grid-template-columns: 9rem minmax(0, 1fr); }
+.rv__mdl dd { color: var(--color-text-soft); line-height: 1.6; }
+.rv__mdl dd strong { color: var(--color-text); font-weight: 500; }
+.rv__more { margin: 0; padding: 0; list-style: none; }
+.rv__more li { padding: 0.75rem 0; border-bottom: 1px solid var(--color-border); font-size: 0.875rem; color: var(--color-text-soft); }
+@media (max-width: 640px) { .rv__mdl > div { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; } }
+
+/* Predictive power: one table, a column group per asset. Each cell is its
+   figure over a signed bar from the centre line, green right and red left,
+   muted under |ρ| 0.15, and a tip in words. */
+.rv__corr-key { margin: 0 0 1.25rem; font-size: 0.875rem; line-height: 1.6; color: var(--color-text-soft); }
+.rv__corr-key strong { color: var(--color-text); font-weight: 500; }
+.rv__corr-table thead th.rv__corr-group { text-align: left; color: var(--color-text); border-left: 1px solid var(--color-border); }
+.rv__corr-table .rv__corr-start { border-left: 1px solid var(--color-border); }
+.rv__corr-table .rv__corr-idx { position: sticky; left: 0; background: var(--color-void); z-index: 1; }
+.rv__corr-table thead .rv__corr-idx { background: var(--color-surface); }
+.rv__rho .rm-tip { display: block; margin: 0; }
+.rv__corr-table td.rv__rho, .rv__corr-table thead tr:last-child th { text-align: center; }
+.rv__rho-btn { display: block; width: 100%; text-align: center; text-decoration: none !important; cursor: default; }
+.rv__rho-fig { display: block; font-family: var(--font-mono); }
+.rv__rho-bar { position: relative; display: block; width: 44px; height: 3px; margin: 0.35rem auto 0; background: var(--color-border); }
+.rv__rho-bar::after { content: ""; position: absolute; left: 50%; top: -2px; width: 1px; height: 7px; background: var(--color-text-muted); }
+.rv__rho-bar i { position: absolute; top: 0; height: 100%; display: block; }
 /* table shell + cells (.rm-table-scroll / .rm-table / .rm-num / .rm-muted)
    promoted to components.css; regime-only cell styles stay below. */
 .rv__ind-cell { display: flex; flex-direction: column; gap: 0.1rem; }
@@ -222,10 +351,6 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-text); }
 .rv__bt-weight { display: flex; align-items: center; gap: 0.4rem; }
 .rv__pie-wrap { display: inline-flex; }
 .rv__pie { display: block; }
-.rv__bt-baseline td { background: rgba(16, 20, 28, 0.35); }
-.rv__bt-chart-wrap { padding: 0.75rem 1rem; border-top: 1px solid var(--color-border); }
-.rv__bt-chart-label { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-muted); margin-bottom: 0.75rem; }
-.rv__bt-chart { height: 320px; }
 
 /* card foot note (.rm-foot) promoted to components.css. */
 
@@ -246,7 +371,6 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-text); }
 .rv__method-list { color: var(--color-text-soft); font-size: 0.85rem; line-height: 1.6; margin: 0; padding-left: 1.25rem; }
 .rv__method-list li { margin-bottom: 0.25rem; }
 .rv__method-card p { color: var(--color-text-soft); font-size: 0.85rem; line-height: 1.6; margin: 0; }
-.rv__method-note { color: var(--color-text-soft); font-size: 0.85rem; line-height: 1.6; margin: 1rem 0 0; }
 .rv__link { color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line);
   text-decoration-thickness: 1px; text-underline-offset: 4px; }
 .rv__link:hover { text-decoration-color: var(--color-link); }
@@ -884,7 +1008,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 /* SIGNAL: dots on one percentile axis. A position, not an amount, so never a
    bar from zero. The lead dot is the composite; hollow is context. */
 .sig { display: grid; gap: 0.5rem; }
-.sig__scale, .sig__row { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr) 2.8rem;
+.sig__scale, .sig__row { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr) 2.8rem;
   gap: 0.75rem; align-items: center; }
 .sig__ticks { position: relative; height: 1rem; }
 .sig__ticks b { position: absolute; bottom: 0; transform: translateX(-50%); font-family: var(--font-mono);
@@ -908,7 +1032,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
    either end of the scale so it never leaves the card. */
 .sig__row:hover { cursor: default; }
 .sig__tip { position: absolute; bottom: calc(100% + 0.375rem); transform: translateX(-50%); z-index: 5;
-  width: max-content; max-width: 17rem; white-space: normal;
+  width: max-content; max-width: min(24rem, calc(100vw - 2rem)); white-space: normal;
   opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 100ms var(--ease-out-expo), visibility 0s linear 100ms; }
 .sig__tip.is-start { transform: translateX(-0.5rem); }
 .sig__tip b { display: block; font-weight: 500; }

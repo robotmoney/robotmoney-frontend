@@ -178,7 +178,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
       },
     ],
     contractType: "{ latest: RegimeSnapshot, history: RegimeSnapshot[] }",
-    sizeHint: "about 490 KB at the default 180 days, and about 300 KB at any range",
+    sizeHint: "about 125 KB at the default 180 days and 33 KB at `?range=1`; `&include=backtest` adds about 125 KB of backtests",
   },
   {
     id: "getResearchSignal",
