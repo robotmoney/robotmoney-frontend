@@ -1,16 +1,16 @@
 // Read-only comparison of backend/migrations/*.sql against schema_migrations.
 //
-// WHY THIS EXISTS. scripts/lib/smoke-external-migrate.ts's refuseIfSchemaBehind()
-// calls this before an `--db external` boot that is about to skip migrate()
-// (no `--migrate` passed): without it, that boot would warn and then silently
-// serve whatever schema happens to be live, pending migrations or not. This
-// script is the check that turns "warn and proceed" into "refuse and say why".
+// WHY THIS EXISTS. An operator's standalone question — "is every migration in
+// this checkout recorded?" — answered read-only. `bun smoke` no longer runs it:
+// every boot's full preflight asks the stronger form of the same question of
+// any database (check 3a: does the schema match its manifest; 3b: does this code
+// support the installed version), and a pending migration refuses there.
 //
 // READ-ONLY BY CONSTRUCTION — one query against the catalog, one against
 // schema_migrations, nothing else — so it runs as the ordinary runtime role
 // (rm_app), the same credential every other `--db external` step already
 // uses. No elevated privilege is needed to ASK whether the schema is current,
-// only to fix it (that is what `--migrate` and its interactive doadmin prompt
+// only to fix it (that is what `bun run migrate` / `--migrate`, as rm_owner,
 // are for).
 //
 // Exit 0: every migration file is recorded. Exit 1: one or more are not,

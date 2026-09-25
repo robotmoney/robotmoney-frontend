@@ -66,50 +66,17 @@ export const EPHEMERAL_PG_VOLUME = "pgdata";
 
 
 /**
- * The database classification step, as data.
- *
- * ONLY an external database gets it — the ephemeral compose postgres is this
- * boot's own, created empty moments ago. For an external server the step
- * states, in the boot log, which situation this boot is in: an EMPTY database
- * gets bootstrapped (migrate + seed + archive restore); a POPULATED one is
- * assumed to be working production data — restored manually from a .dump, or
- * a surviving volume — and is ADOPTED: the same migrate + seed path runs, but
- * every writer on it is idempotent and deduplicated, filling gaps and never
- * overwriting existing rows (differences surface as drift reports, existing
- * rows win). backend/scripts/db-preflight.ts carries the full rationale.
- *
- * Runs as a one-off container BEFORE migrate(), so the mode is on record
- * before the first write. `--no-deps` because nothing else needs to be up to
- * ask the question. It fails (and aborts the boot) only when the database
- * cannot be reached at all.
- */
-export const DB_PREFLIGHT_STEP = "db preflight";
-
-/**
  * How every refusal below names the path it refuses. `--db external` is retired
  * with no alias (spec §1) and the entrypoint refuses it by name, so an operator
  * who ran plain `bun smoke` must not be told about it here.
  */
 export const REMOTE_LABEL = "remote database (no --local flag)";
-export const DB_PREFLIGHT_ARGV: readonly string[] = Object.freeze([
-  "run", "--rm", "--no-deps", "api", "bun", "run", "scripts/db-preflight.ts",
-]);
-
-/**
- * The full preflight argv for a boot with a known initializer.
- *
- * The initializer travels with the question because the answer depends on it:
- * a populated database may be ADOPTED by an "adopt" (`--twin`, or an explicit
- * production restore) boot, whose whole seed path is idempotent and
- * non-clobbering — but never by a "simulation" (`--seed`) boot, whose demo
- * fixtures overwrite by design (their ON CONFLICT DO UPDATE is how corrected
- * demo copy reaches a demo stack). db-preflight.ts refuses that combination,
- * and treats a missing flag as simulation so the strict branch is the one you
- * get by forgetting the parameter.
- */
-export function dbPreflightArgv(initializer: "adopt" | "simulation"): string[] {
-  return [...DB_PREFLIGHT_ARGV, `--initializer=${initializer}`];
-}
+// NO CLASSIFICATION ONE-SHOT. A remote boot used to run
+// backend/scripts/db-preflight.ts in an `api` container before its first write,
+// to say whether the database was empty or populated. That question now belongs
+// to the step that needs its answer: `--seed` refuses a populated database in
+// the same fenced transaction it seeds in (backend/src/db/seed.ts
+// assertSeedable), and every boot's full preflight (check 3) judges the schema.
 
 /** What the postgres bring-up phase should say, and which container tile (if
  *  any) it owns. */

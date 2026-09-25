@@ -62,9 +62,11 @@ export const CADENCE_FLAG = "--cadence";
  * Run the migrate step this once.
  *
  * NEVER IMPLIED by any `--local` mode (spec §4.3, §8.5): a boot migrates a
- * database only when it was told to. On the remote database smoke-main.ts
- * prompts for the owner password at the terminal, never from an env var or
- * `.env`; see scripts/lib/smoke-external-migrate.ts.
+ * database only when it was told to. It runs the migrate run of §8.3 as
+ * rm_owner under the boot's target lock (backend/scripts/smoke-prepare.ts →
+ * migrate-run.ts migrateCommand): a local mode uses the owner password smoke
+ * generated; on the remote database the rm_owner password is typed at the
+ * terminal, never read from an env var or `.env`.
  */
 export const MIGRATE_FLAG = "--migrate";
 

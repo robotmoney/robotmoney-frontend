@@ -166,9 +166,9 @@ export type TargetLockKey = bigint & { readonly __brand: "TargetLockKey" };
  * header's "One constant key"). Postgres scopes an advisory lock to the
  * database it was taken in, so this one value already means "this database".
  *
- * The number is the literal `backend/tests/migrate-run.test.ts` has always
- * passed as its lock key, so the migrate runner moving onto this constant
- * changes no value that runner's tests already pin. It is non-negative, which
+ * The migrate run takes no key of its own any more: it runs under the session
+ * lock its caller acquired with this key, and fences each transaction with this
+ * key's `int8` form (backend/scripts/migrate-run.ts). It is non-negative, which
  * is what makes the catalog's classid/objid split reassemble to exactly it.
  */
 export const TARGET_LOCK_KEY = 7726322199513601n as TargetLockKey;
