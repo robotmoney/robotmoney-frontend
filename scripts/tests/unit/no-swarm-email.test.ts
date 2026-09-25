@@ -52,6 +52,8 @@ const PINNED: Record<string, string> = {
   "backend/migrations/0066_drop_swarm_notifications.sql": "the migration that removes it names what it removes",
   "docs/technical/bill-of-materials.html": "cites 0066 by filename while stating that no email is sent",
   "backend/schema/snapshot.json": "the snapshot's identity is its migration filename list, 0066 included",
+  "backend/tests/fixtures/snapshots/0078_automation_token_holders/schema/snapshot.json":
+    "byte-for-byte copy of the 0078 snapshot.json (snapshot N, spec §8.4); its identity is the same filename list, 0066 included",
   "backend/tests/rollout-steps-0-5-1.test.ts": "names 0066 as a post-v0.5.1 arrival; a filename list, not a feature",
 
   // A DIFFERENT COMPANY. `agentmail-16d51f` is an x402 ecosystem project in the
