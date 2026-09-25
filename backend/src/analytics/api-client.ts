@@ -1,8 +1,9 @@
 // HTTP implementation of the AnalyticsPersistence port (issue #106): the ONLY
 // persistence path the independent producer (and retained legacy handler tests)
 // uses. Typed calls to the authenticated /api/analytics/* boundary, presenting
-// the analytics-provider bearer credential (ANALYTICS_TOKEN). No db/client, no
-// SQL — the API process owns all analytics-table SQL behind these endpoints.
+// the analytics-provider bearer credential: analytics-producer's store token,
+// read from the file ANALYTICS_TOKEN_FILE names (smoke spec §3). No db/client,
+// no SQL — the API process owns all analytics-table SQL behind these endpoints.
 //
 // SECRET HYGIENE: the token is held in a closure and set only on the outgoing
 // Authorization header. It is never logged, never echoed into thrown errors,
@@ -20,11 +21,29 @@ import type {
 } from "./persistence.ts";
 import type { RunLifecycleEvent } from "./run-ledger.ts";
 import type { TerminalRunPackageInput } from "./output-snapshots.ts";
-import { envSecret } from "../lib/env-secret.ts";
+import { readFileSync } from "node:fs";
 
 export interface AnalyticsApiConfig {
   baseUrl: string; // e.g. http://api:8787 (compose) / http://localhost:8787
-  token: string | null; // ANALYTICS_TOKEN; null only in insecure/ephemeral envs
+  token: string | null; // analytics-producer's store token; null when no file is named
+}
+
+/**
+ * The analytics-provider bearer, from the file ANALYTICS_TOKEN_FILE names.
+ *
+ * The FILE is the only source (smoke spec §3: each service token is "a file
+ * the boot places in the instance's state directory"). There is no
+ * token-valued env var to fall back on, so a secret can never ride in an
+ * env var or an image. A named file that is missing or empty throws: that is a
+ * broken delivery, and answering it with "no token" would only move the failure
+ * to a 401 somewhere less legible.
+ */
+export function readAnalyticsToken(env: Record<string, string | undefined> = process.env): string | null {
+  const file = env.ANALYTICS_TOKEN_FILE?.trim();
+  if (!file) return null;
+  const value = readFileSync(file, "utf8").trim();
+  if (!value) throw new Error("ANALYTICS_TOKEN_FILE points to an empty token file");
+  return value;
 }
 
 // Resolve the producer's API wiring from the environment at CALL time (tests
@@ -35,26 +54,8 @@ export function resolveAnalyticsApiConfig(
 ): AnalyticsApiConfig {
   return {
     baseUrl: (env.ANALYTICS_API_URL || `http://localhost:${Number(env.API_PORT ?? 8787)}`).replace(/\/+$/, ""),
-    token: envSecret("ANALYTICS_TOKEN", env),
+    token: readAnalyticsToken(env),
   };
-}
-
-// Fail-loud startup guard (issue #106 AC): an analytics producer configured to
-// run in smoke/prod MUST have its analytics-provider credential. Without it every
-// submission would 401 at the boundary — refusing to boot is the honest failure.
-// `allowInsecure` (RM_ENV=ephemeral or explicit RM_ALLOW_INSECURE=1) is the only
-// opt-out, mirroring the API-side gate in config.ts/api auth.
-export function assertAnalyticsUpdaterCredentials(cfg: {
-  env: string;
-  allowInsecure: boolean;
-  analyticsToken: string | null;
-}): void {
-  if (!cfg.allowInsecure && !cfg.analyticsToken) {
-    throw new Error(
-      `analytics updater is configured for RM_ENV=${cfg.env} without ANALYTICS_TOKEN — ` +
-        "set the analytics-provider bearer credential (or RM_ALLOW_INSECURE=1 for a local throwaway smoke)",
-    );
-  }
 }
 
 // The one authenticated-HTTP call shape every analytics-boundary caller in

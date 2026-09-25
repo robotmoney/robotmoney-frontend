@@ -15,8 +15,6 @@ const MAX_PUBLIC_AUTH_CHALLENGES = 32;
 const CHALLENGE_TTL = "5 minutes";
 const CHALLENGE_ISSUE_LOCK = 587001;
 
-type AdminAuthConfig = { adminToken: string | null; allowInsecure: boolean };
-
 // The relying party must match the page hosting the browser WebAuthn call. A
 // deployment can pin it explicitly when the API sits behind a reverse proxy;
 // otherwise the public request origin is the safe same-origin default. This
@@ -80,14 +78,13 @@ async function storeChallenge(flow: "registration" | "authentication", challenge
 export async function handleAdminWebauthn(
   req: Request,
   url: URL,
-  authConfig?: AdminAuthConfig,
 ): Promise<{ status: number; body: unknown } | null> {
   const p = url.pathname;
   const m = req.method;
   const { rpID, expectedOrigin } = relyingParty(url);
 
   if (m === "GET" && p === "/api/admin/webauthn/register/options") {
-    if (!await isPrivileged(req, authConfig)) return FORBIDDEN;
+    if (!await isPrivileged(req)) return FORBIDDEN;
 
     const passkeys = await sql<{ id: string, transports: string[] }[]>`SELECT id, transports FROM admin_passkey`;
 
@@ -114,7 +111,7 @@ export async function handleAdminWebauthn(
   }
 
   if (m === "POST" && p === "/api/admin/webauthn/register/verify") {
-    if (!await isPrivileged(req, authConfig)) return FORBIDDEN;
+    if (!await isPrivileged(req)) return FORBIDDEN;
     const body = await req.json().catch(() => null);
     if (!body) return BAD("missing body");
 
@@ -145,7 +142,7 @@ export async function handleAdminWebauthn(
         // and this second check rejects the now-revoked caller. If this wins,
         // rotation waits and then deletes this new passkey before returning.
         await tx`SELECT id FROM admin_credential WHERE id = 1 FOR UPDATE`;
-        if (!await isPrivileged(req, authConfig)) return false;
+        if (!await isPrivileged(req)) return false;
         await tx`
           INSERT INTO admin_passkey (id, public_key, counter, transports)
           VALUES (${id}, ${Buffer.from(publicKey)}, ${counter}, ${transports || []})

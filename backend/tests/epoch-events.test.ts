@@ -20,7 +20,7 @@
 // the subscription, the keepalive carrying the head sequence, the resync
 // notice, unacked job pushes — is W4.4's, and nothing in this file depends on
 // it.
-import { test, expect } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import * as epoch from "../src/swarm/domain.ts";
@@ -29,8 +29,16 @@ import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject, rid, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
 import { inHouseJudge } from "./support/stub-judge.ts";
+import { provisionOperatorToken } from "./support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
+
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on.
+let OPERATOR = "";
+beforeAll(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 
 interface EventRow {
   seq: string;
@@ -215,7 +223,6 @@ test("the admin route activates a subject, versioned, and opens no session", asy
   const [{ version }] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${id}`;
   expect((await admin.deactivateSubjectAdmin(id, version)).status).toBe(200);
   const path = ROUTES.swarm.admin.subjectActivate.replace(":id", encodeURIComponent(id));
-  const cfg = { adminToken: "admin-secret", automationToken: null, allowInsecure: false };
   const call = (token: string | null, body: unknown) =>
     handleSwarmAdmin(
       new Request(`http://test${path}`, {
@@ -224,12 +231,11 @@ test("the admin route activates a subject, versioned, and opens no session", asy
         body: JSON.stringify(body),
       }),
       new URL(`http://test${path}`),
-      cfg,
     );
   // An admin edit: no credential, no activation.
   expect((await call(null, { expectedVersion: version + 1 }))?.status).toBe(403);
-  expect((await call("admin-secret", {}))?.status).toBe(400);
-  const res = await call("admin-secret", { expectedVersion: version + 1 });
+  expect((await call(OPERATOR, {}))?.status).toBe(400);
+  const res = await call(OPERATOR, { expectedVersion: version + 1 });
   expect(res?.status).toBe(200);
   const [{ status }] = await sql<{ status: string }[]>`SELECT status FROM swarm_subjects WHERE id = ${id}`;
   expect(status).toBe("active");

@@ -2,24 +2,29 @@
 // ephemeral Postgres the preload provisions (real DB, never mocked) — if
 // Postgres is absent the preload THROWS, so this suite fails red rather than
 // skipping. Asserts:
-//   • the fail-closed auth guard (403 without X-Admin-Token in prod-mode, 403
-//     with a wrong token, 200 with the right one) on every owned route, BEFORE
-//     any database access;
+//   • the fail-closed auth guard (403 without a credential — in this
+//     RM_ENV=ephemeral process too — 403 with a wrong token, 200 with the
+//     operator's store token) on every owned route, BEFORE any database access;
 //   • list/detail return run identity, job linkage, source/as-of metadata,
 //     stage timeline, warning count, freshness, and the persisted output;
 //   • allowlisted raw-series/signal reads reject unregistered indicators/keys,
 //     invalid dates, and excessive limits, while valid requests return the
 //     bounded projection;
-//   • the retired rerun endpoint fails closed because ADMIN_TOKEN must not
-//     grant analytics-production authority.
-import { test, expect, afterAll } from "bun:test";
+//   • the retired rerun endpoint fails closed because the admin credential
+//     must not grant analytics-production authority.
+import { test, expect, afterAll, beforeAll } from "bun:test";
 import { sql } from "../../src/db/client.ts";
 import { handleAdmin } from "../../src/api/routes/admin.ts";
 import { saveTelemetryRun } from "../../src/analytics/store/telemetry-store.ts";
 import type { TelemetryRunSubmission } from "../../src/analytics/telemetry.ts";
+import { provisionOperatorToken } from "../support/automation-auth.ts";
 
-const PROD = { adminToken: "s3cret-admin-token", allowInsecure: false } as const;
-const INSECURE = { adminToken: null, allowInsecure: true } as const;
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on.
+let OPERATOR = "";
+beforeAll(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 
 const ASOF = "2026-04-01"; // far enough in the past to be reliably "stale"
 const KIND = `art_${crypto.randomUUID().slice(0, 8)}`; // unique run kind so assertions never collide with other tests
@@ -30,7 +35,7 @@ function req(method: string, path: string, opts: { token?: string; body?: unknow
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
   return new Request(`http://x${path}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) });
 }
-const call = (r: Request, cfg: typeof PROD | typeof INSECURE = PROD) => handleAdmin(r, new URL(r.url), cfg);
+const call = (r: Request) => handleAdmin(r, new URL(r.url));
 
 function sampleRun(overrides: Partial<TelemetryRunSubmission> = {}): TelemetryRunSubmission {
   const now = new Date();
@@ -64,7 +69,7 @@ afterAll(async () => {
   await sql`DELETE FROM research_pipeline_runs WHERE kind = ${KIND}`;
 });
 
-test("prod-mode with no token → 403 on every owned research route (fail-closed, before DB access)", async () => {
+test("no credential → 403 on every owned research route (fail-closed, before DB access)", async () => {
   const runId = await saveTelemetryRun(sampleRun());
   seededRunId = runId;
   expect((await call(req("GET", "/api/admin/research/runs")))?.status).toBe(403);
@@ -78,13 +83,14 @@ test("wrong token → 403", async () => {
   expect((await call(req("GET", "/api/admin/research/runs", { token: "nope" })))?.status).toBe(403);
 });
 
-test("insecure mode (no token configured) → 200 without a token", async () => {
-  const res = await call(req("GET", "/api/admin/research/runs"), INSECURE);
-  expect(res?.status).toBe(200);
+test("RM_ENV=ephemeral does not open the surface without a credential (D52 (1))", async () => {
+  expect(process.env.RM_ENV).toBe("ephemeral");
+  const res = await call(req("GET", "/api/admin/research/runs"));
+  expect(res?.status).toBe(403);
 });
 
 test("GET /api/admin/research/runs: list returns run identity, job linkage, source/asof, warning count, freshness", async () => {
-  const res = await call(req("GET", `/api/admin/research/runs?kind=${KIND}`, { token: PROD.adminToken }));
+  const res = await call(req("GET", `/api/admin/research/runs?kind=${KIND}`, { token: OPERATOR }));
   expect(res?.status).toBe(200);
   const body = res?.body as { runs: any[] };
   expect(body.runs.length).toBe(1);
@@ -102,7 +108,7 @@ test("GET /api/admin/research/runs: list returns run identity, job linkage, sour
 });
 
 test("GET /api/admin/research/runs/:id: detail returns full stage timeline, warnings, and bounded artifacts", async () => {
-  const res = await call(req("GET", `/api/admin/research/runs/${seededRunId}`, { token: PROD.adminToken }));
+  const res = await call(req("GET", `/api/admin/research/runs/${seededRunId}`, { token: OPERATOR }));
   expect(res?.status).toBe(200);
   const body = res?.body as { run: any; stages: any[]; warnings: any[]; artifacts: any[] };
   expect(Number(body.run.id)).toBe(seededRunId);
@@ -116,24 +122,24 @@ test("GET /api/admin/research/runs/:id: detail returns full stage timeline, warn
 });
 
 test("GET /api/admin/research/runs/:id: 404 for an unknown id, 400 for a non-numeric one", async () => {
-  expect((await call(req("GET", "/api/admin/research/runs/999999999", { token: PROD.adminToken })))?.status).toBe(404);
-  expect((await call(req("GET", "/api/admin/research/runs/not-a-number", { token: PROD.adminToken })))?.status).toBe(400);
+  expect((await call(req("GET", "/api/admin/research/runs/999999999", { token: OPERATOR })))?.status).toBe(404);
+  expect((await call(req("GET", "/api/admin/research/runs/not-a-number", { token: OPERATOR })))?.status).toBe(400);
 });
 
 test("GET /api/admin/research/raw-series/:indicator: rejects an unregistered indicator, invalid dates; returns a bounded, allowlisted read", async () => {
   await sql`INSERT INTO raw_indicator_history (date, indicator, value) VALUES ('2026-01-01', 'T10Y2Y', 0.3)
             ON CONFLICT (date, indicator) DO UPDATE SET value = 0.3`;
 
-  const unregistered = await call(req("GET", "/api/admin/research/raw-series/DROP_TABLE_JOBS", { token: PROD.adminToken }));
+  const unregistered = await call(req("GET", "/api/admin/research/raw-series/DROP_TABLE_JOBS", { token: OPERATOR }));
   expect(unregistered?.status).toBe(400);
 
-  const badFrom = await call(req("GET", "/api/admin/research/raw-series/T10Y2Y?from=not-a-date", { token: PROD.adminToken }));
+  const badFrom = await call(req("GET", "/api/admin/research/raw-series/T10Y2Y?from=not-a-date", { token: OPERATOR }));
   expect(badFrom?.status).toBe(400);
 
   // Bound `to` tightly to the inserted point's date: the shared test DB may
   // carry many OTHER (more recent) T10Y2Y rows from other suites, which would
   // otherwise push this row out of a small `ORDER BY date DESC LIMIT` window.
-  const ok = await call(req("GET", "/api/admin/research/raw-series/T10Y2Y?from=2025-01-01&to=2026-01-01&limit=10", { token: PROD.adminToken }));
+  const ok = await call(req("GET", "/api/admin/research/raw-series/T10Y2Y?from=2025-01-01&to=2026-01-01&limit=10", { token: OPERATOR }));
   expect(ok?.status).toBe(200);
   const body = ok?.body as { indicator: string; points: { date: string; value: number }[] };
   expect(body.indicator).toBe("T10Y2Y");
@@ -141,7 +147,7 @@ test("GET /api/admin/research/raw-series/:indicator: rejects an unregistered ind
 
   // MNA is allowlisted even though it's not in the regime INDICATORS registry
   // (it's the late-cycle-signals research indicator).
-  const mna = await call(req("GET", "/api/admin/research/raw-series/MNA", { token: PROD.adminToken }));
+  const mna = await call(req("GET", "/api/admin/research/raw-series/MNA", { token: OPERATOR }));
   expect(mna?.status).toBe(200);
 
   await sql`DELETE FROM raw_indicator_history WHERE indicator = 'T10Y2Y' AND date = '2026-01-01'`;
@@ -151,10 +157,10 @@ test("GET /api/admin/research/signals/:key: rejects an unregistered signal key; 
   await sql`INSERT INTO research_signals (signal_key, date, payload) VALUES ('channel-divergence', '2026-01-01', '{"x":1}'::jsonb)
             ON CONFLICT (signal_key, date) DO UPDATE SET payload = '{"x":1}'::jsonb`;
 
-  const bad = await call(req("GET", "/api/admin/research/signals/arbitrary_table", { token: PROD.adminToken }));
+  const bad = await call(req("GET", "/api/admin/research/signals/arbitrary_table", { token: OPERATOR }));
   expect(bad?.status).toBe(400);
 
-  const ok = await call(req("GET", "/api/admin/research/signals/channel-divergence?limit=5", { token: PROD.adminToken }));
+  const ok = await call(req("GET", "/api/admin/research/signals/channel-divergence?limit=5", { token: OPERATOR }));
   expect(ok?.status).toBe(200);
   const body = ok?.body as { key: string; points: { date: string; payload: unknown }[] };
   expect(body.key).toBe("channel-divergence");
@@ -169,7 +175,7 @@ test("POST /api/admin/research/rerun: admin cannot trigger analytics production"
     { kind: "research.refresh", tool: "late-cycle-signals", asof: ASOF, reason: "manual refresh" },
   ]) {
     const before = await sql`SELECT count(*)::int AS n FROM jobs`;
-    const res = await call(req("POST", "/api/admin/research/rerun", { token: PROD.adminToken, body }));
+    const res = await call(req("POST", "/api/admin/research/rerun", { token: OPERATOR, body }));
     expect(res?.status).toBe(409);
     const after = await sql`SELECT count(*)::int AS n FROM jobs`;
     expect(after[0].n).toBe(before[0].n);

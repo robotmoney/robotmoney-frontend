@@ -28,7 +28,7 @@
 // Shares the one ephemeral Postgres every other swarm test file uses
 // (tests/preload.ts). A missing Docker/Postgres fails that preload loudly;
 // nothing here skips.
-import { test, expect } from "bun:test";
+import { test, expect, beforeEach } from "bun:test";
 import { canonicalizeApplication, ROUTES, path as routePath } from "@robotmoney/contract";
 import * as ic from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
@@ -39,8 +39,8 @@ import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { provisionOperatorToken } from "./support/automation-auth.ts";
 
-const ADMIN_CFG = { adminToken: "s3cret-swarm-admin-token", allowInsecure: false } as const;
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
 // Own database per TEST, cloned from the migrated template. Per-test, not
@@ -49,6 +49,14 @@ const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 // next test's admission a spurious 409. Unique ids cannot fix that; a clean
 // database can.
 useCleanDatabasePerTest(import.meta.file);
+
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on. Per test, because each test
+// gets its own database (the clone hook above runs first).
+let OPERATOR = "";
+beforeEach(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 
 async function callSwarm(req: Request): Promise<{ status: number; body: any }> {
   // api/index.ts sanitizes ANY escaped exception into `500 {"error":"internal
@@ -65,11 +73,11 @@ async function callSwarm(req: Request): Promise<{ status: number; body: any }> {
 async function callAdmin(method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> {
   const req = new Request(`http://localhost${path}`, {
     method,
-    headers: { "Content-Type": "application/json", "X-Admin-Token": ADMIN_CFG.adminToken },
+    headers: { "Content-Type": "application/json", "X-Admin-Token": OPERATOR },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   try {
-    return (await handleSwarmAdmin(req, new URL(req.url), ADMIN_CFG)) ?? { status: 404, body: null };
+    return (await handleSwarmAdmin(req, new URL(req.url))) ?? { status: 404, body: null };
   } catch {
     return { status: 500, body: { error: "internal error" } };
   }

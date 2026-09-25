@@ -2,7 +2,7 @@
 // equivalence, non-destructive rollback, legacy-baseline semantics, and
 // migration/cutover/rollback stability of both the ledger and the
 // pre-existing legacy tables.
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test, beforeEach } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,9 +11,8 @@ import postgres from "postgres";
 import { ROUTES } from "@robotmoney/contract";
 import { POSTGRES_IMAGE } from "../../scripts/lib/postgres-image.ts";
 import { sql } from "../src/db/client.ts";
-import { config } from "../src/config.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
-import { handleAdmin, type AdminAuthConfig } from "../src/api/routes/admin.ts";
+import { handleAdmin } from "../src/api/routes/admin.ts";
 import { getRegimeSnapshots, getRegimeSnapshotsSummary, getResearchSignal } from "../src/api/routes/dashboards.ts";
 import { ensureSubject, openSession, publishBrief, getBriefBySession } from "../src/swarm/domain.ts";
 import { captureSourceAcquisition, payloadChecksum } from "../src/analytics/source-ledger.ts";
@@ -28,6 +27,7 @@ import { getAnalyticsReadMode, setAnalyticsReadMode, CutoverGateNotPassedError }
 import type { ParityDomain } from "../src/analytics/cutover/parity.ts";
 import { canonicalStringify, sha256Hex } from "../src/analytics/run-ledger.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { provisionAnalyticsToken, provisionOperatorToken } from "./support/automation-auth.ts";
 
 // PER TEST, not per file: analytics_parity_observations is immutable
 // (migration 0060 refuses DELETE/UPDATE/TRUNCATE), so a shared database would
@@ -43,16 +43,20 @@ const TEST_GATE_ENV = {
 };
 
 const A = ROUTES.analytics;
-const TOKEN = "tok_analytics_test_secret";
-const ADMIN_TOKEN = "tok_admin_test_secret";
+let TOKEN = "";
+let ADMIN_TOKEN = "";
 
-const orig = { analyticsToken: config.analyticsToken, adminToken: config.adminToken, allowInsecure: config.allowInsecure };
+// Store-issued, like the real credentials (smoke spec §3, D52 (1)): the
+// producer's token is the only one the analytics boundary accepts, and the
+// operator's admin token is refused there, in every env.
+beforeEach(async () => {
+  TOKEN = await provisionAnalyticsToken();
+  ADMIN_TOKEN = await provisionOperatorToken();
+});
+
 const origGateEnv = Object.fromEntries(Object.keys(TEST_GATE_ENV).map((k) => [k, process.env[k]]));
 for (const [k, v] of Object.entries(TEST_GATE_ENV)) process.env[k] = v;
 afterEach(async () => {
-  config.analyticsToken = orig.analyticsToken;
-  config.adminToken = orig.adminToken;
-  config.allowInsecure = orig.allowInsecure;
   // Every test leaves the switch back on 'compatibility' — a raw SQL reset,
   // not setAnalyticsReadMode(), because a prior test may have left the gate
   // unsatisfied (compatibility is never gated, but this keeps every test
@@ -65,11 +69,6 @@ afterAll(() => {
     else process.env[k] = v;
   }
 });
-function prodAuth() {
-  config.analyticsToken = TOKEN;
-  config.adminToken = ADMIN_TOKEN;
-  config.allowInsecure = false;
-}
 
 function req(method: string, path: string, body?: unknown, token = TOKEN): Request {
   return new Request(`http://x${path}`, {
@@ -80,11 +79,10 @@ function req(method: string, path: string, body?: unknown, token = TOKEN): Reque
 }
 const call = (r: Request) => handleAnalytics(r, new URL(r.url));
 
-const ADMIN_CFG: AdminAuthConfig = { adminToken: ADMIN_TOKEN, allowInsecure: false };
 function adminReq(path: string): Request {
   return new Request(`http://x${path}`, { headers: { "X-Admin-Token": ADMIN_TOKEN } });
 }
-const callAdmin = (r: Request) => handleAdmin(r, new URL(r.url), ADMIN_CFG);
+const callAdmin = (r: Request) => handleAdmin(r, new URL(r.url));
 
 // `provenance` is the acquisition-time data-source label (issue #979,
 // migration 0061). Omitted here means the submitter observed none, which is
@@ -288,7 +286,6 @@ describe("issue #979 AC2: the cutover gate's observation window", () => {
 
 describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destructive rollback", () => {
   test("dashboard, admin, raw-history, swarm-brief, and regime-summary reads return identical DTOs in both modes, and rollback restores the legacy fixture with zero ledger drift", async () => {
-    prodAuth();
     const indicator = INDICATORS[0]!.id;
     const signalKey = "channel-divergence";
     const date = "2024-05-01";
@@ -421,7 +418,6 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
   // owner, 2026-09-17), not a defect to route around, and this test pins the
   // divergence itself rather than a comfortable claim that there is none.
   test("a row written without provenance reads NULL in ledger mode and its real legacy label in compatibility mode, and the append-only ledger refuses to backfill it", async () => {
-    prodAuth();
     // A real registry id: the admin raw-series route only serves allowlisted
     // indicators, and this test has to read the DTO through that route in both
     // modes rather than assert on the tables behind it.
@@ -508,7 +504,6 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
   // 'seed', so ledger mode and compatibility mode answered DIFFERENTLY for a
   // row written after 0061 — new data, not accepted history.
   test("a producer catch-up row carries ONE label into both models, so both modes return the same `source` for it", async () => {
-    prodAuth();
     const indicator = INDICATORS[0]!.id;
     const date = "2024-09-01";
 
@@ -638,7 +633,6 @@ async function snapshotLegacyTables(): Promise<Record<string, { count: number; c
 
 describe("issue #979 AC9: legacy row counts and PK checksums survive cutover and rollback unchanged", () => {
   test("recording legacy state, cutting over, and rolling back leaves it byte-for-byte identical", async () => {
-    prodAuth();
     await submitRawHistoryPoint("AC9_IND", "2024-06-01", 9.5);
     await submitRegimeAndResearch("2024-06-01", 60, "late-cycle-signals", "ac9-check");
 
@@ -777,7 +771,6 @@ describe("issue #979 AC7: legacy-baseline source rows are never upgraded to hist
   });
 
   test("a real revision for a key that has a legacy_baseline predecessor is never recorded as another legacy_baseline, and the baseline is not rewritten", async () => {
-    prodAuth();
     // The predecessor has to actually EXIST, or the writer takes its
     // `no prior version` branch and this proves nothing about the
     // legacy-baseline path. Seed one exactly as migration 0057's backfill
@@ -803,7 +796,6 @@ describe("issue #979 AC7: legacy-baseline source rows are never upgraded to hist
   });
 
   test("no projection or admin read exposes a legacy_baseline row as historically reproducible", async () => {
-    prodAuth();
     await submitRawHistoryPoint("AC7_PROJ_IND", "2024-07-02", 4);
     const res = await callAdmin(adminReq(`/api/admin/research/raw-series/AC7_PROJ_IND`));
     // AC7_PROJ_IND is not on the admin allowlist (only real registry

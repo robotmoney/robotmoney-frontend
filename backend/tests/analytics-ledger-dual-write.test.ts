@@ -9,31 +9,27 @@
 // analytics/cutover/ledger-current.ts) have identical natural keys, canonical
 // values, row counts, and checksums — after an initial insert, an unchanged
 // replay, and a genuine revision.
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test, beforeAll } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
-import { config } from "../src/config.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { payloadChecksum } from "../src/analytics/source-ledger.ts";
 import { checkRawIndicatorHistoryParity, checkRegimeSnapshotsParity, checkResearchSignalsParity } from "../src/analytics/cutover/parity.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { provisionAnalyticsToken, provisionOperatorToken } from "./support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
 
 const A = ROUTES.analytics;
-const TOKEN = "tok_analytics_test_secret";
-const ADMIN = "tok_admin_test_secret";
+let TOKEN = "";
+let ADMIN = "";
 
-const orig = { analyticsToken: config.analyticsToken, adminToken: config.adminToken, allowInsecure: config.allowInsecure };
-function prodAuth() {
-  config.analyticsToken = TOKEN;
-  config.adminToken = ADMIN;
-  config.allowInsecure = false;
-}
-afterEach(() => {
-  config.analyticsToken = orig.analyticsToken;
-  config.adminToken = orig.adminToken;
-  config.allowInsecure = orig.allowInsecure;
+// Store-issued, like the real credentials (smoke spec §3, D52 (1)): the
+// producer's token is the only one the analytics boundary accepts, and the
+// operator's admin token is refused there, in every env.
+beforeAll(async () => {
+  TOKEN = await provisionAnalyticsToken();
+  ADMIN = await provisionOperatorToken();
 });
 
 function req(method: string, path: string, body?: unknown): Request {
@@ -177,7 +173,6 @@ async function submitRegimeAndResearch(
 
 describe("dual-write parity: raw-history, regime, and research through the authenticated analytics API", () => {
   test("INSERT: compatibility and ledger-derived current rows have identical natural keys, values, row counts, and checksums", async () => {
-    prodAuth();
     await submitRawHistoryPoint("DUALWRITE_IND", "2024-01-01", 1.5);
     await submitRegimeAndResearch("2024-01-01", 10, "dualwrite-signal", "v1");
 
@@ -199,7 +194,6 @@ describe("dual-write parity: raw-history, regime, and research through the authe
   });
 
   test("UNCHANGED REPLAY: resubmitting the identical content converges (no duplication) and parity still matches", async () => {
-    prodAuth();
     await submitRawHistoryPoint("DUALWRITE_REPLAY", "2024-02-01", 2.5);
     const before = await checkRawIndicatorHistoryParity();
     expect(before.matched).toBe(true);
@@ -231,7 +225,6 @@ describe("dual-write parity: raw-history, regime, and research through the authe
   });
 
   test("REVISION: a genuinely changed value still converges to matching compatibility and ledger current rows", async () => {
-    prodAuth();
     await submitRawHistoryPoint("DUALWRITE_REVISED", "2024-03-01", 5);
     await submitRegimeAndResearch("2024-03-01", 30, "dualwrite-revision-signal", "v1");
     expect((await checkRawIndicatorHistoryParity()).matched).toBe(true);
@@ -269,7 +262,6 @@ describe("dual-write parity: raw-history, regime, and research through the authe
 // accepted as permanently unlabelled do NOT park the gate red forever.
 describe("dual-write parity: raw-history `source` (issue #979 AC3)", () => {
   test("a row whose ledger label disagrees with its compatibility label is a MISMATCH, not an invisible difference", async () => {
-    prodAuth();
     // Exactly the shape the producer's gap catch-up produced before this fix:
     // the acquisition captured 'live' while the floor writer tagged the very
     // same point 'seed'. Value, indicator and date all agree — `source` is the
@@ -300,7 +292,6 @@ describe("dual-write parity: raw-history `source` (issue #979 AC3)", () => {
   });
 
   test("a version recorded BEFORE migration 0061 is exempt from the `source` comparison, so accepted history cannot park the gate red", async () => {
-    prodAuth();
     // A pre-0061 row, built the only way an append-only ledger allows: a fresh
     // INSERT (never an UPDATE) with revision_kind 'legacy_baseline' and no
     // acquisition — migration 0057's own backfill shape — back-dated to one
@@ -358,7 +349,6 @@ describe("dual-write parity: raw-history `source` (issue #979 AC3)", () => {
 // ALREADY-settled date still correctly does.
 describe("dual-write parity: mid-run race immunity (issue #979 fix)", () => {
   test("RACE: compat-only current rows with no frozen terminal package yet are not compared, so they cannot false-mismatch", async () => {
-    prodAuth();
     const date = "2024-04-01";
 
     // The standalone `POST /api/analytics/regime-snapshots` /
@@ -414,7 +404,6 @@ describe("dual-write parity: mid-run race immunity (issue #979 fix)", () => {
   });
 
   test("PERSISTENT MISMATCH: a genuine divergence on an already-SETTLED date still records matched:false", async () => {
-    prodAuth();
     const date = "2024-04-02";
     // Freeze this asof for real (A.runPackage) — analytics_report_snapshots
     // now has a row for it, so it is settled and eligible for comparison.

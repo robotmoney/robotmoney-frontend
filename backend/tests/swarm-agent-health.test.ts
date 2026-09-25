@@ -4,7 +4,7 @@
 // stdout. Both are now recorded on a durable, queryable, append-only event
 // log (swarm_agent_health_events) and exposed admin-only via
 // GET /api/swarm/admin/agent-health.
-import { test, expect } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,7 @@ import { sql } from "../src/db/client.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
+import { provisionOperatorToken } from "./support/automation-auth.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
@@ -32,6 +33,13 @@ const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 // file admits into is its own, with no reset of anyone else's rows.
 useCleanDatabase(import.meta.file);
 
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on.
+let OPERATOR = "";
+beforeAll(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
+
 async function activeMember() {
   const id = rid("m");
   const { publicKeyB64, privateKey } = await generateKeyPair();
@@ -45,7 +53,7 @@ async function activeMember() {
 }
 
 async function getAgentHealth(query: string) {
-  const req = new Request(`http://test/api/swarm/admin/agent-health${query}`);
+  const req = new Request(`http://test/api/swarm/admin/agent-health${query}`, { headers: { "X-Admin-Token": OPERATOR } });
   return handleSwarmAdmin(req, new URL(req.url));
 }
 

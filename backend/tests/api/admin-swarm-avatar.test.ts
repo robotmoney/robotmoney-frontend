@@ -21,7 +21,7 @@
 // route production traffic uses — so a real <img> pointed at it can never
 // hit that onerror fallback. That is the whole condition #625's precedence
 // check depends on; there is no separate flag to assert.
-import { test, expect } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
 import { generateKeyPair } from "../../src/lib/signing.ts";
 import { handleSwarmAdmin } from "../../src/api/routes/swarm-admin.ts";
 import { handleSwarm } from "../../src/api/routes/swarm.ts";
@@ -29,12 +29,17 @@ import { AVATAR_MAX_BYTES } from "../../src/swarm/admin.ts";
 import { sql } from "../../src/db/client.ts";
 import { ROUTES, path as buildPath } from "@robotmoney/contract";
 import { useCleanDatabase } from "../support/clean-db.ts";
+import { provisionOperatorToken } from "../support/automation-auth.ts";
 
 // Own database per file — see admin-swarm.test.ts for why (issue #152).
 useCleanDatabase(import.meta.file);
 
-const TOKEN = "s3cret-avatar-admin-token";
-const PROD = { adminToken: TOKEN, allowInsecure: false };
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on.
+let TOKEN = "";
+beforeAll(async () => {
+  TOKEN = await provisionOperatorToken();
+});
 
 // A tiny, genuinely-PNG-signed payload — content-type is what this endpoint
 // validates, not decoded pixel data, but a real magic number keeps the fixture
@@ -55,7 +60,7 @@ function avatarReq(
   });
 }
 
-const call = (r: Request, cfg = PROD) => handleSwarmAdmin(r, new URL(r.url), cfg);
+const call = (r: Request) => handleSwarmAdmin(r, new URL(r.url));
 
 // The public serving route lives in handleSwarm (routes/swarm.ts), not the
 // admin dispatcher — a real <img src=avatarPath> is an unauthenticated GET.

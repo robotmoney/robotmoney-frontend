@@ -5,43 +5,42 @@
 //
 // Covers the issue ACs:
 //   • every mutation returns 401/403 AND makes zero database changes without a
-//     valid bearer token; accepts a valid ANALYTICS_TOKEN; NEVER accepts
-//     ADMIN_TOKEN or a swarm-member credential as a substitute;
+//     valid bearer token; accepts analytics-producer's store token (right
+//     `analytics_ingestion`, smoke spec §3); NEVER accepts the operator's or
+//     the scheduler's token or a swarm-member credential as a substitute;
 //   • malformed / oversized / duplicate-conflicting / non-finite / partial
 //     payloads are rejected before any row changes;
 //   • valid batches persist atomically + idempotently on their natural keys; a
 //     forced mid-operation error rolls back the whole mutation;
 //   • credentials are never returned in responses or emitted in logs, and the
-//     updater startup guard fails loudly in smoke/prod without its token.
-import { test, expect, afterEach } from "bun:test";
+//     updater startup guard fails loudly without its token file.
+import { test, expect, beforeAll } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
-import { config } from "../../src/config.ts";
 import { handleAnalytics } from "../../src/api/routes/analytics.ts";
-import { assertAnalyticsUpdaterCredentials } from "../../src/analytics/api-client.ts";
+import { requireProducerApiConfig } from "../../src/producer/index.ts";
 import { hashKey } from "../../src/lib/keys.ts";
 import { useCleanDatabase } from "../support/clean-db.ts";
+import { provisionAnalyticsToken, provisionOperatorToken, provisionSchedulerToken } from "../support/automation-auth.ts";
 import { payloadChecksum } from "../../src/analytics/source-ledger.ts";
 
 // Own database per file, cloned from the migrated template (support/clean-db.ts).
 useCleanDatabase(import.meta.file);
 
 const A = ROUTES.analytics;
-const TOKEN = "tok_analytics_test_secret";
-const ADMIN = "tok_admin_test_secret";
-
-// Prod-shaped auth for every test: a token is configured and the insecure
-// convenience path is OFF, so only the exact ANALYTICS_TOKEN authorizes.
-const orig = { analyticsToken: config.analyticsToken, adminToken: config.adminToken, allowInsecure: config.allowInsecure };
-function prodAuth() {
-  config.analyticsToken = TOKEN;
-  config.adminToken = ADMIN;
-  config.allowInsecure = false;
-}
-afterEach(() => {
-  config.analyticsToken = orig.analyticsToken;
-  config.adminToken = orig.adminToken;
-  config.allowInsecure = orig.allowInsecure;
+// Every credential is store-issued (smoke spec §3, D52 (1)): the producer's
+// token is the only one that authorizes here, in every env, with no
+// configuration to flip.
+let TOKEN = "";
+let ADMIN = "";
+let SCHEDULER = "";
+beforeAll(async () => {
+  TOKEN = await provisionAnalyticsToken();
+  ADMIN = await provisionOperatorToken();
+  SCHEDULER = await provisionSchedulerToken();
 });
 
 function req(method: string, path: string, body?: unknown, token?: string, rawBody?: string): Request {
@@ -72,7 +71,7 @@ const validBodies: [string, string, unknown][] = [
 // ISSUE #978: `POST /api/analytics/regime-snapshots` and
 // `POST /api/analytics/research-signals` are RETIRED. They upserted the
 // current views with no run, no immutable artifact and no report snapshot, so
-// an ANALYTICS_TOKEN holder could publish regime rows no frozen report ever
+// an analytics-credential holder could publish regime rows no frozen report ever
 // contained — and publishBrief, which derives its binding from those rows,
 // would bind a signed brief to some other run's report. Both DTOs now reach
 // the API only inside a terminal run package, which is what the validation
@@ -121,7 +120,6 @@ function sourceAcquisitionBody(id = crypto.randomUUID()) {
 }
 
 test("source acquisition ingestion is provider-only, validates before mutation, rolls back atomically, and replays idempotently", async () => {
-  prodAuth();
   const body = sourceAcquisitionBody();
   expect((await call(req("POST", A.sourceAcquisitions, body)))?.status).toBe(401);
   expect((await call(req("POST", A.sourceAcquisitions, body, ADMIN)))?.status).toBe(403);
@@ -148,7 +146,6 @@ test("source acquisition ingestion is provider-only, validates before mutation, 
 });
 
 test("readiness authenticates the producer credential without reading or mutating analytics data", async () => {
-  prodAuth();
   const before = await tableCounts();
   expect((await call(req("GET", A.readiness)))?.status).toBe(401);
   expect((await call(req("GET", A.readiness, undefined, "wrong-token")))?.status).toBe(403);
@@ -160,7 +157,6 @@ test("readiness authenticates the producer credential without reading or mutatin
 });
 
 test("every mutation: 401 with no bearer, 403 with a wrong/admin/member bearer — and ZERO row changes", async () => {
-  prodAuth();
   // A real swarm-member credential (the strongest confusable substitute).
   const memberId = `az_${crypto.randomUUID().slice(0, 8)}`;
   const memberToken = `tok_member_${crypto.randomUUID().slice(0, 8)}`;
@@ -172,32 +168,33 @@ test("every mutation: 401 with no bearer, 403 with a wrong/admin/member bearer �
   for (const [method, path, body] of validBodies) {
     expect((await call(req(method, path, body)))?.status).toBe(401); // no credential
     expect((await call(req(method, path, body, "wrong-token")))?.status).toBe(403); // wrong bearer
-    expect((await call(req(method, path, body, ADMIN)))?.status).toBe(403); // ADMIN_TOKEN is NOT a substitute
+    expect((await call(req(method, path, body, ADMIN)))?.status).toBe(403); // the operator's admin token is NOT a substitute
+    expect((await call(req(method, path, body, SCHEDULER)))?.status).toBe(403); // nor the scheduler's
     expect((await call(req(method, path, body, memberToken)))?.status).toBe(403); // member bearer is NOT a substitute
   }
   // The read is analytics-provider-only too.
   expect((await call(req("GET", A.rawHistory)))?.status).toBe(401);
   expect(await tableCounts()).toEqual(before); // zero database changes
 
-  // The SAME payloads succeed with the valid ANALYTICS_TOKEN.
+  // The SAME payloads succeed with the producer's store token.
   for (const [method, path, body] of validBodies) {
     expect((await call(req(method, path, body, TOKEN)))?.status).toBe(200);
   }
 });
 
-test("fail-closed: no token configured → locked in smoke/prod, open only under allowInsecure", async () => {
-  prodAuth();
-  config.analyticsToken = null; // smoke/prod misconfiguration
+test("fail-closed with no opt-out: RM_ENV=ephemeral opens nothing without the producer's token (D52 (1))", async () => {
+  // tests/preload.ts runs this process as RM_ENV=ephemeral — the env that
+  // used to open this boundary to a tokenless caller.
+  expect(process.env.RM_ENV).toBe("ephemeral");
   const [method, path] = ["POST", A.rawHistory] as const;
-  const body = { history: { [rid()]: [{ date: "2020-01-01", value: 1 }] } };
+  const ind = rid();
+  const body = { history: { [ind]: [{ date: "2020-01-01", value: 1 }] } };
   expect((await call(req(method, path, body)))?.status).toBe(401);
   expect((await call(req(method, path, body, "anything")))?.status).toBe(403);
-  config.allowInsecure = true; // ephemeral / explicit RM_ALLOW_INSECURE opt-in
-  expect((await call(req(method, path, body)))?.status).toBe(200);
+  expect(await sql`SELECT 1 FROM raw_indicator_history WHERE indicator = ${ind}`).toHaveLength(0);
 });
 
 test("DTO validation rejects malformed/oversized/duplicate-conflicting/non-finite/partial payloads with zero row changes", async () => {
-  prodAuth();
   const ind = rid();
   const before = await tableCounts();
 
@@ -258,10 +255,9 @@ test("DTO validation rejects malformed/oversized/duplicate-conflicting/non-finit
 });
 
 // The retired routes stay retired: `handleAnalytics` no longer claims either
-// path, so an ANALYTICS_TOKEN holder cannot reach a regime/research current-view
+// path, so an analytics-credential holder cannot reach a regime/research current-view
 // write that carries no run, no artifact and no report snapshot.
 test("the retired standalone regime-snapshot and research-signal upsert routes are not handled at all (issue #978)", async () => {
-  prodAuth();
   const before = await tableCounts();
   for (const path of ["/api/analytics/regime-snapshots", "/api/analytics/research-signals"]) {
     // `null` means "not an analytics route" — the caller falls through to the
@@ -273,7 +269,6 @@ test("the retired standalone regime-snapshot and research-signal upsert routes a
 });
 
 test("raw-history + regime-snapshots: accept an optional provenance `source`, reject a garbage value (issue #397)", async () => {
-  prodAuth();
   const ind = rid();
   const before = await tableCounts();
 
@@ -307,7 +302,6 @@ test("raw-history + regime-snapshots: accept an optional provenance `source`, re
 });
 
 test("raw-history: persists atomically, idempotent upsert on (date, indicator)", async () => {
-  prodAuth();
   const ind = rid();
   const body = { history: { [ind]: [{ date: "2020-01-01", value: 1 }, { date: "2020-01-02", value: 2 }] } };
   expect((await call(req("POST", A.rawHistory, body, TOKEN)))?.status).toBe(200);
@@ -321,7 +315,6 @@ test("raw-history: persists atomically, idempotent upsert on (date, indicator)",
 });
 
 test("seed ingestion: gap-fill only (existing rows win), idempotent no-op when warm", async () => {
-  prodAuth();
   const ind = rid();
   await sql`INSERT INTO raw_indicator_history (date, indicator, value) VALUES ('2020-01-02', ${ind}, 42)`;
   const body = { history: { [ind]: [
@@ -339,7 +332,6 @@ test("seed ingestion: gap-fill only (existing rows win), idempotent no-op when w
 });
 
 test("current-view projections stay idempotent on (date) / (signal_key, date) across two run packages for the same date", async () => {
-  prodAuth();
   const date = "1998-06-15";
   const key = `sig-${rid()}`;
   const snap = { date, composite: 0.4, compositePercentile: 0.6, regime: "neutral", macroRegime: "neutral", onchainRegime: "neutral", factorRegime: null, percentiles: { VIX: 0.5 }, indicators: [{ id: "VIX" }] };
@@ -369,7 +361,6 @@ test("current-view projections stay idempotent on (date) / (signal_key, date) ac
 });
 
 test("forced mid-operation error rolls back the WHOLE mutation (nothing persists)", async () => {
-  prodAuth();
   // A run package writes its immutable artifacts, its report snapshot and ONE
   // INSERT per research signal inside a single transaction, so a trigger that
   // detonates on the SECOND signal proves cross-statement rollback: the first
@@ -403,7 +394,6 @@ test("forced mid-operation error rolls back the WHOLE mutation (nothing persists
 });
 
 test("credentials never appear in responses or logs", async () => {
-  prodAuth();
   const captured: string[] = [];
   const spy = (...args: unknown[]) => { captured.push(args.map(String).join(" ")); };
   const real = { log: console.log, warn: console.warn, error: console.error };
@@ -427,18 +417,23 @@ test("credentials never appear in responses or logs", async () => {
   expect(captured.join("\n")).not.toContain(ADMIN);
 });
 
-test("startup guard: smoke/prod updater without ANALYTICS_TOKEN fails loudly; token or insecure opt-in boots", () => {
-  expect(() => assertAnalyticsUpdaterCredentials({ env: "prod", allowInsecure: false, analyticsToken: null }))
-    .toThrow(/ANALYTICS_TOKEN/);
-  expect(() => assertAnalyticsUpdaterCredentials({ env: "smoke", allowInsecure: false, analyticsToken: null }))
-    .toThrow(/ANALYTICS_TOKEN/);
-  // The thrown message never contains a secret (there is none) and setting one boots.
-  expect(() => assertAnalyticsUpdaterCredentials({ env: "prod", allowInsecure: false, analyticsToken: TOKEN })).not.toThrow();
-  expect(() => assertAnalyticsUpdaterCredentials({ env: "ephemeral", allowInsecure: true, analyticsToken: null })).not.toThrow();
+test("startup guard: the updater without ANALYTICS_TOKEN_FILE fails loudly in every env; the file boots it", () => {
+  // The retired shapes boot nothing: a token-valued env var is not read, and
+  // no RM_ENV or RM_ALLOW_INSECURE value is an opt-out.
+  for (const env of [
+    {},
+    { RM_ENV: "ephemeral" },
+    { RM_ALLOW_INSECURE: "1" },
+    { ANALYTICS_TOKEN: TOKEN },
+  ] as Record<string, string>[]) {
+    expect(() => requireProducerApiConfig(env)).toThrow(/ANALYTICS_TOKEN_FILE/);
+  }
+  const file = join(mkdtempSync(join(tmpdir(), "rm-analytics-token-")), "analytics-producer.token");
+  writeFileSync(file, `${TOKEN}\n`);
+  expect(requireProducerApiConfig({ ANALYTICS_TOKEN_FILE: file }).token).toBe(TOKEN);
 });
 
 test("GET raw-history returns the persisted floor to the analytics-provider", async () => {
-  prodAuth();
   const ind = rid();
   await sql`INSERT INTO raw_indicator_history (date, indicator, value) VALUES ('2021-05-05', ${ind}, 7)`;
   const res = await call(req("GET", A.rawHistory, undefined, TOKEN));
@@ -452,10 +447,9 @@ test("GET raw-history returns the persisted floor to the analytics-provider", as
 // a research signal — must fail against pre-#614 main, where this route does
 // not exist at all.
 test("GET research-signals/dates: analytics-provider-only, validates `since`, and returns only pairs on/after it", async () => {
-  prodAuth();
   expect((await call(req("GET", `${A.researchSignalDates}?since=2020-01-01`)))?.status).toBe(401); // no credential
   expect((await call(req("GET", `${A.researchSignalDates}?since=2020-01-01`, undefined, "wrong-token")))?.status).toBe(403);
-  expect((await call(req("GET", `${A.researchSignalDates}?since=2020-01-01`, undefined, ADMIN)))?.status).toBe(403); // ADMIN_TOKEN is not a substitute
+  expect((await call(req("GET", `${A.researchSignalDates}?since=2020-01-01`, undefined, ADMIN)))?.status).toBe(403); // the operator's admin token is not a substitute
   expect((await call(req("GET", A.researchSignalDates, undefined, TOKEN)))?.status).toBe(400); // missing `since`
   expect((await call(req("GET", `${A.researchSignalDates}?since=not-a-date`, undefined, TOKEN)))?.status).toBe(400);
 
@@ -475,10 +469,9 @@ test("GET research-signals/dates: analytics-provider-only, validates `since`, an
 // (ops/gap-detector.ts) rather than a bespoke presence query — must fail
 // against pre-#646 main, where this route does not exist at all.
 test("GET raw-history/gaps: analytics-provider-only, validates `since`, and returns only interior gap dates on/after it", async () => {
-  prodAuth();
   expect((await call(req("GET", `${A.rawHistoryGaps}?since=2018-01-01`)))?.status).toBe(401); // no credential
   expect((await call(req("GET", `${A.rawHistoryGaps}?since=2018-01-01`, undefined, "wrong-token")))?.status).toBe(403);
-  expect((await call(req("GET", `${A.rawHistoryGaps}?since=2018-01-01`, undefined, ADMIN)))?.status).toBe(403); // ADMIN_TOKEN is not a substitute
+  expect((await call(req("GET", `${A.rawHistoryGaps}?since=2018-01-01`, undefined, ADMIN)))?.status).toBe(403); // the operator's admin token is not a substitute
   expect((await call(req("GET", A.rawHistoryGaps, undefined, TOKEN)))?.status).toBe(400); // missing `since`
   expect((await call(req("GET", `${A.rawHistoryGaps}?since=not-a-date`, undefined, TOKEN)))?.status).toBe(400);
 
@@ -529,7 +522,6 @@ function validTelemetryBody(kind = `tel-${rid()}`): unknown {
 }
 
 test("telemetry: 401 with no bearer, 403 with a wrong/admin/member bearer — ZERO row changes; 200 with the valid token", async () => {
-  prodAuth();
   const memberId = `az_${crypto.randomUUID().slice(0, 8)}`;
   const memberToken = `tok_member_${crypto.randomUUID().slice(0, 8)}`;
   await sql`INSERT INTO swarm_members (id, status, name) VALUES (${memberId}, 'active', ${memberId})`;
@@ -560,7 +552,6 @@ test("telemetry: 401 with no bearer, 403 with a wrong/admin/member bearer — ZE
 });
 
 test("telemetry: DTO validation rejects malformed run/stage/warning/artifact payloads with zero row changes", async () => {
-  prodAuth();
   const [{ n: before }] = await sql`SELECT COUNT(*)::int AS n FROM research_pipeline_runs`;
   const good = validTelemetryBody();
   const badBodies: unknown[] = [
@@ -602,7 +593,6 @@ test("telemetry: DTO validation rejects malformed run/stage/warning/artifact pay
 // are non-fatal by design — see analytics/telemetry.ts submitTelemetrySafely
 // — which is exactly how this went uncaught).
 test("telemetry: accepts a real bigint-as-string jobId (postgres.js's actual runtime representation) and persists it exactly, without precision loss", async () => {
-  prodAuth();
 
   // Prove the root cause against a REAL row, not an assumption: postgres.js
   // decodes `jobs.id bigserial` as a string.

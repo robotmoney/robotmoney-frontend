@@ -3,11 +3,12 @@
 // computed outputs HERE instead of writing SQL: the API process is the only
 // runtime component that imports the analytics store writers.
 //
-// Every route requires the analytics-provider bearer credential
-// (ANALYTICS_TOKEN, constant-time compared; ADMIN_TOKEN / member bearers are
-// NEVER substitutes). Fail-closed: with no token configured the boundary opens
-// only under config.allowInsecure (RM_ENV=ephemeral or explicit
-// RM_ALLOW_INSECURE=1) — smoke/prod without a token stay locked.
+// Every route requires the analytics-provider credential: analytics-producer's
+// store token, presented as a Bearer, whose row carries the
+// `analytics_ingestion` right (smoke spec §3, D52 (1)). The operator's admin
+// token, the scheduler's token and member bearers are NEVER substitutes — each
+// holds a different right — and no deployment flag opens the boundary without
+// one.
 //
 // Mutation contract:
 //   • the ENTIRE payload is validated before a transaction is opened — a
@@ -616,10 +617,10 @@ export async function handleAnalytics(req: Request, url: URL): Promise<{ status:
   if (!isAnalyticsRoute) return null;
 
   // Authenticate FIRST — reads and mutations alike are analytics-provider-only.
-  // 401 when no credential was presented, 403 when one was presented but does
-  // not match. Neither ADMIN_TOKEN nor member bearers are accepted here: the
-  // comparison is strictly against ANALYTICS_TOKEN.
-  if (!hasAnalyticsProviderRole(req)) {
+  // 401 when no credential was presented, 403 when one was presented but its
+  // store row (if any) does not carry `analytics_ingestion`. The operator and
+  // scheduler tokens, an admin session and member bearers are all refused.
+  if (!(await hasAnalyticsProviderRole(req))) {
     const presented = bearer(req);
     return presented
       ? { status: 403, body: { error: "analytics-provider role required" } }
@@ -665,7 +666,7 @@ export async function handleAnalytics(req: Request, url: URL): Promise<{ status:
   // RETIRED (issue #978): `POST /api/analytics/regime-snapshots` and
   // `POST /api/analytics/research-signals`. Both upserted straight into the
   // current views with no run_id, no immutable output artifact and no report
-  // snapshot, so anything holding ANALYTICS_TOKEN could publish regime rows
+  // snapshot, so anything holding the analytics credential could publish regime rows
   // that no frozen report ever contained — and publishBrief, which derives its
   // binding from those rows, would then bind a signed brief to some OTHER
   // run's report. `POST /api/analytics/run-packages` is now the sole HTTP

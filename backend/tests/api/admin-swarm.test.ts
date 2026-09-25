@@ -3,15 +3,14 @@
 // same idiom as routes/admin.ts). Runs against the ephemeral Postgres from
 // tests/preload.ts. Also asserts documented 200/201/404/409 envelopes and
 // that a path this handler does not own falls through as null.
-import { test, expect } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
 import { generateKeyPair } from "../../src/lib/signing.ts";
 import { handleSwarmAdmin } from "../../src/api/routes/swarm-admin.ts";
 import { sql } from "../../src/db/client.ts";
+import { openEpoch } from "../../src/swarm/domain.ts";
 import { ROUTES } from "@robotmoney/contract";
 import { useCleanDatabase } from "../support/clean-db.ts";
-
-const PROD = { adminToken: "s3cret-swarm-admin-token", allowInsecure: false } as const;
-const INSECURE = { adminToken: null, allowInsecure: true } as const;
+import { provisionOperatorToken } from "../support/automation-auth.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -25,20 +24,28 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 // file admits into is its own, with no reset of anyone else's rows.
 useCleanDatabase(import.meta.file);
 
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on.
+let OPERATOR = "";
+beforeAll(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
+
 function req(method: string, path: string, opts: { token?: string; body?: unknown; rawBody?: string } = {}): Request {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (opts.token !== undefined) headers["X-Admin-Token"] = opts.token;
   const body = opts.rawBody !== undefined ? opts.rawBody : opts.body !== undefined ? JSON.stringify(opts.body) : undefined;
   return new Request(`http://x${path}`, { method, headers, body });
 }
-const call = (r: Request, cfg: typeof PROD | typeof INSECURE = PROD) => handleSwarmAdmin(r, new URL(r.url), cfg);
+const call = (r: Request) => handleSwarmAdmin(r, new URL(r.url));
 
-test("prod-mode with no token → 403 on every owned route, before body parsing", async () => {
+test("no credential → 403 on every owned route, before body parsing", async () => {
   const routes: [string, string][] = [
     ["GET", "/api/swarm/admin/subjects"],
     ["POST", "/api/swarm/admin/subjects"],
     ["POST", "/api/swarm/admin/subjects/x/update"],
     ["POST", "/api/swarm/admin/subjects/x/deactivate"],
+    ["POST", "/api/swarm/admin/subjects/x/activate"],
     ["GET", "/api/swarm/admin/members"],
     ["POST", "/api/swarm/admin/members"],
     ["GET", "/api/swarm/admin/applications"],
@@ -65,84 +72,80 @@ test("prod-mode with no token → 403 on every owned route, before body parsing"
     ["GET", "/api/swarm/admin/audit"],
   ];
   for (const [method, path] of routes) {
-    const res = await call(req(method, path), PROD);
+    const res = await call(req(method, path));
     expect(res?.status).toBe(403);
   }
 });
 
 test("wrong token → 403", async () => {
-  expect((await call(req("GET", "/api/swarm/admin/subjects", { token: "nope" }), PROD))?.status).toBe(403);
+  expect((await call(req("GET", "/api/swarm/admin/subjects", { token: "nope" })))?.status).toBe(403);
 });
 
 test("member judge-role route is privileged, versioned, and never mints a credential", async () => {
   const { publicKeyB64 } = await generateKeyPair();
   const added = await call(req("POST", "/api/swarm/admin/members", {
-    token: PROD.adminToken, body: { name: "Route Judge", publicKey: publicKeyB64 },
-  }), PROD);
+    token: OPERATOR, body: { name: "Route Judge", publicKey: publicKeyB64 },
+  }));
   expect(added?.status).toBe(201);
   const member = (added!.body as any).member;
   const promoted = await call(req("POST", `/api/swarm/admin/members/${member.id}/role`, {
-    token: PROD.adminToken, body: { expectedVersion: member.version, role: "judge" },
-  }), PROD);
+    token: OPERATOR, body: { expectedVersion: member.version, role: "judge" },
+  }));
   expect(promoted?.status).toBe(200);
   expect((promoted!.body as any).member.role).toBe("judge");
   expect((promoted!.body as any).token).toBeUndefined();
   const stale = await call(req("POST", `/api/swarm/admin/members/${member.id}/role`, {
-    token: PROD.adminToken, body: { expectedVersion: member.version, role: "member" },
-  }), PROD);
+    token: OPERATOR, body: { expectedVersion: member.version, role: "member" },
+  }));
   expect((stale!.body as any).error).toBe("stale_version");
 });
 
 test("malformed JSON body never reaches parsing when unauthenticated (auth runs first)", async () => {
   // If auth ran AFTER body parsing, this malformed body would surface as a
   // 400 (or throw); it must still be a clean 403.
-  const res = await call(req("POST", "/api/swarm/admin/subjects", { rawBody: "{not json" }), PROD);
+  const res = await call(req("POST", "/api/swarm/admin/subjects", { rawBody: "{not json" }));
   expect(res?.status).toBe(403);
 });
 
 test("a path this handler does not own returns null (falls through to the legacy dispatcher)", async () => {
-  expect(await call(req("POST", "/api/swarm/admin/regime"), INSECURE)).toBeNull();
-  expect(await call(req("POST", "/api/swarm/admin/open"), INSECURE)).toBeNull();
-  expect(await call(req("GET", "/api/swarm/members"), INSECURE)).toBeNull();
+  expect(await call(req("POST", "/api/swarm/admin/regime"))).toBeNull();
+  expect(await call(req("POST", "/api/swarm/admin/open"))).toBeNull();
+  expect(await call(req("GET", "/api/swarm/members"))).toBeNull();
 });
 
 test("topics: create (201) → list includes it (200) → update stale version (409) → update ok (200) → deactivate (200)", async () => {
   const id = rid("rtopic");
-  const create = await call(req("POST", "/api/swarm/admin/subjects", { token: PROD.adminToken, body: { id, name: "Route Topic" } }), PROD);
+  const create = await call(req("POST", "/api/swarm/admin/subjects", { token: OPERATOR, body: { id, name: "Route Topic" } }));
   expect(create?.status).toBe(201);
   expect((create!.body as any).subject.id).toBe(id);
 
-  const list = await call(req("GET", "/api/swarm/admin/subjects", { token: PROD.adminToken }), PROD);
+  const list = await call(req("GET", "/api/swarm/admin/subjects", { token: OPERATOR }));
   expect(list?.status).toBe(200);
   expect((list!.body as any).subjects.some((s: any) => s.id === id)).toBe(true);
 
   const staleUpdate = await call(
-    req("POST", `/api/swarm/admin/subjects/${id}/update`, { token: PROD.adminToken, body: { expectedVersion: 99, name: "x" } }),
-    PROD,
+    req("POST", `/api/swarm/admin/subjects/${id}/update`, { token: OPERATOR, body: { expectedVersion: 99, name: "x" } }),
   );
   expect(staleUpdate?.status).toBe(409);
 
   const update = await call(
-    req("POST", `/api/swarm/admin/subjects/${id}/update`, { token: PROD.adminToken, body: { expectedVersion: 1, name: "Renamed" } }),
-    PROD,
+    req("POST", `/api/swarm/admin/subjects/${id}/update`, { token: OPERATOR, body: { expectedVersion: 1, name: "Renamed" } }),
   );
   expect(update?.status).toBe(200);
   expect((update!.body as any).subject.name).toBe("Renamed");
 
   const deactivate = await call(
-    req("POST", `/api/swarm/admin/subjects/${id}/deactivate`, { token: PROD.adminToken, body: { expectedVersion: 2 } }),
-    PROD,
+    req("POST", `/api/swarm/admin/subjects/${id}/deactivate`, { token: OPERATOR, body: { expectedVersion: 2 } }),
   );
   expect(deactivate?.status).toBe(200);
   expect((deactivate!.body as any).subject.status).toBe("inactive");
 });
 
 test("topics: missing required fields → 400; missing expectedVersion on update → 400", async () => {
-  const bad = await call(req("POST", "/api/swarm/admin/subjects", { token: PROD.adminToken, body: { name: "no id" } }), PROD);
+  const bad = await call(req("POST", "/api/swarm/admin/subjects", { token: OPERATOR, body: { name: "no id" } }));
   expect(bad?.status).toBe(400);
   const missingVersion = await call(
-    req("POST", "/api/swarm/admin/subjects/x/update", { token: PROD.adminToken, body: { name: "x" } }),
-    PROD,
+    req("POST", "/api/swarm/admin/subjects/x/update", { token: OPERATOR, body: { name: "x" } }),
   );
   expect(missingVersion?.status).toBe(400);
 });
@@ -150,8 +153,7 @@ test("topics: missing required fields → 400; missing expectedVersion on update
 test("members: manual add (201, one-time token) → list is redacted → review/deactivate/rotate route through", async () => {
   const { publicKeyB64 } = await generateKeyPair();
   const add = await call(
-    req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { name: "Route Member", publicKey: publicKeyB64 } }),
-    PROD,
+    req("POST", "/api/swarm/admin/members", { token: OPERATOR, body: { name: "Route Member", publicKey: publicKeyB64 } }),
   );
   expect(add?.status).toBe(201);
   expect(typeof (add!.body as any).token).toBe("string");
@@ -160,7 +162,7 @@ test("members: manual add (201, one-time token) → list is redacted → review/
   const memberId = (add!.body as any).member.id as string;
   expect(memberId).toMatch(UUID_RE);
 
-  const list = await call(req("GET", "/api/swarm/admin/members", { token: PROD.adminToken }), PROD);
+  const list = await call(req("GET", "/api/swarm/admin/members", { token: OPERATOR }));
   expect(list?.status).toBe(200);
   const listed = (list!.body as any).members.find((m: any) => m.id === memberId);
   expect(listed).toBeTruthy();
@@ -168,20 +170,18 @@ test("members: manual add (201, one-time token) → list is redacted → review/
   expect(listed).not.toHaveProperty("public_key");
 
   const deactivate = await call(
-    req("POST", `/api/swarm/admin/members/${memberId}/deactivate`, { token: PROD.adminToken, body: { expectedVersion: 1 } }),
-    PROD,
+    req("POST", `/api/swarm/admin/members/${memberId}/deactivate`, { token: OPERATOR, body: { expectedVersion: 1 } }),
   );
   expect(deactivate?.status).toBe(200);
 
   // Deactivation revokes the active key transactionally, so rotating without
   // a fresh publicKey correctly 409s (no on-file active key to rotate from).
-  const rotateNoKey = await call(req("POST", `/api/swarm/admin/members/${memberId}/rotate-key`, { token: PROD.adminToken, body: {} }), PROD);
+  const rotateNoKey = await call(req("POST", `/api/swarm/admin/members/${memberId}/rotate-key`, { token: OPERATOR, body: {} }));
   expect(rotateNoKey?.status).toBe(409);
 
   const { publicKeyB64: freshKey } = await generateKeyPair();
   const rotate = await call(
-    req("POST", `/api/swarm/admin/members/${memberId}/rotate-key`, { token: PROD.adminToken, body: { publicKey: freshKey } }),
-    PROD,
+    req("POST", `/api/swarm/admin/members/${memberId}/rotate-key`, { token: OPERATOR, body: { publicKey: freshKey } }),
   );
   expect(rotate?.status).toBe(200);
   expect(typeof (rotate!.body as any).token).toBe("string");
@@ -197,8 +197,7 @@ test("members: manual add (201, one-time token) → list is redacted → review/
 // member the rest of the admin surface can drive by the id it was given.
 async function releaseSeat(id: string): Promise<void> {
   const res = await call(
-    req("POST", `/api/swarm/admin/members/${id}/deactivate`, { token: PROD.adminToken, body: { expectedVersion: 1 } }),
-    PROD,
+    req("POST", `/api/swarm/admin/members/${id}/deactivate`, { token: OPERATOR, body: { expectedVersion: 1 } }),
   );
   if (res?.status !== 200) throw new Error(`releaseSeat(${id}) failed: ${JSON.stringify(res)}`);
 }
@@ -221,8 +220,7 @@ test("members: the manual add mints a UUID id — the caller cannot name one, an
   //    not a 201 under some other id, and not the generic "required" message.
   const slug = "woon";
   const named = await call(
-    req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { memberId: slug, name: "Woon", publicKey: publicKeyB64 } }),
-    PROD,
+    req("POST", "/api/swarm/admin/members", { token: OPERATOR, body: { memberId: slug, name: "Woon", publicKey: publicKeyB64 } }),
   );
   expect(named?.status).toBe(400);
   expect((named!.body as any).error).toBe("memberId is not accepted: the member id is generated and returned as member.id");
@@ -235,8 +233,7 @@ test("members: the manual add mints a UUID id — the caller cannot name one, an
   //    the field rather than removing it is not silently let through.
   for (const value of ["", null]) {
     const blank = await call(
-      req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { memberId: value, name: "Woon", publicKey: publicKeyB64 } }),
-      PROD,
+      req("POST", "/api/swarm/admin/members", { token: OPERATOR, body: { memberId: value, name: "Woon", publicKey: publicKeyB64 } }),
     );
     expect(blank?.status).toBe(400);
     expect((blank!.body as any).error).toBe("memberId is not accepted: the member id is generated and returned as member.id");
@@ -244,8 +241,7 @@ test("members: the manual add mints a UUID id — the caller cannot name one, an
 
   // 3. WITHOUT the field it is created, and the id in the DATABASE is a UUID.
   const ok = await call(
-    req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { name: "Woon", publicKey: publicKeyB64 } }),
-    PROD,
+    req("POST", "/api/swarm/admin/members", { token: OPERATOR, body: { name: "Woon", publicKey: publicKeyB64 } }),
   );
   expect(ok?.status).toBe(201);
   const id = (ok!.body as any).member.id as string;
@@ -269,17 +265,15 @@ test("members: the manual add mints a UUID id — the caller cannot name one, an
 test("members: two adds with the SAME display name both get UUID ids and the derived-handle suffix — no id collision to trip over", async () => {
   const first = await call(
     req("POST", "/api/swarm/admin/members", {
-      token: PROD.adminToken,
+      token: OPERATOR,
       body: { name: "Noop Analyst", publicKey: (await generateKeyPair()).publicKeyB64 },
     }),
-    PROD,
   );
   const second = await call(
     req("POST", "/api/swarm/admin/members", {
-      token: PROD.adminToken,
+      token: OPERATOR,
       body: { name: "Noop Analyst", publicKey: (await generateKeyPair()).publicKeyB64 },
     }),
-    PROD,
   );
   expect(first?.status).toBe(201);
   expect(second?.status).toBe(201);
@@ -300,8 +294,7 @@ test("members: two adds with the SAME display name both get UUID ids and the der
 test("members: duplicate detection moved to the public key — the same credential twice is a 409, and seats nobody", async () => {
   const { publicKeyB64 } = await generateKeyPair();
   const first = await call(
-    req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { name: "Twice Over", publicKey: publicKeyB64 } }),
-    PROD,
+    req("POST", "/api/swarm/admin/members", { token: OPERATOR, body: { name: "Twice Over", publicKey: publicKeyB64 } }),
   );
   expect(first?.status).toBe(201);
 
@@ -311,8 +304,7 @@ test("members: duplicate detection moved to the public key — the same credenti
   // better signal anyway, because two members sharing a public key make every
   // signed take ambiguous about who produced it.
   const again = await call(
-    req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { name: "Twice Over", publicKey: publicKeyB64 } }),
-    PROD,
+    req("POST", "/api/swarm/admin/members", { token: OPERATOR, body: { name: "Twice Over", publicKey: publicKeyB64 } }),
   );
   expect(again?.status).toBe(409);
   expect((again!.body as any).error).toContain("publicKey already belongs to a member");
@@ -325,7 +317,7 @@ test("members: duplicate detection moved to the public key — the same credenti
 });
 
 test("applications: GET list (200), optionally filtered by ?status=", async () => {
-  const res = await call(req("GET", "/api/swarm/admin/applications?status=pending", { token: PROD.adminToken }), PROD);
+  const res = await call(req("GET", "/api/swarm/admin/applications?status=pending", { token: OPERATOR }));
   expect(res?.status).toBe(200);
   expect(Array.isArray((res!.body as any).applications)).toBe(true);
 });
@@ -340,26 +332,26 @@ test("applications: GET list (200), optionally filtered by ?status=", async () =
 test("sessions: the pre-epoch create and lifecycle verbs answer 410 and write nothing", async () => {
   const subjectId = rid("retired");
   await sql`INSERT INTO swarm_subjects (id, status, name) VALUES (${subjectId}, 'active', 'Retired verbs')`;
-  const opened = await call(req("POST", "/api/swarm/admin/epochs/open", { token: PROD.adminToken, body: { subjectId } }), PROD);
-  expect(opened?.status).toBe(201);
-  const sessionId = (opened!.body as any).sessionId as string;
+  // Opened by the scheduler's transition: the admin token cannot drive an
+  // epoch (D55 (4)), which tests/epoch-lifecycle-auth.test.ts proves.
+  const opened = await openEpoch(subjectId);
+  if (!opened.ok) throw new Error(`openEpoch failed: ${JSON.stringify(opened)}`);
+  const sessionId = opened.sessionId;
   const before = (await sql`SELECT state, version FROM swarm_sessions WHERE id = ${sessionId}`)[0];
   expect(before.state).toBe("collecting");
 
   const created = await call(
     req("POST", "/api/swarm/admin/sessions", {
-      token: PROD.adminToken,
+      token: OPERATOR,
       body: { date: "2026-08-01", subjectId, briefOpensAt: "2026-08-01T09:00:00Z", windowClosesAt: "2026-08-01T10:00:00Z", publishAt: "2026-08-01T10:05:00Z" },
     }),
-    PROD,
   );
   expect(created?.status).toBe(410);
   expect((created!.body as any).error).toContain("epochs/");
 
   for (const verb of ["close", "aggregate", "publish", "reopen", "cancel"]) {
     const res = await call(
-      req("POST", `/api/swarm/admin/sessions/${sessionId}/${verb}`, { token: PROD.adminToken, body: { expectedVersion: Number(before.version) } }),
-      PROD,
+      req("POST", `/api/swarm/admin/sessions/${sessionId}/${verb}`, { token: OPERATOR, body: { expectedVersion: Number(before.version) } }),
     );
     expect(res?.status).toBe(410);
     expect((res!.body as any).error).toContain(`session ${verb} action is gone`);
@@ -380,13 +372,14 @@ test("sessions: the pre-epoch create and lifecycle verbs answer 410 and write no
 test("sessions: the judgements read path is a real admin route — 200 with an empty history, 404 for an unknown session", async () => {
   const subjectId = rid("judgeread");
   await sql`INSERT INTO swarm_subjects (id, status, name) VALUES (${subjectId}, 'active', 'Judge read path')`;
-  // Opened through the epoch transition: the pre-epoch session create is 410.
-  const created = await call(req("POST", "/api/swarm/admin/epochs/open", { token: PROD.adminToken, body: { subjectId } }), PROD);
-  expect(created?.status).toBe(201);
-  const sessionId = (created!.body as any).sessionId as string;
+  // Opened through the epoch transition: the pre-epoch session create is 410,
+  // and the admin token cannot drive an epoch (D55 (4)).
+  const created = await openEpoch(subjectId);
+  if (!created.ok) throw new Error(`openEpoch failed: ${JSON.stringify(created)}`);
+  const sessionId = created.sessionId;
 
   const path = ROUTES.swarm.admin.sessionJudgements.replace(":id", sessionId);
-  const res = await call(req("GET", path, { token: PROD.adminToken }), PROD);
+  const res = await call(req("GET", path, { token: OPERATOR }));
   expect(res?.status).toBe(200);
   const body = res!.body as any;
   expect(body.sessionId).toBe(sessionId);
@@ -395,22 +388,22 @@ test("sessions: the judgements read path is a real admin route — 200 with an e
   expect(body.inForce).toBeNull();
 
   const missing = await call(
-    req("GET", ROUTES.swarm.admin.sessionJudgements.replace(":id", crypto.randomUUID()), { token: PROD.adminToken }),
-    PROD,
+    req("GET", ROUTES.swarm.admin.sessionJudgements.replace(":id", crypto.randomUUID()), { token: OPERATOR }),
   );
   expect(missing?.status).toBe(404);
 });
 
 test("audit: GET returns entries (200) and honors ?limit=", async () => {
-  const res = await call(req("GET", "/api/swarm/admin/audit?limit=5", { token: PROD.adminToken }), PROD);
+  const res = await call(req("GET", "/api/swarm/admin/audit?limit=5", { token: OPERATOR }));
   expect(res?.status).toBe(200);
   expect(Array.isArray((res!.body as any).entries)).toBe(true);
   expect((res!.body as any).entries.length).toBeLessThanOrEqual(5);
 });
 
-test("insecure config (RM_ALLOW_INSECURE/ephemeral) opens the surface without a token", async () => {
-  const res = await call(req("GET", "/api/swarm/admin/subjects"), INSECURE);
-  expect(res?.status).toBe(200);
+test("RM_ENV=ephemeral no longer opens the surface without a credential (D52 (1))", async () => {
+  expect(process.env.RM_ENV).toBe("ephemeral");
+  const res = await call(req("GET", "/api/swarm/admin/subjects"));
+  expect(res?.status).toBe(403);
 });
 
 // ── Member edit (issue #567) ────────────────────────────────────────────────
@@ -425,8 +418,7 @@ test("insecure config (RM_ALLOW_INSECURE/ephemeral) opens the surface without a 
 async function seatMember(): Promise<{ id: string; handle: string }> {
   const { publicKeyB64 } = await generateKeyPair();
   const add = await call(
-    req("POST", "/api/swarm/admin/members", { token: PROD.adminToken, body: { name: "Before", publicKey: publicKeyB64 } }),
-    PROD,
+    req("POST", "/api/swarm/admin/members", { token: OPERATOR, body: { name: "Before", publicKey: publicKeyB64 } }),
   );
   // Fail loudly rather than let a bogus id flow into a confusing 404 later.
   if (add?.status !== 201) throw new Error(`seatMember(): manual add failed: ${JSON.stringify(add)}`);
@@ -434,7 +426,7 @@ async function seatMember(): Promise<{ id: string; handle: string }> {
 }
 
 const updateMember = (id: string, body: unknown) =>
-  call(req("POST", `/api/swarm/admin/members/${id}/update`, { token: PROD.adminToken, body }), PROD);
+  call(req("POST", `/api/swarm/admin/members/${id}/update`, { token: OPERATOR, body }));
 
 const rowOf = async (id: string) =>
   (await sql`SELECT * FROM swarm_members WHERE id = ${id}`)[0] as Record<string, any>;
@@ -504,7 +496,7 @@ test("members: update writes every editable field, bumps version, and the projec
   expect(member).not.toHaveProperty("key_hash");
 
   // Same fields are visible on the list projection the admin page loads.
-  const list = await call(req("GET", "/api/swarm/admin/members", { token: PROD.adminToken }), PROD);
+  const list = await call(req("GET", "/api/swarm/admin/members", { token: OPERATOR }));
   const listed = (list!.body as any).members.find((m: any) => m.id === id);
   expect(listed.biases).toEqual(["never-sells-agent-tokens", "openly-conflicted"]);
   expect(listed.voiceMd).toBe("# voice");
@@ -635,7 +627,6 @@ test("members: a non-admin caller is refused before any row is read or written",
   for (const token of [undefined, "nope"]) {
     const res = await call(
       req("POST", `/api/swarm/admin/members/${id}/update`, { ...(token === undefined ? {} : { token }), body: { expectedVersion: 1, name: "Escalated" } }),
-      PROD,
     );
     expect(res?.status).toBe(403);
   }
@@ -648,7 +639,7 @@ test("members: the update path is the contract's swarm.admin.memberUpdate templa
   const { id } = await seatMember();
   // Guards against the handler and contract drifting onto two different URLs.
   const path = ROUTES.swarm.admin.memberUpdate.replace(":id", id);
-  const res = await call(req("POST", path, { token: PROD.adminToken, body: { expectedVersion: 1, tagline: "via contract path" } }), PROD);
+  const res = await call(req("POST", path, { token: OPERATOR, body: { expectedVersion: 1, tagline: "via contract path" } }));
   expect(res?.status).toBe(200);
   expect((await rowOf(id)).tagline).toBe("via contract path");
 });

@@ -9,7 +9,7 @@ import { handleSwarmAdmin } from "./swarm-admin.ts";
 import { isRegistrablePublicKey, isValidEd25519PublicKey, PUBLIC_KEY_REFUSAL } from "../../lib/signing.ts";
 import { saveRegimeSnapshots } from "../../analytics/store/regime-store.ts";
 import { parseSnapshots } from "./analytics.ts";
-import { bearer, hasAnalyticsProviderRole, isPrivileged, hasAutomationRole } from "../auth.ts";
+import { bearer, hasAnalyticsProviderRole, isPrivileged } from "../auth.ts";
 import {
   CONTACT_EMAIL_RE,
   isIsoDate,
@@ -25,7 +25,7 @@ import {
 } from "../validation.ts";
 import { SWARM_ROUTE_EXTENSIONS } from "./swarm/extensions.ts";
 
-// bearer()/secretEq()/isPrivileged()/hasAnalyticsProviderRole() live in
+// bearer()/isPrivileged()/hasAnalyticsProviderRole() live in
 // api/auth.ts (issue #106) so the /api/analytics boundary reuses the exact same
 // constant-time credential idioms as this router.
 
@@ -266,13 +266,11 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     return { status: 200, body: { memberId } };
   }
 
-  // Member onboarding + admin lifecycle are PRIVILEGED. Guard: if ADMIN_TOKEN is
-  // set, require it as X-Admin-Token (works in every env, incl. a public box);
-  // if unset, allow only outside prod (smoke/ephemeral convenience). This closes
-  // the unauthenticated identity-takeover / state-drive holes. Proper
-  // per-member onboarding + OAuth is the IC-remainder work.
-  // Role definitions + the fail-closed rule live in api/auth.ts (issue #106).
-  const privileged = async () => await isPrivileged(req) || hasAutomationRole(req);
+  // Member onboarding (`register`) and the admin dispatcher below are ADMIN
+  // routes: isPrivileged() — an admin session, the operator's store token or
+  // the claimed password — in every env, with no env token and no insecure
+  // opt-out (D52 (1)). This closes the unauthenticated identity-takeover /
+  // state-drive holes. Role definitions live in api/auth.ts (issue #106).
 
   // PUBLIC onboarding (§11 R1-R6, setup-gated apply): a prospective member
   // submits {name, contact, lens?, publicKey, signature} — an rmpc signature
@@ -335,7 +333,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
   // issue #978's snapshot layer and still writes the current view with no run
   // behind it, unlike POST /api/analytics/run-packages.
   if (m === "POST" && p === C.regime) {
-    if (!hasAnalyticsProviderRole(req)) return { status: 403, body: { error: "analytics-provider role required" } };
+    if (!(await hasAnalyticsProviderRole(req))) return { status: 403, body: { error: "analytics-provider role required" } };
     const parsed = parseSnapshots(await readJsonObject(req));
     if (!Array.isArray(parsed)) return { status: 400, body: { error: parsed.error } };
     await saveRegimeSnapshots(parsed);
@@ -346,7 +344,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
   // bearer token in one shot (apply + activate combined). Kept for the smoke/E2E
   // harness. Privileged because it can rotate/replace an existing member's key.
   if (m === "POST" && p === C.register) {
-    if (!(await privileged())) return { status: 403, body: { error: "onboarding requires admin authorization" } };
+    if (!(await isPrivileged(req))) return { status: 403, body: { error: "onboarding requires admin authorization" } };
     const b = parseRegisterMember(await readJsonObject(req));
     if (!b) return { status: 400, body: { error: "valid memberId, name, and publicKey required" } };
     // Issue #789 — the SAME gate the public apply route applies, not the old
@@ -378,7 +376,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
 
   // Admin lifecycle. Drives a session for smokes/E2E.
   if (m === "POST" && p.startsWith(ADMIN_PREFIX)) {
-    if (!(await privileged())) return { status: 403, body: { error: "admin authorization required" } };
+    if (!(await isPrivileged(req))) return { status: 403, body: { error: "admin authorization required" } };
     const action = p.split("/").pop();
     const b = await readJsonObject(req) ?? {};
     switch (action) {

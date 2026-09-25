@@ -1,29 +1,35 @@
 // The regime write boundary (issue #361 Phase 4; docs/decisions.md D25, §9.6):
 // POST /api/swarm/regime is a genuine provider SUBMISSION gate (validate +
-// persist; NEVER recompute server-side), the ADMIN_TOKEN classifier path
+// persist; NEVER recompute server-side), the admin classifier path
 // (POST /api/swarm/admin/regime) is REMOVED. The independent producer owns
-// cadence; ADMIN_TOKEN cannot enqueue a consumer-worker replacement.
+// cadence; the admin credential cannot enqueue a consumer-worker replacement.
+// Every credential here is store-issued (smoke spec §3, D52 (1)).
 //
 // Dispatches through handleSwarm in-process (the same pattern authz.test.ts
 // uses) rather than over HTTP.
-import { test, expect, afterEach } from "bun:test";
-import { config } from "../src/config.ts";
+import { test, expect, beforeAll } from "bun:test";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import {
+  adminHeaders,
+  bearerHeaders,
+  provisionAnalyticsToken,
+  provisionOperatorToken,
+  provisionSchedulerToken,
+  schedulerHeaders,
+} from "./support/automation-auth.ts";
 
 // Own database per file, cloned from the migrated template (support/clean-db.ts).
 useCleanDatabase(import.meta.file);
 
-const origConfig = {
-  adminToken: config.adminToken,
-  allowInsecure: config.allowInsecure,
-  analyticsToken: config.analyticsToken,
-};
-afterEach(() => {
-  config.adminToken = origConfig.adminToken;
-  config.allowInsecure = origConfig.allowInsecure;
-  config.analyticsToken = origConfig.analyticsToken;
+let analytics = "";
+let operator = "";
+let scheduler = "";
+beforeAll(async () => {
+  analytics = await provisionAnalyticsToken();
+  operator = await provisionOperatorToken();
+  scheduler = await provisionSchedulerToken();
 });
 
 const call = (req: Request) => handleSwarm(req, new URL(req.url));
@@ -64,13 +70,8 @@ function regimeReq(body: unknown, headers: Record<string, string> = {}) {
 }
 
 test("POST /api/swarm/regime is a provider SUBMISSION gate: analytics bearer persists submitted snapshots verbatim, with no server-side recompute", async () => {
-  config.analyticsToken = "analytics-secret";
-  config.allowInsecure = false;
-
   const date = "2031-06-15";
-  const res = await call(
-    regimeReq({ snapshots: [snapshotRow(date, 0.731)] }, { Authorization: "Bearer analytics-secret" }),
-  );
+  const res = await call(regimeReq({ snapshots: [snapshotRow(date, 0.731)] }, bearerHeaders(analytics)));
   expect(res).not.toBeNull();
   expect(res!.status).toBe(200);
   expect(res!.body).toMatchObject({ ok: true, saved: 1 });
@@ -85,32 +86,30 @@ test("POST /api/swarm/regime is a provider SUBMISSION gate: analytics bearer per
 });
 
 test("POST /api/swarm/regime rejects a malformed submission with 400 and zero writes", async () => {
-  config.analyticsToken = "analytics-secret";
-  config.allowInsecure = false;
-  const res = await call(
-    regimeReq({ snapshots: [{ date: "not-a-date" }] }, { Authorization: "Bearer analytics-secret" }),
-  );
+  const res = await call(regimeReq({ snapshots: [{ date: "not-a-date" }] }, bearerHeaders(analytics)));
   expect(res!.status).toBe(400);
   expect(String((res!.body as { error: string }).error)).toContain("snapshots[0]");
 });
 
-test("POST /api/swarm/regime refuses ADMIN_TOKEN and member-shaped bearers — the analytics role is not substitutable", async () => {
-  config.analyticsToken = "analytics-secret";
-  config.adminToken = "admin-secret";
-  config.allowInsecure = false;
+test("POST /api/swarm/regime refuses the operator's and the scheduler's tokens, member-shaped bearers and no bearer — the analytics role is not substitutable", async () => {
   const payload = { snapshots: [snapshotRow("2031-06-16", 0.5)] };
-  // Admin header is not the analytics role.
-  expect((await call(regimeReq(payload, { "X-Admin-Token": "admin-secret" })))!.status).toBe(403);
-  // Neither is an arbitrary (member-shaped) bearer.
+  // The operator's admin token is not the analytics role, in any header.
+  expect((await call(regimeReq(payload, adminHeaders(operator))))!.status).toBe(403);
+  expect((await call(regimeReq(payload, bearerHeaders(operator))))!.status).toBe(403);
+  // Nor is the scheduler's.
+  expect((await call(regimeReq(payload, schedulerHeaders(scheduler))))!.status).toBe(403);
+  expect((await call(regimeReq(payload, bearerHeaders(scheduler))))!.status).toBe(403);
+  // Nor an arbitrary (member-shaped) bearer, nor nothing at all — even in this
+  // RM_ENV=ephemeral process, which used to open the role without a token.
   expect((await call(regimeReq(payload, { Authorization: "Bearer tok_member_x" })))!.status).toBe(403);
+  expect((await call(regimeReq(payload)))!.status).toBe(403);
+  expect((await sql`SELECT 1 FROM regime_snapshots WHERE date = '2031-06-16'`).length).toBe(0);
 });
 
-test("the ADMIN_TOKEN classifier path is gone: POST /api/swarm/admin/regime is an unknown admin action", async () => {
-  config.adminToken = null;
-  config.allowInsecure = true;
+test("the admin classifier path is gone: POST /api/swarm/admin/regime is an unknown admin action", async () => {
   const req = new Request("http://x/api/swarm/admin/regime", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...adminHeaders(operator) },
     body: JSON.stringify({ asof: "2026-06-29" }),
   });
   const res = await call(req);
@@ -124,12 +123,10 @@ test("the ADMIN_TOKEN classifier path is gone: POST /api/swarm/admin/regime is a
 // a handler or a lane, so it would only write rows nothing could claim — and it
 // answers 410 for every action. There is no enqueue path to reach regime
 // classification through, which is what the test was protecting.
-test("ADMIN_TOKEN cannot trigger classification through enqueue-job", async () => {
-  config.adminToken = null;
-  config.allowInsecure = true;
+test("the admin credential cannot trigger classification through enqueue-job", async () => {
   const req = new Request("http://x/api/swarm/admin/enqueue-job", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...adminHeaders(operator) },
     body: JSON.stringify({ action: "regime_classify", asof: "2031-06-17" }),
   });
   const res = await call(req);

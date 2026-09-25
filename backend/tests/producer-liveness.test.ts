@@ -23,6 +23,7 @@ import {
   type ProducerKind,
   type ScheduleState,
 } from "../src/producer/index.ts";
+import { writeTokenFile } from "./support/automation-auth.ts";
 
 // BOOT COVER (see the boot-cover block in src/producer/index.ts)
 // Nothing wrote a heartbeat between container start and the liveness loop, so
@@ -34,7 +35,7 @@ test("the first record lands BEFORE the API wait, so a slow API cannot age the c
   const order: string[] = [];
   const beats: { phase: string; detail?: string; staleAfterMs: number }[] = [];
   await startProducerSchedules({
-    env: { ANALYTICS_API_URL: "http://unused:1", ANALYTICS_TOKEN: "t" },
+    env: { ANALYTICS_API_URL: "http://unused:1", ANALYTICS_TOKEN_FILE: writeTokenFile("t") },
     beat: async (rec) => {
       order.push(`beat:${rec.phase}`);
       beats.push({ phase: rec.phase, detail: rec.detail, staleAfterMs: rec.staleAfterMs });
@@ -286,7 +287,7 @@ test("the real schedule() registers what the liveness check reads — the two ca
   // the readiness wait is stubbed, so no network is touched), then judges the
   // crons it actually armed. afterEach disarms the timers.
   await startProducerSchedules({
-    env: { PRODUCER_REGIME_CRON: "30 22 * * *", PRODUCER_RESEARCH_CRON: "0 23 * * *", ANALYTICS_TOKEN: "t" },
+    env: { PRODUCER_REGIME_CRON: "30 22 * * *", PRODUCER_RESEARCH_CRON: "0 23 * * *", ANALYTICS_TOKEN_FILE: writeTokenFile("t") },
     waitUntilReady: async () => {},
   });
 

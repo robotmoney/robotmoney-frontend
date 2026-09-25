@@ -21,7 +21,7 @@
 // about every statement in the process, and it is proved from the query
 // registry by a later package (criterion 81's registry clause), not by a test
 // that exercises one writer.
-import { test, expect } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
 import { readFileSync } from "node:fs";
 import { sql } from "../src/db/client.ts";
 import * as admin from "../src/swarm/admin.ts";
@@ -29,8 +29,16 @@ import * as epoch from "../src/swarm/domain.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject, refusedByDatabase, rid, sessionRow } from "./support/epoch-fixtures.ts";
+import { adminHeaders, provisionOperatorToken } from "./support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
+
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on.
+let OPERATOR = "";
+beforeAll(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 
 const MIGRATION_0067 = new URL("../migrations/0067_subject_epoch_duration.sql", import.meta.url).pathname;
 const SNAPSHOT = new URL("../schema/snapshot.sql", import.meta.url).pathname;
@@ -39,12 +47,13 @@ const COLUMNS = ["epoch_duration_seconds", "epoch_anchor", "judging_duration_sec
 const versionOf = async (id: string) =>
   (await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${id}`)[0].version;
 
-const INSECURE = { adminToken: null, allowInsecure: true } as const;
 function adminPost(path: string, body: unknown) {
   const req = new Request(`http://x${path}`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...adminHeaders(OPERATOR) },
+    body: JSON.stringify(body),
   });
-  return handleSwarmAdmin(req, new URL(req.url), INSECURE);
+  return handleSwarmAdmin(req, new URL(req.url));
 }
 
 test("all three columns exist on swarm_subjects, NOT NULL, with a schema default", async () => {

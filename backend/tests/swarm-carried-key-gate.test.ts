@@ -23,15 +23,24 @@
 // both worlds — the operator is told no and the forgeable key is registered a
 // second time regardless. Every refusal below asserts the member's
 // swarm_member_keys rows are byte-for-byte what they were before the call.
-import { test, expect } from "bun:test";
+import { test, expect, beforeEach } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair } from "../src/lib/signing.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { path as routePath, ROUTES } from "@robotmoney/contract";
 import { LOW_ORDER_ED25519_PUBLIC_KEYS_B64 } from "./support/low-order-ed25519.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { provisionOperatorToken } from "./support/automation-auth.ts";
 
 useCleanDatabasePerTest(import.meta.file);
+
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on. Per test, because each test
+// gets its own database (the clone hook above runs first).
+let OPERATOR = "";
+beforeEach(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 
 // Restated here rather than imported from swarm/admin.ts (which does not export
 // it): a test that asserts a constant against itself asserts nothing. This is
@@ -45,10 +54,10 @@ const CARRIED_KEY_UNREGISTRABLE =
 // object would. Both shapes are exercised below.
 async function post(pathname: string, body?: Record<string, unknown>) {
   const req = body === undefined
-    ? new Request(`http://test${pathname}`, { method: "POST" })
+    ? new Request(`http://test${pathname}`, { method: "POST", headers: { "X-Admin-Token": OPERATOR } })
     : new Request(`http://test${pathname}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Admin-Token": OPERATOR },
       body: JSON.stringify(body),
     });
   return handleSwarm(req, new URL(req.url));

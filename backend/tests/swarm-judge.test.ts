@@ -30,7 +30,7 @@
 // might have answered, signed exactly as the participant signs it
 // (tests/support/stub-judge.ts). The participant's own transport and refusal
 // taxonomy are proven in scripts/tests/unit/participant-judge-*.test.ts.
-import { expect, test } from "bun:test";
+import { expect, test, beforeEach } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import * as ic from "../src/swarm/domain.ts";
@@ -38,7 +38,6 @@ import * as admin from "../src/swarm/admin.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
-import { config } from "../src/config.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
@@ -55,8 +54,19 @@ import {
   enforceJudging, requestJudgingFor, seatJudge, signedJudgement, STUB_JUDGE_MODEL, STUB_JUDGE_REPLY, submitSigned,
   type TestJudge,
 } from "./support/stub-judge.ts";
+import { adminHeaders, provisionOperatorToken, provisionSchedulerToken, schedulerHeaders } from "./support/automation-auth.ts";
 
 useCleanDatabasePerTest(import.meta.file);
+
+// Store-issued, like the real credentials (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on. Per test, because each test
+// gets its own database (the clone hook above runs first).
+let SCHEDULER = "";
+let OPERATOR = "";
+beforeEach(async () => {
+  SCHEDULER = await provisionSchedulerToken();
+  OPERATOR = await provisionOperatorToken();
+});
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 const sessionDate = (s: Record<string, unknown>): string =>
@@ -201,18 +211,13 @@ async function refusedJudgement(judge: TestJudge, sessionId: string, raw: string
 
 test("the admin `judge` verb is gone: 410, and no row or state moves", async () => {
   const { session } = await aggregatedSession("judge-410");
-  const saved = { adminToken: config.adminToken, allowInsecure: config.allowInsecure };
-  config.adminToken = null;
-  config.allowInsecure = true;
-  try {
-    const url = new URL(`http://test/api/swarm/admin/sessions/${session.id}/judge`);
-    const res = (await handleSwarm(new Request(url, { method: "POST", body: "{}" }), url)) as { status: number; body: any };
-    expect(res.status).toBe(410);
-    expect(String(res.body.error)).toContain("does not judge");
-  } finally {
-    config.adminToken = saved.adminToken;
-    config.allowInsecure = saved.allowInsecure;
-  }
+  const url = new URL(`http://test/api/swarm/admin/sessions/${session.id}/judge`);
+  const res = (await handleSwarm(
+    new Request(url, { method: "POST", headers: adminHeaders(OPERATOR), body: "{}" }),
+    url,
+  )) as { status: number; body: any };
+  expect(res.status).toBe(410);
+  expect(String(res.body.error)).toContain("does not judge");
   expect(await stateOf(session.id)).toBe("aggregated");
   expect(await judgementCount(session.id)).toBe(0);
 });
@@ -859,14 +864,14 @@ test("two racing submissions from one judge produce ONE judgement", async () => 
 
 // ── 7b. After the deadline, before finalize ─────────────────────────────────
 
-const ADMIN_CFG = { adminToken: "s3cret-swarm-judge-admin-token", allowInsecure: false } as const;
+// The epoch routes answer system-scheduler's token only (D55 (4)).
 async function callAdmin(path: string, body: unknown): Promise<{ status: number; body: any }> {
   const req = new Request(`http://localhost${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Admin-Token": ADMIN_CFG.adminToken },
+    headers: { "Content-Type": "application/json", ...schedulerHeaders(SCHEDULER) },
     body: JSON.stringify(body),
   });
-  return (await handleSwarmAdmin(req, new URL(req.url), ADMIN_CFG)) ?? { status: 404, body: null };
+  return (await handleSwarmAdmin(req, new URL(req.url))) ?? { status: 404, body: null };
 }
 
 test("the judge of record submitting AFTER the deadline but before finalize is kept as evidence, and the session publishes no_consensus with NO certificate", async () => {
