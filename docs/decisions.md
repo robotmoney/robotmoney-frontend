@@ -3812,6 +3812,8 @@ single `revision` default is `TAKE_REVISION_DEFAULT = 1`, read through
 `backend/tests/swarm-take-idempotent.test.ts`, `swarm-take-revisions.test.ts`
 and `consensus-receipt-judge-roundtrip.test.ts`.
 
+<a id="d52"></a>
+
 ## D52 — File credentials are final, the smoke spec governs the whole stack, and epochs close on a grid (Lucas, 2026-09-24)
 
 **Status.** Accepted 2026-09-24; not yet implemented. Recorded from a three-question
@@ -3874,6 +3876,13 @@ this was built:
   below it is forbidden. "Never" foreclosed a retention policy that will be
   needed.
 
+> **Superseded by [D55](#d55) (12) on 2026-09-25.** The retention bullet above
+> no longer holds. Pruning is a manual, receipted `rm_owner` command with a
+> retention window of at least 7 days. It keeps no cursor bookkeeping, and a
+> cursor below the retained floor gets resync-and-close (`log_truncated`).
+
+
+<a id="d53"></a>
 
 ## D53 — Seven owner calls that unblock the deployment refactor (Lucas, 2026-09-24)
 
@@ -3907,6 +3916,12 @@ cursor", because a log that can never shrink forecloses a retention policy the
 system will need. A trigger that refuses every `DELETE` makes that policy
 impossible. The grant keeps the part that matters: no runtime role can open a
 gap.
+
+> **Bound superseded by [D55](#d55) (12) on 2026-09-25.** The triggers stay
+> dropped and the grant stays. The bound "only rows older than the oldest
+> cursor the API may still be asked to serve" no longer holds. Only a manual,
+> receipted `rm_owner` command prunes, and it removes only rows older than a
+> retention window of at least 7 days.
 
 **Decision 3: compat headers start after a baseline of 0063.** The migration
 runner refuses a pending migration with no `-- compat: additive` or
@@ -4054,6 +4069,26 @@ added. Amended again the same day: decision 8 was corrected to name
 production's observed 73-name ledger rather than v0.5.0 alone, and decisions 9
 to 13 were added.
 
+**Corrected on 2026-09-25, after a review of the recorded answers.** A review
+checked every call above against the owner's own words and the code. The owner
+then answered four follow-up questions. The text below carries the result, and
+it wins over any earlier wording of this decision, commit 88a1ced5 included.
+- Decision 4: a deactivation no longer closes the open epoch. The window runs
+  to its close (the owner's answer).
+- Decision 8: the 73-name baseline is the owner's confirmed call. A pure
+  v0.5.0 ledger is refused.
+- Decision 12: pruning is a manual, receipted `rm_owner` command with a 7-day
+  minimum window (the owner's answer). It supersedes [D52](#d52)'s retention
+  bullet and [D53](#d53) (2)'s cursor bound.
+- Decision 10: a remote twin restored from a production dump is supported
+  through the twin tooling's `--migrate`, in a changed sequence (the owner's
+  answer).
+- Decisions 5, 9 and 10: the three passes that may apply 0063 first are named,
+  each with its own guard, and all share one transaction rule.
+- Decision 2 is narrowed to `robotmoney`. Decisions 3, 6 and 11 gained
+  implementation constraints. Decision 11's reason is recorded as a transport
+  preference.
+
 **Decision 1: the API stops reporting the site's identity (T26).** The API
 retires its `_static` mount and the `static` identity field it reports at
 `/version` and `/health`, with `matches_image`. The site reports itself through
@@ -4064,41 +4099,68 @@ can see is not the one `website-server` serves. A report about a directory
 nobody serves is worse than no report, because an operator would trust it.
 D54 already gave each side its own version endpoint, so nothing is lost.
 
-**Decision 2: a forward migration clears forged `operator` values.** A
-self-healing forward migration clears `operator` on every member row where the
-member set it through the self-write path that issue #925 closed. It runs on
-every deploy and changes nothing once no forged row remains. Implementation
-lands in wave 3.
-*Why.* The judge's third-party gate is keyed on `operator`, so a value a member
-wrote for itself is a standing forgery, not old data. Closing the hole stopped
-new forgeries and left the old ones in place. A migration fixes every database
-the release reaches, where a hand edit would fix only the one it was run on.
+**Decision 2: a forward migration clears forged `robotmoney` operator values.**
+The owner approved clearing one forged value: a self-written `operator` of
+`robotmoney`. The migration clears `operator` on a member row only when all of
+these hold:
+- `lower(trim(operator)) = 'robotmoney'`;
+- a member self-write, through the path issue #925 closed, could have set it;
+- no later admin write named the operator;
+- the member is not seeded from the roster, so `themis` keeps its operator.
+
+It applies once per database, as every migration does. It changes nothing on a
+database with no such row. Migration 0083 as built clears every self-written
+value, which is wider than the owner approved. If no shared database, stage-2
+included, has recorded 0083, 0083 is corrected in place. If one has, a forward
+migration carries the correction. Criterion 166 is reworded to match.
+Implementation lands in wave 3.
+*Why.* The judge's third-party gate passes a member whose operator is
+`robotmoney` ([D52](#d52)). A member that wrote that value for itself holds a
+standing forgery. Any other self-written value passes no gate, and the owner
+did not approve clearing it. Closing the hole stopped new forgeries and left
+the old ones in place. A migration fixes every database the release reaches,
+where a hand edit would fix only the one it was run on.
 
 **Decision 3: the judge fault-injection lever goes, and judge spend is wired.**
 The test-only judge fault-injection switch (R13) is retired with its route, its
-table, its env flags and its compose lines. Judge spend (R19) is filled from the
-usage the participant judge reports with its judgement. A later package on
-issue #1026 implements both.
+table, its env flags and its compose lines. A forward migration drops the
+`swarm_judge_fault_injection` table. The `audit_log` rows the lever wrote stay
+readable, and so do the judgements it affected. Criterion 167 names the drop.
+Judge spend (R19) is filled from the usage the participant judge reports with
+its judgement. A later package on issue #1026 implements both.
 *Why.* The lever faulted the backend `judge()`, which [D53](#d53) deleted.
 Nothing in the API forms an opinion any more, so the switch has nothing to
 break and only adds a way to arm a test path in production. The spend fields
 were filled by the deleted model transport. The participant now makes the model
-call, so it is the only process that knows what the call cost.
+call, so it is the only process that knows what the call cost. The audit rows
+and the judgements stay because they are history.
 
 **Decision 4: the scheduler drives epochs; only an admin deactivates a
 subject.** The system scheduler is the only caller of the epoch lifecycle
 transitions: open, turnover and settlement (aggregate, request judging,
 finalize). It never deactivates a subject. The `epochs/*` lifecycle routes stay
-scheduler-only. No operator or admin early turnover exists. The operator admin
-token holds only the `admin` right, and every epoch lifecycle route refuses it.
+scheduler-only. No operator or admin early turnover exists, and no admin or
+operator early close exists either. The operator admin token holds only the
+`admin` right, and every epoch lifecycle route refuses it.
 
 A subject's status is an admin subject edit under the `admin` right, and the
 scheduler's token cannot make it. Only an admin deactivates a subject. The
-deactivation closes the subject's open epoch in the same transaction that sets
-it inactive, recording absences as a boundary would, and opens no successor.
-The scheduler then settles that closed epoch from the `subject.changed` event.
-Activation is also an admin subject edit. It opens no session. The scheduler
-opens the first epoch from the `subject.changed` event.
+owner's call is that the window runs to its close:
+- A deactivation only sets the subject inactive and publishes
+  `subject.changed`. It does not close the open epoch.
+- The open window stays open until its grid boundary. Takes are accepted until
+  then.
+- At that boundary the scheduler turns the epoch over as usual. It closes and
+  settles the epoch. The turnover opens no successor, because the subject is
+  inactive.
+- A reactivation while that window is still open opens nothing, because the
+  subject already has a collecting session.
+
+Activation is also an admin subject edit. It opens no session. When an active
+subject has no collecting session, the scheduler opens its first epoch from the
+`subject.changed` event. The first text said the deactivation closed the open
+epoch in its own transaction. That clause is removed from this decision, from
+the scheduler spec §4.5, and from the code and the tests.
 
 [`system-scheduler-spec.md`](technical/system-scheduler-spec.md) §13 records
 the edits to the spec. Today the epoch routes still admit the privileged admin
@@ -4111,17 +4173,22 @@ cause. The guarantees that path was tested for still matter for a turnover
 this scheduler did not make, such as one a second scheduler made or one whose
 response was lost. The spec's gates now test those cases instead. Stopping a
 subject is the opposite case. It is an owner's choice, not a clock event, so it
-belongs to the admin. A scheduler that could deactivate would let a clock
-fault silence a subject, and it would give the one credential that drives the
-clock a right it never needs.
+belongs to the admin. A deactivation that closed the window would be an early
+close. Deactivating and then reactivating would be the banned early turnover in
+two calls. Letting the window run to its close keeps the scheduler the only
+thing that moves the state machine. A scheduler that could deactivate would let
+a clock fault silence a subject, and it would give the one credential that
+drives the clock a right it never needs.
 
 **Decision 5: the first production migrate may run once with no
 `deployment_identity` row.** Production runs v0.5.0, which predates the
 `deployment_identity` table (0063) and the schema manifest (0064). Every
 `bun run migrate` refuses a database with no identity row, and nothing else may
 run a migration. So production cannot reach the release that creates the row.
-One guarded exception closes the gap. `bun run migrate` accepts a database with
-no `deployment_identity` row, or no table, only when every one of these holds:
+One guarded production exception closes the gap. `bun run migrate` accepts a
+database with no `deployment_identity` row, or no table, only when every one of
+these holds:
+- a remote connection;
 - `RM_ENV=prod`;
 - the ledger's filename list is exactly equal to the filename list of one
   `SUPPORTED_RELEASES` entry (decision 8);
@@ -4129,16 +4196,22 @@ no `deployment_identity` row, or no table, only when every one of these holds:
 - the operator answers an explicit `y`.
 
 Its receipt records the pre-identity state: that no identity row existed, the
-release the ledger matched, and that ledger's filename list. Production
-initialization then writes `production`
-([`smoke-production-spec.md`](technical/smoke-production-spec.md) §9.1). Every
-later run requires the row. A wave package implements the exception.
+release the ledger matched, and that ledger's filename list. The pass writes
+`production` with 0063 (decision 9,
+[`smoke-production-spec.md`](technical/smoke-production-spec.md) §9.1). Every
+later run requires the row. Decision 9 names the two rehearsal passes that
+share this pass's identity-first shape. A wave package implements the
+exception.
 *Why.* Without it, the first production upgrade has no legal path: the tool
 that creates the table refuses because the table is missing. A hand-run
 migration would skip the fence, the ledger and the receipt the migrate run
-provides (smoke spec §8.3). An exception keyed on the exact ledger of a known release cannot be reached from a
-partly migrated or hand-edited database. It requires `RM_ENV=prod`, so no stage
-tool can use it.
+provides (smoke spec §8.3). An exception keyed on the exact ledger of a known
+release cannot be reached from a partly migrated or hand-edited database. It
+requires a remote connection, `RM_ENV=prod`, a typed owner password and a `y`,
+so no stage tool can take it. The ledger alone cannot tell production from a
+dump of it. So each rehearsal pass of decision 9 is its own exception: it is
+tied to a database its own run restored, it refuses `RM_ENV=prod`, and it
+writes `rehearsal`, never `production`.
 
 **Decision 6: only `rm_owner` may `DELETE` or `TRUNCATE`.** No runtime role
 (`rm_app`, `rm_worker`, `rm_readonly`) holds `DELETE` or `TRUNCATE` on any
@@ -4152,11 +4225,24 @@ Security revocations stay immediately effective. A revoked key, token or
 membership is refused on the next request, because the revoking transaction
 writes the tombstone. A later prune never carries the revocation. Preflight's
 denylist widens from append-only tables to every table. A wave package
-implements the redesign and the grant change.
+implements the redesign and the grant change, under two constraints:
+- **A table that unauthenticated requests write stays bounded with no
+  `rm_owner` run.** WebAuthn challenges use a fixed set of 32 slots. A new
+  challenge overwrites the oldest slot under `CHALLENGE_ISSUE_LOCK`, and a
+  single-use conditional `UPDATE` consumes it. Gate: more than 32
+  unauthenticated option requests leave the row count at 32.
+- **No release ships a tombstone ahead of the revoke.** No release may ship
+  code that writes a revocation or consumption tombstone unless the same
+  release carries the `compat: breaking` migration that revokes runtime
+  `DELETE`. Gate: code built before that migration refuses to boot after it.
+
 *Why.* A runtime credential that can delete can erase history, and a list of
 protected tables is a list that can miss one. One rule with no list needs no
 upkeep. The three shapes keep every current delete's effect while leaving the
-row for audit.
+row for audit. A table an unauthenticated caller fills would grow without bound
+if only a manual owner prune removed its rows, so its size is fixed by shape.
+Code built before the tombstone does not read it, so a rollback to that code
+would serve a revoked key again. The breaking label closes that rollback.
 
 **Decision 7: migration 0072 is `compat: breaking`.** 0072's header said
 `additive`. The migration deletes the `swarm.*` `job_schedules` rows and the
@@ -4173,58 +4259,111 @@ corrected label.
 boot and then schedule nothing, with no refusal to explain why.
 
 **Decision 8: production's observed ledger is the only supported upgrade
-source.** `SUPPORTED_RELEASES` holds one baseline: the 73 filenames
-production's `schema_migrations` recorded when it was read on 2026-09-25. They
-are the 72 files of v0.5.0 plus `0062_rm_readonly_sequence_select.sql`, which
-production applied out of band on 2026-09-22 with the SQL of commit c3a68812
-(tag `archive/releases-0.5.x-2026-09-24`). Upgrade tests replay those archived
-bytes. An upgrade from any other ledger, a pure v0.5.0 ledger included, is
-neither tested nor supported. Decision 5's ledger match reads this list, so the
-first-migrate exception accepts only the 73-name ledger. Adding a baseline to
-the list takes a new decision. `backend/src/db/supported-releases.ts` holds the
-list, and `backend/tests/fixtures/releases/production-2026-09-25/` pins it.
+source.** Lucas confirmed this baseline on 2026-09-25. `SUPPORTED_RELEASES`
+holds one baseline: the 73 filenames production's `schema_migrations` recorded
+when it was read on 2026-09-25. They are the 72 files of v0.5.0 plus
+`0062_rm_readonly_sequence_select.sql`, which production applied out of band
+on 2026-09-22 with the SQL of commit c3a68812 (tag
+`archive/releases-0.5.x-2026-09-24`). Upgrade tests replay those archived
+bytes. An upgrade from any other ledger is refused, and a pure v0.5.0 ledger
+is refused too. Decision 5's ledger match reads this list, so the first-migrate
+exception accepts only the 73-name ledger. Adding a baseline to the list takes
+a new decision. `backend/src/db/supported-releases.ts` holds the list, and
+`backend/tests/fixtures/releases/production-2026-09-25/` pins it.
 *Why.* Every supported baseline is a fixture, an upgrade test and a ledger the
 first-migrate exception must accept. No database will take a path from an
 older release, so each extra entry would be cost with no user. The first text
 named v0.5.0 alone. No database holds that ledger: production and every dump
 taken from it carry the 0062 row, so a v0.5.0 list would refuse the one
-database the exception exists for. The owner ruled the observed ledger the
-ground truth.
+database the exception exists for. This is the owner's call. It replaces the
+earlier wording that credited the ruling to the owner before he had made it.
 
-**Decision 9: the guarded first production pass applies 0063 first and writes
-the identity row before anything else.** The pass of decision 5 applies
-`0063_deployment_identity` before any other pending migration, out of filename
-order. The identity row, `production`, commits in the same transaction as 0063.
-The pass then applies the remaining pending migrations in filename order. So
-an interruption at any point after 0063 commits leaves the row in place, and a
-rerun takes the normal path: it requires the row and resumes from the first
-unapplied migration (smoke spec §8.3). An interruption before 0063 commits
-leaves the ledger on the baseline, and a rerun takes the guarded pass again.
-Out-of-order apply of 0063 happens only in this guarded pass. The runner
-refuses it anywhere else. This replaces decision 5's order, in which production
-initialization wrote the row after the whole migrate run. Criterion 18 gains a
-process test that kills the migrate between two commits and proves the rerun
-resumes, and a first-pass test that kills it after 0063 and before the rest
-and proves the same. A wave package implements this.
-*Why.* Under decision 5's order, a pass interrupted after its first commit left
-a ledger that matched no supported baseline and no identity row. The exception
-refused it, and the normal path refused it too, so that database had no legal
-way forward. With the row written first, every interruption after 0063 is an
-ordinary partial migrate, which the runner already resumes.
+**Decision 9: three named passes apply 0063 first and write the identity row
+with it.** Only three passes may run against a database with no
+`deployment_identity` row. Each applies `0063_deployment_identity` before any
+other pending migration, out of filename order:
+- **The production first pass** (decision 5), `bun run migrate`. It needs a
+  remote connection, `RM_ENV=prod`, a typed `rm_owner` password and an
+  explicit `y`. It writes `production`.
+- **The `--local dump` preparation** (decision 10), inside `bun smoke`. It runs
+  only on the Postgres container the same run created and restored. `RM_ENV`
+  must not be `prod`, and it uses the owner password smoke generated. It
+  writes `rehearsal`. It checks for itself that its connection is that local
+  container. It refuses any remote connection, whatever `RM_ENV`, password or
+  acknowledgement says.
+- **The remote twin restore** (decision 10), through the twin tooling's
+  `--migrate`. It runs only on the database the same twin run restored, as
+  that run's own journal or receipt proves. `RM_ENV` must not be `prod`. It
+  writes `rehearsal`. It refuses any target the run did not restore itself.
 
-**Decision 10: a `--local dump` of production takes the same identity-first
-path, writing `rehearsal`.** A dump restored by `--local dump` whose ledger
-equals the production baseline (decision 8) has no `deployment_identity`
-table, because production has none yet. Smoke's preparation applies 0063 to it
-first and writes `rehearsal` in the same transaction, before any other pending
-migration. The remaining migrations then take the normal path. This path needs
-no `RM_ENV=prod`, typed password or `y`, because smoke owns the local
-container and generated its owner password (smoke spec §5). A dump with any
-other pre-identity ledger refuses. A wave package implements this.
-*Why.* The spec already required every `--local dump` restore to write
-`rehearsal`, but a production dump has no table to write it to. Taking the same
+All three share three rules:
+- 0063's DDL, its `schema_migrations` row and the identity row commit in one
+  fenced transaction (smoke spec §2).
+- Before the pass, the ledger must equal the 73-name baseline of decision 8.
+- Out-of-order 0063 is refused outside these three passes.
+
+The rest of the pending migrations then take the normal path, and the normal
+path accepts the state a pass leaves. It may apply a pending file that sorts
+below a recorded 0063 only when the identity row exists and the rest of the
+ledger equals the baseline plus 0063, plus any files applied after it. Every
+other out-of-order state refuses. Production lacks six files below 0063:
+`0056_swarm_judge_requires_model`, `0057_swarm_judge_policy_stamp`,
+`0058_swarm_judge_fault_injection`, `0059_swarm_judgement_completion_usage`,
+`0061_rm_worker_wallet_backfill_grant` and
+`0062_rm_worker_analytics_ledger_read_grant`. The normal path applies them
+after 0063.
+
+So an interruption after 0063 commits leaves the row in place. A rerun takes
+the normal path and resumes from the first unapplied migration (smoke spec
+§8.3). An interruption before 0063 commits leaves the ledger on the baseline,
+and a rerun takes the same pass again. This replaces decision 5's first order,
+in which production initialization wrote the row after the whole migrate run.
+
+Criterion 18 gains a process test that kills a migrate between two commits and
+proves the rerun resumes. Each pass gains two kill-and-rerun tests. Kill it
+before 0063 commits: the rerun takes the pass again. Kill it after 0063: the
+rerun resumes through the normal path and applies the six lower files.
+Criterion 170 says the identity row commits in the same transaction as 0063. A
+wave package implements this. It also hardens `transactionIdentityStore` so
+the store carries the connection's remote flag, and the rehearsal guard
+applies on the fenced path too.
+*Why.* Under decision 5's first order, a pass interrupted after its first
+commit left a ledger that matched no supported baseline and no identity row.
+Both the exception and the normal path refused it, so that database had no
+legal way forward. The first text of this decision said the runner already
+resumed the state a pass leaves after 0063. It did not: the normal path
+refused the six lower files as a gap. With the row written first, and the
+normal path accepting exactly the state a pass leaves, every interruption
+after 0063 is an ordinary partial migrate. Naming each pass with its own guard
+keeps the exception from spreading. The ledger cannot tell production from a
+dump of it, so each rehearsal pass proves instead that its own run restored
+the target.
+
+**Decision 10: a production dump, local or remote, takes the identity-first
+path and writes `rehearsal`.** A dump of production restored for rehearsal has
+no `deployment_identity` table, because production has none yet.
+- **A `--local dump`.** When its restored ledger equals the production
+  baseline (decision 8), smoke's preparation takes decision 9's local pass: it
+  applies 0063 first and writes `rehearsal` in the same transaction, before any
+  other pending migration. It needs no `RM_ENV=prod`, typed password or `y`,
+  because smoke owns the container and generated its owner password (smoke
+  spec §5).
+- **A remote twin.** A remote database restored from a pre-0063 production
+  dump is supported through the existing twin tooling's `--migrate`
+  (`scripts/smoke-twin.ts`, `scripts/lib/smoke-twin-rehearsal.ts`). Its
+  sequence changes to three steps: restore; then decision 9's remote twin pass,
+  which applies 0063 and writes `rehearsal` in one transaction; then the
+  remaining migrations. All of it happens before any other stage tool
+  connects.
+
+A dump with any other pre-identity ledger refuses. A wave package implements
+both paths, and each has its own issue criterion.
+*Why.* The spec already required every restore of a production dump to write
+`rehearsal`, but a production dump has no table to write it to. Taking the
 order production takes makes the twin a rehearsal of the first production
-upgrade, not of a different path.
+upgrade, not of a different path. The owner noted that the twin tooling
+already has a `--migrate` option, so the remote twin needs a changed sequence,
+not a new tool.
 
 **Decision 11: the scheduler event stream moves from SSE to WebSocket.** The
 subscription that serves the §6.3 event stream of
@@ -4233,27 +4372,56 @@ WebSocket, not a `text/event-stream` response. The API sees the socket's
 buffered amount. When a subscriber stops reading, the API sends one `resync`
 frame and closes the socket. It never drops an event to make room. Cursors,
 gapless sequence numbers, keepalives carrying the head, and resync-and-close
-keep their meaning. A later package on issue #1026 implements the move.
-*Why.* An SSE response gives the server no reliable view of what the client has
-not read, so a slow subscriber shows up only as memory growing on the API. A
-WebSocket reports its outbound backlog, so the API can tell the subscriber to
-rebuild at a bounded cost. It also gives the transport-level ping and pong the
-spec already names for silent-failure detection.
+keep their meaning. The implementation keeps four constraints:
+- The socket re-authorizes the scheduler's token against the token store at
+  every keepalive. It closes when the token is revoked or rotated.
+- The token rides only in the upgrade request's `Authorization` header, never
+  in the URL.
+- The scope is the scheduler stream only. Moving the judge subscription needs
+  its own decision.
+- The `routes.js` change bumps `contract/package.json` ([D54](#d54)). The
+  `routes.js` comments and `docs/architecture/network-topology.md` change with
+  it. An nginx upgrade block is added only if the scheduler connects through
+  `website-server`.
 
-**Decision 12: the `rm_owner` stream prune is bounded by a time window only.**
-The prune of `swarm_stream_events`, which only `rm_owner` may run
-([D53](#d53) (2)), deletes events older than a retention window: 7 days by
-default, configurable. It keeps no per-subscriber cursor bookkeeping, and it
-does not wait for the oldest cursor still in use. A subscriber whose cursor is
-below the retained range gets resync-and-close (`log_truncated`), then a full
-read and a rebuild. This replaces D53 (2)'s "only rows older than the oldest
-cursor the API may still be asked to serve". A later package on issue #1026
-implements the prune.
+A later package on issue #1026 implements the move, and it has its own issue
+criterion.
+*Why.* This is a transport preference. The SSE path lost no data: a subscriber
+that fell behind already got `resync` and did a full read. A WebSocket gives a
+two-way keepalive and an explicit close code, so a silent failure and the
+reason for a close are both visible in the protocol. It also reports its
+outbound backlog, so the API can bound a slow subscriber's cost directly. A
+token in a URL lands in access logs, and a header does not.
+
+**Decision 12: pruning is a manual, receipted `rm_owner` command with a 7-day
+minimum window.** Pruning is an operator command: a planned root `prune`
+script, run through `bun run`. It takes a typed `rm_owner` password, runs
+fenced under the target lock (smoke spec §2), and writes a receipt. It runs at each upgrade or on a runbook
+cadence. Nothing schedules it. Its retention window is a minimum of 7 days,
+which the owner confirmed. The window is a floor, not a schedule: the command
+never removes a row younger than it. The command lists exactly the tables it
+may prune:
+- `swarm_stream_events` rows older than the window;
+- expired or consumed rows that carry no audit value.
+
+It never prunes a security tombstone or audit history. It keeps no
+per-subscriber cursor bookkeeping. A scheduler whose cursor is below the
+retained floor gets resync-and-close (`log_truncated`), then a full read and a
+rebuild. This supersedes [D52](#d52)'s retention bullet and [D53](#d53) (2)'s
+bound of "only rows older than the oldest cursor the API may still be asked to
+serve". Criteria 93 and 104 are reworded to this rule: time-window retention,
+pruned only by the manual `rm_owner` command, with resync-and-close below the
+floor. A later migration corrects the table comment 0080 wrote, which still
+names the cursor bound. A later package on issue #1026 implements the command,
+and it has its own issue criterion.
 *Why.* The oldest cursor the API may still be asked to serve is not knowable:
 a scheduler that is down holds its cursor in memory, and the API cannot see it.
 A rule keyed on it either never prunes or guesses. A time window is a rule
 anyone can check. Resync-and-close already makes a truncated log safe, because
-a subscriber that missed events rebuilds rather than skipping them.
+a subscriber that missed events rebuilds rather than skipping them. A manual
+command keeps the owner password typed at the terminal, as [D47](#d47)
+requires, where a scheduled prune would need it stored. A missed or late
+prune loses nothing, because the window is only a floor.
 
 **Decision 13: the query registry gains an object-less statement kind, and dead
 registered functions are deleted.** Some statements name no table, such as a
@@ -4262,7 +4430,8 @@ explicit kind for them. Its allowed statements are a closed list of shapes, and
 a statement matches only when it equals one listed shape exactly. A statement
 that names a relation can never take this kind. Every registered function that
 has no production caller is deleted, with the tests that were its only callers.
-A later package on issue #1026 implements both.
+A later package on issue #1026 implements both, and it has its own issue
+criterion.
 *Why.* An object-less statement today either sits on the raw-SQL allowlist or
 declares a table it does not touch, and both weaken the registry. A closed list
 pinned by equality keeps the kind from growing into a bypass. A registered
