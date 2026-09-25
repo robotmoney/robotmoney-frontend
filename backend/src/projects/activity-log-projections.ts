@@ -20,6 +20,20 @@ const FETCH_LIMIT = 50;
 
 // Registered queries (smoke-production-spec.md §7.1): the feed reads the log and
 // LEFT JOINs the live agent name, so it declares both relations.
+// The joined read below, as tests/db-registry-execution.test.ts runs it: the
+// call site's own statement (that test holds the two to the same text), under
+// both declarations it joins.
+const ACTIVITY_PROBE = {
+  statement: `SELECT al.id, al.occurred_at, al.agent_id, al.agent_name, oa.name AS live_agent_name,
+      al.action_type, al.status, al.commit_summary, al.submitted_by, al.approved_by
+    FROM agent_activity_log al
+    LEFT JOIN openclaw_agents oa ON oa.id = al.agent_id
+    WHERE al.score IS NULL OR al.score <> 0
+    ORDER BY al.occurred_at DESC
+    LIMIT $1`,
+  params: [FETCH_LIMIT],
+};
+
 const activityRows = registerQuery({
   role: "rm_app",
   object: "agent_activity_log",
@@ -27,13 +41,7 @@ const activityRows = registerQuery({
   site: "src/projects/activity-log-projections:fetchActivityLog.log",
   purpose: "Read the 50 newest non-noise agent actions for GET /api/dashboards/activity.",
   callers: ["src/api/routes/dashboards"],
-  probe: {
-    statement: `SELECT al.id, al.occurred_at, al.agent_id, al.agent_name, al.action_type, al.status,
-             al.commit_summary, al.submitted_by, al.approved_by
-      FROM agent_activity_log al WHERE al.score IS NULL OR al.score <> 0
-      ORDER BY al.occurred_at DESC LIMIT $1`,
-    params: [50],
-  },
+  probe: ACTIVITY_PROBE,
 });
 
 const activityAgents = registerQuery({
@@ -43,10 +51,7 @@ const activityAgents = registerQuery({
   site: "src/projects/activity-log-projections:fetchActivityLog.agents",
   purpose: "Join each action's live agent name, which the activity feed LEFT JOINs.",
   callers: ["src/api/routes/dashboards"],
-  probe: {
-    statement: "SELECT oa.id, oa.name FROM openclaw_agents oa WHERE oa.id = ANY($1::uuid[])",
-    params: ["{00000000-0000-0000-0000-000000000000}"],
-  },
+  probe: ACTIVITY_PROBE,
 });
 
 export async function fetchActivityLog(): Promise<ActivityLogResponse> {

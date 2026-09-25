@@ -64,7 +64,18 @@ import { on, registerQuery } from "../src/db/registry.ts";
 // operator CLI, so it declares the read-only role: every relation it reads is
 // one rm_readonly may SELECT, and it needs nothing more.
 const SCAN_CLI = "scripts/scan-low-order-keys";
-const SAMPLE_MEMBER = "00000000-0000-0000-0000-000000000000";
+
+// The scan below, as tests/db-registry-execution.test.ts runs it: the call
+// site's own statement (that test holds the two to the same text), under all
+// three declarations it reads.
+const SCAN_PROBE = {
+  statement: `SELECT k.id, k.member_id, k.public_key, k.active, k.created_at,
+           m.handle, m.name, m.status,
+           (SELECT count(*) FROM swarm_recommendations r WHERE r.member_id = k.member_id) AS take_count
+    FROM swarm_member_keys k
+    LEFT JOIN swarm_members m ON m.id = k.member_id
+    ORDER BY k.created_at ASC, k.id ASC`,
+};
 
 const scanKeys = registerQuery({
   role: "rm_readonly",
@@ -73,10 +84,7 @@ const scanKeys = registerQuery({
   site: "scripts/scan-low-order-keys:runLowOrderKeyScan.keys",
   purpose: "Read every registered member key, active and rotated, to test each for a low-order point.",
   callers: [SCAN_CLI],
-  probe: {
-    statement: `SELECT k.id, k.member_id, k.public_key, k.active, k.created_at FROM swarm_member_keys k
-      ORDER BY k.created_at ASC, k.id ASC`,
-  },
+  probe: SCAN_PROBE,
 });
 
 const scanMembers = registerQuery({
@@ -86,10 +94,7 @@ const scanMembers = registerQuery({
   site: "scripts/scan-low-order-keys:runLowOrderKeyScan.members",
   purpose: "Join each key's member handle, name and status, which the scan LEFT JOINs.",
   callers: [SCAN_CLI],
-  probe: {
-    statement: "SELECT m.id, m.handle, m.name, m.status FROM swarm_members m WHERE m.id = $1",
-    params: [SAMPLE_MEMBER],
-  },
+  probe: SCAN_PROBE,
 });
 
 const scanTakeCounts = registerQuery({
@@ -99,10 +104,7 @@ const scanTakeCounts = registerQuery({
   site: "scripts/scan-low-order-keys:runLowOrderKeyScan.takes",
   purpose: "Count each key holder's takes, every one of which a low-order key makes suspect.",
   callers: [SCAN_CLI],
-  probe: {
-    statement: "SELECT count(*) FROM swarm_recommendations r WHERE r.member_id = $1",
-    params: [SAMPLE_MEMBER],
-  },
+  probe: SCAN_PROBE,
 });
 
 export interface LowOrderKeyHit {

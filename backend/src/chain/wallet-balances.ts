@@ -184,6 +184,26 @@ const lastHolding = registerQuery({
   },
 });
 
+// The joined read below, as tests/db-registry-execution.test.ts runs it: the
+// call site's own statement (that test holds the two to the same text), under
+// both declarations it joins.
+const HISTORY_PROBE = {
+  statement: `SELECT wbs.sample_date, wbs.symbol, wbs.amount, wbs.value_usd, wbs.provenance,
+           ap.price_usd AS asset_price_usd,
+           (wbs.sample_date < (now() AT TIME ZONE 'UTC')::date) AS is_closed
+      FROM wallet_balance_samples wbs
+      LEFT JOIN asset_prices ap
+        ON ap.symbol = wbs.symbol
+       AND ap.price_date = wbs.sample_date
+       AND ap.time_basis = $1
+     WHERE wbs.sample_date NOT IN (
+             SELECT sample_date FROM wallet_balance_samples
+              WHERE provenance = $2
+           )
+     ORDER BY wbs.sample_date ASC, wbs.symbol ASC`,
+  params: [ASSET_PRICE_TIME_BASIS, QUARANTINED_PROVENANCE],
+};
+
 const historySamples = registerQuery({
   role: "rm_app",
   object: "wallet_balance_samples",
@@ -191,12 +211,7 @@ const historySamples = registerQuery({
   site: "src/chain/wallet-balances:loadHistory.samples",
   purpose: "Read the wallet's daily sample history, excluding quarantined days, for the balances payload.",
   callers: ["src/api/routes/dashboards", "src/worker/handlers/wallet"],
-  probe: {
-    statement: `SELECT wbs.sample_date, wbs.symbol, wbs.amount, wbs.value_usd, wbs.provenance FROM wallet_balance_samples wbs
-      WHERE wbs.sample_date NOT IN (SELECT sample_date FROM wallet_balance_samples WHERE provenance = $1)
-      ORDER BY wbs.sample_date ASC, wbs.symbol ASC`,
-    params: [QUARANTINED_PROVENANCE],
-  },
+  probe: HISTORY_PROBE,
 });
 
 const historyPrices = registerQuery({
@@ -206,10 +221,7 @@ const historyPrices = registerQuery({
   site: "src/chain/wallet-balances:loadHistory.prices",
   purpose: "Join each closed day's settled asset price onto the wallet history, which the history read LEFT JOINs.",
   callers: ["src/api/routes/dashboards", "src/worker/handlers/wallet"],
-  probe: {
-    statement: "SELECT ap.symbol, ap.price_date, ap.price_usd FROM asset_prices ap WHERE ap.time_basis = $1",
-    params: ["utc-daily-close"],
-  },
+  probe: HISTORY_PROBE,
 });
 
 const latestSamples = registerQuery({

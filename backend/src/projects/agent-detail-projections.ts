@@ -38,6 +38,20 @@ export type { AgentDetail };
 const DASHBOARDS = "src/api/routes/dashboards";
 const SAMPLE_ID = "00000000-0000-0000-0000-000000000000";
 
+// The joined read below, as tests/db-registry-execution.test.ts runs it: the
+// call site's own statement (that test holds the two to the same text), under
+// both declarations it joins.
+const DETAIL_AGENT_PROBE = {
+  statement: `SELECT a.id, a.name, a.protocol_standard, a.x402_score, a.x402_txn_count, a.x402_resources_count,
+           a.x402_volume_usd, a.cumulative_revenue_usd, a.productivity_score, a.is_active,
+           a.wallet_address, a.source_confidence, a.enriched_at, a.created_at, a.project_id,
+           p.overview_short, p.website_url, p.twitter_handle
+    FROM openclaw_agents a
+    LEFT JOIN projects p ON p.id = a.project_id
+    WHERE a.id = $1::uuid`,
+  params: [SAMPLE_ID],
+};
+
 const detailAgent = registerQuery({
   role: "rm_app",
   object: "openclaw_agents",
@@ -45,13 +59,7 @@ const detailAgent = registerQuery({
   site: "src/projects/agent-detail-projections:fetchAgentDetail.agent",
   purpose: "Read one agent's detail columns by id.",
   callers: [DASHBOARDS],
-  probe: {
-    statement: `SELECT a.id, a.name, a.protocol_standard, a.x402_score, a.x402_txn_count, a.x402_resources_count,
-             a.x402_volume_usd, a.cumulative_revenue_usd, a.productivity_score, a.is_active,
-             a.wallet_address, a.source_confidence, a.enriched_at, a.created_at, a.project_id
-      FROM openclaw_agents a WHERE a.id = $1::uuid`,
-    params: [SAMPLE_ID],
-  },
+  probe: DETAIL_AGENT_PROBE,
 });
 
 const detailProject = registerQuery({
@@ -61,10 +69,7 @@ const detailProject = registerQuery({
   site: "src/projects/agent-detail-projections:fetchAgentDetail.project",
   purpose: "Join the agent's project overview and links, which the agent read LEFT JOINs.",
   callers: [DASHBOARDS],
-  probe: {
-    statement: "SELECT p.id, p.overview_short, p.website_url, p.twitter_handle FROM projects p WHERE p.id = $1::uuid",
-    params: [SAMPLE_ID],
-  },
+  probe: DETAIL_AGENT_PROBE,
 });
 
 const detailRevenue = registerQuery({

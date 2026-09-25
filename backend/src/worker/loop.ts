@@ -49,35 +49,115 @@ const renewLease = registerQuery({
   },
 });
 
-const settleJob = registerQuery({
+// SETTLING A CLAIMED JOB. Each outcome is its own statement, so each is its
+// own site: tests/db-registry-execution.test.ts holds a probe to its call
+// site's exact text, and one declaration may not stand for statements that
+// differ. Every settle is guarded on this worker still holding the job, and
+// SELECT is declared because the WHERE and RETURNING read the row.
+const SETTLE_GUARD = "WHERE id = $2 AND locked_by = $3 AND status = 'running' RETURNING id";
+
+const settleRetry = registerQuery({
   role: "rm_worker",
   object: "jobs",
-  // SELECT because the WHERE and RETURNING read the row.
   privileges: ["UPDATE", "SELECT"],
-  site: "src/worker/loop:processOneJob.settle",
-  purpose: "Settle a claimed job (succeeded, retried with backoff, failed or dead), only while this worker still holds it.",
+  site: "src/worker/loop:processOneJob.settleRetry",
+  purpose: "Put a failed or degraded job back to pending after its backoff, only while this worker still holds it.",
   callers: [WORKER_ENTRY],
   probe: {
     statement: `UPDATE jobs
-      SET status = 'pending', run_after = now() + ($1 || ' seconds')::interval,
-          locked_at = NULL, locked_by = NULL, last_error = $2, updated_at = now()
+      SET status = 'pending',
+          run_after = now() + ($1 || ' seconds')::interval,
+          locked_at = NULL, locked_by = NULL,
+          last_error = $2, updated_at = now()
       WHERE id = $3 AND locked_by = $4 AND status = 'running' RETURNING id`,
     params: [2, "probe", 0, "probe-worker"],
   },
 });
 
-const recordRun = registerQuery({
+const settleFailed = registerQuery({
+  role: "rm_worker",
+  object: "jobs",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/worker/loop:processOneJob.settleFailed",
+  purpose: "Settle an exhausted or terminal degrade as failed, only while this worker still holds it.",
+  callers: [WORKER_ENTRY],
+  probe: {
+    statement: `UPDATE jobs SET status = 'failed', locked_at = NULL, locked_by = NULL,
+      last_error = $1, updated_at = now() ${SETTLE_GUARD}`,
+    params: ["probe", 0, "probe-worker"],
+  },
+});
+
+const settleSucceeded = registerQuery({
+  role: "rm_worker",
+  object: "jobs",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/worker/loop:processOneJob.settleSucceeded",
+  purpose: "Settle a job whose handler returned as succeeded, only while this worker still holds it.",
+  callers: [WORKER_ENTRY],
+  probe: {
+    statement: `UPDATE jobs SET status = 'succeeded', locked_at = NULL, locked_by = NULL, last_error = NULL, updated_at = now()
+      WHERE id = $1 AND locked_by = $2 AND status = 'running' RETURNING id`,
+    params: [0, "probe-worker"],
+  },
+});
+
+const settleDead = registerQuery({
+  role: "rm_worker",
+  object: "jobs",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/worker/loop:processOneJob.settleDead",
+  purpose: "Settle a job that threw on its last attempt as dead, only while this worker still holds it.",
+  callers: [WORKER_ENTRY],
+  probe: {
+    statement: `UPDATE jobs SET status = 'dead', locked_at = NULL, locked_by = NULL,
+      last_error = $1, updated_at = now() ${SETTLE_GUARD}`,
+    params: ["probe", 0, "probe-worker"],
+  },
+});
+
+// RECORDING THE RUN, in the same transaction as the settle: one site per
+// column set. Each probe inserts from a query yielding no row, because
+// job_id is a foreign key to a real job and the database is blank.
+const recordDegradedRun = registerQuery({
   role: "rm_worker",
   object: "job_runs",
   privileges: ["INSERT"],
-  site: "src/worker/loop:processOneJob.recordRun",
-  purpose: "Record one run of a settled job, in the same transaction as the settle.",
+  site: "src/worker/loop:processOneJob.recordDegradedRun",
+  purpose: "Record a degraded (or terminally refused) run with its error and the handler's output.",
   callers: [WORKER_ENTRY],
   probe: {
-    // From a query yielding no row: job_id is a foreign key to a real job.
     statement: `INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error, output)
       SELECT $1::bigint, $2, $3::timestamptz, now(), $4, $5, $6::jsonb WHERE false`,
-    params: [0, "noop", "2026-01-01T00:00:00Z", "succeeded", null, "{}"],
+    params: [0, "noop", "2026-01-01T00:00:00Z", "degraded", "probe", "{}"],
+  },
+});
+
+const recordSucceededRun = registerQuery({
+  role: "rm_worker",
+  object: "job_runs",
+  privileges: ["INSERT"],
+  site: "src/worker/loop:processOneJob.recordSucceededRun",
+  purpose: "Record a succeeded run with the handler's output.",
+  callers: [WORKER_ENTRY],
+  probe: {
+    statement: `INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, output)
+      SELECT $1::bigint, $2, $3::timestamptz, now(), 'succeeded', $4::jsonb WHERE false`,
+    params: [0, "noop", "2026-01-01T00:00:00Z", "{}"],
+  },
+});
+
+const recordFailedRun = registerQuery({
+  role: "rm_worker",
+  object: "job_runs",
+  privileges: ["INSERT"],
+  site: "src/worker/loop:processOneJob.recordFailedRun",
+  purpose: "Record a run whose handler threw, as failed (a retry follows) or dead.",
+  callers: [WORKER_ENTRY],
+  probe: {
+    statement: `INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error)
+      SELECT $1::bigint, $2, $3::timestamptz, now(), $4, $5 WHERE false`,
+    params: [0, "noop", "2026-01-01T00:00:00Z", "failed", "probe"],
   },
 });
 
@@ -271,13 +351,13 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
       const backoff = Math.min(MAX_BACKOFF_SECONDS, Math.pow(2, job.attempts));
       const recorded = await sql.begin(async (tx) => {
         const upd = canRetry
-          ? await on(tx, settleJob)`UPDATE jobs
+          ? await on(tx, settleRetry)`UPDATE jobs
                         SET status = 'pending',
                             run_after = now() + (${backoff} || ' seconds')::interval,
                             locked_at = NULL, locked_by = NULL,
                             last_error = ${errText}, updated_at = now()
                       WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`
-          : await on(tx, settleJob)`UPDATE jobs
+          : await on(tx, settleFailed)`UPDATE jobs
                         SET status = 'failed', locked_at = NULL, locked_by = NULL,
                             last_error = ${errText}, updated_at = now()
                       WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`;
@@ -285,7 +365,7 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
         // The RUN keeps the 'degraded' status that distinguishes "kept the
         // last-persisted rows" from a thrown failure — except for a terminal
         // refusal, which is not a degradation of anything and is recorded red.
-        await on(tx, recordRun)`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error, output)
+        await on(tx, recordDegradedRun)`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error, output)
                  VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), ${terminal ? "failed" : "degraded"}, ${errText}, ${tx.json(jsonValue(output ?? null))})`;
         return true;
       });
@@ -296,10 +376,10 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
     }
 
     const ok = await sql.begin(async (tx) => {
-      const upd = await on(tx, settleJob)`UPDATE jobs SET status = 'succeeded', locked_at = NULL, locked_by = NULL, last_error = NULL, updated_at = now()
+      const upd = await on(tx, settleSucceeded)`UPDATE jobs SET status = 'succeeded', locked_at = NULL, locked_by = NULL, last_error = NULL, updated_at = now()
                            WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`;
       if (upd.length === 0) return false;
-      await on(tx, recordRun)`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, output)
+      await on(tx, recordSucceededRun)`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, output)
                VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), 'succeeded', ${tx.json(jsonValue(output ?? null))})`;
       return true;
     });
@@ -311,18 +391,18 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
     const backoff = Math.min(MAX_BACKOFF_SECONDS, Math.pow(2, job.attempts));
     await sql.begin(async (tx) => {
       const upd = canRetry
-        ? await on(tx, settleJob)`UPDATE jobs
+        ? await on(tx, settleRetry)`UPDATE jobs
                       SET status = 'pending',
                           run_after = now() + (${backoff} || ' seconds')::interval,
                           locked_at = NULL, locked_by = NULL,
                           last_error = ${message}, updated_at = now()
                     WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`
-        : await on(tx, settleJob)`UPDATE jobs
+        : await on(tx, settleDead)`UPDATE jobs
                       SET status = 'dead', locked_at = NULL, locked_by = NULL,
                           last_error = ${message}, updated_at = now()
                     WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`;
       if (upd.length === 0) return; // lost the lock — don't record a duplicate run
-      await on(tx, recordRun)`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error)
+      await on(tx, recordFailedRun)`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error)
                VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), ${canRetry ? "failed" : "dead"}, ${message})`;
     });
     console.error(`job ${job.id} (${job.kind}) failed${canRetry ? `, retry in ${backoff}s` : " — DEAD"}: ${message.split("\n")[0]}`);

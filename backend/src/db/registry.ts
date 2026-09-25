@@ -43,10 +43,9 @@
 // never mentioned). Only executing the statements under the real role catches
 // the second kind, and that test is tests/db-registry-execution.test.ts, not
 // this module. What this module adds for it is the `probe` a declaration
-// carries (see `QueryProbe`): a runnable statement that exercises exactly the
-// declared privileges on the declared object, so the test can run every site
-// as its declared LOGIN role without calling the application function around
-// it.
+// carries (see `QueryProbe`): the call site's own statement with sample
+// parameters, which that test holds to the call site's text and runs as the
+// declared LOGIN role without calling the application function around it.
 //
 // The registry is also NOT an allowlist of grants. Spec §7 check 2: "A grant
 // absent from the registry is not forbidden by that fact alone." See
@@ -171,22 +170,33 @@ export interface QueryDeclaration {
 export type ProbeParam = string | number | boolean | null;
 
 /**
- * A runnable stand-in for one call site's statement.
+ * One call site's statement, written out so it can run on its own.
  *
- * WHY NOT RUN THE CALL SITE ITSELF. The real statement is a template built at
- * the call site from runtime values, inside an application function that
- * needs a request, a job or a chain read to reach it. The probe is the same
- * statement's shape — the same relation, the same kind of access, the same
- * columns where they matter — written once, next to the declaration it
- * proves, with sample parameters.
+ * WHY IT IS WRITTEN OUT. The real statement is a template built at the call
+ * site from runtime values, inside an application function that needs a
+ * request, a job or a chain read to reach it. The probe is that statement's
+ * text with each interpolated value as a `$n` placeholder and a sample
+ * parameter for it, written next to the declaration it proves.
+ *
+ * IT IS THE CALL SITE'S STATEMENT, NOT A STAND-IN. tests/db-registry-
+ * execution.test.ts reads every `on(...)` call site from source and requires
+ * the probe to reduce to the same token form as the template it declares,
+ * modulo only privilege-neutral differences (whitespace, comments, case, a
+ * cast on a bound value, the postgres.js helper expansions, and an INSERT's
+ * VALUES written as `SELECT ... WHERE false`; that file's header lists them).
+ * So a call site that gains RETURNING, ON CONFLICT DO UPDATE, FOR UPDATE, a
+ * JOIN or a column no longer matches its probe, and one declaration may not
+ * serve two statements that differ: each gets its own site.
  *
  * WHAT "EXACTLY" MEANS. The execution test holds every probe to two things
  * beyond running as the declared role: it succeeds for a scratch role holding
- * ONLY the declared privileges on ONLY the declared object, and it fails with
- * 42501 for that role once any single declared privilege is taken away. So a
- * probe cannot be `SELECT 1` (which needs nothing), cannot touch a second
- * relation (a join's other relations have declarations and probes of their
- * own), and a declaration cannot list a privilege its probe does not use.
+ * ONLY what the declarations named in the same `on(...)` call declare (for a
+ * JOIN, every joined relation's declaration of the same role), and it fails
+ * with 42501 once any single privilege THIS declaration lists is taken away.
+ * So a probe cannot be `SELECT 1` (which needs nothing), cannot touch a
+ * relation its call site did not declare, and a declaration cannot list a
+ * privilege its statement does not use. The declarations of one JOIN
+ * therefore carry the same probe.
  */
 export interface QueryProbe {
   /** One DML statement, `$1`-style placeholders, no trailing semicolon. It

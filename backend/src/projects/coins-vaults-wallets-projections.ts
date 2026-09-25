@@ -33,6 +33,21 @@ const coinsList = registerQuery({
   },
 });
 
+// The joined read below, as tests/db-registry-execution.test.ts runs it: the
+// call site's own statement (that test holds the two to the same text), under
+// both declarations it joins.
+const VAULTS_LIST_PROBE = {
+  statement: `SELECT v.id, v.name, v.strategy_type, v.protocol, v.chain, v.data_source, v.tvl_usd, v.yield_apy, v.refreshed_at,
+           (
+             SELECT a.name FROM openclaw_agents a
+             WHERE a.project_id = v.project_id AND a.is_active = true
+             ORDER BY a.created_at ASC LIMIT 1
+           ) AS managing_agent_name
+    FROM agent_vaults v
+    WHERE v.is_active = true
+    ORDER BY v.tvl_usd DESC NULLS LAST`,
+};
+
 const vaultsList = registerQuery({
   role: "rm_app",
   object: "agent_vaults",
@@ -40,11 +55,7 @@ const vaultsList = registerQuery({
   site: "src/projects/coins-vaults-wallets-projections:fetchVaultsList",
   purpose: "Read every active agent vault, TVL first, for GET /api/dashboards/vaults.",
   callers: [DASHBOARDS],
-  probe: {
-    statement: `SELECT v.id, v.project_id, v.name, v.strategy_type, v.protocol, v.chain, v.data_source, v.tvl_usd,
-             v.yield_apy, v.refreshed_at
-      FROM agent_vaults v WHERE v.is_active = true ORDER BY v.tvl_usd DESC NULLS LAST`,
-  },
+  probe: VAULTS_LIST_PROBE,
 });
 
 const vaultsManagingAgent = registerQuery({
@@ -54,11 +65,7 @@ const vaultsManagingAgent = registerQuery({
   site: "src/projects/coins-vaults-wallets-projections:fetchVaultsList.agent",
   purpose: "Name each vault's managing agent, the project's oldest active agent, which the vaults read sub-selects.",
   callers: [DASHBOARDS],
-  probe: {
-    statement: `SELECT a.name FROM openclaw_agents a WHERE a.project_id = $1::uuid AND a.is_active = true
-      ORDER BY a.created_at ASC LIMIT 1`,
-    params: ["00000000-0000-0000-0000-000000000000"],
-  },
+  probe: VAULTS_LIST_PROBE,
 });
 
 const trackedWallets = registerQuery({

@@ -78,18 +78,23 @@ const updateConfig = registerQuery({
   site: "src/swarm/judge-config:setJudgeConfig.update",
   purpose: "Patch the judge switch (mode, min_takes, model, third-party flag) on behalf of an audited admin write.",
   callers: [ADMIN_ROUTE],
+  // The call site's statement exactly (tests/db-registry-execution.test.ts
+  // holds the two to the same text): one placeholder per interpolation.
   probe: {
     statement: `UPDATE swarm_judge_config SET
-        mode = CASE WHEN COALESCE($1, mode) = 'enforce' THEN 'enforce' ELSE 'off' END,
-        min_takes = COALESCE($2::integer, min_takes),
-        model = COALESCE($3, model),
-        third_party_enabled = COALESCE($4::boolean, third_party_enabled),
-        updated_at = now(),
-        policy_updated_at = CASE WHEN min_takes IS DISTINCT FROM COALESCE($2::integer, min_takes)
-                                 THEN now() ELSE policy_updated_at END
-      WHERE id = 1
-      RETURNING id`,
-    params: ["off", null, null, null],
+      mode = CASE WHEN COALESCE($1, mode) = 'enforce' THEN 'enforce' ELSE 'off' END,
+      min_takes = COALESCE($2::integer, min_takes),
+      model = CASE WHEN $3::boolean THEN NULL
+                   ELSE COALESCE($4, model) END,
+      third_party_enabled = COALESCE($5::boolean, third_party_enabled),
+      updated_at = now(),
+      policy_updated_at = CASE
+        WHEN mode IS DISTINCT FROM (CASE WHEN COALESCE($6, mode) = 'enforce' THEN 'enforce' ELSE 'off' END)
+          OR min_takes IS DISTINCT FROM COALESCE($7::integer, min_takes)
+        THEN now() ELSE policy_updated_at END
+    WHERE id = 1
+    RETURNING id`,
+    params: ["off", null, false, null, null, "off", null],
   },
 });
 

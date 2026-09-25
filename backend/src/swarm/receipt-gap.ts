@@ -55,18 +55,73 @@ import { on, registerQuery } from "../db/registry.ts";
 
 // Registered queries (smoke-production-spec.md §7.1). The detector is read by
 // the admin overview only. The scan reads five relations, so it declares five
-// times; each probe exercises its own relation the way the scan reads it.
+// times, and every one of the five carries the scan itself as its probe:
+// tests/db-registry-execution.test.ts holds a probe to its call site's exact
+// statement, and runs it with each declaration's privilege taken away in turn.
 const ADMIN_ROUTE = "src/api/routes/admin";
-const SAMPLE_SESSION = "00000000-0000-0000-0000-000000000000";
+
+// The scan below, as the execution test runs it (comments dropped; the one
+// bound value is the lookback cut-off).
+const SCAN_PROBE = {
+  statement: `    WITH cfg AS (SELECT mode, min_takes, policy_updated_at FROM swarm_judge_config WHERE id = 1),
+    candidate AS (
+      SELECT s.id, s.subject_id, s.published_at, s.judging_outcome, t.take_count,
+             COALESCE(g.mode, s.judge_mode,
+                      CASE WHEN s.judging_deadline_at IS NOT NULL THEN 'enforce' END,
+                      c.mode) AS mode_applied,
+             COALESCE(g.min_takes, c.min_takes)::int AS min_takes_applied,
+             (g.mode IS NOT NULL OR s.judge_mode IS NOT NULL OR s.judging_deadline_at IS NOT NULL) AS carries_mode,
+             (s.judge_mode IS DISTINCT FROM 'off' AND s.judging_outcome = 'no_consensus') AS judge_failed,
+             (COALESCE(c.policy_updated_at, to_timestamp(0)) <= s.published_at) AS config_predates
+        FROM swarm_sessions s
+        CROSS JOIN cfg c
+        JOIN LATERAL (
+          SELECT count(DISTINCT r.member_id)::int AS take_count
+            FROM swarm_recommendations r
+           WHERE r.session_id = s.id AND r.verified
+        ) t ON true
+        LEFT JOIN LATERAL (
+          SELECT mode, min_takes FROM swarm_session_judgements
+           WHERE session_id = s.id
+           ORDER BY (mode = 'enforce') DESC, id DESC LIMIT 1
+        ) g ON true
+       WHERE s.state = 'published'
+         AND s.published_at IS NOT NULL
+         AND s.published_at >= $1::timestamptz
+         AND t.take_count >= 1
+         AND NOT EXISTS (SELECT 1 FROM swarm_consensus_receipts rc WHERE rc.session_id = s.id)
+    ),
+    scored AS (
+      SELECT *,
+             (mode_applied = 'enforce' AND take_count >= min_takes_applied
+              AND (carries_mode OR config_predates)) AS elig_takes
+        FROM candidate
+    )
+    SELECT * FROM scored
+     WHERE elig_takes
+       OR judge_failed
+     ORDER BY published_at DESC`,
+  params: ["2026-01-01T00:00:00Z"],
+};
 
 const readPolicy = registerQuery({
   role: "rm_app",
   object: "swarm_judge_config",
   privileges: ["SELECT"],
   site: "src/swarm/receipt-gap:detectMissingReceiptSessions.policy",
-  purpose: "Read today's judge mode and min_takes for the missing-receipt report header, and the scan's policy stamp.",
+  purpose: "Read today's judge mode and min_takes for the missing-receipt report header.",
   callers: [ADMIN_ROUTE],
-  probe: { statement: "SELECT mode, min_takes, updated_at, policy_updated_at FROM swarm_judge_config WHERE id = 1" },
+  probe: { statement: "SELECT mode, min_takes, updated_at FROM swarm_judge_config WHERE id = 1" },
+});
+
+const scanPolicy = registerQuery({
+  role: "rm_app",
+  object: "swarm_judge_config",
+  privileges: ["SELECT"],
+  site: "src/swarm/receipt-gap:detectMissingReceiptSessions.scanPolicy",
+  purpose: "Read today's judge policy and its policy stamp inside the scan, for sessions that carry no mode of their own.",
+  callers: [ADMIN_ROUTE],
+  probe: SCAN_PROBE,
 });
 
 const scanSessions = registerQuery({
@@ -76,13 +131,7 @@ const scanSessions = registerQuery({
   site: "src/swarm/receipt-gap:detectMissingReceiptSessions.sessions",
   purpose: "Scan recently published sessions, with their captured judge mode and outcome, for a missing receipt.",
   callers: [ADMIN_ROUTE],
-  probe: {
-    statement: `SELECT s.id, s.subject_id, s.published_at, s.judging_outcome, s.judge_mode, s.judging_deadline_at
-      FROM swarm_sessions s
-      WHERE s.state = 'published' AND s.published_at IS NOT NULL AND s.published_at >= $1::timestamptz
-      ORDER BY s.published_at DESC`,
-    params: ["2026-01-01T00:00:00Z"],
-  },
+  probe: SCAN_PROBE,
 });
 
 const scanTakes = registerQuery({
@@ -92,11 +141,7 @@ const scanTakes = registerQuery({
   site: "src/swarm/receipt-gap:detectMissingReceiptSessions.takes",
   purpose: "Count each candidate session's distinct verified takers.",
   callers: [ADMIN_ROUTE],
-  probe: {
-    statement: `SELECT count(DISTINCT r.member_id)::int AS take_count FROM swarm_recommendations r
-      WHERE r.session_id = $1::uuid AND r.verified`,
-    params: [SAMPLE_SESSION],
-  },
+  probe: SCAN_PROBE,
 });
 
 const scanJudgements = registerQuery({
@@ -106,11 +151,7 @@ const scanJudgements = registerQuery({
   site: "src/swarm/receipt-gap:detectMissingReceiptSessions.judgements",
   purpose: "Read the session's own judgement record, enforce preferred, as the mode and threshold that applied.",
   callers: [ADMIN_ROUTE],
-  probe: {
-    statement: `SELECT mode, min_takes FROM swarm_session_judgements WHERE session_id = $1::uuid
-      ORDER BY (mode = 'enforce') DESC, id DESC LIMIT 1`,
-    params: [SAMPLE_SESSION],
-  },
+  probe: SCAN_PROBE,
 });
 
 const scanReceipts = registerQuery({
@@ -120,10 +161,7 @@ const scanReceipts = registerQuery({
   site: "src/swarm/receipt-gap:detectMissingReceiptSessions.receipts",
   purpose: "Test whether a candidate session already has a consensus receipt.",
   callers: [ADMIN_ROUTE],
-  probe: {
-    statement: "SELECT 1 FROM swarm_consensus_receipts rc WHERE rc.session_id = $1::uuid",
-    params: [SAMPLE_SESSION],
-  },
+  probe: SCAN_PROBE,
 });
 
 /**
@@ -230,7 +268,7 @@ export async function detectMissingReceiptSessions(
   const minTakes = Number(cfg?.min_takes ?? 3);
 
   const since = new Date(now.getTime() - lookbackDays * 86_400_000);
-  const rows = await on(db, scanSessions, readPolicy, scanTakes, scanJudgements, scanReceipts)<{
+  const rows = await on(db, scanSessions, scanPolicy, scanTakes, scanJudgements, scanReceipts)<{
     id: string; subject_id: string; published_at: Date | string; take_count: number;
     judging_outcome: string | null; mode_applied: string; min_takes_applied: number; elig_takes: boolean;
   }>`
