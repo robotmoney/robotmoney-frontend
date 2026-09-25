@@ -250,7 +250,7 @@
       "get": {
         "operationId": "getRegimeSnapshots",
         "summary": "Daily cross-asset risk-on / risk-off classifier",
-        "description": "The regime classifier: a composite score in 0..1 per day, its percentile, the label (risk_off below 0.33, neutral to 0.67, risk_on above), the macro / onchain / equity-factor indicator panels behind it, and the backtests. If all you want is today's reading it is `latest.composite` and `latest.regime`. Be aware of the size before you call: `range` trims the history but not the roughly 300 KB of backtests and correlations that ride on `latest`, so even range=1 is about 300 KB.\n\nResponse size: about 490 KB at the default 180 days, and about 300 KB at any range.\n\nResponse type: `{ latest: RegimeSnapshot, history: RegimeSnapshot[] }` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "The regime classifier: a composite score in 0..1 per day, its percentile, the label (risk_off below 0.33, neutral to 0.67, risk_on above), the macro / onchain / equity-factor indicator panels behind it, and the backtests. If all you want is today's reading it is `latest.composite` and `latest.regime`. Be aware of the size before you call: `range` trims the history but not the roughly 300 KB of backtests and correlations that ride on `latest`, so even range=1 is about 300 KB.\n\nResponse size: about 125 KB at the default 180 days and 33 KB at `?range=1`; `&include=backtest` adds about 125 KB of backtests.\n\nResponse type: `{ latest: RegimeSnapshot, history: RegimeSnapshot[] }` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],

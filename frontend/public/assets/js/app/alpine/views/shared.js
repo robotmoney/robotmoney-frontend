@@ -270,6 +270,19 @@ export const SOURCE_LABEL = {
 const HATCH_SWATCH = `url("data:image/svg+xml,${encodeURIComponent(
   "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><path d='M3-1L-9 11M7-1L-5 11M11-1L-1 11M15-1L3 11M19-1L7 11' stroke='rgba(242,244,249,0.6)' stroke-width='1'/></svg>",
 )}")`;
+// The same three treatments as CSS backgrounds, for the bands behind the
+// site's own charts (lib/line-chart.js), where each run is a strip of HTML
+// under the lines. The hatch is a 6px tile, so it keeps its angle and pitch
+// however the plot stretches.
+const HATCH_TILE = `url("data:image/svg+xml,${encodeURIComponent(
+  "<svg xmlns='http://www.w3.org/2000/svg' width='6' height='6'><path d='M-1 1l2-2M0 6L6 0M5 7l2-2' stroke='rgba(242,244,249,0.16)' stroke-width='1'/></svg>",
+)}")`;
+export const REGIME_BAND_BG = {
+  risk_on: rgba(PALETTE.text, 0.09),
+  neutral: rgba(PALETTE.text, 0.03),
+  risk_off: HATCH_TILE,
+};
+
 export const REGIME_BG_LEGEND = [
   { label: "risk-off", bg: HATCH_SWATCH },
   { label: "neutral", bg: rgba(PALETTE.text, 0.1) },

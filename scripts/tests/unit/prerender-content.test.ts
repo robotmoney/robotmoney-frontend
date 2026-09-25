@@ -19,7 +19,7 @@
 // against a committed fixture: the claim is about what a deploy serves, and a
 // fixture keeps passing long after the injection stops happening.
 import { describe, expect, test } from "bun:test";
-import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { viewFor } from "../../../frontend/public/assets/js/app/routes.js";
@@ -34,7 +34,12 @@ const ROUTES = Array.from(sitemap.matchAll(/<loc>https:\/\/robotmoney\.network([
 
 const dir = mkdtempSync(join(tmpdir(), "rm-prerender-"));
 cpSync(publicDir, dir, { recursive: true });
-const run = Bun.spawnSync(["bun", "scripts/prerender.ts"], { cwd: repoRoot, env: { ...process.env, PRERENDER_DIR: dir } });
+// The regime's reading comes from the goldens' saved snapshot, never the
+// network: a unit test that read production's API would pass or fail with it.
+const REGIME_GOLDEN = JSON.parse(readFileSync(join(repoRoot, "goldens/api-goldens.json"), "utf8")).routes["/api/dashboards/regime-snapshots"];
+const regimeFile = join(dir, "..", `rm-regime-${process.pid}.json`);
+writeFileSync(regimeFile, JSON.stringify(REGIME_GOLDEN));
+const run = Bun.spawnSync(["bun", "scripts/prerender.ts"], { cwd: repoRoot, env: { ...process.env, PRERENDER_DIR: dir, PRERENDER_REGIME: regimeFile } });
 
 const fileFor = (route: string) => (route === "/" ? join(dir, "index.html") : join(dir, route.slice(1), "index.html"));
 const htmlFor = (route: string) => readFileSync(fileFor(route), "utf8");
@@ -135,6 +140,23 @@ describe("research pages ship their structured data", () => {
       expect(Array.isArray(doc["@graph"]), `${route} @graph`).toBe(true);
       expect(doc["@graph"].some((n: { "@type"?: string }) => n["@type"] === "BreadcrumbList"), `${route} breadcrumbs`).toBe(true);
     }
+  });
+
+  // The regime's live reading reaches a reader that runs no JavaScript: in the
+  // machine-readers block as text and tables, and on the Dataset as values.
+  test("/regime carries the day's reading, its indicators and its correlations", () => {
+    const html = htmlFor("/regime");
+    const latest = REGIME_GOLDEN.latest;
+    const noscript = html.slice(html.indexOf('<section id="agent-data">'));
+    expect(noscript).toContain("The regime on ");
+    expect(noscript).toContain(`Composite ${latest.composite.toFixed(2)}`);
+    expect((noscript.match(/regime\/indicators#/g) || []).length).toBe(latest.indicators.length);
+    expect(noscript).toContain("Predictive power and alignment");
+    const doc = JSON.parse(ld(html)[0]!);
+    const ds = doc["@graph"].find((n: { "@type"?: string }) => n["@type"] === "Dataset");
+    expect(ds.dateModified).toBe(latest.date);
+    const composite = ds.variableMeasured.find((v: { name: string }) => v.name === "Composite");
+    expect(composite.value).toBeCloseTo(latest.composite, 3);
   });
 
   test("a page that is not research carries none", () => {
@@ -240,6 +262,7 @@ describe("what gets inlined is safe to inline", () => {
 });
 
 test("cleanup", () => {
+  rmSync(regimeFile, { force: true });
   rmSync(dir, { recursive: true, force: true });
   expect(true).toBe(true);
 });

@@ -39,6 +39,14 @@ const RESEARCH_REVISED = "2026-09-24";
 // the default answer is the last 180 days, and the Dataset's coverage is the
 // whole history, which starts on 2018-05-15.
 const REGIME_DATA_URL = ORIGIN + "/api/dashboards/regime-snapshots?range=3650";
+const REGIME_VARIABLES = [
+  { "@type": "PropertyValue", name: "Regime", description: "The composite's reading: risk-on, neutral or risk-off." },
+  { "@type": "PropertyValue", name: "Composite", minValue: 0, maxValue: 1, description: "The mean of the macro and on-chain panel indices." },
+  { "@type": "PropertyValue", name: "Composite percentile, 3 years", minValue: 0, maxValue: 1, description: "Where the composite ranks in its last 3 years; below 0.33 reads risk-off, above 0.67 risk-on." },
+  { "@type": "PropertyValue", name: "Macro index", minValue: 0, maxValue: 1, description: "A weighted mean of 8 macro indicators, 0 risk-off to 1 risk-on." },
+  { "@type": "PropertyValue", name: "On-chain index", minValue: 0, maxValue: 1, description: "A weighted mean of 10 on-chain indicators, 0 risk-off to 1 risk-on." },
+  { "@type": "PropertyValue", name: "Equity factor index", minValue: 0, maxValue: 1, description: "A weighted mean of 8 equity factor indicators, tracked for context and left out of the composite." },
+];
 
 // The shell's own robots directive (index.html). A route may override it with a
 // `robots` key below; every other route is restored to this on navigation, so a
@@ -734,8 +742,14 @@ export function routeStructuredData(pathname) {
       creator: ORG,
       publisher: ORG,
       temporalCoverage: "2018-05-15/..",
+      ...(m.modified ? { dateModified: m.modified } : {}),
       isAccessibleForFree: true,
-      variableMeasured: ["composite", "compositePercentile", "regime"],
+      keywords: ["market regime", "risk-on", "risk-off", "cross-asset", "macro indicators", "on-chain indicators", "equity factors", "crypto"],
+      measurementTechnique: "Rolling 3-year percentile ranks of 26 open-data indicators in three panels (macro, on-chain, equity factor), sign-aligned so high reads risk-on and weighted within each panel by point-in-time inverse correlation. The composite is the mean of the macro and on-chain panels, bucketed at its 33rd and 67th percentiles, with a 5-day or 2-sigma confirmation before the label switches.",
+      // The figures a snapshot carries. The prerender adds each one's value on
+      // the day it ran (scripts/lib/regime-snapshot.ts).
+      variableMeasured: REGIME_VARIABLES,
+      isBasedOn: { "@type": "TechArticle", "@id": ORIGIN + "/regime/indicators#article", url: ORIGIN + "/regime/indicators", name: "The 26 regime indicators" },
       distribution: [{ "@type": "DataDownload", encodingFormat: "application/json", contentUrl: REGIME_DATA_URL }],
     };
   } else if (m.type === "CollectionPage") {
