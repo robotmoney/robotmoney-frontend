@@ -925,6 +925,81 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
     expect(readFileSync(join(markers, "model-key"), "utf8")).toBe("athena-key-only-hers-42");
   }, 30_000);
 
+  test("THE RENDERED TAKE COMMAND, for real: author-take.ts reads the brief, asks the model on the member's OWN key, and the chain submits its draft", async () => {
+    // The argv every rendered agent carries (scripts/lib/participant-compose.ts
+    // PARTICIPANT_TAKE_COMMAND), with the script path absolute because this test
+    // runs from the repository root rather than the image's /app.
+    const { PARTICIPANT_TAKE_COMMAND } = await import("../../lib/participant-compose.ts");
+    expect(PARTICIPANT_TAKE_COMMAND).toEqual(["bun", "run", "scripts/agent/participant/author-take.ts"]);
+    const takeCommand = ["bun", "run", join(import.meta.dir, "..", "..", "agent", "participant", "author-take.ts")];
+    const seen: { auth: string | null; model: unknown }[] = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === ROUTES.swarm.brief) {
+          return Response.json({ body: { subject: { recommendationType: "stance" }, prompt: "Assess woon." }, reportSnapshotId: "rs-7" });
+        }
+        if (url.pathname === "/v1/chat/completions") {
+          const body = (await req.json()) as { model?: unknown };
+          seen.push({ auth: req.headers.get("authorization"), model: body.model });
+          return Response.json({ choices: [{ message: { content: `{"stance":"constructive","confidence":0.72,"body":"The treasury is well covered."}` } }] });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    try {
+      const root = dir();
+      const api = fakeApi();
+      const outcome = await runTake(
+        config({
+          workspaceRoot: root,
+          apiUrl: `http://127.0.0.1:${server.port}`,
+          inferenceUrl: `http://127.0.0.1:${server.port}/v1`,
+          inferenceWireId: "deepseek-v4-flash",
+          modelKey: "athena-own-model-key-0123456789",
+          takeCommand,
+        }),
+        work,
+      );
+      expect({ oneShot: outcome.oneShot, submission: outcome.submission, reason: outcome.reason }).toEqual({ oneShot: "ok", submission: "submitted", reason: undefined });
+      // ONE model call, on this member's own key, for the model the boot resolved.
+      expect(seen).toEqual([{ auth: "Bearer athena-own-model-key-0123456789", model: "deepseek-v4-flash" }]);
+      // The signed draft is what the model authored, bound to the brief's report.
+      expect(api.signingDrafts[0]).toMatchObject({ memberId: MEMBER_ID, subjectId: "woon", date: "2026-09-23", stance: "constructive", confidence: 0.72, reportSnapshotId: "rs-7" });
+    } finally {
+      server.stop(true);
+    }
+  }, 60_000);
+
+  test("the real take one-shot refuses rather than invents: an unparseable model answer submits nothing", async () => {
+    const takeCommand = ["bun", "run", join(import.meta.dir, "..", "..", "agent", "participant", "author-take.ts")];
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === ROUTES.swarm.brief) return new Response("no brief yet", { status: 404 });
+        if (url.pathname.startsWith("/api/swarm/subjects/")) return Response.json({ recommendationType: null });
+        if (url.pathname === "/v1/chat/completions") return Response.json({ choices: [{ message: { content: "I would rather not." } }] });
+        return new Response("not found", { status: 404 });
+      },
+    });
+    try {
+      const root = dir();
+      const api = fakeApi();
+      const outcome = await runTake(
+        config({ workspaceRoot: root, apiUrl: `http://127.0.0.1:${server.port}`, inferenceUrl: `http://127.0.0.1:${server.port}/v1`, inferenceWireId: "w", takeCommand }),
+        work,
+      );
+      expect(outcome.oneShot).toBe("crashed");
+      expect(outcome.reason).toContain("no JSON object");
+      expect(api.submits).toEqual([]);
+      expect(api.signingDrafts).toEqual([]);
+    } finally {
+      server.stop(true);
+    }
+  }, 60_000);
+
   test("authoring RESIDUE of a crashed attempt (no signed submission) is removed, and the take is authored fresh", async () => {
     const root = dir();
     const markers = dir();

@@ -878,7 +878,9 @@ function cleanup(): void {
     console.log(`[smoke] WARNING: failed purging evaluation containers: ${err instanceof Error ? err.message : err}`);
   }
   console.log("\n[smoke] tearing down (keeping postgres data)…");
-  const r = downStack ? downStack() : dockerCompose(["down"], false);
+  // --remove-orphans: the participant containers are defined by the generated
+  // participants overlay, not by these files, and go down with the stack.
+  const r = downStack ? downStack() : dockerCompose(["down", "--remove-orphans"], false);
   // The smoke-twin goes LAST, after the stack has stopped talking to it. Its VOLUME
   // survives on purpose (the ephemeral-pgdata contract); smoke:clean reclaims it.
   if (smokeTwinContainer) {
@@ -1398,7 +1400,7 @@ async function main(): Promise<void> {
     io: { stdout: outFd, stderr: errFd },
     hooks: { onEvent: onStackEvent },
   });
-  downStack = () => stack.down();
+  downStack = () => stack.down({ removeOrphans: true });
   if (dataPath.kind === "smoke-twin") assertSmokeTwinIsTarget(stack.spawnEnv, containerRoleUrls(dataPath).app);
 
   // NO MODE IMPLIES --seed OR --migrate (spec §4.3, §5, §8.5). Each runs only

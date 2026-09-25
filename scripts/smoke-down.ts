@@ -149,7 +149,12 @@ if (purged.skipped.length > 0) {
 
 // NO `-v`: keep the volume. `--env-file /dev/null`: compose must not read the
 // checkout's `.env` for interpolation (scripts/stack/config.ts composeArgs()).
-const r = Bun.spawnSync(["docker", "compose", "--env-file", "/dev/null", "down"], {
+// `--remove-orphans`: the participant containers (smoke spec §6.2) are this
+// project's too, defined by the generated participants overlay the boot adds,
+// not by the files here — without it they would outlive the stack they call,
+// and hold its network so `down` could not remove it (§1: `smoke:down` stops
+// everything).
+const r = Bun.spawnSync(["docker", "compose", "--env-file", "/dev/null", "down", "--remove-orphans"], {
   cwd: repoRoot,
   env: dockerEnv,
   stdout: "inherit",
