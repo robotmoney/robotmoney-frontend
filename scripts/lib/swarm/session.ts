@@ -303,6 +303,18 @@ export function operatorHeaders(token?: string): Record<string, string> {
   return operatorToken ? { "X-Automation-Token": operatorToken } : {};
 }
 
+/**
+ * A role-gated route answered a caller that lacks the right: only 401 or 403
+ * is a refusal. Anything else — a 400 from payload validation, a 2xx, a 404
+ * past the gate — means authorization PASSED, which since D52 (1) (no insecure
+ * gate) is a security failure the session must stop on, not a log line.
+ */
+export function assertRoleRefused(what: string, status: number): void {
+  if (status !== 401 && status !== 403) {
+    throw new Error(`${what}: expected 401/403 (refused for want of the right), got ${status} — the role gate let it through`);
+  }
+}
+
 async function responseJson<T = any>(response: Response): Promise<T> {
   return await response.json() as T;
 }
@@ -1482,10 +1494,11 @@ async function main() {
   console.log(`\n  new member eos: joins the roster — enrolls in its own container at session 2`);
 
   // ── Cross-role denial assertions ─────────────────────────────────────────
-  // Register a test member and verify identity-layer checks (always enforced
-  // regardless of RM_ALLOW_INSECURE). The smoke runs in insecure mode so role
-  // gates on regime write (analyticsProvider) and admin lifecycle (privileged)
-  // are open — the identity-layer submit checks are the universal enforcement.
+  // Register a test member and verify both layers: the identity-layer submit
+  // checks (5a, 5b) and the role gates (5c, 5d). D52 (1) retired the insecure
+  // gate, so a member token on the regime write (the analytics-producer's
+  // right) or on an epoch transition (the scheduler's `lifecycle_transitions`
+  // right, D55 (4)) is refused — asserted, not logged.
   const testReg = await fetch(`${backendUrl()}${ROUTES.swarm.register}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...operatorHeaders() },
     body: JSON.stringify({ memberId: "cross-role-test", name: "Cross Role Test", publicKey: (await generateKeyPair()).publicKeyB64 }),
@@ -1510,30 +1523,26 @@ async function main() {
   const mismatchOk = mismatchRes.status === 403 && String(mismatchRes.error).includes("token/member mismatch");
   if (!mismatchOk) throw new Error(`expected 403 token/member mismatch, got ${mismatchRes.status}`);
 
-  // 5c. Known member token calling regime write (would be 403 with
-  // ANALYTICS_TOKEN set; in insecure mode the gate is open so we document
-  // the expected behaviour rather than assert a specific status).
+  // 5c. A known member token on the regime write — the analytics-producer's
+  // right, never a member's. The body has the retired trigger shape on
+  // purpose: a 400 would be positive evidence that authorization PASSED and
+  // payload validation ran, so only 401/403 counts as refused.
   const regimeWriteRes = await fetch(`${backendUrl()}${ROUTES.swarm.regime}`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
     body: JSON.stringify({ asof: today }),
   });
-  // A member token can only get past the analytics-role check when that gate
-  // is open. The body intentionally has the retired trigger shape, so 400 is
-  // positive evidence that authorization passed and payload validation ran;
-  // 403 is the enforced-role result. Observe that boundary instead of reading
-  // ANALYTICS_TOKEN in this harness process.
-  const regimeGateOpen = regimeWriteRes.status !== 403;
-  console.log(`  cross-role: member → regime write → ${regimeWriteRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
+  console.log(`  cross-role: member → regime write → ${regimeWriteRes.status}`);
+  assertRoleRefused("member token on the regime write", regimeWriteRes.status);
 
-  // 5d. Known member token calling a lifecycle transition (same insecure-mode
-  // caveat). The epoch turnover, not the retired `close` action: it is the
-  // route that actually closes a window now (§4.3), so it is the one whose
-  // gate is worth observing.
+  // 5d. A known member token on an epoch transition — the scheduler's
+  // `lifecycle_transitions` right alone (D55 (4)). The turnover, not the
+  // retired `close` action: it is the route that closes a window now (§4.3).
   const adminCloseRes = await fetch(`${backendUrl()}${ROUTES.swarm.admin.epochTurnover}`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
     body: JSON.stringify({ subjectId: "cross-role-probe", expectedSessionId: "00000000-0000-4000-8000-000000000000" }),
   });
-  console.log(`  cross-role: member → epoch turnover → ${adminCloseRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
+  console.log(`  cross-role: member → epoch turnover → ${adminCloseRes.status}`);
+  assertRoleRefused("member token on the epoch turnover", adminCloseRes.status);
 
   // NO JUDGE COVERAGE HERE (issue #1026, D48/D53). This used to grant `themis`
   // the judge role and flip `swarm_judge_config.mode` to `enforce` around

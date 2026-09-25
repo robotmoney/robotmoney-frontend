@@ -53,7 +53,15 @@ import {
   terminalReadinessFailure,
   type ReadinessObservation,
 } from "../../lib/smoke-readiness-scheduler.ts";
-import { makeReadinessObserver, READ_ONLY_DOCKER_SUBCOMMANDS, readOnlyRunner, type ProbeRunner } from "../../lib/smoke-readiness-probes.ts";
+import {
+  makeReadinessObserver,
+  parseProducerHealth,
+  PRODUCER_AUTHENTICATED_PHASES,
+  READ_ONLY_DOCKER_SUBCOMMANDS,
+  readOnlyRunner,
+  type ProbeRunner,
+} from "../../lib/smoke-readiness-probes.ts";
+import { evaluateHeartbeat } from "../../../backend/src/ops/heartbeat.ts";
 
 const REPO = join(import.meta.dir, "..", "..", "..");
 
@@ -311,7 +319,7 @@ function allGood(over: Partial<ReadinessObservation> = {}): ReadinessObservation
       { service: "worker-analytics", health: "healthy", line: { kind: "passed" } },
       { service: "worker-research", health: "healthy", line: { kind: "passed" } },
     ],
-    producer: { health: "healthy", detail: "authenticated gate answered" },
+    producer: { health: "healthy", phase: "armed", authenticated: true, detail: "heartbeat phase=armed" },
     seed: { completed: true, detail: "exited 0" },
     ...over,
   };
@@ -334,7 +342,8 @@ describe("readiness is every §6.3 condition, each a named result for the receip
       [{ workers: [{ service: "worker-analytics", health: "starting", line: null }] }, "pipeline-worker-startup"],
       [{ workers: [{ service: "worker-analytics", health: "unhealthy", line: { kind: "refused", detail: "check 2: rm_worker holds DELETE" } }] }, "pipeline-worker-startup"],
       [{ workers: [] }, "pipeline-worker-startup"],
-      [{ producer: { health: "unhealthy", detail: "401" } }, "analytics-producer-authenticated"],
+      [{ producer: { health: "unhealthy", phase: null, authenticated: false, detail: "exited: credential rejected" } }, "analytics-producer-authenticated"],
+      [{ producer: { health: "healthy", phase: "boot", authenticated: false, detail: "phase=boot" } }, "analytics-producer-authenticated"],
       [{ seed: { completed: false, detail: "exit 1" } }, "analytics-producer-seed"],
       [{ scheduler: null }, "scheduler-authenticated"],
       [{ subjects: null }, "epoch-per-active-subject"],
@@ -362,6 +371,57 @@ describe("readiness is every §6.3 condition, each a named result for the receip
     expect(parseStartupPreflightLine("startup_preflight passed")).toBeNull();
     expect(lastStartupPreflightLine("boot\nstartup_preflight: refused check 1: bad password\nretry\nstartup_preflight: passed\n")).toEqual({ kind: "passed" });
     expect(lastStartupPreflightLine("nothing yet\n")).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The producer's authentication is its heartbeat PHASE, not its container health
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The producer writes a `boot` record (staleAfterMs 180s) BEFORE waitForApi
+// presents its token (backend/src/producer/index.ts startProducerSchedules), so
+// its container is `healthy` while it has authenticated nothing. The fixtures
+// below are Docker's `.State.Health` carrying the line the REAL healthcheck
+// prints (backend/src/ops/healthcheck.ts: `ok: <reason> [<path>]`), with the
+// reason made by the REAL evaluateHeartbeat over a real record — a renamed
+// `phase=` on the producing side breaks this file.
+describe("analytics-producer-authenticated reads the heartbeat phase the producer writes only after its token authenticated", () => {
+  const now = 1_800_000_000_000;
+  const line = (phase: string) => {
+    const verdict = evaluateHeartbeat(JSON.stringify({ ts: now - 2_000, staleAfterMs: 180_000, writer: "analytics-producer", phase, detail: "x" }), now);
+    return `${verdict.healthy ? "ok" : "STALE"}: ${verdict.reason} [/tmp/heartbeat.json]\n`;
+  };
+  const dockerHealth = (status: string, entries: { exit: number; out: string }[]) =>
+    JSON.stringify({ Status: status, FailingStreak: 0, Log: entries.map((e) => ({ Start: "", End: "", ExitCode: e.exit, Output: e.out })) });
+
+  test("RED CONTROL: a healthy container whose last check printed phase=boot has NOT authenticated", () => {
+    const r = parseProducerHealth(dockerHealth("healthy", [{ exit: 0, out: line("boot") }]));
+    expect(r.health).toBe("healthy");
+    expect(r.phase).toBe("boot");
+    expect(r.authenticated).toBe(false);
+    const checks = evaluateReadiness(allGood({ producer: r }));
+    expect(passOf(checks, "analytics-producer-authenticated")).toBe(false);
+    expect(checks.find((c) => c.check === "analytics-producer-authenticated")!.detail).toContain("has not yet authenticated");
+  });
+
+  test("each post-authentication phase passes, on a passing check of a healthy container", () => {
+    expect([...PRODUCER_AUTHENTICATED_PHASES]).toEqual(["busy", "armed"]);
+    for (const phase of PRODUCER_AUTHENTICATED_PHASES) {
+      const r = parseProducerHealth(dockerHealth("healthy", [{ exit: 0, out: line("boot") }, { exit: 0, out: line(phase) }]));
+      expect({ phase, authenticated: r.authenticated }).toEqual({ phase, authenticated: true });
+      expect(passOf(evaluateReadiness(allGood({ producer: r })), "analytics-producer-authenticated")).toBe(true);
+    }
+  });
+
+  test("the LAST check decides: an armed record followed by a failing check is not authenticated", () => {
+    const r = parseProducerHealth(dockerHealth("unhealthy", [{ exit: 0, out: line("armed") }, { exit: 1, out: "STALE: no heartbeat file — the work loop has never reported progress [/tmp/h]" }]));
+    expect(r.authenticated).toBe(false);
+  });
+
+  test("no healthcheck yet, no health state, or unparseable output is not authenticated", () => {
+    expect(parseProducerHealth(dockerHealth("starting", [])).authenticated).toBe(false);
+    expect(parseProducerHealth("null").authenticated).toBe(false);
+    expect(parseProducerHealth("not json").authenticated).toBe(false);
   });
 });
 
@@ -421,6 +481,9 @@ describe("the REAL readiness path issues read-only docker commands only — smok
       seen.push([...args]);
       if (args.includes("port")) return { exitCode: 0, stdout: "127.0.0.1:41999\n", stderr: "" };
       if (args[0] === "ps") return { exitCode: 0, stdout: `${args.find((a) => a.startsWith("label=com.docker.compose.service="))!.split("=").at(-1)}-id\n`, stderr: "" };
+      if (args[0] === "inspect" && args.includes("{{json .State.Health}}")) {
+        return { exitCode: 0, stdout: JSON.stringify({ Status: "healthy", Log: [{ ExitCode: 0, Output: "ok: progress 1s ago (budget 120s) — analytics-producer phase=armed x [/tmp/h]" }] }), stderr: "" };
+      }
       if (args[0] === "inspect") return { exitCode: 0, stdout: "healthy\n", stderr: "" };
       if (args[0] === "logs") return { exitCode: 0, stdout: "startup_preflight: passed\n", stderr: "" };
       if (over.restartTried !== undefined) over.restartTried = true;
@@ -457,6 +520,9 @@ describe("the REAL readiness path issues read-only docker commands only — smok
     const verdict = await awaitReadiness(observe, { timeoutMs: 60_000, pollMs: 1, sleep: async () => {} });
     expect(verdict.passed).toBe(false);
     expect(verdict.reason).toContain("exhausted work");
+    // The producer's authentication came from its heartbeat phase over `inspect`.
+    expect(passOf(verdict.checks, "analytics-producer-authenticated")).toBe(true);
+    expect(seen.some((argv) => argv[0] === "inspect" && argv.includes("{{json .State.Health}}"))).toBe(true);
     expect(seen.length).toBeGreaterThan(0);
     for (const argv of seen) {
       const sub = argv[0] === "compose" ? `compose ${argv.find((a, i) => i > 0 && !a.startsWith("-") && !["-p", "-f", "--env-file"].includes(argv[i - 1]!))}` : argv[0];

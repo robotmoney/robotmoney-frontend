@@ -287,7 +287,13 @@ export interface ReadinessObservation {
   /** Active subjects and the subjects holding a `collecting` session, as the API reports them; null when unreadable. */
   subjects: { active: readonly string[]; collecting: readonly string[] } | null;
   workers: readonly WorkerStartupReading[];
-  producer: { health: ContainerHealth; detail: string };
+  /**
+   * The analytics-producer's authentication, read from the heartbeat phase its
+   * last healthcheck printed (smoke-readiness-probes.ts readProducerAuth): a
+   * healthy container is not enough, since the producer is healthy on its
+   * pre-authentication `boot` record.
+   */
+  producer: { health: ContainerHealth; phase: string | null; authenticated: boolean; detail: string };
   /** The producer's seed command: whether it exited 0 on this boot. */
   seed: { completed: boolean; detail: string };
 }
@@ -323,8 +329,8 @@ export function evaluateReadiness(o: ReadinessObservation): GateCheck[] {
     evaluateWorkerStartup(o.workers),
     {
       check: "analytics-producer-authenticated",
-      pass: o.producer.health === "healthy",
-      detail: `container ${o.producer.health}: ${o.producer.detail}`,
+      pass: o.producer.authenticated && o.producer.health === "healthy",
+      detail: o.producer.detail,
     },
     { check: "analytics-producer-seed", pass: o.seed.completed, detail: o.seed.detail },
     ...scheduler,
@@ -354,8 +360,9 @@ export function terminalReadinessFailure(o: ReadinessObservation): string | null
 /**
  * How long a boot's readiness waits for every condition before it fails. It
  * covers the scheduler's startup check, first rebuild and first epoch per active
- * subject, and the worker's startup checks; the producer was already waited
- * healthy by its deferred start. A failure that waiting cannot fix ends the wait
+ * subject, the worker's startup checks, and the producer's first post-
+ * authentication heartbeat (its deferred start waits only for a healthy
+ * container, which its pre-authentication `boot` record already gives). A failure that waiting cannot fix ends the wait
  * at once ({@link terminalReadinessFailure}).
  */
 export const READINESS_TIMEOUT_MS = 5 * 60_000;

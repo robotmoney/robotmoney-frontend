@@ -1061,6 +1061,14 @@ async function observeSchema(): Promise<{ ledger: string[]; manifestHash: string
 // --- Orchestration --------------------------------------------------------
 /** Thrown at a phase boundary after a SIGINT/SIGTERM, once the stop is journaled (§1.4). */
 class StoppedAtBoundary extends Error {}
+/**
+ * A refusal taken before this boot's first write to anything: the target, the
+ * live site, or a container (§13.3's web-compat refusal). The failure path
+ * journals it and exits non-zero, and — unlike a startup failure — stops no
+ * writer and tears nothing down: every container running is the PREVIOUS
+ * deployment's, and the refusal exists to leave it exactly as it was.
+ */
+class RefusedBeforeAnyWrite extends Error {}
 
 const EMPTY_OUTCOME: PhaseOutcome = {
   migrationsApplied: [],
@@ -1249,7 +1257,7 @@ async function main(): Promise<void> {
   }
 
   // ── The bring-up IS scripts/stack's bring-up (§11.3 E5) ──────────────────
-  // database → assemble → site → build → preflight → services → /health, in ONE
+  // assemble → database → site → build → preflight → services → /health, in ONE
   // shared implementation. The smoke contributes the `full` profile, the
   // database half (prepareDatabase), the narration, and — through beforeStep —
   // its phase boundaries.
@@ -1422,20 +1430,27 @@ async function main(): Promise<void> {
     if (stackStep === "assemble") {
       await commit();
       await begin("prepare", "assemble");
+    } else if (stackStep === "database") {
+      // §13.3, D54: BEFORE THE FIRST MUTATION OF THE TARGET — no role, no
+      // lock, no migrate, no seed, no token — the site that will serve this
+      // plan's api (the one it deploys, else the live one) must admit this
+      // tree's API version. stack.up assembles `_static` before this boundary
+      // precisely so the decision can be taken here. A refusal leaves the
+      // database, the live site and every container as they were.
+      await commit();
+      await begin("prepare", "web-compat");
+      const compat = readWebCompatPlan(paths.webDir, join(repoRoot, "_static"), readContractVersion(repoRoot));
+      const refusal = webCompatRefusal(compat);
+      if (refusal) throw new RefusedBeforeAnyWrite(refusal);
+      log(`web compat: API ${compat.apiVersion} is inside ${(compat.deploys ?? compat.live)!.siteId}'s range (${(compat.deploys ?? compat.live)!.range})`);
+      await commit();
     } else if (stackStep === "site") {
       // W7: the assembled `_static` becomes this instance's current site
       // (stack.ts places it; scripts/lib/smoke-site.ts). A switch of `current`
-      // changes what a running website-server serves, so it is journaled.
+      // changes what a running website-server serves, so it is journaled. The
+      // compat decision was taken at the `database` boundary, before any write.
       await commit();
       await begin("prepare", "site");
-      // §13.3, D54: BEFORE the switch and before any service is replaced, the
-      // site that will serve this plan's api — the one it deploys, else the
-      // live one — must admit this tree's API version. A refusal leaves the
-      // live site and every container as they were.
-      const compat = readWebCompatPlan(paths.webDir, join(repoRoot, "_static"), readContractVersion(repoRoot));
-      const refusal = webCompatRefusal(compat);
-      if (refusal) throw new Error(refusal);
-      log(`web compat: API ${compat.apiVersion} is inside ${(compat.deploys ?? compat.live)!.siteId}'s range (${(compat.deploys ?? compat.live)!.range})`);
     } else if (stackStep === "build") {
       await commit();
       await begin("prepare", "images");
@@ -1641,14 +1656,15 @@ async function runCiScenario(stack: Stack): Promise<never> {
   }
 
   if (process.env.CI && dataPath.kind !== "smoke-twin") {
-    // RM_ALLOW_INSECURE=1: docker-compose.smoke.yml runs the api with this flag,
-    // so the session driver is told explicitly (it is secure-by-default). The
+    // No RM_ALLOW_INSECURE: D52 (1) retired the insecure gate, and the driver
+    // presents the operator's token for its admin calls and asserts that a
+    // member token is REFUSED on the role-gated routes (session.ts 5c/5d). The
     // stack's exact compose env + COMPOSE_FILE ride along because the driver
     // launches one member-agent CONTAINER per present member (issue #361), and
     // its `docker compose run` children must re-resolve the same compose model.
     console.log("\n[smoke] running swarm session…");
     await run(["bun", "run", "scripts/lib/swarm/session.ts"], repoRoot,
-      { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, ...operatorTokenEnv(), RM_ALLOW_INSECURE: "1" } as Record<string, string>, "swarm session");
+      { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, ...operatorTokenEnv() } as Record<string, string>, "swarm session");
 
     // Issue #209: the repo-native single-member starter against this live stack,
     // including its two missing-credential guards. (D21: REST is the only transport.)
@@ -1793,6 +1809,15 @@ main().catch(async (err) => {
     try { await journal.endPhase("failed", em); } catch { /* the error below is the one to report */ }
   }
   await releaseTargetLock();
+
+  // A refusal before this boot's first write: nothing of this plan ran, and
+  // every running container is the previous deployment's. Stopping its writers
+  // (below) would take down the live service over a boot that changed nothing.
+  if (err instanceof RefusedBeforeAnyWrite) {
+    console.error(`[smoke] refused: ${em}`);
+    console.error("[smoke] nothing was changed: the database, the live site and every running container are as they were.");
+    process.exit(1);
+  }
 
   // CI tears the stack down, which also stops the writers, and must exit
   // non-zero for the job to fail.

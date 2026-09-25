@@ -11,14 +11,29 @@
 // with no Docker. Then the REAL `bun smoke` process on an instance whose live
 // site is planted before the boot:
 //
-//   out of range, and the plan deploys no other site  → refuses before any
-//                                                       application service
-//                                                       exists, live site kept;
+//   out of range, and the plan deploys no other site  → refuses before the
+//                                                       first write to the
+//                                                       target: no postgres, no
+//                                                       lock, no migrate, live
+//                                                       site kept;
 //   no declared range (legacy), no other site         → refuses the same way;
 //   no declared range, and the plan deploys the tree's
 //   own site, whose range includes the API            → proceeds past the site
 //                                                       step with `current`
-//                                                       switched to it.
+//                                                       switched to it;
+//   a RUNNING instance, then `--local volume --migrate`
+//   with its live site out of range                   → refuses before the
+//                                                       database step: the
+//                                                       running api, postgres,
+//                                                       ledger and manifest are
+//                                                       exactly as they were.
+//
+// The last case is the one that matters for a real deployment: before #1026's
+// fix the refusal ran at the `site` step, AFTER prepareDatabase had taken the
+// lock, migrated, seeded and provisioned tokens — so a refused boot left the old
+// api running against a migrated schema. Its red control is the journal: on
+// that code the refused plan carries `prepare:database`, `prepare:lock` and
+// `prepare:migrate` records; here it carries none.
 //
 // "The plan deploys no other site" is made real, not faked: the planted live
 // site IS this tree's assembled site — same id, same content digest — with only
@@ -34,6 +49,7 @@ import { readWebCompatPlan, webCompatRefusal } from "../../lib/smoke-web-compat.
 import { instancePaths } from "../../lib/smoke-state.ts";
 import {
   bootFailureReport,
+  bootQuery,
   BOOT_TIMEOUT_MS,
   containerIdentity,
   harness,
@@ -162,13 +178,16 @@ describe("a real `bun smoke` process against a planted live site (criterion 162)
     expect({ code: code === 0 ? 0 : "non-zero" }).toEqual({ code: "non-zero" });
     expect({ refused: out.includes(`refusing to replace api: API version ${API}`), report: out.includes(says) ? "" : bootFailureReport(slot.boot) })
       .toEqual({ refused: true, report: "" });
-    // Before ANY application service: the journal never reached `replace`, and
-    // no api, worker, scheduler, producer or website container was created.
+    // Before the FIRST WRITE to the target: the refusal is the web-compat
+    // record, and no database, lock, migrate, token or replace record follows
+    // it. No container at all was created — not even postgres.
     const phases = (journalNow(h)?.phases ?? []).map((r) => `${r.phase}:${r.step ?? ""}:${r.status}`);
-    expect(phases).toContain("prepare:site:failed");
+    expect(phases).toContain("prepare:web-compat:failed");
+    for (const step of ["database", "lock", "bootstrap", "migrate", "seed", "tokens", "site"]) {
+      expect({ step, journaled: phases.some((p) => p.startsWith(`prepare:${step}:`)) }).toEqual({ step, journaled: false });
+    }
     expect(phases.some((p) => p.startsWith("replace"))).toBe(false);
-    const containers = Object.keys(containerIdentity(h.project));
-    expect(containers.filter((s) => s !== "postgres")).toEqual([]);
+    expect(Object.keys(containerIdentity(h.project))).toEqual([]);
     // The live site is still the one that was live.
     expect(readlinkSync(join(h.paths.webDir, "current"))).toBe(liveId);
   }
@@ -180,6 +199,59 @@ describe("a real `bun smoke` process against a planted live site (criterion 162)
   test("a legacy live site with no declared range, and no other site: refused the same way", async () => {
     await expectRefusedBeforeReplace("webcompat-legacy", { same: true, range: null }, "no declared range");
   }, BOOT_TIMEOUT_MS);
+
+  test("a running instance, then `--local volume --migrate` with its live site out of range: refused before the database is touched", async () => {
+    // 1. A blank instance with a running api on a migrated database. The boot
+    //    is stopped at a boundary once its services are replaced; its
+    //    containers stay up (a stopped boot tears nothing down).
+    const { h, slot } = instanceWithLiveSite("webcompat-vol", { same: false, range: null });
+    slot.boot = spawnBoot(h, [], { ownProcessGroup: false });
+    await waitFor(
+      () => (journalNow(h)?.phases ?? []).some((r) => r.phase === "replace" && r.status === "committed"),
+      BOOT_TIMEOUT_MS - 120_000,
+      "the first boot to replace its services",
+      slot.boot,
+    );
+    slot.boot.proc.kill("SIGINT");
+    await slot.boot.exited;
+    const before = containerIdentity(h.project);
+    expect({ api: before.api?.state, postgres: before.postgres?.state }).toEqual({ api: "running", postgres: "running" });
+    const ledgerBefore = bootQuery(h.project, "SELECT string_agg(name, ',' ORDER BY name) FROM schema_migrations");
+    const manifestBefore = bootQuery(h.project, "SELECT content_hash FROM schema_manifest");
+    expect(ledgerBefore).not.toBeNull();
+    expect(manifestBefore).not.toBeNull();
+
+    // 2. The live site (this tree's own, now current) is made to exclude this
+    //    tree's API. Same id and digest, so the next plan deploys no other site.
+    const liveId = readlinkSync(join(h.paths.webDir, "current"));
+    expect(liveId).toBe(siteId);
+    const versionFile = join(h.paths.webDir, liveId, "version.json");
+    writeFileSync(versionFile, JSON.stringify({ ...JSON.parse(readFileSync(versionFile, "utf8")), apiRange: "<0.1.0" }));
+
+    // 3. `--local volume --migrate` on the same instance: refused.
+    slot.boot = spawnBoot(h, [], { local: "volume" });
+    const code = await slot.boot.exited;
+    const out = slot.boot.output();
+    expect({ code: code === 0 ? 0 : "non-zero" }).toEqual({ code: "non-zero" });
+    expect({ refused: out.includes(`refusing to replace api: API version ${API}`), report: out.includes("apiRange <0.1.0") ? "" : bootFailureReport(slot.boot) })
+      .toEqual({ refused: true, report: "" });
+    const journal = journalNow(h)!;
+    const phases = journal.phases.map((r) => `${r.phase}:${r.step ?? ""}:${r.status}`);
+    expect(phases).toContain("prepare:web-compat:failed");
+    for (const step of ["database", "lock", "migrate", "seed", "tokens", "site"]) {
+      expect({ step, journaled: phases.some((p) => p.startsWith(`prepare:${step}:`)) }).toEqual({ step, journaled: false });
+    }
+    // The running stack is exactly as it was: same containers, never restarted.
+    const after = containerIdentity(h.project);
+    for (const service of ["api", "postgres"]) {
+      expect({ service, id: after[service]?.id, startedAt: after[service]?.startedAt })
+        .toEqual({ service, id: before[service]!.id, startedAt: before[service]!.startedAt });
+    }
+    // …and the schema it serves is the one it had.
+    expect(bootQuery(h.project, "SELECT string_agg(name, ',' ORDER BY name) FROM schema_migrations")).toBe(ledgerBefore);
+    expect(bootQuery(h.project, "SELECT content_hash FROM schema_manifest")).toBe(manifestBefore);
+    expect(readlinkSync(join(h.paths.webDir, "current"))).toBe(liveId);
+  }, BOOT_TIMEOUT_MS * 2);
 
   test("a legacy live site, and a plan that deploys this tree's including site: the boot proceeds past the site step", async () => {
     const { h, slot } = instanceWithLiveSite("webcompat-deploys", { same: false, range: null });

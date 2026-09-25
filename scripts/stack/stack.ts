@@ -63,8 +63,8 @@ export type StackPhase = "docker-preflight" | "build" | "postgres" | "migrate" |
  * caller may act at, not narration.
  */
 export type StackStep =
-  | "database"
   | "assemble"
+  | "database"
   | "site"
   | "build"
   | "postgres"
@@ -602,12 +602,17 @@ export function createStack(
     const boundary = async (step: StackStep): Promise<void> => {
       if (upOpts.beforeStep) await upOpts.beforeStep(step);
     };
+    // ASSEMBLE FIRST, then the database. Assembly writes only the checkout's
+    // `_static`; it touches no target. Running it before prepareDatabase lets
+    // a caller decide on the assembled site at the `database` boundary, BEFORE
+    // the first mutation of the target (smoke spec §13.3: the web-compat
+    // refusal must leave the database and every container as they were).
+    await boundary("assemble");
+    await assembleStaticDir();
     if (upOpts.prepareDatabase) {
       await boundary("database");
       await upOpts.prepareDatabase();
     }
-    await boundary("assemble");
-    await assembleStaticDir();
     if (cfg.instance) {
       // The assembled site becomes the instance's current one (website-server
       // serves `web/current`; scripts/lib/smoke-site.ts). Every consumer of this

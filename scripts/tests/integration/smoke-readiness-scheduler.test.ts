@@ -38,7 +38,10 @@
 // carries every condition as a passed, named result) and
 // scripts/tests/integration/scheduler-api-runtime.test.ts (the real scheduler
 // process against the real API and Postgres, including a re-provisioned token
-// that leaves the running scheduler unhealthy until it is restarted).
+// that leaves the running scheduler unhealthy until it is restarted, and a
+// turnover the real scheduler EXHAUSTS against a frozen database, which smoke's
+// real observer and gate then fail on their first poll, naming the item, with
+// read-only docker argv and no restart).
 //
 // THIS FILE stays what it was: the socket hops, against a Bun server that
 // implements the epoch routes in memory. The API's own behaviour is owned by

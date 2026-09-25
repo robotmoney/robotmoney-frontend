@@ -49,6 +49,8 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { POSTGRES_IMAGE } from "../../lib/postgres-image.ts";
+import { awaitReadiness } from "../../lib/smoke-readiness-scheduler.ts";
+import { makeReadinessObserver, READ_ONLY_DOCKER_SUBCOMMANDS, type ProbeRunner } from "../../lib/smoke-readiness-probes.ts";
 import { dockerLabelFlags, resolveStackEnvironment, stackLabels, stackProjectName } from "../../stack/naming.ts";
 
 const REPO = join(import.meta.dir, "..", "..", "..");
@@ -635,4 +637,92 @@ describe("re-provisioning the scheduler's token (smoke spec §3: rotation is a r
     await startScheduler();
     expect((await schedulerHealth())?.status).toBe(200);
   }, 120_000);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EXHAUSTED WORK FAILS SMOKE'S READINESS AT ONCE, AND SMOKE RESTARTS NOTHING
+// (smoke spec §6.3, criterion 27's runtime half)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The REAL scheduler process meets an unreachable dependency: Postgres is
+// frozen (`docker pause`) just before a turnover instant, so the API cannot
+// answer the turnover and every attempt times out. The scheduler exhausts its
+// §4.6 retry budget and reports the item on its REAL /health. Smoke's REAL
+// readiness path — makeReadinessObserver over awaitReadiness — then reads that
+// endpoint and must fail on the first poll, naming the item, having issued only
+// read docker argv. The docker runner is a recorder that answers like a daemon
+// (the scheduler here is a host process, so `compose port` is answered with
+// its real health port); every HTTP read is real.
+describe("a scheduler with exhausted work fails smoke's readiness at once, with no restart (§6.3)", () => {
+  test("the real scheduler exhausts a turnover against a frozen database; the real observer fails on its first poll", async () => {
+    const id = `rt_exhaust_${crypto.randomUUID().slice(0, 6)}`;
+    await createSubject(id, 8);
+    const [open] = await waitFor("the scheduler to open the first epoch", () => {
+      const c = collectingOf(id);
+      return c.length === 1 ? c : null;
+    });
+    // Freeze the database a moment before the turnover instant.
+    const untilCloseMs = Number(psql(`SELECT floor(extract(epoch FROM window_closes_at - clock_timestamp()) * 1000) FROM swarm_sessions WHERE id = ${lit(open!.id)}`));
+    await Bun.sleep(Math.max(0, untilCloseMs - 1_500));
+    expect(Bun.spawnSync(["docker", "pause", pgName]).exitCode).toBe(0);
+    try {
+      // §4.6: five attempts, 20s each at most, with backoff between them.
+      let exhausted: { item: string }[] = [];
+      for (const deadline = Date.now() + 200_000; Date.now() < deadline && exhausted.length === 0; await Bun.sleep(1_000)) {
+        const r = await fetch(`http://127.0.0.1:${healthPort}/health`, { signal: AbortSignal.timeout(2_000) }).then((x) => x.json()).catch(() => null) as { exhausted?: { item: string }[] } | null;
+        exhausted = r?.exhausted ?? [];
+      }
+      if (exhausted.length === 0) {
+        throw new Error(`the scheduler never reported exhausted work\n--- process logs ---\n${logs.slice(-60).join("\n")}`);
+      }
+
+      const seen: string[][] = [];
+      const run: ProbeRunner = (args) => {
+        seen.push([...args]);
+        if (args.includes("port")) return { exitCode: 0, stdout: `127.0.0.1:${healthPort}\n`, stderr: "" };
+        if (args[0] === "ps") return { exitCode: 0, stdout: "container-id\n", stderr: "" };
+        if (args[0] === "inspect" && args.includes("{{json .State.Health}}")) {
+          return { exitCode: 0, stdout: JSON.stringify({ Status: "healthy", Log: [{ ExitCode: 0, Output: "ok: progress 1s ago — analytics-producer phase=armed" }] }), stderr: "" };
+        }
+        if (args[0] === "inspect") return { exitCode: 0, stdout: "healthy\n", stderr: "" };
+        if (args[0] === "logs") return { exitCode: 0, stdout: "startup_preflight: passed\n", stderr: "" };
+        return { exitCode: 1, stdout: "", stderr: `unexpected docker ${args.join(" ")}` };
+      };
+      const observe = makeReadinessObserver({
+        project: "rm_it_sched_rt",
+        composePrefix: ["compose", "--env-file", "/dev/null", "-p", "rm_it_sched_rt", "-f", "docker-compose.yml"],
+        apiUrl: `http://127.0.0.1:${apiPort}`,
+        operatorToken,
+        workerServices: ["worker-analytics"],
+        producerService: "analytics-producer",
+        schedulerService: "system-scheduler",
+        seed: () => ({ completed: true, detail: "exited 0" }),
+        run,
+      });
+      let polls = 0;
+      const verdict = await awaitReadiness(async () => {
+        polls++;
+        return observe();
+      }, { timeoutMs: 120_000, pollMs: 1_000 });
+      expect(verdict.passed).toBe(false);
+      expect(polls).toBe(1);
+      expect(verdict.reason).toContain("exhausted work");
+      for (const item of exhausted) expect(verdict.reason).toContain(item.item);
+      expect(verdict.checks.find((c) => c.check === "scheduler-no-exhausted-work")?.pass).toBe(false);
+      for (const argv of seen) {
+        const sub = argv[0] === "compose" ? `compose ${argv.find((a, i) => i > 0 && !a.startsWith("-") && !["-p", "-f", "--env-file"].includes(argv[i - 1]!))}` : argv[0];
+        expect({ argv: argv.join(" "), read: (READ_ONLY_DOCKER_SUBCOMMANDS as readonly string[]).includes(sub!) }).toEqual({ argv: argv.join(" "), read: true });
+        expect(argv).not.toContain("restart");
+      }
+      // The scheduler process was left exactly as it was: still running, still exhausted.
+      expect(scheduler?.exitCode ?? null).toBeNull();
+      const after = await fetch(`http://127.0.0.1:${healthPort}/health`).then((x) => x.json()) as { exhausted: unknown[] };
+      expect(after.exhausted.length).toBeGreaterThan(0);
+    } finally {
+      Bun.spawnSync(["docker", "unpause", pgName]);
+    }
+    // The operator's recovery (§6.3): restart the scheduler once the dependency is back.
+    await stopScheduler();
+    await startScheduler();
+  }, 300_000);
 });
