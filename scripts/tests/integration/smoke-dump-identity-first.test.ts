@@ -36,7 +36,7 @@
 // boot first reattaches the restored copy (scripts/lib/smoke-main.ts), which is
 // ./smoke-dump-lifecycle.test.ts's reattach case.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { BOOT_TIMEOUT_MS, bootFailureReport, harness, journalNow, spawnBoot, teardown, waitFor, type BootHarness, type RunningBoot } from "./smoke-boot-harness.ts";
@@ -421,6 +421,115 @@ describe("pointed at a REMOTE database with no identity table and the baseline l
       expect(baselineState()).toEqual({ ledger: [...BASELINE.migrations], table: false, identity: "" });
     }, 120_000);
   }
+
+  // The loop above stops each request at the FIRST guard it meets: `prod`
+  // keeps connection=remote, and `claimslocal` names an instance with no
+  // restored container. The guards after those — RM_ENV=prod on the local
+  // copy, the journal of another plan, and the published host:port — are
+  // reached only from an instance whose plan really restored a copy. So one
+  // boot restores the baseline dump and is killed with enroll blocked (the
+  // copy keeps its baseline, the journal stays open with its restore
+  // committed), and each request below is aimed from that state.
+  test("from a plan that really restored a copy: RM_ENV=prod, another plan's lock, and a local claim aimed at another host:port each refuse at their own guard — and the plan's own request then passes", async () => {
+    const h = harness("dumpguards");
+    let boot: RunningBoot | undefined;
+    let blocker: { release(): Promise<void> } | undefined;
+    try {
+      boot = spawnBoot(h, [], { local: `dump=${dump.dir}`, env: { RM_ENV: "stage" }, ownProcessGroup: true });
+      const b = boot;
+      await waitFor(() => stepCommitted(h, "restore"), BOOT_TIMEOUT_MS, "the restore to commit", b);
+      const copy = restoredCopy(h);
+      blocker = await holdInTransaction(copy.superuserUrl, `INSERT INTO schema_migrations (name) VALUES ('${IDENTITY_MIGRATION}')`);
+      await waitOwnerBlocked(copy.superuserUrl, "%INSERT INTO schema_migrations%", b);
+      await killGroup(b);
+      await blocker.release();
+      blocker = undefined;
+      await waitOwnerGone(copy.superuserUrl);
+      const baselineCopy = { ledger: [...BASELINE.migrations], table: false, identity: "" };
+      expect(stateOf(copy.superuserUrl)).toEqual(baselineCopy);
+      const planId = journalNow(h)!.planId;
+
+      /** The enroll child for `instance`, under a target lock on `target` held by `lockPlan`. */
+      const enroll = async (
+        instance: { root: string; name: string; readonlyPassword: string },
+        target: HostTarget,
+        lockPlan: string,
+        rmEnv: "stage" | "prod",
+      ) => {
+        const readerUrl = roleUrl(target, "rm_readonly", instance.readonlyPassword);
+        const acquired = await acquireTargetLock({
+          databaseUrl: readerUrl,
+          holder: { tool: "smoke", planId: lockPlan, instance: instance.name, host: hostname(), pid: process.pid },
+          timeoutMs: 10_000,
+          expected: await readTargetStateAt(readerUrl),
+        });
+        if (!acquired.acquired) throw new Error(acquired.reason);
+        try {
+          return await runPrepareStep(
+            repoRoot,
+            {
+              action: "enroll",
+              rmEnv,
+              connection: "local",
+              target,
+              credentials: { source: "instance", stateRoot: instance.root, instance: instance.name },
+              lock: { backendPid: acquired.lock.backendPid, holder: acquired.lock.holder },
+              stateDir: instancePaths(instance.root, instance.name).dir,
+              nonInteractive: true,
+              note: `--local dump ${dump.stamp}`,
+            },
+            { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", RM_SMOKE_STATE_ROOT: instance.root },
+          );
+        } finally {
+          await acquired.lock.release();
+        }
+      };
+      const own = { root: h.root, name: h.instance, readonlyPassword: readRolePasswords(h.paths).rm_readonly };
+      const refusal = (result: Awaited<ReturnType<typeof runPrepareStep>>): string => {
+        expect(result.ok).toBe(false);
+        const error = (result as { error: string }).error;
+        expect(error).toContain("Refusing the --local dump identity-first pass");
+        return error;
+      };
+
+      // 1. RM_ENV=prod on the very copy this plan restored.
+      expect(refusal(await enroll(own, copy.target, planId, "prod"))).toContain("RM_ENV=prod. The pass writes `rehearsal`");
+      expect(stateOf(copy.superuserUrl)).toEqual(baselineCopy);
+
+      // 2. The same copy, under a lock another plan holds: the open journal
+      //    is not that plan's.
+      expect(refusal(await enroll(own, copy.target, "another-plan", "stage"))).toContain(
+        `is not the journal of plan another-plan that holds the target lock`,
+      );
+      expect(stateOf(copy.superuserUrl)).toEqual(baselineCopy);
+
+      // 3. A local claim aimed at ANOTHER database — the remote server, with
+      //    the baseline and no table — from an instance that records this
+      //    plan's real restored container and its open journal (the remote's
+      //    role file, so the reader connects and the refusal is the guard's).
+      const aimedRoot = join(work, "aimed");
+      const aimedName = "rm_it_dumpguards_aimed";
+      const aimed = instancePaths(aimedRoot, aimedName, { create: true });
+      writeFileSync(aimed.rolePasswordsFile, JSON.stringify(remote.passwords), { mode: 0o600 });
+      copyFileSync(h.paths.stackStateFile, aimed.stackStateFile);
+      copyFileSync(h.paths.journalFile, aimed.journalFile);
+      const remoteTarget: HostTarget = { host: remote.host, port: remote.port, database: BASELINE_DB, sslmode: "disable" };
+      expect(
+        refusal(await enroll({ root: aimedRoot, name: aimedName, readonlyPassword: remote.passwords.rm_readonly }, remoteTarget, planId, "stage")),
+      ).toContain(`the connection is ${remote.host}:${remote.port}, and the container this plan restored (${copy.container}) is published at`);
+      expect(baselineState()).toEqual(baselineCopy);
+      expect(stateOf(copy.superuserUrl)).toEqual(baselineCopy);
+
+      // Positive control: the plan's own request, on its own copy, passes —
+      // so each refusal above was its guard's, not a broken setup.
+      const again = await rerunStep(h, "enroll");
+      expect(again).toMatchObject({ ok: true, detail: { kind: "rehearsal", identityFirst: BASELINE.name } });
+      expect(stateOf(copy.superuserUrl)).toEqual({ ledger: [...BASELINE.migrations, IDENTITY_MIGRATION].sort(), table: true, identity: "rehearsal:rm_owner" });
+    } finally {
+      await blocker?.release();
+      teardown(h, boot);
+    }
+  }, BOOT_TIMEOUT_MS);
 
   test("RM_ENV=stage `bun smoke` against it refuses at the §4.3 matrix under the target lock: 0063 not applied, no row written", async () => {
     const op = remote.operator("stagebaseline", [], BASELINE_DB);

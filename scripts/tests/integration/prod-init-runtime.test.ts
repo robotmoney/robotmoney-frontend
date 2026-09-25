@@ -38,7 +38,8 @@
 // credential.json key through `rotate-key`, called with the operator token
 // provision-tokens just wrote, and the bearer the route returned written into
 // that member's entry — the one that now authenticates, where the old one no
-// longer does.
+// longer does. Both namespaces are seated: two agents, and one judge seated
+// through the admin role route, so the judge half of the rebind runs too.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { createHash } from "node:crypto";
@@ -189,7 +190,14 @@ describe("§9.1 step 5 — `prod-init provision-tokens` writes the three holders
 describe("§9.1 step 6 — `prod-init rebind-members` rotates each member to its credential.json key through the real api", () => {
   const b64 = (buf: ArrayBuffer) => Buffer.from(new Uint8Array(buf)).toString("base64");
   let operatorToken = "";
-  const members: { name: string; id: string; oldBearer: string; publicKeyB64: string; privateJwk: JsonWebKey }[] = [];
+  const members: {
+    name: string;
+    kind: "agent" | "judge";
+    id: string;
+    oldBearer: string;
+    publicKeyB64: string;
+    privateJwk: JsonWebKey;
+  }[] = [];
 
   beforeAll(async () => {
     // The api, as a stack runs it: its own database login (rm_app), over the
@@ -225,9 +233,11 @@ describe("§9.1 step 6 — `prod-init rebind-members` rotates each member to its
     }
 
     operatorToken = readFileSync(paths().tokenFiles.operator, "utf8").trim();
-    // Two seated members, registered with the keys they hold TODAY; the
-    // credential file then names the keys each should hold (fresh ones).
-    for (const name of ["athena", "boreas"]) {
+    // Three seated members, registered with the keys they hold TODAY — two
+    // agents and a judge (seated through the admin role route, as an operator
+    // seats one); the credential file then names the keys each should hold
+    // (fresh ones).
+    for (const [name, kind] of [["athena", "agent"], ["boreas", "agent"], ["themis", "judge"]] as const) {
       const today = (await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"])) as CryptoKeyPair;
       const id = `rt_prodinit_${name}_${crypto.randomUUID().slice(0, 6)}`;
       const r = await fetch(`http://127.0.0.1:${apiPort}${ROUTES.swarm.register}`, {
@@ -237,9 +247,20 @@ describe("§9.1 step 6 — `prod-init rebind-members` rotates each member to its
       });
       const body = (await r.json()) as { token?: string };
       if (r.status !== 201 || !body.token) throw new Error(`register ${id}: ${r.status} ${JSON.stringify(body)}\n${apiLog.join("").slice(-2000)}`);
+      if (kind === "judge") {
+        const expectedVersion = Number(db.superuser(`SELECT version FROM swarm_members WHERE id = '${id}'`));
+        const seat = await fetch(`http://127.0.0.1:${apiPort}${ROUTES.swarm.admin.memberRole.replace(":id", encodeURIComponent(id))}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Automation-Token": operatorToken },
+          body: JSON.stringify({ role: "judge", expectedVersion }),
+        });
+        if (seat.status !== 200) throw new Error(`seat ${id} as judge: ${seat.status} ${await seat.text()}\n${apiLog.join("").slice(-2000)}`);
+        if (db.superuser(`SELECT role FROM swarm_members WHERE id = '${id}'`) !== "judge") throw new Error(`${id} is not seated as a judge`);
+      }
       const target = (await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"])) as CryptoKeyPair;
       members.push({
         name,
+        kind,
         id,
         oldBearer: body.token,
         publicKeyB64: b64(await crypto.subtle.exportKey("raw", target.publicKey)),
@@ -254,15 +275,19 @@ describe("§9.1 step 6 — `prod-init rebind-members` rotates each member to its
     return { status: r.status, memberId: body.memberId };
   }
 
-  test("each member's key moves to its credential.json key, and the bearer rotate-key returned is written into its entry", async () => {
+  test("each member's key — agents and the judge — moves to its credential.json key, and the bearer rotate-key returned is written into its entry", async () => {
     // The old bearers authenticate before the rebind.
     for (const m of members) expect(await verify(m.oldBearer)).toEqual({ status: 200, memberId: m.id });
 
     const credentialPath = join(op.root, "credential.json");
-    const entries = Object.fromEntries(
-      members.map((m) => [m.name, { memberId: m.id, publicKeyB64: m.publicKeyB64, privateJwk: m.privateJwk, bearer: m.oldBearer, modelKey: `model-${m.name}` }]),
-    );
-    writeFileSync(credentialPath, JSON.stringify({ agents: entries, judges: {} }, null, 2), { mode: 0o600 });
+    const entriesOf = (kind: "agent" | "judge") =>
+      Object.fromEntries(
+        members
+          .filter((m) => m.kind === kind)
+          .map((m) => [m.name, { memberId: m.id, publicKeyB64: m.publicKeyB64, privateJwk: m.privateJwk, bearer: m.oldBearer, modelKey: `model-${m.name}` }]),
+      );
+    expect(members.filter((m) => m.kind === "judge")).toHaveLength(1);
+    writeFileSync(credentialPath, JSON.stringify({ agents: entriesOf("agent"), judges: entriesOf("judge") }, null, 2), { mode: 0o600 });
     chmodSync(credentialPath, 0o600);
 
     const run = await prodInit(["rebind-members", "--credentials", credentialPath, "--api", `http://127.0.0.1:${apiPort}`], { y: "y" });
@@ -270,9 +295,11 @@ describe("§9.1 step 6 — `prod-init rebind-members` rotates each member to its
     // No rm_owner for an API write (§4.3).
     expect(run.screen).not.toContain("rm_owner password");
 
-    const after = JSON.parse(readFileSync(credentialPath, "utf8")) as { agents: Record<string, { bearer: string; publicKeyB64: string; modelKey: string }> };
+    type Entry = { bearer: string; publicKeyB64: string; modelKey: string };
+    const after = JSON.parse(readFileSync(credentialPath, "utf8")) as { agents: Record<string, Entry>; judges: Record<string, Entry> };
+    const entryOf = (m: (typeof members)[number]): Entry => (m.kind === "judge" ? after.judges : after.agents)[m.name]!;
     for (const m of members) {
-      const entry = after.agents[m.name]!;
+      const entry = entryOf(m);
       // The entry now carries the bearer the route returned, and only that changed.
       expect(entry.bearer).not.toBe(m.oldBearer);
       expect({ publicKeyB64: entry.publicKeyB64, modelKey: entry.modelKey }).toEqual({ publicKeyB64: m.publicKeyB64, modelKey: `model-${m.name}` });
@@ -293,10 +320,10 @@ describe("§9.1 step 6 — `prod-init rebind-members` rotates each member to its
       identityBefore: "production",
       lockHolder: "prod-init:rebind-members",
       outcome: "completed",
-      detail: { credentialFile: credentialPath, rebound: members.map((m) => ({ name: m.name, kind: "agent", memberId: m.id })) },
+      detail: { credentialFile: credentialPath, rebound: members.map((m) => ({ name: m.name, kind: m.kind, memberId: m.id })) },
     });
     const text = JSON.stringify(receipt);
-    for (const m of members) expect(text).not.toContain(after.agents[m.name]!.bearer);
+    for (const m of members) expect(text).not.toContain(entryOf(m).bearer);
     expect(text).not.toContain(operatorToken);
   }, 180_000);
 });
