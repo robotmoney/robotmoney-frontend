@@ -540,6 +540,15 @@ for (const tag of SUPPORTED_RELEASES) {
       ]);
     });
 
+    test("0072 is recorded `breaking`: it deletes rows code at 0070 seeded and read (D55 (7))", async () => {
+      // The release predates 0072, so this run applied it and recorded the
+      // header it carries now. §8.4: removing a bootstrap row old code relies
+      // on is not additive.
+      expect(
+        await rows(db`SELECT name, compat, metadata_version FROM schema_migrations WHERE name = '0072_drop_swarm_schedules.sql'`),
+      ).toEqual([{ name: "0072_drop_swarm_schedules.sql", compat: "breaking", metadata_version: 1 }]);
+    });
+
     test("a self-written operator is cleared and recorded; an admin-written one is kept (0083, D55 (2))", async () => {
       // The release's own code logged a member's profile write as
       // `update_profile` with only { memberId }, so `m-forged`'s `robotmoney`
@@ -583,12 +592,13 @@ for (const tag of SUPPORTED_RELEASES) {
     // NOT PROVED HERE: that an older image's REGISTERED QUERIES still succeed
     // (§8.4's definition of additive). No older registry exists to execute —
     // the registry is this branch's — so that half is a reviewed claim per
-    // migration. One such claim is wrong, surfaced by the data test above:
-    // 0072 declares `compat: additive` while deleting the swarm.* job_schedules
-    // rows and pending swarm.* jobs that code built at 0070 seeded and read
-    // (0072:1, :45-52). §8.4: additive means "no bootstrap row it relies on is
-    // removed". Code at 0070 passes the boot gate below against this database
-    // and then schedules nothing.
+    // migration. One such claim was wrong, surfaced by the data test above:
+    // 0072 declared `compat: additive` while deleting the swarm.* job_schedules
+    // rows and pending swarm.* jobs that code built at 0070 seeded and read.
+    // §8.4: additive means "no bootstrap row it relies on is removed". D55 (7)
+    // relabelled it `breaking`, so this run records `breaking` for it and code
+    // at 0070 is refused by check 3b. A ledger that recorded 0072 before the
+    // relabel keeps `additive`; 0079-0081, all `breaking`, close that rollback.
 
     function context(codeFilenames: readonly string[]): PreflightContext {
       return { env: "stage", connection: "local", roles: ["rm_app"], codeFilenames, envFilePath: "/nonexistent/.env" };

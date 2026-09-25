@@ -160,7 +160,8 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     //   0072 — W4's removal half: it DELETES the five retired `swarm.*`
     //          `job_schedules` rows (scheduler spec §12; there are no schedule
     //          rows any more) and made 0068's and 0070's logs append-only
-    //          (both since released: 0079 and 0080).
+    //          (both since released: 0079 and 0080). `breaking` (D55 (7)):
+    //          code at 0070 seeded and read the rows it deletes.
     "0066_drop_swarm_notifications.sql",
     "0067_subject_epoch_duration.sql",
     "0068_session_epoch_lifecycle.sql",

@@ -1,4 +1,4 @@
--- compat: additive
+-- compat: breaking
 -- metadata_version: 1
 --
 -- THE OLD SCHEDULER'S ROWS, AND THE NEW ONE'S LOGS — issue #1026 W4, part 3.
@@ -35,12 +35,20 @@
 -- is periodically pruned by design"), so this DELETE is permitted and fires no
 -- guard.
 --
--- ADDITIVE. §8.4 defines additive as old code's supported behaviour preserved.
--- The code that read these rows — `resolveSwarmSchedules`, `seedSwarmSchedules`,
--- the `swarm` worker lane and the six `swarm.*` handlers — is deleted in the
--- same change, so there is no old code left to preserve a behaviour for. A
--- genuinely old binary rolled back onto this database finds no rows and
--- schedules nothing, which is the same thing `SWARM_SCHEDULES_ENABLED=0` did.
+-- BREAKING (relabelled from `additive` by D55 (7), 2026-09-25). §8.4 defines
+-- additive as old code's supported behaviour preserved, and says no bootstrap
+-- row old code relies on is removed. This file removes exactly such rows: code
+-- built at 0070 seeded these `job_schedules` rows and read them through
+-- `resolveSwarmSchedules`, `seedSwarmSchedules`, the `swarm` worker lane and
+-- the six `swarm.*` handlers. That code is deleted in the same change, but an
+-- old binary rolled back onto this database would boot, find no rows and
+-- schedule nothing, with no refusal to say why. `breaking` makes check 3b
+-- refuse that rollback instead.
+--
+-- A ledger that already recorded this file keeps `additive`: the runner writes
+-- a ledger row once, at apply, and never rewrites it. 0079, 0080 and 0081 are
+-- `breaking` and later, so once they are applied they close rollback past this
+-- file by themselves and the stale label decides nothing.
 
 DELETE FROM jobs
  WHERE kind IN ('swarm.open_session', 'swarm.publish_brief', 'swarm.close_window',
