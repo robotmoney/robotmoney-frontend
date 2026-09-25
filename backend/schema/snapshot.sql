@@ -50,7 +50,7 @@ SET row_security = off;
 -- owned by rm_owner, which every blank bootstrap creates it as.
 ALTER SCHEMA public OWNER TO rm_owner;
 -- And the schema's ACL as 0053:134 leaves it: initdb grants PUBLIC USAGE, and
--- the migrations revoke it. grants.sql:185 re-grants USAGE to the three
+-- the migrations revoke it. grants.sql's `GRANT USAGE ON SCHEMA` re-grants it to the three
 -- application roles by name, so nothing that needs the schema loses it.
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 
@@ -233,6 +233,23 @@ BEGIN
   RAISE EXCEPTION 'source ledger is immutable: % is not permitted on %', TG_OP, TG_TABLE_NAME
     USING ERRCODE = 'feature_not_supported';
 END;
+$$;
+
+
+--
+-- Name: rm_stream_head_forward_only(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.rm_stream_head_forward_only() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.seq < OLD.seq THEN
+    RAISE EXCEPTION 'swarm_stream_head only moves forward: % -> % refused', OLD.seq, NEW.seq
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END
 $$;
 
 
@@ -1328,40 +1345,9 @@ CREATE SEQUENCE public.committee_memos_id_seq
 --
 
 ALTER SEQUENCE public.committee_memos_id_seq OWNED BY public.swarm_memos.id;
-
-
---
--- Name: swarm_scheduler_jobs; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.swarm_scheduler_jobs (
-    id bigint NOT NULL,
-    kind text NOT NULL,
-    target text NOT NULL,
-    idempotency_key text NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    acked_at timestamp with time zone,
-    CONSTRAINT swarm_scheduler_jobs_key_check CHECK ((idempotency_key ~ '^[A-Za-z0-9._:-]{4,128}$'::text)),
-    CONSTRAINT swarm_scheduler_jobs_kind_check CHECK ((kind <> ''::text)),
-    CONSTRAINT swarm_scheduler_jobs_target_check CHECK ((target <> ''::text))
-);
 
-
---
--- Name: swarm_scheduler_jobs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-ALTER TABLE public.swarm_scheduler_jobs ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
-    SEQUENCE NAME public.swarm_scheduler_jobs_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1
-);
-
-
---
 -- Name: swarm_session_events; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2203,7 +2189,7 @@ CREATE TABLE public.swarm_judge_config (
     policy_updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT swarm_judge_config_id_check CHECK ((id = 1)),
     CONSTRAINT swarm_judge_config_min_takes_check CHECK ((min_takes >= 1)),
-    CONSTRAINT swarm_judge_config_mode_check CHECK ((mode = ANY (ARRAY['off'::text, 'shadow'::text, 'enforce'::text]))),
+    CONSTRAINT swarm_judge_config_mode_check CHECK ((mode = ANY (ARRAY['off'::text, 'enforce'::text]))),
     CONSTRAINT swarm_judge_config_mode_requires_model_check CHECK (((mode = 'off'::text) OR ((model IS NOT NULL) AND (btrim(model) <> ''::text)))),
     CONSTRAINT swarm_judge_config_model_check CHECK (((model IS NULL) OR (btrim(model) <> ''::text)))
 );
@@ -2436,6 +2422,29 @@ CREATE TABLE public.swarm_stream_events (
     CONSTRAINT swarm_stream_events_kind_check CHECK ((kind = ANY (ARRAY['subject.changed'::text, 'epoch.turned_over'::text, 'session.judged'::text]))),
     CONSTRAINT swarm_stream_events_seq_positive_check CHECK ((seq > 0))
 );
+
+
+--
+-- Name: swarm_stream_head; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.swarm_stream_head (
+    id boolean DEFAULT true NOT NULL,
+    seq bigint NOT NULL,
+    CONSTRAINT swarm_stream_head_seq_check CHECK ((seq >= 0)),
+    CONSTRAINT swarm_stream_head_singleton_check CHECK (id)
+);
+
+
+--
+-- Name: TABLE swarm_stream_head; Type: COMMENT; Schema: public; Owner: -
+--
+-- HAND-ADDED (issue #1026 wave 3): the comment migration 0081 declares. The
+-- dump above is taken with --no-comments (schema-equivalence.test.ts cause F
+-- records each older comment the snapshot still lacks); a table new in this
+-- snapshot carries its comment from the start instead of joining that list.
+
+COMMENT ON TABLE public.swarm_stream_head IS 'The event stream''s one counter row (spec §6.3): seq is the last number handed out. Incremented by UPDATE ... RETURNING inside each event-writing transaction, so numbers are gapless and in commit order. Never moves back.';
 
 
 --
@@ -3913,22 +3922,6 @@ ALTER TABLE ONLY public.swarm_recommendations
 
 
 --
--- Name: swarm_scheduler_jobs swarm_scheduler_jobs_idempotency_key_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.swarm_scheduler_jobs
-    ADD CONSTRAINT swarm_scheduler_jobs_idempotency_key_key UNIQUE (idempotency_key);
-
-
---
--- Name: swarm_scheduler_jobs swarm_scheduler_jobs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.swarm_scheduler_jobs
-    ADD CONSTRAINT swarm_scheduler_jobs_pkey PRIMARY KEY (id);
-
-
---
 -- Name: swarm_session_events swarm_session_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3966,6 +3959,14 @@ ALTER TABLE ONLY public.swarm_sessions
 
 ALTER TABLE ONLY public.swarm_stream_events
     ADD CONSTRAINT swarm_stream_events_pkey PRIMARY KEY (seq);
+
+
+--
+-- Name: swarm_stream_head swarm_stream_head_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.swarm_stream_head
+    ADD CONSTRAINT swarm_stream_head_pkey PRIMARY KEY (id);
 
 
 --
@@ -4670,13 +4671,6 @@ CREATE INDEX swarm_recommendations_session_member_latest_idx ON public.swarm_rec
 --
 
 CREATE UNIQUE INDEX swarm_recommendations_session_member_revision_key ON public.swarm_recommendations USING btree (session_id, member_id, revision);
-
-
---
--- Name: swarm_scheduler_jobs_unacked_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX swarm_scheduler_jobs_unacked_idx ON public.swarm_scheduler_jobs USING btree (created_at) WHERE (acked_at IS NULL);
 
 
 --
@@ -5436,24 +5430,6 @@ CREATE TRIGGER swarm_recommendations_default_final_trigger BEFORE INSERT ON publ
 
 
 --
--- Name: swarm_scheduler_jobs swarm_scheduler_jobs_append_only; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER swarm_scheduler_jobs_append_only BEFORE DELETE OR TRUNCATE ON public.swarm_scheduler_jobs FOR EACH STATEMENT EXECUTE FUNCTION public.rm_append_only_guard();
-
-ALTER TABLE public.swarm_scheduler_jobs ENABLE ALWAYS TRIGGER swarm_scheduler_jobs_append_only;
-
-
---
--- Name: swarm_scheduler_jobs swarm_scheduler_jobs_append_only_row; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER swarm_scheduler_jobs_append_only_row BEFORE DELETE ON public.swarm_scheduler_jobs FOR EACH ROW EXECUTE FUNCTION public.rm_append_only_guard();
-
-ALTER TABLE public.swarm_scheduler_jobs ENABLE ALWAYS TRIGGER swarm_scheduler_jobs_append_only_row;
-
-
---
 -- Name: swarm_session_events swarm_session_events_append_only; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -5526,21 +5502,10 @@ ALTER TABLE public.swarm_sessions ENABLE ALWAYS TRIGGER swarm_sessions_append_on
 
 
 --
--- Name: swarm_stream_events swarm_stream_events_append_only; Type: TRIGGER; Schema: public; Owner: -
+-- Name: swarm_stream_head swarm_stream_head_forward_only; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER swarm_stream_events_append_only BEFORE DELETE OR TRUNCATE ON public.swarm_stream_events FOR EACH STATEMENT EXECUTE FUNCTION public.rm_append_only_guard();
-
-ALTER TABLE public.swarm_stream_events ENABLE ALWAYS TRIGGER swarm_stream_events_append_only;
-
-
---
--- Name: swarm_stream_events swarm_stream_events_append_only_row; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER swarm_stream_events_append_only_row BEFORE DELETE ON public.swarm_stream_events FOR EACH ROW EXECUTE FUNCTION public.rm_append_only_guard();
-
-ALTER TABLE public.swarm_stream_events ENABLE ALWAYS TRIGGER swarm_stream_events_append_only_row;
+CREATE TRIGGER swarm_stream_head_forward_only BEFORE UPDATE ON public.swarm_stream_head FOR EACH ROW EXECUTE FUNCTION public.rm_stream_head_forward_only();
 
 
 --

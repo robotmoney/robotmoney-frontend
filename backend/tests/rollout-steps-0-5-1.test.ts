@@ -16,7 +16,7 @@
 // guard tells "missing from this release's manifest" apart from "not this
 // release's migration at all" without editing the frozen record.
 import { describe, expect, test } from "bun:test";
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { STEPS, TAG_GLOB } from "../scripts/upgrades/0.5.0-to-0.5.1/steps.ts";
 import {
@@ -153,14 +153,14 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     //          at-most-one-`collecting`-per-subject unique index (§2.1).
     //   0069 — W4.5's `automation_tokens`, the API automation-credential store
     //          (smoke spec §3): a hash and the rights, never the secret.
-    //   0070 — W4.4's `swarm_scheduler_jobs`, the ad-hoc jobs the API pushes on
-    //          the scheduler subscription (scheduler spec §6.3). Rows are never
-    //          deleted, because the idempotency key has to outlive the ack.
+    //   0070 — W4.4's `swarm_scheduler_jobs`, the ad-hoc jobs the API once
+    //          pushed on the scheduler subscription. Job pushes are gone (§6.3
+    //          as amended by D52) and 0079 drops the table; 0070 stays on disk
+    //          because it may have reached a shared database (criterion 105).
     //   0072 — W4's removal half: it DELETES the five retired `swarm.*`
     //          `job_schedules` rows (scheduler spec §12; there are no schedule
-    //          rows any more) and makes 0068's and 0070's logs append-only,
-    //          because a deleted row in the event log IS the gap §6.3 defines
-    //          as proof the clock is stale.
+    //          rows any more) and made 0068's and 0070's logs append-only
+    //          (both since released: 0079 and 0080).
     "0066_drop_swarm_notifications.sql",
     "0067_subject_epoch_duration.sql",
     "0068_session_epoch_lifecycle.sql",
@@ -185,7 +185,35 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     "0076_ledger_write_revoke.sql",
     "0077_immutable_ledger_grants.sql",
     "0078_automation_token_holders.sql",
+    //   0079 — drops `swarm_scheduler_jobs` with the job pushes (§6.3, D52;
+    //          criteria 94, 105). `breaking`: 0070-0078 code writes it.
+    //   0080 — `swarm_stream_events` loses 0072's triggers and is protected by
+    //          grant alone, prunable only by rm_owner (D53 (2)). `breaking`.
+    //   0081 — `swarm_stream_head`, the one counter row event numbers come
+    //          from (§6.3). `breaking`: MAX + 1 writers would collide.
+    //   0082 — `swarm_judge_config.mode` admits off | enforce (D53 (1)).
+    //   0083 — clears self-written member operators (D55 (2)).
+    "0079_drop_swarm_scheduler_jobs.sql",
+    "0080_stream_events_grant_only.sql",
+    "0081_stream_event_counter.sql",
+    "0082_judge_config_two_modes.sql",
+    "0083_clear_forged_member_operator.sql",
   ];
+
+  test("the job ledger 0070 created is dropped by a later file, never by deleting 0070 (criterion 105)", () => {
+    // 0070 may already be recorded on a shared database, so it stays on disk
+    // and a forward migration removes what it made. Nothing may create the
+    // table again after that.
+    const dir = join(import.meta.dir, "..", "migrations");
+    const onDisk = readdirSync(dir).filter((n) => n.endsWith(".sql")).sort();
+    expect(onDisk).toContain("0070_swarm_scheduler_jobs.sql");
+    const drops = onDisk.filter((n) => /DROP TABLE IF EXISTS swarm_scheduler_jobs\b/.test(readFileSync(join(dir, n), "utf8")));
+    expect(drops).toEqual(["0079_drop_swarm_scheduler_jobs.sql"]);
+    const recreates = onDisk.filter(
+      (n) => n > drops[0]! && /CREATE TABLE[^;]*swarm_scheduler_jobs/.test(readFileSync(join(dir, n), "utf8")),
+    );
+    expect(recreates).toEqual([]);
+  });
 
   test("nothing this release shipped is also claimed as a later arrival", () => {
     // The list above must never be used to excuse a file the release really

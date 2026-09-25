@@ -1049,9 +1049,16 @@ test("the judge switch has TWO modes: `shadow` is refused like any other nonsens
 });
 
 test("a legacy `shadow` row reads as `off`, and the next write through the switch stores `off`", async () => {
-  // Migration 0039's CHECK still admits the value until the CHECK is
-  // tightened; a row written before D53 is the case. Read and write agree with
-  // the lifecycle, which captures `off` for it (domain.ts currentJudgeMode).
+  // A row written before D53 is the case. Migration 0082 heals such a row and
+  // tightens the CHECK to off | enforce, so the pre-0082 state is rebuilt here
+  // (0039's CHECK put back, in this test's own database) to prove the reader
+  // and writer still agree with the lifecycle for it, which captures `off`
+  // (domain.ts currentJudgeMode). backend/tests/judge-config-mode-check.test.ts
+  // proves 0082 itself.
+  await sql.unsafe(`
+    ALTER TABLE swarm_judge_config DROP CONSTRAINT swarm_judge_config_mode_check;
+    ALTER TABLE swarm_judge_config ADD CONSTRAINT swarm_judge_config_mode_check
+      CHECK (mode IN ('off', 'shadow', 'enforce'));`);
   await sql`UPDATE swarm_judge_config SET mode = 'shadow', model = ${STUB_JUDGE_MODEL} WHERE id = 1`;
   expect((await getJudgeConfig()).mode).toBe("off");
   await setJudgeConfig({ minTakes: 2 });

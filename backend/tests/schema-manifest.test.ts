@@ -486,11 +486,12 @@ describe("rm_app is refused every write to the manifest and the ledger, by grant
   // WHY THE MANIFEST TABLE IS REBUILT FROM THE REAL 0064. This file's afterEach
   // drops `schema_manifest` after every test, so the table the migrations built
   // is long gone by now. Re-running the migration's own text as rm_owner puts
-  // back exactly what 0064 creates, grants included. The second case first runs
-  // the real reconciliation (backend/schema/grants.sql), whose default
-  // privileges hand every NEW rm_owner table `SELECT, INSERT, UPDATE` for
-  // rm_app — which is the state production is in, and the state in which
-  // 0064's REVOKE is the only thing between rm_app and a forged manifest.
+  // back exactly what 0064 creates, grants included. The later cases plant the
+  // default privilege the old reconciliation left behind — every NEW rm_owner
+  // table handed `SELECT, INSERT, UPDATE` for rm_app — which is the state in
+  // which 0064's REVOKE is the only thing between rm_app and a forged manifest,
+  // and then prove the real reconciliation (backend/schema/grants.sql) takes
+  // that default back.
   const RM_APP_PASSWORD = "rm_app_manifest_grant_test";
   const MIGRATION_0064 = readFileSync(join(MIGRATIONS_DIR, "0064_schema_manifest.sql"), "utf8");
   let app: postgres.Sql<{}>;
@@ -576,14 +577,41 @@ describe("rm_app is refused every write to the manifest and the ledger, by grant
     await assertRefusedByGrant();
   });
 
-  test("after the real grants reconciliation — default privileges included — still 42501 for every write", async () => {
-    // The reconciliation first, so its default privileges are in force when
-    // 0064 creates the table: the production order.
+  /** Whether rm_app may INSERT into a table rm_owner creates right now — the
+   *  default privileges in force, read off a real new table. */
+  async function newTableAdmitsAppInsert(): Promise<boolean> {
+    const probe = `rm_default_priv_probe_${crypto.randomUUID().slice(0, 8)}`;
+    await asOwner(`CREATE TABLE ${probe} (x int)`);
+    try {
+      return (await sqlstate(`INSERT INTO ${probe} (x) VALUES (1)`)) === null;
+    } finally {
+      await asOwner(`DROP TABLE ${probe}`);
+    }
+  }
+
+  test("under a default privilege that hands rm_app writes, 0064's own REVOKE is what refuses them", async () => {
+    // Every database the old reconciliation ran on carries a default
+    // `GRANT SELECT, INSERT, UPDATE ON TABLES TO rm_app` for rm_owner — the line
+    // grants.sql used to end with, against 0053's no-default-write rule. That
+    // is planted here, and 0064 creates the table under it: the order a
+    // production database met them in.
+    await asOwner("ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO rm_app");
+    // Red control: the planted default really does hand a new table's writes
+    // to rm_app, so the refusal below is 0064's REVOKE and not an absence.
+    expect(await newTableAdmitsAppInsert()).toBe(true);
+    await rebuildManifestFromMigration();
+    await assertRefusedByGrant();
+  });
+
+  test("the real grants reconciliation takes the default write grant back, and keeps every manifest write refused", async () => {
+    await asOwner("ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO rm_app");
+    expect(await newTableAdmitsAppInsert()).toBe(true);
     const snapshot = await loadSnapshot();
     await asOwner(snapshot.grantsSql);
+    // 0053: "There are no default write grants." After reconciliation a table
+    // rm_owner creates gives rm_app nothing to write until a migration says so.
+    expect(await newTableAdmitsAppInsert()).toBe(false);
     await rebuildManifestFromMigration();
-    // Here 0064's own REVOKE is the only thing standing between rm_app and the
-    // INSERT/UPDATE the default privileges just handed the new table.
     await assertRefusedByGrant();
     // And once more afterwards, as every later migrate run does: the sweep must
     // re-assert the narrowing, never undo it.

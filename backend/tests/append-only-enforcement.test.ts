@@ -34,6 +34,7 @@ import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
 import {
   APPEND_ONLY_MIGRATIONS,
+  APPEND_ONLY_RELEASED,
   APPEND_ONLY_TABLE_MIGRATION,
   APPEND_ONLY_TABLES,
   LEDGER_IMMUTABLE_FAMILIES,
@@ -157,19 +158,10 @@ beforeAll(async () => {
             ${sql.json({ schema_version: "1.0", session_id: SESSION, subject_id: SUBJECT } as never)},
             ${"robotmoney:consensus-receipt:v1\n{\"schema_version\":\"1.0\"}\n"})`;
   await sql`INSERT INTO swarm_applications (payload) VALUES ('{}'::jsonb)`;
-  // Issue #1026 W4, migration 0072: the epoch scheduler's two logs. Seeded for
-  // the same reason as everything else here — an empty table would pass the
-  // "the rows survive" assertions for the wrong reason. `swarm_stream_events`
-  // assigns `seq` by hand in the production path (an advisory lock plus
-  // MAX(seq)+1, so the sequence is gapless and in commit order), so the fixture
-  // does the same rather than relying on a default that does not exist.
-  await sql`
-    INSERT INTO swarm_stream_events (seq, kind, subject_id, session_id, payload)
-    VALUES ((SELECT COALESCE(MAX(seq), 0) + 1 FROM swarm_stream_events),
-            'subject.changed', ${SUBJECT}, NULL, '{"reason":"append-only-probe"}'::jsonb)`;
-  await sql`
-    INSERT INTO swarm_scheduler_jobs (kind, target, idempotency_key)
-    VALUES ('probe.kind', ${SUBJECT}, 'append-only-probe-key')`;
+  // The epoch scheduler's two logs, which migration 0072 opted in, are not
+  // seeded: both have left the protected set (APPEND_ONLY_RELEASED — the job
+  // ledger is dropped by 0079, the event log is grant-only under D53 (2) since
+  // 0080). The "released" case below asserts what each became instead.
   await sql`INSERT INTO audit_log (actor, action) VALUES ('append-only-test', 'probe')`;
   await sql`INSERT INTO agent_activity_log (action_type, status) VALUES ('probe', 'success')`;
   await sql`INSERT INTO regime_snapshots (date) VALUES ('2031-01-02')`;
@@ -264,7 +256,15 @@ describe("append-only: every protected table holds data that cannot be removed",
       for (const name of names) declaredBy[name] = file;
     }
     expect(new Set(inMigrations).size, "no table may be declared by two migrations").toBe(inMigrations.length);
-    expect([...inMigrations].sort()).toEqual([...APPEND_ONLY_TABLES].sort());
+    // A table a later migration released (APPEND_ONLY_RELEASED) is still in its
+    // frozen declaring array; it leaves the union only through that record,
+    // and only as declared by the migration the record names.
+    for (const [table, { declaredBy: file }] of Object.entries(APPEND_ONLY_RELEASED)) {
+      expect({ table, declaredBy: declaredBy[table] }).toEqual({ table, declaredBy: file });
+      expect((APPEND_ONLY_TABLES as readonly string[]).includes(table), `${table} is released, not protected`).toBe(false);
+    }
+    const released = new Set(Object.keys(APPEND_ONLY_RELEASED));
+    expect(inMigrations.filter((t) => !released.has(t)).sort()).toEqual([...APPEND_ONLY_TABLES].sort());
 
     // And each table maps to the migration that ACTUALLY declares it. The
     // Record type pins the key set; nothing but this pins the values, and a
@@ -273,7 +273,47 @@ describe("append-only: every protected table holds data that cannot be removed",
     expect(
       APPEND_ONLY_TABLE_MIGRATION as Record<string, string>,
       "every protected table must name the migration that declares it",
-    ).toEqual(declaredBy);
+    ).toEqual(Object.fromEntries(Object.entries(declaredBy).filter(([t]) => !released.has(t))));
+  });
+
+  test("each RELEASED table is released by a real migration that removed its guard, and carries no trigger now", async () => {
+    // Criterion 104 / D53 (2) for `swarm_stream_events`, criteria 94/105 for
+    // `swarm_scheduler_jobs`. A release is only honest if the database agrees:
+    // the releasing file is on disk, it drops the triggers (or the table), and
+    // the migrated schema carries no 0032 trigger on the table any more.
+    for (const [table, { releasedBy }] of Object.entries(APPEND_ONLY_RELEASED)) {
+      const ddl = readFileSync(join(import.meta.dir, "..", "migrations", releasedBy), "utf8").replace(/--.*$/gm, "");
+      const names = triggerNames(table);
+      const dropsTable = new RegExp(`DROP TABLE IF EXISTS ${table}\\b`).test(ddl);
+      const dropsTriggers =
+        ddl.includes(`DROP TRIGGER IF EXISTS ${names.statement} ON ${table}`) &&
+        ddl.includes(`DROP TRIGGER IF EXISTS ${names.row} ON ${table}`);
+      expect({ table, releasedBy, removesGuard: dropsTable || dropsTriggers }).toEqual({
+        table,
+        releasedBy,
+        removesGuard: true,
+      });
+    }
+    const triggers = (await sql`
+      SELECT c.relname::text AS table_name, t.tgname::text AS trigger_name
+        FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+       WHERE NOT t.tgisinternal AND c.relname = ANY(${Object.keys(APPEND_ONLY_RELEASED)})
+    `) as unknown as { table_name: string; trigger_name: string }[];
+    expect(triggers).toEqual([]);
+    const [jobs] = (await sql`SELECT to_regclass('public.swarm_scheduler_jobs')::text AS reg`) as unknown as {
+      reg: string | null;
+    }[];
+    expect(jobs!.reg).toBeNull();
+    // Grant-only is still a protection: the runtime roles hold neither DELETE
+    // nor TRUNCATE on the event log (stream-events-retention.test.ts executes
+    // the refusal as each role).
+    const held = (await sql`
+      SELECT r.rolname::text AS role, p.privilege
+        FROM (VALUES ('rm_app'), ('rm_worker')) AS r(rolname)
+        CROSS JOIN (VALUES ('DELETE'), ('TRUNCATE')) AS p(privilege)
+       WHERE has_table_privilege(r.rolname, 'public.swarm_stream_events', p.privilege)
+    `) as unknown as { role: string; privilege: string }[];
+    expect(held).toEqual([]);
   });
 
   test("each ledger family's migration array and LEDGER_IMMUTABLE_FAMILIES are the same set", () => {

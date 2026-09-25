@@ -23,6 +23,7 @@ import { expect, test } from "bun:test";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { APPEND_ONLY_TABLES } from "../src/db/append-only-guard.ts";
+import { RUNTIME_DELETE_REVOKED_TABLES } from "../src/db/preflight.ts";
 
 // Scanned from the REPOSITORY root, not backend/. The statement this guard is
 // really aimed at — a hand-run `psql` — is not written in application code; it
@@ -109,16 +110,40 @@ const ALLOWED: Record<string, string> = {
   "backend/src/db/append-only-guard.ts": "declares the protected set; the probe interpolates the table name",
 };
 
-const TABLES = APPEND_ONLY_TABLES.join("|");
+/**
+ * THE GRANT-ONLY TABLES (D53 (2)) and the files allowed to prune them.
+ *
+ * `swarm_stream_events` left APPEND_ONLY_TABLES when migration 0080 dropped its
+ * triggers so rm_owner can prune below the oldest servable cursor (scheduler
+ * spec §6.3 Retention, D52). Leaving the append-only set must not also take it
+ * out of this guard: a DELETE against it is still a decision, and the only
+ * correct one is rm_owner's prune below the floor. So it is scanned as well,
+ * against its OWN pinned list — never the append-only ALLOWED map above, which
+ * would excuse a file for every protected table at once. Each entry must carry
+ * a statement against the table (no stale entry) and must act as `rm_owner`,
+ * the only role that may prune.
+ */
+const GRANT_ONLY_TABLES: readonly string[] = RUNTIME_DELETE_REVOKED_TABLES.filter(
+  (t) => !(APPEND_ONLY_TABLES as readonly string[]).includes(t),
+);
+const PRUNE_SITES: Record<string, string> = {
+  "backend/tests/stream-events-retention.test.ts":
+    "proves rm_owner may prune below the floor while rm_app and rm_worker get 42501",
+  "backend/tests/api-event-stream.test.ts": "prunes as rm_owner to prove a cursor below the floor is a resync",
+};
+
 // `TRUNCATE a, b, c` is one statement over several tables, so look past the
 // keyword for the table — but only across characters a TABLE LIST can contain.
 // Anything else (a backtick, a semicolon, a paren, an operator) ends the search,
 // or `DELETE FROM admin_passkey`; …; `INSERT INTO audit_log` would read as one
 // destructive statement against audit_log.
-const DESTRUCTIVE = new RegExp(
-  String.raw`(DELETE\s+FROM|TRUNCATE(\s+TABLE)?|DROP\s+TABLE(\s+IF\s+EXISTS)?)[\w\s,."']{0,120}?\b(${TABLES})\b`,
-  "gi",
-);
+const destructiveAgainst = (tables: readonly string[]) =>
+  new RegExp(
+    String.raw`(DELETE\s+FROM|TRUNCATE(\s+TABLE)?|DROP\s+TABLE(\s+IF\s+EXISTS)?)[\w\s,."']{0,120}?\b(${tables.join("|")})\b`,
+    "gi",
+  );
+const DESTRUCTIVE = destructiveAgainst(APPEND_ONLY_TABLES);
+const DESTRUCTIVE_GRANT_ONLY = destructiveAgainst(GRANT_ONLY_TABLES);
 
 // Scan CODE, not prose: every one of these tables is named in comments that
 // explain why it must NOT be deleted, and a guard that fired on its own
@@ -212,9 +237,42 @@ test("no new DELETE/TRUNCATE/DROP TABLE against an append-only table", () => {
   ).toEqual([]);
 });
 
+test("no DELETE/TRUNCATE/DROP TABLE against a grant-only table outside its pinned prune sites (D53 (2))", () => {
+  expect(GRANT_ONLY_TABLES, "swarm_stream_events is grant-only, and must still be scanned").toContain(
+    "swarm_stream_events",
+  );
+  const offenders: string[] = [];
+  for (const file of walk(root)) {
+    const rel = relative(root, file);
+    if (rel in ALLOWED || rel in PRUNE_SITES) continue;
+    // A GRANT or REVOKE names the privilege, not a removal: migration 0080's
+    // `REVOKE DELETE, TRUNCATE ON swarm_stream_events FROM rm_app, rm_worker` is
+    // the protection itself. Privilege statements are dropped before matching,
+    // so what is left to match is a statement that removes rows.
+    const code = codeOnly(file).replace(/\b(?:GRANT|REVOKE)\b[^;`"]*?\b(?:TO|FROM)\s+[\w, ]+/gi, "");
+    for (const m of code.matchAll(DESTRUCTIVE_GRANT_ONLY)) {
+      offenders.push(`${rel}: ${m[0].replace(/\s+/g, " ").trim()}`);
+    }
+  }
+  expect(
+    offenders,
+    "Only rm_owner prunes swarm_stream_events, and only below the oldest servable cursor (D52, D53 (2)). " +
+      "A new prune site is a decision: add it to PRUNE_SITES with the reason.",
+  ).toEqual([]);
+  for (const [rel, why] of Object.entries(PRUNE_SITES)) {
+    const code = codeOnly(join(root, rel));
+    expect({ rel, why, prunes: [...code.matchAll(DESTRUCTIVE_GRANT_ONLY)].length > 0 }).toEqual({ rel, why, prunes: true });
+    expect({ rel, actsAsOwner: code.includes("SET LOCAL ROLE rm_owner") }).toEqual({ rel, actsAsOwner: true });
+  }
+});
+
 // A guard that matches nothing is a guard that has silently stopped working —
 // the exact failure mode this file exists to prevent elsewhere.
 test("the guard's pattern actually matches the statements it forbids", () => {
+  for (const table of GRANT_ONLY_TABLES) {
+    expect([...`DELETE FROM ${table} WHERE seq < 10`.matchAll(DESTRUCTIVE_GRANT_ONLY)].length).toBeGreaterThan(0);
+    expect([...`TRUNCATE ${table}`.matchAll(DESTRUCTIVE_GRANT_ONLY)].length).toBeGreaterThan(0);
+  }
   for (const table of APPEND_ONLY_TABLES) {
     for (const stmt of [`DELETE FROM ${table} WHERE x`, `TRUNCATE ${table}`, `DROP TABLE IF EXISTS ${table}`]) {
       expect([...stmt.matchAll(DESTRUCTIVE)].length, `pattern must match: ${stmt}`).toBeGreaterThan(0);
