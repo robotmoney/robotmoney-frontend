@@ -117,13 +117,25 @@
     "id": "external-judge-attempt-timeout",
     "match": "\\(swarm\\.judge\\) failed, retry in <n>s: judge produced no judgement \\(model_timeout",
     "class": "external",
-    "reason": "One judge attempt timed out at the model provider and the job is retrying; a judge job that exhausts its retries logs '— DEAD', which stays fatal."
+    "reason": "One judge attempt timed out at the model provider and the job is retrying; a judge job that exhausts its retries logs '— DEAD', which stays fatal. An outcome of the model, not a platform failure (owner, 2026-09-25)."
   },
   {
     "id": "external-member-take-rejected",
     "match": "member-session-client failed: model take's",
     "class": "external",
-    "reason": "A member's model returned a take that failed validation (e.g. a WEIGHTS clause missing a canonical bucket); by design the member is rendered absent, never defaulted, and attendance is graded separately."
+    "reason": "A member's model returned a take that failed validation (e.g. a WEIGHTS clause missing a canonical bucket); by design the member is rendered absent, never defaulted, and attendance is graded separately. An outcome of the model, not a platform failure (owner, 2026-09-25)."
+  },
+  {
+    "id": "external-member-inference-timeout",
+    "match": "member-session-client failed: opencode inference timed out after <n>ms",
+    "class": "external",
+    "reason": "The member's model provider did not answer in time; the member is rendered absent, never given a template take. An outcome of the model, not a platform failure (owner, 2026-09-25)."
+  },
+  {
+    "id": "expected-compose-orphan-member-containers",
+    "match": "Found orphan containers \\(\\S*member-agent",
+    "class": "expected",
+    "reason": "Compose notices the per-session member-agent containers it did not define; they are the driver's own and it removes them."
   },
   {
     "id": "fragment-member-container-exit",
