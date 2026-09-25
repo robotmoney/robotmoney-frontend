@@ -472,6 +472,14 @@ export async function pruneCommand(input: {
       throw new PruneRefused(`Refusing: ${(error as Error).message}`);
     });
     if (password === "") throw new PruneRefused("Refusing: no rm_owner password entered.");
+    // Prove the login before asking for the `y`: a connection is opened and
+    // authenticated, and no statement is issued on it until the fenced prune.
+    owner = postgres(asOwner(input.readerUrl, password), { max: 1, onnotice: () => {} });
+    try {
+      (await owner.reserve()).release();
+    } catch (error) {
+      throw new PruneRefused(`Refusing: the rm_owner credential was not accepted by this database (${(error as Error).message}).`);
+    }
 
     await phase("confirm");
     const plan = PRUNE_TARGETS.map((t) => `  ${t.table}: ${t.predicate}`).join("\n");
@@ -487,18 +495,7 @@ export async function pruneCommand(input: {
     }
 
     await phase("prune");
-    owner = postgres(asOwner(input.readerUrl, password), { max: 1, onnotice: () => {} });
-    let tables: readonly PrunedTable[];
-    try {
-      tables = await runPrune(owner, { windowDays: input.windowDays, lock: held });
-    } catch (error) {
-      if (error instanceof PruneRefused) throw error;
-      const code = (error as { code?: string }).code;
-      if (code === "28P01" || code === "28000") {
-        throw new PruneRefused(`Refusing: the rm_owner credential was not accepted by this database (${(error as Error).message}).`);
-      }
-      throw error;
-    }
+    const tables = await runPrune(owner, { windowDays: input.windowDays, lock: held });
     for (const t of tables) input.log(`${t.table}: ${t.rows} row(s) where ${t.predicate}, cutoff ${t.cutoff}`);
 
     await phase("receipt");
