@@ -165,10 +165,17 @@
   },
   {
     "id": "known-db-connection-dropped",
-    "match": "CONNECTION_CLOSED|CONNECT_TIMEOUT|terminating connection due to administrator command|database unavailable",
+    "match": "CONNECTION_CLOSED|CONNECT_TIMEOUT|terminating connection due to administrator command|database unavailable|connect ECONNREFUSED [0-9.]+:25060",
     "class": "known-issue",
     "issue": "1035",
-    "reason": "Connections dropped while the managed cluster protected itself from a full disk."
+    "reason": "Connections dropped while the managed cluster protected itself from a full disk; also the managed cluster refusing connections (port 25060) while it restarts, e.g. the storage upsize on 2026-09-25 17:43."
+  },
+  {
+    "id": "known-inference-credits-exhausted",
+    "match": "cause=(quota-limited|exhausted-credits)|Insufficient balance",
+    "class": "known-issue",
+    "issue": "v0.5.1-D3",
+    "reason": "The OpenCode Zen account behind a member or judge key was out of credit (HTTP 402 quota-limited, production 2026-09-24 23:08 and 2026-09-25 05:19). Operational, not code: after the release the judge uses the same key, so a recurrence fails the post-release gate until the account is funded."
   },
   {
     "id": "known-db-boot-refusal",
