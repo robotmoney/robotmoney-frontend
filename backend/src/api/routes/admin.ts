@@ -19,7 +19,7 @@ import { decodeCursor, encodeCursor } from "../../admin/cursor.ts";
 import { recordAudit, redactAuditRow } from "../../admin/audit.ts";
 import { getOverviewProjection, PRODUCTION_KINDS } from "../../admin/overview.ts";
 import { detectAllGaps } from "../../ops/gap-detector.ts";
-import { isPrivileged } from "../auth.ts";
+import { hasAutomationRole, isPrivileged } from "../auth.ts";
 import { hashKey } from "../../lib/keys.ts";
 import { getAnalyticsReadMode } from "../../analytics/cutover/read-mode.ts";
 import { ledgerCurrentRawIndicatorSeries, ledgerCurrentResearchSignals } from "../../analytics/cutover/ledger-current.ts";
@@ -29,6 +29,8 @@ import { ledgerCurrentRawIndicatorSeries, ledgerCurrentResearchSignals } from ".
 export interface AdminAuthConfig {
   adminToken: string | null;
   allowInsecure: boolean;
+  /** The swarm driver's service token; it may read ONE job by exact ?id= (see GET /api/admin/jobs). */
+  automationToken?: string | null;
 }
 
 // Clamp a `?limit=` query param to [1, max] with a default when unset/invalid.
@@ -313,7 +315,17 @@ export async function handleAdmin(
   // `summary` are the original response shape (backward compatible); `nextCursor`
   // is additive.
   if (m === "GET" && p === "/api/admin/jobs") {
-    if (!await isPrivileged(req, cfg)) return FORBIDDEN;
+    // The swarm driver polls the judge job it just enqueued by exact ?id= and
+    // authenticates with its automation token, not an admin session. Without
+    // this, on any host with a claimed admin credential (production, and a
+    // twin restored from it) every read was a 403 and the driver waited out
+    // the whole backstop ceiling on every session (2026-09-25 rehearsal:
+    // "judge job still unreadable after the 420s backstop ceiling"). Listing,
+    // filtering and paging stay admin-only.
+    const exactId = url.searchParams.get("id");
+    const automationRead = exactId != null && exactId !== ""
+      && hasAutomationRole(req, { allowInsecure: cfg.allowInsecure, automationToken: cfg.automationToken ?? null });
+    if (!automationRead && !await isPrivileged(req, cfg)) return FORBIDDEN;
     try {
       const limit = parseLimit(url.searchParams.get("limit"));
       const cursor = parseCursor(url.searchParams.get("cursor"));

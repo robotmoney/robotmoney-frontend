@@ -188,3 +188,27 @@ test("bad shapes: non-numeric id → 400; unknown numeric id → 404", async () 
 test("a path this handler does not own returns null (index.ts falls through to 404)", async () => {
   expect(await call(req("GET", "/api/admin/nope"), INSECURE)).toBeNull();
 });
+
+// The swarm driver's judge wait polls ONE job by exact id with its automation
+// token. On a host with a claimed admin credential that read was a 403, and the
+// driver waited out its whole backstop ceiling every session (2026-09-25).
+const WITH_AUTOMATION = { adminToken: "s3cret-admin-token", allowInsecure: false, automationToken: "auto-tok" } as const;
+const autoGet = (path: string, token: string) =>
+  handleAdmin(new Request(`http://x${path}`, { headers: { "X-Automation-Token": token } }), new URL(`http://x${path}`), WITH_AUTOMATION);
+
+test("the automation token may read one job by exact id", async () => {
+  const jobId = await seed();
+  const r = await autoGet(`/api/admin/jobs?id=${jobId}`, "auto-tok");
+  expect(r?.status).toBe(200);
+  expect(((r!.body as { jobs: { id: unknown }[] }).jobs).map((j) => Number(j.id))).toEqual([jobId]);
+});
+
+test("the automation token may NOT list jobs without an exact id", async () => {
+  expect((await autoGet(`/api/admin/jobs`, "auto-tok"))?.status).toBe(403);
+  expect((await autoGet(`/api/admin/jobs?kind=${KIND}`, "auto-tok"))?.status).toBe(403);
+});
+
+test("a wrong automation token reads nothing", async () => {
+  const jobId = await seed();
+  expect((await autoGet(`/api/admin/jobs?id=${jobId}`, "not-the-token"))?.status).toBe(403);
+});
