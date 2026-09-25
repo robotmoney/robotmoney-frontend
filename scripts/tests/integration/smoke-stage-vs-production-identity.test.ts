@@ -56,8 +56,8 @@ beforeAll(async () => {
 }, 180_000);
 afterAll(() => db?.close());
 
-function remoteArgv(op: Operator, instance: string | null, extra: readonly string[] = []): string[] {
-  return ["bun", "--no-env-file", "scripts/smoke.ts", ...(instance ? ["--instance", instance] : []), "--credentials", op.roster, "--lock-timeout", "10", ...extra];
+function remoteArgv(op: Operator, instance: string | null, extra: readonly string[] = [], lockTimeoutSeconds = 10): string[] {
+  return ["bun", "--no-env-file", "scripts/smoke.ts", ...(instance ? ["--instance", instance] : []), "--credentials", op.roster, "--lock-timeout", String(lockTimeoutSeconds), ...extra];
 }
 
 /** Run to completion; for the refusing rows. */
@@ -175,6 +175,56 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
     expect(r.out).not.toContain("phase:");
     expect(r.out).not.toContain("plan id:");
   }, 120_000);
+
+  test("criterion 21: a target re-enrolled while `bun smoke` waited for the lock refuses once it acquires — the plan is re-run on the locked read", async () => {
+    // The plan was read (rehearsal) before the lock existed. Another tool holds
+    // the lock; while the boot waits, the target is re-enrolled production and
+    // the holder lets go. The boot acquires, re-reads identity, ledger and
+    // manifest, finds the plan no longer true, releases and refuses — the
+    // `lock` preparation journaled failed, nothing after it run.
+    const { acquireTargetLock, readTargetStateAt } = await import("../../../backend/src/db/target-lock.ts");
+    db.setIdentity("rehearsal");
+    const op = db.operator("revalidate", ["RM_ENV = stage"]);
+    const url = `postgres://rm_readonly:${db.passwords.rm_readonly}@${db.host}:${db.port}/${db.database}?sslmode=disable`;
+    const held = await acquireTargetLock({
+      databaseUrl: url,
+      holder: { tool: "migrate", planId: null, instance: null, host: "another-host", pid: 4321 },
+      timeoutMs: 10_000,
+      expected: await readTargetStateAt(url),
+    });
+    if (!held.acquired) throw new Error(held.reason);
+    const proc = Bun.spawn(remoteArgv(op, "rm_it_matrix_revalidate", [], 60), {
+      cwd: repoRoot,
+      env: { ...op.env },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    let out = "";
+    const pumps = Promise.all(
+      [proc.stdout, proc.stderr].map(async (stream) => {
+        for await (const chunk of stream as ReadableStream<Uint8Array>) out += new TextDecoder().decode(chunk);
+      }),
+    );
+    try {
+      // Queued: the boot's lock connection publishes itself while it waits.
+      const deadline = Date.now() + 120_000;
+      while (db.superuser("SELECT count(*) FROM pg_stat_activity WHERE application_name LIKE 'rm-tl:smoke|%';") === "0") {
+        if (proc.exitCode !== null || Date.now() > deadline) throw new Error(`the boot never queued for the lock:\n${out.slice(-3000)}`);
+        await Bun.sleep(100);
+      }
+      db.setIdentity("production");
+      await held.lock.release();
+      const code = await proc.exited;
+      await pumps;
+      expect(code).not.toBe(0);
+      expect(out).toContain("deployment_identity is production, but the plan was built against rehearsal");
+      expect(out).not.toContain("phase: prepare (assemble)");
+    } finally {
+      if (proc.exitCode === null) proc.kill("SIGKILL");
+      await held.lock.release();
+    }
+  }, 300_000);
 
   test("other × remote: the retired `smoke` value refuses, and is not downgraded to stage", () => {
     db.setIdentity("rehearsal");
