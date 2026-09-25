@@ -19,8 +19,17 @@
 //
 // SWITCHING IS A RENAME. A new site is copied into a temporary directory and
 // renamed into place; `current` is replaced by writing a temporary symlink and
-// renaming it over the old one. rename(2) is atomic, so a request sees the old
-// site or the new one, never a partial tree and never a missing root.
+// EXCHANGING it with the old one (renameat2 RENAME_EXCHANGE), then removing the
+// temporary name, which now holds the old link. A request sees the old site or
+// the new one, never a partial tree and never a missing root.
+//
+// Why an exchange and not a plain rename over the old link: on Linux (6.8,
+// ext4, measured 2026-09-25) an open() through `current` that races a
+// rename(2) replacing it fails with ENOENT now and then — a few times per
+// thousand switches — because the replaced entry is briefly gone for a path
+// walk already in flight. An exchange never removes either name, and the same
+// measurement saw no error. Where renameat2 is unavailable (not Linux, or a
+// filesystem that refuses the flag) the switch falls back to rename(2).
 //
 // THE SITE ID is the web client's own identity from the assembled
 // `/version.json` (scripts/web-client/version.ts): `<version>-<commit>`. A
@@ -42,7 +51,8 @@
 // smoke:web` (scripts/lib/website-release.ts) calls installSite, switchSite,
 // currentSite and previousSite.
 
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import { dlopen, FFIType, ptr } from "bun:ffi";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
@@ -131,12 +141,45 @@ function readSiteLink(webDir: string, name: string): string | null {
   return target;
 }
 
-/** Point `name` at `siteId` by writing a temporary symlink and renaming it over the old one. */
+/**
+ * renameat2(RENAME_EXCHANGE) through libc, or null where it cannot be had.
+ * Resolved on first use, never at import: importing this module opens nothing.
+ */
+let exchangeNames: ((a: string, b: string) => boolean) | null | undefined;
+function renameExchange(): ((a: string, b: string) => boolean) | null {
+  if (exchangeNames !== undefined) return exchangeNames;
+  exchangeNames = null;
+  if (process.platform !== "linux") return exchangeNames;
+  try {
+    const libc = dlopen("libc.so.6", {
+      renameat2: { args: [FFIType.i32, FFIType.cstring, FFIType.i32, FFIType.cstring, FFIType.u32], returns: FFIType.i32 },
+    });
+    const AT_FDCWD = -100;
+    const RENAME_EXCHANGE = 2;
+    const cstring = (value: string) => ptr(Buffer.from(`${value}\0`));
+    exchangeNames = (a, b) => libc.symbols.renameat2(AT_FDCWD, cstring(a), AT_FDCWD, cstring(b), RENAME_EXCHANGE) === 0;
+  } catch {
+    exchangeNames = null;
+  }
+  return exchangeNames;
+}
+
+/**
+ * Point `name` at `siteId`: write a temporary symlink, then exchange it with
+ * the old link (the temporary name then holds the old link and is removed), or
+ * rename it into place when there is no old link or no exchange (header).
+ */
 function writeSiteLink(webDir: string, name: string, siteId: string): void {
   const temporary = join(webDir, `.${name}-${randomBytes(4).toString("hex")}`);
+  const link = join(webDir, name);
   symlinkSync(siteId, temporary);
   try {
-    renameSync(temporary, join(webDir, name));
+    const exchange = renameExchange();
+    if (exchange !== null && lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink() && exchange(temporary, link)) {
+      unlinkSync(temporary);
+      return;
+    }
+    renameSync(temporary, link);
   } catch (error) {
     rmSync(temporary, { force: true });
     throw error;
