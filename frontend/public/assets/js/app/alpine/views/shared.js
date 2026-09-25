@@ -102,51 +102,40 @@ export const BASELINE_KEYS = new Set(["eth_hodl", "sp500_hodl", "blend_hodl", "s
 
 // Backtest markets: title, per-regime target weights (drive the allocation pie
 // glyphs), and the ordered strategy rows (key / label / description).
+//
+// Every strategy holds the same three mixes (a market's `weights`). What sets
+// one apart is which reading decides the regime each day: the composite, one
+// panel, or a rule across every panel (backend/src/analytics/analyze/
+// backtest.ts: combineConservativeN, combineAggressiveN, over all the
+// snapshot's panels). The names are the chart legend's (STRATEGY_STYLE); the
+// descriptions say the rule in words.
+const RULES = [
+  ["composite", "Composite", "Follows the published regime: the composite's own reading."],
+  ["macro", "Macro", "Follows the macro panel's reading alone."],
+  ["onchain", "On-chain", "Follows the on-chain panel's reading alone."],
+  ["factor", "Equity factor", "Follows the equity factor panel's reading alone."],
+  ["conservative", "Conservative", "Combines every panel: risk-off if any panel reads risk-off, risk-on only when all read risk-on, neutral otherwise."],
+  ["aggressive", "Aggressive", "Combines every panel by vote, +1 for each risk-on and −1 for each risk-off: above 0 is risk-on, below 0 risk-off, 0 neutral."],
+];
+const CASH = ["stables_only", "All stables", "Holds cash throughout, earning the 3-month T-bill (DTB3) yield."];
 export const BACKTESTS = [
   {
     key: "eth",
     title: "Backtest · ETH / cash",
     weights: { risk_off: { cash: 1 }, neutral: { cash: 0.5, eth: 0.5 }, risk_on: { eth: 1 } },
-    strategies: [
-      ["composite", "Composite bucket", "Default rule on the published composite."],
-      ["macro", "Macro bucket", "Macro panel only."],
-      ["onchain", "On-chain bucket", "On-chain panel only."],
-      ["factor", "Equity factor bucket", "Equity factor panel only."],
-      ["conservative", "Conservative (N-panel)", "Any panel off → off; all panels on → on; else neutral."],
-      ["aggressive", "Aggressive (N-panel)", "Net sum > 0 → on, < 0 → off, = 0 → neutral."],
-      ["eth_hodl", "Buy-and-hold ETH", "Reference: 100% ETH."],
-      ["stables_only", "All-stables", "Reference: 100% DTB3 yield."],
-    ],
+    strategies: [...RULES, ["eth_hodl", "Buy-and-hold ETH", "Holds 100% ETH throughout."], CASH],
   },
   {
     key: "sp500",
     title: "Backtest · SP500 / cash",
     weights: { risk_off: { cash: 1 }, neutral: { cash: 0.5, sp500: 0.5 }, risk_on: { sp500: 1 } },
-    strategies: [
-      ["composite", "Composite bucket", "Default rule on the published composite."],
-      ["macro", "Macro bucket", "Macro panel only."],
-      ["onchain", "On-chain bucket", "On-chain panel only."],
-      ["factor", "Equity factor bucket", "Equity factor panel only."],
-      ["conservative", "Conservative (N-panel)", "Any panel off → off; all panels on → on; else neutral."],
-      ["aggressive", "Aggressive (N-panel)", "Net sum > 0 → on, < 0 → off, = 0 → neutral."],
-      ["sp500_hodl", "Buy-and-hold SP500", "Reference: 100% SP500."],
-      ["stables_only", "All-stables", "Reference: 100% DTB3 yield."],
-    ],
+    strategies: [...RULES, ["sp500_hodl", "Buy-and-hold S&P 500", "Holds 100% S&P 500 throughout."], CASH],
   },
   {
     key: "mixed",
     title: "Backtest · ETH + SP500 + cash",
     weights: { risk_off: { cash: 1 }, neutral: { cash: 0.5, eth: 0.25, sp500: 0.25 }, risk_on: { eth: 0.5, sp500: 0.5 } },
-    strategies: [
-      ["composite", "Composite bucket", "Default rule on the published composite."],
-      ["macro", "Macro bucket", "Macro panel only."],
-      ["onchain", "On-chain bucket", "On-chain panel only."],
-      ["factor", "Equity factor bucket", "Equity factor panel only."],
-      ["conservative", "Conservative (N-panel)", "Any panel off → off; all panels on → on; else neutral."],
-      ["aggressive", "Aggressive (N-panel)", "Net sum > 0 → on, < 0 → off, = 0 → neutral."],
-      ["blend_hodl", "50/50 ETH + SP500 HODL", "Reference: always max-risk."],
-      ["stables_only", "All-stables", "Reference: 100% DTB3 yield."],
-    ],
+    strategies: [...RULES, ["blend_hodl", "Buy-and-hold 50/50", "Holds 50% ETH and 50% S&P 500 throughout: the risk-on mix, always."], CASH],
   },
 ];
 // Strategy weight-pie slices (cash / ETH / SP500) — three categories, three

@@ -823,7 +823,9 @@ export function registerRegimeView(Alpine) {
         let vals = idx.map((i) => { const v = at.get(days[i]); return v == null ? null : +v; });
         if (rebased) { const first = vals.find((v) => v != null && v > 0); vals = vals.map((v) => (v == null || !first ? null : v / first)); }
         const st = STRATEGY_STYLE[sk];
-        return { token: sk, label: st.label, color: st.color, baseline: !!st.baseline, dash: st.baseline ? (st.dash || [4, 3]) : null, values: vals };
+        // The table's name for the line, so a row and its line read the same.
+        const row = BACKTESTS.find((b) => b.key === key)?.strategies.find(([k]) => k === sk);
+        return { token: sk, label: row ? row[1] : st.label, color: st.color, baseline: !!st.baseline, dash: st.baseline ? (st.dash || [4, 3]) : null, values: vals };
       });
       const flat = lines.flatMap((l) => l.values).filter((v) => v > 0);
       const lo = flat.length ? Math.min(...flat) : 0.1, hi = flat.length ? Math.max(...flat) : 10;
