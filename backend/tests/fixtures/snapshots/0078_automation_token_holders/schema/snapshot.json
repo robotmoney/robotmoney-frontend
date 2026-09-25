@@ -94,12 +94,7 @@
     "0075_swarm_recommendations_final.sql",
     "0076_ledger_write_revoke.sql",
     "0077_immutable_ledger_grants.sql",
-    "0078_automation_token_holders.sql",
-    "0079_drop_swarm_scheduler_jobs.sql",
-    "0080_stream_events_grant_only.sql",
-    "0081_stream_event_counter.sql",
-    "0082_judge_config_two_modes.sql",
-    "0083_clear_forged_member_operator.sql"
+    "0078_automation_token_holders.sql"
   ],
   "exclusions": {
     "roles": [
@@ -111,7 +106,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "e847123dccaf2210ac9a55be5a15dc89787c834d7ec7a5fa921ca0ec0beb02d2",
+  "contentHash": "67b0868feab5652cd94678ad30ef345594d10dbe6ce5dc2b0c18a12c647c980b",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -2658,6 +2653,32 @@
       "notnull": "yes",
       "default": "false"
     },
+    "column public.swarm_scheduler_jobs.acked_at": {
+      "type": "timestamp with time zone",
+      "notnull": "no"
+    },
+    "column public.swarm_scheduler_jobs.created_at": {
+      "type": "timestamp with time zone",
+      "notnull": "yes",
+      "default": "now()"
+    },
+    "column public.swarm_scheduler_jobs.id": {
+      "type": "bigint",
+      "notnull": "yes",
+      "identity": "always"
+    },
+    "column public.swarm_scheduler_jobs.idempotency_key": {
+      "type": "text",
+      "notnull": "yes"
+    },
+    "column public.swarm_scheduler_jobs.kind": {
+      "type": "text",
+      "notnull": "yes"
+    },
+    "column public.swarm_scheduler_jobs.target": {
+      "type": "text",
+      "notnull": "yes"
+    },
     "column public.swarm_session_events.action": {
       "type": "text",
       "notnull": "yes"
@@ -2965,15 +2986,6 @@
     "column public.swarm_stream_events.subject_id": {
       "type": "text",
       "notnull": "no"
-    },
-    "column public.swarm_stream_head.id": {
-      "type": "boolean",
-      "notnull": "yes",
-      "default": "true"
-    },
-    "column public.swarm_stream_head.seq": {
-      "type": "bigint",
-      "notnull": "yes"
     },
     "column public.swarm_subject_snapshots.date": {
       "type": "date",
@@ -4425,7 +4437,7 @@
       "definition": "CHECK ((min_takes >= 1))"
     },
     "constraint public.swarm_judge_config.swarm_judge_config_mode_check": {
-      "definition": "CHECK ((mode = ANY (ARRAY['off'::text, 'enforce'::text])))"
+      "definition": "CHECK ((mode = ANY (ARRAY['off'::text, 'shadow'::text, 'enforce'::text])))"
     },
     "constraint public.swarm_judge_config.swarm_judge_config_mode_requires_model_check": {
       "definition": "CHECK (((mode = 'off'::text) OR ((model IS NOT NULL) AND (btrim(model) <> ''::text))))"
@@ -4507,6 +4519,21 @@
     },
     "constraint public.swarm_recommendations.swarm_recommendations_subject_fk": {
       "definition": "FOREIGN KEY (subject_id) REFERENCES public.swarm_subjects(id)"
+    },
+    "constraint public.swarm_scheduler_jobs.swarm_scheduler_jobs_idempotency_key_key": {
+      "definition": "UNIQUE (idempotency_key)"
+    },
+    "constraint public.swarm_scheduler_jobs.swarm_scheduler_jobs_key_check": {
+      "definition": "CHECK ((idempotency_key ~ '^[A-Za-z0-9._:-]{4,128}$'::text))"
+    },
+    "constraint public.swarm_scheduler_jobs.swarm_scheduler_jobs_kind_check": {
+      "definition": "CHECK ((kind <> ''::text))"
+    },
+    "constraint public.swarm_scheduler_jobs.swarm_scheduler_jobs_pkey": {
+      "definition": "PRIMARY KEY (id)"
+    },
+    "constraint public.swarm_scheduler_jobs.swarm_scheduler_jobs_target_check": {
+      "definition": "CHECK ((target <> ''::text))"
     },
     "constraint public.swarm_session_events.committee_session_events_job_id_fkey": {
       "definition": "FOREIGN KEY (job_id) REFERENCES public.jobs(id) ON DELETE SET NULL"
@@ -4618,15 +4645,6 @@
     },
     "constraint public.swarm_stream_events.swarm_stream_events_session_id_fkey": {
       "definition": "FOREIGN KEY (session_id) REFERENCES public.swarm_sessions(id)"
-    },
-    "constraint public.swarm_stream_head.swarm_stream_head_pkey": {
-      "definition": "PRIMARY KEY (id)"
-    },
-    "constraint public.swarm_stream_head.swarm_stream_head_seq_check": {
-      "definition": "CHECK ((seq >= 0))"
-    },
-    "constraint public.swarm_stream_head.swarm_stream_head_singleton_check": {
-      "definition": "CHECK (id)"
     },
     "constraint public.swarm_subject_snapshots.swarm_subject_snapshots_pkey": {
       "definition": "PRIMARY KEY (id)"
@@ -4818,7 +4836,7 @@
       "privileges": "rm_app=r/rm_owner,rm_readonly=r/rm_owner,rm_worker=r/rm_owner"
     },
     "default privileges for rm_owner in schema public on tables": {
-      "privileges": "rm_app=r/rm_owner,rm_readonly=r/rm_owner,rm_worker=r/rm_owner"
+      "privileges": "rm_app=arw/rm_owner,rm_readonly=r/rm_owner,rm_worker=r/rm_owner"
     },
     "function public.rm_analytics_cutover_immutable()": {
       "owner": "rm_owner",
@@ -4855,10 +4873,6 @@
     "function public.rm_source_ledger_immutable()": {
       "owner": "rm_owner",
       "definition": "CREATE OR REPLACE FUNCTION public.rm_source_ledger_immutable()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\nBEGIN\n  RAISE EXCEPTION 'source ledger is immutable: % is not permitted on %', TG_OP, TG_TABLE_NAME\n    USING ERRCODE = 'feature_not_supported';\nEND;\n$function$\n"
-    },
-    "function public.rm_stream_head_forward_only()": {
-      "owner": "rm_owner",
-      "definition": "CREATE OR REPLACE FUNCTION public.rm_stream_head_forward_only()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF NEW.seq < OLD.seq THEN\n    RAISE EXCEPTION 'swarm_stream_head only moves forward: % -> % refused', OLD.seq, NEW.seq\n      USING ERRCODE = 'check_violation';\n  END IF;\n  RETURN NEW;\nEND\n$function$\n"
     },
     "function public.rm_text_array_is_canonical_set(text[])": {
       "owner": "rm_owner",
@@ -5392,6 +5406,15 @@
     "index public.swarm_recommendations_session_member_revision_key": {
       "definition": "CREATE UNIQUE INDEX swarm_recommendations_session_member_revision_key ON public.swarm_recommendations USING btree (session_id, member_id, revision)"
     },
+    "index public.swarm_scheduler_jobs_idempotency_key_key": {
+      "definition": "CREATE UNIQUE INDEX swarm_scheduler_jobs_idempotency_key_key ON public.swarm_scheduler_jobs USING btree (idempotency_key)"
+    },
+    "index public.swarm_scheduler_jobs_pkey": {
+      "definition": "CREATE UNIQUE INDEX swarm_scheduler_jobs_pkey ON public.swarm_scheduler_jobs USING btree (id)"
+    },
+    "index public.swarm_scheduler_jobs_unacked_idx": {
+      "definition": "CREATE INDEX swarm_scheduler_jobs_unacked_idx ON public.swarm_scheduler_jobs USING btree (created_at) WHERE (acked_at IS NULL)"
+    },
     "index public.swarm_session_events_pkey": {
       "definition": "CREATE UNIQUE INDEX swarm_session_events_pkey ON public.swarm_session_events USING btree (id)"
     },
@@ -5427,9 +5450,6 @@
     },
     "index public.swarm_stream_events_subject_idx": {
       "definition": "CREATE INDEX swarm_stream_events_subject_idx ON public.swarm_stream_events USING btree (subject_id, seq)"
-    },
-    "index public.swarm_stream_head_pkey": {
-      "definition": "CREATE UNIQUE INDEX swarm_stream_head_pkey ON public.swarm_stream_head USING btree (id)"
     },
     "index public.swarm_subject_snapshots_pkey": {
       "definition": "CREATE UNIQUE INDEX swarm_subject_snapshots_pkey ON public.swarm_subject_snapshots USING btree (id)"
@@ -5863,6 +5883,16 @@
       "cache": "1",
       "cycle": "no"
     },
+    "sequence public.swarm_scheduler_jobs_id_seq": {
+      "owner": "rm_owner",
+      "type": "bigint",
+      "start": "1",
+      "increment": "1",
+      "min": "1",
+      "max": "9223372036854775807",
+      "cache": "1",
+      "cycle": "no"
+    },
     "sequence public.swarm_session_judgements_id_seq": {
       "owner": "rm_owner",
       "type": "bigint",
@@ -6176,6 +6206,9 @@
     "table public.swarm_recommendations": {
       "owner": "rm_owner"
     },
+    "table public.swarm_scheduler_jobs": {
+      "owner": "rm_owner"
+    },
     "table public.swarm_session_events": {
       "owner": "rm_owner"
     },
@@ -6189,9 +6222,6 @@
       "owner": "rm_owner"
     },
     "table public.swarm_stream_events": {
-      "owner": "rm_owner"
-    },
-    "table public.swarm_stream_head": {
       "owner": "rm_owner"
     },
     "table public.swarm_subject_snapshots": {
@@ -6499,6 +6529,14 @@
       "definition": "CREATE TRIGGER swarm_recommendations_default_final_trigger BEFORE INSERT ON public.swarm_recommendations FOR EACH ROW EXECUTE FUNCTION public.swarm_recommendations_default_final()",
       "fires": "origin"
     },
+    "trigger public.swarm_scheduler_jobs.swarm_scheduler_jobs_append_only": {
+      "definition": "CREATE TRIGGER swarm_scheduler_jobs_append_only BEFORE DELETE OR TRUNCATE ON public.swarm_scheduler_jobs FOR EACH STATEMENT EXECUTE FUNCTION public.rm_append_only_guard()",
+      "fires": "always"
+    },
+    "trigger public.swarm_scheduler_jobs.swarm_scheduler_jobs_append_only_row": {
+      "definition": "CREATE TRIGGER swarm_scheduler_jobs_append_only_row BEFORE DELETE ON public.swarm_scheduler_jobs FOR EACH ROW EXECUTE FUNCTION public.rm_append_only_guard()",
+      "fires": "always"
+    },
     "trigger public.swarm_session_events.swarm_session_events_append_only": {
       "definition": "CREATE TRIGGER swarm_session_events_append_only BEFORE DELETE OR TRUNCATE ON public.swarm_session_events FOR EACH STATEMENT EXECUTE FUNCTION public.rm_append_only_guard()",
       "fires": "always"
@@ -6531,9 +6569,13 @@
       "definition": "CREATE TRIGGER swarm_sessions_append_only_row BEFORE DELETE ON public.swarm_sessions FOR EACH ROW EXECUTE FUNCTION public.rm_append_only_guard()",
       "fires": "always"
     },
-    "trigger public.swarm_stream_head.swarm_stream_head_forward_only": {
-      "definition": "CREATE TRIGGER swarm_stream_head_forward_only BEFORE UPDATE ON public.swarm_stream_head FOR EACH ROW EXECUTE FUNCTION public.rm_stream_head_forward_only()",
-      "fires": "origin"
+    "trigger public.swarm_stream_events.swarm_stream_events_append_only": {
+      "definition": "CREATE TRIGGER swarm_stream_events_append_only BEFORE DELETE OR TRUNCATE ON public.swarm_stream_events FOR EACH STATEMENT EXECUTE FUNCTION public.rm_append_only_guard()",
+      "fires": "always"
+    },
+    "trigger public.swarm_stream_events.swarm_stream_events_append_only_row": {
+      "definition": "CREATE TRIGGER swarm_stream_events_append_only_row BEFORE DELETE ON public.swarm_stream_events FOR EACH ROW EXECUTE FUNCTION public.rm_append_only_guard()",
+      "fires": "always"
     },
     "trigger public.swarm_subject_snapshots.swarm_subject_snapshots_append_only": {
       "definition": "CREATE TRIGGER swarm_subject_snapshots_append_only BEFORE DELETE OR TRUNCATE ON public.swarm_subject_snapshots FOR EACH STATEMENT EXECUTE FUNCTION public.rm_append_only_guard()",

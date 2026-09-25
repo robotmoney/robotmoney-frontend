@@ -20,7 +20,7 @@
 // (and an executed test asserts the two agree), so a third copy would be a
 // third thing to forget.
 import { expect, test } from "bun:test";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { APPEND_ONLY_TABLES } from "../src/db/append-only-guard.ts";
 import { RUNTIME_DELETE_REVOKED_TABLES } from "../src/db/preflight.ts";
@@ -103,7 +103,7 @@ const ALLOWED: Record<string, string> = {
   // snapshot N+1" (tests/snapshot-advance.test.ts) is a byte-for-byte,
   // sha256-pinned copy of an earlier backend/schema/snapshot.sql, so it carries
   // the same trigger declarations for the same reason. It deletes no row.
-  "backend/tests/fixtures/snapshots/0083_clear_forged_member_operator/schema/snapshot.sql":
+  "backend/tests/fixtures/snapshots/0078_automation_token_holders/schema/snapshot.sql":
     "pinned copy of an earlier snapshot declaration; installs the guard's triggers",
 
   // Migration 0059 cleans up fabricated snapshots on framework subjects (issue #960).
@@ -275,6 +275,15 @@ test("no DELETE/TRUNCATE/DROP TABLE against a grant-only table outside its pinne
 
 // A guard that matches nothing is a guard that has silently stopped working —
 // the exact failure mode this file exists to prevent elsewhere.
+// An exemption for a file that no longer exists is a dead key a later file of
+// the same name would inherit silently. The snapshot-N fixture's entry is the
+// one most likely to go stale: spec §8.4 deletes the old fixture directory
+// when the fixture advances, so its ALLOWED key must move with it.
+test("every ALLOWED and PRUNE_SITES entry names a file that exists", () => {
+  const missing = [...Object.keys(ALLOWED), ...Object.keys(PRUNE_SITES)].filter((rel) => !existsSync(join(root, rel)));
+  expect(missing).toEqual([]);
+});
+
 test("the guard's pattern actually matches the statements it forbids", () => {
   for (const table of GRANT_ONLY_TABLES) {
     expect([...`DELETE FROM ${table} WHERE seq < 10`.matchAll(DESTRUCTIVE_GRANT_ONLY)].length).toBeGreaterThan(0);

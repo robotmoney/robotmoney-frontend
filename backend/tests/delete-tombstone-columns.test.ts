@@ -18,7 +18,14 @@
 //      database bootstrapped from the pinned snapshot N
 //      (tests/fixtures/snapshots/), given rows, then migrated;
 //   3. today's statements (copied from the code that runs them, each cited)
-//      still run, as the role that runs them, and leave the new columns NULL;
+//      still run, as the role that runs them, and leave the new columns NULL —
+//      on the full replay. On the two snapshot-built paths (blank bootstrap,
+//      snapshot N + migrate) rm_app's admin DELETEs fail 42501 TODAY, before
+//      and after these migrations: grants.sql never granted rm_app DELETE on
+//      the admin tables, and 0053 did (cause B of schema-equivalence.test.ts).
+//      That break is recorded below as an exact list, not hidden; it closes
+//      when w5-owner-only-deletes (D55 (6)) turns those DELETEs into the
+//      tombstone UPDATEs this file proves rm_app can already make;
 //   4. the tombstone writes wave 5 will make are possible for the role that
 //      will make them, with no new privilege, and the published-snapshot guard
 //      (rm_wallet_aum_snapshot_constituent_guard, 0038) permits
@@ -198,45 +205,103 @@ describe("today's statements still work against the new columns (additive, spec 
     });
   });
 
-  test("rm_worker's wallet upserts and the repair pass's delete-and-insert run unchanged and leave superseded_at NULL", async () => {
-    const outcome = await asRole(migrated, "rm_worker", async (tx) => {
-      // src/worker/handlers/wallet.ts sampleWalletBalances / sampleWalletSleeves,
-      // twice, so the second write takes the ON CONFLICT path: the total
-      // constraint is still the arbiter, not the partial index.
-      for (const amount of [1, 2]) {
+  test("rm_worker's wallet upserts and the repair pass's delete-and-insert run unchanged and leave superseded_at NULL — full replay, blank bootstrap, snapshot N + migrate", async () => {
+    for (const db of [migrated, fresh, advanced]) {
+      const outcome = await asRole(db, "rm_worker", async (tx) => {
+        // src/worker/handlers/wallet.ts sampleWalletBalances / sampleWalletSleeves,
+        // twice, so the second write takes the ON CONFLICT path: the total
+        // constraint is still the arbiter, not the partial index.
+        for (const amount of [1, 2]) {
+          await tx`
+            INSERT INTO wallet_balance_samples
+              (sample_date, symbol, amount, value_usd, provenance, strategy_nav_idle_only, sampled_at)
+            VALUES (${DAY}, 'OLDCODE', ${amount}, ${amount}, 'live', false, now())
+            ON CONFLICT (sample_date, symbol) DO UPDATE SET
+              amount = EXCLUDED.amount, value_usd = EXCLUDED.value_usd, provenance = EXCLUDED.provenance,
+              strategy_nav_idle_only = EXCLUDED.strategy_nav_idle_only, sampled_at = EXCLUDED.sampled_at`;
+          await tx`
+            INSERT INTO wallet_sleeve_samples
+              (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
+            VALUES (${DAY}, '0x00000000000000000000000000000000000000bb', 'OLDCODE', ${amount}, ${amount}, 'live', now())
+            ON CONFLICT (sample_date, wallet_address, symbol) DO UPDATE SET
+              amount = EXCLUDED.amount, value_usd = EXCLUDED.value_usd, provenance = EXCLUDED.provenance,
+              sampled_at = EXCLUDED.sampled_at`;
+        }
+        const upserted = await tx`
+          SELECT (SELECT count(*)::int FROM wallet_balance_samples WHERE sample_date = ${DAY} AND symbol = 'OLDCODE') AS balance_rows,
+                 (SELECT amount::int FROM wallet_balance_samples WHERE sample_date = ${DAY} AND symbol = 'OLDCODE') AS balance_amount,
+                 (SELECT superseded_at FROM wallet_balance_samples WHERE sample_date = ${DAY} AND symbol = 'OLDCODE') AS balance_tombstone,
+                 (SELECT superseded_at FROM wallet_sleeve_samples WHERE sample_date = ${DAY} AND symbol = 'OLDCODE') AS sleeve_tombstone`;
+        // src/ops/wallet-backfill.ts, the repair pass: delete the day, re-insert.
+        await tx`DELETE FROM wallet_balance_samples WHERE sample_date = ${DAY}`;
+        await tx`DELETE FROM wallet_sleeve_samples WHERE sample_date = ${DAY}`;
         await tx`
-          INSERT INTO wallet_balance_samples
-            (sample_date, symbol, amount, value_usd, provenance, strategy_nav_idle_only, sampled_at)
-          VALUES (${DAY}, 'OLDCODE', ${amount}, ${amount}, 'live', false, now())
-          ON CONFLICT (sample_date, symbol) DO UPDATE SET
-            amount = EXCLUDED.amount, value_usd = EXCLUDED.value_usd, provenance = EXCLUDED.provenance,
-            strategy_nav_idle_only = EXCLUDED.strategy_nav_idle_only, sampled_at = EXCLUDED.sampled_at`;
-        await tx`
-          INSERT INTO wallet_sleeve_samples
-            (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
-          VALUES (${DAY}, '0x00000000000000000000000000000000000000bb', 'OLDCODE', ${amount}, ${amount}, 'live', now())
-          ON CONFLICT (sample_date, wallet_address, symbol) DO UPDATE SET
-            amount = EXCLUDED.amount, value_usd = EXCLUDED.value_usd, provenance = EXCLUDED.provenance,
-            sampled_at = EXCLUDED.sampled_at`;
-      }
-      const upserted = await tx`
-        SELECT (SELECT count(*)::int FROM wallet_balance_samples WHERE sample_date = ${DAY} AND symbol = 'OLDCODE') AS balance_rows,
-               (SELECT amount::int FROM wallet_balance_samples WHERE sample_date = ${DAY} AND symbol = 'OLDCODE') AS balance_amount,
-               (SELECT superseded_at FROM wallet_balance_samples WHERE sample_date = ${DAY} AND symbol = 'OLDCODE') AS balance_tombstone,
-               (SELECT superseded_at FROM wallet_sleeve_samples WHERE sample_date = ${DAY} AND symbol = 'OLDCODE') AS sleeve_tombstone`;
-      // src/ops/wallet-backfill.ts, the repair pass: delete the day, re-insert.
-      await tx`DELETE FROM wallet_balance_samples WHERE sample_date = ${DAY}`;
-      await tx`DELETE FROM wallet_sleeve_samples WHERE sample_date = ${DAY}`;
-      await tx`
-        INSERT INTO wallet_balance_samples (sample_date, symbol, amount, value_usd, provenance, sampled_at)
-        VALUES (${DAY}, 'OLDCODE', 3, 3, 'backfilled', now())`;
-      const repaired = await tx`SELECT amount::int AS amount, superseded_at FROM wallet_balance_samples WHERE sample_date = ${DAY}`;
-      return { upserted: upserted[0], repaired: [...repaired] };
-    });
-    expect(outcome).toEqual({
-      upserted: { balance_rows: 1, balance_amount: 2, balance_tombstone: null, sleeve_tombstone: null },
-      repaired: [{ amount: 3, superseded_at: null }],
-    });
+          INSERT INTO wallet_balance_samples (sample_date, symbol, amount, value_usd, provenance, sampled_at)
+          VALUES (${DAY}, 'OLDCODE', 3, 3, 'backfilled', now())`;
+        const repaired = await tx`SELECT amount::int AS amount, superseded_at FROM wallet_balance_samples WHERE sample_date = ${DAY}`;
+        return { upserted: upserted[0], repaired: [...repaired] };
+      });
+      expect(outcome).toEqual({
+        upserted: { balance_rows: 1, balance_amount: 2, balance_tombstone: null, sleeve_tombstone: null },
+        repaired: [{ amount: 3, superseded_at: null }],
+      });
+    }
+  });
+
+  /**
+   * RECORDED, cause B (schema-equivalence.test.ts), shrink-only: the rm_app
+   * statements of today's code that a snapshot-built database refuses, because
+   * grants.sql gives rm_app no DELETE on the admin tables while 0053 gave it
+   * DELETE on the full-replay path. Each is refused 42501 with or without
+   * migrations 0084-0086: the tombstone columns neither cause nor cure it.
+   * w5-owner-only-deletes deletes each entry as it converts the site
+   * (tests/no-runtime-delete.test.ts's backlog names the same sites).
+   */
+  const SNAPSHOT_PATH_REFUSED_TODAY: readonly string[] = [
+    "admin-webauthn.ts storeChallenge expired cleanup",
+    "admin-webauthn.ts consumeChallenge",
+    "admin.ts password change / recovery: DELETE FROM admin_passkey",
+    "admin.ts password change / recovery: DELETE FROM admin_session",
+  ];
+
+  test("on the snapshot-built paths rm_app's admin writes run and leave the tombstones NULL; its admin DELETEs are refused 42501 exactly as recorded (cause B, closed in wave 5)", async () => {
+    for (const db of [fresh, advanced]) {
+      const outcome = await asRole(db, "rm_app", async (tx) => {
+        await tx`INSERT INTO admin_passkey (id, public_key, counter, transports) VALUES ('pk-old-code', ${Buffer.from([1])}, 0, ${["usb"]})`;
+        await tx`UPDATE admin_passkey SET counter = 1, last_used_at = now() WHERE id = 'pk-old-code'`;
+        await tx`INSERT INTO admin_session (token, expires_at) VALUES ('tok-old-code', now() + interval '1 day')`;
+        const session = await tx`SELECT 1 FROM admin_session WHERE token = 'tok-old-code' AND expires_at > now()`;
+        await tx`INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at) VALUES ('authentication', 'ch-old-code', now() + interval '5 minutes')`;
+        const tombstones = await tx`
+          SELECT (SELECT revoked_at FROM admin_session WHERE token = 'tok-old-code') AS session,
+                 (SELECT revoked_at FROM admin_passkey WHERE id = 'pk-old-code') AS passkey,
+                 (SELECT consumed_at FROM admin_webauthn_challenge WHERE challenge = 'ch-old-code') AS challenge`;
+        // Each DELETE in its own savepoint, so one refusal does not abort the rest.
+        const attempt = async (run: () => Promise<unknown>) => {
+          await tx`SAVEPOINT old_code_delete`;
+          const state = await sqlState(run);
+          await tx`ROLLBACK TO SAVEPOINT old_code_delete`;
+          return state;
+        };
+        const refused: Record<string, string | null> = {
+          [SNAPSHOT_PATH_REFUSED_TODAY[0]!]: await attempt(() => tx`DELETE FROM admin_webauthn_challenge WHERE expires_at <= now()`),
+          [SNAPSHOT_PATH_REFUSED_TODAY[1]!]: await attempt(
+            () => tx`
+              DELETE FROM admin_webauthn_challenge
+              WHERE flow = 'authentication' AND challenge = 'ch-old-code' AND expires_at > now()
+              RETURNING challenge`,
+          ),
+          [SNAPSHOT_PATH_REFUSED_TODAY[2]!]: await attempt(() => tx`DELETE FROM admin_passkey`),
+          [SNAPSHOT_PATH_REFUSED_TODAY[3]!]: await attempt(() => tx`DELETE FROM admin_session`),
+        };
+        return { session: session.length, tombstones: tombstones[0], refused };
+      });
+      expect(outcome).toEqual({
+        session: 1,
+        tombstones: { session: null, passkey: null, challenge: null },
+        refused: Object.fromEntries(SNAPSHOT_PATH_REFUSED_TODAY.map((site) => [site, "42501"])),
+      });
+    }
   });
 });
 

@@ -13,13 +13,26 @@
 // WHAT COUNTS AS A DELETE. Every `.ts`/`.js` file under backend/src/ and
 // backend/scripts/ is parsed (the TypeScript parser, not a line regex) and two
 // things are collected:
-//   * a SQL statement: a string or template literal (tagged — `sql\`...\``,
-//     `tx\`...\``, `on(db, q)\`...\`` — or passed to `sql.unsafe`, or held in a
-//     registry probe's `statement:`) in which a DELETE FROM or TRUNCATE begins
-//     a statement: at the start of the literal, after `;`, or after `(` (a
-//     data-modifying CTE, `WITH x AS (DELETE ...)`). Prose that mentions the
-//     words ("UPDATE/DELETE/TRUNCATE refused", an operator hint "Emergency
-//     reset: DELETE FROM ...") does not begin a statement and is not counted.
+//   * a SQL statement: a string or template literal that removes rows. SQL
+//     comments are stripped first. A literal is read as SQL when the AST puts
+//     it in a SQL position (a tagged template — `sql\`...\``, `tx\`...\``,
+//     `on(db, q)\`...\`` — an argument of `.unsafe(...)`, or a `statement:` /
+//     `sql:` property) or when its text begins with a SQL verb followed by
+//     whitespace. In SQL it counts:
+//       - `DELETE FROM <t>` after ANY token boundary, so a CTE-led
+//         `WITH old AS (...) DELETE FROM t USING old` and a data-modifying CTE
+//         `WITH x AS (DELETE ...)` both count;
+//       - `TRUNCATE [TABLE] [ONLY] a, b, ...` at a statement start (start, `;`,
+//         `(`, a quote, `$$`, or BEGIN/THEN/ELSE/LOOP), EVERY table in the list;
+//         never the TRUNCATE of a trigger event list or a GRANT/REVOKE;
+//       - `MERGE INTO <t> ... THEN DELETE`, as a delete from <t>;
+//       - a DELETE FROM or TRUNCATE with no table after it (the literal ends,
+//         as in `"DELETE FROM " + table`, or a `%I` placeholder follows) counts
+//         on table `?`: a computed table is still a delete.
+//     Any other string is prose: it counts only where a DELETE FROM or
+//     TRUNCATE begins a statement (start, `;`, `(`), so "UPDATE/DELETE/TRUNCATE
+//     refused" and an operator hint "Emergency reset: DELETE FROM ..." are not
+//     counted.
 //   * a registry declaration: an object literal whose `privileges` array names
 //     "DELETE" or "TRUNCATE" (src/db/registry.ts `registerQuery`).
 // `Map.prototype.delete` / `Set.prototype.delete` calls are not SQL and are not
@@ -71,9 +84,78 @@ interface Hit {
   readonly text: string;
 }
 
-/** A DELETE FROM / TRUNCATE that begins a statement inside SQL text. */
-const STATEMENT =
-  /(?:^|[;(])\s*(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)(?:\s+ONLY)?\s+((?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?(?:\$\{[^}]*\}|"?[A-Za-z_][A-Za-z0-9_]*"?))/gi;
+/** A table reference: optionally schema-qualified, possibly a `${...}` span. */
+const NAME = String.raw`(?:(?:"?[A-Za-z_][A-Za-z0-9_]*"?|\$\{[^}]*\})\.)?(?:\$\{[^}]*\}|"?[A-Za-z_][A-Za-z0-9_]*"?)`;
+/** A TRUNCATE's table list: `a [*], ONLY b, c`. */
+const NAME_LIST = String.raw`(?:ONLY\s+)?${NAME}(?:\s*\*)?(?:\s*,\s*(?:ONLY\s+)?${NAME}(?:\s*\*)?)*`;
+
+/** SQL: `DELETE FROM` after any token boundary; the table is optional (`?`). */
+const SQL_DELETE = new RegExp(String.raw`(?<![A-Za-z0-9_$])DELETE\s+FROM(?:\s+ONLY)?(?:\s+(${NAME}))?`, "gi");
+/** SQL: `TRUNCATE` at a statement start, with its whole table list — or with
+ *  a computed table: the literal ends there, or a `%I` / `$1` / `' ||` follows. */
+const SQL_TRUNCATE = new RegExp(
+  String.raw`(?:^|[;('"]|\$\$|(?<![A-Za-z0-9_$])(?:BEGIN|THEN|ELSE|LOOP))\s*TRUNCATE(?:\s+TABLE)?` +
+    String.raw`(?:\s+(${NAME_LIST})(?=\s|;|\)|'|"|$)|(?:\s+ONLY)?(?=\s*(?:$|'\s*\|\||%[IsL]|\$\d)))`,
+  "gi",
+);
+/** SQL: `MERGE INTO <t> ... THEN DELETE` removes rows from <t>. */
+const SQL_MERGE_DELETE = new RegExp(String.raw`(?<![A-Za-z0-9_$])MERGE\s+INTO\s+(?:ONLY\s+)?(${NAME})[\s\S]*?\bTHEN\s+DELETE\b`, "gi");
+/** Prose: only a DELETE FROM / TRUNCATE that begins a statement, with a table. */
+const PROSE_STATEMENT = new RegExp(
+  String.raw`(?:^|[;(])\s*(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)(?:\s+ONLY)?\s+(${NAME})`,
+  "gi",
+);
+/** A literal whose text begins with a SQL verb is SQL wherever it sits. */
+const SQL_VERB_START = /^\s*(?:SELECT|INSERT|UPDATE|DELETE|TRUNCATE|WITH|MERGE|DO|BEGIN|EXECUTE)\s/i;
+/** The words a TRUNCATE-shaped match can capture that are not tables. */
+const NOT_A_TABLE = /^(?:ON|OR|TO|FROM|AND|RESTART|CONTINUE|CASCADE|RESTRICT)$/i;
+
+/** `--` and block comments removed, so a comment-led statement still starts. */
+function stripSqlComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
+}
+
+const cleanTable = (name: string): string => name.replace(/"/g, "").replace(/^public\./, "");
+
+/** The tables every row-removing statement in `text` names (`?` when computed). */
+function deletedTables(text: string, sqlContext: boolean): string[] {
+  const sql = stripSqlComments(text);
+  if (!sqlContext && !SQL_VERB_START.test(sql)) {
+    return [...sql.matchAll(PROSE_STATEMENT)].map((m) => cleanTable(m[1]!));
+  }
+  const tables: string[] = [];
+  for (const m of sql.matchAll(SQL_DELETE)) tables.push(m[1] ? cleanTable(m[1]) : "?");
+  for (const m of sql.matchAll(SQL_TRUNCATE)) {
+    if (!m[1]) {
+      tables.push("?");
+      continue;
+    }
+    const names = m[1]
+      .split(",")
+      .map((n) => n.trim().replace(/^ONLY\s+/i, "").replace(/\s*\*$/, ""));
+    // `BEFORE DELETE OR TRUNCATE ON t` and `GRANT ..., TRUNCATE ON t` are not
+    // statements: the "table" they would capture is a keyword.
+    if (names.length === 1 && NOT_A_TABLE.test(names[0]!)) continue;
+    for (const n of names) tables.push(cleanTable(n));
+  }
+  for (const m of sql.matchAll(SQL_MERGE_DELETE)) tables.push(cleanTable(m[1]!));
+  return tables;
+}
+
+/** True when the AST puts this literal where SQL is executed. */
+function inSqlPosition(node: ts.Node): boolean {
+  const parent = node.parent;
+  if (!parent) return false;
+  if (ts.isTaggedTemplateExpression(parent) && parent.template === node) return true;
+  if (ts.isCallExpression(parent) && parent.arguments.includes(node as ts.Expression)) {
+    const callee = parent.expression;
+    return ts.isPropertyAccessExpression(callee) && callee.name.text === "unsafe";
+  }
+  if (ts.isPropertyAssignment(parent) && parent.initializer === node && ts.isIdentifier(parent.name)) {
+    return parent.name.text === "statement" || parent.name.text === "sql";
+  }
+  return false;
+}
 
 function literalText(node: ts.Node, source: ts.SourceFile): string | null {
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
@@ -92,12 +174,12 @@ function scanSource(file: string, text: string): Hit[] {
   const visit = (node: ts.Node): void => {
     const sqlText = literalText(node, source);
     if (sqlText !== null) {
-      for (const match of sqlText.matchAll(STATEMENT)) {
+      for (const table of deletedTables(sqlText, inSqlPosition(node))) {
         hits.push({
           file,
           line: lineOf(node),
           kind: "statement",
-          table: match[1]!.replace(/"/g, "").replace(/^public\./, ""),
+          table,
           text: sqlText.replace(/\s+/g, " ").trim(),
         });
       }
@@ -350,23 +432,47 @@ describe("RED CONTROL: the detector catches a planted runtime delete in every sh
     "  return note;",
     "}",
     "export const q = { role: \"rm_app\", object: \"jobs\", privileges: [\"DELETE\", \"SELECT\"] };",
+    // The shapes a start-of-statement rule misses (line 13 onward).
+    "export async function prune2(id: string, table: string) {",
+    "  await sql`WITH old AS (SELECT id FROM jobs WHERE id = ${id}) DELETE FROM jobs USING old WHERE jobs.id = old.id`;",
+    '  await sql.unsafe("\\n  -- revoke every session\\n  DELETE FROM admin_session");',
+    '  const stmt = "/* x */ DELETE FROM admin_passkey WHERE true";',
+    "  await sql`MERGE INTO job_runs r USING (SELECT ${id} AS id) s ON r.id = s.id WHEN MATCHED THEN DELETE`;",
+    '  await sql.unsafe("DELETE FROM " + table);',
+    '  await sql.unsafe("TRUNCATE jobs, admin_session RESTART IDENTITY");',
+    "  await sql`DO $$ BEGIN EXECUTE 'TRUNCATE ' || quote_ident(${table}); END $$`;",
+    // Not deletes: a privilege probe, a trigger event list, a GRANT.
+    "  await sql`SELECT has_table_privilege(c.oid, 'TRUNCATE') FROM pg_class c`;",
+    "  await sql`CREATE TRIGGER g BEFORE DELETE OR TRUNCATE ON jobs FOR EACH STATEMENT EXECUTE FUNCTION f()`;",
+    "  await sql`GRANT SELECT, DELETE, TRUNCATE ON jobs TO rm_owner`;",
+    "  return stmt;",
+    "}",
   ].join("\n");
 
   test("each planted SQL delete and declaration is found; the Map.delete and the prose are not", () => {
     const hits = scanSource("src/worker/planted.ts", planted);
     expect(hits.map((h) => `${h.kind} ${h.table} :${h.line}`).sort()).toEqual([
       "declaration jobs :11",
+      "statement ? :17", // "DELETE FROM " + table: the computed table still counts
+      "statement ? :19", // EXECUTE 'TRUNCATE ' || ...
+      "statement admin_passkey :15", // literal led by a block comment, outside a SQL position
+      "statement admin_session :14", // literal led by a -- comment
+      "statement admin_session :18", // the second table of a TRUNCATE list
       "statement comments :6",
+      "statement job_runs :16", // MERGE ... THEN DELETE
       "statement job_runs :4",
       "statement job_schedules :5",
+      "statement jobs :13", // CTE-led DELETE, after `)`
+      "statement jobs :18", // the first table of a TRUNCATE list
       "statement jobs :3",
     ]);
   });
 
   test("the planted file fails the inventory, naming file and line", () => {
     const problems = unrecorded([...HITS, ...scanSource("src/worker/planted.ts", planted)]);
-    expect(problems.length).toBe(5);
-    expect(problems.join("\n")).toContain("src/worker/planted.ts:3");
+    expect(problems.length).toBe(8);
+    const text = problems.join("\n");
+    for (const line of [3, 13, 14, 15, 16, 17, 18, 19]) expect(text).toContain(`src/worker/planted.ts:${line} `);
   });
 
   test("one more DELETE in a backlog file fails too — the backlog is a count, not a file exemption", () => {

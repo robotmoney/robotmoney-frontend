@@ -29,17 +29,21 @@
 // comparison (`compareCatalog`, src/db/schema-manifest.ts), and the manifest
 // the run published must be the one the current snapshot publishes.
 //
-// THE FIXTURE. No release tag carries backend/schema/ (v0.5.0 predates it), so
-// snapshot N is pinned in the repository: the files of the last commit whose
-// snapshot ended at the fixture's `last` migration, byte for byte, each
-// sha256-pinned in fixture.json the way tests/fixtures/releases/ pins a
-// release's migrations. How the fixture advances when a release ships is spec
-// §8.4's rule (the paragraph "Snapshot N").
+// THE FIXTURE. No release commit carries backend/schema/ (v0.5.0 predates it),
+// so snapshot N is pinned in the repository: the files of the named commit in
+// fixture.json whose snapshot ended at the fixture's `last` migration, byte for
+// byte, each sha256-pinned the way tests/fixtures/releases/ pins a release's
+// migrations. It is pinned at 0078, the last snapshot before wave 3 of #1026,
+// so every migration waves 3 and 4 added (0079's table drop, 0080's trigger
+// drop, 0081's counter table, 0082's CHECK change, 0083's data clear, and
+// 0084-0087's additive columns) is applied onto a snapshot-built database here,
+// not only in the full replay. How the fixture advances is spec §8.4's rule
+// (the paragraph "Snapshot N").
 //
 // RECORDED, NOT HIDDEN. Snapshot N was written before cause F of
 // schema-equivalence.test.ts was fixed, so it carries none of the COMMENT ON
-// statements the migrations at or below N declare, and no later migration
-// re-declares them. Those comments are the one recorded difference below, as
+// statements the migrations at or below N declare. The ones a later migration
+// re-declares (0080 and 0081 re-comment swarm_stream_events) are not listed. Those comments are the one recorded difference below, as
 // an exact list, held to the same two rules: every difference is recorded, and
 // every recorded entry still occurs. The list empties when the fixture next
 // advances (to a snapshot that carries its comments) and never grows: a
@@ -114,8 +118,6 @@ const COMMENTS_SNAPSHOT_N_LACKS: readonly string[] = [
   "pg_class public.swarm_sessions.judging_duration_seconds",
   "pg_class public.swarm_sessions.judging_outcome",
   "pg_class public.swarm_sessions.successor_session_id",
-  "pg_class public.swarm_stream_events",
-  "pg_class public.swarm_stream_events.seq",
   "pg_class public.swarm_subjects.epoch_anchor",
   "pg_class public.swarm_subjects.epoch_duration_seconds",
   "pg_class public.swarm_subjects.judging_duration_seconds",

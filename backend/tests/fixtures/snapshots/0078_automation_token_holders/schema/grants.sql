@@ -36,60 +36,14 @@ DECLARE
     'swarm_briefs', 'swarm_subjects', 'swarm_session_events', 'swarm_session_members',
     'swarm_subject_snapshots', 'swarm_session_judgements', 'swarm_consensus_receipts',
     'swarm_member_keys', 'swarm_applications', 'audit_log', 'agent_activity_log',
-    'regime_snapshots', 'schema_migrations', 'analytics_overwrite_events'
-    -- The epoch scheduler's two logs left this list (APPEND_ONLY_RELEASED in
-    -- src/db/append-only-guard.ts): the pushed-job ledger is dropped with the
-    -- job pushes (migration 0079), and the event log is protected by grant
-    -- alone (0080, D53 (2)) — see `runtime_delete_revoked` below.
+    'regime_snapshots', 'schema_migrations', 'analytics_overwrite_events',
+    -- Issue #1026 W4: the epoch scheduler's event log (created by migration
+    -- 0068) and its pushed-job ledger (created by 0070), both made append-only
+    -- by 0072. Both are append-only for the same reason — a removed row
+    -- destroys the guarantee the other side reads (a gapless sequence, a
+    -- durable idempotency key).
+    'swarm_stream_events', 'swarm_scheduler_jobs'
   ];
-  -- Tables that are NOT append-only, whose DELETE and TRUNCATE nonetheless stay
-  -- revoked from the runtime roles, re-asserted on every run from THIS list so
-  -- that leaving `append_only` never quietly hands the privilege back.
-  -- `swarm_stream_events`: D53 (2) dropped its guard triggers so rm_owner can
-  -- prune rows below the oldest servable cursor (scheduler spec §6.3
-  -- Retention, D52), and "DELETE and TRUNCATE stay revoked from rm_app and
-  -- rm_worker"; preflight check 2 refuses either grant on it
-  -- (RUNTIME_DELETE_REVOKED_TABLES in src/db/preflight.ts). `swarm_stream_head`
-  -- is its counter row (0081): a runtime role that could remove it could stop
-  -- every transition that writes an event.
-  runtime_delete_revoked text[] := ARRAY['swarm_stream_events', 'swarm_stream_head'];
-  -- rm_worker's grants, as the migrations give them (0016's default, narrowed
-  -- by 0054's explicit allowlist, then 0061 and 0062). Declared here because
-  -- the snapshot carries no grants: before this list a `--local blank`
-  -- bootstrap left rm_worker holding nothing, so the pipeline worker could not
-  -- even claim a job. Everything else rm_worker holds is SELECT (0062: "GRANT
-  -- SELECT ON ALL TABLES/SEQUENCES ... TO rm_app, rm_worker" and its default
-  -- for later tables), and the loop below re-asserts exactly that.
-  worker_dml text[] := ARRAY[
-    'agent_revenue_daily', 'agent_vaults', 'chain_address_floors', 'chain_day_blocks', 'daily_agent_snapshots',
-    'daily_coin_snapshots', 'daily_tvl_snapshots', 'daily_wallet_snapshots', 'job_runs', 'job_schedules', 'jobs',
-    'lobster_coins', 'openclaw_agents', 'projects', 'tracked_wallets', 'vault_adapter_samples',
-    'vault_share_price_history', 'wallet_backfill_state', 'wallet_balance_samples', 'wallet_sleeve_samples'
-  ];
-  -- Written by the price workers but never pruned (0054).
-  worker_insert_update text[] := ARRAY['asset_price_floors', 'asset_prices'];
-  -- The serial sequences behind rm_worker's inserts (0054, 0061); every other
-  -- sequence is SELECT only for it (0062).
-  worker_sequence_usage text[] := ARRAY[
-    'analytics_artifacts_id_seq', 'analytics_stage_runs_id_seq', 'audit_log_id_seq', 'buyback_swaps_id_seq',
-    'committee_agent_health_events_id_seq', 'committee_member_keys_id_seq', 'committee_memos_id_seq',
-    'committee_session_events_id_seq', 'job_runs_id_seq', 'job_schedules_id_seq', 'jobs_id_seq', 'prices_id_seq',
-    'regime_indicators_id_seq', 'research_pipeline_artifacts_id_seq', 'research_pipeline_runs_id_seq',
-    'research_pipeline_stages_id_seq', 'research_pipeline_warnings_id_seq', 'research_signals_id_seq',
-    'swarm_session_judgements_id_seq', 'vault_adapter_samples_id_seq', 'vault_share_price_history_id_seq',
-    'vault_tvl_id_seq', 'wallet_aum_snapshot_runs_run_id_seq', 'wallet_balance_sample_evidence_evidence_id_seq',
-    'wallet_balance_samples_id_seq', 'wallet_balances_id_seq', 'wallet_sleeve_sample_evidence_evidence_id_seq',
-    'wallet_sleeve_samples_id_seq'
-  ];
-  -- The trigger functions 0056/0057/0058/0059/0060 created with PUBLIC EXECUTE
-  -- revoked. The snapshot declares no function ACLs, so a blank bootstrap left
-  -- PUBLIC holding EXECUTE on each; reconciliation re-asserts the revoke.
-  ledger_guard_functions text[] := ARRAY[
-    'rm_analytics_cutover_immutable()', 'rm_analytics_output_ledger_immutable()',
-    'rm_analytics_overwrite_event_immutable()', 'rm_analytics_run_ledger_immutable()',
-    'rm_capture_analytics_overwrite()', 'rm_source_ledger_immutable()'
-  ];
-  fn text;
   -- Tables a later migration narrowed on purpose; the sweep below must not hand them
   -- back. 0056 revoked ALL on `analytics_overwrite_events` from rm_app/rm_worker;
   -- 0063 left the runtime roles SELECT only on `deployment_identity`, which §4.2
@@ -199,45 +153,20 @@ BEGIN
       EXECUTE format('GRANT SELECT, INSERT ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT UPDATE (final) ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
-    ELSIF rel.name = 'swarm_stream_head' THEN
-      -- The event counter's one row (migration 0081): rm_app reads it and
-      -- increments it, and nothing else. The row is seeded by the migration and
-      -- bootstrap-data.sql, so no runtime role ever INSERTs one; the ordinary
-      -- sweep below would hand rm_app INSERT on every run. rm_worker's SELECT is
-      -- settled by the worker block that follows, like every other table's.
-      EXECUTE format('REVOKE INSERT ON %s FROM rm_app, rm_worker', rel.ident);
-      EXECUTE format('GRANT SELECT, UPDATE ON %s TO rm_app', rel.ident);
-      EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
     ELSE
       EXECUTE format('GRANT SELECT, INSERT, UPDATE ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
     END IF;
-    -- rm_worker, exactly as the migrations leave it: DML on its allowlist,
-    -- SELECT everywhere else. The read-only-for-runtime tables were settled in
-    -- their own branch above (SELECT on the select list, nothing otherwise) and
-    -- are not touched again here. TRUNCATE is never the worker's.
-    IF NOT rel.name = ANY(read_only_for_runtime) THEN
-      IF rel.name = ANY(worker_dml) THEN
-        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %s TO rm_worker', rel.ident);
-        EXECUTE format('REVOKE TRUNCATE ON %s FROM rm_worker', rel.ident);
-      ELSIF rel.name = ANY(worker_insert_update) THEN
-        EXECUTE format('GRANT SELECT, INSERT, UPDATE ON %s TO rm_worker', rel.ident);
-        EXECUTE format('REVOKE DELETE, TRUNCATE ON %s FROM rm_worker', rel.ident);
-      ELSE
-        EXECUTE format('GRANT SELECT ON %s TO rm_worker', rel.ident);
-        EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON %s FROM rm_worker', rel.ident);
-      END IF;
-    END IF;
-    IF rel.name = ANY(append_only) OR rel.name = ANY(runtime_delete_revoked) THEN
+    IF rel.name = ANY(append_only) THEN
       EXECUTE format('REVOKE DELETE, TRUNCATE ON %s FROM rm_app, rm_worker', rel.ident);
     END IF;
   END LOOP;
 
   -- Sequences: rm_app writes, so it needs the serial columns' sequences; rm_readonly
-  -- reads `last_value` (migration 0062); rm_worker reads every one and uses the
-  -- ones behind its own inserts (`worker_sequence_usage`), nothing more.
+  -- reads `last_value` (migration 0062). rm_worker's own table grants are an
+  -- allowlist maintained by migrations 0054/0061/0062 and are not widened here.
   FOR rel IN
-    SELECT c.oid::regclass AS ident, c.relname AS name
+    SELECT c.oid::regclass AS ident
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     LEFT JOIN pg_depend d ON d.objid = c.oid AND d.deptype = 'e'
@@ -247,18 +176,6 @@ BEGIN
   LOOP
     EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %s TO rm_app', rel.ident);
     EXECUTE format('GRANT SELECT ON SEQUENCE %s TO rm_readonly', rel.ident);
-    IF rel.name = ANY(worker_sequence_usage) THEN
-      EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %s TO rm_worker', rel.ident);
-    ELSE
-      EXECUTE format('GRANT SELECT ON SEQUENCE %s TO rm_worker', rel.ident);
-      EXECUTE format('REVOKE USAGE, UPDATE ON SEQUENCE %s FROM rm_worker', rel.ident);
-    END IF;
-  END LOOP;
-
-  FOREACH fn IN ARRAY ledger_guard_functions LOOP
-    IF to_regprocedure('public.' || fn) IS NOT NULL THEN
-      EXECUTE format('REVOKE EXECUTE ON FUNCTION public.%s FROM PUBLIC', fn);
-    END IF;
   END LOOP;
 END
 $$;
@@ -267,13 +184,7 @@ $$;
 -- and granted only USAGE, which is what the `ddl` denylist rule tests.
 GRANT USAGE ON SCHEMA public TO rm_app, rm_worker, rm_readonly;
 
--- Future objects created by rm_owner: READ ONLY, for every runtime role. 0053 says
--- "There are no default write grants. A later migration must name every new runtime
--- capability explicitly, making a missing grant fail closed", and 0062 set exactly
--- SELECT for rm_app and rm_worker. This file used to add a default
--- `GRANT SELECT, INSERT, UPDATE ON TABLES TO rm_app`, which contradicted that rule on
--- every run; the REVOKE takes it back from every database that reconciled under it.
--- Existing tables are unaffected: the sweep above grants each one's runtime
--- privileges explicitly.
-ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON TABLES TO rm_readonly, rm_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public REVOKE INSERT, UPDATE ON TABLES FROM rm_app;
+-- Future objects created by rm_owner, so a table added by a later migration is not a
+-- table nobody may read.
+ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON TABLES TO rm_readonly;
+ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO rm_app;
