@@ -33,9 +33,11 @@
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import * as epoch from "../src/swarm/domain.ts";
+import * as admin from "../src/swarm/admin.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject, collectingSessions, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
+import { inHouseJudge } from "./support/stub-judge.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -244,7 +246,7 @@ test("a refused turnover closes NOTHING: an inactive subject's collecting epoch 
   // one and the same outcome.
   const { subjectId, sessionId } = await openedEpoch("to_refuse_inactive");
   await sql`UPDATE swarm_subjects SET status = 'inactive' WHERE id = ${subjectId}`;
-  const [{ head }] = await sql<{ head: string }[]>`SELECT COALESCE(MAX(seq), 0) AS head FROM swarm_stream_events`;
+  const head = await epoch.streamHeadSequence();
 
   const r = await epoch.turnOverEpoch(subjectId, sessionId);
   expect(r.ok).toBe(false);
@@ -257,14 +259,15 @@ test("a refused turnover closes NOTHING: an inactive subject's collecting epoch 
   expect(s.judging_duration_seconds).toBeNull();
   expect(s.successor_session_id).toBeNull();
   expect((await sql`SELECT 1 FROM swarm_agent_health_events WHERE session_id = ${sessionId}`).length).toBe(0);
-  expect((await sql`SELECT 1 FROM swarm_stream_events WHERE seq > ${Number(head)}`).length).toBe(0);
+  expect((await sql`SELECT 1 FROM swarm_stream_events WHERE seq > ${head}`).length).toBe(0);
+  expect(await epoch.streamHeadSequence()).toBe(head);
 });
 
 test("HTTP: POST epochs/turnover without expectedSessionId is a 400 and changes nothing", async () => {
   // §4.3: turnover is bound to a named epoch. The route refuses a call that
   // names none before it reaches the transition, and nothing moves.
   const { subjectId, sessionId } = await openedEpoch("to_http_unbound");
-  const [{ head }] = await sql<{ head: string }[]>`SELECT COALESCE(MAX(seq), 0) AS head FROM swarm_stream_events`;
+  const head = await epoch.streamHeadSequence();
   const cfg = { adminToken: null, allowInsecure: true } as const;
   const post = (body: unknown) => {
     const req = new Request("http://x/api/swarm/admin/epochs/turnover", {
@@ -286,7 +289,8 @@ test("HTTP: POST epochs/turnover without expectedSessionId is a 400 and changes 
 
   expect((await sessionRow(sessionId)).state).toBe("collecting");
   expect((await sql`SELECT id FROM swarm_sessions WHERE subject_id = ${subjectId}`).length).toBe(1);
-  expect((await sql`SELECT 1 FROM swarm_stream_events WHERE seq > ${Number(head)}`).length).toBe(0);
+  expect((await sql`SELECT 1 FROM swarm_stream_events WHERE seq > ${head}`).length).toBe(0);
+  expect(await epoch.streamHeadSequence()).toBe(head);
 
   // And the bound call, through the same route, does turn it over.
   const bound = await post({ subjectId, expectedSessionId: sessionId });
@@ -465,4 +469,127 @@ test("the judging duration in force is captured on the closing epoch, and a late
   const second = await epoch.turnOverEpoch(subjectId, r.openedSessionId);
   expect(second.ok).toBe(true);
   expect((await sessionRow(r.openedSessionId)).judging_duration_seconds).toBe(60);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §9, criterion 92 — the event and its number commit WITH the transition
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// "Each event row and its global sequence are written in the same transaction
+// as the transition, proved by aborting a transition and finding no event."
+//
+// THE FAILURE FIRES AFTER THE APPEND, AT COMMIT. A failure planted anywhere
+// before `appendStreamEvent` proves nothing about the event: it was never
+// written, whatever transaction it would have been in. So the abort here is a
+// DEFERRABLE INITIALLY DEFERRED constraint trigger on `swarm_stream_events`
+// itself. It fires only once the event row EXISTS, and only when the
+// transaction that wrote it tries to COMMIT. If the event were written in a
+// transaction of its own, that transaction would commit it (and fail on its
+// own), and the transition's state change would stand; if it were written
+// after the transition committed, the state change would stand. Only "one
+// transaction" leaves both the event and the state change gone, with the
+// counter where it was. The trigger lives in this file's own database
+// (useCleanDatabase) and is dropped in `finally`.
+
+/** Run `transition` with every event insert refused at COMMIT; return the error it raised. */
+async function abortedAtCommit(transition: () => Promise<unknown>): Promise<string | null> {
+  await sql.unsafe(`
+    CREATE FUNCTION rm_test_refuse_at_commit() RETURNS trigger LANGUAGE plpgsql AS $t$
+    BEGIN RAISE EXCEPTION 'planted commit-time failure after event %', NEW.seq; END $t$;
+    CREATE CONSTRAINT TRIGGER rm_test_refuse_at_commit AFTER INSERT ON swarm_stream_events
+      DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rm_test_refuse_at_commit();`);
+  try {
+    await transition();
+    return null;
+  } catch (e) {
+    return (e as Error).message;
+  } finally {
+    await sql.unsafe(`DROP TRIGGER rm_test_refuse_at_commit ON swarm_stream_events;
+                      DROP FUNCTION rm_test_refuse_at_commit();`);
+  }
+}
+
+const eventCount = async (): Promise<number> =>
+  Number(((await sql`SELECT count(*)::int AS n FROM swarm_stream_events`) as unknown as { n: number }[])[0]!.n);
+
+test("a turnover aborted at COMMIT, after its event was written, leaves no event, no number and no turnover", async () => {
+  const { subjectId, sessionId } = await openedEpoch("to_abort_commit");
+  const head = await epoch.streamHeadSequence();
+  const events = await eventCount();
+
+  const error = await abortedAtCommit(() => epoch.turnOverEpoch(subjectId, sessionId));
+  // The planted trigger names the number the event was given: the append DID
+  // happen, inside the transaction that then failed.
+  expect(error).toBe(`planted commit-time failure after event ${head + 1}`);
+
+  expect(await epoch.streamHeadSequence()).toBe(head);
+  expect(await eventCount()).toBe(events);
+  const s = await sessionRow(sessionId);
+  expect(s.state).toBe("collecting");
+  expect(s.successor_session_id).toBeNull();
+  expect((await collectingSessions(subjectId)).length).toBe(1);
+
+  // The same call with nothing planted succeeds and takes the SAME number: the
+  // aborted attempt left no hole.
+  const r = await epoch.turnOverEpoch(subjectId, sessionId);
+  expect(r.ok).toBe(true);
+  expect(await epoch.streamHeadSequence()).toBe(head + 1);
+});
+
+test("a subject.changed edit (deactivation) aborted at COMMIT leaves the subject active and its epoch open", async () => {
+  const { subjectId, sessionId } = await openedEpoch("to_abort_deactivate");
+  const [{ version }] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${subjectId}`;
+  const head = await epoch.streamHeadSequence();
+
+  const error = await abortedAtCommit(() => admin.deactivateSubjectAdmin(subjectId, version));
+  expect(error).toBe(`planted commit-time failure after event ${head + 1}`);
+
+  expect(await epoch.streamHeadSequence()).toBe(head);
+  const [subject] = await sql<{ status: string; version: number }[]>`
+    SELECT status, version FROM swarm_subjects WHERE id = ${subjectId}`;
+  expect(subject).toEqual({ status: "active", version });
+  expect((await sessionRow(sessionId)).state).toBe("collecting");
+});
+
+test("a subject.changed edit (activation) aborted at COMMIT leaves the subject inactive", async () => {
+  const { subjectId } = await openedEpoch("to_abort_activate");
+  const [{ version }] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${subjectId}`;
+  expect((await admin.deactivateSubjectAdmin(subjectId, version)).status).toBe(200);
+  const head = await epoch.streamHeadSequence();
+
+  const error = await abortedAtCommit(() => admin.activateSubjectAdmin(subjectId, version + 1));
+  expect(error).toBe(`planted commit-time failure after event ${head + 1}`);
+
+  expect(await epoch.streamHeadSequence()).toBe(head);
+  const [{ status }] = await sql<{ status: string }[]>`SELECT status FROM swarm_subjects WHERE id = ${subjectId}`;
+  expect(status).toBe("inactive");
+});
+
+test("a consensus aborted at COMMIT publishes no session.judged and leaves the session judging", async () => {
+  await setJudgeMode("enforce");
+  const { subjectId, sessionId: open } = await openedEpoch("to_abort_judged");
+  const turned = await epoch.turnOverEpoch(subjectId, open);
+  if (!turned.ok) throw new Error("turnOverEpoch failed");
+  const sessionId = turned.closedSessionId;
+  await epoch.aggregateEpoch(sessionId);
+  const requested = await epoch.requestJudging(sessionId);
+  if (!requested.ok) throw new Error("requestJudging failed");
+  const judge = await inHouseJudge();
+  const [j] = await sql<{ id: string }[]>`
+    INSERT INTO swarm_session_judgements
+      (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion,
+       judged_by, judged_by_member_id)
+    VALUES (${sessionId}, 'enforce', 'model', 'test/epoch-fixture-judge', 'ph', 'id', 1, 1, '{"verdict":"ok"}'::jsonb,
+            ${judge.id}, ${judge.id})
+    RETURNING id`;
+  const head = await epoch.streamHeadSequence();
+
+  const error = await abortedAtCommit(() => epoch.recordJudgingConsensus(sessionId, Number(j.id)));
+  expect(error).toBe(`planted commit-time failure after event ${head + 1}`);
+
+  expect(await epoch.streamHeadSequence()).toBe(head);
+  const s = await sessionRow(sessionId);
+  expect(s.state).toBe("judging");
+  expect(s.consensus_recorded_at).toBeNull();
+  await setJudgeMode("off");
 });

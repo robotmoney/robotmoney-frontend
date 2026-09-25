@@ -33,10 +33,14 @@ import { ROUTES } from "@robotmoney/contract";
 import { config as globalConfig } from "../../config.ts";
 import { hasAutomationRight } from "../auth.ts";
 import * as stream from "../../swarm/domain.ts";
-import { readJsonObject } from "../validation.ts";
 import type { SwarmRouteResult } from "./swarm/types.ts";
 
-type AuthConfig = Pick<typeof globalConfig, "allowInsecure"> & { automationToken?: string | null };
+type AuthConfig = Pick<typeof globalConfig, "allowInsecure"> & {
+  automationToken?: string | null;
+  /** The connection's timing, for a test that cannot wait out the defaults.
+   *  Never read from the environment; the server passes nothing. */
+  streamTiming?: Pick<stream.StreamOptions, "keepaliveMs" | "pollMs">;
+};
 
 const FORBIDDEN: SwarmRouteResult = { status: 403, body: { error: "forbidden" } };
 
@@ -79,21 +83,20 @@ export async function handleSchedulerStream(
     }
     const cursor = parseCursor(url);
     if (cursor === null) return { status: 400, body: { error: "cursor required" } };
-    return stream.openSchedulerStream(cursor);
+    // The bearer is re-checked before every keepalive, against the token store
+    // as it is THEN. A token rotated or revoked while this connection is open
+    // (smoke spec §3: provisioning replaces the row's hash) stops authorizing
+    // it, and the subscription closes instead of reading on for the life of the
+    // socket.
+    return stream.openSchedulerStream(cursor, {
+      ...cfg.streamTiming,
+      stillAuthorized: async () =>
+        (await hasAutomationRight(req, "read_subjects", cfg)) && (await hasAutomationRight(req, "read_sessions", cfg)),
+    });
   }
 
-  if (p === S.jobAck && m === "POST") {
-    // Acking is not a read: it retires work the API is holding for this
-    // subscriber, so it asks for the transition right the scheduler's token
-    // carries and a read-only token does not.
-    if (!(await hasAutomationRight(req, "lifecycle_transitions", cfg))) return FORBIDDEN;
-    const body = (await readJsonObject(req)) ?? {};
-    const key = typeof body.idempotencyKey === "string" ? body.idempotencyKey : null;
-    if (!key) return { status: 400, body: { error: "idempotencyKey required" } };
-    const result = await stream.ackJob(key);
-    if (!result.known) return { status: 404, body: { error: "unknown_job" } };
-    return { status: 200, body: result };
-  }
-
+  // There is no job-ack route. §6.3 (amended 2026-09-24, D52): "there is no
+  // ad-hoc job kind for the API to push, ack or redeliver." A POST to the old
+  // path falls through to the router's 404 like any other unknown path.
   return null;
 }

@@ -2924,18 +2924,23 @@ export async function updateMemberProfile(token: string, memberRef: string, patc
 // head-sequence keepalive exists to catch. Writing it inside makes the case
 // impossible rather than detectable.
 //
-// THE NUMBER IS ASSIGNED UNDER A LOCK, and it is MAX + 1 rather than a
-// sequence. A sequence is monotonic but not commit-ordered and not gapless, and
-// §6.3 defines a gap — "a sequence number that is not the last applied plus
-// one" — as proof the clock's copy is stale. A stream numbered from a sequence
-// would therefore fake that proof: an ordinary concurrent commit would look
-// identical to a lost event. The advisory lock is transaction-scoped, so it is
-// released by the same commit that makes the row visible, and event-writing
-// transitions serialise against each other for exactly that window.
+// THE NUMBER COMES FROM ONE COUNTER ROW (§6.3, D52; migration 0081). "Each
+// event takes its number by incrementing one counter row inside the
+// transaction that makes the change. The row lock serializes event-writing
+// transactions, so numbers are assigned in commit order and a rolled-back
+// transaction leaves no hole." `UPDATE swarm_stream_head ... RETURNING` takes
+// that row lock and holds it to COMMIT: the next writer waits until this
+// number is either visible or rolled back (which restores the old value), so
+// the numbers are gapless and commit-ordered by construction.
 //
-// WHAT THIS DOES NOT DO: serve the stream. The cursor handoff, the keepalive,
-// the resync notice and the job pushes (§6.3) are W4.4's, and none of them
-// changes what is written here.
+// Not a database sequence: a sequence numbers at insert time, so a later number
+// can commit first and push a subscriber's cursor past an earlier one still in
+// flight — §6.3 then has the subscriber drop that earlier event as a duplicate.
+// And no longer MAX(seq) + 1 under an advisory lock, which it replaced: the two
+// agree only while the log is never pruned. D53 (2) lets rm_owner prune rows
+// below the oldest servable cursor, and once the newest rows can be gone,
+// MAX + 1 hands out a number a subscriber already holds. The counter only moves
+// forward (its trigger refuses a decrease), whatever is deleted.
 export type StreamEventKind = "subject.changed" | "epoch.turned_over" | "session.judged";
 
 export async function appendStreamEvent(
@@ -2943,20 +2948,24 @@ export async function appendStreamEvent(
   kind: StreamEventKind,
   target: { subjectId?: string | null; sessionId?: string | null; payload?: Record<string, unknown> },
 ): Promise<number> {
-  await tx`SELECT pg_advisory_xact_lock(hashtextextended('swarm_stream_events', 0))`;
-  const [row] = await tx<{ seq: string }[]>`
+  const [head] = await tx<{ seq: string }[]>`UPDATE swarm_stream_head SET seq = seq + 1 RETURNING seq`;
+  if (!head) throw new Error("swarm_stream_head holds no row: the event counter (migration 0081) is missing");
+  await tx`
     INSERT INTO swarm_stream_events (seq, kind, subject_id, session_id, payload)
-    SELECT COALESCE(MAX(seq), 0) + 1, ${kind}, ${target.subjectId ?? null}, ${target.sessionId ?? null},
-           ${tx.json((target.payload ?? {}) as any)}
-      FROM swarm_stream_events
-    RETURNING seq`;
-  return Number(row.seq);
+    VALUES (${head.seq}, ${kind}, ${target.subjectId ?? null}, ${target.sessionId ?? null},
+            ${tx.json((target.payload ?? {}) as any)})`;
+  return Number(head.seq);
 }
 
-/** The last sequence number committed — the cursor a full read is paired with (§6.3). */
+/**
+ * The last sequence number committed — the cursor a full read is paired with,
+ * and the head every keepalive carries (§6.3). Read from the counter row, never
+ * from the log: after a prune the log's MAX is not the head.
+ */
 export async function streamHeadSequence(h: DbHandle = sql): Promise<number> {
-  const [row] = await h<{ head: string }[]>`SELECT COALESCE(MAX(seq), 0) AS head FROM swarm_stream_events`;
-  return Number(row.head);
+  const [row] = await h<{ seq: string }[]>`SELECT seq FROM swarm_stream_head`;
+  if (!row) throw new Error("swarm_stream_head holds no row: the event counter (migration 0081) is missing");
+  return Number(row.seq);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -2969,18 +2978,14 @@ export async function streamHeadSequence(h: DbHandle = sql): Promise<number> {
 // module would have to do — `backend/tests/db-registry.test.ts`'s allowlist
 // says in those words that it "must only ever shrink", so adding a line for a
 // brand-new file would be recording a fresh violation rather than fixing one.
-// Registering the sites was tried and does not work yet either: preflight
-// check 2 resolves every declared relation against the live catalog, and
-// `tests/schema-snapshot.test.ts`'s blank-bootstrap fixture declares three
-// tables, so the FIRST real registration anywhere in the process makes that
-// test refuse `swarm_sessions does not resolve to a relation in public`. That
-// is a W2 gap in the fixture, not something this workstream may paper over by
-// editing another workstream's test.
+// Registering the sites is the supported route, and it is scheduled work
+// (the epoch-registry package of issue #1026) rather than something this
+// section does piecemeal.
 //
 // So the lifecycle lives in the module that already owns the session
 // lifecycle's statements and is already on the allowlist. Nothing is hidden by
 // it: the code below is the same code, under its own banner, and it moves to
-// `registerQuery` with the rest of this file when W2 converts it.
+// `registerQuery` with the rest of this file when that conversion lands.
 //
 // AUTHORITY: docs/technical/system-scheduler-spec.md §4 and §5. Where this
 // section and the older cron-driven lifecycle above it disagree, the spec says
@@ -3014,9 +3019,9 @@ export async function streamHeadSequence(h: DbHandle = sql): Promise<number> {
 //   * No timer, no interval, no background work. The API "runs no background
 //     orchestration of its own" (§1).
 //   * No SUBSCRIPTION. Every transition below writes its event to the log in
-//     its own transaction (§9), but the cursor handoff, the keepalive, the
-//     sequence gap and the job pushes that serve that log to a subscriber are
-//     W4.4's, and nothing here depends on them.
+//     its own transaction (§9), but the cursor handoff, the keepalive and the
+//     resync that serve that log to a subscriber are the serving section's
+//     below, and nothing here depends on them. There are no job pushes (§6.3).
 //   * No judge call and no push to a judge. Requesting judging records the
 //     request and its absolute deadline, which is the STATE a judge
 //     subscription is served on every connect (smoke spec §6.2); the
@@ -3779,14 +3784,9 @@ function isOneCollectingViolation(err: unknown): boolean {
 //     words that it "must only ever shrink" and that adding a line is "the one
 //     thing a ratchet exists to prevent". A new module issuing raw statements
 //     needs a new line.
-//   * `registerQuery` is the supported alternative, and when these sections
-//     were written it could not be used: registration is process-global,
-//     preflight check 2 resolves every declared relation against the live
-//     catalog, and `tests/schema-snapshot.test.ts`'s blank-bootstrap fixture
-//     declares three tables — so the first real registration anywhere made that
-//     test refuse. `swarm/judge-config.ts` is now that first registration, and
-//     the fixture case runs its preflight in a fresh process; converting these
-//     sections is the W2 conversion of this whole file.
+//   * `registerQuery` is the supported alternative. `swarm/judge-config.ts`
+//     already registers its statements; converting these sections is the
+//     conversion of this whole file (the epoch-registry package of #1026).
 //
 // A NOTE ON WHAT WAS NOT DONE. The detector's regex only matches a BARE tagged
 // template (`sql\``), so every statement below would have slipped past it
@@ -3795,7 +3795,7 @@ function isOneCollectingViolation(err: unknown): boolean {
 // of §7.1 rather than a recorded one. The code is here instead.
 //
 // Nothing else changed in the move: the sections keep their own headers, and
-// they move to `registerQuery` with the rest of this file when W2 converts it.
+// they move to `registerQuery` with the rest of this file when it is converted.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // §3 — the full read
@@ -3884,7 +3884,10 @@ export async function fullRead(): Promise<SchedulerFullRead> {
        WHERE s.state = ANY(${SETTLING_STATES as unknown as string[]})
        ORDER BY s.convened_at`;
 
-    const [head] = await tx<{ head: string }[]>`SELECT COALESCE(MAX(seq), 0) AS head FROM swarm_stream_events`;
+    // §6.3: "The full read takes its cursor from the counter value visible in
+    // its own snapshot." Same REPEATABLE READ transaction as the rows above, so
+    // every change they do not reflect carries a number above this one.
+    const head = await streamHeadSequence(tx);
 
     return {
       subjects: subjects.map((s) => ({
@@ -3906,7 +3909,7 @@ export async function fullRead(): Promise<SchedulerFullRead> {
         judgingDeadlineAt: isoOrNull(s.judging_deadline_at),
         subjectActive: s.subject_active,
       })),
-      cursor: Number(head.head),
+      cursor: head,
     };
   }) as Promise<SchedulerFullRead>;
 }
@@ -3958,100 +3961,59 @@ export async function retainedFloor(h: DbHandle = sql): Promise<number | null> {
 }
 
 /**
- * §6.3's resync reasons. Two, and they are different failures.
+ * §6.3's resync reasons. Every one is a way the API cannot serve from where
+ * the subscriber stands, and every one is SAID rather than skipped over:
  *
- *   "If the API cannot serve from the requested cursor — its retained log does
- *    not reach that far, or its buffer for this subscriber overflowed — it says
- *    so ... The API never silently skips."
+ *   "If the API cannot serve from the requested cursor — its buffer for this
+ *    subscriber overflowed, or the cursor is above the log's head — it says so
+ *    ... The API never silently skips."
  *
  * `cursor_ahead_of_head` — the subscriber claims to have applied an event this
  * API has not committed. Nothing can be served from there. Answering with an
  * empty stream would be indistinguishable from "you are up to date", which is
  * exactly the silent skip.
  *
- * `log_truncated` — the next event this subscriber needs is below the log's
- * floor and is gone. Serving from the floor instead would skip the missing
- * ones, silently.
+ * `log_truncated` — the next event this subscriber needs is below the retained
+ * floor, pruned by rm_owner under D53 (2)'s retention rule, and is gone.
+ * Serving from the floor instead would skip the missing ones, silently.
+ *
+ * `buffer_overflow` — this connection's outbound buffer filled because the
+ * subscriber stopped reading. Dropping frames to make room would be a skip, so
+ * the connection says so and closes.
+ *
+ * `unavailable` — the API could not read the log or the counter (a database
+ * error). It cannot say what the subscriber missed, so it cannot claim the
+ * subscriber is current; the subscriber rebuilds.
  *
  * A cursor of `floor - 1` is SERVABLE: the next event it needs is the floor
- * itself, and that is still here. A cursor of 0 against any log is servable for
- * the same reason, and is what a scheduler starting against a fresh database
- * presents.
+ * itself, and that is still here. A cursor of 0 against an unpruned log is
+ * servable for the same reason, and is what a scheduler starting against a
+ * fresh database presents. When the whole log has been pruned the floor is the
+ * next number the counter will hand out, so only a cursor at the head is
+ * servable.
  */
-export type ResyncReason = "cursor_ahead_of_head" | "log_truncated";
+export type ResyncReason = "cursor_ahead_of_head" | "log_truncated" | "buffer_overflow" | "unavailable";
 
 export async function resyncReasonFor(cursor: number, h: DbHandle = sql): Promise<ResyncReason | null> {
   const head = await streamHeadSequence(h);
   if (cursor > head) return "cursor_ahead_of_head";
-  const floor = await retainedFloor(h);
-  if (floor !== null && cursor < floor - 1) return "log_truncated";
+  const floor = (await retainedFloor(h)) ?? head + 1;
+  if (cursor < floor - 1) return "log_truncated";
   return null;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// §6.3 — job pushes
-// ─────────────────────────────────────────────────────────────────────────────
-
-export interface SchedulerJob {
-  kind: string;
-  target: string;
-  idempotencyKey: string;
-}
-
-/**
- * Record an ad-hoc job for the scheduler.
- *
- * `created: false` means the key was already known — whether it is outstanding
- * or long since acked. Migration 0070's header explains why the row outlives
- * the ack: the idempotency key is the guarantee, and a guarantee that is
- * deleted when the work finishes lets the same key back in as fresh work.
- */
-export async function pushJob(job: SchedulerJob): Promise<{ created: boolean }> {
-  const rows = await sql<{ id: string }[]>`
-    INSERT INTO swarm_scheduler_jobs (kind, target, idempotency_key)
-    VALUES (${job.kind}, ${job.target}, ${job.idempotencyKey})
-    ON CONFLICT (idempotency_key) DO NOTHING
-    RETURNING id`;
-  return { created: rows.length > 0 };
-}
-
-/** Everything the scheduler has not reported done, oldest first. */
-export async function unackedJobs(limit = 100, h: DbHandle = sql): Promise<SchedulerJob[]> {
-  const rows = await h<{ kind: string; target: string; idempotency_key: string }[]>`
-    SELECT kind, target, idempotency_key FROM swarm_scheduler_jobs
-     WHERE acked_at IS NULL ORDER BY created_at, id LIMIT ${limit}`;
-  return rows.map((r) => ({ kind: r.kind, target: r.target, idempotencyKey: r.idempotency_key }));
-}
-
-/**
- * The scheduler reporting one job done.
- *
- * Three distinguishable answers, because the caller needs to tell them apart:
- * an unknown key is a bug or a forged ack and must not read as success; a
- * second ack of the same key is the ordinary consequence of a redelivery whose
- * first ack was lost, and is not an error.
- */
-export async function ackJob(
-  idempotencyKey: string,
-): Promise<{ known: boolean; acked: boolean; alreadyAcked: boolean }> {
-  const rows = await sql<{ acked_at: Date | null }[]>`
-    UPDATE swarm_scheduler_jobs SET acked_at = now()
-     WHERE idempotency_key = ${idempotencyKey} AND acked_at IS NULL
-     RETURNING acked_at`;
-  if (rows.length > 0) return { known: true, acked: true, alreadyAcked: false };
-  const [existing] = await sql<{ id: string }[]>`
-    SELECT id FROM swarm_scheduler_jobs WHERE idempotency_key = ${idempotencyKey}`;
-  return existing
-    ? { known: true, acked: false, alreadyAcked: true }
-    : { known: false, acked: false, alreadyAcked: false };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // §6.3 — the subscription itself
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// THERE ARE NO JOB PUSHES. §6.3 as amended on 2026-09-24 (D52): "The stream
+// carries change events only. Every piece of work the scheduler does follows
+// from an event or a timer; there is no ad-hoc job kind for the API to push,
+// ack or redeliver." The job ledger, its push/ack functions, the `job` frame
+// and the ack route were deleted with migration 0079, which drops the table.
 
 /**
- * How a connection behaves. Both values are defaults a test may shorten; NONE
+ * How a connection behaves. Every value is a default a test may shorten; NONE
  * of them is a scheduling parameter, and none is read from the environment.
  */
 export interface StreamOptions {
@@ -4064,14 +4026,24 @@ export interface StreamOptions {
   /**
    * How often this CONNECTION looks for events above what it has sent.
    *
-   * This is the API serving an open subscription, which §6.3 admits in the same
-   * breath as redelivery: "part of the API's serving of that subscription — it
-   * is not autonomous orchestration and does not need a background worker."
-   * Nothing runs when nobody is connected, and the SCHEDULER's no-polling rule
-   * (§9) is about the scheduler, which makes no call at all while this loop
-   * runs.
+   * This is the API serving an open subscription, which §6.3 names as one of
+   * the API's "only stream duties". Nothing runs when nobody is connected, and
+   * the SCHEDULER's no-polling rule (§9) is about the scheduler, which makes no
+   * call at all while this loop runs.
    */
   pollMs?: number;
+  /**
+   * How many frames this connection may hold unread before its buffer counts
+   * as overflowed (§6.3). Past it the connection sends `resync` with reason
+   * `buffer_overflow` and closes, rather than dropping or skipping anything.
+   */
+  bufferFrames?: number;
+  /**
+   * Re-checked before every keepalive. Resolving false (or failing) closes the
+   * subscription: a bearer that was rotated or revoked after the connection
+   * opened must not keep reading the stream for the life of the socket.
+   */
+  stillAuthorized?: () => Promise<boolean>;
 }
 
 /**
@@ -4084,7 +4056,7 @@ export interface StreamOptions {
  * scheduler-api-runtime.test.ts); every unit test drove the stream with its
  * own short interval and could not see it.
  */
-const STREAM_DEFAULTS = { keepaliveMs: 5_000, pollMs: 500 } as const;
+const STREAM_DEFAULTS = { keepaliveMs: 5_000, pollMs: 500, bufferFrames: 1_000 } as const;
 
 /**
  * An SSE COMMENT, written the moment a subscription opens.
@@ -4102,8 +4074,7 @@ const STREAM_OPEN_COMMENT = ": subscribed\n\n";
 type StreamServeFrame =
   | { event: "event"; data: ServedStreamEvent }
   | { event: "keepalive"; data: { head: number } }
-  | { event: "resync"; data: { reason: ResyncReason; head: number } }
-  | { event: "job"; data: SchedulerJob };
+  | { event: "resync"; data: { reason: ResyncReason; head: number | null } };
 
 const encodeStreamFrame = (f: StreamServeFrame): string => `event: ${f.event}\ndata: ${JSON.stringify(f.data)}\n\n`;
 
@@ -4114,88 +4085,144 @@ const encodeStreamFrame = (f: StreamServeFrame): string => `event: ${f.event}\nd
  *
  *   1. If the cursor cannot be served, ONE resync frame and close. Not an empty
  *      stream, and not a skip forward to the head (§6.3).
- *   2. Everything unacked, as job frames — §6.3's "On reconnect the API
- *      re-pushes anything unacked", which on a first connect is simply
- *      everything outstanding.
- *   3. Events above the cursor, in order, for as long as the connection lives.
- *   4. A keepalive carrying the head sequence whenever the keepalive interval
- *      passes with nothing else sent.
+ *   2. Events above the cursor, in order, for as long as the connection lives.
+ *      Each served event must be the one after the last sent; an event missing
+ *      from the middle (pruned while the connection was open) is a resync and
+ *      a close, never a jump.
+ *   3. A keepalive carrying the head sequence whenever the keepalive interval
+ *      passes with nothing else sent, after the bearer is re-checked.
  *
- * THE LOOP DIES WITH THE CONNECTION. `cancel` clears the timers and flips the
- * flag the loop reads, so a disconnected subscriber leaves nothing running —
- * which is the difference between serving a connection and being a background
- * process.
+ * NO STATE IS EVER CLAIMED FROM A FAILED READ. A database error while reading
+ * events or the head ends the connection with `resync: unavailable`; it never
+ * reads as "no new events" or as a stale head, either of which would tell the
+ * subscriber it is current when nothing proves it.
+ *
+ * THE LOOP DIES WITH THE CONNECTION. `cancel` flips the flag the loop reads, so
+ * a disconnected subscriber leaves nothing running — which is the difference
+ * between serving a connection and being a background process.
  */
 export function openSchedulerStream(cursor: number, opts: StreamOptions = {}): Response {
   const keepaliveMs = opts.keepaliveMs ?? STREAM_DEFAULTS.keepaliveMs;
   const pollMs = opts.pollMs ?? STREAM_DEFAULTS.pollMs;
+  const bufferFrames = opts.bufferFrames ?? STREAM_DEFAULTS.bufferFrames;
   let live = true;
 
-  const body = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const encoder = new TextEncoder();
-      const send = (f: StreamServeFrame): void => {
-        if (!live) return;
-        try {
-          controller.enqueue(encoder.encode(encodeStreamFrame(f)));
-        } catch {
+  const body = new ReadableStream<Uint8Array>(
+    {
+      async start(controller) {
+        const encoder = new TextEncoder();
+        const close = (): void => {
           live = false;
-        }
-      };
-
-      try {
-        controller.enqueue(encoder.encode(STREAM_OPEN_COMMENT));
-      } catch {
-        live = false;
-      }
-
-      const reason = await resyncReasonFor(cursor);
-      if (reason) {
-        send({ event: "resync", data: { reason, head: await streamHeadSequence() } });
-        live = false;
-        try {
-          controller.close();
-        } catch {
-          /* already closed by the consumer */
-        }
-        return;
-      }
-
-      for (const job of await unackedJobs()) send({ event: "job", data: job });
-
-      let sent = cursor;
-      let lastFrameAt = Date.now();
-      // Drive the connection from here rather than from a module-level timer:
-      // this promise is owned by the stream and ends when `live` goes false.
-      void (async () => {
-        while (live) {
-          const events = await eventsAbove(sent).catch(() => []);
-          for (const e of events) {
-            send({ event: "event", data: e });
-            sent = e.seq;
+          try {
+            controller.close();
+          } catch {
+            /* already closed by the consumer */
           }
-          if (events.length > 0) lastFrameAt = Date.now();
-          else if (Date.now() - lastFrameAt >= keepaliveMs) {
-            // §6.3: "Each keepalive from the API includes the sequence number of
-            // the last event it committed." The HEAD of the log, not `sent` —
-            // the whole point is that a subscriber behind the head can tell.
-            send({ event: "keepalive", data: { head: await streamHeadSequence().catch(() => sent) } });
-            lastFrameAt = Date.now();
+        };
+        const enqueue = (text: string): void => {
+          try {
+            controller.enqueue(encoder.encode(text));
+          } catch {
+            live = false;
           }
-          if (!live) break;
-          await Bun.sleep(pollMs);
-        }
+        };
+        // The last frame a connection ever sends: the reason, then the close.
+        const resyncAndClose = (reason: ResyncReason, head: number | null): void => {
+          if (live) enqueue(encodeStreamFrame({ event: "resync", data: { reason, head } }));
+          close();
+        };
+        const headOrNull = async (): Promise<number | null> => {
+          try {
+            return await streamHeadSequence();
+          } catch {
+            return null;
+          }
+        };
+        /**
+         * Send one frame, or end the connection if its buffer is full. The
+         * resync that replaces the frame is the ONLY thing enqueued past the
+         * limit: the subscriber reads what it was sent, then the reason, and
+         * nothing is dropped from the middle.
+         */
+        const send = async (f: StreamServeFrame): Promise<boolean> => {
+          if (!live) return false;
+          if ((controller.desiredSize ?? 1) <= 0) {
+            resyncAndClose("buffer_overflow", await headOrNull());
+            return false;
+          }
+          enqueue(encodeStreamFrame(f));
+          return live;
+        };
+
+        enqueue(STREAM_OPEN_COMMENT);
+
+        let reason: ResyncReason | null;
         try {
-          controller.close();
+          reason = await resyncReasonFor(cursor);
         } catch {
-          /* already closed */
+          resyncAndClose("unavailable", null);
+          return;
         }
-      })();
+        if (reason) {
+          resyncAndClose(reason, await headOrNull());
+          return;
+        }
+
+        let sent = cursor;
+        let lastFrameAt = Date.now();
+        // Drive the connection from here rather than from a module-level timer:
+        // this promise is owned by the stream and ends when `live` goes false.
+        void (async () => {
+          while (live) {
+            let events: ServedStreamEvent[];
+            try {
+              events = await eventsAbove(sent);
+            } catch {
+              resyncAndClose("unavailable", null);
+              break;
+            }
+            for (const e of events) {
+              if (e.seq !== sent + 1) {
+                // The next number this subscriber needs is not in the log any
+                // more: pruned between two polls. Serving `e` would skip it.
+                resyncAndClose("log_truncated", await headOrNull());
+                break;
+              }
+              if (!(await send({ event: "event", data: e }))) break;
+              sent = e.seq;
+            }
+            if (!live) break;
+            if (events.length > 0) lastFrameAt = Date.now();
+            else if (Date.now() - lastFrameAt >= keepaliveMs) {
+              if (opts.stillAuthorized && !(await opts.stillAuthorized().catch(() => false))) {
+                close();
+                break;
+              }
+              // §6.3: "Each keepalive from the API includes the sequence number
+              // of the last event it committed." The HEAD of the log, not
+              // `sent` — the whole point is that a subscriber behind the head
+              // can tell. A head that cannot be read is not replaced by a guess.
+              const head = await headOrNull();
+              if (head === null) {
+                resyncAndClose("unavailable", null);
+                break;
+              }
+              if (!(await send({ event: "keepalive", data: { head } }))) break;
+              lastFrameAt = Date.now();
+            }
+            if (!live) break;
+            await Bun.sleep(pollMs);
+          }
+          close();
+        })();
+      },
+      cancel() {
+        live = false;
+      },
     },
-    cancel() {
-      live = false;
-    },
-  });
+    // Counted in frames: the open comment and every frame is one chunk.
+    new CountQueuingStrategy({ highWaterMark: bufferFrames }),
+  );
 
   return new Response(body, {
     headers: {

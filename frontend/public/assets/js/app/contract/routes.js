@@ -212,8 +212,10 @@ export const ROUTES = {
     // an operator would drive by hand.
     scheduler: {
       fullRead: "/api/swarm/scheduler/full-read", // GET → §3's four parts + the cursor, one consistent snapshot
-      subscribe: "/api/swarm/scheduler/subscribe", // GET ?cursor=N → text/event-stream: event | keepalive (carries head) | resync | job
-      jobAck: "/api/swarm/scheduler/jobs/ack", // POST { idempotencyKey } — the scheduler reporting one pushed job done
+      subscribe: "/api/swarm/scheduler/subscribe", // GET ?cursor=N → text/event-stream: event | keepalive (carries head) | resync
+      // No job-ack route: §6.3 (amended 2026-09-24, D52) — "The stream carries
+      // change events only ... there is no ad-hoc job kind for the API to push,
+      // ack or redeliver."
     },
 
     // ── Participants (smoke-production-spec.md §6.2)
@@ -261,6 +263,11 @@ export const ROUTES = {
       subjects: "/api/swarm/admin/subjects", // GET list (all statuses) / POST create
       subjectUpdate: "/api/swarm/admin/subjects/:id/update", // POST — versioned edit (409 stale_version)
       subjectDeactivate: "/api/swarm/admin/subjects/:id/deactivate", // POST — versioned deactivate
+      // POST { expectedVersion } — versioned inactive → active. A subject edit,
+      // not an epoch route: it publishes `subject.changed` and opens NO session;
+      // `system-scheduler` opens the first epoch from that event (scheduler spec
+      // §2.4, §3, §6.2; D55 (4)).
+      subjectActivate: "/api/swarm/admin/subjects/:id/activate",
 
       // ── The epoch lifecycle (issue #1026 W4.2, system-scheduler-spec.md §4)
       // Every one of these is a STATE-GUARDED transition that `system-scheduler`
@@ -316,7 +323,7 @@ export const ROUTES = {
       // it, POST { mode, minTakes } sets it) that lets an operator take the
       // judge off published sessions WITHOUT a redeploy.
       sessionJudge: "/api/swarm/admin/sessions/:id/judge", // POST — versioned guarded transition
-      judgeConfig: "/api/swarm/admin/judge", // GET | POST { mode: off|shadow|enforce, minTakes }
+      judgeConfig: "/api/swarm/admin/judge", // GET | POST { mode: off|enforce, minTakes } — `shadow` retired (D53 (1))
       // Assemble, sign-collect and PUBLISH the consensus receipt for a judged
       // session (issue #754). Immutable once published: a second POST returns
       // the receipt already on file rather than re-assembling it.

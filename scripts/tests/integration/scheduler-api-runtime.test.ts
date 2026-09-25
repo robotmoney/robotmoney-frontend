@@ -335,6 +335,54 @@ describe("the real scheduler drives the real API (§3, §4)", () => {
     expect(psql(`SELECT successor_session_id IS NULL FROM swarm_sessions WHERE id = ${lit(open!.id)}`)).toBe("t");
   }, 60_000);
 
+  test("DEACTIVATE THEN RE-ACTIVATE through the admin route: the running scheduler opens exactly one fresh on-grid epoch (criteria 88, 89)", async () => {
+    // §2.4 / §3: "a subject deactivated and re-activated" is opened by the
+    // scheduler, and "Nothing else opens a first epoch." D55 (4): activation
+    // is a subject edit — the route flips the status and publishes
+    // `subject.changed`; the scheduler, live on the stream, opens the epoch.
+    // The test never calls epochs/open and holds no scheduler token here.
+    const id = `rt_react_${crypto.randomUUID().slice(0, 6)}`;
+    const created = await createSubject(id, 6);
+    const [first] = await waitFor("the first epoch", () => {
+      const c = collectingOf(id);
+      return c.length === 1 ? c : null;
+    });
+    const off = await adminPost(ROUTES.swarm.admin.subjectDeactivate.replace(":id", id), { expectedVersion: created.version });
+    expect(off.status).toBe(200);
+    await waitFor("the closed epoch to settle", () =>
+      psql(`SELECT state FROM swarm_sessions WHERE id = ${lit(first!.id)}`) === "published", 20_000);
+    expect(collectingOf(id)).toEqual([]);
+
+    const activatedAt = dbNow();
+    const on = await adminPost(ROUTES.swarm.admin.subjectActivate.replace(":id", id), {
+      expectedVersion: off.body.subject.version,
+    });
+    expect(on.status).toBe(200);
+    expect(on.body.subject.status).toBe("active");
+    const [fresh] = await waitFor("the scheduler to open the re-activated subject's epoch", () => {
+      const c = collectingOf(id);
+      return c.length === 1 ? c : null;
+    });
+    expect(fresh!.id).not.toBe(first!.id);
+    expect(onGrid(fresh!.id)).toBe(true);
+    // Fresh: opened after the activation, never backdated, with the
+    // first-epoch floor of half a duration.
+    expect(psql(`SELECT convened_at >= ${lit(activatedAt)}::timestamptz
+                    AND window_closes_at >= convened_at + interval '3 seconds'
+                   FROM swarm_sessions WHERE id = ${lit(fresh!.id)}`)).toBe("t");
+    // Exactly one FIRST opening: give a duplicate open every chance to appear.
+    // A session opened by a later turnover is some session's successor and is
+    // not a first opening, so it is excluded by name rather than by timing.
+    await Bun.sleep(1500);
+    expect(psql(`SELECT count(*) FROM swarm_sessions WHERE subject_id = ${lit(id)}
+                    AND convened_at >= ${lit(activatedAt)}::timestamptz
+                    AND id NOT IN (SELECT successor_session_id FROM swarm_sessions
+                                    WHERE subject_id = ${lit(id)} AND successor_session_id IS NOT NULL)`)).toBe("1");
+    await adminPost(ROUTES.swarm.admin.subjectDeactivate.replace(":id", id), {
+      expectedVersion: Number(psql(`SELECT version FROM swarm_subjects WHERE id = ${lit(id)}`)),
+    });
+  }, 60_000);
+
   test("ACTIVATION DURING DOWNTIME yields one fresh on-grid epoch on rebuild, never backdated (criterion 90)", async () => {
     await stopScheduler();
     const id = `rt_down_act_${crypto.randomUUID().slice(0, 6)}`;
