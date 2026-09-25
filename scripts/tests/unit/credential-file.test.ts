@@ -33,6 +33,7 @@ import {
   CredentialFileRefusal,
   loadCredentialFile,
   parseCredentialFile,
+  planParticipants,
   reconcileRoster,
   resolveCredentialPath,
   rosterEntries,
@@ -573,5 +574,64 @@ describe("rosterPlanLines — redacted; a plan is pasted into issues and chat lo
 
   test("an empty roster prints no lines", () => {
     expect(rosterPlanLines([])).toEqual([]);
+  });
+});
+
+// ── THE ROLE CHECK (spec §6.1, D52; criterion 132) ─────────────────────────
+// "An `agents` entry must be a member with role `member` and a `judges` entry a
+// member with role `judge`; a mismatch with the database refuses the boot and
+// names the entry." The database's answer arrives as a lookup (the boot reads
+// it off the admin members route); these drive the one composition a boot
+// calls, so a boot cannot skip the check by calling something else.
+describe("planParticipants — a roster role that disagrees with the database refuses the boot, naming the entry", () => {
+  const configured = { configured: true as const, path: "/etc/rm/credential.json", origin: "env" as const };
+  /** The production database's answers for PROD_ROSTER's members. */
+  const DB_ROLES: Record<string, string> = {
+    "m-athena": "member",
+    "m-noop-analyst": "member",
+    "m-robot-money": "member",
+    "m-themis": "judge",
+  };
+  const lookup = (roles: Record<string, string>) => (memberId: string) =>
+    roles[memberId] === undefined ? undefined : { role: roles[memberId]! };
+
+  test("every agents entry a member and every judges entry a judge passes, and the plan starts all four", () => {
+    const plan = planParticipants(configured, [], () => PROD_ROSTER, { memberRole: lookup(DB_ROLES) });
+    expect(plan.start.map((e) => `${e.kind}:${e.name}`)).toEqual(["agent:athena", "agent:noop-analyst", "agent:robot-money", "judge:themis"]);
+  });
+
+  test("an AGENTS entry whose member is role judge refuses, naming the entry and both roles", () => {
+    const r = refusal(() => planParticipants(configured, [], () => PROD_ROSTER, { memberRole: lookup({ ...DB_ROLES, "m-athena": "judge" }) }));
+    expect(r.reason).toBe("role-mismatch");
+    expect(r.message).toContain('agents entry "athena"');
+    expect(r.message).toContain("role judge");
+    expect(r.message).toContain("must be role member");
+  });
+
+  test("a JUDGES entry whose member is role member refuses, naming the entry", () => {
+    const r = refusal(() => planParticipants(configured, [], () => PROD_ROSTER, { memberRole: lookup({ ...DB_ROLES, "m-themis": "member" }) }));
+    expect(r.reason).toBe("role-mismatch");
+    expect(r.message).toContain('judges entry "themis"');
+    expect(r.message).toContain("must be role judge");
+  });
+
+  test("an entry naming a member the database does not hold refuses too — no role is not the right role", () => {
+    const { ["m-robot-money"]: _gone, ...withoutRobot } = DB_ROLES;
+    const r = refusal(() => planParticipants(configured, [], () => PROD_ROSTER, { memberRole: lookup(withoutRobot) }));
+    expect(r.reason).toBe("role-mismatch");
+    expect(r.message).toContain('agents entry "robot-money"');
+    expect(r.message).toContain("does not hold");
+  });
+
+  test("the refusal comes BEFORE any plan: running participants are named in no stop list", () => {
+    const live = [running({ name: "athena" }), running({ name: "boreas" })];
+    const r = refusal(() => planParticipants(configured, live, () => PROD_ROSTER, { memberRole: lookup({ ...DB_ROLES, "m-themis": "member" }) }));
+    expect(r.reason).toBe("role-mismatch");
+    expect(r.running).toEqual([]);
+  });
+
+  test("the refusal names no key material — not the bearer, the private key or the model key", () => {
+    const r = refusal(() => planParticipants(configured, [], () => PROD_ROSTER, { memberRole: lookup({ ...DB_ROLES, "m-athena": "judge" }) }));
+    for (const secret of ["tok-athena", "priv-athena", "zen-athena", "pub-athena"]) expect(r.message).not.toContain(secret);
   });
 });

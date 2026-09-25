@@ -45,5 +45,24 @@ COPY backend/ /app/
 COPY scripts/system-scheduler.ts /app/scripts/
 COPY scripts/lib/system-scheduler/ /app/scripts/lib/system-scheduler/
 
-# Overridden by compose command (api vs worker vs system-scheduler).
+# The STANDING PARTICIPANT ships from this image too (smoke spec §6.2, issue
+# #1026): one container per credential-file entry, started by `bun smoke`'s
+# `participants` phase with `bun run scripts/agent/participant/main.ts`, which
+# routes an agent to its poll loop and a judge to its subscription. Like the
+# scheduler it holds no database credential (it refuses one at startup), so it
+# lives in `scripts/`, not in `backend/src/` whose config demands one.
+#
+# ONLY the participant's own directory and the one library it imports at run
+# time (the credential-key list its startup check refuses by). Its other
+# `scripts/lib` imports are `import type`, which Bun erases.
+#
+# The judge client reads the server's own prompt and digest from
+# `backend/src/swarm/judge.ts` by its repository path (`../../../backend/...`),
+# so the one symlink below gives that path its meaning here: /backend is this
+# image's /app, the same sources, never a second copy that could drift.
+COPY scripts/agent/participant/ /app/scripts/agent/participant/
+COPY scripts/lib/db-credential-keys.ts /app/scripts/lib/db-credential-keys.ts
+RUN ln -s /app /backend
+
+# Overridden by compose command (api vs worker vs system-scheduler vs participant).
 CMD ["bun", "run", "src/api/index.ts"]

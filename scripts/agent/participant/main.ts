@@ -1,17 +1,31 @@
 #!/usr/bin/env bun
 // The STANDING PARTICIPANT container's entrypoint
-// (smoke-production-spec.md §6.2, issue #1026 W3.2). The types and the
-// contract in these comments are the design; the bodies implement it.
+// (smoke-production-spec.md §6.2, issue #1026 W3).
 //
 // ── WHAT THIS PROCESS IS ────────────────────────────────────────────────────
 // One long-lived process, one per credential-file roster entry (§6.1), running
-// under `restart: unless-stopped`. It behaves exactly like a third party's
-// deployment would. This loop is the AGENT's side of §6.2 — "Agents poll": it
-// polls the API over HTTP for `collecting` sessions this participant has not
-// yet taken, runs each take as a one-shot process in a fresh workspace
-// (take-runner.ts), submits, and sleeps. A judge does not poll: "Judges
-// subscribe" (§6.2), and its standing loop is the subscription in
-// judge-client.ts. Routing a judge entry to that loop is not done here yet.
+// under `restart: unless-stopped` in a container `bun smoke`'s `participants`
+// phase started (scripts/lib/participant-compose.ts). It behaves exactly like a
+// third party's deployment would, and what it runs depends on the entry's
+// namespace, which arrives as `RM_PARTICIPANT_KIND`:
+//
+//   - AN AGENT POLLS (§6.2). This file's loop polls the API over HTTP for
+//     `collecting` sessions this participant has not yet taken, runs each take
+//     as a one-shot process in a fresh workspace (take-runner.ts), submits,
+//     and sleeps.
+//   - A JUDGE SUBSCRIBES (§6.2). After the same HTTP-only startup diagnostic,
+//     this process hands over to judge-client.ts `runJudgeClient`: an
+//     authenticated stream the API answers with every session in `judging`
+//     this judge has not submitted for, a model call on the judge's OWN key,
+//     and a judgement SIGNED with the judge's own key, POSTed through the
+//     participant route. Nothing else judges: no API route, no worker and no
+//     harness runs a model on a session (D53 (4)). A judge that cannot reach
+//     its model submits nothing, and the session publishes `no_consensus`.
+//
+// Sessions have no schedule rows: `system-scheduler` opens, turns over and
+// settles each subject's epochs over the API whether or not this host runs
+// any participant (§6.3, scheduler spec). A participant only reacts to the
+// state the API serves it.
 //
 // ── THIS PROCESS HOLDS NO DATABASE CREDENTIAL AND NO DOCKER SOCKET ──────────
 // State that plainly, because both have been true of predecessors and both are
@@ -29,35 +43,41 @@
 //
 //   - NO DOCKER SOCKET. Issue #1014 mounted `/var/run/docker.sock` into an
 //     `agent-launcher` service so a judge could be started as a short-lived
-//     container. The spec forbids the socket anywhere (§6.2) and the secret
+//     container. The spec forbids the socket anywhere (§3) and the secret
 //     management direction forbids it outright: the socket is root on the
 //     host, and handing it to a process that runs model-authored code is
 //     handing that code the host. The compose tests assert no service mounts
 //     it; `assertNoDockerSocket` below is the runtime half, and refuses a
 //     socket that reached this process by ANY route — an env var, a value
 //     naming one, or a socket file on disk. A take is a PROCESS here, not a
-//     container — see take-runner.ts.
+//     container — see take-runner.ts — and so is a judgement's model call.
 //
 // ── WHAT BREAKS WITHOUT THIS ────────────────────────────────────────────────
-// Today the in-process driver (scripts/lib/swarm/session.ts) orchestrates
-// members from the smoke host: it knows the roster, it launches each member,
-// and it waits for the session. That makes the harness a participant in its
-// own session, which is why `bun smoke` cannot exit at readiness (spec §1) and
-// why a session dies when the invoking terminal does (§10 W1: "Sessions and
-// participants survive the invoking terminal's exit"). Standing containers cut
-// that tie: `system-scheduler` opens and closes each subject's sessions on its
-// epoch grid whether or not this host runs any participant at all (§6.3) —
-// sessions have no schedule rows and nothing to enable.
+// The in-process driver (scripts/lib/swarm/session.ts) orchestrated members
+// from the smoke host: it knew the roster, launched each member, and waited
+// for the session. That made the harness a participant in its own session,
+// which is why `bun smoke` could not exit at readiness (spec §1) and why a
+// session died with the invoking terminal (§10 W1: "Sessions and participants
+// survive the invoking terminal's exit"). Standing containers cut that tie.
 //
 // ── GOVERNING SPEC SECTIONS ─────────────────────────────────────────────────
-// §6.2 (standing containers, one take in flight, idempotent submission), §6.1
-// (the roster entry this container was started from), §6.3 (sessions are
-// independent of participants), §7.2 (HTTP-only startup diagnostic), §1
-// (containers stay up under Docker; `smoke:down` is the only stop), §10 W3.
+// §6.2 (standing containers, one take in flight, idempotent submission, the
+// judge is a participant), §6.1 (the roster entry this container was started
+// from), §6.3 (sessions are independent of participants), §7.2 (HTTP-only
+// startup diagnostic), §1 (containers stay up under Docker; `smoke:down` is
+// the only stop), §10 W3.
 import { lstatSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
-import { INFERENCE_KEY_ENV, resendPendingSubmissions, runTake, TAKE_COMMAND_ENV } from "./take-runner.ts";
+import {
+  INFERENCE_KEY_ENV,
+  INFERENCE_URL_ENV,
+  INFERENCE_WIRE_ID_ENV,
+  resendPendingSubmissions,
+  runTake,
+  TAKE_COMMAND_ENV,
+} from "./take-runner.ts";
+import { readJudgeClientConfig, runJudgeClient } from "./judge-client.ts";
 import type { ParticipantKind, PersonaIdentity } from "../../lib/swarm/credential-file.ts";
 import { isDbCredentialKey, looksLikeConnectionString } from "../../lib/db-credential-keys.ts";
 
@@ -274,11 +294,18 @@ export interface ParticipantConfig {
   identity: PersonaIdentity;
   /**
    * This participant's OWN model key (`RM_INFERENCE_KEY`), from the `modelKey`
-   * field of its D52 credential-file entry. The one-shot that authors a take
-   * receives it, and nothing else does. Required for an agent; empty for a
-   * judge, whose model work is not dispatched from this loop yet.
+   * field of its D52 credential-file entry. Required for both kinds: the
+   * one-shot that authors an agent's take receives it, and a judge's model
+   * call is made on it (judge-client.ts reads the same name).
    */
   modelKey: string;
+  /**
+   * Where an agent's one-shot sends its model call, and the model id as that
+   * endpoint spells it (`RM_INFERENCE_URL`, `RM_INFERENCE_WIRE_ID`). Required
+   * for an agent; a judge reads its own pair (judge-client.ts).
+   */
+  inferenceUrl?: string;
+  inferenceWireId?: string;
   /**
    * The argv of the one-shot that authors a take (`RM_TAKE_COMMAND`, a JSON
    * array or a whitespace-separated command). Required for an agent; empty for
@@ -351,10 +378,18 @@ export function readParticipantConfig(
   }
 
   const modelKey = (env[INFERENCE_KEY_ENV] ?? "").trim();
-  if (kindValue === "agent" && modelKey === "") {
-    // An agent without its own model key can be offered work and never author
-    // it: refusing at boot names the gap, failing every take hides it (D52).
-    throw new Error(`${INFERENCE_KEY_ENV} was not injected into this agent participant container`);
+  if (modelKey === "") {
+    // A participant without its own model key can be offered work and never
+    // do it: refusing at boot names the gap, failing every item hides it (D52).
+    throw new Error(`${INFERENCE_KEY_ENV} was not injected into this ${kindValue} participant container`);
+  }
+  const inferenceUrl = (env[INFERENCE_URL_ENV] ?? "").trim();
+  const inferenceWireId = (env[INFERENCE_WIRE_ID_ENV] ?? "").trim();
+  if (kindValue === "agent" && (inferenceUrl === "" || inferenceWireId === "")) {
+    // A key with no endpoint or model to spend it on authors nothing.
+    throw new Error(
+      `${inferenceUrl === "" ? INFERENCE_URL_ENV : INFERENCE_WIRE_ID_ENV} was not injected into this agent participant container`,
+    );
   }
 
   const takeCommand = parseTakeCommand(env[TAKE_COMMAND_ENV]);
@@ -373,6 +408,8 @@ export function readParticipantConfig(
     token: required(env, "RM_MEMBER_TOKEN"),
     identity: { publicKeyB64: identity.publicKeyB64, privateJwk: identity.privateJwk },
     modelKey,
+    ...(inferenceUrl === "" ? {} : { inferenceUrl }),
+    ...(inferenceWireId === "" ? {} : { inferenceWireId }),
     takeCommand,
     pollIntervalMs: positiveInt(env.RM_POLL_INTERVAL_MS, 5_000),
     takeTimeoutMs: positiveInt(env.RM_TAKE_TIMEOUT_MS, 600_000),
@@ -649,13 +686,63 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/** The two standing loops, injectable so the dispatch is testable without a network. */
+export interface ParticipantLoops {
+  agent: (config: ParticipantConfig, signal?: AbortSignal) => Promise<void>;
+  judge: (config: ReturnType<typeof readJudgeClientConfig>, signal?: AbortSignal) => Promise<void>;
+  diagnose: (config: ParticipantConfig) => Promise<StartupDiagnostic>;
+}
+
+const DEFAULT_LOOPS: ParticipantLoops = {
+  agent: runParticipantLoop,
+  judge: (config, signal) => runJudgeClient(config, signal),
+  diagnose: runStartupDiagnostic,
+};
+
+/**
+ * The container's whole life, by namespace: an AGENT polls (the loop above),
+ * a JUDGE subscribes (judge-client.ts). Both are configured from the same
+ * environment and refused by the same checks first — no database credential,
+ * no Docker socket, every required value present — and a judge proves its
+ * token and identity over HTTP before it subscribes, exactly as an agent does
+ * before it polls.
+ *
+ * Refusals: any configuration refusal; a failed startup diagnostic; a judge
+ * configuration the judge client refuses (by its D-A7 name).
+ */
+export async function runParticipant(
+  env: Record<string, string | undefined>,
+  options: { signal?: AbortSignal; loops?: ParticipantLoops; read?: ReadParticipantConfigOptions } = {},
+): Promise<ParticipantKind> {
+  const { signal } = options;
+  const loops = options.loops ?? DEFAULT_LOOPS;
+  const config = readParticipantConfig(env, options.read);
+  if (config.kind === "agent") {
+    await loops.agent(config, signal);
+    return "agent";
+  }
+  // Refused before the diagnostic: a judge with no usable model is a crash
+  // loop an operator reads at once, not a subscription that refuses every item.
+  const judgeConfig = readJudgeClientConfig(env);
+  const diagnostic = await loops.diagnose(config);
+  if (!diagnostic.apiReachable || !diagnostic.tokenValid || !diagnostic.identityMatchesRoster) {
+    throw new Error(
+      `participant judge ${config.name} refuses to subscribe: `
+      + `apiReachable=${diagnostic.apiReachable} tokenValid=${diagnostic.tokenValid} `
+      + `serverMemberId=${diagnostic.serverMemberId ?? "none"} expected=${config.memberId}`,
+    );
+  }
+  await loops.judge(judgeConfig, signal);
+  return "judge";
+}
+
 if (import.meta.main) {
   const controller = new AbortController();
   for (const sig of ["SIGTERM", "SIGINT"] as const) {
     process.on(sig, () => controller.abort());
   }
   try {
-    await runParticipantLoop(readParticipantConfig(process.env), controller.signal);
+    await runParticipant(process.env, { signal: controller.signal });
   } catch (err) {
     // A misconfigured participant crash-loops visibly under
     // `restart: unless-stopped`, which is the correct outcome.

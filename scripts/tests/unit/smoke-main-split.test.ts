@@ -181,6 +181,77 @@ describe("no driver writes judge mode, and nothing posts `shadow` (criterion 6)"
   });
 });
 
+// ---------------------------------------------------------------------------
+// persona-keys.json IS NOT AN IDENTITY SOURCE (issue #1026, criterion 9).
+//
+// A committed fixture held eleven usable private keys, three of them
+// production-seated members (athena, robot-money, noop-analyst), and it still
+// filtered the roster in smoke-mode.ts. The credential file is the roster and
+// the only place an in-house key lives (spec §6.1, §3). The fixture and its
+// loaders are deleted; what is pinned here is that they stay deleted and that
+// nothing loads, imports or filters by them again. The keys themselves remain
+// readable in git history and must be rotated (spec §9.1 step 6) — an operator
+// action this test cannot perform.
+// ---------------------------------------------------------------------------
+const PERSONA_FIXTURE = join(libDir, "swarm", "fixtures", "persona-keys.json");
+const PERSONA_LOADER = join(libDir, "swarm", "persona-keys.ts");
+const PERSONA_API = ["personaIdentity", "personaIdentities", "personaIdentityEnv"];
+
+/** Files under `roots` whose CODE (comments dropped) imports persona-keys or calls its loaders. */
+function personaKeyUsers(files: ReadonlyArray<readonly [string, string]>): string[] {
+  const offenders: string[] = [];
+  for (const [file, src] of files) {
+    const code = codeOnly(src);
+    const imports = /from\s+["'][^"']*persona-keys(\.ts|\.json)?["']/.test(code) || /persona-keys\.json/.test(code);
+    const calls = PERSONA_API.some((name) => new RegExp(`\\b${name}\\s*\\(`).test(code));
+    if (imports || calls) offenders.push(file);
+  }
+  return offenders.sort();
+}
+
+/** Every .ts source under the production trees, as [relative path, text]. */
+function productionSources(): Array<readonly [string, string]> {
+  const out: Array<readonly [string, string]> = [];
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      if (name === "node_modules" || name === "tests" || name.startsWith(".")) continue;
+      const full = join(dir, name);
+      if (statSync(full).isDirectory()) walk(full);
+      else if (name.endsWith(".ts")) out.push([full.slice(repoRoot.length + 1), readFileSync(full, "utf8")]);
+    }
+  };
+  for (const tree of ["scripts", "backend"]) walk(join(repoRoot, tree));
+  return out;
+}
+
+describe("persona-keys.json is not an identity source (criterion 9)", () => {
+  test("the fixture and its loader module are gone", () => {
+    expect({ fixture: existsSync(PERSONA_FIXTURE), loader: existsSync(PERSONA_LOADER) }).toEqual({ fixture: false, loader: false });
+  });
+
+  test("no production source imports persona-keys or calls its loaders", () => {
+    const sources = productionSources();
+    expect(sources.length).toBeGreaterThan(100); // the walk really read the trees
+    expect(personaKeyUsers(sources)).toEqual([]);
+  });
+
+  test("the roster filter asks the credential file: smoke-mode.ts filters by credential handles, and the boot hands them in", () => {
+    const smokeMode = readFileSync(join(libDir, "smoke-mode.ts"), "utf8");
+    expect(codeOnly(smokeMode)).toContain("held.has(handleOf(member))");
+    expect(codeOnly(smokeMain)).toMatch(/adoptRestoredRoster\([^)]*credentialHandles: credentialHandlesOf\(plan\.roster\.agents\)/);
+  });
+
+  test("red control: a re-added loader import and a filter call are both caught, a comment is not", () => {
+    const planted: Array<readonly [string, string]> = [
+      ["scripts/lib/smoke-mode.ts", 'import { personaIdentity } from "./swarm/persona-keys.ts";\nconst ok = (n: string) => Boolean(personaIdentity(n));\n'],
+      ["scripts/lib/swarm/agent.ts", "const env = personaIdentityEnv(m.name);\n"],
+      ["scripts/lib/other.ts", 'const raw = readFileSync(join(dir, "fixtures", "persona-keys.json"), "utf8");\n'],
+      ["scripts/lib/clean.ts", "// persona-keys.json is gone; personaIdentity() was its loader\n"],
+    ];
+    expect(personaKeyUsers(planted)).toEqual(["scripts/lib/other.ts", "scripts/lib/smoke-mode.ts", "scripts/lib/swarm/agent.ts"]);
+  });
+});
+
 describe("the process.env.ADMIN_TOKEN global mutation is gone (issue #456)", () => {
   test("smoke-main.ts no longer assigns process.env.ADMIN_TOKEN", () => {
     expect(smokeMain).not.toMatch(/process\.env\.ADMIN_TOKEN\s*=[^=]/);

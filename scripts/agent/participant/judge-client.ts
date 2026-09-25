@@ -69,8 +69,9 @@ import {
   type JudgeInput,
 } from "../../../backend/src/swarm/judge.ts";
 import { assertJudgeModelAllowed } from "../../../backend/src/swarm/judge-model-policy.ts";
-import type { PersonaIdentity } from "../../lib/swarm/persona-keys.ts";
-import { runJudge, type JudgeAnswer } from "./judge-runner.ts";
+import type { PersonaIdentity } from "../../lib/swarm/credential-file.ts";
+import { runJudge, type JudgeAnswer, type JudgeUsage } from "./judge-runner.ts";
+import { INFERENCE_KEY_ENV } from "./take-runner.ts";
 import {
   failureCodeForAnswer,
   RUNNER_FAULT,
@@ -120,7 +121,12 @@ export class JudgeClientConfigError extends Error {
   }
 }
 
-/** Env names the compose `judge` participant profile injects. */
+/**
+ * Env names a judge participant's container receives (scripts/lib/
+ * participant-compose.ts renders them from the judge's `credential.json`
+ * entry). The model credential is the judge's OWN model key, under the same
+ * name every participant gets it (D52): no judge reads a host-wide key.
+ */
 export const JUDGE_CLIENT_ENV = {
   apiUrl: "RM_API_URL",
   token: "RM_MEMBER_TOKEN",
@@ -129,7 +135,7 @@ export const JUDGE_CLIENT_ENV = {
   identity: "RM_MEMBER_IDENTITY",
   model: "RM_JUDGE_MODEL",
   endpoint: "RM_JUDGE_BASE_URL",
-  apiKey: "OPENCODE_API_KEY",
+  apiKey: INFERENCE_KEY_ENV,
   timeoutMs: "RM_JUDGE_TIMEOUT_MS",
 } as const;
 
@@ -271,7 +277,9 @@ export async function judgeOne(
     return { kind: "refused", sessionId: pending.sessionId, reason: failure ?? RUNNER_FAULT, detail: detailOf(answer) };
   }
 
-  return submitJudgement(config, pending, answer.body, doFetch);
+  // The call's spend goes with the judgement it paid for (D55 (3)); a vendor
+  // that reported none sends none, and the API stores NULL rather than 0.
+  return submitJudgement(config, pending, answer.body, doFetch, answer.usage);
 }
 
 /**
@@ -310,12 +318,19 @@ async function signJudgement(canonical: string, config: JudgeClientConfig): Prom
  * behaving exactly as designed. A submission after finalize comes back
  * `lateEvidence: true` and is likewise a success — it was recorded, it simply
  * decides nothing (§4.4).
+ *
+ * THE SPEND RIDES ALONGSIDE, UNSIGNED (D55 (3)). `usage` is what the model call
+ * cost, as the vendor reported it; the API writes it into the judge spend
+ * columns in the judgement's own transaction. It is accounting about the call,
+ * not part of what the judge attests, so it sits outside the signed bytes, and
+ * it is left out entirely when the vendor reported nothing.
  */
 export async function submitJudgement(
   config: JudgeClientConfig,
   pending: PendingJudging,
   opinion: string,
   fetchImpl: typeof globalThis.fetch = fetch,
+  usage?: JudgeUsage,
 ): Promise<JudgeOutcome> {
   const sessionId = pending.sessionId;
   const body = {
@@ -332,7 +347,7 @@ export async function submitJudgement(
     res = await fetchImpl(`${config.apiUrl}${ROUTES.swarm.participants.judgement}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, signature }),
+      body: JSON.stringify({ ...body, signature, ...(usage === undefined ? {} : { usage }) }),
     });
   } catch (err) {
     return { kind: "submit_failed", sessionId, status: 0, error: String((err as Error)?.message ?? err) };

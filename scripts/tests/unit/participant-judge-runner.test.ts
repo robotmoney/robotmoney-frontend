@@ -42,6 +42,7 @@ import {
   parseAnswerLine,
   readPromptFile,
   runJudge,
+  usageOf,
   type JudgeAnswer,
   type JudgeRunnerOptions,
 } from "../../agent/participant/judge-runner.ts";
@@ -545,6 +546,33 @@ describe("the runner on its real transport, into the API's parser", () => {
     } finally {
       v.server.stop(true);
     }
+  });
+
+  test("the vendor's usage comes back with the answer, in the judgement route's names (D55 (3))", async () => {
+    const answerText = JSON.stringify({ rationale: "r", disagreements: [], release_safety: { release: "safe", concerns: [] } });
+    const v = vendor(200, JSON.stringify({
+      choices: [{ message: { content: answerText } }],
+      usage: { prompt_tokens: 1834, completion_tokens: 412, total_tokens: 2246, cost: 0.0123 },
+    }));
+    try {
+      const answer = await withPrompt((file) => runJudge(options({ promptFile: file, endpoint: v.endpoint })));
+      expect(answer).toEqual({
+        kind: "ok",
+        body: answerText,
+        usage: { inputTokens: 1834, outputTokens: 412, totalTokens: 2246, costUsd: 0.0123 },
+      });
+      // The answer line carries it through the standalone shim as well.
+      expect(parseAnswerLine(formatAnswerLine(answer))).toEqual(answer);
+    } finally {
+      v.server.stop(true);
+    }
+  });
+
+  test("a usage field the vendor malformed is dropped, never repaired into a number", () => {
+    expect(usageOf({ usage: { prompt_tokens: 10, completion_tokens: -1, total_tokens: 1.5, cost: "free" } })).toEqual({ inputTokens: 10 });
+    expect(usageOf({ usage: { prompt_tokens: "10" } })).toBeUndefined();
+    expect(usageOf({ choices: [] })).toBeUndefined();
+    expect(usageOf(null)).toBeUndefined();
   });
 
   test("a smuggled weight passes through the runner untouched and is refused WHOLE by the parser", async () => {

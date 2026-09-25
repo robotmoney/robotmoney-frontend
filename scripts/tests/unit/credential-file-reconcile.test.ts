@@ -328,10 +328,66 @@ describe("planParticipants — resolution → load → reconcile, with unconfigu
       { configured: true, path: "/etc/rm/credential.json", origin: "flag" },
       [running("athena", { generation: "gen-1" })],
       recordingLoader({ agents: { athena: identity("agent-athena") }, judges: {} }).load,
-      "gen-2",
+      { currentGeneration: "gen-2" },
     );
     expect(names(plan.stop)).toEqual(["athena"]);
     expect(names(plan.start)).toEqual(["athena"]);
+  });
+
+  // ROSTER PRECEDENCE (spec §6.4, D52) lives in this composition, so a boot
+  // cannot forget it: the instance's generation replaces the named members'
+  // key and bearer, names only THEM for replacement, and never adds a member.
+  const GENERATION = {
+    generationId: "gen-7",
+    createdAt: "2026-09-25T00:00:00.000Z",
+    instance: "rm_twin",
+    members: {
+      athena: { name: "athena", memberId: "m-agent-athena", identity: { publicKeyB64: "spoof-pub", privateJwk: { kty: "OKP", d: "spoof" } }, bearer: "tok_spoofed" },
+      ghost: { name: "ghost", memberId: "m-ghost", identity: { publicKeyB64: "ghost-pub", privateJwk: { kty: "OKP" } }, bearer: "tok_ghost" },
+    },
+  };
+  const FILE_TWO: CredentialFile = { agents: { athena: identity("agent-athena"), "noop-analyst": identity("agent-noop") }, judges: {} };
+
+  test("a generation's members boot on ITS key and bearer; everyone else keeps the file's", () => {
+    const plan = planParticipants(
+      { configured: true, path: "/etc/rm/credential.json", origin: "env" },
+      [],
+      recordingLoader(FILE_TWO).load,
+      { generation: GENERATION },
+    );
+    const athena = plan.start.find((e) => e.name === "athena")!;
+    expect(athena.credential.publicKeyB64).toBe("spoof-pub");
+    expect(athena.credential.bearer).toBe("tok_spoofed");
+    expect(athena.credential.modelKey).toBe(identity("agent-athena").modelKey);
+    expect(athena.generation).toBe("gen-7");
+    const noop = plan.start.find((e) => e.name === "noop-analyst")!;
+    expect(noop.credential).toEqual(identity("agent-noop"));
+    expect(noop.generation).toBeUndefined();
+    // `ghost` is in the generation and not in the file: it is never started.
+    expect(names(plan.start)).toEqual(["athena", "noop-analyst"]);
+  });
+
+  test("only the spoofed member's container is replaced; a plain member on the file's key is kept", () => {
+    const plan = planParticipants(
+      { configured: true, path: "/etc/rm/credential.json", origin: "env" },
+      [running("athena"), running("noop-analyst")],
+      recordingLoader(FILE_TWO).load,
+      { generation: GENERATION },
+    );
+    expect(names(plan.stop)).toEqual(["athena"]);
+    expect(names(plan.start)).toEqual(["athena"]);
+    expect(names(plan.keep)).toEqual(["noop-analyst"]);
+  });
+
+  test("once the generation is gone, a container still on a spoofed key is replaced onto the file's", () => {
+    const plan = planParticipants(
+      { configured: true, path: "/etc/rm/credential.json", origin: "env" },
+      [running("athena", { generation: "gen-7" })],
+      recordingLoader(FILE_TWO).load,
+      { generation: null },
+    );
+    expect(names(plan.stop)).toEqual(["athena"]);
+    expect(plan.start.find((e) => e.name === "athena")?.credential.bearer).toBe(identity("agent-athena").bearer);
   });
 
   test("RATCHET: outside credential-file.ts, no production code names reconcileRoster or rosterEntries at all", () => {

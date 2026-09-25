@@ -3,11 +3,12 @@
 // these comments are the design; the bodies below implement it.
 //
 // ── WHY THIS MODULE EXISTS ──────────────────────────────────────────────────
-// Until now the in-house roster was assembled from three places that could
-// disagree: a committed fixture of persona keys
-// (scripts/lib/swarm/persona-keys.ts), a `--agents` flag listing handles, and
-// per-agent lines in `~/.env`. That arrangement has three defects the spec
-// closes at once:
+// The in-house roster used to be assembled from three places that could
+// disagree: a committed fixture of persona keys (persona-keys.json, deleted by
+// issue #1026 — its eleven private keys, three of them production-seated
+// members, stay readable in git history and must be rotated, spec §9.1 step 6),
+// a `--agents` flag listing handles, and per-agent lines in `~/.env`. That
+// arrangement had three defects the spec closes at once:
 //
 //   1. A key committed to the repository is a key anyone with a clone can sign
 //      with. Fine for a smoke character, disqualifying for production. Spec §3
@@ -55,11 +56,12 @@
 import { randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { effectiveRoster, type SpoofGeneration } from "./spoof-keys.ts";
 
 /**
  * A participant's signing identity: the Ed25519 public key the API holds and
  * the private JWK the participant signs with. It lives here, beside the file
- * that carries it; persona-keys.ts re-exports it for the smoke fixtures.
+ * that carries it, and nowhere else: no committed fixture supplies one.
  */
 export interface PersonaIdentity {
   /** Raw Ed25519 public key, base64 — the form /api/swarm/register takes. */
@@ -135,6 +137,15 @@ export interface RosterEntry {
   kind: ParticipantKind;
   /** The whole entry: this container's credential and no other's. */
   credential: CredentialEntry;
+  /**
+   * The spoof-keys generation this entry's key and bearer came from (spec
+   * §6.4), set by `effectiveRoster` (spoof-keys.ts) for a member the
+   * instance's generation names, and absent for an entry read from the file
+   * as it is. Reconciliation replaces a running container whose generation
+   * differs from its entry's, so a member moves onto (or off) spoofed keys
+   * without touching any other participant.
+   */
+  generation?: string;
 }
 
 /**
@@ -178,6 +189,13 @@ export type CredentialPathResolution =
  * - `unconfigured-with-running` — no path is configured but participants are
  *                          running. Refuse and name them; never interpret
  *                          absent configuration as "stop everyone".
+ * - `role-mismatch`      — an `agents` entry whose member is not role `member`
+ *                          in the database, a `judges` entry whose member is not
+ *                          role `judge`, or an entry naming no member at all
+ *                          (spec §6.1, D52). The boot refuses naming the entry:
+ *                          a judge's key in an agent container, or the reverse,
+ *                          is a copy-paste mistake the server would otherwise
+ *                          only reveal one refused submission at a time.
  */
 export type CredentialRefusalReason =
   | "missing"
@@ -185,7 +203,8 @@ export type CredentialRefusalReason =
   | "malformed"
   | "duplicate-name"
   | "shared-identity"
-  | "unconfigured-with-running";
+  | "unconfigured-with-running"
+  | "role-mismatch";
 
 /**
  * The refusal carried out of this module. Real (not a stub): callers match on
@@ -627,6 +646,13 @@ export function rosterEntries(file: CredentialFile): RosterEntry[] {
  *   restarted even though its name is on the roster: that is step (3) of spec
  *   §6.4, expressed here rather than duplicated in spoof-keys.ts.
  *
+ *   An entry's OWN `generation` (set by `effectiveRoster` for a spoofed member)
+ *   wins over `currentGeneration`, because a generation names only the members
+ *   it spoofed: every other participant keeps the file's key, and restarting it
+ *   for a generation it is not part of would churn a healthy container. With
+ *   neither set, a running container that still holds SOME generation is
+ *   replaced too: it signs with a spoofed key the roster no longer names.
+ *
  * Output: a `ReconciliationPlan`. This function is PURE — no Docker, no
  * filesystem, no clock — so the gates can drive every overlap case directly.
  *
@@ -672,8 +698,11 @@ export function reconcileRoster(
       continue;
     }
     // Spec §6.4 step (3): a container holding a superseded generation is
-    // replaced even though its name is on the roster.
-    if (currentGeneration !== undefined && live.generation !== currentGeneration) {
+    // replaced even though its name is on the roster. The entry's own
+    // generation decides for a spoofed member; a container on a generation
+    // the roster no longer names is replaced as well.
+    const wanted = entry.generation ?? currentGeneration;
+    if (live.generation !== wanted) {
       stop.push(live);
       start.push(entry);
       continue;
@@ -687,11 +716,47 @@ export function reconcileRoster(
 }
 
 /**
- * The ONE composition a boot uses: path resolution → load → reconcile.
+ * The database's answer about one member, as the boot reads it (the admin
+ * members route's `role`, which is `swarm_members.role`).
+ */
+export interface MemberRoleRecord {
+  role: string;
+}
+
+/** What `planParticipants` needs beyond the path and the running set. */
+export interface PlanParticipantsOptions {
+  /**
+   * The spoof-keys generation the caller intends EVERY container to hold, or
+   * `undefined`. A boot passes `generation` instead, which names only the
+   * spoofed members.
+   */
+  currentGeneration?: string;
+  /**
+   * The instance's persisted spoof generation (spoof-keys.ts
+   * `readSpoofGeneration`), or `null` when none exists. Roster precedence (spec
+   * §6.4, D52): while it exists, the members it names boot from ITS key and
+   * bearer rather than the file's, and a container of theirs running on any
+   * other generation is replaced. It never adds a member the file does not
+   * list.
+   */
+  generation?: SpoofGeneration | null;
+  /**
+   * The database's role for a member id, `undefined` for no such member (spec
+   * §6.1, D52). When given, every `agents` entry must name a member with role
+   * `member` and every `judges` entry one with role `judge`; otherwise the boot
+   * refuses `role-mismatch` naming the entry, before anything is started or
+   * stopped.
+   */
+  memberRole?: (memberId: string) => MemberRoleRecord | undefined;
+}
+
+/**
+ * The ONE composition a boot uses: path resolution → load → roster precedence
+ * → role check → reconcile.
  *
  * Inputs: the resolved path, what is running, the loader (injectable so the
- * gates can observe whether it was called), and the spoof-keys generation, if
- * any. Output: a `ReconciliationPlan`.
+ * gates can observe whether it was called), and the options above. Output: a
+ * `ReconciliationPlan`.
  *
  * WHY THIS EXISTS AS A FUNCTION. `reconcileRoster` already refuses `null` with
  * participants running, but a caller decides what to pass it, and the natural
@@ -702,22 +767,25 @@ export function reconcileRoster(
  * `RM_CREDENTIALS` line went missing. So the mapping lives here, once, and
  * boot code calls only this (spec §6.1: "With no path configured, smoke
  * proceeds with no participants only if none are running; otherwise it
- * refuses and names them").
+ * refuses and names them"). The spoof generation's precedence and the role
+ * check live here for the same reason: a boot that applied either one itself
+ * could leave it out.
  *
  * An unconfigured resolution never calls `load`: there is no path to read,
  * and reading a default would invent configuration nobody wrote.
  *
  * Refusals: `unconfigured-with-running` from `reconcileRoster`; every load
  * refusal, rethrown with the setting that pointed at the path, so the operator
- * knows whether to fix a shell command or `~/.env`.
+ * knows whether to fix a shell command or `~/.env`; `role-mismatch` naming the
+ * first entry whose member's database role disagrees with its namespace.
  */
 export function planParticipants(
   resolution: CredentialPathResolution,
   running: readonly RunningParticipant[],
   load: (path: string) => CredentialFile = loadCredentialFile,
-  currentGeneration?: string,
+  options: PlanParticipantsOptions = {},
 ): ReconciliationPlan {
-  if (!resolution.configured) return reconcileRoster(null, running, currentGeneration);
+  if (!resolution.configured) return reconcileRoster(null, running, options.currentGeneration);
   let file: CredentialFile;
   try {
     file = load(resolution.path);
@@ -728,7 +796,47 @@ export function planParticipants(
       path: resolution.path,
     });
   }
-  return reconcileRoster(rosterEntries(file), running, currentGeneration);
+  // Roster precedence (spec §6.4): the generation's key and bearer for the
+  // members it names, and only for members the file already lists.
+  const entries = effectiveRoster(rosterEntries(file), options.generation ?? null);
+  if (options.memberRole) assertRosterRoles(entries, options.memberRole, resolution.path);
+  return reconcileRoster(entries, running, options.currentGeneration);
+}
+
+/** The database role each namespace requires (spec §6.1; D48, amendment for issue 812). */
+const REQUIRED_ROLE: Record<ParticipantKind, string> = { agent: "member", judge: "judge" };
+
+/**
+ * Refuse the first entry whose member's database role disagrees with its
+ * namespace, or whose member id names no member at all. The refusal names the
+ * entry, its member id and both roles, never a key.
+ */
+function assertRosterRoles(
+  entries: readonly RosterEntry[],
+  memberRole: (memberId: string) => MemberRoleRecord | undefined,
+  path: string,
+): void {
+  for (const entry of entries) {
+    const namespace = entry.kind === "agent" ? "agents" : "judges";
+    const required = REQUIRED_ROLE[entry.kind];
+    const record = memberRole(entry.credential.memberId);
+    if (!record) {
+      throw new CredentialFileRefusal(
+        "role-mismatch",
+        `${path}: ${namespace} entry "${entry.name}" names member ${entry.credential.memberId}, which this database does not hold; `
+          + `a ${namespace} entry must be a member with role ${required} (spec §6.1). Refusing the boot.`,
+        { path },
+      );
+    }
+    if (record.role !== required) {
+      throw new CredentialFileRefusal(
+        "role-mismatch",
+        `${path}: ${namespace} entry "${entry.name}" is member ${entry.credential.memberId} with role ${record.role}, `
+          + `but a ${namespace} entry must be role ${required} (spec §6.1). Refusing the boot.`,
+        { path },
+      );
+    }
+  }
 }
 
 /**

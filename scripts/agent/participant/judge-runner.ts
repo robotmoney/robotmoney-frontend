@@ -92,10 +92,48 @@ export const JUDGE_ANSWER_TAG = "RM_JUDGE_ANSWER";
  *                    for a vendor response of any status, nor for a timeout.
  */
 export type JudgeAnswer =
-  | { kind: "ok"; body: string }
+  | { kind: "ok"; body: string; usage?: JudgeUsage }
   | { kind: "model_status"; status: number; body: string }
   | { kind: "timeout"; timeoutMs: number }
   | { kind: "runner"; message: string };
+
+/**
+ * What the model call cost, as the vendor reported it (D55 (3), R19): the
+ * participant makes the call, so it is the only process that knows. The field
+ * names are the judgement route's `usage` block (contract routes.js
+ * `participants.judgement`), which the API writes into the judge spend
+ * columns. A field the vendor did not report is ABSENT, never 0: a zero would
+ * claim the call was free.
+ */
+export interface JudgeUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+}
+
+/**
+ * The usage block of an OpenAI-compatible chat completion, mapped to the
+ * route's names: `prompt_tokens`, `completion_tokens`, `total_tokens`, and the
+ * `cost` in US dollars when the vendor reports one. A value that is not a
+ * finite, non-negative number (a whole one, for a token count) is dropped
+ * rather than repaired. `undefined` when nothing usable was reported.
+ */
+export function usageOf(completion: unknown): JudgeUsage | undefined {
+  const raw = (completion as { usage?: unknown } | null)?.usage;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const record = raw as Record<string, unknown>;
+  const count = (v: unknown): number | undefined =>
+    typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : undefined;
+  const cost = typeof record.cost === "number" && Number.isFinite(record.cost) && record.cost >= 0 ? record.cost : undefined;
+  const usage: JudgeUsage = {
+    ...(count(record.prompt_tokens) === undefined ? {} : { inputTokens: count(record.prompt_tokens) }),
+    ...(count(record.completion_tokens) === undefined ? {} : { outputTokens: count(record.completion_tokens) }),
+    ...(count(record.total_tokens) === undefined ? {} : { totalTokens: count(record.total_tokens) }),
+    ...(cost === undefined ? {} : { costUsd: cost }),
+  };
+  return Object.keys(usage).length === 0 ? undefined : usage;
+}
 
 /** Everything one judge run needs. A judge run reads nothing ambient. */
 export interface JudgeRunnerOptions {
@@ -181,7 +219,21 @@ export function parseAnswerLine(line: string): JudgeAnswer | null {
   const answer = parsed as Partial<JudgeAnswer> | null;
   if (answer && typeof answer === "object") {
     if (answer.kind === "ok" && typeof (answer as { body?: unknown }).body === "string") {
-      return { kind: "ok", body: (answer as { body: string }).body };
+      // The usage block is re-read through the same filter the runner used,
+      // so a line cannot smuggle a malformed spend past it.
+      const rawUsage = (answer as { usage?: Record<string, unknown> }).usage;
+      const usage = rawUsage
+        ? usageOf({
+            usage: {
+              prompt_tokens: rawUsage.inputTokens,
+              completion_tokens: rawUsage.outputTokens,
+              total_tokens: rawUsage.totalTokens,
+              cost: rawUsage.costUsd,
+            },
+          })
+        : undefined;
+      const body = (answer as { body: string }).body;
+      return usage === undefined ? { kind: "ok", body } : { kind: "ok", body, usage };
     }
     if (
       answer.kind === "model_status"
@@ -278,8 +330,10 @@ export async function runJudge(options: JudgeRunnerOptions): Promise<JudgeAnswer
     return { kind: "runner", message: "model answer carried no assistant text" };
   }
   // Raw and uninterpreted: a shim that reshapes a judgement is a shim that
-  // could manufacture one.
-  return { kind: "ok", body: content };
+  // could manufacture one. The spend travels beside it, when the vendor
+  // reported one (D55 (3)).
+  const usage = usageOf(parsed);
+  return usage === undefined ? { kind: "ok", body: content } : { kind: "ok", body: content, usage };
 }
 
 function isTimeout(err: unknown): boolean {
