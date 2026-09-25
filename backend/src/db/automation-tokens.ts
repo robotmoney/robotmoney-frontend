@@ -87,6 +87,13 @@ const provisionToken = registerQuery({
   site: "src/db/automation-tokens:provisionAutomationToken",
   purpose: "Provision or rotate one holder's automation token on one instance, storing only its hash.",
   callers: ["src/db/automation-tokens"],
+  probe: {
+    statement: `INSERT INTO automation_tokens (instance, holder, token_hash, rights)
+      VALUES ($1, $2, $3, $4::text[])
+      ON CONFLICT (instance, holder) DO UPDATE
+        SET token_hash = EXCLUDED.token_hash, rights = EXCLUDED.rights, created_at = now(), created_by = CURRENT_USER`,
+    params: ["probe-instance", "system-scheduler", "0000000000000000000000000000000000000000000000000000000000000000", "{read_subjects}"],
+  },
 });
 
 const lookupToken = registerQuery({
@@ -96,6 +103,10 @@ const lookupToken = registerQuery({
   site: "src/db/automation-tokens:lookupAutomationToken",
   purpose: "Resolve a presented automation token to its grant by hash, for the routes that check a right.",
   callers: ["src/api/routes/swarm-admin", "src/api/routes/swarm-stream"],
+  probe: {
+    statement: "SELECT instance, holder, rights FROM automation_tokens WHERE token_hash = $1",
+    params: ["0000000000000000000000000000000000000000000000000000000000000000"],
+  },
 });
 
 /** The token's wire prefix, so an operator reading a file knows what it is holding. */

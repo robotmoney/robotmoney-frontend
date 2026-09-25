@@ -177,6 +177,11 @@ const lastHolding = registerQuery({
   site: "src/chain/wallet-balances:lastPersistedHolding",
   purpose: "Read a symbol's newest non-quarantined sample, for the stale-degrade path of a failed live read.",
   callers: ["src/worker/handlers/wallet"],
+  probe: {
+    statement: `SELECT amount, price_usd, value_usd FROM wallet_balance_samples
+      WHERE symbol = $1 AND provenance <> $2 ORDER BY sample_date DESC LIMIT 1`,
+    params: ["USDC", "backfilled-quarantined"],
+  },
 });
 
 const historySamples = registerQuery({
@@ -186,6 +191,12 @@ const historySamples = registerQuery({
   site: "src/chain/wallet-balances:loadHistory.samples",
   purpose: "Read the wallet's daily sample history, excluding quarantined days, for the balances payload.",
   callers: ["src/api/routes/dashboards", "src/worker/handlers/wallet"],
+  probe: {
+    statement: `SELECT wbs.sample_date, wbs.symbol, wbs.amount, wbs.value_usd, wbs.provenance FROM wallet_balance_samples wbs
+      WHERE wbs.sample_date NOT IN (SELECT sample_date FROM wallet_balance_samples WHERE provenance = $1)
+      ORDER BY wbs.sample_date ASC, wbs.symbol ASC`,
+    params: ["backfilled-quarantined"],
+  },
 });
 
 const historyPrices = registerQuery({
@@ -195,6 +206,10 @@ const historyPrices = registerQuery({
   site: "src/chain/wallet-balances:loadHistory.prices",
   purpose: "Join each closed day's settled asset price onto the wallet history, which the history read LEFT JOINs.",
   callers: ["src/api/routes/dashboards", "src/worker/handlers/wallet"],
+  probe: {
+    statement: "SELECT ap.symbol, ap.price_date, ap.price_usd FROM asset_prices ap WHERE ap.time_basis = $1",
+    params: ["utc-daily-close"],
+  },
 });
 
 const latestSamples = registerQuery({
@@ -204,6 +219,12 @@ const latestSamples = registerQuery({
   site: "src/chain/wallet-balances:fetchPersistedWalletBalances",
   purpose: "Read the last scheduled sample per symbol for the persisted, zero-RPC balances payload.",
   callers: ["src/api/routes/dashboards"],
+  probe: {
+    statement: `SELECT DISTINCT ON (symbol) symbol, amount, price_usd, value_usd, provenance, strategy_nav_idle_only, sampled_at
+      FROM wallet_balance_samples WHERE provenance <> $1
+      ORDER BY symbol, sample_date DESC, sampled_at DESC`,
+    params: ["backfilled-quarantined"],
+  },
 });
 
 interface PersistedHolding {

@@ -149,6 +149,9 @@ const readFramework = registerQuery({
   site: "src/chain/allocation-framework:computeAllocationFramework",
   purpose: "Read the single admin-managed allocation row for GET /api/dashboards/allocation.",
   callers: ["src/api/routes/dashboards"],
+  probe: {
+    statement: "SELECT asof, buckets FROM allocation_framework WHERE id = 1",
+  },
 });
 
 async function computeAllocationFramework(): Promise<AllocationFramework> {

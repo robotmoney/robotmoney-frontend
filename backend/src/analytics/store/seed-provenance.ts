@@ -36,6 +36,10 @@ const loadSeedRows = registerQuery({
   site: "src/analytics/store/seed-provenance:loadSeedTaggedFloor",
   purpose: "Read every source='seed' floor row so the calendar validator can find fabricated dates.",
   callers: CALLERS,
+  probe: {
+    statement: `SELECT indicator, date::text AS date, value FROM raw_indicator_history
+      WHERE source = 'seed' ORDER BY indicator, date`,
+  },
 });
 
 const deleteInvalidSeedRow = registerQuery({
@@ -46,6 +50,12 @@ const deleteInvalidSeedRow = registerQuery({
   site: "src/analytics/store/seed-provenance:verifySeedProvenance.clean",
   purpose: "Delete one calendar-invalid source='seed' row on an operator's --clean, never a live-tagged one.",
   callers: CALLERS,
+  probe: {
+    statement: `DELETE FROM raw_indicator_history
+      WHERE indicator = $1 AND date = $2::date AND source = 'seed'
+      RETURNING indicator`,
+    params: ["probe_indicator", "2026-01-01"],
+  },
 });
 
 // Load every source='seed' row, grouped for the calendar validator.

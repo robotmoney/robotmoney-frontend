@@ -58,6 +58,10 @@ const readConflictsAsRuntime = registerQuery({
   site: "src/db/handle-namespace:handleNamespaceConflicts.runtime",
   purpose: "Boot re-check for restored handle/id namespace violations: probe for the handle column, then scan member pairs.",
   callers: ["src/api/index", "scripts/db-preflight"],
+  probe: {
+    statement: `SELECT a.id AS holder, a.handle AS handle, b.id AS shadowed
+      FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id ORDER BY a.id`,
+  },
 });
 
 const readConflictsAsOwner = registerQuery({
@@ -67,6 +71,10 @@ const readConflictsAsOwner = registerQuery({
   site: "src/db/handle-namespace:handleNamespaceConflicts.owner",
   purpose: "prod-bootstrap's first step: the same handle/id namespace re-check, run on the migrating credential.",
   callers: ["scripts/prod-bootstrap"],
+  probe: {
+    statement: `SELECT a.id AS holder, a.handle AS handle, b.id AS shadowed
+      FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id ORDER BY a.id`,
+  },
 });
 
 /** The subset of postgres.js's client these functions need. A TRANSACTION is

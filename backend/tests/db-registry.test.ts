@@ -2,307 +2,97 @@
 // statement may be issued from, and the input to preflight check 2.
 //
 // These tests are the specification for src/db/registry.ts (issue #1026 W2).
-// The first four blocks pin the interface itself with fixture declarations.
-// The last two pin the property that makes it the input to check 2: no module
-// outside the db layer's infrastructure issues a statement except through
-// `on(...)` and a declaration, read statically from the source rather than
-// from whatever the process happens to have registered. The swarm_judge_config
-// declarations get a dedicated reading in
+// The interface itself — registration, `on`, callers, enumeration, the fold
+// check 2 reads, the probe contract — is pinned with FIXTURE declarations in
+// tests/registry-interface.cases.ts, which the first block below runs in a
+// child `bun test` so those fixtures never enter this process's registry. The
+// rest pin the property that makes the registry the input to check 2: no
+// module outside the db layer's infrastructure issues a statement except
+// through `on(...)` and a declaration, read statically from the source rather
+// than from whatever the process happens to have registered. The
+// swarm_judge_config declarations get a dedicated reading in
 // tests/swarm-judge-config-registry.test.ts.
 //
 // WHY THE ASSERTIONS ARE ABOUT SHAPE AND NOT ABOUT SQL. §7.1 is explicit that
 // the registry "is not a runtime proof: execution under each role against a
-// disposable database is a separate CI test" (W2.8). So nothing here executes a
-// registered statement. What is pinned is the three properties check 2 depends
-// on: a declaration cannot be ambiguous, every declaration is enumerable, and
-// the fold into (role → object → privileges) is a union rather than a
-// last-writer-wins overwrite.
+// disposable database is a separate CI test". That test is
+// tests/db-registry-execution.test.ts. What is pinned here is the three
+// properties check 2 depends on: a declaration cannot be ambiguous, every
+// declaration is enumerable, and the fold into (role → object → privileges) is
+// a union rather than a last-writer-wins overwrite.
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import ts from "typescript";
-import {
-  on,
-  registerQuery,
-  registeredSites,
-  requiredPrivileges,
-  type QueryDeclaration,
-  type RegistryDb,
-  type RmRole,
-} from "../src/db/registry.ts";
+import { registeredSites, type QueryDeclaration, type RmRole } from "../src/db/registry.ts";
 
 /** The four roles of spec §3. There is no `rm_migrator` (D46/D47) and `doadmin`
  *  is cluster provisioning only (§3, §9.1), so neither may ever appear. */
 const TAXONOMY_ROLES: readonly RmRole[] = ["rm_owner", "rm_app", "rm_worker", "rm_readonly"];
 
-/** Unique per call so one test's registration cannot decide another's outcome —
- *  `registerQuery` refuses a duplicate id, which is itself under test below. */
-let seq = 0;
-function site(name: string): string {
-  return `tests/db-registry:${name}_${++seq}`;
-}
+describe("the interface specification — fixture registrations run in a child process", () => {
+  // ORDER-INDEPENDENCE (#1026 W2 open problem 5). The fixture cases register
+  // sites on real relations (`jobs`, `job_schedules`) and on made-up ones
+  // (`rm_registry_rel_*`), with privileges no program needs. The registry has
+  // no removal, and backend `bun test` runs every file in one process, so while
+  // those cases ran HERE any later file folding the in-process registry
+  // inherited them. In a child they die with the child.
+  const CASES = join(import.meta.dir, "registry-interface.cases.ts");
 
-function declaration(over: Partial<QueryDeclaration> = {}): QueryDeclaration {
-  return {
-    role: "rm_app",
-    object: "jobs",
-    privileges: ["SELECT"],
-    site: site("fixture"),
-    purpose: "Fixture declaration for the registry specification tests.",
-    callers: ["src/api/routes/fixture"],
-    ...over,
-  };
-}
-
-describe("registerQuery — one declaration per call site", () => {
-  test("returns a runner carrying back exactly the declaration it was given", () => {
-    const decl = declaration({ role: "rm_worker", object: "job_schedules", privileges: ["SELECT", "UPDATE"] });
-    const query = registerQuery(decl);
-    expect(query.declaration).toEqual(decl);
-  });
-
-  test("hands back no route to the underlying client — `run` is the whole surface", () => {
-    const query = registerQuery(declaration());
-    // An escape hatch is how the registry stops being complete (module header),
-    // so the runner exposes the declaration and `run`, and nothing else.
-    expect(Object.keys(query).sort()).toEqual(["declaration", "run"]);
-  });
-
-  test("refuses a second registration of the same site id with a different declaration", () => {
-    const id = site("duplicate");
-    registerQuery(declaration({ site: id, privileges: ["SELECT"] }));
-    expect(() => registerQuery(declaration({ site: id, privileges: ["SELECT", "INSERT"] }))).toThrow(id);
-  });
-
-  test("accepts an identical re-registration of the same site, because it is not ambiguous", () => {
-    const id = site("identical");
-    const decl = declaration({ site: id });
-    const first = registerQuery(decl);
-    const second = registerQuery({ ...decl });
-    expect(second.declaration).toEqual(first.declaration);
-  });
-
-  test("refuses an empty privilege list — a statement needing nothing does not touch the object it named", () => {
-    expect(() => registerQuery(declaration({ privileges: [] }))).toThrow("privileges");
-  });
-
-  test("refuses a schema-qualified object, which would resolve outside `public` through to_regclass", () => {
-    expect(() => registerQuery(declaration({ object: "public.jobs" }))).toThrow("public.jobs");
-  });
-
-  test("refuses a quoted object name", () => {
-    expect(() => registerQuery(declaration({ object: '"jobs"' }))).toThrow("object");
-  });
-
-  test("refuses an object name containing whitespace", () => {
-    expect(() => registerQuery(declaration({ object: "jobs " }))).toThrow("object");
-  });
-});
-
-describe("on — the registered form a call site issues its statement through", () => {
-  /** A stand-in handle that records what it was called with, so the forwarding
-   *  is observed without a database. */
-  function recordingDb() {
-    const calls: { strings: readonly string[]; values: unknown[] }[] = [];
-    const db = ((strings: TemplateStringsArray, ...values: unknown[]) => {
-      calls.push({ strings: [...strings], values });
-      return Promise.resolve([{ ok: 1 }]);
-    }) as unknown as RegistryDb;
-    return { db, calls };
+  /** How many `test(...)` calls the cases file makes — what the child must report. */
+  function declaredCases(): number {
+    const source = ts.createSourceFile(CASES, readFileSync(CASES, "utf8"), ts.ScriptTarget.Latest, true);
+    let count = 0;
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "test") count += 1;
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    return count;
   }
 
-  test("forwards the template and its values to the handle unchanged", async () => {
-    const query = registerQuery(declaration({ site: site("on_forward") }));
-    const { db, calls } = recordingDb();
-    const rows = await on(db, query)<{ ok: number }>`SELECT ${1} AS ok WHERE ${"x"} = ${"x"}`;
-    expect(rows).toEqual([{ ok: 1 }]);
-    expect(calls).toEqual([{ strings: ["SELECT ", " AS ok WHERE ", " = ", ""], values: [1, "x", "x"] }]);
-  });
-
-  test("accepts the declarations of a join's other relations, and refuses one that was never registered", async () => {
-    const samples = registerQuery(declaration({ site: site("on_join_a"), object: "wallet_balance_samples" }));
-    const prices = registerQuery(declaration({ site: site("on_join_b"), object: "asset_prices" }));
-    const { db, calls } = recordingDb();
-    await on(db, samples, prices)`SELECT 1`;
-    expect(calls).toHaveLength(1);
-
-    const forged = { declaration: { ...prices.declaration, site: site("never_registered") }, run: prices.run };
-    expect(() => on(db, samples, forged)).toThrow("unregistered site");
-  });
-
-  // RED CONTROL for the hole the lint cannot see. The structural lint accepts
-  // any tag that is a call of `on`, so a hand-built object shaped like a
-  // RegisteredQuery would run a statement nothing declared. The version this
-  // replaced checked only the joined entries and let the primary through.
-  test("refuses a forged PRIMARY query, and never runs its statement", () => {
-    const { db, calls } = recordingDb();
-    let ran = false;
-    const forged = {
-      declaration: { site: "x" },
-      run: (d: RegistryDb, s: TemplateStringsArray, ...v: unknown[]) => {
-        ran = true;
-        return (d as unknown as (s: TemplateStringsArray, ...v: unknown[]) => Promise<unknown[]>)(s, ...v);
-      },
-    } as never;
-    expect(() => on(db, forged)`SELECT 1`).toThrow("unregistered site");
-    expect(ran).toBe(false);
-    expect(calls).toEqual([]);
-  });
-
-  test("refuses a forgery that copies a REAL site id — identity, not the name, is what is checked", () => {
-    const real = registerQuery(declaration({ site: site("on_identity") }));
-    const { db, calls } = recordingDb();
-    const copied = { declaration: real.declaration, run: real.run } as never;
-    expect(() => on(db, copied)).toThrow("unregistered site");
-    const other = registerQuery(declaration({ site: site("on_identity_join") }));
-    expect(() => on(db, real, { declaration: other.declaration, run: other.run } as never)).toThrow("unregistered site");
-    expect(calls).toEqual([]);
-  });
-});
-
-describe("callers — every declaration names the entry modules that may reach it", () => {
-  // Spec §6.2: "nothing but the admin route writes `swarm_judge_config`". A
-  // statement about a call site can only be asserted from the registry if the
-  // registry records it, so a declaration with no caller is refused rather
-  // than read as "anyone".
-  test("a declaration carries its callers back, frozen", () => {
-    const query = registerQuery(declaration({ callers: ["src/api/routes/swarm-admin", "scripts/swarm-judge-replay"] }));
-    expect(query.declaration.callers).toEqual(["src/api/routes/swarm-admin", "scripts/swarm-judge-replay"]);
-    expect(Object.isFrozen(query.declaration.callers)).toBe(true);
-  });
-
-  test("refuses an empty callers list", () => {
-    expect(() => registerQuery(declaration({ callers: [] }))).toThrow("declared no callers");
-  });
-
-  test("refuses a missing callers field — a JS caller cannot skip the declaration the type demands", () => {
-    const { callers: _omitted, ...rest } = declaration();
-    expect(() => registerQuery(rest as unknown as QueryDeclaration)).toThrow("declared no callers");
-  });
-
-  test("refuses a caller that is not a module id under src/ or scripts/", () => {
-    for (const bad of ["swarm-admin", "src/api/routes/swarm-admin.ts", "/src/api/routes/swarm-admin", "src/", "tests/x", ""]) {
-      expect(() => registerQuery(declaration({ callers: [bad] })), bad).toThrow("caller");
+  test("every interface case passes in a child `bun test`, and every one of them ran", () => {
+    // Run from outside backend/, so the backend bunfig's Postgres preload does
+    // not start for a file that never touches a database.
+    const cwd = mkdtempSync(join(tmpdir(), "rm-registry-cases-"));
+    try {
+      const child = Bun.spawnSync(["bun", "test", CASES], { cwd, env: process.env, stdout: "pipe", stderr: "pipe" });
+      // bun test reports on stderr; read both.
+      const out = `${child.stdout.toString()}\n${child.stderr.toString()}`;
+      const pass = Number(/^\s*(\d+) pass$/m.exec(out)?.[1] ?? -1);
+      const fail = Number(/^\s*(\d+) fail$/m.exec(out)?.[1] ?? -1);
+      expect({ exitCode: child.exitCode, fail }, out).toEqual({ exitCode: 0, fail: 0 });
+      // Non-vacuous: the child ran every case the file declares, so a case
+      // cannot quietly stop running (a `.skip`, a broken describe).
+      expect(declaredCases()).toBeGreaterThan(30);
+      expect(pass).toBe(declaredCases());
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
     }
   });
 
-  test("refuses the same caller twice", () => {
-    expect(() => registerQuery(declaration({ callers: ["src/api/routes/a", "src/api/routes/a"] }))).toThrow("same caller twice");
+  test("no fixture site reaches this process's registry", () => {
+    // What the move buys, asserted: nothing registered by the cases file
+    // (every fixture site id starts `tests/db-registry:`) exists here.
+    expect(registeredSites().filter((d) => d.site.startsWith("tests/db-registry:"))).toEqual([]);
   });
 
-  test("a re-registration that changes only the callers is a DIFFERENT declaration, and is refused", () => {
-    const id = site("callers_changed");
-    registerQuery(declaration({ site: id, callers: ["src/api/routes/swarm-admin"] }));
-    expect(() => registerQuery(declaration({ site: id, callers: ["src/api/routes/swarm-admin", "src/worker/loop"] })))
-      .toThrow(id);
-  });
-});
-
-describe("registeredSites — the enumeration CI reads", () => {
-  test("enumerates every declaration made, in registration order", () => {
-    const first = declaration({ site: site("order_a"), object: "jobs" });
-    const second = declaration({ site: site("order_b"), object: "job_schedules", role: "rm_worker" });
-    registerQuery(first);
-    registerQuery(second);
-
-    const all = registeredSites();
-    const a = all.findIndex((d) => d.site === first.site);
-    const b = all.findIndex((d) => d.site === second.site);
-    expect(a).toBeGreaterThanOrEqual(0);
-    expect(b).toBe(a + 1);
-    expect(all[a]).toEqual(first);
-    expect(all[b]).toEqual(second);
-  });
-
-  test("returns declarations and never the runners, so enumerating cannot execute a call site", () => {
-    registerQuery(declaration({ site: site("no_runner") }));
-    for (const entry of registeredSites()) {
-      expect(entry).not.toHaveProperty("run");
-    }
-  });
-
-  test("returns a frozen array, so a caller cannot edit the evidence check 2 reads", () => {
-    registerQuery(declaration({ site: site("frozen") }));
-    expect(Object.isFrozen(registeredSites())).toBe(true);
-  });
-
-  test("every declared role is one of the four §3 roles — never `doadmin`, never `rm_migrator`", () => {
-    for (const entry of registeredSites()) {
-      expect(TAXONOMY_ROLES).toContain(entry.role);
-    }
-  });
-
-  test("every declared privilege is spelled the way has_table_privilege spells it", () => {
-    const catalog = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
-    for (const entry of registeredSites()) {
-      for (const privilege of entry.privileges) {
-        expect(catalog).toContain(privilege);
+  test("this file registers nothing in-process — a fixture added here would leak again", () => {
+    const self = readFileSync(import.meta.path, "utf8");
+    const source = ts.createSourceFile(import.meta.path, self, ts.ScriptTarget.Latest, true);
+    let calls = 0;
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "registerQuery") {
+        calls += 1;
       }
-    }
-  });
-
-  test("site ids are unique across the whole process", () => {
-    const ids = registeredSites().map((d) => d.site);
-    expect(new Set(ids).size).toBe(ids.length);
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    expect(calls).toBe(0);
   });
 });
 
-describe("requiredPrivileges — the fold check 2 consumes", () => {
-  test("unions every call site's privileges for one role on one relation", () => {
-    registerQuery(declaration({ site: site("fold_read"), role: "rm_app", object: "jobs", privileges: ["SELECT"] }));
-    registerQuery(
-      declaration({ site: site("fold_write"), role: "rm_app", object: "jobs", privileges: ["INSERT", "UPDATE"] }),
-    );
-
-    const byObject = requiredPrivileges().get("rm_app");
-    expect(byObject).toBeDefined();
-    const jobs = byObject?.get("jobs");
-    expect(jobs).toBeDefined();
-    // A union, not a last-writer-wins overwrite: the reader that only SELECTs
-    // and the writer that INSERTs are both real requirements on `jobs`.
-    expect([...(jobs ?? [])].sort()).toEqual(expect.arrayContaining(["INSERT", "SELECT", "UPDATE"]));
-  });
-
-  test("keeps roles apart — rm_worker's declarations never appear under rm_app", () => {
-    const relation = `rm_registry_fold_probe_${++seq}`;
-    registerQuery(declaration({ site: site("role_split"), role: "rm_worker", object: relation, privileges: ["UPDATE"] }));
-
-    const map = requiredPrivileges();
-    expect([...(map.get("rm_worker")?.get(relation) ?? [])]).toEqual(["UPDATE"]);
-    expect(map.get("rm_app")?.get(relation)).toBeUndefined();
-  });
-
-  test("keeps relations apart — a privilege on one table is not required on another", () => {
-    const one = `rm_registry_rel_one_${++seq}`;
-    const two = `rm_registry_rel_two_${++seq}`;
-    registerQuery(declaration({ site: site("rel_one"), object: one, privileges: ["SELECT"] }));
-    registerQuery(declaration({ site: site("rel_two"), object: two, privileges: ["DELETE"] }));
-
-    const byObject = requiredPrivileges().get("rm_app");
-    expect([...(byObject?.get(one) ?? [])]).toEqual(["SELECT"]);
-    expect([...(byObject?.get(two) ?? [])]).toEqual(["DELETE"]);
-  });
-
-  test("never yields an empty privilege set, because registerQuery refuses one", () => {
-    registerQuery(declaration({ site: site("nonempty") }));
-    for (const [, byObject] of requiredPrivileges()) {
-      for (const [, privileges] of byObject) {
-        expect(privileges.size).toBeGreaterThan(0);
-      }
-    }
-  });
-
-  test("covers exactly the (role, relation) pairs registeredSites() names — no more, no fewer", () => {
-    registerQuery(declaration({ site: site("coverage") }));
-    const expected = new Set(registeredSites().map((d) => `${d.role}/${d.object}`));
-    const actual = new Set<string>();
-    for (const [role, byObject] of requiredPrivileges()) {
-      for (const [object] of byObject) actual.add(`${role}/${object}`);
-    }
-    expect(actual).toEqual(expected);
-  });
-});
 
 describe("structural enforcement — a raw sql call outside the interface is detectable", () => {
   // Spec §7.1: "CI forbids raw `sql` outside it, so the registry cannot drift

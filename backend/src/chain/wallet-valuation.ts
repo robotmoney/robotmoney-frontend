@@ -164,6 +164,14 @@ const fallbackSample = registerQuery({
   site: "src/chain/wallet-valuation:recentPersistedPrice.samples",
   purpose: "Read a symbol's newest recent sample price, for the fallback when a live price read fails.",
   callers: ["src/worker/handlers/wallet", "src/worker/handlers/projects"],
+  probe: {
+    statement: `SELECT wbs.price_usd, wbs.amount, wbs.value_usd, wbs.sampled_at FROM wallet_balance_samples wbs
+      WHERE wbs.symbol = $1
+        AND (wbs.price_usd IS NOT NULL OR (wbs.value_usd IS NOT NULL AND wbs.amount IS NOT NULL AND wbs.amount <> 0))
+        AND wbs.sampled_at <= now() AND wbs.provenance <> $2
+      ORDER BY wbs.sampled_at DESC LIMIT 1`,
+    params: ["USDC", "backfilled-quarantined"],
+  },
 });
 
 const fallbackPrice = registerQuery({
@@ -173,6 +181,10 @@ const fallbackPrice = registerQuery({
   site: "src/chain/wallet-valuation:recentPersistedPrice.prices",
   purpose: "Join the settled asset price for the fallback sample's day, which the fallback read LEFT JOINs.",
   callers: ["src/worker/handlers/wallet", "src/worker/handlers/projects"],
+  probe: {
+    statement: "SELECT ap.symbol, ap.price_date, ap.price_usd FROM asset_prices ap WHERE ap.time_basis = $1",
+    params: ["utc-daily-close"],
+  },
 });
 
 async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number; sampledAt: string } | null> {

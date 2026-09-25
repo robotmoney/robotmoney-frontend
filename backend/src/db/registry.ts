@@ -41,7 +41,12 @@
 // site. It can be wrong in both directions — over-declared (the check demands a
 // privilege nobody uses) and under-declared (a statement runs that the registry
 // never mentioned). Only executing the statements under the real role catches
-// the second kind, and that test is W2.8's, not this module's.
+// the second kind, and that test is tests/db-registry-execution.test.ts, not
+// this module. What this module adds for it is the `probe` a declaration
+// carries (see `QueryProbe`): a runnable statement that exercises exactly the
+// declared privileges on the declared object, so the test can run every site
+// as its declared LOGIN role without calling the application function around
+// it.
 //
 // The registry is also NOT an allowlist of grants. Spec §7 check 2: "A grant
 // absent from the registry is not forbidden by that fact alone." See
@@ -146,6 +151,49 @@ export interface QueryDeclaration {
    * can assert the property from the registry itself.
    */
   readonly callers: readonly string[];
+  /**
+   * The statement tests/db-registry-execution.test.ts runs, as `role`, in a
+   * transaction it rolls back, on a disposable database bootstrapped from the
+   * real snapshot (spec §7.1: "execution under each role against a disposable
+   * database is a separate CI test").
+   *
+   * Optional in the TYPE only. The execution test refuses a registered site
+   * with no probe unless the site is on its dated, shrink-only PROBE_PENDING
+   * list, so an omission is a visible backlog entry, never a silent gap.
+   */
+  readonly probe?: QueryProbe;
+}
+
+/** A probe parameter: JSON-safe, because the execution test reads the probes
+ *  out of a child process (the registry is process-global) as JSON. A value
+ *  Postgres needs typed (a jsonb, a timestamp) is passed as text and cast in
+ *  the statement. */
+export type ProbeParam = string | number | boolean | null;
+
+/**
+ * A runnable stand-in for one call site's statement.
+ *
+ * WHY NOT RUN THE CALL SITE ITSELF. The real statement is a template built at
+ * the call site from runtime values, inside an application function that
+ * needs a request, a job or a chain read to reach it. The probe is the same
+ * statement's shape — the same relation, the same kind of access, the same
+ * columns where they matter — written once, next to the declaration it
+ * proves, with sample parameters.
+ *
+ * WHAT "EXACTLY" MEANS. The execution test holds every probe to two things
+ * beyond running as the declared role: it succeeds for a scratch role holding
+ * ONLY the declared privileges on ONLY the declared object, and it fails with
+ * 42501 for that role once any single declared privilege is taken away. So a
+ * probe cannot be `SELECT 1` (which needs nothing), cannot touch a second
+ * relation (a join's other relations have declarations and probes of their
+ * own), and a declaration cannot list a privilege its probe does not use.
+ */
+export interface QueryProbe {
+  /** One DML statement, `$1`-style placeholders, no trailing semicolon. It
+   *  may write: the test rolls every probe back. */
+  readonly statement: string;
+  /** One value per placeholder, in order. */
+  readonly params?: readonly ProbeParam[];
 }
 
 /**
@@ -183,6 +231,9 @@ export interface RegisteredQuery {
  *   - `callers` empty, repeated, or not a module id under `src/` or
  *     `scripts/` — a declaration that names no caller says nothing about who
  *     may reach the statement, and a misspelled one says something false.
+ *   - `probe` present but not one DML statement that names the declared
+ *     object, or with a placeholder count that does not match its params —
+ *     a probe the execution test cannot run faithfully is a false proof.
  *
  * Serves spec §10 W2 "Registry structurally enforced; execution under each role
  * on a disposable database" — this half is the structural one.
@@ -195,6 +246,7 @@ const bySite = new Map<string, RegisteredQuery>();
 export function registerQuery(declaration: QueryDeclaration): RegisteredQuery {
   assertValidObject(declaration);
   assertValidCallers(declaration);
+  assertValidProbe(declaration);
   if (declaration.privileges.length === 0) {
     throw new Error(
       `registry: call site ${declaration.site} declared an empty privileges list on ${declaration.object} — ` +
@@ -333,15 +385,60 @@ function assertValidCallers(declaration: QueryDeclaration): void {
   }
 }
 
+/** The statements a probe may be: DML (TRUNCATE included, which Postgres rolls
+ *  back like any other), because the execution test wraps it in a transaction
+ *  of its own and rolls that back. A probe that opened, ended or re-roled the
+ *  transaction would escape the rollback or run as somebody other than the
+ *  declared role. */
+const PROBE_STATEMENT = /^\s*(?:SELECT|INSERT|UPDATE|DELETE|TRUNCATE|WITH)\b/i;
+const PROBE_PARAM_TYPES = new Set(["string", "number", "boolean"]);
+
+function assertValidProbe(declaration: QueryDeclaration): void {
+  const probe = declaration.probe as Partial<QueryProbe> | undefined;
+  if (probe === undefined) return;
+  const refuse = (why: string): never => {
+    throw new Error(`registry: call site ${declaration.site} declared an unusable probe — ${why} (spec §7.1).`);
+  };
+  const statement = probe.statement;
+  if (typeof statement !== "string" || !PROBE_STATEMENT.test(statement)) {
+    refuse("a probe is one SELECT, INSERT, UPDATE, DELETE, TRUNCATE or WITH statement");
+  }
+  const text = statement as string;
+  if (text.includes(";")) refuse("a probe is ONE statement with no semicolon");
+  if (!new RegExp(`\\b${declaration.object.replace(/\$/g, "\\$")}\\b`, "i").test(text)) {
+    refuse(`its statement never names the declared object ${declaration.object}`);
+  }
+  const params = probe.params ?? [];
+  if (!Array.isArray(params)) refuse("params must be an array");
+  for (const value of params) {
+    if (value !== null && !PROBE_PARAM_TYPES.has(typeof value)) {
+      refuse(`param ${JSON.stringify(value)} is not a string, number, boolean or null`);
+    }
+  }
+  const highest = Math.max(0, ...[...text.matchAll(/\$(\d+)/g)].map((m) => Number(m[1])));
+  if (highest !== params.length) {
+    refuse(`its statement uses ${highest} placeholder(s) but supplies ${params.length} param(s)`);
+  }
+}
+
 function freezeDeclaration(declaration: QueryDeclaration): QueryDeclaration {
-  return Object.freeze({
+  const frozen: QueryDeclaration = {
     role: declaration.role,
     object: declaration.object,
     privileges: Object.freeze([...declaration.privileges]),
     site: declaration.site,
     purpose: declaration.purpose,
     callers: Object.freeze([...declaration.callers]),
-  });
+    ...(declaration.probe
+      ? {
+          probe: Object.freeze({
+            statement: declaration.probe.statement,
+            params: Object.freeze([...(declaration.probe.params ?? [])]),
+          }),
+        }
+      : {}),
+  };
+  return Object.freeze(frozen);
 }
 
 const sameList = (a: readonly string[], b: readonly string[]): boolean =>
@@ -354,7 +451,9 @@ function sameDeclaration(a: QueryDeclaration, b: QueryDeclaration): boolean {
     a.site === b.site &&
     a.purpose === b.purpose &&
     sameList(a.privileges, b.privileges) &&
-    sameList(a.callers, b.callers)
+    sameList(a.callers, b.callers) &&
+    a.probe?.statement === b.probe?.statement &&
+    JSON.stringify(a.probe?.params ?? []) === JSON.stringify(b.probe?.params ?? [])
   );
 }
 

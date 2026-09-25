@@ -54,6 +54,11 @@ const listVisible = registerQuery({
   site: "src/api/routes/comments:listComments",
   purpose: "List a page's visible comments, oldest first, for GET /api/comments.",
   callers: [ROUTE],
+  probe: {
+    statement: `SELECT id, page, author, content, parent_id, status, created_at FROM comments
+      WHERE page = $1 AND status = 'visible' ORDER BY created_at ASC`,
+    params: ["/probe"],
+  },
 });
 
 const readParent = registerQuery({
@@ -63,6 +68,10 @@ const readParent = registerQuery({
   site: "src/api/routes/comments:createComment.parent",
   purpose: "Check that a reply's parent is a visible comment on the same page before inserting it.",
   callers: [ROUTE],
+  probe: {
+    statement: "SELECT page, status FROM comments WHERE id = $1::uuid",
+    params: ["00000000-0000-0000-0000-000000000000"],
+  },
 });
 
 const insertComment = registerQuery({
@@ -73,6 +82,12 @@ const insertComment = registerQuery({
   site: "src/api/routes/comments:createComment.insert",
   purpose: "Insert one anonymous comment (ip stored only as a hash) for POST /api/comments.",
   callers: [ROUTE],
+  probe: {
+    statement: `INSERT INTO comments (page, author, content, parent_id, ip_hash)
+      VALUES ($1, $2, $3, $4::uuid, $5)
+      RETURNING id, page, author, content, parent_id, status, created_at`,
+    params: ["/probe", "probe", "probe comment", null, "probe-ip-hash"],
+  },
 });
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

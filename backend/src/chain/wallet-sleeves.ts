@@ -68,6 +68,13 @@ const sleeveSamples = registerQuery({
   site: "src/chain/wallet-sleeves:computeWalletSleeves.samples",
   purpose: "Read each sleeve wallet's newest non-quarantined sample per symbol for the sleeves payload.",
   callers: ["src/api/routes/dashboards"],
+  probe: {
+    statement: `SELECT DISTINCT ON (wss.symbol) wss.symbol, wss.amount, wss.price_usd, wss.value_usd, wss.provenance, wss.sampled_at
+      FROM wallet_sleeve_samples wss
+      WHERE lower(wss.wallet_address) = lower($1) AND wss.provenance <> $2
+      ORDER BY wss.symbol, wss.sample_date DESC, wss.sampled_at DESC`,
+    params: ["0x0000000000000000000000000000000000000001", "backfilled-quarantined"],
+  },
 });
 
 const sleevePrices = registerQuery({
@@ -77,6 +84,10 @@ const sleevePrices = registerQuery({
   site: "src/chain/wallet-sleeves:computeWalletSleeves.prices",
   purpose: "Join each closed day's settled asset price onto the sleeve samples, which the sleeve read LEFT JOINs.",
   callers: ["src/api/routes/dashboards"],
+  probe: {
+    statement: "SELECT ap.symbol, ap.price_date, ap.price_usd FROM asset_prices ap WHERE ap.time_basis = $1",
+    params: ["utc-daily-close"],
+  },
 });
 
 const defaultWalletSleeveReaders: WalletSleeveReaders = {
