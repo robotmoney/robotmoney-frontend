@@ -404,6 +404,46 @@ describe("§10 W2 — the normal path accepts the state a pass leaves, and no ot
     expect(await stateOf(name)).toEqual(before);
   }, 120_000);
 
+  test("RED CONTROL: a gap AMONG the rows applied after 0063 (0058 recorded, 0057 run through psql with no row) refuses, applying nothing", async () => {
+    // The pass's state, then a resume that went wrong out of band: 0056 by the
+    // runner, 0057's DDL by hand with no ledger row, 0058 by the runner. The
+    // rows before 0063 still equal the baseline, so readIdentityPassRemainder
+    // matches — and 0057 must still refuse, or the runner would apply it a
+    // second time onto a schema that already has it.
+    const name = await copyOf(TEMPLATE, "gapafter");
+    await passShape(name, "production");
+    const step = (file: string) => ({ file, ddl: readFileSync(join(MIGRATIONS_DIR, file), "utf8") });
+    await withDb(name, (db) => applyAsReleaseRunner(db, [step(LOWER_SIX[0]!)]));
+    const owner = connect(name, asOwner);
+    try {
+      await owner.unsafe(step(LOWER_SIX[1]!).ddl);
+    } finally {
+      await owner.end({ timeout: 5 });
+    }
+    await withDb(name, (db) => applyAsReleaseRunner(db, [step(LOWER_SIX[2]!)]));
+    const before = await stateOf(name);
+    expect(before.ledger).toEqual([...BASELINE_FILES, LOWER_SIX[0]!, LOWER_SIX[2]!, IDENTITY_MIGRATION].sort());
+    await expect(operatorRun(name)).rejects.toThrow(
+      `the snapshot embodies ${LOWER_SIX[1]!}, which the ledger does not record although later files are recorded`,
+    );
+    expect(await stateOf(name)).toEqual(before);
+  }, 120_000);
+
+  test("a resume the runner itself left (0056 and 0057 applied after 0063, in order) is accepted and applies the rest", async () => {
+    const name = await copyOf(TEMPLATE, "orderedafter");
+    await passShape(name, "production");
+    await withDb(name, (db) =>
+      applyAsReleaseRunner(
+        db,
+        LOWER_SIX.slice(0, 2).map((file) => ({ file, ddl: readFileSync(join(MIGRATIONS_DIR, file), "utf8") })),
+      ),
+    );
+    const result = await operatorRun(name);
+    expect(result.applied.slice(0, 4)).toEqual(LOWER_SIX.slice(2));
+    expect(result.resumedAfterIdentityPass).toBe(TAG);
+    expect(await stateOf(name)).toEqual({ ledger: HEAD_FILES, table: true, identity: ["production"], manifest: true });
+  }, 180_000);
+
   // A ledger whose rows share 0063's applied_at (one snapshot bootstrap
   // transaction wrote them all) is not a pass's state either: prod-baseline.test.ts's
   // "a ledger that never recorded 0053" case holds that refusal on a

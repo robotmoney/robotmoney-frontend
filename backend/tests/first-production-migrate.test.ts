@@ -93,6 +93,7 @@ const DB = {
   renamed: `rm_fpm_renamed_${suffix}`,
   more: `rm_fpm_more_${suffix}`,
   norow: `rm_fpm_norow_${suffix}`,
+  tablenorow: `rm_fpm_tablenorow_${suffix}`,
 } as const;
 
 function urlFor(database: string, role?: { name: string; password: string }): URL {
@@ -192,6 +193,15 @@ beforeAll(async () => {
     applyAsReleaseRunner(db, [{ file: FIRST_UNSHIPPED, ddl: readFileSync(join(MIGRATIONS_DIR, FIRST_UNSHIPPED), "utf8") }]),
   );
   await withDb(DB.exact, (db) => revokeLoginDefaults(db, LOGIN));
+  // tablenorow — exact, plus a deployment_identity table made out of band:
+  // 0063's DDL with no ledger row and no identity row.
+  await admin.unsafe(`CREATE DATABASE ${DB.tablenorow} TEMPLATE ${DB.exact}`);
+  await withDb(DB.tablenorow, (db) =>
+    db.begin(async (tx) => {
+      await tx.unsafe("SET LOCAL ROLE rm_owner");
+      await tx.unsafe(readFileSync(join(MIGRATIONS_DIR, IDENTITY_MIGRATION), "utf8"));
+    }),
+  );
 
   // §9.1 step 1, through the provisioning login: rm_owner LOGIN with a password
   // the operator will type. And the rm_readonly line the host's ~/.env holds.
@@ -289,6 +299,17 @@ describe("§10 W2 — First production migrate", () => {
     expect(run.screen).toContain(`1 missing (${LAST})`);
     expect(run.screen).toContain(`1 extra (${RENAMED})`);
     await expectRefusedAndUnchanged(DB.renamed, run, before, "gates");
+  });
+
+  test("a deployment_identity table with NO row and the exact baseline ledger refuses at the gates, before any password is asked for", async () => {
+    // Criterion 170 admits the pass only with no table at all. The baseline
+    // predates 0063, so a table with no row was made out of band; the pass
+    // would refuse it under its fence, so the gates refuse it first.
+    const before = await fingerprint(DB.tablenorow);
+    const run = await operator(DB.tablenorow, "prod", typed("y"));
+    expect(run.screen).toContain("deployment_identity exists with no row");
+    expect(run.screen).not.toContain(PASSWORD_PROMPT);
+    await expectRefusedAndUnchanged(DB.tablenorow, run, before, "gates");
   });
 
   test("a missing owner password refuses and changes nothing", async () => {
@@ -399,8 +420,16 @@ describe("§10 W2 — First production migrate", () => {
     const run = await operator(DB.exact, "prod", typed("y"));
     expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-3000) }).toEqual({ code: 0, tail: "" });
     expect(run.screen).not.toContain("FIRST PRODUCTION MIGRATE");
-    const receipt = JSON.parse(readFileSync(run.receiptPath, "utf8")) as { applied: string[]; preIdentity: unknown; identityWritten: unknown };
-    expect(receipt).toMatchObject({ applied: [], preIdentity: null, identityWritten: null });
+    const receipt = JSON.parse(readFileSync(run.receiptPath, "utf8")) as {
+      applied: string[];
+      preIdentity: unknown;
+      identityWritten: unknown;
+      resumedAfterIdentityPass: unknown;
+    };
+    // The rows before 0063 still equal the baseline, but a published manifest
+    // means no resume happened: the receipt must not claim one.
+    expect(receipt).toMatchObject({ applied: [], preIdentity: null, identityWritten: null, resumedAfterIdentityPass: null });
+    expect(run.screen).not.toContain("resumed after the identity-first pass");
   }, 180_000);
 
   test("a second run with no row still refuses: its ledger no longer equals the baseline's", async () => {
