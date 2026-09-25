@@ -14,8 +14,7 @@ import { demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/con
 import { runAgent, enroll, railFromEnv } from "./agent.ts";
 import { resolveAgentModel } from "../model-registry.ts";
 import type { AgentStage, SessionRail } from "./agent.ts";
-import { resolveMemberConcurrency, resolveSmokeCadence, swarmWindowMinutes } from "../smoke-schedule.ts";
-import { InFlightMemo } from "./concurrency.ts";
+import { resolveSmokeCadence, swarmWindowMinutes } from "../smoke-schedule.ts";
 import type { SmokeCadence } from "../smoke-schedule.ts";
 import type { ScenarioInitializer } from "../smoke-mode.ts";
 import { missingSectionLeadIns } from "./inference.ts";
@@ -1293,28 +1292,6 @@ export async function runRegimeClassify(
   );
 }
 
-// ONE regime run per as-of date AT A TIME, shared by every session that asks
-// while it is in flight. With concurrent sessions (SmokeCadence.
-// maxConcurrentSessions) several subjects convene on the same date within
-// seconds of each other, and each used to launch its own analytics-producer
-// container for that date — two regime runs whose regime-store upserts race
-// (no transaction around them). The memo is IN-FLIGHT only, not a cache: once
-// a run settles the next session runs again, exactly as every session did when
-// the driver ran them one at a time, so a one-session-at-a-time driver
-// (production) behaves as before. Keyed by compose project too, so two stacks
-// driven from one process could never share a run.
-const regimeRuns = new InFlightMemo<unknown>();
-
-export function classifyRegimeShared(
-  asof: string,
-  rail: ProducerComposeRail,
-  run: (asof: string, rail: ProducerComposeRail) => Promise<unknown> = runRegimeClassify,
-): Promise<unknown> {
-  const key = `${rail.composeProject}/${asof}`;
-  if (regimeRuns.isInFlight(key)) console.log(`  regime ${asof}: joining the producer run already in flight for this date`);
-  return regimeRuns.run(key, () => run(asof, rail));
-}
-
 // ── Judge role + judge mode live-stack coverage (issue #845) ────────────────
 // `swarm_judge_config.mode` ships `off`, and nothing in `bun smoke` ever
 // granted the per-member `judge` role or flipped the switch — the
@@ -1656,7 +1633,7 @@ export async function runSession(
   // ability to pin a classification to a different day than the sitting — e.g.
   // a session convened just after midnight UTC reading yesterday's snapshot.
   if (sessionIndex > 0) {
-    await classifyRegimeShared(opts?.regimeAsof ?? date, rail);
+    await runRegimeClassify(opts?.regimeAsof ?? date, rail);
   }
 
   // Seed the reference-shaped subject fixtures (subject row + subject snapshot the
@@ -1699,27 +1676,21 @@ export async function runSession(
   // Enroll the no-show (own container + persistent keystore — the harness
   // never generates a key for it), then run present members, each in its OWN
   // container on the member-agent rail.
-  // Per-session member bound: the cadence profile's memberConcurrency, or
-  // SWARM_MAX_CONCURRENCY when the environment sets it (resolveMemberConcurrency
-  // parses it exactly as the old inline `?? 4` did). No-show enrolments ride the
-  // same bound, and — like every member container — the per-member HOME lock in
-  // swarm/agent.ts, so a no-show being enrolled here is never also running in
-  // another session.
-  const limit = resolveMemberConcurrency(cadence, process.env);
   const absent = opts.members.filter((m) => !m.present);
-  await mapSettledWithConcurrency(absent, limit, (m) => enroll(rail, m).catch((err) => {
+  await Promise.all(absent.map((m) => enroll(rail, m).catch((err) => {
     // A failed no-show enrollment must not sink the session: absence is
     // already this member's outcome either way. Logged, never fatal.
     console.log(`  ${m.memberId}: no-show enrollment failed (absent regardless) — ${err instanceof Error ? err.message : err}`);
-  }));
+  })));
   for (const m of absent) onProgress?.({ type: "member", memberId: m.memberId, stage: "absent" });
   const present = opts.members.filter((m) => m.present);
   // Settle so one failed member container cannot freeze the session lifecycle
-  // (#122). Concurrency is preserved at the CONTAINER level: at most `limit`
-  // member containers in flight for this session. Rejected members are
+  // (#122). Concurrency is preserved at the CONTAINER level: at most
+  // SWARM_MAX_CONCURRENCY member containers in flight. Rejected members are
   // honestly absent — the post-publish assertion below verifies the published
   // absent list matches exactly this driver's observed failures, and that at
   // least one take is genuinely live-authored.
+  const limit = Number(process.env.SWARM_MAX_CONCURRENCY ?? 4);
   const settled = await mapSettledWithConcurrency(present, limit, (m) => runAgent(
     rail,
     { ...m, date, subjectId: subject.id, sessionId },

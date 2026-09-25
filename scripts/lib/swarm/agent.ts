@@ -47,7 +47,6 @@ import { DEFAULT_COMPOSE_FILES } from "../../stack/config.ts";
 import { createSwarmSessionArtifactWriter } from "./telemetry.ts";
 import { opencodeTimeoutEnv } from "../opencode-env.ts";
 import { resolveOpenCodeTimeoutMs } from "../../agent/opencode-run.ts";
-import { KeyedMutex } from "./concurrency.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(scriptDir, "..", "..", "..");
@@ -215,36 +214,7 @@ interface MemberRunOpts {
   onStdoutLine?: (line: string) => void;
 }
 
-// ── One container per member at a time (concurrent sessions) ────────────────
-// A member's HOME is ONE read-write volume, and the client inside writes its
-// token and identity files there non-atomically. While the driver ran one
-// session at a time a member could never be in two containers at once; with
-// concurrent sessions (SmokeCadence.maxConcurrentSessions) it could, so every
-// member container — enroll AND participate, which is to say every run a
-// no-show's enrollment makes too — is serialized on the volume it mounts.
-// Keyed by the VOLUME, not the member id, because the volume is the shared
-// thing: an onboarded member's volume has its own name (rail.onboardedHomes).
-//
-// This is also the driver-wide bound on member containers: at most one per
-// volume, i.e. at most the roster size, however many sessions are in flight.
-// SWARM_MAX_CONCURRENCY / SmokeCadence.memberConcurrency is the per-session
-// bound inside that.
-//
-// Module scope on purpose: the lock must span every session the process
-// runs, and the driver is one process.
-const memberHomeLock = new KeyedMutex();
-
 async function runMemberContainer(rail: SessionRail, o: MemberRunOpts) {
-  if (memberHomeLock.isHeld(o.homeVolume)) {
-    console.log(
-      `  ${o.extraEnv.RM_MEMBER_ID ?? "member"}: waiting for its run in another session to finish ` +
-        "(one HOME volume, one container at a time)",
-    );
-  }
-  return memberHomeLock.run(o.homeVolume, () => runMemberContainerUnlocked(rail, o));
-}
-
-async function runMemberContainerUnlocked(rail: SessionRail, o: MemberRunOpts) {
   const runtime = await buildMemberSessionRuntime(rail.repoRoot);
   const memberId = o.extraEnv.RM_MEMBER_ID ?? "unknown-member";
   const sessionId = o.extraEnv.RM_SESSION_ID;
