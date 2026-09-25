@@ -28,7 +28,6 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeDockerRunner, purgeSmokeEvalContainers } from "./lib/smoke-volumes.ts";
-import { removeSmokeAnalyticsToken } from "./lib/smoke-secret.ts";
 import { buildSmokeLifecycleComposeEnv, dbModeFromState } from "./lib/smoke-lifecycle-env.ts";
 import {
   deploymentLockHolder,
@@ -162,11 +161,9 @@ if (r.exitCode !== 0) {
   process.exit(r.exitCode ?? 1);
 }
 
-if (s.analyticsTokenFile) {
-  if (!removeSmokeAnalyticsToken(s.analyticsTokenFile, paths)) {
-    console.warn(`[smoke:down] refused unsafe analytics-token cleanup path: ${s.analyticsTokenFile}`);
-  }
-}
+// The instance's service-token files STAY (smoke spec §5): `--local volume`
+// reattaches this data with the same saved tokens, and the volume's token rows
+// hold their hashes. They are removed only with the instance's state.
 
 if (s.smokeTwinContainer) {
   // AFTER `compose down`, never before: the stack must stop talking to the smoke-twin

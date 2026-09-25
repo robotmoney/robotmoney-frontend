@@ -26,6 +26,7 @@ import {
   buildComposeEnv,
   buildSpawnEnv,
   composeArgs,
+  CONTAINER_TOKEN_HOLDERS,
   composeFilesWithImagesOverride,
   downArgs,
   hostBackendUrl,
@@ -34,6 +35,7 @@ import {
   pgReadyArgs,
   portArgs,
   POSTGRES_CONTAINER_PORT,
+  serviceTokenFile,
   servicesFor,
   upArgs,
   WEBSITE_SERVER_CONTAINER_PORT,
@@ -49,8 +51,8 @@ import { parseComposePortOutput, PortDiscoveryError } from "./ports.ts";
 import { inspectArgs, missingImageRefs, parseImagesOverrideRefs, assertOverrideOutsideCheckout } from "./images.ts";
 import { ensureContractInstallFresh } from "../lib/contract-freshness.ts";
 import { placeSite, WEB_DIR_NAME } from "../lib/smoke-site.ts";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 export type StackPhase = "docker-preflight" | "build" | "postgres" | "migrate" | "services" | "ports" | "health" | "initialize";
 
@@ -174,6 +176,8 @@ export interface Stack {
   waitForPostgres(timeoutMs?: number): Promise<void>;
   waitForHttp(url: string, timeoutMs?: number): Promise<void>;
   migrate(extraEnv?: Record<string, string>, scriptArgs?: string[]): Promise<void>;
+  /** Provision the three service tokens for a throwaway stack's own compose postgres. */
+  provisionTokens(): Promise<void>;
   /** Ask the daemon which host port it published one container port on. */
   publishedPort(service: string, containerPort: number): number;
   /** Both stack ports, queried live and then cached for this handle. */
@@ -185,25 +189,33 @@ export interface Stack {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * A full stack starts the independent analytics producer, so its Docker-secret
- * source must exist and contain a credential before Docker does any work.
- * Core/status/down operations deliberately do not have this requirement.
+ * A `full` stack starts `system-scheduler` and `analytics-producer`, and each
+ * reads its own token file from the instance's state directory (smoke spec §3).
+ * Refuse BEFORE any application service starts when one is missing or empty:
+ * a scheduler started without its file crash-loops on "automation token file
+ * not found", and a boot that let it would report containers up while nothing
+ * could authenticate. Checked after the database half, which is where `bun
+ * smoke` provisions them. Core/status/down operations have no such service.
  */
-export function assertFullStackProducerCredential(cfg: StackConfig): void {
-  if (cfg.profile !== "full") return;
-  const file = cfg.credentials.analyticsTokenFile;
-  if (!file) {
-    throw new Error("full stack profile requires credentials.analyticsTokenFile for the independent analytics producer");
+export function assertContainerTokenFiles(cfg: StackConfig): void {
+  // No instance: compose itself refuses the model before any service starts
+  // (docker-compose.yml spells RM_INSTANCE_STATE_DIR with `:?`), so there is no
+  // file to look for and nothing that could start without one.
+  if (cfg.profile !== "full" || !cfg.instance) return;
+  for (const holder of CONTAINER_TOKEN_HOLDERS) {
+    const file = serviceTokenFile(cfg.instance.stateDir, holder);
+    let value = "";
+    try {
+      value = readFileSync(file, "utf8").trim();
+    } catch (error) {
+      throw new Error(
+        `the ${holder} token file ${file} is not readable (${error instanceof Error ? error.message : String(error)}). ` +
+          "`bun smoke --local blank|dump` provisions it; production and a remote rehearsal target provision it " +
+          "explicitly with `bun scripts/prod-init.ts provision-tokens`.",
+      );
+    }
+    if (!value) throw new Error(`the ${holder} token file ${file} is empty`);
   }
-  let value: string;
-  try {
-    value = readFileSync(file, "utf8").trim();
-  } catch (error) {
-    throw new Error(
-      `full stack analytics producer credential file is not readable: ${file} (${error instanceof Error ? error.message : String(error)})`,
-    );
-  }
-  if (!value) throw new Error(`full stack analytics producer credential file is empty: ${file}`);
 }
 
 function decode(buf: unknown): string {
@@ -533,8 +545,46 @@ export function createStack(
     return hostBackendUrl(discovered.webPort);
   }
 
+  /**
+   * Provision the three service tokens for a THROWAWAY stack — an eval or a
+   * rails test on the stack's own compose postgres — through the one entry
+   * module that writes them (backend/scripts/provision-tokens.ts, its
+   * `stack-superuser` form: that container's superuser, on this host's
+   * loopback). `bun smoke` never comes here: it provisions inside its own
+   * journaled, target-locked preparation. The request carries no secret (the
+   * stack superuser's password is the baked-in, non-secret default).
+   */
+  async function provisionTokens(): Promise<void> {
+    if (!cfg.instance) throw new Error("provisionTokens needs an instance: the token files live in its state directory");
+    if (externalPostgres) throw new Error("provisionTokens is for a stack's own compose postgres; a deployment provisions through bun smoke or prod-init");
+    const requestFile = join(cfg.instance.stateDir, `provision-request-${process.pid}.json`);
+    const resultFile = join(cfg.instance.stateDir, `provision-result-${process.pid}.json`);
+    const request = {
+      instance: cfg.instance.name,
+      stateRoot: dirname(cfg.instance.stateDir),
+      target: { host: "127.0.0.1", port: publishedPort("postgres", POSTGRES_CONTAINER_PORT), database: cfg.database.name, sslmode: "disable" },
+      credentials: { source: "stack-superuser", user: cfg.database.user, password: cfg.database.password },
+      resultFile,
+    };
+    writeFileSync(requestFile, JSON.stringify(request), { mode: 0o600 });
+    emit({ phase: "log", message: "provisioning the three service tokens…" });
+    try {
+      const code = await runtime.run(
+        ["bun", "--no-env-file", join(cfg.repoRoot, "backend", "scripts", "provision-tokens.ts"), "--request", requestFile],
+        defaultIo,
+        join(cfg.repoRoot, "backend"),
+      );
+      const result = existsSync(resultFile) ? (JSON.parse(readFileSync(resultFile, "utf8")) as { ok: boolean; error?: string }) : null;
+      if (code !== 0 || result?.ok !== true) {
+        throw new Error(`service-token provisioning failed: ${result?.error ?? `exit ${code} with no result`}`);
+      }
+    } finally {
+      rmSync(requestFile, { force: true });
+      rmSync(resultFile, { force: true });
+    }
+  }
+
   async function up(upOpts: StackUpOptions = {}): Promise<StackHostPorts> {
-    assertFullStackProducerCredential(cfg);
     assertDockerAvailable();
     // R18 / C-18. Bun COPIES `file:` deps, so `node_modules/@robotmoney/contract`
     // is a point-in-time copy: the rc.1→rc.2 repin moved the checkout past a
@@ -606,6 +656,9 @@ export function createStack(
         // for — this process keeps running long after migrate() returns.
         delete process.env.MIGRATE_DATABASE_URL;
       }
+      // The throwaway stack's own database is now the schema; its services
+      // authenticate with store-issued tokens like every other stack's.
+      if (cfg.instance && !externalPostgres && !upOpts.prepareDatabase) await provisionTokens();
     } else {
       emit({ phase: "migrate", status: "start", detail: "skipped — pass --migrate to run it" });
       emit({ phase: "migrate", status: "done", detail: "skipped" });
@@ -619,6 +672,7 @@ export function createStack(
       throw new Error(`deferred services are not in the ${cfg.profile} profile: ${unknownDeferred.join(", ")}`);
     }
     const rest = services.filter((s) => s !== "postgres" && !requestedDeferred.has(s));
+    assertContainerTokenFiles(cfg);
     await boundary("services");
     emit({ phase: "services", status: "start", detail: rest.join(", ") });
     await composeAsync(upArgs(rest, { noBuild: shippedImages }), "start services");
@@ -700,6 +754,7 @@ export function createStack(
     waitForPostgres,
     waitForHttp,
     migrate,
+    provisionTokens,
     publishedPort,
     hostPorts,
     up,

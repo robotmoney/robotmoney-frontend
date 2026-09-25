@@ -125,7 +125,6 @@ describe("the resolved credential actually reaches the compose child", () => {
     profile: "core",
     composeFiles: DEFAULT_COMPOSE_FILES,
     database: DEFAULT_STACK_DATABASE,
-    credentials: { adminToken: "a", automationToken: "b", analyticsToken: "c" },
     environment: { class: "local", hash: "0123456789" },
     extraComposeEnv,
   });

@@ -679,8 +679,8 @@ async function runOpencode(
       // SCRUBBED environment (issue #361 Phase 0): the subprocess gets the
       // opencodeSpawnEnv allowlist (PATH/HOME/TERM + the single model
       // credential) — never a `process.env` spread, which handed every
-      // member-model subprocess the stack's whole admin credential set
-      // (ADMIN_TOKEN, ANALYTICS_TOKEN, …). OpenCode state stays in this
+      // member-model subprocess every credential the stack's environment
+      // carried. OpenCode state stays in this
       // member container's isolated, persistent HOME.
       { stdout: "pipe", stderr: "pipe", env: buildOpenCodeSpawnEnv(process.env) },
     );

@@ -43,7 +43,6 @@ function stackConfig(env: Record<string, string | undefined>): StackConfig {
     composeFiles: COMPOSE_FILES,
     // smoke-main.ts: an ephemeral data path takes DEFAULT_STACK_DATABASE, no URL.
     database: DEFAULT_STACK_DATABASE,
-    credentials: { adminToken: "a", automationToken: "b", analyticsToken: "c", analyticsTokenFile: "/dev/null" },
     environment: { class: "local", hash: "c32c32c32c" },
     rmEnv: "smoke",
     // smoke-main.ts always hands the stack its instance (smoke spec §1.1).

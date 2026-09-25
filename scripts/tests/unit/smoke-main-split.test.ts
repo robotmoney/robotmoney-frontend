@@ -195,25 +195,29 @@ describe("the process.env.ADMIN_TOKEN global mutation is gone (issue #456)", () 
     expect(offenders).toEqual([]);
   });
 
-  test("the automation token is threaded explicitly to every stack-internal driver", () => {
-    expect(smokeMain).toContain("automationToken,");
+  test("the operator token is threaded explicitly to every stack-internal driver", () => {
+    // In process: read from the instance's own token file (smoke spec §3,
+    // D52: the operator's service token replaces the old env tokens).
+    expect(smokeMain).toContain('const operatorToken = (): string => readServiceToken(paths, "operator");');
+    expect(smokeMain).toContain("operatorToken: operatorToken(),");
     // swarm/session.ts: the in-process consumers the smoke's dynamically
-    // imported driver calls now take an explicit token rather than reading
-    // the (removed) global mutation off process.env in this same process.
+    // imported driver calls take an explicit token rather than reading a
+    // global mutation off process.env in this same process.
     const session = readFileSync(join(libDir, "swarm", "session.ts"), "utf8");
-    expect(session).toContain("getAutomationHeaders(token?: string)");
-    expect(session).toMatch(/export async function admin\(action: string, body: unknown = \{\}, automationToken\?: string\)/);
-    expect(session).toContain("rosterMembers(targetUrl: string = backendUrl(), automationToken?: string)");
-    expect(session).toContain("existingMemberNames(targetUrl: string = backendUrl(), automationToken?: string)");
+    expect(session).toContain("operatorHeaders(token?: string)");
+    expect(session).toMatch(/export async function admin\(action: string, body: unknown = \{\}, operatorToken\?: string\)/);
+    expect(session).toContain("rosterMembers(targetUrl: string = backendUrl(), operatorToken?: string)");
+    expect(session).toContain("existingMemberNames(targetUrl: string = backendUrl(), operatorToken?: string)");
   });
 
-  test("smoke keeps human setup and automation credentials distinct", () => {
-    // Each of these previously relied on `...process.env` already carrying a
-    // value this SAME process had mutated onto itself; each now gets it
-    // explicitly in its own spawn env object.
-    expect(smokeMain).toContain("const automationToken = credentials.automationToken;");
-    expect(smokeMain).not.toContain("AUTOMATION_TOKEN: adminPassword");
-    expect((smokeMain.match(/AUTOMATION_TOKEN: automationToken/g) ?? []).length).toBeGreaterThanOrEqual(4);
+  test("a child gets the operator token's PATH, never a token value, and no retired token name", () => {
+    // Each child that makes admin calls gets `RM_OPERATOR_TOKEN_FILE` in its
+    // own spawn env object, never a value this SAME process mutated onto
+    // itself, and never one of the retired env tokens.
+    expect((smokeMain.match(/\.\.\.operatorTokenEnv\(\)/g) ?? []).length).toBeGreaterThanOrEqual(4);
+    for (const retired of ["ADMIN_TOKEN", "AUTOMATION_TOKEN", "ANALYTICS_TOKEN", "generateStackCredentials"]) {
+      expect({ retired, found: smokeMain.includes(retired) }).toEqual({ retired, found: false });
+    }
   });
 });
 

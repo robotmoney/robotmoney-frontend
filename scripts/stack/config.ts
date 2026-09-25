@@ -18,6 +18,7 @@
 //   3. Nothing here has an inference-off, injection, or skip affordance
 //      (D22 §11.3 E2). A missing dependency is the caller's problem to throw
 //      about, never something this layer papers over.
+import { join } from "node:path";
 import type { RmEnv } from "../../backend/src/acceptance-path.ts";
 import {
   ENV_CLASS_COMPOSE_VAR,
@@ -227,26 +228,27 @@ export function hostBackendUrl(port: number): string {
   return `http://127.0.0.1:${port}`;
 }
 
-// ── Credentials ─────────────────────────────────────────────────────────────
-export interface StackCredentials {
-  // Guards the /admin task-queue dashboard (X-Admin-Token) and every swarm
-  // admin route. Fresh per stack.
-  adminToken: string;
-  automationToken: string;
-  // Analytics-provider bearer (issue #106): the api verifies it, the worker
-  // submits with it. Fresh per stack, never printed anywhere.
-  analyticsToken: string;
-  /** Optional host path mounted as a Docker secret; avoids placing the token in child env. */
-  analyticsTokenFile?: string;
-}
+// ── Service tokens ──────────────────────────────────────────────────────────
+// NOT A CONFIG FIELD (smoke-production spec §3, D52). A stack carries no
+// service credential of any kind: the operator's admin token, the analytics
+// producer's and the scheduler's are each a row in the api's automation-token
+// store plus a per-holder file in the instance's state directory
+// (`tokens/<holder>/token`, scripts/lib/smoke-state.ts). docker-compose.yml
+// mounts each holder's own directory into that holder's container and hands the
+// api nothing. So there is nothing here to generate and nothing for
+// buildComposeEnv() to emit: the file under RM_INSTANCE_STATE_DIR is the whole
+// delivery.
 
-// A FUNCTION, called by the caller — never executed on import (invariant 1).
-export function generateStackCredentials(): StackCredentials {
-  return {
-    adminToken: crypto.randomUUID().replace(/-/g, "").slice(0, 20),
-    automationToken: crypto.randomUUID().replace(/-/g, "").slice(0, 20),
-    analyticsToken: crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, ""),
-  };
+/**
+ * The holders whose token file a `full` stack's containers mount: compose
+ * mounts each one's own directory into that holder (and the producer's into
+ * the worker's analytics client). The operator's never enters a container.
+ */
+export const CONTAINER_TOKEN_HOLDERS = ["system-scheduler", "analytics-producer"] as const;
+
+/** `tokens/<holder>/token` under an instance's state directory (smoke-state.ts `InstancePaths.tokenFiles`). */
+export function serviceTokenFile(stateDir: string, holder: "system-scheduler" | "analytics-producer" | "operator"): string {
+  return join(stateDir, "tokens", holder, "token");
 }
 
 // ── Config object ───────────────────────────────────────────────────────────
@@ -262,7 +264,6 @@ export interface StackConfig {
   // has to be filled in before the daemon is asked.
   composeFiles: string[];
   database: StackDatabase;
-  credentials: StackCredentials;
   // WHICH ENVIRONMENT started this stack (scripts/stack/naming.ts). REQUIRED,
   // not optional: it is the input to both the compose project name AND the
   // labels every container carries, and an optional field is one a spawner
@@ -377,11 +378,6 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
       throw new Error(`${key} must not be passed through extraComposeEnv; it comes from StackConfig.instance.`);
     }
   }
-  if (cfg.profile === "full" && !cfg.credentials.analyticsTokenFile) {
-    throw new Error(
-      "full stack profile requires credentials.analyticsTokenFile for the independent analytics producer",
-    );
-  }
   return {
     SMOKE_PROJECT: cfg.project,
     // The environment labels every smoke-overlay service and the pgdata volume
@@ -395,10 +391,8 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
     // The pipeline worker's credential (docker-compose.yml x-worker-env hands it
     // to BOTH of the worker's pools, with no fallback to the api's).
     WORKER_DATABASE_URL: cfg.database.roleUrls?.worker ?? internalDatabaseUrl(cfg.database),
-    ADMIN_TOKEN: cfg.credentials.adminToken,
-    AUTOMATION_TOKEN: cfg.credentials.automationToken,
-    ANALYTICS_TOKEN: cfg.credentials.analyticsTokenFile ? "" : cfg.credentials.analyticsToken,
-    ANALYTICS_TOKEN_FILE_HOST: cfg.credentials.analyticsTokenFile ?? "/dev/null",
+    // No service token of any kind (smoke spec §3): each holder's token is a
+    // file under RM_INSTANCE_STATE_DIR, mounted into that holder alone.
     // No WEB_PORT / POSTGRES_PORT. They were compose interpolation OUTPUTS
     // right up until the compose files stopped naming a host port at all
     // (`ports: ["8787"]` / `["5432"]` — Docker assigns the host side). Emitting

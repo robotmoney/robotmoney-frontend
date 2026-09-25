@@ -45,23 +45,38 @@
 //     rehearsal target, §5), through {@link provisionServiceTokens} with the
 //     owner password the operator typed. That caller takes the target lock
 //     itself.
-import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { urlForRole } from "../../scripts/lib/env-role.ts";
 import { instancePaths, readRolePasswords, SERVICE_TOKEN_HOLDERS, type ServiceTokenHolder } from "../../scripts/lib/smoke-state.ts";
 import type { HeldTargetLock, LockHolder } from "../src/db/target-lock.ts";
 
-/** The request `bun smoke` hands the direct-run form. No secret travels in it. */
+/**
+ * The request the direct-run form takes, from RM_PROVISION_REQUEST or from the
+ * JSON file named by `--request <file>`. No secret travels in it.
+ */
 export interface ProvisionRequest {
   /** The deployment instance (§1.1): the `automation_tokens.instance` value and the state directory's name. */
   readonly instance: string;
   /** The absolute state root; the token files go under `<stateRoot>/<instance>/tokens/`. */
   readonly stateRoot: string;
-  /** How the host reaches the local Postgres the boot owns. */
+  /** How the host reaches the local Postgres. */
   readonly target: { readonly host: string; readonly port: number; readonly database: string; readonly sslmode: string };
-  /** The boot's session target lock, proven held before the write. */
-  readonly lock: { readonly backendPid: number; readonly holder: LockHolder };
+  /**
+   * Whose credential writes the rows.
+   *   `instance` (the default): a Postgres `bun smoke` owns — rm_owner and
+   *     rm_readonly from the instance's generated role passwords (§5). The
+   *     boot's session target lock is required and proven held.
+   *   `stack-superuser`: a throwaway compose stack's own `postgres` superuser
+   *     (scripts/stack's DEFAULT_STACK_DATABASE, not a secret: that container
+   *     is reachable only on this host's loopback). What an eval or a rails
+   *     test stack uses; it is refused for any host but loopback, so it can
+   *     never reach a deployment's database.
+   */
+  readonly credentials?: { readonly source: "instance" } | { readonly source: "stack-superuser"; readonly user: string; readonly password: string };
+  /** The caller's session target lock, proven held before the write. Required for `instance`. */
+  readonly lock?: { readonly backendPid: number; readonly holder: LockHolder };
   readonly resultFile: string;
 }
 
@@ -142,22 +157,43 @@ function stageSecret(destination: string, secret: string): string {
   return temp;
 }
 
-/** The direct-run form: `bun smoke`'s local preparation. */
-async function main(request: ProvisionRequest): Promise<ProvisionResult> {
-  const paths = instancePaths(request.stateRoot, request.instance);
-  const passwords = readRolePasswords(paths);
+/** Loopback only: the one kind of host a `stack-superuser` request may name. */
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+/** The owner and reader URLs a request names, from the instance's passwords or a throwaway stack's superuser. */
+function requestUrls(request: ProvisionRequest): { ownerUrl: string; readerUrl: string } {
   const connection = {
     host: request.target.host,
     port: String(request.target.port),
     database: request.target.database,
     sslmode: request.target.sslmode,
   };
+  const credentials = request.credentials ?? { source: "instance" as const };
+  if (credentials.source === "stack-superuser") {
+    if (!LOOPBACK.has(request.target.host)) {
+      throw new Error(`a stack-superuser request provisions only a throwaway stack on this host's loopback, not ${request.target.host}`);
+    }
+    const url = urlForRole({ ...connection, [credentials.user]: credentials.password }, credentials.user);
+    if (!url) throw new Error("the stack-superuser request names no usable connection");
+    return { ownerUrl: url, readerUrl: url };
+  }
+  const passwords = readRolePasswords(instancePaths(request.stateRoot, request.instance));
   const readerUrl = urlForRole({ ...connection, rm_readonly: passwords.rm_readonly }, "rm_readonly");
   const ownerUrl = urlForRole({ ...connection, rm_owner: passwords.rm_owner }, "rm_owner");
   if (!readerUrl || !ownerUrl) throw new Error("the instance's role passwords do not name rm_readonly and rm_owner");
-  // backend/src/config.ts validates at IMPORT: DATABASE_URL is the read-only
-  // role, which can write nothing. The owner credential never enters the
-  // environment.
+  return { ownerUrl, readerUrl };
+}
+
+/** The direct-run form: `bun smoke`'s local preparation, or a throwaway stack's. */
+async function main(request: ProvisionRequest): Promise<ProvisionResult> {
+  const paths = instancePaths(request.stateRoot, request.instance);
+  const { ownerUrl, readerUrl } = requestUrls(request);
+  if ((request.credentials?.source ?? "instance") === "instance" && !request.lock) {
+    throw new Error("a boot's provisioning runs only under the boot's target lock, and this request names none");
+  }
+  // backend/src/config.ts validates at IMPORT. For an instance this is the
+  // read-only role, which can write nothing; the owner credential never
+  // enters the environment.
   process.env.DATABASE_URL = readerUrl;
   process.env.WORKER_DATABASE_URL = readerUrl;
   process.env.RM_ENV = "stage";
@@ -165,7 +201,7 @@ async function main(request: ProvisionRequest): Promise<ProvisionResult> {
   const { observeTargetLock } = await import("../src/db/target-lock.ts");
   const reader = postgres(readerUrl, { max: 1, onnotice: () => {} });
   try {
-    const lock = observeTargetLock(reader, request.lock.backendPid, request.lock.holder);
+    const lock = request.lock ? observeTargetLock(reader, request.lock.backendPid, request.lock.holder) : undefined;
     const result = await provisionServiceTokens({ ownerUrl, instance: request.instance, tokenFiles: paths.tokenFiles, lock });
     return { ok: true, ...result };
   } finally {
@@ -173,14 +209,22 @@ async function main(request: ProvisionRequest): Promise<ProvisionResult> {
   }
 }
 
+/** The request from `--request <file>`, else RM_PROVISION_REQUEST, else null. */
+function readRequest(argv: readonly string[], env: Record<string, string | undefined>): ProvisionRequest | null {
+  const at = argv.indexOf("--request");
+  if (at >= 0 && argv[at + 1]) return JSON.parse(readFileSync(argv[at + 1]!, "utf8")) as ProvisionRequest;
+  return JSON.parse(env.RM_PROVISION_REQUEST ?? "null") as ProvisionRequest | null;
+}
+
 if (import.meta.main) {
   // A terminal's Ctrl-C is the boot's to honour at its next phase boundary,
   // never this step's to die of halfway through a fenced write.
   process.on("SIGINT", () => {});
-  const request = JSON.parse(process.env.RM_PROVISION_REQUEST ?? "null") as ProvisionRequest | null;
+  let request: ProvisionRequest | null = null;
   let result: ProvisionResult;
   try {
-    if (request === null) throw new Error("RM_PROVISION_REQUEST is not set; this process is started by `bun smoke`");
+    request = readRequest(process.argv.slice(2), process.env);
+    if (request === null) throw new Error("no request: pass `--request <file>` or RM_PROVISION_REQUEST (this process is started by `bun smoke`)");
     result = await main(request);
   } catch (error) {
     result = { ok: false, error: error instanceof Error ? error.message : String(error) };

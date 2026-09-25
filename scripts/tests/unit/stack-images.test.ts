@@ -32,7 +32,7 @@ import {
   saveArgs,
 } from "../../stack/images.ts";
 import { decideImagesOverride } from "../../lib/smoke-images-override.ts";
-import { upArgs, DEFAULT_STACK_DATABASE, generateStackCredentials, type StackConfig } from "../../stack/config.ts";
+import { upArgs, DEFAULT_STACK_DATABASE, type StackConfig } from "../../stack/config.ts";
 import { createStack, type StackRuntime } from "../../stack/stack.ts";
 
 const TAG = "v0.5.0-rc.3";
@@ -130,14 +130,12 @@ function recordingRuntime(opts: { inspectOk?: boolean } = {}): { runtime: StackR
 }
 
 function configWith(imagesOverride: string, repoRoot: string): StackConfig {
-  const credentials = generateStackCredentials();
   return {
     repoRoot,
     project: "rm_images_test",
     profile: "core",
     composeFiles: ["docker-compose.yml", "docker-compose.smoke.yml"],
     database: DEFAULT_STACK_DATABASE,
-    credentials,
     environment: { class: "ci", hash: "deadbeef" },
     imagesOverride,
   };

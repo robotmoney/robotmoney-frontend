@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 
 // ── Live-backend admin contract check (issue #185) ──────────────────────────
@@ -21,24 +22,28 @@ import { expect, test, type Page } from "@playwright/test";
 // reads matches what the live backend actually sends.
 
 // ── Loud-skip guard (test-coverage-policy.md invariant 1) ──────────────────
-// scripts/lib/smoke-main.ts always exports BACKEND_URL + ADMIN_TOKEN into the
-// spawn env of `bun run test:browser` (the required e2e job's "browser
-// checks" step) — see its `run(["bun","run","test:browser"], …,
-// { ...process.env, BACKEND_URL: backendUrl, ADMIN_TOKEN: adminPassword }, …)`
-// call. If either is missing here, this spec must fail loudly at module load
-// — never silently skip every test in this file (which would print a false
-// "0 failed" green while asserting nothing).
+// scripts/lib/smoke-main.ts always exports BACKEND_URL and RM_OPERATOR_TOKEN_FILE
+// into the spawn env of `bun run test:browser` (the required e2e job's
+// "browser checks" step) — see its `run(["bun","run","test:browser"], …,
+// { ...process.env, BACKEND_URL: backendUrl, ...operatorTokenEnv() }, …)` call.
+// The operator's service token (smoke spec §3, D52: it replaces the old admin
+// env token) is a FILE; only its path travels in the environment. If either is
+// missing here, this spec must fail loudly at module load — never silently
+// skip every test in this file (which would print a false "0 failed" green
+// while asserting nothing).
 const BACKEND_URL = process.env.BACKEND_URL;
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
-if (!BACKEND_URL || !ADMIN_TOKEN) {
+const OPERATOR_TOKEN_FILE = process.env.RM_OPERATOR_TOKEN_FILE;
+if (!BACKEND_URL || !OPERATOR_TOKEN_FILE) {
   throw new Error(
-    "admin-live.spec.ts requires BACKEND_URL and ADMIN_TOKEN in the environment " +
+    "admin-live.spec.ts requires BACKEND_URL and RM_OPERATOR_TOKEN_FILE in the environment " +
       "to exercise the live admin backend (test-coverage-policy.md invariant 1: " +
       "loud-skip, never silent-skip) — refusing an all-skip false-green run. " +
       "Run via `bun run scripts/smoke.ts` (or set both env vars manually before " +
       "`bunx playwright test frontend/test/browser/admin-live.spec.ts`).",
   );
 }
+/** The operator's token, read when the setup claim needs it (the file exists only on a live smoke). */
+const operatorToken = (): string => readFileSync(OPERATOR_TOKEN_FILE, "utf8").trim();
 
 // The smoke starts unclaimed so the test itself performs its one-time setup
 // claim. Keep the durable credential distinct from the ephemeral setup token:
@@ -54,7 +59,7 @@ test.beforeAll(async ({ request }) => {
 
   if (!claimed) {
     const claim = await request.post("/api/admin/claim", {
-      headers: { "X-Admin-Token": ADMIN_TOKEN },
+      headers: { "X-Admin-Token": operatorToken() },
       data: { password: ADMIN_PASSWORD },
     });
     expect(claim.ok()).toBe(true);

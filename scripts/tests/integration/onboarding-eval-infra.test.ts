@@ -61,15 +61,14 @@ import {
   createStack,
   DEFAULT_COMPOSE_FILES,
   DEFAULT_STACK_DATABASE,
-  generateStackCredentials,
   resolveStackEnvironment,
   stackProjectName,
   type Stack,
-  type StackCredentials,
   type StackEnvironment,
 } from "../../stack/index.ts";
 import { makeDockerRunner, purgeSmokeEvalContainers } from "../../lib/smoke-volumes.ts";
 import { throwawayInstance } from "../../lib/smoke-state.ts";
+import { readServiceToken } from "../../lib/smoke-secret.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -95,7 +94,8 @@ const TEST_TIMEOUT_MS = 2 * 60_000;
 // compose call — so merely importing this file costs nothing. All of it happens
 // in the beforeAll below.
 let stack: Stack | null = null;
-let stackCredentials: StackCredentials | null = null;
+/** The operator's service token, read from the throwaway instance once up() provisioned it. */
+let operatorToken: string | null = null;
 // The compose file requires an instance state directory outside the checkout
 // (RM_INSTANCE_STATE_DIR; smoke spec §1.1); a rails check gets a throwaway one.
 let stackInstance: ReturnType<typeof throwawayInstance> | null = null;
@@ -122,7 +122,6 @@ function unreachableDaemonStack(): Stack {
       profile: "core",
       composeFiles: DEFAULT_COMPOSE_FILES,
       database: DEFAULT_STACK_DATABASE,
-      credentials: generateStackCredentials(),
       environment,
     },
     { hostEnv: { PATH: process.env.PATH, DOCKER_HOST: "tcp://127.0.0.1:1" } },
@@ -142,7 +141,6 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     // would only slow this "fast, cheap" check down for nothing. (D21: no mcp
     // service — the swarm surface is the api's REST API.)
     const environment = infraEnvironment();
-    stackCredentials = generateStackCredentials();
     stackInstance = throwawayInstance(stackProjectName("infra", environment));
     stack = createStack(
       {
@@ -154,7 +152,6 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         profile: "core",
         composeFiles: DEFAULT_COMPOSE_FILES,
         database: DEFAULT_STACK_DATABASE,
-        credentials: stackCredentials,
         environment,
         instance: { name: stackInstance.name, stateDir: stackInstance.stateDir },
       },
@@ -165,6 +162,10 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     // answers.
     await stack.up();
     await stack.waitForHttp(`${stack.backendUrl}${ROUTES.swarm.members}`, 30_000);
+    // up() provisioned the three service tokens on the stack's own database
+    // (scripts/stack/stack.ts provisionTokens); the admin calls below present
+    // the operator's, which carries the `admin` right (smoke spec §3).
+    operatorToken = readServiceToken(stackInstance.paths, "operator");
 
     // Build (never run yet — that's the inference-off "container starts" test
     // below) the member-agent image now so its cost is paid once in beforeAll,
@@ -453,7 +454,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-Automation-Token": stackCredentials!.automationToken,
+            "X-Automation-Token": operatorToken!,
           },
           body: JSON.stringify({ decision: "approve" }),
         });
@@ -525,7 +526,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
-                  "X-Automation-Token": stackCredentials!.automationToken,
+                  "X-Automation-Token": operatorToken!,
                 },
                 body: JSON.stringify(input),
               },
@@ -731,7 +732,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         composeSpawnEnv: stack!.spawnEnv,
         modelConfig: keyless,
         backendUrl: stack!.backendUrl,
-        automationToken: stackCredentials!.automationToken,
+        automationToken: operatorToken!,
       };
       const identity = await ensureMemberIdentity(rail, { memberId, name: "Rails Check", lens: "infra" });
       expect(typeof identity.freshToken).toBe("string");

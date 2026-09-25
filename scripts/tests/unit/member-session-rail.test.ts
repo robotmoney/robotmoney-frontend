@@ -6,7 +6,7 @@
 // present member's take is containerized there and asserted post-publish by
 // assertAuthoredTakes).
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -153,6 +153,11 @@ describe("railFromEnv — the standalone session driver's rail resolution", () =
   });
 
   test("resolves project, compose files, and a defined-only spawn env", () => {
+    // The operator's token reaches the rail as a FILE the env names (smoke
+    // spec §3), never as an env value.
+    const tokenDir = mkdtempSync(join(tmpdir(), "rm-rail-operator-"));
+    const tokenFile = join(tokenDir, "token");
+    writeFileSync(tokenFile, "operator-token\n", { mode: 0o600 });
     const rail = railFromEnv({
       SMOKE_PROJECT: "rm_ci_stack_y",
       COMPOSE_FILE: "docker-compose.yml:docker-compose.smoke.yml",
@@ -161,13 +166,14 @@ describe("railFromEnv — the standalone session driver's rail resolution", () =
       // smoke stack's compose env, so it carries one. Unset would be the
       // acceptance path, where `free` is refused — see the RM_ENV cases below.
       RM_ENV: "smoke",
-      AUTOMATION_TOKEN: "automation-token",
+      RM_OPERATOR_TOKEN_FILE: tokenFile,
       UNDEF: undefined,
     });
+    rmSync(tokenDir, { recursive: true, force: true });
     expect(rail.composeProject).toBe("rm_ci_stack_y");
     expect(rail.composeFiles).toEqual(["docker-compose.yml", "docker-compose.smoke.yml"]);
     expect("UNDEF" in rail.composeSpawnEnv).toBe(false);
-    expect(rail.automationToken).toBe("automation-token");
+    expect(rail.operatorToken).toBe("operator-token");
     // Keyless selection resolves with no credential — DEVELOPMENT only. This is
     // the contrast case for the two refusals below: it is legal here precisely
     // because nothing about this environment claims its output is evidence.

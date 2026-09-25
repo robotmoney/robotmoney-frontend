@@ -71,7 +71,7 @@ services:
       WORKER_LANE: research
 
   # Independent external producer (issue #361 Phase 4): no DATABASE_URL, no
-  # queue access, no ADMIN_TOKEN.
+  # queue access, no admin right.
   analytics-producer:
     image: robotmoney/robotmoney-producer:stack
     command: ["bun", "run", "src/producer/index.ts", "serve"]
@@ -81,7 +81,7 @@ services:
       # is a file placed in the instance's state directory, named per instance
       # and per holder, and mounted read-only, the same shape docker-compose.yml
       # gives system-scheduler. producer/index.ts accepts ANALYTICS_TOKEN_FILE.
-      # A plain ANALYTICS_TOKEN put the secret in the container's environment,
+      # A plain env var would put the secret in the container's environment,
       # where every `docker inspect` shows it.
       # `token` is TOKEN_FILE_NAME (scripts/lib/smoke-state.ts), the one file in
       # the producer's own token directory mounted below.

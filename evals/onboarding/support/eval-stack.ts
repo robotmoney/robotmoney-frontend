@@ -17,7 +17,6 @@ import {
   DEFAULT_COMPOSE_FILES,
   DEFAULT_STACK_DATABASE,
   dockerClientHostEnv,
-  generateStackCredentials,
   resolveStackEnvironment,
   type Stack,
 } from "../../../scripts/stack/index.ts";
@@ -50,7 +49,6 @@ export function imageOnlyStack(project: string): Stack {
       profile: "core",
       composeFiles: DEFAULT_COMPOSE_FILES,
       database: DEFAULT_STACK_DATABASE,
-      credentials: generateStackCredentials(),
       environment: resolveStackEnvironment({}),
       instance: { name: instance.name, stateDir: instance.stateDir },
     },

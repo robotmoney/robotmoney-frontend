@@ -9,6 +9,7 @@
  */
 import { canonicalizeSubmission, path as routePath, RECEIPT_CANONICAL_BUCKET_ORDER, ROUTES } from "@robotmoney/contract";
 import type { SwarmBrief, SwarmSession, SwarmTake } from "@robotmoney/contract";
+import { requireOperatorToken } from "./lib/operator-token.ts";
 
 // D21 retired the MCP transport (docs/decisions.md D21); REST is the only
 // transport. The type is kept (single-valued) so the exported signing helpers
@@ -348,12 +349,12 @@ function parseTransport(argv: string[]): StarterTransport {
   return "rest";
 }
 
-async function adminJson<T>(backendUrl: string, automationToken: string, action: string, body: unknown): Promise<T> {
+async function adminJson<T>(backendUrl: string, operatorToken: string, action: string, body: unknown): Promise<T> {
   return restJson<T>(backendUrl, routePath(ROUTES.swarm.admin.action, { action }), `starter e2e ${action}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Automation-Token": automationToken,
+      "X-Automation-Token": operatorToken,
     },
     body: JSON.stringify(body),
   });
@@ -362,7 +363,7 @@ async function adminJson<T>(backendUrl: string, automationToken: string, action:
 async function e2eCredentials(
   transport: StarterTransport,
   backendUrl: string,
-  automationToken: string,
+  operatorToken: string,
 ): Promise<StarterCredentials> {
   const memberId = `starter-${transport}`;
   const keys = (await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"])) as CryptoKeyPair;
@@ -375,7 +376,7 @@ async function e2eCredentials(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Automation-Token": automationToken,
+        "X-Automation-Token": operatorToken,
       },
       body: JSON.stringify({
         memberId,
@@ -389,7 +390,7 @@ async function e2eCredentials(
   return { memberId, memberToken: registered.token, privateKey: keys.privateKey };
 }
 
-async function ensureE2eOpenSession(backendUrl: string, automationToken: string): Promise<void> {
+async function ensureE2eOpenSession(backendUrl: string, operatorToken: string): Promise<void> {
   const open = await restJson<StarterSession | null>(
     backendUrl,
     ROUTES.swarm.openSession,
@@ -405,22 +406,29 @@ async function ensureE2eOpenSession(backendUrl: string, automationToken: string)
   // 409 is "already there", which is all this needs.
   const created = await fetch(`${backendUrl}${ROUTES.swarm.admin.subjects}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Automation-Token": automationToken },
-    body: JSON.stringify({ ...subject, recommendationType: "position_actions" }),
+    headers: { "Content-Type": "application/json", "X-Automation-Token": operatorToken },
+    body: JSON.stringify({ ...subject, recommendationType: "position_actions", epochDuration: STARTER_EPOCH_SECONDS }),
   });
   if (created.status !== 201 && created.status !== 409) {
     throw new Error(`starter e2e subject create failed with HTTP ${created.status}: ${await created.text()}`);
   }
-  await adminJson(backendUrl, automationToken, "subject_fixtures", { ...subject, date });
-  // §4.1: one call creates the session, publishes its brief and sets its
-  // window on the subject's grid.
-  const opened = await restJson<{ sessionId?: string }>(backendUrl, ROUTES.swarm.admin.epochOpen, "starter e2e epoch open", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Automation-Token": automationToken },
-    body: JSON.stringify({ subjectId: subject.id }),
-  });
-  if (!opened.sessionId) throw new Error("starter e2e epochs/open returned no session id");
+  await adminJson(backendUrl, operatorToken, "subject_fixtures", { ...subject, date });
+  // §4.1: the SCHEDULER opens the epoch, from the subject's `subject.changed`.
+  // Nothing but system-scheduler calls an epoch transition (D55 (4)), so this
+  // waits for it to, on the public read, for at most one epoch.
+  const deadline = Date.now() + STARTER_EPOCH_SECONDS * 1000;
+  for (;;) {
+    const now = await restJson<StarterSession | null>(backendUrl, ROUTES.swarm.openSession, "discover starter e2e session");
+    if (now) return;
+    if (Date.now() >= deadline) {
+      throw new Error(`starter e2e: the scheduler opened no epoch within ${STARTER_EPOCH_SECONDS}s of creating subject ${subject.id}`);
+    }
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
 }
+
+/** The starter subject's epoch, when this exercise has to create it: short, so the scheduler opens it promptly. */
+const STARTER_EPOCH_SECONDS = 300;
 
 async function main(): Promise<void> {
   const transport = parseTransport(process.argv.slice(2));
@@ -429,9 +437,11 @@ async function main(): Promise<void> {
 
   let credentials: StarterCredentials;
   if (e2e) {
-    const automationToken = requiredEnv("AUTOMATION_TOKEN");
-    await ensureE2eOpenSession(backendUrl, automationToken);
-    credentials = await e2eCredentials(transport, backendUrl, automationToken);
+    // The operator's service token (smoke spec §3), read from the file
+    // RM_OPERATOR_TOKEN_FILE names — refused, loudly, when it is not set.
+    const operatorToken = requireOperatorToken(process.env);
+    await ensureE2eOpenSession(backendUrl, operatorToken);
+    credentials = await e2eCredentials(transport, backendUrl, operatorToken);
   } else {
     credentials = {
       memberId: requiredEnv("SWARM_MEMBER_ID"),
