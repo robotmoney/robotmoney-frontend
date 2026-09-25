@@ -63,6 +63,222 @@ import {
   type V0Snapshot,
   type V0Brief,
 } from "../src/swarm/v0-archive.ts";
+import { on, registerQuery } from "../src/db/registry.ts";
+
+// ── Registered queries (smoke-production-spec.md §7.1) ─────────────────────
+//
+// The backfill runs on the credential that migrates: prod-bootstrap calls it
+// as its second step, holding `rm_owner`, and the direct run
+// (`bun run v0-seed:bootstrap`) is the same operator action. So every site
+// declares `rm_owner`. Every table here is append-only; nothing below deletes.
+// Each INSERT probe inserts from a query yielding no row, which still needs
+// (and is checked for) INSERT on every listed column without inventing the
+// foreign keys a real row would need.
+const BOOTSTRAP_CALLERS = ["scripts/v0-seed-bootstrap", "scripts/prod-bootstrap"];
+const SAMPLE_ID = "00000000-0000-0000-0000-000000000000";
+
+const memberByHandle = registerQuery({
+  role: "rm_owner",
+  object: "swarm_members",
+  privileges: ["SELECT"],
+  site: "scripts/v0-seed-bootstrap:processMember.find",
+  purpose: "Find an archived member's row by its derived handle, to insert, fill or drift-check it.",
+  callers: BOOTSTRAP_CALLERS,
+  probe: {
+    statement: `SELECT id, status, name, tagline, lens, mandate, biases, voice_md, mode, submit, operator, avatar
+      FROM swarm_members WHERE handle = $1`,
+    params: ["probe-member"],
+  },
+});
+
+const insertMember = registerQuery({
+  role: "rm_owner",
+  object: "swarm_members",
+  privileges: ["INSERT"],
+  site: "scripts/v0-seed-bootstrap:processMember.insert",
+  purpose: "Insert an archived member missing from this database.",
+  callers: BOOTSTRAP_CALLERS,
+  probe: {
+    statement: `INSERT INTO swarm_members (id, handle, status, name, tagline, lens, mandate, biases, voice_md, mode, submit, operator, avatar)
+      SELECT $1, $2, $3, $4, NULL, NULL, NULL, NULL::jsonb, $5, NULL, NULL::jsonb, NULL, NULL::jsonb WHERE false`,
+    params: [SAMPLE_ID, "probe-member", "inactive", "Probe", ""],
+  },
+});
+
+const fillMemberColumn = registerQuery({
+  role: "rm_owner",
+  object: "swarm_members",
+  // SELECT because the WHERE reads the row it updates.
+  privileges: ["UPDATE", "SELECT"],
+  site: "scripts/v0-seed-bootstrap:processMember.fill",
+  purpose: "Fill one NULL profile column of an existing member from the archive, never overwriting a value.",
+  callers: BOOTSTRAP_CALLERS,
+  probe: { statement: "UPDATE swarm_members SET tagline = $1 WHERE id = $2", params: ["probe", SAMPLE_ID] },
+});
+
+const subjectById = registerQuery({
+  role: "rm_owner",
+  object: "swarm_subjects",
+  privileges: ["SELECT"],
+  site: "scripts/v0-seed-bootstrap:processSubject.find",
+  purpose: "Read an archived subject's row by id, to insert or drift-check it.",
+  callers: BOOTSTRAP_CALLERS,
+  probe: {
+    statement: `SELECT status, name, operator, homepage, x_handle, thesis_blurb, wallets, nft_contracts, source,
+             recommendation_type, linked_member_id, structural_notes, last_reviewed
+      FROM swarm_subjects WHERE id = $1`,
+    params: ["probe-subject"],
+  },
+});
+
+const insertSubject = registerQuery({
+  role: "rm_owner",
+  object: "swarm_subjects",
+  privileges: ["INSERT"],
+  site: "scripts/v0-seed-bootstrap:processSubject.insert",
+  purpose: "Insert an archived subject missing from this database.",
+  callers: BOOTSTRAP_CALLERS,
+  probe: {
+    statement: `INSERT INTO swarm_subjects (id, status, name, operator, homepage, x_handle, thesis_blurb,
+                                  wallets, nft_contracts, source, recommendation_type, linked_member_id,
+                                  structural_notes, last_reviewed)
+      SELECT $1, $2, $3, NULL, NULL, NULL, NULL, NULL::jsonb, NULL::jsonb, NULL::jsonb, NULL, NULL, NULL::jsonb, NULL::date
+      WHERE false`,
+    params: ["probe-subject", "active", "Probe"],
+  },
+});
+
+const sessionByNaturalKey = registerQuery({
+  role: "rm_owner",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "scripts/v0-seed-bootstrap:processSession.find",
+  purpose: "Read an archived session's row by (subject, convened_at), to insert or drift-check it.",
+  callers: BOOTSTRAP_CALLERS,
+  probe: {
+    statement: `SELECT subject_name, regime_summary, subject_snapshot_total_value_usd, synthesis, swarm_recommendation,
+             social_draft_id, generated_at, state, published_at
+      FROM swarm_sessions WHERE subject_id = $1 AND convened_at = $2::timestamptz`,
+    params: ["probe-subject", "2026-01-01T00:00:00Z"],
+  },
+});
+
+const insertSession = registerQuery({
+  role: "rm_owner",
+  object: "swarm_sessions",
+  privileges: ["INSERT"],
+  site: "scripts/v0-seed-bootstrap:processSession.insert",
+  purpose: "Insert an archived session, published, missing from this database.",
+  callers: BOOTSTRAP_CALLERS,
+  probe: {
+    statement: `INSERT INTO swarm_sessions (subject_id, convened_at, subject_name, regime_summary, subject_snapshot_total_value_usd,
+                                  synthesis, swarm_recommendation, social_draft_id, generated_at, state, published_at)
+      SELECT $1, $2::timestamptz, NULL, NULL::jsonb, NULL::numeric, NULL, NULL::jsonb, NULL, NULL::timestamptz,
+             'published', NULL::timestamptz
+      WHERE false`,
+    params: ["probe-subject", "2026-01-01T00:00:00Z"],
+  },
+});
+
+const sessionIdByNaturalKey = registerQuery({
+  role: "rm_owner",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "scripts/v0-seed-bootstrap:sessionIdByNaturalKey",
+  purpose: "Resolve an archived (subject, date) to this database's session id, for its takes and brief.",
+  callers: BOOTSTRAP_CALLERS,
+  probe: {
+    statement: "SELECT id FROM swarm_sessions WHERE subject_id = $1 AND convened_at = $2::timestamptz",
+    params: ["probe-subject", "2026-01-01T00:00:00Z"],
+  },
+});
+
+const takeByNaturalKey = registerQuery({
+  role: "rm_owner",
+  object: "swarm_recommendations",
+  privileges: ["SELECT"],
+  site: "scripts/v0-seed-bootstrap:processTake.find",
+  purpose: "Read the first revision of an archived take by (session, member), to insert or drift-check it.",
+  callers: BOOTSTRAP_CALLERS,
+  probe: {
+    statement: `SELECT stance, confidence, body, nonce, payload, signature, received_at
+      FROM swarm_recommendations WHERE session_id = $1::uuid AND member_id = $2
+      ORDER BY revision ASC LIMIT 1`,
+    params: [SAMPLE_ID, SAMPLE_ID],
+  },
+});
+
+const insertTake = registerQuery({
+  role: "rm_owner",
+  object: "swarm_recommendations",
+  privileges: ["INSERT"],
+  site: "scripts/v0-seed-bootstrap:processTake.insert",
+  purpose: "Insert an archived take, signed with the published archival key and stored unverified.",
+  callers: BOOTSTRAP_CALLERS,
+  probe: {
+    statement: `INSERT INTO swarm_recommendations
+        (session_id, member_id, subject_id, date, nonce, stance, confidence, body, payload, signature, verified, received_at)
+      SELECT $1::uuid, $2, $3, $4::date, $5, NULL, NULL::numeric, NULL, $6::jsonb, $7, false, $8::timestamptz
+      WHERE false`,
+    params: [SAMPLE_ID, SAMPLE_ID, "probe-subject", "2026-01-01", "probe-nonce", "{}", "probe-signature", "2026-01-01T00:00:00Z"],
+  },
+});
+
+const snapshotByNaturalKey = registerQuery({
+  role: "rm_owner",
+  object: "swarm_subject_snapshots",
+  privileges: ["SELECT"],
+  site: "scripts/v0-seed-bootstrap:processSnapshot.find",
+  purpose: "Read an archived subject snapshot by (subject, date), to insert or drift-check it.",
+  callers: BOOTSTRAP_CALLERS,
+  probe: {
+    statement: `SELECT total_value_usd, positions, wallets, notable
+      FROM swarm_subject_snapshots WHERE subject_id = $1 AND date = $2::date`,
+    params: ["probe-subject", "2026-01-01"],
+  },
+});
+
+const insertSnapshot = registerQuery({
+  role: "rm_owner",
+  object: "swarm_subject_snapshots",
+  privileges: ["INSERT"],
+  site: "scripts/v0-seed-bootstrap:processSnapshot.insert",
+  purpose: "Insert an archived subject snapshot missing from this database.",
+  callers: BOOTSTRAP_CALLERS,
+  probe: {
+    statement: `INSERT INTO swarm_subject_snapshots (subject_id, date, total_value_usd, positions, wallets, notable)
+      SELECT $1, $2::date, NULL::numeric, NULL::jsonb, NULL::jsonb, NULL::jsonb WHERE false`,
+    params: ["probe-subject", "2026-01-01"],
+  },
+});
+
+const briefByNaturalKey = registerQuery({
+  role: "rm_owner",
+  object: "swarm_briefs",
+  privileges: ["SELECT"],
+  site: "scripts/v0-seed-bootstrap:processBrief.find",
+  purpose: "Read an archived brief by (session, subject, date), a NULL session included, to insert or drift-check it.",
+  callers: BOOTSTRAP_CALLERS,
+  probe: {
+    statement: `SELECT body FROM swarm_briefs
+      WHERE subject_id = $1 AND date = $2::date AND session_id IS NOT DISTINCT FROM $3::uuid`,
+    params: ["probe-subject", "2026-01-01", null],
+  },
+});
+
+const insertBrief = registerQuery({
+  role: "rm_owner",
+  object: "swarm_briefs",
+  privileges: ["INSERT"],
+  site: "scripts/v0-seed-bootstrap:processBrief.insert",
+  purpose: "Insert an archived brief missing from this database.",
+  callers: BOOTSTRAP_CALLERS,
+  probe: {
+    statement: `INSERT INTO swarm_briefs (session_id, date, subject_id, body)
+      SELECT $1::uuid, $2::date, $3, NULL::jsonb WHERE false`,
+    params: [null, "2026-01-01", "probe-subject"],
+  },
+});
 
 type FieldKind = "text" | "json" | "numeric" | "date" | "timestamp";
 
@@ -241,12 +457,10 @@ async function processMember(m: V0Member, drifts: Drift[]): Promise<RowOutcome> 
   // archive to a slug namespace. Note the archive's "woon" was renamed to
   // "Noop analyst" above, so it correctly derives `noop-analyst`.
   const handle = slugifyMemberName(m.name);
-  const found = (
-    await sql`
+  const [found] = await on(sql, memberByHandle)<Record<string, unknown> & { id: string }>`
       SELECT id, status, name, tagline, lens, mandate, biases, voice_md, mode, submit, operator, avatar
       FROM swarm_members WHERE handle = ${handle}
-    `
-  )[0] as (Record<string, unknown> & { id: string }) | undefined;
+    `;
   // Generated, never the archive slug — see archiveIdToDbId.
   const dbId = found?.id ?? crypto.randomUUID();
   archiveIdToDbId.set(m.id, dbId);
@@ -269,7 +483,7 @@ async function processMember(m: V0Member, drifts: Drift[]): Promise<RowOutcome> 
   ];
 
   if (!existing) {
-    await sql`
+    await on(sql, insertMember)`
       INSERT INTO swarm_members (id, handle, status, name, tagline, lens, mandate, biases, voice_md, mode, submit, operator, avatar)
       VALUES (
         ${dbId}, ${handle}, ${m.status ?? "inactive"}, ${m.name}, ${m.tagline ?? null}, ${m.lens ?? null}, ${m.mandate ?? null},
@@ -297,7 +511,7 @@ async function processMember(m: V0Member, drifts: Drift[]): Promise<RowOutcome> 
   const fillable = fields.filter((f) => existing[f.column] === null && (f.expected ?? null) !== null);
   for (const f of fillable) {
     const value = (f.kind === "json" ? sql.json(jsonValue(f.expected as never)) : f.expected) as never;
-    await sql`UPDATE swarm_members SET ${sql(f.column)} = ${value} WHERE id = ${dbId}`;
+    await on(sql, fillMemberColumn)`UPDATE swarm_members SET ${sql(f.column)} = ${value} WHERE id = ${dbId}`;
     existing[f.column] = f.expected;
   }
   if (fillable.length > 0) {
@@ -328,13 +542,11 @@ async function processSubject(s: V0Subject, drifts: Drift[]): Promise<RowOutcome
     s.name = "RM Protocol Labs Treasury";
   }
 
-  const existing = (
-    await sql`
+  const [existing] = await on(sql, subjectById)`
       SELECT status, name, operator, homepage, x_handle, thesis_blurb, wallets, nft_contracts, source,
              recommendation_type, linked_member_id, structural_notes, last_reviewed
       FROM swarm_subjects WHERE id = ${s.id}
-    `
-  )[0] as Record<string, unknown> | undefined;
+    `;
 
   const fields: FieldSpec[] = [
     { column: "status", kind: "text", expected: s.status ?? "active" },
@@ -353,7 +565,7 @@ async function processSubject(s: V0Subject, drifts: Drift[]): Promise<RowOutcome
   ];
 
   if (!existing) {
-    await sql`
+    await on(sql, insertSubject)`
       INSERT INTO swarm_subjects (
         id, status, name, operator, homepage, x_handle, thesis_blurb,
         wallets, nft_contracts, source, recommendation_type, linked_member_id, structural_notes, last_reviewed
@@ -402,14 +614,12 @@ async function processSession(sess: V0Session, drifts: Drift[]): Promise<RowOutc
     }
   }
 
-  const existing = (
-    await sql`
+  const [existing] = await on(sql, sessionByNaturalKey)`
       SELECT subject_name, regime_summary, subject_snapshot_total_value_usd, synthesis, swarm_recommendation,
              social_draft_id, generated_at, state, published_at
       FROM swarm_sessions
       WHERE subject_id = ${sess.subject_id} AND convened_at = ${convenedAt}
-    `
-  )[0] as Record<string, unknown> | undefined;
+    `;
 
   const fields: FieldSpec[] = [
     { column: "subject_name", kind: "text", expected: sess.subject_name },
@@ -426,7 +636,7 @@ async function processSession(sess: V0Session, drifts: Drift[]): Promise<RowOutc
   const naturalKey = `subject_id=${sess.subject_id}, convened_at=${convenedAt}`;
 
   if (!existing) {
-    await sql`
+    await on(sql, insertSession)`
       INSERT INTO swarm_sessions (
         subject_id, convened_at, subject_name, regime_summary, subject_snapshot_total_value_usd,
         synthesis, swarm_recommendation, social_draft_id, generated_at, state, published_at
@@ -555,13 +765,11 @@ async function processTake(
   // no private key exists to re-sign with.
   const memberDbId = resolveDbMemberId(take.member_id) ?? take.member_id;
 
-  const existing = (
-    await sql`
+  const [existing] = await on(sql, takeByNaturalKey)`
       SELECT stance, confidence, body, nonce, payload, signature, received_at
       FROM swarm_recommendations WHERE session_id = ${sessionId} AND member_id = ${memberDbId}
       ORDER BY revision ASC LIMIT 1
-    `
-  )[0] as Record<string, unknown> | undefined;
+    `;
 
   const fields: FieldSpec[] = [
     { column: "stance", kind: "text", expected: take.stance },
@@ -578,7 +786,7 @@ async function processTake(
   const naturalKey = `session=${sess.subject_id}/${sess.date}, member_id=${take.member_id}`;
 
   if (!existing) {
-    await sql`
+    await on(sql, insertTake)`
       INSERT INTO swarm_recommendations
         (session_id, member_id, subject_id, date, nonce, stance, confidence, body, payload, signature, verified, received_at)
       VALUES (
@@ -601,12 +809,10 @@ async function processTake(
 // for either, so they are dropped HERE rather than in the artifact — the
 // artifact keeps saying what v0 said, and the schema stays clean.
 async function processSnapshot(snap: V0Snapshot, drifts: Drift[]): Promise<RowOutcome> {
-  const existing = (
-    await sql`
+  const [existing] = await on(sql, snapshotByNaturalKey)`
       SELECT total_value_usd, positions, wallets, notable
       FROM swarm_subject_snapshots WHERE subject_id = ${snap.subject_id} AND date = ${snap.date}
-    `
-  )[0] as Record<string, unknown> | undefined;
+    `;
 
   const fields: FieldSpec[] = [
     { column: "total_value_usd", kind: "numeric", expected: snap.total_value_usd },
@@ -617,7 +823,7 @@ async function processSnapshot(snap: V0Snapshot, drifts: Drift[]): Promise<RowOu
   const naturalKey = `subject_id=${snap.subject_id}, date=${snap.date}`;
 
   if (!existing) {
-    await sql`
+    await on(sql, insertSnapshot)`
       INSERT INTO swarm_subject_snapshots (subject_id, date, total_value_usd, positions, wallets, notable)
       VALUES (
         ${snap.subject_id}, ${snap.date}, ${snap.total_value_usd ?? null},
@@ -649,25 +855,23 @@ async function processSnapshot(snap: V0Snapshot, drifts: Drift[]): Promise<RowOu
 // is what keeps the import idempotent for all 73 rather than only 54.
 async function processBrief(brief: V0Brief, drifts: Drift[]): Promise<RowOutcome> {
   const sessionId = (
-    await sql<{ id: string }[]>`
+    await on(sql, sessionIdByNaturalKey)<{ id: string }>`
       SELECT id FROM swarm_sessions
       WHERE subject_id = ${brief.subject_id} AND convened_at = ${convenedAtFromDate(brief.date)}
     `
   )[0]?.id ?? null;
 
-  const existing = (
-    await sql`
+  const [existing] = await on(sql, briefByNaturalKey)`
       SELECT body FROM swarm_briefs
       WHERE subject_id = ${brief.subject_id} AND date = ${brief.date}
         AND session_id IS NOT DISTINCT FROM ${sessionId}
-    `
-  )[0] as Record<string, unknown> | undefined;
+    `;
 
   const fields: FieldSpec[] = [{ column: "body", kind: "json", expected: brief.body }];
   const naturalKey = `session_id=${sessionId ?? "none"}, date=${brief.date}, subject_id=${brief.subject_id}`;
 
   if (!existing) {
-    await sql`
+    await on(sql, insertBrief)`
       INSERT INTO swarm_briefs (session_id, date, subject_id, body)
       VALUES (${sessionId}, ${brief.date}, ${brief.subject_id}, ${sql.json(jsonValue(brief.body ?? null))})
     `;
@@ -744,7 +948,7 @@ export async function runV0SeedBootstrap(): Promise<V0BootstrapResult> {
     sessions.record(outcome);
 
     const sessionId = (
-      await sql<{ id: string }[]>`
+      await on(sql, sessionIdByNaturalKey)<{ id: string }>`
         SELECT id FROM swarm_sessions
         WHERE subject_id = ${sess.subject_id} AND convened_at = ${convenedAtFromDate(sess.date)}
       `

@@ -14,6 +14,35 @@ import { rowToSnapshot, forHistory, computeRegimeSnapshotStaleness, type RegimeS
 import { getAnalyticsReadMode } from "../cutover/read-mode.ts";
 import { ledgerCurrentLatestResearchSignal, ledgerCurrentRegimeSnapshots } from "../cutover/ledger-current.ts";
 import type { RegimeSnapshotRow } from "./regime-projection.ts";
+import { on, registerQuery } from "../../db/registry.ts";
+
+// Registered queries (smoke-production-spec.md §7.1): the compatibility-mode
+// reads, reached only through the dashboards routes.
+const latestSignal = registerQuery({
+  role: "rm_app",
+  object: "research_signals",
+  privileges: ["SELECT"],
+  site: "src/analytics/report/projections:fetchLatestResearchSignal",
+  purpose: "Read the newest research-signal payload for a key, in compatibility read mode.",
+  callers: ["src/api/routes/dashboards"],
+  probe: {
+    statement: "SELECT signal_key, date, payload FROM research_signals WHERE signal_key = $1 ORDER BY date DESC LIMIT 1",
+    params: ["probe_signal"],
+  },
+});
+
+const recentSnapshots = registerQuery({
+  role: "rm_app",
+  object: "regime_snapshots",
+  privileges: ["SELECT"],
+  site: "src/analytics/report/projections:fetchRegimeSnapshots",
+  purpose: "Read the newest `range` regime snapshots dated no later than today, in compatibility read mode.",
+  callers: ["src/api/routes/dashboards"],
+  probe: {
+    statement: "SELECT * FROM regime_snapshots WHERE date <= $1::date ORDER BY date DESC LIMIT $2",
+    params: ["2026-01-01", 30],
+  },
+});
 
 // The read an agent actually makes: today's classifier read without the ~500
 // KB of backtests/correlations/indicators/percentiles that ride along on the
@@ -61,7 +90,8 @@ export async function fetchLatestResearchSignal(key: string) {
     const signal = await ledgerCurrentLatestResearchSignal(key);
     return signal ? { signalKey: signal.signalKey, date: signal.date, payload: signal.payload } : null;
   }
-  const rows = await sql`SELECT signal_key, date, payload FROM research_signals WHERE signal_key = ${key} ORDER BY date DESC LIMIT 1`;
+  const rows = await on(sql, latestSignal)<{ signal_key: string; date: string | Date; payload: unknown }>`
+    SELECT signal_key, date, payload FROM research_signals WHERE signal_key = ${key} ORDER BY date DESC LIMIT 1`;
   const r = rows[0];
   if (!r) return null;
   const date = typeof r.date === "string" ? r.date : new Date(r.date).toISOString().slice(0, 10);
@@ -139,7 +169,7 @@ export async function fetchRegimeSnapshots(
           .slice(-range)
           .map(ledgerRowToSnapshot)
       : (
-          await sql`
+          await on(sql, recentSnapshots)`
     SELECT * FROM regime_snapshots
     WHERE date <= ${today}
     ORDER BY date DESC

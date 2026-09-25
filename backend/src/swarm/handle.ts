@@ -118,6 +118,12 @@ const takenNames = registerQuery({
   // carries one role, and `rm_app` is the one check 2 has something to verify
   // for.
   callers: ["src/api/routes/swarm", "src/api/routes/swarm-admin", "src/db/seed", "scripts/prod-bootstrap"],
+  probe: {
+    statement: `SELECT handle AS taken FROM swarm_members WHERE id <> $1 AND (handle = $2 OR handle LIKE $3)
+      UNION
+      SELECT id AS taken FROM swarm_members WHERE id <> $1 AND (id = $2 OR id LIKE $3)`,
+    params: ["00000000-0000-0000-0000-000000000000", "probe", "probe-%"],
+  },
 });
 
 export async function deriveMemberHandle(

@@ -157,6 +157,11 @@ const latestShareSample = registerQuery({
   site: "src/chain/vault-economics:lastPersistedSample",
   purpose: "Read a vault's newest persisted share-price sample for the sample reader.",
   callers: ["src/api/routes/dashboards"],
+  probe: {
+    statement: `SELECT sample_hour, total_assets, total_supply, share_price FROM vault_share_price_history
+      WHERE lower(vault_address) = lower($1) ORDER BY sample_hour DESC LIMIT 1`,
+    params: ["0x0000000000000000000000000000000000000001"],
+  },
 });
 
 const apyWindow = registerQuery({
@@ -166,6 +171,13 @@ const apyWindow = registerQuery({
   site: "src/chain/vault-economics:computeApy7d",
   purpose: "Read a vault's last seven days of share prices to annualise its APY.",
   callers: ["src/api/routes/dashboards"],
+  probe: {
+    statement: `SELECT sample_hour, share_price FROM vault_share_price_history
+      WHERE lower(vault_address) = lower($1) AND share_price IS NOT NULL
+        AND sample_hour >= now() - interval '7 days'
+      ORDER BY sample_hour ASC`,
+    params: ["0x0000000000000000000000000000000000000001"],
+  },
 });
 
 const coreTotals = registerQuery({
@@ -175,6 +187,11 @@ const coreTotals = registerQuery({
   site: "src/chain/vault-economics:computeVaultEconomics.core",
   purpose: "Read the newest persisted vault totals for the vault-economics payload, with zero RPC.",
   callers: ["src/api/routes/dashboards"],
+  probe: {
+    statement: `SELECT sample_hour, sampled_at, total_assets, total_supply, share_price FROM vault_share_price_history
+      WHERE lower(vault_address) = lower($1) ORDER BY sample_hour DESC, sampled_at DESC LIMIT 1`,
+    params: ["0x0000000000000000000000000000000000000001"],
+  },
 });
 
 const adapterBalances = registerQuery({
@@ -184,6 +201,12 @@ const adapterBalances = registerQuery({
   site: "src/chain/vault-economics:computeVaultEconomics.adapters",
   purpose: "Read each adapter's newest persisted balance for the vault-economics payload, with zero RPC.",
   callers: ["src/api/routes/dashboards"],
+  probe: {
+    statement: `SELECT DISTINCT ON (adapter_address) adapter_address, adapter_name, balance_usd, configured, provenance, sampled_at
+      FROM vault_adapter_samples WHERE lower(vault_address) = lower($1)
+      ORDER BY adapter_address, sample_hour DESC, sampled_at DESC`,
+    params: ["0x0000000000000000000000000000000000000001"],
+  },
 });
 
 async function lastPersistedSample(vaultAddress: string): Promise<PersistedVaultSample> {

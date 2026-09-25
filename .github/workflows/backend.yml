@@ -135,6 +135,17 @@ jobs:
           for f in tests/schema-equivalence.test.ts tests/upgrade-from-release.test.ts tests/support/catalog-normalize.ts tests/fixtures/releases/v0.5.0/release.json; do
             test -f "$f" || { echo "::error::$f is missing: a spec §8.4 schema proof would stop running"; exit 1; }
           done
+      # Spec §7.1's runtime proof (issue #1026 criterion 78): "execution under
+      # each role against a disposable database is a separate CI test". It is
+      # an ordinary file under tests/, so the suite below runs it; these two
+      # steps make its absence or exclusion a red job rather than a green one,
+      # the same way the schema proofs above are held.
+      - name: Registry execution proof exists (spec §7.1)
+        working-directory: backend
+        run: |
+          for f in tests/db-registry-execution.test.ts tests/registry-interface.cases.ts; do
+            test -f "$f" || { echo "::error::$f is missing: the spec §7.1 registry execution proof would stop running"; exit 1; }
+          done
       - name: Run tests (ephemeral Postgres via Docker)
         working-directory: backend
         # tests/geckoterminal-resilience.test.ts and
@@ -153,3 +164,8 @@ jobs:
             grep -qxF "$f:" "$RUNNER_TEMP/backend-bun-test.log" \
               || { echo "::error::$f did not run in the backend suite: a spec §8.4 schema proof is excluded"; exit 1; }
           done
+      - name: Registry execution proof ran (spec §7.1)
+        shell: bash
+        run: |
+          grep -qxF "tests/db-registry-execution.test.ts:" "$RUNNER_TEMP/backend-bun-test.log" \
+            || { echo "::error::tests/db-registry-execution.test.ts did not run in the backend suite: the spec §7.1 execution proof is excluded"; exit 1; }

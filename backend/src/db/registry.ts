@@ -41,7 +41,11 @@
 // site. It can be wrong in both directions — over-declared (the check demands a
 // privilege nobody uses) and under-declared (a statement runs that the registry
 // never mentioned). Only executing the statements under the real role catches
-// the second kind, and that test is W2.8's, not this module's.
+// the second kind, and that test is tests/db-registry-execution.test.ts, not
+// this module. What this module adds for it is the `probe` a declaration
+// carries (see `QueryProbe`): the call site's own statement with sample
+// parameters, which that test holds to the call site's text and runs as the
+// declared LOGIN role without calling the application function around it.
 //
 // The registry is also NOT an allowlist of grants. Spec §7 check 2: "A grant
 // absent from the registry is not forbidden by that fact alone." See
@@ -146,7 +150,65 @@ export interface QueryDeclaration {
    * can assert the property from the registry itself.
    */
   readonly callers: readonly string[];
+  /**
+   * The statement tests/db-registry-execution.test.ts runs, as `role`, in a
+   * transaction it rolls back, on a disposable database bootstrapped from the
+   * real snapshot (spec §7.1: "execution under each role against a disposable
+   * database is a separate CI test").
+   *
+   * Optional in the TYPE only. The execution test refuses a registered site
+   * with no probe unless the site is on its dated, shrink-only PROBE_PENDING
+   * list, so an omission is a visible backlog entry, never a silent gap.
+   */
+  readonly probe?: QueryProbe;
 }
+
+/** A probe parameter: JSON-safe, because the execution test reads the probes
+ *  out of a child process (the registry is process-global) as JSON. A value
+ *  Postgres needs typed (a jsonb, a timestamp) is passed as text and cast in
+ *  the statement. */
+export type ProbeParam = string | number | boolean | null;
+
+/**
+ * One call site's statement, written out so it can run on its own.
+ *
+ * WHY IT IS WRITTEN OUT. The real statement is a template built at the call
+ * site from runtime values, inside an application function that needs a
+ * request, a job or a chain read to reach it. The probe is that statement's
+ * text with each interpolated value as a `$n` placeholder and a sample
+ * parameter for it, written next to the declaration it proves.
+ *
+ * IT IS THE CALL SITE'S STATEMENT, NOT A STAND-IN. tests/db-registry-
+ * execution.test.ts reads every `on(...)` call site from source and requires
+ * the probe to reduce to the same token form as the template it declares,
+ * modulo only privilege-neutral differences (whitespace, comments, case, a
+ * cast on a bound value, the postgres.js helper expansions, and an INSERT's
+ * VALUES written as `SELECT ... WHERE false`; that file's header lists them).
+ * So a call site that gains RETURNING, ON CONFLICT DO UPDATE, FOR UPDATE, a
+ * JOIN or a column no longer matches its probe, and one declaration may not
+ * serve two statements that differ: each gets its own site.
+ *
+ * WHAT "EXACTLY" MEANS. The execution test holds every probe to two things
+ * beyond running as the declared role: it succeeds for a scratch role holding
+ * ONLY what the declarations named in the same `on(...)` call declare (for a
+ * JOIN, every joined relation's declaration of the same role), and it fails
+ * with 42501 once any single privilege THIS declaration lists is taken away.
+ * So a probe cannot be `SELECT 1` (which needs nothing), cannot touch a
+ * relation its call site did not declare, and a declaration cannot list a
+ * privilege its statement does not use. The declarations of one JOIN
+ * therefore carry the same probe.
+ */
+export interface QueryProbe {
+  /** One DML statement, `$1`-style placeholders, no trailing semicolon. It
+   *  may write: the test rolls every probe back. */
+  readonly statement: string;
+  /** One value per placeholder, in order. */
+  readonly params?: readonly ProbeParam[];
+}
+
+/** The rows a statement returns, plus the affected-row `count` postgres.js puts
+ *  on every result — what an INSERT or UPDATE without RETURNING reports. */
+export type RegistryRows<T> = T[] & { readonly count: number };
 
 /**
  * What `registerQuery` hands back: a tagged template that issues the statement
@@ -163,7 +225,7 @@ export interface RegisteredQuery {
     db: RegistryDb,
     strings: TemplateStringsArray,
     ...values: readonly unknown[]
-  ): Promise<T[]>;
+  ): Promise<RegistryRows<T>>;
 }
 
 /**
@@ -183,6 +245,9 @@ export interface RegisteredQuery {
  *   - `callers` empty, repeated, or not a module id under `src/` or
  *     `scripts/` — a declaration that names no caller says nothing about who
  *     may reach the statement, and a misspelled one says something false.
+ *   - `probe` present but not one DML statement that names the declared
+ *     object, or with a placeholder count that does not match its params —
+ *     a probe the execution test cannot run faithfully is a false proof.
  *
  * Serves spec §10 W2 "Registry structurally enforced; execution under each role
  * on a disposable database" — this half is the structural one.
@@ -195,6 +260,7 @@ const bySite = new Map<string, RegisteredQuery>();
 export function registerQuery(declaration: QueryDeclaration): RegisteredQuery {
   assertValidObject(declaration);
   assertValidCallers(declaration);
+  assertValidProbe(declaration);
   if (declaration.privileges.length === 0) {
     throw new Error(
       `registry: call site ${declaration.site} declared an empty privileges list on ${declaration.object} — ` +
@@ -217,11 +283,11 @@ export function registerQuery(declaration: QueryDeclaration): RegisteredQuery {
 
   const query: RegisteredQuery = {
     declaration: frozen,
-    run<T = unknown>(db: RegistryDb, strings: TemplateStringsArray, ...values: readonly unknown[]): Promise<T[]> {
+    run<T = unknown>(db: RegistryDb, strings: TemplateStringsArray, ...values: readonly unknown[]): Promise<RegistryRows<T>> {
       // postgres.js's tagged template, called with the caller's own strings and
       // values, so a registered site costs nothing but the declaration. The
       // handle is never exposed back to the call site.
-      return (db as unknown as (s: TemplateStringsArray, ...v: readonly unknown[]) => Promise<T[]>)(
+      return (db as unknown as (s: TemplateStringsArray, ...v: readonly unknown[]) => Promise<RegistryRows<T>>)(
         strings,
         ...values,
       );
@@ -278,7 +344,7 @@ export function on(db: RegistryDb, query: RegisteredQuery, ...joined: readonly R
   // primary one included, must be the exact runner `registerQuery` returned for
   // that site, or nothing runs.
   for (const candidate of [query, ...joined]) assertRegistered(candidate, query);
-  return <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: readonly unknown[]): Promise<T[]> =>
+  return <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: readonly unknown[]): Promise<RegistryRows<T>> =>
     query.run<T>(db, strings, ...values);
 }
 
@@ -333,15 +399,60 @@ function assertValidCallers(declaration: QueryDeclaration): void {
   }
 }
 
+/** The statements a probe may be: DML (TRUNCATE included, which Postgres rolls
+ *  back like any other), because the execution test wraps it in a transaction
+ *  of its own and rolls that back. A probe that opened, ended or re-roled the
+ *  transaction would escape the rollback or run as somebody other than the
+ *  declared role. */
+const PROBE_STATEMENT = /^\s*(?:SELECT|INSERT|UPDATE|DELETE|TRUNCATE|WITH)\b/i;
+const PROBE_PARAM_TYPES = new Set(["string", "number", "boolean"]);
+
+function assertValidProbe(declaration: QueryDeclaration): void {
+  const probe = declaration.probe as Partial<QueryProbe> | undefined;
+  if (probe === undefined) return;
+  const refuse = (why: string): never => {
+    throw new Error(`registry: call site ${declaration.site} declared an unusable probe — ${why} (spec §7.1).`);
+  };
+  const statement = probe.statement;
+  if (typeof statement !== "string" || !PROBE_STATEMENT.test(statement)) {
+    refuse("a probe is one SELECT, INSERT, UPDATE, DELETE, TRUNCATE or WITH statement");
+  }
+  const text = statement as string;
+  if (text.includes(";")) refuse("a probe is ONE statement with no semicolon");
+  if (!new RegExp(`\\b${declaration.object.replace(/\$/g, "\\$")}\\b`, "i").test(text)) {
+    refuse(`its statement never names the declared object ${declaration.object}`);
+  }
+  const params = probe.params ?? [];
+  if (!Array.isArray(params)) refuse("params must be an array");
+  for (const value of params) {
+    if (value !== null && !PROBE_PARAM_TYPES.has(typeof value)) {
+      refuse(`param ${JSON.stringify(value)} is not a string, number, boolean or null`);
+    }
+  }
+  const highest = Math.max(0, ...[...text.matchAll(/\$(\d+)/g)].map((m) => Number(m[1])));
+  if (highest !== params.length) {
+    refuse(`its statement uses ${highest} placeholder(s) but supplies ${params.length} param(s)`);
+  }
+}
+
 function freezeDeclaration(declaration: QueryDeclaration): QueryDeclaration {
-  return Object.freeze({
+  const frozen: QueryDeclaration = {
     role: declaration.role,
     object: declaration.object,
     privileges: Object.freeze([...declaration.privileges]),
     site: declaration.site,
     purpose: declaration.purpose,
     callers: Object.freeze([...declaration.callers]),
-  });
+    ...(declaration.probe
+      ? {
+          probe: Object.freeze({
+            statement: declaration.probe.statement,
+            params: Object.freeze([...(declaration.probe.params ?? [])]),
+          }),
+        }
+      : {}),
+  };
+  return Object.freeze(frozen);
 }
 
 const sameList = (a: readonly string[], b: readonly string[]): boolean =>
@@ -354,7 +465,9 @@ function sameDeclaration(a: QueryDeclaration, b: QueryDeclaration): boolean {
     a.site === b.site &&
     a.purpose === b.purpose &&
     sameList(a.privileges, b.privileges) &&
-    sameList(a.callers, b.callers)
+    sameList(a.callers, b.callers) &&
+    a.probe?.statement === b.probe?.statement &&
+    JSON.stringify(a.probe?.params ?? []) === JSON.stringify(b.probe?.params ?? [])
   );
 }
 

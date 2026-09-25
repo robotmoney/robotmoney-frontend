@@ -26,6 +26,161 @@
 // `inflow30d` is their sum (the full 30d agent_revenue_daily total for the
 // agent) — every figure is a real aggregate over real rows, never invented.
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
+
+// Registered queries (smoke-production-spec.md §7.1): reads, reached only
+// through GET /api/dashboards/list2.
+const DASHBOARDS = "src/api/routes/dashboards";
+const SAMPLE_ID = "00000000-0000-0000-0000-000000000000";
+
+const list2Agents = registerQuery({
+  role: "rm_app",
+  object: "openclaw_agents",
+  privileges: ["SELECT"],
+  site: "src/projects/list2-projections:fetchList2.agents",
+  purpose: "Read every active agent for the unified list.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: "SELECT id, project_id, name, protocol_standard, wallet_address, enriched_at FROM openclaw_agents WHERE is_active = true",
+  },
+});
+
+const list2Coins = registerQuery({
+  role: "rm_app",
+  object: "lobster_coins",
+  privileges: ["SELECT"],
+  site: "src/projects/list2-projections:fetchList2.coins",
+  purpose: "Read every active coin for the unified list.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT id, project_id, name, ticker, chain, price_usd, percent_change_24h, market_cap, volume_24h, contract_address
+      FROM lobster_coins WHERE is_active = true`,
+  },
+});
+
+const list2Vaults = registerQuery({
+  role: "rm_app",
+  object: "agent_vaults",
+  privileges: ["SELECT"],
+  site: "src/projects/list2-projections:fetchList2.vaults",
+  purpose: "Read every active vault for the unified list.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT id, name, protocol, strategy_type, chain, tvl_usd, yield_apy, data_source, vault_address,
+             last_rebalance_at, refreshed_at
+      FROM agent_vaults WHERE is_active = true`,
+  },
+});
+
+const list2Wallets = registerQuery({
+  role: "rm_app",
+  object: "tracked_wallets",
+  privileges: ["SELECT"],
+  site: "src/projects/list2-projections:fetchList2.wallets",
+  purpose: "Read every active tracked wallet for the unified list.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT id, label, category, chain, balance_usd, address, last_tx_at, refreshed_at
+      FROM tracked_wallets WHERE is_active = true`,
+  },
+});
+
+const list2Revenue30 = registerQuery({
+  role: "rm_app",
+  object: "agent_revenue_daily",
+  privileges: ["SELECT"],
+  site: "src/projects/list2-projections:fetchList2.revenue30",
+  purpose: "Read the agents' last 30 days of revenue, by source.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT agent_id, source, revenue_usd FROM agent_revenue_daily
+      WHERE agent_id IN ($1::uuid) AND revenue_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const list2LastRevenue = registerQuery({
+  role: "rm_app",
+  object: "agent_revenue_daily",
+  privileges: ["SELECT"],
+  site: "src/projects/list2-projections:fetchList2.lastRevenue",
+  purpose: "Read each agent's most recent revenue date.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT agent_id, MAX(revenue_date)::text AS last_date FROM agent_revenue_daily
+      WHERE agent_id IN ($1::uuid) GROUP BY agent_id`,
+    params: [SAMPLE_ID],
+  },
+});
+
+const list2AgentSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_agent_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/list2-projections:fetchList2.agentSnapshots",
+  purpose: "Read the agents' last 182 days of x402 snapshots.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT agent_id, snapshot_date::text AS snapshot_date, x402_volume_usd, x402_txn_count FROM daily_agent_snapshots
+      WHERE agent_id IN ($1::uuid) AND snapshot_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const list2CoinSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_coin_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/list2-projections:fetchList2.coinSnapshots",
+  purpose: "Read the coins' last 182 days of prices.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT coin_id, snapshot_date::text AS snapshot_date, price_usd FROM daily_coin_snapshots
+      WHERE coin_id IN ($1::uuid) AND snapshot_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const list2VaultSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_tvl_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/list2-projections:fetchList2.vaultSnapshots",
+  purpose: "Read the vaults' last 182 days of TVL.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT vault_id, snapshot_date::text AS snapshot_date, tvl_usd FROM daily_tvl_snapshots
+      WHERE vault_id IN ($1::uuid) AND snapshot_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const list2WalletSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_wallet_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/list2-projections:fetchList2.walletSnapshots",
+  purpose: "Read the wallets' last 182 days of balances.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT wallet_id, snapshot_date::text AS snapshot_date, total_balance_usd FROM daily_wallet_snapshots
+      WHERE wallet_id IN ($1::uuid) AND snapshot_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const list2ProjectCoins = registerQuery({
+  role: "rm_app",
+  object: "lobster_coins",
+  privileges: ["SELECT"],
+  site: "src/projects/list2-projections:fetchList2.projectCoins",
+  purpose: "Read the agents' projects' active coins, to pick each project's best by market cap.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: "SELECT id, project_id, ticker, market_cap FROM lobster_coins WHERE project_id IN ($1::uuid) AND is_active = true",
+    params: [SAMPLE_ID],
+  },
+});
 import type { List2AgentRow, List2CoinRow, List2VaultRow, List2WalletRow, List2Response } from "@robotmoney/contract";
 
 export type { List2AgentRow, List2CoinRow, List2VaultRow, List2WalletRow, List2Response };
@@ -93,13 +248,13 @@ function toWeeklyBuckets(rows: { date: string; value: number }[], weeks: number)
 
 export async function fetchList2(): Promise<List2Response> {
   const [agents, coins, vaults, wallets] = await Promise.all([
-    sql`SELECT id, project_id, name, protocol_standard, wallet_address, enriched_at
+    on(sql, list2Agents)`SELECT id, project_id, name, protocol_standard, wallet_address, enriched_at
         FROM openclaw_agents WHERE is_active = true`,
-    sql`SELECT id, project_id, name, ticker, chain, price_usd, percent_change_24h, market_cap, volume_24h, contract_address
+    on(sql, list2Coins)`SELECT id, project_id, name, ticker, chain, price_usd, percent_change_24h, market_cap, volume_24h, contract_address
         FROM lobster_coins WHERE is_active = true`,
-    sql`SELECT id, name, protocol, strategy_type, chain, tvl_usd, yield_apy, data_source, vault_address, last_rebalance_at, refreshed_at
+    on(sql, list2Vaults)`SELECT id, name, protocol, strategy_type, chain, tvl_usd, yield_apy, data_source, vault_address, last_rebalance_at, refreshed_at
         FROM agent_vaults WHERE is_active = true`,
-    sql`SELECT id, label, category, chain, balance_usd, address, last_tx_at, refreshed_at
+    on(sql, list2Wallets)`SELECT id, label, category, chain, balance_usd, address, last_tx_at, refreshed_at
         FROM tracked_wallets WHERE is_active = true`,
   ]);
 
@@ -114,36 +269,36 @@ export async function fetchList2(): Promise<List2Response> {
 
   const [revenue30, revenueAll, agentSnaps182, coinSnaps, vaultSnaps, walletSnaps, projectCoins] = await Promise.all([
     agentIds.length
-      ? sql`SELECT agent_id, source, revenue_usd FROM agent_revenue_daily
+      ? on(sql, list2Revenue30)`SELECT agent_id, source, revenue_usd FROM agent_revenue_daily
             WHERE agent_id IN ${sql(agentIds)} AND revenue_date >= ${cutoff30}`
       : Promise.resolve([] as Record<string, unknown>[]),
     // Last-activity fallback: most recent revenue_date per agent (used only
     // when enriched_at/snapshot data is absent).
     agentIds.length
-      ? sql`SELECT agent_id, MAX(revenue_date)::text AS last_date FROM agent_revenue_daily
+      ? on(sql, list2LastRevenue)`SELECT agent_id, MAX(revenue_date)::text AS last_date FROM agent_revenue_daily
             WHERE agent_id IN ${sql(agentIds)} GROUP BY agent_id`
       : Promise.resolve([] as Record<string, unknown>[]),
     agentIds.length
-      ? sql`SELECT agent_id, snapshot_date::text AS snapshot_date, x402_volume_usd, x402_txn_count FROM daily_agent_snapshots
+      ? on(sql, list2AgentSnapshots)`SELECT agent_id, snapshot_date::text AS snapshot_date, x402_volume_usd, x402_txn_count FROM daily_agent_snapshots
             WHERE agent_id IN ${sql(agentIds)} AND snapshot_date >= ${cutoff182}`
       : Promise.resolve([] as Record<string, unknown>[]),
     coinIds.length
-      ? sql`SELECT coin_id, snapshot_date::text AS snapshot_date, price_usd FROM daily_coin_snapshots
+      ? on(sql, list2CoinSnapshots)`SELECT coin_id, snapshot_date::text AS snapshot_date, price_usd FROM daily_coin_snapshots
             WHERE coin_id IN ${sql(coinIds)} AND snapshot_date >= ${cutoff182}`
       : Promise.resolve([] as Record<string, unknown>[]),
     vaultIds.length
-      ? sql`SELECT vault_id, snapshot_date::text AS snapshot_date, tvl_usd FROM daily_tvl_snapshots
+      ? on(sql, list2VaultSnapshots)`SELECT vault_id, snapshot_date::text AS snapshot_date, tvl_usd FROM daily_tvl_snapshots
             WHERE vault_id IN ${sql(vaultIds)} AND snapshot_date >= ${cutoff182}`
       : Promise.resolve([] as Record<string, unknown>[]),
     walletIds.length
-      ? sql`SELECT wallet_id, snapshot_date::text AS snapshot_date, total_balance_usd FROM daily_wallet_snapshots
+      ? on(sql, list2WalletSnapshots)`SELECT wallet_id, snapshot_date::text AS snapshot_date, total_balance_usd FROM daily_wallet_snapshots
             WHERE wallet_id IN ${sql(walletIds)} AND snapshot_date >= ${cutoff182}`
       : Promise.resolve([] as Record<string, unknown>[]),
     // Best (max market cap) coin per project — feeds an agent's linked-token
     // ticker/mcap/spark, matching the /projects directory's own "max across
     // a project's coins" rule (projects/projections.ts).
     projectIds.length
-      ? sql`SELECT id, project_id, ticker, market_cap FROM lobster_coins
+      ? on(sql, list2ProjectCoins)`SELECT id, project_id, ticker, market_cap FROM lobster_coins
             WHERE project_id IN ${sql(projectIds)} AND is_active = true`
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);

@@ -21,6 +21,7 @@
 // successive runs, and what a run deferred is REPORTED in its output rather than
 // silently dropped.
 import { sql } from "../../db/worker-client.ts";
+import { on, registerQuery } from "../../db/registry.ts";
 import { detectAllGaps } from "../../ops/gap-detector.ts";
 import {
   assertRpcBudgetConfigured,
@@ -33,6 +34,50 @@ import {
 
 const BACKFILL_KIND = "wallet.backfill_day";
 const WINDOW_KIND = "wallet.backfill_window";
+
+// Registered queries (smoke-production-spec.md §7.1), on the worker's own
+// pool. This handler module is the entry: the job loop dispatches
+// `ops.repair_gaps` to it, and it enqueues the class-C backfill window.
+const REPAIR_HANDLER = "src/worker/handlers/repair";
+
+const liveWindowJobs = registerQuery({
+  role: "rm_worker",
+  object: "jobs",
+  privileges: ["SELECT"],
+  site: "src/worker/handlers/repair:repairGaps.liveWindow",
+  purpose: "Count backfill-window jobs still pending or running, so a second window is never enqueued beside one.",
+  callers: [REPAIR_HANDLER],
+  probe: {
+    statement: "SELECT count(*)::int AS n FROM jobs WHERE kind = $1 AND status IN ('pending', 'running')",
+    params: [WINDOW_KIND],
+  },
+});
+
+const liveDayJobs = registerQuery({
+  role: "rm_worker",
+  object: "jobs",
+  privileges: ["SELECT"],
+  site: "src/worker/handlers/repair:repairGaps.liveDays",
+  purpose: "List the days a pending or running per-day backfill job already claims.",
+  callers: [REPAIR_HANDLER],
+  probe: {
+    statement: "SELECT payload->>'asof' AS asof FROM jobs WHERE kind = $1 AND status IN ('pending', 'running')",
+    params: [BACKFILL_KIND],
+  },
+});
+
+const enqueueWindow = registerQuery({
+  role: "rm_worker",
+  object: "jobs",
+  privileges: ["INSERT"],
+  site: "src/worker/handlers/repair:repairGaps.enqueue",
+  purpose: "Enqueue one backfill-window job for the unclaimed missing days.",
+  callers: [REPAIR_HANDLER],
+  probe: {
+    statement: "INSERT INTO jobs (kind, payload) VALUES ($1, $2::jsonb)",
+    params: [WINDOW_KIND, "{\"dates\":[]}"],
+  },
+});
 
 /** Whether this deployment may dispatch repair work. See the note in
  *  repairGaps: under a live RPC source the shared rate budget must be
@@ -129,7 +174,7 @@ export async function repairGaps(): Promise<unknown> {
     console.warn(`wallet-backfill: ${b.date} remains BLOCKED on shared leg '${b.leg}' — ${b.detail ?? "no detail"}`);
   }
 
-  const [liveWindow] = await sql<{ n: number }[]>`
+  const [liveWindow] = await on(sql, liveWindowJobs)<{ n: number }>`
     SELECT count(*)::int AS n
       FROM jobs
      WHERE kind = ${WINDOW_KIND}
@@ -137,7 +182,7 @@ export async function repairGaps(): Promise<unknown> {
   `;
   // Legacy per-day rows may still be in flight from a pre-upgrade dispatcher.
   // Their days are excluded rather than repaired twice.
-  const liveDays = await sql<{ asof: string }[]>`
+  const liveDays = await on(sql, liveDayJobs)<{ asof: string }>`
     SELECT payload->>'asof' AS asof
       FROM jobs
      WHERE kind = ${BACKFILL_KIND}
@@ -147,7 +192,7 @@ export async function repairGaps(): Promise<unknown> {
   const days = (liveWindow?.n ?? 0) > 0 ? [] : plan.days.filter((d) => !claimed.has(d));
   let enqueued = 0;
   if (days.length > 0) {
-    await sql`
+    await on(sql, enqueueWindow)`
       INSERT INTO jobs (kind, payload)
       VALUES (${WINDOW_KIND}, ${sql.json({ dates: days })})
     `;

@@ -6,12 +6,48 @@
 // other admin action is; see setAnalyticsReadMode's caller in
 // scripts/analytics-ledger-cutover-gate.ts).
 import { sql, type DbHandle } from "../../db/client.ts";
+import { on, registerQuery } from "../../db/registry.ts";
 import { evaluateCutoverGate, defaultCutoverGateConfig } from "./gate.ts";
 
 export type AnalyticsReadMode = "compatibility" | "ledger";
 
+// Registered queries (smoke-production-spec.md §7.1). The switch is READ on
+// every ledger-derived-current request path and by the cutover CLI; it is
+// WRITTEN only by that CLI.
+const readMode = registerQuery({
+  role: "rm_app",
+  object: "analytics_read_mode",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/read-mode:getAnalyticsReadMode",
+  purpose: "Read which source (compatibility tables or the immutable ledger) a ledger-derived-current read serves from.",
+  // admin (analytics overview), dashboards (report projections), swarm (a
+  // brief's body), and the cutover CLI's status line.
+  callers: [
+    "src/api/routes/admin",
+    "src/api/routes/dashboards",
+    "src/api/routes/swarm",
+    "scripts/analytics-ledger-cutover-gate",
+  ],
+  probe: { statement: "SELECT mode FROM analytics_read_mode WHERE id = true" },
+});
+
+const writeMode = registerQuery({
+  role: "rm_app",
+  object: "analytics_read_mode",
+  // SELECT because the WHERE reads the row it updates.
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/analytics/cutover/read-mode:setAnalyticsReadMode",
+  purpose: "Flip the single analytics read-mode row, behind the cutover gate for 'ledger' and ungated for a rollback.",
+  callers: ["scripts/analytics-ledger-cutover-gate"],
+  probe: {
+    statement: `UPDATE analytics_read_mode SET mode = $1, updated_at = clock_timestamp(), updated_by = $2
+      WHERE id = true`,
+    params: ["compatibility", "probe"],
+  },
+});
+
 export async function getAnalyticsReadMode(db: DbHandle = sql): Promise<AnalyticsReadMode> {
-  const [row] = (await db`SELECT mode FROM analytics_read_mode WHERE id = true`) as unknown as { mode: AnalyticsReadMode }[];
+  const [row] = await on(db, readMode)<{ mode: AnalyticsReadMode }>`SELECT mode FROM analytics_read_mode WHERE id = true`;
   // No row is a first-boot-before-migration-0060 shape, never a reason to
   // refuse a read: default to the mode every consumer has always used.
   return row?.mode ?? "compatibility";
@@ -47,7 +83,7 @@ export async function setAnalyticsReadMode(
     const result = await evaluateCutoverGate(db, defaultCutoverGateConfig());
     if (!result.ok) throw new CutoverGateNotPassedError(result.reasons);
   }
-  await db`
+  await on(db, writeMode)`
     UPDATE analytics_read_mode SET mode = ${mode}, updated_at = clock_timestamp(), updated_by = ${updatedBy}
     WHERE id = true`;
 }

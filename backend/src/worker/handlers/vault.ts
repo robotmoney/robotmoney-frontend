@@ -6,6 +6,61 @@
 // `vault.sample_share_price` cron (db/seed.ts, hourly) fires.
 import { config, resolveBaseRpcSource, resolveVaultAdapters } from "../../config.ts";
 import { sql } from "../../db/worker-client.ts";
+import { on, registerQuery } from "../../db/registry.ts";
+
+// Registered queries (smoke-production-spec.md §7.1), on the worker's own
+// pool. This handler module is the entry: the job loop dispatches the
+// `vault.sample_share_price` and `vault.sample_adapters` kinds to it.
+const VAULT_HANDLER = "src/worker/handlers/vault";
+
+const upsertSharePrice = registerQuery({
+  role: "rm_worker",
+  object: "vault_share_price_history",
+  // UPDATE for ON CONFLICT DO UPDATE; SELECT because the conflict target and
+  // EXCLUDED are read.
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/worker/handlers/vault:sampleSharePrice",
+  purpose: "Upsert the vault's hourly share-price sample on (vault_address, sample_hour).",
+  callers: [VAULT_HANDLER],
+  probe: {
+    statement: `INSERT INTO vault_share_price_history
+        (vault_address, sample_hour, sampled_at, total_assets, total_supply, share_price)
+      VALUES ($1, $2::timestamptz, $3::timestamptz, $4::numeric, $5::numeric, $6::numeric)
+      ON CONFLICT (vault_address, sample_hour) DO UPDATE SET
+        sampled_at = EXCLUDED.sampled_at, total_assets = EXCLUDED.total_assets,
+        total_supply = EXCLUDED.total_supply, share_price = EXCLUDED.share_price`,
+    params: ["0x0000000000000000000000000000000000000001", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "1", "1", "1"],
+  },
+});
+
+const upsertAdapterSample = registerQuery({
+  role: "rm_worker",
+  object: "vault_adapter_samples",
+  // UPDATE for ON CONFLICT DO UPDATE; SELECT because the conflict target and
+  // EXCLUDED are read.
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/worker/handlers/vault:sampleVaultAdapters",
+  purpose: "Upsert each adapter's hourly balance sample on (vault, adapter, sample_hour).",
+  callers: [VAULT_HANDLER],
+  probe: {
+    statement: `INSERT INTO vault_adapter_samples
+        (vault_address, adapter_address, adapter_name, sample_hour, balance_usd, configured, provenance, sampled_at)
+      VALUES ($1, $2, $3, $4::timestamptz, $5::numeric, $6::boolean, $7, $8::timestamptz)
+      ON CONFLICT (vault_address, adapter_address, sample_hour) DO UPDATE SET
+        adapter_name = EXCLUDED.adapter_name, balance_usd = EXCLUDED.balance_usd, configured = EXCLUDED.configured,
+        provenance = EXCLUDED.provenance, sampled_at = EXCLUDED.sampled_at`,
+    params: [
+      "0x0000000000000000000000000000000000000001",
+      "0x0000000000000000000000000000000000000002",
+      "probe",
+      "2026-01-01T00:00:00Z",
+      "1",
+      true,
+      "live",
+      "2026-01-01T00:00:00Z",
+    ],
+  },
+});
 import {
   type Aggregate3Result,
   decodeUint256,
@@ -52,7 +107,7 @@ export async function sampleSharePrice(payload: Record<string, unknown> = {}): P
   const sampleHour = new Date(sampledAt);
   sampleHour.setUTCMinutes(0, 0, 0);
 
-  await sql`
+  await on(sql, upsertSharePrice)`
     INSERT INTO vault_share_price_history
       (vault_address, sample_hour, sampled_at, total_assets, total_supply, share_price)
     VALUES
@@ -76,7 +131,7 @@ export async function sampleVaultAdapters(payload: Record<string, unknown> = {})
   const sampleHour = new Date(sampledAt);
   sampleHour.setUTCMinutes(0, 0, 0);
 
-  const upsert = (a: { name: string; address: string }, balanceUsd: number | null, configured: boolean) => sql`
+  const upsert = (a: { name: string; address: string }, balanceUsd: number | null, configured: boolean) => on(sql, upsertAdapterSample)`
     INSERT INTO vault_adapter_samples
       (vault_address, adapter_address, adapter_name, sample_hour, balance_usd, configured, provenance, sampled_at)
     VALUES

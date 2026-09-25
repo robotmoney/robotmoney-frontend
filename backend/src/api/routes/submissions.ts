@@ -23,6 +23,12 @@ const insertSubmission = registerQuery({
   site: "src/api/routes/submissions:createSubmission",
   purpose: "Insert one anonymous /submit intake row, always status 'pending', for POST /api/dashboards/submissions.",
   callers: ["src/api/routes/submissions"],
+  probe: {
+    statement: `INSERT INTO analytics_submissions (action_type, submitter_handle, agent_id, summary, registration, ip_hash)
+      VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+      RETURNING id, action_type, submitter_handle, agent_id, summary, registration, status, created_at`,
+    params: ["register_agent", "probe", null, "probe summary", "{\"name\":\"probe\"}", "probe-ip-hash"],
+  },
 });
 
 const MAX_HANDLE = 80;

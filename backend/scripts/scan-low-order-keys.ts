@@ -56,6 +56,56 @@
 // load, and `--sql` (and the unit test for the encoding table) must work on a
 // machine that has no database configured at all.
 import { isLowOrderEd25519PublicKey } from "../src/lib/signing.ts";
+// The registry builds no pool and reads no environment, so importing it
+// eagerly keeps `--sql` free of a database, like the lazy client import below.
+import { on, registerQuery } from "../src/db/registry.ts";
+
+// Registered queries (smoke-production-spec.md §7.1). The scan is a read-only
+// operator CLI, so it declares the read-only role: every relation it reads is
+// one rm_readonly may SELECT, and it needs nothing more.
+const SCAN_CLI = "scripts/scan-low-order-keys";
+
+// The scan below, as tests/db-registry-execution.test.ts runs it: the call
+// site's own statement (that test holds the two to the same text), under all
+// three declarations it reads.
+const SCAN_PROBE = {
+  statement: `SELECT k.id, k.member_id, k.public_key, k.active, k.created_at,
+           m.handle, m.name, m.status,
+           (SELECT count(*) FROM swarm_recommendations r WHERE r.member_id = k.member_id) AS take_count
+    FROM swarm_member_keys k
+    LEFT JOIN swarm_members m ON m.id = k.member_id
+    ORDER BY k.created_at ASC, k.id ASC`,
+};
+
+const scanKeys = registerQuery({
+  role: "rm_readonly",
+  object: "swarm_member_keys",
+  privileges: ["SELECT"],
+  site: "scripts/scan-low-order-keys:runLowOrderKeyScan.keys",
+  purpose: "Read every registered member key, active and rotated, to test each for a low-order point.",
+  callers: [SCAN_CLI],
+  probe: SCAN_PROBE,
+});
+
+const scanMembers = registerQuery({
+  role: "rm_readonly",
+  object: "swarm_members",
+  privileges: ["SELECT"],
+  site: "scripts/scan-low-order-keys:runLowOrderKeyScan.members",
+  purpose: "Join each key's member handle, name and status, which the scan LEFT JOINs.",
+  callers: [SCAN_CLI],
+  probe: SCAN_PROBE,
+});
+
+const scanTakeCounts = registerQuery({
+  role: "rm_readonly",
+  object: "swarm_recommendations",
+  privileges: ["SELECT"],
+  site: "scripts/scan-low-order-keys:runLowOrderKeyScan.takes",
+  purpose: "Count each key holder's takes, every one of which a low-order key makes suspect.",
+  callers: [SCAN_CLI],
+  probe: SCAN_PROBE,
+});
 
 export interface LowOrderKeyHit {
   keyId: number;
@@ -105,7 +155,7 @@ export async function runLowOrderKeyScan(): Promise<LowOrderKeyScanReport> {
   const { sql } = await import("../src/db/client.ts");
   // ALL rows — active and rotated. A rotated-out low-order key still signed
   // whatever it signed while it was active, so it is just as much a finding.
-  const rows = await sql<{
+  const rows = await on(sql, scanKeys, scanMembers, scanTakeCounts)<{
     id: string | number;
     member_id: string;
     public_key: string;
@@ -115,7 +165,7 @@ export async function runLowOrderKeyScan(): Promise<LowOrderKeyScanReport> {
     name: string | null;
     status: string | null;
     take_count: string | number;
-  }[]>`
+  }>`
     SELECT k.id, k.member_id, k.public_key, k.active, k.created_at,
            m.handle, m.name, m.status,
            (SELECT count(*) FROM swarm_recommendations r WHERE r.member_id = k.member_id) AS take_count

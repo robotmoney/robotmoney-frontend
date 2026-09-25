@@ -63,24 +63,57 @@ const readConfig = registerQuery({
   site: "src/swarm/judge-config:getJudgeConfig",
   purpose: "Read the judge switch for the admin surface, for the pair validation of a write, and for the replay audit.",
   callers: [ADMIN_ROUTE, "scripts/swarm-judge-replay"],
+  probe: {
+    statement: "SELECT mode, min_takes, model, third_party_enabled, updated_at FROM swarm_judge_config WHERE id = 1",
+  },
 });
 
 const updateConfig = registerQuery({
   role: "rm_app",
   object: "swarm_judge_config",
-  privileges: ["UPDATE"],
+  // SELECT as well: the SET list reads the row it replaces (COALESCE(..., mode),
+  // the policy stamp's IS DISTINCT FROM), and the WHERE and RETURNING read it
+  // too. Postgres checks each of those as a read of the column.
+  privileges: ["UPDATE", "SELECT"],
   site: "src/swarm/judge-config:setJudgeConfig.update",
   purpose: "Patch the judge switch (mode, min_takes, model, third-party flag) on behalf of an audited admin write.",
   callers: [ADMIN_ROUTE],
+  // The call site's statement exactly (tests/db-registry-execution.test.ts
+  // holds the two to the same text): one placeholder per interpolation.
+  probe: {
+    statement: `UPDATE swarm_judge_config SET
+      mode = CASE WHEN COALESCE($1, mode) = 'enforce' THEN 'enforce' ELSE 'off' END,
+      min_takes = COALESCE($2::integer, min_takes),
+      model = CASE WHEN $3::boolean THEN NULL
+                   ELSE COALESCE($4, model) END,
+      third_party_enabled = COALESCE($5::boolean, third_party_enabled),
+      updated_at = now(),
+      policy_updated_at = CASE
+        WHEN mode IS DISTINCT FROM (CASE WHEN COALESCE($6, mode) = 'enforce' THEN 'enforce' ELSE 'off' END)
+          OR min_takes IS DISTINCT FROM COALESCE($7::integer, min_takes)
+        THEN now() ELSE policy_updated_at END
+    WHERE id = 1
+    RETURNING id`,
+    params: ["off", null, false, null, null, "off", null],
+  },
 });
 
 const insertConfig = registerQuery({
   role: "rm_app",
   object: "swarm_judge_config",
-  privileges: ["INSERT"],
+  // SELECT as well: `ON CONFLICT (id)` reads the arbiter column, which
+  // Postgres checks as a read (tests/db-registry-execution.test.ts found the
+  // INSERT-only declaration refused with 42501 for a role holding just that).
+  privileges: ["INSERT", "SELECT"],
   site: "src/swarm/judge-config:setJudgeConfig.insert",
   purpose: "Create the one judge-switch row on an empty table, for an audited admin write.",
   callers: [ADMIN_ROUTE],
+  probe: {
+    statement: `INSERT INTO swarm_judge_config (id, mode, min_takes, model, third_party_enabled, updated_at, policy_updated_at)
+      VALUES (1, $1, $2::integer, $3, $4::boolean, now(), now())
+      ON CONFLICT (id) DO NOTHING`,
+    params: ["off", 3, null, false],
+  },
 });
 
 export async function getJudgeConfig(): Promise<JudgeConfig> {
