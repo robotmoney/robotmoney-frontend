@@ -315,7 +315,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
   // written down instead of fixed, which is the one thing a ratchet exists to
   // prevent. The only legal edit is a deletion.
   const RAW_SQL_ALLOWLIST: readonly string[] = [
-    "src/admin/overview",
     "src/analytics/store/output-snapshot-store",
     "src/analytics/store/regime-store",
     "src/analytics/store/run-ledger-store",

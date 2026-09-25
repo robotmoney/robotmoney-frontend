@@ -6,6 +6,7 @@
 // healthy — never guessed, always derived from the same columns the rest of
 // the admin surface reads.
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import { getNextSwarmSession } from "../swarm/domain.ts";
 import { computeRegimeSnapshotStaleness, type RegimeStaleness } from "../analytics/report/regime-projection.ts";
 import { loadRosterSeedManifest } from "../projects/seed/roster-seed.ts";
@@ -144,6 +145,106 @@ export interface RosterSeedHealth {
   error: string | null; // manifest unreadable/unsupported — the seed cannot load at all
 }
 
+// Registered queries (smoke-production-spec.md §7.1), all reads, reached only
+// through GET /api/admin/overview.
+const ADMIN_ROUTE = "src/api/routes/admin";
+
+const jobsByStatus = registerQuery({
+  role: "rm_app",
+  object: "jobs",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.queueCounts",
+  purpose: "Count jobs by status for the overview's queue panel.",
+  callers: [ADMIN_ROUTE],
+  probe: { statement: "SELECT status, count(*)::int AS n FROM jobs GROUP BY status" },
+});
+
+const lastJobOfKind = registerQuery({
+  role: "rm_app",
+  object: "jobs",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.lastJob",
+  purpose: "Read a monitored kind's newest job, to tell dead, stuck and running apart.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: "SELECT id, status, locked_at FROM jobs WHERE kind = $1 ORDER BY id DESC LIMIT 1",
+    params: ["regime.classify"],
+  },
+});
+
+const lastRunOfKind = registerQuery({
+  role: "rm_app",
+  object: "job_runs",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.lastRun",
+  purpose: "Read a monitored kind's newest run and its outcome.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: "SELECT status, started_at, finished_at FROM job_runs WHERE kind = $1 ORDER BY started_at DESC LIMIT 1",
+    params: ["regime.classify"],
+  },
+});
+
+const latestRegime = registerQuery({
+  role: "rm_app",
+  object: "regime_snapshots",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.regime",
+  purpose: "Read the newest regime snapshot's indicators to judge its staleness.",
+  callers: [ADMIN_ROUTE],
+  probe: { statement: "SELECT indicators FROM regime_snapshots ORDER BY date DESC LIMIT 1" },
+});
+
+const latestResearchDate = registerQuery({
+  role: "rm_app",
+  object: "research_signals",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.research",
+  purpose: "Read a research signal's newest date to judge its staleness.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: "SELECT date FROM research_signals WHERE signal_key = $1 ORDER BY date DESC LIMIT 1",
+    params: ["probe_signal"],
+  },
+});
+
+const enabledSchedules = registerQuery({
+  role: "rm_app",
+  object: "job_schedules",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.schedules",
+  purpose: "List the enabled production analytics schedules and their next run.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: "SELECT id, kind, cron, next_run_at FROM job_schedules WHERE enabled = true AND kind = ANY($1::text[]) ORDER BY kind",
+    params: ["{regime.classify,research.refresh}"],
+  },
+});
+
+const activeProjects = registerQuery({
+  role: "rm_app",
+  object: "projects",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.activeProjects",
+  purpose: "Count the active, resolved projects for the roster-seed health panel.",
+  callers: [ADMIN_ROUTE],
+  probe: { statement: "SELECT count(*)::int AS n FROM projects WHERE status = 'active' AND resolved_at IS NOT NULL" },
+});
+
+const judgementSources = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.judgeSources",
+  purpose: "Count recent judgements by source and fallback reason for the judge fallback-share alert.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: `SELECT source, coalesce(btrim(fallback_reason), '') AS fallback_reason, count(*)::int AS n
+      FROM swarm_session_judgements WHERE created_at >= now() - ($1 || ' days')::interval GROUP BY 1, 2`,
+    params: [7],
+  },
+});
+
 function visibilityTimeoutSeconds(): number {
   return Number(process.env.JOB_VISIBILITY_TIMEOUT ?? 300);
 }
@@ -153,18 +254,19 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
   const alerts: Alert[] = [];
 
   // ── Queue counts ───────────────────────────────────────────────────────
-  const statusRows = await sql`SELECT status, count(*)::int AS n FROM jobs GROUP BY status`;
+  const statusRows = await on(sql, jobsByStatus)<{ status: string; n: number }>`
+    SELECT status, count(*)::int AS n FROM jobs GROUP BY status`;
   const queueCounts: Record<string, number> = {};
   for (const r of statusRows) queueCounts[r.status] = r.n;
 
   // ── Production-kind health ────────────────────────────────────────────
   const production: ProductionKindHealth[] = [];
   for (const kind of MONITORED_KINDS) {
-    const [lastJob] = await sql`
+    const [lastJob] = await on(sql, lastJobOfKind)<{ id: string; status: string; locked_at: Date | null }>`
       SELECT id, status, locked_at
         FROM jobs WHERE kind = ${kind}
        ORDER BY id DESC LIMIT 1`;
-    const [lastRun] = await sql`
+    const [lastRun] = await on(sql, lastRunOfKind)<{ status: string; started_at: Date | null; finished_at: Date | null }>`
       SELECT status, started_at, finished_at
         FROM job_runs WHERE kind = ${kind}
        ORDER BY started_at DESC LIMIT 1`;
@@ -224,7 +326,8 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
   // #398), never from its `date` column — that column is forward-filled to
   // today on every pipeline run regardless of whether the underlying sources
   // actually refreshed, so it can never surface a frozen data source.
-  const [regimeRow] = await sql`SELECT indicators FROM regime_snapshots ORDER BY date DESC LIMIT 1`;
+  const [regimeRow] = await on(sql, latestRegime)<{ indicators: Parameters<typeof computeRegimeSnapshotStaleness>[0] }>`
+    SELECT indicators FROM regime_snapshots ORDER BY date DESC LIMIT 1`;
   const regime = computeRegimeSnapshotStaleness(regimeRow?.indicators ?? null, serverDate);
   if (regime.stale) alerts.push({ level: "stale", source: "regime", message: "regime snapshot is stale" });
   else alerts.push({ level: "healthy", source: "regime", message: "regime snapshot is fresh" });
@@ -232,7 +335,8 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
   // ── Research signal freshness (RESEARCH_STALE_DAYS) ───────────────────
   const research: AdminOverview["research"] = [];
   for (const key of RESEARCH_SIGNAL_KEYS) {
-    const [row] = await sql`SELECT date FROM research_signals WHERE signal_key = ${key} ORDER BY date DESC LIMIT 1`;
+    const [row] = await on(sql, latestResearchDate)<{ date: string | Date }>`
+      SELECT date FROM research_signals WHERE signal_key = ${key} ORDER BY date DESC LIMIT 1`;
     const latestDate = row?.date
       ? typeof row.date === "string" ? row.date : new Date(row.date).toISOString().slice(0, 10)
       : null;
@@ -253,7 +357,7 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
   }
 
   // ── Enabled analytics schedules ────────────────────────────────────────
-  const scheduleRows = await sql`
+  const scheduleRows = await on(sql, enabledSchedules)<{ id: string; kind: string; cron: string; next_run_at: Date | null }>`
     SELECT id, kind, cron, next_run_at
       FROM job_schedules
      WHERE enabled = true AND kind = ANY(${[...PRODUCTION_KINDS]})
@@ -289,7 +393,7 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
   // actually live" are the two numbers that say whether the public directory is
   // current — and neither was reachable anywhere before this. Manifest only: the
   // ~1.1 MB data file is not read on an admin request.
-  const [activeRow] = await sql`
+  const [activeRow] = await on(sql, activeProjects)<{ n: number }>`
     SELECT count(*)::int AS n FROM projects WHERE status = 'active' AND resolved_at IS NOT NULL`;
   const activeProjectCount = Number(activeRow?.n ?? 0);
   let rosterSeed: RosterSeedHealth = {
@@ -409,7 +513,7 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
   // feature is gone, and the thresholds were not re-tuned because nothing new
   // can reach them.
   try {
-    const judgeSources = await sql<{ source: string; fallback_reason: string | null; n: number }[]>`
+    const judgeSources = await on(sql, judgementSources)<{ source: string; fallback_reason: string | null; n: number }>`
       SELECT source, coalesce(btrim(fallback_reason), '') AS fallback_reason, count(*)::int AS n
         FROM swarm_session_judgements
        WHERE created_at >= now() - (${JUDGE_FALLBACK_LOOKBACK_DAYS} || ' days')::interval
