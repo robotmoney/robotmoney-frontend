@@ -196,6 +196,10 @@ export interface QueryProbe {
   readonly params?: readonly ProbeParam[];
 }
 
+/** The rows a statement returns, plus the affected-row `count` postgres.js puts
+ *  on every result — what an INSERT or UPDATE without RETURNING reports. */
+export type RegistryRows<T> = T[] & { readonly count: number };
+
 /**
  * What `registerQuery` hands back: a tagged template that issues the statement
  * and nothing else. There is no escape hatch to the underlying client, because
@@ -211,7 +215,7 @@ export interface RegisteredQuery {
     db: RegistryDb,
     strings: TemplateStringsArray,
     ...values: readonly unknown[]
-  ): Promise<T[]>;
+  ): Promise<RegistryRows<T>>;
 }
 
 /**
@@ -269,11 +273,11 @@ export function registerQuery(declaration: QueryDeclaration): RegisteredQuery {
 
   const query: RegisteredQuery = {
     declaration: frozen,
-    run<T = unknown>(db: RegistryDb, strings: TemplateStringsArray, ...values: readonly unknown[]): Promise<T[]> {
+    run<T = unknown>(db: RegistryDb, strings: TemplateStringsArray, ...values: readonly unknown[]): Promise<RegistryRows<T>> {
       // postgres.js's tagged template, called with the caller's own strings and
       // values, so a registered site costs nothing but the declaration. The
       // handle is never exposed back to the call site.
-      return (db as unknown as (s: TemplateStringsArray, ...v: readonly unknown[]) => Promise<T[]>)(
+      return (db as unknown as (s: TemplateStringsArray, ...v: readonly unknown[]) => Promise<RegistryRows<T>>)(
         strings,
         ...values,
       );
@@ -330,7 +334,7 @@ export function on(db: RegistryDb, query: RegisteredQuery, ...joined: readonly R
   // primary one included, must be the exact runner `registerQuery` returned for
   // that site, or nothing runs.
   for (const candidate of [query, ...joined]) assertRegistered(candidate, query);
-  return <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: readonly unknown[]): Promise<T[]> =>
+  return <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: readonly unknown[]): Promise<RegistryRows<T>> =>
     query.run<T>(db, strings, ...values);
 }
 

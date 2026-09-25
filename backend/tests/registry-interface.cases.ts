@@ -102,7 +102,8 @@ describe("on — the registered form a call site issues its statement through", 
     const calls: { strings: readonly string[]; values: unknown[] }[] = [];
     const db = ((strings: TemplateStringsArray, ...values: unknown[]) => {
       calls.push({ strings: [...strings], values });
-      return Promise.resolve([{ ok: 1 }]);
+      // postgres.js puts the affected-row count on every result array.
+      return Promise.resolve(Object.assign([{ ok: 1 }], { count: 1 }));
     }) as unknown as RegistryDb;
     return { db, calls };
   }
@@ -111,7 +112,8 @@ describe("on — the registered form a call site issues its statement through", 
     const query = registerQuery(declaration({ site: site("on_forward") }));
     const { db, calls } = recordingDb();
     const rows = await on(db, query)<{ ok: number }>`SELECT ${1} AS ok WHERE ${"x"} = ${"x"}`;
-    expect(rows).toEqual([{ ok: 1 }]);
+    expect([...rows]).toEqual([{ ok: 1 }]);
+    expect(rows.count).toBe(1);
     expect(calls).toEqual([{ strings: ["SELECT ", " AS ok WHERE ", " = ", ""], values: [1, "x", "x"] }]);
   });
 

@@ -188,8 +188,46 @@ describe("structural enforcement — a raw sql call outside the interface is det
         tag: tag.getText(source).replace(/\s+/g, " "),
       });
     };
+    // A FRAGMENT WRITTEN INLINE IN A REGISTERED STATEMENT IS PART OF IT.
+    // postgres.js composes `on(db, q)`... ${cond ? db`FOR UPDATE` : db``}`` into
+    // ONE statement: the inner templates are pieces of the declared statement,
+    // never issued on their own. So a tagged template counts as a fragment,
+    // not a statement, only when ALL of these hold, read from the syntax:
+    //   - it sits directly in a `${...}` of a registered template (or of a
+    //     fragment that does), reached through nothing but parentheses and
+    //     `?:` branches — never through a call, a variable or a function;
+    //   - its tag is the very handle identifier the enclosing `on(...)` was
+    //     given as its first argument.
+    // A fragment built anywhere else (a helper that returns one, a `const`)
+    // is still a raw statement here, however it is later used.
+    const fragments = new Set<ts.Node>();
+    const collectFragments = (expression: ts.Expression, handle: string): void => {
+      let e = expression;
+      while (ts.isParenthesizedExpression(e)) e = e.expression;
+      if (ts.isConditionalExpression(e)) {
+        collectFragments(e.whenTrue, handle);
+        collectFragments(e.whenFalse, handle);
+        return;
+      }
+      if (ts.isTaggedTemplateExpression(e) && ts.isIdentifier(e.tag) && e.tag.text === handle) {
+        fragments.add(e);
+        if (ts.isTemplateExpression(e.template)) {
+          for (const span of e.template.templateSpans) collectFragments(span.expression, handle);
+        }
+      }
+    };
+    const markInlineFragments = (node: ts.TaggedTemplateExpression): void => {
+      const call = node.tag as ts.CallExpression;
+      const handle = call.arguments[0];
+      if (!handle || !ts.isIdentifier(handle) || !ts.isTemplateExpression(node.template)) return;
+      for (const span of node.template.templateSpans) collectFragments(span.expression, handle.text);
+    };
+
     const visit = (node: ts.Node): void => {
-      if (ts.isTaggedTemplateExpression(node) && !isRegisteredTag(node.tag)) record(node, node.tag);
+      if (ts.isTaggedTemplateExpression(node)) {
+        if (isRegisteredTag(node.tag)) markInlineFragments(node);
+        else if (!fragments.has(node)) record(node, node.tag);
+      }
       if (
         ts.isCallExpression(node) &&
         ts.isPropertyAccessExpression(node.expression) &&
@@ -289,7 +327,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "src/api/routes/admin",
     "src/api/routes/admin-webauthn",
     "src/api/routes/projects",
-    "src/chain/buyback-logs",
     "src/ops/asset-prices",
     "src/ops/gap-detector",
     "src/ops/wallet-backfill",
@@ -306,7 +343,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "src/swarm/domain",
     "src/swarm/judge-fault-injection",
     "src/swarm/judge-replay",
-    "src/swarm/judgements",
     "src/swarm/roster-seed",
     "src/worker/handlers/projects",
     "src/worker/handlers/repair",
@@ -417,6 +453,35 @@ describe("structural enforcement — a raw sql call outside the interface is det
     for (const shape of registered) {
       expect(plant(shape), shape).toEqual([]);
     }
+  });
+
+  test("a fragment written inline in a registered statement is part of it, not a statement", () => {
+    const REG = 'import { on } from "../db/registry.ts";\n';
+    const inline = [
+      "export async function ok(db, q, lock) { return on(db, q)`SELECT 1 FROM t ${lock ? db`FOR UPDATE` : db``}`; }",
+      "export async function ok(db, q, n) { return on(db, q)`SELECT 1 FROM t ${(n == null ? db`` : db`LIMIT ${n}`)}`; }",
+      // Nested ternaries, and a fragment inside a fragment.
+      "export async function ok(db, q, a, b) { return on(db, q)`SELECT 1 FROM t WHERE ${a ? db`x = ${a}` : b ? db`y = ${b} ${db`AND true`}` : db`true`}`; }",
+    ];
+    for (const shape of inline) expect(plant(REG + shape), shape).toEqual([]);
+  });
+
+  test("RED CONTROL: a fragment built anywhere but inline, or on another handle, is still a raw statement", () => {
+    const REG = 'import { on } from "../db/registry.ts";\n';
+    const outside = [
+      // Built in a variable, then spliced in.
+      "export async function leak(db, q) { const f = db`FOR UPDATE`; return on(db, q)`SELECT 1 FROM t ${f}`; }",
+      // Returned by a helper.
+      "const lock = (db) => db`FOR UPDATE`;\nexport async function leak(db, q) { return on(db, q)`SELECT 1 FROM t ${lock(db)}`; }",
+      // Reached through a call inside the span.
+      "export async function leak(db, q) { return on(db, q)`SELECT 1 FROM t ${String(db`DELETE FROM t`)}`; }",
+      // Tagged with a different handle than the registered statement runs on.
+      "export async function leak(db, other, q) { return on(db, q)`SELECT 1 FROM t ${other`FOR UPDATE`}`; }",
+      // Inline in an UNREGISTERED statement: both are raw.
+      "export async function leak(db) { return db`SELECT 1 FROM t ${db`FOR UPDATE`}`; }",
+    ];
+    const expected = [1, 1, 1, 1, 2];
+    outside.forEach((shape, i) => expect(plant(REG + shape), shape).toHaveLength(expected[i]!));
   });
 
   test("a module that registers is not thereby exempt — its raw statements still count", () => {
