@@ -28,56 +28,38 @@ export function stackRmEnvFor(standingStack: boolean, policy: "prod" | "stage"):
 
 // ── What else the operator's shell may still contribute ─────────────────────
 //
-// The base allowlist lives one module further down (smoke-compose-passthrough
-// .ts) so the judge-transport test can import it without importing this file's
-// RM_ENV resolver. This file owns the two adjustments that are facts about a
-// BOOT rather than about the list:
+// The allowlist lives one module further down (smoke-compose-passthrough.ts) so
+// the judge-transport test can import it without importing this file's RM_ENV
+// resolver. It is used as it stands: nothing is added to it here any more.
 //
-//   * MIGRATE_DATABASE_URL is ADDED. It is not inherited from an operator's
-//     shell — restore-container.ts assigns it on this process from the shaped
-//     twin, and the passthrough is how it reaches compose. Set only by a
-//     rehearsal that opted into RM_TWIN_PRODUCTION_PRIVILEGES; it is what makes
-//     migrate.ts (:34) run as the non-superuser bootstrap login instead of
-//     inheriting the container superuser's DATABASE_URL.
+//   * NO MIGRATION CREDENTIAL reaches compose. MIGRATE_DATABASE_URL used to be
+//     added here so a one-shot migrate container could run the legacy runner
+//     as a bootstrap login. `bun smoke` no longer migrates inside a container:
+//     `--migrate` runs the migrate run on the HOST, as rm_owner, under the
+//     boot's target lock (backend/scripts/smoke-prepare.ts, migrate-run.ts
+//     migrateCommand), so no container is ever handed a migration credential.
 //
-//   * WORKER_DATABASE_URL is REMOVED (ffa431b6), because it cost a stage twin
-//     boot on 2026-09-18: the stage checkout's `.env` carries the DEPLOYMENT's
-//     value (`…@postgres:5432/robotmoney`, the rm_worker login of the
-//     persistent stack, deployment.md §4.3) and bun auto-loads `.env` into the
-//     driver's process.env, so every `bun smoke:twin` on that host forwarded it
-//     into all three worker lanes. A smoke has no `postgres` service to resolve
-//     — `--twin`/`--db external` delete it outright (`postgres: !reset null`) —
-//     so each lane's first query died in DNS (`getaddrinfo ESERVFAIL`), the
-//     lanes sat `unhealthy` forever, and every enqueued swarm.open_session
-//     stayed `pending` at attempts=0. It could never have worked in the other
-//     direction either: with an in-stack postgres the ephemeral database's
-//     credentials are generated per boot. This is a DATABASE URL — precisely
-//     the class buildComposeEnv() owns and an exported value must never shadow.
-//     Unset, docker-compose.yml's `:-` default leaves it empty and
-//     worker-client.ts:49 falls back to the stack's DATABASE_URL, which is the
-//     twin. Exported, it is now reported and dropped (see below).
-//
-// Derived from the leaf rather than restated, so a key added there (the judge's
-// transport settings, the fault-injection levers) arrives here automatically
-// and the two lists can never silently disagree.
-const NEVER_FROM_THE_SHELL: ReadonlySet<string> = new Set(["WORKER_DATABASE_URL"]);
-
-export const DEMO_COMPOSE_PASSTHROUGH: readonly string[] = Object.freeze([
-  ...LEAF_COMPOSE_PASSTHROUGH.filter((k) => !NEVER_FROM_THE_SHELL.has(k)),
-  "MIGRATE_DATABASE_URL",
-]);
+//   * WORKER_DATABASE_URL is STACK-OWNED. It is the pipeline worker's rm_worker
+//     URL, emitted by buildComposeEnv() from the stack's own role URLs
+//     (scripts/stack/config.ts StackDatabase.roleUrls) — the smoke's generated
+//     rm_worker password for a local mode, `~/.env`'s for the remote database.
+//     It is not on the shell allowlist: a deployment `.env` once forwarded the
+//     persistent stack's `…@postgres:5432` value into every lane of a twin boot
+//     that has no `postgres` service (ffa431b6), and every lane died in DNS. An
+//     exported value is reported and ignored (shadowingStackEnvWarnings below).
+export const DEMO_COMPOSE_PASSTHROUGH: readonly string[] = Object.freeze([...LEAF_COMPOSE_PASSTHROUGH]);
 
 /**
  * The migration credential an operator's shell may not supply.
  *
- * MIGRATE_DATABASE_URL is in the passthrough above for ONE reason: this process
- * assigns it itself, for one migrate run (restore-container.ts's
- * twinMigrationCredential() for a dump, the interactive prompt for the remote
- * database). An EXPORTED value is a different thing: `--local blank --migrate`
- * with a remote MIGRATE_DATABASE_URL in the shell would have run migrate.ts
- * against that remote database, which is exactly the remote connection a local
- * mode must never open (criterion 32, spec §3). So the shell's value is removed
- * from `env` before anything reads it, and the caller says so out loud.
+ * Nothing in `bun smoke` reads MIGRATE_DATABASE_URL: the migrate run takes the
+ * rm_owner password smoke generated (local) or the one typed at the terminal
+ * (remote), for one run, and never from the environment (spec §3). An EXPORTED
+ * value is still removed from `env` before anything could read it, and the
+ * caller says so out loud: `--local blank --migrate` with a remote
+ * MIGRATE_DATABASE_URL in the shell once ran a migration against that remote
+ * database, which is exactly the remote connection a local mode must never open
+ * (criterion 32, spec §3).
  *
  * Mutates `env` (the caller passes process.env, at the very top of the boot)
  * and returns the warning to print, or null when nothing was exported.
@@ -89,9 +71,9 @@ export function dropShellMigrationCredential(env: Record<string, string | undefi
   if (raw.trim() === "") return null;
   return (
     "WARNING: MIGRATE_DATABASE_URL is set in the environment and is being IGNORED for this boot. " +
-    "A boot builds its own migration credential for the one migrate run that needs it (a local mode " +
-    "from its container, the remote database from the interactive prompt); a shell value would point " +
-    "migrate.ts at whatever database it names. This message means the smoke did NOT forward it."
+    "A boot's migrate run logs in as rm_owner with the password smoke generated (a local mode) or the one " +
+    "typed at the terminal (the remote database); a shell value would point a migration at whatever " +
+    "database it names. This message means the smoke did NOT forward it."
   );
 }
 
@@ -117,9 +99,10 @@ export function smokePassthroughEnv(env: Record<string, string | undefined>): Re
 const SHADOWING_STACK_ENV_VARS: ReadonlyArray<readonly [string, string]> = [
   [
     "WORKER_DATABASE_URL",
-    "the worker lanes take the stack's own DATABASE_URL (the twin, under --twin). " +
-      "Forwarding a deployment's rm_worker URL pointed them at a `postgres` host this stack does " +
-      "not have, and every lane died in DNS while the boot reported only unhealthy workers",
+    "the worker lanes take the stack's own rm_worker URL (the instance's generated password for a local " +
+      "mode, ~/.env's for the remote database). Forwarding a deployment's rm_worker URL pointed them at a " +
+      "`postgres` host this stack does not have, and every lane died in DNS while the boot reported only " +
+      "unhealthy workers",
   ],
 ];
 

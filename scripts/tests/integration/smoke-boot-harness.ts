@@ -6,8 +6,9 @@
 // instance or another test's. The boot runs exactly as an operator runs it —
 // `bun --no-env-file scripts/smoke.ts --local blank --migrate --instance <name>`
 // — with a hermetic environment: no CI and no GitHub Actions identity (either
-// would change the instance and project resolution under test), a development
-// RM_ENV and a keyless model (no local path calls a model; the inference
+// would change the instance and project resolution under test), the `stage`
+// policy (spec §4.1; the §4.3 matrix refuses the retired `smoke` value) and a
+// keyless model (no local path calls a model; the inference
 // preflight still resolves one), and an explicit empty roster unless a test
 // plants one. Docker and bun keep the real HOME so builds hit the host's caches.
 //
@@ -46,7 +47,7 @@ export interface BootHarness {
 export function harness(prefix: string, opts: { root?: string } = {}): BootHarness {
   const root = opts.root ?? mkdtempSync(join(tmpdir(), `rm-${prefix}-`));
   const instance = `rm_it_${prefix.replace(/[^a-z0-9]/g, "")}_${Math.random().toString(16).slice(2, 8)}`;
-  const env: Record<string, string> = { RM_SMOKE_STATE_ROOT: root, RM_ENV: "smoke", AGENT_MODEL: "free" };
+  const env: Record<string, string> = { RM_SMOKE_STATE_ROOT: root, RM_ENV: "stage", AGENT_MODEL: "free" };
   for (const key of ["PATH", "HOME", "TMPDIR", "DOCKER_HOST", "DOCKER_CONFIG", "DOCKER_CONTEXT", "BUN_INSTALL", "BUN_INSTALL_CACHE_DIR"]) {
     const value = process.env[key];
     if (value !== undefined) env[key] = value;

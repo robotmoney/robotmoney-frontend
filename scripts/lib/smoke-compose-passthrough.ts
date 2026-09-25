@@ -35,14 +35,9 @@ export const DEMO_COMPOSE_PASSTHROUGH = [
   // were forwarded here for an inline judge inside `api`; `api` no longer
   // interpolates either (D52: the judge is a participant), so forwarding them
   // would only carry a value to nothing.
-  // THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (backend/src/swarm/
-  // judge-fault-injection.ts, R13). `docker-compose.yml` interpolates both
-  // into api, and until this list named them, exporting either produced an
-  // EMPTY variable in the container: an operator staging AC-E2E-06 through the
-  // documented boot got a silent "flag_absent" refusal instead of the lever
-  // they set. Blank by default (never enabled unless set).
-  "SWARM_JUDGE_FAULT_INJECTION",
-  "SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN",
+  // NO JUDGE FAULT-INJECTION LEVER. D55 (3) retired it: docker-compose.yml no
+  // longer interpolates SWARM_JUDGE_FAULT_INJECTION or its acceptance opt-in
+  // into any service, so forwarding either would carry a value to nothing.
   "FETCH_CACHE_DIR",
   "FLOOR_SEED_PATH",
   "PROJECTS_SOURCE",
@@ -51,7 +46,9 @@ export const DEMO_COMPOSE_PASSTHROUGH = [
   // resolveStackRmEnv(), and buildComposeEnv() refuses to see it in the extras
   // map. Passing it through from the operator's shell is exactly what made the
   // acceptance path a property of what somebody last typed (D13).
-  "WORKER_DATABASE_URL",
+  // NO "WORKER_DATABASE_URL" either. It is the pipeline worker's rm_worker
+  // credential, which buildComposeEnv() emits from the stack's own role URLs
+  // (StackDatabase.roleUrls); an exported value must never shadow it.
 ] as const;
 
 export function smokePassthroughEnv(env: Record<string, string | undefined>): Record<string, string> {

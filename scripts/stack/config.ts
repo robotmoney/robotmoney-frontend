@@ -178,6 +178,24 @@ export interface StackDatabase {
    * real secret. Print `redactPostgresUrl()` instead.
    */
   url?: string;
+  /**
+   * THE RUNTIME ROLES' OWN URLS, as a container reaches the database: `app`
+   * for `api` (rm_app) and `worker` for the pipeline worker (rm_worker). When
+   * set, they are what buildComposeEnv() emits as DATABASE_URL and
+   * WORKER_DATABASE_URL, and no container is handed any other database login
+   * (smoke-production-spec §3, §7.2, §7.3: "tests connect as
+   * rm_app/rm_worker/rm_readonly, and nothing uses the superuser again").
+   * `bun smoke` always sets them — from the instance's generated passwords for
+   * a local mode, from `~/.env` for the remote database.
+   *
+   * Unset (a consumer that has not moved onto the role taxonomy, such as the
+   * onboarding eval's `core` stack), both variables fall back to the one URL
+   * above: that consumer's single legacy login, stated explicitly rather than
+   * left to docker-compose.yml, which no longer falls back from one to the other.
+   *
+   * NEVER log or serialize these.
+   */
+  roleUrls?: { readonly app: string; readonly worker: string };
 }
 
 // The baked-in smoke credentials (previously spelled out in smoke-main.ts). They
@@ -361,7 +379,10 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
     // file without a second code path.
     [ENV_CLASS_COMPOSE_VAR]: cfg.environment.class,
     [ENV_HASH_COMPOSE_VAR]: cfg.environment.hash,
-    DATABASE_URL: internalDatabaseUrl(cfg.database),
+    DATABASE_URL: cfg.database.roleUrls?.app ?? internalDatabaseUrl(cfg.database),
+    // The pipeline worker's credential (docker-compose.yml x-worker-env hands it
+    // to BOTH of the worker's pools, with no fallback to the api's).
+    WORKER_DATABASE_URL: cfg.database.roleUrls?.worker ?? internalDatabaseUrl(cfg.database),
     ADMIN_TOKEN: cfg.credentials.adminToken,
     AUTOMATION_TOKEN: cfg.credentials.automationToken,
     ANALYTICS_TOKEN: cfg.credentials.analyticsTokenFile ? "" : cfg.credentials.analyticsToken,

@@ -23,7 +23,9 @@ export {
 // rather than the lib, which proves the tested module is the one that boots.
 export {
   bannerFor,
-  bootPreflightPlan,
+  LOCK_TIMEOUT_DEFAULT_SECONDS,
+  LOCK_TIMEOUT_FLAG,
+  lockTimeoutMs,
   cadenceOverride,
   DEMO_FLAGS,
   dataPathOverlayYaml,

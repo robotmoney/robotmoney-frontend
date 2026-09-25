@@ -141,29 +141,14 @@ const TWIN_BOOTSTRAP_ATTRS = "LOGIN CREATEROLE CREATEDB BYPASSRLS REPLICATION";
  * Returns the bootstrap URL; the caller sets it as MIGRATE_DATABASE_URL for the
  * boot. DATABASE_URL is untouched, so the running application is unaffected.
  */
-/**
- * The migration credential a smoke-twin boot should use, or undefined to leave
- * `migrate.ts` on DATABASE_URL (the container superuser).
- *
- * OPT-IN via RM_TWIN_PRODUCTION_PRIVILEGES=1, which the stage rehearsal sets
- * and an ordinary `bun run smoke` does not. A development boot is not a
- * rehearsal: it should neither pay for the reshaping nor be broken by it.
- *
- * Throws rather than returning an error: a rehearsal that silently fell back to
- * a superuser migration would report a pass for the one thing it was changed to
- * stop missing.
- */
-export function twinMigrationCredential(twinUrl: string, log: (m: string) => void): string | undefined {
-  if (process.env.RM_TWIN_PRODUCTION_PRIVILEGES !== "1") return undefined;
-  const shaped = shapeTwinToProductionPrivileges(twinUrl, log);
-  if ("error" in shaped) throw new Error(shaped.error);
-  // Set here rather than returned into a binding: smoke-main's compose env is
-  // built from process.env through the MIGRATE_DATABASE_URL passthrough entry,
-  // so this is what actually reaches the API container's migration run.
-  process.env.MIGRATE_DATABASE_URL = shaped.url;
-  return shaped.url;
-}
-
+// NOT A SMOKE PATH ANY MORE. `bun smoke --local dump` no longer migrates a
+// restored copy through this bootstrap login: after the restore, the copy's
+// superuser creates the four roles and hands every application object to
+// rm_owner (scripts/lib/smoke-database.ts dumpOwnershipSql), rm_owner writes
+// `deployment_identity = rehearsal`, and `--migrate` runs as rm_owner under
+// the boot's target lock (spec §4.2, §8.5). This reshaping remains for the
+// tooling that rehearses 0053 itself (backend/tests/
+// twin-production-privilege-shaping.test.ts pins its shape).
 export function shapeTwinToProductionPrivileges(
   superuserUrl: string,
   log: (m: string) => void,

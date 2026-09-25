@@ -249,6 +249,11 @@ async function importRegistrations(): Promise<void> {
 }
 
 if (import.meta.main) {
+  // A terminal's Ctrl-C reaches the whole foreground process group, this step
+  // included. The boot records it and stops at its next phase boundary (§1.4);
+  // this step must not die of it halfway through a fenced write. (The masked
+  // owner prompt reads Ctrl-C as a key in raw mode and aborts the prompt itself.)
+  process.on("SIGINT", () => {});
   const request = JSON.parse(process.env.RM_PREPARE_REQUEST ?? "null") as PrepareRequest | null;
   let result: PrepareResult;
   try {

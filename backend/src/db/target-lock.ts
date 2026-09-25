@@ -706,6 +706,22 @@ export async function readTargetState(conn: DbHandle): Promise<TargetState> {
   return { identity: identity.value, ledger: ledger.value, manifestHash: manifest.value };
 }
 
+/**
+ * {@link readTargetState} over a short-lived connection of its own — what a
+ * tool reads BEFORE it holds the lock: the plan's expectation, which
+ * {@link acquireTargetLock} then revalidates. `bun smoke` reads a remote
+ * target this way from the host (it hashes the target's kind into its plan,
+ * spec §1.2), and scripts/ cannot construct a `postgres` client of its own.
+ */
+export async function readTargetStateAt(databaseUrl: string): Promise<TargetState> {
+  const reader = postgres(databaseUrl, { max: 1, onnotice: () => {}, connect_timeout: 10 });
+  try {
+    return await readTargetState(reader);
+  } finally {
+    await reader.end({ timeout: 5 }).catch(() => undefined);
+  }
+}
+
 /** A short, stable name for a ledger list, so two lists can be compared by eye in a refusal. */
 export function ledgerDigest(ledger: readonly string[]): string {
   return createHash("sha256").update(ledger.join("\n")).digest("hex").slice(0, 12);

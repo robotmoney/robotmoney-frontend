@@ -128,11 +128,16 @@ x-worker-base: &worker-base
 # worker needs PROJECTS_SOURCE=live (fail-closed — unset throws in prod; unset
 # elsewhere = offline fixture).
 x-worker-env: &worker-env
-  DATABASE_URL: ${DATABASE_URL}
-  # Optional queue-scoped restricted role (migrations/0016_worker_role.sql):
-  # point the worker's pool at rm_worker so DB permissions enforce that it can
-  # never mutate analytics data tables (issue #106). Falls back to DATABASE_URL
-  # when unset.
+  # THE PIPELINE WORKER HOLDS rm_worker AND NOTHING ELSE (smoke-production-spec
+  # §7.2: "the pipeline worker running the vault, wallet, buyback and project
+  # jobs as `rm_worker`"). Both of the backend's pools — config.ts's DATABASE_URL
+  # and db/worker-client.ts's WORKER_DATABASE_URL — are the worker credential,
+  # which scripts/stack/config.ts buildComposeEnv() emits from the stack's own
+  # role URLs. There is NO fallback to the api's DATABASE_URL: that fallback is
+  # how every lane used to run on the api's rm_app login. Unset, the worker's
+  # DATABASE_URL is empty and config.ts refuses to start — loudly, never on
+  # someone else's credential.
+  DATABASE_URL: ${WORKER_DATABASE_URL:-}
   WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
   # FAIL-CLOSED DEFAULT (D13). This interpolation default must never be reached:
   # scripts/stack/config.ts's buildComposeEnv() emits RM_ENV explicitly for every
@@ -336,15 +341,10 @@ services:
       # combination §7 forbids, so the three keys are gone, not blanked.
       # scripts/tests/integration/no-docker-socket-compose-config.test.ts
       # asserts no non-participant service in any composition carries one.
-      # THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (R13, backend/src/swarm/
-      # judge-fault-injection.ts). This service arms/disarms the row over
-      # POST /api/swarm/admin/judge/fault-injection (swarm/admin.ts), and
-      # `assertFaultInjectionAllowed()` runs on THIS process's env before that
-      # write — a row armed without the flag present here is refused at arm
-      # time, not merely inert. Blank by default so no deployment honours a
-      # fault-injected judge unless an operator explicitly sets these.
-      SWARM_JUDGE_FAULT_INJECTION: ${SWARM_JUDGE_FAULT_INJECTION:-}
-      SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN: ${SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN:-}
+      # NO JUDGE FAULT-INJECTION LEVER. D55 (3) retires it: the stack no
+      # longer hands `api` SWARM_JUDGE_FAULT_INJECTION or its acceptance
+      # opt-in, so no composition can arm a fault-injected judge (the backend
+      # code and its table go in later #1026 waves).
       # READ-ONLY, FOR AC-ID-03/T26 IDENTITY ONLY (issue #892 follow-up tracked
       # separately: this mount should not exist by the time that work lands —
       # the static bundle should be baked into website-server's own image, and

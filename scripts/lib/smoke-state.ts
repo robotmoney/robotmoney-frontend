@@ -78,12 +78,13 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { resolveStackEnvironment, stackProjectName, type StackEnvironment } from "../stack/naming.ts";
 import { WEB_DIR_NAME } from "./smoke-site.ts";
 
@@ -99,6 +100,34 @@ const STATE_ROOT_ENV = "RM_SMOKE_STATE_ROOT";
 function assertInstanceName(name: string): void {
   if (!INSTANCE_NAME.test(name)) {
     throw new Error(`Refusing: \`${name}\` is not a legal instance name (${INSTANCE_NAME.source}).`);
+  }
+}
+
+/**
+ * The git work tree `path` is inside, or null. Walks up from the deepest
+ * ancestor that exists (the override may name a directory not yet created),
+ * resolving symlinks, and stops at the first directory holding a `.git` entry —
+ * a directory in a clone, a file in a linked worktree. Reads the filesystem
+ * only: no `git` process, so a missing git binary cannot turn "inside a
+ * checkout" into "not inside one".
+ */
+export function enclosingGitWorkTree(path: string): string | null {
+  let dir = resolve(path);
+  while (!existsSync(dir)) {
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+  try {
+    dir = realpathSync(dir);
+  } catch {
+    // Unresolvable: judge the path as written.
+  }
+  for (;;) {
+    if (existsSync(join(dir, ".git"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
   }
 }
 
@@ -284,6 +313,19 @@ export function stateRoot(env: Record<string, string | undefined>): string {
   if (override !== undefined && override !== "") {
     if (!isAbsolute(override)) {
       throw new Error(`Refusing: ${STATE_ROOT_ENV}=${override} is relative; an absolute path is required.`);
+    }
+    // Spec §1.1: state directories live "never inside a checkout: they hold
+    // generated passwords, service tokens and the journal, and `git clean` or a
+    // worktree switch must not be able to lose or leak them". An absolute
+    // override is not enough by itself: `<checkout>/.agents/state` is absolute.
+    const checkout = enclosingGitWorkTree(override);
+    if (checkout !== null) {
+      throw new Error(
+        `Refusing: ${STATE_ROOT_ENV}=${override} is inside the git work tree ${checkout}. Instance state holds ` +
+          "generated passwords, service tokens and the journal, and `git clean` or a worktree switch must not be able " +
+          "to lose or leak them (spec §1.1). Point it outside every checkout, or unset it for " +
+          "$HOME/.local/state/robotmoney-smoke.",
+      );
     }
     return override;
   }
