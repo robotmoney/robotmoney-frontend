@@ -4,10 +4,7 @@
 -- and the blank-database bootstrap. NEVER applied to a populated database.
 --
 -- Generated from a database built by applying every file in backend/migrations/
--- in order, dumped schema-only WITH comments (`pg_dump --schema-only --no-owner
--- --no-privileges`): every COMMENT ON a migration declares is declared here too,
--- because "blank + all migrations = snapshot" (§8.4) compares comments
--- (backend/tests/schema-equivalence.test.ts). Two things are deliberately absent:
+-- in order, dumped schema-only. Two things are deliberately absent:
 --   * grants and default privileges -- they are part 3 (schema/grants.sql), because
 --     reconciliation runs on EVERY migrate run while this file runs only on a blank
 --     database (§8.3);
@@ -53,13 +50,15 @@ SET row_security = off;
 -- owned by rm_owner, which every blank bootstrap creates it as.
 ALTER SCHEMA public OWNER TO rm_owner;
 -- And the schema's ACL as 0053:134 leaves it: initdb grants PUBLIC USAGE, and
--- the migrations revoke it. grants.sql's `GRANT USAGE ON SCHEMA` re-grants it to the three
+-- the migrations revoke it. grants.sql:185 re-grants USAGE to the three
 -- application roles by name, so nothing that needs the schema loses it.
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
+
 
 --
 -- Name: pgcrypto; Type: EXTENSION; Schema: -; Owner: -
 --
+
 
 
 
@@ -156,13 +155,6 @@ $$;
 
 
 --
--- Name: FUNCTION rm_append_only_guard(); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.rm_append_only_guard() IS 'Refuses DELETE/TRUNCATE on the append-only historical tables. Both a statement-level and a row-level trigger call it; see migration 0032, src/db/append-only-guard.ts and backend/tests/append-only-enforcement.test.ts.';
-
-
---
 -- Name: rm_aum_evidence_guard(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -241,23 +233,6 @@ BEGIN
   RAISE EXCEPTION 'source ledger is immutable: % is not permitted on %', TG_OP, TG_TABLE_NAME
     USING ERRCODE = 'feature_not_supported';
 END;
-$$;
-
-
---
--- Name: rm_stream_head_forward_only(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.rm_stream_head_forward_only() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  IF NEW.seq < OLD.seq THEN
-    RAISE EXCEPTION 'swarm_stream_head only moves forward: % -> % refused', OLD.seq, NEW.seq
-      USING ERRCODE = 'check_violation';
-  END IF;
-  RETURN NEW;
-END
 $$;
 
 
@@ -537,16 +512,8 @@ CREATE TABLE public.admin_passkey (
     counter bigint NOT NULL,
     transports text[] DEFAULT '{}'::text[] NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    last_used_at timestamp with time zone DEFAULT now() NOT NULL,
-    revoked_at timestamp with time zone
+    last_used_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
-
---
--- Name: COLUMN admin_passkey.revoked_at; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.admin_passkey.revoked_at IS 'When this passkey was revoked (D55 (6)): set in the revoking transaction instead of deleting the row. Every passkey read filters revoked_at IS NULL, so a revoked passkey is refused on the next ceremony. NULL = live.';
 
 
 --
@@ -556,16 +523,8 @@ COMMENT ON COLUMN public.admin_passkey.revoked_at IS 'When this passkey was revo
 CREATE TABLE public.admin_session (
     token text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    expires_at timestamp with time zone NOT NULL,
-    revoked_at timestamp with time zone
+    expires_at timestamp with time zone NOT NULL
 );
-
-
---
--- Name: COLUMN admin_session.revoked_at; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.admin_session.revoked_at IS 'When this session was revoked (D55 (6)): set in the revoking transaction instead of deleting the row. Every session read filters revoked_at IS NULL, so a revoked session is refused on the next request. NULL = live.';
 
 
 --
@@ -576,16 +535,8 @@ CREATE TABLE public.admin_webauthn_challenge (
     flow text NOT NULL,
     challenge text NOT NULL,
     expires_at timestamp with time zone NOT NULL,
-    consumed_at timestamp with time zone,
     CONSTRAINT admin_webauthn_challenge_flow_check CHECK ((flow = ANY (ARRAY['registration'::text, 'authentication'::text])))
 );
-
-
---
--- Name: COLUMN admin_webauthn_challenge.consumed_at; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.admin_webauthn_challenge.consumed_at IS 'When this challenge was consumed (D55 (6)): set by the single-use conditional UPDATE instead of deleting the row. A consumed or expired challenge is never accepted again. NULL = unconsumed.';
 
 
 --
@@ -722,13 +673,6 @@ CREATE TABLE public.analytics_data_vintages (
 
 
 --
--- Name: TABLE analytics_data_vintages; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.analytics_data_vintages IS 'Frozen, fingerprint-verifiable manifest of the source_value_versions eligible under one (knowledge-time, market-time) cutoff pair (issue #977).';
-
-
---
 -- Name: analytics_data_vintages_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -825,13 +769,6 @@ CREATE TABLE public.analytics_ledger_runs (
 
 
 --
--- Name: TABLE analytics_ledger_runs; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.analytics_ledger_runs IS 'Immutable analytics run header, written before the injected AnalyticsDataSource is first called (issue #977). Outcome lives only in analytics_ledger_run_events.';
-
-
---
 -- Name: analytics_ledger_runs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -896,13 +833,6 @@ CREATE TABLE public.analytics_overwrite_events (
 
 
 --
--- Name: TABLE analytics_overwrite_events; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.analytics_overwrite_events IS 'Immutable evidence of material UPDATE and allowed DELETE operations on analytics current-view rows (issue #974).';
-
-
---
 -- Name: analytics_overwrite_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -939,13 +869,6 @@ CREATE TABLE public.analytics_parity_observations (
 
 
 --
--- Name: TABLE analytics_parity_observations; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.analytics_parity_observations IS 'Immutable record of one dual-write parity check (issue #979): natural-key/row-count/checksum comparison between a compatibility current-view table and its ledger-derived reconstruction. The cutover gate (backend/src/analytics/cutover/gate.ts) requires an unbroken, sufficiently long, sufficiently large, sufficiently recent run of matched=true observations across every domain before ledger-mode reads are permitted.';
-
-
---
 -- Name: analytics_parity_observations_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -974,13 +897,6 @@ CREATE TABLE public.analytics_read_mode (
 
 
 --
--- Name: TABLE analytics_read_mode; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.analytics_read_mode IS 'Single-row operator switch (issue #979): whether current-view reads (dashboard/admin/raw-history/swarm-brief/regime-summary) resolve from the mutable compatibility tables or are derived from the immutable Phase A ledger. Flipping this writes nothing to any ledger table — cutover and rollback are both non-destructive by construction.';
-
-
---
 -- Name: analytics_report_snapshots; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -995,13 +911,6 @@ CREATE TABLE public.analytics_report_snapshots (
     CONSTRAINT analytics_report_snapshots_check CHECK ((encode(public.digest(report_bytes, 'sha256'::text), 'hex'::text) = checksum)),
     CONSTRAINT analytics_report_snapshots_checksum_check CHECK ((checksum ~ '^[0-9a-f]{64}$'::text))
 );
-
-
---
--- Name: TABLE analytics_report_snapshots; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.analytics_report_snapshots IS 'Immutable, byte-exact report per terminal analytics run (issue #978). One row per run_id, never per asof — a later run for the same market date gets its own row and its own id.';
 
 
 --
@@ -1227,34 +1136,6 @@ CREATE TABLE public.automation_tokens (
 
 
 --
--- Name: TABLE automation_tokens; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.automation_tokens IS 'API service tokens (smoke spec §3): one row per (instance, holder) holding the hash of that holder''s bearer token and the rights it carries. The secret itself is never stored, and a token file on disk that matches no row here grants nothing.';
-
-
---
--- Name: COLUMN automation_tokens.instance; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.automation_tokens.instance IS 'The deployment instance this token was provisioned for. Keyed with holder, so provisioning or rotating one holder''s token never invalidates another holder''s or another instance''s.';
-
-
---
--- Name: COLUMN automation_tokens.rights; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.automation_tokens.rights IS 'What the bearer may do, a subset of its holder''s list: system-scheduler read_subjects/read_sessions/lifecycle_transitions; analytics-producer analytics_ingestion; operator admin.';
-
-
---
--- Name: COLUMN automation_tokens.holder; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.automation_tokens.holder IS 'Who presents this token: system-scheduler, analytics-producer or operator (smoke spec §3). Bounds the rights the row may carry.';
-
-
---
 -- Name: buyback_scan_state; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1393,24 +1274,8 @@ CREATE TABLE public.swarm_member_keys (
     alg text DEFAULT 'ed25519'::text CONSTRAINT committee_member_keys_alg_not_null NOT NULL,
     token_hash text,
     active boolean DEFAULT true CONSTRAINT committee_member_keys_active_not_null NOT NULL,
-    created_at timestamp with time zone DEFAULT now() CONSTRAINT committee_member_keys_created_at_not_null NOT NULL,
-    spoof_generation_id text,
-    CONSTRAINT swarm_member_keys_spoof_generation_id_check CHECK (((spoof_generation_id IS NULL) OR (spoof_generation_id <> ''::text)))
+    created_at timestamp with time zone DEFAULT now() CONSTRAINT committee_member_keys_created_at_not_null NOT NULL
 );
-
-
---
--- Name: TABLE swarm_member_keys; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.swarm_member_keys IS 'Append-only key-history record (migrations 0004, 0050). A row is retired with active = false, never deleted; protected by rm_append_only_guard() so a take''s signing key can never be discarded out from under it. See issue #697.';
-
-
---
--- Name: COLUMN swarm_member_keys.spoof_generation_id; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_member_keys.spoof_generation_id IS 'The --spoof-keys generation that installed this key (smoke spec §6.4), written by the rebind''s INSERT and never updated. A rerun finds the database at a generation when every spoofed member''s active key carries its id. NULL = not a spoofed key.';
 
 
 --
@@ -1463,6 +1328,37 @@ CREATE SEQUENCE public.committee_memos_id_seq
 --
 
 ALTER SEQUENCE public.committee_memos_id_seq OWNED BY public.swarm_memos.id;
+
+
+--
+-- Name: swarm_scheduler_jobs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.swarm_scheduler_jobs (
+    id bigint NOT NULL,
+    kind text NOT NULL,
+    target text NOT NULL,
+    idempotency_key text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    acked_at timestamp with time zone,
+    CONSTRAINT swarm_scheduler_jobs_key_check CHECK ((idempotency_key ~ '^[A-Za-z0-9._:-]{4,128}$'::text)),
+    CONSTRAINT swarm_scheduler_jobs_kind_check CHECK ((kind <> ''::text)),
+    CONSTRAINT swarm_scheduler_jobs_target_check CHECK ((target <> ''::text))
+);
+
+
+--
+-- Name: swarm_scheduler_jobs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.swarm_scheduler_jobs ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.swarm_scheduler_jobs_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
 
 
 --
@@ -1570,13 +1466,6 @@ CREATE TABLE public.deployment_identity (
     CONSTRAINT deployment_identity_id_check CHECK (id),
     CONSTRAINT deployment_identity_kind_check CHECK ((kind = ANY (ARRAY['production'::text, 'rehearsal'::text])))
 );
-
-
---
--- Name: TABLE deployment_identity; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.deployment_identity IS 'One-row target enrollment: what this database is enrolled for (spec §4.2). Writable only by rm_owner.';
 
 
 --
@@ -2074,13 +1963,6 @@ CREATE TABLE public.schema_manifest (
 
 
 --
--- Name: TABLE schema_manifest; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.schema_manifest IS 'One-row declared schema for the installed version (spec §8.3): declaration, filename list, content hash, format version. Writable only by rm_owner.';
-
-
---
 -- Name: schema_migrations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2091,20 +1973,6 @@ CREATE TABLE public.schema_migrations (
     metadata_version integer,
     CONSTRAINT schema_migrations_compat_check CHECK (((compat IS NULL) OR (compat = ANY (ARRAY['additive'::text, 'breaking'::text]))))
 );
-
-
---
--- Name: COLUMN schema_migrations.compat; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.schema_migrations.compat IS 'Spec §8.2/§8.4: the migration''s own additive/breaking declaration, parsed from its header on apply. NULL means the row predates the scheme, which §8.4 refuses rather than assumes.';
-
-
---
--- Name: COLUMN schema_migrations.metadata_version; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.schema_migrations.metadata_version IS 'Spec §8.2/§8.4: the metadata format the compat claim was written under, so an older image can refuse a version it does not understand.';
 
 
 --
@@ -2214,20 +2082,6 @@ CREATE TABLE public.source_value_versions (
 
 
 --
--- Name: TABLE source_value_versions; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.source_value_versions IS 'Immutable normalized source observations with distinct market time and database-assigned knowledge time (issue #976).';
-
-
---
--- Name: COLUMN source_value_versions.provenance; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.source_value_versions.provenance IS 'Data-source label observed at acquisition time (raw_indicator_history.source''s ledger equivalent, issue #979). NULL on migration 0057 legacy baselines and on any row written before migration 0061 — the append-only trigger forbids backfilling it.';
-
-
---
 -- Name: source_value_versions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -2275,13 +2129,6 @@ CREATE TABLE public.swarm_brief_revisions (
 
 
 --
--- Name: TABLE swarm_brief_revisions; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.swarm_brief_revisions IS 'Append-only brief bodies (issue #978): publishBrief() always INSERTs a new numbered revision; swarm_briefs remains the mutable current-view projection of the newest one.';
-
-
---
 -- Name: swarm_brief_revisions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -2308,13 +2155,6 @@ CREATE TABLE public.swarm_briefs (
     session_id uuid,
     report_snapshot_id bigint
 );
-
-
---
--- Name: COLUMN swarm_briefs.report_snapshot_id; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_briefs.report_snapshot_id IS 'Mirrors the newest swarm_brief_revisions row for this session (issue #978). NULL for every brief written before this migration and for any session published with no analytics report snapshot available for its date.';
 
 
 --
@@ -2350,13 +2190,6 @@ CREATE TABLE public.swarm_consensus_receipts (
 
 
 --
--- Name: TABLE swarm_consensus_receipts; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.swarm_consensus_receipts IS 'The published Project Fusion consensus receipt, one row per session (issue #754). Append-only via rm_append_only_guard() and additionally UPDATE-refusing via rm_consensus_receipt_immutable(): the canonical bytes are what an on-chain digest commits to.';
-
-
---
 -- Name: swarm_judge_config; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2370,24 +2203,10 @@ CREATE TABLE public.swarm_judge_config (
     policy_updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT swarm_judge_config_id_check CHECK ((id = 1)),
     CONSTRAINT swarm_judge_config_min_takes_check CHECK ((min_takes >= 1)),
-    CONSTRAINT swarm_judge_config_mode_check CHECK ((mode = ANY (ARRAY['off'::text, 'enforce'::text]))),
+    CONSTRAINT swarm_judge_config_mode_check CHECK ((mode = ANY (ARRAY['off'::text, 'shadow'::text, 'enforce'::text]))),
     CONSTRAINT swarm_judge_config_mode_requires_model_check CHECK (((mode = 'off'::text) OR ((model IS NOT NULL) AND (btrim(model) <> ''::text)))),
     CONSTRAINT swarm_judge_config_model_check CHECK (((model IS NULL) OR (btrim(model) <> ''::text)))
 );
-
-
---
--- Name: COLUMN swarm_judge_config.third_party_enabled; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_judge_config.third_party_enabled IS 'Global switch: may a graduated judge member (identified by judgeMemberId) author a judgement at all. Off by default; independent of mode. A false value refuses a third-party judgement with third_party_judging_disabled and writes nothing; the built-in worker judgement path is unaffected either way (issue #796).';
-
-
---
--- Name: CONSTRAINT swarm_judge_config_mode_requires_model_check ON swarm_judge_config; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON CONSTRAINT swarm_judge_config_mode_requires_model_check ON public.swarm_judge_config IS 'issue #969: shadow/enforce require a model. setJudgeConfig() validates the same pair against the resulting row; this is the backstop for any writer that does not come through it.';
 
 
 --
@@ -2409,13 +2228,6 @@ CREATE TABLE public.swarm_judge_fault_injection (
     CONSTRAINT swarm_judge_fault_injection_note_check CHECK (((note IS NULL) OR (length(note) <= 500))),
     CONSTRAINT swarm_judge_fault_injection_remaining_check CHECK (((remaining >= 0) AND (remaining <= 100)))
 );
-
-
---
--- Name: TABLE swarm_judge_fault_injection; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.swarm_judge_fault_injection IS 'TEST-ONLY judge fault-injection lever (R13/AC-E2E-06). Inert unless SWARM_JUDGE_FAULT_INJECTION is set in the judging process, and refused on an acceptance path (RM_ENV=prod) unless SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN is also set. Every transition writes an audit_log row; enabling it on staging is a recorded acceptance mutation.';
 
 
 --
@@ -2463,13 +2275,6 @@ CREATE TABLE public.swarm_members (
 
 
 --
--- Name: COLUMN swarm_members.role; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_members.role IS 'member submits signed takes; judge authors consensus judgements and is excluded from takes/rosters (issue #812).';
-
-
---
 -- Name: swarm_recommendations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2494,27 +2299,6 @@ CREATE TABLE public.swarm_recommendations (
     final boolean DEFAULT false NOT NULL,
     CONSTRAINT swarm_recommendations_revision_positive CHECK ((revision >= 1))
 );
-
-
---
--- Name: COLUMN swarm_recommendations.signing_key_id; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_recommendations.signing_key_id IS 'The swarm_member_keys row verified against at submission time (issue #697). NULL for every row written before this migration — see the cutover note above; read paths must resolve a take''s public key through this column first and fall back to the member''s currently-active key only when it is NULL.';
-
-
---
--- Name: COLUMN swarm_recommendations.report_snapshot_id; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_recommendations.report_snapshot_id IS 'The analytics_report_snapshots row the signed submission named (issue #978 AC6, schema 2.0 canonicalizeSubmission). NULL for every row written before this migration and for a schema-1.0 (legacy, unversioned) submission that named none.';
-
-
---
--- Name: COLUMN swarm_recommendations.final; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_recommendations.final IS 'Whether this take is the member''s counting take for the session (D51). Exactly one per (session_id, member_id), enforced by swarm_recommendations_one_final_per_member. The only column rm_app may UPDATE: a take''s content is never rewritten.';
 
 
 --
@@ -2560,62 +2344,6 @@ CREATE TABLE public.swarm_session_judgements (
     CONSTRAINT swarm_session_judgements_usage_output_tokens_check CHECK (((usage_output_tokens IS NULL) OR (usage_output_tokens >= 0))),
     CONSTRAINT swarm_session_judgements_usage_total_tokens_check CHECK (((usage_total_tokens IS NULL) OR (usage_total_tokens >= 0)))
 );
-
-
---
--- Name: TABLE swarm_session_judgements; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.swarm_session_judgements IS 'Append-only record of every judge run (migrations 0039, 0040). Protected by rm_append_only_guard().';
-
-
---
--- Name: COLUMN swarm_session_judgements.applied; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_session_judgements.applied IS 'enforce only: the opinion actually reached swarm_sessions.swarm_recommendation (issue #767).';
-
-
---
--- Name: COLUMN swarm_session_judgements.applied_skipped_reason; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_session_judgements.applied_skipped_reason IS 'enforce only: why a recorded opinion did NOT reach the session (e.g. it published first).';
-
-
---
--- Name: COLUMN swarm_session_judgements.dropped_positions; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_session_judgements.dropped_positions IS 'positions[] entries dropped for having no member-authored body to quote (issues #773/#767).';
-
-
---
--- Name: COLUMN swarm_session_judgements.dropped_disagreements; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_session_judgements.dropped_disagreements IS 'disagreements dropped because every one of their positions was (issues #773/#767).';
-
-
---
--- Name: COLUMN swarm_session_judgements.judged_by; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_session_judgements.judged_by IS 'Named judging party: robotmoney-in-house or the immutable swarm member id (issue #812).';
-
-
---
--- Name: COLUMN swarm_session_judgements.digest_scheme; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_session_judgements.digest_scheme IS 'Which canonical form (judge.ts DIGEST_SCHEME) produced this row''s inputs_digest. swarm-judge-replay treats a mismatch on a row whose digest_scheme equals the CURRENT constant as a real finding, and a mismatch on any other value as expected history to report, not fail (issue #829, D44).';
-
-
---
--- Name: COLUMN swarm_session_judgements.usage_cost_usd; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_session_judgements.usage_cost_usd IS 'Completion cost in USD as reported by the provider for THIS judging, or NULL when the provider reported none (and on every fallback row, where no model answered). NULL is "not recorded", never "free" (R19).';
 
 
 --
@@ -2695,48 +2423,6 @@ CREATE TABLE public.swarm_sessions (
 
 
 --
--- Name: COLUMN swarm_sessions.judge_mode; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_sessions.judge_mode IS 'The judge mode in force when this epoch CLOSED (scheduler spec §4.4), captured in the turnover transaction. NULL while the epoch is still collecting.';
-
-
---
--- Name: COLUMN swarm_sessions.judging_deadline_at; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_sessions.judging_deadline_at IS 'The absolute instant judging must have produced a consensus by. Stored once when judging is requested and never restarted by a scheduler rebuild (spec §9).';
-
-
---
--- Name: COLUMN swarm_sessions.consensus_recorded_at; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_sessions.consensus_recorded_at IS 'When the judges'' consensus was ACCEPTED by the API. Compared against judging_deadline_at by finalize; an event''s arrival time is never compared to anything (spec §4.4).';
-
-
---
--- Name: COLUMN swarm_sessions.judging_outcome; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_sessions.judging_outcome IS 'Decided once, by finalize, from stored instants: judged | no_consensus | not_judged (spec §4.4). A repeated finalize returns this value rather than re-deciding.';
-
-
---
--- Name: COLUMN swarm_sessions.successor_session_id; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_sessions.successor_session_id IS 'The epoch this one turned over into. It is the turnover''s recorded result, which is what lets a retry bound to THIS epoch replay instead of closing the successor (spec §4.3).';
-
-
---
--- Name: COLUMN swarm_sessions.judging_duration_seconds; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_sessions.judging_duration_seconds IS 'The subject''s judging duration in force when this epoch CLOSED (scheduler spec §4.4), captured in the turnover transaction beside judge_mode. The judging deadline is the request instant plus this value. NULL while the epoch is still collecting.';
-
-
---
 -- Name: swarm_stream_events; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2750,39 +2436,6 @@ CREATE TABLE public.swarm_stream_events (
     CONSTRAINT swarm_stream_events_kind_check CHECK ((kind = ANY (ARRAY['subject.changed'::text, 'epoch.turned_over'::text, 'session.judged'::text]))),
     CONSTRAINT swarm_stream_events_seq_positive_check CHECK ((seq > 0))
 );
-
-
---
--- Name: TABLE swarm_stream_events; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.swarm_stream_events IS 'The scheduler event stream (spec §6). One row per change to what the clock waits on, written in the same transaction as that change, numbered gaplessly in commit order from swarm_stream_head. Only rm_owner may delete, and only rows below the oldest servable cursor (D52, D53 (2)).';
-
-
---
--- Name: COLUMN swarm_stream_events.seq; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_stream_events.seq IS 'Global monotonic sequence, gapless and in commit order: taken from swarm_stream_head inside the writing transaction, never from a sequence and never from MAX(seq) (migration 0081).';
-
-
---
--- Name: swarm_stream_head; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.swarm_stream_head (
-    id boolean DEFAULT true NOT NULL,
-    seq bigint NOT NULL,
-    CONSTRAINT swarm_stream_head_seq_check CHECK ((seq >= 0)),
-    CONSTRAINT swarm_stream_head_singleton_check CHECK (id)
-);
-
-
---
--- Name: TABLE swarm_stream_head; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.swarm_stream_head IS 'The event stream''s one counter row (spec §6.3): seq is the last number handed out. Incremented by UPDATE ... RETURNING inside each event-writing transaction, so numbers are gapless and in commit order. Never moves back.';
 
 
 --
@@ -2828,27 +2481,6 @@ CREATE TABLE public.swarm_subjects (
     CONSTRAINT swarm_subjects_judging_duration_seconds_check CHECK ((judging_duration_seconds > 0)),
     CONSTRAINT swarm_subjects_status_check CHECK ((status = ANY (ARRAY['active'::text, 'inactive'::text])))
 );
-
-
---
--- Name: COLUMN swarm_subjects.epoch_duration_seconds; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_subjects.epoch_duration_seconds IS 'How long this subject''s submission window stays open, in seconds. The subject''s ONLY scheduling parameter (scheduler spec §2.2). Set by the schema snapshot on a blank database, changed afterwards only through the admin subject route. Never zero and never null: there is no disabled state (§2.4).';
-
-
---
--- Name: COLUMN swarm_subjects.epoch_anchor; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_subjects.epoch_anchor IS 'One instant on this subject''s grid: every epoch close is epoch_anchor + k * epoch_duration_seconds (scheduler spec §2.2). Set by the schema declaration on a blank database, changed afterwards only through the admin subject route; a duration change re-anchors at the current window''s close.';
-
-
---
--- Name: COLUMN swarm_subjects.judging_duration_seconds; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.swarm_subjects.judging_duration_seconds IS 'How long judging waits for a consensus after it is requested, in seconds (scheduler spec §2.2, §4.4). Not part of the grid. Captured onto the session at turnover. Never zero and never null: there is no disabled state (§2.4).';
 
 
 --
@@ -3070,20 +2702,6 @@ CREATE TABLE public.wallet_aum_snapshot_runs (
 
 
 --
--- Name: TABLE wallet_aum_snapshot_runs; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.wallet_aum_snapshot_runs IS 'Immutable final-state AUM publication attempts. Only complete/degraded runs have snapshot_id and are publishable.';
-
-
---
--- Name: COLUMN wallet_aum_snapshot_runs.producer_revision; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.wallet_aum_snapshot_runs.producer_revision IS 'Explicit build/runtime revision. NULL is permitted only with status=unavailable and a reason; never inferred.';
-
-
---
 -- Name: wallet_aum_snapshot_runs_run_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -3149,13 +2767,6 @@ CREATE TABLE public.wallet_balance_sample_evidence (
 
 
 --
--- Name: TABLE wallet_balance_sample_evidence; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.wallet_balance_sample_evidence IS 'Immutable original balance rows displaced by quarantine repair or incomplete-snapshot replacement.';
-
-
---
 -- Name: wallet_balance_sample_evidence_evidence_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -3192,30 +2803,8 @@ CREATE TABLE public.wallet_balance_samples (
     amount_observed_at timestamp with time zone,
     price_observed_at timestamp with time zone,
     recorded_at timestamp with time zone,
-    superseded_at timestamp with time zone,
     CONSTRAINT wallet_balance_samples_snapshot_identity_shape CHECK ((((snapshot_run_id IS NULL) AND (amount_observed_at IS NULL) AND (price_observed_at IS NULL) AND (recorded_at IS NULL)) OR ((snapshot_run_id IS NOT NULL) AND (amount_observed_at IS NOT NULL) AND (price_observed_at IS NOT NULL) AND (recorded_at IS NOT NULL) AND (recorded_at >= amount_observed_at) AND (recorded_at >= price_observed_at))))
 );
-
-
---
--- Name: COLUMN wallet_balance_samples.strategy_nav_idle_only; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.wallet_balance_samples.strategy_nav_idle_only IS 'issue #642: for valuationKind=strategy legs, true when this sample''s NAV was idle USDC only (no vault/underlying position contributed). NULL for every other symbol and for rows predating the column.';
-
-
---
--- Name: COLUMN wallet_balance_samples.snapshot_run_id; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.wallet_balance_samples.snapshot_run_id IS 'NULL means legacy-unverified; future publishers attach all rows in one immutable wallet_aum_snapshot_runs run.';
-
-
---
--- Name: COLUMN wallet_balance_samples.superseded_at; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.wallet_balance_samples.superseded_at IS 'When a later repair pass stopped writing this row (D55 (6)): the pass upserts the rows it writes and sets this on the rest instead of deleting them. Every read filters superseded_at IS NULL. NULL = live.';
 
 
 --
@@ -3300,13 +2889,6 @@ CREATE TABLE public.wallet_sleeve_sample_evidence (
 
 
 --
--- Name: TABLE wallet_sleeve_sample_evidence; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.wallet_sleeve_sample_evidence IS 'Immutable original sleeve rows displaced by quarantine repair or incomplete-snapshot replacement.';
-
-
---
 -- Name: wallet_sleeve_sample_evidence_evidence_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -3343,23 +2925,8 @@ CREATE TABLE public.wallet_sleeve_samples (
     amount_observed_at timestamp with time zone,
     price_observed_at timestamp with time zone,
     recorded_at timestamp with time zone,
-    superseded_at timestamp with time zone,
     CONSTRAINT wallet_sleeve_samples_snapshot_identity_shape CHECK ((((snapshot_run_id IS NULL) AND (amount_observed_at IS NULL) AND (price_observed_at IS NULL) AND (recorded_at IS NULL)) OR ((snapshot_run_id IS NOT NULL) AND (amount_observed_at IS NOT NULL) AND (price_observed_at IS NOT NULL) AND (recorded_at IS NOT NULL) AND (recorded_at >= amount_observed_at) AND (recorded_at >= price_observed_at))))
 );
-
-
---
--- Name: COLUMN wallet_sleeve_samples.snapshot_run_id; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.wallet_sleeve_samples.snapshot_run_id IS 'NULL means legacy-unverified; future publishers attach all rows in one immutable wallet_aum_snapshot_runs run.';
-
-
---
--- Name: COLUMN wallet_sleeve_samples.superseded_at; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.wallet_sleeve_samples.superseded_at IS 'When a later repair pass stopped writing this row (D55 (6)): the pass upserts the rows it writes and sets this on the rest instead of deleting them. Every read filters superseded_at IS NULL. NULL = live.';
 
 
 --
@@ -4346,6 +3913,22 @@ ALTER TABLE ONLY public.swarm_recommendations
 
 
 --
+-- Name: swarm_scheduler_jobs swarm_scheduler_jobs_idempotency_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.swarm_scheduler_jobs
+    ADD CONSTRAINT swarm_scheduler_jobs_idempotency_key_key UNIQUE (idempotency_key);
+
+
+--
+-- Name: swarm_scheduler_jobs swarm_scheduler_jobs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.swarm_scheduler_jobs
+    ADD CONSTRAINT swarm_scheduler_jobs_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: swarm_session_events swarm_session_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4383,14 +3966,6 @@ ALTER TABLE ONLY public.swarm_sessions
 
 ALTER TABLE ONLY public.swarm_stream_events
     ADD CONSTRAINT swarm_stream_events_pkey PRIMARY KEY (seq);
-
-
---
--- Name: swarm_stream_head swarm_stream_head_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.swarm_stream_head
-    ADD CONSTRAINT swarm_stream_head_pkey PRIMARY KEY (id);
 
 
 --
@@ -5098,6 +4673,13 @@ CREATE UNIQUE INDEX swarm_recommendations_session_member_revision_key ON public.
 
 
 --
+-- Name: swarm_scheduler_jobs_unacked_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX swarm_scheduler_jobs_unacked_idx ON public.swarm_scheduler_jobs USING btree (created_at) WHERE (acked_at IS NULL);
+
+
+--
 -- Name: swarm_session_events_session_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5224,13 +4806,6 @@ CREATE INDEX wallet_balance_sample_evidence_snapshot_run_idx ON public.wallet_ba
 
 
 --
--- Name: wallet_balance_samples_live_key; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX wallet_balance_samples_live_key ON public.wallet_balance_samples USING btree (sample_date, symbol) WHERE (superseded_at IS NULL);
-
-
---
 -- Name: wallet_balance_samples_snapshot_run_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5263,13 +4838,6 @@ CREATE INDEX wallet_sleeve_sample_evidence_date_key_idx ON public.wallet_sleeve_
 --
 
 CREATE INDEX wallet_sleeve_sample_evidence_snapshot_run_idx ON public.wallet_sleeve_sample_evidence USING btree (snapshot_run_id) WHERE (snapshot_run_id IS NOT NULL);
-
-
---
--- Name: wallet_sleeve_samples_live_key; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX wallet_sleeve_samples_live_key ON public.wallet_sleeve_samples USING btree (sample_date, wallet_address, symbol) WHERE (superseded_at IS NULL);
 
 
 --
@@ -5868,6 +5436,24 @@ CREATE TRIGGER swarm_recommendations_default_final_trigger BEFORE INSERT ON publ
 
 
 --
+-- Name: swarm_scheduler_jobs swarm_scheduler_jobs_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER swarm_scheduler_jobs_append_only BEFORE DELETE OR TRUNCATE ON public.swarm_scheduler_jobs FOR EACH STATEMENT EXECUTE FUNCTION public.rm_append_only_guard();
+
+ALTER TABLE public.swarm_scheduler_jobs ENABLE ALWAYS TRIGGER swarm_scheduler_jobs_append_only;
+
+
+--
+-- Name: swarm_scheduler_jobs swarm_scheduler_jobs_append_only_row; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER swarm_scheduler_jobs_append_only_row BEFORE DELETE ON public.swarm_scheduler_jobs FOR EACH ROW EXECUTE FUNCTION public.rm_append_only_guard();
+
+ALTER TABLE public.swarm_scheduler_jobs ENABLE ALWAYS TRIGGER swarm_scheduler_jobs_append_only_row;
+
+
+--
 -- Name: swarm_session_events swarm_session_events_append_only; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -5940,10 +5526,21 @@ ALTER TABLE public.swarm_sessions ENABLE ALWAYS TRIGGER swarm_sessions_append_on
 
 
 --
--- Name: swarm_stream_head swarm_stream_head_forward_only; Type: TRIGGER; Schema: public; Owner: -
+-- Name: swarm_stream_events swarm_stream_events_append_only; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER swarm_stream_head_forward_only BEFORE UPDATE ON public.swarm_stream_head FOR EACH ROW EXECUTE FUNCTION public.rm_stream_head_forward_only();
+CREATE TRIGGER swarm_stream_events_append_only BEFORE DELETE OR TRUNCATE ON public.swarm_stream_events FOR EACH STATEMENT EXECUTE FUNCTION public.rm_append_only_guard();
+
+ALTER TABLE public.swarm_stream_events ENABLE ALWAYS TRIGGER swarm_stream_events_append_only;
+
+
+--
+-- Name: swarm_stream_events swarm_stream_events_append_only_row; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER swarm_stream_events_append_only_row BEFORE DELETE ON public.swarm_stream_events FOR EACH ROW EXECUTE FUNCTION public.rm_append_only_guard();
+
+ALTER TABLE public.swarm_stream_events ENABLE ALWAYS TRIGGER swarm_stream_events_append_only_row;
 
 
 --
