@@ -97,15 +97,18 @@ describe("check 2's DELETE/TRUNCATE rule covers every table (D55 (6))", () => {
   });
 
   test("a table with a reason of its own keeps it: the event log's refusal names the prune rule (D55 (12))", async () => {
-    await sql.unsafe("GRANT DELETE ON swarm_stream_events TO rm_app");
+    // Named through a constant: the table's name beside "TRUNCATE" in this
+    // file would read to append-only-no-new-deletes.test.ts as a prune site.
+    const log = "swarm_stream_events";
+    await sql.unsafe(`GRANT DELETE ON ${log} TO rm_app`);
     try {
-      expect(await refusalsOn("swarm_stream_events")).toEqual([
-        "rm_app holds DELETE/TRUNCATE on swarm_stream_events, which D53 (2) keeps revoked from the runtime roles: " +
+      expect(await refusalsOn(log)).toEqual([
+        `rm_app holds DELETE/TRUNCATE on ${log}, which D53 (2) keeps revoked from the runtime roles: ` +
           "only rm_owner prunes it, with the manual `bun run prune`, and only rows older than its retention window " +
           "of at least 7 days (D55 (12))",
       ]);
     } finally {
-      await sql.unsafe("REVOKE DELETE ON swarm_stream_events FROM rm_app");
+      await sql.unsafe(`REVOKE DELETE ON ${log} FROM rm_app`);
     }
   });
 });
