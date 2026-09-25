@@ -29,6 +29,15 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
+-- Data for Name: admin_webauthn_challenge; Type: TABLE DATA; Schema: public; Owner: rm_owner
+--
+-- The 32 empty WebAuthn challenge slots (migration 0088, D55 (6)). The runtime
+-- holds no INSERT on the table, so these are the only rows it will ever have.
+
+INSERT INTO public.admin_webauthn_challenge (slot) SELECT s FROM generate_series(0, 31) AS s;
+
+
+--
 -- Data for Name: analytics_read_mode; Type: TABLE DATA; Schema: public; Owner: rm_owner
 --
 

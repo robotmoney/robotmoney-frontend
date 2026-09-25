@@ -194,9 +194,13 @@ export type AppendOnlyDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<
  * BOTH lists is the defect this section exists to prevent:
  *
  *  - `admin_session`, `admin_webauthn_challenge`, `swarm_claim_challenges` —
- *    ephemeral auth state whose PURPOSE is to be consumed or to expire. A
- *    WebAuthn challenge that cannot be deleted is a replay window: protecting
- *    these would REDUCE security.
+ *    ephemeral auth state whose PURPOSE is to be consumed or to expire. Its
+ *    rows change state, so a trigger that froze them would break sign-in.
+ *    Since D55 (6) no runtime role deletes them either: a session is revoked
+ *    by a `revoked_at` tombstone every read filters on, and a WebAuthn
+ *    challenge is consumed by a single-use conditional UPDATE in one of 32
+ *    fixed slots (migration 0088), so a consumed challenge is never a replay
+ *    window.
  *  - `jobs`, `job_runs`, `job_schedules` — queue and coordination churn, and
  *    the queue is periodically pruned by design. NOTE the cost, recorded in
  *    0032's header: `jobs` has `ON DELETE SET NULL` edges into protected tables
@@ -645,6 +649,25 @@ async function triggerInventory(db: AppendOnlyDb, tables: string[], spec: GuardS
 class GuardCheckInconclusive extends Error {}
 
 /**
+ * The executor's own refusal: the connected role holds no DELETE on the table.
+ *
+ * D55 (6): "No runtime role (`rm_app`, `rm_worker`, `rm_readonly`) holds
+ * `DELETE` or `TRUNCATE` on any table", so on every runtime connection this is
+ * the EXPECTED answer to the probe, and a conclusive one: the DELETE is refused
+ * before any trigger runs, by a check no trigger edit can disarm. Spec §7 check
+ * 2: "Append-only protection is both absent privilege and the existing
+ * triggers." What the probe cannot learn from such a role is whether the guard
+ * FUNCTION would refuse too; the trigger inventory still reads the catalog half
+ * from any role, and the behavioural half runs in full under rm_owner, which
+ * holds DELETE (tests/append-only-guard-check.test.ts).
+ */
+const PRIVILEGE_REFUSED = "42501";
+
+function isPrivilegeRefusal(err: unknown): boolean {
+  return (err as { code?: string } | null)?.code === PRIVILEGE_REFUSED;
+}
+
+/**
  * SQLSTATEs that mean "this database could not answer right now", never "the
  * guard is gone".
  *
@@ -663,11 +686,13 @@ class GuardCheckInconclusive extends Error {}
  *   57014 query_canceled (statement_timeout), 55P03 lock_not_available,
  *   57P0x admin/crash shutdown and "cannot connect now", 53300 too many
  *   connections, and the whole 08 class (connection exceptions).
- * `42501 insufficient_privilege` is included for a different reason: a role
- * without DELETE on the table never reaches the trigger stage at all, so the
- * probe learns nothing about the guard either way.
+ * `42501 insufficient_privilege` is NOT here. It used to be, back when a
+ * runtime role held DELETE on most tables and a refusal was an accident of one
+ * grant; since D55 (6) it is the answer every runtime role must give, and it is
+ * conclusive (`PRIVILEGE_REFUSED` above). Counting it as "could not answer"
+ * would turn every runtime boot's check into "unavailable".
  */
-const INCONCLUSIVE_CODES = new Set(["57014", "55P03", "57P01", "57P02", "57P03", "53300", "42501"]);
+const INCONCLUSIVE_CODES = new Set(["57014", "55P03", "57P01", "57P02", "57P03", "53300"]);
 
 function isInconclusive(err: unknown): boolean {
   const code = (err as { code?: string } | null)?.code;
@@ -679,7 +704,10 @@ function isInconclusive(err: unknown): boolean {
 
 /**
  * The probe half: issue a real removal statement per protected table and
- * require the guard's own message back.
+ * require a refusal back — the guard's own message, or, from a role that holds
+ * no DELETE on the table (every runtime role, D55 (6)), the executor's 42501.
+ * Anything else is a problem, and an ACCEPTED delete is the one this exists
+ * for.
  *
  * `DELETE ... WHERE false` matches nothing in either outcome, so this is safe
  * against a live database whether the guard answers or not — see the header.
@@ -710,6 +738,7 @@ async function deleteProbe(db: AppendOnlyDb, tables: string[], spec: GuardSpec):
       continue;
     }
     if (spec.isRefusal(raised, table)) continue;
+    if (isPrivilegeRefusal(raised)) continue;
     const e = raised as { message?: string; code?: string };
     const first = String(e?.message ?? raised).split("\n")[0];
     if (isInconclusive(raised)) {
@@ -738,39 +767,6 @@ async function migrationRecorded(db: AppendOnlyDb, migration: string): Promise<b
 }
 
 /**
- * Which of `tables` the CURRENT ROLE could actually issue a DELETE against.
- *
- * WHY THE PROBE IS FILTERED AT ALL, AND WHY THAT IS A FIX AND NOT A WEAKENING.
- * The api connects as `rm_app`. Migrations 0056, 0057, 0058, 0059 and 0060 all grant
- * that role SELECT and INSERT on their tables and NOT DELETE, so an unfiltered
- * probe takes `42501 insufficient_privilege` there — which INCONCLUSIVE_CODES
- * correctly classifies as "this database did not answer", and ONE such throw
- * turns the WHOLE check "unavailable". That is not hypothetical and it is not
- * new to the ledger families: `analytics_overwrite_events` (migration 0056) is
- * already in APPEND_ONLY_TABLES with the same grant, so on the production role
- * this check has been returning "unavailable" — verifying NOTHING, on every
- * boot, including 0032's own tables — since 0056 landed. It is measured by an
- * executed test (backend/tests/append-only-guard-check.test.ts, the rm_app
- * describe), not reasoned about.
- *
- * Skipping the probe where the role cannot reach the trigger stage costs
- * nothing real: a role without DELETE is refused by the executor before any
- * trigger runs (42501 — a refusal no trigger edit can disarm), and the role
- * that could replace a guard function is not the one the api connects as. Those
- * tables keep the catalog half here, and their behavioural half is executed in
- * CI as the owner, which does hold DELETE.
- */
-async function probeTables(db: AppendOnlyDb, tables: string[]): Promise<string[]> {
-  if (tables.length === 0) return tables;
-  const rows = (await db`
-    SELECT t AS table_name
-    FROM unnest(${tables}::text[]) AS t
-    WHERE has_table_privilege(current_user, 'public.' || quote_ident(t), 'DELETE')
-  `) as unknown as { table_name: string }[];
-  return rows.map((r) => r.table_name);
-}
-
-/**
  * One ledger family's half of the check: the same catalog inventory and the
  * same behavioural probe, against its own function name and its own refusal
  * text.
@@ -792,7 +788,7 @@ async function checkLedgerFamily(db: AppendOnlyDb, family: LedgerImmutableFamily
         `but the table is not there. The ledger and the schema disagree.`,
     );
   problems.push(...(await triggerInventory(db, present, spec)));
-  problems.push(...(await deleteProbe(db, await probeTables(db, present), spec)));
+  problems.push(...(await deleteProbe(db, present, spec)));
   return problems;
 }
 
@@ -832,7 +828,7 @@ export async function checkAppendOnlyGuard(db: AppendOnlyDb = sql): Promise<Appe
     const tables = tablesExpectedProtected(existing, appliedMigrations);
     const problems = [
       ...(await triggerInventory(db, tables, APPEND_ONLY_SPEC)),
-      ...(await deleteProbe(db, await probeTables(db, tables), APPEND_ONLY_SPEC)),
+      ...(await deleteProbe(db, tables, APPEND_ONLY_SPEC)),
     ];
     // The ledger families (0057/0058/0059/0060) are checked on the SAME boot path,
     // because a trigger that only a migration installs is a trigger a restore
@@ -861,9 +857,9 @@ export async function checkAppendOnlyGuard(db: AppendOnlyDb = sql): Promise<Appe
  * catalog queries per ledger family. Its own client bounds each statement at
  * the server (statement_timeout and lock_timeout), so the realistic worst case
  * is one timed-out probe — the loop stops at the first inconclusive answer
- * rather than paying the timeout once per table. On the production role the
- * ledger tables are not probed at all (probeTables), so what the second
- * protected set adds to a boot is catalog reads, not DELETEs.
+ * rather than paying the timeout once per table. On a runtime role every probe
+ * is refused by the executor at 42501 before any trigger runs (D55 (6)), so
+ * each costs one privilege check, not a trigger call.
  */
 export const APPEND_ONLY_GUARD_BUDGET_MS = 2_000;
 
@@ -935,9 +931,10 @@ export function appendOnlyGuardOutcome(): AppendOnlyGuardStatus {
  *      catalog; its behaviour is proved by
  *      backend/tests/append-only-replication.test.ts. See the header.
  *   5. A TABLE THE CONNECTING ROLE CANNOT DELETE FROM GETS THE CATALOG HALF
- *      ONLY. `rm_app` holds no DELETE on the 0056–0060 tables, so the probe is
- *      skipped there (probeTables) — the executor's own 42501 is what stands in
- *      for it. CI probes them as the owner.
+ *      ONLY. No runtime role holds DELETE on any table (D55 (6)), so on the
+ *      api's own connection every probe is refused at 42501 — a conclusive
+ *      answer, counted as protected — and the executor's refusal is what
+ *      stands in for the guard function. CI probes it as the owner.
  */
 export async function assertAppendOnlyGuardArmed(db?: AppendOnlyDb): Promise<void> {
   // createNamespaceGuardClient is reused rather than re-implemented: it is

@@ -230,11 +230,14 @@ export async function handleAdmin(
          WHERE id = 1 AND pass_hash = ${hashKey(curr)}
          RETURNING id`;
       if (!rows.length) return false;
-      // A password rotation is a full admin-credential rotation. Delete both
-      // the passkeys and their bearer sessions in this same transaction so a
-      // passkey added during a compromise cannot survive the recovery path.
-      await tx`DELETE FROM admin_passkey`;
-      await tx`DELETE FROM admin_session`;
+      // A password rotation is a full admin-credential rotation. Revoke every
+      // live passkey and every live bearer session in this same transaction so
+      // a passkey added during a compromise cannot survive the recovery path.
+      // D55 (6): the revocation is a tombstone every read filters on
+      // (auth.ts isPrivileged, admin-webauthn.ts), never a DELETE, and it is
+      // refused on the very next request because it commits with the rotation.
+      await tx`UPDATE admin_passkey SET revoked_at = now() WHERE revoked_at IS NULL`;
+      await tx`UPDATE admin_session SET revoked_at = now() WHERE revoked_at IS NULL`;
       await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'change_admin_password', ${tx.json({})})`;
       return true;
     });
@@ -262,8 +265,9 @@ export async function handleAdmin(
       if (!rows.length) return false;
       // Keep credential rotation and revocation indivisible: if auditing
       // fails, neither the new password nor passkey/session revocation commits.
-      await tx`DELETE FROM admin_passkey`;
-      await tx`DELETE FROM admin_session`;
+      // The revocation is the tombstone of D55 (6), as in the password change.
+      await tx`UPDATE admin_passkey SET revoked_at = now() WHERE revoked_at IS NULL`;
+      await tx`UPDATE admin_session SET revoked_at = now() WHERE revoked_at IS NULL`;
       // Returning the replacement code commits only with its audit record. If
       // auditing fails, the old code remains usable rather than being consumed
       // without a successor the operator can see.

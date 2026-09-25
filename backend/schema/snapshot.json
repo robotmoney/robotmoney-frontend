@@ -103,7 +103,10 @@
     "0084_admin_revocation_tombstones.sql",
     "0085_webauthn_challenge_consumed_at.sql",
     "0086_wallet_sample_superseded_at.sql",
-    "0087_member_key_spoof_generation.sql"
+    "0087_member_key_spoof_generation.sql",
+    "0088_webauthn_challenge_slots.sql",
+    "0089_revoke_runtime_delete.sql",
+    "0090_stream_events_retention_comment.sql"
   ],
   "exclusions": {
     "roles": [
@@ -115,7 +118,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "bbd5816eac3e0d734d478d3b0a47d1d06c18a7a11a4f7445eaf433072efe98a7",
+  "contentHash": "47becf56c42b563b1937b31cfb87539dc9018fc99669435e6b26d793bce71025",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -184,7 +187,7 @@
     },
     "column public.admin_webauthn_challenge.challenge": {
       "type": "text",
-      "notnull": "yes"
+      "notnull": "no"
     },
     "column public.admin_webauthn_challenge.consumed_at": {
       "type": "timestamp with time zone",
@@ -192,10 +195,18 @@
     },
     "column public.admin_webauthn_challenge.expires_at": {
       "type": "timestamp with time zone",
-      "notnull": "yes"
+      "notnull": "no"
     },
     "column public.admin_webauthn_challenge.flow": {
       "type": "text",
+      "notnull": "no"
+    },
+    "column public.admin_webauthn_challenge.issued_at": {
+      "type": "timestamp with time zone",
+      "notnull": "no"
+    },
+    "column public.admin_webauthn_challenge.slot": {
+      "type": "smallint",
       "notnull": "yes"
     },
     "column public.agent_activity_log.action_type": {
@@ -3816,11 +3827,20 @@
     "constraint public.admin_session.admin_session_pkey": {
       "definition": "PRIMARY KEY (token)"
     },
+    "constraint public.admin_webauthn_challenge.admin_webauthn_challenge_challenge_key": {
+      "definition": "UNIQUE (challenge)"
+    },
     "constraint public.admin_webauthn_challenge.admin_webauthn_challenge_flow_check": {
       "definition": "CHECK ((flow = ANY (ARRAY['registration'::text, 'authentication'::text])))"
     },
     "constraint public.admin_webauthn_challenge.admin_webauthn_challenge_pkey": {
-      "definition": "PRIMARY KEY (challenge)"
+      "definition": "PRIMARY KEY (slot)"
+    },
+    "constraint public.admin_webauthn_challenge.admin_webauthn_challenge_slot_check": {
+      "definition": "CHECK (((slot >= 0) AND (slot < 32)))"
+    },
+    "constraint public.admin_webauthn_challenge.admin_webauthn_challenge_slot_state_check": {
+      "definition": "CHECK ((((flow IS NULL) AND (challenge IS NULL) AND (issued_at IS NULL) AND (expires_at IS NULL) AND (consumed_at IS NULL)) OR ((flow IS NOT NULL) AND (challenge IS NOT NULL) AND (issued_at IS NOT NULL) AND (expires_at IS NOT NULL))))"
     },
     "constraint public.agent_activity_log.agent_activity_log_agent_id_fkey": {
       "definition": "FOREIGN KEY (agent_id) REFERENCES public.openclaw_agents(id) ON DELETE SET NULL"
@@ -4928,8 +4948,11 @@
     "index public.admin_session_pkey": {
       "definition": "CREATE UNIQUE INDEX admin_session_pkey ON public.admin_session USING btree (token)"
     },
+    "index public.admin_webauthn_challenge_challenge_key": {
+      "definition": "CREATE UNIQUE INDEX admin_webauthn_challenge_challenge_key ON public.admin_webauthn_challenge USING btree (challenge)"
+    },
     "index public.admin_webauthn_challenge_pkey": {
-      "definition": "CREATE UNIQUE INDEX admin_webauthn_challenge_pkey ON public.admin_webauthn_challenge USING btree (challenge)"
+      "definition": "CREATE UNIQUE INDEX admin_webauthn_challenge_pkey ON public.admin_webauthn_challenge USING btree (slot)"
     },
     "index public.agent_activity_log_agent_idx": {
       "definition": "CREATE INDEX agent_activity_log_agent_idx ON public.agent_activity_log USING btree (agent_id)"

@@ -208,6 +208,15 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     "0085_webauthn_challenge_consumed_at.sql",
     "0086_wallet_sample_superseded_at.sql",
     "0087_member_key_spoof_generation.sql",
+    //   0088 — the 32 fixed WebAuthn challenge slots (D55 (6)). `breaking`:
+    //          older code INSERTs and DELETEs challenges.
+    //   0089 — DELETE and TRUNCATE revoked from every runtime role on every
+    //          table (D55 (6), smoke spec §9.1 step 3). `breaking`.
+    //   0090 — `swarm_stream_events`' comment names the 7-day prune window
+    //          (D55 (12)).
+    "0088_webauthn_challenge_slots.sql",
+    "0089_revoke_runtime_delete.sql",
+    "0090_stream_events_retention_comment.sql",
   ];
 
   test("the job ledger 0070 created is dropped by a later file, never by deleting 0070 (criterion 105)", () => {

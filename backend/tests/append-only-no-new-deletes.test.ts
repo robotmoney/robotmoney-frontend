@@ -121,19 +121,23 @@ const ALLOWED: Record<string, string> = {
  * THE GRANT-ONLY TABLES (D53 (2)) and the files allowed to prune them.
  *
  * `swarm_stream_events` left APPEND_ONLY_TABLES when migration 0080 dropped its
- * triggers so rm_owner can prune below the oldest servable cursor (scheduler
- * spec §6.3 Retention, D52). Leaving the append-only set must not also take it
- * out of this guard: a DELETE against it is still a decision, and the only
- * correct one is rm_owner's prune below the floor. So it is scanned as well,
- * against its OWN pinned list — never the append-only ALLOWED map above, which
- * would excuse a file for every protected table at once. Each entry must carry
- * a statement against the table (no stale entry) and must act as `rm_owner`,
- * the only role that may prune.
+ * triggers so rm_owner can prune it. Leaving the append-only set must not also
+ * take it out of this guard: a DELETE against it is still a decision, and the
+ * only correct one is rm_owner's. D55 (12): the log keeps a time window of at
+ * least 7 days and is pruned only by the manual, receipted `bun run prune`
+ * (backend/scripts/prune.ts), plus the tests that prove what that prune does.
+ * So it is scanned as well, against its OWN pinned list — never the
+ * append-only ALLOWED map above, which would excuse a file for every protected
+ * table at once. Each entry must carry a statement against the table (no stale
+ * entry) and must act as `rm_owner`, the only role that may prune: a test by
+ * `SET LOCAL ROLE rm_owner`, the command by declaring its statement an
+ * rm_owner registry site and logging in as rm_owner.
  */
 const GRANT_ONLY_TABLES: readonly string[] = RUNTIME_DELETE_REVOKED_TABLES.filter(
   (t) => !(APPEND_ONLY_TABLES as readonly string[]).includes(t),
 );
 const PRUNE_SITES: Record<string, string> = {
+  "backend/scripts/prune.ts": "`bun run prune`, the one pruning path: typed rm_owner, fenced, receipted (D55 (12))",
   "backend/tests/stream-events-retention.test.ts":
     "proves rm_owner may prune below the floor while rm_app and rm_worker get 42501",
   "backend/tests/api-event-stream.test.ts": "prunes as rm_owner to prove a cursor below the floor is a resync",
@@ -263,13 +267,18 @@ test("no DELETE/TRUNCATE/DROP TABLE against a grant-only table outside its pinne
   }
   expect(
     offenders,
-    "Only rm_owner prunes swarm_stream_events, and only below the oldest servable cursor (D52, D53 (2)). " +
+    "Only rm_owner prunes swarm_stream_events, through `bun run prune` and only past its 7-day window (D55 (12)). " +
       "A new prune site is a decision: add it to PRUNE_SITES with the reason.",
   ).toEqual([]);
   for (const [rel, why] of Object.entries(PRUNE_SITES)) {
     const code = codeOnly(join(root, rel));
     expect({ rel, why, prunes: [...code.matchAll(DESTRUCTIVE_GRANT_ONLY)].length > 0 }).toEqual({ rel, why, prunes: true });
-    expect({ rel, actsAsOwner: code.includes("SET LOCAL ROLE rm_owner") }).toEqual({ rel, actsAsOwner: true });
+    // A test switches to rm_owner; the command declares every statement it
+    // issues as an rm_owner site, and none as a runtime role's.
+    const actsAsOwner =
+      code.includes("SET LOCAL ROLE rm_owner") ||
+      (/\brole:\s*"rm_owner"/.test(code) && !/\brole:\s*"rm_(app|worker|readonly)"/.test(code));
+    expect({ rel, actsAsOwner }).toEqual({ rel, actsAsOwner: true });
   }
 });
 

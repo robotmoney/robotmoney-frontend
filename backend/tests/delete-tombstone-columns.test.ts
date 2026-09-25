@@ -17,15 +17,15 @@
 //   2. rows that existed BEFORE the migration read NULL after it — shown on a
 //      database bootstrapped from the pinned snapshot N
 //      (tests/fixtures/snapshots/), given rows, then migrated;
-//   3. today's statements (copied from the code that runs them, each cited)
-//      still run, as the role that runs them, and leave the new columns NULL —
-//      on the full replay. On the two snapshot-built paths (blank bootstrap,
-//      snapshot N + migrate) rm_app's admin DELETEs fail 42501 TODAY, before
-//      and after these migrations: grants.sql never granted rm_app DELETE on
-//      the admin tables, and 0053 did (cause B of schema-equivalence.test.ts).
-//      That break is recorded below as an exact list, not hidden; it closes
-//      when w5-owner-only-deletes (D55 (6)) turns those DELETEs into the
-//      tombstone UPDATEs this file proves rm_app can already make;
+//   3. the statements of the code built before them (copied from that code,
+//      each cited) that write or read rows still run, as the role that runs
+//      them, and leave the new columns NULL. Its DELETEs, and its WebAuthn
+//      challenge INSERT, are refused on every path: wave 5 of #1026 (D55 (6))
+//      shipped the tombstone writes with the `compat: breaking` migrations
+//      0088 (the 32 challenge slots) and 0089 (DELETE and TRUNCATE revoked
+//      from every runtime role), so that code refuses to boot on the current
+//      version (tests/pre-revoke-boot-refusal.test.ts) and the refusals below
+//      are what it would meet if it ran;
 //   4. the tombstone writes wave 5 will make are possible for the role that
 //      will make them, with no new privilege, and the published-snapshot guard
 //      (rm_wallet_aum_snapshot_constituent_guard, 0038) permits
@@ -169,43 +169,8 @@ describe("rows written before the migration read NULL after it", () => {
   });
 });
 
-describe("today's statements still work against the new columns (additive, spec §8.4)", () => {
-  test("rm_app's admin session, passkey and challenge statements run unchanged and leave the tombstones NULL", async () => {
-    // Statements copied from the code that runs them as rm_app, against the
-    // migration-built database every production database is.
-    const outcome = await asRole(migrated, "rm_app", async (tx) => {
-      // src/api/routes/admin-webauthn.ts, the sign-in: passkey registered,
-      // session minted.
-      await tx`INSERT INTO admin_passkey (id, public_key, counter, transports) VALUES ('pk-old-code', ${Buffer.from([1])}, 0, ${["usb"]})`;
-      await tx`UPDATE admin_passkey SET counter = 1, last_used_at = now() WHERE id = 'pk-old-code'`;
-      await tx`INSERT INTO admin_session (token, expires_at) VALUES ('tok-old-code', now() + interval '1 day')`;
-      // src/api/auth.ts: the session check.
-      const session = await tx`SELECT 1 FROM admin_session WHERE token = 'tok-old-code' AND expires_at > now()`;
-      const tombstones = await tx`
-        SELECT (SELECT revoked_at FROM admin_session WHERE token = 'tok-old-code') AS session,
-               (SELECT revoked_at FROM admin_passkey WHERE id = 'pk-old-code') AS passkey`;
-      // src/api/routes/admin-webauthn.ts storeChallenge / consumeChallenge.
-      await tx`DELETE FROM admin_webauthn_challenge WHERE expires_at <= now()`;
-      await tx`INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at) VALUES ('authentication', 'ch-old-code', now() + interval '5 minutes')`;
-      const challengeTombstone = await tx`SELECT consumed_at FROM admin_webauthn_challenge WHERE challenge = 'ch-old-code'`;
-      const consumed = await tx`
-        DELETE FROM admin_webauthn_challenge
-        WHERE flow = 'authentication' AND challenge = 'ch-old-code' AND expires_at > now()
-        RETURNING challenge`;
-      // src/api/routes/admin.ts, the password change: revoke everything.
-      await tx`DELETE FROM admin_passkey`;
-      await tx`DELETE FROM admin_session`;
-      return { session: session.length, tombstones: tombstones[0], challengeTombstone: challengeTombstone[0], consumed: consumed.length };
-    });
-    expect(outcome).toEqual({
-      session: 1,
-      tombstones: { session: null, passkey: null },
-      challengeTombstone: { consumed_at: null },
-      consumed: 1,
-    });
-  });
-
-  test("rm_worker's wallet upserts and the repair pass's delete-and-insert run unchanged and leave superseded_at NULL — full replay, blank bootstrap, snapshot N + migrate", async () => {
+describe("the pre-tombstone code's statements against the new columns (spec §8.4)", () => {
+  test("rm_worker's wallet upserts run unchanged and leave superseded_at NULL; the repair pass's delete-the-day is refused 42501 — full replay, blank bootstrap, snapshot N + migrate", async () => {
     for (const db of [migrated, fresh, advanced]) {
       const outcome = await asRole(db, "rm_worker", async (tx) => {
         // src/worker/handlers/wallet.ts sampleWalletBalances / sampleWalletSleeves,
@@ -232,74 +197,73 @@ describe("today's statements still work against the new columns (additive, spec 
                  (SELECT amount::int FROM wallet_balance_samples WHERE sample_date = ${DAY} AND symbol = 'OLDCODE') AS balance_amount,
                  (SELECT superseded_at FROM wallet_balance_samples WHERE sample_date = ${DAY} AND symbol = 'OLDCODE') AS balance_tombstone,
                  (SELECT superseded_at FROM wallet_sleeve_samples WHERE sample_date = ${DAY} AND symbol = 'OLDCODE') AS sleeve_tombstone`;
-        // src/ops/wallet-backfill.ts, the repair pass: delete the day, re-insert.
-        await tx`DELETE FROM wallet_balance_samples WHERE sample_date = ${DAY}`;
-        await tx`DELETE FROM wallet_sleeve_samples WHERE sample_date = ${DAY}`;
-        await tx`
-          INSERT INTO wallet_balance_samples (sample_date, symbol, amount, value_usd, provenance, sampled_at)
-          VALUES (${DAY}, 'OLDCODE', 3, 3, 'backfilled', now())`;
-        const repaired = await tx`SELECT amount::int AS amount, superseded_at FROM wallet_balance_samples WHERE sample_date = ${DAY}`;
-        return { upserted: upserted[0], repaired: [...repaired] };
+        // src/ops/wallet-backfill.ts, the pre-D55 (6) repair pass: delete the
+        // day. Refused since 0089: the repair pass upserts instead.
+        await tx`SAVEPOINT old_repair`;
+        const balance = await sqlState(() => tx`DELETE FROM wallet_balance_samples WHERE sample_date = ${DAY}`);
+        await tx`ROLLBACK TO SAVEPOINT old_repair`;
+        const sleeve = await sqlState(() => tx`DELETE FROM wallet_sleeve_samples WHERE sample_date = ${DAY}`);
+        await tx`ROLLBACK TO SAVEPOINT old_repair`;
+        return { upserted: upserted[0], repair: { balance, sleeve } };
       });
       expect(outcome).toEqual({
         upserted: { balance_rows: 1, balance_amount: 2, balance_tombstone: null, sleeve_tombstone: null },
-        repaired: [{ amount: 3, superseded_at: null }],
+        repair: { balance: "42501", sleeve: "42501" },
       });
     }
   });
 
-  /**
-   * RECORDED, cause B (schema-equivalence.test.ts), shrink-only: the rm_app
-   * statements of today's code that a snapshot-built database refuses, because
-   * grants.sql gives rm_app no DELETE on the admin tables while 0053 gave it
-   * DELETE on the full-replay path. Each is refused 42501 with or without
-   * migrations 0084-0086: the tombstone columns neither cause nor cure it.
-   * w5-owner-only-deletes deletes each entry as it converts the site
-   * (tests/no-runtime-delete.test.ts's backlog names the same sites).
-   */
-  const SNAPSHOT_PATH_REFUSED_TODAY: readonly string[] = [
+  /** The pre-tombstone code's admin statements that D55 (6) retired, each
+   *  refused on every path to the current version. */
+  const RETIRED_ADMIN_STATEMENTS: readonly string[] = [
     "admin-webauthn.ts storeChallenge expired cleanup",
+    "admin-webauthn.ts storeChallenge INSERT",
     "admin-webauthn.ts consumeChallenge",
     "admin.ts password change / recovery: DELETE FROM admin_passkey",
     "admin.ts password change / recovery: DELETE FROM admin_session",
   ];
 
-  test("on the snapshot-built paths rm_app's admin writes run and leave the tombstones NULL; its admin DELETEs are refused 42501 exactly as recorded (cause B, closed in wave 5)", async () => {
-    for (const db of [fresh, advanced]) {
+  test("rm_app's admin passkey and session writes run and leave the tombstones NULL; its DELETEs and its challenge INSERT are refused 42501 — full replay, blank bootstrap, snapshot N + migrate", async () => {
+    for (const db of [migrated, fresh, advanced]) {
       const outcome = await asRole(db, "rm_app", async (tx) => {
+        // src/api/routes/admin-webauthn.ts, the sign-in: passkey registered,
+        // session minted.
         await tx`INSERT INTO admin_passkey (id, public_key, counter, transports) VALUES ('pk-old-code', ${Buffer.from([1])}, 0, ${["usb"]})`;
         await tx`UPDATE admin_passkey SET counter = 1, last_used_at = now() WHERE id = 'pk-old-code'`;
         await tx`INSERT INTO admin_session (token, expires_at) VALUES ('tok-old-code', now() + interval '1 day')`;
+        // src/api/auth.ts: the session check.
         const session = await tx`SELECT 1 FROM admin_session WHERE token = 'tok-old-code' AND expires_at > now()`;
-        await tx`INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at) VALUES ('authentication', 'ch-old-code', now() + interval '5 minutes')`;
         const tombstones = await tx`
           SELECT (SELECT revoked_at FROM admin_session WHERE token = 'tok-old-code') AS session,
-                 (SELECT revoked_at FROM admin_passkey WHERE id = 'pk-old-code') AS passkey,
-                 (SELECT consumed_at FROM admin_webauthn_challenge WHERE challenge = 'ch-old-code') AS challenge`;
-        // Each DELETE in its own savepoint, so one refusal does not abort the rest.
+                 (SELECT revoked_at FROM admin_passkey WHERE id = 'pk-old-code') AS passkey`;
+        // Each retired statement in its own savepoint, so one refusal does not
+        // abort the rest.
         const attempt = async (run: () => Promise<unknown>) => {
-          await tx`SAVEPOINT old_code_delete`;
+          await tx`SAVEPOINT old_code_statement`;
           const state = await sqlState(run);
-          await tx`ROLLBACK TO SAVEPOINT old_code_delete`;
+          await tx`ROLLBACK TO SAVEPOINT old_code_statement`;
           return state;
         };
         const refused: Record<string, string | null> = {
-          [SNAPSHOT_PATH_REFUSED_TODAY[0]!]: await attempt(() => tx`DELETE FROM admin_webauthn_challenge WHERE expires_at <= now()`),
-          [SNAPSHOT_PATH_REFUSED_TODAY[1]!]: await attempt(
+          [RETIRED_ADMIN_STATEMENTS[0]!]: await attempt(() => tx`DELETE FROM admin_webauthn_challenge WHERE expires_at <= now()`),
+          [RETIRED_ADMIN_STATEMENTS[1]!]: await attempt(
+            () => tx`INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at) VALUES ('authentication', 'ch-old-code', now() + interval '5 minutes')`,
+          ),
+          [RETIRED_ADMIN_STATEMENTS[2]!]: await attempt(
             () => tx`
               DELETE FROM admin_webauthn_challenge
               WHERE flow = 'authentication' AND challenge = 'ch-old-code' AND expires_at > now()
               RETURNING challenge`,
           ),
-          [SNAPSHOT_PATH_REFUSED_TODAY[2]!]: await attempt(() => tx`DELETE FROM admin_passkey`),
-          [SNAPSHOT_PATH_REFUSED_TODAY[3]!]: await attempt(() => tx`DELETE FROM admin_session`),
+          [RETIRED_ADMIN_STATEMENTS[3]!]: await attempt(() => tx`DELETE FROM admin_passkey`),
+          [RETIRED_ADMIN_STATEMENTS[4]!]: await attempt(() => tx`DELETE FROM admin_session`),
         };
         return { session: session.length, tombstones: tombstones[0], refused };
       });
       expect(outcome).toEqual({
         session: 1,
-        tombstones: { session: null, passkey: null, challenge: null },
-        refused: Object.fromEntries(SNAPSHOT_PATH_REFUSED_TODAY.map((site) => [site, "42501"])),
+        tombstones: { session: null, passkey: null },
+        refused: Object.fromEntries(RETIRED_ADMIN_STATEMENTS.map((site) => [site, "42501"])),
       });
     }
   });
@@ -314,7 +278,12 @@ describe("the tombstone writes wave 5 makes need no new privilege", () => {
       await tx`UPDATE admin_passkey SET revoked_at = now() WHERE revoked_at IS NULL`;
       const live = await tx`
         SELECT 1 FROM admin_session WHERE token = 'tok-new-code' AND expires_at > now() AND revoked_at IS NULL`;
-      await tx`INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at) VALUES ('registration', 'ch-new-code', now() + interval '5 minutes')`;
+      // A challenge is issued by overwriting a slot in place (0088).
+      await tx`
+        UPDATE admin_webauthn_challenge
+           SET flow = 'registration', challenge = 'ch-new-code', issued_at = now(),
+               expires_at = now() + interval '5 minutes', consumed_at = NULL
+         WHERE slot = 0`;
       const consume = () => tx`
         UPDATE admin_webauthn_challenge SET consumed_at = now()
         WHERE flow = 'registration' AND challenge = 'ch-new-code' AND expires_at > now() AND consumed_at IS NULL
@@ -405,23 +374,17 @@ describe("the tombstone writes wave 5 makes need no new privilege", () => {
     expect(outcome).toEqual({ unpublished: null, legacy: null, published: "0A000" });
   });
 
-  test("no runtime role gained DELETE or TRUNCATE on a tombstoned table from these migrations", async () => {
-    // The blank bootstrap is grants.sql's word on the intended privileges
-    // (cause B of schema-equivalence.test.ts is the migrated side's leftover
-    // 0053 DELETE, revoked in wave 5). rm_worker's wallet DELETE is 0054's,
-    // held until wave 5 revokes it with the repair pass's rewrite.
-    const rows = (await fresh`
-      SELECT t AS table, r AS role
-      FROM unnest(${TOMBSTONES.map(([table]) => table)}::text[]) AS t, unnest(ARRAY['rm_app', 'rm_readonly']) AS r
-      WHERE has_table_privilege(r, 'public.' || t, 'DELETE') OR has_table_privilege(r, 'public.' || t, 'TRUNCATE')`) as unknown as {
-      table: string;
-      role: string;
-    }[];
-    expect(rows).toEqual([]);
-    const worker = (await fresh`
-      SELECT t AS table FROM unnest(${TOMBSTONES.map(([table]) => table)}::text[]) AS t
-      WHERE has_table_privilege('rm_worker', 'public.' || t, 'DELETE') OR has_table_privilege('rm_worker', 'public.' || t, 'TRUNCATE')
-      ORDER BY t`) as unknown as { table: string }[];
-    expect(worker.map((r) => r.table)).toEqual(["wallet_balance_samples", "wallet_sleeve_samples"]);
+  test("no runtime role holds DELETE or TRUNCATE on a tombstoned table — full replay, blank bootstrap, snapshot N + migrate (D55 (6), 0089)", async () => {
+    for (const db of [migrated, fresh, advanced]) {
+      const rows = (await db`
+        SELECT t AS table, r AS role
+        FROM unnest(${TOMBSTONES.map(([table]) => table)}::text[]) AS t,
+             unnest(ARRAY['rm_app', 'rm_worker', 'rm_readonly']) AS r
+        WHERE has_table_privilege(r, 'public.' || t, 'DELETE') OR has_table_privilege(r, 'public.' || t, 'TRUNCATE')`) as unknown as {
+        table: string;
+        role: string;
+      }[];
+      expect(rows).toEqual([]);
+    }
   });
 });

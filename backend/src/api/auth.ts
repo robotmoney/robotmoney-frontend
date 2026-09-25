@@ -73,7 +73,10 @@ async function hasOperatorRight(req: Request): Promise<boolean> {
 // admin role (issue #553 / D32, D52 (1)).
 //
 // Three credentials open it, each a durable server-side record:
-//  • an unexpired admin_session (a passkey login), as X-Admin-Token;
+//  • an unexpired, unrevoked admin_session (a passkey login), as
+//    X-Admin-Token. A password change or recovery revokes every session by
+//    setting `revoked_at` in its own transaction (D55 (6): a tombstone, never a
+//    DELETE), so a revoked session is refused on the very next request;
 //  • the operator's store token with the `admin` right. This is also the
 //    UNCLAIMED-setup credential: on a fresh instance with no admin_credential
 //    row it is what `POST /api/admin/claim` accepts, where an env
@@ -86,7 +89,9 @@ async function hasOperatorRight(req: Request): Promise<boolean> {
 export async function isPrivileged(req: Request): Promise<boolean> {
   const presented = req.headers.get("X-Admin-Token");
   if (presented) {
-    const session = await sql`SELECT 1 FROM admin_session WHERE token = ${hashKey(presented)} AND expires_at > now()`;
+    const session = await sql`
+      SELECT 1 FROM admin_session
+       WHERE token = ${hashKey(presented)} AND expires_at > now() AND revoked_at IS NULL`;
     if (session.length > 0) return true;
   }
   if (await hasOperatorRight(req)) return true;

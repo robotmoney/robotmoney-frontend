@@ -323,7 +323,7 @@ function probeTarget(db: PreflightDb): ProbeTarget | null {
 /**
  * The denylist of spec §7 check 2, verbatim: a runtime role may hold none of
  * "superuser; `CREATEROLE`; membership in `rm_owner`; ownership of any
- * application object; DDL; `DELETE`/`TRUNCATE` on append-only tables."
+ * application object; DDL; `DELETE` or `TRUNCATE` on any table (§3, D55 (6))."
  *
  * Fixed, not derived. Nothing a call site declares in the registry can add to
  * this list or take anything off it — that is the difference between a rule and
@@ -371,18 +371,23 @@ export type DenylistRule =
    *  runs inside other roles' statements, so a runtime role able to create one
    *  can rewrite writes it could never issue itself. */
   | "trigger_privilege"
-  /** `DELETE` or `TRUNCATE` on any table in `APPEND_ONLY_TABLES` or in
-   *  `LEDGER_IMMUTABLE_FAMILIES` (./append-only-guard.ts), or in
-   *  `RUNTIME_DELETE_REVOKED_TABLES` below. The ledger families count per
-   *  decision D53 (6): losing a ledger row is the same harm as losing a
-   *  history row. The grant-only tables count per D53 (2).
+  /** `DELETE` or `TRUNCATE` on ANY table, view or foreign table in an
+   *  application schema. D55 (6): "No runtime role (`rm_app`, `rm_worker`,
+   *  `rm_readonly`) holds `DELETE` or `TRUNCATE` on any table, append-only or
+   *  not", and "Preflight's denylist widens from append-only tables to every
+   *  table". One rule with no list, because a list of protected tables is a
+   *  list that can miss one. The id is the one this rule had when it covered
+   *  the append-only set alone; the refusal names the table, the role and the
+   *  decision, and adds a table's own reason where it has one
+   *  (`protectedFromDeletion()`).
    *
-   *  Migration 0065 is spec §9.1 step 2, the transition that revokes 0053's
+   *  Migration 0089 is spec §9.1 step 3, the transition that revokes 0053's
    *  `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO
-   *  rm_app` on the append-only set; 0072 does the same for the two scheduler
-   *  logs. Before them this rule refuses every boot, which is what §9.1 means
-   *  by "Check 2 fails until it lands". db-preflight-checks.test.ts replays that
-   *  transition and proves both halves. */
+   *  rm_app` (and every other runtime DELETE) on every table; 0065 did it for
+   *  the append-only set first. Before 0089 this rule refuses every boot, which
+   *  is what §9.1 means by "Check 2 fails until they land".
+   *  tests/preflight-delete-denylist.test.ts plants a grant of each privilege
+   *  for each runtime role on an ordinary table. */
   | "append_only_write";
 
 /** One denylist hit, resolved to the exact role and object. */
@@ -434,7 +439,7 @@ export interface DenylistViolation {
  * a denylist that only arms in production is first exercised in production.
  *
  * Serves spec §10 W2 "Denylist: runtime role with `rm_owner` membership, object
- * ownership, or DELETE on an append-only table fails preflight."
+ * ownership, or `DELETE` or `TRUNCATE` on any table fails preflight."
  */
 export async function checkPrivileges(db: PreflightDb, context: PreflightContext): Promise<PreflightCheckResult> {
   const findings: PreflightFinding[] = [];
@@ -525,31 +530,34 @@ function denylistMessage(violation: DenylistViolation): string {
           `runtime roles: ${GRANT_ONLY_REASON[violation.object] ?? "only rm_owner removes its rows"}`
         );
       }
+      if (violation.object !== null && protectedFromDeletion().includes(violation.object)) {
+        return (
+          `${violation.role} holds DELETE/TRUNCATE on the append-only table ${violation.object}: ` +
+          "spec §9.1 step 3's grant transition has not landed on this database, or a grant re-widened it"
+        );
+      }
       return (
-        `${violation.role} holds DELETE/TRUNCATE on the append-only table ${violation.object}: ` +
-        "spec §9.1 step 2's grant transition has not landed on this database, or a grant re-widened it"
+        `${violation.role} holds DELETE/TRUNCATE on ${violation.object}: only rm_owner may DELETE or TRUNCATE, on ` +
+        "any table (D55 (6)). Migration 0089 revokes both from every runtime role and every migrate run " +
+        "re-asserts it, so this database has not reached 0089, or a grant re-widened it since"
       );
   }
 }
 
 /**
- * Tables whose DELETE and TRUNCATE stay revoked from the runtime roles although
- * they are not append-only. Decision D53 (2): `swarm_stream_events` loses its
- * DELETE/TRUNCATE triggers so rm_owner can prune rows older than the oldest
- * servable cursor (D52 retention), and it leaves `APPEND_ONLY_TABLES` — but
- * "DELETE/TRUNCATE stay revoked from rm_app and rm_worker".
+ * The two tables D53 (2) protected by grant alone before D55 (6) extended the
+ * grant rule to every table. `swarm_stream_events` lost its DELETE/TRUNCATE
+ * triggers so rm_owner can prune it, and left `APPEND_ONLY_TABLES` — but
+ * "DELETE/TRUNCATE stay revoked from rm_app and rm_worker". It is pruned only
+ * by the manual, receipted `bun run prune`, and only rows older than its
+ * retention window of at least 7 days (D55 (12), backend/scripts/prune.ts).
  * `swarm_stream_head` is that log's counter row (migration 0081): a runtime
  * role that could remove it could stop every transition that writes an event.
  *
- * The same list as backend/schema/grants.sql's `runtime_delete_revoked`, which
- * re-revokes both on every reconciliation; check 2 is what refuses a database
- * where a grant re-widened either one since. db-preflight-checks.test.ts pins
- * the two lists together.
- *
- * Listed here, independently of ./append-only-guard.ts, on purpose: if check 2
- * derived its protected set from `APPEND_ONLY_TABLES` alone, taking the table
- * out of that list would silently stop check 2 refusing a runtime-role DELETE
- * grant on it. A table leaves this list only by a decision that says so.
+ * Check 2 refuses a runtime DELETE or TRUNCATE on every table; this list only
+ * gives these two a reason of their own in the refusal. Kept independent of
+ * ./append-only-guard.ts on purpose, so a table leaving `APPEND_ONLY_TABLES`
+ * never loses its reason silently.
  */
 export const RUNTIME_DELETE_REVOKED_TABLES: readonly string[] = Object.freeze([
   "swarm_stream_events",
@@ -558,15 +566,18 @@ export const RUNTIME_DELETE_REVOKED_TABLES: readonly string[] = Object.freeze([
 
 /** Why each grant-only table keeps DELETE/TRUNCATE revoked, for the refusal. */
 const GRANT_ONLY_REASON: Readonly<Record<string, string>> = Object.freeze({
-  swarm_stream_events: "only rm_owner prunes it, past the oldest servable cursor",
+  swarm_stream_events:
+    "only rm_owner prunes it, with the manual `bun run prune`, and only rows older than its retention window of " +
+    "at least 7 days (D55 (12))",
   swarm_stream_head:
     "it is swarm_stream_events' counter row, and a runtime role that removed it would stop every transition " +
     "that writes an event",
 });
 
-/** Every table the `append_only_write` rule protects: the append-only set, the
+/** The tables whose check-2 refusal carries a reason beyond D55 (6)'s "only
+ *  rm_owner may DELETE or TRUNCATE, on any table": the append-only set, the
  *  immutable ledger families (D53 (6)) and the grant-only tables (D53 (2)),
- *  deduplicated, in a stable order. */
+ *  deduplicated, in a stable order. The rule itself covers every table. */
 export function protectedFromDeletion(): string[] {
   const tables = new Set<string>(APPEND_ONLY_TABLES);
   for (const family of LEDGER_IMMUTABLE_FAMILIES) {
@@ -701,21 +712,27 @@ export async function findDenylistViolations(
       AND has_table_privilege(r.rolname, c.oid, 'TRIGGER')
     ORDER BY r.rolname, c.oid::regclass::text`) as unknown as { role: RmRole; object: string }[];
 
-  // APPEND-ONLY WRITE. The protected set is APPEND_ONLY_TABLES plus every
-  // LEDGER_IMMUTABLE_FAMILIES table (D53 (6)) plus RUNTIME_DELETE_REVOKED_TABLES
-  // (D53 (2)), resolved through `to_regclass`
-  // so a table this database has not reached yet is skipped rather than
-  // raising.
-  const appendOnly = (await db`
+  // DELETE OR TRUNCATE ON ANY TABLE (D55 (6)). Every relation in an
+  // application schema that a row can be removed from — a table, a partitioned
+  // table, a view (an updatable view passes a DELETE through) or a foreign
+  // table — for every runtime role, with no list: a list of protected tables
+  // is a list that can miss one. Extension members are the extension's.
+  // Named as `regclass` prints them, like the ownership rule.
+  const deletable = (await db`
     SELECT r.rolname AS role,
-           t.name    AS object,
-           has_table_privilege(r.rolname, to_regclass('public.' || t.name), 'DELETE')   AS may_delete,
-           has_table_privilege(r.rolname, to_regclass('public.' || t.name), 'TRUNCATE') AS may_truncate
+           c.oid::regclass::text AS object,
+           has_table_privilege(r.rolname, c.oid, 'DELETE')   AS may_delete,
+           has_table_privilege(r.rolname, c.oid, 'TRUNCATE') AS may_truncate
     FROM pg_roles r
-    CROSS JOIN unnest(${protectedFromDeletion()}::text[]) AS t(name)
+    CROSS JOIN pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE r.rolname = ANY(${names})
-      AND to_regclass('public.' || t.name) IS NOT NULL
-    ORDER BY r.rolname, t.name`) as unknown as {
+      AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+      AND c.relkind IN ('r', 'p', 'v', 'f')
+      AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                       WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
+      AND (has_table_privilege(r.rolname, c.oid, 'DELETE') OR has_table_privilege(r.rolname, c.oid, 'TRUNCATE'))
+    ORDER BY r.rolname, c.oid::regclass::text`) as unknown as {
     role: RmRole;
     object: string;
     may_delete: boolean;
@@ -738,9 +755,9 @@ export async function findDenylistViolations(
     for (const entry of triggerable.filter((t) => t.role === role)) {
       violations.push({ rule: "trigger_privilege", role, object: entry.object });
     }
-    for (const entry of appendOnly.filter((a) => a.role === role)) {
+    for (const entry of deletable.filter((a) => a.role === role)) {
       // ONE violation per table, whichever of the two privileges is held:
-      // absent privilege is one protection, and a table is either protected or
+      // absent privilege is the protection, and a table is either protected or
       // it is not.
       if (entry.may_delete || entry.may_truncate) {
         violations.push({ rule: "append_only_write", role, object: entry.object });
