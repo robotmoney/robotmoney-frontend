@@ -180,7 +180,7 @@ const lastHolding = registerQuery({
   probe: {
     statement: `SELECT amount, price_usd, value_usd FROM wallet_balance_samples
       WHERE symbol = $1 AND provenance <> $2 ORDER BY sample_date DESC LIMIT 1`,
-    params: ["USDC", "backfilled-quarantined"],
+    params: ["USDC", QUARANTINED_PROVENANCE],
   },
 });
 
@@ -195,7 +195,7 @@ const historySamples = registerQuery({
     statement: `SELECT wbs.sample_date, wbs.symbol, wbs.amount, wbs.value_usd, wbs.provenance FROM wallet_balance_samples wbs
       WHERE wbs.sample_date NOT IN (SELECT sample_date FROM wallet_balance_samples WHERE provenance = $1)
       ORDER BY wbs.sample_date ASC, wbs.symbol ASC`,
-    params: ["backfilled-quarantined"],
+    params: [QUARANTINED_PROVENANCE],
   },
 });
 
@@ -223,7 +223,7 @@ const latestSamples = registerQuery({
     statement: `SELECT DISTINCT ON (symbol) symbol, amount, price_usd, value_usd, provenance, strategy_nav_idle_only, sampled_at
       FROM wallet_balance_samples WHERE provenance <> $1
       ORDER BY symbol, sample_date DESC, sampled_at DESC`,
-    params: ["backfilled-quarantined"],
+    params: [QUARANTINED_PROVENANCE],
   },
 });
 

@@ -170,7 +170,7 @@ const fallbackSample = registerQuery({
         AND (wbs.price_usd IS NOT NULL OR (wbs.value_usd IS NOT NULL AND wbs.amount IS NOT NULL AND wbs.amount <> 0))
         AND wbs.sampled_at <= now() AND wbs.provenance <> $2
       ORDER BY wbs.sampled_at DESC LIMIT 1`,
-    params: ["USDC", "backfilled-quarantined"],
+    params: ["USDC", QUARANTINED_PROVENANCE],
   },
 });
 

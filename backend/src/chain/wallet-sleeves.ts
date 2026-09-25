@@ -73,7 +73,7 @@ const sleeveSamples = registerQuery({
       FROM wallet_sleeve_samples wss
       WHERE lower(wss.wallet_address) = lower($1) AND wss.provenance <> $2
       ORDER BY wss.symbol, wss.sample_date DESC, wss.sampled_at DESC`,
-    params: ["0x0000000000000000000000000000000000000001", "backfilled-quarantined"],
+    params: ["0x0000000000000000000000000000000000000001", QUARANTINED_PROVENANCE],
   },
 });
 
