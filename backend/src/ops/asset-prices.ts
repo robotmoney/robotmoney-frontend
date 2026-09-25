@@ -319,6 +319,9 @@ export async function backfillAssetPricesForCleanDays(
      WHERE wbs.sample_date < ${cutoff}
        AND wbs.symbol = ANY(${pricedSymbols})
        AND wbs.provenance <> ${QUARANTINED_PROVENANCE}
+       -- D55 (6): a row the wallet repair superseded (migration 0086) is not
+       -- a sample any more; it neither makes a day a candidate nor covers it.
+       AND wbs.superseded_at IS NULL
        AND NOT EXISTS (
              SELECT 1 FROM asset_prices ap
               WHERE ap.symbol = wbs.symbol
@@ -351,6 +354,7 @@ export async function backfillAssetPricesForCleanDays(
         COUNT(DISTINCT symbol) FILTER (WHERE provenance <> ${QUARANTINED_PROVENANCE}) AS balance_rows
       FROM wallet_balance_samples
       WHERE sample_date = ${date}
+        AND superseded_at IS NULL
     `;
     const [sleeveResult] = await db<{
       sleeve_keys: string[];
@@ -361,6 +365,7 @@ export async function backfillAssetPricesForCleanDays(
         COUNT(DISTINCT wallet_address || '|' || symbol) FILTER (WHERE provenance <> ${QUARANTINED_PROVENANCE}) AS sleeve_rows
       FROM wallet_sleeve_samples
       WHERE sample_date = ${date}
+        AND superseded_at IS NULL
         AND lower(wallet_address) = ANY(${wallets.map((w) => w.toLowerCase())}::text[])
     `;
 

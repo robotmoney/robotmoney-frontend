@@ -179,7 +179,7 @@ const lastHolding = registerQuery({
   callers: ["src/worker/handlers/wallet"],
   probe: {
     statement: `SELECT amount, price_usd, value_usd FROM wallet_balance_samples
-      WHERE symbol = $1 AND provenance <> $2 ORDER BY sample_date DESC LIMIT 1`,
+      WHERE symbol = $1 AND provenance <> $2 AND superseded_at IS NULL ORDER BY sample_date DESC LIMIT 1`,
     params: ["USDC", QUARANTINED_PROVENANCE],
   },
 });
@@ -196,9 +196,11 @@ const HISTORY_PROBE = {
         ON ap.symbol = wbs.symbol
        AND ap.price_date = wbs.sample_date
        AND ap.time_basis = $1
-     WHERE wbs.sample_date NOT IN (
+     WHERE wbs.superseded_at IS NULL
+       AND wbs.sample_date NOT IN (
              SELECT sample_date FROM wallet_balance_samples
               WHERE provenance = $2
+                AND superseded_at IS NULL
            )
      ORDER BY wbs.sample_date ASC, wbs.symbol ASC`,
   params: [ASSET_PRICE_TIME_BASIS, QUARANTINED_PROVENANCE],
@@ -233,7 +235,7 @@ const latestSamples = registerQuery({
   callers: ["src/api/routes/dashboards"],
   probe: {
     statement: `SELECT DISTINCT ON (symbol) symbol, amount, price_usd, value_usd, provenance, strategy_nav_idle_only, sampled_at
-      FROM wallet_balance_samples WHERE provenance <> $1
+      FROM wallet_balance_samples WHERE provenance <> $1 AND superseded_at IS NULL
       ORDER BY symbol, sample_date DESC, sampled_at DESC`,
     params: [QUARANTINED_PROVENANCE],
   },
@@ -251,6 +253,9 @@ async function lastPersistedHolding(symbol: string): Promise<PersistedHolding | 
       FROM wallet_balance_samples
      WHERE symbol = ${symbol}
        AND provenance <> ${QUARANTINED_PROVENANCE}
+       -- D55 (6): a row the repair pass superseded (migration 0086) is gone
+       -- for every reader, as the delete it replaces left it.
+       AND superseded_at IS NULL
      ORDER BY sample_date DESC
      LIMIT 1
   `;
@@ -387,9 +392,14 @@ async function loadHistory(): Promise<{ history: WalletHistoryPoint[]; historyPr
         ON ap.symbol = wbs.symbol
        AND ap.price_date = wbs.sample_date
        AND ap.time_basis = ${ASSET_PRICE_TIME_BASIS}
-     WHERE wbs.sample_date NOT IN (
+     -- D55 (6): superseded rows (migration 0086) are filtered on both sides —
+     -- a superseded point is not drawn, and a superseded quarantined row does
+     -- not hide its day, exactly as the delete it replaces left the table.
+     WHERE wbs.superseded_at IS NULL
+       AND wbs.sample_date NOT IN (
              SELECT sample_date FROM wallet_balance_samples
               WHERE provenance = ${QUARANTINED_PROVENANCE}
+                AND superseded_at IS NULL
            )
      ORDER BY wbs.sample_date ASC, wbs.symbol ASC
   `;
@@ -489,6 +499,7 @@ export async function fetchPersistedWalletBalances(): Promise<WalletBalances> {
     SELECT DISTINCT ON (symbol) symbol, amount, price_usd, value_usd, provenance, strategy_nav_idle_only, sampled_at
       FROM wallet_balance_samples
      WHERE provenance <> ${QUARANTINED_PROVENANCE}
+       AND superseded_at IS NULL -- D55 (6), migration 0086
      ORDER BY symbol, sample_date DESC, sampled_at DESC
   `;
   const latest = new Map(rows.map((r) => [r.symbol, r]));
