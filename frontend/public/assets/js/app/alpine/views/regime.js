@@ -54,6 +54,12 @@ const HISTORY_SERIES = [["composite", "Composite"], ["macro", "Macro"], ["onchai
 // data they would be read back through Alpine's proxies on every render.
 const HIST_MEMO = { key: null, m: null };
 const DAYS_MEMO = { key: null, days: [] };
+// The history chart's scale. Off: the composite and panel index levels, 0 to
+// 1, as the page has always drawn them. On: each as a percentile of its last
+// three years, the scale the composite's 33rd / 67th cuts apply to, so lines,
+// bands and thresholds read on one axis. Held off until Lex has seen it
+// (2026-09-25); flipping it back is this one line.
+const HISTORY_ON_PERCENTILES = false;
 // The narrowest window the navigator allows, in days.
 const MIN_WINDOW = 14;
 const BT_MEMO = new Map();
@@ -684,7 +690,7 @@ export function registerRegimeView(Alpine) {
     // Percentiles when the history carries them for most days.
     historyPct() {
       const h = this.history;
-      if (!h.length) return false;
+      if (!HISTORY_ON_PERCENTILES || !h.length) return false;
       return h.filter((r) => (r.compositePercentile ?? r.composite_percentile) != null).length >= h.length / 2;
     },
     _histFmt(v) { return this.historyPct() ? this.ordinalPct(v) : (+v).toFixed(2); },
@@ -784,7 +790,7 @@ export function registerRegimeView(Alpine) {
       const idx = sampleDays(all.length, 60);
       if (which === "hist") {
         const byDate = new Map(this.history.map((r) => [r.date, r]));
-        return lineChartSvg({ n: all.length, y: (v) => v, series: [{ token: "nav", color: "rgba(242,244,249,0.45)", width: 1, points: idx.map((i) => { const v = byDate.get(all[i])?.compositePercentile; return { i, v: v == null ? null : +v }; }) }] });
+        return lineChartSvg({ n: all.length, y: (v) => v, series: [{ token: "nav", color: "rgba(242,244,249,0.45)", width: 1, points: idx.map((i) => { const r = byDate.get(all[i]); const v = this.historyPct() ? r?.compositePercentile : r?.composite; return { i, v: v == null ? null : +v }; }) }] });
       }
       const curve = this.latest?.backtest?.[this.btMarket]?.composite?.equity_curve || [];
       const pos = new Map(all.map((d, i) => [d, i]));
@@ -884,6 +890,7 @@ export function registerRegimeView(Alpine) {
       const from = m.from ? this.dateLong(m.from) : "the start";
       return `What $1 put into each strategy on ${from} was worth at each month-end after. Log scale: an equal step up or down is the same percentage move.`;
     },
+    fmtMultiple(v) { return v == null || !isFinite(v) ? "—" : (+v).toFixed(2) + "×"; },
     money(v) {
       if (v == null || !isFinite(v)) return "—";
       const n = +v;
@@ -894,7 +901,7 @@ export function registerRegimeView(Alpine) {
     // The table's columns, each with what it means.
     btColumns() {
       return [
-        { key: "final", label: "$1 became", tip: "What $1 put in at the start was worth at the end, after trading costs." },
+        { key: "final", label: "Multiple", tip: "What the strategy multiplied its starting capital by, after trading costs: 2.00× means $1 became $2." },
         { key: "cagr", label: "CAGR", tip: "Compound annual growth rate: the steady yearly return that ends at the same place." },
         { key: "in", label: "In-sample", tip: "CAGR before the February 2024 split." },
         { key: "out", label: "Out-of-sample", tip: "CAGR from February 2024 on. The method was built later, so this is not a true holdout." },
