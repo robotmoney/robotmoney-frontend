@@ -279,8 +279,10 @@ export async function runMigrate(
   // backend/migrations/.
   const snapshot = await loadSnapshot(seams.snapshotDir, seams.snapshotDir ? migrationsDir : undefined);
 
-  // 4. BASELINE GAP, before anything is applied: see assertBaselineGap.
-  if (firstManifest) await assertBaselineGap(db, snapshot);
+  // 4. BASELINE GAP, before anything is applied: see assertBaselineGap. The
+  //    FINAL filename list (ledger plus pending) is held to the snapshot's here
+  //    too, so the one refusal left after the apply loop is the catalog's.
+  if (firstManifest) await assertBaselineGap(db, snapshot, plan.pending);
 
   // 5. HEADERS, ALL OF THEM, BEFORE THE FIRST COMMIT. §8.2: every migration
   //    "declares itself `additive` or `breaking` in a header the runner
@@ -355,9 +357,21 @@ export async function runMigrate(
  *     because scripts/ops/provision-db-role-taxonomy.sh applied them through
  *     psql: the runner would "apply" 0053 again, as a pending file, onto a
  *     schema that already has it. That is repaired by the §9.1 operator steps
- *     first, never by this run.
+ *     first, never by this run;
+ *   - the pending files would not bring the ledger to the snapshot's list: a
+ *     pending file the snapshot does not embody, or an embodied file that is
+ *     neither recorded nor pending. The list the comparison would run at is
+ *     then not the snapshot's, so it refuses now rather than after applying.
+ *
+ * What cannot be checked before the apply is the CATALOG of the prefix: this
+ * checkout has no snapshot for it. So a first manifest over pending files
+ * compares after the apply loop, and a catalog difference found there leaves
+ * the pending files committed with no manifest — the §8.3 "in progress" state
+ * (ledger ahead of manifest), which check 3a refuses to boot and a rerun
+ * re-compares once a migration repairs the difference (§9.1 step 2).
+ * prod-baseline.test.ts pins that outcome.
  */
-async function assertBaselineGap(db: ReadDb, snapshot: Snapshot): Promise<void> {
+async function assertBaselineGap(db: ReadDb, snapshot: Snapshot, pending: readonly string[]): Promise<void> {
   const ledger = (
     (await db.unsafe("SELECT name FROM schema_migrations ORDER BY name")) as unknown as { name: string }[]
   ).map((row) => row.name);
@@ -371,6 +385,12 @@ async function assertBaselineGap(db: ReadDb, snapshot: Snapshot): Promise<void> 
     ...snapshot.filenames
       .filter((name) => !recorded.has(name) && last !== undefined && name < last)
       .map((name) => `the snapshot embodies ${name}, which the ledger does not record although later files are recorded`),
+    ...pending
+      .filter((name) => !embodied.has(name))
+      .map((name) => `the pending ${name} is not embodied by the snapshot`),
+    ...snapshot.filenames
+      .filter((name) => !recorded.has(name) && !pending.includes(name) && !(last !== undefined && name < last))
+      .map((name) => `the snapshot embodies ${name}, which is neither recorded nor pending`),
   ];
   if (problems.length === 0) return;
   throw new Error(

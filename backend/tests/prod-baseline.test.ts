@@ -26,7 +26,12 @@
 //     login's default privileges) — the migration-built shape production has;
 //   - a ledger that never recorded 0053 (production's actual ledger: 0053 and
 //     0062 were applied through psql) refuses BEFORE anything is applied,
-//     naming 0053, and publishes nothing.
+//     naming 0053, and publishes nothing;
+//   - a database with a PENDING file and catalog drift: the checkout has no
+//     snapshot for the prefix, so the drift is found only after the pending
+//     file commits. What that leaves is pinned: the file applied, NO manifest
+//     (the §8.3 "in progress" state check 3a refuses to boot), and a rerun that
+//     still refuses by name until a migration repairs the difference.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import postgres from "postgres";
@@ -198,5 +203,57 @@ describe("§9.1 step 2 — the first manifest is published only over a live sche
       expect(await ledger(admin)).toEqual(before);
       expect(await readManifest(admin)).toBeNull();
     }, { unrecorded: "0053_database_role_taxonomy.sql" });
+  });
+
+  test("PENDING files plus drift: the pending file commits, NO manifest is published, and the rerun still refuses by name", async () => {
+    // The last file is pending (its DDL is idempotent, so the snapshot-built
+    // schema already carrying it is the prefix-plus-pending shape), and the
+    // live schema drifts from the snapshot by one column.
+    const snapshot = await loadSnapshot();
+    const last = snapshot.filenames.at(-1)!;
+    await withDatabase("snapshot", async ({ admin, owner, name }) => {
+      const before = await ledger(admin);
+      expect(before).not.toContain(last);
+      await admin.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
+
+      await expect(operatorRun(owner, name)).rejects.toThrow("column public.job_schedules.last_enqueued_at");
+      // What is left: the pending file committed (its own fenced transaction),
+      // the publish transaction rolled back — ledger ahead of manifest.
+      expect(await ledger(admin)).toEqual([...before, last].sort());
+      expect(await readManifest(admin)).toBeNull();
+
+      // Nothing pending now, and the difference is still there: still refused,
+      // still no manifest. Only a migration repairing it lets the baseline pass.
+      await expect(operatorRun(owner, name)).rejects.toThrow("Refusing to publish this database's first schema manifest");
+      expect(await readManifest(admin)).toBeNull();
+    }, { unrecorded: last });
+  });
+
+  test("a pending file the snapshot does not embody refuses BEFORE anything is applied", async () => {
+    // The final list would not be the snapshot's, so no comparison could ever
+    // pass: refused before the first commit, through the migrations-dir seam.
+    const { mkdtempSync, readdirSync, copyFileSync, writeFileSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const dir = mkdtempSync(join(tmpdir(), "rm-baseline-pending-"));
+    const migrations = join(import.meta.dir, "..", "migrations");
+    try {
+      for (const f of readdirSync(migrations)) if (f.endsWith(".sql")) copyFileSync(join(migrations, f), join(dir, f));
+      writeFileSync(join(dir, "9999_planted_additive.sql"), "-- compat: additive\n-- metadata_version: 1\nCREATE TABLE baseline_planted (id int);\n");
+      await withDatabase("snapshot", async ({ admin, owner, name }) => {
+        const before = await ledger(admin);
+        await expect(
+          withTargetLock(urlFor(name), (lock) =>
+            runMigrate(owner, { caller: "operator", env: "prod", connection: "remote", nonInteractive: true, lock }, { migrationsDir: dir }),
+          ),
+        ).rejects.toThrow("the pending 9999_planted_additive.sql is not embodied by the snapshot");
+        expect(await ledger(admin)).toEqual(before);
+        expect(await readManifest(admin)).toBeNull();
+        const [planted] = await admin<{ t: string | null }[]>`SELECT to_regclass('public.baseline_planted')::text AS t`;
+        expect(planted?.t).toBeNull();
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
