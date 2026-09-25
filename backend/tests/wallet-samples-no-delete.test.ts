@@ -16,26 +16,36 @@
 //      on both tables (the revocation w5-no-runtime-delete's migration makes),
 //      and succeeds.
 //   2. A re-run over the same date is idempotent: same row count, same values,
-//      same ids.
+//      same ids, same tombstones.
 //   3. A key dropped between passes (an asset no longer tracked, a sleeve
 //      wallet no longer configured) is superseded, not deleted: its row is
-//      still in the table, its content unchanged, and it has left every read.
-//      The rows the pass does write are replaced IN PLACE (same id).
-//   4. Every reader returns exactly what the old delete-and-insert produced for
+//      still in the table, its id and content unchanged, and it has left every
+//      read. The rows the pass does write are replaced on their key, and the
+//      table never grows past one row per key however often the configuration
+//      flips.
+//   4. Each rewrite archives every live version it replaces or supersedes to
+//      evidence exactly once (the evidence tables are UNIQUE (original_id), so
+//      an upsert that kept the old id would collide on a key's second rewrite).
+//   5. Every reader returns exactly what the old delete-and-insert produced for
 //      the same inputs — a golden comparison per reader, under both the
 //      configuration that dropped the keys and the one that still expects them
 //      (the second is where an unfiltered read would differ).
-//   5. The published-snapshot guard (rm_wallet_aum_snapshot_constituent_guard,
+//   6. The published-snapshot guard (rm_wallet_aum_snapshot_constituent_guard,
 //      0038) refuses a repair that would touch a row of a complete run with
-//      0A000, on the upsert path and on the supersede path, exactly as it
-//      refused the DELETE, and the rows stay as they were.
+//      0A000 and the rows stay as they were: a live constituent at the evidence
+//      copy (where the old code was refused too), a superseded one at the
+//      upsert.
 //
-// RED CONTROLS. (3)'s id assertion fails on the old code (a delete and
-// re-insert mints new ids), and the pass fails outright on the old code under
-// (1)'s revocation (42501 on the DELETE). (4) carries its own control: the same
-// gap report computed WITHOUT the tombstone filter disagrees with the old
-// world, so the equality is the filter's doing and not an artefact of inputs
-// that could not tell the worlds apart.
+// RED CONTROLS, each run against f59bbac7's files. The old writer fails (1)
+// outright: 42501 on its DELETE. Each reader file reverted alone
+// (wallet-balances, wallet-sleeves, wallet-valuation, asset-prices,
+// gap-detector) fails (5) on its own reader's key. Within wallet-backfill.ts:
+// its completeness read without the filter fails (3) (a superseded key counts
+// as present), its evidence copy without the filter fails (4) (a superseded
+// row is archived a second time), and an upsert that keeps the old id fails
+// (3) and (4) (the key's second rewrite collides on the evidence tables'
+// UNIQUE (original_id)). (5) also asserts its discrimination directly: the gap
+// reports computed WITHOUT the tombstone filter disagree with the old world.
 //
 // THE EVIDENCE GRANT. The pass copies a day's live rows into
 // wallet_{balance,sleeve}_sample_evidence before it rewrites them. No migration
@@ -177,6 +187,37 @@ async function tableState(date: string): Promise<{ balances: BalanceRow[]; sleev
   return { balances: [...balances], sleeves: [...sleeves] };
 }
 
+const balanceKey = (r: BalanceRow): string => r.symbol;
+const sleeveKey = (r: SleeveRow): string => `${r.wallet_address}|${r.symbol}`;
+/** A row as a reader could ever see it: everything but the version id. */
+function withoutIds<T extends { id: string }>(row: T): Omit<T, "id"> {
+  const { id: _id, ...rest } = row;
+  return rest;
+}
+
+/** The original ids the date's evidence rows archive, per table, sorted. */
+async function archivedIds(date: string): Promise<{ balances: string[]; sleeves: string[] }> {
+  const balances = await sql<{ id: string }[]>`
+    SELECT original_id::text AS id FROM wallet_balance_sample_evidence WHERE sample_date = ${date}
+  `;
+  const sleeves = await sql<{ id: string }[]>`
+    SELECT original_id::text AS id FROM wallet_sleeve_sample_evidence WHERE sample_date = ${date}
+  `;
+  return { balances: balances.map((r) => r.id).sort(), sleeves: sleeves.map((r) => r.id).sort() };
+}
+
+/** Every tombstone on the date, as (table, id, superseded_at). */
+async function tombstones(date: string): Promise<string[]> {
+  const rows = await sql<{ t: string }[]>`
+    SELECT 'balance:' || id || ':' || superseded_at::text AS t
+      FROM wallet_balance_samples WHERE sample_date = ${date} AND superseded_at IS NOT NULL
+    UNION ALL
+    SELECT 'sleeve:' || id || ':' || superseded_at::text
+      FROM wallet_sleeve_samples WHERE sample_date = ${date} AND superseded_at IS NOT NULL
+  `;
+  return rows.map((r) => r.t).sort();
+}
+
 const ROLLBACK = Symbol("rollback");
 /** Run a reader that writes (the asset-price backfill) and throw its writes away. */
 async function rolledBack<T>(fn: (tx: DbHandle) => Promise<T>): Promise<T> {
@@ -247,12 +288,24 @@ async function readAll(): Promise<Record<string, unknown>> {
     balanceGaps: await detectGaps(seriesDef("wallet_balance_samples"), sql, READ_NOW),
     sleeveGaps: await detectGaps(seriesDef("wallet_sleeve_samples"), sql, READ_NOW),
     repairPlan: await planWalletBackfill(sql, READ_NOW),
-    assetPriceBackfill: await rolledBack((tx) =>
-      backfillAssetPricesForCleanDays(tx, READ_NOW, {
+    // The passes dual-wrote D's asset_prices rows, which takes D out of this
+    // reader's candidate set before it ever reads the samples, and the seeded
+    // history's unpriced days fill its 30-day window first. Its input here is
+    // the gap it exists to close with D alone in it — D sampled, D unpriced,
+    // no other sampled day — made inside the same rolled-back transaction as
+    // the harness owner, so the reader's completeness read over D's samples is
+    // what gets compared.
+    assetPriceBackfill: await rolledBack(async (tx) => {
+      const owner = tx as unknown as postgres.TransactionSql<{}>;
+      await owner`DELETE FROM asset_prices WHERE price_date = ${D}`;
+      await owner`DELETE FROM wallet_balance_samples WHERE sample_date <> ${D}`;
+      await owner`DELETE FROM wallet_sleeve_samples WHERE sample_date <> ${D}`;
+      return backfillAssetPricesForCleanDays(tx, READ_NOW, {
         async loadPrices(assets, fromDate) {
           return new Map(assets.map((a) => [a.symbol, new Map([[fromDate, 2]])]));
         },
-      })),
+      });
+    }),
   };
 }
 
@@ -344,24 +397,26 @@ describe("the wallet repair pass as rm_worker with DELETE revoked", () => {
     expect(await tableState(D)).toEqual(afterPass1);
   });
 
-  test("pass 2 under configuration B rewrites the day in place and supersedes the keys it dropped — nothing is deleted", async () => {
+  test("pass 2 under configuration B rewrites the day on its keys and supersedes the keys it dropped — nothing is deleted", async () => {
     useConfig("B");
     const result = await backfillWalletDay(worker, D, passDeps(7, T2), PASS_NOW);
     expect(result).toMatchObject({ ok: true, status: "filled" });
 
     const manifest = resolveWalletSnapshotManifest();
     afterPass2 = await tableState(D);
-    const idsBefore = new Set([...afterPass1.balances, ...afterPass1.sleeves].map((r) => r.id));
 
-    // Nothing left the table: every row pass 1 wrote is still there.
-    const idsAfter = new Set([...afterPass2.balances, ...afterPass2.sleeves].map((r) => r.id));
-    for (const id of idsBefore) expect(idsAfter.has(id)).toBe(true);
+    // Nothing left the table: every key pass 1 wrote still has its row, and
+    // the only rows added are the new wallet's.
+    const keysAfter = new Set([...afterPass2.balances.map(balanceKey), ...afterPass2.sleeves.map(sleeveKey)]);
+    for (const key of [...afterPass1.balances.map(balanceKey), ...afterPass1.sleeves.map(sleeveKey)]) {
+      expect(keysAfter.has(key)).toBe(true);
+    }
     expect(afterPass2.balances).toHaveLength(afterPass1.balances.length);
     const newSleeves = manifest.sleeveKeys.filter((k) => k.walletAddress === W3B).length;
     expect(newSleeves).toBeGreaterThan(0);
     expect(afterPass2.sleeves).toHaveLength(afterPass1.sleeves.length + newSleeves);
 
-    // The dropped keys: superseded, content exactly as pass 1 left it.
+    // The dropped keys: superseded, id and content exactly as pass 1 left them.
     const supersededBalances = afterPass2.balances.filter((r) => r.superseded);
     expect(supersededBalances.map((r) => r.symbol)).toEqual(["aUSDC"]);
     expect(supersededBalances[0]).toEqual({ ...afterPass1.balances.find((r) => r.symbol === "aUSDC")!, superseded: true });
@@ -372,55 +427,79 @@ describe("the wallet repair pass as rm_worker with DELETE revoked", () => {
       expect(row).toEqual({ ...afterPass1.sleeves.find((r) => r.id === row.id)!, superseded: true });
     }
 
-    // The written keys: live, pass 2's values, and — the red control against
-    // the old delete-and-insert, which minted a new id for every one — the
-    // SAME id as the row pass 1 wrote for that key.
+    // The written keys: live, pass 2's values, and a new version's id (the
+    // evidence tables' UNIQUE (original_id) needs one per version).
     const live = afterPass2.balances.filter((r) => !r.superseded);
     expect(live.map((r) => r.symbol).sort()).toEqual(manifest.balanceAssets.map((a) => a.symbol).sort());
     for (const row of live) {
       expect(row).toMatchObject({ amount: "7", price_usd: null, value_usd: "14", provenance: "backfilled", snapshot_run_id: null });
-      expect(row.id).toBe(afterPass1.balances.find((r) => r.symbol === row.symbol)!.id);
+      expect(row.id).not.toBe(afterPass1.balances.find((r) => r.symbol === row.symbol)!.id);
     }
     const liveSleeves = afterPass2.sleeves.filter((r) => !r.superseded);
     expect(liveSleeves).toHaveLength(manifest.sleeveKeys.length);
     for (const row of liveSleeves) {
       expect(row).toMatchObject({ amount: "7", price_usd: null, value_usd: "14", provenance: "backfilled" });
-      const prior = afterPass1.sleeves.find((r) => r.wallet_address === row.wallet_address && r.symbol === row.symbol);
-      if (prior) expect(row.id).toBe(prior.id);
-      else expect(row.wallet_address).toBe(W3B);
     }
 
     // What the pass replaced or superseded went to evidence first — every row
     // pass 1 wrote, once.
-    const [archived] = await sql<{ balances: number; sleeves: number }[]>`
-      SELECT (SELECT count(*) FROM wallet_balance_sample_evidence
-               WHERE sample_date = ${D} AND original_id = ANY(${afterPass1.balances.map((r) => r.id)}::bigint[]))::int AS balances,
-             (SELECT count(*) FROM wallet_sleeve_sample_evidence
-               WHERE sample_date = ${D} AND original_id = ANY(${afterPass1.sleeves.map((r) => r.id)}::bigint[]))::int AS sleeves
-    `;
-    expect(archived).toEqual({ balances: afterPass1.balances.length, sleeves: afterPass1.sleeves.length });
+    expect(await archivedIds(D)).toEqual({
+      balances: afterPass1.balances.map((r) => r.id).sort(),
+      sleeves: afterPass1.sleeves.map((r) => r.id).sort(),
+    });
   });
 
-  test("re-running pass 2 over the same date is idempotent: same rows, same values, same tombstones", async () => {
+  test("re-running pass 2 over the same date is idempotent: same rows, same values, same ids, same tombstones", async () => {
     useConfig("B");
-    const [tombstonesBefore] = await sql<{ at: string[] }[]>`
-      SELECT array_agg(superseded_at::text ORDER BY id) AS at FROM (
-        SELECT id, superseded_at FROM wallet_balance_samples WHERE sample_date = ${D} AND superseded_at IS NOT NULL
-        UNION ALL
-        SELECT id, superseded_at FROM wallet_sleeve_samples WHERE sample_date = ${D} AND superseded_at IS NOT NULL
-      ) t
-    `;
+    const tombstonesBefore = await tombstones(D);
     const rerun = await backfillWalletDay(worker, D, passDeps(7, T2), PASS_NOW);
     expect(rerun).toMatchObject({ ok: true, status: "filled" });
     expect(await tableState(D)).toEqual(afterPass2);
-    const [tombstonesAfter] = await sql<{ at: string[] }[]>`
-      SELECT array_agg(superseded_at::text ORDER BY id) AS at FROM (
-        SELECT id, superseded_at FROM wallet_balance_samples WHERE sample_date = ${D} AND superseded_at IS NOT NULL
-        UNION ALL
-        SELECT id, superseded_at FROM wallet_sleeve_samples WHERE sample_date = ${D} AND superseded_at IS NOT NULL
-      ) t
+    expect(await tombstones(D)).toEqual(tombstonesBefore);
+  });
+
+  test("a key the configuration brings back is live again, flipping back restores pass 2's table, and each live version is archived exactly once", async () => {
+    // Pass 3, configuration A again: the day is incomplete under A (aUSDC and
+    // the third wallet's sleeves are superseded, so wallet-backfill's own
+    // completeness read must not count them), so the pass rewrites it — its
+    // upsert revives those keys and supersedes the new wallet's.
+    useConfig("A");
+    const pass3 = await backfillWalletDay(worker, D, passDeps(5, T1), PASS_NOW);
+    expect(pass3).toMatchObject({ ok: true, status: "filled" });
+    const afterPass3 = await tableState(D);
+    expect(afterPass3.balances).toHaveLength(afterPass2.balances.length);
+    expect(afterPass3.sleeves).toHaveLength(afterPass2.sleeves.length);
+    expect(withoutIds(afterPass3.balances.find((r) => r.symbol === "aUSDC")!)).toEqual(
+      withoutIds(afterPass1.balances.find((r) => r.symbol === "aUSDC")!),
+    );
+    for (const row of afterPass3.sleeves) {
+      expect(row.superseded).toBe(row.wallet_address === W3B);
+    }
+
+    // Pass 4, configuration B again: pass 2's table, key for key and value for
+    // value (the live rows are new versions, so their ids are new).
+    useConfig("B");
+    const pass4 = await backfillWalletDay(worker, D, passDeps(7, T2), PASS_NOW);
+    expect(pass4).toMatchObject({ ok: true, status: "filled" });
+    const afterPass4 = await tableState(D);
+    expect(afterPass4.balances.map(withoutIds)).toEqual(afterPass2.balances.map(withoutIds));
+    expect(afterPass4.sleeves.map(withoutIds)).toEqual(afterPass2.sleeves.map(withoutIds));
+
+    // Evidence holds each LIVE version a rewrite replaced or superseded, once:
+    // passes 2, 3 and 4 each archived the rows live before them, and a row
+    // already superseded was not archived again (it was archived while live).
+    const liveIds = (rows: readonly { id: string; superseded: boolean }[]): string[] =>
+      rows.filter((r) => !r.superseded).map((r) => r.id);
+    expect(await archivedIds(D)).toEqual({
+      balances: [afterPass1, afterPass2, afterPass3].flatMap((s) => liveIds(s.balances)).sort(),
+      sleeves: [afterPass1, afterPass2, afterPass3].flatMap((s) => liveIds(s.sleeves)).sort(),
+    });
+    // aUSDC's key: two versions archived (pass 1's before pass 2, pass 3's
+    // before pass 4), never the superseded one twice.
+    const [ausdc] = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM wallet_balance_sample_evidence WHERE sample_date = ${D} AND symbol = 'aUSDC'
     `;
-    expect(tombstonesAfter).toEqual(tombstonesBefore);
+    expect(ausdc!.n).toBe(2);
   });
 
   test("every reader returns what the old delete-and-insert produced for the same inputs, under both configurations", async () => {

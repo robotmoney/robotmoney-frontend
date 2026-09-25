@@ -1304,10 +1304,15 @@ async function repairResolvedDay(
           // D55 (6): an upsert that replaces the row in place, never a delete
           // and re-insert. The conflict branch sets EVERY column to its EXCLUDED
           // value — the value the INSERT gives a fresh row, which is the
-          // column's default (NULL) for each one the INSERT does not name — so
-          // the replaced row reads exactly as the old delete-and-insert left
-          // it, id aside: price_usd stays NULL, a prior snapshot identity is
-          // cleared, and a row an earlier pass superseded is live again.
+          // column's default for each one the INSERT does not name — so the
+          // replaced row reads exactly as the old delete-and-insert left it:
+          // price_usd stays NULL, a prior snapshot identity is cleared, a row an
+          // earlier pass superseded is live again, and `id` is the fresh
+          // sequence value EXCLUDED drew. The new id is load-bearing, not
+          // cosmetic: the evidence tables hold UNIQUE (original_id), one archived
+          // copy per VERSION, so a key rewritten by a second pass must present a
+          // new version's id or its archive collides with the first (the delete
+          // and re-insert got this for free).
           // rm_wallet_aum_snapshot_constituent_guard (0038) still refuses this
           // UPDATE with 0A000 on a row of a complete or degraded run, exactly as
           // it refused the DELETE.
@@ -1317,6 +1322,7 @@ async function repairResolvedDay(
             VALUES
               (${date}, ${r.asset.symbol}, ${amount.amount}, ${amount.amount * priceUsd}, 'backfilled', ${sampledAt})
             ON CONFLICT (sample_date, symbol) DO UPDATE SET
+              id                     = EXCLUDED.id,
               amount                 = EXCLUDED.amount,
               price_usd              = EXCLUDED.price_usd,
               value_usd              = EXCLUDED.value_usd,
@@ -1382,13 +1388,14 @@ async function repairResolvedDay(
           // D41 phase 4 (markets §5.6): same rationale as the balance insert above —
           // price_usd is left unwritten; value_usd still carries the fused product.
           // D55 (6): the same in-place upsert as the balance row above, on the
-          // sleeve natural key, every column from EXCLUDED.
+          // sleeve natural key, every column (id included) from EXCLUDED.
           await tx`
             INSERT INTO wallet_sleeve_samples
               (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
             VALUES
               (${date}, ${t.walletAddress}, ${t.asset.symbol}, ${amount.amount}, ${amount.amount * priceUsd}, 'backfilled', ${sampledAt})
             ON CONFLICT (sample_date, wallet_address, symbol) DO UPDATE SET
+              id                 = EXCLUDED.id,
               amount             = EXCLUDED.amount,
               price_usd          = EXCLUDED.price_usd,
               value_usd          = EXCLUDED.value_usd,
