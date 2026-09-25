@@ -17,12 +17,12 @@
 import { expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
-import { config } from "../src/config.ts";
 import { SCHEDULES } from "../src/db/seed.ts";
 import { getHandler } from "../src/worker/handlers/index.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { ALL_PARITY_DOMAINS } from "../src/analytics/cutover/parity.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { provisionAnalyticsToken, writeTokenFile } from "./support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -52,7 +52,10 @@ test(
     // process mounts) proves both that the handler never touches Postgres
     // itself and that runParitySweep() still runs for real, once it reaches
     // the API side of that boundary.
-    const TOKEN = "tok_analytics_parity_sweep_dispatch";
+    // analytics-producer's store token, delivered as the file the worker's
+    // client reads (smoke spec §3, D52 (1)).
+    const TOKEN = await provisionAnalyticsToken();
+    const TOKEN_FILE = writeTokenFile(TOKEN);
     const requests: { method: string; path: string; auth: string | null }[] = [];
     const server = Bun.serve({
       port: 0, hostname: "127.0.0.1",
@@ -65,15 +68,12 @@ test(
       },
     });
 
-    const origConfig = { analyticsToken: config.analyticsToken, allowInsecure: config.allowInsecure };
-    const origEnv = { ANALYTICS_API_URL: process.env.ANALYTICS_API_URL, ANALYTICS_TOKEN: process.env.ANALYTICS_TOKEN };
+    const origEnv = { ANALYTICS_API_URL: process.env.ANALYTICS_API_URL, ANALYTICS_TOKEN_FILE: process.env.ANALYTICS_TOKEN_FILE };
     try {
-      // Server side verifies the analytics-provider bearer (prod-shaped: no
-      // insecure fallback) — mirrors analytics-api-boundary.test.ts PART 2.
-      config.analyticsToken = TOKEN;
-      config.allowInsecure = false;
+      // Server side verifies the analytics-provider bearer against the token
+      // store — mirrors analytics-api-boundary.test.ts PART 2.
       process.env.ANALYTICS_API_URL = `http://localhost:${server.port}`;
-      process.env.ANALYTICS_TOKEN = TOKEN;
+      process.env.ANALYTICS_TOKEN_FILE = TOKEN_FILE;
 
       // A clean, freshly migrated+seeded database has no rows in any of the
       // four parity domains' source tables, so this exercises the REAL
@@ -118,8 +118,6 @@ test(
       expect(after[0]!.n).toBe(ALL_PARITY_DOMAINS.length * 2);
     } finally {
       server.stop(true);
-      config.analyticsToken = origConfig.analyticsToken;
-      config.allowInsecure = origConfig.allowInsecure;
       for (const [k, v] of Object.entries(origEnv)) {
         if (v === undefined) delete process.env[k as keyof typeof origEnv];
         else process.env[k as keyof typeof origEnv] = v;

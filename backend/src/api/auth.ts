@@ -2,132 +2,103 @@
 // router so the /api/analytics boundary reuses the SAME idioms instead of
 // growing a second implementation).
 //
-// Roles (docs/architecture.md §9.8):
-//  • host/admin         — isPrivileged() (claimed admin_credential hash or
-//    ADMIN_TOKEN as X-Admin-Token before setup is claimed; see D32 / issue #584).
-//  • automation         — hasAutomationRole() (AUTOMATION_TOKEN as
-//    X-Automation-Token), for stack-internal drivers only.
-//  • analytics-provider — hasAnalyticsProviderRole() (ANALYTICS_TOKEN bearer). The
-//    ONLY role that may write analytics data (regime recompute + /api/analytics/*).
+// Roles (docs/architecture.md §9.8), after D52 (1) retired every env-held
+// service secret into the API's automation-token store (issue #1026, smoke
+// spec §3):
+//  • admin              — isPrivileged(): an unexpired admin session, the
+//    operator's store token (right `admin`), or the claimed admin_credential
+//    password (D32). There is no `ADMIN_TOKEN` any more.
+//  • system-scheduler   — hasAutomationRight(read_subjects | read_sessions |
+//    lifecycle_transitions). The epoch lifecycle routes accept this and
+//    nothing else (D55 (4)).
+//  • analytics-provider — hasAnalyticsProviderRole(): the producer's store
+//    token (right `analytics_ingestion`). The ONLY role that may write
+//    analytics data (regime submission + /api/analytics/*). There is no shared
+//    `ANALYTICS_TOKEN` any more.
 //  • member             — swarm_member_keys bearer (checked in the swarm
 //    domain layer, not here).
 //
-// Fail-closed: a configured token (constant-time compared) authorizes in any
-// env; WITHOUT a token the role opens only when config.allowInsecure
-// (RM_ENV=ephemeral / explicit RM_ALLOW_INSECURE=1). smoke/prod with no token →
-// locked. ADMIN_TOKEN and member bearers are NEVER substitutes for the
-// analytics-provider credential (distinct comparisons against distinct secrets).
-import { createHash, timingSafeEqual } from "node:crypto";
-import { config } from "../config.ts";
+// FAIL-CLOSED, WITH NO OPT-OUT. A service token is valid when, and only when,
+// its hash is a row in `automation_tokens` carrying the right asked for. No env
+// value is consulted, and no deployment flag (`RM_ALLOW_INSECURE`,
+// `RM_ENV=ephemeral`) stands in for a missing or wrong credential: "a file on
+// disk establishes nothing by itself" (smoke spec §3), and neither does the
+// absence of one. Each check asks for ONE right, so no holder's token
+// substitutes for another's — the scheduler's cannot administer, the
+// operator's cannot drive an epoch, the producer's can do neither.
+import { timingSafeEqual } from "node:crypto";
 import { sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
 import { lookupAutomationToken, type AutomationGrant, type AutomationRight } from "../db/automation-tokens.ts";
+
+export type { AutomationGrant, AutomationRight } from "../db/automation-tokens.ts";
 
 export function bearer(req: Request): string | null {
   const h = req.headers.get("Authorization") ?? "";
   return h.startsWith("Bearer ") ? h.slice(7) : null;
 }
 
-// Constant-time secret comparison (over fixed-length sha256 hashes so lengths
-// always match and timing doesn't leak the secret).
-export function secretEq(presented: string | null, expected: string): boolean {
-  const a = createHash("sha256").update(presented ?? "").digest();
-  const b = createHash("sha256").update(expected).digest();
-  return timingSafeEqual(a, b);
-}
-
-// host/admin role, presented as X-Admin-Token (issue #553 / D32).
-//
-// Two-tier credential:
-//  • CLAIMED (admin_credential row present): the persisted hash is the durable
-//    operator credential — it survives restarts, so the per-boot mint can no
-//    longer rotate the operator out. The per-boot ADMIN_TOKEN setup value is
-//    revoked unconditionally; stack-internal drivers use the separate
-//    AUTOMATION_TOKEN role. allowInsecure stops opening this gate once a claim
-//    exists: a claim is an explicit security opt-in.
-//  • UNCLAIMED (no row): exactly the historical behaviour — ADMIN_TOKEN if
-//    configured, else allowInsecure.
-//
-// Fail-closed AND loud: a database failure propagates to the router's
-// sanitized 500 — never silently fall back to the env token while a claim
-// might exist.
-export async function isPrivileged(req: Request, cfg: Pick<typeof config, "adminToken" | "allowInsecure"> = config): Promise<boolean> {
-  const presented = req.headers.get("X-Admin-Token");
-  if (presented) {
-    const session = await sql`SELECT 1 FROM admin_session WHERE token = ${hashKey(presented)} AND expires_at > now()`;
-    if (session.length > 0) return true;
-  }
-  const claimed = await sql<{ pass_hash: string }[]>`SELECT pass_hash FROM admin_credential WHERE id = 1`;
-  if (claimed.length > 0) {
-    const expected = Buffer.from(claimed[0].pass_hash, "hex");
-    const got = Buffer.from(hashKey(presented ?? ""), "hex");
-    if (expected.length === got.length && timingSafeEqual(got, expected)) return true;
-    return false;
-  }
-  return cfg.adminToken ? secretEq(presented, cfg.adminToken) : cfg.allowInsecure;
-}
-
-// automation role: AUTOMATION_TOKEN presented as X-Automation-Token or Bearer.
-export function hasAutomationRole(
-  req: Request,
-  cfg: Pick<typeof config, "allowInsecure"> & { automationToken?: string | null } = config,
-): boolean {
-  const presented = req.headers.get("X-Automation-Token") ?? bearer(req);
-  return cfg.automationToken ? secretEq(presented, cfg.automationToken) : cfg.allowInsecure;
-}
-
-// ── The automation-token STORE (issue #1026 W4.5) ───────────────────────────
-//
-// `hasAutomationRole` above is the pre-existing, env-configured automation
-// credential: one shared secret, no identity, no rights, and no way to
-// provision a second one. That is what `system-scheduler` cannot use.
-// Smoke spec §3 requires a per-instance credential validated against a row
-// carrying its rights, so that "each instance holds its own token" and
-// "provisioning one never invalidates another's" are structural facts rather
-// than operational care.
-//
-// The two live side by side deliberately and are NOT merged. The env token
-// still authorizes the existing stack-internal drivers exactly as before —
-// merging would silently change who may call what — while a right-bearing
-// route asks `hasAutomationRight`, which the env token satisfies only as the
-// unscoped legacy credential it already is.
-export type { AutomationGrant, AutomationRight } from "../db/automation-tokens.ts";
-
 /**
- * The grant behind a presented bearer, or null.
+ * The grant behind a presented service token, or null.
  *
- * Reads the store and nothing else: a token that matches no row is refused
- * whether or not an env token happens to be configured, because the store is
- * about identity and the env token has none.
+ * A service token is presented as `X-Automation-Token` (what system-scheduler
+ * sends) or as a Bearer (what the analytics producer sends). The store is read
+ * and nothing else: a token that matches no row is refused.
  */
 export async function automationTokenGrant(req: Request): Promise<AutomationGrant | null> {
   return lookupAutomationToken(req.headers.get("X-Automation-Token") ?? bearer(req));
 }
 
-/**
- * Does the caller hold `right`?
- *
- * Order matters and is fail-closed. The store is consulted first, because a
- * provisioned token is an identity and its rights are the answer. Only if the
- * presented secret is in no row at all does this fall back to the legacy
- * unscoped automation credential — which, being unscoped, carries every right
- * by definition. `allowInsecure` is last and means what it means everywhere
- * else in this file: RM_ENV=ephemeral, never smoke or production.
- */
-export async function hasAutomationRight(
-  req: Request,
-  right: AutomationRight,
-  cfg: Pick<typeof config, "allowInsecure"> & { automationToken?: string | null } = config,
-): Promise<boolean> {
+/** Does the caller's store token hold `right`? No row, no right. */
+export async function hasAutomationRight(req: Request, right: AutomationRight): Promise<boolean> {
   const grant = await automationTokenGrant(req);
-  if (grant) return grant.rights.includes(right);
-  return hasAutomationRole(req, cfg);
+  return grant !== null && grant.rights.includes(right);
 }
 
-// analytics-provider role: ANALYTICS_TOKEN presented as a Bearer token.
-export function hasAnalyticsProviderRole(
-  req: Request,
-  cfg: Pick<typeof config, "analyticsToken" | "allowInsecure"> = config,
-): boolean {
-  return cfg.analyticsToken ? secretEq(bearer(req), cfg.analyticsToken) : cfg.allowInsecure;
+/**
+ * The operator's service token (smoke spec §3: "the admin routes; this
+ * replaces the `ADMIN_TOKEN` environment variable").
+ *
+ * Accepted where `ADMIN_TOKEN` was presented, as `X-Admin-Token`, and where
+ * every other service token is presented, so an operator command needs no
+ * header of its own. Either way it is the store row's `admin` right that
+ * authorizes, never the header it arrived in.
+ */
+async function hasOperatorRight(req: Request): Promise<boolean> {
+  const asAdminHeader = await lookupAutomationToken(req.headers.get("X-Admin-Token"));
+  if (asAdminHeader?.rights.includes("admin")) return true;
+  return hasAutomationRight(req, "admin");
+}
+
+// admin role (issue #553 / D32, D52 (1)).
+//
+// Three credentials open it, each a durable server-side record:
+//  • an unexpired admin_session (a passkey login), as X-Admin-Token;
+//  • the operator's store token with the `admin` right. This is also the
+//    UNCLAIMED-setup credential: on a fresh instance with no admin_credential
+//    row it is what `POST /api/admin/claim` accepts, where an env
+//    `ADMIN_TOKEN` used to be;
+//  • once claimed, the admin_credential password, as X-Admin-Token.
+// Nothing else, in any env.
+//
+// Fail-closed AND loud: a database failure propagates to the router's
+// sanitized 500 — never a silent grant.
+export async function isPrivileged(req: Request): Promise<boolean> {
+  const presented = req.headers.get("X-Admin-Token");
+  if (presented) {
+    const session = await sql`SELECT 1 FROM admin_session WHERE token = ${hashKey(presented)} AND expires_at > now()`;
+    if (session.length > 0) return true;
+  }
+  if (await hasOperatorRight(req)) return true;
+  if (!presented) return false;
+  const claimed = await sql<{ pass_hash: string }[]>`SELECT pass_hash FROM admin_credential WHERE id = 1`;
+  if (claimed.length === 0) return false;
+  const expected = Buffer.from(claimed[0].pass_hash, "hex");
+  const got = Buffer.from(hashKey(presented), "hex");
+  return expected.length === got.length && timingSafeEqual(got, expected);
+}
+
+// analytics-provider role: the producer's store token, `analytics_ingestion`.
+export async function hasAnalyticsProviderRole(req: Request): Promise<boolean> {
+  return hasAutomationRight(req, "analytics_ingestion");
 }

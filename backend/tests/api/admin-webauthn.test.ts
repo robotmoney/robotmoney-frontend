@@ -3,14 +3,21 @@
 // Docker is unavailable; this fixture supplies a deterministic software
 // authenticator so registration and assertion verification execute in CI.
 import { createHash, createSign, generateKeyPairSync, randomBytes } from "node:crypto";
-import { expect, test } from "bun:test";
+import { expect, test, beforeAll } from "bun:test";
 import { sql } from "../../src/db/client.ts";
 import { isPrivileged } from "../../src/api/auth.ts";
 import { handleAdminWebauthn, relyingParty } from "../../src/api/routes/admin-webauthn.ts";
 import { hashKey } from "../../src/lib/keys.ts";
+import { provisionOperatorToken } from "../support/automation-auth.ts";
+
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on.
+let OPERATOR = "";
+beforeAll(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 
 const ORIGIN = "http://localhost";
-const ADMIN = { adminToken: "passkey-test-admin-token", allowInsecure: false } as const;
 
 function base64url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64url");
@@ -67,7 +74,7 @@ function request(method: string, path: string, body?: unknown, token?: string): 
 
 async function call(method: string, path: string, body?: unknown, token?: string) {
   const req = request(method, path, body, token);
-  return handleAdminWebauthn(req, new URL(req.url), ADMIN);
+  return handleAdminWebauthn(req, new URL(req.url));
 }
 
 test("WebAuthn zero-counter registration and authentication verify an ES256 passkey", async () => {
@@ -80,7 +87,7 @@ test("WebAuthn zero-counter registration and authentication verify an ES256 pass
 
   // Registration starts behind the existing admin gate and persists a
   // one-time challenge before the authenticator response is accepted.
-  const registrationOptions = await call("GET", "/api/admin/webauthn/register/options", undefined, ADMIN.adminToken);
+  const registrationOptions = await call("GET", "/api/admin/webauthn/register/options", undefined, OPERATOR);
   expect(registrationOptions?.status).toBe(200);
   const registrationChallenge = (registrationOptions?.body as { challenge: string; rp: { id: string; name: string } }).challenge;
   expect((registrationOptions?.body as { rp: { id: string; name: string } }).rp).toEqual({ id: "localhost", name: "Robot Money" });
@@ -96,7 +103,7 @@ test("WebAuthn zero-counter registration and authentication verify an ES256 pass
     rawId: credentialID64,
     type: "public-key",
     response: { clientDataJSON: base64url(registrationClientData), attestationObject: base64url(attestationObject) },
-  }, ADMIN.adminToken);
+  }, OPERATOR);
   expect(registered).toEqual({ status: 200, body: { verified: true } });
   expect(Array.from(await sql`SELECT id, counter FROM admin_passkey WHERE id = ${credentialID64}`)).toEqual([{ id: credentialID64, counter: "0" }]);
 
@@ -129,7 +136,7 @@ test("WebAuthn zero-counter registration and authentication verify an ES256 pass
   expect(authenticated?.status).toBe(200);
   const sessionToken = (authenticated?.body as { verified: boolean; token: string }).token;
   expect(sessionToken).toHaveLength(43);
-  expect(await isPrivileged(request("GET", "/api/admin/overview", undefined, sessionToken), ADMIN)).toBe(true);
+  expect(await isPrivileged(request("GET", "/api/admin/overview", undefined, sessionToken))).toBe(true);
   expect(Array.from(await sql`SELECT counter, last_used_at FROM admin_passkey WHERE id = ${credentialID64}`)).toEqual([
     { counter: "0", last_used_at: expect.any(Date) },
   ]);
@@ -160,7 +167,7 @@ test("concurrent out-of-order assertions never regress a passkey counter", async
   if (!jwk.x || !jwk.y) throw new Error("P-256 fixture did not export public coordinates");
   const publicKeyCOSE = cbor([[1, 2], [3, -7], [-1, 1], [-2, Buffer.from(jwk.x, "base64url")], [-3, Buffer.from(jwk.y, "base64url")]]);
 
-  const registrationOptions = await call("GET", "/api/admin/webauthn/register/options", undefined, ADMIN.adminToken);
+  const registrationOptions = await call("GET", "/api/admin/webauthn/register/options", undefined, OPERATOR);
   const registrationChallenge = (registrationOptions?.body as { challenge: string }).challenge;
   const attestationObject = cbor([
     ["fmt", "none"],
@@ -175,7 +182,7 @@ test("concurrent out-of-order assertions never regress a passkey counter", async
       clientDataJSON: base64url(clientData("webauthn.create", registrationChallenge)),
       attestationObject: base64url(attestationObject),
     },
-  }, ADMIN.adminToken))?.status).toBe(200);
+  }, OPERATOR))?.status).toBe(200);
 
   const makeAssertion = (challenge: string, counter: number) => {
     const data = clientData("webauthn.get", challenge);
@@ -218,7 +225,7 @@ test("concurrent out-of-order assertions never regress a passkey counter", async
       },
     }),
   });
-  const lowResult = handleAdminWebauthn(delayedLowRequest, new URL(delayedLowRequest.url), ADMIN);
+  const lowResult = handleAdminWebauthn(delayedLowRequest, new URL(delayedLowRequest.url));
   const highResult = await call("POST", "/api/admin/webauthn/auth/verify", highAssertion);
   releaseLowBody();
   const lateLowResult = await lowResult;

@@ -30,7 +30,7 @@
 // skipped, never opened." Every grid equality below is compared IN SQL, at
 // microsecond precision; a JS Date would round both sides to the millisecond
 // and could call an off-grid close "on" it.
-import { test, expect } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import * as epoch from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
@@ -38,8 +38,16 @@ import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject, collectingSessions, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
 import { inHouseJudge } from "./support/stub-judge.ts";
+import { provisionSchedulerToken, schedulerHeaders } from "./support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
+
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on.
+let SCHEDULER = "";
+beforeAll(async () => {
+  SCHEDULER = await provisionSchedulerToken();
+});
 
 async function openedEpoch(prefix: string, durationSeconds = 600) {
   const subjectId = await activeSubject(prefix, durationSeconds);
@@ -268,12 +276,13 @@ test("HTTP: POST epochs/turnover without expectedSessionId is a 400 and changes 
   // names none before it reaches the transition, and nothing moves.
   const { subjectId, sessionId } = await openedEpoch("to_http_unbound");
   const head = await epoch.streamHeadSequence();
-  const cfg = { adminToken: null, allowInsecure: true } as const;
   const post = (body: unknown) => {
     const req = new Request("http://x/api/swarm/admin/epochs/turnover", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...schedulerHeaders(SCHEDULER) },
+      body: JSON.stringify(body),
     });
-    return handleSwarmAdmin(req, new URL(req.url), cfg);
+    return handleSwarmAdmin(req, new URL(req.url));
   };
 
   for (const body of [{ subjectId }, { subjectId, expectedSessionId: "" }, { subjectId, expectedSessionId: null }]) {

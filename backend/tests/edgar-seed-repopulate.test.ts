@@ -3,19 +3,24 @@
 // subset of rows, restores them via repopulateEdgarSeed, and asserts ONLY the
 // missing rows return while the final canonical DB projection matches the
 // seed's manifest exactly.
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test, beforeAll } from "bun:test";
 import { gzipSync } from "node:zlib";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
-import { config } from "../src/config.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { canonicalCsv, buildManifest, type EdgarSeedRow } from "../src/analytics/extract/edgar-seed.ts";
 import { bootstrapEdgarSeed, repopulateEdgarSeed, repairEdgarSeed } from "../src/analytics/edgar-seed-loader.ts";
 import type { AnalyticsApiConfig } from "../src/analytics/api-client.ts";
+import { provisionAnalyticsToken } from "./support/automation-auth.ts";
 
-const TOKEN = "tok_edgar_repopulate_test";
+// analytics-producer's store-issued token (smoke spec §3, D52 (1)): the API
+// validates the bearer against the store, with no configuration to flip.
+let TOKEN = "";
+beforeAll(async () => {
+  TOKEN = await provisionAnalyticsToken();
+});
 
 const SEED_ROWS: EdgarSeedRow[] = [
   { date: "2022-01-31", indicator: "MNA", value: 50 },
@@ -39,8 +44,6 @@ function installSeedFixture(rows: EdgarSeedRow[] = SEED_ROWS): { dir: string } {
 let fixtureDir: string | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
 let cfg: AnalyticsApiConfig;
-const origAnalyticsToken = config.analyticsToken;
-const origAllowInsecure = config.allowInsecure;
 
 beforeEach(async () => {
   ({ dir: fixtureDir } = installSeedFixture());
@@ -54,8 +57,6 @@ beforeEach(async () => {
     },
   });
   cfg = { baseUrl: `http://localhost:${server.port}`, token: TOKEN };
-  config.analyticsToken = TOKEN;
-  config.allowInsecure = false;
   await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
 });
 
@@ -64,8 +65,6 @@ afterEach(async () => {
   if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
   delete process.env.EDGAR_SEED_PATH;
   delete process.env.EDGAR_SEED_MANIFEST_PATH;
-  config.analyticsToken = origAnalyticsToken;
-  config.allowInsecure = origAllowInsecure;
   await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
 });
 

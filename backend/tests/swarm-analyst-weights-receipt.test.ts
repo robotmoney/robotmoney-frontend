@@ -36,7 +36,7 @@
 // The parser and prompt half of the same fix is pinned hermetically in
 // scripts/tests/unit/swarm-take-weights.test.ts; the submission-time refusal of
 // a weightless take is backend/tests/swarm-take-weights-submission.test.ts.
-import { expect, test } from "bun:test";
+import { expect, test, beforeEach } from "bun:test";
 import { canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
 import * as epoch from "../src/swarm/domain.ts";
 import { sql } from "../src/db/client.ts";
@@ -46,10 +46,19 @@ import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { activeSubject, rid, sessionDate, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
 import { inHouseJudge, submitSigned, STUB_JUDGE_REPLY } from "./support/stub-judge.ts";
+import { provisionSchedulerToken, schedulerHeaders } from "./support/automation-auth.ts";
 
 // Per TEST: every scenario seats its own members, and SWARM_ROSTER_CAP is
 // enforced on each admission.
 useCleanDatabasePerTest(import.meta.file);
+
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on. Per test, because each test
+// gets its own database (the clone hook above runs first).
+let SCHEDULER = "";
+beforeEach(async () => {
+  SCHEDULER = await provisionSchedulerToken();
+});
 
 const CANON = [...RECEIPT_CANONICAL_BUCKET_ORDER];
 const full = (shares: number[]) => CANON.map((bucket, i) => ({ bucket, weight: shares[i]! }));
@@ -79,9 +88,11 @@ async function submit(date: string, subjectId: string, weights: Vector) {
 /** POST epochs/finalize through the real admin handler — the call system-scheduler makes. */
 async function finalizeOverHttp(sessionId: string) {
   const req = new Request("http://x/api/swarm/admin/epochs/finalize", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId }),
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...schedulerHeaders(SCHEDULER) },
+    body: JSON.stringify({ sessionId }),
   });
-  const res = await handleSwarmAdmin(req, new URL(req.url), { adminToken: null, allowInsecure: true });
+  const res = await handleSwarmAdmin(req, new URL(req.url));
   if (!res) throw new Error("epochs/finalize fell through the admin handler");
   return res as { status: number; body: Record<string, any> };
 }

@@ -33,10 +33,10 @@ import { test, expect } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { sql } from "../src/db/client.ts";
-import { config } from "../src/config.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { processOneJob } from "../src/worker/loop.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { provisionAnalyticsToken, writeTokenFile } from "./support/automation-auth.ts";
 
 // Own database per TEST, cloned from the migrated template: these tests each
 // start from an empty table, which used to mean wiping one the previous test
@@ -222,7 +222,10 @@ test("only API persistence + migration/smoke tooling import the analytics store 
 test(
   "retained analytics handlers persist only via authenticated HTTP when invoked directly by a compatibility test",
   async () => {
-    const TOKEN = "tok_analytics_worker_boundary";
+    // analytics-producer's store token, delivered as the file the client reads
+    // (smoke spec §3, D52 (1)).
+    const TOKEN = await provisionAnalyticsToken();
+    const TOKEN_FILE = writeTokenFile(TOKEN);
     const requests: { method: string; path: string; auth: string | null }[] = [];
 
     // Real Bun server wrapping the REAL analytics route handler (same code the
@@ -237,22 +240,18 @@ test(
         return new Response(JSON.stringify(r.body), { status: r.status, headers: { "Content-Type": "application/json" } });
       },
     });
-
-    const origConfig = { analyticsToken: config.analyticsToken, allowInsecure: config.allowInsecure };
     const origEnv = {
       ANALYTICS_SOURCE: process.env.ANALYTICS_SOURCE,
       ANALYTICS_API_URL: process.env.ANALYTICS_API_URL,
-      ANALYTICS_TOKEN: process.env.ANALYTICS_TOKEN,
+      ANALYTICS_TOKEN_FILE: process.env.ANALYTICS_TOKEN_FILE,
     };
     try {
-      // Server side verifies the analytics-provider bearer (prod-shaped: no
-      // insecure fallback). This test explicitly wires the retained handler;
+      // Server side verifies the analytics-provider bearer against the token
+      // store. This test explicitly wires the retained handler;
       // production shared workers deliberately receive no provider secret.
-      config.analyticsToken = TOKEN;
-      config.allowInsecure = false;
       process.env.ANALYTICS_SOURCE = "hermetic"; // deterministic + offline sources
       process.env.ANALYTICS_API_URL = `http://localhost:${server.port}`;
-      process.env.ANALYTICS_TOKEN = TOKEN;
+      process.env.ANALYTICS_TOKEN_FILE = TOKEN_FILE;
 
       // Empty the queue: a clean database still carries seed()'s production
       // cold-start jobs, and processOneJob() claims the oldest eligible job, not
@@ -303,8 +302,6 @@ test(
       expect(sigs.map((s) => s.signal_key).sort()).toEqual(["channel-divergence", "late-cycle-signals"]);
     } finally {
       server.stop(true);
-      config.analyticsToken = origConfig.analyticsToken;
-      config.allowInsecure = origConfig.allowInsecure;
       for (const [k, v] of Object.entries(origEnv)) {
         if (v === undefined) delete process.env[k as keyof typeof origEnv];
         else process.env[k as keyof typeof origEnv] = v;

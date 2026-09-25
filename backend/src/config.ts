@@ -1,7 +1,6 @@
 // Central environment configuration. The only required input is DATABASE_URL.
 // RM_ENV selects behavior hints (ephemeral | smoke | prod) but the connection
 // itself is always driven by DATABASE_URL so the same code runs everywhere.
-import { envSecret } from "./lib/env-secret.ts";
 import { RM_ENV_VALUES } from "./acceptance-path.ts";
 
 function required(name: string): string {
@@ -575,17 +574,16 @@ export function assertNoVaultAddressCollision(
 }
 
 // --- Swarm public base URL ----------------------------------------------
-// The absolute origin the swarm notification emails link back to. Every
-// other surface in this codebase can get away with a root-relative path because
-// it renders inside a browser that already has an origin; an email does not. It
-// is read in a mail client, so a link that is not absolute is not a link at all.
-// That matters more here than it looks: the application status page at
-// /swarm/apply/<memberId> is reachable ONLY by its opaque id, nothing on the
-// site links to it, and the operator is handed the URL exactly once by their own
-// coding agent in a chat transcript. The email is the durable copy, so the URL
-// inside it has to be complete and it has to point at the deployment the
-// operator actually applied to (staging applicants must not be sent to
-// production, where their member id does not exist).
+// The canonical public origin absolute links into the site are built from.
+// There is no notification email any more (D50 removed it); what is left is
+// the applicant status page at /swarm/apply/<memberId>, which is reachable
+// ONLY by its opaque id — nothing on the site links to it, and the operator is
+// handed the URL exactly once by their own coding agent in a chat transcript.
+// D50 keeps this origin for exactly that reason: the status page is now the
+// only channel an applicant has, so a URL built for it has to be complete and
+// has to point at the deployment the operator actually applied to (staging
+// applicants must not be sent to production, where their member id does not
+// exist).
 //
 // Defaults to the public production site: an unconfigured real deployment still
 // emits a link that works for a real operator, which is the failure mode we can
@@ -612,9 +610,11 @@ export function resolveSwarmPublicBaseUrl(
 }
 
 // Fail-closed: default to "prod" when RM_ENV is unset, and REFUSE to start on an
-// unrecognized value (so a typo like "production" can never silently open the
-// privileged surface). The unauthenticated convenience path is opt-in: it is
-// allowed only in the "ephemeral" (CI/throwaway) env or with RM_ALLOW_INSECURE=1.
+// unrecognized value (so a typo like "production" can never silently select a
+// non-production policy). No RM_ENV value, and no RM_ALLOW_INSECURE flag, opens
+// a privileged route: every service credential is a row in the API's
+// automation-token store (smoke-production-spec.md §3, D52 (1)), validated in
+// backend/src/api/auth.ts in every env alike.
 //
 // `stage` is the §4.1 deployment policy for stage, test and CI; `bun smoke` and
 // `bun run migrate` start backend code under it (smoke-production-spec.md §4,
@@ -632,9 +632,6 @@ if (RM_ENV === "prod" && new URL(databaseUrl).username === "doadmin") {
 
 export const config = {
   env: RM_ENV as (typeof VALID_ENVS)[number],
-  // Privileged endpoints (onboarding/admin/analytics) may run WITHOUT a token
-  // only when this is true; otherwise the relevant token is required in every env.
-  allowInsecure: process.env.RM_ALLOW_INSECURE === "1" || RM_ENV === "ephemeral",
   // Trust X-Forwarded-For for client-ip (rate limiting) only behind a known proxy.
   trustProxy: process.env.TRUST_PROXY === "1",
   databaseUrl,
@@ -652,16 +649,10 @@ export const config = {
     .map((o) => o.trim())
     .filter(Boolean),
   workerId: process.env.WORKER_ID ?? `worker-${process.pid}`,
-  // Shared secret guarding privileged endpoints (member onboarding + admin
-  // lifecycle). If set, callers must present it as `X-Admin-Token`. If unset,
-  // those endpoints are allowed only outside prod (smoke/ephemeral convenience).
-  adminToken: process.env.ADMIN_TOKEN || null,
-  automationToken: process.env.AUTOMATION_TOKEN || null,
-  // Credential for the analytics-provider role. Only this role may write the
-  // regime via POST /api/swarm/regime. Presented as a Bearer token. If set,
-  // it is required (every env); if unset, the role is allowed only outside prod
-  // (smoke/ephemeral convenience), mirroring adminToken.
-  analyticsToken: envSecret("ANALYTICS_TOKEN"),
+  // There is no service-token field here, and there must not be one: the
+  // scheduler, analytics-producer and operator tokens are rows in the API's
+  // automation-token store (smoke-production-spec.md §3, D52 (1)), validated
+  // by backend/src/api/auth.ts. The api reads no token env and no token file.
   // Canonical public origin for absolute links into the site. See the resolver
   // above; it is pinned by backend/tests/swarm-public-base-url.test.ts.
   swarmPublicBaseUrl: resolveSwarmPublicBaseUrl(),

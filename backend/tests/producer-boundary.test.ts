@@ -4,6 +4,7 @@ import type { AnalyticsPersistence } from "../src/analytics/persistence.ts";
 import { runAnalytics, RESEARCH_TOOL_GROUP } from "../src/analytics/index.ts";
 import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { requireProducerApiConfig, runProducerCommand, runProducerOnce, startProducerSchedules } from "../src/producer/index.ts";
+import { writeTokenFile } from "./support/automation-auth.ts";
 
 const persistence = {} as AnalyticsPersistence;
 
@@ -84,9 +85,12 @@ test("producer refuses to reach readiness without an analytics credential", asyn
   await expect(runProducerCommand("regime", "2031-01-02", {
     env: { ANALYTICS_API_URL: "http://api:8787" },
     waitUntilReady: async () => { readinessChecked = true; },
-  })).rejects.toThrow("requires ANALYTICS_TOKEN");
+  })).rejects.toThrow("requires ANALYTICS_TOKEN_FILE");
   expect(readinessChecked).toBe(false);
-  expect(() => requireProducerApiConfig({ ANALYTICS_TOKEN: "  " })).toThrow("requires ANALYTICS_TOKEN");
+  // D52 (1): a token-valued env var is not a credential source any more — the
+  // producer reads its store-issued token from the file and nowhere else.
+  expect(() => requireProducerApiConfig({ ANALYTICS_TOKEN: "producer-secret" })).toThrow("requires ANALYTICS_TOKEN_FILE");
+  expect(() => requireProducerApiConfig({ ANALYTICS_TOKEN_FILE: writeTokenFile("  ") })).toThrow("empty token file");
 });
 
 test("serve validates the credential with the API before arming either schedule", async () => {
@@ -110,14 +114,14 @@ test("serve validates the credential with the API before arming either schedule"
   try {
     const rejectedSchedules: string[] = [];
     await expect(startProducerSchedules({
-      env: { ...baseEnv, ANALYTICS_TOKEN: "wrong-non-empty-secret" },
+      env: { ...baseEnv, ANALYTICS_TOKEN_FILE: writeTokenFile("wrong-non-empty-secret") },
       scheduleKind: (kind) => { rejectedSchedules.push(kind); },
     })).rejects.toThrow("credential was rejected");
     expect(rejectedSchedules).toEqual([]);
 
     const acceptedSchedules: string[] = [];
     await startProducerSchedules({
-      env: { ...baseEnv, ANALYTICS_TOKEN: expectedToken },
+      env: { ...baseEnv, ANALYTICS_TOKEN_FILE: writeTokenFile(expectedToken) },
       scheduleKind: (kind, cron) => { acceptedSchedules.push(`${kind}:${cron}`); },
     });
     expect(acceptedSchedules).toEqual([
@@ -134,7 +138,7 @@ test("serve validates the credential with the API before arming either schedule"
 test("seed waits for the API, seeds raw history, then produces both research signals", async () => {
   const events: string[] = [];
   await runProducerCommand("seed", "2031-01-02", {
-    env: { ANALYTICS_API_URL: "http://api:8787", ANALYTICS_TOKEN: "producer-secret" },
+    env: { ANALYTICS_API_URL: "http://api:8787", ANALYTICS_TOKEN_FILE: writeTokenFile("producer-secret") },
     waitUntilReady: async (cfg) => {
       expect(cfg.baseUrl).toBe("http://api:8787");
       expect(cfg.token).toBe("producer-secret");

@@ -1,16 +1,20 @@
 // Swarm ADMIN REST surface (issue #152): topics, members, session
 // scheduling + roster, guarded lifecycle transitions, and audit filtering.
-// Thin transport over swarm/admin.ts — every route here is PRIVILEGED
-// (X-Admin-Token / isPrivileged(), the same fail-closed guard the rest of the
-// swarm admin dispatcher and /api/admin use) and every owned route checks
-// that guard BEFORE parsing the request body or touching the database, so an
-// unauthenticated caller never causes SQL work (issue #152 AC7).
+// Thin transport over swarm/admin.ts. Every owned route checks its credential
+// BEFORE parsing the request body or doing any domain work (issue #152 AC7),
+// and exactly one kind of credential opens each (D55 (4), smoke spec §3):
+//
+//   epochs/*     system-scheduler's store token, right `lifecycle_transitions`.
+//                Nothing else: not the operator token, not an admin session.
+//   the rest     an admin — isPrivileged(): an admin session, the operator's
+//                store token (right `admin`) or the claimed password. That
+//                includes subjects/:id/{update,activate,deactivate}, so the
+//                scheduler's token can never activate or deactivate a subject.
 import * as admin from "../../swarm/admin.ts";
 import * as epoch from "../../swarm/domain.ts";
 import { getAgentHealthEvents } from "../../swarm/domain.ts";
 import { JUDGE_MODES, type JudgeMode } from "../../swarm/judge-config.ts";
-import { config as globalConfig } from "../../config.ts";
-import { isPrivileged, hasAutomationRole, hasAutomationRight } from "../auth.ts";
+import { isPrivileged, hasAutomationRight } from "../auth.ts";
 import { isRegistrablePublicKey, PUBLIC_KEY_REFUSAL } from "../../lib/signing.ts";
 import {
   optionalString,
@@ -45,18 +49,6 @@ function ownsPath(p: string): boolean {
 function fromResult(r: { status: number; [k: string]: unknown }) {
   return { status: r.status, body: r };
 }
-
-export interface AdminAuthConfig {
-  adminToken: string | null;
-  automationToken?: string | null;
-  allowInsecure: boolean;
-}
-
-// `cfg` is injectable (mirrors routes/admin.ts's handleAdmin) so tests can
-// exercise a prod-mode config (token required, insecure disallowed) against
-// the ephemeral test DB, which otherwise runs with RM_ENV=ephemeral →
-// allowInsecure=true. swarm.ts's live mount omits it (defaults to the
-// real global config).
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Finalize, and attest — issue #1026 W4
@@ -141,7 +133,6 @@ async function finalizeAndAttest(sessionId: string) {
 export async function handleSwarmAdmin(
   req: Request,
   url: URL,
-  cfg: AdminAuthConfig = globalConfig,
 ): Promise<{ status: number; body: unknown } | null> {
   const p = url.pathname;
   const m = req.method;
@@ -150,18 +141,17 @@ export async function handleSwarmAdmin(
   const rest = p.slice(PREFIX.length);
   const segs = rest.split("/").filter(Boolean);
 
-  // Auth FIRST — before any body parsing or DB query (AC7).
+  // Auth FIRST — before any body parsing or domain work (AC7).
   //
-  // The epoch-lifecycle routes ask for a RIGHT, not merely for the automation
-  // role (issue #1026 W4.5, smoke spec §3): `system-scheduler` presents a
-  // per-instance token whose row names what it may do, and a token provisioned
-  // to read subjects and sessions must not be able to turn an epoch over. Every
-  // other admin route keeps exactly the guard it had.
+  // The epoch-lifecycle routes ask for ONE right and nothing else (D55 (4),
+  // scheduler spec §7): system-scheduler is the only caller of the epoch
+  // lifecycle transitions, so the operator token and an admin session are
+  // refused here exactly like a stranger. Every other route in this file is an
+  // admin route, which the scheduler's token cannot open (§4.5: only an admin
+  // activates or deactivates a subject).
   if (segs[0] === "epochs") {
-    if (!(await isPrivileged(req, cfg) || await hasAutomationRight(req, "lifecycle_transitions", cfg))) {
-      return FORBIDDEN;
-    }
-  } else if (!(await isPrivileged(req, cfg) || hasAutomationRole(req, cfg))) {
+    if (!(await hasAutomationRight(req, "lifecycle_transitions"))) return FORBIDDEN;
+  } else if (!(await isPrivileged(req))) {
     return FORBIDDEN;
   }
 

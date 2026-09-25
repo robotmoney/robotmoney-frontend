@@ -22,21 +22,18 @@
 //      API credential, an automation token with the rights to read subjects and
 //      sessions and to perform lifecycle transitions", and nothing more. The
 //      stream is that token's surface, so it asks for those named rights and
-//      nothing else opens it — not `isPrivileged`, and not the legacy unscoped
-//      env automation token except as the unscoped credential it already is
-//      (see `hasAutomationRight`'s header in backend/src/api/auth.ts).
+//      nothing else opens it — not `isPrivileged`, and no env credential
+//      (there is none left to consult: D52 (1), backend/src/api/auth.ts).
 //
 // THE READ ROUTES ASK FOR BOTH READ RIGHTS. §3's full read returns subjects AND
 // sessions in one answer; a token holding only one of the two would otherwise
 // receive the other half anyway, which would make the split meaningless.
 import { ROUTES } from "@robotmoney/contract";
-import { config as globalConfig } from "../../config.ts";
 import { hasAutomationRight } from "../auth.ts";
 import * as stream from "../../swarm/domain.ts";
 import type { SwarmRouteResult } from "./swarm/types.ts";
 
-type AuthConfig = Pick<typeof globalConfig, "allowInsecure"> & {
-  automationToken?: string | null;
+type StreamConfig = {
   /** The connection's timing, for a test that cannot wait out the defaults,
    *  and its end hook, for a test that must see the connection stop. Never
    *  read from the environment; the server passes nothing. */
@@ -66,20 +63,20 @@ function parseCursor(url: URL): number | null {
 export async function handleSchedulerStream(
   req: Request,
   url: URL,
-  cfg: AuthConfig = globalConfig,
+  cfg: StreamConfig = {},
 ): Promise<SwarmRouteResult | Response | null> {
   const p = url.pathname;
   const m = req.method;
 
   if (p === S.fullRead && m === "GET") {
-    if (!(await hasAutomationRight(req, "read_subjects", cfg)) || !(await hasAutomationRight(req, "read_sessions", cfg))) {
+    if (!(await hasAutomationRight(req, "read_subjects")) || !(await hasAutomationRight(req, "read_sessions"))) {
       return FORBIDDEN;
     }
     return { status: 200, body: await stream.fullRead() };
   }
 
   if (p === S.subscribe && m === "GET") {
-    if (!(await hasAutomationRight(req, "read_subjects", cfg)) || !(await hasAutomationRight(req, "read_sessions", cfg))) {
+    if (!(await hasAutomationRight(req, "read_subjects")) || !(await hasAutomationRight(req, "read_sessions"))) {
       return FORBIDDEN;
     }
     const cursor = parseCursor(url);
@@ -92,7 +89,7 @@ export async function handleSchedulerStream(
     return stream.openSchedulerStream(cursor, {
       ...cfg.streamTiming,
       stillAuthorized: async () =>
-        (await hasAutomationRight(req, "read_subjects", cfg)) && (await hasAutomationRight(req, "read_sessions", cfg)),
+        (await hasAutomationRight(req, "read_subjects")) && (await hasAutomationRight(req, "read_sessions")),
     });
   }
 

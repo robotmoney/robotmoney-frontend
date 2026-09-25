@@ -35,10 +35,9 @@ import { inHouseJudge } from "./support/stub-judge.ts";
 
 useCleanDatabase(import.meta.file);
 
-// Nothing waved through: no env automation token, no insecure mode. The
-// provisioned per-instance token is then the only thing that can authorize, so
-// a rights assertion below means what it says.
-const LOCKED = { adminToken: "admin-secret", automationToken: null, allowInsecure: false };
+// There is no env automation token and no insecure mode (D52 (1)): the
+// provisioned per-instance token is the only thing that can authorize, so a
+// rights assertion below means what it says.
 
 const get = (path: string, token: string | null) =>
   new Request(`http://test${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
@@ -483,7 +482,6 @@ test("the contract has no job-ack route, and the old path is not served", async 
     await handleSchedulerStream(
       post("/api/swarm/scheduler/jobs/ack", token, { idempotencyKey: "job_never_pushed" }),
       url("/api/swarm/scheduler/jobs/ack"),
-      LOCKED,
     ),
   ).toBeNull();
 });
@@ -839,14 +837,13 @@ test("RED CONTROL for the publisher kill: an event written AFTER the commit is l
 
 test("the full read needs read_subjects AND read_sessions, and the scheduler's token has both", async () => {
   const { token } = await provisionAutomationToken("rm_stream_reader", ["read_subjects", "read_sessions"]);
-  const ok = await handleSchedulerStream(get("/api/swarm/scheduler/full-read", token), url("/api/swarm/scheduler/full-read"), LOCKED);
+  const ok = await handleSchedulerStream(get("/api/swarm/scheduler/full-read", token), url("/api/swarm/scheduler/full-read"));
   expect((ok as { status: number }).status).toBe(200);
 
   const { token: partial } = await provisionAutomationToken("rm_stream_partial", ["read_subjects"]);
   const refused = await handleSchedulerStream(
     get("/api/swarm/scheduler/full-read", partial),
     url("/api/swarm/scheduler/full-read"),
-    LOCKED,
   );
   expect((refused as { status: number }).status).toBe(403);
 });
@@ -855,7 +852,6 @@ test("an unknown bearer reads nothing from the stream", async () => {
   const refused = await handleSchedulerStream(
     get("/api/swarm/scheduler/full-read", "rmat_forged"),
     url("/api/swarm/scheduler/full-read"),
-    LOCKED,
   );
   expect((refused as { status: number }).status).toBe(403);
 });
@@ -873,7 +869,6 @@ test("the analytics producer's and the operator's tokens read nothing from the s
     const refused = await handleSchedulerStream(
       get("/api/swarm/scheduler/full-read", token),
       url("/api/swarm/scheduler/full-read"),
-      LOCKED,
     );
     expect((refused as { status: number }).status).toBe(403);
   }
@@ -890,7 +885,7 @@ test("a bearer rotated while the subscription is open closes it at the next keep
   const { token } = await provisionAutomationToken("rm_stream_rotated", [...rights]);
   const head = await epoch.streamHeadSequence();
   const path = `/api/swarm/scheduler/subscribe?cursor=${head}`;
-  const timing = { ...LOCKED, streamTiming: { keepaliveMs: 20, pollMs: 10 } };
+  const timing = { streamTiming: { keepaliveMs: 20, pollMs: 10 } };
 
   // Control: an unrotated bearer is served keepalive after keepalive.
   const kept = (await handleSchedulerStream(get(path, token), url(path), timing)) as Response;
@@ -920,7 +915,6 @@ test("a bearer rotated while events are FLOWING closes the subscription too — 
   const path = `/api/swarm/scheduler/subscribe?cursor=${head}`;
   let why = null as string | null; // assigned in a callback; the cast stops TS narrowing it to null
   const timing = {
-    ...LOCKED,
     streamTiming: { keepaliveMs: 100, pollMs: 10, onEnd: (w: string) => void (why = w) },
   };
   let pumping = true;
@@ -956,7 +950,6 @@ test("the route serves the same four parts and cursor the module does", async ()
   const res = (await handleSchedulerStream(
     get("/api/swarm/scheduler/full-read", token),
     url("/api/swarm/scheduler/full-read"),
-    LOCKED,
   )) as { status: number; body: any };
   expect(res.status).toBe(200);
   expect(Object.keys(res.body).sort()).toEqual(["collecting", "cursor", "settling", "subjects"]);
@@ -969,7 +962,6 @@ test("the subscribe route returns an event-stream response", async () => {
   const res = await handleSchedulerStream(
     get(`/api/swarm/scheduler/subscribe?cursor=${head}`, token),
     url(`/api/swarm/scheduler/subscribe?cursor=${head}`),
-    LOCKED,
   );
   expect(res).toBeInstanceOf(Response);
   expect((res as Response).headers.get("Content-Type")).toBe("text/event-stream");
@@ -977,7 +969,7 @@ test("the subscribe route returns an event-stream response", async () => {
 });
 
 test("the stream routes own only their own paths", async () => {
-  expect(await handleSchedulerStream(get("/api/swarm/members", null), url("/api/swarm/members"), LOCKED)).toBeNull();
+  expect(await handleSchedulerStream(get("/api/swarm/members", null), url("/api/swarm/members"))).toBeNull();
 });
 
 const url = (p: string) => new URL(`http://test${p}`);
@@ -1061,7 +1053,6 @@ test("BEHIND Bun.serve, a subscriber that stops reading is cut by the idle timeo
     async fetch(req) {
       const u = new URL(req.url);
       const r = await handleSchedulerStream(req, u, {
-        ...LOCKED,
         streamTiming: {
           keepaliveMs: 500,
           pollMs: 10,
