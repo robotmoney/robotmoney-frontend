@@ -31,9 +31,11 @@
 //
 // The REMOTE rows run against a database provisioned as §9.1 leaves production
 // (./remote-db-harness.ts). The LOCAL rows run against the boot's own Postgres
-// (./smoke-boot-harness.ts). The `--local dump` row is not driven here: it needs
-// an encrypted production backup, and this suite has none (reported, not
-// claimed). `--allow-insecure` is not yet a `bun smoke` flag (the overlay it
+// (./smoke-boot-harness.ts); the `--local dump` row restores a gpg-encrypted
+// backup built by ../support/make-encrypted-backup.ts from a database enrolled
+// `production`, the way §5.1/§5.2 capture one. (What a dump boot does after its
+// enrollment, and a v0.5.0 dump that predates the identity table, are
+// ./smoke-dump-lifecycle.test.ts's.) `--allow-insecure` is not yet a `bun smoke` flag (the overlay it
 // replaces is removed in a later #1026 wave), so criterion 46's "incl.
 // `--allow-insecure`" is proven here only through the typed-password and plain
 // stage boots.
@@ -50,8 +52,10 @@ import {
   type RunningBoot,
 } from "./smoke-boot-harness.ts";
 import { onTerminal, repoRoot, startRemoteDb, type Operator, type RemoteDb } from "./remote-db-harness.ts";
-import { instancePaths } from "../../lib/smoke-state.ts";
+import { makeEncryptedBackup } from "../support/make-encrypted-backup.ts";
+import { instancePaths, readStackState } from "../../lib/smoke-state.ts";
 import { readJournal } from "../../lib/smoke-journal.ts";
+import { smokeTwinUrlFromContainer } from "../../lib/smoke-twin.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Remote rows
@@ -311,6 +315,38 @@ describe("§4.3 local rows — a real `bun smoke` against its own Postgres", () 
       teardown(x);
     }
   }, 120_000);
+
+  test("stage × --local dump × a restored `production` row: stage — the matrix passes the lock and smoke re-enrolls the copy rehearsal through rm_owner", async () => {
+    // The row's input: a backup of a database enrolled `production` (§9.1's
+    // shape), encrypted as §5.2 encrypts one. §4.3 does not consult a local
+    // dump's row: it is "written by smoke as rehearsal", under the lock.
+    const backup = await makeEncryptedBackup("production-identity");
+    const x = harness("mxdump");
+    let boot: RunningBoot | undefined;
+    try {
+      expect(backup.identity).toBe("production");
+      boot = spawnBoot(x, [], { env: { RM_ENV: "stage" }, local: `dump=${backup.dir}`, migrate: false });
+      await waitFor(() => {
+        const j = journalNow(x);
+        return j !== null && j.phases.some((r) => r.phase === "prepare" && r.step === "enroll" && r.status === "committed");
+      }, BOOT_TIMEOUT_MS, "the boot to commit its enroll preparation", boot);
+      boot.proc.kill("SIGINT");
+      // Stopped by the test after the enrollment, never refused by the matrix.
+      expect(await boot.exited).toBe(130);
+      expect(boot.output()).toContain("RM_ENV=stage, deployment_identity rehearsal");
+      expect(boot.output()).toContain("target lock held");
+      expect(boot.output()).not.toContain("refusing");
+      const steps = journalNow(x)!.phases.map((p) => `${p.phase}:${p.step ?? ""}:${p.status}`);
+      expect(steps.slice(0, 5)).toEqual(["plan::committed", "prepare:instance:committed", "prepare:restore:committed", "prepare:lock:committed", "prepare:enroll:committed"]);
+      // The restored copy's own answer: the production row is gone, rehearsal is written by rm_owner.
+      const url = smokeTwinUrlFromContainer(readStackState(x.paths)!.smokeTwinContainer!)!;
+      const read = Bun.spawnSync(["psql", "-X", "-At", url, "-c", "SELECT string_agg(kind || ':' || written_by, ',') FROM deployment_identity"], { stdout: "pipe", stderr: "pipe" });
+      expect(read.stdout.toString().trim()).toBe("rehearsal:rm_owner");
+    } finally {
+      teardown(x, boot);
+      backup.close();
+    }
+  }, BOOT_TIMEOUT_MS);
 
   test("unset × --local blank: warns `RM_ENV not set, running as stage`, proceeds, and the bootstrap writes rehearsal", async () => {
     h = harness("mxlocal");
