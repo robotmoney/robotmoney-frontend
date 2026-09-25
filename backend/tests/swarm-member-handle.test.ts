@@ -34,6 +34,7 @@ import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
+import { provisionOperatorToken } from "./support/automation-auth.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -46,6 +47,14 @@ const sessionDate = (s: Record<string, unknown>): string =>
 // next test's admission a spurious 409. Unique ids cannot fix that; a clean
 // database can.
 useCleanDatabasePerTest(import.meta.file);
+
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on. Per test, because each test
+// gets its own database (the clone hook above runs first).
+let OPERATOR = "";
+beforeEach(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 
 // `handle` is read back off the row rather than assumed to equal `id`: since
 // issue #562 registerMember derives the public handle from the member's NAME,
@@ -139,7 +148,7 @@ async function callSwarm(req: Request): Promise<{ status: number; body: any }> {
 const postJson = (path: string, body: unknown) =>
   new Request(`http://localhost${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Admin-Token": OPERATOR },
     body: JSON.stringify(body),
   });
 

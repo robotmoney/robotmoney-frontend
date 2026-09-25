@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { test, expect, beforeEach } from "bun:test";
 import * as ic from "../src/swarm/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeApplication, canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER, REGIME_METHOD, SWARM_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
@@ -35,6 +35,14 @@ async function signedApply(fields: { name: string; contact: string; lens?: strin
 // next test's admission a spurious 409. Unique ids cannot fix that; a clean
 // database can.
 useCleanDatabasePerTest(import.meta.file);
+
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on. Per test, because each test
+// gets its own database (the clone hook above runs first).
+let OPERATOR = "";
+beforeEach(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 
 async function activeMember() {
   const id = rid("m");
@@ -162,7 +170,7 @@ test("the three key-STORING paths refuse every low-order encoding with an explan
   const post = async (path: string, body: Record<string, unknown>) => {
     const req = new Request(`http://test${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Admin-Token": OPERATOR },
       body: JSON.stringify(body),
     });
     return handleSwarm(req, new URL(req.url));
@@ -439,7 +447,6 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(rs).toHaveProperty("macro_percentile");
   expect(rs).toHaveProperty("onchain_regime");
   expect(rs.method).toBe(REGIME_METHOD.id);
-
 
   // subject snapshot total flowed onto the session.
   expect(s.subjectSnapshotTotalValueUsd).toBeGreaterThan(0);
@@ -1470,6 +1477,7 @@ test("ordinal string formatting for percentiles in buildRationale and buildConse
 });
 
 import { toTake } from "../src/swarm/projections.ts";
+import { provisionOperatorToken } from "./support/automation-auth.ts";
 
 test("toTake constructs a public DTO where SwarmTake.weights === null if payload.weights is malformed", () => {
   const row = {
@@ -1505,7 +1513,7 @@ test("the retired subject/open/brief/close/aggregate/publish dispatcher actions 
   const post = async (action: string, body: Record<string, unknown>) => {
     const req = new Request(`http://test${routePath(ROUTES.swarm.admin.action, { action })}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Admin-Token": OPERATOR },
       body: JSON.stringify(body),
     });
     return (await handleSwarm(req, new URL(req.url))) as { status: number; body: { error: string } };
