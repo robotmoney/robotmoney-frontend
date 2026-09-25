@@ -29,9 +29,10 @@
 // changed by c3a68812; tag `archive/releases-0.5.x-2026-09-24`). Production
 // ran c3a68812's SQL, not 61fab107's (verified on the replica: the
 // rm_readonly_test role is gone and rm_worker holds the INSERT/UPDATE grants
-// only c3a68812 adds), so tests replay the archive tag's bytes. The owner
-// ruled that observed set the ground truth (2026-09-25), so the one supported
-// baseline is that exact set, named for its provenance. A pure v0.5.0 ledger is
+// only c3a68812 adds), so tests replay the archive tag's bytes. Lucas, the
+// owner, confirmed that observed set as the one supported baseline on
+// 2026-09-25 (D55 (8), as corrected that day), so the one supported baseline
+// is that exact set, named for its provenance. A pure v0.5.0 ledger is
 // NOT supported: no database holds it (production, and every rehearsal dump
 // taken from production, carries the 0062 row), and it is the "one file less"
 // case the first production migrate refuses.
