@@ -19,11 +19,76 @@
 // this paragraph.
 import { STANCES } from "@robotmoney/contract";
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import {
   buildRationale, judgeInputFromFrozen, latestJudgement, loadFrozenTakeSet, majorityStance, meanTakeWeights,
 } from "./domain.ts";
 import { DIGEST_SCHEME, inputsDigest } from "./judge.ts";
 import { getJudgeConfig } from "./judge-config.ts";
+
+// Registered queries (smoke-production-spec.md §7.1), all reads of
+// swarm_sessions. The replay audit is an operator CLI on the api's pool (the
+// same role getJudgeConfig declares for it); the rationale-ladder drift report
+// is reached only from that CLI too.
+const REPLAY_CLI = "scripts/swarm-judge-replay";
+const SAMPLE_SESSION = "00000000-0000-0000-0000-000000000000";
+
+const sessionBefore = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/judge-replay:replaySessionJudge.before",
+  purpose: "Read a session's state and stored recommendation before the replay compares it.",
+  callers: [REPLAY_CLI],
+  probe: {
+    statement: "SELECT state, swarm_recommendation FROM swarm_sessions WHERE id = $1::uuid",
+    params: [SAMPLE_SESSION],
+  },
+});
+
+const sessionAfter = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/judge-replay:replaySessionJudge.after",
+  purpose: "Re-read the session's recommendation after the replay, to show it did not move.",
+  callers: [REPLAY_CLI],
+  probe: {
+    statement: "SELECT swarm_recommendation FROM swarm_sessions WHERE id = $1::uuid",
+    params: [SAMPLE_SESSION],
+  },
+});
+
+const ladderCandidates = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/judge-replay:listRationaleLadderDrift",
+  purpose: "Read published sessions carrying stances and a rationale, to report rationale-ladder drift.",
+  callers: [REPLAY_CLI],
+  probe: {
+    statement: `SELECT id, date, subject_id, subject_name, swarm_recommendation, regime_summary FROM swarm_sessions
+      WHERE state = 'published'
+        AND jsonb_typeof(swarm_recommendation -> 'stances') = 'object'
+        AND jsonb_typeof(swarm_recommendation -> 'rationale') = 'string'
+      ORDER BY date DESC, id LIMIT $1`,
+    params: [5000],
+  },
+});
+
+const judgeableSessions = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/judge-replay:recentJudgeableSessions",
+  purpose: "List the most recently convened sessions that have something to judge.",
+  callers: [REPLAY_CLI],
+  probe: {
+    statement: `SELECT id FROM swarm_sessions WHERE state IN ('aggregated', 'judged', 'published')
+      ORDER BY convened_at DESC LIMIT $1`,
+    params: [10],
+  },
+});
 
 // WHAT IT USED TO CHECK, AND WHY THAT WAS WORTHLESS (issue #766). The original
 // version read `swarm_recommendation.weights`, called the (since deleted)
@@ -191,9 +256,8 @@ export async function replaySessionJudge(
   if (!frozen) return null;
   const input = await judgeInputFromFrozen(frozen, minTakes);
 
-  const before = (await sql`SELECT state, swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
-    | { state: string; swarm_recommendation: Record<string, unknown> | null }
-    | undefined;
+  const [before] = await on(sql, sessionBefore)<{ state: string; swarm_recommendation: Record<string, unknown> | null }>`
+    SELECT state, swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`;
   const rec = (before?.swarm_recommendation ?? {}) as Record<string, unknown>;
   const weightsBefore = rec.weights ?? null;
 
@@ -230,9 +294,8 @@ export async function replaySessionJudge(
   // below is now a property of the whole replay rather than of one call inside it.
 
   // ── 2. The kept assertion, under its own name.
-  const after = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
-    | { swarm_recommendation: Record<string, unknown> | null }
-    | undefined;
+  const [after] = await on(sql, sessionAfter)<{ swarm_recommendation: Record<string, unknown> | null }>`
+    SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`;
   const weightsAfter = after?.swarm_recommendation?.weights ?? null;
 
   // ── 4. inputs_digest reproducibility (issue #829, D44). The digest ON FILE
@@ -460,21 +523,21 @@ export interface RationaleLadderReport {
  */
 export async function listRationaleLadderDrift(limit = 5000): Promise<RationaleLadderReport> {
   const bounded = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 20000) : 5000;
-  const rows = (await sql`
-    SELECT id, date, subject_id, subject_name, swarm_recommendation, regime_summary
-      FROM swarm_sessions
-     WHERE state = 'published'
-       AND jsonb_typeof(swarm_recommendation -> 'stances') = 'object'
-       AND jsonb_typeof(swarm_recommendation -> 'rationale') = 'string'
-     ORDER BY date DESC, id
-     LIMIT ${bounded}`) as unknown as {
+  const rows = await on(sql, ladderCandidates)<{
       id: string;
       date: Date | string;
       subject_id: string;
       subject_name: string | null;
       swarm_recommendation: Record<string, unknown> | null;
       regime_summary: unknown;
-    }[];
+    }>`
+    SELECT id, date, subject_id, subject_name, swarm_recommendation, regime_summary
+      FROM swarm_sessions
+     WHERE state = 'published'
+       AND jsonb_typeof(swarm_recommendation -> 'stances') = 'object'
+       AND jsonb_typeof(swarm_recommendation -> 'rationale') = 'string'
+     ORDER BY date DESC, id
+     LIMIT ${bounded}`;
 
   const report: RationaleLadderReport = { scanned: rows.length, tied: 0, templateShaped: 0, drifted: [] };
   for (const row of rows) {
@@ -498,9 +561,9 @@ export async function listRationaleLadderDrift(limit = 5000): Promise<RationaleL
 
 /** The N most recently convened sessions that have something to judge. */
 export async function recentJudgeableSessions(limit = 10): Promise<string[]> {
-  const rows = (await sql`
+  const rows = await on(sql, judgeableSessions)<{ id: string }>`
     SELECT id FROM swarm_sessions
     WHERE state IN ('aggregated', 'judged', 'published')
-    ORDER BY convened_at DESC LIMIT ${Math.max(1, Math.min(limit, 200))}`) as unknown as { id: string }[];
+    ORDER BY convened_at DESC LIMIT ${Math.max(1, Math.min(limit, 200))}`;
   return rows.map((r) => String(r.id));
 }
