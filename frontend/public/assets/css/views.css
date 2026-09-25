@@ -129,21 +129,11 @@
    .rm-chip / .rm-legend / .rm-legend-item / .rm-legend-swatch). */
 
 /* panel + generic tables */
-/* Column count is chosen where a panel table actually fits, which the old rule
-   did not do: it went three-across at 768px and stayed there, putting a ~390px
-   table in a 230px card, and the card's `overflow: hidden` then quietly ate the
-   Weight column rather than showing anything was missing. Every laptop under
-   about 1250px had been reading a four-column table.
-   Three across needs 3 × 392px + 2 gaps inside the 1216px content box, which
-   arrives at a 1264px viewport; two across needs 2 × 396px, which arrives at
-   860px. `minmax(0, 1fr)` rather than `1fr` so a track is exactly its share and
-   a wide table can never widen the grid past the page (the clip used to be what
-   prevented that — see .rv__panel-card). Breakpoints, not auto-fit: auto-fit
-   picks its own count from the same numbers, and one stray pixel of padding
-   would silently drop the page from three columns to two. */
-.rv__panels { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
-@media (min-width: 860px) { .rv__panels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (min-width: 1264px) { .rv__panels { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+/* One panel at a time, behind the tabs above it: at three across a panel
+   table had ~396px and gave up padding to fit; alone it has the page. */
+.rv__panels { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
+.rv__tabs { gap: 0.4rem; }
+.rv__tab-n { color: var(--color-text-muted); margin-left: 0.35rem; }
 .rv__corr-card, .rv__bt-card { border: 1px solid var(--color-border); border-radius: var(--radius); overflow: hidden; }
 /* Not `overflow: hidden`, unlike its two siblings: this card is the only one
    holding tooltips, and both kinds are absolutely positioned — the header
@@ -177,6 +167,34 @@
 .rv__panel-card-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; padding: 0.72rem 1rem; border-bottom: 1px solid var(--color-border); background: rgba(16, 20, 28, 0.4); }
 .rv__panel-card-title { font-size: 0.9rem; font-weight: 500; margin: 0; }
 .rv__panel-card-meta { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-muted); }
+.rv__panel-card-lede { flex-basis: 100%; margin: 0; font-size: 0.8rem; line-height: 1.5; color: var(--color-text-soft); }
+
+/* History chart: the range chips beside the title, the line chips and the
+   band key under it. The chips are the chart's legend. */
+.rv__chart-meta { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-muted); }
+.rv__chart-legend { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.6rem 1rem; margin-bottom: 0.7rem; }
+.rv__chips--bands { align-items: center; gap: 0.75rem; }
+.rv__legend.is-off { opacity: 0.4; }
+.rv__chip-line { display: inline-block; margin-right: 0.45rem; vertical-align: 0.05em; }
+.rv__bt-chips { margin: 0.25rem 0 0.6rem; }
+
+/* Predictive power: one table, a column group per asset. Each cell is its
+   figure over a signed bar from the centre line, green right and red left,
+   muted under |ρ| 0.15. */
+.rv__corr-key { margin: 0; padding: 0.85rem 1rem 0.35rem; font-size: 0.8rem; line-height: 1.55; color: var(--color-text-soft); }
+.rv__corr-key strong { color: var(--color-text); font-weight: 500; }
+.rv__corr-table { min-width: 640px; }
+.rv__table thead th.rv__num { text-align: right; }
+.rv__corr-table thead th { vertical-align: bottom; }
+.rv__corr-table thead th.rv__corr-group { text-align: left; color: var(--color-text); border-left: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); padding-left: 0.75rem; }
+.rv__corr-table .rv__corr-start { border-left: 1px solid var(--color-border); padding-left: 0.75rem; }
+.rv__corr-table tbody th { font-family: var(--font-sans); font-weight: 400; font-size: 0.85rem; color: var(--color-text); text-align: left; padding: 0.55rem 0.5rem 0.55rem 1rem; border-top: 1px solid var(--color-border); white-space: nowrap; }
+.rv__corr-table .rv__corr-idx { position: sticky; left: 0; background: var(--color-deep); z-index: 1; }
+.rv__rho { white-space: nowrap; }
+.rv__rho-fig { display: block; font-family: var(--font-mono); }
+.rv__rho-bar { position: relative; display: block; width: 44px; height: 3px; margin: 0.3rem 0 0 auto; background: var(--color-border); }
+.rv__rho-bar::after { content: ""; position: absolute; left: 50%; top: -2px; width: 1px; height: 7px; background: var(--color-text-muted); }
+.rv__rho-bar i { position: absolute; top: 0; height: 100%; display: block; }
 /* table shell + cells (.rm-table-scroll / .rm-table / .rm-num / .rm-muted)
    promoted to components.css; regime-only cell styles stay below. */
 .rv__ind-cell { display: flex; flex-direction: column; gap: 0.1rem; }

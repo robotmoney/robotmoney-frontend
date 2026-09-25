@@ -138,10 +138,15 @@ test("regime dashboard renders 3 panels, sparklines, correlations + backtests (e
 
   // All three panel tables render (headers carry just the panel title now, matching
   // the source PanelTable), including the equity factor panel (eq snapshot only).
+  // One at a time, behind tabs: macro first, the others one click away.
   const panels = page.locator(".rv__panel-card");
   await expect(panels).toHaveCount(3);
   await expect(page.locator(".rv__panel-card", { hasText: "Macro panel" })).toBeVisible();
+  await expect(page.locator(".rv__panel-card", { hasText: "Equity factor panel" })).toBeHidden();
+  await page.getByRole("tab", { name: /Equity factor/ }).click();
   await expect(page.locator(".rv__panel-card", { hasText: "Equity factor panel" })).toBeVisible();
+  await expect(page.locator(".rv__panel-card", { hasText: "Macro panel" })).toBeHidden();
+  await page.getByRole("tab", { name: /Macro/ }).click();
   // The macro panel index surfaces in its summary index card (value to 2dp).
   await expect(page.locator(".rv__cards")).toContainText(latest.macroIndex!.toFixed(2));
 
@@ -231,6 +236,7 @@ test("regime view surfaces the Equity factor panel even when `panels` is null (d
 
   // And all three per-panel tables render, including the equity factor panel.
   await expect(page.locator(".rv__panel-card")).toHaveCount(3);
+  await page.getByRole("tab", { name: /Equity factor/ }).click();
   await expect(page.locator(".rv__panel-card", { hasText: "Equity factor panel" })).toBeVisible();
 });
 
@@ -259,6 +265,9 @@ test("regime history chart occupies proportional horizontal space across a gap a
   await page.goto("/");
   await navigate(page, "/regime");
   await expect(page.locator('canvas[x-ref="chart"]')).toBeVisible();
+  // The whole history, where the hole is. It is past a year, so the lines
+  // take one reading a week; the axis is still one unit per calendar day.
+  await page.locator(".rv__chart-card .rv__chip", { hasText: /^All$/ }).click();
 
   const expectedDenseDays = Math.round(
     (Date.parse(dto.history[dto.history.length - 1]!.date) - Date.parse(dto.history[0]!.date)) / 86_400_000,
@@ -269,32 +278,91 @@ test("regime history chart occupies proportional horizontal space across a gap a
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const chart = (window as any).Chart.getChart(canvas);
     return {
-      labelCount: chart.data.labels.length,
+      axisMax: chart.options.scales.x.max,
+      bandDays: chart.options.plugins.regimeBands.regimes.length,
       spanGaps: chart.data.datasets.map((d: { spanGaps: unknown }) => d.spanGaps),
-      datasetsData: chart.data.datasets.map((d: { data: (number | null)[] }) => d.data),
+      datasetsData: chart.data.datasets.map((d: { data: { x: number; y: number | null }[] }) => d.data),
     };
   });
 
-  // The core assertion: the axis is a DENSE calendar (one slot per real
+  // The core assertion: the axis is a DENSE calendar (one unit per real
   // calendar day across the full span), not a sparse array of only the
-  // persisted points — this is what makes the 30-day hole occupy 30 slots of
-  // horizontal space instead of collapsing to a single step.
-  expect(chartState.labelCount).toBe(expectedDenseDays);
-  expect(chartState.labelCount).toBeGreaterThan(dto.history.length);
+  // persisted points, so the 30-day hole takes 30 days of horizontal space
+  // instead of collapsing to a single step. The bands carry every day.
+  expect(chartState.axisMax).toBe(expectedDenseDays - 1);
+  expect(chartState.bandDays).toBe(expectedDenseDays);
+  expect(chartState.bandDays).toBeGreaterThan(dto.history.length);
 
   // spanGaps must be false on every history-chart series — a `true`/`undefined`
   // config would let Chart.js bridge the gap with an interpolated line.
   for (const sg of chartState.spanGaps) expect(sg).toBe(false);
 
-  // The synthesized gap-region index (a calendar day strictly between the two
-  // persisted dates on either side of the hole) must be `null` in every
-  // dataset — a real discontinuity, never a fabricated/interpolated value. The
-  // vendored snapshot's daily history is contiguous before the excision, so
-  // dense-axis index === original array index up through GAP_START_INDEX.
-  const midGapIndex = GAP_START_INDEX + Math.floor(GAP_DAYS / 2);
+  // Every point that lands strictly inside the hole must be `null`: a real
+  // discontinuity, never a fabricated/interpolated value. The vendored
+  // snapshot's daily history is contiguous before the excision, so the day
+  // index equals the original array index up through GAP_START_INDEX.
   for (const data of chartState.datasetsData) {
-    expect(data[midGapIndex]).toBeNull();
+    const inGap = data.filter((p: { x: number; y: number | null }) => p.x > GAP_START_INDEX && p.x < GAP_START_INDEX + GAP_DAYS - 1);
+    expect(inGap.length).toBeGreaterThan(0);
+    for (const p of inGap) expect(p.y).toBeNull();
   }
+});
+
+// The history chart's controls redraw the chart itself. The toggles used to
+// throw ("canvas already in use"), so the chip and the key changed and the
+// chart never did.
+test("regime history chart: toggles redraw it, ranges set its span, weekly past a year", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/regime");
+  await expect(page.locator('canvas[x-ref="chart"]')).toBeVisible();
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  const state = () => page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chart = (window as any).Chart.getChart(document.querySelector('canvas[x-ref="chart"]'));
+    return {
+      bands: chart.options.plugins.regimeBands.enabled,
+      days: chart.options.plugins.regimeBands.regimes.length,
+      points: chart.data.datasets[0].data.length,
+      hidden: chart.data.datasets.filter((d: { hidden?: boolean }) => d.hidden).map((d: { label: string }) => d.label),
+    };
+  });
+
+  // One year by default, a point a day.
+  let s = await state();
+  expect(s.bands).toBe(true);
+  expect(s.days).toBe(366);
+  expect(s.points).toBe(366);
+  await expect(page.locator(".rv__chart-meta")).toHaveText("Daily");
+
+  await page.getByRole("button", { name: "Regime bands" }).click();
+  expect((await state()).bands).toBe(false);
+  await page.getByRole("button", { name: "Regime bands" }).click();
+  expect((await state()).bands).toBe(true);
+
+  await page.locator(".rv__chart-legend .rv__chip", { hasText: "Macro" }).click();
+  expect((await state()).hidden).toEqual(["Macro"]);
+  await expect(page.locator(".rv__chart-legend .rv__chip", { hasText: "Macro" })).toHaveAttribute("aria-pressed", "false");
+
+  // Past a year the lines are weekly and the bands stay daily.
+  await page.locator(".rv__chart-card .rv__chip", { hasText: /^3Y$/ }).click();
+  s = await state();
+  expect(s.days).toBe(1097);
+  expect(s.points).toBe(157);
+  await expect(page.locator(".rv__chart-meta")).toHaveText("One reading a week");
+  expect(errors).toEqual([]);
+});
+
+// A link to a panel opens its tab: session pages link their market context
+// rows to #panel-<key>.
+test("a link to a regime panel opens that panel's tab", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/regime#panel-onchain");
+  await expect(page.locator("#panel-onchain")).toBeVisible();
+  await expect(page.locator("#panel-macro")).toBeHidden();
+  await expect(page.getByRole("tab", { name: /On-chain/ })).toHaveAttribute("aria-selected", "true");
 });
 
 test("channel-divergence view renders the Stablecoin-vs-QQQ-flow gauge with value + read", async ({ page }) => {

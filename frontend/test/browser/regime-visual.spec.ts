@@ -146,38 +146,41 @@ test("a failed read holds the dashboard's place with the empty chart", async ({ 
 // `overflow: hidden` ate whatever did not fit, so the Weight column was simply
 // absent, with nothing to show it was missing. The clip is gone now (the header
 // tooltips have to be able to leave the card), so an overflow would spill
-// across the neighbouring panel rather than hide, and the column-count
-// breakpoints are what keep a table inside its track. Those numbers are tuned
-// to within a few pixels, so they are asserted rather than trusted.
+// past it rather than hide. So the fit is asserted rather than trusted.
 //
-// 1264/1263 straddle the three-across breakpoint; 900 is inside two-across;
-// 1440 is the width the visual baseline is captured at.
-const FIT_WIDTHS = [1440, 1264, 1263, 900];
+// The panels sit one at a time behind tabs, so each is checked while its tab is
+// open (a hidden card measures 0 and would pass without being looked at).
+// 700 is the narrowest width before a card scrolls instead; 1440 is the width
+// the visual baseline is captured at.
+const FIT_WIDTHS = [1440, 1024, 900, 700];
 
-test("panel tables fit the cards they sit in, at every column count", async ({ page }) => {
+test("each panel table fits its card, at every width, with its tab open", async ({ page }) => {
   await stub(page);
   await page.setViewportSize({ width: FIT_WIDTHS[0], height: 900 });
   await page.goto("/");
   await navigate(page, "/regime");
   await expect(page.locator(".rv__spark-svg").first()).toBeVisible();
+  const tabs = page.getByRole("tab");
+  await expect(tabs).toHaveCount(3);
 
   for (const width of FIT_WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(() => (document as any).fonts?.ready);
     await page.waitForTimeout(250);
 
-    const fit = await page.evaluate(() =>
-      [...document.querySelectorAll(".rv__panel-card")].map((card) => {
-        const table = card.querySelector("table") as HTMLElement;
-        return {
-          card: Math.round(card.getBoundingClientRect().width),
-          table: Math.round(table.getBoundingClientRect().width),
-        };
-      }));
-
-    expect(fit.length, `panel count at ${width}px`).toBe(3);
-    for (const [i, panel] of fit.entries()) {
-      expect(panel.table, `panel ${i} table vs card at ${width}px`).toBeLessThanOrEqual(panel.card);
+    for (let t = 0; t < 3; t++) {
+      await tabs.nth(t).click();
+      const fit = await page.evaluate(() =>
+        [...document.querySelectorAll(".rv__panel-card")].filter((c) => (c as HTMLElement).offsetParent).map((card) => {
+          const table = card.querySelector("table") as HTMLElement;
+          return {
+            card: Math.round(card.getBoundingClientRect().width),
+            table: Math.round(table.getBoundingClientRect().width),
+          };
+        }));
+      expect(fit.length, `one panel shown at ${width}px, tab ${t}`).toBe(1);
+      expect(fit[0]!.card, `panel ${t} has width at ${width}px`).toBeGreaterThan(0);
+      expect(fit[0]!.table, `panel ${t} table vs card at ${width}px`).toBeLessThanOrEqual(fit[0]!.card);
     }
 
     // A tooltip bubble is `visibility: hidden` at rest, which still lays out and

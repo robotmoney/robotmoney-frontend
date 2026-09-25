@@ -29,6 +29,25 @@ function signedFig(n, digits, suffix, plus) {
   return (n < 0 ? "\u2212" : plus ? "+" : "") + s + suffix;
 }
 
+// The history chart's ranges. The first paint asks for one year (about 36 KB,
+// answered in ~0.3 s); the whole history and the backtests (~260 KB, ~1 s)
+// follow behind it, so the longer ranges fill in once that has landed.
+const RANGES = [
+  { id: "6m", label: "6M", days: 183 },
+  { id: "ytd", label: "YTD" },
+  { id: "1y", label: "1Y", days: 365 },
+  { id: "3y", label: "3Y", days: 1096 },
+  { id: "5y", label: "5Y", days: 1826 },
+  { id: "all", label: "All" },
+];
+const FIRST_PAINT_DAYS = 400;
+// Past this many days the lines take one reading a week (the last day of each
+// seven, counted back from the latest, so today is always a point). A day is
+// under half a pixel wide at that span. The regime bands stay day by day.
+const WEEKLY_AFTER_DAYS = 400;
+const HISTORY_SERIES = [["composite", "Composite"], ["macro", "Macro"], ["onchain", "On-chain"], ["factor", "Equity factor"]];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 // The summary cards' panel tips (panelTip below). `reads` is each panel's own
 // description on the indicators page; `count` is that page's count, used only
 // when a snapshot carries no indicator rows to count.
@@ -41,7 +60,6 @@ const PANEL_TIP = {
 export function registerRegimeView(Alpine) {
   // ── Regime classification ────────────────────────────────────────────────
   Alpine.data("regimeView", () => ({
-    _charts: {},
     loading: true,
     error: null,
     latest: null,
@@ -54,28 +72,64 @@ export function registerRegimeView(Alpine) {
     // drawn (no per-series toggle, matching the source HistoryChart); only the
     // regime bands + the S&P 500 / ETH price overlays toggle.
     visible: { spx: false, eth: false, bands: true },
+    // Each index line on the history chart, on or off from its chip.
+    series: { composite: true, macro: true, onchain: true, factor: true },
+    range: "1y",
+    ranges: RANGES,
+    // True once the whole history and the backtests have landed.
+    fullLoaded: false,
+    // The indicator panel on show; a #panel-<key> link opens its own.
+    panelTab: "macro",
+    // Hidden strategy lines on the backtest charts, "<market>:<strategy>".
+    btHidden: {},
 
     async load() {
       try {
-        // The dashboard blobs (backtest/correlations/extras) ride on the asof
-        // `latest` row; history is the full daily series for the charts.
-        // `latest.backtest` (~126 KB) is off by default on the backend
-        // (issue #866b) — this page is the one place that reads it, so ask
-        // for it explicitly rather than falling back to a blank panel.
-        const data = await api.get(ROUTES.dashboards.regimeSnapshots, { range: 4000, include: "backtest" });
-        this.latest = data.latest;
-        this.history = data.history || [];
-        this.staleness = data.staleness || null;
+        const data = await api.get(ROUTES.dashboards.regimeSnapshots, { range: FIRST_PAINT_DAYS });
+        this._apply(data);
         this.loading = false;
+        this._openTabFromHash();
         // #composite and #panel-<key> exist only now: a session page links
         // its market context rows to them. So do the dashboard's headings,
         // which the router's rm:view-changed pass (lib/heading-anchors.js)
         // ran too early to give their section links.
-        this.$nextTick(() => { this.drawHistory(); this.drawBacktests(); enhanceHeadings(this.$root); scrollToFragment(); });
+        this.$nextTick(() => { this.drawHistory(); enhanceHeadings(this.$root); scrollToFragment(); });
       } catch (e) {
         this.error = e.message;
         this.loading = false;
+        return;
       }
+      this._onHash = () => this._openTabFromHash();
+      addEventListener("hashchange", this._onHash);
+      this.loadFull();
+    },
+
+    // The whole history and the backtests. `latest.backtest` (~126 KB) is off
+    // by default on the backend (issue #866b); this page is the one place that
+    // reads it, so it asks for it explicitly. A failure here leaves the year
+    // already on screen standing.
+    async loadFull() {
+      const target = location.hash.slice(1);
+      const landed = !target || !!document.getElementById(decodeURIComponent(target));
+      try {
+        const data = await api.get(ROUTES.dashboards.regimeSnapshots, { range: 4000, include: "backtest" });
+        this._apply(data);
+        this.fullLoaded = true;
+        this.$nextTick(() => {
+          this.drawHistory();
+          this.drawBacktests();
+          enhanceHeadings(this.$root);
+          // A link to a backtest could not land before its card existed.
+          if (!landed) scrollToFragment();
+        });
+      } catch {
+        this.fullLoaded = true;
+      }
+    },
+    _apply(data) {
+      this.latest = data.latest;
+      this.history = data.history || [];
+      this.staleness = data.staleness || null;
     },
 
     // ── panels ──────────────────────────────────────────────────────────────
@@ -89,6 +143,18 @@ export function registerRegimeView(Alpine) {
     },
     panelLabel(p) { return p === "macro" ? "Macro" : p === "onchain" ? "On-chain" : p === "factor" ? "Equity factor" : p; },
     panelIndex(p) { return this.latest?.[p + "Index"]; },
+    setPanelTab(p) { this.panelTab = p; },
+    // #panel-<key>, a panel's heading id, or an id inside its card.
+    _openTabFromHash() {
+      const id = decodeURIComponent(location.hash.slice(1));
+      if (!id) return;
+      for (const p of this.panelsList()) {
+        if (id === "panel-" + p || id === this.slug(this.panelLabel(p) + " panel")) { this.panelTab = p; return; }
+      }
+      const el = document.getElementById(id);
+      const card = el?.closest?.("[id^='panel-']");
+      if (card) this.panelTab = card.id.slice("panel-".length);
+    },
 
     // ── summary-card tooltips ───────────────────────────────────────────────
     // What each top figure is, in the terms the methodology below uses. The
@@ -294,6 +360,28 @@ export function registerRegimeView(Alpine) {
       if (!c) return [];
       return CORR_ROWS.filter(([k]) => (c.forward && c.forward[k]) || (c.concurrent && c.concurrent[k]));
     },
+    // The one predictive-power table: per asset, today's alignment and then the
+    // 30, 90 and 180 day forward correlations, each column only where the
+    // snapshot carries it.
+    corrAssets() { return [["spx", "S&P 500"], ["eth", "ETH"]]; },
+    corrHorizons() {
+      const h = [];
+      if (this.hasConcurrent()) h.push(["now", "Today"]);
+      if (this.hasForward()) h.push(["30d", "30 days"], ["90d", "90 days"], ["180d", "180 days"]);
+      return h;
+    },
+    corrColumns() {
+      const hs = this.corrHorizons();
+      return this.corrAssets().flatMap(([asset]) => hs.map(([h, label], i) => ({ id: asset + h, asset, h, label, first: i === 0 })));
+    },
+    corrCell(idx, asset, h) { return h === "now" ? this.conCell(idx, asset) : this.fwdCell(idx, asset + "_" + h); },
+    // The cell's signed bar: from the centre line, right for a positive ρ and
+    // left for a negative one, half the track at |ρ| = 1.
+    rhoBarStyle(cell) {
+      if (!cell || cell.rho == null) return "width:0";
+      const w = Math.min(1, Math.abs(cell.rho)) * 50;
+      return `width:${w.toFixed(1)}%;left:${cell.rho < 0 ? 50 - w : 50}%;background:${this.rhoColor(cell)}`;
+    },
     fwdCell(idx, col) { return this.latest?.correlations?.forward?.[idx]?.[col]; },
     conCell(idx, col) { return this.latest?.correlations?.concurrent?.[idx]?.[col]; },
     rhoText(cell) { if (!cell || cell.rho == null) return "—"; return signedFig(cell.rho, 2, "", true); },
@@ -380,12 +468,60 @@ export function registerRegimeView(Alpine) {
     hasEth() { return (this.latest?.extras?.eth || []).length > 0; },
     isVisible(key) { return !!this.visible[key]; },
     toggle(key) { this.visible[key] = !this.visible[key]; this.drawHistory(); },
+    historySeries() {
+      const hasFactor = this.history.some((h) => this._idx(h, "factor") != null);
+      return HISTORY_SERIES.filter(([k]) => k !== "factor" || hasFactor).map(([key, label]) => ({ key, label, color: STRATEGY_STYLE[key].color }));
+    },
+    toggleSeries(key) { this.series[key] = !this.series[key]; this.drawHistory(); },
+    setRange(id) { this.range = id; this.drawHistory(); },
+    // The first day the range shows, or null for the whole history.
+    _rangeStart(last) {
+      const r = RANGES.find((x) => x.id === this.range);
+      if (!r || r.id === "all" || !last) return null;
+      if (r.id === "ytd") return last.slice(0, 4) + "-01-01";
+      return new Date(Date.parse(last + "T00:00:00Z") - r.days * 86_400_000).toISOString().slice(0, 10);
+    },
+    // Whether the chart shows one reading a week, and says so.
+    historyWeekly() {
+      const days = this._rangeDays();
+      return days.length > WEEKLY_AFTER_DAYS;
+    },
+    _rangeDays() {
+      const all = this._denseCalendarDays(this.history);
+      const start = this._rangeStart(all[all.length - 1]);
+      return start ? all.filter((d) => d >= start) : all;
+    },
+    // Tick positions on the history chart: month starts, thinned to every
+    // second month, every half year or every year as the span grows.
+    _dateTicks(days) {
+      const n = days.length;
+      const step = n <= 200 ? 1 : n <= 400 ? 2 : n <= 1200 ? 6 : 12;
+      const out = [];
+      days.forEach((d, i) => { if (d.endsWith("-01") && (Number(d.slice(5, 7)) - 1) % step === 0) out.push(i); });
+      return out;
+    },
+    _tickLabel(d, n) {
+      if (!d) return "";
+      const y = d.slice(0, 4), m = MONTHS[Number(d.slice(5, 7)) - 1];
+      if (n > 1200) return y;
+      return d.slice(5, 7) === "01" ? m + " " + y : m;
+    },
     // The history chart's empty state (.rm-nodata): a line needs two readings,
     // and with one Chart.js draws its axes around nothing.
     historyEmpty() { return this.history.length < 2; },
     historyEmptyTitle() { return this.history.length === 1 ? "Not enough data yet" : "No data yet"; },
     historyEmptyDetail() { return this.history.length === 1 ? "One reading so far" : ""; },
-    _setChart(key, chart) { this._charts[key]?.destroy(); this._charts[key] = chart; },
+    // The old chart goes BEFORE the new one is built: Chart.js refuses a canvas
+    // that is still in use, and building first threw, so a toggle changed the
+    // chip and never the chart.
+    //
+    // No instance is kept on the component: stored in Alpine data, a chart is
+    // read back through its reactive proxy, and its own update() recursed until
+    // the stack ran out. Chart.js already keeps one chart per canvas.
+    _newChart(canvas, config) {
+      window.Chart.getChart(canvas)?.destroy();
+      return new window.Chart(canvas, config);
+    },
     // Panel index on a history row: prefer the DTO camelCase, fall back to the
     // raw snapshot key so the chart works against either shape.
     _idx(h, panel) { const v = h[panel + "Index"]; return v != null ? v : h[panel]; },
@@ -416,9 +552,15 @@ export function registerRegimeView(Alpine) {
       // Not drawn at all when empty: an empty Chart.js still paints its axes
       // and gridlines under the empty state laid over the canvas.
       if (!canvas || !window.Chart || this.historyEmpty()) return;
-      const labels = this._denseCalendarDays(this.history);
+      const days = this._rangeDays();
       const byDate = new Map(this.history.map((h) => [h.date, h]));
-      const val = (fn) => labels.map((d) => { const h = byDate.get(d); return h ? fn(h) : null; });
+      const weekly = days.length > WEEKLY_AFTER_DAYS;
+      // x is the day's position in the range, on a linear axis, so a weekly
+      // line and the daily bands share one scale.
+      const idx = [];
+      if (weekly) { for (let i = days.length - 1; i >= 0; i -= 7) idx.unshift(i); } else { for (let i = 0; i < days.length; i++) idx.push(i); }
+      const pts = (fn) => idx.map((i) => { const h = byDate.get(days[i]); return { x: i, y: h ? fn(h) : null }; });
+      const byDay = (arr) => idx.map((i) => ({ x: i, y: arr[i] ?? null }));
       // spanGaps:false is Chart.js's own default, set explicitly (issue #624,
       // mirroring wallet-perf.js) so a `null` gap day breaks the line instead
       // of ever silently interpolating across it.
@@ -426,33 +568,40 @@ export function registerRegimeView(Alpine) {
       // a mass over the whole plot. Each series takes the colour its name has
       // in the backtest charts below (STRATEGY_STYLE), so Macro, On-chain and
       // Equity factor are one hue each on the whole page.
-      const line = (label, data, color, o = {}) => ({ label, data, borderColor: color, backgroundColor: "transparent", fill: false, tension: 0.2, pointRadius: 0, borderWidth: o.bw || 1.25, borderDash: o.dash, yAxisID: o.axis || "y", spanGaps: false });
-      const ds = [
-        line("Composite", val((h) => h.composite), STRATEGY_STYLE.composite.color, { bw: 2 }),
-        line("Macro", val((h) => this._idx(h, "macro")), STRATEGY_STYLE.macro.color),
-        line("On-chain", val((h) => this._idx(h, "onchain")), STRATEGY_STYLE.onchain.color),
-      ];
-      const hasFactor = this.history.some((h) => this._idx(h, "factor") != null);
-      if (hasFactor) ds.push(line("Equity factor", val((h) => this._idx(h, "factor")), STRATEGY_STYLE.factor.color));
+      const line = (label, data, color, o = {}) => ({ label, data, borderColor: color, backgroundColor: "transparent", fill: false, tension: 0.2, pointRadius: 0, borderWidth: o.bw || 1.25, borderDash: o.dash, yAxisID: o.axis || "y", spanGaps: false, hidden: !!o.hidden });
+      const read = { composite: (h) => h.composite, macro: (h) => this._idx(h, "macro"), onchain: (h) => this._idx(h, "onchain"), factor: (h) => this._idx(h, "factor") };
+      const ds = this.historySeries().map(({ key, label, color }) => line(label, pts(read[key]), color, { bw: key === "composite" ? 2 : 1.25, hidden: !this.series[key] }));
       const extras = this.latest?.extras || {};
       const showSpx = this.visible.spx && (extras.spx || []).length > 0;
       const showEth = this.visible.eth && (extras.eth || []).length > 0;
       const spx = this.overlayStyle("spx"), eth = this.overlayStyle("eth");
-      if (showSpx) ds.push(line("S&P 500", alignToDates(extras.spx, labels), spx.color, { axis: "yPrice", dash: spx.dash }));
-      if (showEth) ds.push(line("ETH", alignToDates(extras.eth, labels), eth.color, { axis: "yPrice", dash: eth.dash }));
-      const chart = new window.Chart(canvas, {
+      if (showSpx) ds.push(line("S&P 500", byDay(alignToDates(extras.spx, days)), spx.color, { axis: "yPrice", dash: spx.dash }));
+      if (showEth) ds.push(line("ETH", byDay(alignToDates(extras.eth, days)), eth.color, { axis: "yPrice", dash: eth.dash }));
+      const ticks = this._dateTicks(days);
+      this._newChart(canvas, {
         type: "line",
-        data: { labels, datasets: ds },
+        data: { datasets: ds },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
           interaction: { mode: "index", intersect: false },
           plugins: {
-            regimeBands: { enabled: this.visible.bands, regimes: val((h) => h.regime ?? null) },
-            legend: { position: "bottom", labels: { color: PALETTE.textMuted, font: MONO_FONT } },
-            tooltip: { backgroundColor: rgba(PALETTE.deep, 0.95), borderColor: PALETTE.border, borderWidth: 1, titleColor: PALETTE.text, bodyColor: PALETTE.text },
+            regimeBands: { enabled: this.visible.bands, regimes: days.map((d) => byDate.get(d)?.regime ?? null) },
+            // The chips above the chart are the legend.
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: rgba(PALETTE.deep, 0.95), borderColor: PALETTE.border, borderWidth: 1, titleColor: PALETTE.text, bodyColor: PALETTE.text,
+              callbacks: {
+                title: (items) => this.dateLong(days[items[0]?.parsed?.x]),
+                label: (ctx) => ctx.dataset.label + ": " + (ctx.dataset.yAxisID === "yPrice" ? fmtUsdCompact(ctx.parsed.y) : (+ctx.parsed.y).toFixed(2)),
+              },
+            },
           },
           scales: {
-            x: monoAxis({ ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 8 } }),
+            x: {
+              type: "linear", min: 0, max: Math.max(1, days.length - 1),
+              ...monoAxis({ ticks: { maxRotation: 0, autoSkip: false, callback: (v) => this._tickLabel(days[v], days.length) } }),
+              afterBuildTicks: (scale) => { scale.ticks = ticks.map((value) => ({ value })); },
+            },
             // Two decimals: Chart.js's own label rounded the 0.25 and 0.75
             // ticks to "0.3" and "0.8".
             y: { min: 0, max: 1, ...monoAxis({ ticks: { stepSize: 0.25, callback: (v) => (+v).toFixed(2) } }) },
@@ -461,7 +610,6 @@ export function registerRegimeView(Alpine) {
         },
         plugins: [regimeBandsPlugin],
       });
-      this._setChart("history", chart);
     },
 
     drawBacktests() {
@@ -469,6 +617,7 @@ export function registerRegimeView(Alpine) {
       const labels = this._denseCalendarDays(this.history);
       const byDate = new Map(this.history.map((h) => [h.date, h]));
       const regimes = labels.map((d) => byDate.get(d)?.regime ?? null);
+      const btTicks = this._dateTicks(labels);
       for (const canvas of this.$root.querySelectorAll("canvas[data-bt]")) {
         const key = canvas.getAttribute("data-bt");
         if (this.btEmptyTitle(key)) continue;
@@ -476,9 +625,9 @@ export function registerRegimeView(Alpine) {
         const ds = this._curveKeys(key).map((sk) => {
           const s = strategies[sk];
           const style = STRATEGY_STYLE[sk];
-          return { label: style.label, data: alignToDates(s.equity_curve, labels), borderColor: style.color, borderWidth: style.baseline ? 1 : 1.5, borderDash: style.baseline ? (style.dash || [4, 3]) : undefined, pointRadius: 0, tension: 0.2, fill: false, spanGaps: true };
+          return { label: style.label, data: alignToDates(s.equity_curve, labels), borderColor: style.color, borderWidth: style.baseline ? 1 : 1.5, borderDash: style.baseline ? (style.dash || [4, 3]) : undefined, pointRadius: 0, tension: 0.2, fill: false, spanGaps: true, hidden: !!this.btHidden[key + ":" + sk] };
         });
-        const chart = new window.Chart(canvas, {
+        this._newChart(canvas, {
           type: "line",
           data: { labels, datasets: ds },
           options: {
@@ -486,20 +635,45 @@ export function registerRegimeView(Alpine) {
             interaction: { mode: "index", intersect: false },
             plugins: {
               regimeBands: { enabled: true, regimes },
-              legend: { position: "bottom", labels: { color: PALETTE.textMuted, font: MONO_FONT } },
+              // The chips above the chart are the legend.
+              legend: { display: false },
               tooltip: { backgroundColor: rgba(PALETTE.deep, 0.95), borderColor: PALETTE.border, borderWidth: 1, titleColor: PALETTE.text, bodyColor: PALETTE.text, callbacks: { label: (ctx) => ctx.dataset.label + ": " + (+ctx.parsed.y).toFixed(2) + "×" } },
             },
             scales: {
-              x: monoAxis({ ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 8 } }),
+              // The history chart's date ticks: a year each across the window.
+              x: { ...monoAxis({ ticks: { maxRotation: 0, autoSkip: false, callback: (v) => this._tickLabel(labels[v], labels.length) } }), afterBuildTicks: (scale) => { scale.ticks = btTicks.map((value) => ({ value })); } },
               y: { type: "logarithmic", ...monoAxis({ ticks: { callback: (v) => (+v).toFixed(v < 10 ? 1 : 0) + "×" } }) },
             },
           },
           plugins: [regimeBandsPlugin],
         });
-        this._setChart("bt-" + key, chart);
       }
     },
+    // The backtest chart's chips: each strategy line, its colour, and for a
+    // baseline its dash, drawn as a short run of the line.
+    btSeries(key) {
+      return this._curveKeys(key).map((sk) => {
+        const st = STRATEGY_STYLE[sk];
+        const dash = st.baseline ? (st.dash || [4, 3]) : null;
+        const key2 = key + ":" + sk;
+        const swatch = dash
+          ? `<svg class="rv__chip-line" width="14" height="8" aria-hidden="true"><line x1="0" y1="4" x2="14" y2="4" stroke="${st.color}" stroke-width="1.5" stroke-dasharray="${dash.map((v) => v / 2).join(" ")}"/></svg>`
+          : `<i class="rv__chip-dot" data-mark="series" style="background:${st.color}" aria-hidden="true"></i>`;
+        return { id: key2, label: st.label, swatch, on: !this.btHidden[key2] };
+      });
+    },
+    toggleBt(key, id) {
+      this.btHidden[id] = !this.btHidden[id];
+      const canvas = this.$root?.querySelector(`canvas[data-bt="${key}"]`);
+      const chart = canvas && window.Chart?.getChart(canvas);
+      if (!chart) return;
+      const i = this._curveKeys(key).findIndex((sk) => key + ":" + sk === id);
+      if (i >= 0) { chart.setDatasetVisibility(i, !this.btHidden[id]); chart.update(); }
+    },
 
-    destroy() { Object.values(this._charts).forEach((c) => c?.destroy()); this._charts = {}; },
+    destroy() {
+      if (this._onHash) removeEventListener("hashchange", this._onHash);
+      this.$root?.querySelectorAll("canvas").forEach((c) => window.Chart?.getChart(c)?.destroy());
+    },
   }));
 }
