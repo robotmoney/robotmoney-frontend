@@ -120,14 +120,16 @@ test("T0.2: a quarantined day reads as a GAP, so the operator surface and the AP
   // would never be told to look at it.
   const def = getSeriesDef("wallet_balance_samples")!;
   await sql.begin(async (tx) => {
-    await tx`CREATE TEMP TABLE wallet_balance_samples (sample_date date, symbol text, provenance text) ON COMMIT DROP`;
+    // superseded_at mirrors the real table (migration 0086): the detector
+    // filters it (SeriesDef.tombstoneColumn, D55 (6)), and every row here is live.
+    await tx`CREATE TEMP TABLE wallet_balance_samples (sample_date date, symbol text, provenance text, superseded_at timestamptz) ON COMMIT DROP`;
     const expectedSymbols = def.expectedKeys!.resolve().map(([symbol]) => symbol!);
     for (const date of ["2026-03-18", "2026-03-19", "2026-03-21"]) {
       for (const symbol of expectedSymbols) {
-        await tx`INSERT INTO wallet_balance_samples VALUES (${date}::date, ${symbol}, 'seed')`;
+        await tx`INSERT INTO wallet_balance_samples VALUES (${date}::date, ${symbol}, 'seed', NULL)`;
       }
     }
-    await tx`INSERT INTO wallet_balance_samples VALUES ('2026-03-20'::date, ${expectedSymbols[0]}, ${QUARANTINED_PROVENANCE})`;
+    await tx`INSERT INTO wallet_balance_samples VALUES ('2026-03-20'::date, ${expectedSymbols[0]}, ${QUARANTINED_PROVENANCE}, NULL)`;
     const report = await detectGaps(def, tx, new Date("2026-03-21T12:00:00Z"));
     expect(report.interiorGaps).toEqual(["2026-03-20T00:00:00.000Z"]);
     expect(report.clean).toBe(false);
