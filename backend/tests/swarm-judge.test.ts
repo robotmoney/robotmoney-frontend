@@ -1048,24 +1048,6 @@ test("the judge switch has TWO modes: `shadow` is refused like any other nonsens
   expect(audits[0].scope).toMatchObject({ mode: "enforce", minTakes: 4 });
 });
 
-test("a legacy `shadow` row reads as `off`, and the next write through the switch stores `off`", async () => {
-  // A row written before D53 is the case. Migration 0082 heals such a row and
-  // tightens the CHECK to off | enforce, so the pre-0082 state is rebuilt here
-  // (0039's CHECK put back, in this test's own database) to prove the reader
-  // and writer still agree with the lifecycle for it, which captures `off`
-  // (domain.ts currentJudgeMode). backend/tests/judge-config-mode-check.test.ts
-  // proves 0082 itself.
-  await sql.unsafe(`
-    ALTER TABLE swarm_judge_config DROP CONSTRAINT swarm_judge_config_mode_check;
-    ALTER TABLE swarm_judge_config ADD CONSTRAINT swarm_judge_config_mode_check
-      CHECK (mode IN ('off', 'shadow', 'enforce'));`);
-  await sql`UPDATE swarm_judge_config SET mode = 'shadow', model = ${STUB_JUDGE_MODEL} WHERE id = 1`;
-  expect((await getJudgeConfig()).mode).toBe("off");
-  await setJudgeConfig({ minTakes: 2 });
-  const [row] = await sql`SELECT mode, min_takes FROM swarm_judge_config WHERE id = 1` as any[];
-  expect(row).toMatchObject({ mode: "off", min_takes: 2 });
-});
-
 test("flipping the mode to `enforce` returns the residual hazard — and `off` returns none (#806)", async () => {
   const off = await admin.setJudgeConfigAdmin({ mode: "off" }) as any;
   expect(off.warnings).toEqual([]);

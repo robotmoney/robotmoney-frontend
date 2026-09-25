@@ -37,9 +37,10 @@ import type { SwarmRouteResult } from "./swarm/types.ts";
 
 type AuthConfig = Pick<typeof globalConfig, "allowInsecure"> & {
   automationToken?: string | null;
-  /** The connection's timing, for a test that cannot wait out the defaults.
-   *  Never read from the environment; the server passes nothing. */
-  streamTiming?: Pick<stream.StreamOptions, "keepaliveMs" | "pollMs">;
+  /** The connection's timing, for a test that cannot wait out the defaults,
+   *  and its end hook, for a test that must see the connection stop. Never
+   *  read from the environment; the server passes nothing. */
+  streamTiming?: Pick<stream.StreamOptions, "keepaliveMs" | "pollMs" | "onEnd">;
 };
 
 const FORBIDDEN: SwarmRouteResult = { status: 403, body: { error: "forbidden" } };
@@ -83,8 +84,8 @@ export async function handleSchedulerStream(
     }
     const cursor = parseCursor(url);
     if (cursor === null) return { status: 400, body: { error: "cursor required" } };
-    // The bearer is re-checked before every keepalive, against the token store
-    // as it is THEN. A token rotated or revoked while this connection is open
+    // The bearer is re-checked every keepalive interval, busy or quiet,
+    // against the token store as it is THEN. A token rotated or revoked while this connection is open
     // (smoke spec §3: provisioning replaces the row's hash) stops authorizing
     // it, and the subscription closes instead of reading on for the life of the
     // socket.

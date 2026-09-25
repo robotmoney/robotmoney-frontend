@@ -199,6 +199,15 @@ BEGIN
       EXECUTE format('GRANT SELECT, INSERT ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT UPDATE (final) ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
+    ELSIF rel.name = 'swarm_stream_head' THEN
+      -- The event counter's one row (migration 0081): rm_app reads it and
+      -- increments it, and nothing else. The row is seeded by the migration and
+      -- bootstrap-data.sql, so no runtime role ever INSERTs one; the ordinary
+      -- sweep below would hand rm_app INSERT on every run. rm_worker's SELECT is
+      -- settled by the worker block that follows, like every other table's.
+      EXECUTE format('REVOKE INSERT ON %s FROM rm_app, rm_worker', rel.ident);
+      EXECUTE format('GRANT SELECT, UPDATE ON %s TO rm_app', rel.ident);
+      EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
     ELSE
       EXECUTE format('GRANT SELECT, INSERT, UPDATE ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);

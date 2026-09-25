@@ -143,11 +143,13 @@ test("rm_app cannot rewind the counter either: it only moves forward", async () 
   expect(await sqlstate(app, "UPDATE swarm_stream_head SET seq = 0")).toBe("23514");
 });
 
-test("rm_owner prunes the rows below the oldest servable cursor, and that cursor is still served", async () => {
+test("rm_owner CAN prune, and a cursor at the new floor is still served", async () => {
   await commitEvents("ret_owner_prune", 3);
   const head = await domain.streamHeadSequence();
-  // Say the oldest cursor any subscriber may still present is head - 2: it
-  // needs head - 1 and head. Everything at or below it may go (§6.3).
+  // NOT PROVED HERE: that a prune stays below the oldest cursor the API may
+  // still be asked to serve. Nothing records that cursor or bounds a DELETE by
+  // it; this case picks head - 2 by hand. It proves only the grant half (the
+  // owner may DELETE) and the served half (the new floor is honest).
   const oldestServable = head - 2;
   const pruned = await asOwner(
     async (tx) => (await tx`DELETE FROM swarm_stream_events WHERE seq <= ${oldestServable} RETURNING seq`).length,
@@ -208,6 +210,31 @@ test("grant reconciliation re-asserts the revoke from its own list, not from the
     expect(await sqlstate(logins.get("rm_app")!, "DELETE FROM swarm_stream_events WHERE seq = 1")).toBe("42501");
   } finally {
     await sql.unsafe("REVOKE DELETE, TRUNCATE ON swarm_stream_events FROM rm_app, rm_worker");
+  }
+});
+
+test("grant reconciliation gives rm_app exactly SELECT and UPDATE on the counter row, as 0081 does — never INSERT", async () => {
+  const grantsSql = (await loadSnapshot()).grantsSql;
+  const held = async (): Promise<string[]> =>
+    ((await sql`
+      SELECT r.rolname || ':' || p.privilege AS item
+        FROM (VALUES ('rm_app'), ('rm_worker'), ('rm_readonly')) AS r(rolname)
+        CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE')) AS p(privilege)
+       WHERE has_table_privilege(r.rolname, 'public.swarm_stream_head', p.privilege)
+       ORDER BY 1`) as unknown as { item: string }[]).map((r) => r.item);
+  const exactly0081 = ["rm_app:SELECT", "rm_app:UPDATE", "rm_readonly:SELECT", "rm_worker:SELECT"];
+  expect(await held()).toEqual(exactly0081);
+  // Red control: a hand-widened INSERT is taken back, and a reconciliation run
+  // on a clean database adds nothing (the ordinary sweep would add INSERT).
+  await sql.unsafe("GRANT INSERT ON swarm_stream_head TO rm_app, rm_worker");
+  try {
+    expect(await held()).toContain("rm_app:INSERT");
+    await asOwner(async (tx) => tx.unsafe(grantsSql));
+    expect(await held()).toEqual(exactly0081);
+    await asOwner(async (tx) => tx.unsafe(grantsSql));
+    expect(await held()).toEqual(exactly0081);
+  } finally {
+    await sql.unsafe("REVOKE INSERT ON swarm_stream_head FROM rm_app, rm_worker");
   }
 });
 

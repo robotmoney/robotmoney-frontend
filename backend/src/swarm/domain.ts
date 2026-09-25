@@ -4033,17 +4033,38 @@ export interface StreamOptions {
    */
   pollMs?: number;
   /**
-   * How many frames this connection may hold unread before its buffer counts
-   * as overflowed (§6.3). Past it the connection sends `resync` with reason
-   * `buffer_overflow` and closes, rather than dropping or skipping anything.
+   * How many frames this connection's own queue may hold unread before it
+   * counts as overflowed (§6.3). Past it the connection sends `resync` with
+   * reason `buffer_overflow` and closes, rather than dropping or skipping
+   * anything.
+   *
+   * THIS IS NOT WHAT BOUNDS A SUBSCRIBER UNDER `Bun.serve`. Measured on Bun
+   * 1.3.14: the server drains a response body into its own unbounded socket
+   * buffer whether or not the peer reads — a default, `pull`, `bytes`,
+   * `direct` and async-generator body all showed it — so `desiredSize` never
+   * falls and this limit is never reached behind the real server. What does
+   * end a connection whose peer stopped reading is the server's `idleTimeout`
+   * (10 s by default, which backend/src/api/index.ts keeps): with no socket
+   * progress the server closes the connection, `cancel` ends this loop and the
+   * buffered frames are freed. The subscriber reconnects from the cursor it
+   * last applied, so nothing is skipped, but it gets no `resync` frame first.
+   * The limit stays for any consumer that does honour the queue.
    */
   bufferFrames?: number;
   /**
-   * Re-checked before every keepalive. Resolving false (or failing) closes the
-   * subscription: a bearer that was rotated or revoked after the connection
-   * opened must not keep reading the stream for the life of the socket.
+   * Re-checked every `keepaliveMs` whatever the connection is sending — events
+   * do not postpone it. Resolving false (or failing) closes the subscription: a
+   * bearer that was rotated or revoked after the connection opened must not
+   * keep reading the stream for the life of the socket, and a busy stream must
+   * not keep it reading either.
    */
   stillAuthorized?: () => Promise<boolean>;
+  /**
+   * Called exactly once, when the connection's loop has stopped, with why it
+   * stopped: a resync reason, `unauthorized`, or `cancelled` (the peer or the
+   * server closed the response). For tests and diagnostics; it decides nothing.
+   */
+  onEnd?: (why: ResyncReason | "unauthorized" | "cancelled") => void;
 }
 
 /**
@@ -4090,7 +4111,9 @@ const encodeStreamFrame = (f: StreamServeFrame): string => `event: ${f.event}\nd
  *      from the middle (pruned while the connection was open) is a resync and
  *      a close, never a jump.
  *   3. A keepalive carrying the head sequence whenever the keepalive interval
- *      passes with nothing else sent, after the bearer is re-checked.
+ *      passes with nothing else sent.
+ *   4. The bearer re-checked every keepalive interval, busy or quiet; a bearer
+ *      that no longer authorizes ends the connection.
  *
  * NO STATE IS EVER CLAIMED FROM A FAILED READ. A database error while reading
  * events or the head ends the connection with `resync: unavailable`; it never
@@ -4106,6 +4129,23 @@ export function openSchedulerStream(cursor: number, opts: StreamOptions = {}): R
   const pollMs = opts.pollMs ?? STREAM_DEFAULTS.pollMs;
   const bufferFrames = opts.bufferFrames ?? STREAM_DEFAULTS.bufferFrames;
   let live = true;
+  // Why the connection stopped, reported once through `onEnd`. The first
+  // cause recorded wins: a resync closes the controller, which a consumer may
+  // then see as a cancel.
+  let endedBy: ResyncReason | "unauthorized" | "cancelled" | null = null;
+  let reported = false;
+  const ended = (why: ResyncReason | "unauthorized" | "cancelled"): void => {
+    endedBy ??= why;
+  };
+  const report = (): void => {
+    if (reported) return;
+    reported = true;
+    try {
+      opts.onEnd?.(endedBy ?? "cancelled");
+    } catch {
+      /* a diagnostic hook never breaks the connection */
+    }
+  };
 
   const body = new ReadableStream<Uint8Array>(
     {
@@ -4128,6 +4168,7 @@ export function openSchedulerStream(cursor: number, opts: StreamOptions = {}): R
         };
         // The last frame a connection ever sends: the reason, then the close.
         const resyncAndClose = (reason: ResyncReason, head: number | null): void => {
+          ended(reason);
           if (live) enqueue(encodeStreamFrame({ event: "resync", data: { reason, head } }));
           close();
         };
@@ -4161,19 +4202,33 @@ export function openSchedulerStream(cursor: number, opts: StreamOptions = {}): R
           reason = await resyncReasonFor(cursor);
         } catch {
           resyncAndClose("unavailable", null);
+          report();
           return;
         }
         if (reason) {
           resyncAndClose(reason, await headOrNull());
+          report();
           return;
         }
 
         let sent = cursor;
         let lastFrameAt = Date.now();
+        let lastAuthAt = Date.now();
         // Drive the connection from here rather than from a module-level timer:
         // this promise is owned by the stream and ends when `live` goes false.
         void (async () => {
           while (live) {
+            // The bearer is re-checked on its own clock. It used to ride the
+            // keepalive, which only goes out when a poll finds nothing, so a
+            // rotated token kept reading for as long as events kept flowing.
+            if (opts.stillAuthorized && Date.now() - lastAuthAt >= keepaliveMs) {
+              if (!(await opts.stillAuthorized().catch(() => false))) {
+                ended("unauthorized");
+                close();
+                break;
+              }
+              lastAuthAt = Date.now();
+            }
             let events: ServedStreamEvent[];
             try {
               events = await eventsAbove(sent);
@@ -4194,10 +4249,6 @@ export function openSchedulerStream(cursor: number, opts: StreamOptions = {}): R
             if (!live) break;
             if (events.length > 0) lastFrameAt = Date.now();
             else if (Date.now() - lastFrameAt >= keepaliveMs) {
-              if (opts.stillAuthorized && !(await opts.stillAuthorized().catch(() => false))) {
-                close();
-                break;
-              }
               // §6.3: "Each keepalive from the API includes the sequence number
               // of the last event it committed." The HEAD of the log, not
               // `sent` — the whole point is that a subscriber behind the head
@@ -4214,13 +4265,16 @@ export function openSchedulerStream(cursor: number, opts: StreamOptions = {}): R
             await Bun.sleep(pollMs);
           }
           close();
+          report();
         })();
       },
       cancel() {
+        ended("cancelled");
         live = false;
       },
     },
-    // Counted in frames: the open comment and every frame is one chunk.
+    // Counted in frames: the open comment and every frame is one chunk. See
+    // `bufferFrames`: behind Bun.serve this queue is drained eagerly.
     new CountQueuingStrategy({ highWaterMark: bufferFrames }),
   );
 

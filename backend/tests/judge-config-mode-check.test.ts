@@ -21,7 +21,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
 import { listJudgements, openEpoch, turnOverEpoch } from "../src/swarm/domain.ts";
-import { getJudgeConfig } from "../src/swarm/judge-config.ts";
+import { getJudgeConfig, setJudgeConfig } from "../src/swarm/judge-config.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject } from "./support/epoch-fixtures.ts";
 
@@ -120,4 +120,25 @@ test("judgements recorded under `shadow` stay on file and readable — 0082 touc
   expect(def).toContain("'shadow'::text");
   const rows = await listJudgements(sessionId);
   expect(rows.map((r) => r.mode)).toEqual(["shadow"]);
+});
+
+test("a legacy `shadow` row reads as `off`, and the next write through the switch stores `off`", async () => {
+  // Moved here from swarm-judge.test.ts, whose database it left on 0039's
+  // three-mode CHECK for every later case. The reader and the writer agree
+  // with the lifecycle for a pre-0082 row, which captures `off` (domain.ts
+  // currentJudgeMode). The tightened CHECK is put back in `finally` by running
+  // 0082 itself, so no later case runs where `shadow` is writable.
+  await plantPre0082Shadow();
+  try {
+    expect((await getJudgeConfig()).mode).toBe("off");
+    await setJudgeConfig({ minTakes: 2 });
+    const [row] = (await sql`SELECT mode, min_takes FROM swarm_judge_config WHERE id = 1`) as unknown as {
+      mode: string;
+      min_takes: number;
+    }[];
+    expect(row).toMatchObject({ mode: "off", min_takes: 2 });
+  } finally {
+    await sql.unsafe(MIGRATION);
+  }
+  expect(await sqlstate(() => sql`UPDATE swarm_judge_config SET mode = 'shadow' WHERE id = 1`)).toBe("23514");
 });
