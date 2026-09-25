@@ -267,8 +267,9 @@ export class SchedulerClock {
    * IT CLEARS FIRST. §3.1 makes a rebuild the replacement of the whole copy, not
    * a merge into it — so a timer held for a session the snapshot no longer
    * mentions must be gone, not merely unused. An implementation that only added
-   * would keep a stale boundary alive after an operator's early turnover and
-   * fire it against a closed epoch.
+   * would keep a stale boundary alive after a turnover this scheduler did not
+   * make (a second scheduler's; D55 leaves no operator turnover) and fire it
+   * against a closed epoch.
    *
    * IT DOES NOT AWAIT THE WORK. §6.3 of the smoke spec defines the initial
    * rebuild as complete when "timers reconstructed and recoverable work
@@ -398,8 +399,10 @@ export class SchedulerClock {
    * §6.2: "sets that subject's boundary timer to the new `window_closes_at`;
    * settles N if it is not already settling."
    *
-   * This is the path an OPERATOR's early turnover reaches. The scheduler's own
-   * turnover re-arms and settles inline, so by the time its event arrives the
+   * This is the path a turnover THIS scheduler did not make reaches — a second
+   * scheduler's, or its own whose response was lost. D55 leaves no operator or
+   * admin turnover to arrive here. The scheduler's own completed turnover
+   * re-arms and settles inline, so by the time its event arrives the
    * successor is already armed and the closed epoch is already driving — and
    * both re-entries are no-ops, which is why a duplicate frame costs nothing.
    */
@@ -506,8 +509,9 @@ export class SchedulerClock {
    *
    * §4.3: "Turnover is bound to the epoch, never to 'whatever is open.'" The
    * `expectedSessionId` passed here is the session the timer was armed FOR, not
-   * whatever the clock currently believes is open — those differ after an
-   * operator's early turnover, and the difference is the whole guarantee.
+   * whatever the clock currently believes is open — those differ after a
+   * turnover this scheduler did not make (a second scheduler's), and the
+   * difference is the whole guarantee.
    *
    * THE RE-ARM HAPPENS BEFORE SETTLEMENT IS LAUNCHED, and settlement is not
    * awaited. A settlement that hangs must not delay the next boundary (§4.4).

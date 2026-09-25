@@ -384,8 +384,9 @@ describe("the full read is consumed whole (§3, §10)", () => {
     await clock.idle();
     expect(timers.pending).toHaveLength(1);
 
-    // The world moved on: the operator turned the epoch over by hand while the
-    // stream was down, so the snapshot names a different session.
+    // The world moved on: a turnover this scheduler did not make (a second
+    // scheduler's; D55 leaves no operator turnover) committed while the stream
+    // was down, so the snapshot names a different session.
     api.sessions.get("sa")!.state = "published";
     api.addSession({ sessionId: "sb", subjectId: "sub-a", windowClosesAt: T0 + 1_200_000 });
 

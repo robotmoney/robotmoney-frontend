@@ -9,14 +9,19 @@
 //
 //   "Turnover is bound to the epoch, never to 'whatever is open.' If the named
 //    session is no longer the current collecting one — because this call is a
-//    retry after a lost response, because a stale timer fired after an
-//    operator's early turnover, or because a second scheduler got there first
-//    — the API returns the original turnover's result if it has one, or a
+//    retry after a lost response, because a stale timer fired after a
+//    turnover this scheduler did not make, or because a second scheduler got
+//    there first — the API returns the original turnover's result if it has one, or a
 //    reasoned no-op. It never closes the successor."
 //
 // This is the single most important correctness property on the API side: the
 // gate races two schedulers against one epoch, and a retry aimed at N must
 // never reach N+1.
+//
+// D55 (2026-09-25): only `system-scheduler` turns an epoch over. There is no
+// operator or admin early turnover, so the "turnover this scheduler did not
+// make" below is a second scheduler's, never an operator's. The guarantees are
+// the same ones the operator case was tested for.
 //
 // THE GRID (§2.2, amended 2026-09-24): "Epoch N+1 closes at the first grid
 // instant after N's `window_closes_at` — on an unchanged grid, exactly
@@ -81,9 +86,10 @@ test("turnover closes N and opens N+1, and N+1 closes EXACTLY one duration after
   const opened = await sessionRow(r.openedSessionId);
   expect(opened.state).toBe("collecting");
   // §2.2: "on an unchanged grid, exactly `window_closes_at + epoch_duration`"
-  // — measured from N's CLOSE, not from the instant the turnover ran. This is
-  // an operator's early turnover (N's close is still ahead), so the new window
-  // is LONGER than one duration from its open, as §2.2 says it must be.
+  // — measured from N's CLOSE, not from the instant the turnover ran. Here the
+  // turnover commits while N's close is still ahead (a scheduler timer running
+  // ahead of the database clock, §4.2), so the new window is LONGER than one
+  // duration from its open: the grid, not the turnover instant, sets it.
   const [row] = await sql<{ exact: boolean; longer_than_one: boolean }[]>`
     SELECT n1.window_closes_at = n.window_closes_at + interval '900 seconds' AS exact,
            n1.window_closes_at - n1.convened_at > interval '900 seconds' AS longer_than_one
@@ -315,18 +321,19 @@ test("dropping a successful turnover's response and retrying replays it, never t
   expect((await sql`SELECT id FROM swarm_sessions WHERE subject_id = ${subjectId}`).length).toBe(2);
 });
 
-test("a stale timer that fires after an operator's early turnover is a replay, not a second turnover", async () => {
+test("a stale timer that fires after a turnover this scheduler did not make is a replay, not a second turnover", async () => {
   const { subjectId, sessionId } = await openedEpoch("to_stale");
-  // The operator ends the window early through the same endpoint.
-  const operator = await epoch.turnOverEpoch(subjectId, sessionId);
-  expect(operator.ok).toBe(true);
-  if (!operator.ok) return;
-  // The scheduler's own timer, still holding the OLD epoch, fires afterwards.
+  // Another caller turns N over first — a second scheduler (D55: never an
+  // operator) — through the same endpoint with the same expected_session_id.
+  const other = await epoch.turnOverEpoch(subjectId, sessionId);
+  expect(other.ok).toBe(true);
+  if (!other.ok) return;
+  // This scheduler's own timer, still holding the OLD epoch, fires afterwards.
   const stale = await epoch.turnOverEpoch(subjectId, sessionId);
   expect(stale.ok).toBe(true);
   if (!stale.ok) return;
-  expect(stale.openedSessionId).toBe(operator.openedSessionId);
-  expect((await sessionRow(operator.openedSessionId)).state).toBe("collecting");
+  expect(stale.openedSessionId).toBe(other.openedSessionId);
+  expect((await sessionRow(other.openedSessionId)).state).toBe("collecting");
   expect((await sql`SELECT id FROM swarm_sessions WHERE subject_id = ${subjectId}`).length).toBe(2);
 });
 

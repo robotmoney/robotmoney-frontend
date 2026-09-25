@@ -161,13 +161,15 @@ test("an ELAPSED window still refuses, and that is now the only timing refusal",
   expect((late as { error: string }).error).not.toContain("not open");
 });
 
-test("an EARLY turnover rejects no take — the next take lands in the successor, whose window is open", async () => {
-  // The behaviour #570 stated as a test, restated for the epoch model. An
-  // operator may turn an epoch over before its advertised instant (§4.3). The
+test("a turnover that commits AHEAD of the stored close rejects no take — the next take lands in the successor, whose window is open", async () => {
+  // The behaviour #570 stated as a test, restated for the epoch model. D55
+  // removed the operator's early turnover: only `system-scheduler` turns an
+  // epoch over. Its timer still runs on its own clock, not the database's
+  // (§4.2), so the API can see a turnover commit before N's stored close. The
   // closed epoch refuses further takes — they would post-date its absences —
   // but the successor opened in the same transaction is collecting, so a
-  // member arriving after the early close is never told `not open` and never
-  // loses its take.
+  // member arriving after that close is never told `not open` and never loses
+  // its take.
   const subj = await activeSubject("early", 600);
   const opened = await ic.openEpoch(subj);
   if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);

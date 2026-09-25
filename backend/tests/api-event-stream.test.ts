@@ -228,7 +228,8 @@ test("a turnover committed between the full read and the subscription arrives AB
   const read = await stream.fullRead();
   expect(read.collecting.some((c) => c.sessionId === opened.sessionId)).toBe(true);
 
-  // The operator turns over in the gap between the two calls.
+  // A turnover this reader did not make — a second scheduler's (D55: never an
+  // operator's) — commits in the gap between the two calls.
   const turned = await epoch.turnOverEpoch(subjectId, opened.sessionId);
   if (!turned.ok) throw new Error("turnOverEpoch failed");
 

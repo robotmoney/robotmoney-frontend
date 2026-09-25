@@ -213,8 +213,11 @@ test("a take after DEACTIVATION is refused, though the closed epoch's stored clo
   expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${sessionId}`).length).toBe(0);
 });
 
-test("a take that read N before an operator's EARLY turnover committed, and queued behind it, is refused — no row lands in N", async () => {
-  // The race the take INSERT's `FOR SHARE` exists for. The turnover is held
+test("a take that read N before a turnover committed AHEAD of N's stored close, and queued behind it, is refused — no row lands in N", async () => {
+  // The race the take INSERT's `FOR SHARE` exists for. D55 removed the
+  // operator's early turnover, but the scheduler's timer runs on its own clock,
+  // not the database's (§4.2), so a turnover can still commit while N's stored
+  // close is minutes ahead. That is the case held here. The turnover is held
   // open AFTER it has closed N and recorded its absences: the test takes the
   // stream-event advisory lock the turnover needs for `epoch.turned_over`.
   // While it waits, the take reads N as the newest session (N+1 is not yet

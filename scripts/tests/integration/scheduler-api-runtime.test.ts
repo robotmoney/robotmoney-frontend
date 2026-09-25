@@ -67,6 +67,11 @@ let healthPort = 0;
 let databaseUrl = "";
 let stateDir = "";
 let tokenFile = "";
+// A SECOND scheduler's token. D55: only `system-scheduler` turns an epoch over,
+// and the operator admin token is refused on every epoch lifecycle route. So a
+// turnover the running scheduler did not make is driven with this token, the
+// way a second scheduler would, never with ADMIN_TOKEN.
+let secondSchedulerToken = "";
 let api: ReturnType<typeof Bun.spawn> | null = null;
 let scheduler: ReturnType<typeof Bun.spawn> | null = null;
 const logs: string[] = [];
@@ -147,6 +152,15 @@ async function stopScheduler(): Promise<void> {
   scheduler.kill("SIGTERM");
   await scheduler.exited;
   scheduler = null;
+}
+
+async function secondSchedulerPost(path: string, body: unknown): Promise<{ status: number; body: any }> {
+  const r = await fetch(`http://127.0.0.1:${apiPort}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Automation-Token": secondSchedulerToken },
+    body: JSON.stringify(body),
+  });
+  return { status: r.status, body: await r.json().catch(() => null) };
 }
 
 async function adminPost(path: string, body: unknown): Promise<{ status: number; body: any }> {
@@ -238,6 +252,11 @@ beforeAll(async () => {
     const r = await provisionAutomationToken("it-runtime", ["read_subjects", "read_sessions", "lifecycle_transitions"]);
     console.log(r.token); process.exit(0);`);
   writeFileSync(tokenFile, `${token.split("\n").pop()}\n`, { mode: 0o600 });
+  const second = await runBackend(`
+    const { provisionAutomationToken } = await import("./src/db/automation-tokens.ts");
+    const r = await provisionAutomationToken("it-runtime-second", ["read_subjects", "read_sessions", "lifecycle_transitions"]);
+    console.log(r.token); process.exit(0);`);
+  secondSchedulerToken = second.split("\n").pop()!;
 
   api = Bun.spawn(["bun", "run", "src/api/index.ts"], {
     cwd: BACKEND,
@@ -407,9 +426,11 @@ describe("the real scheduler drives the real API (§3, §4)", () => {
           const c = collectingOf(id);
           return c.length === 1 ? c : null;
         });
-        // An operator's early turnover: the scheduler learns of it by event and
-        // settles N — aggregate, then the judging request with its deadline.
-        const t = await adminPost("/api/swarm/admin/epochs/turnover", { subjectId: id, expectedSessionId: n!.id });
+        // A turnover the running scheduler did not make — a second scheduler's
+        // (D55: never an operator's): the running scheduler learns of it by
+        // event and settles N — aggregate, then the judging request with its
+        // deadline.
+        const t = await secondSchedulerPost("/api/swarm/admin/epochs/turnover", { subjectId: id, expectedSessionId: n!.id });
         expect(t.status).toBe(200);
         await waitFor("N to be judging", () => psql(`SELECT state FROM swarm_sessions WHERE id = ${lit(n!.id)}`) === "judging");
         return n!.id;

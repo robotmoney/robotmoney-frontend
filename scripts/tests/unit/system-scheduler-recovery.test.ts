@@ -615,7 +615,11 @@ describe("bounded retry and degradation (§4.6, §10)", () => {
   });
 });
 
-describe("an operator's turnover, learned of only by the event (§4.3, §6.2, §10)", () => {
+describe("a turnover this scheduler did not make, learned of only by the event (§4.3, §6.2, §10)", () => {
+  // D55: only `system-scheduler` turns an epoch over — there is no operator or
+  // admin early turnover. The turnover this scheduler learns of only by event
+  // is a second scheduler's. The guarantees are the ones the operator case was
+  // tested for: the closed epoch settles, the timer moves, nothing doubles.
   test("`epoch.turned_over` settles the closed epoch to published and moves the timer", async () => {
     const { api, boot } = world();
     api.addSubject("sub-a", 600);
@@ -625,8 +629,8 @@ describe("an operator's turnover, learned of only by the event (§4.3, §6.2, §
     await clock.idle();
     expect(clock.boundaryAt("sub-a")).toBe(T0 + 600_000);
 
-    // The operator ends the window early through the admin API. The scheduler's
-    // own timer never fired; all it gets is the event.
+    // A second scheduler turns N over before this one's timer fires. This
+    // scheduler's own timer never fired; all it gets is the event.
     const r = await api.turnover("sub-a", "sa");
     expect(r.ok).toBe(true);
     const opened = (r as { openedSessionId: string; windowClosesAt: string });
@@ -638,7 +642,7 @@ describe("an operator's turnover, learned of only by the event (§4.3, §6.2, §
     expect(api.sessions.get("sa")!.state).toBe("published");
     expect(api.sessions.get("sa")!.outcome).toBe("not_judged");
     expect(clock.boundaryAt("sub-a")).toBe(Date.parse(opened.windowClosesAt));
-    // The scheduler did not fire a turnover of its own on top of the operator's.
+    // The scheduler did not fire a turnover of its own on top of the other one.
     expect(api.countCalls("turnover")).toBe(1);
   });
 

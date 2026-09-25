@@ -264,11 +264,10 @@ export const ROUTES = {
 
       // ── The epoch lifecycle (issue #1026 W4.2, system-scheduler-spec.md §4)
       // Every one of these is a STATE-GUARDED transition that `system-scheduler`
-      // calls at an instant it already holds. They are POSTs under the admin
-      // namespace because an operator drives the same transitions by hand
-      // (§4.3: "An operator ending a window early does it through the same
-      // endpoint with the same `expected_session_id`"), and because the API
-      // decides nothing about timing on its own.
+      // calls at an instant it already holds, and ONLY `system-scheduler` calls
+      // them (D55, §4.3): there is no operator or admin early turnover, and the
+      // operator admin token holds only `admin`, which these routes refuse. The
+      // API decides nothing about timing on its own.
       epochOpen: "/api/swarm/admin/epochs/open", // POST { subjectId } — create+brief+window, one transaction
       epochTurnover: "/api/swarm/admin/epochs/turnover", // POST { subjectId, expectedSessionId } — close N, open N+1
       epochAggregate: "/api/swarm/admin/epochs/aggregate", // POST { sessionId } — deterministic rollup

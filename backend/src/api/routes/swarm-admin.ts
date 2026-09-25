@@ -354,9 +354,9 @@ export async function handleSwarmAdmin(
     //   cancel    ended a collecting epoch with no successor and no event.
     //
     // §4.3: "Turnover is the only way an epoch closes while its subject stays
-    // active. An operator ending a window early does it through the same
-    // endpoint." 410, not 404: the verbs were real and their absence is
-    // deliberate, so a stale client is told where to go.
+    // active", and only `system-scheduler` turns an epoch over (D55): there is
+    // no operator or admin early close. 410, not 404: the verbs were real and
+    // their absence is deliberate, so a stale client is told where to go.
     if ((segs.length === 1 && m === "POST") ||
         (segs.length === 3 && m === "POST" && ["cancel", "close", "reopen", "aggregate", "publish"].includes(segs[2]!))) {
       const verb = segs.length === 1 ? "create" : segs[2]!;
@@ -364,8 +364,8 @@ export async function handleSwarmAdmin(
         status: 410,
         body: {
           error: `the session ${verb} action is gone: epochs open, close and settle only through the epoch transitions ` +
-            "(POST /api/swarm/admin/epochs/{open,turnover,aggregate,request-judging,finalize}); an early close is a " +
-            "turnover naming its expectedSessionId, and stopping a subject is deactivation (system-scheduler-spec.md §4.3, §4.5)",
+            "(POST /api/swarm/admin/epochs/{open,turnover,aggregate,request-judging,finalize}), which only system-scheduler " +
+            "calls; there is no early close, and stopping a subject is deactivation (system-scheduler-spec.md §4.3, §4.5; D55)",
         },
       };
     }

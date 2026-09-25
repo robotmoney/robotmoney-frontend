@@ -1071,10 +1071,12 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     // #570 dropped this conjunct because the old lifecycle had a `scheduled`
     // gap between sessions and a `closeWindow` that ran before the advertised
     // instant. The epoch model has neither: a session is born `collecting`
-    // (§3), and the only ways an epoch leaves `collecting` are turnover (§4.3,
-    // an operator's early turnover included) and deactivation (§4.5). Neither
-    // moves `window_closes_at`, so without this conjunct a take that read N
-    // just before an early turnover committed — or any take after a
+    // (§3), and the only ways an epoch leaves `collecting` are turnover (§4.3)
+    // and deactivation (§4.5). Only `system-scheduler` turns an epoch over
+    // (D55), but its timer runs on its own clock, not the database's (§4.2), so
+    // the API can still see a turnover commit before N's stored close. Neither
+    // path moves `window_closes_at`, so without this conjunct a take that read
+    // N just before such a turnover committed — or any take after a
     // deactivation — landed in a CLOSED epoch whose stored close was still in
     // the future: after its absences were recorded, and after aggregation.
     // Under the `FOR SHARE` lock below, the state this reads is the committed
@@ -2993,10 +2995,11 @@ export async function streamHeadSequence(h: DbHandle = sql): Promise<number> {
 // The API decides nothing about timing. `system-scheduler` holds the clock and
 // calls in at the instant; every function here is a state-guarded transition
 // that can be called twice, called late, called by two schedulers at once, or
-// called by an operator by hand, and must produce the same world either way.
-// §5 states the rule and §10 races it: "a boundary fired twice, a settlement
-// resumed after downtime, a stale timer, a second scheduler, and an operator
-// firing a step by hand all reach the same guard."
+// retried after a lost response, and must produce the same world either way.
+// Only `system-scheduler` calls them (D55): there is no operator or admin
+// early turnover. §5 states the rule and §10 races it: "a boundary fired
+// twice, a settlement resumed after downtime, a stale timer, a second
+// scheduler, and a retry after a lost response all reach the same guard."
 //
 // So every function returns a DISCRIMINATED result rather than throwing, and
 // the successful ones say whether they actually did the work (`transitioned` /

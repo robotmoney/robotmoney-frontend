@@ -330,8 +330,9 @@ describe("the SSE hop, which only a real socket exercises", () => {
     const { clock } = await bootScheduler(api);
     expect(clock.boundaryAt("sub-a")).toBe(Date.parse(iso(closesAt)));
 
-    // An OPERATOR turns the epoch over. The scheduler learns of it only by the
-    // event, exactly as §4.3's last paragraph describes.
+    // Another caller turns the epoch over — a second scheduler; D55 leaves no
+    // operator turnover. This scheduler learns of it only by the event,
+    // exactly as §4.3's last paragraph describes.
     const newCloses = Date.now() + 600_000;
     api.emit("epoch.turned_over", "sub-a", "s1", {
       closedSessionId: "s1",
@@ -346,7 +347,7 @@ describe("the SSE hop, which only a real socket exercises", () => {
 
     expect(clock.boundaryAt("sub-a")).toBe(Date.parse(iso(newCloses)));
     // And it settled the closed epoch through to published, without ever
-    // issuing a turnover of its own on top of the operator's.
+    // issuing a turnover of its own on top of the other one.
     expect(api.turnovers).toEqual([]);
   });
 
