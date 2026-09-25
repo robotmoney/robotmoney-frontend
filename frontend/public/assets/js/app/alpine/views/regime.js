@@ -5,9 +5,9 @@ import { api, ROUTES } from "../../lib/api.js";
 import { scrollToFragment } from "../../router.js";
 import { enhanceHeadings } from "../../lib/heading-anchors.js";
 import { fmtUsdCompact } from "../lib/dash-format.js";
-import { PALETTE, SERIES, MONO_FONT, REGIME, rgba, monoAxis } from "../../lib/chart-theme.js";
+import { PALETTE, SERIES, REGIME } from "../../lib/chart-theme.js";
+import { denseDays, sampleDays, yScale, lineChartSvg, bandRuns, dateTicks, nearestSample, logTicks } from "../../lib/line-chart.js";
 import {
-  regimeBandsPlugin,
   alignToDates,
   STRATEGY_STYLE,
   BASELINE_KEYS,
@@ -19,6 +19,7 @@ import {
   CORR_ROWS,
   SOURCE_LABEL,
   REGIME_BG_LEGEND,
+  REGIME_BAND_BG,
 } from "./shared.js";
 
 // A figure as the site prints one: a true minus sign, a plus only where asked,
@@ -46,7 +47,28 @@ const FIRST_PAINT_DAYS = 400;
 // under half a pixel wide at that span. The regime bands stay day by day.
 const WEEKLY_AFTER_DAYS = 400;
 const HISTORY_SERIES = [["composite", "Composite"], ["macro", "Macro"], ["onchain", "On-chain"], ["factor", "Equity factor"]];
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Chart models are memoised outside Alpine data: one per history and range
+// for the history chart, one per market for the backtests. Held in component
+// data they would be read back through Alpine's proxies on every render.
+const HIST_MEMO = { key: null, m: null };
+const BT_MEMO = new Map();
+
+// Arrow keys step the crosshair through the drawn readings; Home and End jump
+// to the ends; Escape clears it.
+function stepAt(ev, at, count) {
+  if (!count) return at;
+  const last = count - 1;
+  if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
+    ev.preventDefault();
+    const from = at ?? (ev.key === "ArrowRight" ? -1 : last + 1);
+    return Math.max(0, Math.min(last, from + (ev.key === "ArrowRight" ? 1 : -1)));
+  }
+  if (ev.key === "Home") { ev.preventDefault(); return 0; }
+  if (ev.key === "End") { ev.preventDefault(); return last; }
+  if (ev.key === "Escape") return null;
+  return at;
+}
 
 // The summary cards' panel tips (panelTip below). `reads` is each panel's own
 // description on the indicators page; `count` is that page's count, used only
@@ -82,6 +104,14 @@ export function registerRegimeView(Alpine) {
     panelTab: "macro",
     // Hidden strategy lines on the backtest charts, "<market>:<strategy>".
     btHidden: {},
+    // The market on show in Backtests; a link to a market's heading opens it.
+    btMarket: "eth",
+    // Crosshair positions (an index into the drawn readings) and the line a
+    // legend hover focuses, per chart.
+    histAt: null,
+    histFocus: null,
+    btAt: null,
+    btFocus: null,
 
     async load() {
       try {
@@ -93,7 +123,7 @@ export function registerRegimeView(Alpine) {
         // its market context rows to them. So do the dashboard's headings,
         // which the router's rm:view-changed pass (lib/heading-anchors.js)
         // ran too early to give their section links.
-        this.$nextTick(() => { this.drawHistory(); enhanceHeadings(this.$root); scrollToFragment(); });
+        this.$nextTick(() => { enhanceHeadings(this.$root); scrollToFragment(); });
       } catch (e) {
         this.error = e.message;
         this.loading = false;
@@ -116,8 +146,6 @@ export function registerRegimeView(Alpine) {
         this._apply(data);
         this.fullLoaded = true;
         this.$nextTick(() => {
-          this.drawHistory();
-          this.drawBacktests();
           enhanceHeadings(this.$root);
           // A link to a backtest could not land before its card existed.
           if (!landed) scrollToFragment();
@@ -150,6 +178,9 @@ export function registerRegimeView(Alpine) {
       if (!id) return;
       for (const p of this.panelsList()) {
         if (id === "panel-" + p || id === this.slug(this.panelLabel(p) + " panel")) { this.panelTab = p; return; }
+      }
+      for (const bt of BACKTESTS) {
+        if (id === this.slug(bt.title) || id === "market-" + bt.key) { this.btMarket = bt.key; return; }
       }
       const el = document.getElementById(id);
       const card = el?.closest?.("[id^='panel-']");
@@ -374,6 +405,25 @@ export function registerRegimeView(Alpine) {
       const hs = this.corrHorizons();
       return this.corrAssets().flatMap(([asset]) => hs.map(([h, label], i) => ({ id: asset + h, asset, h, label, first: i === 0 })));
     },
+    // What one figure says, in words, from the figure itself: its sign, and
+    // whether it clears the 0.15 noise line. Strength past that is not graded,
+    // since the method draws no line there.
+    rhoSentence(idx, asset, h) {
+      const cell = this.corrCell(idx, asset, h);
+      const row = (CORR_ROWS.find(([k]) => k === idx) || [idx, idx])[1];
+      const name = asset === "spx" ? "S&P 500" : "ETH";
+      const when = h === "now" ? "today" : `next ${parseInt(h, 10)} days`;
+      if (!cell || cell.rho == null) return `${row} vs ${name}, ${when}: no reading.`;
+      const r = cell.rho;
+      const n = cell.n != null ? ` Across ${Number(cell.n).toLocaleString("en-US")} days.` : "";
+      const head = `${row} vs ${name}, ${when}: ${this.rhoText(cell)}.`;
+      if (Math.abs(r) < 0.15) return `${head} Under 0.15 either way: no relation beyond noise.${n}`;
+      const hi = `a high ${row.toLowerCase()} reading`;
+      const says = h === "now"
+        ? (r > 0 ? `The index has run high when ${name} is high.` : `The index has run high when ${name} is low.`)
+        : (r > 0 ? `${hi[0].toUpperCase() + hi.slice(1)} has come before stronger ${name} returns over the ${parseInt(h, 10)} days after.` : `${hi[0].toUpperCase() + hi.slice(1)} has come before weaker ${name} returns over the ${parseInt(h, 10)} days after.`);
+      return `${head} ${says}${n}`;
+    },
     corrCell(idx, asset, h) { return h === "now" ? this.conCell(idx, asset) : this.fwdCell(idx, asset + "_" + h); },
     // The cell's signed bar: from the centre line, right for a positive ρ and
     // left for a negative one, half the track at |ρ| = 1.
@@ -467,13 +517,27 @@ export function registerRegimeView(Alpine) {
     hasSpx() { return (this.latest?.extras?.spx || []).length > 0; },
     hasEth() { return (this.latest?.extras?.eth || []).length > 0; },
     isVisible(key) { return !!this.visible[key]; },
-    toggle(key) { this.visible[key] = !this.visible[key]; this.drawHistory(); },
+    toggle(key) { this.visible[key] = !this.visible[key]; },
+    // The history chart's empty state (.rm-nodata): a line needs two readings.
+    historyEmpty() { return this.history.length < 2; },
+    historyEmptyTitle() { return this.history.length === 1 ? "Not enough data yet" : "No data yet"; },
+    historyEmptyDetail() { return this.history.length === 1 ? "One reading so far" : ""; },
+    // Panel index on a history row: prefer the DTO camelCase, fall back to the
+    // raw snapshot key so the chart works against either shape.
+    _idx(h, panel) { const v = h[panel + "Index"]; return v != null ? v : h[panel]; },
+
+    // ── the charts: the site's own (.rr-area, lib/line-chart.js) ─────────────
+    // Both draw on an axis of one unit per calendar day (issue #624): a gap in
+    // the persisted readings takes the width of the days it covers and breaks
+    // the line, never bridged. Past a year the lines take one reading a week;
+    // the bands behind them stay day by day.
+    bandBg(state) { return REGIME_BAND_BG[state] || "transparent"; },
     historySeries() {
       const hasFactor = this.history.some((h) => this._idx(h, "factor") != null);
       return HISTORY_SERIES.filter(([k]) => k !== "factor" || hasFactor).map(([key, label]) => ({ key, label, color: STRATEGY_STYLE[key].color }));
     },
-    toggleSeries(key) { this.series[key] = !this.series[key]; this.drawHistory(); },
-    setRange(id) { this.range = id; this.drawHistory(); },
+    toggleSeries(key) { this.series[key] = !this.series[key]; },
+    setRange(id) { this.range = id; this.histAt = null; },
     // The first day the range shows, or null for the whole history.
     _rangeStart(last) {
       const r = RANGES.find((x) => x.id === this.range);
@@ -481,199 +545,164 @@ export function registerRegimeView(Alpine) {
       if (r.id === "ytd") return last.slice(0, 4) + "-01-01";
       return new Date(Date.parse(last + "T00:00:00Z") - r.days * 86_400_000).toISOString().slice(0, 10);
     },
-    // Whether the chart shows one reading a week, and says so.
-    historyWeekly() {
-      const days = this._rangeDays();
-      return days.length > WEEKLY_AFTER_DAYS;
-    },
-    _rangeDays() {
-      const all = this._denseCalendarDays(this.history);
+    // One model per history and range, reused by every binding that reads it
+    // (lines, bands, ticks, crosshair) in the same render.
+    _hist() {
+      const h = this.history;
+      const key = `${h.length}|${h[0]?.date}|${h[h.length - 1]?.date}|${this.range}`;
+      if (HIST_MEMO.key === key) return HIST_MEMO.m;
+      const all = denseDays(h.map((r) => r.date));
       const start = this._rangeStart(all[all.length - 1]);
-      return start ? all.filter((d) => d >= start) : all;
+      const days = start ? all.filter((d) => d >= start) : all;
+      const byDate = new Map(h.map((r) => [r.date, r]));
+      const idx = sampleDays(days.length, WEEKLY_AFTER_DAYS);
+      const read = { composite: (r) => r.composite, macro: (r) => this._idx(r, "macro"), onchain: (r) => this._idx(r, "onchain"), factor: (r) => this._idx(r, "factor") };
+      const values = {};
+      for (const k of Object.keys(read)) values[k] = idx.map((i) => { const r = byDate.get(days[i]); const v = r ? read[k](r) : null; return v == null ? null : +v; });
+      const extras = this.latest?.extras || {};
+      for (const k of ["spx", "eth"]) { const a = alignToDates(extras[k] || [], days); values[k] = idx.map((i) => a[i] ?? null); }
+      const regimes = days.map((d) => byDate.get(d)?.regime ?? null);
+      const m = { days, n: days.length, idx, values, regimes, runs: bandRuns(regimes), ticks: dateTicks(days), weekly: days.length > WEEKLY_AFTER_DAYS };
+      HIST_MEMO.key = key; HIST_MEMO.m = m;
+      return m;
     },
-    // Tick positions on the history chart: month starts, thinned to every
-    // second month, every half year or every year as the span grows.
-    _dateTicks(days) {
-      const n = days.length;
-      const step = n <= 200 ? 1 : n <= 400 ? 2 : n <= 1200 ? 6 : 12;
-      const out = [];
-      days.forEach((d, i) => { if (d.endsWith("-01") && (Number(d.slice(5, 7)) - 1) % step === 0) out.push(i); });
+    historyWeekly() { return this._hist().weekly; },
+    historyDays() { return this._hist().n; },
+    // The lines drawn now: each index that is on, then any price overlay that
+    // is on. A price overlay has its own log scale, fitted to the range.
+    _histLines() {
+      const m = this._hist();
+      const out = this.historySeries().filter((s) => this.series[s.key]).map((s) => ({ token: s.key, color: s.color, width: s.key === "composite" ? 2 : 1.25, values: m.values[s.key], y: (v) => v }));
+      for (const k of ["spx", "eth"]) {
+        if (!this.visible[k] || !(this.latest?.extras?.[k] || []).length) continue;
+        const vals = m.values[k].filter((v) => v > 0);
+        if (!vals.length) continue;
+        const f = yScale({ min: Math.min(...vals), max: Math.max(...vals), log: true });
+        const st = this.overlayStyle(k);
+        out.push({ token: k, color: st.color, width: 1.25, dash: st.dash, values: m.values[k], y: f, price: true });
+      }
       return out;
     },
-    _tickLabel(d, n) {
-      if (!d) return "";
-      const y = d.slice(0, 4), m = MONTHS[Number(d.slice(5, 7)) - 1];
-      if (n > 1200) return y;
-      return d.slice(5, 7) === "01" ? m + " " + y : m;
-    },
-    // The history chart's empty state (.rm-nodata): a line needs two readings,
-    // and with one Chart.js draws its axes around nothing.
-    historyEmpty() { return this.history.length < 2; },
-    historyEmptyTitle() { return this.history.length === 1 ? "Not enough data yet" : "No data yet"; },
-    historyEmptyDetail() { return this.history.length === 1 ? "One reading so far" : ""; },
-    // The old chart goes BEFORE the new one is built: Chart.js refuses a canvas
-    // that is still in use, and building first threw, so a toggle changed the
-    // chip and never the chart.
-    //
-    // No instance is kept on the component: stored in Alpine data, a chart is
-    // read back through its reactive proxy, and its own update() recursed until
-    // the stack ran out. Chart.js already keeps one chart per canvas.
-    _newChart(canvas, config) {
-      window.Chart.getChart(canvas)?.destroy();
-      return new window.Chart(canvas, config);
-    },
-    // Panel index on a history row: prefer the DTO camelCase, fall back to the
-    // raw snapshot key so the chart works against either shape.
-    _idx(h, panel) { const v = h[panel + "Index"]; return v != null ? v : h[panel]; },
-    // issue #624: `history` is one array slot per PERSISTED date — Chart.js's
-    // (default) category x-axis spaces slots by ARRAY INDEX, not elapsed time,
-    // so a gap between two adjacent persisted rows would draw compressed to an
-    // ordinary-width step instead of a real time gap (the same defect
-    // wallet-perf.js's AUM chart had — see _denseCalendarDays there). Currently
-    // latent (the analytics pipeline recomputes + upserts the full history
-    // every run, so `history` never actually has a hole today), but the chart
-    // itself shouldn't rely on that backend guarantee to stay honest.
-    // Synthesizing one slot per CALENDAR day between the first and last
-    // persisted date — gap days included — keeps the x-axis proportional to
-    // elapsed time regardless.
-    _denseCalendarDays(history) {
-      if (history.length === 0) return [];
-      const days = [];
-      const start = new Date(history[0].date + "T00:00:00Z");
-      const end = new Date(history[history.length - 1].date + "T00:00:00Z");
-      for (let t = start.getTime(); t <= end.getTime(); t += 86_400_000) {
-        days.push(new Date(t).toISOString().slice(0, 10));
-      }
-      return days;
-    },
-
-    drawHistory() {
-      const canvas = this.$refs.chart;
-      // Not drawn at all when empty: an empty Chart.js still paints its axes
-      // and gridlines under the empty state laid over the canvas.
-      if (!canvas || !window.Chart || this.historyEmpty()) return;
-      const days = this._rangeDays();
-      const byDate = new Map(this.history.map((h) => [h.date, h]));
-      const weekly = days.length > WEEKLY_AFTER_DAYS;
-      // x is the day's position in the range, on a linear axis, so a weekly
-      // line and the daily bands share one scale.
-      const idx = [];
-      if (weekly) { for (let i = days.length - 1; i >= 0; i -= 7) idx.unshift(i); } else { for (let i = 0; i < days.length; i++) idx.push(i); }
-      const pts = (fn) => idx.map((i) => { const h = byDate.get(days[i]); return { x: i, y: h ? fn(h) : null }; });
-      const byDay = (arr) => idx.map((i) => ({ x: i, y: arr[i] ?? null }));
-      // spanGaps:false is Chart.js's own default, set explicitly (issue #624,
-      // mirroring wallet-perf.js) so a `null` gap day breaks the line instead
-      // of ever silently interpolating across it.
-      // Lines only: the composite no longer fills to zero, which made its hue
-      // a mass over the whole plot. Each series takes the colour its name has
-      // in the backtest charts below (STRATEGY_STYLE), so Macro, On-chain and
-      // Equity factor are one hue each on the whole page.
-      const line = (label, data, color, o = {}) => ({ label, data, borderColor: color, backgroundColor: "transparent", fill: false, tension: 0.2, pointRadius: 0, borderWidth: o.bw || 1.25, borderDash: o.dash, yAxisID: o.axis || "y", spanGaps: false, hidden: !!o.hidden });
-      const read = { composite: (h) => h.composite, macro: (h) => this._idx(h, "macro"), onchain: (h) => this._idx(h, "onchain"), factor: (h) => this._idx(h, "factor") };
-      const ds = this.historySeries().map(({ key, label, color }) => line(label, pts(read[key]), color, { bw: key === "composite" ? 2 : 1.25, hidden: !this.series[key] }));
-      const extras = this.latest?.extras || {};
-      const showSpx = this.visible.spx && (extras.spx || []).length > 0;
-      const showEth = this.visible.eth && (extras.eth || []).length > 0;
-      const spx = this.overlayStyle("spx"), eth = this.overlayStyle("eth");
-      if (showSpx) ds.push(line("S&P 500", byDay(alignToDates(extras.spx, days)), spx.color, { axis: "yPrice", dash: spx.dash }));
-      if (showEth) ds.push(line("ETH", byDay(alignToDates(extras.eth, days)), eth.color, { axis: "yPrice", dash: eth.dash }));
-      const ticks = this._dateTicks(days);
-      this._newChart(canvas, {
-        type: "line",
-        data: { datasets: ds },
-        options: {
-          responsive: true, maintainAspectRatio: false, animation: false,
-          interaction: { mode: "index", intersect: false },
-          plugins: {
-            regimeBands: { enabled: this.visible.bands, regimes: days.map((d) => byDate.get(d)?.regime ?? null) },
-            // The chips above the chart are the legend.
-            legend: { display: false },
-            tooltip: {
-              backgroundColor: rgba(PALETTE.deep, 0.95), borderColor: PALETTE.border, borderWidth: 1, titleColor: PALETTE.text, bodyColor: PALETTE.text,
-              callbacks: {
-                title: (items) => this.dateLong(days[items[0]?.parsed?.x]),
-                label: (ctx) => ctx.dataset.label + ": " + (ctx.dataset.yAxisID === "yPrice" ? fmtUsdCompact(ctx.parsed.y) : (+ctx.parsed.y).toFixed(2)),
-              },
-            },
-          },
-          scales: {
-            x: {
-              type: "linear", min: 0, max: Math.max(1, days.length - 1),
-              ...monoAxis({ ticks: { maxRotation: 0, autoSkip: false, callback: (v) => this._tickLabel(days[v], days.length) } }),
-              afterBuildTicks: (scale) => { scale.ticks = ticks.map((value) => ({ value })); },
-            },
-            // Two decimals: Chart.js's own label rounded the 0.25 and 0.75
-            // ticks to "0.3" and "0.8".
-            y: { min: 0, max: 1, ...monoAxis({ ticks: { stepSize: 0.25, callback: (v) => (+v).toFixed(2) } }) },
-            yPrice: { type: "logarithmic", display: !!(showSpx || showEth), position: "right", ticks: { color: PALETTE.textMuted, font: MONO_FONT }, grid: { drawOnChartArea: false } },
-          },
-        },
-        plugins: [regimeBandsPlugin],
+    historySvg() {
+      if (this.historyEmpty()) return "";
+      const m = this._hist();
+      const lines = this._histLines();
+      // Each line is placed by its own scale and drawn on a unit one.
+      return lineChartSvg({
+        n: m.n, y: (v) => v, grid: [0.25, 0.5, 0.75],
+        series: lines.map((l) => ({ token: l.token, color: l.color, width: l.width, dash: l.dash, muted: !!this.histFocus && this.histFocus !== l.token, points: m.idx.map((i, k) => ({ i, v: l.values[k] == null ? null : l.y(l.values[k]) })) })),
       });
     },
-
-    drawBacktests() {
-      if (!this.latest?.backtest || !window.Chart || !this.$root) return;
-      const labels = this._denseCalendarDays(this.history);
-      const byDate = new Map(this.history.map((h) => [h.date, h]));
-      const regimes = labels.map((d) => byDate.get(d)?.regime ?? null);
-      const btTicks = this._dateTicks(labels);
-      for (const canvas of this.$root.querySelectorAll("canvas[data-bt]")) {
-        const key = canvas.getAttribute("data-bt");
-        if (this.btEmptyTitle(key)) continue;
-        const strategies = this.latest.backtest[key];
-        const ds = this._curveKeys(key).map((sk) => {
-          const s = strategies[sk];
-          const style = STRATEGY_STYLE[sk];
-          return { label: style.label, data: alignToDates(s.equity_curve, labels), borderColor: style.color, borderWidth: style.baseline ? 1 : 1.5, borderDash: style.baseline ? (style.dash || [4, 3]) : undefined, pointRadius: 0, tension: 0.2, fill: false, spanGaps: true, hidden: !!this.btHidden[key + ":" + sk] };
-        });
-        this._newChart(canvas, {
-          type: "line",
-          data: { labels, datasets: ds },
-          options: {
-            responsive: true, maintainAspectRatio: false, animation: false,
-            interaction: { mode: "index", intersect: false },
-            plugins: {
-              regimeBands: { enabled: true, regimes },
-              // The chips above the chart are the legend.
-              legend: { display: false },
-              tooltip: { backgroundColor: rgba(PALETTE.deep, 0.95), borderColor: PALETTE.border, borderWidth: 1, titleColor: PALETTE.text, bodyColor: PALETTE.text, callbacks: { label: (ctx) => ctx.dataset.label + ": " + (+ctx.parsed.y).toFixed(2) + "×" } },
-            },
-            scales: {
-              // The history chart's date ticks: a year each across the window.
-              x: { ...monoAxis({ ticks: { maxRotation: 0, autoSkip: false, callback: (v) => this._tickLabel(labels[v], labels.length) } }), afterBuildTicks: (scale) => { scale.ticks = btTicks.map((value) => ({ value })); } },
-              y: { type: "logarithmic", ...monoAxis({ ticks: { callback: (v) => (+v).toFixed(v < 10 ? 1 : 0) + "×" } }) },
-            },
-          },
-          plugins: [regimeBandsPlugin],
-        });
-      }
+    historyBands() { return this.visible.bands ? this._hist().runs : []; },
+    historyYTicks() { return [1, 0.75, 0.5, 0.25, 0].map((v) => ({ key: v, top: (1 - v) * 100, label: v.toFixed(2) })); },
+    historyXTicks() { return this._hist().ticks; },
+    historyLabel() {
+      const m = this._hist();
+      if (!m.n) return "";
+      const last = this.history[this.history.length - 1];
+      return `The composite and its panel indices, 0 risk-off to 1 risk-on, ${this.dateLong(m.days[0])} to ${this.dateLong(m.days[m.n - 1])}${m.weekly ? ", one reading a week" : ""}. Latest: ${this.regimeLabel(last?.regime)}, composite ${last?.composite == null ? "none" : (+last.composite).toFixed(2)}. Use the arrow keys to step through the readings.`;
     },
-    // The backtest chart's chips: each strategy line, its colour, and for a
-    // baseline its dash, drawn as a short run of the line.
-    btSeries(key) {
-      return this._curveKeys(key).map((sk) => {
+    // The legend: each line with its latest value; hover focuses it, a click
+    // switches it off and on.
+    historyLegend() {
+      const m = this._hist();
+      const lastOf = (arr) => { for (let k = arr.length - 1; k >= 0; k--) if (arr[k] != null) return arr[k]; return null; };
+      const rows = this.historySeries().map((s) => { const v = lastOf(m.values[s.key]); return { ...s, on: !!this.series[s.key], value: v == null ? "—" : v.toFixed(2) }; });
+      for (const k of ["spx", "eth"]) {
+        if (!(this.latest?.extras?.[k] || []).length) continue;
+        const v = lastOf(m.values[k]);
+        rows.push({ key: k, label: k === "spx" ? "S&P 500" : "ETH", color: this.overlayColor(k), dash: this.overlayStyle(k).dash, on: !!this.visible[k], value: v == null ? "—" : fmtUsdCompact(v), price: true });
+      }
+      return rows;
+    },
+    legendToggle(row) { if (row.price) this.toggle(row.key); else this.toggleSeries(row.key); },
+    historyMove(ev) { const m = this._hist(); if (m.n) this.histAt = nearestSample(m.idx, m.n, ev); },
+    historyKey(ev) { this.histAt = stepAt(ev, this.histAt, this._hist().idx.length); },
+    historyPoint() {
+      const m = this._hist();
+      const k = this.histAt;
+      if (k == null || m.idx[k] == null) return null;
+      const i = m.idx[k];
+      const r = this.history.find((h) => h.date === m.days[i]);
+      const items = this._histLines().map((l) => ({ token: l.token, label: this.historyLegend().find((x) => x.key === l.token)?.label || l.token, color: l.color, value: l.values[k] == null ? "—" : l.price ? fmtUsdCompact(l.values[k]) : (+l.values[k]).toFixed(2) }));
+      return { left: (i / Math.max(1, m.n - 1)) * 100, date: this.dateLong(m.days[i]), regime: r?.regime ? this.regimeLabel(r.regime) : "", regimeColor: this.regimeColor(r?.regime), items };
+    },
+
+    // Backtests: one market at a time behind the switch, every market's
+    // table still in the page.
+    marketLabel(bt) { return bt.title.replace(/^Backtest · /, "").replace(/SP500/g, "S&P 500"); },
+    setMarket(key) { this.btMarket = key; this.btAt = null; this.btFocus = null; },
+    _bt(key) {
+      const h = this.history;
+      const cacheKey = `${key}|${h.length}|${h[h.length - 1]?.date}|${!!this.latest?.backtest}`;
+      if (BT_MEMO.has(cacheKey)) return BT_MEMO.get(cacheKey);
+      const days = denseDays(h.map((r) => r.date));
+      const byDate = new Map(h.map((r) => [r.date, r]));
+      const idx = sampleDays(days.length, WEEKLY_AFTER_DAYS);
+      const strategies = this.latest?.backtest?.[key] || {};
+      const lines = this._curveKeys(key).map((sk) => {
+        const a = alignToDates(strategies[sk].equity_curve, days);
         const st = STRATEGY_STYLE[sk];
-        const dash = st.baseline ? (st.dash || [4, 3]) : null;
-        const key2 = key + ":" + sk;
-        const swatch = dash
-          ? `<svg class="rv__chip-line" width="14" height="8" aria-hidden="true"><line x1="0" y1="4" x2="14" y2="4" stroke="${st.color}" stroke-width="1.5" stroke-dasharray="${dash.map((v) => v / 2).join(" ")}"/></svg>`
-          : `<i class="rv__chip-dot" data-mark="series" style="background:${st.color}" aria-hidden="true"></i>`;
-        return { id: key2, label: st.label, swatch, on: !this.btHidden[key2] };
+        return { token: sk, label: st.label, color: st.color, baseline: !!st.baseline, dash: st.baseline ? (st.dash || [4, 3]) : null, values: idx.map((i) => (a[i] == null ? null : +a[i])) };
+      });
+      const all = lines.flatMap((l) => l.values).filter((v) => v > 0);
+      const min = all.length ? Math.min(...all) * 0.9 : 0.1, max = all.length ? Math.max(...all) * 1.1 : 10;
+      const regimes = days.map((d) => byDate.get(d)?.regime ?? null);
+      const m = { days, n: days.length, idx, lines, min, max, runs: bandRuns(regimes), ticks: dateTicks(days) };
+      BT_MEMO.set(cacheKey, m);
+      return m;
+    },
+    btSvg(key) {
+      if (this.btMarket !== key || this.btEmptyTitle(key)) return "";
+      const m = this._bt(key);
+      const f = yScale({ min: m.min, max: m.max, log: true });
+      const grid = logTicks(m.min, m.max).map(f);
+      return lineChartSvg({
+        n: m.n, y: f, grid,
+        series: m.lines.filter((l) => !this.btHidden[key + ":" + l.token]).map((l) => ({ token: l.token, color: l.color, width: l.baseline ? 1 : 1.5, dash: l.dash, muted: !!this.btFocus && this.btFocus !== l.token, points: m.idx.map((i, k) => ({ i, v: l.values[k] })) })),
       });
     },
-    toggleBt(key, id) {
-      this.btHidden[id] = !this.btHidden[id];
-      const canvas = this.$root?.querySelector(`canvas[data-bt="${key}"]`);
-      const chart = canvas && window.Chart?.getChart(canvas);
-      if (!chart) return;
-      const i = this._curveKeys(key).findIndex((sk) => key + ":" + sk === id);
-      if (i >= 0) { chart.setDatasetVisibility(i, !this.btHidden[id]); chart.update(); }
+    btBands(key) { return this.btMarket === key && !this.btEmptyTitle(key) ? this._bt(key).runs : []; },
+    btYTicks(key) {
+      if (this.btMarket !== key || this.btEmptyTitle(key)) return [];
+      const m = this._bt(key);
+      const f = yScale({ min: m.min, max: m.max, log: true });
+      return logTicks(m.min, m.max).map((v) => ({ key: v, top: (1 - f(v)) * 100, label: (v < 10 ? v.toFixed(1) : v.toFixed(0)) + "×" }));
+    },
+    btXTicks(key) { return this.btMarket === key && !this.btEmptyTitle(key) ? this._bt(key).ticks : []; },
+    btLegend(key) {
+      const m = this._bt(key);
+      return m.lines.map((l) => {
+        let last = null;
+        for (let k = l.values.length - 1; k >= 0; k--) if (l.values[k] != null) { last = l.values[k]; break; }
+        return { key: l.token, id: key + ":" + l.token, label: l.label, color: l.color, dash: l.dash, on: !this.btHidden[key + ":" + l.token], value: last == null ? "—" : last.toFixed(2) + "×" };
+      });
+    },
+    toggleBt(id) { this.btHidden[id] = !this.btHidden[id]; },
+    btMove(key, ev) { const m = this._bt(key); if (m.n) this.btAt = nearestSample(m.idx, m.n, ev); },
+    btKey(key, ev) { this.btAt = stepAt(ev, this.btAt, this._bt(key).idx.length); },
+    btPoint(key) {
+      if (this.btAt == null || this.btMarket !== key) return null;
+      const m = this._bt(key);
+      const k = this.btAt;
+      const i = m.idx[k];
+      if (i == null) return null;
+      const r = this.history.find((h) => h.date === m.days[i]);
+      const items = m.lines.filter((l) => !this.btHidden[key + ":" + l.token]).map((l) => ({ token: l.token, label: l.label, color: l.color, value: l.values[k] == null ? "—" : l.values[k].toFixed(2) + "×" }));
+      return { left: (i / Math.max(1, m.n - 1)) * 100, date: this.dateLong(m.days[i]), regime: r?.regime ? this.regimeLabel(r.regime) : "", regimeColor: this.regimeColor(r?.regime), items };
+    },
+    btLabel(key) {
+      const m = this._bt(key);
+      if (!m.n) return "";
+      return `Growth of $1 under each strategy, log scale, ${this.dateLong(m.days[0])} to ${this.dateLong(m.days[m.n - 1])}, one reading a week, the composite regime shaded behind. Use the arrow keys to step through the readings.`;
+    },
+    // A dashed baseline's legend key: a short run of its line.
+    dashKey(color, dash) {
+      return `<svg width="14" height="8" aria-hidden="true"><line x1="0" y1="4" x2="14" y2="4" stroke="${color}" stroke-width="1.5" stroke-dasharray="${(dash || []).map((v) => v / 2).join(" ")}"/></svg>`;
     },
 
     destroy() {
       if (this._onHash) removeEventListener("hashchange", this._onHash);
-      this.$root?.querySelectorAll("canvas").forEach((c) => window.Chart?.getChart(c)?.destroy());
     },
   }));
 }

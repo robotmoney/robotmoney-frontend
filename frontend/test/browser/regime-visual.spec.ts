@@ -77,7 +77,7 @@ test("the loading skeleton holds the page still while the snapshot is in flight"
 
   await page.goto("/regime");
   await expect(page.locator(".rv__skel")).toBeVisible();
-  await expect(page.locator(".rv__panel-card").first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator(".rv__panel").first()).toBeVisible({ timeout: 20_000 });
   await page.waitForTimeout(1500);
 
   const cls = await page.evaluate(() => (window as any).__cls as number);
@@ -90,9 +90,10 @@ test("regime dashboard matches its visual baseline", async ({ page }) => {
   await page.goto("/");
   await navigate(page, "/regime");
 
-  // Deterministic capture: wait for the enriched view + every chart canvas, let
-  // fonts settle, and hold the Chart.js paints (all use animation:false anyway).
-  await expect(page.locator(".rv__bt-card:visible")).toHaveCount(3);
+  // Deterministic capture: wait for the enriched view, the backtests (they
+  // land after the first paint) and both charts, and let fonts settle.
+  await expect(page.locator(".rv__market")).toHaveCount(3);
+  await expect(page.locator("#backtests-sec .rr-area__plot:visible")).toHaveCount(1);
   await expect(page.locator(".rv__spark-svg").first()).toBeVisible();
   await page.evaluate(() => (document as any).fonts?.ready);
   await page.waitForTimeout(500);
@@ -105,10 +106,9 @@ test("regime dashboard matches its visual baseline", async ({ page }) => {
   });
 });
 
-// A chart with nothing to draw says so (.rm-nodata) over its own box. The
-// history line needs two readings: with one, Chart.js drew its axes around
-// nothing, and with none the canvas was left blank. It is not drawn at all now,
-// since an empty Chart.js still paints gridlines under the empty state.
+// A chart with nothing to draw says so (.rm-nodata) in its own place. The
+// history line needs two readings: with one, a chart drew its axes around
+// nothing. It is not drawn at all: no plot, no axes.
 test("a history of one reading shows the empty chart, not axes around nothing", async ({ page }) => {
   await stub(page);
   const dto = regimeDto();
@@ -117,12 +117,10 @@ test("a history of one reading shows the empty chart, not axes around nothing", 
   await page.goto("/");
   await navigate(page, "/regime");
 
-  const empty = page.locator(".rv__chart-card .rm-nodata");
+  const empty = page.locator("#history-sec .rm-nodata");
   await expect(empty.locator(".rm-nodata__h")).toHaveText("Not enough data yet");
   await expect(empty.locator(".rm-nodata__d")).toHaveText("One reading so far");
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const drawn = await page.evaluate(() => !!(window as any).Chart.getChart(document.querySelector(".rv__chart canvas")));
-  expect(drawn).toBe(false);
+  await expect(page.locator("#history-sec .rr-area")).toHaveCount(0);
 });
 
 // A failed read leaves no dashboard to render. Its place holds the empty
@@ -150,9 +148,9 @@ test("a failed read holds the dashboard's place with the empty chart", async ({ 
 //
 // The panels sit one at a time behind tabs, so each is checked while its tab is
 // open (a hidden card measures 0 and would pass without being looked at).
-// 700 is the narrowest width before a card scrolls instead; 1440 is the width
-// the visual baseline is captured at.
-const FIT_WIDTHS = [1440, 1024, 900, 700];
+// Below 900 the table scrolls in its own box (.rr-tablewrap), as every table
+// on the site does; 1440 is the width the visual baseline is captured at.
+const FIT_WIDTHS = [1440, 1024, 900];
 
 test("each panel table fits its card, at every width, with its tab open", async ({ page }) => {
   await stub(page);
@@ -171,7 +169,7 @@ test("each panel table fits its card, at every width, with its tab open", async 
     for (let t = 0; t < 3; t++) {
       await tabs.nth(t).click();
       const fit = await page.evaluate(() =>
-        [...document.querySelectorAll(".rv__panel-card")].filter((c) => (c as HTMLElement).offsetParent).map((card) => {
+        [...document.querySelectorAll(".rv__panel")].filter((c) => (c as HTMLElement).offsetParent).map((card) => {
           const table = card.querySelector("table") as HTMLElement;
           return {
             card: Math.round(card.getBoundingClientRect().width),
