@@ -83,7 +83,9 @@ afterAll(() => {
   tryDocker(["network", "rm", NETWORK]);
   tryDocker(["rmi", "-f", IMAGE]);
   rmSync(siteDir, { recursive: true, force: true });
-});
+  // Removing two containers, a network and an image takes seconds on a loaded
+  // host; the default 5s hook timeout failed this teardown in a full suite run.
+}, 120_000);
 
 async function getThroughNginx(path: string, deadlineMs = 30_000): Promise<Response> {
   const deadline = Date.now() + deadlineMs;
