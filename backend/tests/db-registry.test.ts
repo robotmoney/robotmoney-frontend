@@ -828,11 +828,10 @@ describe("declarations — what the converted modules declare, read without depe
   /** Sites whose statement no entry module reaches yet. Each one names its own
    *  module as the caller, which is a placeholder, not a claim that anything
    *  reaches it. Recorded 2026-09-24 (#1026 W2) with one entry; it only
-   *  shrinks, and an entry leaves when the wiring names its real entry module. */
-  const UNWIRED_SITES: readonly string[] = [
-    // Token provisioning (spec §3, §9.1) is W4's to wire; only tests call it today.
-    "src/db/automation-tokens:provisionAutomationToken",
-  ];
+   *  shrinks, and an entry leaves when the wiring names its real entry module.
+   *  Empty since 2026-09-25 (#1026 W4): token provisioning names its entry
+   *  module, scripts/provision-tokens. */
+  const UNWIRED_SITES: readonly string[] = [];
 
   /** A module is its own entry point when it is one by the registry's own
    *  definition (QueryDeclaration.callers: "the route that receives the request,
@@ -874,9 +873,11 @@ describe("declarations — what the converted modules declare, read without depe
   });
 
   test("the self-caller rule is not vacuous: a library module naming itself is refused", () => {
-    // Red control: src/db/automation-tokens has no direct-run block, so without
-    // the unwired entry its provision site would be refused.
+    // Red control: src/db/automation-tokens has no direct-run block, so its
+    // provision site would be refused if it named itself again.
     expect(isEntryModule("src/db/automation-tokens")).toBe(false);
+    // …and the module it names instead is an entry by the directory rule.
+    expect(isEntryModule("scripts/provision-tokens")).toBe(true);
     expect(isEntryModule("src/chain/wallet-balances")).toBe(false);
     expect(isEntryModule("src/db/seed")).toBe(true);
     expect(isEntryModule("src/api/routes/comments")).toBe(true);

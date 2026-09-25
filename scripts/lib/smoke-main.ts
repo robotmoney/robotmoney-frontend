@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { resolveSmokeEnv } from "./smoke-env.ts";
 import { hostname } from "node:os";
 import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
-import { homeEnvFilePath, urlForRole } from "./env-role.ts";
+import { databaseName, homeEnvFilePath, urlForRole } from "./env-role.ts";
 import { bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
 import { dropShellMigrationCredential, shadowingStackEnvWarnings, smokePassthroughEnv, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
 import { resolveBackupFiles } from "./restore-container.ts";
@@ -459,7 +459,7 @@ const remote = dataPath.kind === "external"
       if (!readerUrl || !workerUrl) {
         return fatal(`the remote database needs rm_readonly and rm_worker lines in ${homeEnvFilePath()} (spec §3), beside the connection values and rm_app.`);
       }
-      const target: HostTarget = { host: homeEnv.host!, port: Number(homeEnv.port ?? "5432"), database: homeEnv.database!, sslmode: homeEnv.sslmode ?? "require" };
+      const target: HostTarget = { host: homeEnv.host!, port: Number(homeEnv.port ?? "5432"), database: databaseName(homeEnv)!, sslmode: homeEnv.sslmode ?? "require" };
       return { readerUrl, workerUrl, target };
     })()
   : undefined;

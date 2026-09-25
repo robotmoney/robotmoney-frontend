@@ -46,7 +46,9 @@ import { homedir } from "node:os";
 import { describe, expect, test } from "bun:test";
 import {
   CONNECTION_TOKENS,
+  DATABASE_NAME_KEYS,
   HOME_ENV_FILE,
+  databaseName,
   ROLES,
   homeEnvFilePath,
   loadEnvFile,
@@ -155,6 +157,29 @@ describe("urlForRole — ONE role, ONE assembled URL, never a second role's", ()
     delete noSsl.sslmode;
     const u = new URL(urlForRole(noSsl, "rm_app")!);
     expect(u.searchParams.get("sslmode")).toBe("require");
+  });
+});
+
+describe("the database name — both spellings preflight check 4 accepts (criterion 150 residual)", () => {
+  test("DATABASE_NAME_KEYS is the panel's `database` and spec §3's `dbname`", () => {
+    expect([...DATABASE_NAME_KEYS]).toEqual(["database", "dbname"]);
+  });
+
+  test("a ~/.env written with the spec's `dbname` spelling assembles a URL", () => {
+    // Red control: before the residual was fixed urlForRole read only
+    // `env.database`, so this file passed check 4 and could not connect.
+    const { database: _panel, ...rest } = base;
+    const env = { ...rest, dbname: "specdb" };
+    expect(databaseName(env)).toBe("specdb");
+    const u = new URL(urlForRole(env, "rm_readonly")!);
+    expect(u.pathname).toBe("/specdb");
+  });
+
+  test("`database` wins when both are present; neither is a refusal, not a default", () => {
+    expect(databaseName({ database: "panel", dbname: "spec" })).toBe("panel");
+    expect(databaseName({ dbname: "" })).toBeUndefined();
+    const { database: _panel, ...rest } = base;
+    expect(urlForRole(rest, "rm_readonly")).toBeUndefined();
   });
 });
 
