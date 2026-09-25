@@ -44,11 +44,15 @@ lifecycle, the scheduler spec governs and this list only summarizes it:
   Role-based admin accounts are out of scope for this phase.
 - Keep the buildless Alpine frontend and the frontend-to-backend HTTP boundary.
 - Research and queue admin requests still go through the Postgres queue. The
-  swarm lifecycle is not an admin action at all: only `system-scheduler`
+  epoch lifecycle is not an admin action at all: only `system-scheduler`
   drives it (open, turn over, aggregate, request judging, finalize), and the
   operator admin token holds only the `admin` right, which every epoch
   lifecycle route refuses ([D55](../decisions.md#d55),
   [scheduler spec §4.3](../technical/system-scheduler-spec.md#43-the-boundary)).
+  A subject's status is the admin's, not the scheduler's: activating and
+  deactivating a subject are admin subject edits (US-C1), and the scheduler
+  never deactivates
+  ([scheduler spec §4.5](../technical/system-scheduler-spec.md#45-deactivating-a-subject)).
   The browser never runs domain operations itself.
 - Preserve accepted swarm recommendations as append-only signed records.
   Admins cannot edit or delete them. Under [D51](../decisions.md#d51) a member
@@ -292,9 +296,12 @@ Acceptance:
 - Wallet and NFT entries have `address`, `chain`, and optional `label` strings.
   `framework` requires an empty wallet array; `rpc` requires at least one wallet.
 - `linkedMemberId`, when present, must reference an existing member.
-- Deactivation sets `status = 'inactive'`, closes the topic's open epoch
-  (recording absences as a boundary would), opens no successor, and lets
-  settlement of that closed epoch run to `published`
+- Deactivation is an admin subject edit, and only an admin makes it; the
+  scheduler never deactivates ([D55](../decisions.md#d55)). In one
+  transaction it sets `status = 'inactive'`, closes the topic's open epoch
+  (recording absences as a boundary would) and opens no successor. The
+  scheduler then settles that closed epoch to `published` from
+  `subject.changed`
   ([scheduler spec §4.5](../technical/system-scheduler-spec.md#45-deactivating-a-subject)).
   Old sessions, briefs, snapshots, and recommendations are unchanged.
 - Edits require the current `version`; a stale version returns 409.
@@ -378,7 +385,9 @@ and I cannot fire one myself.
 Only `system-scheduler` drives the epoch lifecycle
 ([D55](../decisions.md#d55)). There is no manual turnover, no early close and
 no hand-fired settlement step. The operator admin token holds only the `admin`
-right, and every epoch lifecycle route refuses it. The transition contract
+right, and every epoch lifecycle route refuses it. Deactivating a topic
+(US-C1) is a subject edit, not a transition: it closes the open epoch and opens
+none, and the scheduler settles what it closed. The transition contract
 lives in
 [scheduler spec §§4–5](../technical/system-scheduler-spec.md#4-the-session-lifecycle).
 This surface shows the transitions that contract produced. Summary:

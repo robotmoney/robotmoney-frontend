@@ -63,7 +63,7 @@ No environment variable sets them. No seed command sets them. No boot overwrites
 
 ### 2.4 Never disabled
 
-There is no on/off state for scheduling. Activating a subject opens its first epoch (§3). A subject that must stop running epochs is deactivated, and deactivation closes its open epoch and settles it (§4.5).
+There is no on/off state for scheduling. An admin activating a subject leads the scheduler to open its first epoch (§3). A subject that must stop running epochs is deactivated by an admin; the deactivation closes its open epoch, and the scheduler settles it (§4.5). Activation and deactivation are admin subject edits, never scheduler actions ([D55](../decisions.md#d55)).
 
 ## 3. The clock
 
@@ -157,7 +157,11 @@ Then it publishes. A repeated finalize returns the outcome already decided; it n
 
 ### 4.5 Deactivating a subject
 
-Deactivating a subject through the admin API closes its open epoch (recording absences as in §4.3) and opens no new one. Settlement of that closed epoch proceeds and must finish; §3 step 3 includes it in every rebuild. The scheduler drops the subject's boundary timer on the `subject.changed` event and settles the closed epoch.
+**Only an admin deactivates a subject, and the scheduler never does** ([D55](../decisions.md#d55)). Deactivation is an admin subject edit made under the `admin` right, not an epoch lifecycle transition. The scheduler's token holds no `admin` right, so it cannot make the edit. The `epochs/*` lifecycle routes stay scheduler-only, and none of them deactivates.
+
+In one transaction the deactivation sets the subject inactive, closes its open epoch (recording absences as in §4.3), opens no new one, and publishes `subject.changed`. Settlement of that closed epoch proceeds and must finish; §3 step 3 includes it in every rebuild. The scheduler drops the subject's boundary timer on the `subject.changed` event and settles the closed epoch through the ordinary settlement transitions (§4.4).
+
+Activation is the mirror case. It is also an admin subject edit, and it opens no session. It publishes `subject.changed`, and the scheduler opens the first epoch from that event (§3, §6.2).
 
 ### 4.6 Transition calls that fail
 
@@ -188,7 +192,7 @@ Any write that alters what the scheduler is waiting on is published by the API a
 
 | event | cause | scheduler does |
 |---|---|---|
-| `subject.changed` | a scheduling column changed (§2.2), or subject activated / deactivated | re-reads that subject; on activation opens its first epoch (§3); on deactivation drops its boundary timer and settles the closed epoch (§4.5) |
+| `subject.changed` | a scheduling column changed (§2.2), or an admin activated or deactivated the subject (§4.5) | re-reads that subject; on activation opens its first epoch (§3); on deactivation drops its boundary timer and settles the epoch the deactivation closed (§4.5) |
 | `epoch.turned_over` | epoch N closed and N+1 opened — by this scheduler's boundary, or by a second scheduler | sets that subject's boundary timer to the new `window_closes_at`; settles N if it is not already settling |
 | `session.judged` | the judges' consensus was recorded | proceeds to finalize (§4.4) |
 
@@ -222,7 +226,7 @@ There are four kinds of credential in this system, and they must not be confused
 | **Database** — a Postgres role password | that the process may open a database connection | the API and the pipeline worker, at runtime | `~/.env` (`smoke-production-spec.md` §3) |
 | **Model** — a third-party LLM key (e.g. `OPENCODE_API_KEY`) | that the holder may call a model vendor | participants that call a model: agents, judges | each participant's own `credential.json` entry, delivered to its container only |
 
-`system-scheduler` holds exactly one: an **API credential**, an automation token with the rights to read subjects and sessions and to perform lifecycle transitions. It is the only credential those transitions accept: the operator admin token holds only the `admin` right, and every epoch lifecycle route refuses it ([D55](../decisions.md#d55)). It signs nothing, so it has no signing key and no entry in `credential.json`. It never touches the database, so it has no role password. It calls no model, so it has no model key. It holds no Docker socket.
+`system-scheduler` holds exactly one: an **API credential**, an automation token with the rights to read subjects and sessions and to perform the epoch lifecycle transitions (open, turnover and settlement). It is the only credential those transitions accept: the operator admin token holds only the `admin` right, and every epoch lifecycle route refuses it ([D55](../decisions.md#d55)). The scheduler's token holds no `admin` right, so it cannot activate or deactivate a subject (§4.5). It signs nothing, so it has no signing key and no entry in `credential.json`. It never touches the database, so it has no role password. It calls no model, so it has no model key. It holds no Docker socket.
 
 How that automation token is issued, validated, delivered and rotated is defined in `smoke-production-spec.md`: §3 for the token store and delivery, §9.1 for production, §5 for rehearsal (blank, dump, volume and remote rehearsal targets). Every environment in §8 obtains it by one of those two paths; none reuses another's.
 
@@ -242,7 +246,8 @@ The same `system-scheduler` image and code run in production, stage, test and CI
 - The submission window is the only scheduled part of a session. Settlement is never scheduled; the judging deadline is a timeout inside it.
 - A submission after `window_closes_at` is refused regardless of state.
 - Turnover is bound to a named epoch and never retargets its successor.
-- Only `system-scheduler` drives the lifecycle transitions. No operator or admin early turnover exists, and the operator admin token is refused on every epoch lifecycle route.
+- Only `system-scheduler` drives the epoch lifecycle transitions: open, turnover and settlement. No operator or admin early turnover exists, and the operator admin token is refused on every epoch lifecycle route.
+- Only an admin subject edit activates or deactivates a subject. The scheduler never deactivates, and its token is refused on the subject edit routes. A deactivation closes the open epoch in the transaction that sets the subject inactive.
 - `system-scheduler` never polls the API on an interval, and never re-reads on a timer. Failure-triggered, bounded retries are not polling.
 - The clock is either provably current or rebuilding. There is no third state.
 - Every change to what the clock waits on is an event on the stream, sequenced in the transaction that made the change.
@@ -276,7 +281,8 @@ Timing gates distinguish **dispatch** (the scheduler issued the call at the inst
 - A turnover this scheduler did not make (a second scheduler's), learned of only by `epoch.turned_over`, is settled and followed exactly as the scheduler's own boundary would be: N is settled to `published`, N+1's window closes on the grid (§2.2), the scheduler's timer moves to that instant, and the scheduler fires no turnover of its own on top.
 - The operator admin token is refused on every epoch lifecycle route — open, turnover, each settlement step — and changes nothing.
 - Killing `system-scheduler` mid-window and restarting it after the window instant fires the boundary once on rebuild; a window that should have turned over three times during the outage turns over once.
-- Deactivating a subject closes and settles its open epoch and opens no new one.
+- An admin deactivating a subject closes its open epoch in the same transaction that sets the subject inactive, opens no new one, and the scheduler settles the closed epoch to `published` from `subject.changed`.
+- The scheduler's token is refused on the subject activate and deactivate routes and changes nothing; no `epochs/*` route deactivates a subject.
 - **Handoff:** a turnover this scheduler did not make (a second scheduler's), committed between this scheduler's full read and its subscription, is delivered on the stream above the cursor, not lost.
 - **Silent stall:** stall the connection without closing it — the missed keepalive is detected, the scheduler rebuilds, and no stale timer fires.
 - **Final-event loss:** drop one application event at the API-to-scheduler hop while keepalives keep flowing, with no later event to follow it. The next keepalive's head sequence exceeds the scheduler's last-applied number; that alone triggers the rebuild, and the rebuilt state reflects the dropped change. The test asserts the trigger was the head-sequence mismatch, not a manually induced rebuild.
@@ -338,7 +344,7 @@ Decided with the owner on 2026-09-24 and recorded as [D52](../decisions.md#d52).
 
 ### 2026-09-25
 
-Decided with the owner on 2026-09-25 and recorded as [D55](../decisions.md#d55): only `system-scheduler` drives the lifecycle transitions. Each row records what changed so the edit is auditable from this document alone.
+Decided with the owner on 2026-09-25 and recorded as [D55](../decisions.md#d55): only `system-scheduler` drives the epoch lifecycle transitions (open, turnover and settlement), and only an admin deactivates a subject. Each row records what changed so the edit is auditable from this document alone.
 
 | clause | said before | says now |
 |---|---|---|
@@ -348,3 +354,14 @@ Decided with the owner on 2026-09-25 and recorded as [D55](../decisions.md#d55):
 | §6.1, §6.2 | settlement follows the scheduler's own turnover or an operator's; an operator triggering a step is event-driven; `epoch.turned_over` is caused by the boundary or an operator | settlement follows a turnover whose response the scheduler received or one it learned of only by event; `epoch.turned_over` is caused by this scheduler's boundary or a second scheduler |
 | §7, §9 | the operator admin token's rights on lifecycle routes unstated | the scheduler's token is the only credential the lifecycle transitions accept; a new invariant says so |
 | §10 | gates exercised an operator's early turnover (epoch binding, event-learned turnover, handoff) | the same gates run against a turnover this scheduler did not make; a new gate asserts the operator admin token is refused on every epoch lifecycle route |
+
+Amended the same day, because the first text of D55 listed deactivation among the scheduler's transitions. The scheduler drives open, turnover and settlement only. Only an admin deactivates a subject.
+
+| clause | said before | says now |
+|---|---|---|
+| §2.4 | activating a subject opens its first epoch; a subject is deactivated | an admin activates or deactivates a subject; the scheduler opens the first epoch and settles the closed one; neither edit is a scheduler action |
+| §4.5 | deactivation through the admin API closes the open epoch | only an admin deactivates, as a subject edit under `admin`; it closes the open epoch in the same transaction; the scheduler never deactivates and settles the closed epoch from `subject.changed`; activation is an admin subject edit after which the scheduler opens the epoch; the `epochs/*` routes stay scheduler-only |
+| §6.2 | `subject.changed` caused by a subject activated or deactivated | caused by an admin activating or deactivating the subject |
+| §7 | the scheduler's token performs "lifecycle transitions" | it performs open, turnover and settlement, and holds no `admin` right, so it cannot activate or deactivate a subject |
+| §9 | only `system-scheduler` drives the lifecycle transitions | it drives open, turnover and settlement; a new invariant says only an admin subject edit activates or deactivates |
+| §10 | deactivating a subject closes and settles its open epoch | the admin's deactivation closes the epoch in its own transaction and the scheduler settles it; a new gate refuses the scheduler's token on the subject activate and deactivate routes |

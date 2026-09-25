@@ -15,7 +15,8 @@
 >
 > **Scope.** This specification governs every service the stack runs: `api`,
 > `website-server`, `system-scheduler`, `analytics-producer`, the pipeline
-> worker, local Postgres, and the participants. Amended 2026-09-24 (§12).
+> worker, local Postgres, and the participants. Amended 2026-09-24 (§12) and
+> 2026-09-25 (§14).
 > The static website is its own release unit, with its own deploy command and
 > version check (§13, [D54](../decisions.md#d54)).
 
@@ -92,6 +93,8 @@ One protocol for every tool that mutates or deploys against a database: `bun smo
 
 **`rm_owner` is `LOGIN`.** Its password is typed at the terminal for the one run that needs it and never stored.
 
+**Only `rm_owner` may `DELETE` or `TRUNCATE`** ([D55](../decisions.md#d55) (6)). No runtime role — `rm_app`, `rm_worker`, `rm_readonly` — holds `DELETE` or `TRUNCATE` on any table, append-only or not. Runtime code never removes a row. Where it deletes today, it is redesigned into one of three shapes: a tombstone column every read filters on; a read that filters out expired rows, with pruning left to an `rm_owner` run; or an upsert that replaces the row in place. Security revocations stay immediately effective: a revoked key, token or membership is refused on the next request, because the revoking transaction writes the tombstone, never because a later prune removed a row. Preflight check 2 enforces the grant half (§7).
+
 **`~/.env`** is the deploying user's home-directory file, outside every checkout. It holds exactly these keys and nothing else: the remote connection (host, port, dbname); the runtime role passwords `rm_app`, `rm_worker` and `rm_readonly`; `RM_ENV`; and `RM_CREDENTIALS`. It must not contain `rm_owner`, `doadmin`, a superuser token, a service token, a signing key or a model key; preflight enforces the list (§7 check 4). Args override env: any `--local` mode (§5) makes smoke ignore every remote connection value.
 
 **Participant credentials** live in `credential.json` (§6.1), never in `~/.env`. Each entry holds that participant's signing key, its API bearer token and its model key.
@@ -131,6 +134,8 @@ It marks what the target is enrolled for. It is an accidental-target safeguard, 
 | unset | remote | any | refuse |
 | unset | `--local` | as `stage` | warn `RM_ENV not set, running as stage`, proceed |
 | other | any | any | refuse |
+
+**One exception, for one command, once.** `bun run migrate` may run against a production database that has no `deployment_identity` row, or no table, exactly once: the first production migrate of §9.1, under every guard listed there ([D55](../decisions.md#d55) (5)). No boot, no `bun smoke` and no other tool has that exception, and every later run requires the row.
 
 **Rehearsal-only preparation:** `--migrate`, `--seed`, `--spoof-keys` require `rehearsal` in addition to their own guards.
 
@@ -217,7 +222,7 @@ Boot order: config validation → plan and deployment lock → database create/r
 **Checks, against any database including production:**
 
 1. Every role password smoke will hand to a container authenticates.
-2. Each role holds every privilege the registry (§7.1) says its programs need, and none from the denylist: superuser; `CREATEROLE`; membership in `rm_owner`; ownership of any application object; DDL; `DELETE`/`TRUNCATE` on append-only tables. Checked through catalog queries (`has_table_privilege`, `pg_has_role`, `pg_class.relowner`), never by executing application statements. A grant absent from the registry is not forbidden by that fact alone. Append-only protection is both absent privilege and the existing triggers.
+2. Each role holds every privilege the registry (§7.1) says its programs need, and none from the denylist: superuser; `CREATEROLE`; membership in `rm_owner`; ownership of any application object; DDL; `DELETE` or `TRUNCATE` on any table (§3, [D55](../decisions.md#d55) (6)). Checked through catalog queries (`has_table_privilege`, `pg_has_role`, `pg_class.relowner`), never by executing application statements. A grant absent from the registry is not forbidden by that fact alone. Append-only protection is both absent privilege and the existing triggers.
 3. Schema, two questions against the installed version M:
    (a) **integrity** — live definitions of every object class in §8.1 match the manifest for M stored in the database (§8.3), excluding the provider list. Genuine drift fails here whatever code is booting.
    (b) **compatibility** — the booting code supports M (§8.4). An additive change to an existing table passes: (a) compares against M's manifest, which includes it; (b) reads the migration's declaration.
@@ -265,7 +270,7 @@ Code built for snapshot N boots against a database at M > N only if every ledger
 
 **`additive`** means old code's supported behavior is preserved across schema, data, and grants: every query the older registry declares still succeeds with the same semantics, no bootstrap row it relies on is removed or reshaped, no privilege it needs is revoked. Adding SQL objects is necessary, not sufficient. The declaration is a reviewed claim, backed by the CI proof below.
 
-**CI proves:** blank + all migrations = snapshot; snapshot N + migrations = snapshot N+1; a snapshot-created database boots and passes preflight without `--seed`; an upgrade from a populated database of each supported release passes its data assertions; code at N boots against N+additive.
+**CI proves:** blank + all migrations = snapshot; snapshot N + migrations = snapshot N+1; a snapshot-created database boots and passes preflight without `--seed`; an upgrade from a populated database of each supported release (`SUPPORTED_RELEASES`: v0.5.0 alone, [D55](../decisions.md#d55) (8)) passes its data assertions; code at N boots against N+additive.
 
 ### 8.5 `--migrate` and production upgrades
 
@@ -281,10 +286,19 @@ In production an upgrade is an operator intervention: `bun run migrate`, prompti
 
 1. `rm_owner LOGIN` — via `doadmin`: `ALTER ROLE rm_owner LOGIN PASSWORD …`, then a verification login. Migration 0053's `NOLOGIN` lines change for fresh databases; existing databases need this step because the runner skips recorded files.
 2. Baseline — compare production's live schema with the snapshot for its installed filename list. Any difference is repaired by a migration first; the first `bun run migrate` publishes a manifest only when the live schema matches.
-3. Grant transition — a migration revoking `DELETE`/`TRUNCATE` on append-only tables from `rm_app`/`rm_worker` (0053 granted `DELETE` on all tables). Check 2 fails until it lands.
+3. Grant transition — migrations revoking `DELETE` and `TRUNCATE` on every table from every runtime role (0053 granted `DELETE` on all tables; §3, [D55](../decisions.md#d55) (6)). Check 2 fails until they land.
 4. `deployment_identity = production` — via `rm_owner`.
 5. Provision the three service tokens (§3).
 6. Rebind each seated member to its `credential.json` key through the admin `rotate-key` route, one member at a time, writing each returned bearer token into that member's entry.
+
+**The first production migrate runs before the identity row exists** ([D55](../decisions.md#d55) (5)). Production runs v0.5.0, which predates the `deployment_identity` table (0063) and the manifest (0064), and every migrate run otherwise refuses a database with no identity row. So the first `bun run migrate`, which carries steps 2 and 3, may run once with no row, or no table, only when every one of these holds:
+
+- `RM_ENV=prod`;
+- the ledger's filename list is exactly equal to the filename list of one `SUPPORTED_RELEASES` entry (today v0.5.0 alone, [D55](../decisions.md#d55) (8)): no file missing, none extra, none renamed;
+- the operator types the `rm_owner` password at the terminal;
+- the operator answers an explicit `y`.
+
+It takes the target lock (§2) like every other mutation. Its receipt records the pre-identity state: that no identity row existed, the supported release the ledger matched, and that ledger's filename list. Step 4 then writes `production`. From then on every run of every tool requires the row, and the exception is never available again on that database. A ledger that matches no supported release, a partly migrated ledger, an `RM_ENV` other than `prod`, a missing owner password or any answer but `y` refuses and changes nothing.
 
 ### 9.2 Every boot
 
@@ -330,7 +344,9 @@ Each is an executable release gate. Cutover requires all three workstreams green
 - Old code boots after an additive change to an existing table while genuine drift on the same database still fails.
 - Old release reads compat metadata written by a newer one and refuses unknown `metadata_version`.
 - Migrate fails between commits and during grant reconciliation; rerun reaches a verified final state.
-- Denylist: runtime role with `rm_owner` membership, object ownership, or DELETE on an append-only table fails preflight.
+- Denylist: runtime role with `rm_owner` membership, object ownership, or `DELETE` or `TRUNCATE` on any table fails preflight.
+- No runtime path deletes: a revoked key, token or membership is refused on its next request with no `DELETE` issued, and an expired row stops being served before any prune runs.
+- First production migrate: with no `deployment_identity` row and a ledger exactly equal to v0.5.0's, `RM_ENV=prod`, a typed `rm_owner` and `y` migrate once and receipt the pre-identity state. A ledger with one file more or less, `RM_ENV=stage`, a missing owner password, or any answer but `y` refuses and changes nothing. A second run with no row still refuses.
 - `rm_app` can `UPDATE` only the `final` column of `swarm_recommendations`.
 - Production baseline: a live schema that differs from the snapshot blocks the first manifest publication.
 - Registry structurally enforced; execution under each role on a disposable database.
@@ -417,3 +433,17 @@ Before its first API call the page reads its own range from `/version.json` and 
 ### 13.5 Open question
 
 **T26, not decided here.** The API still reads the assembled site directory (`_static`) to report the served site's identity at `/version` and `/health`. Once the site switches on its own, that report describes whichever directory the API can see, which may not be the one `website-server` serves. The question is tracked on issue #1026. Until it is decided, the report stays as it is. **Decided by [D55](../decisions.md#d55) on 2026-09-25:** the API retires the `_static` mount and the `static` identity field; the site reports itself through `/version.json` and the API through `/api/version`. The work lands in wave 6.
+
+## 14. Amendments (2026-09-25)
+
+Decided with the owner on 2026-09-25 and recorded as [D55](../decisions.md#d55). Each row records what changed so the edit is auditable from this document alone.
+
+| clause | said before | says now |
+|---|---|---|
+| header | amended 2026-09-24 | also amended 2026-09-25 (this section) |
+| §3 | runtime roles lose `DELETE`/`TRUNCATE` on append-only tables only | only `rm_owner` may `DELETE` or `TRUNCATE`; no runtime role holds either on any table; runtime deletes become tombstones, expiry-filtered reads or upserts; security revocations stay immediately effective (D55 (6)) |
+| §4.3 | every production run requires the identity row | `bun run migrate` has one guarded first-run exception for a database with no identity row (§9.1, D55 (5)) |
+| §7 check 2 | denylist: `DELETE`/`TRUNCATE` on append-only tables | denylist: `DELETE` or `TRUNCATE` on any table |
+| §8.4 | "each supported release" unnamed | `SUPPORTED_RELEASES` is v0.5.0 alone (D55 (8)) |
+| §9.1 | grant transition revokes on append-only tables; the first migrate's identity precondition unstated | grant transition revokes on every table; the first migrate may run once with no identity row under `RM_ENV=prod`, an exact `SUPPORTED_RELEASES` ledger match, a typed `rm_owner` and an explicit `y`, with a receipt of the pre-identity state (D55 (5), (8)) |
+| §10 | denylist gate names append-only tables | denylist gate names every table; gates added for no runtime delete and for the first production migrate |

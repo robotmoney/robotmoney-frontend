@@ -4020,12 +4020,15 @@ route table and the response shapes.
 
 <a id="d55"></a>
 
-## D55 — Four owner calls: version reports, forged operators, judge levers, and who drives epochs (Lucas, 2026-09-25)
+## D55 — Eight owner calls: version reports, forged operators, judge levers, who drives epochs, the first production migrate, who may delete, 0072's label and the supported release (Lucas, 2026-09-25)
 
 **Status.** Accepted 2026-09-25; not yet implemented. Recorded from issue
 #1026, where each point was a question the earlier decisions left open or a
 place the specifications allowed something the owner does not want. Each call
 names the wave or package that implements it, so no wave has to guess.
+Amended the same day: decision 4 was corrected, because its first text listed
+deactivation among the scheduler's transitions, and decisions 5 to 8 were
+added.
 
 **Decision 1: the API stops reporting the site's identity (T26).** The API
 retires its `_static` mount and the `static` identity field it reports at
@@ -4058,11 +4061,21 @@ break and only adds a way to arm a test path in production. The spend fields
 were filled by the deleted model transport. The participant now makes the model
 call, so it is the only process that knows what the call cost.
 
-**Decision 4: only the system scheduler drives the epoch lifecycle.** The
-system scheduler is the only caller of the swarm lifecycle transitions: open,
-turnover, settlement and deactivation. No operator or admin early turnover
-exists. The operator admin token holds only the `admin` right, and every epoch
-lifecycle route refuses it.
+**Decision 4: the scheduler drives epochs; only an admin deactivates a
+subject.** The system scheduler is the only caller of the epoch lifecycle
+transitions: open, turnover and settlement (aggregate, request judging,
+finalize). It never deactivates a subject. The `epochs/*` lifecycle routes stay
+scheduler-only. No operator or admin early turnover exists. The operator admin
+token holds only the `admin` right, and every epoch lifecycle route refuses it.
+
+A subject's status is an admin subject edit under the `admin` right, and the
+scheduler's token cannot make it. Only an admin deactivates a subject. The
+deactivation closes the subject's open epoch in the same transaction that sets
+it inactive, recording absences as a boundary would, and opens no successor.
+The scheduler then settles that closed epoch from the `subject.changed` event.
+Activation is also an admin subject edit. It opens no session. The scheduler
+opens the first epoch from the `subject.changed` event.
+
 [`system-scheduler-spec.md`](technical/system-scheduler-spec.md) §13 records
 the edits to the spec. Today the epoch routes still admit the privileged admin
 credential. The refusal lands with the operator admin token's move into the
@@ -4072,7 +4085,78 @@ early turnover gave the operator a way to shorten a window members were
 promised, and it made the scheduler's timer depend on an event it did not
 cause. The guarantees that path was tested for still matter for a turnover
 this scheduler did not make, such as one a second scheduler made or one whose
-response was lost. The spec's gates now test those cases instead.
+response was lost. The spec's gates now test those cases instead. Stopping a
+subject is the opposite case. It is an owner's choice, not a clock event, so it
+belongs to the admin. A scheduler that could deactivate would let a clock
+fault silence a subject, and it would give the one credential that drives the
+clock a right it never needs.
+
+**Decision 5: the first production migrate may run once with no
+`deployment_identity` row.** Production runs v0.5.0, which predates the
+`deployment_identity` table (0063) and the schema manifest (0064). Every
+`bun run migrate` refuses a database with no identity row, and nothing else may
+run a migration. So production cannot reach the release that creates the row.
+One guarded exception closes the gap. `bun run migrate` accepts a database with
+no `deployment_identity` row, or no table, only when every one of these holds:
+- `RM_ENV=prod`;
+- the ledger's filename list is exactly equal to the filename list of one
+  `SUPPORTED_RELEASES` entry (decision 8);
+- the operator types the `rm_owner` password;
+- the operator answers an explicit `y`.
+
+Its receipt records the pre-identity state: that no identity row existed, the
+release the ledger matched, and that ledger's filename list. Production
+initialization then writes `production`
+([`smoke-production-spec.md`](technical/smoke-production-spec.md) §9.1). Every
+later run requires the row. A wave package implements the exception.
+*Why.* Without it, the first production upgrade has no legal path: the tool
+that creates the table refuses because the table is missing. A hand-run
+migration would skip the fence, the ledger and the receipt the migrate run
+provides (smoke spec §8.3). An exception keyed on the exact ledger of a known release cannot be reached from a
+partly migrated or hand-edited database. It requires `RM_ENV=prod`, so no stage
+tool can use it.
+
+**Decision 6: only `rm_owner` may `DELETE` or `TRUNCATE`.** No runtime role
+(`rm_app`, `rm_worker`, `rm_readonly`) holds `DELETE` or `TRUNCATE` on any
+table, append-only or not. Runtime code that deletes today is redesigned into
+one of three shapes:
+- a tombstone column that every read filters on;
+- a read that filters out expired rows, with pruning left to an `rm_owner` run;
+- an upsert that replaces the row in place.
+
+Security revocations stay immediately effective. A revoked key, token or
+membership is refused on the next request, because the revoking transaction
+writes the tombstone. A later prune never carries the revocation. Preflight's
+denylist widens from append-only tables to every table. A wave package
+implements the redesign and the grant change.
+*Why.* A runtime credential that can delete can erase history, and a list of
+protected tables is a list that can miss one. One rule with no list needs no
+upkeep. The three shapes keep every current delete's effect while leaving the
+row for audit.
+
+**Decision 7: migration 0072 is `compat: breaking`.** 0072's header said
+`additive`. The migration deletes the `swarm.*` `job_schedules` rows and the
+pending `swarm.*` jobs that code built at 0070 seeded and read. The smoke spec
+§8.4 says additive means no bootstrap row old code relies on is removed, so the
+label was wrong. The file's header now says `breaking`. A ledger that already
+recorded 0072 keeps `additive`, because the runner writes a ledger row once, at
+apply, and never rewrites it. On such a database the stale label changes no
+boot decision once 0079 is applied, because 0079, 0080 and 0081 are
+`breaking` and close rollback past 0072 by themselves. Production runs
+v0.5.0, which predates 0063, so it has not applied 0072 and will record the
+corrected label.
+*Why.* The label is a promise to older code. A wrong promise lets code at 0070
+boot and then schedule nothing, with no refusal to explain why.
+
+**Decision 8: v0.5.0 is the only supported upgrade source.**
+`SUPPORTED_RELEASES` lists v0.5.0 alone. It is the release production runs.
+An upgrade from any other release is neither tested nor supported. Decision
+5's ledger match reads this list, so the first-migrate exception accepts only a
+v0.5.0 ledger. Adding a release to the list takes a new decision.
+*Why.* Every supported release is a fixture, an upgrade test and a ledger the
+first-migrate exception must accept. No database will take a path from an
+older release, so each extra entry would be cost with no user.
 
 **What stays.** D54's version contract, D52's third-party gate, D53's deleted
-backend judge and the state guard on every transition are unchanged.
+backend judge, D47's rule that `rm_owner` is typed at the terminal and never
+stored, and the state guard on every transition are unchanged.
