@@ -57,6 +57,10 @@ export const DEMO_COMPOSE_PASSTHROUGH = [
   "FETCH_CACHE_DIR",
   "FLOOR_SEED_PATH",
   "PROJECTS_SOURCE",
+  // THE PAID COINGECKO KEY (issue #1047). Both compose files interpolate it
+  // into the three worker lanes, where projects.refresh_coins sends it to the
+  // Pro host. Without this entry an exported key reached no container.
+  "COINGECKO_API_KEY",
   // NO "RM_ENV". It is a first-class StackConfig field now (`rmEnv`,
   // scripts/stack/config.ts) resolved from the KIND of boot by
   // resolveStackRmEnv(), and buildComposeEnv() refuses to see it in the extras
