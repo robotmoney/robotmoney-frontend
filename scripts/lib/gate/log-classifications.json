@@ -199,6 +199,13 @@
     "reason": "nginx losing the api during database stalls and refused boots; follows from the database state."
   },
   {
+    "id": "known-driver-window-read-during-api-outage",
+    "match": "\\[window\\] session read failed \\(attempt <n>\\): GET /api/swarm/sessions/\\S+ -> HTTP (502|503|504); retrying|\\[window\\] session read failed \\(attempt \\d+\\): GET /api/swarm/sessions/\\S+ -> HTTP (502|503|504); retrying",
+    "class": "known-issue",
+    "issue": "1035",
+    "reason": "The host driver re-reading its open session while the api is saturated by analytics-ledger writes (production 2026-09-26 00:00 and 00:30-00:39); it retries without limit inside the window wait and never aborts the session. A symptom of the api outages issue 1035 causes."
+  },
+  {
     "id": "known-repair-gaps-dead",
     "match": "ops\\.repair_gaps\\) failed",
     "class": "known-issue",
