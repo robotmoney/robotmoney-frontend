@@ -389,10 +389,41 @@ test("each predictive-power figure carries its reading in words", async ({ page 
   expect(await tips.count()).toBeGreaterThan(10);
   const texts = await tips.allTextContents();
   for (const t of texts) expect(t).toMatch(/: (no reading|[−+]?\d\.\d\d)\./);
-  expect(texts.some((t) => t.includes("no relation beyond noise"))).toBe(true);
+  expect(texts.some((t) => t.includes("treated as noise"))).toBe(true);
+  // A forward figure says how far chance alone reaches over its horizon.
+  expect(texts.some((t) => /Chance alone reaches ±0\.\d\d here/.test(t))).toBe(true);
   // The notes read open under the table, every one of them.
   await expect(page.locator("#corr-notes")).toBeVisible();
   await expect(page.locator("#corr-notes")).toContainText("Effective independent observations");
+});
+
+// The history chart draws the index levels, 0 to 1, even when the history
+// carries percentiles: the percentile scale (HISTORY_ON_PERCENTILES in
+// regime.js) is held back until the brand owner has seen it.
+test("the regime history draws the index levels, 0 to 1, while the percentile scale is held back", async ({ page }) => {
+  await stubEnvironment(page);
+  const dto = loadRegimeStub();
+  for (const r of dto.history) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row = r as any;
+    row.compositePercentile = 0.5; row.macroPercentile = 0.5; row.onchainPercentile = 0.5; row.factorPercentile = 0.5;
+  }
+  await page.route("**/api/dashboards/regime-snapshots*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(dto) }));
+  await page.goto("/");
+  await navigate(page, "/regime");
+  await expect(page.locator("#history-sec .rr-area__y span")).toHaveText(["1.00", "0.75", "0.50", "0.25", "0.00"]);
+  await expect(page.locator("#history-sec .rv__lg b").first()).toHaveText(/^\d\.\d\d$/);
+});
+
+// The backtest table's first figure is a multiple, not dollars.
+test("the backtest table gives each strategy's result as a multiple", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/regime");
+  const market = page.locator(".rv__market:visible");
+  await expect(market.locator("thead th").nth(1)).toContainText("Multiple");
+  await expect(market.locator("tbody tr").first().locator("td").first()).toHaveText(/^\d+\.\d\d×$/);
 });
 
 // A link to a panel opens its tab: session pages link their market context
