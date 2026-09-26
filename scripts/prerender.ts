@@ -1,10 +1,11 @@
-import { metaFor } from "../frontend/public/assets/js/app/seo.js";
+import { renderMeta } from "../frontend/public/assets/js/app/seo.js";
 import { viewFor } from "../frontend/public/assets/js/app/routes.js";
 import { mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { ORIGIN as API_ORIGIN, endpointsForRoute, openApiPath } from "./lib/agent-endpoints.ts";
 import { assertContractInstallFresh } from "./lib/contract-freshness.ts";
 import { publishableFragment } from "./lib/prerender-view.ts";
+import { fetchRegimeLatest, regimeSnapshotHtml, withLiveRegime } from "./lib/regime-snapshot.ts";
 
 await assertContractInstallFresh();
 
@@ -38,6 +39,24 @@ const locMatches = sitemapText.matchAll(new RegExp(`<loc>${ORIGIN_PATTERN}([^<]*
 const routes = Array.from(locMatches, (m) => m[1] || "/");
 
 const shell = await Bun.file(shellPath).text();
+
+// The regime's live reading, written into /regime's machine-readers block and
+// its Dataset (scripts/lib/regime-snapshot.ts). PRERENDER_REGIME picks the
+// source: unset reads production's API, "off" skips it, a path to a .json file
+// reads a saved snapshot ({latest} or the DTO), and anything else is an origin.
+// A read that fails or takes too long leaves the page as it was, never the
+// build broken.
+async function regimeSource() {
+  const src = process.env.PRERENDER_REGIME ?? "";
+  if (src === "off") return null;
+  if (src.endsWith(".json")) {
+    const body = JSON.parse(await Bun.file(src).text());
+    return body?.latest ?? null;
+  }
+  return fetchRegimeLatest(src || API_ORIGIN);
+}
+const regimeLatest = await regimeSource();
+console.log(regimeLatest ? `Regime reading of ${regimeLatest.date} written into /regime` : "Regime reading not available; /regime prerendered without it");
 
 function escapeAttr(str: string): string {
   return str.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
@@ -87,6 +106,7 @@ function routeDataBlock(route: string): string {
     })
     .join("\n");
 
+  const snapshot = route === "/regime" ? regimeSnapshotHtml(regimeLatest) : "";
   const lead = endpoints.length
     ? `<p>The text of this page is in the HTML you are reading. Its live figures are filled in by the browser from these public JSON endpoints, which need no key and answer a plain GET:</p>\n        <ul>\n${items}\n        </ul>`
     : `<p>Everything on this page is in the HTML you are reading.</p>`;
@@ -96,6 +116,7 @@ function routeDataBlock(route: string): string {
     '      <section id="agent-data">',
     "        <h2>Data for machine readers</h2>",
     `        ${lead}`,
+    ...(snapshot ? [`        ${snapshot}`] : []),
     `        <p>Full API description: <a href="${API_ORIGIN}/openapi.json">${API_ORIGIN}/openapi.json</a>. Site index for LLM readers: <a href="${API_ORIGIN}/llms.txt">${API_ORIGIN}/llms.txt</a>. Source: <a href="https://github.com/robotmoney/robotmoney-frontend">github.com/robotmoney/robotmoney-frontend</a>.</p>`,
     "      </section>",
     "    </noscript>",
@@ -151,20 +172,15 @@ async function prerenderView(html: string, route: string): Promise<string> {
 }
 
 /** The shell with one route's metadata substituted in. The view mount is still
- *  empty at this point; prerenderView fills it. */
+ *  empty at this point; prerenderView fills it. seo.js's `renderMeta` does the
+ *  head, the same function the api process's shell fallback uses, so the
+ *  prerendered page carries the route's structured data and og:type too. */
 function shellFor(route: string): string {
-  const m = metaFor(route);
-  const url = ORIGIN + (route === "/" ? "/" : route);
-  return shell
-    .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(m.title)}</title>`)
-    .replace(/(<meta name="description" content=")[^"]*(")/, `$1${escapeAttr(m.description)}$2`)
-    .replace(/(<link rel="canonical" href=")[^"]*(")/, `$1${url}$2`)
-    .replace(/(<meta property="og:title" content=")[^"]*(")/, `$1${escapeAttr(m.title)}$2`)
-    .replace(/(<meta property="og:description" content=")[^"]*(")/, `$1${escapeAttr(m.description)}$2`)
-    .replace(/(<meta property="og:url" content=")[^"]*(")/, `$1${url}$2`)
-    .replace(/(<meta name="twitter:title" content=")[^"]*(")/, `$1${escapeAttr(m.title)}$2`)
-    .replace(/(<meta name="twitter:description" content=")[^"]*(")/, `$1${escapeAttr(m.description)}$2`)
-    .replace("<!--AGENT-DATA-->", () => routeDataBlock(route));
+  let html = renderMeta(shell, route).replace("<!--AGENT-DATA-->", () => routeDataBlock(route));
+  if (route === "/regime" && regimeLatest) {
+    html = html.replace(/(<script type="application\/ld\+json" data-route-ld>)([\s\S]*?)(<\/script>)/, (_m, a, ld, b) => a + withLiveRegime(ld, regimeLatest) + b);
+  }
+  return html;
 }
 
 // The shell to answer an UNKNOWN client route with, originally written for

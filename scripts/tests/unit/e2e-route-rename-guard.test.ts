@@ -81,7 +81,9 @@ function extractSpecRouteRefs(): RouteRef[] {
 
       const callMatch = lines[i].match(CALL_PATTERN);
       if (!callMatch) continue;
-      const route = callMatch[1];
+      // The route the app resolves: a "#section" or "?query" suffix picks a
+      // place on the page, not the page.
+      const route = callMatch[1].replace(/[?#].*$/, "");
       if (!isRoutePath(route)) continue;
       refs.push({ file, line: i + 1, route, testTitle: currentTitle });
     }

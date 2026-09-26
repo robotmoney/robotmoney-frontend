@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Robot Money research</title>
+    <link>https://robotmoney.network/blog</link>
+    <description>Research and announcements from Robot Money: market regime signals, treasury allocation backtests, DeFi exploit case studies and partnership news.</description>
+    <language>en</language>
+    <lastBuildDate>Thu, 24 Sep 2026 00:00:00 +0000</lastBuildDate>
+    <atom:link href="https://robotmoney.network/blog/feed.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Channel divergence: is macro→crypto breaking?</title>
+      <link>https://robotmoney.network/research/channel-divergence</link>
+      <guid isPermaLink="true">https://robotmoney.network/research/channel-divergence</guid>
+      <pubDate>Fri, 12 Jun 2026 00:00:00 +0000</pubDate>
+      <category>Research</category>
+      <description>Three transmission indicators that measure whether risk-on macro is still reaching crypto. Bitcoin's beta to risk-appetite has collapsed from 3.3 to 0.7 since March 2026, BTC/Nasdaq sits at the 1st percentile of its 3-year window, and the stablecoin-vs-Nasdaq flow proxy has turned sharply negative. Three angles, same conclusion: the channel is breaking right now.</description>
+    </item>
+    <item>
+      <title>Late-cycle signals: how late in the rally are we?</title>
+      <link>https://robotmoney.network/research/late-cycle-signals</link>
+      <guid isPermaLink="true">https://robotmoney.network/research/late-cycle-signals</guid>
+      <pubDate>Fri, 12 Jun 2026 00:00:00 +0000</pubDate>
+      <category>Research</category>
+      <description>Four slow-moving gauges inspired by BofA's 'signposts of a market peak' checklist, rebuilt from free data: index concentration (SPY/RSP), M&amp;A activity (SEC S-4 filing counts), broker-dealer margin debt, and University of Michigan consumer sentiment. The current configuration is unusual: late-cycle in equities (concentration high, margin debt growing 20%/yr, M&amp;A elevated) but consumer sentiment at multi-decade lows.</description>
+    </item>
+    <item>
+      <title>AI ate the bull market</title>
+      <link>https://robotmoney.network/blog/ai-ate-the-bull-market</link>
+      <guid isPermaLink="true">https://robotmoney.network/blog/ai-ate-the-bull-market</guid>
+      <pubDate>Fri, 12 Jun 2026 00:00:00 +0000</pubDate>
+      <category>Research</category>
+      <description>Stocks are up a lot in 2025-2026. Bitcoin is not. That hasn't been true in any previous cycle. Seven free-data indicators tell the same story from different angles: beta collapse, BTC/Nasdaq at the 1st percentile, stables-flow turning negative, index concentration at extremes, leveraged speculators on top of recession-level consumer confidence. A plain-English walkthrough with explanatory charts.</description>
+    </item>
+    <item>
+      <title>Adding an equity factor panel: how the 3-panel regime classifier improves on the legacy 2-panel</title>
+      <link>https://robotmoney.network/blog/regime-eq-vs-base</link>
+      <guid isPermaLink="true">https://robotmoney.network/blog/regime-eq-vs-base</guid>
+      <pubDate>Sun, 31 May 2026 00:00:00 +0000</pubDate>
+      <category>Research</category>
+      <description>Side-by-side backtest of the current 3-panel regime classifier (macro + on-chain + equity factor) and the legacy 2-panel classifier. Same 8 years, same point-in-time weights. The 3-panel composite wins on every portfolio, and the factor panel alone produces the best single-panel Sharpe in two of three tests.</description>
+    </item>
+    <item>
+      <title>Backtesting honestly: what survives when you remove hindsight</title>
+      <link>https://robotmoney.network/blog/honest-backtesting-weights</link>
+      <guid isPermaLink="true">https://robotmoney.network/blog/honest-backtesting-weights</guid>
+      <pubDate>Fri, 15 May 2026 00:00:00 +0000</pubDate>
+      <category>Research</category>
+      <description>Our regime model weights indicators by inverse correlation. We discovered the backtest computed those weights with full-history hindsight, so we rebuilt it point-in-time and re-ran every comparison. Here's what held up, what didn't, and why the honest version is the one worth trusting.</description>
+    </item>
+    <item>
+      <title>Conservative vs aggressive: combining macro and on-chain regime signals</title>
+      <link>https://robotmoney.network/blog/regime-conservative-aggressive</link>
+      <guid isPermaLink="true">https://robotmoney.network/blog/regime-conservative-aggressive</guid>
+      <pubDate>Wed, 13 May 2026 00:00:00 +0000</pubDate>
+      <category>Research</category>
+      <description>Most regime classifiers average macro and on-chain panels into a single composite. We backtest two alternatives across 8 years of ETH/cash allocation: combine them conservatively (any panel off → off) or aggressively (any panel on → on, unless contradicted).</description>
+    </item>
+    <item>
+      <title>Treasury Allocation for On-Chain Businesses</title>
+      <link>https://robotmoney.network/blog/treasury-allocation</link>
+      <guid isPermaLink="true">https://robotmoney.network/blog/treasury-allocation</guid>
+      <pubDate>Tue, 12 May 2026 00:00:00 +0000</pubDate>
+      <category>Research</category>
+      <description>8-year backtest comparing regime-based allocation, HODL, and stable yield across a full market cycle.</description>
+    </item>
+    <item>
+      <title>Regime Detection</title>
+      <link>https://robotmoney.network/regime-detection</link>
+      <guid isPermaLink="true">https://robotmoney.network/regime-detection</guid>
+      <pubDate>Fri, 24 Apr 2026 00:00:00 +0000</pubDate>
+      <category>Research</category>
+      <description>Prior art, methods, and data sources for risk-on / risk-off regime classification.</description>
+    </item>
+    <item>
+      <title>Smart Contract Risks</title>
+      <link>https://robotmoney.network/smart-contract-risks</link>
+      <guid isPermaLink="true">https://robotmoney.network/smart-contract-risks</guid>
+      <pubDate>Thu, 02 Apr 2026 00:00:00 +0000</pubDate>
+      <category>Research</category>
+      <description>A field guide to how DeFi vaults get exploited: chronological case studies for protocol developers.</description>
+    </item>
+    <item>
+      <title>peaq Announces Partnership with Robot Money</title>
+      <link>https://robotmoney.network/blog/peaq-partnership</link>
+      <guid isPermaLink="true">https://robotmoney.network/blog/peaq-partnership</guid>
+      <pubDate>Fri, 27 Mar 2026 00:00:00 +0000</pubDate>
+      <category>Partnership</category>
+      <description>peaq announced a partnership with Robot Money to bring autonomous treasury management to 3.3M+ machines on the peaq network. The first robot, a Hong Kong robo-farm, has already invested.</description>
+    </item>
+    <item>
+      <title>The Institute for Zero-Human Companies and Generative Ventures Are Building Robot Money</title>
+      <link>https://robotmoney.network/blog/announcement</link>
+      <guid isPermaLink="true">https://robotmoney.network/blog/announcement</guid>
+      <pubDate>Wed, 11 Mar 2026 00:00:00 +0000</pubDate>
+      <category>Announcement</category>
+      <description>Autonomous Treasury Management for the Agent Economy. A partnership between ZHC Institute and Lex Sokolin's Generative Ventures to build a managed vault for AI agents.</description>
+    </item>
+  </channel>
+</rss>

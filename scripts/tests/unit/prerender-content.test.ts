@@ -19,10 +19,11 @@
 // against a committed fixture: the claim is about what a deploy serves, and a
 // fixture keeps passing long after the injection stops happening.
 import { describe, expect, test } from "bun:test";
-import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { viewFor } from "../../../frontend/public/assets/js/app/routes.js";
+import { researchRoutes } from "../../../frontend/public/assets/js/app/seo.js";
 import { publishableFragment } from "../../lib/prerender-view.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
@@ -33,7 +34,12 @@ const ROUTES = Array.from(sitemap.matchAll(/<loc>https:\/\/robotmoney\.network([
 
 const dir = mkdtempSync(join(tmpdir(), "rm-prerender-"));
 cpSync(publicDir, dir, { recursive: true });
-const run = Bun.spawnSync(["bun", "scripts/prerender.ts"], { cwd: repoRoot, env: { ...process.env, PRERENDER_DIR: dir } });
+// The regime's reading comes from the goldens' saved snapshot, never the
+// network: a unit test that read production's API would pass or fail with it.
+const REGIME_GOLDEN = JSON.parse(readFileSync(join(repoRoot, "goldens/api-goldens.json"), "utf8")).routes["/api/dashboards/regime-snapshots"];
+const regimeFile = join(dir, "..", `rm-regime-${process.pid}.json`);
+writeFileSync(regimeFile, JSON.stringify(REGIME_GOLDEN));
+const run = Bun.spawnSync(["bun", "scripts/prerender.ts"], { cwd: repoRoot, env: { ...process.env, PRERENDER_DIR: dir, PRERENDER_REGIME: regimeFile } });
 
 const fileFor = (route: string) => (route === "/" ? join(dir, "index.html") : join(dir, route.slice(1), "index.html"));
 const htmlFor = (route: string) => readFileSync(fileFor(route), "utf8");
@@ -114,6 +120,47 @@ describe("prerendered routes carry their own content", () => {
       expect(readableText(html), `${route} lost its heading`).toContain(marker);
       expect(readableChars(html), `${route} is thin`).toBeGreaterThan(1200);
     }
+  });
+});
+
+describe("research pages ship their structured data", () => {
+  // The JSON-LD is only worth having where a crawler reads it, which is the
+  // prerendered page. renderMeta() writing it in a unit test proved nothing
+  // about the deploy: prerender.ts ran its own head substitutions and shipped
+  // none of it.
+  const ld = (html: string) => Array.from(html.matchAll(/<script type="application\/ld\+json" data-route-ld>([\s\S]*?)<\/script>/g), (m) => m[1]);
+
+  test("every research route carries exactly one parseable graph", () => {
+    const routes = researchRoutes();
+    expect(routes.length).toBeGreaterThan(10);
+    for (const route of routes) {
+      const blocks = ld(htmlFor(route));
+      expect(blocks.length, `${route} JSON-LD blocks`).toBe(1);
+      const doc = JSON.parse(blocks[0]);
+      expect(Array.isArray(doc["@graph"]), `${route} @graph`).toBe(true);
+      expect(doc["@graph"].some((n: { "@type"?: string }) => n["@type"] === "BreadcrumbList"), `${route} breadcrumbs`).toBe(true);
+    }
+  });
+
+  // The regime's live reading reaches a reader that runs no JavaScript: in the
+  // machine-readers block as text and tables, and on the Dataset as values.
+  test("/regime carries the day's reading, its indicators and its correlations", () => {
+    const html = htmlFor("/regime");
+    const latest = REGIME_GOLDEN.latest;
+    const noscript = html.slice(html.indexOf('<section id="agent-data">'));
+    expect(noscript).toContain("The regime on ");
+    expect(noscript).toContain(`Composite ${latest.composite.toFixed(2)}`);
+    expect((noscript.match(/regime\/indicators#/g) || []).length).toBe(latest.indicators.length);
+    expect(noscript).toContain("Predictive power and alignment");
+    const doc = JSON.parse(ld(html)[0]!);
+    const ds = doc["@graph"].find((n: { "@type"?: string }) => n["@type"] === "Dataset");
+    expect(ds.dateModified).toBe(latest.date);
+    const composite = ds.variableMeasured.find((v: { name: string }) => v.name === "Composite");
+    expect(composite.value).toBeCloseTo(latest.composite, 3);
+  });
+
+  test("a page that is not research carries none", () => {
+    for (const route of ["/", "/allocation", "/swarm"]) expect(ld(htmlFor(route)).length, route).toBe(0);
   });
 });
 
@@ -215,6 +262,7 @@ describe("what gets inlined is safe to inline", () => {
 });
 
 test("cleanup", () => {
+  rmSync(regimeFile, { force: true });
   rmSync(dir, { recursive: true, force: true });
   expect(true).toBe(true);
 });

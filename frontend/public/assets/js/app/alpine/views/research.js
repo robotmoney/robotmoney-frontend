@@ -1,7 +1,7 @@
 // Alpine factory for the /research/* signal views (channel-divergence /
 // late-cycle-signals). Moved verbatim from the monolithic views.js (finding 025).
 import { api, ROUTES, path } from "../../lib/api.js";
-import { PALETTE, GRID_COLOR, rgba, monoAxis } from "../../lib/chart-theme.js";
+import { PALETTE, monoAxis } from "../../lib/chart-theme.js";
 
 export function registerResearchView(Alpine) {
   // ── Research signal (channel-divergence / late-cycle-signals) ─────────────
@@ -82,14 +82,13 @@ export function registerResearchView(Alpine) {
         type: "line",
         data: {
           labels: pts.map((p) => p.date),
+          // A line with no area under it: cyan is a line, never a mass.
           datasets: [{ label: this.payload.series.label, data: pts.map((p) => p.value),
-            borderColor: PALETTE.accent, backgroundColor: rgba(PALETTE.accent, 0.12), fill: true, tension: 0.25, pointRadius: 0, borderWidth: 2 }],
+            borderColor: PALETTE.accent, fill: false, tension: 0.25, pointRadius: 0, borderWidth: 2 }],
         },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
-          scales: { y: { grid: { color: GRID_COLOR }, ticks: { color: PALETTE.textMuted } },
-            x: { grid: { display: false }, ticks: { color: PALETTE.textMuted, maxTicksLimit: 8 } } },
-          plugins: { legend: { labels: { color: PALETTE.textMuted } } },
+          scales: { y: monoAxis(), x: monoAxis({ ticks: { maxTicksLimit: 8 } }) },
         },
       });
     },
