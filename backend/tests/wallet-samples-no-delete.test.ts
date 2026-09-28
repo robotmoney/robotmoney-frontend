@@ -47,22 +47,37 @@
 // UNIQUE (original_id)). (5) also asserts its discrimination directly: the gap
 // reports computed WITHOUT the tombstone filter disagree with the old world.
 //
+//   7. The live sampler (worker/handlers/wallet.ts) revives a key the repair
+//      superseded as a fresh row: a new id, price_usd and snapshot identity
+//      reset, as the old delete-and-insert let its INSERT create one. A live
+//      row keeps its id and every column the sampler never writes.
+//
 // THE EVIDENCE GRANT. The pass copies a day's live rows into
-// wallet_{balance,sleeve}_sample_evidence before it rewrites them. No migration
-// grants rm_worker INSERT on those tables (0054's allowlist omits them, the
-// same omission 0061 fixed for wallet_backfill_state), so today the rewrite of
-// any populated incomplete day fails 42501 in production, delete or no delete.
-// This file grants it on its own database copy so the rest of the path can be
-// proved; the grant belongs in the wave's migration (reported to the
-// integrator), after which the GRANT below is a no-op.
+// wallet_{balance,sleeve}_sample_evidence before it rewrites them, as
+// rm_worker. The shipped grant set must give rm_worker INSERT on both tables.
+// 0054's allowlist omitted them (the same omission 0061 fixed for
+// wallet_backfill_state), so the grant belongs in w5-no-runtime-delete's
+// migration and backend/schema/grants.sql. The first test below reads the
+// privilege as the template shipped it, BEFORE this file grants anything, and
+// fails until that migration lands: the production privilege set is asserted,
+// never assumed. The GRANT in beforeAll then only keeps the rest of the path
+// provable on a tree without that migration; once the migration ships it is a
+// no-op.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import postgres from "postgres";
 import { sql, type DbHandle } from "../src/db/client.ts";
+import { decodeAggregate3Calls, encodeAggregate3Result } from "../src/chain/base-rpc-client.ts";
 import type { TrackedAsset } from "../src/config.ts";
 import { resolveTrackedAssets } from "../src/config.ts";
-import { fetchPersistedWalletBalances } from "../src/chain/wallet-balances.ts";
+import {
+  fetchPersistedWalletBalances,
+  fetchWalletBalances,
+  _resetWalletBalancesCacheForTests,
+} from "../src/chain/wallet-balances.ts";
+import { _resetTokenPriceCacheForTests } from "../src/chain/token-prices.ts";
 import { getWalletSleeves, _resetWalletSleevesCacheForTests } from "../src/chain/wallet-sleeves.ts";
 import {
+  MAX_PERSISTED_PRICE_AGE_MS,
   persistedFallbackWalletPriceReader,
   type ChainAmount,
   type KeyedAssetRead,
@@ -72,6 +87,7 @@ import { detectGaps } from "../src/ops/gap-detector.ts";
 import { getSeriesDef, type SeriesDef } from "../src/ops/series-registry.ts";
 import { backfillWalletDay, planWalletBackfill, type WalletBackfillDeps } from "../src/ops/wallet-backfill.ts";
 import { resolveWalletSnapshotManifest } from "../src/ops/wallet-snapshot-manifest.ts";
+import { sampleWalletBalances, sampleWalletSleeves } from "../src/worker/handlers/wallet.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
@@ -251,7 +267,10 @@ const seriesDef = (key: string): SeriesDef => {
 /**
  * Every reader of the two tables, under the configuration currently set:
  *   - chain/wallet-balances.ts: the persisted balances payload (latest per
- *     symbol) and its history (the quarantine-aware day series);
+ *     symbol) and its history (the quarantine-aware day series), and the live
+ *     payload's stale degrade (lastPersistedHolding), forced by failing every
+ *     chain and price read so each tracked symbol falls back to its last
+ *     persisted row;
  *   - chain/wallet-sleeves.ts: the per-wallet sleeves payload;
  *   - chain/wallet-valuation.ts: the persisted-price fallback, forced by a
  *     provider refusal (a gecko read under the stub price source with no
@@ -283,6 +302,7 @@ async function readAll(): Promise<Record<string, unknown>> {
   }
   return {
     persistedBalances: await fetchPersistedWalletBalances(),
+    staleDegrade: await staleDegradedHoldings(),
     sleeves: await getWalletSleeves(),
     fallback,
     balanceGaps: await detectGaps(seriesDef("wallet_balance_samples"), sql, READ_NOW),
@@ -309,7 +329,53 @@ async function readAll(): Promise<Record<string, unknown>> {
   };
 }
 
+/**
+ * fetchWalletBalances with every outbound read failing: the RPC batch throws
+ * (every chain leg fails) and every price host throws (the config leg fails
+ * too), so valueAsset degrades each tracked symbol to lastPersistedHolding —
+ * the live path's only read of wallet_balance_samples. Only what that read
+ * decides is kept: the history in the same payload is loadHistory, compared
+ * through fetchPersistedWalletBalances already.
+ */
+async function staleDegradedHoldings(): Promise<Record<string, unknown>> {
+  const saved = {
+    fetch: globalThis.fetch,
+    consoleError: console.error,
+    rpc: process.env.BASE_RPC_SOURCE,
+    price: process.env.PRICE_SOURCE,
+  };
+  globalThis.fetch = (async () => {
+    throw new Error("wallet-samples-no-delete: every outbound read fails");
+  }) as unknown as typeof fetch;
+  console.error = () => {};
+  process.env.BASE_RPC_SOURCE = "live";
+  process.env.PRICE_SOURCE = "live";
+  _resetWalletBalancesCacheForTests();
+  _resetTokenPriceCacheForTests();
+  try {
+    const { holdings } = await fetchWalletBalances();
+    const out: Record<string, unknown> = {};
+    for (const h of holdings) {
+      out[h.symbol] = { amount: h.amount, priceUsd: h.priceUsd, valueUsd: h.valueUsd, provenance: h.provenance };
+    }
+    return out;
+  } finally {
+    globalThis.fetch = saved.fetch;
+    console.error = saved.consoleError;
+    if (saved.rpc === undefined) delete process.env.BASE_RPC_SOURCE;
+    else process.env.BASE_RPC_SOURCE = saved.rpc;
+    if (saved.price === undefined) delete process.env.PRICE_SOURCE;
+    else process.env.PRICE_SOURCE = saved.price;
+    _resetWalletBalancesCacheForTests();
+    _resetTokenPriceCacheForTests();
+  }
+}
+
 const WORKER_PASSWORD = "rm_worker_ci_password";
+const EVIDENCE_TABLES = ["wallet_balance_sample_evidence", "wallet_sleeve_sample_evidence"] as const;
+/** rm_worker's INSERT on each evidence table as the template shipped it, read
+ *  before this file grants anything. */
+const shippedEvidenceInsert: Record<string, boolean> = {};
 let worker: postgres.Sql<{}>;
 
 beforeAll(async () => {
@@ -319,7 +385,11 @@ beforeAll(async () => {
   // D55 (6)'s end state on this file's own copy: rm_worker holds no DELETE or
   // TRUNCATE on either sample table.
   await sql`REVOKE DELETE, TRUNCATE ON wallet_balance_samples, wallet_sleeve_samples FROM rm_worker`;
-  // See THE EVIDENCE GRANT in the header.
+  // See THE EVIDENCE GRANT in the header: read the shipped privilege first.
+  for (const table of EVIDENCE_TABLES) {
+    const [row] = await sql<{ ins: boolean }[]>`SELECT has_table_privilege('rm_worker', ${table}, 'INSERT') AS ins`;
+    shippedEvidenceInsert[table] = row!.ins;
+  }
   await sql`GRANT INSERT ON wallet_balance_sample_evidence, wallet_sleeve_sample_evidence TO rm_worker`;
   const [{ db }] = await sql<{ db: string }[]>`SELECT current_database() AS db`;
   const url = new URL(process.env.DATABASE_URL!);
@@ -344,9 +414,26 @@ afterAll(async () => {
   await worker?.end({ timeout: 5 });
 });
 
+describe("the shipped grant set", () => {
+  test("gives rm_worker INSERT on both evidence tables, which every rewrite of an incomplete day copies into first", () => {
+    // Red until w5-no-runtime-delete's migration and grants.sql grant it: the
+    // repair pass then fails 42501 at its evidence copy for every incomplete
+    // day in production (backend/src/ops/wallet-backfill.ts, the evidence
+    // INSERT ... SELECT in repairResolvedDay).
+    expect(shippedEvidenceInsert).toEqual({
+      wallet_balance_sample_evidence: true,
+      wallet_sleeve_sample_evidence: true,
+    });
+  });
+});
+
 describe("the wallet repair pass as rm_worker with DELETE revoked", () => {
-  const T1 = Date.now() - 180_000;
-  const T2 = Date.now() - 60_000;
+  // Block stamps for the two configurations, fixed when the first pass runs
+  // (not at collection) so the rows stay well inside the persisted-price
+  // fallback's MAX_PERSISTED_PRICE_AGE_MS window when the golden reads them.
+  // The golden asserts that as a positive control.
+  let T1 = 0;
+  let T2 = 0;
   let afterPass1: Awaited<ReturnType<typeof tableState>>;
   let afterPass2: Awaited<ReturnType<typeof tableState>>;
 
@@ -375,6 +462,8 @@ describe("the wallet repair pass as rm_worker with DELETE revoked", () => {
     const before = await tableState(D);
     expect(before.balances.length + before.sleeves.length).toBe(0);
 
+    T1 = Date.now() - 60_000;
+    T2 = Date.now() - 30_000;
     useConfig("A");
     const result = await backfillWalletDay(worker, D, passDeps(5, T1), PASS_NOW);
     expect(result).toMatchObject({ ok: true, status: "filled" });
@@ -509,6 +598,24 @@ describe("the wallet repair pass as rm_worker with DELETE revoked", () => {
       useConfig(config);
       tombstone[config] = await readAll();
     }
+    // Positive control for the valuation fallback's half of the golden: the
+    // superseded aUSDC row is still young enough, AFTER every tombstone read
+    // ran, that an unfiltered recentPersistedPrice would have served it. Without
+    // this the fallback could refuse in both worlds only because the row aged
+    // out, and the comparison would prove nothing about the filter.
+    const [ausdcRow] = await sql<{ sampled_at: Date; superseded: boolean }[]>`
+      SELECT sampled_at, superseded_at IS NOT NULL AS superseded
+        FROM wallet_balance_samples WHERE sample_date = ${D} AND symbol = 'aUSDC'
+    `;
+    expect(ausdcRow!.superseded).toBe(true);
+    expect(Date.now() - ausdcRow!.sampled_at.getTime()).toBeLessThan(MAX_PERSISTED_PRICE_AGE_MS);
+    // And the stale degrade's half: aUSDC's newest row is the superseded one
+    // on D, so an unfiltered lastPersistedHolding would serve pass 3's amount.
+    const [newestAusdc] = await sql<{ sample_date: string }[]>`
+      SELECT sample_date::text FROM wallet_balance_samples
+       WHERE symbol = 'aUSDC' ORDER BY sample_date DESC LIMIT 1
+    `;
+    expect(newestAusdc!.sample_date).toBe(D);
     // The red control's input: the balances gap report as it would read
     // WITHOUT the tombstone filter, under configuration A (which still expects
     // aUSDC and the third wallet's sleeves).
@@ -569,8 +676,12 @@ describe("the wallet repair pass as rm_worker with DELETE revoked", () => {
     expect(gapAtD(unfiltered.balanceGaps)).toBe(false);
     expect(gapAtD(unfiltered.sleeveGaps)).toBe(false);
     // And the persisted-price fallback for aUSDC refuses in both worlds (the
-    // superseded row is recent enough that an unfiltered read would serve it).
+    // positive control above shows an unfiltered read would have served it).
     expect((tombstone.A.fallback as Record<string, unknown>).aUSDC).toHaveProperty("error");
+    // The stale degrade never serves the superseded aUSDC version (amount 5).
+    const staleAusdc = (tombstone.A.staleDegrade as Record<string, { amount: number | null; provenance: string }>).aUSDC!;
+    expect(staleAusdc.provenance).toBe("stale");
+    expect(staleAusdc.amount).not.toBe(5);
   });
 });
 
@@ -580,8 +691,15 @@ describe("the published-snapshot guard still refuses a repair that would touch a
 
   /** Publish a complete run whose one constituent is `symbol`'s balance row on
    *  `day`, staged under the reserved run id exactly as a publisher would.
-   *  `superseded` stages that row already tombstoned — the finalize guard
-   *  (rm_wallet_aum_snapshot_finalize_guard, 0038) counts it all the same. */
+   *  `superseded` stages that row already tombstoned. That state exists only
+   *  because rm_wallet_aum_snapshot_finalize_guard (0038, reproduced in
+   *  backend/schema/snapshot.sql) counts constituents with no superseded_at
+   *  filter, a gap no code under backend/src reaches today (nothing publishes
+   *  a run). It is the one shape in which the repair's upsert, not its
+   *  evidence copy, is the first statement to touch a published row, so the
+   *  case pins that the constituent guard still refuses there. When a migration
+   *  closes the finalize-guard gap, publishRun(…, true) fails 23514 and the
+   *  superseded case must become the proof that the run cannot be published. */
   async function publishRun(day: string, symbol: string, superseded: boolean): Promise<string> {
     const [reserved] = await sql<{ run_id: string }[]>`
       SELECT nextval(pg_get_serial_sequence('wallet_aum_snapshot_runs', 'run_id'))::text AS run_id
@@ -648,4 +766,129 @@ describe("the published-snapshot guard still refuses a repair that would touch a
       expect(await tableState(day)).toEqual(before);
     });
   }
+});
+
+
+describe("the live sampler revives a superseded key as a fresh row", () => {
+  // Hermetic: the stub RPC and price sources, as asset-prices-dual-write runs
+  // the sampler, plus an in-process transport (mockTransport below) for the
+  // reads the samplers still make under them (pool discovery, the sleeves'
+  // batched NAV call). The sampler picks today's date itself; each case reads
+  // it off the sampler's own return value.
+  const saved = { rpc: process.env.BASE_RPC_SOURCE, price: process.env.PRICE_SOURCE, fetch: globalThis.fetch };
+  beforeAll(() => {
+    process.env.BASE_RPC_SOURCE = "stub";
+    process.env.PRICE_SOURCE = "stub";
+    mockTransport();
+  });
+  afterAll(() => {
+    globalThis.fetch = saved.fetch;
+    if (saved.rpc === undefined) delete process.env.BASE_RPC_SOURCE;
+    else process.env.BASE_RPC_SOURCE = saved.rpc;
+    if (saved.price === undefined) delete process.env.PRICE_SOURCE;
+    else process.env.PRICE_SOURCE = saved.price;
+  });
+
+  test("balances: a superseded row comes back with a new id and price_usd reset; a live row keeps both", async () => {
+    useConfig("A");
+    const first = (await sampleWalletBalances({})) as { sampleDate: string };
+    const today = first.sampleDate;
+    // As the repair would leave it: USDC superseded after it was archived
+    // under its id (evidence holds UNIQUE (original_id)), and a price_usd from
+    // the old version. WETH stays live with a price_usd the sampler never writes.
+    const [usdc] = await sql<{ id: string }[]>`
+      UPDATE wallet_balance_samples SET superseded_at = now(), price_usd = 1
+       WHERE sample_date = ${today} AND symbol = 'USDC' RETURNING id::text
+    `;
+    await sql`
+      INSERT INTO wallet_balance_sample_evidence
+        (original_id, sample_date, symbol, amount, price_usd, value_usd, provenance,
+         strategy_nav_idle_only, sampled_at, evidence_reason)
+      SELECT id, sample_date, symbol, amount, price_usd, value_usd, provenance,
+             strategy_nav_idle_only, sampled_at, 'incomplete-snapshot-replacement'
+        FROM wallet_balance_samples WHERE id = ${usdc!.id}
+    `;
+    const [weth] = await sql<{ id: string }[]>`
+      UPDATE wallet_balance_samples SET price_usd = 7
+       WHERE sample_date = ${today} AND symbol = 'WETH' RETURNING id::text
+    `;
+
+    const second = (await sampleWalletBalances({})) as { sampleDate: string };
+    expect(second.sampleDate).toBe(today);
+
+    const rows = await sql<{ symbol: string; id: string; price_usd: string | null; superseded: boolean }[]>`
+      SELECT symbol, id::text, price_usd::text, superseded_at IS NOT NULL AS superseded
+        FROM wallet_balance_samples WHERE sample_date = ${today} AND symbol IN ('USDC', 'WETH')
+       ORDER BY symbol
+    `;
+    const bySymbol = new Map(rows.map((r) => [r.symbol, r]));
+    expect(bySymbol.get("USDC")).toMatchObject({ price_usd: null, superseded: false });
+    expect(bySymbol.get("USDC")!.id).not.toBe(usdc!.id);
+    expect(bySymbol.get("WETH")).toEqual({ symbol: "WETH", id: weth!.id, price_usd: "7", superseded: false });
+  });
+
+  /** The samplers still reach the network under the stub sources (the
+   *  balance sampler's pool discovery, the sleeve sampler's batched round-2
+   *  NAV call), so they get a transport that answers every Multicall3
+   *  sub-call and every price request, as chain-indexer-samples mocks it, and
+   *  refuses anything else. Nothing leaves the process. */
+  function mockTransport(): void {
+    const word = (n: bigint): string => "0x" + n.toString(16).padStart(64, "0");
+    const answers: Record<string, string> = {
+      "0x70a08231": word(1_000_000n), // balanceOf
+      "0x07a2d13a": word(1_000_000n), // convertToAssets
+      "0x4d2301cc": word(50_000_000_000_000_000n), // getEthBalance
+    };
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("geckoterminal.com") || u.includes("finance.yahoo.com")) {
+        const addrs = (u.split("/token_price/")[1] ?? "x").toLowerCase().split(",");
+        return new Response(
+          JSON.stringify({ data: { attributes: { token_prices: Object.fromEntries(addrs.map((a) => [a, "10.0"])) } } }),
+          { status: 200 },
+        );
+      }
+      const body = JSON.parse(String(init?.body)) as { method: string; params: { data: string }[] };
+      if (body.method === "eth_call" && body.params[0]!.data.slice(0, 10) === "0x82ad56cb") {
+        const results = decodeAggregate3Calls(body.params[0]!.data).map((c) => {
+          const rd = answers[c.callData.slice(0, 10)];
+          return rd ? { success: true, returnData: rd } : { success: false, returnData: "0x" };
+        });
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: encodeAggregate3Result(results) }), { status: 200 });
+      }
+      throw new Error(`wallet-samples-no-delete: unexpected outbound call ${body.method}`);
+    }) as unknown as typeof fetch;
+  }
+
+  test("sleeves: a superseded row comes back with a new id and price_usd reset; a live row keeps both", async () => {
+    useConfig("A");
+    const first = (await sampleWalletSleeves({})) as { sampleDate: string };
+    const today = first.sampleDate;
+    const live = await sql<{ id: string; wallet_address: string; symbol: string }[]>`
+      SELECT id::text, wallet_address, symbol FROM wallet_sleeve_samples
+       WHERE sample_date = ${today} AND superseded_at IS NULL
+       ORDER BY wallet_address COLLATE "C", symbol COLLATE "C" LIMIT 2
+    `;
+    expect(live).toHaveLength(2);
+    const target = live[0]!;
+    const kept = live[1]!;
+    await sql`UPDATE wallet_sleeve_samples SET superseded_at = now(), price_usd = 1 WHERE id = ${target.id}`;
+    await sql`UPDATE wallet_sleeve_samples SET price_usd = 7 WHERE id = ${kept.id}`;
+
+    const second = (await sampleWalletSleeves({})) as { sampleDate: string };
+    expect(second.sampleDate).toBe(today);
+
+    const read = async (k: { wallet_address: string; symbol: string }) => {
+      const [row] = await sql<{ id: string; price_usd: string | null; superseded: boolean }[]>`
+        SELECT id::text, price_usd::text, superseded_at IS NOT NULL AS superseded
+          FROM wallet_sleeve_samples
+         WHERE sample_date = ${today} AND wallet_address = ${k.wallet_address} AND symbol = ${k.symbol}
+      `;
+      return row!;
+    };
+    const revived = await read(target);
+    expect(revived).toMatchObject({ price_usd: null, superseded: false });
+    expect(revived.id).not.toBe(target.id);
+    expect(await read(kept)).toEqual({ id: kept.id, price_usd: "7", superseded: false });
+  });
 });
