@@ -40,6 +40,7 @@ import { APPEND_ONLY_TABLES as POSTFLIGHT_ROSTER } from "../scripts/upgrades/0.2
 import { findDenylistViolations, RUNTIME_DELETE_REVOKED_TABLES } from "../src/db/preflight.ts";
 import { loadSnapshot } from "../src/db/schema-snapshot.ts";
 import { MIN_RETENTION_DAYS, runPrune } from "../scripts/prune.ts";
+import { restoreRoles, saveRoles, type SavedRole } from "./fixtures/releases/release-fixture.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject } from "./support/epoch-fixtures.ts";
 import { withTargetLock } from "./support/target-lock.ts";
@@ -52,10 +53,15 @@ type Runtime = (typeof RUNTIME)[number];
 const logins = new Map<Runtime, postgres.Sql<{}>>();
 /** A real rm_owner login, the one `bun run prune` opens with the typed password. */
 let owner: postgres.Sql<{}>;
-let ownerCanLogin: boolean | null = null;
+/** The four roles as this file found them: cluster-wide, so put back exactly. */
+let savedRoles: SavedRole[] = [];
 let databaseUrl = "";
 
 beforeAll(async () => {
+  // rm_owner, rm_app and rm_worker are cluster-wide and backend `bun test` runs
+  // every file in one process: record their LOGIN attribute and stored password
+  // and put back exactly those (rule (j): no pass may depend on file order).
+  savedRoles = await saveRoles(sql as unknown as postgres.Sql<{}>);
   const [{ db }] = (await sql`SELECT current_database() AS db`) as unknown as { db: string }[];
   const url = new URL(process.env.DATABASE_URL!);
   url.pathname = `/${db}`;
@@ -66,12 +72,6 @@ beforeAll(async () => {
     url.password = PASSWORD;
     logins.set(role, postgres(url.toString(), { max: 1, onnotice: () => {} }));
   }
-  // rm_owner is cluster-wide and another file reads its LOGIN attribute:
-  // record it and put back exactly that value.
-  const [row] = (await sql`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`) as unknown as {
-    rolcanlogin: boolean;
-  }[];
-  ownerCanLogin = row?.rolcanlogin ?? null;
   await sql.unsafe(`ALTER ROLE rm_owner LOGIN PASSWORD '${PASSWORD}'`);
   url.username = "rm_owner";
   url.password = PASSWORD;
@@ -81,7 +81,7 @@ beforeAll(async () => {
 afterAll(async () => {
   for (const login of logins.values()) await login.end({ timeout: 5 });
   await owner?.end({ timeout: 5 });
-  await sql.unsafe(`ALTER ROLE rm_owner ${ownerCanLogin === false ? "NOLOGIN" : "LOGIN"} PASSWORD NULL`);
+  await restoreRoles(sql as unknown as postgres.Sql<{}>, savedRoles);
 });
 
 async function sqlstate(db: postgres.Sql<{}>, statement: string): Promise<string | null> {
@@ -249,6 +249,35 @@ test("grant reconciliation revokes DELETE and TRUNCATE from every runtime role o
     expect(await sqlstate(logins.get("rm_worker")!, "DELETE FROM jobs WHERE false")).toBe("42501");
   } finally {
     await sql.unsafe("REVOKE DELETE, TRUNCATE ON swarm_stream_events, jobs FROM rm_app, rm_worker, rm_readonly");
+  }
+});
+
+test("grant reconciliation also takes DELETE and TRUNCATE back on a view — every relation kind check 2 inspects", async () => {
+  // Preflight check 2 refuses either privilege on a table, a partitioned table,
+  // a view (an updatable view passes a DELETE through) or a foreign table. A
+  // sweep narrower than that would let a hand-run grant on a view refuse every
+  // boot while `bun run migrate` never took it back.
+  const grantsSql = (await loadSnapshot()).grantsSql;
+  const view = "rm_retention_planted_view";
+  await asOwner(async (tx) => tx.unsafe(`CREATE VIEW ${view} AS SELECT id, kind FROM jobs`));
+  const held = async (): Promise<string[]> =>
+    ((await sql`
+      SELECT r.rolname || ':' || p.privilege AS item
+        FROM (VALUES ('rm_app'), ('rm_worker'), ('rm_readonly')) AS r(rolname)
+        CROSS JOIN (VALUES ('DELETE'), ('TRUNCATE')) AS p(privilege)
+       WHERE has_table_privilege(r.rolname, ${"public." + view}, p.privilege)
+       ORDER BY 1`) as unknown as { item: string }[]).map((r) => r.item);
+  try {
+    await asOwner(async (tx) => tx.unsafe(`GRANT DELETE, TRUNCATE ON ${view} TO rm_app, rm_worker, rm_readonly`));
+    expect((await held()).length).toBe(6);
+    expect(
+      (await findDenylistViolations(sql, ["rm_app"])).filter((v) => v.object === view),
+    ).toEqual([{ rule: "append_only_write", role: "rm_app", object: view }]);
+    await asOwner(async (tx) => tx.unsafe(grantsSql));
+    expect(await held()).toEqual([]);
+    expect(await sqlstate(logins.get("rm_app")!, `DELETE FROM ${view} WHERE false`)).toBe("42501");
+  } finally {
+    await asOwner(async (tx) => tx.unsafe(`DROP VIEW ${view}`));
   }
 });
 
