@@ -212,7 +212,15 @@ export const ROUTES = {
     // an operator would drive by hand.
     scheduler: {
       fullRead: "/api/swarm/scheduler/full-read", // GET → §3's four parts + the cursor, one consistent snapshot
-      subscribe: "/api/swarm/scheduler/subscribe", // GET ?cursor=N → text/event-stream: event | keepalive (carries head) | resync
+      // WebSocket upgrade (D55 (11)): GET ?cursor=N, and NOTHING else in the
+      // URL — the scheduler token rides only in the upgrade's
+      // `Authorization: Bearer` header, and a URL carrying any other parameter
+      // is refused (400). JSON text frames: event | keepalive (carries the
+      // head) | resync. Every keepalive re-authorizes the token; the socket
+      // closes 4000 after a resync (cursor above the head, below the retained
+      // floor, a backlog past its bound, a database error) and 4001 when the
+      // token was revoked or rotated. A plain GET with no upgrade is 426.
+      subscribe: "/api/swarm/scheduler/subscribe",
       // No job-ack route: §6.3 (amended 2026-09-24, D52) — "The stream carries
       // change events only ... there is no ad-hoc job kind for the API to push,
       // ack or redeliver."

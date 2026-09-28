@@ -298,3 +298,21 @@ export interface SchedulerHealth {
   /** Timers currently held, for the operator's view. Not a readiness input. */
   timers: { boundaries: number; deadlines: number };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The socket's close codes (D55 (11))
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The close codes the API ends the scheduler stream's socket with — declared
+ * in backend/src/swarm/domain.ts, which this process may not import (§7), and
+ * held to that declaration by scripts/tests/unit/system-scheduler-wire-parity.test.ts.
+ * The client treats every close the same way (full read, rebuild: §3.1); the
+ * code only says why, in the log.
+ */
+export const SCHEDULER_STREAM_CLOSE = {
+  /** Sent after the one `resync` frame: the API cannot serve from where the subscriber stands. */
+  resync: 4000,
+  /** The token was revoked or rotated while the socket was open; no frame precedes it. */
+  tokenRevoked: 4001,
+} as const;

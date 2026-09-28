@@ -24,14 +24,21 @@
 //
 // WHAT THIS FILE DOES NOT PROVE. It does not prove the real API emits these
 // frames — that is the backend file's job — and it proves nothing about a
-// real socket beyond the HTTP transport's own subscribe, driven here through
-// an injected fetch. Everything here is module evidence against fakes; the
-// integration suite runs the same runtime over real sockets.
+// real socket beyond the transport's own subscribe, driven here through an
+// injected socket, and one real WebSocket server at the end (D55 (11): the
+// token rides in the upgrade's Authorization header, never the URL, and
+// pings are answered). Everything else here is module evidence against fakes;
+// the integration suite runs the same runtime over real sockets.
 import { describe, expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseSseFrame, SchedulerHttpApi } from "../../lib/system-scheduler/api-client.ts";
+import {
+  parseStreamMessage,
+  SchedulerHttpApi,
+  type OpenStreamSocket,
+  type StreamSocket,
+} from "../../lib/system-scheduler/api-client.ts";
 import { SchedulerRuntime } from "../../lib/system-scheduler/runtime.ts";
 import type { FetchLike, SchedulerFullRead } from "../../lib/system-scheduler/types.ts";
 import {
@@ -341,8 +348,12 @@ describe("the stream carries change events only (§6.3, amended 2026-09-24)", ()
   // run, so the API recorded as done work nothing had done.
 
   test("a `job` frame on the wire parses to nothing", () => {
-    const wire = `event: job\ndata: ${JSON.stringify({ kind: "reconcile_subject", target: "sub-1", idempotencyKey: "k1" })}`;
-    expect(parseSseFrame(wire)).toBeNull();
+    const wire = JSON.stringify({ type: "job", kind: "reconcile_subject", target: "sub-1", idempotencyKey: "k1" });
+    expect(parseStreamMessage(wire)).toBeNull();
+    // Nor does anything that is not one of the three §6.3 frames.
+    expect(parseStreamMessage("not json")).toBeNull();
+    expect(parseStreamMessage(JSON.stringify({ kind: "no type" }))).toBeNull();
+    expect(parseStreamMessage(JSON.stringify({ type: "keepalive", head: 9 }))).toEqual({ type: "keepalive", head: 9 });
   });
 
   test("the client has no job surface: no ack call, no job hook, no job memory", () => {
@@ -380,36 +391,47 @@ describe("the stream carries change events only (§6.3, amended 2026-09-24)", ()
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * A `fetch` that serves the subscribe route with a stream the test writes to,
- * and aborts it the way a real connection aborts.
+ * An injected socket opener: every socket the transport opens, with the URL
+ * and headers it was opened with, and hooks the test drives — `open()`,
+ * `write(frame)`, `end(code, reason)` from the API's side. `closedByClient`
+ * records a close the transport made itself.
  */
-function socketFetch() {
-  const opened: { cursor: number; signal: AbortSignal; write(frame: string): void; end(): void }[] = [];
-  const fetchImpl = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const url = new URL(String(input));
-    let controller!: ReadableStreamDefaultController<Uint8Array>;
-    const body = new ReadableStream<Uint8Array>({
-      start(c) {
-        controller = c;
+function fakeSockets(opts: { autoOpen?: boolean } = {}) {
+  const opened: {
+    url: URL;
+    cursor: number;
+    headers: Record<string, string>;
+    closedByClient: boolean;
+    open(): void;
+    write(frame: Record<string, unknown>): void;
+    end(code?: number, reason?: string): void;
+  }[] = [];
+  const openSocket: OpenStreamSocket = (url, headers) => {
+    const socket: StreamSocket = {
+      onopen: null,
+      onmessage: null,
+      onclose: null,
+      onerror: null,
+      close() {
+        entry.closedByClient = true;
+        queueMicrotask(() => socket.onclose?.({ code: 1000, reason: "client" }));
       },
-    });
-    const signal = init!.signal!;
-    signal.addEventListener("abort", () => {
-      try {
-        controller.error(new Error("aborted"));
-      } catch {
-        /* already closed */
-      }
-    });
-    opened.push({
-      cursor: Number(url.searchParams.get("cursor")),
-      signal,
-      write: (frame) => controller.enqueue(new TextEncoder().encode(frame)),
-      end: () => controller.close(),
-    });
-    return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    };
+    const u = new URL(url);
+    const entry = {
+      url: u,
+      cursor: Number(u.searchParams.get("cursor")),
+      headers,
+      closedByClient: false,
+      open: () => socket.onopen?.(),
+      write: (frame: Record<string, unknown>) => socket.onmessage?.({ data: JSON.stringify(frame) }),
+      end: (code = 1006, reason = "") => socket.onclose?.({ code, reason }),
+    };
+    opened.push(entry);
+    if (opts.autoOpen !== false) queueMicrotask(() => socket.onopen?.());
+    return socket;
   };
-  return { opened, fetchImpl };
+  return { opened, openSocket };
 }
 
 describe("SchedulerHttpApi.subscribe replaces the connection (§3.1, §6.3)", () => {
@@ -418,9 +440,21 @@ describe("SchedulerHttpApi.subscribe replaces the connection (§3.1, §6.3)", ()
   // keepalive) re-read the world and stayed on the old socket. On a stall that
   // socket never spoke again, and the watchdog re-read once per budget forever.
 
-  test("a second subscribe aborts the first socket and opens a new one at the new cursor", async () => {
-    const { opened, fetchImpl } = socketFetch();
-    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", fetchImpl });
+  test("the socket is a WebSocket URL carrying ONLY the cursor, and the token rides in the Authorization header (D55 (11))", async () => {
+    const { opened, openSocket } = fakeSockets();
+    const http = new SchedulerHttpApi({ apiUrl: "http://api:8787", token: "rmat_t", openSocket });
+    http.attachStream({ onFrame: () => {}, onClosed: () => {} });
+    await http.subscribe(5);
+    expect(opened[0].url.protocol).toBe("ws:");
+    expect(opened[0].url.pathname).toBe(ROUTES.swarm.scheduler.subscribe);
+    expect([...opened[0].url.searchParams.keys()]).toEqual(["cursor"]);
+    expect(opened[0].url.href).not.toContain("rmat_t");
+    expect(opened[0].headers).toEqual({ Authorization: "Bearer rmat_t" });
+  });
+
+  test("a second subscribe closes the first socket and opens a new one at the new cursor", async () => {
+    const { opened, openSocket } = fakeSockets();
+    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", openSocket });
     const frames: StreamFrame[] = [];
     const closed: string[] = [];
     http.attachStream({ onFrame: (f) => void frames.push(f), onClosed: (r) => void closed.push(r) });
@@ -430,86 +464,98 @@ describe("SchedulerHttpApi.subscribe replaces the connection (§3.1, §6.3)", ()
     await drain();
 
     expect(opened.map((o) => o.cursor)).toEqual([5, 9]);
-    expect(opened[0].signal.aborted).toBe(true);
-    expect(opened[1].signal.aborted).toBe(false);
+    expect(opened[0].closedByClient).toBe(true);
+    expect(opened[1].closedByClient).toBe(false);
     expect(http.streamOpen).toBe(true);
     // Replacing a socket is deliberate, and reporting it as a drop would turn
     // every rebuild into a reconnect.
     expect(closed).toEqual([]);
 
-    opened[1].write(`event: keepalive\ndata: {"head":9}\n\n`);
+    opened[1].write({ type: "keepalive", head: 9 });
+    opened[0].write({ type: "keepalive", head: 5 }); // the replaced socket is not listened to
     await drain();
     expect(frames).toEqual([{ type: "keepalive", head: 9 }]);
   });
 
-  test("only the CURRENT socket's end is reported, exactly once", async () => {
-    const { opened, fetchImpl } = socketFetch();
-    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", fetchImpl });
+  test("only the CURRENT socket's close is reported, exactly once, with its code", async () => {
+    const { opened, openSocket } = fakeSockets();
+    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", openSocket });
     const closed: string[] = [];
     http.attachStream({ onFrame: () => {}, onClosed: (r) => void closed.push(r) });
     await http.subscribe(1);
     await http.subscribe(2);
-    opened[1].end();
+    opened[1].end(4001, "token revoked or rotated");
     await drain();
-    expect(closed).toEqual(["stream ended"]);
+    expect(closed).toEqual(["closed 4001: token revoked or rotated"]);
     expect(http.streamOpen).toBe(false);
   });
 
+  test("a resync frame is delivered BEFORE the close that follows it", async () => {
+    const { opened, openSocket } = fakeSockets();
+    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", openSocket });
+    const seen: string[] = [];
+    http.attachStream({
+      onFrame: async (f) => {
+        await Bun.sleep(5); // a slow consumer: the close must still wait for it
+        seen.push(`frame:${f.type}`);
+      },
+      onClosed: (r) => void seen.push(`closed:${r}`),
+    });
+    await http.subscribe(1);
+    opened[0].write({ type: "event", seq: 2, kind: "subject.changed", subjectId: null, sessionId: null, payload: {} });
+    opened[0].write({ type: "resync", reason: "buffer_overflow", head: 9 });
+    opened[0].end(4000, "resync: buffer_overflow");
+    await Bun.sleep(50);
+    await drain();
+    expect(seen).toEqual(["frame:event", "frame:resync", "closed:closed 4000: resync: buffer_overflow"]);
+  });
+
   test("closeStream ends the socket silently", async () => {
-    const { opened, fetchImpl } = socketFetch();
-    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", fetchImpl });
+    const { opened, openSocket } = fakeSockets();
+    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", openSocket });
     const closed: string[] = [];
     http.attachStream({ onFrame: () => {}, onClosed: (r) => void closed.push(r) });
     await http.subscribe(1);
     http.closeStream();
     await drain();
-    expect(opened[0].signal.aborted).toBe(true);
+    expect(opened[0].closedByClient).toBe(true);
     expect(closed).toEqual([]);
   });
 
-  test("a refused subscribe throws and leaves no socket", async () => {
-    const http = new SchedulerHttpApi({
-      apiUrl: "http://api",
-      token: "rmat_t",
-      fetchImpl: async () => new Response("{}", { status: 503 }),
-    });
+  test("a refused upgrade throws and leaves no socket", async () => {
+    const { opened, openSocket } = fakeSockets({ autoOpen: false });
+    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", openSocket });
     http.attachStream({ onFrame: () => {}, onClosed: () => {} });
-    await expect(http.subscribe(1)).rejects.toThrow("HTTP 503");
+    const pending = http.subscribe(1);
+    await drain();
+    opened[0].end(1002, "");
+    await expect(pending).rejects.toThrow("closed before it opened");
     expect(http.streamOpen).toBe(false);
   });
 
   test("a subscribe with nowhere to deliver frames refuses rather than dropping them", async () => {
-    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", fetchImpl: socketFetch().fetchImpl });
+    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", openSocket: fakeSockets().openSocket });
     await expect(http.subscribe(1)).rejects.toThrow("attachStream");
   });
 
-  // The defect these pin: subscribe awaited its response headers with only the
-  // abort signal, so an API that accepted the connection and never answered
-  // left the consumer's rebuild pending for ever — not current, so the
-  // keepalive watchdog had nothing to compare, and every recovery path waiting
-  // on that rebuild. The runtime test further down shows the consequence.
+  // The defect these pin: subscribe awaited its connection with no bound, so
+  // an API that accepted the connection and never answered left the
+  // consumer's rebuild pending for ever — not current, so the keepalive
+  // watchdog had nothing to compare, and every recovery path waiting on that
+  // rebuild. The runtime test further down shows the consequence.
 
-  test("response headers that never arrive reject within the request ceiling, and leave no socket", async () => {
-    let signal: AbortSignal | undefined;
-    const http = new SchedulerHttpApi({
-      apiUrl: "http://api",
-      token: "rmat_t",
-      timeoutMs: 50,
-      fetchImpl: (_input, init) =>
-        new Promise<Response>((_resolve, reject) => {
-          signal = init!.signal!;
-          signal.addEventListener("abort", () => reject(new Error("aborted")));
-        }),
-    });
+  test("a socket that never opens rejects within the request ceiling, and leaves no socket", async () => {
+    const { opened, openSocket } = fakeSockets({ autoOpen: false });
+    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", timeoutMs: 50, openSocket });
     http.attachStream({ onFrame: () => {}, onClosed: () => {} });
     const started = Date.now();
-    await expect(http.subscribe(1)).rejects.toThrow("no response headers within 50ms");
+    await expect(http.subscribe(1)).rejects.toThrow("did not open within 50ms");
     expect(Date.now() - started).toBeLessThan(2_000);
-    expect(signal!.aborted).toBe(true);
+    expect(opened[0].closedByClient).toBe(true);
     expect(http.streamOpen).toBe(false);
   });
 
-  test("the same, over a REAL socket: a server that accepts and never answers", async () => {
+  test("the same, over a REAL socket: a server that accepts and never answers the upgrade", async () => {
     const server = Bun.serve({
       port: 0,
       // Accept, read the request, never send a status line.
@@ -518,27 +564,108 @@ describe("SchedulerHttpApi.subscribe replaces the connection (§3.1, §6.3)", ()
     try {
       const http = new SchedulerHttpApi({ apiUrl: `http://127.0.0.1:${server.port}`, token: "rmat_t", timeoutMs: 100 });
       http.attachStream({ onFrame: () => {}, onClosed: () => {} });
-      await expect(http.subscribe(1)).rejects.toThrow("no response headers within 100ms");
+      await expect(http.subscribe(1)).rejects.toThrow("did not open within 100ms");
       expect(http.streamOpen).toBe(false);
     } finally {
       server.stop(true);
     }
   });
 
-  test("the ceiling bounds only the headers: an open stream outlives it, and still delivers", async () => {
-    const { opened, fetchImpl } = socketFetch();
-    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", timeoutMs: 50, fetchImpl });
+  test("the ceiling bounds only the open: an open socket outlives it, and still delivers", async () => {
+    const { opened, openSocket } = fakeSockets();
+    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", timeoutMs: 50, openSocket });
     const frames: StreamFrame[] = [];
     const closed: string[] = [];
     http.attachStream({ onFrame: (f) => void frames.push(f), onClosed: (r) => void closed.push(r) });
     await http.subscribe(3);
     await Bun.sleep(200);
-    expect(opened[0].signal.aborted).toBe(false);
+    expect(opened[0].closedByClient).toBe(false);
     expect(http.streamOpen).toBe(true);
     expect(closed).toEqual([]);
-    opened[0].write(`event: keepalive\ndata: {"head":3}\n\n`);
+    opened[0].write({ type: "keepalive", head: 3 });
     await drain();
     expect(frames).toEqual([{ type: "keepalive", head: 3 }]);
+  });
+});
+
+describe("over a REAL WebSocket (D55 (11))", () => {
+  test("the upgrade carries the token in Authorization and nothing in the URL; frames arrive; pings are answered past the idle timeout", async () => {
+    const seen: { url: string; authorization: string | null; xToken: string | null }[] = [];
+    const server = Bun.serve<{ n: number }, never>({
+      port: 0,
+      fetch(req, srv) {
+        seen.push({ url: req.url, authorization: req.headers.get("authorization"), xToken: req.headers.get("x-automation-token") });
+        return srv.upgrade(req, { data: { n: 0 } }) ? undefined : new Response("no", { status: 400 });
+      },
+      websocket: {
+        // The server pings an idle peer and closes one that does not answer
+        // within the idle timeout. The client sends nothing of its own, so
+        // surviving several timeouts is the proof it answers pings.
+        idleTimeout: 1,
+        sendPings: true,
+        open(ws) {
+          ws.send(JSON.stringify({ type: "keepalive", head: 4 }));
+        },
+        message() {},
+      },
+    });
+    try {
+      const http = new SchedulerHttpApi({ apiUrl: `http://127.0.0.1:${server.port}`, token: "rmat_real", timeoutMs: 2_000 });
+      const frames: StreamFrame[] = [];
+      const closed: string[] = [];
+      http.attachStream({ onFrame: (f) => void frames.push(f), onClosed: (r) => void closed.push(r) });
+      await http.subscribe(4);
+      await Bun.sleep(3_500);
+      expect(frames).toEqual([{ type: "keepalive", head: 4 }]);
+      expect(closed).toEqual([]);
+      expect(http.streamOpen).toBe(true);
+      expect(seen).toHaveLength(1);
+      const u = new URL(seen[0].url);
+      expect([...u.searchParams.entries()]).toEqual([["cursor", "4"]]);
+      expect(seen[0].url).not.toContain("rmat_real");
+      expect(seen[0].authorization).toBe("Bearer rmat_real");
+      expect(seen[0].xToken).toBeNull();
+      http.closeStream();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("RED CONTROL for the ping case: a peer that completes the upgrade and never answers a ping is closed by the same server config", async () => {
+    // Without this, surviving the idle timeout above could mean the timeout
+    // never fired. A raw TCP peer that upgrades and then reads nothing and
+    // writes nothing — so no pong — is cut within a few idle periods.
+    let closedAt = 0;
+    const server = Bun.serve<{ n: number }, never>({
+      port: 0,
+      fetch: (req, srv) => (srv.upgrade(req, { data: { n: 0 } }) ? undefined : new Response("no", { status: 400 })),
+      websocket: {
+        idleTimeout: 1,
+        sendPings: true,
+        message() {},
+        close() {
+          closedAt = Date.now();
+        },
+      },
+    });
+    const { connect } = await import("node:net");
+    const started = Date.now();
+    const peer = connect(server.port!, "127.0.0.1", () => {
+      peer.write(
+        "GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+          "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+      );
+    });
+    peer.on("data", () => {});
+    peer.on("error", () => {});
+    try {
+      for (let i = 0; i < 100 && closedAt === 0; i++) await Bun.sleep(50);
+      expect(closedAt, "the server must close a peer that never answers its pings").toBeGreaterThan(0);
+      expect(closedAt - started).toBeLessThan(5_000);
+    } finally {
+      peer.destroy();
+      server.stop(true);
+    }
   });
 });
 
@@ -771,45 +898,38 @@ describe("the runtime: a stale copy never fires (§3.1, §10)", () => {
 
 function httpApiFetch() {
   let hang = false;
-  const subscribes: { cursor: number; signal: AbortSignal; hung: boolean }[] = [];
+  const subscribes: { cursor: number; closedByClient: () => boolean; hung: boolean }[] = [];
   const fullReads: number[] = [];
-  const fetchImpl: FetchLike = async (input, init) => {
+  const fetchImpl: FetchLike = async (input) => {
     const url = new URL(String(input));
-    const signal = init!.signal!;
     if (url.pathname === ROUTES.swarm.scheduler.fullRead) {
       fullReads.push(fullReads.length + 1);
       const body: SchedulerFullRead = { subjects: [], collecting: [], settling: [], cursor: 7 };
       return Response.json(body);
     }
-    if (url.pathname === ROUTES.swarm.scheduler.subscribe) {
-      const cursor = Number(url.searchParams.get("cursor"));
-      if (hang) {
-        // The connection is accepted and the status line never comes.
-        subscribes.push({ cursor, signal, hung: true });
-        return new Promise<Response>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(new Error("aborted")));
-        });
-      }
-      subscribes.push({ cursor, signal, hung: false });
-      let controller!: ReadableStreamDefaultController<Uint8Array>;
-      const body = new ReadableStream<Uint8Array>({
-        start(c) {
-          controller = c;
-        },
-      });
-      signal.addEventListener("abort", () => {
-        try {
-          controller.error(new Error("aborted"));
-        } catch {
-          /* already closed */
-        }
-      });
-      return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
-    }
     return Response.json({ error: "not_found" }, { status: 404 });
+  };
+  const openSocket: OpenStreamSocket = (url) => {
+    const cursor = Number(new URL(url).searchParams.get("cursor"));
+    let closedByClient = false;
+    const hung = hang;
+    const socket: StreamSocket = {
+      onopen: null,
+      onmessage: null,
+      onclose: null,
+      onerror: null,
+      close() {
+        closedByClient = true;
+      },
+    };
+    subscribes.push({ cursor, closedByClient: () => closedByClient, hung });
+    // A hung upgrade: the connection is accepted and never opens.
+    if (!hung) queueMicrotask(() => socket.onopen?.());
+    return socket;
   };
   return {
     fetchImpl,
+    openSocket,
     subscribes,
     fullReads,
     setHang: (on: boolean) => {
@@ -819,10 +939,16 @@ function httpApiFetch() {
 }
 
 describe("the runtime: a subscribe that never answers is a drop, not a wedge (§6.3)", () => {
-  test("HUNG SUBSCRIBE: the watchdog's rebuild fails at the headers bound and a reconnect lands on a live socket", async () => {
+  test("HUNG SUBSCRIBE: the watchdog's rebuild fails at the open bound and a reconnect lands on a live socket", async () => {
     const HEADERS_MS = 60;
     const net = httpApiFetch();
-    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", timeoutMs: HEADERS_MS, fetchImpl: net.fetchImpl });
+    const http = new SchedulerHttpApi({
+      apiUrl: "http://api",
+      token: "rmat_t",
+      timeoutMs: HEADERS_MS,
+      fetchImpl: net.fetchImpl,
+      openSocket: net.openSocket,
+    });
     const timers = new FakeTimers(T0);
     const logs: string[] = [];
     const runtime = new SchedulerRuntime(http, {
@@ -838,18 +964,18 @@ describe("the runtime: a subscribe that never answers is a drop, not a wedge (§
       expect(net.subscribes).toHaveLength(1);
 
       // The socket goes quiet, and from now on the API accepts a subscribe
-      // and never sends its headers.
+      // and never answers its upgrade.
       net.setHang(true);
       await timers.advanceTo(T0 + BUDGET + WATCHDOG);
       expect(net.subscribes).toHaveLength(2);
       expect(net.subscribes[1].hung).toBe(true);
       expect(runtime.consumer.current).toBe(false);
 
-      // Real time, because the headers bound is the transport's own timer.
+      // Real time, because the open bound is the transport's own timer.
       await Bun.sleep(HEADERS_MS * 4);
       await drain();
-      expect(net.subscribes[1].signal.aborted).toBe(true);
-      expect(logs.some((l) => l.includes(`no response headers within ${HEADERS_MS}ms`))).toBe(true);
+      expect(net.subscribes[1].closedByClient()).toBe(true);
+      expect(logs.some((l) => l.includes(`did not open within ${HEADERS_MS}ms`))).toBe(true);
 
       // The rejection became a dropped connection, so a reconnect is waiting
       // on its backoff. The API answers again.
@@ -860,7 +986,7 @@ describe("the runtime: a subscribe that never answers is a drop, not a wedge (§
       expect(runtime.consumer.rebuilds.map((r) => r.trigger)).toEqual(["start", "dropped_connection"]);
       expect(net.subscribes).toHaveLength(3);
       expect(net.subscribes[2]).toMatchObject({ hung: false, cursor: 7 });
-      expect(net.subscribes[2].signal.aborted).toBe(false);
+      expect(net.subscribes[2].closedByClient()).toBe(false);
       expect(http.streamOpen).toBe(true);
       expect(runtime.consumer.current).toBe(true);
       expect(runtime.clock.health.streamSynchronized).toBe(true);

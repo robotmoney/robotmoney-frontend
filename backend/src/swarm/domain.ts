@@ -4213,8 +4213,10 @@ export async function retainedFloor(h: DbHandle = sql): Promise<number | null> {
  * the subscriber stands, and every one is SAID rather than skipped over:
  *
  *   "If the API cannot serve from the requested cursor — its buffer for this
- *    subscriber overflowed, or the cursor is above the log's head — it says so
- *    ... The API never silently skips."
+ *    subscriber overflowed, the cursor is below the retained floor
+ *    (`log_truncated`), or the cursor is above the log's head — it sends one
+ *    `resync` frame and closes the connection ... The API never silently
+ *    skips."
  *
  * `cursor_ahead_of_head` — the subscriber claims to have applied an event this
  * API has not committed. Nothing can be served from there. Answering with an
@@ -4222,12 +4224,13 @@ export async function retainedFloor(h: DbHandle = sql): Promise<number | null> {
  * exactly the silent skip.
  *
  * `log_truncated` — the next event this subscriber needs is below the retained
- * floor, pruned by rm_owner under D53 (2)'s retention rule, and is gone.
- * Serving from the floor instead would skip the missing ones, silently.
+ * floor, pruned by the manual, receipted `rm_owner` command (`bun run prune`,
+ * which keeps at least a 7-day window, D55 (12)), and is gone. Serving from the
+ * floor instead would skip the missing ones, silently.
  *
- * `buffer_overflow` — this connection's outbound buffer filled because the
- * subscriber stopped reading. Dropping frames to make room would be a skip, so
- * the connection says so and closes.
+ * `buffer_overflow` — this socket's outbound backlog passed its bound because
+ * the subscriber stopped reading (D55 (11)). Dropping frames to make room would
+ * be a skip, so the connection says so and closes.
  *
  * `unavailable` — the API could not read the log or the counter (a database
  * error). It cannot say what the subscriber missed, so it cannot claim the
@@ -4266,8 +4269,9 @@ export async function resyncReasonFor(cursor: number, h: DbHandle = sql): Promis
  */
 export interface StreamOptions {
   /**
-   * How often a keepalive goes out when nothing else has (§6.3's "silent
-   * failure detection"). It carries the head sequence, so it is also the only
+   * How often a keepalive goes out when nothing else has (§6.3's "The
+   * keepalive carries the head sequence"), and how often the token is
+   * re-authorized against the store, busy or quiet. The keepalive is the only
    * thing that can reveal the loss of the last event before a quiet period.
    */
   keepaliveMs?: number;
@@ -4281,258 +4285,274 @@ export interface StreamOptions {
    */
   pollMs?: number;
   /**
-   * How many frames this connection's own queue may hold unread before it
-   * counts as overflowed (§6.3). Past it the connection sends `resync` with
-   * reason `buffer_overflow` and closes, rather than dropping or skipping
-   * anything.
+   * The bound on this socket's outbound backlog, in bytes (D55 (11): "The API
+   * watches the socket's outbound buffered amount. When a subscriber stops
+   * reading and that backlog passes its bound, the API sends one `resync`
+   * frame and closes the socket. It never drops an event to make room.").
    *
-   * THIS IS NOT WHAT BOUNDS A SUBSCRIBER UNDER `Bun.serve`. Measured on Bun
-   * 1.3.14: the server drains a response body into its own unbounded socket
-   * buffer whether or not the peer reads — a default, `pull`, `bytes`,
-   * `direct` and async-generator body all showed it — so `desiredSize` never
-   * falls and this limit is never reached behind the real server. What does
-   * end a connection whose peer stopped reading is the server's `idleTimeout`
-   * (10 s by default, which backend/src/api/index.ts keeps): with no socket
-   * progress the server closes the connection, `cancel` ends this loop and the
-   * buffered frames are freed. The subscriber reconnects from the cursor it
-   * last applied, so nothing is skipped, but it gets no `resync` frame first.
-   * The limit stays for any consumer that does honour the queue.
+   * Checked before every frame, against what the socket itself reports as
+   * queued and not yet written. The sink also reports backpressure on the send
+   * that crosses the server's own limit; either one ends the connection the
+   * same way. Unlike the SSE body this replaced, which `Bun.serve` drained into
+   * its own unbounded buffer whatever the peer did, a WebSocket reports its
+   * backlog, so a stalled subscriber is told why before it is closed.
    */
-  bufferFrames?: number;
+  bufferBytes?: number;
   /**
    * Re-checked every `keepaliveMs` whatever the connection is sending — events
-   * do not postpone it. Resolving false (or failing) closes the subscription: a
-   * bearer that was rotated or revoked after the connection opened must not
-   * keep reading the stream for the life of the socket, and a busy stream must
-   * not keep it reading either.
+   * do not postpone it. Resolving false (or failing) closes the socket with
+   * `SCHEDULER_STREAM_CLOSE.tokenRevoked`: a bearer that was rotated or revoked
+   * after the connection opened must not keep reading the stream for the life
+   * of the socket, and a busy stream must not keep it reading either.
    */
   stillAuthorized?: () => Promise<boolean>;
   /**
    * Called exactly once, when the connection's loop has stopped, with why it
    * stopped: a resync reason, `unauthorized`, or `cancelled` (the peer or the
-   * server closed the response). For tests and diagnostics; it decides nothing.
+   * server closed the socket). For tests and diagnostics; it decides nothing.
    */
   onEnd?: (why: ResyncReason | "unauthorized" | "cancelled") => void;
 }
 
 /**
- * THE KEEPALIVE MUST BEAT THE SERVER'S IDLE TIMEOUT. The API is `Bun.serve`,
- * whose default `idleTimeout` is 10 seconds: a connection that writes nothing
- * for that long is closed by the server. A 15-second keepalive therefore never
- * went out on a quiet stream — the server cut the connection first, every ten
- * seconds, and the scheduler rebuilt on each cut. Found by running the real
- * scheduler against the real API (scripts/tests/integration/
- * scheduler-api-runtime.test.ts); every unit test drove the stream with its
- * own short interval and could not see it.
+ * The keepalive interval. The WebSocket's own ping/pong is the transport
+ * keepalive (§6.3 "Silent failure detection"); this frame is the application's
+ * and carries the head, which a ping cannot.
  */
-const STREAM_DEFAULTS = { keepaliveMs: 5_000, pollMs: 500, bufferFrames: 1_000 } as const;
+const STREAM_DEFAULTS = { keepaliveMs: 5_000, pollMs: 500, bufferBytes: 1024 * 1024 } as const;
 
 /**
- * An SSE COMMENT, written the moment a subscription opens.
- *
- * `Bun.serve` sends a streamed response's headers with its first chunk, so a
- * subscription with no event to deliver and no keepalive due sent NOTHING —
- * not even its status line — and the scheduler's bounded header wait gave up
- * on a perfectly healthy connection. A comment line (`:`) is not a frame: the
- * SSE format says a consumer ignores it, and both parsers in this repo drop a
- * chunk with no `event:` line. So it flushes the headers and changes nothing a
- * subscriber reads.
+ * The close codes the scheduler stream ends with (D55 (11): "an explicit close
+ * code"). Private-use codes (4000-4999, RFC 6455 §7.4.2), declared again,
+ * field for field, in scripts/lib/system-scheduler/types.ts;
+ * scripts/tests/unit/system-scheduler-wire-parity.test.ts holds the two to
+ * each other. Every one of them means the same thing to the scheduler — the
+ * copy is no longer provably current, so full read and rebuild (§3.1) — and
+ * the code says why, so an operator reading a log can tell a stalled reader
+ * from a rotated token.
  */
-const STREAM_OPEN_COMMENT = ": subscribed\n\n";
+export const SCHEDULER_STREAM_CLOSE = {
+  /** Sent after the one `resync` frame: the API cannot serve from where the subscriber stands. */
+  resync: 4000,
+  /** The token was revoked or rotated while the socket was open; no frame precedes it. */
+  tokenRevoked: 4001,
+} as const;
 
-type StreamServeFrame =
-  | { event: "event"; data: ServedStreamEvent }
-  | { event: "keepalive"; data: { head: number } }
-  | { event: "resync"; data: { reason: ResyncReason; head: number | null } };
-
-const encodeStreamFrame = (f: StreamServeFrame): string => `event: ${f.event}\ndata: ${JSON.stringify(f.data)}\n\n`;
+/** One frame on the socket, as JSON text. The `type` field is the discriminant the scheduler reads. */
+export type StreamServeFrame =
+  | ({ type: "event" } & ServedStreamEvent)
+  | { type: "keepalive"; head: number }
+  | { type: "resync"; reason: ResyncReason; head: number | null };
 
 /**
- * Open a subscription from `cursor`.
+ * What the serving loop writes to: one WebSocket, seen through the three
+ * things the loop needs from it. backend/src/api/routes/swarm-stream.ts adapts
+ * Bun's ServerWebSocket to this; a test may hand in its own.
+ */
+export interface StreamSink {
+  /**
+   * Send one text frame. `sent` — written or queued within the server's
+   * limit; `backpressure` — queued, but the socket's backlog is past the
+   * server's limit (Bun's `send` returning -1); `closed` — dropped because the
+   * connection is gone (Bun's 0).
+   */
+  send(text: string): "sent" | "backpressure" | "closed";
+  /** Bytes queued on this socket and not yet written to the peer. */
+  bufferedAmount(): number;
+  close(code: number, reason: string): void;
+}
+
+/** A running subscription. `stop` is what the socket's close handler calls. */
+export interface SchedulerStreamHandle {
+  stop(): void;
+  /** Resolves when the loop has ended, whoever ended it. */
+  readonly done: Promise<void>;
+}
+
+/**
+ * Serve the §6.3 stream from `cursor` onto one socket.
  *
  * The shape of the connection, in order:
  *
- *   1. If the cursor cannot be served, ONE resync frame and close. Not an empty
- *      stream, and not a skip forward to the head (§6.3).
- *   2. Events above the cursor, in order, for as long as the connection lives.
+ *   1. If the cursor cannot be served (above the head, below the retained
+ *      floor, or the database cannot say), ONE resync frame and a close. Not an
+ *      empty stream, and not a skip forward to the head.
+ *   2. Events above the cursor, in order, for as long as the socket lives.
  *      Each served event must be the one after the last sent; an event missing
- *      from the middle (pruned while the connection was open) is a resync and
- *      a close, never a jump.
+ *      from the middle (pruned while the socket was open) is a resync and a
+ *      close, never a jump.
  *   3. A keepalive carrying the head sequence whenever the keepalive interval
  *      passes with nothing else sent.
- *   4. The bearer re-checked every keepalive interval, busy or quiet; a bearer
- *      that no longer authorizes ends the connection.
+ *   4. The token re-checked every keepalive interval, busy or quiet; a token
+ *      that no longer authorizes ends the socket with its own close code.
+ *   5. Before every frame, the socket's outbound backlog against
+ *      `bufferBytes`; past it — or on a send the server itself reports as
+ *      backpressured — one resync frame (`buffer_overflow`) and a close. The
+ *      frames already queued stay queued, so the subscriber reads a gapless
+ *      prefix, then the reason, then the close: nothing is dropped from the
+ *      middle to make room.
  *
  * NO STATE IS EVER CLAIMED FROM A FAILED READ. A database error while reading
- * events or the head ends the connection with `resync: unavailable`; it never
- * reads as "no new events" or as a stale head, either of which would tell the
+ * events or the head ends the socket with `resync: unavailable`; it never reads
+ * as "no new events" or as a stale head, either of which would tell the
  * subscriber it is current when nothing proves it.
  *
- * THE LOOP DIES WITH THE CONNECTION. `cancel` flips the flag the loop reads, so
- * a disconnected subscriber leaves nothing running — which is the difference
+ * THE LOOP DIES WITH THE SOCKET. `stop` flips the flag the loop reads, so a
+ * disconnected subscriber leaves nothing running — which is the difference
  * between serving a connection and being a background process.
  */
-export function openSchedulerStream(cursor: number, opts: StreamOptions = {}): Response {
+export function serveSchedulerStream(cursor: number, sink: StreamSink, opts: StreamOptions = {}): SchedulerStreamHandle {
   const keepaliveMs = opts.keepaliveMs ?? STREAM_DEFAULTS.keepaliveMs;
   const pollMs = opts.pollMs ?? STREAM_DEFAULTS.pollMs;
-  const bufferFrames = opts.bufferFrames ?? STREAM_DEFAULTS.bufferFrames;
+  const bufferBytes = opts.bufferBytes ?? STREAM_DEFAULTS.bufferBytes;
   let live = true;
   // Why the connection stopped, reported once through `onEnd`. The first
-  // cause recorded wins: a resync closes the controller, which a consumer may
-  // then see as a cancel.
+  // cause recorded wins: a resync closes the socket, whose close handler then
+  // calls `stop`.
   let endedBy: ResyncReason | "unauthorized" | "cancelled" | null = null;
-  let reported = false;
   const ended = (why: ResyncReason | "unauthorized" | "cancelled"): void => {
     endedBy ??= why;
   };
-  const report = (): void => {
-    if (reported) return;
-    reported = true;
+  const close = (code: number, reason: string): void => {
+    live = false;
     try {
-      opts.onEnd?.(endedBy ?? "cancelled");
+      sink.close(code, reason);
     } catch {
-      /* a diagnostic hook never breaks the connection */
+      /* already closed by the peer */
+    }
+  };
+  const write = (f: StreamServeFrame): "sent" | "backpressure" | "closed" => {
+    try {
+      return sink.send(JSON.stringify(f));
+    } catch {
+      return "closed";
+    }
+  };
+  // The last frame a connection ever sends: the reason, then the close.
+  const resyncAndClose = (reason: ResyncReason, head: number | null): void => {
+    ended(reason);
+    if (live) write({ type: "resync", reason, head });
+    close(SCHEDULER_STREAM_CLOSE.resync, `resync: ${reason}`);
+  };
+  const headOrNull = async (): Promise<number | null> => {
+    try {
+      return await streamHeadSequence();
+    } catch {
+      return null;
+    }
+  };
+  /**
+   * Send one frame, or end the connection when the socket's backlog is past
+   * its bound. The resync that replaces the frame is the ONLY thing written
+   * past the bound.
+   */
+  const send = async (f: StreamServeFrame): Promise<boolean> => {
+    if (!live) return false;
+    if (sink.bufferedAmount() > bufferBytes) {
+      resyncAndClose("buffer_overflow", await headOrNull());
+      return false;
+    }
+    const r = write(f);
+    if (r === "closed") {
+      ended("cancelled");
+      live = false;
+      return false;
+    }
+    if (r === "backpressure") {
+      // The frame was queued, so it is not lost; nothing may follow it but
+      // the reason.
+      resyncAndClose("buffer_overflow", await headOrNull());
+      return false;
+    }
+    return live;
+  };
+
+  const run = async (): Promise<void> => {
+    let reason: ResyncReason | null;
+    try {
+      reason = await resyncReasonFor(cursor);
+    } catch {
+      resyncAndClose("unavailable", null);
+      return;
+    }
+    if (reason) {
+      resyncAndClose(reason, await headOrNull());
+      return;
+    }
+
+    let sent = cursor;
+    let lastFrameAt = Date.now();
+    let lastAuthAt = Date.now();
+    while (live) {
+      // The token is re-checked on its own clock. It used to ride the
+      // keepalive, which only goes out when a poll finds nothing, so a rotated
+      // token kept reading for as long as events kept flowing.
+      if (opts.stillAuthorized && Date.now() - lastAuthAt >= keepaliveMs) {
+        if (!(await opts.stillAuthorized().catch(() => false))) {
+          ended("unauthorized");
+          close(SCHEDULER_STREAM_CLOSE.tokenRevoked, "token revoked or rotated");
+          break;
+        }
+        lastAuthAt = Date.now();
+      }
+      if (!live) break;
+      let events: ServedStreamEvent[];
+      try {
+        events = await eventsAbove(sent);
+      } catch {
+        resyncAndClose("unavailable", null);
+        break;
+      }
+      for (const e of events) {
+        if (e.seq !== sent + 1) {
+          // The next number this subscriber needs is not in the log any
+          // more: pruned between two polls. Serving `e` would skip it.
+          resyncAndClose("log_truncated", await headOrNull());
+          break;
+        }
+        if (!(await send({ type: "event", ...e }))) break;
+        sent = e.seq;
+      }
+      if (!live) break;
+      if (events.length > 0) lastFrameAt = Date.now();
+      else if (Date.now() - lastFrameAt >= keepaliveMs) {
+        // §6.3: "Each keepalive from the API includes the sequence number of
+        // the last event it committed." The HEAD of the log, not `sent` —
+        // the whole point is that a subscriber behind the head can tell. A
+        // head that cannot be read is not replaced by a guess.
+        const head = await headOrNull();
+        if (head === null) {
+          resyncAndClose("unavailable", null);
+          break;
+        }
+        if (!(await send({ type: "keepalive", head }))) break;
+        lastFrameAt = Date.now();
+      }
+      if (!live) break;
+      await Bun.sleep(pollMs);
     }
   };
 
-  const body = new ReadableStream<Uint8Array>(
-    {
-      async start(controller) {
-        const encoder = new TextEncoder();
-        const close = (): void => {
-          live = false;
-          try {
-            controller.close();
-          } catch {
-            /* already closed by the consumer */
-          }
-        };
-        const enqueue = (text: string): void => {
-          try {
-            controller.enqueue(encoder.encode(text));
-          } catch {
-            live = false;
-          }
-        };
-        // The last frame a connection ever sends: the reason, then the close.
-        const resyncAndClose = (reason: ResyncReason, head: number | null): void => {
-          ended(reason);
-          if (live) enqueue(encodeStreamFrame({ event: "resync", data: { reason, head } }));
-          close();
-        };
-        const headOrNull = async (): Promise<number | null> => {
-          try {
-            return await streamHeadSequence();
-          } catch {
-            return null;
-          }
-        };
-        /**
-         * Send one frame, or end the connection if its buffer is full. The
-         * resync that replaces the frame is the ONLY thing enqueued past the
-         * limit: the subscriber reads what it was sent, then the reason, and
-         * nothing is dropped from the middle.
-         */
-        const send = async (f: StreamServeFrame): Promise<boolean> => {
-          if (!live) return false;
-          if ((controller.desiredSize ?? 1) <= 0) {
-            resyncAndClose("buffer_overflow", await headOrNull());
-            return false;
-          }
-          enqueue(encodeStreamFrame(f));
-          return live;
-        };
+  const done = run()
+    .catch(() => {
+      if (live) resyncAndClose("unavailable", null);
+    })
+    .finally(() => {
+      live = false;
+      try {
+        opts.onEnd?.(endedBy ?? "cancelled");
+      } catch {
+        /* a diagnostic hook never breaks the connection */
+      }
+    });
 
-        enqueue(STREAM_OPEN_COMMENT);
-
-        let reason: ResyncReason | null;
-        try {
-          reason = await resyncReasonFor(cursor);
-        } catch {
-          resyncAndClose("unavailable", null);
-          report();
-          return;
-        }
-        if (reason) {
-          resyncAndClose(reason, await headOrNull());
-          report();
-          return;
-        }
-
-        let sent = cursor;
-        let lastFrameAt = Date.now();
-        let lastAuthAt = Date.now();
-        // Drive the connection from here rather than from a module-level timer:
-        // this promise is owned by the stream and ends when `live` goes false.
-        void (async () => {
-          while (live) {
-            // The bearer is re-checked on its own clock. It used to ride the
-            // keepalive, which only goes out when a poll finds nothing, so a
-            // rotated token kept reading for as long as events kept flowing.
-            if (opts.stillAuthorized && Date.now() - lastAuthAt >= keepaliveMs) {
-              if (!(await opts.stillAuthorized().catch(() => false))) {
-                ended("unauthorized");
-                close();
-                break;
-              }
-              lastAuthAt = Date.now();
-            }
-            let events: ServedStreamEvent[];
-            try {
-              events = await eventsAbove(sent);
-            } catch {
-              resyncAndClose("unavailable", null);
-              break;
-            }
-            for (const e of events) {
-              if (e.seq !== sent + 1) {
-                // The next number this subscriber needs is not in the log any
-                // more: pruned between two polls. Serving `e` would skip it.
-                resyncAndClose("log_truncated", await headOrNull());
-                break;
-              }
-              if (!(await send({ event: "event", data: e }))) break;
-              sent = e.seq;
-            }
-            if (!live) break;
-            if (events.length > 0) lastFrameAt = Date.now();
-            else if (Date.now() - lastFrameAt >= keepaliveMs) {
-              // §6.3: "Each keepalive from the API includes the sequence number
-              // of the last event it committed." The HEAD of the log, not
-              // `sent` — the whole point is that a subscriber behind the head
-              // can tell. A head that cannot be read is not replaced by a guess.
-              const head = await headOrNull();
-              if (head === null) {
-                resyncAndClose("unavailable", null);
-                break;
-              }
-              if (!(await send({ event: "keepalive", data: { head } }))) break;
-              lastFrameAt = Date.now();
-            }
-            if (!live) break;
-            await Bun.sleep(pollMs);
-          }
-          close();
-          report();
-        })();
-      },
-      cancel() {
-        ended("cancelled");
-        live = false;
-      },
+  return {
+    stop() {
+      ended("cancelled");
+      live = false;
     },
-    // Counted in frames: the open comment and every frame is one chunk. See
-    // `bufferFrames`: behind Bun.serve this queue is drained eagerly.
-    new CountQueuingStrategy({ highWaterMark: bufferFrames }),
-  );
-
-  return new Response(body, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-store",
-      Connection: "keep-alive",
-    },
-  });
+    done,
+  };
 }
 
 
@@ -5196,8 +5216,8 @@ export interface JudgeStreamOptions {
   refreshMs?: number;
 }
 
-// Under `Bun.serve`'s 10-second default idle timeout for the reason
-// STREAM_DEFAULTS gives: a quiet connection has to write something first. The
+// Under `Bun.serve`'s 10-second default idle timeout: a quiet SSE connection
+// has to write something first, or the server cuts it. The
 // keepalive threshold sits under the refresh interval, so an unchanged pending
 // set still writes a keepalive on every refresh — at most five seconds apart.
 const JUDGE_STREAM_DEFAULTS = { keepaliveMs: 4_000, refreshMs: 5_000 } as const;

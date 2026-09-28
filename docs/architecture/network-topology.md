@@ -49,7 +49,7 @@ flowchart LR
     Visitors -->|browser| Static
     Static -->|HTTP JSON| API
     Members -->|HTTP JSON| API
-    Scheduler -->|"authenticated API calls<br/>+ event-stream subscription"| API
+    Scheduler -->|"authenticated API calls<br/>+ WebSocket event subscription"| API
     Agents -->|HTTP JSON| API
     Judges -->|HTTP + subscription| API
     API <--> DB
@@ -68,6 +68,13 @@ Only `api` and the pipeline worker hold a database credential;
 over HTTP only, and no container holds a Docker
 socket ([smoke-production-spec §3](../technical/smoke-production-spec.md#3-roles-and-credentials),
 [scheduler spec §7](../technical/system-scheduler-spec.md#7-credentials)).
+
+`system-scheduler`'s event subscription is a WebSocket
+([D55](../decisions.md#d55) (11), [scheduler spec §6.3](../technical/system-scheduler-spec.md#63-contract)).
+It connects to `api:8787` directly on the compose network, not through
+`website-server`, so no proxy carries the upgrade. Its token rides only in the
+upgrade's `Authorization` header, never in the URL. The judges' subscription is
+still an HTTP event stream.
 
 ---
 

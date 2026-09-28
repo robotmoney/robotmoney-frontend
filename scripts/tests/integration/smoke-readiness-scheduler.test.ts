@@ -13,11 +13,12 @@
 // the hop:
 //
 //   1. `SchedulerHttpApi` presents the automation token, reads a real JSON full
-//      read off a real socket, and parses a real `text/event-stream` into the
-//      consumer's frames. The SSE wire shape (`event:` line plus a JSON `data:`
-//      line) and the consumer's shape (one object with a `type`) are DIFFERENT,
-//      and the translation between them is the kind of thing that is correct in
-//      every unit test and wrong on the wire.
+//      read off a real socket, and opens a real WebSocket (D55 (11)) whose
+//      upgrade carries the token in its `Authorization` header and nothing but
+//      the cursor in its URL, then parses the JSON frames into the consumer's
+//      frames. The wire and the client are declared apart (§7 forbids the
+//      scheduler the backend's modules), and the hop between them is the kind
+//      of thing that is correct in every unit test and wrong on the wire.
 //   2. `serveHealth` answers the real payload with the real status code.
 //   3. `fetchSchedulerHealth` + `evaluateSchedulerReadiness` — smoke's
 //      readiness gate for the scheduler — consume that answer and reach §6.3's
@@ -88,8 +89,10 @@ interface FakeApi {
  * A Bun server speaking the API's scheduler surface.
  *
  * It checks the token the way the real routes do — `X-Automation-Token` or a
- * bearer — because the credential hop is one of the three this file exists to
- * exercise. Everything else it answers from a plain object the test controls.
+ * bearer on the HTTP calls, and ONLY the upgrade's `Authorization: Bearer`
+ * header on the subscription, whose URL may carry nothing but the cursor
+ * (D55 (11)) — because the credential hop is one of the three this file exists
+ * to exercise. Everything else it answers from a plain object the test controls.
  */
 function startFakeApi(initial: SchedulerFullRead): FakeApi {
   let snapshot: SchedulerFullRead = structuredClone(initial);
@@ -97,57 +100,64 @@ function startFakeApi(initial: SchedulerFullRead): FakeApi {
   const events: { seq: number; kind: string; subjectId: string | null; sessionId: string | null; payload: Record<string, unknown> }[] = [];
   let seq = initial.cursor;
   const subscriptions: number[] = [];
-  const sockets: { live: boolean; stalled: boolean }[] = [];
+  const sockets: { live: boolean; stalled: boolean; from: number }[] = [];
 
   const authorized = (req: Request): boolean => {
     const presented = req.headers.get("X-Automation-Token") ?? (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
     return presented === TOKEN;
   };
 
-  const server = Bun.serve({
+  type Socket = { live: boolean; stalled: boolean; from: number };
+  const server = Bun.serve<Socket, never>({
     port: 0,
-    async fetch(req) {
+    websocket: {
+      open(ws) {
+        const socket = ws.data;
+        let sent = socket.from;
+        const send = (frame: Record<string, unknown>): void => {
+          if (!socket.live || socket.stalled) return;
+          if (ws.send(JSON.stringify(frame)) === 0) socket.live = false;
+        };
+        void (async () => {
+          while (socket.live) {
+            for (const e of events.filter((x) => x.seq > sent)) {
+              send({ type: "event", ...e, committedAt: new Date().toISOString() });
+              sent = e.seq;
+            }
+            send({ type: "keepalive", head: seq });
+            await Bun.sleep(25);
+          }
+        })();
+      },
+      message() {},
+      close(ws) {
+        ws.data.live = false;
+      },
+    },
+    async fetch(req, srv) {
       const url = new URL(req.url);
+
+      if (url.pathname === ROUTES.swarm.scheduler.subscribe) {
+        // The real upgrade's rules: the token only in Authorization, and
+        // nothing in the URL but the cursor.
+        if ([...url.searchParams.keys()].some((k) => k !== "cursor")) {
+          return Response.json({ error: "only cursor may ride in the URL" }, { status: 400 });
+        }
+        if ((req.headers.get("Authorization") ?? "") !== `Bearer ${TOKEN}`) {
+          return Response.json({ error: "forbidden" }, { status: 403 });
+        }
+        const from = Number(url.searchParams.get("cursor"));
+        if (!Number.isInteger(from)) return Response.json({ error: "cursor required" }, { status: 400 });
+        const socket: Socket = { live: true, stalled: false, from };
+        subscriptions.push(from);
+        sockets.push(socket);
+        return srv.upgrade(req, { data: socket }) ? undefined : Response.json({ error: "upgrade failed" }, { status: 400 });
+      }
+
       if (!authorized(req)) return new Response(JSON.stringify({ error: "forbidden" }), { status: 403 });
 
       if (url.pathname === ROUTES.swarm.scheduler.fullRead) {
         return Response.json({ ...snapshot, cursor: seq });
-      }
-
-      if (url.pathname === ROUTES.swarm.scheduler.subscribe) {
-        const from = Number(url.searchParams.get("cursor"));
-        if (!Number.isInteger(from)) return Response.json({ error: "cursor required" }, { status: 400 });
-        let sent = from;
-        const socket = { live: true, stalled: false };
-        subscriptions.push(from);
-        sockets.push(socket);
-        const body = new ReadableStream<Uint8Array>({
-          start(controller) {
-            const enc = new TextEncoder();
-            const send = (event: string, data: unknown): void => {
-              if (!socket.live || socket.stalled) return;
-              try {
-                controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-              } catch {
-                socket.live = false;
-              }
-            };
-            void (async () => {
-              while (socket.live) {
-                for (const e of events.filter((x) => x.seq > sent)) {
-                  send("event", { ...e, committedAt: new Date().toISOString() });
-                  sent = e.seq;
-                }
-                send("keepalive", { head: seq });
-                await Bun.sleep(25);
-              }
-            })();
-          },
-          cancel() {
-            socket.live = false;
-          },
-        });
-        return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
       }
 
       if (url.pathname === ROUTES.swarm.admin.epochTurnover && req.method === "POST") {
@@ -324,7 +334,7 @@ describe("the scheduler's health endpoint, read the way smoke reads it", () => {
 });
 
 describe("the SSE hop, which only a real socket exercises", () => {
-  test("a real `text/event-stream` frame reaches the clock and moves its timer", async () => {
+  test("a real WebSocket frame reaches the clock and moves its timer", async () => {
     const closesAt = Date.now() + 3_600_000;
     const api = startFakeApi({
       subjects: [{ subjectId: "sub-a", name: "A", epochDurationSeconds: 3600, epochAnchor: "1970-01-01T00:00:00.000Z", judgingDurationSeconds: 900 }],

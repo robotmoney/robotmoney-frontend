@@ -70,6 +70,33 @@ describe("the full read's shape is declared identically on both sides (§3)", ()
   });
 });
 
+describe("the socket's close codes are declared identically on both sides (D55 (11))", () => {
+  /** `{ name: code }` from the body of `export const SCHEDULER_STREAM_CLOSE = { … } as const;`. */
+  const codesOf = (source: string): Record<string, number> => {
+    const body = /export const SCHEDULER_STREAM_CLOSE = \{([\s\S]*?)\} as const;/.exec(source)?.[1] ?? "";
+    const clean = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*/g, "");
+    return Object.fromEntries([...clean.matchAll(/([A-Za-z_]+)\s*:\s*(\d+)/g)].map((m) => [m[1], Number(m[2])]));
+  };
+
+  test("SCHEDULER_STREAM_CLOSE has the same names and codes in domain.ts and in types.ts", () => {
+    expect(codesOf(CLIENT)).toEqual(codesOf(DOMAIN));
+    expect(codesOf(DOMAIN)).toEqual({ resync: 4000, tokenRevoked: 4001 });
+  });
+
+  test("the frames the API serves are the three the client parses, discriminated by `type`", () => {
+    const pick = (source: string, name: string): string[] => {
+      const at = source.indexOf(`export type ${name} =`);
+      expect({ name, found: at !== -1 }).toEqual({ name, found: true });
+      const decl = source.slice(at, source.indexOf("\n\n", at));
+      return [...decl.matchAll(/type: "([a-z]+)"/g)].map((m) => m[1]).sort();
+    };
+    const consumer = readFileSync(join(REPO, "scripts/lib/system-scheduler/stream-consumer.ts"), "utf8");
+    expect(pick(DOMAIN, "StreamServeFrame")).toEqual(["event", "keepalive", "resync"]);
+    const clientTypes = [...consumer.matchAll(/^\s*type: "([a-z]+)";/gm)].map((m) => m[1]).sort();
+    expect(clientTypes).toEqual(pick(DOMAIN, "StreamServeFrame"));
+  });
+});
+
 describe("the one path the startup check hard-codes matches the contract (§7)", () => {
   test("SCHEDULER_FULL_READ_PATH is ROUTES.swarm.scheduler.fullRead", () => {
     // health.ts holds it as a literal so the module imports nothing outside its
