@@ -5,11 +5,29 @@
 # issue #892 — website-server/nginx.conf proxies /api/ and /health through to
 # `api` so this stack still presents as one origin, matching frontend/public/
 # config.js's same-origin default and this repo's own local dev/smoke/e2e
-# harness, which loads pages from `backendUrl`). `api` no longer SERVES any
-# static content — see website-server/Dockerfile — but still reads the same
-# `_static` mount read-only, for AC-ID-03/T26 identity purposes only (see the
-# STATIC_DIR comment on the api service; tracked for removal once the static
-# bundle is baked into website-server's own image instead of assembled here).
+# harness, which loads pages from `backendUrl`). `api` serves no static content
+# and mounts none (D55 (1)): the site reports itself at /version.json and the
+# api at /api/version.
+#
+# THIS IS THE ONLY BASE COMPOSE FILE. The former smoke overlay is gone (smoke
+# spec §4.4): its reap-by-label stamps and data-path passthroughs live here, and
+# its one surviving knob is the explicit `bun smoke --allow-insecure` flag, which
+# refuses under RM_ENV=prod.
+#
+# CONTAINER LABELS — the reap-by-label channel (scripts/stack/naming.ts). Every
+# standing service, the pgdata volume and the default network carry the same
+# three labels:
+#
+#   robotmoney.smoke.project=<compose project>  which RUN created it
+#   robotmoney.env=ci|local                    which ENVIRONMENT CLASS created it
+#   robotmoney.env.hash=<10 hex>               which environment INSTANCE
+#
+# Names encode the same facts, but tools must select on these LABELS:
+# name-substring matching is the fragile channel, and on a host that runs the
+# standing stage smoke, the CI runner and local evals at once a wrong selector
+# kills the live site. The two RM_STACK_* values are set by
+# scripts/stack/config.ts's buildComposeEnv and reproduced from the instance's
+# stack-state.json by smoke:down / smoke:status. Unset, they resolve empty.
 #
 # HOST PORTS ARE ASSIGNED BY DOCKER, NEVER BY US. Both published ports below
 # use the container-port-only short form (`- "8787"`), which makes the Docker
@@ -45,14 +63,13 @@
 #   demo            : named volume `pgdata` persists across restarts
 #   prod            : point DATABASE_URL at an external/managed Postgres and run
 #                     `api` + internal worker lanes + the scheduler + producer
-#                     (docker compose up api worker-analytics worker-research system-scheduler analytics-producer)
+#                     (docker compose up api worker-analytics system-scheduler analytics-producer)
 
 # Task-queue worker lanes (issue #107): one container per execution lane. This
 # IS the production/default lane topology:
 #   worker-analytics — internal scheduled pipelines (vault/wallet/buybacks/
-#                      projects), excluding research.%.
-#   worker-research  — compatibility lane for unreachable legacy research.%
-#                      queue handlers; D25 producer execution does not use it.
+#                      projects). It is the only queue worker: the research
+#                      lane and its container are gone (issue #1026 wave 6).
 #   analytics-producer — owns regime/research timers and submits over REST; no
 #                        DATABASE_URL or admin credential.
 #
@@ -76,6 +93,11 @@
 # 10m x 3 per container: enough history to see a crash loop develop across
 # several restarts, capped at ~30MB x 6 services. Applied to EVERY service —
 # a service without it silently keeps the unbounded default.
+x-smoke-labels: &smoke-labels
+  robotmoney.smoke.project: ${SMOKE_PROJECT:-}
+  robotmoney.env: ${RM_STACK_ENV_CLASS:-}
+  robotmoney.env.hash: ${RM_STACK_ENV_HASH:-}
+
 x-logging: &default-logging
   driver: json-file
   options:
@@ -164,10 +186,19 @@ x-worker-env: &worker-env
   # pacing off entirely, which also stops the backfill (it refuses to run
   # unpaced). Passing it through here is still what makes an override reachable
   # inside the container at all.
-  # (BASE_RPC_URL / BASE_RPC_SOURCE are deliberately NOT added here: their
-  # absence from this allowlist is the pre-existing defect class tracked in
-  # #641/#643, and fixing it belongs there rather than riding along on this
-  # change. The code defaults they fall through to are the production values.)
+  # Data-path knobs (issue #50). With nothing set every one resolves EMPTY, so
+  # backend config.ts / analytics/index.ts fall through to their own live
+  # production defaults (BASE_RPC_URL -> https://mainnet.base.org,
+  # ANALYTICS_SOURCE / BASE_RPC_SOURCE -> live). scripts/lib/smoke-env.ts pins
+  # them explicitly for `bun run smoke`; an explicit override always wins.
+  BASE_RPC_URL: ${BASE_RPC_URL:-}
+  BASE_RPC_SOURCE: ${BASE_RPC_SOURCE:-}
+  ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
+  # Cold-DB floor seed: load the vendored raw floor once so a fresh LIVE boot
+  # does not re-fetch years of history. Idempotent; off unless set.
+  ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
+  FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
+  FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
   BASE_RPC_MAX_CALLS_PER_SEC: ${BASE_RPC_MAX_CALLS_PER_SEC:-}
   BASE_RPC_RATE_BURST: ${BASE_RPC_RATE_BURST:-}
   # Blast-radius bounds on the repair driver (worker/handlers/repair.ts).
@@ -180,8 +211,8 @@ x-worker-env: &worker-env
   # worker lanes: the lane that ran `swarm.judge` is gone (issue #1026) and the
   # judge is a participant now, receiving its model key the way every
   # participant does — smoke-production spec §3 "the judge receives its key the
-  # way every participant does, from `credential.json`". worker-analytics and
-  # worker-research call no model, so this anchor carries no inference
+  # way every participant does, from `credential.json`". worker-analytics
+  # calls no model, so this anchor carries no inference
   # credential at all.)
   # Optional per-call inference bound (issue #537), read by
   # scripts/lib/swarm/inference.ts's timeoutMs(). Declared with a NULL value —
@@ -209,6 +240,7 @@ services:
     # of work; do not bump it here in passing (issue #691 was scoped to the
     # harness on purpose).
     image: postgres:17-alpine
+    labels: *smoke-labels
     logging: *default-logging
     environment:
       PG_POOL_MAX: "2"
@@ -245,9 +277,23 @@ services:
         RM_BUILD_COMMIT: ${RM_BUILD_COMMIT:-}
         RM_BUILD_TAG: ${RM_BUILD_TAG:-}
     command: ["bun", "run", "src/api/index.ts"]
+    labels: *smoke-labels
     environment:
-      
       DATABASE_URL: ${DATABASE_URL}
+      # `bun smoke --allow-insecure` only (smoke spec §4.4): scripts/stack/config.ts
+      # buildComposeEnv() emits `1` for that flag and empty otherwise, and the flag
+      # is a refusal under RM_ENV=prod. A bare `docker compose` resolves empty:
+      # secure by default. Nothing in a compose file pins it.
+      RM_ALLOW_INSECURE: ${RM_ALLOW_INSECURE:-}
+      # Data-path knobs (issue #50, #147): every boot is production-parity LIVE.
+      # With nothing set each resolves EMPTY and backend config.ts falls through
+      # to its live production default. An explicit override always wins.
+      BASE_RPC_URL: ${BASE_RPC_URL:-}
+      BASE_RPC_SOURCE: ${BASE_RPC_SOURCE:-}
+      ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
+      ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
+      FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
+      FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
       # FAIL-CLOSED DEFAULT (D13). This interpolation default must never be reached:
       # scripts/stack/config.ts's buildComposeEnv() emits RM_ENV explicitly for every
       # service, so the value is a property of the stack config rather than of
@@ -342,14 +388,6 @@ services:
       # longer hands `api` SWARM_JUDGE_FAULT_INJECTION or its acceptance
       # opt-in, so no composition can arm a fault-injected judge (the backend
       # code and its table go in later #1026 waves).
-      # READ-ONLY, FOR AC-ID-03/T26 IDENTITY ONLY (issue #892 follow-up tracked
-      # separately: this mount should not exist by the time that work lands —
-      # the static bundle should be baked into website-server's own image, and
-      # deploy-time should only write/check a small identity JSON, never build
-      # anything). website-server, not this process, SERVES the SPA from the
-      # same underlying `_static` directory; api reads the manifest here purely
-      # to compare its own build identity against what was assembled.
-      STATIC_DIR: /srv/frontend
     ports:
       # HOST side: ABSENT on purpose — the short form publishes the container
       # port on a host port the Docker daemon picks and binds atomically (see
@@ -373,10 +411,6 @@ services:
       # `ports` by APPENDING, so the overlay must override rather than add —
       # otherwise --stage would publish 48787 AND a second ephemeral port.
       - "8787"
-    volumes:
-      # READ-ONLY, FOR AC-ID-03/T26 IDENTITY ONLY — api does not serve from
-      # this mount (website-server does). See the STATIC_DIR comment above.
-      - ./_static:/srv/frontend:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -413,6 +447,7 @@ services:
       context: ./website-server
       dockerfile: Dockerfile
     labels:
+      <<: *smoke-labels
       robotmoney.instance: ${RM_INSTANCE:?RM_INSTANCE is required; bun smoke sets it from the resolved instance}
     volumes:
       - ${RM_INSTANCE_STATE_DIR:?RM_INSTANCE_STATE_DIR is required; bun smoke sets it to the instance's state directory}/web:/srv/web:ro
@@ -434,6 +469,7 @@ services:
 
   worker-analytics:
     <<: *worker-base
+    labels: *smoke-labels
     environment:
       PG_POOL_MAX: "2"
       <<: *worker-env
@@ -444,19 +480,12 @@ services:
       # pool. It presents the analytics ingestion token, the one holder that
       # carries the `analytics_ingestion` right (smoke spec §3), read from the
       # analytics-producer holder's directory mounted read-only below. Declared
-      # HERE (not the shared *worker-env anchor) so worker-research never
-      # receives a credential it has no job kind that needs.
+      # HERE (not the shared *worker-env anchor) so the credential stays scoped
+      # to the one lane whose job kinds need it.
       ANALYTICS_API_URL: http://api:8787
       ANALYTICS_TOKEN_FILE: /run/rm-token/token
     volumes:
       - ${RM_INSTANCE_STATE_DIR:?RM_INSTANCE_STATE_DIR is required; bun smoke sets it to the instance's state directory}/tokens/analytics-producer:/run/rm-token:ro
-
-  worker-research:
-    <<: *worker-base
-    environment:
-      
-      <<: *worker-env
-      WORKER_LANE: research
 
   # THE CLOCK (issue #1026). One long-running container that holds one timer per
   # active subject, fires each subject's epoch boundary, drives settlement and
@@ -534,6 +563,7 @@ services:
       # file: it is read by host tools on this machine and by nothing else.
       - "127.0.0.1::8090"
     labels:
+      <<: *smoke-labels
       # Which deployment instance (smoke spec §1.1) this clock serves.
       robotmoney.instance: ${RM_INSTANCE:?RM_INSTANCE is required; bun smoke sets it from the resolved instance}
     volumes:
@@ -585,6 +615,7 @@ services:
         RM_BUILD_COMMIT: ${RM_BUILD_COMMIT:-}
         RM_BUILD_TAG: ${RM_BUILD_TAG:-}
     command: ["bun", "run", "src/producer/index.ts", "serve"]
+    labels: *smoke-labels
     environment:
       ANALYTICS_API_URL: http://api:8787
       # Its ONE credential, a path to its own token file (smoke spec §3: the
@@ -621,8 +652,54 @@ services:
       # cover container start up to that first record.
       start_period: 300s
 
-  # D21 retired the member-facing MCP server: swarm members reach the
-  # swarm REST API on the `api` service directly (docs/decisions.md D21).
+  # Onboarding eval (docs/architecture.md §11 R8, Stage 5): a vanilla OpenCode
+  # agent container, no Robot Money tooling preinstalled (see
+  # scripts/lib/member-agent/Dockerfile). This is a TEMPLATE, not a standing
+  # service: the `member-agent` profile is never active by default, and
+  # scripts/lib/onboarding-eval.ts launches one short-lived instance per
+  # admission with `docker compose run`, naming the service explicitly. It is
+  # the one service WITHOUT `restart: unless-stopped`: a one-shot that restarted
+  # itself would re-run an admission nobody asked for.
+  #
+  # Egress: the `api` service (the swarm REST API the agent applies against; D21
+  # retired the MCP server), GitHub Releases (the `rmpc` binary and the
+  # swarm-onboarding skill the agent installs itself), and OpenCode Zen.
+  #
+  # Which agent runs is switchable per environment by AGENT_MODEL, resolved
+  # against scripts/lib/model-registry.ts. Both values reach the container by
+  # explicit `-e` injection from scripts/agent/member-agent.ts at
+  # `docker compose run` time — a container inherits no ambient environment, so
+  # there is deliberately no service-level environment fallback.
+  member-agent:
+    labels: *smoke-labels
+    build:
+      context: .
+      dockerfile: scripts/lib/member-agent/Dockerfile
+    profiles: ["member-agent"] # never started by `docker compose up` alone
+    depends_on:
+      - api
+    restart: "no"
 
+# The postgres data volume is labeled so `bun run smoke:clean`
+# (scripts/smoke-clean.ts) finds and deletes smoke pgdata volumes by LABEL, never
+# by name-substring matching:
+#   - robotmoney.smoke=1              → "this volume belongs to the smoke".
+#   - robotmoney.smoke.project=<proj> → which run created it.
+# Teardown (SIGTERM/Ctrl-C and `smoke:down`) keeps this volume — `docker compose
+# down` WITHOUT -v — so data survives a reboot; `smoke:clean` is the ONLY path
+# that deletes it. With `bun run smoke -- --pg-data <host-dir>` postgres is
+# bind-mounted to that host dir instead, so no named volume is created.
 volumes:
   pgdata:
+    labels:
+      <<: *smoke-labels
+      robotmoney.smoke: "1"
+
+# A Compose network can outlive every container when a run is interrupted after
+# container cleanup but before `compose down`. Label it explicitly so smoke:reap
+# can discover that network-only orphan without deriving it from `docker ps`.
+networks:
+  default:
+    labels:
+      <<: *smoke-labels
+      robotmoney.smoke.network: "1"

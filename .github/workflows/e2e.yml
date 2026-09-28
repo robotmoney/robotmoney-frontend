@@ -570,7 +570,7 @@ jobs:
           echo "::group::docker compose -p $SMOKE_PROJECT down -v --remove-orphans"
           docker compose -p "$SMOKE_PROJECT" \
             --env-file /dev/null \
-            -f docker-compose.yml -f docker-compose.smoke.yml \
+            -f docker-compose.yml \
             down -v --remove-orphans || echo "compose down exited non-zero — smoke-clean below is the gate"
           echo "::endgroup::"
           bun run scripts/smoke-clean.ts --project "$SMOKE_PROJECT"

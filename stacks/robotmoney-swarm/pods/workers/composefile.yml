@@ -1,8 +1,7 @@
-# workers pod: the two surviving task-queue lanes plus the independent
+# workers pod: the one task-queue lane (worker-analytics) plus the independent
 # analytics producer. Mirrors docker-compose.yml's x-worker-base / x-worker-env
-# anchor pattern — worker-analytics / worker-research share the same api image
-# and differ only by WORKER_LANE. Neither calls a model, so the shared anchor
-# carries no inference credential.
+# anchor pattern. The research lane is gone (issue #1026 wave 6). The worker
+# calls no model, so the shared anchor carries no inference credential.
 #
 # There is no swarm lane (issue #1026): session timing left the queue for its
 # own container, `system-scheduler` (system scheduler spec §1). This stack tree
@@ -63,12 +62,6 @@ services:
     environment:
       <<: *worker-env
       WORKER_LANE: analytics
-
-  worker-research:
-    <<: *worker-base
-    environment:
-      <<: *worker-env
-      WORKER_LANE: research
 
   # Independent external producer (issue #361 Phase 4): no DATABASE_URL, no
   # queue access, no admin right.

@@ -369,7 +369,6 @@ describe("member-agent container primitive", () => {
       // checkout's own `.env` (scripts/stack/config.ts).
       "compose", "--env-file", "/dev/null", "-p", "rm_smoke_stack_abc",
       "-f", "docker-compose.yml",
-      "-f", "docker-compose.smoke.yml",
       "run",
       "--rm",
       "--no-deps",
@@ -504,7 +503,7 @@ describe("member-agent container primitive", () => {
   });
 
   // ── The compose child's environment (2026-07-27) ──────────────────────────
-  // `docker compose run` re-resolves the WHOLE project, and docker-compose.smoke.yml
+  // `docker compose run` re-resolves the WHOLE project, and docker-compose.yml
   // labels the pgdata volume with ${SMOKE_PROJECT}. A child without it hashes a
   // different volume definition than `stack.up()` recorded, and compose then
   // asks — interactively — whether to recreate the live database. Reproduced on

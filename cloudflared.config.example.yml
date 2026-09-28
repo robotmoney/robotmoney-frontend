@@ -51,9 +51,11 @@ ingress:
 # ── Operational notes ───────────────────────────────────────────────────────
 #
 # WHAT IS BEHIND THIS HOSTNAME IS A DEMO STACK, NOT A PROD STACK. The pinned
-# boot runs docker-compose.smoke.yml, which pins RM_ALLOW_INSECURE=1 (privileged
+# boot runs docker-compose.yml, and runs it insecure only when the operator
+# passes the explicit `--allow-insecure` flag (RM_ALLOW_INSECURE=1: privileged
 # admin / onboarding / analytics endpoints answer with NO token — .env.example
-# says of that flag: "NEVER on a reachable box"), applies quota-safe schedules
+# says of that flag: "NEVER on a reachable box"; the flag is refused under
+# RM_ENV=prod), applies quota-safe schedules
 # and one-hour capability cache TTLs explicitly, and leaves PROJECTS_SOURCE unset, so /projects serves the
 # vendored offline FIXTURE directory rather than live provider data. A real
 # production deployment is docker-compose.yml with RM_ENV=prod, an explicit

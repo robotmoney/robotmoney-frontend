@@ -43,7 +43,7 @@ describe("shared full-stack member-agent prebuild", () => {
         repoRoot: dir,
         project: "rm_ci_stack_prebuild",
         profile: "full",
-        composeFiles: ["docker-compose.yml", "docker-compose.smoke.yml"],
+        composeFiles: ["docker-compose.yml"],
         database: { ...DEFAULT_STACK_DATABASE, url: "postgres://managed.example/db" },
         environment: { class: "ci", hash: "prebuild00" },
       };

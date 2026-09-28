@@ -43,7 +43,6 @@
 export const SHIPPED_IMAGE_SERVICES = [
   "api",
   "worker-analytics",
-  "worker-research",
   "system-scheduler",
   "analytics-producer",
   "member-agent",

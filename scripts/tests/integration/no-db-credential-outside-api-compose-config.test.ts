@@ -37,13 +37,11 @@
 // asserted to contain nothing that is not in the rendered configuration — a
 // stale exemption is itself a finding.
 //
-// ONE EXEMPTION HERE IS NOT A SPEC EXCEPTION BUT AN UNLANDED REMOVAL, and it is
-// labelled as such. `smoke-production-spec.md` §7.2 now says in as many words:
-// "The research worker lane serves only retired rows and is removed." It is not
-// removed yet — that lane and its rows are a different workstream's scope, not
-// W4's — so it is carried here with that sentence as its reason rather than
-// with a clause that blesses it. When the lane goes, this entry goes with it,
-// and the "stale exemption" test below is what will say so.
+// THERE IS NO UNLANDED-REMOVAL EXEMPTION ANY MORE. The research worker lane and
+// its `worker-research` service were removed (issue #1026 wave 6, P1), so the
+// one entry that used to be carried here with `smoke-production-spec.md` §7.2's
+// "the research worker lane ... is removed" as its reason is gone, and the
+// "stale exemption" test below is what would say so if it came back.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // WHY THE DECLARATION IS THE FINDING, NOT THE VALUE
@@ -151,19 +149,15 @@ export const EXEMPT: Record<string, string> = {
   api: "§1: the API is the only service in scope that holds a database connection",
   "worker-analytics":
     "§9's ONE named exception: the pipeline worker running the vault, wallet, buyback and project jobs as rm_worker, governed by smoke-production-spec.md §7.2",
-  "worker-research":
-    "NOT a spec exception. smoke-production-spec.md §7.2: 'The research worker lane serves only retired rows and is removed.' The removal has not landed and is outside W4; this entry is the record of that, and it must go when the lane does",
   migrate: "a one-shot migration runner, not a running service; it exists to hold rm_owner for one command",
 };
 
 /**
- * Exemptions that exist only because a removal has not happened yet.
- *
- * Kept apart from the spec-blessed ones so the two can never be confused, and
- * asserted to be a set that SHRINKS: a reader can see at a glance how much of
- * §9 is actually true today.
+ * Exemptions that exist only because a removal has not happened yet. Empty since
+ * the research lane's removal landed (issue #1026 wave 6, P1); it is kept as an
+ * asserted-empty set so a future one has to be added on purpose, with a reason.
  */
-export const UNLANDED_REMOVALS = ["worker-research"] as const;
+export const UNLANDED_REMOVALS: readonly string[] = [];
 
 /** Whether a bind mount of `source` exposes `file`: the file is the source or lies below it. */
 export function mountReaches(source: string, file: string): boolean {
@@ -195,8 +189,7 @@ function baseEnv(): Record<string, string> {
 }
 
 const BASE = ["docker-compose.yml"] as const;
-const SMOKE = ["docker-compose.yml", "docker-compose.smoke.yml"] as const;
-const STAGE = ["docker-compose.yml", "docker-compose.smoke.yml", "docker-compose.stage.yml"] as const;
+const STAGE = ["docker-compose.yml", "docker-compose.stage.yml"] as const;
 
 interface Composition {
   label: string;
@@ -217,8 +210,8 @@ function profilesOf(files: readonly string[]): string[] {
 }
 
 /**
- * Every composition this repo boots: the base file, the smoke overlay `bun
- * smoke` renders, and the stage overlay `--static-port` adds — each by default
+ * Every composition this repo boots: the base file (the smoke overlay is gone),
+ * and the stage overlay `--static-port` adds — each by default
  * and under every profile compose says it declares. "Any rendered compose
  * config" (criterion 101) is only true of the configs actually rendered here.
  */
@@ -229,9 +222,8 @@ const PARTICIPANTS = writeParticipantOverlay(entriesOf(credentialFile(["athena",
 
 const COMPOSITIONS: readonly Composition[] = [
   { label: "base (docker-compose.yml)", files: BASE },
-  { label: "base + smoke", files: SMOKE },
-  { label: "base + smoke + stage", files: STAGE },
-  { label: "base + smoke + participants (rendered)", files: [...SMOKE, PARTICIPANTS] },
+  { label: "base + stage", files: STAGE },
+  { label: "base + participants (rendered)", files: [...BASE, PARTICIPANTS] },
 ].flatMap(({ label, files }) => [
   { label, files, profiles: [] },
   ...profilesOf(files).map((p) => ({ label: `${label} [profile ${p}]`, files, profiles: [p] })),
@@ -279,7 +271,7 @@ beforeAll(() => {
 
 describe("only the named services carry a database credential (§9, §10)", () => {
   test("the rendered participants are all there, and not one of them carries a database credential (§7.2)", () => {
-    const cfg = composeConfig([...SMOKE, PARTICIPANTS], []);
+    const cfg = composeConfig([...BASE, PARTICIPANTS], []);
     const participants = Object.keys(cfg.services ?? {}).filter((n) => n.startsWith("participant-")).sort();
     expect(participants).toEqual(["participant-agent-athena", "participant-agent-noop-analyst", "participant-agent-robot-money", "participant-judge-themis"]);
     expect(findDatabaseCredentials(cfg).filter((f) => f.service.startsWith("participant-"))).toEqual([]);
@@ -420,7 +412,9 @@ describe("only the named services carry a database credential (§9, §10)", () =
     }
   });
 
-  test("only ONE worker is a spec exception, and the other is flagged as an unlanded removal", () => {
+  test("only ONE worker is a spec exception, and no unlanded removal is carried", () => {
+    expect(UNLANDED_REMOVALS).toEqual([]);
+    expect(Object.keys(EXEMPT)).not.toContain("worker-research");
     const workers = Object.keys(EXEMPT).filter((s) => s.startsWith("worker-"));
     const blessed = workers.filter((s) => !(UNLANDED_REMOVALS as readonly string[]).includes(s));
     // §9 carves out the pipeline worker and nothing else. If this ever names

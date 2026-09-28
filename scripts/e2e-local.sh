@@ -56,10 +56,10 @@ cleanup() {
     return
   fi
   echo "::capturing full container logs to $CONTAINER_LOG::"
-  docker compose -p "$PROJECT" --env-file /dev/null -f docker-compose.yml -f docker-compose.smoke.yml \
+  docker compose -p "$PROJECT" --env-file /dev/null -f docker-compose.yml \
     logs --no-color > "$CONTAINER_LOG" 2>&1 || true
   echo "::teardown $PROJECT::"
-  docker compose -p "$PROJECT" --env-file /dev/null -f docker-compose.yml -f docker-compose.smoke.yml \
+  docker compose -p "$PROJECT" --env-file /dev/null -f docker-compose.yml \
     down -v --remove-orphans || true
   WEB_PORT=1 POSTGRES_PORT=1 bun run scripts/smoke-clean.ts --project "$PROJECT" || true
 }

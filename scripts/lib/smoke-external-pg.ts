@@ -57,7 +57,6 @@ export { urlForRole, redactedTarget } from "./env-role.ts";
 export const POSTGRES_DEPENDENT_SERVICES = [
   "api",
   "worker-analytics",
-  "worker-research",
 ] as const;
 
 /** The compose service and named volume the overlay removes outright. */

@@ -76,7 +76,7 @@ describe("stack profiles", () => {
     // pick it up, and anything reasoning about the full stack must.
     expect(servicesFor("full")).toContain("system-scheduler");
     expect([...WORKER_LANE_SERVICES]).not.toContain("system-scheduler");
-    expect([...WORKER_LANE_SERVICES]).toEqual(["worker-analytics", "worker-research"]);
+    expect([...WORKER_LANE_SERVICES]).toEqual(["worker-analytics"]);
   });
 
   test("full prebuilds the profile-gated member-agent image exactly once without starting it", () => {
@@ -237,7 +237,7 @@ describe("argv builders", () => {
     expect(composeArgs("p", ["a.yml", "b.yml"]))
       .toEqual(["compose", "--env-file", "/dev/null", "-p", "p", "-f", "a.yml", "-f", "b.yml"]);
     expect(composeArgs("p"))
-      .toEqual(["compose", "--env-file", "/dev/null", "-p", "p", "-f", "docker-compose.yml", "-f", "docker-compose.smoke.yml"]);
+      .toEqual(["compose", "--env-file", "/dev/null", "-p", "p", "-f", "docker-compose.yml"]);
   });
 
   test("upArgs names services explicitly — never a bare `up -d`", () => {

@@ -8,7 +8,7 @@ import { cleanupKeptSwarmEval, swarmEvalStateFile } from "../../swarm-eval-local
 
 const state = {
   project: "rm_smoke_stack_fresh_shell",
-  composeFiles: "docker-compose.yml:docker-compose.smoke.yml",
+  composeFiles: "docker-compose.yml",
   databaseUrl: "postgres://robotmoney:robotmoney@postgres:5432/robotmoney",
   dbUser: "robotmoney",
   dbPassword: "robotmoney",
@@ -43,7 +43,7 @@ describe("smoke token lifecycle", () => {
     writeFileSync(stateFile, JSON.stringify({
       project,
       stateDir: instance.stateDir,
-      composeFiles: ["docker-compose.yml", "docker-compose.smoke.yml"],
+      composeFiles: ["docker-compose.yml"],
       envClass: "local",
       envHash: "0123456789",
       createdAt: new Date().toISOString(),

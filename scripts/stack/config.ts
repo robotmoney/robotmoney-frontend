@@ -35,13 +35,13 @@ import {
 // adds the two worker execution lanes the standing smoke drives, the
 // `system-scheduler` clock (issue #1026) and the independent producer. The
 // member-agent service is deliberately in NEITHER *running* list: it is
-// compose-profile gated (docker-compose.smoke.yml `profiles:
+// compose-profile gated (docker-compose.yml `profiles:
 // ["member-agent"]`) and is only ever started one-shot via `docker compose
 // run`.
 export type StackProfile = "core" | "full";
 
 export const CORE_SERVICES = ["postgres", "api", "website-server"] as const;
-export const WORKER_LANE_SERVICES = ["worker-analytics", "worker-research"] as const;
+export const WORKER_LANE_SERVICES = ["worker-analytics"] as const;
 // The clock (issue #1026). NOT a worker lane and deliberately its own list: it
 // claims no jobs, holds no database credential and shares none of the lanes'
 // wiring — system-scheduler-spec.md §1 gives it a database connection of
@@ -104,7 +104,6 @@ export const SERVICE_BUILD_CONTEXTS: Readonly<Record<string, string>> = Object.f
   api: ".",
   "website-server": "website-server",
   "worker-analytics": ".",
-  "worker-research": ".",
   "system-scheduler": ".",
   "analytics-producer": ".",
   [MEMBER_AGENT_SERVICE]: ".",
@@ -127,7 +126,7 @@ export function buildContextsFor(
 // overrides it (it may append the stage overlay and/or a generated pg-data bind
 // overlay); the eval harness and the rails check, which today each spell their
 // own copy out, take this one as they adopt the module.
-export const DEFAULT_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.smoke.yml"];
+export const DEFAULT_COMPOSE_FILES = ["docker-compose.yml"];
 
 // The `bun run smoke -- --stage` overlay: the ONLY file in the repo that names a
 // host port. APPENDED to the list above (never a replacement, and never
@@ -291,10 +290,9 @@ export interface StackConfig {
   /**
    * Whether `api` runs allow-insecure (RM_ALLOW_INSECURE=1: a privileged route
    * with no token configured opens instead of refusing). Emitted by
-   * buildComposeEnv() and never accepted from extraComposeEnv. Absent keeps the
-   * value docker-compose.smoke.yml used to pin for every consumer (`1`); the
-   * smoke boot decides it from its policy (scripts/lib/smoke-compose-env.ts
-   * stackAllowInsecureFor), so a boot under `RM_ENV=prod` runs without it.
+   * buildComposeEnv() and never accepted from extraComposeEnv. Absent means
+   * false: secure by default. Only `bun smoke --allow-insecure` sets it, and
+   * that flag is a refusal under `RM_ENV=prod` (scripts/lib/smoke-compose-env.ts).
    */
   allowInsecure?: boolean;
   // Extra compose interpolation values a specific consumer needs (the smoke
@@ -357,7 +355,7 @@ export function instanceComposeEnv(instance: StackInstance): Record<string, stri
 }
 
 // ── Compose env (PURE) ──────────────────────────────────────────────────────
-// Exactly the interpolation values docker-compose.yml / docker-compose.smoke.yml
+// Exactly the interpolation values docker-compose.yml
 // need, and nothing else. Deliberately does NOT spread the caller's ambient
 // environment, and deliberately does NOT set COMPOSE_FILE / COMPOSE_PROJECT_NAME:
 // topology is expressed as argv (`-p` / `-f`, see composeArgs) so a stale
@@ -381,7 +379,7 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
   return {
     SMOKE_PROJECT: cfg.project,
     // The environment labels every smoke-overlay service and the pgdata volume
-    // stamp (docker-compose.smoke.yml). Threaded through compose interpolation
+    // stamp (docker-compose.yml). Threaded through compose interpolation
     // rather than applied by a wrapper so a bare `docker compose -f … up` gets
     // them too, and so `smoke:down`/`smoke:status` reproduce them from the state
     // file without a second code path.
@@ -403,7 +401,7 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
     // above) — the whole point is that one place decides.
     RM_ENV: cfg.rmEnv ?? "prod",
     // An empty value is "not insecure" (backend config.ts reads exactly "1").
-    RM_ALLOW_INSECURE: cfg.allowInsecure === false ? "" : "1",
+    RM_ALLOW_INSECURE: cfg.allowInsecure === true ? "1" : "",
     POSTGRES_USER: cfg.database.user,
     POSTGRES_PASSWORD: cfg.database.password,
     POSTGRES_DB: cfg.database.name,

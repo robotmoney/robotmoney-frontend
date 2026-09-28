@@ -252,7 +252,7 @@ export function teardown(h: BootHarness, boot?: RunningBoot): void {
     if (readStackState(h.paths) !== null) runCommand(h, "smoke-down.ts", ["--instance", h.instance]);
   } catch { /* backstop below */ }
   Bun.spawnSync(
-    ["docker", "compose", "--env-file", "/dev/null", "-p", h.project, "-f", "docker-compose.yml", "-f", "docker-compose.smoke.yml", "down", "-v", "--remove-orphans"],
+    ["docker", "compose", "--env-file", "/dev/null", "-p", h.project, "-f", "docker-compose.yml", "down", "-v", "--remove-orphans"],
     { cwd: repoRoot, env: { ...h.env, RM_INSTANCE: h.instance, RM_INSTANCE_STATE_DIR: h.paths.dir, SMOKE_PROJECT: h.project, RM_STACK_ENV_CLASS: "local", RM_STACK_ENV_HASH: "teardown" }, stdout: "ignore", stderr: "ignore" },
   );
   Bun.spawnSync(["bun", "--no-env-file", "scripts/smoke-clean.ts", "--project", h.project], { cwd: repoRoot, env: h.env, stdout: "ignore", stderr: "ignore" });

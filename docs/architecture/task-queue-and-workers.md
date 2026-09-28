@@ -54,10 +54,11 @@ startup). Lanes are deterministic kind allowlists applied inside the claim:
 | Lane | Claims | Purpose |
 |------|--------|---------|
 | `analytics` | everything except `research.%` | Internal scheduled pipelines (vault/wallet/buybacks/projects); legacy `regime.classify` rows are disabled/dead-lettered. |
-| `research` | `research.%` only | Compatibility lane for retired queue rows; supported research runs in the independent producer. Removed under smoke spec §7.2 (2026-09-24). |
 | `generic` | everything | Single-process dev convenience; never part of the compose topology. |
 
-There is no `swarm` lane. It was removed with the job chain it reserved
+There is no `research` lane. It served only retired rows, and it was removed
+with its `worker-research` service (issue #1026 wave 6, smoke spec §7.2). Supported research runs in
+the independent producer. There is also no `swarm` lane. It was removed with the job chain it reserved
 capacity for ([scheduler spec §1](../technical/system-scheduler-spec.md#1-roles):
 `system-scheduler` "replaces the process formerly called `worker-swarm`"), and
 the `swarm.%` exclusions the other lanes carried went with it — an exclusion
@@ -65,12 +66,12 @@ for a kind nothing can enqueue is a rule a reader has to look up to discover is
 dead.
 
 The Compose topology is one container per surviving lane
-(`worker-analytics`/`worker-research` in `docker-compose.yml`), the non-queue
+(`worker-analytics` in `docker-compose.yml`), the non-queue
 `analytics-producer`, and `system-scheduler`, which is not a queue lane at all
 — it holds one API token, no database credential, and drives epochs over HTTP.
 The pipeline worker (`worker-analytics`, lane `analytics`, running the vault,
 wallet, buyback and project jobs) holds `rm_worker` and runs preflight checks
-1–3 at startup; `worker-research` serves only retired rows and is removed
+1–3 at startup
 ([smoke spec §7.2](../technical/smoke-production-spec.md#72-one-library-three-callers)). Worker lanes
 scale independently; producer cadence does not pass through a worker lane.
 Worker ids default to `<lane>-<pid>`, so `locked_by`, logs, and the admin jobs

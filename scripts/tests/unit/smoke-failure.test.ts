@@ -17,7 +17,7 @@ describe("DB_WRITER_SERVICES — what a failed boot must stop", () => {
 
   test("covers every service that writes: the api, the producer and both worker lanes", () => {
     expect([...DB_WRITER_SERVICES].sort()).toEqual(
-      ["analytics-producer", "api", "worker-analytics", "worker-research"],
+      ["analytics-producer", "api", "worker-analytics"],
     );
   });
 

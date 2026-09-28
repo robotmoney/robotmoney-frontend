@@ -427,17 +427,18 @@ describe("the general job queue and every non-swarm kind are untouched", () => {
     expect(scheduler).toContain("job_schedules");
   });
 
-  test("the three surviving lanes are declared and resolve", () => {
+  test("the two surviving lanes are declared and resolve, and there is no research lane", () => {
     const lanes = readFileSync(join(REPO, "backend/src/worker/lanes.ts"), "utf8");
-    for (const lane of ["analytics", "research", "generic"]) {
+    for (const lane of ["analytics", "generic"]) {
       expect({ lane, present: lanes.includes(`name: "${lane}"`) }).toEqual({ lane, present: true });
     }
+    expect(lanes).not.toContain('name: "research"');
   });
 
-  test("the analytics and research worker services survive in the production compose", () => {
+  test("the analytics worker service survives in the production compose, and worker-research is gone", () => {
     const compose = readFileSync(join(REPO, "docker-compose.yml"), "utf8");
     expect(compose).toContain("worker-analytics:");
-    expect(compose).toContain("worker-research:");
+    expect(compose).not.toContain("worker-research");
   });
 
   test("the production compose declares the system-scheduler that replaces worker-swarm (§1)", () => {

@@ -594,7 +594,7 @@ export function assertNoVaultAddressCollision(
 //
 // THIS DEFAULT IS THE EFFECTIVE PRODUCTION VALUE, not a placeholder.
 // SWARM_PUBLIC_BASE_URL is named by NO compose file: not docker-compose.yml's
-// api `environment:` allowlist, not docker-compose.smoke.yml's, not the
+// api `environment:` allowlist, not docker-compose.yml's, not the
 // x-worker-env anchor — and there is no `env_file:` anywhere and
 // backend/Dockerfile sets no ENV, so the variable can never reach the
 // container. It is also absent from scripts/lib/smoke-main.ts's

@@ -32,7 +32,6 @@ import { join } from "node:path";
 const REPO = join(import.meta.dir, "..", "..", "..");
 const COMPOSE_FILES = [
   "docker-compose.yml",
-  "docker-compose.smoke.yml",
   "docker-compose.stage.yml",
 ];
 

@@ -38,7 +38,7 @@ import {
   type RunningBoot,
 } from "./smoke-boot-harness.ts";
 
-const APP_SERVICES = ["api", "website-server", "worker-analytics", "worker-research", "system-scheduler"];
+const APP_SERVICES = ["api", "website-server", "worker-analytics", "system-scheduler"];
 const REPLACE = DEPLOYMENT_PHASES.indexOf("replace");
 
 let h: BootHarness | undefined;

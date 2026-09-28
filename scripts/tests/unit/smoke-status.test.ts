@@ -278,7 +278,7 @@ describe("the command, as its own process, with Docker unreachable (criterion 15
     const paths = instancePaths(root, "rm_local_cli", { create: true });
     const receipt = await completedRun(paths, "rm_local_cli");
     // A stack record, so the command asks the (dead) daemon and must survive it.
-    writeFileSync(paths.stackStateFile, JSON.stringify({ instance: "rm_local_cli", project: "rm_smoke_stack_0123456789", composeFiles: "docker-compose.yml:docker-compose.smoke.yml", databaseUrl: "x", dbUser: "x", dbPassword: "x", dbName: "x", envClass: "local", envHash: "0123456789", db: "ephemeral", externalPg: false, apiPort: 0, webPort: 0, pgPort: 0, stage: false, logFile: "", createdAt: "" }));
+    writeFileSync(paths.stackStateFile, JSON.stringify({ instance: "rm_local_cli", project: "rm_smoke_stack_0123456789", composeFiles: "docker-compose.yml", databaseUrl: "x", dbUser: "x", dbPassword: "x", dbName: "x", envClass: "local", envHash: "0123456789", db: "ephemeral", externalPg: false, apiPort: 0, webPort: 0, pgPort: 0, stage: false, logFile: "", createdAt: "" }));
     const r = run(root, ["--instance", "rm_local_cli"]);
     expect(r.code).toBe(0);
     expect(r.out).toContain(`under plan ${receipt.planId}`);

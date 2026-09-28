@@ -12,7 +12,7 @@
 //      baked into it would say so (`<sha>+dirty`) far too late.
 //   2. BUILD, with the same Dockerfiles and the same compose model the stack
 //      runs — `docker compose build` over docker-compose.yml +
-//      docker-compose.smoke.yml with an images override that names the tagged
+//      docker-compose.yml with an images override that names the tagged
 //      refs, so what is built and what is later started cannot drift apart.
 //      Nothing is re-derived from a second copy of the topology.
 //   3. SHIP, `docker save <six refs> | ssh <host> docker load`. One stream, no
@@ -163,7 +163,6 @@ if (import.meta.main) {
     "docker",
     ...composeArgs(`rm_ship_images_${args.tag.replace(/[^A-Za-z0-9]/g, "_")}`, [
       "docker-compose.yml",
-      "docker-compose.smoke.yml",
       overridePath,
     ]),
   ];

@@ -93,7 +93,7 @@ function render(files: readonly string[], profiles: readonly string[] = [], extr
   ) as ConfigLike;
 }
 
-const SMOKE = ["docker-compose.yml", "docker-compose.smoke.yml"] as const;
+const SMOKE = ["docker-compose.yml"] as const;
 const FILE = credentialFile(["athena", "noop-analyst", "robot-money"], ["themis"]);
 const PARTICIPANTS = writeParticipantOverlay(entriesOf(FILE)).overlay;
 const FILE_SETS: readonly { label: string; files: readonly string[] }[] = [

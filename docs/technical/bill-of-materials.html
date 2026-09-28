@@ -387,8 +387,7 @@ footer {
     <p><strong>contract/</strong> — Shared HTTP contract (route table, DTOs, canonical signing + regime rules); zero
       runtime dependencies, vendored into the frontend by <code>bun run sync-contract</code></p>
     <p><strong>frontend/</strong> — Buildless static SPA (HTML + Alpine.js + CSS); no build step required</p>
-    <p><strong>backend/</strong> — Bun processes sharing one source tree: the <em>api</em> (HTTP + optional static
-      serving when <code>STATIC_DIR</code> is set), one <em>worker</em> per queue lane, and the independent
+    <p><strong>backend/</strong> — Bun processes sharing one source tree: the <em>api</em> (HTTP only; the site is served by website-server), one <em>worker</em> per queue lane, and the independent
       <em>analytics-producer</em>, which holds no database credential at all</p>
     <p><strong>scripts/</strong> — the smoke/stage stack driver, preview server, goldens capture, evals and checks</p>
   </div>
@@ -1367,8 +1366,6 @@ footer {
         may take those, so session lifecycle work is always immediately claimable.</li>
       <li><strong>analytics</strong> — everything EXCEPT <code>swarm.%</code> and <code>research.%</code>. In practice
         that is the vault / wallet / buybacks / projects pipelines — <strong>it excludes research</strong>.</li>
-      <li><strong>research</strong> — compatibility lane for legacy <code>research.%</code> rows. Since D25 the
-        independent producer owns supported research execution and nothing can enqueue new rows here.</li>
       <li><strong>generic</strong> — dev/tooling convenience: everything EXCEPT the reserved <code>swarm.%</code>
         kinds. Not part of the compose topology.</li>
     </ul>
@@ -2025,12 +2022,6 @@ footer {
         <td>Postgres connection string — the only required input</td>
       </tr>
       <tr>
-        <td><code>STATIC_DIR</code></td>
-        <td><code>null</code></td>
-        <td>If set, the API process <em>also</em> serves this directory (single-box deployment, no reverse proxy).
-          Unset means no static serving at all.</td>
-      </tr>
-      <tr>
         <td><code>API_PORT</code></td>
         <td>8787</td>
         <td>The port a host-side <code>bun run api</code> binds. There is no bare <code>PORT</code> for the API
@@ -2200,7 +2191,7 @@ footer {
     <tbody>
       <tr>
         <td><code>WORKER_LANE</code></td>
-        <td>Which lane this worker drains: swarm | analytics | research | generic</td>
+        <td>Which lane this worker drains: analytics | generic</td>
         <td><strong>REQUIRED</strong> — empty or unknown throws at startup; there is no default</td>
       </tr>
       <tr>

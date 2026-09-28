@@ -19,7 +19,7 @@
 // scripts/tests/unit/smoke-onboarding-driver.test.ts uses, so a grader that has
 // stopped matching is red rather than vacuously green.
 import { describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   assertProductionConstants,
@@ -552,18 +552,17 @@ describe("assertProductionConstants — the boot refuses to lie about its own ca
     expect(smokeMain).toContain("const twinBoot = requestsDump(process.argv);");
   });
 
-  test("the smoke overlay pins NO scheduling switch, because there is none to pin", () => {
-    // The other half of the same invariant, inverted by issue #1026. The
-    // overlay used to be the belt to this check's braces; now neither has a
-    // subject. A reappearing pin here would mean the mechanism came back.
-    const overlay = readFileSync(join(repoRoot, "docker-compose.smoke.yml"), "utf8");
-    expect(overlay).not.toMatch(/SCHEDULES_ENABLED/);
-    expect(overlay).not.toMatch(/_CRON:/);
-    // …and the two lanes that survive still receive the shared overlay, which
-    // no longer hangs off a service that can be deleted out from under them.
-    expect(overlay).toContain("x-smoke-worker: &smoke-worker");
-    expect(overlay).toContain("worker-analytics: *smoke-worker");
-    expect(overlay).toContain("worker-research: *smoke-worker");
+  test("no compose file pins a scheduling switch, because there is none to pin, and the overlay is gone", () => {
+    // The other half of the same invariant, inverted by issue #1026. A
+    // reappearing pin here would mean the mechanism came back. The smoke
+    // overlay itself was deleted in wave 6 (P1).
+    expect(existsSync(join(repoRoot, "docker-compose.smoke.yml"))).toBe(false);
+    const compose = readFileSync(join(repoRoot, "docker-compose.yml"), "utf8");
+    expect(compose).not.toMatch(/SCHEDULES_ENABLED/);
+    // The producer's two crons are the only `_CRON` variables, and they are the
+    // producer's, not the queue's.
+    expect([...compose.matchAll(/^\s+(\w+_CRON):/gm)].map((m) => m[1]).sort()).toEqual(["PRODUCER_REGIME_CRON", "PRODUCER_RESEARCH_CRON"]);
+    expect(compose).not.toContain("worker-research");
   });
 });
 

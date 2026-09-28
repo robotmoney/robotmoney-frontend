@@ -90,7 +90,7 @@ const port = await freePort();
 // how you accidentally kill the live site.
 const environment = resolveStackEnvironment(process.env);
 const name = stackProjectName("pgtest", environment);
-// This is a raw `docker run`, NOT compose, so the labels docker-compose.smoke.yml
+// This is a raw `docker run`, NOT compose, so the labels docker-compose.yml
 // applies to every other container must be passed explicitly here.
 const labelFlags = dockerLabelFlags(stackLabels(environment, name));
 

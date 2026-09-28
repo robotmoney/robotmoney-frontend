@@ -48,7 +48,7 @@ export const CI_PROJECT_PREFIX = "rm_ci";
 export const LOCAL_PROJECT_PREFIX = "rm_smoke";
 
 // The label keys. `robotmoney.smoke.project` predates this module
-// (docker-compose.smoke.yml has always stamped it on the pgdata volume, which is
+// (docker-compose.yml has always stamped it on the pgdata volume, which is
 // how `smoke:clean` finds volumes by label instead of by name); the two env
 // labels are its generalisation to the environment.
 export const PROJECT_LABEL = "robotmoney.smoke.project";
@@ -70,7 +70,7 @@ export const TWIN_ROLE = "smoke-twin";
 
 // The compose interpolation variable names the two env labels are threaded
 // through (scripts/stack/config.ts's buildComposeEnv sets both;
-// docker-compose.smoke.yml reads both). Named RM_STACK_* rather than RM_ENV_* so
+// docker-compose.yml reads both). Named RM_STACK_* rather than RM_ENV_* so
 // they can never be confused with `RM_ENV` (ephemeral|smoke|prod), which is a
 // BACKEND runtime mode and an entirely different axis.
 export const ENV_CLASS_COMPOSE_VAR = "RM_STACK_ENV_CLASS";
