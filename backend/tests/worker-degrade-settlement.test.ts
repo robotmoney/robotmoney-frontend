@@ -34,7 +34,7 @@ beforeEach(async () => {
 const drain = async (max = 12) => {
   for (let i = 0; i < max; i++) {
     await sql`UPDATE jobs SET run_after = now() WHERE status = 'pending'`;
-    if (!(await processOneJob({ lane: LANES.research }))) return;
+    if (!(await processOneJob({ lane: LANES.generic }))) return;
   }
 };
 

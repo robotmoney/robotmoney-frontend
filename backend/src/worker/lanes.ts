@@ -1,19 +1,19 @@
 // Execution lanes (issue #107): deterministic kind-allowlist filtering for queue
-// claims so regime analytics and slow research fetches run with independent
-// capacity. A lane is a pair of SQL LIKE pattern lists applied inside the
+// claims. A lane is a pair of SQL LIKE pattern lists applied inside the
 // FOR UPDATE SKIP LOCKED claim (loop.ts) — ownership semantics are unchanged, a
 // lane only narrows WHICH pending kinds a worker may claim.
 //
 // Topology (production default = the docker-compose services):
-//   - `analytics` — non-research scheduled product pipelines
-//     (vault/wallet/buybacks/projects): everything EXCEPT `research.%` (service
-//     `worker-analytics`). Legacy regime.classify rows are disabled/dead-lettered
-//     and have no supported enqueue path.
-//   - `research` — compatibility lane for legacy `research.%` queue rows. D25's
-//     independent producer owns supported research execution; seed retires
-//     pending rows and control-plane endpoints cannot create new ones.
+//   - `analytics` — the scheduled product pipelines (vault/wallet/buybacks/
+//     projects), service `worker-analytics`. It never claims the kinds the
+//     independent producer replaced (D25): those rows are retired, and a
+//     retired row must stay unclaimed rather than run on a database-holding
+//     worker.
 //   - `generic` — single-process dev/tooling convenience: every kind. Not part of
 //     the compose topology.
+//
+// Regime and research compute belong to `analytics-producer`, which submits over
+// REST. There is no lane for it (issue #1026 wave 6, D55).
 //
 // THERE IS NO SWARM LANE. Session work is not queue work any more: per
 // docs/technical/system-scheduler-spec.md §1 the `system-scheduler` container
@@ -24,7 +24,7 @@
 // WORKER_LANE is REQUIRED for a worker process: empty or unknown lane names fail
 // loudly at startup (resolveLane) rather than silently claiming everything.
 
-export type LaneName = "analytics" | "research" | "generic";
+export type LaneName = "analytics" | "generic";
 
 export interface Lane {
   readonly name: LaneName;
@@ -34,11 +34,11 @@ export interface Lane {
   readonly exclude: readonly string[];
 }
 
-const RESEARCH_KINDS = "research.%";
+// Queue kinds the producer replaced (D25). No lane claims them but `generic`.
+const PRODUCER_OWNED_KINDS = "research.%";
 
 export const LANES: Record<LaneName, Lane> = {
-  research: { name: "research", include: [RESEARCH_KINDS], exclude: [] },
-  analytics: { name: "analytics", include: ["%"], exclude: [RESEARCH_KINDS] },
+  analytics: { name: "analytics", include: ["%"], exclude: [PRODUCER_OWNED_KINDS] },
   generic: { name: "generic", include: ["%"], exclude: [] },
 };
 
@@ -50,9 +50,7 @@ export function describeLane(lane: Lane): string {
 
 // Resolve a worker's lane from configuration (WORKER_LANE). FAIL-CLOSED: an
 // empty/missing or unknown value throws at startup — a misconfigured worker must
-// never fall through to claiming every kind: `analytics` and `research` are sized
-// and deployed separately, and a worker that claimed both would starve whichever
-// side its neighbour was meant to serve.
+// never fall through to claiming every kind.
 export function resolveLane(raw: string | undefined | null): Lane {
   const value = (raw ?? "").trim();
   const valid = Object.keys(LANES).join(" | ");

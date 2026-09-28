@@ -4,9 +4,8 @@
 // `WORKER_LANE=<analytics|research|generic> bun run src/worker/index.ts`.
 //
 // WORKER_LANE is REQUIRED (issue #107): an empty or unknown lane fails loudly
-// here instead of silently claiming every kind — the compose topology gives
-// each lane its own container (worker-analytics / worker-research; see
-// docker-compose.yml).
+// here instead of silently claiming every kind — the compose topology runs
+// one worker container, worker-analytics (see docker-compose.yml).
 import { config, warnIfStrategyVaultsUnconfigured } from "../config.ts";
 import { runStartupPreflight } from "../db/preflight.ts";
 import { resolveLane } from "./lanes.ts";

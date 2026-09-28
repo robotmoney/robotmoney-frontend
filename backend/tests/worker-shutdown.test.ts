@@ -81,7 +81,7 @@ async function waitForStatus(id: number, status: string, ms: number): Promise<vo
 }
 
 test("idle shutdown: all lanes signaled together exit bounded with no orphaned work", async () => {
-  const workers: WorkerHandle[] = [LANES.analytics, LANES.research].map((lane) =>
+  const workers: WorkerHandle[] = [LANES.analytics, LANES.generic].map((lane) =>
     launch({ lane, workerId: `idle-${lane.name}`, ...fastOpts, shutdownTimeoutMs: 5000 }));
   await sleep(150); // loops spinning idle
 
@@ -115,7 +115,7 @@ test("active shutdown: in-flight job finishes, exactly one terminal job_runs row
 });
 
 test("hung handler: bounded exit at the deadline, job released to pending (never orphaned), zombie write discarded", async () => {
-  const worker = launch({ lane: LANES.research, workerId: "hung-research", ...fastOpts, shutdownTimeoutMs: 500 });
+  const worker = launch({ lane: LANES.generic, workerId: "hung-research", ...fastOpts, shutdownTimeoutMs: 500 });
   const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_shutdown_hang', '{}') RETURNING id`;
   await waitForStatus(id, "running", 3000);
 
@@ -143,7 +143,7 @@ test("stop() resolving is NOT proof the loops exited — drained() is, and it fa
   // that a drain guarantee is making a claim the runtime does not honour, and
   // the symptom of being wrong is not a failure here — it is a query from an
   // escaped loop against a database some LATER file already dropped.
-  const worker = launch({ lane: LANES.research, workerId: "drain-research", ...fastOpts, shutdownTimeoutMs: 300 });
+  const worker = launch({ lane: LANES.generic, workerId: "drain-research", ...fastOpts, shutdownTimeoutMs: 300 });
   const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_shutdown_hang', '{}') RETURNING id`;
   await waitForStatus(id, "running", 3000);
 

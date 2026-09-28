@@ -1,8 +1,9 @@
 // Issue #107 — lane-filtered claiming over the real Postgres queue. Covers:
 //   - fail-loud lane configuration (empty/unknown WORKER_LANE);
 //   - allowlist filtering: a worker NEVER claims kinds outside its lane;
-//   - starvation: an indefinitely blocked research job cannot prevent analytics
-//     and regime jobs from reaching terminal state;
+//   - the lane set is exactly analytics and generic: there is no research lane
+//     (issue #1026 wave 6), and a producer-owned kind is claimable by `generic`
+//     alone;
 //
 // THE RESERVED-LANE CASES ARE GONE, not disabled (issue #1026 W4). Two tests
 // here asserted that `swarm.%` was claimable by one lane and by no other, and
@@ -14,6 +15,8 @@
 //     non-overlapping ownership and exactly one terminal job_runs row;
 //   - priority is preserved WITHIN a lane.
 // Runs in the required backend-integration job against ephemeral Postgres.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test, expect, afterEach, beforeAll, afterAll, beforeEach } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
@@ -96,17 +99,18 @@ test("resolveLane: empty or unknown lane configuration fails loudly", () => {
   expect(() => resolveLane("   ")).toThrow(/WORKER_LANE is required/);
   expect(() => resolveLane("bogus")).toThrow(/invalid WORKER_LANE "bogus"/);
   expect(resolveLane("analytics").name).toBe("analytics");
-  expect(resolveLane("research").name).toBe("research");
+  expect(() => resolveLane("research")).toThrow(/invalid WORKER_LANE "research"/);
+  expect(Object.keys(LANES).sort()).toEqual(["analytics", "generic"]);
   expect(resolveLane("generic").name).toBe("generic");
   expect(describeLane(LANES.analytics)).toContain("except");
 });
 
-test("lane filter: research kinds only claimable by the research lane (not analytics)", async () => {
+test("lane filter: producer-owned research kinds are claimable by `generic` only, never by analytics", async () => {
   researchGate.open(); // don't block — this test only checks claimability
   const id = await enqueue("research.test_block");
   expect(await processOneJob({ lane: LANES.analytics, workerId: "a1" })).toBe(false);
   expect(await jobStatus(id)).toBe("pending");
-  expect(await processOneJob({ lane: LANES.research, workerId: "r1" })).toBe(true);
+  expect(await processOneJob({ lane: LANES.generic, workerId: "g1" })).toBe(true);
   expect(await jobStatus(id)).toBe("succeeded");
 });
 
@@ -130,31 +134,33 @@ test("priority is preserved within a lane", async () => {
   expect(await jobStatus(low)).toBe("pending"); // higher priority claimed first
 });
 
-test("starvation: a blocked research job cannot prevent analytics or regime work (full lane topology)", async () => {
+test("starvation: a blocked job on one worker cannot prevent another analytics worker's work", async () => {
   const workers: WorkerHandle[] = [];
   try {
-    // The configured topology: one worker per lane, all polling fast.
-    for (const lane of [LANES.analytics, LANES.research]) {
-      workers.push(launch({
-        lane, workerId: `starve-${lane.name}`, idlePollMs: 25,
-        schedulerTickMs: 60_000, reaperTickMs: 60_000, shutdownTimeoutMs: 4000,
-      }));
-    }
-    const research = await enqueue("research.test_block");
-    await waitFor(async () => (await jobStatus(research)) === "running", 3000, "research job to block its lane");
+    const opts = { idlePollMs: 25, schedulerTickMs: 60_000, reaperTickMs: 60_000, shutdownTimeoutMs: 4000 };
+    // A generic worker takes the blocking job and is stuck inside it.
+    workers.push(launch({ lane: LANES.generic, workerId: "starve-generic", ...opts }));
+    const blocked = await enqueue("research.test_block");
+    await waitFor(async () => (await jobStatus(blocked)) === "running", 3000, "the blocking job to hold its worker");
+    // The analytics worker starts after, so it can only ever take the fast work.
+    workers.push(launch({ lane: LANES.analytics, workerId: "starve-analytics", ...opts }));
 
     const fast = await enqueue("ops.test_fast");
     const regime = await enqueue("regime.classify");
     await waitFor(async () => (await jobStatus(fast)) === "succeeded", 5000, "analytics job to complete");
     await waitFor(async () => (await jobStatus(regime)) === "succeeded", 5000, "regime job to complete");
-    // ... while research is STILL blocked and owned by the research lane.
-    const [r] = await sql`SELECT status, locked_by FROM jobs WHERE id = ${research}`;
+    const [r] = await sql`SELECT status, locked_by FROM jobs WHERE id = ${blocked}`;
     expect(r.status).toBe("running");
-    expect(r.locked_by).toBe("starve-research");
+    expect(r.locked_by).toBe("starve-generic");
   } finally {
     researchGate.open();
     await Promise.all(workers.map((w) => w.stop()));
   }
+});
+
+test("lanes.ts names no research lane", () => {
+  const text = readFileSync(join(import.meta.dir, "../src/worker/lanes.ts"), "utf8");
+  expect(text).not.toMatch(/research\s*:|"research"\s*[|;,)]|LANES\.research|research lane/i);
 });
 
 test("exclusive claims: N concurrent workers, each job executes once, ownership never overlaps, one job_runs row per job", async () => {
