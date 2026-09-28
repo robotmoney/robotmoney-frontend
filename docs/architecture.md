@@ -1546,7 +1546,7 @@ a 5xx, a network error, an unreadable answer (`model_unavailable:…`), an empty
 (`malformed_json`, `not_an_object`, `missing_rationale`,
 `missing_disagreements`, `too_many_disagreements`, `malformed_disagreement`,
 `malformed_position`, `missing_release_safety`, `malformed_release`,
-`malformed_concerns`), more than `MAX_POSITIONS` = 20 positions inside one
+`malformed_concerns`), more than `MAX_POSITIONS` (= `SWARM_ROSTER_CAP`, 20) positions inside one
 disagreement (`too_many_positions`), the same member named twice inside one
 disagreement (`duplicate_position:<id>`), a disagreement attributed to a member
 who did not submit (`unknown_member:<id>`), a weight-like field anywhere in the

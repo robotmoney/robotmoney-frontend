@@ -189,7 +189,7 @@ test("members: manual add (201, one-time token) → list is redacted → review/
 
 // ── The admin add path can no longer manufacture an id (issue #690) ─────────
 //
-// SWARM_ROSTER_CAP is 10 and this file's clean database is shared by every test
+// SWARM_ROSTER_CAP is finite and this file's clean database is shared by every test
 // in it, so a test that seats members and walks away spends seats the later
 // `members: update …` tests need. Each #690 test hands its seats back the way
 // an operator would — through the real deactivate route, which is also a small

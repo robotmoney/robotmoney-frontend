@@ -2075,9 +2075,9 @@ test("a positions[] the model can ask for cheaply cannot be persisted expensivel
     release_safety: { release: "safe", concerns: [] },
   });
 
-  // 1. Over-long array. 21 entries is one past the bound; every id is real, so
-  //    nothing but the LENGTH is wrong with this response.
-  const long = Array.from({ length: 21 }, (_, i) => ({
+  // 1. Over-long array. One past the bound (MAX_POSITIONS is the roster cap);
+  //    every id is real, so nothing but the LENGTH is wrong with this response.
+  const long = Array.from({ length: ic.SWARM_ROSTER_CAP + 1 }, (_, i) => ({
     member_id: members[i % members.length]!.id, view: "v",
   }));
   const overLong = await judgeSession(session.id, { transport: fixedTransport(answerWith(long)) });
@@ -2115,8 +2115,8 @@ test("a positions[] the model can ask for cheaply cannot be persisted expensivel
   expect(() => parseJudgeResponse(cheap, fat)).toThrow("too_many_positions");
   expect(() => parseJudgeResponse(answerWith(repeated), fat)).toThrow("duplicate_position:");
 
-  // And a legitimate multi-member disagreement — one position per member of a
-  // single-digit roster — is NOT truncated by the bound.
+  // And a legitimate multi-member disagreement — one position per member, at
+  // most SWARM_ROSTER_CAP of them — is NOT truncated by the bound.
   const honest = parseJudgeResponse(
     answerWith(members.map((m) => ({ member_id: m.id, view: "v" }))),
     input,
