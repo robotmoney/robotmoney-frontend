@@ -7,7 +7,6 @@ import { config, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured
 import { isDatabaseUnavailable, sql } from "../db/client.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
-import { readStaticIdentity } from "../ops/static-identity.ts";
 import { buildIdentityJson } from "../ops/build-identity.ts";
 import { apiVersionResponse } from "../ops/api-version.ts";
 import { analyticsLedgerGuardOutcome, assertAnalyticsLedgerGuardArmed } from "../db/analytics-ledger-guard.ts";
@@ -224,13 +223,6 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
         // its identity — never a package version or a timestamp standing in for
         // one (backend/src/ops/build-identity.ts).
         build: buildIdentityJson(),
-        // AND WHICH FRONTEND IT IS SERVING (T26). The api co-serves the SPA
-        // from STATIC_DIR, a read-only bind of a directory assembled on the
-        // deploy host outside this image — `build` above says nothing about it,
-        // so a redeploy that rebuilt the image and skipped `bun run
-        // static:assemble` passed every identity check while serving the
-        // previous release's HTML. `matches_image` is that drift, as a boolean.
-        static: readStaticIdentity(config.staticDir),
         analytics_ledger_guard: analyticsLedgerGuardOutcome(),
       });
     }
@@ -241,12 +233,10 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
     // reasons: /health is a liveness probe whose body varies with database and
     // guard state, while this is a constant for the life of the process.
     if (pathname === ROUTES.version) {
-      // Flat, plus `static` — the SPA half of AC-ID-03 (T26). Both halves in
-      // one body because the check runbook §7 describes is one `curl` and a
-      // comparison, and the question "is the frontend this API serves the same
-      // release as the API" cannot be answered from two requests that raced a
-      // redeploy.
-      return json({ ...buildIdentityJson(), static: readStaticIdentity(config.staticDir) });
+      // Flat: this process's own build identity and nothing about the site.
+      // The site reports itself at /version.json and the api's contract
+      // version is at /api/version (D55 (1)).
+      return json(buildIdentityJson());
     }
 
     if (pathname === ROUTES.comments.list && req.method === "GET") {

@@ -151,6 +151,22 @@ describe("GET /api/version on the running api", () => {
   });
 });
 
+// ── D55 (1): the api no longer reports the site ─────────────────────────────
+describe("the api reports itself only (D55 (1))", () => {
+  test("/version and /health carry no `static` field, and no module reads the site directory", async () => {
+    const port = await bootApi({ [BUILD_COMMIT_ENV]: COMMIT, STATIC_DIR: "/nonexistent" });
+    const version = await (await fetch(`http://127.0.0.1:${port}${ROUTES.version}`)).json();
+    expect(version).not.toHaveProperty("static");
+    const health = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
+    expect(health).not.toHaveProperty("static");
+    expect(health).not.toHaveProperty("matches_image");
+    for (const file of ["src/api/index.ts", "src/config.ts"]) {
+      const text = readFileSync(join(backendDir, file), "utf8");
+      expect(text).not.toMatch(/staticDir|STATIC_DIR|static-identity|matches_image/);
+    }
+  });
+});
+
 // ── 3. The import graph ─────────────────────────────────────────────────────
 /** Every backend source file `entry` reaches through relative imports. */
 function relativeImportClosure(entry: string): string[] {
