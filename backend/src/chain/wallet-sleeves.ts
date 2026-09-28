@@ -76,6 +76,7 @@ const SLEEVE_PROBE = {
          AND ap.time_basis = $1
        WHERE lower(wss.wallet_address) = lower($2)
          AND wss.provenance <> $3
+         AND wss.superseded_at IS NULL
        ORDER BY wss.symbol, wss.sample_date DESC, wss.sampled_at DESC`,
   params: [ASSET_PRICE_TIME_BASIS, "0x0000000000000000000000000000000000000001", QUARANTINED_PROVENANCE],
 };
@@ -166,6 +167,9 @@ async function computeWalletSleeves(
          AND ap.time_basis = ${ASSET_PRICE_TIME_BASIS}
        WHERE lower(wss.wallet_address) = lower(${address})
          AND wss.provenance <> ${QUARANTINED_PROVENANCE}
+         -- D55 (6): a row the repair pass superseded (migration 0086) is
+         -- gone for every reader, as the delete it replaces left it.
+         AND wss.superseded_at IS NULL
        ORDER BY wss.symbol, wss.sample_date DESC, wss.sampled_at DESC
     `;
     const sampleMap = new Map(rows.map((r) => [r.symbol, r]));

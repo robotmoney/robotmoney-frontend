@@ -31,6 +31,12 @@
 //   * It never silently overwrites a day that already has rows. A complete day
 //     is untouched; an incomplete day is copied to immutable evidence before a
 //     complete replacement snapshot is committed (markets §6.5's append-only boundary).
+//   * It never deletes a row (D55 (6); smoke-production-spec.md §3, "Only
+//     rm_owner may DELETE or TRUNCATE"). The replacement snapshot upserts each
+//     row it writes in place and marks `superseded_at` (migration 0086) on the
+//     day's live rows it no longer writes; every read of either table filters
+//     `superseded_at IS NULL`, so what a reader sees is exactly what the old
+//     delete-and-insert left.
 //   * It never treats `success:true` + `returnData:"0x"` as a zero. That is a
 //     contract with no code at that block, and decoding it to 0 does not read a
 //     balance — it invents one.
@@ -569,6 +575,10 @@ interface WalletSnapshotCompleteness {
 
 /** Inspect active rows against the same manifest the writer uses.
  *
+ * "Active" is live: a row a repair pass superseded (D55 (6), migration 0086)
+ * is neither coverage nor a row awaiting archival — it was archived when it
+ * was live, before the pass that superseded it wrote anything.
+ *
  * counts-quarantined: DELIBERATE — quarantined rows are selected so they can be
  * counted as occupied evidence awaiting archival, but they are excluded from
  * the present-key sets and therefore can never make a snapshot complete. */
@@ -582,6 +592,7 @@ async function inspectWalletSnapshot(
     SELECT symbol, provenance
       FROM wallet_balance_samples
      WHERE sample_date = ${date}
+       AND superseded_at IS NULL
      ${lockRows ? db`FOR UPDATE` : db``}
   `;
   // counts-quarantined: DELIBERATE — same evidence/coverage distinction above.
@@ -589,6 +600,7 @@ async function inspectWalletSnapshot(
     SELECT wallet_address, symbol, provenance
       FROM wallet_sleeve_samples
      WHERE sample_date = ${date}
+       AND superseded_at IS NULL
      ${lockRows ? db`FOR UPDATE` : db``}
   `;
   const balanceSymbols = new Set(
@@ -1158,9 +1170,12 @@ async function repairResolvedDay(
   }
 
   // 4. Commit one COMPLETE active snapshot. If the day is partial or contains
-  //    quarantine, its original rows move to immutable evidence before both
-  //    active tables are rebuilt. Archive, replacement, completeness proof and
-  //    checkpoint are one transaction; any failure restores the original state.
+  //    quarantine, its original live rows are copied to immutable evidence
+  //    before both active tables are rewritten in place: each row this pass
+  //    writes is upserted on its natural key, and each live row it no longer
+  //    writes is marked `superseded_at` (D55 (6): nothing here deletes).
+  //    Archive, replacement, supersession, completeness proof and checkpoint
+  //    are one transaction; any failure restores the original state.
   const sampledAt = new Date(resolved.blockTimestampSec * 1000);
   const manifest = resolveWalletSnapshotManifest(assets, wallets);
   let balanceRows = 0;
@@ -1195,11 +1210,11 @@ async function repairResolvedDay(
 
       // Serialize every repair/live writer for this date. Row locks alone do
       // not cover a missing natural key that a concurrent sampler could insert
-      // between evidence copy and DELETE.
+      // between the evidence copy and the rewrite below.
       await lockWalletSnapshotDate(tx, date);
-      // Lock every active row whose value may be archived. Without this, a
+      // Lock every live row whose value may be archived. Without this, a
       // concurrent UPDATE could commit after the evidence SELECT but before the
-      // DELETE, removing a version that was never preserved.
+      // rewrite, replacing a version that was never preserved.
       const before = await inspectWalletSnapshot(txDb, date, manifest, true);
 
       if (before.complete) {
@@ -1211,8 +1226,11 @@ async function repairResolvedDay(
         sleeveRows = status === "filled" ? manifest.sleeveKeys.length : 0;
         detail = "already populated with a complete expected balance+sleeve snapshot";
       } else {
-        // counts-quarantined: DELIBERATE. Every original row is copied before
-        // active deletion; quarantined rows receive the more specific reason.
+        // counts-quarantined: DELIBERATE. Every original live row is copied
+        // before it is rewritten or superseded; quarantined rows receive the
+        // more specific reason. A row an EARLIER pass superseded is not copied
+        // again: it was live, and so archived, before that pass rewrote the
+        // day, and supersession changed nothing but its tombstone.
         await tx`
           INSERT INTO wallet_balance_sample_evidence
             (original_id, sample_date, symbol, amount, price_usd, value_usd,
@@ -1228,6 +1246,7 @@ async function repairResolvedDay(
                  price_observed_at, recorded_at
             FROM wallet_balance_samples
            WHERE sample_date = ${date}
+             AND superseded_at IS NULL
         `;
         // counts-quarantined: DELIBERATE — same evidence-preserving transition.
         await tx`
@@ -1245,8 +1264,9 @@ async function repairResolvedDay(
                  price_observed_at, recorded_at
             FROM wallet_sleeve_samples
            WHERE sample_date = ${date}
+             AND superseded_at IS NULL
         `;
-        // Captured BEFORE the delete so the asset_prices dual-write below can
+        // Captured BEFORE the rewrite so the asset_prices dual-write below can
         // report a disagreement against the sample row a prior pass wrote for
         // this (date, symbol) — D41 phase 2's "a check reports rows that
         // disagree", read literally as sample row vs. price row. `before`
@@ -1258,13 +1278,17 @@ async function repairResolvedDay(
         const priorSampleRows = await tx<{ symbol: string; price_usd: string | null }[]>`
           SELECT symbol, price_usd FROM wallet_balance_samples
            WHERE sample_date = ${date} AND provenance <> ${QUARANTINED_PROVENANCE}
+             AND superseded_at IS NULL
         `;
         const priorSamplePriceBySymbol = new Map(
           priorSampleRows.map((row) => [row.symbol, row.price_usd === null ? null : Number(row.price_usd)]),
         );
 
-        await tx`DELETE FROM wallet_balance_samples WHERE sample_date = ${date}`;
-        await tx`DELETE FROM wallet_sleeve_samples WHERE sample_date = ${date}`;
+        // The natural keys this pass writes. Every live row on the date outside
+        // them is superseded below, after the upserts.
+        const writtenSymbols: string[] = [];
+        const writtenSleeveWallets: string[] = [];
+        const writtenSleeveSymbols: string[] = [];
 
         for (const r of reads) {
           if (!r.key.startsWith("agg:")) continue;
@@ -1276,17 +1300,47 @@ async function repairResolvedDay(
           // read site to the join; leaving this column NULL on a repaired row is
           // deliberate, not an oversight, and value_usd still carries the fused
           // amount*price product a caller may need before the join lands its row.
+          //
+          // D55 (6): an upsert that replaces the row in place, never a delete
+          // and re-insert. The conflict branch sets EVERY column to its EXCLUDED
+          // value — the value the INSERT gives a fresh row, which is the
+          // column's default for each one the INSERT does not name — so the
+          // replaced row reads exactly as the old delete-and-insert left it:
+          // price_usd stays NULL, a prior snapshot identity is cleared, a row an
+          // earlier pass superseded is live again, and `id` is the fresh
+          // sequence value EXCLUDED drew. The new id is load-bearing, not
+          // cosmetic: the evidence tables hold UNIQUE (original_id), one archived
+          // copy per VERSION, so a key rewritten by a second pass must present a
+          // new version's id or its archive collides with the first (the delete
+          // and re-insert got this for free).
+          // rm_wallet_aum_snapshot_constituent_guard (0038) still refuses this
+          // UPDATE with 0A000 on a row of a complete or degraded run, exactly as
+          // it refused the DELETE.
           await tx`
             INSERT INTO wallet_balance_samples
               (sample_date, symbol, amount, value_usd, provenance, sampled_at)
             VALUES
               (${date}, ${r.asset.symbol}, ${amount.amount}, ${amount.amount * priceUsd}, 'backfilled', ${sampledAt})
+            ON CONFLICT (sample_date, symbol) DO UPDATE SET
+              id                     = EXCLUDED.id,
+              amount                 = EXCLUDED.amount,
+              price_usd              = EXCLUDED.price_usd,
+              value_usd              = EXCLUDED.value_usd,
+              provenance             = EXCLUDED.provenance,
+              sampled_at             = EXCLUDED.sampled_at,
+              strategy_nav_idle_only = EXCLUDED.strategy_nav_idle_only,
+              snapshot_run_id        = EXCLUDED.snapshot_run_id,
+              amount_observed_at     = EXCLUDED.amount_observed_at,
+              price_observed_at      = EXCLUDED.price_observed_at,
+              recorded_at            = EXCLUDED.recorded_at,
+              superseded_at          = EXCLUDED.superseded_at
           `;
+          writtenSymbols.push(r.asset.symbol);
           balanceRows += 1;
 
           // The literal "sample row vs. price row" reading of D41 phase 2's
           // verify step: what a PRIOR pass wrote to wallet_balance_samples for
-          // this (date, symbol), captured above before the delete, compared
+          // this (date, symbol), captured above before the rewrite, compared
           // against what this pass just computed. Reported, never a reason to
           // change what gets written — the freshly-verified chain read/price
           // is authoritative here regardless (nothing reads asset_prices yet).
@@ -1333,14 +1387,62 @@ async function repairResolvedDay(
           const priceUsd = priceFor(t.asset.symbol)!;
           // D41 phase 4 (markets §5.6): same rationale as the balance insert above —
           // price_usd is left unwritten; value_usd still carries the fused product.
+          // D55 (6): the same in-place upsert as the balance row above, on the
+          // sleeve natural key, every column (id included) from EXCLUDED.
           await tx`
             INSERT INTO wallet_sleeve_samples
               (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
             VALUES
               (${date}, ${t.walletAddress}, ${t.asset.symbol}, ${amount.amount}, ${amount.amount * priceUsd}, 'backfilled', ${sampledAt})
+            ON CONFLICT (sample_date, wallet_address, symbol) DO UPDATE SET
+              id                 = EXCLUDED.id,
+              amount             = EXCLUDED.amount,
+              price_usd          = EXCLUDED.price_usd,
+              value_usd          = EXCLUDED.value_usd,
+              provenance         = EXCLUDED.provenance,
+              sampled_at         = EXCLUDED.sampled_at,
+              snapshot_run_id    = EXCLUDED.snapshot_run_id,
+              amount_observed_at = EXCLUDED.amount_observed_at,
+              price_observed_at  = EXCLUDED.price_observed_at,
+              recorded_at        = EXCLUDED.recorded_at,
+              superseded_at      = EXCLUDED.superseded_at
           `;
+          writtenSleeveWallets.push(t.walletAddress);
+          writtenSleeveSymbols.push(t.asset.symbol);
           sleeveRows += 1;
         }
+
+        // D55 (6): the day's live rows this pass did not write — a symbol no
+        // longer tracked, a sleeve wallet no longer configured, a key spelled
+        // differently from the one the pass writes — are superseded, not
+        // deleted. Their content is already in evidence (copied above), every
+        // reader filters them out, and a later write of the same key (this
+        // pass's upsert or the live sampler's) clears the tombstone. The
+        // constituent guard refuses this UPDATE on a row of a complete or
+        // degraded run, as it refused the DELETE. Key matching is exact (no
+        // case folding): the old DELETE removed every row on the date, so any
+        // row whose key differs from the one written here must leave the
+        // live set.
+        await tx`
+          UPDATE wallet_balance_samples
+             SET superseded_at = now()
+           WHERE sample_date = ${date}
+             AND superseded_at IS NULL
+             AND symbol <> ALL(${writtenSymbols}::text[])
+        `;
+        await tx`
+          UPDATE wallet_sleeve_samples AS s
+             SET superseded_at = now()
+           WHERE s.sample_date = ${date}
+             AND s.superseded_at IS NULL
+             AND NOT EXISTS (
+                   SELECT 1
+                     FROM unnest(${writtenSleeveWallets}::text[], ${writtenSleeveSymbols}::text[])
+                          AS w(wallet_address, symbol)
+                    WHERE w.wallet_address = s.wallet_address
+                      AND w.symbol = s.symbol
+                 )
+        `;
 
         const after = await inspectWalletSnapshot(txDb, date, manifest);
         if (

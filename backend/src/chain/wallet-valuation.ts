@@ -173,6 +173,7 @@ const RECENT_PRICE_PROBE = {
        AND (wbs.price_usd IS NOT NULL OR (wbs.value_usd IS NOT NULL AND wbs.amount IS NOT NULL AND wbs.amount <> 0))
        AND wbs.sampled_at <= now()
        AND wbs.provenance <> $3
+       AND wbs.superseded_at IS NULL
      ORDER BY wbs.sampled_at DESC
      LIMIT 1`,
   params: [ASSET_PRICE_TIME_BASIS, "USDC", QUARANTINED_PROVENANCE],
@@ -228,6 +229,9 @@ async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number;
        -- unrelated policies, which is exactly the "correct today by luck"
        -- shape §3 of the review is about; the predicate above makes it
        -- correct by construction instead.
+       -- D55 (6): nor is a row the repair pass superseded (migration 0086):
+       -- the delete it replaces left no such row to serve.
+       AND wbs.superseded_at IS NULL
      ORDER BY wbs.sampled_at DESC
      LIMIT 1
   `;

@@ -57,9 +57,11 @@ export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now:
   const stepMs = STEP_MS[def.cadence];
 
   // A row the serving layer is not allowed to serve does not cover its slot
-  // (SeriesDef.uncounted). Filtering here keeps quarantine aligned between the
-  // operator report and repair planner. `expectedKeys` additionally makes the
-  // P0 planner reject partial snapshots; publishing completeness is P1 scope.
+  // (SeriesDef.uncounted), and neither does a tombstoned one
+  // (SeriesDef.tombstoneColumn, D55 (6)). Filtering here keeps quarantine and
+  // supersession aligned between the operator report and repair planner.
+  // `expectedKeys` additionally makes the P0 planner reject partial snapshots;
+  // publishing completeness is P1 scope.
   const uncounted = def.uncounted;
   const expectedKeys = def.expectedKeys;
   const rows = await db<(Record<string, unknown> & { slot: Date })[]>`
@@ -68,6 +70,7 @@ export async function detectGaps(def: SeriesDef, db: DbHandle = defaultSql, now:
       FROM ${db(def.table)}
      WHERE ${db(def.dateColumn)}::timestamptz >= ${seriesStart}
        ${uncounted ? db`AND ${db(uncounted.column)} <> ALL (${db.array([...uncounted.values])})` : db``}
+       ${def.tombstoneColumn ? db`AND ${db(def.tombstoneColumn)} IS NULL` : db``}
      ORDER BY slot
   `;
   const keyToken = (parts: readonly string[]): string => JSON.stringify(parts);

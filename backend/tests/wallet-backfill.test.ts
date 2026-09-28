@@ -405,7 +405,7 @@ test("quarantined rows remain immutable evidence and their logical keys accept v
   expect(String(guardError)).toContain("immutable AUM evidence");
 });
 
-test("a checkpoint failure rolls archive/delete/replacement/checkpoint back over existing rows and remains retryable", async () => {
+test("a checkpoint failure rolls archive/rewrite/supersession/checkpoint back over existing rows and remains retryable", async () => {
   const sleeveTarget = resolveWalletSnapshotManifest().sleeveKeys[0]!;
   const [originalBalance] = await sql<{ id: string }[]>`
     INSERT INTO wallet_balance_samples
