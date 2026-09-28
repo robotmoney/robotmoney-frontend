@@ -133,9 +133,8 @@ export const twinRosterLeg: VerifyLeg = {
       const body = await ctx.json<{ sessions?: SessionRow[] }>(ROUTES.swarm.sessions);
       const rows = (body.sessions ?? []).slice(0, LOOKBACK);
       for (const row of rows) {
-        const detail = await ctx.json<{ takes?: TakeRow[] }>(
-          routePath(ROUTES.swarm.session, { date: row.date, subject: row.subjectId }),
-        );
+        // By id: the (date, subject) route returns that day's LATEST session, not this row.
+        const detail = await ctx.json<{ takes?: TakeRow[] }>(routePath(ROUTES.swarm.sessionById, { id: row.id }));
         const live = liveTakes(detail.takes ?? []);
         if (!live.length) continue; // archival-only: restored history, not this boot's
         const missing = unseatedMembers(active, live);

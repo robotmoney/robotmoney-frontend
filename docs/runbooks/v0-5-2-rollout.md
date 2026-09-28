@@ -41,6 +41,13 @@ there, and lets a session go ahead when a regime save fails.
 | E2 | Issue 1035's symptoms (API 502s under load, dead parity sweeps, failed regime saves) after v0.5.2 | v0.5.2 claims to fix them, so their rules carry `issue: "1035"` with `fixedIn: "0.5.2"`, and a recurrence **fails** the soak |
 | E3 | `judge-agent.ts` spool default in `/tmp` | Not in v0.5.2: the file exists only on `main` (PR 1014); fixed there |
 
+### 1.2 What else v0.5.2 changes
+
+- **No market-data refresh at startup** (owner, 2026-09-28). The standing boot no longer runs the regime producer and waits for it; the regime comes from the producer's own schedule (every 3 h). On 2026-09-25 the startup refresh timed out and tore production down.
+- **The producer can hold at most 2 of the api's 10 database connections** (`ANALYTICS_CONCURRENCY`). Its write bursts used to take the whole pool and turn every public request into a 502 for minutes.
+- **The judge is not counted as an absent analyst** (quorum fallback filters `role = 'member'`): sessions publish "7 of 7", not "7 of 8".
+- **`verify:live` loads each published session by id**, so R7.3 no longer fails when a subject has two sessions on one date.
+
 ## R1. Code readiness (workstation)
 
 As v0.5.1 R1, except:
@@ -85,6 +92,17 @@ As v0.5.1 R5. The owner's go names the cutover slot from R4.3a's measured window
 As v0.5.1 R6 (pre-cut session list R6.2a, stop the driver, check out the tag, boot `smoke:archive` in tmux with `--no-tui`), with:
 
 - **R6.4**: the boot applies `0080` and runs `VACUUM FULL` before READY. Expect the API to be down for about R4.3a's measured time. A boot still inside `0080` is not a hang: watch `pg_stat_activity` from the migration login before calling it one.
+- **R6.4b — if the reclaim fails (issue 1049).** `0080` commits first; the runner then runs `VACUUM (FULL, ANALYZE)` on the three compacted tables. If a vacuum fails (disk space, a lock, a dropped connection), `migrate()` stops before `seed()`, the boot fails, and the reclaim is **never retried**: `0080` is already recorded. The data is correct, only the disk space is still held. Recover by hand, from `/root/robotmoney-frontend`, then boot again (R6.4); the second boot skips `0080` and runs `seed()`:
+
+  ```bash
+  psql "$(grep -m1 '^MIGRATE_DATABASE_URL=' .env | cut -d= -f2-)" -v ON_ERROR_STOP=1 \
+    -c "SET ROLE rm_owner" \
+    -c "VACUUM (FULL, ANALYZE) public.source_value_versions" \
+    -c "VACUUM (FULL, ANALYZE) public.analytics_vintage_members" \
+    -c "VACUUM (FULL, ANALYZE) public.analytics_overwrite_events"
+  ```
+
+  Separate `-c` flags, not one string: `VACUUM` cannot run inside the implicit transaction a single multi-statement `-c` opens. Each `VACUUM FULL` needs free space about the size of the table it rewrites (R2.12).
 - **R6.5**: `schema_migrations` gains exactly `0080_analytics_ledger_compaction.sql` (76 rows); `source_payloads` no longer exists; both guards report armed in the boot log.
 
 ## R7. Immediate postflight

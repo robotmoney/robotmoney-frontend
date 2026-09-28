@@ -148,7 +148,12 @@ export const swarmPipelineLeg: VerifyLeg = {
     for (const row of recent) {
       let detail: SessionDetail;
       try {
-        detail = await ctx.json<SessionDetail>(routePath(ROUTES.swarm.session, { date: row.date, subject: row.subjectId }));
+        // BY ID, not by (date, subject): that route returns the LATEST session of
+        // the day for the subject. Production runs more than one session per
+        // subject per day, so on 2026-09-25 this check loaded an OPEN session in
+        // place of the published row it was grading and reported "state=published
+        // but no publishedAt" (R7.3).
+        detail = await ctx.json<SessionDetail>(routePath(ROUTES.swarm.sessionById, { id: row.id }));
       } catch (e) {
         incomplete.push(`${row.id}: detail did not load — ${e instanceof Error ? e.message : String(e)}`);
         continue;

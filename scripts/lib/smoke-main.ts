@@ -12,7 +12,6 @@ import { assertSmokeTwinIsTarget, resolveSmokeTwinDataPath, smokeTwinLeftRunning
 import { retimeAdoptedWindows, teardownContainer } from "./restore-container.ts";
 import { listSmokeVolumes, makeDockerRunner, purgeSmokeEvalContainers, removeSmokeVolumes } from "./smoke-volumes.ts";
 import { provisionSmokeAnalyticsTokenAfterPreflight, removeSmokeAnalyticsToken } from "./smoke-secret.ts";
-import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
 import {
   plannedRunAt,
   planSubjectSchedules,
@@ -1462,48 +1461,14 @@ async function main(): Promise<void> {
     backendUrl,
   };
 
-  // One-time setup: seed regime. NOTHING IS WIPED HERE.
-  //
-  // This used to begin with `admin("reset")`, a TRUNCATE of every swarm
-  // session, brief, recommendation and (by CASCADE) memo. That was invisible
-  // while each boot got a throwaway postgres volume — there was never anything
-  // to destroy — and became data loss the moment the database outlived the
-  // stack: an --external-pg boot silently erased every previously published
-  // memo, and RESTART IDENTITY made the next boot reuse those memo ids for
-  // different memos. An ephemeral database is deleted or inspected as a whole;
-  // no bring-up may TRUNCATE rows it did not create. The endpoint behind this
-  // call is gone too, so there is no way back to the wiping behaviour.
-  //
-  // The regime snapshot is the PRODUCER's own regime.classify command (issue
-  // #361 Phase 4), launched against this explicit stack rail and submitted
-  // through the analytics HTTP boundary under the producer's credential; the
-  // removed admin("regime") classifier path no longer exists.
-  const today = new Date().toISOString().slice(0, 10);
-  await e2e.runRegimeClassify(today, producerRail);
-
-  // Self-heal: verify the boot regime run actually landed a FRESH snapshot before
-  // handing off to the producer's recurring timer. A transient live-fetch failure (or
-  // a throw) can leave the served snapshot frozen at the seed floor, which the
-  // /regime charts would then render silently as if current. The API now reports
-  // `staleness`; retry the run a few times, and if it's still stale, log LOUDLY so
-  // the operator sees it instead of shipping a frozen dashboard. The fresh/rerun/
-  // give-up decision is the pure decideRegimeBootAction (regime-boot.ts, unit-
-  // tested); this loop keeps only the I/O around it.
-  for (let attempt = 1; attempt <= REGIME_BOOT_MAX_ATTEMPTS; attempt++) {
-    let staleness: RegimeBootStaleness | null = null;
-    try {
-      const snap = await fetch(`${backendUrl}${ROUTES.dashboards.regimeSnapshots}?range=1`).then((r) => (r.ok ? r.json() : null));
-      staleness = snap?.staleness ?? null;
-    } catch (err) {
-      log(`regime freshness check failed (attempt ${attempt}/${REGIME_BOOT_MAX_ATTEMPTS}): ${err instanceof Error ? err.message : err}`);
-    }
-    const decision = decideRegimeBootAction(staleness, attempt);
-    log(decision.message);
-    if (decision.action === "fresh") break;
-    if (decision.action === "rerun") {
-      await e2e.runRegimeClassify(today, producerRail).catch((err: unknown) => log(`regime re-run failed: ${err instanceof Error ? err.message : err}`));
-    }
-  }
+  // NO MARKET-DATA REFRESH AT STARTUP. The regime is the analytics producer's
+  // job, on its own schedule (PRODUCER_REGIME_CRON, every 3 h in production).
+  // Startup used to run it once and wait for it: on 2026-09-25 that run timed
+  // out under analytics-ledger load, the await threw, and the boot tore the
+  // whole production stack down (about 16 minutes of API outage). Refreshing at
+  // an arbitrary moment also put a full regime write burst on the database the
+  // instant the api came up. Until the producer's next slot, the site shows the
+  // latest saved regime, and the API reports its staleness. (Owner, 2026-09-28.)
 
   // Each subject runs on its OWN schedule (own interval + a stagger offset) so woon
   // and mav appear in separate panes on separate cadences. Execution is SERIALIZED

@@ -2355,9 +2355,14 @@ export async function loadFrozenTakeSet(sessionId: string): Promise<FrozenTakeSe
   // unchanged.
   const rosterRows = await sql<{ id: string }[]>`
     SELECT member_id AS id FROM swarm_session_members WHERE session_id = ${sessionId} AND status != 'excused'`;
+  // role = 'member': a judge (Themis) files no take, so it is not an analyst
+  // seat. Without the filter every session opened by the host driver (which
+  // freezes no roster, so it takes this fallback) published the judge as absent:
+  // "7 of 8 members (88% participation)" when all seven analysts filed.
+  // admin.ts's roster freeze already filters the same way.
   const activeMembers = rosterRows.length > 0
     ? rosterRows
-    : (await sql`SELECT id FROM swarm_members WHERE status = 'active'`) as unknown as { id: string }[];
+    : (await sql`SELECT id FROM swarm_members WHERE status = 'active' AND role = 'member'`) as unknown as { id: string }[];
   const frozenRoster = new Set(activeMembers.map((member: any) => member.id));
   const takes = rosterRows.length > 0
     ? takeRows.filter((take: any) => frozenRoster.has(take.member_id))
