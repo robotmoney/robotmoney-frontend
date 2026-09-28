@@ -968,10 +968,12 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   //
   // THE EPOCH MODEL (issue #1026) put a state conjunct back — on the INSERT,
   // not here, and with a different answer. The dead zone this paragraph
-  // describes cannot recur: turnover opens N+1 `collecting` in the transaction
-  // that closes N, so the newest session is always the collecting one. What
-  // the conjunct refuses is a take into an epoch that turnover already closed
-  // (a deactivation closes nothing: D55 (4), §4.5), and it answers `submission window closed` — the same "you
+  // describes cannot recur: for an active subject, turnover opens N+1
+  // `collecting` in the transaction that closes N, so the newest session is
+  // always the collecting one; for an inactive one the boundary opens nothing,
+  // and "too late" is the true answer. What the conjunct refuses is a take
+  // into an epoch that turnover already closed (a deactivation closes nothing:
+  // D55 (4), §4.5), and it answers `submission window closed` — the same "you
   // are too late" as the instant — never `not open`. The early check below
   // reads the same two facts (state and instant) so a late take is refused
   // before the signature work; the INSERT's conjuncts remain the authority.
