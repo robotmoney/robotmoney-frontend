@@ -110,12 +110,19 @@ function routeDataBlock(route: string): string {
   const lead = endpoints.length
     ? `<p>The text of this page is in the HTML you are reading. Its live figures are filled in by the browser from these public JSON endpoints, which need no key and answer a plain GET:</p>\n        <ul>\n${items}\n        </ul>`
     : `<p>Everything on this page is in the HTML you are reading.</p>`;
+  // The static files a page publishes beside its text (seo.js's `downloads`),
+  // the same files its <head> links as rel="alternate".
+  const downloads = routeDownloads(route);
+  const files = downloads.length
+    ? `<p>The same content as data, in static files:</p>\n        <ul>\n${downloads.map((d) => `          <li><a href="${escapeAttr(d.url)}">${escapeHtml(d.url)}</a>: ${escapeHtml(d.title)}.</li>`).join("\n")}\n        </ul>`
+    : "";
 
   return [
     "<noscript>",
     '      <section id="agent-data">',
     "        <h2>Data for machine readers</h2>",
     `        ${lead}`,
+    ...(files ? [`        ${files}`] : []),
     ...(snapshot ? [`        ${snapshot}`] : []),
     `        <p>Full API description: <a href="${API_ORIGIN}/openapi.json">${API_ORIGIN}/openapi.json</a>. Site index for LLM readers: <a href="${API_ORIGIN}/llms.txt">${API_ORIGIN}/llms.txt</a>. Source: <a href="https://github.com/robotmoney/robotmoney-frontend">github.com/robotmoney/robotmoney-frontend</a>.</p>`,
     "      </section>",

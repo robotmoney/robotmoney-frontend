@@ -2,15 +2,19 @@
 //
 // scripts/build-smart-contract-risks-data.ts reads the view and writes the
 // cases as JSON (frontend/public/data/smart-contract-risks.json) and the case
-// and category lists the structured data uses (lib/smart-contract-risks-index.js).
-// Both are committed and served, so both go stale the moment the view is edited
-// without re-running it; and the JSON promises to be the page's own words, so a
-// string it carries that the page does not say is a fabrication. Neither shows
-// in a browser. This holds them:
-//   - the committed files are exactly what the view builds (--check is clean);
+// and category lists the structured data uses (lib/smart-contract-risks-index.js),
+// and bakes the timeline's SVG into the view itself from the index rows. All
+// three are committed and served, so all three go stale the moment the view is
+// edited without re-running it; and the JSON promises to be the page's own
+// words, so a string it carries that the page does not say is a fabrication.
+// None of that shows in a browser. This holds them:
+//   - the committed files and the baked timeline are exactly what the view
+//     builds (--check is clean);
 //   - every string in the JSON is in the view's text, and every id is an id there;
-//   - the index rows, the records and the Pattern Analysis citations agree, and
-//     a view where they do not is refused.
+//   - each field holds its own text (a swapped field fails), and each amount's
+//     dollar figure (data-usd, amount_usd) is the first one its words state;
+//   - the index rows, the records, the chips, the sortable columns and the
+//     Pattern Analysis citations agree, and a view where they do not is refused.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -22,8 +26,11 @@ import {
   INDEX_PATH,
   JSON_PATH,
   parseHtml,
+  placeLabels,
   readPage,
   textOf,
+  TIMELINE_VARIANTS,
+  timelinePoints,
   VIEW_PATH,
 } from "../../build-smart-contract-risks-data.ts";
 import { SMART_CONTRACT_RISKS } from "../../../frontend/public/assets/js/app/lib/smart-contract-risks-index.js";
@@ -48,10 +55,21 @@ describe("the committed files are the view's", () => {
     expect(r.exitCode).toBe(0);
   });
 
-  test("the JSON and the index module are exactly what the view builds", () => {
+  test("the JSON, the index module and the view's timeline are exactly what the view builds", () => {
     const built = buildSmartContractRisksData(view);
     expect(built.json).toBe(json);
     expect(built.index).toBe(readFileSync(INDEX_PATH, "utf8"));
+    expect(built.view).toBe(view);
+  });
+
+  test("a stale timeline is rewritten, so --check fails on it", () => {
+    // A point moved by hand, and a timeline emptied: the build puts both back.
+    const moved = view.replace(/(<a href="#aave"[^\n]*?<circle [^>]*cy=")[\d.]+/, "$1100");
+    expect(moved).not.toBe(view);
+    expect(buildSmartContractRisksData(moved).view).toBe(view);
+    const emptied = view.replace(/(<!-- timeline:start -->)[\s\S]*?(<!-- timeline:end -->)/, "$1\n        $2");
+    expect(emptied).not.toBe(view);
+    expect(buildSmartContractRisksData(emptied).view).toBe(view);
   });
 
   test("the index module lists the JSON's cases and categories, in its order", () => {
@@ -108,6 +126,78 @@ describe("the JSON says what the page says", () => {
   });
 });
 
+// The first "$" figure of each case's Amount Lost, read here with a parser of
+// the test's own, and written out as the case studies state them.
+const STATED_USD: Record<string, number> = {
+  "new-market-trading": 3780000, "kelp-dao": 290000000, "drift-protocol": 285000000, "solv-protocol": 2730000,
+  "venus-protocol": 3700000, resolv: 25000000, aave: 27780000, yieldblox: 10970000, iotex: 4400000,
+  "step-finance": 27300000, truebit: 26200000, "bybit-safe": 1500000000, "curve-finance": 70000000,
+  "euler-finance": 200000000, beanstalk: 181000000, "harvest-finance": 33800000, "the-dao": 60000000,
+};
+function statedUsd(amount: string): number {
+  const m = amount.match(/\$([\d.,]+)\+?\s*(million|billion|M|B)?/);
+  if (!m) throw new Error(`no dollar figure in "${amount}"`);
+  const n = Number(m[1]!.replace(/,/g, ""));
+  const unit = m[2] === "billion" || m[2] === "B" ? 1e9 : m[2] === "million" || m[2] === "M" ? 1e6 : 1;
+  return Math.round(n * unit);
+}
+
+describe("each field holds its own words", () => {
+  const byId = (id: string) => data.cases.find((c: any) => c.id === id);
+
+  test("a field swapped for another fails", () => {
+    expect(byId("new-market-trading").root_cause.startsWith("Confused deputy vulnerability")).toBe(true);
+    expect(byId("drift-protocol").amount_lost).toBe("$285 million (JLP, USDC, wETH, dSOL, cbBTC vaults)");
+    expect(byId("the-dao").what_happened.startsWith("An attacker exploited a reentrancy vulnerability in The DAO\u2019s")).toBe(true);
+    expect(byId("kelp-dao").parties).toBe("Kelp DAO (victim), LayerZero Labs (compromised/faulty DVN), Tornado Cash (funding)");
+    expect(byId("solv-protocol").attack).toBe("Self-Reentrancy via ERC-3525");
+  });
+
+  test("every row's data-usd is the first dollar figure its amount states", () => {
+    const rows = findAll(root, (n) => n.tag === "tr" && "data-usd" in n.attrs);
+    expect(rows).toHaveLength(17);
+    for (const tr of rows) {
+      const id = findAll(tr, (n) => n.tag === "a")[0]!.attrs.href!.slice(1);
+      const amount = textOf(findAll(tr, (n) => n.tag === "td").at(-1)!);
+      expect(Number(tr.attrs["data-usd"]), id).toBe(statedUsd(amount));
+      expect(Number(tr.attrs["data-usd"]), id).toBe(STATED_USD[id]!);
+    }
+  });
+
+  test("the JSON's amount_usd is the row's data-usd", () => {
+    const rows = readPage(view).rows;
+    for (const c of data.cases as { id: string; amount_usd: number }[]) {
+      expect(c.amount_usd, c.id).toBe(Number(rows.find((r) => r.id === c.id)!.sort.usd));
+      expect(c.amount_usd, c.id).toBe(STATED_USD[c.id]!);
+    }
+  });
+});
+
+describe("the timeline", () => {
+  const rows = readPage(view).rows;
+
+  test("each drawing has a point per case, linking its record, filtered by its categories", () => {
+    for (const v of TIMELINE_VARIANTS) {
+      const fig = findAll(root, (n) => n.tag === "figure" && hasClass(n, `rr-tl--${v.name}`));
+      expect(fig, v.name).toHaveLength(1);
+      const points = findAll(fig[0]!, (n) => n.tag === "a");
+      expect(points.map((a) => a.attrs.href!.slice(1)).sort(), v.name).toEqual(data.cases.map((c: any) => c.id).sort());
+      for (const a of points) {
+        const row = rows.find((r) => r.id === a.attrs.href!.slice(1))!;
+        expect(a.attrs["data-tags"], a.attrs.href).toBe(row.categories.join(" "));
+        expect(a.attrs[":class"]).toContain("has($el)");
+        expect(a.attrs[":tabindex"]).toContain("has($el)");
+        expect(textOf(findAll(a, (n) => n.tag === "title")[0]!)).toBe(`${row.protocol}, ${row.date_text}: ${row.amount_lost}`);
+        expect(findAll(a, (n) => n.tag === "circle")[0]!.attrs["data-mark"]).toBe("series");
+      }
+    }
+  });
+
+  test("every label has a place clear of the others at every width its drawing shows at", () => {
+    for (const v of TIMELINE_VARIANTS) expect(placeLabels(timelinePoints(rows), v)).toHaveLength(17);
+  });
+});
+
 describe("the page agrees with itself", () => {
   test("ids are unique: cases, categories, recommendations and every id on the page", () => {
     for (const list of [data.cases, data.categories, data.recommendations]) {
@@ -153,6 +243,25 @@ describe("the page agrees with itself", () => {
     );
     expect(cited).not.toBe(view);
     expect(disagreements(readPage(cited)).length).toBeGreaterThan(0);
+  });
+
+  test("the chips, the sortable columns and the rows' sort keys are checked too", () => {
+    const refuse = (from: string, to: string) => {
+      const bad = view.replace(from, to);
+      expect(bad, from).not.toBe(view);
+      expect(() => buildSmartContractRisksData(bad), from).toThrow();
+    };
+    // A chip toggling a category that is not the heading in its place.
+    refuse("toggle('legacy-code', $el.textContent)", "toggle('legacy', $el.textContent)");
+    // A chip described by another category's heading.
+    refuse('aria-describedby="reentrancy"', 'aria-describedby="legacy-code"');
+    // A sortable column gone.
+    refuse(`<button type="button" class="rr-sort" @click="sortBy('usd', 'desc', $el.textContent)">Amount lost</button>`, "Amount lost");
+    // A row without a sort key, or with one that says something else.
+    refuse(' data-protocol="Aave"', "");
+    refuse('data-month="2026-05"', 'data-month="2026-04"');
+    refuse('data-usd="290000000"', 'data-usd="116500"');
+    refuse('data-protocol="Kelp DAO"', 'data-protocol="KelpDAO"');
   });
 
   test("records never hide: only index rows carry the filter", () => {

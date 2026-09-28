@@ -14,6 +14,7 @@
       "attack": "Confused Deputy in Gnosis Safe Module",
       "what_happened": "An attacker exploited a broken access control check in New Market Trading’s custom Gnosis Safe module, SquidRouterModule. 88 user Safes were drained across Ethereum, Base, and Arbitrum in under 15 minutes. No flash loan, no phishing, no bridge exploit: the attacker read a public contract, copied a string, encoded a real delegate address from an open on-chain registry, and called a function that had been left unguarded for three months.",
       "amount_lost": "$3.78 million (88 user Safes across Ethereum, Base, Arbitrum)",
+      "amount_usd": 3780000,
       "parties": "New Market Trading (victim), SquidRouterModule (custom Safe module), QuillAudits (post-hoc analysis)",
       "categories": [],
       "blocks": [
@@ -59,6 +60,7 @@
       "attack": "1/1 DVN Configuration Failure",
       "what_happened": "An attacker exploited KelpDAO’s LayerZero OFT (Omnichain Fungible Token) configuration by leveraging a critically weak DVN (Decentralized Verifier Network) setup: 1 required DVN, 0 optional DVNs, threshold 0. The single required DVN (LayerZero Labs) signed an attestation for a message that was never actually emitted on the source chain (Unichain). With no independent verifiers to contradict it, the forged message passed verification and triggered minting of 116,500 rsETH (~$290M) on Ethereum.",
       "amount_lost": "~$290 million (116,500 rsETH)",
+      "amount_usd": 290000000,
       "parties": "Kelp DAO (victim), LayerZero Labs (compromised/faulty DVN), Tornado Cash (funding)",
       "categories": [],
       "blocks": [
@@ -141,6 +143,7 @@
       "attack": "Durable Nonce + Multisig Social Engineering Attack",
       "what_happened": "On April 1, 2026 at 16:05 UTC, an exploit worth approximately $285M struck Drift Protocol. The attacker used compromised multisig signers (2-of-5 Security Council) combined with Solana’s durable nonce mechanism to execute pre-signed malicious transactions. Over a 9-day timeline, the attacker created durable nonce accounts, adapted to a legitimate multisig migration on March 27, and obtained pre-signatures from legitimate signers through transaction misrepresentation. No seed phrase leaks or smart contract bugs were involved.",
       "amount_lost": "$285 million (JLP, USDC, wETH, dSOL, cbBTC vaults)",
+      "amount_usd": 285000000,
       "parties": "Drift Protocol (victim), Switchboard (oracle infrastructure), Four Pillars (analysis)",
       "categories": [
         "private-key-compromise",
@@ -205,6 +208,7 @@
       "attack": "Self-Reentrancy via ERC-3525",
       "what_happened": "Solv’s BitcoinReserveOffering (BRO) contract used ERC-3525 (semi-fungible token standard with NFT-like callbacks). The mint function triggered onERC721Received before updating state, allowing the attacker to re-enter and mint twice. The contract was unaudited and excluded from bug bounty coverage despite five audits on other Solv contracts.",
       "amount_lost": "$2.73 million (38.05 SolvBTC)",
+      "amount_usd": 2730000,
       "parties": "Solv Protocol (victim), Quantstamp/Salus/OpenZeppelin (auditors of OTHER contracts), unaudited BRO contract",
       "categories": [
         "reentrancy",
@@ -250,6 +254,7 @@
       "attack": "Donation Attack (Thena Market)",
       "what_happened": "An attacker spent 9 months accumulating THE tokens, then bypassed Venus’s supply cap via direct ERC-20 transfers (donations) to inflate the vToken exchange rate. This allowed borrowing against collateral that exceeded protocol limits, ultimately leaving $2.15M in bad debt. Code4rena had flagged this exact vector in May 2023; Venus dismissed it as “supported behavior with no negative side effects.”",
       "amount_lost": "$3.7 million extracted, $2.15M bad debt remaining (1.18M CAKE + 1.84M THE)",
+      "amount_usd": 3700000,
       "parties": "Venus Protocol (victim, 4th exploit in 5 years), Thena (token), Code4rena (flagged M-10 in May 2023, dismissed)",
       "categories": [
         "oracle-manipulation",
@@ -298,6 +303,7 @@
       "attack": "No Circuit Breakers on Compromised SERVICE_ROLE Key",
       "what_happened": "A malicious actor gained unauthorized access to Resolv infrastructure through a compromised private key, minting approximately $80M of tokens. No circuit breakers existed to pause minting when abnormal volumes were detected. A single SERVICE_ROLE key had unilateral mint authority.",
       "amount_lost": "$25M+ (attacker minted $80M, portion recovered)",
+      "amount_usd": 25000000,
       "parties": "Resolv (victim), compromised SERVICE_ROLE key holder, no circuit breaker in place",
       "categories": [
         "missing-circuit-breakers"
@@ -339,6 +345,7 @@
       "attack": "CAPO Oracle Misconfiguration",
       "what_happened": "Aave’s Correlated Asset Price Oracle (CAPO) had a stale snapshot ratio from 2024. When Chaos Labs’ automated risk engine pushed an update, a rate limiter prevented the ratio from catching up to market rates, causing the oracle to undervalue wstETH by 2.85% and trigger liquidation of healthy positions. 34 accounts were liquidated for a configuration error they had no part in.",
       "amount_lost": "$27.78 million (10,938 wstETH liquidated from 34 accounts)",
+      "amount_usd": 27780000,
       "parties": "Aave (victim), Chaos Labs (risk oracle provider), 34 liquidated users",
       "categories": [
         "oracle-manipulation"
@@ -386,6 +393,7 @@
       "attack": "Oracle Manipulation via Illiquid Collateral",
       "what_happened": "An attacker exploited a community-managed Blend V2 pool by manipulating the price of USTRY, a yield-bearing stablebond with effectively zero market depth. A single trade pumped USTRY 100x on the Stellar DEX, which the VWAP oracle dutifully reported as truth, allowing the attacker to borrow $10.97M against collateral worth ~$160K.",
       "amount_lost": "$10.97 million (1M USDC + 61M XLM)",
+      "amount_usd": 10970000,
       "parties": "YieldBlox/Script3 (victim), Reflector (oracle), Code4rena/Certora (auditors of Blend V2)",
       "categories": [
         "oracle-manipulation",
@@ -431,6 +439,7 @@
       "attack": "Private Key Compromise (Bridge)",
       "what_happened": "An attacker obtained the owner key to IoTeX’s ioTube bridge validator contract. With unchecked upgrade authority, they pushed a malicious contract version, seized control of the TokenSafe and MinterPool, drained $4.4M in real assets, and minted 821M CIOTX tokens. A single EOA held the keys to everything.",
       "amount_lost": "$4.4 million + 821M CIOTX minted (86% frozen by team)",
+      "amount_usd": 4400000,
       "parties": "IoTeX (victim), ioTube bridge (compromised), Specter/PeckShield (on-chain analysts)",
       "categories": [
         "private-key-compromise"
@@ -475,6 +484,7 @@
       "attack": "Private Key Compromise",
       "what_happened": "An attacker compromised Step Finance executive devices through a phishing/social engineering attack. Using the stolen keys, they transferred stake authorization to their own wallet, unstaked 261,854 SOL ($27.3M), and drained the treasury. The smart contracts worked flawlessly. The humans failed.",
       "amount_lost": "$27.3 million (261,854 SOL)",
+      "amount_usd": 27300000,
       "parties": "Step Finance (victim), executive team (compromised), CertiK (auditor of contracts)",
       "categories": [
         "private-key-compromise"
@@ -516,6 +526,7 @@
       "attack": "Integer Overflow in Legacy Code",
       "what_happened": "An attacker exploited a 5-year-old unaudited contract with unverified bytecode. By passing astronomical values to the minting function, they triggered an integer overflow in an unprotected addition operation, minting 240M+ TRU tokens for essentially zero cost, then burning them for ETH at a 12.5% buyback rate.",
       "amount_lost": "$26.2 million (8,535 ETH)",
+      "amount_usd": 26200000,
       "parties": "Truebit Protocol (victim), no auditors (code unverified), Banteg (flagged risk in 2021)",
       "categories": [
         "legacy-code"
@@ -560,6 +571,7 @@
       "attack": "Multisig Compromise",
       "what_happened": "An attacker compromised Bybit’s Gnosis Safe multisig through a sophisticated supply chain attack. The attacker gained access to the Safe Wallet developer infrastructure, injected malicious JavaScript into the frontend, and intercepted signing requests. When Bybit signers approved what appeared to be legitimate transactions, the malicious code altered the transaction parameters to send funds to attacker-controlled addresses.",
       "amount_lost": "$1.5 billion in ETH and staked ETH derivatives (largest crypto theft in history)",
+      "amount_usd": 1500000000,
       "parties": "Bybit (victim), Safe Wallet (compromised infrastructure), Gnosis Safe (multisig contracts)",
       "categories": [],
       "blocks": [
@@ -602,6 +614,7 @@
       "attack": "Vyper Compiler Reentrancy",
       "what_happened": "A compiler bug in Vyper (versions 0.2.15, 0.2.16, 0.3.0) caused the @nonreentrant decorator to fail when raw_call was used with default_return_value. This allowed reentrancy attacks against multiple Curve pools simultaneously.",
       "amount_lost": "$70+ million (pETH-ETH, msETH-ETH, alETH-ETH, CRV/ETH pools)",
+      "amount_usd": 70000000,
       "parties": "Curve Finance (victim), Vyper compiler (bug source), multiple pool LPs",
       "categories": [
         "reentrancy"
@@ -646,6 +659,7 @@
       "attack": "Donate-to-Reserves Exploit",
       "what_happened": "An attacker exploited Euler’s donateToReserves() function combined with liquidation logic. The donation function failed to update the user’s health factor, allowing the attacker to donate away their collateral, become artificially insolvent, then liquidate themselves for profit. All funds later returned by attacker.",
       "amount_lost": "$200 million (all funds returned)",
+      "amount_usd": 200000000,
       "parties": "Euler Finance (victim), Omniscia (auditor), Aave (flash loan source)",
       "categories": [
         "supply-cap-bypass"
@@ -690,6 +704,7 @@
       "attack": "Flash Loan Governance Attack",
       "what_happened": "An attacker used a flash loan to acquire majority voting power and passed an emergency governance proposal that drained the protocol treasury. The key vulnerability was that governance tokens were not locked and voting + execution could happen in the same transaction.",
       "amount_lost": "$181 million (attacker kept ~$76M)",
+      "amount_usd": 181000000,
       "parties": "Beanstalk (victim), Omniscia (auditor), Aave/Uniswap/SushiSwap (flash loan sources)",
       "categories": [],
       "blocks": [
@@ -729,6 +744,7 @@
       "attack": "Price Oracle Manipulation",
       "what_happened": "An attacker exploited Harvest Finance’s yield vaults by manipulating the price of stablecoins within Curve pools. Using a $50 million flash loan, the attacker artificially inflated the price of USDT during deposits and deflated it during withdrawals, extracting more value than deposited.",
       "amount_lost": "$33.8 million (24,830 ETH)",
+      "amount_usd": 33800000,
       "parties": "Harvest Finance (victim), PeckShield / Haechi Labs / CertiK (auditors), Curve Finance (external dependency)",
       "categories": [
         "oracle-manipulation"
@@ -770,6 +786,7 @@
       "attack": "Recursive Call Reentrancy",
       "what_happened": "An attacker exploited a reentrancy vulnerability in The DAO’s splitDAO function to recursively drain ether from the contract before the balance could be updated. The attacker called the withdraw function repeatedly before the state change, extracting 3.6M ETH (~$60M at the time). This exploit led to the Ethereum hard fork that created Ethereum Classic.",
       "amount_lost": "3.6M ETH (~$60 million at time of attack, ~$50M+ recovered later)",
+      "amount_usd": 60000000,
       "parties": "The DAO (victim), no formal auditors, Ethereum Foundation (emergency response)",
       "categories": [],
       "blocks": [

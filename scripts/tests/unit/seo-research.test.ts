@@ -334,9 +334,10 @@ describe("the smart contract risks graph (RM-138)", () => {
     if (/&[a-z#0-9]+;/i.test(text)) throw new Error(`an entity this reader does not decode: ${text}`);
     return text;
   };
-  // Each record's heading, in page order: the h3 that opens an article.rr-case.
+  // Each record's heading, in page order: the h3 under the date that opens an
+  // article.rr-case.
   const cases = Array.from(
-    view.matchAll(/<article class="rr-case"[^>]*>\s*<div class="rr-subhead">\s*<h3 class="rr-subhead__h" id="([^"]+)">([\s\S]*?)<\/h3>/g),
+    view.matchAll(/<article class="rr-case"[^>]*>\s*<time\b[^>]*>[^<]*<\/time>\s*<h3 class="[^"]*\brr-case__h\b[^"]*" id="([^"]+)">([\s\S]*?)<\/h3>/g),
     (m) => ({ id: m[1]!, name: plain(m[2]!) }),
   );
   const h4s = Array.from(view.matchAll(/<h4\b[^>]*\sid="([^"]+)"[^>]*>([\s\S]*?)<\/h4>/g), (m) => ({ id: m[1]!, text: plain(m[2]!) }));
@@ -376,10 +377,13 @@ describe("the smart contract risks graph (RM-138)", () => {
     expect(ds.url).toBe(url);
     expect(ds.name).not.toContain(EM_DASH);
     expect(ds.isAccessibleForFree).toBe(true);
-    expect(ds.creator["@id"]).toBe(ORG_ID);
-    expect(ds.publisher["@id"]).toBe(ORG_ID);
+    // By reference: the TechArticle in the same graph names the Organization in full.
+    expect(ds.creator).toEqual({ "@id": ORG_ID });
+    expect(ds.publisher).toEqual({ "@id": ORG_ID });
     expect(ds.dateModified).toBe(REVISED);
     expect(ds.isBasedOn["@id"]).toBe(node("TechArticle")["@id"]);
+    // The file's one number per case, amount_usd, is a variable it measures.
+    expect(ds.variableMeasured.map((v: Json) => v.name)).toContain("Amount lost in US dollars");
     expect(ds.distribution).toHaveLength(1);
     const [download] = ds.distribution;
     expect(download["@type"]).toBe("DataDownload");

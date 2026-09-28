@@ -24,9 +24,10 @@ const OG_IMAGE = ORIGIN + "/assets/og-image.png";
 // The Organization node the shell's own JSON-LD defines (index.html). Route
 // structured data refers to it by this @id and repeats its name and url, so a
 // reader that does not merge the two script blocks still gets a named author.
+const ORG_ID = ORIGIN + "/#org";
 const ORG = {
   "@type": "Organization",
-  "@id": ORIGIN + "/#org",
+  "@id": ORG_ID,
   name: SITE_NAME,
   url: ORIGIN,
   logo: ORIGIN + "/assets/icon-512.png",
@@ -53,12 +54,14 @@ const REGIME_VARIABLES = [
 ];
 
 // What each record in the smart contract risks download gives, for its
-// Dataset (RM-138). Every value in the file is the page's own wording, so an
-// amount is a phrase ("$25M+ (attacker minted $80M, portion recovered)"), not
-// a number.
+// Dataset (RM-138). Every string in the file is the page's own wording, so an
+// amount is a phrase ("$25M+ (attacker minted $80M, portion recovered)"); the
+// one number beside it, amount_usd, is that phrase's first dollar figure, the
+// figure the page's timeline plots and its index sorts by.
 const SMART_CONTRACT_RISKS_VARIABLES = [
   { "@type": "PropertyValue", name: "Month", description: "The month of the exploit." },
   { "@type": "PropertyValue", name: "Amount lost", description: "The loss as the case study states it, with its qualifiers." },
+  { "@type": "PropertyValue", name: "Amount lost in US dollars", description: "Amount lost, the first US dollar figure the case states.", unitText: "USD" },
   { "@type": "PropertyValue", name: "Parties", description: "The victim and the other parties involved." },
   { "@type": "PropertyValue", name: "Attack category", description: "The Common Attack Categories that cite the case." },
 ];
@@ -859,10 +862,11 @@ function smartContractRisksNodes(url) {
       "@type": "Dataset",
       "@id": url + "#dataset",
       name: `DeFi Vault Exploit Case Studies, ${oldest.month.slice(0, 4)} to ${newest.month.slice(0, 4)}`,
-      description: `Case studies of ${cases.length} DeFi exploits, from ${oldest.protocol} in ${oldest.date} to ${newest.protocol} in ${newest.date}. Each gives the month, the protocol, the amount lost as reported, the parties, the attack vector, the root cause and the attack categories that cite it.`,
+      description: `Case studies of ${cases.length} DeFi exploits, from ${oldest.protocol} in ${oldest.date} to ${newest.protocol} in ${newest.date}. Each gives the month, the protocol, the amount lost as reported and its first US dollar figure, the parties, the attack vector, the root cause and the attack categories that cite it.`,
       url,
-      creator: ORG,
-      publisher: ORG,
+      // The Organization by reference: the TechArticle beside it names it in full.
+      creator: { "@id": ORG_ID },
+      publisher: { "@id": ORG_ID },
       isAccessibleForFree: true,
       temporalCoverage: `${oldest.month}/${newest.month}`,
       dateModified: RESEARCH_REVISED,
