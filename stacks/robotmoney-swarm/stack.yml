@@ -31,7 +31,7 @@ pods:
 # EVERY secret declared in this file into EVERY service in EVERY pod
 # composefile, even a service whose SOURCE composefile here never mentions
 # that secret at all (confirmed for `website`, which has no `environment:`
-# block in pods/app/composefile.yml, and for worker-analytics/worker-research/
+# block in pods/app/composefile.yml, and for worker-analytics and
 # analytics-producer, none of which reference OPENCODE_API_KEY in
 # pods/workers/composefile.yml below). A pod composefile choosing not to
 # reference a secret documents intent only — it is not an isolation boundary

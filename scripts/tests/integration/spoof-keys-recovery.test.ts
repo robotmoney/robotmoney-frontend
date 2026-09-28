@@ -39,7 +39,7 @@ import { hashKey } from "../../../backend/src/lib/keys.ts";
 import { startRemoteDb, type RemoteDb } from "./remote-db-harness.ts";
 import { credentialEntry, entriesOf, repoRoot, writeParticipantOverlay } from "./participant-fixture.ts";
 
-const DEMO_FILES = ["docker-compose.yml", "docker-compose.smoke.yml"] as const;
+const DEMO_FILES = ["docker-compose.yml"] as const;
 let db: RemoteDb;
 const cleanups: Array<() => void> = [];
 

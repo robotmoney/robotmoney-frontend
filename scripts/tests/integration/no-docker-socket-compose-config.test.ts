@@ -242,8 +242,8 @@ function baseEnv(): Record<string, string> {
 }
 
 const BASE = ["docker-compose.yml"] as const;
-const SMOKE = ["docker-compose.yml", "docker-compose.smoke.yml"] as const;
-const STAGE = ["docker-compose.yml", "docker-compose.smoke.yml", "docker-compose.stage.yml"] as const;
+const SMOKE = ["docker-compose.yml"] as const;
+const STAGE = ["docker-compose.yml", "docker-compose.stage.yml"] as const;
 
 interface Composition {
   /** Named in every failure message. */

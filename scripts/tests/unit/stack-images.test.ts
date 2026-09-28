@@ -42,7 +42,6 @@ describe("shipped image plan (pure)", () => {
     expect([...SHIPPED_IMAGE_SERVICES]).toEqual([
       "api",
       "worker-analytics",
-      "worker-research",
       // The clock, shipped like the rest (issue #1026): it replaces
       // `worker-swarm` and runs from the same backend/Dockerfile image, so a
       // staging host still compiles nothing (AC-ID-05).
@@ -134,7 +133,7 @@ function configWith(imagesOverride: string, repoRoot: string): StackConfig {
     repoRoot,
     project: "rm_images_test",
     profile: "core",
-    composeFiles: ["docker-compose.yml", "docker-compose.smoke.yml"],
+    composeFiles: ["docker-compose.yml"],
     database: DEFAULT_STACK_DATABASE,
     environment: { class: "ci", hash: "deadbeef" },
     imagesOverride,
@@ -161,7 +160,7 @@ describe("a stack with shipped images builds NOTHING on this host", () => {
     await stack.up();
     const anyCompose = argv.find((a) => a[1] === "compose")!;
     const files = anyCompose.flatMap((tok, i) => (tok === "-f" ? [anyCompose[i + 1]!] : []));
-    expect(files).toEqual(["docker-compose.yml", "docker-compose.smoke.yml", path]);
+    expect(files).toEqual(["docker-compose.yml", path]);
   });
 
   test("build() is REFUSED outright, not quietly skipped", async () => {

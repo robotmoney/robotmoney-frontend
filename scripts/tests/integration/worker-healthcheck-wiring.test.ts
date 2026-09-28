@@ -82,9 +82,8 @@ describe("the healthcheck command docker-compose.yml declares actually runs", ()
 
   test("the lanes and the producer are wired to the same command", () => {
     expect(resolvedHealthcheckCommand("analytics-producer")).toEqual(argv);
-    for (const lane of ["worker-research"]) {
-      expect(resolvedHealthcheckCommand(lane)).toEqual(argv);
-    }
+    // No research lane exists to wire (issue #1026 wave 6, P1).
+    expect(() => resolvedHealthcheckCommand("worker-research")).toThrow();
   });
 
   test("a fresh heartbeat exits 0", () => {

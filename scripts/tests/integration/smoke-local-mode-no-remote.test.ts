@@ -18,7 +18,7 @@ import { buildSpawnEnv, composeArgs, DEFAULT_STACK_DATABASE, type StackConfig } 
 
 const repoRoot = join(import.meta.dir, "../../..");
 const REMOTE_HOST = "db-rm-app-x.do-user-12345-0.b.db.ondigitalocean.com";
-const COMPOSE_FILES = ["docker-compose.yml", "docker-compose.smoke.yml"];
+const COMPOSE_FILES = ["docker-compose.yml"];
 
 const homeEnv = join(mkdtempSync(join(tmpdir(), "rm-c32-home-")), ".env");
 writeFileSync(homeEnv, `host = ${REMOTE_HOST}\nport = 25060\ndatabase = defaultdb\nsslmode = require\nrm_app = s3cret-remote\n`);

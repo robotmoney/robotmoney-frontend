@@ -33,7 +33,7 @@ function composeConfig(extraFiles: string[], args: string[]): { stdout: string; 
     // named — and it is one of the six images that must be shipped, because a
     // host that lacks it cold-builds it the first time a session runs.
     ["docker", "compose", "-p", "rm_images_override_it", "--profile", "member-agent",
-      "-f", "docker-compose.yml", "-f", "docker-compose.smoke.yml",
+      "-f", "docker-compose.yml",
       ...extraFiles.flatMap((f) => ["-f", f]), ...args],
     // RM_INSTANCE / RM_INSTANCE_STATE_DIR: docker-compose.yml requires both (no checkout fallback,
     // smoke spec §1.1); `config` mounts nothing, so any absolute path renders.

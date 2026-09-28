@@ -620,7 +620,7 @@ function stackRecord(instance: string, overrides: Partial<StackStateRecord> = {}
     stage: false,
     envClass: "local",
     envHash: "0123456789",
-    composeFiles: "docker-compose.yml:docker-compose.smoke.yml",
+    composeFiles: "docker-compose.yml",
     db: "ephemeral",
     externalPg: false,
     databaseUrl: "postgres://robotmoney:robotmoney@postgres:5432/robotmoney",

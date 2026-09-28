@@ -2,7 +2,7 @@
 //
 //  1. Compose topology (docker compose config — offline interpolation, no
 //     containers): the smoke stack starts one worker container per execution
-//     lane (worker-analytics / worker-research), each with its WORKER_LANE
+//     lane (worker-analytics only; the research lane is gone), with its WORKER_LANE
 //     pinned; the old undifferentiated `worker` service is gone. Fails loudly
 //     if the topology regresses to generic workers. There is no session lane:
 //     issue #1026 moved session timing out of the queue entirely.
@@ -23,7 +23,6 @@ const repoRoot = join(import.meta.dir, "../../..");
 
 const WORKER_LANE_SERVICES: Record<string, string> = {
   "worker-analytics": "analytics",
-  "worker-research": "research",
 };
 
 interface ComposeConfig {
@@ -46,7 +45,7 @@ function composeConfig(): ComposeConfig {
   env.RM_INSTANCE = "rm_local_lanetopo";
   env.RM_INSTANCE_STATE_DIR = "/var/empty/rm_local_lanetopo";
   const r = Bun.spawnSync(
-    ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.smoke.yml", "config", "--format", "json"],
+    ["docker", "compose", "-f", "docker-compose.yml", "config", "--format", "json"],
     { cwd: repoRoot, env, stdout: "pipe", stderr: "pipe" },
   );
   if (r.exitCode !== 0) {

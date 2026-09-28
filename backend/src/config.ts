@@ -594,7 +594,7 @@ export function assertNoVaultAddressCollision(
 //
 // THIS DEFAULT IS THE EFFECTIVE PRODUCTION VALUE, not a placeholder.
 // SWARM_PUBLIC_BASE_URL is named by NO compose file: not docker-compose.yml's
-// api `environment:` allowlist, not docker-compose.smoke.yml's, not the
+// api `environment:` allowlist, not docker-compose.yml's, not the
 // x-worker-env anchor — and there is no `env_file:` anywhere and
 // backend/Dockerfile sets no ENV, so the variable can never reach the
 // container. It is also absent from scripts/lib/smoke-main.ts's
@@ -636,9 +636,6 @@ export const config = {
   trustProxy: process.env.TRUST_PROXY === "1",
   databaseUrl,
   apiPort: Number(process.env.API_PORT ?? 8787),
-  // Read-only for AC-ID-03/T26 identity purposes only (backend/src/ops/static-identity.ts) —
-  // website-server (issue #892), not this process, serves the SPA from the same mount.
-  staticDir: process.env.STATIC_DIR || null,
   // Origins allowed to call this API cross-origin (issue #871): a split-repo
   // frontend deployed as its own container is no longer same-origin, so it
   // needs CORS. Empty by default — the single-box same-origin deployment

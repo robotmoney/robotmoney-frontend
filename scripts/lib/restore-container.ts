@@ -282,7 +282,7 @@ export async function restoreBackupIntoContainer(
   const volumeArgs: string[] = [];
   if (opts.volume) {
     // SMOKE_VOLUME_LABEL ("robotmoney.smoke=1") is what smoke:clean filters on —
-    // docker-compose.smoke.yml stamps it on pgdata, and this is the non-compose
+    // docker-compose.yml stamps it on pgdata, and this is the non-compose
     // equivalent. Without it the volume is unreclaimable by the documented path.
     const created = await run(
       ["docker", "volume", "create", "--label", "robotmoney.smoke=1", ...dockerLabelFlags(labels), opts.volume],

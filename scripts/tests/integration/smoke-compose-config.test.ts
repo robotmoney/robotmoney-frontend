@@ -1,6 +1,7 @@
 // Compose-layer test for the smoke data path (issue #50; issue #147 removed
-// DEMO_HERMETIC and the base-rpc-stub service entirely). Shells
-// `docker compose -f docker-compose.yml -f docker-compose.smoke.yml config`
+// DEMO_HERMETIC and the base-rpc-stub service entirely; issue #1026 wave 6 (P1)
+// deleted the smoke overlay, so docker-compose.yml is the one base file). Shells
+// `docker compose -f docker-compose.yml config`
 // (offline — pure interpolation, no daemon-side state, no containers) and
 // asserts the RESOLVED api/worker environment:
 //
@@ -18,7 +19,7 @@
 // a missing docker CLI fails this test loudly — never a silent skip
 // (test-coverage policy).
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveSmokeEnv } from "../../smoke.ts";
@@ -83,7 +84,7 @@ function baseEnv(): Record<string, string> {
     env[k] = v;
   }
   env.SMOKE_PROJECT = "compose-config-test"; // used by labels; avoids interpolation warnings
-  // The environment labels docker-compose.smoke.yml stamps on every service and
+  // The environment labels docker-compose.yml stamps on every service and
   // on the pgdata volume (scripts/stack/naming.ts). Same reason as above:
   // supplied so `config` resolves without interpolation warnings.
   env.RM_STACK_ENV_CLASS = "local";
@@ -101,15 +102,16 @@ function baseEnv(): Record<string, string> {
   return env;
 }
 
-const DEMO_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.smoke.yml"] as const;
-
 const BASE_COMPOSE_FILES = ["docker-compose.yml"] as const;
+// The smoke and the base are ONE composition since the overlay was deleted
+// (issue #1026 wave 6, P1). The old name stays as an alias so every case that
+// asked for "the smoke composition" asks for the base file.
+const DEMO_COMPOSE_FILES = BASE_COMPOSE_FILES;
 const STAGE_COMPOSE_FILES = [...DEMO_COMPOSE_FILES, "docker-compose.stage.yml"] as const;
 // The three compositions this repo actually boots, in the order the describes
 // below iterate them.
 const ALL_COMPOSITIONS: ReadonlyArray<readonly string[]> = [
   BASE_COMPOSE_FILES,
-  DEMO_COMPOSE_FILES,
   STAGE_COMPOSE_FILES,
 ];
 
@@ -233,6 +235,8 @@ const PREWARM: readonly RenderArgs[] = [
     knobs: { HTTP_FETCH_CACHE_TTL_MS: "45000", TOKEN_PRICE_CACHE_TTL_MS: "90000" },
     files: BASE_COMPOSE_FILES,
   },
+  // P1: the data-path passthroughs reach api and worker-analytics.
+  { knobs: { BASE_RPC_URL: "http://127.0.0.1:9999", ANALYTICS_SOURCE: "live" }, files: DEMO_COMPOSE_FILES },
   // "explicit BASE_RPC_URL override is honored".
   { knobs: { BASE_RPC_URL: "http://127.0.0.1:9999" }, files: DEMO_COMPOSE_FILES },
   // The resolver-driven renders. The non-stage and stage cadence profiles are
@@ -315,7 +319,7 @@ function serviceEnv(cfg: ComposeConfig, svc: string): Record<string, string | nu
 // both worker lanes (issue #107 topology — analytics/research). NOT
 // `system-scheduler`: it reads no data-path knob and holds no provider
 // credential (system-scheduler-spec.md §7).
-const RPC_CONSUMERS = ["api", "worker-analytics", "worker-research"] as const;
+const RPC_CONSUMERS = ["api", "worker-analytics"] as const;
 const HTTP_CACHE_CONSUMERS = [...RPC_CONSUMERS, "analytics-producer"] as const;
 // Every service built from backend/Dockerfile. `system-scheduler` is here and
 // NOT in RPC_CONSUMERS above: it ships from the same image (so the identity
@@ -328,7 +332,6 @@ describe("AUM producer revision reaches every backend image build", () => {
   // for a composition the prewarm did not pay for.
   const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
     ["base", BASE_COMPOSE_FILES],
-    ["smoke", DEMO_COMPOSE_FILES],
     ["stage", STAGE_COMPOSE_FILES],
   ];
 
@@ -568,7 +571,7 @@ describe("member-agent compose template — zero ambient model configuration", (
     const mounts = (svc: string) => JSON.stringify(cfg.services[svc]?.volumes ?? []);
     expect(mounts("analytics-producer")).toContain(holderDir);
     expect(mounts("worker-analytics")).toContain(holderDir);
-    for (const svc of ["member-agent", "api", "system-scheduler", "worker-research", "website-server"]) {
+    for (const svc of ["member-agent", "api", "system-scheduler", "website-server"]) {
       expect({ svc, mounted: mounts(svc).includes(holderDir) }).toEqual({ svc, mounted: false });
     }
     // The scheduler mounts its own holder's directory and nothing else of the instance.
@@ -715,7 +718,6 @@ describe("every long-running service reports its own health", () => {
   // for a composition the prewarm did not pay for.
   const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
     ["base", BASE_COMPOSE_FILES],
-    ["smoke", DEMO_COMPOSE_FILES],
     ["stage", STAGE_COMPOSE_FILES],
   ];
 
@@ -762,7 +764,7 @@ describe("every long-running service reports its own health", () => {
 
   test("the lanes and the producer all run the heartbeat check, not a process-existence probe", () => {
     const cfg = composeConfig({});
-    for (const name of ["worker-analytics", "worker-research", "analytics-producer"]) {
+    for (const name of ["worker-analytics", "analytics-producer"]) {
       const test_ = cfg.services[name]?.healthcheck?.test ?? [];
       // Pinning the command is the point: `CMD true` / `pgrep bun` would satisfy
       // the "declares a healthcheck" test above while proving nothing.
@@ -804,6 +806,56 @@ describe("every long-running service reports its own health", () => {
     // supervises it as a standing process.
     expect(gated.services["member-agent"]?.restart).toBe("no");
     expect(gated.services["member-agent"]?.profiles).toEqual(["member-agent"]);
+  });
+});
+
+// Issue #1026 wave 6, P1 (compose cleanup). Each case renders the REAL compose
+// configuration, so a service, mount or variable that comes back fails here and
+// not in a review.
+describe("compose cleanup (issue #1026 wave 6, P1)", () => {
+  test("docker-compose.smoke.yml is deleted, and no committed compose file names it", async () => {
+    expect(existsSync(join(repoRoot, "docker-compose.smoke.yml"))).toBe(false);
+    for (const file of ["docker-compose.yml", "docker-compose.stage.yml"]) {
+      expect(`${file}:${(await Bun.file(join(repoRoot, file)).text()).includes("docker-compose.smoke.yml")}`).toBe(`${file}:false`);
+    }
+  });
+
+  test("there is no worker-research service, and no research lane, in any composition", () => {
+    for (const files of ALL_COMPOSITIONS) {
+      const names = Object.keys(composeConfig({}, files).services);
+      expect(names).not.toContain("worker-research");
+      expect(names.filter((n) => /research/.test(n))).toEqual([]);
+      const lanes = Object.values(composeConfig({}, files).services)
+        .map((svc) => svc.environment?.WORKER_LANE)
+        .filter((lane): lane is string => typeof lane === "string");
+      expect(lanes).toEqual(["analytics"]);
+    }
+  });
+
+  test("the api mounts no `_static` directory and is handed no STATIC_DIR (D55 (1))", () => {
+    for (const files of ALL_COMPOSITIONS) {
+      const api = composeConfig({}, files).services.api!;
+      expect(JSON.stringify(api.volumes ?? [])).not.toMatch(/_static|\/srv\/frontend/);
+      expect("STATIC_DIR" in (api.environment ?? {})).toBe(false);
+    }
+  });
+
+  test("the stamps the overlay carried now come from the base file: every standing service, the volume and the network", () => {
+    const cfg = composeConfig({}) as ComposeConfig & { volumes?: Record<string, { labels?: Record<string, string> }> };
+    const labelKeys = ["robotmoney.env", "robotmoney.env.hash", "robotmoney.smoke.project"];
+    for (const name of ["postgres", "api", "website-server", "worker-analytics", "system-scheduler", "analytics-producer"]) {
+      expect({ name, keys: labelKeys.filter((k) => k in ((cfg.services[name] as { labels?: Record<string, string> }).labels ?? {})) }).toEqual({ name, keys: labelKeys });
+    }
+    expect(cfg.volumes?.pgdata?.labels?.["robotmoney.smoke"]).toBe("1");
+    expect(cfg.networks?.default?.labels?.["robotmoney.smoke.network"]).toBe("1");
+  });
+
+  test("the data-path passthroughs the overlay carried still reach the api and the worker", () => {
+    const cfg = composeConfig({ BASE_RPC_URL: "http://127.0.0.1:9999", ANALYTICS_SOURCE: "live" });
+    for (const name of ["api", "worker-analytics"]) {
+      const env = serviceEnv(cfg, name);
+      expect({ name, url: env.BASE_RPC_URL, source: env.ANALYTICS_SOURCE }).toEqual({ name, url: "http://127.0.0.1:9999", source: "live" });
+    }
   });
 });
 
@@ -889,7 +941,6 @@ describe("boot-guard operator controls reach the api container (issue #602)", ()
   // for a composition the prewarm did not pay for.
   const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
     ["base", BASE_COMPOSE_FILES],
-    ["smoke", DEMO_COMPOSE_FILES],
     ["stage", STAGE_COMPOSE_FILES],
   ];
   const CONTROLS = ["RM_ALLOW_HANDLE_NAMESPACE_VIOLATION", "PG_NAMESPACE_GUARD_TIMEOUT_MS"] as const;
@@ -945,7 +996,7 @@ describe("boot-guard operator controls reach the api container (issue #602)", ()
     // The premise the cases above rest on, asserted rather than assumed: if a
     // future `env_file:` appeared, "not in the allowlist" would stop meaning
     // "not delivered" and these tests would be guarding the wrong thing.
-    for (const file of ["docker-compose.yml", "docker-compose.smoke.yml", "docker-compose.stage.yml"]) {
+    for (const file of ["docker-compose.yml", "docker-compose.stage.yml"]) {
       const text = await Bun.file(join(repoRoot, file)).text();
       expect(`${file}:${/^\s*env_file\s*:/m.test(text)}`).toBe(`${file}:false`);
     }
@@ -970,13 +1021,13 @@ describe("boot-guard operator controls reach the api container (issue #602)", ()
 // DELIVERED, since the api service's `environment:` block is an allowlist and
 // a key missing from it is never sent to the container regardless of what the
 // host shell exports.
-describe("api allow-insecure is the boot's decision, never the overlay's pin (§4.4, criterion 46)", () => {
+describe("api allow-insecure is the boot's decision, never a compose file's pin (§4.4, criterion 46)", () => {
   test("a prod boot's empty RM_ALLOW_INSECURE reaches api empty; a stage boot's 1 reaches it as 1", () => {
     expect(serviceEnv(composeConfig({ RM_ALLOW_INSECURE: "" }), "api").RM_ALLOW_INSECURE).toBe("");
     expect(serviceEnv(composeConfig({ RM_ALLOW_INSECURE: "1" }), "api").RM_ALLOW_INSECURE).toBe("1");
   });
 
-  test("with nothing emitted the overlay resolves empty — it pins no insecure default any more", () => {
+  test("with nothing emitted the api resolves empty — no compose file pins an insecure default", () => {
     expect(serviceEnv(composeConfig({}), "api").RM_ALLOW_INSECURE ?? "").toBe("");
   });
 });
@@ -984,7 +1035,6 @@ describe("api allow-insecure is the boot's decision, never the overlay's pin (§
 describe("TRUST_PROXY reaches the api container in every composition (issue #892 finding)", () => {
   const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
     ["base", BASE_COMPOSE_FILES],
-    ["smoke", DEMO_COMPOSE_FILES],
     ["stage", STAGE_COMPOSE_FILES],
   ];
 
@@ -1042,7 +1092,6 @@ export function assertNoReplicaMultipliers(cfg: ComposeConfig, label = "config")
 describe("no composition multiplies a service (issue #891, generalised by #1026)", () => {
   const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
     ["base", BASE_COMPOSE_FILES],
-    ["smoke", DEMO_COMPOSE_FILES],
     ["stage", STAGE_COMPOSE_FILES],
   ];
 
@@ -1051,7 +1100,7 @@ describe("no composition multiplies a service (issue #891, generalised by #1026)
       const cfg = composeConfig({}, files);
       // The sweep is only meaningful if it saw the real topology, so name the
       // services it must have found rather than trusting a possibly-empty map.
-      for (const name of ["api", "worker-analytics", "worker-research", "system-scheduler"]) {
+      for (const name of ["api", "worker-analytics", "system-scheduler"]) {
         expect({ label, name, present: cfg.services?.[name] !== undefined })
           .toEqual({ label, name, present: true });
       }
@@ -1082,7 +1131,7 @@ describe("no composition multiplies a service (issue #891, generalised by #1026)
   });
 
   test("raw compose source files contain no scale or replica multipliers at all", async () => {
-    for (const file of ["docker-compose.yml", "docker-compose.smoke.yml", "docker-compose.stage.yml"]) {
+    for (const file of ["docker-compose.yml", "docker-compose.stage.yml"]) {
       const text = await Bun.file(join(repoRoot, file)).text();
       expect(`${file}:replicas:${/replicas\s*:\s*[2-9]/i.test(text)}`).toBe(`${file}:replicas:false`);
       expect(`${file}:scale:${/scale\s*:\s*[2-9]/i.test(text)}`).toBe(`${file}:scale:false`);

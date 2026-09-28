@@ -8,7 +8,7 @@
 // used to mint four private name shapes and the answer was no, which is why
 // nothing could be reaped without risking the live site.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CI_IDENTITY_VARS,
@@ -183,18 +183,22 @@ describe("labels — the channel tooling selects on", () => {
 // spawners: these are the places the scheme has to be APPLIED, and none of them
 // is reachable from a unit test any other way (each one needs Docker to run).
 describe("the scheme is actually wired into every spawner", () => {
-  test("docker-compose.smoke.yml stamps attribution on services, pgdata, and the managed default network", () => {
-    const smoke = readFileSync(join(repoRoot, "docker-compose.smoke.yml"), "utf8");
-    const classLines = smoke.split("\n").filter((l) => l.includes(`${ENV_CLASS_LABEL}:`));
-    const hashLines = smoke.split("\n").filter((l) => l.includes(`${ENV_HASH_LABEL}:`));
-    // postgres, website-server, api, the shared worker anchor, system-scheduler
-    // (issue #1026 — a standing container the reaper must be able to attribute),
-    // member-agent, volume, network.
-    expect(classLines.length).toBe(8);
-    expect(hashLines.length).toBe(8);
-    for (const l of classLines) expect(l).toContain(`\${${ENV_CLASS_COMPOSE_VAR}}`);
-    for (const l of hashLines) expect(l).toContain(`\${${ENV_HASH_COMPOSE_VAR}}`);
-    expect(smoke).toContain(`${MANAGED_NETWORK_LABEL}: "1"`);
+  test("docker-compose.yml stamps attribution on services, pgdata, and the managed default network", () => {
+    // The overlay that used to carry these was deleted (issue #1026 wave 6, P1).
+    // The three stamps are defined ONCE, as the `x-smoke-labels` anchor, and
+    // every stamped object refers to it: postgres, api, website-server,
+    // worker-analytics, system-scheduler, analytics-producer, member-agent, the
+    // pgdata volume and the default network.
+    expect(existsSync(join(repoRoot, "docker-compose.smoke.yml"))).toBe(false);
+    const compose = readFileSync(join(repoRoot, "docker-compose.yml"), "utf8");
+    const classLines = compose.split("\n").filter((l) => l.includes(`${ENV_CLASS_LABEL}:`));
+    const hashLines = compose.split("\n").filter((l) => l.includes(`${ENV_HASH_LABEL}:`));
+    expect(classLines.length).toBe(1);
+    expect(hashLines.length).toBe(1);
+    expect(classLines[0]).toContain(`\${${ENV_CLASS_COMPOSE_VAR}`);
+    expect(hashLines[0]).toContain(`\${${ENV_HASH_COMPOSE_VAR}`);
+    expect(compose.match(/\*smoke-labels/g)?.length).toBe(9);
+    expect(compose).toContain(`${MANAGED_NETWORK_LABEL}: "1"`);
   });
 
   test("no spawner keeps a private ad-hoc name shape", () => {

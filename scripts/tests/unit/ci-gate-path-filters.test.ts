@@ -131,7 +131,6 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
     // service is handed — so a PR touching nothing but a compose file has to
     // run it, or the assertions covering that very file are skipped pre-merge.
     ["docker-compose.yml", ["backend.yml", "integration.yml"]],
-    ["docker-compose.smoke.yml", ["backend.yml", "integration.yml"]],
     ["docker-compose.stage.yml", ["backend.yml", "integration.yml"]],
     ["backend/src/analytics/extract/geckoterminal.ts", ["backend.yml", "research-pipeline.yml"]],
     ["backend/src/chain/token-prices.ts", ["backend.yml", "research-pipeline.yml"]],

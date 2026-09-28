@@ -37,7 +37,6 @@ export const DB_WRITER_SERVICES: readonly string[] = Object.freeze([
   "api",
   "analytics-producer",
   "worker-analytics",
-  "worker-research",
 ]);
 // `system-scheduler` is absent because it writes to no database: it holds one
 // API credential and no role password (system-scheduler-spec.md §7), so a

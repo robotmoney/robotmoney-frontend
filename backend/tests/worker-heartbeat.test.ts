@@ -85,7 +85,7 @@ async function waitFor(predicate: () => Promise<boolean>, ms: number, what: stri
 }
 
 test("an IDLE lane with nothing queued stays healthy and keeps reporting — idleness is not failure", async () => {
-  launch({ lane: LANES.research, workerId: "idle-research", heartbeatFile: path, ...fastOpts });
+  launch({ lane: LANES.generic, workerId: "idle-research", heartbeatFile: path, ...fastOpts });
 
   await waitFor(async () => (await checkHeartbeatFile(path)).healthy, 3000, "the first healthy heartbeat");
   const first = await record();
@@ -103,7 +103,7 @@ test("a lane whose loop is wedged inside a job goes UNHEALTHY while the process 
   // The whole point of the check. A 400ms job budget stands in for the shipped
   // 15 minutes; nothing else about the path differs.
   launch({
-    lane: LANES.research, workerId: "wedged-research", heartbeatFile: path,
+    lane: LANES.generic, workerId: "wedged-research", heartbeatFile: path,
     ...fastOpts, jobProgressTimeoutMs: 400, idleProgressTimeoutMs: 60_000,
   });
   const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_heartbeat_hang', '{}') RETURNING id`;
@@ -133,7 +133,7 @@ test("a lane whose loop is wedged inside a job goes UNHEALTHY while the process 
 
 test("a legitimately slow job does NOT go red: the busy budget covers it, and the idle budget is restored after", async () => {
   launch({
-    lane: LANES.research, workerId: "slow-research", heartbeatFile: path,
+    lane: LANES.generic, workerId: "slow-research", heartbeatFile: path,
     ...fastOpts, jobProgressTimeoutMs: 10_000, idleProgressTimeoutMs: 60_000,
   });
   const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_heartbeat_slow', '{}') RETURNING id`;
@@ -159,7 +159,7 @@ test("a legitimately slow job does NOT go red: the busy budget covers it, and th
 
 test("the budget the lane reports comes from its configured knobs, so compose and code cannot drift apart", async () => {
   launch({
-    lane: LANES.research, workerId: "knobs-research", heartbeatFile: path,
+    lane: LANES.generic, workerId: "knobs-research", heartbeatFile: path,
     ...fastOpts, idleProgressTimeoutMs: 12_345,
   });
 
@@ -177,7 +177,7 @@ test("a lane that has LOST ITS DATABASE goes unhealthy — 'process alive' is no
   // path. Restored in `finally` because this ephemeral Postgres is shared with
   // every later test file.
   launch({
-    lane: LANES.research, workerId: "dbless-research", heartbeatFile: path,
+    lane: LANES.generic, workerId: "dbless-research", heartbeatFile: path,
     ...fastOpts, idleProgressTimeoutMs: 300,
   });
   await waitFor(async () => (await checkHeartbeatFile(path)).healthy, 3000, "a healthy idle lane first");
@@ -205,7 +205,7 @@ test("a DB outage that hits MID-JOB narrows the stale BUSY budget back down inst
   // would keep reporting healthy for up to the full job budget even though it
   // is fully stalled. The fix must narrow it back to the idle budget instead.
   launch({
-    lane: LANES.research, workerId: "midjob-dbloss-research", heartbeatFile: path,
+    lane: LANES.generic, workerId: "midjob-dbloss-research", heartbeatFile: path,
     ...fastOpts, jobProgressTimeoutMs: 10_000, idleProgressTimeoutMs: 300,
   });
   const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_heartbeat_busy_then_dbloss', '{}') RETURNING id`;
@@ -277,7 +277,7 @@ test("a SUSTAINED database outage stays unhealthy across many failed cycles, not
   const idlePollMs = 1200; // > MIN_WRITE_INTERVAL_MS, same ordering as production's 2000ms default
   const idleProgressTimeoutMs = 2500; // a small multiple of idlePollMs, so several cycles fit inside one budget window
   launch({
-    lane: LANES.research, workerId: "sustained-dbloss-research", heartbeatFile: path,
+    lane: LANES.generic, workerId: "sustained-dbloss-research", heartbeatFile: path,
     idlePollMs, schedulerTickMs: 60_000, reaperTickMs: 60_000, shutdownTimeoutMs: 1000,
     idleProgressTimeoutMs,
   });
@@ -325,7 +325,7 @@ test("a SUSTAINED database outage stays unhealthy across many failed cycles, not
 test("the scheduler tick keeps its own heartbeat fresh, independent of the drain loop", async () => {
   const schedulerPath = join(dir, "heartbeat.scheduler");
   launch({
-    lane: LANES.research, workerId: "sched-research", heartbeatFile: path,
+    lane: LANES.generic, workerId: "sched-research", heartbeatFile: path,
     schedulerHeartbeatFile: schedulerPath, schedulerProgressTimeoutMs: 500,
     ...fastOpts, schedulerTickMs: 60, idleProgressTimeoutMs: 60_000,
   });
@@ -341,7 +341,7 @@ test("the scheduler tick keeps its own heartbeat fresh, independent of the drain
 test("a scheduler that cannot progress goes UNHEALTHY on its own file while an idle drain loop stays healthy — the exact production incident this issue was filed from", async () => {
   const schedulerPath = join(dir, "heartbeat.scheduler");
   launch({
-    lane: LANES.research, workerId: "sched-fault-research", heartbeatFile: path,
+    lane: LANES.generic, workerId: "sched-fault-research", heartbeatFile: path,
     schedulerHeartbeatFile: schedulerPath, schedulerProgressTimeoutMs: 300,
     ...fastOpts, schedulerTickMs: 40, idleProgressTimeoutMs: 60_000,
   });

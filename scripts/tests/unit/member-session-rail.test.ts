@@ -160,7 +160,7 @@ describe("railFromEnv — the standalone session driver's rail resolution", () =
     writeFileSync(tokenFile, "operator-token\n", { mode: 0o600 });
     const rail = railFromEnv({
       SMOKE_PROJECT: "rm_ci_stack_y",
-      COMPOSE_FILE: "docker-compose.yml:docker-compose.smoke.yml",
+      COMPOSE_FILE: "docker-compose.yml",
       AGENT_MODEL: "free",
       // The stack states its own RM_ENV now (D13) and this rail is built from a
       // smoke stack's compose env, so it carries one. Unset would be the
@@ -171,7 +171,7 @@ describe("railFromEnv — the standalone session driver's rail resolution", () =
     });
     rmSync(tokenDir, { recursive: true, force: true });
     expect(rail.composeProject).toBe("rm_ci_stack_y");
-    expect(rail.composeFiles).toEqual(["docker-compose.yml", "docker-compose.smoke.yml"]);
+    expect(rail.composeFiles).toEqual(["docker-compose.yml"]);
     expect("UNDEF" in rail.composeSpawnEnv).toBe(false);
     expect(rail.operatorToken).toBe("operator-token");
     // Keyless selection resolves with no credential — DEVELOPMENT only. This is

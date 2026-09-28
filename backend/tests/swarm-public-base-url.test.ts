@@ -3,7 +3,7 @@
 //
 // `SWARM_PUBLIC_BASE_URL` is inert: it is named by no compose file (not
 // docker-compose.yml's api `environment:` allowlist, not
-// docker-compose.smoke.yml's, not the x-worker-env anchor), there is no
+// docker-compose.yml's, not the x-worker-env anchor), there is no
 // `env_file:` anywhere and backend/Dockerfile sets no ENV, and it is absent
 // from scripts/lib/smoke-main.ts's DEMO_COMPOSE_PASSTHROUGH. So the fallback in
 // resolveSwarmPublicBaseUrl IS the value every real deployment computes, and it

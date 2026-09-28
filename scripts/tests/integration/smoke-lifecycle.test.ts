@@ -251,7 +251,7 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
     }
     expect(bootQuery(h.project, `SELECT count(*) FROM automation_tokens WHERE instance = '${h.instance}'`)).toBe("3");
     // No service carries a token in its environment (smoke spec §3, D52).
-    for (const service of ["api", "worker-analytics", "worker-research", "system-scheduler", "analytics-producer", "website-server"]) {
+    for (const service of ["api", "worker-analytics", "system-scheduler", "analytics-producer", "website-server"]) {
       for (const key of ["ADMIN_TOKEN", "AUTOMATION_TOKEN", "ANALYTICS_TOKEN"]) {
         expect({ service, key, value: containerEnv(h.project, service, key) ?? null }).toEqual({ service, key, value: null });
       }
@@ -331,7 +331,7 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
     expect(user(containerEnv(h.project, "api", "DATABASE_URL"))).toBe("rm_app");
     expect(user(containerEnv(h.project, "worker-analytics", "DATABASE_URL"))).toBe("rm_worker");
     expect(user(containerEnv(h.project, "worker-analytics", "WORKER_DATABASE_URL"))).toBe("rm_worker");
-    for (const service of ["api", "worker-analytics", "worker-research", "system-scheduler", "analytics-producer", "website-server"]) {
+    for (const service of ["api", "worker-analytics", "system-scheduler", "analytics-producer", "website-server"]) {
       for (const key of ["DATABASE_URL", "WORKER_DATABASE_URL", "MIGRATE_DATABASE_URL"]) {
         const value = containerEnv(h.project, service, key);
         if (value) expect({ service, key, user: user(value) }).not.toEqual({ service, key, user: "robotmoney" });

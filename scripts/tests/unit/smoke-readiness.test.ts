@@ -317,7 +317,6 @@ function allGood(over: Partial<ReadinessObservation> = {}): ReadinessObservation
     subjects: { active: ["woon"], collecting: ["woon"] },
     workers: [
       { service: "worker-analytics", health: "healthy", line: { kind: "passed" } },
-      { service: "worker-research", health: "healthy", line: { kind: "passed" } },
     ],
     producer: { health: "healthy", phase: "armed", authenticated: true, detail: "heartbeat phase=armed" },
     seed: { completed: true, detail: "exited 0" },

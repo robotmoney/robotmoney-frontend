@@ -352,7 +352,7 @@ describe("the generated overlay", () => {
     // Exactly the services that HOLD a database connection. `system-scheduler`
     // is not among them and must not be: it has no `depends_on: postgres` to
     // reset because it has no database at all (system-scheduler-spec.md §1).
-    for (const s of ["api", "worker-analytics", "worker-research"]) {
+    for (const s of ["api", "worker-analytics"]) {
       expect(yaml).toContain(`  ${s}:\n    depends_on: !reset null`);
     }
   });

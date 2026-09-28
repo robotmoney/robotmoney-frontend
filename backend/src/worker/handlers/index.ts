@@ -32,7 +32,7 @@ export const handlers: Record<string, JobHandler> = {
   // combined `analytics.run` kind is RETIRED (issue #107): regime and research
   // are distinct kinds so a slow research fetch can never starve regime work.
   "regime.classify": analytics.regimeClassify,
-  // research signals only → research_signals (research lane)
+  // research signals only → research_signals (legacy rows; only the `generic` lane claims them)
   "research.refresh": analytics.researchRefresh,
   // hourly vault share-price sample (feeds the 7-day APY calc)
   "vault.sample_share_price": sampleSharePrice,
