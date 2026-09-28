@@ -152,7 +152,18 @@ export interface InventoryVerdict {
  *   it) and a failure after the release, unless its rule tolerates it with a
  *   written reason.
  */
-export function inventoryVerdict(groups: readonly ClassifiedGroup[], mode: InventoryMode): InventoryVerdict {
+export function inventoryVerdict(
+  groups: readonly ClassifiedGroup[],
+  mode: InventoryMode,
+  /**
+   * The release being graded (e.g. "v0.5.1"). When given, a known issue fails
+   * after the release only if THIS release claims to fix it: its rule's issue is
+   * tagged with the release (`v0.5.1-D1`, `v0.5.1-sweep-timeout`). A known issue
+   * the release does not touch (issue 1035) is reported as a warning. Without it,
+   * every known issue fails after the release (the twin gate's behaviour).
+   */
+  releaseTag?: string,
+): InventoryVerdict {
   const failures: string[] = [];
   const warnings: string[] = [];
   let unclassifiedErrors = 0;
@@ -167,8 +178,10 @@ export function inventoryVerdict(groups: readonly ClassifiedGroup[], mode: Inven
     }
     if (g.rule.class !== "known-issue") continue;
     const label = `known issue ${g.rule.id} (${g.rule.issue})`;
+    const fixedByThisRelease = releaseTag === undefined || String(g.rule.issue ?? "").startsWith(releaseTag);
     if (mode === "baseline" || g.rule.tolerateAfterRelease) warnings.push(`${label} — ${where}`);
-    else failures.push(`${label} still present after the release — ${where}`);
+    else if (!fixedByThisRelease) warnings.push(`${label}, not fixed by ${releaseTag} — ${where}`);
+    else failures.push(`${label} still present after the release that fixes it — ${where}`);
   }
   return { failures, warnings, unclassifiedErrors };
 }

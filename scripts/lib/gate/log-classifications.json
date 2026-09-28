@@ -242,11 +242,18 @@
     "tolerateAfterRelease": "Pre-existing in v0.5.0 and untouched by v0.5.1; tolerated at the cutover (triage 2026-09-25 21:35), to be fixed in a later release."
   },
   {
+    "id": "known-api-idle-timeout-under-ledger-load",
+    "match": "\\[Bun\\.serve\\]: request timed out after <n> seconds",
+    "class": "known-issue",
+    "issue": "1035",
+    "reason": "The api's ~10 s idle timeout closing a request while analytics-ledger writes saturate its database pool (production 2026-09-25/26, during regime runs). The line names no route, so it is attributed to the load, not to the parity sweep."
+  },
+  {
     "id": "known-parity-sweep-timeout",
-    "match": "parity_sweep\\) failed.*socket connection was closed|\\[Bun\\.serve\\]: request timed out",
+    "match": "parity_sweep\\) failed.*socket connection was closed",
     "class": "known-issue",
     "issue": "v0.5.1-sweep-timeout",
-    "reason": "The parity sweep outlived the api's ~10 s idle timeout; v0.5.1 lifts it for that request. (Log-line form.)"
+    "reason": "The parity sweep outlived the api's ~10 s idle timeout; v0.5.1 lifts it to 240 s for that request. (Log-line form, attributed by the job name; the api's own '[Bun.serve] request timed out' line names no route and is classified separately.)"
   },
   {
     "id": "known-parity-sweep-timeout-job",

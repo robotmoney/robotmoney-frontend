@@ -38,7 +38,7 @@ import { fileURLToPath } from "node:url";
 import { SMOKE_SUBJECTS } from "./lib/smoke-mode.ts";
 import { classify, inventory, inventoryVerdict, renderInventory, validateRules, type ClassifiedGroup, type InventoryMode, type RawLine } from "./lib/gate/log-inventory.ts";
 import { containerLogs, dbQuery, memberSessionLogs, projectContainers, sh, type ContainerState } from "./lib/gate/io.ts";
-import { CLASSIFICATIONS_PATH, evaluateDriverSessions, evaluateSessions, parseDriverSessions, type CheckRecord, type SessionRow } from "./twin-gate.ts";
+import { CLASSIFICATIONS_PATH, parseDriverSessions, type CheckRecord, type SessionRow } from "./twin-gate.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const NAME = "prod:gate";
@@ -60,10 +60,14 @@ export interface ProdGateArgs {
   minSessions: number;
   minAttendance: number;
   stuckAfterMin: number;
+  /** The release being graded; known issues it does not fix are warnings, not failures (default v0.5.1). */
+  release: string;
+  /** post-release: FAIL when no session has published for this many hours (sessions stopped). */
+  livenessHours: number;
 }
 
 export function parseProdGateArgs(argv: readonly string[]): ProdGateArgs | { error: string } {
-  const out: ProdGateArgs = { mode: "baseline", windowHours: 24, deferSessions: false, minSessions: 1, minAttendance: 0.5, stuckAfterMin: 780 };
+  const out: ProdGateArgs = { mode: "baseline", windowHours: 24, deferSessions: false, minSessions: 1, minAttendance: 0.5, stuckAfterMin: 780, release: "v0.5.1", livenessHours: 12 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--defer-sessions") { out.deferSessions = true; continue; }
@@ -84,11 +88,13 @@ export function parseProdGateArgs(argv: readonly string[]): ProdGateArgs | { err
       case "--min-sessions":
       case "--min-attendance":
       case "--stuck-after":
+      case "--liveness-hours":
         if (!Number.isFinite(num) || num <= 0) return { error: `${a} takes a positive number, got "${v}".` };
         if (a === "--window-hours") out.windowHours = num;
         else if (a === "--db-capacity-gb") out.capacityGb = num;
         else if (a === "--min-sessions") out.minSessions = Math.floor(num);
         else if (a === "--min-attendance") out.minAttendance = Math.min(1, num);
+        else if (a === "--liveness-hours") out.livenessHours = num;
         else out.stuckAfterMin = num;
         break;
       case "--report":
@@ -97,6 +103,9 @@ export function parseProdGateArgs(argv: readonly string[]): ProdGateArgs | { err
         break;
       case "--driver-log":
         out.driverLog = v;
+        break;
+      case "--release":
+        out.release = v;
         break;
       case "--state-file":
         out.stateFile = v;
@@ -151,6 +160,83 @@ export function evaluateJudgeConfig(row: { mode: string; model: string | null } 
   const on = row.mode === "enforce" || row.mode === "shadow";
   if (on && !(row.model ?? "").trim()) return { status: "FAIL", detail: [`mode=${row.mode} with no model: every judging refuses model_unconfigured`] };
   return { status: "PASS", detail: [`mode=${row.mode}, model=${row.model ?? "none"}`] };
+}
+
+/** A session production published during the graded window, as the database records it. */
+export interface PublishedSession {
+  id: string;
+  subject: string;
+  publishedAtMs: number;
+  /** Distinct members with a take (swarm_recommendations), outside members included. */
+  takes: number;
+  judged: boolean;
+  receipt: boolean;
+}
+
+/**
+ * PURE. Grade production's sessions over the soak window.
+ *
+ * WHY NOT THE TWIN'S evaluateSessions. It graded production wrongly in three
+ * ways (R8, 2026-09-26): it counted takes from swarm_memos, which only the
+ * driver's seated personas write, so outside members' takes did not count; it
+ * admitted only sessions CONVENED after the release, so the sessions production
+ * had open at the cutover and this release adopted and published were
+ * invisible; and one weak session failed the whole check even when the subject
+ * had published good ones. Here:
+ *  - a session counts when it PUBLISHED in the window, whenever it convened;
+ *  - takes are real takes (swarm_recommendations);
+ *  - a published session with no model judgement or no receipt FAILS (platform);
+ *  - a subject with no published, judged, attended session FAILS;
+ *  - a session under the attendance bar is a WARNING (model timeouts and
+ *    refused takes are acceptable outcomes, owner 2026-09-25);
+ *  - no session published for livenessHours FAILS: sessions have stopped.
+ */
+export function evaluateProdSessions(
+  sessions: readonly PublishedSession[],
+  subjects: readonly string[],
+  activeAnalysts: number,
+  opts: { minAttendance: number; minSessions: number; livenessHours: number; nowMs: number },
+): { failures: string[]; warnings: string[]; goodBySubject: Map<string, number> } {
+  const failures: string[] = [];
+  const warnings: string[] = [];
+  const need = Math.max(1, Math.ceil(activeAnalysts * opts.minAttendance));
+  const goodBySubject = new Map(subjects.map((s) => [s, 0]));
+  for (const s of sessions) {
+    if (!s.judged) failures.push(`session ${s.id} (${s.subject}) published without an applied model/enforce judgement`);
+    if (!s.receipt) failures.push(`session ${s.id} (${s.subject}) published without a consensus receipt`);
+    if (s.takes < need) warnings.push(`session ${s.id} (${s.subject}) published with ${s.takes} take(s), under ${need} of ${activeAnalysts} active`);
+    if (s.judged && s.receipt && s.takes >= need) goodBySubject.set(s.subject, (goodBySubject.get(s.subject) ?? 0) + 1);
+  }
+  for (const [subject, n] of goodBySubject) {
+    if (n < opts.minSessions) failures.push(`subject ${subject}: ${n} published, judged, attended session(s) in the window; need ${opts.minSessions}`);
+  }
+  const last = sessions.reduce((m, s) => Math.max(m, s.publishedAtMs), 0);
+  const idleH = last ? (opts.nowMs - last) / 3_600_000 : Infinity;
+  if (idleH > opts.livenessHours) {
+    failures.push(`no session has published for ${Number.isFinite(idleH) ? `${idleH.toFixed(1)} h` : "the whole window"} (limit ${opts.livenessHours} h): sessions have stopped`);
+  }
+  return { failures, warnings, goodBySubject };
+}
+
+/**
+ * PURE. The host driver's account: every subject logged a published session
+ * with judge=enforce, and no published line reads any other judge outcome.
+ * Attendance is NOT graded here: the driver's "takes=N of M" counts the judge's
+ * seat and every roster member in M, so it is not the analyst denominator; the
+ * database check grades attendance.
+ */
+export function evaluateProdDriver(
+  lines: readonly { subject: string; state: string; judge: string }[],
+  subjects: readonly string[],
+): string[] {
+  const failures: string[] = [];
+  for (const s of subjects) {
+    if (!lines.some((d) => d.subject === s && d.state === "published" && d.judge === "enforce")) {
+      failures.push(`driver log: subject ${s} logged no published session with judge=enforce`);
+    }
+  }
+  for (const d of lines) if (d.judge !== "enforce") failures.push(`driver log: a ${d.subject} session published with judge=${d.judge}`);
+  return failures;
 }
 
 function log(m: string) { console.log(`[${NAME}] ${m}`); }
@@ -213,11 +299,14 @@ async function main(): Promise<number> {
   const dead = dbQuery<{ kind: string; n: string; last_error: string | null }>(api,
     `SELECT kind, count(*)::text AS n, max(left(coalesce(last_error, ''), 400)) AS last_error FROM jobs WHERE status = 'dead' AND created_at >= '${since}'::timestamptz GROUP BY kind ORDER BY 2 DESC`);
   const deadGroups = classify(dead.map((d) => ({ source: `jobs:${d.kind}`, level: "ERROR" as const, key: d.last_error ?? "", count: Number(d.n), first: null, last: null, sample: d.last_error ?? "" })), rules);
-  const deadVerdict = inventoryVerdict(deadGroups, args.mode);
+  // A dead job is graded by its stored cause, like a log line: unclassified, or
+  // a known issue THIS release claims to fix, fails; a known issue it does not
+  // touch (issue 1035) or an external cause is a warning, and still listed.
+  const deadVerdict = inventoryVerdict(deadGroups, args.mode, args.mode === "post-release" ? args.release : undefined);
   const anyDead = dead.length > 0;
-  add("jobs", args.mode === "post-release" ? "No job created after the release is dead" : "Every dead job in the window has a classified cause",
-    args.mode === "post-release" ? (anyDead ? "FAIL" : "PASS") : deadVerdict.failures.length ? "FAIL" : anyDead ? "WARN" : "PASS",
-    [...(args.mode === "post-release" ? dead.map((d) => `${d.n} dead '${d.kind}': ${(d.last_error ?? "").split("\n")[0]}`) : [...deadVerdict.failures, ...deadVerdict.warnings]),
+  add("jobs", "Every dead job in the window has a cause that is not a regression of this release",
+    deadVerdict.failures.length ? "FAIL" : anyDead ? "WARN" : "PASS",
+    [...deadVerdict.failures, ...deadVerdict.warnings, ...dead.map((d) => `${d.n} dead '${d.kind}': ${(d.last_error ?? "").split("\n")[0]}`),
       `${dead.reduce((a, d) => a + Number(d.n), 0)} dead job(s) in the window`]);
 
   // sessions
@@ -236,10 +325,18 @@ async function main(): Promise<number> {
     add("sessions", "Every subject published a judged, attended session convened after the release", "WARN",
       ["DEFERRED (--defer-sessions): production's first session convened after the release publishes about 6 h later; the R8 soak run grades this", `${rows.length} session(s) in or open during the window`]);
   } else if (args.mode === "post-release") {
-    const inWindow = rows.filter((r) => Date.parse(now) - r.ageMin * 60_000 >= Date.parse(since) - 1000);
-    const v = evaluateSessions(inWindow, SMOKE_SUBJECTS.map((s) => s.id), active, args);
-    add("sessions", "Every subject published a judged, attended session convened after the release", v.failures.length ? "FAIL" : "PASS",
-      [...v.failures, [...v.publishedBySubject].map(([s, n]) => `${s}: ${n}`).join("; "), `active analysts ${active}`]);
+    const published = dbQuery<{ id: string; subject: string; pub: string; takes: string; judged: boolean; receipt: boolean }>(api,
+      `SELECT s.id, s.subject_id AS subject, s.published_at::text AS pub,
+              (SELECT count(DISTINCT r.member_id) FROM swarm_recommendations r WHERE r.session_id = s.id)::text AS takes,
+              EXISTS (SELECT 1 FROM swarm_session_judgements j WHERE j.session_id = s.id AND j.source = 'model' AND j.mode = 'enforce' AND j.applied) AS judged,
+              EXISTS (SELECT 1 FROM swarm_consensus_receipts r WHERE r.session_id = s.id) AS receipt
+         FROM swarm_sessions s
+        WHERE s.state = 'published' AND s.published_at >= '${since}'::timestamptz
+        ORDER BY s.published_at`)
+      .map((r) => ({ id: r.id, subject: r.subject, publishedAtMs: Date.parse(r.pub), takes: Number(r.takes), judged: r.judged, receipt: r.receipt }));
+    const v = evaluateProdSessions(published, SMOKE_SUBJECTS.map((s) => s.id), active, { ...args, nowMs: Date.parse(now) });
+    add("sessions", "Every subject published a judged, attended session in the window, and sessions have not stopped", v.failures.length ? "FAIL" : v.warnings.length ? "WARN" : "PASS",
+      [...v.failures, ...v.warnings, `${published.length} session(s) published in the window`, [...v.goodBySubject].map(([s, n]) => `${s}: ${n} good`).join("; "), `active analysts ${active}`]);
   } else {
     const stuck = rows.filter((r) => r.state !== "published" && r.state !== "cancelled" && r.ageMin > args.stuckAfterMin);
     add("sessions", `No session is stuck unpublished for more than ${args.stuckAfterMin} min`, stuck.length ? "FAIL" : "PASS",
@@ -254,7 +351,7 @@ async function main(): Promise<number> {
     if (!args.driverLog) add("driver", "The host driver logged each subject's session as published with judge=enforce", "FAIL", ["no --driver-log given"]);
     else {
       const ds = parseDriverSessions(driverLines.map((l) => l.text));
-      const f = evaluateDriverSessions(ds, SMOKE_SUBJECTS.map((s) => s.id), args);
+      const f = evaluateProdDriver(ds, SMOKE_SUBJECTS.map((s) => s.id));
       add("driver", "The host driver logged each subject's session as published with judge=enforce", f.length ? "FAIL" : "PASS", [...f, `${ds.length} published line(s)`]);
     }
   }
@@ -266,7 +363,7 @@ async function main(): Promise<number> {
     ...memberSessionLogs(dirname(dirname(stateFile)), state.project, Date.parse(since)),
   ];
   const classified: ClassifiedGroup[] = classify(sources.flatMap(({ source, lines }) => inventory(source, lines)), rules);
-  const inv = inventoryVerdict(classified, args.mode);
+  const inv = inventoryVerdict(classified, args.mode, args.mode === "post-release" ? args.release : undefined);
   add("inventory", "Every distinct error in every log is classified (default deny)" + (args.mode === "post-release" ? ", and no known issue this release fixes is still present" : ""),
     inv.failures.length ? "FAIL" : inv.warnings.length ? "WARN" : "PASS",
     [...inv.failures, `${classified.length} distinct message(s) across ${sources.length} source(s); ${inv.unclassifiedErrors} unclassified error(s)`, ...inv.warnings.map((w) => `warn: ${w}`)]);

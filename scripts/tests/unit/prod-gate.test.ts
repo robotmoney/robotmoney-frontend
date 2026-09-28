@@ -1,7 +1,7 @@
 // prod:gate's pure decisions (scripts/prod-gate.ts). Each case is something
 // production actually did on 2026-09-24/25 that no runbook step caught.
 import { describe, expect, test } from "bun:test";
-import { evaluateCapacity, evaluateJudgeConfig, parseProdGateArgs } from "../../prod-gate.ts";
+import { evaluateCapacity, evaluateJudgeConfig, evaluateProdDriver, evaluateProdSessions, parseProdGateArgs } from "../../prod-gate.ts";
 
 const GB = 1024 ** 3;
 
@@ -57,5 +57,60 @@ describe("parseProdGateArgs", () => {
 
   test("takes a state file for a run from a scratch checkout", () => {
     expect(parseProdGateArgs(["--state-file", "/root/robotmoney-frontend/.agents/smoke-state.json"])).toMatchObject({ stateFile: "/root/robotmoney-frontend/.agents/smoke-state.json" });
+  });
+});
+
+describe("evaluateProdSessions (soak grading against what production records)", () => {
+  const H = 3_600_000;
+  const now = Date.parse("2026-09-28T12:00:00Z");
+  const subjects = ["a", "b"];
+  const s = (id: string, subject: string, hoursAgo: number, takes: number, judged = true, receipt = true) =>
+    ({ id, subject, publishedAtMs: now - hoursAgo * H, takes, judged, receipt });
+  const opts = { minAttendance: 0.5, minSessions: 1, livenessHours: 12, nowMs: now };
+
+  test("adopted or new, a session counts when it published in the window; real takes count", () => {
+    const v = evaluateProdSessions([s("1", "a", 10, 5), s("2", "b", 4, 4)], subjects, 7, opts);
+    expect(v.failures).toEqual([]);
+    expect(v.warnings).toEqual([]);
+  });
+
+  test("a weak session is a warning when the subject also published a good one", () => {
+    const v = evaluateProdSessions([s("1", "a", 10, 3), s("2", "a", 4, 5), s("3", "b", 2, 4)], subjects, 7, opts);
+    expect(v.failures).toEqual([]);
+    expect(v.warnings).toEqual(["session 1 (a) published with 3 take(s), under 4 of 7 active"]);
+  });
+
+  test("a published session without a model judgement or receipt is a failure", () => {
+    const v = evaluateProdSessions([s("1", "a", 2, 5, false, true), s("2", "b", 2, 5, true, false)], subjects, 7, opts);
+    expect(v.failures).toContain("session 1 (a) published without an applied model/enforce judgement");
+    expect(v.failures).toContain("session 2 (b) published without a consensus receipt");
+  });
+
+  test("sessions that stopped publishing fail the liveness bar", () => {
+    const v = evaluateProdSessions([s("1", "a", 17, 5), s("2", "b", 20, 5)], subjects, 7, opts);
+    expect(v.failures.join("\n")).toContain("no session has published for 17.0 h (limit 12 h): sessions have stopped");
+  });
+});
+
+describe("evaluateProdDriver", () => {
+  test("every subject needs a published judge=enforce line; attendance is not graded from M", () => {
+    const d = (subject: string, judge = "enforce") => ({ subject, state: "published", judge, takes: 3, active: 8 });
+    expect(evaluateProdDriver([d("a"), d("b")], ["a", "b"])).toEqual([]);
+    expect(evaluateProdDriver([d("a")], ["a", "b"])).toEqual(["driver log: subject b logged no published session with judge=enforce"]);
+    expect(evaluateProdDriver([d("a"), d("b"), d("b", "none")], ["a", "b"])).toEqual(["driver log: a b session published with judge=none"]);
+  });
+});
+
+describe("known issues after the release", () => {
+  test("only a known issue THIS release fixes fails; issue 1035 is a warning", async () => {
+    const { classify, inventory, inventoryVerdict } = await import("../../lib/gate/log-inventory.ts");
+    const rules = [
+      { id: "judge", match: "model_unconfigured", class: "known-issue" as const, issue: "v0.5.1-D1", reason: "judge had no model, fixed by 0063" },
+      { id: "ledger", match: "upstream prematurely closed", class: "known-issue" as const, issue: "1035", reason: "ledger load, not this release" },
+    ];
+    const g = classify(inventory("x", [{ ts: null, text: "judge produced no judgement (model_unconfigured) error" }, { ts: null, text: "[error] upstream prematurely closed connection" }]), rules);
+    const v = inventoryVerdict(g, "post-release", "v0.5.1");
+    expect(v.failures.join("\n")).toContain("known issue judge (v0.5.1-D1) still present after the release that fixes it");
+    expect(v.warnings.join("\n")).toContain("known issue ledger (1035), not fixed by v0.5.1");
   });
 });
