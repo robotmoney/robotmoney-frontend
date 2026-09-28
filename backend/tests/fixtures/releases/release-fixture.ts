@@ -24,8 +24,10 @@
 //
 // HOW IT IS MIGRATED. Through the operator's command, as a PROCESS under a
 // pseudo-terminal (`script`), so `process.stdin.isTTY` is true and the real
-// masked rm_owner prompt and the real `y/n` run: `migrateAtTerminal`. Nothing
-// here reaches past the command into the run.
+// masked rm_owner prompt and the real `y/n` run: `migrateAtTerminal`, or
+// `startMigrateAtTerminal` for a run the test drives step by step and may
+// SIGKILL mid-run (identity-first-pass.test.ts). Nothing here reaches past the
+// command into the run.
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -213,21 +215,41 @@ export interface TerminalRun {
   readonly receiptPath: string;
 }
 
-/**
- * `bun run migrate` (backend/scripts/migrate.ts) as an operator runs it: a
- * `$HOME/.env` holding the connection values and an `rm_readonly` line, RM_ENV
- * in the environment, a real terminal. Each step waits for its prompt and types
- * its answer; a process that exits before a prompt it would have shown simply
- * leaves the remaining steps untyped — which is how a refusal at the gates
- * looks from the terminal.
- */
-export async function migrateAtTerminal(options: {
+/** The options every `bun run migrate` at a terminal takes. */
+export interface OperatorTerminalOptions {
   readonly databaseUrl: URL;
   readonly readonlyPassword: string;
   readonly rmEnv: string;
-  readonly steps: readonly TerminalStep[];
-  readonly timeoutMs?: number;
-}): Promise<TerminalRun> {
+}
+
+/**
+ * A `bun run migrate` still running at its terminal: what it has shown so far,
+ * a way to type into it, and a way to KILL it — SIGKILL to the migrate process
+ * itself, found by its unique `--receipt` path, so no exit handler, lock
+ * release or journal close runs. That is a crash, not an interruption: the
+ * kill-and-rerun gates of spec §10 W2 (D55 (9)) need the process to die
+ * between two statements the way a lost host would.
+ */
+export interface LiveTerminal {
+  readonly home: string;
+  readonly receiptDir: string;
+  readonly receiptPath: string;
+  screen(): string;
+  /** Wait for `text` to appear after offset `from`; returns where it ended. */
+  waitFor(text: string, from?: number, timeoutMs?: number): Promise<number>;
+  type(text: string): Promise<void>;
+  /** SIGKILL the migrate process; resolves once the terminal has exited. */
+  kill(): Promise<void>;
+  readonly exited: Promise<number>;
+}
+
+/**
+ * Start `bun run migrate` (backend/scripts/migrate.ts) as an operator runs it:
+ * a `$HOME/.env` holding the connection values and an `rm_readonly` line,
+ * RM_ENV in the environment, a real terminal (`script`, so
+ * `process.stdin.isTTY` is true and the real masked prompt and `y/n` run).
+ */
+export function startMigrateAtTerminal(options: OperatorTerminalOptions): LiveTerminal {
   const home = mkdtempSync(join(tmpdir(), "rm-operator-"));
   const url = options.databaseUrl;
   writeFileSync(
@@ -244,7 +266,8 @@ export async function migrateAtTerminal(options: {
   );
   const receiptDir = join(home, "receipts");
   const receiptPath = join(receiptDir, "migrate-receipt.json");
-  const child = Bun.spawn(["script", "-qefc", `bun scripts/migrate.ts --receipt ${receiptPath}`, "/dev/null"], {
+  const command = `bun scripts/migrate.ts --receipt ${receiptPath}`;
+  const child = Bun.spawn(["script", "-qefc", command, "/dev/null"], {
     cwd: BACKEND_DIR,
     env: { PATH: process.env.PATH ?? "", HOME: home, RM_ENV: options.rmEnv, TERM: "dumb" },
     stdin: "pipe",
@@ -256,42 +279,96 @@ export async function migrateAtTerminal(options: {
   const pump = (async () => {
     for await (const chunk of child.stdout) screen += decoder.decode(chunk);
   })();
-  const deadline = Date.now() + (options.timeoutMs ?? 120_000);
-  try {
-    let from = 0;
-    for (const step of options.steps) {
-      let at = screen.indexOf(step.await, from);
-      while (at < 0 && child.exitCode === null) {
-        if (Date.now() > deadline) throw new Error(`timed out waiting for "${step.await}"; terminal so far:\n${screen}`);
-        await Bun.sleep(25);
-        at = screen.indexOf(step.await, from);
-      }
-      if (at < 0) break;
-      from = at + step.await.length;
-      child.stdin.write(`${step.send}\r`);
-      await child.stdin.flush();
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const late = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`bun run migrate did not exit in time; terminal so far:\n${screen}`)),
-        Math.max(0, deadline - Date.now()),
-      );
-    });
-    let code: number;
-    try {
-      code = await Promise.race([child.exited, late]);
-    } finally {
-      clearTimeout(timer);
-    }
+  const exited = (async () => {
+    const code = await child.exited;
     await pump;
-    return { code, screen, home, receiptDir, receiptPath };
-  } finally {
-    if (child.exitCode === null) child.kill("SIGKILL");
     try {
       child.stdin.end();
     } catch {
       // already closed with the process
     }
+    return code;
+  })();
+  return {
+    home,
+    receiptDir,
+    receiptPath,
+    screen: () => screen,
+    async waitFor(text, from = 0, timeoutMs = 120_000) {
+      const deadline = Date.now() + timeoutMs;
+      let at = screen.indexOf(text, from);
+      while (at < 0) {
+        if (child.exitCode !== null) throw new Error(`bun run migrate exited ${child.exitCode} before "${text}":\n${screen}`);
+        if (Date.now() > deadline) throw new Error(`timed out waiting for "${text}"; terminal so far:\n${screen}`);
+        await Bun.sleep(25);
+        at = screen.indexOf(text, from);
+      }
+      return at + text.length;
+    },
+    async type(text) {
+      child.stdin.write(text);
+      await child.stdin.flush();
+    },
+    async kill() {
+      // The migrate process is `script`'s grandchild, in the pty's own session,
+      // so it is found by its command line, which carries this run's unique
+      // receipt path.
+      const found = Bun.spawnSync(["pgrep", "-f", `scripts/migrate.ts --receipt ${receiptPath}`], { stdout: "pipe" });
+      for (const pid of found.stdout.toString().split(/\s+/).filter(Boolean).map(Number)) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+      if (child.exitCode === null) child.kill("SIGKILL");
+      await exited;
+    },
+    exited,
+  };
+}
+
+/**
+ * `bun run migrate` run to its end at a terminal. Each step waits for its
+ * prompt and types its answer; a process that exits before a prompt it would
+ * have shown simply leaves the remaining steps untyped — which is how a
+ * refusal at the gates looks from the terminal.
+ */
+export async function migrateAtTerminal(
+  options: OperatorTerminalOptions & { readonly steps: readonly TerminalStep[]; readonly timeoutMs?: number },
+): Promise<TerminalRun> {
+  const run = startMigrateAtTerminal(options);
+  const deadline = Date.now() + (options.timeoutMs ?? 120_000);
+  let finished = false;
+  try {
+    let from = 0;
+    for (const step of options.steps) {
+      let end: number;
+      try {
+        end = await run.waitFor(step.await, from, Math.max(0, deadline - Date.now()));
+      } catch (error) {
+        if ((error as Error).message.startsWith("bun run migrate exited")) break;
+        throw error;
+      }
+      from = end;
+      await run.type(`${step.send}\r`);
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`bun run migrate did not exit in time; terminal so far:\n${run.screen()}`)),
+        Math.max(0, deadline - Date.now()),
+      );
+    });
+    let code: number;
+    try {
+      code = await Promise.race([run.exited, late]);
+    } finally {
+      clearTimeout(timer);
+    }
+    finished = true;
+    return { code, screen: run.screen(), home: run.home, receiptDir: run.receiptDir, receiptPath: run.receiptPath };
+  } finally {
+    if (!finished) await run.kill();
   }
 }

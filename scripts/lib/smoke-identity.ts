@@ -4,12 +4,16 @@
 // rehearsal-only gate that `--migrate`, `--seed` and `--spoof-keys` share.
 //
 // Implemented for issue #1026, W1 step 2. The table itself is created by
-// backend/migrations/0063_deployment_identity.sql. Its runtime caller is `bun
-// smoke --local dump` (backend/scripts/smoke-prepare.ts `enroll`), which writes
-// the restored copy's row as `rehearsal` through rm_owner inside the §2
-// mutation fence, using {@link transactionIdentityStore}. A `--local blank`
-// bootstrap writes the same row inside its own snapshot transaction
-// (backend/src/db/schema-snapshot.ts bootstrapBlankDatabase).
+// backend/migrations/0063_deployment_identity.sql. Its runtime callers write
+// through {@link transactionIdentityStore}, inside the §2 mutation fence, as
+// rm_owner: `bun smoke --local dump` (backend/scripts/smoke-prepare.ts
+// `enroll`) overwrites a restored copy's row with `rehearsal`; the
+// identity-first passes of §4.3 (D55 (9), backend/scripts/migrate-run.ts
+// applyIdentityFirst) write `production` or `rehearsal` in 0063's own
+// transaction on a database that had no table; `bun scripts/prod-init.ts
+// set-identity` (backend/scripts/set-identity.ts) reports production's row. A
+// `--local blank` bootstrap writes `rehearsal` inside its own snapshot
+// transaction (backend/src/db/schema-snapshot.ts bootstrapBlankDatabase).
 //
 // ── Why a row in the database, and not a file or a flag ─────────────────────
 //
@@ -60,8 +64,9 @@
 //         carry it.
 //   §6.4  `--spoof-keys` refuses unless the row says `rehearsal`.
 //   §8.5  `--migrate` refuses on `RM_ENV=prod` or identity ≠ `rehearsal`.
-//   §9.1  production initialization writes `production` exactly once, via
-//         `rm_owner`, receipted, never through `bun smoke`.
+//   §9.1  the first production migrate writes `production` exactly once, via
+//         `rm_owner`, in 0063's transaction, receipted, never through
+//         `bun smoke` (D55 (9)).
 //
 // Acceptance gates served (spec §10): W1 — the identity half of the policy
 // matrix; W2 — "`RM_ENV=stage` + typed owner password against
@@ -222,7 +227,7 @@ export function openDeploymentIdentityStore(options: {
   contexts.set(store, {
     writable: options.writable,
     role: options.role,
-    remote: !LOCAL_HOSTS.has(parsed.hostname),
+    remote: !isLoopbackHost(parsed.hostname),
   });
   return store;
 }
@@ -246,6 +251,13 @@ function toRow(row: IdentityRowShape): DeploymentIdentityRow {
 
 /** Hosts that are not a remote target for the acknowledgement rule below. */
 const LOCAL_HOSTS: ReadonlySet<string> = new Set(["", "localhost", "127.0.0.1", "::1"]);
+
+/** True for a host this module treats as local: the loopback names and
+ *  addresses, nothing else. A Docker bridge address is remote, as a managed
+ *  server is (scripts/tests/integration/remote-db-harness.ts). */
+export function isLoopbackHost(host: string): boolean {
+  return LOCAL_HOSTS.has(host.replace(/^\[|\]$/g, ""));
+}
 
 /**
  * How a store was opened. A store this module did not open (a test double, or
@@ -334,14 +346,16 @@ export async function enrollAsRehearsal(
 }
 
 /**
- * Enroll a database as `production`. Step 3 of the one-time production
+ * Enroll a database as `production`. Step 4 of the one-time production
  * initialization (§9.1).
  *
  * "`production` is written once by production initialization" (§4.2). Once, by
- * a separate receipted command, never by `bun smoke` — spec §4.3 makes
- * production initialization "a set of separate commands allowed on
- * `production`, each gated by `RM_ENV=prod`, typed `rm_owner`, `y/n`, and a
- * receipt. None is reachable through `bun smoke`."
+ * the first production migrate in 0063's own fenced transaction (§9.1 "Identity
+ * first", D55 (9)), and reported — never rewritten — by `bun scripts/prod-init.ts
+ * set-identity` afterwards. Never by `bun smoke`: spec §4.3 makes production
+ * initialization "a set of separate commands allowed on `production`, each
+ * gated by `RM_ENV=prod`, `y/n`, a receipt and the target lock. None is
+ * reachable through `bun smoke`."
  *
  * Refusal cases:
  *  - `RM_ENV` is not exactly `prod`.
@@ -388,6 +402,20 @@ export async function enrollAsProduction(
  */
 export type TemplateSql = (strings: TemplateStringsArray, ...values: never[]) => PromiseLike<unknown>;
 
+/** How the caller reached the database a {@link transactionIdentityStore}
+ *  writes through. */
+export interface TransactionIdentityContext {
+  /**
+   * True when the connection is a remote one — anything but a Postgres the
+   * calling tool owns on this host's loopback. The CALLER knows it: a
+   * transaction does not say which host it came over. Required, never
+   * defaulted, because a store that silently read as local would let
+   * {@link enrollAsRehearsal} write `rehearsal` onto a remote database with no
+   * acknowledgement — the one write in this module that disarms a protection.
+   */
+  readonly remote: boolean;
+}
+
 /**
  * A store over a transaction the CALLER already holds — the §2 mutation fence.
  *
@@ -396,15 +424,24 @@ export type TemplateSql = (strings: TemplateStringsArray, ...values: never[]) =>
  * that opened its own connection (as {@link openDeploymentIdentityStore} does)
  * would write outside that transaction. So `bun smoke --local dump` opens the
  * fence as rm_owner (backend/src/db/target-lock.ts withMutationFence) and hands
- * its transaction here; {@link enrollAsRehearsal} then writes through it.
+ * its transaction here; {@link enrollAsRehearsal} then writes through it. The
+ * identity-first passes of §4.3 (backend/scripts/migrate-run.ts
+ * applyIdentityFirst, D55 (9)) write through it too, inside 0063's own
+ * transaction.
  *
- * The write restriction is the database's: the grant lets only rm_owner write
- * the table (§4.2), and this store adds no second, weaker check. `close` is a
- * no-op — the transaction belongs to the fence, which commits or aborts it.
+ * The store is registered as writable by rm_owner with the caller's `remote`
+ * flag, exactly as {@link openDeploymentIdentityStore} registers the stores it
+ * opens, so {@link enrollAsRehearsal}'s remote guard holds on the fenced path
+ * as well: `rehearsal` onto a remote database without the operator's explicit
+ * acknowledgement refuses, whichever kind of store carries the write. The
+ * write restriction itself stays the database's: the grant lets only rm_owner
+ * write the table (§4.2), and this store adds no second, weaker check of the
+ * role. `close` is a no-op — the transaction belongs to the fence, which
+ * commits or aborts it.
  */
-export function transactionIdentityStore(tx: TemplateSql): DeploymentIdentityStore {
+export function transactionIdentityStore(tx: TemplateSql, context: TransactionIdentityContext): DeploymentIdentityStore {
   const run = tx as unknown as (strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
-  return {
+  const store: DeploymentIdentityStore = {
     async read(): Promise<DeploymentIdentityRead> {
       try {
         const rows = (await run`SELECT kind, written_at, written_by, note FROM deployment_identity`) as IdentityRowShape[];
@@ -431,4 +468,6 @@ export function transactionIdentityStore(tx: TemplateSql): DeploymentIdentitySto
     },
     async close(): Promise<void> {},
   };
+  contexts.set(store, { writable: true, role: "rm_owner", remote: context.remote });
+  return store;
 }

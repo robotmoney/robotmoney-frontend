@@ -841,7 +841,7 @@ describe("the seed and the identity write are fenced mutations — a competitor'
         await Bun.sleep(150);
         const write = withMutationFence({ databaseUrl: url, label: "identity" }, async (tx) => {
           order.push("identity:start");
-          const row = await enrollAsRehearsal(transactionIdentityStore(tx), { note: "fence test", remoteAcknowledged: false });
+          const row = await enrollAsRehearsal(transactionIdentityStore(tx, { remote: false }), { note: "fence test", remoteAcknowledged: false });
           order.push("identity:wrote");
           return row;
         });

@@ -31,7 +31,12 @@
 //              and nothing else (§7.3); it is not used here.
 //   enroll     `--local dump`: the restored copy's enrollment overwritten with
 //              `rehearsal` through rm_owner (enrollAsRehearsal, §4.2), before
-//              any stage tool connects to it.
+//              any stage tool connects to it. A copy with NO table — a
+//              production dump that predates 0063 — takes the identity-first
+//              pass instead (localDumpIdentityFirst, D55 (9), (10)): 0063 and
+//              `rehearsal` in one fenced transaction, only on the container
+//              this run restored, never over a remote connection, never under
+//              RM_ENV=prod, only from the production baseline ledger.
 //   migrate    `--migrate`: migrateCommand as the `smoke_flag` caller — gates,
 //              owner password (smoke's generated one locally, typed on a
 //              remote rehearsal), an explicit `y` on a remote, the run, a
@@ -46,7 +51,9 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
 import { loadEnvFile, urlForRole } from "../../scripts/lib/env-role.ts";
-import { instancePaths, readRolePasswords } from "../../scripts/lib/smoke-state.ts";
+import { readJournal } from "../../scripts/lib/smoke-journal.ts";
+import { instancePaths, readRolePasswords, readStackState } from "../../scripts/lib/smoke-state.ts";
+import { smokeTwinUrlFromContainer } from "../../scripts/lib/smoke-twin.ts";
 import type { LockHolder } from "../src/db/target-lock.ts";
 
 /** Everything one step needs, and no secret: passwords are read from the files it names. */
@@ -143,9 +150,23 @@ async function main(): Promise<PrepareResult> {
 
       case "enroll": {
         const { enrollAsRehearsal, transactionIdentityStore } = await import("../../scripts/lib/smoke-identity.ts");
+        // Remote is the CONNECTION's kind (§5), not the address's: the Postgres
+        // a `--local dump` restores is smoke's own container, published on the
+        // Docker bridge address so the stack's containers reach it too
+        // (scripts/lib/restore-container.ts). That it is the container this
+        // run restored is proved by the pass itself (proveRestoredByThisPlan).
+        const remote = request.connection !== "local" || request.credentials.source !== "instance";
+        // A dump restored from a database that predates 0063 has no table to
+        // write `rehearsal` into: that is the `--local dump` identity-first
+        // pass (D55 (9), (10)), and it proves its own guards first.
+        const { identityTableExists } = await import("./migrate-run.ts");
+        if (!(await identityTableExists(reader))) {
+          const pass = await localDumpIdentityFirst(request, reader, lock, remote);
+          return done({ kind: pass.row.kind, writtenBy: pass.row.writtenBy, identityFirst: pass.preIdentity.release });
+        }
         const row = await withMutationFence(
           { databaseUrl: required(urlFor(request, "rm_owner"), "rm_owner"), label: "identity" },
-          (tx) => enrollAsRehearsal(transactionIdentityStore(tx), { note: request.note ?? null, remoteAcknowledged: false }),
+          (tx) => enrollAsRehearsal(transactionIdentityStore(tx, { remote }), { note: request.note ?? null, remoteAcknowledged: false }),
         );
         return done({ kind: row.kind, writtenBy: row.writtenBy });
       }
@@ -234,6 +255,109 @@ async function main(): Promise<PrepareResult> {
     }
   } finally {
     await reader.end({ timeout: 5 }).catch(() => undefined);
+  }
+}
+
+/**
+ * The `--local dump` identity-first pass — the second of §4.3's three named
+ * exceptions (D55 (9), (10)): a restored production dump that predates 0063
+ * has no `deployment_identity` table, so the enrollment §4.2 requires has
+ * nowhere to land. When the restored ledger equals the production baseline,
+ * this applies 0063 and writes `rehearsal` in ONE fenced transaction as
+ * rm_owner (migrate-run.ts applyIdentityFirst), before any other pending
+ * migration; `--migrate` then takes the normal path, which accepts the state
+ * the pass leaves.
+ *
+ * Its guards, each checked here for itself, in this order, before anything is
+ * written — and none of them relaxable by any input:
+ *   1. NEVER REMOTE. A remote connection refuses whatever RM_ENV, password or
+ *      acknowledgement says: the request's connection must be local and its
+ *      owner password the one smoke generated for the instance (§5). The identity write itself refuses a
+ *      remote store too (enrollAsRehearsal), so the rule holds twice.
+ *   2. NOT PROD. `RM_ENV=prod` refuses (§4.3: prod never runs on a database
+ *      smoke owns; enrollAsRehearsal refuses it again).
+ *   3. THE COPY THIS RUN RESTORED. The instance's stack record names the
+ *      restored container; this plan's open journal has its `restore`
+ *      preparation committed; and the address the request connects to is the
+ *      one Docker published for that container. A published host port is
+ *      bound by one listener, so a connection there reaches that container
+ *      and no other database — which is what makes a `local` claim about any
+ *      other address (a remote server) refuse here.
+ *   4. THE BASELINE. The restored ledger equals one SUPPORTED_RELEASES
+ *      baseline exactly (D55 (8)). A dump with any other pre-identity ledger
+ *      refuses, naming how it differs.
+ * The pass re-reads the baseline under its own fence and refuses if it moved.
+ */
+async function localDumpIdentityFirst(
+  request: PrepareRequest,
+  reader: postgres.Sql<{}>,
+  lock: import("../src/db/target-lock.ts").HeldTargetLock,
+  remote: boolean,
+): Promise<import("./migrate-run.ts").IdentityFirstResult> {
+  const refuse = (why: string): never => {
+    throw new Error(
+      `Refusing the --local dump identity-first pass (spec §4.3, D55 (9), (10)): ${why} Nothing was applied and no ` +
+        "identity row was written.",
+    );
+  };
+  if (remote || request.credentials.source !== "instance") {
+    refuse(
+      `its connection is remote (${request.target.host}:${request.target.port}, ${request.connection}). The pass runs ` +
+        "only on the Postgres container this smoke run restored, with the owner password smoke " +
+        "generated; a remote connection refuses whatever RM_ENV, password or acknowledgement says.",
+    );
+  }
+  if (request.rmEnv === "prod") refuse("RM_ENV=prod. The pass writes `rehearsal` and never runs under production policy.");
+  proveRestoredByThisPlan(request, refuse);
+
+  const { applyIdentityFirst, describeUnmatchedPreIdentity, readPreIdentityLedger } = await import("./migrate-run.ts");
+  const state = await readPreIdentityLedger(reader);
+  if (state === null) {
+    refuse(`the restored copy has no deployment_identity table, and ${await describeUnmatchedPreIdentity(reader)}.`);
+  }
+  const { assertStillHeld } = await import("../src/db/target-lock.ts");
+  await assertStillHeld(lock, "prepare enroll (identity-first)");
+  const owner = postgres(required(urlFor(request, "rm_owner"), "rm_owner"), { max: 1, onnotice: () => {} });
+  try {
+    return await applyIdentityFirst(owner, {
+      kind: "rehearsal",
+      rmEnv: request.rmEnv,
+      remote,
+      expected: state!,
+      note: `${request.note ?? "--local dump"}: identity-first from ${state!.release} (spec §4.3, D55 (10))`,
+    });
+  } finally {
+    await owner.end({ timeout: 5 }).catch(() => undefined);
+  }
+}
+
+/**
+ * Guard 3 of the `--local dump` pass: the request's target is the container
+ * this plan restored. Reads what the smoke parent recorded — the stack record's
+ * `smokeTwinContainer` and this plan's journal — and asks Docker where that
+ * container's Postgres is published.
+ */
+function proveRestoredByThisPlan(request: PrepareRequest, refuse: (why: string) => never): void {
+  if (request.credentials.source !== "instance") refuse("it has no instance whose restore it could check.");
+  const paths = instancePaths(request.credentials.stateRoot, request.credentials.instance);
+  const container = readStackState(paths)?.smokeTwinContainer;
+  if (!container) refuse(`instance ${request.credentials.instance} records no restored container.`);
+  const journal = readJournal(paths);
+  const planId = request.lock.holder.planId;
+  if (journal === null || journal.closedAt !== null || planId === null || journal.planId !== planId) {
+    refuse(`the open journal of instance ${request.credentials.instance} is not the journal of plan ${planId ?? "(none)"} that holds the target lock.`);
+  }
+  if (!journal!.phases.some((p) => p.phase === "prepare" && p.step === "restore" && p.status === "committed")) {
+    refuse(`plan ${planId} has not committed a restore, so there is no copy this run restored.`);
+  }
+  const published = smokeTwinUrlFromContainer(container!);
+  if (published === null) refuse(`the restored container ${container} is not running.`);
+  const url = new URL(published!);
+  if (url.hostname !== request.target.host || Number(url.port) !== request.target.port) {
+    refuse(
+      `the connection is ${request.target.host}:${request.target.port}, and the container this plan restored ` +
+        `(${container}) is published at ${url.hostname}:${url.port}.`,
+    );
   }
 }
 

@@ -16,11 +16,14 @@
 // scripts/stack's imports to hold that last sentence.)
 //
 // WHAT EACH COMMAND DOES.
-//   set-identity      §9.1 step 4. Writes `deployment_identity = production`
-//                     through rm_owner, inside the §2 fence
-//                     (backend/scripts/set-identity.ts). It accepts the database
-//                     the first production migrate just upgraded, which has the
-//                     table and no row (D55 (5)).
+//   set-identity      §9.1 step 4. Confirms `deployment_identity = production`
+//                     and receipts it: the first production migrate already
+//                     wrote the row, in the transaction that created the table
+//                     (D55 (9)), so this command reads it through rm_owner
+//                     inside the §2 fence and REPORTS it, unchanged
+//                     (backend/scripts/set-identity.ts). It writes no row: a
+//                     target that is not enrolled `production` refuses before
+//                     any prompt.
 //   provision-tokens  §9.1 step 5. The three service tokens — hash and rights in
 //                     the store, the secret in `tokens/<holder>/token` under the
 //                     instance's state directory — through the one module that
@@ -177,7 +180,13 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
   }
   if (command === "set-identity") {
     if (state.identity === "rehearsal") {
-      refuse(`${target} is enrolled \`rehearsal\`; set-identity enrolls a production database the first migrate upgraded, never a rehearsal one (§9.1).`);
+      refuse(`${target} is enrolled \`rehearsal\`; set-identity reports a production database the first migrate upgraded, never a rehearsal one (§9.1).`);
+    }
+    if (state.identity !== "production") {
+      refuse(
+        `${target} reads \`${state.identity}\`. The first production migrate writes \`production\` in the transaction that ` +
+          "creates deployment_identity (§9.1 step 4, D55 (9)), and set-identity only reports that row: run `bun run migrate` first.",
+      );
     }
   } else if (policy === "prod" && state.identity !== "production") {
     refuse(`${command} under RM_ENV=prod requires ${target} enrolled \`production\`; it reads \`${state.identity}\` (run set-identity first, §9.1 step 4).`);
@@ -234,7 +243,7 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
   }
 
   const what = {
-    "set-identity": `enroll ${target} as \`production\``,
+    "set-identity": `confirm and receipt ${target}'s \`production\` enrollment (it is read, never rewritten)`,
     "provision-tokens": `provision the three service tokens for instance ${instanceName} on ${target} (a re-run rotates them; restart the holders after)`,
     "rebind-members": `rotate ${roster.length} member key(s) from ${credentialPath} through ${apiUrl} and write each new bearer into its entry`,
   }[command];
@@ -260,7 +269,14 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
           note: `bun scripts/prod-init.ts set-identity by ${operatorName()}@${hostname()}`,
           lock: acquired.lock,
         });
-        detail = { before: result.before, after: result.row.kind, writtenBy: result.row.writtenBy, writtenAt: result.row.writtenAt };
+        detail = {
+          before: result.before,
+          after: result.row.kind,
+          written: result.written,
+          writtenBy: result.row.writtenBy,
+          writtenAt: result.row.writtenAt,
+          note: result.row.note,
+        };
         break;
       }
       case "provision-tokens": {

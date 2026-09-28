@@ -8,8 +8,11 @@
 //   but `y` refuses and changes nothing. A second run with no row still
 //   refuses."
 //
-// The identity-first order of the same gate's next bullet (D55 (9)) is not
-// implemented yet, so nothing here asserts it.
+// And the next bullet's first half (D55 (9)): "Identity first: the production
+// pass applies 0063 and commits its DDL, its ledger row and `production` in
+// the same transaction, before any other migration." Its kill-and-rerun half
+// and the normal path's acceptance of the state a pass leaves are
+// identity-first-pass.test.ts's.
 //
 // Governed by §4.3's one exception and §9.1 ("The first production migrate
 // runs before the identity row exists"), D55 (5) and (8); implemented by
@@ -49,7 +52,7 @@ import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
 import { config } from "../src/config.ts";
-import { runMigrate } from "../scripts/migrate-run.ts";
+import { IDENTITY_MIGRATION, runMigrate } from "../scripts/migrate-run.ts";
 import type { MigrateJournalFile } from "../scripts/migrate-journal.ts";
 import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
 import {
@@ -89,6 +92,8 @@ const DB = {
   less: `rm_fpm_less_${suffix}`,
   renamed: `rm_fpm_renamed_${suffix}`,
   more: `rm_fpm_more_${suffix}`,
+  norow: `rm_fpm_norow_${suffix}`,
+  tablenorow: `rm_fpm_tablenorow_${suffix}`,
 } as const;
 
 function urlFor(database: string, role?: { name: string; password: string }): URL {
@@ -188,6 +193,15 @@ beforeAll(async () => {
     applyAsReleaseRunner(db, [{ file: FIRST_UNSHIPPED, ddl: readFileSync(join(MIGRATIONS_DIR, FIRST_UNSHIPPED), "utf8") }]),
   );
   await withDb(DB.exact, (db) => revokeLoginDefaults(db, LOGIN));
+  // tablenorow — exact, plus a deployment_identity table made out of band:
+  // 0063's DDL with no ledger row and no identity row.
+  await admin.unsafe(`CREATE DATABASE ${DB.tablenorow} TEMPLATE ${DB.exact}`);
+  await withDb(DB.tablenorow, (db) =>
+    db.begin(async (tx) => {
+      await tx.unsafe("SET LOCAL ROLE rm_owner");
+      await tx.unsafe(readFileSync(join(MIGRATIONS_DIR, IDENTITY_MIGRATION), "utf8"));
+    }),
+  );
 
   // §9.1 step 1, through the provisioning login: rm_owner LOGIN with a password
   // the operator will type. And the rm_readonly line the host's ~/.env holds.
@@ -287,6 +301,17 @@ describe("§10 W2 — First production migrate", () => {
     await expectRefusedAndUnchanged(DB.renamed, run, before, "gates");
   });
 
+  test("a deployment_identity table with NO row and the exact baseline ledger refuses at the gates, before any password is asked for", async () => {
+    // Criterion 170 admits the pass only with no table at all. The baseline
+    // predates 0063, so a table with no row was made out of band; the pass
+    // would refuse it under its fence, so the gates refuse it first.
+    const before = await fingerprint(DB.tablenorow);
+    const run = await operator(DB.tablenorow, "prod", typed("y"));
+    expect(run.screen).toContain("deployment_identity exists with no row");
+    expect(run.screen).not.toContain(PASSWORD_PROMPT);
+    await expectRefusedAndUnchanged(DB.tablenorow, run, before, "gates");
+  });
+
   test("a missing owner password refuses and changes nothing", async () => {
     const before = await fingerprint(DB.exact);
     const run = await operator(DB.exact, "prod", [{ await: PASSWORD_PROMPT, send: "" }]);
@@ -327,7 +352,7 @@ describe("§10 W2 — First production migrate", () => {
     expect(await fingerprint(DB.exact)).toEqual(before);
   });
 
-  test("no row, production's exact observed ledger, RM_ENV=prod, a typed rm_owner and y: migrates once and receipts the pre-identity state", async () => {
+  test("no row, production's exact observed ledger, RM_ENV=prod, a typed rm_owner and y: migrates once, identity first, and receipts the pre-identity state", async () => {
     const run = await operator(DB.exact, "prod", typed("y"));
     expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-3000) }).toEqual({ code: 0, tail: "" });
     expect(run.screen).not.toContain(OWNER_PASSWORD);
@@ -336,31 +361,92 @@ describe("§10 W2 — First production migrate", () => {
       applied: string[];
       baselined: boolean;
       preIdentity: { identity: string; release: string; ledger: string[] } | null;
+      identityWritten: { kind: string; writtenBy: string } | null;
       manifest: { filenames: string[] };
     };
     // §9.1: "no identity row existed, the supported release the ledger
     // matched, and that ledger's filename list".
     expect(receipt.preIdentity).toEqual({ identity: "no table", release: TAG, ledger: RELEASE_FILES });
-    expect(receipt.applied).toEqual(HEAD_FILES.filter((file) => !RELEASE_FILES.includes(file)));
+    // D55 (9): 0063 FIRST, out of filename order; then every other pending
+    // file in filename order — the six the baseline lacks below 0063 included.
+    const pending = HEAD_FILES.filter((file) => !RELEASE_FILES.includes(file));
+    expect(receipt.applied).toEqual([IDENTITY_MIGRATION, ...pending.filter((file) => file !== IDENTITY_MIGRATION)]);
+    expect(receipt.applied.slice(1, 7)).toEqual([
+      "0056_swarm_judge_requires_model.sql",
+      "0057_swarm_judge_policy_stamp.sql",
+      "0058_swarm_judge_fault_injection.sql",
+      "0059_swarm_judgement_completion_usage.sql",
+      "0061_rm_worker_wallet_backfill_grant.sql",
+      "0062_rm_worker_analytics_ledger_read_grant.sql",
+    ]);
+    expect(receipt.identityWritten).toMatchObject({ kind: "production", writtenBy: "rm_owner" });
     expect(receipt.baselined).toBe(true);
     expect(receipt.manifest.filenames).toEqual(HEAD_FILES);
     expect(journalOf(run).outcome).toBe("succeeded");
 
     const after = await fingerprint(DB.exact);
     expect(after.ledger).toEqual(HEAD_FILES);
-    // 0063 created the table; step 4 of §9.1 — writing `production` — is the
-    // operator's next command, not this one's.
     await withDb(DB.exact, async (db) => {
-      expect((await db`SELECT kind FROM deployment_identity`).length).toBe(0);
+      // §9.1 step 4, D55 (9): `production`, written by rm_owner...
+      expect([...(await db`SELECT kind, written_by FROM deployment_identity`)]).toEqual([{ kind: "production", written_by: "rm_owner" }]);
+      // ...in the SAME transaction as 0063's ledger row: the two rows carry one
+      // creating transaction id and one transaction timestamp. (The table's
+      // own pg_class row is rewritten by every later grant, so its xmin says
+      // nothing; a killed pass is identity-first-pass.test.ts's proof that the
+      // DDL rolls back with the rows.)
+      const [same] = (await db`
+        SELECT (SELECT xmin::text FROM schema_migrations WHERE name = ${IDENTITY_MIGRATION}) AS ledger_xid,
+               (SELECT xmin::text FROM deployment_identity) AS row_xid,
+               (SELECT applied_at FROM schema_migrations WHERE name = ${IDENTITY_MIGRATION})
+                 = (SELECT written_at FROM deployment_identity) AS same_instant`) as unknown as {
+        ledger_xid: string;
+        row_xid: string;
+        same_instant: boolean;
+      }[];
+      expect(same!.row_xid).toBe(same!.ledger_xid);
+      expect(same!.same_instant).toBe(true);
+      // ...and BEFORE every other file this run applied.
+      const [later] = (await db`
+        SELECT count(*)::int AS n FROM schema_migrations
+         WHERE name = ANY(${receipt.applied.slice(1)})
+           AND applied_at <= (SELECT applied_at FROM schema_migrations WHERE name = ${IDENTITY_MIGRATION})`) as unknown as {
+        n: number;
+      }[];
+      expect(later!.n).toBe(0);
     });
   }, 180_000);
 
-  test("a second run with no row still refuses: its ledger no longer equals the baseline's", async () => {
-    const before = await fingerprint(DB.exact);
+  test("the next run is an ordinary one: the row exists, so no exception is taken and nothing is pending", async () => {
     const run = await operator(DB.exact, "prod", typed("y"));
+    expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-3000) }).toEqual({ code: 0, tail: "" });
+    expect(run.screen).not.toContain("FIRST PRODUCTION MIGRATE");
+    const receipt = JSON.parse(readFileSync(run.receiptPath, "utf8")) as {
+      applied: string[];
+      preIdentity: unknown;
+      identityWritten: unknown;
+      resumedAfterIdentityPass: unknown;
+    };
+    // The rows before 0063 still equal the baseline, but a published manifest
+    // means no resume happened: the receipt must not claim one.
+    expect(receipt).toMatchObject({ applied: [], preIdentity: null, identityWritten: null, resumedAfterIdentityPass: null });
+    expect(run.screen).not.toContain("resumed after the identity-first pass");
+  }, 180_000);
+
+  test("a second run with no row still refuses: its ledger no longer equals the baseline's", async () => {
+    // The first run leaves its row, so "no row" is built: a copy of that
+    // database, the row removed on the copy by rm_owner, the table's owner.
+    await admin.unsafe(`CREATE DATABASE ${DB.norow} TEMPLATE ${DB.exact}`);
+    const owner = postgres(urlFor(DB.norow, { name: "rm_owner", password: OWNER_PASSWORD }).toString(), { max: 1, onnotice: () => {} });
+    try {
+      await owner`DELETE FROM deployment_identity`;
+    } finally {
+      await owner.end({ timeout: 5 });
+    }
+    const before = await fingerprint(DB.norow);
+    const run = await operator(DB.norow, "prod", typed("y"));
     expect(run.screen).toContain("no deployment_identity row");
     expect(run.screen).toContain("matches none");
     expect(run.screen).not.toContain(PASSWORD_PROMPT);
-    await expectRefusedAndUnchanged(DB.exact, run, before, "gates");
+    await expectRefusedAndUnchanged(DB.norow, run, before, "gates");
   });
 });

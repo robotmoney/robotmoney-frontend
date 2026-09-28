@@ -289,6 +289,8 @@ Code built for snapshot N boots against a database at M > N only if every ledger
 
 In production an upgrade is an operator intervention: `bun run migrate`, prompting for `rm_owner`, planned per release, receipted. It is never part of the boot.
 
+**Where a standalone migrate records itself.** `bun run migrate` writes its receipt, `migrate-receipt-<start>.json`, and its journal, `migrate-journal-<start>.json`, into one directory: the instance's state directory (§1.1; `rm_prod` under `RM_ENV=prod`, else the one `--instance` names), or the directory of `--receipt <path>`. The journal is written before each phase and closed on every exit with the phase it stopped in (§2), so a run that refused, failed, lost its lock or was killed leaves the journal alone, and a run that succeeded leaves both. `bun smoke --migrate` keeps no journal of its own: the smoke journal (§1.3) records its `migrate` preparation.
+
 **Order.** When every pending migration is `additive`, the operator runs `bun run migrate` against the running stack, then `bun smoke --static-port` with the new images; the old code keeps serving because it supports the additive state (§8.4). When any pending migration is `breaking`, the operator runs `bun smoke:down`, then `bun run migrate`, then `bun smoke --static-port`, so no old service runs against the breaking state. The release's runbook names which case applies.
 
 `--migrate` is a convenience for stage, test, and CI, where the database and the boot happen in one step. It refuses on `RM_ENV=prod` or `deployment_identity ≠ rehearsal`, except that it carries the `--local dump` pass of §4.3 on a local database with no identity row. On a remote database with no `deployment_identity` table it refuses and names the one-off intervention of §4.2. In local modes it uses the owner password smoke generated. On a remote connection it prompts for `rm_owner`, warns, and asks `y/n`. It runs the migrate run of §8.3.
@@ -300,7 +302,7 @@ In production an upgrade is an operator intervention: `bun run migrate`, prompti
 1. `rm_owner LOGIN` — via `doadmin`: `ALTER ROLE rm_owner LOGIN PASSWORD …`, then a verification login. Migration 0053's `NOLOGIN` lines change for fresh databases; existing databases need this step because the runner skips recorded files.
 2. Baseline — compare production's live schema with the snapshot for its installed filename list. Any difference is repaired by a migration first; the first `bun run migrate` publishes a manifest only when the live schema matches.
 3. Grant transition — migrations revoking `DELETE` and `TRUNCATE` on every table from every runtime role (0053 granted `DELETE` on all tables; §3, [D55](../decisions.md#d55) (6)). Check 2 fails until they land.
-4. `deployment_identity = production` — via `rm_owner`, written by the first migrate in the same transaction as 0063 (below, [D55](../decisions.md#d55) (9)).
+4. `deployment_identity = production` — via `rm_owner`, written by the first migrate in the same transaction as 0063 (below, [D55](../decisions.md#d55) (9)). `bun scripts/prod-init.ts set-identity` then confirms the row under the same gates as the other steps and receipts it: it reads the row through `rm_owner` inside the fence and never writes one, so a target with no row refuses.
 5. Provision the three service tokens (§3).
 6. Rebind each seated member to its `credential.json` key through the admin `rotate-key` route, one member at a time, writing each returned bearer token into that member's entry.
 

@@ -48,8 +48,10 @@
 // §9.1, D55 (5)): `bun run migrate` as a PROCESS under a terminal, RM_ENV=prod,
 // the rm_owner password typed at the masked prompt, an explicit `y` — the one
 // run §4.3 allows without the row, because the ledger equals the baseline's
-// filename list exactly. It applies EVERY pending file, including the pre-compat ones at
-// or below 0063 (their compat stays NULL, D53 decision 3), reconciles grants,
+// filename list exactly. It applies 0063 FIRST, with `production` in 0063's own
+// transaction (D55 (9)), then EVERY other pending file in filename order,
+// including the pre-compat ones at or below 0063 (their compat stays NULL,
+// D53 decision 3), reconciles grants,
 // compares the live schema with the snapshot (§9.1 step 2) and publishes the
 // first manifest. Nothing is applied around the command. The refusals that
 // guard that exception are first-production-migrate.test.ts's subject; the one
@@ -71,7 +73,7 @@ import {
 import { COMPAT_HEADER_BASELINE, migrationNumber, parsePendingHeader } from "../src/db/schema-compat.ts";
 import { readManifest } from "../src/db/schema-manifest.ts";
 import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
-import { runMigrate, type MigrateGateOptions } from "../scripts/migrate-run.ts";
+import { IDENTITY_MIGRATION, runMigrate, type MigrateGateOptions } from "../scripts/migrate-run.ts";
 import {
   HEAD_FILES,
   MIGRATIONS_DIR,
@@ -421,8 +423,14 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
       appliedByRun = receipt.applied;
       const recorded = new Set(release.migrations.map((m) => m.file));
       // Every pending file, the pre-compat ones at or below 0063 included: no
-      // file is applied around the command any more.
-      expect(receipt.applied).toEqual(HEAD_FILES.filter((file) => !recorded.has(file)));
+      // file is applied around the command any more. A release that predates
+      // 0063 takes the identity-first pass (D55 (9)): 0063 first, then the rest
+      // in filename order.
+      const pending = HEAD_FILES.filter((file) => !recorded.has(file));
+      expect(receipt.applied).toEqual(
+        predatesIdentity ? [IDENTITY_MIGRATION, ...pending.filter((file) => file !== IDENTITY_MIGRATION)] : pending,
+      );
+      expect(await rows(db`SELECT kind FROM deployment_identity`)).toEqual([{ kind: "production" }]);
       expect(receipt.preIdentity).toEqual(
         predatesIdentity ? { identity: "no table", release: tag, ledger: release.migrations.map((m) => m.file) } : null,
       );
