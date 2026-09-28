@@ -46,6 +46,12 @@ const upsertBalanceSample = registerQuery({
       ON CONFLICT (sample_date, symbol) DO UPDATE SET
         amount = EXCLUDED.amount, value_usd = EXCLUDED.value_usd, provenance = EXCLUDED.provenance,
         strategy_nav_idle_only = EXCLUDED.strategy_nav_idle_only, sampled_at = EXCLUDED.sampled_at,
+        id = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.id ELSE EXCLUDED.id END,
+        price_usd = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.price_usd ELSE EXCLUDED.price_usd END,
+        snapshot_run_id = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.snapshot_run_id ELSE EXCLUDED.snapshot_run_id END,
+        amount_observed_at = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.amount_observed_at ELSE EXCLUDED.amount_observed_at END,
+        price_observed_at = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.price_observed_at ELSE EXCLUDED.price_observed_at END,
+        recorded_at = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.recorded_at ELSE EXCLUDED.recorded_at END,
         superseded_at = NULL`,
     params: ["2026-01-01", "PROBE", "1", "1", "live", false],
   },
@@ -66,7 +72,14 @@ const upsertSleeveSample = registerQuery({
       VALUES ($1::date, $2, $3, $4::numeric, $5::numeric, $6, now())
       ON CONFLICT (sample_date, wallet_address, symbol) DO UPDATE SET
         amount = EXCLUDED.amount, value_usd = EXCLUDED.value_usd, provenance = EXCLUDED.provenance,
-        sampled_at = EXCLUDED.sampled_at, superseded_at = NULL`,
+        sampled_at = EXCLUDED.sampled_at,
+        id = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.id ELSE EXCLUDED.id END,
+        price_usd = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.price_usd ELSE EXCLUDED.price_usd END,
+        snapshot_run_id = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.snapshot_run_id ELSE EXCLUDED.snapshot_run_id END,
+        amount_observed_at = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.amount_observed_at ELSE EXCLUDED.amount_observed_at END,
+        price_observed_at = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.price_observed_at ELSE EXCLUDED.price_observed_at END,
+        recorded_at = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.recorded_at ELSE EXCLUDED.recorded_at END,
+        superseded_at = NULL`,
     params: ["2026-01-01", "0x0000000000000000000000000000000000000001", "PROBE", "1", "1", "live"],
   },
 });
@@ -189,10 +202,18 @@ export async function sampleWalletBalances(payload: Record<string, unknown> = {}
       // amount*price product a caller may need before the join lands its row.
       //
       // D55 (6): a key the wallet repair pass superseded (ops/wallet-backfill.ts,
-      // migration 0086) is live again once the sampler writes it — the row the
-      // old delete-and-insert would have let this INSERT create fresh. Without
-      // `superseded_at = NULL` the sample would land on a tombstoned row every
-      // reader filters out.
+      // migration 0086) is live again once the sampler writes it, as the row
+      // the old delete-and-insert would have let this INSERT create fresh.
+      // "Fresh" is every column, not just the tombstone. A superseded row was
+      // archived to evidence under its id while it was live, and the evidence
+      // tables hold UNIQUE (original_id), so the revived row takes EXCLUDED's
+      // new id: keeping the old one would make the day's next rewrite archive
+      // that id a second time and fail 23505. Its price_usd and snapshot
+      // identity (snapshot_run_id and the three *_observed_at / recorded_at
+      // columns) are the old version's too, so they reset to what the INSERT
+      // gives a fresh row. A LIVE row keeps every column this upsert never
+      // wrote, exactly as before. SET expressions read the pre-update row, so
+      // each CASE sees the tombstone this statement clears.
       await on(tx, upsertBalanceSample)`
         INSERT INTO wallet_balance_samples
           (sample_date, symbol, amount, value_usd, provenance, strategy_nav_idle_only, sampled_at)
@@ -204,6 +225,12 @@ export async function sampleWalletBalances(payload: Record<string, unknown> = {}
           provenance = EXCLUDED.provenance,
           strategy_nav_idle_only = EXCLUDED.strategy_nav_idle_only,
           sampled_at = EXCLUDED.sampled_at,
+          id = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.id ELSE EXCLUDED.id END,
+          price_usd = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.price_usd ELSE EXCLUDED.price_usd END,
+          snapshot_run_id = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.snapshot_run_id ELSE EXCLUDED.snapshot_run_id END,
+          amount_observed_at = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.amount_observed_at ELSE EXCLUDED.amount_observed_at END,
+          price_observed_at = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.price_observed_at ELSE EXCLUDED.price_observed_at END,
+          recorded_at = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.recorded_at ELSE EXCLUDED.recorded_at END,
           superseded_at = NULL
       `;
 
@@ -318,8 +345,9 @@ export async function sampleWalletSleeves(payload: Record<string, unknown> = {})
       // wallet_sleeve_samples, mirroring both sampleWalletBalances above and
       // repairResolvedDay's already-shipped (#851) sleeve write. asset_prices
       // is the sole write target for price data; value_usd still carries the
-      // fused amount*price product. D55 (6): clears a repair pass's
-      // supersession of this key, as sampleWalletBalances above does.
+      // fused amount*price product. D55 (6): a superseded key is revived as a
+      // fresh row (new id, price_usd and snapshot identity reset), for the
+      // reason spelled out at sampleWalletBalances' upsert above.
       await on(tx, upsertSleeveSample)`
         INSERT INTO wallet_sleeve_samples
           (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
@@ -330,6 +358,12 @@ export async function sampleWalletSleeves(payload: Record<string, unknown> = {})
           value_usd  = EXCLUDED.value_usd,
           provenance = EXCLUDED.provenance,
           sampled_at = EXCLUDED.sampled_at,
+          id = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.id ELSE EXCLUDED.id END,
+          price_usd = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.price_usd ELSE EXCLUDED.price_usd END,
+          snapshot_run_id = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.snapshot_run_id ELSE EXCLUDED.snapshot_run_id END,
+          amount_observed_at = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.amount_observed_at ELSE EXCLUDED.amount_observed_at END,
+          price_observed_at = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.price_observed_at ELSE EXCLUDED.price_observed_at END,
+          recorded_at = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.recorded_at ELSE EXCLUDED.recorded_at END,
           superseded_at = NULL
       `;
 
