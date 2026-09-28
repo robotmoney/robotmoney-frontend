@@ -3499,7 +3499,10 @@ export type TurnoverResult = {
  *   * it already has a successor   → replay that original result verbatim.
  *   * it was closed as an epoch with no successor (a turnover of an inactive
  *     subject's window) → replay that result: N closed, nothing opened.
- *   * it was closed by a pre-epoch path (nothing captured) → reasoned no-op.
+ *   * it was closed with nothing captured (a row closed before capture
+ *     existed, e.g. by the retired admin `close` verb) → reasoned no-op.
+ *     `closeWindow` DOES capture, so a session it closed with no successor
+ *     replays like an inactive subject's boundary; it has no callers today.
  *   * it belongs to another subject, or does not exist   → reasoned no-op.
  *
  * At no point is "the subject's current collecting session" consulted as a
@@ -3541,8 +3544,11 @@ export async function turnOverEpoch(
         // inactive subject's window (§4.5) — and a retry after a lost
         // response gets that original result back, so the scheduler settles
         // N instead of recording a refusal (§5: "the guard returns the
-        // original result rather than a bare refusal"). A session closed by a
-        // retired pre-epoch path captured nothing and stays a reasoned no-op.
+        // original result rather than a bare refusal"). A session closed with
+        // nothing captured (a row from before capture existed, e.g. the
+        // retired admin `close` verb) stays a reasoned no-op. `closeWindow`
+        // captures both values, so a session it closed takes the replay
+        // branch; it has no callers today.
         if (!judgingCaptured(expected)) return refuse(409, "epoch_not_collecting");
         return {
           ok: true as const,
@@ -3692,9 +3698,9 @@ export type RequestJudgingResult = {
  *
  * NOTHING CAPTURED, NOTHING REQUESTED (§4.4: "Judge mode and judging duration
  * are captured at turnover"). A session whose `judge_mode` or
- * `judging_duration_seconds` is NULL (migration 0074) closed through a
- * pre-epoch path — the retired admin `close` verb, `closeWindow` — and has no
- * captured value to settle by. It is refused with `judging_not_captured`. It is
+ * `judging_duration_seconds` is NULL (migration 0074) was closed before
+ * capture existed — by the retired admin `close` verb, or by `closeWindow`
+ * before it began capturing — and has no captured value to settle by. It is refused with `judging_not_captured`. It is
  * NOT settled from the subject's live column: that value is whatever an admin
  * set AFTER the close, so reading it here would let a later change reach a
  * settling session, which is exactly what capture-at-turnover forbids. A

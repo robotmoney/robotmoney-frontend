@@ -298,7 +298,24 @@ export class SchedulerHttpApi implements TransitionApi, ConsumerApi {
         if (!frame) return;
         chain = chain.then(async () => {
           if (this.#stream !== current) return;
-          await handlers.onFrame(frame);
+          try {
+            await handlers.onFrame(frame);
+          } catch (err) {
+            // A handler that throws must not leave the chain rejected: every
+            // later frame and the close report would be skipped, and the
+            // scheduler would sit connected but deaf. The socket is ended and
+            // the failure reported like any other close, so the runtime's
+            // full read and rebuild (§3.1) take over. `#stream` is cleared
+            // first, so the socket's own close reports nothing a second time.
+            if (this.#stream !== current) return;
+            this.#stream = null;
+            try {
+              socket.close(1000, "frame handler failed");
+            } catch {
+              /* already closed */
+            }
+            handlers.onClosed(`frame handler failed: ${String((err as Error)?.message ?? err)}`);
+          }
         });
       };
       socket.onerror = () => {

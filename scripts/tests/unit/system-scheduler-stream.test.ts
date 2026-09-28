@@ -510,6 +510,32 @@ describe("SchedulerHttpApi.subscribe replaces the connection (§3.1, §6.3)", ()
     expect(seen).toEqual(["frame:event", "frame:resync", "closed:closed 4000: resync: buffer_overflow"]);
   });
 
+  test("a frame handler that throws ends the socket and is reported once, never leaving it connected but deaf", async () => {
+    const { opened, openSocket } = fakeSockets();
+    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", openSocket });
+    const frames: StreamFrame[] = [];
+    const closed: string[] = [];
+    http.attachStream({
+      onFrame: (f) => {
+        frames.push(f);
+        if (frames.length === 1) throw new Error("consumer broke");
+      },
+      onClosed: (r) => void closed.push(r),
+    });
+    await http.subscribe(1);
+    opened[0].write({ type: "keepalive", head: 1 });
+    opened[0].write({ type: "keepalive", head: 2 }); // after the failure: not applied
+    await drain();
+    expect(frames).toEqual([{ type: "keepalive", head: 1 }]);
+    expect(closed).toEqual(["frame handler failed: consumer broke"]);
+    expect(opened[0].closedByClient).toBe(true);
+    expect(http.streamOpen).toBe(false);
+    // The socket's own close that follows is not reported a second time.
+    opened[0].end(1000, "frame handler failed");
+    await drain();
+    expect(closed).toEqual(["frame handler failed: consumer broke"]);
+  });
+
   test("closeStream ends the socket silently", async () => {
     const { opened, openSocket } = fakeSockets();
     const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", openSocket });
