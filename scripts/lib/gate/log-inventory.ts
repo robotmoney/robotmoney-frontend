@@ -52,8 +52,10 @@ export interface ClassificationRule {
   source?: string;
   class: RuleClass;
   reason: string;
-  /** Issue, decision or runbook id the known issue is tracked under. */
+  /** Issue, decision or runbook id the known issue is tracked under (never a version). */
   issue?: string;
+  /** known-issue only: the release that fixed it, as a plain semver version (e.g. "0.5.2"). */
+  fixedIn?: string;
   /** known-issue only: still acceptable after the release, and why. */
   tolerateAfterRelease?: string;
 }
@@ -105,6 +107,7 @@ export function inventory(source: string, lines: readonly RawLine[]): InventoryG
 }
 
 const CLASSES: readonly RuleClass[] = ["expected", "external", "fragment", "known-issue"];
+const SEMVER = /^\d+\.\d+\.\d+$/;
 
 /** Validate a parsed classification file; throws naming the first bad rule. */
 export function validateRules(raw: unknown): ClassificationRule[] {
@@ -122,6 +125,8 @@ export function validateRules(raw: unknown): ClassificationRule[] {
     if (!CLASSES.includes(rule.class)) throw new Error(`${where}: class must be one of ${CLASSES.join(", ")}`);
     if (typeof rule.reason !== "string" || rule.reason.trim().length < 10) throw new Error(`${where}: a reason of at least 10 characters is required`);
     if (rule.class === "known-issue" && !rule.issue) throw new Error(`${where}: a known-issue must name its issue`);
+    if (rule.fixedIn !== undefined && !SEMVER.test(rule.fixedIn)) throw new Error(`${where}: fixedIn must be a plain semver version like "0.5.2", got "${rule.fixedIn}"`);
+    if (rule.issue !== undefined && /^v?\d+\.\d+\.\d+/.test(rule.issue)) throw new Error(`${where}: issue names the issue, not a version; put the version in fixedIn`);
     return rule;
   });
 }
@@ -156,11 +161,11 @@ export function inventoryVerdict(
   groups: readonly ClassifiedGroup[],
   mode: InventoryMode,
   /**
-   * The release being graded (e.g. "v0.5.1"). When given, a known issue fails
-   * after the release only if THIS release claims to fix it: its rule's issue is
-   * tagged with the release (`v0.5.1-D1`, `v0.5.1-sweep-timeout`). A known issue
-   * the release does not touch (issue 1035) is reported as a warning. Without it,
-   * every known issue fails after the release (the twin gate's behaviour).
+   * The release being graded, as its semver version or tag ("0.5.2" or
+   * "v0.5.2"). When given, a known issue fails after the release only if its
+   * rule's `fixedIn` is this release or an earlier one. A known issue no release
+   * has fixed is reported as a warning. Without it, every known issue fails after
+   * the release (the twin gate's behaviour).
    */
   releaseTag?: string,
 ): InventoryVerdict {
@@ -177,13 +182,23 @@ export function inventoryVerdict(
       continue;
     }
     if (g.rule.class !== "known-issue") continue;
-    const label = `known issue ${g.rule.id} (${g.rule.issue})`;
-    const fixedByThisRelease = releaseTag === undefined || String(g.rule.issue ?? "").startsWith(releaseTag);
+    const label = `known issue ${g.rule.id} (${g.rule.issue}${g.rule.fixedIn ? `, fixed in ${g.rule.fixedIn}` : ""})`;
+    const fixedByThisRelease = releaseTag === undefined || (g.rule.fixedIn !== undefined && fixedInOrBefore(g.rule.fixedIn, releaseTag));
     if (mode === "baseline" || g.rule.tolerateAfterRelease) warnings.push(`${label} — ${where}`);
-    else if (!fixedByThisRelease) warnings.push(`${label}, not fixed by ${releaseTag} — ${where}`);
+    else if (!fixedByThisRelease) warnings.push(`${label}, not fixed by ${releaseTag} or earlier — ${where}`);
     else failures.push(`${label} still present after the release that fixes it — ${where}`);
   }
   return { failures, warnings, unclassifiedErrors };
+}
+
+/** PURE. True when semver `fixedIn` ("0.5.1") is not later than the release ("0.5.2" or "v0.5.2"). */
+export function fixedInOrBefore(fixedIn: string, release: string): boolean {
+  const v = (x: string) => /^v?(\d+)\.(\d+)\.(\d+)/.exec(x)?.slice(1, 4).map(Number) ?? null;
+  const fixed = v(fixedIn);
+  const rel = v(release);
+  if (!fixed || !rel) return false;
+  for (let i = 0; i < 3; i++) if (fixed[i] !== rel[i]) return fixed[i]! < rel[i]!;
+  return true;
 }
 
 /** Markdown lines: the full inventory table, one row per group, every source. */

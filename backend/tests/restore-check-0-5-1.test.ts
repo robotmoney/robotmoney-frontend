@@ -2,6 +2,8 @@
 import { describe, expect, test } from "bun:test";
 import { gradeLedger } from "../scripts/upgrades/0.5.0-to-0.5.1/restore-check.ts";
 import { PRIOR_RELEASE_MIGRATIONS, RELEASE_MIGRATIONS } from "../scripts/upgrades/0.5.0-to-0.5.1/release.ts";
+// Migrations later releases add; v0.5.1's facts are frozen and do not name them.
+import { RELEASE_MIGRATIONS as LATER } from "../scripts/upgrades/0.5.1-to-0.5.2/release.ts";
 
 const onDisk = [...PRIOR_RELEASE_MIGRATIONS, ...RELEASE_MIGRATIONS].sort();
 
@@ -26,6 +28,6 @@ describe("v0.5.1 restore-check ledger grading", () => {
     const files = (await readdir(new URL("../migrations", import.meta.url))).filter((f) => f.endsWith(".sql"));
     for (const m of RELEASE_MIGRATIONS) expect(files).toContain(m);
     // From 0039 (the first file these lists track) on, every file is either prior or this release's.
-    expect(files.filter((f) => Number(f.slice(0, 4)) >= 39 && ![...PRIOR_RELEASE_MIGRATIONS, ...RELEASE_MIGRATIONS].includes(f as never))).toEqual([]);
+    expect(files.filter((f) => Number(f.slice(0, 4)) >= 39 && ![...PRIOR_RELEASE_MIGRATIONS, ...RELEASE_MIGRATIONS, ...LATER].includes(f as never))).toEqual([]);
   });
 });

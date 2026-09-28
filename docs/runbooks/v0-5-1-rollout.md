@@ -1,4 +1,4 @@
-# v0.5.1 production rollout — PROPOSED
+# v0.5.1 production rollout — SHIPPED 2026-09-25 as v0.5.1 (`3ac99f9c`); soak did not pass, fixes in v0.5.2 (see v0-5-2-rollout.md)
 
 > **Status: proposal (2026-09-25), not yet adopted. D1, D2, D6 decided 2026-09-25.** Steps marked **[TO BUILD]**
 > name tooling that does not exist yet; every other command exists on

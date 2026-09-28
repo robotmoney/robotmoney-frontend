@@ -105,12 +105,31 @@ describe("known issues after the release", () => {
   test("only a known issue THIS release fixes fails; issue 1035 is a warning", async () => {
     const { classify, inventory, inventoryVerdict } = await import("../../lib/gate/log-inventory.ts");
     const rules = [
-      { id: "judge", match: "model_unconfigured", class: "known-issue" as const, issue: "v0.5.1-D1", reason: "judge had no model, fixed by 0063" },
+      { id: "judge", match: "model_unconfigured", class: "known-issue" as const, issue: "D1", fixedIn: "0.5.1", reason: "judge had no model, fixed by 0063" },
       { id: "ledger", match: "upstream prematurely closed", class: "known-issue" as const, issue: "1035", reason: "ledger load, not this release" },
     ];
     const g = classify(inventory("x", [{ ts: null, text: "judge produced no judgement (model_unconfigured) error" }, { ts: null, text: "[error] upstream prematurely closed connection" }]), rules);
     const v = inventoryVerdict(g, "post-release", "v0.5.1");
-    expect(v.failures.join("\n")).toContain("known issue judge (v0.5.1-D1) still present after the release that fixes it");
-    expect(v.warnings.join("\n")).toContain("known issue ledger (1035), not fixed by v0.5.1");
+    expect(v.failures.join("\n")).toContain("known issue judge (D1, fixed in 0.5.1) still present after the release that fixes it");
+    expect(v.warnings.join("\n")).toContain("known issue ledger (1035), not fixed by v0.5.1 or earlier");
+  });
+});
+
+describe("fixedByOrBefore", () => {
+  test("fixed in this release or an earlier one counts; a later one does not (semver)", async () => {
+    const { fixedInOrBefore } = await import("../../lib/gate/log-inventory.ts");
+    expect(fixedInOrBefore("0.5.1", "v0.5.2")).toBe(true);
+    expect(fixedInOrBefore("0.5.2", "0.5.2")).toBe(true);
+    expect(fixedInOrBefore("0.5.3", "v0.5.2")).toBe(false);
+    expect(fixedInOrBefore("0.4.9", "0.5.0")).toBe(true);
+    expect(fixedInOrBefore("0.10.0", "0.9.9")).toBe(false);
+  });
+
+  test("a rule must keep the version out of its issue id and write fixedIn as plain semver", async () => {
+    const { validateRules } = await import("../../lib/gate/log-inventory.ts");
+    const base = { id: "x", match: "y", class: "known-issue", reason: "a reason long enough" };
+    expect(() => validateRules([{ ...base, issue: "v0.5.2-1035" }])).toThrow("not a version");
+    expect(() => validateRules([{ ...base, issue: "1035", fixedIn: "v0.5.2" }])).toThrow("plain semver");
+    expect(() => validateRules([{ ...base, issue: "1035", fixedIn: "0.5.2" }])).not.toThrow();
   });
 });

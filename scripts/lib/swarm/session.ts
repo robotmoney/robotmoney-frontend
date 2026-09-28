@@ -166,8 +166,17 @@ export function assertAuthoredTakes(
         `published payload — a submission this driver verified did not land`,
     );
   }
+  // THE FORMAT CHECKS BELOW GRADE ONLY THE TAKES THIS DRIVER AUTHORED. An
+  // outside member files through its own client, in its own format: in
+  // production (2026-09-26/27) Woon's takes carried no **SUBJECT** lead-in, and
+  // this loop threw `swarm session failed` after every session had already
+  // published, judged, with a receipt. The comment above already says members
+  // the driver did not run carry no driver ground truth; that now holds for the
+  // format checks too. The attendance checks above still cover everyone.
+  const driven = new Set(fulfilledMemberIds.map(String));
+  const drivenTakes = authored.filter((t) => driven.has(String(t.memberId)));
   const seenBodies = new Map<string, string>();
-  for (const t of authored) {
+  for (const t of drivenTakes) {
     const who = String(t.memberId);
     if (OLD_TEMPLATE_RE.test(t.body)) {
       throw new Error(`${tag}: take for ${who} matches the retired template fingerprint — not a real inference body`);
@@ -189,7 +198,7 @@ export function assertAuthoredTakes(
     }
     seenBodies.set(who, t.body);
   }
-  console.log(`${tag}: authored-take invariants passed for ${authored.length} present member(s)`);
+  console.log(`${tag}: authored-take invariants passed for ${drivenTakes.length} driver-run member(s); ${authored.length - drivenTakes.length} outside member take(s) not format-checked`);
 }
 
 // ── Attendance reporting (issue #501) ───────────────────────────────────────

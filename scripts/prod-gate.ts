@@ -60,14 +60,14 @@ export interface ProdGateArgs {
   minSessions: number;
   minAttendance: number;
   stuckAfterMin: number;
-  /** The release being graded; known issues it does not fix are warnings, not failures (default v0.5.1). */
+  /** The release being graded; a known issue fixed by no release up to it is a warning, not a failure (default v0.5.2). */
   release: string;
   /** post-release: FAIL when no session has published for this many hours (sessions stopped). */
   livenessHours: number;
 }
 
 export function parseProdGateArgs(argv: readonly string[]): ProdGateArgs | { error: string } {
-  const out: ProdGateArgs = { mode: "baseline", windowHours: 24, deferSessions: false, minSessions: 1, minAttendance: 0.5, stuckAfterMin: 780, release: "v0.5.1", livenessHours: 12 };
+  const out: ProdGateArgs = { mode: "baseline", windowHours: 24, deferSessions: false, minSessions: 1, minAttendance: 0.5, stuckAfterMin: 780, release: "v0.5.2", livenessHours: 12 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--defer-sessions") { out.deferSessions = true; continue; }
