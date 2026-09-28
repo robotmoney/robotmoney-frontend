@@ -610,7 +610,7 @@ export const EXCLUDED_ROUTES: Record<string, string> = {
   // participant's own bearer (system-scheduler-spec.md §7). There is no job-ack
   // route: the stream carries change events only (§6.3, D52).
   [ROUTES.swarm.scheduler.fullRead]: "scheduler automation token only; an internal snapshot for one client",
-  [ROUTES.swarm.scheduler.subscribe]: "scheduler automation token only; a long-lived event-stream, not a document",
+  [ROUTES.swarm.scheduler.subscribe]: "scheduler automation token only; a WebSocket upgrade carrying the change stream (D55 (11)), not a document",
   [ROUTES.swarm.participants.pending]: "participant work queue; requires that member's own bearer and answers only about itself",
   [ROUTES.swarm.participants.judgeSubscribe]: "judge participant bearer only; a long-lived event-stream of that judge's own work",
   [ROUTES.swarm.participants.judgement]: "judge participant write flow; requires a judge's member bearer",
