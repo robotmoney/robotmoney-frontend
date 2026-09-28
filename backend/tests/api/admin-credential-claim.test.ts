@@ -385,12 +385,13 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
         VALUES (${rogueId(challenge)}, ${Buffer.from("not-used-before-lookup")}, 0, '{}')
       `;
       await sql`INSERT INTO admin_session (token, expires_at) VALUES (${hashKey(rogueSession(challenge))}, now() + interval '1 day')`;
-      // A pending sign-in ceremony in one of the 32 slots (migration 0088).
+      // A pending sign-in ceremony in one of the 32 slots (migration 0088):
+      // slot 8, the first of the authentication slots (8..31).
       await sql`
         UPDATE admin_webauthn_challenge
            SET flow = 'authentication', challenge = ${challenge}, issued_at = now(),
                expires_at = now() + interval '5 minutes', consumed_at = NULL
-         WHERE slot = 0
+         WHERE slot = 8
       `;
     };
     const assertRogueRejected = async (challenge: string) => {

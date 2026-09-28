@@ -581,6 +581,7 @@ CREATE TABLE public.admin_webauthn_challenge (
     issued_at timestamp with time zone,
     CONSTRAINT admin_webauthn_challenge_flow_check CHECK ((flow = ANY (ARRAY['registration'::text, 'authentication'::text]))),
     CONSTRAINT admin_webauthn_challenge_slot_check CHECK (((slot >= 0) AND (slot < 32))),
+    CONSTRAINT admin_webauthn_challenge_slot_flow_check CHECK (((flow IS NULL) OR (flow = CASE WHEN (slot < 8) THEN 'registration'::text ELSE 'authentication'::text END))),
     CONSTRAINT admin_webauthn_challenge_slot_state_check CHECK ((((flow IS NULL) AND (challenge IS NULL) AND (issued_at IS NULL) AND (expires_at IS NULL) AND (consumed_at IS NULL)) OR ((flow IS NOT NULL) AND (challenge IS NOT NULL) AND (issued_at IS NOT NULL) AND (expires_at IS NOT NULL))))
 );
 
@@ -589,7 +590,7 @@ CREATE TABLE public.admin_webauthn_challenge (
 -- Name: TABLE admin_webauthn_challenge; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON TABLE public.admin_webauthn_challenge IS 'The 32 WebAuthn challenge slots (D55 (6)). Issuing a challenge overwrites the slot with the oldest issued_at under CHALLENGE_ISSUE_LOCK; consuming it is a single-use conditional UPDATE of consumed_at. The runtime holds no INSERT or DELETE, so the table always has exactly 32 rows and needs no prune.';
+COMMENT ON TABLE public.admin_webauthn_challenge IS 'The 32 WebAuthn challenge slots (D55 (6)): 0..7 registration, 8..31 authentication. Issuing a challenge overwrites the slot of its flow with the oldest issued_at under CHALLENGE_ISSUE_LOCK; consuming it is a single-use conditional UPDATE of consumed_at. The runtime holds no INSERT or DELETE, so the table always has exactly 32 rows and needs no prune.';
 
 
 --
@@ -603,7 +604,7 @@ COMMENT ON COLUMN public.admin_webauthn_challenge.consumed_at IS 'When this chal
 -- Name: COLUMN admin_webauthn_challenge.slot; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON COLUMN public.admin_webauthn_challenge.slot IS 'The slot number, 0..31. The primary key: there are exactly 32 slots, written by migration 0088 or the blank bootstrap.';
+COMMENT ON COLUMN public.admin_webauthn_challenge.slot IS 'The slot number, 0..31. The primary key: there are exactly 32 slots, written by migration 0088 or the blank bootstrap. Slots 0..7 hold registration ceremonies and 8..31 authentication ones, so a public flood of sign-in options never evicts a pending enrolment.';
 
 
 --

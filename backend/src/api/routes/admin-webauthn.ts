@@ -16,7 +16,14 @@ const BAD = (error: string) => ({ status: 400, body: { error } }) as const;
 // the table, so a caller can make us evict old pending ceremonies but can never
 // change the row count. The transaction advisory lock serializes issuance, so
 // two concurrent requests never pick, and overwrite, the same slot.
+//
+// Each flow owns its own slots (0088's slot_flow_check): registration 0..7,
+// authentication 8..31. Registration options need an admin credential and
+// authentication options do not, so an unauthenticated flood overwrites only
+// authentication slots and can never evict a signed-in admin's pending passkey
+// enrolment.
 const CHALLENGE_TTL = "5 minutes";
+const REGISTRATION_SLOTS = 8;
 const CHALLENGE_ISSUE_LOCK = 587001;
 
 // The relying party must match the page hosting the browser WebAuthn call. A
@@ -62,17 +69,20 @@ async function consumeChallenge(flow: "registration" | "authentication", challen
 async function storeChallenge(flow: "registration" | "authentication", challenge: string): Promise<void> {
   await sql.begin(async (tx) => {
     // Serialize issuance so two concurrent option requests never choose the
-    // same slot. The slot overwritten is the one issued longest ago, as D55 (6)
-    // specifies: an empty slot (issued_at NULL) first, then the oldest
-    // ceremony, whether it is pending, consumed or expired. A ceremony lives
-    // five minutes, so a pending one is evicted only by 32 newer issuances.
+    // same slot. The slot overwritten is the one of this flow issued longest
+    // ago, as D55 (6) specifies: an empty slot (issued_at NULL) first, then the
+    // oldest ceremony, whether it is pending, consumed or expired. A ceremony
+    // lives five minutes, so a pending one is evicted only by as many newer
+    // issuances of its own flow as the flow has slots.
     await tx`SELECT pg_advisory_xact_lock(${CHALLENGE_ISSUE_LOCK})`;
+    const registration = flow === "registration";
     const written = await tx`
       UPDATE admin_webauthn_challenge
          SET flow = ${flow}, challenge = ${challenge}, issued_at = now(),
              expires_at = now() + ${CHALLENGE_TTL}::interval, consumed_at = NULL
        WHERE slot = (
          SELECT slot FROM admin_webauthn_challenge
+          WHERE (slot < ${REGISTRATION_SLOTS}) = ${registration}
           ORDER BY issued_at ASC NULLS FIRST, slot ASC
           LIMIT 1
        )

@@ -249,15 +249,18 @@ test("concurrent out-of-order assertions never regress a passkey counter", async
   expect(await countSessions()).toBe(sessionsBefore + 1);
 });
 
-test("public authentication options overwrite the slot issued longest ago, and the store stays at 32 slots", async () => {
-  // Every slot holds a ceremony: slot 7 the oldest (expired), slot 3 the next
-  // oldest (still live), the rest newer and live.
+test("public authentication options overwrite the authentication slot issued longest ago, and the store stays at 32 slots", async () => {
+  // Every authentication slot (8..31, migration 0088) holds a ceremony: slot
+  // 15 the oldest (expired), slot 11 the next oldest (still live), the rest
+  // newer and live. The registration slots (0..7) hold ceremonies OLDER than
+  // all of them, and are never chosen by an authentication issuance.
   const prefix = `challenge-cap-${randomBytes(12).toString("hex")}`;
   await sql`
     UPDATE admin_webauthn_challenge
-       SET flow = 'authentication', challenge = ${prefix} || '-' || slot,
-           issued_at = now() - make_interval(secs => CASE slot WHEN 7 THEN 200 WHEN 3 THEN 150 ELSE 100 - slot END),
-           expires_at = CASE WHEN slot = 7 THEN now() - interval '1 minute' ELSE now() + interval '2 minutes' END,
+       SET flow = CASE WHEN slot < 8 THEN 'registration' ELSE 'authentication' END,
+           challenge = ${prefix} || '-' || slot,
+           issued_at = now() - make_interval(secs => CASE WHEN slot < 8 THEN 1000 WHEN slot = 15 THEN 200 WHEN slot = 11 THEN 150 ELSE 100 - slot END),
+           expires_at = CASE WHEN slot = 15 THEN now() - interval '1 minute' ELSE now() + interval '2 minutes' END,
            consumed_at = NULL`;
   const slotOf = async (challenge: string) =>
     ((await sql`SELECT slot FROM admin_webauthn_challenge WHERE challenge = ${challenge}`) as unknown as { slot: number }[])[0]
@@ -265,12 +268,14 @@ test("public authentication options overwrite the slot issued longest ago, and t
 
   const first = await call("GET", "/api/admin/webauthn/auth/options");
   expect(first?.status).toBe(200);
-  expect(await slotOf((first?.body as { challenge: string }).challenge)).toBe(7);
+  expect(await slotOf((first?.body as { challenge: string }).challenge)).toBe(15);
   // The next issuance takes the next oldest, even though it is still live:
   // the bound is the shape of the table, not a cleanup.
   const second = await call("GET", "/api/admin/webauthn/auth/options");
-  expect(await slotOf((second?.body as { challenge: string }).challenge)).toBe(3);
-  expect(await slotOf(`${prefix}-3`)).toBeNull();
+  expect(await slotOf((second?.body as { challenge: string }).challenge)).toBe(11);
+  expect(await slotOf(`${prefix}-11`)).toBeNull();
+  // The older registration ceremonies were left alone.
+  for (let slot = 0; slot < 8; slot++) expect(await slotOf(`${prefix}-${slot}`)).toBe(slot);
   expect(Array.from(await sql<{ count: string }[]>`SELECT count(*) FROM admin_webauthn_challenge`)).toEqual([{ count: "32" }]);
 });
 

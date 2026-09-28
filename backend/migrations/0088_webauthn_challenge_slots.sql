@@ -24,10 +24,17 @@
 --     a blank database) and never again: rm_app holds SELECT and UPDATE on the
 --     table and no INSERT, so the runtime cannot add a row even by mistake;
 --   * an empty slot holds NULL in every ceremony column, and the state CHECK
---     keeps a slot either wholly empty or wholly a ceremony.
+--     keeps a slot either wholly empty or wholly a ceremony;
+--   * each flow has its own slots, fixed by a CHECK: 0..7 registration,
+--     8..31 authentication. Authentication options are public, registration
+--     options need an admin credential. In one shared pool some 32
+--     unauthenticated requests inside the five-minute lifetime would evict a
+--     signed-in admin's pending passkey enrolment; with the split a public flood
+--     only ever overwrites authentication slots. Eight registration slots are
+--     ample: an enrolment is one privileged operator's ceremony at a time.
 -- Issuing a challenge (src/api/routes/admin-webauthn.ts storeChallenge)
--- overwrites the slot with the oldest `issued_at` — an empty one first, since
--- NULL sorts first — in place, under CHALLENGE_ISSUE_LOCK. Consuming it is
+-- overwrites the slot of its own flow with the oldest `issued_at` — an empty
+-- one first, since NULL sorts first — in place, under CHALLENGE_ISSUE_LOCK. Consuming it is
 -- `UPDATE ... SET consumed_at = now() WHERE ... AND consumed_at IS NULL AND
 -- expires_at > now() RETURNING`, so a challenge is accepted at most once. A
 -- consumed or expired slot needs no prune: the next issuance overwrites it.
@@ -77,6 +84,15 @@ BEGIN
         OR (flow IS NOT NULL AND challenge IS NOT NULL AND issued_at IS NOT NULL AND expires_at IS NOT NULL)
       );
   END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'public.admin_webauthn_challenge'::regclass AND conname = 'admin_webauthn_challenge_slot_flow_check'
+  ) THEN
+    ALTER TABLE admin_webauthn_challenge
+      ADD CONSTRAINT admin_webauthn_challenge_slot_flow_check CHECK (
+        flow IS NULL OR flow = CASE WHEN slot < 8 THEN 'registration' ELSE 'authentication' END
+      );
+  END IF;
 END
 $$;
 
@@ -86,8 +102,8 @@ REVOKE INSERT, DELETE, TRUNCATE ON admin_webauthn_challenge FROM rm_app, rm_work
 GRANT SELECT, UPDATE ON admin_webauthn_challenge TO rm_app;
 
 COMMENT ON TABLE admin_webauthn_challenge IS
-  'The 32 WebAuthn challenge slots (D55 (6)). Issuing a challenge overwrites the slot with the oldest issued_at under CHALLENGE_ISSUE_LOCK; consuming it is a single-use conditional UPDATE of consumed_at. The runtime holds no INSERT or DELETE, so the table always has exactly 32 rows and needs no prune.';
+  'The 32 WebAuthn challenge slots (D55 (6)): 0..7 registration, 8..31 authentication. Issuing a challenge overwrites the slot of its flow with the oldest issued_at under CHALLENGE_ISSUE_LOCK; consuming it is a single-use conditional UPDATE of consumed_at. The runtime holds no INSERT or DELETE, so the table always has exactly 32 rows and needs no prune.';
 COMMENT ON COLUMN admin_webauthn_challenge.slot IS
-  'The slot number, 0..31. The primary key: there are exactly 32 slots, written by migration 0088 or the blank bootstrap.';
+  'The slot number, 0..31. The primary key: there are exactly 32 slots, written by migration 0088 or the blank bootstrap. Slots 0..7 hold registration ceremonies and 8..31 authentication ones, so a public flood of sign-in options never evicts a pending enrolment.';
 COMMENT ON COLUMN admin_webauthn_challenge.issued_at IS
   'When the ceremony in this slot was issued. The next issuance overwrites the slot with the oldest issued_at (an empty slot, NULL, first). NULL = empty slot.';
