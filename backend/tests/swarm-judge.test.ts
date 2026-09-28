@@ -2115,8 +2115,8 @@ test("a positions[] the model can ask for cheaply cannot be persisted expensivel
   expect(() => parseJudgeResponse(cheap, fat)).toThrow("too_many_positions");
   expect(() => parseJudgeResponse(answerWith(repeated), fat)).toThrow("duplicate_position:");
 
-  // And a legitimate multi-member disagreement — one position per member of a
-  // single-digit roster — is NOT truncated by the bound.
+  // And a legitimate multi-member disagreement — one position per member, at
+  // most SWARM_ROSTER_CAP of them — is NOT truncated by the bound.
   const honest = parseJudgeResponse(
     answerWith(members.map((m) => ({ member_id: m.id, view: "v" }))),
     input,
