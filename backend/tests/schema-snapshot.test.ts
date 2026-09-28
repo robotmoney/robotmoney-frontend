@@ -831,6 +831,17 @@ describe("the real snapshot (backend/schema/) — fingerprint, preflight, bootst
       expect(sites.some((s) => s.role === "rm_app" && s.callers.some((c) => c.startsWith("src/api/")))).toBe(true);
       expect(sites.filter((s) => s.site.startsWith("tests/"))).toEqual([]);
 
+      // The epoch lifecycle and the stream's log (src/swarm/epoch.ts, W6 P2) are
+      // in that registry, so check 2 tested rm_app's grants against the real
+      // snapshot for every table they touch. Non-vacuous: the sites are named,
+      // and the tables the lifecycle writes are among them.
+      const epochSites = sites.filter((s) => s.site.startsWith("src/swarm/epoch:"));
+      expect(epochSites.length).toBeGreaterThanOrEqual(25);
+      const epochObjects = new Set(epochSites.map((s) => s.object));
+      for (const object of ["swarm_sessions", "swarm_session_members", "swarm_briefs", "swarm_stream_head", "swarm_stream_events"]) {
+        expect(epochObjects.has(object), object).toBe(true);
+      }
+
       // RECORDED, NOT HIDDEN: check 6 had no subject to check. The bootstrap
       // data seeds no subject, so on a blank database check 6 passes because
       // there is nothing to refuse. The next case gives it a subject.
