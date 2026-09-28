@@ -179,6 +179,12 @@ interface FakeSession {
   successorId: string | null;
   /** §4.4: captured at turnover beside the judge mode, never read live. */
   capturedJudgingSeconds: number;
+  /**
+   * Closed by a turnover that opened no successor, because the subject was
+   * inactive at its boundary (§4.3, §4.5; D55 (4)). A retry of that turnover
+   * replays this result, as the real API's does.
+   */
+  closedWithoutSuccessor?: boolean;
 }
 
 export interface FakeApiOptions {
@@ -690,15 +696,35 @@ export class FakeSchedulerApi implements TransitionApi, SchedulerTransport {
       };
     }
     if (closing.state !== "collecting") {
+      if (closing.closedWithoutSuccessor) {
+        return {
+          ok: true,
+          subjectId,
+          closedSessionId: closing.sessionId,
+          openedSessionId: null,
+          windowClosesAt: null,
+          judgeMode: closing.judgeMode,
+          replayed: true,
+        };
+      }
       return { ok: false, status: 409, error: "session_not_collecting", transient: false };
     }
     closing.state = "window_closed";
     this.#seq += 1;
     const subject = this.subjects.get(subjectId)!;
     if (!subject.active) {
-      // §4.5: deactivation closes and opens no successor. Not reachable from the
-      // boundary in practice, but the guard is here so a stale timer cannot.
-      return { ok: false, status: 409, error: "subject_not_active", transient: false };
+      // §4.5, D55 (4): the window of an inactive subject ran to its close, and
+      // this boundary turnover closes it and opens no successor.
+      closing.closedWithoutSuccessor = true;
+      return {
+        ok: true,
+        subjectId,
+        closedSessionId: closing.sessionId,
+        openedSessionId: null,
+        windowClosesAt: null,
+        judgeMode: closing.judgeMode,
+        replayed: false,
+      };
     }
     // §2.2: measured from the CLOSED epoch's scheduled close, not from now.
     const opened = this.#open(subject, closing.windowClosesAt);

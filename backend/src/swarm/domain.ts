@@ -323,8 +323,8 @@ export async function getMemberAvatarBytes(memberId: string): Promise<MemberAvat
   const row = rows[0];
   return row ? { contentType: row.content_type, bytes: row.bytes, uploadedAt: row.uploaded_at } : null;
 }
-export async function getSubject(id: string) {
-  const row = (await sql`SELECT * FROM swarm_subjects WHERE id = ${id}`)[0];
+export async function getSubject(id: string, h: DbHandle = sql) {
+  const row = (await h`SELECT * FROM swarm_subjects WHERE id = ${id}`)[0];
   return row ? toSubject(row) : null;
 }
 
@@ -968,10 +968,12 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   //
   // THE EPOCH MODEL (issue #1026) put a state conjunct back — on the INSERT,
   // not here, and with a different answer. The dead zone this paragraph
-  // describes cannot recur: turnover opens N+1 `collecting` in the transaction
-  // that closes N, so the newest session is always the collecting one. What
-  // the conjunct refuses is a take into an epoch that turnover or deactivation
-  // already closed, and it answers `submission window closed` — the same "you
+  // describes cannot recur: for an active subject, turnover opens N+1
+  // `collecting` in the transaction that closes N, so the newest session is
+  // always the collecting one; for an inactive one the boundary opens nothing,
+  // and "too late" is the true answer. What the conjunct refuses is a take
+  // into an epoch that turnover already closed (a deactivation closes nothing:
+  // D55 (4), §4.5), and it answers `submission window closed` — the same "you
   // are too late" as the instant — never `not open`. The early check below
   // reads the same two facts (state and instant) so a late take is refused
   // before the signature work; the INSERT's conjuncts remain the authority.
@@ -1187,14 +1189,15 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
     // #570 dropped this conjunct because the old lifecycle had a `scheduled`
     // gap between sessions and a `closeWindow` that ran before the advertised
     // instant. The epoch model has neither: a session is born `collecting`
-    // (§3), and the only ways an epoch leaves `collecting` are turnover (§4.3)
-    // and deactivation (§4.5). Only `system-scheduler` turns an epoch over
-    // (D55), but its timer runs on its own clock, not the database's (§4.2), so
-    // the API can still see a turnover commit before N's stored close. Neither
-    // path moves `window_closes_at`, so without this conjunct a take that read
-    // N just before such a turnover committed — or any take after a
-    // deactivation — landed in a CLOSED epoch whose stored close was still in
-    // the future: after its absences were recorded, and after aggregation.
+    // (§3), and the only way an epoch leaves `collecting` is turnover (§4.3):
+    // a deactivation closes nothing, and the window of an inactive subject
+    // runs to its close (§4.5, D55 (4)). Only `system-scheduler` turns an
+    // epoch over (D55), but its timer runs on its own clock, not the
+    // database's (§4.2), so the API can still see a turnover commit before N's
+    // stored close. Turnover does not move `window_closes_at`, so without this
+    // conjunct a take that read N just before such a turnover committed landed
+    // in a CLOSED epoch whose stored close was still in the future: after its
+    // absences were recorded, and after aggregation.
     // Under the `FOR SHARE` lock below, the state this reads is the committed
     // one, so the take either lands before the close or is refused after it.
     //
@@ -2106,7 +2109,15 @@ export async function buildBriefBody(
     SELECT signal_key, date, payload FROM research_signals
     WHERE date = ${s.date} ORDER BY signal_key`;
   const previousSession = prevOutcome ? { outcome: prevOutcome } : undefined;
-  const subject = await getSubject(s.subject_id);
+  // ON THE CALLER'S HANDLE, like every other read here. This read used to take
+  // a second connection from the pool while the caller's transaction held its
+  // own and the subject's row lock (turnover, openEpoch). With the pool full of
+  // turnovers queued on that same lock — a scheduler catching up after a
+  // database outage — no connection ever came back: every transaction waited
+  // for the pool, every pooled query waited for the lock, and the api stopped
+  // answering (found by scripts/tests/integration/scheduler-api-runtime.test.ts's
+  // frozen-database case, which then could not restart the scheduler).
+  const subject = await getSubject(s.subject_id, h);
   // The ONE read of the subject's recommendation type on this path — the same
   // value `aggregateSession()` normalizes, so the ask published to the swarm and
   // the derivation applied to its answers come from one column.
@@ -2332,7 +2343,7 @@ export async function closeWindow(
   // its failures collected into the return value rather than thrown.
   //
   // THE CLOSE CAPTURES WHAT SETTLEMENT RUNS ON (§4.4, issue #1026). Turnover
-  // and deactivation store the judge mode and judging duration in force as an
+  // (of an active or an inactive subject's window) stores the judge mode and judging duration in force as an
   // epoch closes; this close does the same, in the same statement, so no path
   // left in the code closes a session with nothing captured. Settlement
   // refuses an uncaptured session (`judging_not_captured`) rather than reading
@@ -3456,8 +3467,15 @@ export type TurnoverResult = {
   status: number;
   subjectId: string;
   closedSessionId: string;
-  openedSessionId: string;
-  windowClosesAt: string;
+  /**
+   * The successor N+1, or null when the subject was inactive at the boundary
+   * (§4.3 "opens epoch N+1 … but only if the subject is active at that
+   * instant"; §4.5, D55 (4)). A null here is not a failure: N closed and
+   * settles, and nothing opened.
+   */
+  openedSessionId: string | null;
+  /** N+1's close, or null with `openedSessionId`. */
+  windowClosesAt: string | null;
   judgeMode: JudgeMode;
   /** True when this call found the turnover already done and returned its original result (§4.3). */
   replayed: boolean;
@@ -3475,9 +3493,16 @@ export type TurnoverResult = {
  * HOW THE BINDING WORKS. `expectedSessionId` names the epoch the caller intends
  * to close, and the answer is decided entirely from that row:
  *
- *   * it is `collecting`           → do the turnover.
+ *   * it is `collecting`           → do the turnover. For an inactive
+ *                                    subject that closes N and opens nothing
+ *                                    (§4.5, D55 (4)).
  *   * it already has a successor   → replay that original result verbatim.
- *   * it is closed with no successor (deactivation, §4.5) → reasoned no-op.
+ *   * it was closed as an epoch with no successor (a turnover of an inactive
+ *     subject's window) → replay that result: N closed, nothing opened.
+ *   * it was closed with nothing captured (a row closed before capture
+ *     existed, e.g. by the retired admin `close` verb) → reasoned no-op.
+ *     `closeWindow` DOES capture, so a session it closed with no successor
+ *     replays like an inactive subject's boundary; it has no callers today.
  *   * it belongs to another subject, or does not exist   → reasoned no-op.
  *
  * At no point is "the subject's current collecting session" consulted as a
@@ -3513,7 +3538,29 @@ export async function turnOverEpoch(
     if (expected.subject_id !== subjectId) return refuse(409, "expected_session_not_for_subject");
 
     if (expected.state !== "collecting") {
-      if (!expected.successor_session_id) return refuse(409, "epoch_not_collecting");
+      if (!expected.successor_session_id) {
+        // Closed with no successor. When the close captured its judge mode and
+        // judging duration, it was an epoch close — the boundary of an
+        // inactive subject's window (§4.5) — and a retry after a lost
+        // response gets that original result back, so the scheduler settles
+        // N instead of recording a refusal (§5: "the guard returns the
+        // original result rather than a bare refusal"). A session closed with
+        // nothing captured (a row from before capture existed, e.g. the
+        // retired admin `close` verb) stays a reasoned no-op. `closeWindow`
+        // captures both values, so a session it closed takes the replay
+        // branch; it has no callers today.
+        if (!judgingCaptured(expected)) return refuse(409, "epoch_not_collecting");
+        return {
+          ok: true as const,
+          status: 200,
+          subjectId,
+          closedSessionId: String(expected.id),
+          openedSessionId: null,
+          windowClosesAt: null,
+          judgeMode: expected.judge_mode as JudgeMode,
+          replayed: true,
+        };
+      }
       const [successor] = await tx<Record<string, any>[]>`
         SELECT id, window_closes_at FROM swarm_sessions WHERE id = ${expected.successor_session_id}`;
       return {
@@ -3528,13 +3575,17 @@ export async function turnOverEpoch(
       };
     }
 
-    // §4.5: deactivation closes an epoch and opens none, so an inactive subject
-    // has nothing to turn over into. Deactivation closes the window in its own
-    // transaction, so this is not normally reachable — but it is checked BEFORE
-    // anything is written, because a refusal closes nothing (§5). Checked after
-    // the write, a refusal returned from inside `sql.begin` would COMMIT the
-    // close it was refusing.
-    if (subject.status !== "active") return refuse(409, "subject_not_active");
+    // §4.5, D55 (4) as corrected 2026-09-25 — THE WINDOW RUNS TO ITS CLOSE. An
+    // admin deactivation only sets the subject inactive; it closes nothing. The
+    // open window keeps accepting takes until `window_closes_at`, and THIS is
+    // the transaction that closes it: the ordinary boundary turnover, which
+    // closes N, records absences and captures the judge mode exactly as for an
+    // active subject, and then opens no N+1 because the subject is inactive.
+    // The status is read once, under the subject lock taken above, so an
+    // activation racing this boundary either commits first (N+1 opens) or
+    // waits for it (nothing opens here, and the scheduler opens the first
+    // epoch from that activation's subject.changed).
+    const opensSuccessor = subject.status === "active";
 
     // §4.4: "Judge mode and judging duration are captured at turnover." Read
     // once, here, and stored on the closing session — everything downstream
@@ -3551,22 +3602,27 @@ export async function turnOverEpoch(
     // §2.2 turnover rule, against ONE reading of the clock taken here — after
     // the subject lock is held, so a turnover that waited on another never
     // derives its close from a present that went stale while it waited.
-    const closesAt = await gridClose(tx, subjectId, await readPresent(tx), expected.window_closes_at_text ?? null);
-    const successor = await insertEpoch(tx, subject, closesAt);
-    await tx`UPDATE swarm_sessions SET successor_session_id = ${successor.sessionId}
-              WHERE id = ${expectedSessionId}`;
-    // §6.2: `epoch.turned_over` — "epoch N closed and N+1 opened". Written here,
-    // in the transaction that did both, so the scheduler cannot be told about a
+    let successor: OpenResult | null = null;
+    if (opensSuccessor) {
+      const closesAt = await gridClose(tx, subjectId, await readPresent(tx), expected.window_closes_at_text ?? null);
+      successor = await insertEpoch(tx, subject, closesAt);
+      await tx`UPDATE swarm_sessions SET successor_session_id = ${successor.sessionId}
+                WHERE id = ${expectedSessionId}`;
+    }
+    // §6.2: `epoch.turned_over` — "epoch N closed and N+1 opened", or N closed
+    // and nothing opened for an inactive subject (§4.5), which the scheduler
+    // reads as "drop the boundary timer, settle N". Written here, in the
+    // transaction that did both, so the scheduler cannot be told about a
     // turnover that rolled back or miss one that committed. A REPLAY does not
     // publish: the event for this turnover was written when it happened, and a
     // second copy would read to a subscriber as a second turnover.
     await appendStreamEvent(tx, "epoch.turned_over", {
       subjectId,
-      sessionId: successor.sessionId,
+      sessionId: successor?.sessionId ?? expectedSessionId,
       payload: {
         closedSessionId: expectedSessionId,
-        openedSessionId: successor.sessionId,
-        windowClosesAt: successor.windowClosesAt,
+        openedSessionId: successor?.sessionId ?? null,
+        windowClosesAt: successor?.windowClosesAt ?? null,
       },
     });
 
@@ -3575,34 +3631,12 @@ export async function turnOverEpoch(
       status: 200,
       subjectId,
       closedSessionId: expectedSessionId,
-      openedSessionId: successor.sessionId,
-      windowClosesAt: successor.windowClosesAt,
+      openedSessionId: successor?.sessionId ?? null,
+      windowClosesAt: successor?.windowClosesAt ?? null,
       judgeMode,
       replayed: false,
     };
   });
-}
-
-/**
- * Close a subject's open epoch without opening a successor — §4.5.
- *
- * Called from the admin deactivation path, inside its transaction, so that
- * "deactivated" and "window closed" are one fact rather than two that a crash
- * can separate. Settlement of the closed epoch still has to finish; §3 step 3
- * makes the scheduler pick it up on its next rebuild.
- */
-export async function closeEpochForDeactivation(subjectId: string, tx: DbHandle): Promise<string | null> {
-  const open = await currentCollecting(tx, subjectId);
-  if (!open) return null;
-  // The same capture a turnover makes (§4.4): this epoch settles like any
-  // other, so it carries the mode and judging duration in force as it closes.
-  const judgeMode = await currentJudgeMode(tx);
-  await tx`UPDATE swarm_sessions
-              SET state = 'window_closed', judge_mode = ${judgeMode},
-                  judging_duration_seconds = (SELECT judging_duration_seconds FROM swarm_subjects WHERE id = ${subjectId})
-            WHERE id = ${open.id} AND state = 'collecting'`;
-  await recordAbsencesTx(open.id, tx);
-  return open.id;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3664,9 +3698,9 @@ export type RequestJudgingResult = {
  *
  * NOTHING CAPTURED, NOTHING REQUESTED (§4.4: "Judge mode and judging duration
  * are captured at turnover"). A session whose `judge_mode` or
- * `judging_duration_seconds` is NULL (migration 0074) closed through a
- * pre-epoch path — the retired admin `close` verb, `closeWindow` — and has no
- * captured value to settle by. It is refused with `judging_not_captured`. It is
+ * `judging_duration_seconds` is NULL (migration 0074) was closed before
+ * capture existed — by the retired admin `close` verb, or by `closeWindow`
+ * before it began capturing — and has no captured value to settle by. It is refused with `judging_not_captured`. It is
  * NOT settled from the subject's live column: that value is whatever an admin
  * set AFTER the close, so reading it here would let a later change reach a
  * settling session, which is exactly what capture-at-turnover forbids. A
@@ -3955,7 +3989,7 @@ export async function finalizeEpoch(sessionId: string): Promise<FinalizeResult |
 
 /**
  * Did this session's close capture what settlement runs on (§4.4)? Turnover
- * and deactivation write both `judge_mode` (off | enforce) and
+ * writes both `judge_mode` (off | enforce) and
  * `judging_duration_seconds` in the transaction that closes the epoch; a
  * session missing either never closed as an epoch.
  */
@@ -4061,10 +4095,12 @@ export interface SettlingSession {
   /**
    * Whether the subject is still active.
    *
-   * Carried because §3 includes "sessions whose subject has since been
-   * deactivated" and §4.5 says settlement of those "proceeds and must finish",
-   * while the scheduler must NOT hold a boundary timer for them. One flag tells
-   * the two apart without a second read.
+   * Carried because §3 includes sessions "whose subject has since been
+   * deactivated" and §4.5 says their settlement still has to finish. A
+   * SETTLING session holds no boundary timer whatever its subject's status —
+   * its window already closed. The boundary timer of an inactive subject's
+   * still-open window comes from §3 part 2 (`collecting`), which lists it
+   * too (D55 (4): the window runs to its close).
    */
   subjectActive: boolean;
 }
@@ -4193,8 +4229,10 @@ export async function retainedFloor(h: DbHandle = sql): Promise<number | null> {
  * the subscriber stands, and every one is SAID rather than skipped over:
  *
  *   "If the API cannot serve from the requested cursor — its buffer for this
- *    subscriber overflowed, or the cursor is above the log's head — it says so
- *    ... The API never silently skips."
+ *    subscriber overflowed, the cursor is below the retained floor
+ *    (`log_truncated`), or the cursor is above the log's head — it sends one
+ *    `resync` frame and closes the connection ... The API never silently
+ *    skips."
  *
  * `cursor_ahead_of_head` — the subscriber claims to have applied an event this
  * API has not committed. Nothing can be served from there. Answering with an
@@ -4202,12 +4240,13 @@ export async function retainedFloor(h: DbHandle = sql): Promise<number | null> {
  * exactly the silent skip.
  *
  * `log_truncated` — the next event this subscriber needs is below the retained
- * floor, pruned by rm_owner under D53 (2)'s retention rule, and is gone.
- * Serving from the floor instead would skip the missing ones, silently.
+ * floor, pruned by the manual, receipted `rm_owner` command (`bun run prune`,
+ * which keeps at least a 7-day window, D55 (12)), and is gone. Serving from the
+ * floor instead would skip the missing ones, silently.
  *
- * `buffer_overflow` — this connection's outbound buffer filled because the
- * subscriber stopped reading. Dropping frames to make room would be a skip, so
- * the connection says so and closes.
+ * `buffer_overflow` — this socket's outbound backlog passed its bound because
+ * the subscriber stopped reading (D55 (11)). Dropping frames to make room would
+ * be a skip, so the connection says so and closes.
  *
  * `unavailable` — the API could not read the log or the counter (a database
  * error). It cannot say what the subscriber missed, so it cannot claim the
@@ -4246,8 +4285,9 @@ export async function resyncReasonFor(cursor: number, h: DbHandle = sql): Promis
  */
 export interface StreamOptions {
   /**
-   * How often a keepalive goes out when nothing else has (§6.3's "silent
-   * failure detection"). It carries the head sequence, so it is also the only
+   * How often a keepalive goes out when nothing else has (§6.3's "The
+   * keepalive carries the head sequence"), and how often the token is
+   * re-authorized against the store, busy or quiet. The keepalive is the only
    * thing that can reveal the loss of the last event before a quiet period.
    */
   keepaliveMs?: number;
@@ -4261,258 +4301,274 @@ export interface StreamOptions {
    */
   pollMs?: number;
   /**
-   * How many frames this connection's own queue may hold unread before it
-   * counts as overflowed (§6.3). Past it the connection sends `resync` with
-   * reason `buffer_overflow` and closes, rather than dropping or skipping
-   * anything.
+   * The bound on this socket's outbound backlog, in bytes (D55 (11): "The API
+   * watches the socket's outbound buffered amount. When a subscriber stops
+   * reading and that backlog passes its bound, the API sends one `resync`
+   * frame and closes the socket. It never drops an event to make room.").
    *
-   * THIS IS NOT WHAT BOUNDS A SUBSCRIBER UNDER `Bun.serve`. Measured on Bun
-   * 1.3.14: the server drains a response body into its own unbounded socket
-   * buffer whether or not the peer reads — a default, `pull`, `bytes`,
-   * `direct` and async-generator body all showed it — so `desiredSize` never
-   * falls and this limit is never reached behind the real server. What does
-   * end a connection whose peer stopped reading is the server's `idleTimeout`
-   * (10 s by default, which backend/src/api/index.ts keeps): with no socket
-   * progress the server closes the connection, `cancel` ends this loop and the
-   * buffered frames are freed. The subscriber reconnects from the cursor it
-   * last applied, so nothing is skipped, but it gets no `resync` frame first.
-   * The limit stays for any consumer that does honour the queue.
+   * Checked before every frame, against what the socket itself reports as
+   * queued and not yet written. The sink also reports backpressure on the send
+   * that crosses the server's own limit; either one ends the connection the
+   * same way. Unlike the SSE body this replaced, which `Bun.serve` drained into
+   * its own unbounded buffer whatever the peer did, a WebSocket reports its
+   * backlog, so a stalled subscriber is told why before it is closed.
    */
-  bufferFrames?: number;
+  bufferBytes?: number;
   /**
    * Re-checked every `keepaliveMs` whatever the connection is sending — events
-   * do not postpone it. Resolving false (or failing) closes the subscription: a
-   * bearer that was rotated or revoked after the connection opened must not
-   * keep reading the stream for the life of the socket, and a busy stream must
-   * not keep it reading either.
+   * do not postpone it. Resolving false (or failing) closes the socket with
+   * `SCHEDULER_STREAM_CLOSE.tokenRevoked`: a bearer that was rotated or revoked
+   * after the connection opened must not keep reading the stream for the life
+   * of the socket, and a busy stream must not keep it reading either.
    */
   stillAuthorized?: () => Promise<boolean>;
   /**
    * Called exactly once, when the connection's loop has stopped, with why it
    * stopped: a resync reason, `unauthorized`, or `cancelled` (the peer or the
-   * server closed the response). For tests and diagnostics; it decides nothing.
+   * server closed the socket). For tests and diagnostics; it decides nothing.
    */
   onEnd?: (why: ResyncReason | "unauthorized" | "cancelled") => void;
 }
 
 /**
- * THE KEEPALIVE MUST BEAT THE SERVER'S IDLE TIMEOUT. The API is `Bun.serve`,
- * whose default `idleTimeout` is 10 seconds: a connection that writes nothing
- * for that long is closed by the server. A 15-second keepalive therefore never
- * went out on a quiet stream — the server cut the connection first, every ten
- * seconds, and the scheduler rebuilt on each cut. Found by running the real
- * scheduler against the real API (scripts/tests/integration/
- * scheduler-api-runtime.test.ts); every unit test drove the stream with its
- * own short interval and could not see it.
+ * The keepalive interval. The WebSocket's own ping/pong is the transport
+ * keepalive (§6.3 "Silent failure detection"); this frame is the application's
+ * and carries the head, which a ping cannot.
  */
-const STREAM_DEFAULTS = { keepaliveMs: 5_000, pollMs: 500, bufferFrames: 1_000 } as const;
+const STREAM_DEFAULTS = { keepaliveMs: 5_000, pollMs: 500, bufferBytes: 1024 * 1024 } as const;
 
 /**
- * An SSE COMMENT, written the moment a subscription opens.
- *
- * `Bun.serve` sends a streamed response's headers with its first chunk, so a
- * subscription with no event to deliver and no keepalive due sent NOTHING —
- * not even its status line — and the scheduler's bounded header wait gave up
- * on a perfectly healthy connection. A comment line (`:`) is not a frame: the
- * SSE format says a consumer ignores it, and both parsers in this repo drop a
- * chunk with no `event:` line. So it flushes the headers and changes nothing a
- * subscriber reads.
+ * The close codes the scheduler stream ends with (D55 (11): "an explicit close
+ * code"). Private-use codes (4000-4999, RFC 6455 §7.4.2), declared again,
+ * field for field, in scripts/lib/system-scheduler/types.ts;
+ * scripts/tests/unit/system-scheduler-wire-parity.test.ts holds the two to
+ * each other. Every one of them means the same thing to the scheduler — the
+ * copy is no longer provably current, so full read and rebuild (§3.1) — and
+ * the code says why, so an operator reading a log can tell a stalled reader
+ * from a rotated token.
  */
-const STREAM_OPEN_COMMENT = ": subscribed\n\n";
+export const SCHEDULER_STREAM_CLOSE = {
+  /** Sent after the one `resync` frame: the API cannot serve from where the subscriber stands. */
+  resync: 4000,
+  /** The token was revoked or rotated while the socket was open; no frame precedes it. */
+  tokenRevoked: 4001,
+} as const;
 
-type StreamServeFrame =
-  | { event: "event"; data: ServedStreamEvent }
-  | { event: "keepalive"; data: { head: number } }
-  | { event: "resync"; data: { reason: ResyncReason; head: number | null } };
-
-const encodeStreamFrame = (f: StreamServeFrame): string => `event: ${f.event}\ndata: ${JSON.stringify(f.data)}\n\n`;
+/** One frame on the socket, as JSON text. The `type` field is the discriminant the scheduler reads. */
+export type StreamServeFrame =
+  | ({ type: "event" } & ServedStreamEvent)
+  | { type: "keepalive"; head: number }
+  | { type: "resync"; reason: ResyncReason; head: number | null };
 
 /**
- * Open a subscription from `cursor`.
+ * What the serving loop writes to: one WebSocket, seen through the three
+ * things the loop needs from it. backend/src/api/routes/swarm-stream.ts adapts
+ * Bun's ServerWebSocket to this; a test may hand in its own.
+ */
+export interface StreamSink {
+  /**
+   * Send one text frame. `sent` — written or queued within the server's
+   * limit; `backpressure` — queued, but the socket's backlog is past the
+   * server's limit (Bun's `send` returning -1); `closed` — dropped because the
+   * connection is gone (Bun's 0).
+   */
+  send(text: string): "sent" | "backpressure" | "closed";
+  /** Bytes queued on this socket and not yet written to the peer. */
+  bufferedAmount(): number;
+  close(code: number, reason: string): void;
+}
+
+/** A running subscription. `stop` is what the socket's close handler calls. */
+export interface SchedulerStreamHandle {
+  stop(): void;
+  /** Resolves when the loop has ended, whoever ended it. */
+  readonly done: Promise<void>;
+}
+
+/**
+ * Serve the §6.3 stream from `cursor` onto one socket.
  *
  * The shape of the connection, in order:
  *
- *   1. If the cursor cannot be served, ONE resync frame and close. Not an empty
- *      stream, and not a skip forward to the head (§6.3).
- *   2. Events above the cursor, in order, for as long as the connection lives.
+ *   1. If the cursor cannot be served (above the head, below the retained
+ *      floor, or the database cannot say), ONE resync frame and a close. Not an
+ *      empty stream, and not a skip forward to the head.
+ *   2. Events above the cursor, in order, for as long as the socket lives.
  *      Each served event must be the one after the last sent; an event missing
- *      from the middle (pruned while the connection was open) is a resync and
- *      a close, never a jump.
+ *      from the middle (pruned while the socket was open) is a resync and a
+ *      close, never a jump.
  *   3. A keepalive carrying the head sequence whenever the keepalive interval
  *      passes with nothing else sent.
- *   4. The bearer re-checked every keepalive interval, busy or quiet; a bearer
- *      that no longer authorizes ends the connection.
+ *   4. The token re-checked every keepalive interval, busy or quiet; a token
+ *      that no longer authorizes ends the socket with its own close code.
+ *   5. Before every frame, the socket's outbound backlog against
+ *      `bufferBytes`; past it — or on a send the server itself reports as
+ *      backpressured — one resync frame (`buffer_overflow`) and a close. The
+ *      frames already queued stay queued, so the subscriber reads a gapless
+ *      prefix, then the reason, then the close: nothing is dropped from the
+ *      middle to make room.
  *
  * NO STATE IS EVER CLAIMED FROM A FAILED READ. A database error while reading
- * events or the head ends the connection with `resync: unavailable`; it never
- * reads as "no new events" or as a stale head, either of which would tell the
+ * events or the head ends the socket with `resync: unavailable`; it never reads
+ * as "no new events" or as a stale head, either of which would tell the
  * subscriber it is current when nothing proves it.
  *
- * THE LOOP DIES WITH THE CONNECTION. `cancel` flips the flag the loop reads, so
- * a disconnected subscriber leaves nothing running — which is the difference
+ * THE LOOP DIES WITH THE SOCKET. `stop` flips the flag the loop reads, so a
+ * disconnected subscriber leaves nothing running — which is the difference
  * between serving a connection and being a background process.
  */
-export function openSchedulerStream(cursor: number, opts: StreamOptions = {}): Response {
+export function serveSchedulerStream(cursor: number, sink: StreamSink, opts: StreamOptions = {}): SchedulerStreamHandle {
   const keepaliveMs = opts.keepaliveMs ?? STREAM_DEFAULTS.keepaliveMs;
   const pollMs = opts.pollMs ?? STREAM_DEFAULTS.pollMs;
-  const bufferFrames = opts.bufferFrames ?? STREAM_DEFAULTS.bufferFrames;
+  const bufferBytes = opts.bufferBytes ?? STREAM_DEFAULTS.bufferBytes;
   let live = true;
   // Why the connection stopped, reported once through `onEnd`. The first
-  // cause recorded wins: a resync closes the controller, which a consumer may
-  // then see as a cancel.
+  // cause recorded wins: a resync closes the socket, whose close handler then
+  // calls `stop`.
   let endedBy: ResyncReason | "unauthorized" | "cancelled" | null = null;
-  let reported = false;
   const ended = (why: ResyncReason | "unauthorized" | "cancelled"): void => {
     endedBy ??= why;
   };
-  const report = (): void => {
-    if (reported) return;
-    reported = true;
+  const close = (code: number, reason: string): void => {
+    live = false;
     try {
-      opts.onEnd?.(endedBy ?? "cancelled");
+      sink.close(code, reason);
     } catch {
-      /* a diagnostic hook never breaks the connection */
+      /* already closed by the peer */
+    }
+  };
+  const write = (f: StreamServeFrame): "sent" | "backpressure" | "closed" => {
+    try {
+      return sink.send(JSON.stringify(f));
+    } catch {
+      return "closed";
+    }
+  };
+  // The last frame a connection ever sends: the reason, then the close.
+  const resyncAndClose = (reason: ResyncReason, head: number | null): void => {
+    ended(reason);
+    if (live) write({ type: "resync", reason, head });
+    close(SCHEDULER_STREAM_CLOSE.resync, `resync: ${reason}`);
+  };
+  const headOrNull = async (): Promise<number | null> => {
+    try {
+      return await streamHeadSequence();
+    } catch {
+      return null;
+    }
+  };
+  /**
+   * Send one frame, or end the connection when the socket's backlog is past
+   * its bound. The resync that replaces the frame is the ONLY thing written
+   * past the bound.
+   */
+  const send = async (f: StreamServeFrame): Promise<boolean> => {
+    if (!live) return false;
+    if (sink.bufferedAmount() > bufferBytes) {
+      resyncAndClose("buffer_overflow", await headOrNull());
+      return false;
+    }
+    const r = write(f);
+    if (r === "closed") {
+      ended("cancelled");
+      live = false;
+      return false;
+    }
+    if (r === "backpressure") {
+      // The frame was queued, so it is not lost; nothing may follow it but
+      // the reason.
+      resyncAndClose("buffer_overflow", await headOrNull());
+      return false;
+    }
+    return live;
+  };
+
+  const run = async (): Promise<void> => {
+    let reason: ResyncReason | null;
+    try {
+      reason = await resyncReasonFor(cursor);
+    } catch {
+      resyncAndClose("unavailable", null);
+      return;
+    }
+    if (reason) {
+      resyncAndClose(reason, await headOrNull());
+      return;
+    }
+
+    let sent = cursor;
+    let lastFrameAt = Date.now();
+    let lastAuthAt = Date.now();
+    while (live) {
+      // The token is re-checked on its own clock. It used to ride the
+      // keepalive, which only goes out when a poll finds nothing, so a rotated
+      // token kept reading for as long as events kept flowing.
+      if (opts.stillAuthorized && Date.now() - lastAuthAt >= keepaliveMs) {
+        if (!(await opts.stillAuthorized().catch(() => false))) {
+          ended("unauthorized");
+          close(SCHEDULER_STREAM_CLOSE.tokenRevoked, "token revoked or rotated");
+          break;
+        }
+        lastAuthAt = Date.now();
+      }
+      if (!live) break;
+      let events: ServedStreamEvent[];
+      try {
+        events = await eventsAbove(sent);
+      } catch {
+        resyncAndClose("unavailable", null);
+        break;
+      }
+      for (const e of events) {
+        if (e.seq !== sent + 1) {
+          // The next number this subscriber needs is not in the log any
+          // more: pruned between two polls. Serving `e` would skip it.
+          resyncAndClose("log_truncated", await headOrNull());
+          break;
+        }
+        if (!(await send({ type: "event", ...e }))) break;
+        sent = e.seq;
+      }
+      if (!live) break;
+      if (events.length > 0) lastFrameAt = Date.now();
+      else if (Date.now() - lastFrameAt >= keepaliveMs) {
+        // §6.3: "Each keepalive from the API includes the sequence number of
+        // the last event it committed." The HEAD of the log, not `sent` —
+        // the whole point is that a subscriber behind the head can tell. A
+        // head that cannot be read is not replaced by a guess.
+        const head = await headOrNull();
+        if (head === null) {
+          resyncAndClose("unavailable", null);
+          break;
+        }
+        if (!(await send({ type: "keepalive", head }))) break;
+        lastFrameAt = Date.now();
+      }
+      if (!live) break;
+      await Bun.sleep(pollMs);
     }
   };
 
-  const body = new ReadableStream<Uint8Array>(
-    {
-      async start(controller) {
-        const encoder = new TextEncoder();
-        const close = (): void => {
-          live = false;
-          try {
-            controller.close();
-          } catch {
-            /* already closed by the consumer */
-          }
-        };
-        const enqueue = (text: string): void => {
-          try {
-            controller.enqueue(encoder.encode(text));
-          } catch {
-            live = false;
-          }
-        };
-        // The last frame a connection ever sends: the reason, then the close.
-        const resyncAndClose = (reason: ResyncReason, head: number | null): void => {
-          ended(reason);
-          if (live) enqueue(encodeStreamFrame({ event: "resync", data: { reason, head } }));
-          close();
-        };
-        const headOrNull = async (): Promise<number | null> => {
-          try {
-            return await streamHeadSequence();
-          } catch {
-            return null;
-          }
-        };
-        /**
-         * Send one frame, or end the connection if its buffer is full. The
-         * resync that replaces the frame is the ONLY thing enqueued past the
-         * limit: the subscriber reads what it was sent, then the reason, and
-         * nothing is dropped from the middle.
-         */
-        const send = async (f: StreamServeFrame): Promise<boolean> => {
-          if (!live) return false;
-          if ((controller.desiredSize ?? 1) <= 0) {
-            resyncAndClose("buffer_overflow", await headOrNull());
-            return false;
-          }
-          enqueue(encodeStreamFrame(f));
-          return live;
-        };
+  const done = run()
+    .catch(() => {
+      if (live) resyncAndClose("unavailable", null);
+    })
+    .finally(() => {
+      live = false;
+      try {
+        opts.onEnd?.(endedBy ?? "cancelled");
+      } catch {
+        /* a diagnostic hook never breaks the connection */
+      }
+    });
 
-        enqueue(STREAM_OPEN_COMMENT);
-
-        let reason: ResyncReason | null;
-        try {
-          reason = await resyncReasonFor(cursor);
-        } catch {
-          resyncAndClose("unavailable", null);
-          report();
-          return;
-        }
-        if (reason) {
-          resyncAndClose(reason, await headOrNull());
-          report();
-          return;
-        }
-
-        let sent = cursor;
-        let lastFrameAt = Date.now();
-        let lastAuthAt = Date.now();
-        // Drive the connection from here rather than from a module-level timer:
-        // this promise is owned by the stream and ends when `live` goes false.
-        void (async () => {
-          while (live) {
-            // The bearer is re-checked on its own clock. It used to ride the
-            // keepalive, which only goes out when a poll finds nothing, so a
-            // rotated token kept reading for as long as events kept flowing.
-            if (opts.stillAuthorized && Date.now() - lastAuthAt >= keepaliveMs) {
-              if (!(await opts.stillAuthorized().catch(() => false))) {
-                ended("unauthorized");
-                close();
-                break;
-              }
-              lastAuthAt = Date.now();
-            }
-            let events: ServedStreamEvent[];
-            try {
-              events = await eventsAbove(sent);
-            } catch {
-              resyncAndClose("unavailable", null);
-              break;
-            }
-            for (const e of events) {
-              if (e.seq !== sent + 1) {
-                // The next number this subscriber needs is not in the log any
-                // more: pruned between two polls. Serving `e` would skip it.
-                resyncAndClose("log_truncated", await headOrNull());
-                break;
-              }
-              if (!(await send({ event: "event", data: e }))) break;
-              sent = e.seq;
-            }
-            if (!live) break;
-            if (events.length > 0) lastFrameAt = Date.now();
-            else if (Date.now() - lastFrameAt >= keepaliveMs) {
-              // §6.3: "Each keepalive from the API includes the sequence number
-              // of the last event it committed." The HEAD of the log, not
-              // `sent` — the whole point is that a subscriber behind the head
-              // can tell. A head that cannot be read is not replaced by a guess.
-              const head = await headOrNull();
-              if (head === null) {
-                resyncAndClose("unavailable", null);
-                break;
-              }
-              if (!(await send({ event: "keepalive", data: { head } }))) break;
-              lastFrameAt = Date.now();
-            }
-            if (!live) break;
-            await Bun.sleep(pollMs);
-          }
-          close();
-          report();
-        })();
-      },
-      cancel() {
-        ended("cancelled");
-        live = false;
-      },
+  return {
+    stop() {
+      ended("cancelled");
+      live = false;
     },
-    // Counted in frames: the open comment and every frame is one chunk. See
-    // `bufferFrames`: behind Bun.serve this queue is drained eagerly.
-    new CountQueuingStrategy({ highWaterMark: bufferFrames }),
-  );
-
-  return new Response(body, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-store",
-      Connection: "keep-alive",
-    },
-  });
+    done,
+  };
 }
 
 
@@ -5176,8 +5232,8 @@ export interface JudgeStreamOptions {
   refreshMs?: number;
 }
 
-// Under `Bun.serve`'s 10-second default idle timeout for the reason
-// STREAM_DEFAULTS gives: a quiet connection has to write something first. The
+// Under `Bun.serve`'s 10-second default idle timeout: a quiet SSE connection
+// has to write something first, or the server cuts it. The
 // keepalive threshold sits under the refresh interval, so an unchanged pending
 // set still writes a keepalive on every refresh — at most five seconds apart.
 const JUDGE_STREAM_DEFAULTS = { keepaliveMs: 4_000, refreshMs: 5_000 } as const;

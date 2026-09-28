@@ -93,7 +93,7 @@ test("turnover closes N and opens N+1, and N+1 closes EXACTLY one duration after
   expect(closed.state).toBe("window_closed");
   expect(closed.successor_session_id).toBe(r.openedSessionId);
 
-  const opened = await sessionRow(r.openedSessionId);
+  const opened = await sessionRow(r.openedSessionId!);
   expect(opened.state).toBe("collecting");
   // §2.2: "on an unchanged grid, exactly `window_closes_at + epoch_duration`"
   // — measured from N's CLOSE, not from the instant the turnover ran. Here the
@@ -106,7 +106,7 @@ test("turnover closes N and opens N+1, and N+1 closes EXACTLY one duration after
       FROM swarm_sessions n JOIN swarm_sessions n1 ON n1.id = n.successor_session_id
      WHERE n.id = ${sessionId}`;
   expect(row).toEqual({ exact: true, longer_than_one: true });
-  expect((await onGrid(r.openedSessionId)).exact).toBe(true);
+  expect((await onGrid(r.openedSessionId!)).exact).toBe(true);
 
   // There is no gap: exactly one collecting session for the subject, always.
   expect((await collectingSessions(subjectId)).length).toBe(1);
@@ -151,7 +151,7 @@ test("NO DRIFT: after ten late turnovers every close equals epoch_anchor + k × 
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.replayed).toBe(false);
-    chain.push(r.openedSessionId);
+    chain.push(r.openedSessionId!);
     await sql`UPDATE swarm_subjects SET epoch_anchor = epoch_anchor - make_interval(secs => ${D}) WHERE id = ${subjectId}`;
     await sql`UPDATE swarm_sessions SET window_closes_at = window_closes_at - make_interval(secs => ${D})
                WHERE subject_id = ${subjectId}`;
@@ -247,19 +247,22 @@ test("ONE PRESENT, READ AT THE COMPARISON: a turnover that waited past the next 
   expect(row).toEqual({ after_release: true, second_slot: true });
 });
 
-test("a refused turnover closes NOTHING: an inactive subject's collecting epoch stays exactly as it was", async () => {
+test("a refused turnover closes NOTHING: a named epoch of another subject stays exactly as it was", async () => {
   // §5: a refusal is a reasoned no-op. The subject-status check used to run
   // AFTER the UPDATE that closed N, and a refusal returned from inside
   // `sql.begin` COMMITS — so "refused" and "closed, absences recorded" were
-  // one and the same outcome.
-  const { subjectId, sessionId } = await openedEpoch("to_refuse_inactive");
-  await sql`UPDATE swarm_subjects SET status = 'inactive' WHERE id = ${subjectId}`;
+  // one and the same outcome. That check is gone (D55 (4): an inactive
+  // subject's window turns over like any other, below), so the property is
+  // held on the refusal that remains once the subject is locked: an epoch
+  // named for the wrong subject.
+  const { sessionId } = await openedEpoch("to_refuse_other");
+  const { subjectId: other } = await openedEpoch("to_refuse_other_subject");
   const head = await epoch.streamHeadSequence();
 
-  const r = await epoch.turnOverEpoch(subjectId, sessionId);
+  const r = await epoch.turnOverEpoch(other, sessionId);
   expect(r.ok).toBe(false);
   if (r.ok) return;
-  expect(r.error).toBe("subject_not_active");
+  expect(r.error).toBe("expected_session_not_for_subject");
 
   const s = await sessionRow(sessionId);
   expect(s.state).toBe("collecting");
@@ -269,6 +272,46 @@ test("a refused turnover closes NOTHING: an inactive subject's collecting epoch 
   expect((await sql`SELECT 1 FROM swarm_agent_health_events WHERE session_id = ${sessionId}`).length).toBe(0);
   expect((await sql`SELECT 1 FROM swarm_stream_events WHERE seq > ${head}`).length).toBe(0);
   expect(await epoch.streamHeadSequence()).toBe(head);
+});
+
+test("an INACTIVE subject's window turns over at its boundary: N closes and settles, and no N+1 opens (§4.5, D55 (4))", async () => {
+  // §4.3: "opens epoch N+1 … but only if the subject is active at that
+  // instant". This test used to pin the retired rule, under which the
+  // turnover of an inactive subject was refused with `subject_not_active`
+  // (the deactivation having closed the window itself). Now the window runs
+  // to its close and this turnover is the one transaction that closes it.
+  await setJudgeMode("off");
+  const { subjectId, sessionId } = await openedEpoch("to_inactive_boundary");
+  await sql`UPDATE swarm_subjects SET status = 'inactive' WHERE id = ${subjectId}`;
+  const head = await epoch.streamHeadSequence();
+
+  const r = await epoch.turnOverEpoch(subjectId, sessionId);
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  expect(r).toMatchObject({ closedSessionId: sessionId, openedSessionId: null, windowClosesAt: null, replayed: false });
+
+  const s = await sessionRow(sessionId);
+  expect(s.state).toBe("window_closed");
+  expect(s.judge_mode).toBe("off");
+  expect(s.judging_duration_seconds).toBe(900);
+  expect(s.successor_session_id).toBeNull();
+  expect((await collectingSessions(subjectId)).length).toBe(0);
+  // One event, in the same transaction: N closed, nothing opened.
+  const events = await sql<{ seq: string; kind: string; payload: Record<string, unknown> }[]>`
+    SELECT seq, kind, payload FROM swarm_stream_events WHERE seq > ${head} ORDER BY seq`;
+  expect(events.map((e) => [Number(e.seq), e.kind, e.payload])).toEqual([
+    [head + 1, "epoch.turned_over", { closedSessionId: sessionId, openedSessionId: null, windowClosesAt: null }],
+  ]);
+
+  // A retry after a lost response replays the original result, publishing
+  // nothing, so the scheduler settles N rather than recording a refusal.
+  const again = await epoch.turnOverEpoch(subjectId, sessionId);
+  expect(again).toMatchObject({ ok: true, closedSessionId: sessionId, openedSessionId: null, replayed: true });
+  expect(await epoch.streamHeadSequence()).toBe(head + 1);
+
+  // And it settles like any other closed epoch.
+  expect((await epoch.aggregateEpoch(sessionId)).ok).toBe(true);
+  expect(await epoch.finalizeEpoch(sessionId)).toMatchObject({ ok: true, state: "published", outcome: "not_judged" });
 });
 
 test("HTTP: POST epochs/turnover without expectedSessionId is a 400 and changes nothing", async () => {
@@ -330,7 +373,7 @@ test("dropping a successful turnover's response and retrying replays it, never t
   expect(retry.openedSessionId).toBe(first.openedSessionId);
 
   // N+1 is NEVER closed by a retry aimed at N.
-  expect((await sessionRow(first.openedSessionId)).state).toBe("collecting");
+  expect((await sessionRow(first.openedSessionId!)).state).toBe("collecting");
   expect((await sql`SELECT id FROM swarm_sessions WHERE subject_id = ${subjectId}`).length).toBe(2);
 });
 
@@ -346,7 +389,7 @@ test("a stale timer that fires after a turnover this scheduler did not make is a
   expect(stale.ok).toBe(true);
   if (!stale.ok) return;
   expect(stale.openedSessionId).toBe(other.openedSessionId);
-  expect((await sessionRow(other.openedSessionId)).state).toBe("collecting");
+  expect((await sessionRow(other.openedSessionId!)).state).toBe("collecting");
   expect((await sql`SELECT id FROM swarm_sessions WHERE subject_id = ${subjectId}`).length).toBe(2);
 });
 
@@ -453,7 +496,7 @@ test("the judge mode in force is captured on the closing epoch, and a later chan
   // An admin changing the mode afterwards affects LATER sessions only.
   await setJudgeMode("off");
   expect((await sessionRow(sessionId)).judge_mode).toBe("enforce");
-  const second = await epoch.turnOverEpoch(subjectId, r.openedSessionId);
+  const second = await epoch.turnOverEpoch(subjectId, r.openedSessionId!);
   expect(second.ok).toBe(true);
   if (!second.ok) return;
   expect(second.judgeMode).toBe("off");
@@ -471,13 +514,13 @@ test("the judging duration in force is captured on the closing epoch, and a late
   if (!r.ok) return;
   expect((await sessionRow(sessionId)).judging_duration_seconds).toBe(240);
   // Still collecting: nothing is captured on the successor until IT closes.
-  expect((await sessionRow(r.openedSessionId)).judging_duration_seconds).toBeNull();
+  expect((await sessionRow(r.openedSessionId!)).judging_duration_seconds).toBeNull();
 
   await sql`UPDATE swarm_subjects SET judging_duration_seconds = 60 WHERE id = ${subjectId}`;
   expect((await sessionRow(sessionId)).judging_duration_seconds).toBe(240);
-  const second = await epoch.turnOverEpoch(subjectId, r.openedSessionId);
+  const second = await epoch.turnOverEpoch(subjectId, r.openedSessionId!);
   expect(second.ok).toBe(true);
-  expect((await sessionRow(r.openedSessionId)).judging_duration_seconds).toBe(60);
+  expect((await sessionRow(r.openedSessionId!)).judging_duration_seconds).toBe(60);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

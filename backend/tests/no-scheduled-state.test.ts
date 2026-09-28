@@ -123,19 +123,23 @@ test("at runtime: open, take, mid-epoch join, turnover, settlement, deactivation
   const absent = await sql<{ member_id: string }[]>`
     SELECT member_id FROM swarm_agent_health_events WHERE session_id = ${opened.sessionId} AND event_type = 'absent'`;
   expect(absent.map((r) => r.member_id)).toEqual([silent.id]);
-  expect((await sessionRow(turned.openedSessionId)).state).toBe("collecting");
-  expect(await seatedIn(turned.openedSessionId)).toEqual([filer.id, silent.id, late.id].sort());
-  expect((await submitTake(late, sessionDate(await sessionRow(turned.openedSessionId)), subjectId)).ok).toBe(true);
+  expect((await sessionRow(turned.openedSessionId!)).state).toBe("collecting");
+  expect(await seatedIn(turned.openedSessionId!)).toEqual([filer.id, silent.id, late.id].sort());
+  expect((await submitTake(late, sessionDate(await sessionRow(turned.openedSessionId!)), subjectId)).ok).toBe(true);
 
   // Settlement of N under judge mode `off`.
   expect((await ic.aggregateEpoch(opened.sessionId)).ok).toBe(true);
   expect((await ic.finalizeEpoch(opened.sessionId)).ok).toBe(true);
   expect((await sessionRow(opened.sessionId)).state).toBe("published");
 
-  // An admin deactivates the subject, then activates it; the scheduler opens
-  // its first epoch again.
+  // An admin deactivates the subject; its open window N+1 runs to its close
+  // (D55 (4)), and the boundary turnover closes it with no successor. The
+  // admin then activates it; the scheduler opens its first epoch again.
   let [subject] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${subjectId}`;
   expect((await admin.deactivateSubjectAdmin(subjectId, Number(subject!.version))).ok).toBe(true);
+  expect((await sessionRow(turned.openedSessionId!)).state).toBe("collecting");
+  const boundary = await ic.turnOverEpoch(subjectId, turned.openedSessionId!);
+  expect(boundary.ok && boundary.openedSessionId).toBeNull();
   [subject] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${subjectId}`;
   expect((await admin.activateSubjectAdmin(subjectId, Number(subject!.version))).ok).toBe(true);
   const reopened = await ic.openEpoch(subjectId);

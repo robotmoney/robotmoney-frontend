@@ -69,6 +69,7 @@ export const ROUTES: {
     submit: string;
     scheduler: {
       fullRead: string;
+      /** A WebSocket upgrade (D55 (11)): `?cursor=N` only; the token only in the `Authorization` header. */
       subscribe: string;
     };
     participants: {

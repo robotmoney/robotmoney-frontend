@@ -9,7 +9,6 @@
 // surface. Where this module's session lifecycle overlaps with domain.ts (e.g.
 // aggregateSessionGuarded still calls domain.aggregateSession for the rich
 // rollup), it composes those functions rather than duplicating them.
-import { createHash } from "node:crypto";
 import { sql, type DbHandle } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
 import { isRegistrablePublicKey } from "../lib/signing.ts";
@@ -20,7 +19,6 @@ import {
   isHandleUniqueViolation,
   SWARM_ROSTER_CAP,
   appendStreamEvent,
-  closeEpochForDeactivation,
   listJudgements,
   sessionJudgeFingerprint,
 } from "./domain.ts";
@@ -32,16 +30,6 @@ import { deriveMemberHandle } from "./handle.ts";
 // (issue #1026): nothing in this module judges.
 import { getJudgeConfig, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-config.ts";
 import { ConsensusReceiptRefusal, publishConsensusReceipt } from "./consensus-receipt.ts";
-// R13 — the TEST-ONLY judge fault-injection lever (AC-E2E-06). Its ONLY writer
-// is the admin path below, so that every transition is an audited admin action
-// exactly as `swarm_judge_config.mode` already is.
-import {
-  assertFaultInjectionAllowed,
-  getJudgeFaultInjection,
-  JudgeFaultInjectionRefused,
-  writeJudgeFaultInjection,
-  type JudgeFaultInjectionState,
-} from "./judge-fault-injection.ts";
 // The published shape of this module's member projection. Imported for the
 // `: AdminMember` return annotation on toMemberAdmin() below — see the comment
 // there (issue #572).
@@ -348,15 +336,36 @@ export async function updateSubjectAdmin(
   });
 }
 
+/**
+ * Deactivate a subject: `active → inactive`, versioned.
+ *
+ * A SUBJECT EDIT, AND NOTHING ELSE (D55 (4) as corrected 2026-09-25: "the
+ * window runs to its close"). It sets the subject inactive, publishes
+ * `subject.changed` with reason `deactivated`, and writes its audit row — in
+ * one transaction (§9), so the clock is never told about a deactivation that
+ * rolled back and never misses one that committed. It CLOSES NOTHING:
+ *
+ *   * the open window stays `collecting` until its grid boundary and accepts
+ *     takes until `window_closes_at` (§4.2, §4.5);
+ *   * at that boundary `system-scheduler` turns the epoch over as usual —
+ *     the turnover closes and settles N and opens no N+1, because the subject
+ *     is inactive (domain.ts `turnOverEpoch`);
+ *   * a reactivation inside that window opens nothing, because the subject
+ *     still has its `collecting` session.
+ *
+ * A close here would be the admin early close D55 (4) forbids, and a
+ * deactivate-then-activate pair would be the banned early turnover in two
+ * calls.
+ */
 export async function deactivateSubjectAdmin(
   id: string,
   expectedVersion: number,
   actor: Actor = ADMIN_ACTOR,
 ): Promise<AdminResult> {
   return sql.begin(async (tx) => {
-    // `FOR NO KEY UPDATE` for updateSubjectAdmin's reason: the close below
-    // writes the open session, which a take in flight may hold while it waits
-    // on a key-share lock of this row.
+    // `FOR NO KEY UPDATE` for updateSubjectAdmin's reason, and so a boundary
+    // turnover of this subject (which takes the same lock) reads the status
+    // either before or after this edit, never half of it.
     const row = (await tx`SELECT * FROM swarm_subjects WHERE id = ${id} FOR NO KEY UPDATE`)[0];
     if (!row) return err(404, "subject not found");
     if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
@@ -365,20 +374,14 @@ export async function deactivateSubjectAdmin(
       WHERE id = ${id} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
-    // Scheduler spec §4.5: "Deactivating a subject through the admin API closes
-    // its open epoch (recording absences as in §4.3) and opens no new one."
-    // In the SAME transaction as the status flip, so a crash between them
-    // cannot leave an inactive subject with a window still advertised open.
-    // Settlement of the closed epoch still has to finish, and §3 step 3 makes
-    // the scheduler pick it up on its next rebuild.
-    const closedEpochId = await closeEpochForDeactivation(id, tx);
-    // §6.2: on deactivation the scheduler "drops its boundary timer and settles
-    // the closed epoch". Same transaction as the status flip and the close.
+    // §6.2: on deactivation the scheduler keeps the open session's boundary
+    // timer, so the boundary turns it over with no successor (§4.5). The
+    // event carries no closed epoch, because none closed.
     await appendStreamEvent(tx, "subject.changed", {
       subjectId: id,
-      payload: { reason: "deactivated", closedEpochId },
+      payload: { reason: "deactivated" },
     });
-    await audit(actor, "subject_deactivate", { subjectId: id, closedEpochId }, tx);
+    await audit(actor, "subject_deactivate", { subjectId: id }, tx);
     return { ok: true, status: 200, subject: toSubjectAdmin(upd[0]) };
   });
 }
@@ -386,16 +389,16 @@ export async function deactivateSubjectAdmin(
 /**
  * Re-activate a subject: `inactive → active`, versioned like deactivate.
  *
- * A SUBJECT EDIT, NOT AN EPOCH ROUTE (D55 (4)). Scheduler spec §2.4:
- * "Activating a subject opens its first epoch (§3)", and §3 says who does the
- * opening: "An active subject with no session in `collecting` is opened
- * immediately as part of the rebuild — ... a subject deactivated and
- * re-activated. Nothing else opens a first epoch." So this flips the status
- * and publishes `subject.changed` with reason `activated` (§6.2: "on
- * activation opens its first epoch"), and opens NO session. `system-scheduler`
- * opens it from the event through `openEpoch`, which places the window on the
- * subject's grid. An admin path that opened the epoch itself would be the
- * operator lifecycle lever D55 removed.
+ * A SUBJECT EDIT, NOT AN EPOCH ROUTE (D55 (4)). Scheduler spec §3: "A first
+ * epoch is opened by the rebuild, or by the scheduler on an activation's
+ * `subject.changed`, and by nothing else." So this flips the status and
+ * publishes `subject.changed` with reason `activated`, and opens NO session.
+ * When the subject has no `collecting` session, `system-scheduler` opens its
+ * first epoch from the event through `openEpoch`, which places the window on
+ * the subject's grid. When it still has one — a reactivation inside the window
+ * a deactivation left running (§4.5) — nothing opens, and that window's
+ * boundary opens N+1 as usual. An admin path that opened the epoch itself
+ * would be the operator lifecycle lever D55 removed.
  *
  * Same transaction as the status flip (§9): the clock is never told about an
  * activation that rolled back, and never misses one that committed.
@@ -1346,116 +1349,6 @@ export async function setJudgeConfigAdmin(
     thirdPartyEnabled: judge.thirdPartyEnabled, warnings,
   });
   return { ok: true, status: 200, judge, warnings };
-}
-
-/**
- * READ the fault lever. Safe on every path and in every environment — knowing
- * whether the judge is being faulted is exactly what an operator staring at a
- * run of `malformed_output` judgements needs, and refusing to answer would make
- * an armed lever harder to find than to arm.
- *
- * The body is NOT projected. It is operator-supplied text chosen to be
- * malformed, it can be 20,000 characters, and a GET that echoes it turns the
- * admin surface into a place to park a payload. Its length and digest are
- * enough to say WHICH body is armed.
- */
-export async function getJudgeFaultInjectionAdmin(): Promise<AdminResult> {
-  const state = await getJudgeFaultInjection();
-  return { ok: true, status: 200, faultInjection: projectFaultInjection(state) };
-}
-
-function projectFaultInjection(state: JudgeFaultInjectionState) {
-  return {
-    enabled: state.enabled,
-    bodyChars: state.body.length,
-    bodyDigest: state.body ? createHash("sha256").update(state.body, "utf8").digest("hex").slice(0, 16) : null,
-    remaining: state.remaining,
-    sessionId: state.sessionId,
-    note: state.note,
-    updatedBy: state.updatedBy,
-    updatedAt: state.updatedAt,
-  };
-}
-
-/**
- * ARM OR DISARM the fault lever (R13) — the one documented, audited way to make
- * the judge transport answer with a body an operator chose.
- *
- * THE REFUSAL IS THE FEATURE. `assertFaultInjectionAllowed` runs BEFORE the
- * write and only for `enabled: true`: a process without
- * `SWARM_JUDGE_FAULT_INJECTION` refuses (403 `fault_injection_refused`), and on
- * an ACCEPTANCE path — RM_ENV=prod, which staging and production both run, and
- * which an unset RM_ENV resolves to under D13 — it refuses again unless the
- * second opt-in `SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN` is also
- * present. Disarming is never refused.
- *
- * THE AUDIT ROW IS THE ACCEPTANCE ARTIFACT. Arming this on staging is a
- * RECORDED ACCEPTANCE MUTATION — while it is on, the judge is not exercising
- * the model, so nothing it writes is evidence about the model — and the pair of
- * `judge_fault_injection` rows (on, then off) is what an acceptance bundle
- * cites to bound the window. The BODY never reaches the audit row for the same
- * reason it never reaches the GET.
- *
- * ARMING IS REFUSED TODAY: THE LEVER HAS NO CONSUMER (issue #1026, D53 point
- * 4). Its only consumer was the backend `judgeSession()`, deleted when the
- * judge became a participant, and no participant reads the row yet. Accepting
- * `enabled: true` would return 200, write an audit row saying "the judge is now
- * answering from this table", and change no judging at all — the inert row an
- * operator believes is working, which is exactly what the 403 above exists to
- * prevent. So after the process gates pass (so a stack that could never arm it
- * still says so first), arming is refused with `fault_injection_has_no_consumer`
- * and writes nothing. Disarming stays open, so a row armed before the removal
- * can always be cleared. Lift this refusal in the change that makes the judge
- * participant consume the lever, and not before.
- */
-export const FAULT_INJECTION_HAS_CONSUMER: boolean = false;
-
-export async function setJudgeFaultInjectionAdmin(
-  patch: { enabled: boolean; body?: string; remaining?: number; sessionId?: string | null; note?: string | null },
-  actor: Actor = ADMIN_ACTOR,
-): Promise<AdminResult> {
-  if (patch.enabled) {
-    try {
-      assertFaultInjectionAllowed();
-    } catch (e) {
-      if (e instanceof JudgeFaultInjectionRefused) {
-        return { ...err(403, e.message), reason: e.gate, error: "fault_injection_refused", detail: e.message };
-      }
-      throw e;
-    }
-    if (!FAULT_INJECTION_HAS_CONSUMER) {
-      return {
-        ...err(409, "fault_injection_has_no_consumer"),
-        error: "fault_injection_has_no_consumer",
-        detail: "the judge fault-injection lever has no consumer: the backend judge that read it is deleted (D53) and no " +
-          "judge participant reads it yet, so arming it would change no judging. Nothing was written.",
-      };
-    }
-  }
-  let state: JudgeFaultInjectionState;
-  try {
-    state = await writeJudgeFaultInjection(patch, actor);
-  } catch (e) {
-    return err(400, e instanceof Error ? e.message : "invalid judge fault injection");
-  }
-  const projected = projectFaultInjection(state);
-  await audit(actor, "judge_fault_injection", {
-    ...projected,
-    acceptanceMutation: true,
-    testOnly: true,
-  });
-  return {
-    ok: true,
-    status: 200,
-    faultInjection: projected,
-    warnings: state.enabled
-      ? [
-        "TEST-ONLY: the consensus judge is now answering from swarm_judge_fault_injection, not from its model. " +
-        "Judgements written while this is armed are NOT evidence of model behaviour — they are a recorded acceptance " +
-        "mutation. Disarm it ({ enabled: false }) as the last step of the demonstration.",
-      ]
-      : [],
-  };
 }
 
 // ── The judgement record's read path (issue #767, folded from #768) ────────

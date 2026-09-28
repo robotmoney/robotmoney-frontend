@@ -20,6 +20,7 @@ import { handleSwarm } from "./routes/swarm.ts";
 import { handleAdmin } from "./routes/admin.ts";
 import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
+import { schedulerStreamWebSocket, upgradeSchedulerStream, type SchedulerStreamSocketData } from "./routes/swarm-stream.ts";
 import { corsPreflightResponse, withCors } from "./cors.ts";
 import { resolveClientIp } from "./client-ip.ts";
 
@@ -129,13 +130,31 @@ await assertAnalyticsLedgerGuardArmed();
   }
 }
 
-const server = Bun.serve({
+const server = Bun.serve<SchedulerStreamSocketData, never>({
   port: config.apiPort,
+  // THE SCHEDULER STREAM'S SOCKET (D55 (11), scheduler spec §6.3). The only
+  // WebSocket this process serves; routes/swarm-stream.ts owns its handler.
+  websocket: schedulerStreamWebSocket,
   async fetch(req, server) {
     const url = new URL(req.url);
     const { pathname } = url;
 
     if (req.method === "OPTIONS") return corsPreflightResponse(req, pathname);
+
+    // The scheduler's subscription upgrades here, before any other routing,
+    // because only `fetch` holds the server handle an upgrade needs. A refusal
+    // is an ordinary JSON response; an upgrade returns nothing, and Bun owns
+    // the connection from then on. No CORS: the caller is system-scheduler,
+    // never a browser.
+    if (pathname === ROUTES.swarm.scheduler.subscribe) {
+      try {
+        return await upgradeSchedulerStream(req, url, server);
+      } catch (err) {
+        if (isDatabaseUnavailable(err)) return json({ error: "database unavailable" }, 503);
+        console.error("api error:", err);
+        return json({ error: "internal error" }, 500);
+      }
+    }
 
     // Client ip for rate limiting. See client-ip.ts's resolveClientIp() for
     // the trust/parsing rules — TRUST_PROXY=1 only when a known proxy (now

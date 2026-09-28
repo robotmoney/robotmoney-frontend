@@ -315,6 +315,9 @@ describe("structural enforcement — a raw sql call outside the interface is det
   // a probe tests/db-registry-execution.test.ts runs as its declared role. 20
   // entries remain; what keeps each one here is reported with the change.
   //
+  // 2026-09-28 (#1026 W5): src/swarm/judge-fault-injection was deleted with
+  // the lever D55 (3) retired, not converted. 19 entries remain.
+  //
   // NEVER ADD A LINE HERE. An addition would be a new violation of §7.1 being
   // written down instead of fixed, which is the one thing a ratchet exists to
   // prevent. The only legal edit is a deletion.
@@ -336,7 +339,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "src/swarm/admin",
     "src/swarm/consensus-receipt",
     "src/swarm/domain",
-    "src/swarm/judge-fault-injection",
     "src/swarm/roster-seed",
     "src/worker/handlers/projects",
   ];
@@ -525,8 +527,10 @@ describe("structural enforcement — a raw sql call outside the interface is det
     expect(stale).toEqual([]);
     expect(new Set(RAW_SQL_ALLOWLIST).size).toBe(RAW_SQL_ALLOWLIST.length);
     // The recorded size. A longer list is an addition, whatever it is called.
-    // 50 when recorded; 20 after #1026 W3 moved thirty modules onto the registry.
-    expect(RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(20);
+    // 50 when recorded; 20 after #1026 W3 moved thirty modules onto the registry;
+    // 19 after #1026 W5 deleted src/swarm/judge-fault-injection with the lever
+    // D55 (3) retired.
+    expect(RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(19);
   });
 
   /** The scripts gate itself: every backend/scripts module issuing a raw

@@ -181,7 +181,7 @@ test("a retry still returns the existing record after the window closed and the 
   expect(resend.status).toBe(200);
   expect(resend.body).toMatchObject({ alreadySubmitted: true, recommendationId: first.body.recommendationId, verified: true });
   expect(await takeRows(sessionId, m.memberId)).toHaveLength(1);
-  if (turned.ok) expect(await takeRows(turned.openedSessionId, m.memberId)).toHaveLength(0);
+  if (turned.ok) expect(await takeRows(turned.openedSessionId!, m.memberId)).toHaveLength(0);
 });
 
 test("130 over HTTP: the participant's own take-runner persists the signed bytes, and resending them after a crash-restart settles as already_submitted against the real route", async () => {
@@ -419,7 +419,7 @@ test("a member amends twice while the window is open; after window_closes_at a t
   expect(afterTurnover.status).toBe(201);
   expect(await takeRows(sessionId, m.memberId)).toHaveLength(3);
   if (turned.ok) {
-    expect((await takeRows(turned.openedSessionId, m.memberId)).map((r) => [r.body, r.final])).toEqual([["later still", true]]);
+    expect((await takeRows(turned.openedSessionId!, m.memberId)).map((r) => [r.body, r.final])).toEqual([["later still", true]]);
   }
 });
 
@@ -582,3 +582,41 @@ for (const rebind of ["rotateMemberKeyAdmin", "registerMember"] as const) {
     await assertHistoryVerifies(subjectId, sessionId, m.memberId, [r1.body.recommendationId, r2.body.recommendationId]);
   });
 }
+
+// ── 127: the missing-receipt report counts the session's FINAL takes ────────
+
+test("127: the missing-receipt report's take count selects on the final flag, not on distinct verified members", async () => {
+  // D51: "every read that means 'the session's takes' selects on the flag".
+  // backend/src/swarm/receipt-gap.ts counts a published session's takes and
+  // gates `take_count >= min_takes_applied` on it. RED CONTROL, the same one
+  // the list take_count above uses: a member whose every row has lost the
+  // flag has takes but no final take, so `count(DISTINCT member_id) WHERE
+  // verified` (the old read) says 2 while the flag says 1. With min_takes 2
+  // the old read named the session as missing a receipt; the flag does not,
+  // exactly as loadFrozenTakeSet — what settlement digested — leaves that
+  // member out.
+  const { detectMissingReceiptSessions } = await import("../src/swarm/receipt-gap.ts");
+  const a = await member();
+  const b = await member();
+  const { subjectId, sessionId, date } = await openEpoch("gap_final");
+  expect((await send(a.token, await sign(a, date, subjectId, "a's take"))).status).toBe(201);
+  expect((await send(b.token, await sign(b, date, subjectId, "b's take"))).status).toBe(201);
+  await sql`UPDATE swarm_judge_config SET mode = 'enforce', model = 'test/receipt-gap-judge', min_takes = 2 WHERE id = 1`;
+  const turned = await ic.turnOverEpoch(subjectId, sessionId);
+  expect(turned.ok).toBe(true);
+  expect((await sessionRow(sessionId)).judge_mode).toBe("enforce");
+  // Published as `judged` with no receipt on file, so only the take-count
+  // clause can name it (a `no_consensus` outcome would name it by itself).
+  await sql`UPDATE swarm_sessions SET state = 'published', published_at = clock_timestamp(), judging_outcome = 'judged'
+             WHERE id = ${sessionId}`;
+  const named = async () => (await detectMissingReceiptSessions()).sessions.find((s) => s.sessionId === sessionId);
+
+  expect(await named()).toMatchObject({ trigger: "eligible_take_count", takeCount: 2, minTakesApplied: 2 });
+
+  await sql`UPDATE swarm_recommendations SET final = false WHERE session_id = ${sessionId} AND member_id = ${b.memberId}`;
+  const [{ byMember }] = await sql<{ byMember: number }[]>`
+    SELECT count(DISTINCT member_id)::int AS "byMember" FROM swarm_recommendations WHERE session_id = ${sessionId} AND verified`;
+  expect(byMember).toBe(2);
+  expect((await ic.loadFrozenTakeSet(sessionId))!.takes.map((t) => t.member_id)).toEqual([a.memberId]);
+  expect(await named()).toBeUndefined();
+});

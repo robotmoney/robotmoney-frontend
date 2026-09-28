@@ -2,8 +2,10 @@
 //
 // AUTHORITY: docs/technical/system-scheduler-spec.md §3, §4.3, §6.2 and §10.
 //
-//   §3: "It holds one timer per active subject: the instant that subject's
-//    current epoch closes. It also holds one timer per session in `judging` …
+//   §3: "It holds one boundary timer per `collecting` session: the instant
+//    that session's window closes. A session whose subject has been
+//    deactivated keeps its timer until its boundary (§4.5). It also holds one
+//    timer per session in `judging` …
 //    It fires at the instant. It does not poll the API on an interval. It does
 //    not tick."
 //
@@ -32,6 +34,9 @@
 // implementation with any interval at all fails it, because a poll that has not
 // yet noticed the instant has still MADE A CALL, and the fake API counts calls.
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SchedulerClock } from "../../lib/system-scheduler/clock.ts";
 import { realTimers } from "../../lib/system-scheduler/types.ts";
 import {
@@ -45,6 +50,8 @@ import {
 const DISPATCH_TOLERANCE_MS = 1_000;
 
 const T0 = 1_800_000_000_000;
+
+const CLOCK_SOURCE = join(import.meta.dir, "..", "..", "lib", "system-scheduler", "clock.ts");
 
 function harness(startMs = T0) {
   const timers = new FakeTimers(startMs);
@@ -240,29 +247,126 @@ describe("a duration change (§6.2, §10)", () => {
     expect(clock.boundaryAt("late")).toBe(T0 + 300_000);
   });
 
-  test("a deactivation event drops the boundary timer and settles the closed epoch (§4.5)", async () => {
-    const { api, clock } = harness();
-    api.addSubject("sub-a", 600);
-    api.addSession({ sessionId: "sa", subjectId: "sub-a", windowClosesAt: T0 + 600_000 });
-    await clock.rebuild(await api.fullRead());
-    await clock.idle();
-    expect(clock.timerCount.boundaries).toBe(1);
+  // D55 (4) as corrected 2026-09-25: THE WINDOW RUNS TO ITS CLOSE. The test
+  // that stood here pinned the retired rule (the admin route closed the epoch,
+  // the event named it, and the clock dropped the timer); the four below pin
+  // the corrected one, and the last is the red control for the first.
 
-    // The admin route closed the epoch and deactivated the subject.
-    api.subjects.get("sub-a")!.active = false;
-    api.sessions.get("sa")!.state = "window_closed";
+  /** A subject with one open window, rebuilt into the clock, then deactivated by an admin. */
+  async function deactivatedMidWindow(Clock: typeof SchedulerClock = SchedulerClock) {
+    const timers = new FakeTimers(T0);
+    const api = new FakeSchedulerApi({ now: () => timers.now() });
+    const clock = new Clock(api, { timers, sleep: async () => {} });
+    const h = { timers, api, clock };
+    h.api.addSubject("sub-a", 600);
+    h.api.addSession({ sessionId: "sa", subjectId: "sub-a", windowClosesAt: T0 + 600_000 });
+    await h.clock.rebuild(await h.api.fullRead());
+    await h.clock.idle();
+    expect(h.clock.timerCount.boundaries).toBe(1);
+    // The admin's edit: the subject goes inactive, and nothing else moves.
+    h.api.subjects.get("sub-a")!.active = false;
+    await h.clock.applyEvent({ ...subjectChangedEvent(1, "sub-a"), payload: { reason: "deactivated" } });
+    await h.clock.idle();
+    return h;
+  }
+
+  test("a deactivation event KEEPS the boundary timer; the window stays open and no call is made (§4.5)", async () => {
+    const { api, clock } = await deactivatedMidWindow();
+    expect(clock.boundaryAt("sub-a")).toBe(T0 + 600_000);
+    expect(api.sessions.get("sa")!.state).toBe("collecting");
+    expect(api.calls.filter((c) => c.call !== "fullRead")).toHaveLength(0);
+  });
+
+  test("at the boundary the clock turns the inactive subject's window over, settles it, and arms nothing (§4.3, §4.5)", async () => {
+    const { timers, api, clock } = await deactivatedMidWindow();
+    await timers.advanceTo(T0 + 600_000 - 1);
+    await clock.idle();
+    expect(api.countCalls("turnover")).toBe(0);
+
+    await timers.advanceTo(T0 + 600_000);
+    await clock.idle();
+    expect(api.callsOf("turnover").map((c) => c.args)).toEqual([{ subjectId: "sub-a", expectedSessionId: "sa" }]);
+    // Settled to published, no successor opened, and no timer left behind.
+    expect(api.sessions.get("sa")!.state).toBe("published");
+    expect(api.sessionsOf("sub-a")).toHaveLength(1);
+    expect(clock.timerCount).toEqual({ boundaries: 0, deadlines: 0 });
+    expect(api.countCalls("openEpoch")).toBe(0);
+  });
+
+  test("a reactivation while the window is still open opens nothing; the boundary then opens N+1 (§4.5)", async () => {
+    const { timers, api, clock } = await deactivatedMidWindow();
+    api.subjects.get("sub-a")!.active = true;
     await clock.applyEvent({
-      ...subjectChangedEvent(1, "sub-a"),
-      payload: { reason: "deactivated", closedEpochId: "sa" },
+      ...subjectChangedEvent(2, "sub-a"),
+      payload: { reason: "activated", epochDurationSeconds: 600 },
     });
     await clock.idle();
+    expect(api.countCalls("openEpoch")).toBe(0);
+    expect(clock.boundaryAt("sub-a")).toBe(T0 + 600_000);
 
+    await timers.advanceTo(T0 + 600_000);
+    await clock.idle();
+    const opened = api.sessionsOf("sub-a").filter((x) => x.state === "collecting");
+    expect(opened).toHaveLength(1);
+    expect(clock.boundaryAt("sub-a")).toBe(opened[0]!.windowClosesAt);
+  });
+
+  test("a reactivation after the boundary settled the window opens exactly one first epoch (§3)", async () => {
+    const { timers, api, clock } = await deactivatedMidWindow();
+    await timers.advanceTo(T0 + 600_000);
+    await clock.idle();
     expect(clock.boundaryAt("sub-a")).toBeNull();
-    expect(clock.timerCount.boundaries).toBe(0);
-    // Settlement of the closed epoch still had to finish.
+
+    api.subjects.get("sub-a")!.active = true;
+    await clock.applyEvent({
+      ...subjectChangedEvent(3, "sub-a"),
+      payload: { reason: "activated", epochDurationSeconds: 600 },
+    });
+    await clock.idle();
+    expect(api.countCalls("openEpoch")).toBe(1);
+    expect(api.sessionsOf("sub-a").filter((x) => x.state === "collecting")).toHaveLength(1);
+    expect(clock.boundaryAt("sub-a")).not.toBeNull();
+  });
+
+  test("a turnover this clock did not make, learned by event with no successor, drops the timer and settles N", async () => {
+    const { api, clock } = await deactivatedMidWindow();
+    // A second scheduler's boundary: N closed with no successor.
+    await api.turnover("sub-a", "sa");
+    api.calls.length = 0;
+    await clock.applyEvent({
+      type: "event",
+      seq: 2,
+      kind: "epoch.turned_over",
+      subjectId: "sub-a",
+      sessionId: "sa",
+      payload: { closedSessionId: "sa", openedSessionId: null, windowClosesAt: null },
+    });
+    await clock.idle();
+    expect(clock.boundaryAt("sub-a")).toBeNull();
     expect(api.sessions.get("sa")!.state).toBe("published");
-    // And no successor was opened.
-    expect(api.sessionsOf("sub-a")).toHaveLength(1);
+    expect(api.countCalls("turnover")).toBe(0);
+  });
+
+  test("RED CONTROL: the clock with the retired rule restored (drop the timer on deactivation) never closes the window", async () => {
+    // The retired rule, restored in a copy of the REAL module: the deactivation
+    // branch clears the boundary timer again. clock.ts imports only types, so
+    // the copy loads on its own. Run the second test's scenario on it: the
+    // boundary passes and nothing turns the window over, so an inactive
+    // subject's window stays `collecting` past its close.
+    const source = readFileSync(CLOCK_SOURCE, "utf8");
+    const needle = "      // settled, because that event can sit in the log across an upgrade.\n      if (payload.closedEpochId) {";
+    expect(source.includes(needle)).toBe(true);
+    const dir = mkdtempSync(join(tmpdir(), "rm-clock-red-"));
+    const copy = join(dir, "clock.ts");
+    writeFileSync(copy, source.replace(needle, needle.replace("if (payload", "this.#clearBoundary(subjectId);\n      if (payload")));
+    const { SchedulerClock: Retired } = (await import(copy)) as { SchedulerClock: typeof SchedulerClock };
+
+    const { timers, api, clock } = await deactivatedMidWindow(Retired);
+    expect(clock.boundaryAt("sub-a")).toBeNull();
+    await timers.advanceTo(T0 + 600_000);
+    await clock.idle();
+    expect(api.countCalls("turnover")).toBe(0);
+    expect(api.sessions.get("sa")!.state).toBe("collecting");
   });
 });
 

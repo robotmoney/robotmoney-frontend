@@ -14,8 +14,11 @@
 //    first grid instant at least half of `epoch_duration` after now; if the
 //    next instant is nearer than that, it closes at the one after."
 //
-//   "Deactivating a subject through the admin API closes its open epoch
-//    (recording absences as in §4.3) and opens no new one."
+//   §4.5, D55 (4) as corrected 2026-09-25: "The window runs to its close. A
+//    deactivation only sets the subject inactive and publishes
+//    `subject.changed`. It does not close the open epoch." The boundary
+//    turnover closes it and opens no successor. The full set of deactivation
+//    cases, with its red control, is backend/tests/epoch-deactivation.test.ts.
 //
 // HOW THE GRID IS CONTROLLED. The anchor is a column on the subject, so a test
 // puts a grid instant exactly where it needs one — "one second from now" — by
@@ -196,7 +199,11 @@ test("creating a subject through the admin route opens NO session: the scheduler
   expect(rows.map((x) => x.state)).toEqual(["collecting"]);
 });
 
-test("deactivating a subject closes its open epoch and opens no successor", async () => {
+test("deactivating a subject leaves its open epoch collecting; the boundary turnover closes it and opens no successor", async () => {
+  // D55 (4) as corrected 2026-09-25: the window runs to its close. This test
+  // used to pin the retired rule — the deactivation closed the window in its
+  // own transaction — with the same assertions on the closed row that it now
+  // makes after the boundary turnover.
   const subjectId = await activeSubject("open_deactivate", 600);
   const opened = await epoch.openEpoch(subjectId);
   expect(opened.ok).toBe(true);
@@ -205,6 +212,19 @@ test("deactivating a subject closes its open epoch and opens no successor", asyn
   const [{ version }] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${subjectId}`;
   const r = await admin.deactivateSubjectAdmin(subjectId, version);
   expect(r.status).toBe(200);
+
+  // Nothing closed: the window is still collecting, nothing captured yet.
+  const open = await sessionRow(opened.sessionId);
+  expect(open.state).toBe("collecting");
+  expect(open.judge_mode).toBeNull();
+  expect((await collectingSessions(subjectId)).map((x) => x.id)).toEqual([opened.sessionId]);
+
+  // The scheduler's boundary turnover closes it.
+  const turned = await epoch.turnOverEpoch(subjectId, opened.sessionId);
+  expect(turned.ok).toBe(true);
+  if (!turned.ok) return;
+  expect({ closed: turned.closedSessionId, opened: turned.openedSessionId, closes: turned.windowClosesAt })
+    .toEqual({ closed: opened.sessionId, opened: null, closes: null });
 
   const closed = await sessionRow(opened.sessionId);
   expect(closed.state).toBe("window_closed");
@@ -220,16 +240,20 @@ test("deactivating a subject closes its open epoch and opens no successor", asyn
 });
 
 test("re-activating a subject opens NO session until the scheduler acts, and the scheduler's open is a fresh on-grid epoch", async () => {
-  // §2.4: "Activating a subject opens its first epoch (§3)" — and §3 says who:
-  // "An active subject with no session in `collecting` is opened immediately
-  // as part of the rebuild — ... a subject deactivated and re-activated.
-  // Nothing else opens a first epoch." D55 (4): activation is a subject edit
-  // through the admin API, never an epoch route.
+  // §3: "An active subject with no session in `collecting` is opened
+  // immediately as part of the rebuild — ... a subject deactivated, turned
+  // over with no successor and then re-activated. A first epoch is opened by
+  // the rebuild, or by the scheduler on an activation's `subject.changed`, and
+  // by nothing else." D55 (4): activation is a subject edit through the admin
+  // API, never an epoch route. The deactivated window runs to its boundary
+  // first (the reactivation INSIDE it is epoch-deactivation.test.ts's case).
   const subjectId = await activeSubject("open_reactivate", 600);
   const first = await epoch.openEpoch(subjectId);
   if (!first.ok) throw new Error("openEpoch failed");
   const [{ version }] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${subjectId}`;
   expect((await admin.deactivateSubjectAdmin(subjectId, version)).status).toBe(200);
+  const boundary = await epoch.turnOverEpoch(subjectId, first.sessionId);
+  expect(boundary.ok && boundary.openedSessionId).toBeNull();
   const before = (await sql`SELECT id FROM swarm_sessions WHERE subject_id = ${subjectId}`).length;
 
   const activated = await admin.activateSubjectAdmin(subjectId, version + 1);
@@ -318,8 +342,8 @@ test("GET /api/swarm/sessions answers nextSessionAt from the EPOCH, never from j
 test("nextSessionAt is NULL — present, never omitted — when no window is open, whatever job_schedules says", async () => {
   // The null branch of getNextSwarmSession (domain.ts): "no known next
   // session", the honest answer while no subject has an open window — here,
-  // because the only open epoch's subject was deactivated (§4.5), which closes
-  // the epoch and opens no successor.
+  // because the only open epoch's subject was deactivated and its window then
+  // reached its boundary, whose turnover opens no successor (§4.5, D55 (4)).
   await sql`UPDATE swarm_sessions SET state = 'window_closed' WHERE state = 'collecting'`;
   const subjectId = await activeSubject("open_next_null", 3600);
   const opened = await epoch.openEpoch(subjectId);
@@ -331,6 +355,11 @@ test("nextSessionAt is NULL — present, never omitted — when no window is ope
   const [subject] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${subjectId}`;
   const deactivated = await admin.deactivateSubjectAdmin(subjectId, Number(subject!.version));
   expect(deactivated.ok).toBe(true);
+  // The window runs to its close: a deactivated subject's open window is
+  // still the next close anyone can submit before.
+  expect(await epoch.getNextSwarmSessionAt()).toBe(opened.windowClosesAt);
+  const boundary = await epoch.turnOverEpoch(subjectId, opened.sessionId);
+  expect(boundary.ok && boundary.openedSessionId).toBeNull();
   expect(await collectingSessions(subjectId)).toEqual([]);
 
   // Schedule rows that WOULD answer if the field still read them.
@@ -348,3 +377,64 @@ test("nextSessionAt is NULL — present, never omitted — when no window is ope
     expect(body.nextSessionAt).toBeNull();
   }
 });
+
+// ── One transaction, one connection (the frozen-database recovery case) ─────
+//
+// openEpoch and turnover build the brief inside their transaction, holding
+// the subject's row lock. Every read that building does must run on that
+// transaction's own connection: a read that asks the pool for a SECOND one
+// waits for the pool while holding the lock the pooled queries wait for, and a
+// scheduler catching up after a database outage fills the pool with exactly
+// those queries. scripts/tests/integration/scheduler-api-runtime.test.ts's
+// frozen-database case found it: the api stopped answering altogether.
+//
+// Proved in a child process whose pool holds ONE connection, so any second
+// checkout inside the transaction can never be served.
+
+async function openAndTurnOverOnOnePooledConnection(subjectId: string, preload?: string): Promise<string> {
+  const [{ db }] = await sql<{ db: string }[]>`SELECT current_database() AS db`;
+  const url = new URL(process.env.DATABASE_URL!);
+  url.pathname = `/${db}`;
+  const domain = new URL("../src/swarm/domain.ts", import.meta.url).pathname;
+  const child = Bun.spawn(
+    [
+      "bun",
+      ...(preload ? ["--preload", preload] : []),
+      "-e",
+      `const d = await import(${JSON.stringify(domain)});
+       const o = await d.openEpoch(${JSON.stringify(subjectId)});
+       if (!o.ok) { console.log("open refused " + JSON.stringify(o)); process.exit(3); }
+       const t = await d.turnOverEpoch(${JSON.stringify(subjectId)}, o.sessionId);
+       console.log(t.ok ? "turned " + t.openedSessionId : "turnover refused " + JSON.stringify(t));
+       process.exit(0);`,
+    ],
+    {
+      cwd: new URL("..", import.meta.url).pathname,
+      env: { ...process.env, DATABASE_URL: url.toString(), PG_POOL_MAX: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const out = await Promise.race([
+    new Response(child.stdout).text(),
+    Bun.sleep(15_000).then(() => "TIMED OUT"),
+  ]);
+  child.kill("SIGKILL");
+  return out.trim();
+}
+
+test("openEpoch and turnover build the brief on their own transaction's connection: both complete on a one-connection pool", async () => {
+  const subjectId = await activeSubject("open_one_conn", 600);
+  expect(await openAndTurnOverOnOnePooledConnection(subjectId)).toMatch(/^turned [0-9a-f-]{36}$/);
+});
+
+test("RED CONTROL: with the brief's subject read back on the pool, the same open never completes on a one-connection pool", async () => {
+  const { writeRedControlPreload } = await import("./support/automation-auth.ts");
+  const preload = writeRedControlPreload(
+    "/src/swarm/domain.ts",
+    "const subject = await getSubject(s.subject_id, h);",
+    "const subject = await getSubject(s.subject_id);",
+  );
+  const subjectId = await activeSubject("open_one_conn_red", 600);
+  expect(await openAndTurnOverOnOnePooledConnection(subjectId, preload)).toBe("TIMED OUT");
+}, 30_000);

@@ -192,31 +192,47 @@ test("a past-close take is refused THROUGHOUT an exhausted turnover, and the nex
   const turned = await epoch.turnOverEpoch(subjectId, sessionId);
   expect(turned.ok).toBe(true);
   if (!turned.ok) return;
-  const nextDate = sessionDate(await sessionRow(turned.openedSessionId));
+  const nextDate = sessionDate(await sessionRow(turned.openedSessionId!));
   const accepted = await submitTake(m, nextDate, subjectId);
   expect(accepted.ok).toBe(true);
   expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${turned.openedSessionId}`).length).toBe(1);
   expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${sessionId}`).length).toBe(0);
 });
 
-test("a take after DEACTIVATION is refused, though the closed epoch's stored close is still in the future", async () => {
-  // §4.2: takes are accepted "while a session is `collecting` and now is
-  // before its `window_closes_at`". Deactivation (§4.5) closes the epoch and
-  // does not move `window_closes_at`. RED CONTROL: before the INSERT carried
-  // `s.state = 'collecting'`, this take returned 201 and one row landed in the
-  // closed session, after its absences had been recorded.
+test("a take after DEACTIVATION is accepted while the window is open; after the boundary turnover a take is refused, though the stored close is still in the future", async () => {
+  // D55 (4) as corrected 2026-09-25: the window runs to its close, so a
+  // deactivation leaves the epoch `collecting` and §4.2 accepts takes "while a
+  // session is `collecting` and now is before its `window_closes_at`". This
+  // test used to pin the retired rule (the deactivation closed the epoch and
+  // this take was refused). The second half keeps what it proved about the
+  // INSERT's `s.state = 'collecting'` conjunct: once the turnover closes N —
+  // here ahead of its stored close — a take into N is refused, and no row
+  // lands. RED CONTROL for that half: before the INSERT carried the state
+  // conjunct, the late take returned 201 into the closed session.
   const m = await activeMember();
+  const late = await activeMember();
   const { subjectId, sessionId, date } = await openedEpoch("win_deactivated");
   const [subject] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${subjectId}`;
   const deactivated = await admin.deactivateSubjectAdmin(subjectId, Number(subject.version));
   expect(deactivated.ok).toBe(true);
+  const [open] = await sql<{ state: string; still_future: boolean }[]>`
+    SELECT state, window_closes_at > clock_timestamp() AS still_future FROM swarm_sessions WHERE id = ${sessionId}`;
+  expect(open).toEqual({ state: "collecting", still_future: true });
+
+  const r = await submitTake(m, date, subjectId);
+  expect(r.ok).toBe(true);
+  expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${sessionId}`).length).toBe(1);
+
+  // The boundary turnover closes N and opens nothing (the subject is inactive).
+  const turned = await epoch.turnOverEpoch(subjectId, sessionId);
+  expect(turned.ok && turned.openedSessionId).toBeNull();
   const [closed] = await sql<{ state: string; still_future: boolean }[]>`
     SELECT state, window_closes_at > clock_timestamp() AS still_future FROM swarm_sessions WHERE id = ${sessionId}`;
   expect(closed).toEqual({ state: "window_closed", still_future: true });
 
-  const r = await submitTake(m, date, subjectId);
-  expect(r).toMatchObject({ ok: false, status: 409, error: "submission window closed" });
-  expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${sessionId}`).length).toBe(0);
+  const refused = await submitTake(late, date, subjectId);
+  expect(refused).toMatchObject({ ok: false, status: 409, error: "submission window closed" });
+  expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${sessionId}`).length).toBe(1);
 });
 
 test("a take that read N before a turnover committed AHEAD of N's stored close, and queued behind it, is refused — no row lands in N", async () => {

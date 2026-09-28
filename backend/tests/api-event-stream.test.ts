@@ -15,23 +15,35 @@
 // contract with a different subject and live in
 // scripts/tests/unit/system-scheduler-stream.test.ts.
 //
+// THE SUBSCRIPTION IS A WEBSOCKET (D55 (11)). Every subscription case below
+// runs over a real socket: a Bun.serve carrying the api's own upgrade and
+// handler (routes/swarm-stream.ts), and at the end the api process itself.
+// Frames are the JSON the API sends; closes carry SCHEDULER_STREAM_CLOSE.
+//
 // THE DIVISION IS NOT COSMETIC. §6.3's keepalive clause is the clearest case:
 // the API's whole duty is to put the head sequence on the frame, and it can be
 // asserted here exactly. Whether a scheduler behind that number rebuilds is
 // something no server-side test can observe, so claiming it here would be
 // overstating what the assertion proves.
-import { test, expect } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { connect, createServer, type AddressInfo } from "node:net";
 import { join } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import * as epoch from "../src/swarm/domain.ts";
 import * as stream from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
-import { handleSchedulerStream } from "../src/api/routes/swarm-stream.ts";
+import {
+  handleSchedulerStream,
+  schedulerStreamWebSocket,
+  upgradeSchedulerStream,
+  type SchedulerStreamSocketData,
+} from "../src/api/routes/swarm-stream.ts";
 import { provisionAutomationToken } from "../src/db/automation-tokens.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
 import { inHouseJudge } from "./support/stub-judge.ts";
+import { bootApi, writeTokenFile, type ApiProcess } from "./support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -49,94 +61,142 @@ const post = (path: string, token: string | null, body: unknown) =>
     body: JSON.stringify(body),
   });
 
+/** One frame off the socket: the JSON the API sent, discriminated by `type`. */
 interface Frame {
   type: string;
-  data: Record<string, any>;
+  [field: string]: any;
 }
 
-/**
- * Read frames off a live SSE body until `want` of them have arrived, then
- * cancel.
- *
- * Cancelling rather than waiting for an end is the point: a subscription has no
- * end, and a test that waited for one would hang instead of failing. The reader
- * is released in a `finally` so a failed expectation still tears the connection
- * down and the suite does not leak a held database handle.
- */
-async function readFrames(res: Response, want: number, budgetMs = 5000): Promise<Frame[]> {
-  const frames: Frame[] = [];
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  const deadline = Date.now() + budgetMs;
-  let buffer = "";
-  try {
-    while (frames.length < want && Date.now() < deadline) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let cut: number;
-      while ((cut = buffer.indexOf("\n\n")) !== -1) {
-        const raw = buffer.slice(0, cut);
-        buffer = buffer.slice(cut + 2);
-        const type = /^event: (.+)$/m.exec(raw)?.[1];
-        const data = /^data: (.+)$/m.exec(raw)?.[1];
-        if (type && data) frames.push({ type, data: JSON.parse(data) });
-      }
-    }
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
-  return frames;
-}
+type Timing = NonNullable<Parameters<typeof upgradeSchedulerStream>[3]>["streamTiming"];
 
 /**
- * Like `readFrames`, but the connection stays open after the first `want`
- * frames so a case can change the world and then keep reading the SAME
- * connection. `more` reads until `n` frames, the end of the stream, or the
- * budget, and says which it was: `done` is true only when the server ended the
- * stream. It releases the reader either way.
+ * A REAL server: `Bun.serve` carrying the api's own upgrade and WebSocket
+ * handler (routes/swarm-stream.ts), with the connection timing a case needs.
+ * The api's own server (backend/src/api/index.ts) passes no timing; the cases
+ * that boot that process are at the end of this file.
  */
-async function readFramesKeepOpen(res: Response, want: number, budgetMs = 5000) {
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  const pull = async (n: number, budget: number): Promise<{ frames: Frame[]; done: boolean }> => {
-    const frames: Frame[] = [];
-    const deadline = Date.now() + budget;
-    while (frames.length < n && Date.now() < deadline) {
-      const next = await Promise.race([reader.read(), Bun.sleep(Math.max(0, deadline - Date.now())).then(() => null)]);
-      if (next === null) break;
-      if (next.done) return { frames, done: true };
-      buffer += decoder.decode(next.value, { stream: true });
-      let cut: number;
-      while ((cut = buffer.indexOf("\n\n")) !== -1) {
-        const raw = buffer.slice(0, cut);
-        buffer = buffer.slice(cut + 2);
-        const type = /^event: (.+)$/m.exec(raw)?.[1];
-        const data = /^data: (.+)$/m.exec(raw)?.[1];
-        if (type && data) frames.push({ type, data: JSON.parse(data) });
-      }
-    }
-    return { frames, done: false };
-  };
-  const first = await pull(want, budgetMs);
+function streamServer(timing: Timing = {}) {
+  const server = Bun.serve<SchedulerStreamSocketData, never>({
+    port: 0,
+    fetch: (req, srv) => upgradeSchedulerStream(req, new URL(req.url), srv, { streamTiming: timing }),
+    websocket: schedulerStreamWebSocket,
+  });
   return {
-    frames: first.frames,
-    async more(n: number, budget = 5000): Promise<{ frames: Frame[]; done: boolean }> {
-      try {
-        const rest = await pull(n, budget);
-        // A frame count reached exactly as the stream ended still ends it.
-        if (!rest.done) {
-          const tail = await Promise.race([reader.read(), Bun.sleep(100).then(() => null)]);
-          if (tail?.done) return { ...rest, done: true };
-        }
-        return rest;
-      } finally {
-        await reader.cancel().catch(() => {});
-      }
-    },
+    ws: `ws://127.0.0.1:${server.port}`,
+    http: `http://127.0.0.1:${server.port}`,
+    stop: () => server.stop(true),
   };
 }
+
+interface Subscription {
+  readonly frames: Frame[];
+  /** Resolves with the close code and reason, whoever closed. */
+  readonly closed: Promise<{ code: number; reason: string }>;
+  /** Wait until `n` frames have arrived, the socket closed, or the budget ran out; the frames so far. */
+  next(n: number, budgetMs?: number): Promise<Frame[]>;
+  /** Close from the subscriber's side. */
+  end(): void;
+}
+
+/**
+ * Subscribe from `cursor` over a real WebSocket, presenting `token` the one
+ * way the API reads it: the upgrade's `Authorization: Bearer` header. Rejects
+ * when the upgrade is refused (the socket closes before it opens).
+ */
+function subscribeWs(
+  base: string,
+  cursor: number,
+  token: string | null,
+  opts: { query?: string; headers?: Record<string, string> } = {},
+): Promise<Subscription> {
+  const frames: Frame[] = [];
+  let closedResolve!: (v: { code: number; reason: string }) => void;
+  const closed = new Promise<{ code: number; reason: string }>((r) => (closedResolve = r));
+  let isClosed = false;
+  const headers = { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...opts.headers };
+  const ws = new WebSocket(`${base}${ROUTES.swarm.scheduler.subscribe}?cursor=${cursor}${opts.query ?? ""}`, {
+    headers,
+  } as unknown as string[]);
+  ws.onmessage = (e) => void frames.push(JSON.parse(String(e.data)) as Frame);
+  return new Promise<Subscription>((resolve, reject) => {
+    let opened = false;
+    ws.onopen = () => {
+      opened = true;
+      resolve({
+        frames,
+        closed,
+        async next(n, budgetMs = 5_000) {
+          const deadline = Date.now() + budgetMs;
+          while (frames.length < n && !isClosed && Date.now() < deadline) await Bun.sleep(5);
+          return frames.slice();
+        },
+        end: () => ws.close(1000, "done"),
+      });
+    };
+    ws.onclose = (e) => {
+      isClosed = true;
+      closedResolve({ code: e.code, reason: e.reason });
+      if (!opened) reject(new Error(`upgrade refused (close ${e.code})`));
+    };
+  });
+}
+
+/** Read `want` frames from a fresh subscription, then close it. */
+async function framesFrom(base: string, cursor: number, want: number, budgetMs = 5_000): Promise<Frame[]> {
+  const sub = await subscribeWs(base, cursor, TOKEN);
+  try {
+    return (await sub.next(want, budgetMs)).slice(0, want);
+  } finally {
+    sub.end();
+  }
+}
+
+/** A subscribe request as `upgradeSchedulerStream` sees it, and whether it was upgraded. */
+async function upgradeAttempt(query: string, headers: Record<string, string>) {
+  let upgraded = false;
+  const req = new Request(`http://test${ROUTES.swarm.scheduler.subscribe}${query}`, {
+    headers: { Upgrade: "websocket", Connection: "Upgrade", ...headers },
+  });
+  const res = await upgradeSchedulerStream(req, new URL(req.url), {
+    upgrade: () => {
+      upgraded = true;
+      return true;
+    },
+  });
+  return { upgraded, status: res?.status ?? 101, body: res ? await res.text() : "" };
+}
+
+// The scheduler's own token (holder `system-scheduler`, all three rights), as
+// the stream admits it. Provisioned once; the rotation cases use their own.
+let TOKEN = "";
+beforeAll(async () => {
+  TOKEN = (await provisionAutomationToken("rm_stream_ws", ["read_subjects", "read_sessions", "lifecycle_transitions"])).token;
+});
+
+/** A free loopback port, never :48787. */
+function freeTcpPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.on("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const port = (srv.address() as AddressInfo).port;
+      srv.close(() => (port === 48787 ? reject(new Error("refusing :48787")) : resolve(port)));
+    });
+  });
+}
+
+// Two real servers every subscription case shares: keepalives every 20 ms,
+// and keepalives that effectively never come.
+let FAST: ReturnType<typeof streamServer>;
+let QUIET: ReturnType<typeof streamServer>;
+beforeAll(() => {
+  FAST = streamServer({ keepaliveMs: 20, pollMs: 10 });
+  QUIET = streamServer({ keepaliveMs: 5_000, pollMs: 10 });
+});
+afterAll(() => {
+  FAST?.stop();
+  QUIET?.stop();
+});
 
 /** A judging session on its own subject, with its deadline stored by the API. */
 async function judgingSession(prefix: string): Promise<{ subjectId: string; sessionId: string; deadlineAt: string }> {
@@ -237,11 +297,14 @@ test("a published session is NOT in the full read", async () => {
   expect(read.settling.some((s) => s.sessionId === turned.closedSessionId)).toBe(false);
 });
 
-test("a deactivated subject's unfinished settlement is still in the full read", async () => {
-  // §3: "This includes sessions whose subject has since been deactivated;
-  // deactivation closes an epoch but settlement still has to finish." Dropping
-  // it would strand the session in `window_closed` for ever, with no timer and
-  // no owner.
+test("a deactivated subject's open window, and then its unfinished settlement, are both in the full read", async () => {
+  // §3 parts 2 and 3 (as corrected with D55 (4)): "Every session in
+  // `collecting` … including one whose subject has since been deactivated",
+  // and every closed-but-unpublished one, "including sessions whose subject
+  // has since been deactivated; a window left open by a deactivation still
+  // turns over at its boundary, and its settlement still has to finish."
+  // Dropping either would strand the session — a window nobody closes, or a
+  // `window_closed` epoch nobody settles.
   const subjectId = await activeSubject("fr_deactivated", 600);
   const opened = await epoch.openEpoch(subjectId);
   if (!opened.ok) throw new Error("openEpoch failed");
@@ -249,8 +312,20 @@ test("a deactivated subject's unfinished settlement is still in the full read", 
   const done = await admin.deactivateSubjectAdmin(subjectId, subject.version);
   expect(done.status).toBe(200);
 
-  const read = await stream.fullRead();
+  let read = await stream.fullRead();
   expect(read.subjects.some((s) => s.subjectId === subjectId)).toBe(false);
+  expect(read.collecting.find((c) => c.sessionId === opened.sessionId)).toEqual({
+    sessionId: opened.sessionId,
+    subjectId,
+    windowClosesAt: opened.windowClosesAt,
+  });
+  expect(read.settling.some((s) => s.sessionId === opened.sessionId)).toBe(false);
+
+  // The boundary turnover closes it with no successor; now it is settling.
+  const turned = await epoch.turnOverEpoch(subjectId, opened.sessionId);
+  expect(turned.ok && turned.openedSessionId).toBeNull();
+  read = await stream.fullRead();
+  expect(read.collecting.some((c) => c.subjectId === subjectId)).toBe(false);
   const row = read.settling.find((s) => s.sessionId === opened.sessionId);
   expect(row).toBeDefined();
   expect(row!.state).toBe("window_closed");
@@ -310,7 +385,7 @@ test("events are served in ascending sequence order", async () => {
   if (!opened.ok) throw new Error("openEpoch failed");
   const t = await epoch.turnOverEpoch(subjectId, opened.sessionId);
   if (!t.ok) throw new Error("turnOverEpoch failed");
-  await epoch.turnOverEpoch(subjectId, t.openedSessionId);
+  await epoch.turnOverEpoch(subjectId, t.openedSessionId!);
 
   const seqs = (await stream.eventsAbove(cursor)).map((e) => e.seq);
   expect(seqs.length).toBeGreaterThanOrEqual(2);
@@ -364,13 +439,14 @@ test("a cursor below the retained log's floor is a resync, not an empty answer",
   expect(await stream.retainedFloor()).toBe(1);
 });
 
-test("the subscription sends a resync frame and nothing else when it cannot serve the cursor", async () => {
+test("the subscription sends ONE resync frame when it cannot serve the cursor, then closes with the resync code", async () => {
+  // D55 (11): "an explicit close code". The frame names the reason; the close
+  // code says it was a resync; nothing is served in between.
   const head = await epoch.streamHeadSequence();
-  const res = stream.openSchedulerStream(head + 99, { keepaliveMs: 50, pollMs: 10 });
-  const frames = await readFrames(res, 1);
-  expect(frames[0].type).toBe("resync");
-  expect(frames[0].data.reason).toBe("cursor_ahead_of_head");
-  expect(frames.some((f) => f.type === "event")).toBe(false);
+  const sub = await subscribeWs(FAST.ws, head + 99, TOKEN);
+  const closed = await sub.closed;
+  expect(sub.frames).toEqual([{ type: "resync", reason: "cursor_ahead_of_head", head }]);
+  expect(closed).toEqual({ code: stream.SCHEDULER_STREAM_CLOSE.resync, reason: "resync: cursor_ahead_of_head" });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -384,12 +460,11 @@ test("the subscription delivers events above the cursor, in order, as event fram
   if (!opened.ok) throw new Error("openEpoch failed");
   await epoch.turnOverEpoch(subjectId, opened.sessionId);
 
-  const res = stream.openSchedulerStream(cursor, { keepaliveMs: 5000, pollMs: 10 });
-  const frames = await readFrames(res, 1);
+  const frames = await framesFrom(QUIET.ws, cursor, 1);
   const events = frames.filter((f) => f.type === "event");
   expect(events.length).toBeGreaterThanOrEqual(1);
-  expect(events[0].data.seq).toBe(cursor + 1);
-  expect(events[0].data.kind).toBe("epoch.turned_over");
+  expect(events[0].seq).toBe(cursor + 1);
+  expect(events[0].kind).toBe("epoch.turned_over");
 });
 
 test("an event committed WHILE the subscription is live is delivered on it", async () => {
@@ -398,13 +473,16 @@ test("an event committed WHILE the subscription is live is delivered on it", asy
   if (!opened.ok) throw new Error("openEpoch failed");
   const cursor = await epoch.streamHeadSequence();
 
-  const res = stream.openSchedulerStream(cursor, { keepaliveMs: 5000, pollMs: 10 });
-  const pending = readFrames(res, 1);
-  await epoch.turnOverEpoch(subjectId, opened.sessionId);
-  const frames = await pending;
-  expect(frames[0].type).toBe("event");
-  expect(frames[0].data.kind).toBe("epoch.turned_over");
-  expect(frames[0].data.seq).toBe(cursor + 1);
+  const sub = await subscribeWs(QUIET.ws, cursor, TOKEN);
+  try {
+    await epoch.turnOverEpoch(subjectId, opened.sessionId);
+    const frames = await sub.next(1);
+    expect(frames[0].type).toBe("event");
+    expect(frames[0].kind).toBe("epoch.turned_over");
+    expect(frames[0].seq).toBe(cursor + 1);
+  } finally {
+    sub.end();
+  }
 });
 
 test("EVERY keepalive carries the sequence of the last event the API committed", async () => {
@@ -417,11 +495,10 @@ test("EVERY keepalive carries the sequence of the last event the API committed",
   await epoch.openEpoch(subjectId);
   const head = await epoch.streamHeadSequence();
 
-  const res = stream.openSchedulerStream(head, { keepaliveMs: 20, pollMs: 10 });
-  const frames = await readFrames(res, 2);
+  const frames = await framesFrom(FAST.ws, head, 2);
   const keepalives = frames.filter((f) => f.type === "keepalive");
   expect(keepalives.length).toBeGreaterThanOrEqual(2);
-  for (const k of keepalives) expect(k.data.head).toBe(head);
+  for (const k of keepalives) expect(k.head).toBe(head);
 });
 
 test("the keepalive's head moves with the log, so a quiet subscriber still learns the number", async () => {
@@ -430,19 +507,13 @@ test("the keepalive's head moves with the log, so a quiet subscriber still learn
   if (!opened.ok) throw new Error("openEpoch failed");
   const before = await epoch.streamHeadSequence();
 
-  // Subscribe from a cursor ABOVE nothing — then commit an event this
-  // subscriber is not served (it is served, but the point is the number on the
-  // keepalive frame tracks the log rather than the connection).
-  const res = stream.openSchedulerStream(before, { keepaliveMs: 20, pollMs: 10 });
-  await readFrames(res, 1);
+  await framesFrom(FAST.ws, before, 1);
   await epoch.turnOverEpoch(subjectId, opened.sessionId);
   const after = await epoch.streamHeadSequence();
   expect(after).toBeGreaterThan(before);
 
-  const res2 = stream.openSchedulerStream(after, { keepaliveMs: 20, pollMs: 10 });
-  const frames = await readFrames(res2, 1);
-  expect(frames[0].type).toBe("keepalive");
-  expect(frames[0].data.head).toBe(after);
+  const frames = await framesFrom(FAST.ws, after, 1);
+  expect(frames[0]).toEqual({ type: "keepalive", head: after });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -491,13 +562,16 @@ test("a live subscription carries only event, keepalive and resync frames — ne
   const opened = await epoch.openEpoch(subjectId);
   if (!opened.ok) throw new Error("openEpoch failed");
   const cursor = await epoch.streamHeadSequence();
-  const res = stream.openSchedulerStream(cursor, { keepaliveMs: 20, pollMs: 10 });
-  const pending = readFrames(res, 4);
-  await epoch.turnOverEpoch(subjectId, opened.sessionId);
-  const frames = await pending;
-  expect(frames.length).toBe(4);
-  expect(frames.filter((f) => !["event", "keepalive", "resync"].includes(f.type))).toEqual([]);
-  expect(frames.some((f) => f.type === "event" && f.data.kind === "epoch.turned_over")).toBe(true);
+  const sub = await subscribeWs(FAST.ws, cursor, TOKEN);
+  try {
+    await epoch.turnOverEpoch(subjectId, opened.sessionId);
+    const frames = (await sub.next(4)).slice(0, 4);
+    expect(frames.length).toBe(4);
+    expect(frames.filter((f) => !["event", "keepalive", "resync"].includes(f.type))).toEqual([]);
+    expect(frames.some((f) => f.type === "event" && f.kind === "epoch.turned_over")).toBe(true);
+  } finally {
+    sub.end();
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -603,80 +677,69 @@ test("the full read's cursor is the counter visible in its own snapshot, not a t
   expect((await stream.eventsAbove(read!.cursor)).map((e) => e.seq)).toEqual([seq]);
 });
 
+test("the COUNTER ROW numbers every event, not MAX(seq) + 1: with the whole log pruned, the next event continues from the head", async () => {
+  // §6.3: "Each event takes its number by incrementing one counter row inside
+  // the transaction that makes the change." Criterion 93 asked whether the
+  // MAX + 1 wave 3 first built is equivalent; it is not, and this is the case
+  // that tells them apart. rm_owner prunes EVERY row (its own transaction, on
+  // this file's copy, rolled back), so MAX(seq) + 1 would restart at 1 and
+  // hand a subscriber at the head numbers it has already applied — which it
+  // would drop as duplicates. The counter row hands out head + 1.
+  const subjectId = await activeSubject("seq_counter_row", 600);
+  await sql.begin((tx) => epoch.appendStreamEvent(tx, "subject.changed", { subjectId, payload: { reason: "probe" } }));
+  const head = await epoch.streamHeadSequence();
+  await sql
+    .begin(async (tx) => {
+      await tx.unsafe("SET LOCAL ROLE rm_owner");
+      await tx`DELETE FROM swarm_stream_events`;
+      const [{ max }] = await tx<{ max: string | null }[]>`SELECT MAX(seq) AS max FROM swarm_stream_events`;
+      expect(max).toBeNull();
+      const n = await epoch.appendStreamEvent(tx, "subject.changed", { subjectId, payload: { reason: "after prune" } });
+      expect(n).toBe(head + 1);
+      // RED CONTROL: what MAX + 1 would have handed out here.
+      expect(Number(max ?? 0) + 1).not.toBe(n);
+      const [row] = await tx<{ seq: string }[]>`SELECT seq FROM swarm_stream_head`;
+      expect(Number(row!.seq)).toBe(head + 1);
+      throw new Error("roll the prune back");
+    })
+    .catch((e: Error) => {
+      if (e.message !== "roll the prune back") throw e;
+    });
+  expect(await epoch.streamHeadSequence()).toBe(head);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // §6.3 — the stream never claims the subscriber is current when it cannot say
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("MODULE ONLY: a full queue on the response itself is answered with a resync and a close, nothing skipped before it", async () => {
-  // §6.3: "its buffer for this subscriber overflowed ... it says so." The
-  // subscriber below reads nothing while five events are waiting; the
-  // connection may hold three frames. What it then reads is the events it was
-  // sent, in order and gapless from the cursor, then the reason, then the end.
-  //
-  // WHAT THIS DOES NOT PROVE. The Response is read in-process, with no server
-  // in between. Behind the real Bun.serve the queue is drained eagerly and
-  // this limit is never reached (StreamOptions.bufferFrames); what bounds a
-  // stalled subscriber there is the server's idle timeout, proved through a
-  // real server and a socket that never reads further down this file.
-  const subjectId = await activeSubject("sub_overflow", 600);
-  const cursor = await epoch.streamHeadSequence();
-  const session = await epoch.openEpoch(subjectId);
-  if (!session.ok) throw new Error("openEpoch failed");
-  let open = session.sessionId;
-  for (let i = 0; i < 5; i++) {
-    const t = await epoch.turnOverEpoch(subjectId, open);
-    if (!t.ok) throw new Error("turnOverEpoch failed");
-    open = t.openedSessionId;
-  }
-  expect((await epoch.streamHeadSequence()) - cursor).toBeGreaterThanOrEqual(5);
-
-  const res = stream.openSchedulerStream(cursor, { keepaliveMs: 5_000, pollMs: 10, bufferFrames: 3 });
-  await Bun.sleep(200); // the loop runs while nobody reads
-  const frames = await readFrames(res, 100, 2_000);
-  const last = frames[frames.length - 1];
-  expect(last.type).toBe("resync");
-  expect(last.data.reason).toBe("buffer_overflow");
-  const events = frames.filter((f) => f.type === "event").map((f) => f.data.seq);
-  expect(events.length).toBeGreaterThan(0);
-  expect(events).toEqual(events.map((_, i) => cursor + 1 + i));
-  expect(frames.filter((f) => f.type === "resync").length).toBe(1);
-});
-
-test("a cursor above the head is a resync and the connection ENDS — no stream of nothing", async () => {
+test("a cursor above the head is a resync and the socket CLOSES — no stream of nothing", async () => {
   const head = await epoch.streamHeadSequence();
-  const res = stream.openSchedulerStream(head + 7, { keepaliveMs: 20, pollMs: 10 });
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let text = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    text += decoder.decode(value, { stream: true });
-  }
-  const frames = [...text.matchAll(/^event: (.+)$/gm)].map((m) => m[1]);
-  expect(frames).toEqual(["resync"]);
-  expect(text).toContain('"reason":"cursor_ahead_of_head"');
+  const sub = await subscribeWs(FAST.ws, head + 7, TOKEN);
+  const closed = await sub.closed;
+  expect(sub.frames.map((f) => f.type)).toEqual(["resync"]);
+  expect(sub.frames[0].reason).toBe("cursor_ahead_of_head");
+  expect(closed.code).toBe(stream.SCHEDULER_STREAM_CLOSE.resync);
 });
 
-test("a database error ends the connection with resync `unavailable`, never a keepalive with a guessed head", async () => {
+test("a database error ends the socket with resync `unavailable`, never a keepalive with a guessed head", async () => {
   // The code this replaces answered a failed head read with the connection's
   // own `sent` number — a keepalive that told a subscriber behind the real
   // head that it was current. The counter row is made unreadable for the
   // length of the case and restored in `finally`.
   const head = await epoch.streamHeadSequence();
-  const res = stream.openSchedulerStream(head, { keepaliveMs: 20, pollMs: 10 });
-  const first = await readFramesKeepOpen(res, 1);
-  expect(first.frames[0].type).toBe("keepalive");
+  const sub = await subscribeWs(FAST.ws, head, TOKEN);
+  const first = await sub.next(1);
+  expect(first[0]).toEqual({ type: "keepalive", head });
   await sql`ALTER TABLE swarm_stream_head RENAME TO swarm_stream_head_hidden`;
   try {
-    const rest = await first.more(10, 2_000);
-    expect(rest.done, "the connection must end").toBe(true);
-    const last = rest.frames[rest.frames.length - 1];
-    expect(last.type).toBe("resync");
-    expect(last.data).toEqual({ reason: "unavailable", head: null });
+    const closed = await Promise.race([sub.closed, Bun.sleep(3_000).then(() => null)]);
+    expect(closed, "the socket must close").not.toBeNull();
+    expect(closed!.code).toBe(stream.SCHEDULER_STREAM_CLOSE.resync);
+    const last = sub.frames[sub.frames.length - 1]!;
+    expect(last).toEqual({ type: "resync", reason: "unavailable", head: null });
     // A keepalive queued before the rename carries the real head; none carries
     // a stand-in, and nothing follows the resync.
-    for (const f of rest.frames.slice(0, -1)) expect(f).toEqual({ type: "keepalive", data: { head } });
+    for (const f of sub.frames.slice(0, -1)) expect(f).toEqual({ type: "keepalive", head });
   } finally {
     await sql`ALTER TABLE swarm_stream_head_hidden RENAME TO swarm_stream_head`;
   }
@@ -686,7 +749,7 @@ test("a database error ends the connection with resync `unavailable`, never a ke
 // §9 / criterion 92 — killed after commit, still found
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("SUBSCRIBER HALF: a turnover committed and never delivered — its reader cancelled — is served to a resubscribe from the old cursor", async () => {
+test("SUBSCRIBER HALF: a turnover committed and never delivered — its socket closed — is served to a resubscribe from the old cursor", async () => {
   // "Each event row and its global sequence are written in the same
   // transaction as the transition ... proved ... by killing a publisher after
   // commit and still finding it." The event's durability is the commit's, not
@@ -697,18 +760,17 @@ test("SUBSCRIBER HALF: a turnover committed and never delivered — its reader c
   if (!opened.ok) throw new Error("openEpoch failed");
   const cursor = await epoch.streamHeadSequence();
 
-  const doomed = stream.openSchedulerStream(cursor, { keepaliveMs: 5_000, pollMs: 10 });
+  const doomed = await subscribeWs(QUIET.ws, cursor, TOKEN);
+  doomed.end();
+  await doomed.closed;
   const turned = await epoch.turnOverEpoch(subjectId, opened.sessionId);
   if (!turned.ok) throw new Error("turnOverEpoch failed");
-  // Killed before it read a single frame.
-  await doomed.body!.cancel();
 
-  const again = stream.openSchedulerStream(cursor, { keepaliveMs: 5_000, pollMs: 10 });
-  const frames = await readFrames(again, 1);
+  const frames = await framesFrom(QUIET.ws, cursor, 1);
   expect(frames[0].type).toBe("event");
-  expect(frames[0].data.seq).toBe(cursor + 1);
-  expect(frames[0].data.kind).toBe("epoch.turned_over");
-  expect(frames[0].data.payload.closedSessionId).toBe(opened.sessionId);
+  expect(frames[0].seq).toBe(cursor + 1);
+  expect(frames[0].kind).toBe("epoch.turned_over");
+  expect(frames[0].payload.closedSessionId).toBe(opened.sessionId);
 });
 
 /**
@@ -799,8 +861,8 @@ test("PUBLISHER HALF: a turnover whose process is SIGKILLed inside its COMMIT st
   expect(event!.payload.closedSessionId).toBe(opened.sessionId);
   expect((await sessionRow(opened.sessionId)).state).not.toBe("collecting");
   // And a subscriber from the old cursor is served it.
-  const frames = await readFrames(stream.openSchedulerStream(head, { keepaliveMs: 5_000, pollMs: 10 }), 1);
-  expect(frames[0]).toMatchObject({ type: "event", data: { seq: head + 1, kind: "epoch.turned_over" } });
+  const frames = await framesFrom(QUIET.ws, head, 1);
+  expect(frames[0]).toMatchObject({ type: "event", seq: head + 1, kind: "epoch.turned_over" });
 });
 
 test("RED CONTROL for the publisher kill: an event written AFTER the commit is lost under the same kill", async () => {
@@ -874,49 +936,63 @@ test("the analytics producer's and the operator's tokens read nothing from the s
   }
 });
 
-test("a bearer rotated while the subscription is open closes it at the next keepalive", async () => {
+test("a token rotated while the subscription is open closes the socket at the next keepalive, with the token-revoked code", async () => {
   // Smoke spec §3: provisioning a holder's token again REPLACES the row's hash,
   // so the old bearer authorizes nothing from that instant — including a
-  // subscription it opened before the rotation. The route re-checks the bearer
-  // every keepalive interval (a busy stream too: the next case); without that,
-  // a revoked credential would keep reading the stream for the life of the
-  // socket.
+  // socket it opened before the rotation. D55 (11): "The socket re-authorizes
+  // the scheduler's token against the token store at every keepalive. It
+  // closes when the token is revoked or rotated."
   const rights = ["read_subjects", "read_sessions"] as const;
   const { token } = await provisionAutomationToken("rm_stream_rotated", [...rights]);
   const head = await epoch.streamHeadSequence();
-  const path = `/api/swarm/scheduler/subscribe?cursor=${head}`;
-  const timing = { streamTiming: { keepaliveMs: 20, pollMs: 10 } };
 
-  // Control: an unrotated bearer is served keepalive after keepalive.
-  const kept = (await handleSchedulerStream(get(path, token), url(path), timing)) as Response;
-  const steady = await readFrames(kept, 4, 2_000);
+  // Control: an unrotated token is served keepalive after keepalive.
+  const kept = await subscribeWs(FAST.ws, head, token);
+  const steady = (await kept.next(4, 2_000)).slice(0, 4);
+  kept.end();
   expect(steady.map((f) => f.type)).toEqual(["keepalive", "keepalive", "keepalive", "keepalive"]);
 
-  const res = (await handleSchedulerStream(get(path, token), url(path), timing)) as Response;
-  const open = await readFramesKeepOpen(res, 1);
-  expect(open.frames.map((f) => f.type)).toEqual(["keepalive"]);
-
+  const sub = await subscribeWs(FAST.ws, head, token);
+  expect((await sub.next(1)).map((f) => f.type)).toEqual(["keepalive"]);
+  const before = sub.frames.length;
   await provisionAutomationToken("rm_stream_rotated", [...rights]); // the rotation
-  const after = await open.more(20, 2_000);
-  expect(after.done, "the subscription must END, not keep serving the rotated bearer").toBe(true);
+  const closed = await Promise.race([sub.closed, Bun.sleep(2_000).then(() => null)]);
+  expect(closed, "the socket must CLOSE, not keep serving the rotated token").toEqual({
+    code: stream.SCHEDULER_STREAM_CLOSE.tokenRevoked,
+    reason: "token revoked or rotated",
+  });
   // At most one keepalive can already have been queued before the check that
-  // saw the rotation; nothing follows it.
-  expect(after.frames.filter((f) => f.type === "keepalive").length).toBeLessThanOrEqual(1);
+  // saw the rotation; nothing follows it, and no resync frame is sent.
+  const after = sub.frames.slice(before);
+  expect(after.filter((f) => f.type === "keepalive").length).toBeLessThanOrEqual(1);
+  expect(after.filter((f) => f.type !== "keepalive")).toEqual([]);
 });
 
-test("a bearer rotated while events are FLOWING closes the subscription too — traffic never postpones the check", async () => {
+test("a token REVOKED while the subscription is open closes the socket at the next keepalive", async () => {
+  // Revocation removes the token's row (rm_owner, on this file's own copy:
+  // no runtime role may delete, D55 (6)). The next re-check finds no grant.
+  const { token } = await provisionAutomationToken("rm_stream_revoked", ["read_subjects", "read_sessions"]);
+  const head = await epoch.streamHeadSequence();
+  const sub = await subscribeWs(FAST.ws, head, token);
+  await sub.next(1);
+  await sql.begin(async (tx) => {
+    await tx.unsafe("SET LOCAL ROLE rm_owner");
+    await tx`DELETE FROM automation_tokens WHERE instance = 'rm_stream_revoked'`;
+  });
+  const closed = await Promise.race([sub.closed, Bun.sleep(2_000).then(() => null)]);
+  expect(closed?.code).toBe(stream.SCHEDULER_STREAM_CLOSE.tokenRevoked);
+});
+
+test("a token rotated while events are FLOWING closes the socket too — traffic never postpones the check", async () => {
   // The re-check used to ride the keepalive, which goes out only when a poll
   // finds nothing. Here an event commits every few milliseconds, so no poll is
   // ever idle for a keepalive interval: under the old placement the rotated
-  // bearer read on for as long as the traffic lasted.
+  // token read on for as long as the traffic lasted.
   const rights = ["read_subjects", "read_sessions"] as const;
   const { token } = await provisionAutomationToken("rm_stream_rotated_busy", [...rights]);
   const head = await epoch.streamHeadSequence();
-  const path = `/api/swarm/scheduler/subscribe?cursor=${head}`;
   let why = null as string | null; // assigned in a callback; the cast stops TS narrowing it to null
-  const timing = {
-    streamTiming: { keepaliveMs: 100, pollMs: 10, onEnd: (w: string) => void (why = w) },
-  };
+  const server = streamServer({ keepaliveMs: 100, pollMs: 10, onEnd: (w) => void (why = w) });
   let pumping = true;
   let pumped = 0;
   const pump = (async () => {
@@ -927,21 +1003,23 @@ test("a bearer rotated while events are FLOWING closes the subscription too — 
     }
   })();
   try {
-    const res = (await handleSchedulerStream(get(path, token), url(path), timing)) as Response;
-    const open = await readFramesKeepOpen(res, 5);
-    expect(open.frames.map((f) => f.type)).toEqual(["event", "event", "event", "event", "event"]);
+    const sub = await subscribeWs(server.ws, head, token);
+    const open = (await sub.next(5)).slice(0, 5);
+    expect(open.map((f) => f.type)).toEqual(["event", "event", "event", "event", "event"]);
 
+    const at = sub.frames.length;
     await provisionAutomationToken("rm_stream_rotated_busy", [...rights]); // the rotation
     const pumpedAtRotation = pumped;
-    const after = await open.more(1_000_000, 3_000);
-    expect(after.done, "the subscription must END while events are still flowing").toBe(true);
+    const closed = await Promise.race([sub.closed, Bun.sleep(3_000).then(() => null)]);
+    expect(closed?.code, "the socket must CLOSE while events are still flowing").toBe(stream.SCHEDULER_STREAM_CLOSE.tokenRevoked);
     expect(why).toBe("unauthorized");
     // It ended mid-traffic, not at an idle keepalive.
-    expect(after.frames.filter((f) => f.type === "keepalive")).toEqual([]);
+    expect(sub.frames.slice(at).filter((f) => f.type === "keepalive")).toEqual([]);
     expect(pumped).toBeGreaterThan(pumpedAtRotation);
   } finally {
     pumping = false;
     await pump;
+    server.stop();
   }
 });
 
@@ -956,16 +1034,61 @@ test("the route serves the same four parts and cursor the module does", async ()
   expect(typeof res.body.cursor).toBe("number");
 });
 
-test("the subscribe route returns an event-stream response", async () => {
-  const { token } = await provisionAutomationToken("rm_stream_sub", ["read_subjects", "read_sessions"]);
+// ─────────────────────────────────────────────────────────────────────────────
+// D55 (11) — a WebSocket, and the token only in the upgrade's Authorization header
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("the subscribe route is a WebSocket: a plain GET is 426, and an upgrade opens a socket", async () => {
   const head = await epoch.streamHeadSequence();
-  const res = await handleSchedulerStream(
-    get(`/api/swarm/scheduler/subscribe?cursor=${head}`, token),
-    url(`/api/swarm/scheduler/subscribe?cursor=${head}`),
-  );
-  expect(res).toBeInstanceOf(Response);
-  expect((res as Response).headers.get("Content-Type")).toBe("text/event-stream");
-  await (res as Response).body?.cancel();
+  const path = `/api/swarm/scheduler/subscribe?cursor=${head}`;
+  const plain = await handleSchedulerStream(get(path, TOKEN), url(path));
+  expect(plain).toBeInstanceOf(Response);
+  expect((plain as Response).status).toBe(426);
+  expect((plain as Response).headers.get("Upgrade")).toBe("websocket");
+  expect((await upgradeAttempt(`?cursor=${head}`, { Authorization: `Bearer ${TOKEN}` })).upgraded).toBe(true);
+  const sub = await subscribeWs(FAST.ws, head, TOKEN);
+  expect((await sub.next(1))[0]).toEqual({ type: "keepalive", head });
+  sub.end();
+});
+
+test("the token travels ONLY in the upgrade's Authorization header: a token in the URL, or in any other header, is refused and nothing is upgraded", async () => {
+  const head = await epoch.streamHeadSequence();
+  const auth = { Authorization: `Bearer ${TOKEN}` };
+  // Control: the same request with the header and a clean URL is upgraded, so
+  // each refusal below is about the one thing that differs.
+  expect(await upgradeAttempt(`?cursor=${head}`, auth)).toMatchObject({ upgraded: true, status: 101 });
+
+  // A token in the query string is refused before it is looked up — with the
+  // header present too, and under any parameter name.
+  for (const q of [`&token=${TOKEN}`, `&access_token=${TOKEN}`, `&automation_token=${TOKEN}`, `&auth=${TOKEN}`]) {
+    const r = await upgradeAttempt(`?cursor=${head}${q}`, auth);
+    expect({ q, upgraded: r.upgraded, status: r.status }).toEqual({ q, upgraded: false, status: 400 });
+    expect(r.body).toContain("Authorization header");
+    expect(r.body).not.toContain(TOKEN);
+  }
+  expect(await upgradeAttempt(`?cursor=${head}&token=${TOKEN}`, {})).toMatchObject({ upgraded: false, status: 400 });
+
+  // The HTTP calls' header does not open the socket; neither does no header.
+  expect(await upgradeAttempt(`?cursor=${head}`, { "X-Automation-Token": TOKEN })).toMatchObject({ upgraded: false, status: 401 });
+  expect(await upgradeAttempt(`?cursor=${head}`, {})).toMatchObject({ upgraded: false, status: 401 });
+
+  // Over a real socket: a client that puts the token in the URL never opens one.
+  await expect(subscribeWs(FAST.ws, head, null, { query: `&token=${TOKEN}` })).rejects.toThrow("upgrade refused");
+  await expect(subscribeWs(FAST.ws, head, null, { headers: { "X-Automation-Token": TOKEN } })).rejects.toThrow("upgrade refused");
+});
+
+test("only the scheduler's own token with both read rights opens the socket: forged, other holders' and narrowed tokens are 403", async () => {
+  const head = await epoch.streamHeadSequence();
+  const producer = await provisionAutomationToken("rm_stream_holders_ws", ["analytics_ingestion"], { holder: "analytics-producer" });
+  const operator = await provisionAutomationToken("rm_stream_holders_ws", ["admin"], { holder: "operator" });
+  const narrowed = await provisionAutomationToken("rm_stream_narrow_ws", ["read_subjects"]);
+  for (const token of ["rmat_forged", producer.token, operator.token, narrowed.token]) {
+    const r = await upgradeAttempt(`?cursor=${head}`, { Authorization: `Bearer ${token}` });
+    expect({ upgraded: r.upgraded, status: r.status }).toEqual({ upgraded: false, status: 403 });
+  }
+  // And a missing or malformed cursor is 400, after the credential.
+  expect(await upgradeAttempt(`?cursor=`, { Authorization: `Bearer ${TOKEN}` })).toMatchObject({ upgraded: false, status: 400 });
+  expect(await upgradeAttempt(`?cursor=-1`, { Authorization: `Bearer ${TOKEN}` })).toMatchObject({ upgraded: false, status: 400 });
 });
 
 test("the stream routes own only their own paths", async () => {
@@ -989,126 +1112,121 @@ async function plantJudgement(sessionId: string): Promise<number> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §6.3 overflow, behind the REAL server
+// §6.3 overflow, behind a REAL socket: resync, then close — never a silent skip
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** The body of a raw HTTP/1.1 response read off a socket: headers dropped, chunked encoding undone, a cut final chunk kept as far as it got. */
-function dechunk(raw: string): string {
-  const start = raw.indexOf("\r\n\r\n");
-  if (start === -1) return "";
-  let rest = raw.slice(start + 4);
-  let body = "";
-  for (;;) {
-    const eol = rest.indexOf("\r\n");
-    if (eol === -1) break;
-    const size = parseInt(rest.slice(0, eol), 16);
-    if (!Number.isFinite(size) || size === 0) break;
-    body += rest.slice(eol + 2, eol + 2 + size);
-    if (rest.length < eol + 2 + size + 2) break; // the connection was cut inside this chunk
-    rest = rest.slice(eol + 2 + size + 2);
-  }
-  return body;
-}
-
-/** Every COMPLETE frame in an SSE body; a frame the cut left unfinished is not one. */
-function completeFrames(body: string): Frame[] {
-  const pieces = body.split("\n\n");
-  pieces.pop(); // whatever follows the last terminator is unfinished (or empty)
-  const frames: Frame[] = [];
-  for (const raw of pieces) {
-    const type = /^event: (.+)$/m.exec(raw)?.[1];
-    const data = /^data: (.+)$/m.exec(raw)?.[1];
-    if (type && data) frames.push({ type, data: JSON.parse(data) });
-  }
-  return frames;
-}
-
-test("BEHIND Bun.serve, a subscriber that stops reading is cut by the idle timeout, the loop ends, and nothing is skipped", async () => {
-  // A child process opens a raw socket, sends the subscribe request and then
-  // never reads. ~26 MB of events are waiting: more than the loopback socket
-  // buffers hold, so its window closes and the server's writes stop making
-  // progress. Bun.serve drains the body regardless (StreamOptions.bufferFrames),
-  // so the only bound it honours is `idleTimeout`: it closes the connection,
-  // the stream is cancelled, and the loop ends. The API server runs with the
-  // 10 s default; this server uses 2 s so the case finishes in time.
-  //
-  // WHAT IT PROVES, AND WHAT NOT. The connection's memory is bounded by the
-  // idle timeout and its loop stops; whatever the subscriber did receive is a
-  // gapless prefix; a resubscribe from its last number gets the rest. It
-  // does NOT deliver a `resync buffer_overflow` frame first — the peer is not
-  // reading, and the server gives this code no signal to send one on.
-  const { token } = await provisionAutomationToken("rm_stream_stalled", ["read_subjects", "read_sessions"]);
-  const cursor = await epoch.streamHeadSequence();
-  const N = 400;
-  const big = "x".repeat(64 * 1024);
-  await sql.begin(async (tx) => {
-    for (let i = 0; i < N; i++) await epoch.appendStreamEvent(tx, "subject.changed", { payload: { reason: "flood", i, big } });
-  });
-
-  let why = null as string | null; // assigned in a callback; the cast stops TS narrowing it to null
-  let endedAt = 0;
-  const server = Bun.serve({
-    port: 0,
-    idleTimeout: 2,
-    async fetch(req) {
-      const u = new URL(req.url);
-      const r = await handleSchedulerStream(req, u, {
-        streamTiming: {
-          keepaliveMs: 500,
-          pollMs: 10,
-          onEnd: (w) => {
-            why = w;
-            endedAt = Date.now();
-          },
-        },
-      });
-      if (r instanceof Response) return r;
-      return Response.json(r?.body ?? { error: "not found" }, { status: r?.status ?? 404 });
-    },
-  });
-  const pauseMs = 8_000;
-  const client = Bun.spawn(
+/**
+ * A client in its OWN process that opens the socket, prints `open`, and then —
+ * once the parent has SIGSTOPped it and let it go again — reads everything and
+ * prints what it got: the event numbers, every non-event frame, and the close.
+ * A stopped process reads nothing, so the loopback buffers fill and the
+ * server's backlog grows: a subscriber that stopped reading, for real.
+ */
+function stalledClient(wsBase: string, cursor: number, token: string) {
+  return Bun.spawn(
     [
       "bun",
       "-e",
-      `import { connect } from "node:net";
-       const chunks = [];
-       const s = connect(${server.port}, "127.0.0.1", () => {
-         s.write("GET /api/swarm/scheduler/subscribe?cursor=${cursor} HTTP/1.1\\r\\nHost: x\\r\\nAuthorization: Bearer ${token}\\r\\n\\r\\n");
-         s.pause();
-         setTimeout(() => s.resume(), ${pauseMs});
-       });
-       s.on("data", (c) => chunks.push(c));
-       const done = () => { process.stdout.write(Buffer.concat(chunks)); process.exit(0); };
-       s.on("close", done);
-       s.on("error", () => {});`,
+      `const ws = new WebSocket(${JSON.stringify(`${wsBase}${ROUTES.swarm.scheduler.subscribe}?cursor=${cursor}`)},
+         { headers: { Authorization: ${JSON.stringify(`Bearer ${token}`)} } });
+       const seqs = []; const other = [];
+       ws.onopen = () => console.error("open");
+       ws.onmessage = (e) => { const f = JSON.parse(e.data); if (f.type === "event") seqs.push(f.seq); else other.push(f); };
+       ws.onclose = (e) => { console.log(JSON.stringify({ seqs, other, code: e.code, reason: e.reason })); process.exit(0); };`,
     ],
     { stdout: "pipe", stderr: "pipe" },
   );
-  const startedAt = Date.now();
+}
+
+async function waitForLine(stream: ReadableStream<Uint8Array>, needle: string, budgetMs = 15_000): Promise<void> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  const deadline = Date.now() + budgetMs;
   try {
+    while (!text.includes(needle)) {
+      const next = await Promise.race([reader.read(), Bun.sleep(Math.max(0, deadline - Date.now())).then(() => null)]);
+      if (next === null || next.done) throw new Error(`never saw ${JSON.stringify(needle)}; got: ${text}`);
+      text += decoder.decode(next.value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/** ~26 MB of events, more than the loopback buffers hold. */
+async function flood(n = 400): Promise<void> {
+  const big = "x".repeat(64 * 1024);
+  await sql.begin(async (tx) => {
+    for (let i = 0; i < n; i++) await epoch.appendStreamEvent(tx, "subject.changed", { payload: { reason: "flood", i, big } });
+  });
+}
+
+test("a subscriber that STOPS READING gets every frame it was sent, gapless, then ONE resync `buffer_overflow`, then the resync close", async () => {
+  // D55 (11): "When a subscriber stops reading, the API sends one `resync`
+  // frame and closes the socket. It never drops an event to make room." The
+  // SSE body this replaced gave the server no backpressure signal, so a
+  // stalled subscriber was cut by the idle timeout with no reason sent; the
+  // socket reports its backlog, and this is the proof the API acts on it.
+  const cursor = await epoch.streamHeadSequence();
+  let why = null as string | null; // assigned in a callback
+  const server = streamServer({ keepaliveMs: 5_000, pollMs: 10, bufferBytes: 256 * 1024, onEnd: (w) => void (why = w) });
+  const client = stalledClient(server.ws, cursor, TOKEN);
+  try {
+    await waitForLine(client.stderr as ReadableStream<Uint8Array>, "open");
+    process.kill(client.pid, "SIGSTOP");
+    await flood();
     for (let i = 0; i < 1_500 && why === null; i++) await Bun.sleep(10);
-    expect(why, "the server must end the stalled connection").toBe("cancelled");
-    expect(endedAt - startedAt, "it ended while the peer was still not reading").toBeLessThan(pauseMs);
-    const raw = await new Response(client.stdout).text();
-    await client.exited;
-    const frames = completeFrames(dechunk(raw));
-    const seqs = frames.filter((f) => f.type === "event").map((f) => f.data.seq as number);
-    // A prefix, gapless from the cursor, and not the whole flood: it was cut.
-    expect(seqs).toEqual(seqs.map((_, i) => cursor + 1 + i));
-    expect(seqs.length).toBeLessThan(N);
-    expect(frames.filter((f) => f.type === "resync")).toEqual([]);
-    const last = seqs.length ? seqs[seqs.length - 1]! : cursor;
-    const again = await readFrames(stream.openSchedulerStream(last, { keepaliveMs: 5_000, pollMs: 10 }), 1);
-    expect(again[0]).toMatchObject({ type: "event", data: { seq: last + 1 } });
+    expect(why, "the server must end the stalled socket, while the client is still stopped").toBe("buffer_overflow");
+    process.kill(client.pid, "SIGCONT");
+    const got = JSON.parse(await new Response(client.stdout).text()) as {
+      seqs: number[];
+      other: Frame[];
+      code: number;
+      reason: string;
+    };
+    // A prefix, gapless from the cursor, cut short of the flood …
+    expect(got.seqs.length).toBeGreaterThan(0);
+    expect(got.seqs).toEqual(got.seqs.map((_, i) => cursor + 1 + i));
+    expect(got.seqs.length).toBeLessThan(400);
+    // … then the reason, once, then the close that names it.
+    expect(got.other.map((f) => [f.type, f.reason])).toEqual([["resync", "buffer_overflow"]]);
+    expect({ code: got.code, reason: got.reason }).toEqual({
+      code: stream.SCHEDULER_STREAM_CLOSE.resync,
+      reason: "resync: buffer_overflow",
+    });
+    // Nothing was skipped: a resubscribe from the last number it applied gets the next one.
+    const last = got.seqs[got.seqs.length - 1]!;
+    expect((await framesFrom(QUIET.ws, last, 1))[0]).toMatchObject({ type: "event", seq: last + 1 });
   } finally {
     client.kill("SIGKILL");
-    server.stop(true);
+    server.stop();
   }
-}, 30_000);
+}, 60_000);
 
-test("an event pruned from the MIDDLE while a connection is open is a resync `log_truncated` and a close, never a jump", async () => {
-  // The mid-stream half of §6.3's "never silently skips": the connection has
+test("RED CONTROL: with the backlog bound unread, the same stalled subscriber is never told — no resync, just a longer silence", async () => {
+  // The bound is what makes the API act. Put it out of reach (and leave the
+  // server's own limit to Bun's default) and the stalled socket is not ended
+  // for overflow while the flood sits queued: the subscriber that stopped
+  // reading gets no reason, which is the SSE behaviour D55 (11) replaced.
+  const cursor = await epoch.streamHeadSequence();
+  let why = null as string | null;
+  const server = streamServer({ keepaliveMs: 5_000, pollMs: 10, bufferBytes: Number.MAX_SAFE_INTEGER, onEnd: (w) => void (why = w) });
+  const client = stalledClient(server.ws, cursor, TOKEN);
+  try {
+    await waitForLine(client.stderr as ReadableStream<Uint8Array>, "open");
+    process.kill(client.pid, "SIGSTOP");
+    await flood(40);
+    await Bun.sleep(1_500);
+    expect(why).toBeNull();
+  } finally {
+    client.kill("SIGKILL");
+    server.stop();
+  }
+}, 60_000);
+
+test("an event pruned from the MIDDLE while a socket is open is a resync `log_truncated` and a close, never a jump", async () => {
+  // The mid-stream half of §6.3's "never silently skips": the socket has
   // served up to `cursor + 2`; then one owner transaction commits two numbers
   // and prunes the first, so the next poll finds `cursor + 4` where the
   // subscriber needs `cursor + 3`. Serving it would skip `cursor + 3`.
@@ -1117,9 +1235,8 @@ test("an event pruned from the MIDDLE while a connection is open is a resync `lo
   for (const n of [1, 2]) {
     await sql.begin((tx) => epoch.appendStreamEvent(tx, "subject.changed", { subjectId, payload: { reason: "probe", n } }));
   }
-  const res = stream.openSchedulerStream(cursor, { keepaliveMs: 5_000, pollMs: 10 });
-  const open = await readFramesKeepOpen(res, 2);
-  expect(open.frames.map((f) => f.data.seq)).toEqual([cursor + 1, cursor + 2]);
+  const sub = await subscribeWs(QUIET.ws, cursor, TOKEN);
+  expect((await sub.next(2)).map((f) => f.seq)).toEqual([cursor + 1, cursor + 2]);
 
   await sql.begin(async (tx) => {
     await tx.unsafe("SET LOCAL ROLE rm_owner");
@@ -1127,9 +1244,163 @@ test("an event pruned from the MIDDLE while a connection is open is a resync `lo
     await epoch.appendStreamEvent(tx, "subject.changed", { subjectId, payload: { reason: "probe", n: 4 } });
     await tx`DELETE FROM swarm_stream_events WHERE seq = ${gone}`;
   });
-  const rest = await open.more(5, 2_000);
-  expect(rest.done, "the connection must end").toBe(true);
-  expect(rest.frames).toEqual([{ type: "resync", data: { reason: "log_truncated", head: cursor + 4 } }]);
+  const closed = await Promise.race([sub.closed, Bun.sleep(2_000).then(() => null)]);
+  expect(closed?.code, "the socket must close").toBe(stream.SCHEDULER_STREAM_CLOSE.resync);
+  expect(sub.frames.slice(2)).toEqual([{ type: "resync", reason: "log_truncated", head: cursor + 4 }]);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE REAL api PROCESS — `bun run src/api/index.ts`, what the compose api runs
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The cases above drive the api's own upgrade and handler on a Bun.serve of
+// this file's. These boot the api itself, with its own defaults (keepalive
+// 5 s, backlog bound 1 MiB), and prove the three D55 (11) rules the spec's
+// "Socket authorization" gate names on the process that serves them: the
+// header-only rule, re-authorization at the keepalive, and resync-and-close
+// for a subscriber that stopped reading — followed by a REAL system-scheduler
+// process rebuilding from it.
+
+/** The status line a raw upgrade request gets from `api`, read off a TCP socket. */
+async function rawUpgradeStatus(base: string, pathAndQuery: string, headers: Record<string, string>): Promise<number> {
+  const { port } = new URL(base);
+  const lines = [
+    `GET ${pathAndQuery} HTTP/1.1`,
+    `Host: 127.0.0.1:${port}`,
+    "Upgrade: websocket",
+    "Connection: Upgrade",
+    "Sec-WebSocket-Version: 13",
+    `Sec-WebSocket-Key: ${Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("base64")}`,
+    ...Object.entries(headers).map(([k, v]) => `${k}: ${v}`),
+    "",
+    "",
+  ];
+  return await new Promise<number>((resolve, reject) => {
+    let text = "";
+    const s = connect(Number(port), "127.0.0.1", () => s.write(lines.join("\r\n")));
+    s.on("data", (c) => {
+      text += c.toString();
+      const m = /^HTTP\/1\.1 (\d{3})/.exec(text);
+      if (m) {
+        s.destroy();
+        resolve(Number(m[1]));
+      }
+    });
+    s.on("error", reject);
+    setTimeout(() => {
+      s.destroy();
+      reject(new Error(`no status line: ${text}`));
+    }, 10_000);
+  });
+}
+
+describe("the real api process", () => {
+  let api: ApiProcess;
+  beforeAll(async () => {
+    api = await bootApi({ env: { RM_ENV: "ephemeral" } });
+  }, 90_000);
+  afterAll(() => api?.stop());
+
+  test("HEADER ONLY: the api upgrades on the Authorization header, and refuses a token in the URL or in X-Automation-Token", async () => {
+    const head = await epoch.streamHeadSequence();
+    const path = `${ROUTES.swarm.scheduler.subscribe}?cursor=${head}`;
+    expect(await rawUpgradeStatus(api.base, path, { Authorization: `Bearer ${TOKEN}` })).toBe(101);
+    expect(await rawUpgradeStatus(api.base, `${path}&token=${TOKEN}`, { Authorization: `Bearer ${TOKEN}` })).toBe(400);
+    expect(await rawUpgradeStatus(api.base, `${path}&token=${TOKEN}`, {})).toBe(400);
+    expect(await rawUpgradeStatus(api.base, path, { "X-Automation-Token": TOKEN })).toBe(401);
+    expect(await rawUpgradeStatus(api.base, path, { Authorization: "Bearer rmat_forged" })).toBe(403);
+    // And a plain GET, no upgrade, is 426.
+    const plain = await fetch(`${api.base}${path}`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    expect(plain.status).toBe(426);
+    // A real WebSocket client with the header is served the head.
+    const sub = await subscribeWs(api.base.replace(/^http/, "ws"), head, TOKEN);
+    try {
+      const [first] = await sub.next(1, 8_000);
+      expect(first).toMatchObject({ type: "keepalive" });
+    } finally {
+      sub.end();
+    }
+  }, 30_000);
+
+  test("REVOKED AT THE KEEPALIVE: the api closes an open socket with the token-revoked code once the token's row is gone", async () => {
+    const { token } = await provisionAutomationToken("rm_stream_api_revoked", ["read_subjects", "read_sessions"]);
+    const head = await epoch.streamHeadSequence();
+    const sub = await subscribeWs(api.base.replace(/^http/, "ws"), head, token);
+    expect((await sub.next(1, 8_000))[0]).toMatchObject({ type: "keepalive", head });
+    await sql.begin(async (tx) => {
+      await tx.unsafe("SET LOCAL ROLE rm_owner");
+      await tx`DELETE FROM automation_tokens WHERE instance = 'rm_stream_api_revoked'`;
+    });
+    const closed = await Promise.race([sub.closed, Bun.sleep(8_000).then(() => null)]);
+    expect(closed).toEqual({ code: stream.SCHEDULER_STREAM_CLOSE.tokenRevoked, reason: "token revoked or rotated" });
+  }, 30_000);
+
+  test("OVERFLOW ON THE api: a client process that stops reading gets its frames, one resync and the close; a real system-scheduler that stopped reading rebuilds from it", async () => {
+    // (1) A bare client.
+    const cursor = await epoch.streamHeadSequence();
+    const wsBase = api.base.replace(/^http/, "ws");
+    const client = stalledClient(wsBase, cursor, TOKEN);
+    try {
+      await waitForLine(client.stderr as ReadableStream<Uint8Array>, "open");
+      process.kill(client.pid, "SIGSTOP");
+      await flood();
+      await Bun.sleep(4_000);
+      process.kill(client.pid, "SIGCONT");
+      const got = JSON.parse(await new Response(client.stdout).text()) as { seqs: number[]; other: Frame[]; code: number };
+      expect(got.seqs.length).toBeGreaterThan(0);
+      expect(got.seqs).toEqual(got.seqs.map((_, i) => cursor + 1 + i));
+      expect(got.seqs.length).toBeLessThan(400);
+      expect(got.other.filter((f) => f.type === "resync").map((f) => f.reason)).toEqual(["buffer_overflow"]);
+      expect(got.other[got.other.length - 1]!.type).toBe("resync");
+      expect(got.code).toBe(stream.SCHEDULER_STREAM_CLOSE.resync);
+    } finally {
+      client.kill("SIGKILL");
+    }
+
+    // (2) The real scheduler, its socket open against the same api, stopped
+    // while the log floods, then let go: it reads what it was sent, the
+    // resync, and rebuilds (§3.1) — the trigger is the API's resync.
+    const healthPort = await freeTcpPort();
+    const scheduler = Bun.spawn(["bun", "scripts/system-scheduler.ts"], {
+      cwd: join(import.meta.dir, "..", ".."),
+      env: {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        HOME: process.env.HOME ?? "/tmp",
+        SCHEDULER_API_URL: api.base,
+        SCHEDULER_TOKEN_FILE: writeTokenFile(TOKEN),
+        SCHEDULER_HEALTH_PORT: String(healthPort),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const out: string[] = [];
+    void (async () => {
+      const dec = new TextDecoder();
+      for await (const chunk of scheduler.stdout as ReadableStream<Uint8Array>) out.push(dec.decode(chunk));
+    })();
+    const saw = async (needle: string, budgetMs: number) => {
+      const deadline = Date.now() + budgetMs;
+      while (!out.join("").includes(needle) && Date.now() < deadline) await Bun.sleep(50);
+      return out.join("").includes(needle);
+    };
+    try {
+      expect(await saw("clock running", 20_000)).toBe(true);
+      process.kill(scheduler.pid, "SIGSTOP");
+      await flood();
+      await Bun.sleep(4_000);
+      process.kill(scheduler.pid, "SIGCONT");
+      expect(await saw("rebuild (resync)", 30_000), out.join("")).toBe(true);
+      // Healthy again on the rebuilt copy.
+      let healthy = false;
+      for (let i = 0; i < 100 && !healthy; i++) {
+        healthy = await fetch(`http://127.0.0.1:${healthPort}/health`).then((r) => r.ok, () => false);
+        if (!healthy) await Bun.sleep(100);
+      }
+      expect(healthy).toBe(true);
+    } finally {
+      scheduler.kill("SIGKILL");
+    }
+  }, 120_000);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1137,7 +1408,11 @@ test("an event pruned from the MIDDLE while a connection is open is a resync `lo
 // it commits a prune, and every case above reads a log that starts at 1.
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("a subscription from a cursor rm_owner has pruned below is a resync and a close, never a skip to the floor", async () => {
+test("a subscription from a cursor rm_owner has pruned below is a resync `log_truncated` and a close, never a skip to the floor", async () => {
+  // D55 (12): the log is pruned only by the manual, receipted `bun run prune`
+  // (rm_owner), and "a scheduler cursor below the retained floor gets
+  // resync-and-close (`log_truncated`)". The prune here is that command's
+  // DELETE, run as rm_owner on this file's copy.
   const subjectId = await activeSubject("sub_pruned", 600);
   const opened = await epoch.openEpoch(subjectId);
   if (!opened.ok) throw new Error("openEpoch failed");
@@ -1150,19 +1425,12 @@ test("a subscription from a cursor rm_owner has pruned below is a resync and a c
   expect(await stream.retainedFloor()).toBe(head);
 
   // Servable: the next event it needs (the floor) is still there.
-  const served = await readFrames(stream.openSchedulerStream(head - 1, { keepaliveMs: 5_000, pollMs: 10 }), 1);
-  expect(served[0]).toMatchObject({ type: "event", data: { seq: head } });
+  const served = await framesFrom(QUIET.ws, head - 1, 1);
+  expect(served[0]).toMatchObject({ type: "event", seq: head });
 
-  // Not servable: `head - 1` is gone. One frame, the reason, then the end.
-  const res = stream.openSchedulerStream(head - 2, { keepaliveMs: 20, pollMs: 10 });
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let text = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    text += decoder.decode(value, { stream: true });
-  }
-  expect([...text.matchAll(/^event: (.+)$/gm)].map((m) => m[1])).toEqual(["resync"]);
-  expect(text).toContain('"reason":"log_truncated"');
+  // Not servable: `head - 1` is gone. One frame, the reason, then the close.
+  const sub = await subscribeWs(FAST.ws, head - 2, TOKEN);
+  const closed = await sub.closed;
+  expect(sub.frames).toEqual([{ type: "resync", reason: "log_truncated", head }]);
+  expect(closed.code).toBe(stream.SCHEDULER_STREAM_CLOSE.resync);
 });
