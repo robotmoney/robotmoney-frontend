@@ -51,6 +51,11 @@ DECLARE
   -- Written by the price workers (0054). The same privileges as worker_dml now
   -- that neither list carries DELETE; kept apart because 0054 granted them apart.
   worker_insert_update text[] := ARRAY['asset_price_floors', 'asset_prices'];
+  -- The wallet repair pass's immutable evidence (0037): it copies a day's
+  -- samples here before rewriting the day, so it INSERTs, and 0037's guard
+  -- refuses every UPDATE. Granted by 0091; 0054's allowlist had left it out,
+  -- and the repair of every incomplete day failed 42501 on the copy.
+  worker_insert_only text[] := ARRAY['wallet_balance_sample_evidence', 'wallet_sleeve_sample_evidence'];
   -- The serial sequences behind rm_worker's inserts (0054, 0061); every other
   -- sequence is SELECT only for it (0062).
   worker_sequence_usage text[] := ARRAY[
@@ -210,14 +215,36 @@ BEGIN
     IF NOT rel.name = ANY(read_only_for_runtime) THEN
       IF rel.name = ANY(worker_dml) OR rel.name = ANY(worker_insert_update) THEN
         EXECUTE format('GRANT SELECT, INSERT, UPDATE ON %s TO rm_worker', rel.ident);
+      ELSIF rel.name = ANY(worker_insert_only) THEN
+        EXECUTE format('GRANT SELECT, INSERT ON %s TO rm_worker', rel.ident);
+        EXECUTE format('REVOKE UPDATE ON %s FROM rm_worker', rel.ident);
       ELSE
         EXECUTE format('GRANT SELECT ON %s TO rm_worker', rel.ident);
         EXECUTE format('REVOKE INSERT, UPDATE ON %s FROM rm_worker', rel.ident);
       END IF;
     END IF;
-    -- D55 (6), on every relation, for every runtime role, last: nothing above
-    -- grants either privilege, and a hand-run grant since the last run is taken
-    -- back here. Preflight check 2 refuses a database where one survives.
+  END LOOP;
+
+  -- D55 (6), for every runtime role, last, on every relation check 2 inspects:
+  -- a table, a partitioned table, a view (an updatable view passes a DELETE
+  -- through to its table) and a foreign table, in any application schema. Nothing
+  -- above grants either privilege; a hand-run grant since the last run is taken
+  -- back here. Preflight check 2 (src/db/preflight.ts, rule `append_only_write`)
+  -- refuses a database where one survives. The sweep reaches what rm_owner owns,
+  -- which is every application relation: one a runtime role owns already failed
+  -- above, and a relation owned by the provisioning login or an extension is not
+  -- rm_owner's to re-grant, so check 2 stays the refusal for those.
+  FOR rel IN
+    SELECT c.oid::regclass AS ident, c.relname AS name
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    LEFT JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'
+    WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+      AND c.relkind IN ('r', 'p', 'v', 'f')
+      AND c.relowner = 'rm_owner'::regrole
+      AND d.objid IS NULL
+    ORDER BY c.oid::regclass::text
+  LOOP
     EXECUTE format('REVOKE DELETE, TRUNCATE ON %s FROM rm_app, rm_worker, rm_readonly', rel.ident);
   END LOOP;
 

@@ -14,7 +14,7 @@
 // THE DATABASE is built the way a real one reaches this release: snapshot N
 // (the pinned fixture, tests/fixtures/snapshots/) bootstrapped by rm_owner,
 // then the REAL migrate run with this checkout's migrations, which applies
-// 0088 (the WebAuthn slots), 0089 (the revoke) and 0090 and records each one's
+// 0088 (the WebAuthn slots), 0089 (the revoke), 0090 and 0091 and records each one's
 // declared compat in the ledger.
 //
 // THE CODE is the real api entrypoint (`bun run src/api/index.ts`), logged in
@@ -28,7 +28,7 @@
 //     exactly that list, handed in through `bun --preload` the way
 //     tests/support/automation-auth.ts's red controls rewrite one line of a
 //     real process. It must refuse by check 3b, naming 0088 and 0089 as
-//     breaking — and not 0090, whose `additive` it may run beside.
+//     breaking — and not 0090 or 0091, whose `additive` it may run beside.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import type postgres from "postgres";
@@ -44,6 +44,7 @@ const LAST_BEFORE_REVOKE = "0087_member_key_spoof_generation.sql";
 const REVOKE = "0089_revoke_runtime_delete.sql";
 const SLOTS = "0088_webauthn_challenge_slots.sql";
 const COMMENT = "0090_stream_events_retention_comment.sql";
+const WORKER_EVIDENCE = "0091_rm_worker_wallet_evidence_insert.sql";
 
 const dbs = new ScratchDatabases();
 const suffix = crypto.randomUUID().slice(0, 8);
@@ -56,6 +57,8 @@ interface Boot {
   readonly code: number | null;
   readonly port: number;
   readonly lines: string[];
+  /** The served /health body; null when the process exited instead. */
+  readonly health: Record<string, unknown> | null;
 }
 
 /** Boot the real api as rm_app on the scratch database, optionally with a preload. */
@@ -84,10 +87,11 @@ async function bootApi(preload?: string): Promise<Boot> {
     for (;;) {
       if (proc.exitCode !== null) {
         await drained;
-        return { outcome: "exited", code: proc.exitCode, port, lines: lines() };
+        return { outcome: "exited", code: proc.exitCode, port, lines: lines(), health: null };
       }
       try {
-        if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) return { outcome: "served", code: null, port, lines: lines() };
+        const res = await fetch(`http://127.0.0.1:${port}/health`);
+        if (res.ok) return { outcome: "served", code: null, port, lines: lines(), health: (await res.json()) as Record<string, unknown> };
       } catch {
         /* not listening yet */
       }
@@ -125,9 +129,10 @@ afterAll(async () => {
 });
 
 describe("the breaking revoke closes rollback to code that ignores the tombstones (D55 (6))", () => {
-  test("the real migrate run recorded 0088 and 0089 as breaking and 0090 as additive", async () => {
+  test("the real migrate run recorded 0088 and 0089 as breaking, and 0090 and 0091 as additive", async () => {
     const rows = (await db`
-      SELECT name, compat FROM schema_migrations WHERE name IN (${SLOTS}, ${REVOKE}, ${COMMENT}) ORDER BY name`) as unknown as {
+      SELECT name, compat FROM schema_migrations
+       WHERE name IN (${SLOTS}, ${REVOKE}, ${COMMENT}, ${WORKER_EVIDENCE}) ORDER BY name`) as unknown as {
       name: string;
       compat: string;
     }[];
@@ -135,21 +140,29 @@ describe("the breaking revoke closes rollback to code that ignores the tombstone
       { name: SLOTS, compat: "breaking" },
       { name: REVOKE, compat: "breaking" },
       { name: COMMENT, compat: "additive" },
+      { name: WORKER_EVIDENCE, compat: "additive" },
     ]);
   });
 
-  test("the code built here serves the migrated database", async () => {
+  test("the code built here serves the migrated database, with both boot guards armed as rm_app", async () => {
     const boot = await bootApi();
     expect({ outcome: boot.outcome, lines: boot.lines }).toEqual({ outcome: "served", lines: ["startup_preflight: passed"] });
+    // The guards' DELETE probes get 42501 from rm_app on every table now (D55
+    // (6)). That refusal is the conclusive answer, so both checks report
+    // "armed", never "unchecked" (which a 42501 counted as inconclusive gave).
+    expect({
+      append_only_guard: boot.health?.append_only_guard,
+      analytics_ledger_guard: boot.health?.analytics_ledger_guard,
+    }).toEqual({ append_only_guard: "armed", analytics_ledger_guard: "armed" });
   }, 120_000);
 
-  test("the code built before the revoke refuses to boot by check 3b, naming 0088 and 0089 as breaking and not 0090", async () => {
+  test("the code built before the revoke refuses to boot by check 3b, naming 0088 and 0089 as breaking and not 0090 or 0091", async () => {
     // Its filename list, as its own snapshot carried it: this tree's up to the
     // last file before this wave. Nothing else about the image changes.
     const own = (await loadSnapshot()).filenames;
     expect(own).toContain(LAST_BEFORE_REVOKE);
     const before = own.filter((file) => file <= LAST_BEFORE_REVOKE);
-    expect(own.filter((file) => !before.includes(file))).toEqual([SLOTS, REVOKE, COMMENT]);
+    expect(own.filter((file) => !before.includes(file))).toEqual([SLOTS, REVOKE, COMMENT, WORKER_EVIDENCE]);
     const preload = writeRedControlPreload(
       "src/db/preflight.ts",
       "codeFilenames = (await loadSnapshot()).filenames;",

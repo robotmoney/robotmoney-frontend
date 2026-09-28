@@ -59,6 +59,16 @@ const created: string[] = [];
 const homes: string[] = [];
 /** Held DELETE/TRUNCATE on the release, before the upgrade ran: the red control. */
 let heldBeforeUpgrade: string[] = [];
+/** The wallet repair pass's evidence copy: rm_worker's INSERT, before the upgrade (0091's red control). */
+let evidenceInsertBeforeUpgrade: Record<string, boolean> = {};
+const EVIDENCE_TABLES = ["wallet_balance_sample_evidence", "wallet_sleeve_sample_evidence"] as const;
+
+async function workerEvidenceInsert(db: postgres.Sql<{}>): Promise<Record<string, boolean>> {
+  const rows = (await db`
+    SELECT t, has_table_privilege('rm_worker', 'public.' || t, 'INSERT') AS may
+      FROM unnest(${[...EVIDENCE_TABLES]}::text[]) AS t ORDER BY t`) as unknown as { t: string; may: boolean }[];
+  return Object.fromEntries(rows.map((r) => [r.t, r.may]));
+}
 
 /** Every (role, relation, privilege) a runtime role holds DELETE or TRUNCATE on. */
 async function runtimeDeleteGrants(db: postgres.Sql<{}>): Promise<string[]> {
@@ -124,6 +134,7 @@ beforeAll(async () => {
       await restoreLogins(admin, savedRoles);
     }
     heldBeforeUpgrade = await runtimeDeleteGrants(db);
+    evidenceInsertBeforeUpgrade = await workerEvidenceInsert(db);
     // Production's shape: the provisioning login's own defaults are not the
     // schema's (§9.1 step 3's provisioning half).
     await revokeLoginDefaults(db, LOGIN);
@@ -239,6 +250,66 @@ describe("the executor (real logins): each runtime role gets 42501, and rm_owner
         return (await db`DELETE FROM jobs WHERE id = ${job!.id} RETURNING id`).length;
       });
       expect(removed).toBe(1);
+    });
+  }
+});
+
+describe("rm_worker may INSERT the wallet repair pass's evidence, and nothing more on it (0091)", () => {
+  test("RED CONTROL: the production baseline, before the upgrade, gives rm_worker no INSERT on either evidence table", () => {
+    // 0054's allowlist left both off; so the repair pass's evidence copy (src/ops/
+    // wallet-backfill.ts repairResolvedDay) failed 42501 for every incomplete day.
+    expect(evidenceInsertBeforeUpgrade).toEqual({
+      wallet_balance_sample_evidence: false,
+      wallet_sleeve_sample_evidence: false,
+    });
+  });
+
+  for (const [label, name] of [
+    ["a blank bootstrap", () => blankDb],
+    ["the upgraded production baseline", () => UPGRADED_DB],
+  ] as const) {
+    test(`${label}: a real rm_worker login inserts an evidence row in each table, and cannot UPDATE or DELETE one`, async () => {
+      const outcome = await asLogin(name(), "rm_worker", async (db) => {
+        const inserted: Record<string, number> = {};
+        const rollback = new Error("rollback: rm_worker cannot remove what it inserted, so the probe row never commits");
+        await db
+          .begin(async (tx) => {
+            const original = -Math.floor(Math.random() * 1e9) - 1;
+            inserted.wallet_balance_sample_evidence = (
+              await tx`
+                INSERT INTO wallet_balance_sample_evidence
+                  (original_id, sample_date, symbol, value_usd, provenance, sampled_at, evidence_reason)
+                VALUES (${original}, '2026-01-01', 'USDC', 1, 'probe', now(), 'incomplete-snapshot-replacement')
+                RETURNING evidence_id`
+            ).length;
+            inserted.wallet_sleeve_sample_evidence = (
+              await tx`
+                INSERT INTO wallet_sleeve_sample_evidence
+                  (original_id, sample_date, wallet_address, symbol, provenance, sampled_at, evidence_reason)
+                VALUES (${original}, '2026-01-01', '0xprobe', 'USDC', 'probe', now(), 'incomplete-snapshot-replacement')
+                RETURNING evidence_id`
+            ).length;
+            throw rollback;
+          })
+          .catch((error) => {
+            if (error !== rollback) throw error;
+          });
+        const refused: Record<string, string | null> = {};
+        for (const table of EVIDENCE_TABLES) {
+          refused[`UPDATE ${table}`] = await sqlstate(db, `UPDATE ${table} SET provenance = provenance WHERE false`);
+          refused[`DELETE ${table}`] = await sqlstate(db, `DELETE FROM ${table} WHERE false`);
+        }
+        return { inserted, refused };
+      });
+      expect(outcome).toEqual({
+        inserted: { wallet_balance_sample_evidence: 1, wallet_sleeve_sample_evidence: 1 },
+        refused: {
+          "UPDATE wallet_balance_sample_evidence": "42501",
+          "DELETE wallet_balance_sample_evidence": "42501",
+          "UPDATE wallet_sleeve_sample_evidence": "42501",
+          "DELETE wallet_sleeve_sample_evidence": "42501",
+        },
+      });
     });
   }
 });
