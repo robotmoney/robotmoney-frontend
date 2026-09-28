@@ -7,11 +7,13 @@
 //   1. `swarm_judge_config.mode` is `off` in production, and a twin restores
 //      production — so every twin boot judged nothing at all.
 //   2. `OPENCODE_API_KEY` reached the member-agent containers but not the
-//      worker lane that ran the judge (that lane is gone — issue #1026 made the
-//      judge a participant, which receives its model key from
-//      `credential.json` like every other participant, smoke-production-spec.md
-//      §3), so `resolveJudgeTransport()` returned null and every judgement was
-//      template prose.
+//      worker lane that ran the judge, so every judgement was template prose.
+//      That lane, its inline judge and the template are gone (issue #1026,
+//      D53 (4)): the judge is a participant container started from the
+//      credential file's `judges` namespace, it receives its model key as
+//      `RM_INFERENCE_KEY` from its own `credential.json` entry like every
+//      other participant (smoke-production-spec.md §3, §6.2), and a judge
+//      that cannot reach its model refuses rather than submitting prose.
 //   3. A twin adopted production's in-flight session and inherited its
 //      six-hour window, so the lifecycle stalled before the judge job.
 //   4. The Zen REST API rejects the provider-qualified model id the config
@@ -72,9 +74,10 @@ interface Receipt {
  *
  * PURE, and the whole point of the leg: `source` is the one field that
  * separates "a model read the takes and wrote this" from "the aggregator's own
- * template wrote this under the judge's name". `judge_mode` matters too —
- * `shadow` records an opinion the session never adopted, so a receipt carrying
- * one attests less than it appears to.
+ * template wrote this under the judge's name". `judge_mode` matters too: only
+ * an `enforce` judgement is one the session adopted. D53 (1) removed `shadow`
+ * from every write path, so a stored receipt carrying it is history, and it
+ * attests less than it appears to.
  */
 export function receiptVerdict(body: ReceiptResponse | Receipt): { ok: boolean; why: string } {
   // Accepts the served envelope or a bare receipt, so a shape change surfaces

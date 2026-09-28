@@ -23,7 +23,10 @@
 //     and while a generation exists a plain boot's roster takes those
 //     members' key and bearer from it rather than from `RM_CREDENTIALS`.
 //   - THE ORDER IS (1) write generation → (2) fenced rebind by MEMBER ID →
-//     (3) stop old-generation participants → (4) start them. The generation is
+//     (3) stop old-generation participants → (4) start them. (1) and (2) are
+//     `spoofKeys`; (3) and (4) are the boot's own reconciliation
+//     (planParticipants with the generation, then applyParticipantPlan), driven
+//     here over a recording Docker. The generation is
 //     written BEFORE the rebind: a generation written after a crashed rebind
 //     would leave the database holding keys no file records, and those members
 //     would be permanently unusable.
@@ -32,8 +35,11 @@
 //     "interrupted rebind then rerun; crash after rebind commit before
 //     container replacement recovers."
 //
-// Cost class `unit` (docs/architecture.md §3 L1): a temp state directory and
-// injected database/container dependencies — no Postgres, no Docker, no clock.
+// Cost class `unit` (docs/architecture.md §3 L1): a temp state directory, an
+// injected database, and a recording stand-in for Docker — no Postgres, no
+// daemon, no clock. The real database and daemon are
+// scripts/tests/integration/spoof-keys-recovery.test.ts and
+// backend/tests/spoof-rebind.test.ts.
 import { describe, expect, test } from "bun:test";
 import {
   existsSync,
@@ -54,16 +60,21 @@ import {
   effectiveRoster,
   readSpoofGeneration,
   rebindSpoofedKeys,
-  replaceSpoofedParticipants,
   spoofKeys,
   SpoofKeysRefusal,
+  spoofKeysRequest,
   writeSpoofGeneration,
-  type SpoofContainerDeps,
   type SpoofGeneration,
   type SpoofGuardContext,
   type SpoofRebindDeps,
 } from "../../lib/swarm/spoof-keys.ts";
-import type { RosterEntry, RunningParticipant } from "../../lib/swarm/credential-file.ts";
+import {
+  planParticipants,
+  type CredentialFile,
+  type RosterEntry,
+  type RunningParticipant,
+} from "../../lib/swarm/credential-file.ts";
+import { applyParticipantPlan, participantServiceName } from "../../lib/participant-compose.ts";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "rm-spoof-keys-"));
@@ -162,7 +173,7 @@ function fakeDb(initialInstalled: string | null = null) {
       calls.push(`token:${memberId}`);
       tokens.push({ memberId, bearer, generationId });
     },
-    async readInstalledGeneration(): Promise<string | null> {
+    async readInstalledGeneration(_generation: SpoofGeneration): Promise<string | null> {
       calls.push("readInstalled");
       return installed;
     },
@@ -179,17 +190,39 @@ function fakeDb(initialInstalled: string | null = null) {
   };
 }
 
-function fakeContainers() {
+/**
+ * Steps (3) and (4) as a boot performs them: the credential file's roster
+ * through planParticipants with the instance's generation, then
+ * applyParticipantPlan over a recording Docker. Returns the plan and every
+ * Docker call in order, as `stop:<name>` and `start:<name>@<generation>`.
+ */
+const FILE_FOR: (names: readonly string[]) => CredentialFile = (names) => ({
+  agents: Object.fromEntries(
+    names.map((name) => [
+      name,
+      { memberId: `m-${name}`, publicKeyB64: `file-pub-${name}`, privateJwk: { kty: "OKP" }, bearer: `tok_file_${name}`, modelKey: `mk-${name}` },
+    ]),
+  ),
+  judges: {},
+});
+function reconcile(names: readonly string[], live: readonly RunningParticipant[], generation: SpoofGeneration | null) {
+  const plan = planParticipants({ configured: true, path: "/etc/rm/credential.json", origin: "flag" }, live, () => FILE_FOR(names), { generation });
   const calls: string[] = [];
-  const deps: SpoofContainerDeps = {
-    async stopParticipant(participant): Promise<void> {
-      calls.push(`stop:${participant.name}`);
+  const generationOf = new Map([...plan.start, ...plan.keep].map((e) => [participantServiceName(e.kind, e.name), `${e.name}@${e.generation ?? "file"}`]));
+  applyParticipantPlan(
+    plan,
+    plan.start.map((e) => participantServiceName(e.kind, e.name)),
+    {
+      project: "rm_twin",
+      composeFiles: ["docker-compose.yml"],
+      run: (args) => {
+        if (args[0] === "rm") for (const c of args.slice(2)) calls.push(`stop:${live.find((p) => p.containerName === c)?.name}`);
+        if (args[0] === "compose") for (const svc of args.slice(args.indexOf("--no-deps") + 1)) calls.push(`start:${generationOf.get(svc)}`);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
     },
-    async startParticipant(member, generationId): Promise<void> {
-      calls.push(`start:${member.name}@${generationId}`);
-    },
-  };
-  return { deps, calls };
+  );
+  return { plan, calls };
 }
 
 // ── THE FOUR GUARDS, EACH REFUSING ON ITS OWN ──────────────────────────────
@@ -384,9 +417,7 @@ describe("assertSpoofKeysAllowed — the generation is never written over RM_CRE
         stateRoot: root,
         names: [],
         members: IN_HOUSE,
-        running: [],
         db: fakeDb(null).deps,
-        containers: fakeContainers().deps,
       });
       expect(outcome.generationPath).toBe(genFile(root));
       expect(outcome.generationPath).not.toBe(cred);
@@ -410,9 +441,7 @@ describe("spoofKeys — the generation lands in instancePaths(stateRoot, instanc
         stateRoot: root,
         names: [],
         members: IN_HOUSE,
-        running: [],
         db: fakeDb(null).deps,
-        containers: fakeContainers().deps,
       });
       const expected = instancePaths(root, "rm_twin").spoofGenerationFile;
       expect(outcome.generationPath).toBe(expected);
@@ -436,9 +465,7 @@ describe("spoofKeys — the generation lands in instancePaths(stateRoot, instanc
           stateRoot: root,
           names: [],
           members: IN_HOUSE,
-          running: [],
           db: fakeDb(null).deps,
-          containers: fakeContainers().deps,
         });
       const a = await run("twin-a");
       const b = await run("twin-b");
@@ -718,9 +745,7 @@ describe("effectiveRoster — while a generation exists, its members boot on its
         stateRoot: root,
         names: ["athena"],
         members: IN_HOUSE,
-        running: [],
         db: fakeDb(null).deps,
-        containers: fakeContainers().deps,
       });
       const persisted = readSpoofGeneration(root, "rm_twin");
       expect(persisted?.generationId).toBe(outcome.generationId);
@@ -816,7 +841,7 @@ describe("rebindSpoofedKeys — one fenced transaction, keyed by member id, idem
 });
 
 // ── STEPS (3) AND (4): STOP THE OLD, THEN START THE NEW ────────────────────
-describe("replaceSpoofedParticipants — stop-then-start, never a rolling restart", () => {
+describe("steps (3) and (4) are the boot's reconciliation — stop-then-start, never a rolling restart", () => {
   const generation: SpoofGeneration = {
     generationId: "gen-2",
     createdAt: "2026-09-23T00:00:00.000Z",
@@ -831,14 +856,11 @@ describe("replaceSpoofedParticipants — stop-then-start, never a rolling restar
     },
   };
 
-  test("an older-generation container is stopped and the new one started", async () => {
-    const containers = fakeContainers();
-    await replaceSpoofedParticipants(generation, [running("athena", "gen-1")], containers.deps);
-    expect(containers.calls).toEqual(["stop:athena", "start:athena@gen-2"]);
+  test("an older-generation container is stopped and the new one started", () => {
+    expect(reconcile(["athena"], [running("athena", "gen-1")], generation).calls).toEqual(["stop:athena", "start:athena@gen-2"]);
   });
 
-  test("EVERY stop precedes EVERY start — two containers for one member must never overlap", async () => {
-    const containers = fakeContainers();
+  test("EVERY stop precedes EVERY start — two containers for one member must never overlap", () => {
     const gen: SpoofGeneration = {
       ...generation,
       members: {
@@ -851,38 +873,46 @@ describe("replaceSpoofedParticipants — stop-then-start, never a rolling restar
         },
       },
     };
-    await replaceSpoofedParticipants(gen, [running("athena", "gen-1"), running("robot-money", "gen-1")], containers.deps);
-    const lastStop = containers.calls.map((c) => c.startsWith("stop:")).lastIndexOf(true);
-    const firstStart = containers.calls.findIndex((c) => c.startsWith("start:"));
+    const { calls } = reconcile(["athena", "robot-money"], [running("athena", "gen-1"), running("robot-money", "gen-1")], gen);
+    const lastStop = calls.map((c) => c.startsWith("stop:")).lastIndexOf(true);
+    const firstStart = calls.findIndex((c) => c.startsWith("start:"));
+    expect(lastStop).toBe(1);
     expect(firstStart).toBeGreaterThan(lastStop);
   });
 
-  test("a container ALREADY on this generation is left alone — a rerun does not restart healthy containers", async () => {
-    const containers = fakeContainers();
-    await replaceSpoofedParticipants(generation, [running("athena", "gen-2")], containers.deps);
-    expect(containers.calls).toEqual([]);
+  test("a container ALREADY on this generation is left alone — a rerun does not restart healthy containers", () => {
+    const { plan, calls } = reconcile(["athena"], [running("athena", "gen-2")], generation);
+    expect(plan.keep.map((e) => e.name)).toEqual(["athena"]);
+    expect(calls).toEqual([]);
   });
 
-  test("a container with no generation at all is superseded and replaced", async () => {
-    const containers = fakeContainers();
-    await replaceSpoofedParticipants(generation, [running("athena")], containers.deps);
-    expect(containers.calls).toEqual(["stop:athena", "start:athena@gen-2"]);
+  test("a container with no generation at all is superseded and replaced", () => {
+    expect(reconcile(["athena"], [running("athena")], generation).calls).toEqual(["stop:athena", "start:athena@gen-2"]);
   });
 
-  test("a spoofed member with no running container is simply started", async () => {
-    const containers = fakeContainers();
-    await replaceSpoofedParticipants(generation, [], containers.deps);
-    expect(containers.calls).toEqual(["start:athena@gen-2"]);
+  test("a spoofed member with no running container is simply started", () => {
+    expect(reconcile(["athena"], [], generation).calls).toEqual(["start:athena@gen-2"]);
+  });
+
+  test("a member the generation does not name keeps the file's key and is not restarted for it", () => {
+    const { plan, calls } = reconcile(["athena", "noop-analyst"], [running("athena", "gen-2"), running("noop-analyst")], generation);
+    expect(plan.keep.map((e) => e.name).sort()).toEqual(["athena", "noop-analyst"]);
+    expect(plan.keep.find((e) => e.name === "noop-analyst")?.credential.bearer).toBe("tok_file_noop-analyst");
+    expect(calls).toEqual([]);
+  });
+
+  test("a generation never starts a member the credential file does not list", () => {
+    const { plan } = reconcile([], [], generation);
+    expect(plan.start).toEqual([]);
   });
 });
 
 // ── THE WHOLE OPERATION, IN ORDER, RESUMABLE ───────────────────────────────
 describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
-  test("a full first run writes the generation, rebinds by id, and replaces the containers", async () => {
+  test("a full first run writes the generation, rebinds by id, and the boot then replaces the containers", async () => {
     const dir = tempDir();
     const out = genFile(dir);
     const db = fakeDb(null);
-    const containers = fakeContainers();
     try {
       const outcome = await spoofKeys({
         guards: allowed(),
@@ -890,15 +920,24 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
         stateRoot: dir,
         names: [],
         members: IN_HOUSE,
-        running: [running("athena", "gen-old"), running("robot-money", "gen-old")],
         db: db.deps,
-        containers: containers.deps,
       });
       expect(outcome.generationPath).toBe(out);
       expect(outcome.resumed).toBe(false);
       expect([...outcome.rebound].sort()).toEqual(["athena", "robot-money"]);
-      expect([...outcome.restarted].sort()).toEqual(["athena", "robot-money"]);
       expect(db.installedGeneration()).toBe(outcome.generationId);
+      // (3) and (4): the boot's reconciliation over the persisted generation.
+      const { calls } = reconcile(
+        ["athena", "robot-money"],
+        [running("athena", "gen-old"), running("robot-money", "gen-old")],
+        readSpoofGeneration(dir, "rm_twin"),
+      );
+      expect(calls).toEqual([
+        "stop:athena",
+        "stop:robot-money",
+        `start:athena@${outcome.generationId}`,
+        `start:robot-money@${outcome.generationId}`,
+      ]);
       expect(db.tokens.map((t) => t.memberId).sort()).toEqual(["m-athena", "m-robot-money"]);
       expect(readSpoofGeneration(dir, "rm_twin")?.generationId).toBe(outcome.generationId);
     } finally {
@@ -923,9 +962,7 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
         stateRoot: dir,
         names: [],
         members: IN_HOUSE,
-        running: [],
         db: db.deps,
-        containers: fakeContainers().deps,
       });
       expect(fileWhenFenceOpened).toBe(true);
     } finally {
@@ -944,24 +981,19 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
         stateRoot: dir,
         names: [],
         members: IN_HOUSE,
-        running: [],
         db: fakeDb(null).deps,
-        containers: fakeContainers().deps,
       });
       const persistedKey = readSpoofGeneration(dir, "rm_twin")?.members.athena?.identity.publicKeyB64;
 
       // The rerun: the database already reports the persisted generation.
       const db2 = fakeDb(first.generationId);
-      const containers2 = fakeContainers();
       const second = await spoofKeys({
         guards: allowed(),
         instance: "rm_twin",
         stateRoot: dir,
         names: [],
         members: IN_HOUSE,
-        running: [running("athena", "gen-old")],
         db: db2.deps,
-        containers: containers2.deps,
       });
 
       expect(second.generationId).toBe(first.generationId);
@@ -971,9 +1003,70 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
       // No second generation was minted: the file still holds the first keys.
       expect(readSpoofGeneration(dir, "rm_twin")?.generationId).toBe(first.generationId);
       expect(readSpoofGeneration(dir, "rm_twin")?.members.athena?.identity.publicKeyB64).toBe(persistedKey);
-      // And the stale container was still replaced — steps (3) and (4) ran.
-      expect(containers2.calls).toContain("stop:athena");
-      expect(containers2.calls).toContain(`start:athena@${first.generationId}`);
+      // And the stale container is still replaced — steps (3) and (4) are the
+      // rerun's reconciliation over the persisted generation.
+      const { calls } = reconcile(["athena", "robot-money"], [running("athena", "gen-old")], readSpoofGeneration(dir, "rm_twin"));
+      expect(calls).toContain("stop:athena");
+      expect(calls).toContain(`start:athena@${first.generationId}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a rerun that selects a DIFFERENT member set refuses, naming both sets, and touches neither the file nor the database", async () => {
+    // `--spoof-keys=athena` completes; the operator then asks for
+    // `--spoof-keys=athena,robot-money`. Reusing the one-member generation
+    // would report "already installed" while robot-money was never spoofed.
+    const dir = tempDir();
+    try {
+      const first = await spoofKeys({
+        guards: allowed(),
+        instance: "rm_twin",
+        stateRoot: dir,
+        names: ["athena"],
+        members: IN_HOUSE,
+        db: fakeDb(null).deps,
+      });
+      const before = readFileSync(genFile(dir), "utf8");
+      const db2 = fakeDb(first.generationId);
+      const err = await spoofKeys({
+        guards: allowed(),
+        instance: "rm_twin",
+        stateRoot: dir,
+        names: ["athena", "robot-money"],
+        members: IN_HOUSE,
+        db: db2.deps,
+      }).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(Error);
+      const message = (err as Error).message;
+      expect(message).toContain("athena=m-athena, robot-money=m-robot-money");
+      expect(message).toContain(`${first.generationId} for [athena=m-athena]`);
+      expect(db2.calls).toEqual([]);
+      expect(readFileSync(genFile(dir), "utf8")).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a member whose id changed since the generation was written refuses too — the pair is name AND id", async () => {
+    const dir = tempDir();
+    try {
+      writeSpoofGeneration([{ name: "athena", memberId: "m-athena-old" }], dir, "rm_twin");
+      const db = fakeDb(null);
+      await expect(
+        spoofKeys({
+          guards: allowed(),
+          instance: "rm_twin",
+          stateRoot: dir,
+          names: ["athena"],
+          members: IN_HOUSE,
+          db: db.deps,
+        }),
+      ).rejects.toThrow(/athena=m-athena-old/);
+      expect(db.rebinds).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -995,9 +1088,7 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
         stateRoot: dir,
         names: [],
         members: IN_HOUSE,
-        running: [],
         db: db.deps,
-        containers: fakeContainers().deps,
       });
       expect(outcome.generationId).toBe(first.generationId);
       expect(db.rebinds.map((r) => r.memberId).sort()).toEqual(["m-athena", "m-robot-money"]);
@@ -1021,9 +1112,7 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
         stateRoot: dir,
         names: [],
         members: [...IN_HOUSE, THIRD_PARTY],
-        running: [],
         db: fakeDb(null).deps,
-        containers: fakeContainers().deps,
       });
       expect([...outcome.rebound].sort()).toEqual(["athena", "robot-money"]);
       expect(outcome.rebound).not.toContain("outsider");
@@ -1044,9 +1133,7 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
           stateRoot: dir,
           names: ["outsider"],
           members: [...IN_HOUSE, THIRD_PARTY],
-          running: [],
           db: fakeDb(null).deps,
-          containers: fakeContainers().deps,
         }),
       ).rejects.toThrow(/outsider/);
     } finally {
@@ -1064,9 +1151,7 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
         stateRoot: dir,
         names: ["athena"],
         members: IN_HOUSE,
-        running: [],
         db: fakeDb(null).deps,
-        containers: fakeContainers().deps,
       });
       expect(outcome.rebound).toEqual(["athena"]);
       expect(Object.keys(readSpoofGeneration(dir, "rm_twin")?.members ?? {})).toEqual(["athena"]);
@@ -1075,11 +1160,10 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
     }
   });
 
-  test("a refused run generates NOTHING — no file, no rebind, no container touched", async () => {
+  test("a refused run generates NOTHING — no file, no rebind", async () => {
     const dir = tempDir();
     const out = genFile(dir);
     const db = fakeDb(null);
-    const containers = fakeContainers();
     try {
       const r = await asyncSpoofRefusal(() =>
         spoofKeys({
@@ -1088,15 +1172,12 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
           stateRoot: dir,
           names: [],
           members: IN_HOUSE,
-          running: [running("athena", "gen-old")],
           db: db.deps,
-          containers: containers.deps,
         }),
       );
       expect(r.reason).toBe("rm_env_prod");
       expect(existsSync(out)).toBe(false);
       expect(db.rebinds).toEqual([]);
-      expect(containers.calls).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1113,9 +1194,7 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
           stateRoot: dir,
           names: [],
           members: IN_HOUSE,
-          running: [],
           db: fakeDb(null).deps,
-          containers: fakeContainers().deps,
         }),
       );
       expect(r.reason).toBe("credential_path_collision");
@@ -1138,9 +1217,7 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
           stateRoot: dir,
           names: [],
           members: IN_HOUSE,
-          running: [],
           db: fakeDb(null).deps,
-          containers: fakeContainers().deps,
         }),
       );
       expect(dotted).not.toBe(out);
@@ -1149,5 +1226,30 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ── THE FLAG: explicit, or nothing ──────────────────────────────────────────
+describe("spoofKeysRequest — `--spoof-keys` is explicit on argv or it is not requested", () => {
+  test("bare `--spoof-keys` asks for every in-house member", () => {
+    expect(spoofKeysRequest(["bun", "smoke", "--local", "dump", "--spoof-keys"])).toEqual({ explicit: true, names: [] });
+  });
+
+  test("`--spoof-keys=a,b` names exactly those members", () => {
+    expect(spoofKeysRequest(["bun", "smoke", "--spoof-keys=athena, robot-money"])).toEqual({ explicit: true, names: ["athena", "robot-money"] });
+  });
+
+  test("the boot's argv allowlist accepts both spellings and refuses an empty list", async () => {
+    const { validateArgv } = await import("../../lib/smoke-db-mode.ts");
+    expect(validateArgv(["bun", "smoke", "--local", "dump", "--spoof-keys"])).toEqual([]);
+    expect(validateArgv(["bun", "smoke", "--local", "dump", "--spoof-keys=athena,robot-money"])).toEqual([]);
+    expect(validateArgv(["bun", "smoke", "--spoof-keys="]).join(" ")).toContain("--spoof-keys= requires a value");
+    // Bare means bare: the next token is never swallowed as its value.
+    expect(validateArgv(["bun", "smoke", "--spoof-keys", "athena"]).join(" ")).toContain(`unexpected argument "athena"`);
+  });
+
+  test("no flag is no request — never implied by a mode or inherited", () => {
+    expect(spoofKeysRequest(["bun", "smoke", "--local", "dump", "--migrate"])).toEqual({ explicit: false, names: [] });
+    expect(spoofKeysRequest(["bun", "smoke", "--spoof-keysx"])).toEqual({ explicit: false, names: [] });
   });
 });

@@ -47,11 +47,6 @@
 //     reconciliation. The test asserts the empty list; the migrate step on a
 //     copy BEHIND head (the baseline dump, the six lower files first) is
 //     ./smoke-dump-identity-first.test.ts's.
-//   - The reattach of a restored copy on a rerun of the same plan needs
-//     scripts/lib/smoke-main.ts to stop overwriting the recorded container
-//     before its reattach branch reads it (w5-participants-runtime's fix, the
-//     same wave). The test below asserts the spec outcome as a normal test and
-//     passes only once that fix is merged.
 //   - smoke:capture itself cannot capture v0.5.0 (#699): the fixture dumps it
 //     as the superuser, and a case below keeps the rm_readonly refusal visible.
 //
@@ -63,8 +58,7 @@
 //                        A rerun of the same plan must then REATTACH the
 //                        restored copy (scripts/lib/smoke-main.ts, the committed
 //                        prepare:restore branch) with the row still `rehearsal`.
-//                        It refuses today (see the known-failure test), so the
-//                        reattach half of criterion 76 is NOT proven.
+//                        The reattach test below asserts exactly that.
 //   baseline             production's observed ledger (D55 (8)): v0.5.0 plus
 //                        0062_rm_readonly_sequence_select.sql, what a capture of
 //                        today's production restores. It predates 0063, so it
@@ -221,12 +215,9 @@ describe("`RM_ENV=stage bun smoke --local dump --migrate` against a real encrypt
 
   // The reattach half of criterion 76 (spec §1.3, §5). A rerun of the SAME
   // plan whose restore committed must reattach the copy it recorded, restore
-  // nothing, and leave the row `rehearsal`. Before w5-participants-runtime's
-  // fix, scripts/lib/smoke-main.ts called writeStateFile() at the start of
-  // prepare:instance, before the reattach branch read the recorded container,
-  // with dataPath.container still the "" placeholder, so the rerun refused
-  // with "this plan's restore already committed, and its container  is gone".
-  // A normal test: it passes on a tree that carries that fix.
+  // nothing, and leave the row `rehearsal`. smoke-main.ts reads the recorded
+  // twin (recordedTwin) before prepare:instance rewrites the state file, so the
+  // record still names the restored container when the reattach branch runs.
   test("a rerun of the same plan reattaches the restored copy, restores nothing, and the row still reads rehearsal", async () => {
     if (!prod?.h) throw new Error("the production-identity boot above did not run");
     const h = prod.h;

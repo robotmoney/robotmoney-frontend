@@ -65,6 +65,8 @@ import { dirname, join, relative } from "node:path";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { instancePaths, TOKEN_FILE_NAME } from "../../lib/smoke-state.ts";
+import { DB_CREDENTIAL_KEYS, looksLikeConnectionString } from "../../lib/db-credential-keys.ts";
+import { credentialFile, entriesOf, writeParticipantOverlay } from "./participant-fixture.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 
@@ -86,31 +88,14 @@ export interface ComposeConfigLike {
 // The detector
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Environment names that hand a service a client credential for the database.
- *
- * `POSTGRES_PASSWORD` is NOT here. It is the server's own initialization
- * variable on the `postgres` service — the database setting its own password,
- * not a client being given one — and listing it would make the one service that
- * legitimately owns the secret the loudest finding in the file.
- */
-export const DB_CREDENTIAL_KEYS = [
-  "DATABASE_URL",
-  "WORKER_DATABASE_URL",
-  "PREFLIGHT_DATABASE_URL",
-  "PGPASSWORD",
-  "PGUSER",
-  "PGPASSFILE",
-  "RM_APP_PASSWORD",
-  "RM_WORKER_PASSWORD",
-  "RM_OWNER_PASSWORD",
-  "RM_READONLY_PASSWORD",
-] as const;
-
-/** A value that is a Postgres connection string, whatever the key is called. */
-export function looksLikeConnectionString(value: unknown): boolean {
-  return typeof value === "string" && /^postgres(ql)?:\/\//i.test(value.trim());
-}
+// THE CREDENTIAL LIST IS THE ONE THE RUNTIME REFUSES BY. Environment names that
+// hand a service a client credential for the database, and the connection-string
+// shape under any name, come from scripts/lib/db-credential-keys.ts — the same
+// module a participant's startup check (scripts/agent/participant/main.ts)
+// refuses by — so this compose guard and that runtime guard can never disagree
+// about what a database credential is. `POSTGRES_PASSWORD` is NOT on it: it is
+// the server's own initialization variable on the `postgres` service.
+export { DB_CREDENTIAL_KEYS, looksLikeConnectionString };
 
 export interface CredentialFinding {
   service: string;
@@ -237,10 +222,16 @@ function profilesOf(files: readonly string[]): string[] {
  * and under every profile compose says it declares. "Any rendered compose
  * config" (criterion 101) is only true of the configs actually rendered here.
  */
+// The participant services a boot starts (smoke spec §6.2), rendered by the
+// boot's own renderer: a participant holds no database credential (§7.2), so it
+// is judged here like every other service and is on no exemption list.
+const PARTICIPANTS = writeParticipantOverlay(entriesOf(credentialFile(["athena", "noop-analyst", "robot-money"], ["themis"]))).overlay;
+
 const COMPOSITIONS: readonly Composition[] = [
   { label: "base (docker-compose.yml)", files: BASE },
   { label: "base + smoke", files: SMOKE },
   { label: "base + smoke + stage", files: STAGE },
+  { label: "base + smoke + participants (rendered)", files: [...SMOKE, PARTICIPANTS] },
 ].flatMap(({ label, files }) => [
   { label, files, profiles: [] },
   ...profilesOf(files).map((p) => ({ label: `${label} [profile ${p}]`, files, profiles: [p] })),
@@ -287,6 +278,13 @@ beforeAll(() => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("only the named services carry a database credential (§9, §10)", () => {
+  test("the rendered participants are all there, and not one of them carries a database credential (§7.2)", () => {
+    const cfg = composeConfig([...SMOKE, PARTICIPANTS], []);
+    const participants = Object.keys(cfg.services ?? {}).filter((n) => n.startsWith("participant-")).sort();
+    expect(participants).toEqual(["participant-agent-athena", "participant-agent-noop-analyst", "participant-agent-robot-money", "participant-judge-themis"]);
+    expect(findDatabaseCredentials(cfg).filter((f) => f.service.startsWith("participant-"))).toEqual([]);
+  });
+
   for (const { label, files, profiles } of COMPOSITIONS) {
     test(`${label}: every finding is a named exception`, () => {
       const findings = findDatabaseCredentials(composeConfig(files, profiles));

@@ -107,6 +107,16 @@ export const TAKE_COMMAND_ENV = "RM_TAKE_COMMAND";
  */
 export const INFERENCE_KEY_ENV = "RM_INFERENCE_KEY";
 
+/**
+ * Where an agent's one-shot sends its model call, and the model it asks for as
+ * that endpoint spells it (no `opencode/` prefix). Neither is a secret and
+ * neither is a selection: the boot resolved the model once, from the single
+ * selection signal, and hands every participant the result. Forwarded to the
+ * one-shot beside the key, under the same names.
+ */
+export const INFERENCE_URL_ENV = "RM_INFERENCE_URL";
+export const INFERENCE_WIRE_ID_ENV = "RM_INFERENCE_WIRE_ID";
+
 /** The single stdout tag the one-shot prints its authored draft on. */
 export const TAKE_DRAFT_TAG = "RM_TAKE_DRAFT";
 
@@ -819,6 +829,9 @@ function oneShotEnv(
     RM_MEMBER_IDENTITY: JSON.stringify(config.identity),
     // The member's OWN model key: the one-shot authors on it, or cannot author.
     ...(config.modelKey === "" ? {} : { [INFERENCE_KEY_ENV]: config.modelKey }),
+    // …and where to spend it: the endpoint and the model as it spells it.
+    ...(config.inferenceUrl === undefined ? {} : { [INFERENCE_URL_ENV]: config.inferenceUrl }),
+    ...(config.inferenceWireId === undefined ? {} : { [INFERENCE_WIRE_ID_ENV]: config.inferenceWireId }),
     RM_SESSION_ID: work.sessionId,
     RM_SUBJECT_ID: work.subjectId,
     RM_SESSION_DATE: work.date,

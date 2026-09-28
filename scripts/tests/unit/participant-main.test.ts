@@ -30,8 +30,8 @@
 // The environment variable NAMES below are this file's contract with the
 // compose `participant` profile: RM_API_URL / RM_MEMBER_ID / RM_MEMBER_TOKEN /
 // RM_MEMBER_NAME / RM_MEMBER_IDENTITY are the names the existing member rail
-// already uses (scripts/lib/swarm/persona-keys.ts, scripts/agent/*), and the
-// participant-only settings extend that same prefix.
+// already uses (scripts/agent/*), and the participant-only settings extend
+// that same prefix.
 //
 // Cost class `unit` (docs/architecture.md §3 L1): a stubbed `fetch`, a temp
 // directory and a unix socket bound inside it — no Docker, no database, no
@@ -47,11 +47,15 @@ import {
   mountPointsOf,
   pollForWork,
   readParticipantConfig,
+  runParticipant,
   runStartupDiagnostic,
   type ParticipantConfig,
+  type ParticipantLoops,
+  type StartupDiagnostic,
 } from "../../agent/participant/main.ts";
+import type { JudgeClientConfig } from "../../agent/participant/judge-client.ts";
 import { DB_CREDENTIAL_KEYS } from "../../lib/db-credential-keys.ts";
-import type { PersonaIdentity } from "../../lib/swarm/persona-keys.ts";
+import type { PersonaIdentity } from "../../lib/swarm/credential-file.ts";
 
 const IDENTITY: PersonaIdentity = {
   publicKeyB64: "pub-athena",
@@ -69,6 +73,8 @@ const ENV = {
   RM_MEMBER_IDENTITY: JSON.stringify(IDENTITY),
   RM_TAKE_COMMAND: JSON.stringify(TAKE_COMMAND),
   RM_INFERENCE_KEY: "athena-own-model-key",
+  RM_INFERENCE_URL: "https://models.example/v1",
+  RM_INFERENCE_WIRE_ID: "deepseek-v4-flash",
   RM_POLL_INTERVAL_MS: "5000",
   RM_TAKE_TIMEOUT_MS: "600000",
   RM_WORKSPACE_ROOT: "/var/lib/rm/takes",
@@ -82,6 +88,8 @@ const config = (over: Partial<ParticipantConfig> = {}): ParticipantConfig => ({
   token: "member-bearer-token",
   identity: IDENTITY,
   modelKey: "athena-own-model-key",
+  inferenceUrl: "https://models.example/v1",
+  inferenceWireId: "deepseek-v4-flash",
   takeCommand: TAKE_COMMAND,
   pollIntervalMs: 5_000,
   takeTimeoutMs: 600_000,
@@ -171,10 +179,18 @@ describe("readParticipantConfig — every value is an explicit injection", () =>
     expect(read({ ...ENV }).modelKey).toBe("athena-own-model-key");
   });
 
-  test("a JUDGE needs no RM_INFERENCE_KEY from this loop — its model work is not dispatched here", () => {
+  test("a JUDGE without its own RM_INFERENCE_KEY refuses too — its model call is made on its own key (D52)", () => {
     const env: Record<string, string | undefined> = { ...ENV, RM_PARTICIPANT_KIND: "judge" };
     delete env.RM_INFERENCE_KEY;
-    expect(read(env).modelKey).toBe("");
+    expect(() => read(env)).toThrow(/RM_INFERENCE_KEY was not injected into this judge participant container/);
+  });
+
+  test("an AGENT without an inference endpoint or model id refuses at boot — a key with nowhere to spend it authors nothing", () => {
+    for (const key of ["RM_INFERENCE_URL", "RM_INFERENCE_WIRE_ID"]) {
+      const env: Record<string, string | undefined> = { ...ENV };
+      delete env[key];
+      expect(() => read(env)).toThrow(new RegExp(key));
+    }
   });
 
   test("RM_TAKE_COMMAND reads as a JSON argv or a plain command, and a broken array refuses", () => {
@@ -649,5 +665,83 @@ describe("the participant module holds no database client", () => {
     const cfg = read({ ...ENV });
     expect(JSON.stringify(cfg)).not.toContain("postgres://");
     expect(Object.keys(cfg)).not.toContain("databaseUrl");
+  });
+});
+
+// ── DISPATCH: an agent polls, a judge subscribes (spec §6.2, criteria 103, 123) ──
+// The container's entrypoint routes a `judges` entry to the judge client's
+// subscription and an `agents` entry to the poll loop. Both loops are injected
+// here, so the assertion is WHICH one ran with WHICH configuration, not what
+// the network did; each loop's own behaviour is covered by its own suite
+// (participant-judge-client, participant-take-runner and the cases above).
+describe("runParticipant — the namespace decides the loop", () => {
+  const JUDGE_ENV = {
+    ...ENV,
+    RM_PARTICIPANT_KIND: "judge",
+    RM_MEMBER_NAME: "themis",
+    RM_MEMBER_ID: "m-themis",
+    RM_MEMBER_TOKEN: "themis-bearer",
+    RM_INFERENCE_KEY: "themis-own-model-key",
+    RM_JUDGE_MODEL: "deepseek-v4-flash",
+    RM_JUDGE_BASE_URL: "https://models.example/v1",
+    RM_ENV: "stage",
+  };
+  const GREEN: StartupDiagnostic = { apiReachable: true, tokenValid: true, serverMemberId: "m-themis", identityMatchesRoster: true };
+
+  function recordingLoops(diagnostic: StartupDiagnostic = GREEN) {
+    const ran: Array<{ loop: "agent" | "judge"; config: ParticipantConfig | JudgeClientConfig }> = [];
+    const loops: ParticipantLoops = {
+      agent: async (config) => void ran.push({ loop: "agent", config }),
+      judge: async (config) => void ran.push({ loop: "judge", config }),
+      diagnose: async () => diagnostic,
+    };
+    return { ran, loops };
+  }
+
+  test("an AGENT entry runs the poll loop with its own configuration, never the judge client", async () => {
+    const { ran, loops } = recordingLoops();
+    expect(await runParticipant({ ...ENV }, { loops, read: { dockerSocketProbePaths: [] } })).toBe("agent");
+    expect(ran.map((r) => r.loop)).toEqual(["agent"]);
+    expect((ran[0]!.config as ParticipantConfig).memberId).toBe("m-athena");
+  });
+
+  test("a JUDGE entry subscribes through the judge client, on its OWN key and model key", async () => {
+    const { ran, loops } = recordingLoops();
+    expect(await runParticipant(JUDGE_ENV, { loops, read: { dockerSocketProbePaths: [] } })).toBe("judge");
+    expect(ran.map((r) => r.loop)).toEqual(["judge"]);
+    const config = ran[0]!.config as JudgeClientConfig;
+    expect(config.memberId).toBe("m-themis");
+    expect(config.token).toBe("themis-bearer");
+    expect(config.apiKey).toBe("themis-own-model-key");
+    expect(config.model).toBe("deepseek-v4-flash");
+    expect(config.identity).toEqual(IDENTITY);
+  });
+
+  test("a judge whose token or identity fails the HTTP diagnostic never subscribes", async () => {
+    const { ran, loops } = recordingLoops({ ...GREEN, serverMemberId: "m-someone-else", identityMatchesRoster: false });
+    await expect(runParticipant(JUDGE_ENV, { loops, read: { dockerSocketProbePaths: [] } })).rejects.toThrow(/refuses to subscribe/);
+    expect(ran).toEqual([]);
+  });
+
+  test("a judge with no usable model refuses by its D-A7 name before anything connects", async () => {
+    const { ran, loops } = recordingLoops();
+    await expect(
+      runParticipant({ ...JUDGE_ENV, RM_JUDGE_MODEL: "nemotron-3-ultra-free" }, { loops, read: { dockerSocketProbePaths: [] } }),
+    ).rejects.toThrow(/model_disallowed/);
+    expect(ran).toEqual([]);
+  });
+
+  test("a judge is refused a database credential exactly like an agent — the same checks run first", async () => {
+    const { ran, loops } = recordingLoops();
+    await expect(
+      runParticipant({ ...JUDGE_ENV, DATABASE_URL: "postgres://rm_app:x@db/robotmoney" }, { loops, read: { dockerSocketProbePaths: [] } }),
+    ).rejects.toThrow(/DATABASE_URL/);
+    expect(ran).toEqual([]);
+  });
+
+  test("the entrypoint's main block dispatches through runParticipant, not the agent loop alone", () => {
+    const main = MAIN_SOURCE.slice(MAIN_SOURCE.indexOf("if (import.meta.main)"));
+    expect(main).toContain("await runParticipant(process.env, { signal: controller.signal });");
+    expect(main).not.toContain("runParticipantLoop(");
   });
 });

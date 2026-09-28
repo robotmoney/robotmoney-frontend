@@ -34,6 +34,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { credentialFile, entriesOf, writeParticipantOverlay } from "./participant-fixture.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 
@@ -263,16 +264,24 @@ function profilesOf(files: readonly string[]): string[] {
   return new TextDecoder().decode(r.stdout).split("\n").map((l) => l.trim()).filter(Boolean).sort();
 }
 
+// The participant services a boot starts (smoke spec §6.2), rendered by the
+// boot's own renderer for 3 agents and 1 judge: a participant is exactly the
+// container that must never hold a socket, so its composition is rendered and
+// judged like every committed one.
+const PARTICIPANTS = writeParticipantOverlay(entriesOf(credentialFile(["athena", "noop-analyst", "robot-money"], ["themis"]))).overlay;
+
 const FILE_SETS: readonly { label: string; files: readonly string[] }[] = [
   { label: "base (docker-compose.yml)", files: BASE },
   { label: "base + smoke", files: SMOKE },
   { label: "base + smoke + stage", files: STAGE },
+  { label: "base + smoke + participants (rendered)", files: [...SMOKE, PARTICIPANTS] },
 ];
 
 // Every composition this repo actually boots: each file set by default, and
 // once more under EVERY profile it declares. A profile-gated service (today
-// `member-agent`; the participant profile when it lands) is invisible to a
-// default render, and a socket hiding behind a profile is exactly the
+// `member-agent`) is invisible to a default render — the participants are not
+// a profile but a generated overlay the boot adds last, rendered above as its
+// own file set — and a socket hiding behind a profile is exactly the
 // regression this file exists to catch. The profiles are read from compose
 // itself, never listed by hand, so a new profile is covered the day it lands.
 const COMPOSITIONS: readonly Composition[] = FILE_SETS.flatMap(({ label, files }) => [
@@ -358,6 +367,11 @@ describe("no service in any composition holds the Docker socket", () => {
     expect(withProfile.length).toBeGreaterThan(withoutProfile.length);
   });
 
+  test("the rendered participants composition really carries the N+M participant services", () => {
+    const names = Object.keys(composeConfig([...SMOKE, PARTICIPANTS], []).services ?? {}).filter((n) => n.startsWith("participant-"));
+    expect(names.sort()).toEqual(["participant-agent-athena", "participant-agent-noop-analyst", "participant-agent-robot-money", "participant-judge-themis"]);
+  });
+
   test("no composition contains an agent-launcher service at all (issue #1014 stays reverted)", () => {
     for (const { label, files, profiles } of COMPOSITIONS) {
       const names = Object.keys(composeConfig(files, profiles).services ?? {});
@@ -368,8 +382,9 @@ describe("no service in any composition holds the Docker socket", () => {
 
 // ---------------------------------------------------------------------------
 // THE COMPOSITION LIST IS COMPOSE'S OWN (criterion 0). Hard-coding it would
-// leave the next profile — the participant profile the judge moves into — out
-// of every assertion in this file the day it lands.
+// leave the next profile out of every assertion in this file the day it lands.
+// (The participants came as a generated overlay, not a profile; they are a
+// file set of their own above, and the case below proves they are rendered.)
 describe("the rendered compositions cover every profile compose declares", () => {
   test("every declared profile of every file set has its own render", () => {
     for (const { label, files } of FILE_SETS) {
@@ -437,42 +452,6 @@ describe("no agent launcher survives anywhere (issue #1014 reversed, criterion 1
     };
     expect(envKeysMatching(planted, LAUNCHER_KEY)).toEqual(["api: SWARM_AGENT_LAUNCHER_URL"]);
   });
-});
-
-// ---------------------------------------------------------------------------
-// NO MODEL KEY OUTSIDE A PARTICIPANT (D52, criterion 134, compose half). `api`
-// used to carry OPENCODE_API_KEY for an inline judge; the judge is a
-// participant now and takes its key from credential.json. A participant is a
-// service in the `participant` profile; no other rendered service may carry a
-// model key in any composition.
-const MODEL_KEY = /(^|_)(API_KEY|MODEL_KEY)$|^OPENCODE_API_KEY$|^ANTHROPIC_|^OPENAI_/;
-const isParticipant = (svc: unknown): boolean =>
-  ((svc as { profiles?: string[] }).profiles ?? []).includes("participant");
-
-describe("no rendered service other than a participant carries a model key (criterion 134)", () => {
-  test("every composition is clean", () => {
-    for (const { label, files, profiles } of COMPOSITIONS) {
-      expect({ label, keys: envKeysMatching(composeConfig(files, profiles), MODEL_KEY, isParticipant) }).toEqual({ label, keys: [] });
-    }
-  });
-
-  test("the pattern is not over-broad: the worker lanes' OPENCODE_TIMEOUT_MS is not a key", () => {
-    const workers = envKeysMatching(composeConfig(SMOKE, []), /^OPENCODE_TIMEOUT_MS$/);
-    expect(workers.length).toBeGreaterThan(0); // present, and…
-    expect(envKeysMatching(composeConfig(SMOKE, []), MODEL_KEY)).toEqual([]); // …not flagged
-  });
-
-  test("red control: a model key planted on api through a real render is caught and named", () => {
-    const dir = mkdtempSync(join(tmpdir(), "rm-no-model-key-control-"));
-    const overlay = join(dir, "docker-compose.planted.yml");
-    writeFileSync(
-      overlay,
-      "services:\n  api:\n    environment:\n      OPENCODE_API_KEY: planted\n" +
-        "  judge-themis:\n    image: busybox\n    profiles: [\"participant\"]\n    environment:\n      OPENCODE_API_KEY: allowed\n",
-    );
-    const cfg = JSON.parse(renderCompose([...SMOKE, overlay], ["participant"])) as ComposeConfigLike;
-    expect(envKeysMatching(cfg, MODEL_KEY, isParticipant)).toEqual(["api: OPENCODE_API_KEY"]);
-  }, 120_000);
 });
 
 // ---------------------------------------------------------------------------

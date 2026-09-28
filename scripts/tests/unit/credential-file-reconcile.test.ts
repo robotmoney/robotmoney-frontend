@@ -11,15 +11,19 @@
 // containers: one take", and the spoof-keys generation sweep of §6.4 step (3)
 // — have to be drivable with a FABRICATED running set and no Docker daemon.
 // Every case below is exactly that: plain records in, a plan out, no clock,
-// no filesystem, no socket. The one exception is the closing ratchet, which
-// reads source to keep boot code on `planParticipants`: the composition that
-// never maps an unconfigured path to the empty roster.
+// no filesystem, no socket. Two blocks are the exception: the ratchet, which
+// reads source to keep boot code on `planParticipants` (the composition that
+// never maps an unconfigured path to the empty roster), and the boot-entry
+// block at the end, which runs `bun scripts/smoke.ts` itself against a
+// recording Docker stand-in on PATH — no daemon, nothing started.
 //
 // Cost class `unit` (docs/architecture.md §3 L1). Parsing, loading and the
 // refusal taxonomy live in credential-file.test.ts.
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { resolveStackEnvironment, stackProjectName } from "../../stack/naming.ts";
 import {
   CredentialFileRefusal,
   planParticipants,
@@ -30,6 +34,7 @@ import {
   type RosterEntry,
   type RunningParticipant,
 } from "../../lib/swarm/credential-file.ts";
+import { summarizeParticipantApply } from "../../lib/participant-compose.ts";
 
 const identity = (seed: string): CredentialEntry => ({
   memberId: `m-${seed}`,
@@ -328,10 +333,66 @@ describe("planParticipants — resolution → load → reconcile, with unconfigu
       { configured: true, path: "/etc/rm/credential.json", origin: "flag" },
       [running("athena", { generation: "gen-1" })],
       recordingLoader({ agents: { athena: identity("agent-athena") }, judges: {} }).load,
-      "gen-2",
+      { currentGeneration: "gen-2" },
     );
     expect(names(plan.stop)).toEqual(["athena"]);
     expect(names(plan.start)).toEqual(["athena"]);
+  });
+
+  // ROSTER PRECEDENCE (spec §6.4, D52) lives in this composition, so a boot
+  // cannot forget it: the instance's generation replaces the named members'
+  // key and bearer, names only THEM for replacement, and never adds a member.
+  const GENERATION = {
+    generationId: "gen-7",
+    createdAt: "2026-09-25T00:00:00.000Z",
+    instance: "rm_twin",
+    members: {
+      athena: { name: "athena", memberId: "m-agent-athena", identity: { publicKeyB64: "spoof-pub", privateJwk: { kty: "OKP", d: "spoof" } }, bearer: "tok_spoofed" },
+      ghost: { name: "ghost", memberId: "m-ghost", identity: { publicKeyB64: "ghost-pub", privateJwk: { kty: "OKP" } }, bearer: "tok_ghost" },
+    },
+  };
+  const FILE_TWO: CredentialFile = { agents: { athena: identity("agent-athena"), "noop-analyst": identity("agent-noop") }, judges: {} };
+
+  test("a generation's members boot on ITS key and bearer; everyone else keeps the file's", () => {
+    const plan = planParticipants(
+      { configured: true, path: "/etc/rm/credential.json", origin: "env" },
+      [],
+      recordingLoader(FILE_TWO).load,
+      { generation: GENERATION },
+    );
+    const athena = plan.start.find((e) => e.name === "athena")!;
+    expect(athena.credential.publicKeyB64).toBe("spoof-pub");
+    expect(athena.credential.bearer).toBe("tok_spoofed");
+    expect(athena.credential.modelKey).toBe(identity("agent-athena").modelKey);
+    expect(athena.generation).toBe("gen-7");
+    const noop = plan.start.find((e) => e.name === "noop-analyst")!;
+    expect(noop.credential).toEqual(identity("agent-noop"));
+    expect(noop.generation).toBeUndefined();
+    // `ghost` is in the generation and not in the file: it is never started.
+    expect(names(plan.start)).toEqual(["athena", "noop-analyst"]);
+  });
+
+  test("only the spoofed member's container is replaced; a plain member on the file's key is kept", () => {
+    const plan = planParticipants(
+      { configured: true, path: "/etc/rm/credential.json", origin: "env" },
+      [running("athena"), running("noop-analyst")],
+      recordingLoader(FILE_TWO).load,
+      { generation: GENERATION },
+    );
+    expect(names(plan.stop)).toEqual(["athena"]);
+    expect(names(plan.start)).toEqual(["athena"]);
+    expect(names(plan.keep)).toEqual(["noop-analyst"]);
+  });
+
+  test("once the generation is gone, a container still on a spoofed key is replaced onto the file's", () => {
+    const plan = planParticipants(
+      { configured: true, path: "/etc/rm/credential.json", origin: "env" },
+      [running("athena", { generation: "gen-7" })],
+      recordingLoader(FILE_TWO).load,
+      { generation: null },
+    );
+    expect(names(plan.stop)).toEqual(["athena"]);
+    expect(plan.start.find((e) => e.name === "athena")?.credential.bearer).toBe(identity("agent-athena").bearer);
   });
 
   test("RATCHET: outside credential-file.ts, no production code names reconcileRoster or rosterEntries at all", () => {
@@ -344,10 +405,9 @@ describe("planParticipants — resolution → load → reconcile, with unconfigu
     // (`cf.reconcileRoster(...)`) still names it, so both are caught. Every
     // production tree is walked: scripts/, backend/ and website-server/.
     //
-    // This is a SOURCE ratchet. It does not prove a boot calls
-    // `planParticipants`; that proof needs the boot entry itself to be driven
-    // (issue #1026 wave 2/5, smoke-main.ts), and criterion 137 stays PARTIAL
-    // until it is.
+    // This is a SOURCE ratchet. The proof that the boot really calls
+    // `planParticipants`, and refuses through it, drives the boot entry itself:
+    // see "the boot entry refuses an unconfigured roster" at the end of this file.
     const repo = join(import.meta.dir, "..", "..", "..");
     const forbidden = /\b(reconcileRoster|rosterEntries)\b/;
     const offenders: string[] = [];
@@ -400,5 +460,169 @@ describe("reconcileRoster — pure: same inputs, same plan, inputs unmodified", 
     reconcileRoster(roster, live);
     expect(JSON.stringify(roster)).toBe(rosterBefore);
     expect(JSON.stringify(live)).toBe(liveBefore);
+  });
+});
+
+// ── THE REAL BOOT CALLER (criterion 137) ───────────────────────────────────
+// The bug is a CALLER mapping an unconfigured roster to "stop everyone", and
+// the pure cases above cannot see a caller. So the boot entry itself is driven:
+// `bun scripts/smoke.ts --local blank` on a host whose `~/.env` names no
+// RM_CREDENTIALS and with no `--credentials`, while two participant containers
+// of the instance's project are running. Docker is a recording stand-in on
+// PATH: it reports those two containers for the participant query, refuses
+// every other command, and logs every call — so "nothing was stopped" is read
+// off the log rather than inferred.
+//
+// RED CONTROL: the same boot, from a copy of smoke-main.ts whose plan-time
+// call is the buggy mapping — `configured ? planParticipants(...) : { stop:
+// running }` — does NOT refuse: it goes on to plan a deployment over the
+// running participants, and the assertion above would be red.
+describe("the boot entry refuses an unconfigured roster while participants run, naming them (criterion 137)", () => {
+  const repo = join(import.meta.dir, "..", "..", "..");
+  const SMOKE_MAIN = join(repo, "scripts", "lib", "smoke-main.ts");
+  const PLAN_TIME_CALL = "planParticipants(credentialResolution, participantsNow() ?? [], loadCredentialFile, {";
+
+  function fakeHost(instance: string) {
+    const root = mkdtempSync(join(tmpdir(), "rm-reconcile-boot-"));
+    const bin = join(root, "bin");
+    const home = join(root, "home");
+    mkdirSync(bin);
+    mkdirSync(home);
+    const log = join(root, "docker.log");
+    const project = stackProjectName("stack", resolveStackEnvironment({}, { seed: instance }));
+    writeFileSync(
+      join(bin, "docker"),
+      [
+        "#!/bin/sh",
+        `echo "$*" >> "${log}"`,
+        'case "$*" in',
+        `  *"label=robotmoney.participant=1"*) printf '${project}-participant-agent-athena-1\\tagent\\tathena\\t\\n${project}-participant-judge-themis-1\\tjudge\\tthemis\\t\\n'; exit 0 ;;`,
+        '  "ps "*) exit 0 ;;',
+        "esac",
+        'echo "fake docker refuses: $*" >&2',
+        "exit 1",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(join(bin, "docker"), 0o755);
+    const env: Record<string, string> = {
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+      HOME: home,
+      RM_SMOKE_STATE_ROOT: join(root, "state"),
+      RM_ENV: "stage",
+      AGENT_MODEL: "free",
+    };
+    return { root, log, env, project, calls: () => (existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : []) };
+  }
+
+  test("an unconfigured path with participants running refuses, names both, and touches no container", () => {
+    const instance = `rm_it_cfr_${Math.random().toString(16).slice(2, 8)}`;
+    const host = fakeHost(instance);
+    try {
+      const r = Bun.spawnSync(["bun", "--no-env-file", "scripts/smoke.ts", "--local", "blank", "--instance", instance], {
+        cwd: repo,
+        env: host.env,
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 60_000,
+      });
+      const out = `${r.stdout.toString()}${r.stderr.toString()}`;
+      expect(r.exitCode).toBe(1);
+      expect(out).toContain("no credential file is configured while these participants are running and were left untouched");
+      expect(out).toContain(`agent:athena (${host.project}-participant-agent-athena-1)`);
+      expect(out).toContain(`judge:themis (${host.project}-participant-judge-themis-1)`);
+      // It stopped at the plan: no phase began, and Docker was only ASKED.
+      expect(out).not.toContain("phase: plan");
+      expect(host.calls().length).toBeGreaterThan(0);
+      expect(host.calls().filter((c) => !c.startsWith("ps "))).toEqual([]);
+    } finally {
+      rmSync(host.root, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  test("RED CONTROL: a boot that maps an unconfigured roster to `{ stop: running }` does not refuse, and proceeds", () => {
+    const source = readFileSync(SMOKE_MAIN, "utf8");
+    expect(source.split(PLAN_TIME_CALL)).toHaveLength(2);
+    const buggy = source.replace(
+      PLAN_TIME_CALL,
+      "(credentialResolution.configured ? planParticipants : (_r: unknown, running: unknown) => ({ start: [], keep: [], stop: running }))(credentialResolution, participantsNow() ?? [], loadCredentialFile, {",
+    );
+    const copy = join(repo, "scripts", "lib", `.redcontrol-smoke-main-${Math.random().toString(16).slice(2, 10)}.ts`);
+    const instance = `rm_it_cfr_${Math.random().toString(16).slice(2, 8)}`;
+    const host = fakeHost(instance);
+    writeFileSync(copy, buggy);
+    try {
+      const r = Bun.spawnSync(["bun", "--no-env-file", copy, "--local", "blank", "--instance", instance], {
+        cwd: repo,
+        env: host.env,
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 60_000,
+      });
+      const out = `${r.stdout.toString()}${r.stderr.toString()}`;
+      // The refusal the real boot gives is absent: the buggy caller read "no
+      // configuration" as a plan, and the boot went on to deploy.
+      expect(out).not.toContain("were left untouched");
+      expect(out).toContain("phase: plan");
+      expect(host.calls().some((c) => c.startsWith("compose "))).toBe(true);
+    } finally {
+      rmSync(copy, { force: true });
+      rmSync(host.root, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  test("smoke-main's two planParticipants calls are the only roster composition it makes", () => {
+    const code = readFileSync(SMOKE_MAIN, "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*)/.test(l)).join("\n");
+    // Plan time (the refusal above) and the participants phase (with roles).
+    expect((code.match(/\bplanParticipants\(/g) ?? []).length).toBe(2);
+    expect(code).toContain(PLAN_TIME_CALL);
+    expect(code).toMatch(/planParticipants\(credentialResolution, running, loadCredentialFile, \{[\s\S]{0,200}memberRole:/);
+  });
+});
+
+// What the boot's `participants` phase journals and receipts after it applied
+// a plan (participant-compose.ts summarizeParticipantApply, called by
+// smoke-main.ts reconcileParticipants). Pure: fabricated plans and ids.
+describe("summarizeParticipantApply: the journal's started/stopped and the receipt's actions", () => {
+  test("a replaced participant (stopped for a new generation, started again) is journaled started and NOT stopped", () => {
+    const athenaOld = running("athena", { generation: "gen-1" });
+    const athenaNew: RosterEntry = { ...entry("athena"), generation: "gen-2" };
+    const plan = reconcileRoster([athenaNew], [athenaOld], "gen-2");
+    expect(plan.stop.map((p) => p.name)).toEqual(["athena"]);
+    expect(plan.start.map((e) => e.name)).toEqual(["athena"]);
+    const done = summarizeParticipantApply(plan, [athenaOld], new Map(), new Map());
+    expect(done.started).toEqual(["agent:athena"]);
+    expect(done.stopped).toEqual([]);
+    expect(done.receipt).toEqual([{ kind: "agent", name: "athena", generation: "gen-2", action: "started" }]);
+    // The resume projection adds the started, then deletes the stopped
+    // (smoke-journal.ts projectExpectations): athena stays expected to run.
+    const project = (started: string[], stopped: string[]) => { const s = new Set(started); for (const t of stopped) s.delete(t); return s; };
+    expect(project(done.started, done.stopped).has("agent:athena")).toBe(true);
+    // Red control: journaling the plan's stop list as-is (the old code) drops
+    // the running replacement from the expected set.
+    expect(project(done.started, plan.stop.map((p) => `${p.kind}:${p.name}`)).has("agent:athena")).toBe(false);
+  });
+
+  test("a kept participant compose recreated (new container id) is receipted `recreated`, an untouched one `kept`", () => {
+    const live = [running("athena"), running("boreas"), running("themis", { kind: "judge" })];
+    const plan = { start: [], keep: [entry("athena"), entry("boreas"), entry("themis", "judge")], stop: [] };
+    const before = new Map(live.map((p) => [p.containerName, `id-${p.name}`]));
+    const after = new Map(before);
+    after.set(live[1]!.containerName, "id-boreas-NEW");
+    const done = summarizeParticipantApply(plan, live, before, after);
+    expect(done.recreated).toEqual(["agent:boreas"]);
+    expect(done.receipt.map((r) => `${r.kind}:${r.name}:${r.action}`)).toEqual(["agent:athena:kept", "agent:boreas:recreated", "judge:themis:kept"]);
+    expect(done.started).toEqual([]);
+    expect(done.stopped).toEqual([]);
+    // With no id change at all, nothing is called recreated.
+    expect(summarizeParticipantApply(plan, live, before, before).recreated).toEqual([]);
+  });
+
+  test("a participant removed and not replaced is journaled stopped and absent from the receipt", () => {
+    const live = [running("athena"), running("boreas")];
+    const plan = reconcileRoster([entry("athena")], live);
+    const done = summarizeParticipantApply(plan, live, new Map(), new Map());
+    expect(done.stopped).toEqual(["agent:boreas"]);
+    expect(done.receipt.map((r) => `${r.name}:${r.action}`)).toEqual(["athena:kept"]);
   });
 });

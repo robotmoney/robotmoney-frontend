@@ -279,9 +279,10 @@ export const DEMO_MEMBERS: readonly SessionMember[] = Object.freeze([
   // Issue #922: smoke-local named-judge persona, kept in sync with the mirror
   // array in ../smoke-mode.ts. `memberId: "themis"` becomes both this driver's
   // registerMember() id AND (via deriveMemberHandle's slugify of the name
-  // "Themis") her handle, which is what makes #918's judgeSessionAdmin —
-  // hardcoded to resolve judgeMemberId by looking up handle 'themis' — find
-  // her at all. Absent via the shared DEMO_NO_SHOWS rule, same as draco.
+  // "Themis") her handle. This driver never judges and nothing on the stack
+  // judges inline: the judge is a participant container from the credential
+  // file's `judges` namespace (smoke spec §6.2; D53 (4)). Absent via the
+  // shared DEMO_NO_SHOWS rule, same as draco.
   { memberId: "themis", name: "Themis", lens: "consensus judge", bias: 0.0, present: demoAttends("themis") },
 ]);
 export const DEMO_SUBJECTS: readonly SessionSubject[] = Object.freeze([

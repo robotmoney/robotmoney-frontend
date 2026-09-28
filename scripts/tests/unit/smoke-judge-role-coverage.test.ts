@@ -6,11 +6,16 @@
 //
 // Issue #1026 removes it (D48 as waived by D53, criterion 6). Nothing on a
 // booted stack judges inline any more — the judge is a participant (smoke spec
-// §6.2) — so no booted stack can produce the row those assertions waited for,
-// and the mode flip was the one place a driver manufactured a judge-mode write.
-// Judge coverage returns with the participant judge, on the participant's own
-// path; until then this file pins the ABSENCE, at both former call sites, so the
-// flip cannot quietly come back.
+// §6.2) — and the mode flip was the one place a driver manufactured a
+// judge-mode write. This file pins the ABSENCE, at both former call sites, so
+// the flip cannot quietly come back.
+//
+// Judge coverage came back on the participant's own path: `bun smoke`'s
+// `participants` phase starts every `judges` entry of the credential file as a
+// standing judge container (scripts/lib/participant-compose.ts), which the
+// entrypoint routes to the judge client's subscription
+// (scripts/agent/participant/main.ts `runParticipant`). The last block below
+// pins that route.
 //
 // Graded on source text (the sessions drive docker and live inference, so they
 // cannot run here), with every grader red-controlled against a planted copy of
@@ -102,5 +107,35 @@ describe("smoke-main.ts's CI dump branch runs one plain session — no judge cov
     );
     expect(planted).not.toBe(smokeMainSrc);
     expect(retiredCalls(sliceOfBranch(planted))).toEqual(["runJudgeRoleCoverage", "judgeCoverageCandidate", "withMemberAbsent"]);
+  });
+});
+
+describe("judge coverage runs through the participant judge (smoke spec §6.2; D53 (4))", () => {
+  const participantMain = readFileSync(join(repoRoot, "scripts", "agent", "participant", "main.ts"), "utf8");
+
+  test("the boot's participants phase starts the credential file's judges, through the one roster composition", () => {
+    const code = codeOnly(smokeMainSrc);
+    expect(code).toContain('await begin("participants", null);');
+    expect(code).toContain("participantsReconciled = await reconcileParticipants(hostBackendUrl(stack.publishedPort(\"api\", 8787)));");
+    expect(code).toMatch(/const desired = \[\.\.\.planned\.start, \.\.\.planned\.keep\];/);
+    expect(code).toMatch(/renderParticipantServices\(desired,/);
+  });
+
+  test("a judge entry's container runs the judge client's subscription, never the agent poll loop", async () => {
+    const { participantEnv } = await import("../../lib/participant-compose.ts");
+    const env = participantEnv(
+      { name: "themis", kind: "judge", credential: { memberId: "m-themis", publicKeyB64: "p", privateJwk: { kty: "OKP" }, bearer: "b", modelKey: "k" } },
+      { instance: "i", envDir: "/x", apiUrl: "http://api:8787", rmEnv: "stage", inference: { wireId: "w", baseUrl: "u" }, image: "img" },
+    );
+    expect(env.RM_PARTICIPANT_KIND).toBe("judge");
+    const dispatch = codeOnly(participantMain.slice(participantMain.indexOf("export async function runParticipant(")));
+    expect(dispatch).toMatch(/if \(config\.kind === "agent"\) \{\s*await loops\.agent\(config, signal\);/);
+    expect(dispatch).toContain("await loops.judge(judgeConfig, signal);");
+  });
+
+  test("red control: a dispatch that sends every kind to the poll loop is caught", () => {
+    const planted = participantMain.replace("await loops.judge(judgeConfig, signal);", "await loops.agent(config, signal);");
+    expect(planted).not.toBe(participantMain);
+    expect(codeOnly(planted.slice(planted.indexOf("export async function runParticipant(")))).not.toContain("await loops.judge(judgeConfig, signal);");
   });
 });

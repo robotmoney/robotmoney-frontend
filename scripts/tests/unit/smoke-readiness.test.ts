@@ -531,6 +531,42 @@ describe("the REAL readiness path issues read-only docker commands only — smok
     }
   });
 
+  test("readiness PASSES with the judge absent: no judge container, a session waiting in judging (§6.2, criterion 103)", async () => {
+    // "Readiness (§6.3) never requires a judge to be connected or a consensus
+    // to exist." The daemon reports every application service healthy and NO
+    // participant at all — the runner answers only for the services it is
+    // asked about, and the observer asks about none that is a judge — while
+    // the scheduler holds a judging deadline for a session nobody is judging.
+    const seen: string[][] = [];
+    const waitingOnJudge = health({ timers: { boundaries: 1, deadlines: 1 } });
+    const fetchImpl = (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.endsWith("/health") && u.includes(":41999")) return new Response(JSON.stringify(waitingOnJudge));
+      if (u.includes("/api/swarm/admin/subjects")) return new Response(JSON.stringify({ subjects: [{ id: "woon", status: "active" }, { id: "mav", status: "active" }] }));
+      if (u.includes("/api/swarm/sessions")) {
+        return new Response(JSON.stringify({ sessions: [{ subjectId: "woon", state: "collecting" }, { subjectId: "mav", state: "collecting" }, { subjectId: "woon", state: "judging" }] }));
+      }
+      return new Response("ok");
+    }) as typeof fetch;
+    const observe = makeReadinessObserver({
+      project: "rm_smoke_stack_x",
+      composePrefix: ["compose", "--env-file", "/dev/null", "-p", "rm_smoke_stack_x", "-f", "docker-compose.yml"],
+      apiUrl: "http://127.0.0.1:41998",
+      operatorToken: "rmat_operator",
+      workerServices: ["worker-analytics"],
+      producerService: "analytics-producer",
+      schedulerService: "system-scheduler",
+      seed: () => ({ completed: true, detail: "exited 0" }),
+      run: recordingRunner(seen),
+      fetchImpl,
+    });
+    const verdict = await awaitReadiness(observe, { timeoutMs: 60_000, pollMs: 1, sleep: async () => {} });
+    expect(verdict.passed).toBe(true);
+    // No check waits on a judge, and nothing the observer asked Docker about is a participant.
+    expect(READINESS_CHECKS.filter((c) => /judge|participant|consensus/i.test(c))).toEqual([]);
+    expect(seen.filter((argv) => argv.some((a) => /participant/.test(a)))).toEqual([]);
+  });
+
   test("red control: the guard refuses a restart, stop or up before it reaches the daemon, and passes a read", () => {
     const reached: string[] = [];
     const run = readOnlyRunner((args) => {

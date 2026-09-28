@@ -33,8 +33,8 @@
 //      holder and its plan id, and real holder processes release on exit and on
 //      SIGINT/SIGTERM; two real tools contending is the integration test that
 //      later #1026 work adds)
-import { afterEach, describe, expect, test } from "bun:test";
-import { randomUUID } from "node:crypto";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -873,6 +873,231 @@ describe("the seed and the identity write are fenced mutations — a competitor'
       expect(order).toEqual(["competitor:start", "competitor:commit", "seed:start", "seed:done"]);
     });
   }, 30_000);
+});
+
+describe("every fenced mutation's REAL path waits on a competitor's fence, holding nothing first (criterion 35)", () => {
+  // Spec §2's fenced list — migration, grant reconciliation, seed, key rebind,
+  // token provisioning, identity write — each driven through the function the
+  // tool itself calls, never through a fence this test wraps around it. A
+  // competitor takes the xact lock first and holds it; the mutation is started
+  // and must (a) show up WAITING on the fence in `pg_locks`, (b) hold no lock
+  // on the relation it is about to write while it waits — the fence is its
+  // first statement, so nothing was touched unfenced — and (c) finish only
+  // after the competitor commits. The seed and the identity write are also
+  // covered, through the composition `bun smoke` runs, by the block above.
+  const OWNER_PASSWORD = randomBytes(18).toString("base64url");
+  let ownerCanLogin = true;
+  const LOGIN = new URL(DATABASE_URL).username;
+
+  beforeAll(async () => {
+    const [row] = await sql<{ rolcanlogin: boolean }[]>`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`;
+    ownerCanLogin = row?.rolcanlogin ?? true;
+    await sql.unsafe(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
+  });
+  afterAll(async () => {
+    await sql.unsafe(`ALTER ROLE rm_owner ${ownerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD NULL`);
+  });
+
+  function asRole(url: string, role: string, password: string): string {
+    const u = new URL(url);
+    u.username = role;
+    u.password = encodeURIComponent(password);
+    return u.toString();
+  }
+
+  /** A template copy of this suite's migrated database, enrolled `rehearsal` unless told not to, dropped after. */
+  async function withEnrolledCopy<T>(body: (url: string, admin: DbHandle) => Promise<T>, enroll = true): Promise<T> {
+    const template = process.env.RM_TEST_TEMPLATE_DB;
+    if (!template) throw new Error("RM_TEST_TEMPLATE_DB is not set (tests/preload.ts sets it)");
+    const name = `rm_tl_real_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+    await sql.unsafe(`CREATE DATABASE "${name}" TEMPLATE "${template}"`);
+    const url = new URL(DATABASE_URL);
+    url.pathname = `/${name}`;
+    const admin = postgres(url.toString(), { max: 1, onnotice: () => {} });
+    try {
+      if (enroll) await admin`INSERT INTO deployment_identity (kind, note) VALUES ('rehearsal', 'target-lock real-path test')`;
+      return await body(url.toString(), admin);
+    } finally {
+      await admin.end({ timeout: 5 });
+      await sql.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+    }
+  }
+
+  /**
+   * Hold the fence as a competitor, start `mutate`, and record what happens:
+   * the mutation's backend waiting on the fence (and how many locks it held on
+   * `touched` while it waited), the competitor's commit, the mutation's end.
+   */
+  async function competitorBlocks(url: string, touched: string, mutate: () => Promise<unknown>): Promise<string[]> {
+    const order: string[] = [];
+    const competitor = postgres(url, { max: 1, onnotice: () => {} });
+    const observer = postgres(url, { max: 1, onnotice: () => {} });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let fenced!: () => void;
+    const isFenced = new Promise<void>((resolve) => (fenced = resolve));
+    const competing = competitor.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(${TARGET_LOCK_KEY.toString()}::bigint)`;
+      order.push("competitor fenced");
+      fenced();
+      await held;
+      order.push("competitor commits");
+    });
+    try {
+      await isFenced;
+      const running = mutate().then(() => void order.push("mutation finished"));
+      let waiter: number | undefined;
+      const deadline = Date.now() + 15_000;
+      while (waiter === undefined && Date.now() < deadline) {
+        const rows = await observer<{ pid: number }[]>`
+          SELECT pid FROM pg_locks
+           WHERE locktype = 'advisory' AND NOT granted
+             AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+             AND ((classid::bigint << 32) | objid::bigint) = ${TARGET_LOCK_KEY.toString()}::bigint`;
+        waiter = rows[0]?.pid;
+        if (waiter === undefined) await Bun.sleep(50);
+      }
+      if (waiter === undefined) throw new Error(`the mutation never waited on the fence; order so far: ${order.join(", ")}`);
+      const [held_] = await observer<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
+         WHERE l.pid = ${waiter} AND c.relname = ${touched}`;
+      order.push(`mutation waiting on the fence, holding ${held_?.n ?? -1} lock(s) on ${touched}`);
+      release();
+      await competing;
+      await running;
+      return order;
+    } finally {
+      release();
+      await competing.catch(() => undefined);
+      await competitor.end({ timeout: 5 });
+      await observer.end({ timeout: 5 });
+    }
+  }
+
+  const expected = (touched: string) => [
+    "competitor fenced",
+    `mutation waiting on the fence, holding 0 lock(s) on ${touched}`,
+    "competitor commits",
+    "mutation finished",
+  ];
+
+  test("MIGRATION: runMigrate applying a pending file waits for the competitor, then applies it", async () => {
+    const { runMigrate } = await import("../scripts/migrate-run.ts");
+    const { holdTargetLock } = await import("./support/target-lock.ts");
+    await withEnrolledCopy(async (url, admin) => {
+      // Production shape in the one respect this harness differs (see
+      // migrate-run.test.ts's header), then the first run publishes the
+      // manifest, so the case below is an ordinary pending migration.
+      await admin.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${LOGIN}" IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker`);
+      await admin.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${LOGIN}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`);
+      const owner = postgres(asRole(url, "rm_owner", OWNER_PASSWORD), { max: 1, onnotice: () => {} });
+      const dir = mkdtempSync(join(tmpdir(), "rm-tl-migrate-"));
+      const migrations = join(import.meta.dir, "..", "migrations");
+      const { readdirSync, rmSync, symlinkSync } = await import("node:fs");
+      for (const file of readdirSync(migrations)) if (file.endsWith(".sql")) symlinkSync(join(migrations, file), join(dir, file));
+      const lock = await holdTargetLock(url);
+      try {
+        const options = { caller: "smoke_flag" as const, env: "stage" as const, connection: "local" as const, nonInteractive: true, lock };
+        await runMigrate(owner, options);
+        writeFileSync(join(dir, "0999_fence_probe.sql"), "-- compat: additive\n-- metadata_version: 1\n--\nCREATE TABLE rm_fence_probe (id integer);\n");
+        const order = await competitorBlocks(url, "schema_migrations", () => runMigrate(owner, options, { migrationsDir: dir }));
+        expect(order).toEqual(expected("schema_migrations"));
+        const [applied] = await admin<{ n: number }[]>`SELECT count(*)::int AS n FROM schema_migrations WHERE name = '0999_fence_probe.sql'`;
+        expect(applied?.n).toBe(1);
+      } finally {
+        await lock.release();
+        await owner.end({ timeout: 5 });
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }, 120_000);
+
+  test("TOKEN PROVISIONING: provisionServiceTokens waits for the competitor, then writes the rows", async () => {
+    const { provisionServiceTokens } = await import("../scripts/provision-tokens.ts");
+    const { instancePaths } = await import("../../scripts/lib/smoke-state.ts");
+    await withEnrolledCopy(async (url, admin) => {
+      const root = mkdtempSync(join(tmpdir(), "rm-tl-tokens-"));
+      const paths = instancePaths(root, "rm_tl_tokens", { create: true });
+      const order = await competitorBlocks(url, "automation_tokens", () =>
+        provisionServiceTokens({ ownerUrl: asRole(url, "rm_owner", OWNER_PASSWORD), instance: "rm_tl_tokens", tokenFiles: paths.tokenFiles }),
+      );
+      expect(order).toEqual(expected("automation_tokens"));
+      const rows = await admin<{ n: number }[]>`SELECT count(*)::int AS n FROM automation_tokens WHERE instance = 'rm_tl_tokens'`;
+      expect(rows[0]?.n).toBe(3);
+    });
+  }, 60_000);
+
+  test("SPOOF REBIND: spoofRebind waits for the competitor, then rebinds every named member in its own fence", async () => {
+    const { spoofRebind } = await import("../scripts/spoof-rebind.ts");
+    await withEnrolledCopy(async (url, admin) => {
+      const tag = randomBytes(3).toString("hex");
+      await admin`INSERT INTO swarm_members (id, handle, name, status, operator, role) VALUES (${`m-tl-${tag}`}, ${`tl-${tag}`}, ${`tl-${tag}`}, 'active', 'robotmoney', 'member')`;
+      const root = mkdtempSync(join(tmpdir(), "rm-tl-spoof-"));
+      const order = await competitorBlocks(url, "swarm_member_keys", () =>
+        spoofRebind({
+          ownerUrl: asRole(url, "rm_owner", OWNER_PASSWORD),
+          instance: "rm_tl_spoof",
+          stateRoot: root,
+          names: [`tl-${tag}`],
+          flagExplicit: true,
+          rmEnv: "stage",
+          credentialPath: null,
+        }),
+      );
+      expect(order).toEqual(expected("swarm_member_keys"));
+      const [row] = await admin<{ n: number }[]>`SELECT count(*)::int AS n FROM swarm_member_keys WHERE member_id = ${`m-tl-${tag}`} AND active AND spoof_generation_id IS NOT NULL`;
+      expect(row?.n).toBe(1);
+    });
+  }, 60_000);
+
+  test("IDENTITY WRITE: setProductionIdentity waits for the competitor, then writes inside its own fence", async () => {
+    const { setProductionIdentity } = await import("../scripts/set-identity.ts");
+    // The production path writes onto a table with no row (§9.1), so this copy
+    // is left unenrolled.
+    await withEnrolledCopy(async (url, admin) => {
+      const order = await competitorBlocks(url, "deployment_identity", () =>
+        setProductionIdentity({ ownerUrl: asRole(url, "rm_owner", OWNER_PASSWORD), rmEnv: "prod", confirmed: true, note: "fence test" }),
+      );
+      expect(order).toEqual(expected("deployment_identity"));
+      const [row] = await admin<{ kind: string }[]>`SELECT kind FROM deployment_identity`;
+      expect(row?.kind).toBe("production");
+    }, false);
+  }, 60_000);
+
+  test("SEED: `bun run src/db/seed.ts`, the seed's own direct-run entry, waits for the competitor, then seeds in its own fence", async () => {
+    await withEnrolledCopy(async (url) => {
+      const owner = asRole(url, "rm_owner", OWNER_PASSWORD);
+      const order = await competitorBlocks(url, "job_schedules", async () => {
+        const child = Bun.spawn(["bun", "--no-env-file", "run", "src/db/seed.ts"], {
+          cwd: join(import.meta.dir, ".."),
+          env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", DATABASE_URL: owner, WORKER_DATABASE_URL: owner, RM_ENV: "stage" },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const code = await child.exited;
+        if (code !== 0) throw new Error(`seed.ts exited ${code}: ${await new Response(child.stderr).text()}`);
+      });
+      expect(order).toEqual(expected("job_schedules"));
+    });
+  }, 60_000);
+
+  test("RED CONTROL: a mutation that writes BEFORE taking the fence is caught holding a lock on its table", async () => {
+    await withEnrolledCopy(async (url) => {
+      const unfenced = postgres(url, { max: 1, onnotice: () => {} });
+      try {
+        const order = await competitorBlocks(url, "deployment_identity", () =>
+          unfenced.begin(async (tx) => {
+            await tx`UPDATE deployment_identity SET note = 'written before the fence'`;
+            await tx`SELECT pg_advisory_xact_lock(${TARGET_LOCK_KEY.toString()}::bigint)`;
+          }),
+        );
+        expect(order).not.toEqual(expected("deployment_identity"));
+        expect(order[1]).toMatch(/holding [1-9]\d* lock\(s\) on deployment_identity/);
+      } finally {
+        await unfenced.end({ timeout: 5 });
+      }
+    });
+  }, 60_000);
 });
 
 describe("assertStillHeld — §2, no phase proceeds on a lock the tool cannot prove it holds [integration tier]", () => {

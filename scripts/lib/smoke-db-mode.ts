@@ -219,8 +219,11 @@ export function targetConnection(dp: DataPathRequest | ResolvedDataPath): Target
 
 export interface FlagSpec {
   flag: string;
-  /** 0 = bare switch, 1 = takes the following token (or `--flag=value`). */
-  arity: 0 | 1;
+  /**
+   * 0 = bare switch, 1 = takes the following token (or `--flag=value`),
+   * "optional" = bare, or `--flag=value` only (never the following token).
+   */
+  arity: 0 | 1 | "optional";
 }
 
 /**
@@ -244,6 +247,9 @@ export const DEMO_FLAGS: readonly FlagSpec[] = Object.freeze([
   Object.freeze({ flag: "--instance", arity: 1 as const }),
   // Spec §6.1: the credential file (the roster); overrides RM_CREDENTIALS.
   Object.freeze({ flag: "--credentials", arity: 1 as const }),
+  // Spec §6.4: `--spoof-keys` spoofs every in-house member; `--spoof-keys=a,b`
+  // names them (scripts/lib/swarm/spoof-keys.ts `spoofKeysRequest`).
+  Object.freeze({ flag: "--spoof-keys", arity: "optional" as const }),
   // Spec §2: "A tool that finds the lock held waits with a timeout, then
   // refuses naming the holder." Seconds; LOCK_TIMEOUT_DEFAULT_SECONDS when absent.
   Object.freeze({ flag: LOCK_TIMEOUT_FLAG, arity: 1 as const }),
@@ -336,6 +342,10 @@ export function validateArgv(argv: readonly string[]): string[] {
     }
     if (spec.arity === 0 && inline) {
       errors.push(`${flag} is a switch and takes no value (got "${inline.value}").`);
+      continue;
+    }
+    if (spec.arity === "optional") {
+      if (inline && !inline.value) errors.push(`${flag}= requires a value, or leave off the "=".`);
       continue;
     }
     if (spec.arity === 1) {

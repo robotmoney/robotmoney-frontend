@@ -13,7 +13,6 @@
 // storage and read paths (#498/#499 own those), the production live-roster
 // seed/prune contract (#529/#530 own that), and any database migration.
 import { ownsData, type DbMode } from "./smoke-db-mode.ts";
-import { personaIdentity } from "./swarm/persona-keys.ts";
 import { planAdoptions } from "./swarm/roster-plan.ts";
 import type { RosterMember } from "./swarm/session.ts";
 import { demoAttends } from "@robotmoney/contract";
@@ -78,12 +77,14 @@ export const DEMO_MEMBERS: readonly ScenarioMember[] = Object.freeze([
   Object.freeze({ memberId: "boreas", name: "Boreas", lens: "on-chain flows", bias: 0, present: demoAttends("boreas") }),
   Object.freeze({ memberId: "cygnus", name: "Cygnus", lens: "momentum", bias: 0.15, present: demoAttends("cygnus") }),
   Object.freeze({ memberId: "draco", name: "Draco", lens: "contrarian", bias: 0, present: demoAttends("draco") }),
-  // Issue #922: the smoke-local named-judge persona. Handle 'themis' (derived
+  // Issue #922: the smoke-local named-judge persona, handle 'themis' (derived
   // from this display name by the same slugifyMemberName algorithm every other
-  // member's handle goes through) so #918's judgeSessionAdmin — which resolves
-  // its judgeMemberId by looking up the HANDLE 'themis', not by role — actually
-  // finds her. Absent by the shared DEMO_NO_SHOWS rule, same as draco: a
-  // judge-role member cannot hold a take in the session it judges.
+  // member's handle goes through). Nothing here judges: the judge is a
+  // participant container started from the credential file's `judges`
+  // namespace (smoke spec §6.1, §6.2; D53 (4)), and the backend judge that
+  // once looked her up by handle is deleted. Absent by the shared
+  // DEMO_NO_SHOWS rule, same as draco: a judge-role member cannot hold a take
+  // in the session it judges.
   Object.freeze({ memberId: "themis", name: "Themis", lens: "consensus judge", bias: 0, present: demoAttends("themis") }),
 ]);
 
@@ -160,14 +161,36 @@ export const SMOKE_MEMBER_NAMES: ReadonlySet<string> = Object.freeze(
 
 export interface RosterAdoptionOpts {
   /**
-   * Seat EVERY active restored member, not only the three committed personas.
-   * True for a production-shaped (--smoke) boot on the pinned tunnel port or
-   * the smoke-twin data path: those boots hold a throwaway copy of production,
-   * so re-keying a restored member at enrollment is free (register rebinds by
-   * member id), and seating the full committee is what makes its IC sessions
-   * realistic. Never true for a plain simulation boot.
+   * Seat EVERY active restored member, not only the members this host holds a
+   * credential for. True for a production-shaped (--smoke) boot on the pinned
+   * tunnel port or the smoke-twin data path: those boots hold a throwaway copy
+   * of production, so re-keying a restored member at enrollment is free
+   * (register rebinds by member id), and seating the full committee is what
+   * makes its IC sessions realistic. Never true for a plain simulation boot.
    */
   seatAllActive: boolean;
+  /**
+   * The HANDLES this host holds a credential for: the `agents` namespace of
+   * its credential file (spec §6.1), lower-cased. The credential file is the
+   * roster, so it is also the only source of "whose key do we hold". A member
+   * outside it signs, if at all, with a key its container generated for this
+   * boot. Empty when no credential file is configured.
+   */
+  credentialHandles: ReadonlySet<string>;
+}
+
+/**
+ * The lower-cased handles of a credential file's `agents` namespace, the form
+ * `adoptionFilter` compares against. The file names members by handle; the
+ * `judges` namespace is left out because a judge never holds a take seat.
+ */
+export function credentialHandlesOf(agents: readonly { name: string }[]): ReadonlySet<string> {
+  return new Set(agents.map((a) => a.name.trim().toLowerCase()).filter(Boolean));
+}
+
+/** The handle a roster row is matched by, falling back to its id. */
+function handleOf(member: { handle?: string; id: string }): string {
+  return (member.handle ?? member.id).trim().toLowerCase();
 }
 
 /**
@@ -176,14 +199,14 @@ export interface RosterAdoptionOpts {
  * (the same reason resolveSmokeCadenceForBoot() exists).
  *
  * `ownsData()` is the load-bearing term. Seat-all makes adoptionFilter return
- * `() => true`, which drops the three-persona allowlist AND the
- * `personaIdentity()` check that issue #537 added, and enrollment then rebinds
- * every seated member's key and mints a fresh token. `--static-port` is only a
- * CLI flag — stagePreflight() checks nothing but that the port is free — so
- * `--smoke --static-port --db external`, which printResumeHint() itself suggests,
- * would have re-keyed every active member of a REAL restored server. `external`
- * is the one mode this boot does not own and cannot throw away, so it never
- * qualifies however the other flags are set.
+ * `() => true`, which drops the four-handle allowlist AND the credential-file
+ * membership check, and enrollment then rebinds every seated member's key and
+ * mints a fresh token. `--static-port` is only a CLI flag — stagePreflight()
+ * checks nothing but that the port is free — so `--smoke --static-port --db
+ * external`, which printResumeHint() itself suggests, would have re-keyed every
+ * active member of a REAL restored server. `external` is the one mode this
+ * boot does not own and cannot throw away, so it never qualifies however the
+ * other flags are set.
  */
 export function resolveSeatAllRestored(boot: {
   smoke: boolean;
@@ -196,69 +219,59 @@ export function resolveSeatAllRestored(boot: {
 }
 
 /**
- * The `hasCommittedIdentity` predicate handed to planAdoptions().
+ * The adoption predicate handed to planAdoptions().
  *
- * Under a smoke boot it is the allowlist AND the committed-identity check: a
- * member outside the three restored personas is refused even if somebody
- * committed a key under their name, and an allowlisted name with no committed
- * key is refused too (adoption seats a member that must be able to SIGN).
+ * Under a smoke boot it is the allowlist AND credential-file membership: a
+ * member outside the four in-house handles is refused whatever this host
+ * holds, and an allowlisted handle with no credential-file entry is refused
+ * too (adoption seats a member that must be able to SIGN, and the credential
+ * file is the only place this host keeps a key — spec §6.1). A plain
+ * simulation boot applies membership alone.
  *
  * It NEVER creates or rotates a credential: it answers a question about the
- * committed fixture and returns a boolean. Adoption re-binds an already
- * committed key; minting one for a member the fixture does not know is exactly
- * the duplicate-making behaviour issue #537 keeps out.
+ * credential file's roster and returns a boolean.
  *
  * `opts.seatAllActive` is the twin/stage exception — a production-shaped boot
- * on the pinned port restores members with NO committed fixture, and seating
- * them all (and rotating their keys at enrollment) is the capability that
- * exception exists for. Never set outside that gate.
+ * on the pinned port restores members this host holds no credential for, and
+ * seating them all (and rotating their keys at enrollment) is the capability
+ * that exception exists for. Never set outside that gate.
  */
 export function adoptionFilter(
   smoke: boolean,
-  // TWO SPELLINGS OF ONE QUESTION, both accepted. `true` is the twin's own
-  // shorthand (`adoptionFilter(smoke, twin)`); `{ seatAllActive }` is the
-  // generalized boot-level gate resolveSeatAllRestored() answers, which covers
-  // the pinned-port stage boot as well as the twin. They mean the same thing
-  // here and are deliberately not two behaviours.
-  opts: boolean | Partial<RosterAdoptionOpts> = false,
-): (name: string) => boolean {
-  const seatAll = opts === true || (typeof opts === "object" && opts.seatAllActive === true);
+  opts: Partial<RosterAdoptionOpts> = {},
+): (member: { name: string; handle?: string; id: string }) => boolean {
   // A TWIN (or a pinned-port production-shaped boot) seats the WHOLE restored
-  // roster, fixture or not.
+  // roster, credential or not.
   //
-  // Both rules above exist to protect a PERSISTENT database: a member whose key
+  // Both rules below exist to protect a PERSISTENT database: a member whose key
   // the smoke invented would be a real member re-keyed by us, and a per-boot
-  // container key cannot sign again after a restart. A `--twin` boot has
-  // neither hazard. Its database is a throwaway copy of production, restored
-  // fresh for this boot and thrown away with it (legacy boot behavior), so
-  // nothing we re-key here outlives the boot and nothing we write can
-  // reach the real member. What the old rules bought there was a session with 3
-  // seats on a roster of 7 — the twin silently exercising less than half the
-  // swarm it exists to rehearse.
-  //
-  // So: under seat-all, every ACTIVE restored member is adoptable. The three
-  // with committed keys still sign as themselves; everyone else signs with a key
-  // their container generates for this boot alone, which the harness registers
-  // through the same privileged shortcut adoption already uses. That is a
-  // SIMULATED member — real name, real lens, real history, a signature that is
-  // ours and not theirs — and `simulatedSigners()` below is what makes the boot
-  // say so out loud rather than leaving it to be inferred from a roster count.
-  if (seatAll) return () => true;
-  return (name: string) => {
-    if (smoke && !SMOKE_MEMBER_NAMES.has(name.trim().toLowerCase())) return false;
-    return Boolean(personaIdentity(name));
+  // container key cannot sign again after a restart. A twin boot has neither
+  // hazard. Its database is a throwaway copy of production, restored fresh for
+  // this boot, so nothing we re-key here outlives it and nothing we write can
+  // reach the real member. Under seat-all every ACTIVE restored member is
+  // adoptable; those outside the credential file sign with a key their
+  // container generates for this boot alone — a SIMULATED member, and
+  // `simulatedSigners()` below is what makes the boot say so out loud.
+  if (opts.seatAllActive === true) return () => true;
+  const held = opts.credentialHandles ?? new Set<string>();
+  return (member) => {
+    if (smoke && !SMOKE_MEMBER_NAMES.has(member.name.trim().toLowerCase())) return false;
+    return held.has(handleOf(member));
   };
 }
 
 /**
  * Of the members about to be seated, which will sign with a key this boot
- * invented rather than with their own committed identity.
+ * invented rather than with a key this host holds in its credential file.
  *
- * Pure, and deliberately name-based: it answers the question the session page
- * cannot ("is this take really theirs?"), so the boot can print it.
+ * Pure, and handle-based like the filter: it answers the question the session
+ * page cannot ("is this take really theirs?"), so the boot can print it.
  */
-export function simulatedSigners(members: readonly { name: string }[]): string[] {
-  return members.filter((m) => !personaIdentity(m.name)).map((m) => m.name);
+export function simulatedSigners(
+  members: readonly { name: string; handle?: string; id: string }[],
+  credentialHandles: ReadonlySet<string>,
+): string[] {
+  return members.filter((m) => !credentialHandles.has(handleOf(m))).map((m) => m.name);
 }
 
 /**
@@ -297,10 +310,11 @@ export function adoptRestoredRoster(
   opts: { twin?: boolean } & Partial<RosterAdoptionOpts> = {},
 ): ScenarioMember[] {
   const seatAll = opts.twin === true || opts.seatAllActive === true;
+  const held = opts.credentialHandles ?? new Set<string>();
   const result = planAdoptions(
     [...roster],
     new Set(seated.map((m) => m.memberId)),
-    adoptionFilter(plan.kind === "smoke", { seatAllActive: seatAll }),
+    adoptionFilter(plan.kind === "smoke", { seatAllActive: seatAll, credentialHandles: held }),
   );
   const adopted = result.adopt.map((m) => ({
     memberId: m.id,
@@ -321,18 +335,14 @@ export function adoptRestoredRoster(
     // a seed that hardcoded slug ids — the thing this issue removes. The handle
     // is the stable public key, and `rosterMembers()` reads it off the admin
     // API's `handle` field alongside the id it seats members with. seat-all
-    // relents from "exactly these handles" to "these three ARE present": other
+    // relents from "exactly these handles" to "these four ARE present": other
     // active restored members are legitimately seated and re-keyed too.
     //
     // ADOPTABLE, not merely allowlisted. Without seat-all, adoptionFilter()
-    // refuses any persona with no committed key in
-    // scripts/lib/swarm/fixtures/persona-keys.json — `themis`, the judge
-    // persona added to the allowlist by issue #922, is one. Comparing the
-    // adopted handles against the WHOLE allowlist therefore asserted a set the
-    // filter can never produce, so every plain smoke restore threw. The
-    // seat-all branch keeps the full list: it seats everyone active, so all
-    // four committed personas really must be in the restore.
-    const adoptable = SMOKE_MEMBERS.filter((m) => Boolean(personaIdentity(m.name)));
+    // refuses any allowlisted handle this host holds no credential-file entry
+    // for — `themis`, the judge, never has an `agents` entry — so the expected
+    // set is the allowlist narrowed to the credential file's agents.
+    const adoptable = SMOKE_MEMBERS.filter((m) => held.has(m.handle));
     const expected = adoptable.map((m) => m.handle).sort().join(",");
     const actualSet = new Set(result.adopt.map((m) => m.handle ?? m.id));
     const missing = SMOKE_MEMBERS.filter((m) => !actualSet.has(m.handle)).map((m) => m.handle);

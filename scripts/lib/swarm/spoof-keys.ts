@@ -36,6 +36,11 @@
 //   (3) stop every running participant holding an OLDER generation;
 //   (4) start them from the new file.
 //
+// (1) and (2) are `spoofKeys` below, run as `rm_owner` under the boot's target
+// lock by backend/scripts/spoof-rebind.ts. (3) and (4) are the boot's own
+// `participants` phase, the reconciliation every boot runs (see "STEPS (3) AND
+// (4)" at the end of this file).
+//
 // There is no way to make (2) and (4) one atomic act: (2) is a database
 // transaction and (4) is a container lifecycle operation, and no transaction
 // spans both. So the design does not pretend to. Between (2) and (4) a
@@ -82,12 +87,12 @@
 // an overwrite, because overwriting it on a mistargeted run would destroy the
 // only copy of a host's real participant keys. It never runs on production:
 // four independent guards below each refuse on their own.
+import { spawn } from "node:child_process";
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { instancePaths } from "../smoke-state.ts";
-import type { PersonaIdentity } from "./persona-keys.ts";
-import type { CredentialEntry, RunningParticipant } from "./credential-file.ts";
+import type { CredentialEntry, PersonaIdentity } from "./credential-file.ts";
 
 /**
  * One generated identity plus the member id it is bound to. The id is
@@ -469,6 +474,10 @@ export function effectiveRoster<E extends { name: string; credential: Credential
         privateJwk: member.identity.privateJwk,
         bearer: member.bearer,
       },
+      // Which generation this entry boots from, so reconciliation replaces a
+      // container of this member running on any other one (§6.4 step 3) and
+      // leaves every member the generation does not name alone.
+      generation: generation.generationId,
     };
   });
 }
@@ -484,19 +493,28 @@ export interface SpoofRebindDeps {
    */
   withFencedTransaction<T>(fn: () => Promise<T>): Promise<T>;
   /**
-   * Rebind one member's current public key BY MEMBER ID, preserving the
-   * historical verification keys so past receipts stay verifiable.
+   * Rebind one member's current public key BY MEMBER ID through the existing
+   * key mechanism (D55 (6)): supersede the member's active key rows
+   * (`active = false`, the same tombstone `rotate-key` writes) and insert the
+   * new active key row carrying `generationId`. Nothing is deleted, so the
+   * historical verification keys stay and past receipts stay verifiable.
    */
   rebindMemberKey(memberId: string, publicKeyB64: string, generationId: string): Promise<void>;
   /**
-   * Issue the generation's bearer to the member BY MEMBER ID (the server stores
-   * only its hash), superseding the member's previous bearer. Called inside the
-   * same fence as `rebindMemberKey`, so a member never holds a new key with an
-   * old bearer or the reverse.
+   * Issue the generation's bearer to the member BY MEMBER ID: the server stores
+   * only its hash, on the key row `rebindMemberKey` just inserted, which is
+   * what the API authenticates a member bearer against. Called inside the same
+   * fence as `rebindMemberKey`, so a member never holds a new key with an old
+   * bearer or the reverse.
    */
   issueMemberToken(memberId: string, bearer: string, generationId: string): Promise<void>;
-  /** The generation id the database currently records, or `null`. */
-  readInstalledGeneration(): Promise<string | null>;
+  /**
+   * The generation id the database currently records for `generation`'s
+   * members: the id every one of their active keys carries, or `null` when
+   * they do not all carry one and the same id (migration 0087
+   * `spoof_generation_id`, written only by the rebind's INSERT).
+   */
+  readInstalledGeneration(generation: SpoofGeneration): Promise<string | null>;
 }
 
 /**
@@ -519,7 +537,7 @@ export async function rebindSpoofedKeys(
   generation: SpoofGeneration,
   deps: SpoofRebindDeps,
 ): Promise<void> {
-  const installed = await deps.readInstalledGeneration();
+  const installed = await deps.readInstalledGeneration(generation);
   // A rerun after a crash between (2) and (4): the database is already there,
   // so this step is a no-op and the caller proceeds to (3) and (4).
   if (installed === generation.generationId) return;
@@ -531,64 +549,21 @@ export async function rebindSpoofedKeys(
   });
 }
 
-/** The container lifecycle the caller owns; this module only decides. */
-export interface SpoofContainerDeps {
-  stopParticipant(participant: RunningParticipant): Promise<void>;
-  startParticipant(member: SpoofedMember, generationId: string): Promise<void>;
-}
+// ── STEPS (3) AND (4) ARE THE BOOT'S RECONCILIATION ─────────────────────────
+// Stopping every participant that holds an older generation and starting it
+// from the new file is not done here. It is `bun smoke`'s `participants`
+// phase: credential-file.ts `planParticipants` applies `effectiveRoster` with
+// the instance's generation, so each spoofed member's entry carries the
+// generation id, and a running container of that member on any other
+// generation is planned for stop AND start; scripts/lib/participant-compose.ts
+// `applyParticipantPlan` then stops every one of them before it starts any
+// (never a rolling restart: two containers for one member, one on each key,
+// would both poll for the same session, and the old one's take would be
+// refused). One reconciliation, for spoofed and plain members alike, is what
+// makes a later PLAIN boot keep the spoofed members on the keys the database
+// accepts (§6.4 "Roster precedence") — the same code runs both times.
 
-/**
- * Steps (3) and (4): stop every participant holding an older generation, then
- * start them from the new file.
- *
- * Inputs: the generation, what is running, and the lifecycle dependencies.
- * Output: nothing.
- *
- * Stop-then-start, never start-then-stop and never a rolling restart: two
- * containers for one member, one on each generation, would both poll for the
- * same session, and while the old one's submission would be REFUSED (its key
- * is superseded) it would still consume a take slot and log a failure that
- * looks like a real fault. One take in flight per participant (spec §6.2) is
- * easier to hold by not creating the overlap in the first place.
- *
- * A participant already on this generation is left alone, so a rerun does not
- * restart healthy containers.
- *
- * Refusals: none; a lifecycle failure propagates and the run refuses with the
- * generation still persisted, so the next rerun resumes here.
- */
-export async function replaceSpoofedParticipants(
-  generation: SpoofGeneration,
-  running: readonly RunningParticipant[],
-  deps: SpoofContainerDeps,
-): Promise<void> {
-  const plan = spoofReplacementPlan(generation, running);
-  // Stop-then-start, never a rolling restart: two containers for one member
-  // would both poll for the same session.
-  for (const participant of plan.stop) await deps.stopParticipant(participant);
-  for (const member of plan.start) await deps.startParticipant(member, generation.generationId);
-}
-
-/**
- * Which containers step (3) stops and which step (4) starts. Separated so
- * `spoofKeys` can report the restarted members without replaying the rule.
- */
-function spoofReplacementPlan(
-  generation: SpoofGeneration,
-  running: readonly RunningParticipant[],
-): { stop: RunningParticipant[]; start: SpoofedMember[] } {
-  const stop: RunningParticipant[] = [];
-  const start: SpoofedMember[] = [];
-  for (const member of Object.values(generation.members)) {
-    const live = running.find((p) => p.name === member.name);
-    if (live && live.generation === generation.generationId) continue; // already current
-    if (live) stop.push(live);
-    start.push(member);
-  }
-  return { stop, start };
-}
-
-/** Everything one `--spoof-keys` invocation needs. */
+/** Everything the database half of one `--spoof-keys` invocation needs. */
 export interface SpoofKeysOptions {
   guards: SpoofGuardContext;
   /**
@@ -598,13 +573,15 @@ export interface SpoofKeysOptions {
    */
   instance: string;
   stateRoot: string;
-  /** Explicit names from `--spoof-keys a,b`; empty means every in-house member. */
+  /** Explicit names from `--spoof-keys=a,b`; empty means every in-house member. */
   names: readonly string[];
-  /** Resolved under the target lock, after revalidation (spec §2). */
+  /**
+   * The target's members, resolved under the target lock after revalidation
+   * (spec §2). `name` is the member's HANDLE, the key the credential file and
+   * the generation file both use.
+   */
   members: readonly { name: string; memberId: string; operator: string }[];
-  running: readonly RunningParticipant[];
   db: SpoofRebindDeps;
-  containers: SpoofContainerDeps;
 }
 
 /** What the run reports into the journal and the receipt (spec §1.3, §1.4). */
@@ -612,17 +589,19 @@ export interface SpoofKeysOutcome {
   generationId: string;
   generationPath: string;
   rebound: readonly string[];
-  restarted: readonly string[];
   /** True when the rebind was skipped because the database was already there. */
   resumed: boolean;
 }
 
 /**
- * The whole operation: guards, then steps (1)–(4), in order, resumable.
+ * Guards, then steps (1) and (2), in order, resumable. Steps (3) and (4) are
+ * the boot's reconciliation (above).
  *
  * Input: `SpoofKeysOptions`. Output: a `SpoofKeysOutcome` for the journal.
  *
- * Refusals: every `SpoofRefusalReason`, before anything is generated.
+ * Refusals: every `SpoofRefusalReason`, before anything is generated; a named
+ * member this target does not hold, or one a third party operates; a persisted
+ * generation whose members differ from this run's targets.
  *
  * Gates (spec §10 W3): "`--spoof-keys` with `RM_CREDENTIALS` set writes
  * elsewhere; interrupted rebind then rerun; crash after rebind commit before
@@ -634,8 +613,12 @@ export async function spoofKeys(options: SpoofKeysOptions): Promise<SpoofKeysOut
   const targets = selectSpoofTargets(options.names, options.members);
 
   // (1) A persisted generation is REUSED, never replaced: minting a second one
-  // while the database may already hold the first strands the members.
+  // while the database may already hold the first strands the members. Reuse
+  // is only for a RETRY: a run that selected a different member set is a new
+  // request, and answering it with the old generation would report success
+  // while the members it named were never spoofed.
   const persisted = readSpoofGeneration(options.stateRoot, options.instance);
+  if (persisted) assertSameSpoofTargets(persisted, targets, generationPath);
   const generation = persisted
     ?? writeSpoofGeneration(
       targets.map((m) => ({ name: m.name, memberId: m.memberId })),
@@ -645,21 +628,45 @@ export async function spoofKeys(options: SpoofKeysOptions): Promise<SpoofKeysOut
 
   // (2) One fenced transaction, keyed by member id — skipped when the database
   // already reports this generation.
-  const installed = await options.db.readInstalledGeneration();
+  const installed = await options.db.readInstalledGeneration(generation);
   const resumed = installed === generation.generationId;
   if (!resumed) await rebindSpoofedKeys(generation, options.db);
-
-  // (3) and (4).
-  const plan = spoofReplacementPlan(generation, options.running);
-  await replaceSpoofedParticipants(generation, options.running, options.containers);
 
   return {
     generationId: generation.generationId,
     generationPath,
     rebound: resumed ? [] : Object.keys(generation.members),
-    restarted: plan.start.map((m) => m.name),
     resumed,
   };
+}
+
+/**
+ * Refuse a persisted generation whose members are not exactly this run's
+ * targets (by name AND member id).
+ *
+ * A rerun of the same `--spoof-keys` request selects the same members and
+ * reuses the generation (the §6.4 retry). A run that selects a different set —
+ * `--spoof-keys=athena` then `--spoof-keys=athena,robot-money`, or a member
+ * whose id changed — is not a retry. Minting a new generation over the old one
+ * would strand the members the database already holds on the old keys, and
+ * reusing the old one would silently skip the new names. So it refuses, naming
+ * both sets.
+ */
+function assertSameSpoofTargets(
+  persisted: SpoofGeneration,
+  targets: readonly { name: string; memberId: string }[],
+  generationPath: string,
+): void {
+  const describe = (pairs: readonly { name: string; memberId: string }[]) =>
+    pairs.map((m) => `${m.name}=${m.memberId}`).sort();
+  const recorded = describe(Object.values(persisted.members));
+  const selected = describe(targets);
+  if (recorded.length === selected.length && recorded.every((pair, i) => pair === selected[i])) return;
+  throw new Error(
+    `--spoof-keys selected [${selected.join(", ")}], but ${generationPath} holds generation ${persisted.generationId} ` +
+      `for [${recorded.join(", ")}]. A persisted generation is reused only by a rerun of the same request; ` +
+      `rerun --spoof-keys=${Object.keys(persisted.members).sort().join(",")} to finish it`,
+  );
 }
 
 /**
@@ -684,4 +691,81 @@ function selectSpoofTargets(
     }
     return member;
   });
+}
+
+/** The `--spoof-keys` flag as argv spells it (spec §6.4): bare, or `--spoof-keys=a,b`. */
+export const SPOOF_KEYS_FLAG = "--spoof-keys";
+
+/**
+ * Whether argv asks for `--spoof-keys`, and which names. Bare means every
+ * in-house member (`names: []`); `--spoof-keys=a,b` names them. `explicit` is
+ * true only when the flag itself is on the command line — the §6.4 guard
+ * `flag_not_explicit` reads exactly this, so nothing but argv can set it.
+ */
+export function spoofKeysRequest(argv: readonly string[]): { explicit: boolean; names: string[] } {
+  let explicit = false;
+  const names: string[] = [];
+  for (const token of argv.slice(2)) {
+    if (token === SPOOF_KEYS_FLAG) {
+      explicit = true;
+      continue;
+    }
+    if (token.startsWith(`${SPOOF_KEYS_FLAG}=`)) {
+      explicit = true;
+      for (const name of token.slice(SPOOF_KEYS_FLAG.length + 1).split(",")) {
+        if (name.trim() !== "") names.push(name.trim());
+      }
+    }
+  }
+  return { explicit, names };
+}
+
+/** What the spoof preparation child is handed: no secret travels in it. */
+export interface SpoofRebindRequest {
+  readonly instance: string;
+  readonly stateRoot: string;
+  readonly target: { readonly host: string; readonly port: number; readonly database: string; readonly sslmode: string };
+  /** The caller's session target lock, proven held before the fenced write. */
+  readonly lock: { readonly backendPid: number; readonly holder: Record<string, unknown> };
+  readonly names: readonly string[];
+  readonly flagExplicit: boolean;
+  readonly rmEnv: "prod" | "stage" | null;
+  /** The resolved credential-file path, compared as a file against the generation's. */
+  readonly credentialPath: string | null;
+  readonly resultFile: string;
+}
+
+/** What the child writes back: the outcome, never a key or a bearer. */
+export type SpoofRebindResult = ({ readonly ok: true } & SpoofKeysOutcome) | { readonly ok: false; readonly reason?: string; readonly error: string };
+
+/**
+ * Run the database half of `--spoof-keys` (backend/scripts/spoof-rebind.ts) as
+ * `rm_owner`, under the boot's target lock, the way `prepare (tokens)` runs
+ * token provisioning. The owner credential is the instance's generated one
+ * (§5): a local mode's. The child reads it from the state directory itself;
+ * nothing secret passes through this process.
+ */
+export async function runSpoofRebind(
+  repoRoot: string,
+  request: Omit<SpoofRebindRequest, "resultFile">,
+  env: Record<string, string>,
+): Promise<SpoofRebindResult> {
+  const resultFile = join(instancePaths(request.stateRoot, request.instance).dir, `prepare-spoof-keys-${process.pid}.json`);
+  rmSync(resultFile, { force: true });
+  const child = spawn("bun", ["--no-env-file", join(repoRoot, "backend", "scripts", "spoof-rebind.ts")], {
+    cwd: join(repoRoot, "backend"),
+    env: { ...env, RM_SPOOF_REQUEST: JSON.stringify({ ...request, resultFile }) },
+    stdio: "inherit",
+  });
+  const code = await new Promise<number>((done) => child.on("exit", (c, signal) => done(c ?? (signal ? 128 : 1))));
+  let parsed: SpoofRebindResult | null = null;
+  try {
+    parsed = JSON.parse(readFileSync(resultFile, "utf8")) as SpoofRebindResult;
+  } catch {
+    parsed = null;
+  } finally {
+    rmSync(resultFile, { force: true });
+  }
+  if (parsed?.ok === true && code === 0) return parsed;
+  return { ok: false, ...(parsed && !parsed.ok && parsed.reason ? { reason: parsed.reason } : {}), error: parsed && !parsed.ok ? parsed.error : `spoof rebind exited ${code} without a result` };
 }

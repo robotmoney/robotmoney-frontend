@@ -26,6 +26,10 @@ import { COMMITTED_REGIME_CRON, COMMITTED_RESEARCH_CRON, resolveSmokeCadence } f
 import { scenarioPlan } from "../../lib/smoke-mode.ts";
 import { instancePaths } from "../../lib/smoke-state.ts";
 import { SERVICE_BUILD_CONTEXTS } from "../../stack/config.ts";
+import { randomBytes } from "node:crypto";
+import { planParticipants, type CredentialFile } from "../../lib/swarm/credential-file.ts";
+import { applyParticipantPlan, listRunningParticipants, type DockerRun } from "../../lib/participant-compose.ts";
+import { credentialEntry, credentialFile, entriesOf, secretsOf, writeParticipantOverlay, type WrittenOverlay } from "./participant-fixture.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 
@@ -1125,6 +1129,204 @@ describe("compose never reads the project directory's .env (criterion 122)", () 
   }, 120_000);
 });
 
+
+// ---------------------------------------------------------------------------
+// THE PARTICIPANT SERVICES (smoke spec §6.1, §6.2, §3; criteria 140, 143).
+//
+// "For N agents and M judges the rendered compose carries exactly N+M
+// participant services, each `restart: unless-stopped`, each with only its own
+// key, and a changed file adds and removes to match." The overlay is rendered
+// by the boot's own renderer (scripts/lib/participant-compose.ts) and resolved
+// through `docker compose config` with the smoke composition, so each service
+// is read with its env file merged in — what Docker would hand the container.
+// The runtime half starts the services on the real daemon, reads a started
+// container's environment back from Docker, then changes the roster and
+// applies the reconciliation plan.
+describe("participant services: N agents and M judges render exactly N+M, each holding only its own key", () => {
+  const PARTICIPANT_RENDER_TIMEOUT_MS = 300_000;
+  let threeOne: { file: CredentialFile; overlay: WrittenOverlay; cfg: ComposeConfig };
+  let zeroTwo: { file: CredentialFile; overlay: WrittenOverlay; cfg: ComposeConfig };
+
+  const render = (file: CredentialFile) => {
+    const overlay = writeParticipantOverlay(entriesOf(file));
+    return { file, overlay, cfg: JSON.parse(renderComposeConfig({}, [...DEMO_COMPOSE_FILES, overlay.overlay], [])) as ComposeConfig };
+  };
+  const participants = (cfg: ComposeConfig) =>
+    Object.entries(cfg.services).filter(([name]) => name.startsWith("participant-")).map(([name, svc]) => ({ name, svc }));
+
+  beforeAll(() => {
+    threeOne = render(credentialFile(["athena", "noop-analyst", "robot-money"], ["themis"]));
+    zeroTwo = render(credentialFile([], ["themis", "dike"]));
+  }, PARTICIPANT_RENDER_TIMEOUT_MS);
+
+  test("3 agents and 1 judge render exactly 4 participant services, named by kind and member", () => {
+    expect(participants(threeOne.cfg).map((p) => p.name).sort()).toEqual([
+      "participant-agent-athena",
+      "participant-agent-noop-analyst",
+      "participant-agent-robot-money",
+      "participant-judge-themis",
+    ]);
+  });
+
+  test("0 agents and 2 judges render exactly 2, both judges — zero agents with several judges is a valid roster", () => {
+    expect(participants(zeroTwo.cfg).map((p) => p.name).sort()).toEqual(["participant-judge-dike", "participant-judge-themis"]);
+    for (const { svc } of participants(zeroTwo.cfg)) {
+      expect(svc.environment?.RM_PARTICIPANT_KIND).toBe("judge");
+      expect(svc.environment?.RM_TAKE_COMMAND).toBeUndefined();
+    }
+  });
+
+  test("every participant is `restart: unless-stopped`, mounts nothing, and has no Docker socket, database credential or service token", () => {
+    for (const cfg of [threeOne.cfg, zeroTwo.cfg]) {
+      for (const { name, svc } of participants(cfg)) {
+        expect(`${name}:${svc.restart}`).toBe(`${name}:unless-stopped`);
+        expect(`${name}:${(svc.volumes ?? []).length}`).toBe(`${name}:0`);
+        const keys = Object.keys(svc.environment ?? {});
+        const forbidden = keys.filter((k) => /DATABASE_URL|POSTGRES|^PG|DOCKER|_TOKEN_FILE$|OPENCODE_API_KEY/.test(k));
+        expect({ name, forbidden }).toEqual({ name, forbidden: [] });
+      }
+    }
+  });
+
+  test("each service carries its OWN member id, bearer, signing key and model key — and no other participant's", () => {
+    for (const { file, cfg } of [threeOne, zeroTwo]) {
+      const entries = entriesOf(file);
+      for (const entry of entries) {
+        const svc = cfg.services[`participant-${entry.kind}-${entry.name}`]!;
+        const env = svc.environment ?? {};
+        expect(env.RM_MEMBER_ID).toBe(entry.credential.memberId);
+        expect(env.RM_MEMBER_TOKEN).toBe(entry.credential.bearer);
+        expect(env.RM_INFERENCE_KEY).toBe(entry.credential.modelKey);
+        expect(JSON.parse(String(env.RM_MEMBER_IDENTITY))).toEqual({ publicKeyB64: entry.credential.publicKeyB64, privateJwk: entry.credential.privateJwk });
+        const text = JSON.stringify(svc);
+        for (const other of entries) {
+          if (other === entry) continue;
+          for (const secret of secretsOf(other.credential)) {
+            expect({ service: entry.name, holdsSecretOf: other.name, found: text.includes(secret) }).toEqual({ service: entry.name, holdsSecretOf: other.name, found: false });
+          }
+        }
+      }
+    }
+  });
+
+  test("no application service carries any participant's secret", () => {
+    const secrets = entriesOf(threeOne.file).flatMap((e) => secretsOf(e.credential));
+    for (const [name, svc] of Object.entries(threeOne.cfg.services)) {
+      if (name.startsWith("participant-")) continue;
+      const text = JSON.stringify(svc);
+      expect({ name, leaked: secrets.filter((s) => text.includes(s)).length }).toEqual({ name, leaked: 0 });
+    }
+  });
+
+  test("an agent carries a real take command and its inference endpoint; a judge carries its model and endpoint", () => {
+    const athena = threeOne.cfg.services["participant-agent-athena"]!.environment!;
+    expect(JSON.parse(String(athena.RM_TAKE_COMMAND))).toEqual(["bun", "run", "scripts/agent/participant/author-take.ts"]);
+    expect(athena.RM_INFERENCE_URL).toBe("https://opencode.ai/zen/v1");
+    expect(athena.RM_INFERENCE_WIRE_ID).toBe("deepseek-v4-flash");
+    const themis = threeOne.cfg.services["participant-judge-themis"]!.environment!;
+    expect(themis.RM_JUDGE_BASE_URL).toBe("https://opencode.ai/zen/v1");
+    expect(themis.RM_PARTICIPANT_KIND).toBe("judge");
+    // The image is the one the boot hands it (the running api's), never a build of its own.
+    expect((threeOne.cfg.services["participant-agent-athena"] as { image?: string }).image).toBe("rm-it-participant:render-only");
+    expect(threeOne.cfg.services["participant-agent-athena"]!.build).toBeUndefined();
+  });
+
+  test("a changed file adds and removes to match: the rendered set and the reconciliation plan agree", () => {
+    const before = credentialFile(["athena", "boreas", "cygnus"], ["themis"]);
+    const after: CredentialFile = {
+      agents: { boreas: before.agents.boreas!, cygnus: before.agents.cygnus!, draco: credentialEntry("draco") },
+      judges: { themis: before.judges.themis! },
+    };
+    const names = (file: CredentialFile) => writeParticipantOverlay(entriesOf(file)).rendered.services.map((s) => s.service).sort();
+    const added = names(after).filter((s) => !names(before).includes(s));
+    const removed = names(before).filter((s) => !names(after).includes(s));
+    expect({ added, removed }).toEqual({ added: ["participant-agent-draco"], removed: ["participant-agent-athena"] });
+    const running = entriesOf(before).map((e) => ({ name: e.name, kind: e.kind, containerName: `p-${e.name}` }));
+    const plan = planParticipants({ configured: true, path: "/etc/rm/credential.json", origin: "flag" }, running, () => after);
+    expect(plan.start.map((e) => e.name)).toEqual(["draco"]);
+    expect(plan.stop.map((p) => p.name)).toEqual(["athena"]);
+    expect(plan.keep.map((e) => e.name).sort()).toEqual(["boreas", "cygnus", "themis"]);
+  });
+
+  // THE RUNTIME HALF. The services really start on the daemon, and what a
+  // STARTED container holds is read back from Docker, not from the render.
+  test("started on the real daemon: each container's environment holds only its own key, and a roster change adds and removes containers", async () => {
+    const project = `rm_it_participants_${randomBytes(4).toString("hex")}`;
+    const docker: DockerRun = (args) => {
+      const r = Bun.spawnSync(["docker", ...args], { cwd: repoRoot, env: { ...baseEnv(), SMOKE_PROJECT: project }, stdout: "pipe", stderr: "pipe" });
+      return { exitCode: r.exitCode ?? -1, stdout: r.stdout.toString(), stderr: r.stderr.toString() };
+    };
+    const inspect = (container: string) => JSON.parse(docker(["inspect", container]).stdout)[0] as {
+      Id: string;
+      State: { StartedAt: string };
+      Config: { Env: string[] };
+      Mounts: unknown[];
+      HostConfig: { RestartPolicy: { Name: string } };
+    };
+    const file = credentialFile(["athena", "boreas"], ["themis"]);
+    try {
+      // The image the boot hands participants is the running api's: build that
+      // service's image for this project, as the stack's build step does.
+      const built = docker(["compose", "--env-file", "/dev/null", "-p", project, ...DEMO_COMPOSE_FILES.flatMap((f) => ["-f", f]), "build", "api"]);
+      if (built.exitCode !== 0) throw new Error(`building the api image failed: ${built.stderr}`);
+      const image = docker(["images", "-q", "--no-trunc", `${project}-api`]).stdout.trim().split("\n")[0]!;
+      expect(image).toMatch(/^sha256:/);
+      // One instance directory for both boots, as a real instance has.
+      const instanceDir = mkdtempSync(join(tmpdir(), "rm-it-participants-"));
+      const first = writeParticipantOverlay(entriesOf(file), project, instanceDir, image);
+      const plan1 = planParticipants({ configured: true, path: "/x", origin: "flag" }, listRunningParticipants(project, docker), () => file);
+      applyParticipantPlan(plan1, first.rendered.services.map((s) => s.service), { project, composeFiles: [...DEMO_COMPOSE_FILES, first.overlay], run: docker });
+      const running1 = listRunningParticipants(project, docker);
+      expect(running1.map((p) => `${p.kind}:${p.name}`)).toEqual(["agent:athena", "agent:boreas", "judge:themis"]);
+      for (const p of running1) {
+        const entry = entriesOf(file).find((e) => e.name === p.name && e.kind === p.kind)!;
+        const info = inspect(p.containerName);
+        const env = info.Config.Env.join("\n");
+        expect(env).toContain(`RM_MEMBER_TOKEN=${entry.credential.bearer}`);
+        expect(env).toContain(`RM_INFERENCE_KEY=${entry.credential.modelKey}`);
+        for (const other of entriesOf(file)) {
+          if (other.name === entry.name && other.kind === entry.kind) continue;
+          for (const secret of secretsOf(other.credential)) expect({ container: p.name, other: other.name, found: env.includes(secret) }).toEqual({ container: p.name, other: other.name, found: false });
+        }
+        // Nothing mounted, so no other participant's env file can be read from inside.
+        expect(info.Mounts).toEqual([]);
+        expect(info.HostConfig.RestartPolicy.Name).toBe("unless-stopped");
+      }
+      // The entrypoint really runs in the image, for BOTH kinds: with no API on
+      // this project each one reaches its HTTP startup diagnostic and refuses
+      // there (an agent to poll, a judge to subscribe) — never a missing module.
+      for (const p of running1) {
+        const expected = p.kind === "agent" ? "refuses to poll" : "refuses to subscribe";
+        let logs = "";
+        const deadline = Date.now() + 60_000;
+        while (!logs.includes(expected) && Date.now() < deadline) {
+          const r = docker(["logs", p.containerName]);
+          logs = `${r.stdout}${r.stderr}`;
+          if (!logs.includes(expected)) await Bun.sleep(500);
+        }
+        expect({ container: p.name, diagnostic: logs.includes(expected), missingModule: /Cannot find module/.test(logs) })
+          .toEqual({ container: p.name, diagnostic: true, missingModule: false });
+      }
+      const boreasBefore = inspect(running1.find((p) => p.name === "boreas")!.containerName).Id;
+
+      // The file changes: athena leaves, draco joins.
+      const changed: CredentialFile = { agents: { boreas: file.agents.boreas!, draco: credentialEntry("draco") }, judges: file.judges };
+      const second = writeParticipantOverlay(entriesOf(changed), project, instanceDir, image);
+      const plan2 = planParticipants({ configured: true, path: "/x", origin: "flag" }, running1, () => changed);
+      applyParticipantPlan(plan2, second.rendered.services.map((s) => s.service), { project, composeFiles: [...DEMO_COMPOSE_FILES, second.overlay], run: docker });
+      const running2 = listRunningParticipants(project, docker);
+      expect(running2.map((p) => `${p.kind}:${p.name}`)).toEqual(["agent:boreas", "agent:draco", "judge:themis"]);
+      // A kept participant is the SAME container: never restarted for its own sake.
+      expect(inspect(running2.find((p) => p.name === "boreas")!.containerName).Id).toBe(boreasBefore);
+    } finally {
+      const ids = docker(["ps", "-aq", "--filter", `label=com.docker.compose.project=${project}`]).stdout.split("\n").filter(Boolean);
+      if (ids.length > 0) docker(["rm", "-f", "-v", ...ids]);
+      docker(["network", "rm", `${project}_default`]);
+      const images = docker(["images", "-q", "--filter", `reference=${project}-*`]).stdout.split("\n").filter(Boolean);
+      if (images.length > 0) docker(["rmi", "-f", ...images]);
+    }
+  }, 900_000);
+});
 
 // Issue #809's regression guard. Every case above reads its compose
 // configuration through `composeConfig`, which serves it from the prewarmed

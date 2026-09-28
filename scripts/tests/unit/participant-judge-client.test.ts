@@ -151,7 +151,7 @@ describe("configuration refuses at startup, by the D-A7 name", () => {
     RM_MEMBER_IDENTITY: JSON.stringify(IDENTITY),
     RM_JUDGE_MODEL: "vendor/m",
     RM_JUDGE_BASE_URL: "https://x",
-    OPENCODE_API_KEY: "k",
+    RM_INFERENCE_KEY: "k",
     // A development environment, where any non-keyless model is allowed.
     RM_ENV: "ephemeral",
   };
@@ -177,7 +177,7 @@ describe("configuration refuses at startup, by the D-A7 name", () => {
   });
 
   test("a model with no credential is `credential_unconfigured`", () => {
-    expect(refusal({ ...base, OPENCODE_API_KEY: "" }).reason).toBe("credential_unconfigured");
+    expect(refusal({ ...base, RM_INFERENCE_KEY: "" }).reason).toBe("credential_unconfigured");
   });
 
   test("a keyless free-family model is `model_disallowed`, in every environment", () => {
@@ -274,6 +274,51 @@ describe("a judgement that lands is SIGNED with the judge's own key", () => {
     expect(await crypto.subtle.verify(
       { name: "Ed25519" }, keyPair.publicKey, Buffer.from(body.signature, "base64"), new TextEncoder().encode(forged),
     )).toBe(false);
+  });
+
+  test("the model call's usage is sent with the judgement, outside the signed bytes (D55 (3))", async () => {
+    const usage = { inputTokens: 1834, outputTokens: 412, totalTokens: 2246, costUsd: 0.01234567 };
+    const { calls, impl } = recordingFetch({ [ROUTES.swarm.participants.judgement]: accepted });
+    const outcome = await judgeOne(CONFIG, PENDING, {
+      fetchImpl: impl,
+      runJudgeImpl: async (): Promise<JudgeAnswer> => ({ kind: "ok", body: ANSWER, usage }),
+    });
+    expect(outcome.kind).toBe("submitted");
+    const body = calls.find((c) => c.method === "POST")!.body as Record<string, unknown>;
+    // The route's own block shape, field for field.
+    expect(body.usage).toEqual(usage);
+    // …and the signature still verifies over the canonical bytes, which carry
+    // no usage: spend is accounting about the call, not what the judge attests.
+    const canonical = canonicalizeJudgement({
+      memberId: CONFIG.memberId,
+      sessionId: String(body.sessionId),
+      nonce: String(body.nonce),
+      model: String(body.model),
+      promptHash: String(body.promptHash),
+      inputsDigest: String(body.inputsDigest),
+      opinion: String(body.opinion),
+    });
+    expect(canonical).not.toContain("inputTokens");
+    expect(await crypto.subtle.verify(
+      { name: "Ed25519" }, keyPair.publicKey, Buffer.from(String(body.signature), "base64"), new TextEncoder().encode(canonical),
+    )).toBe(true);
+  });
+
+  test("a judgement whose model reported no usage still submits, with no usage block at all — never zeros", async () => {
+    const { calls, impl } = recordingFetch({ [ROUTES.swarm.participants.judgement]: accepted });
+    const outcome = await judgeOne(CONFIG, PENDING, {
+      fetchImpl: impl,
+      runJudgeImpl: async (): Promise<JudgeAnswer> => ({ kind: "ok", body: ANSWER }),
+    });
+    expect(outcome.kind).toBe("submitted");
+    const body = calls.find((c) => c.method === "POST")!.body as Record<string, unknown>;
+    expect("usage" in body).toBe(false);
+  });
+
+  test("a partial usage report is sent as reported: the fields the vendor gave, and none it did not", async () => {
+    const { calls, impl } = recordingFetch({ [ROUTES.swarm.participants.judgement]: accepted });
+    await submitJudgement(CONFIG, PENDING, ANSWER, impl, { inputTokens: 10, outputTokens: 2 });
+    expect((calls[0]!.body as { usage: unknown }).usage).toEqual({ inputTokens: 10, outputTokens: 2 });
   });
 
   test("every submission carries a fresh nonce", async () => {

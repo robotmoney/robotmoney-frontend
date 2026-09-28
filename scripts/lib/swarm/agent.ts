@@ -30,7 +30,6 @@
 // its admission already bound its key, and a broken stored credential renders
 // it absent rather than re-keyed.
 import { ROUTES } from "@robotmoney/contract";
-import { personaIdentityEnv } from "./persona-keys.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -327,17 +326,13 @@ async function ensureMemberIdentityUncached(
   const run = await runMemberContainer(rail, {
     mode: "enroll",
     runId: `${m.memberId}-enroll-${crypto.randomUUID().slice(0, 6)}`,
-    // A committed persona identity (scripts/lib/swarm/persona-keys.ts) is
-    // passed as OWNER material, not plain extraEnv: it carries a private key, so
-    // it belongs on the redacted-from-transcripts channel alongside the token and
-    // the rmpc passphrase. It is only ever present for the smoke's named
-    // characters; anyone else enrolls exactly as before.
+    // No committed identity is handed in: the container generates its own key
+    // in its home volume, and the harness registers that public key once. A key
+    // committed to the repository is a key anyone with a clone can sign with
+    // (#1026: persona-keys.json is gone; an in-house participant's key lives in
+    // credential.json and reaches only its own container).
     extraEnv: { RM_MEMBER_ID: m.memberId },
-    ownerEnv: personaIdentityEnv(m.name)
-      ? { ...personaIdentityEnv(m.name), ...(onboarded?.passphrase ? { RMPC_COMMITTEE_IDENTITY_PASSPHRASE: onboarded.passphrase } : {}) }
-      : onboarded?.passphrase
-      ? { RMPC_COMMITTEE_IDENTITY_PASSPHRASE: onboarded.passphrase }
-      : undefined,
+    ownerEnv: onboarded?.passphrase ? { RMPC_COMMITTEE_IDENTITY_PASSPHRASE: onboarded.passphrase } : undefined,
     homeVolume,
     timeoutMs: ENROLL_TIMEOUT_MS,
   });
@@ -419,10 +414,6 @@ export async function runAgent(rail: SessionRail, o: AgentOpts, onProgress?: Age
     ownerEnv: {
       ...(freshToken ? { RM_MEMBER_TOKEN: freshToken } : {}),
       ...(onboarded?.passphrase ? { RMPC_COMMITTEE_IDENTITY_PASSPHRASE: onboarded.passphrase } : {}),
-      // Same committed identity the enroll run seeded, so a participate run on a
-      // FRESH volume (every restart draws a new project hash, hence a new
-      // volume) still signs as this persona rather than as a stranger.
-      ...(personaIdentityEnv(o.name) ?? {}),
     },
     homeVolume,
     timeoutMs: participateTimeoutMs(),
