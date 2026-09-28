@@ -76,9 +76,9 @@ const SCAN_PROBE = {
         FROM swarm_sessions s
         CROSS JOIN cfg c
         JOIN LATERAL (
-          SELECT count(DISTINCT r.member_id)::int AS take_count
+          SELECT count(*)::int AS take_count
             FROM swarm_recommendations r
-           WHERE r.session_id = s.id AND r.verified
+           WHERE r.session_id = s.id AND r.final
         ) t ON true
         LEFT JOIN LATERAL (
           SELECT mode, min_takes FROM swarm_session_judgements
@@ -181,7 +181,7 @@ export interface MissingReceiptSession {
   sessionId: string;
   subjectId: string;
   publishedAt: string;
-  /** Verified takes on file — the number compared against `minTakesApplied`. */
+  /** Final takes on file (D51: one per member) — the number compared against `minTakesApplied`. */
   takeCount: number;
   /**
    * The threshold and mode THAT APPLIED TO THIS SESSION, not today's.
@@ -299,10 +299,15 @@ export async function detectMissingReceiptSessions(
              (COALESCE(c.policy_updated_at, to_timestamp(0)) <= s.published_at) AS config_predates
         FROM swarm_sessions s
         CROSS JOIN cfg c
+        -- THE SESSION'S TAKES ARE ITS FINAL TAKES (D51, criterion 127): one
+        -- row per member carries final, so counting the flag is the count
+        -- settlement digested (loadFrozenTakeSet selects on the same flag).
+        -- count(DISTINCT member_id) WHERE verified counted a member whose
+        -- every revision had lost the flag, which the take set does not.
         JOIN LATERAL (
-          SELECT count(DISTINCT r.member_id)::int AS take_count
+          SELECT count(*)::int AS take_count
             FROM swarm_recommendations r
-           WHERE r.session_id = s.id AND r.verified
+           WHERE r.session_id = s.id AND r.final
         ) t ON true
         -- THE SESSION'S OWN JUDGEMENT RECORD. An enforce row is preferred over
         -- a historical shadow one: enforce is the mode under which a receipt
