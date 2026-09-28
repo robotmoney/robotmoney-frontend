@@ -363,7 +363,7 @@ test("a grant-only table named in a privilege is not a prune, and a real DELETE 
     `expect(reasons).toEqual(["rm_app holds DELETE/TRUNCATE on ${table}, which D53 (2) keeps revoked"]);`,
     `await sql.unsafe("REVOKE DELETE ON ${table} FROM rm_app");`,
   ].join("\n");
-  expect(grantOnlyRemovals(privilegeOnly, "backend/tests/x.test.ts")).toEqual([]);
+  expect(grantOnlyRemovals(privilegeOnly, "synthetic.test.ts")).toEqual([]);
 
   for (const removal of [
     `await sql.unsafe("DELETE FROM ${table} WHERE seq < 10");`,
@@ -371,7 +371,7 @@ test("a grant-only table named in a privilege is not a prune, and a real DELETE 
     `await sql.unsafe("TRUNCATE ${table}");`,
     `await sql.unsafe("TRUNCATE TABLE ONLY ${table} RESTART IDENTITY");`,
   ]) {
-    expect({ removal, hits: grantOnlyRemovals(`${privilegeOnly}\n${removal}`, "backend/tests/x.test.ts").length }).toEqual({
+    expect({ removal, hits: grantOnlyRemovals(`${privilegeOnly}\n${removal}`, "synthetic.test.ts").length }).toEqual({
       removal,
       hits: 1,
     });
