@@ -11,13 +11,14 @@
 // this tuple, never re-declare the values.
 export const STANCES = /** @type {const} */ (["bearish", "cautious", "neutral", "constructive", "bullish"]);
 
-// Fixed target size for the standing demo swarm. The onboarding drivers
-// (backend gate + scripts/lib/demo-main.ts loop) stop admitting new members once
-// the active roster reaches this cap, so the swarm settles at a realistic,
-// bounded size instead of growing without bound. Pinned by
+// The swarm's seats. Every active member holds one, analysts and the judge
+// alike, and every transition to active is refused past it
+// (backend/src/swarm/domain.ts assertRosterCapacity). The smoke onboarding
+// driver (scripts/lib/smoke-main.ts) also stops admitting newcomers here.
+// Twenty since RM-126; it was ten. Pinned by
 // backend/tests/swarm-roster-cap.test.ts (always via this constant, never a
 // literal).
-export const SWARM_ROSTER_CAP = 10;
+export const SWARM_ROSTER_CAP = 20;
 
 // Hard ceiling on how many take rows ONE member may file in ONE session —
 // the original plus its amendments (issue #573, ADR D32). It replaces the

@@ -2,7 +2,7 @@
 // fabricated one.
 //
 // `authorTake` already re-samples a take that omits a required prose section
-// (TAKE_SECTION_LEAD_INS) and renders the member ABSENT when every attempt
+// (takeSectionLeadIns) and renders the member ABSENT when every attempt
 // fails. The four-bucket vector joins that contract on exactly the same terms,
 // and this file proves it with a fake `opencode` on OPENCODE_BIN whose answer
 // CHANGES between attempts — no model call, no network.
