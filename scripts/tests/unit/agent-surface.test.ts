@@ -163,7 +163,7 @@ describe("prerendered routes", () => {
   // and a fixture would keep passing after the injection stopped happening.
   const dir = mkdtempSync(join(tmpdir(), "rm-agent-surface-"));
   cpSync(join(repoRoot, "frontend/public"), dir, { recursive: true });
-  const result = Bun.spawnSync(["bun", "scripts/prerender.ts"], { cwd: repoRoot, env: { ...process.env, PRERENDER_DIR: dir } });
+  const result = Bun.spawnSync(["bun", "scripts/prerender.ts"], { cwd: repoRoot, env: { ...process.env, PRERENDER_DIR: dir, PRERENDER_REGIME: "off" } });
 
   test("prerender succeeds", () => {
     expect(new TextDecoder().decode(result.stderr)).toBe("");

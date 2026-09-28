@@ -42,7 +42,8 @@ const shell = await Bun.file(shellPath).text();
 
 // The regime's live reading, written into /regime's machine-readers block and
 // its Dataset (scripts/lib/regime-snapshot.ts). PRERENDER_REGIME picks the
-// source: unset reads production's API, "off" skips it, a path to a .json file
+// source: unset reads production's API (tests pass "off" to stay off the
+// network), "off" skips it, a path to a .json file
 // reads a saved snapshot ({latest} or the DTO), and anything else is an origin.
 // A read that fails or takes too long leaves the page as it was, never the
 // build broken.
