@@ -200,6 +200,9 @@ beforeAll(async () => {
   for (let i = 0; i < 3; i++) {
     const t = await domain.turnOverEpoch(subjectId, open);
     if (!t.ok) throw new Error("turnOverEpoch failed");
+    // The epoch stream's turnover opens no successor on a subject that stops
+    // (openedSessionId null); this active subject must open one every time.
+    if (t.openedSessionId === null) throw new Error("turnOverEpoch opened no successor");
     open = t.openedSessionId;
   }
   const head = await domain.streamHeadSequence();
