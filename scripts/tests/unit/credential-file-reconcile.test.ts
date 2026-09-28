@@ -34,6 +34,7 @@ import {
   type RosterEntry,
   type RunningParticipant,
 } from "../../lib/swarm/credential-file.ts";
+import { summarizeParticipantApply } from "../../lib/participant-compose.ts";
 
 const identity = (seed: string): CredentialEntry => ({
   memberId: `m-${seed}`,
@@ -576,5 +577,52 @@ describe("the boot entry refuses an unconfigured roster while participants run, 
     expect((code.match(/\bplanParticipants\(/g) ?? []).length).toBe(2);
     expect(code).toContain(PLAN_TIME_CALL);
     expect(code).toMatch(/planParticipants\(credentialResolution, running, loadCredentialFile, \{[\s\S]{0,200}memberRole:/);
+  });
+});
+
+// What the boot's `participants` phase journals and receipts after it applied
+// a plan (participant-compose.ts summarizeParticipantApply, called by
+// smoke-main.ts reconcileParticipants). Pure: fabricated plans and ids.
+describe("summarizeParticipantApply: the journal's started/stopped and the receipt's actions", () => {
+  test("a replaced participant (stopped for a new generation, started again) is journaled started and NOT stopped", () => {
+    const athenaOld = running("athena", { generation: "gen-1" });
+    const athenaNew: RosterEntry = { ...entry("athena"), generation: "gen-2" };
+    const plan = reconcileRoster([athenaNew], [athenaOld], "gen-2");
+    expect(plan.stop.map((p) => p.name)).toEqual(["athena"]);
+    expect(plan.start.map((e) => e.name)).toEqual(["athena"]);
+    const done = summarizeParticipantApply(plan, [athenaOld], new Map(), new Map());
+    expect(done.started).toEqual(["agent:athena"]);
+    expect(done.stopped).toEqual([]);
+    expect(done.receipt).toEqual([{ kind: "agent", name: "athena", generation: "gen-2", action: "started" }]);
+    // The resume projection adds the started, then deletes the stopped
+    // (smoke-journal.ts projectExpectations): athena stays expected to run.
+    const project = (started: string[], stopped: string[]) => { const s = new Set(started); for (const t of stopped) s.delete(t); return s; };
+    expect(project(done.started, done.stopped).has("agent:athena")).toBe(true);
+    // Red control: journaling the plan's stop list as-is (the old code) drops
+    // the running replacement from the expected set.
+    expect(project(done.started, plan.stop.map((p) => `${p.kind}:${p.name}`)).has("agent:athena")).toBe(false);
+  });
+
+  test("a kept participant compose recreated (new container id) is receipted `recreated`, an untouched one `kept`", () => {
+    const live = [running("athena"), running("boreas"), running("themis", { kind: "judge" })];
+    const plan = { start: [], keep: [entry("athena"), entry("boreas"), entry("themis", "judge")], stop: [] };
+    const before = new Map(live.map((p) => [p.containerName, `id-${p.name}`]));
+    const after = new Map(before);
+    after.set(live[1]!.containerName, "id-boreas-NEW");
+    const done = summarizeParticipantApply(plan, live, before, after);
+    expect(done.recreated).toEqual(["agent:boreas"]);
+    expect(done.receipt.map((r) => `${r.kind}:${r.name}:${r.action}`)).toEqual(["agent:athena:kept", "agent:boreas:recreated", "judge:themis:kept"]);
+    expect(done.started).toEqual([]);
+    expect(done.stopped).toEqual([]);
+    // With no id change at all, nothing is called recreated.
+    expect(summarizeParticipantApply(plan, live, before, before).recreated).toEqual([]);
+  });
+
+  test("a participant removed and not replaced is journaled stopped and absent from the receipt", () => {
+    const live = [running("athena"), running("boreas")];
+    const plan = reconcileRoster([entry("athena")], live);
+    const done = summarizeParticipantApply(plan, live, new Map(), new Map());
+    expect(done.stopped).toEqual(["agent:boreas"]);
+    expect(done.receipt.map((r) => `${r.name}:${r.action}`)).toEqual(["athena:kept"]);
   });
 });

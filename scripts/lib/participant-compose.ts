@@ -43,7 +43,7 @@ import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSyn
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { ROUTES } from "@robotmoney/contract";
-import type { ParticipantKind, RosterEntry, RunningParticipant } from "./swarm/credential-file.ts";
+import type { ParticipantKind, ReconciliationPlan, RosterEntry, RunningParticipant } from "./swarm/credential-file.ts";
 import { isDbCredentialKey, looksLikeConnectionString } from "./db-credential-keys.ts";
 import { JUDGE_CLIENT_ENV } from "../agent/participant/judge-client.ts";
 import { INFERENCE_KEY_ENV, INFERENCE_URL_ENV, INFERENCE_WIRE_ID_ENV, TAKE_COMMAND_ENV } from "../agent/participant/take-runner.ts";
@@ -391,4 +391,52 @@ export function applyParticipantPlan(
     "up", "-d", "--no-deps", ...desired,
   ]);
   if (up.exitCode !== 0) throw new Error(`starting participants ${desired.join(", ")} failed: ${up.stderr.trim().slice(-2000)}`);
+}
+
+/** What the `participants` phase did, for the journal and the receipt (§1.3, §1.4). */
+export interface ParticipantsReconciled {
+  /** `kind:name` of every participant this run started, replacements included. */
+  started: string[];
+  /** `kind:name` of every participant this run removed and did not start again. */
+  stopped: string[];
+  /** `kind:name` of every KEPT participant compose recreated (a new container id). */
+  recreated: string[];
+  receipt: { kind: string; name: string; generation: string | null; action: "started" | "kept" | "recreated" }[];
+}
+
+/**
+ * What an applied reconciliation plan did, from the plan, the participants
+ * that ran before it and the container ids before and after `compose up`.
+ * Pure: no Docker, no clock.
+ *
+ * - A kept participant whose container id changed was RECREATED by compose
+ *   (its image or env file changed), and the receipt says so, never `kept`.
+ * - A REPLACED participant (a spoof generation change) is in both the plan's
+ *   `stop` and `start`; it runs afterwards, so it is started and NOT stopped:
+ *   the resume projection adds the started and then deletes the stopped, and
+ *   listing it in both would drop a running participant from the expected set.
+ */
+export function summarizeParticipantApply(
+  planned: ReconciliationPlan,
+  runningBefore: readonly RunningParticipant[],
+  idsBefore: ReadonlyMap<string, string>,
+  idsAfter: ReadonlyMap<string, string>,
+): ParticipantsReconciled {
+  const tag = (p: { kind: string; name: string }) => `${p.kind}:${p.name}`;
+  const containerOf = new Map(runningBefore.map((p) => [tag(p), p.containerName]));
+  const recreated = planned.keep.map(tag).filter((t) => {
+    const name = containerOf.get(t);
+    return name !== undefined && idsBefore.get(name) !== idsAfter.get(name);
+  });
+  const started = planned.start.map(tag);
+  const receiptOf = (e: RosterEntry, action: "started" | "kept" | "recreated") => ({ kind: e.kind, name: e.name, generation: e.generation ?? null, action });
+  return {
+    started,
+    stopped: planned.stop.map(tag).filter((t) => !started.includes(t)),
+    recreated,
+    receipt: [
+      ...planned.start.map((e) => receiptOf(e, "started")),
+      ...planned.keep.map((e) => receiptOf(e, recreated.includes(tag(e)) ? "recreated" : "kept")),
+    ],
+  };
 }
