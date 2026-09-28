@@ -1218,8 +1218,9 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
 }
 
 /* ── Research documents ──
-   /regime/indicators (.ri), the .stub documents (/smart-contract-risks,
-   /regime-detection, /research/late-cycle-signals and the archived stubs) and
+   /regime/indicators (.ri), the .stub documents (/regime-detection,
+   /research/late-cycle-signals and the archived stubs; /smart-contract-risks
+   left them for the research record's hero band in RM-138) and
    /research/channel-divergence (.rs) have no hero band: the head sits on the
    page, a mono eyebrow over the title. Their own sheets pinned the EYEBROW at
    10rem on desktop, which put the headline 33px lower than on every hero page,

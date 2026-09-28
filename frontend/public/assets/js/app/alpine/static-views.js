@@ -21,6 +21,7 @@ import { sessionTakes } from "../lib/session-takes.js";
 import { allocationFramework } from "../lib/allocation-framework.js";
 import { sessionBrief } from "../lib/session-brief.js";
 import { sleeveExplorer } from "../lib/sleeve-explorer.js";
+import { tagFilter } from "../lib/tag-filter.js";
 import { takeCard, takeWeightRows } from "../lib/take-card.js";
 import { canonicalUrlFor, setCanonicalUrl, citeTitle } from "../seo.js";
 import { VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
@@ -666,6 +667,9 @@ export function registerStaticViews(Alpine) {
   // why the wording is production's verbatim and not this repo's to edit.
   Alpine.data("swarmDisclaimer", () => ({ text: SWARM_DISCLAIMER }));
   Alpine.data("sleeveExplorer", sleeveExplorer);
+  // A baked list narrowed by one tag, rows hidden and never removed: the
+  // smart contract risks index (lib/tag-filter.js).
+  Alpine.data("tagFilter", tagFilter);
   // The same explorer over the vault stack's book (the Robot Money Vault
   // subject's Holdings): one arc per vault at its actual weight, measured
   // against the weights in force, and a vault's positions in its drawer.

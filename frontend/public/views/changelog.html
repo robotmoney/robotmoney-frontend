@@ -60,7 +60,7 @@
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'partnerships')" @click="toggle('partnerships')">Partnerships</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'documentation')" @click="toggle('documentation')">Documentation</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'infrastructure')" @click="toggle('infrastructure')">Infrastructure</button>
-        <span class="cl__count" x-text="countLabel">35 releases</span>
+        <span class="cl__count" x-text="countLabel">36 releases</span>
       </div>
 
       <div class="cl__log" x-ref="log">
@@ -77,6 +77,13 @@
             <div class="cl__frame"><div class="cl__win"><div class="cl__win-bar">robotmoney.network/regime</div><img src="/assets/img/changelog/regime-history.jpg" width="1536" height="793" loading="lazy" decoding="async" alt="The regime history over three years: the composite, macro, on-chain and equity factor indices as lines from 0 to 1, over bands shading each day risk-on, neutral or hatched risk-off. Under the chart, the whole history since 2018 in miniature, with the three years on show between two handles, and a legend giving each line's latest value: composite 0.60, macro 0.66, on-chain 0.53, equity factor 0.60."></div></div>
             <figcaption class="cl__cap">The regime history, with the range between two handles</figcaption>
           </figure>
+        </article>
+
+        <article class="cl__entry" id="next-an-index-of-defi-exploits" data-tags="research" data-release="pending" x-show="has($el)">
+          <div class="cl__meta"><span class="cl__pending" data-release="pending">Next release</span><span class="cl__sep">/</span><span>Research</span></div>
+          <h3 class="cl__title"><a href="#next-an-index-of-defi-exploits">An index of DeFi exploits</a></h3>
+          <p>The smart contract risks page opens on an index of its 17 exploits, from The DAO in June 2016 to New Market Trading in May 2026, and filters it by attack category. Every case gives the same facts in the same order: what happened, the amount lost, the parties, the attack and its root cause. The cases download as JSON, and search engines and agents read them as a dataset.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/smart-contract-risks">Smart contract risks</a><a class="cl__lnk" href="/data/smart-contract-risks.json">The cases as JSON</a></div>
         </article>
 
         <div class="cl__also" data-release="pending" x-show="!tag">

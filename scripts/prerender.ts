@@ -1,4 +1,4 @@
-import { renderMeta } from "../frontend/public/assets/js/app/seo.js";
+import { renderMeta, routeDownloads } from "../frontend/public/assets/js/app/seo.js";
 import { viewFor } from "../frontend/public/assets/js/app/routes.js";
 import { mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -83,13 +83,12 @@ function escapeHtml(str: string): string {
 //   renders it, so there is no flash and no visual change, while the raw bytes
 //   carry the URLs. An agent's fetch tool IS a client that does not run the JS.
 function routeDataLinks(route: string): string {
-  const endpoints = endpointsForRoute(route);
-  if (!endpoints.length) return "";
-  return endpoints
-    .map((e) => {
-      const url = API_ORIGIN + openApiPath(e.path);
-      return `    <link rel="alternate" type="application/json" href="${escapeAttr(url)}" title="${escapeAttr(e.summary)}" />`;
-    })
+  const endpoints = endpointsForRoute(route).map((e) => ({ url: API_ORIGIN + openApiPath(e.path), type: "application/json", title: e.summary }));
+  // A page can also publish a static file beside its text (seo.js's
+  // `downloads`: the smart contract risks cases as JSON), linked the same way.
+  const links = [...endpoints, ...routeDownloads(route)];
+  return links
+    .map((l) => `    <link rel="alternate" type="${escapeAttr(l.type)}" href="${escapeAttr(l.url)}" title="${escapeAttr(l.title)}" />`)
     .join("\n");
 }
 
