@@ -894,7 +894,7 @@ export interface AuthoredTake extends ParsedTake {
 // Returns the stored body (control line stripped) plus the parsed
 // stance/confidence.
 //
-// A sample that parses but omits a required section (see TAKE_SECTION_LEAD_INS)
+// A sample that parses but omits a required section (see takeSectionLeadIns)
 // is re-sampled up to `structureAttempts` times. Only the SECTION contract is
 // retried: parseStanceFromBody's own failures — a missing or out-of-vocabulary
 // STANCE/CONFIDENCE control line — still throw on the first attempt, because

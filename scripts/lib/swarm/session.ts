@@ -130,6 +130,15 @@ export function settledAttendance(
   return { failed, fulfilled };
 }
 
+// An allocation session is the one whose recommendation is a weight vector;
+// its takes carry REGIME and ALLOCATION, every other subject's REGIME and
+// SUBJECT. The recommendation's type alone decides it: any take may attach
+// optional weights, and one that does must not change which sections the
+// house members' takes are held to.
+export function sessionRequiresWeights(pub: any): boolean {
+  return pub?.session?.swarmRecommendation?.type === "bucket_weights";
+}
+
 export function assertAuthoredTakes(
   tag: string,
   takes: any[],
@@ -1622,7 +1631,7 @@ export async function runSession(
 
   // Every present member's published take must be genuine live opencode
   // authoring (non-template body,
-  // REGIME/ALLOCATION/SUBJECT lead-ins, stance in the five-value set, confidence
+  // the subject's two lead-ins, stance in the five-value set, confidence
   // in [0,1], distinct across members). Throws → exit 1 on any failure.
   //
   // Absence is a DESIGNED outcome (#301/#319), so this does not require every
@@ -1636,12 +1645,9 @@ export async function runSession(
   // cross-role test identity) carry no ground truth and are not asserted on.
   const { failed, fulfilled } = settledAttendance(present, settled);
   const observedAbsent = [...absent.map((m) => m.memberId), ...failed];
-  // An allocation session is the one whose recommendation is a weight vector;
-  // its takes carry REGIME and ALLOCATION, every other subject's REGIME and
-  // SUBJECT.
-  const requireWeights = pub.session?.swarmRecommendation?.type === "bucket_weights"
-    || (pub.takes ?? []).some((t: any) => Array.isArray(t?.weights) && t.weights.length > 0);
-  assertAuthoredTakes(tag, pub.takes, attendance, observedAbsent, fulfilled, { requireWeights });
+  assertAuthoredTakes(tag, pub.takes, attendance, observedAbsent, fulfilled, {
+    requireWeights: sessionRequiresWeights(pub),
+  });
 
   // Verify memos
   for (const r of results) {
