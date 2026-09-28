@@ -377,3 +377,64 @@ test("nextSessionAt is NULL — present, never omitted — when no window is ope
     expect(body.nextSessionAt).toBeNull();
   }
 });
+
+// ── One transaction, one connection (the frozen-database recovery case) ─────
+//
+// openEpoch and turnover build the brief inside their transaction, holding
+// the subject's row lock. Every read that building does must run on that
+// transaction's own connection: a read that asks the pool for a SECOND one
+// waits for the pool while holding the lock the pooled queries wait for, and a
+// scheduler catching up after a database outage fills the pool with exactly
+// those queries. scripts/tests/integration/scheduler-api-runtime.test.ts's
+// frozen-database case found it: the api stopped answering altogether.
+//
+// Proved in a child process whose pool holds ONE connection, so any second
+// checkout inside the transaction can never be served.
+
+async function openAndTurnOverOnOnePooledConnection(subjectId: string, preload?: string): Promise<string> {
+  const [{ db }] = await sql<{ db: string }[]>`SELECT current_database() AS db`;
+  const url = new URL(process.env.DATABASE_URL!);
+  url.pathname = `/${db}`;
+  const domain = new URL("../src/swarm/domain.ts", import.meta.url).pathname;
+  const child = Bun.spawn(
+    [
+      "bun",
+      ...(preload ? ["--preload", preload] : []),
+      "-e",
+      `const d = await import(${JSON.stringify(domain)});
+       const o = await d.openEpoch(${JSON.stringify(subjectId)});
+       if (!o.ok) { console.log("open refused " + JSON.stringify(o)); process.exit(3); }
+       const t = await d.turnOverEpoch(${JSON.stringify(subjectId)}, o.sessionId);
+       console.log(t.ok ? "turned " + t.openedSessionId : "turnover refused " + JSON.stringify(t));
+       process.exit(0);`,
+    ],
+    {
+      cwd: new URL("..", import.meta.url).pathname,
+      env: { ...process.env, DATABASE_URL: url.toString(), PG_POOL_MAX: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const out = await Promise.race([
+    new Response(child.stdout).text(),
+    Bun.sleep(15_000).then(() => "TIMED OUT"),
+  ]);
+  child.kill("SIGKILL");
+  return out.trim();
+}
+
+test("openEpoch and turnover build the brief on their own transaction's connection: both complete on a one-connection pool", async () => {
+  const subjectId = await activeSubject("open_one_conn", 600);
+  expect(await openAndTurnOverOnOnePooledConnection(subjectId)).toMatch(/^turned [0-9a-f-]{36}$/);
+});
+
+test("RED CONTROL: with the brief's subject read back on the pool, the same open never completes on a one-connection pool", async () => {
+  const { writeRedControlPreload } = await import("./support/automation-auth.ts");
+  const preload = writeRedControlPreload(
+    "/src/swarm/domain.ts",
+    "const subject = await getSubject(s.subject_id, h);",
+    "const subject = await getSubject(s.subject_id);",
+  );
+  const subjectId = await activeSubject("open_one_conn_red", 600);
+  expect(await openAndTurnOverOnOnePooledConnection(subjectId, preload)).toBe("TIMED OUT");
+}, 30_000);

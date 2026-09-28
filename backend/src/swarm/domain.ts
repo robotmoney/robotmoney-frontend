@@ -323,8 +323,8 @@ export async function getMemberAvatarBytes(memberId: string): Promise<MemberAvat
   const row = rows[0];
   return row ? { contentType: row.content_type, bytes: row.bytes, uploadedAt: row.uploaded_at } : null;
 }
-export async function getSubject(id: string) {
-  const row = (await sql`SELECT * FROM swarm_subjects WHERE id = ${id}`)[0];
+export async function getSubject(id: string, h: DbHandle = sql) {
+  const row = (await h`SELECT * FROM swarm_subjects WHERE id = ${id}`)[0];
   return row ? toSubject(row) : null;
 }
 
@@ -2109,7 +2109,15 @@ export async function buildBriefBody(
     SELECT signal_key, date, payload FROM research_signals
     WHERE date = ${s.date} ORDER BY signal_key`;
   const previousSession = prevOutcome ? { outcome: prevOutcome } : undefined;
-  const subject = await getSubject(s.subject_id);
+  // ON THE CALLER'S HANDLE, like every other read here. This read used to take
+  // a second connection from the pool while the caller's transaction held its
+  // own and the subject's row lock (turnover, openEpoch). With the pool full of
+  // turnovers queued on that same lock — a scheduler catching up after a
+  // database outage — no connection ever came back: every transaction waited
+  // for the pool, every pooled query waited for the lock, and the api stopped
+  // answering (found by scripts/tests/integration/scheduler-api-runtime.test.ts's
+  // frozen-database case, which then could not restart the scheduler).
+  const subject = await getSubject(s.subject_id, h);
   // The ONE read of the subject's recommendation type on this path — the same
   // value `aggregateSession()` normalizes, so the ask published to the swarm and
   // the derivation applied to its answers come from one column.
