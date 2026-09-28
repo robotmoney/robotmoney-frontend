@@ -29,5 +29,21 @@
 -- ADDITIVE (spec §8.4): it widens a privilege; code built before it runs
 -- beside it unchanged. IDEMPOTENT: a GRANT already held is a no-op
 -- (tests/prod-baseline.test.ts re-applies the newest migration).
+--
+-- A TABLE 0037 NEVER CREATED IS SKIPPED, the way 0082 skips an absent
+-- swarm_judge_config: a database that has not run 0037 has no evidence to
+-- grant on, and the repair pass that writes it cannot run there either.
 
-GRANT INSERT ON wallet_balance_sample_evidence, wallet_sleeve_sample_evidence TO rm_worker;
+DO $$
+DECLARE
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['wallet_balance_sample_evidence', 'wallet_sleeve_sample_evidence'] LOOP
+    IF to_regclass('public.' || t) IS NULL THEN
+      RAISE NOTICE '% absent — 0037 has not run on this database; nothing to grant', t;
+    ELSE
+      EXECUTE format('GRANT INSERT ON public.%I TO rm_worker', t);
+    END IF;
+  END LOOP;
+END
+$$;

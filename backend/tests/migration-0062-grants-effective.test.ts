@@ -104,8 +104,8 @@ describe("after the full migration set, every reader role can read everything", 
 
   test("the write grant did NOT leak onto the rest of the schema", async () => {
     // An allow-list that quietly became a blanket grant would be the worse
-    // bug. rm_worker's writable set must be exactly 0054's list plus 0062's
-    // three, and no more.
+    // bug. rm_worker's writable set must be exactly 0054's list plus 0061's,
+    // 0062's and 0091's additions, and no more.
     const rows = (await sql`
       WITH t AS MATERIALIZED (
         SELECT c.oid, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -129,8 +129,19 @@ describe("after the full migration set, every reader role can read everything", 
       // connection and writes its own two tables, which 0054's allow-list
       // missed. `chain_address_floors` is its third and is already above.
       "chain_day_blocks", "wallet_backfill_state",
+      // 0091_rm_worker_wallet_evidence_insert's additions: the same repair
+      // driver copies a day's samples into the immutable evidence tables before
+      // rewriting it. INSERT only (asserted just below); 0037's guard refuses
+      // an UPDATE anyway.
+      "wallet_balance_sample_evidence", "wallet_sleeve_sample_evidence",
     ];
     expect([...writable].filter((t) => !allowed.includes(t))).toEqual([]);
+    // The evidence is INSERT-only for rm_worker, never UPDATE.
+    const evidenceUpdate = (await sql`
+      SELECT relname FROM pg_class
+       WHERE relname IN ('wallet_balance_sample_evidence', 'wallet_sleeve_sample_evidence')
+         AND has_table_privilege('rm_worker', oid, 'UPDATE')`) as unknown as { relname: string }[];
+    expect(evidenceUpdate).toEqual([]);
   });
 
   test("0062 granted no WRITE to rm_readonly — it still cannot write anywhere", async () => {
