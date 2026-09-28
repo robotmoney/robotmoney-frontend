@@ -3,10 +3,11 @@
 // AUTHORITY: docs/technical/system-scheduler-spec.md §3, §3.2, §4.1, §4.3,
 // §4.4, §4.5, §4.6, §5, §6.2 and §9.
 //
-//   §3: "`system-scheduler` is the clock. It holds one timer per active
-//    subject: the instant that subject's current epoch closes. It also holds
-//    one timer per session in `judging` … It fires at the instant. It does not
-//    poll the API on an interval. It does not tick."
+//   §3: "`system-scheduler` is the clock. It holds one boundary timer per
+//    `collecting` session: the instant that session's window closes. A session
+//    whose subject has been deactivated keeps its timer until its boundary
+//    (§4.5). It also holds one timer per session in `judging` … It fires at
+//    the instant. It does not poll the API on an interval. It does not tick."
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // THE SHAPE OF THIS MODULE, AND WHY
@@ -14,8 +15,9 @@
 //
 // Three things live here and nothing else:
 //
-//   1. THE TIMER SET. One boundary timer per subject, one deadline timer per
-//      judging session, each set from an instant THE API SUPPLIED. This module
+//   1. THE TIMER SET. One boundary timer per collecting session (keyed by its
+//      subject, which the database holds to one collecting session at a time),
+//      one deadline timer per judging session, each set from an instant THE API SUPPLIED. This module
 //      computes no close instant at all, which is what makes §2.2's grid
 //      (amended 2026-09-24, D52) a property it cannot break: `window_closes_at`
 //      is `epoch_anchor + k × epoch_duration`, decided by the API inside the
@@ -146,7 +148,11 @@ export class SchedulerClock {
   #log: (msg: string) => void;
   #isCurrent: () => boolean;
 
-  /** subjectId → the boundary timer it holds. */
+  /**
+   * subjectId → the boundary timer of that subject's ONE collecting session
+   * (§3; migration 0068 allows no second). Held whether the subject is active
+   * or not: an inactive subject's window runs to its close (§4.5, D55 (4)).
+   */
   #boundaries = new Map<string, { at: number; sessionId: string; handle: TimerHandle }>();
   /** sessionId → the judging-deadline timer it holds. */
   #deadlines = new Map<string, { at: number; handle: TimerHandle; rearms: number }>();
@@ -308,7 +314,11 @@ export class SchedulerClock {
     }
 
     // 3. §3: "An active subject with no session in `collecting` is opened
-    //    immediately as part of the rebuild." Nothing else opens a first epoch.
+    //    immediately as part of the rebuild." A first epoch is opened by the
+    //    rebuild, or on an activation's `subject.changed`, and by nothing else.
+    //    A collecting session of an INACTIVE subject got its boundary timer in
+    //    step 1 like any other (§4.5): the full read lists it, and its
+    //    boundary turns it over with no successor.
     for (const subject of snapshot.subjects) {
       if (collectingSubjects.has(subject.subjectId)) continue;
       this.#track(this.#openFirstEpoch(subject.subjectId));
@@ -344,16 +354,17 @@ export class SchedulerClock {
   }
 
   /**
-   * §6.2: "re-reads that subject … on activation opens its first epoch; on
-   * deactivation drops its boundary timer and settles the closed epoch".
+   * §6.2: "re-reads that subject; on activation opens its first epoch when it
+   * has no `collecting` session (§3); on deactivation keeps the open session's
+   * boundary timer, so the boundary turns it over with no successor (§4.5)".
    *
    * THERE IS NO RE-READ CALL, and that is not a shortcut. The event's payload
    * is written in the SAME TRANSACTION as the change it describes
-   * (`backend/src/swarm/admin.ts`), so it carries the new duration and the
-   * closed epoch's id as committed facts. A separate read could only return the
-   * same values or newer ones — and newer ones arrive as their own event above
-   * this one's sequence, which §6.3 guarantees. Calling an endpoint to learn
-   * what the frame already stated would be a read on a timer in all but name.
+   * (`backend/src/swarm/admin.ts`), so it carries the new duration as a
+   * committed fact. A separate read could only return the same values or newer
+   * ones — and newer ones arrive as their own event above this one's sequence,
+   * which §6.3 guarantees. Calling an endpoint to learn what the frame already
+   * stated would be a read on a timer in all but name.
    */
   async #onSubjectChanged(event: StreamEventFrame): Promise<void> {
     const subjectId = event.subjectId;
@@ -367,7 +378,15 @@ export class SchedulerClock {
     // held would be state it could only use to be wrong with.
 
     if (payload.reason === "deactivated") {
-      this.#clearBoundary(subjectId);
+      // D55 (4) as corrected 2026-09-25: THE WINDOW RUNS TO ITS CLOSE. The
+      // boundary timer is KEPT. When it fires, the turnover closes N and opens
+      // no successor because the subject is inactive, and #fireBoundary
+      // settles N. Dropping the timer here would strand the window open past
+      // its close until the next rebuild.
+      //
+      // `closedEpochId` is carried only by an event an API before this
+      // correction wrote, whose deactivation DID close the epoch. It is still
+      // settled, because that event can sit in the log across an upgrade.
       if (payload.closedEpochId) {
         await this.#track(
           this.#resumeSettlement({
@@ -383,6 +402,11 @@ export class SchedulerClock {
     }
 
     if (payload.reason === "activated") {
+      // §4.5: "A reactivation while that window is still open opens nothing,
+      // because the subject already has a `collecting` session." The clock
+      // holds that session's boundary timer, so it knows. Only a subject with
+      // no collecting session gets its first epoch from this event (§3).
+      if (this.#boundaries.has(subjectId)) return;
       await this.#track(this.#openFirstEpoch(subjectId));
       return;
     }
@@ -410,10 +434,28 @@ export class SchedulerClock {
     const subjectId = event.subjectId;
     const payload = (event.payload ?? {}) as {
       closedSessionId?: string;
-      openedSessionId?: string;
-      windowClosesAt?: string;
+      openedSessionId?: string | null;
+      windowClosesAt?: string | null;
     };
-    if (!subjectId || !payload.openedSessionId || !payload.windowClosesAt) return;
+    if (!subjectId) return;
+
+    if (!payload.openedSessionId || !payload.windowClosesAt) {
+      // N closed and nothing opened: the subject was inactive at its boundary
+      // (§4.3, §4.5). The timer held for N is spent — drop it if it is still
+      // armed — and N settles below like any other closed epoch.
+      if (!payload.closedSessionId) return;
+      if (this.#boundaries.get(subjectId)?.sessionId === payload.closedSessionId) this.#clearBoundary(subjectId);
+      await this.#track(
+        this.#resumeSettlement({
+          sessionId: payload.closedSessionId,
+          subjectId,
+          state: "window_closed",
+          judgingDeadlineAt: null,
+          subjectActive: false,
+        }),
+      );
+      return;
+    }
 
     const at = Date.parse(payload.windowClosesAt);
     if (Number.isFinite(at)) {
@@ -521,8 +563,13 @@ export class SchedulerClock {
     const out = await this.#call(id, () => this.#api.turnover(subjectId, expectedSessionId));
     if (out.kind !== "ok") return;
 
-    const at = Date.parse(out.body.windowClosesAt);
-    if (Number.isFinite(at)) this.#armBoundary(subjectId, out.body.openedSessionId, at);
+    // §4.3: "The scheduler then sets the subject's boundary timer to the new
+    // `window_closes_at`, or drops it when no N+1 opened". The timer that
+    // fired this call is already gone from the map, so "drop" is to arm
+    // nothing: an inactive subject's window closed and opened no successor.
+    const opened = out.body.openedSessionId;
+    const at = out.body.windowClosesAt == null ? NaN : Date.parse(out.body.windowClosesAt);
+    if (opened && Number.isFinite(at)) this.#armBoundary(subjectId, opened, at);
 
     this.#track(
       this.#resumeSettlement({
@@ -530,7 +577,7 @@ export class SchedulerClock {
         subjectId,
         state: "window_closed",
         judgingDeadlineAt: null,
-        subjectActive: true,
+        subjectActive: opened !== null,
       }),
     );
   }

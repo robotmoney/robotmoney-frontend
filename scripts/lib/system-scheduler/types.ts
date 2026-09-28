@@ -133,8 +133,13 @@ export interface OpenBody {
 export interface TurnoverBody {
   subjectId: string;
   closedSessionId: string;
-  openedSessionId: string;
-  windowClosesAt: string;
+  /**
+   * N+1, or null when the subject was inactive at the boundary: the turnover
+   * closed N and opened nothing (scheduler spec §4.3, §4.5; D55 (4)).
+   */
+  openedSessionId: string | null;
+  /** N+1's close, or null with `openedSessionId`. */
+  windowClosesAt: string | null;
   judgeMode: "off" | "enforce";
   /** True when the turnover had already happened and its ORIGINAL result came back (§4.3). */
   replayed: boolean;

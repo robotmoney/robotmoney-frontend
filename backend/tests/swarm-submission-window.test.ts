@@ -103,7 +103,7 @@ test("a take submitted BETWEEN sessions is accepted and routed to the session it
   await sql`UPDATE swarm_sessions SET window_closes_at = clock_timestamp() - interval '1 second' WHERE id = ${a}`;
   const turned = await ic.turnOverEpoch(subj, a);
   if (!turned.ok) throw new Error(`turnOverEpoch: ${JSON.stringify(turned)}`);
-  const b = turned.openedSessionId;
+  const b = turned.openedSessionId!;
   expect(b).not.toBe(a);
 
   // THE GAP IS GONE. B was born `collecting` with a future deadline in the
@@ -184,7 +184,7 @@ test("a turnover that commits AHEAD of the stored close rejects no take — the 
     SELECT state, window_closes_at > clock_timestamp() AS still_future FROM swarm_sessions WHERE id = ${a}`;
   expect(closed).toEqual({ state: "window_closed", still_future: true });
 
-  const res = await submit(m, sessionDate(await sessionRow(turned.openedSessionId)), subj);
+  const res = await submit(m, sessionDate(await sessionRow(turned.openedSessionId!)), subj);
   expect(res.status).toBe(201);
   if (!("recommendationId" in res)) throw new Error(`submission failed: ${JSON.stringify(res)}`);
   const stored = (await sql`SELECT session_id FROM swarm_recommendations WHERE id = ${res.recommendationId}`)[0];

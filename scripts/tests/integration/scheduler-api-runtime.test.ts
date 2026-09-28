@@ -363,29 +363,75 @@ describe("the real scheduler drives the real API (§3, §4)", () => {
     expect(psql("SELECT count(*) FROM jobs WHERE kind LIKE 'swarm.%'")).toBe("0");
   }, 60_000);
 
-  test("a deactivated subject's open epoch reaches published and no successor opens (§4.5)", async () => {
+  test("a deactivated subject's window runs to its close: a take after the deactivation lands, the boundary settles it to published, and no successor opens (§4.5, D55 (4))", async () => {
+    // D55 (4) as corrected 2026-09-25. This test used to pin the retired rule
+    // (the deactivation closed the window and the scheduler settled it at
+    // once). Now the admin's deactivation only marks the subject inactive,
+    // the window stays collecting, the running scheduler KEEPS its boundary
+    // timer and turns the epoch over at the instant with no successor.
+    const member = await registeredMember();
     const id = `rt_deact_${crypto.randomUUID().slice(0, 6)}`;
-    const created = await createSubject(id, 30);
+    const created = await createSubject(id, 8);
     const [open] = await waitFor("the first epoch", () => {
       const c = collectingOf(id);
       return c.length === 1 ? c : null;
     });
     const r = await adminPost(`/api/swarm/admin/subjects/${id}/deactivate`, { expectedVersion: created.version });
     expect(r.status).toBe(200);
-    await waitFor("the closed epoch to settle to published", () =>
-      psql(`SELECT state FROM swarm_sessions WHERE id = ${lit(open!.id)}`) === "published", 20_000);
+    expect(psql(`SELECT state, window_closes_at > clock_timestamp() FROM swarm_sessions WHERE id = ${lit(open!.id)}`))
+      .toBe("collecting|t");
+    const date = psql(`SELECT date::text FROM swarm_sessions WHERE id = ${lit(open!.id)}`);
+    expect((await signedTake(member, date, id)).status).toBe(201);
+
+    await waitFor("the boundary to settle the window to published", () =>
+      psql(`SELECT state FROM swarm_sessions WHERE id = ${lit(open!.id)}`) === "published", 30_000);
+    // It closed AT its boundary, not at the deactivation: the take is in it,
+    // received before the stored close, and the turnover recorded no absence
+    // for the member that filed.
+    expect(psql(`SELECT count(*) FROM swarm_recommendations WHERE session_id = ${lit(open!.id)}
+                    AND member_id = ${lit(member.id)} AND received_at <= (SELECT window_closes_at FROM swarm_sessions WHERE id = ${lit(open!.id)})`))
+      .toBe("1");
+    expect(psql(`SELECT count(*) FROM swarm_agent_health_events WHERE session_id = ${lit(open!.id)}
+                    AND member_id = ${lit(member.id)} AND event_type = 'absent'`)).toBe("0");
     // Give a stray timer every chance to misfire: nothing may open.
     await Bun.sleep(1500);
     expect(sessionsOf(id).map((s) => s.state)).toEqual(["published"]);
     expect(psql(`SELECT successor_session_id IS NULL FROM swarm_sessions WHERE id = ${lit(open!.id)}`)).toBe("t");
   }, 60_000);
 
+  test("a reactivation inside the still-open window opens nothing; the running scheduler's boundary then opens N+1 (§4.5)", async () => {
+    const id = `rt_react_in_${crypto.randomUUID().slice(0, 6)}`;
+    const created = await createSubject(id, 8);
+    const [open] = await waitFor("the first epoch", () => {
+      const c = collectingOf(id);
+      return c.length === 1 ? c : null;
+    });
+    const off = await adminPost(ROUTES.swarm.admin.subjectDeactivate.replace(":id", id), { expectedVersion: created.version });
+    expect(off.status).toBe(200);
+    const on = await adminPost(ROUTES.swarm.admin.subjectActivate.replace(":id", id), { expectedVersion: off.body.subject.version });
+    expect(on.status).toBe(200);
+    // Nothing opened: still the one collecting window, still open.
+    await Bun.sleep(1000);
+    expect(psql(`SELECT window_closes_at > clock_timestamp() FROM swarm_sessions WHERE id = ${lit(open!.id)}`)).toBe("t");
+    expect(sessionsOf(id).map((s) => [s.id, s.state])).toEqual([[open!.id, "collecting"]]);
+
+    await waitFor("the boundary to open N+1", () =>
+      psql(`SELECT successor_session_id IS NOT NULL FROM swarm_sessions WHERE id = ${lit(open!.id)}`) === "t", 30_000);
+    const next = psql(`SELECT successor_session_id FROM swarm_sessions WHERE id = ${lit(open!.id)}`);
+    expect(onGrid(next)).toBe(true);
+    await adminPost(ROUTES.swarm.admin.subjectDeactivate.replace(":id", id), {
+      expectedVersion: Number(psql(`SELECT version FROM swarm_subjects WHERE id = ${lit(id)}`)),
+    });
+  }, 60_000);
+
   test("DEACTIVATE THEN RE-ACTIVATE through the admin route: the running scheduler opens exactly one fresh on-grid epoch (criteria 88, 89)", async () => {
-    // §2.4 / §3: "a subject deactivated and re-activated" is opened by the
-    // scheduler, and "Nothing else opens a first epoch." D55 (4): activation
-    // is a subject edit — the route flips the status and publishes
-    // `subject.changed`; the scheduler, live on the stream, opens the epoch.
-    // The test never calls epochs/open and holds no scheduler token here.
+    // §3: "a subject deactivated, turned over with no successor and then
+    // re-activated" is opened by the scheduler — "A first epoch is opened by
+    // the rebuild, or by the scheduler on an activation's `subject.changed`,
+    // and by nothing else." D55 (4): activation is a subject edit — the route
+    // flips the status and publishes `subject.changed`; the scheduler, live on
+    // the stream, opens the epoch. The deactivated window runs to its close
+    // first. The test never calls epochs/open and holds no scheduler token.
     const id = `rt_react_${crypto.randomUUID().slice(0, 6)}`;
     const created = await createSubject(id, 6);
     const [first] = await waitFor("the first epoch", () => {
@@ -394,8 +440,8 @@ describe("the real scheduler drives the real API (§3, §4)", () => {
     });
     const off = await adminPost(ROUTES.swarm.admin.subjectDeactivate.replace(":id", id), { expectedVersion: created.version });
     expect(off.status).toBe(200);
-    await waitFor("the closed epoch to settle", () =>
-      psql(`SELECT state FROM swarm_sessions WHERE id = ${lit(first!.id)}`) === "published", 20_000);
+    await waitFor("the window to run to its close and settle", () =>
+      psql(`SELECT state FROM swarm_sessions WHERE id = ${lit(first!.id)}`) === "published", 30_000);
     expect(collectingOf(id)).toEqual([]);
 
     const activatedAt = dbNow();

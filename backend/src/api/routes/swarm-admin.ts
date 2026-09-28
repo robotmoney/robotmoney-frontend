@@ -40,6 +40,9 @@ function ownsPath(p: string): boolean {
     rest === "sessions" || rest.startsWith("sessions/") ||
     rest === "audit" ||
     rest === "judge" ||
+    // D55 (3): the retired fault-injection lever, owned so it answers 410 rather
+    // than falling through to the generic dispatcher's 404.
+    rest === "judge/fault-injection" ||
     rest === "agent-health"
   );
 }
@@ -358,7 +361,8 @@ export async function handleSwarmAdmin(
         body: {
           error: `the session ${verb} action is gone: epochs open, close and settle only through the epoch transitions ` +
             "(POST /api/swarm/admin/epochs/{open,turnover,aggregate,request-judging,finalize}), which only system-scheduler " +
-            "calls; there is no early close, and stopping a subject is deactivation (system-scheduler-spec.md §4.3, §4.5; D55)",
+            "calls; there is no early close, and stopping a subject is deactivation, which lets the open window run to its " +
+            "close (system-scheduler-spec.md §4.3, §4.5; D55)",
         },
       };
     }
@@ -474,42 +478,21 @@ export async function handleSwarmAdmin(
     return { status: 404, body: { error: "unknown judge admin route" } };
   }
 
-  // ── The TEST-ONLY judge fault-injection lever (R13, AC-E2E-06) ─────────
-  // A sibling of the judge switch above and for the same reason: an acceptance
-  // rehearsal must be able to stage a malformed judge response on a RUNNING
-  // stack, and the shipped artifact must be the thing that is exercised. Every
-  // gate lives below this handler (backend/src/swarm/judge-fault-injection.ts):
-  // the process flag, the acceptance-path second opt-in, and the audit row.
+  // ── The retired judge fault-injection lever (R13), D55 (3) ──────────────
+  // The lever faulted the backend `judge()`, which D53 deleted, so it had
+  // nothing left to break and only added a way to arm a test path in
+  // production. Its code is gone. 410, not 404: the route was real and its
+  // absence is deliberate, so a stale rehearsal script is told why. The table
+  // and the audit_log rows it wrote stay readable until a forward migration
+  // drops the table (D55 (3)).
   if (segs[0] === "judge" && segs[1] === "fault-injection" && segs.length === 2) {
-    if (m === "GET") return fromResult(await admin.getJudgeFaultInjectionAdmin());
-    if (m === "POST") {
-      const b = (await readJsonObject(req)) ?? {};
-      if (typeof b.enabled !== "boolean") return { status: 400, body: { error: "enabled must be a boolean" } };
-      const patch: { enabled: boolean; body?: string; remaining?: number; sessionId?: string | null; note?: string | null } = {
-        enabled: b.enabled,
-      };
-      if (b.body !== undefined) {
-        if (typeof b.body !== "string") return { status: 400, body: { error: "body must be a string" } };
-        patch.body = b.body;
-      }
-      if (b.remaining !== undefined) {
-        const remaining = Number(b.remaining);
-        if (!Number.isInteger(remaining)) return { status: 400, body: { error: "remaining must be an integer" } };
-        patch.remaining = remaining;
-      }
-      if (b.sessionId !== undefined) {
-        if (b.sessionId !== null && typeof b.sessionId !== "string") {
-          return { status: 400, body: { error: "sessionId must be a uuid string, or null" } };
-        }
-        patch.sessionId = b.sessionId;
-      }
-      if (b.note !== undefined) {
-        if (b.note !== null && typeof b.note !== "string") return { status: 400, body: { error: "note must be a string, or null" } };
-        patch.note = b.note;
-      }
-      return fromResult(await admin.setJudgeFaultInjectionAdmin(patch));
-    }
-    return { status: 404, body: { error: "unknown judge admin route" } };
+    return {
+      status: 410,
+      body: {
+        error: "the judge fault-injection lever is retired (D55 (3)): the backend judge it faulted no longer exists " +
+          "(D53); its audit_log rows stay readable",
+      },
+    };
   }
 
   // ── Audit ─────────────────────────────────────────────────────────────

@@ -76,7 +76,7 @@ async function commitEvents(prefix: string, turnovers: number): Promise<void> {
   for (let i = 0; i < turnovers; i++) {
     const t = await domain.turnOverEpoch(subjectId, open);
     if (!t.ok) throw new Error("turnOverEpoch failed");
-    open = t.openedSessionId;
+    open = t.openedSessionId!;
   }
 }
 

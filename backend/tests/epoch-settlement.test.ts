@@ -64,7 +64,7 @@ async function closedEpoch(prefix: string, mode: "off" | "enforce", judgingSecon
   if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);
   const turned = await epoch.turnOverEpoch(subjectId, opened.sessionId);
   if (!turned.ok) throw new Error(`turnOverEpoch: ${JSON.stringify(turned)}`);
-  return { subjectId, sessionId: turned.closedSessionId, successorId: turned.openedSessionId };
+  return { subjectId, sessionId: turned.closedSessionId, successorId: turned.openedSessionId! };
 }
 
 async function setDeadline(sessionId: string, at: Date) {
@@ -505,7 +505,8 @@ test("every settlement step refuses out of order, with a reason", async () => {
 test("a session with nothing captured is refused by request-judging and finalize, which never read the subject's live duration", async () => {
   // §4.4: "Judge mode and judging duration are captured at turnover", and a
   // later change "affects later sessions, never one already settling". Every
-  // close path in the code now captures (turnover, deactivation, and the
+  // close path in the code now captures (turnover — of an active or an
+  // inactive subject's window, D55 (4) — and the
   // route-unreachable legacy closes, asserted first below), so an uncaptured
   // session is a row closed before migration 0074 — modelled here by clearing
   // the two columns. RED CONTROL: the code before this refusal treated the
@@ -550,4 +551,44 @@ test("the legacy closeWindow captures judge mode and judging duration at the clo
   await sql`UPDATE swarm_subjects SET judging_duration_seconds = 5 WHERE id = ${subjectId}`;
   const s = await sessionRow(opened.sessionId);
   expect([s.state, s.judge_mode, s.judging_duration_seconds]).toEqual(["window_closed", "enforce", 77]);
+});
+
+test("D55 (4): a deactivated subject's window, closed at its boundary with no successor, settles by the same steps and the same captured values", async () => {
+  // §4.5 as corrected 2026-09-25: "At the boundary it turns the epoch over as
+  // usual (§4.3): the turnover closes the session, records absences and opens
+  // no successor … The scheduler then settles the closed epoch through the
+  // ordinary settlement transitions (§4.4)." The judge mode and judging
+  // duration are captured by that turnover, not by the deactivation (which
+  // closes nothing), so an admin change made after the deactivation and before
+  // the boundary DOES reach this epoch, and one made after the boundary does not.
+  await setJudgeMode("enforce");
+  const subjectId = await activeSubject("st_deactivated", 600);
+  await sql`UPDATE swarm_subjects SET judging_duration_seconds = 300 WHERE id = ${subjectId}`;
+  const opened = await epoch.openEpoch(subjectId);
+  if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);
+  const [{ version }] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${subjectId}`;
+  expect((await admin.deactivateSubjectAdmin(subjectId, Number(version))).ok).toBe(true);
+  expect((await sessionRow(opened.sessionId)).judging_duration_seconds).toBeNull();
+  await sql`UPDATE swarm_subjects SET judging_duration_seconds = 240 WHERE id = ${subjectId}`;
+
+  const turned = await epoch.turnOverEpoch(subjectId, opened.sessionId);
+  if (!turned.ok) throw new Error(`turnOverEpoch: ${JSON.stringify(turned)}`);
+  expect(turned.openedSessionId).toBeNull();
+  const sessionId = turned.closedSessionId;
+  expect(await sessionRow(sessionId)).toMatchObject({ judge_mode: "enforce", judging_duration_seconds: 240 });
+  await sql`UPDATE swarm_subjects SET judging_duration_seconds = 5 WHERE id = ${subjectId}`;
+
+  expect((await epoch.aggregateEpoch(sessionId)).ok).toBe(true);
+  const requested = await epoch.requestJudging(sessionId);
+  if (!requested.ok) throw new Error(`requestJudging: ${JSON.stringify(requested)}`);
+  const [{ span }] = await sql<{ span: number }[]>`
+    SELECT extract(epoch FROM (judging_deadline_at - judging_requested_at))::int AS span FROM swarm_sessions WHERE id = ${sessionId}`;
+  expect(span).toBe(240);
+  // Before the deadline with no consensus, finalize refuses; after it, the
+  // epoch publishes `no_consensus` like any other.
+  expect((await epoch.finalizeEpoch(sessionId)).ok).toBe(false);
+  await setDeadline(sessionId, new Date(Date.now() - 1_000));
+  const fin = await epoch.finalizeEpoch(sessionId);
+  expect(fin).toMatchObject({ ok: true, state: "published", outcome: "no_consensus" });
+  expect((await sql`SELECT id FROM swarm_sessions WHERE subject_id = ${subjectId}`).length).toBe(1);
 });

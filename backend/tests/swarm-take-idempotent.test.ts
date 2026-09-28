@@ -181,7 +181,7 @@ test("a retry still returns the existing record after the window closed and the 
   expect(resend.status).toBe(200);
   expect(resend.body).toMatchObject({ alreadySubmitted: true, recommendationId: first.body.recommendationId, verified: true });
   expect(await takeRows(sessionId, m.memberId)).toHaveLength(1);
-  if (turned.ok) expect(await takeRows(turned.openedSessionId, m.memberId)).toHaveLength(0);
+  if (turned.ok) expect(await takeRows(turned.openedSessionId!, m.memberId)).toHaveLength(0);
 });
 
 test("130 over HTTP: the participant's own take-runner persists the signed bytes, and resending them after a crash-restart settles as already_submitted against the real route", async () => {
@@ -419,7 +419,7 @@ test("a member amends twice while the window is open; after window_closes_at a t
   expect(afterTurnover.status).toBe(201);
   expect(await takeRows(sessionId, m.memberId)).toHaveLength(3);
   if (turned.ok) {
-    expect((await takeRows(turned.openedSessionId, m.memberId)).map((r) => [r.body, r.final])).toEqual([["later still", true]]);
+    expect((await takeRows(turned.openedSessionId!, m.memberId)).map((r) => [r.body, r.final])).toEqual([["later still", true]]);
   }
 });
 

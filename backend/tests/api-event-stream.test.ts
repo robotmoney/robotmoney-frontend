@@ -237,11 +237,14 @@ test("a published session is NOT in the full read", async () => {
   expect(read.settling.some((s) => s.sessionId === turned.closedSessionId)).toBe(false);
 });
 
-test("a deactivated subject's unfinished settlement is still in the full read", async () => {
-  // §3: "This includes sessions whose subject has since been deactivated;
-  // deactivation closes an epoch but settlement still has to finish." Dropping
-  // it would strand the session in `window_closed` for ever, with no timer and
-  // no owner.
+test("a deactivated subject's open window, and then its unfinished settlement, are both in the full read", async () => {
+  // §3 parts 2 and 3 (as corrected with D55 (4)): "Every session in
+  // `collecting` … including one whose subject has since been deactivated",
+  // and every closed-but-unpublished one, "including sessions whose subject
+  // has since been deactivated; a window left open by a deactivation still
+  // turns over at its boundary, and its settlement still has to finish."
+  // Dropping either would strand the session — a window nobody closes, or a
+  // `window_closed` epoch nobody settles.
   const subjectId = await activeSubject("fr_deactivated", 600);
   const opened = await epoch.openEpoch(subjectId);
   if (!opened.ok) throw new Error("openEpoch failed");
@@ -249,8 +252,20 @@ test("a deactivated subject's unfinished settlement is still in the full read", 
   const done = await admin.deactivateSubjectAdmin(subjectId, subject.version);
   expect(done.status).toBe(200);
 
-  const read = await stream.fullRead();
+  let read = await stream.fullRead();
   expect(read.subjects.some((s) => s.subjectId === subjectId)).toBe(false);
+  expect(read.collecting.find((c) => c.sessionId === opened.sessionId)).toEqual({
+    sessionId: opened.sessionId,
+    subjectId,
+    windowClosesAt: opened.windowClosesAt,
+  });
+  expect(read.settling.some((s) => s.sessionId === opened.sessionId)).toBe(false);
+
+  // The boundary turnover closes it with no successor; now it is settling.
+  const turned = await epoch.turnOverEpoch(subjectId, opened.sessionId);
+  expect(turned.ok && turned.openedSessionId).toBeNull();
+  read = await stream.fullRead();
+  expect(read.collecting.some((c) => c.subjectId === subjectId)).toBe(false);
   const row = read.settling.find((s) => s.sessionId === opened.sessionId);
   expect(row).toBeDefined();
   expect(row!.state).toBe("window_closed");
@@ -310,7 +325,7 @@ test("events are served in ascending sequence order", async () => {
   if (!opened.ok) throw new Error("openEpoch failed");
   const t = await epoch.turnOverEpoch(subjectId, opened.sessionId);
   if (!t.ok) throw new Error("turnOverEpoch failed");
-  await epoch.turnOverEpoch(subjectId, t.openedSessionId);
+  await epoch.turnOverEpoch(subjectId, t.openedSessionId!);
 
   const seqs = (await stream.eventsAbove(cursor)).map((e) => e.seq);
   expect(seqs.length).toBeGreaterThanOrEqual(2);
@@ -626,7 +641,7 @@ test("MODULE ONLY: a full queue on the response itself is answered with a resync
   for (let i = 0; i < 5; i++) {
     const t = await epoch.turnOverEpoch(subjectId, open);
     if (!t.ok) throw new Error("turnOverEpoch failed");
-    open = t.openedSessionId;
+    open = t.openedSessionId!;
   }
   expect((await epoch.streamHeadSequence()) - cursor).toBeGreaterThanOrEqual(5);
 

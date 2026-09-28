@@ -357,6 +357,49 @@ describe("the full read is consumed whole (§3, §10)", () => {
     expect(api.countCalls("openEpoch")).toBe(0);
   });
 
+  test("a COLLECTING session of an inactive subject holds its boundary timer on rebuild, and its boundary opens no successor (§3, §4.5)", async () => {
+    // D55 (4) as corrected 2026-09-25: the window runs to its close. §3 part
+    // 2 lists "every session in `collecting` … including one whose subject has
+    // since been deactivated", and the rebuild arms a timer for it like any
+    // other. It opens no first epoch for the subject: the subject is inactive.
+    const { timers, api, boot } = world();
+    api.addSubject("gone", 600, false);
+    api.addSession({ sessionId: "open", subjectId: "gone", windowClosesAt: T0 + 600_000 });
+
+    const snapshot = await api.fullRead();
+    expect(snapshot.subjects.map((s) => s.subjectId)).not.toContain("gone");
+    expect(snapshot.collecting.map((c) => c.sessionId)).toContain("open");
+
+    const clock = boot();
+    await clock.rebuild(snapshot);
+    await clock.idle();
+    expect(clock.boundaryAt("gone")).toBe(T0 + 600_000);
+    expect(api.countCalls("openEpoch")).toBe(0);
+
+    await timers.advanceTo(T0 + 600_000);
+    await clock.idle();
+    expect(api.callsOf("turnover").map((c) => c.args.expectedSessionId)).toEqual(["open"]);
+    expect(api.sessions.get("open")!.state).toBe("published");
+    expect(api.sessionsOf("gone")).toHaveLength(1);
+    expect(clock.timerCount.boundaries).toBe(0);
+  });
+
+  test("restarted after an inactive subject's boundary passed, the rebuild fires it once and settles it with no successor (§3.2, §4.5)", async () => {
+    const { timers, api, boot } = world();
+    api.addSubject("gone", 600, false);
+    api.addSession({ sessionId: "open", subjectId: "gone", windowClosesAt: T0 + 600_000 });
+    // Down across the instant.
+    await timers.advanceTo(T0 + 900_000);
+
+    const clock = boot();
+    await clock.rebuild(await api.fullRead());
+    await clock.idle();
+    expect(api.countCalls("turnover")).toBe(1);
+    expect(api.sessions.get("open")!.state).toBe("published");
+    expect(api.sessionsOf("gone")).toHaveLength(1);
+    expect(api.countCalls("openEpoch")).toBe(0);
+  });
+
   test("every state in the full read is resumed in the same rebuild, independently", async () => {
     const { api, boot } = world();
     api.addSubject("sub-a", 600);

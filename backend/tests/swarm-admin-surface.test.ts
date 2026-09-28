@@ -421,7 +421,7 @@ test("aggregate: quorum denominator is the frozen roster (excluding excused), no
   // in the successor the turnover already opened: it joins the next epoch.
   const late = await activeMember("agg-c-after-close");
   if (turned.ok) {
-    const successorRoster = (await admin.getSessionRoster(turned.openedSessionId)).map((r: any) => r.member_id);
+    const successorRoster = (await admin.getSessionRoster(turned.openedSessionId!)).map((r: any) => r.member_id);
     expect(successorRoster).not.toContain(late.id);
   }
   expect((await admin.getSessionRoster(sessionId)).map((r: any) => r.member_id)).not.toContain(late.id);
@@ -527,4 +527,39 @@ test("audit: listAuditLog filters by actor/action and redacts to non-credential 
     expect(r).not.toHaveProperty("token_hash");
     expect(JSON.stringify(r.scope ?? {})).not.toMatch(/tok_/);
   }
+});
+
+// ── D55 (3): the judge fault-injection lever is retired ─────────────────────
+test("the retired judge fault-injection route answers 410 naming D55 (3), writes nothing, and leaves its old audit rows readable", async () => {
+  // The lever's module, its admin functions and their two test files were
+  // deleted with the feature D55 (3) retired (the backend judge it faulted is
+  // gone, D53). The route stays as a 410 so a stale rehearsal script is told
+  // why. The table itself is dropped by a later forward migration; until then
+  // it and the audit_log rows the lever wrote stay readable.
+  // Through the swarm dispatcher, the way /api/swarm/* reaches it.
+  const { handleSwarm } = await import("../src/api/routes/swarm.ts");
+  const { provisionOperatorToken, adminHeaders } = await import("./support/automation-auth.ts");
+  const operator = await provisionOperatorToken();
+  await sql`INSERT INTO audit_log (actor, action, scope)
+            VALUES ('admin', 'judge_fault_injection', ${sql.json({ enabled: false, testOnly: true })})`;
+  const before = await sql`SELECT * FROM swarm_judge_fault_injection`;
+  const auditBefore = await sql`SELECT count(*)::int AS n FROM audit_log`;
+
+  for (const [method, body] of [["GET", undefined], ["POST", { enabled: true, body: "not json", remaining: 1 }], ["POST", { enabled: false }]] as const) {
+    const req = new Request("http://test/api/swarm/admin/judge/fault-injection", {
+      method,
+      headers: { "Content-Type": "application/json", ...adminHeaders(operator) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const res = (await handleSwarm(req, new URL(req.url))) as { status: number; body: unknown } | null;
+    expect(res?.status).toBe(410);
+    expect(String((res?.body as { error?: string }).error)).toContain("D55 (3)");
+  }
+  expect([...(await sql`SELECT * FROM swarm_judge_fault_injection`)]).toEqual([...before]);
+  expect([...(await sql`SELECT count(*)::int AS n FROM audit_log`)]).toEqual([...auditBefore]);
+  const old = await sql<{ action: string }[]>`SELECT action FROM audit_log WHERE action = 'judge_fault_injection'`;
+  expect(old.length).toBe(1);
+  // No module exports the lever's admin functions any more.
+  expect("getJudgeFaultInjectionAdmin" in admin).toBe(false);
+  expect("setJudgeFaultInjectionAdmin" in admin).toBe(false);
 });

@@ -68,8 +68,8 @@ async function nextSession(subjectId: string): Promise<string> {
   }
   const turned = await ic.turnOverEpoch(subjectId, current);
   if (!turned.ok) throw new Error(`turnOverEpoch(${subjectId}) failed: ${JSON.stringify(turned)}`);
-  currentEpoch.set(subjectId, turned.openedSessionId);
-  return turned.openedSessionId;
+  currentEpoch.set(subjectId, turned.openedSessionId!);
+  return turned.openedSessionId!;
 }
 
 /** Convene `count` consecutive sessions for the subject; returns their ids in order. */

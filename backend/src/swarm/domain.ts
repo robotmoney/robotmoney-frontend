@@ -970,8 +970,8 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   // not here, and with a different answer. The dead zone this paragraph
   // describes cannot recur: turnover opens N+1 `collecting` in the transaction
   // that closes N, so the newest session is always the collecting one. What
-  // the conjunct refuses is a take into an epoch that turnover or deactivation
-  // already closed, and it answers `submission window closed` — the same "you
+  // the conjunct refuses is a take into an epoch that turnover already closed
+  // (a deactivation closes nothing: D55 (4), §4.5), and it answers `submission window closed` — the same "you
   // are too late" as the instant — never `not open`. The early check below
   // reads the same two facts (state and instant) so a late take is refused
   // before the signature work; the INSERT's conjuncts remain the authority.
@@ -1187,14 +1187,15 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
     // #570 dropped this conjunct because the old lifecycle had a `scheduled`
     // gap between sessions and a `closeWindow` that ran before the advertised
     // instant. The epoch model has neither: a session is born `collecting`
-    // (§3), and the only ways an epoch leaves `collecting` are turnover (§4.3)
-    // and deactivation (§4.5). Only `system-scheduler` turns an epoch over
-    // (D55), but its timer runs on its own clock, not the database's (§4.2), so
-    // the API can still see a turnover commit before N's stored close. Neither
-    // path moves `window_closes_at`, so without this conjunct a take that read
-    // N just before such a turnover committed — or any take after a
-    // deactivation — landed in a CLOSED epoch whose stored close was still in
-    // the future: after its absences were recorded, and after aggregation.
+    // (§3), and the only way an epoch leaves `collecting` is turnover (§4.3):
+    // a deactivation closes nothing, and the window of an inactive subject
+    // runs to its close (§4.5, D55 (4)). Only `system-scheduler` turns an
+    // epoch over (D55), but its timer runs on its own clock, not the
+    // database's (§4.2), so the API can still see a turnover commit before N's
+    // stored close. Turnover does not move `window_closes_at`, so without this
+    // conjunct a take that read N just before such a turnover committed landed
+    // in a CLOSED epoch whose stored close was still in the future: after its
+    // absences were recorded, and after aggregation.
     // Under the `FOR SHARE` lock below, the state this reads is the committed
     // one, so the take either lands before the close or is refused after it.
     //
@@ -2332,7 +2333,7 @@ export async function closeWindow(
   // its failures collected into the return value rather than thrown.
   //
   // THE CLOSE CAPTURES WHAT SETTLEMENT RUNS ON (§4.4, issue #1026). Turnover
-  // and deactivation store the judge mode and judging duration in force as an
+  // (of an active or an inactive subject's window) stores the judge mode and judging duration in force as an
   // epoch closes; this close does the same, in the same statement, so no path
   // left in the code closes a session with nothing captured. Settlement
   // refuses an uncaptured session (`judging_not_captured`) rather than reading
@@ -3456,8 +3457,15 @@ export type TurnoverResult = {
   status: number;
   subjectId: string;
   closedSessionId: string;
-  openedSessionId: string;
-  windowClosesAt: string;
+  /**
+   * The successor N+1, or null when the subject was inactive at the boundary
+   * (§4.3 "opens epoch N+1 … but only if the subject is active at that
+   * instant"; §4.5, D55 (4)). A null here is not a failure: N closed and
+   * settles, and nothing opened.
+   */
+  openedSessionId: string | null;
+  /** N+1's close, or null with `openedSessionId`. */
+  windowClosesAt: string | null;
   judgeMode: JudgeMode;
   /** True when this call found the turnover already done and returned its original result (§4.3). */
   replayed: boolean;
@@ -3475,9 +3483,13 @@ export type TurnoverResult = {
  * HOW THE BINDING WORKS. `expectedSessionId` names the epoch the caller intends
  * to close, and the answer is decided entirely from that row:
  *
- *   * it is `collecting`           → do the turnover.
+ *   * it is `collecting`           → do the turnover. For an inactive
+ *                                    subject that closes N and opens nothing
+ *                                    (§4.5, D55 (4)).
  *   * it already has a successor   → replay that original result verbatim.
- *   * it is closed with no successor (deactivation, §4.5) → reasoned no-op.
+ *   * it was closed as an epoch with no successor (a turnover of an inactive
+ *     subject's window) → replay that result: N closed, nothing opened.
+ *   * it was closed by a pre-epoch path (nothing captured) → reasoned no-op.
  *   * it belongs to another subject, or does not exist   → reasoned no-op.
  *
  * At no point is "the subject's current collecting session" consulted as a
@@ -3513,7 +3525,26 @@ export async function turnOverEpoch(
     if (expected.subject_id !== subjectId) return refuse(409, "expected_session_not_for_subject");
 
     if (expected.state !== "collecting") {
-      if (!expected.successor_session_id) return refuse(409, "epoch_not_collecting");
+      if (!expected.successor_session_id) {
+        // Closed with no successor. When the close captured its judge mode and
+        // judging duration, it was an epoch close — the boundary of an
+        // inactive subject's window (§4.5) — and a retry after a lost
+        // response gets that original result back, so the scheduler settles
+        // N instead of recording a refusal (§5: "the guard returns the
+        // original result rather than a bare refusal"). A session closed by a
+        // retired pre-epoch path captured nothing and stays a reasoned no-op.
+        if (!judgingCaptured(expected)) return refuse(409, "epoch_not_collecting");
+        return {
+          ok: true as const,
+          status: 200,
+          subjectId,
+          closedSessionId: String(expected.id),
+          openedSessionId: null,
+          windowClosesAt: null,
+          judgeMode: expected.judge_mode as JudgeMode,
+          replayed: true,
+        };
+      }
       const [successor] = await tx<Record<string, any>[]>`
         SELECT id, window_closes_at FROM swarm_sessions WHERE id = ${expected.successor_session_id}`;
       return {
@@ -3528,13 +3559,17 @@ export async function turnOverEpoch(
       };
     }
 
-    // §4.5: deactivation closes an epoch and opens none, so an inactive subject
-    // has nothing to turn over into. Deactivation closes the window in its own
-    // transaction, so this is not normally reachable — but it is checked BEFORE
-    // anything is written, because a refusal closes nothing (§5). Checked after
-    // the write, a refusal returned from inside `sql.begin` would COMMIT the
-    // close it was refusing.
-    if (subject.status !== "active") return refuse(409, "subject_not_active");
+    // §4.5, D55 (4) as corrected 2026-09-25 — THE WINDOW RUNS TO ITS CLOSE. An
+    // admin deactivation only sets the subject inactive; it closes nothing. The
+    // open window keeps accepting takes until `window_closes_at`, and THIS is
+    // the transaction that closes it: the ordinary boundary turnover, which
+    // closes N, records absences and captures the judge mode exactly as for an
+    // active subject, and then opens no N+1 because the subject is inactive.
+    // The status is read once, under the subject lock taken above, so an
+    // activation racing this boundary either commits first (N+1 opens) or
+    // waits for it (nothing opens here, and the scheduler opens the first
+    // epoch from that activation's subject.changed).
+    const opensSuccessor = subject.status === "active";
 
     // §4.4: "Judge mode and judging duration are captured at turnover." Read
     // once, here, and stored on the closing session — everything downstream
@@ -3551,22 +3586,27 @@ export async function turnOverEpoch(
     // §2.2 turnover rule, against ONE reading of the clock taken here — after
     // the subject lock is held, so a turnover that waited on another never
     // derives its close from a present that went stale while it waited.
-    const closesAt = await gridClose(tx, subjectId, await readPresent(tx), expected.window_closes_at_text ?? null);
-    const successor = await insertEpoch(tx, subject, closesAt);
-    await tx`UPDATE swarm_sessions SET successor_session_id = ${successor.sessionId}
-              WHERE id = ${expectedSessionId}`;
-    // §6.2: `epoch.turned_over` — "epoch N closed and N+1 opened". Written here,
-    // in the transaction that did both, so the scheduler cannot be told about a
+    let successor: OpenResult | null = null;
+    if (opensSuccessor) {
+      const closesAt = await gridClose(tx, subjectId, await readPresent(tx), expected.window_closes_at_text ?? null);
+      successor = await insertEpoch(tx, subject, closesAt);
+      await tx`UPDATE swarm_sessions SET successor_session_id = ${successor.sessionId}
+                WHERE id = ${expectedSessionId}`;
+    }
+    // §6.2: `epoch.turned_over` — "epoch N closed and N+1 opened", or N closed
+    // and nothing opened for an inactive subject (§4.5), which the scheduler
+    // reads as "drop the boundary timer, settle N". Written here, in the
+    // transaction that did both, so the scheduler cannot be told about a
     // turnover that rolled back or miss one that committed. A REPLAY does not
     // publish: the event for this turnover was written when it happened, and a
     // second copy would read to a subscriber as a second turnover.
     await appendStreamEvent(tx, "epoch.turned_over", {
       subjectId,
-      sessionId: successor.sessionId,
+      sessionId: successor?.sessionId ?? expectedSessionId,
       payload: {
         closedSessionId: expectedSessionId,
-        openedSessionId: successor.sessionId,
-        windowClosesAt: successor.windowClosesAt,
+        openedSessionId: successor?.sessionId ?? null,
+        windowClosesAt: successor?.windowClosesAt ?? null,
       },
     });
 
@@ -3575,34 +3615,12 @@ export async function turnOverEpoch(
       status: 200,
       subjectId,
       closedSessionId: expectedSessionId,
-      openedSessionId: successor.sessionId,
-      windowClosesAt: successor.windowClosesAt,
+      openedSessionId: successor?.sessionId ?? null,
+      windowClosesAt: successor?.windowClosesAt ?? null,
       judgeMode,
       replayed: false,
     };
   });
-}
-
-/**
- * Close a subject's open epoch without opening a successor — §4.5.
- *
- * Called from the admin deactivation path, inside its transaction, so that
- * "deactivated" and "window closed" are one fact rather than two that a crash
- * can separate. Settlement of the closed epoch still has to finish; §3 step 3
- * makes the scheduler pick it up on its next rebuild.
- */
-export async function closeEpochForDeactivation(subjectId: string, tx: DbHandle): Promise<string | null> {
-  const open = await currentCollecting(tx, subjectId);
-  if (!open) return null;
-  // The same capture a turnover makes (§4.4): this epoch settles like any
-  // other, so it carries the mode and judging duration in force as it closes.
-  const judgeMode = await currentJudgeMode(tx);
-  await tx`UPDATE swarm_sessions
-              SET state = 'window_closed', judge_mode = ${judgeMode},
-                  judging_duration_seconds = (SELECT judging_duration_seconds FROM swarm_subjects WHERE id = ${subjectId})
-            WHERE id = ${open.id} AND state = 'collecting'`;
-  await recordAbsencesTx(open.id, tx);
-  return open.id;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3955,7 +3973,7 @@ export async function finalizeEpoch(sessionId: string): Promise<FinalizeResult |
 
 /**
  * Did this session's close capture what settlement runs on (§4.4)? Turnover
- * and deactivation write both `judge_mode` (off | enforce) and
+ * writes both `judge_mode` (off | enforce) and
  * `judging_duration_seconds` in the transaction that closes the epoch; a
  * session missing either never closed as an epoch.
  */
@@ -4061,10 +4079,12 @@ export interface SettlingSession {
   /**
    * Whether the subject is still active.
    *
-   * Carried because §3 includes "sessions whose subject has since been
-   * deactivated" and §4.5 says settlement of those "proceeds and must finish",
-   * while the scheduler must NOT hold a boundary timer for them. One flag tells
-   * the two apart without a second read.
+   * Carried because §3 includes sessions "whose subject has since been
+   * deactivated" and §4.5 says their settlement still has to finish. A
+   * SETTLING session holds no boundary timer whatever its subject's status —
+   * its window already closed. The boundary timer of an inactive subject's
+   * still-open window comes from §3 part 2 (`collecting`), which lists it
+   * too (D55 (4): the window runs to its close).
    */
   subjectActive: boolean;
 }

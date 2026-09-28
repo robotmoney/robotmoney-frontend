@@ -81,7 +81,7 @@ test("a session drops out of the queue once the member has taken it, once its in
   const turned = await ic.turnOverEpoch(c.subjectId, c.sessionId);
   if (!turned.ok) throw new Error(`turnOverEpoch: ${JSON.stringify(turned)}`);
 
-  expect(await ids()).toEqual([turned.openedSessionId]);
+  expect(await ids()).toEqual([turned.openedSessionId!]);
 });
 
 test("a member activated after an epoch opened is not sent to it — it joins the next epoch (US-C3)", async () => {
@@ -95,7 +95,7 @@ test("a member activated after an epoch opened is not sent to it — it joins th
   // Once the epoch turns over, the successor seats the late member and offers it.
   const turned = await ic.turnOverEpoch(subjectId, sessionId);
   if (!turned.ok) throw new Error(`turnOverEpoch: ${JSON.stringify(turned)}`);
-  expect(await ids(late)).toEqual([turned.openedSessionId]);
+  expect(await ids(late)).toEqual([turned.openedSessionId!]);
 });
 
 test("an epoch opened with NO active member seats an empty roster that still gates: a member activated mid-epoch gets 403 and an empty queue", async () => {
@@ -122,7 +122,7 @@ test("an epoch opened with NO active member seats an empty roster that still gat
   const turned = await ic.turnOverEpoch(subjectId, sessionId);
   if (!turned.ok) throw new Error(`turnOverEpoch: ${JSON.stringify(turned)}`);
   const pending = (await poll(late.token, late.id)).body.pending as { sessionId: string; date: string }[];
-  expect(pending.map((p) => p.sessionId)).toEqual([turned.openedSessionId]);
+  expect(pending.map((p) => p.sessionId)).toEqual([turned.openedSessionId!]);
   expect((await submitTake(late, pending[0]!.date, subjectId)).ok).toBe(true);
 });
 
