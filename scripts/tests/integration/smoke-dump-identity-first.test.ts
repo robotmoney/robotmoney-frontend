@@ -63,8 +63,6 @@ const LOWER_SIX = [
 const HEAD_FILES = readdirSync(join(repoRoot, "backend", "migrations")).filter((f) => f.endsWith(".sql")).sort();
 /** What the migrate step applies after the pass: every file the baseline lacks but 0063, in filename order. */
 const PENDING_AFTER_PASS = HEAD_FILES.filter((f) => !BASELINE.migrations.includes(f) && f !== IDENTITY_MIGRATION);
-/** The one refusal the migrate step ends on over a restored copy today (the known gap below). */
-const KNOWN_PRIVILEGE_GAP = /^Refusing to publish this database's first schema manifest: the live schema differs from the snapshot for its installed filename list \(spec §9\.1 step 2\) — (default privileges for rm_owner in schema public on (tables|sequences) [^;]*(; |\. ))+Any difference is repaired by a migration first\. No manifest was published\.$/;
 
 let dump: EncryptedBackup;
 beforeAll(async () => {
@@ -206,7 +204,7 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
   });
 
   // ONE boot, shared by the two tests below: what the pass and the migrate
-  // step did, and the one outcome still blocked.
+  // step did, and that the migrate step committed.
   let base: { steps: string[]; applyOrder: string[]; headLedger: boolean; why: string; migrateError: string } | undefined;
 
   test("enroll applies 0063 and writes rehearsal in ONE transaction, then --migrate applies the six lower files first and the rest", async () => {
@@ -246,24 +244,18 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
       expect(base.applyOrder.slice(1, 7)).toEqual(LOWER_SIX);
       expect(base.headLedger).toBe(true);
       expect(psql(copy.superuserUrl, "SELECT kind FROM deployment_identity")).toBe("rehearsal");
-      // What stops the step today is only the first manifest's baseline
-      // comparison (§9.1 step 2), on the default privileges the capture's
-      // --no-privileges drops — the known gap below.
-      if (!steps.includes("prepare:migrate:committed")) expect(base.migrateError).toMatch(KNOWN_PRIVILEGE_GAP);
     } finally {
       teardown(h, boot);
     }
   }, BOOT_TIMEOUT_MS);
 
-  // KNOWN GAP — not this package's (it needs backend/schema/grants.sql to
-  // restore the default privileges a --no-privileges capture drops, and a
-  // snapshot regeneration by the schema's owner; ./smoke-dump-lifecycle.test.ts
-  // records the same gap for a production-identity dump's preflight). The
-  // migrate step applies every file and then refuses to publish the first
-  // manifest over the restored copy, because `ALTER DEFAULT PRIVILEGES` for
-  // rm_owner did not survive the capture. This asserts the SPEC outcome ("and
-  // boots"), so it turns red the moment the gap closes.
-  test.failing("KNOWN GAP: --migrate publishes the first manifest over the restored baseline copy, and the boot passes its migrate step", () => {
+  // Once a KNOWN GAP: the first manifest refused to publish over the restored
+  // copy because `ALTER DEFAULT PRIVILEGES` for rm_owner did not survive the
+  // capture's --no-privileges. backend/schema/grants.sql now declares every
+  // default privilege the snapshot records (D55 (6), w5-no-runtime-delete), and
+  // the migrate run's reconciliation restores them before the manifest's
+  // baseline comparison, so the migrate step commits.
+  test("--migrate publishes the first manifest over the restored baseline copy, and the boot passes its migrate step", () => {
     if (!base) throw new Error("the baseline boot above did not run");
     expect({ migrated: base.steps.includes("prepare:migrate:committed"), error: base.migrateError }).toEqual({ migrated: true, error: "" });
   });
@@ -321,10 +313,10 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
       expect(journalNow(h)!.phases.filter((r) => r.phase === "prepare" && r.step === "migrate").map((r) => r.status)).toEqual(["started"]);
 
       // The rerun of the killed step resumes through the normal path: every
-      // pending file, the six lower files first, 0063 never again. (It ends on
-      // the known first-manifest privilege gap above, and on nothing else.)
+      // pending file, the six lower files first, 0063 never again, and it
+      // publishes the first manifest.
       const again = await rerunStep(h, "migrate");
-      if (!again.ok) expect(again.error).toMatch(KNOWN_PRIVILEGE_GAP);
+      expect({ ok: again.ok, error: again.ok ? "" : again.error }).toEqual({ ok: true, error: "" });
       expect(applyOrder(copy.superuserUrl)).toEqual([IDENTITY_MIGRATION, ...PENDING_AFTER_PASS]);
       expect(stateOf(copy.superuserUrl)).toEqual({ ledger: HEAD_FILES, table: true, identity: "rehearsal:rm_owner" });
     } finally {
