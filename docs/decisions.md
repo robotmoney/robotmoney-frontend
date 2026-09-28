@@ -4067,7 +4067,8 @@ Amended the same day: decision 4 was corrected, because its first text listed
 deactivation among the scheduler's transitions, and decisions 5 to 8 were
 added. Amended again the same day: decision 8 was corrected to name
 production's observed 73-name ledger rather than v0.5.0 alone, and decisions 9
-to 13 were added.
+to 13 were added. Amended on 2026-09-28: decision 10 records the owner's call
+that no tool turns a pre-0063 production dump into a remote twin (below).
 
 **Corrected on 2026-09-25, after a review of the recorded answers.** A review
 checked every call above against the owner's own words and the code. The owner
@@ -4080,11 +4081,10 @@ it wins over any earlier wording of this decision, commit 88a1ced5 included.
 - Decision 12: pruning is a manual, receipted `rm_owner` command with a 7-day
   minimum window (the owner's answer). It supersedes [D52](#d52)'s retention
   bullet and [D53](#d53) (2)'s cursor bound.
-- Decision 10: a remote twin restored from a production dump is supported
-  through the twin tooling's `--migrate`, in a changed sequence (the owner's
-  answer).
-- Decisions 5, 9 and 10: the three passes that may apply 0063 first are named,
-  each with its own guard, and all share one transaction rule.
+- Decision 10: its remote twin clause was replaced on 2026-09-28 by the
+  owner's call recorded in decision 10.
+- Decisions 5, 9 and 10: the passes that may apply 0063 first are named, each
+  with its own guard, and all share one transaction rule.
 - Decision 2 is narrowed to `robotmoney`. Decisions 3, 6 and 11 gained
   implementation constraints. Decision 11's reason is recorded as a transport
   preference.
@@ -4199,9 +4199,10 @@ Its receipt records the pre-identity state: that no identity row existed, the
 release the ledger matched, and that ledger's filename list. The pass writes
 `production` with 0063 (decision 9,
 [`smoke-production-spec.md`](technical/smoke-production-spec.md) §9.1). Every
-later run requires the row. Decision 9 names the two rehearsal passes that
-share this pass's identity-first shape. A wave package implements the
-exception.
+later run requires the row. Decision 9 names the one rehearsal pass that
+shares this pass's identity-first shape. Decision 10 names the one-off
+operator intervention that takes the same shape for a remote twin. A wave
+package implements the exception.
 *Why.* Without it, the first production upgrade has no legal path: the tool
 that creates the table refuses because the table is missing. A hand-run
 migration would skip the fence, the ledger and the receipt the migrate run
@@ -4209,9 +4210,9 @@ provides (smoke spec §8.3). An exception keyed on the exact ledger of a known
 release cannot be reached from a partly migrated or hand-edited database. It
 requires a remote connection, `RM_ENV=prod`, a typed owner password and a `y`,
 so no stage tool can take it. The ledger alone cannot tell production from a
-dump of it. So each rehearsal pass of decision 9 is its own exception: it is
-tied to a database its own run restored, it refuses `RM_ENV=prod`, and it
-writes `rehearsal`, never `production`.
+dump of it. So the rehearsal pass of decision 9 is its own exception: it is
+tied to the local container its own run restored, it refuses `RM_ENV=prod`,
+and it writes `rehearsal`, never `production`.
 
 **Decision 6: only `rm_owner` may `DELETE` or `TRUNCATE`.** No runtime role
 (`rm_app`, `rm_worker`, `rm_readonly`) holds `DELETE` or `TRUNCATE` on any
@@ -4278,8 +4279,8 @@ taken from it carry the 0062 row, so a v0.5.0 list would refuse the one
 database the exception exists for. This is the owner's call. It replaces the
 earlier wording that credited the ruling to the owner before he had made it.
 
-**Decision 9: three named passes apply 0063 first and write the identity row
-with it.** Only three passes may run against a database with no
+**Decision 9: two named passes apply 0063 first and write the identity row
+with it.** Only two tool passes may run against a database with no
 `deployment_identity` row. Each applies `0063_deployment_identity` before any
 other pending migration, out of filename order:
 - **The production first pass** (decision 5), `bun run migrate`. It needs a
@@ -4291,16 +4292,16 @@ other pending migration, out of filename order:
   writes `rehearsal`. It checks for itself that its connection is that local
   container. It refuses any remote connection, whatever `RM_ENV`, password or
   acknowledgement says.
-- **The remote twin restore** (decision 10), through the twin tooling's
-  `--migrate`. It runs only on the database the same twin run restored, as
-  that run's own journal or receipt proves. `RM_ENV` must not be `prod`. It
-  writes `rehearsal`. It refuses any target the run did not restore itself.
 
-All three share three rules:
+Both share three rules:
 - 0063's DDL, its `schema_migrations` row and the identity row commit in one
   fenced transaction (smoke spec §2).
 - Before the pass, the ledger must equal the 73-name baseline of decision 8.
-- Out-of-order 0063 is refused outside these three passes.
+- No tool applies 0063 out of order outside these two passes.
+
+No tool pass exists for a remote twin. Decision 10's one-off operator
+intervention is a hand step outside every tool, and it keeps the first two
+rules.
 
 The rest of the pending migrations then take the normal path, and the normal
 path accepts the state a pass leaves. It may apply a pending file that sorts
@@ -4320,8 +4321,8 @@ and a rerun takes the same pass again. This replaces decision 5's first order,
 in which production initialization wrote the row after the whole migrate run.
 
 Criterion 18 gains a process test that kills a migrate between two commits and
-proves the rerun resumes. Each pass gains two kill-and-rerun tests. Kill it
-before 0063 commits: the rerun takes the pass again. Kill it after 0063: the
+proves the rerun resumes. Each of the two passes gains two kill-and-rerun
+tests. Kill it before 0063 commits: the rerun takes the pass again. Kill it after 0063: the
 rerun resumes through the normal path and applies the six lower files.
 Criterion 170 says the identity row commits in the same transaction as 0063. A
 wave package implements this. It also hardens `transactionIdentityStore` so
@@ -4336,34 +4337,51 @@ refused the six lower files as a gap. With the row written first, and the
 normal path accepting exactly the state a pass leaves, every interruption
 after 0063 is an ordinary partial migrate. Naming each pass with its own guard
 keeps the exception from spreading. The ledger cannot tell production from a
-dump of it, so each rehearsal pass proves instead that its own run restored
-the target.
+dump of it, so the rehearsal pass proves instead that its own run restored
+the local container.
 
-**Decision 10: a production dump, local or remote, takes the identity-first
-path and writes `rehearsal`.** A dump of production restored for rehearsal has
-no `deployment_identity` table, because production has none yet.
+**Decision 10: a production dump from before 0063 becomes a twin through `bun
+smoke --local dump`; a remote twin of it needs a one-off operator
+intervention.** A dump of production restored for rehearsal has no
+`deployment_identity` table, because production has none yet.
 - **A `--local dump`.** When its restored ledger equals the production
   baseline (decision 8), smoke's preparation takes decision 9's local pass: it
   applies 0063 first and writes `rehearsal` in the same transaction, before any
   other pending migration. It needs no `RM_ENV=prod`, typed password or `y`,
   because smoke owns the container and generated its owner password (smoke
   spec §5).
-- **A remote twin.** A remote database restored from a pre-0063 production
-  dump is supported through the existing twin tooling's `--migrate`
-  (`scripts/smoke-twin.ts`, `scripts/lib/smoke-twin-rehearsal.ts`). Its
-  sequence changes to three steps: restore; then decision 9's remote twin pass,
-  which applies 0063 and writes `rehearsal` in one transaction; then the
-  remaining migrations. All of it happens before any other stage tool
-  connects.
+- **A remote twin.** Lucas's call on 2026-09-28: a production dump from before
+  0063 cannot become a remote twin through any tool.
+  - The twin tooling and every stage tool refuse a remote target with no
+    `deployment_identity` table. The refusal changes nothing, and its message
+    names the one-off operator intervention.
+  - That intervention is a receipted `rm_owner` step, run by hand.
+    [`docs/runbooks/pre-identity-remote-twin.md`](runbooks/pre-identity-remote-twin.md)
+    documents it. In one transaction, fenced on the target-lock key (smoke
+    spec §2), it applies 0063, records 0063's ledger row and writes
+    `rehearsal`. The ledger must equal the 73-name baseline before it starts.
+    The operator types the `rm_owner` password, and the receipt is the psql
+    session log.
+  - After it, the database is in the state decision 9's normal path accepts.
+    A stage `bun run migrate` or `--migrate` then applies the six files below
+    0063 and the rest.
+  - Otherwise a twin of such a dump uses `bun smoke --local dump`.
 
 A dump with any other pre-identity ledger refuses. A wave package implements
-both paths, and each has its own issue criterion.
+the local pass and the remote refusal, and each has its own issue criterion.
 *Why.* The spec already required every restore of a production dump to write
 `rehearsal`, but a production dump has no table to write it to. Taking the
-order production takes makes the twin a rehearsal of the first production
-upgrade, not of a different path. The owner noted that the twin tooling
-already has a `--migrate` option, so the remote twin needs a changed sequence,
-not a new tool.
+order production takes makes the local twin a rehearsal of the first
+production upgrade, not of a different path. The text of 2026-09-25 said the
+twin tooling's `--migrate` would carry a remote twin in a changed sequence.
+That was wrong: `bun run smoke:twin` and `bun run smoke:twin:once` both run
+`bun smoke --local dump --migrate` (`scripts/smoke-twin.ts`,
+`scripts/lib/smoke-twin-rehearsal.ts`). They restore into a local container
+and never reach a remote database. So a remote pass would be a new tool that
+writes `rehearsal` onto a remote database full of production data. A remote
+database cannot prove who restored it, and the operator who ran the restore
+can. The owner chose a one-off hand step over that tool. The need ends when
+production applies 0063, because every later dump carries the table.
 
 **Decision 11: the scheduler event stream moves from SSE to WebSocket.** The
 subscription that serves the §6.3 event stream of
