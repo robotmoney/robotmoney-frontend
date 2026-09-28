@@ -263,6 +263,13 @@ describe("append-only: every protected table holds data that cannot be removed",
     ).toEqual(declaredBy);
   });
 
+  // Ledger tables a later migration dropped outright, with the migration that
+  // did it. source_payloads: issue #1035 / decision D56 — the ledger keeps no
+  // raw response bodies.
+  const DROPPED_LEDGER_TABLES: Record<string, string> = {
+    source_payloads: "0080_analytics_ledger_compaction.sql",
+  };
+
   test("each ledger family's migration array and LEDGER_IMMUTABLE_FAMILIES are the same set", () => {
     // The same pin as the test above, for the SECOND protected set. Migrations
     // 0057/0058/0059 each install their own guard function over their own
@@ -275,8 +282,17 @@ describe("append-only: every protected table holds data that cannot be removed",
       const ddl = readFileSync(join(import.meta.dir, "..", "migrations", family.migration), "utf8");
       const block = ddl.match(/protected text\[\] := ARRAY\[([\s\S]*?)\];/);
       expect(block, `${family.migration} must still declare its protected array in the shape this test reads`).not.toBeNull();
-      const names = [...block![1]!.replace(/--.*$/gm, "").matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!);
-      expect(names.length, `${family.migration}'s array must not have been parsed as empty`).toBeGreaterThan(0);
+      const declared = [...block![1]!.replace(/--.*$/gm, "").matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!);
+      expect(declared.length, `${family.migration}'s array must not have been parsed as empty`).toBeGreaterThan(0);
+      // An applied migration is never rewritten, so a table a LATER migration
+      // dropped is still in its array. Each such drop is pinned to the
+      // migration that performs it, and only then leaves the expected set.
+      for (const [table, migration] of Object.entries(DROPPED_LEDGER_TABLES)) {
+        if (!declared.includes(table)) continue;
+        const dropping = readFileSync(join(import.meta.dir, "..", "migrations", migration), "utf8");
+        expect(dropping, `${migration} must drop ${table}`).toMatch(new RegExp(`^DROP TABLE ${table};`, "m"));
+      }
+      const names = declared.filter((t) => !(t in DROPPED_LEDGER_TABLES));
       expect([...names].sort(), `${family.migration} and its LEDGER_IMMUTABLE_FAMILIES entry must agree`).toEqual(
         [...family.tables].sort(),
       );
@@ -547,7 +563,9 @@ describe("append-only: the limits the migration header claims, held to the same 
 });
 
 describe("source acquisition ledger: complete immutability and runtime-role boundary", () => {
-  const tables = ["source_acquisitions", "source_acquisition_events", "source_payloads", "source_fetches", "source_value_versions"] as const;
+  // source_payloads was dropped by migration 0080 (issue #1035): the ledger
+  // keeps each response's checksum, never its body.
+  const tables = ["source_acquisitions", "source_acquisition_events", "source_fetches", "source_value_versions"] as const;
 
   test("valid inserts succeed, every table has ENABLE ALWAYS row/statement guards, and UPDATE/DELETE/TRUNCATE are refused", async () => {
     const acquisition = crypto.randomUUID();
@@ -556,7 +574,6 @@ describe("source acquisition ledger: complete immutability and runtime-role boun
     const checksum = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
     await sql`INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity) VALUES (${acquisition}, 'fixture', '1', 'append-only')`;
     await sql`INSERT INTO source_acquisition_events (acquisition_id, sequence, event_type) VALUES (${acquisition}, 1, 'started')`;
-    await sql`INSERT INTO source_payloads (checksum, payload_bytes) VALUES (${checksum}, ${bytes})`;
     await sql`INSERT INTO source_fetches (id, acquisition_id, sequence, request_identity, cache_status, response_status, response_checksum)
               VALUES (${fetchId}, ${acquisition}, 1, '{"method":"GET","url":"https://example.invalid","headers":{}}', 'disabled', 200, ${checksum})`;
     await sql`INSERT INTO source_value_versions (acquisition_id, source_key, market_date, value, revision_kind)

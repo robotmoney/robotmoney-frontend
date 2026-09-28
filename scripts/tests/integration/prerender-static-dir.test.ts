@@ -96,6 +96,7 @@ describe("prerendered STATIC_DIR served by the website-server image (no Bun in t
     execFileSync("bash", [join(repoRoot, "scripts", "static-assembly.sh"), staticDir], {
       cwd: repoRoot,
       stdio: "pipe",
+      env: { ...process.env, PRERENDER_REGIME: "off" },
     });
 
     // Build the REAL website-server image from the repo tree — not a stand-in

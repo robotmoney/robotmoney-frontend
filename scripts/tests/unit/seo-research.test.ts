@@ -18,6 +18,7 @@ import {
   renderMeta,
   researchIndex,
   researchRoutes,
+  routeDownloads,
   routeStructuredData,
   routeStructuredDataJson,
 } from "../../../frontend/public/assets/js/app/seo.js";
@@ -314,6 +315,103 @@ describe("structured data details", () => {
 
   test("a legacy address describes the page it renders", () => {
     expect(routeStructuredData("/articles/treasury-allocation")).toEqual(routeStructuredData("/blog/treasury-allocation"));
+  });
+});
+
+// RM-138: the smart contract risks page is an article about an index of cases,
+// and the cases are a dataset with a download. Every id and name in its graph
+// has to be one the page itself carries, or an agent following the graph lands
+// nowhere; the view is read directly here, not through the generator that
+// wrote the lists, so the two are checked against each other.
+describe("the smart contract risks graph (RM-138)", () => {
+  const route = "/smart-contract-risks";
+  const url = ORIGIN + route;
+  const graph = graphOf(routeStructuredData(route));
+  const node = (type: string) => graph.find((n) => n["@type"] === type)!;
+  const view = read("frontend/public/views/smart-contract-risks.html").replace(/<!--[\s\S]*?-->/g, "");
+  const plain = (html: string) => {
+    const text = html.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+    if (/&[a-z#0-9]+;/i.test(text)) throw new Error(`an entity this reader does not decode: ${text}`);
+    return text;
+  };
+  // Each record's heading, in page order: the h3 under the date that opens an
+  // article.rr-case.
+  const cases = Array.from(
+    view.matchAll(/<article class="rr-case"[^>]*>\s*<time\b[^>]*>[^<]*<\/time>\s*<h3 class="[^"]*\brr-case__h\b[^"]*" id="([^"]+)">([\s\S]*?)<\/h3>/g),
+    (m) => ({ id: m[1]!, name: plain(m[2]!) }),
+  );
+  const h4s = Array.from(view.matchAll(/<h4\b[^>]*\sid="([^"]+)"[^>]*>([\s\S]*?)<\/h4>/g), (m) => ({ id: m[1]!, text: plain(m[2]!) }));
+  const ids = new Set(Array.from(view.matchAll(/\sid="([^"]+)"/g), (m) => m[1]));
+
+  test("the page has its 17 records and 8 categories to describe", () => {
+    expect(cases).toHaveLength(17);
+    expect(h4s).toHaveLength(8);
+  });
+
+  test("the ItemList is the records, newest first, by their ids and headings", () => {
+    const list = node("ItemList");
+    expect(list["@id"]).toBe(url + "#incidents");
+    expect(ids.has("incidents"), "the ItemList's fragment names the index table").toBe(true);
+    expect(list.numberOfItems).toBe(17);
+    expect(list.itemListOrder).toBe("https://schema.org/ItemListOrderDescending");
+    expect(list.itemListElement.map((e: Json) => e.position)).toEqual(cases.map((_, i) => i + 1));
+    expect(list.itemListElement.map((e: Json) => e.url)).toEqual(cases.map((c) => `${url}#${c.id}`));
+    expect(list.itemListElement.map((e: Json) => e.name)).toEqual(cases.map((c) => c.name));
+    for (const e of list.itemListElement) expect(e["@type"]).toBe("ListItem");
+    expect(node("TechArticle").mainEntity["@id"]).toBe(list["@id"]);
+  });
+
+  test("each DefinedTerm is a Pattern Analysis heading: its id, and its text without the parenthetical", () => {
+    const set = node("DefinedTermSet");
+    expect(set["@id"]).toBe(url + "#common-attack-categories");
+    expect(ids.has("common-attack-categories")).toBe(true);
+    const terms: Json[] = set.hasDefinedTerm;
+    expect(terms.map((t) => t["@id"])).toEqual(h4s.map((h) => `${url}#${h.id}`));
+    expect(terms.map((t) => t.name)).toEqual(h4s.map((h) => h.text.replace(/\s*\([^)]*\)$/, "")));
+    for (const t of terms) expect(t["@type"]).toBe("DefinedTerm");
+  });
+
+  test("the Dataset downloads a file that is here, parses, and holds the same 17 cases", () => {
+    const ds = node("Dataset");
+    expect(ds["@id"]).toBe(url + "#dataset");
+    expect(ds.url).toBe(url);
+    expect(ds.name).not.toContain(EM_DASH);
+    expect(ds.isAccessibleForFree).toBe(true);
+    // By reference: the TechArticle in the same graph names the Organization in full.
+    expect(ds.creator).toEqual({ "@id": ORG_ID });
+    expect(ds.publisher).toEqual({ "@id": ORG_ID });
+    expect(ds.dateModified).toBe(REVISED);
+    expect(ds.isBasedOn["@id"]).toBe(node("TechArticle")["@id"]);
+    // The file's one number per case, amount_usd, is a variable it measures.
+    expect(ds.variableMeasured.map((v: Json) => v.name)).toContain("Amount lost in US dollars");
+    expect(ds.distribution).toHaveLength(1);
+    const [download] = ds.distribution;
+    expect(download["@type"]).toBe("DataDownload");
+    expect(download.encodingFormat).toBe("application/json");
+    expect(download.contentUrl.startsWith(ORIGIN + "/")).toBe(true);
+    const file = JSON.parse(read("frontend/public" + new URL(download.contentUrl).pathname));
+    expect(file.cases.map((c: Json) => c.id)).toEqual(cases.map((c) => c.id));
+    // The prerender links the same file from the page's head.
+    expect(routeDownloads(route).map((d) => d.url)).toEqual([download.contentUrl]);
+  });
+
+  test("the Dataset's coverage runs from the oldest case's month to the newest's", () => {
+    const months = Array.from(view.matchAll(/<article class="rr-case"[\s\S]*?<time[^>]*datetime="(\d{4}-\d{2})"/g), (m) => m[1]!).sort();
+    expect(months).toHaveLength(17);
+    expect(node("Dataset").temporalCoverage).toBe(`${months[0]}/${months.at(-1)}`);
+    expect(node("Dataset").temporalCoverage).toBe("2016-06/2026-05");
+  });
+
+  test("the Dataset's description is 50 to 5000 characters with no em dash; a licence, when there is one, is a URL", () => {
+    const ds = node("Dataset");
+    expect(ds.description.length).toBeGreaterThanOrEqual(50);
+    expect(ds.description.length).toBeLessThanOrEqual(5000);
+    expect(ds.description).not.toContain(EM_DASH);
+    if (ds.license !== undefined) expect(String(ds.license)).toMatch(/^https:\/\//);
+  });
+
+  test("the whole block stays under 8 KB minified", () => {
+    expect(Buffer.byteLength(routeStructuredDataJson(route))).toBeLessThanOrEqual(8192);
   });
 });
 

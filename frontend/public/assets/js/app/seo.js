@@ -13,6 +13,10 @@
 // half of that story and the single source of per-route copy the prerender can
 // reuse.
 
+// The smart contract risks page's cases and categories, written from its view
+// by scripts/build-smart-contract-risks-data.ts (RM-138).
+import { SMART_CONTRACT_RISKS } from "./lib/smart-contract-risks-index.js";
+
 const ORIGIN = "https://robotmoney.network";
 const SITE_NAME = "Robot Money";
 const OG_IMAGE = ORIGIN + "/assets/og-image.png";
@@ -20,9 +24,10 @@ const OG_IMAGE = ORIGIN + "/assets/og-image.png";
 // The Organization node the shell's own JSON-LD defines (index.html). Route
 // structured data refers to it by this @id and repeats its name and url, so a
 // reader that does not merge the two script blocks still gets a named author.
+const ORG_ID = ORIGIN + "/#org";
 const ORG = {
   "@type": "Organization",
-  "@id": ORIGIN + "/#org",
+  "@id": ORG_ID,
   name: SITE_NAME,
   url: ORIGIN,
   logo: ORIGIN + "/assets/icon-512.png",
@@ -48,6 +53,19 @@ const REGIME_VARIABLES = [
   { "@type": "PropertyValue", name: "Equity factor index", minValue: 0, maxValue: 1, description: "A weighted mean of 8 equity factor indicators, tracked for context and left out of the composite." },
 ];
 
+// What each record in the smart contract risks download gives, for its
+// Dataset (RM-138). Every string in the file is the page's own wording, so an
+// amount is a phrase ("$25M+ (attacker minted $80M, portion recovered)"); the
+// one number beside it, amount_usd, is that phrase's first dollar figure, the
+// figure the page's index sorts by.
+const SMART_CONTRACT_RISKS_VARIABLES = [
+  { "@type": "PropertyValue", name: "Month", description: "The month of the exploit." },
+  { "@type": "PropertyValue", name: "Amount lost", description: "The loss as the case study states it, with its qualifiers." },
+  { "@type": "PropertyValue", name: "Amount lost in US dollars", description: "Amount lost, the first US dollar figure the case states.", unitText: "USD" },
+  { "@type": "PropertyValue", name: "Parties", description: "The victim and the other parties involved." },
+  { "@type": "PropertyValue", name: "Attack category", description: "The Common Attack Categories that cite the case." },
+];
+
 // The shell's own robots directive (index.html). A route may override it with a
 // `robots` key below; every other route is restored to this on navigation, so a
 // noindex route can never leak its directive onto the next one.
@@ -64,6 +82,11 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
 //              builds and og:type ("article" for the article types).
 //   published  the date the blog index gives the piece, when it gives one.
 //   modified   the last revision (RESEARCH_REVISED).
+// and, where the page is more than an article (RM-138):
+//   mainEntity  the fragment of the node the article is mainly about.
+//   nodes       the page's further @graph nodes, given its URL.
+//   downloads   static files the page publishes beside its text, which the
+//               prerender links from its <head> (routeDownloads).
 /**
  * @typedef {{
  *   title: string;
@@ -74,6 +97,9 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
  *   type?: "Dataset" | "TechArticle" | "BlogPosting" | "CollectionPage";
  *   published?: string;
  *   modified?: string;
+ *   mainEntity?: string;
+ *   nodes?: (url: string) => Record<string, unknown>[];
+ *   downloads?: { path: string; title: string; type: string }[];
  * }} RouteMeta
  */
 /** @type {Record<string, RouteMeta>} */
@@ -221,6 +247,10 @@ const META = {
     type: "TechArticle",
     published: "2026-04-02",
     modified: RESEARCH_REVISED,
+    // The article is mainly its index of cases; the cases are also a dataset.
+    mainEntity: "#incidents",
+    nodes: smartContractRisksNodes,
+    downloads: [{ path: SMART_CONTRACT_RISKS.data, title: "The exploit cases as JSON", type: "application/json" }],
   },
   "/regime-detection": {
     title: "Regime Detection: Prior Art, Methods and Data | Robot Money",
@@ -787,9 +817,77 @@ export function routeStructuredData(pathname) {
       publisher: ORG,
       isPartOf: { "@id": ORIGIN + "/#website" },
       inLanguage: "en",
+      ...(m.mainEntity ? { mainEntity: { "@id": url + m.mainEntity } } : {}),
     };
   }
-  return { "@context": "https://schema.org", "@graph": [node, breadcrumb] };
+  return { "@context": "https://schema.org", "@graph": [node, ...(m.nodes ? m.nodes(url) : []), breadcrumb] };
+}
+
+/**
+ * The smart contract risks page beyond its article (RM-138): the chronology's
+ * cases as an ItemList (the index the article is mainly about), the Pattern
+ * Analysis categories as a DefinedTermSet, and the cases as a Dataset whose
+ * download is the JSON file written from the view. Ids, titles and names come
+ * from lib/smart-contract-risks-index.js, which the same script writes, so
+ * every fragment here is an id on the page and every name is its heading.
+ *
+ * The ItemList and the DefinedTermSet are for agents; Google uses neither.
+ * The Dataset carries no licence until one is chosen.
+ *
+ * @param {string} url the page's canonical URL
+ * @returns {Record<string, unknown>[]}
+ */
+function smartContractRisksNodes(url) {
+  const { cases, categories, listName, termsName, data } = SMART_CONTRACT_RISKS;
+  const byMonth = [...cases].sort((a, b) => a.month.localeCompare(b.month));
+  const oldest = byMonth[0];
+  const newest = byMonth[byMonth.length - 1];
+  return [
+    {
+      "@type": "ItemList",
+      "@id": url + "#incidents",
+      name: listName,
+      numberOfItems: cases.length,
+      itemListOrder: "https://schema.org/ItemListOrderDescending",
+      itemListElement: cases.map((c, i) => ({ "@type": "ListItem", position: i + 1, url: `${url}#${c.id}`, name: c.title })),
+    },
+    {
+      "@type": "DefinedTermSet",
+      "@id": url + "#common-attack-categories",
+      name: termsName,
+      url: url + "#common-attack-categories",
+      hasDefinedTerm: categories.map((t) => ({ "@type": "DefinedTerm", "@id": `${url}#${t.id}`, name: t.name })),
+    },
+    {
+      "@type": "Dataset",
+      "@id": url + "#dataset",
+      name: `DeFi Vault Exploit Case Studies, ${oldest.month.slice(0, 4)} to ${newest.month.slice(0, 4)}`,
+      description: `Case studies of ${cases.length} DeFi exploits, from ${oldest.protocol} in ${oldest.date} to ${newest.protocol} in ${newest.date}. Each gives the month, the protocol, the amount lost as reported and its first US dollar figure, the parties, the attack vector, the root cause and the attack categories that cite it.`,
+      url,
+      // The Organization by reference: the TechArticle beside it names it in full.
+      creator: { "@id": ORG_ID },
+      publisher: { "@id": ORG_ID },
+      isAccessibleForFree: true,
+      temporalCoverage: `${oldest.month}/${newest.month}`,
+      dateModified: RESEARCH_REVISED,
+      isBasedOn: { "@id": url + "#article" },
+      variableMeasured: SMART_CONTRACT_RISKS_VARIABLES,
+      distribution: [{ "@type": "DataDownload", encodingFormat: "application/json", contentUrl: ORIGIN + data }],
+    },
+  ];
+}
+
+/**
+ * The static files a page publishes beside its text (frontend/public/data),
+ * as absolute URLs. scripts/prerender.ts links each one from the page's
+ * <head> as rel="alternate", as it does the API endpoints behind a page.
+ * @param {string} pathname
+ * @returns {{ url: string; title: string; type: string }[]}
+ */
+export function routeDownloads(pathname) {
+  const p = canonicalPath(pathname);
+  const m = META[p] || POST_META[p];
+  return (m?.downloads ?? []).map((d) => ({ url: ORIGIN + d.path, title: d.title, type: d.type }));
 }
 
 /**

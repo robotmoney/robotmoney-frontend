@@ -190,7 +190,8 @@ export class VintageConflictError extends Error {
 
 // Freeze one data vintage: select the boundary-eligible source-value-version
 // ids (loadHistoricalSourceValues), build the canonical manifest, and persist
-// both the manifest and its flat membership atomically. Idempotent on
+// both the manifest and its membership (as runs of consecutive ids — see
+// memberRanges) atomically. Idempotent on
 // (run_id, tool_id) (issue #977 AC8): resubmitting the SAME cutoffs +
 // methodology + build for an already-frozen (run, tool) replays the existing
 // vintage rather than erroring; resubmitting DIFFERENT ones raises
@@ -231,22 +232,22 @@ export async function freezeVintage(input: FreezeVintageInput): Promise<FreezeVi
                 ${tx.json(jsonValue(manifest))}, ${manifest.manifestDigest}, ${members.length})
         RETURNING id`;
       const vintageId = String(vintage!.id);
-      // Batched, never one round trip per member (the same rule as
-      // source-ledger-store.ts's value insert): a vintage spans every series
-      // in the ledger, so this is thousands of rows, and `sql.begin` holds one
-      // of the api's 10 pooled connections for the whole transaction. A
-      // per-row loop here would hold it open for one round trip per member.
-      // postgres.js binds one parameter per cell, so keep each statement well
-      // below PostgreSQL's 65,535-parameter limit (3 columns per row).
+      // One row per RUN of consecutive version ids, not one per member (issue
+      // #1035): see memberRanges below. Still batched, never one round trip per
+      // row: `sql.begin` holds one of the api's 10 pooled connections for the
+      // whole transaction. postgres.js binds one parameter per cell, so keep
+      // each statement well below PostgreSQL's 65,535-parameter limit (4
+      // columns per row).
       const MEMBER_INSERT_BATCH_SIZE = 10_000;
-      const memberRows = members.map((member) => ({
+      const memberRows = memberRanges(members).map((range) => ({
         vintage_id: vintageId,
-        source_value_version_id: member.versionId,
-        source_key: member.sourceKey,
+        source_value_version_id: range.firstVersionId,
+        last_source_value_version_id: range.lastVersionId,
+        source_key: range.sourceKey,
       }));
       for (let start = 0; start < memberRows.length; start += MEMBER_INSERT_BATCH_SIZE) {
         await tx`
-          INSERT INTO analytics_vintage_members ${tx(memberRows.slice(start, start + MEMBER_INSERT_BATCH_SIZE), "vintage_id", "source_value_version_id", "source_key")}`;
+          INSERT INTO analytics_vintage_members ${tx(memberRows.slice(start, start + MEMBER_INSERT_BATCH_SIZE), "vintage_id", "source_value_version_id", "last_source_value_version_id", "source_key")}`;
       }
       return { vintageId, manifest, memberCount: members.length, replayed: false };
     });
@@ -258,6 +259,49 @@ export async function freezeVintage(input: FreezeVintageInput): Promise<FreezeVi
     if (code === "23505") return freezeVintage(input);
     throw err;
   }
+}
+
+// Issue #1035: a vintage's membership, stored as runs of CONSECUTIVE
+// source_value_versions ids that share one source_key, instead of one row per
+// member.
+//
+// WHY. Every vintage selects the ledger head of every series — ~172k members in
+// production — and the old one-row-per-member copy wrote all of them again on
+// every freeze: 3.3M analytics_vintage_members rows a day, 1.7 GB in four days.
+// But one acquisition inserts a series' points in one statement, so their ids
+// are consecutive, and a vintage's members are overwhelmingly long unbroken
+// runs of them. A run [first, last] is exact: it contains EVERY id from first
+// to last, and each of those ids is a member. Only strictly consecutive
+// integers are merged — a gap in the id sequence (an aborted insert, or an
+// insert still in flight when the vintage froze) always ends a run, so no id
+// that was not a member at freeze time can ever fall inside one.
+//
+// The resolved membership is therefore the IDENTICAL set of versionIds, and
+// buildVintageManifest over it reproduces manifest_digest bit for bit — which
+// is what loadFrozenVintage's replay proof, and every vintage frozen before
+// this change (one row each, last_source_value_version_id NULL), depend on.
+export interface MemberRange {
+  firstVersionId: string;
+  /** NULL for a single-member row — the shape every pre-#1035 row has. */
+  lastVersionId: string | null;
+  sourceKey: string;
+}
+
+export function memberRanges(members: readonly FrozenSourceValue[]): MemberRange[] {
+  const sorted = [...members]
+    .map((m) => ({ id: BigInt(m.versionId), sourceKey: m.sourceKey }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const ranges: { first: bigint; last: bigint; sourceKey: string }[] = [];
+  for (const m of sorted) {
+    const open = ranges[ranges.length - 1];
+    if (open && open.sourceKey === m.sourceKey && m.id === open.last + 1n) open.last = m.id;
+    else ranges.push({ first: m.id, last: m.id, sourceKey: m.sourceKey });
+  }
+  return ranges.map((r) => ({
+    firstVersionId: r.first.toString(),
+    lastVersionId: r.last === r.first ? null : r.last.toString(),
+    sourceKey: r.sourceKey,
+  }));
 }
 
 export interface FrozenVintage {
@@ -274,6 +318,32 @@ export interface FrozenVintage {
   members: FrozenSourceValue[];
 }
 
+// A vintage's members, resolved from its stored runs (memberRanges above); a
+// single-id row is the one-id run [first, first]. Runs are expanded with
+// generate_series and joined on the id ALONE: a source_key term (or a
+// `BETWEEN` range) in the join lets the planner scan every version of the
+// run's key per member instead of probing the primary key, and the LIMIT 1
+// LATERAL keeps the probe from being flattened into a per-member hash join
+// (see migration 0080's fingerprint for the same shape). The source_key match
+// is checked on the result as a guard: a run can only be written over one key,
+// so a row it drops would be a corrupted run — and the callers' count checks
+// then refuse a membership that no longer matches what was frozen.
+export async function resolveVintageMembers(vintageId: string, db: DbHandle = sql): Promise<FrozenSourceValue[]> {
+  const resolved = (await db`
+    SELECT svv.id, svv.source_key, svv.market_date::text AS market_date,
+           svv.market_instant::text AS market_instant, svv.value, vm.source_key AS run_key
+    FROM analytics_vintage_members vm
+    CROSS JOIN LATERAL generate_series(
+      vm.source_value_version_id,
+      COALESCE(vm.last_source_value_version_id, vm.source_value_version_id)) AS g(id)
+    CROSS JOIN LATERAL (
+      SELECT v.id, v.source_key, v.market_date, v.market_instant, v.value
+      FROM source_value_versions v WHERE v.id = g.id LIMIT 1
+    ) svv
+    WHERE vm.vintage_id = ${vintageId}::bigint`) as unknown as (SourceValueRow & { run_key: string })[];
+  return resolved.filter((r) => r.source_key === r.run_key).map(toFrozen);
+}
+
 // Reload a previously-frozen vintage from the ledger ALONE — no network, no
 // AnalyticsDataSource call (issue #977 AC7's offline replay). Recomputing
 // buildVintageManifest over `members` here must reproduce `manifestDigest`
@@ -285,12 +355,13 @@ export async function loadFrozenVintage(vintageId: string, db: DbHandle = sql): 
            manifest, manifest_digest, member_count
     FROM analytics_data_vintages WHERE id = ${vintageId}::bigint`;
   if (!vintage) return null;
-  const members = (await db`
-    SELECT svv.id, svv.source_key, svv.market_date::text AS market_date,
-           svv.market_instant::text AS market_instant, svv.value
-    FROM analytics_vintage_members vm
-    JOIN source_value_versions svv ON svv.id = vm.source_value_version_id
-    WHERE vm.vintage_id = ${vintageId}::bigint`) as unknown as SourceValueRow[];
+  const members = await resolveVintageMembers(vintageId, db);
+  if (members.length !== Number(vintage.member_count)) {
+    throw new Error(
+      `vintage ${vintageId} resolves to ${members.length} members but was frozen with ${vintage.member_count} — ` +
+        "its membership can no longer reproduce its manifest digest",
+    );
+  }
   return {
     vintageId: String(vintage.id),
     runId: String(vintage.run_id),
@@ -302,8 +373,62 @@ export async function loadFrozenVintage(vintageId: string, db: DbHandle = sql): 
     manifest: vintage.manifest as VintageManifest,
     manifestDigest: vintage.manifest_digest,
     memberCount: vintage.member_count,
-    members: members.map(toFrozen),
+    members,
   };
+}
+
+// Issue #1050: recompute every stored vintage's manifest, series fingerprints,
+// member_count and manifest_digest from the members it resolves to NOW.
+//
+// WHY. Migration 0080 re-points every vintage to the source_value_versions rows
+// the fixed ledger writer would have written (decision D56, amendment for
+// #1050), so the digests frozen over the old writer's rows no longer describe
+// their members. The owner's rule is that the database ends as if the old
+// writer had never run — so each vintage gets exactly the manifest freezeVintage
+// would have stored for these members, and the old digest is overwritten, not
+// kept anywhere.
+//
+// Runs ONLY from the migration runner, inside the transaction that applied
+// 0080 (IN_TRANSACTION_AFTER_MIGRATION in src/db/migrate.ts), as rm_owner. A
+// canonical-JSON SHA-256 in plpgsql would have to reproduce JavaScript's number
+// formatting byte for byte; this reuses buildVintageManifest instead, the one
+// function every freeze and every replay already uses. analytics_data_vintages
+// is immutable, so its guard is disarmed for these UPDATEs and re-armed (ENABLE
+// ALWAYS) before returning; an error rolls the whole migration back with it.
+export async function rebuildVintageManifests(db: DbHandle): Promise<{ vintages: number; rewritten: number }> {
+  const vintages = (await db`
+    SELECT id::text AS id, knowledge_time_cutoff::text AS knowledge_time_cutoff,
+           market_time_cutoff::text AS market_time_cutoff, methodology_version_id::text AS methodology_version_id,
+           build_identity, manifest_digest, member_count
+    FROM analytics_data_vintages ORDER BY id`) as unknown as {
+    id: string;
+    knowledge_time_cutoff: string;
+    market_time_cutoff: string;
+    methodology_version_id: string;
+    build_identity: string;
+    manifest_digest: string;
+    member_count: number;
+  }[];
+  if (vintages.length === 0) return { vintages: 0, rewritten: 0 };
+  await db.unsafe("ALTER TABLE analytics_data_vintages DISABLE TRIGGER analytics_data_vintages_immutable");
+  await db.unsafe("ALTER TABLE analytics_data_vintages DISABLE TRIGGER analytics_data_vintages_immutable_row");
+  let rewritten = 0;
+  for (const v of vintages) {
+    const members = await resolveVintageMembers(v.id, db);
+    const { manifest } = buildVintageManifest(
+      members, v.methodology_version_id, v.build_identity, v.knowledge_time_cutoff, v.market_time_cutoff,
+    );
+    if (manifest.manifestDigest === v.manifest_digest && members.length === Number(v.member_count)) continue;
+    await db`
+      UPDATE analytics_data_vintages
+      SET manifest = ${db.json(jsonValue(manifest))}, manifest_digest = ${manifest.manifestDigest},
+          member_count = ${members.length}
+      WHERE id = ${v.id}::bigint`;
+    rewritten++;
+  }
+  await db.unsafe("ALTER TABLE analytics_data_vintages ENABLE ALWAYS TRIGGER analytics_data_vintages_immutable");
+  await db.unsafe("ALTER TABLE analytics_data_vintages ENABLE ALWAYS TRIGGER analytics_data_vintages_immutable_row");
+  return { vintages: vintages.length, rewritten };
 }
 
 // Read-back by (run_id, tool_id) — the natural key the API's idempotent

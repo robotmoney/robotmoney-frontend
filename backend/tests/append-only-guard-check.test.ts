@@ -464,20 +464,20 @@ describe("the runtime check under the PRODUCTION role (rm_app), which holds no D
     // What the boot check can still see as rm_app: the trigger inventory, which
     // needs no privilege on the table at all.
     const family = LEDGER_IMMUTABLE_FAMILIES.find((f) => f.migration === "0057_source_acquisition_ledger.sql")!;
-    const names = ledgerTriggerNames(family, "source_payloads");
-    await sql.unsafe(`DROP TRIGGER ${names.row} ON source_payloads`);
+    const names = ledgerTriggerNames(family, "source_fetches");
+    await sql.unsafe(`DROP TRIGGER ${names.row} ON source_fetches`);
     try {
       const result = await checkAppendOnlyGuard(app);
       expect(result.status).toBe("disarmed");
       expect(result.problems).toEqual([
-        expect.stringContaining(`source_payloads: the row-level trigger '${names.row}' is MISSING`),
+        expect.stringContaining(`source_fetches: the row-level trigger '${names.row}' is MISSING`),
       ]);
     } finally {
       await sql.unsafe(
-        `CREATE TRIGGER ${names.row} BEFORE UPDATE OR DELETE ON public.source_payloads
+        `CREATE TRIGGER ${names.row} BEFORE UPDATE OR DELETE ON public.source_fetches
          FOR EACH ROW EXECUTE FUNCTION public.${family.functionName}()`,
       );
-      await sql.unsafe(`ALTER TABLE public.source_payloads ENABLE ALWAYS TRIGGER ${names.row}`);
+      await sql.unsafe(`ALTER TABLE public.source_fetches ENABLE ALWAYS TRIGGER ${names.row}`);
     }
   });
 });

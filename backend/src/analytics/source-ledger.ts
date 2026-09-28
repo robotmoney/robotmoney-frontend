@@ -11,8 +11,12 @@ export interface SourceFetchEvidence {
   requestIdentity: { method: "GET"; url: string; headers: Record<string, string> };
   cacheStatus: CacheStatus;
   responseStatus: number | null;
+  // SHA-256 of the response body: a fingerprint of what the source returned,
+  // NOT a key into stored bytes. Issue #1035 (decision D56): the ledger keeps no
+  // raw response bodies — every fetch returns a series' whole history, so
+  // storing each body stored that history again per fetch. What the ledger
+  // records is the normalized values and their revisions (source_value_versions).
   responseChecksum: string | null;
-  payloadBase64: string | null;
   providerReleaseId: string | null;
   errorDetail: string | null;
 }
@@ -96,7 +100,6 @@ export function recordSourceFetch(input: {
     cacheStatus: input.cacheStatus,
     responseStatus: input.responseStatus ?? null,
     responseChecksum: payload ? payloadChecksum(payload) : null,
-    payloadBase64: payload ? Buffer.from(payload).toString("base64") : null,
     providerReleaseId: input.providerReleaseId ?? null,
     errorDetail: input.error === undefined ? null : safeError(input.error),
   });

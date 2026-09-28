@@ -4,8 +4,10 @@
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type postgresTypes from "postgres";
 import { sql, closeDb, setDatabase } from "./client.ts";
 import { seed, seedSmokeJobSchedules } from "./seed.ts";
+import { rebuildVintageManifests } from "../analytics/store/run-ledger-store.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "migrations");
 
@@ -48,26 +50,89 @@ export async function migrate(options: { seedSmokeSchedules?: boolean } = {}): P
     (await sql<{ name: string }[]>`SELECT name FROM schema_migrations`).map((r) => r.name),
   );
 
+  const appliedNow: string[] = [];
   for (const file of files) {
     if (applied.has(file)) continue;
-    const ddl = await readFile(join(migrationsDir, file), "utf8");
-    await sql.begin(async (tx) => {
-      // 0053 creates rm_owner and transfers existing objects.  Every later
-      // migration runs as that non-login owner through a short-lived bootstrap
-      // connection that has been granted SET ROLE capability.
-      if (file >= "0054_rm_worker_allowlist.sql") await tx.unsafe("SET LOCAL ROLE rm_owner");
-      await tx.unsafe(ddl);
-      await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
-    });
+    await applyMigrationFile(sql, file);
     console.log(`migrated: ${file}`);
+    appliedNow.push(file);
   }
   console.log(`migrations up to date (${files.length} total)`);
+  await reclaimAfterMigrations(sql, appliedNow);
 
   // Seed required rows (job_schedules etc.) after schema is current. Idempotent,
   // so safe on every boot — gives the worker recurring work without a manual
   // admin trigger. See seed.ts.
   await seed();
   if (options.seedSmokeSchedules) await seedSmokeJobSchedules();
+}
+
+// Apply one migration file: its SQL, then any TypeScript step it needs, then
+// its schema_migrations row — all in ONE transaction, so a failure anywhere
+// leaves no trace of the file at all. Exported so a migration-replay test
+// applies a file exactly as a deploy does, rather than a copy of this loop.
+export async function applyMigrationFile(db: postgresTypes.Sql<{}>, file: string): Promise<void> {
+  const ddl = await readFile(join(migrationsDir, file), "utf8");
+  await db.begin(async (tx) => {
+    // 0053 creates rm_owner and transfers existing objects.  Every later
+    // migration runs as that non-login owner through a short-lived bootstrap
+    // connection that has been granted SET ROLE capability.
+    if (file >= "0054_rm_worker_allowlist.sql") await tx.unsafe("SET LOCAL ROLE rm_owner");
+    await tx.unsafe(ddl);
+    await IN_TRANSACTION_AFTER_MIGRATION[file]?.(tx);
+    await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
+  });
+}
+
+// Work a migration needs that SQL cannot do well, run by the runner right
+// after that file's SQL, INSIDE the same transaction and as the same role
+// (rm_owner). It runs once, only in the run that applies the file, and a throw
+// rolls the file back with it. Keep this list short: each entry is a step a
+// reader of the .sql file cannot see there, so the file must say it exists.
+//
+// 0080 (issue #1050): after the SQL re-points every vintage to the rows the
+// fixed ledger writer would have written, each vintage's manifest and
+// manifest_digest are recomputed with the same canonical-JSON SHA-256 every
+// freeze uses (analytics/run-ledger.ts buildVintageManifest). Reproducing that
+// in plpgsql would mean matching JavaScript's number formatting byte for byte.
+export const IN_TRANSACTION_AFTER_MIGRATION: Readonly<Record<string, (tx: postgresTypes.TransactionSql<{}>) => Promise<unknown>>> = {
+  "0080_analytics_ledger_compaction.sql": rebuildVintageManifests,
+};
+
+// Tables a migration rewrote heavily enough that its DELETEs left most of the
+// table as dead tuples. A DELETE frees nothing on disk: the space is only
+// reused by later inserts, so a compaction migration alone leaves the database
+// exactly as large as before. VACUUM FULL rewrites each table and its indexes
+// compactly and returns the space to the operating system.
+//
+// It cannot run inside the migration (VACUUM refuses a transaction block, and
+// every migration is one), so the runner does it, right after the migration
+// commits — once, ONLY in the run that applied that migration, never on an
+// ordinary boot. It runs as rm_owner on the migration connection, because only
+// a table's owner may VACUUM FULL it; no grant changes.
+//
+// Each table is held under ACCESS EXCLUSIVE for the length of its own rewrite,
+// which is proportional to its LIVE rows — small once 0080 has removed the
+// duplication (issue #1035).
+export const RECLAIM_AFTER_MIGRATION: Readonly<Record<string, readonly string[]>> = {
+  "0080_analytics_ledger_compaction.sql": ["source_value_versions", "analytics_vintage_members", "analytics_overwrite_events"],
+};
+
+export async function reclaimAfterMigrations(db: postgresTypes.Sql<{}>, appliedNow: readonly string[]): Promise<void> {
+  const tables = appliedNow.flatMap((file) => RECLAIM_AFTER_MIGRATION[file] ?? []);
+  if (tables.length === 0) return;
+  const conn = await db.reserve();
+  try {
+    await conn.unsafe("SET ROLE rm_owner");
+    for (const table of tables) {
+      const started = Date.now();
+      await conn.unsafe(`VACUUM (FULL, ANALYZE) public.${table}`);
+      console.log(`reclaimed: ${table} (VACUUM FULL, ${Date.now() - started}ms)`);
+    }
+  } finally {
+    await conn.unsafe("RESET ROLE").catch(() => {});
+    conn.release();
+  }
 }
 
 // Run directly: `bun run src/db/migrate.ts`

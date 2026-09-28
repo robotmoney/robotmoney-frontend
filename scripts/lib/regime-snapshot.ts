@@ -10,8 +10,9 @@
 //     26 indicators and the correlation table, as text and tables;
 //   - the route's schema.org Dataset: the date and each headline figure.
 //
-// It is as fresh as the last prerender, and it says its date. The host re-runs
-// the prerender daily so it follows the analytics refresh.
+// It is as fresh as the last prerender, and it says its date. The prerender
+// runs when a stack assembles its static files; a daily re-run, so the page
+// follows the analytics refresh, is #1043.
 //
 // Pure functions over the snapshot DTO, apart from the fetch, so the unit test
 // pins the output without running a prerender.

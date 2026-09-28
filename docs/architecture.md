@@ -2602,7 +2602,10 @@ from this repo's own tables and pipelines instead of Supabase.
   `job_schedules` (`backend/src/db/seed.ts`) at the same cadence as the legacy
   crons. Within that ported set, coverage is uneven by design:
   - **Live and wired**: coin market data (CoinGecko `/coins/markets` +
-    DexScreener best-pair fallback), Virtuals/x402 revenue sync, ERC-4626
+    DexScreener best-pair fallback; with `COINGECKO_API_KEY` set in the worker
+    lanes the call uses the paid Pro host `pro-api.coingecko.com` with the
+    `x-cg-pro-api-key` header, and unset or blank keeps the keyless public
+    host — the worker logs the tier and host, never the key, issue #1047), Virtuals/x402 revenue sync, ERC-4626
     vault TVL reads (Base RPC), coverage-score recomputation, and (issue #346)
     per-wallet native-ETH balance on chain `"base"` — reusing the SAME
     batched-Multicall3 + GeckoTerminal-priced + persisted-fallback valuation

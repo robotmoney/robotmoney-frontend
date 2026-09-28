@@ -382,10 +382,11 @@ export const LEDGER_IMMUTABLE_FAMILIES: readonly LedgerImmutableFamily[] = [
     messagePrefix: "source ledger is immutable",
     statementSuffix: "_immutable",
     rowSuffix: "_immutable_row",
+    // source_payloads is gone: migration 0080 dropped it (issue #1035,
+    // decision D56 — the ledger keeps no raw response bodies).
     tables: [
       "source_acquisitions",
       "source_acquisition_events",
-      "source_payloads",
       "source_fetches",
       "source_value_versions",
     ],

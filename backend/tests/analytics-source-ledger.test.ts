@@ -95,19 +95,18 @@ test("every sources.ts provider variant records requests, ratio/fallback legs, p
   expect(shillerFetches).toBe(2); // primary + fallback/backfill leg
 
   const [fred] = await sql`
-    SELECT f.provider_release_id, f.response_checksum, p.payload_bytes
+    SELECT f.provider_release_id, f.response_checksum
     FROM source_fetches f JOIN source_acquisitions a ON a.id=f.acquisition_id
-    JOIN source_payloads p ON p.checksum=f.response_checksum
     WHERE a.provider='fred' LIMIT 1`;
   const exact = new TextEncoder().encode("DATE,VALUE\n2024-01-01,1.25\n");
   expect(fred.provider_release_id).toBe("fred-release-1");
+  // The body's fingerprint, not the body (issue #1035, decision D56).
   expect(fred.response_checksum).toBe(payloadChecksum(exact));
-  expect(Buffer.from(fred.payload_bytes)).toEqual(Buffer.from(exact));
   const [{ values }] = await sql`SELECT count(*)::int AS values FROM source_value_versions WHERE acquisition_id IS NOT NULL`;
   expect(values).toBeGreaterThan(INDICATORS.length);
 });
 
-test("cache hits remain independent immutable fetch evidence with checksum-addressed exact bytes", async () => {
+test("cache hits remain independent immutable fetch evidence, each fingerprinting the exact bytes it returned", async () => {
   const dir = await mkdtemp(join(tmpdir(), "rm-source-ledger-"));
   process.env.HTTP_FETCH_CACHE_TTL_MS = "60000";
   process.env.FETCH_CACHE_DIR = dir;
@@ -119,18 +118,18 @@ test("cache hits remain independent immutable fetch evidence with checksum-addre
     }
     expect(calls).toBe(1);
     const rows = await sql`
-      SELECT f.cache_status, p.payload_bytes FROM source_fetches f
+      SELECT f.cache_status, f.response_checksum FROM source_fetches f
       JOIN source_acquisitions a ON a.id=f.acquisition_id
-      JOIN source_payloads p ON p.checksum=f.response_checksum
       WHERE a.cache_identity='cache-test' ORDER BY a.knowledge_time, f.sequence`;
     expect(rows.map((r) => r.cache_status)).toEqual(["miss", "hit"]);
-    expect(rows.every((r) => Buffer.from(r.payload_bytes).toString() === "DATE,VALUE\n2024-01-01,9\n")).toBe(true);
+    const exact = payloadChecksum(new TextEncoder().encode("DATE,VALUE\n2024-01-01,9\n"));
+    expect(rows.every((r) => r.response_checksum === exact)).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test("unchanged and revised observations retain every version in one deterministic prior-version chain", async () => {
+test("a re-observation adds no version and a revision adds one, in one deterministic prior-version chain", async () => {
   for (const value of [10, 10, 11]) {
     await captureSourceAcquisition({ provider: "fixture", sourceKey: "series:revision", parserVersion: "fixture:1", cacheIdentity: String(value) }, sink,
       async () => [{ date: "2024-01-01", value }]);
@@ -138,10 +137,129 @@ test("unchanged and revised observations retain every version in one determinist
   const rows = await sql`
     SELECT id, prior_version_id, revision_kind, value FROM source_value_versions
     WHERE source_key='series:revision' ORDER BY id`;
-  expect(rows.map((r) => r.revision_kind)).toEqual(["initial", "unchanged", "revision"]);
+  // The second acquisition of 10 is evidence that a fetch happened (its
+  // acquisition, fetches and payload are all kept) but not a new version.
+  expect(rows.map((r) => r.revision_kind)).toEqual(["initial", "revision"]);
+  expect(rows.map((r) => Number(r.value))).toEqual([10, 11]);
   expect(rows[0]!.prior_version_id).toBeNull();
   expect(String(rows[1]!.prior_version_id)).toBe(String(rows[0]!.id));
-  expect(String(rows[2]!.prior_version_id)).toBe(String(rows[1]!.id));
+  const [{ acquisitions }] = await sql`
+    SELECT count(*)::int AS acquisitions FROM source_acquisitions WHERE cache_identity IN ('10', '11')`;
+  expect(acquisitions).toBe(3);
+});
+
+// ── Issue #1035: re-observations and float noise add no versions ────────────
+// A Yahoo-derived key, because that is the one D56 gives a non-zero tolerance
+// (analytics/source-tolerance.ts); an exact key is covered by the case above.
+const NOISY_KEY = "backtest:ETH-USD"; // no other case in this file writes it
+const HISTORY = Array.from({ length: 40 }, (_, i) => ({
+  date: new Date(Date.UTC(2023, 0, i + 1)).toISOString().slice(0, 10),
+  value: 18.719999313354492 + i,
+}));
+
+async function acquireNoisy(points: { date: string; value: number }[], provenance: string = "live"): Promise<void> {
+  await saveSourceAcquisition({
+    id: randomUUID(),
+    provider: "yahoo",
+    parserVersion: "yahoo:1",
+    cacheIdentity: `noise-${randomUUID()}`,
+    requestedByRunId: null,
+    events: [{ type: "started", detail: null }, { type: "succeeded", detail: null }],
+    fetches: [],
+    values: points.map((p) => ({ sourceKey: NOISY_KEY, marketDate: p.date, marketInstant: null, value: p.value, provenance })),
+  });
+}
+
+async function noisyVersions(): Promise<{ id: string; market_date: string; value: number; revision_kind: string; provenance: string | null }[]> {
+  return (await sql`
+    SELECT id::text AS id, market_date::text AS market_date, value, revision_kind, provenance
+    FROM source_value_versions WHERE source_key = ${NOISY_KEY} ORDER BY id`) as never;
+}
+
+test("issue #1035 AC1: an acquisition whose values all equal the ledger head adds zero source_value_versions rows", async () => {
+  await acquireNoisy(HISTORY);
+  const [{ total: before }] = await sql`SELECT count(*)::int AS total FROM source_value_versions`;
+  expect((await noisyVersions()).length).toBe(HISTORY.length);
+
+  // The whole history re-fetched, twice — what every production fetch did.
+  await acquireNoisy(HISTORY);
+  await acquireNoisy(HISTORY);
+
+  const [{ total: after }] = await sql`SELECT count(*)::int AS total FROM source_value_versions`;
+  expect(after - before).toBe(0);
+  expect((await noisyVersions()).every((v) => v.revision_kind === "initial")).toBe(true);
+  // The re-fetches themselves are still on the record.
+  const [{ n }] = await sql`
+    SELECT count(*)::int AS n FROM source_acquisitions WHERE cache_identity LIKE 'noise-%'`;
+  expect(n).toBe(3);
+});
+
+test("issue #1035 AC2: a value within the source's tolerance adds no revision; one outside it adds exactly one", async () => {
+  const date = "2023-06-01";
+  const base = 4523.68017578125;
+  await acquireNoisy([{ date, value: base }]);
+
+  // Float32 jitter: a relative 1e-7 off the head, well inside D56's 1e-6.
+  const jitter = base * (1 + 1e-7);
+  expect(jitter).not.toBe(base);
+  await acquireNoisy([{ date, value: jitter }]);
+  let versions = (await noisyVersions()).filter((v) => v.market_date === date);
+  expect(versions.map((v) => v.revision_kind)).toEqual(["initial"]);
+  expect(Number(versions[0]!.value)).toBe(base);
+
+  // A real revision: a relative 1e-5, ten times the tolerance.
+  const revised = base * (1 + 1e-5);
+  await acquireNoisy([{ date, value: revised }]);
+  versions = (await noisyVersions()).filter((v) => v.market_date === date);
+  expect(versions.map((v) => v.revision_kind)).toEqual(["initial", "revision"]);
+  expect(Number(versions[1]!.value)).toBe(revised);
+
+  // The tolerance is measured against the NEW head, so re-fetching the
+  // revised value (with its own jitter) adds nothing further.
+  await acquireNoisy([{ date, value: revised * (1 - 1e-7) }]);
+  versions = (await noisyVersions()).filter((v) => v.market_date === date);
+  expect(versions).toHaveLength(2);
+});
+
+test("issue #1035: a relabel within tolerance is one 'unchanged' version carrying the head value, the same rule raw history applies", async () => {
+  const date = "2023-07-01";
+  const base = 31.5;
+  await acquireNoisy([{ date, value: base }], "seed");
+  await acquireNoisy([{ date, value: base * (1 + 1e-7) }], "live");
+  const versions = (await noisyVersions()).filter((v) => v.market_date === date);
+  expect(versions.map((v) => [v.revision_kind, Number(v.value), v.provenance])).toEqual([
+    ["initial", base, "seed"],
+    ["unchanged", base, "live"],
+  ]);
+});
+
+// ── Issue #1035: the ledger keeps no raw response bodies ────────────────────
+test("issue #1035: an acquisition whose fetches carry response bodies stores no body, and each fetch keeps its response_checksum", async () => {
+  // source_payloads no longer exists (migration 0080): there is nowhere a body
+  // could be written, and this proves the migration really removed it here.
+  const [{ table }] = await sql`SELECT to_regclass('public.source_payloads')::text AS table`;
+  expect(table).toBeNull();
+
+  const bodies = ["DATE,VALUE\n2024-01-01,1\n", "DATE,VALUE\n2024-01-01,2\n"];
+  globalThis.fetch = (() => Promise.resolve(new Response(bodies.shift()!))) as unknown as typeof fetch;
+  await captureSourceAcquisition({ provider: "fred", sourceKey: "series:bodies", parserVersion: "fred:1", cacheIdentity: "bodies-a" }, sink,
+    () => fetchFred("BODIES_A"));
+  await captureSourceAcquisition({ provider: "fred", sourceKey: "series:bodies", parserVersion: "fred:1", cacheIdentity: "bodies-b" }, sink,
+    () => fetchFred("BODIES_B"));
+  const rows = await sql`
+    SELECT a.cache_identity, f.response_checksum FROM source_fetches f
+    JOIN source_acquisitions a ON a.id = f.acquisition_id
+    WHERE a.cache_identity IN ('bodies-a', 'bodies-b') ORDER BY a.cache_identity`;
+  expect(rows.map((r) => [r.cache_identity, r.response_checksum])).toEqual([
+    ["bodies-a", payloadChecksum(new TextEncoder().encode("DATE,VALUE\n2024-01-01,1\n"))],
+    ["bodies-b", payloadChecksum(new TextEncoder().encode("DATE,VALUE\n2024-01-01,2\n"))],
+  ]);
+  // No column anywhere in the source ledger holds a body.
+  const [{ bytea }] = await sql`
+    SELECT count(*)::int AS bytea FROM information_schema.columns
+    WHERE table_schema = 'public' AND data_type = 'bytea'
+      AND table_name IN ('source_acquisitions', 'source_acquisition_events', 'source_fetches', 'source_value_versions')`;
+  expect(bytea).toBe(0);
 });
 
 test("concurrent revisions serialize into a single chain without a duplicate successor or lost acquisition", async () => {
@@ -329,7 +447,6 @@ test("a sweep-sized acquisition persists in a handful of statements, not two per
       cacheStatus: "miss" as const,
       responseStatus: 200,
       responseChecksum: payloadChecksum(body),
-      payloadBase64: Buffer.from(body).toString("base64"),
       providerReleaseId: null,
       errorDetail: null,
     };
@@ -348,17 +465,16 @@ test("a sweep-sized acquisition persists in a handful of statements, not two per
   });
   const elapsed = Date.now() - startedAt;
 
-  const [{ fetchRows, payloadRows }] = await sql`
-    SELECT (SELECT count(*)::int FROM source_fetches f
-              JOIN source_acquisitions a ON a.id = f.acquisition_id
-             WHERE a.cache_identity = 'sweep') AS "fetchRows",
-           (SELECT count(*)::int FROM source_payloads
-             WHERE checksum = ANY(${payloads.map((p) => payloadChecksum(new TextEncoder().encode(p)))}::text[])) AS "payloadRows"`;
+  const [{ fetchRows, checksums }] = await sql`
+    SELECT count(*)::int AS "fetchRows", count(DISTINCT f.response_checksum)::int AS checksums
+    FROM source_fetches f
+    JOIN source_acquisitions a ON a.id = f.acquisition_id
+    WHERE a.cache_identity = 'sweep'`;
   // Every attempt still gets its own row — batching changes how the write is
   // issued, never what is recorded.
   expect(fetchRows).toBe(300);
-  // Content-addressed: 300 fetches over 8 distinct bodies store 8 payloads.
-  expect(payloadRows).toBe(8);
+  // 300 fetches over 8 distinct bodies: 8 distinct fingerprints.
+  expect(checksums).toBe(8);
   // Far below the 10s the api would be cut off at. Generous on purpose: this
   // is a floor against the per-row regression, not a benchmark.
   expect(elapsed).toBeLessThan(5_000);
