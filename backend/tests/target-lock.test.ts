@@ -1050,17 +1050,25 @@ describe("every fenced mutation's REAL path waits on a competitor's fence, holdi
     });
   }, 60_000);
 
-  test("IDENTITY WRITE: setProductionIdentity waits for the competitor, then writes inside its own fence", async () => {
+  test("IDENTITY STEP: setProductionIdentity waits for the competitor, then reads the production row inside its own fence and rewrites nothing", async () => {
     const { setProductionIdentity } = await import("../scripts/set-identity.ts");
-    // The production path writes onto a table with no row (§9.1), so this copy
-    // is left unenrolled.
+    // D55 (9): the first production migrate writes `production` in the
+    // transaction that creates the table (covered by MIGRATION's fence above),
+    // so §9.1 step 4 only reads and reports the row, inside the fence so no
+    // competitor can move it mid-read. The copy carries the row the first
+    // migrate leaves.
     await withEnrolledCopy(async (url, admin) => {
-      const order = await competitorBlocks(url, "deployment_identity", () =>
-        setProductionIdentity({ ownerUrl: asRole(url, "rm_owner", OWNER_PASSWORD), rmEnv: "prod", confirmed: true, note: "fence test" }),
-      );
+      await admin`INSERT INTO deployment_identity (kind, note) VALUES ('production', 'first migrate')`;
+      const [before] = await admin<{ written_at: string }[]>`SELECT written_at::text AS written_at FROM deployment_identity`;
+      let result: Awaited<ReturnType<typeof setProductionIdentity>> | undefined;
+      const order = await competitorBlocks(url, "deployment_identity", async () => {
+        result = await setProductionIdentity({ ownerUrl: asRole(url, "rm_owner", OWNER_PASSWORD), rmEnv: "prod", confirmed: true, note: "fence test" });
+      });
       expect(order).toEqual(expected("deployment_identity"));
-      const [row] = await admin<{ kind: string }[]>`SELECT kind FROM deployment_identity`;
-      expect(row?.kind).toBe("production");
+      expect(result?.written).toBe(false);
+      expect(result?.row.kind).toBe("production");
+      const rows = await admin<{ kind: string; note: string | null; written_at: string }[]>`SELECT kind, note, written_at::text AS written_at FROM deployment_identity`;
+      expect([...rows]).toEqual([{ kind: "production", note: "first migrate", written_at: before!.written_at }]);
     }, false);
   }, 60_000);
 
