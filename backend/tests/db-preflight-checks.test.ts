@@ -818,9 +818,10 @@ describe("check 2 fails before the append-only grant transition and passes after
 
     // The other direction: nothing the transition protects is unknown to
     // check 2. D53 (2) moves `swarm_stream_events` to grant-only protection
-    // (its triggers go so rm_owner can prune past the oldest servable cursor;
-    // DELETE/TRUNCATE stay revoked from the runtime roles, which is what 0072's
-    // REVOKE does). So the comparison is against check 2's own protected set,
+    // (its triggers go so rm_owner can prune it, only with the manual
+    // `bun run prune` and only past its retention window, D55 (12); DELETE and
+    // TRUNCATE stay revoked from every runtime role, as D55 (6) does for every
+    // table). So the comparison is against check 2's own protected set,
     // not APPEND_ONLY_TABLES: a table the transition revokes on must stay one
     // check 2 refuses a DELETE grant on.
     const protectedSet = new Set(protectedFromDeletion());
@@ -856,18 +857,40 @@ describe("check 2 fails before the append-only grant transition and passes after
     expect(named.sort()).toEqual(["rm_app", "rm_worker"]);
   });
 
-  test("check 2's grant-only list is exactly grants.sql's runtime_delete_revoked — the two cannot drift apart", () => {
-    // grants.sql re-revokes DELETE/TRUNCATE on these on every reconciliation;
-    // check 2 is what refuses a database where a grant re-widened one since.
-    // A table in one list and not the other is either revoked with nothing
-    // refusing its return, or refused with nothing revoking it.
-    const grants = readFileSync(join(import.meta.dir, "..", "schema", "grants.sql"), "utf8");
-    expect([...RUNTIME_DELETE_REVOKED_TABLES].sort()).toEqual(declaredArray(grants, "runtime_delete_revoked").sort());
+  test("grants.sql re-revokes DELETE/TRUNCATE on every relation check 2 inspects, so the grant-only tables need no list of their own to drift from", async () => {
+    // D55 (6) replaced grants.sql's `runtime_delete_revoked` array with one
+    // sweep: every relation kind check 2 inspects (table, partitioned table,
+    // view, foreign table) loses DELETE and TRUNCATE from every runtime role on
+    // every reconciliation. check 2's RUNTIME_DELETE_REVOKED_TABLES now only
+    // gives two tables a reason of their own in the refusal; the revocation
+    // itself cannot miss them, because it names no table at all.
+    const grants = readFileSync(join(import.meta.dir, "..", "schema", "grants.sql"), "utf8").replace(/--.*$/gm, "");
+    expect(grants).not.toMatch(/runtime_delete_revoked/);
+    const revoke = "EXECUTE format('REVOKE DELETE, TRUNCATE ON %s FROM rm_app, rm_worker, rm_readonly', rel.ident);";
+    expect(grants).toContain(revoke);
+    // The sweep's own SELECT: the last `FOR rel IN` before that REVOKE.
+    const head = grants.slice(0, grants.indexOf(revoke));
+    const select = head.slice(head.lastIndexOf("FOR rel IN"));
+    expect(select).toContain("c.relkind IN ('r', 'p', 'v', 'f')");
+    expect(select).not.toMatch(/relname\s*=\s*ANY/);
+
+    // And on the migrated clone: no runtime role holds either privilege on the
+    // tables check 2 names, or on any other relation.
+    for (const table of RUNTIME_DELETE_REVOKED_TABLES) expect(protectedFromDeletion()).toContain(table);
+    const held = (await sql`
+      SELECT r.rolname AS role, c.relname AS name, p.privilege
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      CROSS JOIN (VALUES ('rm_app'), ('rm_worker'), ('rm_readonly')) AS r(rolname)
+      CROSS JOIN (VALUES ('DELETE'), ('TRUNCATE')) AS p(privilege)
+      WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'f')
+        AND has_table_privilege(r.rolname, c.oid, p.privilege)`) as unknown as { role: string; name: string; privilege: string }[];
+    expect(held).toEqual([]);
   });
 
   test("check 2 refuses a runtime-role DELETE or TRUNCATE grant on swarm_stream_head, the event log's counter row", async () => {
-    // Routed from wave 3: grants.sql lists the counter row in
-    // runtime_delete_revoked, and check 2 did not — so a hand-widened DELETE on
+    // Routed from wave 3: grants.sql's revoke covered the counter row, and
+    // check 2 did not — so a hand-widened DELETE on
     // it passed preflight. It is in neither APPEND_ONLY_TABLES nor a ledger
     // family, so only RUNTIME_DELETE_REVOKED_TABLES can protect it.
     expect(RUNTIME_DELETE_REVOKED_TABLES).toContain("swarm_stream_head");

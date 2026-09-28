@@ -341,12 +341,14 @@ export const APPEND_ONLY_TABLE_MIGRATION: Record<
  * only with the migration that removed its triggers, and never also in
  * APPEND_ONLY_TABLES.
  *
- *  - `swarm_stream_events` — D53 (2): the retention rule of scheduler spec §6.3
- *    (D52) lets rm_owner prune rows below the oldest servable cursor, which the
- *    0032 triggers refused for every role. Migration 0080 drops them. DELETE
- *    and TRUNCATE stay revoked from rm_app and rm_worker, re-asserted by
- *    backend/schema/grants.sql's `runtime_delete_revoked` list and refused by
- *    preflight check 2 (RUNTIME_DELETE_REVOKED_TABLES in ./preflight.ts).
+ *  - `swarm_stream_events` — D53 (2): rm_owner prunes it (as corrected by
+ *    D55 (12), only with the manual, receipted `bun run prune`, and only rows
+ *    older than a retention window of at least 7 days), which the 0032
+ *    triggers refused for every role. Migration 0080 drops them. DELETE
+ *    and TRUNCATE stay revoked from every runtime role, re-asserted by
+ *    backend/schema/grants.sql's revoke sweep over every relation (D55 (6))
+ *    and refused by preflight check 2 (RUNTIME_DELETE_REVOKED_TABLES in
+ *    ./preflight.ts gives it its own reason).
  *  - `swarm_scheduler_jobs` — scheduler spec §6.3 as amended by D52: no job
  *    pushes. Migration 0079 drops the table, and its triggers with it.
  */

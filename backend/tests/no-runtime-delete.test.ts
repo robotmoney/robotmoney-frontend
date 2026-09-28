@@ -43,13 +43,12 @@
 // contributes nothing.
 //
 // EVERY HIT IS ONE OF THREE THINGS, by exact file and table, never a pattern:
-//   (i)   the wave-5 BACKLOG — runtime deletes D55 (6) redesigns. The admin
-//         revocations (routes/admin.ts) and the WebAuthn challenge consume,
-//         cleanup and cap (routes/admin-webauthn.ts) are converted and gone
-//         from it: tombstones (0084, 0085) and 32 fixed slots (0088). What is
-//         left is the wallet repair pass (ops/wallet-backfill.ts), which
-//         w5-wallet-samples-upsert converts onto 0086's `superseded_at`.
-//         Shrink-only: each entry is deleted as its site is converted.
+//   (i)   the wave-5 BACKLOG — runtime deletes D55 (6) redesigns. It is now
+//         EMPTY: the admin revocations (routes/admin.ts) and the WebAuthn
+//         challenge consume, cleanup and cap (routes/admin-webauthn.ts) became
+//         tombstones (0084, 0085) and 32 fixed slots (0088), and the wallet
+//         repair pass (ops/wallet-backfill.ts) became an upsert onto 0086's
+//         `superseded_at`. Shrink-only: nothing is ever added back.
 //   (ii)  an rm_owner site reachable only from an rm_owner entry: seed
 //         (db/seed.ts, declared rm_owner; projects/smoke-seed.ts, called only
 //         from db/seed.ts), the operator's `--clean`
@@ -246,14 +245,13 @@ function tally(hits: readonly Hit[]): Map<string, number> {
  * never kept, and nothing is ever added. Each names the column its redesign
  * writes.
  */
-const BACKLOG: ReadonlyMap<string, number> = new Map([
+const BACKLOG: ReadonlyMap<string, number> = new Map<string, number>([
   // Converted in wave 5 and deleted from here: routes/admin.ts's password
-  // change and recovery (now `revoked_at` tombstones, 0084) and
+  // change and recovery (now `revoked_at` tombstones, 0084),
   // routes/admin-webauthn.ts's challenge consume, cleanup and cap (now
-  // `consumed_at` and 32 fixed slots, 0085 and 0088).
-  // The repair pass's delete-the-day. → upsert plus superseded_at (0086).
-  ["src/ops/wallet-backfill.ts statement wallet_balance_samples", 1],
-  ["src/ops/wallet-backfill.ts statement wallet_sleeve_samples", 1],
+  // `consumed_at` and 32 fixed slots, 0085 and 0088), and
+  // ops/wallet-backfill.ts's delete-the-day (now an upsert plus
+  // `superseded_at`, 0086). The backlog is empty and stays empty.
 ]);
 
 /** (ii) rm_owner sites, reachable only from an rm_owner entry (proved below). */
@@ -326,17 +324,15 @@ describe("no runtime path deletes (spec §10 W2, D55 (6))", () => {
     expect(stale).toEqual([]);
   });
 
-  test("the backlog is what is left of the wave-5 worklist: wallet-backfill.ts x2 (admin.ts and admin-webauthn.ts converted)", () => {
+  test("the wave-5 backlog is empty: admin.ts, admin-webauthn.ts and wallet-backfill.ts are all converted", () => {
     const perFile = new Map<string, number>();
     for (const [key, count] of BACKLOG) {
       const file = key.split(" ")[0]!;
       perFile.set(file, (perFile.get(file) ?? 0) + count);
     }
-    expect(Object.fromEntries(perFile)).toEqual({
-      "src/ops/wallet-backfill.ts": 2,
-    });
+    expect(Object.fromEntries(perFile)).toEqual({});
     // The converted files delete nothing at all now.
-    for (const file of ["src/api/routes/admin.ts", "src/api/routes/admin-webauthn.ts", "src/api/auth.ts"]) {
+    for (const file of ["src/api/routes/admin.ts", "src/api/routes/admin-webauthn.ts", "src/api/auth.ts", "src/ops/wallet-backfill.ts"]) {
       expect(HITS.filter((hit) => hit.file === file), file).toEqual([]);
     }
   });
