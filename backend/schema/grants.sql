@@ -16,58 +16,46 @@
 -- is itself a check-2 denylist violation (§7 check 2), so reconciliation must not
 -- quietly succeed around it.
 --
--- THE APPEND-ONLY REVOCATION IS §9.1 STEP 2, and it is MIGRATION 0065. Migration
--- 0053 granted rm_app `SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public`
--- -- append-only tables included -- and preflight check 2 fails until that is undone.
--- §9.1 calls the transition "a migration" and 0065 is it: reconciliation only runs
--- inside a migrate run, and §8.5 keeps a production migrate run out of the boot, so a
--- transition carried by reconciliation alone would leave production unable to pass
--- check 2 until an operator happened to migrate. The REVOKE below RE-ASSERTS 0065 on
--- every run rather than replacing it, because a hand-run GRANT that re-widens rm_app
--- is drift a one-shot migration cannot catch. Absent privilege is one half of the
--- protection; migration 0032's triggers are the other (src/db/append-only-guard.ts).
+-- ONLY rm_owner MAY DELETE OR TRUNCATE (§3, D55 (6)). No runtime role holds either
+-- privilege on any table, append-only or not. Migration 0053 granted rm_app
+-- `SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public`; 0065 took DELETE
+-- back on the append-only tables and 0089 on every table, for every runtime role
+-- (§9.1 step 3: "Check 2 fails until they land"). §9.1 calls the transition "a
+-- migration": reconciliation only runs inside a migrate run, and §8.5 keeps a
+-- production migrate run out of the boot, so a transition carried by reconciliation
+-- alone would leave production unable to pass check 2 until an operator happened to
+-- migrate. The sweep below RE-ASSERTS it on every relation on every run rather than
+-- replacing it, because a hand-run GRANT that re-widens a runtime role is drift a
+-- one-shot migration cannot catch. It is one sweep with no list: "a list of protected
+-- tables is a list that can miss one" (D55 (6)). For the append-only tables absent
+-- privilege is one half of the protection; migration 0032's triggers are the other
+-- (src/db/append-only-guard.ts).
 
 DO $$
 DECLARE
-  -- Kept in step with APPEND_ONLY_TABLES in src/db/append-only-guard.ts, which is
-  -- what preflight check 2's `append_only_write` rule tests against.
-  append_only text[] := ARRAY[
-    'swarm_members', 'swarm_recommendations', 'swarm_memos', 'swarm_sessions',
-    'swarm_briefs', 'swarm_subjects', 'swarm_session_events', 'swarm_session_members',
-    'swarm_subject_snapshots', 'swarm_session_judgements', 'swarm_consensus_receipts',
-    'swarm_member_keys', 'swarm_applications', 'audit_log', 'agent_activity_log',
-    'regime_snapshots', 'schema_migrations', 'analytics_overwrite_events'
-    -- The epoch scheduler's two logs left this list (APPEND_ONLY_RELEASED in
-    -- src/db/append-only-guard.ts): the pushed-job ledger is dropped with the
-    -- job pushes (migration 0079), and the event log is protected by grant
-    -- alone (0080, D53 (2)) — see `runtime_delete_revoked` below.
-  ];
-  -- Tables that are NOT append-only, whose DELETE and TRUNCATE nonetheless stay
-  -- revoked from the runtime roles, re-asserted on every run from THIS list so
-  -- that leaving `append_only` never quietly hands the privilege back.
-  -- `swarm_stream_events`: D53 (2) dropped its guard triggers so rm_owner can
-  -- prune rows below the oldest servable cursor (scheduler spec §6.3
-  -- Retention, D52), and "DELETE and TRUNCATE stay revoked from rm_app and
-  -- rm_worker"; preflight check 2 refuses either grant on it
-  -- (RUNTIME_DELETE_REVOKED_TABLES in src/db/preflight.ts). `swarm_stream_head`
-  -- is its counter row (0081): a runtime role that could remove it could stop
-  -- every transition that writes an event.
-  runtime_delete_revoked text[] := ARRAY['swarm_stream_events', 'swarm_stream_head'];
   -- rm_worker's grants, as the migrations give them (0016's default, narrowed
-  -- by 0054's explicit allowlist, then 0061 and 0062). Declared here because
-  -- the snapshot carries no grants: before this list a `--local blank`
-  -- bootstrap left rm_worker holding nothing, so the pipeline worker could not
-  -- even claim a job. Everything else rm_worker holds is SELECT (0062: "GRANT
-  -- SELECT ON ALL TABLES/SEQUENCES ... TO rm_app, rm_worker" and its default
-  -- for later tables), and the loop below re-asserts exactly that.
+  -- by 0054's explicit allowlist, then 0061 and 0062, less the DELETE 0089
+  -- revoked). Declared here because the snapshot carries no grants: before this
+  -- list a `--local blank` bootstrap left rm_worker holding nothing, so the
+  -- pipeline worker could not even claim a job. Everything else rm_worker holds
+  -- is SELECT (0062: "GRANT SELECT ON ALL TABLES/SEQUENCES ... TO rm_app,
+  -- rm_worker" and its default for later tables), and the loop below re-asserts
+  -- exactly that. The worker's writes are inserts, updates and upserts; a
+  -- superseded wallet sample is tombstoned (0086), never deleted.
   worker_dml text[] := ARRAY[
     'agent_revenue_daily', 'agent_vaults', 'chain_address_floors', 'chain_day_blocks', 'daily_agent_snapshots',
     'daily_coin_snapshots', 'daily_tvl_snapshots', 'daily_wallet_snapshots', 'job_runs', 'job_schedules', 'jobs',
     'lobster_coins', 'openclaw_agents', 'projects', 'tracked_wallets', 'vault_adapter_samples',
     'vault_share_price_history', 'wallet_backfill_state', 'wallet_balance_samples', 'wallet_sleeve_samples'
   ];
-  -- Written by the price workers but never pruned (0054).
+  -- Written by the price workers (0054). The same privileges as worker_dml now
+  -- that neither list carries DELETE; kept apart because 0054 granted them apart.
   worker_insert_update text[] := ARRAY['asset_price_floors', 'asset_prices'];
+  -- The wallet repair pass's immutable evidence (0037): it copies a day's
+  -- samples here before rewriting the day, so it INSERTs, and 0037's guard
+  -- refuses every UPDATE. Granted by 0091; 0054's allowlist had left it out,
+  -- and the repair of every incomplete day failed 42501 on the copy.
+  worker_insert_only text[] := ARRAY['wallet_balance_sample_evidence', 'wallet_sleeve_sample_evidence'];
   -- The serial sequences behind rm_worker's inserts (0054, 0061); every other
   -- sequence is SELECT only for it (0062).
   worker_sequence_usage text[] := ARRAY[
@@ -199,6 +187,14 @@ BEGIN
       EXECUTE format('GRANT SELECT, INSERT ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT UPDATE (final) ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
+    ELSIF rel.name = 'admin_webauthn_challenge' THEN
+      -- The 32 WebAuthn challenge slots (migration 0088, D55 (6)): rm_app
+      -- overwrites and consumes a slot in place and never adds one, so the
+      -- table an unauthenticated request writes stays at exactly 32 rows. The
+      -- ordinary sweep below would hand rm_app INSERT on every run.
+      EXECUTE format('REVOKE INSERT ON %s FROM rm_app, rm_worker', rel.ident);
+      EXECUTE format('GRANT SELECT, UPDATE ON %s TO rm_app', rel.ident);
+      EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
     ELSIF rel.name = 'swarm_stream_head' THEN
       -- The event counter's one row (migration 0081): rm_app reads it and
       -- increments it, and nothing else. The row is seeded by the migration and
@@ -215,22 +211,41 @@ BEGIN
     -- rm_worker, exactly as the migrations leave it: DML on its allowlist,
     -- SELECT everywhere else. The read-only-for-runtime tables were settled in
     -- their own branch above (SELECT on the select list, nothing otherwise) and
-    -- are not touched again here. TRUNCATE is never the worker's.
+    -- are not touched again here.
     IF NOT rel.name = ANY(read_only_for_runtime) THEN
-      IF rel.name = ANY(worker_dml) THEN
-        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %s TO rm_worker', rel.ident);
-        EXECUTE format('REVOKE TRUNCATE ON %s FROM rm_worker', rel.ident);
-      ELSIF rel.name = ANY(worker_insert_update) THEN
+      IF rel.name = ANY(worker_dml) OR rel.name = ANY(worker_insert_update) THEN
         EXECUTE format('GRANT SELECT, INSERT, UPDATE ON %s TO rm_worker', rel.ident);
-        EXECUTE format('REVOKE DELETE, TRUNCATE ON %s FROM rm_worker', rel.ident);
+      ELSIF rel.name = ANY(worker_insert_only) THEN
+        EXECUTE format('GRANT SELECT, INSERT ON %s TO rm_worker', rel.ident);
+        EXECUTE format('REVOKE UPDATE ON %s FROM rm_worker', rel.ident);
       ELSE
         EXECUTE format('GRANT SELECT ON %s TO rm_worker', rel.ident);
-        EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON %s FROM rm_worker', rel.ident);
+        EXECUTE format('REVOKE INSERT, UPDATE ON %s FROM rm_worker', rel.ident);
       END IF;
     END IF;
-    IF rel.name = ANY(append_only) OR rel.name = ANY(runtime_delete_revoked) THEN
-      EXECUTE format('REVOKE DELETE, TRUNCATE ON %s FROM rm_app, rm_worker', rel.ident);
-    END IF;
+  END LOOP;
+
+  -- D55 (6), for every runtime role, last, on every relation check 2 inspects:
+  -- a table, a partitioned table, a view (an updatable view passes a DELETE
+  -- through to its table) and a foreign table, in any application schema. Nothing
+  -- above grants either privilege; a hand-run grant since the last run is taken
+  -- back here. Preflight check 2 (src/db/preflight.ts, rule `append_only_write`)
+  -- refuses a database where one survives. The sweep reaches what rm_owner owns,
+  -- which is every application relation: one a runtime role owns already failed
+  -- above, and a relation owned by the provisioning login or an extension is not
+  -- rm_owner's to re-grant, so check 2 stays the refusal for those.
+  FOR rel IN
+    SELECT c.oid::regclass AS ident, c.relname AS name
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    LEFT JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'
+    WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+      AND c.relkind IN ('r', 'p', 'v', 'f')
+      AND c.relowner = 'rm_owner'::regrole
+      AND d.objid IS NULL
+    ORDER BY c.oid::regclass::text
+  LOOP
+    EXECUTE format('REVOKE DELETE, TRUNCATE ON %s FROM rm_app, rm_worker, rm_readonly', rel.ident);
   END LOOP;
 
   -- Sequences: rm_app writes, so it needs the serial columns' sequences; rm_readonly
@@ -269,11 +284,26 @@ GRANT USAGE ON SCHEMA public TO rm_app, rm_worker, rm_readonly;
 
 -- Future objects created by rm_owner: READ ONLY, for every runtime role. 0053 says
 -- "There are no default write grants. A later migration must name every new runtime
--- capability explicitly, making a missing grant fail closed", and 0062 set exactly
--- SELECT for rm_app and rm_worker. This file used to add a default
--- `GRANT SELECT, INSERT, UPDATE ON TABLES TO rm_app`, which contradicted that rule on
--- every run; the REVOKE takes it back from every database that reconciled under it.
--- Existing tables are unaffected: the sweep above grants each one's runtime
--- privileges explicitly.
-ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON TABLES TO rm_readonly, rm_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public REVOKE INSERT, UPDATE ON TABLES FROM rm_app;
+-- capability explicitly, making a missing grant fail closed"; 0053 and 0062 set
+-- exactly SELECT on tables for all three runtime roles and SELECT on sequences for
+-- all three, and 0089 re-asserted that no default carries DELETE or TRUNCATE. This
+-- file used to add a default `GRANT SELECT, INSERT, UPDATE ON TABLES TO rm_app`,
+-- which contradicted that rule on every run; the REVOKEs take every write back.
+--
+-- ALL OF rm_owner's DEFAULTS ARE DECLARED HERE, not only the ones a migration once
+-- widened, because a restored backup has none: `bun smoke:capture` dumps with
+-- `--no-privileges`, which drops default privileges with every other ACL, and the
+-- manifest (§8.3) declares these four, so a restored copy failed preflight check
+-- 3a ("default privileges for rm_owner ... is declared by the installed manifest
+-- but absent") until reconciliation put them back. Existing tables are unaffected:
+-- the sweep above grants each one's runtime privileges explicitly.
+--
+-- The cluster's provisioning login may hold defaults of its own (0016 ran as it and
+-- granted rm_worker DML on its future tables). rm_owner cannot alter another role's
+-- defaults, so that revoke is a provisioning step run as the login itself
+-- (scripts/lib/smoke-database.ts PROVISIONING_DEFAULT_PRIVILEGES_SQL; §9.1 step 3).
+ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public
+  REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES FROM rm_readonly, rm_app, rm_worker;
+ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON TABLES TO rm_readonly, rm_app, rm_worker;
+ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public REVOKE USAGE, UPDATE ON SEQUENCES FROM rm_readonly, rm_app, rm_worker;
+ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON SEQUENCES TO rm_readonly, rm_app, rm_worker;

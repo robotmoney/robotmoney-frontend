@@ -1,11 +1,15 @@
-// Forged member operators are cleared by a self-healing forward migration —
+// Forged `robotmoney` member operators are cleared by a forward migration —
 // issue #1026, decision D55 (2), migration 0083.
 //
-// D55 (2): "A self-healing forward migration clears `operator` on every member
-// row where the member set it through the self-write path that issue #925
-// closed. It runs on every deploy and changes nothing once no forged row
-// remains." The judge's third-party gate is keyed on `operator`, so a value a
-// member wrote for itself is a standing forgery.
+// D55 (2): the owner "approved clearing one forged value: a self-written
+// `operator` of `robotmoney`", only where a member self-write could have set
+// it, no later admin write named the operator, and the member is not seeded
+// from the roster. "It applies once per database, as every migration does."
+// The judge's third-party gate passes `robotmoney`, so that value written by a
+// member for itself is a standing forgery; any other self-written value passes
+// no gate and is kept. tests/operator-self-write-migration.test.ts proves the
+// value predicate (case and spaces) and the once-per-database rule; this file
+// proves the provenance rule with every row written by its real writer path.
 //
 // EVERY ROW HERE IS WRITTEN BY THE PATH IT STANDS FOR, where that path still
 // exists: the member's own profile route (`updateMemberProfile`), the admin
@@ -16,7 +20,7 @@
 //
 // The migration was applied when the template was built; each case plants its
 // state in this file's own database (useCleanDatabase) and then runs 0083's
-// own text again, which is what "runs on every deploy" means for it.
+// own text again, as rm_owner, the way the migrate step applies it.
 import { beforeAll, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -61,7 +65,8 @@ beforeAll(async () => {
   ids.forged = forged.id;
 
   // 2. A post-#925 self-write that names `operator` (any value but the
-  //    reserved one gets past today's route): still a self-written operator.
+  //    reserved one gets past today's route): self-written, but not the value
+  //    the gate trusts, so D55 (2) keeps it.
   const selfNamed = await activeMember();
   const written = await updateMemberProfile(selfNamed.token, selfNamed.id, { operator: "acme-labs" });
   expect(written.ok).toBe(true);
@@ -110,7 +115,15 @@ test("0083 is additive, and its roster list is LIVE_ROSTER's in-house members", 
   expect(new Set(LIVE_ROSTER.map((m) => m.operator))).toEqual(new Set(["robotmoney"]));
 });
 
-test("the migration clears every self-written operator and keeps every other, recording each id it cleared", async () => {
+/** 0083's text as the migrate step applies it: one transaction, as rm_owner. */
+async function applyMigration(): Promise<void> {
+  await sql.begin(async (tx) => {
+    await tx.unsafe("SET LOCAL ROLE rm_owner");
+    await tx.unsafe(MIGRATION);
+  });
+}
+
+test("the migration clears every self-written robotmoney operator and keeps every other, recording each id it cleared", async () => {
   // Red control: every planted value is really there before the run.
   expect({
     forged: await operatorOf(ids.forged!),
@@ -118,9 +131,10 @@ test("the migration clears every self-written operator and keeps every other, re
     overwritten: await operatorOf(ids.overwritten!),
   }).toEqual({ forged: "robotmoney", selfNamed: "acme-labs", overwritten: "robotmoney" });
   const versionBefore = await versionOf(ids.forged!);
+  const selfNamedVersion = await versionOf(ids.selfNamed!);
   const before = await clearedIds();
 
-  await sql.unsafe(MIGRATION);
+  await applyMigration();
 
   expect({
     forged: await operatorOf(ids.forged!),
@@ -132,7 +146,7 @@ test("the migration clears every self-written operator and keeps every other, re
     themis: await operatorOf(ids.themis!),
   }).toEqual({
     forged: null,
-    selfNamed: null,
+    selfNamed: "acme-labs",
     overwritten: null,
     adminWritten: "peaq",
     corrected: "partner-co",
@@ -142,20 +156,22 @@ test("the migration clears every self-written operator and keeps every other, re
   // A cleared row is an edit: its version moves, so a stale admin form cannot
   // write the forged value back.
   expect(await versionOf(ids.forged!)).toBe(versionBefore + 1);
+  // A kept row is not touched at all.
+  expect(await versionOf(ids.selfNamed!)).toBe(selfNamedVersion);
 
   const recorded = (await clearedIds()).filter((id) => !before.includes(id));
-  expect(recorded.sort()).toEqual([ids.forged!, ids.selfNamed!, ids.overwritten!].sort());
+  expect(recorded.sort()).toEqual([ids.forged!, ids.overwritten!].sort());
   const [row] = (await sql`
     SELECT before_state, after_state, scope FROM audit_log
-     WHERE actor = 'migration 0083' AND target_id = ${ids.selfNamed!}`) as unknown as {
+     WHERE actor = 'migration 0083' AND target_id = ${ids.forged!}`) as unknown as {
     before_state: unknown;
     after_state: unknown;
     scope: unknown;
   }[];
   expect(row).toEqual({
-    before_state: { operator: "acme-labs" },
+    before_state: { operator: "robotmoney" },
     after_state: { operator: null },
-    scope: { memberId: ids.selfNamed!, fields: ["operator"] },
+    scope: { memberId: ids.forged!, fields: ["operator"] },
   });
 });
 
@@ -164,7 +180,7 @@ test("a rerun changes nothing, and records nothing", async () => {
     (await sql`SELECT id, operator, version FROM swarm_members ORDER BY id`) as unknown as unknown[];
   const members = await snapshot();
   const recorded = await clearedIds();
-  await sql.unsafe(MIGRATION);
+  await applyMigration();
   expect(await snapshot()).toEqual(members);
   expect(await clearedIds()).toEqual(recorded);
 });

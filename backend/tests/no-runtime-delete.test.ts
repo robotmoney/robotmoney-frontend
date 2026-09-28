@@ -6,9 +6,9 @@
 // redesigned into one of three shapes" (a tombstone every read filters on, an
 // expiry-filtered read with pruning left to rm_owner, or an upsert), and
 // "rm_owner deletes only inside migrate, seed, or an explicit operator
-// command". The redesign and the revoking migration land together in wave 5;
-// until then this file makes the set of deleting code a CLOSED, NAMED set, so
-// wave 5 has an exact worklist and nothing new can join it.
+// command". The redesign and the revoking migration (0089) land together in
+// wave 5; this file makes the set of deleting code a CLOSED, NAMED set, so the
+// wave had an exact worklist and nothing new can join it.
 //
 // WHAT COUNTS AS A DELETE. Every `.ts`/`.js` file under backend/src/ and
 // backend/scripts/ is parsed (the TypeScript parser, not a line regex) and two
@@ -43,18 +43,22 @@
 // contributes nothing.
 //
 // EVERY HIT IS ONE OF THREE THINGS, by exact file and table, never a pattern:
-//   (i)   the wave-5 BACKLOG — runtime deletes D55 (6) redesigns: the admin
-//         revocations (routes/admin.ts), the WebAuthn challenge consume,
-//         cleanup and cap (routes/admin-webauthn.ts), and the wallet repair
-//         pass (ops/wallet-backfill.ts). Shrink-only: wave 5 deletes each entry
-//         as it converts the site onto migrations 0084-0086's columns.
+//   (i)   the wave-5 BACKLOG — runtime deletes D55 (6) redesigns. The admin
+//         revocations (routes/admin.ts) and the WebAuthn challenge consume,
+//         cleanup and cap (routes/admin-webauthn.ts) are converted and gone
+//         from it: tombstones (0084, 0085) and 32 fixed slots (0088). What is
+//         left is the wallet repair pass (ops/wallet-backfill.ts), which
+//         w5-wallet-samples-upsert converts onto 0086's `superseded_at`.
+//         Shrink-only: each entry is deleted as its site is converted.
 //   (ii)  an rm_owner site reachable only from an rm_owner entry: seed
 //         (db/seed.ts, declared rm_owner; projects/smoke-seed.ts, called only
 //         from db/seed.ts), the operator's `--clean`
 //         (analytics/store/seed-provenance.ts, declared rm_owner), and the
 //         manifest publish (db/schema-manifest.ts `writeManifest`, called only
 //         by the migrate run and the blank bootstrap, both of which refuse any
-//         session but rm_owner).
+//         session but rm_owner), and the manual prune (scripts/prune.ts, the
+//         operator's `bun run prune`, which logs in as rm_owner with a typed
+//         password and is imported by nothing, D55 (12)).
 //   (iii) a guard PROBE: `DELETE FROM public.<t> WHERE false`, issued to prove
 //         the append-only or ledger guard refuses it. It matches no row in any
 //         outcome, so it removes nothing (src/db/append-only-guard.ts
@@ -243,13 +247,10 @@ function tally(hits: readonly Hit[]): Map<string, number> {
  * writes.
  */
 const BACKLOG: ReadonlyMap<string, number> = new Map([
-  // Password change and recovery reset: revoke every passkey and session.
-  // → admin_passkey.revoked_at / admin_session.revoked_at (migration 0084).
-  ["src/api/routes/admin.ts statement admin_passkey", 2],
-  ["src/api/routes/admin.ts statement admin_session", 2],
-  // consumeChallenge, and storeChallenge's expired cleanup and cap trim.
-  // → admin_webauthn_challenge.consumed_at (0085) plus expiry-filtered reads.
-  ["src/api/routes/admin-webauthn.ts statement admin_webauthn_challenge", 3],
+  // Converted in wave 5 and deleted from here: routes/admin.ts's password
+  // change and recovery (now `revoked_at` tombstones, 0084) and
+  // routes/admin-webauthn.ts's challenge consume, cleanup and cap (now
+  // `consumed_at` and 32 fixed slots, 0085 and 0088).
   // The repair pass's delete-the-day. → upsert plus superseded_at (0086).
   ["src/ops/wallet-backfill.ts statement wallet_balance_samples", 1],
   ["src/ops/wallet-backfill.ts statement wallet_sleeve_samples", 1],
@@ -271,6 +272,12 @@ const OWNER_SITES: ReadonlyMap<string, number> = new Map([
   ["src/analytics/store/seed-provenance.ts declaration raw_indicator_history", 1],
   // writeManifest's one-row replace.
   ["src/db/schema-manifest.ts statement schema_manifest", 1],
+  // `bun run prune` (D55 (12)): each DELETE, its registry probe and its
+  // declaration. The only pruning path, as rm_owner, under the target lock.
+  ["scripts/prune.ts statement swarm_stream_events", 2],
+  ["scripts/prune.ts declaration swarm_stream_events", 1],
+  ["scripts/prune.ts statement admin_session", 2],
+  ["scripts/prune.ts declaration admin_session", 1],
 ]);
 
 /** (iii) Guard probes: `DELETE ... WHERE false`, table computed per guard. */
@@ -319,17 +326,19 @@ describe("no runtime path deletes (spec §10 W2, D55 (6))", () => {
     expect(stale).toEqual([]);
   });
 
-  test("the backlog is exactly the wave-5 worklist: admin.ts x4, admin-webauthn.ts x3, wallet-backfill.ts x2", () => {
+  test("the backlog is what is left of the wave-5 worklist: wallet-backfill.ts x2 (admin.ts and admin-webauthn.ts converted)", () => {
     const perFile = new Map<string, number>();
     for (const [key, count] of BACKLOG) {
       const file = key.split(" ")[0]!;
       perFile.set(file, (perFile.get(file) ?? 0) + count);
     }
     expect(Object.fromEntries(perFile)).toEqual({
-      "src/api/routes/admin.ts": 4,
-      "src/api/routes/admin-webauthn.ts": 3,
       "src/ops/wallet-backfill.ts": 2,
     });
+    // The converted files delete nothing at all now.
+    for (const file of ["src/api/routes/admin.ts", "src/api/routes/admin-webauthn.ts", "src/api/auth.ts"]) {
+      expect(HITS.filter((hit) => hit.file === file), file).toEqual([]);
+    }
   });
 
   test("every guard probe matches no row: its statement ends WHERE false", () => {
@@ -372,6 +381,14 @@ describe("the rm_owner sites are reachable only from rm_owner entries", () => {
     expect(importersOf("src/projects/smoke-seed.ts")).toEqual(["src/db/seed.ts"]);
   });
 
+  test("scripts/prune.ts is imported by nothing: it is reached only as the operator's `bun run prune`", () => {
+    expect(importersOf("scripts/prune.ts")).toEqual([]);
+    const pkg = (dir: string) =>
+      (JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
+    expect(pkg(join(BACKEND, "..")).prune).toBe("bun run --cwd backend scripts/prune.ts");
+    expect(pkg(BACKEND).prune).toBe("bun run scripts/prune.ts");
+  });
+
   test("writeManifest (schema-manifest.ts's delete) is called only by the migrate run and the blank bootstrap, each of which refuses any session but rm_owner", () => {
     const callers = sourceFiles().filter((file) =>
       file !== "src/db/schema-manifest.ts" && /\bwriteManifest\s*\(/.test(readFileSync(join(BACKEND, file), "utf8")),
@@ -412,6 +429,8 @@ describe("the rm_owner sites are reachable only from rm_owner entries", () => {
       .map((site) => ({ role: site.role, object: site.object, site: site.site }))
       .sort((a, b) => a.site.localeCompare(b.site));
     expect(deleting).toEqual([
+      { role: "rm_owner", object: "admin_session", site: "scripts/prune:pruneExpiredSessions" },
+      { role: "rm_owner", object: "swarm_stream_events", site: "scripts/prune:pruneStreamEvents" },
       { role: "rm_owner", object: "raw_indicator_history", site: "src/analytics/store/seed-provenance:verifySeedProvenance.clean" },
       { role: "rm_owner", object: "job_schedules", site: "src/db/seed:seedJobSchedules.deleteAnalyticsRun" },
       { role: "rm_owner", object: "job_schedules", site: "src/db/seed:seedJobSchedules.deleteHourlyRepair" },
@@ -475,10 +494,17 @@ describe("RED CONTROL: the detector catches a planted runtime delete in every sh
     for (const line of [3, 13, 14, 15, 16, 17, 18, 19]) expect(text).toContain(`src/worker/planted.ts:${line} `);
   });
 
-  test("one more DELETE in a backlog file fails too — the backlog is a count, not a file exemption", () => {
+  test("a DELETE put back into a converted file fails — the backlog never re-admits a site that left it", () => {
     const extra = scanSource("src/api/routes/admin.ts", "await tx`DELETE FROM admin_session WHERE token = ${t}`;");
     expect(unrecorded([...HITS, ...extra])).toEqual([
-      expect.stringContaining("src/api/routes/admin.ts statement admin_session: 3 found, 2 recorded"),
+      expect.stringContaining("src/api/routes/admin.ts statement admin_session: 1 found, 0 recorded"),
+    ]);
+  });
+
+  test("one more DELETE in an rm_owner file fails too — a recorded site is a count, not a file exemption", () => {
+    const extra = scanSource("scripts/prune.ts", "await on(tx, q)`DELETE FROM job_runs WHERE id = ${id}`;");
+    expect(unrecorded([...HITS, ...extra])).toEqual([
+      expect.stringContaining("scripts/prune.ts statement job_runs: 1 found, 0 recorded"),
     ]);
   });
 });

@@ -73,13 +73,34 @@ function literal(value: string): string {
 }
 
 /**
+ * The provisioning login's own default privileges, taken back (D55 (6), spec
+ * §9.1 step 3). Run AS the login that creates the roles — the local container's
+ * superuser here, `doadmin` in production — because it is that login's
+ * defaults, and no other role may alter them: `rm_owner` is a member of no
+ * other role (§3), so neither the migrations nor backend/schema/grants.sql can.
+ *
+ * Migration 0016 ran as that login and set `GRANT SELECT, INSERT, UPDATE,
+ * DELETE ON TABLES TO rm_worker` and `USAGE, SELECT ON SEQUENCES` for every
+ * table the login creates later. Every table since 0053 is created by
+ * `rm_owner`, so the default grants nothing today; it is still a DELETE default
+ * for a runtime role, which D55 (6) forbids, and a manifest check 3a compares
+ * (tests/schema-equivalence.test.ts builds its migrated side with this step).
+ * Idempotent: revoking a default that is not there changes nothing.
+ */
+export const PROVISIONING_DEFAULT_PRIVILEGES_SQL = `
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM rm_app, rm_worker, rm_readonly;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_app, rm_worker, rm_readonly;
+`;
+
+/**
  * What the LOCAL superuser runs, once, on a Postgres smoke owns — exactly what
  * `doadmin` does on a fresh production cluster (§3, §7.3): create the four
  * roles with their generated passwords, hand the database to `rm_owner`, and
  * install the extensions the snapshot lists as provider-managed (pgcrypto; a
  * managed cluster installs it, `rm_owner` may not). Nothing else: the schema is
  * `rm_owner`'s to create (bootstrapBlankDatabase), and the superuser is not used
- * again.
+ * again. Its own default privileges are taken back from the runtime roles
+ * ({@link PROVISIONING_DEFAULT_PRIVILEGES_SQL}), as `doadmin`'s are in §9.1.
  *
  * Idempotent, so a rerun of an interrupted `database` step converges: a role
  * that exists has its password (re)set to the saved one.
@@ -101,7 +122,7 @@ END $rm$;`,
   return `${roles}
 ALTER DATABASE "${database}" OWNER TO rm_owner;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
-`;
+${PROVISIONING_DEFAULT_PRIVILEGES_SQL}`;
 }
 
 /**

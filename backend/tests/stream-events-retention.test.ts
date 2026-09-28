@@ -1,14 +1,19 @@
-// The event log is protected by GRANT, and only rm_owner prunes it — issue
-// #1026 criterion 104, decision D53 (2).
+// The event log is protected by GRANT, and only rm_owner prunes it, through
+// the manual `bun run prune` — issue #1026 criterion 104, decisions D53 (2)
+// and D55 (12).
 //
-// AUTHORITY: docs/technical/system-scheduler-spec.md §6.3 ("Retention. The
-// event log is append-only and is retained at least as far back as the oldest
-// cursor the API may still be asked to serve. Pruning above that point is
-// permitted; pruning below it is forbidden."), D52, and D53 (2): the retention
+// AUTHORITY: docs/technical/system-scheduler-spec.md §6.3 Retention ("No
+// runtime role may delete from the event log. Only a manual, receipted operator
+// command prunes it ... It deletes only events older than a retention window of
+// at least 7 days."), D55 (12), which supersedes D52's retention bullet and
+// D53 (2)'s bound of the oldest servable cursor, and D53 (2): the retention
 // rule beats migration 0072's triggers. Migration 0080 drops them; DELETE and
-// TRUNCATE stay revoked from rm_app and rm_worker, grant reconciliation
-// re-asserts that revoke from its own list, and preflight check 2 refuses
-// either grant.
+// TRUNCATE stay revoked from rm_app and rm_worker (0089 revokes both from every
+// runtime role on every table), grant reconciliation re-asserts that on every
+// relation, and preflight check 2 refuses either grant. The command itself is
+// backend/scripts/prune.ts; tests/prune-command.test.ts proves its terminal,
+// lock, window and receipt, and this file proves what its prune does to the
+// log and to a subscriber's cursor.
 //
 // EVERY REFUSAL HERE IS A REAL LOGIN. The runtime roles connect as themselves
 // and run the statement; the answer asserted is SQLSTATE 42501 from the
@@ -17,7 +22,9 @@
 // did another.
 //
 // WHAT THIS FILE DOES NOT OWN. The served side of a pruned cursor — the resync
-// a subscriber below the floor receives — is backend/tests/api-event-stream.test.ts.
+// frame a subscriber below the floor receives on the wire — is
+// backend/tests/api-event-stream.test.ts. The floor check it serves from
+// (`resyncReasonFor`) is asserted here, after a real prune.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -32,8 +39,11 @@ import {
 import { APPEND_ONLY_TABLES as POSTFLIGHT_ROSTER } from "../scripts/upgrades/0.2.2-to-0.3.0/release.ts";
 import { findDenylistViolations, RUNTIME_DELETE_REVOKED_TABLES } from "../src/db/preflight.ts";
 import { loadSnapshot } from "../src/db/schema-snapshot.ts";
+import { MIN_RETENTION_DAYS, runPrune } from "../scripts/prune.ts";
+import { restoreRoles, saveRoles, type SavedRole } from "./fixtures/releases/release-fixture.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject } from "./support/epoch-fixtures.ts";
+import { withTargetLock } from "./support/target-lock.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -41,21 +51,37 @@ const PASSWORD = `rm_stream_retention_${crypto.randomUUID().slice(0, 8)}`;
 const RUNTIME = ["rm_app", "rm_worker"] as const;
 type Runtime = (typeof RUNTIME)[number];
 const logins = new Map<Runtime, postgres.Sql<{}>>();
+/** A real rm_owner login, the one `bun run prune` opens with the typed password. */
+let owner: postgres.Sql<{}>;
+/** The four roles as this file found them: cluster-wide, so put back exactly. */
+let savedRoles: SavedRole[] = [];
+let databaseUrl = "";
 
 beforeAll(async () => {
+  // rm_owner, rm_app and rm_worker are cluster-wide and backend `bun test` runs
+  // every file in one process: record their LOGIN attribute and stored password
+  // and put back exactly those (rule (j): no pass may depend on file order).
+  savedRoles = await saveRoles(sql as unknown as postgres.Sql<{}>);
   const [{ db }] = (await sql`SELECT current_database() AS db`) as unknown as { db: string }[];
+  const url = new URL(process.env.DATABASE_URL!);
+  url.pathname = `/${db}`;
+  databaseUrl = url.toString();
   for (const role of RUNTIME) {
     await sql.unsafe(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${PASSWORD}'`);
-    const url = new URL(process.env.DATABASE_URL!);
-    url.pathname = `/${db}`;
     url.username = role;
     url.password = PASSWORD;
     logins.set(role, postgres(url.toString(), { max: 1, onnotice: () => {} }));
   }
+  await sql.unsafe(`ALTER ROLE rm_owner LOGIN PASSWORD '${PASSWORD}'`);
+  url.username = "rm_owner";
+  url.password = PASSWORD;
+  owner = postgres(url.toString(), { max: 1, onnotice: () => {} });
 });
 
 afterAll(async () => {
   for (const login of logins.values()) await login.end({ timeout: 5 });
+  await owner?.end({ timeout: 5 });
+  await restoreRoles(sql as unknown as postgres.Sql<{}>, savedRoles);
 });
 
 async function sqlstate(db: postgres.Sql<{}>, statement: string): Promise<string | null> {
@@ -143,23 +169,37 @@ test("rm_app cannot rewind the counter either: it only moves forward", async () 
   expect(await sqlstate(app, "UPDATE swarm_stream_head SET seq = 0")).toBe("23514");
 });
 
-test("rm_owner CAN prune, and a cursor at the new floor is still served", async () => {
+test("the prune `bun run prune` runs, as a real rm_owner login, removes only events older than the 7-day window, and a cursor below the new floor gets log_truncated", async () => {
   await commitEvents("ret_owner_prune", 3);
   const head = await domain.streamHeadSequence();
-  // NOT PROVED HERE: that a prune stays below the oldest cursor the API may
-  // still be asked to serve. Nothing records that cursor or bounds a DELETE by
-  // it; this case picks head - 2 by hand. It proves only the grant half (the
-  // owner may DELETE) and the served half (the new floor is honest).
-  const oldestServable = head - 2;
-  const pruned = await asOwner(
-    async (tx) => (await tx`DELETE FROM swarm_stream_events WHERE seq <= ${oldestServable} RETURNING seq`).length,
-  );
-  expect(pruned).toBe(oldestServable);
-  expect(await domain.retainedFloor()).toBe(oldestServable + 1);
-  expect(await domain.resyncReasonFor(oldestServable)).toBeNull();
-  expect((await domain.eventsAbove(oldestServable)).map((e) => e.seq)).toEqual([head - 1, head]);
-  // One below it is now honestly out of reach, and says so.
-  expect(await domain.resyncReasonFor(oldestServable - 1)).toBe("log_truncated");
+  // The log's age, planted by rm_owner: everything up to head - 2 is 8 days
+  // old, head - 1 is 6 days old (inside the window), head is new.
+  await asOwner(async (tx) => {
+    await tx`UPDATE swarm_stream_events SET committed_at = now() - interval '8 days' WHERE seq <= ${head - 2}`;
+    await tx`UPDATE swarm_stream_events SET committed_at = now() - interval '6 days' WHERE seq = ${head - 1}`;
+  });
+  const [{ who }] = (await owner`SELECT current_user AS who`) as unknown as { who: string }[];
+  expect(who).toBe("rm_owner");
+
+  const pruned = await withTargetLock(databaseUrl, (lock) => runPrune(owner, { windowDays: MIN_RETENTION_DAYS, lock }));
+
+  const events = pruned.find((t) => t.table === "swarm_stream_events")!;
+  expect({ rows: events.rows, windowDays: events.windowDays, predicate: events.predicate }).toEqual({
+    rows: head - 2,
+    windowDays: 7,
+    predicate: "committed_at < <cutoff>",
+  });
+  // Nothing younger than the window went: the 6-day-old event is the floor.
+  expect(await domain.retainedFloor()).toBe(head - 1);
+  expect((await domain.eventsAbove(head - 2)).map((e) => e.seq)).toEqual([head - 1, head]);
+  // The domain's floor check, which the stream serves from: a cursor one below
+  // the floor is still servable, and anything lower is told log_truncated —
+  // resync-and-close, then a full read and a rebuild (§6.3).
+  expect(await domain.resyncReasonFor(head - 2)).toBeNull();
+  expect(await domain.resyncReasonFor(head - 3)).toBe("log_truncated");
+  expect(await domain.resyncReasonFor(0)).toBe("log_truncated");
+  // The counter row is never pruned: numbering continues from it.
+  expect(await domain.streamHeadSequence()).toBe(head);
 });
 
 test("a prune never renumbers: with every row gone the next event continues from the counter, not MAX + 1", async () => {
@@ -183,33 +223,61 @@ test("a prune never renumbers: with every row gone the next event continues from
   expect(await domain.resyncReasonFor(head)).toBeNull();
 });
 
-test("grant reconciliation re-asserts the revoke from its own list, not from the append-only one", async () => {
+test("grant reconciliation revokes DELETE and TRUNCATE from every runtime role on every relation — by sweep, not from a list", async () => {
   const grantsSql = (await loadSnapshot()).grantsSql;
-  const arrayOf = (name: string): string[] => {
-    const block = new RegExp(`${name} text\\[\\] := ARRAY\\[([\\s\\S]*?)\\];`).exec(grantsSql.replace(/--.*$/gm, ""));
-    expect(block, `grants.sql must declare ${name}`).not.toBeNull();
-    return [...block![1]!.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!);
-  };
-  expect(arrayOf("append_only")).not.toContain("swarm_stream_events");
-  expect(arrayOf("runtime_delete_revoked")).toContain("swarm_stream_events");
+  // No list names the log: D55 (6)'s rule is every table.
+  expect(grantsSql.replace(/--.*$/gm, "")).not.toMatch(/runtime_delete_revoked|append_only text\[\]/);
+  expect(grantsSql).toContain("REVOKE DELETE, TRUNCATE ON %s FROM rm_app, rm_worker, rm_readonly");
 
   const held = async (): Promise<string[]> =>
     ((await sql`
-      SELECT r.rolname || ':' || p.privilege AS item
-        FROM (VALUES ('rm_app'), ('rm_worker')) AS r(rolname)
+      SELECT r.rolname || ':' || t.name || ':' || p.privilege AS item
+        FROM (VALUES ('rm_app'), ('rm_worker'), ('rm_readonly')) AS r(rolname)
+        CROSS JOIN (VALUES ('swarm_stream_events'), ('jobs')) AS t(name)
         CROSS JOIN (VALUES ('DELETE'), ('TRUNCATE')) AS p(privilege)
-       WHERE has_table_privilege(r.rolname, 'public.swarm_stream_events', p.privilege)
+       WHERE has_table_privilege(r.rolname, 'public.' || t.name, p.privilege)
        ORDER BY 1`) as unknown as { item: string }[]).map((r) => r.item);
 
-  // A hand-run grant re-widens both roles (the drift reconciliation exists for).
-  await sql.unsafe("GRANT DELETE, TRUNCATE ON swarm_stream_events TO rm_app, rm_worker");
+  // A hand-run grant re-widens every runtime role, on the log and on an
+  // ordinary table (the drift reconciliation exists for).
+  await sql.unsafe("GRANT DELETE, TRUNCATE ON swarm_stream_events, jobs TO rm_app, rm_worker, rm_readonly");
   try {
-    expect(await held()).toEqual(["rm_app:DELETE", "rm_app:TRUNCATE", "rm_worker:DELETE", "rm_worker:TRUNCATE"]);
+    expect((await held()).length).toBe(12);
     await asOwner(async (tx) => tx.unsafe(grantsSql));
     expect(await held()).toEqual([]);
     expect(await sqlstate(logins.get("rm_app")!, "DELETE FROM swarm_stream_events WHERE seq = 1")).toBe("42501");
+    expect(await sqlstate(logins.get("rm_worker")!, "DELETE FROM jobs WHERE false")).toBe("42501");
   } finally {
-    await sql.unsafe("REVOKE DELETE, TRUNCATE ON swarm_stream_events FROM rm_app, rm_worker");
+    await sql.unsafe("REVOKE DELETE, TRUNCATE ON swarm_stream_events, jobs FROM rm_app, rm_worker, rm_readonly");
+  }
+});
+
+test("grant reconciliation also takes DELETE and TRUNCATE back on a view — every relation kind check 2 inspects", async () => {
+  // Preflight check 2 refuses either privilege on a table, a partitioned table,
+  // a view (an updatable view passes a DELETE through) or a foreign table. A
+  // sweep narrower than that would let a hand-run grant on a view refuse every
+  // boot while `bun run migrate` never took it back.
+  const grantsSql = (await loadSnapshot()).grantsSql;
+  const view = "rm_retention_planted_view";
+  await asOwner(async (tx) => tx.unsafe(`CREATE VIEW ${view} AS SELECT id, kind FROM jobs`));
+  const held = async (): Promise<string[]> =>
+    ((await sql`
+      SELECT r.rolname || ':' || p.privilege AS item
+        FROM (VALUES ('rm_app'), ('rm_worker'), ('rm_readonly')) AS r(rolname)
+        CROSS JOIN (VALUES ('DELETE'), ('TRUNCATE')) AS p(privilege)
+       WHERE has_table_privilege(r.rolname, ${"public." + view}, p.privilege)
+       ORDER BY 1`) as unknown as { item: string }[]).map((r) => r.item);
+  try {
+    await asOwner(async (tx) => tx.unsafe(`GRANT DELETE, TRUNCATE ON ${view} TO rm_app, rm_worker, rm_readonly`));
+    expect((await held()).length).toBe(6);
+    expect(
+      (await findDenylistViolations(sql, ["rm_app"])).filter((v) => v.object === view),
+    ).toEqual([{ rule: "append_only_write", role: "rm_app", object: view }]);
+    await asOwner(async (tx) => tx.unsafe(grantsSql));
+    expect(await held()).toEqual([]);
+    expect(await sqlstate(logins.get("rm_app")!, `DELETE FROM ${view} WHERE false`)).toBe("42501");
+  } finally {
+    await asOwner(async (tx) => tx.unsafe(`DROP VIEW ${view}`));
   }
 });
 

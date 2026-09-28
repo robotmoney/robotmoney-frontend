@@ -375,18 +375,23 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
   test("password rotation revokes rogue passkeys and their sessions before either change or recovery returns", async () => {
     const claimed = await call(claimReq(PASSWORD, OPERATOR));
     const initialRecoveryCode = (claimed?.body as { recoveryCode: string }).recoveryCode;
-    const rogueId = "rogue-passkey";
-    const rogueSession = "rogue-passkey-session";
+    // One rogue credential per rotation: the first one's rows stay, revoked.
+    const rogueId = (challenge: string) => `rogue-passkey-${challenge}`;
+    const rogueSession = (challenge: string) => `rogue-passkey-session-${challenge}`;
 
     const seedRogueCredential = async (challenge: string) => {
       await sql`
         INSERT INTO admin_passkey (id, public_key, counter, transports)
-        VALUES (${rogueId}, ${Buffer.from("not-used-before-lookup")}, 0, '{}')
+        VALUES (${rogueId(challenge)}, ${Buffer.from("not-used-before-lookup")}, 0, '{}')
       `;
-      await sql`INSERT INTO admin_session (token, expires_at) VALUES (${hashKey(rogueSession)}, now() + interval '1 day')`;
+      await sql`INSERT INTO admin_session (token, expires_at) VALUES (${hashKey(rogueSession(challenge))}, now() + interval '1 day')`;
+      // A pending sign-in ceremony in one of the 32 slots (migration 0088):
+      // slot 8, the first of the authentication slots (8..31).
       await sql`
-        INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at)
-        VALUES ('authentication', ${challenge}, now() + interval '5 minutes')
+        UPDATE admin_webauthn_challenge
+           SET flow = 'authentication', challenge = ${challenge}, issued_at = now(),
+               expires_at = now() + interval '5 minutes', consumed_at = NULL
+         WHERE slot = 8
       `;
     };
     const assertRogueRejected = async (challenge: string) => {
@@ -394,14 +399,20 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
       const req = new Request("http://localhost/api/admin/webauthn/auth/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: rogueId, response: { clientDataJSON } }),
+        body: JSON.stringify({ id: rogueId(challenge), response: { clientDataJSON } }),
       });
       expect(await handleAdminWebauthn(req, new URL(req.url))).toEqual({ status: 400, body: { error: "passkey not found" } });
       expect(await isPrivileged(new Request("http://localhost/api/admin/overview", {
-        headers: { "X-Admin-Token": rogueSession },
+        headers: { "X-Admin-Token": rogueSession(challenge) },
       }))).toBe(false);
-      expect(await sql`SELECT id FROM admin_passkey WHERE id = ${rogueId}`).toHaveLength(0);
-      expect(await sql`SELECT token FROM admin_session WHERE token = ${hashKey(rogueSession)}`).toHaveLength(0);
+      // Revoked by tombstone in the rotating transaction, never deleted
+      // (D55 (6)): the rows stay, and nothing live is left.
+      expect(Array.from(await sql`SELECT revoked_at IS NOT NULL AS revoked FROM admin_passkey WHERE id = ${rogueId(challenge)}`))
+        .toEqual([{ revoked: true }]);
+      expect(Array.from(await sql`SELECT revoked_at IS NOT NULL AS revoked FROM admin_session WHERE token = ${hashKey(rogueSession(challenge))}`))
+        .toEqual([{ revoked: true }]);
+      expect(await sql`SELECT 1 FROM admin_passkey WHERE revoked_at IS NULL`).toHaveLength(0);
+      expect(await sql`SELECT 1 FROM admin_session WHERE revoked_at IS NULL`).toHaveLength(0);
     };
 
     await seedRogueCredential("rogue-before-change");

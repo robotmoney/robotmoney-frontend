@@ -7,12 +7,23 @@ import { hashKey } from "../../lib/keys.ts";
 const FORBIDDEN = { status: 403, body: { error: "admin authorization required" } } as const;
 const BAD = (error: string) => ({ status: 400, body: { error } }) as const;
 // Authentication options are public so the login surface can discover a
-// passkey before it has a session. Keep the one-time challenge store bounded:
-// a caller can make us evict old pending ceremonies, but cannot grow a table
-// indefinitely. The transaction advisory lock makes the cap hold even when
-// many unauthenticated requests arrive at once.
-const MAX_PUBLIC_AUTH_CHALLENGES = 32;
+// passkey before it has a session, so the one-time challenge store is a table
+// unauthenticated requests write. D55 (6): such a table "stays bounded with no
+// `rm_owner` run", and no runtime role may DELETE. So the store is a fixed set
+// of 32 slots (migration 0088): issuing a challenge overwrites the slot with
+// the oldest `issued_at` in place, and consuming one is a single-use
+// conditional UPDATE of `consumed_at`. rm_app holds no INSERT and no DELETE on
+// the table, so a caller can make us evict old pending ceremonies but can never
+// change the row count. The transaction advisory lock serializes issuance, so
+// two concurrent requests never pick, and overwrite, the same slot.
+//
+// Each flow owns its own slots (0088's slot_flow_check): registration 0..7,
+// authentication 8..31. Registration options need an admin credential and
+// authentication options do not, so an unauthenticated flood overwrites only
+// authentication slots and can never evict a signed-in admin's pending passkey
+// enrolment.
 const CHALLENGE_TTL = "5 minutes";
+const REGISTRATION_SLOTS = 8;
 const CHALLENGE_ISSUE_LOCK = 587001;
 
 // The relying party must match the page hosting the browser WebAuthn call. A
@@ -40,10 +51,16 @@ function challengeFromResponse(body: unknown): string | null {
   }
 }
 
+// Single use: the conditional UPDATE matches a live slot at most once. Two
+// racing consumers of one challenge serialize on the row, and the second
+// re-reads `consumed_at IS NULL` as false and matches nothing — exactly as the
+// second of two DELETEs used to. An expired or already-consumed challenge is
+// never accepted.
 async function consumeChallenge(flow: "registration" | "authentication", challenge: string): Promise<string | null> {
   const rows = await sql<{ challenge: string }[]>`
-    DELETE FROM admin_webauthn_challenge
-    WHERE flow = ${flow} AND challenge = ${challenge} AND expires_at > now()
+    UPDATE admin_webauthn_challenge
+       SET consumed_at = now()
+     WHERE flow = ${flow} AND challenge = ${challenge} AND consumed_at IS NULL AND expires_at > now()
     RETURNING challenge
   `;
   return rows[0]?.challenge ?? null;
@@ -51,26 +68,30 @@ async function consumeChallenge(flow: "registration" | "authentication", challen
 
 async function storeChallenge(flow: "registration" | "authentication", challenge: string): Promise<void> {
   await sql.begin(async (tx) => {
-    // Serialize issuance, including the cleanup/retention pass, so concurrent
-    // public option requests cannot briefly exceed the configured cap.
+    // Serialize issuance so two concurrent option requests never choose the
+    // same slot. The slot overwritten is the one of this flow issued longest
+    // ago, as D55 (6) specifies: an empty slot (issued_at NULL) first, then the
+    // oldest ceremony, whether it is pending, consumed or expired. A ceremony
+    // lives five minutes, so a pending one is evicted only by as many newer
+    // issuances of its own flow as the flow has slots.
     await tx`SELECT pg_advisory_xact_lock(${CHALLENGE_ISSUE_LOCK})`;
-    await tx`DELETE FROM admin_webauthn_challenge WHERE expires_at <= now()`;
-    await tx`
-      INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at)
-      VALUES (${flow}, ${challenge}, now() + ${CHALLENGE_TTL}::interval)
+    const registration = flow === "registration";
+    const written = await tx`
+      UPDATE admin_webauthn_challenge
+         SET flow = ${flow}, challenge = ${challenge}, issued_at = now(),
+             expires_at = now() + ${CHALLENGE_TTL}::interval, consumed_at = NULL
+       WHERE slot = (
+         SELECT slot FROM admin_webauthn_challenge
+          WHERE (slot < ${REGISTRATION_SLOTS}) = ${registration}
+          ORDER BY issued_at ASC NULLS FIRST, slot ASC
+          LIMIT 1
+       )
+      RETURNING slot
     `;
-    if (flow === "authentication") {
-      await tx`
-        DELETE FROM admin_webauthn_challenge
-        WHERE flow = 'authentication'
-          AND challenge IN (
-            SELECT challenge
-            FROM admin_webauthn_challenge
-            WHERE flow = 'authentication'
-            ORDER BY expires_at DESC, challenge DESC
-            OFFSET ${MAX_PUBLIC_AUTH_CHALLENGES}
-          )
-      `;
+    if (written.length !== 1) {
+      // 0088 and the blank bootstrap write the 32 slots; the runtime cannot
+      // add one. A table with none is a database that never reached 0088.
+      throw new Error("admin_webauthn_challenge holds no slot to overwrite: migration 0088 has not been applied");
     }
   });
 }
@@ -86,7 +107,11 @@ export async function handleAdminWebauthn(
   if (m === "GET" && p === "/api/admin/webauthn/register/options") {
     if (!await isPrivileged(req)) return FORBIDDEN;
 
-    const passkeys = await sql<{ id: string, transports: string[] }[]>`SELECT id, transports FROM admin_passkey`;
+    // Live passkeys only: a revoked one (D55 (6), `revoked_at`) is not a
+    // credential any more, so it neither blocks re-registering its
+    // authenticator nor is offered for sign-in below.
+    const passkeys = await sql<{ id: string, transports: string[] }[]>`
+      SELECT id, transports FROM admin_passkey WHERE revoked_at IS NULL`;
 
     const options = await generateRegistrationOptions({
       rpName: "Robot Money",
@@ -138,9 +163,9 @@ export async function handleAdminWebauthn(
 
       const registered = await sql.begin(async (tx) => {
         // Pair the authorization re-check with a credential row lock. If a
-        // password rotation wins, its transaction deletes the passkeys first
+        // password rotation wins, its transaction revokes the sessions first
         // and this second check rejects the now-revoked caller. If this wins,
-        // rotation waits and then deletes this new passkey before returning.
+        // rotation waits and then revokes this new passkey before returning.
         await tx`SELECT id FROM admin_credential WHERE id = 1 FOR UPDATE`;
         if (!await isPrivileged(req)) return false;
         await tx`
@@ -159,7 +184,8 @@ export async function handleAdminWebauthn(
   }
 
   if (m === "GET" && p === "/api/admin/webauthn/auth/options") {
-    const passkeys = await sql<{ id: string, transports: string[] }[]>`SELECT id, transports FROM admin_passkey`;
+    const passkeys = await sql<{ id: string, transports: string[] }[]>`
+      SELECT id, transports FROM admin_passkey WHERE revoked_at IS NULL`;
 
     const options = await generateAuthenticationOptions({
       rpID,
@@ -185,8 +211,10 @@ export async function handleAdminWebauthn(
     const challenge = await consumeChallenge("authentication", responseChallenge);
     if (!challenge) return BAD("challenge not found or expired");
 
+    // A revoked passkey is refused here, on the very next ceremony after the
+    // rotation that revoked it (D55 (6)).
     const passkeys = await sql<{ id: string, public_key: Buffer, counter: number, transports: string[] }[]>`
-      SELECT id, public_key, counter, transports FROM admin_passkey WHERE id = ${body.id}
+      SELECT id, public_key, counter, transports FROM admin_passkey WHERE id = ${body.id} AND revoked_at IS NULL
     `;
     if (!passkeys.length) return BAD("passkey not found");
     const pk = passkeys[0];
@@ -214,8 +242,8 @@ export async function handleAdminWebauthn(
       const sessionToken = randomBytes(32).toString("base64url");
       const advanced = await sql.begin(async (tx) => {
         // Serialize session issuance with credential rotation. A rotation
-        // that follows this lock removes the just-created session; one that
-        // precedes it removes the passkey so the CAS below cannot succeed.
+        // that follows this lock revokes the just-created session; one that
+        // precedes it revokes the passkey so the CAS below cannot succeed.
         await tx`SELECT id FROM admin_credential WHERE id = 1 FOR UPDATE`;
         // Verification uses the counter observed above, but a second valid
         // assertion can finish first. Compare-and-swap makes the stored
@@ -227,7 +255,7 @@ export async function handleAdminWebauthn(
         const updated = await tx`
           UPDATE admin_passkey
           SET counter = ${newCounter}, last_used_at = now()
-          WHERE id = ${pk.id}
+          WHERE id = ${pk.id} AND revoked_at IS NULL
             AND (counter < ${newCounter} OR (counter = 0 AND ${newCounter} = 0))
           RETURNING id
         `;

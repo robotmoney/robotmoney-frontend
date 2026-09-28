@@ -71,7 +71,15 @@ test("queue lifecycle works under the restricted role: enqueue → claim → com
   // Schedules too (the scheduler updates next_run_at/last_enqueued_at).
   await worker`INSERT INTO job_schedules (kind, cron, enabled) VALUES ('role.test', '0 0 * * *', false)`;
   await worker`UPDATE job_schedules SET next_run_at = now() WHERE kind = 'role.test'`;
-  await worker`DELETE FROM job_schedules WHERE kind = 'role.test'`;
+  // D55 (6): no runtime role deletes (migration 0089). The retired-schedule
+  // cleanup is rm_owner's, in the seed step (src/db/seed.ts).
+  let code: string | undefined;
+  try {
+    await worker`DELETE FROM job_schedules WHERE kind = 'role.test'`;
+  } catch (e) {
+    code = (e as { code?: string }).code;
+  }
+  expect(code).toBe("42501");
 });
 
 test("analytics data tables DENY insert/update/delete to the worker role (42501), reads still allowed", async () => {
@@ -122,7 +130,8 @@ test("analytics data tables DENY insert/update/delete to the worker role (42501)
 test("non-analytics sampler tables stay writable to the worker role (legacy handlers unaffected)", async () => {
   await worker`INSERT INTO vault_share_price_history (vault_address, sample_hour, total_assets, total_supply)
                VALUES ('0xroletest', '1997-01-01T00:00:00Z', 0, 0)`;
-  await worker`DELETE FROM vault_share_price_history WHERE vault_address = '0xroletest'`;
+  // Writable means INSERT and UPDATE: no runtime role deletes (D55 (6), 0089).
+  await worker`UPDATE vault_share_price_history SET total_assets = 1 WHERE vault_address = '0xroletest'`;
 });
 
 // The wallet-backfill repair driver (issue #709/#760) runs entirely under

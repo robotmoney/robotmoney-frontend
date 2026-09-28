@@ -573,12 +573,24 @@ COMMENT ON COLUMN public.admin_session.revoked_at IS 'When this session was revo
 --
 
 CREATE TABLE public.admin_webauthn_challenge (
-    flow text NOT NULL,
-    challenge text NOT NULL,
-    expires_at timestamp with time zone NOT NULL,
+    flow text,
+    challenge text,
+    expires_at timestamp with time zone,
     consumed_at timestamp with time zone,
-    CONSTRAINT admin_webauthn_challenge_flow_check CHECK ((flow = ANY (ARRAY['registration'::text, 'authentication'::text])))
+    slot smallint NOT NULL,
+    issued_at timestamp with time zone,
+    CONSTRAINT admin_webauthn_challenge_flow_check CHECK ((flow = ANY (ARRAY['registration'::text, 'authentication'::text]))),
+    CONSTRAINT admin_webauthn_challenge_slot_check CHECK (((slot >= 0) AND (slot < 32))),
+    CONSTRAINT admin_webauthn_challenge_slot_flow_check CHECK (((flow IS NULL) OR (flow = CASE WHEN (slot < 8) THEN 'registration'::text ELSE 'authentication'::text END))),
+    CONSTRAINT admin_webauthn_challenge_slot_state_check CHECK ((((flow IS NULL) AND (challenge IS NULL) AND (issued_at IS NULL) AND (expires_at IS NULL) AND (consumed_at IS NULL)) OR ((flow IS NOT NULL) AND (challenge IS NOT NULL) AND (issued_at IS NOT NULL) AND (expires_at IS NOT NULL))))
 );
+
+
+--
+-- Name: TABLE admin_webauthn_challenge; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.admin_webauthn_challenge IS 'The 32 WebAuthn challenge slots (D55 (6)): 0..7 registration, 8..31 authentication. Issuing a challenge overwrites the slot of its flow with the oldest issued_at under CHALLENGE_ISSUE_LOCK; consuming it is a single-use conditional UPDATE of consumed_at. The runtime holds no INSERT or DELETE, so the table always has exactly 32 rows and needs no prune.';
 
 
 --
@@ -586,6 +598,20 @@ CREATE TABLE public.admin_webauthn_challenge (
 --
 
 COMMENT ON COLUMN public.admin_webauthn_challenge.consumed_at IS 'When this challenge was consumed (D55 (6)): set by the single-use conditional UPDATE instead of deleting the row. A consumed or expired challenge is never accepted again. NULL = unconsumed.';
+
+
+--
+-- Name: COLUMN admin_webauthn_challenge.slot; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.admin_webauthn_challenge.slot IS 'The slot number, 0..31. The primary key: there are exactly 32 slots, written by migration 0088 or the blank bootstrap. Slots 0..7 hold registration ceremonies and 8..31 authentication ones, so a public flood of sign-in options never evicts a pending enrolment.';
+
+
+--
+-- Name: COLUMN admin_webauthn_challenge.issued_at; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.admin_webauthn_challenge.issued_at IS 'When the ceremony in this slot was issued. The next issuance overwrites the slot with the oldest issued_at (an empty slot, NULL, first). NULL = empty slot.';
 
 
 --
@@ -2756,7 +2782,7 @@ CREATE TABLE public.swarm_stream_events (
 -- Name: TABLE swarm_stream_events; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON TABLE public.swarm_stream_events IS 'The scheduler event stream (spec §6). One row per change to what the clock waits on, written in the same transaction as that change, numbered gaplessly in commit order from swarm_stream_head. Only rm_owner may delete, and only rows below the oldest servable cursor (D52, D53 (2)).';
+COMMENT ON TABLE public.swarm_stream_events IS 'The scheduler event stream (spec §6). One row per change to what the clock waits on, written in the same transaction as that change, numbered gaplessly in commit order from swarm_stream_head. No runtime role may delete: only the manual, receipted rm_owner command `bun run prune` removes rows, and only rows older than its retention window of at least 7 days. A cursor below the retained floor gets resync-and-close (log_truncated) (D55 (12)).';
 
 
 --
@@ -3606,7 +3632,15 @@ ALTER TABLE ONLY public.admin_session
 --
 
 ALTER TABLE ONLY public.admin_webauthn_challenge
-    ADD CONSTRAINT admin_webauthn_challenge_pkey PRIMARY KEY (challenge);
+    ADD CONSTRAINT admin_webauthn_challenge_pkey PRIMARY KEY (slot);
+
+
+--
+-- Name: admin_webauthn_challenge admin_webauthn_challenge_challenge_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_webauthn_challenge
+    ADD CONSTRAINT admin_webauthn_challenge_challenge_key UNIQUE (challenge);
 
 
 --
