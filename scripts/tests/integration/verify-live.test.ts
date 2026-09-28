@@ -98,6 +98,17 @@ function serve(sessions: StubSession[], opts: { healthy?: boolean; members?: Stu
           receipt: { judge: { source: "model", mode: "enforce" } },
         });
       }
+      // BY ID first: /api/swarm/sessions/:id is what the legs call now (a
+      // subject can publish more than one session a day; (date, subject)
+      // returns only the LATEST). A bare id has no further slash, so this must
+      // be tried before the two-segment (date, subject) pattern below.
+      const byId = url.pathname.match(/^\/api\/swarm\/sessions\/([^/]+)$/);
+      if (byId) {
+        const found = sessions.find((s) => s.id === byId[1]);
+        if (!found) return new Response("not found", { status: 404 });
+        const { takes, ...rest } = found;
+        return Response.json({ session: rest, takes });
+      }
       const m = url.pathname.match(/^\/api\/swarm\/sessions\/([^/]+)\/([^/]+)$/);
       if (m) {
         const found = sessions.find((s) => s.date === m[1] && s.subjectId === m[2]);
