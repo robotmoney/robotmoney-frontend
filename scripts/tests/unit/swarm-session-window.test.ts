@@ -330,3 +330,17 @@ describe("a twin's adopted windows are configuration written at boot, not a driv
     expect(mainSrc).toContain("if (twinRoster && smokeTwinContainer) retimeAdoptedWindows(smokeTwinContainer, cadence.swarmWindowMs, log);");
   });
 });
+
+describe("a failed regime refresh does not cancel the session", () => {
+  test("the refresh is caught, logged with the saved regime's date, and the session goes on to its brief", () => {
+    const i = sessionSrc.indexOf("await runRegimeClassify(opts?.regimeAsof ?? date, rail);");
+    expect(i).toBeGreaterThan(0);
+    const around = sessionSrc.slice(i - 200, i + 700);
+    expect(around).toContain("try {");
+    expect(around).toContain("} catch (err) {");
+    expect(around).toContain("regime refresh failed; the brief carries the latest saved regime");
+    // The session continues: nothing in the catch rethrows.
+    const catchBody = around.slice(around.indexOf("} catch (err) {"), around.indexOf("regime refresh failed") + 200);
+    expect(catchBody).not.toContain("throw");
+  });
+});

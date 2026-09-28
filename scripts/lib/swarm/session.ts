@@ -1632,8 +1632,23 @@ export async function runSession(
   // always "now" and can never run ahead of the boundary. What survives is the
   // ability to pin a classification to a different day than the sitting — e.g.
   // a session convened just after midnight UTC reading yesterday's snapshot.
+  // A FAILED REFRESH DOES NOT CANCEL THE SESSION. The brief reads the latest
+  // SAVED regime (publishBrief: regime_snapshots ORDER BY date DESC LIMIT 1), not
+  // the one this refresh produces, so the refresh only makes it fresher. On
+  // 2026-09-28 production computed each day's regime but could not save it (the
+  // write timed out under analytics-ledger load, issue 1035), this await threw,
+  // and every session died before its brief: 17 hours without a session. Now the
+  // brief goes out with the last saved regime, which is real data and carries
+  // its own date, and the failure is logged with that date.
   if (sessionIndex > 0) {
-    await runRegimeClassify(opts?.regimeAsof ?? date, rail);
+    try {
+      await runRegimeClassify(opts?.regimeAsof ?? date, rail);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      const saved: string = await fetch(`${rail.backendUrl ?? backendUrl()}${ROUTES.dashboards.regimeSnapshots}?range=1`)
+        .then(responseJson).then((j: any) => j?.latest?.date ?? "none").catch(() => "unknown");
+      console.log(`${tag} regime refresh failed; the brief carries the latest saved regime (${saved}) instead: ${reason}`);
+    }
   }
 
   // Seed the reference-shaped subject fixtures (subject row + subject snapshot the
