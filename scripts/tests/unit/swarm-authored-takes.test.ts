@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assertAuthoredTakes, settledAttendance, type AbsenceReport } from "../../lib/swarm/session.ts";
+import { assertAuthoredTakes, sessionRequiresWeights, settledAttendance, type AbsenceReport } from "../../lib/swarm/session.ts";
 
 const take = (memberId: string, body: string) => ({
   memberId,
@@ -90,5 +90,25 @@ describe("settledAttendance — each settled result is its own member's", () => 
   test("every mix reads by position", () => {
     expect(settledAttendance(present, [no, ok, no])).toEqual({ failed: ["athena", "boreas"], fulfilled: ["cygnus"] });
     expect(settledAttendance(present, [ok, ok, ok])).toEqual({ failed: [], fulfilled: ["athena", "cygnus", "boreas"] });
+  });
+});
+describe("sessionRequiresWeights — the recommendation's type decides a take's sections", () => {
+  const session = (type: string, takes: unknown[] = []) => ({ session: { swarmRecommendation: { type } }, takes });
+  const weights = [{ bucket: "fixed_income", weight: 1 }];
+
+  test("an allocation session's takes carry ALLOCATION; any other subject's do not", () => {
+    expect(sessionRequiresWeights(session("bucket_weights"))).toBe(true);
+    expect(sessionRequiresWeights(session("position_actions"))).toBe(false);
+  });
+
+  test("an outside take's optional weights do not turn a portfolio session into an allocation one", () => {
+    // Weights are optional on any take. A bodyless outside take that carries
+    // them must leave the house members held to REGIME and SUBJECT.
+    const pub = session("position_actions", [{ memberId: "outside", weights }]);
+    expect(sessionRequiresWeights(pub)).toBe(false);
+    expect(() => assertAuthoredTakes("session", [
+      take("athena", "**REGIME**\n- risk-on\n**SUBJECT**\n- the book holds"),
+      { memberId: "outside", weights, stance: "neutral", confidence: 0.5 },
+    ], attendance([]), [], ["athena"], { requireWeights: sessionRequiresWeights(pub) })).not.toThrow();
   });
 });
