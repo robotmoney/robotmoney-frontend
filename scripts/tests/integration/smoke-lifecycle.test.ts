@@ -2,7 +2,17 @@
 //
 // One boot of `bun smoke --local blank --migrate --instance <name>`, on a
 // terminal (script(1) gives it a pty), against its own state root. Asserted of
-// the running process and of what it leaves behind — never of the modules alone:
+// the running process and of what it leaves behind — never of the modules alone.
+//
+// A blank database holds no members, and D52 / spec §6.1 make a credential
+// file naming a member the database lacks refuse the boot (`role-mismatch`).
+// So the roster is seated the way an operator seats one: after the blank boot,
+// athena (role member) and themis (role judge) are created through the running
+// API's admin route with the operator's token — the one path that mints a
+// member and its bearer — and a second boot of the same instance's data
+// (`--local volume --credentials <file>`) reads the file, prints the roster in
+// its plan and starts both as standing participants. Criterion 14's roster
+// half is asserted of THAT boot's printed plan, journal and receipt.
 //
 //   criterion 20  the plan is printed before the first mutation, and the
 //                 journal's phase order says so: `plan` first, committed
@@ -10,8 +20,12 @@
 //   criterion 14  the printed plan holds none of the run's secrets: the role
 //                 passwords and the owner password saved for the instance, the
 //                 service tokens the running containers were given, and every
-//                 participant's key, bearer and model key — planted with NO
-//                 recognisable shape, so only the by-value check can catch them;
+//                 participant's key, bearer and model key. The role passwords,
+//                 the private keys (a 32-byte Ed25519 seed whose base64url is
+//                 lower-case words and hyphens) and the model keys are planted
+//                 with NO recognisable shape, so only the by-value check can
+//                 catch them; the bearers are the ones the admin route minted,
+//                 the only bearers a seated participant can authenticate with;
 //   criterion 40  every state file lands under the instance directory, and the
 //                 checkout's `.agents/` is not written at all;
 //   criterion 26  a second process observes the run through `smoke:status` and
@@ -39,8 +53,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { assertPlanRedacted, DEPLOYMENT_PHASES, readReceipt, type DeploymentPlan } from "../../lib/smoke-journal.ts";
-import { instancePaths, SERVICE_TOKEN_HOLDERS } from "../../lib/smoke-state.ts";
+import { createPrivateKey } from "node:crypto";
+import { ROUTES } from "@robotmoney/contract";
+import type { CredentialEntry } from "../../lib/swarm/credential-file.ts";
+import { listRunningParticipants } from "../../lib/participant-compose.ts";
+import { assertPlanRedacted, credentialShape, DEPLOYMENT_PHASES, readReceipt, type DeploymentPlan } from "../../lib/smoke-journal.ts";
+import { instancePaths, readStackState, SERVICE_TOKEN_HOLDERS } from "../../lib/smoke-state.ts";
 import { READINESS_CHECKS } from "../../lib/smoke-readiness-scheduler.ts";
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
@@ -49,6 +67,7 @@ import {
   bootQuery,
   BOOT_TIMEOUT_MS,
   containerEnv,
+  bootFailureReport,
   harness,
   journalNow,
   listTree,
@@ -71,16 +90,57 @@ const ROLE_PASSWORDS = {
   rm_worker: "copper-meadow-evening-worker",
   rm_readonly: "silver-canyon-drifting-readonly",
 };
+// Each private key is a REAL Ed25519 seed: 43 base64url characters (32 bytes)
+// that happen to be lower-case words and hyphens, so the participant can sign
+// with it and no shape heuristic can see it.
 const PARTICIPANT = {
-  bearer: "tangerine-marble-bearer-athena",
   modelKey: "cobalt-kettle-modelkey-athena",
-  privateD: "velvet-thunder-private-athena",
+  privateD: "velvet-thunder-private-athena-quiet-harbors",
 };
 const JUDGE = {
-  bearer: "saffron-glacier-bearer-themis",
   modelKey: "amber-willow-modelkey-themis",
-  privateD: "ivory-comet-private-themis",
+  privateD: "ivory-comet-private-themis-lanterns-ribbons",
 };
+
+/** The Ed25519 identity whose private seed is exactly `d` (base64url). */
+function identityFromSeed(d: string): { privateJwk: Record<string, unknown>; publicKeyB64: string } {
+  const seed = Buffer.from(d, "base64url");
+  if (seed.length !== 32 || seed.toString("base64url") !== d) throw new Error(`${d} is not a canonical 32-byte base64url seed`);
+  const pkcs8Prefix = Buffer.from("302e020100300506032b657004220420", "hex");
+  const jwk = createPrivateKey({ key: Buffer.concat([pkcs8Prefix, seed]), format: "der", type: "pkcs8" }).export({ format: "jwk" }) as Record<string, unknown>;
+  if (jwk.d !== d) throw new Error("the exported private key does not carry the planted seed");
+  return { privateJwk: jwk, publicKeyB64: Buffer.from(String(jwk.x), "base64url").toString("base64") };
+}
+
+/**
+ * Seat one member through the running API's admin route (the one path that
+ * mints a member and its bearer) with the planted identity, making it a judge
+ * when asked; returns its credential-file entry.
+ */
+async function seat(apiUrl: string, operatorToken: string, name: string, planted: typeof PARTICIPANT, role: "member" | "judge"): Promise<CredentialEntry> {
+  const { privateJwk, publicKeyB64 } = identityFromSeed(planted.privateD);
+  const res = await fetch(`${apiUrl}${ROUTES.swarm.admin.members}`, {
+    method: "POST",
+    headers: { "X-Automation-Token": operatorToken, "Content-Type": "application/json" },
+    body: JSON.stringify({ name, publicKey: publicKeyB64 }),
+  });
+  const body = (await res.json()) as { member?: { id?: string; version?: number }; token?: string };
+  if (res.status !== 201 || !body.member?.id || !body.token) throw new Error(`seating ${name} failed: HTTP ${res.status} ${JSON.stringify(body)}`);
+  if (role === "judge") {
+    const r = await fetch(`${apiUrl}${ROUTES.swarm.admin.members}/${encodeURIComponent(body.member.id)}/role`, {
+      method: "POST",
+      headers: { "X-Automation-Token": operatorToken, "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "judge", expectedVersion: body.member.version ?? 1 }),
+    });
+    if (!r.ok) throw new Error(`making ${name} a judge failed: HTTP ${r.status} ${await r.text()}`);
+  }
+  return { memberId: body.member.id, publicKeyB64, privateJwk, bearer: body.token, modelKey: planted.modelKey };
+}
+
+// The roster boot selects the judge's pinned paid model (a judge refuses the
+// keyless family); the key the boot's inference preflight asks for is a
+// placeholder that reaches no container (no-model-key-outside-participants).
+const ROSTER_BOOT_ENV = { AGENT_MODEL: "deepseek", OPENCODE_API_KEY: "sk-placeholder-never-forwarded" };
 
 let h: BootHarness;
 let boot: RunningBoot;
@@ -95,22 +155,15 @@ let schedulerHealthAfterExit = "";
 beforeAll(async () => {
   h = harness("lifecycle");
   // Plant the instance's saved role passwords (§5: `volume` mode reuses them),
-  // owner-only as readRolePasswords() requires, and a two-member roster.
+  // owner-only as readRolePasswords() requires. The blank database holds no
+  // members yet, so this boot runs with the explicit empty roster; the
+  // two-member roster is seated below, once the API is up.
   const paths = instancePaths(h.root, h.instance, { create: true });
   writeFileSync(paths.rolePasswordsFile, JSON.stringify(ROLE_PASSWORDS), { mode: 0o600 });
   chmodSync(paths.rolePasswordsFile, 0o600);
-  const credentials = join(h.root, "roster.json");
-  const entry = (who: string, s: typeof PARTICIPANT) => ({
-    memberId: `member-${who}`,
-    publicKeyB64: `${who}-public-key-b64`,
-    privateJwk: { kty: "OKP", crv: "Ed25519", x: `${who}-public-key-b64`, d: s.privateD },
-    bearer: s.bearer,
-    modelKey: s.modelKey,
-  });
-  writeFileSync(credentials, JSON.stringify({ agents: { athena: entry("athena", PARTICIPANT) }, judges: { themis: entry("themis", JUDGE) } }));
 
   agentsBefore = listTree(join(repoRoot, ".agents"));
-  boot = spawnBoot(h, ["--credentials", credentials], { tty: true });
+  boot = spawnBoot(h, ["--credentials", h.emptyRoster], { tty: true });
 
   // Observe from ANOTHER process while the run holds its lock (criterion 26).
   await waitFor(() => {
@@ -143,9 +196,9 @@ function containerHealthStatus(project: string, service: string): string {
     .stdout.toString().trim();
 }
 
-/** The plan block exactly as the boot printed it. */
-function printedPlan(): string {
-  const out = boot.output();
+/** The plan block exactly as `run` printed it. */
+function printedPlan(run: RunningBoot): string {
+  const out = run.output();
   const start = out.indexOf("── plan ──");
   const end = out.indexOf("plan id:", start);
   expect(start).toBeGreaterThan(-1);
@@ -296,20 +349,11 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
     expect(boot.output()).toContain("phase: preflight");
   });
 
-  test("criterion 14: the printed plan holds no role password, owner password, service token or participant key", () => {
-    const plan = printedPlan();
-    // The roster WAS read — the plan carries it by name and fingerprint.
-    expect(plan).toContain("agent: athena role member key fp:");
-    expect(plan).toContain("judge: themis role judge key fp:");
+  test("criterion 14: the printed plan holds no role password, owner password or service token", () => {
+    const plan = printedPlan(boot);
     expect(serviceTokens.length).toBe(3);
     const secrets = {
       ...Object.fromEntries(Object.entries(ROLE_PASSWORDS).map(([k, v]) => [`role password ${k}`, v])),
-      "participant bearer": PARTICIPANT.bearer,
-      "participant model key": PARTICIPANT.modelKey,
-      "participant private key": PARTICIPANT.privateD,
-      "judge bearer": JUDGE.bearer,
-      "judge model key": JUDGE.modelKey,
-      "judge private key": JUDGE.privateD,
       ...Object.fromEntries(serviceTokens.map((t, i) => [`service token ${i}`, t])),
     };
     for (const [kind, secret] of Object.entries(secrets)) {
@@ -419,5 +463,77 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
     }
     const tui = runCommand(h, "smoke-tui.ts", ["--instance", h.instance, "--once"]);
     expect(tui.out).toContain("source: receipt — this deployment FINISHED");
+  });
+});
+
+// The roster half of criterion 14, over a boot that READ a roster: after every
+// case above has read the blank boot's journal and receipt, athena and themis
+// are seated through the running API and the same instance's data is booted
+// again with their credential file (it overwrites the journal and receipt,
+// which is why it runs last).
+describe("a real `bun smoke` run with a seated roster (criterion 14, roster half)", () => {
+  let rosterBoot: RunningBoot;
+  let rosterExit = -1;
+  let entries: { athena: CredentialEntry; themis: CredentialEntry };
+  let rosterServiceTokens: string[] = [];
+
+  beforeAll(async () => {
+    const state = readStackState(h.paths)!;
+    const apiUrl = `http://127.0.0.1:${state.apiPort}`;
+    const operatorToken = readFileSync(h.paths.tokenFiles.operator, "utf8").trim();
+    entries = {
+      athena: await seat(apiUrl, operatorToken, "Athena Lifecycle", PARTICIPANT, "member"),
+      themis: await seat(apiUrl, operatorToken, "Themis Lifecycle", JUDGE, "judge"),
+    };
+    const credentials = join(h.root, "roster.json");
+    writeFileSync(credentials, JSON.stringify({ agents: { athena: entries.athena }, judges: { themis: entries.themis } }), { mode: 0o600 });
+    rosterBoot = spawnBoot(h, ["--credentials", credentials], { local: "volume", migrate: false, env: ROSTER_BOOT_ENV });
+    rosterExit = await rosterBoot.exited;
+    rosterServiceTokens = SERVICE_TOKEN_HOLDERS.map((holder) =>
+      existsSync(h.paths.tokenFiles[holder]) ? readFileSync(h.paths.tokenFiles[holder], "utf8").trim() : undefined,
+    ).filter((t): t is string => typeof t === "string" && t.length > 0);
+  }, BOOT_TIMEOUT_MS);
+
+  test("the roster boot reads the file, passes the database role check and starts both participants", () => {
+    expect({ rosterExit, why: rosterExit === 0 ? "" : bootFailureReport(rosterBoot) }).toEqual({ rosterExit: 0, why: "" });
+    const running = listRunningParticipants(h.project, (args) => {
+      const r = Bun.spawnSync(["docker", ...args], { stdout: "pipe", stderr: "pipe" });
+      return { exitCode: r.exitCode ?? -1, stdout: r.stdout.toString(), stderr: r.stderr.toString() };
+    });
+    expect(running.map((p) => `${p.kind}:${p.name}`).sort()).toEqual(["agent:athena", "judge:themis"]);
+  });
+
+  test("criterion 14: the printed plan holds no role password, owner password, service token or participant key", () => {
+    const plan = printedPlan(rosterBoot);
+    // The roster WAS read — the plan carries it by name and fingerprint.
+    expect(plan).toContain("agent: athena role member key fp:");
+    expect(plan).toContain("judge: themis role judge key fp:");
+    expect(rosterServiceTokens.length).toBe(3);
+    const shapeless = {
+      "participant model key": PARTICIPANT.modelKey,
+      "participant private key": PARTICIPANT.privateD,
+      "judge model key": JUDGE.modelKey,
+      "judge private key": JUDGE.privateD,
+    };
+    // The planted keys really are shapeless: only the by-value list can catch them.
+    for (const [kind, secret] of Object.entries(shapeless)) expect({ kind, shape: credentialShape(secret) }).toEqual({ kind, shape: null });
+    // …and the file the boot read carries exactly them.
+    expect(entries.athena.privateJwk.d).toBe(PARTICIPANT.privateD);
+    expect(entries.themis.privateJwk.d).toBe(JUDGE.privateD);
+    const secrets = {
+      ...Object.fromEntries(Object.entries(ROLE_PASSWORDS).map(([k, v]) => [`role password ${k}`, v])),
+      ...shapeless,
+      "participant bearer": entries.athena.bearer,
+      "judge bearer": entries.themis.bearer,
+      ...Object.fromEntries(rosterServiceTokens.map((t, i) => [`service token ${i}`, t])),
+    };
+    for (const [kind, secret] of Object.entries(secrets)) {
+      expect({ kind, printed: plan.includes(secret) }).toEqual({ kind, printed: false });
+    }
+    // Nor did the journal or the receipt persist one.
+    const persisted = `${readFileSync(h.paths.journalFile, "utf8")}${readFileSync(h.paths.receiptFile, "utf8")}`;
+    for (const [kind, secret] of Object.entries(secrets)) {
+      expect({ kind, persisted: persisted.includes(secret) }).toEqual({ kind, persisted: false });
+    }
   });
 });
