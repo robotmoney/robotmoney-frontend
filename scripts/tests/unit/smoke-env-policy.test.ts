@@ -32,11 +32,11 @@ import {
   type TargetConnection,
 } from "../../lib/smoke-env-policy.ts";
 import type { DeploymentIdentityKind } from "../../lib/smoke-identity.ts";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseDataPath, targetConnection } from "../../smoke.ts";
-import { dropShellMigrationCredential, smokePassthroughEnv } from "../../lib/smoke-compose-env.ts";
+import { dropShellMigrationCredential, refuseAllowInsecureOnProd, smokePassthroughEnv, stackAllowInsecureFor } from "../../lib/smoke-compose-env.ts";
 import { buildSpawnEnv, DEFAULT_STACK_DATABASE, type StackConfig } from "../../stack/index.ts";
 
 /** Every identity value the matrix distinguishes, including the two non-kinds. */
@@ -271,6 +271,21 @@ describe("refuseWeakeningFlagsOnProd — §4.4, the one surviving overlay knob i
     expect(refuseWeakeningFlagsOnProd("stage", { allowInsecure: true }).allow).toBe(true);
   });
 
+  test("`bun smoke --allow-insecure` is wired: a known flag, refused on prod before the port preflight, and never a default", () => {
+    const main = readFileSync(join(import.meta.dir, "..", "..", "lib", "smoke-main.ts"), "utf8");
+    const refusal = main.indexOf("refuseAllowInsecureOnProd(policy, allowInsecureRequested)");
+    expect(refusal).toBeGreaterThan(0);
+    expect(refusal).toBeLessThan(main.indexOf("if (staticPortMode) await stagePreflight();"));
+    expect(main).toContain("allowInsecure: stackAllowInsecureFor(policy, allowInsecureRequested)");
+    // Never a default: without the flag the stack config asks for nothing.
+    expect(stackAllowInsecureFor("stage", false)).toBe(false);
+    expect(stackAllowInsecureFor("prod", false)).toBe(false);
+    expect(refuseAllowInsecureOnProd("prod", true)).toContain("--allow-insecure");
+    expect(refuseAllowInsecureOnProd("stage", true)).toBeNull();
+    // And no compose overlay exists to pin it.
+    expect(existsSync(join(import.meta.dir, "..", "..", "..", "docker-compose.smoke.yml"))).toBe(false);
+  });
+
   test("there is no `--schedules-off` to guard: §4.4 says scheduling has no off state", () => {
     // The guard used to take a `schedulesOff` flag and name it in the refusal,
     // which read as evidence the flag exists. Its input type no longer has one.
@@ -392,7 +407,7 @@ describe("a --local boot hands compose no remote connection (criterion 32, spawn
     repoRoot: "/repo",
     project: "rm_smoke_stack_c32",
     profile: "full",
-    composeFiles: ["docker-compose.yml", "docker-compose.smoke.yml"],
+    composeFiles: ["docker-compose.yml"],
     database: { ...DEFAULT_STACK_DATABASE, roleUrls: LOCAL_ROLES },
     environment: { class: "local", hash: "c32c32c32c" },
     rmEnv: "stage",

@@ -9,10 +9,11 @@
 // first query died with `getaddrinfo ESERVFAIL` and every enqueued
 // lifecycle job sat `pending` at attempts=0.
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { shadowingStackEnvWarnings, smokePassthroughEnv, stackAllowInsecureFor } from "../../lib/smoke-compose-env.ts";
+import { refuseAllowInsecureOnProd, shadowingStackEnvWarnings, smokePassthroughEnv, stackAllowInsecureFor } from "../../lib/smoke-compose-env.ts";
+import { ALLOW_INSECURE_FLAG, DEMO_FLAGS } from "../../lib/smoke-db-mode.ts";
 import { buildSmokeLifecycleComposeEnv } from "../../lib/smoke-lifecycle-env.ts";
 import { refuseCheckoutEnvFile } from "../../smoke.ts";
 import {
@@ -74,7 +75,7 @@ describe("smokePassthroughEnv", () => {
     expect(legacy.DATABASE_URL).toBe("postgres://robotmoney:robotmoney@postgres:5432/robotmoney");
   });
 
-  test("§4.4: a boot under RM_ENV=prod hands api NO allow-insecure; a stage boot keeps it (criterion 46's weakening-flag half)", () => {
+  test("§4.4: allow-insecure is explicit only, and refused on prod (criterion 46's weakening-flag half)", () => {
     const cfg: StackConfig = {
       repoRoot: "/repo",
       project: "rm_smoke_stack_insecure",
@@ -84,14 +85,29 @@ describe("smokePassthroughEnv", () => {
       environment: { class: "local", hash: "0123456789" },
       rmEnv: "prod",
     };
-    expect(stackAllowInsecureFor("prod")).toBe(false);
-    expect(stackAllowInsecureFor("stage")).toBe(true);
-    expect(buildComposeEnv({ ...cfg, allowInsecure: stackAllowInsecureFor("prod") }).RM_ALLOW_INSECURE).toBe("");
-    expect(buildComposeEnv({ ...cfg, rmEnv: "stage", allowInsecure: stackAllowInsecureFor("stage") }).RM_ALLOW_INSECURE).toBe("1");
-    // Red control: a consumer that decides nothing keeps the overlay's old pin.
-    expect(buildComposeEnv(cfg).RM_ALLOW_INSECURE).toBe("1");
+    // No flag: no allow-insecure on any policy. Secure by default.
+    expect(stackAllowInsecureFor("prod", false)).toBe(false);
+    expect(stackAllowInsecureFor("stage", false)).toBe(false);
+    // The flag: stage keeps it, prod never gets it.
+    expect(stackAllowInsecureFor("stage", true)).toBe(true);
+    expect(stackAllowInsecureFor("prod", true)).toBe(false);
+    // ...and prod refuses the flag outright, naming it, before anything starts.
+    expect(refuseAllowInsecureOnProd("prod", true)).toContain("--allow-insecure");
+    expect(refuseAllowInsecureOnProd("prod", false)).toBeNull();
+    expect(refuseAllowInsecureOnProd("stage", true)).toBeNull();
+    expect(buildComposeEnv({ ...cfg, allowInsecure: stackAllowInsecureFor("prod", true) }).RM_ALLOW_INSECURE).toBe("");
+    expect(buildComposeEnv({ ...cfg, rmEnv: "stage", allowInsecure: stackAllowInsecureFor("stage", true) }).RM_ALLOW_INSECURE).toBe("1");
+    // A consumer that decides nothing gets the secure value, not an overlay's old pin.
+    expect(buildComposeEnv(cfg).RM_ALLOW_INSECURE).toBe("");
     // And no one smuggles it back in through the extras map.
     expect(() => buildComposeEnv({ ...cfg, extraComposeEnv: { RM_ALLOW_INSECURE: "1" } })).toThrow(/StackConfig field/);
+  });
+
+  test("§4.4: `bun smoke --allow-insecure` is a known flag, and no compose overlay file exists to pin it", () => {
+    expect(DEMO_FLAGS.map((f) => f.flag)).toContain(ALLOW_INSECURE_FLAG);
+    expect(ALLOW_INSECURE_FLAG).toBe("--allow-insecure");
+    expect(existsSync(join(import.meta.dir, "../../../docker-compose.smoke.yml"))).toBe(false);
+    expect(DEFAULT_COMPOSE_FILES).toEqual(["docker-compose.yml"]);
   });
 
   test("ignores a name that is not on the allowlist", () => {
@@ -215,7 +231,7 @@ describe("the driver never spreads the host environment into compose (criterion 
   test("smoke:down / smoke:status rebuild compose env from the state file plus docker plumbing only", () => {
     const state = {
       project: "rm_smoke_stack_state",
-      composeFiles: "docker-compose.yml:docker-compose.smoke.yml",
+      composeFiles: "docker-compose.yml",
       databaseUrl: "postgres://robotmoney:robotmoney@postgres:5432/robotmoney",
       dbUser: "robotmoney",
       dbPassword: "robotmoney",
@@ -435,7 +451,7 @@ describe("docker-compose.yml: the scheduler mounts its own token directory, with
   });
 
   test("no compose file anywhere keeps a ./.agents/state or :-default instance fallback", () => {
-    for (const file of ["docker-compose.yml", "docker-compose.smoke.yml", "docker-compose.stage.yml", "stacks/robotmoney-swarm/pods/workers/composefile.yml"]) {
+    for (const file of ["docker-compose.yml", "docker-compose.stage.yml", "stacks/robotmoney-swarm/pods/workers/composefile.yml"]) {
       const code = readFileSync(join(repoRoot, file), "utf8").split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
       expect({ file, agentsState: /\.agents\/state/.test(code), defaulted: /RM_INSTANCE(_STATE_DIR)?:-/.test(code) }).toEqual({ file, agentsState: false, defaulted: false });
     }

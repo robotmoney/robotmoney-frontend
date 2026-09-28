@@ -226,6 +226,9 @@ export interface FlagSpec {
   arity: 0 | 1 | "optional";
 }
 
+/** `bun smoke --allow-insecure`: the api runs with RM_ALLOW_INSECURE=1. Refused on prod. */
+export const ALLOW_INSECURE_FLAG = "--allow-insecure";
+
 /**
  * EVERY flag `bun smoke` accepts. Nothing else may appear.
  *
@@ -253,6 +256,9 @@ export const DEMO_FLAGS: readonly FlagSpec[] = Object.freeze([
   // Spec §2: "A tool that finds the lock held waits with a timeout, then
   // refuses naming the holder." Seconds; LOCK_TIMEOUT_DEFAULT_SECONDS when absent.
   Object.freeze({ flag: LOCK_TIMEOUT_FLAG, arity: 1 as const }),
+  // Spec §4.4: the one knob the deleted compose overlay left behind. Explicit or
+  // absent, and a refusal under RM_ENV=prod (backend/src/deploy-policy.ts).
+  Object.freeze({ flag: ALLOW_INSECURE_FLAG, arity: 0 as const }),
 ]);
 
 

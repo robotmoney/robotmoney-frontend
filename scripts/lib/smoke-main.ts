@@ -5,8 +5,8 @@ import { resolveSmokeEnv } from "./smoke-env.ts";
 import { hostname } from "node:os";
 import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { databaseName, homeEnvFilePath, urlForRole } from "./env-role.ts";
-import { bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { dropShellMigrationCredential, shadowingStackEnvWarnings, smokePassthroughEnv, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
+import { ALLOW_INSECURE_FLAG, bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
+import { dropShellMigrationCredential, shadowingStackEnvWarnings, smokePassthroughEnv, refuseAllowInsecureOnProd, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
 import { resolveBackupFiles } from "./restore-container.ts";
 import { resolveDeploymentPolicy, resolveRmEnv } from "./smoke-env-policy.ts";
 import { requireRehearsalTarget } from "./smoke-identity.ts";
@@ -297,6 +297,13 @@ for (const [requested, preparation] of [[requestsMigrate(process.argv), "migrate
   const gate = requested && policy === "prod" ? requireRehearsalTarget({ preparation, rmEnv: "prod", identity: "rehearsal", explicitlyRequested: true }) : null;
   if (gate && !gate.allow) fatal(gate.reason);
 }
+// §4.4: `--allow-insecure` is explicit, and a refusal under RM_ENV=prod. Refused
+// here, before any credential is minted or container created.
+const allowInsecureRequested = process.argv.includes(ALLOW_INSECURE_FLAG);
+{
+  const refusal = refuseAllowInsecureOnProd(policy, allowInsecureRequested);
+  if (refusal !== null) fatal(refusal);
+}
 if (staticPortMode) await stagePreflight();
 // The containers' RM_ENV: the policy, and `prod` on the standing stack by rule.
 const stackRmEnv: RmEnv = stackRmEnvFor(staticPortMode, policy);
@@ -486,7 +493,6 @@ const remoteState: TargetState | undefined = remote
 // what is actually published.
 const composeFilesBase = [
   "docker-compose.yml",
-  "docker-compose.smoke.yml",
   ...(staticPortMode ? [STAGE_COMPOSE_FILE] : [])
 ].join(":");
 // The GENERATED overlays: the no-compose-postgres overlay (remote and dump) and
@@ -807,8 +813,8 @@ function makeStackConfig(): StackConfig {
     database: databaseFor(dataPath),
     environment: stackEnvironment,
     rmEnv: stackRmEnv,
-    // §4.4: never allow-insecure under RM_ENV=prod (refuseWeakeningFlagsOnProd).
-    allowInsecure: stackAllowInsecureFor(policy),
+    // §4.4: explicit `--allow-insecure` only; refused under RM_ENV=prod above.
+    allowInsecure: stackAllowInsecureFor(policy, allowInsecureRequested),
     imagesOverride,
     instance: { name: instance.name, stateDir: paths.dir },
     // NO MODEL KEY. The judge is a participant and takes its key from
