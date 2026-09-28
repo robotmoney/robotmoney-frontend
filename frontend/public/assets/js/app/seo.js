@@ -57,7 +57,7 @@ const REGIME_VARIABLES = [
 // Dataset (RM-138). Every string in the file is the page's own wording, so an
 // amount is a phrase ("$25M+ (attacker minted $80M, portion recovered)"); the
 // one number beside it, amount_usd, is that phrase's first dollar figure, the
-// figure the page's timeline plots and its index sorts by.
+// figure the page's index sorts by.
 const SMART_CONTRACT_RISKS_VARIABLES = [
   { "@type": "PropertyValue", name: "Month", description: "The month of the exploit." },
   { "@type": "PropertyValue", name: "Amount lost", description: "The loss as the case study states it, with its qualifiers." },

@@ -11,15 +11,17 @@
 // where sortKey and sortDir name the order the rows are baked in.
 //   - the filtered items carry data-tags="<tag> <tag>" (space-separated, empty
 //     for none) and x-show="has($el)", inside the element named x-ref="filtered";
-//     anything else the filter reaches (a chart's points) binds has($el) too,
-//     to fade rather than hide;
 //   - each chip is :aria-pressed="String(tag === 'x')" and
 //     @click="toggle('x', $el.textContent)", and "All" is toggle('', ...);
 //   - a sortable heading is th :aria-sort="sortState('k')" holding
 //     button.rr-sort @click="sortBy('k', 'desc', $el.textContent)", where each
 //     row carries data-k: numbers compare as numbers, anything else as text
 //     ("2026-05" sorts as a month), and the second argument is the order a
-//     first click gives. A second click reverses it. Ties keep page order;
+//     first click gives. A second click reverses it. Ties keep page order,
+//     except under the key and against the direction the rows are baked in:
+//     rows baked newest first list a month's cases newest first, so the
+//     oldest-first order reverses them too, and a month reads oldest first
+//     under it and newest first under the baked order;
 //   - each row binds :class="isLast($el) ? 'is-last' : ''", the last row
 //     shown in the current order, which draws no closing rule;
 //   - `said` is the live region's line: what the last click changed.
@@ -98,8 +100,11 @@ export function tagFilter(opts = {}) {
     ordered() {
       const key = this.sortKey;
       const sign = this.sortDir === "desc" ? -1 : 1;
+      // Against the baked order, ties reverse with it: the page's order within
+      // a month is the baked direction's, so the other direction is its reverse.
+      const tie = key === opts.sortKey && this.sortDir !== (opts.sortDir ?? "desc") ? -1 : 1;
       const rows = this.pageRows().map((el, i) => ({ el, i, v: valueOf(el, key) }));
-      if (key) rows.sort((a, b) => sign * compare(a.v, b.v) || a.i - b.i);
+      if (key) rows.sort((a, b) => sign * compare(a.v, b.v) || tie * (a.i - b.i));
       return rows.map((r) => r.el);
     },
     /** A heading's aria-sort. @param {string} key */

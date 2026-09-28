@@ -2,19 +2,20 @@
 //
 // scripts/build-smart-contract-risks-data.ts reads the view and writes the
 // cases as JSON (frontend/public/data/smart-contract-risks.json) and the case
-// and category lists the structured data uses (lib/smart-contract-risks-index.js),
-// and bakes the timeline's SVG into the view itself from the index rows. All
-// three are committed and served, so all three go stale the moment the view is
+// and category lists the structured data uses (lib/smart-contract-risks-index.js).
+// Both are committed and served, so both go stale the moment the view is
 // edited without re-running it; and the JSON promises to be the page's own
 // words, so a string it carries that the page does not say is a fabrication.
 // None of that shows in a browser. This holds them:
-//   - the committed files and the baked timeline are exactly what the view
-//     builds (--check is clean);
+//   - the committed files are exactly what the view builds (--check is clean);
 //   - every string in the JSON is in the view's text, and every id is an id there;
 //   - each field holds its own text (a swapped field fails), and each amount's
 //     dollar figure (data-usd, amount_usd) is the first one its words state;
 //   - the index rows, the records, the chips, the sortable columns and the
-//     Pattern Analysis citations agree, and a view where they do not is refused.
+//     Pattern Analysis citations agree, the rows run newest first, and a view
+//     where any of that fails is refused;
+//   - the identifiers the text names (functions, variables, addresses) are
+//     set in code, which the JSON does not see.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -23,14 +24,12 @@ import {
   disagreements,
   findAll,
   hasClass,
+  type HNode,
   INDEX_PATH,
   JSON_PATH,
   parseHtml,
-  placeLabels,
   readPage,
   textOf,
-  TIMELINE_VARIANTS,
-  timelinePoints,
   VIEW_PATH,
 } from "../../build-smart-contract-risks-data.ts";
 import { SMART_CONTRACT_RISKS } from "../../../frontend/public/assets/js/app/lib/smart-contract-risks-index.js";
@@ -55,21 +54,10 @@ describe("the committed files are the view's", () => {
     expect(r.exitCode).toBe(0);
   });
 
-  test("the JSON, the index module and the view's timeline are exactly what the view builds", () => {
+  test("the JSON and the index module are exactly what the view builds", () => {
     const built = buildSmartContractRisksData(view);
     expect(built.json).toBe(json);
     expect(built.index).toBe(readFileSync(INDEX_PATH, "utf8"));
-    expect(built.view).toBe(view);
-  });
-
-  test("a stale timeline is rewritten, so --check fails on it", () => {
-    // A point moved by hand, and a timeline emptied: the build puts both back.
-    const moved = view.replace(/(<a href="#aave"[^\n]*?<circle [^>]*cy=")[\d.]+/, "$1100");
-    expect(moved).not.toBe(view);
-    expect(buildSmartContractRisksData(moved).view).toBe(view);
-    const emptied = view.replace(/(<!-- timeline:start -->)[\s\S]*?(<!-- timeline:end -->)/, "$1\n        $2");
-    expect(emptied).not.toBe(view);
-    expect(buildSmartContractRisksData(emptied).view).toBe(view);
   });
 
   test("the index module lists the JSON's cases and categories, in its order", () => {
@@ -173,30 +161,15 @@ describe("each field holds its own words", () => {
   });
 });
 
-describe("the timeline", () => {
-  const rows = readPage(view).rows;
-
-  test("each drawing has a point per case, linking its record, filtered by its categories", () => {
-    for (const v of TIMELINE_VARIANTS) {
-      const fig = findAll(root, (n) => n.tag === "figure" && hasClass(n, `rr-tl--${v.name}`));
-      expect(fig, v.name).toHaveLength(1);
-      const points = findAll(fig[0]!, (n) => n.tag === "a");
-      expect(points.map((a) => a.attrs.href!.slice(1)).sort(), v.name).toEqual(data.cases.map((c: any) => c.id).sort());
-      for (const a of points) {
-        const row = rows.find((r) => r.id === a.attrs.href!.slice(1))!;
-        expect(a.attrs["data-tags"], a.attrs.href).toBe(row.categories.join(" "));
-        expect(a.attrs[":class"]).toContain("has($el)");
-        expect(a.attrs[":tabindex"]).toContain("has($el)");
-        expect(textOf(findAll(a, (n) => n.tag === "title")[0]!)).toBe(`${row.protocol}, ${row.date_text}: ${row.amount_lost}`);
-        expect(findAll(a, (n) => n.tag === "circle")[0]!.attrs["data-mark"]).toBe("series");
-      }
-    }
-  });
-
-  test("every label has a place clear of the others at every width its drawing shows at", () => {
-    for (const v of TIMELINE_VARIANTS) expect(placeLabels(timelinePoints(rows), v)).toHaveLength(17);
-  });
-});
+/** The view with two index rows, or two records, traded places. */
+function swap(html: string, find: (id: string) => RegExp, a: string, b: string): string {
+  const [x, y] = [find(a).exec(html)?.[0], find(b).exec(html)?.[0]];
+  if (!x || !y) throw new Error(`no ${a} or ${b} to trade`);
+  // Functions, not strings, as replacements: an amount's "$" is not a pattern.
+  return html.replace(x, "\u0000").replace(y, () => x).replace("\u0000", () => y);
+}
+const rowOf = (id: string) => new RegExp(`<tr [^>]*>\\s*<td[^>]*>[^<]*</td>\\s*<th scope="row"><a class="rr-lnk" href="#${id}">[\\s\\S]*?</tr>`);
+const recordOf = (id: string) => new RegExp(`<article class="rr-case" aria-labelledby="${id}">[\\s\\S]*?</article>`);
 
 describe("the page agrees with itself", () => {
   test("ids are unique: cases, categories, recommendations and every id on the page", () => {
@@ -262,6 +235,47 @@ describe("the page agrees with itself", () => {
     refuse('data-month="2026-05"', 'data-month="2026-04"');
     refuse('data-usd="290000000"', 'data-usd="116500"');
     refuse('data-protocol="Kelp DAO"', 'data-protocol="KelpDAO"');
+  });
+
+  test("the rows run newest first, and a row dated after the one above it is refused", () => {
+    const rows = readPage(view).rows;
+    for (let i = 1; i < rows.length; i++) expect(rows[i]!.sort.month <= rows[i - 1]!.sort.month, rows[i]!.id).toBe(true);
+    // The rows and the records traded in step, so the index still lists the
+    // records in their order and only the dates can disagree. Within a month
+    // the order is the page's to choose (Step Finance and Truebit are both
+    // January 2026); across months it is not (Truebit above IoTeX, February).
+    const trade = (a: string, b: string) => swap(swap(view, rowOf, a, b), recordOf, a, b);
+    const inMonth = trade("step-finance", "truebit");
+    expect(inMonth).not.toBe(view);
+    expect(disagreements(readPage(inMonth))).toEqual([]);
+    const early = trade("iotex", "truebit");
+    expect(disagreements(readPage(early))).toEqual([
+      'iotex: data-month="2026-02" is later than step-finance\'s "2026-01" above it',
+    ]);
+    expect(() => buildSmartContractRisksData(early)).toThrow(/later than/);
+  });
+
+  test("identifiers read as code wherever the text names them", () => {
+    // A function, a variable, a decorator, an address: set in code, so it
+    // reads as typed. Text outside any <code> must name none of them.
+    const IDENTIFIERS = [
+      "0x85d456B2DfF1fd8245387C0BfB64Dfb700e98Ef3", "6UJbu9", "expressExecuteWithToken()", "mint()", "donateToReserves()",
+      "splitDAO", "getPurchasePrice()", "onERC721Received", "get_virtual_price", "raw_call", "msg.sender",
+      "default_return_value", "@nonreentrant", "doSafeTransferIn()", "upgrade()", "emergencyCommit()", "transfer()",
+      "snapshotRatio", "snapshotTimestamp", "totalSupply", "commitVerification", "lzReceive",
+    ];
+    const loose: string[] = [];
+    const walk = (n: HNode) => {
+      for (const c of n.children) {
+        if (typeof c === "string") loose.push(c);
+        else if (c.tag !== "code") walk(c);
+      }
+    };
+    walk(root);
+    for (const id of IDENTIFIERS) {
+      expect(viewText, id).toContain(id);
+      expect(loose.filter((t) => t.includes(id)), id).toEqual([]);
+    }
   });
 
   test("records never hide: only index rows carry the filter", () => {

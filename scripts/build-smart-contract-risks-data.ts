@@ -14,8 +14,9 @@
 //     builds the page's ItemList, DefinedTermSet and Dataset from.
 //
 // It refuses to write anything when the page disagrees with itself: an index
-// row whose categories, date, attack or amount differ from its record's, or a
-// category whose cited cases differ from the records filed under it.
+// row whose categories, date, attack or amount differ from its record's, a row
+// dated later than the one above it (the page is newest first), or a category
+// whose cited cases differ from the records filed under it.
 // scripts/tests/unit/smart-contract-risks-data.test.ts runs --check's
 // comparison, so a view edited without re-running this fails the unit tier.
 import { readFileSync, writeFileSync } from "node:fs";
@@ -319,6 +320,12 @@ export function disagreements({ data, rows, dataHref, chips, sortKeys, categoryH
   // Date, Protocol and Amount lost sort, by attributes every row carries and
   // that say what the row says.
   if ([...sortKeys].sort().join() !== [...SORT_KEYS].sort().join()) out.push(`the index sorts by [${sortKeys}], not [${SORT_KEYS}]`);
+  // Baked newest first: the sort's ties, and a reader without JavaScript, take
+  // the page's order as the date order.
+  rows.forEach((r, i) => {
+    const above = rows[i - 1];
+    if (above && r.sort.month > above.sort.month) out.push(`${r.id}: data-month="${r.sort.month}" is later than ${above.id}'s "${above.sort.month}" above it`);
+  });
   for (const r of rows) {
     const rec = data.cases.find((c) => c.id === r.id);
     if (!r.sort.month || !r.sort.protocol || !r.sort.usd) out.push(`${r.id}: a row needs data-month, data-protocol and data-usd`);
@@ -354,264 +361,10 @@ export function disagreements({ data, rows, dataHref, chips, sortKeys, categoryH
   return out;
 }
 
-
-// ── The timeline ────────────────────────────────────────────────────────────
-// The chronology opens on a chart: each case a Beacon point at its month and
-// the first dollar figure its Amount Lost states (the row's data-usd), on a
-// log scale from $1M to $2B. Two panels, the page's own era split: the years
-// before the latest by year on the left, the latest year by month on the
-// right, with a gap between them so the change of scale shows. Cases in the
-// same month spread across that month's band.
-//
-// Baked, not drawn in the browser, so a reader without JavaScript gets it,
-// and written twice (like the changelog's diagrams): a wide drawing, and one
-// with the panels stacked for a phone; views.css shows one.
-//
-// Neither drawing has a viewBox. Across the page its x positions are
-// percentages of the drawing's width and every size is in pixels, so a dot is
-// the same 10px and a label the same type size at every width. A label sits
-// a fixed number of pixels from its dot, so its box moves linearly with the
-// width: placeLabels() picks, for each point, the first side of its dot where
-// the label stays inside its panel and clears every other label and dot at
-// both ends of the width range the drawing is shown at, which by linearity is
-// every width in between.
-
-export type TimelinePoint = { id: string; protocol: string; month: string; usd: number; tags: string[]; title: string };
-
-/** The y axis: amount lost, log scale. */
-const USD_LO = 1e6;
-const USD_HI = 2e9;
-const USD_TICKS: [number, string][] = [[1e6, "$1M"], [1e7, "$10M"], [1e8, "$100M"], [1e9, "$1B"]];
-const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-/** Type and marks, in pixels. Labels are JetBrains Mono at 0.625rem: 6px an
- *  advance, and a line box of 10.2px over the baseline and 3px under it (the
- *  box a browser measures a label by, a little more than its ink). The dot is
- *  Beacon's point, under the covenant's 12px. */
-const CH = 6;
-const ASC = 10.2;
-const DESC = 3;
-const LABEL_H = ASC + DESC;
-const DOT_R = 5;
-const PAD = 1;
-
-type Panel = { x0: number; x1: number; top: number; h: number; kind: "years" | "months" };
-type Variant = { name: "wide" | "narrow"; wMin: number; wMax: number; height: number; gutter: number; panels: Panel[] };
-
-/** The drawings. wMin and wMax bound the column each one is shown in: the
- *  wide one from a 641px window (the column is the window less 1.5rem a side,
- *  and less a scrollbar) to .rv__body's 1280px less 2rem a side; the narrow
- *  one from a 320px phone to the 640px breakpoint. */
-export const TIMELINE_VARIANTS: Variant[] = [
-  {
-    name: "wide", wMin: 560, wMax: 1216, height: 316, gutter: 0.075,
-    panels: [
-      { x0: 0.075, x1: 0.405, top: 6, h: 280, kind: "years" },
-      { x0: 0.445, x1: 1, top: 6, h: 280, kind: "months" },
-    ],
-  },
-  {
-    name: "narrow", wMin: 300, wMax: 592, height: 562, gutter: 0.14,
-    panels: [
-      { x0: 0.14, x1: 1, top: 6, h: 230, kind: "years" },
-      { x0: 0.14, x1: 1, top: 302, h: 230, kind: "months" },
-    ],
-  },
-];
-
-const yOf = (panel: Panel, usd: number) =>
-  panel.top + panel.h * (1 - (Math.log10(usd) - Math.log10(USD_LO)) / (Math.log10(USD_HI) - Math.log10(USD_LO)));
-
-/** A box whose x runs a·W + [b0, b1] for a drawing W pixels wide; y is fixed. */
-type Box = { a: number; b0: number; b1: number; y0: number; y1: number };
-
-/** Clear of each other at every width in [lo, hi]: apart in y, or one wholly
- *  left of the other at both ends of the range (x is linear in W). */
-function clear(p: Box, q: Box, lo: number, hi: number) {
-  if (p.y1 <= q.y0 || q.y1 <= p.y0) return true;
-  const leftOf = (l: Box, r: Box) => [lo, hi].every((w) => l.a * w + l.b1 <= r.a * w + r.b0);
-  return leftOf(p, q) || leftOf(q, p);
-}
-
-/** The sides a label can take, in order of preference: right of its dot,
- *  left of it, then over or under it, running right, left or centred. */
-const SIDES = ["r", "l", "ar", "br", "al", "bl", "a", "b"] as const;
-type Side = (typeof SIDES)[number];
-
-function labelBox(side: Side, a: number, cy: number, w: number): Box {
-  const d = DOT_R + 4;
-  const above = [cy - DOT_R - 2 - LABEL_H, cy - DOT_R - 2];
-  // Centred on the dot: the baseline sits (ASC - DESC) / 2 under its centre.
-  const below = [cy + DOT_R + 2, cy + DOT_R + 2 + LABEL_H];
-  const mid = [cy - LABEL_H / 2, cy + LABEL_H / 2];
-  const [y0, y1] = side === "r" || side === "l" ? mid : side.startsWith("a") ? above : below;
-  const [b0, b1] =
-    side === "r" ? [d, d + w] :
-    side === "l" ? [-d - w, -d] :
-    side.endsWith("r") ? [-4, -4 + w] :
-    side.endsWith("l") ? [4 - w, 4] :
-    [-w / 2, w / 2];
-  return { a, b0: b0! - PAD, b1: b1! + PAD, y0: y0!, y1: y1! };
-}
-
-type Placed = { point: TimelinePoint; panel: Panel; a: number; cy: number; side: Side };
-
-/** Every point's x (as a fraction of the drawing's width), its y, and its panel. */
-function positions(points: TimelinePoint[], v: Variant) {
-  const years = points.map((p) => Number(p.month.slice(0, 4)));
-  const last = Math.max(...years);
-  const first = Math.min(...years);
-  const lastMonths = Math.max(...points.filter((p) => p.month.startsWith(String(last))).map((p) => Number(p.month.slice(5))));
-  const [yp, mp] = [v.panels.find((p) => p.kind === "years")!, v.panels.find((p) => p.kind === "months")!];
-  // Within a month, the page lists the newest first; left to right is oldest first.
-  const inMonth = (p: TimelinePoint) => {
-    const same = points.filter((q) => q.month === p.month).reverse();
-    return (same.indexOf(p) + 0.5) / same.length;
-  };
-  return {
-    first, last, lastMonths,
-    placed: points.map((p) => {
-      const y = Number(p.month.slice(0, 4));
-      const m = Number(p.month.slice(5));
-      const panel = y === last ? mp : yp;
-      const t = y === last ? (m - 1 + inMonth(p)) / lastMonths : (y - first + (m - 0.5) / 12) / (last - first);
-      return { point: p, panel, a: panel.x0 + (panel.x1 - panel.x0) * t, cy: yOf(panel, p.usd) };
-    }),
-  };
-}
-
-/** Each label's side: inside its panel, clear of every other label and dot,
- *  at every width the drawing is shown at. Throws when there is no such set. */
-export function placeLabels(points: TimelinePoint[], v: Variant): Placed[] {
-  const { placed } = positions(points, v);
-  // A label keeps 4px clear of every other dot, so it never reads as that dot's.
-  const clearing = DOT_R + 2;
-  const dots: Box[] = placed.map((p) => ({ a: p.a, b0: -clearing, b1: clearing, y0: p.cy - clearing, y1: p.cy + clearing }));
-  const width = (p: TimelinePoint) => p.protocol.length * CH;
-  const fits = (i: number, side: Side) => {
-    const p = placed[i]!;
-    const box = labelBox(side, p.a, p.cy, width(p.point));
-    const inside = [v.wMin, v.wMax].every((w) => box.a * w + box.b0 >= p.panel.x0 * w && box.a * w + box.b1 <= p.panel.x1 * w);
-    if (!inside || box.y0 < p.panel.top - 6 || box.y1 > p.panel.top + p.panel.h - 1) return null;
-    for (let j = 0; j < dots.length; j++) if (j !== i && !clear(box, dots[j]!, v.wMin, v.wMax)) return null;
-    return box;
-  };
-  // The most crowded points choose first.
-  const crowd = (i: number) => placed.filter((q, j) => j !== i && Math.abs(q.cy - placed[i]!.cy) < 24 && Math.abs(q.a - placed[i]!.a) * v.wMin < 140).length;
-  const order = placed.map((_, i) => i).sort((i, j) => crowd(j) - crowd(i) || i - j);
-  const chosen: (Box | null)[] = placed.map(() => null);
-  const sides: Side[] = [];
-  const search = (k: number): boolean => {
-    if (k === order.length) return true;
-    const i = order[k]!;
-    for (const side of SIDES) {
-      const box = fits(i, side);
-      if (!box || chosen.some((b) => b && !clear(box, b, v.wMin, v.wMax))) continue;
-      chosen[i] = box;
-      sides[i] = side;
-      if (search(k + 1)) return true;
-      chosen[i] = null;
-    }
-    return false;
-  };
-  if (!search(0)) throw new Error(`smart-contract-risks: the ${v.name} timeline has no place for every label between ${v.wMin}px and ${v.wMax}px`);
-  return placed.map((p, i) => ({ ...p, side: sides[i]! }));
-}
-
-const pct = (a: number) => `${+(a * 100).toFixed(3)}%`;
-const px = (n: number) => `${+n.toFixed(1)}`;
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-/** One drawing: gridlines and axes, then a link per point. */
-export function timelineSvg(points: TimelinePoint[], v: Variant): string {
-  const placed = placeLabels(points, v);
-  const { first, last, lastMonths } = positions(points, v);
-  const out: string[] = [];
-  out.push(`<figure class="rr-tl rr-tl--${v.name}" aria-labelledby="timeline">`);
-  out.push(`  <svg class="rr-tl__svg" width="100%" height="${v.height}">`);
-  out.push(`    <g aria-hidden="true">`);
-  const yLabelled = new Set<number>();
-  for (const panel of v.panels) {
-    const base = panel.top + panel.h;
-    // The dollar gridlines, and the axis's own labels in the gutter once per
-    // row of panels.
-    for (const [usd, label] of USD_TICKS) {
-      const y = yOf(panel, usd);
-      const cls = usd === USD_LO ? "rr-tl__base" : "rr-tl__grid";
-      out.push(`      <line class="${cls}" x1="${pct(panel.x0)}" x2="${pct(panel.x1)}" y1="${px(y)}" y2="${px(y)}"/>`);
-      if (!yLabelled.has(Math.round(y))) out.push(`      <text class="rr-tl__y" x="${pct(v.gutter)}" dx="-8" y="${px(y + 3.5)}" text-anchor="end">${esc(label)}</text>`);
-    }
-    for (const [usd] of USD_TICKS) yLabelled.add(Math.round(yOf(panel, usd)));
-    const at = (t: number) => panel.x0 + (panel.x1 - panel.x0) * t;
-    if (panel.kind === "years") {
-      const span = last - first;
-      for (let k = 0; k <= span; k++) {
-        out.push(`      <line class="rr-tl__tick" x1="${pct(at(k / span))}" x2="${pct(at(k / span))}" y1="${px(base)}" y2="${px(base + 5)}"/>`);
-        // Every other year is named: at a phone's width a year is 20px.
-        if (k < span && k % 2 === 0) out.push(`      <text class="rr-tl__x" x="${pct(at(k / span))}" y="${px(base + 17)}" text-anchor="middle">${first + k}</text>`);
-      }
-    } else {
-      for (let k = 0; k <= lastMonths; k++) {
-        out.push(`      <line class="rr-tl__tick" x1="${pct(at(k / lastMonths))}" x2="${pct(at(k / lastMonths))}" y1="${px(base)}" y2="${px(base + 5)}"/>`);
-        if (k < lastMonths) {
-          const name = k === 0 ? `${MONTH_SHORT[k]} ${last}` : MONTH_SHORT[k]!;
-          out.push(`      <text class="rr-tl__x" x="${pct(at((k + 0.5) / lastMonths))}" y="${px(base + 17)}" text-anchor="middle">${name}</text>`);
-        }
-      }
-    }
-  }
-  out.push(`    </g>`);
-  // Oldest first, left to right: the order a keyboard moves through them.
-  const byTime = [...placed].sort((p, q) => p.point.month.localeCompare(q.point.month) || p.a - q.a);
-  for (const p of byTime) {
-    const { point, side, a, cy } = p;
-    const d = DOT_R + 4;
-    const mid = cy + (ASC - DESC) / 2;
-    const [anchor, dx, y] =
-      side === "r" ? ["start", d, mid] :
-      side === "l" ? ["end", -d, mid] :
-      [side.endsWith("r") ? "start" : side.endsWith("l") ? "end" : "middle", side.endsWith("r") ? -4 : side.endsWith("l") ? 4 : 0,
-        side.startsWith("a") ? cy - DOT_R - 2 - DESC : cy + DOT_R + 2 + ASC];
-    out.push(`    <a href="#${point.id}" data-tags="${point.tags.join(" ")}" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1">` +
-      `<title>${esc(point.title)}</title>` +
-      `<circle class="rr-tl__dot" data-mark="series" cx="${pct(a)}" cy="${px(cy)}" r="${DOT_R}"/>` +
-      `<text class="rr-tl__lbl" x="${pct(a)}" dx="${dx}" y="${px(y as number)}"${anchor === "start" ? "" : ` text-anchor="${anchor}"`}>${esc(point.protocol)}</text></a>`);
-  }
-  out.push(`  </svg>`);
-  out.push(`</figure>`);
-  return out.join("\n");
-}
-
-/** The timeline's points, from the index rows: newest first, as the page lists them. */
-export function timelinePoints(rows: IndexRow[]): TimelinePoint[] {
-  return rows.map((r) => ({
-    id: r.id,
-    protocol: r.protocol,
-    month: r.sort.month,
-    usd: Number(r.sort.usd),
-    tags: r.categories,
-    title: `${r.protocol}, ${r.date_text}: ${r.amount_lost}`,
-  }));
-}
-
-const TL_START = "<!-- timeline:start -->";
-const TL_END = "<!-- timeline:end -->";
-
-/** The view with both drawings written between its markers. */
-export function withTimeline(html: string, rows: IndexRow[]): string {
-  const start = html.indexOf(TL_START);
-  const end = html.indexOf(TL_END);
-  if (start < 0 || end < start || html.indexOf(TL_START, start + 1) >= 0) throw new Error("smart-contract-risks: the view needs one timeline:start and timeline:end marker pair");
-  const indent = html.slice(html.lastIndexOf("\n", start) + 1, start);
-  const points = timelinePoints(rows);
-  const body = TIMELINE_VARIANTS.map((v) => timelineSvg(points, v)).join("\n").split("\n").map((l) => indent + l).join("\n");
-  return html.slice(0, start) + TL_START + "\n" + body + "\n" + indent + html.slice(end);
-}
-
 /** A category's name without its parenthetical: "Oracle Manipulation (~35% of exploits)" reads "Oracle Manipulation". */
 export const termName = (heading: string) => heading.replace(/\s*\([^)]*\)\s*$/, "");
 
-export function buildSmartContractRisksData(html: string): { json: string; index: string; view: string; parsed: Parsed } {
+export function buildSmartContractRisksData(html: string): { json: string; index: string; parsed: Parsed } {
   const parsed = readPage(html);
   const problems = disagreements(parsed);
   if (problems.length) throw new Error(`smart-contract-risks disagrees with itself:\n  ${problems.join("\n  ")}`);
@@ -636,14 +389,14 @@ export function buildSmartContractRisksData(html: string): { json: string; index
     `export const SMART_CONTRACT_RISKS = ${JSON.stringify(index, null, 2)};`,
     "",
   ];
-  return { json: JSON.stringify(data, null, 2) + "\n", index: lines.join("\n"), view: withTimeline(html, parsed.rows), parsed };
+  return { json: JSON.stringify(data, null, 2) + "\n", index: lines.join("\n"), parsed };
 }
 
 if (import.meta.main) {
   const check = process.argv.includes("--check");
-  const { json, index, view } = buildSmartContractRisksData(readFileSync(VIEW_PATH, "utf8"));
+  const { json, index } = buildSmartContractRisksData(readFileSync(VIEW_PATH, "utf8"));
   const read = (p: string) => { try { return readFileSync(p, "utf8"); } catch { return ""; } };
-  const stale = [[JSON_PATH, json], [INDEX_PATH, index], [VIEW_PATH, view]].filter(([p, body]) => read(p!) !== body).map(([p]) => p!);
+  const stale = [[JSON_PATH, json], [INDEX_PATH, index]].filter(([p, body]) => read(p!) !== body).map(([p]) => p!);
   if (check) {
     if (stale.length) {
       console.error(`Out of date: ${stale.map((p) => p.slice(repoRoot.length + 1)).join(", ")}\n  Run: bun scripts/build-smart-contract-risks-data.ts`);
@@ -653,7 +406,6 @@ if (import.meta.main) {
   } else {
     writeFileSync(JSON_PATH, json);
     writeFileSync(INDEX_PATH, index);
-    writeFileSync(VIEW_PATH, view);
-    console.log(`wrote ${[JSON_PATH, INDEX_PATH].map((p) => p.slice(repoRoot.length + 1)).join(", ")} and the view's timeline`);
+    console.log(`wrote ${[JSON_PATH, INDEX_PATH].map((p) => p.slice(repoRoot.length + 1)).join(", ")}`);
   }
 }

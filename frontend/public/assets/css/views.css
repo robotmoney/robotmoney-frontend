@@ -1926,9 +1926,9 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .rr-case, .rr-era { margin-top: 2.25rem; padding-top: 2.25rem; border-top: 1px solid var(--color-border); }
 .rr-era + .rr-case { margin-top: 1rem; padding-top: 0; border-top: 0; }
 /* A record leads with its date: the figure step, in mono and the text colour,
-   over its title. From 1100px, the narrowest width that still leaves the
+   over its title. From 1120px, the narrowest width that still leaves the
    narrative 36rem beside the facts, the date takes a column of its own beside
-   the title, month over year. */
+   the title, month over year: 8.25rem, as wide as "September" at this size. */
 .rr-case__date { display: block; margin: 0 0 0.5rem; font-family: var(--font-mono); font-size: 1.5rem; line-height: 1.2;
   font-variant-numeric: tabular-nums; color: var(--color-text); }
 /* Its body: the parts (what happened, the facts, each labelled list, the root
@@ -1955,8 +1955,8 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   .rr-case__body > .rr-dl > div:first-child { padding-top: 0; }
   .rr-case__body > .rr-dl > div:last-child { border-bottom: 0; }
 }
-@media (min-width: 1100px) {
-  .rr-case { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr); column-gap: 1.5rem; align-items: start; }
+@media (min-width: 1120px) {
+  .rr-case { display: grid; grid-template-columns: 8.25rem minmax(0, 1fr); column-gap: 1.5rem; align-items: start; }
   .rr-case__date { grid-column: 1; grid-row: 1 / span 2; width: min-content; margin: 0; }
   .rr-case > .rr-case__h, .rr-case__body { grid-column: 2; }
   #view .rr-case > .rr-case__h[id] { scroll-margin-top: 6rem; }
@@ -1979,42 +1979,17 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .rr-case .rr-dl dd.rr-mono { white-space: normal; }
 /* A minor heading over its own paragraph (a Pattern Analysis category): half
    a step between them. The categories' headings at the name step and in the
-   text colour, so they lead the bold text under them. */
+   text colour, so they lead the bold text under them; the heading over them
+   all (Common Attack Categories) a rung up at the h3 step, a step and a half
+   clear of the first. */
 .rr-block > .rr-subhead__h--minor + * { margin-top: 0.5rem; }
 #patterns-sec .rr-subhead__h--minor { font-size: 1rem; color: var(--color-text); }
+#patterns-sec .rr-subhead { margin-bottom: 1.5rem; }
+#patterns-sec .rr-subhead > .rr-subhead__h { font-size: 1.3125rem; }
 /* A section aside that names a file (smart-contract-risks.json): the name as
    it is spelt, not in the nav's capitals. */
 .rr a.rr-sec__aside.rr-sec__aside--file { text-transform: none; letter-spacing: 0; }
 
-/* The exploit timeline (/smart-contract-risks): amount lost against date, one
-   Beacon point per case (an exploit is an event, and Beacon marks when
-   something happened), a label beside it in the text's soft rung, on
-   hairline gridlines. The SVG is written by
-   scripts/build-smart-contract-risks-data.ts: percentages across, pixels
-   down, so a dot and a label keep their size at every width. Two drawings,
-   one shown: the panels side by side, and stacked on a phone. */
-.rr-tl { margin: 0; }
-.rr-tl__svg { display: block; width: 100%; overflow: visible; }
-.rr-tl--narrow { display: none; }
-@media (max-width: 640px) {
-  .rr-tl--wide { display: none; }
-  .rr-tl--narrow { display: block; }
-}
-.rr-tl__grid { stroke: var(--color-border); shape-rendering: crispEdges; }
-.rr-tl__base, .rr-tl__tick { stroke: var(--color-border-light); shape-rendering: crispEdges; }
-.rr-tl__y, .rr-tl__x, .rr-tl__lbl { font-family: var(--font-mono); font-size: 0.625rem; letter-spacing: 0; font-variant-numeric: tabular-nums; }
-.rr-tl__y, .rr-tl__x { fill: var(--color-text-muted); }
-/* A label cuts the gridline it crosses: a stroke in the page's own ground,
-   painted under the letters. */
-.rr-tl__lbl { fill: var(--color-text-soft); paint-order: stroke; stroke: var(--color-void); stroke-width: 3px; stroke-linejoin: round; }
-.rr-tl__dot { fill: var(--color-beacon); }
-/* A point is a link to its record. A filter fades the points it leaves out
-   (and takes them out of the tab order) rather than hiding them, so the
-   shape of the whole stays. */
-.rr-tl a { transition: opacity 160ms var(--ease-out-expo); }
-.rr-tl a:hover .rr-tl__lbl, .rr-tl a:focus-visible .rr-tl__lbl { fill: var(--color-text); text-decoration: underline; }
-.rr-tl a.is-faded { opacity: 0.2; }
-@media (prefers-reduced-motion: reduce) { .rr-tl a { transition: none; } }
 /* A filter over the table it heads (the exploit index): a step clear of it. */
 .rr-block > .rm-chips { margin-bottom: 1rem; }
 /* A long-read's closing note (its date and sources) over the links on: a
@@ -2140,15 +2115,16 @@ a.sv__vfy { text-decoration: none; }
 .rr-table td.rr-table__text a { white-space: nowrap; }
 /* The exploit index: the date leads, in the text colour and on one line, and
    a protocol's name never breaks. Fixed columns, so a filter or a sort never
-   moves one: the date, the protocol and the categories as wide as their
-   longest entry, the amount a quarter, and the attack the rest. Under 860px
-   a category's name may break, and the attack and the amount share what is
-   left. A phone stacks the rows instead (.rr-stack). */
+   moves one: the date as wide as "September 2026", the protocol and the
+   categories as wide as their longest entry, the amount a quarter, and the
+   attack the rest. Under 860px a category's name may break, and the attack
+   and the amount share what is left. A phone stacks the rows instead
+   (.rr-stack). */
 .rr-table--index td.rr-table__date { color: var(--color-text); white-space: nowrap; }
 .rr-table--index tbody th { white-space: nowrap; }
 @media (min-width: 641px) {
   .rr-table--index { table-layout: fixed; }
-  .rr-table--index .rr-col--date { width: 7.5rem; }
+  .rr-table--index .rr-col--date { width: 8.25rem; }
   .rr-table--index .rr-col--protocol, .rr-table--index .rr-col--category { width: 10rem; }
   .rr-table--index .rr-col--amount { width: 25%; }
 }
@@ -2578,10 +2554,15 @@ a.sv__vfy { text-decoration: none; }
   /* An empty category ("—") says nothing once the headings are gone. */
   .rr-table--index.rr-stack td.is-zero { display: none; }
   /* The index keeps its sort on a phone: the sortable headings stay, as one
-     row over the stacked rows, and the others stay for screen readers only. */
+     row over the stacked rows, and the others stay for screen readers only.
+     Each button is the row's full height, so all of it takes a tap, and keeps
+     the arrow's room whether or not it is the order, so a tap moves no other
+     heading. */
   .rr-table--index.rr-stack thead { position: static; width: auto; height: auto; overflow: visible; clip: auto; }
-  .rr-table--index.rr-stack thead tr { display: flex; flex-wrap: wrap; gap: 0 1.5rem; padding: 0 0.625rem; background: var(--color-surface); }
-  .rr-table--index.rr-stack thead th { padding: 0.625rem 0; border: 0; background: none; }
+  .rr-table--index.rr-stack thead tr { display: flex; flex-wrap: wrap; gap: 0 1rem; padding: 0 0.625rem; background: var(--color-surface); }
+  .rr-table--index.rr-stack thead th { padding: 0; border: 0; background: none; }
+  .rr-table--index.rr-stack thead .rr-sort { display: block; padding: 0.625rem 0; }
+  .rr-table--index.rr-stack thead .rr-sort::after { content: ""; display: inline-block; width: 1.2em; text-align: right; }
   .rr-table--index.rr-stack thead th:not([aria-sort]) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   .rr-stack tbody th, .rr-stack tbody td { display: block; padding: 0; border: 0; text-align: left; }
   .rr-stack tbody td:nth-of-type(n+2) { grid-column: 1 / -1; }

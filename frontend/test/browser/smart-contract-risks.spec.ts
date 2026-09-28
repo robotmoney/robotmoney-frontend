@@ -1,6 +1,6 @@
-// The smart contract risks page on the research record (RM-138): a timeline of
-// its cases, an index of them that sorts and filters, then every case as one
-// record led by its date.
+// The smart contract risks page on the research record (RM-138): an index of
+// its cases that sorts and filters, then every case as one record led by its
+// date.
 //
 // Runs against a plain static server with /api answering 503, as
 // heading-anchors.spec.ts does: the page is static prose and needs no data.
@@ -8,22 +8,23 @@
 //
 // What only a browser shows, so it is asserted here and nowhere else:
 //   - the index is baked newest first; Date, Protocol and Amount lost reorder
-//     it, a second click reverses, aria-sort and the live region follow;
-//   - a chip hides index rows and never a record, fades the timeline points
-//     outside its category and takes them out of the tab order, and All
-//     brings everything back;
+//     it, a second click reverses, aria-sort and the live region follow, and
+//     oldest first lists each month's cases oldest first too;
+//   - a chip hides index rows and never a record, and All brings everything
+//     back;
 //   - rules divide, never close: the last row SHOWN, under any filter and any
 //     sort, draws no bottom rule, on a desktop and on a phone;
-//   - the timeline: a point per case linking its record, each a Beacon dot of
-//     at most 12px, mono axis labels, the wide drawing on a desktop and the
-//     stacked one on a phone;
+//   - a link from the index lands its record with the date clear of the fixed
+//     nav, at every layout the record takes;
+//   - "September 2026", the longest date, fits both date columns;
+//   - on a phone the sort row keeps its place: a tap moves no heading, and the
+//     whole row's height takes the tap;
 //   - nothing runs past a phone's edge (a hash or an address in a list, an
 //     amount in the facts); .rv__body.rr clips sideways overflow, so a page
 //     with no scrollbar can still be cutting text off, and each box is
 //     measured as well;
 //   - the covenant, on computed styles: no shadow, gradient or rounded corner,
-//     no cyan area, no cyan figure or link, and Beacon on the timeline's
-//     points and nowhere else.
+//     no cyan area, no cyan figure or link, and no Beacon anywhere.
 import { expect, test, type Page } from "@playwright/test";
 import { navigate } from "./navigation.ts";
 
@@ -77,33 +78,22 @@ async function lastRowRules(page: Page) {
   });
 }
 
-/** The timeline drawing on show: its points, their dots, and its axis labels. */
-async function timeline(page: Page) {
-  return page.evaluate(() => {
-    const figs = [...document.querySelectorAll("#view figure.rr-tl")].filter((f) => getComputedStyle(f).display !== "none");
-    const fig = figs[0];
-    if (!fig) return null;
-    const points = [...fig.querySelectorAll("a")];
-    return {
-      shown: figs.map((f) => f.getAttribute("class")),
-      points: points.map((a) => {
-        const dot = a.querySelector("circle")!;
-        const r = dot.getBoundingClientRect();
-        const cs = getComputedStyle(a);
-        return {
-          href: a.getAttribute("href")!,
-          tags: (a.getAttribute("data-tags") || "").split(" ").filter(Boolean),
-          fill: getComputedStyle(dot).fill,
-          size: Math.max(r.width, r.height),
-          round: Math.abs(r.width - r.height) < 0.5,
-          opacity: Number(cs.opacity),
-          tabindex: a.getAttribute("tabindex"),
-          label: a.querySelector("text")!.getBoundingClientRect().toJSON() as { left: number; right: number; top: number; bottom: number },
-        };
-      }),
-      axisFonts: [...fig.querySelectorAll("text.rr-tl__x, text.rr-tl__y, text.rr-tl__lbl")].map((t) => getComputedStyle(t).fontFamily),
-    };
-  });
+/** Where a record's date lands after a link from the index: its top against
+ *  the fixed nav's bottom. */
+async function landing(page: Page, id: string) {
+  await page.locator(`#view #incidents a[href="#${id}"]`).click();
+  await expect.poll(() => page.evaluate(() => location.hash)).toBe(`#${id}`);
+  // The page scrolls smoothly: wait until it has stopped, the same offset a
+  // quarter of a second apart.
+  await expect.poll(() => page.evaluate(() => new Promise<boolean>((done) => {
+    const y = scrollY;
+    setTimeout(() => done(scrollY === y && y > 0), 250);
+  }))).toBe(true);
+  return page.evaluate((id) => {
+    const nav = document.querySelector("nav.nav")!.getBoundingClientRect();
+    const date = document.querySelector(`#view article[aria-labelledby="${id}"] time.rr-case__date`)!.getBoundingClientRect();
+    return { navBottom: Math.round(nav.bottom), dateTop: Math.round(date.top), dateBottom: Math.round(date.bottom), fixed: getComputedStyle(document.querySelector("nav.nav")!).position };
+  }, id);
 }
 
 test.describe("desktop", () => {
@@ -143,20 +133,39 @@ test.describe("desktop", () => {
     expect(now.sort).toEqual(["none", "ascending", null, null, "none"]);
     expect(await lastRowRules(page)).toEqual([]);
 
-    // Date's first click is newest first again; ties keep the page's order.
+    // Date's first click is newest first again: the page's own order.
     await head("Date").click();
     now = await shown(page);
     expect(now.rows).toEqual(start.rows);
     expect(now.sort).toEqual(start.sort);
+    // Oldest first reverses each month too, so a month's cases read oldest
+    // first: 2026 opens on Truebit, then Step Finance, and April is Drift
+    // (April 1), then Kelp DAO. Without the reversal, a month would keep the
+    // page's newest-first order inside an oldest-first list.
     await head("Date").click();
     now = await shown(page);
-    expect(now.rows[0]).toBe("the-dao");
-    expect(now.rows.at(-1)).toBe("new-market-trading");
     expect(now.sort[0]).toBe("ascending");
+    expect(now.spoken).toBe("Sorted by Date, ascending");
+    expect(now.rows).toEqual([...start.rows].reverse());
+    expect(now.rows).toEqual([
+      "the-dao", "harvest-finance", "beanstalk", "euler-finance", "curve-finance", "bybit-safe",
+      "truebit", "step-finance", "iotex", "yieldblox", "aave", "resolv", "venus-protocol", "solv-protocol",
+      "drift-protocol", "kelp-dao", "new-market-trading",
+    ]);
+    expect(await lastRowRules(page)).toEqual([]);
+    // And back: newest first is the page's order again, every month included.
+    await head("Date").click();
+    expect((await shown(page)).rows).toEqual(start.rows);
     expect(errors).toEqual([]);
   });
 
-  test("a chip filters the index and fades the timeline, never a record; All brings them back", async ({ page }) => {
+  test("the index is named by its heading's words, not its section link", async ({ page }) => {
+    await open(page);
+    await expect(page.locator("#view h2#chronology > a.rm-hlink")).toHaveCount(1);
+    await expect(page.locator("#view table#incidents")).toHaveAccessibleName("The Attack Chronology");
+  });
+
+  test("a chip filters the index, never a record; All brings them back", async ({ page }) => {
     const errors = collectErrors(page);
     await open(page);
 
@@ -171,8 +180,7 @@ test.describe("desktop", () => {
     expect(start.records).toBe(17);
     expect(start.spoken).toBe("");
 
-    // Every category chip, in turn: its rows and only its rows, every record,
-    // its points bright and the rest faded out of the tab order.
+    // Every category chip, in turn: its rows and only its rows, and every record.
     for (let i = 1; i < 9; i++) {
       const chip = chips.nth(i);
       const tag = await chip.evaluate((b) => /toggle\('([^']+)'/.exec(b.getAttribute("@click") || "")![1]!);
@@ -191,10 +199,6 @@ test.describe("desktop", () => {
       await expect(chip).toHaveAttribute("aria-describedby", tag);
       await expect(page.locator(`#view h4#${tag}`)).toHaveCount(1);
       expect(await lastRowRules(page), tag).toEqual([]);
-      await expect.poll(async () => {
-        const t = (await timeline(page))!;
-        return t.points.every((p) => (p.tags.includes(tag) ? p.opacity === 1 && p.tabindex === null : p.opacity < 0.3 && p.tabindex === "-1"));
-      }, { message: `${tag}: the timeline's points` }).toBe(true);
     }
 
     // A second press on the chip in force, then All, each restore everything.
@@ -210,15 +214,13 @@ test.describe("desktop", () => {
     const end = await shown(page);
     expect(end.rows).toHaveLength(17);
     expect(end.spoken).toBe("17 of 17 exploits: All");
-    await expect.poll(async () => (await timeline(page))!.points.every((p) => p.opacity === 1 && p.tabindex === null)).toBe(true);
 
     // A link from the index lands on its record while a filter is on, its
     // date clear of the fixed nav.
     await chips.nth(1).click();
-    await page.locator('#view #incidents a[href="#drift-protocol"]').click();
-    await expect.poll(() => page.evaluate(() => location.hash)).toBe("#drift-protocol");
-    await expect(page.locator("#view h3#drift-protocol")).toBeInViewport();
-    await expect(page.locator('#view article[aria-labelledby="drift-protocol"] time.rr-case__date')).toBeInViewport();
+    const at = await landing(page, "drift-protocol");
+    expect(at.fixed).toBe("fixed");
+    expect(at.dateTop, "the date is under the nav").toBeGreaterThanOrEqual(at.navBottom);
     expect(errors).toEqual([]);
   });
 
@@ -236,47 +238,6 @@ test.describe("desktop", () => {
     }
     await chip("Private key compromise").click();
     expect(await lastRowRules(page)).toEqual([]);
-  });
-
-  test("the timeline: a Beacon point per case, linking its record", async ({ page }) => {
-    await open(page);
-    const t = (await timeline(page))!;
-    expect(t.shown).toEqual(["rr-tl rr-tl--wide"]);
-    expect(t.points).toHaveLength(17);
-    const ids = await page.evaluate(() => [...document.querySelectorAll("#view article.rr-case h3[id]")].map((h) => `#${h.id}`));
-    expect(t.points.map((p) => p.href).sort()).toEqual([...ids].sort());
-    for (const p of t.points) {
-      expect(p.fill, p.href).toBe(BEACON);
-      expect(p.size, p.href).toBeGreaterThan(4);
-      expect(p.size, p.href).toBeLessThanOrEqual(12);
-      expect(p.round, `${p.href} is a round point, a reading`).toBe(true);
-    }
-    // No two labels overlap.
-    const boxes = t.points.map((p) => p.label);
-    for (let i = 0; i < boxes.length; i++) {
-      for (let j = i + 1; j < boxes.length; j++) {
-        const [a, b] = [boxes[i]!, boxes[j]!];
-        const overlap = a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
-        expect(overlap, `${t.points[i]!.href} and ${t.points[j]!.href}`).toBe(false);
-      }
-    }
-    for (const f of t.axisFonts) expect(f).toMatch(/mono/i);
-
-    // A point takes the keyboard, visibly: Shift+Tab from the first chip lands
-    // on the timeline's last point.
-    await page.locator("#view .rm-chips button.rm-chip").first().focus();
-    await page.keyboard.press("Shift+Tab");
-    const focused = await page.evaluate(() => {
-      const a = document.activeElement!;
-      return {
-        inTimeline: !!a.closest("figure.rr-tl"),
-        outline: getComputedStyle(a).outlineStyle,
-        label: a.querySelector("text") ? getComputedStyle(a.querySelector("text")!).textDecorationLine : "",
-      };
-    });
-    expect(focused.inTimeline).toBe(true);
-    expect(focused.outline).toBe("solid");
-    expect(focused.label).toBe("underline");
   });
 
   test("a record leads with its date, and its facts sit beside the narrative, flush with it", async ({ page }) => {
@@ -306,9 +267,51 @@ test.describe("desktop", () => {
     expect(r.dateColor).toBe("rgb(242, 244, 249)");
   });
 
+  test('"September 2026" fits the record\'s date column and the index\'s', async ({ page }) => {
+    await open(page);
+    // The longest month there is, written into a record and an index row: it
+    // must stay inside its column, clear of the title and the next cell.
+    const fit = await page.evaluate(() => {
+      const art = document.querySelector('#view article[aria-labelledby="kelp-dao"]')!;
+      const time = art.querySelector("time.rr-case__date")!;
+      time.textContent = "September 2026";
+      const cols = getComputedStyle(art).gridTemplateColumns.split(" ").map(parseFloat);
+      const td = document.querySelector("#view #incidents tbody tr td.rr-table__date")!;
+      td.textContent = "September 2026";
+      const text = document.createRange();
+      text.selectNodeContents(td);
+      const t = text.getBoundingClientRect();
+      const cell = td.getBoundingClientRect();
+      return {
+        dateWidth: time.getBoundingClientRect().width,
+        column: cols[0]!,
+        titleClear: time.getBoundingClientRect().right <= art.querySelector("h3")!.getBoundingClientRect().left,
+        textRight: t.right,
+        cellInner: cell.right - parseFloat(getComputedStyle(td).paddingRight),
+      };
+    });
+    expect(fit.dateWidth, "the record's date").toBeLessThanOrEqual(fit.column);
+    expect(fit.titleClear).toBe(true);
+    expect(fit.textRight, "the index's date").toBeLessThanOrEqual(fit.cellInner);
+  });
+
+  test("Pattern Analysis steps down from its heading to the categories", async ({ page }) => {
+    await open(page);
+    const step = await page.evaluate(() => {
+      const size = (s: string) => parseFloat(getComputedStyle(document.querySelector(s)!).fontSize);
+      const h3 = document.querySelector("#view h3#common-attack-categories")!.getBoundingClientRect();
+      const h4 = document.querySelector("#view #patterns-sec h4")!.getBoundingClientRect();
+      return { h3: size("#view h3#common-attack-categories"), h4: size("#view #patterns-sec h4"), gap: h4.top - h3.bottom };
+    });
+    // A rung of the type scale apart, and more room under the heading than
+    // between a category's name and its text.
+    expect(step.h3 - step.h4).toBeGreaterThanOrEqual(4);
+    expect(step.gap).toBeGreaterThanOrEqual(24);
+  });
+
   test("the page keeps the covenant on its computed styles", async ({ page }) => {
     await open(page);
-    // A filter on, so the pressed chip and the faded points are scanned too.
+    // A filter on, so the pressed chip is scanned too.
     await page.locator("#view .rm-chips button.rm-chip").nth(3).click();
     const findings = await page.evaluate((beacon) => {
       const CYAN = ["rgb(0, 229, 255)", "rgb(0, 184, 212)"];
@@ -316,7 +319,6 @@ test.describe("desktop", () => {
       const out: string[] = [];
       const root = document.querySelector("#view section.rv")!;
       let scanned = 0;
-      let points = 0;
       for (const el of [root, ...root.querySelectorAll("*")]) {
         if (!el.getClientRects().length) continue;
         scanned++;
@@ -336,21 +338,13 @@ test.describe("desktop", () => {
         if (svg && CYAN.includes(cs.fill) && own) out.push(`cyan text in ${tag}: "${own}"`);
         if (CYAN.includes(cs.color) && el.tagName === "A") out.push(`cyan link: "${el.textContent}"`);
         if (CYAN.includes(cs.borderBottomColor) && el.tagName === "A") out.push(`cyan underline: "${el.textContent}"`);
-        // Beacon marks the timeline's points and nothing else: a dot of at
-        // most 12px, never a mass, a line or a note.
-        const isPoint = el.matches("figure.rr-tl circle.rr-tl__dot");
-        if (isPoint) {
-          points++;
-          if (cs.fill !== beacon) out.push(`a timeline point is not Beacon: ${cs.fill}`);
-          if (Math.max(r.width, r.height) > 12) out.push(`a timeline point is ${Math.round(r.width)}px`);
-        }
-        const beaconHere = [cs.color, cs.backgroundColor, cs.borderTopColor, cs.borderLeftColor, cs.borderBottomColor].some((c) => BEACON.includes(c)) ||
-          (svg && [cs.fill, cs.stroke].some((c) => BEACON.includes(c)));
-        if (beaconHere && !isPoint) out.push(`Beacon on ${tag}`);
+        // Nothing on this page is Beacon: no point, no note, no rule.
+        const beaconHere = [cs.color, cs.backgroundColor, cs.borderTopColor, cs.borderRightColor, cs.borderBottomColor, cs.borderLeftColor, cs.outlineColor]
+          .some((c) => BEACON.includes(c)) || (svg && [cs.fill, cs.stroke].some((c) => BEACON.includes(c)));
+        if (beaconHere) out.push(`Beacon on ${tag}`);
       }
       // A scan that reached nothing would pass on nothing.
       if (scanned < 500) out.push(`only ${scanned} elements scanned`);
-      if (points !== 17) out.push(`${points} timeline points scanned, not 17`);
       // Figures in mono: dates and amounts in the index, the facts and the records' dates.
       for (const el of document.querySelectorAll("#view #incidents td.rr-table__date, #view #incidents td:last-of-type, #view .rr-case .rr-dl dd.rr-mono, #view .rr-case time")) {
         if (!/mono/i.test(getComputedStyle(el).fontFamily)) out.push(`a figure out of mono: "${el.textContent}"`);
@@ -382,23 +376,8 @@ test.describe("phone", () => {
     expect(over).toEqual([]);
   });
 
-  test("the stacked timeline, the sort and the last row's rule on a phone", async ({ page }) => {
+  test("the sort and the last row's rule on a phone", async ({ page }) => {
     await open(page);
-    const t = (await timeline(page))!;
-    expect(t.shown).toEqual(["rr-tl rr-tl--narrow"]);
-    expect(t.points).toHaveLength(17);
-    for (const p of t.points) {
-      expect(p.fill).toBe(BEACON);
-      expect(p.size).toBeLessThanOrEqual(12);
-      expect(p.label.right, p.href).toBeLessThanOrEqual(390);
-      expect(p.label.left, p.href).toBeGreaterThanOrEqual(0);
-    }
-    for (let i = 0; i < t.points.length; i++) {
-      for (let j = i + 1; j < t.points.length; j++) {
-        const [a, b] = [t.points[i]!.label, t.points[j]!.label];
-        expect(a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom, `${t.points[i]!.href} and ${t.points[j]!.href}`).toBe(false);
-      }
-    }
     // The stacked rows print no lone dash for a case with no category.
     const dashes = await page.evaluate(() => [...document.querySelectorAll("#view #incidents td.is-zero")].filter((td) => getComputedStyle(td).display !== "none").length);
     expect(dashes).toBe(0);
@@ -418,4 +397,51 @@ test.describe("phone", () => {
     expect((await shown(page)).rows).toEqual(["solv-protocol", "curve-finance"]);
     expect(await lastRowRules(page)).toEqual([]);
   });
+
+  test("the sort row keeps its place, and all of its height takes a tap", async ({ page }) => {
+    await open(page);
+    const row = () => page.evaluate(() => {
+      // Measured from the row's own corner, so a scroll between two readings
+      // moves nothing.
+      const tr = document.querySelector("#view #incidents thead tr")!.getBoundingClientRect();
+      return {
+        row: { top: 0, bottom: Math.round(tr.height) },
+        buttons: [...document.querySelectorAll("#view #incidents thead button.rr-sort")].map((b) => {
+          const r = b.getBoundingClientRect();
+          return { name: b.textContent!.trim(), left: Math.round(r.left - tr.left), right: Math.round(r.right - tr.left), top: Math.round(r.top - tr.top), bottom: Math.round(r.bottom - tr.top) };
+        }),
+      };
+    });
+    const before = await row();
+    expect(before.buttons.map((b) => b.name)).toEqual(["Date", "Protocol", "Amount lost"]);
+    for (const b of before.buttons) {
+      expect(b.top, `${b.name} reaches the row's top`).toBe(before.row.top);
+      expect(b.bottom, `${b.name} reaches the row's bottom`).toBe(before.row.bottom);
+      expect(b.bottom - b.top, b.name).toBeGreaterThanOrEqual(24);
+    }
+    // Each order in turn: no heading moves, whichever carries the arrow.
+    for (const name of ["Protocol", "Amount lost", "Amount lost", "Date"]) {
+      await page.locator("#view #incidents thead button.rr-sort", { hasText: name }).click();
+      const after = await row();
+      expect(after.buttons, `after ${name}`).toEqual(before.buttons);
+    }
+  });
 });
+
+// Below 1120px a record's date sits over its title, so a link from the index
+// must land the title low enough for the date to clear the fixed nav: the
+// title's scroll margin carries the date's height too.
+for (const width of [1024, 390]) {
+  test.describe(`a link lands its record at ${width}px`, () => {
+    test.use({ viewport: { width, height: width < 600 ? 844 : 800 } });
+
+    test("the date clears the fixed nav", async ({ page }) => {
+      await open(page);
+      for (const id of ["kelp-dao", "curve-finance"]) {
+        const at = await landing(page, id);
+        expect(at.fixed).toBe("fixed");
+        expect(at.dateTop, `${id}: the date's top is under the nav`).toBeGreaterThanOrEqual(at.navBottom);
+      }
+    });
+  });
+}

@@ -3,28 +3,25 @@
      as /regime is: the hero, then sections divided by hairlines. The copy is production's long-form
      page, word for word; only its presentation changed (RM-138).
 
-     The chronology opens on a timeline of the cases (amount lost against date, one Beacon point
-     each, since an exploit is an event), then an index of the cases, one row each, that sorts by
-     date, protocol or amount lost and filters by attack category, then every case as one record
-     in one order: its date, its title, what happened, the facts, each labelled list, the root
-     cause. Newest first; within a month the order is as published, except that Kelp DAO sits
-     above Drift, which is dated April 1.
+     The chronology opens on an index of the cases, one row each, that sorts by date, protocol or
+     amount lost and filters by attack category, then every case as one record in one order: its
+     date, its title, what happened, the facts, each labelled list, the root cause. Newest first;
+     within a month the order is as published, except that Kelp DAO sits above Drift, which is
+     dated April 1. Sorted oldest first, a month's cases reverse too, so they read oldest first.
 
      A case's categories are the ones Pattern Analysis names it under, in the bold lead of each
      category, and no others. New Market Trading, Kelp DAO, Bybit Safe, Beanstalk and The DAO are
      named under none, so they carry none; Yearn, Radiant and Cream are named but have no case, so
      they stay plain text. The index, each record's Category row and those leads must agree.
 
-     The filter and the sort (tagFilter, lib/tag-filter.js) touch the index and the timeline only:
-     a filter hides index rows and fades timeline points, a sort reorders the baked rows. Records
-     never hide, so every link to a case lands, and a reader without JavaScript gets every row,
-     newest first.
+     The filter and the sort (tagFilter, lib/tag-filter.js) touch the index only: a filter hides
+     index rows, a sort reorders the baked rows. Records never hide, so every link to a case
+     lands, and a reader without JavaScript gets every row, newest first.
 
      scripts/build-smart-contract-risks-data.ts reads this file and writes the cases as JSON
-     (/data/smart-contract-risks.json), the case and category lists the structured data uses
-     (lib/smart-contract-risks-index.js), and the timeline's SVG between its markers below, from
-     the index rows' data-month and data-usd. Run it after any edit here; with --check it fails
-     when any of the three is stale, and so does its unit test.
+     (/data/smart-contract-risks.json) and the case and category lists the structured data uses
+     (lib/smart-contract-risks-index.js). Run it after any edit here; with --check it fails when
+     either is stale or the page disagrees with itself, and so does its unit test.
 
      No script elements, no x-cloak and no loading or error guards: the prerender strips those, and
      everything on this page is content. -->
@@ -52,157 +49,16 @@
 
     <section class="rr-sec" id="chronology-sec" aria-labelledby="chronology">
       <div class="rr-sec__head">
-        <h2 class="rr-sec__h" id="chronology">The Attack Chronology</h2>
+        <h2 class="rr-sec__h" id="chronology"><span id="chronology-name">The Attack Chronology</span></h2>
         <a class="rr-sec__aside rr-sec__aside--file" href="/data/smart-contract-risks.json">smart-contract-risks.json</a>
-      </div>
-
-      <!-- The timeline: each case at its month and the first dollar figure its
-           Amount Lost states (data-usd), on a log scale. 2016 to 2025 by year
-           on the left, 2026 by month on the right, the page's own era split.
-           Written by the generator from the index rows; edit the rows, never the SVG.
-           Two drawings of one chart: the wide one, and the panels stacked for a phone. -->
-      <div class="rr-block">
-        <div class="rr-subhead">
-          <h3 class="rr-subhead__h" id="timeline">Amount lost, by date</h3>
-          <span class="rr-sec__aside">Log scale</span>
-        </div>
-        <!-- timeline:start -->
-        <figure class="rr-tl rr-tl--wide" aria-labelledby="timeline">
-          <svg class="rr-tl__svg" width="100%" height="316">
-            <g aria-hidden="true">
-              <line class="rr-tl__base" x1="7.5%" x2="40.5%" y1="286" y2="286"/>
-              <text class="rr-tl__y" x="7.5%" dx="-8" y="289.5" text-anchor="end">$1M</text>
-              <line class="rr-tl__grid" x1="7.5%" x2="40.5%" y1="201.2" y2="201.2"/>
-              <text class="rr-tl__y" x="7.5%" dx="-8" y="204.7" text-anchor="end">$10M</text>
-              <line class="rr-tl__grid" x1="7.5%" x2="40.5%" y1="116.4" y2="116.4"/>
-              <text class="rr-tl__y" x="7.5%" dx="-8" y="119.9" text-anchor="end">$100M</text>
-              <line class="rr-tl__grid" x1="7.5%" x2="40.5%" y1="31.5" y2="31.5"/>
-              <text class="rr-tl__y" x="7.5%" dx="-8" y="35" text-anchor="end">$1B</text>
-              <line class="rr-tl__tick" x1="7.5%" x2="7.5%" y1="286" y2="291"/>
-              <text class="rr-tl__x" x="7.5%" y="303" text-anchor="middle">2016</text>
-              <line class="rr-tl__tick" x1="10.8%" x2="10.8%" y1="286" y2="291"/>
-              <line class="rr-tl__tick" x1="14.1%" x2="14.1%" y1="286" y2="291"/>
-              <text class="rr-tl__x" x="14.1%" y="303" text-anchor="middle">2018</text>
-              <line class="rr-tl__tick" x1="17.4%" x2="17.4%" y1="286" y2="291"/>
-              <line class="rr-tl__tick" x1="20.7%" x2="20.7%" y1="286" y2="291"/>
-              <text class="rr-tl__x" x="20.7%" y="303" text-anchor="middle">2020</text>
-              <line class="rr-tl__tick" x1="24%" x2="24%" y1="286" y2="291"/>
-              <line class="rr-tl__tick" x1="27.3%" x2="27.3%" y1="286" y2="291"/>
-              <text class="rr-tl__x" x="27.3%" y="303" text-anchor="middle">2022</text>
-              <line class="rr-tl__tick" x1="30.6%" x2="30.6%" y1="286" y2="291"/>
-              <line class="rr-tl__tick" x1="33.9%" x2="33.9%" y1="286" y2="291"/>
-              <text class="rr-tl__x" x="33.9%" y="303" text-anchor="middle">2024</text>
-              <line class="rr-tl__tick" x1="37.2%" x2="37.2%" y1="286" y2="291"/>
-              <line class="rr-tl__tick" x1="40.5%" x2="40.5%" y1="286" y2="291"/>
-              <line class="rr-tl__base" x1="44.5%" x2="100%" y1="286" y2="286"/>
-              <line class="rr-tl__grid" x1="44.5%" x2="100%" y1="201.2" y2="201.2"/>
-              <line class="rr-tl__grid" x1="44.5%" x2="100%" y1="116.4" y2="116.4"/>
-              <line class="rr-tl__grid" x1="44.5%" x2="100%" y1="31.5" y2="31.5"/>
-              <line class="rr-tl__tick" x1="44.5%" x2="44.5%" y1="286" y2="291"/>
-              <text class="rr-tl__x" x="50.05%" y="303" text-anchor="middle">Jan 2026</text>
-              <line class="rr-tl__tick" x1="55.6%" x2="55.6%" y1="286" y2="291"/>
-              <text class="rr-tl__x" x="61.15%" y="303" text-anchor="middle">Feb</text>
-              <line class="rr-tl__tick" x1="66.7%" x2="66.7%" y1="286" y2="291"/>
-              <text class="rr-tl__x" x="72.25%" y="303" text-anchor="middle">Mar</text>
-              <line class="rr-tl__tick" x1="77.8%" x2="77.8%" y1="286" y2="291"/>
-              <text class="rr-tl__x" x="83.35%" y="303" text-anchor="middle">Apr</text>
-              <line class="rr-tl__tick" x1="88.9%" x2="88.9%" y1="286" y2="291"/>
-              <text class="rr-tl__x" x="94.45%" y="303" text-anchor="middle">May</text>
-              <line class="rr-tl__tick" x1="100%" x2="100%" y1="286" y2="291"/>
-            </g>
-            <a href="#the-dao" data-tags="" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>The DAO, June 2016: 3.6M ETH (~$60 million at time of attack, ~$50M+ recovered later)</title><circle class="rr-tl__dot" data-mark="series" cx="9.012%" cy="135.2" r="5"/><text class="rr-tl__lbl" x="9.012%" dx="9" y="138.8">The DAO</text></a>
-            <a href="#harvest-finance" data-tags="oracle-manipulation" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Harvest Finance, October 2020: $33.8 million (24,830 ETH)</title><circle class="rr-tl__dot" data-mark="series" cx="23.313%" cy="156.3" r="5"/><text class="rr-tl__lbl" x="23.313%" dx="-4" y="173.5">Harvest Finance</text></a>
-            <a href="#beanstalk" data-tags="" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Beanstalk, April 2022: $181 million (attacker kept ~$76M)</title><circle class="rr-tl__dot" data-mark="series" cx="28.263%" cy="94.5" r="5"/><text class="rr-tl__lbl" x="28.263%" dx="-9" y="98.1" text-anchor="end">Beanstalk</text></a>
-            <a href="#euler-finance" data-tags="supply-cap-bypass" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Euler Finance, March 2023: $200 million (all funds returned)</title><circle class="rr-tl__dot" data-mark="series" cx="31.288%" cy="90.8" r="5"/><text class="rr-tl__lbl" x="31.288%" dx="4" y="80.8" text-anchor="end">Euler Finance</text></a>
-            <a href="#curve-finance" data-tags="reentrancy" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Curve Finance, July 2023: $70+ million (pETH-ETH, msETH-ETH, alETH-ETH, CRV/ETH pools)</title><circle class="rr-tl__dot" data-mark="series" cx="32.388%" cy="129.5" r="5"/><text class="rr-tl__lbl" x="32.388%" dx="4" y="119.5" text-anchor="end">Curve Finance</text></a>
-            <a href="#bybit-safe" data-tags="" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Bybit Safe, February 2025: $1.5 billion in ETH and staked ETH derivatives (largest crypto theft in history)</title><circle class="rr-tl__dot" data-mark="series" cx="37.613%" cy="16.6" r="5"/><text class="rr-tl__lbl" x="37.613%" dx="-9" y="20.2" text-anchor="end">Bybit Safe</text></a>
-            <a href="#truebit" data-tags="legacy-code" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Truebit, January 2026: $26.2 million (8,535 ETH)</title><circle class="rr-tl__dot" data-mark="series" cx="47.275%" cy="165.7" r="5"/><text class="rr-tl__lbl" x="47.275%" dx="-4" y="182.9">Truebit</text></a>
-            <a href="#step-finance" data-tags="private-key-compromise" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Step Finance, January 2026: $27.3 million (261,854 SOL)</title><circle class="rr-tl__dot" data-mark="series" cx="52.825%" cy="164.2" r="5"/><text class="rr-tl__lbl" x="52.825%" dx="0" y="154.2" text-anchor="middle">Step Finance</text></a>
-            <a href="#iotex" data-tags="private-key-compromise" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>IoTeX, February 2026: $4.4 million + 821M CIOTX minted (86% frozen by team)</title><circle class="rr-tl__dot" data-mark="series" cx="58.375%" cy="231.4" r="5"/><text class="rr-tl__lbl" x="58.375%" dx="9" y="235">IoTeX</text></a>
-            <a href="#yieldblox" data-tags="oracle-manipulation audit-scope-gaps" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>YieldBlox, February 2026: $10.97 million (1M USDC + 61M XLM)</title><circle class="rr-tl__dot" data-mark="series" cx="63.925%" cy="197.8" r="5"/><text class="rr-tl__lbl" x="63.925%" dx="9" y="201.4">YieldBlox</text></a>
-            <a href="#aave" data-tags="oracle-manipulation" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Aave, March 2026: $27.78 million (10,938 wstETH liquidated from 34 accounts)</title><circle class="rr-tl__dot" data-mark="series" cx="68.088%" cy="163.5" r="5"/><text class="rr-tl__lbl" x="68.088%" dx="-9" y="167.1" text-anchor="end">Aave</text></a>
-            <a href="#resolv" data-tags="missing-circuit-breakers" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Resolv, March 2026: $25M+ (attacker minted $80M, portion recovered)</title><circle class="rr-tl__dot" data-mark="series" cx="70.862%" cy="167.4" r="5"/><text class="rr-tl__lbl" x="70.862%" dx="9" y="171">Resolv</text></a>
-            <a href="#venus-protocol" data-tags="oracle-manipulation supply-cap-bypass" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Venus Protocol, March 2026: $3.7 million extracted, $2.15M bad debt remaining (1.18M CAKE + 1.84M THE)</title><circle class="rr-tl__dot" data-mark="series" cx="73.638%" cy="237.8" r="5"/><text class="rr-tl__lbl" x="73.638%" dx="4" y="255" text-anchor="end">Venus Protocol</text></a>
-            <a href="#solv-protocol" data-tags="reentrancy audit-scope-gaps" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Solv Protocol, March 2026: $2.73 million (38.05 SolvBTC)</title><circle class="rr-tl__dot" data-mark="series" cx="76.412%" cy="249" r="5"/><text class="rr-tl__lbl" x="76.412%" dx="9" y="252.6">Solv Protocol</text></a>
-            <a href="#drift-protocol" data-tags="private-key-compromise durable-nonce" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Drift Protocol, April 2026: $285 million (JLP, USDC, wETH, dSOL, cbBTC vaults)</title><circle class="rr-tl__dot" data-mark="series" cx="80.575%" cy="77.8" r="5"/><text class="rr-tl__lbl" x="80.575%" dx="-9" y="81.4" text-anchor="end">Drift Protocol</text></a>
-            <a href="#kelp-dao" data-tags="" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Kelp DAO, April 2026: ~$290 million (116,500 rsETH)</title><circle class="rr-tl__dot" data-mark="series" cx="86.125%" cy="77.1" r="5"/><text class="rr-tl__lbl" x="86.125%" dx="9" y="80.7">Kelp DAO</text></a>
-            <a href="#new-market-trading" data-tags="" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>New Market Trading, May 2026: $3.78 million (88 user Safes across Ethereum, Base, Arbitrum)</title><circle class="rr-tl__dot" data-mark="series" cx="94.45%" cy="237" r="5"/><text class="rr-tl__lbl" x="94.45%" dx="4" y="227" text-anchor="end">New Market Trading</text></a>
-          </svg>
-        </figure>
-        <figure class="rr-tl rr-tl--narrow" aria-labelledby="timeline">
-          <svg class="rr-tl__svg" width="100%" height="562">
-            <g aria-hidden="true">
-              <line class="rr-tl__base" x1="14%" x2="100%" y1="236" y2="236"/>
-              <text class="rr-tl__y" x="14%" dx="-8" y="239.5" text-anchor="end">$1M</text>
-              <line class="rr-tl__grid" x1="14%" x2="100%" y1="166.3" y2="166.3"/>
-              <text class="rr-tl__y" x="14%" dx="-8" y="169.8" text-anchor="end">$10M</text>
-              <line class="rr-tl__grid" x1="14%" x2="100%" y1="96.6" y2="96.6"/>
-              <text class="rr-tl__y" x="14%" dx="-8" y="100.1" text-anchor="end">$100M</text>
-              <line class="rr-tl__grid" x1="14%" x2="100%" y1="27" y2="27"/>
-              <text class="rr-tl__y" x="14%" dx="-8" y="30.5" text-anchor="end">$1B</text>
-              <line class="rr-tl__tick" x1="14%" x2="14%" y1="236" y2="241"/>
-              <text class="rr-tl__x" x="14%" y="253" text-anchor="middle">2016</text>
-              <line class="rr-tl__tick" x1="22.6%" x2="22.6%" y1="236" y2="241"/>
-              <line class="rr-tl__tick" x1="31.2%" x2="31.2%" y1="236" y2="241"/>
-              <text class="rr-tl__x" x="31.2%" y="253" text-anchor="middle">2018</text>
-              <line class="rr-tl__tick" x1="39.8%" x2="39.8%" y1="236" y2="241"/>
-              <line class="rr-tl__tick" x1="48.4%" x2="48.4%" y1="236" y2="241"/>
-              <text class="rr-tl__x" x="48.4%" y="253" text-anchor="middle">2020</text>
-              <line class="rr-tl__tick" x1="57%" x2="57%" y1="236" y2="241"/>
-              <line class="rr-tl__tick" x1="65.6%" x2="65.6%" y1="236" y2="241"/>
-              <text class="rr-tl__x" x="65.6%" y="253" text-anchor="middle">2022</text>
-              <line class="rr-tl__tick" x1="74.2%" x2="74.2%" y1="236" y2="241"/>
-              <line class="rr-tl__tick" x1="82.8%" x2="82.8%" y1="236" y2="241"/>
-              <text class="rr-tl__x" x="82.8%" y="253" text-anchor="middle">2024</text>
-              <line class="rr-tl__tick" x1="91.4%" x2="91.4%" y1="236" y2="241"/>
-              <line class="rr-tl__tick" x1="100%" x2="100%" y1="236" y2="241"/>
-              <line class="rr-tl__base" x1="14%" x2="100%" y1="532" y2="532"/>
-              <text class="rr-tl__y" x="14%" dx="-8" y="535.5" text-anchor="end">$1M</text>
-              <line class="rr-tl__grid" x1="14%" x2="100%" y1="462.3" y2="462.3"/>
-              <text class="rr-tl__y" x="14%" dx="-8" y="465.8" text-anchor="end">$10M</text>
-              <line class="rr-tl__grid" x1="14%" x2="100%" y1="392.6" y2="392.6"/>
-              <text class="rr-tl__y" x="14%" dx="-8" y="396.1" text-anchor="end">$100M</text>
-              <line class="rr-tl__grid" x1="14%" x2="100%" y1="323" y2="323"/>
-              <text class="rr-tl__y" x="14%" dx="-8" y="326.5" text-anchor="end">$1B</text>
-              <line class="rr-tl__tick" x1="14%" x2="14%" y1="532" y2="537"/>
-              <text class="rr-tl__x" x="22.6%" y="549" text-anchor="middle">Jan 2026</text>
-              <line class="rr-tl__tick" x1="31.2%" x2="31.2%" y1="532" y2="537"/>
-              <text class="rr-tl__x" x="39.8%" y="549" text-anchor="middle">Feb</text>
-              <line class="rr-tl__tick" x1="48.4%" x2="48.4%" y1="532" y2="537"/>
-              <text class="rr-tl__x" x="57%" y="549" text-anchor="middle">Mar</text>
-              <line class="rr-tl__tick" x1="65.6%" x2="65.6%" y1="532" y2="537"/>
-              <text class="rr-tl__x" x="74.2%" y="549" text-anchor="middle">Apr</text>
-              <line class="rr-tl__tick" x1="82.8%" x2="82.8%" y1="532" y2="537"/>
-              <text class="rr-tl__x" x="91.4%" y="549" text-anchor="middle">May</text>
-              <line class="rr-tl__tick" x1="100%" x2="100%" y1="532" y2="537"/>
-            </g>
-            <a href="#the-dao" data-tags="" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>The DAO, June 2016: 3.6M ETH (~$60 million at time of attack, ~$50M+ recovered later)</title><circle class="rr-tl__dot" data-mark="series" cx="17.942%" cy="112.1" r="5"/><text class="rr-tl__lbl" x="17.942%" dx="9" y="115.7">The DAO</text></a>
-            <a href="#harvest-finance" data-tags="oracle-manipulation" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Harvest Finance, October 2020: $33.8 million (24,830 ETH)</title><circle class="rr-tl__dot" data-mark="series" cx="55.208%" cy="129.5" r="5"/><text class="rr-tl__lbl" x="55.208%" dx="9" y="133.1">Harvest Finance</text></a>
-            <a href="#beanstalk" data-tags="" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Beanstalk, April 2022: $181 million (attacker kept ~$76M)</title><circle class="rr-tl__dot" data-mark="series" cx="68.108%" cy="78.7" r="5"/><text class="rr-tl__lbl" x="68.108%" dx="-9" y="82.3" text-anchor="end">Beanstalk</text></a>
-            <a href="#euler-finance" data-tags="supply-cap-bypass" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Euler Finance, March 2023: $200 million (all funds returned)</title><circle class="rr-tl__dot" data-mark="series" cx="75.992%" cy="75.7" r="5"/><text class="rr-tl__lbl" x="75.992%" dx="4" y="65.7" text-anchor="end">Euler Finance</text></a>
-            <a href="#curve-finance" data-tags="reentrancy" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Curve Finance, July 2023: $70+ million (pETH-ETH, msETH-ETH, alETH-ETH, CRV/ETH pools)</title><circle class="rr-tl__dot" data-mark="series" cx="78.858%" cy="107.4" r="5"/><text class="rr-tl__lbl" x="78.858%" dx="-9" y="111" text-anchor="end">Curve Finance</text></a>
-            <a href="#bybit-safe" data-tags="" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Bybit Safe, February 2025: $1.5 billion in ETH and staked ETH derivatives (largest crypto theft in history)</title><circle class="rr-tl__dot" data-mark="series" cx="92.475%" cy="14.7" r="5"/><text class="rr-tl__lbl" x="92.475%" dx="-9" y="18.3" text-anchor="end">Bybit Safe</text></a>
-            <a href="#truebit" data-tags="legacy-code" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Truebit, January 2026: $26.2 million (8,535 ETH)</title><circle class="rr-tl__dot" data-mark="series" cx="18.3%" cy="433.2" r="5"/><text class="rr-tl__lbl" x="18.3%" dx="-4" y="450.4">Truebit</text></a>
-            <a href="#step-finance" data-tags="private-key-compromise" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Step Finance, January 2026: $27.3 million (261,854 SOL)</title><circle class="rr-tl__dot" data-mark="series" cx="26.9%" cy="431.9" r="5"/><text class="rr-tl__lbl" x="26.9%" dx="0" y="421.9" text-anchor="middle">Step Finance</text></a>
-            <a href="#iotex" data-tags="private-key-compromise" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>IoTeX, February 2026: $4.4 million + 821M CIOTX minted (86% frozen by team)</title><circle class="rr-tl__dot" data-mark="series" cx="35.5%" cy="487.2" r="5"/><text class="rr-tl__lbl" x="35.5%" dx="9" y="490.8">IoTeX</text></a>
-            <a href="#yieldblox" data-tags="oracle-manipulation audit-scope-gaps" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>YieldBlox, February 2026: $10.97 million (1M USDC + 61M XLM)</title><circle class="rr-tl__dot" data-mark="series" cx="44.1%" cy="459.5" r="5"/><text class="rr-tl__lbl" x="44.1%" dx="9" y="463.1">YieldBlox</text></a>
-            <a href="#aave" data-tags="oracle-manipulation" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Aave, March 2026: $27.78 million (10,938 wstETH liquidated from 34 accounts)</title><circle class="rr-tl__dot" data-mark="series" cx="50.55%" cy="431.4" r="5"/><text class="rr-tl__lbl" x="50.55%" dx="-4" y="421.4">Aave</text></a>
-            <a href="#resolv" data-tags="missing-circuit-breakers" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Resolv, March 2026: $25M+ (attacker minted $80M, portion recovered)</title><circle class="rr-tl__dot" data-mark="series" cx="54.85%" cy="434.6" r="5"/><text class="rr-tl__lbl" x="54.85%" dx="9" y="438.2">Resolv</text></a>
-            <a href="#venus-protocol" data-tags="oracle-manipulation supply-cap-bypass" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Venus Protocol, March 2026: $3.7 million extracted, $2.15M bad debt remaining (1.18M CAKE + 1.84M THE)</title><circle class="rr-tl__dot" data-mark="series" cx="59.15%" cy="492.4" r="5"/><text class="rr-tl__lbl" x="59.15%" dx="4" y="509.6" text-anchor="end">Venus Protocol</text></a>
-            <a href="#solv-protocol" data-tags="reentrancy audit-scope-gaps" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Solv Protocol, March 2026: $2.73 million (38.05 SolvBTC)</title><circle class="rr-tl__dot" data-mark="series" cx="63.45%" cy="501.6" r="5"/><text class="rr-tl__lbl" x="63.45%" dx="-4" y="518.8">Solv Protocol</text></a>
-            <a href="#drift-protocol" data-tags="private-key-compromise durable-nonce" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Drift Protocol, April 2026: $285 million (JLP, USDC, wETH, dSOL, cbBTC vaults)</title><circle class="rr-tl__dot" data-mark="series" cx="69.9%" cy="361" r="5"/><text class="rr-tl__lbl" x="69.9%" dx="-9" y="364.6" text-anchor="end">Drift Protocol</text></a>
-            <a href="#kelp-dao" data-tags="" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>Kelp DAO, April 2026: ~$290 million (116,500 rsETH)</title><circle class="rr-tl__dot" data-mark="series" cx="78.5%" cy="360.4" r="5"/><text class="rr-tl__lbl" x="78.5%" dx="9" y="364">Kelp DAO</text></a>
-            <a href="#new-market-trading" data-tags="" :class="has($el) ? '' : 'is-faded'" :tabindex="has($el) ? null : -1"><title>New Market Trading, May 2026: $3.78 million (88 user Safes across Ethereum, Base, Arbitrum)</title><circle class="rr-tl__dot" data-mark="series" cx="91.4%" cy="491.8" r="5"/><text class="rr-tl__lbl" x="91.4%" dx="4" y="481.8" text-anchor="end">New Market Trading</text></a>
-          </svg>
-        </figure>
-        <!-- timeline:end -->
       </div>
 
       <!-- The index: a row per record. Baked newest first, the records' order;
            Date, Protocol and Amount lost sort it (the rows move, nothing is
-           re-rendered), and a chip filters it and the timeline. A chip's name is
-           its label and its category's heading describes it; the live region
-           says what a click changed. -->
+           re-rendered), and a chip filters it. A chip's name is its label and
+           its category's heading describes it; the live region says what a
+           click changed. The table is named by the heading's words alone
+           (#chronology-name), not by the section link the page adds to it. -->
       <div class="rr-block">
         <div class="rm-chips" role="group" aria-label="Filter by attack category">
           <button type="button" class="rm-chip" aria-pressed="true" :aria-pressed="String(!tag)" @click="toggle('', $el.textContent)">All</button>
@@ -217,7 +73,7 @@
         </div>
         <span class="rm-visually-hidden" aria-live="polite" x-text="said"></span>
         <div class="rr-tablewrap">
-          <table class="rr-table rr-table--compact rr-table--index rr-stack" id="incidents" aria-labelledby="chronology" x-ref="filtered">
+          <table class="rr-table rr-table--compact rr-table--index rr-stack" id="incidents" aria-labelledby="chronology-name" x-ref="filtered">
             <thead>
               <tr>
                 <th scope="col" class="rr-col--date" aria-sort="descending" :aria-sort="sortState('month')"><button type="button" class="rr-sort" @click="sortBy('month', 'desc', $el.textContent)">Date</button></th>
@@ -404,7 +260,7 @@
             <li><strong>Step 2:</strong> Forged a cross-chain message that was never emitted on source chain (Unichain)</li>
             <li><strong>Step 3:</strong> Single required DVN (LayerZero Labs) signed attestation for the non-existent packet</li>
             <li><strong>Step 4:</strong> No optional DVNs or threshold to challenge the fraudulent attestation</li>
-            <li><strong>Step 5:</strong> Message passed verification: commitVerification &rarr; lzReceive &rarr; peer check &rarr; OFT decode &rarr; rsETH mint</li>
+            <li><strong>Step 5:</strong> Message passed verification: <code class="rr-code">commitVerification</code> &rarr; <code class="rr-code">lzReceive</code> &rarr; peer check &rarr; OFT decode &rarr; rsETH mint</li>
             <li><strong>Result:</strong> 116,500 rsETH materialized on Ethereum with no corresponding lock on source chain</li>
           </ul>
           <p class="rr-k">Root cause</p>
@@ -472,7 +328,7 @@
           </dl>
           <p class="rr-k">Technical Attack Vector</p>
           <ul class="rr-list">
-            <li>Contract used doSafeTransferIn() to receive NFT deposits during minting</li>
+            <li>Contract used <code class="rr-code">doSafeTransferIn()</code> to receive NFT deposits during minting</li>
             <li>This triggered <code class="rr-code">onERC721Received</code> callback in attacker&rsquo;s contract</li>
             <li>Callback minted BRO tokens BEFORE execution returned to original <code class="rr-code">mint()</code></li>
             <li>Original <code class="rr-code">mint()</code> then minted BRO tokens again</li>
@@ -498,7 +354,7 @@
           </dl>
           <p class="rr-k">Technical Attack Vector</p>
           <ul class="rr-list">
-            <li>Supply cap enforced only in <code class="rr-code">mint()</code> function, not in direct transfer()</li>
+            <li>Supply cap enforced only in <code class="rr-code">mint()</code> function, not in direct <code class="rr-code">transfer()</code></li>
             <li>Attacker accumulated 84% of supply cap via normal deposits (12.2M THE)</li>
             <li>Transferred 49.5M THE directly to vTHE contract (bypassing cap)</li>
             <li>Exchange rate inflated 3.81x because contract balance increased without new vTokens minted</li>
@@ -550,8 +406,8 @@
           </dl>
           <p class="rr-k">Technical Attack Vector</p>
           <ul class="rr-list">
-            <li>CAPO initialized in 2024 with snapshotRatio of ~1.15 for wstETH/stETH</li>
-            <li>Off-chain engine computed correct update: snapshotRatio ~1.2282, timestamp 7 days ago</li>
+            <li>CAPO initialized in 2024 with <code class="rr-code">snapshotRatio</code> of ~1.15 for wstETH/stETH</li>
+            <li>Off-chain engine computed correct update: <code class="rr-code">snapshotRatio</code> ~1.2282, timestamp 7 days ago</li>
             <li>On-chain rate limiter capped single updates at 3% per 3 days</li>
             <li>Ratio could only update to ~1.1919, but timestamp updated to 7 days ago</li>
             <li>Formula extrapolated from wrong base: computed ceiling ~1.1939 vs market ~1.2285</li>
@@ -560,7 +416,7 @@
             <li>Similar misconfiguration nearly triggered a month earlier but agent wasn&rsquo;t connected</li>
           </ul>
           <p class="rr-k">Root cause</p>
-          <p class="rr-prose">Configuration mismatch between snapshotRatio and snapshotTimestamp parameters. Rate limiter prevented correction as effectively as it prevented manipulation. Stale 2024 anchor couldn&rsquo;t catch up to two years of yield growth. Near-miss a month earlier wasn&rsquo;t investigated thoroughly: institutional memory failure.</p>
+          <p class="rr-prose">Configuration mismatch between <code class="rr-code">snapshotRatio</code> and <code class="rr-code">snapshotTimestamp</code> parameters. Rate limiter prevented correction as effectively as it prevented manipulation. Stale 2024 anchor couldn&rsquo;t catch up to two years of yield growth. Near-miss a month earlier wasn&rsquo;t investigated thoroughly: institutional memory failure.</p>
         </div>
       </article>
 
@@ -604,7 +460,7 @@
           <p class="rr-k">Technical Attack Vector</p>
           <ul class="rr-list">
             <li>Attacker compromised validator owner EOA (0x6dd...148e) after 6-18 months of reconnaissance</li>
-            <li>Called upgrade() on TransferValidatorWithPayload contract</li>
+            <li>Called <code class="rr-code">upgrade()</code> on TransferValidatorWithPayload contract</li>
             <li>Deployed malicious contract with all validation checks stripped</li>
             <li>No multisig, no timelock, no second signature required for upgrade</li>
             <li>With ownership secured, transferred TokenSafe and MinterPool control</li>
@@ -703,7 +559,7 @@
         <h3 class="rr-subhead__h rr-case__h" id="curve-finance">Curve Finance: Vyper Compiler Reentrancy</h3>
         <div class="rr-case__body">
           <p class="rr-k">What happened</p>
-          <p class="rr-prose">A compiler bug in Vyper (versions 0.2.15, 0.2.16, 0.3.0) caused the @nonreentrant decorator to fail when <code class="rr-code">raw_call</code> was used with default_return_value. This allowed reentrancy attacks against multiple Curve pools simultaneously.</p>
+          <p class="rr-prose">A compiler bug in Vyper (versions 0.2.15, 0.2.16, 0.3.0) caused the <code class="rr-code">@nonreentrant</code> decorator to fail when <code class="rr-code">raw_call</code> was used with <code class="rr-code">default_return_value</code>. This allowed reentrancy attacks against multiple Curve pools simultaneously.</p>
           <dl class="rr-dl">
             <div><dt>Amount Lost</dt><dd class="rr-mono">$70+ million (pETH-ETH, msETH-ETH, alETH-ETH, CRV/ETH pools)</dd></div>
             <div><dt>Parties</dt><dd>Curve Finance (victim), Vyper compiler (bug source), multiple pool LPs</dd></div>
@@ -712,7 +568,7 @@
           <p class="rr-k">Technical Attack Vector</p>
           <ul class="rr-list">
             <li>Attacker identified Curve pools written in Vyper using affected compiler versions</li>
-            <li>Vyper&rsquo;s <code class="rr-code">raw_call</code> with default_return_value had a bug in @nonreentrant</li>
+            <li>Vyper&rsquo;s <code class="rr-code">raw_call</code> with <code class="rr-code">default_return_value</code> had a bug in <code class="rr-code">@nonreentrant</code></li>
             <li>First call triggered external call to token contract</li>
             <li>Compiler bug: reentrancy lock was not properly set on revert with default return value</li>
             <li>Attacker re-entered pool contract before first call completed</li>
@@ -720,7 +576,7 @@
             <li>Withdrew more than deposited</li>
           </ul>
           <p class="rr-k">Root cause</p>
-          <p class="rr-prose">Vyper compiler bug affecting all contracts compiled with versions 0.2.15-0.3.0 using <code class="rr-code">raw_call</code> with default_return_value and @nonreentrant. The reentrancy guard state was reset before external call completed.</p>
+          <p class="rr-prose">Vyper compiler bug affecting all contracts compiled with versions 0.2.15-0.3.0 using <code class="rr-code">raw_call</code> with <code class="rr-code">default_return_value</code> and <code class="rr-code">@nonreentrant</code>. The reentrancy guard state was reset before external call completed.</p>
         </div>
       </article>
 
@@ -766,7 +622,7 @@
             <li>Flash loaned $1B+ in stablecoins from Aave</li>
             <li>Added liquidity to BEAN Curve pools, acquiring 32M BEAN governance tokens</li>
             <li>Voted on malicious BIP-18 proposal (submitted 1 day earlier)</li>
-            <li>Called emergencyCommit() to execute immediately in same transaction</li>
+            <li>Called <code class="rr-code">emergencyCommit()</code> to execute immediately in same transaction</li>
             <li>Proposal transferred all protocol assets to attacker</li>
             <li>Removed liquidity, repaid flash loans, kept ~$76M profit</li>
           </ul>
@@ -881,7 +737,7 @@
           <li id="rec-audit"><strong>Audit every contract that touches user funds:</strong> Security theater is dangerous. Five audits on some contracts while shipping unaudited new products creates false confidence. Include economic audits of collateral markets, not just code.</li>
           <li id="rec-legacy"><strong>Deprecate or sunset legacy contracts:</strong> Contracts sitting dormant for years are being systematically hunted. Verify all bytecode. Upgrade to modern compiler versions. If not maintained, sunset it.</li>
           <li id="rec-entry-points"><strong>Validate all entry points:</strong> Supply caps, deposit limits, and access controls must apply to every function path, including direct ERC-20 transfers to the contract. Don&rsquo;t dismiss audit findings as &ldquo;supported behavior.&rdquo;</li>
-          <li id="rec-rounding"><strong>Account for rounding:</strong> Use virtual shares/assets pattern (OpenZeppelin v4.9+) to prevent inflation attacks. Be especially careful when totalSupply is small.</li>
+          <li id="rec-rounding"><strong>Account for rounding:</strong> Use virtual shares/assets pattern (OpenZeppelin v4.9+) to prevent inflation attacks. Be especially careful when <code class="rr-code">totalSupply</code> is small.</li>
           <li id="rec-config-drift"><strong>Review configuration drift:</strong> Stale parameters are silent killers. Automated oracles need human oversight. Near-misses should trigger reviews, not relief. Investigate every anomaly.</li>
           <li id="rec-compiler"><strong>Pin compiler versions:</strong> Use specific compiler versions, verify bytecode matches source, and stay aware of compiler-level bugs that could affect security assumptions.</li>
           <li id="rec-external-calls"><strong>Block arbitrary external calls:</strong> Never allow user-controlled target addresses or calldata in contracts that hold funds. All external calls should be to whitelisted targets with validated parameters.</li>
