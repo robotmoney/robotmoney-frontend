@@ -1984,8 +1984,20 @@ async function main() {
   // 0022 the DATABASE dates a session, so two sittings on one day are simply two
   // rows with different convened_at rather than one row relabelled to a day that
   // has not happened. The rotation this proves is the real one.
+  // Once granted the judge role, themis is no longer one of the driver's
+  // analyst seats: the backend's own roster fallback now excludes role='member'
+  // seats only ((domain.ts, issue 1035's quorum fix — a judge was published as
+  // an 8th "absent" analyst), and it correctly stops counting a promoted judge
+  // as an analyst at all, present OR absent. Session 2's member list drops her
+  // here so the driver's own attendance-truthfulness check (assertAuthoredTakes)
+  // never expects a member the backend no longer tracks to show up by name in
+  // the published absent list.
   await runJudgeRoleCoverage("themis", rail.automationToken, () =>
-    runSession(subjects[1], 2, { prevOutcome: s1.pub.session.synthesis, rail, members, initializer: "simulation", cadence }));
+    runSession(subjects[1], 2, {
+      prevOutcome: s1.pub.session.synthesis, rail,
+      members: members.filter((m) => m.memberId !== "themis"),
+      initializer: "simulation", cadence,
+    }));
 
   // Verify list_sessions returns both sessions
   const all = await fetch(`${backendUrl()}${ROUTES.swarm.sessions}`).then((r) => r.json());

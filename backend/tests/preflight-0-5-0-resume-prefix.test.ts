@@ -49,6 +49,8 @@ const LATER_RELEASE_MIGRATIONS: readonly string[] = [
   "0061_rm_worker_wallet_backfill_grant.sql",
   "0062_rm_readonly_sequence_select.sql",
   "0063_swarm_judge_model_default.sql",
+  // v0.5.2 (issue 1035): also never part of a v0.4.0 database.
+  "0080_analytics_ledger_compaction.sql",
 ];
 
 let admin: ReturnType<typeof postgres>;
