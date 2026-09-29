@@ -288,6 +288,14 @@
     "reason": "The producer's research run could not write through the api while analytics-ledger writes saturated its database pool (production 2026-09-27/28). No partial results are published."
   },
   {
+    "id": "known-producer-catch-up-failed-under-load",
+    "match": "\\[analytics-producer\\] catch-up for <n>-<n>-<n> failed \\(will retry next pass\\): (The operation timed out|The socket connection was closed unexpectedly)",
+    "class": "known-issue",
+    "issue": "1035",
+    "fixedIn": "0.5.2",
+    "reason": "The producer's gap catch-up could not write through the api while analytics-ledger writes saturated its database pool (production baseline 2026-09-29, x7); it retries on the next pass. Same cause as known-producer-research-failed-under-load."
+  },
+  {
     "id": "known-producer-fatal-under-load",
     "match": "\\[analytics-producer\\] fatal: (The operation timed out|The socket connection was closed unexpectedly)",
     "class": "known-issue",
