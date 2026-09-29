@@ -133,17 +133,17 @@ As v0.5.1 R5. The owner's go names the cutover slot from R4.3a's measured window
 As v0.5.1 R6 (pre-cut session list R6.2a, stop the driver, check out the tag, boot `smoke:archive` in tmux with `--no-tui`), with:
 
 - **R6.4**: timestamp the boot log the same way R4.3 does (`… \| while IFS= read -r l; do printf '%s %s\n' "$(date -u +%T)" "$l"; done \| tee /root/smoke-archive-v0.5.2.log`), not a bare `tee`. The boot applies `0080` (seconds) and comes up READY.
-- **R6.4c — the ledger repair (once).** From `/root/robotmoney-frontend` (twin: `~/robotmoney-frontend`), with `STATE=.agents/smoke-state.json`. Stop the ledger's writers, run the repair, start them again:
+- **R6.4c — the ledger repair (once).** From `/root/robotmoney-frontend` (twin: `~/robotmoney-frontend`), with `STATE=.agents/smoke-state.json` and `RM_BACKUP_DIR` the R3 backup (its receipts folder gets this step's receipt). Stop the ledger's writers, run the repair, start them again:
 
   ```bash
   PROJECT=$(bun -e "console.log(require('./$STATE').project)")
   docker compose -p "$PROJECT" stop analytics-producer worker-analytics worker-research worker-swarm
-  bun backend/scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts --emit-receipt --step R6.4c.ledger-repair \
+  bun backend/scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts --emit-receipt --step R6.4c.ledger-repair --backup-dir "$RM_BACKUP_DIR" \
     --database-url "$(grep -m1 '^MIGRATE_DATABASE_URL=' .env | cut -d= -f2-)" 2>&1 | tee /root/ledger-repair-v0.5.2.log
   docker compose -p "$PROJECT" start analytics-producer worker-analytics worker-research worker-swarm
   ```
 
-  On the twin the URL is the smoke-twin's own: `--database-url "$(bun -e "console.log(require('./$STATE').databaseUrl)")"`. Pass: it ends `LEDGER REPAIRED` and exits 0. It prints each series as it goes and the seconds of each step. A failure rolls everything back and changes nothing: fix the cause and run it again. `--dry-run` does all of it, proofs included, and rolls back.
+  On the twin the URL is the smoke-twin's own, which the state file stores redacted on purpose; read it from the running api: `--database-url "$(docker exec "$PROJECT-api-1" printenv DATABASE_URL)"`. Pass: it ends `LEDGER REPAIRED` and exits 0. It prints each series as it goes and the seconds of each step. A failure rolls everything back and changes nothing: fix the cause and run it again. `--dry-run` does all of it, proofs included, and rolls back.
 - **R6.4a — watching the repair while it runs.** From a second shell: `psql "$(grep -m1 '^MIGRATE_DATABASE_URL=' .env | cut -d= -f2-)" -Atc "SELECT pid, state, wait_event_type, wait_event, now() - query_start AS running_for, left(query, 80) FROM pg_stat_activity WHERE query ILIKE '%ledger_repair%' OR query ILIKE '%source_value_versions%'"`. Its lock waits at most 30 s for a writer that is still running, then fails without changing anything.
 - **R6.5**: `schema_migrations` gains exactly `0080_analytics_ledger_compaction.sql` (76 rows); `source_payloads` no longer exists; both guards report armed in the boot log and again at the end of R6.4c.
 

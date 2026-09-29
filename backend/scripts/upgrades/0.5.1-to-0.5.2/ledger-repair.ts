@@ -36,7 +36,7 @@
 //
 // Usage (repo root):
 //   bun backend/scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts \
-//     [--database-url URL] [--dry-run] [--emit-receipt --step R6.4c.ledger-repair]
+//     [--database-url URL] [--dry-run] [--emit-receipt --step R6.4c.ledger-repair --backup-dir DIR]
 // The URL defaults to MIGRATE_DATABASE_URL, then DATABASE_URL. The session
 // switches to rm_owner, the tables' owner, as the migration runner does.
 import { dirname, join } from "node:path";
@@ -543,6 +543,7 @@ async function main(): Promise<number> {
       step: arg("--step") ?? "ledger-repair", exit: code,
       verdict: code === 0 ? (dryRun ? "DRY RUN OK" : "LEDGER REPAIRED") : "LEDGER REPAIR FAILED",
       startedAt, repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role, git: gitFacts(repoRoot, TAG_GLOB), note,
+      backupDir: arg("--backup-dir"),
     });
     log(`receipt: ${path}`);
   }
