@@ -1,6 +1,6 @@
 # Production drift audit — an OBSERVER, not a gate.
 #
-# WHAT THIS IS. A schedule-only job that asks THREE questions about things
+# WHAT THIS IS. A schedule-only job that asks FOUR questions about things
 # deployed OUTSIDE this repository and writes down what it saw:
 #
 #   A. Does the rmpc release the onboarding skill PINS still exist, and does
@@ -11,54 +11,95 @@
 #   C. Does the SERVED copy carry an unverified `| tar` install form? — asserted
 #      over the served body directly, so it fires whatever the rest of the site
 #      is doing. (issue #759 deliverable 1's explicit floor)
+#   D. NEGATIVE CONTROL: does a sibling path on the same host that cannot exist
+#      come back non-200, with none of the skill's markers? — the proof that B's
+#      discriminators can fail at all. A green B is only a statement about the
+#      document if D says a wrong document would have been caught.
 #
-# THERE USED TO BE A FOURTH CHECK, AND IT WAS DELETED ON PURPOSE. It was "A" in
-# the old numbering: do the bytes served at SWARM_ONBOARDING_SKILL_URL match
-# frontend/public/skills/swarm-onboarding/SKILL.md — i.e. is the deploy fresh?
-# It called `describeSkillMismatch` from `contract/src/skill-parity.js`, and
-# both that module and its offline unit test are now deleted. This repository's
+# B, C AND D ARE ALL CODE THAT MOVED OFF THE MERGE GATE, and together they are
+# everything the deleted live test file used to assert. That file, the
+# `contract/tests/live/` directory, the `test:live` script and the `contract`
+# job's live step are all DELETED.
+# Why the reachability and procedure assertions left a REQUIRED check: whether
+# robotmoney.network answers is not a property of the commit under review. It
+# depends on deploys, DNS, TLS, CDN state, and renames and releases in
+# robotmoney-core — none of which a diff in this repository can change. Measured,
+# not argued: while this was being decided the `contract` job was RED on an open
+# pull request with `Received: 502`, caused by nobody in that pull request. A
+# required job that reaches the public internet on every PR gives any contributor
+# with a flaky connection, and any upstream hiccup, an unmergeable PR whose
+# resolution is outside the repository. So the question is asked here, nightly,
+# and the answer is reported rather than enforced.
+#
+# THE PLAIN CONSEQUENCE — NOTHING ON A MERGE TRIGGER VERIFIES THIS ENDPOINT, AND
+# THAT IS INTENDED. If the URL 404s, or production starts serving a stub, no
+# required check in this repository says so; this audit says so once a night, in
+# a report nobody is blocked by. The one assertion about this URL that IS
+# merge-gated is hermetic — that the constant names a skill directory above
+# SKILL.md (contract/tests/unit/swarm-onboarding-skill-url.test.ts) — because that
+# is a fact about this repository. The 404 that issue #484 was filed about is now
+# found by tonight's audit rather than by the pull request that caused it. That is
+# a slower detection, bought on purpose.
+#
+# THERE USED TO BE A FOURTH CHECK BEYOND A/B/C, AND IT WAS DELETED ON PURPOSE.
+# Before the control, the auditor's fourth check was "A" in the old numbering: do
+# the bytes served at SWARM_ONBOARDING_SKILL_URL match
+# frontend/public/skills/swarm-onboarding/SKILL.md — i.e. is the deploy fresh? It
+# called `describeSkillMismatch` from `contract/src/skill-parity.js`, and both
+# that module and its offline unit test are now deleted. This repository's
 # tooling does not ask the deploy-freshness question anywhere: not here, not on
 # any merge gate, not offline, and not under a different name. That was the
 # repository owner's decision, and the paragraphs here and at the top of
 # scripts/production-drift-audit.ts are the record of it.
 #
-# THE PLAIN CONSEQUENCE — NOTHING IN CI REPORTS A STALE DEPLOY. If `main` carries
-# a correct skill and production is still serving the previous one, no job in
-# this repository will say so. Deploy freshness is now the DEPLOY PIPELINE's
-# job: it is a fact about whether a publish ran, and this repository has no
-# deploy workflow, so the only place that fact can be observed is the deploy
-# tooling or a human watching it. Do not "fix" this by adding a parity check
-# back to this workflow, and do not "fix" it by giving this workflow a non-zero
-# exit — the first would be the check the owner declined, the second would
-# re-create required reading whose exit is outside the repository. Checks B and
-# C are what remains, and they are not a substitute for it: "what production is
-# serving is safe to install" (C) and "is the deploy fresh" were never the same
-# question, and the second one is no longer asked.
+# A SECOND CONSEQUENCE, ALSO PLAIN: NOTHING IN CI REPORTS A STALE DEPLOY. If `main`
+# carries a correct skill and production is still serving the previous one, no job
+# in this repository will say so. Deploy freshness is now the DEPLOY PIPELINE's
+# job: it is a fact about whether a publish ran, and this repository has no deploy
+# workflow, so the only place that fact can be observed is the deploy tooling or a
+# human watching it. Do not "fix" this by adding a parity check back to this
+# workflow, and do not "fix" it by giving this workflow a non-zero exit — the
+# first would be the check the owner declined, the second would re-create required
+# reading whose exit is outside the repository. Checks B, C and D are what remains,
+# and they are not a substitute for it: "what production is serving is safe to
+# install" (C) and "is the deploy fresh" were never the same question, and the
+# second one is no longer asked.
 #
-# WHY B AND C ARE NOT ON THE MERGE GATE. `contract/tests/live/
-# swarm-onboarding-skill-url-live.test.ts` bundled unrelated questions in one
-# required check. "Is the endpoint serving a real, complete procedure?" is
-# merge-gated and stays that way, untouched — it caught a MEASURED incident in
-# which robotmoney-core replaced the file with a 1,951-byte deprecation stub
-# whose front matter kept the right `name:`, whose body mentioned `rmpc`, and
-# which was comfortably over every size floor. Agents were handed a signpost
-# instead of a procedure, and CI stayed green for two days. "What is the served
-# install form, and is the endpoint still serving a procedure at all?" are
-# questions about production, and this repository has no deploy workflow: the
-# only exit is a human deploying the site, so requiring them would red a
-# required check for a reason no change here can fix. Those moved; the
-# procedure assertions did not.
+# B IS THE STUB-INCIDENT CHECK AND MUST KEEP ITS PROCEDURE ASSERTIONS. When
+# robotmoney-core replaced the file with a 1,951-byte deprecation stub whose front
+# matter kept the right `name:`, whose body mentioned `rmpc`, and which was
+# comfortably over every size floor, agents were handed a signpost instead of a
+# procedure and CI stayed green for two days. So B asserts the PROCEDURE — the
+# endpoint an application is POSTed to, the claim envelope, the completion gate,
+# the applicant's status URL, the deprecation-stub negative, the floor — and not
+# the label.
+#
+# D IS LOAD-BEARING BECAUSE B CANNOT CHECK ITSELF. Every marker in B is a
+# positive assertion over a body that is supposed to be good, and a positive
+# assertion over a good input says nothing about whether it would have gone red on
+# a bad one. If the origin answers 200 with an SPA shell, or an error page happens
+# to contain `rmpc`, B renders green over garbage. D fetches a sibling `.md` path
+# that cannot exist and reports what came back. The shape of its verdict matters
+# as much as the check itself, and the reasoning is at the D section of
+# scripts/production-drift-audit.ts: a 404 with none of the markers is the only
+# outcome that counts as OK, a 200 (or a 404 carrying a marker) is DRIFT, and
+# anything else — a 5xx, an unreachable host — is UNKNOWN, never OK, because a
+# non-404 failure status measures the ORIGIN's health rather than the
+# discriminator, and reading it as "the control fired" is the false green D
+# exists to prevent. D is its own row, is never folded into B, and is reported
+# even when it did not run.
 #
 # C IS DELIBERATELY ITS OWN CHECK AND MUST STAY THAT WAY. The unverified
 # `curl … | tar xz` form pipes a downloaded archive into a root-privileged
 # extractor with no checksum check. The floor was independent of the byte
 # comparison that used to sit beside it by design, and it is independent of
 # everything else here by the same design: it is asserted over the served body
-# directly, has its own status line, and reports UNKNOWN — never a pass — when
-# the fetch did not complete. Do not fold C into B, and do not make it
-# contingent on anything else in the script. The comparison that used to carry
-# it as a side effect is gone; C is what is left, and it is a security guard,
-# not a content diff.
+# directly, has its own status line, and reports UNKNOWN — never a pass — when the
+# fetch did not complete or when the origin answered with an error page rather
+# than the document. Do not fold C into B, and do not make it contingent on
+# anything else in the script. The comparison that used to carry it as a side
+# effect is gone; C is what is left, and it is a security guard, not a content
+# diff.
 #
 # WHY A IS WORTH A WORKFLOW OF ITS OWN. It is the question the merge set can
 # never see, and it is not a hypothetical. The skill pins an rmpc release tag
@@ -78,11 +119,13 @@
 # artifact.
 #
 # LOUD-SKIP-NEVER, INWARD. A check that could not run — DNS failure, timeout,
-# an HTTP 403 from a rate-limited GitHub, a non-JSON response — is reported
-# UNKNOWN with the reason. Never omitted, never rendered as a pass. This is the
-# same invariant the live test enforces with a red exit; it points the other way
-# only because there is no merge to protect here, and a silently dropped check
-# would be the one outcome nobody would ever notice.
+# an HTTP 403 from a rate-limited GitHub, a non-JSON response, a body that
+# arrived with an error status instead of the document, a discriminator that
+# could not be computed — is reported UNKNOWN with the reason. Never omitted,
+# never rendered as a pass. It used to be the same invariant the deleted live
+# test enforced with a red exit, pointed the other way; that test is gone, so the
+# direction is no longer borrowed. There is no merge to protect here, and a
+# silently dropped check is now the one outcome nobody would ever notice.
 #
 # ON GITHUB API RATE LIMITS. Check A talks to api.github.com and does NOT send a
 # token: this repository's `GITHUB_TOKEN` is an installation token scoped to
@@ -94,7 +137,7 @@
 # 60/hour; the budget is the shared-IP reality, not this script's volume.
 #
 # CI taxonomy class: heavy. Chosen for TRIGGER SHAPE, not cost — this workflow
-# costs two HTTPS GETs and one API call, which is not what `heavy` usually
+# costs three HTTPS GETs and one API call, which is not what `heavy` usually
 # means. It is chosen because `heavy` is the class this repo already uses for
 # its one other scheduled, non-gating, exempt workflow
 # (`contribution-advisory-reviewer.yml`), and because the alternative classes

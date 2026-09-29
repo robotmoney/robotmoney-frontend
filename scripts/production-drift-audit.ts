@@ -8,15 +8,20 @@
 // repo added to EXEMPT_FROM_MERGE_MIRROR in
 // scripts/tests/unit/nightly-mirrors-merge-set.test.ts).
 //
-// THE CHECK LIST, IN FULL — THERE ARE THREE AND THIS IS ALL OF THEM:
+// THE CHECK LIST, IN FULL — THERE ARE FOUR AND THIS IS ALL OF THEM:
 //   A. Does the rmpc release the onboarding skill PINS still exist, and does
 //      robotmoney-core still publish archives whose sha256 match the ones the
 //      skill CARRIES? (release integrity)
 //   B. Does SWARM_ONBOARDING_SKILL_URL still serve a real, complete procedure
-//      rather than a deprecation stub? (an observer copy of what the live test
-//      merge-gates — the live test is the gate, this is the report)
+//      rather than a deprecation stub? (reachability + procedure, merged from
+//      the merge-gated live test's assertion set)
 //   C. Does the SERVED copy carry an unverified `curl … | tar xz` install
 //      form? (a security floor, not a content comparison)
+//   D. NEGATIVE CONTROL: do B's own discriminators actually fire? A sibling
+//      path on the same host that cannot exist is fetched with the same code
+//      and the same markers, and the result is reported as its own row —
+//      because a check that cannot tell a real procedure from a wrong document
+//      is not a check. (see the D section for what each outcome reports)
 //
 // ── WHAT WAS DELETED FROM THIS AUDITOR, AND WHY ───────────────────────────
 // A fourth check used to live here, lettered "A" in the old numbering: "do the
@@ -53,29 +58,48 @@
 // is still asked, independently, by check C below.
 //
 // ── WHAT MOVED OFF THE MERGE GATE, AND WHY ────────────────────────────────
-// `contract/tests/live/swarm-onboarding-skill-url-live.test.ts` used to bundle
-// two unrelated questions in one required merge gate:
+// The deleted live test file used to bundle three unrelated questions in one
+// required merge gate, and now bundles none of them: the file and the
+// `contract/tests/live/` directory are DELETED, and every assertion it held
+// lives here instead. Nothing in this repository's merge gate reaches
+// robotmoney.network any more.
 //
-//   (1) "is the endpoint serving a real, complete procedure?" — MERGE-GATED,
-//       untouched, and it stays that way. It earned its place by catching a
-//       MEASURED incident: robotmoney-core replaced the path with a 1,951-byte
-//       deprecation stub that passed every marker assertion (robotmoney-core
-//       #1199 / PR #1200). Check B restates those assertions here as an
-//       OBSERVER copy so a drift finding is legible from a report with no PR
-//       attached; the live test is the gate, and B is not why they are safe.
-//       Do not "simplify" this by dropping B because "the live test already
-//       checks it".
+//   (1) "is the endpoint serving a real, complete procedure?" — check B. It
+//       earns its place by answering a MEASURED question: robotmoney-core
+//       replaced the path with a 1,951-byte deprecation stub that passed every
+//       marker assertion (robotmoney-core #1199 / PR #1200). It also LEFT the
+//       gate, and the reason is not a preference for schedules — it is that the
+//       question is not a property of the commit under review. Whether
+//       robotmoney.network answers is a fact about deploys, DNS, TLS, CDN state
+//       and upstream renames in robotmoney-core, none of which any diff in this
+//       repository can repair. A required job that reaches the public internet
+//       on every pull request makes a contributor with a flaky connection, or an
+//       upstream hiccup, hold an unmergeable PR for a reason the diff cannot
+//       fix. It was proved during this change: the `contract` job was RED on a
+//       pull request with `Received: 502`, caused by nobody in the pull request.
 //
-//   (2) "is the served copy safe to install?" — the unverified `| tar` floor,
-//       asserted over the served body directly. It also left that gate, for
-//       the same structural reason: whether production currently serves that
-//       form is a question about production, and its only exit is a human
-//       deploying the site. It is check C here, and it keeps its own status
-//       line, its own OK/DRIFT/UNKNOWN verdict, and its own
+//   (2) "is the served copy safe to install?" — the unverified `| tar` floor.
+//       Check C, asserted over the served body directly so it fires whatever
+//       else is true about the document, with its own status line and its own
 //       UNKNOWN-never-a-pass semantics.
 //
-//   (3) "is the deploy fresh?" — also left that gate, and has since been
-//       deleted from the repository outright. See the section above.
+//   (3) "is the deploy fresh?" — deleted from the repository outright long ago.
+//       See the section above.
+//
+//   (4) the live test's RED CONTROL — the proof that (1)'s discriminators fire
+//       at all. It moved with the assertions it was proving, because a control
+//       over assertions that no longer exist here would be a control over
+//       nothing. It is check D.
+//
+// THE SPLIT IS BY QUESTION, NOT BY CONVENIENCE, AND THE BOUNDARY IS EXACT: a
+// question about production is reported here and never gates; a question about
+// THIS REPOSITORY'S CODE is merge-gated. Every assertion left in the deleted
+// live file that was a fact about the URL constant rather than about the served
+// document — that the URL names a skill directory above SKILL.md, so a derived
+// slug is really a slug — is HERMETIC, makes no network call, and is
+// merge-gated today at `contract/tests/unit/swarm-onboarding-skill-url.test.ts`.
+// That is the whole of what the merge gate keeps about this URL, and it is
+// enough to keep the slug meaningful to B and D below.
 //
 // EXIT SEMANTICS — READ BEFORE "FIXING" A NON-ZERO EXIT. This script ALWAYS
 // exits 0. A non-zero exit would turn a question about production into a merge
@@ -90,15 +114,32 @@
 // timeout, TLS error, HTTP 403 from a rate-limited GitHub, a non-JSON response —
 // is reported UNKNOWN, with the reason. It is NEVER omitted and NEVER rendered
 // as a pass. A green row and a row nobody can see are different things, and only
-// the first one is a claim. This is the same invariant the live test enforces
-// with a red exit, pointed the other way: nothing here is gating, so a
-// silently dropped check is the one failure nobody would ever notice.
+// the first one is a claim. This was once the same invariant the deleted live
+// test enforced with a RED EXIT, pointed the other way; the live test is gone, so
+// the direction is no longer borrowed — nothing here is gating, and a silently
+// dropped check is now the one failure nobody would ever notice. It also applies
+// to a check that RAN but could not evaluate one of its own discriminators: that
+// is UNKNOWN too, never a pass (see B's `evaluable`).
 //
-// NOT A REIMPLEMENTATION OF THE LIVE TEST. B restates the live test's procedure
-// assertions because they are prose in a test file rather than a shared
-// constant, and that duplication is deliberate and cross-referenced: the LIVE
-// test is the gate, this is the observer. If you change one, change the other —
-// see the pointers at both sites.
+// THE ONLY PLACE IN THIS REPOSITORY THAT LOOKS AT THE SERVED DOCUMENT. B, C
+// and D were all merge-gated once, in the deleted live test file, and all three
+// are here now. Two consequences a reader must not have to infer:
+//
+//   1. NOTHING IN CI VERIFIES THE ENDPOINT'S LIVENESS OR CONTENT ON A MERGE
+//      TRIGGER, and that is intended. A red merge means the code on `main` is
+//      broken by a commit; whether robotmoney.network is answering at that
+//      moment is not a property of any commit. The merge gate keeps exactly one
+//      assertion about this URL — that the constant names a skill directory
+//      above SKILL.md — and that assertion is hermetic
+//      (contract/tests/unit/swarm-onboarding-skill-url.test.ts). The cost of the
+//      choice is real and stated here: a broken URL or a stubbed skill is found
+//      by tonight's audit, not on the pull request that introduced it.
+//   2. So the assertions below are not a second copy kept "in case" — they are
+//      the only implementation, and they have to carry their own evidence that
+//      they discriminate at all. That is what check D is for. Do not "simplify"
+//      B by dropping an assertion because "D already checks the endpoint", and
+//      do not drop D because "B is thorough": B being thorough is exactly the
+//      claim D is there to hold to account.
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -118,9 +159,11 @@ const TIMEOUT_MS = 30_000;
 // ── Diagnostic overrides ────────────────────────────────────────────────────
 // These exist so the UNKNOWN path can be demonstrated on demand (point the
 // auditor at an unreachable host and watch every check report UNKNOWN rather
-// than pass). They are NOT configuration: nothing in CI sets them, and a run
-// that has one in effect prints an OVERRIDE IN EFFECT banner at the top of its
-// report, so an override run can never be mistaken for a production verdict.
+// than pass), and so the negative control and check C can be driven against
+// inputs they must catch — a known-404 sibling path, or a body carrying
+// `curl … | tar xz`. They are NOT configuration: nothing in CI sets them, and a
+// run that has one in effect prints an OVERRIDE IN EFFECT banner at the top of
+// its report, so an override run can never be mistaken for a production verdict.
 const SKILL_URL = process.env.PRODUCTION_DRIFT_AUDIT_SKILL_URL?.trim() || SWARM_ONBOARDING_SKILL_URL;
 const GITHUB_API = process.env.PRODUCTION_DRIFT_AUDIT_GITHUB_API?.trim() || "https://api.github.com";
 const CORE_REPO = process.env.PRODUCTION_DRIFT_AUDIT_CORE_REPO?.trim() || RMPC_REPO;
@@ -174,6 +217,98 @@ async function fetchText(url: string, headers: Record<string, string> = {}): Pro
   } catch (e) {
     return { ok: false, status: 0, body: "", error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
   }
+}
+
+// ── The served-document discriminators, shared by B and D ────────────────────
+//
+// ONE table, read in both directions, on purpose. B asks "does this body carry
+// every marker a real procedure carries?"; D asks "does a body which is NOT a
+// procedure carry none of them?". They are the same question with the sign
+// flipped, and keeping them in one list is what makes D a control over B rather
+// than a second, differently-worded opinion about the endpoint.
+//
+// Each entry carries `evaluable`, not a boolean, because a discriminator that
+// cannot be computed is not a discriminator that passed. Loud-skip-never applies
+// to the arithmetic as well as to the fetch: an entry whose `evaluable` is
+// `false` drives its check to UNKNOWN, never to a pass. There is exactly one
+// such entry today — the front-matter `name:`, which needs a slug derived from
+// the URL — and the shape is here so that the next one does not have to invent
+// a way to be quietly dropped.
+
+/**
+ * The procedure floor, in bytes. The deleted live test asserted two floors, 500
+ * and 10 000; only the stronger one is kept here, because a check that lists
+ * both is a check whose report has a row that can never be the reason a finding
+ * is raised. The 1,951-byte deprecation stub cleared 500 comfortably — it cleared
+ * both — and the floor is here for the smaller future stub, not for that one.
+ */
+const PROCEDURE_BODY_FLOOR_BYTES = 10_000;
+
+interface Marker {
+  label: string;
+  /** Whether the marker is PRESENT in the body B was handed. */
+  holds: boolean;
+  /** False when this discriminator could not be computed for the URL in hand. */
+  evaluable: boolean;
+}
+
+/**
+ * The skill slug the URL itself names — the directory immediately above
+ * `SKILL.md` — derived rather than hardcoded, so the `name:` discriminator keeps
+ * working wherever the constant points. The merge-gated hermetic assertion that
+ * the production constant really does end in `<skill>/SKILL.md` and yields such a
+ * slug is `contract/tests/unit/swarm-onboarding-skill-url.test.ts`; this
+ * derivation is for the override case, which no merge-gated test can reach.
+ *
+ * `null` when the URL is shaped in a way this derivation does not understand, or
+ * when the derived segment does not look like a skill directory. Both are
+ * reported as UNKNOWN by the checks below, never treated as "no marker".
+ */
+const SKILL_SLUG = ((): string | null => {
+  let pathname: string;
+  try {
+    pathname = new URL(SKILL_URL).pathname;
+  } catch {
+    return null;
+  }
+  const slug = pathname.split("/").at(-2);
+  if (slug === undefined || !/^[a-z0-9-]+-onboarding$/.test(slug)) return null;
+  return slug;
+})();
+
+/** The strongest form of every marker the deleted live test asserted. */
+function servedDocumentMarkers(body: string): Marker[] {
+  return [
+    {
+      label: "front matter names this skill (`name: " + (SKILL_SLUG ?? "<slug not derivable from the URL>") + "`)",
+      holds: SKILL_SLUG !== null && body.includes(`name: ${SKILL_SLUG}`),
+      evaluable: SKILL_SLUG !== null,
+    },
+    { label: "mentions the rmpc toolchain the skill exists to install", holds: body.includes("rmpc"), evaluable: true },
+    { label: "names the endpoint an application is actually POSTed to (`/api/swarm/apply`)", holds: body.includes("/api/swarm/apply"), evaluable: true },
+    { label: "carries the `swarm-token-claim-v1` claim envelope", holds: body.includes("swarm-token-claim-v1"), evaluable: true },
+    { label: "carries the `claimed` completion gate", holds: body.includes("claimed"), evaluable: true },
+    {
+      label: "still points the applicant at their status page (`/swarm/apply/`) — the only way to watch an application move, until approval email is wired",
+      holds: body.includes("/swarm/apply/"),
+      evaluable: true,
+    },
+    { label: "is not a deprecation stub (no \"no instructions to follow\")", holds: !body.toLowerCase().includes("no instructions to follow"), evaluable: true },
+    { label: `clears the ${PROCEDURE_BODY_FLOOR_BYTES.toLocaleString("en-US")}-byte procedure floor (${body.length} bytes)`, holds: body.length > PROCEDURE_BODY_FLOOR_BYTES, evaluable: true },
+  ];
+}
+
+/**
+ * One report line per marker. `invert` is what makes D a control rather than a
+ * second copy of B: for a body that must NOT look like a procedure, a marker
+ * being present is the bad outcome, so the glyphs swap. Non-evaluable markers
+ * are never green in either direction.
+ */
+function renderMarkers(markers: Marker[], invert = false): string[] {
+  return markers.map((m) => {
+    if (!m.evaluable) return bullet(`⚠️ ${m.label} — NOT EVALUATED`);
+    return bullet(`${(invert ? !m.holds : m.holds) ? "✅" : "❌"} ${m.label}`);
+  });
 }
 
 // ── A — pinned rmpc release integrity ───────────────────────────────────────
@@ -420,36 +555,31 @@ async function checkPinnedRelease(repo: string): Promise<Check> {
 
 // ── B — the endpoint still serves a procedure ───────────────────────────────
 //
-// These restate contract/tests/live/swarm-onboarding-skill-url-live.test.ts's
-// substantive assertions, which are a merge gate and stay one. They are prose
-// in a test file rather than a shared constant, so the duplication is
-// deliberate and bounded: the live test is the GATE, this is the OBSERVER, and
-// what separates them is only that one blocks a merge and one does not. Change
-// one, change the other. Why they exist here at all, given the live test
-// already asserts them: a drift finding has to be legible from a report with no
-// PR attached to it, and the report is the thing an operator reads. Why the
-// procedure assertions matter at all: a 200 with the right front-matter `name:`
-// is not sufficient — when robotmoney-core landed #1199 it served a 1,951-byte
-// deprecation stub that passed every marker assertion above the size floor
-// while reading, verbatim, "This file is a compatibility stub. It contains no
-// instructions to follow." Agents were handed a signpost instead of a
-// procedure, and CI stayed green. So assert the PROCEDURE, not the label.
-
-const PROCEDURE_BODY_FLOOR_BYTES = 10_000;
-
-function procedureAssertions(body: string): Array<{ label: string; holds: boolean }> {
-  return [
-    { label: "names the endpoint an application is actually POSTed to (`/api/swarm/apply`)", holds: body.includes("/api/swarm/apply") },
-    { label: "carries the `swarm-token-claim-v1` claim envelope", holds: body.includes("swarm-token-claim-v1") },
-    { label: "carries the `claimed` completion gate", holds: body.includes("claimed") },
-    {
-      label: "still points the applicant at their status page (`/swarm/apply/`) — the only way to watch an application move, until approval email is wired",
-      holds: body.includes("/swarm/apply/"),
-    },
-    { label: "is not a deprecation stub (no \"no instructions to follow\")", holds: !body.toLowerCase().includes("no instructions to follow") },
-    { label: `clears the ${PROCEDURE_BODY_FLOOR_BYTES.toLocaleString("en-US")}-byte procedure floor (${body.length} bytes)`, holds: body.length > PROCEDURE_BODY_FLOOR_BYTES },
-  ];
-}
+// WHAT B IS. The reachability and procedure question, asked of the SERVED
+// document. It is the union of every assertion the deleted live test file used
+// to assert,
+// merged rather than copied: the 200, the front-matter `name:` that must agree
+// with the slug the URL itself names, the `rmpc` marker, the full procedure set
+// and the procedure floor. Where the live test and the old B disagreed, the
+// STRONGER form won and the weaker one was dropped — the live test's 500-byte
+// floor is gone because the 10 000-byte floor subsumes it, and dropping a
+// row that can never be the reason a finding is raised is what keeps the report
+// readable.
+//
+// IT IS NOT A MERGE GATE, AND NOTHING ELSE IS EITHER. A red B means production
+// is serving something wrong, not that the code on `main` is broken: whether
+// robotmoney.network answers at all is a fact about deploys, DNS, TLS, CDN state
+// and upstream renames in robotmoney-core, none of which a diff here can repair.
+// See the file header for the measured version of that claim.
+//
+// WHY THE PROCEDURE ASSERTIONS AT ALL, rather than "is it 200?". Measured, not
+// hypothetical: when robotmoney-core landed #1199 it served a 1,951-byte
+// deprecation stub that passed every marker assertion — right `name:` in the
+// front matter, `rmpc` mentioned (only to say it had not changed), comfortably
+// over the size floor — while reading, verbatim, "This file is a compatibility
+// stub. It contains no instructions to follow." Agents were handed a signpost
+// instead of a procedure, and CI stayed green for two days. So assert the
+// PROCEDURE, not the label.
 
 function checkEndpointServesProcedure(served: Fetched): Check {
   const title = "The endpoint still serves a real procedure, not a deprecation stub";
@@ -460,21 +590,36 @@ function checkEndpointServesProcedure(served: Fetched): Check {
       "unknown",
       bullet(`GET ${SKILL_URL} did not complete — ${served.error}.`),
       bullet(
-        "**This check measured nothing.** It is UNKNOWN, not a pass. Note the merge gate is NOT weakened by that unknown: `contract` still runs contract/tests/live/swarm-onboarding-skill-url-live.test.ts on every PR and every push to `main`, and per loud-skip-never it goes RED on exactly this unreachable-network case.",
+        "**This check measured nothing.** It is UNKNOWN, not a pass. The document was never fetched, so its content is unknown rather than good.",
+      ),
+      bullet(
+        "Nothing else in this repository will notice tonight's outage: no merge gate reaches the public internet, so there is no `contract` red for anyone to triage, and no nightly mirror of one either. That is the intended consequence of the merge gate no longer depending on a host outside the repository (see the file header) — and it is why the UNKNOWN verdict is stated here rather than folded into a pass.",
       ),
     );
   }
-  const assertions = procedureAssertions(served.body);
-  const broken = assertions.filter((a) => !a.holds);
-  if (served.status !== 200 || broken.length > 0) {
+  const markers = servedDocumentMarkers(served.body);
+  const notEvaluable = markers.filter((m) => !m.evaluable);
+  const broken = markers.filter((m) => m.evaluable && !m.holds);
+  const rendered = renderMarkers(markers);
+  if (served.status !== 200 || broken.length > 0 || notEvaluable.length > 0) {
     return check(
       "B",
       title,
-      "fail",
+      notEvaluable.length > 0 && broken.length === 0 && served.status === 200 ? "unknown" : "fail",
       bullet(`HTTP ${served.status}${served.status !== 200 ? ` (expected 200; ${served.body.length} bytes returned)` : ""}.`),
-      ...assertions.map((a) => bullet(`${a.holds ? "✅" : "❌"} ${a.label}`)),
-      ...(served.status === 200
-        ? [bullet("A 200 with the right markers is not sufficient on its own — a deprecation stub carried this file's name, mentioned rmpc, and passed every size floor in production for two days.")]
+      ...rendered,
+      ...(notEvaluable.length > 0
+        ? [
+            bullet(
+              `**At least one discriminator could not be evaluated, so this row is UNKNOWN rather than a verdict:** ${notEvaluable.map((m) => m.label).join("; ")}. Check D below reports the same condition independently, and the merge-gated hermetic assertion on the URL constant is what keeps this one evaluable in a real run.`,
+            ),
+          ]
+        : []),
+      ...(served.status === 200 && broken.length > 0
+        ? [bullet("A 200 with the right markers is not sufficient on its own — a deprecation stub carried this file's name, mentioned rmpc, and cleared every size floor in production for two days.")]
+        : []),
+      ...(served.status === 200 && broken.length === 0 && notEvaluable.length === 0
+        ? [bullet("Every discriminator held, which is the claim check D exists to hold to account — read D before treating this row as evidence.")]
         : []),
     );
   }
@@ -483,7 +628,8 @@ function checkEndpointServesProcedure(served: Fetched): Check {
     title,
     "pass",
     bullet(`HTTP ${served.status}, ${served.body.length} bytes.`),
-    ...assertions.map((a) => bullet(`✅ ${a.label}`)),
+    ...rendered,
+    bullet("Every discriminator held. Check D is the evidence that these discriminators can tell this document from a wrong one; a green B with a red or UNKNOWN D is not a healthy endpoint."),
   );
 }
 
@@ -521,8 +667,9 @@ function checkEndpointServesProcedure(served: Fetched): Check {
 //
 // It moved OFF the merge gate for one reason: whether production currently
 // serves this form is a question about production, and its only exit is a human
-// deploying the site. It is NOT the same as check B — the procedure assertions
-// are still gated, and stayed in the live test.
+// deploying the site. B moved for the same reason, and the two are still NOT the
+// same check: this one asks about the install FORM of whatever is being served,
+// and reports DRIFT even when every marker in B holds.
 
 /**
  * The pattern is stated literally here, with no shared module behind it. There
@@ -550,6 +697,25 @@ function checkServedInstallForm(served: Fetched): Check {
       bullet(`GET ${SKILL_URL} did not complete — ${served.error}.`),
       bullet(
         "**This is not a pass.** No document was fetched, so the served copy was never examined. Loud-skip-never forbids rendering an unexecuted check as green.",
+      ),
+    );
+  }
+  if (served.status !== 200) {
+    // The same reasoning as the unreachable case, one step along, and it is the
+    // reason this row is worth reading: a non-200 means the body is an ERROR
+    // PAGE, not the document. Grepping a CDN's 502 page for `| tar` and
+    // reporting "the floor holds" measures the CDN, and prints a green row
+    // beside a red B on the very same response. The floor is about the document
+    // a new member would be handed; when no document was handed out, what the
+    // floor did is UNKNOWN, and the absence of a procedure is already B's
+    // finding to raise.
+    return check(
+      "C",
+      title,
+      "unknown",
+      bullet(`GET ${SKILL_URL} → HTTP ${served.status} (${served.body.length} bytes). The body is an error response, not the served document.`),
+      bullet(
+        "**This is not a pass.** The `| tar` scan below was NOT applied to the document, because the document was not served — only to whatever the origin answered with. Loud-skip-never forbids rendering an unexamined check as green, and a floor that reports itself satisfied off a 502 page is the exact shape of that failure. Check B reports the missing document itself.",
       ),
     );
   }
@@ -584,11 +750,184 @@ function checkServedInstallForm(served: Fetched): Check {
   );
 }
 
+// ── D — NEGATIVE CONTROL: do B's discriminators fire at all? ──────────────────
+//
+// THE PROBLEM THIS SOLVES. Every marker in B is a positive assertion over a
+// body that is supposed to be good, and a positive assertion over a good input
+// cannot tell you whether it would have gone red on a bad one. If the origin
+// answers 200 with an SPA shell or a proxy error page for everything, B's HTTP
+// 200 is satisfied by garbage; if an error page happens to contain the string
+// `rmpc`, B's `rmpc` marker is satisfied by garbage. Both would render as a
+// green B, and a green B is the exact thing a reader of this report is about to
+// trust. The deleted live test carried this control for the same reason, as a
+// second test in the same file; there is no second test in a reporter, so it is
+// its own row here and it reports on itself.
+//
+// WHAT IT DOES. It fetches a sibling path in the SAME directory, on the SAME
+// host, that cannot exist, and runs the SAME marker table over the answer.
+//
+// THE DEAD PATH KEEPS A `.md` EXTENSION, AND THAT IS LOAD-BEARING. The site
+// server (website-server/nginx.conf, #954) answers a path ending in a file
+// extension with the file or a plain 404, and every OTHER path with the SPA
+// shell at 200. A dead path with no extension would therefore draw the shell's
+// 200 and this control would correctly — but uselessly — report DRIFT against a
+// perfectly healthy site. A missing SKILL.md meets the `.md` rule, so a sibling
+// `.md` that cannot exist is the failure this control stands for.
+//
+// WHICH DIRECTION EACH OUTCOME REPORTS, AND WHY. This is the part that is easy
+// to get backwards, so each branch is named:
+//
+//   CONFIRMED (a 404 whose body carries none of the markers) — reports OK. This
+//   is the only outcome that is evidence. It means the origin really does
+//   distinguish a document that exists from one that does not, so B's green is a
+//   statement about the document and not about a catch-all.
+//
+//   NOT CONFIRMED, and this is NOT reported as OK — reports DRIFT, for two
+//   distinct shapes that mean different things, both spelled out in the report:
+//     (a) the dead path answered 200. The origin is serving its shell (or a
+//         proxy is answering 200 for everything), so a wrong document at the
+//         skill URL would satisfy B's status check. B is then measuring the
+//         origin's indiscrimination, not the document.
+//     (b) the dead path answered 404 but its body carried a marker. That marker
+//         is not a discriminator: any 404 page mentioning `rmpc` satisfies it.
+//   In both cases B's result must not be read at face value, and saying so
+//   here — out loud, in a row of its own — is the whole point. It is worth a red
+//   report body on a green job: the report is the deliverable.
+//
+//   MEASURED SOMETHING ELSE (any status that is not 200 and not 404, or a body
+//   so small the status is ambiguous) — reports UNKNOWN, never OK. A 502 from
+//   the dead path says the ORIGIN is down, not that the path is missing, and an
+//   origin that is down says nothing about whether a wrong document would be
+//   caught. This branch is not a nicety: it is the branch a real outage lands
+//   in, and the tempting reading — "non-200 and no markers, so the control
+//   fired" — is exactly the false green this row exists to prevent. UNKNOWN is
+//   also what an unreachable host produces (no response at all), and
+//   loud-skip-never forbids calling that a pass.
+//
+// THE CONTROL DOES NOT GATE ANYTHING, and neither does its verdict: this
+// workflow always exits 0 (see EXIT SEMANTICS in the file header). A DRIFT here
+// is a finding to read, not a merge to block — and the finding it raises is
+// about production's shape, which is the only kind of finding this repository
+// can now make about the skill endpoint at all.
+
+/** Statuses that mean "the origin answered, and the answer was: not here". */
+const NOT_FOUND_STATUSES = [404, 410];
+
+/** Kept as a `.md` basename so the site's file-serving rule applies — see above. */
+const DEAD_PATH_BASENAME = "this-path-cannot-exist.md";
+
+/**
+ * The control path: a sibling of the skill URL, in the same directory, on the
+ * same host, that cannot exist. `null` when the URL in hand has no directory
+ * component to put a sibling in — which is UNKNOWN above, never a pass, because
+ * a control that quietly compared the live path with itself would confirm
+ * nothing at all.
+ */
+function deadSiblingPath(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const lastSlash = u.pathname.lastIndexOf("/");
+    if (lastSlash < 0) return null;
+    return `${u.origin}${u.pathname.slice(0, lastSlash + 1)}${DEAD_PATH_BASENAME}`;
+  } catch {
+    return null;
+  }
+}
+
+function checkDiscriminatorsFire(controlUrl: string | null, dead: Fetched | null): Check {
+  const title = "Negative control: a known-404 sibling path on the same host is seen as non-200, with none of the skill's markers";
+  if (controlUrl === null || dead === null) {
+    return check(
+      "D",
+      title,
+      "unknown",
+      bullet(`No control path could be derived from \`${SKILL_URL}\` — it has no directory to place a sibling in.`),
+      bullet(
+        "**This is not a pass.** Nothing was measured about whether this auditor's own discriminators can fail, so nothing in check B should be read as evidence of anything. Loud-skip-never forbids rendering an unexecuted check as green, and a control that reports OK because it never ran is the worst possible version of that failure.",
+      ),
+    );
+  }
+  if (dead.error !== null) {
+    return check(
+      "D",
+      title,
+      "unknown",
+      bullet(`GET ${controlUrl} did not complete — ${dead.error}.`),
+      bullet(
+        "**This is not a pass.** The control fetch never returned, so the discriminators were never exercised. Check B may be a true statement about the document or an accident of an unreachable host; this row is what tells you which.",
+      ),
+    );
+  }
+  if (!NOT_FOUND_STATUSES.includes(dead.status)) {
+    return check(
+      "D",
+      title,
+      "unknown",
+      bullet(`GET ${controlUrl} → HTTP ${dead.status} (${dead.body.length} bytes), which is not a "this path does not exist" answer.`),
+      bullet(
+        "**This is not a pass, and it is deliberately not a DRIFT either.** A non-404 failure status measures the ORIGIN, not the discriminator: a 5xx from a site-wide outage is exactly what this control would be handed tonight, and reading it as \"the control fired\" — non-200, no markers, therefore confirmed — is the false green this row exists to prevent. The origin answered a question about its own health; the question this row asks is still unanswered.",
+      ),
+      bullet(
+        "The only two statuses that make this a control are 404 and 410, because only those are the origin's own answer to \"that file is not here\" rather than to \"I am broken\" or \"you are not allowed\".",
+      ),
+    );
+  }
+  // A genuine not-found. Now: does the 404 body carry any of the markers B relies on?
+  const markers = servedDocumentMarkers(dead.body);
+  const notEvaluable = markers.filter((m) => !m.evaluable);
+  const leaked = markers.filter((m) => m.evaluable && m.holds);
+  const legend = bullet("Inverted polarity — a ✅ here means the marker is ABSENT from a body that must not contain it, which is what makes it a discriminator.");
+  const seen = bullet(`GET ${controlUrl} → HTTP ${dead.status} (${dead.body.length} bytes), as expected for a path that cannot exist.`);
+  if (leaked.length > 0) {
+    return check(
+      "D",
+      title,
+      "fail",
+      seen,
+      legend,
+      ...renderMarkers(markers, true),
+      bullet(
+        `**The control did NOT fire, and that is a finding rather than a passing control.** ${leaked.length} of B's discriminators are satisfied by a 404 page for a path that does not exist, so a green B would be a statement about the origin's error page rather than about the document: ${leaked.map((m) => m.label).join("; ")}.`,
+      ),
+      bullet(
+        "Read check B with that in hand. Nothing here is merge-blocking, and the fix is a question about the site's file-serving layer (website-server/nginx.conf), not about this repository.",
+      ),
+    );
+  }
+  if (notEvaluable.length > 0) {
+    return check(
+      "D",
+      title,
+      "unknown",
+      seen,
+      legend,
+      ...renderMarkers(markers, true),
+      bullet(
+        `**The dead path behaved correctly, but this row is UNKNOWN rather than OK** because ${notEvaluable.map((m) => m.label).join("; ")} could not be evaluated at all. A control that cannot check every discriminator is not a control over the whole of B.`,
+      ),
+    );
+  }
+  return check(
+    "D",
+    title,
+    "pass",
+    seen,
+    legend,
+    ...renderMarkers(markers, true),
+    bullet(
+      "**The control fired.** The origin answered a non-existent `.md` path with a not-found status and a body carrying none of B's markers, so every discriminator in B can fail — which is what makes a green B a statement about the document. Read this row before B's.",
+    ),
+    bullet(
+      "This is the property the deleted live test proved with a second test in the same file (`red control: a known-404 path on the same host …`). A reporter that always exits 0 cannot assert it with an exit code, so it reports it as a row — and the row is only worth anything if somebody reads it.",
+    ),
+  );
+}
+
 // ── Report ─────────────────────────────────────────────────────────────────
 
 function render(checks: Check[], startedAt: string): string {
   const overrides: string[] = [];
-  if (process.env.PRODUCTION_DRIFT_AUDIT_SKILL_URL) overrides.push(`\`PRODUCTION_DRIFT_AUDIT_SKILL_URL=${SKILL_URL}\` (checks B and C)`);
+  if (process.env.PRODUCTION_DRIFT_AUDIT_SKILL_URL) overrides.push(`\`PRODUCTION_DRIFT_AUDIT_SKILL_URL=${SKILL_URL}\` (checks B, C and D — D's control path is derived from it)`);
   if (process.env.PRODUCTION_DRIFT_AUDIT_GITHUB_API) overrides.push(`\`PRODUCTION_DRIFT_AUDIT_GITHUB_API=${GITHUB_API}\` (check A)`);
   if (process.env.PRODUCTION_DRIFT_AUDIT_CORE_REPO) overrides.push(`\`PRODUCTION_DRIFT_AUDIT_CORE_REPO=${CORE_REPO}\` (check A)`);
 
@@ -606,8 +945,9 @@ function render(checks: Check[], startedAt: string): string {
     "> runs on no trigger but its own schedule. Read the table below for what it saw. A `DRIFT` row here is",
     "> a real finding; a `UNKNOWN` row means the question was not answered, which is not the same as an",
     "> answer of \"fine\". Nothing on this page blocks a merge — by design, because the questions it asks",
-    "> (is the served install form verified? does the endpoint still serve a procedure? does an external",
-    "> release still exist?) cannot be fixed by any change to this repository.",
+    "> (is the served install form verified? does the endpoint still serve a procedure? do this audit's own",
+    "> discriminators fire? does an external release still exist?) cannot be fixed by any change to this",
+    "> repository.",
     ">",
     "> **This audit does not check deploy freshness, and nothing else in CI does either.** A former",
     "> fourth check compared the served skill against the repo copy; it was removed by decision, along with",
@@ -628,6 +968,7 @@ function render(checks: Check[], startedAt: string): string {
     `**Outcome: ${worst}**`,
     "",
     `- Skill URL: \`${SKILL_URL}\``,
+    `- Derived skill slug: \`${SKILL_SLUG ?? "<not derivable — every \`name:\` discriminator is UNKNOWN, never a pass>"}\``,
     `- Skill pin source (read from this checkout, not fetched): \`${SKILL_REL}\``,
     `- rmpc release repo: \`${CORE_REPO}\` (via \`${GITHUB_API}\`, ${GH_TOKEN ? "token supplied" : "unauthenticated — 60 req/hour"})`,
     `- Started: \`${startedAt}\``,
@@ -646,9 +987,12 @@ function render(checks: Check[], startedAt: string): string {
     "---",
     "",
     "_Produced by `scripts/production-drift-audit.ts`, run by `.github/workflows/production-drift-audit.yml`._",
-    "_Checks B and C are code that MOVED off the merge gate: they are no longer in",
-    "`contract/tests/live/swarm-onboarding-skill-url-live.test.ts`, whose only exit is a human deploying the",
-    "site. Every reachability and procedure assertion that file still holds is merge-gated, untouched._",
+    "_Checks B, C and D are code that MOVED off the merge gate, out of the deleted",
+    "live test file. NO REACHABILITY OR PROCEDURE ASSERTION ABOUT",
+    "THE SERVED DOCUMENT IS MERGE-GATED ANYWHERE IN THIS REPOSITORY, and that is the intended state: whether",
+    "robotmoney.network answers is not a property of the commit under review. Read these rows for the",
+    "endpoint; read `contract/tests/unit/swarm-onboarding-skill-url.test.ts` (hermetic, merge-gated) for the URL",
+    "constant. Read D before B: a green B means the document is real only if D says the discriminators can fail._",
     "",
     "_No check here compares the served skill against the repo copy. Deploy freshness is not watched by",
     "anything in this repository; catching a stale deploy is the deploy pipeline's job._",
@@ -669,10 +1013,17 @@ async function main(): Promise<number> {
     // both, with the same reason — a check that could not run is named, not
     // quietly dropped, and not charged a second identical request either.
     const served = await fetchText(SKILL_URL);
+    // A SECOND, SEPARATE fetch backs D, because a control that shared B's
+    // response could not control anything: it would be reading the very body it
+    // is supposed to hold to account. The two run in sequence, and neither
+    // failing hides the other — that is what the four UNKNOWN branches are for.
+    const controlUrl = deadSiblingPath(SKILL_URL);
+    const control = controlUrl === null ? null : await fetchText(controlUrl);
     checks = [
       await checkPinnedRelease(repo),
       checkEndpointServesProcedure(served),
       checkServedInstallForm(served),
+      checkDiscriminatorsFire(controlUrl, control),
     ];
   } catch (e) {
     // The auditor itself broke — a renamed repo path, an unreadable file, a bug
@@ -687,6 +1038,11 @@ async function main(): Promise<number> {
       // as a pass — an abort must not be the way an unverified-install guard
       // silently stops being reported.
       check("C", "The served copy never carries an unverified `| tar` install form", "unknown", bullet("The audit aborted before this check.")),
+      // …and D for the same reason plus one: an auditor that aborts before it
+      // could prove its own assertions are not vacuous must say so. Dropping the
+      // control silently would leave every B verdict unaccompanied, which is the
+      // exact state this row exists to prevent.
+      check("D", "Negative control: a known-404 sibling path on the same host is seen as non-200, with none of the skill's markers", "unknown", bullet("The audit aborted before this check.")),
     ];
   }
 

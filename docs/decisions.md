@@ -1454,7 +1454,7 @@ three checks are renumbered A/B/C above, with no hole where the fourth was. The
 consequence is stated in full in the next paragraph, because it changes what
 this decision means in practice.
 
-**Why.** `contract/tests/live/swarm-onboarding-skill-url-live.test.ts` bundled
+**Why.** The deleted live test file bundled
 two unrelated questions in one required check. The first — *is the endpoint
 serving a real, complete procedure?* — is merge-gated and stays merge-gated,
 untouched; it is the check that caught robotmoney-core's 1,951-byte
@@ -1514,13 +1514,17 @@ rendered UNKNOWN with its reason, never omitted and never rendered as a pass. A
 red report body on a green job is the intended outcome.
 
 **What this does NOT do.** It does not relax the live test, and it does not
-weaken any invariant test. `contract` still runs `test:live` on every PR and
-every push to `main`, and per the loud-skip-never invariant an unreachable
-network is still a RED there. Every reachability and procedure assertion the
-live test holds is still required. What left the gate was a question about
-production's own state, and only that; the later deletion of the deploy-freshness
-comparison removed a check, not an assertion — nothing that was gated became
-ungated, and no gated assertion was weakened to make the deletion clean.
+weaken any invariant test. The live test and its `test:live` script have been
+DELETED, along with the `contract/tests/live/` directory. Every reachability
+and procedure assertion that test held is now an observer check in the auditor
+(`.github/workflows/production-drift-audit.yml`, checks B, C, D), and the one
+hermetic assertion it also held (that the URL names a skill directory above
+`SKILL.md`) remains merge-gated at
+`contract/tests/unit/swarm-onboarding-skill-url.test.ts`. What left the gate
+was a question about production's own state, and only that; the later deletion
+of the deploy-freshness comparison removed a check, not an assertion — nothing
+that was gated became ungated, and no gated assertion was weakened to make the
+deletion clean.
 
 ---
 

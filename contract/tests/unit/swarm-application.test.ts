@@ -317,10 +317,16 @@ describe("SWARM_ONBOARDING_SKILL_URL", () => {
   // constant ship in the same deploy, so they cannot be edited apart without a
   // diff landing in this repository. The limit of this assertion, stated
   // plainly: it proves the STRING, not that the file is reachable or that it
-  // still contains a procedure. Both of those are proved only by the live test
-  // at contract/tests/live/swarm-onboarding-skill-url-live.test.ts, which is
-  // deliberately outside this (network-free) directory but runs in the SAME
-  // required `contract` job (issue #484 — before that it ran in no job at all).
+  // still contains a procedure. Those two questions are asked only by the
+  // schedule-only auditor (check B, with its negative control D), which reports
+  // and never gates — deliberately, because whether robotmoney.network answers
+  // is not a property of the commit under review, and gating a merge on it made
+  // pull requests unmergeable for a reason no diff here could fix (issue #484's
+  // guard used to be merge-gated and went red on a pull request with
+  // `Received: 502`, caused by nobody in it). The URL's own shape — that the
+  // constant names a skill directory above SKILL.md — is merge-gated and
+  // hermetic, in contract/tests/unit/swarm-onboarding-skill-url.test.ts, because
+  // that IS a property of this repository.
   //
   // Same-deploy does not mean published: this repository has no deploy
   // workflow, so `main` can carry a correct skill while production still serves

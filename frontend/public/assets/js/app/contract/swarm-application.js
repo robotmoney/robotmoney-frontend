@@ -43,10 +43,18 @@ export function canonicalizeApplication(a) {
 //
 // A URL that stops serving the procedure fails SILENTLY from an agent's point
 // of view — it simply never onboards, and nothing in this repo raises an error.
-// Reachability AND content are therefore asserted for real by
-// contract/tests/live/swarm-onboarding-skill-url-live.test.ts, on every PR and
-// every push to `main`; the offline regression pin on this string lives in
-// contract/tests/unit/swarm-application.test.ts.
+// What still watches that, then, is the schedule-only auditor: reachability and
+// procedure over the SERVED document are its check B, the unverified-install
+// floor is its check C, and a negative control over both is its check D. The
+// offline pins on this string live in
+// contract/tests/unit/swarm-application.test.ts and
+// contract/tests/unit/swarm-onboarding-skill-url.test.ts, and those are the only
+// assertions about this URL that a merge gate makes — deliberately, because
+// whether robotmoney.network answers is a fact about deploys, DNS, TLS, CDN
+// state and robotmoney-core, not a property of the commit under review, and a
+// required check that depended on it made pull requests unmergeable for reasons
+// no diff here could fix. So: NOTHING IN CI VERIFIES THIS URL ON A MERGE
+// TRIGGER. The auditor answers once a night, reports, and never gates.
 //
 // The served-vs-repo question is not asked here, and is not asked anywhere in
 // this repository: nothing here or in CI compares what production is serving
@@ -55,10 +63,6 @@ export function canonicalizeApplication(a) {
 // deliberately removed from this repository's tooling (see the header of
 // scripts/production-drift-audit.ts for the record). This repository has no
 // deploy workflow, so a merge cannot make the deploy fresh in the first place.
-// Reachability and procedure — the two things a commit in this repository can
-// actually break — stay merge-gated, and the schedule-only auditor
-// (scripts/production-drift-audit.ts) reports on the served document's shape
-// and on the externally pinned rmpc release without gating anything.
 //
 // THIS IS A SAME-ORIGIN URL, ON PURPOSE. It used to point into robotmoney-core
 // over raw.githubusercontent.com, and that cross-repo dependency broke the
