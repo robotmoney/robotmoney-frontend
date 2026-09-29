@@ -35,6 +35,7 @@ import { spoofRebind, spoofRebindDeps } from "../scripts/spoof-rebind.ts";
 import { readSpoofGeneration, spoofKeys, SpoofKeysRefusal, writeSpoofGeneration } from "../../scripts/lib/swarm/spoof-keys.ts";
 import { instancePaths } from "../../scripts/lib/smoke-state.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { adminExec, adminUrl, ROLE_PASSWORD } from "./support/cluster.ts";
 
 useCleanDatabasePerTest(import.meta.file);
@@ -82,15 +83,15 @@ async function seat(): Promise<{ inHouse: string[]; outsider: string; oldBearers
   ];
   const oldBearers: Record<string, string> = {};
   for (const m of members) {
-    await sql`INSERT INTO swarm_members (id, handle, name, status, operator, role) VALUES (${m.id}, ${m.handle}, ${m.handle}, 'active', ${m.operator}, 'member')`;
+    await fixtureDb`INSERT INTO swarm_members (id, handle, name, status, operator, role) VALUES (${m.id}, ${m.handle}, ${m.handle}, 'active', ${m.operator}, 'member')`;
     oldBearers[m.id] = `tok_${m.id}_original`;
-    await sql`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash) VALUES (${m.id}, ${`orig-pub-${m.id}`}, true, ${hashKey(oldBearers[m.id]!)})`;
+    await fixtureDb`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash) VALUES (${m.id}, ${`orig-pub-${m.id}`}, true, ${hashKey(oldBearers[m.id]!)})`;
   }
   return { inHouse: [members[0]!.handle, members[1]!.handle], outsider: members[2]!.handle, oldBearers };
 }
 
 async function enroll(kind: "rehearsal" | "production"): Promise<void> {
-  await sql`INSERT INTO deployment_identity (kind, note) VALUES (${kind}, 'spoof-rebind test')`;
+  await fixtureDb`INSERT INTO deployment_identity (kind, note) VALUES (${kind}, 'spoof-rebind test')`;
 }
 
 type KeyRow = { member_id: string; public_key: string; active: boolean; token_hash: string | null; spoof_generation_id: string | null };
