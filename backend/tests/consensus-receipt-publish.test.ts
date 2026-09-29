@@ -21,6 +21,7 @@ import * as verbs from "./support/session-verbs.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { setJudgeConfig } from "../src/swarm/judge-config.ts";
 import { ConsensusReceiptRefusal, publishConsensusReceipt, getConsensusReceipt, verifyAssembledReceipt } from "../src/swarm/consensus-receipt.ts";
@@ -280,23 +281,25 @@ test("the stored receipt refuses UPDATE and DELETE at the database, not merely i
   const { sessionId } = await judgedSession("recguard", [[0.4, 0.3, 0.2, 0.1], [0.1, 0.2, 0.3, 0.4]]);
   await publishConsensusReceipt(sessionId);
 
+  // These three run as the owner (fixtureDb): the point is that the TRIGGERS refuse,
+  // which they do even for the schema owner; rm_app would be stopped by a grant first.
   // UPDATE — migration 0042's own trigger. The append-only guard shared with
   // every other protected table does NOT cover UPDATE, and for this table the
   // difference matters: amending these bytes does not amend the receipt, it
   // orphans the on-chain digest that commits to them.
   let raised: any = null;
   try {
-    await sql`UPDATE swarm_consensus_receipts SET canonical_bytes = 'tampered' WHERE session_id = ${sessionId}`;
+    await fixtureDb`UPDATE swarm_consensus_receipts SET canonical_bytes = 'tampered' WHERE session_id = ${sessionId}`;
   } catch (e) { raised = e; }
   expect(raised).not.toBeNull();
   expect(String(raised.message)).toContain("immutable once published");
 
   // DELETE and TRUNCATE — the shared append-only guard (migrations 0032/0042).
   raised = null;
-  try { await sql`DELETE FROM swarm_consensus_receipts WHERE session_id = ${sessionId}`; } catch (e) { raised = e; }
+  try { await fixtureDb`DELETE FROM swarm_consensus_receipts WHERE session_id = ${sessionId}`; } catch (e) { raised = e; }
   expect(String(raised?.message)).toContain("append-only");
   raised = null;
-  try { await sql.unsafe(`TRUNCATE swarm_consensus_receipts CASCADE`); } catch (e) { raised = e; }
+  try { await fixtureDb.unsafe(`TRUNCATE swarm_consensus_receipts CASCADE`); } catch (e) { raised = e; }
   expect(String(raised?.message)).toContain("append-only");
 
   const [row] = (await sql`SELECT canonical_bytes FROM swarm_consensus_receipts WHERE session_id = ${sessionId}`) as any[];
@@ -498,12 +501,12 @@ test("REPLAY: a member's nonce is single-use across sessions, and the assembler 
   // receipt is relying on rather than on a constraint they cannot see. The
   // constraint is lifted for the length of this assertion so a replayed row can
   // exist at all, then restored.
-  await sql.unsafe(`ALTER TABLE swarm_recommendations DROP CONSTRAINT swarm_recommendations_member_id_nonce_key`);
+  await fixtureDb.unsafe(`ALTER TABLE swarm_recommendations DROP CONSTRAINT swarm_recommendations_member_id_nonce_key`);
   try {
-    await sql`
+    await fixtureDb`
       INSERT INTO swarm_recommendations (session_id, member_id, subject_id, date, nonce, stance, confidence, body, payload, signature, verified, revision)
       VALUES (${s2.id}, ${replayer.id}, ${second}, ${date2}, ${take.nonce}, 'neutral', 0.5, 'replayed',
-              ${sql.json(take.payload)}, ${take.signature}, true, 1)`;
+              ${fixtureDb.json(take.payload)}, ${take.signature}, true, 1)`;
     await advanceToPublished(s2.id);
 
     let raised: ConsensusReceiptRefusal | null = null;
@@ -512,7 +515,7 @@ test("REPLAY: a member's nonce is single-use across sessions, and the assembler 
     expect(raised!.reason).toBe("nonce_replayed");
     expect(raised!.message).toContain("already filed against a different session");
   } finally {
-    await sql.unsafe(
+    await fixtureDb.unsafe(
       `ALTER TABLE swarm_recommendations ADD CONSTRAINT swarm_recommendations_member_id_nonce_key UNIQUE (member_id, nonce)`,
     ).catch(() => {});
   }
