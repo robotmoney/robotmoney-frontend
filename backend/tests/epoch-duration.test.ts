@@ -24,6 +24,7 @@
 import { test, expect, beforeAll } from "bun:test";
 import { readFileSync } from "node:fs";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import * as admin from "../src/swarm/admin.ts";
 import * as epoch from "../src/swarm/domain.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
@@ -285,7 +286,7 @@ test("a boot on a populated database changes no subject's duration", async () =>
   // would do if `schema_migrations` had not already recorded it — the strongest
   // available statement that the migration is not a seeder in disguise.
   const id = await activeSubject("dur_populated", 4242);
-  await sql.unsafe(readFileSync(MIGRATION_0067, "utf8"));
+  await fixtureDb.unsafe(readFileSync(MIGRATION_0067, "utf8"));
   const [after] = await sql<{ epoch_duration_seconds: number }[]>`
     SELECT epoch_duration_seconds FROM swarm_subjects WHERE id = ${id}`;
   expect(after.epoch_duration_seconds).toBe(4242);
