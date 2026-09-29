@@ -81,6 +81,10 @@ const LOWER_SIX = [
   "0062_rm_worker_analytics_ledger_read_grant.sql",
 ];
 
+// cluster admin: this file replays the historical releases AS the bootstrap login
+// (a superuser), so the objects before 0054 are the admin's and role attributes
+// are rewritten by 0053; the replay, the role save/restore and the session
+// catalog reads all need it. The owner's own steps run as rm_owner (asOwner).
 const LOGIN = new URL(adminUrl()).username;
 const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 const READONLY_PASSWORD = randomBytes(12).toString("hex");
