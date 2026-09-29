@@ -14,6 +14,7 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
@@ -147,7 +148,7 @@ test("closeWindow closes the window even when the absence record cannot be writt
   // Break the absence-record path: drop the partial unique index that the
   // insert's ON CONFLICT (session_id, member_id) WHERE event_type='absent'
   // clause targets. Every such insert now fails.
-  await sql`DROP INDEX swarm_agent_health_events_absent_once_idx`;
+  await fixtureDb`DROP INDEX swarm_agent_health_events_absent_once_idx`;
   try {
     const result = await ic.closeWindow(session.id);
     // The transition COMMITTED despite the telemetry failure...
@@ -166,7 +167,7 @@ test("closeWindow closes the window even when the absence record cannot be writt
     // A re-close is still a no-op and still does not throw.
     await ic.closeWindow(session.id);
   } finally {
-    await sql`
+    await fixtureDb`
       CREATE UNIQUE INDEX IF NOT EXISTS swarm_agent_health_events_absent_once_idx
         ON swarm_agent_health_events (session_id, member_id)
         WHERE event_type = 'absent'`;
@@ -254,7 +255,7 @@ test("closeWindow commits window_closed even when absence-event recording fails,
   const signature = await signMessage(canonicalizeSubmission(sub), present.privateKey);
   expect((await ic.submitRecommendation(present.token, { ...sub, signature })).status).toBe(201);
 
-  await sql.unsafe(`DROP INDEX swarm_agent_health_events_absent_once_idx`);
+  await fixtureDb.unsafe(`DROP INDEX swarm_agent_health_events_absent_once_idx`);
 
   const result = await ic.closeWindow(session.id);
   expect(result.state).toBe("window_closed");
