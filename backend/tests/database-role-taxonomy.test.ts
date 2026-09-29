@@ -6,7 +6,7 @@ import { APPEND_ONLY_TABLES } from "../src/db/append-only-guard.ts";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
-import { adminExec, adminUrl } from "./support/cluster.ts";
+import { adminExec } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -16,7 +16,7 @@ let worker: postgres.Sql<{}>;
 let readonly: postgres.Sql<{}>;
 
 function urlFor(role: keyof typeof passwords): string {
-  const url = new URL(adminUrl());
+  const url = new URL(process.env.DATABASE_URL!);
   url.username = role;
   url.password = passwords[role];
   return url.toString();
@@ -33,6 +33,7 @@ async function denied(query: Promise<unknown>): Promise<string | null> {
 
 beforeAll(async () => {
   for (const [role, password] of Object.entries(passwords)) {
+    // cluster admin: ALTER ROLE is superuser-only
     await adminExec(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${password}'`);
   }
   app = postgres(urlFor("rm_app"), { max: 1, onnotice: () => {} });
