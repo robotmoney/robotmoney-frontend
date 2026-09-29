@@ -60,16 +60,10 @@ import {
   type CatalogDiff,
   type CatalogEntry,
 } from "./support/catalog-normalize.ts";
-import { adminUrl } from "./support/cluster.ts";
+import { adminConnection, harnessConnection, harnessUrl } from "./support/cluster.ts";
 
 function urlFor(database: string): string {
-  const url = new URL(adminUrl());
-  url.pathname = `/${database}`;
-  return url.toString();
-}
-
-function connect(database: string): postgres.Sql<{}> {
-  return postgres(urlFor(database), { max: 1, onnotice: () => {} });
+  return harnessUrl(database);
 }
 
 /** The smoke `--migrate` caller against a rehearsal database this file owns.
@@ -93,7 +87,8 @@ let snapshotCatalog: CatalogEntry[] = [];
 let baselined = false;
 
 beforeAll(async () => {
-  const admin = connect("postgres");
+  // cluster admin: CREATE DATABASE
+  const admin = adminConnection();
   try {
     await admin.unsafe(`CREATE DATABASE ${MIGRATED_DB} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`);
     // OWNER rm_owner: §5's `--local blank` hands the bootstrap a database the
@@ -103,7 +98,11 @@ beforeAll(async () => {
     await admin.end({ timeout: 5 });
   }
 
-  migrated = connect(MIGRATED_DB);
+  // cluster admin: the migrated side IS the replaying login's view. Its own
+  // default privileges, the event trigger and the publication the red controls
+  // plant, and the `default privileges for <login>` key are the superuser's.
+  migrated = adminConnection(MIGRATED_DB);
+  [{ current_user: DATABASE_LOGIN }] = (await migrated`SELECT current_user`) as unknown as { current_user: string }[];
   // §9.1 step 3, as the login that ran the migrations: the provisioning
   // login's own defaults, which no migration can reach.
   await migrated.unsafe(PROVISIONING_DEFAULT_PRIVILEGES_SQL);
@@ -126,7 +125,7 @@ beforeAll(async () => {
   expect(run.applied).toEqual([]);
   baselined = run.baselined;
 
-  snapshotDb = connect(SNAPSHOT_DB);
+  snapshotDb = harnessConnection(SNAPSHOT_DB);
   await snapshotDb.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
   await snapshotDb.unsafe("SET ROLE rm_owner");
   await bootstrapBlankDatabase(snapshotDb, await loadSnapshot());
@@ -139,7 +138,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await migrated?.end({ timeout: 5 });
   await snapshotDb?.end({ timeout: 5 });
-  const admin = connect("postgres");
+  const admin = adminConnection();
   try {
     for (const name of [MIGRATED_DB, SNAPSHOT_DB, RESTORED_DB]) {
       await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
@@ -159,7 +158,7 @@ function differingKeys(diff: CatalogDiff): string[] {
   return [...diff.onlyLeft.map((e) => e.key), ...diff.onlyRight.map((e) => e.key), ...diff.differing.map((d) => d.key)].sort();
 }
 
-const DATABASE_LOGIN = new URL(adminUrl()).username;
+let DATABASE_LOGIN: string;
 const RUNTIME = ["rm_app", "rm_worker", "rm_readonly"] as const;
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -342,13 +341,13 @@ describe("a restored backup gets rm_owner's default privileges back from the rec
   };
 
   test("check 3a refuses the stripped copy by name, and passes after the real migrate run reconciles it", async () => {
-    const admin = connect("postgres");
+    const admin = adminConnection();
     try {
       await admin.unsafe(`CREATE DATABASE ${RESTORED_DB} OWNER rm_owner`);
     } finally {
       await admin.end({ timeout: 5 });
     }
-    const restored = connect(RESTORED_DB);
+    const restored = harnessConnection(RESTORED_DB);
     try {
       await restored.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
       await restored.unsafe("SET ROLE rm_owner");
