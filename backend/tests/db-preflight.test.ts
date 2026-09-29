@@ -12,6 +12,7 @@ import { expect, test } from "bun:test";
 import postgres from "postgres";
 import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import {
   classifyDatabase,
   handleNamespaceConflicts,
@@ -90,7 +91,7 @@ test("a restored violation is DETECTED and the boot is refused, with both member
   const shadowed = `pf-shadowed-${crypto.randomUUID().slice(0, 8)}`;
   const rollback = new Error("rollback");
   try {
-    await sql.begin(async (tx) => {
+    await fixtureDb.begin(async (tx) => {
       await tx`ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_handle_namespace_trigger`;
       await tx`INSERT INTO swarm_members (id, status, name, handle)
                VALUES (${shadowed}, 'active', 'Shadowed', ${`${shadowed}-h`})`;
