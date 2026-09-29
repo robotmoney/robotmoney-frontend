@@ -4,6 +4,7 @@
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { saveRegimeSnapshots, type RegimeSnapshotRow } from "../src/analytics/store/regime-store.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import type { RegimeSnapshot } from "../src/analytics/analyze/regime.ts";
 import { persistResearchSignal } from "../src/analytics/store/research-store.ts";
 import type { ResearchPayload } from "../src/analytics/analyze/research.ts";
@@ -189,7 +190,7 @@ test("saveRegimeSnapshots: round-trips the full v2 row (panel fields, weights, v
 
 test("persistResearchSignal: round-trips and upserts on (signal_key, date)", async () => {
   const KEY = "test-store-signal";
-  await sql`DELETE FROM research_signals WHERE signal_key = ${KEY}`;
+  await fixtureDb`DELETE FROM research_signals WHERE signal_key = ${KEY}`;
   const payload = (v: number): ResearchPayload => ({
     asof: DATE,
     title: "T",
@@ -199,13 +200,13 @@ test("persistResearchSignal: round-trips and upserts on (signal_key, date)", asy
     series: { label: "L", points: [{ date: DATE, value: v }] },
   });
 
-  await persistResearchSignal(KEY, DATE, payload(1));
+  await persistResearchSignal(KEY, DATE, payload(1), fixtureDb);
   const [row] = await sql`SELECT payload FROM research_signals WHERE signal_key = ${KEY} AND date = ${DATE}`;
   expect(row).toBeDefined();
   expect(row.payload).toEqual(payload(1) as any);
 
   // upsert overwrites, no duplicate.
-  await persistResearchSignal(KEY, DATE, payload(2));
+  await persistResearchSignal(KEY, DATE, payload(2), fixtureDb);
   const rows = await sql`SELECT payload FROM research_signals WHERE signal_key = ${KEY} AND date = ${DATE}`;
   expect(rows.length).toBe(1);
   expect((rows[0].payload as any).spec.window).toBe(2);

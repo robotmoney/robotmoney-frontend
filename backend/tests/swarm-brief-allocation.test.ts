@@ -3,6 +3,7 @@
 // subjects, freeze policy on retry, and scope recentSessions to the target subject.
 import { expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { ALLOCATION_FRAMEWORK_SEED } from "../src/chain/allocation-framework.ts";
@@ -15,9 +16,9 @@ test("publishBrief() for subject with source.type === 'framework' attaches body.
             VALUES (${subjId}, 'active', 'Robot Money Allocation', ${sql.json({ type: "framework" })}, 'bucket_weights')
             ON CONFLICT (id) DO UPDATE SET source = EXCLUDED.source`;
 
-  await sql`INSERT INTO allocation_framework (id, asof, vault_contract, buckets)
+  await fixtureDb`INSERT INTO allocation_framework (id, asof, vault_contract, buckets)
             VALUES (1, '2026-06-02', ${ALLOCATION_FRAMEWORK_SEED.vault_contract},
-                    ${sql.json(JSON.parse(JSON.stringify(ALLOCATION_FRAMEWORK_SEED.buckets)))})
+                    ${fixtureDb.json(JSON.parse(JSON.stringify(ALLOCATION_FRAMEWORK_SEED.buckets)))})
             ON CONFLICT (id) DO UPDATE SET asof = EXCLUDED.asof, buckets = EXCLUDED.buckets`;
 
   const session = await ic.openSession(subjId);
@@ -52,7 +53,7 @@ test("publishBrief() for framework subject without allocation_framework row carr
             VALUES (${subjId}, 'active', 'Framework No Row', ${sql.json({ type: "framework" })}, 'bucket_weights')
             ON CONFLICT (id) DO UPDATE SET source = EXCLUDED.source`;
 
-  await sql`DELETE FROM allocation_framework WHERE id = 1`;
+  await fixtureDb`DELETE FROM allocation_framework WHERE id = 1`;
 
   const session = await ic.openSession(subjId);
   await ic.publishBrief(session.id);
@@ -68,9 +69,9 @@ test("brief freezes policy at creation and retry cannot replace its reference", 
             VALUES (${subjId}, 'active', 'Robot Money Allocation', ${sql.json({ type: "framework" })}, 'bucket_weights')
             ON CONFLICT (id) DO UPDATE SET source = EXCLUDED.source`;
 
-  await sql`INSERT INTO allocation_framework (id, asof, vault_contract, buckets)
+  await fixtureDb`INSERT INTO allocation_framework (id, asof, vault_contract, buckets)
             VALUES (1, '2026-06-02', ${ALLOCATION_FRAMEWORK_SEED.vault_contract},
-                    ${sql.json(JSON.parse(JSON.stringify(ALLOCATION_FRAMEWORK_SEED.buckets)))})
+                    ${fixtureDb.json(JSON.parse(JSON.stringify(ALLOCATION_FRAMEWORK_SEED.buckets)))})
             ON CONFLICT (id) DO UPDATE SET asof = EXCLUDED.asof, buckets = EXCLUDED.buckets`;
 
   const first = await ic.openSession(subjId);
@@ -83,7 +84,7 @@ test("brief freezes policy at creation and retry cannot replace its reference", 
     ...b,
     target_weight: i === 0 ? 0.9 : i === 1 ? 0.1 : 0,
   }));
-  await sql`UPDATE allocation_framework SET buckets = ${sql.json(JSON.parse(JSON.stringify(changed)))} WHERE id = 1`;
+  await fixtureDb`UPDATE allocation_framework SET buckets = ${fixtureDb.json(JSON.parse(JSON.stringify(changed)))} WHERE id = 1`;
 
   // Retry publishing the first session — must retain original reference
   await ic.publishBrief(first.id);

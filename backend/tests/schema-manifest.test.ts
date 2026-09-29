@@ -36,6 +36,7 @@ import { useCleanDatabase } from "./support/clean-db.ts";
 import { adminExec, adminUrl } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
+import { fixtureDb } from "./support/fixture-db.ts";
 
 const MIGRATIONS_DIR = join(import.meta.dir, "..", "migrations");
 const ON_DISK = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
@@ -58,7 +59,7 @@ function manifest(over: Partial<SchemaManifest> = {}): SchemaManifest {
  *  so "no manifest table" stays reachable; a test that needs the table builds
  *  it here, owned by rm_owner as §8.3's write restriction requires. */
 async function createManifestTable(): Promise<void> {
-  await sql.unsafe(`
+  await fixtureDb.unsafe(`
     CREATE TABLE IF NOT EXISTS ${MANIFEST_TABLE} (
       format_version integer NOT NULL,
       declaration    text    NOT NULL,
@@ -66,7 +67,9 @@ async function createManifestTable(): Promise<void> {
       content_hash   text    NOT NULL,
       singleton      boolean NOT NULL DEFAULT true UNIQUE CHECK (singleton)
     )`);
-  await sql.unsafe(`ALTER TABLE ${MANIFEST_TABLE} OWNER TO rm_owner`);
+  await fixtureDb.unsafe(`ALTER TABLE ${MANIFEST_TABLE} OWNER TO rm_owner`);
+  // Migration 0064's own grant: the runtime role reads the manifest, nothing more.
+  await fixtureDb.unsafe(`GRANT SELECT ON ${MANIFEST_TABLE} TO rm_app`);
 }
 
 async function insertManifestRow(row: {
@@ -75,7 +78,7 @@ async function insertManifestRow(row: {
   filenames: readonly string[];
   contentHash?: string;
 }): Promise<void> {
-  await sql`
+  await fixtureDb`
     INSERT INTO schema_manifest (format_version, declaration, filenames, content_hash)
     VALUES (
       ${row.formatVersion ?? MANIFEST_FORMAT_VERSION},
@@ -92,7 +95,7 @@ async function ledgerNames(): Promise<string[]> {
 }
 
 afterEach(async () => {
-  await sql.unsafe(`DROP TABLE IF EXISTS ${MANIFEST_TABLE}`);
+  await fixtureDb.unsafe(`DROP TABLE IF EXISTS ${MANIFEST_TABLE}`);
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -203,7 +206,7 @@ describe("readManifest / writeManifest — round trip", () => {
     await createManifestTable();
     const names = await ledgerNames();
     const published = manifest({ filenames: names });
-    await sql.begin(async (tx) => {
+    await fixtureDb.begin(async (tx) => {
       await tx.unsafe("SET LOCAL ROLE rm_owner");
       await writeManifest(tx, published);
     });
@@ -222,8 +225,8 @@ describe("readManifest / writeManifest — round trip", () => {
     // so this builds the unconstrained shape on its own clone: what is under
     // test is readManifest's refusal to choose between two rows, not who
     // created the table, and the two-row state has to be constructible at all.
-    await sql.unsafe(`DROP TABLE IF EXISTS ${MANIFEST_TABLE}`);
-    await sql.unsafe(`
+    await fixtureDb.unsafe(`DROP TABLE IF EXISTS ${MANIFEST_TABLE}`);
+    await fixtureDb.unsafe(`
       CREATE TABLE ${MANIFEST_TABLE} (
         format_version integer NOT NULL, declaration text NOT NULL,
         filenames text[] NOT NULL, content_hash text NOT NULL)`);
@@ -242,7 +245,7 @@ describe("writeManifest — a trusted input, written only by rm_owner and only w
     // decision.
     const filenames = await ledgerNames();
     await expect(
-      sql.begin(async (tx) => {
+      fixtureDb.begin(async (tx) => {
         await tx.unsafe("SET LOCAL ROLE rm_app");
         await writeManifest(tx, manifest({ filenames }));
       }),
@@ -253,7 +256,7 @@ describe("writeManifest — a trusted input, written only by rm_owner and only w
     await createManifestTable();
     const wrong = (await ledgerNames()).slice(0, -1);
     await expect(
-      sql.begin(async (tx) => {
+      fixtureDb.begin(async (tx) => {
         await tx.unsafe("SET LOCAL ROLE rm_owner");
         await writeManifest(tx, manifest({ filenames: wrong }));
       }),
@@ -265,7 +268,7 @@ describe("writeManifest — a trusted input, written only by rm_owner and only w
     const names = await ledgerNames();
     const forged: SchemaManifest = { ...manifest({ filenames: names }), contentHash: "0".repeat(64) };
     await expect(
-      sql.begin(async (tx) => {
+      fixtureDb.begin(async (tx) => {
         await tx.unsafe("SET LOCAL ROLE rm_owner");
         await writeManifest(tx, forged);
       }),
@@ -277,7 +280,7 @@ describe("writeManifest — a trusted input, written only by rm_owner and only w
     const names = await ledgerNames();
     const wrong: SchemaManifest = { ...manifest({ filenames: names }), formatVersion: MANIFEST_FORMAT_VERSION + 1 };
     await expect(
-      sql.begin(async (tx) => {
+      fixtureDb.begin(async (tx) => {
         await tx.unsafe("SET LOCAL ROLE rm_owner");
         await writeManifest(tx, wrong);
       }),
@@ -287,7 +290,7 @@ describe("writeManifest — a trusted input, written only by rm_owner and only w
   test("a refused write leaves no row — it commits with the reconciliation or it does not exist", async () => {
     await createManifestTable();
     const wrong = (await ledgerNames()).slice(0, -1);
-    await sql
+    await fixtureDb
       .begin(async (tx) => {
         await tx.unsafe("SET LOCAL ROLE rm_owner");
         await writeManifest(tx, manifest({ filenames: wrong }));
@@ -386,7 +389,7 @@ describe("detectManifestState — classify manifest vs ledger", () => {
     const names = await ledgerNames();
     await insertManifestRow({ filenames: names, contentHash: hashManifest(DECLARATION, names) });
     const before = await detectManifestState(sql);
-    await sql.unsafe("DROP TRIGGER IF EXISTS swarm_members_append_only ON swarm_members");
+    await fixtureDb.unsafe("DROP TRIGGER IF EXISTS swarm_members_append_only ON swarm_members");
     expect(await detectManifestState(sql)).toEqual(before);
   });
 });
@@ -470,7 +473,7 @@ describe("resumePlan — finishing an interrupted run without replaying or accep
     const names = await ledgerNames();
     const embodied = names.filter((n) => n < "0032_append_only_history.sql");
     await insertManifestRow({ filenames: embodied, contentHash: hashManifest(DECLARATION, embodied) });
-    await sql.unsafe("DROP TRIGGER IF EXISTS swarm_members_append_only ON swarm_members");
+    await fixtureDb.unsafe("DROP TRIGGER IF EXISTS swarm_members_append_only ON swarm_members");
     await expect(resumePlan(sql, names)).rejects.toThrow("swarm_members");
   });
 });
@@ -519,7 +522,7 @@ describe("rm_app is refused every write to the manifest and the ledger, by grant
   });
 
   async function asOwner(statements: string): Promise<void> {
-    await sql.begin(async (tx) => {
+    await fixtureDb.begin(async (tx) => {
       await tx.unsafe("SET LOCAL ROLE rm_owner");
       await tx.unsafe(statements);
     });
@@ -528,7 +531,7 @@ describe("rm_app is refused every write to the manifest and the ledger, by grant
   /** Put back 0064's table and one manifest row, as the migration and a
    *  migrate run would leave them. */
   async function rebuildManifestFromMigration(): Promise<void> {
-    await sql.unsafe(`DROP TABLE IF EXISTS ${MANIFEST_TABLE}`);
+    await fixtureDb.unsafe(`DROP TABLE IF EXISTS ${MANIFEST_TABLE}`);
     await asOwner(MIGRATION_0064);
     await insertManifestRow({ filenames: await ledgerNames() });
   }

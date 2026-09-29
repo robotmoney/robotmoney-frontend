@@ -65,6 +65,7 @@ import {
 } from "./support/startup-preflight.ts";
 import { adminExec, adminUrl, ROLE_PASSWORD } from "./support/cluster.ts";
 
+import { fixtureDb } from "./support/fixture-db.ts";
 useCleanDatabase(import.meta.file);
 
 /** A header in the shape this repo already writes: the first comment block of
@@ -79,8 +80,8 @@ function header(lines: readonly string[]): string {
  *  afterEach below drops them so "the column does not exist" stays reachable,
  *  and a test that needs them re-adds them here. */
 async function addCompatColumns(): Promise<void> {
-  await sql.unsafe(`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS compat text`);
-  await sql.unsafe(`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS metadata_version integer`);
+  await fixtureDb.unsafe(`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS compat text`);
+  await fixtureDb.unsafe(`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS metadata_version integer`);
 }
 
 async function ledgerNames(): Promise<string[]> {
@@ -90,7 +91,7 @@ async function ledgerNames(): Promise<string[]> {
 
 afterEach(async () => {
   for (const column of COMPAT_COLUMNS) {
-    await sql.unsafe(`ALTER TABLE schema_migrations DROP COLUMN IF EXISTS ${column}`);
+    await fixtureDb.unsafe(`ALTER TABLE schema_migrations DROP COLUMN IF EXISTS ${column}`);
   }
 });
 
@@ -355,7 +356,7 @@ describe("readLedgerCompat — what a newer release RECORDED at apply time", () 
   test("returns one row per requested filename, with nulls preserved", async () => {
     await addCompatColumns();
     const names = (await ledgerNames()).slice(0, 2);
-    await sql`UPDATE schema_migrations SET compat = 'additive', metadata_version = 1 WHERE name = ${names[0] ?? ""}`;
+    await fixtureDb`UPDATE schema_migrations SET compat = 'additive', metadata_version = 1 WHERE name = ${names[0] ?? ""}`;
     const rows = await readLedgerCompat(sql, names);
     expect(rows).toEqual([
       { filename: names[0] ?? "", compat: "additive", metadataVersion: 1 },
@@ -399,7 +400,7 @@ describe("checkCompatibility — code at N against a database at M > N", () => {
     await addCompatColumns();
     const names = await ledgerNames();
     const surplus = names.slice(-2);
-    await sql`
+    await fixtureDb`
       UPDATE schema_migrations SET compat = 'additive', metadata_version = ${COMPAT_METADATA_VERSION}
       WHERE name = ANY(${surplus})`;
     expect(await checkCompatibility(sql, names.slice(0, -2), names)).toEqual({ kind: "compatible", surplus });
@@ -412,8 +413,8 @@ describe("checkCompatibility — code at N against a database at M > N", () => {
     // DROP COLUMN would pass just as well.
     await addCompatColumns();
     const names = await ledgerNames();
-    await sql.unsafe("ALTER TABLE jobs ADD COLUMN rm_compat_probe text");
-    await sql`
+    await fixtureDb.unsafe("ALTER TABLE jobs ADD COLUMN rm_compat_probe text");
+    await fixtureDb`
       INSERT INTO schema_migrations (name, compat, metadata_version)
       VALUES ('0063_jobs_add_probe.sql', 'additive', ${COMPAT_METADATA_VERSION})`;
     const verdict = await checkCompatibility(sql, names, [...names, "0063_jobs_add_probe.sql"]);
@@ -424,7 +425,7 @@ describe("checkCompatibility — code at N against a database at M > N", () => {
     await addCompatColumns();
     const names = await ledgerNames();
     const surplus = names[names.length - 1] ?? "";
-    await sql`
+    await fixtureDb`
       UPDATE schema_migrations SET compat = 'breaking', metadata_version = ${COMPAT_METADATA_VERSION}
       WHERE name = ${surplus}`;
     const verdict = await checkCompatibility(sql, names.slice(0, -1), names);
@@ -456,7 +457,7 @@ describe("checkCompatibility — code at N against a database at M > N", () => {
     await addCompatColumns();
     const names = await ledgerNames();
     const surplus = names[names.length - 1] ?? "";
-    await sql`
+    await fixtureDb`
       UPDATE schema_migrations SET compat = 'additive', metadata_version = ${COMPAT_METADATA_VERSION + 1}
       WHERE name = ${surplus}`;
     const verdict = await checkCompatibility(sql, names.slice(0, -1), names);
@@ -471,7 +472,7 @@ describe("checkCompatibility — code at N against a database at M > N", () => {
     await addCompatColumns();
     const names = await ledgerNames();
     const surplus = names[names.length - 1] ?? "";
-    await sql`UPDATE schema_migrations SET compat = 'additive', metadata_version = 0 WHERE name = ${surplus}`;
+    await fixtureDb`UPDATE schema_migrations SET compat = 'additive', metadata_version = 0 WHERE name = ${surplus}`;
     const verdict = await checkCompatibility(sql, names.slice(0, -1), names);
     expect(verdict.kind).toBe("refused");
     if (verdict.kind === "refused") {
@@ -484,8 +485,8 @@ describe("checkCompatibility — code at N against a database at M > N", () => {
     await addCompatColumns();
     const names = await ledgerNames();
     const surplus = names.slice(-3);
-    await sql`UPDATE schema_migrations SET compat = 'breaking', metadata_version = 1 WHERE name = ${surplus[0] ?? ""}`;
-    await sql`UPDATE schema_migrations SET compat = 'additive', metadata_version = 99 WHERE name = ${surplus[1] ?? ""}`;
+    await fixtureDb`UPDATE schema_migrations SET compat = 'breaking', metadata_version = 1 WHERE name = ${surplus[0] ?? ""}`;
+    await fixtureDb`UPDATE schema_migrations SET compat = 'additive', metadata_version = 99 WHERE name = ${surplus[1] ?? ""}`;
     // surplus[2] stays NULL.
     const verdict = await checkCompatibility(sql, names.slice(0, -3), names);
     expect(verdict.kind).toBe("refused");
@@ -500,7 +501,7 @@ describe("checkCompatibility — code at N against a database at M > N", () => {
     expect(names).toContain(swarm0059);
     expect(names).toContain(analytics0059);
 
-    await sql`
+    await fixtureDb`
       UPDATE schema_migrations SET compat = 'additive', metadata_version = ${COMPAT_METADATA_VERSION}
       WHERE name = ${swarm0059}`;
     const codeFilenames = names.filter((n) => n !== swarm0059);
@@ -529,7 +530,7 @@ describe("checkCompatibility — code at N against a database at M > N", () => {
     // on drift so that 3a's refusal is the one the operator reads.
     await addCompatColumns();
     const names = await ledgerNames();
-    await sql.unsafe("DROP TRIGGER IF EXISTS swarm_members_append_only ON swarm_members");
+    await fixtureDb.unsafe("DROP TRIGGER IF EXISTS swarm_members_append_only ON swarm_members");
     expect(await checkCompatibility(sql, names, names)).toEqual({ kind: "compatible", surplus: [] });
   });
 });
@@ -541,7 +542,7 @@ describe("checkCompatibility — code at N against a database at M > N", () => {
 describe("recordMigrationCompat — the declaration commits with the DDL, never after it", () => {
   test("writes compat and metadata_version onto the migration's own ledger row", async () => {
     await addCompatColumns();
-    await sql.begin(async (tx) => {
+    await fixtureDb.begin(async (tx) => {
       await tx.unsafe("SET LOCAL ROLE rm_owner");
       await tx`INSERT INTO schema_migrations (name) VALUES ('0063_probe.sql')`;
       await recordMigrationCompat(tx, {
@@ -562,7 +563,7 @@ describe("recordMigrationCompat — the declaration commits with the DDL, never 
     // other than the write order.
     await addCompatColumns();
     let caught: unknown;
-    await sql
+    await fixtureDb
       .begin(async (tx) => {
         await tx.unsafe("SET LOCAL ROLE rm_owner");
         await tx`INSERT INTO schema_migrations (name) VALUES ('0064_rolled_back.sql')`;
@@ -588,11 +589,11 @@ describe("recordMigrationCompat — the declaration commits with the DDL, never 
 
   test("refuses when the effective role is not rm_owner — compat is a trusted input", async () => {
     await addCompatColumns();
-    await sql`INSERT INTO schema_migrations (name) VALUES ('0065_not_owner.sql')`;
+    await fixtureDb`INSERT INTO schema_migrations (name) VALUES ('0065_not_owner.sql')`;
     // The suite's own session acts as rm_owner (tests/preload.ts), so the
     // non-owner is a runtime role the same session steps down to.
     await expect(
-      sql.begin(async (tx) => {
+      fixtureDb.begin(async (tx) => {
         await tx.unsafe("SET LOCAL ROLE rm_app");
         await recordMigrationCompat(tx, {
           filename: "0065_not_owner.sql",
@@ -607,11 +608,11 @@ describe("recordMigrationCompat — the declaration commits with the DDL, never 
     // schema_migrations is append-only, and a declaration that could be revised
     // after the fact is not evidence of anything.
     await addCompatColumns();
-    await sql`
+    await fixtureDb`
       INSERT INTO schema_migrations (name, compat, metadata_version)
       VALUES ('0066_already_declared.sql', 'breaking', ${COMPAT_METADATA_VERSION})`;
     await expect(
-      sql.begin(async (tx) => {
+      fixtureDb.begin(async (tx) => {
         await tx.unsafe("SET LOCAL ROLE rm_owner");
         await recordMigrationCompat(tx, {
           filename: "0066_already_declared.sql",
