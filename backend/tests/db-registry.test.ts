@@ -335,12 +335,7 @@ describe("structural enforcement — a raw sql call outside the interface is det
   // written down instead of fixed, which is the one thing a ratchet exists to
   // prevent. The only legal edit is a deletion.
   const RAW_SQL_ALLOWLIST: readonly string[] = [
-    "src/api/routes/admin",
-    "src/api/routes/admin-webauthn",
-    "src/swarm/admin",
-    "src/swarm/consensus-receipt",
     "src/swarm/domain",
-    "src/swarm/roster-seed",
   ];
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -916,6 +911,7 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
     walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
     sourceKeyLock: "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
     runEventsLock: "SELECT pg_advisory_xact_lock(hashtextextended('analytics_ledger_run_events:' || $1, 0))",
+    webauthnChallengeIssueLock: "SELECT pg_advisory_xact_lock(hashtext('admin-webauthn-challenge'))",
     snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
   };
 

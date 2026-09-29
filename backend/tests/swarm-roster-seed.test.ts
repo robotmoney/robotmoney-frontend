@@ -34,11 +34,19 @@
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { LIVE_ROSTER, LIVE_ROSTER_HANDLES, pruneToLiveRoster, readLiveRoster, seedLiveRoster } from "../src/swarm/roster-seed.ts";
+import { LIVE_ROSTER, LIVE_ROSTER_HANDLES, pruneToLiveRoster, seedLiveRoster } from "../src/swarm/roster-seed.ts";
 import { getMembers } from "../src/swarm/domain.ts";
 import { seed } from "../src/db/seed.ts";
 import { sql } from "../src/db/client.ts";
+import { toMember } from "../src/swarm/projections.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+
+// The live roster as the API projects it. It lives here, not in roster-seed:
+// the seed had no production caller for it (D55 (13)).
+async function readLiveRoster() {
+  const rows = await sql`SELECT * FROM swarm_members WHERE handle = ANY(${[...LIVE_ROSTER_HANDLES]}) ORDER BY handle`;
+  return rows.map(toMember);
+}
 
 // Own database per TEST, cloned from the migrated template: these tests each
 // start from an empty table, which used to mean wiping one the previous test

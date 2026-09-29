@@ -43,7 +43,116 @@ import {
 // not silently keep reproducing an older document's bytes.
 import spec from "@robotmoney/contract/fixtures/consensus-receipt.canonicalization.json" with { type: "json" };
 import schema from "@robotmoney/contract/fixtures/consensus-receipt.schema.json" with { type: "json" };
+
+// THE RECEIPT STATEMENTS ARE REGISTERED (smoke-production-spec.md §7.1), all on
+// the api's `rm_app` credential. Publishing is reached from the admin route,
+// serving from the public receipts route.
+const PUBLISH_CALLERS = ["src/api/routes/swarm-admin"];
+const SESSION_ID_PROBE = "00000000-0000-0000-0000-000000000000";
+
+const readMemberKeys = registerQuery({
+  role: "rm_app",
+  object: "swarm_member_keys",
+  privileges: ["SELECT"],
+  site: "src/swarm/consensus-receipt:resolveSigningKey",
+  purpose: "Read a member's registered public keys, active first, to find the one that verifies a take's signature.",
+  callers: PUBLISH_CALLERS,
+  probe: {
+    statement: "SELECT public_key FROM swarm_member_keys WHERE member_id = $1 ORDER BY active DESC, created_at DESC",
+    params: ["probe"],
+  },
+});
+
+const countJudgements = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/swarm/consensus-receipt:loadAssemblyInput.judgementCount",
+  purpose: "Count the judgements on file for a session, so an unjudged session is refused by name.",
+  callers: PUBLISH_CALLERS,
+  probe: {
+    statement: "SELECT count(*)::int AS n FROM swarm_session_judgements WHERE session_id = $1",
+    params: [SESSION_ID_PROBE],
+  },
+});
+
+const readAuthoredJudgement = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/swarm/consensus-receipt:loadAssemblyInput.authored",
+  purpose: "Read the source of the enforce judgement a session adopted, so template prose is refused.",
+  callers: PUBLISH_CALLERS,
+  probe: {
+    statement:
+      "SELECT source, fallback_reason FROM swarm_session_judgements WHERE session_id = $1 AND mode = 'enforce' " +
+      "AND prompt_hash = $2 AND inputs_digest = $3 ORDER BY id DESC LIMIT 1",
+    params: [SESSION_ID_PROBE, "probe", "probe"],
+  },
+});
+
+const readAdoptedCandidates = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/swarm/consensus-receipt:loadAssemblyInput.candidates",
+  purpose: "Read the enforce judgements formed over the adopted prompt and inputs, for the receipt's judge block.",
+  callers: PUBLISH_CALLERS,
+  probe: {
+    statement:
+      "SELECT id, mode, source, prompt_hash, inputs_digest, opinion FROM swarm_session_judgements " +
+      "WHERE session_id = $1 AND mode = 'enforce' AND prompt_hash = $2 AND inputs_digest = $3 ORDER BY id DESC",
+    params: [SESSION_ID_PROBE, "probe", "probe"],
+  },
+});
+
+const readForeignNonces = registerQuery({
+  role: "rm_app",
+  object: "swarm_recommendations",
+  privileges: ["SELECT"],
+  site: "src/swarm/consensus-receipt:loadAssemblyInput.foreignNonces",
+  purpose: "Find a take whose (member, nonce) is already filed against a different session, so a replay is refused.",
+  callers: PUBLISH_CALLERS,
+  probe: {
+    statement:
+      "SELECT r.member_id, r.nonce FROM swarm_recommendations r " +
+      "JOIN jsonb_to_recordset($1::jsonb) AS p(member_id text, nonce text) ON r.member_id = p.member_id AND r.nonce = p.nonce " +
+      "WHERE r.session_id <> $2 LIMIT 1",
+    params: ["[]", SESSION_ID_PROBE],
+  },
+});
+
+const insertReceipt = registerQuery({
+  role: "rm_app",
+  object: "swarm_consensus_receipts",
+  // SELECT as well: ON CONFLICT (session_id) reads the arbiter column.
+  privileges: ["INSERT", "SELECT"],
+  site: "src/swarm/consensus-receipt:publishConsensusReceipt",
+  purpose: "File the signed consensus receipt of a published session once, keeping the first on a repeat.",
+  callers: PUBLISH_CALLERS,
+  probe: {
+    statement:
+      "INSERT INTO swarm_consensus_receipts (session_id, subject_id, schema_version, judgement_id, session_version, receipt, canonical_bytes) " +
+      "SELECT $1, $2, $3, $4, $5, $6, $7 WHERE false ON CONFLICT (session_id) DO NOTHING",
+    params: [SESSION_ID_PROBE, "probe", "1.0", 1, 1, "{}", "probe"],
+  },
+});
+
+const readReceipt = registerQuery({
+  role: "rm_app",
+  object: "swarm_consensus_receipts",
+  privileges: ["SELECT"],
+  site: "src/swarm/consensus-receipt:readStoredReceipt",
+  purpose: "Read the stored receipt of a session, the bytes the public route serves and the publish path re-checks.",
+  callers: [...PUBLISH_CALLERS, "src/api/routes/swarm/receipts"],
+  probe: {
+    statement:
+      "SELECT session_id, subject_id, schema_version, receipt, canonical_bytes, published_at FROM swarm_consensus_receipts WHERE session_id = $1",
+    params: [SESSION_ID_PROBE],
+  },
+});
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import { verifyDetachedSignature } from "../lib/signing.ts";
 import { judgeInputFromFrozen, loadFrozenTakeSet, normalizedTakeWeights, takeRevision } from "./domain.ts";
 import { inputsDigest, type JudgeOpinion } from "./judge.ts";
@@ -491,7 +600,7 @@ export function assembleConsensusReceipt(input: ConsensusReceiptAssemblyInput): 
  * signature in it.
  */
 async function resolveSigningKey(memberId: string, canonicalSubmission: string, signature: string): Promise<string | null> {
-  const rows = (await sql`
+  const rows = (await on(sql, readMemberKeys)`
     SELECT public_key FROM swarm_member_keys
     WHERE member_id = ${memberId}
     ORDER BY active DESC, created_at DESC`) as unknown as { public_key: string }[];
@@ -631,7 +740,7 @@ async function loadAssemblyInput(
   // NEVER JUDGED AT ALL is its own, older, still-correct reason — checked first
   // so an operator who simply has not judged the session is not told about
   // adoption.
-  const onFile = (await sql`
+  const onFile = (await on(sql, countJudgements)`
     SELECT count(*)::int AS n FROM swarm_session_judgements WHERE session_id = ${sessionId}`)[0] as { n: number };
   if (Number(onFile.n) === 0) {
     throw new ConsensusReceiptRefusal(
@@ -666,7 +775,7 @@ async function loadAssemblyInput(
   // concluded this" over them attests something that never happened. Only
   // pre-#969 history can carry one; nothing writes it now. The refusal is kept
   // separate from `judgement_not_adopted` because it names a different fact.
-  const authored = (await sql`
+  const authored = (await on(sql, readAuthoredJudgement)`
     SELECT source, fallback_reason FROM swarm_session_judgements
     WHERE session_id = ${sessionId} AND mode = 'enforce'
       AND prompt_hash = ${adopted.prompt_hash} AND inputs_digest = ${adopted.inputs_digest}
@@ -680,7 +789,7 @@ async function loadAssemblyInput(
         "Nothing writes a fallback row any more (the judge is a participant that refuses rather than fakes); this row is pre-#969 history.",
     );
   }
-  const candidates = (await sql`
+  const candidates = (await on(sql, readAdoptedCandidates)`
     SELECT id, mode, source, prompt_hash, inputs_digest, opinion
     FROM swarm_session_judgements
     WHERE session_id = ${sessionId} AND mode = 'enforce'
@@ -850,7 +959,7 @@ async function loadAssemblyInput(
   // database constraint held" is not a fact it carries.
   if (analysts.length > 0) {
     const pairs = analysts.map((a) => ({ member_id: a.member_id, nonce: a.nonce }));
-    const foreign = (await sql`
+    const foreign = (await on(sql, readForeignNonces)`
       SELECT r.member_id, r.nonce FROM swarm_recommendations r
       JOIN jsonb_to_recordset(${sql.json(pairs as never)}::jsonb) AS p(member_id text, nonce text)
         ON r.member_id = p.member_id AND r.nonce = p.nonce
@@ -931,7 +1040,7 @@ export async function publishConsensusReceipt(sessionId: string, now: Date = new
 
   const input = await loadAssemblyInput(sessionId, now);
   const { receipt, canonicalBytes } = assembleConsensusReceipt(input);
-  await sql`
+  await on(sql, insertReceipt)`
     INSERT INTO swarm_consensus_receipts
       (session_id, subject_id, schema_version, judgement_id, session_version, receipt, canonical_bytes)
     VALUES (${sessionId}, ${input.subject_id}, ${RECEIPT_SCHEMA_VERSION}, ${input.judgementId},
@@ -943,7 +1052,7 @@ export async function publishConsensusReceipt(sessionId: string, now: Date = new
 }
 
 async function readStoredReceipt(sessionId: string): Promise<StoredConsensusReceipt | null> {
-  const row = (await sql`
+  const row = (await on(sql, readReceipt)`
     SELECT session_id, subject_id, schema_version, receipt, canonical_bytes, published_at
     FROM swarm_consensus_receipts WHERE session_id = ${sessionId}`)[0] as
     | { session_id: string; subject_id: string; schema_version: string; receipt: Record<string, unknown>; canonical_bytes: string; published_at: Date }

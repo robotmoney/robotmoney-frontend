@@ -22,6 +22,7 @@
 import { expect, test } from "bun:test";
 import { canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
 import * as admin from "../src/swarm/admin.ts";
+import * as verbs from "./support/session-verbs.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
@@ -172,7 +173,7 @@ test("the forced roster excuse is refused without the force flag, and is AUDITED
   // weightless, and the receipt gate now refuses them forever.
   await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${subjectId}`;
   await sql`UPDATE swarm_sessions SET window_closes_at = now() WHERE id = ${sessionId}`;
-  const closed = await admin.closeSessionAdmin(sessionId, undefined);
+  const closed = await verbs.closeSessionAdmin(sessionId, undefined);
   if (!closed.ok) throw new Error(`close failed: ${JSON.stringify(closed)}`);
 
   // The un-forced lever still refuses once collection has begun — the pre-T17
@@ -205,7 +206,7 @@ test("the forced roster excuse is refused without the force flag, and is AUDITED
   // AND IT ACTUALLY UNSTICKS THE SESSION: re-aggregating now drops the excused
   // member's take from the frozen set, so the rollup carries the surviving
   // canonical-four vector.
-  const reaggregated = await admin.aggregateSessionAdmin(sessionId, undefined);
+  const reaggregated = await verbs.aggregateSessionAdmin(sessionId, undefined);
   if (!reaggregated.ok) throw new Error(`re-aggregate failed: ${JSON.stringify(reaggregated)}`);
   const rec = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`)[0]
     .swarm_recommendation as { type: string; weights?: { bucket: string }[] };

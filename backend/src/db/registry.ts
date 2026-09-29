@@ -517,6 +517,8 @@ export const OBJECTLESS_SHAPES = Object.freeze({
   sourceKeyLock: "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
   /** One transaction lock per run, so two appends for the same run never take the same sequence number (analytics run ledger). */
   runEventsLock: "SELECT pg_advisory_xact_lock(hashtextextended('analytics_ledger_run_events:' || $1, 0))",
+  /** Serializes issuance of an admin WebAuthn challenge, so two requests never pick the same slot (api/routes/admin-webauthn.ts). */
+  webauthnChallengeIssueLock: "SELECT pg_advisory_xact_lock(hashtext('admin-webauthn-challenge'))",
   /** The snapshot the scheduler's full read takes (scheduler spec §3). */
   snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
 } as const);

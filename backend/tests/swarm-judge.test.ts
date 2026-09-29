@@ -35,6 +35,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import * as ic from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
+import * as verbs from "./support/session-verbs.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
@@ -962,8 +963,8 @@ test("`inForce` reports SUPERSEDED after the legal close -> aggregate that wipes
   const fresh = await admin.getSessionJudgementsAdmin(session.id) as any;
   expect(fresh.inForce).toMatchObject({ applied: true, carriedBySession: true, supersededReason: null });
 
-  expect((await admin.closeSessionAdmin(session.id, undefined, "admin", "reopening")).ok).toBe(true);
-  expect((await admin.aggregateSessionAdmin(session.id, undefined)).ok).toBe(true);
+  expect((await verbs.closeSessionAdmin(session.id, undefined, "admin", "reopening")).ok).toBe(true);
+  expect((await verbs.aggregateSessionAdmin(session.id, undefined)).ok).toBe(true);
 
   const stale = await admin.getSessionJudgementsAdmin(session.id) as any;
   expect(stale.inForce).toMatchObject({ applied: true, carriedBySession: false, supersededReason: "recommendation_overwritten" });
@@ -1070,7 +1071,7 @@ test("flipping the mode to `enforce` returns the residual hazard — and `off` r
 test("replaying published sessions leaves every weight vector byte-identical, and writes nothing", async () => {
   const full = await aggregatedSession("replay-full", 4);
   const thin = await aggregatedSession("replay-thin", 1);
-  for (const id of [full.session.id, thin.session.id]) await admin.publishSessionAdmin(id, undefined);
+  for (const id of [full.session.id, thin.session.id]) await verbs.publishSessionAdmin(id, undefined);
   const recent = await recentJudgeableSessions(10);
   expect(recent).toContain(full.session.id);
   for (const id of [full.session.id, thin.session.id]) {
@@ -1121,7 +1122,7 @@ test("the replay CLI runs against real session rows and reports every vector unc
   await submit(amender, messy.date, messy.subj, { stance: "bullish", body: "v2", weights: W });
   await ic.closeWindow(messy.session.id);
   await ic.aggregateSession(messy.session.id);
-  await admin.publishSessionAdmin(full.session.id, undefined);
+  await verbs.publishSessionAdmin(full.session.id, undefined);
   await setJudgeConfig({ mode: "off", minTakes: 3 });
 
   const proc = Bun.spawnSync(
@@ -1188,7 +1189,7 @@ test("the replay CLI runs against real session rows and reports every vector unc
  */
 async function nonReproducibleSession(prefix: string, which: "takes" | "stored") {
   const s = await aggregatedSession(prefix, 3);
-  await admin.publishSessionAdmin(s.session.id, undefined);
+  await verbs.publishSessionAdmin(s.session.id, undefined);
   const other = [{ bucket: "agent_tokens", weight: 1 }, { bucket: "protocol", weight: 3 }];
   if (which === "takes") {
     await sql`
@@ -1206,7 +1207,7 @@ async function nonReproducibleSession(prefix: string, which: "takes" | "stored")
 
 test("the replay NAMES a session whose stored vector no longer equals meanTakeWeights() over its takes — and clears a healthy one", async () => {
   const healthy = await aggregatedSession("repro-healthy", 3);
-  await admin.publishSessionAdmin(healthy.session.id, undefined);
+  await verbs.publishSessionAdmin(healthy.session.id, undefined);
   const movedTakes = await nonReproducibleSession("repro-moved-takes", "takes");
   const movedStored = await nonReproducibleSession("repro-moved-stored", "stored");
   await setJudgeConfig({ mode: "off", minTakes: 3 });
@@ -1249,7 +1250,7 @@ test("a position_actions session with no vector is `not_applicable`, not a false
   await submit(m, date, subj, { body: "an actions take" });
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
-  await admin.publishSessionAdmin(session.id, undefined);
+  await verbs.publishSessionAdmin(session.id, undefined);
   await setJudgeConfig({ mode: "off", minTakes: 3 });
 
   const replay = (await replaySessionJudge(session.id))!;
@@ -1276,7 +1277,7 @@ async function tiedSession(prefix: string) {
   }
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
-  await admin.publishSessionAdmin(session.id, undefined);
+  await verbs.publishSessionAdmin(session.id, undefined);
   return { subj, session, date, members };
 }
 

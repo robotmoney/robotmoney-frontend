@@ -38,6 +38,7 @@ import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import * as epoch from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
+import * as verbs from "./support/session-verbs.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import {
   activeMember,
@@ -518,7 +519,7 @@ test("a session with nothing captured is refused by request-judging and finalize
   await sql`UPDATE swarm_subjects SET judging_duration_seconds = 120 WHERE id = ${subjectId}`;
   const opened = await epoch.openEpoch(subjectId);
   if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);
-  expect((await admin.closeSessionAdmin(opened.sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.closeSessionAdmin(opened.sessionId, undefined)).ok).toBe(true);
   const captured = await sessionRow(opened.sessionId);
   expect([captured.judge_mode, captured.judging_duration_seconds]).toEqual(["enforce", 120]);
 

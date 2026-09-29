@@ -1,6 +1,7 @@
 import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse } from "@simplewebauthn/server";
 import { randomBytes } from "node:crypto";
 import { sql } from "../../db/client.ts";
+import { on, onStatement, registerQuery, registerStatement } from "../../db/registry.ts";
 import { isPrivileged } from "../auth.ts";
 import { hashKey } from "../../lib/keys.ts";
 
@@ -24,7 +25,116 @@ const BAD = (error: string) => ({ status: 400, body: { error } }) as const;
 // enrolment.
 const CHALLENGE_TTL = "5 minutes";
 const REGISTRATION_SLOTS = 8;
-const CHALLENGE_ISSUE_LOCK = 587001;
+
+// ── The passkey statements are registered (smoke-production-spec.md §7.1) ────
+// All of them run on the api's `rm_app` credential. The issuance lock names no
+// relation, so it is an object-less statement of the closed list (D55 (13)).
+const WEBAUTHN_CALLERS = ["src/api/routes/admin-webauthn"];
+
+const challengeIssueLock = registerStatement({
+  role: "rm_app",
+  shape: "webauthnChallengeIssueLock",
+  site: "src/api/routes/admin-webauthn:storeChallenge.lock",
+  purpose: "Serialize challenge issuance so two requests never pick, and overwrite, the same slot.",
+  callers: WEBAUTHN_CALLERS,
+});
+
+const consumeChallengeSlot = registerQuery({
+  role: "rm_app", object: "admin_webauthn_challenge", privileges: ["UPDATE", "SELECT"],
+  site: "src/api/routes/admin-webauthn:consumeChallenge",
+  purpose: "Consume a pending challenge exactly once, if it has not expired.",
+  callers: WEBAUTHN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE admin_webauthn_challenge SET consumed_at = now() WHERE flow = $1 AND challenge = $2 " +
+      "AND consumed_at IS NULL AND expires_at > now() RETURNING challenge",
+    params: ["authentication", "probe"],
+  },
+});
+
+const overwriteChallengeSlot = registerQuery({
+  role: "rm_app", object: "admin_webauthn_challenge", privileges: ["UPDATE", "SELECT"],
+  site: "src/api/routes/admin-webauthn:storeChallenge.overwrite",
+  purpose: "Overwrite the oldest slot of the flow's own range with a new challenge.",
+  callers: WEBAUTHN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE admin_webauthn_challenge SET flow = $1, challenge = $2, issued_at = now(), " +
+      "expires_at = now() + $3::interval, consumed_at = NULL WHERE slot = (SELECT slot FROM admin_webauthn_challenge " +
+      "WHERE (slot < $4) = $5 ORDER BY issued_at ASC NULLS FIRST, slot ASC LIMIT 1) RETURNING slot",
+    params: ["authentication", "probe", "5 minutes", 8, false],
+  },
+});
+
+const livePasskeys = registerQuery({
+  role: "rm_app", object: "admin_passkey", privileges: ["SELECT"],
+  site: "src/api/routes/admin-webauthn:livePasskeys",
+  purpose: "List the live passkey ids and transports a ceremony excludes or allows.",
+  callers: WEBAUTHN_CALLERS,
+  probe: { statement: "SELECT id, transports FROM admin_passkey WHERE revoked_at IS NULL" },
+});
+
+const lockAdminCredential = registerQuery({
+  role: "rm_app", object: "admin_credential", privileges: ["SELECT", "UPDATE"],
+  site: "src/api/routes/admin-webauthn:lockAdminCredential",
+  purpose: "Lock the credential row, so a rotation cannot commit between a passkey check and its write.",
+  callers: WEBAUTHN_CALLERS,
+  probe: { statement: "SELECT id FROM admin_credential WHERE id = 1 FOR UPDATE" },
+});
+
+const insertPasskey = registerQuery({
+  role: "rm_app", object: "admin_passkey", privileges: ["INSERT"],
+  site: "src/api/routes/admin-webauthn:registerPasskey",
+  purpose: "File a newly verified passkey.",
+  callers: WEBAUTHN_CALLERS,
+  probe: {
+    statement: "INSERT INTO admin_passkey (id, public_key, counter, transports) SELECT $1, $2, $3, $4 WHERE false",
+    params: ["probe", "probe", 0, "{}"],
+  },
+});
+
+const auditPasskeyEvent = registerQuery({
+  role: "rm_app", object: "audit_log", privileges: ["INSERT"],
+  site: "src/api/routes/admin-webauthn:passkeyAudit",
+  purpose: "Append the audit row of a passkey registration or login in the same transaction.",
+  callers: WEBAUTHN_CALLERS,
+  probe: { statement: "INSERT INTO audit_log (actor, action, scope) SELECT 'admin', $1, $2 WHERE false", params: ["probe", "{}"] },
+});
+
+const readPasskey = registerQuery({
+  role: "rm_app", object: "admin_passkey", privileges: ["SELECT"],
+  site: "src/api/routes/admin-webauthn:readPasskey",
+  purpose: "Read one live passkey's public key and counter to verify an assertion.",
+  callers: WEBAUTHN_CALLERS,
+  probe: {
+    statement: "SELECT id, public_key, counter, transports FROM admin_passkey WHERE id = $1 AND revoked_at IS NULL",
+    params: ["probe"],
+  },
+});
+
+const advancePasskeyCounter = registerQuery({
+  role: "rm_app", object: "admin_passkey", privileges: ["UPDATE", "SELECT"],
+  site: "src/api/routes/admin-webauthn:advanceCounter",
+  purpose: "Advance a live passkey's signature counter, refusing a replayed or cloned assertion.",
+  callers: WEBAUTHN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE admin_passkey SET counter = $1, last_used_at = now() WHERE id = $2 AND revoked_at IS NULL " +
+      "AND (counter < $3 OR (counter = 0 AND $4 = 0)) RETURNING id",
+    params: [1, "probe", 1, 1],
+  },
+});
+
+const openAdminSession = registerQuery({
+  role: "rm_app", object: "admin_session", privileges: ["INSERT"],
+  site: "src/api/routes/admin-webauthn:openSession",
+  purpose: "Open a one-day admin session for a passkey login.",
+  callers: WEBAUTHN_CALLERS,
+  probe: {
+    statement: "INSERT INTO admin_session (token, expires_at) SELECT $1, now() + interval '1 day' WHERE false",
+    params: ["probe"],
+  },
+});
 
 // The relying party must match the page hosting the browser WebAuthn call. A
 // deployment can pin it explicitly when the API sits behind a reverse proxy;
@@ -57,7 +167,7 @@ function challengeFromResponse(body: unknown): string | null {
 // second of two DELETEs used to. An expired or already-consumed challenge is
 // never accepted.
 async function consumeChallenge(flow: "registration" | "authentication", challenge: string): Promise<string | null> {
-  const rows = await sql<{ challenge: string }[]>`
+  const rows = await on(sql, consumeChallengeSlot)<{ challenge: string }>`
     UPDATE admin_webauthn_challenge
        SET consumed_at = now()
      WHERE flow = ${flow} AND challenge = ${challenge} AND consumed_at IS NULL AND expires_at > now()
@@ -74,9 +184,9 @@ async function storeChallenge(flow: "registration" | "authentication", challenge
     // oldest ceremony, whether it is pending, consumed or expired. A ceremony
     // lives five minutes, so a pending one is evicted only by as many newer
     // issuances of its own flow as the flow has slots.
-    await tx`SELECT pg_advisory_xact_lock(${CHALLENGE_ISSUE_LOCK})`;
+    await onStatement(tx, challengeIssueLock)`SELECT pg_advisory_xact_lock(hashtext('admin-webauthn-challenge'))`;
     const registration = flow === "registration";
-    const written = await tx`
+    const written = await on(tx, overwriteChallengeSlot)`
       UPDATE admin_webauthn_challenge
          SET flow = ${flow}, challenge = ${challenge}, issued_at = now(),
              expires_at = now() + ${CHALLENGE_TTL}::interval, consumed_at = NULL
@@ -110,7 +220,7 @@ export async function handleAdminWebauthn(
     // Live passkeys only: a revoked one (D55 (6), `revoked_at`) is not a
     // credential any more, so it neither blocks re-registering its
     // authenticator nor is offered for sign-in below.
-    const passkeys = await sql<{ id: string, transports: string[] }[]>`
+    const passkeys = await on(sql, livePasskeys)<{ id: string, transports: string[] }>`
       SELECT id, transports FROM admin_passkey WHERE revoked_at IS NULL`;
 
     const options = await generateRegistrationOptions({
@@ -166,13 +276,13 @@ export async function handleAdminWebauthn(
         // password rotation wins, its transaction revokes the sessions first
         // and this second check rejects the now-revoked caller. If this wins,
         // rotation waits and then revokes this new passkey before returning.
-        await tx`SELECT id FROM admin_credential WHERE id = 1 FOR UPDATE`;
+        await on(tx, lockAdminCredential)`SELECT id FROM admin_credential WHERE id = 1 FOR UPDATE`;
         if (!await isPrivileged(req)) return false;
-        await tx`
+        await on(tx, insertPasskey)`
           INSERT INTO admin_passkey (id, public_key, counter, transports)
           VALUES (${id}, ${Buffer.from(publicKey)}, ${counter}, ${transports || []})
         `;
-        await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'register_passkey', ${tx.json({ id })})`;
+        await on(tx, auditPasskeyEvent)`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', ${"register_passkey"}, ${tx.json({ id })})`;
         return true;
       });
       if (!registered) return FORBIDDEN;
@@ -184,7 +294,7 @@ export async function handleAdminWebauthn(
   }
 
   if (m === "GET" && p === "/api/admin/webauthn/auth/options") {
-    const passkeys = await sql<{ id: string, transports: string[] }[]>`
+    const passkeys = await on(sql, livePasskeys)<{ id: string, transports: string[] }>`
       SELECT id, transports FROM admin_passkey WHERE revoked_at IS NULL`;
 
     const options = await generateAuthenticationOptions({
@@ -213,7 +323,7 @@ export async function handleAdminWebauthn(
 
     // A revoked passkey is refused here, on the very next ceremony after the
     // rotation that revoked it (D55 (6)).
-    const passkeys = await sql<{ id: string, public_key: Buffer, counter: number, transports: string[] }[]>`
+    const passkeys = await on(sql, readPasskey)<{ id: string, public_key: Buffer, counter: number, transports: string[] }>`
       SELECT id, public_key, counter, transports FROM admin_passkey WHERE id = ${body.id} AND revoked_at IS NULL
     `;
     if (!passkeys.length) return BAD("passkey not found");
@@ -244,7 +354,7 @@ export async function handleAdminWebauthn(
         // Serialize session issuance with credential rotation. A rotation
         // that follows this lock revokes the just-created session; one that
         // precedes it revokes the passkey so the CAS below cannot succeed.
-        await tx`SELECT id FROM admin_credential WHERE id = 1 FOR UPDATE`;
+        await on(tx, lockAdminCredential)`SELECT id FROM admin_credential WHERE id = 1 FOR UPDATE`;
         // Verification uses the counter observed above, but a second valid
         // assertion can finish first. Compare-and-swap makes the stored
         // counter monotonic and prevents the late assertion from regressing
@@ -252,7 +362,7 @@ export async function handleAdminWebauthn(
         // authenticators deliberately always report a zero signature counter:
         // accept only that exact zero-to-zero case. Challenge consumption is
         // still single-use, so it does not weaken assertion replay defense.
-        const updated = await tx`
+        const updated = await on(tx, advancePasskeyCounter)`
           UPDATE admin_passkey
           SET counter = ${newCounter}, last_used_at = now()
           WHERE id = ${pk.id} AND revoked_at IS NULL
@@ -260,8 +370,8 @@ export async function handleAdminWebauthn(
           RETURNING id
         `;
         if (!updated.length) return false;
-        await tx`INSERT INTO admin_session (token, expires_at) VALUES (${hashKey(sessionToken)}, now() + interval '1 day')`;
-        await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'login_passkey', ${tx.json({ id: pk.id })})`;
+        await on(tx, openAdminSession)`INSERT INTO admin_session (token, expires_at) VALUES (${hashKey(sessionToken)}, now() + interval '1 day')`;
+        await on(tx, auditPasskeyEvent)`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', ${"login_passkey"}, ${tx.json({ id: pk.id })})`;
         return true;
       });
       if (!advanced) return BAD("passkey counter did not advance");

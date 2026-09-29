@@ -21,6 +21,7 @@
 // no-jobs halves against the epoch open.
 import { expect, test } from "bun:test";
 import * as admin from "../src/swarm/admin.ts";
+import * as verbs from "./support/session-verbs.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
@@ -448,17 +449,17 @@ test("guarded lifecycle: legal transitions succeed with one event+audit row; ill
     Number((await sql`SELECT count(*)::int AS n FROM swarm_session_events WHERE session_id = ${sessionId} AND to_state = ${toState}`)[0].n);
 
   // Illegal: cannot aggregate directly from 'collecting'.
-  const illegal = await admin.aggregateSessionAdmin(sessionId, 1);
+  const illegal = await verbs.aggregateSessionAdmin(sessionId, 1);
   expect(illegal.status).toBe(409);
   expect((illegal as any).error).toContain("illegal_transition");
 
   // Stale version.
-  const stale = await admin.closeSessionAdmin(sessionId, 99);
+  const stale = await verbs.closeSessionAdmin(sessionId, 99);
   expect(stale.status).toBe(409);
   expect((stale as any).error).toBe("stale_version");
 
   // Legal: collecting -> window_closed (the epoch is born collecting, §4.1).
-  const close = await admin.closeSessionAdmin(sessionId, 1);
+  const close = await verbs.closeSessionAdmin(sessionId, 1);
   expect(close.status).toBe(200);
   expect((close as any).session.state).toBe("window_closed");
   expect((close as any).session.version).toBe(2);
@@ -471,43 +472,43 @@ test("guarded lifecycle: legal transitions succeed with one event+audit row; ill
   expect(eventRow.action).toBe("close_window");
 
   // Idempotent repeat: same state again → 200, no version bump, no new event/audit row.
-  const closeAgain = await admin.closeSessionAdmin(sessionId, 2);
+  const closeAgain = await verbs.closeSessionAdmin(sessionId, 2);
   expect(closeAgain.status).toBe(200);
   expect((closeAgain as any).idempotent).toBe(true);
   expect((closeAgain as any).session.version).toBe(2);
   expect(await eventCountFor("window_closed")).toBe(1);
 
   // Legal: window_closed -> aggregated.
-  const agg = await admin.aggregateSessionAdmin(sessionId, 2);
+  const agg = await verbs.aggregateSessionAdmin(sessionId, 2);
   expect(agg.status).toBe(200);
   expect((agg as any).session.state).toBe("aggregated");
 
   // Legal: aggregated -> published (terminal).
-  const pub = await admin.publishSessionAdmin(sessionId, 3);
+  const pub = await verbs.publishSessionAdmin(sessionId, 3);
   expect(pub.status).toBe(200);
   expect((pub as any).session.state).toBe("published");
   const row = (await sql`SELECT published_at FROM swarm_sessions WHERE id = ${sessionId}`)[0];
   expect(row.published_at).toBeTruthy();
 
   // Terminal-state protection: no further transition is legal from 'published'.
-  const afterTerminal = await admin.cancelSessionAdmin(sessionId, 4);
+  const afterTerminal = await verbs.cancelSessionAdmin(sessionId, 4);
   expect(afterTerminal.status).toBe(409);
   expect((afterTerminal as any).error).toContain("terminal_state");
 
   // 404 for an unknown session id.
-  expect((await admin.closeSessionAdmin(crypto.randomUUID(), 1)).status).toBe(404);
+  expect((await verbs.closeSessionAdmin(crypto.randomUUID(), 1)).status).toBe(404);
 });
 
 test("guarded lifecycle: cancel is legal from a non-terminal state and is itself terminal", async () => {
   const subjectId = await activeSubject();
   const { sessionId } = await openedEpoch(subjectId);
-  const cancel = await admin.cancelSessionAdmin(sessionId, 1, admin.ADMIN_ACTOR, "operator error");
+  const cancel = await verbs.cancelSessionAdmin(sessionId, 1, admin.ADMIN_ACTOR, "operator error");
   expect(cancel.status).toBe(200);
   expect((cancel as any).session.state).toBe("cancelled");
   const eventRow = (await sql`SELECT action, reason FROM swarm_session_events WHERE session_id = ${sessionId} AND to_state = 'cancelled'`)[0];
   expect(eventRow.action).toBe("cancel");
   expect(eventRow.reason).toBe("operator error");
-  const again = await admin.closeSessionAdmin(sessionId, 2);
+  const again = await verbs.closeSessionAdmin(sessionId, 2);
   expect(again.status).toBe(409);
   expect((again as any).error).toContain("terminal_state");
 });

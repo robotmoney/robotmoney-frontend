@@ -36,7 +36,7 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission, SWARM_TAKE_REVISION_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
-import * as admin from "../src/swarm/admin.ts";
+import * as verbs from "./support/session-verbs.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { activeSubject, sessionRow } from "./support/epoch-fixtures.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
@@ -331,9 +331,9 @@ test("every session state other than `collecting` refuses an amendment inside th
   // list, so it is proved by submitting into each state rather than by reading
   // a set. This walks the lifecycle's own table, so adding a row to
   // TRANSITIONS is covered the moment it exists.
-  expect(admin.SESSION_STATES.length).toBeGreaterThan(0);
-  expect(admin.SESSION_STATES).toContain("collecting");
-  for (const state of admin.SESSION_STATES) {
+  expect(verbs.SESSION_STATES.length).toBeGreaterThan(0);
+  expect(verbs.SESSION_STATES).toContain("collecting");
+  for (const state of verbs.SESSION_STATES) {
     const { subj, session, date } = await openCollectingSession(`state-${state}`);
     const m = await activeMember();
     expect((await submit(m, date, subj, { body: "on file" })).status).toBe(201);
