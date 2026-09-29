@@ -28,9 +28,8 @@ import { type CheckResult, createChecker } from "../scripts/lib/checks.ts";
 import type { Db } from "../scripts/lib/preflight-utils.ts";
 import { NEW_RELEASE_TABLES_BY_MIGRATION, PRIOR_RELEASE_MIGRATIONS, RELEASE_MIGRATIONS } from "../scripts/upgrades/0.4.0-to-0.5.0/release.ts";
 import { runChecks } from "../scripts/upgrades/0.4.0-to-0.5.0/preflight.ts";
-import { adminUrl } from "./support/cluster.ts";
+import { adminExec, harnessUrl } from "./support/cluster.ts";
 
-const ADMIN_URL = adminUrl();
 const V4_TABLES = ["swarm_judge_config", "swarm_session_judgements", "swarm_consensus_receipts"];
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
@@ -52,26 +51,25 @@ const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migr
 // logic they exist to test.
 let BASELINE: string[] = [];
 
-let admin: ReturnType<typeof postgres>;
 const made: string[] = [];
 
 beforeAll(async () => {
   const onDisk = (await readdir(MIGRATIONS_DIR)).filter((n) => n.endsWith(".sql")).sort();
   BASELINE = onDisk.filter((n) => !RELEASE_MIGRATIONS.includes(n as (typeof RELEASE_MIGRATIONS)[number]));
-  admin = postgres(ADMIN_URL, { max: 1, onnotice: () => {} });
 });
 afterAll(async () => {
-  for (const name of made) await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`).catch(() => {});
-  await admin.end();
+  // cluster admin: DROP DATABASE is cluster-level.
+  for (const name of made) await adminExec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`).catch(() => {});
 });
 
 /** A throwaway database whose ledger records exactly `appliedMigrations`, and
  *  whose v0.5.0 tables are exactly those the applied ones create. */
 async function fixture(label: string, appliedMigrations: readonly string[], opts: { extraTables?: string[]; dropTables?: string[] } = {}): Promise<CheckResult[]> {
   const name = `rm_pf050_${label}_${Math.random().toString(36).slice(2, 10)}`;
-  await admin.unsafe(`CREATE DATABASE ${name}`);
+  // cluster admin: CREATE DATABASE is cluster-level; the tables are the owner's.
+  await adminExec(`CREATE DATABASE ${name} OWNER rm_owner`);
   made.push(name);
-  const db = postgres(ADMIN_URL.replace(/\/[^/?]+(\?|$)/, `/${name}$1`), { max: 1, onnotice: () => {} }) as unknown as Db;
+  const db = postgres(harnessUrl(name), { max: 1, onnotice: () => {} }) as unknown as Db;
 
   await db`CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
   for (const m of appliedMigrations) await db`INSERT INTO schema_migrations (name) VALUES (${m})`;
