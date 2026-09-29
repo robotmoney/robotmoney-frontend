@@ -24,6 +24,7 @@ import {
   bps,
   bpsFromWeights,
   canDeposit,
+  contractNetworks,
   explorerLink,
   fmtBps,
   fmtDate,
@@ -48,6 +49,8 @@ import {
   vaultForBucket,
   withRecommendation,
   portfolioTwr,
+  ROUTER,
+  USDC_BASE,
   isVaultBookReading,
 } from "../../../frontend/public/assets/js/app/lib/vault-data.js";
 import {
@@ -152,6 +155,42 @@ describe("vault identity", () => {
     const skill = readFileSync(join(publicDir, "skill.md"), "utf8");
     expect(skill).toContain(`\`${VAULTS[0].baseAddress}\``);
     expect(VAULTS.slice(1).every((v) => v.baseAddress === null)).toBe(true);
+  });
+
+  test("what rmUSDC's contract sets is what skill.md says; a vault not on Base sets nothing", () => {
+    const skill = readFileSync(join(publicDir, "skill.md"), "utf8");
+    const facts = VAULTS[0].onBase!;
+    for (const a of facts.adapters) expect(skill).toContain(`| ${a.name} | \`${a.address}\` |`);
+    expect(skill).toContain(`\`${USDC_BASE}\``);
+    expect(skill).toContain("minus a 0.25% exit fee");
+    expect(facts.exitFeeBps).toBe(25);
+    expect(skill).toContain("TVL cap ($100,000)");
+    expect(skill).toContain("per-deposit cap ($5,000)");
+    expect(facts.caps).toEqual({ tvlCap: 100000, perDepositCap: 5000 });
+    expect(skill).toContain("Morpho Gauntlet USDC Prime, Aave V3, and Compound V3 by dynamic equal weight");
+    expect(facts.venues).toEqual(["Morpho Gauntlet USDC Prime", "Aave V3", "Compound V3"]);
+    expect(facts.equalWeight).toBe(true);
+    expect(explorerLink({ chainId: 8453 }, facts.admin)).not.toBeNull();
+    expect(facts.audit).toEqual({ status: "Audited", href: "https://github.com/robotmoney/robotmoney-core/blob/dev/docs/audits.md" });
+    expect(VAULTS.slice(1).every((v) => v.onBase === null)).toBe(true);
+    expect(ROUTER.baseAddress).toBeNull();
+  });
+
+  test("the contracts on Base: rmUSDC, its adapters and its admin; the router and the other three not on Base", () => {
+    const [base, ...rest] = contractNetworks();
+    expect(rest).toEqual([]);
+    expect(base.label).toBe("Base");
+    expect(base.chainId).toBe(8453);
+    expect(base.contracts.map((c) => c.name)).toEqual([
+      "RobotMoneyVault (rmUSDC)", "MorphoAdapter", "AaveV3Adapter", "CompoundV3Adapter", "Multisig (Admin)",
+      "Router", "Vault (rmAGENT)", "Vault (rmPROTO)", "Vault (rmRWA)",
+    ]);
+    const deployed = base.contracts.filter((c) => c.address);
+    expect(deployed.map((c) => c.address)).toEqual([
+      VAULTS[0].baseAddress, ...VAULTS[0].onBase!.adapters.map((a) => a.address), VAULTS[0].onBase!.admin,
+    ]);
+    for (const c of deployed) expect(explorerLink({ chainId: 8453 }, c.address), c.name).not.toBeNull();
+    expect(new Set(base.contracts.map((c) => c.key)).size).toBe(base.contracts.length);
   });
 
   test("a sleeve resolves by bucket id, DTO key or published name; a slug by vaultBySlug only", () => {
@@ -377,7 +416,12 @@ describe("the Base feed as an overview", () => {
     expect(usdc.tvlUsd).toBe(199.697519);
     expect(usdc.address).toBe(VAULTS[0].baseAddress);
     expect(usdc.exitFeeBps).toBe(25);
-    expect(usdc.auditStatus).toBe("Not audited");
+    // What its contract sets, from the registry: the feed carries none of it.
+    expect(usdc.auditStatus).toBe("Audited");
+    expect(usdc.auditHref).toBe("https://github.com/robotmoney/robotmoney-core/blob/dev/docs/audits.md");
+    expect(usdc.caps).toEqual({ tvlCap: 100000, perDepositCap: 5000 });
+    expect(usdc.admin).toBe(VAULTS[0].onBase?.admin);
+    expect(usdc.mechanics.venues).toEqual(["Morpho Gauntlet USDC Prime", "Aave V3", "Compound V3"]);
     expect(usdc.sharePrice).toBeCloseTo(1.01196, 4);
     for (const slug of ["rmagent", "rmproto", "rmrwa"]) {
       expect(bySlug(o, slug).availability).toBe("not_on_network");
