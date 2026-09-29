@@ -66,6 +66,21 @@ function enclosingFunction(node: ts.Node): string {
   return "<module>";
 }
 
+/**
+ * A registered site's `probe: { statement }` (src/db/registry.ts QueryProbe) is
+ * the call site's statement written out so tests/db-registry-execution.test.ts
+ * can run it as the declared role inside a transaction it rolls back. It is
+ * never issued by the application, so it is not a writer of `scheduled`; the
+ * statement it mirrors is, and is still counted at its call site.
+ */
+function isRegistryProbe(node: ts.Node): boolean {
+  for (let n: ts.Node | undefined = node.parent; n; n = n.parent) {
+    if (ts.isPropertyAssignment(n) && ts.isIdentifier(n.name) && n.name.text === "probe") return true;
+    if (ts.isVariableDeclaration(n) || ts.isFunctionLike(n)) return false;
+  }
+  return false;
+}
+
 /** Every template literal under backend/src that writes swarm_sessions with the literal 'scheduled'. */
 function scheduledWriters(): string[] {
   const writes = /\b(INSERT\s+INTO|UPDATE)\s+swarm_sessions\b/i;
@@ -75,7 +90,7 @@ function scheduledWriters(): string[] {
     if (!text.includes("'scheduled'")) continue;
     const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
     const visit = (node: ts.Node): void => {
-      if (ts.isTemplateExpression(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      if ((ts.isTemplateExpression(node) || ts.isNoSubstitutionTemplateLiteral(node)) && !isRegistryProbe(node)) {
         const literal = node.getText(source);
         if (writes.test(literal) && literal.includes("'scheduled'")) {
           found.add(`${relative(BACKEND, file)}:${enclosingFunction(node)}`);
