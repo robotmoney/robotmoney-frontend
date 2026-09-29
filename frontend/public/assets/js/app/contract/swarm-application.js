@@ -44,9 +44,21 @@ export function canonicalizeApplication(a) {
 // A URL that stops serving the procedure fails SILENTLY from an agent's point
 // of view — it simply never onboards, and nothing in this repo raises an error.
 // Reachability AND content are therefore asserted for real by
-// contract/tests/live/swarm-onboarding-skill-url-live.test.ts; the offline
-// regression pin on this string lives in
+// contract/tests/live/swarm-onboarding-skill-url-live.test.ts, on every PR and
+// every push to `main`; the offline regression pin on this string lives in
 // contract/tests/unit/swarm-application.test.ts.
+//
+// The served-vs-repo question is not asked here, and is not asked anywhere in
+// this repository: nothing here or in CI compares what production is serving
+// against what this checkout holds, so whether the deploy is fresh is not
+// something a merge gate could report even in principle. That question was
+// deliberately removed from this repository's tooling (see the header of
+// scripts/production-drift-audit.ts for the record). This repository has no
+// deploy workflow, so a merge cannot make the deploy fresh in the first place.
+// Reachability and procedure — the two things a commit in this repository can
+// actually break — stay merge-gated, and the schedule-only auditor
+// (scripts/production-drift-audit.ts) reports on the served document's shape
+// and on the externally pinned rmpc release without gating anything.
 //
 // THIS IS A SAME-ORIGIN URL, ON PURPOSE. It used to point into robotmoney-core
 // over raw.githubusercontent.com, and that cross-repo dependency broke the
@@ -67,7 +79,15 @@ export function canonicalizeApplication(a) {
 // owned by a repo with its own release cadence, and a 200 is not evidence the
 // procedure is there. Pointing at our own origin removes the coupling — the
 // skill is now served from frontend/public/skills/swarm-onboarding/SKILL.md by
-// the same deploy that ships this constant, so the two cannot skew.
+// the same deploy that ships this constant, so the two cannot be edited apart
+// without a diff landing in this repository.
+//
+// What the same deploy does NOT guarantee is that the deploy RAN. This
+// repository has no deploy workflow, so `main` can carry a correct skill while
+// production still serves the previous one, and that window is real. SAME-DEPLOY
+// IS A CLAIM ABOUT AUTHORSHIP, NOT ABOUT PUBLICATION — and the publication half
+// is not observed here either: nothing in this repository or in CI reports a
+// stale deploy. Catching one is the deploy pipeline's job.
 //
 // Self-hosting is also the BETTER file, not merely the closer one. Core's
 // post-rename copy still targets `/api/committee/*` and prints the applicant's

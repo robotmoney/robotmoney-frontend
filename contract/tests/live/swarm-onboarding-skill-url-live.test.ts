@@ -34,6 +34,47 @@
 // survived, and then how #407's rename onto a `robotmoney-swarm` plugin that
 // does not exist in robotmoney-core survived for two days in production.
 //
+// WHAT THIS FILE ASSERTS, AND WHAT IT DELIBERATELY DOES NOT. It carries
+// REACHABILITY and PROCEDURE, and nothing else. It used to also carry issue
+// #759's deploy-parity assertion — a byte comparison of the served document
+// against frontend/public/skills/swarm-onboarding/SKILL.md — plus that issue's
+// explicit `| tar` floor beside it. The `| tar` floor MOVED OFF this gate to
+// the schedule-only `scripts/production-drift-audit.ts`, run by
+// .github/workflows/production-drift-audit.yml, where it is check C: the same
+// `| tar` regex, asserted over the served body on its own so it fires whatever
+// else is true about the document.
+//
+// The deploy-parity comparison is GONE, and not merely relocated. It called
+// `contract/src/skill-parity.js`'s `describeSkillMismatch`; that module and its
+// offline unit test have been deleted, and nothing in this repository compares
+// the served skill against the repo copy any more. That was a decision of the
+// repository owner, recorded at the top of scripts/production-drift-audit.ts.
+// The consequence is worth stating here because this is the file a reader would
+// come to looking for it: NOTHING IN CI REPORTS A STALE DEPLOY. If `main`
+// carries a correct skill and production is still serving the previous one, no
+// required check and no unit test will say so. Deploy freshness is the deploy
+// pipeline's job, and this repository has no deploy workflow.
+//
+// WHY THEY MOVED RATHER THAN STAYING HERE. This repository has no deploy
+// workflow. Merging to `main` does not republish robotmoney.network; only a
+// human deploying the site does. So when a merge landed here carrying a correct
+// skill and production was still serving the previous `main`'s bytes, this
+// required check went red for a reason NO change to this repository could fix,
+// and the only exit was outside the repo entirely. A correct merge must not red
+// a required check for something no commit can repair — that is required
+// reading whose resolution is not in the author's hands, and the auditor
+// reports it nightly instead, without gating anything.
+//
+// The split is by question, not by convenience, and the boundary is exact:
+// REACHABILITY AND PROCEDURE STAY HERE. This file keeps the 200, the
+// front-matter `name:` that must agree with the URL's own slug, the `rmpc`
+// marker, the size floors, and the full procedure set — the endpoint an
+// application is POSTed to, the claim envelope, the completion gate, the
+// applicant's status URL, the deprecation-stub negative. A red here is
+// something a commit in this repository can cause and therefore can fix, which
+// is exactly the property a merge gate is for. DEPLOY FRESHNESS IS NOT A
+// QUESTION ABOUT THE CODE, and it is not a question this repository asks.
+//
 // Loud-skip-never (test-coverage policy invariant 1): there is deliberately NO
 // try/catch, NO env gate, and NO conditional skip below, and the job that runs
 // it carries no `continue-on-error`. If DNS fails, egress is blocked, or GitHub
@@ -41,31 +82,16 @@
 // resource must never be reported as a pass. Invariant 2 comes for free from
 // the directory selection: `bun test` against an empty or missing directory
 // exits 1 on bun 1.3.x, so an emptied `tests/live/` is red, not a vacuous
-// green.
+// green. Note the auditor points the OTHER way — it reports a check it could
+// not run as UNKNOWN, because nothing here is gating and a silently dropped
+// check is the one failure nobody would ever notice.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { SWARM_ONBOARDING_SKILL_URL } from "../../src/swarm-application.js";
-import { describeSkillMismatch } from "../../src/skill-parity.js";
 
 const TIMEOUT_MS = 30_000;
 
-// Issue #759. PR #758 (issue #748) closed the unverified `curl | tar xz`
-// install form and covered it with
-// scripts/tests/unit/onboarding-skill-rmpc-install-verified.test.ts — but that
-// test asserts against the REPO-LOCAL file. Issue #748's own AC1 was about the
-// SERVED document ("the skill as served from
-// https://robotmoney.net/skills/swarm-onboarding/SKILL.md contains no
-// `curl ... | tar xz` install form"), and nothing checked that the deployed
-// bytes actually match. This file already makes the one live fetch this job
-// is allowed (see the module header above), so the parity check below rides
-// the same request rather than adding a second one.
-const SKILL_REL = "frontend/public/skills/swarm-onboarding/SKILL.md";
-const repoSkill = readFileSync(join(import.meta.dir, "../../..", SKILL_REL), "utf8");
-
-// Issue #759 deliverable 3 — DECISION: this parity check does NOT also need
-// to cover the onboarding eval's local skill URL, and the eval is left
-// unchanged.
+// Issue #759, and its deliverable 3 — the eval's local skill URL is out of
+// scope, unchanged, and the reason is unaffected by anything above.
 //
 // scripts/lib/onboarding-eval.ts builds `localSkillUrl` by taking
 // `LOCAL_SWARM_ONBOARDING_SKILL_PATH` (SWARM_ONBOARDING_SKILL_URL's own
@@ -77,21 +103,19 @@ const repoSkill = readFileSync(join(import.meta.dir, "../../..", SKILL_REL), "ut
 // this checkout" and "what the eval's container fetches" — the two are the
 // same bytes by construction, in the same process, every run.
 //
-// The failure class this issue exists to close is specifically a DIVERGENCE
-// between the repo and something deployed independently of it (a stale or
-// failed deploy to robotmoney.network). That class cannot occur for the
-// eval's local URL, because nothing independent is deployed — extending this
-// check to also diff the eval's served copy against the repo would only be
-// re-verifying that a static file server returns the file it was pointed at,
-// which is not this issue's risk and not worth a second live assertion.
+// The failure class at issue is specifically a DIVERGENCE between the repo and
+// something deployed independently of it (a stale or failed deploy to
+// robotmoney.network). That class cannot occur for the eval's local URL,
+// because nothing independent is deployed — diffing the eval's served copy
+// against the repo would only be re-verifying that a static file server returns
+// the file it was pointed at, which is not this issue's risk.
 //
-// (The onboarding-eval-uses-repo-local-skill note this decision closes is
-// about a DIFFERENT gap — the eval never exercises the real
+// (The onboarding-eval-uses-repo-local-skill note this decision closes is about
+// a DIFFERENT gap — the eval never exercises the real
 // SWARM_ONBOARDING_SKILL_URL/production endpoint at all, so a green eval
 // proves nothing about production. That gap is what THIS file's fetch against
 // SWARM_ONBOARDING_SKILL_URL itself, run in the required `contract` job on
-// every push to main and nightly, exists to close — see "WHERE IT RUNS"
-// above. No further eval change is needed for issue #759.)
+// every push to main and nightly, exists to close — see "WHERE IT RUNS" above.)
 
 /**
  * The skill slug the URL itself names — the directory immediately above
@@ -169,30 +193,6 @@ describe("SWARM_ONBOARDING_SKILL_URL — live reachability", () => {
       // procedure, whatever else it happens to contain.
       expect(body.toLowerCase()).not.toContain("no instructions to follow");
       expect(body.length).toBeGreaterThan(10_000);
-
-      // Issue #759 AC1/AC3 — the served bytes must match the repo-local copy
-      // exactly, not merely carry a few markers in common. Every assertion
-      // above would still pass against a stale deploy that kept some other
-      // paragraph — including the pre-#758 unverified install block — as long
-      // as the handful of strings checked above happened to survive; a byte
-      // comparison against the file this deploy is supposed to be serving
-      // closes that gap. describeSkillMismatch() (contract/src/skill-parity.js)
-      // is the same function contract/tests/unit/skill-parity.test.ts drives
-      // against a fixture pre-#758 body, so "this would go red on a stale
-      // deploy" is demonstrated there without needing a real one in
-      // production.
-      const mismatch = describeSkillMismatch({
-        url: SWARM_ONBOARDING_SKILL_URL,
-        served: body,
-        repoPath: SKILL_REL,
-        repo: repoSkill,
-      });
-      expect(mismatch, mismatch ?? "").toBeNull();
-
-      // Issue #759 deliverable 1's explicit floor, independent of the byte
-      // comparison above: even if repoSkill itself somehow regressed, the
-      // served copy must never carry the unverified pipe-into-tar form.
-      expect(body).not.toMatch(/\|\s*tar\b/);
     },
     TIMEOUT_MS,
   );

@@ -1423,6 +1423,105 @@ newly declare the eval a gate, and does not touch whether any *other* part of
 `e2e.yml` (the browser-check suite) gates a PR — that was already, and remains,
 governed by ordinary branch protection on the `pull_request` run.
 
+### Amendment — the nightly set gains one named, non-gating auditor
+
+**What changed.** "Nothing else runs on a nightly schedule" is now true over
+the set of *product test suites*, and false over the set of workflow files.
+`.github/workflows/production-drift-audit.yml` (`CI_CLASS: heavy`, `schedule:
+11 2 * * *`, `permissions: contents: read`, no `push` and no `pull_request`) is
+a scheduled workflow with no merge-to-`main` counterpart. It is registered on
+`EXEMPT_FROM_MERGE_MIRROR` in `scripts/tests/unit/nightly-mirrors-merge-set.test.ts`
+next to `contribution-advisory-reviewer.yml`, with the justification carried in
+the entry. Its three checks are A (does the pinned `rmpc` release still publish
+the checksums the skill carries?), B (does the endpoint still serve a real
+procedure rather than a deprecation stub?) and C (does the served copy carry an
+unverified `| tar` install form?). B and C are code that MOVED off the merge
+gate; A is a newly-written observer check that answers nothing a merge gate
+could. The test's own assertion is unchanged — it is the same exemption
+mechanism the "PR-review bot" precedent already used, not a weakening of it —
+and its "no new suite" half is untouched: this workflow declares no
+`github.event_name == 'schedule'` gate, because it has no second trigger to be
+asymmetric with.
+
+**Correction — the auditor originally had FOUR checks, and the fourth was
+deleted after this amendment was written.** It was "A" in the original
+numbering: *do the bytes served at the skill URL match the repo-local
+`frontend/public/skills/swarm-onboarding/SKILL.md`?* — the deploy-freshness
+question, implemented by `describeSkillMismatch` in `contract/src/skill-parity.js`.
+The repository owner removed that question from this repository's tooling
+entirely, and `contract/src/skill-parity.js` is deleted with it. The remaining
+three checks are renumbered A/B/C above, with no hole where the fourth was. The
+consequence is stated in full in the next paragraph, because it changes what
+this decision means in practice.
+
+**Why.** `contract/tests/live/swarm-onboarding-skill-url-live.test.ts` bundled
+two unrelated questions in one required check. The first — *is the endpoint
+serving a real, complete procedure?* — is merge-gated and stays merge-gated,
+untouched; it is the check that caught robotmoney-core's 1,951-byte
+deprecation stub passing every marker assertion. The second — *what is
+production actually serving?* — is unanswerable from inside this repository.
+There is no deploy workflow here, so merging to `main` does not republish
+robotmoney.network, and a correct merge reds a required check for a reason no
+amount of correct code can fix; its only exit is a human deploying the site.
+Keeping that half on the gate is the exact shape of required reading D26 was
+written to delete — and worse, it is required reading whose resolution is
+outside the repository.
+
+**This is a MOVE, not an addition, and the two things that moved were not
+equivalent.** The unverified `curl … | tar xz` install floor (now check C) left
+the gate and is still here, asserted over the served body **on its own**, with
+its own status line, so it still reports DRIFT whatever else is true about the
+document. That is the whole reason the floor existed: "even if `repoSkill`
+itself somehow regressed, the served copy must never carry the unverified
+pipe-into-tar form." A comparison that passes proves nothing about the install
+form, so anything that made this check conditional on one would report nothing
+at exactly the moment it was written for. **Its independence is deliberate and
+load-bearing: do not fold check C into check B, and do not make it contingent on
+anything else in the auditor.** The second thing that left the gate — the
+deploy-freshness byte comparison — was subsequently deleted outright rather
+than relocated, and nothing replaced it.
+
+**What the deletion means, stated as a consequence rather than a caveat:
+NOTHING IN CI REPORTS A STALE DEPLOY.** If `main` carries a correct skill and
+production is still serving the previous one, no job in this repository — no
+required check, not this auditor, not any unit test — will say so. Deploy
+freshness is now the deploy pipeline's job. It is a fact about whether a publish
+ran, and this repository has no deploy workflow, so the only place that fact can
+be observed is the deploy tooling or a human watching it. Do not reinstate a
+served-vs-repo byte comparison to close the gap, under this decision's name or
+any other, and do not give the auditor a non-zero exit to compensate: the first
+is the check the owner declined, and the second would re-create required reading
+whose resolution is outside the repository — the exact shape of required reading
+D26 was written to delete.
+
+**The check that justifies a workflow of its own.** The auditor's
+highest-value question is the one the merge set structurally cannot see. The
+onboarding skill pins an `rmpc` release and carries that release's checksums
+inside its own bytes (RM-148). If robotmoney-core yanks that release, replaces
+an archive, or re-uploads it, every new member's install breaks at the verify
+step — and the deleted served-vs-repo comparison was blind to it by
+construction, because in that scenario the served copy and the repo copy keep
+matching each other perfectly: neither of them moved. That is check A.
+
+**How the "observer, not gate" shape is kept honest.** The auditor always exits
+0; the deliverable is the report, not a verdict, and a non-zero exit would turn
+a question about production into a merge verdict. Its findings live in
+`$GITHUB_STEP_SUMMARY` and in an uploaded artifact, and the report states at the
+top that **a green job means the audit ran, not that production is healthy**.
+Loud-skip-never points inward here rather than outward: a check that could not
+run — DNS failure, timeout, an HTTP 403 from a rate-limited api.github.com — is
+rendered UNKNOWN with its reason, never omitted and never rendered as a pass. A
+red report body on a green job is the intended outcome.
+
+**What this does NOT do.** It does not relax the live test, and it does not
+weaken any invariant test. `contract` still runs `test:live` on every PR and
+every push to `main`, and per the loud-skip-never invariant an unreachable
+network is still a RED there. Every reachability and procedure assertion the
+live test holds is still required. What left the gate was a question about
+production's own state, and only that; the later deletion of the deploy-freshness
+comparison removed a check, not an assertion — nothing that was gated became
+ungated, and no gated assertion was weakened to make the deletion clean.
+
 ---
 
 ## D27 — PR-body compliance rule relaxed to "starts with" a closing reference; scoped to open PRs (issue #343)
