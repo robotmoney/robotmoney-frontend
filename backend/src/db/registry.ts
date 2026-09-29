@@ -524,6 +524,8 @@ export const OBJECTLESS_SHAPES = Object.freeze({
   webauthnChallengeIssueLock: "SELECT pg_advisory_xact_lock(hashtext('admin-webauthn-challenge'))",
   /** The postmaster's start time: the exact boundary between rows a restored dump carried and rows written since (upgrade rehearsals). */
   postmasterStart: "SELECT pg_postmaster_start_time() AS boot_at",
+  /** A transaction-scoped advisory lock keyed on a text the caller builds (a per-entity or per-subsystem serialisation key; the class is baked into the text). */
+  advisoryLockByText: "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
   /** The snapshot the scheduler's full read takes (scheduler spec §3). */
   snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
 } as const);

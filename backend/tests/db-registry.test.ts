@@ -293,50 +293,12 @@ describe("structural enforcement — a raw sql call outside the interface is det
   ];
 
   // ─────────────────────────────────────────────────────────────────────────
-  // THE ALLOWLIST IS A RATCHET, AND IT MUST ONLY EVER SHRINK.
-  //
-  // Recorded 2026-09-23 (#1026 W2.3) with 51 entries, every module under
-  // `src/` outside the db layer that issued a raw tagged template the old
-  // detector could see on that date. Moving them onto `registerQuery` is a
-  // refactor of its own and is tracked separately; enforcing the rule only
-  // after that refactor would mean the rule does not exist until then, and a
-  // new call site landing in the meantime would be indistinguishable from the
-  // backlog.
-  //
-  // So the gate ships now, with the backlog RECORDED rather than hidden. A
-  // module not on this list may not issue a raw statement — that case fails
-  // below and is the tooth. A module on this list that has been converted must
-  // be REMOVED from it, which the second test enforces, so the list cannot be
-  // used to re-admit a module that already left.
-  //
-  // When the parser replaced the old regex (#1026 W2) the list lost
-  // `src/worker/runtime`, which had been admitted only because the regex
-  // matched "`sql` is a live binding" inside a comment. The ten modules the
-  // old detector missed were converted rather than added; the list did not
-  // grow to admit them. 50 entries remained.
-  //
-  // 2026-09-25 (#1026 W3): thirty modules moved onto the registry, each with
-  // a probe tests/db-registry-execution.test.ts runs as its declared role. 20
-  // entries remain; what keeps each one here is reported with the change.
-  //
-  // 2026-09-28 (#1026 W5): src/swarm/judge-fault-injection was deleted with
-  // the lever D55 (3) retired, not converted. 19 entries remain.
-  //
-  // 2026-09-29 (#1026 W6 P2): six modules moved onto the registry: src/api/auth,
-  // src/api/index (its one statement is the object-less `connectionCheck`, in
-  // src/db/connection-check), src/api/routes/projects, src/analytics/store/
-  // regime-store, src/analytics/store/output-snapshot-store and src/ops/
-  // wallet-snapshot-manifest (an object-less advisory lock). The epoch code left
-  // domain.ts for src/swarm/epoch, which was never listed. 13 entries remain;
-  // domain.ts still holds about 145 raw statements of the take, application and
-  // judge paths, and admin.ts and admin routes hold the rest of the count.
-  //
-  // NEVER ADD A LINE HERE. An addition would be a new violation of §7.1 being
-  // written down instead of fixed, which is the one thing a ratchet exists to
-  // prevent. The only legal edit is a deletion.
-  const RAW_SQL_ALLOWLIST: readonly string[] = [
-    "src/swarm/domain",
-  ];
+  // THERE IS NO SRC ALLOWLIST. The dated backlog recorded 2026-09-23 (#1026 W2.3)
+  // with 51 modules was retired on 2026-09-29 (#1026 W6 P2): every module under
+  // src/ outside INFRA issues its statements through the registry, so a raw
+  // statement anywhere in src/ but INFRA fails the build. Do not reintroduce a
+  // list. A module that cannot register is a named, reasoned, count-pinned
+  // exception like SCRIPTS_RAW_SQL_EXCEPTIONS below, never a grandfather line.
 
   // ─────────────────────────────────────────────────────────────────────────
   // THE SCRIPTS EXCEPTIONS — what backend/scripts/ may still issue raw, and why.
@@ -518,10 +480,8 @@ describe("structural enforcement — a raw sql call outside the interface is det
     expect(plant(mixed).map((s) => s.tag)).toEqual(["sql"]);
   });
 
-  test("every module issuing a raw statement is infrastructure or a dated allowlist entry", () => {
-    const allowed = new Set(RAW_SQL_ALLOWLIST);
+  test("every module under src/ issues its statements through the registry, or is infrastructure", () => {
     const offenders = [...rawStatementModules()]
-      .filter(([moduleId]) => !allowed.has(moduleId))
       .map(([moduleId, statements]) => `${moduleId}: ${statements.map((s) => `${s.line} ${s.tag}`).join(", ")}`)
       .sort();
 
@@ -529,21 +489,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
     // to read which file and which line broke the property, not just that
     // something did.
     expect(offenders).toEqual([]);
-  });
-
-  test("the allowlist only shrinks — a converted module must be removed from it", () => {
-    // Without this, the list would be a floor rather than a ceiling: a module
-    // moved onto registerQuery would keep its exemption, and the next raw
-    // statement added to that same file would land inside it unnoticed.
-    const stillRaw = rawStatementModules();
-    const stale = RAW_SQL_ALLOWLIST.filter((m) => !stillRaw.has(m));
-    expect(stale).toEqual([]);
-    expect(new Set(RAW_SQL_ALLOWLIST).size).toBe(RAW_SQL_ALLOWLIST.length);
-    // The recorded size. A longer list is an addition, whatever it is called.
-    // 50 when recorded; 20 after #1026 W3 moved thirty modules onto the registry;
-    // 19 after #1026 W5 deleted src/swarm/judge-fault-injection with the lever
-    // D55 (3) retired.
-    expect(RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(13);
   });
 
   /** The scripts gate itself: every backend/scripts module issuing a raw
@@ -696,13 +641,11 @@ describe("structural enforcement — a raw sql call outside the interface is det
     }
   });
 
-  test("the infrastructure set names real files, and never the allowlist's", () => {
+  test("the infrastructure set names real files under src/db/", () => {
     for (const moduleId of INFRA) {
       expect(existsSync(join(SRC, "..", `${moduleId}.ts`)), moduleId).toBe(true);
       expect(moduleId.startsWith("src/db/"), moduleId).toBe(true);
     }
-    const allowed = new Set(RAW_SQL_ALLOWLIST);
-    expect(INFRA.filter((m) => allowed.has(m))).toEqual([]);
   });
 });
 
@@ -958,6 +901,7 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
     runEventsLock: "SELECT pg_advisory_xact_lock(hashtextextended('analytics_ledger_run_events:' || $1, 0))",
     webauthnChallengeIssueLock: "SELECT pg_advisory_xact_lock(hashtext('admin-webauthn-challenge'))",
     postmasterStart: "SELECT pg_postmaster_start_time() AS boot_at",
+    advisoryLockByText: "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
     snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
   };
 
