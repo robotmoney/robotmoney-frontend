@@ -32,7 +32,6 @@ import { withTargetLock } from "./support/target-lock.ts";
 import {
   BACKEND_DIR,
   bootApi,
-  connectAdmin,
   copyDatabase,
   createSnapshotTemplate,
   databaseUrl,
@@ -41,7 +40,7 @@ import {
   startupLines,
   type ApiBoot,
 } from "./support/startup-preflight.ts";
-import { adminExec, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminExec, harnessConnection, ROLE_PASSWORD } from "./support/cluster.ts";
 
 const APP = { name: "rm_app", password: `rm_app_startup_${crypto.randomUUID().slice(0, 8)}` };
 const OWNER = { name: "rm_owner", password: `rm_owner_startup_${crypto.randomUUID().slice(0, 8)}` };
@@ -51,6 +50,7 @@ const created: string[] = [];
 let ownerCanLogin: boolean | null = null;
 
 beforeAll(async () => {
+  // cluster admin: ALTER ROLE is superuser-only
   await adminExec(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${APP.password}'`);
   // rm_owner is cluster-wide and another file reads its LOGIN attribute, so
   // record it and put back exactly that value (migrate-run.test.ts does the same).
@@ -140,11 +140,11 @@ describe("api startup preflight — checks 1-3 as rm_app, refuse to serve on fai
 
   test("check 2: a runtime DELETE grant on the stream counter row refuses by check 2, naming the table", async () => {
     const name = await freshCopy("csp_grant");
-    const admin = connectAdmin(name);
+    const fixture = harnessConnection(name);
     try {
-      await admin.unsafe(`GRANT DELETE ON ${COUNTER_ROW} TO rm_app`);
+      await fixture.unsafe(`GRANT DELETE ON ${COUNTER_ROW} TO rm_app`);
     } finally {
-      await admin.end({ timeout: 5 });
+      await fixture.end({ timeout: 5 });
     }
     const lines = await expectRefused(await bootApi(databaseUrl(name, APP)), 2);
     expect(lines.filter((line) => line.startsWith("startup_preflight: refused check 2: "))).toEqual([
@@ -156,11 +156,11 @@ describe("api startup preflight — checks 1-3 as rm_app, refuse to serve on fai
 
   test("check 3: a dropped declared column refuses by check 3, naming the column", async () => {
     const name = await freshCopy("csp_drift");
-    const admin = connectAdmin(name);
+    const fixture = harnessConnection(name);
     try {
-      await admin.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
+      await fixture.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
     } finally {
-      await admin.end({ timeout: 5 });
+      await fixture.end({ timeout: 5 });
     }
     const lines = await expectRefused(await bootApi(databaseUrl(name, APP)), 3);
     expect(lines).toContain(
@@ -221,7 +221,6 @@ describe("criterion 61 — a failure between two commits, injected as a real int
       "0999_csp_interrupt_b.sql": `${ADDITIVE}CREATE TABLE rm_csp_interrupt_b (id integer);\n`,
     });
     const owner = postgres(databaseUrl(name, OWNER), { max: 1, onnotice: () => {} });
-    const admin = connectAdmin(name);
     try {
       // The interruption: the REAL run, as rm_owner, under the real target
       // lock, stopped by a throw after 0998 COMMITTED and before 0999 began —
@@ -241,12 +240,11 @@ describe("criterion 61 — a failure between two commits, injected as a real int
           ),
         ),
       ).rejects.toThrow(killed.message);
-      const state = await detectManifestState(admin);
+      const state = await detectManifestState(owner);
       expect(state.kind).toBe("in_progress");
       if (state.kind === "in_progress") expect(state.ahead).toEqual(["0998_csp_interrupt_a.sql"]);
     } finally {
       await owner.end({ timeout: 5 });
-      await admin.end({ timeout: 5 });
       rmSync(dir, { recursive: true, force: true });
     }
 
