@@ -44,6 +44,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { loadSnapshot } from "../src/db/schema-snapshot.ts";
 import { acquireTargetLock, readTargetState } from "../src/db/target-lock.ts";
 import { instancePaths } from "../../scripts/lib/smoke-state.ts";
@@ -86,7 +87,7 @@ beforeAll(async () => {
   }
   // The enrollment a blank bootstrap writes, so every refusal below is refusing
   // a write to a real row.
-  await sql`INSERT INTO deployment_identity (kind) VALUES ('rehearsal') ON CONFLICT (id) DO NOTHING`;
+  await fixtureDb`INSERT INTO deployment_identity (kind) VALUES ('rehearsal') ON CONFLICT (id) DO NOTHING`;
 });
 
 afterAll(async () => {
@@ -129,7 +130,7 @@ describe("deployment_identity refuses every runtime role's write by grant (§4.2
     // The file every migrate run applies (§8.3: "always, even with nothing
     // pending"), as the role that applies it.
     const snapshot = await loadSnapshot();
-    await sql.begin(async (tx) => {
+    await fixtureDb.begin(async (tx) => {
       await tx.unsafe("SET LOCAL ROLE rm_owner");
       await tx.unsafe(snapshot.grantsSql);
     });
