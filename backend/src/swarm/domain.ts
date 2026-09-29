@@ -303,7 +303,7 @@ const membersTakes = registerQuery({
   probe: MEMBERS_PROBE,
 });
 export async function getMembers() {
-  const rows = await on(sql, membersRows, membersTakes)`
+  const rows = await on(sql, membersRows, membersTakes)<any>`
     SELECT m.*, t.last_take_at
       FROM swarm_members m
       LEFT JOIN LATERAL (
@@ -509,7 +509,7 @@ const subjectById = registerQuery({
   probe: { statement: "SELECT * FROM swarm_subjects WHERE id = $1", params: ["probe"] },
 });
 export async function getSubject(id: string, h: DbHandle = sql) {
-  const row = (await on(h, subjectById)`SELECT * FROM swarm_subjects WHERE id = ${id}`)[0];
+  const row = (await on(h, subjectById)<any>`SELECT * FROM swarm_subjects WHERE id = ${id}`)[0];
   return row ? toSubject(row) : null;
 }
 
@@ -548,10 +548,10 @@ const snapshotsAll = registerQuery({
 export async function getSubjectSnapshots(id: string, opts: { limit?: number; before?: string } = {}) {
   const { limit, before } = opts;
   const rows = before
-    ? await on(sql, snapshotsBefore)`SELECT id, subject_id, date, total_value_usd, positions, wallets, notable
+    ? await on(sql, snapshotsBefore)<any>`SELECT id, subject_id, date, total_value_usd, positions, wallets, notable
                FROM swarm_subject_snapshots WHERE subject_id = ${id} AND date < ${before}
                ORDER BY date DESC LIMIT ${limit ?? null}`
-    : await on(sql, snapshotsAll)`SELECT id, subject_id, date, total_value_usd, positions, wallets, notable
+    : await on(sql, snapshotsAll)<any>`SELECT id, subject_id, date, total_value_usd, positions, wallets, notable
                FROM swarm_subject_snapshots WHERE subject_id = ${id}
                ORDER BY date DESC LIMIT ${limit ?? null}`;
   return rows.map(toSnapshot);
@@ -755,7 +755,7 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   if (opts.full && (opts.subject || search)) throw new Error("subject and search page the light index; drop full=1");
   if (search.length > SESSIONS_SEARCH_MAX_LENGTH) throw new Error(`search must be at most ${SESSIONS_SEARCH_MAX_LENGTH} characters`);
   if (opts.full) {
-    const rows = await on(sql, sessionsFull)`SELECT * FROM swarm_sessions ORDER BY date DESC, generated_at DESC, id DESC`;
+    const rows = await on(sql, sessionsFull)<any>`SELECT * FROM swarm_sessions ORDER BY date DESC, generated_at DESC, id DESC`;
     return { sessions: rows.map(toSession), nextCursor: null as string | null, nextSessionAt };
   }
 
@@ -781,7 +781,7 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   // (issue #991): how many members filed (one final take per member, D51, not
   // revisions), and the target the session's own brief carried. Bounded by
   // LIMIT, so they run for at most one page of rows.
-  const rows = await on(sql, sessionsPage, sessionsPageTakes, sessionsPageBriefs)`
+  const rows = await on(sql, sessionsPage, sessionsPageTakes, sessionsPageBriefs)<any>`
     SELECT *, generated_at::text AS cursor_generated_at,
       (SELECT count(*)::int FROM swarm_recommendations r WHERE r.session_id = swarm_sessions.id AND r.final) AS take_count,
       (SELECT b.body->'allocation' FROM swarm_briefs b WHERE b.session_id = swarm_sessions.id) AS reference_allocation
@@ -889,7 +889,7 @@ export async function getMemberTakes(memberId: string, limit?: number) {
   // silently start returning fewer sessions than asked for. The flag, not
   // `ORDER BY revision`, says which row counts: the partial unique index
   // `swarm_recommendations_one_final_per_member` (migration 0075) makes it one.
-  const rows = await on(sql, memberTakesTakes, memberTakesSessions, memberTakesMembers, memberTakesKeys)`
+  const rows = await on(sql, memberTakesTakes, memberTakesSessions, memberTakesMembers, memberTakesKeys)<any>`
     SELECT r.id, r.member_id, m.handle AS member_handle, m.name AS member_name,
            r.stance, r.confidence, r.body,
            r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
@@ -933,7 +933,7 @@ const openSessionRead = registerQuery({
   },
 });
 export async function getOpenSession() {
-  const r = await on(sql, openSessionRead)`SELECT id, date, subject_id, subject_name, state, window_closes_at
+  const r = await on(sql, openSessionRead)<any>`SELECT id, date, subject_id, subject_name, state, window_closes_at
                       FROM swarm_sessions WHERE state = 'collecting'
                       ORDER BY generated_at DESC LIMIT 1`;
   return r[0] ? toSession(r[0]) : null;
@@ -962,7 +962,7 @@ export async function getSession(
   // session that day. That keeps every existing link and the frontend's
   // (date, subject) fetches working, and is the answer a reader wants: the most
   // recent word on that subject for that day.
-  const s = (await on(sql, sessionByDate)`SELECT * FROM swarm_sessions
+  const s = (await on(sql, sessionByDate)<any>`SELECT * FROM swarm_sessions
                        WHERE date = ${date} AND subject_id = ${subjectId}
                        ORDER BY convened_at DESC LIMIT 1`)[0];
   if (!s) return null;
@@ -991,7 +991,7 @@ export async function getSessionById(
   // rather than miss. Treat anything unparseable as simply not found — this is a
   // public GET and a 404 is the honest answer for "no session with that handle".
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
-  const s = (await on(sql, sessionById)`SELECT * FROM swarm_sessions WHERE id = ${id}`)[0];
+  const s = (await on(sql, sessionById)<any>`SELECT * FROM swarm_sessions WHERE id = ${id}`)[0];
   if (!s) return null;
   return withTakes(s);
 }
@@ -1050,7 +1050,7 @@ const withTakesKeys = registerQuery({
   probe: WITH_TAKES_PROBE,
 });
 async function withTakes(s: Record<string, unknown>) {
-  const takes = await on(sql, withTakesTakes, withTakesMembers, withTakesKeys)`
+  const takes = await on(sql, withTakesTakes, withTakesMembers, withTakesKeys)<any>`
     SELECT r.id, r.member_id, m.handle AS member_handle, m.name AS member_name,
            r.stance, r.confidence, r.body,
            r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
@@ -1134,7 +1134,7 @@ const receiptSuperseding = registerQuery({
   },
 });
 export async function getTakeReceipt(id: string) {
-  const row = (await on(sql, receiptTakes, receiptMembers, receiptKeys)`
+  const row = (await on(sql, receiptTakes, receiptMembers, receiptKeys)<any>`
     SELECT r.id, r.session_id, r.member_id, m.handle AS member_handle, m.name AS member_name,
            r.stance, r.confidence, r.body,
            r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
@@ -1237,7 +1237,7 @@ export async function getBriefBySession(sessionId: string) {
   if ((await getAnalyticsReadMode()) === "ledger") {
     const ledger = await ledgerCurrentBriefBySession(sessionId);
     if (!ledger) return null;
-    const [row] = await on(sql, briefIdBySession)`SELECT id, created_at FROM swarm_briefs WHERE session_id = ${sessionId} LIMIT 1`;
+    const [row] = await on(sql, briefIdBySession)<any>`SELECT id, created_at FROM swarm_briefs WHERE session_id = ${sessionId} LIMIT 1`;
     return toBrief({
       id: row?.id ?? null,
       date: ledger.date,
@@ -1248,7 +1248,7 @@ export async function getBriefBySession(sessionId: string) {
       created_at: row?.created_at ?? ledger.createdAt,
     });
   }
-  const r = await on(sql, briefBySession)`SELECT id, date, subject_id, session_id, report_snapshot_id, body, created_at FROM swarm_briefs
+  const r = await on(sql, briefBySession)<any>`SELECT id, date, subject_id, session_id, report_snapshot_id, body, created_at FROM swarm_briefs
                       WHERE session_id = ${sessionId} LIMIT 1`;
   return r[0] ? toBrief(r[0]) : null;
 }
@@ -1303,7 +1303,7 @@ export async function getBrief(date: string, subjectId: string) {
   // 0028 deliberately preserved v0-archived briefs whose session was never
   // archived, and an inner join would silently hide them. `NULLS LAST` ranks a
   // real session's brief above such a row when both exist for a day.
-  const r = await on(sql, briefByDayBriefs, briefByDaySessions)`SELECT b.id, b.date, b.subject_id, b.session_id, b.report_snapshot_id, b.body, b.created_at
+  const r = await on(sql, briefByDayBriefs, briefByDaySessions)<any>`SELECT b.id, b.date, b.subject_id, b.session_id, b.report_snapshot_id, b.body, b.created_at
                       FROM swarm_briefs b
                       LEFT JOIN swarm_sessions s ON s.id = b.session_id
                       WHERE b.date = ${date} AND b.subject_id = ${subjectId}
@@ -3320,13 +3320,13 @@ const openSessionInsert = registerQuery({
 });
 export async function openSession(subjectId: string) {
   const subject = await getSubject(subjectId);
-  const existing = (await on(sql, openSessionExisting)`
+  const existing = (await on(sql, openSessionExisting)<any>`
     SELECT id, date, convened_at, subject_id, subject_name, state
       FROM swarm_sessions
      WHERE subject_id = ${subjectId} AND state IN ('scheduled', 'collecting')
      ORDER BY convened_at DESC LIMIT 1`)[0];
   if (existing) return existing;
-  const r = (await on(sql, openSessionInsert)`
+  const r = (await on(sql, openSessionInsert)<any>`
     INSERT INTO swarm_sessions (subject_id, subject_name, state)
     VALUES (${subjectId}, ${subject?.name ?? subjectId}, 'scheduled')
     RETURNING id, date, convened_at, subject_id, subject_name, state`)[0];
@@ -3498,11 +3498,11 @@ export async function buildBriefBody(
   // than once a day, so date and subject alone cannot reach an earlier session
   // of that day. Ordered by convened_at, the order getSession() uses to pick a
   // day's latest, so same-day refs come back newest first.
-  const recent = await on(sql, briefRecent)`SELECT id, date, convened_at, subject_id, state FROM swarm_sessions
+  const recent = await on(sql, briefRecent)<any>`SELECT id, date, convened_at, subject_id, state FROM swarm_sessions
                            WHERE state = 'published' AND subject_id = ${s.subject_id}
                            ORDER BY convened_at DESC, id DESC LIMIT 5`;
 
-  const researchSignals = await on(sql, briefSignals)`
+  const researchSignals = await on(sql, briefSignals)<any>`
     SELECT signal_key, date, payload FROM research_signals
     WHERE date = ${s.date} ORDER BY signal_key`;
   const previousSession = prevOutcome ? { outcome: prevOutcome } : undefined;
@@ -3617,7 +3617,7 @@ export async function buildBriefBody(
     : null;
   const [report] = regimeDate === null
     ? []
-    : await on(sql, briefReportSnapshots, briefReportOutputs)`
+    : await on(sql, briefReportSnapshots, briefReportOutputs)<any>`
         SELECT rs.id FROM analytics_report_snapshots rs
         JOIN analytics_output_snapshots os
           ON os.run_id = rs.run_id
@@ -4397,7 +4397,7 @@ const frozenActive = registerQuery({
   probe: { statement: "SELECT id FROM swarm_members WHERE status = 'active'" },
 });
 export async function loadFrozenTakeSet(sessionId: string, h: DbHandle = sql): Promise<FrozenTakeSet | null> {
-  const s = (await on(h, frozenSession)`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+  const s = (await on(h, frozenSession)<any>`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
   if (!s) return null;
   // THE FINAL TAKE PER MEMBER (D51), for the same reason as withTakes above
   // and one more that is specific to this function: aggregation copies take
@@ -4626,7 +4626,7 @@ export async function aggregateSession(sessionId: string) {
   const regimeSummary = await buildRegimeSummary(sessionDate);
 
   // Latest subject snapshot total (drives the session header figure).
-  const snapRow = (await on(sql, aggSnapshot)`
+  const snapRow = (await on(sql, aggSnapshot)<any>`
     SELECT total_value_usd FROM swarm_subject_snapshots
     WHERE subject_id = ${s.subject_id} ORDER BY date DESC LIMIT 1`)[0] as { total_value_usd: unknown } | undefined;
   const subjectTotal = snapRow?.total_value_usd == null ? null : Number(snapRow.total_value_usd);
@@ -4757,7 +4757,7 @@ const publishCurrent = registerQuery({
   probe: { statement: "SELECT state FROM swarm_sessions WHERE id = $1", params: [SAMPLE_ID] },
 });
 export async function publishSession(sessionId: string) {
-  const rows = await on(sql, publishTransition)`
+  const rows = await on(sql, publishTransition)<any>`
     UPDATE swarm_sessions
        SET state = 'published',
            published_at = COALESCE(published_at, now()),
@@ -4816,7 +4816,7 @@ const memoRead = registerQuery({
   },
 });
 export async function getMemo(id: number) {
-  const r = (await on(sql, memoRead)`SELECT id, member_id, session_id, title, body, created_at
+  const r = (await on(sql, memoRead)<any>`SELECT id, member_id, session_id, title, body, created_at
                        FROM swarm_memos WHERE id = ${id}`)[0] ?? null;
   if (!r) return null;
   return toMemo(r);
@@ -5316,9 +5316,72 @@ export interface PendingJudging {
  * query uses; that later check stays authoritative, because the flag can flip
  * while the model is thinking.
  */
+const PENDING_JUDGING_PROBE = {
+    statement: `SELECT s.id, s.subject_id, s.date, s.judging_deadline_at, s.judging_requested_at
+      FROM swarm_sessions s
+     WHERE s.state = 'judging'
+       AND EXISTS (
+         SELECT 1 FROM swarm_members m
+          WHERE m.id = $1
+            AND (m.operator = $2
+                 OR COALESCE((SELECT c.third_party_enabled FROM swarm_judge_config c WHERE c.id = 1), false)))
+       AND NOT EXISTS (
+         SELECT 1 FROM swarm_session_judgements j
+          WHERE j.session_id = s.id AND j.judged_by_member_id = $3)
+       AND NOT EXISTS (
+         SELECT 1 FROM swarm_recommendations r
+          WHERE r.session_id = s.id AND r.member_id = $4)
+     ORDER BY s.judging_deadline_at`,
+    params: ["probe", "robotmoney", "probe", "probe"],
+  } as const;
+const pendingJudgingSessions = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:pendingJudgingFor.sessions",
+  purpose: "List the sessions in judging that a judge member has not yet judged.",
+  callers: [JUDGE_ROUTE],
+  probe: PENDING_JUDGING_PROBE,
+});
+const pendingJudgingMembers = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:pendingJudgingFor.members",
+  purpose: "Apply the third-party gate to the polling member: in-house, or third-party judging enabled.",
+  callers: [JUDGE_ROUTE],
+  probe: PENDING_JUDGING_PROBE,
+});
+const pendingJudgingConfig = registerQuery({
+  role: "rm_app",
+  object: "swarm_judge_config",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:pendingJudgingFor.config",
+  purpose: "Read whether third-party judging is enabled.",
+  callers: [JUDGE_ROUTE],
+  probe: PENDING_JUDGING_PROBE,
+});
+const pendingJudgingJudgements = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:pendingJudgingFor.judgements",
+  purpose: "Skip a session the member already judged.",
+  callers: [JUDGE_ROUTE],
+  probe: PENDING_JUDGING_PROBE,
+});
+const pendingJudgingTakes = registerQuery({
+  role: "rm_app",
+  object: "swarm_recommendations",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:pendingJudgingFor.takes",
+  purpose: "Skip a session the member took a position in: a judge cannot judge its own take.",
+  callers: [JUDGE_ROUTE],
+  probe: PENDING_JUDGING_PROBE,
+});
 export async function pendingJudgingFor(memberId: string): Promise<PendingJudging[]> {
-  const rows = await sql<
-    { id: string; subject_id: string; date: Date | string; judging_deadline_at: Date; judging_requested_at: Date | null }[]
+  const rows = await on(sql, pendingJudgingSessions, pendingJudgingMembers, pendingJudgingConfig, pendingJudgingJudgements, pendingJudgingTakes)<
+    { id: string; subject_id: string; date: Date | string; judging_deadline_at: Date; judging_requested_at: Date | null }
   >`
     SELECT s.id, s.subject_id, s.date, s.judging_deadline_at, s.judging_requested_at
       FROM swarm_sessions s
@@ -5358,8 +5421,17 @@ export async function pendingJudgingFor(memberId: string): Promise<PendingJudgin
  * Read off the config row in the caller's handle, so the submission path reads
  * it inside the same transaction as the third-party flag beside it.
  */
+const judgeMinTakesRead = registerQuery({
+  role: "rm_app",
+  object: "swarm_judge_config",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:judgeMinTakes",
+  purpose: "Read the release-safety threshold a judgement is formed against.",
+  callers: [JUDGE_ROUTE, ADMIN_ROUTE],
+  probe: { statement: "SELECT min_takes FROM swarm_judge_config WHERE id = 1" },
+});
 async function judgeMinTakes(h: DbHandle): Promise<number> {
-  const [cfg] = await h<{ min_takes: number }[]>`SELECT min_takes FROM swarm_judge_config WHERE id = 1`;
+  const [cfg] = await on(h, judgeMinTakesRead)<{ min_takes: number }>`SELECT min_takes FROM swarm_judge_config WHERE id = 1`;
   return Number(cfg?.min_takes ?? 3);
 }
 
@@ -5481,8 +5553,17 @@ const boundedText = (v: unknown, max: number): string | null =>
  * database access in one place, and a role check spelled out in a route file is
  * a second place it can drift.
  */
+const judgeMemberRole = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:isJudgeMember",
+  purpose: "Read a member's role and status, to check it is an active judge.",
+  callers: [JUDGE_ROUTE],
+  probe: { statement: "SELECT role, status FROM swarm_members WHERE id = $1", params: ["probe"] },
+});
 export async function isJudgeMember(memberId: string): Promise<boolean> {
-  const [member] = await sql<{ role: string; status: string }[]>`
+  const [member] = await on(sql, judgeMemberRole)<{ role: string; status: string }>`
     SELECT role, status FROM swarm_members WHERE id = ${memberId}`;
   return member?.role === "judge" && member.status === "active";
 }
@@ -5502,8 +5583,45 @@ export async function isJudgeMember(memberId: string): Promise<boolean> {
  * it. Two copies of this query would be two chances to disagree about which
  * judgement is the session's consensus.
  */
+const JUDGE_OF_RECORD_PROBE = {
+    statement: `SELECT m.id FROM swarm_members m
+     WHERE m.role = 'judge' AND m.status = 'active'
+       AND (m.operator = $1
+            OR COALESCE((SELECT c.third_party_enabled FROM swarm_judge_config c WHERE c.id = 1), false))
+       AND NOT EXISTS (SELECT 1 FROM swarm_recommendations r
+                        WHERE r.session_id = $2 AND r.member_id = m.id)
+     ORDER BY m.id LIMIT 1`,
+    params: ["robotmoney", SAMPLE_ID],
+  } as const;
+const judgeOfRecordMembers = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:judgeOfRecordTx.members",
+  purpose: "Find the eligible judges: active, role judge, passing the third-party gate.",
+  callers: [JUDGE_ROUTE, ADMIN_ROUTE],
+  probe: JUDGE_OF_RECORD_PROBE,
+});
+const judgeOfRecordConfig = registerQuery({
+  role: "rm_app",
+  object: "swarm_judge_config",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:judgeOfRecordTx.config",
+  purpose: "Read whether third-party judging is enabled.",
+  callers: [JUDGE_ROUTE, ADMIN_ROUTE],
+  probe: JUDGE_OF_RECORD_PROBE,
+});
+const judgeOfRecordTakes = registerQuery({
+  role: "rm_app",
+  object: "swarm_recommendations",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:judgeOfRecordTx.takes",
+  purpose: "Exclude a judge that took a position in the session.",
+  callers: [JUDGE_ROUTE, ADMIN_ROUTE],
+  probe: JUDGE_OF_RECORD_PROBE,
+});
 export async function judgeOfRecordTx(tx: DbHandle, sessionId: string): Promise<string | null> {
-  const [row] = await tx<{ id: string }[]>`
+  const [row] = await on(tx, judgeOfRecordMembers, judgeOfRecordConfig, judgeOfRecordTakes)<{ id: string }>`
     SELECT m.id FROM swarm_members m
      WHERE m.role = 'judge' AND m.status = 'active'
        AND (m.operator = ${IN_HOUSE_OPERATOR}
@@ -5559,6 +5677,117 @@ export async function judgeOfRecordTx(tx: DbHandle, sessionId: string): Promise<
  * NOTHING HERE CAN SUPPLY AN OPINION. A refusal writes nothing and substitutes
  * nothing; the session then reaches its deadline and publishes `no_consensus`.
  */
+const judgeSession = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT", "UPDATE"],
+  site: "src/swarm/domain:submitJudgement.session",
+  purpose: "Lock the session the judgement is filed against, reading its state, mode and deadline.",
+  callers: [JUDGE_ROUTE],
+  probe: {
+    statement: `SELECT id, state, judge_mode, judging_deadline_at, consensus_recorded_at
+        FROM swarm_sessions WHERE id = $1 FOR UPDATE`,
+    params: [SAMPLE_ID],
+  },
+});
+const judgeExisting = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:submitJudgement.existing",
+  purpose: "Find the judgement this member already filed for the session, so a retry returns it.",
+  callers: [JUDGE_ROUTE],
+  probe: {
+    statement: `SELECT id, applied, applied_skipped_reason, created_at FROM swarm_session_judgements
+       WHERE session_id = $1 AND judged_by_member_id = $2
+       ORDER BY id LIMIT 1`,
+    params: [SAMPLE_ID, "probe"],
+  },
+});
+const judgeMember = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["SELECT", "UPDATE"],
+  site: "src/swarm/domain:submitJudgement.member",
+  purpose: "Hold the judge's member row FOR SHARE while its status, role and operator are checked.",
+  callers: [JUDGE_ROUTE],
+  probe: { statement: "SELECT status, role, operator FROM swarm_members WHERE id = $1 FOR SHARE", params: ["probe"] },
+});
+const judgeConfig = registerQuery({
+  role: "rm_app",
+  object: "swarm_judge_config",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:submitJudgement.config",
+  purpose: "Read the third-party flag and the release-safety threshold inside the submission transaction.",
+  callers: [JUDGE_ROUTE],
+  probe: { statement: "SELECT third_party_enabled, min_takes FROM swarm_judge_config WHERE id = 1" },
+});
+const judgeTake = registerQuery({
+  role: "rm_app",
+  object: "swarm_recommendations",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:submitJudgement.take",
+  purpose: "Refuse a judge that has a take in the session.",
+  callers: [JUDGE_ROUTE],
+  probe: { statement: "SELECT 1 AS one FROM swarm_recommendations WHERE session_id = $1 AND member_id = $2 LIMIT 1", params: [SAMPLE_ID, "probe"] },
+});
+const judgeClock = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:submitJudgement.clock",
+  purpose: "Compare the transaction's one present with the session's judging deadline.",
+  callers: [JUDGE_ROUTE],
+  probe: {
+    statement: `SELECT (judging_deadline_at IS NOT NULL AND $1::text::timestamptz > judging_deadline_at) AS past_deadline
+        FROM swarm_sessions WHERE id = $2`,
+    params: ["2000-01-01 00:00:00+00", SAMPLE_ID],
+  },
+});
+const judgeInsert = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["INSERT", "SELECT"],
+  site: "src/swarm/domain:submitJudgement.insert",
+  purpose: "Record the judgement, applied or with the reason it was not.",
+  callers: [JUDGE_ROUTE],
+  probe: {
+    statement: `INSERT INTO swarm_session_judgements
+        (session_id, mode, source, model, prompt_hash, inputs_digest, digest_scheme, take_count, min_takes,
+         applied, applied_skipped_reason, dropped_positions, dropped_disagreements,
+         judged_by, judged_by_member_id, opinion,
+         usage_input_tokens, usage_output_tokens, usage_total_tokens, usage_cost_usd)
+      SELECT $1, 'enforce', 'model', $2, $3, $4, $5,
+              $6, $7, $8, $9,
+              $10, $11,
+              $12, $13, $14::jsonb,
+              $15, $16,
+              $17, $18 WHERE false
+      RETURNING id`,
+    params: [SAMPLE_ID, "probe", "probe", "probe", "probe", 1, 1, false, null, 0, 0, "probe", "probe", "{}", null, null, null, null],
+  },
+});
+const judgeAudit = registerQuery({
+  role: "rm_app",
+  object: "audit_log",
+  privileges: ["INSERT"],
+  site: "src/swarm/domain:submitJudgement.audit",
+  purpose: "Record a judgement submission in the audit log.",
+  callers: [JUDGE_ROUTE],
+  probe: {
+    statement: "INSERT INTO audit_log (actor, action, scope) SELECT $1, 'submit_judgement', $2::jsonb WHERE false",
+    params: ["probe", "{}"],
+  },
+});
+const judgeCreated = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:submitJudgement.created",
+  purpose: "Read back the recorded judgement's creation instant.",
+  callers: [JUDGE_ROUTE],
+  probe: { statement: "SELECT created_at FROM swarm_session_judgements WHERE id = $1", params: [1] },
+});
 export async function submitJudgement(
   token: string,
   input: JudgementSubmission,
@@ -5612,7 +5841,7 @@ export async function submitJudgement(
   }
 
   return sql.begin(async (tx) => {
-    const [session] = await tx<Record<string, any>[]>`
+    const [session] = await on(tx, judgeSession)<Record<string, any>>`
       SELECT id, state, judge_mode, judging_deadline_at, consensus_recorded_at
         FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`;
     if (!session) return refuseSubmission(404, "session_not_found");
@@ -5632,7 +5861,7 @@ export async function submitJudgement(
       return refuseSubmission(409, "session_not_judging");
     }
 
-    const [existing] = await tx<{ id: string; applied: boolean; applied_skipped_reason: string | null; created_at: Date }[]>`
+    const [existing] = await on(tx, judgeExisting)<{ id: string; applied: boolean; applied_skipped_reason: string | null; created_at: Date }>`
       SELECT id, applied, applied_skipped_reason, created_at FROM swarm_session_judgements
        WHERE session_id = ${sessionId} AND judged_by_member_id = ${memberId}
        ORDER BY id LIMIT 1`;
@@ -5659,11 +5888,11 @@ export async function submitJudgement(
     // ── ELIGIBILITY, read inside the write transaction ──────────────────────
     // An admin revoking the judge, or turning third-party judging off, while
     // its model was thinking is observed before any row can land.
-    const [member] = await tx<{ status: string; role: string; operator: string | null }[]>`
+    const [member] = await on(tx, judgeMember)<{ status: string; role: string; operator: string | null }>`
       SELECT status, role, operator FROM swarm_members WHERE id = ${memberId} FOR SHARE`;
     if (!member || member.status !== "active") return refuseSubmission(403, "judge_member_inactive");
     if (member.role !== "judge") return refuseSubmission(403, "judge_role_required");
-    const [cfg] = await tx<{ third_party_enabled: boolean; min_takes: number }[]>`
+    const [cfg] = await on(tx, judgeConfig)<{ third_party_enabled: boolean; min_takes: number }>`
       SELECT third_party_enabled, min_takes FROM swarm_judge_config WHERE id = 1`;
     const thirdPartyEnabled = cfg?.third_party_enabled === true;
     // THE THIRD-PARTY GATE, KEYED ON OPERATOR (§6.2, D52). `operator` is only
@@ -5673,7 +5902,7 @@ export async function submitJudgement(
     if (member.operator !== IN_HOUSE_OPERATOR && !thirdPartyEnabled) {
       return refuseSubmission(403, "third_party_judging_disabled");
     }
-    const [take] = await tx`
+    const [take] = await on(tx, judgeTake)`
       SELECT 1 AS one FROM swarm_recommendations WHERE session_id = ${sessionId} AND member_id = ${memberId} LIMIT 1`;
     if (take) return refuseSubmission(409, "judge_member_has_take_in_session");
 
@@ -5712,7 +5941,7 @@ export async function submitJudgement(
     // instant then makes it ineligible. The deadline itself is inclusive (§4.4:
     // a consensus recorded AT it is eligible).
     const present = await readPresent(tx);
-    const [clock] = await tx<{ past_deadline: boolean }[]>`
+    const [clock] = await on(tx, judgeClock)<{ past_deadline: boolean }>`
       SELECT (judging_deadline_at IS NOT NULL AND ${present}::text::timestamptz > judging_deadline_at) AS past_deadline
         FROM swarm_sessions WHERE id = ${sessionId}`;
     session.past_deadline = clock?.past_deadline === true;
@@ -5743,7 +5972,7 @@ export async function submitJudgement(
       skipped = attempt.applied ? null : attempt.reason;
     }
 
-    const [row] = await tx<{ id: string }[]>`
+    const [row] = await on(tx, judgeInsert)<{ id: string }>`
       INSERT INTO swarm_session_judgements
         (session_id, mode, source, model, prompt_hash, inputs_digest, digest_scheme, take_count, min_takes,
          applied, applied_skipped_reason, dropped_positions, dropped_disagreements,
@@ -5759,7 +5988,7 @@ export async function submitJudgement(
     const judgementId = Number(row.id);
     // The signature is kept beside the row it authorizes, so "which key signed
     // this judgement, over which nonce" is answerable after the fact.
-    await tx`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, 'submit_judgement', ${sql.json({
+    await on(tx, judgeAudit)`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, 'submit_judgement', ${sql.json({
       sessionId, judgementId, nonce, signature, signingKeyId: key.id, judgeOfRecord, applied,
     } as any)})`;
 
@@ -5782,7 +6011,7 @@ export async function submitJudgement(
         applied,
       };
     }
-    const [created] = await tx<{ created_at: Date }[]>`
+    const [created] = await on(tx, judgeCreated)<{ created_at: Date }>`
       SELECT created_at FROM swarm_session_judgements WHERE id = ${judgementId}`;
     return {
       ok: true as const,
@@ -5827,12 +6056,35 @@ type ApplyOutcome = { applied: true; reason: null } | { applied: false; reason: 
  * Takes a `tx` because the read and the write are a read-modify-write, inside
  * the submission's transaction and under its lock on the session row.
  */
+const opinionLock = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT", "UPDATE"],
+  site: "src/swarm/domain:applyOpinion.lock",
+  purpose: "Lock the session and read its state and recommendation before the opinion is merged in.",
+  callers: [JUDGE_ROUTE],
+  probe: { statement: "SELECT state, swarm_recommendation FROM swarm_sessions WHERE id = $1 FOR UPDATE", params: [SAMPLE_ID] },
+});
+const opinionWrite = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/domain:applyOpinion.write",
+  purpose: "Write the judge's opinion into the session's recommendation while the session is still writable.",
+  callers: [JUDGE_ROUTE],
+  probe: {
+    statement: `UPDATE swarm_sessions SET swarm_recommendation = $1::jsonb
+    WHERE id = $2 AND state = ANY($3::text[])
+    RETURNING id`,
+    params: ["{}", SAMPLE_ID, "{scheduled,collecting,window_closed,aggregated,judging,judged}"],
+  },
+});
 async function applyOpinion(
   tx: DbHandle,
   sessionId: string,
   j: { opinion: JudgeOpinion; model: string; promptHash: string; inputsDigest: string; judgedByMemberId: string },
 ): Promise<ApplyOutcome> {
-  const [row] = await tx<{ state: string; swarm_recommendation: Record<string, unknown> | null }[]>`
+  const [row] = await on(tx, opinionLock)<{ state: string; swarm_recommendation: Record<string, unknown> | null }>`
     SELECT state, swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`;
   if (!row || !OPINION_WRITABLE_STATES.includes(String(row.state))) {
     return { applied: false, reason: "session_no_longer_writable" };
@@ -5849,7 +6101,7 @@ async function applyOpinion(
     judged_by: j.judgedByMemberId,
     judged_by_member_id: j.judgedByMemberId,
   };
-  const upd = await tx`
+  const upd = await on(tx, opinionWrite)`
     UPDATE swarm_sessions SET swarm_recommendation = ${sql.json(rec as any)}
     WHERE id = ${sessionId} AND state = ANY(${OPINION_WRITABLE_STATES}::text[])
     RETURNING id`;
@@ -5877,11 +6129,26 @@ async function applyOpinion(
  * seated. `judgedByMemberId` is null on a historical in-house judgement, which
  * named no member.
  */
+const judgeFingerprint = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:sessionJudgeFingerprint",
+  purpose: "Read the judge fingerprint (prompt hash, inputs digest, judge) a session's recommendation carries.",
+  callers: [JUDGE_ROUTE, ADMIN_ROUTE, SWARM_ROUTE],
+  probe: {
+    statement: `SELECT swarm_recommendation->'judge'->>'prompt_hash'         AS prompt_hash,
+           swarm_recommendation->'judge'->>'inputs_digest'       AS inputs_digest,
+           swarm_recommendation->'judge'->>'judged_by_member_id' AS judged_by_member_id
+      FROM swarm_sessions WHERE id = $1`,
+    params: [SAMPLE_ID],
+  },
+});
 export async function sessionJudgeFingerprint(
   handle: DbHandle = sql,
   sessionId: string,
 ): Promise<{ promptHash: string; inputsDigest: string; judgedByMemberId: string | null } | null> {
-  const [row] = await handle<{ prompt_hash: string | null; inputs_digest: string | null; judged_by_member_id: string | null }[]>`
+  const [row] = await on(handle, judgeFingerprint)<{ prompt_hash: string | null; inputs_digest: string | null; judged_by_member_id: string | null }>`
     SELECT swarm_recommendation->'judge'->>'prompt_hash'         AS prompt_hash,
            swarm_recommendation->'judge'->>'inputs_digest'       AS inputs_digest,
            swarm_recommendation->'judge'->>'judged_by_member_id' AS judged_by_member_id
@@ -5899,9 +6166,25 @@ export async function sessionJudgeFingerprint(
 // transactions the one that committed second can carry the earlier timestamp.
 // `id` is a bigserial drawn at INSERT, so it is the only ordering that agrees
 // with the order the rows were actually written in.
+const judgementsList = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:listJudgements",
+  purpose: "List a session's judgements, newest first.",
+  callers: [SWARM_ROUTE, ADMIN_ROUTE, JUDGE_ROUTE],
+  probe: {
+    statement: `SELECT id, session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, digest_scheme,
+           take_count, min_takes, applied, applied_skipped_reason,
+           dropped_positions, dropped_disagreements, judged_by, judged_by_member_id, opinion, created_at
+    FROM swarm_session_judgements WHERE session_id = $1
+    ORDER BY id DESC LIMIT $2`,
+    params: [SAMPLE_ID, 1],
+  },
+});
 export async function listJudgements(sessionId: string, limit = 50, db: DbHandle = sql) {
   const bounded = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 200) : 50;
-  return (await db`
+  return (await on(db, judgementsList)<any>`
     SELECT id, session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, digest_scheme,
            take_count, min_takes, applied, applied_skipped_reason,
            dropped_positions, dropped_disagreements, judged_by, judged_by_member_id, opinion, created_at

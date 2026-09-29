@@ -327,9 +327,11 @@ describe("structural enforcement — a raw sql call outside the interface is det
   // src/db/connection-check), src/api/routes/projects, src/analytics/store/
   // regime-store, src/analytics/store/output-snapshot-store and src/ops/
   // wallet-snapshot-manifest (an object-less advisory lock). The epoch code left
-  // domain.ts for src/swarm/epoch, which was never listed. 13 entries remain;
-  // domain.ts still holds about 145 raw statements of the take, application and
-  // judge paths, and admin.ts and admin routes hold the rest of the count.
+  // domain.ts for src/swarm/epoch, which was never listed. 13 entries remained.
+  //
+  // 2026-09-29 (#1026 W6 P2, continued): src/swarm/domain left the list, every
+  // statement of its take, application and judge paths registered with a probe.
+  // 12 entries remain; admin.ts and the admin routes hold the rest of the count.
   //
   // NEVER ADD A LINE HERE. An addition would be a new violation of §7.1 being
   // written down instead of fixed, which is the one thing a ratchet exists to
@@ -345,7 +347,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "src/projects/smoke-seed",
     "src/swarm/admin",
     "src/swarm/consensus-receipt",
-    "src/swarm/domain",
     "src/swarm/roster-seed",
     "src/worker/handlers/projects",
   ];
