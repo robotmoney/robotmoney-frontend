@@ -337,7 +337,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
   const RAW_SQL_ALLOWLIST: readonly string[] = [
     "src/analytics/store/run-ledger-store",
     "src/analytics/store/source-ledger-store",
-    "src/api/routes/admin-webauthn",
     "src/ops/asset-prices",
     "src/ops/gap-detector",
     "src/ops/wallet-backfill",
@@ -917,6 +916,7 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
     clockTimestamp: "SELECT clock_timestamp() AS at",
     connectionCheck: "SELECT 1",
     walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
+    webauthnChallengeIssueLock: "SELECT pg_advisory_xact_lock(hashtext('admin-webauthn-challenge'))",
     snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
   };
 

@@ -513,6 +513,8 @@ export const OBJECTLESS_SHAPES = Object.freeze({
   connectionCheck: "SELECT 1",
   /** The one lock protocol for every writer of a wallet snapshot date (ops/wallet-snapshot-manifest.ts). */
   walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
+  /** Serializes issuance of an admin WebAuthn challenge, so two requests never pick the same slot (api/routes/admin-webauthn.ts). */
+  webauthnChallengeIssueLock: "SELECT pg_advisory_xact_lock(hashtext('admin-webauthn-challenge'))",
   /** The snapshot the scheduler's full read takes (scheduler spec §3). */
   snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
 } as const);
