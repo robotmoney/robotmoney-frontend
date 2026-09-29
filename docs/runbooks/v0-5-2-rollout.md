@@ -138,7 +138,7 @@ As v0.5.1 R6 (pre-cut session list R6.2a, stop the driver, check out the tag, bo
   ```bash
   PROJECT=$(bun -e "console.log(require('./$STATE').project)")
   docker compose -p "$PROJECT" stop website-server api analytics-producer worker-analytics worker-research worker-swarm
-  bun backend/scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts --emit-receipt --step R6.4c.ledger-repair --backup-dir "$RM_BACKUP_DIR" \
+  bun backend/scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts --apply-migration --emit-receipt --step R6.4c.ledger-repair --backup-dir "$RM_BACKUP_DIR" \
     --database-url "$(grep -m1 '^MIGRATE_DATABASE_URL=' .env | cut -d= -f2-)" 2>&1 | tee /root/ledger-repair-v0.5.2.log
   docker compose -p "$PROJECT" start api website-server analytics-producer worker-analytics worker-research worker-swarm
   ```

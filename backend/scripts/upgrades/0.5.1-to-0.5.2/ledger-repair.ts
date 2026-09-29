@@ -36,9 +36,14 @@
 //
 // Usage (repo root):
 //   bun backend/scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts \
-//     [--database-url URL] [--dry-run] [--emit-receipt --step R6.4c.ledger-repair --backup-dir DIR]
+//     [--database-url URL] [--apply-migration] [--dry-run] [--emit-receipt --step R6.4c.ledger-repair --backup-dir DIR]
 // The URL defaults to MIGRATE_DATABASE_URL, then DATABASE_URL. The session
 // switches to rm_owner, the tables' owner, as the migration runner does.
+// --apply-migration first applies 0080 with the runner's own applyMigrationFile
+// (its own transaction, committed before the repair starts) when it is not yet
+// recorded, so the whole cutover can run with the stack stopped: the boot then
+// finds 0080 recorded and skips it. Without the flag, an unrecorded 0080 makes
+// the repair refuse.
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
@@ -551,6 +556,11 @@ async function main(): Promise<number> {
     console.error("[ledger-repair] no database: pass --database-url, or set MIGRATE_DATABASE_URL");
     return 2;
   }
+  // The backend's config module is imported by the modules the repair reuses.
+  // It refuses a doadmin DATABASE_URL when RM_ENV is prod (the default), and the
+  // migration login IS doadmin in production. This script opens exactly one
+  // connection, to the URL it was given, so it runs as a smoke-class process.
+  process.env.RM_ENV ??= "smoke";
   process.env.DATABASE_URL ??= url;
   const dryRun = process.argv.includes("--dry-run");
   const startedAt = new Date().toISOString();
@@ -560,6 +570,18 @@ async function main(): Promise<number> {
   let code = 0;
   let note = "";
   try {
+    if (process.argv.includes("--apply-migration")) {
+      const file = "0080_analytics_ledger_compaction.sql";
+      const [applied] = (await db`SELECT count(*)::int AS n FROM schema_migrations WHERE name = ${file}`) as unknown as { n: number }[];
+      if (applied!.n === 1) {
+        log(`${file} is already recorded; not applying it again`);
+      } else {
+        const { applyMigrationFile } = await import("../../../src/db/migrate.ts");
+        const started = Date.now();
+        await applyMigrationFile(db, file);
+        log(`migrated: ${file} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
+      }
+    }
     const report = await repairLedger(db, { dryRun, log });
     note = JSON.stringify(report);
     console.log(JSON.stringify(report, null, 2));
