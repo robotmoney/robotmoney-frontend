@@ -56,14 +56,13 @@ import { runMigrate } from "../scripts/migrate-run.ts";
 import { withTargetLock } from "./support/target-lock.ts";
 import {
   bootApi,
-  connectAdmin,
   createSnapshotTemplate,
   databaseUrl as roleDatabaseUrl,
   dropDatabases,
   portIsBound,
   startupLines,
 } from "./support/startup-preflight.ts";
-import { adminExec, adminUrl, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminExec, harnessConnection, ROLE_PASSWORD } from "./support/cluster.ts";
 
 import { fixtureDb } from "./support/fixture-db.ts";
 useCleanDatabase(import.meta.file);
@@ -642,25 +641,18 @@ describe("recordMigrationCompat — the declaration commits with the DDL, never 
 // runtime half — the real api entrypoint booting against N + additive and
 // refusing the drift — is the block after it.
 
-/** A URL for `database` on the suite's server, as the harness superuser. */
-function databaseUrl(database: string): string {
-  const url = new URL(adminUrl());
-  url.pathname = `/${database}`;
-  return url.toString();
-}
-
 /** A blank database owned by rm_owner, bootstrapped from the REAL snapshot
  *  (pgcrypto installed first, as the provider's half), handed to `body` as the
- *  harness superuser and dropped afterwards. */
+ *  harness owner login and dropped afterwards. */
 async function withSnapshotDatabase(
   body: (db: postgres.Sql<{}>, snapshot: Awaited<ReturnType<typeof loadSnapshot>>) => Promise<void>,
 ): Promise<void> {
   const snapshot = await loadSnapshot();
   const name = `rmt_compat_snapshot_${crypto.randomUUID().slice(0, 8)}`;
-  const admin = postgres(databaseUrl("postgres"), { max: 1, onnotice: () => {} });
   try {
-    await admin.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
-    const db = postgres(databaseUrl(name), { max: 1, onnotice: () => {} });
+    // cluster admin: CREATE/DROP DATABASE are cluster-level.
+    await adminExec(`CREATE DATABASE ${name} OWNER rm_owner`);
+    const db = harnessConnection(name);
     try {
       await db.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
       await db.unsafe("SET ROLE rm_owner");
@@ -671,8 +663,7 @@ async function withSnapshotDatabase(
       await db.end({ timeout: 5 });
     }
   } finally {
-    await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-    await admin.end({ timeout: 5 });
+    await adminExec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
   }
 }
 
@@ -691,7 +682,6 @@ async function withSnapshotDatabase(
 async function snapshotForVersionM(additiveDdl: string): Promise<SchemaDeclaration> {
   const root = mkdtempSync(join(tmpdir(), "rm-snapshot-m-"));
   const name = `rmt_compat_snapshot_m_${crypto.randomUUID().slice(0, 8)}`;
-  const admin = postgres(databaseUrl("postgres"), { max: 1, onnotice: () => {} });
   try {
     mkdirSync(join(root, "schema"));
     for (const part of Object.values(SNAPSHOT_FILES)) {
@@ -700,8 +690,8 @@ async function snapshotForVersionM(additiveDdl: string): Promise<SchemaDeclarati
     const declarationPath = join(root, SNAPSHOT_FILES.declaration);
     writeFileSync(declarationPath, `${readFileSync(declarationPath, "utf8")}\n${additiveDdl}\n`, "utf8");
 
-    await admin.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
-    const blank = postgres(databaseUrl(name), { max: 1, onnotice: () => {} });
+    await adminExec(`CREATE DATABASE ${name} OWNER rm_owner`);
+    const blank = harnessConnection(name);
     try {
       await blank.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
       await blank.unsafe("SET ROLE rm_owner");
@@ -715,8 +705,7 @@ async function snapshotForVersionM(additiveDdl: string): Promise<SchemaDeclarati
       await blank.end({ timeout: 5 });
     }
   } finally {
-    await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-    await admin.end({ timeout: 5 });
+    await adminExec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
     rmSync(root, { recursive: true, force: true });
   }
 }
@@ -853,8 +842,9 @@ describe("old code at N against a database at N + additive — and genuine drift
 // old code, and the boot refuses by check 3b — so the pass above is owed to the
 // migration's recorded `additive`, not to a check that lets anything through.
 
-const COMPAT_BOOT_APP = { name: "rm_app", password: `rm_app_compat_${crypto.randomUUID().slice(0, 8)}` };
-const COMPAT_BOOT_OWNER = { name: "rm_owner", password: `rm_owner_compat_${crypto.randomUUID().slice(0, 8)}` };
+// The role logins carry the suite's shared password (tests/preload.ts).
+const COMPAT_BOOT_APP = { name: "rm_app", password: ROLE_PASSWORD() };
+const COMPAT_BOOT_OWNER = { name: "rm_owner", password: ROLE_PASSWORD() };
 const SYNTHESIZED = "0999_compat_boot_job_schedules_note.sql";
 const ADDITIVE_DDL = "ALTER TABLE public.job_schedules ADD COLUMN operator_note text;";
 
@@ -868,7 +858,6 @@ const ADDITIVE_DDL = "ALTER TABLE public.job_schedules ADD COLUMN operator_note 
 async function snapshotDirForVersionM(ddl: string, synthesized: string): Promise<string> {
   const root = mkdtempSync(join(tmpdir(), "rm-compat-boot-snapshot-"));
   const name = `rmt_compat_boot_m_${crypto.randomUUID().slice(0, 8)}`;
-  const admin = postgres(databaseUrl("postgres"), { max: 1, onnotice: () => {} });
   try {
     mkdirSync(join(root, "schema"));
     for (const part of Object.values(SNAPSHOT_FILES)) {
@@ -877,8 +866,8 @@ async function snapshotDirForVersionM(ddl: string, synthesized: string): Promise
     const declarationPath = join(root, SNAPSHOT_FILES.declaration);
     writeFileSync(declarationPath, `${readFileSync(declarationPath, "utf8")}\n${ddl}\n`, "utf8");
 
-    await admin.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
-    const blank = postgres(databaseUrl(name), { max: 1, onnotice: () => {} });
+    await adminExec(`CREATE DATABASE ${name} OWNER rm_owner`);
+    const blank = harnessConnection(name);
     let metadata;
     try {
       await blank.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
@@ -900,8 +889,7 @@ async function snapshotDirForVersionM(ddl: string, synthesized: string): Promise
     );
     return root;
   } finally {
-    await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-    await admin.end({ timeout: 5 });
+    await adminExec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
   }
 }
 
@@ -944,17 +932,10 @@ async function databaseMigratedToM(compat: "additive" | "breaking", snapshotDir:
 }
 
 const compatBootDatabases: string[] = [];
-let compatBootOwnerCanLogin: boolean | null = null;
 let compatBootSnapshotDir = "";
 
 describe("criterion 54, runtime — the real api at N serves against N + additive, and refuses genuine drift", () => {
   beforeAll(async () => {
-    await adminExec(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${COMPAT_BOOT_APP.password}'`);
-    // rm_owner is cluster-wide and another file reads its LOGIN attribute:
-    // record it and put back exactly that value.
-    const [owner] = await sql<{ rolcanlogin: boolean }[]>`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`;
-    compatBootOwnerCanLogin = owner?.rolcanlogin ?? null;
-    await adminExec(`ALTER ROLE rm_owner PASSWORD '${COMPAT_BOOT_OWNER.password}'`);
     compatBootSnapshotDir = await snapshotDirForVersionM(ADDITIVE_DDL, SYNTHESIZED);
     // The fixture pair is checked as a pair: M's snapshot does not load against
     // this checkout's migrations, which do not hold the synthesized file.
@@ -964,7 +945,6 @@ describe("criterion 54, runtime — the real api at N serves against N + additiv
   afterAll(async () => {
     await dropDatabases(compatBootDatabases);
     if (compatBootSnapshotDir) rmSync(compatBootSnapshotDir, { recursive: true, force: true });
-    await adminExec(`ALTER ROLE rm_owner ${compatBootOwnerCanLogin === false ? "NOLOGIN" : "LOGIN"} PASSWORD '${ROLE_PASSWORD()}'`);
   });
 
   test("old code SERVES after the real run publishes M with an additive migration; a dropped declared column then REFUSES it by check 3", async () => {
@@ -985,11 +965,11 @@ describe("criterion 54, runtime — the real api at N serves against N + additiv
     }
 
     // GENUINE DRIFT on the same database, for the same old code.
-    const admin = connectAdmin(name);
+    const drifter = harnessConnection(name);
     try {
-      await admin.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
+      await drifter.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
     } finally {
-      await admin.end({ timeout: 5 });
+      await drifter.end({ timeout: 5 });
     }
     const refused = await bootApi(app);
     if (refused.outcome === "served") {
