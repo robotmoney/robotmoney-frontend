@@ -5677,7 +5677,7 @@ export async function judgeOfRecordTx(tx: DbHandle, sessionId: string): Promise<
  * NOTHING HERE CAN SUPPLY AN OPINION. A refusal writes nothing and substitutes
  * nothing; the session then reaches its deadline and publishes `no_consensus`.
  */
-const judgeSession = registerQuery({
+const sessionForJudgement = registerQuery({
   role: "rm_app",
   object: "swarm_sessions",
   privileges: ["SELECT", "UPDATE"],
@@ -5841,7 +5841,7 @@ export async function submitJudgement(
   }
 
   return sql.begin(async (tx) => {
-    const [session] = await on(tx, judgeSession)<Record<string, any>>`
+    const [session] = await on(tx, sessionForJudgement)<Record<string, any>>`
       SELECT id, state, judge_mode, judging_deadline_at, consensus_recorded_at
         FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`;
     if (!session) return refuseSubmission(404, "session_not_found");
