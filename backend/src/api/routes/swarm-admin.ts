@@ -40,9 +40,6 @@ function ownsPath(p: string): boolean {
     rest === "sessions" || rest.startsWith("sessions/") ||
     rest === "audit" ||
     rest === "judge" ||
-    // D55 (3): the retired fault-injection lever, owned so it answers 410 rather
-    // than falling through to the generic dispatcher's 404.
-    rest === "judge/fault-injection" ||
     rest === "agent-health"
   );
 }
@@ -476,23 +473,6 @@ export async function handleSwarmAdmin(
       return fromResult(await admin.setJudgeConfigAdmin(patch));
     }
     return { status: 404, body: { error: "unknown judge admin route" } };
-  }
-
-  // ── The retired judge fault-injection lever (R13), D55 (3) ──────────────
-  // The lever faulted the backend `judge()`, which D53 deleted, so it had
-  // nothing left to break and only added a way to arm a test path in
-  // production. Its code is gone. 410, not 404: the route was real and its
-  // absence is deliberate, so a stale rehearsal script is told why. The table
-  // and the audit_log rows it wrote stay readable until a forward migration
-  // drops the table (D55 (3)).
-  if (segs[0] === "judge" && segs[1] === "fault-injection" && segs.length === 2) {
-    return {
-      status: 410,
-      body: {
-        error: "the judge fault-injection lever is retired (D55 (3)): the backend judge it faulted no longer exists " +
-          "(D53); its audit_log rows stay readable",
-      },
-    };
   }
 
   // ── Audit ─────────────────────────────────────────────────────────────

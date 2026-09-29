@@ -107,7 +107,8 @@
     "0088_webauthn_challenge_slots.sql",
     "0089_revoke_runtime_delete.sql",
     "0090_stream_events_retention_comment.sql",
-    "0091_rm_worker_wallet_evidence_insert.sql"
+    "0091_rm_worker_wallet_evidence_insert.sql",
+    "0092_drop_swarm_judge_fault_injection.sql"
   ],
   "exclusions": {
     "roles": [
@@ -119,7 +120,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "fe360fe4f069bcd31ffe9f617ad565bbb7b58507b95ab8089c9b33262e94a643",
+  "contentHash": "695bfd74cbf049b4e8a01dd73497dc928bce201eaaad3db16be043a4f5f89b62",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -2404,43 +2405,6 @@
       "notnull": "yes",
       "default": "now()"
     },
-    "column public.swarm_judge_fault_injection.body": {
-      "type": "text",
-      "notnull": "yes",
-      "default": "''::text"
-    },
-    "column public.swarm_judge_fault_injection.enabled": {
-      "type": "boolean",
-      "notnull": "yes",
-      "default": "false"
-    },
-    "column public.swarm_judge_fault_injection.id": {
-      "type": "smallint",
-      "notnull": "yes",
-      "default": "1"
-    },
-    "column public.swarm_judge_fault_injection.note": {
-      "type": "text",
-      "notnull": "no"
-    },
-    "column public.swarm_judge_fault_injection.remaining": {
-      "type": "integer",
-      "notnull": "yes",
-      "default": "0"
-    },
-    "column public.swarm_judge_fault_injection.session_id": {
-      "type": "uuid",
-      "notnull": "no"
-    },
-    "column public.swarm_judge_fault_injection.updated_at": {
-      "type": "timestamp with time zone",
-      "notnull": "yes",
-      "default": "now()"
-    },
-    "column public.swarm_judge_fault_injection.updated_by": {
-      "type": "text",
-      "notnull": "no"
-    },
     "column public.swarm_member_avatars.byte_size": {
       "type": "integer",
       "notnull": "yes"
@@ -4488,24 +4452,6 @@
     "constraint public.swarm_judge_config.swarm_judge_config_pkey": {
       "definition": "PRIMARY KEY (id)"
     },
-    "constraint public.swarm_judge_fault_injection.swarm_judge_fault_injection_body_check": {
-      "definition": "CHECK ((length(body) <= 20000))"
-    },
-    "constraint public.swarm_judge_fault_injection.swarm_judge_fault_injection_check": {
-      "definition": "CHECK (((NOT enabled) OR ((length(btrim(body)) > 0) AND (remaining > 0))))"
-    },
-    "constraint public.swarm_judge_fault_injection.swarm_judge_fault_injection_id_check": {
-      "definition": "CHECK ((id = 1))"
-    },
-    "constraint public.swarm_judge_fault_injection.swarm_judge_fault_injection_note_check": {
-      "definition": "CHECK (((note IS NULL) OR (length(note) <= 500)))"
-    },
-    "constraint public.swarm_judge_fault_injection.swarm_judge_fault_injection_pkey": {
-      "definition": "PRIMARY KEY (id)"
-    },
-    "constraint public.swarm_judge_fault_injection.swarm_judge_fault_injection_remaining_check": {
-      "definition": "CHECK (((remaining >= 0) AND (remaining <= 100)))"
-    },
     "constraint public.swarm_member_avatars.swarm_member_avatars_member_id_fkey": {
       "definition": "FOREIGN KEY (member_id) REFERENCES public.swarm_members(id) ON DELETE CASCADE"
     },
@@ -5402,9 +5348,6 @@
     "index public.swarm_judge_config_pkey": {
       "definition": "CREATE UNIQUE INDEX swarm_judge_config_pkey ON public.swarm_judge_config USING btree (id)"
     },
-    "index public.swarm_judge_fault_injection_pkey": {
-      "definition": "CREATE UNIQUE INDEX swarm_judge_fault_injection_pkey ON public.swarm_judge_fault_injection USING btree (id)"
-    },
     "index public.swarm_member_avatars_pkey": {
       "definition": "CREATE UNIQUE INDEX swarm_member_avatars_pkey ON public.swarm_member_avatars USING btree (member_id)"
     },
@@ -6220,9 +6163,6 @@
       "owner": "rm_owner"
     },
     "table public.swarm_judge_config": {
-      "owner": "rm_owner"
-    },
-    "table public.swarm_judge_fault_injection": {
       "owner": "rm_owner"
     },
     "table public.swarm_member_avatars": {
