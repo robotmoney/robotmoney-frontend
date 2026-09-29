@@ -316,6 +316,7 @@ export async function repairLedger(db: Db, opts: { dryRun?: boolean; log?: (line
   // Imported here, not at the top: store/run-ledger-store.ts pulls in
   // src/db/client.ts, which needs DATABASE_URL set, and main() sets it first.
   const { rebuildVintageManifests } = await import("../../../src/analytics/store/run-ledger-store.ts");
+  const { checkRawIndicatorHistoryParity } = await import("../../../src/analytics/cutover/parity.ts");
   let report: LedgerRepairReport | undefined;
 
   try {
@@ -457,6 +458,16 @@ export async function repairLedger(db: Db, opts: { dryRun?: boolean; log?: (line
       // ── 6. Re-arm, then recompute every vintage's manifest ───────────────
       for (const [table, trigger] of GUARDS) await tx.unsafe(`ALTER TABLE ${table} ENABLE ALWAYS TRIGGER ${trigger}`);
       const manifests = await time("rebuild vintage manifests", () => rebuildVintageManifests(tx));
+      // raw_indicator_history must agree with the ledger's heads. Checked HERE,
+      // under the repair's own locks: after the commit a writer that was
+      // waiting on them lands its ledger rows before its raw rows, and a check
+      // that reads in between judges that writer, not the repair.
+      await time("prove raw history parity", async () => {
+        const parity = await checkRawIndicatorHistoryParity(tx);
+        if (!parity.matched) {
+          throw new Error(`raw_indicator_history would not match the ledger: ${JSON.stringify(parity.mismatches)}`);
+        }
+      });
       await tx.unsafe("DROP FUNCTION pg_temp.ledger_repair_series(text, double precision)");
       await tx.unsafe("DROP FUNCTION pg_temp.ledger_repair_raw(jsonb)");
 
@@ -514,20 +525,13 @@ async function main(): Promise<number> {
     note = JSON.stringify(report);
     console.log(JSON.stringify(report, null, 2));
     if (!dryRun) {
-      // Read-only confirmation on the committed result: both guards armed, and
-      // raw_indicator_history agrees with the ledger's heads.
+      // Read-only confirmation on the committed result: both guards armed.
       const { checkAnalyticsLedgerGuard } = await import("../../../src/db/analytics-ledger-guard.ts");
       const { checkAppendOnlyGuard } = await import("../../../src/db/append-only-guard.ts");
-      const { checkRawIndicatorHistoryParity } = await import("../../../src/analytics/cutover/parity.ts");
       const ledger = await checkAnalyticsLedgerGuard(db);
       const appendOnly = await checkAppendOnlyGuard(db);
-      const parity = await checkRawIndicatorHistoryParity(db);
-      log(`analytics ledger guard: ${ledger.status}; append-only guard: ${appendOnly.status}; raw history parity: ${parity.matched ? "matched" : `${parity.mismatches.length} mismatch(es)`}`);
+      log(`analytics ledger guard: ${ledger.status}; append-only guard: ${appendOnly.status}; raw history parity: matched (proved before commit)`);
       if (ledger.status !== "armed" || appendOnly.status !== "armed") code = 1;
-      if (!parity.matched) {
-        for (const m of parity.mismatches.slice(0, 10)) log(`  parity mismatch: ${JSON.stringify(m)}`);
-        code = 1;
-      }
     }
     log(code === 0 ? (dryRun ? "DRY RUN OK" : "LEDGER REPAIRED") : "LEDGER REPAIRED, CHECKS FAILED");
   } catch (err) {

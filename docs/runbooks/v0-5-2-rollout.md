@@ -114,7 +114,7 @@ As v0.5.1 R3, with `backend/scripts/upgrades/0.5.1-to-0.5.2/restore-check.ts` fo
 | R4.2 | `git checkout --detach "$RC_SHA"`; installs | HEAD = `RC_SHA` | HEAD |
 | R4.3 | In tmux: `bun smoke:twin -- --no-tui --full-dump 2>&1 \| while IFS= read -r l; do printf '%s %s\n' "$(date -u +%T)" "$l"; done \| tee ~/twin-$RC_SHA.log` | READY | READY time |
 | R4.3a | `grep -E 'migrated: 00' ~/twin-$RC_SHA.log` | `migrated: 0080_analytics_ledger_compaction.sql`; no error | start and end times of 0080 |
-| R4.3h | **The ledger repair, as R6.4c runs it**, from `~/robotmoney-frontend` (see R6.4c for the commands) with `STATE=.agents/smoke-state.json` and `--step R4.3h.ledger-repair` | `LEDGER REPAIRED`; guards armed; raw history parity matched; exit 0 | **the per-step seconds it prints: this is E1's window** |
+| R4.3h | **The ledger repair, as R6.4c runs it**, from `~/robotmoney-frontend` (see R6.4c for the commands) with `STATE=.agents/smoke-state.json` and `--step R4.3h.ledger-repair` | `LEDGER REPAIRED`; guards armed; exit 0 (raw history parity is proved inside the repair's transaction: a mismatch rolls it back) | **the per-step seconds it prints: this is E1's window** |
 | R4.3b | Ledger sizes and counts after the repair (as R2.11, on the twin) | far below R2.11, near one version per point; every vintage's `member_count` unchanged (the repair raises otherwise) | the numbers |
 | R4.3c | R2.13's query, on the twin, for rows written since READY | `unchanged` at or near 0 for post-boot writes — this is what R7/R8's post-T0 comparison expects to see in production | counts by kind |
 | R4.3d | R2.14's log grep, on the twin, for the run(s) the twin's own producer makes during R4.4 | at least one `regime asof` line, no `fatal:` after it | the lines |
