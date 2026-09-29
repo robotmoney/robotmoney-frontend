@@ -376,7 +376,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "scripts/lib/rollout-receipt",
     "scripts/migrate-run",
     "scripts/smoke-twin-capture",
-    "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal",
     "scripts/upgrades/0.5.0-to-0.5.1/postflight",
     "scripts/upgrades/0.5.0-to-0.5.1/preflight",
   ];
@@ -918,6 +917,7 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
     clockTimestamp: "SELECT clock_timestamp() AS at",
     connectionCheck: "SELECT 1",
     walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
+    postmasterStart: "SELECT pg_postmaster_start_time() AS boot_at",
     snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
   };
 

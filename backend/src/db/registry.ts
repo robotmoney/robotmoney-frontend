@@ -516,6 +516,8 @@ export const OBJECTLESS_SHAPES = Object.freeze({
   connectionCheck: "SELECT 1",
   /** The one lock protocol for every writer of a wallet snapshot date (ops/wallet-snapshot-manifest.ts). */
   walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
+  /** The postmaster's start time: the exact boundary between rows a restored dump carried and rows written since (upgrade rehearsals). */
+  postmasterStart: "SELECT pg_postmaster_start_time() AS boot_at",
   /** The snapshot the scheduler's full read takes (scheduler spec §3). */
   snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
 } as const);
