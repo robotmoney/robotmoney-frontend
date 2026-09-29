@@ -26,6 +26,8 @@ let twinSuperuserUrl: string;
 let shapedUrl: string;
 
 beforeAll(async () => {
+  // cluster admin: CREATE/DROP DATABASE and ROLE are superuser-only, and the twin under test
+  // IS a superuser-owned restore, so its fixtures are built as that superuser by design
   admin = postgres(ADMIN_URL, { max: 1, onnotice: () => {} });
   await admin.unsafe(`DROP DATABASE IF EXISTS ${TWIN_DB} WITH (FORCE)`).catch(() => {});
   await admin.unsafe(`DROP ROLE IF EXISTS ${TWIN_BOOTSTRAP_ROLE}`).catch(() => {});

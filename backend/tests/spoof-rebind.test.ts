@@ -36,7 +36,7 @@ import { readSpoofGeneration, spoofKeys, SpoofKeysRefusal, writeSpoofGeneration 
 import { instancePaths } from "../../scripts/lib/smoke-state.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
-import { adminExec, adminUrl, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminExec, ROLE_PASSWORD } from "./support/cluster.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -47,6 +47,7 @@ const roots: string[] = [];
 beforeAll(async () => {
   const [row] = await sql<{ rolcanlogin: boolean }[]>`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`;
   ownerCanLogin = row?.rolcanlogin ?? true;
+  // cluster admin: ALTER ROLE (password/LOGIN) is superuser-only
   await adminExec(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
 });
 
@@ -58,7 +59,7 @@ afterAll(async () => {
 /** An rm_owner login to THIS test's own database. */
 async function ownerUrl(): Promise<string> {
   const [row] = await sql<{ db: string }[]>`SELECT current_database() AS db`;
-  const url = new URL(adminUrl());
+  const url = new URL(process.env.DATABASE_URL!);
   url.pathname = `/${row!.db}`;
   url.username = "rm_owner";
   url.password = encodeURIComponent(OWNER_PASSWORD);

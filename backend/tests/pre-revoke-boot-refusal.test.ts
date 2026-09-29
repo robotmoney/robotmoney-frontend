@@ -105,6 +105,7 @@ async function bootApi(preload?: string): Promise<Boot> {
 }
 
 beforeAll(async () => {
+  // cluster admin: ALTER ROLE and saving/restoring role attributes are superuser-only
   const cluster = connectAdmin();
   try {
     savedRoles = await saveRoles(cluster);
