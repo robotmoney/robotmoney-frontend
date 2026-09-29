@@ -178,6 +178,6 @@ Trigger as v0.5.1 R9. Because neither `0080` nor the ledger repair is reversible
 
 ## R10. Completion
 
-1. Tag `v0.5.2` on the rc that passed R8.
+1. **Tag `v0.5.2` on the deployed commit as soon as R7 passes, before the R8 soak** (owner, 2026-09-29; v0.5.2 was tagged at the end of its R7). The soak grades a released version. A soak that fails is a rollback (R9) or a follow-up release, never an untag.
 2. Merge `releases-0.5.x` into `main` with a real merge commit. PRs 1046 and 1051 came from `main`, so their changes merge back without conflict.
 3. The rollout report: every step's evidence and every gate report.
