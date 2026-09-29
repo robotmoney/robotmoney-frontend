@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
+import { fixtureDb } from "../support/fixture-db.ts";
 import { handleAnalytics } from "../../src/api/routes/analytics.ts";
 import { requireProducerApiConfig } from "../../src/producer/index.ts";
 import { hashKey } from "../../src/lib/keys.ts";
@@ -367,13 +368,13 @@ test("forced mid-operation error rolls back the WHOLE mutation (nothing persists
   // (already-executed) INSERT must be undone, and so must the artifacts.
   const good = `sig-${rid()}`;
   const runId = await beginLedgerRun("1999-01-03", "rollback-run");
-  await sql`
+  await fixtureDb`
     CREATE OR REPLACE FUNCTION rmtest_boom() RETURNS trigger AS $$
     BEGIN
       IF NEW.signal_key = 'zz-boom' THEN RAISE EXCEPTION 'forced mid-operation failure'; END IF;
       RETURN NEW;
     END $$ LANGUAGE plpgsql`;
-  await sql`CREATE TRIGGER rmtest_boom_trg BEFORE INSERT ON research_signals FOR EACH ROW EXECUTE FUNCTION rmtest_boom()`;
+  await fixtureDb`CREATE TRIGGER rmtest_boom_trg BEFORE INSERT ON research_signals FOR EACH ROW EXECUTE FUNCTION rmtest_boom()`;
   try {
     const body = packageBody({ runId, asof: "1999-01-03", researchSignals: [
       { key: good, date: "1999-01-03", payload: { v: 1 } }, // executes first
@@ -388,8 +389,8 @@ test("forced mid-operation error rolls back the WHOLE mutation (nothing persists
     const [{ r }] = await sql`SELECT COUNT(*)::int AS r FROM analytics_report_snapshots WHERE run_id = ${runId}::bigint`;
     expect(r).toBe(0);
   } finally {
-    await sql`DROP TRIGGER IF EXISTS rmtest_boom_trg ON research_signals`;
-    await sql`DROP FUNCTION IF EXISTS rmtest_boom()`;
+    await fixtureDb`DROP TRIGGER IF EXISTS rmtest_boom_trg ON research_signals`;
+    await fixtureDb`DROP FUNCTION IF EXISTS rmtest_boom()`;
   }
 });
 

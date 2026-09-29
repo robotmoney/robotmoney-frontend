@@ -30,6 +30,7 @@ import { connect, createServer, type AddressInfo } from "node:net";
 import { join } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import * as epoch from "../src/swarm/domain.ts";
 import * as stream from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
@@ -170,7 +171,7 @@ async function upgradeAttempt(query: string, headers: Record<string, string>) {
 // the stream admits it. Provisioned once; the rotation cases use their own.
 let TOKEN = "";
 beforeAll(async () => {
-  TOKEN = (await provisionAutomationToken("rm_stream_ws", ["read_subjects", "read_sessions", "lifecycle_transitions"])).token;
+  TOKEN = (await provisionAutomationToken("rm_stream_ws", ["read_subjects", "read_sessions", "lifecycle_transitions"], { db: fixtureDb })).token;
 });
 
 /** A free loopback port, never :48787. */
@@ -547,7 +548,7 @@ test("the pushed-job table is gone, dropped by a forward migration rather than a
 
 test("the contract has no job-ack route, and the old path is not served", async () => {
   expect("jobAck" in ROUTES.swarm.scheduler).toBe(false);
-  const { token } = await provisionAutomationToken("rm_no_job_ack", ["lifecycle_transitions"]);
+  const { token } = await provisionAutomationToken("rm_no_job_ack", ["lifecycle_transitions"], { db: fixtureDb });
   // `null` is "not mine": the router answers it with its ordinary 404.
   expect(
     await handleSchedulerStream(
@@ -730,7 +731,7 @@ test("a database error ends the socket with resync `unavailable`, never a keepal
   const sub = await subscribeWs(FAST.ws, head, TOKEN);
   const first = await sub.next(1);
   expect(first[0]).toEqual({ type: "keepalive", head });
-  await sql`ALTER TABLE swarm_stream_head RENAME TO swarm_stream_head_hidden`;
+  await fixtureDb`ALTER TABLE swarm_stream_head RENAME TO swarm_stream_head_hidden`;
   try {
     const closed = await Promise.race([sub.closed, Bun.sleep(3_000).then(() => null)]);
     expect(closed, "the socket must close").not.toBeNull();
@@ -741,7 +742,7 @@ test("a database error ends the socket with resync `unavailable`, never a keepal
     // a stand-in, and nothing follows the resync.
     for (const f of sub.frames.slice(0, -1)) expect(f).toEqual({ type: "keepalive", head });
   } finally {
-    await sql`ALTER TABLE swarm_stream_head_hidden RENAME TO swarm_stream_head`;
+    await fixtureDb`ALTER TABLE swarm_stream_head_hidden RENAME TO swarm_stream_head`;
   }
 });
 
@@ -786,17 +787,20 @@ test("SUBSCRIBER HALF: a turnover committed and never delivered — its socket c
  * that process would have done after its COMMIT returned — a second write, a
  * publish — never happens.
  */
+// The trigger holds a transaction-level advisory lock while it sleeps, and the probe
+// reads pg_locks: the runtime pool acts as rm_app, which may not see another login's
+// wait_event in pg_stat_activity (a different session user), but pg_locks is open.
 async function killedInsideCommit(table: string, code: string): Promise<{ stdout: string }> {
-  await sql.unsafe(`
+  await fixtureDb.unsafe(`
     CREATE FUNCTION rm_test_sleep_at_commit() RETURNS trigger LANGUAGE plpgsql AS $t$
-    BEGIN PERFORM pg_sleep(1.5); RETURN NULL; END $t$;
+    BEGIN PERFORM pg_advisory_xact_lock(9182731); PERFORM pg_sleep(1.5); RETURN NULL; END $t$;
     CREATE CONSTRAINT TRIGGER rm_test_sleep_at_commit AFTER INSERT ON ${table}
       DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rm_test_sleep_at_commit();`);
   const sleeping = async (): Promise<number> =>
     Number(
       ((await sql`
-        SELECT count(*)::int AS n FROM pg_stat_activity
-         WHERE datname = current_database() AND pid <> pg_backend_pid() AND wait_event = 'PgSleep'`) as unknown as {
+        SELECT count(*)::int AS n FROM pg_locks
+         WHERE locktype = 'advisory' AND objid = 9182731 AND granted AND pid <> pg_backend_pid()`) as unknown as {
         n: number;
       }[])[0]!.n,
     );
@@ -824,7 +828,7 @@ async function killedInsideCommit(table: string, code: string): Promise<{ stdout
     expect(await sleeping()).toBe(0);
     return { stdout: await new Response(child.stdout).text() };
   } finally {
-    await sql.unsafe(`DROP TRIGGER IF EXISTS rm_test_sleep_at_commit ON ${table};
+    await fixtureDb.unsafe(`DROP TRIGGER IF EXISTS rm_test_sleep_at_commit ON ${table};
                       DROP FUNCTION IF EXISTS rm_test_sleep_at_commit();`);
   }
 }
@@ -871,7 +875,8 @@ test("RED CONTROL for the publisher kill: an event written AFTER the commit is l
   // it. Killed inside the first COMMIT, the state change stands and the event
   // never exists — which is exactly what the case above would see if the
   // turnover published after committing.
-  await sql.unsafe("CREATE TABLE rm_test_kill_marker (id int PRIMARY KEY)");
+  await fixtureDb.unsafe("CREATE TABLE rm_test_kill_marker (id int PRIMARY KEY)");
+  await fixtureDb.unsafe("GRANT SELECT, INSERT ON rm_test_kill_marker TO rm_app");
   try {
     const head = await epoch.streamHeadSequence();
     const { stdout } = await killedInsideCommit(
@@ -889,7 +894,7 @@ test("RED CONTROL for the publisher kill: an event written AFTER the commit is l
     expect(await epoch.streamHeadSequence()).toBe(head);
     expect(await epoch.eventsAbove(head)).toEqual([]);
   } finally {
-    await sql.unsafe("DROP TABLE rm_test_kill_marker");
+    await fixtureDb.unsafe("DROP TABLE rm_test_kill_marker");
   }
 });
 
@@ -898,11 +903,11 @@ test("RED CONTROL for the publisher kill: an event written AFTER the commit is l
 // ─────────────────────────────────────────────────────────────────────────────
 
 test("the full read needs read_subjects AND read_sessions, and the scheduler's token has both", async () => {
-  const { token } = await provisionAutomationToken("rm_stream_reader", ["read_subjects", "read_sessions"]);
+  const { token } = await provisionAutomationToken("rm_stream_reader", ["read_subjects", "read_sessions"], { db: fixtureDb });
   const ok = await handleSchedulerStream(get("/api/swarm/scheduler/full-read", token), url("/api/swarm/scheduler/full-read"));
   expect((ok as { status: number }).status).toBe(200);
 
-  const { token: partial } = await provisionAutomationToken("rm_stream_partial", ["read_subjects"]);
+  const { token: partial } = await provisionAutomationToken("rm_stream_partial", ["read_subjects"], { db: fixtureDb });
   const refused = await handleSchedulerStream(
     get("/api/swarm/scheduler/full-read", partial),
     url("/api/swarm/scheduler/full-read"),
@@ -924,9 +929,9 @@ test("the analytics producer's and the operator's tokens read nothing from the s
   // hold only their own (migration 0078). A valid, store-issued token of the
   // wrong holder is refused exactly like a forged one.
   const producer = await provisionAutomationToken("rm_stream_holders", ["analytics_ingestion"], {
-    holder: "analytics-producer",
+    db: fixtureDb, holder: "analytics-producer",
   });
-  const operator = await provisionAutomationToken("rm_stream_holders", ["admin"], { holder: "operator" });
+  const operator = await provisionAutomationToken("rm_stream_holders", ["admin"], { db: fixtureDb, holder: "operator" });
   for (const token of [producer.token, operator.token]) {
     const refused = await handleSchedulerStream(
       get("/api/swarm/scheduler/full-read", token),
@@ -943,7 +948,7 @@ test("a token rotated while the subscription is open closes the socket at the ne
   // the scheduler's token against the token store at every keepalive. It
   // closes when the token is revoked or rotated."
   const rights = ["read_subjects", "read_sessions"] as const;
-  const { token } = await provisionAutomationToken("rm_stream_rotated", [...rights]);
+  const { token } = await provisionAutomationToken("rm_stream_rotated", [...rights], { db: fixtureDb });
   const head = await epoch.streamHeadSequence();
 
   // Control: an unrotated token is served keepalive after keepalive.
@@ -955,7 +960,7 @@ test("a token rotated while the subscription is open closes the socket at the ne
   const sub = await subscribeWs(FAST.ws, head, token);
   expect((await sub.next(1)).map((f) => f.type)).toEqual(["keepalive"]);
   const before = sub.frames.length;
-  await provisionAutomationToken("rm_stream_rotated", [...rights]); // the rotation
+  await provisionAutomationToken("rm_stream_rotated", [...rights], { db: fixtureDb }); // the rotation
   const closed = await Promise.race([sub.closed, Bun.sleep(2_000).then(() => null)]);
   expect(closed, "the socket must CLOSE, not keep serving the rotated token").toEqual({
     code: stream.SCHEDULER_STREAM_CLOSE.tokenRevoked,
@@ -971,7 +976,7 @@ test("a token rotated while the subscription is open closes the socket at the ne
 test("a token REVOKED while the subscription is open closes the socket at the next keepalive", async () => {
   // Revocation removes the token's row (rm_owner, on this file's own copy:
   // no runtime role may delete, D55 (6)). The next re-check finds no grant.
-  const { token } = await provisionAutomationToken("rm_stream_revoked", ["read_subjects", "read_sessions"]);
+  const { token } = await provisionAutomationToken("rm_stream_revoked", ["read_subjects", "read_sessions"], { db: fixtureDb });
   const head = await epoch.streamHeadSequence();
   const sub = await subscribeWs(FAST.ws, head, token);
   await sub.next(1);
@@ -989,7 +994,7 @@ test("a token rotated while events are FLOWING closes the socket too — traffic
   // ever idle for a keepalive interval: under the old placement the rotated
   // token read on for as long as the traffic lasted.
   const rights = ["read_subjects", "read_sessions"] as const;
-  const { token } = await provisionAutomationToken("rm_stream_rotated_busy", [...rights]);
+  const { token } = await provisionAutomationToken("rm_stream_rotated_busy", [...rights], { db: fixtureDb });
   const head = await epoch.streamHeadSequence();
   let why = null as string | null; // assigned in a callback; the cast stops TS narrowing it to null
   const server = streamServer({ keepaliveMs: 100, pollMs: 10, onEnd: (w) => void (why = w) });
@@ -1008,7 +1013,7 @@ test("a token rotated while events are FLOWING closes the socket too — traffic
     expect(open.map((f) => f.type)).toEqual(["event", "event", "event", "event", "event"]);
 
     const at = sub.frames.length;
-    await provisionAutomationToken("rm_stream_rotated_busy", [...rights]); // the rotation
+    await provisionAutomationToken("rm_stream_rotated_busy", [...rights], { db: fixtureDb }); // the rotation
     const pumpedAtRotation = pumped;
     const closed = await Promise.race([sub.closed, Bun.sleep(3_000).then(() => null)]);
     expect(closed?.code, "the socket must CLOSE while events are still flowing").toBe(stream.SCHEDULER_STREAM_CLOSE.tokenRevoked);
@@ -1024,7 +1029,7 @@ test("a token rotated while events are FLOWING closes the socket too — traffic
 });
 
 test("the route serves the same four parts and cursor the module does", async () => {
-  const { token } = await provisionAutomationToken("rm_stream_route", ["read_subjects", "read_sessions"]);
+  const { token } = await provisionAutomationToken("rm_stream_route", ["read_subjects", "read_sessions"], { db: fixtureDb });
   const res = (await handleSchedulerStream(
     get("/api/swarm/scheduler/full-read", token),
     url("/api/swarm/scheduler/full-read"),
@@ -1079,9 +1084,9 @@ test("the token travels ONLY in the upgrade's Authorization header: a token in t
 
 test("only the scheduler's own token with both read rights opens the socket: forged, other holders' and narrowed tokens are 403", async () => {
   const head = await epoch.streamHeadSequence();
-  const producer = await provisionAutomationToken("rm_stream_holders_ws", ["analytics_ingestion"], { holder: "analytics-producer" });
-  const operator = await provisionAutomationToken("rm_stream_holders_ws", ["admin"], { holder: "operator" });
-  const narrowed = await provisionAutomationToken("rm_stream_narrow_ws", ["read_subjects"]);
+  const producer = await provisionAutomationToken("rm_stream_holders_ws", ["analytics_ingestion"], { db: fixtureDb, holder: "analytics-producer" });
+  const operator = await provisionAutomationToken("rm_stream_holders_ws", ["admin"], { db: fixtureDb, holder: "operator" });
+  const narrowed = await provisionAutomationToken("rm_stream_narrow_ws", ["read_subjects"], { db: fixtureDb });
   for (const token of ["rmat_forged", producer.token, operator.token, narrowed.token]) {
     const r = await upgradeAttempt(`?cursor=${head}`, { Authorization: `Bearer ${token}` });
     expect({ upgraded: r.upgraded, status: r.status }).toEqual({ upgraded: false, status: 403 });
@@ -1323,7 +1328,7 @@ describe("the real api process", () => {
   }, 30_000);
 
   test("REVOKED AT THE KEEPALIVE: the api closes an open socket with the token-revoked code once the token's row is gone", async () => {
-    const { token } = await provisionAutomationToken("rm_stream_api_revoked", ["read_subjects", "read_sessions"]);
+    const { token } = await provisionAutomationToken("rm_stream_api_revoked", ["read_subjects", "read_sessions"], { db: fixtureDb });
     const head = await epoch.streamHeadSequence();
     const sub = await subscribeWs(api.base.replace(/^http/, "ws"), head, token);
     expect((await sub.next(1, 8_000))[0]).toMatchObject({ type: "keepalive", head });
