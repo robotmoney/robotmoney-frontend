@@ -98,7 +98,6 @@ const COMMENTS_SNAPSHOT_N_LACKS: readonly string[] = [
   "pg_class public.swarm_briefs.report_snapshot_id",
   "pg_class public.swarm_consensus_receipts",
   "pg_class public.swarm_judge_config.third_party_enabled",
-  "pg_class public.swarm_judge_fault_injection",
   "pg_class public.swarm_member_keys",
   "pg_class public.swarm_members.role",
   "pg_class public.swarm_recommendations.final",

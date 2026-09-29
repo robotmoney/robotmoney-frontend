@@ -220,6 +220,7 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     "0089_revoke_runtime_delete.sql",
     "0090_stream_events_retention_comment.sql",
     "0091_rm_worker_wallet_evidence_insert.sql",
+    "0092_drop_swarm_judge_fault_injection.sql",
   ];
 
   test("the job ledger 0070 created is dropped by a later file, never by deleting 0070 (criterion 105)", () => {

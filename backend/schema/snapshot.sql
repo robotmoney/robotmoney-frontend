@@ -2417,34 +2417,6 @@ COMMENT ON CONSTRAINT swarm_judge_config_mode_requires_model_check ON public.swa
 
 
 --
--- Name: swarm_judge_fault_injection; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.swarm_judge_fault_injection (
-    id smallint DEFAULT 1 NOT NULL,
-    enabled boolean DEFAULT false NOT NULL,
-    body text DEFAULT ''::text NOT NULL,
-    remaining integer DEFAULT 0 NOT NULL,
-    session_id uuid,
-    note text,
-    updated_by text,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT swarm_judge_fault_injection_body_check CHECK ((length(body) <= 20000)),
-    CONSTRAINT swarm_judge_fault_injection_check CHECK (((NOT enabled) OR ((length(btrim(body)) > 0) AND (remaining > 0)))),
-    CONSTRAINT swarm_judge_fault_injection_id_check CHECK ((id = 1)),
-    CONSTRAINT swarm_judge_fault_injection_note_check CHECK (((note IS NULL) OR (length(note) <= 500))),
-    CONSTRAINT swarm_judge_fault_injection_remaining_check CHECK (((remaining >= 0) AND (remaining <= 100)))
-);
-
-
---
--- Name: TABLE swarm_judge_fault_injection; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.swarm_judge_fault_injection IS 'TEST-ONLY judge fault-injection lever (R13/AC-E2E-06). Inert unless SWARM_JUDGE_FAULT_INJECTION is set in the judging process, and refused on an acceptance path (RM_ENV=prod) unless SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN is also set. Every transition writes an audit_log row; enabling it on staging is a recorded acceptance mutation.';
-
-
---
 -- Name: swarm_member_avatars; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4321,14 +4293,6 @@ ALTER TABLE ONLY public.swarm_consensus_receipts
 
 ALTER TABLE ONLY public.swarm_judge_config
     ADD CONSTRAINT swarm_judge_config_pkey PRIMARY KEY (id);
-
-
---
--- Name: swarm_judge_fault_injection swarm_judge_fault_injection_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.swarm_judge_fault_injection
-    ADD CONSTRAINT swarm_judge_fault_injection_pkey PRIMARY KEY (id);
 
 
 --

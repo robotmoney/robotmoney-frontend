@@ -118,13 +118,6 @@ INSERT INTO public.swarm_judge_config (id, mode, min_takes, model, updated_at, t
 
 
 --
--- Data for Name: swarm_judge_fault_injection; Type: TABLE DATA; Schema: public; Owner: rm_owner
---
-
-INSERT INTO public.swarm_judge_fault_injection (id, enabled, body, remaining, session_id, note, updated_by, updated_at) VALUES (1, false, '', 0, NULL, NULL, NULL, '2026-09-23 04:55:53.108409+00');
-
-
---
 -- Data for Name: swarm_stream_head; Type: TABLE DATA; Schema: public; Owner: rm_owner
 --
 
