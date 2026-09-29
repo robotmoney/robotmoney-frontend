@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { canonicalCsv, buildManifest, type EdgarSeedRow } from "../src/analytics/extract/edgar-seed.ts";
 import { bootstrapEdgarSeed, repopulateEdgarSeed, repairEdgarSeed } from "../src/analytics/edgar-seed-loader.ts";
@@ -57,7 +58,7 @@ beforeEach(async () => {
     },
   });
   cfg = { baseUrl: `http://localhost:${server.port}`, token: TOKEN };
-  await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
 });
 
 afterEach(async () => {
@@ -65,14 +66,14 @@ afterEach(async () => {
   if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
   delete process.env.EDGAR_SEED_PATH;
   delete process.env.EDGAR_SEED_MANIFEST_PATH;
-  await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
 });
 
 test("repopulation restores ONLY a deleted subset; final DB projection matches the manifest exactly", async () => {
   // Fully seed, then delete a deterministic subset (the middle two months) to
   // simulate a partial data-loss scenario.
   await bootstrapEdgarSeed(cfg);
-  await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA' AND date IN ('2022-02-28', '2022-03-31')`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA' AND date IN ('2022-02-28', '2022-03-31')`;
   const afterDelete = await sql`SELECT count(*)::int AS n FROM raw_indicator_history WHERE indicator = 'MNA'`;
   expect(Number(afterDelete[0]!.n)).toBe(2);
 
@@ -104,8 +105,8 @@ test("repopulation on a completely empty DB reports every row as seeded, none ex
 test("repopulation reports a REJECTED count for a month whose persisted real value disagrees with the artifact — and never overwrites it", async () => {
   await bootstrapEdgarSeed(cfg);
   // Simulate a later REAL correction that diverges from the committed artifact's value.
-  await sql`UPDATE raw_indicator_history SET value = 12345 WHERE indicator = 'MNA' AND date = '2022-03-31'`;
-  await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA' AND date = '2022-04-30'`;
+  await fixtureDb`UPDATE raw_indicator_history SET value = 12345 WHERE indicator = 'MNA' AND date = '2022-03-31'`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA' AND date = '2022-04-30'`;
 
   const report = await repopulateEdgarSeed(cfg);
   expect(report.seeded).toBe(1); // 2022-04-30 restored
@@ -121,7 +122,7 @@ test("repopulation reports a REJECTED count for a month whose persisted real val
 
 test("missing credentials: repopulation client gets 401 and writes zero rows", async () => {
   await bootstrapEdgarSeed(cfg);
-  await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA' AND date = '2022-02-28'`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA' AND date = '2022-02-28'`;
 
   await expect(repopulateEdgarSeed({ baseUrl: cfg.baseUrl, token: null })).rejects.toThrow(/HTTP 401/);
 
@@ -131,7 +132,7 @@ test("missing credentials: repopulation client gets 401 and writes zero rows", a
 
 test("wrong credentials: repopulation client gets 403 and writes zero rows", async () => {
   await bootstrapEdgarSeed(cfg);
-  await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA' AND date = '2022-02-28'`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA' AND date = '2022-02-28'`;
 
   await expect(repopulateEdgarSeed({ baseUrl: cfg.baseUrl, token: "wrong-token" })).rejects.toThrow(/HTTP 403/);
 
@@ -141,7 +142,7 @@ test("wrong credentials: repopulation client gets 403 and writes zero rows", asy
 
 test("repopulation is idempotent: a second run over an already-restored DB seeds nothing further", async () => {
   await bootstrapEdgarSeed(cfg);
-  await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA' AND date = '2022-02-28'`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA' AND date = '2022-02-28'`;
 
   const first = await repopulateEdgarSeed(cfg);
   expect(first.seeded).toBe(1);
@@ -163,7 +164,7 @@ test("repopulation is idempotent: a second run over an already-restored DB seeds
 test("repair: after a bulk overwrite clobbered every persisted month, gap-fill repopulation restores NOTHING (it reports them all as rejected) — this is the hole the repair path fills", async () => {
   await bootstrapEdgarSeed(cfg);
   // A bad full-sweep batch: every archived month rewritten to a degenerate 0.
-  await sql`UPDATE raw_indicator_history SET value = 0, source = 'live' WHERE indicator = 'MNA'`;
+  await fixtureDb`UPDATE raw_indicator_history SET value = 0, source = 'live' WHERE indicator = 'MNA'`;
 
   const gapFill = await repopulateEdgarSeed(cfg);
   expect(gapFill.seeded).toBe(0);
@@ -201,7 +202,7 @@ test("repair: is idempotent and reports zero restored once the floor already mat
 
 test("repair: refuses without the analytics-provider credential and changes zero rows", async () => {
   await bootstrapEdgarSeed(cfg);
-  await sql`UPDATE raw_indicator_history SET value = 0 WHERE indicator = 'MNA'`;
+  await fixtureDb`UPDATE raw_indicator_history SET value = 0 WHERE indicator = 'MNA'`;
 
   await expect(repairEdgarSeed({ baseUrl: cfg.baseUrl, token: null })).rejects.toThrow(/HTTP 401/);
   await expect(repairEdgarSeed({ baseUrl: cfg.baseUrl, token: "wrong-token" })).rejects.toThrow(/HTTP 403/);

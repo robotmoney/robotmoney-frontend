@@ -23,6 +23,7 @@
 import { test, expect, beforeAll } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import * as epoch from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
@@ -110,7 +111,7 @@ test("a transition whose transaction aborts leaves no event and no state change"
   // Make the successor's brief insert fail, so the turnover transaction rolls
   // back AFTER it has closed the epoch and written its event. A real abort of a
   // real transition, not a hand-rolled transaction that imitates one.
-  await sql.unsafe(`
+  await fixtureDb.unsafe(`
     CREATE FUNCTION rm_test_refuse_brief() RETURNS trigger LANGUAGE plpgsql AS $t$
     BEGIN RAISE EXCEPTION 'planted failure'; END $t$;
     CREATE TRIGGER rm_test_refuse_brief BEFORE INSERT ON swarm_briefs
@@ -124,7 +125,7 @@ test("a transition whose transaction aborts leaves no event and no state change"
     }
     expect(threw).toBe(true);
   } finally {
-    await sql.unsafe(`DROP TRIGGER rm_test_refuse_brief ON swarm_briefs; DROP FUNCTION rm_test_refuse_brief();`);
+    await fixtureDb.unsafe(`DROP TRIGGER rm_test_refuse_brief ON swarm_briefs; DROP FUNCTION rm_test_refuse_brief();`);
   }
 
   // Nothing happened: no event, and the epoch is still collecting.

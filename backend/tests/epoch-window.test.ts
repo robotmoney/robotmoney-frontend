@@ -13,6 +13,7 @@
 //    enforces it with a uniqueness constraint."
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import * as epoch from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
@@ -313,7 +314,7 @@ test("a take stamped after the window is not counted as present when absences ar
   const submitted = await submitTake(late, date, subjectId);
   expect(submitted.ok).toBe(true);
   const closes = (await sessionRow(sessionId)).window_closes_at;
-  await sql`UPDATE swarm_recommendations
+  await fixtureDb`UPDATE swarm_recommendations
                SET received_at = ${closes}::timestamptz + interval '1 second'
              WHERE session_id = ${sessionId} AND member_id = ${late.id}`;
 
@@ -329,7 +330,7 @@ test("a take stamped after the window is not counted as present when absences ar
 test("the database refuses a second collecting session for one subject", async () => {
   const { subjectId } = await openedEpoch("win_unique");
   await refusedByDatabase(() =>
-    sql`INSERT INTO swarm_sessions (subject_id, subject_name, state, window_closes_at)
+    fixtureDb`INSERT INTO swarm_sessions (subject_id, subject_name, state, window_closes_at)
         VALUES (${subjectId}, ${subjectId}, 'collecting', now() + interval '1 hour')`);
 });
 

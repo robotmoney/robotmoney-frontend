@@ -32,6 +32,7 @@
 // and could call an off-grid close "on" it.
 import { test, expect, beforeAll } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import * as epoch from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
@@ -545,7 +546,7 @@ test("the judging duration in force is captured on the closing epoch, and a late
 
 /** Run `transition` with every event insert refused at COMMIT; return the error it raised. */
 async function abortedAtCommit(transition: () => Promise<unknown>): Promise<string | null> {
-  await sql.unsafe(`
+  await fixtureDb.unsafe(`
     CREATE FUNCTION rm_test_refuse_at_commit() RETURNS trigger LANGUAGE plpgsql AS $t$
     BEGIN RAISE EXCEPTION 'planted commit-time failure after event %', NEW.seq; END $t$;
     CREATE CONSTRAINT TRIGGER rm_test_refuse_at_commit AFTER INSERT ON swarm_stream_events
@@ -556,7 +557,7 @@ async function abortedAtCommit(transition: () => Promise<unknown>): Promise<stri
   } catch (e) {
     return (e as Error).message;
   } finally {
-    await sql.unsafe(`DROP TRIGGER rm_test_refuse_at_commit ON swarm_stream_events;
+    await fixtureDb.unsafe(`DROP TRIGGER rm_test_refuse_at_commit ON swarm_stream_events;
                       DROP FUNCTION rm_test_refuse_at_commit();`);
   }
 }
