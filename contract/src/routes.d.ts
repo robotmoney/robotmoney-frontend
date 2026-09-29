@@ -84,12 +84,6 @@ export const ROUTES: {
       regime: string;
       subject: string;
       subjectFixtures: string;
-      open: string;
-      brief: string;
-      close: string;
-      aggregate: string;
-      publish: string;
-      enqueueJob: string;
       subjects: string;
       subjectUpdate: string;
       subjectDeactivate: string;

@@ -266,12 +266,10 @@ export const ROUTES = {
       // and the independent producer owns its own cadence.
       subject: "/api/swarm/admin/subject", // POST — ensure a subject row
       subjectFixtures: "/api/swarm/admin/subject_fixtures", // POST — seed reference-shaped demo fixtures
-      open: "/api/swarm/admin/open", // POST — open a session
-      brief: "/api/swarm/admin/brief", // POST — publish the brief, open the window
-      close: "/api/swarm/admin/close", // POST — close the submission window
-      aggregate: "/api/swarm/admin/aggregate", // POST — deterministic rollup
-      publish: "/api/swarm/admin/publish", // POST — publish the session
-      enqueueJob: "/api/swarm/admin/enqueue-job", // POST — drive lifecycle via the worker job queue
+      // NO OPERATOR SESSION ACTIONS (D55 (4)). The generic `open`, `brief`,
+      // `close`, `aggregate`, `publish` and `enqueue-job` admin actions are not
+      // in this table: the api answers each 410, and only `system-scheduler`
+      // drives an epoch, through the five `epoch*` routes below.
 
       // Admin surface (issue #152): topics/members/roster/lifecycle/audit.
       // Distinct sub-resource paths (never a single-segment :action) so they
