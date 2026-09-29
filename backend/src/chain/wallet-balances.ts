@@ -31,7 +31,7 @@ import {
   type KeyedAssetRead,
   type Provenance,
 } from "./wallet-valuation.ts";
-import { ASSET_PRICE_TIME_BASIS } from "../ops/asset-prices.ts";
+import { ASSET_PRICE_TIME_BASIS } from "../ops/asset-price-basis.ts";
 import { ttlCached } from "./ttl-cache.ts";
 
 // Provenance ('seed' = a pre-launch backfilled history row, never a live chain
