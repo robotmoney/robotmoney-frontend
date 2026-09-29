@@ -343,7 +343,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "src/ops/gap-detector",
     "src/ops/wallet-backfill",
     "src/projects/smoke-seed",
-    "src/swarm/admin",
     "src/swarm/domain",
     "src/worker/handlers/projects",
   ];
