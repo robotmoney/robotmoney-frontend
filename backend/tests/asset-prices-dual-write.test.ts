@@ -12,6 +12,7 @@ import type { ChainAmount, KeyedAssetRead } from "../src/chain/wallet-valuation.
 import { resolveTrackedAssets } from "../src/config.ts";
 import { sampleWalletBalances } from "../src/worker/handlers/wallet.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -33,11 +34,11 @@ const resolvedBlock = (date: string) => ({
 });
 
 async function cleanup(): Promise<void> {
-  await sql`DELETE FROM wallet_balance_samples WHERE sample_date = ${D1}`;
-  await sql`DELETE FROM wallet_sleeve_samples WHERE sample_date = ${D1}`;
-  await sql`DELETE FROM wallet_backfill_state WHERE sample_date = ${D1}`;
-  await sql`DELETE FROM chain_day_blocks WHERE sample_date = ${D1}`;
-  await sql`DELETE FROM asset_prices WHERE price_date = ${D1}`;
+  await fixtureDb`DELETE FROM wallet_balance_samples WHERE sample_date = ${D1}`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples WHERE sample_date = ${D1}`;
+  await fixtureDb`DELETE FROM wallet_backfill_state WHERE sample_date = ${D1}`;
+  await fixtureDb`DELETE FROM chain_day_blocks WHERE sample_date = ${D1}`;
+  await fixtureDb`DELETE FROM asset_prices WHERE price_date = ${D1}`;
 }
 
 beforeEach(async () => {
@@ -96,7 +97,7 @@ test("a repaired day dual-writes asset_prices for every priced symbol, source co
 });
 
 test("a disagreement against an already-persisted asset_prices row is reported, not silently swallowed, offline", async () => {
-  await sql`
+  await fixtureDb`
     INSERT INTO asset_prices
       (price_date, symbol, time_basis, price_usd, currency, source, observed_at, fetched_at, config_identity)
     VALUES
@@ -121,7 +122,7 @@ test("a disagreement against the PRIOR wallet_balance_samples row is reported â€
   // An incomplete prior snapshot: one symbol present at a stale price, every
   // other manifest symbol missing â€” `before.complete` is false, so the
   // rebuild branch runs and the pre-delete comparison fires.
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${D1}, 'WETH', 1, 999, 999, 'live', ${new Date(BLOCK_TS * 1000).toISOString()})
   `;
@@ -134,7 +135,7 @@ test("a disagreement against the PRIOR wallet_balance_samples row is reported â€
 });
 
 test("no disagreement is reported when the freshly repaired price matches what asset_prices already held", async () => {
-  await sql`
+  await fixtureDb`
     INSERT INTO asset_prices
       (price_date, symbol, time_basis, price_usd, currency, source, observed_at, fetched_at, config_identity)
     VALUES
