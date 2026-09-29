@@ -26,6 +26,7 @@ import { createHash, createSign, generateKeyPairSync, randomBytes, type KeyObjec
 import postgres from "postgres";
 import { provisionAutomationToken } from "../src/db/automation-tokens.ts";
 import { writeRedControlPreload } from "./support/automation-auth.ts";
+import { harnessConnection } from "./support/cluster.ts";
 import { restoreRoles, saveRoles, type SavedRole } from "./fixtures/releases/release-fixture.ts";
 import {
   BACKEND_DIR,
@@ -40,7 +41,7 @@ const APP = { name: "rm_app", password: `rm_app_revocation_${randomBytes(6).toSt
 const ORIGIN = "http://localhost";
 
 let name = "";
-let admin: postgres.Sql<{}>;
+let owner: postgres.Sql<{}>;
 let savedRoles: SavedRole[] = [];
 let operator = "";
 
@@ -216,7 +217,7 @@ async function offered(api: Api): Promise<string[]> {
 }
 
 async function tombstones(ids: { passkey: string }): Promise<{ passkeyRevoked: boolean; liveSessions: number; sessions: number }> {
-  const [row] = (await admin`
+  const [row] = (await owner`
     SELECT (SELECT revoked_at IS NOT NULL FROM admin_passkey WHERE id = ${ids.passkey}) AS "passkeyRevoked",
            (SELECT count(*)::int FROM admin_session WHERE revoked_at IS NULL) AS "liveSessions",
            (SELECT count(*)::int FROM admin_session) AS sessions`) as unknown as {
@@ -228,6 +229,7 @@ async function tombstones(ids: { passkey: string }): Promise<{ passkeyRevoked: b
 }
 
 beforeAll(async () => {
+  // cluster admin: saving and altering role logins is superuser-only
   const cluster = connectAdmin();
   try {
     savedRoles = await saveRoles(cluster);
@@ -236,14 +238,14 @@ beforeAll(async () => {
     await cluster.end({ timeout: 5 });
   }
   name = await createSnapshotTemplate("admin_revocation");
-  admin = connectAdmin(name);
+  owner = harnessConnection(name);
   // The operator's store token (smoke spec §3), provisioned as the owner would.
-  operator = (await provisionAutomationToken(`rm_revocation_${process.pid}`, ["admin"], { holder: "operator", db: admin }))
+  operator = (await provisionAutomationToken(`rm_revocation_${process.pid}`, ["admin"], { holder: "operator", db: owner }))
     .token;
 }, 120_000);
 
 afterAll(async () => {
-  await admin?.end({ timeout: 5 });
+  await owner?.end({ timeout: 5 });
   const cluster = connectAdmin();
   try {
     await restoreRoles(cluster, savedRoles);
@@ -255,7 +257,7 @@ afterAll(async () => {
 
 describe("revocation is a tombstone, immediate, and needs no DELETE (D55 (6))", () => {
   test("the database is the snapshot's: rm_app holds UPDATE and no DELETE or TRUNCATE on the admin tables", async () => {
-    const rows = (await admin`
+    const rows = (await owner`
       SELECT t, has_table_privilege('rm_app', 'public.' || t, 'UPDATE') AS may_update,
              has_table_privilege('rm_app', 'public.' || t, 'DELETE') OR
              has_table_privilege('rm_app', 'public.' || t, 'TRUNCATE') AS may_delete
@@ -318,12 +320,12 @@ describe("revocation is a tombstone, immediate, and needs no DELETE (D55 (6))", 
       expect(await tombstones({ passkey: again.id })).toEqual({ passkeyRevoked: true, liveSessions: 0, sessions: 2 });
 
       // Every revocation is on file: both rotations audited, nothing removed.
-      const [{ n }] = (await admin`
+      const [{ n }] = (await owner`
         SELECT count(*)::int AS n FROM audit_log WHERE action IN ('change_admin_password', 'recover_admin_password')`) as unknown as {
         n: number;
       }[];
       expect(n).toBe(2);
-      const [{ passkeys }] = (await admin`SELECT count(*)::int AS passkeys FROM admin_passkey`) as unknown as {
+      const [{ passkeys }] = (await owner`SELECT count(*)::int AS passkeys FROM admin_passkey`) as unknown as {
         passkeys: number;
       }[];
       expect(passkeys).toBe(2);
@@ -342,7 +344,7 @@ describe("revocation is a tombstone, immediate, and needs no DELETE (D55 (6))", 
     );
     const api = await bootApi(preload);
     try {
-      const [{ hash }] = (await admin`SELECT pass_hash AS hash FROM admin_credential WHERE id = 1`) as unknown as {
+      const [{ hash }] = (await owner`SELECT pass_hash AS hash FROM admin_credential WHERE id = 1`) as unknown as {
         hash: string;
       }[];
       const changed = await call(
@@ -355,7 +357,7 @@ describe("revocation is a tombstone, immediate, and needs no DELETE (D55 (6))", 
       expect(changed.status).toBe(500);
       // The rotation rolled back with the refused DELETE: the old password
       // still opens the admin surface, the new one does not.
-      const [{ after }] = (await admin`SELECT pass_hash AS after FROM admin_credential WHERE id = 1`) as unknown as {
+      const [{ after }] = (await owner`SELECT pass_hash AS after FROM admin_credential WHERE id = 1`) as unknown as {
         after: string;
       }[];
       expect(after).toBe(hash);

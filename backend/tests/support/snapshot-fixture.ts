@@ -15,7 +15,7 @@ import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
-import { adminConnection, harnessUrl } from "./cluster.ts";
+import { adminConnection, harnessConnection, harnessUrl } from "./cluster.ts";
 import { bootstrapBlankDatabase, loadSnapshot, type Snapshot } from "../../src/db/schema-snapshot.ts";
 import { runMigrate, type MigrateRunResult, type MigrateRunSeams } from "../../scripts/migrate-run.ts";
 import { withTargetLock } from "./target-lock.ts";
@@ -62,9 +62,10 @@ export class ScratchDatabases {
     return pool;
   }
 
-  /** The cluster admin creates the database (and installs the provider's
-   *  pgcrypto where asked); nothing else is done as a superuser. */
+  /** The cluster admin creates the database; the provider's pgcrypto (where
+   *  asked) is installed by its owner, `rm_owner` (a trusted extension). */
   private async create(statement: string, name: string, provider = false): Promise<void> {
+    // cluster admin: CREATE DATABASE is the admin's job
     const admin = adminConnection();
     try {
       await admin.unsafe(statement);
@@ -73,7 +74,7 @@ export class ScratchDatabases {
     }
     this.names.push(name);
     if (provider) {
-      const db = adminConnection(name);
+      const db = harnessConnection(name);
       try {
         await db.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
       } finally {

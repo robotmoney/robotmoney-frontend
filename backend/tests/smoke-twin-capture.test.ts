@@ -34,7 +34,7 @@ import {
   probeCaptureTarget,
   READ_ONLY_PGOPTIONS,
 } from "../scripts/smoke-twin-capture.ts";
-import { adminUrl } from "./support/cluster.ts";
+import { adminConnection, harnessConnection, harnessUrl } from "./support/cluster.ts";
 
 describe("parseArgs", () => {
   test("defaults to the same backup dir resolveBackupFiles() defaults to", () => {
@@ -197,28 +197,27 @@ const savedUmask = process.umask(0o022);
 process.umask(savedUmask);
 
 describe("smoke:capture against the suite's PRIMARY — every non-readonly credential and the primary itself refuse", () => {
-  const base = new URL(adminUrl());
+  const base = new URL(harnessUrl("postgres"));
   const database = `smoke_capture_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
   let admin: postgres.Sql;
-  let adminDb: postgres.Sql;
+  let ownerDb: postgres.Sql;
   let dir: string;
   let envPath: string;
 
   beforeAll(async () => {
-    admin = postgres(base.toString(), { max: 1, onnotice: () => {} });
-    await admin.unsafe(`CREATE DATABASE ${database}`);
+    // cluster admin: CREATE DATABASE, ALTER/CREATE/DROP ROLE and role membership are superuser-only
+    admin = adminConnection();
+    await admin.unsafe(`CREATE DATABASE ${database} OWNER rm_owner`);
     // rm_readonly is cluster-wide (migration 0053 creates it with no password);
     // give it one for the length of this file, and a writer beside it.
     await admin.unsafe(`ALTER ROLE rm_readonly PASSWORD '${READONLY_PASSWORD}'`);
     await admin.unsafe(`DROP ROLE IF EXISTS ${WRITER}`);
     await admin.unsafe(`CREATE ROLE ${WRITER} LOGIN PASSWORD '${WRITER_PASSWORD}'`);
-    const u = new URL(base.toString());
-    u.pathname = `/${database}`;
-    adminDb = postgres(u.toString(), { max: 1, onnotice: () => {} });
-    await adminDb.unsafe("CREATE TABLE public.planted (id int PRIMARY KEY, note text)");
-    await adminDb.unsafe("INSERT INTO public.planted VALUES (1, 'before')");
-    await adminDb.unsafe("GRANT SELECT ON public.planted TO rm_readonly");
-    await adminDb.unsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON public.planted TO ${WRITER}`);
+    ownerDb = harnessConnection(database);
+    await ownerDb.unsafe("CREATE TABLE public.planted (id int PRIMARY KEY, note text)");
+    await ownerDb.unsafe("INSERT INTO public.planted VALUES (1, 'before')");
+    await ownerDb.unsafe("GRANT SELECT ON public.planted TO rm_readonly");
+    await ownerDb.unsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON public.planted TO ${WRITER}`);
     dir = mkdtempSync(join(tmpdir(), "rm-capture-primary-"));
     envPath = writeEnv(dir, base.hostname, base.port, database);
   });
@@ -226,7 +225,7 @@ describe("smoke:capture against the suite's PRIMARY — every non-readonly crede
   afterEach(() => process.umask(savedUmask));
 
   afterAll(async () => {
-    await adminDb.end({ timeout: 5 });
+    await ownerDb.end({ timeout: 5 });
     await admin.unsafe(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
     await admin.unsafe(`DROP ROLE IF EXISTS ${WRITER}`);
     await admin.unsafe("ALTER ROLE rm_readonly PASSWORD NULL");
@@ -250,7 +249,7 @@ describe("smoke:capture against the suite's PRIMARY — every non-readonly crede
   });
 
   test("rm_readonly holding INSERT on a table exits 2 as a non-readonly credential", async () => {
-    await adminDb.unsafe("GRANT INSERT ON public.planted TO rm_readonly");
+    await ownerDb.unsafe("GRANT INSERT ON public.planted TO rm_readonly");
     try {
       const out = freshOut();
       const r = await runCapture(["--out", out, "--env-file", envPath]);
@@ -259,7 +258,7 @@ describe("smoke:capture against the suite's PRIMARY — every non-readonly crede
       expect(r.stderr).toContain("table public.planted: INSERT");
       expect(existsSync(out)).toBe(false);
     } finally {
-      await adminDb.unsafe("REVOKE INSERT ON public.planted FROM rm_readonly");
+      await ownerDb.unsafe("REVOKE INSERT ON public.planted FROM rm_readonly");
     }
   });
 
@@ -267,10 +266,10 @@ describe("smoke:capture against the suite's PRIMARY — every non-readonly crede
   // only `UPDATE (note)` reads as clean there, yet `UPDATE planted SET note=…`
   // succeeds. The probe must see the column grant.
   test("rm_readonly holding a COLUMN-level UPDATE exits 2, and the grant really writes", async () => {
-    await adminDb.unsafe("GRANT UPDATE (note) ON public.planted TO rm_readonly");
+    await ownerDb.unsafe("GRANT UPDATE (note) ON public.planted TO rm_readonly");
     try {
       // Prove the shape is a real write capability, not a theoretical one.
-      const [t] = (await adminDb.unsafe(
+      const [t] = (await ownerDb.unsafe(
         "SELECT has_table_privilege('rm_readonly', 'public.planted', 'UPDATE') AS tbl, " +
           "has_any_column_privilege('rm_readonly', 'public.planted', 'UPDATE') AS col",
       )) as unknown as { tbl: boolean; col: boolean }[];
@@ -282,40 +281,40 @@ describe("smoke:capture against the suite's PRIMARY — every non-readonly crede
       expect(r.stderr).toContain("table public.planted: UPDATE");
       expect(existsSync(out)).toBe(false);
     } finally {
-      await adminDb.unsafe("REVOKE UPDATE (note) ON public.planted FROM rm_readonly");
+      await ownerDb.unsafe("REVOKE UPDATE (note) ON public.planted FROM rm_readonly");
     }
   });
 
   test("rm_readonly holding a COLUMN-level INSERT exits 2", async () => {
-    await adminDb.unsafe("GRANT INSERT (id) ON public.planted TO rm_readonly");
+    await ownerDb.unsafe("GRANT INSERT (id) ON public.planted TO rm_readonly");
     try {
       const r = await runCapture(["--out", freshOut(), "--env-file", envPath]);
       expect(r.code).toBe(2);
       expect(r.stderr).toContain("table public.planted: INSERT");
     } finally {
-      await adminDb.unsafe("REVOKE INSERT (id) ON public.planted FROM rm_readonly");
+      await ownerDb.unsafe("REVOKE INSERT (id) ON public.planted FROM rm_readonly");
     }
   });
 
   test("rm_readonly holding TRIGGER on a table exits 2", async () => {
-    await adminDb.unsafe("GRANT TRIGGER ON public.planted TO rm_readonly");
+    await ownerDb.unsafe("GRANT TRIGGER ON public.planted TO rm_readonly");
     try {
       const r = await runCapture(["--out", freshOut(), "--env-file", envPath]);
       expect(r.code).toBe(2);
       expect(r.stderr).toContain("table public.planted: TRIGGER");
     } finally {
-      await adminDb.unsafe("REVOKE TRIGGER ON public.planted FROM rm_readonly");
+      await ownerDb.unsafe("REVOKE TRIGGER ON public.planted FROM rm_readonly");
     }
   });
 
   test("rm_readonly holding MAINTAIN on a table exits 2", async () => {
-    await adminDb.unsafe("GRANT MAINTAIN ON public.planted TO rm_readonly");
+    await ownerDb.unsafe("GRANT MAINTAIN ON public.planted TO rm_readonly");
     try {
       const r = await runCapture(["--out", freshOut(), "--env-file", envPath]);
       expect(r.code).toBe(2);
       expect(r.stderr).toContain("table public.planted: MAINTAIN");
     } finally {
-      await adminDb.unsafe("REVOKE MAINTAIN ON public.planted FROM rm_readonly");
+      await ownerDb.unsafe("REVOKE MAINTAIN ON public.planted FROM rm_readonly");
     }
   });
 
@@ -348,24 +347,24 @@ describe("smoke:capture against the suite's PRIMARY — every non-readonly crede
   });
 
   test("rm_readonly holding CREATE on a schema exits 2", async () => {
-    await adminDb.unsafe("GRANT CREATE ON SCHEMA public TO rm_readonly");
+    await ownerDb.unsafe("GRANT CREATE ON SCHEMA public TO rm_readonly");
     try {
       const r = await runCapture(["--out", freshOut(), "--env-file", envPath]);
       expect(r.code).toBe(2);
       expect(r.stderr).toContain("schema public: CREATE");
     } finally {
-      await adminDb.unsafe("REVOKE CREATE ON SCHEMA public FROM rm_readonly");
+      await ownerDb.unsafe("REVOKE CREATE ON SCHEMA public FROM rm_readonly");
     }
   });
 
   test("rm_readonly holding CREATE on the database exits 2", async () => {
-    await admin.unsafe(`GRANT CREATE ON DATABASE ${database} TO rm_readonly`);
+    await ownerDb.unsafe(`GRANT CREATE ON DATABASE ${database} TO rm_readonly`);
     try {
       const r = await runCapture(["--out", freshOut(), "--env-file", envPath]);
       expect(r.code).toBe(2);
       expect(r.stderr).toContain(`database ${database}: CREATE`);
     } finally {
-      await admin.unsafe(`REVOKE CREATE ON DATABASE ${database} FROM rm_readonly`);
+      await ownerDb.unsafe(`REVOKE CREATE ON DATABASE ${database} FROM rm_readonly`);
     }
   });
 
@@ -427,7 +426,7 @@ describe("smoke:capture against the suite's PRIMARY — every non-readonly crede
     } finally {
       await db.end({ timeout: 5 });
     }
-    const rows = await adminDb.unsafe("SELECT id FROM public.planted ORDER BY id");
+    const rows = await ownerDb.unsafe("SELECT id FROM public.planted ORDER BY id");
     expect(rows.map((r) => r.id)).toEqual([1]);
   });
 

@@ -49,7 +49,7 @@ import { loadSnapshot } from "../src/db/schema-snapshot.ts";
 import { acquireTargetLock, readTargetState } from "../src/db/target-lock.ts";
 import { instancePaths } from "../../scripts/lib/smoke-state.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { adminExec, adminUrl, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminExec, harnessConnection, harnessUrl, roleUrl, ROLE_PASSWORD } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -78,10 +78,9 @@ const connections = new Map<RuntimeRole, postgres.Sql<{}>>();
 beforeAll(async () => {
   const [{ db }] = (await sql`SELECT current_database() AS db`) as unknown as { db: string }[];
   for (const role of RUNTIME_ROLES) {
+    // cluster admin: ALTER ROLE is superuser-only
     await adminExec(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${PASSWORD[role]}'`);
-    const url = new URL(adminUrl());
-    url.pathname = `/${db}`;
-    url.username = role;
+    const url = new URL(roleUrl(role, db));
     url.password = PASSWORD[role];
     connections.set(role, postgres(url.toString(), { max: 1, onnotice: () => {} }));
   }
@@ -146,8 +145,7 @@ const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 let ownerCanLogin = true;
 
 function urlFor(database: string, role?: { name: string; password: string }): string {
-  const url = new URL(adminUrl());
-  url.pathname = `/${database}`;
+  const url = new URL(harnessUrl(database));
   if (role) {
     url.username = role.name;
     url.password = encodeURIComponent(role.password);
@@ -182,7 +180,7 @@ async function prepareStep(
     const acquired = await acquireTargetLock({ databaseUrl: urlFor(database), holder, timeoutMs: 10_000, expected });
     if (!acquired.acquired) throw new Error(acquired.reason);
     try {
-      const url = new URL(adminUrl());
+      const url = new URL(harnessUrl(database));
       const resultFile = join(paths.dir, "result.json");
       const request = {
         action,
@@ -239,6 +237,7 @@ describe("the smoke's own preparation writes `rehearsal` through rm_owner, and n
   beforeAll(async () => {
     const [row] = await sql<{ rolcanlogin: boolean }[]>`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`;
     ownerCanLogin = row?.rolcanlogin ?? true;
+    // cluster admin: ALTER ROLE is superuser-only
     await adminExec(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
   });
 
@@ -247,14 +246,15 @@ describe("the smoke's own preparation writes `rehearsal` through rm_owner, and n
   });
 
   test("`--local blank`: the bootstrap step leaves `rehearsal` written by rm_owner, and every runtime role is still refused every write by grant", async () => {
-    // What the local superuser does for a blank boot and nothing more: the
-    // database, owned by rm_owner, and the provider's extension (§7.3).
+    // What the cluster admin does for a blank boot and nothing more: the
+    // database, owned by rm_owner, and rm_owner installs the provider's extension (§7.3).
     const name = `rm_identity_blank_${randomBytes(4).toString("hex")}`;
+    // cluster admin: CREATE DATABASE is the admin's job
     await adminExec(`CREATE DATABASE ${name} OWNER rm_owner`);
     try {
-      const admin = postgres(urlFor(name), { max: 1, onnotice: () => {} });
-      await admin.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
-      await admin.end({ timeout: 5 });
+      const owner = harnessConnection(name);
+      await owner.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+      await owner.end({ timeout: 5 });
       const result = await prepareStep("bootstrap", name);
       expect({ ok: result.ok, error: result.error }).toEqual({ ok: true, error: undefined });
       expect(await enrollment(name)).toBe("rehearsal|rm_owner");
@@ -275,10 +275,10 @@ describe("the smoke's own preparation writes `rehearsal` through rm_owner, and n
     const name = `rm_identity_dump_${randomBytes(4).toString("hex")}`;
     await adminExec(`CREATE DATABASE ${name} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`);
     try {
-      const admin = postgres(urlFor(name), { max: 1, onnotice: () => {} });
-      await admin.unsafe("DELETE FROM deployment_identity");
-      await admin.unsafe("INSERT INTO deployment_identity (kind) VALUES ('production')");
-      await admin.end({ timeout: 5 });
+      const owner = harnessConnection(name);
+      await owner.unsafe("DELETE FROM deployment_identity");
+      await owner.unsafe("INSERT INTO deployment_identity (kind) VALUES ('production')");
+      await owner.end({ timeout: 5 });
       expect((await enrollment(name)).startsWith("production|")).toBe(true);
 
       const result = await prepareStep("enroll", name, "--local dump test-stamp");
@@ -293,10 +293,10 @@ describe("the smoke's own preparation writes `rehearsal` through rm_owner, and n
     const name = `rm_identity_redctl_${randomBytes(4).toString("hex")}`;
     await adminExec(`CREATE DATABASE ${name} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`);
     try {
-      const admin = postgres(urlFor(name), { max: 1, onnotice: () => {} });
-      await admin.unsafe("DELETE FROM deployment_identity");
-      await admin.unsafe("INSERT INTO deployment_identity (kind) VALUES ('production')");
-      await admin.end({ timeout: 5 });
+      const owner = harnessConnection(name);
+      await owner.unsafe("DELETE FROM deployment_identity");
+      await owner.unsafe("INSERT INTO deployment_identity (kind) VALUES ('production')");
+      await owner.end({ timeout: 5 });
       for (const role of RUNTIME_ROLES) {
         expect({ role, code: await writeAs(name, role, "UPDATE deployment_identity SET kind = 'rehearsal'") }).toEqual({ role, code: "42501" });
       }

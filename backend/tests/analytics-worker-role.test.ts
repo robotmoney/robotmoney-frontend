@@ -12,7 +12,7 @@ import { test, expect, beforeAll, afterAll } from "bun:test";
 import postgres from "postgres";
 import { fixtureDb } from "./support/fixture-db.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { adminExec, adminUrl } from "./support/cluster.ts";
+import { adminExec, roleUrl } from "./support/cluster.ts";
 
 // Own database per file, cloned from the migrated template (support/clean-db.ts).
 useCleanDatabase(import.meta.file);
@@ -25,9 +25,9 @@ beforeAll(async () => {
   // deliberately ships NO password — an operator sets one out-of-band; CI is
   // that operator here) and connect exactly as a deployed worker would via
   // WORKER_DATABASE_URL.
+  // cluster admin: ALTER ROLE is superuser-only
   await adminExec(`ALTER ROLE rm_worker WITH LOGIN PASSWORD '${WORKER_PASSWORD}'`);
-  const url = new URL(adminUrl());
-  url.username = "rm_worker";
+  const url = new URL(roleUrl("rm_worker", new URL(process.env.DATABASE_URL!).pathname.replace(/^\//, "")));
   url.password = WORKER_PASSWORD;
   process.env.WORKER_DATABASE_URL = url.toString();
   worker = postgres(url.toString(), { max: 2, onnotice: () => {} });

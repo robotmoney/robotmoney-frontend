@@ -62,6 +62,7 @@ beforeAll(async () => {
   // have left one of them otherwise, so assert the baseline first; this file
   // then logs in as each of them and leaves the cluster as the suite expects it.
   for (const role of ["rm_app", "rm_worker", "rm_owner"]) {
+    // cluster admin: ALTER ROLE is superuser-only
     await adminExec(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${PASSWORD}'`);
   }
   const [{ db }] = (await sql`SELECT current_database() AS db`) as unknown as { db: string }[];
