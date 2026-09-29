@@ -27,6 +27,7 @@ import { CONNECTION_TOKENS, ROLES, homeEnvFilePath } from "../../scripts/lib/env
 import { config } from "../src/config.ts";
 import { APPEND_ONLY_TABLES, LEDGER_IMMUTABLE_FAMILIES } from "../src/db/append-only-guard.ts";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import {
   ENV_FILE_ALLOWED_KEYS,
   PREFLIGHT_CHECK_NUMBER,
@@ -209,7 +210,7 @@ async function publishManifest(): Promise<void> {
     exclusions: snapshot.exclusions,
     fingerprint: await fingerprintCatalog(sql, snapshot.exclusions),
   });
-  await sql.begin(async (tx) => {
+  await fixtureDb.begin(async (tx) => {
     await tx.unsafe("SET LOCAL ROLE rm_owner");
     const filenames = await ledgerNames(tx);
     await writeManifest(tx, {
@@ -224,7 +225,7 @@ async function publishManifest(): Promise<void> {
 /** Enroll this clone as `rehearsal`, as rm_owner — the only role 0063 lets
  *  write it. */
 async function enrollRehearsal(): Promise<void> {
-  await sql.begin(async (tx) => {
+  await fixtureDb.begin(async (tx) => {
     await tx.unsafe("SET LOCAL ROLE rm_owner");
     await tx`INSERT INTO deployment_identity (kind, note) VALUES ('rehearsal', 'db-preflight-checks fixture')`;
   });
@@ -450,7 +451,7 @@ describe("check 2, required half — the registry says what each role's programs
   test("a missing required privilege refuses, naming the call site that declared it", async () => {
     // Revoke exactly the privilege the fixture declares. Grants live in this
     // test's cloned database, so the next test starts from the template again.
-    await sql.unsafe(`REVOKE SELECT ON ${REQUIRED_FIXTURE.object} FROM rm_readonly`);
+    await fixtureDb.unsafe(`REVOKE SELECT ON ${REQUIRED_FIXTURE.object} FROM rm_readonly`);
     const result = await checkPrivileges(sql, context({ roles: ["rm_readonly"] }));
     const refused = refusals(scoped(result.findings));
     expect(refused).toHaveLength(1);
@@ -496,7 +497,7 @@ describe("check 2, denylist half — the fixed list of things no runtime role ma
   });
 
   test("a runtime role owning an application object is a denylist violation, naming the relation", async () => {
-    await sql.unsafe("CREATE TABLE rm_preflight_owned_probe (id integer)");
+    await fixtureDb.unsafe("CREATE TABLE rm_preflight_owned_probe (id integer)");
     await inCurrentDatabase("ALTER TABLE rm_preflight_owned_probe OWNER TO rm_worker");
     try {
       const violations = await findDenylistViolations(sql, ["rm_worker"]);
@@ -506,17 +507,17 @@ describe("check 2, denylist half — the fixed list of things no runtime role ma
         object: "rm_preflight_owned_probe",
       });
     } finally {
-      await sql.unsafe("DROP TABLE IF EXISTS rm_preflight_owned_probe");
+      await fixtureDb.unsafe("DROP TABLE IF EXISTS rm_preflight_owned_probe");
     }
   });
 
   test("a runtime role holding CREATE on public is a DDL denylist violation — 0053 line 117 revokes it", async () => {
-    await sql.unsafe("GRANT CREATE ON SCHEMA public TO rm_app");
+    await fixtureDb.unsafe("GRANT CREATE ON SCHEMA public TO rm_app");
     try {
       const violations = await findDenylistViolations(sql, ["rm_app"]);
       expect(violations).toContainEqual({ rule: "ddl", role: "rm_app", object: "public" });
     } finally {
-      await sql.unsafe("REVOKE CREATE ON SCHEMA public FROM rm_app");
+      await fixtureDb.unsafe("REVOKE CREATE ON SCHEMA public FROM rm_app");
     }
   });
 
@@ -538,18 +539,18 @@ describe("check 2, denylist half — the fixed list of things no runtime role ma
     // every other case in this describe already does.
     const tables = [...APPEND_ONLY_TABLES].sort();
     const relations = tables.map((t) => `"${t}"`).join(", ");
-    await sql.unsafe(`GRANT DELETE ON ${relations} TO rm_app`);
+    await fixtureDb.unsafe(`GRANT DELETE ON ${relations} TO rm_app`);
     try {
       const violations = await findDenylistViolations(sql, ["rm_app"]);
       const appendOnly = violations.filter((v) => v.rule === "append_only_write");
       expect(appendOnly.map((v) => v.object).sort()).toEqual(tables);
     } finally {
-      await sql.unsafe(`REVOKE DELETE ON ${relations} FROM rm_app`);
+      await fixtureDb.unsafe(`REVOKE DELETE ON ${relations} FROM rm_app`);
     }
   });
 
   test("TRUNCATE on an append-only table is the same violation as DELETE", async () => {
-    await sql.unsafe("GRANT TRUNCATE ON swarm_members TO rm_worker");
+    await fixtureDb.unsafe("GRANT TRUNCATE ON swarm_members TO rm_worker");
     try {
       const violations = await findDenylistViolations(sql, ["rm_worker"]);
       expect(violations).toContainEqual({
@@ -558,7 +559,7 @@ describe("check 2, denylist half — the fixed list of things no runtime role ma
         object: "swarm_members",
       });
     } finally {
-      await sql.unsafe("REVOKE TRUNCATE ON swarm_members FROM rm_worker");
+      await fixtureDb.unsafe("REVOKE TRUNCATE ON swarm_members FROM rm_worker");
     }
   });
 
@@ -568,8 +569,8 @@ describe("check 2, denylist half — the fixed list of things no runtime role ma
     // runtime roles SELECT and INSERT only, so the grant is constructed here.
     const tables = [...new Set(LEDGER_IMMUTABLE_FAMILIES.flatMap((family) => family.tables))].sort();
     const relations = tables.map((t) => `"${t}"`).join(", ");
-    await sql.unsafe(`GRANT DELETE ON ${relations} TO rm_app`);
-    await sql.unsafe(`GRANT TRUNCATE ON ${relations} TO rm_worker`);
+    await fixtureDb.unsafe(`GRANT DELETE ON ${relations} TO rm_app`);
+    await fixtureDb.unsafe(`GRANT TRUNCATE ON ${relations} TO rm_worker`);
     const violations = await findDenylistViolations(sql, ["rm_app", "rm_worker"]);
     for (const role of ["rm_app", "rm_worker"] as const) {
       const hits = violations.filter((v) => v.rule === "append_only_write" && v.role === role).map((v) => v.object);
@@ -681,7 +682,7 @@ describe("check 2, the asymmetry — the registry is not an allowlist", () => {
     // not in any other wording — because only the denylist says what may not
     // be held.
     expect(requiredPrivileges().get("rm_readonly")?.has("job_schedules") ?? false).toBe(false);
-    await sql.unsafe("GRANT INSERT ON job_schedules TO rm_readonly");
+    await fixtureDb.unsafe("GRANT INSERT ON job_schedules TO rm_readonly");
     const [held] = await sql<{ held: boolean }[]>`
       SELECT has_table_privilege('rm_readonly', 'job_schedules', 'INSERT') AS held`;
     expect(held?.held).toBe(true);
@@ -696,7 +697,7 @@ describe("check 2, the asymmetry — the registry is not an allowlist", () => {
     // case constructs it instead of reading it. The thing being proved is
     // unchanged and is the reason the step exists: while a runtime role holds
     // DELETE on an append-only table, check 2 refuses the boot and names both.
-    await sql.unsafe("GRANT DELETE ON swarm_members TO rm_app");
+    await fixtureDb.unsafe("GRANT DELETE ON swarm_members TO rm_app");
     try {
       const result = await checkPrivileges(sql, context({ roles: ["rm_app"] }));
       const refused = refusals(result.findings);
@@ -706,7 +707,7 @@ describe("check 2, the asymmetry — the registry is not an allowlist", () => {
       expect(text).toContain("swarm_members");
       expect(text).toMatch(/DELETE/);
     } finally {
-      await sql.unsafe("REVOKE DELETE ON swarm_members FROM rm_app");
+      await fixtureDb.unsafe("REVOKE DELETE ON swarm_members FROM rm_app");
     }
   });
 
@@ -755,7 +756,7 @@ describe("check 2 fails before the append-only grant transition and passes after
   /** Apply the transition exactly as the migrate run applies a migration:
    *  inside a transaction, as rm_owner. */
   async function applyTransition(): Promise<void> {
-    await sql.begin(async (tx) => {
+    await fixtureDb.begin(async (tx) => {
       await tx.unsafe("SET LOCAL ROLE rm_owner");
       await tx.unsafe(TRANSITION_0065);
       await tx.unsafe(part2Of0072());
@@ -781,7 +782,7 @@ describe("check 2 fails before the append-only grant transition and passes after
     // ALL TABLES` reached every append-only table, and TRUNCATE is the
     // privilege the row triggers cannot stop.
     const relations = [...APPEND_ONLY_TABLES].map((t) => `"${t}"`).join(", ");
-    await sql.unsafe(`GRANT DELETE, TRUNCATE ON ${relations} TO rm_app, rm_worker`);
+    await fixtureDb.unsafe(`GRANT DELETE, TRUNCATE ON ${relations} TO rm_app, rm_worker`);
 
     // BEFORE: check 2 refuses, exactly once per role per table.
     const before = await checkPrivileges(sql, context({ roles: WRITERS }));
@@ -849,8 +850,8 @@ describe("check 2 fails before the append-only grant transition and passes after
       (await findDenylistViolations(sql, WRITERS)).filter((v) => v.object === "swarm_stream_events"),
     ).toEqual([]);
 
-    await sql.unsafe("GRANT DELETE ON swarm_stream_events TO rm_app");
-    await sql.unsafe("GRANT TRUNCATE ON swarm_stream_events TO rm_worker");
+    await fixtureDb.unsafe("GRANT DELETE ON swarm_stream_events TO rm_app");
+    await fixtureDb.unsafe("GRANT TRUNCATE ON swarm_stream_events TO rm_worker");
     const result = await checkPrivileges(sql, context({ roles: WRITERS }));
     const named = refusals(result.findings)
       .filter((f) => f.message.includes("swarm_stream_events"))
@@ -904,8 +905,8 @@ describe("check 2 fails before the append-only grant transition and passes after
       (await findDenylistViolations(sql, WRITERS)).filter((v) => v.object === "swarm_stream_head"),
     ).toEqual([]);
 
-    await sql.unsafe("GRANT DELETE ON swarm_stream_head TO rm_app");
-    await sql.unsafe("GRANT TRUNCATE ON swarm_stream_head TO rm_worker");
+    await fixtureDb.unsafe("GRANT DELETE ON swarm_stream_head TO rm_app");
+    await fixtureDb.unsafe("GRANT TRUNCATE ON swarm_stream_head TO rm_worker");
     const result = await checkPrivileges(sql, context({ roles: WRITERS }));
     const lines = refusals(result.findings)
       .filter((f) => f.message.includes("swarm_stream_head"))
@@ -961,7 +962,7 @@ describe("check 3a — integrity against the manifest stored in the database", (
       "CREATE TABLE rm_preflight_interrupted_probe (id integer PRIMARY KEY);",
       "",
     ].join("\n");
-    await sql.begin(async (tx) => {
+    await fixtureDb.begin(async (tx) => {
       await tx.unsafe("SET LOCAL ROLE rm_owner");
       await tx.unsafe(ddl);
       await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
@@ -990,7 +991,7 @@ describe("check 3a — integrity against the manifest stored in the database", (
   });
 
   test("a dropped trigger on an append-only table is genuine drift and fails", async () => {
-    await sql.unsafe("DROP TRIGGER IF EXISTS swarm_members_append_only ON swarm_members");
+    await fixtureDb.unsafe("DROP TRIGGER IF EXISTS swarm_members_append_only ON swarm_members");
     const result = await checkSchemaIntegrity(sql, context());
     const text = refusals(result.findings).map((f) => f.message).join("\n");
     expect(text).toContain("swarm_members");
@@ -1302,8 +1303,8 @@ describe("check 3a against the manifest the real migrate run publishes", () => {
     await enrollRehearsal();
     await revokeLoginDefaults(sql, new URL(adminUrl()).username);
     await migrateAsOwner(await currentDatabaseOf(sql));
-    await sql.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
-    await sql.unsafe("ALTER SCHEMA public OWNER TO pg_database_owner");
+    await fixtureDb.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
+    await fixtureDb.unsafe("ALTER SCHEMA public OWNER TO pg_database_owner");
     const refused = await integrity(sql);
     expect(naming(refused, "column public.job_schedules.last_enqueued_at")).toContain("absent from the live catalog");
     expect(naming(refused, "schema public")).toContain("pg_database_owner");
@@ -1584,17 +1585,20 @@ describe("check 5 — RM_ENV x deployment_identity resolve per the §4.3 matrix"
   // table rather than reusing 0063's so that the zero-row and two-row cases
   // below are expressible at all: 0063 pins one row with a boolean primary key.
   async function withIdentity(value: "production" | "rehearsal" | null, body: () => Promise<void>): Promise<void> {
-    await sql.unsafe("DROP TABLE IF EXISTS deployment_identity");
-    await sql.unsafe(`
+    await fixtureDb.unsafe("DROP TABLE IF EXISTS deployment_identity");
+    await fixtureDb.unsafe(`
       CREATE TABLE deployment_identity (
         kind text NOT NULL,
         singleton boolean NOT NULL DEFAULT true UNIQUE CHECK (singleton)
       )`);
-    if (value) await sql`INSERT INTO deployment_identity (kind) VALUES (${value})`;
+    // The replacement table is the owner's; the check reads it as a runtime role, as
+    // 0063's real one allows.
+    await fixtureDb.unsafe("GRANT SELECT ON deployment_identity TO rm_app, rm_worker, rm_readonly");
+    if (value) await fixtureDb`INSERT INTO deployment_identity (kind) VALUES (${value})`;
     try {
       await body();
     } finally {
-      await sql.unsafe("DROP TABLE IF EXISTS deployment_identity");
+      await fixtureDb.unsafe("DROP TABLE IF EXISTS deployment_identity");
     }
   }
 
@@ -1664,14 +1668,15 @@ describe("check 5 — RM_ENV x deployment_identity resolve per the §4.3 matrix"
   });
 
   test("more than one deployment_identity row refuses", async () => {
-    await sql.unsafe("DROP TABLE IF EXISTS deployment_identity");
-    await sql.unsafe("CREATE TABLE deployment_identity (kind text NOT NULL)");
-    await sql.unsafe("INSERT INTO deployment_identity (kind) VALUES ('rehearsal'), ('production')");
+    await fixtureDb.unsafe("DROP TABLE IF EXISTS deployment_identity");
+    await fixtureDb.unsafe("CREATE TABLE deployment_identity (kind text NOT NULL)");
+    await fixtureDb.unsafe("GRANT SELECT ON deployment_identity TO rm_app, rm_worker, rm_readonly");
+    await fixtureDb.unsafe("INSERT INTO deployment_identity (kind) VALUES ('rehearsal'), ('production')");
     try {
       const result = await checkEnvIdentity(sql, context({ env: "stage", connection: "remote" }));
       expect(refusals(result.findings).length).toBeGreaterThan(0);
     } finally {
-      await sql.unsafe("DROP TABLE IF EXISTS deployment_identity");
+      await fixtureDb.unsafe("DROP TABLE IF EXISTS deployment_identity");
     }
   });
 });
@@ -1701,8 +1706,8 @@ async function activeSubject(prefix: string): Promise<string> {
 
 /** Relax one scheduling column so a NULL can be stored, then store it. */
 async function nullOut(subjectId: string, column: string): Promise<void> {
-  await sql.unsafe(`ALTER TABLE swarm_subjects ALTER COLUMN ${column} DROP NOT NULL`);
-  await sql.unsafe(`UPDATE swarm_subjects SET ${column} = NULL WHERE id = $1`, [subjectId]);
+  await fixtureDb.unsafe(`ALTER TABLE swarm_subjects ALTER COLUMN ${column} DROP NOT NULL`);
+  await fixtureDb.unsafe(`UPDATE swarm_subjects SET ${column} = NULL WHERE id = $1`, [subjectId]);
 }
 
 describe("check 6 — every active subject has its epoch duration, epoch anchor and judging duration", () => {
@@ -1761,7 +1766,7 @@ describe("check 6 — every active subject has its epoch duration, epoch anchor 
   });
 
   test("refuses when a column itself is absent — the migration has not reached this database", async () => {
-    await sql.unsafe("ALTER TABLE swarm_subjects DROP COLUMN epoch_anchor");
+    await fixtureDb.unsafe("ALTER TABLE swarm_subjects DROP COLUMN epoch_anchor");
     const result = await checkSubjectScheduling(sql, context({ env: "prod" }));
     expect(refusals(result.findings)).toHaveLength(1);
     expect(result.findings[0]?.message).toContain("swarm_subjects has no epoch_anchor column");
@@ -1845,7 +1850,7 @@ describe("runPreflight — one library, three callers (§7.2)", () => {
     // "3 and 5" the day the transition landed, which is the opposite of what it
     // is for. What is under test is that one boot reports EVERY failing check
     // rather than stopping at the first.
-    await sql.unsafe("GRANT DELETE ON swarm_members TO rm_app");
+    await fixtureDb.unsafe("GRANT DELETE ON swarm_members TO rm_app");
     try {
       const report = await runPreflight(sql, context({ env: "prod", connection: "remote" }), "full", tokens());
       const failed = report.results.filter((r) => r.findings.some((f) => f.severity === "refuse")).map((r) => r.check);
@@ -1854,7 +1859,7 @@ describe("runPreflight — one library, three callers (§7.2)", () => {
       expect(failed).toContain("env_identity");
       expect(report.passed).toBe(false);
     } finally {
-      await sql.unsafe("REVOKE DELETE ON swarm_members FROM rm_app");
+      await fixtureDb.unsafe("REVOKE DELETE ON swarm_members FROM rm_app");
     }
   });
 
@@ -1932,7 +1937,7 @@ describe("runPreflight — one library, three callers (§7.2)", () => {
     });
 
     test("failing outcome: checks 2, 3 and 5 refuse — and still nothing is written", async () => {
-      await sql.unsafe("GRANT DELETE ON swarm_members TO rm_app");
+      await fixtureDb.unsafe("GRANT DELETE ON swarm_members TO rm_app");
       const ctx = context({ env: "prod", connection: "remote" });
 
       const before = await tupleWrites();
