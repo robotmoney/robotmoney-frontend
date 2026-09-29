@@ -108,22 +108,18 @@ const ADMIN_URL = `postgres://robotmoney:robotmoney@localhost:${port}/postgres`;
 const roleUrl = (role: string, database = "robotmoney"): string =>
   `postgres://${role}:${ROLE_PASSWORD}@localhost:${port}/${database}`;
 // The login of the shared api pool: `rm_test`, NOT a superuser, a member of the
-// four roles with `SET ROLE rm_owner` as its session default. It acts as the
-// schema owner, which holds the DELETE, TRUNCATE and DDL that ~120 files use to
-// build their fixtures and that no runtime role may hold (D55 (6)), and a test
-// that must act as a runtime role does `SET ROLE rm_app`. It is a login of its
-// own so that a test which changes rm_owner's password or LOGIN attribute (the
-// owner-terminal tests) cannot lock the suite's own pool out.
+// four roles with `SET ROLE rm_app` as its session default. The code under test
+// runs as the real runtime role: no DELETE, no TRUNCATE, no DDL (D55 (6)). It is
+// a login of its own so that a test which changes rm_app's password or LOGIN
+// attribute cannot lock the suite's own pool out.
 const HARNESS_ROLE = "rm_test";
-// The role that login acts as. `rm_owner` by default (the fixtures of ~117 files
-// need DELETE, TRUNCATE and DDL). `RM_TEST_API_ROLE=rm_app` makes the shared api
-// pool the real runtime role, which tests/run-as-rm-app.sh does for the files
-// listed in tests/rm-app-pool-files.txt; tests/rm-app-pool-blocked.txt is what
-// cannot run that way yet.
-const API_POOL_ROLE = process.env.RM_TEST_API_ROLE ?? "rm_owner";
-if (!["rm_owner", "rm_app"].includes(API_POOL_ROLE)) {
-  throw new Error(`RM_TEST_API_ROLE must be rm_owner or rm_app, not ${JSON.stringify(API_POOL_ROLE)}`);
-}
+// The FIXTURE login: `rm_test_owner`, NOT a superuser, whose session role is
+// `rm_owner`. A test builds and tears down its state through it
+// (tests/support/fixture-db.ts `fixtureDb`), because only the schema owner holds
+// the DELETE, TRUNCATE and DDL a fixture needs and the code under test never
+// does. A login of its own, so a test that changes rm_owner's password (the
+// owner-terminal tests) cannot lock the fixtures out.
+const OWNER_HARNESS_ROLE = "rm_test_owner";
 // The pipeline worker's pool, on the same footing: a login of its own whose
 // session role is `rm_worker`, so it holds exactly the worker's privileges (a
 // real runtime role: no DELETE, no DDL) and a test that changes rm_worker's
@@ -248,7 +244,10 @@ async function whenReady<T>(open: () => Promise<T>, timeoutMs = 30_000): Promise
     await superuser.unsafe(`
       CREATE ROLE ${HARNESS_ROLE} LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB NOINHERIT PASSWORD '${ROLE_PASSWORD}';
       GRANT rm_owner, rm_app, rm_worker, rm_readonly TO ${HARNESS_ROLE};
-      ALTER ROLE ${HARNESS_ROLE} SET role = '${API_POOL_ROLE}';
+      ALTER ROLE ${HARNESS_ROLE} SET role = 'rm_app';
+      CREATE ROLE ${OWNER_HARNESS_ROLE} LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB NOINHERIT PASSWORD '${ROLE_PASSWORD}';
+      GRANT rm_owner, rm_app, rm_worker, rm_readonly TO ${OWNER_HARNESS_ROLE};
+      ALTER ROLE ${OWNER_HARNESS_ROLE} SET role = 'rm_owner';
       CREATE ROLE ${WORKER_HARNESS_ROLE} LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB NOINHERIT PASSWORD '${ROLE_PASSWORD}';
       GRANT rm_worker TO ${WORKER_HARNESS_ROLE};
       ALTER ROLE ${WORKER_HARNESS_ROLE} SET role = 'rm_worker';

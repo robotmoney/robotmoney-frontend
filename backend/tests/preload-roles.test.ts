@@ -69,7 +69,7 @@ describe("the pools log in as roles, never as a superuser", () => {
       rolbypassrls: facts!.rolbypassrls,
     }).toEqual({ rolsuper: false, rolcreaterole: false, rolcreatedb: false, rolreplication: false, rolbypassrls: false });
     expect(facts!.session_user).toBe("rm_test");
-    expect(facts!.current_user).toBe("rm_owner");
+    expect(facts!.current_user).toBe("rm_app");
   });
 
   test("the worker pool: a login with no cluster powers, whose session role is rm_worker", async () => {

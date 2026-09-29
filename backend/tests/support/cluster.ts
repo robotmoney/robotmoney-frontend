@@ -73,14 +73,14 @@ export async function adminExec(
 }
 
 /**
- * A URL for the suite's harness login on `database`: `rm_test`, not a
- * superuser, whose session role is `rm_owner` (tests/preload.ts). It is the
+ * A URL for the suite's fixture login on `database`: `rm_test_owner`, not a
+ * superuser (the api pool's `rm_test` acts as rm_app), whose session role is `rm_owner` (tests/preload.ts). It is the
  * schema owner's authority under a login of its own, so a test that changes
  * rm_owner's password or LOGIN attribute does not lock it out. Provisioning a
  * database's schema goes through it.
  */
 export function harnessUrl(database: string = "robotmoney"): string {
-  return roleUrl("rm_test", database);
+  return roleUrl("rm_test_owner", database);
 }
 
 /** A one-connection handle for the harness login on `database`. The caller ends it. */
