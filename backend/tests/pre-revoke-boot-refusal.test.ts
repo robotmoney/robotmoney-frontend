@@ -29,6 +29,7 @@
 //     tests/support/automation-auth.ts's red controls rewrite one line of a
 //     real process. It must refuse by check 3b, naming 0088 and 0089 as
 //     breaking — and not 0090 or 0091, whose `additive` it may run beside.
+import { restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import type postgres from "postgres";
@@ -105,6 +106,7 @@ async function bootApi(preload?: string): Promise<Boot> {
 }
 
 beforeAll(async () => {
+  // cluster admin: ALTER ROLE and saving/restoring role attributes are superuser-only
   const cluster = connectAdmin();
   try {
     savedRoles = await saveRoles(cluster);
@@ -182,3 +184,6 @@ describe("the breaking revoke closes rollback to code that ignores the tombstone
     ]);
   }, 120_000);
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

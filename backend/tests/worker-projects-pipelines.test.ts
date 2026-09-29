@@ -7,6 +7,7 @@
 // non-success status (degrade-to-persisted, nothing fabricated).
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { config } from "../src/config.ts";
 import { getHandler, handlers } from "../src/worker/handlers/index.ts";
 import { processOneJob } from "../src/worker/loop.ts";
@@ -57,14 +58,14 @@ test("every projects.* kind is seeded exactly once in job_schedules (idempotent)
   // Re-seed first so this assertion is independent of test ordering (queue.test.ts
   // truncates job_schedules in its beforeEach). seed() is idempotent.
   const { seed } = await import("../src/db/seed.ts");
-  await seed();
+  await seed(fixtureDb);
   for (const k of KINDS) {
     const rows = await sql<{ enabled: boolean }[]>`SELECT enabled FROM job_schedules WHERE kind = ${k}`;
     expect(rows.length).toBe(1);
     expect(rows[0].enabled).toBe(true);
   }
   // Re-running the seed must not duplicate schedule rows.
-  await seed();
+  await seed(fixtureDb);
   for (const k of KINDS) {
     const [{ n }] = await sql<{ n: number }[]>`SELECT count(*)::int n FROM job_schedules WHERE kind = ${k}`;
     expect(n).toBe(1);
@@ -128,7 +129,7 @@ test("admin-authored overview_short/overview_long survive a re-discovery run whi
 
   // Simulate an admin edit of the overview text AND drift a refreshable facet
   // column (display_name) so the re-run can prove it refreshes that column.
-  await sql`UPDATE projects SET
+  await fixtureDb`UPDATE projects SET
       overview_short = 'ADMIN SHORT', overview_long = 'ADMIN LONG', display_name = 'STALE NAME'
     WHERE id = ${before.id}`;
 
@@ -183,7 +184,7 @@ test("refreshWallets degrades only the failing wallet — other wallets in the s
   // A second wallet on the same project whose address has no fixture entry —
   // walletBalanceUsd throws for it ("fixture wallet balance missing").
   const badAddress = "0xwalletbadbadbadbadbadbadbadbadbadbadbad";
-  const [{ id: badWalletId }] = await sql<{ id: string }[]>`
+  const [{ id: badWalletId }] = await fixtureDb<{ id: string }[]>`
     INSERT INTO tracked_wallets (project_id, label, chain, address, is_active, balance_usd)
     VALUES (${projectId}, 'No Fixture Wallet', 'base', ${badAddress}, true, 111)
     RETURNING id`;
@@ -236,7 +237,7 @@ test("processOneJob routes a partial-wallet-failure refresh_wallets run to job_r
   const [{ id: projectId }] = await sql<{ id: string }[]>`
     SELECT id FROM projects WHERE slug = ${prefix + "-virtuals-protocol"}`;
   const badAddress = "0xwalletbadbadbadbadbadbadbadbadbadbadjob";
-  await sql`
+  await fixtureDb`
     INSERT INTO tracked_wallets (project_id, label, chain, address, is_active, balance_usd)
     VALUES (${projectId}, 'No Fixture Wallet (job)', 'base', ${badAddress}, true, 222)`;
 
@@ -245,7 +246,7 @@ test("processOneJob routes a partial-wallet-failure refresh_wallets run to job_r
   handlers[kind] = (payload) => refreshWallets(payload, src);
   const jobIds: number[] = [];
   try {
-    const [{ id: jobId }] = await sql<{ id: number }[]>`
+    const [{ id: jobId }] = await fixtureDb<{ id: number }[]>`
       INSERT INTO jobs (kind, priority, max_attempts) VALUES (${kind}, 1000000, 5) RETURNING id`;
     jobIds.push(jobId);
 
@@ -270,8 +271,8 @@ test("processOneJob routes a partial-wallet-failure refresh_wallets run to job_r
   } finally {
     handlers[kind] = original;
     if (jobIds.length) {
-      await sql`DELETE FROM job_runs WHERE job_id IN ${sql(jobIds)}`;
-      await sql`DELETE FROM jobs WHERE id IN ${sql(jobIds)}`;
+      await fixtureDb`DELETE FROM job_runs WHERE job_id IN ${sql(jobIds)}`;
+      await fixtureDb`DELETE FROM jobs WHERE id IN ${sql(jobIds)}`;
     }
   }
 });
@@ -291,11 +292,11 @@ test("a stalled live provider fetch aborts at the timeout and fetchVaults degrad
   let projectId: string | undefined;
   try {
     const slug = `wkstall_${crypto.randomUUID().slice(0, 8)}`;
-    const [{ id }] = await sql<{ id: string }[]>`
+    const [{ id }] = await fixtureDb<{ id: string }[]>`
       INSERT INTO projects (slug, display_name, status) VALUES (${slug}, 'Stall Vault', 'active') RETURNING id`;
     projectId = id;
     const vaultAddr = "0x" + "ab".repeat(20);
-    await sql`INSERT INTO agent_vaults (project_id, name, vault_address, chain, strategy_type, data_source, is_active, tvl_usd)
+    await fixtureDb`INSERT INTO agent_vaults (project_id, name, vault_address, chain, strategy_type, data_source, is_active, tvl_usd)
               VALUES (${projectId}, 'stall', ${vaultAddr}, 'base', 'erc4626', 'live', true, 42424)`;
 
     const started = Date.now();
@@ -315,9 +316,9 @@ test("a stalled live provider fetch aborts at the timeout and fetchVaults degrad
     else process.env.LIVE_FETCH_TIMEOUT_MS = prevTimeout;
     server.stop(true);
     if (projectId) {
-      await sql`DELETE FROM daily_tvl_snapshots WHERE vault_id IN (SELECT id FROM agent_vaults WHERE project_id = ${projectId})`;
-      await sql`DELETE FROM agent_vaults WHERE project_id = ${projectId}`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      await fixtureDb`DELETE FROM daily_tvl_snapshots WHERE vault_id IN (SELECT id FROM agent_vaults WHERE project_id = ${projectId})`;
+      await fixtureDb`DELETE FROM agent_vaults WHERE project_id = ${projectId}`;
+      await fixtureDb`DELETE FROM projects WHERE id = ${projectId}`;
     }
   }
 }, 15_000);
@@ -334,7 +335,7 @@ test("the loop records a degraded handler result as a non-'succeeded' job_runs s
   try {
     // Retryable: attempts remain → job goes back to 'pending' with a future
     // run_after (backoff engaged), and the run is recorded 'degraded'.
-    const [{ id: retryId }] = await sql<{ id: number }[]>`
+    const [{ id: retryId }] = await fixtureDb<{ id: number }[]>`
       INSERT INTO jobs (kind, priority, max_attempts) VALUES (${kind}, 1000000, 5) RETURNING id`;
     jobIds.push(retryId);
     expect(await processOneJob()).toBe(true);
@@ -363,7 +364,7 @@ test("the loop records a degraded handler result as a non-'succeeded' job_runs s
     // counts and swarm/receipt-gap.ts all had to work around a green row for
     // work that was never done. The RUN keeps 'degraded', which is where the
     // "kept last-persisted rows" distinction actually belongs.
-    const [{ id: termId }] = await sql<{ id: number }[]>`
+    const [{ id: termId }] = await fixtureDb<{ id: number }[]>`
       INSERT INTO jobs (kind, priority, max_attempts) VALUES (${kind}, 1000000, 1) RETURNING id`;
     jobIds.push(termId);
     expect(await processOneJob()).toBe(true);
@@ -378,8 +379,8 @@ test("the loop records a degraded handler result as a non-'succeeded' job_runs s
   } finally {
     delete handlers[kind];
     if (jobIds.length) {
-      await sql`DELETE FROM job_runs WHERE job_id IN ${sql(jobIds)}`;
-      await sql`DELETE FROM jobs WHERE id IN ${sql(jobIds)}`;
+      await fixtureDb`DELETE FROM job_runs WHERE job_id IN ${sql(jobIds)}`;
+      await fixtureDb`DELETE FROM jobs WHERE id IN ${sql(jobIds)}`;
     }
   }
 });

@@ -45,7 +45,7 @@ import { randomBytes } from "node:crypto";
 import { readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
-import { adminUrl } from "./support/cluster.ts";
+import { adminUrl, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import { applyIdentityFirst, IDENTITY_MIGRATION, readPreIdentityLedger, runMigrate } from "../scripts/migrate-run.ts";
 import type { MigrateJournalFile } from "../scripts/migrate-journal.ts";
 import { readManifest } from "../src/db/schema-manifest.ts";
@@ -81,6 +81,10 @@ const LOWER_SIX = [
   "0062_rm_worker_analytics_ledger_read_grant.sql",
 ];
 
+// cluster admin: this file replays the historical releases AS the bootstrap login
+// (a superuser), so the objects before 0054 are the admin's and role attributes
+// are rewritten by 0053; the replay, the role save/restore and the session
+// catalog reads all need it. The owner's own steps run as rm_owner (asOwner).
 const LOGIN = new URL(adminUrl()).username;
 const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 const READONLY_PASSWORD = randomBytes(12).toString("hex");
@@ -535,3 +539,6 @@ describe("the identity-first pass itself (applyIdentityFirst), on the fenced pat
     expect(await stateOf(name)).toEqual({ ledger: HEAD_FILES, table: true, identity: ["rehearsal"], manifest: true });
   }, 180_000);
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

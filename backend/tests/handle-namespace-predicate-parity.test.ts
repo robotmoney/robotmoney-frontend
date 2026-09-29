@@ -39,6 +39,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import {
   HANDLE_NAMESPACE_CONFLICT_RELATION,
   handleNamespaceConflicts,
@@ -102,7 +103,7 @@ test("layer 2 (behavioural): both relations flag exactly the same pairs, over ro
 
   const rollback = new Error("rollback");
   try {
-    await sql.begin(async (tx) => {
+    await fixtureDb.begin(async (tx) => {
       // The pairs below are unreachable through the trigger — that is the whole
       // point — so it is disabled for the inserts and restored with
       // ENABLE ALWAYS, never a plain ENABLE (which silently downgrades

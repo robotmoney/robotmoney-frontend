@@ -43,7 +43,7 @@ import { checkSchemaIntegrity, type PreflightContext, type PreflightReport } fro
 import type { RmRole } from "../src/db/registry.ts";
 import { SCHEDULES } from "../src/db/seed.ts";
 import { LEDGER_FAMILIES } from "../src/db/analytics-ledger-guard.ts";
-import { adminExec, adminUrl } from "./support/cluster.ts";
+import { adminExec, harnessConnection, ROLE_PASSWORD, roleUrl } from "./support/cluster.ts";
 
 const MIGRATIONS_DIR = join(import.meta.dir, "..", "migrations");
 const ON_DISK = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
@@ -155,36 +155,26 @@ function writeSnapshot(
  * a database the schema owner owns.
  */
 async function withBlankDatabase(body: (db: postgres.Sql<{}>, name: string) => Promise<void>): Promise<void> {
-  const base = new URL(adminUrl());
   const name = `rm_snapshot_blank_${crypto.randomUUID().slice(0, 8)}`;
-  const admin = postgres(base.toString(), { max: 1, onnotice: () => {} });
-  await admin.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
-  await admin.end({ timeout: 5 });
-
-  const url = new URL(base.toString());
-  url.pathname = `/${name}`;
-  const db = postgres(url.toString(), { max: 1, onnotice: () => {} });
+  // cluster admin: CREATE/DROP DATABASE are cluster-level; the schema is the owner's.
+  await adminExec(`CREATE DATABASE ${name} OWNER rm_owner`);
+  const db = harnessConnection(name);
   try {
     await body(db, name);
   } finally {
     await db.end({ timeout: 5 });
-    const cleanup = postgres(base.toString(), { max: 1, onnotice: () => {} });
-    await cleanup.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-    await cleanup.end({ timeout: 5 });
+    await adminExec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
   }
 }
 
 /** The password the preflight case below hands `checkRoleTokens`. Preflight
  *  check 1 is "Every role token smoke will hand to a container authenticates"
- *  (§7), which it answers by actually logging in — so the fixture has to make
- *  the credential real rather than assert about a password nobody set. Role
- *  attributes are a property of the CLUSTER, not of any one database, so this
- *  holds for the blank databases created below. */
-const RM_APP_PASSWORD = "rm_app_snapshot_password";
+ *  (§7), which it answers by actually logging in: rm_app's login carries the
+ *  suite's shared role password (tests/preload.ts), so the credential is real. */
+const RM_APP_PASSWORD = ROLE_PASSWORD();
 
-beforeAll(async () => {
+beforeAll(() => {
   fixtures = mkdtempSync(join(tmpdir(), "rm-snapshot-fixtures-"));
-  await adminExec(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${RM_APP_PASSWORD}'`);
 });
 
 afterAll(() => {
@@ -350,7 +340,10 @@ describe("the provider exclusion list — explicit, carried by the snapshot, nar
 
       // Detach one function from the extension: the same object, now owned by
       // nobody's exclusion. 3a must name it.
-      await owner.unsafe("ALTER EXTENSION pgcrypto DROP FUNCTION digest(text, text)");
+      // cluster admin: a trusted extension's functions belong to the bootstrap
+      // superuser, and detaching one takes ownership of it.
+      const { db: dbName } = (await owner<{ db: string }[]>`SELECT current_database() AS db`)[0]!;
+      await adminExec("ALTER EXTENSION pgcrypto DROP FUNCTION digest(text, text)", dbName);
       const refused = await integrityRefusals(owner);
       expect(refused).toHaveLength(1);
       expect(refused[0]).toContain("function public.digest(text,text)");
@@ -363,11 +356,16 @@ describe("the provider exclusion list — explicit, carried by the snapshot, nar
       // `doadmin` is the managed cluster's admin role. The ephemeral cluster has
       // none, so the case creates it — and removes it, because roles outlive
       // this database.
-      await owner.unsafe("CREATE ROLE doadmin NOLOGIN");
+      // cluster admin: CREATE/DROP ROLE and the membership that lets rm_owner
+      // re-own objects to doadmin are superuser-only.
+      await adminExec("CREATE ROLE doadmin NOLOGIN");
+      await adminExec("GRANT doadmin TO rm_owner WITH INHERIT TRUE, SET TRUE");
+      // A new owner needs CREATE on the schema; the schema's owner grants it.
+      await owner.unsafe("GRANT CREATE ON SCHEMA public TO doadmin");
       try {
         await owner.unsafe("CREATE TABLE provider_monitoring (id integer)");
         await owner.unsafe("CREATE FUNCTION provider_probe() RETURNS integer LANGUAGE sql AS 'SELECT 1'");
-        // Created by the harness superuser, which is NOT on the list: both refuse.
+        // Created by the owner, which is NOT on the list: both refuse.
         const unlisted = await integrityRefusals(owner);
         expect(unlisted.some((f) => f.startsWith("table public.provider_monitoring "))).toBe(true);
         expect(unlisted.some((f) => f.startsWith("function public.provider_probe() "))).toBe(true);
@@ -378,14 +376,18 @@ describe("the provider exclusion list — explicit, carried by the snapshot, nar
       } finally {
         await owner.unsafe("DROP TABLE IF EXISTS provider_monitoring");
         await owner.unsafe("DROP FUNCTION IF EXISTS provider_probe()");
-        await owner.unsafe("DROP ROLE IF EXISTS doadmin");
+        await owner.unsafe("REVOKE CREATE ON SCHEMA public FROM doadmin");
+        await adminExec("DROP ROLE IF EXISTS doadmin");
       }
     });
   });
 
   test("a DECLARED object re-owned to a provider role is still drift — the list covers extras, never the manifest's own objects", async () => {
     await withRealBootstrap(async ({ owner }) => {
-      await owner.unsafe("CREATE ROLE doadmin NOLOGIN");
+      await adminExec("CREATE ROLE doadmin NOLOGIN");
+      await adminExec("GRANT doadmin TO rm_owner WITH INHERIT TRUE, SET TRUE");
+      // A new owner needs CREATE on the schema; the schema's owner grants it.
+      await owner.unsafe("GRANT CREATE ON SCHEMA public TO doadmin");
       try {
         await owner.unsafe("ALTER TABLE job_schedules OWNER TO doadmin");
         const refused = await integrityRefusals(owner);
@@ -394,7 +396,8 @@ describe("the provider exclusion list — explicit, carried by the snapshot, nar
         );
       } finally {
         await owner.unsafe("ALTER TABLE job_schedules OWNER TO rm_owner");
-        await owner.unsafe("DROP ROLE IF EXISTS doadmin");
+        await owner.unsafe("REVOKE CREATE ON SCHEMA public FROM doadmin");
+        await adminExec("DROP ROLE IF EXISTS doadmin");
       }
     });
   });
@@ -513,6 +516,8 @@ describe("bootstrapBlankDatabase — one transaction, blank in, version M out", 
   test("refuses when the effective role is not rm_owner", async () => {
     const snapshot = await loadSnapshot(writeSnapshot("bootstrap-not-owner"));
     await withBlankDatabase(async (db) => {
+      // The harness login acts as rm_owner already; act as the runtime role instead.
+      await db.unsafe("SET ROLE rm_app");
       await expect(bootstrapBlankDatabase(db, snapshot)).rejects.toThrow("rm_owner");
     });
   });
@@ -625,7 +630,6 @@ async function withRealBootstrap(
     await owner.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
     await owner.unsafe("SET ROLE rm_owner");
     await bootstrapBlankDatabase(owner, snapshot);
-    await owner.unsafe("RESET ROLE");
 
     const app = postgres(appUrl(name), { max: 1, onnotice: () => {} });
     try {
@@ -638,11 +642,7 @@ async function withRealBootstrap(
 
 /** rm_app's login to the named database. */
 function appUrl(name: string): string {
-  const url = new URL(adminUrl());
-  url.pathname = `/${name}`;
-  url.username = "rm_app";
-  url.password = RM_APP_PASSWORD;
-  return url.toString();
+  return roleUrl("rm_app", name);
 }
 
 /** Check 3a's refusals against `db`, as sentences, so a failure prints them. */
@@ -1052,11 +1052,7 @@ describe("the real snapshot (backend/schema/) — fingerprint, preflight, bootst
       // inserts its own as final, in its own transaction, on its own
       // connection. The partial unique index serializes them: whichever commits
       // second meets the first's final row and is refused.
-      const url = new URL(adminUrl());
-      url.pathname = `/${(await owner`SELECT current_database() AS db`)[0]!.db}`;
-      url.username = "rm_app";
-      url.password = RM_APP_PASSWORD;
-      const racer = postgres(url.toString(), { max: 1, onnotice: () => {} });
+      const racer = postgres(roleUrl("rm_app", (await owner`SELECT current_database() AS db`)[0]!.db), { max: 1, onnotice: () => {} });
       try {
         let releaseFirst!: () => void;
         const firstHolds = new Promise<void>((resolve) => (releaseFirst = resolve));

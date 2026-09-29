@@ -14,6 +14,7 @@
 //     must not grant analytics-production authority.
 import { test, expect, afterAll, beforeAll } from "bun:test";
 import { sql } from "../../src/db/client.ts";
+import { fixtureDb } from "../support/fixture-db.ts";
 import { handleAdmin } from "../../src/api/routes/admin.ts";
 import { saveTelemetryRun } from "../../src/analytics/store/telemetry-store.ts";
 import type { TelemetryRunSubmission } from "../../src/analytics/telemetry.ts";
@@ -66,7 +67,7 @@ function sampleRun(overrides: Partial<TelemetryRunSubmission> = {}): TelemetryRu
 let seededRunId: number;
 
 afterAll(async () => {
-  await sql`DELETE FROM research_pipeline_runs WHERE kind = ${KIND}`;
+  await fixtureDb`DELETE FROM research_pipeline_runs WHERE kind = ${KIND}`;
 });
 
 test("no credential → 403 on every owned research route (fail-closed, before DB access)", async () => {
@@ -127,7 +128,7 @@ test("GET /api/admin/research/runs/:id: 404 for an unknown id, 400 for a non-num
 });
 
 test("GET /api/admin/research/raw-series/:indicator: rejects an unregistered indicator, invalid dates; returns a bounded, allowlisted read", async () => {
-  await sql`INSERT INTO raw_indicator_history (date, indicator, value) VALUES ('2026-01-01', 'T10Y2Y', 0.3)
+  await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value) VALUES ('2026-01-01', 'T10Y2Y', 0.3)
             ON CONFLICT (date, indicator) DO UPDATE SET value = 0.3`;
 
   const unregistered = await call(req("GET", "/api/admin/research/raw-series/DROP_TABLE_JOBS", { token: OPERATOR }));
@@ -150,11 +151,11 @@ test("GET /api/admin/research/raw-series/:indicator: rejects an unregistered ind
   const mna = await call(req("GET", "/api/admin/research/raw-series/MNA", { token: OPERATOR }));
   expect(mna?.status).toBe(200);
 
-  await sql`DELETE FROM raw_indicator_history WHERE indicator = 'T10Y2Y' AND date = '2026-01-01'`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'T10Y2Y' AND date = '2026-01-01'`;
 });
 
 test("GET /api/admin/research/signals/:key: rejects an unregistered signal key; returns a bounded, allowlisted read", async () => {
-  await sql`INSERT INTO research_signals (signal_key, date, payload) VALUES ('channel-divergence', '2026-01-01', '{"x":1}'::jsonb)
+  await fixtureDb`INSERT INTO research_signals (signal_key, date, payload) VALUES ('channel-divergence', '2026-01-01', '{"x":1}'::jsonb)
             ON CONFLICT (signal_key, date) DO UPDATE SET payload = '{"x":1}'::jsonb`;
 
   const bad = await call(req("GET", "/api/admin/research/signals/arbitrary_table", { token: OPERATOR }));
@@ -166,7 +167,7 @@ test("GET /api/admin/research/signals/:key: rejects an unregistered signal key; 
   expect(body.key).toBe("channel-divergence");
   expect(body.points.length).toBeGreaterThan(0);
 
-  await sql`DELETE FROM research_signals WHERE signal_key = 'channel-divergence' AND date = '2026-01-01'`;
+  await fixtureDb`DELETE FROM research_signals WHERE signal_key = 'channel-divergence' AND date = '2026-01-01'`;
 });
 
 test("POST /api/admin/research/rerun: admin cannot trigger analytics production", async () => {

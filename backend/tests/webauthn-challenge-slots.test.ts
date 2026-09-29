@@ -26,6 +26,7 @@ import {
   dropDatabases,
   freePort,
 } from "./support/startup-preflight.ts";
+import { harnessConnection, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 
 const APP = { name: "rm_app", password: `rm_app_slots_${randomBytes(6).toString("hex")}` };
 const SLOTS = 32;
@@ -33,10 +34,10 @@ const SLOTS = 32;
 const REGISTRATION_SLOTS = 8;
 
 let name = "";
-let admin: postgres.Sql<{}>;
+let fixture: postgres.Sql<{}>;
 let savedRoles: SavedRole[] = [];
 let api: { base: string; proc: ReturnType<typeof Bun.spawn> } | null = null;
-/** The operator's store token (right `admin`): it opens the registration flow. */
+/** The operator's store token (right `fixture`): it opens the registration flow. */
 let operator = "";
 
 async function call(
@@ -63,9 +64,10 @@ const verifyWith = (challenge: string) =>
   });
 
 const rowCount = async (): Promise<number> =>
-  ((await admin`SELECT count(*)::int AS n FROM admin_webauthn_challenge`) as unknown as { n: number }[])[0]!.n;
+  ((await fixture`SELECT count(*)::int AS n FROM admin_webauthn_challenge`) as unknown as { n: number }[])[0]!.n;
 
 beforeAll(async () => {
+  // cluster admin: saving and altering a role is superuser-only
   const cluster = connectAdmin();
   try {
     savedRoles = await saveRoles(cluster);
@@ -74,8 +76,8 @@ beforeAll(async () => {
     await cluster.end({ timeout: 5 });
   }
   name = await createSnapshotTemplate("webauthn_slots");
-  admin = connectAdmin(name);
-  operator = (await provisionAutomationToken(`rm_slots_${process.pid}`, ["admin"], { holder: "operator", db: admin })).token;
+  fixture = harnessConnection(name);
+  operator = (await provisionAutomationToken(`rm_slots_${process.pid}`, ["admin"], { holder: "operator", db: fixture })).token;
 
   const port = await freePort();
   const proc = Bun.spawn(["bun", "run", "src/api/index.ts"], {
@@ -106,7 +108,8 @@ afterAll(async () => {
     api.proc.kill();
     await api.proc.exited;
   }
-  await admin?.end({ timeout: 5 });
+  await fixture?.end({ timeout: 5 });
+  // cluster admin: restoring a role is superuser-only
   const cluster = connectAdmin();
   try {
     await restoreRoles(cluster, savedRoles);
@@ -132,7 +135,7 @@ describe("the api boots as rm_app on a blank bootstrap with both boot guards arm
 
 describe("the challenge store is 32 slots by shape (D55 (6))", () => {
   test("a blank bootstrap holds exactly 32 empty slots, numbered 0..31", async () => {
-    const rows = (await admin`
+    const rows = (await fixture`
       SELECT slot, challenge, flow, issued_at, expires_at, consumed_at FROM admin_webauthn_challenge ORDER BY slot`) as unknown as {
       slot: number;
       challenge: string | null;
@@ -142,7 +145,7 @@ describe("the challenge store is 32 slots by shape (D55 (6))", () => {
   });
 
   test("the runtime cannot add or remove a slot: rm_app holds SELECT and UPDATE only, and a 33rd slot violates the key's CHECK", async () => {
-    const [grants] = (await admin`
+    const [grants] = (await fixture`
       SELECT has_table_privilege('rm_app', 'public.admin_webauthn_challenge', 'SELECT') AS s,
              has_table_privilege('rm_app', 'public.admin_webauthn_challenge', 'UPDATE') AS u,
              has_table_privilege('rm_app', 'public.admin_webauthn_challenge', 'INSERT') AS i,
@@ -151,7 +154,7 @@ describe("the challenge store is 32 slots by shape (D55 (6))", () => {
     expect(grants).toEqual({ s: true, u: true, i: false, d: false, t: false });
     let code: string | undefined;
     try {
-      await admin`INSERT INTO admin_webauthn_challenge (slot) VALUES (32)`;
+      await fixture`INSERT INTO admin_webauthn_challenge (slot) VALUES (32)`;
     } catch (error) {
       code = (error as { code?: string }).code;
     }
@@ -165,14 +168,14 @@ describe("the challenge store is 32 slots by shape (D55 (6))", () => {
     // Every authentication slot (8..31) now holds one of the issued challenges,
     // each once: the 24 issued last, whichever order the lock admitted them
     // in. The registration slots (0..7) were never touched.
-    const held = (await admin`
+    const held = (await fixture`
       SELECT slot, challenge, flow FROM admin_webauthn_challenge WHERE slot >= ${REGISTRATION_SLOTS}
        ORDER BY issued_at DESC, slot`) as unknown as { slot: number; challenge: string; flow: string }[];
     const issued = new Set(responses.map((r) => r.body.challenge as string));
     expect(held.length).toBe(SLOTS - REGISTRATION_SLOTS);
     expect(new Set(held.map((h) => h.challenge)).size).toBe(SLOTS - REGISTRATION_SLOTS);
     expect(held.every((h) => issued.has(h.challenge) && h.flow === "authentication")).toBe(true);
-    const registration = (await admin`
+    const registration = (await fixture`
       SELECT count(*)::int AS n FROM admin_webauthn_challenge
        WHERE slot < ${REGISTRATION_SLOTS} AND challenge IS NOT NULL`) as unknown as { n: number }[];
     expect(registration[0]!.n).toBe(0);
@@ -183,13 +186,13 @@ describe("the challenge store is 32 slots by shape (D55 (6))", () => {
   }, 60_000);
 
   test("each issuance overwrites the authentication slot issued longest ago", async () => {
-    const [oldest] = (await admin`
+    const [oldest] = (await fixture`
       SELECT slot FROM admin_webauthn_challenge WHERE slot >= ${REGISTRATION_SLOTS}
        ORDER BY issued_at ASC NULLS FIRST, slot LIMIT 1`) as unknown as {
       slot: number;
     }[];
     const issued = await call("GET", "/api/admin/webauthn/auth/options");
-    const [written] = (await admin`
+    const [written] = (await fixture`
       SELECT slot FROM admin_webauthn_challenge WHERE challenge = ${issued.body.challenge as string}`) as unknown as {
       slot: number;
     }[];
@@ -205,7 +208,7 @@ describe("a challenge is consumed once, and an expired or consumed one is never 
     // The winner consumed it and was then refused for its (absent) passkey;
     // the loser was refused for the challenge itself.
     expect(results.map((r) => r.body.error).sort()).toEqual(["challenge not found or expired", "passkey not found"]);
-    const [row] = (await admin`
+    const [row] = (await fixture`
       SELECT consumed_at IS NOT NULL AS consumed FROM admin_webauthn_challenge WHERE challenge = ${challenge}`) as unknown as {
       consumed: boolean;
     }[];
@@ -222,9 +225,9 @@ describe("a challenge is consumed once, and an expired or consumed one is never 
   test("an expired challenge is not accepted, though its slot still holds it", async () => {
     const issued = await call("GET", "/api/admin/webauthn/auth/options");
     const challenge = issued.body.challenge as string;
-    await admin`UPDATE admin_webauthn_challenge SET expires_at = now() - interval '1 second' WHERE challenge = ${challenge}`;
+    await fixture`UPDATE admin_webauthn_challenge SET expires_at = now() - interval '1 second' WHERE challenge = ${challenge}`;
     expect((await verifyWith(challenge)).body.error).toBe("challenge not found or expired");
-    const [row] = (await admin`
+    const [row] = (await fixture`
       SELECT consumed_at FROM admin_webauthn_challenge WHERE challenge = ${challenge}`) as unknown as { consumed_at: Date | null }[];
     expect(row).toEqual({ consumed_at: null });
     expect(await rowCount()).toBe(SLOTS);
@@ -235,7 +238,7 @@ describe("a public flood cannot evict a pending passkey registration (each flow 
   test("the slots are split by flow: 0..7 registration, 8..31 authentication, fixed by a CHECK", async () => {
     let code: string | undefined;
     try {
-      await admin`
+      await fixture`
         UPDATE admin_webauthn_challenge
            SET flow = 'authentication', challenge = 'wrong-flow-slot', issued_at = now(), expires_at = now() + interval '5 minutes'
          WHERE slot = 0`;
@@ -250,7 +253,7 @@ describe("a public flood cannot evict a pending passkey registration (each flow 
     const started = await call("GET", "/api/admin/webauthn/register/options", undefined, { "X-Admin-Token": operator });
     expect(started.status).toBe(200);
     const challenge = started.body.challenge as string;
-    const [slot] = (await admin`
+    const [slot] = (await fixture`
       SELECT slot FROM admin_webauthn_challenge WHERE challenge = ${challenge} AND flow = 'registration'`) as unknown as {
       slot: number;
     }[];
@@ -279,10 +282,13 @@ describe("a public flood cannot evict a pending passkey registration (each flow 
       { "X-Admin-Token": operator },
     );
     expect(verified).toEqual({ status: 400, body: { error: "passkey verification failed" } });
-    const [row] = (await admin`
+    const [row] = (await fixture`
       SELECT consumed_at IS NOT NULL AS consumed FROM admin_webauthn_challenge WHERE challenge = ${challenge}`) as unknown as {
       consumed: boolean;
     }[];
     expect(row).toEqual({ consumed: true });
   }, 60_000);
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

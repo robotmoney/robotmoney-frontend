@@ -11,7 +11,6 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import postgres from "postgres";
 import { createChecker } from "../scripts/lib/checks.ts";
 import {
   connectReadOnly,
@@ -20,7 +19,8 @@ import {
   runPreflightMain,
   urlFromDiscreteEnv,
 } from "../scripts/lib/preflight-utils.ts";
-import { adminUrl } from "./support/cluster.ts";
+import { adminUrl, adminExec } from "./support/cluster.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 describe("redactedTarget — the only form of the target safe to print", () => {
   test("undefined -> the caller-supplied unset message, never a blank/misleading string", () => {
@@ -149,18 +149,18 @@ describe("gateReadOnly — PASS/BLOCKED paths for real, against live Postgres ro
   let dbUrl: URL;
 
   beforeAll(async () => {
-    const sql = postgres(adminUrl());
-    await sql`DROP ROLE IF EXISTS rm_readonly_test`;
-    await sql`DROP ROLE IF EXISTS rm_writer_test`;
-    await sql`CREATE ROLE rm_readonly_test LOGIN PASSWORD 'testpass'`;
+    // cluster admin: CREATE/DROP ROLE is superuser-only; the grants are rm_owner's.
+    await adminExec("DROP ROLE IF EXISTS rm_readonly_test");
+    await adminExec("DROP ROLE IF EXISTS rm_writer_test");
+    await adminExec("CREATE ROLE rm_readonly_test LOGIN PASSWORD 'testpass'");
+    await adminExec("CREATE ROLE rm_writer_test LOGIN PASSWORD 'testpass'");
+    const sql = fixtureDb;
     await sql`GRANT CONNECT ON DATABASE robotmoney TO rm_readonly_test`;
     await sql`GRANT USAGE ON SCHEMA public TO rm_readonly_test`;
     await sql`GRANT SELECT ON ALL TABLES IN SCHEMA public TO rm_readonly_test`;
-    await sql`CREATE ROLE rm_writer_test LOGIN PASSWORD 'testpass'`;
     await sql`GRANT CONNECT ON DATABASE robotmoney TO rm_writer_test`;
     await sql`GRANT USAGE ON SCHEMA public TO rm_writer_test`;
     await sql`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO rm_writer_test`;
-    await sql.end();
     dbUrl = new URL(adminUrl());
   });
 

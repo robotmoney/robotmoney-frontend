@@ -17,8 +17,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/worker-client.ts";
 // The worker pool is a real runtime role and may not DELETE (D55 (6)); the
-// cleanup between cases is the schema owner's, on the suite's api pool.
-import { sql as owner } from "../src/db/client.ts";
+// cleanup between cases is the schema owner's, through the fixture handle.
+import { fixtureDb as owner } from "./support/fixture-db.ts";
 import { repairGaps } from "../src/worker/handlers/repair.ts";
 
 const BACKFILL_KIND = "wallet.backfill_day";

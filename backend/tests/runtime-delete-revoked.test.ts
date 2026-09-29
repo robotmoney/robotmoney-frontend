@@ -31,7 +31,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
 import postgres from "postgres";
-import { adminUrl } from "./support/cluster.ts";
+import { adminUrl, harnessConnection, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
 import {
   applyAsReleaseRunner,
@@ -114,6 +114,7 @@ async function asLogin<T>(database: string, role: string, body: (db: postgres.Sq
 }
 
 beforeAll(async () => {
+  // cluster admin: saving/restoring/altering roles and CREATE DATABASE are superuser-only.
   admin = connectAdmin();
   savedRoles = await saveRoles(admin);
 
@@ -124,6 +125,7 @@ beforeAll(async () => {
   const release = loadBaseline(SUPPORTED_RELEASES[0]!.name);
   await admin.unsafe(`CREATE DATABASE ${UPGRADED_DB}`);
   created.push(UPGRADED_DB);
+  // cluster admin: the release runner replays a baseline whose 0053 alters roles (superuser-only).
   const db = connectAdmin(UPGRADED_DB);
   try {
     try {
@@ -183,7 +185,7 @@ describe("the grant (catalog): no runtime role holds DELETE or TRUNCATE on any t
     ["the production baseline after `bun run migrate`", () => UPGRADED_DB],
   ] as const) {
     test(`${label}: has_table_privilege is false for DELETE and TRUNCATE, for every runtime role, on every table`, async () => {
-      const db = connectAdmin(name());
+      const db = harnessConnection(name());
       try {
         expect(await tableCount(db)).toBeGreaterThan(50);
         expect(await runtimeDeleteGrants(db)).toEqual([]);
@@ -202,7 +204,7 @@ describe("the grant (catalog): no runtime role holds DELETE or TRUNCATE on any t
   }
 
   test("the upgrade recorded 0089 as breaking, and 0088 with it", async () => {
-    const db = connectAdmin(UPGRADED_DB);
+    const db = harnessConnection(UPGRADED_DB);
     try {
       const rows = (await db`
         SELECT name, compat FROM schema_migrations
@@ -313,3 +315,6 @@ describe("rm_worker may INSERT the wallet repair pass's evidence, and nothing mo
     });
   }
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

@@ -23,6 +23,7 @@ import * as admin from "../src/swarm/admin.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
 
@@ -198,7 +199,7 @@ test("a pre-#697 row (signing_key_id NULL) falls back to the currently-active-ke
 
   const submitted = await submitSignedTake({ token: registered.token, signer: key, memberId, date, subjectId: subj, nonce: "n1" });
 
-  await sql`UPDATE swarm_recommendations SET signing_key_id = NULL WHERE id = ${submitted.recommendationId}`;
+  await fixtureDb`UPDATE swarm_recommendations SET signing_key_id = NULL WHERE id = ${submitted.recommendationId}`;
 
   const after = await ic.getTakeReceipt(submitted.recommendationId);
   expect(after?.take.verified).toBe(true);

@@ -10,6 +10,7 @@ import postgres from "postgres";
 import { ROUTES } from "@robotmoney/contract";
 import { createHistoryDatabase } from "./support/history-database.ts";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { handleAdmin } from "../src/api/routes/admin.ts";
 import { getRegimeSnapshots, getRegimeSnapshotsSummary, getResearchSignal } from "../src/api/routes/dashboards.ts";
@@ -60,7 +61,7 @@ afterEach(async () => {
   // not setAnalyticsReadMode(), because a prior test may have left the gate
   // unsatisfied (compatibility is never gated, but this keeps every test
   // file's teardown identical and independent of gate state).
-  await sql`UPDATE analytics_read_mode SET mode = 'compatibility', updated_by = 'test-teardown' WHERE id = true`;
+  await fixtureDb`UPDATE analytics_read_mode SET mode = 'compatibility', updated_by = 'test-teardown' WHERE id = true`;
 });
 afterAll(() => {
   for (const [k, v] of Object.entries(origGateEnv)) {
@@ -165,7 +166,7 @@ async function submitRegimeAndResearch(date: string, composite: number, signalKe
 async function insertObservation(domain: ParityDomain, observedAt: Date, matched: boolean): Promise<void> {
   const rows = [{ domain, value: matched ? "ok" : "bad" }];
   const checksum = sha256Hex(canonicalStringify(rows));
-  await sql`
+  await fixtureDb`
     INSERT INTO analytics_parity_observations
       (domain, observed_at, legacy_row_count, ledger_row_count, legacy_checksum, ledger_checksum, matched, detail)
     VALUES (${domain}, ${observedAt.toISOString()}::timestamptz, 1, ${matched ? 1 : 0},
@@ -296,7 +297,7 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     // value neither writer would produce by default.
     await submitRawHistoryPoint(indicator, date, 3.25, RAW_SOURCE);
     await submitRegimeAndResearch(date, 55, signalKey, "cutover-dto-check");
-    await sql`UPDATE raw_indicator_history SET source = ${RAW_SOURCE} WHERE indicator = ${indicator}`;
+    await fixtureDb`UPDATE raw_indicator_history SET source = ${RAW_SOURCE} WHERE indicator = ${indicator}`;
 
     const subjectId = `cutover-subject-${crypto.randomUUID()}`;
     await ensureSubject(subjectId, "Cutover DTO Subject");
@@ -381,7 +382,7 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     // sentinel the ledger cannot know about: ledger mode must keep returning
     // the frozen value, and rollback must return the drifted one.
     const DRIFT = 424243;
-    await sql`UPDATE regime_snapshots SET composite = ${DRIFT} WHERE date = ${date}`;
+    await fixtureDb`UPDATE regime_snapshots SET composite = ${DRIFT} WHERE date = ${date}`;
     const stillLedger = await getRegimeSnapshots(new URL("http://x?range=10"));
     expect(JSON.stringify(stillLedger), "ledger mode must ignore a legacy-table edit").not.toContain(String(DRIFT));
     expect(stillLedger).toEqual(compatRegime);
@@ -393,7 +394,7 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
 
     // Put the legacy fixture back and confirm the original DTO returns — the
     // AC's literal "reads use the legacy fixture again".
-    await sql`UPDATE regime_snapshots SET composite = 55 WHERE date = ${date}`;
+    await fixtureDb`UPDATE regime_snapshots SET composite = 55 WHERE date = ${date}`;
     const revertedRegime = await getRegimeSnapshots(new URL("http://x?range=10"));
     const revertedBrief = await getBriefBySession(session.id);
     expect(revertedRegime).toEqual(compatRegime);
@@ -462,8 +463,8 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     // (see the AC7 test below), so counting over it as-is would be 0 out of 0
     // — vacuous. Seed a probe the way that AC7 test does, re-running 0057's
     // backfill statement verbatim, so this counts a real population.
-    await sql`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES ('2024-01-02', 'PROVENANCE_BASELINE_PROBE', 2, 'seed')`;
-    await sql.unsafe(`
+    await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES ('2024-01-02', 'PROVENANCE_BASELINE_PROBE', 2, 'seed')`;
+    await fixtureDb.unsafe(`
       INSERT INTO source_value_versions (source_key, market_date, value, revision_kind, knowledge_time)
       SELECT 'raw_indicator_history:' || indicator, date, value, 'legacy_baseline', statement_timestamp()
       FROM raw_indicator_history WHERE indicator = 'PROVENANCE_BASELINE_PROBE'
@@ -482,7 +483,7 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     // statement would also satisfy.
     let raised: { message: string; code: string | null } | null = null;
     try {
-      await sql.unsafe(`UPDATE source_value_versions SET provenance = 'backfilled' WHERE id = ${Number(row!.id)}`);
+      await fixtureDb.unsafe(`UPDATE source_value_versions SET provenance = 'backfilled' WHERE id = ${Number(row!.id)}`);
     } catch (e) {
       const err = e as { message?: string; code?: string };
       raised = { message: err?.message ?? String(e), code: err?.code ?? null };
@@ -714,8 +715,8 @@ describe("issue #979 AC7: legacy-baseline source rows are never upgraded to hist
     // verbatim from backend/migrations/0057_source_acquisition_ledger.sql)
     // against a seeded row makes this a real, non-vacuous check of what that
     // statement actually does, not merely an assertion over an empty set.
-    await sql`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES ('2024-01-01', 'AC7_BACKFILL_PROBE', 1, 'seed')`;
-    await sql.unsafe(`
+    await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES ('2024-01-01', 'AC7_BACKFILL_PROBE', 1, 'seed')`;
+    await fixtureDb.unsafe(`
       INSERT INTO source_value_versions (source_key, market_date, value, revision_kind, knowledge_time)
       SELECT 'raw_indicator_history:' || indicator, date, value, 'legacy_baseline', statement_timestamp()
       FROM raw_indicator_history
@@ -732,10 +733,10 @@ describe("issue #979 AC7: legacy-baseline source rows are never upgraded to hist
 
   test("the schema itself refuses a row that claims BOTH legacy_baseline and a real acquisition — no code path could 'upgrade' one in place", async () => {
     const acquisitionId = crypto.randomUUID();
-    await sql`INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity) VALUES (${acquisitionId}, 'fixture', '1', 'ac7-check')`;
+    await fixtureDb`INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity) VALUES (${acquisitionId}, 'fixture', '1', 'ac7-check')`;
     let raised: { message?: string; code?: string } | null = null;
     try {
-      await sql`
+      await fixtureDb`
         INSERT INTO source_value_versions (acquisition_id, source_key, market_date, value, revision_kind)
         VALUES (${acquisitionId}::uuid, 'ac7:test', '2024-01-01', 1, 'legacy_baseline')`;
     } catch (e) {
@@ -750,7 +751,7 @@ describe("issue #979 AC7: legacy-baseline source rows are never upgraded to hist
     // `no prior version` branch and this proves nothing about the
     // legacy-baseline path. Seed one exactly as migration 0057's backfill
     // does: no acquisition, revision_kind 'legacy_baseline'.
-    await sql`
+    await fixtureDb`
       INSERT INTO source_value_versions (source_key, market_date, value, revision_kind, knowledge_time)
       VALUES ('raw_indicator_history:AC7_REAL_IND', '2024-07-01', 10, 'legacy_baseline', now())`;
 

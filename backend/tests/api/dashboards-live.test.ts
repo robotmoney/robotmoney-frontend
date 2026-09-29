@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { jsonValue, sql } from "../../src/db/client.ts";
+import { fixtureDb } from "../support/fixture-db.ts";
 import { fileURLToPath } from "node:url";
 import {
   resolveVaultAdapters,
@@ -52,8 +53,8 @@ async function resetCaches() {
   _resetWalletSleevesCacheForTests();
   _resetAllocationFrameworkCacheForTests();
   _resetTokenPriceCacheForTests();
-  await sql`DELETE FROM wallet_sleeve_samples`;
-  await sql`DELETE FROM vault_adapter_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM vault_adapter_samples`;
 }
 
 beforeEach(async () => {
@@ -305,7 +306,7 @@ test("wallet-sleeves: ONE reverted sub-call degrades ONLY that holding to stale;
 test("wallet-sleeves: a THROWN batch (forced RPC failure) degrades every holding to value null + provenance 'stale' (never fabricated)", async () => {
   process.env.BASE_RPC_SOURCE = "stub";
   process.env.PRICE_SOURCE = "stub";
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   mockChain({ failCall: true });
   await sampleWalletSleeves({}).catch(() => {});
   const r = await getWalletSleeves();
@@ -325,9 +326,9 @@ test("wallet-sleeves (#173): a failed live price read falls back to a recent per
 
   const fresh = new Date(Date.now() - 60_000);
   const tooOld = new Date(Date.now() - 6 * 60_000);
-  await sql`DELETE FROM wallet_balance_samples`;
-  await sql`DELETE FROM wallet_sleeve_samples`;
-  await sql`
+  await fixtureDb`DELETE FROM wallet_balance_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES
       (current_date, 'WETH', 1, 2500, 2500, 'live', ${fresh}),
@@ -357,22 +358,22 @@ test("wallet-sleeves (#173): a failed live price read falls back to a recent per
     expect(bankr.stale).toBe(true);
     expect(r.stale).toBe(true);
   } finally {
-    await sql`DELETE FROM wallet_balance_samples`;
-    await sql`DELETE FROM wallet_sleeve_samples`;
+    await fixtureDb`DELETE FROM wallet_balance_samples`;
+    await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   }
 });
 
 test("wallet-sleeves seam: amount and price readers inject independently and persisted-price provenance reaches the unchanged DTO", async () => {
   process.env.BASE_RPC_SOURCE = "live";
   process.env.PRICE_SOURCE = "live";
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   const sampledAt = new Date();
   const sampleDate = sampledAt.toISOString().slice(0, 10);
   const propWallets = resolvePropWallets();
 
   // Seed sample rows into Postgres
   for (const w of propWallets) {
-    await sql`
+    await fixtureDb`
       INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
       VALUES
         (${sampleDate}, ${w.toLowerCase()}, 'ROBOTMONEY', 2, 3, 6, 'stale', ${sampledAt}),
@@ -392,7 +393,7 @@ test("wallet-sleeves seam: amount and price readers inject independently and per
 
   const providerHolding = r.wallets.find((wallet) => wallet.type === "primary")!.holdings.find((holding) => holding.symbol === "USDC")!;
   expect(providerHolding).toEqual({ symbol: "USDC", amount: 2, priceUsd: 4, valueUsd: 8, provenance: "live", observedAt: sampledAt.toISOString() });
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
 });
 
 // ── allocation ──────────────────────────────────────────────────────────────
@@ -412,7 +413,7 @@ test("allocation: with the row absent, getAllocation falls back to the swarm see
   // Genuinely exercise the row-absent branch on the shared pool, then restore the
   // seeded row so the suite's DB state is unchanged.
   try {
-    await sql`DELETE FROM allocation_framework WHERE id = 1`;
+    await fixtureDb`DELETE FROM allocation_framework WHERE id = 1`;
     resetCaches();
     const r = await getAllocation();
     expect(r.managed).toBe(true);
@@ -420,10 +421,10 @@ test("allocation: with the row absent, getAllocation falls back to the swarm see
     expect(r.strategy.find((s) => s.label === "Conservative DeFi Yield")!.targetPct).toBe(95);
   } finally {
     // Restore the swarm seed row (id=1) exactly as db/seed.ts wrote it.
-    await sql`
+    await fixtureDb`
       INSERT INTO allocation_framework (id, asof, vault_contract, buckets)
       VALUES (1, ${ALLOCATION_FRAMEWORK_SEED.asof}, ${ALLOCATION_FRAMEWORK_SEED.vault_contract},
-              ${sql.json(jsonValue(ALLOCATION_FRAMEWORK_SEED.buckets))})
+              ${fixtureDb.json(jsonValue(ALLOCATION_FRAMEWORK_SEED.buckets))})
       ON CONFLICT (id) DO NOTHING
     `;
     resetCaches();
@@ -456,7 +457,7 @@ test("buyback indexer advances a persisted scan cursor across empty windows and 
     throw new Error(`unexpected ${body.method}`);
   }) as unknown as typeof fetch;
   try {
-    await sql`DELETE FROM buyback_scan_state`;
+    await fixtureDb`DELETE FROM buyback_scan_state`;
     const r1 = await indexBuybacks();
     const c1 = await sql<{ b: string }[]>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`;
     // from=FLOOR; BUYBACK_MAX_CHUNKS windows of BUYBACK_LOG_CHUNK blocks.
@@ -470,7 +471,7 @@ test("buyback indexer advances a persisted scan cursor across empty windows and 
     expect(Number(c2[0]!.b)).toBe(FLOOR + RUN_SPAN * 2 - 1);
   } finally {
     for (const k of ["BASE_RPC_SOURCE"]) delete process.env[k];
-    await sql`DELETE FROM buyback_scan_state`;
+    await fixtureDb`DELETE FROM buyback_scan_state`;
     _resetBuybackCacheForTests();
   }
 });
@@ -521,7 +522,7 @@ test("buyback indexer: a fresh database scans from the committed constant, never
     throw new Error(`unexpected ${body.method}`);
   }) as unknown as typeof fetch;
   try {
-    await sql`DELETE FROM buyback_scan_state`; // fresh DB: no cursor, and every seed row has block_number NULL
+    await fixtureDb`DELETE FROM buyback_scan_state`; // fresh DB: no cursor, and every seed row has block_number NULL
     const r = await indexBuybacks();
     // The RPC-visible window, not just the return value: the very first
     // eth_getLogs must open at the buyback era, not at genesis (and not at the
@@ -531,7 +532,7 @@ test("buyback indexer: a fresh database scans from the committed constant, never
     expect(r.scannedToBlock).toBe(BUYBACK_FROM_BLOCK + 10_000);
   } finally {
     for (const k of ["BASE_RPC_SOURCE", "BUYBACK_FROM_BLOCK"]) delete process.env[k];
-    await sql`DELETE FROM buyback_scan_state`;
+    await fixtureDb`DELETE FROM buyback_scan_state`;
     _resetBuybackCacheForTests();
   }
 });
@@ -562,7 +563,7 @@ test("issue #641: the buyback scan bounds are committed constants — the retire
     throw new Error(`unexpected ${body.method}`);
   }) as unknown as typeof fetch;
   try {
-    await sql`DELETE FROM buyback_scan_state`;
+    await fixtureDb`DELETE FROM buyback_scan_state`;
     const r = await indexBuybacks();
     expect(r.scannedToBlock).toBe(BUYBACK_FROM_BLOCK + RUN_SPAN - 1);
     // Not the 1-block window the planted env would have produced.
@@ -572,7 +573,7 @@ test("issue #641: the buyback scan bounds are committed constants — the retire
     expect([BUYBACK_LOG_CHUNK, BUYBACK_MAX_CHUNKS]).toEqual([9000, 25]);
   } finally {
     for (const k of ["BUYBACK_LOG_CHUNK", "BUYBACK_MAX_CHUNKS"]) delete process.env[k];
-    await sql`DELETE FROM buyback_scan_state`;
+    await fixtureDb`DELETE FROM buyback_scan_state`;
     _resetBuybackCacheForTests();
   }
 });
@@ -679,8 +680,8 @@ async function indexOneHistoricSwap(ohlcv: "ok" | "unavailable" | "other-side") 
   // the mock window is wide enough that the first 9000-block window contains
   // HISTORIC_BLOCK, so no env override is needed.
   const calls = mockHistoricBuyback(ohlcv);
-  await sql`DELETE FROM buyback_swaps WHERE tx_hash = ${SWAP_TX}`;
-  await sql`DELETE FROM buyback_scan_state`;
+  await fixtureDb`DELETE FROM buyback_swaps WHERE tx_hash = ${SWAP_TX}`;
+  await fixtureDb`DELETE FROM buyback_scan_state`;
   const result = await indexBuybacks();
   const rows = await sql<{ occurred_on: Date; weth_spent: string; value_usd: string | null }[]>`
     SELECT occurred_on, weth_spent::text, value_usd::text FROM buyback_swaps WHERE tx_hash = ${SWAP_TX}
@@ -690,8 +691,8 @@ async function indexOneHistoricSwap(ohlcv: "ok" | "unavailable" | "other-side") 
 
 async function cleanupHistoricSwap() {
   delete process.env.BASE_RPC_SOURCE;
-  await sql`DELETE FROM buyback_swaps WHERE tx_hash = ${SWAP_TX}`;
-  await sql`DELETE FROM buyback_scan_state`;
+  await fixtureDb`DELETE FROM buyback_swaps WHERE tx_hash = ${SWAP_TX}`;
+  await fixtureDb`DELETE FROM buyback_scan_state`;
   _resetBuybackCacheForTests();
   _resetTokenPriceCacheForTests();
 }
@@ -750,7 +751,7 @@ test("buyback indexer: a candle for the OTHER side of the pool is REFUSED — th
 });
 
 test("wallet-sleeves: getWalletSleeves performs ZERO RPC/price calls on request path when readers expect.unreachable()", async () => {
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   const sampledAt = new Date();
   const sampleDate = sampledAt.toISOString().slice(0, 10);
   const wallets = resolvePropWallets();
@@ -758,7 +759,7 @@ test("wallet-sleeves: getWalletSleeves performs ZERO RPC/price calls on request 
 
   for (const w of wallets) {
     for (const s of symbols) {
-      await sql`
+      await fixtureDb`
         INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
         VALUES (${sampleDate}, ${w.toLowerCase()}, ${s}, 10, 2, 20, 'live', ${sampledAt})
         ON CONFLICT (sample_date, wallet_address, symbol) DO NOTHING
@@ -788,16 +789,16 @@ test("wallet-sleeves: getWalletSleeves performs ZERO RPC/price calls on request 
       expect(h.provenance).toBe("live");
     }
   }
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
 });
 
 test("wallet-sleeves: served provenance and observedAt pass-through persisted row's own value exactly", async () => {
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   const fixedSampledAt = new Date("2026-07-25T10:00:00.000Z");
   const sampleDate = "2026-07-25";
   const wallet = "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6";
 
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${sampleDate}, ${wallet.toLowerCase()}, 'USDC', 100, 1, 100, 'stale', ${fixedSampledAt})
   `;
@@ -810,11 +811,11 @@ test("wallet-sleeves: served provenance and observedAt pass-through persisted ro
   expect(usdc.provenance).toBe("stale");
   expect(usdc.observedAt).toBe(fixedSampledAt.toISOString());
 
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
 });
 
 test("wallet-sleeves: freshness budget boundary pair (budget-1s -> stale false, budget+1s -> stale true)", async () => {
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   const BUDGET_MS = 5 * 60_000;
   const wallet = "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6";
   const symbols = ["USDC", "ROBOTMONEY", "WETH", "ETH", "BNKR"];
@@ -823,7 +824,7 @@ test("wallet-sleeves: freshness budget boundary pair (budget-1s -> stale false, 
   const freshTime = new Date(Date.now() - (BUDGET_MS - 1000));
   const dateFresh = freshTime.toISOString().slice(0, 10);
   for (const s of symbols) {
-    await sql`
+    await fixtureDb`
       INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
       VALUES (${dateFresh}, ${wallet.toLowerCase()}, ${s}, 10, 1, 10, 'live', ${freshTime})
     `;
@@ -834,11 +835,11 @@ test("wallet-sleeves: freshness budget boundary pair (budget-1s -> stale false, 
   expect(bankrFresh.stale).toBe(false);
 
   // 2) Budget + 1s (stale)
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   const staleTime = new Date(Date.now() - (BUDGET_MS + 1000));
   const dateStale = staleTime.toISOString().slice(0, 10);
   for (const s of symbols) {
-    await sql`
+    await fixtureDb`
       INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
       VALUES (${dateStale}, ${wallet.toLowerCase()}, ${s}, 10, 1, 10, 'live', ${staleTime})
     `;
@@ -848,5 +849,5 @@ test("wallet-sleeves: freshness budget boundary pair (budget-1s -> stale false, 
   const bankrStale = rStale.wallets.find((w) => w.name === "Bankr")!;
   expect(bankrStale.stale).toBe(true);
 
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
 });

@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { checkSchemaCurrent } from "../scripts/schema-current.ts";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -67,7 +68,7 @@ describe("checkSchemaCurrent", () => {
     // DDL, not the DML the append-only guard's triggers intercept (0032's own
     // header: the guard makes UPDATE/DDL DETECTABLE elsewhere, not blocked
     // here) — and this file's clone is dropped after it finishes regardless.
-    await sql`DROP TABLE schema_migrations`;
+    await fixtureDb`DROP TABLE schema_migrations`;
     const result = await checkSchemaCurrent();
     expect(result.exists).toBe(false);
     expect(result.pending).toEqual([]);

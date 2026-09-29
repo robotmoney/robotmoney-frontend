@@ -20,6 +20,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { listJudgements, openEpoch, turnOverEpoch } from "../src/swarm/domain.ts";
 import { getJudgeConfig, setJudgeConfig } from "../src/swarm/judge-config.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
@@ -40,11 +41,11 @@ async function sqlstate(statement: () => Promise<unknown>): Promise<string | nul
 
 /** Put 0039's three-mode CHECK back and plant a `shadow` row, as a pre-0082 database holds it. */
 async function plantPre0082Shadow(): Promise<void> {
-  await sql.unsafe(`
+  await fixtureDb.unsafe(`
     ALTER TABLE swarm_judge_config DROP CONSTRAINT swarm_judge_config_mode_check;
     ALTER TABLE swarm_judge_config ADD CONSTRAINT swarm_judge_config_mode_check
       CHECK (mode IN ('off', 'shadow', 'enforce'));`);
-  await sql`UPDATE swarm_judge_config SET mode = 'shadow', model = 'legacy/shadow-model' WHERE id = 1`;
+  await fixtureDb`UPDATE swarm_judge_config SET mode = 'shadow', model = 'legacy/shadow-model' WHERE id = 1`;
 }
 
 const healRows = async (): Promise<number> =>
@@ -74,7 +75,7 @@ test("a database still holding `shadow` is healed to `off`, audited, and a rerun
   expect((await sql`SELECT mode FROM swarm_judge_config WHERE id = 1`)[0]!.mode).toBe("shadow");
   const before = await healRows();
 
-  await sql.unsafe(MIGRATION);
+  await fixtureDb.unsafe(MIGRATION);
 
   const [row] = (await sql`SELECT mode, model FROM swarm_judge_config WHERE id = 1`) as unknown as {
     mode: string;
@@ -95,7 +96,7 @@ test("a database still holding `shadow` is healed to `off`, audited, and a rerun
   expect(await sqlstate(() => sql`UPDATE swarm_judge_config SET mode = 'shadow' WHERE id = 1`)).toBe("23514");
 
   // Rerun: nothing left to heal, nothing recorded.
-  await sql.unsafe(MIGRATION);
+  await fixtureDb.unsafe(MIGRATION);
   expect(await healRows()).toBe(before + 1);
   expect((await sql`SELECT mode FROM swarm_judge_config WHERE id = 1`)[0]!.mode).toBe("off");
 });
@@ -107,7 +108,7 @@ test("judgements recorded under `shadow` stay on file and readable — 0082 touc
   const turned = await turnOverEpoch(subjectId, opened.sessionId);
   if (!turned.ok) throw new Error("turnOverEpoch failed");
   const sessionId = turned.closedSessionId;
-  await sql`
+  await fixtureDb`
     INSERT INTO swarm_session_judgements
       (session_id, mode, source, fallback_reason, prompt_hash, inputs_digest, take_count, min_takes, opinion)
     VALUES (${sessionId}, 'shadow', 'fallback', 'model_unconfigured', 'history-prompt-hash', 'history-digest', 1, 3,
@@ -138,7 +139,7 @@ test("a legacy `shadow` row reads as `off`, and the next write through the switc
     }[];
     expect(row).toMatchObject({ mode: "off", min_takes: 2 });
   } finally {
-    await sql.unsafe(MIGRATION);
+    await fixtureDb.unsafe(MIGRATION);
   }
   expect(await sqlstate(() => sql`UPDATE swarm_judge_config SET mode = 'shadow' WHERE id = 1`)).toBe("23514");
 });

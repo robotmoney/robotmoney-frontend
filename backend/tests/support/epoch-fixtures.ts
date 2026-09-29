@@ -8,6 +8,7 @@
 // what another file believes it is testing.
 import * as ic from "../../src/swarm/domain.ts";
 import { sql } from "../../src/db/client.ts";
+import { fixtureDb } from "./fixture-db.ts";
 import { ensureProseSubject } from "./prose-subject.ts";
 import { generateKeyPair, signMessage } from "../../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
@@ -28,7 +29,7 @@ export const sessionDate = (s: Record<string, unknown>): string =>
 export async function activeSubject(prefix: string, epochDurationSeconds = 3600): Promise<string> {
   const id = rid(prefix);
   await ensureProseSubject(id, `${prefix} subject`);
-  await sql`UPDATE swarm_subjects
+  await fixtureDb`UPDATE swarm_subjects
                SET epoch_duration_seconds = ${epochDurationSeconds}, status = 'active'
              WHERE id = ${id}`;
   return id;
@@ -93,7 +94,7 @@ export async function collectingSessions(subjectId: string): Promise<Record<stri
  * supplied; no judge is ever called from these files.
  */
 export async function setJudgeMode(mode: "off" | "enforce"): Promise<void> {
-  await sql`UPDATE swarm_judge_config
+  await fixtureDb`UPDATE swarm_judge_config
                SET mode = ${mode},
                    model = ${mode === "off" ? null : "test/epoch-fixture-judge"},
                    updated_at = now()
@@ -102,7 +103,7 @@ export async function setJudgeMode(mode: "off" | "enforce"): Promise<void> {
 
 /** Seat a member on the session's FROZEN expected roster (the absence denominator). */
 export async function seat(sessionId: string, member: TestMember): Promise<void> {
-  await sql`INSERT INTO swarm_session_members (session_id, member_id, member_name)
+  await fixtureDb`INSERT INTO swarm_session_members (session_id, member_id, member_name)
             VALUES (${sessionId}, ${member.id}, ${member.id})
             ON CONFLICT DO NOTHING`;
 }

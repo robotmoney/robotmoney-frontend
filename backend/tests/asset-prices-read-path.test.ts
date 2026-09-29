@@ -33,6 +33,7 @@ import { persistedFallbackWalletPriceReader } from "../src/chain/wallet-valuatio
 import { ASSET_PRICE_TIME_BASIS } from "../src/ops/asset-prices.ts";
 import { _resetTokenPriceCacheForTests } from "../src/chain/token-prices.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 // This file's last test permanently attaches a wallet_balance_samples row to a
 // published wallet_aum_snapshot_runs header — migration 0038's finalize guard
@@ -57,9 +58,9 @@ async function cleanup(): Promise<void> {
   // before this runs. wallet_aum_snapshot_runs itself is append-only and is
   // deliberately never cleaned up — each test that inserts one reserves a
   // fresh run_id, so fixture rows never collide across tests.
-  await sql`DELETE FROM wallet_balance_samples WHERE symbol IN ('WETH', 'ROBOTMONEY') AND snapshot_run_id IS NULL`;
-  await sql`DELETE FROM wallet_sleeve_samples WHERE symbol IN ('WETH', 'ROBOTMONEY')`;
-  await sql`DELETE FROM asset_prices WHERE symbol IN ('WETH', 'ROBOTMONEY')`;
+  await fixtureDb`DELETE FROM wallet_balance_samples WHERE symbol IN ('WETH', 'ROBOTMONEY') AND snapshot_run_id IS NULL`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples WHERE symbol IN ('WETH', 'ROBOTMONEY')`;
+  await fixtureDb`DELETE FROM asset_prices WHERE symbol IN ('WETH', 'ROBOTMONEY')`;
 }
 
 beforeEach(async () => {
@@ -79,7 +80,7 @@ afterEach(async () => {
 });
 
 async function insertAssetPrice(priceDate: string, symbol: string, priceUsd: number): Promise<void> {
-  await sql`
+  await fixtureDb`
     INSERT INTO asset_prices
       (price_date, symbol, time_basis, price_usd, currency, source, pool_key, token_address,
        observed_at, fetched_at, config_identity)
@@ -99,7 +100,7 @@ test("wallet-balances history: a CLOSED day with an agreeing asset_prices row jo
   const amount = 1.1;
   const priceUsd = 1500.37;
   const valueUsd = amount * priceUsd; // the exact double sampleWalletBalances would have stored
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${YESTERDAY}, 'WETH', ${amount}, ${priceUsd}, ${valueUsd}, 'live', ${`${YESTERDAY}T23:59:58Z`})
   `;
@@ -113,7 +114,7 @@ test("wallet-balances history: a CLOSED day with an agreeing asset_prices row jo
 
 test("wallet-balances history: a CLOSED day with NO asset_prices row (the #849 known cleanly-sampled-day gap) still serves the sample's own value_usd unchanged", async () => {
   const valueUsd = 1650.129999; // an odd literal, so a silent fallback-to-zero or NaN would be obvious
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${YESTERDAY}, 'WETH', 1, 1650.129999, ${valueUsd}, 'live', ${`${YESTERDAY}T23:59:58Z`})
   `;
@@ -128,7 +129,7 @@ test("wallet-balances history: TODAY's row stays on its fused value_usd even whe
   const amount = 2;
   const priceUsd = 3000;
   const valueUsd = amount * priceUsd;
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${TODAY}, 'WETH', ${amount}, ${priceUsd}, ${valueUsd}, 'live', now())
   `;
@@ -149,7 +150,7 @@ test("wallet-sleeves: a CLOSED day with an agreeing asset_prices row joins to it
   const priceUsd = 2650.111;
   const valueUsd = amount * priceUsd;
   const wallet = resolvePropWallets()[0]!.toLowerCase();
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${YESTERDAY}, ${wallet}, 'WETH', ${amount}, ${priceUsd}, ${valueUsd}, 'live', ${`${YESTERDAY}T23:59:58Z`})
   `;
@@ -164,7 +165,7 @@ test("wallet-sleeves: a CLOSED day with an agreeing asset_prices row joins to it
 
 test("wallet-sleeves: a CLOSED day with NO asset_prices row still serves the sample's own price/value unchanged", async () => {
   const wallet = resolvePropWallets()[0]!.toLowerCase();
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${YESTERDAY}, ${wallet}, 'WETH', 1, 2222.333, 2222.333, 'live', ${`${YESTERDAY}T23:59:58Z`})
   `;
@@ -180,7 +181,7 @@ test("wallet-sleeves: TODAY's holding stays fused even when asset_prices holds a
   const amount = 1;
   const priceUsd = 2500;
   const valueUsd = amount * priceUsd;
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${TODAY}, ${wallet}, 'WETH', ${amount}, ${priceUsd}, ${valueUsd}, 'live', now())
   `;
@@ -216,7 +217,7 @@ test("recentPersistedPrice: a CLOSED day's row still within the freshness window
   // migration note describes (a repair/backfill commit landing minutes after
   // UTC midnight for the day it just closed).
   const closedDayPrice = 1800.5;
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${YESTERDAY}, 'WETH', 1, ${closedDayPrice}, ${closedDayPrice}, 'backfilled', now())
   `;
@@ -233,7 +234,7 @@ test("recentPersistedPrice: a CLOSED day's row within the freshness window falls
   mockPriceHostFailure();
   const asset = resolveTrackedAssets().find((a) => a.symbol === "WETH")!;
 
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${YESTERDAY}, 'WETH', 1, 1701.4, 1701.4, 'backfilled', now())
   `;
@@ -248,7 +249,7 @@ test("recentPersistedPrice: TODAY's fresh sample keeps reading its own price_usd
   mockPriceHostFailure();
   const asset = resolveTrackedAssets().find((a) => a.symbol === "WETH")!;
 
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${TODAY}, 'WETH', 1, 2600.75, 2600.75, 'live', now())
   `;
@@ -273,7 +274,7 @@ test("recentPersistedPrice: a row with price_usd NULL (post-#927 shape) derives 
   mockPriceHostFailure();
   const asset = resolveTrackedAssets().find((a) => a.symbol === "WETH")!;
 
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${TODAY}, 'WETH', 2, NULL, 5401.5, 'live', now())
   `;
@@ -308,7 +309,7 @@ test("0038: a published snapshot's constituent row reproduces its original value
   const [reserved] = await sql<{ run_id: string }[]>`
     SELECT nextval(pg_get_serial_sequence('wallet_aum_snapshot_runs', 'run_id')) AS run_id
   `;
-  await sql.begin(async (tx) => {
+  await fixtureDb.begin(async (tx) => {
     await tx`
       INSERT INTO wallet_balance_samples
         (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at,
@@ -343,7 +344,7 @@ test("0038: a published snapshot's constituent row reproduces its original value
   // Simulate a repair reconciling asset_prices to a NEW price for the same
   // (date, symbol) — "the price series is repaired underneath it".
   const repairedPrice = 1620;
-  await sql`
+  await fixtureDb`
     UPDATE asset_prices SET price_usd = ${repairedPrice}
      WHERE price_date = ${YESTERDAY} AND symbol = ${symbol} AND time_basis = ${ASSET_PRICE_TIME_BASIS}
   `;
@@ -361,5 +362,5 @@ test("0038: a published snapshot's constituent row reproduces its original value
   const after = await fetchPersistedWalletBalances();
   expect(after.history.find((h) => h.date === YESTERDAY)!.byAsset[symbol]).toBe(1 * repairedPrice);
 
-  await sql`DELETE FROM asset_prices WHERE symbol = ${symbol}`;
+  await fixtureDb`DELETE FROM asset_prices WHERE symbol = ${symbol}`;
 });

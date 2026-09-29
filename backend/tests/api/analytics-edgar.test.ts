@@ -54,6 +54,7 @@
 //         the bearer credential never appears in any log line.
 import { test, expect, beforeAll } from "bun:test";
 import { sql } from "../../src/db/client.ts";
+import { fixtureDb } from "../support/fixture-db.ts";
 import { handleAnalytics } from "../../src/api/routes/analytics.ts";
 import { runAnalytics } from "../../src/analytics/index.ts";
 import { liveDataSource } from "../../src/analytics/access/data-source.ts";
@@ -166,16 +167,16 @@ test(
       // production boots from.
       const { history, manifest } = await loadEdgarSeed();
       const mnaRows = history[manifest.indicator]!;
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
       for (const row of mnaRows) {
-        await sql`INSERT INTO raw_indicator_history (date, indicator, value) VALUES (${row.date}, 'MNA', ${row.value})`;
+        await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value) VALUES (${row.date}, 'MNA', ${row.value})`;
       }
       // A "later" refresh relative to endMonth, pinned to the periodic
       // full-sweep weekday so this suite deterministically exercises Tier 2
       // (see nextFullSweepDate above) rather than depending on which
       // weekday the seed's own manifest.asOf happens to fall on.
       const asof = nextFullSweepDate(manifest.asOf);
-      await sql`DELETE FROM research_signals WHERE date = ${asof}`;
+      await fixtureDb`DELETE FROM research_signals WHERE date = ${asof}`;
 
       // EDGAR answers each already-seeded month with the value the committed
       // artifact holds, and the one genuinely-new month with a fresh count.
@@ -264,7 +265,7 @@ test(
         if (v === undefined) delete process.env[k as keyof typeof origEnv];
         else process.env[k as keyof typeof origEnv] = v;
       }
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
     }
 
     async function runAnalyticsWithLogger(asOfDate: string, logger: { log: (m: string) => void; warn: (m: string) => void; error: (m: string) => void }) {
@@ -327,13 +328,13 @@ test(
 
       const { history, manifest } = await loadEdgarSeed();
       const mnaRows = history[manifest.indicator]!;
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
       for (const row of mnaRows) {
-        await sql`INSERT INTO raw_indicator_history (date, indicator, value) VALUES (${row.date}, 'MNA', ${row.value})`;
+        await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value) VALUES (${row.date}, 'MNA', ${row.value})`;
       }
       const asof = nextIncrementalDate(manifest.asOf);
       expect(selectEdgarRefreshTier(asof)).toBe("incremental"); // the tier under test, asserted not assumed
-      await sql`DELETE FROM research_signals WHERE date = ${asof}`;
+      await fixtureDb`DELETE FROM research_signals WHERE date = ${asof}`;
 
       // ── ACT 1: the daily refresh over the real committed floor.
       fetchDouble = installFetchDouble(process.env.ANALYTICS_API_URL, () => 5);
@@ -402,7 +403,7 @@ test(
         if (v === undefined) delete process.env[k as keyof typeof origEnv];
         else process.env[k as keyof typeof origEnv] = v;
       }
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
     }
   },
   // Bounded by construction (a handful of 250ms-paced requests per run) —

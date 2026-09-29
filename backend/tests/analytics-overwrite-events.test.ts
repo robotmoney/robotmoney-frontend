@@ -12,6 +12,7 @@ import { persistResearchSignal } from "../src/analytics/store/research-store.ts"
 import type { ResearchPayload } from "../src/analytics/analyze/research.ts";
 import type { RegimeSnapshotRow } from "../src/analytics/store/regime-store.ts";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { createHistoryDatabase } from "./support/history-database.ts";
 
@@ -30,15 +31,15 @@ interface OverwriteEvent {
 }
 
 async function events(table: string, key: Record<string, unknown>): Promise<OverwriteEvent[]> {
-  return await sql<OverwriteEvent[]>`
+  return await fixtureDb<OverwriteEvent[]>`
     SELECT table_name, operation, natural_key, previous_row, replacement_row, recorded_at
     FROM analytics_overwrite_events
-    WHERE table_name = ${table} AND natural_key = ${sql.json(key as never)}
+    WHERE table_name = ${table} AND natural_key = ${fixtureDb.json(key as never)}
     ORDER BY id`;
 }
 
 async function rowJson(table: string, where: string): Promise<Record<string, unknown>> {
-  const [row] = await sql.unsafe<{ row: Record<string, unknown> }[]>(
+  const [row] = await fixtureDb.unsafe<{ row: Record<string, unknown> }[]>(
     `SELECT to_jsonb(t) AS row FROM ${table} t WHERE ${where}`,
   );
   if (!row) throw new Error(`missing fixture row in ${table}: ${where}`);
@@ -161,7 +162,7 @@ test("allowed deletes retain complete old rows while regime deletion stays refus
   const rawIndicator = "OVERWRITE_RAW_DELETE";
   await saveRawIndicatorHistory({ [rawIndicator]: [{ date: rawDate, value: 9 }] }, undefined, "live");
   const rawBefore = await rowJson("raw_indicator_history", `date = '${rawDate}' AND indicator = '${rawIndicator}'`);
-  await sql`DELETE FROM raw_indicator_history WHERE date = ${rawDate} AND indicator = ${rawIndicator}`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE date = ${rawDate} AND indicator = ${rawIndicator}`;
   const rawEvents = await events("raw_indicator_history", { date: rawDate, indicator: rawIndicator });
   expect(rawEvents).toHaveLength(1);
   expect(rawEvents[0]).toMatchObject({ operation: "delete", previous_row: rawBefore, replacement_row: null });
@@ -173,7 +174,7 @@ test("allowed deletes retain complete old rows while regime deletion stays refus
     "research_signals",
     `signal_key = '${signalKey}' AND date = '${signalDate}'`,
   );
-  await sql`DELETE FROM research_signals WHERE signal_key = ${signalKey} AND date = ${signalDate}`;
+  await fixtureDb`DELETE FROM research_signals WHERE signal_key = ${signalKey} AND date = ${signalDate}`;
   const researchEvents = await events("research_signals", { signal_key: signalKey, date: signalDate });
   expect(researchEvents).toHaveLength(1);
   expect(researchEvents[0]).toMatchObject({ operation: "delete", previous_row: researchBefore, replacement_row: null });
@@ -182,7 +183,7 @@ test("allowed deletes retain complete old rows while regime deletion stays refus
   await saveRegimeSnapshots([regime(regimeDate, 0.4, "live")]);
   let refusal: { code?: string; message?: string } | null = null;
   try {
-    await sql`DELETE FROM regime_snapshots WHERE date = ${regimeDate}`;
+    await fixtureDb`DELETE FROM regime_snapshots WHERE date = ${regimeDate}`;
   } catch (error) {
     refusal = error as { code?: string; message?: string };
   }

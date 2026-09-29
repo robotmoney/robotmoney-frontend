@@ -41,15 +41,15 @@ import { hashManifest, readManifest } from "../src/db/schema-manifest.ts";
 import { bootstrapBlankDatabase, loadSnapshot, type Snapshot } from "../src/db/schema-snapshot.ts";
 import { runMigrate } from "../scripts/migrate-run.ts";
 import { withTargetLock } from "./support/target-lock.ts";
-import { adminExec, adminUrl, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminConnection, adminExec, harnessConnection, harnessUrl, ROLE_PASSWORD, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 
 const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 const OWNER = { name: "rm_owner", password: OWNER_PASSWORD };
-const LOGIN = new URL(adminUrl()).username;
+let LOGIN: string;
 let ownerCanLogin = true;
 
 function urlFor(database: string, role?: { name: string; password: string }): string {
-  const url = new URL(adminUrl());
+  const url = new URL(harnessUrl(database));
   url.pathname = `/${database}`;
   if (role) {
     url.username = role.name;
@@ -65,6 +65,9 @@ function connect(database: string, role?: { name: string; password: string }): p
 beforeAll(async () => {
   const [row] = await sql<{ rolcanlogin: boolean }[]>`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`;
   ownerCanLogin = row?.rolcanlogin ?? true;
+  // cluster admin: ALTER ROLE is superuser-only (rm_owner holds no CREATEROLE);
+  // and the admin login's name is the `default privileges for <login>` subject.
+  [{ current_user: LOGIN }] = (await adminExec("SELECT current_user")) as unknown as { current_user: string }[];
   await adminExec(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
 });
 
@@ -88,23 +91,23 @@ function withUnrecorded(snapshot: Snapshot, unrecorded: string): Snapshot {
 /** A database of its own: blank-and-bootstrapped from the snapshot, or a clone of the migration-built template. */
 async function withDatabase(
   shape: "snapshot" | "migrations",
-  body: (dbs: { admin: postgres.Sql<{}>; owner: postgres.Sql<{}>; name: string }) => Promise<void>,
+  body: (dbs: { db: postgres.Sql<{}>; owner: postgres.Sql<{}>; name: string }) => Promise<void>,
   options: { unrecorded?: string } = {},
 ): Promise<void> {
   const name = `rm_baseline_${shape}_${randomBytes(4).toString("hex")}`;
-  const maintenance = connect("postgres");
+  const maintenance = adminConnection(); // cluster admin: CREATE/DROP DATABASE
   if (shape === "snapshot") {
     await maintenance.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
   } else {
     await maintenance.unsafe(`CREATE DATABASE ${name} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`);
   }
-  const admin = connect(name);
+  const db = harnessConnection(name);
   const owner = connect(name, OWNER);
   try {
     if (shape === "snapshot") {
       // pgcrypto is on the snapshot's provider exclusion list: a managed
       // cluster installs it, rm_owner may not.
-      await admin.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+      await db.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
       const bootstrapper = connect(name, OWNER);
       try {
         const snapshot = await loadSnapshot();
@@ -113,15 +116,15 @@ async function withDatabase(
         await bootstrapper.end({ timeout: 5 });
       }
       // Production before §9.1 step 2: no manifest at all.
-      await admin.unsafe("DELETE FROM schema_manifest");
+      await db.unsafe("DELETE FROM schema_manifest");
     }
     // Enrolled as production (§9.1 step 4 has run; step 2 has not).
-    await admin.unsafe("DELETE FROM deployment_identity");
-    await admin.unsafe("INSERT INTO deployment_identity (kind) VALUES ('production')");
-    await body({ admin, owner, name });
+    await db.unsafe("DELETE FROM deployment_identity");
+    await db.unsafe("INSERT INTO deployment_identity (kind) VALUES ('production')");
+    await body({ db, owner, name });
   } finally {
     await owner.end({ timeout: 5 });
-    await admin.end({ timeout: 5 });
+    await db.end({ timeout: 5 });
     await maintenance.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
     await maintenance.end({ timeout: 5 });
   }
@@ -129,7 +132,7 @@ async function withDatabase(
 
 /** The operator's run, as `bun run migrate` performs it against production. */
 function operatorRun(owner: postgres.Sql<{}>, name: string): ReturnType<typeof runMigrate> {
-  return withTargetLock(urlFor(name), (lock) =>
+  return withTargetLock(harnessUrl(name), (lock) =>
     runMigrate(owner, { caller: "operator", env: "prod", connection: "remote", nonInteractive: true, lock }),
   );
 }
@@ -140,14 +143,14 @@ async function ledger(db: postgres.Sql<{}>): Promise<string[]> {
 
 describe("§9.1 step 2 — the first manifest is published only over a live schema that matches the snapshot", () => {
   test("a database that IS the snapshot publishes its first manifest, and the result says it baselined", async () => {
-    await withDatabase("snapshot", async ({ admin, owner, name }) => {
-      expect(await readManifest(admin)).toBeNull();
+    await withDatabase("snapshot", async ({ db, owner, name }) => {
+      expect(await readManifest(db)).toBeNull();
       const snapshot = await loadSnapshot();
       const result = await operatorRun(owner, name);
       expect(result.baselined).toBe(true);
       expect(result.applied).toEqual([]);
       expect(result.manifest.contentHash).toBe(snapshot.manifest.contentHash);
-      expect(await readManifest(admin)).toEqual(result.manifest);
+      expect(await readManifest(db)).toEqual(result.manifest);
 
       // A later run republishes over its own manifest and does not baseline again.
       const again = await operatorRun(owner, name);
@@ -156,12 +159,12 @@ describe("§9.1 step 2 — the first manifest is published only over a live sche
   });
 
   test("RED CONTROL: the same database with one column dropped refuses, naming the column, and publishes nothing", async () => {
-    await withDatabase("snapshot", async ({ admin, owner, name }) => {
-      await admin.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
+    await withDatabase("snapshot", async ({ db, owner, name }) => {
+      await db.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
       const refusal = operatorRun(owner, name);
       await expect(refusal).rejects.toThrow("Refusing to publish this database's first schema manifest");
       await expect(operatorRun(owner, name)).rejects.toThrow("column public.job_schedules.last_enqueued_at");
-      expect(await readManifest(admin)).toBeNull();
+      expect(await readManifest(db)).toBeNull();
     });
   });
 
@@ -171,20 +174,21 @@ describe("§9.1 step 2 — the first manifest is published only over a live sche
     // LOGIN THAT RAN IT. In production that login is doadmin, which the
     // snapshot's exclusion list covers; in this harness it is not, and the
     // baseline says so rather than publishing over it.
-    await withDatabase("migrations", async ({ admin, owner, name }) => {
-      const before = await ledger(admin);
+    await withDatabase("migrations", async ({ db, owner, name }) => {
+      const before = await ledger(db);
       await expect(operatorRun(owner, name)).rejects.toThrow(
         `default privileges for ${LOGIN} in schema public on tables is in the live catalog but not declared`,
       );
-      expect(await readManifest(admin)).toBeNull();
-      expect(await ledger(admin)).toEqual(before);
+      expect(await readManifest(db)).toBeNull();
+      expect(await ledger(db)).toEqual(before);
 
       // With the login's leftovers gone — production's shape — it baselines.
-      await admin.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${LOGIN}" IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker`);
-      await admin.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${LOGIN}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`);
+      // cluster admin: default privileges FOR ROLE the (superuser) replaying login
+      await adminExec(`ALTER DEFAULT PRIVILEGES FOR ROLE "${LOGIN}" IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker`, name);
+      await adminExec(`ALTER DEFAULT PRIVILEGES FOR ROLE "${LOGIN}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`, name);
       const result = await operatorRun(owner, name);
       expect(result.baselined).toBe(true);
-      expect(await readManifest(admin)).toEqual(result.manifest);
+      expect(await readManifest(db)).toEqual(result.manifest);
     });
   });
 
@@ -194,15 +198,15 @@ describe("§9.1 step 2 — the first manifest is published only over a live sche
     // otherwise "apply" 0053 again as a pending file, onto a schema that has it.
     // The ledger is BUILT without the row, never stripped of it: schema_migrations
     // is append-only, and a test takes a fresh database rather than erase history.
-    await withDatabase("snapshot", async ({ admin, owner, name }) => {
-      const before = await ledger(admin);
+    await withDatabase("snapshot", async ({ db, owner, name }) => {
+      const before = await ledger(db);
       expect(before).not.toContain("0053_database_role_taxonomy.sql");
 
       await expect(operatorRun(owner, name)).rejects.toThrow(
         "the snapshot embodies 0053_database_role_taxonomy.sql, which the ledger does not record although later files are recorded",
       );
-      expect(await ledger(admin)).toEqual(before);
-      expect(await readManifest(admin)).toBeNull();
+      expect(await ledger(db)).toEqual(before);
+      expect(await readManifest(db)).toBeNull();
     }, { unrecorded: "0053_database_role_taxonomy.sql" });
   });
 
@@ -212,21 +216,21 @@ describe("§9.1 step 2 — the first manifest is published only over a live sche
     // live schema drifts from the snapshot by one column.
     const snapshot = await loadSnapshot();
     const last = snapshot.filenames.at(-1)!;
-    await withDatabase("snapshot", async ({ admin, owner, name }) => {
-      const before = await ledger(admin);
+    await withDatabase("snapshot", async ({ db, owner, name }) => {
+      const before = await ledger(db);
       expect(before).not.toContain(last);
-      await admin.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
+      await db.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
 
       await expect(operatorRun(owner, name)).rejects.toThrow("column public.job_schedules.last_enqueued_at");
       // What is left: the pending file committed (its own fenced transaction),
       // the publish transaction rolled back — ledger ahead of manifest.
-      expect(await ledger(admin)).toEqual([...before, last].sort());
-      expect(await readManifest(admin)).toBeNull();
+      expect(await ledger(db)).toEqual([...before, last].sort());
+      expect(await readManifest(db)).toBeNull();
 
       // Nothing pending now, and the difference is still there: still refused,
       // still no manifest. Only a migration repairing it lets the baseline pass.
       await expect(operatorRun(owner, name)).rejects.toThrow("Refusing to publish this database's first schema manifest");
-      expect(await readManifest(admin)).toBeNull();
+      expect(await readManifest(db)).toBeNull();
     }, { unrecorded: last });
   });
 
@@ -241,16 +245,16 @@ describe("§9.1 step 2 — the first manifest is published only over a live sche
     try {
       for (const f of readdirSync(migrations)) if (f.endsWith(".sql")) copyFileSync(join(migrations, f), join(dir, f));
       writeFileSync(join(dir, "9999_planted_additive.sql"), "-- compat: additive\n-- metadata_version: 1\nCREATE TABLE baseline_planted (id int);\n");
-      await withDatabase("snapshot", async ({ admin, owner, name }) => {
-        const before = await ledger(admin);
+      await withDatabase("snapshot", async ({ db, owner, name }) => {
+        const before = await ledger(db);
         await expect(
-          withTargetLock(urlFor(name), (lock) =>
+          withTargetLock(harnessUrl(name), (lock) =>
             runMigrate(owner, { caller: "operator", env: "prod", connection: "remote", nonInteractive: true, lock }, { migrationsDir: dir }),
           ),
         ).rejects.toThrow("the pending 9999_planted_additive.sql is not embodied by the snapshot");
-        expect(await ledger(admin)).toEqual(before);
-        expect(await readManifest(admin)).toBeNull();
-        const [planted] = await admin<{ t: string | null }[]>`SELECT to_regclass('public.baseline_planted')::text AS t`;
+        expect(await ledger(db)).toEqual(before);
+        expect(await readManifest(db)).toBeNull();
+        const [planted] = await db<{ t: string | null }[]>`SELECT to_regclass('public.baseline_planted')::text AS t`;
         expect(planted?.t).toBeNull();
       });
     } finally {
@@ -258,3 +262,6 @@ describe("§9.1 step 2 — the first manifest is published only over a live sche
     }
   });
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

@@ -10,6 +10,7 @@
 import { test, expect, beforeAll } from "bun:test";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import {
   adminHeaders,
@@ -141,7 +142,7 @@ test("the admin credential cannot trigger classification through enqueue-job", a
 // end to end against real Postgres and stays compatible with the existing
 // insert style domain.ts already uses (which never sets the new columns).
 test("legacy-row compatibility: a session inserted the pre-0017 way (no version/updated_at/brief_opens_at) still reads back with sane defaults", async () => {
-  await sql`INSERT INTO swarm_subjects (id, status, name) VALUES ('regime-test-subject', 'active', 'Regime Test Subject')
+  await fixtureDb`INSERT INTO swarm_subjects (id, status, name) VALUES ('regime-test-subject', 'active', 'Regime Test Subject')
             ON CONFLICT (id) DO NOTHING`;
   const [row] = await sql<{ version: number; state: string; updated_at: Date; brief_opens_at: Date | null }[]>`
     INSERT INTO swarm_sessions (convened_at, subject_id, subject_name, state)
@@ -154,7 +155,7 @@ test("legacy-row compatibility: a session inserted the pre-0017 way (no version/
 });
 
 test("swarm_sessions.state check accepts all six legal states and rejects an unknown one", async () => {
-  await sql`INSERT INTO swarm_subjects (id, status, name) VALUES ('regime-test-subject', 'active', 'Regime Test Subject')
+  await fixtureDb`INSERT INTO swarm_subjects (id, status, name) VALUES ('regime-test-subject', 'active', 'Regime Test Subject')
             ON CONFLICT (id) DO NOTHING`;
   const states = ["scheduled", "collecting", "window_closed", "aggregated", "published", "cancelled"];
   for (let i = 0; i < states.length; i++) {
@@ -172,7 +173,7 @@ test("swarm_sessions.state check accepts all six legal states and rejects an unk
   // try/catch instead.
   let threw = false;
   try {
-    await sql`INSERT INTO swarm_sessions (convened_at, subject_id, subject_name, state)
+    await fixtureDb`INSERT INTO swarm_sessions (convened_at, subject_id, subject_name, state)
         VALUES ('2031-03-01', 'regime-test-subject', 'Regime Test Subject', 'brief_published')`;
   } catch {
     threw = true;
@@ -181,18 +182,18 @@ test("swarm_sessions.state check accepts all six legal states and rejects an unk
 });
 
 test("swarm_session_members and swarm_session_events round-trip a real session's roster snapshot and lifecycle history", async () => {
-  await sql`INSERT INTO swarm_subjects (id, status, name) VALUES ('regime-test-subject', 'active', 'Regime Test Subject')
+  await fixtureDb`INSERT INTO swarm_subjects (id, status, name) VALUES ('regime-test-subject', 'active', 'Regime Test Subject')
             ON CONFLICT (id) DO NOTHING`;
-  await sql`INSERT INTO swarm_members (id, status, name, lens) VALUES ('regime-test-member', 'active', 'Regime Test Member', 'macro')
+  await fixtureDb`INSERT INTO swarm_members (id, status, name, lens) VALUES ('regime-test-member', 'active', 'Regime Test Member', 'macro')
             ON CONFLICT (id) DO NOTHING`;
   const [session] = await sql<{ id: string }[]>`
     INSERT INTO swarm_sessions (convened_at, subject_id, subject_name, state)
     VALUES ('2031-04-01', 'regime-test-subject', 'Regime Test Subject', 'scheduled')
     RETURNING id`;
 
-  await sql`INSERT INTO swarm_session_members (session_id, member_id, member_name, member_lens, status)
+  await fixtureDb`INSERT INTO swarm_session_members (session_id, member_id, member_name, member_lens, status)
             VALUES (${session.id}, 'regime-test-member', 'Regime Test Member', 'macro', 'expected')`;
-  await sql`INSERT INTO swarm_session_events (session_id, from_state, to_state, action, actor)
+  await fixtureDb`INSERT INTO swarm_session_events (session_id, from_state, to_state, action, actor)
             VALUES (${session.id}, NULL, 'scheduled', 'create', 'admin')`;
 
   const [roster] = await sql<{ status: string }[]>`
@@ -208,7 +209,7 @@ test("swarm_session_members and swarm_session_events round-trip a real session's
   // delete that would have triggered the cascade is refused categorically
   // (0A000) for every role. That refusal is the guarantee worth asserting —
   // a convened session's attendance and event trail cannot be erased.
-  const refusal = await sql`DELETE FROM swarm_sessions WHERE id = ${session.id}`
+  const refusal = await fixtureDb`DELETE FROM swarm_sessions WHERE id = ${session.id}`
     .then(() => null, (e: { code?: string }) => e.code ?? "unknown");
   expect(refusal).toBe("0A000");
   const [{ n: remainingRoster }] = await sql<{ n: number }[]>`

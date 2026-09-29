@@ -51,7 +51,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
-import { adminUrl } from "./support/cluster.ts";
+import { adminUrl, harnessConnection, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import { IDENTITY_MIGRATION, runMigrate } from "../scripts/migrate-run.ts";
 import type { MigrateJournalFile } from "../scripts/migrate-journal.ts";
 import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
@@ -110,6 +110,8 @@ function connect(database: string): postgres.Sql<{}> {
   return postgres(urlFor(database).toString(), { max: 1, onnotice: () => {} });
 }
 
+// cluster admin: it builds the baseline as the provisioning login (release DDL alters roles,
+// superuser-only), saves/restores/alters roles, and creates/drops databases.
 let admin: postgres.Sql<{}>;
 let saved: SavedRole[] = [];
 const homes: string[] = [];
@@ -125,14 +127,23 @@ async function withDb<T>(database: string, body: (db: postgres.Sql<{}>) => Promi
 
 /** Everything a refused run must leave exactly as it was. */
 async function fingerprint(database: string): Promise<{ ledger: string[]; relations: string[] }> {
-  return withDb(database, async (db) => ({
+  const owner = harnessConnection(database);
+  try {
+    return await readFingerprint(owner);
+  } finally {
+    await owner.end({ timeout: 5 });
+  }
+}
+
+async function readFingerprint(db: postgres.Sql<{}>): Promise<{ ledger: string[]; relations: string[] }> {
+  return ({
     ledger: ((await db`SELECT name FROM schema_migrations ORDER BY name`) as unknown as { name: string }[]).map((r) => r.name),
     relations: (
       (await db`
         SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' ORDER BY c.relname`) as unknown as { relname: string }[]
     ).map((r) => r.relname),
-  }));
+  });
 }
 
 async function operator(database: string, rmEnv: string, steps: readonly TerminalStep[]): Promise<TerminalRun> {
@@ -196,12 +207,15 @@ beforeAll(async () => {
   // tablenorow — exact, plus a deployment_identity table made out of band:
   // 0063's DDL with no ledger row and no identity row.
   await admin.unsafe(`CREATE DATABASE ${DB.tablenorow} TEMPLATE ${DB.exact}`);
-  await withDb(DB.tablenorow, (db) =>
-    db.begin(async (tx) => {
+  const tablenorow = harnessConnection(DB.tablenorow);
+  try {
+    await tablenorow.begin(async (tx) => {
       await tx.unsafe("SET LOCAL ROLE rm_owner");
       await tx.unsafe(readFileSync(join(MIGRATIONS_DIR, IDENTITY_MIGRATION), "utf8"));
-    }),
-  );
+    });
+  } finally {
+    await tablenorow.end({ timeout: 5 });
+  }
 
   // §9.1 step 1, through the provisioning login: rm_owner LOGIN with a password
   // the operator will type. And the rm_readonly line the host's ~/.env holds.
@@ -450,3 +464,6 @@ describe("§10 W2 — First production migrate", () => {
     await expectRefusedAndUnchanged(DB.norow, run, before, "gates");
   });
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

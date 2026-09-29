@@ -47,6 +47,7 @@ import { resolveTrackedAssets } from "../src/config.ts";
 import { ASSET_PRICE_TIME_BASIS } from "../src/ops/asset-prices.ts";
 import { _resetWalletBalancesCacheForTests } from "../src/chain/wallet-balances.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -56,15 +57,15 @@ beforeEach(async () => {
   process.env.BASE_RPC_SOURCE = "stub";
   process.env.PRICE_SOURCE = "stub";
   _resetWalletBalancesCacheForTests();
-  await sql`DELETE FROM wallet_balance_samples`;
-  await sql`DELETE FROM wallet_sleeve_samples`;
-  await sql`DELETE FROM asset_prices`;
+  await fixtureDb`DELETE FROM wallet_balance_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM asset_prices`;
 });
 afterEach(async () => {
   for (const k of ENV_KEYS) delete process.env[k];
-  await sql`DELETE FROM wallet_balance_samples`;
-  await sql`DELETE FROM wallet_sleeve_samples`;
-  await sql`DELETE FROM asset_prices`;
+  await fixtureDb`DELETE FROM wallet_balance_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM asset_prices`;
 });
 
 test("AC3: a cleanly-sampled day's balance rows can never trigger the closed-day fallback — every priced symbol gets a same-transaction asset_prices row", async () => {

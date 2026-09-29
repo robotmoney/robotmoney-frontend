@@ -53,7 +53,7 @@ import postgres from "postgres";
 import ts from "typescript";
 import { bootstrapBlankDatabase, loadSnapshot } from "../src/db/schema-snapshot.ts";
 import { OBJECTLESS_SHAPES, type QueryDeclaration, type RmRole, type StatementDeclaration, type TablePrivilege } from "../src/db/registry.ts";
-import { adminUrl } from "./support/cluster.ts";
+import { adminConnection, adminExec, harnessConnection, ROLE_PASSWORD, roleUrl } from "./support/cluster.ts";
 
 const BACKEND = join(import.meta.dir, "..");
 const SRC = join(BACKEND, "src");
@@ -475,22 +475,18 @@ const CATALOG_ONLY_STATEMENTS: readonly string[] = [
 // The disposable database and the role logins.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PASSWORD = "rm_registry_execution_password";
 /** A LOGIN role that holds nothing but what the exactness check hands it. */
 const SCRATCH = "rm_registry_probe_scratch";
 
 const database = `rm_registry_exec_${crypto.randomUUID().slice(0, 8)}`;
-let admin: postgres.Sql<{}>;
+/** The schema owner's handle on the disposable database (rm_owner, via the fixture login). */
+let owner: postgres.Sql<{}>;
 const logins = new Map<string, postgres.Sql<{}>>();
-/** Each role's login attributes before this file touched them, restored after. */
-const saved: { rolname: string; rolcanlogin: boolean; rolpassword: string | null }[] = [];
 
+// The four role logins already carry the suite's shared password (tests/preload.ts),
+// so every login here, the scratch role included, is a roleUrl.
 function urlFor(role: string, name = database): string {
-  const url = new URL(adminUrl());
-  url.pathname = `/${name}`;
-  url.username = role;
-  url.password = PASSWORD;
-  return url.toString();
+  return roleUrl(role, name);
 }
 
 function login(role: string): postgres.Sql<{}> {
@@ -503,18 +499,11 @@ function login(role: string): postgres.Sql<{}> {
 }
 
 beforeAll(async () => {
-  const superuser = postgres(adminUrl(), { max: 1, onnotice: () => {} });
+  // cluster admin: CREATE ROLE, CREATE DATABASE and the provider's CREATE EXTENSION are superuser-only.
+  const superuser = adminConnection();
   try {
-    // The cluster's roles are shared by every file; their login attributes are
-    // put back in afterAll so nothing here leaks into a file that runs later.
-    saved.push(
-      ...(await superuser<{ rolname: string; rolcanlogin: boolean; rolpassword: string | null }[]>`
-        SELECT rolname, rolcanlogin, rolpassword FROM pg_authid WHERE rolname = ANY(${ROLES as string[]})`),
-    );
-    expect(saved.map((r) => r.rolname).sort()).toEqual([...ROLES].sort());
-    for (const role of ROLES) await superuser.unsafe(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${PASSWORD}'`);
     await superuser.unsafe(`DROP ROLE IF EXISTS ${SCRATCH}`);
-    await superuser.unsafe(`CREATE ROLE ${SCRATCH} LOGIN NOINHERIT PASSWORD '${PASSWORD}'`);
+    await superuser.unsafe(`CREATE ROLE ${SCRATCH} LOGIN NOINHERIT PASSWORD '${ROLE_PASSWORD()}'`);
     // A blank database owned by rm_owner (since Postgres 15 only the database
     // owner may CREATE in `public`), copied from template0 so nothing the
     // suite's migration-built template holds comes with it.
@@ -522,36 +511,26 @@ beforeAll(async () => {
   } finally {
     await superuser.end({ timeout: 5 });
   }
-
-  const target = new URL(adminUrl());
-  target.pathname = `/${database}`;
-  admin = postgres(target.toString(), { max: 1, onnotice: () => {} });
   // pgcrypto is provider-managed (the snapshot's header: "a managed cluster
   // installs it and rm_owner may not"), so the provider's half is done here.
-  await admin.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
-  await admin.unsafe("SET ROLE rm_owner");
-  await bootstrapBlankDatabase(admin, await loadSnapshot());
-  await admin.unsafe("RESET ROLE");
+  await adminExec("CREATE EXTENSION IF NOT EXISTS pgcrypto", database);
+
+  owner = harnessConnection(database);
+  await bootstrapBlankDatabase(owner, await loadSnapshot());
   // The scratch role reaches `public` and the sequences a serial INSERT
   // draws on, and no relation at all until a case grants it one.
-  await admin.unsafe(`GRANT USAGE ON SCHEMA public TO ${SCRATCH}`);
-  await admin.unsafe(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${SCRATCH}`);
+  await owner.unsafe(`GRANT USAGE ON SCHEMA public TO ${SCRATCH}`);
+  await owner.unsafe(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${SCRATCH}`);
 });
 
 afterAll(async () => {
   await Promise.all([...logins.values()].map((db) => db.end({ timeout: 5 })));
-  if (admin) await admin.end({ timeout: 5 });
-  const superuser = postgres(adminUrl(), { max: 1, onnotice: () => {} });
+  if (owner) await owner.end({ timeout: 5 });
+  // cluster admin: DROP DATABASE and DROP ROLE.
+  const superuser = adminConnection();
   try {
     await superuser.unsafe(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
     await superuser.unsafe(`DROP ROLE IF EXISTS ${SCRATCH}`);
-    for (const row of saved) {
-      await superuser.unsafe(`ALTER ROLE ${row.rolname} WITH ${row.rolcanlogin ? "LOGIN" : "NOLOGIN"}`);
-      if (row.rolpassword === null) await superuser.unsafe(`ALTER ROLE ${row.rolname} WITH PASSWORD NULL`);
-      // A stored verifier is accepted back verbatim: Postgres recognises a
-      // SCRAM or md5 string and stores it without hashing it again.
-      else await superuser.unsafe(`ALTER ROLE ${row.rolname} WITH PASSWORD '${row.rolpassword.replace(/'/g, "''")}'`);
-    }
   } finally {
     await superuser.end({ timeout: 5 });
   }
@@ -584,8 +563,8 @@ async function runProbe(db: postgres.Sql<{}>, probe: NonNullable<QueryDeclaratio
 /** Grant the scratch role exactly `held` (relation → privileges), and nothing else. */
 async function scratchHolds(held: ReadonlyMap<string, readonly TablePrivilege[]>): Promise<void> {
   for (const [object, privileges] of held) {
-    await admin.unsafe(`REVOKE ALL ON public.${object} FROM ${SCRATCH}`);
-    if (privileges.length > 0) await admin.unsafe(`GRANT ${privileges.join(", ")} ON public.${object} TO ${SCRATCH}`);
+    await owner.unsafe(`REVOKE ALL ON public.${object} FROM ${SCRATCH}`);
+    if (privileges.length > 0) await owner.unsafe(`GRANT ${privileges.join(", ")} ON public.${object} TO ${SCRATCH}`);
   }
 }
 
@@ -632,7 +611,7 @@ async function executeSite(declaration: QueryDeclaration, group: readonly QueryD
       }
     }
   } finally {
-    for (const object of held.keys()) await admin.unsafe(`REVOKE ALL ON public.${object} FROM ${SCRATCH}`);
+    for (const object of held.keys()) await owner.unsafe(`REVOKE ALL ON public.${object} FROM ${SCRATCH}`);
   }
   return failures;
 }

@@ -10,7 +10,7 @@ import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
-import { adminUrl } from "./support/cluster.ts";
+import { adminExec, harnessUrl } from "./support/cluster.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
@@ -170,15 +170,10 @@ test("claim never bypasses the imported swarm roster cap", async () => {
 // Postgres instance, migrated only through 0019, to genuinely re-test 0019's
 // idempotency against the schema shape it was actually written for.
 test("0019 migration is idempotent when executed repeatedly against real Postgres", async () => {
-  const base = new URL(adminUrl());
   const dbName = `tmp_0019_idem_${crypto.randomUUID().slice(0, 8)}`;
-  const admin = postgres(base.toString(), { max: 1, onnotice: () => {} });
-  await admin.unsafe(`CREATE DATABASE ${dbName}`);
-  await admin.end();
-
-  const tmpUrl = new URL(base.toString());
-  tmpUrl.pathname = `/${dbName}`;
-  const db = postgres(tmpUrl.toString(), { max: 1, onnotice: () => {} });
+  // cluster admin: CREATE DATABASE is cluster-level; the schema is the owner's.
+  await adminExec(`CREATE DATABASE ${dbName} OWNER rm_owner`);
+  const db = postgres(harnessUrl(dbName), { max: 1, onnotice: () => {} });
   try {
     const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
     const upTo0019 = files.filter((f) => f <= "0019_committee_self_serve_claim.sql");
@@ -202,9 +197,7 @@ test("0019 migration is idempotent when executed repeatedly against real Postgre
     ]);
   } finally {
     await db.end();
-    const cleanup = postgres(base.toString(), { max: 1, onnotice: () => {} });
-    await cleanup.unsafe(`DROP DATABASE IF EXISTS ${dbName}`);
-    await cleanup.end();
+    await adminExec(`DROP DATABASE IF EXISTS ${dbName}`);
   }
 });
 

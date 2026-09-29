@@ -33,6 +33,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (original === null) return;
+  // cluster admin: ALTER ROLE (LOGIN/CREATEROLE attributes) is superuser-only, and is the subject here
   await adminExec(
     `ALTER ROLE rm_owner ${original.rolcanlogin ? "LOGIN" : "NOLOGIN"} ${original.rolcreaterole ? "CREATEROLE" : "NOCREATEROLE"}`,
   );

@@ -23,7 +23,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
 import {
-  connectAdmin,
   copyDatabase,
   createSnapshotTemplate,
   databaseUrl,
@@ -32,7 +31,7 @@ import {
   startupLines,
   type Spawned,
 } from "./support/startup-preflight.ts";
-import { adminExec } from "./support/cluster.ts";
+import { adminExec, harnessConnection, restoreRoleBaseline } from "./support/cluster.ts";
 
 const WORKER = { name: "rm_worker", password: `rm_worker_startup_${crypto.randomUUID().slice(0, 8)}` };
 
@@ -41,6 +40,7 @@ const created: string[] = [];
 const scratch = mkdtempSync(join(tmpdir(), "rm-worker-startup-"));
 
 beforeAll(async () => {
+  // cluster admin: ALTER ROLE is superuser-only
   await adminExec(`ALTER ROLE rm_worker WITH LOGIN PASSWORD '${WORKER.password}'`);
   template = await createSnapshotTemplate("wsp");
 }, 120_000);
@@ -48,6 +48,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await dropDatabases([...created, template].filter(Boolean));
   rmSync(scratch, { recursive: true, force: true });
+  await restoreRoleBaseline();
 });
 
 interface Fixture {
@@ -56,35 +57,35 @@ interface Fixture {
 }
 
 /** A copy of the snapshot database with its schedules disabled and exactly one
- *  pending `noop` job, after `plant` has had its say (as the superuser). */
-async function fixture(label: string, plant: (admin: ReturnType<typeof connectAdmin>) => Promise<void> = async () => {}): Promise<Fixture> {
+ *  pending `noop` job, after `plant` has had its say (as the schema owner). */
+async function fixture(label: string, plant: (owner: ReturnType<typeof harnessConnection>) => Promise<void> = async () => {}): Promise<Fixture> {
   const name = await copyDatabase(template, label);
   created.push(name);
-  const admin = connectAdmin(name);
+  const owner = harnessConnection(name);
   try {
-    await admin`UPDATE job_schedules SET enabled = false`;
-    expect(((await admin`SELECT count(*)::int AS n FROM jobs`) as unknown as { n: number }[])[0]!.n).toBe(0);
-    const [job] = (await admin`
+    await owner`UPDATE job_schedules SET enabled = false`;
+    expect(((await owner`SELECT count(*)::int AS n FROM jobs`) as unknown as { n: number }[])[0]!.n).toBe(0);
+    const [job] = (await owner`
       INSERT INTO jobs (kind, payload, run_after) VALUES ('noop', '{"probe": "worker-startup"}', now() - interval '1 minute')
       RETURNING id::text AS id`) as unknown as { id: string }[];
-    await plant(admin);
+    await plant(owner);
     return { name, jobId: job!.id };
   } finally {
-    await admin.end({ timeout: 5 });
+    await owner.end({ timeout: 5 });
   }
 }
 
-/** The job's queue state and the run rows it has, read as the superuser. */
+/** The job's queue state and the run rows it has, read as the schema owner. */
 async function jobState(fx: Fixture): Promise<{ status: string; attempts: number; lockedBy: string | null; runs: number }> {
-  const admin = connectAdmin(fx.name);
+  const owner = harnessConnection(fx.name);
   try {
-    const [row] = (await admin`
+    const [row] = (await owner`
       SELECT status, attempts, locked_by AS "lockedBy",
              (SELECT count(*)::int FROM job_runs WHERE job_id = ${fx.jobId}) AS runs
       FROM jobs WHERE id = ${fx.jobId}`) as unknown as { status: string; attempts: number; lockedBy: string | null; runs: number }[];
     return row!;
   } finally {
-    await admin.end({ timeout: 5 });
+    await owner.end({ timeout: 5 });
   }
 }
 
@@ -180,7 +181,7 @@ describe("pipeline worker startup preflight — checks 1-3 as rm_worker, no clai
   const COUNTER_ROW = "swarm_stream_head";
 
   test("check 2: a TRUNCATE privilege on the stream counter row refuses by check 2, claims nothing", async () => {
-    const fx = await fixture("wsp_grant", (admin) => admin.unsafe(`GRANT TRUNCATE ON ${COUNTER_ROW} TO rm_worker`).then(() => {}));
+    const fx = await fixture("wsp_grant", (owner) => owner.unsafe(`GRANT TRUNCATE ON ${COUNTER_ROW} TO rm_worker`).then(() => {}));
     const lines = await expectRefusedAndUnclaimed(fx, spawnWorker("grant", databaseUrl(fx.name, WORKER)), 2);
     expect(lines.filter((line) => line.startsWith("startup_preflight: refused check 2: "))).toEqual([
       `startup_preflight: refused check 2: rm_worker holds DELETE/TRUNCATE on ${COUNTER_ROW}, which D53 (2) ` +
@@ -190,7 +191,7 @@ describe("pipeline worker startup preflight — checks 1-3 as rm_worker, no clai
   }, 120_000);
 
   test("check 3: a dropped declared column refuses by check 3, claims nothing", async () => {
-    const fx = await fixture("wsp_drift", (admin) => admin.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at").then(() => {}));
+    const fx = await fixture("wsp_drift", (owner) => owner.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at").then(() => {}));
     const lines = await expectRefusedAndUnclaimed(fx, spawnWorker("drift", databaseUrl(fx.name, WORKER)), 3);
     expect(lines).toContain(
       "startup_preflight: refused check 3: column public.job_schedules.last_enqueued_at is declared by the " +

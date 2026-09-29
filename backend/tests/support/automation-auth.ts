@@ -11,6 +11,7 @@ import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "../../src/db/client.ts";
+import { fixtureDb } from "./fixture-db.ts";
 import { HOLDER_RIGHTS, provisionAutomationToken, type AutomationHolder } from "../../src/db/automation-tokens.ts";
 
 let issued = 0;
@@ -26,7 +27,7 @@ export async function provisionHolderToken(
   rights: readonly (typeof HOLDER_RIGHTS)[AutomationHolder][number][] = HOLDER_RIGHTS[holder],
 ): Promise<string> {
   const instance = `rm_test_${holder.replace(/-/g, "_")}_${process.pid}_${++issued}`;
-  const { token } = await provisionAutomationToken(instance, [...rights], { holder });
+  const { token } = await provisionAutomationToken(instance, [...rights], { holder, db: fixtureDb });
   return token;
 }
 

@@ -10,6 +10,7 @@
 // A terminal degrade — one a retry cannot fix — must not be retried at all.
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { processOneJob } from "../src/worker/loop.ts";
 import { LANES } from "../src/worker/lanes.ts";
@@ -27,19 +28,19 @@ afterAll(() => {
   delete handlers["research.test_terminal"];
 });
 beforeEach(async () => {
-  await sql`DELETE FROM job_runs`;
-  await sql`DELETE FROM jobs`;
+  await fixtureDb`DELETE FROM job_runs`;
+  await fixtureDb`DELETE FROM jobs`;
 });
 
 const drain = async (max = 12) => {
   for (let i = 0; i < max; i++) {
-    await sql`UPDATE jobs SET run_after = now() WHERE status = 'pending'`;
+    await fixtureDb`UPDATE jobs SET run_after = now() WHERE status = 'pending'`;
     if (!(await processOneJob({ lane: LANES.generic }))) return;
   }
 };
 
 test("a degrade that exhausts its retries settles FAILED, not succeeded", async () => {
-  const [{ id }] = await sql`
+  const [{ id }] = await fixtureDb`
     INSERT INTO jobs (kind, payload, max_attempts) VALUES ('research.test_degrade', '{}', 3) RETURNING id`;
   await drain();
 
@@ -62,11 +63,11 @@ test("the exhausted degrade is VISIBLE on the admin overview", async () => {
   // `generic`, which claims every kind.
   const kind = SAMPLER_KINDS[0];
   const original = handlers[kind];
-  await sql`INSERT INTO jobs (kind, payload, max_attempts) VALUES (${kind}, '{}', 2)`;
+  await fixtureDb`INSERT INTO jobs (kind, payload, max_attempts) VALUES (${kind}, '{}', 2)`;
   handlers[kind] = async () => ({ ok: false, error: "provider unreachable" });
   try {
     for (let i = 0; i < 6; i++) {
-      await sql`UPDATE jobs SET run_after = now() WHERE status = 'pending'`;
+      await fixtureDb`UPDATE jobs SET run_after = now() WHERE status = 'pending'`;
       if (!(await processOneJob({ lane: LANES.generic }))) break;
     }
   } finally {
@@ -84,7 +85,7 @@ test("the exhausted degrade is VISIBLE on the admin overview", async () => {
 });
 
 test("a TERMINAL degrade is not retried at all — one attempt, one red row", async () => {
-  const [{ id }] = await sql`
+  const [{ id }] = await fixtureDb`
     INSERT INTO jobs (kind, payload, max_attempts) VALUES ('research.test_terminal', '{}', 5) RETURNING id`;
   await drain();
 

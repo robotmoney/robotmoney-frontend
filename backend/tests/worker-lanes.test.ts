@@ -19,6 +19,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect, afterEach, beforeAll, afterAll, beforeEach } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { processOneJob } from "../src/worker/loop.ts";
 import { LANES, resolveLane, describeLane } from "../src/worker/lanes.ts";
@@ -71,14 +72,14 @@ afterAll(() => { handlers["regime.classify"] = realRegime; });
 beforeEach(async () => {
   executed.length = 0;
   researchGate = gate();
-  await sql`DELETE FROM job_runs`;
-  await sql`DELETE FROM jobs`;
-  await sql`DELETE FROM job_schedules`;
+  await fixtureDb`DELETE FROM job_runs`;
+  await fixtureDb`DELETE FROM jobs`;
+  await fixtureDb`DELETE FROM job_schedules`;
 });
 
 async function enqueue(kind: string, priority = 0): Promise<number> {
-  const [{ id }] = await sql`INSERT INTO jobs (kind, payload, priority)
-                             VALUES (${kind}, ${sql.json({})}, ${priority}) RETURNING id`;
+  const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload, priority)
+                             VALUES (${kind}, ${fixtureDb.json({})}, ${priority}) RETURNING id`;
   return id;
 }
 const jobStatus = async (id: number): Promise<string> =>

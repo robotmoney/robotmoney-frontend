@@ -32,6 +32,7 @@ import { sql } from "../src/db/client.ts";
 import * as workerClient from "../src/db/worker-client.ts";
 import { loadSnapshot } from "../src/db/schema-snapshot.ts";
 import { adminUrl } from "./support/cluster.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 const TESTS = import.meta.dir;
 
@@ -69,7 +70,7 @@ describe("the pools log in as roles, never as a superuser", () => {
       rolbypassrls: facts!.rolbypassrls,
     }).toEqual({ rolsuper: false, rolcreaterole: false, rolcreatedb: false, rolreplication: false, rolbypassrls: false });
     expect(facts!.session_user).toBe("rm_test");
-    expect(facts!.current_user).toBe("rm_owner");
+    expect(facts!.current_user).toBe("rm_app");
   });
 
   test("the worker pool: a login with no cluster powers, whose session role is rm_worker", async () => {
@@ -84,6 +85,18 @@ describe("the pools log in as roles, never as a superuser", () => {
     }).toEqual({ rolsuper: false, rolcreaterole: false, rolcreatedb: false, rolreplication: false, rolbypassrls: false });
     expect(facts!.session_user).toBe("rm_test_worker");
     expect(facts!.current_user).toBe("rm_worker");
+  });
+
+  test("the fixture handle: a login with no cluster powers, acting as the schema owner", async () => {
+    const [facts] = (await fixtureDb.unsafe(FACTS)) as unknown as LoginFacts[];
+    expect(facts).toBeDefined();
+    expect({ rolsuper: facts!.rolsuper, rolcreaterole: facts!.rolcreaterole, rolcreatedb: facts!.rolcreatedb }).toEqual({
+      rolsuper: false,
+      rolcreaterole: false,
+      rolcreatedb: false,
+    });
+    expect(facts!.session_user).toBe("rm_test_owner");
+    expect(facts!.current_user).toBe("rm_owner");
   });
 
   test("neither configured URL is the container's bootstrap superuser", () => {
@@ -160,15 +173,14 @@ describe("the schema is rm_owner's, provisioned from the snapshot", () => {
 describe("the cluster superuser is reached only by a pinned list of files", () => {
   /** Files under backend/tests/ that import the cluster-admin helpers or name
    *  RM_TEST_ADMIN_URL. Pinned by equality. Each is here because its subject is
-   *  a state no runtime role can build (a role attribute, a membership, a
-   *  password, a database, a replication subscription) or a catalog only a
-   *  superuser reads; none of them uses it to provision a schema. */
+   *  a state only a superuser can build (CREATE/DROP DATABASE, a role, a role
+   *  attribute, a membership, a password, a replication slot or subscription, a
+   *  superuser-owned historical replay); none of them uses it to provision a schema
+   *  or to arrange rows, which are the owner's (tests/support/fixture-db.ts). */
   const CLUSTER_ADMIN_FILES: readonly string[] = [
     "admin-revocation.test.ts",
     "analytics-ledger-restore.test.ts",
     "analytics-worker-role.test.ts",
-    "api-boot-handle-namespace-guard.test.ts",
-    "append-only-guard-check.test.ts",
     "append-only-replication.test.ts",
     "automation-token-provision.test.ts",
     "container-startup-preflight.test.ts",
@@ -182,7 +194,6 @@ describe("the cluster superuser is reached only by a pinned list of files", () =
     "migrate-run.test.ts",
     "migrations-under-production-privileges.test.ts",
     "preflight-0.2.2.test.ts",
-    "preflight-0-3-0-append-only-safety.test.ts",
     "preflight-0-5-0-resume-prefix.test.ts",
     "preflight-utils.test.ts",
     "pre-revoke-boot-refusal.test.ts",
@@ -192,24 +203,21 @@ describe("the cluster superuser is reached only by a pinned list of files", () =
     "schema-additive-backfills.test.ts",
     "schema-compat.test.ts",
     "schema-equivalence.test.ts",
-    "schema-manifest.test.ts",
     "schema-snapshot.test.ts",
     "seed-gate.test.ts",
     "smoke-twin-capture.test.ts",
-    "stream-events-retention.test.ts",
     "spoof-rebind.test.ts",
+    "stream-events-retention.test.ts",
     "support/clean-db.ts",
     "support/history-database.ts",
     "support/snapshot-fixture.ts",
     "support/startup-preflight.ts",
     "swarm-agent-health.test.ts",
     "swarm-claim.test.ts",
-    "swarm-member-handle.test.ts",
     "target-lock.test.ts",
     "twin-production-privilege-shaping.test.ts",
     "upgrade-from-release.test.ts",
     "upgrade-preflight-rm-owner-login.test.ts",
-    "wallet-samples-no-delete.test.ts",
     "webauthn-challenge-slots.test.ts",
     "worker-startup-preflight.test.ts",
   ];

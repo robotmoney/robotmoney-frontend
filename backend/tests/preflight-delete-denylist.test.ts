@@ -21,6 +21,7 @@ import { describe, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { checkPrivileges, findDenylistViolations, type PreflightContext } from "../src/db/preflight.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -52,7 +53,7 @@ describe("check 2's DELETE/TRUNCATE rule covers every table (D55 (6))", () => {
   for (const role of RUNTIME) {
     for (const privilege of ["DELETE", "TRUNCATE"] as const) {
       test(`a planted ${privilege} grant on the ordinary table jobs fails check 2 for ${role}, naming the table, the role and D55 (6)`, async () => {
-        await sql.unsafe(`GRANT ${privilege} ON jobs TO ${role}`);
+        await fixtureDb.unsafe(`GRANT ${privilege} ON jobs TO ${role}`);
         try {
           const violations = await findDenylistViolations(sql, RUNTIME);
           expect(violations).toEqual([{ rule: "append_only_write", role, object: "jobs" }]);
@@ -62,7 +63,7 @@ describe("check 2's DELETE/TRUNCATE rule covers every table (D55 (6))", () => {
               "database has not reached 0089, or a grant re-widened it since",
           ]);
         } finally {
-          await sql.unsafe(`REVOKE ${privilege} ON jobs FROM ${role}`);
+          await fixtureDb.unsafe(`REVOKE ${privilege} ON jobs FROM ${role}`);
         }
         expect(await findDenylistViolations(sql, RUNTIME)).toEqual([]);
       });
@@ -73,31 +74,31 @@ describe("check 2's DELETE/TRUNCATE rule covers every table (D55 (6))", () => {
     // One table each from the admin surface, the pipeline and the projects
     // roster, none of them append-only, a ledger or a stream table.
     const tables = ["admin_session", "wallet_balance_samples", "tracked_wallets"];
-    await sql.unsafe(`GRANT DELETE ON ${tables.join(", ")} TO rm_worker`);
+    await fixtureDb.unsafe(`GRANT DELETE ON ${tables.join(", ")} TO rm_worker`);
     try {
       const violations = await findDenylistViolations(sql, ["rm_worker"]);
       expect(violations.map((v) => v.object).sort()).toEqual([...tables].sort());
     } finally {
-      await sql.unsafe(`REVOKE DELETE ON ${tables.join(", ")} FROM rm_worker`);
+      await fixtureDb.unsafe(`REVOKE DELETE ON ${tables.join(", ")} FROM rm_worker`);
     }
   });
 
   test("a view counts too: an updatable view passes a DELETE through to its table", async () => {
-    await sql.unsafe("CREATE VIEW rm_denylist_planted_view AS SELECT * FROM jobs");
+    await fixtureDb.unsafe("CREATE VIEW rm_denylist_planted_view AS SELECT * FROM jobs");
     try {
-      await sql.unsafe("GRANT DELETE ON rm_denylist_planted_view TO rm_app");
+      await fixtureDb.unsafe("GRANT DELETE ON rm_denylist_planted_view TO rm_app");
       expect(await findDenylistViolations(sql, ["rm_app"])).toContainEqual({
         rule: "append_only_write",
         role: "rm_app",
         object: "rm_denylist_planted_view",
       });
     } finally {
-      await sql.unsafe("DROP VIEW rm_denylist_planted_view");
+      await fixtureDb.unsafe("DROP VIEW rm_denylist_planted_view");
     }
   });
 
   test("a table with a reason of its own keeps it: the event log's refusal names the prune rule (D55 (12))", async () => {
-    await sql.unsafe("GRANT DELETE ON swarm_stream_events TO rm_app");
+    await fixtureDb.unsafe("GRANT DELETE ON swarm_stream_events TO rm_app");
     try {
       expect(await refusalsOn("swarm_stream_events")).toEqual([
         "rm_app holds DELETE/TRUNCATE on swarm_stream_events, which D53 (2) keeps revoked from the runtime roles: " +
@@ -105,7 +106,7 @@ describe("check 2's DELETE/TRUNCATE rule covers every table (D55 (6))", () => {
           "of at least 7 days (D55 (12))",
       ]);
     } finally {
-      await sql.unsafe("REVOKE DELETE ON swarm_stream_events FROM rm_app");
+      await fixtureDb.unsafe("REVOKE DELETE ON swarm_stream_events FROM rm_app");
     }
   });
 });

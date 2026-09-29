@@ -126,6 +126,7 @@ async function cloneAndUse(testFile: string, options: CleanDatabaseOptions = {})
   const template = options.migrationBuilt ? templates.migrated : templates.snapshot;
   const database = databaseName(testFile);
   const previous = live;
+  // cluster admin: CREATE/DROP DATABASE only.
   const admin = adminConnection();
   try {
     // Nothing may be connected to the template during the copy. Only preload.ts

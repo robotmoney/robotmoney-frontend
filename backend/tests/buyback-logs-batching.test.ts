@@ -16,6 +16,7 @@
 // scan execute. Offline, no skips.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { indexBuybacks, _resetBuybackScanCachesForTests } from "../src/chain/buyback-logs.ts";
 import { _resetRpcConcurrencyForTests, _resetRpcRateLimiterForTests } from "../src/chain/base-rpc-client.ts";
 import { _resetRateLimitStateForTests } from "../src/chain/gecko-rate-limit.ts";
@@ -113,8 +114,8 @@ function serve(opts: { dropBatchEntries?: boolean } = {}): void {
 }
 
 async function cleanup(): Promise<void> {
-  await sql`DELETE FROM buyback_swaps WHERE tx_hash = ANY(${SWAPS.map((s) => s.tx.toLowerCase())}::text[])`;
-  await sql`DELETE FROM buyback_scan_state WHERE id = 1`;
+  await fixtureDb`DELETE FROM buyback_swaps WHERE tx_hash = ANY(${SWAPS.map((s) => s.tx.toLowerCase())}::text[])`;
+  await fixtureDb`DELETE FROM buyback_scan_state WHERE id = 1`;
 }
 
 beforeEach(async () => {

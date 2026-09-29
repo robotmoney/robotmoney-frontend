@@ -7,7 +7,8 @@
 // the dashboard; D52 (1)), and that the endpoints surface the inserted job +
 // its runs' output/error (the logs).
 import { test, expect, afterAll, beforeAll } from "bun:test";
-import { sql, jsonValue } from "../../src/db/client.ts";
+import { jsonValue } from "../../src/db/client.ts";
+import { fixtureDb } from "../support/fixture-db.ts";
 import { handleAdmin } from "../../src/api/routes/admin.ts";
 import { provisionOperatorToken } from "../support/automation-auth.ts";
 
@@ -31,26 +32,26 @@ const call = (r: Request) => handleAdmin(r, new URL(r.url));
 // Insert one job + two runs (one succeeded with jsonb output, one failed with an
 // error string) — the runs' output/error are the "logs" the dashboard renders.
 async function seed(): Promise<number> {
-  const [job] = await sql`
-    INSERT INTO jobs ${sql({ kind: KIND, status: "succeeded", attempts: 1, last_error: null })}
+  const [job] = await fixtureDb`
+    INSERT INTO jobs ${fixtureDb({ kind: KIND, status: "succeeded", attempts: 1, last_error: null })}
     RETURNING id`;
   const jobId = Number(job.id);
-  await sql`
-    INSERT INTO job_runs ${sql({
+  await fixtureDb`
+    INSERT INTO job_runs ${fixtureDb({
       job_id: jobId, kind: KIND, status: "succeeded", error: null,
-      output: sql.json(jsonValue({ ran: true, note: "analytics ok" })),
+      output: fixtureDb.json(jsonValue({ ran: true, note: "analytics ok" })),
     })}`;
-  await sql`
-    INSERT INTO job_runs ${sql({
+  await fixtureDb`
+    INSERT INTO job_runs ${fixtureDb({
       job_id: jobId, kind: KIND, status: "failed", error: "boom: upstream 500",
-      output: sql.json(jsonValue({ ran: false })),
+      output: fixtureDb.json(jsonValue({ ran: false })),
     })}`;
   return jobId;
 }
 
 afterAll(async () => {
-  await sql`DELETE FROM job_runs WHERE kind = ${KIND}`;
-  await sql`DELETE FROM jobs WHERE kind = ${KIND}`;
+  await fixtureDb`DELETE FROM job_runs WHERE kind = ${KIND}`;
+  await fixtureDb`DELETE FROM jobs WHERE kind = ${KIND}`;
 });
 
 test("no credential → 403 on every owned admin route (fail-closed)", async () => {
@@ -135,14 +136,14 @@ test("jobs list filters by exact id, and rejects a malformed id", async () => {
 // endpoint returns that output verbatim — proven generically above by the
 // `note` field; this asserts the specific `telemetry` shape survives too.
 test("job detail surfaces a non-fatal telemetry failure recorded in a run's output (AC3: job output + admin status)", async () => {
-  const [job] = await sql`
-    INSERT INTO jobs ${sql({ kind: KIND, status: "succeeded", attempts: 1, last_error: null })}
+  const [job] = await fixtureDb`
+    INSERT INTO jobs ${fixtureDb({ kind: KIND, status: "succeeded", attempts: 1, last_error: null })}
     RETURNING id`;
   const jobId = Number(job.id);
-  await sql`
-    INSERT INTO job_runs ${sql({
+  await fixtureDb`
+    INSERT INTO job_runs ${fixtureDb({
       job_id: jobId, kind: KIND, status: "succeeded", error: null,
-      output: sql.json(jsonValue({
+      output: fixtureDb.json(jsonValue({
         asof: "2026-07-15",
         tools: ["regime"],
         telemetry: { ok: false, error: "simulated telemetry outage" },
