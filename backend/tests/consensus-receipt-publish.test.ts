@@ -17,6 +17,7 @@
 import { expect, test } from "bun:test";
 import { RECEIPT_DOMAIN_SEPARATOR, ROUTES, canonicalizeSubmission, path } from "@robotmoney/contract";
 import * as admin from "../src/swarm/admin.ts";
+import * as verbs from "./support/session-verbs.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { sql } from "../src/db/client.ts";
@@ -104,14 +105,14 @@ async function judgeNow(sessionId: string, opinion: string = STUB_JUDGE_REPLY) {
  * receipt is assembled only from a session that has reached the end of it.
  */
 async function advanceToPublished(sessionId: string) {
-  const closed = await admin.closeSessionAdmin(sessionId, undefined);
+  const closed = await verbs.closeSessionAdmin(sessionId, undefined);
   if (!closed.ok) throw new Error(`close failed: ${JSON.stringify(closed)}`);
-  const aggregated = await admin.aggregateSessionAdmin(sessionId, undefined);
+  const aggregated = await verbs.aggregateSessionAdmin(sessionId, undefined);
   if (!aggregated.ok) throw new Error(`aggregate failed: ${JSON.stringify(aggregated)}`);
   // A judge participant's signed judgement: `source: "model"`, a real,
   // anchorable opinion, and the session's consensus.
   const judged = await judgeNow(sessionId);
-  const published = await admin.publishSessionAdmin(sessionId, undefined);
+  const published = await verbs.publishSessionAdmin(sessionId, undefined);
   if (!published.ok) throw new Error(`publish failed: ${JSON.stringify(published)}`);
   return judged;
 }
@@ -418,9 +419,9 @@ test("refusals reach the operator with a reason: an unjudged session, and a non-
   // reported is about the judgement and not about the state.
   const bare = await collectingSession("recunjudged", [[0.25, 0.25, 0.25, 0.25]]);
   await setJudgeConfig({ mode: "off", minTakes: 2, model: STUB_JUDGE_MODEL });
-  expect((await admin.closeSessionAdmin(bare.sessionId, undefined)).ok).toBe(true);
-  expect((await admin.aggregateSessionAdmin(bare.sessionId, undefined)).ok).toBe(true);
-  expect((await admin.publishSessionAdmin(bare.sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.closeSessionAdmin(bare.sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.aggregateSessionAdmin(bare.sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.publishSessionAdmin(bare.sessionId, undefined)).ok).toBe(true);
 
   const refusedUnjudged = await admin.publishConsensusReceiptAdmin(bare.sessionId);
   expect(refusedUnjudged.ok).toBe(false);
@@ -529,8 +530,8 @@ test("BLOCKER 1: aggregate, judge, reopen, amend — and the receipt is REFUSED,
     [0.25, 0.25, 0.25, 0.25],
     [0.25, 0.25, 0.25, 0.25],
   ]);
-  expect((await admin.closeSessionAdmin(sessionId, undefined)).ok).toBe(true);
-  expect((await admin.aggregateSessionAdmin(sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.closeSessionAdmin(sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.aggregateSessionAdmin(sessionId, undefined)).ok).toBe(true);
   await judgeNow(sessionId);
   expect(await stateOf(sessionId)).toBe("judged");
 
@@ -548,14 +549,14 @@ test("BLOCKER 1: aggregate, judge, reopen, amend — and the receipt is REFUSED,
   expect((early as any).error).toBe("session_not_published");
   expect((early as any).message).toContain("publish the session first");
 
-  expect((await admin.closeSessionAdmin(sessionId, undefined)).ok).toBe(true);
-  expect((await admin.reopenSessionAdmin(sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.closeSessionAdmin(sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.reopenSessionAdmin(sessionId, undefined)).ok).toBe(true);
   expect(await stateOf(sessionId)).toBe("collecting");
   // Member A amends: a REVISION, so the member count does not change and the
   // old cardinality-only cross-check saw nothing.
   await submit(members[0]!, date, subjectId, [0.9, 0.05, 0.03, 0.02], { stance: "bullish" });
-  expect((await admin.closeSessionAdmin(sessionId, undefined)).ok).toBe(true);
-  expect((await admin.aggregateSessionAdmin(sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.closeSessionAdmin(sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.aggregateSessionAdmin(sessionId, undefined)).ok).toBe(true);
 
   const after = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`)[0] as any;
   expect(after.swarm_recommendation.stances).toEqual({ bullish: 1, neutral: 1 });
@@ -576,8 +577,8 @@ test("BLOCKER 1b: a receipt is refused from EVERY non-terminal state, by name", 
   const seen: string[] = [];
   for (const advance of [
     async () => { expect(await stateOf(sessionId)).toBe("collecting"); },
-    async () => { expect((await admin.closeSessionAdmin(sessionId, undefined)).ok).toBe(true); },
-    async () => { expect((await admin.aggregateSessionAdmin(sessionId, undefined)).ok).toBe(true); },
+    async () => { expect((await verbs.closeSessionAdmin(sessionId, undefined)).ok).toBe(true); },
+    async () => { expect((await verbs.aggregateSessionAdmin(sessionId, undefined)).ok).toBe(true); },
     async () => { await requestJudgingFor(sessionId); },
     async () => { expect((await submitSigned(await inHouseJudge(), sessionId)).ok).toBe(true); },
   ]) {
@@ -591,7 +592,7 @@ test("BLOCKER 1b: a receipt is refused from EVERY non-terminal state, by name", 
   expect(seen).toEqual(["collecting", "window_closed", "aggregated", "judging", "judged"]);
 
   // And the same session publishes cleanly the moment it is terminal.
-  expect((await admin.publishSessionAdmin(sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.publishSessionAdmin(sessionId, undefined)).ok).toBe(true);
   const ok = await admin.publishConsensusReceiptAdmin(sessionId);
   expect(ok.ok).toBe(true);
 });
@@ -605,8 +606,8 @@ test("BLOCKER 2: a judgement the session never adopted never reaches a receipt, 
   const recordJudge = await seatJudge({ prefix: "judge_a" });
   const secondJudge = await seatJudge({ prefix: "judge_b" });
   const unadopted = await collectingSession("recunadopted", [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]]);
-  expect((await admin.closeSessionAdmin(unadopted.sessionId, undefined)).ok).toBe(true);
-  expect((await admin.aggregateSessionAdmin(unadopted.sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.closeSessionAdmin(unadopted.sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.aggregateSessionAdmin(unadopted.sessionId, undefined)).ok).toBe(true);
   await requestJudgingFor(unadopted.sessionId);
   const second = await submitSigned(secondJudge, unadopted.sessionId);
   expect(second).toMatchObject({ ok: true, judgeOfRecord: false, applied: false });
@@ -640,8 +641,8 @@ test("BLOCKER 2: a judgement the session never adopted never reaches a receipt, 
   // prompt_hash and inputs_digest, higher id. `ORDER BY id DESC LIMIT 1` would
   // embed the second one; binding to the session's own judge block does not.
   const live = await collectingSession("recbound", [[0.15, 0.55, 0.2, 0.1], [0.1, 0.65, 0.15, 0.1]]);
-  expect((await admin.closeSessionAdmin(live.sessionId, undefined)).ok).toBe(true);
-  expect((await admin.aggregateSessionAdmin(live.sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.closeSessionAdmin(live.sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.aggregateSessionAdmin(live.sessionId, undefined)).ok).toBe(true);
   await requestJudgingFor(live.sessionId);
   const adopted = await submitSigned(recordJudge, live.sessionId);
   expect(adopted).toMatchObject({ ok: true, judgeOfRecord: true, applied: true });
@@ -654,7 +655,7 @@ test("BLOCKER 2: a judgement the session never adopted never reaches a receipt, 
   expect(later).toMatchObject({ ok: true, applied: false });
   expect(Number((later as any).judgementId)).toBeGreaterThan(Number(adoptedId));
 
-  expect((await admin.publishSessionAdmin(live.sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.publishSessionAdmin(live.sessionId, undefined)).ok).toBe(true);
   const published = await admin.publishConsensusReceiptAdmin(live.sessionId);
   expect(published.ok).toBe(true);
   // The receipt is joined to the ADOPTED judgement, not the newest one.
@@ -677,8 +678,8 @@ test("BLOCKER 2: a judgement the session never adopted never reaches a receipt, 
 // table holds pre-#969 rows, and `judgement_not_authored` is their guard.
 test("BLOCKER 3: an unusable judge response never reaches a receipt — refused at submission, and the historical fallback guard still holds", async () => {
   const fallback = await collectingSession("recfallback", [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]]);
-  expect((await admin.closeSessionAdmin(fallback.sessionId, undefined)).ok).toBe(true);
-  expect((await admin.aggregateSessionAdmin(fallback.sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.closeSessionAdmin(fallback.sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.aggregateSessionAdmin(fallback.sessionId, undefined)).ok).toBe(true);
   await requestJudgingFor(fallback.sessionId);
 
   // A body that is NOT valid judge JSON. The API's parser refuses it before

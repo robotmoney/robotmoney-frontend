@@ -379,7 +379,10 @@ function assertValidObject(declaration: QueryDeclaration): void {
 
 /** A module id relative to `backend/`, no extension: `src/api/routes/swarm-admin`, or an
  *  operator CLI under `scripts/`, which is an entry module in its own right. */
-const MODULE_ID = /^(?:src|scripts)\/[a-z0-9_-]+(?:\/[a-z0-9_-]+)*$/;
+// A segment may carry a dot only before a digit (`0.5.0-to-0.5.1`, a release's
+// upgrade directory), so a file extension (`.ts`) and `..` are still refused.
+const MODULE_SEGMENT = "[a-z0-9_-](?:[a-z0-9_-]|\\.(?=[0-9]))*";
+const MODULE_ID = new RegExp(`^(?:src|scripts)/${MODULE_SEGMENT}(?:/${MODULE_SEGMENT})*$`);
 
 function assertValidCallers(declaration: { readonly site: string; readonly callers: readonly string[] }): void {
   const callers = declaration.callers as readonly unknown[] | undefined;
@@ -513,6 +516,16 @@ export const OBJECTLESS_SHAPES = Object.freeze({
   connectionCheck: "SELECT 1",
   /** The one lock protocol for every writer of a wallet snapshot date (ops/wallet-snapshot-manifest.ts). */
   walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
+  /** One transaction lock per source key, so competing revisions of one series serialize (analytics source ledger). */
+  sourceKeyLock: "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+  /** One transaction lock per run, so two appends for the same run never take the same sequence number (analytics run ledger). */
+  runEventsLock: "SELECT pg_advisory_xact_lock(hashtextextended('analytics_ledger_run_events:' || $1, 0))",
+  /** Serializes issuance of an admin WebAuthn challenge, so two requests never pick the same slot (api/routes/admin-webauthn.ts). */
+  webauthnChallengeIssueLock: "SELECT pg_advisory_xact_lock(hashtext('admin-webauthn-challenge'))",
+  /** The postmaster's start time: the exact boundary between rows a restored dump carried and rows written since (upgrade rehearsals). */
+  postmasterStart: "SELECT pg_postmaster_start_time() AS boot_at",
+  /** A transaction-scoped advisory lock keyed on a text the caller builds (a per-entity or per-subsystem serialisation key; the class is baked into the text). */
+  advisoryLockByText: "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
   /** The snapshot the scheduler's full read takes (scheduler spec §3). */
   snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
 } as const);

@@ -24,6 +24,212 @@
 
 import type { Checker } from "../../lib/checks.ts";
 import type { Db } from "../../lib/postflight-utils.ts";
+import { on, onStatement, registerQuery, registerStatement } from "../../../src/db/registry.ts";
+
+const CALLERS = ["scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal"];
+
+const bootTime = registerStatement({
+  role: "rm_app",
+  shape: "postmasterStart",
+  site: "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal:readState.bootTime",
+  purpose: "Read the twin's postmaster start time, the exact boundary between restored and new rows.",
+  callers: CALLERS,
+});
+
+// The rehearsal is graded as the application's own role (DATABASE_URL), SELECT-only.
+const qRestoredWedged = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal:readState.restoredWedged",
+  purpose: "List restored sessions already past their close time and still open when the twin booted.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT s.id::text AS id, s.state, coalesce(s.subject_name, s.subject_id) AS subject
+      FROM swarm_sessions s
+     WHERE s.convened_at < $1
+       AND s.state <> ALL($2)
+       AND s.window_closes_at IS NOT NULL
+       AND s.window_closes_at < $1
+     ORDER BY s.convened_at`,
+    params: ["2000-01-01T00:00:00Z", "{published,cancelled}"],
+  },
+});
+
+const qOverdue = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal:readState.overdue",
+  purpose: "List every open session past its own prescribed close time, restored or new.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT s.id::text AS id, s.state, s.window_closes_at,
+           (s.convened_at >= $1) AS is_new,
+           round(extract(epoch FROM (now() - s.window_closes_at)) / 60)::int AS minutes_overdue
+      FROM swarm_sessions s
+     WHERE s.state <> ALL($2)
+       AND s.window_closes_at IS NOT NULL
+       AND s.window_closes_at < now()
+     ORDER BY s.window_closes_at`,
+    params: ["2000-01-01T00:00:00Z", "{published,cancelled}"],
+  },
+});
+
+const qWindowless = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal:readState.windowless",
+  purpose: "List open sessions with no close time, which cannot be graded as overdue.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT s.id::text AS id, s.state
+      FROM swarm_sessions s
+     WHERE s.state <> ALL($1) AND s.window_closes_at IS NULL`,
+    params: ["{published,cancelled}"],
+  },
+});
+
+const qRestoredTotal = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal:readState.restoredTotal",
+  purpose: "Count the sessions convened before the twin's postmaster started.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT count(*)::int AS count FROM swarm_sessions WHERE convened_at < $1`,
+    params: ["2000-01-01T00:00:00Z"],
+  },
+});
+
+const qNewSessions = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal:readState.newSessions",
+  purpose: "List the sessions this rehearsal's stack convened after the twin's postmaster started.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT id::text AS id, state, convened_at
+      FROM swarm_sessions WHERE convened_at >= $1 ORDER BY convened_at`,
+    params: ["2000-01-01T00:00:00Z"],
+  },
+});
+
+const qCompleted = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal:readState.completed",
+  purpose: "Read each new session's verified take count and its latest judgement, to grade an end-to-end completion.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT s.id::text AS id,
+           (SELECT count(*)::int FROM swarm_recommendations r
+             WHERE r.session_id = s.id AND r.verified) AS takes,
+           j.judged_by, j.mode, j.source
+      FROM swarm_sessions s
+      LEFT JOIN LATERAL (
+        SELECT judged_by, mode, source FROM swarm_session_judgements
+         WHERE session_id = s.id ORDER BY created_at DESC LIMIT 1
+      ) j ON true
+     WHERE s.convened_at >= $1
+     ORDER BY s.convened_at`,
+    params: ["2000-01-01T00:00:00Z"],
+  },
+});
+
+const qCompleted_1 = registerQuery({
+  role: "rm_app",
+  object: "swarm_recommendations",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal:readState.completed.swarm_recommendations",
+  purpose: "Read each new session's verified take count and its latest judgement, to grade an end-to-end completion.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT s.id::text AS id,
+           (SELECT count(*)::int FROM swarm_recommendations r
+             WHERE r.session_id = s.id AND r.verified) AS takes,
+           j.judged_by, j.mode, j.source
+      FROM swarm_sessions s
+      LEFT JOIN LATERAL (
+        SELECT judged_by, mode, source FROM swarm_session_judgements
+         WHERE session_id = s.id ORDER BY created_at DESC LIMIT 1
+      ) j ON true
+     WHERE s.convened_at >= $1
+     ORDER BY s.convened_at`,
+    params: ["2000-01-01T00:00:00Z"],
+  },
+});
+
+const qCompleted_2 = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal:readState.completed.swarm_session_judgements",
+  purpose: "Read each new session's verified take count and its latest judgement, to grade an end-to-end completion.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT s.id::text AS id,
+           (SELECT count(*)::int FROM swarm_recommendations r
+             WHERE r.session_id = s.id AND r.verified) AS takes,
+           j.judged_by, j.mode, j.source
+      FROM swarm_sessions s
+      LEFT JOIN LATERAL (
+        SELECT judged_by, mode, source FROM swarm_session_judgements
+         WHERE session_id = s.id ORDER BY created_at DESC LIMIT 1
+      ) j ON true
+     WHERE s.convened_at >= $1
+     ORDER BY s.convened_at`,
+    params: ["2000-01-01T00:00:00Z"],
+  },
+});
+
+const qStalledSchedules = registerQuery({
+  role: "rm_app",
+  object: "job_schedules",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal:readState.stalledSchedules",
+  purpose: "List enabled schedules whose next run is far in the past, the scheduler-wedge shape.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT kind, next_run_at FROM job_schedules
+     WHERE enabled
+       AND next_run_at IS NOT NULL
+       AND next_run_at < now() - ($1 || ' minutes')::interval
+     ORDER BY next_run_at`,
+    params: ["30"],
+  },
+});
+
+const qJobBacklog = registerQuery({
+  role: "rm_app",
+  object: "jobs",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal:readState.jobBacklog",
+  purpose: "Count pending jobs that are long overdue to run.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT count(*)::int AS count FROM jobs
+     WHERE status = 'pending' AND run_after < now() - interval '30 minutes'`,
+  },
+});
+
+const qDeadJobs = registerQuery({
+  role: "rm_app",
+  object: "jobs",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal:readState.deadJobs",
+  purpose: "Count jobs that went dead since the twin's postmaster started.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT count(*)::int AS count FROM jobs
+     WHERE status = 'dead' AND updated_at >= $1`,
+    params: ["2000-01-01T00:00:00Z"],
+  },
+});
 
 /** Terminal session states. `swarm_sessions_state_check` (0039) allows
  *  scheduled/collecting/window_closed/aggregated/judged/published/cancelled;
@@ -79,12 +285,12 @@ async function readState(db: Db): Promise<{
   jobBacklog: number;
   deadJobs: number;
 }> {
-  const [{ boot_at: bootAt }] = (await db`
+  const [{ boot_at: bootAt }] = (await onStatement(db, bootTime)`
     SELECT pg_postmaster_start_time() AS boot_at
   `) as unknown as { boot_at: Date }[];
 
   // RESTORED = convened before the twin's postmaster existed.
-  const restoredWedged = (await db`
+  const restoredWedged = (await on(db, qRestoredWedged)`
     SELECT s.id::text AS id, s.state, coalesce(s.subject_name, s.subject_id) AS subject
       FROM swarm_sessions s
      WHERE s.convened_at < ${bootAt}
@@ -98,7 +304,7 @@ async function readState(db: Db): Promise<{
   // grace, no exemption for rows this rehearsal created: the criterion is
   // "longer than the prescribed time ⇒ closed", and a session convened two
   // minutes ago whose window has already shut is as overdue as one from March.
-  const overdue = (await db`
+  const overdue = (await on(db, qOverdue)`
     SELECT s.id::text AS id, s.state, s.window_closes_at,
            (s.convened_at >= ${bootAt}) AS is_new,
            round(extract(epoch FROM (now() - s.window_closes_at)) / 60)::int AS minutes_overdue
@@ -112,17 +318,17 @@ async function readState(db: Db): Promise<{
   // A session with NO window has no prescribed time to be past, so it cannot be
   // graded by the rule above. Reported separately rather than silently dropped
   // from the population -- an unbounded session is its own question.
-  const windowless = (await db`
+  const windowless = (await on(db, qWindowless)`
     SELECT s.id::text AS id, s.state
       FROM swarm_sessions s
      WHERE s.state <> ALL(${[...TERMINAL]}) AND s.window_closes_at IS NULL
   `) as unknown as { id: string; state: string }[];
 
-  const [{ count: restoredTotal }] = (await db`
+  const [{ count: restoredTotal }] = (await on(db, qRestoredTotal)`
     SELECT count(*)::int AS count FROM swarm_sessions WHERE convened_at < ${bootAt}
   `) as unknown as { count: number }[];
 
-  const newSessions = (await db`
+  const newSessions = (await on(db, qNewSessions)`
     SELECT id::text AS id, state, convened_at
       FROM swarm_sessions WHERE convened_at >= ${bootAt} ORDER BY convened_at
   `) as unknown as { id: string; state: string; convened_at: Date }[];
@@ -131,7 +337,7 @@ async function readState(db: Db): Promise<{
   // verified takes for it AND a judge authored a judgement naming itself.
   // `verified` is the signature check (0004); `judged_by` is the judge identity
   // 0043 made non-null, so a row always names its author.
-  const completed = (await db`
+  const completed = (await on(db, qCompleted, qCompleted_1, qCompleted_2)`
     SELECT s.id::text AS id,
            (SELECT count(*)::int FROM swarm_recommendations r
              WHERE r.session_id = s.id AND r.verified) AS takes,
@@ -145,7 +351,7 @@ async function readState(db: Db): Promise<{
      ORDER BY s.convened_at
   `) as unknown as { id: string; takes: number; judged_by: string | null; mode: string | null; source: string | null }[];
 
-  const stalledSchedules = (await db`
+  const stalledSchedules = (await on(db, qStalledSchedules)`
     SELECT kind, next_run_at FROM job_schedules
      WHERE enabled
        AND next_run_at IS NOT NULL
@@ -153,12 +359,12 @@ async function readState(db: Db): Promise<{
      ORDER BY next_run_at
   `) as unknown as { kind: string; next_run_at: Date | null }[];
 
-  const [{ count: jobBacklog }] = (await db`
+  const [{ count: jobBacklog }] = (await on(db, qJobBacklog)`
     SELECT count(*)::int AS count FROM jobs
      WHERE status = 'pending' AND run_after < now() - interval '30 minutes'
   `) as unknown as { count: number }[];
 
-  const [{ count: deadJobs }] = (await db`
+  const [{ count: deadJobs }] = (await on(db, qDeadJobs)`
     SELECT count(*)::int AS count FROM jobs
      WHERE status = 'dead' AND updated_at >= ${bootAt}
   `) as unknown as { count: number }[];

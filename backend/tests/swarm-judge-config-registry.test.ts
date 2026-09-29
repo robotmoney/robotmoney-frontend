@@ -95,9 +95,8 @@ describe("swarm_judge_config is written only through the admin route", () => {
 
   test("the registry is the WHOLE list: no module under src/ writes the switch outside a registered site", () => {
     // Completeness, not the property itself. The declarations above are only
-    // the truth if no statement bypasses them; a raw write in a module that the
-    // raw-SQL ratchet still tolerates (db-registry.test.ts RAW_SQL_ALLOWLIST)
-    // would. The one module allowed to write is the one that registers.
+    // the truth if no statement bypasses them; a raw write in a module the
+    // raw-SQL gate missed would bypass them. The one module allowed to write is the one that registers.
     const SRC = join(import.meta.dir, "..", "src");
     const WRITE = /\b(?:UPDATE\s+swarm_judge_config|INSERT\s+INTO\s+swarm_judge_config)\b/i;
     const writers = (readdirSync(SRC, { recursive: true, encoding: "utf8" }) as string[])

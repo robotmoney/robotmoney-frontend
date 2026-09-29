@@ -259,11 +259,16 @@ const OWNER_SITES: ReadonlyMap<string, number> = new Map([
   // seedJobSchedules's retired-row cleanup: two statements, two declarations.
   ["src/db/seed.ts statement job_schedules", 2],
   ["src/db/seed.ts declaration job_schedules", 2],
-  // seedSmokeProjects, called only from src/db/seed.ts.
-  ["src/projects/smoke-seed.ts statement openclaw_agents", 1],
-  ["src/projects/smoke-seed.ts statement lobster_coins", 1],
-  ["src/projects/smoke-seed.ts statement tracked_wallets", 1],
-  ["src/projects/smoke-seed.ts statement agent_vaults", 1],
+  // seedSmokeProjects, called only from src/db/seed.ts: each DELETE, its registry
+  // probe and its declaration.
+  ["src/projects/smoke-seed.ts statement openclaw_agents", 2],
+  ["src/projects/smoke-seed.ts declaration openclaw_agents", 1],
+  ["src/projects/smoke-seed.ts statement lobster_coins", 2],
+  ["src/projects/smoke-seed.ts declaration lobster_coins", 1],
+  ["src/projects/smoke-seed.ts statement tracked_wallets", 2],
+  ["src/projects/smoke-seed.ts declaration tracked_wallets", 1],
+  ["src/projects/smoke-seed.ts statement agent_vaults", 2],
+  ["src/projects/smoke-seed.ts declaration agent_vaults", 1],
   // verifySeedProvenance's `--clean`: the statement, its registry probe and
   // its declaration.
   ["src/analytics/store/seed-provenance.ts statement raw_indicator_history", 2],
@@ -430,6 +435,10 @@ describe("the rm_owner sites are reachable only from rm_owner entries", () => {
       { role: "rm_owner", object: "raw_indicator_history", site: "src/analytics/store/seed-provenance:verifySeedProvenance.clean" },
       { role: "rm_owner", object: "job_schedules", site: "src/db/seed:seedJobSchedules.deleteAnalyticsRun" },
       { role: "rm_owner", object: "job_schedules", site: "src/db/seed:seedJobSchedules.deleteHourlyRepair" },
+      { role: "rm_owner", object: "agent_vaults", site: "src/projects/smoke-seed:seedSmokeProjects.delete_agent_vaults" },
+      { role: "rm_owner", object: "lobster_coins", site: "src/projects/smoke-seed:seedSmokeProjects.delete_lobster_coins" },
+      { role: "rm_owner", object: "openclaw_agents", site: "src/projects/smoke-seed:seedSmokeProjects.delete_openclaw_agents" },
+      { role: "rm_owner", object: "tracked_wallets", site: "src/projects/smoke-seed:seedSmokeProjects.delete_tracked_wallets" },
     ]);
   }, 60_000);
 });

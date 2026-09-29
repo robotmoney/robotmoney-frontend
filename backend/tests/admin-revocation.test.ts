@@ -337,8 +337,8 @@ describe("revocation is a tombstone, immediate, and needs no DELETE (D55 (6))", 
     // admin_passkey`), on the snapshot-built database it failed on.
     const preload = writeRedControlPreload(
       "src/api/routes/admin.ts",
-      "await tx`UPDATE admin_passkey SET revoked_at = now() WHERE revoked_at IS NULL`;",
-      "await tx`DELETE FROM admin_passkey`;",
+      "await on(tx, revokePasskeys)`UPDATE admin_passkey SET revoked_at = now() WHERE revoked_at IS NULL`;",
+      "await on(tx, revokePasskeys)`DELETE FROM admin_passkey`;",
     );
     const api = await bootApi(preload);
     try {
