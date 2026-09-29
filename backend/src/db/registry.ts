@@ -513,6 +513,10 @@ export const OBJECTLESS_SHAPES = Object.freeze({
   connectionCheck: "SELECT 1",
   /** The one lock protocol for every writer of a wallet snapshot date (ops/wallet-snapshot-manifest.ts). */
   walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
+  /** One transaction lock per source key, so competing revisions of one series serialize (analytics source ledger). */
+  sourceKeyLock: "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+  /** One transaction lock per run, so two appends for the same run never take the same sequence number (analytics run ledger). */
+  runEventsLock: "SELECT pg_advisory_xact_lock(hashtextextended('analytics_ledger_run_events:' || $1, 0))",
   /** The snapshot the scheduler's full read takes (scheduler spec §3). */
   snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
 } as const);

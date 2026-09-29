@@ -2,6 +2,7 @@
 // API process imports this (same rule as source-ledger-store.ts) — the
 // updater/producer goes through analytics/api-client.ts's HTTP boundary.
 import { sql, jsonValue, type DbHandle } from "../../db/client.ts";
+import { on, onStatement, registerQuery, registerStatement } from "../../db/registry.ts";
 import {
   buildVintageManifest,
   configDigest,
@@ -10,6 +11,240 @@ import {
   type RunLifecycleEvent,
   type VintageManifest,
 } from "../run-ledger.ts";
+
+/** The only entry module that reaches this store: the analytics ingestion route. */
+const ANALYTICS_ROUTE = "src/api/routes/analytics";
+
+const findRun = registerQuery({
+  role: "rm_app",
+  object: "analytics_ledger_runs",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:beginRun.findRun",
+  purpose: "Resolve a retried begin-run submission to the run header already persisted for its run_key (issue #977 AC8).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: "SELECT id, methodology_version_id FROM analytics_ledger_runs WHERE run_key = $1",
+    params: ["probe"],
+  },
+});
+
+const findMethodology = registerQuery({
+  role: "rm_app",
+  object: "analytics_ledger_methodology_versions",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:beginRun.findMethodology",
+  purpose: "Find the methodology version a run names by its tool and config digest, so an identical one is reused.",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `SELECT id FROM analytics_ledger_methodology_versions
+        WHERE tool_id = $1 AND config_digest = $2`,
+    params: ["probe", "probe"],
+  },
+});
+
+const insertMethodology = registerQuery({
+  role: "rm_app",
+  object: "analytics_ledger_methodology_versions",
+  // SELECT as well: RETURNING reads the columns of the row it wrote.
+  privileges: ["INSERT", "SELECT"],
+  site: "src/analytics/store/run-ledger-store:beginRun.insertMethodology",
+  purpose: "Record a methodology version the ledger has not seen, immutable from then on (issue #977 AC1).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `INSERT INTO analytics_ledger_methodology_versions (tool_id, version_label, config, config_digest)
+          SELECT $1, $2, $3::jsonb, $4 WHERE false
+          RETURNING id`,
+    params: ["probe", "probe", "{}", "probe"],
+  },
+});
+
+const insertRun = registerQuery({
+  role: "rm_app",
+  object: "analytics_ledger_runs",
+  privileges: ["INSERT", "SELECT"],
+  site: "src/analytics/store/run-ledger-store:beginRun.insertRun",
+  purpose: "Write the immutable run header before any acquisition (issue #977 AC1).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `INSERT INTO analytics_ledger_runs (run_key, asof, tool_id, source_label, methodology_version_id, build_identity, job_id)
+        SELECT $1, $2::date, $3, $4, $5::bigint, $6, $7 WHERE false
+        RETURNING id`,
+    params: ["probe", "2000-01-01", "probe", "probe", 1, "probe", null],
+  },
+});
+
+const readRunAsof = registerQuery({
+  role: "rm_app",
+  object: "analytics_ledger_runs",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:loadRunAsof",
+  purpose: "Read a run header's recorded asof, the cross-check a terminal run package submission makes (issue #978 FIX3).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: "SELECT asof::text AS asof FROM analytics_ledger_runs WHERE id = $1::bigint",
+    params: [1],
+  },
+});
+
+const runEventsLock = registerStatement({
+  role: "rm_app",
+  shape: "runEventsLock",
+  site: "src/analytics/store/run-ledger-store:appendRunEvent.lock",
+  purpose: "Serialize appends for one run so two of them never take the same sequence number.",
+  callers: [ANALYTICS_ROUTE],
+});
+
+const nextRunEventSequence = registerQuery({
+  role: "rm_app",
+  object: "analytics_ledger_run_events",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:appendRunEvent.nextSequence",
+  purpose: "Read the next sequence number for a run's lifecycle events.",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `SELECT COALESCE(MAX(sequence), 0) + 1 AS next
+      FROM analytics_ledger_run_events WHERE run_id = $1::bigint`,
+    params: [1],
+  },
+});
+
+const insertRunEvent = registerQuery({
+  role: "rm_app",
+  object: "analytics_ledger_run_events",
+  privileges: ["INSERT"],
+  site: "src/analytics/store/run-ledger-store:appendRunEvent.insert",
+  purpose: "Append one lifecycle event to a run, never updating the header (issue #977 AC5).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `INSERT INTO analytics_ledger_run_events (run_id, sequence, event_type, detail)
+      SELECT $1::bigint, $2, $3, $4 WHERE false`,
+    params: [1, 1, "probe", null],
+  },
+});
+
+const selectCurrentSourceValues = registerQuery({
+  role: "rm_app",
+  object: "source_value_versions",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:loadCurrentSourceValues",
+  purpose: "Read the newest revision per source coordinate with no cutoff: what the ledger knows right now (issue #977 AC3).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `SELECT DISTINCT ON (source_key, market_date, market_instant)
+      id, source_key, market_date::text AS market_date, market_instant::text AS market_instant, value
+    FROM source_value_versions
+    ORDER BY source_key, market_date, market_instant, knowledge_time DESC, id DESC`,
+  },
+});
+
+const selectHistoricalSourceValues = registerQuery({
+  role: "rm_app",
+  object: "source_value_versions",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:loadHistoricalSourceValues",
+  purpose: "Read the newest revision per source coordinate known at a knowledge-time cutoff, the boundary a vintage freezes (issue #977 AC2).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `SELECT DISTINCT ON (source_key, market_date, market_instant)
+      id, source_key, market_date::text AS market_date, market_instant::text AS market_instant, value
+    FROM source_value_versions
+    WHERE knowledge_time <= $1::timestamptz
+      AND (market_date IS NULL OR market_date <= $2::date)
+      AND (market_instant IS NULL OR (market_instant AT TIME ZONE 'UTC')::date <= $2::date)
+    ORDER BY source_key, market_date, market_instant, knowledge_time DESC, id DESC`,
+    params: ["2000-01-01T00:00:00Z", "2000-01-01"],
+  },
+});
+
+const insertVintage = registerQuery({
+  role: "rm_app",
+  object: "analytics_data_vintages",
+  privileges: ["INSERT", "SELECT"],
+  site: "src/analytics/store/run-ledger-store:freezeVintage.insertVintage",
+  purpose: "Persist one frozen data vintage with its manifest, unique on (run, tool) (issue #977 AC8).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `INSERT INTO analytics_data_vintages
+          (run_id, tool_id, knowledge_time_cutoff, market_time_cutoff, methodology_version_id,
+           build_identity, manifest, manifest_digest, member_count)
+        SELECT $1::bigint, $2, $3::timestamptz, $4::date, $5::bigint, $6, $7::jsonb, $8, $9 WHERE false
+        RETURNING id`,
+    params: [1, "probe", "2000-01-01T00:00:00Z", "2000-01-01", 1, "probe", "{}", "probe", 0],
+  },
+});
+
+const insertVintageMembers = registerQuery({
+  role: "rm_app",
+  object: "analytics_vintage_members",
+  privileges: ["INSERT"],
+  site: "src/analytics/store/run-ledger-store:freezeVintage.insertMembers",
+  purpose: "Persist a vintage's flat membership, batched, in the transaction that froze it.",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `INSERT INTO analytics_vintage_members (vintage_id, source_value_version_id, source_key)
+          SELECT $1::bigint, $2::bigint, $3 WHERE false`,
+    params: [1, 1, "probe"],
+  },
+});
+
+const selectVintage = registerQuery({
+  role: "rm_app",
+  object: "analytics_data_vintages",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:loadFrozenVintage.vintage",
+  purpose: "Reload a frozen vintage header and manifest for offline replay (issue #977 AC7).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `SELECT id, run_id, tool_id, knowledge_time_cutoff::text AS knowledge_time_cutoff,
+           market_time_cutoff::text AS market_time_cutoff, methodology_version_id, build_identity,
+           manifest, manifest_digest, member_count
+    FROM analytics_data_vintages WHERE id = $1::bigint`,
+    params: [1],
+  },
+});
+
+const MEMBERS_PROBE = {
+  statement: `SELECT svv.id, svv.source_key, svv.market_date::text AS market_date,
+           svv.market_instant::text AS market_instant, svv.value
+    FROM analytics_vintage_members vm
+    JOIN source_value_versions svv ON svv.id = vm.source_value_version_id
+    WHERE vm.vintage_id = $1::bigint`,
+  params: [1],
+} as const;
+
+const selectVintageMembers = registerQuery({
+  role: "rm_app",
+  object: "analytics_vintage_members",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:loadFrozenVintage.members",
+  purpose: "Reload a vintage's members, joined to the source value versions they name.",
+  callers: [ANALYTICS_ROUTE],
+  probe: MEMBERS_PROBE,
+});
+
+const selectVintageMemberValues = registerQuery({
+  role: "rm_app",
+  object: "source_value_versions",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:loadFrozenVintage.memberValues",
+  purpose: "Read the source value versions a vintage's members name.",
+  callers: [ANALYTICS_ROUTE],
+  probe: MEMBERS_PROBE,
+});
+
+const selectVintageByRunAndTool = registerQuery({
+  role: "rm_app",
+  object: "analytics_data_vintages",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:findVintageByRunAndTool",
+  purpose: "Resolve an idempotent freeze retry, or a conflict, against the natural key (run_id, tool_id) (issue #977 AC8).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `SELECT id, manifest_digest FROM analytics_data_vintages
+    WHERE run_id = $1::bigint AND tool_id = $2`,
+    params: [1, "probe"],
+  },
+});
 
 export interface BeginRunInput {
   runKey: string;
@@ -34,28 +269,28 @@ export interface BeginRunResult {
 // the same key returns the already-persisted header (`replayed: true`)
 // instead of creating a second one.
 export async function beginRun(input: BeginRunInput): Promise<BeginRunResult> {
-  const [existingRun] = await sql`SELECT id, methodology_version_id FROM analytics_ledger_runs WHERE run_key = ${input.runKey}`;
+  const [existingRun] = await on(sql, findRun)<{ id: string | number; methodology_version_id: string | number }>`SELECT id, methodology_version_id FROM analytics_ledger_runs WHERE run_key = ${input.runKey}`;
   if (existingRun) {
     return { runId: String(existingRun.id), methodologyVersionId: String(existingRun.methodology_version_id), replayed: true };
   }
   try {
     return await sql.begin(async (tx) => {
       const digest = configDigest(input.methodology.config);
-      const [existingMethodology] = await tx`
+      const [existingMethodology] = await on(tx, findMethodology)<{ id: string | number }>`
         SELECT id FROM analytics_ledger_methodology_versions
         WHERE tool_id = ${input.methodology.toolId} AND config_digest = ${digest}`;
       let methodologyVersionId: string;
       if (existingMethodology) {
         methodologyVersionId = String(existingMethodology.id);
       } else {
-        const [row] = await tx`
+        const [row] = await on(tx, insertMethodology)<{ id: string | number }>`
           INSERT INTO analytics_ledger_methodology_versions (tool_id, version_label, config, config_digest)
           VALUES (${input.methodology.toolId}, ${input.methodology.versionLabel},
                   ${tx.json(jsonValue(input.methodology.config))}, ${digest})
           RETURNING id`;
         methodologyVersionId = String(row!.id);
       }
-      const [run] = await tx`
+      const [run] = await on(tx, insertRun)<{ id: string | number }>`
         INSERT INTO analytics_ledger_runs (run_key, asof, tool_id, source_label, methodology_version_id, build_identity, job_id)
         VALUES (${input.runKey}, ${input.asof}::date, ${input.toolId}, ${input.sourceLabel},
                 ${methodologyVersionId}::bigint, ${input.buildIdentity}, ${input.jobId ?? null})
@@ -79,7 +314,7 @@ export async function beginRun(input: BeginRunInput): Promise<BeginRunResult> {
 // real run — submitTerminalRunPackage's own FK insert is what actually
 // refuses that case.
 export async function loadRunAsof(runId: string, db: DbHandle = sql): Promise<string | null> {
-  const [row] = await db`SELECT asof::text AS asof FROM analytics_ledger_runs WHERE id = ${runId}::bigint`;
+  const [row] = await on(db, readRunAsof)<{ asof: string }>`SELECT asof::text AS asof FROM analytics_ledger_runs WHERE id = ${runId}::bigint`;
   return row ? (row.asof as string) : null;
 }
 
@@ -93,11 +328,11 @@ export async function appendRunEvent(
   detail: string | null,
 ): Promise<void> {
   await sql.begin(async (tx) => {
-    await tx`SELECT pg_advisory_xact_lock(hashtextextended('analytics_ledger_run_events:' || ${runId}, 0))`;
-    const [{ next }] = await tx`
+    await onStatement(tx, runEventsLock)`SELECT pg_advisory_xact_lock(hashtextextended('analytics_ledger_run_events:' || ${runId}, 0))`;
+    const [{ next }] = await on(tx, nextRunEventSequence)<{ next: number }>`
       SELECT COALESCE(MAX(sequence), 0) + 1 AS next
       FROM analytics_ledger_run_events WHERE run_id = ${runId}::bigint`;
-    await tx`
+    await on(tx, insertRunEvent)`
       INSERT INTO analytics_ledger_run_events (run_id, sequence, event_type, detail)
       VALUES (${runId}::bigint, ${next}, ${eventType}, ${detail})`;
   });
@@ -126,7 +361,7 @@ function toFrozen(row: SourceValueRow): FrozenSourceValue {
 // market-time cutoff. Never used to freeze a vintage; it answers "what do we
 // know right now".
 export async function loadCurrentSourceValues(db: DbHandle = sql): Promise<FrozenSourceValue[]> {
-  const rows = (await db`
+  const rows = (await on(db, selectCurrentSourceValues)`
     SELECT DISTINCT ON (source_key, market_date, market_instant)
       id, source_key, market_date::text AS market_date, market_instant::text AS market_instant, value
     FROM source_value_versions
@@ -149,7 +384,7 @@ export async function loadHistoricalSourceValues(
   marketTimeCutoff: string,
   db: DbHandle = sql,
 ): Promise<FrozenSourceValue[]> {
-  const rows = (await db`
+  const rows = (await on(db, selectHistoricalSourceValues)`
     SELECT DISTINCT ON (source_key, market_date, market_instant)
       id, source_key, market_date::text AS market_date, market_instant::text AS market_instant, value
     FROM source_value_versions
@@ -222,7 +457,7 @@ export async function freezeVintage(input: FreezeVintageInput): Promise<FreezeVi
   );
   try {
     return await sql.begin(async (tx) => {
-      const [vintage] = await tx`
+      const [vintage] = await on(tx, insertVintage)<{ id: string | number }>`
         INSERT INTO analytics_data_vintages
           (run_id, tool_id, knowledge_time_cutoff, market_time_cutoff, methodology_version_id,
            build_identity, manifest, manifest_digest, member_count)
@@ -245,7 +480,7 @@ export async function freezeVintage(input: FreezeVintageInput): Promise<FreezeVi
         source_key: member.sourceKey,
       }));
       for (let start = 0; start < memberRows.length; start += MEMBER_INSERT_BATCH_SIZE) {
-        await tx`
+        await on(tx, insertVintageMembers)`
           INSERT INTO analytics_vintage_members ${tx(memberRows.slice(start, start + MEMBER_INSERT_BATCH_SIZE), "vintage_id", "source_value_version_id", "source_key")}`;
       }
       return { vintageId, manifest, memberCount: members.length, replayed: false };
@@ -279,13 +514,13 @@ export interface FrozenVintage {
 // buildVintageManifest over `members` here must reproduce `manifestDigest`
 // bit-for-bit; that equality is the replay proof.
 export async function loadFrozenVintage(vintageId: string, db: DbHandle = sql): Promise<FrozenVintage | null> {
-  const [vintage] = await db`
+  const [vintage] = await on(db, selectVintage)<Record<string, any>>`
     SELECT id, run_id, tool_id, knowledge_time_cutoff::text AS knowledge_time_cutoff,
            market_time_cutoff::text AS market_time_cutoff, methodology_version_id, build_identity,
            manifest, manifest_digest, member_count
     FROM analytics_data_vintages WHERE id = ${vintageId}::bigint`;
   if (!vintage) return null;
-  const members = (await db`
+  const members = (await on(db, selectVintageMembers, selectVintageMemberValues)`
     SELECT svv.id, svv.source_key, svv.market_date::text AS market_date,
            svv.market_instant::text AS market_instant, svv.value
     FROM analytics_vintage_members vm
@@ -313,7 +548,7 @@ export async function findVintageByRunAndTool(
   toolId: string,
   db: DbHandle = sql,
 ): Promise<{ vintageId: string; manifestDigest: string } | null> {
-  const [row] = await db`
+  const [row] = await on(db, selectVintageByRunAndTool)<{ id: string | number; manifest_digest: string }>`
     SELECT id, manifest_digest FROM analytics_data_vintages
     WHERE run_id = ${runId}::bigint AND tool_id = ${toolId}`;
   return row ? { vintageId: String(row.id), manifestDigest: row.manifest_digest } : null;
