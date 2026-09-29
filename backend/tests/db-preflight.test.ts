@@ -20,18 +20,17 @@ import {
   reportLines,
 } from "../scripts/db-preflight.ts";
 import { LEDGER_FAMILIES } from "../src/db/analytics-ledger-guard.ts";
-import { adminUrl } from "./support/cluster.ts";
+import { adminUrl, harnessConnection } from "./support/cluster.ts";
 
 test("empty database → bootstrap, on a genuinely fresh (unmigrated) database", async () => {
   const base = new URL(adminUrl());
   const dbName = `tmp_preflight_empty_${crypto.randomUUID().slice(0, 8)}`;
+  // cluster admin: CREATE/DROP DATABASE only; everything inside is the owner's.
   const admin = postgres(base.toString(), { max: 1, onnotice: () => {} });
-  await admin.unsafe(`CREATE DATABASE ${dbName}`);
+  await admin.unsafe(`CREATE DATABASE ${dbName} OWNER rm_owner`);
   await admin.end();
 
-  const tmpUrl = new URL(base.toString());
-  tmpUrl.pathname = `/${dbName}`;
-  const db = postgres(tmpUrl.toString(), { max: 1, onnotice: () => {} });
+  const db = harnessConnection(dbName);
   try {
     const r = await classifyDatabase("adopt", db);
     expect(r).toEqual({ mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [], appendOnlyProblems: [], analyticsLedgerGuardProblems: [] });
@@ -196,13 +195,12 @@ test("an ADOPTED database whose append-only guard is disarmed is refused, and th
   // and the shared suite database must keep its.
   const base = new URL(adminUrl());
   const dbName = `tmp_preflight_disarmed_${crypto.randomUUID().slice(0, 8)}`;
+  // cluster admin: CREATE/DROP DATABASE only; everything inside is the owner's.
   const admin = postgres(base.toString(), { max: 1, onnotice: () => {} });
   await admin.unsafe(`CREATE DATABASE ${dbName} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`);
   await admin.end();
 
-  const url = new URL(base.toString());
-  url.pathname = `/${dbName}`;
-  const db = postgres(url.toString(), { max: 1, onnotice: () => {} });
+  const db = harnessConnection(dbName);
   try {
     // Armed first — the control, so "refused" below cannot be a fact about
     // this helper rather than about the guard.
@@ -250,13 +248,12 @@ test("an ADOPTED database whose analytics ledger guard (issue #979 AC6) is disar
   // must keep its guard intact for every other file.
   const base = new URL(adminUrl());
   const dbName = `tmp_preflight_ledger_disarmed_${crypto.randomUUID().slice(0, 8)}`;
+  // cluster admin: CREATE/DROP DATABASE only; everything inside is the owner's.
   const admin = postgres(base.toString(), { max: 1, onnotice: () => {} });
   await admin.unsafe(`CREATE DATABASE ${dbName} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`);
   await admin.end();
 
-  const url = new URL(base.toString());
-  url.pathname = `/${dbName}`;
-  const db = postgres(url.toString(), { max: 1, onnotice: () => {} });
+  const db = harnessConnection(dbName);
   try {
     const armed = await classifyDatabase("adopt", db);
     expect(armed.analyticsLedgerGuardProblems).toEqual([]);
