@@ -196,7 +196,7 @@ async function migrate(
 /** A private clone of the migrated, seeded template, with a superuser handle
  *  for fixtures and an rm_owner login for the run. Dropped afterwards. */
 async function withClone(
-  body: (dbs: { admin: postgres.Sql<{}>; owner: postgres.Sql<{}>; name: string }) => Promise<void>,
+  body: (dbs: { fixtures: postgres.Sql<{}>; owner: postgres.Sql<{}>; name: string }) => Promise<void>,
 ): Promise<void> {
   const name = `rm_migrate_run_${randomBytes(4).toString("hex")}`;
   // cluster admin: CREATE/DROP DATABASE.

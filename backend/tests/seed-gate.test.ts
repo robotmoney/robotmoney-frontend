@@ -162,7 +162,7 @@ describe("--seed refuses a populated database — rows, not tables (§5)", () =>
 
 describe("--seed gives a blank rehearsal active subjects (scheduler spec §2.1, issue #1026 e2e)", () => {
   test("the seed inserts active subjects that keep the schema's scheduling defaults, so the scheduler opens an epoch for each", async () => {
-    await withDatabase("snapshot", async ({ admin, name }) => {
+    await withDatabase("snapshot", async ({ db: admin, name }) => {
       expect(await count(admin, "swarm_subjects")).toBe(0);
       await fencedSeed(name);
       const rows = (await admin.unsafe(
