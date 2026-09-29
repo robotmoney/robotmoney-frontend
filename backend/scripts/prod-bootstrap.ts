@@ -83,6 +83,7 @@ import { sql, closeDb } from "../src/db/client.ts";
 import { checkHandleNamespace, handleNamespaceRefusalLines } from "../src/db/handle-namespace.ts";
 import { appendOnlyRefusalLines, checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
 import { analyticsLedgerGuardRefusalLines, checkAnalyticsLedgerGuard } from "../src/db/analytics-ledger-guard.ts";
+import { readAppliedMigrations } from "./schema-current.ts";
 import { runV0SeedBootstrap } from "./v0-seed-bootstrap.ts";
 import { bootstrapEdgarSeed } from "../src/analytics/edgar-seed-loader.ts";
 import { resolveAnalyticsApiConfig } from "../src/analytics/api-client.ts";
@@ -156,21 +157,14 @@ async function runHandleNamespaceStep(): Promise<StepResult> {
 // release, receipted", and §2 puts every migration under the target lock and
 // its fence. So this step only reads the ledger and names what is missing.
 
-// An ABSENT ledger is read from `to_regclass`, never inferred from an error:
+// An ABSENT ledger is read from SQLSTATE 42P01 alone, never from any other error:
 // a connection or permission error on schema_migrations used to be swallowed
 // as "the table does not exist" and reported as every migration pending,
 // sending the operator to migrate a database that may already be current. A
 // query error now throws, and this step fails with that error's own message.
-// (The same comparison is scripts/schema-current.ts `checkSchemaCurrent`;
-// calling it from here moves prod-bootstrap off the scripts raw-SQL backlog,
-// which is backend/tests/db-registry.test.ts's to shrink.)
-async function getAppliedMigrations(): Promise<Set<string> | null> {
-  const [{ regclass }] = await sql<{ regclass: string | null }[]>`
-    SELECT to_regclass('public.schema_migrations')::text AS regclass`;
-  if (regclass === null) return null;
-  const rows = await sql<{ name: string }[]>`SELECT name FROM schema_migrations`;
-  return new Set(rows.map((r) => r.name));
-}
+// (The read is scripts/schema-current.ts `readAppliedMigrations`, one registered
+// rm_app statement shared with the operator's standalone check.)
+const getAppliedMigrations = (): Promise<Set<string> | null> => readAppliedMigrations(sql);
 
 async function runSchemaCurrentStep(migrationsDir: string): Promise<StepResult> {
   const onDisk = (await readdir(migrationsDir)).filter((file) => file.endsWith(".sql")).sort();

@@ -6,7 +6,7 @@
 // any database (check 3a: does the schema match its manifest; 3b: does this code
 // support the installed version), and a pending migration refuses there.
 //
-// READ-ONLY BY CONSTRUCTION — one query against the catalog, one against
+// READ-ONLY BY CONSTRUCTION — one registered query against
 // schema_migrations, nothing else — so it runs as the ordinary runtime role
 // (rm_app), the same credential every other `--db external` step already
 // uses. No elevated privilege is needed to ASK whether the schema is current,
@@ -21,9 +21,36 @@
 import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { sql, closeDb } from "../src/db/client.ts";
+import { sql, closeDb, type DbHandle } from "../src/db/client.ts";
+import { on, registerQuery } from "../src/db/registry.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
+
+const readAppliedNames = registerQuery({
+  role: "rm_app",
+  object: "schema_migrations",
+  privileges: ["SELECT"],
+  site: "scripts/schema-current:readAppliedMigrations",
+  purpose: "Read the ledger of applied migration filenames, so an operator can tell whether every file on disk is recorded.",
+  callers: ["scripts/schema-current", "scripts/prod-bootstrap"],
+  probe: { statement: "SELECT name FROM schema_migrations" },
+});
+
+/**
+ * The applied migration filenames, or null when `schema_migrations` does not
+ * exist. Absence is read from SQLSTATE 42P01 (undefined_table) alone: any other
+ * error, permission and connection failures included, is thrown, never reported
+ * as "never migrated" (which would send an operator to migrate a current database).
+ */
+export async function readAppliedMigrations(db: DbHandle = sql): Promise<Set<string> | null> {
+  try {
+    const rows = await on(db, readAppliedNames)<{ name: string }>`SELECT name FROM schema_migrations`;
+    return new Set(rows.map((r) => r.name));
+  } catch (err) {
+    if ((err as { code?: string }).code === "42P01") return null;
+    throw err;
+  }
+}
 
 export interface SchemaCurrentResult {
   /** False when schema_migrations itself does not exist yet. */
@@ -36,15 +63,10 @@ export interface SchemaCurrentResult {
  *  instead of the real backend/migrations/ — the schema_migrations comparison
  *  is what's under test, not the repo's actual migration list. */
 export async function checkSchemaCurrent(dir: string = migrationsDir): Promise<SchemaCurrentResult> {
-  const [{ regclass }] = (await sql`
-    SELECT to_regclass('public.schema_migrations') AS regclass
-  `) as unknown as { regclass: string | null }[];
-  if (regclass === null) return { exists: false, pending: [] };
+  const applied = await readAppliedMigrations();
+  if (applied === null) return { exists: false, pending: [] };
 
   const files = (await readdir(dir)).filter((f) => f.endsWith(".sql")).sort();
-  const applied = new Set(
-    (await sql<{ name: string }[]>`SELECT name FROM schema_migrations`).map((r) => r.name),
-  );
   return { exists: true, pending: files.filter((f) => !applied.has(f)) };
 }
 
