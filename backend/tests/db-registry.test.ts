@@ -376,7 +376,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "scripts/lib/rollout-receipt",
     "scripts/migrate-run",
     "scripts/smoke-twin-capture",
-    "scripts/upgrades/0.5.0-to-0.5.1/closed-day-allocation",
     "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal",
     "scripts/upgrades/0.5.0-to-0.5.1/postflight",
     "scripts/upgrades/0.5.0-to-0.5.1/preflight",
