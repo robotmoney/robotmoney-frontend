@@ -379,7 +379,10 @@ function assertValidObject(declaration: QueryDeclaration): void {
 
 /** A module id relative to `backend/`, no extension: `src/api/routes/swarm-admin`, or an
  *  operator CLI under `scripts/`, which is an entry module in its own right. */
-const MODULE_ID = /^(?:src|scripts)\/[a-z0-9_-]+(?:\/[a-z0-9_-]+)*$/;
+// A segment may carry a dot only before a digit (`0.5.0-to-0.5.1`, a release's
+// upgrade directory), so a file extension (`.ts`) and `..` are still refused.
+const MODULE_SEGMENT = "[a-z0-9_-](?:[a-z0-9_-]|\\.(?=[0-9]))*";
+const MODULE_ID = new RegExp(`^(?:src|scripts)/${MODULE_SEGMENT}(?:/${MODULE_SEGMENT})*$`);
 
 function assertValidCallers(declaration: { readonly site: string; readonly callers: readonly string[] }): void {
   const callers = declaration.callers as readonly unknown[] | undefined;
@@ -519,6 +522,8 @@ export const OBJECTLESS_SHAPES = Object.freeze({
   runEventsLock: "SELECT pg_advisory_xact_lock(hashtextextended('analytics_ledger_run_events:' || $1, 0))",
   /** Serializes issuance of an admin WebAuthn challenge, so two requests never pick the same slot (api/routes/admin-webauthn.ts). */
   webauthnChallengeIssueLock: "SELECT pg_advisory_xact_lock(hashtext('admin-webauthn-challenge'))",
+  /** The postmaster's start time: the exact boundary between rows a restored dump carried and rows written since (upgrade rehearsals). */
+  postmasterStart: "SELECT pg_postmaster_start_time() AS boot_at",
   /** The snapshot the scheduler's full read takes (scheduler spec §3). */
   snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
 } as const);

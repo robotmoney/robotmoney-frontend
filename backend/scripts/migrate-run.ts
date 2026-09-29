@@ -171,6 +171,7 @@ import {
   type SchemaManifest,
 } from "../src/db/schema-manifest.ts";
 import { loadSnapshot, type Snapshot } from "../src/db/schema-snapshot.ts";
+import { on, registerQuery } from "../src/db/registry.ts";
 import { describeUnmatchedLedger, matchSupportedRelease } from "../src/db/supported-releases.ts";
 import type { MigrateJournal } from "./migrate-journal.ts";
 import {
@@ -183,6 +184,55 @@ import {
   type HeldTargetLock,
   type LockHolder,
 } from "../src/db/target-lock.ts";
+
+const CALLERS = ["scripts/migrate-run"];
+
+// The runner's fixed-shape statements on its own ledger, all as rm_owner, the migration login (spec §3, D47).
+// What stays raw is named in tests/db-registry.test.ts: the migration files' own DDL, the grants file, and
+// catalog reads of a database whose schema may be any historical shape.
+const qRecordMigration = registerQuery({
+  role: "rm_owner",
+  object: "schema_migrations",
+  privileges: ["INSERT"],
+  site: "scripts/migrate-run:recordMigration",
+  purpose: "Record one applied migration filename, in the same fenced transaction as its DDL.",
+  callers: CALLERS,
+  probe: {
+    statement: `INSERT INTO schema_migrations (name) VALUES ($1)`,
+    params: ["0000_probe.sql"],
+  },
+});
+
+const qReadLedger = registerQuery({
+  role: "rm_owner",
+  object: "schema_migrations",
+  privileges: ["SELECT"],
+  site: "scripts/migrate-run:readLedger",
+  purpose: "Read the ledger of applied migration filenames in filename order, to plan, reconcile and publish.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT name FROM schema_migrations ORDER BY name`,
+  },
+});
+
+const qReadLedgerSides = registerQuery({
+  role: "rm_owner",
+  object: "schema_migrations",
+  privileges: ["SELECT"],
+  site: "scripts/migrate-run:readLedgerSides",
+  purpose: "Read each ledger row's filename and whether it was applied before or after the identity migration.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT m.name,
+            CASE WHEN m.applied_at < p.applied_at THEN 'before'
+                 WHEN m.applied_at > p.applied_at THEN 'after'
+                 ELSE 'same' END AS side
+       FROM schema_migrations m, (SELECT applied_at FROM schema_migrations WHERE name = $1) p
+      WHERE m.name <> $1
+      ORDER BY m.name`,
+    params: ["0063_deployment_identity.sql"],
+  },
+});
 
 /** A pool: every mutating transaction is `pool.begin` under the fence. */
 export type MigrateDb = postgresTypes.Sql<{}>;
@@ -463,7 +513,7 @@ export async function runMigrate(
     await boundary(options, `migrate: apply ${file}`);
     await withFenceOn(db, `migrate ${file}`, async (tx) => {
       await tx.unsafe(ddl);
-      await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
+      await on(tx, qRecordMigration)`INSERT INTO schema_migrations (name) VALUES (${file})`;
       if (header !== null) await recordDeclaration(tx, header);
     });
     applied.push(file);
@@ -479,7 +529,7 @@ export async function runMigrate(
     await tx.unsafe(snapshot.grantsSql);
     const after = await relationAcls(tx);
     const filenames = (
-      (await tx.unsafe("SELECT name FROM schema_migrations ORDER BY name")) as unknown as { name: string }[]
+      (await on(tx, qReadLedger)<{ name: string }>`SELECT name FROM schema_migrations ORDER BY name`) as unknown as { name: string }[]
     ).map((row) => row.name);
     if (firstManifest) await assertBaselineMatches(tx, snapshot, filenames);
     const published: SchemaManifest = {
@@ -603,7 +653,7 @@ async function assertBaselineGap(
   accepted: { readonly baseline: readonly string[]; readonly appliedAfter: readonly string[] } | null,
 ): Promise<void> {
   const ledger = (
-    (await db.unsafe("SELECT name FROM schema_migrations ORDER BY name")) as unknown as { name: string }[]
+    (await on(db, qReadLedger)<{ name: string }>`SELECT name FROM schema_migrations ORDER BY name`) as unknown as { name: string }[]
   ).map((row) => row.name);
   const embodied = new Set(snapshot.filenames);
   const recorded = new Set(ledger);
@@ -1184,7 +1234,7 @@ export async function applyIdentityFirst(db: MigrateDb, pass: IdentityFirstPass)
       );
     }
     await tx.unsafe(ddl);
-    await tx`INSERT INTO schema_migrations (name) VALUES (${IDENTITY_MIGRATION})`;
+    await on(tx, qRecordMigration)`INSERT INTO schema_migrations (name) VALUES (${IDENTITY_MIGRATION})`;
     if (header !== null) await recordDeclaration(tx, header);
     const store = transactionIdentityStore(tx, { remote: pass.remote });
     const row =
@@ -1225,16 +1275,13 @@ export interface IdentityPassRemainder {
 export async function readIdentityPassRemainder(db: ReadDb): Promise<IdentityPassRemainder | null> {
   const identity = await readDeploymentIdentity(db);
   if (identity.kind !== "read" || (identity.value !== "production" && identity.value !== "rehearsal")) return null;
-  const rows = (await db.unsafe(
-    `SELECT m.name,
+  const rows = (await on(db, qReadLedgerSides)`SELECT m.name,
             CASE WHEN m.applied_at < p.applied_at THEN 'before'
                  WHEN m.applied_at > p.applied_at THEN 'after'
                  ELSE 'same' END AS side
-       FROM schema_migrations m, (SELECT applied_at FROM schema_migrations WHERE name = $1) p
-      WHERE m.name <> $1
-      ORDER BY m.name`,
-    [IDENTITY_MIGRATION],
-  )) as unknown as { name: string; side: "before" | "after" | "same" }[];
+       FROM schema_migrations m, (SELECT applied_at FROM schema_migrations WHERE name = ${IDENTITY_MIGRATION}) p
+      WHERE m.name <> ${IDENTITY_MIGRATION}
+      ORDER BY m.name`) as unknown as { name: string; side: "before" | "after" | "same" }[];
   if (rows.length === 0 || rows.some((row) => row.side === "same")) return null;
   const baseline = rows.filter((row) => row.side === "before").map((row) => row.name);
   const release = matchSupportedRelease(baseline);
@@ -1275,7 +1322,7 @@ async function ledgerOf(db: ReadDb): Promise<string[]> {
     "SELECT to_regclass('public.schema_migrations') IS NOT NULL AS present",
   )) as unknown as { present: boolean }[];
   if (exists?.present !== true) return [];
-  return ((await db.unsafe("SELECT name FROM schema_migrations ORDER BY name")) as unknown as { name: string }[]).map(
+  return ((await on(db, qReadLedger)<{ name: string }>`SELECT name FROM schema_migrations ORDER BY name`) as unknown as { name: string }[]).map(
     (row) => row.name,
   );
 }

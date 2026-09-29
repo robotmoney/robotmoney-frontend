@@ -34,7 +34,23 @@ import { tableExists } from "../../lib/checks.ts";
 import type { Checker } from "../../lib/checks.ts";
 import { homeEnvFilePath, runPreflightMain, type Db } from "../../lib/preflight-utils.ts";
 import { deriveHostRole } from "../../lib/rollout-receipt.ts";
+import { on, registerQuery } from "../../../src/db/registry.ts";
 import { PRESERVED_RELEASE_TABLES, PRIOR_RELEASE_MIGRATIONS, RELEASE_MIGRATIONS, REQUIRED_TABLES, TAG_GLOB } from "./release.ts";
+
+const CALLERS = ["scripts/upgrades/0.5.0-to-0.5.1/preflight"];
+
+// Preflight connects as rm_readonly (scripts/lib/preflight-utils.ts), read-only by construction.
+const qAppliedMigrations = registerQuery({
+  role: "rm_readonly",
+  object: "schema_migrations",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/preflight:appliedMigrations",
+  purpose: "Read the migration ledger of the production target, to grade that v0.5.0 is fully recorded and v0.5.1's migration is not.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT name FROM schema_migrations ORDER BY name`,
+  },
+});
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(dir, "..", "..", "..", "..");
@@ -205,7 +221,7 @@ export async function runChecks(
     return;
   }
 
-  const rows = (await db`SELECT name FROM schema_migrations ORDER BY name`) as unknown as { name: string }[];
+  const rows = (await on(db, qAppliedMigrations)`SELECT name FROM schema_migrations ORDER BY name`) as unknown as { name: string }[];
   const applied = new Set(rows.map((row) => row.name));
 
   // (1) The full v0.4.0 + v0.5.0 set must already be recorded. For a code-only

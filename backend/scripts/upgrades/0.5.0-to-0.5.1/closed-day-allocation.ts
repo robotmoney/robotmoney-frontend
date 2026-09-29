@@ -23,10 +23,109 @@
 // (runbook §7), and this comparison exists to grade the rehearsal.
 
 import type postgres from "postgres";
+import { on, registerQuery } from "../../../src/db/registry.ts";
 import { createChecker, printVerdict } from "../../lib/checks.ts";
 import type { Checker } from "../../lib/checks.ts";
 
 export type Db = postgres.Sql<{}>;
+
+const CALLERS = ["scripts/upgrades/0.5.0-to-0.5.1/closed-day-allocation"];
+
+// The rehearsal runs as the application's own role (DATABASE_URL), SELECT-only. Each
+// statement joins two relations, so each is two declarations carrying the same probe.
+const dayPrices = registerQuery({
+  role: "rm_app",
+  object: "asset_prices",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/closed-day-allocation:dayOfComparison.assetPrices",
+  purpose: "Find the latest closed day asset_prices covers that also has fund-level live or seed samples, to grade the D41 read-path switch.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT max(ap.price_date) AS day
+      FROM asset_prices ap
+     WHERE ap.price_date < (now() AT TIME ZONE 'UTC')::date
+       AND EXISTS (
+         SELECT 1 FROM wallet_balance_samples wbs
+          WHERE wbs.sample_date = ap.price_date
+            AND wbs.provenance IN ('live', 'seed')
+            AND wbs.amount IS NOT NULL AND wbs.amount > 0
+       )`,
+  },
+});
+
+const daySamples = registerQuery({
+  role: "rm_app",
+  object: "wallet_balance_samples",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/closed-day-allocation:dayOfComparison.samples",
+  purpose: "Find the latest closed day asset_prices covers that also has fund-level live or seed samples, to grade the D41 read-path switch.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT max(ap.price_date) AS day
+      FROM asset_prices ap
+     WHERE ap.price_date < (now() AT TIME ZONE 'UTC')::date
+       AND EXISTS (
+         SELECT 1 FROM wallet_balance_samples wbs
+          WHERE wbs.sample_date = ap.price_date
+            AND wbs.provenance IN ('live', 'seed')
+            AND wbs.amount IS NOT NULL AND wbs.amount > 0
+       )`,
+  },
+});
+
+const compareSamples = registerQuery({
+  role: "rm_app",
+  object: "wallet_balance_samples",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/closed-day-allocation:compareDay.samples",
+  purpose: "Read one closed day's fund-level samples beside their asset_prices close, to compare the fused total with the join total.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT wbs.symbol AS symbol,
+           wbs.amount AS amount,
+           wbs.price_usd AS price_usd,
+           wbs.value_usd AS value_usd,
+           ap.price_usd AS asset_price_usd
+      FROM wallet_balance_samples wbs
+      JOIN asset_prices ap
+        ON ap.symbol = wbs.symbol
+       AND ap.price_date = wbs.sample_date
+       AND ap.time_basis = 'utc-daily-close'
+     WHERE wbs.sample_date = $1
+       AND wbs.provenance IN ('live', 'seed')
+       AND wbs.amount IS NOT NULL AND wbs.amount > 0
+       AND wbs.symbol <> 'SP500'
+     ORDER BY wbs.symbol`,
+    params: ["2000-01-01"],
+  },
+});
+
+const comparePrices = registerQuery({
+  role: "rm_app",
+  object: "asset_prices",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/closed-day-allocation:compareDay.assetPrices",
+  purpose: "Read one closed day's fund-level samples beside their asset_prices close, to compare the fused total with the join total.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT wbs.symbol AS symbol,
+           wbs.amount AS amount,
+           wbs.price_usd AS price_usd,
+           wbs.value_usd AS value_usd,
+           ap.price_usd AS asset_price_usd
+      FROM wallet_balance_samples wbs
+      JOIN asset_prices ap
+        ON ap.symbol = wbs.symbol
+       AND ap.price_date = wbs.sample_date
+       AND ap.time_basis = 'utc-daily-close'
+     WHERE wbs.sample_date = $1
+       AND wbs.provenance IN ('live', 'seed')
+       AND wbs.amount IS NOT NULL AND wbs.amount > 0
+       AND wbs.symbol <> 'SP500'
+     ORDER BY wbs.symbol`,
+    params: ["2000-01-01"],
+  },
+});
 
 /** Per-symbol rounding slack: one US cent, the "within rounding" the runbook
  *  criterion allows (the sampled `value_usd` and the seeded/dual-written
@@ -37,7 +136,7 @@ const ROUNDING_SLACK_PER_SYMBOL = 0.01;
 export async function runClosedDayAllocationCheck(db: Db, { record }: Checker): Promise<void> {
   // The most recent CLOSED day asset_prices covers AND that has fund-level
   // live/seed samples to compare — the day the join actually bites on.
-  const [day] = (await db`
+  const [day] = (await on(db, dayPrices, daySamples)`
     SELECT max(ap.price_date) AS day
       FROM asset_prices ap
      WHERE ap.price_date < (now() AT TIME ZONE 'UTC')::date
@@ -58,7 +157,7 @@ export async function runClosedDayAllocationCheck(db: Db, { record }: Checker): 
     return;
   }
 
-  const rows = (await db`
+  const rows = (await on(db, compareSamples, comparePrices)`
     SELECT wbs.symbol AS symbol,
            wbs.amount AS amount,
            wbs.price_usd AS price_usd,

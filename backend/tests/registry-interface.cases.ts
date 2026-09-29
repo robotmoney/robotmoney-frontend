@@ -188,6 +188,15 @@ describe("callers — every declaration names the entry modules that may reach i
     }
   });
 
+  test("accepts a release's upgrade directory, whose name carries dots before digits", () => {
+    expect(() =>
+      registerQuery(declaration({ site: site("dotted_dir"), callers: ["scripts/upgrades/0.5.0-to-0.5.1/postflight"] })),
+    ).not.toThrow();
+    for (const bad of ["scripts/upgrades/../x", "scripts/x.ts", "scripts/x.", "scripts/.5/x"]) {
+      expect(() => registerQuery(declaration({ callers: [bad] })), bad).toThrow("caller");
+    }
+  });
+
   test("refuses the same caller twice", () => {
     expect(() => registerQuery(declaration({ callers: ["src/api/routes/a", "src/api/routes/a"] }))).toThrow("same caller twice");
   });
