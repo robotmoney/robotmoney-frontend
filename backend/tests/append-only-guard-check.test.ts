@@ -22,7 +22,7 @@
 // and one test then deletes real rows.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import postgres from "postgres";
-import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import {
   APPEND_ONLY_MIGRATION,
   APPEND_ONLY_TABLES,
@@ -75,17 +75,17 @@ afterEach(async () => {
   // Every test restores the shipped state, so ordering between them cannot
   // matter and a failure mid-test cannot leave the rest running against a
   // disarmed database and reporting nonsense.
-  await sql.unsafe(REARM);
+  await fixtureDb.unsafe(REARM);
   for (const table of APPEND_ONLY_TABLES) {
     const names = triggerNames(table);
-    await sql.unsafe(`ALTER TABLE public.${table} ENABLE ALWAYS TRIGGER ${names.statement}`).catch(() => {});
-    await sql.unsafe(`ALTER TABLE public.${table} ENABLE ALWAYS TRIGGER ${names.row}`).catch(() => {});
+    await fixtureDb.unsafe(`ALTER TABLE public.${table} ENABLE ALWAYS TRIGGER ${names.statement}`).catch(() => {});
+    await fixtureDb.unsafe(`ALTER TABLE public.${table} ENABLE ALWAYS TRIGGER ${names.row}`).catch(() => {});
   }
 });
 
 describe("the append-only guard's runtime check", () => {
   test("reports 'armed' on a freshly migrated database", async () => {
-    const result = await checkAppendOnlyGuard(sql);
+    const result = await checkAppendOnlyGuard(fixtureDb);
     expect(result.problems).toEqual([]);
     expect(result.status).toBe("armed");
   });
@@ -93,10 +93,10 @@ describe("the append-only guard's runtime check", () => {
   test("A TRIGGER INVENTORY IS SATISFIED BY A FULLY DISARMED DATABASE — the probe is not", async () => {
     // THE WHOLE POINT OF THIS FILE. Replace the function body; change nothing
     // else.
-    await sql.unsafe(DISARM);
+    await fixtureDb.unsafe(DISARM);
 
     // 1. The catalog is untouched and every inventory-style assertion passes.
-    const rows = (await sql`
+    const rows = (await fixtureDb`
       SELECT c.relname::text AS table_name, t.tgname::text AS trigger_name,
              t.tgenabled::text AS enabled, p.proname::text AS function_name
       FROM pg_trigger t
@@ -112,13 +112,13 @@ describe("the append-only guard's runtime check", () => {
 
     // 2. And deletion is completely unguarded. Proved by DOING it — this is a
     //    clone, so a real row really goes.
-    await sql`INSERT INTO audit_log (actor, action) VALUES ('append-only-disarm-probe', 'probe')`;
-    await sql.unsafe(`DELETE FROM audit_log WHERE actor = 'append-only-disarm-probe'`);
-    const left = (await sql`SELECT 1 FROM audit_log WHERE actor = 'append-only-disarm-probe'`) as unknown as unknown[];
+    await fixtureDb`INSERT INTO audit_log (actor, action) VALUES ('append-only-disarm-probe', 'probe')`;
+    await fixtureDb.unsafe(`DELETE FROM audit_log WHERE actor = 'append-only-disarm-probe'`);
+    const left = (await fixtureDb`SELECT 1 FROM audit_log WHERE actor = 'append-only-disarm-probe'`) as unknown as unknown[];
     expect(left.length, "a disarmed guard lets the row go; the inventory above did not notice").toBe(0);
 
     // 3. The check catches it, because it PROBES.
-    const result = await checkAppendOnlyGuard(sql);
+    const result = await checkAppendOnlyGuard(fixtureDb);
     expect(result.status).toBe("disarmed");
     expect(result.problems.length).toBe(APPEND_ONLY_TABLES.length);
     for (const table of APPEND_ONLY_TABLES) {
@@ -127,9 +127,9 @@ describe("the append-only guard's runtime check", () => {
   });
 
   test("catches a single DROPPED trigger, on one table, in a database that is otherwise armed", async () => {
-    await sql.unsafe(`DROP TRIGGER swarm_recommendations_append_only_row ON swarm_recommendations`);
+    await fixtureDb.unsafe(`DROP TRIGGER swarm_recommendations_append_only_row ON swarm_recommendations`);
     try {
-      const result = await checkAppendOnlyGuard(sql);
+      const result = await checkAppendOnlyGuard(fixtureDb);
       expect(result.status).toBe("disarmed");
       // Only the ROW-level trigger is gone, so the probe (a statement-level
       // event) is still refused on every table — the inventory is the only half
@@ -138,11 +138,11 @@ describe("the append-only guard's runtime check", () => {
         expect.stringContaining("swarm_recommendations: the row-level trigger 'swarm_recommendations_append_only_row' is MISSING"),
       ]);
     } finally {
-      await sql.unsafe(
+      await fixtureDb.unsafe(
         `CREATE TRIGGER swarm_recommendations_append_only_row BEFORE DELETE ON swarm_recommendations
          FOR EACH ROW EXECUTE FUNCTION rm_append_only_guard()`,
       );
-      await sql.unsafe(`ALTER TABLE swarm_recommendations ENABLE ALWAYS TRIGGER swarm_recommendations_append_only_row`);
+      await fixtureDb.unsafe(`ALTER TABLE swarm_recommendations ENABLE ALWAYS TRIGGER swarm_recommendations_append_only_row`);
     }
   });
 
@@ -152,14 +152,14 @@ describe("the append-only guard's runtime check", () => {
     // session a restore or a replication apply runs as. Applied here to the
     // STATEMENT-level trigger only, which produces a database where the obvious
     // hand-check passes and the guarantee is gone.
-    await sql.unsafe(`ALTER TABLE audit_log ENABLE REPLICA TRIGGER audit_log_append_only`);
+    await fixtureDb.unsafe(`ALTER TABLE audit_log ENABLE REPLICA TRIGGER audit_log_append_only`);
 
     // The obvious hand-check — delete a REAL row and see it refused — is
     // satisfied, because the row-level trigger is still ALWAYS and still fires.
-    await sql`INSERT INTO audit_log (actor, action) VALUES ('append-only-replica-probe', 'probe')`;
+    await fixtureDb`INSERT INTO audit_log (actor, action) VALUES ('append-only-replica-probe', 'probe')`;
     let handCheck: unknown = null;
     try {
-      await sql.unsafe(`DELETE FROM audit_log WHERE actor = 'append-only-replica-probe'`);
+      await fixtureDb.unsafe(`DELETE FROM audit_log WHERE actor = 'append-only-replica-probe'`);
     } catch (e) {
       handCheck = e;
     }
@@ -170,7 +170,7 @@ describe("the append-only guard's runtime check", () => {
 
     // The real check catches it twice over: the catalog sees 'R', and the probe
     // (a statement-level event, matching no rows) is now ACCEPTED.
-    const result = await checkAppendOnlyGuard(sql);
+    const result = await checkAppendOnlyGuard(fixtureDb);
     expect(result.status).toBe("disarmed");
     const joined = result.problems.join("\n");
     expect(joined).toContain("tgenabled='R'");
@@ -181,17 +181,17 @@ describe("the append-only guard's runtime check", () => {
     // A first boot against a database that predates 0032 must not be refused:
     // migrate() is what installs the guard. The distinction is the whole reason
     // the api can afford to fail closed on "disarmed".
-    await sql.unsafe(`ALTER TABLE schema_migrations DISABLE TRIGGER USER`);
+    await fixtureDb.unsafe(`ALTER TABLE schema_migrations DISABLE TRIGGER USER`);
     try {
-      await sql`DELETE FROM schema_migrations WHERE name = ${APPEND_ONLY_MIGRATION}`;
-      const result = await checkAppendOnlyGuard(sql);
+      await fixtureDb`DELETE FROM schema_migrations WHERE name = ${APPEND_ONLY_MIGRATION}`;
+      const result = await checkAppendOnlyGuard(fixtureDb);
       expect(result.status).toBe("not_applied");
       expect(result.problems).toEqual([]);
     } finally {
-      await sql`INSERT INTO schema_migrations (name) VALUES (${APPEND_ONLY_MIGRATION})
+      await fixtureDb`INSERT INTO schema_migrations (name) VALUES (${APPEND_ONLY_MIGRATION})
                 ON CONFLICT (name) DO NOTHING`;
-      await sql.unsafe(`ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only`);
-      await sql.unsafe(`ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only_row`);
+      await fixtureDb.unsafe(`ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only`);
+      await fixtureDb.unsafe(`ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only_row`);
     }
   });
 
@@ -205,32 +205,32 @@ describe("the append-only guard's runtime check", () => {
     // its triggers and its schema_migrations row, i.e. the honest shape of
     // "never migrated", not merely "disarmed after being armed".
     const names = triggerNames("swarm_member_keys");
-    await sql.unsafe(`DROP TRIGGER ${names.statement} ON swarm_member_keys`);
-    await sql.unsafe(`DROP TRIGGER ${names.row} ON swarm_member_keys`);
-    await sql.unsafe(`ALTER TABLE schema_migrations DISABLE TRIGGER USER`);
+    await fixtureDb.unsafe(`DROP TRIGGER ${names.statement} ON swarm_member_keys`);
+    await fixtureDb.unsafe(`DROP TRIGGER ${names.row} ON swarm_member_keys`);
+    await fixtureDb.unsafe(`ALTER TABLE schema_migrations DISABLE TRIGGER USER`);
     try {
-      await sql`DELETE FROM schema_migrations WHERE name = ${MEMBER_KEYS_MIGRATION}`;
+      await fixtureDb`DELETE FROM schema_migrations WHERE name = ${MEMBER_KEYS_MIGRATION}`;
     } finally {
-      await sql.unsafe(`ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only`);
-      await sql.unsafe(`ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only_row`);
+      await fixtureDb.unsafe(`ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only`);
+      await fixtureDb.unsafe(`ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only_row`);
     }
     try {
-      const result = await checkAppendOnlyGuard(sql);
+      const result = await checkAppendOnlyGuard(fixtureDb);
       expect(result.status).toBe("armed");
       expect(result.problems).toEqual([]);
     } finally {
-      await sql`INSERT INTO schema_migrations (name) VALUES (${MEMBER_KEYS_MIGRATION})
+      await fixtureDb`INSERT INTO schema_migrations (name) VALUES (${MEMBER_KEYS_MIGRATION})
                 ON CONFLICT (name) DO NOTHING`;
-      await sql.unsafe(
+      await fixtureDb.unsafe(
         `CREATE TRIGGER ${names.statement} BEFORE DELETE OR TRUNCATE ON swarm_member_keys
          FOR EACH STATEMENT EXECUTE FUNCTION rm_append_only_guard()`,
       );
-      await sql.unsafe(
+      await fixtureDb.unsafe(
         `CREATE TRIGGER ${names.row} BEFORE DELETE ON swarm_member_keys
          FOR EACH ROW EXECUTE FUNCTION rm_append_only_guard()`,
       );
-      await sql.unsafe(`ALTER TABLE swarm_member_keys ENABLE ALWAYS TRIGGER ${names.statement}`);
-      await sql.unsafe(`ALTER TABLE swarm_member_keys ENABLE ALWAYS TRIGGER ${names.row}`);
+      await fixtureDb.unsafe(`ALTER TABLE swarm_member_keys ENABLE ALWAYS TRIGGER ${names.statement}`);
+      await fixtureDb.unsafe(`ALTER TABLE swarm_member_keys ENABLE ALWAYS TRIGGER ${names.row}`);
     }
   });
 
@@ -240,16 +240,16 @@ describe("the append-only guard's runtime check", () => {
     // a table with an inbound FK, a SQLSTATE-only assertion is therefore green
     // against a database where migration 0032 was never applied at all. Build
     // that exact error and require the recogniser to reject it.
-    await sql.unsafe(`ALTER TABLE swarm_members DISABLE TRIGGER USER`);
+    await fixtureDb.unsafe(`ALTER TABLE swarm_members DISABLE TRIGGER USER`);
     let raised: unknown = null;
     try {
-      await sql.unsafe(`TRUNCATE TABLE swarm_members`);
+      await fixtureDb.unsafe(`TRUNCATE TABLE swarm_members`);
     } catch (e) {
       raised = e;
     } finally {
       const names = triggerNames("swarm_members");
-      await sql.unsafe(`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER ${names.statement}`);
-      await sql.unsafe(`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER ${names.row}`);
+      await fixtureDb.unsafe(`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER ${names.statement}`);
+      await fixtureDb.unsafe(`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER ${names.row}`);
     }
     const err = raised as { code?: string; message?: string };
     expect(err?.code, "the fixture must really be a 0A000 from Postgres itself").toBe("0A000");
@@ -282,9 +282,9 @@ describe("the runtime check covers the immutable-ledger families too", () => {
 
   test("a DROPPED cutover trigger is caught — erasing one parity-observation guard is a refused boot", async () => {
     const names = ledgerTriggerNames(CUTOVER_FAMILY, "analytics_parity_observations");
-    await sql.unsafe(`DROP TRIGGER ${names.row} ON analytics_parity_observations`);
+    await fixtureDb.unsafe(`DROP TRIGGER ${names.row} ON analytics_parity_observations`);
     try {
-      const result = await checkAppendOnlyGuard(sql);
+      const result = await checkAppendOnlyGuard(fixtureDb);
       expect(result.status, "parity observations with a missing row-level trigger must refuse the boot").toBe(
         "disarmed",
       );
@@ -299,19 +299,19 @@ describe("the runtime check covers the immutable-ledger families too", () => {
       // Only the cutover family was dragged in.
       expect(result.problems.every((p) => p.startsWith("analytics_parity_observations:"))).toBe(true);
     } finally {
-      await sql.unsafe(
+      await fixtureDb.unsafe(
         `CREATE TRIGGER ${names.row} BEFORE UPDATE OR DELETE ON public.analytics_parity_observations
          FOR EACH ROW EXECUTE FUNCTION public.${CUTOVER_FAMILY.functionName}()`,
       );
-      await sql.unsafe(`ALTER TABLE public.analytics_parity_observations ENABLE ALWAYS TRIGGER ${names.row}`);
+      await fixtureDb.unsafe(`ALTER TABLE public.analytics_parity_observations ENABLE ALWAYS TRIGGER ${names.row}`);
     }
   });
 
   test("a DROPPED ledger trigger is caught — the case a partial pg_restore produces", async () => {
     const names = ledgerTriggerNames(OUTPUT_FAMILY, "analytics_output_snapshots");
-    await sql.unsafe(`DROP TRIGGER ${names.statement} ON analytics_output_snapshots`);
+    await fixtureDb.unsafe(`DROP TRIGGER ${names.statement} ON analytics_output_snapshots`);
     try {
-      const result = await checkAppendOnlyGuard(sql);
+      const result = await checkAppendOnlyGuard(fixtureDb);
       expect(result.status, "a ledger table with no statement-level trigger must refuse the boot").toBe("disarmed");
       // Both halves see this one: the catalog because the trigger is gone, and
       // the probe because with the statement trigger gone a DELETE matching no
@@ -326,11 +326,11 @@ describe("the runtime check covers the immutable-ledger families too", () => {
       // And nothing else was dragged in with it.
       expect(result.problems.every((p) => p.startsWith("analytics_output_snapshots:"))).toBe(true);
     } finally {
-      await sql.unsafe(
+      await fixtureDb.unsafe(
         `CREATE TRIGGER ${names.statement} BEFORE UPDATE OR DELETE OR TRUNCATE ON public.analytics_output_snapshots
          FOR EACH STATEMENT EXECUTE FUNCTION public.${OUTPUT_FAMILY.functionName}()`,
       );
-      await sql.unsafe(`ALTER TABLE public.analytics_output_snapshots ENABLE ALWAYS TRIGGER ${names.statement}`);
+      await fixtureDb.unsafe(`ALTER TABLE public.analytics_output_snapshots ENABLE ALWAYS TRIGGER ${names.statement}`);
     }
   });
 
@@ -338,17 +338,17 @@ describe("the runtime check covers the immutable-ledger families too", () => {
     // `DISABLE TRIGGER USER` turns both triggers off at once, which is the
     // honest version of this attack: the catalog still lists them, and deletion
     // is completely open. Proved by DOING it — this is a clone.
-    await sql.unsafe(`ALTER TABLE analytics_ledger_run_events DISABLE TRIGGER USER`);
+    await fixtureDb.unsafe(`ALTER TABLE analytics_ledger_run_events DISABLE TRIGGER USER`);
     try {
-      const result = await checkAppendOnlyGuard(sql);
+      const result = await checkAppendOnlyGuard(fixtureDb);
       expect(result.status).toBe("disarmed");
       const joined = result.problems.join("\n");
       expect(joined).toContain("analytics_ledger_run_events: trigger 'analytics_ledger_run_events_immutable' is tgenabled='D'");
       expect(joined).toContain("analytics_ledger_run_events: a DELETE was ACCEPTED");
     } finally {
       const names = ledgerTriggerNames(RUN_FAMILY, "analytics_ledger_run_events");
-      await sql.unsafe(`ALTER TABLE analytics_ledger_run_events ENABLE ALWAYS TRIGGER ${names.statement}`);
-      await sql.unsafe(`ALTER TABLE analytics_ledger_run_events ENABLE ALWAYS TRIGGER ${names.row}`);
+      await fixtureDb.unsafe(`ALTER TABLE analytics_ledger_run_events ENABLE ALWAYS TRIGGER ${names.statement}`);
+      await fixtureDb.unsafe(`ALTER TABLE analytics_ledger_run_events ENABLE ALWAYS TRIGGER ${names.row}`);
     }
   });
 
@@ -357,12 +357,12 @@ describe("the runtime check covers the immutable-ledger families too", () => {
     // family: every trigger still exists, still names the right function, still
     // reports ENABLE ALWAYS — and nothing refuses anything. Only the probe can
     // see this, which is why the families get both halves and not an inventory.
-    await sql.unsafe(
+    await fixtureDb.unsafe(
       `CREATE OR REPLACE FUNCTION public.${OUTPUT_FAMILY.functionName}() RETURNS trigger
        LANGUAGE plpgsql AS $$ BEGIN IF TG_LEVEL = 'ROW' THEN RETURN OLD; END IF; RETURN NULL; END $$`,
     );
     try {
-      const rows = (await sql`
+      const rows = (await fixtureDb`
         SELECT t.tgenabled::text AS enabled, p.proname::text AS function_name
         FROM pg_trigger t
         JOIN pg_class c ON c.oid = t.tgrelid
@@ -375,7 +375,7 @@ describe("the runtime check covers the immutable-ledger families too", () => {
         expect(r.function_name).toBe(OUTPUT_FAMILY.functionName);
       }
 
-      const result = await checkAppendOnlyGuard(sql);
+      const result = await checkAppendOnlyGuard(fixtureDb);
       expect(result.status).toBe("disarmed");
       for (const table of OUTPUT_FAMILY.tables) {
         expect(
@@ -384,7 +384,7 @@ describe("the runtime check covers the immutable-ledger families too", () => {
         ).toBe(true);
       }
     } finally {
-      await sql.unsafe(
+      await fixtureDb.unsafe(
         `CREATE OR REPLACE FUNCTION public.${OUTPUT_FAMILY.functionName}() RETURNS trigger
          LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$
          BEGIN
@@ -397,7 +397,7 @@ describe("the runtime check covers the immutable-ledger families too", () => {
   });
 
   test("armed again once repaired — so the assertions above cannot be passing for a standing reason", async () => {
-    const result = await checkAppendOnlyGuard(sql);
+    const result = await checkAppendOnlyGuard(fixtureDb);
     expect(result.problems).toEqual([]);
     expect(result.status).toBe("armed");
   });
@@ -468,7 +468,7 @@ describe("the runtime check under the PRODUCTION role (rm_app), which holds no D
     // design: "Append-only protection is both absent privilege and the existing
     // triggers." Under 0065 the first half carries the production role, and the
     // probe still runs in full under rm_owner — the describe above this one.
-    await sql.unsafe(DISARM);
+    await fixtureDb.unsafe(DISARM);
 
     // The premise, asserted rather than assumed, because everything below rests
     // on it: the disarmed function cannot be exploited from this connection.
@@ -493,7 +493,7 @@ describe("the runtime check under the PRODUCTION role (rm_app), which holds no D
     // needs no privilege on the table at all.
     const family = LEDGER_IMMUTABLE_FAMILIES.find((f) => f.migration === "0057_source_acquisition_ledger.sql")!;
     const names = ledgerTriggerNames(family, "source_payloads");
-    await sql.unsafe(`DROP TRIGGER ${names.row} ON source_payloads`);
+    await fixtureDb.unsafe(`DROP TRIGGER ${names.row} ON source_payloads`);
     try {
       const result = await checkAppendOnlyGuard(app);
       expect(result.status).toBe("disarmed");
@@ -501,11 +501,11 @@ describe("the runtime check under the PRODUCTION role (rm_app), which holds no D
         expect.stringContaining(`source_payloads: the row-level trigger '${names.row}' is MISSING`),
       ]);
     } finally {
-      await sql.unsafe(
+      await fixtureDb.unsafe(
         `CREATE TRIGGER ${names.row} BEFORE UPDATE OR DELETE ON public.source_payloads
          FOR EACH ROW EXECUTE FUNCTION public.${family.functionName}()`,
       );
-      await sql.unsafe(`ALTER TABLE public.source_payloads ENABLE ALWAYS TRIGGER ${names.row}`);
+      await fixtureDb.unsafe(`ALTER TABLE public.source_payloads ENABLE ALWAYS TRIGGER ${names.row}`);
     }
   });
 });
