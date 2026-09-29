@@ -16,6 +16,7 @@ import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { payloadChecksum } from "../src/analytics/source-ledger.ts";
 import { checkRawIndicatorHistoryParity, checkRegimeSnapshotsParity, checkResearchSignalsParity } from "../src/analytics/cutover/parity.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { provisionAnalyticsToken, provisionOperatorToken } from "./support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
@@ -303,8 +304,8 @@ describe("dual-write parity: raw-history `source` (issue #979 AC3)", () => {
     expect(appliedAt, "0061 must be applied here or this test proves nothing").toBeDefined();
     const before = new Date(new Date(appliedAt).getTime() - 86_400_000).toISOString();
 
-    await sql`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES ('2024-06-01', 'DUALWRITE_PRE_0061', 3.5, 'live')`;
-    await sql`
+    await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES ('2024-06-01', 'DUALWRITE_PRE_0061', 3.5, 'live')`;
+    await fixtureDb`
       INSERT INTO source_value_versions (source_key, market_date, value, revision_kind, knowledge_time)
       VALUES ('raw_indicator_history:DUALWRITE_PRE_0061', '2024-06-01', 3.5, 'legacy_baseline', ${before}::timestamptz)`;
 
@@ -359,10 +360,10 @@ describe("dual-write parity: mid-run race immunity (issue #979 fix)", () => {
     // honest shape in the merged model: a direct, out-of-band INSERT (the
     // v0-seed archive / import-regime-eq / legacy smoke subject — precisely
     // the rows publishBrief deliberately does NOT bind).
-    await sql`INSERT INTO regime_snapshots (date, composite, regime) VALUES (${date}, 99, 'risk_on')`;
-    await sql`
+    await fixtureDb`INSERT INTO regime_snapshots (date, composite, regime) VALUES (${date}, 99, 'risk_on')`;
+    await fixtureDb`
       INSERT INTO research_signals (signal_key, date, payload)
-      VALUES ('race-signal', ${date}, ${sql.json({ asof: date, title: "in-flight", question: "q", spec: {}, gauges: [] })})`;
+      VALUES ('race-signal', ${date}, ${fixtureDb.json({ asof: date, title: "in-flight", question: "q", spec: {}, gauges: [] })})`;
 
     // The compat rows really landed — this is not a no-op test.
     const compatRegime = await sql`SELECT composite FROM regime_snapshots WHERE date = ${date}`;
@@ -414,9 +415,9 @@ describe("dual-write parity: mid-run race immunity (issue #979 fix)", () => {
     // Drift the COMPATIBILITY table only, out of band, after settlement — the
     // ledger keeps the frozen value. This is a real, persistent divergence,
     // not a timing artifact, and AC2 requires it to still block cutover.
-    await sql`UPDATE regime_snapshots SET composite = 424242 WHERE date = ${date}`;
-    await sql`
-      UPDATE research_signals SET payload = ${sql.json({ asof: date, title: "drifted-out-of-band", question: "q", spec: {}, gauges: [] })}
+    await fixtureDb`UPDATE regime_snapshots SET composite = 424242 WHERE date = ${date}`;
+    await fixtureDb`
+      UPDATE research_signals SET payload = ${fixtureDb.json({ asof: date, title: "drifted-out-of-band", question: "q", spec: {}, gauges: [] })}
       WHERE signal_key = 'persistent-mismatch-signal' AND date = ${date}
     `;
 
