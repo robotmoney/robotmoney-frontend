@@ -167,7 +167,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.dashboards.regimeSnapshots,
     summary: "Daily cross-asset risk-on / risk-off classifier",
     description:
-      "The regime classifier: a composite score in 0..1 per day, its percentile, the label (risk_off below 0.33, neutral to 0.67, risk_on above), the macro / onchain / equity-factor indicator panels behind it, and the backtests. If all you want is today's reading it is `latest.composite` and `latest.regime`. Be aware of the size before you call: `range` trims the history but not the roughly 300 KB of backtests and correlations that ride on `latest`, so even range=1 is about 300 KB.",
+      "The regime classifier: a composite score in 0..1 per day, its 3-year rolling percentile, the label (risk_off, neutral or risk_on, bucketed on the percentile at 0.33 and 0.67), the macro / onchain / equity-factor indicator panels behind it, and, on request, the backtests. If all you want is today's reading it is `latest.composite` and `latest.regime`. `range` trims the history; the correlation matrices ride on `latest` whatever the range, and the backtests come only with `include=backtest`.",
     backs: ["/regime", "/regime/indicators", "/regime-detection"],
     params: [
       {
@@ -176,9 +176,15 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
         description: "Days of history. Defaults to 180, clamped to 1..3650.",
         example: "90",
       },
+      {
+        name: "include",
+        in: "query",
+        description: "`backtest` adds the three backtests to `latest`.",
+        example: "backtest",
+      },
     ],
     contractType: "{ latest: RegimeSnapshot, history: RegimeSnapshot[] }",
-    sizeHint: "about 490 KB at the default 180 days, and about 300 KB at any range",
+    sizeHint: "about 125 KB at the default 180 days and 33 KB at `?range=1`; `&include=backtest` adds about 125 KB of backtests",
   },
   {
     id: "getResearchSignal",
