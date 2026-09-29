@@ -921,6 +921,7 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
     clockTimestamp: "SELECT clock_timestamp() AS at",
     connectionCheck: "SELECT 1",
     walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
+    advisoryLockByText: "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
     snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
   };
 
