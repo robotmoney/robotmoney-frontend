@@ -30,6 +30,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import * as domain from "../src/swarm/domain.ts";
 import {
   APPEND_ONLY_RELEASED,
@@ -106,7 +107,7 @@ async function commitEvents(prefix: string, turnovers: number): Promise<void> {
 
 /** rm_owner, the only role that may prune (D53 (2)), in one transaction. */
 async function asOwner<T>(fn: (tx: postgres.TransactionSql<{}>) => Promise<T>): Promise<T> {
-  return (await sql.begin(async (tx) => {
+  return (await fixtureDb.begin(async (tx) => {
     await tx.unsafe("SET LOCAL ROLE rm_owner");
     return fn(tx as unknown as postgres.TransactionSql<{}>);
   })) as T;
@@ -238,7 +239,7 @@ test("grant reconciliation revokes DELETE and TRUNCATE from every runtime role o
 
   // A hand-run grant re-widens every runtime role, on the log and on an
   // ordinary table (the drift reconciliation exists for).
-  await sql.unsafe("GRANT DELETE, TRUNCATE ON swarm_stream_events, jobs TO rm_app, rm_worker, rm_readonly");
+  await fixtureDb.unsafe("GRANT DELETE, TRUNCATE ON swarm_stream_events, jobs TO rm_app, rm_worker, rm_readonly");
   try {
     expect((await held()).length).toBe(12);
     await asOwner(async (tx) => tx.unsafe(grantsSql));
@@ -246,7 +247,7 @@ test("grant reconciliation revokes DELETE and TRUNCATE from every runtime role o
     expect(await sqlstate(logins.get("rm_app")!, "DELETE FROM swarm_stream_events WHERE seq = 1")).toBe("42501");
     expect(await sqlstate(logins.get("rm_worker")!, "DELETE FROM jobs WHERE false")).toBe("42501");
   } finally {
-    await sql.unsafe("REVOKE DELETE, TRUNCATE ON swarm_stream_events, jobs FROM rm_app, rm_worker, rm_readonly");
+    await fixtureDb.unsafe("REVOKE DELETE, TRUNCATE ON swarm_stream_events, jobs FROM rm_app, rm_worker, rm_readonly");
   }
 });
 
@@ -292,7 +293,7 @@ test("grant reconciliation gives rm_app exactly SELECT and UPDATE on the counter
   expect(await held()).toEqual(exactly0081);
   // Red control: a hand-widened INSERT is taken back, and a reconciliation run
   // on a clean database adds nothing (the ordinary sweep would add INSERT).
-  await sql.unsafe("GRANT INSERT ON swarm_stream_head TO rm_app, rm_worker");
+  await fixtureDb.unsafe("GRANT INSERT ON swarm_stream_head TO rm_app, rm_worker");
   try {
     expect(await held()).toContain("rm_app:INSERT");
     await asOwner(async (tx) => tx.unsafe(grantsSql));
@@ -300,7 +301,7 @@ test("grant reconciliation gives rm_app exactly SELECT and UPDATE on the counter
     await asOwner(async (tx) => tx.unsafe(grantsSql));
     expect(await held()).toEqual(exactly0081);
   } finally {
-    await sql.unsafe("REVOKE INSERT ON swarm_stream_head FROM rm_app, rm_worker");
+    await fixtureDb.unsafe("REVOKE INSERT ON swarm_stream_head FROM rm_app, rm_worker");
   }
 });
 
@@ -309,13 +310,13 @@ test("preflight check 2 refuses a runtime DELETE grant on the log, which it no l
     (await findDenylistViolations(sql, RUNTIME)).filter((v) => v.object === "swarm_stream_events");
   // Control: the migrated clone is clean.
   expect(await onLog()).toEqual([]);
-  await sql.unsafe("GRANT DELETE ON swarm_stream_events TO rm_app");
-  await sql.unsafe("GRANT TRUNCATE ON swarm_stream_events TO rm_worker");
+  await fixtureDb.unsafe("GRANT DELETE ON swarm_stream_events TO rm_app");
+  await fixtureDb.unsafe("GRANT TRUNCATE ON swarm_stream_events TO rm_worker");
   try {
     const found = (await onLog()).map((v) => `${v.rule} ${v.role}`).sort();
     expect(found).toEqual(["append_only_write rm_app", "append_only_write rm_worker"]);
   } finally {
-    await sql.unsafe("REVOKE DELETE, TRUNCATE ON swarm_stream_events FROM rm_app, rm_worker");
+    await fixtureDb.unsafe("REVOKE DELETE, TRUNCATE ON swarm_stream_events FROM rm_app, rm_worker");
   }
   expect(await onLog()).toEqual([]);
 });
