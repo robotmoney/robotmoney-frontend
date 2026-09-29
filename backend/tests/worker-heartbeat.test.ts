@@ -14,6 +14,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { LANES } from "../src/worker/lanes.ts";
 import { startWorker, type WorkerHandle } from "../src/worker/runtime.ts";
@@ -56,9 +57,9 @@ beforeEach(async () => {
   resetHeartbeatWriter();
   dir = await mkdtemp(join(tmpdir(), "rm-worker-hb-"));
   path = join(dir, "heartbeat");
-  await sql`DELETE FROM job_runs`;
-  await sql`DELETE FROM jobs`;
-  await sql`DELETE FROM job_schedules`;
+  await fixtureDb`DELETE FROM job_runs`;
+  await fixtureDb`DELETE FROM jobs`;
+  await fixtureDb`DELETE FROM job_schedules`;
 });
 afterEach(async () => {
   await Promise.all(started.splice(0).map((w) => w.stop()));
@@ -106,7 +107,7 @@ test("a lane whose loop is wedged inside a job goes UNHEALTHY while the process 
     lane: LANES.generic, workerId: "wedged-research", heartbeatFile: path,
     ...fastOpts, jobProgressTimeoutMs: 400, idleProgressTimeoutMs: 60_000,
   });
-  const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_heartbeat_hang', '{}') RETURNING id`;
+  const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload) VALUES ('research.test_heartbeat_hang', '{}') RETURNING id`;
 
   // The loop claims the job and widens its deadline for the duration.
   await waitFor(async () => (await record()).phase === "busy", 3000, "the lane entering its busy phase");
@@ -136,7 +137,7 @@ test("a legitimately slow job does NOT go red: the busy budget covers it, and th
     lane: LANES.generic, workerId: "slow-research", heartbeatFile: path,
     ...fastOpts, jobProgressTimeoutMs: 10_000, idleProgressTimeoutMs: 60_000,
   });
-  const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_heartbeat_slow', '{}') RETURNING id`;
+  const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload) VALUES ('research.test_heartbeat_slow', '{}') RETURNING id`;
 
   await waitFor(async () => (await record()).phase === "busy", 3000, "the lane entering its busy phase");
   expect((await record()).staleAfterMs).toBe(10_000); // the JOB budget, not the idle one
@@ -182,14 +183,14 @@ test("a lane that has LOST ITS DATABASE goes unhealthy — 'process alive' is no
   });
   await waitFor(async () => (await checkHeartbeatFile(path)).healthy, 3000, "a healthy idle lane first");
 
-  await sql`ALTER TABLE jobs RENAME TO jobs_fault_injection`;
+  await fixtureDb`ALTER TABLE jobs RENAME TO jobs_fault_injection`;
   try {
     await sleep(700); // past the 300ms idle budget, with every cycle throwing
     const verdict = await checkHeartbeatFile(path);
     expect(verdict.healthy).toBe(false);
     expect(verdict.reason).toContain("no progress");
   } finally {
-    await sql`ALTER TABLE jobs_fault_injection RENAME TO jobs`;
+    await fixtureDb`ALTER TABLE jobs_fault_injection RENAME TO jobs`;
   }
 
   // Recovery proves the process never died — it was up and failing the whole
@@ -208,7 +209,7 @@ test("a DB outage that hits MID-JOB narrows the stale BUSY budget back down inst
     lane: LANES.generic, workerId: "midjob-dbloss-research", heartbeatFile: path,
     ...fastOpts, jobProgressTimeoutMs: 10_000, idleProgressTimeoutMs: 300,
   });
-  const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_heartbeat_busy_then_dbloss', '{}') RETURNING id`;
+  const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload) VALUES ('research.test_heartbeat_busy_then_dbloss', '{}') RETURNING id`;
 
   // Claimed cleanly (DB is fine at this point) — the loop is now on the WIDE
   // (10s) budget.
@@ -220,7 +221,7 @@ test("a DB outage that hits MID-JOB narrows the stale BUSY budget back down inst
   // throw once released below; loop.ts's own failure-path UPDATE then throws
   // too (the table is gone), so processOneJob() itself rejects — the exact
   // path the drainLoop catch branch must handle.
-  await sql`ALTER TABLE jobs RENAME TO jobs_fault_injection`;
+  await fixtureDb`ALTER TABLE jobs RENAME TO jobs_fault_injection`;
   try {
     hangGate.open();
 
@@ -240,7 +241,7 @@ test("a DB outage that hits MID-JOB narrows the stale BUSY budget back down inst
     expect(rec.staleAfterMs).toBe(300);
     expect(rec.phase).toBe("faulted");
   } finally {
-    await sql`ALTER TABLE jobs_fault_injection RENAME TO jobs`;
+    await fixtureDb`ALTER TABLE jobs_fault_injection RENAME TO jobs`;
   }
 
   // Recovery: the process stayed alive throughout (the job row itself never
@@ -283,7 +284,7 @@ test("a SUSTAINED database outage stays unhealthy across many failed cycles, not
   });
   await waitFor(async () => (await checkHeartbeatFile(path)).healthy, 3000, "a healthy idle lane first");
 
-  await sql`ALTER TABLE jobs RENAME TO jobs_fault_injection`;
+  await fixtureDb`ALTER TABLE jobs RENAME TO jobs_fault_injection`;
   try {
     await waitFor(async () => (await record()).phase === "faulted", 3000, "the first faulted beat");
     const first = await record();
@@ -308,7 +309,7 @@ test("a SUSTAINED database outage stays unhealthy across many failed cycles, not
     expect(rec.phase).toBe("faulted");
     expect(rec.ts).toBe(first.ts);
   } finally {
-    await sql`ALTER TABLE jobs_fault_injection RENAME TO jobs`;
+    await fixtureDb`ALTER TABLE jobs_fault_injection RENAME TO jobs`;
   }
 
   await waitFor(async () => (await checkHeartbeatFile(path)).healthy, 5000, "recovery once the database returns");
@@ -350,7 +351,7 @@ test("a scheduler that cannot progress goes UNHEALTHY on its own file while an i
   // two signals are genuinely independent, not one masking the other.
   await waitFor(async () => (await checkHeartbeatFile(path)).healthy, 3000, "a healthy idle drain loop");
 
-  await sql`ALTER TABLE job_schedules RENAME TO job_schedules_fault_injection`;
+  await fixtureDb`ALTER TABLE job_schedules RENAME TO job_schedules_fault_injection`;
   try {
     await sleep(700); // several failing ticks, past the 300ms scheduler budget
     const schedulerVerdict = await checkHeartbeatFile(schedulerPath);
@@ -362,7 +363,7 @@ test("a scheduler that cannot progress goes UNHEALTHY on its own file while an i
     // frozen scheduler entirely.
     expect((await checkHeartbeatFile(path)).healthy).toBe(true);
   } finally {
-    await sql`ALTER TABLE job_schedules_fault_injection RENAME TO job_schedules`;
+    await fixtureDb`ALTER TABLE job_schedules_fault_injection RENAME TO job_schedules`;
   }
 
   await waitFor(async () => (await checkHeartbeatFile(schedulerPath)).healthy, 3000, "recovery once job_schedules returns");
