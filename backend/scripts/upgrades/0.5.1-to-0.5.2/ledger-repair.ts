@@ -302,7 +302,18 @@ async function count(tx: Tx, table: string): Promise<number> {
   return Number(row!.n);
 }
 
-export async function repairLedger(db: Db, opts: { dryRun?: boolean; log?: (line: string) => void } = {}): Promise<LedgerRepairReport> {
+export interface LedgerRepairOptions {
+  dryRun?: boolean;
+  log?: (line: string) => void;
+  /**
+   * TEST SEAM, default true. False only for a fixture that builds ledger rows
+   * with no raw_indicator_history rows behind them, which no real database
+   * has. The command line cannot turn it off.
+   */
+  proveRawHistoryParity?: boolean;
+}
+
+export async function repairLedger(db: Db, opts: LedgerRepairOptions = {}): Promise<LedgerRepairReport> {
   const log = opts.log ?? (() => {});
   const seconds: Record<string, number> = {};
   const time = async <T>(step: string, work: () => Promise<T>): Promise<T> => {
@@ -462,7 +473,7 @@ export async function repairLedger(db: Db, opts: { dryRun?: boolean; log?: (line
       // under the repair's own locks: after the commit a writer that was
       // waiting on them lands its ledger rows before its raw rows, and a check
       // that reads in between judges that writer, not the repair.
-      await time("prove raw history parity", async () => {
+      if (opts.proveRawHistoryParity ?? true) await time("prove raw history parity", async () => {
         const parity = await checkRawIndicatorHistoryParity(tx);
         if (!parity.matched) {
           throw new Error(`raw_indicator_history would not match the ledger: ${JSON.stringify(parity.mismatches)}`);
