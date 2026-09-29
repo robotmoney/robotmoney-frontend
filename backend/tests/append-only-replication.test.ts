@@ -39,9 +39,12 @@
 // this whole issue is about.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import postgres from "postgres";
+import { harnessConnection } from "./support/cluster.ts";
 
-// The cluster admin, on purpose: CREATE SUBSCRIPTION needs a superuser, and the
-// subscriber dials the publisher with this login (which must hold REPLICATION).
+// The cluster admin, on purpose, for what only a superuser may do: CREATE
+// SUBSCRIPTION, replication slots and terminating a walsender. The subscriber
+// dials the publisher with this login (which must hold REPLICATION). Everything
+// inside the three databases (triggers, publication, rows) is rm_owner's.
 const baseUrl = process.env.RM_TEST_ADMIN_URL;
 const template = process.env.RM_TEST_TEMPLATE_DB;
 if (!baseUrl || !template) {
@@ -95,7 +98,18 @@ function connect(database: string) {
 
 type Sql = ReturnType<typeof connect>;
 
+/** Run `fn` on a one-off cluster-admin connection to `database`. */
+async function asAdmin<T>(database: string, fn: (db: Sql) => Promise<T>): Promise<T> {
+  const db = connect(database);
+  try {
+    return await fn(db);
+  } finally {
+    await db.end({ timeout: 5 });
+  }
+}
+
 let admin: Sql;
+let pubAdmin: Sql;
 let publisher: Sql;
 let guarded: Sql;
 let control: Sql;
@@ -131,12 +145,13 @@ async function rowExists(db: Sql, id: number): Promise<boolean> {
  * of one template, so an initial COPY would try to re-insert rows the
  * subscriber already has.
  */
-async function subscribe(subscriber: Sql, name: string): Promise<void> {
-  await publisher.unsafe(`SELECT pg_create_logical_replication_slot('${name}', 'pgoutput')`);
-  await subscriber.unsafe(
+async function subscribe(subscriberDb: string, name: string): Promise<void> {
+  // cluster admin: replication slots and CREATE SUBSCRIPTION are superuser-only
+  await asAdmin(PUBLISHER, (a) => a.unsafe(`SELECT pg_create_logical_replication_slot('${name}', 'pgoutput')`));
+  await asAdmin(subscriberDb, (a) => a.unsafe(
     `CREATE SUBSCRIPTION ${name} CONNECTION '${conninfo(PUBLISHER)}' PUBLICATION rm_ao_pub ` +
       `WITH (create_slot = false, slot_name = '${name}', copy_data = false)`,
-  );
+  ));
 }
 
 /**
@@ -145,28 +160,28 @@ async function subscribe(subscriber: Sql, name: string): Promise<void> {
  * terminates sessions, not slots — so a leaked slot would leave the publisher
  * database (and its WAL) pinned for the rest of the run.
  */
-async function unsubscribe(subscriber: Sql | undefined, name: string): Promise<void> {
-  if (subscriber) {
-    try {
+async function unsubscribe(subscriberDb: string, name: string): Promise<void> {
+  try {
+    await asAdmin(subscriberDb, async (subscriber) => {
       await subscriber.unsafe(`ALTER SUBSCRIPTION ${name} DISABLE`);
       // Detach the slot before dropping the subscription, so DROP SUBSCRIPTION
       // does not try to reach a publisher we are about to delete.
       await subscriber.unsafe(`ALTER SUBSCRIPTION ${name} SET (slot_name = NONE)`);
       await subscriber.unsafe(`DROP SUBSCRIPTION ${name}`);
-    } catch { /* best effort; the slot drop below is the part that matters */ }
-  }
+    });
+  } catch { /* best effort; the slot drop below is the part that matters */ }
   for (let attempt = 0; attempt < 50; attempt++) {
-    const held = (await publisher`
+    const held = (await pubAdmin`
       SELECT active_pid FROM pg_replication_slots WHERE slot_name = ${name}
     `.catch(() => [])) as unknown as { active_pid: number | null }[];
     if (held.length === 0) return;
     try {
-      await publisher.unsafe(`SELECT pg_drop_replication_slot('${name}')`);
+      await pubAdmin.unsafe(`SELECT pg_drop_replication_slot('${name}')`);
       return;
     } catch {
       // Still held by its walsender — the apply worker has not noticed the
       // subscription is gone yet. Evict it and try again.
-      await publisher`
+      await pubAdmin`
         SELECT pg_terminate_backend(active_pid) FROM pg_replication_slots
         WHERE slot_name = ${name} AND active_pid IS NOT NULL
       `.catch(() => {});
@@ -191,9 +206,12 @@ beforeAll(async () => {
     await admin.unsafe(`CREATE DATABASE "${db}" OWNER rm_owner TEMPLATE "${template}"`);
   }
 
-  publisher = connect(PUBLISHER);
-  guarded = connect(GUARDED);
-  control = connect(CONTROL);
+  // cluster admin on the publisher: slots and walsender termination
+  pubAdmin = connect(PUBLISHER);
+  // the rest is the schema owner's (rm_owner owns these databases and tables)
+  publisher = harnessConnection(PUBLISHER);
+  guarded = harnessConnection(GUARDED);
+  control = harnessConnection(CONTROL);
 
   // The PUBLISHER must be able to delete, so its own guard comes off. This also
   // executes one of the residuals migration 0032's header records: the role in
@@ -210,14 +228,14 @@ beforeAll(async () => {
   // experiment rather than a stack trace.
   await control.unsafe(`DROP TRIGGER IF EXISTS ${TABLE}_append_only_row ON ${TABLE}`);
 
-  await subscribe(guarded, "rm_ao_guarded");
-  await subscribe(control, "rm_ao_control");
+  await subscribe(GUARDED, "rm_ao_guarded");
+  await subscribe(CONTROL, "rm_ao_control");
 });
 
 afterAll(async () => {
-  await unsubscribe(guarded, "rm_ao_guarded");
-  await unsubscribe(control, "rm_ao_control");
-  for (const db of [publisher, guarded, control]) await db?.end({ timeout: 5 });
+  await unsubscribe(GUARDED, "rm_ao_guarded");
+  await unsubscribe(CONTROL, "rm_ao_control");
+  for (const db of [pubAdmin, publisher, guarded, control]) await db?.end({ timeout: 5 });
   if (admin) {
     for (const db of [PUBLISHER, GUARDED, CONTROL]) {
       await admin.unsafe(`DROP DATABASE IF EXISTS "${db}" WITH (FORCE)`).catch(() => {});
