@@ -41,7 +41,7 @@ import { hashManifest, readManifest } from "../src/db/schema-manifest.ts";
 import { bootstrapBlankDatabase, loadSnapshot, type Snapshot } from "../src/db/schema-snapshot.ts";
 import { runMigrate } from "../scripts/migrate-run.ts";
 import { withTargetLock } from "./support/target-lock.ts";
-import { adminConnection, adminExec, harnessConnection, harnessUrl, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminConnection, adminExec, harnessConnection, harnessUrl, ROLE_PASSWORD, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 
 const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 const OWNER = { name: "rm_owner", password: OWNER_PASSWORD };
@@ -262,3 +262,6 @@ describe("§9.1 step 2 — the first manifest is published only over a live sche
     }
   });
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

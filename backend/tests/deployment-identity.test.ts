@@ -49,7 +49,7 @@ import { loadSnapshot } from "../src/db/schema-snapshot.ts";
 import { acquireTargetLock, readTargetState } from "../src/db/target-lock.ts";
 import { instancePaths } from "../../scripts/lib/smoke-state.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { adminExec, harnessConnection, harnessUrl, roleUrl, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminExec, harnessConnection, harnessUrl, roleUrl, ROLE_PASSWORD, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -306,3 +306,6 @@ describe("the smoke's own preparation writes `rehearsal` through rm_owner, and n
     }
   }, 60_000);
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

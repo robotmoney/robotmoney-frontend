@@ -64,7 +64,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
-import { adminConnection, adminUrl, harnessUrl } from "./support/cluster.ts";
+import { adminConnection, adminUrl, harnessUrl, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import {
   checkSchemaCompatibility,
   checkSchemaIntegrity,
@@ -717,3 +717,6 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
     });
   });
 }
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

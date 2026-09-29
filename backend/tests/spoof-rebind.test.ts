@@ -36,7 +36,7 @@ import { readSpoofGeneration, spoofKeys, SpoofKeysRefusal, writeSpoofGeneration 
 import { instancePaths } from "../../scripts/lib/smoke-state.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
-import { adminExec, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminExec, ROLE_PASSWORD, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -293,3 +293,6 @@ describe("the §6.4 guards refuse on the target's own enrollment, before anythin
     expect((await refusalOf(run(root, inHouse, { credentialPath: collision }))).reason).toBe("credential_path_collision");
   });
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

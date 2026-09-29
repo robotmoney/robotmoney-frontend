@@ -31,7 +31,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
 import postgres from "postgres";
-import { adminUrl, harnessConnection } from "./support/cluster.ts";
+import { adminUrl, harnessConnection, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
 import {
   applyAsReleaseRunner,
@@ -315,3 +315,6 @@ describe("rm_worker may INSERT the wallet repair pass's evidence, and nothing mo
     });
   }
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

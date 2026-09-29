@@ -42,7 +42,7 @@ import {
   type PruneJournalFile,
   type PruneReceipt,
 } from "../scripts/prune.ts";
-import { adminConnection, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminConnection, ROLE_PASSWORD, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject } from "./support/epoch-fixtures.ts";
 import { holdTargetLock } from "./support/target-lock.ts";
@@ -464,3 +464,6 @@ describe("the run: typed rm_owner, y, fenced prune, receipt", () => {
     expect(readFileSync(receiptPath, "utf8")).not.toContain(OWNER_PASSWORD);
   }, 90_000);
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

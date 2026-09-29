@@ -24,7 +24,7 @@ import { sql } from "../src/db/client.ts";
 import { assertSeedable, seedDemo } from "../src/db/seed.ts";
 import { bootstrapBlankDatabase, bootstrapRowCounts, loadSnapshot, populatedTables } from "../src/db/schema-snapshot.ts";
 import { withMutationFence } from "../src/db/target-lock.ts";
-import { adminConnection, adminExec, harnessConnection, harnessUrl, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminConnection, adminExec, harnessConnection, harnessUrl, ROLE_PASSWORD, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 
 const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 const OWNER = { name: "rm_owner", password: OWNER_PASSWORD };
@@ -197,3 +197,6 @@ describe("--seed requires rehearsal and an explicit request (§4.3, §5)", () =>
     });
   });
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

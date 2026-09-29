@@ -34,7 +34,7 @@ import {
   probeCaptureTarget,
   READ_ONLY_PGOPTIONS,
 } from "../scripts/smoke-twin-capture.ts";
-import { adminConnection, harnessConnection, harnessUrl } from "./support/cluster.ts";
+import { adminConnection, harnessConnection, harnessUrl, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 
 describe("parseArgs", () => {
   test("defaults to the same backup dir resolveBackupFiles() defaults to", () => {
@@ -578,3 +578,6 @@ describe("smoke:capture against a real hot standby — the node that serves read
     240_000,
   );
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

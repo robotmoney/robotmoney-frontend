@@ -45,7 +45,7 @@ import { randomBytes } from "node:crypto";
 import { readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
-import { adminUrl } from "./support/cluster.ts";
+import { adminUrl, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import { applyIdentityFirst, IDENTITY_MIGRATION, readPreIdentityLedger, runMigrate } from "../scripts/migrate-run.ts";
 import type { MigrateJournalFile } from "../scripts/migrate-journal.ts";
 import { readManifest } from "../src/db/schema-manifest.ts";
@@ -539,3 +539,6 @@ describe("the identity-first pass itself (applyIdentityFirst), on the fenced pat
     expect(await stateOf(name)).toEqual({ ledger: HEAD_FILES, table: true, identity: ["rehearsal"], manifest: true });
   }, 180_000);
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

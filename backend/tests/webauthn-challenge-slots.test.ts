@@ -26,7 +26,7 @@ import {
   dropDatabases,
   freePort,
 } from "./support/startup-preflight.ts";
-import { harnessConnection } from "./support/cluster.ts";
+import { harnessConnection, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 
 const APP = { name: "rm_app", password: `rm_app_slots_${randomBytes(6).toString("hex")}` };
 const SLOTS = 32;
@@ -289,3 +289,6 @@ describe("a public flood cannot evict a pending passkey registration (each flow 
     expect(row).toEqual({ consumed: true });
   }, 60_000);
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

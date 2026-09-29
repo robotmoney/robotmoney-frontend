@@ -51,7 +51,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
-import { adminUrl, harnessConnection } from "./support/cluster.ts";
+import { adminUrl, harnessConnection, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import { IDENTITY_MIGRATION, runMigrate } from "../scripts/migrate-run.ts";
 import type { MigrateJournalFile } from "../scripts/migrate-journal.ts";
 import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
@@ -464,3 +464,6 @@ describe("§10 W2 — First production migrate", () => {
     await expectRefusedAndUnchanged(DB.norow, run, before, "gates");
   });
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

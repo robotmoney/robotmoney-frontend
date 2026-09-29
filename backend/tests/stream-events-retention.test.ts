@@ -41,7 +41,7 @@ import { APPEND_ONLY_TABLES as POSTFLIGHT_ROSTER } from "../scripts/upgrades/0.2
 import { findDenylistViolations, RUNTIME_DELETE_REVOKED_TABLES } from "../src/db/preflight.ts";
 import { loadSnapshot } from "../src/db/schema-snapshot.ts";
 import { MIN_RETENTION_DAYS, runPrune } from "../scripts/prune.ts";
-import { adminExec, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminExec, ROLE_PASSWORD, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject } from "./support/epoch-fixtures.ts";
 import { withTargetLock } from "./support/target-lock.ts";
@@ -352,3 +352,6 @@ test("migration 0080 is what dropped the triggers, and it keeps the revoke in th
   expect(ddl).toContain("DROP TRIGGER IF EXISTS swarm_stream_events_append_only_row ON swarm_stream_events;");
   expect(ddl).toContain("REVOKE DELETE, TRUNCATE ON swarm_stream_events FROM rm_app, rm_worker;");
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

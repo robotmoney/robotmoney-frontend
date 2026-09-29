@@ -32,7 +32,7 @@ import { acquireTargetLock, readTargetState, withMutationFence } from "../src/db
 import { hashKey } from "../src/lib/keys.ts";
 import { provisionServiceTokens } from "../scripts/provision-tokens.ts";
 import { instancePaths, SERVICE_TOKEN_HOLDERS } from "../../scripts/lib/smoke-state.ts";
-import { adminConnection, adminExec, harnessConnection, harnessUrl, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminConnection, adminExec, harnessConnection, harnessUrl, ROLE_PASSWORD, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 
 const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 const READER_PASSWORD = randomBytes(18).toString("base64url");
@@ -320,3 +320,6 @@ describe("the direct-run form `bun smoke` starts", () => {
     });
   }, 60_000);
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

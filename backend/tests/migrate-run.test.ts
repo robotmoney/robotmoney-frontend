@@ -40,7 +40,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
-import { adminUrl, adminExec, harnessConnection, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminUrl, adminExec, harnessConnection, ROLE_PASSWORD, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 // Every statement this file runs through `sql` is the owner's: it plants and clears
 // identity rows, manifests and drift, and hands the handle to the gates and the
 // run, which production hands the rm_owner connection too. The api pool is rm_app.
@@ -1545,3 +1545,6 @@ describe("MigrateRunSeams — migrationsDir with snapshotDir publishes M's manif
     });
   });
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

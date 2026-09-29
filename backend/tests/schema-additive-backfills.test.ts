@@ -26,7 +26,7 @@ import { join } from "node:path";
 import postgres from "postgres";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { adminExec } from "./support/cluster.ts";
+import { adminExec, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -238,3 +238,6 @@ describe("the migrations' own privilege narrowing, on the migrated path, with no
     }).toEqual({ stance: "42501", payload: "42501", signature: "42501", revision: "42501", final: null, ledger: "42501" });
   });
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

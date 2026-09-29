@@ -26,7 +26,7 @@ import { createHash, createSign, generateKeyPairSync, randomBytes, type KeyObjec
 import postgres from "postgres";
 import { provisionAutomationToken } from "../src/db/automation-tokens.ts";
 import { writeRedControlPreload } from "./support/automation-auth.ts";
-import { harnessConnection } from "./support/cluster.ts";
+import { harnessConnection, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import { restoreRoles, saveRoles, type SavedRole } from "./fixtures/releases/release-fixture.ts";
 import {
   BACKEND_DIR,
@@ -368,3 +368,6 @@ describe("revocation is a tombstone, immediate, and needs no DELETE (D55 (6))", 
     }
   }, 120_000);
 });
+
+// A role's password is cluster state that outlives this file; put the baseline back (tests/support/cluster.ts).
+restoreRoleBaselineAfterAll();

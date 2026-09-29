@@ -16,6 +16,7 @@
 //
 // Both come from the environment tests/preload.ts sets. A missing variable is a
 // loud failure, never a fallback to some other credential.
+import { afterAll } from "bun:test";
 import postgres from "postgres";
 
 function required(key: string): string {
@@ -104,4 +105,9 @@ export async function restoreRoleBaseline(): Promise<void> {
   for (const role of ["rm_owner", "rm_app", "rm_worker", "rm_readonly"]) {
     await adminExec(`ALTER ROLE ${role} WITH LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB PASSWORD '${ROLE_PASSWORD()}'`);
   }
+}
+
+/** Register `restoreRoleBaseline` to run when the calling file's tests are done. */
+export function restoreRoleBaselineAfterAll(): void {
+  afterAll(restoreRoleBaseline);
 }
