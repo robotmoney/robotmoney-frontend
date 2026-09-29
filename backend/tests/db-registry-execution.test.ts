@@ -94,7 +94,7 @@ const PROBE_PENDING_CEILING = 11;
  * as sites are added. Lower it only in the change that deletes a registering
  * module, saying which.
  */
-const EXECUTED_FLOOR = 233;
+const EXECUTED_FLOOR = 243;
 
 /**
  * The number of `on(...)` call sites the static reader resolved when it was
@@ -724,7 +724,9 @@ describe("every registered query runs as its declared role on a disposable datab
     const failures: string[] = [];
     for (const statement of statements) {
       const shape = OBJECTLESS_SHAPES[statement.shape];
-      const outcome = await runProbe(login(statement.role), { statement: shape });
+      // A shape's `$n` is a bound value; a text sample serves every one on the closed list.
+      const placeholders = new Set([...shape.matchAll(/\$(\d+)/g)].map((m) => m[1]!)).size;
+      const outcome = await runProbe(login(statement.role), { statement: shape, params: Array(placeholders).fill("probe") });
       if (!outcome.ok) failures.push(`${statement.site}: as ${statement.role} → ${outcome.code} ${outcome.message}`);
     }
     expect(failures).toEqual([]);

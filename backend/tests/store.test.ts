@@ -3,11 +3,7 @@
 // natural key overwrites rather than duplicates.
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
-import {
-  saveRegimeSnapshots,
-  loadRegimeSnapshot,
-  type RegimeSnapshotRow,
-} from "../src/analytics/store/regime-store.ts";
+import { saveRegimeSnapshots, type RegimeSnapshotRow } from "../src/analytics/store/regime-store.ts";
 import type { RegimeSnapshot } from "../src/analytics/analyze/regime.ts";
 import { persistResearchSignal } from "../src/analytics/store/research-store.ts";
 import type { ResearchPayload } from "../src/analytics/analyze/research.ts";
@@ -17,6 +13,41 @@ import { useCleanDatabase } from "./support/clean-db.ts";
 useCleanDatabase(import.meta.file);
 
 const DATE = "1990-01-15"; // unique date, no collision with seeded/suite rows
+
+// Read one snapshot back as a typed row (numerics coerced from Postgres text).
+// It was the store's `loadRegimeSnapshot` until D55 (13) deleted registered
+// functions with no production caller: only this file read a snapshot back, so
+// the reader lives here, where the round-trip it serves is asserted.
+async function loadRegimeSnapshot(date: string): Promise<RegimeSnapshotRow | null> {
+  const [row] = await sql`SELECT * FROM regime_snapshots WHERE date = ${date}`;
+  if (!row) return null;
+  const num = (v: unknown): number | null => (v == null ? null : Number(v));
+  return {
+    date: typeof row.date === "string" ? row.date : new Date(row.date).toISOString().slice(0, 10),
+    composite: num(row.composite),
+    compositePercentile: num(row.composite_percentile),
+    regime: row.regime ?? null,
+    macroRegime: row.macro_regime ?? null,
+    onchainRegime: row.onchain_regime ?? null,
+    factorRegime: row.factor_regime ?? null,
+    macroIndex: num(row.macro_index),
+    onchainIndex: num(row.onchain_index),
+    factorIndex: num(row.factor_index),
+    macroPercentile: num(row.macro_percentile),
+    onchainPercentile: num(row.onchain_percentile),
+    factorPercentile: num(row.factor_percentile),
+    panelWeights: (row.panel_weights ?? null) as Record<string, Record<string, number>> | null,
+    version: row.version ?? null,
+    source: (row.source ?? null) as string | null,
+    percentiles: (row.percentiles ?? {}) as Record<string, number>,
+    indicators: (row.indicators ?? []) as RegimeSnapshotRow["indicators"],
+    panels: (row.panels ?? null) as readonly string[] | null,
+    bucketThresholds: (row.bucket_thresholds ?? null) as Record<string, unknown> | null,
+    backtest: (row.backtest ?? null) as Record<string, unknown> | null,
+    correlations: (row.correlations ?? null) as Record<string, unknown> | null,
+    extras: (row.extras ?? null) as Record<string, unknown> | null,
+  };
+}
 
 function snap(composite: number): RegimeSnapshot {
   return {

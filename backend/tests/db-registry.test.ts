@@ -322,23 +322,26 @@ describe("structural enforcement — a raw sql call outside the interface is det
   // 2026-09-28 (#1026 W5): src/swarm/judge-fault-injection was deleted with
   // the lever D55 (3) retired, not converted. 19 entries remain.
   //
+  // 2026-09-29 (#1026 W6 P2): six modules moved onto the registry: src/api/auth,
+  // src/api/index (its one statement is the object-less `connectionCheck`, in
+  // src/db/connection-check), src/api/routes/projects, src/analytics/store/
+  // regime-store, src/analytics/store/output-snapshot-store and src/ops/
+  // wallet-snapshot-manifest (an object-less advisory lock). The epoch code left
+  // domain.ts for src/swarm/epoch, which was never listed. 13 entries remain;
+  // domain.ts still holds about 145 raw statements of the take, application and
+  // judge paths, and admin.ts and admin routes hold the rest of the count.
+  //
   // NEVER ADD A LINE HERE. An addition would be a new violation of §7.1 being
   // written down instead of fixed, which is the one thing a ratchet exists to
   // prevent. The only legal edit is a deletion.
   const RAW_SQL_ALLOWLIST: readonly string[] = [
-    "src/analytics/store/output-snapshot-store",
-    "src/analytics/store/regime-store",
     "src/analytics/store/run-ledger-store",
     "src/analytics/store/source-ledger-store",
-    "src/api/auth",
-    "src/api/index",
     "src/api/routes/admin",
     "src/api/routes/admin-webauthn",
-    "src/api/routes/projects",
     "src/ops/asset-prices",
     "src/ops/gap-detector",
     "src/ops/wallet-backfill",
-    "src/ops/wallet-snapshot-manifest",
     "src/projects/smoke-seed",
     "src/swarm/admin",
     "src/swarm/consensus-receipt",
@@ -543,7 +546,7 @@ describe("structural enforcement — a raw sql call outside the interface is det
     // 50 when recorded; 20 after #1026 W3 moved thirty modules onto the registry;
     // 19 after #1026 W5 deleted src/swarm/judge-fault-injection with the lever
     // D55 (3) retired.
-    expect(RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(19);
+    expect(RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(13);
   });
 
   /** The scripts gate itself: every backend/scripts module issuing a raw
@@ -792,6 +795,12 @@ describe("declarations — what the converted modules declare, read without depe
     "src/swarm/judgements",
     "src/swarm/receipt-gap",
     "src/worker/handlers/repair",
+    // #1026 W6 P2 (the object-less wallet lock is not a query, so it is not here).
+    "src/analytics/store/output-snapshot-store",
+    "src/analytics/store/regime-store",
+    "src/api/auth",
+    "src/api/routes/projects",
+    "src/swarm/epoch",
     "src/worker/handlers/vault",
     "src/worker/handlers/wallet",
     "src/worker/loop",
@@ -910,6 +919,8 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
   const PINNED_SHAPES: Readonly<Record<string, string>> = {
     clockText: "SELECT clock_timestamp()::text AS at",
     clockTimestamp: "SELECT clock_timestamp() AS at",
+    connectionCheck: "SELECT 1",
+    walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
     snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
   };
 

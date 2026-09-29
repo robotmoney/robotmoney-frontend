@@ -509,6 +509,10 @@ export const OBJECTLESS_SHAPES = Object.freeze({
   clockText: "SELECT clock_timestamp()::text AS at",
   /** The database clock as a timestamp, read at the moment of a comparison or a write. */
   clockTimestamp: "SELECT clock_timestamp() AS at",
+  /** A connection check: does the pool still answer (the api's /health `db` field)? */
+  connectionCheck: "SELECT 1",
+  /** The one lock protocol for every writer of a wallet snapshot date (ops/wallet-snapshot-manifest.ts). */
+  walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
   /** The snapshot the scheduler's full read takes (scheduler spec §3). */
   snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
 } as const);

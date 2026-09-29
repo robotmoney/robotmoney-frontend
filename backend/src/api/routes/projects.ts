@@ -7,6 +7,7 @@
 // supported write is the privileged admin route below; the scheduled discovery
 // pipeline never clobbers admin-authored overview text.
 import { sql } from "../../db/client.ts";
+import { on, registerQuery } from "../../db/registry.ts";
 import { fetchProjects } from "../../projects/projections.ts";
 import { fetchProjectDetail } from "../../projects/profile-projections.ts";
 import { optionalString, readJsonObject } from "../validation.ts";
@@ -24,6 +25,26 @@ export async function getProjects() {
 export async function getProjectDetail(slug: string) {
   return fetchProjectDetail(slug);
 }
+
+const updateOverview = registerQuery({
+  role: "rm_app",
+  object: "projects",
+  // SELECT as well: the WHERE, the COALESCE fallbacks and RETURNING all read the row.
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/api/routes/projects:updateProjectOverview",
+  purpose: "Write the admin-supplied overview and description text of one project, leaving omitted fields as they are.",
+  callers: ["src/api/routes/projects"],
+  probe: {
+    statement: `UPDATE projects SET
+      overview_short = COALESCE($1, overview_short),
+      overview_long  = COALESCE($2, overview_long),
+      description    = COALESCE($3, description),
+      updated_at = now()
+    WHERE slug = $4
+    RETURNING slug, overview_short, overview_long, description`,
+    params: [null, null, null, "probe-slug"],
+  },
+});
 
 // PATCH the admin-managed overview text for a project by slug. PRIVILEGED with
 // the one admin guard every admin route uses, isPrivileged() (an admin session,
@@ -47,7 +68,7 @@ export async function updateProjectOverview(
 
   // COALESCE keeps any field the caller omitted untouched; only provided text is
   // written. No LLM call — the text is exactly what the admin supplied.
-  const rows = await sql`
+  const rows = await on(sql, updateOverview)`
     UPDATE projects SET
       overview_short = COALESCE(${overviewShort ?? null}, overview_short),
       overview_long  = COALESCE(${overviewLong ?? null}, overview_long),
