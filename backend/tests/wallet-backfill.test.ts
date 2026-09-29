@@ -15,8 +15,9 @@
 // pre-change tree.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import postgres from "postgres";
 import { sql } from "../src/db/client.ts";
+import { sql as workerSql } from "../src/db/worker-client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { resolvePropWallets, resolveTrackedAssets } from "../src/config.ts";
 import { QUARANTINED_PROVENANCE } from "../src/chain/wallet-valuation.ts";
 import {
@@ -61,14 +62,14 @@ const resolvedBlock = (date: string, rpcCalls = 3, cached = false) => ({
 });
 
 async function cleanup(): Promise<void> {
-  await sql`DROP TRIGGER IF EXISTS wallet_backfill_test_fail_sleeve ON wallet_sleeve_samples`;
-  await sql`DROP FUNCTION IF EXISTS wallet_backfill_test_fail_sleeve()`;
-  await sql`DROP TRIGGER IF EXISTS wallet_backfill_test_fail_checkpoint ON wallet_backfill_state`;
-  await sql`DROP FUNCTION IF EXISTS wallet_backfill_test_fail_checkpoint()`;
-  await sql`DELETE FROM wallet_balance_samples WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
-  await sql`DELETE FROM wallet_sleeve_samples WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
-  await sql`DELETE FROM wallet_backfill_state WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
-  await sql`DELETE FROM chain_day_blocks WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
+  await fixtureDb`DROP TRIGGER IF EXISTS wallet_backfill_test_fail_sleeve ON wallet_sleeve_samples`;
+  await fixtureDb`DROP FUNCTION IF EXISTS wallet_backfill_test_fail_sleeve()`;
+  await fixtureDb`DROP TRIGGER IF EXISTS wallet_backfill_test_fail_checkpoint ON wallet_backfill_state`;
+  await fixtureDb`DROP FUNCTION IF EXISTS wallet_backfill_test_fail_checkpoint()`;
+  await fixtureDb`DELETE FROM wallet_balance_samples WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
+  await fixtureDb`DELETE FROM wallet_backfill_state WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
+  await fixtureDb`DELETE FROM chain_day_blocks WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
 }
 
 beforeEach(async () => {
@@ -106,7 +107,7 @@ function happyDeps(overrides: Partial<WalletBackfillDeps> = {}): WalletBackfillD
 // ── The happy path, and what it must record ──────────────────────────────────
 
 test("a repaired day lands in BOTH series, tagged 'backfilled', at the block's own timestamp", async () => {
-  const result = await backfillWalletDay(sql, D1, happyDeps(), NOW);
+  const result = await backfillWalletDay(workerSql, D1, happyDeps(), NOW);
   expect(result.ok).toBe(true);
   expect(result.status).toBe("filled");
   expect(result.blockNumber).toBe(BLOCK);
@@ -139,7 +140,7 @@ test("a repaired day lands in BOTH series, tagged 'backfilled', at the block's o
 });
 
 test("SP500 is deliberately absent from a repaired day (PD7 / #648) — not zeroed", async () => {
-  await backfillWalletDay(sql, D1, happyDeps(), NOW);
+  await backfillWalletDay(workerSql, D1, happyDeps(), NOW);
   const [row] = await sql<{ n: number }[]>`
     SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${D1} AND symbol = 'SP500'
   `;
@@ -153,7 +154,7 @@ test("SP500 is deliberately absent from a repaired day (PD7 / #648) — not zero
 });
 
 test("the checkpoint commits WITH the day's rows", async () => {
-  await backfillWalletDay(sql, D1, happyDeps(), NOW);
+  await backfillWalletDay(workerSql, D1, happyDeps(), NOW);
   const [state] = await sql<{ status: string; block_number: string; balance_rows: number; sleeve_rows: number }[]>`
     SELECT status, block_number, balance_rows, sleeve_rows FROM wallet_backfill_state WHERE sample_date = ${D1}
   `;
@@ -200,10 +201,10 @@ test("the date→block resolution is cached permanently for that day", async () 
       return resolved;
     },
   });
-  await backfillWalletDay(sql, D1, deps, NOW);
-  await sql`DELETE FROM wallet_balance_samples WHERE sample_date = ${D1}`;
-  await sql`DELETE FROM wallet_sleeve_samples WHERE sample_date = ${D1}`;
-  await backfillWalletDay(sql, D1, deps, NOW);
+  await backfillWalletDay(workerSql, D1, deps, NOW);
+  await fixtureDb`DELETE FROM wallet_balance_samples WHERE sample_date = ${D1}`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples WHERE sample_date = ${D1}`;
+  await backfillWalletDay(workerSql, D1, deps, NOW);
   expect(resolutions).toBe(1); // the second pass paid nothing for the block
 });
 
@@ -218,7 +219,7 @@ test("DAY-ATOMIC: one unreadable leg writes NOTHING for the whole day", async ()
       );
     },
   });
-  const result = await backfillWalletDay(sql, D1, deps, NOW);
+  const result = await backfillWalletDay(workerSql, D1, deps, NOW);
   expect(result.ok).toBe(false);
   expect(result.status).toBe("failed");
 
@@ -241,7 +242,7 @@ test("a missing price fails the day rather than valuing a real holding at zero",
       return out;
     },
   });
-  const result = await backfillWalletDay(sql, D1, deps, NOW);
+  const result = await backfillWalletDay(workerSql, D1, deps, NOW);
   expect(result.ok).toBe(false);
   expect(result.detail).toContain("BNKR");
   const [balances] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${D1}`;
@@ -250,7 +251,7 @@ test("a missing price fails the day rather than valuing a real holding at zero",
 
 test("an incomplete populated day is rebuilt completely while preserving original balance/sleeve identity as evidence", async () => {
   const sleeveTarget = resolveWalletSnapshotManifest().sleeveKeys[0]!;
-  const [snapshot] = await sql<{ run_id: string }[]>`
+  const [snapshot] = await fixtureDb<{ run_id: string }[]>`
     INSERT INTO wallet_aum_snapshot_runs
       (sample_date, time_basis, state, manifest_version, manifest_json,
        manifest_hash, config_identity,
@@ -258,14 +259,14 @@ test("an incomplete populated day is rebuilt completely while preserving origina
        observed_at, chain_id, block_number, block_hash,
        block_timestamp, producer_revision_status, producer_revision, failure_code)
     VALUES
-      (${D1}, 'live', 'failed-retryable', 'fixture-v1', ${sql.json({ fixture: true })},
+      (${D1}, 'live', 'failed-retryable', 'fixture-v1', ${fixtureDb.json({ fixture: true })},
        ${"d".repeat(64)}, 'fixture-config',
        ARRAY['USDC'], ARRAY['USDC'],
        '2019-06-05T23:59:58Z', 8453, ${BLOCK}, ${blockHash(BLOCK)},
        '2019-06-05T23:59:58Z', 'available', 'fixture-revision', 'fixture-incomplete')
     RETURNING run_id
   `;
-  const [original] = await sql<{ id: string }[]>`
+  const [original] = await fixtureDb<{ id: string }[]>`
     INSERT INTO wallet_balance_samples
       (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at,
        snapshot_run_id, amount_observed_at, price_observed_at, recorded_at)
@@ -274,7 +275,7 @@ test("an incomplete populated day is rebuilt completely while preserving origina
        ${snapshot!.run_id}, '2019-06-05T23:59:56Z', '2019-06-05T23:59:57Z', '2019-06-06T00:00:01Z')
     RETURNING id
   `;
-  const [originalSleeve] = await sql<{ id: string }[]>`
+  const [originalSleeve] = await fixtureDb<{ id: string }[]>`
     INSERT INTO wallet_sleeve_samples
       (sample_date, wallet_address, symbol, amount, price_usd, value_usd,
        provenance, sampled_at, snapshot_run_id, amount_observed_at,
@@ -285,7 +286,7 @@ test("an incomplete populated day is rebuilt completely while preserving origina
        '2019-06-05T23:59:55Z', '2019-06-05T23:59:57Z', '2019-06-06T00:00:02Z')
     RETURNING id
   `;
-  const result = await backfillWalletDay(sql, D1, happyDeps(), NOW);
+  const result = await backfillWalletDay(workerSql, D1, happyDeps(), NOW);
 
   const [row] = await sql<{ amount: string; provenance: string }[]>`
     SELECT amount, provenance FROM wallet_balance_samples WHERE sample_date = ${D1} AND symbol = 'USDC'
@@ -343,13 +344,13 @@ test("an incomplete populated day is rebuilt completely while preserving origina
 
 test("quarantined rows remain immutable evidence and their logical keys accept verified replacements", async () => {
   const sleeveTarget = resolveWalletSnapshotManifest().sleeveKeys[0]!;
-  const [original] = await sql<{ id: string }[]>`
+  const [original] = await fixtureDb<{ id: string }[]>`
     INSERT INTO wallet_balance_samples
       (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${D2}, 'WETH', 5, 50000, 250000, ${QUARANTINED_PROVENANCE}, now())
     RETURNING id
   `;
-  const [originalSleeve] = await sql<{ id: string }[]>`
+  const [originalSleeve] = await fixtureDb<{ id: string }[]>`
     INSERT INTO wallet_sleeve_samples
       (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES
@@ -358,7 +359,7 @@ test("quarantined rows remain immutable evidence and their logical keys accept v
     RETURNING id
   `;
 
-  const result = await backfillWalletDay(sql, D2, happyDeps(), NOW);
+  const result = await backfillWalletDay(workerSql, D2, happyDeps(), NOW);
   expect(result.status).toBe("filled");
 
   const [replacement] = await sql<{ amount: string; price_usd: string | null; provenance: string }[]>`
@@ -398,7 +399,7 @@ test("quarantined rows remain immutable evidence and their logical keys accept v
   expect(sleeveEvidence!.evidence_reason).toBe("quarantined-replacement");
   let guardError: unknown;
   try {
-    await sql`UPDATE wallet_balance_sample_evidence SET price_usd = 2 WHERE original_id = ${original!.id}`;
+    await fixtureDb`UPDATE wallet_balance_sample_evidence SET price_usd = 2 WHERE original_id = ${original!.id}`;
   } catch (err) {
     guardError = err;
   }
@@ -407,13 +408,13 @@ test("quarantined rows remain immutable evidence and their logical keys accept v
 
 test("a checkpoint failure rolls archive/rewrite/supersession/checkpoint back over existing rows and remains retryable", async () => {
   const sleeveTarget = resolveWalletSnapshotManifest().sleeveKeys[0]!;
-  const [originalBalance] = await sql<{ id: string }[]>`
+  const [originalBalance] = await fixtureDb<{ id: string }[]>`
     INSERT INTO wallet_balance_samples
       (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${D3}, 'USDC', 111.125, 1.0001, 111.1361125, 'live', '2019-06-07T23:57:00Z')
     RETURNING id
   `;
-  const [originalSleeve] = await sql<{ id: string }[]>`
+  const [originalSleeve] = await fixtureDb<{ id: string }[]>`
     INSERT INTO wallet_sleeve_samples
       (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES
@@ -421,12 +422,12 @@ test("a checkpoint failure rolls archive/rewrite/supersession/checkpoint back ov
        222.25, 3.5, 777.875, 'seed', '2019-06-07T23:58:00Z')
     RETURNING id
   `;
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_backfill_state
       (sample_date, status, attempts, balance_rows, sleeve_rows, detail, attempted_at)
     VALUES (${D3}, 'failed', 3, 1, 1, 'pre-existing retryable checkpoint', now())
   `;
-  await sql.unsafe(`
+  await fixtureDb.unsafe(`
     CREATE FUNCTION wallet_backfill_test_fail_checkpoint() RETURNS trigger
     LANGUAGE plpgsql AS $$
     BEGIN
@@ -440,7 +441,7 @@ test("a checkpoint failure rolls archive/rewrite/supersession/checkpoint back ov
       FOR EACH ROW EXECUTE FUNCTION wallet_backfill_test_fail_checkpoint();
   `);
 
-  const failed = await backfillWalletDay(sql, D3, happyDeps(), NOW);
+  const failed = await backfillWalletDay(workerSql, D3, happyDeps(), NOW);
   expect(failed.status).toBe("failed");
   expect(failed.ok).toBe(false);
   expect(failed.detail).toContain("injected filled-checkpoint failure");
@@ -482,9 +483,9 @@ test("a checkpoint failure rolls archive/rewrite/supersession/checkpoint back ov
   expect(state).toEqual({ status: "failed", attempts: 3 });
   expect(selectBackfillDays([D3], new Map([[D3, state!.status]]), 1).days).toEqual([D3]);
 
-  await sql`DROP TRIGGER wallet_backfill_test_fail_checkpoint ON wallet_backfill_state`;
-  await sql`DROP FUNCTION wallet_backfill_test_fail_checkpoint()`;
-  const retried = await backfillWalletDay(sql, D3, happyDeps(), NOW);
+  await fixtureDb`DROP TRIGGER wallet_backfill_test_fail_checkpoint ON wallet_backfill_state`;
+  await fixtureDb`DROP FUNCTION wallet_backfill_test_fail_checkpoint()`;
+  const retried = await backfillWalletDay(workerSql, D3, happyDeps(), NOW);
   expect(retried.status).toBe("filled");
 });
 
@@ -493,17 +494,12 @@ test("concurrent live writer and repair serialize before archival, preserving th
   expect([...workerSource.matchAll(/lockWalletSnapshotDate\(tx, sampleDate\)/g)]).toHaveLength(2);
 
   const sleeveTarget = resolveWalletSnapshotManifest().sleeveKeys[0]!;
-  const writerDb = postgres(process.env.DATABASE_URL!, {
-    max: 1,
-    onnotice: () => {},
-    connection: { application_name: "wallet-live-writer-race" },
-  });
   let releaseWriter!: () => void;
   const writerRelease = new Promise<void>((resolve) => { releaseWriter = resolve; });
   let writerReady!: (ids: { balanceId: string; sleeveId: string }) => void;
   const writerStarted = new Promise<{ balanceId: string; sleeveId: string }>((resolve) => { writerReady = resolve; });
 
-  const writer = writerDb.begin(async (tx) => {
+  const writer = fixtureDb.begin(async (tx) => {
     await lockWalletSnapshotDate(tx, D4);
     const [balance] = await tx<{ id: string }[]>`
       INSERT INTO wallet_balance_samples
@@ -531,17 +527,16 @@ test("concurrent live writer and repair serialize before archival, preserving th
   `;
   expect(invisibleWhileUncommitted).toEqual({ balances: 0, sleeves: 0 });
 
-  const repair = backfillWalletDay(sql, D4, happyDeps(), NOW);
+  const repair = backfillWalletDay(workerSql, D4, happyDeps(), NOW);
   let observedBlockedRepair = false;
   try {
     for (let i = 0; i < 200; i++) {
       const [waiting] = await sql<{ n: number }[]>`
         SELECT count(*)::int AS n
-          FROM pg_stat_activity
-         WHERE datname = current_database()
-           AND wait_event_type = 'Lock'
-           AND query LIKE '%pg_advisory_xact_lock%'
-           AND pid <> pg_backend_pid()
+          FROM pg_locks
+         WHERE locktype = 'advisory'
+           AND NOT granted
+           AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
       `;
       if ((waiting?.n ?? 0) > 0) {
         observedBlockedRepair = true;
@@ -556,7 +551,6 @@ test("concurrent live writer and repair serialize before archival, preserving th
 
   await writer;
   const result = await repair;
-  await writerDb.end({ timeout: 5 });
   expect(result.status).toBe("filled");
   expect(result.ok).toBe(true);
 
@@ -613,17 +607,17 @@ test("a day that has not closed is skipped without touching the chain", async ()
     },
   });
   const today = "2019-06-10";
-  const result = await backfillWalletDay(sql, today, deps, NOW);
+  const result = await backfillWalletDay(workerSql, today, deps, NOW);
   expect(result.status).toBe("skipped");
   expect(reads).toBe(0);
 });
 
 test("running the same day twice is idempotent — no duplicate rows, and the checkpoint is REPLAYED not restated", async () => {
-  const firstRun = await backfillWalletDay(sql, D1, happyDeps(), NOW);
+  const firstRun = await backfillWalletDay(workerSql, D1, happyDeps(), NOW);
   expect(firstRun.status).toBe("filled");
   const [first] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${D1}`;
 
-  const second = await backfillWalletDay(sql, D1, happyDeps(), NOW);
+  const second = await backfillWalletDay(workerSql, D1, happyDeps(), NOW);
   const [after] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${D1}`;
 
   // The idempotence this test is named for: no second copy of the day.
@@ -658,11 +652,11 @@ test("a day that keeps failing becomes 'exhausted' — still a gap, no longer a 
     },
   });
 
-  const a = await backfillWalletDay(sql, D2, deps, NOW);
+  const a = await backfillWalletDay(workerSql, D2, deps, NOW);
   expect(a.status).toBe("failed");
   expect(a.ok).toBe(false); // retried by the queue's degrade path
 
-  const b = await backfillWalletDay(sql, D2, deps, NOW);
+  const b = await backfillWalletDay(workerSql, D2, deps, NOW);
   expect(b.status).toBe("exhausted");
   expect(b.ok).toBe(true); // the queue stops retrying; the gap stays reported
 
@@ -684,7 +678,7 @@ test("a LIVE run refuses outright when pacing is explicitly disabled (PD6)", asy
   const prior = process.env.BASE_RPC_SOURCE;
   process.env.BASE_RPC_SOURCE = "live";
   try {
-    await expect(backfillWalletDay(sql, D3, happyDeps(), NOW)).rejects.toThrow(/BASE_RPC_MAX_CALLS_PER_SEC/);
+    await expect(backfillWalletDay(workerSql, D3, happyDeps(), NOW)).rejects.toThrow(/BASE_RPC_MAX_CALLS_PER_SEC/);
   } finally {
     if (prior === undefined) delete process.env.BASE_RPC_SOURCE;
     else process.env.BASE_RPC_SOURCE = prior;
@@ -721,7 +715,7 @@ test("a day below an address's earliest-valid-block floor is skipped, never even
     },
   });
 
-  const result = await backfillWalletDay(sql, D1, deps, NOW);
+  const result = await backfillWalletDay(workerSql, D1, deps, NOW);
   expect(result.ok).toBe(true);
   expect(result.status).toBe("skipped");
   // The reason names the address AND its floor (issue #760's AC).
@@ -743,7 +737,7 @@ test("the floor skip charges NO attempt, even on top of a prior charged failure"
       return new Map<string, ChainAmount>(reads.map((r) => [r.key, { ok: false } as ChainAmount]));
     },
   });
-  const first = await backfillWalletDay(sql, D1, failing, NOW);
+  const first = await backfillWalletDay(workerSql, D1, failing, NOW);
   expect(first.status).toBe("failed");
   const [afterFail] = await sql<{ attempts: number }[]>`
     SELECT attempts FROM wallet_backfill_state WHERE sample_date = ${D1}
@@ -763,7 +757,7 @@ test("the floor skip charges NO attempt, even on top of a prior charged failure"
       );
     },
   });
-  const second = await backfillWalletDay(sql, D1, skipping, NOW);
+  const second = await backfillWalletDay(workerSql, D1, skipping, NOW);
   expect(second.ok).toBe(true);
   expect(second.status).toBe("skipped");
 
@@ -782,7 +776,7 @@ test("a floor AT or BELOW the resolved block does not skip the day", async () =>
       );
     },
   });
-  const result = await backfillWalletDay(sql, D1, deps, NOW);
+  const result = await backfillWalletDay(workerSql, D1, deps, NOW);
   expect(result.ok).toBe(true);
   expect(result.status).toBe("filled");
 });
@@ -791,7 +785,7 @@ test("omitting resolveAddressFloors runs the prior behaviour unchanged (no floor
   // happyDeps() supplies no resolveAddressFloors override — proving the dep is
   // truly optional and a caller that never wires it (as every OTHER test in
   // this file does) is unaffected by this feature's existence.
-  const result = await backfillWalletDay(sql, D1, happyDeps(), NOW);
+  const result = await backfillWalletDay(workerSql, D1, happyDeps(), NOW);
   expect(result.status).toBe("filled");
 });
 
@@ -888,7 +882,7 @@ test("issue #761 — the per-run cap still applies once blocked days are retry-e
 // ── Sanity: the fixture actually exercises the real asset/sleeve layout ──────
 
 test("a repaired day covers every chain-read asset and every configured sleeve leg", async () => {
-  await backfillWalletDay(sql, D1, happyDeps(), NOW);
+  await backfillWalletDay(workerSql, D1, happyDeps(), NOW);
   const chainAssets = resolveTrackedAssets().filter((a) => a.valuationKind !== "config");
   const [balances] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${D1}`;
   expect(balances!.n).toBe(chainAssets.length);

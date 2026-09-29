@@ -90,6 +90,7 @@ import { resolveWalletSnapshotManifest } from "../src/ops/wallet-snapshot-manife
 import { sampleWalletBalances, sampleWalletSleeves } from "../src/worker/handlers/wallet.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { adminExec, adminUrl } from "./support/cluster.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -240,7 +241,9 @@ const ROLLBACK = Symbol("rollback");
 async function rolledBack<T>(fn: (tx: DbHandle) => Promise<T>): Promise<T> {
   let result!: T;
   try {
-    await sql.begin(async (tx) => {
+    // An owner transaction on purpose: the reader under test writes asset_prices and the
+    // arrangement deletes rows, neither of which rm_app may do; it is rolled back.
+    await fixtureDb.begin(async (tx) => {
       result = await fn(tx as unknown as DbHandle);
       throw ROLLBACK;
     });
@@ -385,13 +388,13 @@ beforeAll(async () => {
   await adminExec(`ALTER ROLE rm_worker WITH LOGIN PASSWORD '${WORKER_PASSWORD}'`);
   // D55 (6)'s end state on this file's own copy: rm_worker holds no DELETE or
   // TRUNCATE on either sample table.
-  await sql`REVOKE DELETE, TRUNCATE ON wallet_balance_samples, wallet_sleeve_samples FROM rm_worker`;
+  await fixtureDb`REVOKE DELETE, TRUNCATE ON wallet_balance_samples, wallet_sleeve_samples FROM rm_worker`;
   // See THE EVIDENCE GRANT in the header: read the shipped privilege first.
   for (const table of EVIDENCE_TABLES) {
     const [row] = await sql<{ ins: boolean }[]>`SELECT has_table_privilege('rm_worker', ${table}, 'INSERT') AS ins`;
     shippedEvidenceInsert[table] = row!.ins;
   }
-  await sql`GRANT INSERT ON wallet_balance_sample_evidence, wallet_sleeve_sample_evidence TO rm_worker`;
+  await fixtureDb`GRANT INSERT ON wallet_balance_sample_evidence, wallet_sleeve_sample_evidence TO rm_worker`;
   const [{ db }] = await sql<{ db: string }[]>`SELECT current_database() AS db`;
   const url = new URL(adminUrl());
   url.username = "rm_worker";
@@ -645,7 +648,7 @@ describe("the wallet repair pass as rm_worker with DELETE revoked", () => {
     useConfig("B");
     const manifest = resolveWalletSnapshotManifest();
     const sampledAt = new Date(Math.floor(T2 / 1000) * 1000);
-    await sql.begin(async (tx) => {
+    await fixtureDb.begin(async (tx) => {
       await tx`DELETE FROM wallet_balance_samples WHERE sample_date = ${D}`;
       await tx`DELETE FROM wallet_sleeve_samples WHERE sample_date = ${D}`;
       for (const asset of manifest.balanceAssets) {
@@ -711,13 +714,13 @@ describe("the published-snapshot guard still refuses a repair that would touch a
    *  closes the finalize-guard gap, publishRun(…, true) fails 23514 and the
    *  superseded case must become the proof that the run cannot be published. */
   async function publishRun(day: string, symbol: string, superseded: boolean): Promise<string> {
-    const [reserved] = await sql<{ run_id: string }[]>`
+    const [reserved] = await fixtureDb<{ run_id: string }[]>`
       SELECT nextval(pg_get_serial_sequence('wallet_aum_snapshot_runs', 'run_id'))::text AS run_id
     `;
     const blockTs = `${day}T23:59:58Z`;
     const next = new Date(Date.parse(`${day}T00:00:00Z`) + 86_400_000).toISOString();
     const recorded = new Date(Date.parse(next) + 60_000).toISOString();
-    await sql.begin(async (tx) => {
+    await fixtureDb.begin(async (tx) => {
       await tx`
         INSERT INTO wallet_balance_samples
           (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at,
@@ -806,11 +809,11 @@ describe("the live sampler revives a superseded key as a fresh row", () => {
     // As the repair would leave it: USDC superseded after it was archived
     // under its id (evidence holds UNIQUE (original_id)), and a price_usd from
     // the old version. WETH stays live with a price_usd the sampler never writes.
-    const [usdc] = await sql<{ id: string }[]>`
+    const [usdc] = await fixtureDb<{ id: string }[]>`
       UPDATE wallet_balance_samples SET superseded_at = now(), price_usd = 1
        WHERE sample_date = ${today} AND symbol = 'USDC' RETURNING id::text
     `;
-    await sql`
+    await fixtureDb`
       INSERT INTO wallet_balance_sample_evidence
         (original_id, sample_date, symbol, amount, price_usd, value_usd, provenance,
          strategy_nav_idle_only, sampled_at, evidence_reason)
@@ -818,7 +821,7 @@ describe("the live sampler revives a superseded key as a fresh row", () => {
              strategy_nav_idle_only, sampled_at, 'incomplete-snapshot-replacement'
         FROM wallet_balance_samples WHERE id = ${usdc!.id}
     `;
-    const [weth] = await sql<{ id: string }[]>`
+    const [weth] = await fixtureDb<{ id: string }[]>`
       UPDATE wallet_balance_samples SET price_usd = 7
        WHERE sample_date = ${today} AND symbol = 'WETH' RETURNING id::text
     `;
@@ -882,8 +885,8 @@ describe("the live sampler revives a superseded key as a fresh row", () => {
     expect(live).toHaveLength(2);
     const target = live[0]!;
     const kept = live[1]!;
-    await sql`UPDATE wallet_sleeve_samples SET superseded_at = now(), price_usd = 1 WHERE id = ${target.id}`;
-    await sql`UPDATE wallet_sleeve_samples SET price_usd = 7 WHERE id = ${kept.id}`;
+    await fixtureDb`UPDATE wallet_sleeve_samples SET superseded_at = now(), price_usd = 1 WHERE id = ${target.id}`;
+    await fixtureDb`UPDATE wallet_sleeve_samples SET price_usd = 7 WHERE id = ${kept.id}`;
 
     const second = (await sampleWalletSleeves({})) as { sampleDate: string };
     expect(second.sampleDate).toBe(today);
