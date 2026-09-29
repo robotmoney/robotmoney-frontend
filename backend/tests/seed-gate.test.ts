@@ -159,6 +159,26 @@ describe("--seed refuses a populated database — rows, not tables (§5)", () =>
   });
 });
 
+describe("--seed gives a blank rehearsal active subjects (scheduler spec §2.1, issue #1026 e2e)", () => {
+  test("the seed inserts active subjects that keep the schema's scheduling defaults, so the scheduler opens an epoch for each", async () => {
+    await withDatabase("snapshot", async ({ admin, name }) => {
+      expect(await count(admin, "swarm_subjects")).toBe(0);
+      await fencedSeed(name);
+      const rows = (await admin.unsafe(
+        "SELECT id, status, epoch_duration_seconds, judging_duration_seconds, epoch_anchor = 'epoch'::timestamptz AS default_anchor FROM swarm_subjects ORDER BY id",
+      )) as unknown as { id: string; status: string; epoch_duration_seconds: number; judging_duration_seconds: number; default_anchor: boolean }[];
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) {
+        expect({ id: row.id, status: row.status }).toEqual({ id: row.id, status: "active" });
+        // Only the admin route writes the columns (§2.3): the seed leaves the defaults.
+        expect(row.epoch_duration_seconds).toBe(3600);
+        expect(row.judging_duration_seconds).toBe(900);
+        expect(row.default_anchor).toBe(true);
+      }
+    });
+  });
+});
+
 describe("--seed requires rehearsal and an explicit request (§4.3, §5)", () => {
   test("a production enrollment refuses before any row is counted or written", async () => {
     await withDatabase("snapshot", async ({ admin, name }) => {
