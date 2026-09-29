@@ -11,6 +11,7 @@ import { loadHistoricalPrices, type HistoricalPriceTable } from "../src/chain/hi
 import { resolveTrackedAssets, resolvePropWallets } from "../src/config.ts";
 import { SLEEVE_DEFS, sleeveSymbols } from "../src/chain/wallet-valuation.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -33,11 +34,11 @@ const resolvedBlock = (date: string) => ({
 });
 
 async function cleanup(): Promise<void> {
-  await sql`DELETE FROM wallet_balance_samples`;
-  await sql`DELETE FROM wallet_sleeve_samples`;
-  await sql`DELETE FROM wallet_backfill_state`;
-  await sql`DELETE FROM chain_day_blocks`;
-  await sql`DELETE FROM asset_prices`;
+  await fixtureDb`DELETE FROM wallet_balance_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_backfill_state`;
+  await fixtureDb`DELETE FROM chain_day_blocks`;
+  await fixtureDb`DELETE FROM asset_prices`;
 }
 
 beforeEach(async () => {
@@ -74,7 +75,7 @@ async function insertCompleteSleeveSamples(date: string, provenance: string, sam
   for (let i = 0; i < SLEEVE_DEFS.length && i < wallets.length; i++) {
     const wallet = wallets[i];
     for (const symbol of sleeveSymbols(SLEEVE_DEFS[i]!)) {
-      await sql`
+      await fixtureDb`
         INSERT INTO wallet_sleeve_samples
           (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
         VALUES
@@ -90,7 +91,7 @@ test("backfillAssetPricesForCleanDays writes asset_prices for a complete clean d
 
   // Write complete balance samples for D1
   for (const asset of assets) {
-    await sql`
+    await fixtureDb`
       INSERT INTO wallet_balance_samples
         (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
       VALUES
@@ -130,13 +131,13 @@ test("backfillAssetPricesForCleanDays writes asset_prices for a complete clean d
 
 test("backfillAssetPricesForCleanDays skips incomplete days", async () => {
   // Insert an INCOMPLETE day (missing some symbols)
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples
       (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES
       (${D1}, 'USDC', 5, 1, 5, 'live', ${new Date(BLOCK_TS * 1000).toISOString()})
   `;
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_sleeve_samples
       (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES
@@ -159,7 +160,7 @@ test("backfillAssetPricesForCleanDays skips quarantined days", async () => {
   // Insert a complete day but with quarantined provenance
   const assets = resolveTrackedAssets().filter((a) => a.valuationKind !== "config");
   for (const asset of assets) {
-    await sql`
+    await fixtureDb`
       INSERT INTO wallet_balance_samples
         (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
       VALUES
@@ -184,7 +185,7 @@ test("backfillAssetPricesForCleanDays does not process today or future days", as
   const assets = resolveTrackedAssets().filter((a) => a.valuationKind !== "config");
   for (const date of [today, tomorrow]) {
     for (const asset of assets) {
-      await sql`
+      await fixtureDb`
         INSERT INTO wallet_balance_samples
           (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
         VALUES
@@ -205,7 +206,7 @@ test("backfillAssetPricesForCleanDays handles multiple days", async () => {
 
   for (const date of [D1, D2]) {
     for (const asset of assets) {
-      await sql`
+      await fixtureDb`
         INSERT INTO wallet_balance_samples
           (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
         VALUES
