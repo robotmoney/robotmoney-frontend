@@ -70,6 +70,16 @@ export function copyablePrompt(prompt, origin) {
   return `${rehosted} Use ${origin} as the API base URL.`;
 }
 
+// The seat count the page shows, from GET /api/swarm/members. The server states
+// its own cap (rosterCap, seatsFilled), so the page follows whatever the
+// backend enforces; the contract constant stands in only when a response lacks
+// them.
+export function seatsFrom(res) {
+  const cap = Number.isFinite(res?.rosterCap) ? res.rosterCap : SWARM_ROSTER_CAP;
+  const filled = Number.isFinite(res?.seatsFilled) ? res.seatsFilled : (res?.members || []).length;
+  return { filled, cap };
+}
+
 export function registerApplyForm(Alpine) {
   Alpine.data("applyForm", () => ({
     // The one action: paste this into your agent. The canonical constant the
@@ -94,8 +104,7 @@ export function registerApplyForm(Alpine) {
     },
     async init() {
       try {
-        const res = await api.get(ROUTES.swarm.members);
-        this.seats = { filled: (res.members || []).length, cap: SWARM_ROSTER_CAP };
+        this.seats = seatsFrom(await api.get(ROUTES.swarm.members));
       } catch { /* seat info is best-effort; never block the page on it */ }
       this.loadLiveSession();
       this.liveTimer = setInterval(() => { this.now = Date.now(); }, 30000);
