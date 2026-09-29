@@ -8,7 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // §7 forbids `system-scheduler` a database credential, and
-// `backend/src/swarm/domain.ts` — where the server's declarations of these
+// `backend/src/swarm/epoch.ts` — where the server's declarations of these
 // shapes live — opens a database handle at module scope. So the client cannot
 // import them, and `scripts/lib/system-scheduler/types.ts` re-declares them.
 //
@@ -30,6 +30,7 @@ import { SCHEDULER_FULL_READ_PATH } from "../../lib/system-scheduler/health.ts";
 
 const REPO = join(import.meta.dir, "..", "..", "..");
 const DOMAIN = readFileSync(join(REPO, "backend/src/swarm/domain.ts"), "utf8");
+const EPOCH = readFileSync(join(REPO, "backend/src/swarm/epoch.ts"), "utf8");
 const CLIENT = readFileSync(join(REPO, "scripts/lib/system-scheduler/types.ts"), "utf8");
 
 /** The property names declared inside `export interface <name> { … }`. */
@@ -55,8 +56,8 @@ function fieldsOf(source: string, name: string): string[] {
 
 describe("the full read's shape is declared identically on both sides (§3)", () => {
   for (const name of ["SchedulerSubject", "CollectingSession", "SettlingSession", "SchedulerFullRead"]) {
-    test(`${name} has the same fields in domain.ts and in types.ts`, () => {
-      expect({ name, fields: fieldsOf(CLIENT, name) }).toEqual({ name, fields: fieldsOf(DOMAIN, name) });
+    test(`${name} has the same fields in epoch.ts and in types.ts`, () => {
+      expect({ name, fields: fieldsOf(CLIENT, name) }).toEqual({ name, fields: fieldsOf(EPOCH, name) });
     });
   }
 
@@ -65,7 +66,7 @@ describe("the full read's shape is declared identically on both sides (§3)", ()
       [...(s.match(/export type SettlingState = ([^;]+);/)?.[1] ?? "").matchAll(/"([a-z_]+)"/g)]
         .map((m) => m[1])
         .sort();
-    expect(pick(CLIENT)).toEqual(pick(DOMAIN));
+    expect(pick(CLIENT)).toEqual(pick(EPOCH));
     expect(pick(CLIENT)).toEqual(["aggregated", "judged", "judging", "window_closed"]);
   });
 });
