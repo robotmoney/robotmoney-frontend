@@ -337,7 +337,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
   const RAW_SQL_ALLOWLIST: readonly string[] = [
     "src/analytics/store/run-ledger-store",
     "src/analytics/store/source-ledger-store",
-    "src/api/routes/admin",
     "src/api/routes/admin-webauthn",
     "src/ops/asset-prices",
     "src/ops/gap-detector",
