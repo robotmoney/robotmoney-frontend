@@ -51,9 +51,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import postgres from "postgres";
 import ts from "typescript";
-import { config } from "../src/config.ts";
 import { bootstrapBlankDatabase, loadSnapshot } from "../src/db/schema-snapshot.ts";
 import { OBJECTLESS_SHAPES, type QueryDeclaration, type RmRole, type StatementDeclaration, type TablePrivilege } from "../src/db/registry.ts";
+import { adminUrl } from "./support/cluster.ts";
 
 const BACKEND = join(import.meta.dir, "..");
 const SRC = join(BACKEND, "src");
@@ -486,7 +486,7 @@ const logins = new Map<string, postgres.Sql<{}>>();
 const saved: { rolname: string; rolcanlogin: boolean; rolpassword: string | null }[] = [];
 
 function urlFor(role: string, name = database): string {
-  const url = new URL(config.databaseUrl);
+  const url = new URL(adminUrl());
   url.pathname = `/${name}`;
   url.username = role;
   url.password = PASSWORD;
@@ -503,7 +503,7 @@ function login(role: string): postgres.Sql<{}> {
 }
 
 beforeAll(async () => {
-  const superuser = postgres(config.databaseUrl, { max: 1, onnotice: () => {} });
+  const superuser = postgres(adminUrl(), { max: 1, onnotice: () => {} });
   try {
     // The cluster's roles are shared by every file; their login attributes are
     // put back in afterAll so nothing here leaks into a file that runs later.
@@ -523,9 +523,9 @@ beforeAll(async () => {
     await superuser.end({ timeout: 5 });
   }
 
-  const adminUrl = new URL(config.databaseUrl);
-  adminUrl.pathname = `/${database}`;
-  admin = postgres(adminUrl.toString(), { max: 1, onnotice: () => {} });
+  const target = new URL(adminUrl());
+  target.pathname = `/${database}`;
+  admin = postgres(target.toString(), { max: 1, onnotice: () => {} });
   // pgcrypto is provider-managed (the snapshot's header: "a managed cluster
   // installs it and rm_owner may not"), so the provider's half is done here.
   await admin.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
@@ -541,7 +541,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await Promise.all([...logins.values()].map((db) => db.end({ timeout: 5 })));
   if (admin) await admin.end({ timeout: 5 });
-  const superuser = postgres(config.databaseUrl, { max: 1, onnotice: () => {} });
+  const superuser = postgres(adminUrl(), { max: 1, onnotice: () => {} });
   try {
     await superuser.unsafe(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
     await superuser.unsafe(`DROP ROLE IF EXISTS ${SCRATCH}`);

@@ -196,6 +196,7 @@ describe("the cluster superuser is reached only by a pinned list of files", () =
     "schema-snapshot.test.ts",
     "seed-gate.test.ts",
     "smoke-twin-capture.test.ts",
+    "stream-events-retention.test.ts",
     "spoof-rebind.test.ts",
     "support/clean-db.ts",
     "support/history-database.ts",
