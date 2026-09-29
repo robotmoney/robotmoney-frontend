@@ -203,12 +203,15 @@ jobs:
       # not by workflow file) still avoids a redundant download whichever
       # workflow runs first for a given rmpc version.
       RMPC_CACHE_DIR: ${{ github.workspace }}/.rmpc-cache
-      # Instance state (tokens, journal, receipt) lives outside the checkout
-      # (smoke spec §1.1) and, on this shared runner, in a directory of this job
-      # alone, so the lifecycle step below finds exactly one instance.
-      RM_SMOKE_STATE_ROOT: ${{ runner.temp }}/smoke-state
     steps:
       - uses: actions/checkout@v4
+      # Instance state (tokens, journal, receipt) lives outside the checkout
+      # (smoke spec §1.1) and, on this shared runner, in a directory of this job
+      # alone, so the lifecycle step below finds exactly one instance. The
+      # `runner` context is not available in a job-level `env`, so the path is
+      # exported from a step, where RUNNER_TEMP is set.
+      - name: Set the smoke state root
+        run: echo "RM_SMOKE_STATE_ROOT=$RUNNER_TEMP/smoke-state" >> "$GITHUB_ENV"
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.5"
