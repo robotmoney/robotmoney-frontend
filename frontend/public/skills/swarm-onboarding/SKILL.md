@@ -117,7 +117,7 @@ a file, check it, and only then extract — the same order robotmoney-core's own
 OS=$(uname -s | tr '[:upper:]' '[:lower:]' | sed 's/darwin/macos/')
 ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
 TAG=$(curl -fsSL https://api.github.com/repos/robotmoney/robotmoney-core/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
-ARCHIVE="rmpc-${TAG}-${OS}-${ARCH}.tar.gz"
+ARCHIVE="rmpc-${TAG#rmpc-}-${OS}-${ARCH}.tar.gz"   # tags are rmpc-vX.Y.Z; the archive names the version once
 BASE="https://github.com/robotmoney/robotmoney-core/releases/download/${TAG}"
 
 # sha256sum on Linux, shasum -a 256 on macOS. With neither, STOP — never

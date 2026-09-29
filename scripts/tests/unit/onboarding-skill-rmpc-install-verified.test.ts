@@ -91,8 +91,11 @@ describe("the published onboarding skill installs rmpc only after a checksum che
 // EXECUTED: run the documented block against a local fixture release.
 // ---------------------------------------------------------------------------
 
-const TAG = "v0.0.0-fixture";
-const ARCHIVE = `rmpc-${TAG}-testos-testarch.tar.gz`;
+// Release tags carry the binary's name (rmpc-vX.Y.Z, core #1243) and the archive
+// names it once: rmpc-vX.Y.Z-<os>-<arch>.tar.gz. A bare fixture tag hid the
+// doubled rmpc-rmpc- archive name that 404ed from 2 Sep (RM-148).
+const TAG = "rmpc-v0.0.0-fixture";
+const ARCHIVE = "rmpc-v0.0.0-fixture-testos-testarch.tar.gz";
 
 // Rewrite only the four host/network-dependent lines and the destination, each
 // substitution asserted to hit — if the block's shape changes, this fails loudly
