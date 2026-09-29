@@ -21,6 +21,7 @@ import { tableExists } from "../../lib/checks.ts";
 import type { Checker } from "../../lib/checks.ts";
 import { runPostflightMain, type Db } from "../../lib/postflight-utils.ts";
 import { deriveHostRole } from "../../lib/rollout-receipt.ts";
+import { on, registerQuery } from "../../../src/db/registry.ts";
 import {
   PRESERVED_RELEASE_TABLES,
   PRIOR_RELEASE_MIGRATIONS,
@@ -29,13 +30,106 @@ import {
   TAG_GLOB,
 } from "./release.ts";
 
+const CALLERS = ["scripts/upgrades/0.5.0-to-0.5.1/postflight"];
+
+// Postflight runs against the just-deployed database as the application's own role (DATABASE_URL).
+const qAppliedMigrations = registerQuery({
+  role: "rm_app",
+  object: "schema_migrations",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/postflight:appliedMigrations",
+  purpose: "Read the migration ledger, to grade that this release's migration landed and nothing foreign did.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT name FROM schema_migrations`,
+  },
+});
+
+const qPriceRows = registerQuery({
+  role: "rm_app",
+  object: "asset_prices",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/postflight:priceRows",
+  purpose: "Count asset_prices rows, to grade that 0046's seed carried price history forward.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT count(*)::int AS count FROM asset_prices`,
+  },
+});
+
+const qDriftedNames = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/postflight:driftedNames",
+  purpose: "Count sessions whose subject_name no longer matches their subject's name.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT count(*)::int AS count FROM swarm_sessions s JOIN swarm_subjects sub ON s.subject_id = sub.id
+     WHERE s.subject_name IS DISTINCT FROM sub.name`,
+  },
+});
+
+const qDriftedNames_1 = registerQuery({
+  role: "rm_app",
+  object: "swarm_subjects",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/postflight:driftedNames.swarm_subjects",
+  purpose: "Count sessions whose subject_name no longer matches their subject's name.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT count(*)::int AS count FROM swarm_sessions s JOIN swarm_subjects sub ON s.subject_id = sub.id
+     WHERE s.subject_name IS DISTINCT FROM sub.name`,
+  },
+});
+
+const qJudgeConfig = registerQuery({
+  role: "rm_app",
+  object: "swarm_judge_config",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/postflight:judgeConfig",
+  purpose: "Read whether third-party judging is still off, as the release ships it.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT third_party_enabled FROM swarm_judge_config WHERE id = 1`,
+  },
+});
+
+const qReadMode = registerQuery({
+  role: "rm_app",
+  object: "analytics_read_mode",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/postflight:readMode",
+  purpose: "Read the analytics read switch, to record that the release left it where the operator put it.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT mode FROM analytics_read_mode WHERE id = true`,
+  },
+});
+
+const qWedgedSessions = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "scripts/upgrades/0.5.0-to-0.5.1/postflight:wedgedSessions",
+  purpose: "Count sessions convened in the last day whose window closed hours ago and are still not terminal.",
+  callers: CALLERS,
+  probe: {
+    statement: `SELECT count(*)::int AS count FROM swarm_sessions
+     WHERE state NOT IN ('published', 'cancelled')
+       AND window_closes_at IS NOT NULL
+       AND window_closes_at < now() - interval '2 hours'
+       AND convened_at > now() - interval '24 hours'`,
+  },
+});
+
 const dir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(dir, "..", "..", "..", "..");
 const receiptStep = process.argv.find((arg) => arg.startsWith("--emit-receipt="))?.split("=", 2)[1]
   ?? (process.argv.includes("--emit-receipt") ? "P8.postflight-prod" : undefined);
 
 export async function runChecks(db: Db, { record }: Checker): Promise<void> {
-  const rows = (await db`SELECT name FROM schema_migrations`) as unknown as { name: string }[];
+  const rows = (await on(db, qAppliedMigrations)`SELECT name FROM schema_migrations`) as unknown as { name: string }[];
   const applied = new Set(rows.map((row) => row.name));
 
   const missing = PRIOR_RELEASE_MIGRATIONS.filter((name) => !applied.has(name));
@@ -120,23 +214,23 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
 
   // ── the v0.5.0 data invariants, re-asserted after v0.5.1's code has run ──
 
-  const [{ count: priceRows }] = (await db`SELECT count(*)::int AS count FROM asset_prices`) as unknown as { count: number }[];
+  const [{ count: priceRows }] = (await on(db, qPriceRows)`SELECT count(*)::int AS count FROM asset_prices`) as unknown as { count: number }[];
   record("asset-prices-seeded", priceRows > 0 ? "PASS" : "FAIL", `${priceRows} row(s) in asset_prices`, "0046's seed carried existing live/seed price history forward; an empty table means it matched nothing.");
 
-  const [{ count: driftedNames }] = (await db`
+  const [{ count: driftedNames }] = (await on(db, qDriftedNames, qDriftedNames_1)`
     SELECT count(*)::int AS count FROM swarm_sessions s JOIN swarm_subjects sub ON s.subject_id = sub.id
      WHERE s.subject_name IS DISTINCT FROM sub.name
   `) as unknown as { count: number }[];
   record("subject-name-backfill", driftedNames === 0 ? "PASS" : "FAIL", driftedNames === 0 ? "every session's subject_name matches its subject's current name" : `${driftedNames} session(s) still show a stale subject_name`);
 
-  const [judgeConfig] = (await db`SELECT third_party_enabled FROM swarm_judge_config WHERE id = 1`) as unknown as { third_party_enabled: boolean }[];
+  const [judgeConfig] = (await on(db, qJudgeConfig)`SELECT third_party_enabled FROM swarm_judge_config WHERE id = 1`) as unknown as { third_party_enabled: boolean }[];
   record("third-party-judging-off", judgeConfig?.third_party_enabled === false ? "PASS" : "FAIL", judgeConfig ? `third_party_enabled = ${judgeConfig.third_party_enabled}` : "no swarm_judge_config row with id=1", "0048 ships this off by default; v0.5.1 does not flip it.");
 
   // The analytics read switch must still be on the side the operator left it.
   // v0.5.1 ships no cutover, so a mode other than the seeded `compatibility`
   // can only have come from a deliberate 0060 gate run -- recorded, never
   // failed, because flipping it IS a supported operator action.
-  const [readMode] = (await db`SELECT mode FROM analytics_read_mode WHERE id = 1`) as unknown as { mode: string }[];
+  const [readMode] = (await on(db, qReadMode)`SELECT mode FROM analytics_read_mode WHERE id = true`) as unknown as { mode: string }[];
   record(
     "analytics-read-mode",
     readMode ? "PASS" : "FAIL",
@@ -151,7 +245,7 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
   // and ebbfc0bb address, so postflight names it rather than trusting a green
   // boot. Scoped to the last 24h: older wedges are pre-existing history this
   // release does not claim to repair.
-  const [{ count: wedged }] = (await db`
+  const [{ count: wedged }] = (await on(db, qWedgedSessions)`
     SELECT count(*)::int AS count FROM swarm_sessions
      WHERE state NOT IN ('published', 'cancelled')
        AND window_closes_at IS NOT NULL
