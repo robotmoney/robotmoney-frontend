@@ -20,12 +20,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import postgres from "postgres";
-import { adminUrl } from "./support/cluster.ts";
+import { adminConnection, ROLE_PASSWORD, roleUrl } from "./support/cluster.ts";
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
-const ADMIN_URL = adminUrl();
 const BOOT_ROLE = "rm_privprobe_boot";
-const BOOT_PASSWORD = "privprobe";
+const BOOT_PASSWORD = ROLE_PASSWORD();
 const PROBE_DB = "rm_privprobe";
 // 0053 ALTERs these; they are cluster-global and already exist here because
 // preload migrated the suite's own database as superuser. Production's doadmin
@@ -42,7 +41,9 @@ let bootUrl: string;
 let files: string[] = [];
 
 beforeAll(async () => {
-  admin = postgres(ADMIN_URL, { max: 1, onnotice: () => {} });
+  // cluster admin: this file's subject is a NON-superuser bootstrap login, and
+  // CREATE ROLE, role membership and CREATE/DROP DATABASE are superuser-only.
+  admin = adminConnection();
   const [{ rolsuper }] = (await admin`SELECT rolsuper FROM pg_roles WHERE rolname = current_user`) as unknown as { rolsuper: boolean }[];
   // Not a silent skip: without a superuser we cannot CREATE the non-superuser
   // role this file exists to test under, and quietly passing would let the
@@ -58,11 +59,7 @@ beforeAll(async () => {
   }
   await admin.unsafe(`CREATE DATABASE ${PROBE_DB} OWNER ${BOOT_ROLE}`);
 
-  const u = new URL(ADMIN_URL);
-  u.username = BOOT_ROLE;
-  u.password = BOOT_PASSWORD;
-  u.pathname = `/${PROBE_DB}`;
-  bootUrl = u.toString();
+  bootUrl = roleUrl(BOOT_ROLE, PROBE_DB);
 
   files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
 });
