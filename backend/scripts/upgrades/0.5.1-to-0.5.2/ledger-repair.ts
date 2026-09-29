@@ -345,10 +345,15 @@ export async function repairLedger(db: Db, opts: LedgerRepairOptions = {}): Prom
 
   try {
     await db.begin(async (tx) => {
-      // An operator-run repair on production's volume: no statement limit, but
-      // never a silent wait behind a writer that is still running.
+      // An operator-run repair on production's volume: no statement limit. The
+      // lock wait is bounded, never silent: stopping the api does not end the
+      // ledger reads the database is still running for it (rehearsal,
+      // 2026-09-29: waits of 15-21 s, then one past 30 s), and those end at
+      // the api's 5-minute statement_timeout at the latest, so 6 minutes
+      // outlasts every one of them. A writer that is still running would
+      // outlast it, and the repair then fails without changing anything.
       await tx.unsafe("SET LOCAL statement_timeout = 0");
-      await tx.unsafe("SET LOCAL lock_timeout = '30s'");
+      await tx.unsafe("SET LOCAL lock_timeout = '6min'");
       await tx.unsafe("SET LOCAL work_mem = '256MB'");
       await tx.unsafe("SET LOCAL ROLE rm_owner");
 
