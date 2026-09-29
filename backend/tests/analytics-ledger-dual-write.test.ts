@@ -262,26 +262,13 @@ describe("dual-write parity: raw-history, regime, and research through the authe
   });
 });
 
-// Issue #979 AC3 fix: `source` is part of the raw-history DTO, so it has to be
-// part of raw-history parity — otherwise a fully green observation window
-// green-lights a cutover that silently changes that field. These pin BOTH
-// halves: the divergence is caught, and the historical rows the product owner
-// accepted as permanently unlabelled do NOT park the gate red forever.
-describe("dual-write parity: raw-history `source` (issue #979 AC3)", () => {
-  test("a row whose ledger label disagrees with its compatibility label is a MISMATCH, not an invisible difference", async () => {
+// Owner, 2026-09-29 (D56's amendment): raw-history parity compares VALUES, within
+// the tolerance both writers use, and does not compare `source`. These pin both
+// halves, and that a difference beyond tolerance is still caught.
+describe("dual-write parity: raw-history values within tolerance, labels not compared", () => {
+  test("two tables holding different labels for one value match", async () => {
     prodAuth();
-    // Exactly the shape the producer's gap catch-up produced before this fix:
-    // the acquisition captured 'live' while the floor writer tagged the very
-    // same point 'seed'. Value, indicator and date all agree — `source` is the
-    // ONLY difference, so a pass here can only come from comparing it.
     await submitRawHistoryPoint("DUALWRITE_LABEL_SPLIT", "2024-05-01", 1.25, { provenance: "live", source: "seed" });
-
-    const raw = await checkRawIndicatorHistoryParity();
-    expect(raw.matched, "a `source` split must fail parity").toBe(false);
-    expect(
-      raw.mismatches.some((m) => m.naturalKey.includes("DUALWRITE_LABEL_SPLIT") && m.reason.includes("canonical value differs")),
-      JSON.stringify(raw.mismatches),
-    ).toBe(true);
     // The split is real on both sides, not a fixture that failed to write.
     const [legacyRow] = (await sql`
       SELECT source FROM raw_indicator_history WHERE indicator = 'DUALWRITE_LABEL_SPLIT'`) as unknown as { source: string | null }[];
@@ -291,60 +278,33 @@ describe("dual-write parity: raw-history `source` (issue #979 AC3)", () => {
       WHERE source_key = 'raw_indicator_history:DUALWRITE_LABEL_SPLIT'`) as unknown as { provenance: string | null }[];
     expect(ledgerRow!.provenance).toBe("live");
 
-    // Relabelling the SAME value writes nothing on either side (owner,
-    // 2026-09-29: a label change alone is not a change), so the split stays...
-    await submitRawHistoryPoint("DUALWRITE_LABEL_SPLIT", "2024-05-01", 1.25, { provenance: "seed", source: "seed" });
-    expect((await checkRawIndicatorHistoryParity()).matched).toBe(false);
-    // ...until the value really changes, through the same two production
-    // routes, under one label: both sides then carry that write's label.
-    await submitRawHistoryPoint("DUALWRITE_LABEL_SPLIT", "2024-05-01", 1.5, { provenance: "seed", source: "seed" });
-    const fixed = await checkRawIndicatorHistoryParity();
-    expect(fixed.mismatches, JSON.stringify(fixed.mismatches)).toEqual([]);
-    expect(fixed.matched).toBe(true);
-  });
-
-  test("a version recorded BEFORE migration 0061 is exempt from the `source` comparison, so accepted history cannot park the gate red", async () => {
-    prodAuth();
-    // A pre-0061 row, built the only way an append-only ledger allows: a fresh
-    // INSERT (never an UPDATE) with revision_kind 'legacy_baseline' and no
-    // acquisition — migration 0057's own backfill shape — back-dated to one
-    // day before 0061 was applied to this database. Its provenance is NULL and
-    // can never become anything else, while the compatibility row carries the
-    // real 'live' label raw-history has written since migration 0024.
-    const [{ applied_at: appliedAt }] = (await sql`
-      SELECT applied_at FROM schema_migrations WHERE name = '0061_source_value_provenance.sql'`) as unknown as { applied_at: Date }[];
-    expect(appliedAt, "0061 must be applied here or this test proves nothing").toBeDefined();
-    const before = new Date(new Date(appliedAt).getTime() - 86_400_000).toISOString();
-
-    await sql`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES ('2024-06-01', 'DUALWRITE_PRE_0061', 3.5, 'live')`;
-    await sql`
-      INSERT INTO source_value_versions (source_key, market_date, value, revision_kind, knowledge_time)
-      VALUES ('raw_indicator_history:DUALWRITE_PRE_0061', '2024-06-01', 3.5, 'legacy_baseline', ${before}::timestamptz)`;
-
-    const [pre] = (await sql`
-      SELECT provenance FROM source_value_versions
-      WHERE source_key = 'raw_indicator_history:DUALWRITE_PRE_0061'`) as unknown as { provenance: string | null }[];
-    expect(pre!.provenance, "the pre-0061 population is exactly the NULL one").toBeNull();
-
     const raw = await checkRawIndicatorHistoryParity();
     expect(raw.mismatches, JSON.stringify(raw.mismatches)).toEqual([]);
-    expect(raw.matched, "a permanently unlabelled historical row must not block cutover").toBe(true);
+    expect(raw.matched).toBe(true);
+  });
 
-    // ...and the exemption expires the moment anything writes to that key
-    // again. Submitting a REVISED value through the same two production
-    // routes, with no label on the acquisition, appends a post-0061 current
-    // version whose provenance is NULL against a legacy 'live' — in scope, and
-    // caught, rather than inheriting history's exemption. This is the
-    // "a writer stopped stamping provenance" regression, and the scope does
-    // not hide it. (A revised value, not the same one: since issue #1035 an
-    // identical re-observation under the same label writes no version at all,
-    // so it would leave the exempt head exactly where it was.)
-    await submitRawHistoryPoint("DUALWRITE_PRE_0061", "2024-06-01", 3.75, { provenance: null, source: "live" });
-    const reopened = await checkRawIndicatorHistoryParity();
-    expect(
-      reopened.mismatches.some((m) => m.naturalKey.includes("DUALWRITE_PRE_0061")),
-      JSON.stringify(reopened.mismatches),
-    ).toBe(true);
+  test("values within the source's tolerance match, with equal checksums; beyond it they do not", async () => {
+    prodAuth();
+    // IWF_IWD is a Yahoo ratio: relative 5e-6 (D56).
+    const date = "2024-06-01";
+    const base = 0.4797323800499549;
+    await sql`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES (${date}, 'IWF_IWD', ${base}, 'live')`;
+    await sql`
+      INSERT INTO source_value_versions (source_key, market_date, value, revision_kind)
+      VALUES ('raw_indicator_history:IWF_IWD', ${date}, ${base * (1 + 1.5e-6)}, 'legacy_baseline')`;
+    const within = await checkRawIndicatorHistoryParity();
+    expect(within.mismatches, JSON.stringify(within.mismatches)).toEqual([]);
+    expect(within.matched).toBe(true);
+    expect(within.legacyChecksum).toBe(within.ledgerChecksum);
+
+    // An exact source has no tolerance: the same relative difference is real.
+    await sql`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES (${date}, 'T10Y2Y', 1.25, 'live')`;
+    await sql`
+      INSERT INTO source_value_versions (source_key, market_date, value, revision_kind)
+      VALUES ('raw_indicator_history:T10Y2Y', ${date}, ${1.25 * (1 + 1.5e-6)}, 'legacy_baseline')`;
+    const beyond = await checkRawIndicatorHistoryParity();
+    expect(beyond.matched).toBe(false);
+    expect(beyond.mismatches.map((m) => m.naturalKey)).toEqual([`T10Y2Y\u0000${date}`]);
   });
 });
 

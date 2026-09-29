@@ -83,7 +83,7 @@ describe("issue #1035 AC8: a declared tolerance for every source_key the extract
     for (const [key, tolerance] of Object.entries(SOURCE_TOLERANCES)) {
       const line = d56.split("\n").find((l) => l.includes(`\`${key}\``));
       expect(line, `D56 must name ${key}`).toBeDefined();
-      const stated = tolerance.relative === 0 ? "exact" : "1e-6";
+      const stated = tolerance.relative === 0 ? "exact" : tolerance.relative === 5e-6 ? "5e-6" : "1e-6";
       expect({ key, line: line!.includes(stated) }).toEqual({ key, line: true });
     }
   });

@@ -29,7 +29,7 @@ export interface SourceTolerance {
   /** Relative tolerance: the largest |Δ| / max(|a|, |b|) still treated as the same observation. */
   relative: number;
   /** Why this value — the evidence D56 records for it. */
-  basis: "exact" | "yahoo-float32";
+  basis: "exact" | "yahoo-float32" | "yahoo-ratio";
 }
 
 const EXACT: SourceTolerance = { relative: 0, basis: "exact" };
@@ -42,6 +42,14 @@ const EXACT: SourceTolerance = { relative: 0, basis: "exact" };
 // Yahoo revision (a one-cent correction on a $500 close is 2e-5; a dividend or
 // split re-adjustment is 1e-4 and up).
 const YAHOO_FLOAT32: SourceTolerance = { relative: 1e-6, basis: "yahoo-float32" };
+
+// A RATIO of two Yahoo series carries both series' jitter. Measured on
+// production's ledger (stage-2 twin, 2026-09-29): with 1e-6, 102,721 of the
+// ratio series' ~121k recorded "revisions" were a relative 1e-6 to 2e-6 off
+// their prior, the same two values taking turns, and only 184 fell between
+// 2e-6 and 1e-5. 5e-6 sits in that empty band: above all the measured noise,
+// and still four times below the smallest real revision (2e-5, above).
+const YAHOO_RATIO: SourceTolerance = { relative: 5e-6, basis: "yahoo-ratio" };
 
 /**
  * Every source_key the extractors write, with its tolerance. Keep this list in
@@ -56,24 +64,24 @@ export const SOURCE_TOLERANCES: Readonly<Record<string, SourceTolerance>> = {
   "raw_indicator_history:DXY": EXACT, // fred
   "raw_indicator_history:ICSA": EXACT, // fred
   "raw_indicator_history:VIX": YAHOO_FLOAT32, // yahoo ^VIX
-  "raw_indicator_history:COPPER_GOLD": YAHOO_FLOAT32, // yahoo HG=F / GC=F
+  "raw_indicator_history:COPPER_GOLD": YAHOO_RATIO, // yahoo HG=F / GC=F
   "raw_indicator_history:SPX_TREND": YAHOO_FLOAT32, // yahoo ^GSPC
-  "raw_indicator_history:IWM_SPY": YAHOO_FLOAT32, // yahoo IWM / SPY
+  "raw_indicator_history:IWM_SPY": YAHOO_RATIO, // yahoo IWM / SPY
   "raw_indicator_history:DEFI_TVL": EXACT, // defillama_tvl
   "raw_indicator_history:STABLES": EXACT, // defillama_stables
   "raw_indicator_history:BTC_ACTIVE": EXACT, // blockchain_com
   "raw_indicator_history:ETH_ACTIVE": EXACT, // coinmetrics
   "raw_indicator_history:BTC_MVRV": EXACT, // coinmetrics
-  "raw_indicator_history:BTC_ETH": YAHOO_FLOAT32, // yahoo BTC-USD / ETH-USD
+  "raw_indicator_history:BTC_ETH": YAHOO_RATIO, // yahoo BTC-USD / ETH-USD
   "raw_indicator_history:ETH_TREND": YAHOO_FLOAT32, // yahoo ETH-USD
   "raw_indicator_history:NEW_TOKENS": EXACT, // geckoterminal_newpools
   "raw_indicator_history:DEFI_GROWTH": EXACT, // defillama_tvl
   "raw_indicator_history:STABLES_GROWTH": EXACT, // defillama_stables
-  "raw_indicator_history:SPHB_SPLV": YAHOO_FLOAT32, // yahoo SPHB / SPLV
-  "raw_indicator_history:MTUM_SPY": YAHOO_FLOAT32, // yahoo MTUM / SPY
-  "raw_indicator_history:IWF_IWD": YAHOO_FLOAT32, // yahoo IWF / IWD
-  "raw_indicator_history:XLU_SPY": YAHOO_FLOAT32, // yahoo XLU / SPY
-  "raw_indicator_history:XLP_XLY": YAHOO_FLOAT32, // yahoo XLP / XLY
+  "raw_indicator_history:SPHB_SPLV": YAHOO_RATIO, // yahoo SPHB / SPLV
+  "raw_indicator_history:MTUM_SPY": YAHOO_RATIO, // yahoo MTUM / SPY
+  "raw_indicator_history:IWF_IWD": YAHOO_RATIO, // yahoo IWF / IWD
+  "raw_indicator_history:XLU_SPY": YAHOO_RATIO, // yahoo XLU / SPY
+  "raw_indicator_history:XLP_XLY": YAHOO_RATIO, // yahoo XLP / XLY
   "raw_indicator_history:SHILLER_CAPE": EXACT, // shiller_cape / multpl
 
   // access/data-source.ts — research inputs.

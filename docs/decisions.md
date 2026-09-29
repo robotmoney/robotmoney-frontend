@@ -3632,24 +3632,24 @@ observed off) if either would change.
 | `raw_indicator_history:DXY` | fred | exact |
 | `raw_indicator_history:ICSA` | fred | exact |
 | `raw_indicator_history:VIX` | yahoo | relative 1e-6 |
-| `raw_indicator_history:COPPER_GOLD` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:COPPER_GOLD` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:SPX_TREND` | yahoo | relative 1e-6 |
-| `raw_indicator_history:IWM_SPY` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:IWM_SPY` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:DEFI_TVL` | defillama_tvl | exact |
 | `raw_indicator_history:STABLES` | defillama_stables | exact |
 | `raw_indicator_history:BTC_ACTIVE` | blockchain_com | exact |
 | `raw_indicator_history:ETH_ACTIVE` | coinmetrics | exact |
 | `raw_indicator_history:BTC_MVRV` | coinmetrics | exact |
-| `raw_indicator_history:BTC_ETH` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:BTC_ETH` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:ETH_TREND` | yahoo | relative 1e-6 |
 | `raw_indicator_history:NEW_TOKENS` | geckoterminal_newpools | exact |
 | `raw_indicator_history:DEFI_GROWTH` | defillama_tvl | exact |
 | `raw_indicator_history:STABLES_GROWTH` | defillama_stables | exact |
-| `raw_indicator_history:SPHB_SPLV` | yahoo ratio | relative 1e-6 |
-| `raw_indicator_history:MTUM_SPY` | yahoo ratio | relative 1e-6 |
-| `raw_indicator_history:IWF_IWD` | yahoo ratio | relative 1e-6 |
-| `raw_indicator_history:XLU_SPY` | yahoo ratio | relative 1e-6 |
-| `raw_indicator_history:XLP_XLY` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:SPHB_SPLV` | yahoo ratio | relative 5e-6 |
+| `raw_indicator_history:MTUM_SPY` | yahoo ratio | relative 5e-6 |
+| `raw_indicator_history:IWF_IWD` | yahoo ratio | relative 5e-6 |
+| `raw_indicator_history:XLU_SPY` | yahoo ratio | relative 5e-6 |
+| `raw_indicator_history:XLP_XLY` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:SHILLER_CAPE` | shiller_cape / multpl | exact |
 | `raw_indicator_history:MNA` | edgar | exact |
 | `research:BTC-USD` | yahoo | relative 1e-6 |
@@ -3881,6 +3881,19 @@ versions, far more than the ~172k points the ledger describes:
   receipt. 0080 keeps only the schema changes. It rebuilds its three tables by
   `TRUNCATE` and re-insert of the kept rows with their original ids, so the
   space returns at commit and no `VACUUM FULL` is needed.
+
+- **Ratio series get a tolerance of 5e-6.** A ratio of two Yahoo series
+  carries both series' jitter. On the repaired twin, 102,721 of the ratio
+  series' ~121k kept "revisions" were a relative 1e-6 to 2e-6 off their prior,
+  and only 184 fell between 2e-6 and 1e-5. 5e-6 is above the measured noise and
+  four times below the smallest real revision (2e-5).
+- **Raw-history parity compares values within tolerance and does not compare
+  `source`.** The compatibility table and the ledger are fed at different
+  moments and each holds its value until a change exceeds tolerance, so they
+  can settle on two values the writers call the same observation. The parity
+  check calls the same `withinTolerance()`. `source` was compared since issue
+  #979 AC3; with a label change no longer recorded, the two tables can hold
+  different labels for one value, and no writer would ever reconcile them.
 
 **Evidence.** The same two tests, now running 0080 and then the script:
 `backend/tests/analytics-ledger-vintage-repair.test.ts` (row-for-row equal to
