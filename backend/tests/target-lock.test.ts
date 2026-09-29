@@ -33,7 +33,7 @@
 //      holder and its plan id, and real holder processes release on exit and on
 //      SIGINT/SIGTERM; two real tools contending is the integration test that
 //      later #1026 work adds)
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -58,7 +58,7 @@ import {
   type TargetLock,
   type TargetState,
 } from "../src/db/target-lock.ts";
-import { adminExec, adminUrl, harnessUrl, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminConnection, adminExec, harnessConnection, harnessUrl, ROLE_PASSWORD } from "./support/cluster.ts";
 
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
 const MODULE = join(import.meta.dir, "..", "src", "db", "target-lock.ts");
@@ -71,6 +71,16 @@ function holderOf(tool: string, instance: string | null, planId: string | null =
 /** The shared test database's own answers, so a plain acquisition revalidates. */
 async function present(): Promise<TargetState> {
   return readTargetState(sql);
+}
+
+/** Kill one of the api login's own backends: a login may terminate its own sessions, no superuser needed. */
+async function terminateAsApp(pid: number): Promise<void> {
+  // The lock connections log in as the api login and act as rm_app; termination
+  // is judged against the login, so step out of the acting role first.
+  await sql.begin(async (tx) => {
+    await tx.unsafe("SET LOCAL ROLE NONE");
+    await tx`SELECT pg_terminate_backend(${pid})`;
+  });
 }
 
 const opened: TargetLock[] = [];
@@ -118,9 +128,8 @@ async function withScratchDatabase<T>(
   enrollment: "kind" | "legacy-identity-column" | "no-table" = "kind",
 ): Promise<T> {
   const name = `rm_tl_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+  // cluster admin: CREATE/DROP DATABASE are cluster-level; everything inside is the owner's.
   await adminExec(`CREATE DATABASE "${name}" OWNER rm_owner`);
-  const url = new URL(DATABASE_URL);
-  url.pathname = `/${name}`;
   const conn = postgres(harnessUrl(name), { max: 1, onnotice: () => {} }); // scratch DDL is the owner's, not rm_app's
   try {
     await conn`CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
@@ -887,18 +896,11 @@ describe("every fenced mutation's REAL path waits on a competitor's fence, holdi
   // first statement, so nothing was touched unfenced — and (c) finish only
   // after the competitor commits. The seed and the identity write are also
   // covered, through the composition `bun smoke` runs, by the block above.
-  const OWNER_PASSWORD = randomBytes(18).toString("base64url");
-  let ownerCanLogin = true;
-  const LOGIN = new URL(adminUrl()).username;
-
-  beforeAll(async () => {
-    const [row] = await sql<{ rolcanlogin: boolean }[]>`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`;
-    ownerCanLogin = row?.rolcanlogin ?? true;
-    await adminExec(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
-  });
-  afterAll(async () => {
-    await adminExec(`ALTER ROLE rm_owner ${ownerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD '${ROLE_PASSWORD()}'`);
-  });
+  // rm_owner's login carries the suite's shared role password (tests/preload.ts).
+  const OWNER_PASSWORD = ROLE_PASSWORD();
+  // The migrated template was replayed by the cluster's superuser, so it carries
+  // default ACLs FOR that login.
+  const LOGIN = new URL(process.env.RM_TEST_ADMIN_URL!).username;
 
   function asRole(url: string, role: string, password: string): string {
     const u = new URL(url);
@@ -915,9 +917,9 @@ describe("every fenced mutation's REAL path waits on a competitor's fence, holdi
     await adminExec(`CREATE DATABASE "${name}" OWNER rm_owner TEMPLATE "${template}"`);
     const url = new URL(DATABASE_URL);
     url.pathname = `/${name}`;
-    // The fixtures' handle is the cluster admin (it enrols the identity and alters the
-    // provisioning login's default privileges); the tool under test gets `url`.
-    const admin = postgres(adminUrl(name), { max: 1, onnotice: () => {} });
+    // The fixtures' handle is the harness owner login (it enrols the identity);
+    // the tool under test gets `url`.
+    const admin = harnessConnection(name);
     try {
       if (enroll) await admin`INSERT INTO deployment_identity (kind, note) VALUES ('rehearsal', 'target-lock real-path test')`;
       return await body(url.toString(), admin);
@@ -992,8 +994,14 @@ describe("every fenced mutation's REAL path waits on a competitor's fence, holdi
       // Production shape in the one respect this harness differs (see
       // migrate-run.test.ts's header), then the first run publishes the
       // manifest, so the case below is an ordinary pending migration.
-      await admin.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${LOGIN}" IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker`);
-      await admin.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${LOGIN}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`);
+      // cluster admin: ALTER DEFAULT PRIVILEGES FOR another role's login is superuser-only.
+      const dbAdmin = adminConnection(new URL(url).pathname.replace(/^\//, ""));
+      try {
+        await dbAdmin.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${LOGIN}" IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker`);
+        await dbAdmin.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${LOGIN}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`);
+      } finally {
+        await dbAdmin.end({ timeout: 5 });
+      }
       const owner = postgres(asRole(url, "rm_owner", OWNER_PASSWORD), { max: 1, onnotice: () => {} });
       const dir = mkdtempSync(join(tmpdir(), "rm-tl-migrate-"));
       const migrations = join(import.meta.dir, "..", "migrations");
@@ -1131,7 +1139,7 @@ describe("assertStillHeld — §2, no phase proceeds on a lock the tool cannot p
     if (!result.acquired) throw new Error("expected acquisition");
 
     const [self] = await result.lock.connection<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
-    await adminExec(`SELECT pg_terminate_backend(${self?.pid ?? 0})`);
+    await terminateAsApp(self?.pid ?? 0);
 
     await expect(assertStillHeld(result.lock, "participants")).rejects.toThrow(/participants/);
   }, 15000);
@@ -1166,7 +1174,7 @@ describe("the §10 W1 gate: kill the lock connection mid-mutation, start a secon
     // The coordinating connection dies mid-mutation. Postgres releases the
     // SESSION lock immediately; the mutation is still executing.
     await Bun.sleep(150);
-    await adminExec(`SELECT pg_terminate_backend(${coordinator?.pid ?? 0})`);
+    await terminateAsApp(coordinator?.pid ?? 0);
     // Wrapped, so the caller receives the IN-FLIGHT promise: returning it bare
     // from an async function would make the caller wait for it to settle.
     return { aMutation };
