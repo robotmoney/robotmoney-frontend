@@ -7,6 +7,7 @@
 // (ephemeral) Postgres, never a reachable RPC (test-coverage policy).
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { config, resolveBaseRpcSource, resolveVaultAdapters, type VaultAdapterConfig } from "../src/config.ts";
 import {
   fetchVaultEconomics,
@@ -32,8 +33,8 @@ const COMPOUND_OVERRIDE = "0x" + "cc33".repeat(10);
 const ADAPTER_ENV_KEYS = ["ADAPTER_MORPHO_ADDRESS", "ADAPTER_AAVE_ADDRESS", "ADAPTER_COMPOUND_ADDRESS", "BASE_RPC_SOURCE"] as const;
 
 beforeEach(async () => {
-  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
-  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
   _resetVaultEconomicsCacheForTests();
 });
 afterEach(() => {
@@ -168,19 +169,19 @@ test("fetchVaultEconomics happy path: tvl/sharePrice/totalShares/idle/adapters m
 
 test("vault seam: deterministic core, adapter, and sample readers preserve the public DTO and source provenance", async () => {
   process.env.BASE_RPC_SOURCE = "stub";
-  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
-  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
   const sampledAt = new Date();
   const sampleHour = new Date(sampledAt);
   sampleHour.setUTCMinutes(0, 0, 0);
 
-  await sql`
+  await fixtureDb`
     INSERT INTO vault_share_price_history (vault_address, sample_hour, sampled_at, total_assets, total_supply, share_price)
     VALUES (${VAULT}, ${sampleHour}, ${sampledAt}, 84320120000, 84102550000, 1.0025869)
   `;
   const adapters = resolveVaultAdapters();
   for (const a of adapters) {
-    await sql`
+    await fixtureDb`
       INSERT INTO vault_adapter_samples (vault_address, adapter_address, adapter_name, sample_hour, balance_usd, configured, provenance, sampled_at)
       VALUES (${VAULT.toLowerCase()}, ${a.address.toLowerCase()}, ${a.name}, ${sampleHour}, 28000, true, 'stub', ${sampledAt})
     `;
@@ -208,13 +209,13 @@ test("vault seam: deterministic core, adapter, and sample readers preserve the p
 });
 
 test("vault seam (#173): a failed adapter reader degrades ONLY the adapters — core totals stay live", async () => {
-  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
-  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
   const sampledAt = new Date();
   const sampleHour = new Date(sampledAt);
   sampleHour.setUTCMinutes(0, 0, 0);
 
-  await sql`
+  await fixtureDb`
     INSERT INTO vault_share_price_history (vault_address, sample_hour, sampled_at, total_assets, total_supply, share_price)
     VALUES (${VAULT}, ${sampleHour}, ${sampledAt}, 84320120000, 84102550000, 1.0025869)
   `;
@@ -229,15 +230,15 @@ test("vault seam (#173): a failed adapter reader degrades ONLY the adapters — 
 });
 
 test("vault seam (#173): missing core sample degrades core totals to null", async () => {
-  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
-  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
   const sampledAt = new Date();
   const sampleHour = new Date(sampledAt);
   sampleHour.setUTCMinutes(0, 0, 0);
 
   const adapters = resolveVaultAdapters();
   for (const a of adapters) {
-    await sql`
+    await fixtureDb`
       INSERT INTO vault_adapter_samples (vault_address, adapter_address, adapter_name, sample_hour, balance_usd, configured, provenance, sampled_at)
       VALUES (${VAULT.toLowerCase()}, ${a.address.toLowerCase()}, ${a.name}, ${sampleHour}, 28000, true, 'live', ${sampledAt})
     `;
@@ -251,8 +252,8 @@ test("vault seam (#173): missing core sample degrades core totals to null", asyn
 });
 
 test("#173 fix: one reverted adapter eth_call degrades ONLY that adapter; the others keep their live values", async () => {
-  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
-  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
   process.env.ADAPTER_MORPHO_ADDRESS = MORPHO_OVERRIDE;
   process.env.ADAPTER_AAVE_ADDRESS = AAVE_OVERRIDE;
   process.env.ADAPTER_COMPOUND_ADDRESS = COMPOUND_OVERRIDE;
@@ -389,7 +390,7 @@ test("totalSupply = 0 yields sharePrice: null without throwing", async () => {
 test("computeApy7d: fewer than 2 samples in the lookback yields null", async () => {
   expect(await computeApy7d(VAULT)).toBeNull();
 
-  await sql`
+  await fixtureDb`
     INSERT INTO vault_share_price_history (vault_address, sample_hour, total_assets, total_supply, share_price)
     VALUES (${VAULT}, now(), 100, 100, 1.0)
   `;
@@ -401,7 +402,7 @@ test("computeApy7d: (1+growth)^(365/daysElapsed)-1 from seeded history rows", as
   // Just inside the 7-day lookback window (avoids a flaky exact-boundary
   // comparison against the DB's `now()` evaluated a few ms after `now` here).
   const almostSevenDaysAgo = new Date(now.getTime() - 6.99 * 86_400_000);
-  await sql`
+  await fixtureDb`
     INSERT INTO vault_share_price_history (vault_address, sample_hour, total_assets, total_supply, share_price)
     VALUES
       (${VAULT}, ${almostSevenDaysAgo}, 100000000, 100000000, 1.0),
@@ -417,7 +418,7 @@ test("computeApy7d: (1+growth)^(365/daysElapsed)-1 from seeded history rows", as
 test("a failing mocked RPC transport degrades to stale:true with last-persisted values, never fabricated, never a throw", async () => {
   const sampleHour = new Date();
   sampleHour.setUTCMinutes(0, 0, 0);
-  await sql`
+  await fixtureDb`
     INSERT INTO vault_share_price_history (vault_address, sample_hour, total_assets, total_supply, share_price)
     VALUES (${VAULT}, ${sampleHour}, 84320120000, 84102550000, ${84320120000 / 84102550000})
   `;
@@ -477,21 +478,21 @@ test("sampleSharePrice inserts exactly one share-price history row per run (upse
 });
 
 test("fetchVaultEconomics performs ZERO chain calls on request path when injected readers call expect.unreachable()", async () => {
-  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
-  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
 
   const sampledAt = new Date();
   const sampleHour = new Date(sampledAt);
   sampleHour.setUTCMinutes(0, 0, 0);
 
-  await sql`
+  await fixtureDb`
     INSERT INTO vault_share_price_history (vault_address, sample_hour, sampled_at, total_assets, total_supply, share_price)
     VALUES (${VAULT}, ${sampleHour}, ${sampledAt}, 84320120000, 84102550000, 1.0025869)
   `;
 
   const adapters = resolveVaultAdapters();
   for (const a of adapters) {
-    await sql`
+    await fixtureDb`
       INSERT INTO vault_adapter_samples (vault_address, adapter_address, adapter_name, sample_hour, balance_usd, configured, provenance, sampled_at)
       VALUES (${VAULT.toLowerCase()}, ${a.address.toLowerCase()}, ${a.name}, ${sampleHour}, 28000, true, 'live', ${sampledAt})
     `;
@@ -529,13 +530,13 @@ test("fetchVaultEconomics performs ZERO chain calls on request path when injecte
     expect(a.balanceUsd).toBeCloseTo(28000, 6);
   }
 
-  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
-  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
 });
 
 test("fetchVaultEconomics: freshness budget boundary pair (budget-1s -> stale false, budget+1s -> stale true)", async () => {
-  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
-  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
 
   const BUDGET_MS = 60 * 60_000; // 1 hour
   const adapters = resolveVaultAdapters();
@@ -545,12 +546,12 @@ test("fetchVaultEconomics: freshness budget boundary pair (budget-1s -> stale fa
   const freshHour = new Date(freshTime);
   freshHour.setUTCMinutes(0, 0, 0);
 
-  await sql`
+  await fixtureDb`
     INSERT INTO vault_share_price_history (vault_address, sample_hour, sampled_at, total_assets, total_supply, share_price)
     VALUES (${VAULT}, ${freshHour}, ${freshTime}, 84320120000, 84102550000, 1.0025869)
   `;
   for (const a of adapters) {
-    await sql`
+    await fixtureDb`
       INSERT INTO vault_adapter_samples (vault_address, adapter_address, adapter_name, sample_hour, balance_usd, configured, provenance, sampled_at)
       VALUES (${VAULT.toLowerCase()}, ${a.address.toLowerCase()}, ${a.name}, ${freshHour}, 28000, true, 'live', ${freshTime})
     `;
@@ -561,19 +562,19 @@ test("fetchVaultEconomics: freshness budget boundary pair (budget-1s -> stale fa
   expect(rFresh.stale).toBe(false);
 
   // 2) Budget + 1s (stale)
-  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
-  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
 
   const staleTime = new Date(Date.now() - (BUDGET_MS + 1000));
   const staleHour = new Date(staleTime);
   staleHour.setUTCMinutes(0, 0, 0);
 
-  await sql`
+  await fixtureDb`
     INSERT INTO vault_share_price_history (vault_address, sample_hour, sampled_at, total_assets, total_supply, share_price)
     VALUES (${VAULT}, ${staleHour}, ${staleTime}, 84320120000, 84102550000, 1.0025869)
   `;
   for (const a of adapters) {
-    await sql`
+    await fixtureDb`
       INSERT INTO vault_adapter_samples (vault_address, adapter_address, adapter_name, sample_hour, balance_usd, configured, provenance, sampled_at)
       VALUES (${VAULT.toLowerCase()}, ${a.address.toLowerCase()}, ${a.name}, ${staleHour}, 28000, true, 'live', ${staleTime})
     `;
@@ -583,7 +584,7 @@ test("fetchVaultEconomics: freshness budget boundary pair (budget-1s -> stale fa
   const rStale = await fetchVaultEconomics();
   expect(rStale.stale).toBe(true);
 
-  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
-  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await fixtureDb`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
 });
 
