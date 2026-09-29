@@ -19,7 +19,7 @@ import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
 import { provisionOperatorToken } from "./support/automation-auth.ts";
-import { adminUrl } from "./support/cluster.ts";
+import { adminUrl, harnessConnection } from "./support/cluster.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
@@ -291,13 +291,12 @@ test("closeWindow commits window_closed even when absence-event recording fails,
 test("0020 migration is idempotent when executed repeatedly against real Postgres", async () => {
   const base = new URL(adminUrl());
   const dbName = `tmp_0020_idem_${crypto.randomUUID().slice(0, 8)}`;
+  // cluster admin: CREATE/DROP DATABASE is superuser-only here; the schema is the owner's.
   const admin = postgres(base.toString(), { max: 1, onnotice: () => {} });
-  await admin.unsafe(`CREATE DATABASE ${dbName}`);
+  await admin.unsafe(`CREATE DATABASE ${dbName} OWNER rm_owner`);
   await admin.end();
 
-  const tmpUrl = new URL(base.toString());
-  tmpUrl.pathname = `/${dbName}`;
-  const db = postgres(tmpUrl.toString(), { max: 1, onnotice: () => {} });
+  const db = harnessConnection(dbName);
   try {
     const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
     const upTo0020 = files.filter((f) => f <= "0020_committee_agent_health.sql");

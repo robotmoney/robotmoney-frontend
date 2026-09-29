@@ -33,7 +33,7 @@ import {
   type SchemaManifest,
 } from "../src/db/schema-manifest.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { adminExec, adminUrl } from "./support/cluster.ts";
+import { roleConnection } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
 import { fixtureDb } from "./support/fixture-db.ts";
@@ -503,18 +503,12 @@ describe("rm_app is refused every write to the manifest and the ledger, by grant
   // which 0064's REVOKE is the only thing between rm_app and a forged manifest,
   // and then prove the real reconciliation (backend/schema/grants.sql) takes
   // that default back.
-  const RM_APP_PASSWORD = "rm_app_manifest_grant_test";
   const MIGRATION_0064 = readFileSync(join(MIGRATIONS_DIR, "0064_schema_manifest.sql"), "utf8");
   let app: postgres.Sql<{}>;
 
   beforeAll(async () => {
-    await adminExec(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${RM_APP_PASSWORD}'`);
     const [{ db }] = (await sql`SELECT current_database() AS db`) as unknown as { db: string }[];
-    const url = new URL(adminUrl());
-    url.pathname = `/${db}`;
-    url.username = "rm_app";
-    url.password = RM_APP_PASSWORD;
-    app = postgres(url.toString(), { max: 1, onnotice: () => {} });
+    app = roleConnection("rm_app", db);
   });
 
   afterAll(async () => {

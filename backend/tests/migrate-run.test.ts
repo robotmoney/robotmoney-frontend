@@ -40,7 +40,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
-import { adminUrl, adminExec, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminUrl, adminExec, harnessConnection, ROLE_PASSWORD } from "./support/cluster.ts";
 // Every statement this file runs through `sql` is the owner's: it plants and clears
 // identity rows, manifests and drift, and hands the handle to the gates and the
 // run, which production hands the rm_owner connection too. The api pool is rm_app.
@@ -140,6 +140,7 @@ async function tablePrivilege(role: string, table: string, privilege: string, db
 
 /** Production shape for the one thing this harness's template carries that production's does not (see header). */
 async function revokeLoginDefaults(db: postgres.Sql<{}>): Promise<void> {
+  // cluster admin: ALTER DEFAULT PRIVILEGES FOR ROLE <login> is that login's own.
   // The default privileges belong to the provisioning login (the cluster admin),
   // so only that login may alter them: as the admin, on the handle's database.
   const [{ name }] = (await db`SELECT current_database() AS name`) as unknown as { name: string }[];
@@ -198,16 +199,17 @@ async function withClone(
   body: (dbs: { admin: postgres.Sql<{}>; owner: postgres.Sql<{}>; name: string }) => Promise<void>,
 ): Promise<void> {
   const name = `rm_migrate_run_${randomBytes(4).toString("hex")}`;
+  // cluster admin: CREATE/DROP DATABASE.
   const maintenance = connect("postgres");
   await maintenance.unsafe(`CREATE DATABASE ${name} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`);
-  const admin = connect(name);
-  await revokeLoginDefaults(admin);
+  const fixtures = harnessConnection(name);
+  await revokeLoginDefaults(fixtures);
   const cloneOwner = connect(name, OWNER);
   try {
-    await body({ admin, owner: cloneOwner, name });
+    await body({ fixtures, owner: cloneOwner, name });
   } finally {
     await cloneOwner.end({ timeout: 5 });
-    await admin.end({ timeout: 5 });
+    await fixtures.end({ timeout: 5 });
     await maintenance.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
     await maintenance.end({ timeout: 5 });
   }
@@ -238,6 +240,7 @@ const ownerLoginClause = (): string => (ownerCanLogin === false ? "NOLOGIN" : "L
 
 beforeAll(async () => {
   ownerCanLogin = (await ownerAttributes()).rolcanlogin;
+  // cluster admin: ALTER ROLE / CREATE ROLE / DROP ROLE are superuser-only (here and below).
   await adminExec(`ALTER ROLE rm_owner PASSWORD '${OWNER_PASSWORD}'`);
   fileDb = await currentDatabase();
   await revokeLoginDefaults(sql);
@@ -603,8 +606,8 @@ describe("runMigrate under the §2 target lock — no private lock, proof at eve
     // object (objsubid 1) — as a session lock of its own. It never contended
     // with smoke's session lock (objsubid 2) and blocked every other tool's
     // fence for the whole run. Observed from the catalog, mid-run.
-    await withClone(async ({ admin, owner: cloneOwner, name }) => {
-      await setIdentity("rehearsal", admin);
+    await withClone(async ({ fixtures, owner: cloneOwner, name }) => {
+      await setIdentity("rehearsal", fixtures);
       await migrate(cloneOwner, name);
       const dir = migrationsWith({ "0099_lock_probe.sql": `${ADDITIVE}CREATE TABLE rm_lock_probe (id integer);\n` });
       const seen: { objsubid: number; pid: number }[] = [];
@@ -612,7 +615,7 @@ describe("runMigrate under the §2 target lock — no private lock, proof at eve
         await runMigrate(cloneOwner, { ...options(), lock }, {
           migrationsDir: dir,
           afterCommit: async () => {
-            const rows = await admin<{ objsubid: number; pid: number }[]>`
+            const rows = await fixtures<{ objsubid: number; pid: number }[]>`
               SELECT objsubid::int AS objsubid, pid FROM pg_locks
                WHERE locktype = 'advisory' AND granted
                  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
@@ -833,14 +836,14 @@ describe("the migrate journal — written before each phase, closed on every exi
   });
 
   test("the lock connection killed between two commits: the next phase does not start, the journal names it, and a rerun recovers", async () => {
-    await withClone(async ({ admin, name }) => {
-      await setIdentity("rehearsal", admin);
+    await withClone(async ({ fixtures, name }) => {
+      await setIdentity("rehearsal", fixtures);
       const dir = mkdtempSync(join(tmpdir(), "rm-migrate-journal-"));
       plantedDirs.push(dir);
       // A published manifest first, so the planted pair below is an ordinary
       // pending run rather than a first-manifest baseline.
       await command(name, dir, journalIn(dir));
-      const manifestBefore = await readManifest(admin);
+      const manifestBefore = await readManifest(fixtures);
 
       const planted = migrationsWith({
         "0098_kill_probe_a.sql": `${ADDITIVE}CREATE TABLE rm_kill_probe_a (id integer);\n`,
@@ -854,9 +857,11 @@ describe("the migrate journal — written before each phase, closed on every exi
           if (file !== "0098_kill_probe_a.sql") return;
           // The command's OWN lock connection, found by the identity it
           // publishes, and only on this database.
-          const rows = await admin<{ killed: boolean }[]>`
-            SELECT pg_terminate_backend(pid) AS killed FROM pg_stat_activity
-             WHERE application_name LIKE 'rm-tl:migrate|%' AND datname = ${name}`;
+          // cluster admin: terminating another login's backend is superuser-only.
+          const rows = await adminExec(
+            `SELECT pg_terminate_backend(pid) AS killed FROM pg_stat_activity
+              WHERE application_name LIKE 'rm-tl:migrate|%' AND datname = '${name}'`,
+          );
           killed = rows.filter((row) => row.killed).length;
         },
       });
@@ -872,12 +877,12 @@ describe("the migrate journal — written before each phase, closed on every exi
         ["migrate: apply 0099_kill_probe_b.sql", "failed"],
       ]);
       expect(file.phases.at(-1)?.reason).toContain("The lock is not re-acquired");
-      expect(await ledgerNames(admin)).toContain("0098_kill_probe_a.sql");
-      expect(await ledgerNames(admin)).not.toContain("0099_kill_probe_b.sql");
+      expect(await ledgerNames(fixtures)).toContain("0098_kill_probe_a.sql");
+      expect(await ledgerNames(fixtures)).not.toContain("0099_kill_probe_b.sql");
       // §8.3's in-progress state: the ledger is ahead of the manifest, which
       // did not move.
-      expect(await readManifest(admin)).toEqual(manifestBefore);
-      expect((await detectManifestState(admin)).kind).toBe("in_progress");
+      expect(await readManifest(fixtures)).toEqual(manifestBefore);
+      expect((await detectManifestState(fixtures)).kind).toBe("in_progress");
 
       // The next run recovers: it verifies 0098, applies 0099 and publishes.
       const rerun = journalIn(dir);
@@ -885,7 +890,7 @@ describe("the migrate journal — written before each phase, closed on every exi
       expect(result.resumedAndVerified).toContain("0098_kill_probe_a.sql");
       expect(result.applied).toEqual(["0099_kill_probe_b.sql"]);
       expect(readJournal(rerun.path).outcome).toBe("succeeded");
-      expect((await detectManifestState(admin)).kind).toBe("published");
+      expect((await detectManifestState(fixtures)).kind).toBe("published");
     });
   });
 });
@@ -1276,11 +1281,11 @@ describe("runMigrate — per-migration fenced transactions, always reconcile, pu
 
 describe("runMigrate — every pending migration declares additive or breaking", () => {
   test("a pending header-less migration refuses, names itself, and leaves no ledger row and no new manifest", async () => {
-    await withClone(async ({ admin, owner: cloneOwner, name }) => {
-      await setIdentity("rehearsal", admin);
+    await withClone(async ({ fixtures, owner: cloneOwner, name }) => {
+      await setIdentity("rehearsal", fixtures);
       await migrate(cloneOwner, name);
-      const manifestBefore = await readManifest(admin);
-      const ledgerBefore = await ledgerNames(admin);
+      const manifestBefore = await readManifest(fixtures);
+      const ledgerBefore = await ledgerNames(fixtures);
 
       const dir = migrationsWith({
         "0098_headed_probe.sql": `${ADDITIVE}CREATE TABLE rm_headed_probe (id integer);\n`,
@@ -1289,17 +1294,17 @@ describe("runMigrate — every pending migration declares additive or breaking",
       await expect(migrate(cloneOwner, name, {}, { migrationsDir: dir })).rejects.toThrow("0099_headerless_probe.sql");
       await expect(migrate(cloneOwner, name, {}, { migrationsDir: dir })).rejects.toThrow(/compat/);
 
-      expect(await ledgerNames(admin)).toEqual(ledgerBefore);
-      expect(await readManifest(admin)).toEqual(manifestBefore);
-      const [tables] = await admin<{ n: number }[]>`
+      expect(await ledgerNames(fixtures)).toEqual(ledgerBefore);
+      expect(await readManifest(fixtures)).toEqual(manifestBefore);
+      const [tables] = await fixtures<{ n: number }[]>`
         SELECT COUNT(*)::int AS n FROM pg_class WHERE relname IN ('rm_headed_probe', 'rm_headerless_probe')`;
       expect(tables?.n).toBe(0);
     });
   });
 
   test("a header-less file at or below the 0063 baseline is applied as pre-compat and records NULL compat", async () => {
-    await withClone(async ({ admin, owner: cloneOwner, name }) => {
-      await setIdentity("rehearsal", admin);
+    await withClone(async ({ fixtures, owner: cloneOwner, name }) => {
+      await setIdentity("rehearsal", fixtures);
       // The first manifest is baselined against the real snapshot first; the
       // planted files then land on a published database, as any later release's
       // migrations do.
@@ -1310,7 +1315,7 @@ describe("runMigrate — every pending migration declares additive or breaking",
       });
       const result = await migrate(cloneOwner, name, {}, { migrationsDir: dir });
       expect(result.applied).toEqual(["0063_zz_precompat_probe.sql", "0099_declared_probe.sql"]);
-      const rows = await admin<{ name: string; compat: string | null; metadata_version: number | null }[]>`
+      const rows = await fixtures<{ name: string; compat: string | null; metadata_version: number | null }[]>`
         SELECT name, compat, metadata_version FROM schema_migrations
         WHERE name IN ('0063_zz_precompat_probe.sql', '0099_declared_probe.sql') ORDER BY name`;
       expect(rows.map((r) => ({ ...r }))).toEqual([
@@ -1327,8 +1332,8 @@ describe("runMigrate — every pending migration declares additive or breaking",
 
 describe("runMigrate — recovery from an interrupted run", () => {
   test("a REAL interruption between two commits leaves an in-progress database, and a rerun resumes without replaying", async () => {
-    await withClone(async ({ admin, owner: cloneOwner, name }) => {
-      await setIdentity("rehearsal", admin);
+    await withClone(async ({ fixtures, owner: cloneOwner, name }) => {
+      await setIdentity("rehearsal", fixtures);
       await migrate(cloneOwner, name);
       const dir = migrationsWith({
         "0098_interrupt_probe_a.sql": `${ADDITIVE}CREATE TABLE rm_interrupt_probe_a (id integer);\n`,
@@ -1345,49 +1350,50 @@ describe("runMigrate — recovery from an interrupted run", () => {
         }),
       ).rejects.toThrow(killed.message);
 
-      const state = await detectManifestState(admin);
+      const state = await detectManifestState(fixtures);
       expect(state.kind).toBe("in_progress");
       if (state.kind === "in_progress") expect(state.ahead).toEqual(["0098_interrupt_probe_a.sql"]);
-      const ledger = await ledgerNames(admin);
+      const ledger = await ledgerNames(fixtures);
       expect(ledger).toContain("0098_interrupt_probe_a.sql");
       expect(ledger).not.toContain("0099_interrupt_probe_b.sql");
-      const committed = await appliedAtByName(admin);
+      const committed = await appliedAtByName(fixtures);
 
       const rerun = await migrate(cloneOwner, name, {}, { migrationsDir: dir });
       expect(rerun.resumedAndVerified).toEqual(["0098_interrupt_probe_a.sql"]);
       expect(rerun.applied).toEqual(["0099_interrupt_probe_b.sql"]);
-      expect((await detectManifestState(admin)).kind).toBe("published");
+      expect((await detectManifestState(fixtures)).kind).toBe("published");
 
-      const after = await appliedAtByName(admin);
+      const after = await appliedAtByName(fixtures);
       for (const [n, at] of committed) expect({ n, at: after.get(n) }).toEqual({ n, at });
     });
   });
 
   test("a failure DURING GRANT RECONCILIATION publishes nothing, and a rerun finishes with every applied_at unchanged", async () => {
-    await withClone(async ({ admin, owner: cloneOwner, name }) => {
-      await setIdentity("rehearsal", admin);
+    await withClone(async ({ fixtures, owner: cloneOwner, name }) => {
+      await setIdentity("rehearsal", fixtures);
       await migrate(cloneOwner, name);
-      const manifestBefore = await readManifest(admin);
+      const manifestBefore = await readManifest(fixtures);
       const dir = migrationsWith({
         "0099_reconcile_probe.sql": `${ADDITIVE}CREATE TABLE rm_reconcile_probe (id integer);\n`,
       });
-      await admin.unsafe("CREATE TABLE rm_migrate_foreign_probe (id integer)");
-      await admin.unsafe("ALTER TABLE rm_migrate_foreign_probe OWNER TO rm_app");
+      // cluster admin: handing a table to rm_app (a role rm_owner is not a member of) is superuser-only.
+      await adminExec("CREATE TABLE rm_migrate_foreign_probe (id integer)", name);
+      await adminExec("ALTER TABLE rm_migrate_foreign_probe OWNER TO rm_app", name);
 
       await expect(migrate(cloneOwner, name, {}, { migrationsDir: dir })).rejects.toThrow("owned by a runtime role");
       // The migration committed in its own transaction; the manifest did not,
       // because it publishes in the reconciliation's.
-      expect(await ledgerNames(admin)).toContain("0099_reconcile_probe.sql");
-      expect(await readManifest(admin)).toEqual(manifestBefore);
-      const committed = await appliedAtByName(admin);
+      expect(await ledgerNames(fixtures)).toContain("0099_reconcile_probe.sql");
+      expect(await readManifest(fixtures)).toEqual(manifestBefore);
+      const committed = await appliedAtByName(fixtures);
 
-      await admin.unsafe("DROP TABLE rm_migrate_foreign_probe");
+      await adminExec("DROP TABLE rm_migrate_foreign_probe", name);
       const rerun = await migrate(cloneOwner, name, {}, { migrationsDir: dir });
       expect(rerun.applied).toEqual([]);
       expect(rerun.resumedAndVerified).toContain("0099_reconcile_probe.sql");
-      expect(await readManifest(admin)).toEqual(rerun.manifest);
+      expect(await readManifest(fixtures)).toEqual(rerun.manifest);
 
-      const after = await appliedAtByName(admin);
+      const after = await appliedAtByName(fixtures);
       expect(after.size).toBe(committed.size);
       for (const [n, at] of committed) expect({ n, at: after.get(n) }).toEqual({ n, at });
     });
@@ -1429,9 +1435,9 @@ describe("runMigrate — recovery from an interrupted run", () => {
   });
 
   test("refuses when the ledger names a migration this checkout does not contain", async () => {
-    await withClone(async ({ admin, owner: cloneOwner, name }) => {
-      await setIdentity("rehearsal", admin);
-      await admin`INSERT INTO schema_migrations (name) VALUES ('0099_from_a_newer_release.sql')`;
+    await withClone(async ({ fixtures, owner: cloneOwner, name }) => {
+      await setIdentity("rehearsal", fixtures);
+      await fixtures`INSERT INTO schema_migrations (name) VALUES ('0099_from_a_newer_release.sql')`;
       await expect(migrate(cloneOwner, name)).rejects.toThrow("0099_from_a_newer_release.sql");
     });
   });
@@ -1458,8 +1464,9 @@ describe("snapshot bootstrap, then runMigrate", () => {
     const name = `rm_migrate_snapshot_${randomBytes(4).toString("hex")}`;
     const maintenance = connect("postgres");
     await maintenance.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
-    const admin = connect(name);
-    await admin.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+    // cluster admin: pgcrypto is the provider's to install (rm_owner may not).
+    await adminExec("CREATE EXTENSION IF NOT EXISTS pgcrypto", name);
+    const fixtures = harnessConnection(name);
     const snapshot = await loadSnapshot();
     try {
       const bootstrapper = connect(name, OWNER);
@@ -1481,10 +1488,10 @@ describe("snapshot bootstrap, then runMigrate", () => {
       } finally {
         await snapshotOwner.end({ timeout: 5 });
       }
-      expect((await detectManifestState(admin)).kind).toBe("published");
+      expect((await detectManifestState(fixtures)).kind).toBe("published");
       expect((await ownerAttributes()).rolcreaterole).toBe(false);
     } finally {
-      await admin.end({ timeout: 5 });
+      await fixtures.end({ timeout: 5 });
       await maintenance.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
       await maintenance.end({ timeout: 5 });
     }
@@ -1500,8 +1507,8 @@ describe("MigrateRunSeams — migrationsDir with snapshotDir publishes M's manif
   test("a fixture snapshot embodying a synthesized additive migration is the one the run loads and publishes", async () => {
     const { cpSync } = await import("node:fs");
     const { serializeDeclaration } = await import("../src/db/schema-manifest.ts");
-    await withClone(async ({ admin, owner: cloneOwner, name }) => {
-      await setIdentity("rehearsal", admin);
+    await withClone(async ({ fixtures, owner: cloneOwner, name }) => {
+      await setIdentity("rehearsal", fixtures);
       await migrate(cloneOwner, name);
 
       const synthesized = "0099_synthesized_additive.sql";
@@ -1533,8 +1540,8 @@ describe("MigrateRunSeams — migrationsDir with snapshotDir publishes M's manif
       expect(result.applied).toEqual([synthesized]);
       expect(result.manifest.filenames.at(-1)).toBe(synthesized);
       expect(result.manifest.contentHash).toBe(metadata.contentHash);
-      expect(await readManifest(admin)).toEqual(result.manifest);
-      expect((await detectManifestState(admin)).kind).toBe("published");
+      expect(await readManifest(fixtures)).toEqual(result.manifest);
+      expect((await detectManifestState(fixtures)).kind).toBe("published");
     });
   });
 });
