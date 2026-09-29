@@ -20,11 +20,12 @@
 import { beforeAll, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { sql } from "../src/db/client.ts";
+import { setDatabase, sql } from "../src/db/client.ts";
 import { migrate } from "../src/db/migrate.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { seedLiveRoster } from "../src/swarm/roster-seed.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { harnessUrl } from "./support/cluster.ts";
 import { activeMember } from "./support/epoch-fixtures.ts";
 
 useCleanDatabase(import.meta.file);
@@ -163,7 +164,16 @@ test("it applies once per database: the migrate step never replays a recorded 00
   }[];
   expect(ledger!.n).toBe(1);
 
-  await migrate();
+  // migrate() creates and alters as the owner, so it is pointed at the owner
+  // login through its own MIGRATE_DATABASE_URL seam, then the api pool goes back.
+  const runtimeUrl = process.env.DATABASE_URL!;
+  process.env.MIGRATE_DATABASE_URL = harnessUrl(new URL(runtimeUrl).pathname.replace(/^\//, ""));
+  try {
+    await migrate();
+  } finally {
+    delete process.env.MIGRATE_DATABASE_URL;
+    await setDatabase(runtimeUrl);
+  }
 
   expect(await operatorOf(late.id)).toBe("robotmoney");
   expect(await cleared()).toEqual(recordedBefore);

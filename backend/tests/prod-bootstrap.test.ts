@@ -19,15 +19,27 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileS
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sql } from "../src/db/client.ts";
+import { setDatabase, sql } from "../src/db/client.ts";
 import { runProdBootstrap, type StepReport } from "../scripts/prod-bootstrap.ts";
 import { loadV0Archive } from "../src/swarm/v0-archive.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { harnessUrl } from "./support/cluster.ts";
 
 // Own database per TEST, cloned from the migrated template: these tests each
 // start from an empty table, which used to mean wiping one the previous test
 // filled. See support/clean-db.ts.
 useCleanDatabasePerTest(import.meta.file);
+
+// The code under test IS the operator's bootstrap: seed(), the v0 import and the
+// provenance repair write tables only the schema owner writes (job_schedules,
+// wallet_balance_samples, ...) through the module `sql`. A test cannot drive it
+// as rm_app, so after each per-test clone this file moves the api pool onto the
+// owner login (rm_test_owner, acting as rm_owner) for that database.
+// clean-db's afterAll hands the shared database back on the runtime login.
+beforeEach(async () => {
+  const database = new URL(process.env.DATABASE_URL!).pathname.replace(/^\//, "");
+  await setDatabase(harnessUrl(database));
+});
 
 // HANDLES, not ids (issue #685). Both writers this file drives — the roster
 // seed and the v0 archive importer — generate `crypto.randomUUID()` ids now, so

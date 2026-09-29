@@ -41,7 +41,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
 import { adminUrl, adminExec, ROLE_PASSWORD } from "./support/cluster.ts";
-import { sql } from "../src/db/client.ts";
+// Every statement this file runs through `sql` is the owner's: it plants and clears
+// identity rows, manifests and drift, and hands the handle to the gates and the
+// run, which production hands the rm_owner connection too. The api pool is rm_app.
+import { fixtureDb as sql } from "./support/fixture-db.ts";
 import {
   detectManifestState,
   hashManifest,
