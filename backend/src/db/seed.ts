@@ -154,6 +154,12 @@ const insertDemoSubject = registerQuery({
   site: "src/db/seed:seedDemoSubjects.insert",
   purpose: "Insert the rehearsal's active demo subjects on a blank database, scheduling columns left at their column defaults.",
   callers: SMOKE_CALLERS,
+  probe: {
+    statement: `INSERT INTO swarm_subjects (id, status, name, thesis_blurb, recommendation_type)
+      VALUES ($1, 'active', $2, $3, 'position_actions')
+      ON CONFLICT DO NOTHING`,
+    params: ["probe-subject", "Probe Subject", "probe thesis"],
+  },
 });
 
 /**
@@ -176,7 +182,7 @@ async function seedDemoSubjects(db: RegistryDb): Promise<void> {
       INSERT INTO swarm_subjects (id, status, name, thesis_blurb, recommendation_type)
       VALUES (${subject.id}, 'active', ${subject.name},
               ${`${subject.name}: rehearsal subject seeded by \`bun smoke --seed\`.`}, 'position_actions')
-      ON CONFLICT (id) DO NOTHING
+      ON CONFLICT DO NOTHING
     `;
   }
   console.log(`seeded ${SEEDED_DEMO_SUBJECTS.length} active demo subject(s)`);
