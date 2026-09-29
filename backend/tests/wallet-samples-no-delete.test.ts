@@ -89,7 +89,7 @@ import { backfillWalletDay, planWalletBackfill, type WalletBackfillDeps } from "
 import { resolveWalletSnapshotManifest } from "../src/ops/wallet-snapshot-manifest.ts";
 import { sampleWalletBalances, sampleWalletSleeves } from "../src/worker/handlers/wallet.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { adminExec, adminUrl } from "./support/cluster.ts";
+import { roleUrl } from "./support/cluster.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
 
 useCleanDatabase(import.meta.file);
@@ -375,7 +375,6 @@ async function staleDegradedHoldings(): Promise<Record<string, unknown>> {
   }
 }
 
-const WORKER_PASSWORD = "rm_worker_ci_password";
 const EVIDENCE_TABLES = ["wallet_balance_sample_evidence", "wallet_sleeve_sample_evidence"] as const;
 /** rm_worker's INSERT on each evidence table as the template shipped it, read
  *  before this file grants anything. */
@@ -383,9 +382,6 @@ const shippedEvidenceInsert: Record<string, boolean> = {};
 let worker: postgres.Sql<{}>;
 
 beforeAll(async () => {
-  // The same credential analytics-worker-role.test.ts provisions: roles are
-  // cluster-wide, so two files must not fight over the password.
-  await adminExec(`ALTER ROLE rm_worker WITH LOGIN PASSWORD '${WORKER_PASSWORD}'`);
   // D55 (6)'s end state on this file's own copy: rm_worker holds no DELETE or
   // TRUNCATE on either sample table.
   await fixtureDb`REVOKE DELETE, TRUNCATE ON wallet_balance_samples, wallet_sleeve_samples FROM rm_worker`;
@@ -396,11 +392,7 @@ beforeAll(async () => {
   }
   await fixtureDb`GRANT INSERT ON wallet_balance_sample_evidence, wallet_sleeve_sample_evidence TO rm_worker`;
   const [{ db }] = await sql<{ db: string }[]>`SELECT current_database() AS db`;
-  const url = new URL(adminUrl());
-  url.username = "rm_worker";
-  url.password = WORKER_PASSWORD;
-  url.pathname = `/${db}`;
-  worker = postgres(url.toString(), { max: 2, onnotice: () => {} });
+  worker = postgres(roleUrl("rm_worker", db), { max: 2, onnotice: () => {} });
 });
 
 beforeEach(() => {

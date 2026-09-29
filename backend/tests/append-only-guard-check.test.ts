@@ -34,7 +34,7 @@ import {
 } from "../src/db/append-only-guard.ts";
 const MEMBER_KEYS_MIGRATION = "0050_swarm_member_keys_append_only.sql";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { adminExec, adminUrl } from "./support/cluster.ts";
+import { roleUrl } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -415,15 +415,12 @@ describe("the runtime check under the PRODUCTION role (rm_app), which holds no D
   // "unavailable" — verifying nothing at all, on every boot — ever since. It
   // was invisible because every test in this file ran as the owner. These tests
   // run as the deployed role instead.
-  const APP_PASSWORD = "rm_app_ci_password";
   let app: postgres.Sql<{}>;
 
   beforeAll(async () => {
-    await adminExec(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${APP_PASSWORD}'`);
-    const url = new URL(adminUrl());
-    url.username = "rm_app";
-    url.password = APP_PASSWORD;
-    app = postgres(url.toString(), { max: 2, onnotice: () => {} });
+    // rm_app's login carries the suite's shared role password (tests/preload.ts).
+    const db = new URL(process.env.DATABASE_URL!).pathname.replace(/^\//, "");
+    app = postgres(roleUrl("rm_app", db), { max: 2, onnotice: () => {} });
   });
 
   afterAll(async () => {
