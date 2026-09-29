@@ -381,7 +381,7 @@ function assertValidObject(declaration: QueryDeclaration): void {
  *  operator CLI under `scripts/`, which is an entry module in its own right. */
 // A segment may carry a dot only before a digit (`0.5.0-to-0.5.1`, a release's
 // upgrade directory), so a file extension (`.ts`) and `..` are still refused.
-const MODULE_SEGMENT = "(?:[a-z0-9_-]|\\.(?=[0-9]))+";
+const MODULE_SEGMENT = "[a-z0-9_-](?:[a-z0-9_-]|\\.(?=[0-9]))*";
 const MODULE_ID = new RegExp(`^(?:src|scripts)/${MODULE_SEGMENT}(?:/${MODULE_SEGMENT})*$`);
 
 function assertValidCallers(declaration: { readonly site: string; readonly callers: readonly string[] }): void {
