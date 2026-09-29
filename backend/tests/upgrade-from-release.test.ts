@@ -64,7 +64,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
-import { adminUrl } from "./support/cluster.ts";
+import { adminConnection, adminUrl, harnessUrl } from "./support/cluster.ts";
 import {
   checkSchemaCompatibility,
   checkSchemaIntegrity,
@@ -95,13 +95,13 @@ import { describeCatalogDiff, diffCatalogs, normalizedCatalog } from "./support/
 
 const sha256 = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex");
 
-const LOGIN = new URL(adminUrl()).username;
 const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 const READONLY_PASSWORD = randomBytes(12).toString("hex");
 
 function urlFor(database: string, role?: { name: string; password: string }): string {
-  const url = new URL(adminUrl());
-  url.pathname = `/${database}`;
+  // The harness login (rm_test_owner: not a superuser, acts as rm_owner) stands
+  // in for the provider's admin; a named role logs in as itself.
+  const url = new URL(harnessUrl(database));
   if (role) {
     url.username = role.name;
     url.password = encodeURIComponent(role.password);
@@ -130,7 +130,6 @@ const MIGRATE_OPTIONS: MigrateGateOptions & { nonInteractive: boolean } = {
  * the reason production's would.
  */
 async function migrateAsOwner(db: postgres.Sql<{}>, database: string, options = MIGRATE_OPTIONS): ReturnType<typeof runMigrate> {
-  await revokeLoginDefaults(db, LOGIN);
   await db.unsafe("SET ROLE rm_owner");
   try {
     return await withTargetLock(urlFor(database), (lock) => runMigrate(db, { ...options, lock }));
@@ -315,7 +314,8 @@ const created: string[] = [];
 const homes: string[] = [];
 
 beforeAll(async () => {
-  admin = connect("postgres");
+  // cluster admin: role attributes and passwords, CREATE/DROP DATABASE are superuser-only.
+  admin = adminConnection("postgres");
   savedRoles = await saveRoles(admin);
 
   // Blank + all migrations, given the real migrate run — the target every
@@ -323,6 +323,15 @@ beforeAll(async () => {
   // the snapshot.
   await admin.unsafe(`CREATE DATABASE ${REFERENCE_DB} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`);
   created.push(REFERENCE_DB);
+  // cluster admin: the migrated template was replayed by the cluster's superuser
+  // (tests/preload.ts), so it carries default ACLs FOR that login, which only a
+  // superuser may alter. Removing them is the production shape (release-fixture.ts).
+  const templateBuilder = adminConnection(REFERENCE_DB);
+  try {
+    await revokeLoginDefaults(templateBuilder, new URL(adminUrl()).username);
+  } finally {
+    await templateBuilder.end({ timeout: 5 });
+  }
   reference = connect(REFERENCE_DB);
   await enroll(reference, "rehearsal");
   await migrateAsOwner(reference, REFERENCE_DB);
@@ -351,18 +360,26 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
 
     beforeAll(async () => {
       release = loadBaseline(tag);
-      await admin.unsafe(`CREATE DATABASE ${name}`);
+      await admin.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
       created.push(name);
-      db = connect(name);
+      // cluster admin: the release's own 0053 runs ALTER ROLE, which only a
+      // superuser may do, so the release's history is replayed (and its data
+      // loaded) as the provider's bootstrap login, as production's doadmin does.
+      const runner = adminConnection(name);
       try {
-        await applyAsReleaseRunner(db, releaseSteps(release));
+        try {
+          await applyAsReleaseRunner(runner, releaseSteps(release));
+        } finally {
+          // The release's 0053 re-attributed the cluster's roles; put them back
+          // before anything else in this process can observe them.
+          await restoreLogins(admin, savedRoles);
+        }
+        await runner.unsafe(releaseData(release));
+        await revokeLoginDefaults(runner, new URL(adminUrl()).username);
       } finally {
-        // The release's 0053 re-attributed the cluster's roles; put them back
-        // before anything else in this process can observe them.
-        await restoreLogins(admin, savedRoles);
+        await runner.end({ timeout: 5 });
       }
-      await db.unsafe(releaseData(release));
-      await revokeLoginDefaults(db, LOGIN);
+      db = connect(name);
       predatesIdentity = Math.max(...release.migrations.map((m) => migrationNumber(m.file))) < migrationNumber("0063_deployment_identity.sql");
 
       // §9.1 step 1 through the provisioning login, and the host's rm_readonly
