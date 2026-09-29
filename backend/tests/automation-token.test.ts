@@ -47,9 +47,10 @@ import {
   AUTOMATION_RIGHTS,
   HOLDER_RIGHTS,
   lookupAutomationToken,
-  provisionAutomationToken,
+  provisionAutomationToken as provisionAsGiven,
 } from "../src/db/automation-tokens.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { activeSubject } from "./support/epoch-fixtures.ts";
 import {
   bootApi,
@@ -63,6 +64,11 @@ import {
 } from "./support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
+
+// Issuing a token writes a table only the owner writes, so provisioning here is
+// setup: it goes through the owner handle. Lookups and routes stay on rm_app.
+const provisionAutomationToken: typeof provisionAsGiven = (instance, rights, options = {}) =>
+  provisionAsGiven(instance, rights, { db: fixtureDb, ...options });
 
 // The scheduler's three rights (scheduler spec §7). Every case below that
 // predates migration 0078 provisions the default holder, `system-scheduler`,
@@ -266,7 +272,7 @@ test("a holder cannot be provisioned another holder's right — the module refus
     ["operator", ["lifecycle_transitions"]],
     ["someone-else", ["admin"]],
   ] as const) {
-    const error = await sql`
+    const error = await fixtureDb`
       INSERT INTO automation_tokens (instance, holder, token_hash, rights)
       VALUES ('rm_cross_rights', ${holder}, ${hash}, ${[...rights]})`.catch((e: { code?: string }) => e);
     expect({ holder, code: (error as { code?: string }).code }).toEqual({ holder, code: "23514" });
@@ -276,7 +282,7 @@ test("a holder cannot be provisioned another holder's right — the module refus
 
 test("a row written with no holder is the scheduler's — the default keeps pre-0078 inserts meaning what they meant", async () => {
   const hash = "b".repeat(64);
-  await sql`
+  await fixtureDb`
     INSERT INTO automation_tokens (instance, token_hash, rights)
     VALUES ('rm_legacy_insert', ${hash}, ${["read_subjects"]})`;
   const [row] = await sql<{ holder: string }[]>`
