@@ -457,7 +457,7 @@ const resolveTakes = registerQuery({
   probe: RESOLVE_MEMBER_PROBE,
 });
 async function resolveMemberRow(ref: string) {
-  return (await on(sql, resolveMembers, resolveTakes)`
+  return (await on(sql, resolveMembers, resolveTakes)<any>`
     SELECT m.*, t.last_take_at
       FROM swarm_members m
       LEFT JOIN LATERAL (
@@ -2124,6 +2124,122 @@ export async function pendingTakesFor(memberId: string): Promise<PendingTake[]> 
 // holds private keys.
 export interface ApplyInput { name: string; lens?: string; publicKey: string; contact: string; signature: string }
 
+const APPLY_EXISTING_PROBE = {
+  statement: `SELECT k.member_id, m.status
+      FROM swarm_member_keys k
+      JOIN swarm_members m ON m.id = k.member_id
+      WHERE k.public_key = $1
+      ORDER BY k.created_at DESC LIMIT 1
+      FOR UPDATE OF m`,
+  params: ["probe"],
+} as const;
+const applyExistingKeys = registerQuery({
+  role: "rm_app",
+  object: "swarm_member_keys",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:applyMember.existing.keys",
+  purpose: "Find a pending applicant by the public key it applied with, to refresh rather than fork its identity.",
+  callers: [ONBOARDING_ROUTE],
+  probe: APPLY_EXISTING_PROBE,
+});
+const applyExistingMembers = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["SELECT", "UPDATE"],
+  site: "src/swarm/domain:applyMember.existing.members",
+  purpose: "Lock the applicant's member row while a re-apply is decided.",
+  callers: [ONBOARDING_ROUTE],
+  probe: APPLY_EXISTING_PROBE,
+});
+const applyRefreshMember = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/domain:applyMember.refresh.member",
+  purpose: "Refresh a re-applying applicant's name, lens and contact on its existing row.",
+  callers: [ONBOARDING_ROUTE],
+  probe: {
+    statement: `UPDATE swarm_members
+        SET name = $1, lens = $2, contact_email = $3, applied_at = now()
+        WHERE id = $4`,
+    params: ["probe", null, "probe", "probe"],
+  },
+});
+const applyRefreshApplication = registerQuery({
+  role: "rm_app",
+  object: "swarm_applications",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/domain:applyMember.refresh.application",
+  purpose: "Re-open a re-applying applicant's application as pending with the new payload.",
+  callers: [ONBOARDING_ROUTE],
+  probe: {
+    statement: `UPDATE swarm_applications
+        SET payload = $1::jsonb, status = 'pending', reviewed_at = NULL
+        WHERE member_id = $2`,
+    params: ["{}", "probe"],
+  },
+});
+const applyRefreshAudit = registerQuery({
+  role: "rm_app",
+  object: "audit_log",
+  privileges: ["INSERT"],
+  site: "src/swarm/domain:applyMember.refresh.audit",
+  purpose: "Record a refreshed application in the audit log.",
+  callers: [ONBOARDING_ROUTE],
+  probe: {
+    statement: "INSERT INTO audit_log (actor, action, scope) SELECT 'public:apply', 'apply_refresh', $1::jsonb WHERE false",
+    params: ["{}"],
+  },
+});
+const applyInsertMember = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["INSERT"],
+  site: "src/swarm/domain:applyMember.insert.member",
+  purpose: "Record a new applicant as an applied member.",
+  callers: [ONBOARDING_ROUTE],
+  probe: {
+    statement: `INSERT INTO swarm_members (id, status, name, lens, contact_email, applied_at)
+             SELECT $1, 'applied', $2, $3, $4, now() WHERE false`,
+    params: ["probe", "probe", null, "probe"],
+  },
+});
+const applyInsertKey = registerQuery({
+  role: "rm_app",
+  object: "swarm_member_keys",
+  privileges: ["INSERT"],
+  site: "src/swarm/domain:applyMember.insert.key",
+  purpose: "Register the applicant's public key, inactive: no token, cannot submit.",
+  callers: [ONBOARDING_ROUTE],
+  probe: {
+    statement: "INSERT INTO swarm_member_keys (member_id, public_key, active) SELECT $1, $2, false WHERE false",
+    params: ["probe", "probe"],
+  },
+});
+const applyInsertApplication = registerQuery({
+  role: "rm_app",
+  object: "swarm_applications",
+  privileges: ["INSERT"],
+  site: "src/swarm/domain:applyMember.insert.application",
+  purpose: "Record the signed application payload as pending.",
+  callers: [ONBOARDING_ROUTE],
+  probe: {
+    statement: "INSERT INTO swarm_applications (member_id, payload, status) SELECT $1, $2::jsonb, 'pending' WHERE false",
+    params: ["probe", "{}"],
+  },
+});
+const applyInsertAudit = registerQuery({
+  role: "rm_app",
+  object: "audit_log",
+  privileges: ["INSERT"],
+  site: "src/swarm/domain:applyMember.insert.audit",
+  purpose: "Record a new application in the audit log.",
+  callers: [ONBOARDING_ROUTE],
+  probe: {
+    statement: "INSERT INTO audit_log (actor, action, scope) SELECT 'public:apply', 'apply', $1::jsonb WHERE false",
+    params: ["{}"],
+  },
+});
 export async function applyMember(input: ApplyInput) {
   // Verify BEFORE opening a transaction: setup-gated apply (R6) means an
   // unsigned/badly-signed submission never touches storage, not even a
@@ -2158,7 +2274,7 @@ export async function applyMember(input: ApplyInput) {
     //   - an ACTIVE (or otherwise already-admitted) member's key can NEVER be
     //     overwritten by an unauthenticated apply — that stays an admin
     //     operation (key rotation), so this returns 409.
-    const existingKey = (await tx<{ member_id: string; status: string }[]>`
+    const existingKey = (await on(tx, applyExistingKeys, applyExistingMembers)<{ member_id: string; status: string }>`
       SELECT k.member_id, m.status
       FROM swarm_member_keys k
       JOIN swarm_members m ON m.id = k.member_id
@@ -2172,15 +2288,15 @@ export async function applyMember(input: ApplyInput) {
 
     if (existingKey) {
       const memberId = existingKey.member_id;
-      await tx`
+      await on(tx, applyRefreshMember)`
         UPDATE swarm_members
         SET name = ${input.name}, lens = ${input.lens ?? null}, contact_email = ${input.contact}, applied_at = now()
         WHERE id = ${memberId}`;
-      await tx`
+      await on(tx, applyRefreshApplication)`
         UPDATE swarm_applications
         SET payload = ${tx.json(input as any)}, status = 'pending', reviewed_at = NULL
         WHERE member_id = ${memberId}`;
-      await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('public:apply', 'apply_refresh', ${tx.json({ memberId })})`;
+      await on(tx, applyRefreshAudit)`INSERT INTO audit_log (actor, action, scope) VALUES ('public:apply', 'apply_refresh', ${tx.json({ memberId })})`;
       // NO RECEIPT EMAIL. A re-apply used to queue a second copy of the
       // apply-time receipt so the operator could recover a member id they had
       // lost from their terminal; swarm email is removed (issue #1026 W5,
@@ -2190,12 +2306,12 @@ export async function applyMember(input: ApplyInput) {
     }
 
     const memberId = crypto.randomUUID();
-    await tx`INSERT INTO swarm_members (id, status, name, lens, contact_email, applied_at)
+    await on(tx, applyInsertMember)`INSERT INTO swarm_members (id, status, name, lens, contact_email, applied_at)
              VALUES (${memberId}, 'applied', ${input.name}, ${input.lens ?? null}, ${input.contact}, now())`;
-    await tx`INSERT INTO swarm_member_keys (member_id, public_key, active) VALUES (${memberId}, ${input.publicKey}, false)`;
-    await tx`INSERT INTO swarm_applications (member_id, payload, status) VALUES (${memberId}, ${tx.json(input as any)}, 'pending')`;
+    await on(tx, applyInsertKey)`INSERT INTO swarm_member_keys (member_id, public_key, active) VALUES (${memberId}, ${input.publicKey}, false)`;
+    await on(tx, applyInsertApplication)`INSERT INTO swarm_applications (member_id, payload, status) VALUES (${memberId}, ${tx.json(input as any)}, 'pending')`;
     // actor is the request source, NOT the self-asserted body identity.
-    await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('public:apply', 'apply', ${tx.json({ memberId })})`;
+    await on(tx, applyInsertAudit)`INSERT INTO audit_log (actor, action, scope) VALUES ('public:apply', 'apply', ${tx.json({ memberId })})`;
     return { ok: true, status: 201, memberId, memberStatus: "applied" as const };
   });
 }
@@ -2210,12 +2326,34 @@ export interface ApplicationStatusResponse {
   claimed: boolean;
 }
 
+const statusMember = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:getApplicationStatus.member",
+  purpose: "Read the applicant's member status, for the public status route.",
+  callers: [ONBOARDING_ROUTE],
+  probe: { statement: "SELECT status FROM swarm_members WHERE id = $1", params: ["probe"] },
+});
+const statusClaimed = registerQuery({
+  role: "rm_app",
+  object: "swarm_member_keys",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:getApplicationStatus.claimed",
+  purpose: "Tell whether an active key already holds a token, i.e. the bearer was claimed.",
+  callers: [ONBOARDING_ROUTE],
+  probe: {
+    statement: `SELECT 1 FROM swarm_member_keys
+    WHERE member_id = $1 AND active = true AND token_hash IS NOT NULL LIMIT 1`,
+    params: ["probe"],
+  },
+});
 export async function getApplicationStatus(memberId: string): Promise<ApplicationStatusResponse> {
-  const row = (await sql<{ status: string }[]>`
+  const row = (await on(sql, statusMember)<{ status: string }>`
     SELECT status FROM swarm_members WHERE id = ${memberId}`)[0];
   const raw = row?.status ?? null; // 'applied' | 'active' | 'inactive' | null
   const active = raw === "active";
-  const claimed = active && (await sql`
+  const claimed = active && (await on(sql, statusClaimed)`
     SELECT 1 FROM swarm_member_keys
     WHERE member_id = ${memberId} AND active = true AND token_hash IS NOT NULL LIMIT 1`).length > 0;
   const status = raw === "applied" ? "pending"
@@ -2236,19 +2374,64 @@ export interface ApplicationStatus {
   claimedAt: string | null;
 }
 
+const applyStatusMember = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:getApplyStatus.member",
+  purpose: "Read the member's status, role and application instant.",
+  callers: [ONBOARDING_ROUTE],
+  probe: { statement: "SELECT status, role, applied_at FROM swarm_members WHERE id = $1", params: ["probe"] },
+});
+const applyStatusApplication = registerQuery({
+  role: "rm_app",
+  object: "swarm_applications",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:getApplyStatus.application",
+  purpose: "Read the member's newest application status.",
+  callers: [ONBOARDING_ROUTE],
+  probe: {
+    statement: `SELECT status, reviewed_at FROM swarm_applications
+    WHERE member_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    params: ["probe"],
+  },
+});
+const applyStatusKey = registerQuery({
+  role: "rm_app",
+  object: "swarm_member_keys",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:getApplyStatus.key",
+  purpose: "Read whether the member's newest active key holds a token.",
+  callers: [ONBOARDING_ROUTE],
+  probe: {
+    statement: `SELECT token_hash FROM swarm_member_keys
+    WHERE member_id = $1 AND active = true
+    ORDER BY created_at DESC LIMIT 1`,
+    params: ["probe"],
+  },
+});
+const applyStatusChallenge = registerQuery({
+  role: "rm_app",
+  object: "swarm_claim_challenges",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:getApplyStatus.challenge",
+  purpose: "Read when the member's claim challenge was consumed.",
+  callers: [ONBOARDING_ROUTE],
+  probe: { statement: "SELECT consumed_at FROM swarm_claim_challenges WHERE member_id = $1", params: ["probe"] },
+});
 export async function getApplyStatus(memberId: string): Promise<ApplicationStatus | null> {
-  const member = (await sql<{ status: string; role: "member" | "judge"; applied_at: Date | null }[]>`
+  const member = (await on(sql, applyStatusMember)<{ status: string; role: "member" | "judge"; applied_at: Date | null }>`
     SELECT status, role, applied_at FROM swarm_members WHERE id = ${memberId}`)[0];
   if (!member) return null;
 
-  const application = (await sql<{ status: string; reviewed_at: Date | null }[]>`
+  const application = (await on(sql, applyStatusApplication)<{ status: string; reviewed_at: Date | null }>`
     SELECT status, reviewed_at FROM swarm_applications
     WHERE member_id = ${memberId} ORDER BY created_at DESC LIMIT 1`)[0];
-  const key = (await sql<{ token_hash: string | null }[]>`
+  const key = (await on(sql, applyStatusKey)<{ token_hash: string | null }>`
     SELECT token_hash FROM swarm_member_keys
     WHERE member_id = ${memberId} AND active = true
     ORDER BY created_at DESC LIMIT 1`)[0];
-  const challenge = (await sql<{ consumed_at: Date | null }[]>`
+  const challenge = (await on(sql, applyStatusChallenge)<{ consumed_at: Date | null }>`
     SELECT consumed_at FROM swarm_claim_challenges WHERE member_id = ${memberId}`)[0];
 
   let state: ApplicationState;
@@ -2293,23 +2476,95 @@ export async function activateMember(memberId: string, role: "member" | "judge" 
   }
 }
 
+const activateLockMember = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["SELECT", "UPDATE"],
+  site: "src/swarm/domain:activateMember.lockMember",
+  purpose: "Lock the applicant's member row for the admission, reading the name and handle it carries.",
+  callers: [ADMIN_ROUTE, ONBOARDING_ROUTE],
+  probe: { statement: "SELECT id, name, handle FROM swarm_members WHERE id = $1 FOR UPDATE", params: ["probe"] },
+});
+const activateLockKey = registerQuery({
+  role: "rm_app",
+  object: "swarm_member_keys",
+  privileges: ["SELECT", "UPDATE"],
+  site: "src/swarm/domain:activateMember.lockKey",
+  purpose: "Lock the applicant's newest pending (inactive) key.",
+  callers: [ADMIN_ROUTE, ONBOARDING_ROUTE],
+  probe: {
+    statement: "SELECT id FROM swarm_member_keys WHERE member_id = $1 AND active = false ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
+    params: ["probe"],
+  },
+});
+const activateKey = registerQuery({
+  role: "rm_app",
+  object: "swarm_member_keys",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/domain:activateMember.key",
+  purpose: "Activate the pending key with no token: the member proves possession before a bearer is minted.",
+  callers: [ADMIN_ROUTE, ONBOARDING_ROUTE],
+  probe: {
+    statement: `UPDATE swarm_member_keys SET active = true, token_hash = NULL
+      WHERE id = $1 AND active = false RETURNING id`,
+    params: ["1"],
+  },
+});
+const activateMemberRow = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/domain:activateMember.member",
+  purpose: "Flip the member to active with its role and handle.",
+  callers: [ADMIN_ROUTE, ONBOARDING_ROUTE],
+  probe: {
+    statement: `UPDATE swarm_members
+      SET status = 'active', role = $1, handle = $2, activated_at = now(), version = version + 1, updated_at = now()
+      WHERE id = $3`,
+    params: ["member", "probe", "probe"],
+  },
+});
+const activateApplication = registerQuery({
+  role: "rm_app",
+  object: "swarm_applications",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/domain:activateMember.application",
+  purpose: "Mark the member's pending application approved.",
+  callers: [ADMIN_ROUTE, ONBOARDING_ROUTE],
+  probe: {
+    statement: "UPDATE swarm_applications SET status = 'approved', reviewed_at = now() WHERE member_id = $1 AND status = 'pending'",
+    params: ["probe"],
+  },
+});
+const activateAudit = registerQuery({
+  role: "rm_app",
+  object: "audit_log",
+  privileges: ["INSERT"],
+  site: "src/swarm/domain:activateMember.audit",
+  purpose: "Record an admission in the audit log.",
+  callers: [ADMIN_ROUTE, ONBOARDING_ROUTE],
+  probe: {
+    statement: "INSERT INTO audit_log (actor, action, scope) SELECT 'admin', 'activate_member', $1::jsonb WHERE false",
+    params: ["{}"],
+  },
+});
 async function activateMemberTx(memberId: string, role: "member" | "judge") {
   return await sql.begin(async (tx) => {
     // `name` and `handle` ride along on the row we are already locking (issue
     // #562): the handle derivation below needs to know whether anybody has
     // already set one, and this row is already held.
-    const existing = (await tx`
+    const existing = (await on(tx, activateLockMember)`
       SELECT id, name, handle FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0] as
       | { id: string; name: string; handle: string | null }
       | undefined;
     if (!existing) return { ok: false, status: 404, error: "no such applicant" };
-    const key = (await tx`SELECT id FROM swarm_member_keys WHERE member_id = ${memberId} AND active = false ORDER BY created_at DESC LIMIT 1 FOR UPDATE`)[0] as { id: number } | undefined;
+    const key = (await on(tx, activateLockKey)`SELECT id FROM swarm_member_keys WHERE member_id = ${memberId} AND active = false ORDER BY created_at DESC LIMIT 1 FOR UPDATE`)[0] as { id: number } | undefined;
     if (!key) return { ok: false, status: 409, error: "no pending key; member must apply first" };
     // Capacity gate: an 'applied' member is not yet active, so no exemption —
     // this admission must fit under SWARM_ROSTER_CAP or it's refused.
     const cap = await assertRosterCapacity(tx);
     if (!cap.ok) return cap;
-    const upd = await tx`
+    const upd = await on(tx, activateKey)`
       UPDATE swarm_member_keys SET active = true, token_hash = NULL
       WHERE id = ${key.id} AND active = false RETURNING id`;
     if (upd.length === 0) return { ok: false, status: 409, error: "activation raced; retry" };
@@ -2326,12 +2581,12 @@ async function activateMemberTx(memberId: string, role: "member" | "judge") {
     const handle = handleIsUnset(existing)
       ? await deriveMemberHandle(tx, { memberId, name: existing.name })
       : existing.handle;
-    await tx`
+    await on(tx, activateMemberRow)`
       UPDATE swarm_members
       SET status = 'active', role = ${role}, handle = ${handle}, activated_at = now(), version = version + 1, updated_at = now()
       WHERE id = ${memberId}`;
-    await tx`UPDATE swarm_applications SET status = 'approved', reviewed_at = now() WHERE member_id = ${memberId} AND status = 'pending'`;
-    await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'activate_member', ${tx.json({ memberId, handle })})`;
+    await on(tx, activateApplication)`UPDATE swarm_applications SET status = 'approved', reviewed_at = now() WHERE member_id = ${memberId} AND status = 'pending'`;
+    await on(tx, activateAudit)`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'activate_member', ${tx.json({ memberId, handle })})`;
     return {
       ok: true,
       status: 200,
@@ -2355,6 +2610,60 @@ export interface TokenClaimChallenge {
  * active key gets the challenge persisted; unknown/pending ids receive a
  * throwaway challenge, so issuance does not disclose membership state.
  */
+const claimLock = registerStatement({
+  role: "rm_app",
+  shape: "advisoryLockByText",
+  site: "src/swarm/domain:claimChallenge.lock",
+  purpose: "Serialise one member's token-claim challenge issuance and claim.",
+  callers: [ONBOARDING_ROUTE],
+});
+const CLAIM_ELIGIBLE_PROBE = {
+  statement: `SELECT k.id
+      FROM swarm_members m
+      JOIN swarm_member_keys k ON k.id = (
+        SELECT newest.id FROM swarm_member_keys newest
+        WHERE newest.member_id = m.id AND newest.active = true
+        ORDER BY newest.created_at DESC, newest.id DESC LIMIT 1
+      )
+      WHERE m.id = $1 AND m.status = 'active' AND k.token_hash IS NULL`,
+  params: ["probe"],
+} as const;
+const claimEligibleMembers = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:issueTokenClaimChallenge.eligible.members",
+  purpose: "Find an active member whose newest active key holds no token yet: the only one a challenge is persisted for.",
+  callers: [ONBOARDING_ROUTE],
+  probe: CLAIM_ELIGIBLE_PROBE,
+});
+const claimEligibleKeys = registerQuery({
+  role: "rm_app",
+  object: "swarm_member_keys",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:issueTokenClaimChallenge.eligible.keys",
+  purpose: "Join the member's newest active key.",
+  callers: [ONBOARDING_ROUTE],
+  probe: CLAIM_ELIGIBLE_PROBE,
+});
+const claimChallengeUpsert = registerQuery({
+  role: "rm_app",
+  object: "swarm_claim_challenges",
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/swarm/domain:issueTokenClaimChallenge.upsert",
+  purpose: "Persist the member's one claim challenge, replacing any earlier one.",
+  callers: [ONBOARDING_ROUTE],
+  probe: {
+    statement: `INSERT INTO swarm_claim_challenges (member_id, challenge, issued_at, expires_at, consumed_at)
+      SELECT $1, $2, now(), $3, NULL WHERE false
+      ON CONFLICT (member_id) DO UPDATE SET
+        challenge = EXCLUDED.challenge,
+        issued_at = EXCLUDED.issued_at,
+        expires_at = EXCLUDED.expires_at,
+        consumed_at = NULL`,
+    params: ["probe", "probe", "2000-01-01 00:00:00+00"],
+  },
+});
 export async function issueTokenClaimChallenge(memberId: string): Promise<TokenClaimChallenge> {
   const challenge = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
   const expiresAt = new Date(Date.now() + CLAIM_CHALLENGE_TTL_MS);
@@ -2362,8 +2671,8 @@ export async function issueTokenClaimChallenge(memberId: string): Promise<TokenC
     // Serialize issue/claim for this opaque id. This closes the race where an
     // issuer could observe token_hash=NULL, wait behind a successful claim,
     // then replace its consumed row using the stale observation.
-    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${memberId}, 205))`;
-    const eligible = await tx`
+    await onStatement(tx, claimLock)`SELECT pg_advisory_xact_lock(hashtextextended(${`token_claim:${memberId}`}, 0))`;
+    const eligible = await on(tx, claimEligibleMembers, claimEligibleKeys)`
       SELECT k.id
       FROM swarm_members m
       JOIN swarm_member_keys k ON k.id = (
@@ -2373,7 +2682,7 @@ export async function issueTokenClaimChallenge(memberId: string): Promise<TokenC
       )
       WHERE m.id = ${memberId} AND m.status = 'active' AND k.token_hash IS NULL`;
     if (eligible.length === 0) return;
-    await tx`
+    await on(tx, claimChallengeUpsert)`
       INSERT INTO swarm_claim_challenges (member_id, challenge, issued_at, expires_at, consumed_at)
       VALUES (${memberId}, ${challenge}, now(), ${expiresAt}, NULL)
       ON CONFLICT (member_id) DO UPDATE SET
@@ -2394,17 +2703,98 @@ export interface TokenClaimInput extends TokenClaimChallenge {
  * Wrong/expired/unknown proofs are indistinguishable 400s. A valid proof after
  * the first successful claim is the documented 409 and never rotates a token.
  */
+const CLAIM_ROW_PROBE = {
+  statement: `SELECT c.challenge, c.expires_at, c.consumed_at,
+             k.id AS key_id, k.public_key, k.token_hash
+      FROM swarm_claim_challenges c
+      JOIN swarm_members m ON m.id = c.member_id AND m.status = 'active'
+      JOIN swarm_member_keys k ON k.id = (
+        SELECT newest.id FROM swarm_member_keys newest
+        WHERE newest.member_id = c.member_id AND newest.active = true
+        ORDER BY newest.created_at DESC, newest.id DESC LIMIT 1
+      )
+      WHERE c.member_id = $1
+      FOR UPDATE OF c, k`,
+  params: ["probe"],
+} as const;
+const claimRowChallenges = registerQuery({
+  role: "rm_app",
+  object: "swarm_claim_challenges",
+  privileges: ["SELECT", "UPDATE"],
+  site: "src/swarm/domain:claimMemberToken.row.challenges",
+  purpose: "Lock the member's claim challenge while the signed proof is checked.",
+  callers: [ONBOARDING_ROUTE],
+  probe: CLAIM_ROW_PROBE,
+});
+const claimRowMembers = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:claimMemberToken.row.members",
+  purpose: "Require the claiming member to be active.",
+  callers: [ONBOARDING_ROUTE],
+  probe: CLAIM_ROW_PROBE,
+});
+const claimRowKeys = registerQuery({
+  role: "rm_app",
+  object: "swarm_member_keys",
+  privileges: ["SELECT", "UPDATE"],
+  site: "src/swarm/domain:claimMemberToken.row.keys",
+  purpose: "Lock the member's newest active key, the one the token is installed on.",
+  callers: [ONBOARDING_ROUTE],
+  probe: CLAIM_ROW_PROBE,
+});
+const claimInstall = registerQuery({
+  role: "rm_app",
+  object: "swarm_member_keys",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/domain:claimMemberToken.install",
+  purpose: "Install the first token hash on the key, once.",
+  callers: [ONBOARDING_ROUTE],
+  probe: {
+    statement: `UPDATE swarm_member_keys SET token_hash = $1
+      WHERE id = $2 AND active = true AND token_hash IS NULL
+      RETURNING id`,
+    params: ["probe", "1"],
+  },
+});
+const claimConsume = registerQuery({
+  role: "rm_app",
+  object: "swarm_claim_challenges",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/domain:claimMemberToken.consume",
+  purpose: "Consume the challenge so the proof cannot be replayed.",
+  callers: [ONBOARDING_ROUTE],
+  probe: {
+    statement: `UPDATE swarm_claim_challenges SET consumed_at = now()
+      WHERE member_id = $1 AND challenge = $2 AND consumed_at IS NULL`,
+    params: ["probe", "probe"],
+  },
+});
+const claimAudit = registerQuery({
+  role: "rm_app",
+  object: "audit_log",
+  privileges: ["INSERT"],
+  site: "src/swarm/domain:claimMemberToken.audit",
+  purpose: "Record a token claim in the audit log.",
+  callers: [ONBOARDING_ROUTE],
+  probe: {
+    statement: `INSERT INTO audit_log (actor, action, scope)
+      SELECT $1, 'claim_member_token', $2::jsonb WHERE false`,
+    params: ["probe", "{}"],
+  },
+});
 export async function claimMemberToken(input: TokenClaimInput) {
   return sql.begin(async (tx) => {
-    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${input.memberId}, 205))`;
-    const row = (await tx<{
+    await onStatement(tx, claimLock)`SELECT pg_advisory_xact_lock(hashtextextended(${`token_claim:${input.memberId}`}, 0))`;
+    const row = (await on(tx, claimRowChallenges, claimRowMembers, claimRowKeys)<{
       challenge: string;
       expires_at: Date;
       consumed_at: Date | null;
       key_id: number;
       public_key: string;
       token_hash: string | null;
-    }[]>`
+    }>`
       SELECT c.challenge, c.expires_at, c.consumed_at,
              k.id AS key_id, k.public_key, k.token_hash
       FROM swarm_claim_challenges c
@@ -2432,17 +2822,17 @@ export async function claimMemberToken(input: TokenClaimInput) {
     }
 
     const token = `tok_${input.memberId}_${crypto.randomUUID()}`;
-    const installed = await tx`
+    const installed = await on(tx, claimInstall)`
       UPDATE swarm_member_keys SET token_hash = ${hashKey(token)}
       WHERE id = ${row.key_id} AND active = true AND token_hash IS NULL
       RETURNING id`;
     if (installed.length === 0) {
       return { ok: false, status: 409, error: "bearer token already claimed; ask an administrator to rotate it if lost" };
     }
-    await tx`
+    await on(tx, claimConsume)`
       UPDATE swarm_claim_challenges SET consumed_at = now()
       WHERE member_id = ${input.memberId} AND challenge = ${row.challenge} AND consumed_at IS NULL`;
-    await tx`
+    await on(tx, claimAudit)`
       INSERT INTO audit_log (actor, action, scope)
       VALUES (${input.memberId}, 'claim_member_token', ${tx.json({ memberId: input.memberId })})`;
     return { ok: true, status: 200, memberId: input.memberId, token };
@@ -2488,6 +2878,52 @@ export function isHandleUniqueViolation(e: unknown): boolean {
 // a bearer token in one shot. This is the PRIVILEGED admin shortcut (apply +
 // activate combined) used by the smoke/E2E harness; the public path is
 // applyMember → activateMember. Private keys never leave the member.
+const registerSeat = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/swarm/domain:registerMember.seat",
+  purpose: "Seat a member as active, idempotently on its id (the smoke registration shortcut).",
+  callers: [SWARM_ROUTE, ADMIN_ROUTE],
+  probe: {
+    statement: `INSERT INTO swarm_members (id, status, name, lens)
+        SELECT $1, 'active', $2, $3 WHERE false
+        ON CONFLICT (id) DO UPDATE SET status = 'active', name = EXCLUDED.name, lens = EXCLUDED.lens
+        RETURNING id, handle`,
+    params: ["probe", "probe", null],
+  },
+});
+const registerHandle = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/domain:registerMember.handle",
+  purpose: "Stamp the derived public handle on a member that has none.",
+  callers: [SWARM_ROUTE, ADMIN_ROUTE],
+  probe: { statement: "UPDATE swarm_members SET handle = $1 WHERE id = $2", params: ["probe", "probe"] },
+});
+const registerRetireKeys = registerQuery({
+  role: "rm_app",
+  object: "swarm_member_keys",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/domain:registerMember.retireKeys",
+  purpose: "Retire the member's active keys: a re-registration rebinds the identity.",
+  callers: [SWARM_ROUTE, ADMIN_ROUTE],
+  probe: { statement: "UPDATE swarm_member_keys SET active = false WHERE member_id = $1 AND active = true", params: ["probe"] },
+});
+const registerInsertKey = registerQuery({
+  role: "rm_app",
+  object: "swarm_member_keys",
+  privileges: ["INSERT"],
+  site: "src/swarm/domain:registerMember.insertKey",
+  purpose: "Register the member's new active key with its token hash.",
+  callers: [SWARM_ROUTE, ADMIN_ROUTE],
+  probe: {
+    statement: `INSERT INTO swarm_member_keys (member_id, public_key, token_hash)
+               SELECT $1, $2, $3 WHERE false`,
+    params: ["probe", "probe", "probe"],
+  },
+});
 export async function registerMember(input: { memberId: string; name: string; lens?: string; publicKey: string }) {
   const token = `tok_${input.memberId}_${crypto.randomUUID()}`;
   // Transactional so the capacity gate and the writes are one atomic admission.
@@ -2504,7 +2940,7 @@ export async function registerMember(input: { memberId: string; name: string; le
       // puts this create inside swarm_members_handle_key, which is the only
       // thing that physically blocks it against a concurrent, uncommitted
       // rename to this id (issue #596). The derivation is the UPDATE below.
-      const seated = (await tx<{ id: string; handle: string | null }[]>`
+      const seated = (await on(tx, registerSeat)<{ id: string; handle: string | null }>`
         INSERT INTO swarm_members (id, status, name, lens)
         VALUES (${input.memberId}, 'active', ${input.name}, ${input.lens ?? null})
         ON CONFLICT (id) DO UPDATE SET status = 'active', name = EXCLUDED.name, lens = EXCLUDED.lens
@@ -2517,7 +2953,7 @@ export async function registerMember(input: { memberId: string; name: string; le
       // keeps that name however many times the smoke harness re-runs.
       if (handleIsUnset(seated)) {
         const handle = await deriveMemberHandle(tx, { memberId: input.memberId, name: input.name });
-        await tx`UPDATE swarm_members SET handle = ${handle} WHERE id = ${input.memberId}`;
+        await on(tx, registerHandle)`UPDATE swarm_members SET handle = ${handle} WHERE id = ${input.memberId}`;
       }
       // DEACTIVATE, never delete (issue #697) — matching every admin rotation
       // path (deactivateMemberAdmin, reactivateMemberAdmin, rotateMemberKeyAdmin
@@ -2531,8 +2967,8 @@ export async function registerMember(input: { memberId: string; name: string; le
       // (migration 0050), so a stray DELETE here would be refused at the
       // database regardless — this UPDATE is the correct operation, not a
       // workaround for the guard.
-      await tx`UPDATE swarm_member_keys SET active = false WHERE member_id = ${input.memberId} AND active = true`;
-      await tx`INSERT INTO swarm_member_keys (member_id, public_key, token_hash)
+      await on(tx, registerRetireKeys)`UPDATE swarm_member_keys SET active = false WHERE member_id = ${input.memberId} AND active = true`;
+      await on(tx, registerInsertKey)`INSERT INTO swarm_member_keys (member_id, public_key, token_hash)
                VALUES (${input.memberId}, ${input.publicKey}, ${hashKey(token)})`;
       return { memberId: input.memberId, token };
     });
@@ -2557,8 +2993,22 @@ export async function registerMember(input: { memberId: string; name: string; le
 // resolved to someone else's text. Nothing wipes rows any more; an ephemeral
 // database is dropped or inspected as a whole.
 
+const ensureSubjectUpsert = registerQuery({
+  role: "rm_app",
+  object: "swarm_subjects",
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/swarm/domain:ensureSubject",
+  purpose: "Create a subject or rename it, idempotently on its id.",
+  callers: [ADMIN_ROUTE, SWARM_ROUTE],
+  probe: {
+    statement: `INSERT INTO swarm_subjects (id, status, name, recommendation_type)
+            SELECT $1, 'active', $2, 'bucket_weights' WHERE false
+            ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`,
+    params: ["probe", "probe"],
+  },
+});
 export async function ensureSubject(id: string, name: string) {
-  await sql`INSERT INTO swarm_subjects (id, status, name, recommendation_type)
+  await on(sql, ensureSubjectUpsert)`INSERT INTO swarm_subjects (id, status, name, recommendation_type)
             VALUES (${id}, 'active', ${name}, 'bucket_weights')
             ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`;
   return { id, name };
@@ -2613,9 +3063,37 @@ function syntheticRegimePoint(date: string, t: number, rng: () => number) {
 // synthetic rows (a sparse prod table stays sparse and visibly so). The live
 // aggregation path (buildRegimeSummary) no longer calls this at all — only the
 // smoke fixture seeding path (ensureSmokeSubjectFixtures) does.
+const backfillCount = registerQuery({
+  role: "rm_app",
+  object: "regime_snapshots",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:backfillRegimeHistory.count",
+  purpose: "Count the regime snapshots, to backfill only a database with too few (never on prod).",
+  callers: [ADMIN_ROUTE, SWARM_ROUTE],
+  probe: { statement: "SELECT count(*)::int AS n FROM regime_snapshots" },
+});
+const backfillInsert = registerQuery({
+  role: "rm_app",
+  object: "regime_snapshots",
+  privileges: ["INSERT", "SELECT"],
+  site: "src/swarm/domain:backfillRegimeHistory.insert",
+  purpose: "Write one synthetic regime point for a smoke database, leaving any existing date alone.",
+  callers: [ADMIN_ROUTE, SWARM_ROUTE],
+  probe: {
+    statement: `INSERT INTO regime_snapshots
+        (date, composite, composite_percentile, regime,
+         macro_regime, onchain_regime, factor_regime,
+         macro_index, onchain_index, factor_index,
+         macro_percentile, onchain_percentile, factor_percentile,
+         percentiles, indicators)
+      SELECT $1::date, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb WHERE false
+      ON CONFLICT (date) DO NOTHING`,
+    params: ["2000-01-01", 0.5, 0.5, "neutral", "neutral", "neutral", "neutral", 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, "{}", "[]"],
+  },
+});
 export async function backfillRegimeHistory(endDate: string, minPoints = 8): Promise<void> {
   if (config.env === "prod") return; // never write synthetic rows on the live deployment
-  const existing = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM regime_snapshots`;
+  const existing = await on(sql, backfillCount)<{ n: number }>`SELECT count(*)::int AS n FROM regime_snapshots`;
   if (Number(existing[0]?.n ?? 0) >= minPoints) return;
   const span = Math.max(minPoints, 14);
   const rng = seeded(`regime:${endDate}`);
@@ -2624,7 +3102,7 @@ export async function backfillRegimeHistory(endDate: string, minPoints = 8): Pro
     const t = (span - 1 - i) / (span - 1);
     const p = syntheticRegimePoint(date, t, rng);
     const macroReg = classifyRegime(p.macro), onchainReg = classifyRegime(p.onchain), factorReg = classifyRegime(p.factor);
-    await sql`
+    await on(sql, backfillInsert)`
       INSERT INTO regime_snapshots
         (date, composite, composite_percentile, regime,
          macro_regime, onchain_regime, factor_regime,
@@ -2708,8 +3186,51 @@ function subjectBasket(subjectId: string): Basket {
 // trailing regime history for the sparkline. Called from an admin action before a
 // smoke session opens. `date` defaults to today; the snapshot is dated on-or-before
 // the session date so the frontend snapshot picker selects it.
+const smokeSubjectRead = registerQuery({
+  role: "rm_app",
+  object: "swarm_subjects",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:ensureSmokeSubjectFixtures.read",
+  purpose: "Read the subject's source, to leave a framework subject alone.",
+  callers: [ADMIN_ROUTE],
+  probe: { statement: "SELECT id, source FROM swarm_subjects WHERE id = $1", params: ["probe"] },
+});
+const smokeSubjectUpsert = registerQuery({
+  role: "rm_app",
+  object: "swarm_subjects",
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/swarm/domain:ensureSmokeSubjectFixtures.subject",
+  purpose: "Create the smoke subject, or fill only the fields it lacks.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: `INSERT INTO swarm_subjects (id, status, name, thesis_blurb, recommendation_type)
+            SELECT $1, 'active', $2, $3, $4 WHERE false
+            ON CONFLICT (id) DO UPDATE SET
+              name = COALESCE(swarm_subjects.name, EXCLUDED.name),
+              thesis_blurb = COALESCE(swarm_subjects.thesis_blurb, EXCLUDED.thesis_blurb),
+              recommendation_type = COALESCE(swarm_subjects.recommendation_type, EXCLUDED.recommendation_type)`,
+    params: ["probe", "probe", "probe", "position_actions"],
+  },
+});
+const smokeSnapshotUpsert = registerQuery({
+  role: "rm_app",
+  object: "swarm_subject_snapshots",
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/swarm/domain:ensureSmokeSubjectFixtures.snapshot",
+  purpose: "Write the smoke subject's snapshot for the date, replacing that date's values.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: `INSERT INTO swarm_subject_snapshots (subject_id, date, total_value_usd, positions, wallets, notable)
+            SELECT $1, $2::date, $3, $4::jsonb, $5::jsonb, $6::jsonb WHERE false
+            ON CONFLICT (subject_id, date) DO UPDATE SET
+              total_value_usd = EXCLUDED.total_value_usd,
+              positions = EXCLUDED.positions,
+              notable = EXCLUDED.notable`,
+    params: ["probe", "2000-01-01", 1, "[]", "[]", "[]"],
+  },
+});
 export async function ensureSmokeSubjectFixtures(subjectId: string, name: string, date?: string) {
-  const existing = (await sql<{ id: string; source: any }[]>`
+  const existing = (await on(sql, smokeSubjectRead)<{ id: string; source: any }>`
     SELECT id, source FROM swarm_subjects WHERE id = ${subjectId}
   `)[0];
   const sourceType = typeof existing?.source === "string"
@@ -2722,7 +3243,7 @@ export async function ensureSmokeSubjectFixtures(subjectId: string, name: string
   const snapDate = date ?? new Date().toISOString().slice(0, 10);
   const recommendationType = "position_actions";
   const thesis = `${name}: treasury read through the 95/5/0/0 conservative allocation mandate — Conservative DeFi Yield anchors 95%, the Agent Tokens sleeve caps at 5%.`;
-  await sql`INSERT INTO swarm_subjects (id, status, name, thesis_blurb, recommendation_type)
+  await on(sql, smokeSubjectUpsert)`INSERT INTO swarm_subjects (id, status, name, thesis_blurb, recommendation_type)
             VALUES (${subjectId}, 'active', ${name}, ${thesis}, ${recommendationType})
             ON CONFLICT (id) DO UPDATE SET
               name = COALESCE(swarm_subjects.name, EXCLUDED.name),
@@ -2730,7 +3251,7 @@ export async function ensureSmokeSubjectFixtures(subjectId: string, name: string
               recommendation_type = COALESCE(swarm_subjects.recommendation_type, EXCLUDED.recommendation_type)`;
 
   const basket = subjectBasket(subjectId);
-  await sql`INSERT INTO swarm_subject_snapshots (subject_id, date, total_value_usd, positions, wallets, notable)
+  await on(sql, smokeSnapshotUpsert)`INSERT INTO swarm_subject_snapshots (subject_id, date, total_value_usd, positions, wallets, notable)
             VALUES (${subjectId}, ${snapDate}, ${basket.total},
                     ${sql.json(basket.positions as any)}, ${sql.json([])}, ${sql.json(basket.notable as any)})
             ON CONFLICT (subject_id, date) DO UPDATE SET
@@ -2768,15 +3289,44 @@ export async function ensureSmokeSubjectFixtures(subjectId: string, name: string
  * demanding a freshly `scheduled` one, and does not republish a brief over it,
  * so an advertised deadline is never moved.
  */
+const openSessionExisting = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:openSession.existing",
+  purpose: "Find the subject's open (scheduled or collecting) session, so a re-delivered open request convenes no second one.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: `SELECT id, date, convened_at, subject_id, subject_name, state
+      FROM swarm_sessions
+     WHERE subject_id = $1 AND state IN ('scheduled', 'collecting')
+     ORDER BY convened_at DESC LIMIT 1`,
+    params: ["probe"],
+  },
+});
+const openSessionInsert = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["INSERT", "SELECT"],
+  site: "src/swarm/domain:openSession.insert",
+  purpose: "Convene a session for the subject, scheduled; the database stamps when.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: `INSERT INTO swarm_sessions (subject_id, subject_name, state)
+    SELECT $1, $2, 'scheduled' WHERE false
+    RETURNING id, date, convened_at, subject_id, subject_name, state`,
+    params: ["probe", "probe"],
+  },
+});
 export async function openSession(subjectId: string) {
   const subject = await getSubject(subjectId);
-  const existing = (await sql`
+  const existing = (await on(sql, openSessionExisting)`
     SELECT id, date, convened_at, subject_id, subject_name, state
       FROM swarm_sessions
      WHERE subject_id = ${subjectId} AND state IN ('scheduled', 'collecting')
      ORDER BY convened_at DESC LIMIT 1`)[0];
   if (existing) return existing;
-  const r = (await sql`
+  const r = (await on(sql, openSessionInsert)`
     INSERT INTO swarm_sessions (subject_id, subject_name, state)
     VALUES (${subjectId}, ${subject?.name ?? subjectId}, 'scheduled')
     RETURNING id, date, convened_at, subject_id, subject_name, state`)[0];
@@ -2789,6 +3339,35 @@ export async function openSession(subjectId: string) {
 // separately: a test can compose this with a deliberately injected failure
 // in its OWN sql.begin to prove the whole publish rolls back atomically,
 // using the exact production code path rather than a duplicated copy of it.
+const briefRevisionLock = registerStatement({
+  role: "rm_app",
+  shape: "advisoryLockByText",
+  site: "src/swarm/domain:appendBriefRevision.lock",
+  purpose: "Serialise revision numbering of one session's brief.",
+  callers: [ADMIN_ROUTE, STREAM_ROUTE],
+});
+const briefRevisionNext = registerQuery({
+  role: "rm_app",
+  object: "swarm_brief_revisions",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:appendBriefRevision.next",
+  purpose: "Read the session's highest brief revision, to number the next.",
+  callers: [ADMIN_ROUTE, STREAM_ROUTE],
+  probe: { statement: "SELECT COALESCE(MAX(revision), 0) + 1 AS next FROM swarm_brief_revisions WHERE session_id = $1", params: [SAMPLE_ID] },
+});
+const briefRevisionInsert = registerQuery({
+  role: "rm_app",
+  object: "swarm_brief_revisions",
+  privileges: ["INSERT"],
+  site: "src/swarm/domain:appendBriefRevision.insert",
+  purpose: "Append an immutable brief revision with its checksum.",
+  callers: [ADMIN_ROUTE, STREAM_ROUTE],
+  probe: {
+    statement: `INSERT INTO swarm_brief_revisions (session_id, revision, body_bytes, checksum, report_snapshot_id)
+    SELECT $1, $2, $3, $4, $5::bigint WHERE false`,
+    params: [SAMPLE_ID, 1, "probe", "probe", null],
+  },
+});
 export async function appendBriefRevision(
   sessionId: string,
   body: Record<string, unknown>,
@@ -2797,10 +3376,10 @@ export async function appendBriefRevision(
 ): Promise<{ revision: number; checksum: string }> {
   const bodyBytes = Buffer.from(canonicalStringify(body), "utf8");
   const checksum = sha256Hex(bodyBytes);
-  await tx`SELECT pg_advisory_xact_lock(hashtextextended('swarm_brief_revisions:' || ${sessionId}, 0))`;
-  const [{ next }] = await tx`
+  await onStatement(tx, briefRevisionLock)`SELECT pg_advisory_xact_lock(hashtextextended(${`swarm_brief_revisions:${sessionId}`}, 0))`;
+  const [{ next }] = await on(tx, briefRevisionNext)<any>`
     SELECT COALESCE(MAX(revision), 0) + 1 AS next FROM swarm_brief_revisions WHERE session_id = ${sessionId}`;
-  await tx`
+  await on(tx, briefRevisionInsert)`
     INSERT INTO swarm_brief_revisions (session_id, revision, body_bytes, checksum, report_snapshot_id)
     VALUES (${sessionId}, ${next}, ${bodyBytes}, ${checksum}, ${reportSnapshotId}::bigint)`;
   return { revision: Number(next), checksum };
