@@ -203,6 +203,10 @@ jobs:
       # not by workflow file) still avoids a redundant download whichever
       # workflow runs first for a given rmpc version.
       RMPC_CACHE_DIR: ${{ github.workspace }}/.rmpc-cache
+      # Instance state (tokens, journal, receipt) lives outside the checkout
+      # (smoke spec §1.1) and, on this shared runner, in a directory of this job
+      # alone, so the lifecycle step below finds exactly one instance.
+      RM_SMOKE_STATE_ROOT: ${{ runner.temp }}/smoke-state
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -387,7 +391,7 @@ jobs:
         # is checked for either prompt and the step fails if one appeared.
         run: |
           set -o pipefail
-          bun --no-env-file scripts/smoke.ts --local blank --migrate --seed < /dev/null 2>&1 | tee "$RUNNER_TEMP/e2e-smoke.log"
+          bun --no-env-file scripts/smoke.ts --local blank --migrate --seed --credentials test-fixtures/smoke/empty-roster.credentials.json < /dev/null 2>&1 | tee "$RUNNER_TEMP/e2e-smoke.log"
           if grep -Eq "rm_owner password|type y to continue" "$RUNNER_TEMP/e2e-smoke.log"; then
             echo "::error::the unattended CI boot printed an interactive prompt (spec §5: no terminal prompt exists in local modes)"
             exit 1
@@ -463,6 +467,27 @@ jobs:
         # truncation from the eval to the job, which reports as an infra kill
         # rather than the honest `timed-out` outcome.
         timeout-minutes: 105
+      # Lifecycle e2e (issue #1026, smoke spec §10 W1/W3, scheduler spec §10): the
+      # stack the boot above left running is checked for the real scheduler, one
+      # collecting session per active subject, an agent and a judge running as
+      # containers under `restart: unless-stopped`, and ONE turnover after one
+      # short epoch (the first session published, the second collecting). It then
+      # removes the scheduler's token file and stops its container to see the
+      # failures name it, and ends with `smoke:down`. Fixture keys only:
+      # test-fixtures/smoke. The boot above passes the fixture credential file, so
+      # it stops at readiness (no host-side session driver: the standing
+      # participants and the scheduler own the sessions) and leaves the stack up.
+      - name: Lifecycle e2e (scheduler, participants, one turnover)
+        run: bun --no-env-file scripts/smoke-e2e.ts --attached
+        env:
+          CI: "true"
+          RM_ENV: stage
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+        timeout-minutes: 30
+      - name: Stop this job's smoke stack (smoke:down)
+        if: always()
+        run: bun --no-env-file scripts/smoke-down.ts || echo "smoke:down had nothing to stop, or the compose teardown below is the gate"
       # The OpenCode client emits this typed marker only after Zen reports an
       # exhausted balance. Surface it in the job summary, where an operator can
       # distinguish an external billing prerequisite from an application/E2E
