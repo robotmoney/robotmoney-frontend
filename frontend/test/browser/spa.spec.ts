@@ -232,7 +232,7 @@ test("the deposit hero pairs the headline with the install card and runs the tre
   await hero.locator(".sk__install-copy").click();
   await expect(hero.locator(".sk__install-copy")).toHaveClass(/is-copied/);
   const clip = await page.evaluate(() => navigator.clipboard.readText());
-  expect(clip).toBe("npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli");
+  expect(clip).toBe("npx skills add robotmoney/robotmoney-skills-v0 --skill robotmoney-cli");
 
   await expectNoBrowserErrors(errors);
 });
