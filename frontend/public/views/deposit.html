@@ -1,13 +1,15 @@
-<!-- /deposit: how to deposit into Robot Money (RM-129). Until RM-129 this was
-     /skills, the deposit skill's page, restored from production: hero + install,
-     how it works, the two wallet paths, the twelve-command table, protocol
-     mechanics, verified contract + basket token addresses, and about. Deposit
-     is the site's main action, so the page leads with it; /skills is now the
-     index of every Robot Money skill. The section ids (#how-it-works,
-     #capabilities, #mechanics, #contracts, #about) are unchanged.
-     NO <script>, NO <canvas>, NO custom Alpine factories. -->
+<!-- /deposit: what a depositor asks before depositing, in the order they ask
+     it (RM-146). The hero is every nav page's band with the install card
+     beside the headline, since the command is this page's action. Then: how
+     it works, what a deposit buys, the tokens it leaves in the wallet, what
+     they earn with a simulation over the last year, TVL and liquidity, and a
+     FAQ that keeps the detail (the wallet, the risks, the contracts) folded.
+     The command list lives in the docs.
+     Figures come from depositView() (alpine/views/deposit.js): the policy
+     /allocation reads, the vault feed every vault page reads, and the vault
+     registry. #how-it-works and #contracts are linked from other pages. -->
 
-<section class="sk container">
+<section class="sk container dp" x-data="depositView()">
   <header class="sk__head">
     <div class="sk__head-viz" x-data="treeHero()" aria-hidden="true"></div>
     <div class="sk__head-inner">
@@ -16,9 +18,8 @@
           Deposit <span class="sk__title-accent">USDC</span>
         </h1>
         <p class="sk__lede">
-          Your agent deposits with one skill. 95% goes into Fixed Income, the rmUSDC
-          vault lending across Morpho, Aave and Compound on Base, and 5% buys seven
-          Small Cap Tokens that land in your own wallet.
+          Your agent deposits USDC into the Robot Money vaults with one skill, and
+          what it buys stays in your own wallet on Base.
         </p>
       </div>
 
@@ -31,12 +32,12 @@
         </div>
         <div class="sk__install-body">
           <span class="sk__install-prompt" aria-hidden="true">$</span>
-          <code class="sk__install-cmd">npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli</code>
+          <code class="sk__install-cmd">npx skills add robotmoney/robotmoney-skills-v0 --skill robotmoney-cli</code>
           <!-- Icon only: the label cost the width the command needs to stay on
                one line. aria-label carries the meaning, and it flips to a tick
                on success so the state is not colour-only. -->
           <button type="button" class="sk__install-copy" :class="copied && 'is-copied'"
-            @click="navigator.clipboard.writeText('npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli'); copied = true; setTimeout(() => copied = false, 2000)"
+            @click="navigator.clipboard.writeText('npx skills add robotmoney/robotmoney-skills-v0 --skill robotmoney-cli'); copied = true; setTimeout(() => copied = false, 2000)"
             :aria-label="copied ? 'Command copied' : 'Copy the install command'">
             <svg x-show="!copied" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <rect x="5.5" y="5.5" width="9" height="9" stroke="currentColor" />
@@ -51,370 +52,411 @@
           Works with Claude Code, Cursor, Codex, and any agent runtime that can run a
           shell command.
         </p>
-        <a class="sk__cta" href="https://github.com/robotmoney/robotmoney-skills" target="_blank" rel="noopener noreferrer">Install Skill &rarr;</a>
+        <a class="sk__cta" href="https://github.com/robotmoney/robotmoney-skills-v0" target="_blank" rel="noopener noreferrer">Install Skill</a>
       </div>
     </div>
   </header>
 
-  <!-- How it works -->
-  <div class="sk__section" id="how-it-works">
-    <span class="sk__eyebrow">How it works</span>
-    <h2 class="sk__section-title">Skill loads.<br>Agent acts.</h2>
-    <p class="sk__sec-lede">
-      Robot Money skills give the agent protocol context, route requests through the
-      CLI tool layer, and simulate before any write path reaches your wallet.
-    </p>
-
-    <div class="sk__steps">
-      <div class="sk-step">
-        <span class="sk-step__num">01</span>
-        <h3 class="sk-step__title">Prompt</h3>
-        <p class="sk-step__desc">
-          Ask your agent, for example: &ldquo;deposit 50 USDC into Robot Money.&rdquo;
-        </p>
-      </div>
-      <div class="sk-step">
-        <span class="sk-step__num">02</span>
-        <h3 class="sk-step__title">Skill loads</h3>
-        <p class="sk-step__desc">
-          The agent pulls Robot Money protocol context and the command list into its working memory.
-        </p>
-      </div>
-      <div class="sk-step">
-        <span class="sk-step__num">03</span>
-        <h3 class="sk-step__title">Simulate &rarr; Sign &rarr; Broadcast</h3>
-        <p class="sk-step__desc">
-          The CLI simulates locally for accurate gas, signs via the caller&rsquo;s wallet or OWS,
-          and returns a confirmed transaction hash.
-        </p>
-      </div>
+  <div class="dp__body rr">
+    <!-- The facts row: what is in the vaults now, and on what terms. -->
+    <div class="rr-meta dp__meta">
+      <span class="rr-meta__i">TVL <b x-text="tvlLabel()">—</b></span>
+      <span class="rr-meta__i">Vaults live <b x-text="vaultsLiveLabel()">—</b></span>
+      <span class="rr-meta__i">Network <b x-text="networkLabel()">Base</b></span>
+      <span class="rr-meta__i">Exit fee <b x-text="exitFeeLabel()">—</b></span>
+      <template x-if="dataLabel()"><span class="rr-meta__i" data-vault-label><b x-text="dataLabel()"></b></span></template>
     </div>
 
-    <ul class="sk__checks">
-      <li class="sk-check"><span class="sk-check__mark" aria-hidden="true">&#10003;</span>Works from agent code</li>
-      <li class="sk-check"><span class="sk-check__mark" aria-hidden="true">&#10003;</span>Simulation-first write flows</li>
-      <li class="sk-check"><span class="sk-check__mark" aria-hidden="true">&#10003;</span>Built on Open Wallet Standard</li>
-    </ul>
+    <!-- ── How it works ────────────────────────────────────────────────── -->
+    <!-- The old page's section ids, kept so links into it still land: the
+         command list (#capabilities) is a link under How it works now. -->
+    <span id="capabilities" class="dp__alias" aria-hidden="true"></span>
+    <section class="rr-sec" id="how-it-works" aria-labelledby="how-h">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="how-h">How it works</h2>
+      </div>
+      <div class="rr-steps">
+        <div>
+          <p class="rr-k">Step 1</p>
+          <p class="rr-steps__t">Install the skill</p>
+          <p class="rr-steps__d">Run the command once, wherever your agent runs.</p>
+        </div>
+        <div>
+          <p class="rr-k">Step 2</p>
+          <p class="rr-steps__t">Ask for a deposit</p>
+          <p class="rr-steps__d">For example: &ldquo;deposit 500 USDC into Robot Money.&rdquo;</p>
+        </div>
+        <div>
+          <p class="rr-k">Step 3</p>
+          <p class="rr-steps__t">Your agent prepares it</p>
+          <p class="rr-steps__d">Robot Money splits your USDC across the vaults by its allocation. Before anything is signed, your agent gives you the split, the fees and the gas.</p>
+        </div>
+        <div>
+          <p class="rr-k">Step 4</p>
+          <p class="rr-steps__t">You sign</p>
+          <p class="rr-steps__d">From any wallet on Base, a Safe multisig or a hardware wallet included. The vault tokens arrive in that wallet.</p>
+        </div>
+      </div>
+
+      <p class="dp__more"><a class="rr-lnk" href="/docs/skill/commands">Every command the skill runs</a></p>
+    </section>
+
+    <!-- ── What you buy: the target in force, sleeve by sleeve, and the
+         assets inside each (the allocation page's ring and recipe). ── -->
+    <section class="rr-sec" id="allocation" aria-labelledby="buy-h">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="buy-h">What you buy</h2>
+        <template x-if="allocationAsOfLabel()"><span class="rr-sec__aside" x-text="`Allocation set ${allocationAsOfLabel()}`"></span></template>
+      </div>
+      <p class="dp__lede">A deposit buys the Robot Money allocation: four sleeves, each with a target share of every deposit, and the assets inside each sleeve.</p>
+      <template x-if="hasTargets()">
+        <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape.window="close()" @pointerleave="leave()"
+             x-effect="if (rest === null && explorerRows().length) rest = (explorerRows().find((r) => r.pct > 0) || explorerRows()[0]).key">
+          <div class="rr-mix">
+            <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
+              <span class="sv__wdonut-host" role="img" :aria-label="`The Robot Money allocation: ${explorerLabel()}`"
+                    x-html="explorerSvg()"
+                    x-effect="active(); $nextTick(() => syncArcs($el))"></span>
+              <figcaption>
+                <b x-show="activeRow()" x-text="activeRow() ? fmtPctTrim(activeRow().pct) : ''"></b>
+                <span x-text="activeRow() ? activeRow().label : ringRestLabel()"></span>
+              </figcaption>
+            </figure>
+            <div class="rr-legend">
+              <template x-for="r in explorerRows()" :key="r.key">
+                <button type="button" class="rr-legend__row" :data-sleeve-btn="r.key"
+                        :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
+                        :aria-expanded="pinned === r.key ? 'true' : 'false'" :aria-controls="`sleeve-${r.key}`"
+                        @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()" @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
+                  <i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i>
+                  <span><span class="rr-legend__l" x-text="r.label"></span><span class="dp__legtok" x-text="vaultSymbol(r.key)"></span></span>
+                  <b x-text="fmtPctTrim(r.pct)"></b>
+                </button>
+              </template>
+            </div>
+          </div>
+          <div class="rr-x__drawer" :class="activeRow() ? 'is-open' : ''" :inert="!activeRow()">
+            <div class="rr-x__clip">
+              <template x-if="panelRow()">
+                <div class="rr-x__panel" :id="`sleeve-${panelRow().key}`" role="region" :aria-label="`${panelRow().label} assets`">
+                  <div class="rr-x__head">
+                    <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b x-text="panelRow().label"></b><template x-if="bucketNote(panelRow().key)"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${panelRow().label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="bucketNote(panelRow().key)"></span></span></template></p>
+                    <template x-if="vaultHref(panelRow().key)"><span class="dp__vault">Vault <a class="rr-lnk" :href="vaultHref(panelRow().key)" x-text="vaultSymbol(panelRow().key)"></a><span class="dp__vst" x-text="vaultStatus(panelRow().key)"></span></span></template>
+                  </div>
+                  <table class="rr-table rr-x__assets">
+                    <thead><tr><th scope="col">Asset</th><th scope="col" class="q">% of sleeve</th><th scope="col" class="q">% of deposit</th></tr></thead>
+                    <tbody>
+                      <template x-for="a in panelRow().assets" :key="a.key">
+                        <tr>
+                          <th scope="row"><i data-mark="series" :style="`background:${a.colour}`" aria-hidden="true"></i><span x-text="a.label"></span></th>
+                          <td class="q" x-text="fmtPctTrim(a.ofSleeve)"></td>
+                          <td class="q" x-text="fmtPctTrim(a.ofAllocation)"></td>
+                        </tr>
+                      </template>
+                      <template x-if="!panelRow().assets.length">
+                        <tr><td class="rr-table__empty" colspan="3"><span class="rr-empty__t">No assets published</span></td></tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </template>
+            </div>
+          </div>
+          <span class="rr-sr" role="status" x-text="status"></span>
+        </div>
+      </template>
+      <template x-if="!loading && !hasTargets()">
+        <figure class="rr-ring rr-ring--empty">
+          <svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--color-border)" stroke-width="4"></circle></svg>
+          <figcaption><span class="rr-empty__t">Allocation unavailable</span></figcaption>
+        </figure>
+      </template>
+      <p class="dp__more"><a class="rr-lnk" href="/allocation">The allocation in full</a></p>
+    </section>
+
+    <!-- ── What you receive: one token per vault, in your wallet ─────── -->
+    <section class="rr-sec" id="tokens" aria-labelledby="hold-h">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="hold-h">What you receive</h2>
+      </div>
+      <div class="rr-tablewrap">
+        <table class="rr-table dp__tokens">
+          <thead>
+            <tr><th scope="col">Token</th><th scope="col">Sleeve</th><th scope="col">Status</th><th scope="col" class="q">Share price (USDC)</th><th scope="col">On Base</th></tr>
+          </thead>
+          <tbody>
+            <template x-for="t in tokenRows()" :key="t.slug">
+              <tr>
+                <th scope="row"><i data-mark="series" :style="`background:${t.color}`" aria-hidden="true"></i><a class="rr-lnk" :href="t.href" x-text="t.symbol"></a></th>
+                <td class="dp__sans" x-text="t.name"></td>
+                <td :class="t.live ? '' : 'is-zero'" x-text="t.status"></td>
+                <td class="q" :class="t.live ? '' : 'is-zero'" x-text="t.sharePrice"></td>
+                <td :class="t.addressHref ? '' : 'is-zero'">
+                  <template x-if="t.addressHref"><a class="rr-lnk" :href="t.addressHref" target="_blank" rel="noopener noreferrer" :aria-label="`${t.symbol} on BaseScan`"><span x-text="t.short"></span></a></template>
+                  <template x-if="!t.addressHref"><span>—</span></template>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+      <p class="rr-note">Each token is an ERC-4626 vault share. The number you hold stays the same; the share price moves with what the vault holds, and redeeming pays it out in USDC.</p>
+    </section>
+
+    <!-- ── What it earns, and a simulation over the last year ──────── -->
+    <section class="rr-sec" id="returns" aria-labelledby="earn-h">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="earn-h">What it earns</h2>
+      </div>
+      <dl class="rr-dl dp__earn">
+        <template x-for="e in earnRows()" :key="e.key">
+          <div>
+            <dt><i data-mark="series" :style="`background:${e.hue}`" aria-hidden="true"></i><span x-text="e.name"></span></dt>
+            <dd x-text="e.text"></dd>
+          </div>
+        </template>
+      </dl>
+
+      <div class="rr-block dp__sim" id="simulate">
+        <div class="rr-subhead">
+          <h3 class="rr-subhead__h">Simulate a deposit</h3>
+          <template x-if="simLabel"><span class="rr-sec__aside" data-sim-label x-text="simLabel"></span></template>
+        </div>
+        <div class="dp__controls">
+          <label class="dp__amount">
+            <span class="rr-k">Amount</span>
+            <span class="dp__field"><span aria-hidden="true">$</span><input type="text" inputmode="decimal" x-model="amount" aria-label="Amount in USDC" /></span>
+          </label>
+          <div class="rm-chips" role="group" aria-label="Amount presets">
+            <template x-for="a in amounts" :key="a">
+              <button type="button" class="rm-chip" :aria-pressed="amountValue() === a ? 'true' : 'false'" @click="setAmount(a)" x-text="fmtAmount(a)"></button>
+            </template>
+          </div>
+          <div class="rm-chips dp__periods" role="group" aria-label="Deposited this long ago">
+            <template x-for="p in periods" :key="p.id">
+              <button type="button" class="rm-chip" :aria-pressed="period === p.id ? 'true' : 'false'" @click="period = p.id; simAt = null" x-text="p.label"></button>
+            </template>
+          </div>
+        </div>
+
+        <template x-if="hasSim() && simResult()">
+          <div>
+            <div class="dp__result">
+              <div class="rr-stat">
+                <p class="rr-k">Value today</p>
+                <p class="rr-stat__v" x-text="simResult().value"></p>
+                <p class="rr-stat__sub"><span class="dp__mv" :class="simResult().up ? 'is-up' : 'is-down'" x-text="`${simResult().gain} (${simResult().pct})`"></span> on <span x-text="simResult().put"></span> deposited <span x-text="simResult().from"></span><span x-show="simResult().feeNote" x-text="`, ${simResult().feeNote}`"></span></p>
+              </div>
+              <template x-if="benchResult()">
+                <div class="rr-stat dp__bench">
+                  <p class="rr-k"><i data-mark="series" :style="`background:${benchColour}`" aria-hidden="true"></i><span x-text="`On ${benchLabel()}`"></span></p>
+                  <p class="rr-stat__v" x-text="benchResult().value"></p>
+                  <p class="rr-stat__sub"><span class="dp__mv" :class="benchResult().up ? 'is-up' : 'is-down'" x-text="`${benchResult().gain} (${benchResult().pct})`"></span> over the same days</p>
+                </div>
+              </template>
+            </div>
+            <figure class="rr-area dp__fig">
+              <div class="rr-area__frame">
+                <div class="rr-area__y" aria-hidden="true">
+                  <template x-for="t in simYTicks()" :key="t.key"><span :style="`top:${t.top}%`" x-text="t.label"></span></template>
+                </div>
+                <div class="rr-area__plot" tabindex="0" role="img" :aria-label="simAria()"
+                     @pointermove="simMove($event)" @pointerdown="simMove($event)" @pointerleave="simAt = null" @blur="simAt = null">
+                  <div class="rr-area__svg" x-html="simSvg()"></div>
+                  <template x-if="simPoint()"><div class="rr-area__cross" :style="`left:${simPoint().left}%`"></div></template>
+                  <template x-if="simPoint()">
+                    <div class="rr-area__tip" :class="simPoint().left > 62 ? 'is-left' : ''" :style="`left:${simPoint().left}%`">
+                      <p class="rr-area__tip-h"><b x-text="simPoint().date"></b></p>
+                      <ul>
+                        <li><span>Your deposit</span><b x-text="simPoint().value"></b></li>
+                        <template x-if="simPoint().bench"><li><i :style="`background:${benchColour}`" data-mark="series"></i><span x-text="benchLabel()"></span><b x-text="simPoint().bench"></b></li></template>
+                      </ul>
+                    </div>
+                  </template>
+                </div>
+                <div class="rr-area__x" aria-hidden="true">
+                  <template x-for="t in simXTicks()" :key="t.key"><span :class="t.cls" :style="`left:${t.left}%`" x-text="t.label"></span></template>
+                </div>
+              </div>
+              <ul class="rr-area__legend">
+                <li><i class="dp__key" aria-hidden="true"></i>Your deposit</li>
+                <template x-if="benchResult()"><li><i class="dp__key" :style="`border-color:${benchColour}`" aria-hidden="true"></i><span x-text="benchLabel()"></span></li></template>
+                <li><i class="is-target" aria-hidden="true"></i>Held as USDC</li>
+              </ul>
+            </figure>
+            <div class="rr-tablewrap">
+              <table class="rr-table dp__rets">
+                <thead><tr><th scope="col">Returns</th><th scope="col" class="q">Target</th><template x-for="h in horizons" :key="h.id"><th scope="col" class="q" x-text="h.label"></th></template></tr></thead>
+                <tbody>
+                  <template x-for="r in returnRows()" :key="r.key">
+                    <tr :class="{ 'dp__rets-total': r.kind === 'total', 'dp__rets-bench': r.kind === 'bench', 'is-zero': r.zero }">
+                      <th scope="row"><template x-if="r.hue"><i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i></template><span x-text="r.name"></span></th>
+                      <td class="q" x-text="r.weight"></td>
+                      <template x-for="(c, k) in r.cells" :key="k"><td class="q"><span class="dp__mv" :class="c.cls" x-text="c.v"></span></td></template>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+            <p class="rr-note" x-show="capNote()" x-text="capNote()"></p>
+            <p class="rr-note">Split by today's Robot Money allocation and not rebalanced afterwards, the way a deposit works. Each sleeve follows its own daily prices. Returns are before the exit fee and gas. Past returns do not predict future returns.</p>
+          </div>
+        </template>
+        <template x-if="!loading && !(hasSim() && simResult())">
+          <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h">No data yet</p><p class="rm-nodata__d">A simulation needs a year of daily prices for each sleeve.</p></div>
+        </template>
+      </div>
+    </section>
+
+    <!-- ── TVL and liquidity: the aggregate. Each vault's breakdown is on
+         its own page, and the four together on the Robot Money Vault's. ── -->
+    <span id="mechanics" class="dp__alias" aria-hidden="true"></span>
+    <section class="rr-sec" id="liquidity" aria-labelledby="liq-h">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="liq-h">TVL and liquidity</h2>
+        <template x-if="dataLabel()"><span class="rr-sec__aside" x-text="dataLabel()"></span></template>
+      </div>
+      <div class="rr-split rr-split--rule dp__liq">
+        <div class="rr-stat">
+          <p class="rr-k">Combined TVL</p>
+          <p class="rr-stat__v" x-text="combinedTvl()">—</p>
+          <p class="rr-stat__sub" x-text="vaultsLiveSub()"></p>
+        </div>
+        <dl class="rr-dl dp__risk">
+          <div>
+            <dt>Withdrawals</dt>
+            <dd>Any time: one transaction per vault, with no lock and no cooldown, paid in USDC at the share price.</dd>
+          </div>
+          <div>
+            <dt>Exit fee</dt>
+            <dd>
+              <template x-for="f in feeFacts()" :key="f.symbol"><span class="dp__fact"><b x-text="f.symbol"></b><span x-text="f.v"></span></span></template>
+              <template x-if="!feeFacts().length"><span>—</span></template>
+            </dd>
+          </div>
+          <template x-if="capFacts().length">
+            <div>
+              <dt>Caps</dt>
+              <dd><template x-for="c in capFacts()" :key="c.symbol"><span class="dp__fact"><b x-text="c.symbol"></b><span x-text="c.v"></span></span></template></dd>
+            </div>
+          </template>
+        </dl>
+      </div>
+      <nav class="dp__vpages" aria-label="Vault pages">
+        <a class="rr-cta dp__vall" href="/swarm/subjects/robotmoney-vault"><span>The Robot Money Vault</span><span aria-hidden="true">→</span></a>
+        <template x-for="v in vaultPages()" :key="v.slug">
+          <a class="rr-cta" :href="v.href"><span><i data-mark="series" :style="`background:${v.color}`" aria-hidden="true"></i><b x-text="v.symbol"></b> <span class="dp__sub" x-text="v.name"></span></span><span aria-hidden="true">→</span></a>
+        </template>
+      </nav>
+    </section>
+
+    <!-- ── FAQ: the detail a depositor may want, one question at a time.
+         Native disclosure rows, closed by default; a link to #risks or
+         #contracts opens its row (openFragment in the factory). ────────── -->
+    <span id="about" class="dp__alias" aria-hidden="true"></span>
+    <section class="rr-sec" id="faq" aria-labelledby="faq-h" @hashchange.window="openFragment()">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="faq-h">FAQ</h2>
+      </div>
+      <div class="dp__faq">
+        <details id="wallet">
+          <summary @click.prevent="toggleFaq($event)">Do I need a wallet?</summary>
+          <div class="dp__faq-a"><p>Yes, one on Base holding the USDC you deposit and a little ETH for gas. About $0.01 to $0.05 of ETH covers ten vault transactions.</p></div>
+        </details>
+        <details>
+          <summary @click.prevent="toggleFaq($event)">Can I use the wallet I have?</summary>
+          <div class="dp__faq-a"><p>Yes. Any wallet that signs on Base: a Safe multisig, a Ledger or Trezor, MetaMask or Rabby. Your agent prepares the transactions and your wallet signs them; a Safe gets them as one batch for its signers to approve. The skill never holds your keys.</p></div>
+        </details>
+        <details>
+          <summary @click.prevent="toggleFaq($event)">Do I have to create a wallet?</summary>
+          <div class="dp__faq-a"><p>No. Use the wallet you have. If you want your agent to deposit on its own, it can use MetaMask's agent wallet, inside limits you set.</p></div>
+        </details>
+        <details>
+          <summary @click.prevent="toggleFaq($event)">Where do the tokens go?</summary>
+          <div class="dp__faq-a"><p>To the wallet that deposits, a Safe included. They are ERC-20 tokens on Base, so any wallet can hold and send them.</p></div>
+        </details>
+        <details id="allocation-changes">
+          <summary @click.prevent="toggleFaq($event)">What happens when the allocation changes?</summary>
+          <div class="dp__faq-a"><p>New deposits follow the new allocation. What you already hold stays as you bought it: the vaults do not move it between sleeves for you. To match the new allocation, ask your agent to rebalance. It redeems from the sleeves above their new share and deposits into the ones below, and each redeem pays that vault's exit fee.</p></div>
+        </details>
+        <details id="risks">
+          <summary @click.prevent="toggleFaq($event)">What are the risks?</summary>
+          <div class="dp__faq-a">
+            <dl class="rr-dl dp__risk">
+              <div>
+                <dt>Principal</dt>
+                <dd>Capital and returns are not guaranteed. A deposit can lose value.</dd>
+              </div>
+              <div>
+                <dt>Smart contracts</dt>
+                <dd>
+                  <template x-for="a in audits()" :key="a.symbol">
+                    <span class="dp__fact"><b x-text="a.symbol"></b> <a :href="a.href" target="_blank" rel="noopener noreferrer"><span x-text="a.status"></span></a></span>
+                  </template>
+                  <span class="dp__line">Audited code can still fail. <a href="/smart-contract-risks">How DeFi protocols have lost funds</a>.</span>
+                </dd>
+              </div>
+              <div>
+                <dt>Lending markets</dt>
+                <dd x-text="`Fixed Income depends on ${venueList()}. A loss in one of them is a loss for the vault.`"></dd>
+              </div>
+              <div>
+                <dt>Prices</dt>
+                <dd>The token sleeves move with the prices of what they hold, and a redeem sells at the market.</dd>
+              </div>
+              <div>
+                <dt>Admin</dt>
+                <dd>
+                  <template x-for="a in admins()" :key="a.address">
+                    <span class="dp__fact">Safe multisig <a :href="a.href" target="_blank" rel="noopener noreferrer"><span class="dp__mono" x-text="a.short"></span></a></span>
+                  </template>
+                  <span class="dp__line">It can pause deposits and withdrawals, set the exit fee up to 1%, and receives the exit fee.</span>
+                </dd>
+              </div>
+            </dl>
+          </div>
+        </details>
+        <details id="contracts">
+          <summary @click.prevent="toggleFaq($event)">Which contracts does a deposit use?</summary>
+          <div class="dp__faq-a">
+            <div class="rr-tablewrap">
+              <table class="rr-table rr-table--compact dp__contracts">
+                <thead><tr><th scope="col">Contract</th><th scope="col">Address on Base</th></tr></thead>
+                <tbody>
+                  <template x-for="c in contractRows()" :key="c.key">
+                    <tr>
+                      <th scope="row" x-text="c.name"></th>
+                      <td :class="c.href ? '' : 'is-zero'">
+                        <template x-if="c.href"><a class="rr-lnk" :href="c.href" target="_blank" rel="noopener noreferrer"><span x-text="c.address"></span></a></template>
+                        <template x-if="!c.href"><span>Not on Base</span></template>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <nav class="rr-recnav rr-recnav--flow" aria-label="Related">
+      <a href="https://github.com/robotmoney/robotmoney-skills-v0" target="_blank" rel="noopener noreferrer">The skill on GitHub</a>
+      <a href="/skill.md">SKILL.md</a>
+      <a href="/docs/skill/commands">Every command</a>
+      <template x-for="l in vaultLinks()" :key="l.symbol">
+        <a :href="l.href" target="_blank" rel="noopener noreferrer" x-text="`${l.symbol} on BaseScan`"></a>
+      </template>
+    </nav>
   </div>
-
-  <!-- Two paths -->
-  <div class="sk__section">
-    <span class="sk__eyebrow">Two paths</span>
-    <h2 class="sk__section-title">Bring your own wallet,<br>or bootstrap a fresh one.</h2>
-    <p class="sk__sec-lede">
-      Sign externally with whatever you already use, or let the CLI generate an OWS
-      wallet and sign + broadcast for you.
-    </p>
-
-    <div class="sk__table-wrap">
-      <table class="sk-table sk-table--paths">
-        <thead>
-          <tr>
-            <th scope="col"><span class="sk-sr">Step</span></th>
-            <th scope="col">With your own wallet</th>
-            <th scope="col">With a fresh OWS wallet</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <th scope="row">Setup</th>
-            <td>Nothing: use your existing wallet</td>
-            <td><code>create-wallet --label my-agent</code></td>
-          </tr>
-          <tr>
-            <th scope="row">Fund</th>
-            <td>
-              Your existing wallet with USDC + a small amount of ETH for gas
-              <span class="sk-table__sub">~$0.01&ndash;0.05 ETH covers ~10 vault transactions</span>
-            </td>
-            <td>
-              The generated address with USDC + a small amount of ETH for gas
-              <span class="sk-table__sub">~$0.01&ndash;0.05 ETH covers ~10 vault transactions</span>
-            </td>
-          </tr>
-          <tr>
-            <th scope="row">Deposit</th>
-            <td><code>prepare-deposit</code></td>
-            <td><code>execute-deposit</code></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <p class="sk__table-note">
-      Either flow works with Claude Code, Cursor, Codex, or any agent that can run a
-      shell command.
-    </p>
-  </div>
-
-  <!-- Commands -->
-  <div class="sk__section" id="capabilities">
-    <span class="sk__eyebrow">Commands</span>
-    <h2 class="sk__section-title">Twelve commands.<br>Onboard, earn, exit.</h2>
-    <p class="sk__sec-lede">
-      Everything an agent or machine needs to deposit yield + an agent-token basket,
-      and exit on demand, from your wallet or OWS.
-    </p>
-
-    <div class="sk__table-wrap">
-      <table class="sk-table sk-table--cmds">
-        <thead>
-          <tr>
-            <th scope="col">Command</th>
-            <th scope="col">Description</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr class="sk-table__group">
-            <th scope="rowgroup" colspan="2">Wallet</th>
-          </tr>
-          <tr>
-            <td><code>create-wallet</code></td>
-            <td>Bootstrap a new Open Wallet Standard (OWS) wallet for an agent or machine</td>
-          </tr>
-
-          <tr class="sk-table__group">
-            <th scope="rowgroup" colspan="2">Read</th>
-          </tr>
-          <tr>
-            <td><code>health-check</code></td>
-            <td>Check RPC connectivity and vault reachability</td>
-          </tr>
-          <tr>
-            <td><code>get-vault</code></td>
-            <td>Full vault state: caps, exit fee, share price, totals, per-adapter breakdown</td>
-          </tr>
-          <tr>
-            <td><code>get-balance</code></td>
-            <td>A user&rsquo;s rmUSDC balance and USDC-equivalent value</td>
-          </tr>
-          <tr>
-            <td><code>get-apy</code></td>
-            <td>Blended APY across Morpho, Aave, and Compound</td>
-          </tr>
-          <tr>
-            <td><code>get-basket-holdings</code></td>
-            <td>Per-token balances + USD values for the 7 agent tokens in the basket</td>
-          </tr>
-
-          <tr class="sk-table__group">
-            <th scope="rowgroup" colspan="2">Prepare</th>
-          </tr>
-          <tr>
-            <td><code>prepare-deposit</code></td>
-            <td>Unsigned calldata for the vault leg (95%) and the Uniswap basket leg (5%), for the caller to sign with their own wallet</td>
-          </tr>
-          <tr>
-            <td><code>prepare-redeem</code></td>
-            <td>Unsigned calldata for the vault redeem and the basket sale; the caller picks how much of the basket to sell</td>
-          </tr>
-          <tr>
-            <td><code>prepare-withdraw</code></td>
-            <td>Unsigned withdrawal by target net USDC amount</td>
-          </tr>
-
-          <tr class="sk-table__group">
-            <th scope="rowgroup" colspan="2">Execute</th>
-          </tr>
-          <tr>
-            <td><code>execute-deposit</code></td>
-            <td>Sign + broadcast deposit (vault + basket) end-to-end via OWS</td>
-          </tr>
-          <tr>
-            <td><code>execute-redeem</code></td>
-            <td>Sign + broadcast redeem (vault + basket sell) end-to-end via OWS</td>
-          </tr>
-          <tr>
-            <td><code>execute-withdraw</code></td>
-            <td>Sign + broadcast a withdrawal end-to-end via OWS</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- Mechanics -->
-  <div class="sk__section" id="mechanics">
-    <span class="sk__eyebrow">Mechanics</span>
-    <h2 class="sk__section-title">On-chain, multisig-administered,<br>no operator in the hot path.</h2>
-    <p class="sk__sec-lede">
-      A single ERC-4626 vault on Base routes USDC across blue-chip lending protocols.
-      The basket leg is a separate Uniswap swap in the same deposit: those tokens land
-      in your own wallet, not in the vault.
-    </p>
-
-    <div class="sk__mech">
-      <div class="sk-mech">
-        <h3 class="sk-mech__title">ERC-4626 compliant</h3>
-        <p class="sk-mech__desc">One vault, one share token (rmUSDC). Works with any 4626-aware indexer or integration.</p>
-      </div>
-      <div class="sk-mech">
-        <h3 class="sk-mech__title">Dynamic equal-weight routing</h3>
-        <p class="sk-mech__desc">Deposits split atomically across Morpho Gauntlet USDC Prime, Aave V3, and Compound V3, so no single protocol holds it all.</p>
-      </div>
-      <div class="sk-mech">
-        <h3 class="sk-mech__title">Synchronous deposits + withdrawals</h3>
-        <p class="sk-mech__desc">No cooldowns, no locks: a single transaction each way. Redeem returns USDC immediately, minus exit fee.</p>
-      </div>
-      <div class="sk-mech">
-        <h3 class="sk-mech__title">Exit fee: 0.25%</h3>
-        <p class="sk-mech__desc">The only fee. Taken on withdraw or redeem, enforced in the contract, and it stays in the vault. There is no management fee.</p>
-      </div>
-      <div class="sk-mech">
-        <h3 class="sk-mech__title">Production caps</h3>
-        <p class="sk-mech__desc">$100,000 TVL cap, $5,000 per-deposit cap. Multisig-administered.</p>
-      </div>
-      <div class="sk-mech">
-        <h3 class="sk-mech__title">Live blended yield</h3>
-        <p class="sk-mech__desc">APY fetched from the three underlying protocols in real time via <code>get-apy</code>. No manual updates.</p>
-      </div>
-      <div class="sk-mech">
-        <h3 class="sk-mech__title">Agent-token basket leg</h3>
-        <p class="sk-mech__desc">5% of each deposit routes through Uniswap atomically into 7 agent tokens: VIRTUAL, ROBOT, BNKR, JUNO, ZFI, GIZA, PEAQ. They are sent straight to your own wallet, not to the vault.</p>
-      </div>
-      <div class="sk-mech">
-        <h3 class="sk-mech__title">No new contracts for the basket</h3>
-        <p class="sk-mech__desc">The basket leg uses Uniswap&rsquo;s UniversalRouter directly. No protocol fee, no API key, no aggregator middleman.</p>
-      </div>
-    </div>
-  </div>
-
-  <!-- Contracts -->
-  <div class="sk__section" id="contracts">
-    <span class="sk__eyebrow">Contracts</span>
-    <h2 class="sk__section-title">All on-chain.<br>All verified.</h2>
-    <p class="sk__sec-lede">
-      Every contract verified on BaseScan. Chain: Base (8453).
-    </p>
-
-    <div class="sk__table-wrap">
-      <table class="sk-table sk-table--addr">
-        <caption class="sk-table__caption">Protocol</caption>
-        <thead>
-          <tr>
-            <th scope="col">Name</th>
-            <th scope="col">Address</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <th scope="row">RobotMoneyVault</th>
-            <td>
-              <a class="sk-addr" href="https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd" target="_blank" rel="noopener noreferrer">0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
-            </td>
-          </tr>
-          <tr>
-            <th scope="row">MorphoAdapter</th>
-            <td>
-              <a class="sk-addr" href="https://basescan.org/address/0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9" target="_blank" rel="noopener noreferrer">0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
-            </td>
-          </tr>
-          <tr>
-            <th scope="row">AaveV3Adapter</th>
-            <td>
-              <a class="sk-addr" href="https://basescan.org/address/0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea" target="_blank" rel="noopener noreferrer">0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
-            </td>
-          </tr>
-          <tr>
-            <th scope="row">CompoundV3Adapter</th>
-            <td>
-              <a class="sk-addr" href="https://basescan.org/address/0x8247da22a59fce074c102431048d0ce7294c2652" target="_blank" rel="noopener noreferrer">0x8247da22a59fce074c102431048d0ce7294c2652<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
-            </td>
-          </tr>
-          <tr>
-            <th scope="row">Multisig (Admin)</th>
-            <td>
-              <a class="sk-addr" href="https://basescan.org/address/0x88bA7364cC6cE5054981d571b33f8fb3E91475A0" target="_blank" rel="noopener noreferrer">0x88bA7364cC6cE5054981d571b33f8fb3E91475A0<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <!-- Seven tokens, per robotmoney-skills packages/cli/src/lib/basket/constants.ts
-         (v0.3.0). The allocation API seed lists a different seven (it carries Woon and
-         DEUS, which the skill does not buy, and drops VIRTUAL and BNKR, which it does).
-         That seed is not the basket. Do not copy it here. -->
-    <h3 class="sk__sub-title">Basket tokens</h3>
-    <p class="sk__sec-lede">
-      5% of each deposit routes through Uniswap directly into these 7 agent tokens.
-    </p>
-
-    <div class="sk__table-wrap">
-      <table class="sk-table sk-table--addr">
-        <caption class="sk-table__caption">Basket</caption>
-        <thead>
-          <tr>
-            <th scope="col">Name</th>
-            <th scope="col">Address</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <th scope="row">VIRTUAL</th>
-            <td>
-              <a class="sk-addr" href="https://basescan.org/address/0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b" target="_blank" rel="noopener noreferrer">0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
-            </td>
-          </tr>
-          <tr>
-            <th scope="row">ROBOT</th>
-            <td>
-              <a class="sk-addr" href="https://basescan.org/address/0x65021a79aeef22b17cdc1b768f5e79a8618beba3" target="_blank" rel="noopener noreferrer">0x65021a79aeef22b17cdc1b768f5e79a8618beba3<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
-            </td>
-          </tr>
-          <tr>
-            <th scope="row">BNKR</th>
-            <td>
-              <a class="sk-addr" href="https://basescan.org/address/0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b" target="_blank" rel="noopener noreferrer">0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
-            </td>
-          </tr>
-          <tr>
-            <th scope="row">JUNO</th>
-            <td>
-              <a class="sk-addr" href="https://basescan.org/address/0x4E6c9f48f73E54EE5F3AB7e2992B2d733D0d0b07" target="_blank" rel="noopener noreferrer">0x4E6c9f48f73E54EE5F3AB7e2992B2d733D0d0b07<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
-            </td>
-          </tr>
-          <tr>
-            <th scope="row">ZFI</th>
-            <td>
-              <a class="sk-addr" href="https://basescan.org/address/0xd080ed3c74a20250a2c9821885203034acd2d5ae" target="_blank" rel="noopener noreferrer">0xd080ed3c74a20250a2c9821885203034acd2d5ae<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
-            </td>
-          </tr>
-          <tr>
-            <th scope="row">GIZA</th>
-            <td>
-              <a class="sk-addr" href="https://basescan.org/address/0x590830dfdf9a3f68afcdde2694773debdf267774" target="_blank" rel="noopener noreferrer">0x590830dfdf9a3f68afcdde2694773debdf267774<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
-            </td>
-          </tr>
-          <tr>
-            <th scope="row">PEAQ</th>
-            <td>
-              <span class="sk-table__sub">address not listed here yet; the skill carries it in its basket constants</span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- About -->
-  <footer class="sk__footer" id="about">
-    <span class="sk__eyebrow">About</span>
-    <h2 class="sk__section-title">Autonomous yield<br>for the agent economy.</h2>
-    <p class="sk__footer-text">
-      Once an agent has USDC and ETH on Base, the full deposit &rarr; yield + basket &rarr;
-      withdraw loop runs with no human in the loop: yield across Morpho, Aave, and
-      Compound, and a 5% basket leg into 7 curated agent tokens via Uniswap, in a single
-      prompt, fully permissionless.
-    </p>
-    <div class="sk__footer-links">
-      <a class="sk__footer-link" href="https://github.com/robotmoney/robotmoney-skills" target="_blank" rel="noopener noreferrer">View on GitHub</a>
-      <a class="sk__footer-link" href="https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd" target="_blank" rel="noopener noreferrer">Vault on BaseScan</a>
-      <a class="sk__footer-link" href="/skill.md">View SKILL.md</a>
-    </div>
-  </footer>
 </section>
 
 <style>
+/* /deposit, page-local. The hero band and install card are the deposit
+   skill's own (.sk, shared in shape with /skills, which keeps its copy); the
+   sections below are the research record's (.rr, views.css), with the few
+   additions this page needs under dp__. */
 .sk {
   max-width: 80rem;
   margin: 0 auto;
@@ -423,19 +465,7 @@
   font-family: var(--font-sans);
 }
 
-.sk-sr {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-/* Header — full-bleed headline band, matching the other nav pages */
+/* Header: full-bleed headline band, matching the other nav pages */
 .sk__head {
   position: relative;
   width: 100vw;
@@ -447,7 +477,6 @@
   overflow: hidden;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-void);
-  margin-bottom: 3rem;
 }
 /* Canvas host for treeHero(). Behind the content and never interactive, so a
    click anywhere in the band still lands on the copy or install control. */
@@ -466,20 +495,10 @@
   align-items: start;
 }
 @media (min-width: 60rem) {
-  /* Wide enough that the 62-character install command sits on one line. */
+  /* Wide enough that the install command sits on one line. */
   .sk__head-inner { grid-template-columns: minmax(0, 1fr) minmax(0, 42rem); gap: 2.5rem; }
 }
 .sk__head-copy { min-width: 0; }
-
-.sk__eyebrow {
-  display: inline-block;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.3em;
-  color: var(--color-accent);
-  margin-bottom: 1rem;
-}
 
 .sk__title {
   font-family: var(--font-display);
@@ -490,7 +509,6 @@
   line-height: 1.05;
   margin: 0 0 1.25rem;
 }
-
 .sk__title-accent {
   font-family: var(--font-display);
   font-style: normal;
@@ -499,7 +517,6 @@
   letter-spacing: -0.01em;
   color: var(--color-text);
 }
-
 .sk__lede {
   font-size: 1.0625rem;
   line-height: 1.65;
@@ -508,25 +525,10 @@
   margin: 0;
 }
 
-/* Install card — the terminal block beside the headline */
-.sk__install-card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  min-width: 0;
-}
-
-.sk__install-head {
-  padding: 0.6rem 1rem;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.sk__install-body {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.6rem;
-  padding: 1rem;
-}
-
+/* Install card: the terminal block beside the headline */
+.sk__install-card { background: var(--color-surface); border: 1px solid var(--color-border); min-width: 0; }
+.sk__install-head { padding: 0.6rem 1rem; border-bottom: 1px solid var(--color-border); }
+.sk__install-body { display: flex; align-items: flex-start; gap: 0.6rem; padding: 1rem; }
 .sk__install-label {
   font-family: var(--font-mono);
   font-size: 0.65rem;
@@ -534,25 +536,14 @@
   letter-spacing: 0.2em;
   color: var(--color-text-muted);
 }
-
-.sk__install-prompt {
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  color: var(--color-text-muted);
-  flex-shrink: 0;
-}
-
+.sk__install-prompt { font-family: var(--font-mono); font-size: 0.85rem; color: var(--color-text-muted); flex-shrink: 0; }
 /* The command reads in plain text, not accent. Cyan is the house colour and it
-   already fills the CTA under this line; spending it again on the longest
-   string in the hero is what makes the band feel washed. */
+   already fills the CTA under this line. */
 .sk__install-cmd {
   font-family: var(--font-mono);
   font-size: 0.85rem;
   line-height: 1.5;
   color: var(--color-text);
-  /* One line at desktop, where the card is sized for it. Below the breakpoint
-     the card is whatever the phone allows, so wrapping is re-enabled there
-     rather than forcing a sideways scroll. */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -560,12 +551,10 @@
   min-width: 0;
 }
 /* Below the breakpoint the card is whatever the phone allows, so the command
-   wraps rather than hiding its end behind an ellipsis. After the base rule,
-   which it overrides at the same specificity. */
+   wraps rather than hiding its end behind an ellipsis. */
 @media (max-width: 59.99rem) {
   .sk__install-cmd { white-space: normal; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; }
 }
-
 .sk__install-copy {
   flex-shrink: 0;
   display: inline-flex;
@@ -579,20 +568,11 @@
   cursor: pointer;
   transition: border-color 0.2s;
 }
-/* A secondary button with an icon for a label: the frame goes to the text
-   colour on hover, never to cyan. Copied is the tick, not a hue, so it holds
-   the hover state rather than a colour of its own. */
+/* The frame goes to the text colour on hover, never to cyan. Copied is the
+   tick, not a hue, so it holds the hover state rather than a colour. */
 .sk__install-copy:hover,
 .sk__install-copy.is-copied { border-color: var(--color-text); }
-
-.sk__install-note {
-  font-size: 0.8rem;
-  line-height: 1.55;
-  color: var(--color-text-muted);
-  margin: 0;
-  padding: 0 1rem 1rem;
-}
-
+.sk__install-note { font-size: 0.8rem; line-height: 1.55; color: var(--color-text-muted); margin: 0; padding: 0 1rem 1rem; }
 /* The install card's action and the page's one labelled button, so it is the
    primary: .btn-primary's filled cyan and type, at the card's width. */
 .sk__cta {
@@ -610,305 +590,106 @@
   text-decoration: none;
   transition: background-color 0.3s;
 }
-
 .sk__cta:hover { background: #fff; }
 
-/* Card grid */
-
-
-
-
-
-
-
-
-
-/* Inline code: square, bordered, never a cyan mass */
-.sk code {
-  font-family: var(--font-mono);
-  font-size: 0.85em;
-  color: var(--color-text);
-  background: var(--color-void);
-  border: 1px solid var(--color-border);
-  padding: 0.1rem 0.35rem;
+/* ── The record under the hero ───────────────────────────────────────── */
+.dp__meta { border-top: 0; }
+/* An old section id, kept as a landing point: no box of its own. */
+.dp__alias { display: block; height: 0; scroll-margin-top: 6rem; }
+/* A question and its answer: the question takes a wider label column than a
+   fact's, since it is a sentence. */
+.dp__qa > div { grid-template-columns: 14rem minmax(0, 1fr); }
+.dp__qa dt { color: var(--color-text); }
+.dp__qa dd { color: var(--color-text-soft); line-height: 1.6; }
+.dp__qa > div:last-of-type { border-bottom: 0; }
+.dp__more { margin: 1.25rem 0 0; font-size: 0.875rem; }
+/* The legend names each sleeve's vault token under it, in mono. */
+.dp__lede { margin: 0 0 1.5rem; font-size: 0.9375rem; line-height: 1.65; color: var(--color-text-soft); }
+.dp__legtok { margin-left: 0.625rem; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); }
+.dp__vault { display: inline-flex; align-items: baseline; gap: 0.5rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
+.dp__tokens { min-width: 40rem; }
+.dp__tokens tbody th i, .dp__earn dt i { display: inline-block; width: 0.4375rem; height: 0.4375rem; margin-right: 0.5rem; vertical-align: 0.1em; }
+.rr-table td.dp__sans { font-family: var(--font-sans); }
+.dp__earn > div { grid-template-columns: 14rem minmax(0, 1fr); }
+.dp__earn dt { color: var(--color-text); }
+.dp__earn dd { color: var(--color-text-soft); line-height: 1.6; }
+.dp__earn > div:last-of-type { border-bottom: 0; }
+.dp__sim { margin-top: 2.25rem; padding-top: 2.25rem; border-top: 1px solid var(--color-border); }
+.dp__controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 1rem 1.5rem; margin-bottom: 1.75rem; }
+.dp__amount { display: grid; gap: 0.5rem; }
+.dp__field { display: inline-flex; align-items: center; gap: 0.5rem; height: 2.25rem; padding: 0 0.75rem; border: 1px solid var(--color-border-light); background: var(--color-deep); font-family: var(--font-mono); font-size: 0.875rem; color: var(--color-text-muted); }
+.dp__field:focus-within { border-color: var(--color-text); }
+.dp__field input { width: 8rem; border: 0; background: none; color: var(--color-text); font: inherit; font-variant-numeric: tabular-nums; outline: none; }
+.dp__periods { margin-left: auto; }
+.dp__result { margin-bottom: 1.5rem; }
+/* Signed moves read as financial deltas: green up, warn down, the sign first
+   so they survive greyscale. */
+.dp__mv { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.dp__mv.is-up { color: var(--color-green); }
+.dp__mv.is-down { color: var(--color-warn); }
+.dp__fig { margin: 0 0 1.5rem; }
+.dp__key { display: inline-block; width: 0.875rem; height: 0; border-top: 1.5px solid var(--color-text); }
+.dp__rets { min-width: 40rem; }
+.dp__rets tbody th { font-weight: 400; }
+.dp__rets tr.is-zero th, .dp__rets tr.is-zero td { color: var(--color-text-muted); }
+.dp__rets tr.is-zero .dp__mv { opacity: 0.55; }
+/* The deposit's row is the sum of the rows above it: a rule over it, and its
+   name at weight. The benchmark sits under it. */
+.dp__rets tr.dp__rets-total > * { border-top: 1px solid var(--color-border-light); }
+.dp__rets tr.dp__rets-total th { font-weight: 500; }
+.dp__rets tbody th i { display: inline-block; width: 0.4375rem; height: 0.4375rem; margin-right: 0.5rem; vertical-align: 0.1em; }
+.dp__mv.is-zero { color: var(--color-text-muted); }
+.dp__liq { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); }
+.dp__liq .rr-dl > div:last-of-type { border-bottom: 0; }
+.dp__result { display: flex; flex-wrap: wrap; gap: 1.5rem 4rem; }
+.dp__bench .rr-k { display: inline-flex; align-items: center; gap: 0.5rem; }
+.dp__bench .rr-k i { width: 0.4375rem; height: 0.4375rem; }
+.dp__vpages { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.75rem; margin-top: 2rem; }
+.dp__vpages .rr-cta { margin-top: 0; font-size: 0.8125rem; text-transform: none; letter-spacing: 0; }
+.dp__vall { font-family: var(--font-sans); font-weight: 500; }
+.dp__vpages .rr-cta i { display: inline-block; width: 0.4375rem; height: 0.4375rem; margin-right: 0.5rem; vertical-align: 0.1em; }
+.dp__vpages .rr-cta b { font-family: var(--font-mono); font-weight: 500; }
+.dp__vpages .dp__sub { display: block; margin-top: 0.25rem; font-size: 0.75rem; }
+.dp__sym { text-transform: none; }
+.dp__cblock { margin-top: 2.25rem; }
+.dp__cblock > .rr-subhead__h { margin-bottom: 1rem; }
+.dp__sub { font-family: var(--font-sans); font-weight: 400; font-size: 0.875rem; text-transform: none; color: var(--color-text-muted); }
+.dp__fact { display: inline-flex; gap: 0.5rem; margin-right: 1.5rem; }
+.dp__fact b, .dp__mono { font-family: var(--font-mono); font-weight: 500; }
+.dp__fact b { flex: none; }
+.dp__line { display: block; margin-top: 0.25rem; color: var(--color-text-soft); }
+.dp__fact + .dp__line { margin-top: 0.5rem; }
+.dp__contracts { min-width: 36rem; }
+/* The FAQ: one hairline row per question, a mono +/− at the end of the row
+   the way a table's sort glyph sits; the answer opens under it. */
+.dp__faq { border-top: 1px solid var(--color-border); }
+.dp__faq details { border-bottom: 1px solid var(--color-border); scroll-margin-top: 6rem; }
+.dp__faq summary { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; padding: 1rem 0;
+  list-style: none; cursor: pointer; font-size: 0.9375rem; font-weight: 500; color: var(--color-text); }
+.dp__faq summary::-webkit-details-marker { display: none; }
+.dp__faq summary::after { content: "+"; flex: none; font-family: var(--font-mono); font-weight: 400; color: var(--color-text-muted); }
+.dp__faq details[open] > summary::after { content: "−"; }
+.dp__faq summary:hover::after, .dp__faq summary:focus-visible::after { color: var(--color-text); }
+.dp__faq summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.dp__faq-a { overflow: hidden; padding: 0 0 1.5rem; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
+.dp__faq-a > p { margin: 0; }
+.dp__faq-a .rr-dl > div:last-of-type { border-bottom: 0; }
+.dp__contracts tbody th { width: 14rem; font-weight: 400; font-size: 0.75rem; }
+.dp__contracts td { overflow-wrap: anywhere; }
+@media (max-width: 960px) {
+  .dp__vpages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dp__vall { grid-column: 1 / -1; }
 }
-
-.sk-table code { white-space: nowrap; }
-
-/* Wins over the generic `.sk code` styling, which would otherwise draw the
-   command as an inline code chip. Colour is deliberately plain text, see
-   .sk__install-cmd above. */
-.sk .sk__install-cmd {
-  border: 0;
-  background: none;
-  padding: 0;
-  color: var(--color-text);
+@media (max-width: 760px) {
+  .dp__periods { margin-left: 0; }
 }
-
-/* Sections */
-.sk__section { margin-bottom: 4rem; }
-
-.sk__section-title {
-  font-family: var(--font-display);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-  font-size: 1.75rem;
-  line-height: 1.1;
-  margin: 0 0 1rem;
-}
-
-.sk__sub-title {
-  font-family: var(--font-display);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-  font-size: 1.25rem;
-  margin: 2.5rem 0 0.75rem;
-}
-
-.sk__sec-lede {
-  font-size: 0.95rem;
-  line-height: 1.7;
-  color: var(--color-text-muted);
-  max-width: 44rem;
-  margin: 0 0 2rem;
-}
-
-/* How it works: steps */
-.sk__steps {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 1.25rem;
-  margin-bottom: 2rem;
-}
-
-.sk-step {
-  padding: 1.5rem;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-top: 1px solid var(--color-accent);
-}
-
-.sk-step__num {
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  letter-spacing: 0.3em;
-  color: var(--color-text-muted);
-}
-
-.sk-step__title {
-  font-size: 1.1rem;
-  font-weight: 600;
-  margin: 0.6rem 0 0.5rem;
-}
-
-.sk-step__desc {
-  font-size: 0.875rem;
-  line-height: 1.6;
-  color: var(--color-text-muted);
-  margin: 0;
-}
-
-.sk__checks {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem 2rem;
-}
-
-.sk-check {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--color-text-muted);
-}
-
-.sk-check__mark {
-  color: var(--color-green);
-  margin-right: 0.5rem;
-}
-
-/* Tables */
-.sk__table-wrap {
-  margin: 0 0 0.75rem;
-  overflow-x: auto;
-  border: 1px solid var(--color-border);
-}
-
-.sk-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-  text-align: left;
-}
-
-.sk-table--paths { min-width: 40rem; }
-.sk-table--cmds { min-width: 36rem; }
-.sk-table--addr { min-width: 34rem; }
-
-.sk-table__caption {
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.25em;
-  color: var(--color-accent);
-  text-align: left;
-  padding: 0.85rem 1rem 0;
-}
-
-.sk-table thead th {
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  font-weight: 400;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-  color: var(--color-text-muted);
-  padding: 0.85rem 1rem;
-  border-bottom: 1px solid var(--color-border);
-  vertical-align: bottom;
-}
-
-.sk-table tbody th {
-  font-weight: 600;
-  color: var(--color-text);
-  padding: 0.85rem 1rem;
-  vertical-align: top;
-}
-
-.sk-table tbody td {
-  color: var(--color-text-muted);
-  line-height: 1.6;
-  padding: 0.85rem 1rem;
-  vertical-align: top;
-}
-
-.sk-table tbody tr { border-bottom: 1px solid var(--color-border); }
-.sk-table tbody tr:last-child { border-bottom: 0; }
-
-.sk-table__group th {
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  font-weight: 400;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-  color: var(--color-accent);
-  background: var(--color-deep);
-  padding: 0.6rem 1rem;
-}
-
-.sk-table__sub {
-  display: block;
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  color: var(--color-text-muted);
-  margin-top: 0.35rem;
-}
-
-.sk__table-note {
-  font-size: 0.8rem;
-  color: var(--color-text-muted);
-  margin: 0 0 0.5rem;
-}
-
-.sk-addr {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--color-link);
-  text-decoration: none;
-  word-break: break-all;
-  border-bottom: 1px solid var(--color-link-line);
-  transition: border-color 0.2s;
-}
-
-.sk-addr:hover { border-bottom-color: var(--color-link); }
-
-.sk-addr__ext {
-  margin-left: 0.4rem;
-  color: var(--color-text-muted);
-}
-
-/* Mechanics */
-.sk__mech {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 1.25rem;
-}
-
-.sk-mech {
-  padding: 1.5rem;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-}
-
-.sk-mech__title {
-  font-size: 1rem;
-  font-weight: 600;
-  margin: 0 0 0.5rem;
-}
-
-.sk-mech__desc {
-  font-size: 0.85rem;
-  line-height: 1.6;
-  color: var(--color-text-muted);
-  margin: 0;
-}
-
-/* Footer / About */
-.sk__footer {
-  padding-top: 2.5rem;
-  border-top: 1px solid var(--color-border);
-}
-
-.sk__footer-text {
-  font-size: 1rem;
-  line-height: 1.7;
-  color: var(--color-text-muted);
-  max-width: 44rem;
-  margin: 0 0 1.5rem;
-}
-
-.sk__footer-links {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.85rem;
-}
-
-.sk__footer-link {
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--color-text-muted);
-  text-decoration: none;
-  transition: color 0.2s;
-}
-
-.sk__footer-link:hover { color: var(--color-text); }
-
-/* Keyboard focus stays visible everywhere on the page */
-.sk a:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 3px;
-}
-
-@media (min-width: 700px) {
-  .sk__title { font-size: 3.5rem; }
-  .sk__section-title { font-size: 2.25rem; }
-  .sk__steps { grid-template-columns: repeat(3, 1fr); }
-  .sk__mech { grid-template-columns: 1fr 1fr; }
-  .sk__footer-links { flex-direction: row; flex-wrap: wrap; }
-}
-
-@media (min-width: 1024px) {
-  .sk { padding: 0 2rem 6rem; }
-  .sk__mech { grid-template-columns: repeat(4, 1fr); }
-}
-
-@media (prefers-reduced-motion: reduce) {
+@media (max-width: 640px) {
+  .dp__qa > div, .dp__earn > div, .dp__risk > div { grid-template-columns: minmax(0, 1fr); gap: 0.35rem; }
+  /* The comparison stacks: each row's question, then each side under its
+     own name, rather than three columns a phone cannot read. */
+              /* Addresses wrap in place of a sideways scroll. */
+  .dp__contracts { min-width: 0; }
+  .dp__contracts tbody th { width: 40%; }
+  .sk__title { font-size: 2.25rem; }
 }
 </style>
