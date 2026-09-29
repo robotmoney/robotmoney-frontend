@@ -1,4 +1,4 @@
-<!-- /research/channel-divergence — the full research write-up, ported from the
+<!-- /research/channel-divergence: the full research write-up, ported from the
      production page at robotmoney.network/research/channel-divergence. Carries the
      whole argument (the assumption under test, the three transmission
      indicators with their construction notes and reading guides, the published
@@ -8,7 +8,7 @@
      Fragment only: NO <script>, NO custom Alpine factories beyond the existing
      researchView, NO <html>/<head>/<body>. -->
 
-<section class="rs rs--divergence container" x-data="researchView('channel-divergence')" x-init="load()">
+<section class="rs rs--divergence container" x-data="researchView('channel-divergence')" x-init="load()" data-anchors>
   <header class="rs__head">
     <div class="rs__eyebrow">Research preview</div>
     <h1 class="rs__title">Is the macro&ndash;to&ndash;crypto channel breaking?</h1>
@@ -18,13 +18,12 @@
       when the marginal speculative dollar shows up in NVDA, Kalshi, and private secondaries
       instead. These three indicators try to measure the transmission channel directly. If
       they sit persistently low while macro reads risk-on, they argue the composite should be
-      tempered &mdash; the macro tailwind isn&rsquo;t reaching crypto. Not yet wired into the
-      composite; this page is the &ldquo;does the signal look real?&rdquo; check before
-      deciding whether to add them to the on-chain panel.
+      tempered: the macro tailwind isn&rsquo;t reaching crypto. They are not part of the
+      composite yet, pending a check that the signal is real before they are added to the
+      on-chain panel.
     </p>
     <p class="rs__asof" x-show="payload" x-cloak>
-      Live panel as of <span x-text="payload?.asof"></span> &middot; complements the regime
-      composite (not wired into it).
+      Readings as of <span x-text="payload?.asof"></span>. They complement the regime composite and are not part of it.
     </p>
   </header>
 
@@ -34,7 +33,7 @@
        btc_qqq_ratio_percentile, stables_vs_qqq_flow). With none to show, the
        panel keeps a frame and states it the way every chart below does
        (.rm-nodata), a failed read included: the API's own error text is not
-       copy, and the reference table's caption points a reader here. -->
+       copy. -->
   <template x-if="gaugesEmpty()">
     <div class="rs__gauges"><div class="rs__gauge rm-nodata"><p class="rm-nodata__h" x-text="gaugesEmpty()"></p></div></div>
   </template>
@@ -53,7 +52,7 @@
   </template>
 
   <section class="rs__sec">
-    <h2 class="rs__h2">Long-run reference</h2>
+    <h2 class="rs__h2" id="long-run-reference">Long-run reference</h2>
     <!-- The READING column that used to sit beside these medians was hardcoded
          at authoring time and drifted against the live panel above (0.52 vs
          0.479, 7% vs 5.9%, -5.9% vs -7.1% on 2026-08-03), while its caption
@@ -64,8 +63,7 @@
     <div class="rs__tablewrap">
       <table class="rs__table">
         <caption class="rs__caption">
-          The baseline each indicator is read against. Current values are in the live panel
-          above, with the date they were computed.
+          The baseline each indicator is read against.
         </caption>
         <thead>
           <tr>
@@ -92,13 +90,13 @@
   </section>
 
   <section class="rs__sec">
-    <h2 class="rs__h2">1. BTC &beta; vs risk-appetite factor</h2>
+    <h2 class="rs__h2" id="btc-beta-vs-risk-appetite-factor">BTC &beta; vs risk-appetite factor</h2>
     <p class="rs__p">
       90-day rolling OLS beta of BTC daily returns regressed on (QQQ &minus; SPY) daily
-      returns. The (QQQ &minus; SPY) spread isolates the high-beta-tech component &mdash; when
+      returns. The (QQQ &minus; SPY) spread isolates the high-beta-tech component: when
       investors crave duration and growth, this widens. A high BTC beta means crypto moves with
       that appetite (the channel works). A beta that compresses toward zero, or flips negative,
-      means crypto has decoupled &mdash; risk-on flow is being absorbed elsewhere.
+      means crypto has decoupled: risk-on flow is being absorbed elsewhere.
     </p>
     <figure class="rs__figure">
       <figcaption class="rs__figcap">BTC &beta; to (QQQ&minus;SPY), 90d rolling &middot; 8y median 1.04</figcaption>
@@ -120,11 +118,11 @@
   </section>
 
   <section class="rs__sec">
-    <h2 class="rs__h2">2. BTC / QQQ relative-strength percentile</h2>
+    <h2 class="rs__h2" id="btc-qqq-relative-strength-percentile">BTC / QQQ relative-strength percentile</h2>
     <p class="rs__p">
       BTC/QQQ price ratio, 3-year rolling percentile rank. A direct race between &ldquo;buy
       BTC&rdquo; and &ldquo;buy the AI-tech basket.&rdquo; Below the 50th percentile and falling
-      means QQQ is winning the relative-strength contest &mdash; speculation is rotating into
+      means QQQ is winning the relative-strength contest: speculation is rotating into
       AI/tech megacaps.
     </p>
     <figure class="rs__figure">
@@ -143,7 +141,7 @@
   </section>
 
   <section class="rs__sec">
-    <h2 class="rs__h2">3. Stablecoin float growth vs QQQ growth (90d)</h2>
+    <h2 class="rs__h2" id="stablecoin-float-growth-vs-qqq-growth-90d">Stablecoin float growth vs QQQ growth (90d)</h2>
     <p class="rs__p">
       90-day percent change in total stablecoin float minus 90-day percent change in QQQ price.
       A direct flow proxy: are speculative dollars showing up as new stables (crypto rails) or
@@ -160,19 +158,19 @@
       </div>
       <p class="rs__note">
         Positive = new flow into crypto rails. Negative = flow rotating to equity rails.
-        (Early-2018 readings of +500%+ are clipped off the top &mdash; the stablecoin asset class
+        (Early-2018 readings of +500%+ are clipped off the top: the stablecoin asset class
         was tiny then, so 90d percent-changes were hyperbolic and not comparable to today.)
       </p>
     </figure>
   </section>
 
   <section class="rs__sec rs__panel">
-    <h2 class="rs__h2">How this would feed the regime composite</h2>
+    <h2 class="rs__h2" id="regime-composite">How this would feed the regime composite</h2>
     <p class="rs__p">
       These three indicators belong in the on-chain panel. When risk-on macro is loud (macro
       panel &gt; 0.7) but the channel indicators are weak (e.g., BTC &beta; &lt; 0.5&times; its
       long-run median, or BTC/QQQ percentile &lt; 30, or 90d flow diff sustained negative), the
-      on-chain panel should reflect that &mdash; pulling the composite back toward neutral. The
+      on-chain panel should reflect that, pulling the composite back toward neutral. The
       current on-chain panel reads crypto activity in isolation, so a quiet crypto market
       that&rsquo;s quiet <em>because</em> the marginal speculative dollar went elsewhere shows up
       the same as a quiet crypto market that&rsquo;s quiet because macro itself is risk-off.
@@ -189,8 +187,8 @@
   </section>
 
   <p class="rs__p rs__outro">
-    Back to <a class="rs__link" href="/regime">/regime</a>. The companion preview is
-    <a class="rs__link" href="/research/late-cycle-signals">/research/late-cycle-signals</a>.
+    Back to the <a class="rs__link" href="/regime">regime page</a>. The companion preview is
+    <a class="rs__link" href="/research/late-cycle-signals">Late-cycle signals</a>.
   </p>
 
   <div class="rs__back">
@@ -206,9 +204,8 @@
    only as a line. */
 .rs--divergence { max-width: 64rem; }
 .rs--divergence .rs__head { margin-bottom: 2.5rem; }
-.rs--divergence .rs__title { font-size: 2.25rem; line-height: 1.05; }
 .rs__lede {
-  color: var(--color-text-muted);
+  color: var(--color-text-soft);
   max-width: 48rem;
   margin: 1.25rem 0 0;
   line-height: 1.7;
@@ -222,16 +219,16 @@
   font-family: var(--font-mono);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.15em;
+  letter-spacing: 0.11em;
   color: var(--color-text);
   margin: 0 0 1rem;
   padding-bottom: 0.6rem;
-  border-bottom: 1px solid var(--color-accent);
+  border-bottom: 1px solid var(--color-border);
 }
 .rs__p {
   font-size: 0.95rem;
   line-height: 1.75;
-  color: var(--color-text-muted);
+  color: var(--color-text-soft);
   max-width: 48rem;
   margin: 0 0 1rem;
 }
@@ -264,7 +261,7 @@
   font-family: var(--font-mono);
   font-size: 0.7rem;
   text-transform: uppercase;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.11em;
   color: var(--color-text-muted);
   font-weight: 400;
   background: var(--color-surface);
@@ -291,7 +288,7 @@
   font-family: var(--font-mono);
   font-size: 0.7rem;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.11em;
   color: var(--color-text-muted);
   margin-bottom: 0.75rem;
 }
@@ -301,8 +298,6 @@
   line-height: 1.65;
   color: var(--color-text-muted);
   margin: 0.75rem 0 0;
-  padding-left: 0.75rem;
-  border-left: 1px solid var(--color-border);
 }
 
 .rs__panel {
@@ -311,7 +306,6 @@
   border: 1px solid var(--color-border);
   background: var(--color-surface);
 }
-.rs__panel .rs__h2 { border-bottom-color: var(--color-border); }
 
 .rs__outro { margin-top: 2.5rem; }
 .rs__link {
@@ -350,7 +344,6 @@
 }
 
 @media (min-width: 768px) {
-  .rs--divergence .rs__title { font-size: 3rem; }
   .rs--divergence .rs__series-canvas { height: 180px; }
 }
 </style>
