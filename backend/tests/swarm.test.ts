@@ -3,6 +3,7 @@ import * as ic from "../src/swarm/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeApplication, canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER, REGIME_METHOD, SWARM_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import {
@@ -315,7 +316,7 @@ test("submit: signature verify/reject, window, duplicate", async () => {
 
   // Required negative control: the stored submit-time flag stays true, but a
   // changed persisted payload must make both public read surfaces report false.
-  await sql`UPDATE swarm_recommendations
+  await fixtureDb`UPDATE swarm_recommendations
             SET payload = jsonb_set(payload, '{body}', to_jsonb(${"tampered after insert"}::text)),
                 verified = true
             WHERE id = ${ok.recommendationId}`;

@@ -35,6 +35,7 @@ import * as admin from "../src/swarm/admin.ts";
 import { slugifyMemberName, DEGENERATE_NAME_STEM } from "../src/swarm/handle.ts";
 import { MEMBER_HANDLE_RE } from "../src/api/validation.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
@@ -359,7 +360,7 @@ test("slugifyMemberName always produces something MEMBER_HANDLE_RE accepts", asy
 async function waitUntilBlockedOn(fragment: string, whatItProves: string): Promise<void> {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    const [row] = await sql<{ n: number }[]>`
+    const [row] = await fixtureDb<{ n: number }[]>`
       SELECT count(*)::int AS n FROM pg_stat_activity
       WHERE wait_event_type = 'Lock' AND query ILIKE ${`%${fragment}%`}`;
     if ((row?.n ?? 0) > 0) return;

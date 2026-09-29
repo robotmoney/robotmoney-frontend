@@ -42,6 +42,7 @@ import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import {
   DIGEST_SCHEME, inputsDigest, JUDGE_PROMPT_HASH, parseJudgeResponse, REASON_MAX_CHARS, renderJudgePrompt,
   UNTRUSTED_INPUTS_BEGIN, UNTRUSTED_INPUTS_END,
@@ -824,7 +825,7 @@ test("the judgement row and the consensus it forms are ONE transaction: a failur
   // Make the LAST write of the transaction — the `session.judged` event —
   // fail. Everything before it (the applied opinion, the judgement row, its
   // audit row, the state change) must roll back with it.
-  await sql.unsafe(`
+  await fixtureDb.unsafe(`
     CREATE OR REPLACE FUNCTION rm_test_refuse_judged_event() RETURNS trigger LANGUAGE plpgsql AS $f$
     BEGIN
       IF NEW.kind = 'session.judged' THEN RAISE EXCEPTION 'rm_test: refusing session.judged'; END IF;
@@ -835,7 +836,7 @@ test("the judgement row and the consensus it forms are ONE transaction: a failur
   try {
     await expect(submitSigned(judge, session.id, STUB_JUDGE_REPLY)).rejects.toThrow("refusing session.judged");
   } finally {
-    await sql.unsafe(`
+    await fixtureDb.unsafe(`
       DROP TRIGGER IF EXISTS rm_test_refuse_judged_event ON swarm_stream_events;
       DROP FUNCTION IF EXISTS rm_test_refuse_judged_event();`);
   }
@@ -1095,7 +1096,7 @@ test("the replay COMPARES a participant judgement's stored inputs_digest — rep
 
   // An amendment landing after judging, written at the database because the
   // app path that reached it is closed (PR #757); the tool only READS.
-  await sql`
+  await fixtureDb`
     UPDATE swarm_recommendations SET body = 'an amended take, filed after judging'
      WHERE session_id = ${session.id} AND member_id = ${members[0]!.id}`;
   const broken = (await replaySessionJudge(session.id))!;
@@ -1192,7 +1193,7 @@ async function nonReproducibleSession(prefix: string, which: "takes" | "stored")
   await verbs.publishSessionAdmin(s.session.id, undefined);
   const other = [{ bucket: "agent_tokens", weight: 1 }, { bucket: "protocol", weight: 3 }];
   if (which === "takes") {
-    await sql`
+    await fixtureDb`
       UPDATE swarm_recommendations
          SET payload = jsonb_set(coalesce(payload, '{}'::jsonb), '{weights}', ${JSON.stringify(other)}::text::jsonb)
        WHERE session_id = ${s.session.id} AND member_id = ${s.members[0]!.id}`;
@@ -1417,7 +1418,7 @@ test("the replay CLI runs against real session rows, and fails only on a real di
   const green = Bun.spawnSync(["bun", "run", "scripts/swarm-judge-replay.ts", "--session", session.id], { cwd, env });
   expect(green.exitCode, `a reproducible judgement must pass:\n${green.stdout}${green.stderr}`).toBe(0);
 
-  await sql`
+  await fixtureDb`
     UPDATE swarm_recommendations SET body = 'an amended take, filed after judging'
      WHERE session_id = ${session.id} AND member_id = ${members[0]!.id}`;
   const red = Bun.spawnSync(["bun", "run", "scripts/swarm-judge-replay.ts", "--session", session.id], { cwd, env });

@@ -31,6 +31,7 @@ import * as admin from "../src/swarm/admin.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { adminExec } from "./support/cluster.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
@@ -654,7 +655,7 @@ test("getMemberTakes cannot merge two members' takes into one reference", async 
   // B's take is the higher revision, so a merged query picks B deterministically
   // — without this the pre-fix result would depend on physical row order and the
   // test would prove nothing on a good day.
-  await sql`UPDATE swarm_recommendations SET revision = 2 WHERE member_id = ${b.id}`;
+  await fixtureDb`UPDATE swarm_recommendations SET revision = 2 WHERE member_id = ${b.id}`;
 
   // A second session only B takes in, so a merged query also returns a take from
   // a session A never sat in.
@@ -676,11 +677,11 @@ test("getMemberTakes cannot merge two members' takes into one reference", async 
   // --disable-triggers, logical replication) cannot bypass it, and a plain
   // ENABLE silently downgrades it to 'O' for the rest of the suite — reopening
   // the exact hole the migration closes, in the shared database, invisibly.
-  await sql`ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_handle_namespace_trigger`;
+  await fixtureDb`ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_handle_namespace_trigger`;
   try {
     await sql`UPDATE swarm_members SET handle = ${b.id} WHERE id = ${a.id}`;
   } finally {
-    await sql`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER swarm_members_handle_namespace_trigger`;
+    await fixtureDb`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER swarm_members_handle_namespace_trigger`;
   }
   const [trg] = await sql<{ tgenabled: string }[]>`
     SELECT tgenabled FROM pg_trigger WHERE tgname = 'swarm_members_handle_namespace_trigger'`;
