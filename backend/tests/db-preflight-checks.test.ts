@@ -66,7 +66,7 @@ import { bootstrapBlankDatabase, loadSnapshot } from "../src/db/schema-snapshot.
 import { runMigrate } from "../scripts/migrate-run.ts";
 import { withTargetLock } from "./support/target-lock.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
-import { adminExec, adminUrl } from "./support/cluster.ts";
+import { adminExec, adminConnection, harnessConnection, harnessUrl, roleUrl } from "./support/cluster.ts";
 
 // PER TEST, not per file. Several cases here are deliberately destructive to
 // DATABASE state rather than to cluster state: check 6 relaxes and drops the
@@ -96,6 +96,7 @@ let tmpDir = "";
 
 beforeAll(async () => {
   for (const [role, password] of Object.entries(PASSWORDS)) {
+    // cluster admin: ALTER ROLE is superuser-only
     await adminExec(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${password}'`);
   }
   tmpDir = mkdtempSync(join(tmpdir(), "rm-preflight-env-"));
@@ -246,9 +247,14 @@ async function tupleWrites(): Promise<Record<string, number>> {
   });
 }
 
-/** A one-connection pool on this file's clone, as the harness's superuser. */
+/** The database this file's api pool is on right now. */
+function currentDatabaseName(): string {
+  return new URL(process.env.DATABASE_URL!).pathname.replace(/^\//, "");
+}
+
+/** A one-connection pool on this file's clone, as the harness login (rm_owner). */
 function pinnedConnection(readOnly: boolean): postgres.Sql<{}> {
-  return postgres(adminUrl(), {
+  return postgres(harnessUrl(currentDatabaseName()), {
     max: 1,
     onnotice: () => {},
     ...(readOnly ? { connection: { default_transaction_read_only: true } } : {}),
@@ -357,11 +363,10 @@ describe("check 1 — every role token smoke will hand to a container authentica
     // may connect to) would pass all three; a probe that follows the handle
     // refuses each one and says where it tried.
     const database = `rmt_pf_probe_${crypto.randomUUID().slice(0, 8)}`;
-    await adminExec(`CREATE DATABASE ${database}`);
-    await adminExec(`REVOKE CONNECT ON DATABASE ${database} FROM PUBLIC`);
-    const url = new URL(adminUrl());
-    url.pathname = `/${database}`;
-    const elsewhere = postgres(url.toString(), { max: 1, onnotice: () => {} });
+    // cluster admin: CREATE DATABASE is the admin's job
+    await adminExec(`CREATE DATABASE ${database} OWNER rm_owner`);
+    const elsewhere = harnessConnection(database);
+    await elsewhere.unsafe(`REVOKE CONNECT ON DATABASE ${database} FROM PUBLIC`);
     try {
       const result = await checkRoleTokens(elsewhere, context(), tokens());
       expect(refusals(result.findings)).toHaveLength(RUNTIME_ROLES.length);
@@ -1016,17 +1021,16 @@ describe("check 3a — integrity against the manifest stored in the database", (
 
 let snapshotTemplate: string | null = null;
 
-/** A URL for `database` on the suite's server, as the harness superuser. */
+/** A URL for `database` on the suite's server, as the harness login (rm_owner). */
 function databaseUrl(database: string): string {
-  const url = new URL(adminUrl());
-  url.pathname = `/${database}`;
-  return url.toString();
+  return harnessUrl(database);
 }
 
 async function snapshotTemplateName(): Promise<string> {
   if (snapshotTemplate) return snapshotTemplate;
   const name = `rmt_preflight_snapshot_tmpl_${crypto.randomUUID().slice(0, 8)}`;
-  const admin = postgres(databaseUrl("postgres"), { max: 1, onnotice: () => {} });
+  // cluster admin: CREATE DATABASE is the admin's job
+  const admin = adminConnection();
   try {
     // Owned by rm_owner, as `--local blank` hands it over; pgcrypto is the
     // provider's half (the snapshot's exclusion list names it).
@@ -1034,7 +1038,7 @@ async function snapshotTemplateName(): Promise<string> {
   } finally {
     await admin.end({ timeout: 5 });
   }
-  const db = postgres(databaseUrl(name), { max: 1, onnotice: () => {} });
+  const db = harnessConnection(name);
   try {
     await db.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
     await db.unsafe("SET ROLE rm_owner");
@@ -1049,7 +1053,7 @@ async function snapshotTemplateName(): Promise<string> {
 
 afterAll(async () => {
   if (!snapshotTemplate) return;
-  const admin = postgres(databaseUrl("postgres"), { max: 1, onnotice: () => {} });
+  const admin = adminConnection();
   try {
     await admin.unsafe(`DROP DATABASE IF EXISTS ${snapshotTemplate} WITH (FORCE)`);
   } finally {
@@ -1057,14 +1061,14 @@ afterAll(async () => {
   }
 });
 
-/** A fresh copy of the snapshot bootstrap, as the harness superuser. */
+/** A fresh copy of the snapshot bootstrap, as the harness login (rm_owner). */
 async function withSnapshotDatabase(body: (db: postgres.Sql<{}>) => Promise<void>): Promise<void> {
   const template = await snapshotTemplateName();
   const name = `rmt_preflight_snapshot_${crypto.randomUUID().slice(0, 8)}`;
-  const admin = postgres(databaseUrl("postgres"), { max: 1, onnotice: () => {} });
+  const admin = adminConnection();
   try {
-    await admin.unsafe(`CREATE DATABASE ${name} TEMPLATE ${template}`);
-    const db = postgres(databaseUrl(name), { max: 1, onnotice: () => {} });
+    await admin.unsafe(`CREATE DATABASE ${name} OWNER rm_owner TEMPLATE ${template}`);
+    const db = harnessConnection(name);
     try {
       await body(db);
     } finally {
@@ -1238,7 +1242,7 @@ describe("check 3a — every §8.1 object class, against a real snapshot bootstr
  *  the whole run (one connection, `SET ROLE` for the session: the run requires
  *  `current_user = rm_owner`), under the §2 target lock a tool would hold. */
 async function migrateAsOwner(database: string): Promise<void> {
-  const owner = postgres(databaseUrl(database), { max: 1, onnotice: () => {} });
+  const owner = harnessConnection(database);
   try {
     await owner.unsafe("SET ROLE rm_owner");
     await withTargetLock(databaseUrl(database), (lock) =>
@@ -1252,18 +1256,36 @@ async function migrateAsOwner(database: string): Promise<void> {
 /** The harness login's 0016 default privileges — production's bootstrap login
  *  is doadmin, a listed provider role, whose leftovers the snapshot excludes. */
 async function revokeLoginDefaults(db: PreflightDb, login: string): Promise<void> {
-  // Only the provisioning login (the cluster admin) may alter its own defaults.
+  // cluster admin: only the provisioning login (a superuser) may alter its own defaults.
   const name = await currentDatabaseOf(db);
   await adminExec(`ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker`, name);
   await adminExec(`ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`, name);
 }
 
-/** A statement only the cluster admin may run — a role membership, a change of
- *  owner to a role the harness login cannot act as — on the database this
+/** A statement run on the database this
  *  file's pool is on (or `database`). These build the denylist violations the
  *  checks under test must refuse; nothing the code under test runs uses them. */
 async function inCurrentDatabase(statement: string, database?: string): Promise<void> {
-  await adminExec(statement, database ?? (await currentDatabaseOf(sql)));
+  const target = database ?? (await currentDatabaseOf(sql));
+  // cluster admin: ALTER ROLE, a membership in rm_owner, or ownership handed to a role the
+  // harness login cannot act as, is superuser-only. Everything else is rm_owner's.
+  if (/\b(OWNER TO|AUTHORIZATION)\b|^(GRANT|REVOKE) rm_owner\b|^ALTER ROLE\b/i.test(statement)) {
+    await adminExec(statement, target);
+    return;
+  }
+  const owner = harnessConnection(target);
+  try {
+    await owner.unsafe(statement);
+  } finally {
+    await owner.end({ timeout: 5 });
+  }
+}
+
+/** The name of the cluster's bootstrap login (the provisioning superuser). */
+async function clusterAdminLogin(): Promise<string> {
+  // cluster admin: the bootstrap login's own name is only known to the admin
+  const [row] = await adminExec("SELECT current_user AS name");
+  return row!.name as string;
 }
 
 async function currentDatabaseOf(db: PreflightDb): Promise<string> {
@@ -1283,7 +1305,7 @@ describe("check 3a against the manifest the real migrate run publishes", () => {
     // is the container superuser, which it does not. The run names exactly
     // that and publishes nothing, so no manifest claims a schema nobody compared.
     await enrollRehearsal();
-    const login = new URL(adminUrl()).username;
+    const login = await clusterAdminLogin();
     await expect(migrateAsOwner(await currentDatabaseOf(sql))).rejects.toThrow(
       `default privileges for ${login} in schema public on sequences is in the live catalog but not declared by ` +
         `the installed manifest, and the provider exclusion list does not cover it (owner ${login})`,
@@ -1301,7 +1323,7 @@ describe("check 3a against the manifest the real migrate run publishes", () => {
 
   test("RED CONTROL: after the real publisher, genuine drift on the migrated database still refuses by name", async () => {
     await enrollRehearsal();
-    await revokeLoginDefaults(sql, new URL(adminUrl()).username);
+    await revokeLoginDefaults(sql, await clusterAdminLogin());
     await migrateAsOwner(await currentDatabaseOf(sql));
     await fixtureDb.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
     await fixtureDb.unsafe("ALTER SCHEMA public OWNER TO pg_database_owner");
@@ -1820,8 +1842,7 @@ describe("runPreflight — one library, three callers (§7.2)", () => {
   test("runStartupPreflight is bounded: a run that outlives its budget is a refusal naming the running check", async () => {
     // The container caller sits between a process and its port, and Docker
     // restarts a process that exits, never one that hangs.
-    const url = new URL(adminUrl());
-    url.username = "rm_app";
+    const url = new URL(roleUrl("rm_app", currentDatabaseName()));
     url.password = PASSWORDS.rm_app;
     const outcome = await runStartupPreflight({ role: "rm_app", databaseUrl: url.toString(), rmEnv: "stage", budgetMs: 1 });
     expect(outcome.passed).toBe(false);
