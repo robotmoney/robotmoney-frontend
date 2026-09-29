@@ -1,7 +1,7 @@
 # Postmortem: the v0.5.2 ledger repair ran on the production database
 
 Date: 2026-09-29
-Status: **DRAFT, written while the production window was still open.** The fields marked `TBD` are filled in when the repair commits or is aborted.
+Status: **Draft, updated after the cutover completed.** The 24-hour soak (R8) is still running; its result is not in this document.
 Release: `v0.5.2-rc.2` (`becb6897`), from `releases-0.5.x`
 Author: written with the release operator; blameless format
 
@@ -15,10 +15,12 @@ holding five tables locked. It needed the whole stack (api, website, producer,
 workers, session driver) stopped for the length of the run.
 
 On the stage-2 rehearsal host the repair took 14 to 16 minutes. The cutover
-announced a window of 25 to 30 minutes. On production the same repair was 3 to 6
-times slower step for step. At the time of writing the site has been down for
-more than 65 minutes, the repair is still in its third of eight steps, and nobody
-can say how long is left.
+announced a window of 25 to 30 minutes. On production it took **100 minutes**,
+and the site was down for **1 hour 41 minutes**. Eighty of those minutes were one
+SQL statement (the vintage re-point) that took 3 minutes on the twin, 25 times
+longer. The other seven steps together took 20 minutes, between 0.7 and 3 times
+the twin's time. The repair committed at 22:26:38 UTC and the stack was ready at
+22:26:58. The database went from 16 GB to 963 MB.
 
 The owner's judgement, which this postmortem adopts: **the approach was wrong.**
 CPU- and disk-bound work was pushed onto a small production database and
@@ -29,10 +31,10 @@ away from production, with production doing only a short load-and-swap.
 
 | | |
 |---|---|
-| Site | Down from 2026-09-29 20:45:50 UTC. End: TBD |
+| Site | Down 2026-09-29 20:45:50 to 22:26:58 UTC: 1 hour 41 minutes (announced: 25 to 30 minutes) |
 | Data loss | None. The repair commits only at its end. Aborting leaves the old ledger exactly as it was |
 | Users affected | Everyone: website and api were both stopped |
-| Sessions | The 4 sessions already stuck in `scheduled` since 09-27 stayed stuck. No new session ran during the window |
+| Sessions | The 4 sessions already stuck in `scheduled` since 09-27 stayed stuck during the window. The new driver adopted them after the boot |
 | Cost | About 4 hours of rehearsal work, one 48-minute backup, and the window itself |
 
 ## Timeline (UTC)
@@ -54,8 +56,12 @@ away from production, with production doing only a short load-and-swap.
 | 09-29 20:52 | Pre-repair mismatch count: 337 s (twin: 44 s) |
 | 09-29 20:58 | Replay of 43 series done: 356 s (twin: 122 s) |
 | 09-29 20:59 | Vintage re-point starts. Twin: 190 s. Production: still running at 21:50 (over 50 min) |
-| 09-29 21:5x | Owner directs: do not cancel, keep the repair going |
-| TBD | Repair commits or is aborted; stack boots; window ends |
+| 09-29 ~21:25 | Owner directs: do not cancel, keep the repair going |
+| 09-29 22:19 | Vintage re-point finishes: 4,815 s (80 min) |
+| 09-29 22:20-22:26 | Raw evidence replay 68 s, table rebuild 140 s, proofs 36 s, manifest rebuild 173 s (faster than the twin), final check 1.4 s |
+| 09-29 22:26:38 | Repair commits. Versions 23.2M to 221,630; members 22.7M to 580,192; events 3.0M to 183,912. Database 16 GB to 963 MB |
+| 09-29 22:26:58 | Stack ready, 131 frontend checks, 0 failed, 76 migrations recorded, `source_payloads` gone |
+| 09-29 23:08 | Post-release gate exit 0; `verify:live` verified; the driver adopted the first stuck session |
 
 ## What went wrong
 
@@ -67,20 +73,27 @@ away from production, with production doing only a short load-and-swap.
    itself had already caused (issue 1035 was exactly that: writes saturating the
    pool).
 
-2. **The rehearsal host was not a model of production.** Stage-2 has 7 GB of
-   memory, local disk, and a freshly restored, fully cached copy of the data.
-   Production's database has shared buffers of 190 MB, a cache estimate of 570 MB,
-   two parallel workers per query, and reads from network storage. Every step
-   measured on stage-2 was 3 to 8 times faster than it was on production. Our
-   runbook sized the window "from R4.3's measured time on the full dump" and
+2. **The rehearsal host was not a model of production, and one step showed it
+   badly.** Stage-2 has 7 GB of memory, local disk, and a freshly restored, fully
+   cached copy of the data. Production's database has shared buffers of 190 MB, a
+   cache estimate of 570 MB, two parallel workers per query, and reads from
+   network storage. Most steps were 1.5 to 3 times slower there, and one (the
+   vintage re-point, which joins 22.7 million member rows against a 15 million
+   row scratch table) was 25 times slower. **The cause of that 25x is not
+   proven.** One hypothesis: scratch tables use a tiny private buffer, not shared
+   buffers, so on a machine without a large file cache every probe of the scratch
+   table goes to disk. Another: the planner chose a different plan on production.
+   We did not capture the plan, and the hosting provider's log was not readable.
+   Our runbook sized the window "from R4.3's measured time on the full dump" and
    checked disk space, never database compute or memory.
 
 3. **The window was announced as a fact.** "25 to 30 minutes" was an extrapolation
    from a different machine, stated without a range or an abort rule.
 
 4. **No progress signal.** The heavy statement (the vintage re-point) is one SQL
-   statement. Nothing reports how far through it is, so at 50 minutes there is no
-   basis for deciding to wait or abort.
+   statement, and Postgres has no progress view for it. For 80 minutes the only
+   observable facts were "alive" and "on the CPU, no waits", so there was no basis
+   for deciding to wait or abort.
 
 5. **Late discoveries in the final hours.** The `RM_ENV`/`doadmin` crash and the
    "Ctrl-C does not tear the stack down" behaviour were found only in the last
@@ -136,8 +149,8 @@ from "unknown, disk-bound, on production" to "known, batch-sized, on a worker".
 
 | # | Action | Owner | Status |
 |---|---|---|---|
-| 1 | Decide how this window ends: wait for the repair, or abort and reschedule | Owner | Open, in progress |
-| 2 | Fill in the TBD fields of this document with the real times and outcome | Release operator | Open |
+| 1 | Watch the 24-hour soak (R8: gates at +6, +12, +18 and +24 h) and record its result here | Release operator | Open, running |
+| 2 | Finish the runbook: tag `v0.5.2` on the rc that passes R8, merge `releases-0.5.x` into `main` with a real merge commit, write the rollout report | Release operator | Open, after R8 |
 | 3 | Rebuild the repair as plan-on-a-worker, load-and-swap-on-production (design above) | TBD | Open |
 | 4 | Runbook: size every window from a run on production-class hardware; record the database's memory, cache and parallelism next to the timing; state the window as a range with an abort time | TBD | Open |
 | 5 | Give every long statement a progress signal (chunk it, or log rows done) | TBD | Open |
@@ -147,8 +160,9 @@ from "unknown, disk-bound, on production" to "known, batch-sized, on a worker".
 
 ## Open questions
 
-- How long does the current repair have left? The re-point statement has no
-  progress counter.
+- Why was the re-point 25 times slower on production? Capture the plan
+  (`EXPLAIN (ANALYZE, BUFFERS)` on a fork of the production cluster) before
+  redesigning around a guess.
 - Should v0.5.2 have shipped with the writers fixed and the repair deferred to its
   own release? The writers alone stop the growth of the ledger. Only the cleanup
   of the existing 16 GB needed the risky operation.
