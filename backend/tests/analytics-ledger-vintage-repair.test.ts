@@ -1,5 +1,6 @@
-// Issue #1050: migration 0080 leaves the analytics ledger exactly as the FIXED
-// writers would have left it, as if the pre-#1035 re-observation / float-noise
+// Issue #1050: the v0.5.2 ledger repair (scripts/upgrades/0.5.1-to-0.5.2/
+// ledger-repair.ts) leaves the analytics ledger exactly as the FIXED writers
+// would have left it, as if the pre-#1035 re-observation / float-noise / relabel
 // bug had never shipped.
 //
 // HOW. One acquisition sequence — repeats, float noise, real revisions, a drift
@@ -12,7 +13,8 @@
 //               beginRun + freezeVintage.
 //   * REPAIRED — a database migrated only up to 0080, written by the pre-#1035
 //               writers reproduced below, then taken through 0080 exactly as a
-//               deploy does (applyMigrationFile + reclaimAfterMigrations).
+//               deploy does (applyMigrationFile), then through the repair
+//               exactly as the runbook runs it (repairLedger).
 //
 // The two must be equivalent row for row. Ids cannot match (the old writer
 // burned ids on rows the fixed one never wrote, and the repair keeps original
@@ -22,15 +24,11 @@
 // acquisition's rows — the one field that makes the two sequences the same
 // sequence in time.
 //
-// A third database — the pre-0080 state again, taken through 0080 AS MERGED IN
-// PR 1046 (tests/fixtures/ledger/), before this repair — is the "0080 alone"
-// baseline the size assertion compares against.
-//
 // Small by design (a few hundred rows): the planner assertions are EXPLAIN
 // only, and nothing here is a timing or scale run.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
@@ -47,7 +45,8 @@ import { saveRawIndicatorHistory } from "../src/analytics/store/raw-history-stor
 import { checkRawIndicatorHistoryParity, recordParityObservation } from "../src/analytics/cutover/parity.ts";
 import { checkAnalyticsLedgerGuard } from "../src/db/analytics-ledger-guard.ts";
 import { checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
-import { applyMigrationFile, reclaimAfterMigrations } from "../src/db/migrate.ts";
+import { applyMigrationFile } from "../src/db/migrate.ts";
+import { repairLedger } from "../scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
@@ -55,8 +54,6 @@ useCleanDatabase(import.meta.file);
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = join(testsDir, "..", "migrations");
 const MIGRATION = "0080_analytics_ledger_compaction.sql";
-// 0080 byte for byte as PR 1046 merged it (89e1268b), before #1050 extended it.
-const MIGRATION_AS_MERGED_1046 = join(testsDir, "fixtures", "ledger", "0080_analytics_ledger_compaction.as-merged-1046.sql");
 
 const DB_URL = process.env.DATABASE_URL;
 // Loud, never skipped: without tests/preload.ts there is no Postgres to migrate.
@@ -64,8 +61,7 @@ if (!DB_URL) throw new Error("DATABASE_URL is unset — tests/preload.ts must pr
 
 type Db = ReturnType<typeof postgres>;
 let admin: Db;
-let old: Db; // the pre-#1035 database, repaired by 0080 in beforeAll
-let alone: Db; // the same pre-#1035 database, taken through 0080 as merged in 1046
+let old: Db; // the pre-#1035 database, repaired in beforeAll
 const names: string[] = [];
 
 function urlFor(database: string): string {
@@ -105,7 +101,7 @@ const interleaved = (value: (key: string, i: number) => number): Point[] =>
 const coordOf = (p: { sourceKey: string; marketDate: string | null; instantMs: number | null }) =>
   `${p.sourceKey}|${p.marketDate ?? ""}|${p.instantMs ?? ""}`;
 
-// ── The pre-#1035 writers, reproduced (as tests/analytics-ledger-compaction-migration.test.ts does) ──
+// ── The pre-#1035 writers, reproduced (as tests/analytics-ledger-repair.test.ts does) ──
 // store/source-ledger-store.ts before #1035: EVERY fetched point appends a
 // version — 'initial' with no prior, 'unchanged' on exact equality, otherwise
 // 'revision' — chained to the current head, one INSERT per acquisition.
@@ -253,14 +249,13 @@ async function relationSizes(db: Db): Promise<Record<string, number>> {
 }
 
 let oldCountBefore = 0;
-let sizesAlone: Record<string, number> = {};
+let sizesBefore: Record<string, number> = {};
 let sizesRepaired: Record<string, number> = {};
 
 beforeAll(async () => {
   admin = postgres(urlFor("postgres"), { max: 1, onnotice: () => {} });
   const suffix = randomUUID().replace(/-/g, "").slice(0, 12);
   const oldName = `tmp_vintage_repair_${suffix}`;
-  const aloneName = `tmp_vintage_repair_alone_${suffix}`;
   await admin.unsafe(`CREATE DATABASE ${oldName}`);
   names.push(oldName);
   old = postgres(urlFor(oldName), { max: 1, onnotice: () => {} });
@@ -315,9 +310,10 @@ beforeAll(async () => {
     for (const indicator of RAW) await acquire(dated(rawKey(indicator), v(rawKey(indicator))), "live");
     await acquire(interleaved((k, i) => v(k)(i)), "live");
   }
-  // g7 — dates 7..9 relabelled 'seed' WITH jitter (the fixed writer keeps the
-  // head's value and moves the label), the rest re-fetched 'live'. Then g8
-  // repeats it, and g9 moves dates 7..8 back to 'live' at the exact value.
+  // g7 — dates 7..9 relabelled 'seed' WITH jitter (the fixed writer writes
+  // nothing: a label change alone is not a change), the rest re-fetched
+  // 'live'. Then g8 repeats it, and g9 moves dates 7..8 back to 'live' at the
+  // exact value.
   const g6 = (key: string) => (i: number) => (i >= 10 && i < 15 ? drift(g4(key)(i), 2) : g4(key)(i));
   for (const round of [0, 1]) {
     for (const indicator of RAW) {
@@ -333,32 +329,16 @@ beforeAll(async () => {
   const [{ n }] = (await old`SELECT count(*)::int AS n FROM source_value_versions`) as unknown as { n: number }[];
   oldCountBefore = n;
 
-  // "0080 alone": the pre-#1035 database copied, then taken through 0080 as
-  // PR 1046 merged it, plus the runner's VACUUM FULL.
-  await old.end({ timeout: 5 });
-  await admin.unsafe(`CREATE DATABASE ${aloneName} TEMPLATE ${oldName}`);
-  names.push(aloneName);
-  old = postgres(urlFor(oldName), { max: 1, onnotice: () => {} });
-  alone = postgres(urlFor(aloneName), { max: 1, onnotice: () => {} });
-  const asMerged = await readFile(MIGRATION_AS_MERGED_1046, "utf8");
-  await alone.begin(async (tx) => {
-    await tx.unsafe("SET LOCAL ROLE rm_owner");
-    await tx.unsafe(asMerged);
-    await tx`INSERT INTO schema_migrations (name) VALUES (${MIGRATION})`;
-  });
-  await reclaimAfterMigrations(alone, [MIGRATION]);
-  sizesAlone = await relationSizes(alone);
-
-  // The repair: 0080 as it ships, applied the way src/db/migrate.ts applies it.
-  await applyMigrationFile(old, MIGRATION);
-  await reclaimAfterMigrations(old, [MIGRATION]);
-  for (const file of files.filter((f) => f > MIGRATION)) await applyMigrationFile(old, file);
+  // The deploy: 0080 and anything after it, applied the way src/db/migrate.ts
+  // applies them. Then the one-time repair, as the runbook runs it.
+  for (const file of files.filter((f) => f >= MIGRATION)) await applyMigrationFile(old, file);
+  sizesBefore = await relationSizes(old);
+  await repairLedger(old);
   sizesRepaired = await relationSizes(old);
 }, 180_000);
 
 afterAll(async () => {
   await old?.end({ timeout: 5 });
-  await alone?.end({ timeout: 5 });
   for (const name of names) await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
   await admin?.end({ timeout: 5 });
 });
@@ -468,7 +448,7 @@ describe("issue #1050: the repaired ledger is the ledger the fixed writers write
     expect(row!.matched).toBe(true);
   });
 
-  test("both guards report armed, and source_value_versions and analytics_vintage_members are smaller on disk than after 0080 alone", async () => {
+  test("both guards report armed, and source_value_versions and analytics_vintage_members are smaller on disk than before the repair", async () => {
     const ledger = await checkAnalyticsLedgerGuard(old);
     expect(ledger.problems).toEqual([]);
     expect(ledger.status).toBe("armed");
@@ -476,51 +456,8 @@ describe("issue #1050: the repaired ledger is the ledger the fixed writers write
     expect(appendOnly.problems).toEqual([]);
     expect(appendOnly.status).toBe("armed");
     for (const table of RELATIONS) {
-      expect({ table, smaller: sizesRepaired[table]! < sizesAlone[table]! }, JSON.stringify({ alone: sizesAlone, repaired: sizesRepaired }))
+      expect({ table, smaller: sizesRepaired[table]! < sizesBefore[table]! }, JSON.stringify({ before: sizesBefore, repaired: sizesRepaired }))
         .toEqual({ table, smaller: true });
     }
   });
 });
-
-// ── Planner: re-pointing is a primary-key probe per member id ───────────────
-interface PlanNode { "Node Type": string; "Relation Name"?: string; "Index Name"?: string; "Index Cond"?: string;
-  "Join Filter"?: string; Plans?: PlanNode[] }
-const nodes = (plan: PlanNode): PlanNode[] => [plan, ...(plan.Plans ?? []).flatMap(nodes)];
-
-describe("issue #1050: the member re-pointing query uses index lookups, not a range or hash join", () => {
-  test("0080's re-pointing query probes the scratch table's primary key per member id and never reads source_value_versions", async () => {
-    const sql = await readFile(join(migrationsDir, MIGRATION), "utf8");
-    const scratch = /CREATE TEMP TABLE ledger_repair_dropped \([\s\S]*?\) ON COMMIT DROP;/.exec(sql);
-    const repoint = /INSERT INTO ledger_repair_members \(vintage_id, source_key, first_id, last_id\)\n([\s\S]*?GROUP BY o\.vintage_id, o\.source_key, o\.run_key);/.exec(sql);
-    expect(scratch).not.toBeNull();
-    expect(repoint).not.toBeNull();
-    for (const forceIndex of [false, true]) {
-      await old.begin(async (tx) => {
-        await tx.unsafe(scratch![0]);
-        // Sized like a real ledger's dropped set relative to its members, so the
-        // planner is choosing on realistic statistics, not a one-page table.
-        await tx.unsafe(`INSERT INTO ledger_repair_dropped (id, kept_id) SELECT g, g FROM generate_series(1, 200000) g`);
-        await tx.unsafe("ANALYZE ledger_repair_dropped");
-        await tx.unsafe("ANALYZE analytics_vintage_members");
-        if (forceIndex) {
-          await tx.unsafe("SET LOCAL enable_hashjoin = off");
-          await tx.unsafe("SET LOCAL enable_mergejoin = off");
-          await tx.unsafe("SET LOCAL enable_seqscan = off");
-        }
-        const [row] = (await tx.unsafe(`EXPLAIN (FORMAT JSON) ${repoint![1]}`)) as unknown as { "QUERY PLAN": { Plan: PlanNode }[] }[];
-        const all = nodes(row!["QUERY PLAN"][0]!.Plan);
-        expect(all.filter((n) => n["Relation Name"] === "source_value_versions")).toEqual([]);
-        expect(all.map((n) => n["Node Type"]).filter((t) => t === "Hash Join" || t === "Merge Join")).toEqual([]);
-        expect(all.map((n) => n["Join Filter"]).filter((f) => f !== undefined && /\bg\.id\b/.test(f))).toEqual([]);
-        const probes = all.filter((n) => n["Relation Name"] === "ledger_repair_dropped");
-        expect(probes.length).toBe(1);
-        expect(["Index Scan", "Index Only Scan"]).toContain(probes[0]!["Node Type"]);
-        expect(probes[0]!["Index Name"]).toBe("ledger_repair_dropped_pkey");
-        expect(probes[0]!["Index Cond"]).toMatch(/^\(id = g\.id\)$/);
-        throw new RollbackPlan();
-      }).catch((e) => { if (!(e instanceof RollbackPlan)) throw e; });
-    }
-  });
-});
-
-class RollbackPlan extends Error {}

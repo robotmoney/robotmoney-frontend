@@ -18,7 +18,7 @@ there, and lets a session go ahead when a regime save fails.
 
 | v0.5.1 gap | Closed by |
 |---|---|
-| Ledger grows ~2 GB/day; regime saves and the parity sweep time out | PRs 1046 + 1051: writer skips unchanged and sub-tolerance values, vintages store id ranges, no raw bodies; migration `0080` compacts the ledger and drops `source_payloads`; `VACUUM FULL` returns the disk |
+| Ledger grows ~2 GB/day; regime saves and the parity sweep time out | PRs 1046 + 1051: writer skips unchanged and sub-tolerance values, vintages store id ranges, no raw bodies; migration `0080` adds the range column and drops `source_payloads`. Then (2026-09-29) a label change alone writes nothing, and the one-time `ledger-repair.ts` (R6.4c) rebuilds the ledger from what the fixed writers would have kept, which returns the disk at commit |
 | A failed regime save cancels the session | The driver catches it and publishes the brief with the last saved regime (`30761568`) |
 | `swarm session failed` after every session with an outside member | Format checks grade only the takes the driver ran |
 | The soak gate graded production wrongly (memos not takes, adopted sessions invisible, every known issue fatal) and could not see sessions stopping | `prod:gate` rewritten (`b9629cec`, then the per-release grading): published-in-window sessions, real takes, a liveness check, known issues graded against the release that fixed them |
@@ -30,14 +30,15 @@ there, and lets a session go ahead when a regime save fails.
 |---|---|
 | From | `v0.5.1` (`3ac99f9c`), running on `rm-frontend-prod-1` |
 | To | `v0.5.2-rc.N` → `v0.5.2`, cut from `releases-0.5.x` |
-| Migrations | **One, and not reversible:** `0080_analytics_ledger_compaction.sql`. One transaction: compacts `source_value_versions`, `analytics_vintage_members` and `analytics_overwrite_events`, drops `source_payloads`, rebuilds vintage manifests, raises if any vintage's membership or any head changes, re-arms every guard. Then `VACUUM (FULL, ANALYZE)` on the compacted tables. The API is down for all of it. |
-| Rollback | **Code alone cannot go back.** v0.5.1's writer inserts into `source_payloads`, which `0080` drops. Going back needs a database restore (R9). |
+| Migrations | **One, and not reversible:** `0080_analytics_ledger_compaction.sql`. Schema only: the vintage run column and its index, and drops `source_payloads`. Seconds, at boot. |
+| Ledger repair | **One-time script, not reversible:** `backend/scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts`, run by hand after the boot with the producer and workers stopped (R6.4c). One transaction: replays every series, keeps only what the fixed writers would have written (a label change alone is not a change; irregular chains re-linked by knowledge time), re-points every vintage, rebuilds `source_value_versions`, `analytics_vintage_members` and `analytics_overwrite_events` by `TRUNCATE` and re-insert, recomputes vintage manifests, raises if any vintage's member count or any chain's shape would change, re-arms every guard. No `VACUUM FULL`. The api stays up but its ledger reads wait for the repair. |
+| Rollback | **Code alone cannot go back.** v0.5.1's writer inserts into `source_payloads`, which `0080` drops, and the repair deletes rows. Going back needs a database restore (R9). |
 
 ### 1.1 Decisions (owner)
 
 | ID | Question | Decision |
 |---|---|---|
-| E1 | The cutover window: the API is down for `0080` + `VACUUM FULL` | Sized from R4.3's measured time on the full dump; owner picks the slot |
+| E1 | The cutover window: the boot, then the ledger repair (writers stopped, ledger reads waiting) | Sized from R4.3h's measured time on the full dump; owner picks the slot |
 | E2 | Issue 1035's symptoms (API 502s under load, dead parity sweeps, failed regime saves) after v0.5.2 | v0.5.2 claims to fix them, so their rules carry `issue: "1035"` with `fixedIn: "0.5.2"`, and a recurrence **fails** the soak |
 | E3 | `judge-agent.ts` spool default in `/tmp` | Not in v0.5.2: the file exists only on `main` (PR 1014); fixed there |
 
@@ -85,7 +86,7 @@ As v0.5.1 R1, except:
 |---|---|---|
 | R1.3 | `git diff --name-only v0.5.1 "$RC_SHA" -- backend/migrations` | **exactly** `0080_analytics_ledger_compaction.sql` |
 | R1.4 | `git diff --stat v0.5.1 "$RC_SHA" -- docker-compose.yml` | empty |
-| R1.8 | backend tests, including `tests/analytics-ledger-compaction-migration.test.ts` and `tests/analytics-ledger-vintage-repair.test.ts` | 0 fail |
+| R1.8 | backend tests, including `tests/analytics-ledger-repair.test.ts` and `tests/analytics-ledger-vintage-repair.test.ts` (0080 + the repair script, against the fixed writers row for row) | 0 fail |
 
 ## R2. Production baseline (read-only, `rm-frontend-prod-1`)
 
@@ -94,7 +95,7 @@ As v0.5.1 R2 (scratch clone at `RC_SHA`, `prod:gate --mode baseline`, triage eve
 | Step | Command | Pass | Record |
 |---|---|---|---|
 | R2.11 | Row counts and sizes of the three ledger tables and `source_payloads` (`pg_total_relation_size`, `count(*)` or `reltuples`) | recorded | the numbers R7.4 compares against |
-| R2.12 | Database size vs the 30 GB disk | size + the largest table ≤ free space (`VACUUM FULL` rewrites each table beside the old one) | GB |
+| R2.12 | Database size vs the 30 GB disk | free space ≥ 2 GB (the repair's scratch tables; the old rows are freed at its commit) | GB |
 | R2.13 | `SELECT revision_kind, count(*) FROM source_value_versions WHERE knowledge_time >= now() - interval '24 hours' GROUP BY 1 ORDER BY 2 DESC` (through the api, read-only) | recorded — the `unchanged` share is v0.5.1's defect; R7/R8 compare rows written **after T0** against this | counts by kind |
 | R2.14 | `docker logs --since 48h rm_prod-analytics-producer-1 2>&1 \| grep -aE '\[analytics\] regime asof\|regime failed\|\[analytics-producer\] fatal:'` | recorded — successful runs roughly every 3 h (`PRODUCER_REGIME_CRON`), and every `fatal:`/`failed` line, as the pre-cutover rate | the run/failure list |
 | R2.15 | `SELECT kind, count(*), percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM updated_at - created_at)) AS p50_s, max(extract(epoch FROM updated_at - created_at)) AS max_s FROM jobs WHERE status = 'succeeded' AND created_at >= now() - interval '24 hours' GROUP BY kind ORDER BY 1` | recorded, `analytics.parity_sweep` and the producer's own job kinds especially | p50/max seconds by kind |
@@ -112,8 +113,9 @@ As v0.5.1 R3, with `backend/scripts/upgrades/0.5.1-to-0.5.2/restore-check.ts` fo
 | R4.1 | Wipe (as v0.5.1) | 0 containers, 0 volumes | — |
 | R4.2 | `git checkout --detach "$RC_SHA"`; installs | HEAD = `RC_SHA` | HEAD |
 | R4.3 | In tmux: `bun smoke:twin -- --no-tui --full-dump 2>&1 \| while IFS= read -r l; do printf '%s %s\n' "$(date -u +%T)" "$l"; done \| tee ~/twin-$RC_SHA.log` | READY | READY time |
-| R4.3a | `grep -E 'migrated: 00\|VACUUM\|reclaim' ~/twin-$RC_SHA.log` | `migrated: 0080_analytics_ledger_compaction.sql`; no error | **start and end times of 0080 and of the vacuum**: this is E1's window |
-| R4.3b | Ledger sizes and counts after the boot (as R2.11, on the twin) | far below R2.11; every vintage's `member_count` unchanged (0080 raises otherwise) | the numbers |
+| R4.3a | `grep -E 'migrated: 00' ~/twin-$RC_SHA.log` | `migrated: 0080_analytics_ledger_compaction.sql`; no error | start and end times of 0080 |
+| R4.3h | **The ledger repair, as R6.4c runs it**, from `~/robotmoney-frontend` (see R6.4c for the commands) with `STATE=.agents/smoke-state.json` and `--step R4.3h.ledger-repair` | `LEDGER REPAIRED`; guards armed; raw history parity matched; exit 0 | **the per-step seconds it prints: this is E1's window** |
+| R4.3b | Ledger sizes and counts after the repair (as R2.11, on the twin) | far below R2.11, near one version per point; every vintage's `member_count` unchanged (the repair raises otherwise) | the numbers |
 | R4.3c | R2.13's query, on the twin, for rows written since READY | `unchanged` at or near 0 for post-boot writes — this is what R7/R8's post-T0 comparison expects to see in production | counts by kind |
 | R4.3d | R2.14's log grep, on the twin, for the run(s) the twin's own producer makes during R4.4 | at least one `regime asof` line, no `fatal:` after it | the lines |
 | R4.3e | R2.15's query, on the twin | p50/max seconds by kind — the number R7/R8 expect production's post-`0080` runs to approach | seconds by kind |
@@ -130,20 +132,20 @@ As v0.5.1 R5. The owner's go names the cutover slot from R4.3a's measured window
 
 As v0.5.1 R6 (pre-cut session list R6.2a, stop the driver, check out the tag, boot `smoke:archive` in tmux with `--no-tui`), with:
 
-- **R6.4**: timestamp the boot log the same way R4.3 does (`… \| while IFS= read -r l; do printf '%s %s\n' "$(date -u +%T)" "$l"; done \| tee /root/smoke-archive-v0.5.2.log`), not a bare `tee`: v0.5.1's boot log carried no timestamps, so R4.3a's `0080`/vacuum timings had nothing to compare against on the production run itself. The boot applies `0080` and runs `VACUUM FULL` before READY. Expect the API to be down for about R4.3a's measured time.
-- **R6.4a — watching `0080`/`VACUUM FULL` while it runs.** A boot still inside it is not a hang. From a second shell, with the migration login: `psql "$(grep -m1 '^MIGRATE_DATABASE_URL=' .env | cut -d= -f2-)" -Atc "SELECT pid, state, wait_event_type, wait_event, now() - query_start AS running_for, left(query, 80) FROM pg_stat_activity WHERE query ILIKE '%source_value_versions%' OR query ILIKE '%VACUUM%'"`. `VACUUM FULL` is tracked like a `CLUSTER`: `SELECT phase, heap_tuples_scanned, heap_tuples_written, heap_blks_total, heap_blks_scanned FROM pg_stat_progress_cluster` shows which table and how far through it the runner is.
-- **R6.4b — if the reclaim fails (issue 1049).** `0080` commits first; the runner then runs `VACUUM (FULL, ANALYZE)` on the three compacted tables. If a vacuum fails (disk space, a lock, a dropped connection), `migrate()` stops before `seed()`, the boot fails, and the reclaim is **never retried**: `0080` is already recorded. The data is correct, only the disk space is still held. Recover by hand, from `/root/robotmoney-frontend`, then boot again (R6.4); the second boot skips `0080` and runs `seed()`:
+- **R6.4**: timestamp the boot log the same way R4.3 does (`… \| while IFS= read -r l; do printf '%s %s\n' "$(date -u +%T)" "$l"; done \| tee /root/smoke-archive-v0.5.2.log`), not a bare `tee`. The boot applies `0080` (seconds) and comes up READY.
+- **R6.4c — the ledger repair (once).** From `/root/robotmoney-frontend` (twin: `~/robotmoney-frontend`), with `STATE=.agents/smoke-state.json`. Stop the ledger's writers, run the repair, start them again:
 
   ```bash
-  psql "$(grep -m1 '^MIGRATE_DATABASE_URL=' .env | cut -d= -f2-)" -v ON_ERROR_STOP=1 \
-    -c "SET ROLE rm_owner" \
-    -c "VACUUM (FULL, ANALYZE) public.source_value_versions" \
-    -c "VACUUM (FULL, ANALYZE) public.analytics_vintage_members" \
-    -c "VACUUM (FULL, ANALYZE) public.analytics_overwrite_events"
+  PROJECT=$(bun -e "console.log(require('./$STATE').project)")
+  docker compose -p "$PROJECT" stop analytics-producer worker-analytics worker-research worker-swarm
+  bun backend/scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts --emit-receipt --step R6.4c.ledger-repair \
+    --database-url "$(grep -m1 '^MIGRATE_DATABASE_URL=' .env | cut -d= -f2-)" 2>&1 | tee /root/ledger-repair-v0.5.2.log
+  docker compose -p "$PROJECT" start analytics-producer worker-analytics worker-research worker-swarm
   ```
 
-  Separate `-c` flags, not one string: `VACUUM` cannot run inside the implicit transaction a single multi-statement `-c` opens. Each `VACUUM FULL` needs free space about the size of the table it rewrites (R2.12).
-- **R6.5**: `schema_migrations` gains exactly `0080_analytics_ledger_compaction.sql` (76 rows); `source_payloads` no longer exists; both guards report armed in the boot log.
+  On the twin the URL is the smoke-twin's own: `--database-url "$(bun -e "console.log(require('./$STATE').databaseUrl)")"`. Pass: it ends `LEDGER REPAIRED` and exits 0. It prints each series as it goes and the seconds of each step. A failure rolls everything back and changes nothing: fix the cause and run it again. `--dry-run` does all of it, proofs included, and rolls back.
+- **R6.4a — watching the repair while it runs.** From a second shell: `psql "$(grep -m1 '^MIGRATE_DATABASE_URL=' .env | cut -d= -f2-)" -Atc "SELECT pid, state, wait_event_type, wait_event, now() - query_start AS running_for, left(query, 80) FROM pg_stat_activity WHERE query ILIKE '%ledger_repair%' OR query ILIKE '%source_value_versions%'"`. Its lock waits at most 30 s for a writer that is still running, then fails without changing anything.
+- **R6.5**: `schema_migrations` gains exactly `0080_analytics_ledger_compaction.sql` (76 rows); `source_payloads` no longer exists; both guards report armed in the boot log and again at the end of R6.4c.
 
 ## R7. Immediate postflight
 
@@ -168,7 +170,7 @@ Pass: every subject published a judged session with a receipt in the window; no 
 
 ## R9. Rollback — needs a database restore
 
-Trigger as v0.5.1 R9. Because `0080` is not reversible:
+Trigger as v0.5.1 R9. Because neither `0080` nor the ledger repair is reversible:
 
 1. Stop the driver (as R6.3).
 2. Restore the database: the managed cluster's point-in-time restore to just before R6.4 (preferred: it loses nothing written before the cutover), or R3's full dump restored from stage-2 (loses everything written after R3).

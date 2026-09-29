@@ -7,11 +7,12 @@ export const TAG_GLOB = "v0.5.2*";
 export const PRIOR_RELEASE_MIGRATIONS = [...V050_WITH_0062, ...V051] as const;
 
 /**
- * The one migration v0.5.2 applies: the analytics-ledger compaction (issue
- * 1035, PRs 1046 and 1051). It is not reversible: it deletes ledger rows the
- * fixed writers would never have written and DROPS source_payloads, which
- * v0.5.1's writer still inserts into. Going back to v0.5.1 after it therefore
- * needs a database restore (R3 backup or point-in-time), not only old code.
+ * The one migration v0.5.2 applies: the analytics-ledger schema change (issue
+ * 1035, PRs 1046 and 1051). It is not reversible: it DROPS source_payloads,
+ * which v0.5.1's writer still inserts into. The ledger's data is repaired
+ * separately, once, by ledger-repair.ts in this folder (runbook R6.4c), which
+ * is not reversible either. Going back to v0.5.1 after either therefore needs
+ * a database restore (R3 backup or point-in-time), not only old code.
  */
 export const RELEASE_MIGRATIONS = ["0080_analytics_ledger_compaction.sql"] as const;
 

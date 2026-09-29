@@ -43,9 +43,8 @@ export async function loadRawIndicatorHistory(db: DbHandle = sql): Promise<RawIn
 // `source` (issue #397) tags every row in this call with the data source that
 // produced it — 'live' by default (the orchestrator's production merge path),
 // or an explicit override (store/floor-seed.ts passes 'seed' for its vendored
-// gap-fill writer). ON CONFLICT overwrites `source` along with `value` so a
-// genuine live fetch upgrades a previously-seeded row's provenance, matching
-// the existing "fetched wins on overlap" honesty semantics.
+// gap-fill writer). ON CONFLICT overwrites `source` along with `value`, so a
+// row's label is the label of the write that last changed its value.
 //
 // A SUB-TOLERANCE REWRITE IS SKIPPED (issue #1035). The orchestrator writes its
 // whole merged floor back every run, so every point is re-submitted many times a
@@ -53,12 +52,12 @@ export async function loadRawIndicatorHistory(db: DbHandle = sql): Promise<RawIn
 // UPDATE that changes the row at all, and Yahoo's float32 jitter changed
 // hundreds of thousands a day by a relative 1e-9..1e-6. A point whose value is
 // within its source's tolerance of the stored one (source-tolerance.ts, decision
-// D56) AND whose label is unchanged is left alone: no UPDATE, so no overwrite
-// event. A point within tolerance but under a DIFFERENT label rewrites only the
-// label and keeps the stored value. This is the same rule
+// D56) is left alone WHATEVER its label: no UPDATE, so no overwrite event. A
+// label change alone is not a change (owner, 2026-09-29): the live fetch and the
+// producer's 'seed' catch-up rewrite the same points, and relabelling on every
+// turn recorded ~13 rewrites per point. This is the same rule
 // store/source-ledger-store.ts applies to the ledger head, from the same
-// function, so the two stay in parity: a value of record changes only when the
-// change exceeds tolerance, and the label always follows the latest write.
+// function, so the two stay in parity.
 export async function saveRawIndicatorHistory(
   byIndicator: RawIndicatorHistory,
   db: DbHandle = sql,
@@ -66,12 +65,12 @@ export async function saveRawIndicatorHistory(
 ): Promise<void> {
   const indicators = Object.keys(byIndicator);
   if (indicators.length === 0) return;
-  const stored = new Map<string, { value: number; source: string | null }>();
-  const current = await db<{ indicator: string; date: string; value: number; source: string | null }[]>`
-    SELECT indicator, date::text AS date, value, source
+  const stored = new Map<string, number>();
+  const current = await db<{ indicator: string; date: string; value: number }[]>`
+    SELECT indicator, date::text AS date, value
     FROM raw_indicator_history
     WHERE indicator = ANY(${indicators}::text[])`;
-  for (const r of current) stored.set(`${r.indicator}|${r.date}`, { value: Number(r.value), source: r.source ?? null });
+  for (const r of current) stored.set(`${r.indicator}|${r.date}`, Number(r.value));
 
   const rows: { date: string; indicator: string; value: number; source: string }[] = [];
   for (const [indicator, points] of Object.entries(byIndicator)) {
@@ -79,11 +78,8 @@ export async function saveRawIndicatorHistory(
     for (const p of points) {
       if (!Number.isFinite(p.value)) continue;
       const prior = stored.get(`${indicator}|${p.date}`);
-      const same = prior !== undefined && withinTolerance(sourceKey, prior.value, p.value);
-      if (same && prior.source === source) continue;
-      // Within tolerance but relabelled: the label moves, the value of record
-      // does not — the ledger writer keeps its head value in the same case.
-      rows.push({ date: p.date, indicator, value: same ? prior.value : p.value, source });
+      if (prior !== undefined && withinTolerance(sourceKey, prior, p.value)) continue;
+      rows.push({ date: p.date, indicator, value: p.value, source });
     }
   }
   if (rows.length === 0) return;

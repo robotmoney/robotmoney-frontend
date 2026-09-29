@@ -291,9 +291,13 @@ describe("dual-write parity: raw-history `source` (issue #979 AC3)", () => {
       WHERE source_key = 'raw_indicator_history:DUALWRITE_LABEL_SPLIT'`) as unknown as { provenance: string | null }[];
     expect(ledgerRow!.provenance).toBe("live");
 
-    // Agreeing on the label is what clears it — same row, relabelled through
-    // the same two production routes, no other change.
+    // Relabelling the SAME value writes nothing on either side (owner,
+    // 2026-09-29: a label change alone is not a change), so the split stays...
     await submitRawHistoryPoint("DUALWRITE_LABEL_SPLIT", "2024-05-01", 1.25, { provenance: "seed", source: "seed" });
+    expect((await checkRawIndicatorHistoryParity()).matched).toBe(false);
+    // ...until the value really changes, through the same two production
+    // routes, under one label: both sides then carry that write's label.
+    await submitRawHistoryPoint("DUALWRITE_LABEL_SPLIT", "2024-05-01", 1.5, { provenance: "seed", source: "seed" });
     const fixed = await checkRawIndicatorHistoryParity();
     expect(fixed.mismatches, JSON.stringify(fixed.mismatches)).toEqual([]);
     expect(fixed.matched).toBe(true);

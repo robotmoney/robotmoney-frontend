@@ -1,24 +1,23 @@
-// Issue #1035 AC6/AC7: migration 0080 compacts the analytics ledger the old
-// writers left behind — re-observation and float-noise source_value_versions
-// rows, one-row-per-member vintage copies, and noise-only overwrite evidence —
-// and every immutability guard is armed again. Since issue #1050 it also
-// re-points every existing vintage to the rows the fixed writer would have
-// written and recomputes its digest, so each vintage keeps its member count and
-// replays to its (recomputed) manifest digest, and every series keeps one head
-// under the same label and within tolerance of the same value.
-// tests/analytics-ledger-vintage-repair.test.ts proves the result equals what
-// the fixed writers alone would have produced.
+// Issue #1035 AC6/AC7: migration 0080 plus the one-time v0.5.2 ledger repair
+// (scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts) compact the analytics
+// ledger the old writers left behind — re-observation, float-noise and relabel
+// source_value_versions rows, one-row-per-member vintage copies, and noise- or
+// label-only overwrite evidence — and every immutability guard is armed again.
+// Each vintage keeps its member count and replays to its (recomputed) manifest
+// digest, and every series point keeps exactly one chain, with its head within
+// tolerance of the value it had. tests/analytics-ledger-vintage-repair.test.ts
+// proves the result equals what the fixed writers alone would have produced.
 //
 // WHY ITS OWN DATABASE. The suite's template (tests/preload.ts) has 0080
-// applied already, and on an empty ledger, so there is no pre-migration state
-// left in it to compact. This file builds a database of its own on the same
-// ephemeral instance, applies every migration BEFORE 0080 exactly as
-// src/db/migrate.ts does, writes the shapes the pre-#1035 writers wrote, then
-// applies 0080 for real. Nothing here touches the shared database, and nothing
+// applied already, and on an empty ledger, so there is no pre-0080 state left
+// in it. This file builds a database of its own on the same ephemeral
+// instance, applies every migration BEFORE 0080 exactly as src/db/migrate.ts
+// does, writes the shapes the pre-#1035 writers wrote, applies 0080 for real,
+// then runs the repair. Nothing here touches the shared database, and nothing
 // is cleaned up by deleting rows: the whole database is dropped afterwards.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
@@ -27,7 +26,8 @@ import { loadFrozenVintage, loadHistoricalSourceValues } from "../src/analytics/
 import { ledgerCurrentRawIndicatorHistory } from "../src/analytics/cutover/ledger-current.ts";
 import { checkAnalyticsLedgerGuard } from "../src/db/analytics-ledger-guard.ts";
 import { checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
-import { applyMigrationFile, reclaimAfterMigrations } from "../src/db/migrate.ts";
+import { applyMigrationFile } from "../src/db/migrate.ts";
+import { repairLedger } from "../scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const MIGRATION = "0080_analytics_ledger_compaction.sql";
@@ -43,8 +43,7 @@ let dbName: string;
 
 async function applyMigration(file: string): Promise<void> {
   // The runner's own per-file step (src/db/migrate.ts): one transaction per
-  // file, as rm_owner from 0054 on, including any TypeScript step the file
-  // needs (0080's vintage manifest rebuild), recorded under its full basename.
+  // file, as rm_owner from 0054 on, recorded under its full basename.
   await applyMigrationFile(db, file);
 }
 
@@ -221,8 +220,9 @@ beforeAll(async () => {
     await oldAcquire(key, DATES.map((date, i) => ({ date, value: g4(key)(i) })).filter((_, i) => i < 7 || i > 9), "live");
   }
 
-  // A coordinate whose chain does not follow its own time order (two roots):
-  // the migration must leave it exactly as it is.
+  // A coordinate whose chain does not follow its own time order (three
+  // roots): the repair re-links it in (knowledge_time, id) order, which leaves
+  // one version, the other two being repeats of it.
   const acq = randomUUID();
   await db`INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity) VALUES (${acq}::uuid, 'fixture', 'fixture:1', 'irregular')`;
   for (const _ of [1, 2, 3]) {
@@ -233,8 +233,8 @@ beforeAll(async () => {
       VALUES (${a}::uuid, ${IRREGULAR_KEY}, '2024-01-01', 10, 'initial', 'live')`;
   }
 
-  // Overwrite evidence as migration 0056's trigger records it: two noise-only
-  // rewrites (removable) and three material ones (kept).
+  // Overwrite evidence as migration 0056's trigger records it: noise-only and
+  // label-only rewrites (removable) and two material ones (kept).
   await db`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES
     ('2024-02-01', 'VIX', 18.719999313354492, 'live'), ('2024-02-01', 'T10Y2Y', 1.25, 'live')`;
   // The orchestrator's whole-floor rewrite, many times over: jitter out and
@@ -270,11 +270,9 @@ beforeAll(async () => {
   expect(before.counts.events).toBe(403);
   sizesBefore = await relationSizes();
 
-  await applyMigration(MIGRATION);
-  // The runner's own post-commit step (src/db/migrate.ts): VACUUM FULL of the
-  // compacted tables, run because 0080 was applied in this run.
-  await reclaimAfterMigrations(db, [MIGRATION]);
-  for (const file of (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql") && f > MIGRATION).sort()) await applyMigration(file);
+  // The deploy (0080 and anything after it), then the one-time repair.
+  for (const file of (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql") && f >= MIGRATION).sort()) await applyMigration(file);
+  await repairLedger(db);
 }, 180_000);
 
 afterAll(async () => {
@@ -290,10 +288,11 @@ describe("issue #1035 AC6: compaction keeps every vintage and every head, and dr
     expect(after.counts.members).toBeLessThan(before.counts.members);
     // Each vintage's membership is now a handful of runs, not one row a member.
     expect(after.counts.members).toBeLessThan(before.counts.members / 10);
-    expect(after.counts.events).toBe(3);
+    // The VIX revision and the exact key's change; the relabel alone is gone.
+    expect(after.counts.events).toBe(2);
   });
 
-  test("the upgrade returns disk space: every compacted table is smaller on disk after 0080 and the runner's VACUUM FULL", async () => {
+  test("the upgrade returns disk space: every compacted table is smaller on disk after the repair's rebuild", async () => {
     const sizesAfter = await relationSizes();
     for (const table of RECLAIMED) {
       expect({ table, smaller: sizesAfter[table]! < sizesBefore[table]! }, JSON.stringify({ before: sizesBefore, after: sizesAfter }))
@@ -317,53 +316,56 @@ describe("issue #1035 AC6: compaction keeps every vintage and every head, and dr
     }
   });
 
-  test("every series keeps one head, under the same label, with the same value within tolerance", async () => {
-    // Since issue #1050 a head that was only a re-observation is dropped like
-    // any other, so the head can be an EARLIER row: same coordinate, same
-    // label, a value within the source's tolerance.
+  test("every series point keeps exactly one head, with its value within tolerance of the value it had", async () => {
+    // The head can be an EARLIER row than before: same coordinate, a value
+    // within the source's tolerance, and whatever label the version that set
+    // that value carried.
     const after = await snapshot(async () => []);
-    const shape = (heads: unknown) =>
-      (heads as { source_key: string; market_date: string; provenance: string | null; value: number }[])
-        .map((h) => ({ key: `${h.source_key}|${h.market_date}`, provenance: h.provenance, value: Number(h.value) }))
-        .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.value - b.value));
-    const b = shape(before.allHeads);
-    const a = shape(after.allHeads);
-    expect(a.map((h) => [h.key, h.provenance])).toEqual(b.map((h) => [h.key, h.provenance]));
-    for (let i = 0; i < a.length; i++) {
-      const rel = Math.abs(a[i]!.value - b[i]!.value) / Math.max(Math.abs(a[i]!.value), Math.abs(b[i]!.value));
-      expect(rel).toBeLessThanOrEqual(a[i]!.key.startsWith(FRED_KEY) ? 0 : 1e-6);
+    const byKey = (heads: unknown) => {
+      const out = new Map<string, number[]>();
+      for (const h of heads as { source_key: string; market_date: string; value: number }[]) {
+        const key = `${h.source_key}|${h.market_date}`;
+        out.set(key, [...(out.get(key) ?? []), Number(h.value)]);
+      }
+      return out;
+    };
+    const b = byKey(before.allHeads);
+    const a = byKey(after.allHeads);
+    expect([...a.keys()].sort()).toEqual([...b.keys()].sort());
+    for (const [key, values] of a) {
+      expect({ key, heads: values.length }).toEqual({ key, heads: 1 });
+      const was = b.get(key)!.at(-1)!;
+      const rel = Math.abs(values[0]! - was) / Math.max(Math.abs(values[0]!), Math.abs(was));
+      expect(rel).toBeLessThanOrEqual(key.startsWith(FRED_KEY) ? 0 : 1e-6);
     }
     const raw = (heads: unknown) =>
-      (heads as { indicator: string; date: string; value: number; source: string | null }[])
-        .map((h) => [h.indicator, h.date, h.source, Math.round(h.value * 1e6)]);
+      (heads as { indicator: string; date: string; value: number }[]).map((h) => [h.indicator, h.date, Math.round(h.value * 1e6)]);
     expect(raw(after.rawHeads)).toEqual(raw(before.rawHeads));
   });
 
   test("each chain keeps exactly what the fixed writer would have written, re-linked into one chain", async () => {
-    // A Yahoo date with no real revision: the baseline, and g0, which moved the
-    // label from NULL to 'live'. Everything after it (g1..g7) was a
-    // re-observation, or jitter within 1e-6, of that head under the same label,
-    // so the fixed writer wrote none of it — vintage references and the old
-    // head included (issue #1050).
+    // A Yahoo date with no real revision: only the baseline. g0 moved the label
+    // from NULL to 'live', which is not a change, and everything after it was a
+    // re-observation, or jitter within 1e-6 (issue #1050, owner 2026-09-29).
     const plain = await chainOf(YAHOO_KEY, DATES[20]!);
-    expect(plain.map((v) => v.kind)).toEqual(["legacy_baseline", "unchanged"]);
-    expect(plain.every((v) => Number(v.value) === base(YAHOO_KEY, 20))).toBe(true);
-    // A relabelled date: g6's 'seed' label is new information, so it stays; its
-    // g7 repeat does not.
+    expect(plain.map((v) => v.kind)).toEqual(["legacy_baseline"]);
+    expect(Number(plain[0]!.value)).toBe(base(YAHOO_KEY, 20));
+    // A relabelled date: g6's 'seed' label alone is not a change either.
     const relabelled = await chainOf(YAHOO_KEY, DATES[8]!);
-    expect(relabelled.map((v) => v.provenance)).toEqual([null, "live", "seed"]);
+    expect(relabelled.map((v) => v.provenance)).toEqual([null]);
     // An EXACT key keeps its jitter: under D56 a FRED change is always real.
     // g2's jitter and g4's return to base are revisions; every repeat goes.
     const exact = await chainOf(FRED_KEY, DATES[20]!);
     const b = base(FRED_KEY, 20);
-    expect(exact.map((v) => Number(v.value))).toEqual([b, b, noisy(b), b]);
-    expect(exact.map((v) => v.kind)).toEqual(["legacy_baseline", "unchanged", "revision", "revision"]);
+    expect(exact.map((v) => Number(v.value))).toEqual([b, noisy(b), b]);
+    expect(exact.map((v) => v.kind)).toEqual(["legacy_baseline", "revision", "revision"]);
     for (const chain of [plain, relabelled, exact]) {
       expect(chain[0]!.prior).toBeNull();
       for (let i = 1; i < chain.length; i++) expect(chain[i]!.prior).toBe(chain[i - 1]!.id);
     }
-    // The irregular coordinate is untouched.
-    expect(await chainOf(IRREGULAR_KEY, "2024-01-01")).toHaveLength(3);
+    // The irregular coordinate: three roots with one value become one version.
+    const irregular = await chainOf(IRREGULAR_KEY, "2024-01-01");
+    expect(irregular.map((v) => [v.kind, v.prior])).toEqual([["initial", null]]);
   });
 });
 
@@ -435,16 +437,6 @@ function assertMemberResolutionPlan(plan: PlanNode): void {
 }
 
 describe("issue #1035 review: member runs resolve by primary-key equality, never a range join", () => {
-  test("0080's membership count query", async () => {
-    await db.unsafe("ANALYZE");
-    const sql = await readFile(join(migrationsDir, MIGRATION), "utf8");
-    const match = /INSERT INTO ledger_repair_member_counts \(vintage_id, members\)\n([\s\S]*?GROUP BY vm\.vintage_id);/.exec(sql);
-    expect(match).not.toBeNull();
-    const query = match![1]!;
-    assertMemberResolutionPlan(await planOf(query));
-    assertMemberResolutionPlan(await planOf(query, [], true));
-  });
-
   test("loadFrozenVintage's member query, captured from the production loader", async () => {
     await db.unsafe("ANALYZE");
     const captured: { query: string; params: unknown[] }[] = [];
