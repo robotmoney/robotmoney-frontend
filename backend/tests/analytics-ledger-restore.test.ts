@@ -24,20 +24,12 @@ import {
   ledgerCurrentResearchSignals,
 } from "../src/analytics/cutover/ledger-current.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { adminUrl } from "./support/cluster.ts";
+import { adminConnection, harnessConnection } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
 
 function sha256Hex(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-// `new URL(pgUrl).origin` is "null" for a non-special scheme like postgres:
-// (WHATWG URL only computes a real origin for http/https/ws/wss/ftp/file) —
-// build the base manually instead.
-function pgBaseUrl(): string {
-  const u = new URL(adminUrl());
-  return `postgres://${u.username}:${u.password}@${u.host}`;
 }
 
 const container = process.env.RM_TEST_PG_CONTAINER;
@@ -62,7 +54,8 @@ let restoreDbName: string | null = null;
 afterAll(async () => {
   if (restoreDb) await restoreDb.end({ timeout: 5 }).catch(() => {});
   if (restoreDbName) {
-    const admin = postgres(pgBaseUrl() + "/postgres", { max: 1, onnotice: () => {} });
+    // cluster admin: DROP DATABASE
+    const admin = adminConnection();
     await admin.unsafe(`DROP DATABASE IF EXISTS "${restoreDbName}" WITH (FORCE)`).catch(() => {});
     await admin.end({ timeout: 5 }).catch(() => {});
   }
@@ -141,14 +134,15 @@ test("a populated Phase A lineage survives a real pg_dump/pg_restore round-trip 
 
   // ── restore into a brand-new, EMPTY database (no template) ───────────────
   restoreDbName = `rm979_restore_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
-  const admin = postgres(pgBaseUrl() + "/postgres", { max: 1, onnotice: () => {} });
+  // cluster admin: CREATE DATABASE (owned by rm_owner, which owns the restored objects)
+  const admin = adminConnection();
   try {
-    await admin.unsafe(`CREATE DATABASE "${restoreDbName}"`);
+    await admin.unsafe(`CREATE DATABASE "${restoreDbName}" OWNER rm_owner`);
   } finally {
     await admin.end({ timeout: 5 });
   }
   const restore = dockerExec(
-    ["pg_restore", "-h", "127.0.0.1", "-U", "robotmoney", "-d", restoreDbName, "--no-owner", "--role=robotmoney"],
+    ["pg_restore", "-h", "127.0.0.1", "-U", "robotmoney", "-d", restoreDbName, "--no-owner", "--role=rm_owner"],
     dump.stdout,
   );
   // pg_restore can exit nonzero on advisory warnings (e.g. role differences)
@@ -157,7 +151,7 @@ test("a populated Phase A lineage survives a real pg_dump/pg_restore round-trip 
   // directly rather than trusted from the exit code alone.
   if (restore.exitCode !== 0) console.error("pg_restore stderr:", restore.stderr);
 
-  restoreDb = postgres(pgBaseUrl() + `/${restoreDbName}`, { max: 1, onnotice: () => {} });
+  restoreDb = harnessConnection(restoreDbName);
 
   // ── every foreign key is VALIDATED (not merely present) ──────────────────
   const unvalidated = (await restoreDb`
