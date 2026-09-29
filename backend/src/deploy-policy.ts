@@ -108,6 +108,20 @@ export function resolveRmEnv(
   };
 }
 
+/** The runbook a refused pre-identity remote twin is pointed at (D55 (10)). */
+export const PRE_IDENTITY_TWIN_RUNBOOK = "docs/runbooks/pre-identity-remote-twin.md";
+
+/**
+ * D55 (10): no tool turns a pre-0063 production dump into a remote twin, so
+ * every stage tool that reads a remote target with no `deployment_identity`
+ * table (or row) refuses, changes nothing, and names the one intervention that
+ * can enrol it: a receipted `rm_owner` hand step, or `bun smoke --local dump`.
+ * One sentence, shared, so the twin tooling and every stage tool say the same.
+ */
+export const PRE_IDENTITY_TWIN_INTERVENTION =
+  `If this is a production dump restored from before migration 0063, no tool enrols it as a remote twin: ` +
+  `run the one-off, receipted rm_owner intervention in ${PRE_IDENTITY_TWIN_RUNBOOK}, or use \`bun smoke --local dump\` instead.`;
+
 function describeIdentity(identity: PolicyInput["identity"]): string {
   if (identity === null) return "no identity row";
   if (identity === "unreadable") return "unreadable identity table";
@@ -182,7 +196,8 @@ export function resolveDeploymentPolicy(input: PolicyInput): PolicyVerdict {
       reason:
         `RM_ENV=stage against a remote target whose deployment_identity is ${seen}: refusing ` +
         `— stage policy (incl. --allow-insecure) never touches production data (spec §4.3). ` +
-        `No flag relaxes this row.`,
+        `No flag relaxes this row.` +
+        (identity === null || identity === "unreadable" ? ` ${PRE_IDENTITY_TWIN_INTERVENTION}` : ""),
     };
   }
 
@@ -254,7 +269,10 @@ export function requireRehearsalTarget(request: {
   readonly rmEnv: string | undefined;
   readonly identity: DeploymentIdentityKind | null | "unreadable";
   readonly explicitlyRequested: boolean;
+  /** When the target is remote, an un-enrolled refusal also names the D55 (10) intervention. */
+  readonly connection?: TargetConnection;
 }): { readonly allow: true } | { readonly allow: false; readonly reason: string } {
+  const pointer = request.connection === "remote" ? ` ${PRE_IDENTITY_TWIN_INTERVENTION}` : "";
   const what = `--${request.preparation}`;
   const rmEnv = request.rmEnv === undefined || request.rmEnv.trim() === "" ? undefined : request.rmEnv;
   if (rmEnv === "prod") {
@@ -284,13 +302,13 @@ export function requireRehearsalTarget(request: {
   if (request.identity === null) {
     return {
       allow: false,
-      reason: `${what} is refused: this target is not enrolled at all, and an un-enrolled database is not a rehearsal database (§4.3). Enroll it as rehearsal first.`,
+      reason: `${what} is refused: this target is not enrolled at all, and an un-enrolled database is not a rehearsal database (§4.3). Enroll it as rehearsal first.${pointer}`,
     };
   }
   if (request.identity === "unreadable") {
     return {
       allow: false,
-      reason: `${what} is refused: deployment_identity is unreadable, so there is no evidence this target is a rehearsal database (§4.3). Check that the credential can read the table.`,
+      reason: `${what} is refused: deployment_identity is unreadable, so there is no evidence this target is a rehearsal database (§4.3). Check that the credential can read the table.${pointer}`,
     };
   }
   return { allow: true };

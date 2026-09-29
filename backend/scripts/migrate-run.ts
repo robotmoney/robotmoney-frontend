@@ -1045,7 +1045,7 @@ export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions)
   // own guards. Judged on the identity alone here (the policy half is above),
   // so a `prod` + `production` run learns both of its refusals in one pass.
   if (options.caller === "smoke_flag" && kind !== "rehearsal") {
-    const gate = requireRehearsalTarget({ preparation: "migrate", rmEnv: "stage", identity: kind, explicitlyRequested: true });
+    const gate = requireRehearsalTarget({ preparation: "migrate", rmEnv: "stage", identity: kind, explicitlyRequested: true, connection: options.connection === "remote" ? "remote" : "local-volume" });
     if (!gate.allow) {
       push({
         reason: kind === "production" ? "identity_not_rehearsal" : "identity_missing",

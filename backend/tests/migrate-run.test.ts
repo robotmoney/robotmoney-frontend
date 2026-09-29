@@ -370,6 +370,22 @@ describe("the first production migrate's exception does not reach a ledger that 
     expect(refusals[0]?.message).toContain("needs RM_ENV=prod, and this run is RM_ENV=stage");
   });
 
+  test("D55 (10): a remote stage target with no identity row refuses and names the pre-identity twin runbook, for the operator and for `--migrate`", async () => {
+    await setIdentity(null);
+    for (const caller of ["operator", "smoke_flag"] as const) {
+      const refusals = await checkMigrateGates(sql, options({ caller, env: "stage", connection: "remote" }));
+      const text = refusals.map((r) => r.message).join(" ");
+      expect(text).toContain("docs/runbooks/pre-identity-remote-twin.md");
+      expect(text).toContain("rm_owner");
+    }
+  });
+
+  test("D55 (10): a local target with no identity row is not pointed at the remote-twin runbook", async () => {
+    await setIdentity(null);
+    const refusals = await checkMigrateGates(sql, options({ caller: "smoke_flag", env: "stage", connection: "local" }));
+    expect(refusals.map((r) => r.message).join(" ")).not.toContain("pre-identity-remote-twin");
+  });
+
   test("`--migrate` never has the exception, and its refusal does not mention it", async () => {
     await setIdentity(null);
     const refusals = await checkMigrateGates(sql, options({ caller: "smoke_flag", env: "stage" }));
