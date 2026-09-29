@@ -346,7 +346,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "src/swarm/admin",
     "src/swarm/consensus-receipt",
     "src/swarm/domain",
-    "src/swarm/roster-seed",
     "src/worker/handlers/projects",
   ];
 
