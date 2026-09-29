@@ -64,7 +64,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
-import { config } from "../src/config.ts";
+import { adminUrl } from "./support/cluster.ts";
 import {
   checkSchemaCompatibility,
   checkSchemaIntegrity,
@@ -95,12 +95,12 @@ import { describeCatalogDiff, diffCatalogs, normalizedCatalog } from "./support/
 
 const sha256 = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex");
 
-const LOGIN = new URL(config.databaseUrl).username;
+const LOGIN = new URL(adminUrl()).username;
 const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 const READONLY_PASSWORD = randomBytes(12).toString("hex");
 
 function urlFor(database: string, role?: { name: string; password: string }): string {
-  const url = new URL(config.databaseUrl);
+  const url = new URL(adminUrl());
   url.pathname = `/${database}`;
   if (role) {
     url.username = role.name;
@@ -321,7 +321,7 @@ beforeAll(async () => {
   // Blank + all migrations, given the real migrate run — the target every
   // upgrade must land on, and the side schema-equivalence.test.ts compares to
   // the snapshot.
-  await admin.unsafe(`CREATE DATABASE ${REFERENCE_DB} TEMPLATE "${process.env.RM_TEST_TEMPLATE_DB}"`);
+  await admin.unsafe(`CREATE DATABASE ${REFERENCE_DB} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`);
   created.push(REFERENCE_DB);
   reference = connect(REFERENCE_DB);
   await enroll(reference, "rehearsal");

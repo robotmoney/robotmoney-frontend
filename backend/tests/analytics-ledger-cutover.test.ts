@@ -6,10 +6,9 @@ import { afterAll, afterEach, describe, expect, test, beforeEach } from "bun:tes
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import net from "node:net";
 import postgres from "postgres";
 import { ROUTES } from "@robotmoney/contract";
-import { POSTGRES_IMAGE } from "../../scripts/lib/postgres-image.ts";
+import { createHistoryDatabase } from "./support/history-database.ts";
 import { sql } from "../src/db/client.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { handleAdmin } from "../src/api/routes/admin.ts";
@@ -604,17 +603,6 @@ async function snapshotLedgerTables(): Promise<Record<string, { count: number; c
 // comment).
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
 // Legacy-table row counts + primary-key checksums — issue #979 AC9.
 const LEGACY_TABLES: { table: string; pk: string }[] = [
   { table: "raw_indicator_history", pk: "indicator, date" },
@@ -658,23 +646,11 @@ describe("issue #979 AC9: legacy row counts and PK checksums survive cutover and
   // same harness shape as tests/source-ledger-migration.test.ts, which proves
   // 0057's backfill against a real, populated legacy table for the same reason.
   test("legacy row counts and PK checksums are identical before and after migrations 0057-0061 are applied for real", async () => {
-    const port = await freePort();
-    const container = `rmtest_ac9_migration_${crypto.randomUUID().slice(0, 8)}`;
-    const up = Bun.spawnSync([
-      "docker", "run", "-d", "--rm", "--name", container,
-      "-e", "POSTGRES_PASSWORD=robotmoney", "-e", "POSTGRES_USER=robotmoney", "-e", "POSTGRES_DB=robotmoney",
-      "-p", `${port}:5432`, POSTGRES_IMAGE,
-    ]);
-    // Loud, never a silent skip: without Docker there is no migration boundary
-    // to test, and that is a broken runner, not a passing test.
-    if (up.exitCode !== 0) throw new Error(`AC9 migration-boundary test requires Docker+Postgres:\n${up.stderr.toString()}`);
-    const db = postgres(`postgres://robotmoney:robotmoney@localhost:${port}/robotmoney`, { max: 1, onnotice: () => {} });
+    // A history database on the suite's own cluster, owned by the provider's
+    // bootstrap login (tests/support/history-database.ts), not a container of this test's own.
+    const history = await createHistoryDatabase("ac9_migration", { max: 1 });
+    const db = history.db;
     try {
-      const started = Date.now();
-      for (;;) {
-        try { await db`SELECT 1`; break; }
-        catch (error) { if (Date.now() - started > 30_000) throw error; await Bun.sleep(200); }
-      }
       await db`CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
       const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
       const apply = async (file: string) => {
@@ -725,8 +701,7 @@ describe("issue #979 AC9: legacy row counts and PK checksums survive cutover and
 
       expect(await snapshot(), "no Phase A migration may alter a legacy table").toEqual(beforeMigration);
     } finally {
-      await db.end({ timeout: 5 }).catch(() => {});
-      Bun.spawnSync(["docker", "rm", "-f", "-v", container]);
+      await history.drop().catch(() => {});
     }
   }, 180_000);
 });

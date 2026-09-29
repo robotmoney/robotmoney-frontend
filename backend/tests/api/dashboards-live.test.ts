@@ -35,6 +35,11 @@ import {
 } from "../../src/chain/wallet-sleeves.ts";
 import { _resetAllocationFrameworkCacheForTests, ALLOCATION_FRAMEWORK_SEED } from "../../src/chain/allocation-framework.ts";
 import { _resetTokenPriceCacheForTests } from "../../src/chain/token-prices.ts";
+import { useCleanDatabase } from "../support/clean-db.ts";
+
+// The buyback fixture rows are DATA a migration inserts (the snapshot's bootstrap data
+// holds operational rows only), so this file runs on the migration-built template.
+useCleanDatabase(import.meta.file, { migrationBuilt: true });
 
 const realFetch = globalThis.fetch;
 const word = (n: bigint): string => "0x" + n.toString(16).padStart(64, "0");

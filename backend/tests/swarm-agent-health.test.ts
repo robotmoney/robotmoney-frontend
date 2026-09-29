@@ -18,6 +18,7 @@ import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
 import { provisionOperatorToken } from "./support/automation-auth.ts";
+import { adminUrl } from "./support/cluster.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
@@ -287,7 +288,7 @@ test("closeWindow commits window_closed even when absence-event recording fails,
 // 0020, to genuinely re-test 0020's idempotency against the schema shape it
 // was actually written for (same pattern as swarm-claim.test.ts's 0019 test).
 test("0020 migration is idempotent when executed repeatedly against real Postgres", async () => {
-  const base = new URL(config.databaseUrl);
+  const base = new URL(adminUrl());
   const dbName = `tmp_0020_idem_${crypto.randomUUID().slice(0, 8)}`;
   const admin = postgres(base.toString(), { max: 1, onnotice: () => {} });
   await admin.unsafe(`CREATE DATABASE ${dbName}`);

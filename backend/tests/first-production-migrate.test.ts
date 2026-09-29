@@ -51,7 +51,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
-import { config } from "../src/config.ts";
+import { adminUrl } from "./support/cluster.ts";
 import { IDENTITY_MIGRATION, runMigrate } from "../scripts/migrate-run.ts";
 import type { MigrateJournalFile } from "../scripts/migrate-journal.ts";
 import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
@@ -81,7 +81,7 @@ const LAST = RELEASE_FILES.at(-1)!;
 const FIRST_UNSHIPPED = HEAD_FILES.find((file) => !RELEASE_FILES.includes(file))!;
 const RENAMED = LAST.replace(/\.sql$/, "_renamed.sql");
 
-const LOGIN = new URL(config.databaseUrl).username;
+const LOGIN = new URL(adminUrl()).username;
 const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 const READONLY_PASSWORD = randomBytes(12).toString("hex");
 
@@ -97,7 +97,7 @@ const DB = {
 } as const;
 
 function urlFor(database: string, role?: { name: string; password: string }): URL {
-  const url = new URL(config.databaseUrl);
+  const url = new URL(adminUrl());
   url.pathname = `/${database}`;
   if (role) {
     url.username = role.name;

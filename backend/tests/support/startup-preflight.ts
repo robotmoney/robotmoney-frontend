@@ -17,16 +17,16 @@
 import net from "node:net";
 import { join } from "node:path";
 import postgres from "postgres";
-import { config } from "../../src/config.ts";
 import { bootstrapBlankDatabase, loadSnapshot } from "../../src/db/schema-snapshot.ts";
+import { adminUrl, harnessConnection } from "./cluster.ts";
 
 export const BACKEND_DIR = join(import.meta.dir, "..", "..");
 
-/** A URL for `database` on the suite's server — as the harness superuser, or
- *  as `role` with `password`. */
+/** A URL for `database` on the suite's server — as the cluster admin (the
+ *  container's bootstrap superuser: it creates roles and databases, see
+ *  tests/support/cluster.ts), or as `role` with `password`. */
 export function databaseUrl(database: string, role?: { name: string; password: string }): string {
-  const url = new URL(config.databaseUrl);
-  url.pathname = `/${database}`;
+  const url = new URL(adminUrl(database));
   if (role) {
     url.username = role.name;
     url.password = encodeURIComponent(role.password);
@@ -34,7 +34,10 @@ export function databaseUrl(database: string, role?: { name: string; password: s
   return url.toString();
 }
 
-/** A superuser connection to `database` (default: the maintenance database). */
+/** A cluster-admin connection to `database` (default: the maintenance
+ *  database): for creating and dropping databases and roles, and for the few
+ *  states only a superuser can build. Never for the schema: that is
+ *  `rm_owner`'s. */
 export function connectAdmin(database = "postgres"): postgres.Sql<{}> {
   return postgres(databaseUrl(database), { max: 1, onnotice: () => {} });
 }
@@ -57,12 +60,17 @@ export async function createSnapshotTemplate(label: string): Promise<string> {
   } finally {
     await admin.end({ timeout: 5 });
   }
-  const db = connectAdmin(name);
+  // The provider's half (pgcrypto), as the cluster admin; then rm_owner logs in
+  // and provisions the schema, as `--local blank` does.
+  const provider = connectAdmin(name);
   try {
-    await db.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
-    await db.unsafe("SET ROLE rm_owner");
+    await provider.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+  } finally {
+    await provider.end({ timeout: 5 });
+  }
+  const db = harnessConnection(name);
+  try {
     await bootstrapBlankDatabase(db, await loadSnapshot());
-    await db.unsafe("RESET ROLE");
   } finally {
     await db.end({ timeout: 5 });
   }

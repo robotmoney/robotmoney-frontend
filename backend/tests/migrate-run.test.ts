@@ -40,7 +40,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
-import { config } from "../src/config.ts";
+import { adminUrl, adminExec, ROLE_PASSWORD } from "./support/cluster.ts";
 import { sql } from "../src/db/client.ts";
 import {
   detectManifestState,
@@ -68,11 +68,11 @@ import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { holdTargetLock, withTargetLock } from "./support/target-lock.ts";
 
-useCleanDatabase(import.meta.file);
+useCleanDatabase(import.meta.file, { migrationBuilt: true });
 
 const MIGRATIONS = join(import.meta.dir, "..", "migrations");
 const BACKEND = join(import.meta.dir, "..");
-const LOGIN = new URL(config.databaseUrl).username;
+const LOGIN = new URL(adminUrl()).username;
 
 /** The gate half of the options: the `--migrate` caller on a local stage target by default. */
 function options(over: Partial<MigrateGateOptions & { nonInteractive: boolean }> = {}): MigrateGateOptions & {
@@ -137,8 +137,11 @@ async function tablePrivilege(role: string, table: string, privilege: string, db
 
 /** Production shape for the one thing this harness's template carries that production's does not (see header). */
 async function revokeLoginDefaults(db: postgres.Sql<{}>): Promise<void> {
-  await db.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${LOGIN}" IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker`);
-  await db.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${LOGIN}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`);
+  // The default privileges belong to the provisioning login (the cluster admin),
+  // so only that login may alter them: as the admin, on the handle's database.
+  const [{ name }] = (await db`SELECT current_database() AS name`) as unknown as { name: string }[];
+  await adminExec(`ALTER DEFAULT PRIVILEGES FOR ROLE "${LOGIN}" IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker`, name);
+  await adminExec(`ALTER DEFAULT PRIVILEGES FOR ROLE "${LOGIN}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`, name);
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -152,7 +155,7 @@ const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 const OWNER = { name: "rm_owner", password: OWNER_PASSWORD };
 
 function urlFor(database: string, role?: { name: string; password: string }): string {
-  const url = new URL(config.databaseUrl);
+  const url = new URL(adminUrl());
   url.pathname = `/${database}`;
   if (role) {
     url.username = role.name;
@@ -193,7 +196,7 @@ async function withClone(
 ): Promise<void> {
   const name = `rm_migrate_run_${randomBytes(4).toString("hex")}`;
   const maintenance = connect("postgres");
-  await maintenance.unsafe(`CREATE DATABASE ${name} TEMPLATE "${process.env.RM_TEST_TEMPLATE_DB}"`);
+  await maintenance.unsafe(`CREATE DATABASE ${name} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`);
   const admin = connect(name);
   await revokeLoginDefaults(admin);
   const cloneOwner = connect(name, OWNER);
@@ -232,7 +235,7 @@ const ownerLoginClause = (): string => (ownerCanLogin === false ? "NOLOGIN" : "L
 
 beforeAll(async () => {
   ownerCanLogin = (await ownerAttributes()).rolcanlogin;
-  await sql.unsafe(`ALTER ROLE rm_owner PASSWORD '${OWNER_PASSWORD}'`);
+  await adminExec(`ALTER ROLE rm_owner PASSWORD '${OWNER_PASSWORD}'`);
   fileDb = await currentDatabase();
   await revokeLoginDefaults(sql);
   owner = connect(fileDb, OWNER);
@@ -240,7 +243,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await owner?.end({ timeout: 5 });
-  await sql.unsafe(`ALTER ROLE rm_owner ${ownerLoginClause()} PASSWORD NULL`);
+  await adminExec(`ALTER ROLE rm_owner ${ownerLoginClause()} PASSWORD '${ROLE_PASSWORD()}'`);
   for (const dir of plantedDirs) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -489,19 +492,19 @@ describe("rm_owner — LOGIN, the migration login, the only session the run acce
   test("a MEMBER of rm_owner that did not become it is refused too", async () => {
     await setIdentity("rehearsal");
     const role = `rm_owner_member_${Date.now().toString(36)}`;
-    await sql.unsafe(`CREATE ROLE ${role} LOGIN PASSWORD 'member-pw' NOSUPERUSER NOCREATEROLE IN ROLE rm_owner`);
+    await adminExec(`CREATE ROLE ${role} LOGIN PASSWORD 'member-pw' NOSUPERUSER NOCREATEROLE IN ROLE rm_owner`);
     const member = connect(fileDb, { name: role, password: "member-pw" });
     try {
       await expect(migrate(member, fileDb)).rejects.toThrow(`the session is ${role}, not rm_owner`);
     } finally {
       await member.end({ timeout: 5 });
-      await sql.unsafe(`DROP ROLE IF EXISTS ${role}`);
+      await adminExec(`DROP ROLE IF EXISTS ${role}`);
     }
   });
 
   test("an existing database's NOLOGIN rm_owner refuses as `§9.1 step 1 has not been applied`, then migrates once it has", async () => {
     await setIdentity("rehearsal");
-    await sql.unsafe("ALTER ROLE rm_owner NOLOGIN PASSWORD NULL");
+    await adminExec("ALTER ROLE rm_owner NOLOGIN PASSWORD NULL");
     try {
       await expect(
         promptOwnerPassword({ ...options({ connection: "local" }), localOwnerPassword: OWNER_PASSWORD }, urlFor(fileDb)),
@@ -509,7 +512,7 @@ describe("rm_owner — LOGIN, the migration login, the only session the run acce
 
       // Spec §9.1 step 1, through the provisioning login: LOGIN plus a
       // password, then a verification login — which here is the run itself.
-      await sql.unsafe(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
+      await adminExec(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
       const fresh = connect(fileDb, OWNER);
       try {
         const result = await migrate(fresh, fileDb);
@@ -518,7 +521,7 @@ describe("rm_owner — LOGIN, the migration login, the only session the run acce
         await fresh.end({ timeout: 5 });
       }
     } finally {
-      await sql.unsafe(`ALTER ROLE rm_owner ${ownerLoginClause()} PASSWORD '${OWNER_PASSWORD}'`);
+      await adminExec(`ALTER ROLE rm_owner ${ownerLoginClause()} PASSWORD '${OWNER_PASSWORD}'`);
     }
     expect((await ownerAttributes()).rolcreaterole).toBe(false);
   });
@@ -911,7 +914,7 @@ describe("`bun run migrate` (backend/scripts/migrate.ts)", () => {
   }
 
   async function envFileFor(extraLines = "", host?: string): Promise<string> {
-    const url = new URL(config.databaseUrl);
+    const url = new URL(adminUrl());
     return [
       `host = ${host ?? url.hostname}`,
       `port = ${url.port || "5432"}`,
@@ -923,7 +926,7 @@ describe("`bun run migrate` (backend/scripts/migrate.ts)", () => {
   }
 
   beforeAll(async () => {
-    await sql.unsafe(`ALTER ROLE rm_readonly WITH LOGIN PASSWORD '${READONLY_PASSWORD}'`);
+    await adminExec(`ALTER ROLE rm_readonly WITH LOGIN PASSWORD '${READONLY_PASSWORD}'`);
   });
 
   test("refuses a ~/.env that holds an rm_owner line, before connecting to anything", async () => {
@@ -1171,13 +1174,13 @@ describe("runMigrate — per-migration fenced transactions, always reconcile, pu
     await setIdentity("rehearsal");
     const role = `rm_not_owner_${Date.now().toString(36)}`;
     const password = "not-the-owner";
-    await sql.unsafe(`CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOCREATEROLE`);
+    await adminExec(`CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOCREATEROLE`);
     const stranger = connect(fileDb, { name: role, password });
     try {
       await expect(migrate(stranger, fileDb)).rejects.toThrow("rm_owner");
     } finally {
       await stranger.end({ timeout: 5 });
-      await sql.unsafe(`DROP ROLE IF EXISTS ${role}`);
+      await adminExec(`DROP ROLE IF EXISTS ${role}`);
     }
   });
 

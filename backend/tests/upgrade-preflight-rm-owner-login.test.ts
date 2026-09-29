@@ -20,6 +20,7 @@ import { createChecker, type CheckResult } from "../scripts/lib/checks.ts";
 import { roleReadinessCheck as check050 } from "../scripts/upgrades/0.4.0-to-0.5.0/preflight.ts";
 import { roleReadinessCheck as check051 } from "../scripts/upgrades/0.5.0-to-0.5.1/preflight.ts";
 import { sql } from "../src/db/client.ts";
+import { adminExec } from "./support/cluster.ts";
 
 let original: { rolcanlogin: boolean; rolcreaterole: boolean } | null = null;
 
@@ -32,7 +33,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (original === null) return;
-  await sql.unsafe(
+  await adminExec(
     `ALTER ROLE rm_owner ${original.rolcanlogin ? "LOGIN" : "NOLOGIN"} ${original.rolcreaterole ? "CREATEROLE" : "NOCREATEROLE"}`,
   );
 });
@@ -51,27 +52,27 @@ for (const [label, check] of [
 ] as const) {
   describe(`${label} preflight — role-readiness reads rm_owner the way D47 left it`, () => {
     test("rm_owner LOGIN without CREATEROLE raises no rm_owner problem", async () => {
-      await sql.unsafe("ALTER ROLE rm_owner LOGIN NOCREATEROLE");
+      await adminExec("ALTER ROLE rm_owner LOGIN NOCREATEROLE");
       const result = await roleReadiness(check);
       expect(result.detail.filter((line) => /^rm_owner (is|holds)/.test(line))).toEqual([]);
       expect(result.detail.join("\n")).not.toContain("0053 creates it NOLOGIN");
     });
 
     test("rm_owner NOLOGIN leaves the verdict unchanged and names §9.1 step 1", async () => {
-      await sql.unsafe("ALTER ROLE rm_owner LOGIN NOCREATEROLE");
+      await adminExec("ALTER ROLE rm_owner LOGIN NOCREATEROLE");
       const withLogin = await roleReadiness(check);
-      await sql.unsafe("ALTER ROLE rm_owner NOLOGIN NOCREATEROLE");
+      await adminExec("ALTER ROLE rm_owner NOLOGIN NOCREATEROLE");
       try {
         const withoutLogin = await roleReadiness(check);
         expect(withoutLogin.status).toBe(withLogin.status);
         expect(withoutLogin.detail.some((line) => line.includes("§9.1 step 1"))).toBe(true);
       } finally {
-        await sql.unsafe("ALTER ROLE rm_owner LOGIN");
+        await adminExec("ALTER ROLE rm_owner LOGIN");
       }
     });
 
     test("rm_owner CREATEROLE fails the record", async () => {
-      await sql.unsafe("ALTER ROLE rm_owner LOGIN CREATEROLE");
+      await adminExec("ALTER ROLE rm_owner LOGIN CREATEROLE");
       try {
         const result = await roleReadiness(check);
         expect(result.status).toBe("FAIL");
@@ -79,7 +80,7 @@ for (const [label, check] of [
           "rm_owner holds CREATEROLE — 0053 never grants it, and role creation is doadmin's (spec §3)",
         );
       } finally {
-        await sql.unsafe("ALTER ROLE rm_owner NOCREATEROLE");
+        await adminExec("ALTER ROLE rm_owner NOCREATEROLE");
       }
     });
   });

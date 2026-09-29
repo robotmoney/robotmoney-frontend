@@ -31,7 +31,6 @@ import { test, expect, beforeAll, afterAll } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import net from "node:net";
 import postgres from "postgres";
 // The SHARED ephemeral-Postgres pin (issue #691). This file provisions a
 // container of its own, so it is one of the sites that has to stay on the
@@ -40,20 +39,12 @@ import postgres from "postgres";
 // scripts/lib/postgres-image.ts for the version and the -alpine
 // decision, and backend/tests/postgres-version-parity.test.ts, which fails if
 // a literal reappears anywhere under backend/tests/.
-import { POSTGRES_IMAGE } from "../../scripts/lib/postgres-image.ts";
+import { createHistoryDatabase, type HistoryDatabase } from "./support/history-database.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const MIGRATION = "0028_swarm_briefs_session_key.sql";
 
-function freePort(): Promise<number> {
-  return new Promise((res, rej) => {
-    const s = net.createServer();
-    s.on("error", rej);
-    s.listen(0, () => { const p = (s.address() as net.AddressInfo).port; s.close(() => res(p)); });
-  });
-}
-
-let containerName: string;
+let history: HistoryDatabase;
 let db: postgres.Sql<{}>;
 
 // Ids captured during fixture seeding, used by the assertions below.
@@ -102,19 +93,8 @@ let afterFirstApply: BriefRow[];
 let afterSecondApply: BriefRow[];
 
 beforeAll(async () => {
-  const port = await freePort();
-  containerName = `rmtest_briefs_migration_${crypto.randomUUID().slice(0, 8)}`;
-  const up = Bun.spawnSync([
-    "docker", "run", "-d", "--rm", "--name", containerName,
-    "-e", "POSTGRES_PASSWORD=robotmoney", "-e", "POSTGRES_USER=robotmoney", "-e", "POSTGRES_DB=robotmoney",
-    "-p", `${port}:5432`, POSTGRES_IMAGE,
-  ]);
-  if (up.exitCode !== 0) {
-    throw new Error(
-      `swarm-briefs-session-key-migration test requires Docker+Postgres but the container failed to start:\n${up.stderr.toString()}`,
-    );
-  }
-  db = postgres(`postgres://robotmoney:robotmoney@localhost:${port}/robotmoney`, { max: 4, onnotice: () => {} });
+  history = await createHistoryDatabase("swarm-briefs-session-key-migration");
+  db = history.db;
 
   // Wait for a REAL accepting connection (mirrors src/db/migrate.ts's waitForDb).
   const start = Date.now();
@@ -213,8 +193,7 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await db?.end({ timeout: 5 });
-  if (containerName) Bun.spawnSync(["docker", "rm", "-f", "-v", containerName]);
+  await history?.drop();
 });
 
 test("pre-0028 the day key is what made a second same-day brief impossible", () => {

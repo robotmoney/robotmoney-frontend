@@ -41,6 +41,7 @@ import {
   startupLines,
   type ApiBoot,
 } from "./support/startup-preflight.ts";
+import { adminExec, ROLE_PASSWORD } from "./support/cluster.ts";
 
 const APP = { name: "rm_app", password: `rm_app_startup_${crypto.randomUUID().slice(0, 8)}` };
 const OWNER = { name: "rm_owner", password: `rm_owner_startup_${crypto.randomUUID().slice(0, 8)}` };
@@ -50,20 +51,20 @@ const created: string[] = [];
 let ownerCanLogin: boolean | null = null;
 
 beforeAll(async () => {
-  await sql.unsafe(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${APP.password}'`);
+  await adminExec(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${APP.password}'`);
   // rm_owner is cluster-wide and another file reads its LOGIN attribute, so
   // record it and put back exactly that value (migrate-run.test.ts does the same).
   const [owner] = (await sql`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`) as unknown as {
     rolcanlogin: boolean;
   }[];
   ownerCanLogin = owner?.rolcanlogin ?? null;
-  await sql.unsafe(`ALTER ROLE rm_owner PASSWORD '${OWNER.password}'`);
+  await adminExec(`ALTER ROLE rm_owner PASSWORD '${OWNER.password}'`);
   template = await createSnapshotTemplate("csp");
 }, 120_000);
 
 afterAll(async () => {
   await dropDatabases([...created, template].filter(Boolean));
-  await sql.unsafe(`ALTER ROLE rm_owner ${ownerCanLogin === false ? "NOLOGIN" : "LOGIN"} PASSWORD NULL`);
+  await adminExec(`ALTER ROLE rm_owner ${ownerCanLogin === false ? "NOLOGIN" : "LOGIN"} PASSWORD '${ROLE_PASSWORD()}'`);
 });
 
 async function freshCopy(label: string): Promise<string> {

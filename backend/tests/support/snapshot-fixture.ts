@@ -15,7 +15,7 @@ import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
-import { config } from "../../src/config.ts";
+import { adminConnection, harnessUrl } from "./cluster.ts";
 import { bootstrapBlankDatabase, loadSnapshot, type Snapshot } from "../../src/db/schema-snapshot.ts";
 import { runMigrate, type MigrateRunResult, type MigrateRunSeams } from "../../scripts/migrate-run.ts";
 import { withTargetLock } from "./target-lock.ts";
@@ -49,43 +49,50 @@ export class ScratchDatabases {
   private readonly pools: postgres.Sql<{}>[] = [];
   private scratch: string | null = null;
 
+  /** A URL for the named database as `rm_owner`, the schema owner (the target
+   *  lock and the migrate run reach the database this way). */
   urlFor(database: string): string {
-    const url = new URL(config.databaseUrl);
-    url.pathname = `/${database}`;
-    return url.toString();
+    return harnessUrl(database);
   }
 
-  /** A superuser connection (the test container's login). */
+  /** An `rm_owner` connection: the schema's owner, never a superuser. */
   connect(database: string): postgres.Sql<{}> {
     const pool = postgres(this.urlFor(database), { max: 1, onnotice: () => {} });
     this.pools.push(pool);
     return pool;
   }
 
-  private async create(statement: string, name: string): Promise<void> {
-    const admin = postgres(this.urlFor("postgres"), { max: 1, onnotice: () => {} });
+  /** The cluster admin creates the database (and installs the provider's
+   *  pgcrypto where asked); nothing else is done as a superuser. */
+  private async create(statement: string, name: string, provider = false): Promise<void> {
+    const admin = adminConnection();
     try {
       await admin.unsafe(statement);
     } finally {
       await admin.end({ timeout: 5 });
     }
     this.names.push(name);
+    if (provider) {
+      const db = adminConnection(name);
+      try {
+        await db.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+      } finally {
+        await db.end({ timeout: 5 });
+      }
+    }
   }
 
   /** An empty database owned by rm_owner with the provider's pgcrypto — what
-   *  §5's `--local blank` hands the bootstrap. The session is `SET ROLE rm_owner`. */
+   *  §5's `--local blank` hands the bootstrap. The session is an `rm_owner` login. */
   async blank(name: string): Promise<postgres.Sql<{}>> {
-    await this.create(`CREATE DATABASE ${name} OWNER rm_owner`, name);
-    const db = this.connect(name);
-    await db.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
-    await db.unsafe("SET ROLE rm_owner");
-    return db;
+    await this.create(`CREATE DATABASE ${name} OWNER rm_owner`, name, true);
+    return this.connect(name);
   }
 
-  /** A copy of the suite's template: every migration applied from 0001, the
-   *  path every production database took. Superuser session. */
+  /** A copy of the suite's template, owned by rm_owner. The template is the
+   *  real snapshot's bootstrap plus the seed (tests/preload.ts). `rm_owner` session. */
   async migrated(name: string): Promise<postgres.Sql<{}>> {
-    await this.create(`CREATE DATABASE ${name} TEMPLATE "${process.env.RM_TEST_TEMPLATE_DB}"`, name);
+    await this.create(`CREATE DATABASE ${name} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`, name);
     return this.connect(name);
   }
 
@@ -117,7 +124,7 @@ export class ScratchDatabases {
 
   async dropAll(): Promise<void> {
     for (const pool of this.pools) await pool.end({ timeout: 5 });
-    const admin = postgres(this.urlFor("postgres"), { max: 1, onnotice: () => {} });
+    const admin = adminConnection();
     try {
       for (const name of this.names) await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
     } finally {

@@ -24,6 +24,7 @@ import {
   ledgerCurrentResearchSignals,
 } from "../src/analytics/cutover/ledger-current.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { adminUrl } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -35,7 +36,7 @@ function sha256Hex(bytes: Buffer): string {
 // (WHATWG URL only computes a real origin for http/https/ws/wss/ftp/file) —
 // build the base manually instead.
 function pgBaseUrl(): string {
-  const u = new URL(process.env.DATABASE_URL!);
+  const u = new URL(adminUrl());
   return `postgres://${u.username}:${u.password}@${u.host}`;
 }
 

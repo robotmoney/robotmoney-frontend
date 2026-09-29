@@ -26,6 +26,7 @@ import { join } from "node:path";
 import postgres from "postgres";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { adminExec, adminUrl } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -47,9 +48,9 @@ const RM_APP_PASSWORD = "rm_app_additive_backfills";
 let app: postgres.Sql<{}>;
 
 beforeAll(async () => {
-  await sql.unsafe(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${RM_APP_PASSWORD}'`);
+  await adminExec(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${RM_APP_PASSWORD}'`);
   const [row] = (await sql`SELECT current_database() AS db`) as unknown as { db: string }[];
-  const url = new URL(process.env.DATABASE_URL!);
+  const url = new URL(adminUrl());
   url.pathname = `/${row!.db}`;
   url.username = "rm_app";
   url.password = RM_APP_PASSWORD;

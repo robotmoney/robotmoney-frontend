@@ -42,11 +42,12 @@ import {
   PRIOR_RELEASE_MIGRATIONS,
   THIS_RELEASE_MIGRATIONS,
 } from "../scripts/upgrades/0.2.2-to-0.3.0/release.ts";
+import { adminUrl } from "./support/cluster.ts";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = join(testDir, "..", "migrations");
 
-const DB_URL = process.env.DATABASE_URL;
+const DB_URL = adminUrl();
 // Loud, not skipped: this suite is meaningless without the real trigger catalog.
 if (!DB_URL) throw new Error("DATABASE_URL is unset — tests/preload.ts must provision the ephemeral Postgres first");
 

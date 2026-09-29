@@ -34,6 +34,7 @@ import {
 } from "../src/db/append-only-guard.ts";
 const MEMBER_KEYS_MIGRATION = "0050_swarm_member_keys_append_only.sql";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { adminExec, adminUrl } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -418,8 +419,8 @@ describe("the runtime check under the PRODUCTION role (rm_app), which holds no D
   let app: postgres.Sql<{}>;
 
   beforeAll(async () => {
-    await sql.unsafe(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${APP_PASSWORD}'`);
-    const url = new URL(process.env.DATABASE_URL!);
+    await adminExec(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${APP_PASSWORD}'`);
+    const url = new URL(adminUrl());
     url.username = "rm_app";
     url.password = APP_PASSWORD;
     app = postgres(url.toString(), { max: 2, onnotice: () => {} });

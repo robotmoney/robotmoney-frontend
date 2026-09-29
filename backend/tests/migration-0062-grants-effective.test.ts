@@ -15,7 +15,7 @@ import { describe, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
-useCleanDatabase(import.meta.file);
+useCleanDatabase(import.meta.file, { migrationBuilt: true });
 
 /** Roles whose READS 0062 repairs. Writes stay fail-closed and are asserted so. */
 const READERS: string[] = ["rm_readonly", "rm_app", "rm_worker"];

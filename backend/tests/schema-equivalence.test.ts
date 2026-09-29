@@ -60,9 +60,10 @@ import {
   type CatalogDiff,
   type CatalogEntry,
 } from "./support/catalog-normalize.ts";
+import { adminUrl } from "./support/cluster.ts";
 
 function urlFor(database: string): string {
-  const url = new URL(config.databaseUrl);
+  const url = new URL(adminUrl());
   url.pathname = `/${database}`;
   return url.toString();
 }
@@ -94,7 +95,7 @@ let baselined = false;
 beforeAll(async () => {
   const admin = connect("postgres");
   try {
-    await admin.unsafe(`CREATE DATABASE ${MIGRATED_DB} TEMPLATE "${process.env.RM_TEST_TEMPLATE_DB}"`);
+    await admin.unsafe(`CREATE DATABASE ${MIGRATED_DB} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`);
     // OWNER rm_owner: §5's `--local blank` hands the bootstrap a database the
     // schema owner owns (see schema-snapshot.test.ts's withBlankDatabase).
     await admin.unsafe(`CREATE DATABASE ${SNAPSHOT_DB} OWNER rm_owner`);
@@ -158,7 +159,7 @@ function differingKeys(diff: CatalogDiff): string[] {
   return [...diff.onlyLeft.map((e) => e.key), ...diff.onlyRight.map((e) => e.key), ...diff.differing.map((d) => d.key)].sort();
 }
 
-const DATABASE_LOGIN = new URL(config.databaseUrl).username;
+const DATABASE_LOGIN = new URL(adminUrl()).username;
 const RUNTIME = ["rm_app", "rm_worker", "rm_readonly"] as const;
 
 // ───────────────────────────────────────────────────────────────────────────

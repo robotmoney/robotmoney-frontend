@@ -31,7 +31,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
 import postgres from "postgres";
-import { config } from "../src/config.ts";
+import { adminUrl } from "./support/cluster.ts";
 import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
 import {
   applyAsReleaseRunner,
@@ -46,7 +46,7 @@ import {
 } from "./fixtures/releases/release-fixture.ts";
 import { connectAdmin, createSnapshotTemplate, databaseUrl, dropDatabases } from "./support/startup-preflight.ts";
 
-const LOGIN = new URL(config.databaseUrl).username;
+const LOGIN = new URL(adminUrl()).username;
 const PASSWORD = randomBytes(12).toString("hex");
 const RUNTIME = ["rm_app", "rm_worker", "rm_readonly"] as const;
 const suffix = crypto.randomUUID().slice(0, 8);

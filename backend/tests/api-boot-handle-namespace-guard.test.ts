@@ -49,6 +49,7 @@ import {
   parseGuardBudgetMs,
   type NamespaceDb,
 } from "../src/db/handle-namespace.ts";
+import { adminUrl } from "./support/cluster.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const backendDir = join(here, "..");
@@ -56,12 +57,8 @@ const migrationsDir = join(backendDir, "migrations");
 
 const created: string[] = [];
 
-function adminUrl(): string {
-  return new URL(config.databaseUrl).toString();
-}
-
 function urlFor(dbName: string): string {
-  const u = new URL(config.databaseUrl);
+  const u = new URL(adminUrl());
   u.pathname = `/${dbName}`;
   return u.toString();
 }

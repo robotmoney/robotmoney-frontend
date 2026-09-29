@@ -42,7 +42,7 @@ import {
   type PruneJournalFile,
   type PruneReceipt,
 } from "../scripts/prune.ts";
-import { restoreRoles, saveRoles, type SavedRole } from "./fixtures/releases/release-fixture.ts";
+import { adminConnection, ROLE_PASSWORD } from "./support/cluster.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject } from "./support/epoch-fixtures.ts";
 import { holdTargetLock } from "./support/target-lock.ts";
@@ -50,10 +50,9 @@ import { holdTargetLock } from "./support/target-lock.ts";
 useCleanDatabase(import.meta.file);
 
 const BACKEND = join(import.meta.dir, "..");
-const OWNER_PASSWORD = randomBytes(12).toString("hex");
+const OWNER_PASSWORD = ROLE_PASSWORD();
 const READONLY_PASSWORD = randomBytes(12).toString("hex");
 
-let savedRoles: SavedRole[] = [];
 let database = "";
 const dirs: string[] = [];
 
@@ -184,9 +183,17 @@ async function state(): Promise<State> {
 
 beforeAll(async () => {
   [{ database }] = (await sql`SELECT current_database() AS database`) as unknown as { database: string }[];
-  savedRoles = await saveRoles(sql);
-  await sql.unsafe(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
-  await sql.unsafe(`ALTER ROLE rm_readonly LOGIN PASSWORD '${READONLY_PASSWORD}'`);
+  // rm_readonly's password is this file's own, so the assertion that the OWNER's
+  // typed password reached no file can tell it from the read-only line the
+  // host's ~/.env carries. rm_readonly is no pool's login, so changing it is
+  // safe; it is put back below. (The cluster admin: a role's password is
+  // cluster state.)
+  const cluster = adminConnection();
+  try {
+    await cluster.unsafe(`ALTER ROLE rm_readonly LOGIN PASSWORD '${READONLY_PASSWORD}'`);
+  } finally {
+    await cluster.end({ timeout: 5 });
+  }
   await sql.begin(async (tx) => {
     await tx.unsafe("SET LOCAL ROLE rm_owner");
     await tx.unsafe("INSERT INTO deployment_identity (kind) VALUES ('rehearsal')");
@@ -229,7 +236,12 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await restoreRoles(sql, savedRoles);
+  const cluster = adminConnection();
+  try {
+    await cluster.unsafe(`ALTER ROLE rm_readonly LOGIN PASSWORD '${ROLE_PASSWORD()}'`);
+  } finally {
+    await cluster.end({ timeout: 5 });
+  }
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 });
 

@@ -33,6 +33,7 @@ import {
   type SchemaManifest,
 } from "../src/db/schema-manifest.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { adminExec, adminUrl } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -235,10 +236,17 @@ describe("readManifest / writeManifest — round trip", () => {
 describe("writeManifest — a trusted input, written only by rm_owner and only with the grants", () => {
   test("refuses when the effective role is not rm_owner", async () => {
     await createManifestTable();
-    // The suite's own connection is the container superuser, not rm_owner: a
-    // grant mistake must fail loudly at the write rather than quietly widen who
-    // can forge a boot decision.
-    await expect(writeManifest(sql, manifest({ filenames: await ledgerNames() }))).rejects.toThrow("rm_owner");
+    // The suite's own session acts as rm_owner (tests/preload.ts), so the
+    // non-owner is a runtime role it steps down to: a grant mistake must fail
+    // loudly at the write rather than quietly widen who can forge a boot
+    // decision.
+    const filenames = await ledgerNames();
+    await expect(
+      sql.begin(async (tx) => {
+        await tx.unsafe("SET LOCAL ROLE rm_app");
+        await writeManifest(tx, manifest({ filenames }));
+      }),
+    ).rejects.toThrow("rm_owner");
   });
 
   test("refuses a filename list that does not equal the ledger's inside the same transaction", async () => {
@@ -497,9 +505,9 @@ describe("rm_app is refused every write to the manifest and the ledger, by grant
   let app: postgres.Sql<{}>;
 
   beforeAll(async () => {
-    await sql.unsafe(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${RM_APP_PASSWORD}'`);
+    await adminExec(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${RM_APP_PASSWORD}'`);
     const [{ db }] = (await sql`SELECT current_database() AS db`) as unknown as { db: string }[];
-    const url = new URL(process.env.DATABASE_URL!);
+    const url = new URL(adminUrl());
     url.pathname = `/${db}`;
     url.username = "rm_app";
     url.password = RM_APP_PASSWORD;

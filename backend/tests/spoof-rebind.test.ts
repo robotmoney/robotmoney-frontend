@@ -35,6 +35,7 @@ import { spoofRebind, spoofRebindDeps } from "../scripts/spoof-rebind.ts";
 import { readSpoofGeneration, spoofKeys, SpoofKeysRefusal, writeSpoofGeneration } from "../../scripts/lib/swarm/spoof-keys.ts";
 import { instancePaths } from "../../scripts/lib/smoke-state.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { adminExec, adminUrl, ROLE_PASSWORD } from "./support/cluster.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -45,18 +46,18 @@ const roots: string[] = [];
 beforeAll(async () => {
   const [row] = await sql<{ rolcanlogin: boolean }[]>`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`;
   ownerCanLogin = row?.rolcanlogin ?? true;
-  await sql.unsafe(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
+  await adminExec(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
 });
 
 afterAll(async () => {
-  await sql.unsafe(`ALTER ROLE rm_owner ${ownerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD NULL`);
+  await adminExec(`ALTER ROLE rm_owner ${ownerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD '${ROLE_PASSWORD()}'`);
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
 /** An rm_owner login to THIS test's own database. */
 async function ownerUrl(): Promise<string> {
   const [row] = await sql<{ db: string }[]>`SELECT current_database() AS db`;
-  const url = new URL(config.databaseUrl);
+  const url = new URL(adminUrl());
   url.pathname = `/${row!.db}`;
   url.username = "rm_owner";
   url.password = encodeURIComponent(OWNER_PASSWORD);

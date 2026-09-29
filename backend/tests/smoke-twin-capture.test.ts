@@ -34,6 +34,7 @@ import {
   probeCaptureTarget,
   READ_ONLY_PGOPTIONS,
 } from "../scripts/smoke-twin-capture.ts";
+import { adminUrl } from "./support/cluster.ts";
 
 describe("parseArgs", () => {
   test("defaults to the same backup dir resolveBackupFiles() defaults to", () => {
@@ -196,7 +197,7 @@ const savedUmask = process.umask(0o022);
 process.umask(savedUmask);
 
 describe("smoke:capture against the suite's PRIMARY — every non-readonly credential and the primary itself refuse", () => {
-  const base = new URL(process.env.DATABASE_URL as string);
+  const base = new URL(adminUrl());
   const database = `smoke_capture_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
   let admin: postgres.Sql;
   let adminDb: postgres.Sql;
