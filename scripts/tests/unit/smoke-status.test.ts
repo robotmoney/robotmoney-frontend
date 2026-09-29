@@ -25,6 +25,7 @@ import {
 import { instancePaths, instanceStackProject, type InstancePaths } from "../../lib/smoke-state.ts";
 import { classifyServices, schedulerNowLines, statusReport } from "../../smoke-status.ts";
 import { healthPayload } from "../../lib/system-scheduler/health.ts";
+import { deadDockerEnv } from "../support/dead-docker";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const OLD = `sha256:${"1".repeat(64)}`;
@@ -266,7 +267,7 @@ describe("the journal is read when no receipt exists (§1.4)", () => {
 describe("the command, as its own process, with Docker unreachable (criterion 151)", () => {
   const run = (root: string, args: string[]) => {
     const r = Bun.spawnSync(["bun", "--no-env-file", join(repoRoot, "scripts", "smoke-status.ts"), ...args], {
-      env: { PATH: process.env.PATH ?? "", HOME: root, RM_SMOKE_STATE_ROOT: root, DOCKER_HOST: "tcp://127.0.0.1:1" },
+      env: { HOME: root, RM_SMOKE_STATE_ROOT: root, ...deadDockerEnv() },
       stdout: "pipe",
       stderr: "pipe",
     });

@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DB_WRITER_SERVICES, selectFailureDetail, writerQuiesceLine } from "../../lib/smoke-failure.ts";
+import { deadDockerEnv } from "../support/dead-docker";
 
 const STRIP_ANSI = /\x1b\[[0-9;]*m/g;
 const plain = (s: string) => s.replace(STRIP_ANSI, "");
@@ -123,7 +124,7 @@ describe("a failed boot's printed report (it replaced the failure pane)", () => 
       ["bun", "--no-env-file", join(repoRoot, "scripts", "smoke.ts"), "--local", "blank", "--instance", "rm_local_failreport", "--credentials", credentials],
       {
         cwd: repoRoot,
-        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, DOCKER_HOST: "tcp://127.0.0.1:1", RM_ENV: "stage", AGENT_MODEL: "free" },
+        env: { HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, ...deadDockerEnv(), RM_ENV: "stage", AGENT_MODEL: "free" },
         stdout: "pipe",
         stderr: "pipe",
       },

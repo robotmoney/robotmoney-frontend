@@ -48,6 +48,7 @@ import {
 } from "../../lib/smoke-state.ts";
 import { computePlanId, openJournal, readArchivedJournals, readJournal, type DeploymentPlan } from "../../lib/smoke-journal.ts";
 import type { StackEnvironment } from "../../stack/naming.ts";
+import { deadDockerEnv } from "../support/dead-docker";
 
 const MODULE = join(import.meta.dir, "..", "..", "lib", "smoke-state.ts");
 const PLAN = "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00";
@@ -711,7 +712,6 @@ describe("selectExistingInstance — lifecycle commands select, they never mint"
 // scripts/tests/integration/smoke-instance-isolation.test.ts.
 describe("two instances on one host: each command acts only on the named one (criterion 33)", () => {
   const repoRoot = join(import.meta.dir, "..", "..", "..");
-  const DEAD_DOCKER = "tcp://127.0.0.1:1";
 
   function planFor(instance: string): DeploymentPlan {
     return {
@@ -747,7 +747,7 @@ describe("two instances on one host: each command acts only on the named one (cr
   function run(root: string, script: string, args: string[]): { code: number; out: string } {
     const r = Bun.spawnSync(["bun", "--no-env-file", join(repoRoot, "scripts", script), ...args], {
       cwd: repoRoot,
-      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, DOCKER_HOST: DEAD_DOCKER, RM_ENV: "stage", AGENT_MODEL: "free" },
+      env: { HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, ...deadDockerEnv(), RM_ENV: "stage", AGENT_MODEL: "free" },
       stdout: "pipe",
       stderr: "pipe",
     });

@@ -32,6 +32,7 @@ import {
   type StateExpectations,
 } from "./../../lib/smoke-journal.ts";
 import { observe, parseTuiArgs, renderFrame, resolveObservedInstance, type ObservedStack } from "./../../smoke-tui.ts";
+import { deadDockerEnv } from "../support/dead-docker";
 
 const DIGEST = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
@@ -282,7 +283,7 @@ describe("observe — §1.4, receipt when present, journal when not", () => {
     const root = freshRoot();
     const paths = instancePaths(root, "alpha", { create: true });
     openJournal(paths, { kind: "fresh-start", reason: "none" }, plan);
-    const env = { PATH: process.env.PATH ?? "", HOME: root, RM_SMOKE_STATE_ROOT: root, DOCKER_HOST: "tcp://127.0.0.1:1" };
+    const env = { HOME: root, RM_SMOKE_STATE_ROOT: root, ...deadDockerEnv() };
     const derived = instanceStackProject("alpha", env);
     expect(derived).not.toBe("alpha");
     expect(derived).toBe(instanceStackProject("alpha", env)); // stable: the boot derives the same one
@@ -305,7 +306,7 @@ describe("observe — §1.4, receipt when present, journal when not", () => {
     openJournal(paths, { kind: "fresh-start", reason: "none" }, plan);
     writeFileSync(paths.stackStateFile, JSON.stringify({ project: "rm_smoke_stack_0123456789", composeFiles: "docker-compose.yml" }));
     const r = Bun.spawnSync(["bun", "--no-env-file", join(import.meta.dir, "..", "..", "smoke-tui.ts"), "--instance", "alpha", "--once"], {
-      env: { PATH: process.env.PATH ?? "", HOME: root, RM_SMOKE_STATE_ROOT: root, DOCKER_HOST: "tcp://127.0.0.1:1" },
+      env: { HOME: root, RM_SMOKE_STATE_ROOT: root, ...deadDockerEnv() },
       stdout: "pipe",
       stderr: "pipe",
     });
