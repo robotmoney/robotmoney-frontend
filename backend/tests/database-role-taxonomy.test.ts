@@ -6,7 +6,7 @@ import { APPEND_ONLY_TABLES } from "../src/db/append-only-guard.ts";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
-import { adminExec } from "./support/cluster.ts";
+import { adminExec, restoreRoleBaseline } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -43,6 +43,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await Promise.all([app?.end({ timeout: 5 }), worker?.end({ timeout: 5 }), readonly?.end({ timeout: 5 })]);
+  await restoreRoleBaseline();
 });
 
 test("rm_owner owns every protected table, and is a LOGIN role without CREATEROLE", async () => {

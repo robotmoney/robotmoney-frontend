@@ -40,7 +40,7 @@ import {
   startupLines,
   type ApiBoot,
 } from "./support/startup-preflight.ts";
-import { adminExec, harnessConnection, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminExec, harnessConnection, restoreRoleBaseline, ROLE_PASSWORD } from "./support/cluster.ts";
 
 const APP = { name: "rm_app", password: `rm_app_startup_${crypto.randomUUID().slice(0, 8)}` };
 const OWNER = { name: "rm_owner", password: `rm_owner_startup_${crypto.randomUUID().slice(0, 8)}` };
@@ -65,6 +65,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await dropDatabases([...created, template].filter(Boolean));
   await adminExec(`ALTER ROLE rm_owner ${ownerCanLogin === false ? "NOLOGIN" : "LOGIN"} PASSWORD '${ROLE_PASSWORD()}'`);
+  await restoreRoleBaseline();
 });
 
 async function freshCopy(label: string): Promise<string> {

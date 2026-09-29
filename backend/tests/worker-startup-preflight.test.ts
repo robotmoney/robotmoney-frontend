@@ -31,7 +31,7 @@ import {
   startupLines,
   type Spawned,
 } from "./support/startup-preflight.ts";
-import { adminExec, harnessConnection } from "./support/cluster.ts";
+import { adminExec, harnessConnection, restoreRoleBaseline } from "./support/cluster.ts";
 
 const WORKER = { name: "rm_worker", password: `rm_worker_startup_${crypto.randomUUID().slice(0, 8)}` };
 
@@ -48,6 +48,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await dropDatabases([...created, template].filter(Boolean));
   rmSync(scratch, { recursive: true, force: true });
+  await restoreRoleBaseline();
 });
 
 interface Fixture {

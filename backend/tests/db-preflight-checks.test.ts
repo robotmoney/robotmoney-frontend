@@ -66,7 +66,7 @@ import { bootstrapBlankDatabase, loadSnapshot } from "../src/db/schema-snapshot.
 import { runMigrate } from "../scripts/migrate-run.ts";
 import { withTargetLock } from "./support/target-lock.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
-import { adminExec, adminConnection, harnessConnection, harnessUrl, roleUrl } from "./support/cluster.ts";
+import { adminExec, adminConnection, harnessConnection, harnessUrl, restoreRoleBaseline, roleUrl } from "./support/cluster.ts";
 
 // PER TEST, not per file. Several cases here are deliberately destructive to
 // DATABASE state rather than to cluster state: check 6 relaxes and drops the
@@ -107,6 +107,7 @@ afterAll(async () => {
   await adminExec("ALTER ROLE rm_app NOSUPERUSER NOCREATEROLE");
   await adminExec("ALTER ROLE rm_worker NOSUPERUSER NOCREATEROLE");
   await adminExec("ALTER ROLE rm_readonly NOSUPERUSER NOCREATEROLE");
+  await restoreRoleBaseline();
 });
 
 function context(over: Partial<PreflightContext> = {}): PreflightContext {

@@ -12,7 +12,7 @@ import { test, expect, beforeAll, afterAll } from "bun:test";
 import postgres from "postgres";
 import { fixtureDb } from "./support/fixture-db.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { adminExec, roleUrl } from "./support/cluster.ts";
+import { adminExec, restoreRoleBaseline, roleUrl } from "./support/cluster.ts";
 
 // Own database per file, cloned from the migrated template (support/clean-db.ts).
 useCleanDatabase(import.meta.file);
@@ -35,6 +35,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   delete process.env.WORKER_DATABASE_URL;
+  await restoreRoleBaseline();
   await worker?.end({ timeout: 5 });
 });
 

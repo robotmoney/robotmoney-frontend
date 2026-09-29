@@ -92,3 +92,16 @@ export function harnessConnection(database: string = "robotmoney"): postgres.Sql
 export function roleConnection(role: string, database: string = "robotmoney"): postgres.Sql<{}> {
   return postgres(roleUrl(role, database), { max: 1, onnotice: () => {} });
 }
+
+/**
+ * Put the four §3 roles back on the suite's baseline: LOGIN with the shared
+ * password and no cluster power (tests/preload.ts). Role state is cluster state
+ * and every file runs in one process, so a file that gives a role a password of
+ * its own calls this from `afterAll`, or a later file that logs in with the
+ * shared password is refused. (Cluster admin: ALTER ROLE is superuser-only.)
+ */
+export async function restoreRoleBaseline(): Promise<void> {
+  for (const role of ["rm_owner", "rm_app", "rm_worker", "rm_readonly"]) {
+    await adminExec(`ALTER ROLE ${role} WITH LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB PASSWORD '${ROLE_PASSWORD()}'`);
+  }
+}
