@@ -36,6 +36,7 @@
 //         a stable recomputed signal payload.
 import { test, expect, beforeAll } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { runAnalytics } from "../src/analytics/index.ts";
 import { liveDataSource } from "../src/analytics/access/data-source.ts";
@@ -134,8 +135,8 @@ test(
       process.env.ANALYTICS_TOKEN_FILE = TOKEN_FILE;
 
       const asof = "2010-03-14"; // a Sunday (full-sweep weekday) close to EDGAR_FLOOR_START (2010-01) — full range is {2010-01, 2010-02, 2010-03}
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
-      await sql`DELETE FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
       // A partially seeded floor (2010-01 only) — this asof lands on the
       // full-sweep weekday, so tier 'full' is selected: the plan is the
       // FULL [EDGAR_FLOOR_START, asof] range regardless of what's already
@@ -145,7 +146,7 @@ test(
       const seed: { date: string; indicator: string; value: number }[] = [
         { date: "2010-01-31", indicator: "MNA", value: 11 },
       ];
-      await sql`INSERT INTO raw_indicator_history ${sql(seed, "date", "indicator", "value")}`;
+      await fixtureDb`INSERT INTO raw_indicator_history ${fixtureDb(seed, "date", "indicator", "value")}`;
       const fullRangeMonths = 3; // 2010-01, 2010-02, 2010-03
 
       // ── RUN 1: a fully successful refresh — establishes the "last-good"
@@ -211,7 +212,7 @@ test(
         if (v === undefined) delete process.env[k as keyof typeof origEnv];
         else process.env[k as keyof typeof origEnv] = v;
       }
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
     }
   },
   { timeout: 60_000 },
@@ -236,13 +237,13 @@ test(
       process.env.ANALYTICS_TOKEN_FILE = TOKEN_FILE;
 
       const asof = "2010-04-11"; // a Sunday (full-sweep weekday) close to EDGAR_FLOOR_START (2010-01) — full range is {2010-01..2010-04}
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
-      await sql`DELETE FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
       const seed: { date: string; indicator: string; value: number }[] = [
         { date: "2010-01-31", indicator: "MNA", value: 3 },
         { date: "2010-02-28", indicator: "MNA", value: 3 },
       ];
-      await sql`INSERT INTO raw_indicator_history ${sql(seed, "date", "indicator", "value")}`;
+      await fixtureDb`INSERT INTO raw_indicator_history ${fixtureDb(seed, "date", "indicator", "value")}`;
 
       // ── RUN A: establishes last-good (this asof lands on the full-sweep
       // weekday → tier 'full': the FULL range 2010-01..2010-04 lands, value=5).
@@ -305,7 +306,7 @@ test(
         if (v === undefined) delete process.env[k as keyof typeof origEnv];
         else process.env[k as keyof typeof origEnv] = v;
       }
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
     }
   },
   { timeout: 60_000 },
@@ -354,8 +355,8 @@ test(
       // value. Small enough to run four real-paced sweeps inside a test.
       const asof = "2011-01-02";
       const fullRangeMonths = 13;
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
-      await sql`DELETE FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
       const seed: { date: string; indicator: string; value: number }[] = [];
       const lastDayOfMonth = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();
       for (let i = 0; i < fullRangeMonths; i++) {
@@ -364,7 +365,7 @@ test(
         const day = lastDayOfMonth(y, m);
         seed.push({ date: `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`, indicator: "MNA", value: 100 });
       }
-      await sql`INSERT INTO raw_indicator_history ${sql(seed, "date", "indicator", "value")}`;
+      await fixtureDb`INSERT INTO raw_indicator_history ${fixtureDb(seed, "date", "indicator", "value")}`;
 
       // ── RUN 1: a healthy reconciliation — EDGAR confirms every month
       // unchanged. Establishes last-good and proves the guard is not simply
@@ -427,7 +428,7 @@ test(
         if (v === undefined) delete process.env[k as keyof typeof origEnv];
         else process.env[k as keyof typeof origEnv] = v;
       }
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
     }
   },
   { timeout: 120_000 },
