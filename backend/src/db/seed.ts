@@ -147,6 +147,41 @@ const insertAllocationFramework = registerQuery({
   callers: SEED_CALLERS,
 });
 
+const insertDemoSubject = registerQuery({
+  role: "rm_owner",
+  object: "swarm_subjects",
+  privileges: ["INSERT"],
+  site: "src/db/seed:seedDemoSubjects.insert",
+  purpose: "Insert the rehearsal's active demo subjects on a blank database, scheduling columns left at their column defaults.",
+  callers: SMOKE_CALLERS,
+});
+
+/**
+ * The rehearsal's active subjects (`--seed` only, never the canonical seed).
+ * A blank database holds no subject, so without these the scheduler has nothing
+ * to open an epoch for and readiness's "every active subject holds a
+ * `collecting` session" is vacuously true (smoke spec §6.3, scheduler spec
+ * §2.1). The three scheduling columns are NOT written: they take the column
+ * defaults the schema declares, and only the admin route changes them (scheduler
+ * spec §2.3). Ids match scripts/lib/smoke-mode.ts SMOKE_SUBJECTS.
+ */
+export const SEEDED_DEMO_SUBJECTS: readonly { id: string; name: string }[] = Object.freeze([
+  { id: "robotmoney-allocation", name: "Robot Money Allocation" },
+  { id: "robotmoney-vault", name: "Robot Money Vault" },
+]);
+
+async function seedDemoSubjects(db: RegistryDb): Promise<void> {
+  for (const subject of SEEDED_DEMO_SUBJECTS) {
+    await on(db, insertDemoSubject)`
+      INSERT INTO swarm_subjects (id, status, name, thesis_blurb, recommendation_type)
+      VALUES (${subject.id}, 'active', ${subject.name},
+              ${`${subject.name}: rehearsal subject seeded by \`bun smoke --seed\`.`}, 'position_actions')
+      ON CONFLICT (id) DO NOTHING
+    `;
+  }
+  console.log(`seeded ${SEEDED_DEMO_SUBJECTS.length} active demo subject(s)`);
+}
+
 type CatchupPolicy = "all" | "collapse-per-bucket";
 
 interface SeedSchedule {
@@ -577,6 +612,7 @@ export async function seedDemo(
   await assertSeedable(tx, { rmEnv: request.rmEnv, explicitlyRequested: true });
   await seed(tx);
   await seedSmokeJobSchedules(tx);
+  await seedDemoSubjects(tx);
 }
 
 // Run directly: `bun run src/db/seed.ts [--smoke-schedules]`, with an rm_owner

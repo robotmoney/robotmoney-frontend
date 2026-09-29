@@ -1699,7 +1699,11 @@ async function main(): Promise<void> {
   }, redaction);
   log(`receipt written: ${paths.receiptFile}`);
 
-  if (process.env.CI) await runCiScenario(stack);
+  // A credential file means standing participants (§6.2): the host-side session
+  // driver below has no place beside them (it fails with an empty roster). Such a
+  // boot exits at readiness and leaves the stack up for scripts/smoke-e2e.ts.
+  const standingRoster = credentialResolution.configured && dataPath.kind !== "smoke-twin";
+  if (process.env.CI && !standingRoster) await runCiScenario(stack);
 
   // ── LOCAL: the stack is up; `bun smoke` exits (spec §1) ───────────────────
   // Containers stay up under Docker (`restart: unless-stopped`); `bun smoke:down`
