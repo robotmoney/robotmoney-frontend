@@ -11,7 +11,6 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import postgres from "postgres";
 import { createChecker } from "../scripts/lib/checks.ts";
 import {
   connectReadOnly,

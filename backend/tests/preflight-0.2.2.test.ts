@@ -15,7 +15,8 @@ import { connectReadOnly } from "../scripts/lib/preflight-utils.ts";
 // We exercise checkWedgedSchedules via runChecks (the function is not
 // individually exported) and inspect the "wedged-schedules" named result.
 import { runChecks } from "../scripts/upgrades/0.2.1-to-0.2.2/preflight.ts";
-import { adminUrl } from "./support/cluster.ts";
+import { adminUrl, adminExec } from "./support/cluster.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 const DB_URL = adminUrl();
 
@@ -27,13 +28,14 @@ describe("checkWedgedSchedules — wedged-schedule detection (issue #644 AC1)", 
   let roDb: ReturnType<typeof postgres>;
 
   beforeAll(async () => {
-    adminSql = postgres(DB_URL);
+    adminSql = fixtureDb;
 
     // Provision a read-only role for the check (mirrors preflight-utils.test.ts).
     // information_schema is publicly readable in Postgres — no explicit grant needed.
-    await adminSql`DROP OWNED BY rm_readonly_wst`.catch(() => {});
-    await adminSql`DROP ROLE IF EXISTS rm_readonly_wst`;
-    await adminSql`CREATE ROLE rm_readonly_wst LOGIN PASSWORD 'testpass'`;
+    // cluster admin: DROP OWNED / CREATE ROLE are superuser-only here; the grants are rm_owner's.
+    await adminExec("DROP OWNED BY rm_readonly_wst", new URL(DB_URL).pathname.slice(1)).catch(() => {});
+    await adminExec("DROP ROLE IF EXISTS rm_readonly_wst");
+    await adminExec("CREATE ROLE rm_readonly_wst LOGIN PASSWORD 'testpass'");
     await adminSql`GRANT CONNECT ON DATABASE robotmoney TO rm_readonly_wst`;
     await adminSql`GRANT USAGE ON SCHEMA public TO rm_readonly_wst`;
     await adminSql`GRANT SELECT ON ALL TABLES IN SCHEMA public TO rm_readonly_wst`;
@@ -50,9 +52,8 @@ describe("checkWedgedSchedules — wedged-schedule detection (issue #644 AC1)", 
     await adminSql`DELETE FROM job_schedules WHERE kind LIKE 'test.wedge.%'`.catch(() => {});
     // DROP OWNED BY revokes all privileges before the role drop, avoiding the
     // "objects depend on it" error that a bare DROP ROLE raises.
-    await adminSql`DROP OWNED BY rm_readonly_wst`.catch(() => {});
-    await adminSql`DROP ROLE IF EXISTS rm_readonly_wst`;
-    await adminSql.end({ timeout: 5 });
+    await adminExec("DROP OWNED BY rm_readonly_wst", new URL(DB_URL).pathname.slice(1)).catch(() => {});
+    await adminExec("DROP ROLE IF EXISTS rm_readonly_wst");
   });
 
   /**
