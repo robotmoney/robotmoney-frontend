@@ -162,7 +162,7 @@ describe("the breaking revoke closes rollback to code that ignores the tombstone
     const own = (await loadSnapshot()).filenames;
     expect(own).toContain(LAST_BEFORE_REVOKE);
     const before = own.filter((file) => file <= LAST_BEFORE_REVOKE);
-    expect(own.filter((file) => !before.includes(file))).toEqual([SLOTS, REVOKE, COMMENT, WORKER_EVIDENCE]);
+    expect(own.filter((file) => !before.includes(file) && file <= WORKER_EVIDENCE)).toEqual([SLOTS, REVOKE, COMMENT, WORKER_EVIDENCE]);
     const preload = writeRedControlPreload(
       "src/db/preflight.ts",
       "codeFilenames = (await loadSnapshot()).filenames;",
@@ -173,10 +173,12 @@ describe("the breaking revoke closes rollback to code that ignores the tombstone
     expect(boot.outcome).toBe("exited");
     expect(boot.code).toBe(1);
     expect(await portIsBound(boot.port)).toBe(false);
-    // One refusal per breaking row, exactly these two.
+    // One refusal per breaking row, exactly these three: 0092 (the fault-injection
+    // table's drop, D55 (3)) is also breaking and also unknown to this old code.
     expect(boot.lines).toEqual([
       `startup_preflight: refused check 3: ${SLOTS}: declared breaking — code-only rollback past it is closed, explicitly (§8.4).`,
       `startup_preflight: refused check 3: ${REVOKE}: declared breaking — code-only rollback past it is closed, explicitly (§8.4).`,
+      "startup_preflight: refused check 3: 0092_drop_swarm_judge_fault_injection.sql: declared breaking — code-only rollback past it is closed, explicitly (§8.4).",
     ]);
   }, 120_000);
 });
