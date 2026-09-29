@@ -16,8 +16,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import postgres from "postgres";
 import { TWIN_BOOTSTRAP_ROLE, shapeTwinToProductionPrivileges } from "../../scripts/lib/restore-container.ts";
+import { adminUrl } from "./support/cluster.ts";
 
-const ADMIN_URL = process.env.DATABASE_URL!;
+const ADMIN_URL = adminUrl();
 const TWIN_DB = "rm_twinshape_probe";
 
 let admin: ReturnType<typeof postgres>;

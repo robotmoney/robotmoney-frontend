@@ -15,8 +15,9 @@ import { connectReadOnly } from "../scripts/lib/preflight-utils.ts";
 // We exercise checkWedgedSchedules via runChecks (the function is not
 // individually exported) and inspect the "wedged-schedules" named result.
 import { runChecks } from "../scripts/upgrades/0.2.1-to-0.2.2/preflight.ts";
+import { adminUrl } from "./support/cluster.ts";
 
-const DB_URL = process.env.DATABASE_URL as string;
+const DB_URL = adminUrl();
 
 // job_schedules unique key is (kind, cron) — migration 0005_job_schedules_seed.sql.
 const TEST_CRON = "* * * * *";

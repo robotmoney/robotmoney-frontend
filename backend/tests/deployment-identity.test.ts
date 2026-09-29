@@ -48,6 +48,7 @@ import { loadSnapshot } from "../src/db/schema-snapshot.ts";
 import { acquireTargetLock, readTargetState } from "../src/db/target-lock.ts";
 import { instancePaths } from "../../scripts/lib/smoke-state.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { adminExec, adminUrl, ROLE_PASSWORD } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -76,8 +77,8 @@ const connections = new Map<RuntimeRole, postgres.Sql<{}>>();
 beforeAll(async () => {
   const [{ db }] = (await sql`SELECT current_database() AS db`) as unknown as { db: string }[];
   for (const role of RUNTIME_ROLES) {
-    await sql.unsafe(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${PASSWORD[role]}'`);
-    const url = new URL(process.env.DATABASE_URL!);
+    await adminExec(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${PASSWORD[role]}'`);
+    const url = new URL(adminUrl());
     url.pathname = `/${db}`;
     url.username = role;
     url.password = PASSWORD[role];
@@ -144,7 +145,7 @@ const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 let ownerCanLogin = true;
 
 function urlFor(database: string, role?: { name: string; password: string }): string {
-  const url = new URL(process.env.DATABASE_URL!);
+  const url = new URL(adminUrl());
   url.pathname = `/${database}`;
   if (role) {
     url.username = role.name;
@@ -180,7 +181,7 @@ async function prepareStep(
     const acquired = await acquireTargetLock({ databaseUrl: urlFor(database), holder, timeoutMs: 10_000, expected });
     if (!acquired.acquired) throw new Error(acquired.reason);
     try {
-      const url = new URL(process.env.DATABASE_URL!);
+      const url = new URL(adminUrl());
       const resultFile = join(paths.dir, "result.json");
       const request = {
         action,
@@ -237,18 +238,18 @@ describe("the smoke's own preparation writes `rehearsal` through rm_owner, and n
   beforeAll(async () => {
     const [row] = await sql<{ rolcanlogin: boolean }[]>`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`;
     ownerCanLogin = row?.rolcanlogin ?? true;
-    await sql.unsafe(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
+    await adminExec(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
   });
 
   afterAll(async () => {
-    await sql.unsafe(`ALTER ROLE rm_owner ${ownerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD NULL`);
+    await adminExec(`ALTER ROLE rm_owner ${ownerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD '${ROLE_PASSWORD()}'`);
   });
 
   test("`--local blank`: the bootstrap step leaves `rehearsal` written by rm_owner, and every runtime role is still refused every write by grant", async () => {
     // What the local superuser does for a blank boot and nothing more: the
     // database, owned by rm_owner, and the provider's extension (§7.3).
     const name = `rm_identity_blank_${randomBytes(4).toString("hex")}`;
-    await sql.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
+    await adminExec(`CREATE DATABASE ${name} OWNER rm_owner`);
     try {
       const admin = postgres(urlFor(name), { max: 1, onnotice: () => {} });
       await admin.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
@@ -263,7 +264,7 @@ describe("the smoke's own preparation writes `rehearsal` through rm_owner, and n
       }
       expect(await enrollment(name)).toBe("rehearsal|rm_owner");
     } finally {
-      await sql.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+      await adminExec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
     }
   }, 120_000);
 
@@ -271,7 +272,7 @@ describe("the smoke's own preparation writes `rehearsal` through rm_owner, and n
     // A populated, migrated copy carrying production's row — what a restored
     // production dump holds until its enrollment is overwritten.
     const name = `rm_identity_dump_${randomBytes(4).toString("hex")}`;
-    await sql.unsafe(`CREATE DATABASE ${name} TEMPLATE "${process.env.RM_TEST_TEMPLATE_DB}"`);
+    await adminExec(`CREATE DATABASE ${name} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`);
     try {
       const admin = postgres(urlFor(name), { max: 1, onnotice: () => {} });
       await admin.unsafe("DELETE FROM deployment_identity");
@@ -283,13 +284,13 @@ describe("the smoke's own preparation writes `rehearsal` through rm_owner, and n
       expect({ ok: result.ok, error: result.error }).toEqual({ ok: true, error: undefined });
       expect(await enrollment(name)).toBe("rehearsal|rm_owner");
     } finally {
-      await sql.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+      await adminExec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
     }
   }, 120_000);
 
   test("red control: a runtime role cannot perform that same re-enrollment — the grant, not the tool, is what stops it", async () => {
     const name = `rm_identity_redctl_${randomBytes(4).toString("hex")}`;
-    await sql.unsafe(`CREATE DATABASE ${name} TEMPLATE "${process.env.RM_TEST_TEMPLATE_DB}"`);
+    await adminExec(`CREATE DATABASE ${name} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`);
     try {
       const admin = postgres(urlFor(name), { max: 1, onnotice: () => {} });
       await admin.unsafe("DELETE FROM deployment_identity");
@@ -300,7 +301,7 @@ describe("the smoke's own preparation writes `rehearsal` through rm_owner, and n
       }
       expect((await enrollment(name)).startsWith("production|")).toBe(true);
     } finally {
-      await sql.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+      await adminExec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
     }
   }, 60_000);
 });

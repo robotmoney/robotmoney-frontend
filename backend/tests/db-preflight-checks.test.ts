@@ -65,6 +65,7 @@ import { bootstrapBlankDatabase, loadSnapshot } from "../src/db/schema-snapshot.
 import { runMigrate } from "../scripts/migrate-run.ts";
 import { withTargetLock } from "./support/target-lock.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { adminExec, adminUrl } from "./support/cluster.ts";
 
 // PER TEST, not per file. Several cases here are deliberately destructive to
 // DATABASE state rather than to cluster state: check 6 relaxes and drops the
@@ -78,7 +79,7 @@ import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 // enough to be the default here. The `beforeAll` below only touches CLUSTER
 // state (role passwords), which a clone does not reset and therefore still
 // holds for every test.
-useCleanDatabasePerTest(import.meta.file);
+useCleanDatabasePerTest(import.meta.file, { migrationBuilt: true });
 
 const PASSWORDS: Record<"rm_app" | "rm_worker" | "rm_readonly", string> = {
   rm_app: "rm_app_preflight_password",
@@ -94,16 +95,16 @@ let tmpDir = "";
 
 beforeAll(async () => {
   for (const [role, password] of Object.entries(PASSWORDS)) {
-    await sql.unsafe(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${password}'`);
+    await adminExec(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${password}'`);
   }
   tmpDir = mkdtempSync(join(tmpdir(), "rm-preflight-env-"));
 });
 
 afterAll(async () => {
   // Leave the cluster exactly as the template built it.
-  await sql.unsafe("ALTER ROLE rm_app NOSUPERUSER NOCREATEROLE");
-  await sql.unsafe("ALTER ROLE rm_worker NOSUPERUSER NOCREATEROLE");
-  await sql.unsafe("ALTER ROLE rm_readonly NOSUPERUSER NOCREATEROLE");
+  await adminExec("ALTER ROLE rm_app NOSUPERUSER NOCREATEROLE");
+  await adminExec("ALTER ROLE rm_worker NOSUPERUSER NOCREATEROLE");
+  await adminExec("ALTER ROLE rm_readonly NOSUPERUSER NOCREATEROLE");
 });
 
 function context(over: Partial<PreflightContext> = {}): PreflightContext {
@@ -246,7 +247,7 @@ async function tupleWrites(): Promise<Record<string, number>> {
 
 /** A one-connection pool on this file's clone, as the harness's superuser. */
 function pinnedConnection(readOnly: boolean): postgres.Sql<{}> {
-  return postgres(config.databaseUrl, {
+  return postgres(adminUrl(), {
     max: 1,
     onnotice: () => {},
     ...(readOnly ? { connection: { default_transaction_read_only: true } } : {}),
@@ -355,9 +356,9 @@ describe("check 1 — every role token smoke will hand to a container authentica
     // may connect to) would pass all three; a probe that follows the handle
     // refuses each one and says where it tried.
     const database = `rmt_pf_probe_${crypto.randomUUID().slice(0, 8)}`;
-    await sql.unsafe(`CREATE DATABASE ${database}`);
-    await sql.unsafe(`REVOKE CONNECT ON DATABASE ${database} FROM PUBLIC`);
-    const url = new URL(config.databaseUrl);
+    await adminExec(`CREATE DATABASE ${database}`);
+    await adminExec(`REVOKE CONNECT ON DATABASE ${database} FROM PUBLIC`);
+    const url = new URL(adminUrl());
     url.pathname = `/${database}`;
     const elsewhere = postgres(url.toString(), { max: 1, onnotice: () => {} });
     try {
@@ -371,7 +372,7 @@ describe("check 1 — every role token smoke will hand to a container authentica
       expect((await checkRoleTokens(sql, context(), tokens())).findings).toEqual([]);
     } finally {
       await elsewhere.end({ timeout: 5 });
-      await sql.unsafe(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
+      await adminExec(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
     }
   });
 
@@ -462,22 +463,22 @@ describe("check 2, required half — the registry says what each role's programs
 
 describe("check 2, denylist half — the fixed list of things no runtime role may hold", () => {
   test("a runtime role marked SUPERUSER is a denylist violation", async () => {
-    await sql.unsafe("ALTER ROLE rm_app SUPERUSER");
+    await adminExec("ALTER ROLE rm_app SUPERUSER");
     try {
       const violations = await findDenylistViolations(sql, ["rm_app"]);
       expect(violations).toContainEqual({ rule: "superuser", role: "rm_app", object: null });
     } finally {
-      await sql.unsafe("ALTER ROLE rm_app NOSUPERUSER");
+      await adminExec("ALTER ROLE rm_app NOSUPERUSER");
     }
   });
 
   test("a runtime role holding CREATEROLE is a denylist violation — 0053 lines 49-52 pin NOCREATEROLE", async () => {
-    await sql.unsafe("ALTER ROLE rm_worker CREATEROLE");
+    await adminExec("ALTER ROLE rm_worker CREATEROLE");
     try {
       const violations = await findDenylistViolations(sql, ["rm_worker"]);
       expect(violations).toContainEqual({ rule: "createrole", role: "rm_worker", object: null });
     } finally {
-      await sql.unsafe("ALTER ROLE rm_worker NOCREATEROLE");
+      await adminExec("ALTER ROLE rm_worker NOCREATEROLE");
     }
   });
 
@@ -485,18 +486,18 @@ describe("check 2, denylist half — the fixed list of things no runtime role ma
     // 0053 line 56 grants rm_owner to `current_user` and says in its own
     // comment: "This is intentionally the current role, never either runtime
     // role." A runtime role that acquired it makes every other guard decorative.
-    await sql.unsafe("GRANT rm_owner TO rm_app");
+    await inCurrentDatabase("GRANT rm_owner TO rm_app");
     try {
       const violations = await findDenylistViolations(sql, ["rm_app"]);
       expect(violations).toContainEqual({ rule: "rm_owner_membership", role: "rm_app", object: "rm_owner" });
     } finally {
-      await sql.unsafe("REVOKE rm_owner FROM rm_app");
+      await inCurrentDatabase("REVOKE rm_owner FROM rm_app");
     }
   });
 
   test("a runtime role owning an application object is a denylist violation, naming the relation", async () => {
     await sql.unsafe("CREATE TABLE rm_preflight_owned_probe (id integer)");
-    await sql.unsafe("ALTER TABLE rm_preflight_owned_probe OWNER TO rm_worker");
+    await inCurrentDatabase("ALTER TABLE rm_preflight_owned_probe OWNER TO rm_worker");
     try {
       const violations = await findDenylistViolations(sql, ["rm_worker"]);
       expect(violations).toContainEqual({
@@ -589,13 +590,13 @@ describe("check 2, denylist half — the fixed list of things no runtime role ma
   });
 
   test("reports every violation it finds, not the first", async () => {
-    await sql.unsafe("ALTER ROLE rm_readonly SUPERUSER CREATEROLE");
+    await adminExec("ALTER ROLE rm_readonly SUPERUSER CREATEROLE");
     try {
       const rules = (await findDenylistViolations(sql, ["rm_readonly"])).map((v) => v.rule);
       expect(rules).toContain("superuser");
       expect(rules).toContain("createrole");
     } finally {
-      await sql.unsafe("ALTER ROLE rm_readonly NOSUPERUSER NOCREATEROLE");
+      await adminExec("ALTER ROLE rm_readonly NOSUPERUSER NOCREATEROLE");
     }
   });
 });
@@ -658,13 +659,13 @@ describe("check 2, every denylist class refuses through checkPrivileges itself",
       const before = await checkPrivileges(sql, context({ roles: ["rm_worker"] }));
       expect(refusals(before.findings).map((f) => f.message).join("\n")).not.toContain(entry.expects);
 
-      for (const statement of entry.setup) await sql.unsafe(statement);
+      for (const statement of entry.setup) await inCurrentDatabase(statement);
       try {
         const result = await checkPrivileges(sql, context({ roles: ["rm_worker"] }));
         const text = refusals(result.findings).map((f) => f.message).join("\n");
         expect(text).toContain(entry.expects);
       } finally {
-        for (const statement of entry.teardown ?? []) await sql.unsafe(statement);
+        for (const statement of entry.teardown ?? []) await inCurrentDatabase(statement);
       }
     });
   }
@@ -710,7 +711,7 @@ describe("check 2, the asymmetry — the registry is not an allowlist", () => {
   });
 
   test("check 2 refuses at `refuse` severity on stage too — a denylist first armed in production is untested", async () => {
-    await sql.unsafe("GRANT rm_owner TO rm_worker");
+    await inCurrentDatabase("GRANT rm_owner TO rm_worker");
     try {
       for (const env of ["stage", "prod"] as const) {
         const result = await checkPrivileges(sql, context({ env, roles: ["rm_worker"] }));
@@ -718,7 +719,7 @@ describe("check 2, the asymmetry — the registry is not an allowlist", () => {
         expect(owner.length).toBeGreaterThan(0);
       }
     } finally {
-      await sql.unsafe("REVOKE rm_owner FROM rm_worker");
+      await inCurrentDatabase("REVOKE rm_owner FROM rm_worker");
     }
   });
 });
@@ -1016,7 +1017,7 @@ let snapshotTemplate: string | null = null;
 
 /** A URL for `database` on the suite's server, as the harness superuser. */
 function databaseUrl(database: string): string {
-  const url = new URL(config.databaseUrl);
+  const url = new URL(adminUrl());
   url.pathname = `/${database}`;
   return url.toString();
 }
@@ -1172,8 +1173,8 @@ describe("check 3a — every §8.1 object class, against a real snapshot bootstr
 
   test("an ownership change refuses, naming the object and both owners", async () => {
     await withSnapshotDatabase(async (db) => {
-      await db.unsafe("ALTER TABLE job_schedules OWNER TO rm_worker");
-      await db.unsafe("ALTER FUNCTION rm_text_array_is_canonical_set(text[]) OWNER TO rm_app");
+      await inCurrentDatabase("ALTER TABLE job_schedules OWNER TO rm_worker", await currentDatabaseOf(db));
+      await inCurrentDatabase("ALTER FUNCTION rm_text_array_is_canonical_set(text[]) OWNER TO rm_app", await currentDatabaseOf(db));
       const refused = await integrity(db);
       expect(naming(refused, "table public.job_schedules")).toContain('owner: "rm_owner" → "rm_worker"');
       expect(naming(refused, "function public.rm_text_array_is_canonical_set(text[])")).toContain(
@@ -1250,8 +1251,18 @@ async function migrateAsOwner(database: string): Promise<void> {
 /** The harness login's 0016 default privileges — production's bootstrap login
  *  is doadmin, a listed provider role, whose leftovers the snapshot excludes. */
 async function revokeLoginDefaults(db: PreflightDb, login: string): Promise<void> {
-  await db.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker`);
-  await db.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`);
+  // Only the provisioning login (the cluster admin) may alter its own defaults.
+  const name = await currentDatabaseOf(db);
+  await adminExec(`ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker`, name);
+  await adminExec(`ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`, name);
+}
+
+/** A statement only the cluster admin may run — a role membership, a change of
+ *  owner to a role the harness login cannot act as — on the database this
+ *  file's pool is on (or `database`). These build the denylist violations the
+ *  checks under test must refuse; nothing the code under test runs uses them. */
+async function inCurrentDatabase(statement: string, database?: string): Promise<void> {
+  await adminExec(statement, database ?? (await currentDatabaseOf(sql)));
 }
 
 async function currentDatabaseOf(db: PreflightDb): Promise<string> {
@@ -1271,7 +1282,7 @@ describe("check 3a against the manifest the real migrate run publishes", () => {
     // is the container superuser, which it does not. The run names exactly
     // that and publishes nothing, so no manifest claims a schema nobody compared.
     await enrollRehearsal();
-    const login = new URL(config.databaseUrl).username;
+    const login = new URL(adminUrl()).username;
     await expect(migrateAsOwner(await currentDatabaseOf(sql))).rejects.toThrow(
       `default privileges for ${login} in schema public on sequences is in the live catalog but not declared by ` +
         `the installed manifest, and the provider exclusion list does not cover it (owner ${login})`,
@@ -1289,7 +1300,7 @@ describe("check 3a against the manifest the real migrate run publishes", () => {
 
   test("RED CONTROL: after the real publisher, genuine drift on the migrated database still refuses by name", async () => {
     await enrollRehearsal();
-    await revokeLoginDefaults(sql, new URL(config.databaseUrl).username);
+    await revokeLoginDefaults(sql, new URL(adminUrl()).username);
     await migrateAsOwner(await currentDatabaseOf(sql));
     await sql.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
     await sql.unsafe("ALTER SCHEMA public OWNER TO pg_database_owner");
@@ -1804,7 +1815,7 @@ describe("runPreflight — one library, three callers (§7.2)", () => {
   test("runStartupPreflight is bounded: a run that outlives its budget is a refusal naming the running check", async () => {
     // The container caller sits between a process and its port, and Docker
     // restarts a process that exits, never one that hangs.
-    const url = new URL(config.databaseUrl);
+    const url = new URL(adminUrl());
     url.username = "rm_app";
     url.password = PASSWORDS.rm_app;
     const outcome = await runStartupPreflight({ role: "rm_app", databaseUrl: url.toString(), rmEnv: "stage", budgetMs: 1 });

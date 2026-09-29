@@ -58,6 +58,7 @@ import {
   type TargetLock,
   type TargetState,
 } from "../src/db/target-lock.ts";
+import { adminExec, adminUrl, ROLE_PASSWORD } from "./support/cluster.ts";
 
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
 const MODULE = join(import.meta.dir, "..", "src", "db", "target-lock.ts");
@@ -117,7 +118,7 @@ async function withScratchDatabase<T>(
   enrollment: "kind" | "legacy-identity-column" | "no-table" = "kind",
 ): Promise<T> {
   const name = `rm_tl_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-  await sql.unsafe(`CREATE DATABASE "${name}"`);
+  await adminExec(`CREATE DATABASE "${name}" OWNER rm_owner`);
   const url = new URL(DATABASE_URL);
   url.pathname = `/${name}`;
   const conn = postgres(url.toString(), { max: 1, onnotice: () => {} });
@@ -137,7 +138,7 @@ async function withScratchDatabase<T>(
     // Release this file's locks on the scratch database before dropping it.
     while (opened.length > 0) await opened.pop()?.release();
     await conn.end({ timeout: 5 });
-    await sql.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+    await adminExec(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
   }
 }
 
@@ -808,16 +809,16 @@ describe("the seed and the identity write are fenced mutations — a competitor'
   // DELETE to reset it). Advisory locks are per database, so the competitor
   // fences on the same copy.
   async function withTemplateCopy<T>(body: (url: string) => Promise<T>): Promise<T> {
-    const template = process.env.RM_TEST_TEMPLATE_DB;
-    if (!template) throw new Error("RM_TEST_TEMPLATE_DB is not set (tests/preload.ts sets it)");
+    const template = process.env.RM_TEST_MIGRATED_TEMPLATE_DB;
+    if (!template) throw new Error("RM_TEST_MIGRATED_TEMPLATE_DB is not set (tests/preload.ts sets it)");
     const name = `rm_tl_fence_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-    await sql.unsafe(`CREATE DATABASE "${name}" TEMPLATE "${template}"`);
+    await adminExec(`CREATE DATABASE "${name}" OWNER rm_owner TEMPLATE "${template}"`);
     const url = new URL(DATABASE_URL);
     url.pathname = `/${name}`;
     try {
       return await body(url.toString());
     } finally {
-      await sql.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+      await adminExec(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
     }
   }
 
@@ -887,15 +888,15 @@ describe("every fenced mutation's REAL path waits on a competitor's fence, holdi
   // covered, through the composition `bun smoke` runs, by the block above.
   const OWNER_PASSWORD = randomBytes(18).toString("base64url");
   let ownerCanLogin = true;
-  const LOGIN = new URL(DATABASE_URL).username;
+  const LOGIN = new URL(adminUrl()).username;
 
   beforeAll(async () => {
     const [row] = await sql<{ rolcanlogin: boolean }[]>`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`;
     ownerCanLogin = row?.rolcanlogin ?? true;
-    await sql.unsafe(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
+    await adminExec(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
   });
   afterAll(async () => {
-    await sql.unsafe(`ALTER ROLE rm_owner ${ownerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD NULL`);
+    await adminExec(`ALTER ROLE rm_owner ${ownerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD '${ROLE_PASSWORD()}'`);
   });
 
   function asRole(url: string, role: string, password: string): string {
@@ -907,19 +908,21 @@ describe("every fenced mutation's REAL path waits on a competitor's fence, holdi
 
   /** A template copy of this suite's migrated database, enrolled `rehearsal` unless told not to, dropped after. */
   async function withEnrolledCopy<T>(body: (url: string, admin: DbHandle) => Promise<T>, enroll = true): Promise<T> {
-    const template = process.env.RM_TEST_TEMPLATE_DB;
-    if (!template) throw new Error("RM_TEST_TEMPLATE_DB is not set (tests/preload.ts sets it)");
+    const template = process.env.RM_TEST_MIGRATED_TEMPLATE_DB;
+    if (!template) throw new Error("RM_TEST_MIGRATED_TEMPLATE_DB is not set (tests/preload.ts sets it)");
     const name = `rm_tl_real_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-    await sql.unsafe(`CREATE DATABASE "${name}" TEMPLATE "${template}"`);
+    await adminExec(`CREATE DATABASE "${name}" OWNER rm_owner TEMPLATE "${template}"`);
     const url = new URL(DATABASE_URL);
     url.pathname = `/${name}`;
-    const admin = postgres(url.toString(), { max: 1, onnotice: () => {} });
+    // The fixtures' handle is the cluster admin (it enrols the identity and alters the
+    // provisioning login's default privileges); the tool under test gets `url`.
+    const admin = postgres(adminUrl(name), { max: 1, onnotice: () => {} });
     try {
       if (enroll) await admin`INSERT INTO deployment_identity (kind, note) VALUES ('rehearsal', 'target-lock real-path test')`;
       return await body(url.toString(), admin);
     } finally {
       await admin.end({ timeout: 5 });
-      await sql.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+      await adminExec(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
     }
   }
 
@@ -1127,7 +1130,7 @@ describe("assertStillHeld — §2, no phase proceeds on a lock the tool cannot p
     if (!result.acquired) throw new Error("expected acquisition");
 
     const [self] = await result.lock.connection<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
-    await sql`SELECT pg_terminate_backend(${self?.pid ?? 0})`;
+    await adminExec(`SELECT pg_terminate_backend(${self?.pid ?? 0})`);
 
     await expect(assertStillHeld(result.lock, "participants")).rejects.toThrow(/participants/);
   }, 15000);
@@ -1162,7 +1165,7 @@ describe("the §10 W1 gate: kill the lock connection mid-mutation, start a secon
     // The coordinating connection dies mid-mutation. Postgres releases the
     // SESSION lock immediately; the mutation is still executing.
     await Bun.sleep(150);
-    await sql`SELECT pg_terminate_backend(${coordinator?.pid ?? 0})`;
+    await adminExec(`SELECT pg_terminate_backend(${coordinator?.pid ?? 0})`);
     // Wrapped, so the caller receives the IN-FLIGHT promise: returning it bare
     // from an async function would make the caller wait for it to settle.
     return { aMutation };

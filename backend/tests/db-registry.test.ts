@@ -25,7 +25,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import ts from "typescript";
-import { registeredSites, type QueryDeclaration, type RmRole } from "../src/db/registry.ts";
+import { OBJECTLESS_SHAPES, registeredSites, type QueryDeclaration, type RmRole } from "../src/db/registry.ts";
 
 /** The four roles of spec §3. There is no `rm_migrator` (D46/D47) and `doadmin`
  *  is cluster provisioning only (§3, §9.1), so neither may ever appear. */
@@ -137,6 +137,10 @@ describe("structural enforcement — a raw sql call outside the interface is det
     return file.slice(BACKEND.length + 1).replace(/\.ts$/, "");
   }
 
+  /** The two functions of src/db/registry.ts whose call is a permitted tag:
+   *  `on` (a declared relation) and `onStatement` (D55 (13), a listed object-less shape). */
+  const REGISTERED_TAGS: ReadonlySet<string> = new Set(["on", "onStatement"]);
+
   interface RawStatement {
     /** 1-based line of the statement's start. */
     readonly line: number;
@@ -162,7 +166,7 @@ describe("structural enforcement — a raw sql call outside the interface is det
       const bindings = statement.importClause?.namedBindings;
       if (bindings && ts.isNamedImports(bindings)) {
         for (const element of bindings.elements) {
-          if ((element.propertyName ?? element.name).text === "on") binders.add(element.name.text);
+          if (REGISTERED_TAGS.has((element.propertyName ?? element.name).text)) binders.add(element.name.text);
         }
       } else if (bindings && ts.isNamespaceImport(bindings)) {
         namespaces.add(bindings.name.text);
@@ -175,7 +179,7 @@ describe("structural enforcement — a raw sql call outside the interface is det
       if (ts.isIdentifier(callee)) return binders.has(callee.text);
       return (
         ts.isPropertyAccessExpression(callee) &&
-        callee.name.text === "on" &&
+        REGISTERED_TAGS.has(callee.name.text) &&
         ts.isIdentifier(callee.expression) &&
         namespaces.has(callee.expression.text)
       );
@@ -318,23 +322,26 @@ describe("structural enforcement — a raw sql call outside the interface is det
   // 2026-09-28 (#1026 W5): src/swarm/judge-fault-injection was deleted with
   // the lever D55 (3) retired, not converted. 19 entries remain.
   //
+  // 2026-09-29 (#1026 W6 P2): six modules moved onto the registry: src/api/auth,
+  // src/api/index (its one statement is the object-less `connectionCheck`, in
+  // src/db/connection-check), src/api/routes/projects, src/analytics/store/
+  // regime-store, src/analytics/store/output-snapshot-store and src/ops/
+  // wallet-snapshot-manifest (an object-less advisory lock). The epoch code left
+  // domain.ts for src/swarm/epoch, which was never listed. 13 entries remain;
+  // domain.ts still holds about 145 raw statements of the take, application and
+  // judge paths, and admin.ts and admin routes hold the rest of the count.
+  //
   // NEVER ADD A LINE HERE. An addition would be a new violation of §7.1 being
   // written down instead of fixed, which is the one thing a ratchet exists to
   // prevent. The only legal edit is a deletion.
   const RAW_SQL_ALLOWLIST: readonly string[] = [
-    "src/analytics/store/output-snapshot-store",
-    "src/analytics/store/regime-store",
     "src/analytics/store/run-ledger-store",
     "src/analytics/store/source-ledger-store",
-    "src/api/auth",
-    "src/api/index",
     "src/api/routes/admin",
     "src/api/routes/admin-webauthn",
-    "src/api/routes/projects",
     "src/ops/asset-prices",
     "src/ops/gap-detector",
     "src/ops/wallet-backfill",
-    "src/ops/wallet-snapshot-manifest",
     "src/projects/smoke-seed",
     "src/swarm/admin",
     "src/swarm/consensus-receipt",
@@ -457,10 +464,19 @@ describe("structural enforcement — a raw sql call outside the interface is det
       // A value helper inside a registered template is a parameter, not a statement.
       'import { on } from "../db/registry.ts";\nexport async function ok(sql, q, v) { return on(sql, q)`INSERT INTO t VALUES (${sql.json(v)})`; }',
       "export async function ok(q, db) { return q.run(db, ['SELECT 1']); }",
+      // The object-less kind (D55 (13)): `onStatement` is a permitted tag too.
+      'import { onStatement } from "../db/registry.ts";\nexport async function ok(tx, s) { return onStatement(tx, s)<{at:string}>`SELECT clock_timestamp()::text AS at`; }',
+      'import * as registry from "../db/registry.ts";\nexport async function ok(tx, s) { return registry.onStatement(tx, s)`SELECT clock_timestamp() AS at`; }',
     ];
     for (const shape of registered) {
       expect(plant(shape), shape).toEqual([]);
     }
+  });
+
+  test("a lookalike `onStatement` that is not the registry's is just another tag", () => {
+    expect(
+      plant("const onStatement = (db, s) => db;\nexport async function leak(sql, s) { return onStatement(sql, s)`SELECT 1`; }"),
+    ).toHaveLength(1);
   });
 
   test("a fragment written inline in a registered statement is part of it, not a statement", () => {
@@ -530,7 +546,7 @@ describe("structural enforcement — a raw sql call outside the interface is det
     // 50 when recorded; 20 after #1026 W3 moved thirty modules onto the registry;
     // 19 after #1026 W5 deleted src/swarm/judge-fault-injection with the lever
     // D55 (3) retired.
-    expect(RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(19);
+    expect(RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(13);
   });
 
   /** The scripts gate itself: every backend/scripts module issuing a raw
@@ -779,6 +795,12 @@ describe("declarations — what the converted modules declare, read without depe
     "src/swarm/judgements",
     "src/swarm/receipt-gap",
     "src/worker/handlers/repair",
+    // #1026 W6 P2 (the object-less wallet lock is not a query, so it is not here).
+    "src/analytics/store/output-snapshot-store",
+    "src/analytics/store/regime-store",
+    "src/api/auth",
+    "src/api/routes/projects",
+    "src/swarm/epoch",
     "src/worker/handlers/vault",
     "src/worker/handlers/wallet",
     "src/worker/loop",
@@ -885,5 +907,133 @@ describe("declarations — what the converted modules declare, read without depe
     expect(isEntryModule("src/chain/wallet-balances")).toBe(false);
     expect(isEntryModule("src/db/seed")).toBe(true);
     expect(isEntryModule("src/api/routes/comments")).toBe(true);
+  });
+});
+
+describe("object-less statements (D55 (13)) — a closed list of shapes, pinned by equality", () => {
+  const BACKEND = join(import.meta.dir, "..");
+  const SRC = join(BACKEND, "src");
+
+  /** THE CLOSED LIST. Widening the kind is an edit here AND in src/db/registry.ts,
+   *  in the same change, with a reason: a shape added to only one fails a test. */
+  const PINNED_SHAPES: Readonly<Record<string, string>> = {
+    clockText: "SELECT clock_timestamp()::text AS at",
+    clockTimestamp: "SELECT clock_timestamp() AS at",
+    connectionCheck: "SELECT 1",
+    walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
+    snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
+  };
+
+  test("the shape list equals the pinned list exactly", () => {
+    expect({ ...OBJECTLESS_SHAPES } as Record<string, string>).toEqual({ ...PINNED_SHAPES });
+    expect(Object.isFrozen(OBJECTLESS_SHAPES)).toBe(true);
+  });
+
+  test("no shape names a relation, so none can stand for a statement that touches one", () => {
+    const RELATION_WORDS = /\b(from|join|into|update|delete|insert|truncate|table|using|copy|lateral)\b/i;
+    for (const [name, shape] of Object.entries(OBJECTLESS_SHAPES)) {
+      expect(RELATION_WORDS.test(shape), `${name}: ${shape}`).toBe(false);
+    }
+  });
+
+  /** Every `registerStatement(...)` and `onStatement(...)` in src/ and scripts/, read from source. */
+  function usage(): { registrations: { file: string; nested: boolean; shape: string | undefined }[]; calls: { where: string; text: string; expected: string | undefined }[] } {
+    const registrations: { file: string; nested: boolean; shape: string | undefined }[] = [];
+    const calls: { where: string; text: string; expected: string | undefined }[] = [];
+    for (const root of ["src", "scripts"]) {
+      const files = (readdirSync(join(BACKEND, root), { recursive: true, encoding: "utf8" }) as string[]).filter((f) => f.endsWith(".ts"));
+      for (const rel of files) {
+        const file = join(root, rel);
+        if (file === join("src", "db", "registry.ts")) continue;
+        const text = readFileSync(join(BACKEND, file), "utf8");
+        if (!text.includes("registerStatement(") && !text.includes("onStatement(")) continue;
+        const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+        const shapeOf = new Map<string, string>();
+        const collect = (node: ts.Node): void => {
+          if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && ts.isCallExpression(node.initializer)) {
+            const init = node.initializer;
+            const arg = init.arguments[0];
+            if (ts.isIdentifier(init.expression) && init.expression.text === "registerStatement" && arg && ts.isObjectLiteralExpression(arg)) {
+              const prop = arg.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === "shape");
+              if (prop && ts.isStringLiteral(prop.initializer)) shapeOf.set(node.name.text, prop.initializer.text);
+            }
+          }
+          ts.forEachChild(node, collect);
+        };
+        collect(source);
+        const visit = (node: ts.Node, depth: number): void => {
+          if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "registerStatement") {
+            const arg = node.arguments[0];
+            const prop = arg && ts.isObjectLiteralExpression(arg)
+              ? arg.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === "shape")
+              : undefined;
+            registrations.push({ file, nested: depth > 0, shape: prop && ts.isStringLiteral(prop.initializer) ? prop.initializer.text : undefined });
+          }
+          if (
+            ts.isTaggedTemplateExpression(node) &&
+            ts.isCallExpression(node.tag) &&
+            ts.isIdentifier(node.tag.expression) &&
+            node.tag.expression.text === "onStatement"
+          ) {
+            const stmt = node.tag.arguments[1];
+            const tpl = node.template;
+            let literal = ts.isNoSubstitutionTemplateLiteral(tpl) ? tpl.text : tpl.head.text;
+            if (ts.isTemplateExpression(tpl)) tpl.templateSpans.forEach((span, i) => (literal += `$${i + 1}${span.literal.text}`));
+            const shapeName = stmt && ts.isIdentifier(stmt) ? shapeOf.get(stmt.text) : undefined;
+            calls.push({
+              where: `${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`,
+              text: literal.replace(/\s+/g, " ").trim(),
+              expected: shapeName === undefined ? undefined : (OBJECTLESS_SHAPES as Record<string, string>)[shapeName],
+            });
+          }
+          ts.forEachChild(node, (child) => visit(child, ts.isFunctionLike(node) ? depth + 1 : depth));
+        };
+        visit(source, 0);
+      }
+    }
+    return { registrations, calls };
+  }
+
+  test("every registerStatement is at module level and names a listed shape by literal", () => {
+    const { registrations } = usage();
+    // Non-vacuous: the kind is in use, so a rewrite that drops it fails here.
+    expect(registrations.length).toBeGreaterThan(0);
+    expect(registrations.filter((r) => r.nested).map((r) => r.file)).toEqual([]);
+    expect(registrations.filter((r) => r.shape === undefined || !(r.shape in PINNED_SHAPES)).map((r) => r.file)).toEqual([]);
+  });
+
+  test("every onStatement template equals the shape of the site it runs, read from source", () => {
+    const { calls } = usage();
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.filter((c) => c.expected === undefined).map((c) => c.where)).toEqual([]);
+    expect(calls.filter((c) => c.expected !== undefined && c.text !== c.expected).map((c) => `${c.where}: ${c.text}`)).toEqual([]);
+  });
+
+  test("every object-less declaration names a §3 role and entry modules that exist", () => {
+    const modules = [...new Set(usage().registrations.map((r) => r.file.replace(/\.ts$/, "")))];
+    const script = join(mkdtempSync(join(tmpdir(), "rm-registry-stmt-")), "enumerate.ts");
+    writeFileSync(script, [
+      ...modules.map((m) => `await import(${JSON.stringify(join(BACKEND, `${m}.ts`))});`),
+      `const { registeredStatements } = await import(${JSON.stringify(join(SRC, "db", "registry.ts"))});`,
+      `console.log("RM_REGISTRY_STATEMENTS " + JSON.stringify(registeredStatements()));`,
+    ].join("\n"));
+    try {
+      const child = Bun.spawnSync(["bun", "run", script], { env: process.env });
+      const line = child.stdout.toString().split("\n").find((l) => l.startsWith("RM_REGISTRY_STATEMENTS "));
+      if (child.exitCode !== 0 || !line) throw new Error(`statement enumeration child failed:\n${child.stderr.toString()}`);
+      const statements = JSON.parse(line.slice("RM_REGISTRY_STATEMENTS ".length)) as {
+        role: RmRole; shape: string; site: string; callers: string[];
+      }[];
+      expect(statements.length).toBeGreaterThan(0);
+      const bad: string[] = [];
+      for (const s of statements) {
+        if (!TAXONOMY_ROLES.includes(s.role)) bad.push(`${s.site}: role ${s.role}`);
+        if (!(s.shape in PINNED_SHAPES)) bad.push(`${s.site}: shape ${s.shape}`);
+        for (const caller of s.callers) if (!existsSync(join(BACKEND, `${caller}.ts`))) bad.push(`${s.site}: caller ${caller} is not a module`);
+      }
+      expect(bad).toEqual([]);
+    } finally {
+      rmSync(dirname(script), { recursive: true, force: true });
+    }
   });
 });

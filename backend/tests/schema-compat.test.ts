@@ -63,6 +63,7 @@ import {
   portIsBound,
   startupLines,
 } from "./support/startup-preflight.ts";
+import { adminExec, adminUrl, ROLE_PASSWORD } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -588,11 +589,16 @@ describe("recordMigrationCompat — the declaration commits with the DDL, never 
   test("refuses when the effective role is not rm_owner — compat is a trusted input", async () => {
     await addCompatColumns();
     await sql`INSERT INTO schema_migrations (name) VALUES ('0065_not_owner.sql')`;
+    // The suite's own session acts as rm_owner (tests/preload.ts), so the
+    // non-owner is a runtime role the same session steps down to.
     await expect(
-      recordMigrationCompat(sql, {
-        filename: "0065_not_owner.sql",
-        compat: "additive",
-        metadataVersion: COMPAT_METADATA_VERSION,
+      sql.begin(async (tx) => {
+        await tx.unsafe("SET LOCAL ROLE rm_app");
+        await recordMigrationCompat(tx, {
+          filename: "0065_not_owner.sql",
+          compat: "additive",
+          metadataVersion: COMPAT_METADATA_VERSION,
+        });
       }),
     ).rejects.toThrow("rm_owner");
   });
@@ -637,7 +643,7 @@ describe("recordMigrationCompat — the declaration commits with the DDL, never 
 
 /** A URL for `database` on the suite's server, as the harness superuser. */
 function databaseUrl(database: string): string {
-  const url = new URL(config.databaseUrl);
+  const url = new URL(adminUrl());
   url.pathname = `/${database}`;
   return url.toString();
 }
@@ -942,12 +948,12 @@ let compatBootSnapshotDir = "";
 
 describe("criterion 54, runtime — the real api at N serves against N + additive, and refuses genuine drift", () => {
   beforeAll(async () => {
-    await sql.unsafe(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${COMPAT_BOOT_APP.password}'`);
+    await adminExec(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${COMPAT_BOOT_APP.password}'`);
     // rm_owner is cluster-wide and another file reads its LOGIN attribute:
     // record it and put back exactly that value.
     const [owner] = await sql<{ rolcanlogin: boolean }[]>`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`;
     compatBootOwnerCanLogin = owner?.rolcanlogin ?? null;
-    await sql.unsafe(`ALTER ROLE rm_owner PASSWORD '${COMPAT_BOOT_OWNER.password}'`);
+    await adminExec(`ALTER ROLE rm_owner PASSWORD '${COMPAT_BOOT_OWNER.password}'`);
     compatBootSnapshotDir = await snapshotDirForVersionM(ADDITIVE_DDL, SYNTHESIZED);
     // The fixture pair is checked as a pair: M's snapshot does not load against
     // this checkout's migrations, which do not hold the synthesized file.
@@ -957,7 +963,7 @@ describe("criterion 54, runtime — the real api at N serves against N + additiv
   afterAll(async () => {
     await dropDatabases(compatBootDatabases);
     if (compatBootSnapshotDir) rmSync(compatBootSnapshotDir, { recursive: true, force: true });
-    await sql.unsafe(`ALTER ROLE rm_owner ${compatBootOwnerCanLogin === false ? "NOLOGIN" : "LOGIN"} PASSWORD NULL`);
+    await adminExec(`ALTER ROLE rm_owner ${compatBootOwnerCanLogin === false ? "NOLOGIN" : "LOGIN"} PASSWORD '${ROLE_PASSWORD()}'`);
   });
 
   test("old code SERVES after the real run publishes M with an additive migration; a dropped declared column then REFUSES it by check 3", async () => {

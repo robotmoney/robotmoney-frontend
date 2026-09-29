@@ -28,6 +28,7 @@
 // operator's cannot drive an epoch, the producer's can do neither.
 import { timingSafeEqual } from "node:crypto";
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import { hashKey } from "../lib/keys.ts";
 import { lookupAutomationToken, type AutomationGrant, type AutomationRight } from "../db/automation-tokens.ts";
 
@@ -70,6 +71,39 @@ async function hasOperatorRight(req: Request): Promise<boolean> {
   return hasAutomationRight(req, "admin");
 }
 
+/** The routes that guard themselves with `isPrivileged`: the entry modules its two statements are reached through. */
+const ADMIN_GUARDED_ROUTES = [
+  "src/api/routes/admin",
+  "src/api/routes/admin-webauthn",
+  "src/api/routes/projects",
+  "src/api/routes/swarm",
+  "src/api/routes/swarm-admin",
+] as const;
+
+const readSession = registerQuery({
+  role: "rm_app",
+  object: "admin_session",
+  privileges: ["SELECT"],
+  site: "src/api/auth:isPrivileged.session",
+  purpose: "Check the presented token against an unexpired, unrevoked admin session (a passkey login).",
+  callers: ADMIN_GUARDED_ROUTES,
+  probe: {
+    statement: `SELECT 1 FROM admin_session
+       WHERE token = $1 AND expires_at > now() AND revoked_at IS NULL`,
+    params: ["probe-token-hash"],
+  },
+});
+
+const readCredential = registerQuery({
+  role: "rm_app",
+  object: "admin_credential",
+  privileges: ["SELECT"],
+  site: "src/api/auth:isPrivileged.credential",
+  purpose: "Read the claimed admin password's hash, to compare against the presented credential in constant time.",
+  callers: ADMIN_GUARDED_ROUTES,
+  probe: { statement: "SELECT pass_hash FROM admin_credential WHERE id = 1" },
+});
+
 // admin role (issue #553 / D32, D52 (1)).
 //
 // Three credentials open it, each a durable server-side record:
@@ -89,14 +123,14 @@ async function hasOperatorRight(req: Request): Promise<boolean> {
 export async function isPrivileged(req: Request): Promise<boolean> {
   const presented = req.headers.get("X-Admin-Token");
   if (presented) {
-    const session = await sql`
+    const session = await on(sql, readSession)`
       SELECT 1 FROM admin_session
        WHERE token = ${hashKey(presented)} AND expires_at > now() AND revoked_at IS NULL`;
     if (session.length > 0) return true;
   }
   if (await hasOperatorRight(req)) return true;
   if (!presented) return false;
-  const claimed = await sql<{ pass_hash: string }[]>`SELECT pass_hash FROM admin_credential WHERE id = 1`;
+  const claimed = await on(sql, readCredential)<{ pass_hash: string }>`SELECT pass_hash FROM admin_credential WHERE id = 1`;
   if (claimed.length === 0) return false;
   const expected = Buffer.from(claimed[0].pass_hash, "hex");
   const got = Buffer.from(hashKey(presented), "hex");

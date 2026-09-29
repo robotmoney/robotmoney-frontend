@@ -89,6 +89,7 @@ import { backfillWalletDay, planWalletBackfill, type WalletBackfillDeps } from "
 import { resolveWalletSnapshotManifest } from "../src/ops/wallet-snapshot-manifest.ts";
 import { sampleWalletBalances, sampleWalletSleeves } from "../src/worker/handlers/wallet.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { adminExec, adminUrl } from "./support/cluster.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -381,7 +382,7 @@ let worker: postgres.Sql<{}>;
 beforeAll(async () => {
   // The same credential analytics-worker-role.test.ts provisions: roles are
   // cluster-wide, so two files must not fight over the password.
-  await sql.unsafe(`ALTER ROLE rm_worker WITH LOGIN PASSWORD '${WORKER_PASSWORD}'`);
+  await adminExec(`ALTER ROLE rm_worker WITH LOGIN PASSWORD '${WORKER_PASSWORD}'`);
   // D55 (6)'s end state on this file's own copy: rm_worker holds no DELETE or
   // TRUNCATE on either sample table.
   await sql`REVOKE DELETE, TRUNCATE ON wallet_balance_samples, wallet_sleeve_samples FROM rm_worker`;
@@ -392,7 +393,7 @@ beforeAll(async () => {
   }
   await sql`GRANT INSERT ON wallet_balance_sample_evidence, wallet_sleeve_sample_evidence TO rm_worker`;
   const [{ db }] = await sql<{ db: string }[]>`SELECT current_database() AS db`;
-  const url = new URL(process.env.DATABASE_URL!);
+  const url = new URL(adminUrl());
   url.username = "rm_worker";
   url.password = WORKER_PASSWORD;
   url.pathname = `/${db}`;

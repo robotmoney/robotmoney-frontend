@@ -20,9 +20,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import postgres from "postgres";
+import { adminUrl } from "./support/cluster.ts";
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
-const ADMIN_URL = process.env.DATABASE_URL!;
+const ADMIN_URL = adminUrl();
 const BOOT_ROLE = "rm_privprobe_boot";
 const BOOT_PASSWORD = "privprobe";
 const PROBE_DB = "rm_privprobe";

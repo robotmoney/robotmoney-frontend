@@ -51,9 +51,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import postgres from "postgres";
 import ts from "typescript";
-import { config } from "../src/config.ts";
 import { bootstrapBlankDatabase, loadSnapshot } from "../src/db/schema-snapshot.ts";
-import type { QueryDeclaration, RmRole, TablePrivilege } from "../src/db/registry.ts";
+import { OBJECTLESS_SHAPES, type QueryDeclaration, type RmRole, type StatementDeclaration, type TablePrivilege } from "../src/db/registry.ts";
+import { adminUrl } from "./support/cluster.ts";
 
 const BACKEND = join(import.meta.dir, "..");
 const SRC = join(BACKEND, "src");
@@ -94,7 +94,7 @@ const PROBE_PENDING_CEILING = 11;
  * as sites are added. Lower it only in the change that deletes a registering
  * module, saying which.
  */
-const EXECUTED_FLOOR = 204;
+const EXECUTED_FLOOR = 243;
 
 /**
  * The number of `on(...)` call sites the static reader resolved when it was
@@ -486,7 +486,7 @@ const logins = new Map<string, postgres.Sql<{}>>();
 const saved: { rolname: string; rolcanlogin: boolean; rolpassword: string | null }[] = [];
 
 function urlFor(role: string, name = database): string {
-  const url = new URL(config.databaseUrl);
+  const url = new URL(adminUrl());
   url.pathname = `/${name}`;
   url.username = role;
   url.password = PASSWORD;
@@ -503,7 +503,7 @@ function login(role: string): postgres.Sql<{}> {
 }
 
 beforeAll(async () => {
-  const superuser = postgres(config.databaseUrl, { max: 1, onnotice: () => {} });
+  const superuser = postgres(adminUrl(), { max: 1, onnotice: () => {} });
   try {
     // The cluster's roles are shared by every file; their login attributes are
     // put back in afterAll so nothing here leaks into a file that runs later.
@@ -523,9 +523,9 @@ beforeAll(async () => {
     await superuser.end({ timeout: 5 });
   }
 
-  const adminUrl = new URL(config.databaseUrl);
-  adminUrl.pathname = `/${database}`;
-  admin = postgres(adminUrl.toString(), { max: 1, onnotice: () => {} });
+  const target = new URL(adminUrl());
+  target.pathname = `/${database}`;
+  admin = postgres(target.toString(), { max: 1, onnotice: () => {} });
   // pgcrypto is provider-managed (the snapshot's header: "a managed cluster
   // installs it and rm_owner may not"), so the provider's half is done here.
   await admin.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
@@ -541,7 +541,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await Promise.all([...logins.values()].map((db) => db.end({ timeout: 5 })));
   if (admin) await admin.end({ timeout: 5 });
-  const superuser = postgres(config.databaseUrl, { max: 1, onnotice: () => {} });
+  const superuser = postgres(adminUrl(), { max: 1, onnotice: () => {} });
   try {
     await superuser.unsafe(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
     await superuser.unsafe(`DROP ROLE IF EXISTS ${SCRATCH}`);
@@ -641,11 +641,17 @@ async function executeSite(declaration: QueryDeclaration, group: readonly QueryD
 // The child enumeration.
 // ─────────────────────────────────────────────────────────────────────────────
 
-let enumerated: { sites: QueryDeclaration[]; declaring: Map<string, number> } | undefined;
+interface Enumerated {
+  sites: QueryDeclaration[];
+  /** The object-less declarations (D55 (13)) the same process holds. */
+  statements: StatementDeclaration[];
+  declaring: Map<string, number>;
+}
+let enumerated: Enumerated | undefined;
 
 /** The declarations a process holds after importing the api's entry modules,
  *  the worker's, and every declaring module on disk — and nothing else. */
-async function childSites(): Promise<{ sites: QueryDeclaration[]; declaring: Map<string, number> }> {
+async function childSites(): Promise<Enumerated> {
   if (enumerated) return enumerated;
   const declaring = declaringModules();
   const modules = [...new Set([...entryImports(API_ENTRY), ...entryImports(WORKER_ENTRY), ...declaring.keys()])];
@@ -655,8 +661,9 @@ async function childSites(): Promise<{ sites: QueryDeclaration[]; declaring: Map
     script,
     [
       ...modules.map((m) => `await import(${JSON.stringify(m)});`),
-      `const { registeredSites } = await import(${JSON.stringify(REGISTRY_FILE)});`,
+      `const { registeredSites, registeredStatements } = await import(${JSON.stringify(REGISTRY_FILE)});`,
       `console.log("RM_REGISTRY_EXEC_SITES " + JSON.stringify(registeredSites()));`,
+      `console.log("RM_REGISTRY_EXEC_STATEMENTS " + JSON.stringify(registeredStatements()));`,
       // An imported module may start a timer; the answer is out, so leave.
       `process.exit(0);`,
     ].join("\n"),
@@ -678,7 +685,13 @@ async function childSites(): Promise<{ sites: QueryDeclaration[]; declaring: Map
     ]);
     const line = out.split("\n").find((l) => l.startsWith("RM_REGISTRY_EXEC_SITES "));
     if (exitCode !== 0 || !line) throw new Error(`registry enumeration child failed (exit ${exitCode}):\n${out}\n${err}`);
-    enumerated = { sites: JSON.parse(line.slice("RM_REGISTRY_EXEC_SITES ".length)) as QueryDeclaration[], declaring };
+    const statementLine = out.split("\n").find((l) => l.startsWith("RM_REGISTRY_EXEC_STATEMENTS "));
+    if (!statementLine) throw new Error(`registry enumeration child printed no statements:\n${out}\n${err}`);
+    enumerated = {
+      sites: JSON.parse(line.slice("RM_REGISTRY_EXEC_SITES ".length)) as QueryDeclaration[],
+      statements: JSON.parse(statementLine.slice("RM_REGISTRY_EXEC_STATEMENTS ".length)) as StatementDeclaration[],
+      declaring,
+    };
     return enumerated;
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -701,6 +714,22 @@ describe("every registered query runs as its declared role on a disposable datab
     // cannot see.
     expect(new Set(sites.map((s) => s.site)).size).toBe(sites.length);
     for (const site of sites) expect(ROLES, site.site).toContain(site.role);
+  });
+
+  test("every object-less statement (D55 (13)) runs as its declared LOGIN role", async () => {
+    const { statements } = await childSites();
+    // Non-vacuous, and the whole closed list is exercised, not a subset of it.
+    expect(statements.length).toBeGreaterThan(0);
+    expect([...new Set(statements.map((s) => s.shape as string))].sort()).toEqual(Object.keys(OBJECTLESS_SHAPES).sort());
+    const failures: string[] = [];
+    for (const statement of statements) {
+      const shape = OBJECTLESS_SHAPES[statement.shape];
+      // A shape's `$n` is a bound value; a text sample serves every one on the closed list.
+      const placeholders = new Set([...shape.matchAll(/\$(\d+)/g)].map((m) => m[1]!)).size;
+      const outcome = await runProbe(login(statement.role), { statement: shape, params: Array(placeholders).fill("probe") });
+      if (!outcome.ok) failures.push(`${statement.site}: as ${statement.role} → ${outcome.code} ${outcome.message}`);
+    }
+    expect(failures).toEqual([]);
   });
 
   test("every site outside PROBE_PENDING carries a probe, and the backlog only shrinks", async () => {

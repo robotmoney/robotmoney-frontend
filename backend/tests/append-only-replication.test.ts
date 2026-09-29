@@ -40,11 +40,13 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import postgres from "postgres";
 
-const baseUrl = process.env.DATABASE_URL;
+// The cluster admin, on purpose: CREATE SUBSCRIPTION needs a superuser, and the
+// subscriber dials the publisher with this login (which must hold REPLICATION).
+const baseUrl = process.env.RM_TEST_ADMIN_URL;
 const template = process.env.RM_TEST_TEMPLATE_DB;
 if (!baseUrl || !template) {
   throw new Error(
-    "tests/append-only-replication.test.ts requires DATABASE_URL and RM_TEST_TEMPLATE_DB (set by tests/preload.ts)",
+    "tests/append-only-replication.test.ts requires RM_TEST_ADMIN_URL and RM_TEST_TEMPLATE_DB (set by tests/preload.ts)",
   );
 }
 
@@ -186,7 +188,7 @@ beforeAll(async () => {
 
   for (const db of [PUBLISHER, GUARDED, CONTROL]) {
     await admin.unsafe(`DROP DATABASE IF EXISTS "${db}" WITH (FORCE)`);
-    await admin.unsafe(`CREATE DATABASE "${db}" TEMPLATE "${template}"`);
+    await admin.unsafe(`CREATE DATABASE "${db}" OWNER rm_owner TEMPLATE "${template}"`);
   }
 
   publisher = connect(PUBLISHER);

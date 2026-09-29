@@ -32,6 +32,7 @@ import {
   startupLines,
   type Spawned,
 } from "./support/startup-preflight.ts";
+import { adminExec } from "./support/cluster.ts";
 
 const WORKER = { name: "rm_worker", password: `rm_worker_startup_${crypto.randomUUID().slice(0, 8)}` };
 
@@ -40,7 +41,7 @@ const created: string[] = [];
 const scratch = mkdtempSync(join(tmpdir(), "rm-worker-startup-"));
 
 beforeAll(async () => {
-  await sql.unsafe(`ALTER ROLE rm_worker WITH LOGIN PASSWORD '${WORKER.password}'`);
+  await adminExec(`ALTER ROLE rm_worker WITH LOGIN PASSWORD '${WORKER.password}'`);
   template = await createSnapshotTemplate("wsp");
 }, 120_000);
 
@@ -164,7 +165,7 @@ describe("pipeline worker startup preflight — checks 1-3 as rm_worker, no clai
   test("check 1: the api's rm_app credential is refused by name — the worker never runs on another role's login", async () => {
     const fx = await fixture("wsp_user");
     const appPassword = `rm_app_wsp_${crypto.randomUUID().slice(0, 8)}`;
-    await sql.unsafe(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${appPassword}'`);
+    await adminExec(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${appPassword}'`);
     const spawned = spawnWorker("user", databaseUrl(fx.name, { name: "rm_app", password: appPassword }));
     const lines = await expectRefusedAndUnclaimed(fx, spawned, 1);
     expect(lines).toContain(

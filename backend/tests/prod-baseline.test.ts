@@ -41,14 +41,15 @@ import { hashManifest, readManifest } from "../src/db/schema-manifest.ts";
 import { bootstrapBlankDatabase, loadSnapshot, type Snapshot } from "../src/db/schema-snapshot.ts";
 import { runMigrate } from "../scripts/migrate-run.ts";
 import { withTargetLock } from "./support/target-lock.ts";
+import { adminExec, adminUrl, ROLE_PASSWORD } from "./support/cluster.ts";
 
 const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 const OWNER = { name: "rm_owner", password: OWNER_PASSWORD };
-const LOGIN = new URL(config.databaseUrl).username;
+const LOGIN = new URL(adminUrl()).username;
 let ownerCanLogin = true;
 
 function urlFor(database: string, role?: { name: string; password: string }): string {
-  const url = new URL(config.databaseUrl);
+  const url = new URL(adminUrl());
   url.pathname = `/${database}`;
   if (role) {
     url.username = role.name;
@@ -64,12 +65,12 @@ function connect(database: string, role?: { name: string; password: string }): p
 beforeAll(async () => {
   const [row] = await sql<{ rolcanlogin: boolean }[]>`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`;
   ownerCanLogin = row?.rolcanlogin ?? true;
-  await sql.unsafe(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
+  await adminExec(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
 });
 
 afterAll(async () => {
   // rm_owner is cluster-wide: put back the attribute this file found.
-  await sql.unsafe(`ALTER ROLE rm_owner ${ownerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD NULL`);
+  await adminExec(`ALTER ROLE rm_owner ${ownerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD '${ROLE_PASSWORD()}'`);
 });
 
 /**
@@ -95,7 +96,7 @@ async function withDatabase(
   if (shape === "snapshot") {
     await maintenance.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
   } else {
-    await maintenance.unsafe(`CREATE DATABASE ${name} TEMPLATE "${process.env.RM_TEST_TEMPLATE_DB}"`);
+    await maintenance.unsafe(`CREATE DATABASE ${name} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`);
   }
   const admin = connect(name);
   const owner = connect(name, OWNER);

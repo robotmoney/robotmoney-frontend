@@ -43,6 +43,7 @@ import { checkSchemaIntegrity, type PreflightContext, type PreflightReport } fro
 import type { RmRole } from "../src/db/registry.ts";
 import { SCHEDULES } from "../src/db/seed.ts";
 import { LEDGER_FAMILIES } from "../src/db/analytics-ledger-guard.ts";
+import { adminExec, adminUrl } from "./support/cluster.ts";
 
 const MIGRATIONS_DIR = join(import.meta.dir, "..", "migrations");
 const ON_DISK = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
@@ -154,7 +155,7 @@ function writeSnapshot(
  * a database the schema owner owns.
  */
 async function withBlankDatabase(body: (db: postgres.Sql<{}>, name: string) => Promise<void>): Promise<void> {
-  const base = new URL(config.databaseUrl);
+  const base = new URL(adminUrl());
   const name = `rm_snapshot_blank_${crypto.randomUUID().slice(0, 8)}`;
   const admin = postgres(base.toString(), { max: 1, onnotice: () => {} });
   await admin.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
@@ -183,7 +184,7 @@ const RM_APP_PASSWORD = "rm_app_snapshot_password";
 
 beforeAll(async () => {
   fixtures = mkdtempSync(join(tmpdir(), "rm-snapshot-fixtures-"));
-  await sql.unsafe(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${RM_APP_PASSWORD}'`);
+  await adminExec(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${RM_APP_PASSWORD}'`);
 });
 
 afterAll(() => {
@@ -637,7 +638,7 @@ async function withRealBootstrap(
 
 /** rm_app's login to the named database. */
 function appUrl(name: string): string {
-  const url = new URL(config.databaseUrl);
+  const url = new URL(adminUrl());
   url.pathname = `/${name}`;
   url.username = "rm_app";
   url.password = RM_APP_PASSWORD;
@@ -830,6 +831,17 @@ describe("the real snapshot (backend/schema/) — fingerprint, preflight, bootst
       // the test files' fixtures.
       expect(sites.some((s) => s.role === "rm_app" && s.callers.some((c) => c.startsWith("src/api/")))).toBe(true);
       expect(sites.filter((s) => s.site.startsWith("tests/"))).toEqual([]);
+
+      // The epoch lifecycle and the stream's log (src/swarm/epoch.ts, W6 P2) are
+      // in that registry, so check 2 tested rm_app's grants against the real
+      // snapshot for every table they touch. Non-vacuous: the sites are named,
+      // and the tables the lifecycle writes are among them.
+      const epochSites = sites.filter((s) => s.site.startsWith("src/swarm/epoch:"));
+      expect(epochSites.length).toBeGreaterThanOrEqual(25);
+      const epochObjects = new Set(epochSites.map((s) => s.object));
+      for (const object of ["swarm_sessions", "swarm_session_members", "swarm_briefs", "swarm_stream_head", "swarm_stream_events"]) {
+        expect(epochObjects.has(object), object).toBe(true);
+      }
 
       // RECORDED, NOT HIDDEN: check 6 had no subject to check. The bootstrap
       // data seeds no subject, so on a blank database check 6 passes because
@@ -1040,7 +1052,7 @@ describe("the real snapshot (backend/schema/) — fingerprint, preflight, bootst
       // inserts its own as final, in its own transaction, on its own
       // connection. The partial unique index serializes them: whichever commits
       // second meets the first's final row and is refused.
-      const url = new URL(config.databaseUrl);
+      const url = new URL(adminUrl());
       url.pathname = `/${(await owner`SELECT current_database() AS db`)[0]!.db}`;
       url.username = "rm_app";
       url.password = RM_APP_PASSWORD;

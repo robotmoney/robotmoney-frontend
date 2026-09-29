@@ -18,13 +18,17 @@
 import { describe, expect, test } from "bun:test";
 import {
   on,
+  onStatement,
   registerQuery,
+  registerStatement,
   registeredSites,
+  registeredStatements,
   requiredPrivileges,
   type ProbeParam,
   type QueryDeclaration,
   type RegistryDb,
   type RmRole,
+  type StatementDeclaration,
 } from "../src/db/registry.ts";
 
 /** The four roles of spec §3. There is no `rm_migrator` (D46/D47) and `doadmin`
@@ -354,5 +358,84 @@ describe("probe — the runnable statement tests/db-registry-execution.test.ts e
     registerQuery(declaration({ site: id, probe: probe("SELECT id FROM jobs") }));
     expect(() => registerQuery(declaration({ site: id, probe: probe("SELECT kind FROM jobs") }))).toThrow(id);
     expect(() => registerQuery(declaration({ site: id }))).toThrow(id);
+  });
+});
+
+describe("registerStatement — the object-less kind (D55 (13)), a closed list of shapes", () => {
+  const statement = (over: Partial<StatementDeclaration> = {}): StatementDeclaration => ({
+    role: "rm_app",
+    shape: "clockText",
+    site: site("statement"),
+    purpose: "Fixture object-less declaration.",
+    callers: ["src/api/routes/fixture"],
+    ...over,
+  });
+
+  /** A handle that records the statement text it was asked to run. */
+  const recorder = (): { db: RegistryDb; ran: string[] } => {
+    const ran: string[] = [];
+    const db = ((strings: TemplateStringsArray) => {
+      ran.push(strings.join("?"));
+      return Promise.resolve(Object.assign([], { count: 0 }));
+    }) as unknown as RegistryDb;
+    return { db, ran };
+  };
+
+  test("carries a role and its declaration back, and is enumerable apart from queries", () => {
+    const decl = statement({ role: "rm_worker" });
+    const registered = registerStatement(decl);
+    expect(registered.declaration).toEqual(decl);
+    expect(registeredStatements().some((d) => d.site === decl.site)).toBe(true);
+    // It names no relation, so it is not in the fold check 2 reads.
+    expect(registeredSites().some((d) => d.site === decl.site)).toBe(false);
+  });
+
+  test("refuses a shape that is not on the closed list", () => {
+    const bad = statement({ shape: "readJobs" as unknown as StatementDeclaration["shape"] });
+    expect(() => registerStatement(bad)).toThrow("closed object-less list");
+  });
+
+  test("runs a template that equals its shape, whitespace aside", async () => {
+    const { db, ran } = recorder();
+    const registered = registerStatement(statement({ shape: "clockTimestamp" }));
+    await onStatement(db, registered)`SELECT   clock_timestamp()
+      AS at`;
+    expect(ran).toHaveLength(1);
+  });
+
+  test("refuses a template that names a relation, or differs from the shape in any way", () => {
+    const { db, ran } = recorder();
+    const registered = registerStatement(statement({ shape: "clockText" }));
+    expect(() => onStatement(db, registered)`SELECT clock_timestamp()::text AS at FROM jobs`).toThrow("not its shape");
+    expect(() => onStatement(db, registered)`SELECT clock_timestamp() AS at`).toThrow("not its shape");
+    expect(() => onStatement(db, registered)`SELECT ${1}::text AS at`).toThrow("not its shape");
+    expect(ran).toEqual([]);
+  });
+
+  test("refuses a forged registration object", () => {
+    const { db } = recorder();
+    const forged = { declaration: statement({ site: site("forged") }) };
+    expect(() => onStatement(db, forged)).toThrow("unregistered");
+  });
+
+  test("shares one site-id namespace with queries, in both directions", () => {
+    const id = site("shared_id");
+    registerQuery(declaration({ site: id }));
+    expect(() => registerStatement(statement({ site: id }))).toThrow("already registered as a query");
+    const other = site("shared_id_2");
+    registerStatement(statement({ site: other }));
+    expect(() => registerQuery(declaration({ site: other }))).toThrow("already registered as an object-less statement");
+  });
+
+  test("refuses callers that are not module ids, like a query does", () => {
+    expect(() => registerStatement(statement({ callers: [] }))).toThrow("no callers");
+    expect(() => registerStatement(statement({ callers: ["not a module"] }))).toThrow("caller");
+  });
+
+  test("a different re-registration of one site is refused, an identical one is not", () => {
+    const decl = statement({ site: site("re") });
+    const first = registerStatement(decl);
+    expect(registerStatement({ ...decl })).toBe(first);
+    expect(() => registerStatement({ ...decl, role: "rm_worker" })).toThrow("different declaration");
   });
 });

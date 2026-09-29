@@ -40,39 +40,38 @@ import { APPEND_ONLY_TABLES as POSTFLIGHT_ROSTER } from "../scripts/upgrades/0.2
 import { findDenylistViolations, RUNTIME_DELETE_REVOKED_TABLES } from "../src/db/preflight.ts";
 import { loadSnapshot } from "../src/db/schema-snapshot.ts";
 import { MIN_RETENTION_DAYS, runPrune } from "../scripts/prune.ts";
-import { restoreRoles, saveRoles, type SavedRole } from "./fixtures/releases/release-fixture.ts";
+import { adminExec, ROLE_PASSWORD } from "./support/cluster.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject } from "./support/epoch-fixtures.ts";
 import { withTargetLock } from "./support/target-lock.ts";
 
 useCleanDatabase(import.meta.file);
 
-const PASSWORD = `rm_stream_retention_${crypto.randomUUID().slice(0, 8)}`;
+const PASSWORD = ROLE_PASSWORD();
 const RUNTIME = ["rm_app", "rm_worker"] as const;
 type Runtime = (typeof RUNTIME)[number];
 const logins = new Map<Runtime, postgres.Sql<{}>>();
 /** A real rm_owner login, the one `bun run prune` opens with the typed password. */
 let owner: postgres.Sql<{}>;
-/** The four roles as this file found them: cluster-wide, so put back exactly. */
-let savedRoles: SavedRole[] = [];
 let databaseUrl = "";
 
 beforeAll(async () => {
-  // rm_owner, rm_app and rm_worker are cluster-wide and backend `bun test` runs
-  // every file in one process: record their LOGIN attribute and stored password
-  // and put back exactly those (rule (j): no pass may depend on file order).
-  savedRoles = await saveRoles(sql as unknown as postgres.Sql<{}>);
+  // The four roles hold a login and the suite's shared password
+  // (tests/preload.ts provisions them as the provider does). An earlier file may
+  // have left one of them otherwise, so assert the baseline first; this file
+  // then logs in as each of them and leaves the cluster as the suite expects it.
+  for (const role of ["rm_app", "rm_worker", "rm_owner"]) {
+    await adminExec(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${PASSWORD}'`);
+  }
   const [{ db }] = (await sql`SELECT current_database() AS db`) as unknown as { db: string }[];
   const url = new URL(process.env.DATABASE_URL!);
   url.pathname = `/${db}`;
   databaseUrl = url.toString();
   for (const role of RUNTIME) {
-    await sql.unsafe(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${PASSWORD}'`);
     url.username = role;
     url.password = PASSWORD;
     logins.set(role, postgres(url.toString(), { max: 1, onnotice: () => {} }));
   }
-  await sql.unsafe(`ALTER ROLE rm_owner LOGIN PASSWORD '${PASSWORD}'`);
   url.username = "rm_owner";
   url.password = PASSWORD;
   owner = postgres(url.toString(), { max: 1, onnotice: () => {} });
@@ -81,7 +80,6 @@ beforeAll(async () => {
 afterAll(async () => {
   for (const login of logins.values()) await login.end({ timeout: 5 });
   await owner?.end({ timeout: 5 });
-  await restoreRoles(sql as unknown as postgres.Sql<{}>, savedRoles);
 });
 
 async function sqlstate(db: postgres.Sql<{}>, statement: string): Promise<string | null> {

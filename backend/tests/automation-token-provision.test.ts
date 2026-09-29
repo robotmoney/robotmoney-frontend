@@ -32,6 +32,7 @@ import { acquireTargetLock, readTargetState, withMutationFence } from "../src/db
 import { hashKey } from "../src/lib/keys.ts";
 import { provisionServiceTokens } from "../scripts/provision-tokens.ts";
 import { instancePaths, SERVICE_TOKEN_HOLDERS } from "../../scripts/lib/smoke-state.ts";
+import { adminExec, adminUrl, ROLE_PASSWORD } from "./support/cluster.ts";
 
 const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 const READER_PASSWORD = randomBytes(18).toString("base64url");
@@ -40,7 +41,7 @@ let readerCanLogin = true;
 const roots: string[] = [];
 
 function urlFor(database: string, role?: { name: string; password: string }): string {
-  const url = new URL(config.databaseUrl);
+  const url = new URL(adminUrl());
   url.pathname = `/${database}`;
   if (role) {
     url.username = role.name;
@@ -55,13 +56,13 @@ beforeAll(async () => {
     SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname IN ('rm_owner', 'rm_readonly')`;
   ownerCanLogin = rows.find((r) => r.rolname === "rm_owner")?.rolcanlogin ?? true;
   readerCanLogin = rows.find((r) => r.rolname === "rm_readonly")?.rolcanlogin ?? true;
-  await sql.unsafe(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
-  await sql.unsafe(`ALTER ROLE rm_readonly LOGIN PASSWORD '${READER_PASSWORD}'`);
+  await adminExec(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
+  await adminExec(`ALTER ROLE rm_readonly LOGIN PASSWORD '${READER_PASSWORD}'`);
 });
 
 afterAll(async () => {
-  await sql.unsafe(`ALTER ROLE rm_owner ${ownerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD NULL`);
-  await sql.unsafe(`ALTER ROLE rm_readonly ${readerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD NULL`);
+  await adminExec(`ALTER ROLE rm_owner ${ownerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD '${ROLE_PASSWORD()}'`);
+  await adminExec(`ALTER ROLE rm_readonly ${readerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD '${ROLE_PASSWORD()}'`);
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
@@ -232,7 +233,7 @@ describe("provisioning is a fenced mutation — a competitor's fence holds it un
 
 describe("the direct-run form `bun smoke` starts", () => {
   async function runChild(database: string, root: string, instance: string, lock: { backendPid: number; holder: unknown }) {
-    const url = new URL(config.databaseUrl);
+    const url = new URL(adminUrl());
     const resultFile = join(root, instance, "provision-result.json");
     const request = {
       instance,

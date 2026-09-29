@@ -20,6 +20,7 @@ import {
   runPreflightMain,
   urlFromDiscreteEnv,
 } from "../scripts/lib/preflight-utils.ts";
+import { adminUrl } from "./support/cluster.ts";
 
 describe("redactedTarget — the only form of the target safe to print", () => {
   test("undefined -> the caller-supplied unset message, never a blank/misleading string", () => {
@@ -148,7 +149,7 @@ describe("gateReadOnly — PASS/BLOCKED paths for real, against live Postgres ro
   let dbUrl: URL;
 
   beforeAll(async () => {
-    const sql = postgres(process.env.DATABASE_URL as string);
+    const sql = postgres(adminUrl());
     await sql`DROP ROLE IF EXISTS rm_readonly_test`;
     await sql`DROP ROLE IF EXISTS rm_writer_test`;
     await sql`CREATE ROLE rm_readonly_test LOGIN PASSWORD 'testpass'`;
@@ -160,7 +161,7 @@ describe("gateReadOnly — PASS/BLOCKED paths for real, against live Postgres ro
     await sql`GRANT USAGE ON SCHEMA public TO rm_writer_test`;
     await sql`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO rm_writer_test`;
     await sql.end();
-    dbUrl = new URL(process.env.DATABASE_URL as string);
+    dbUrl = new URL(adminUrl());
   });
 
   afterAll(() => {

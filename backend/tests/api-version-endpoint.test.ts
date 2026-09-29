@@ -208,6 +208,7 @@ describe("the handler module imports no database or config module", () => {
     const healthBranch = body.indexOf("pathname === ROUTES.health");
     expect(versionBranch).toBeGreaterThan(0);
     expect(versionBranch).toBeLessThan(healthBranch);
-    expect(body.indexOf("sql`")).toBeGreaterThan(versionBranch);
+    // The first database-touching branch is /health, whose check is `databaseAnswers()` (src/db/connection-check.ts).
+    expect(body.indexOf("databaseAnswers(")).toBeGreaterThan(versionBranch);
   });
 });

@@ -28,8 +28,9 @@ import { type CheckResult, createChecker } from "../scripts/lib/checks.ts";
 import type { Db } from "../scripts/lib/preflight-utils.ts";
 import { NEW_RELEASE_TABLES_BY_MIGRATION, PRIOR_RELEASE_MIGRATIONS, RELEASE_MIGRATIONS } from "../scripts/upgrades/0.4.0-to-0.5.0/release.ts";
 import { runChecks } from "../scripts/upgrades/0.4.0-to-0.5.0/preflight.ts";
+import { adminUrl } from "./support/cluster.ts";
 
-const ADMIN_URL = process.env.DATABASE_URL!;
+const ADMIN_URL = adminUrl();
 const V4_TABLES = ["swarm_judge_config", "swarm_session_judgements", "swarm_consensus_receipts"];
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 

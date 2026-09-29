@@ -12,6 +12,7 @@ import { test, expect, beforeAll, afterAll } from "bun:test";
 import postgres from "postgres";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { adminExec, adminUrl } from "./support/cluster.ts";
 
 // Own database per file, cloned from the migrated template (support/clean-db.ts).
 useCleanDatabase(import.meta.file);
@@ -24,8 +25,8 @@ beforeAll(async () => {
   // deliberately ships NO password — an operator sets one out-of-band; CI is
   // that operator here) and connect exactly as a deployed worker would via
   // WORKER_DATABASE_URL.
-  await sql.unsafe(`ALTER ROLE rm_worker WITH LOGIN PASSWORD '${WORKER_PASSWORD}'`);
-  const url = new URL(process.env.DATABASE_URL!);
+  await adminExec(`ALTER ROLE rm_worker WITH LOGIN PASSWORD '${WORKER_PASSWORD}'`);
+  const url = new URL(adminUrl());
   url.username = "rm_worker";
   url.password = WORKER_PASSWORD;
   process.env.WORKER_DATABASE_URL = url.toString();

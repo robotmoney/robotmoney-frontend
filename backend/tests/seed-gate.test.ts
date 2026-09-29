@@ -24,13 +24,14 @@ import { sql } from "../src/db/client.ts";
 import { assertSeedable, seedDemo } from "../src/db/seed.ts";
 import { bootstrapBlankDatabase, bootstrapRowCounts, loadSnapshot, populatedTables } from "../src/db/schema-snapshot.ts";
 import { withMutationFence } from "../src/db/target-lock.ts";
+import { adminExec, adminUrl, ROLE_PASSWORD } from "./support/cluster.ts";
 
 const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 const OWNER = { name: "rm_owner", password: OWNER_PASSWORD };
 let ownerCanLogin = true;
 
 function urlFor(database: string, role?: { name: string; password: string }): string {
-  const url = new URL(config.databaseUrl);
+  const url = new URL(adminUrl());
   url.pathname = `/${database}`;
   if (role) {
     url.username = role.name;
@@ -46,11 +47,11 @@ function connect(database: string, role?: { name: string; password: string }): p
 beforeAll(async () => {
   const [row] = await sql<{ rolcanlogin: boolean }[]>`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`;
   ownerCanLogin = row?.rolcanlogin ?? true;
-  await sql.unsafe(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
+  await adminExec(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
 });
 
 afterAll(async () => {
-  await sql.unsafe(`ALTER ROLE rm_owner ${ownerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD NULL`);
+  await adminExec(`ALTER ROLE rm_owner ${ownerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD '${ROLE_PASSWORD()}'`);
 });
 
 /** A database of its own: bootstrapped from the snapshot (blank), or a clone of the migrated, seeded template (populated). */
@@ -61,7 +62,7 @@ async function withDatabase(
   const name = `rm_seed_gate_${shape}_${randomBytes(4).toString("hex")}`;
   const maintenance = connect("postgres");
   if (shape === "snapshot") await maintenance.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
-  else await maintenance.unsafe(`CREATE DATABASE ${name} TEMPLATE "${process.env.RM_TEST_TEMPLATE_DB}"`);
+  else await maintenance.unsafe(`CREATE DATABASE ${name} OWNER rm_owner TEMPLATE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}"`);
   const admin = connect(name);
   try {
     if (shape === "snapshot") {

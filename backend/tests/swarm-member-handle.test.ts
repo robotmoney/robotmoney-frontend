@@ -32,6 +32,7 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
+import { adminExec } from "./support/cluster.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
 import { provisionOperatorToken } from "./support/automation-auth.ts";
@@ -477,10 +478,14 @@ test("POST /api/swarm/register: the same conflict, answered the same way — ON 
 async function waitUntilBlockedOn(fragment: string, whatItProves: string): Promise<void> {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    const [row] = await sql<{ n: number }[]>`
-      SELECT count(*)::int AS n FROM pg_stat_activity
-      WHERE wait_event_type = 'Lock' AND query ILIKE ${`%${fragment}%`}`;
-    if ((row?.n ?? 0) > 0) return;
+    // The cluster admin reads pg_stat_activity: another session's statement text
+    // is visible only to a superuser or to that session's own login, and the
+    // blocked create runs on the pool's login under a different session role.
+    const [row] = await adminExec(
+      `SELECT count(*)::int AS n FROM pg_stat_activity
+        WHERE wait_event_type = 'Lock' AND query ILIKE '${`%${fragment}%`.replace(/'/g, "''")}'`,
+    );
+    if (Number(row?.n ?? 0) > 0) return;
     await new Promise((r) => setTimeout(r, 25));
   }
   throw new Error(

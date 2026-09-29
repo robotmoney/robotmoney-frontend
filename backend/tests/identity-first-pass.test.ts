@@ -45,7 +45,7 @@ import { randomBytes } from "node:crypto";
 import { readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
-import { config } from "../src/config.ts";
+import { adminUrl } from "./support/cluster.ts";
 import { applyIdentityFirst, IDENTITY_MIGRATION, readPreIdentityLedger, runMigrate } from "../scripts/migrate-run.ts";
 import type { MigrateJournalFile } from "../scripts/migrate-journal.ts";
 import { readManifest } from "../src/db/schema-manifest.ts";
@@ -81,7 +81,7 @@ const LOWER_SIX = [
   "0062_rm_worker_analytics_ledger_read_grant.sql",
 ];
 
-const LOGIN = new URL(config.databaseUrl).username;
+const LOGIN = new URL(adminUrl()).username;
 const OWNER_PASSWORD = randomBytes(18).toString("base64url");
 const READONLY_PASSWORD = randomBytes(12).toString("hex");
 const suffix = randomBytes(4).toString("hex");
@@ -91,7 +91,7 @@ const created: string[] = [TEMPLATE, V050_TEMPLATE];
 const homes: string[] = [];
 
 function urlFor(database: string, role?: { name: string; password: string }): URL {
-  const url = new URL(config.databaseUrl);
+  const url = new URL(adminUrl());
   url.pathname = `/${database}`;
   if (role) {
     url.username = role.name;

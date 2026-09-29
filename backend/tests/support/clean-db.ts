@@ -41,11 +41,17 @@ import { afterAll, beforeAll, beforeEach } from "bun:test";
 // destructuring freezes the view at the old pool.
 import * as client from "../../src/db/client.ts";
 import * as workerClient from "../../src/db/worker-client.ts";
-import postgres from "postgres";
+import { adminConnection } from "./cluster.ts";
 
-// Captured at import, before any file has swapped the pool.
+// Captured at import, before any file has swapped the pool. Each pool keeps ITS
+// OWN login: the api pool is the shared database's api login, the queue pool is
+// `rm_worker` (tests/preload.ts), so a clone is reached as the same two roles.
 const baseUrl = required("DATABASE_URL");
-const template = required("RM_TEST_TEMPLATE_DB");
+const workerBaseUrl = required("WORKER_DATABASE_URL");
+// Two templates: the snapshot bootstrap `rm_owner` provisioned (the default), and
+// the migration-built one (tests/preload.ts step 4) for the files about history.
+const templates = { snapshot: required("RM_TEST_TEMPLATE_DB"), migrated: required("RM_TEST_MIGRATED_TEMPLATE_DB") } as const;
+export type CleanDatabaseOptions = { readonly migrationBuilt?: boolean };
 
 function required(key: string): string {
   const value = process.env[key];
@@ -56,8 +62,8 @@ function required(key: string): string {
   return value;
 }
 
-function urlFor(database: string): string {
-  const url = new URL(baseUrl);
+function urlFor(database: string, base: string = baseUrl): string {
+  const url = new URL(base);
   url.pathname = `/${database}`;
   return url.toString();
 }
@@ -85,12 +91,10 @@ function databaseName(testFile: string): string {
 // at a time — at most one clone is ever live.
 let live: string | null = null;
 
-// A throwaway maintenance connection: CREATE/DROP DATABASE cannot run on the
-// shared pool's own database, and must not run through it either.
-function adminConnection() {
-  return postgres(urlFor("postgres"), { max: 1, onnotice: () => {} });
-}
-
+// The maintenance connection is the cluster's superuser (tests/support/
+// cluster.ts), and this is the one thing it is for here: CREATE/DROP DATABASE
+// cannot run on the shared pool's own database, and no runtime role holds
+// CREATEDB.
 async function drop(admin: ReturnType<typeof adminConnection>, database: string): Promise<void> {
   // WITH (FORCE) rather than a bare DROP: a handle that outlived its file (a
   // worker loop, a client built at call time) would otherwise hold the database
@@ -118,14 +122,17 @@ async function assertBothPoolsAgree(expected: string): Promise<void> {
   }
 }
 
-async function cloneAndUse(testFile: string): Promise<void> {
+async function cloneAndUse(testFile: string, options: CleanDatabaseOptions = {}): Promise<void> {
+  const template = options.migrationBuilt ? templates.migrated : templates.snapshot;
   const database = databaseName(testFile);
   const previous = live;
   const admin = adminConnection();
   try {
     // Nothing may be connected to the template during the copy. Only preload.ts
     // ever connects to it, and it disconnected before handing the template over.
-    await admin.unsafe(`CREATE DATABASE "${database}" TEMPLATE "${template}"`);
+    // OWNER rm_owner: the template's objects are rm_owner's, and the database's
+    // `public` schema must be too, or the owner could not create in it.
+    await admin.unsafe(`CREATE DATABASE "${database}" TEMPLATE "${template}" OWNER rm_owner`);
     // Recorded the INSTANT it exists, before anything that can throw. `live` is
     // the only handle this module keeps on a clone, so a setDatabase() rejection
     // between CREATE and the old assignment site used to strand this database
@@ -135,7 +142,7 @@ async function cloneAndUse(testFile: string): Promise<void> {
     live = database;
     try {
       await client.setDatabase(urlFor(database));
-      await workerClient.setDatabase(urlFor(database));
+      await workerClient.setDatabase(urlFor(database, workerBaseUrl));
       await assertBothPoolsAgree(database);
     } finally {
       // In `finally`, not after the assertion: the previous clone is idle either
@@ -162,7 +169,7 @@ async function restoreSharedDatabase(): Promise<void> {
     // rethrow rather than short-circuit, so one failing swap cannot decide that
     // the other never happens.
     const failures: unknown[] = [];
-    for (const swap of [() => client.setDatabase(baseUrl), () => workerClient.setDatabase(baseUrl)]) {
+    for (const swap of [() => client.setDatabase(baseUrl), () => workerClient.setDatabase(workerBaseUrl)]) {
       try {
         await swap();
       } catch (err) {
@@ -199,8 +206,8 @@ async function restoreSharedDatabase(): Promise<void> {
  * The argument is only used to name the database, so a leaked or wedged one is
  * attributable to the file that made it.
  */
-export function useCleanDatabase(testFile: string): void {
-  beforeAll(() => cloneAndUse(testFile));
+export function useCleanDatabase(testFile: string, options: CleanDatabaseOptions = {}): void {
+  beforeAll(() => cloneAndUse(testFile, options));
   afterAll(restoreSharedDatabase);
 }
 
@@ -218,7 +225,7 @@ export function useCleanDatabase(testFile: string): void {
  * genuinely is not enough. A file using this must not do database setup in its
  * own `beforeAll` — the next clone would discard it.
  */
-export function useCleanDatabasePerTest(testFile: string): void {
-  beforeEach(() => cloneAndUse(testFile));
+export function useCleanDatabasePerTest(testFile: string, options: CleanDatabaseOptions = {}): void {
+  beforeEach(() => cloneAndUse(testFile, options));
   afterAll(restoreSharedDatabase);
 }

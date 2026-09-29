@@ -4,7 +4,8 @@
 // and /health here so a single-box deployment still presents as one origin.
 import { ROUTES } from "@robotmoney/contract";
 import { config, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured } from "../config.ts";
-import { isDatabaseUnavailable, sql } from "../db/client.ts";
+import { isDatabaseUnavailable } from "../db/client.ts";
+import { databaseAnswers } from "../db/connection-check.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
 import { buildIdentityJson } from "../ops/build-identity.ts";
@@ -196,7 +197,7 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname === ROUTES.health) {
       let db = "down";
-      try { await sql`SELECT 1`; db = "up"; } catch { db = "down"; }
+      db = (await databaseAnswers()) ? "up" : "down";
       // handle_namespace reports what the BOOT guard concluded, so an
       // "unchecked" boot (database unqueryable through the guard's budget) or
       // an overridden one is machine-readable and not merely a log line that

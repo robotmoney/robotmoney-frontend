@@ -269,6 +269,9 @@ export function registerQuery(declaration: QueryDeclaration): RegisteredQuery {
   }
 
   const frozen = freezeDeclaration(declaration);
+  if (statementBySite.has(frozen.site)) {
+    throw new Error(`registry: site id ${frozen.site} is already registered as an object-less statement (D55 (13)).`);
+  }
   const existing = bySite.get(frozen.site);
   if (existing) {
     if (!sameDeclaration(existing.declaration, frozen)) {
@@ -378,7 +381,7 @@ function assertValidObject(declaration: QueryDeclaration): void {
  *  operator CLI under `scripts/`, which is an entry module in its own right. */
 const MODULE_ID = /^(?:src|scripts)\/[a-z0-9_-]+(?:\/[a-z0-9_-]+)*$/;
 
-function assertValidCallers(declaration: QueryDeclaration): void {
+function assertValidCallers(declaration: { readonly site: string; readonly callers: readonly string[] }): void {
   const callers = declaration.callers as readonly unknown[] | undefined;
   if (!Array.isArray(callers) || callers.length === 0) {
     throw new Error(
@@ -473,6 +476,148 @@ function sameDeclaration(a: QueryDeclaration, b: QueryDeclaration): boolean {
 
 function describe(declaration: QueryDeclaration): string {
   return `${declaration.role} ${declaration.privileges.join(",")} ON ${declaration.object}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE OBJECT-LESS STATEMENT KIND (D55 (13))
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Some statements name no relation: a clock read or a session setting. Check 2
+// tests privileges per relation, so such a statement has no
+// `(role, object, privilege)` to declare. Before D55 (13) it either sat on the
+// raw-SQL allowlist or declared a table it never touched, and both weaken the
+// registry: the first hides a statement, the second makes check 2 demand a
+// privilege nothing uses.
+//
+// So they get a kind of their own, and it is a CLOSED one. `OBJECTLESS_SHAPES`
+// is the whole list of statement shapes the kind admits. A statement takes the
+// kind only by equalling one shape exactly (whitespace collapsed, each
+// interpolated value read as `$n`), which `onStatement` checks on every call,
+// so a statement that names a relation, or merely differs from a listed shape,
+// throws before it reaches the database. The list is pinned by equality in
+// tests/db-registry.test.ts, so widening it is a visible edit to two places and
+// a failing test, never one quiet line.
+//
+// A declaration still carries a ROLE, a site id, a purpose and its entry
+// callers: which program may issue the statement is worth saying even when no
+// privilege is at stake. The execution test runs every shape as its declared
+// role, so a role that cannot run it is caught there.
+
+/** The closed list of object-less statement shapes, by name. Values are `$n`. */
+export const OBJECTLESS_SHAPES = Object.freeze({
+  /** The database clock as lossless text (scheduler spec §4.2: one present per transaction). */
+  clockText: "SELECT clock_timestamp()::text AS at",
+  /** The database clock as a timestamp, read at the moment of a comparison or a write. */
+  clockTimestamp: "SELECT clock_timestamp() AS at",
+  /** A connection check: does the pool still answer (the api's /health `db` field)? */
+  connectionCheck: "SELECT 1",
+  /** The one lock protocol for every writer of a wallet snapshot date (ops/wallet-snapshot-manifest.ts). */
+  walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
+  /** The snapshot the scheduler's full read takes (scheduler spec §3). */
+  snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
+} as const);
+
+export type ObjectlessShape = keyof typeof OBJECTLESS_SHAPES;
+
+export interface StatementDeclaration {
+  /** The role the program issuing this statement authenticates as. */
+  readonly role: RmRole;
+  /** A key of `OBJECTLESS_SHAPES`: the one statement text this site may issue. */
+  readonly shape: ObjectlessShape;
+  /** Stable identifier, `<module>:<function>`, unique across queries and statements. */
+  readonly site: string;
+  /** One sentence on what the statement is for. */
+  readonly purpose: string;
+  /** Entry modules through which the statement is reached, as for `QueryDeclaration.callers`. */
+  readonly callers: readonly string[];
+}
+
+/** What `registerStatement` hands back; only `onStatement` can run it. */
+export interface RegisteredStatement {
+  readonly declaration: StatementDeclaration;
+}
+
+const statementOrder: StatementDeclaration[] = [];
+const statementBySite = new Map<string, RegisteredStatement>();
+
+const collapse = (text: string): string => text.replace(/\s+/g, " ").trim();
+
+/** The text a template issues, each interpolated value read as `$n`. */
+function templateText(strings: readonly string[]): string {
+  return collapse(strings.reduce((text, part, index) => (index === 0 ? part : `${text}$${index}${part}`), ""));
+}
+
+/**
+ * Register one object-less call site. Refusals throw at registration, like
+ * `registerQuery`'s: an unknown shape, a site id already taken (by a query or
+ * a different statement), or callers that are not module ids.
+ */
+export function registerStatement(declaration: StatementDeclaration): RegisteredStatement {
+  if (!Object.hasOwn(OBJECTLESS_SHAPES, declaration.shape)) {
+    throw new Error(
+      `registry: statement site ${declaration.site} named shape ${JSON.stringify(declaration.shape)}, which is not on ` +
+        "the closed object-less list (D55 (13)) — a statement that names a relation is a query, not a statement.",
+    );
+  }
+  assertValidCallers({ site: declaration.site, callers: declaration.callers });
+  const frozen: StatementDeclaration = Object.freeze({
+    role: declaration.role,
+    shape: declaration.shape,
+    site: declaration.site,
+    purpose: declaration.purpose,
+    callers: Object.freeze([...declaration.callers]),
+  });
+  if (bySite.has(frozen.site)) {
+    throw new Error(`registry: site id ${frozen.site} is already registered as a query (D55 (13)).`);
+  }
+  const existing = statementBySite.get(frozen.site);
+  if (existing) {
+    const a = existing.declaration;
+    if (a.role !== frozen.role || a.shape !== frozen.shape || a.purpose !== frozen.purpose || !sameList(a.callers, frozen.callers)) {
+      throw new Error(`registry: site id ${frozen.site} is already registered with a different declaration (D55 (13)).`);
+    }
+    return existing;
+  }
+  const registered: RegisteredStatement = Object.freeze({ declaration: frozen });
+  statementBySite.set(frozen.site, registered);
+  statementOrder.push(frozen);
+  return registered;
+}
+
+/**
+ * Issue a registered object-less statement as a tag:
+ *
+ *   const [row] = await onStatement(tx, clockText)<{ at: string }>`SELECT clock_timestamp()::text AS at`;
+ *
+ * The template must equal the site's shape exactly, or nothing runs. This is
+ * the runtime half of "a statement matches only when it equals one listed
+ * shape exactly": the lint sees a tag that is a call of this function, and this
+ * function refuses any text that is not the shape.
+ */
+export function onStatement(db: RegistryDb, statement: RegisteredStatement) {
+  const site = (statement as Partial<RegisteredStatement> | undefined)?.declaration?.site;
+  if (typeof site !== "string" || statementBySite.get(site) !== statement) {
+    throw new Error(
+      `registry: onStatement() was handed an unregistered site (${JSON.stringify(site)}) — ` +
+        "only the value registerStatement returned may issue a statement (D55 (13)).",
+    );
+  }
+  const shape = OBJECTLESS_SHAPES[statement.declaration.shape];
+  return <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: readonly unknown[]): Promise<RegistryRows<T>> => {
+    const text = templateText(strings);
+    if (text !== shape) {
+      throw new Error(
+        `registry: site ${site} issued ${JSON.stringify(text)}, which is not its shape ${JSON.stringify(shape)} ` +
+          "— an object-less statement equals a listed shape exactly (D55 (13)).",
+      );
+    }
+    return (db as unknown as (s: TemplateStringsArray, ...v: readonly unknown[]) => Promise<RegistryRows<T>>)(strings, ...values);
+  };
+}
+
+/** Every object-less declaration registered in this process, in registration order. */
+export function registeredStatements(): readonly StatementDeclaration[] {
+  return Object.freeze([...statementOrder]);
 }
 
 /**
