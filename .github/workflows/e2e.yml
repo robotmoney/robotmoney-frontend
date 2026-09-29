@@ -413,6 +413,59 @@ jobs:
           # than the retired hermetic boot was — an accepted, deliberate
           # consequence of issue #147/#163, not a bug in this workflow.
           #
+          # ONBOARDING_REAL_EVAL is set on the "CI scenario checks" step below: the
+          # boot stops at readiness and no longer reads it.
+          # The swarm session always requires live authoring. On an
+          # untrusted fork GitHub supplies an empty secret and the session fails
+          # loudly instead of fabricating a template take.
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+        # 40 min for the pre-existing checks + headroom for the onboarding eval
+        # on the runs that spend one (the nightly schedule mirror, a
+        # `real-eval`-labelled PR, a dispatch with real_eval=true — issue #289;
+        # a plain push to main no longer spends one, issue #803; an ordinary PR
+        # run stops well short of this ceiling because no eval runs there; the
+        # ceiling is not split per event, so every eval-spending path keeps the
+        # same headroom). Headroom is DERIVED, not guessed: DEFAULT_TIMEOUT_MS is 30
+        # minutes per admission attempt (raised from 20 on measurement — see
+        # onboarding-eval.ts's comment: a real admission took 1183s) and
+        # runOnboardingEvalWithRetry allows 2 attempts with a 45s backoff, so
+        # the eval's own worst case is ~61 min. 40 + 61 ≈ 101, rounded to 105.
+        # Raising DEFAULT_TIMEOUT_MS without raising this would just move the
+        # truncation from the eval to the job, which reports as an infra kill
+        # rather than the honest `timed-out` outcome.
+        timeout-minutes: 105
+      # Lifecycle e2e (issue #1026, smoke spec §10 W1/W3, scheduler spec §10): the
+      # stack the boot above left running is checked for the real scheduler, one
+      # collecting session per active subject, an agent and a judge running as
+      # containers under `restart: unless-stopped`, and ONE turnover after one
+      # short epoch (the first session published, the second collecting). It then
+      # removes the scheduler's token file and stops its container to see the
+      # failures name it, and leaves the stack up (`--keep`) for the checks step
+      # below. Fixture keys only: test-fixtures/smoke. The boot above passes the fixture credential file, so
+      # it stops at readiness (no host-side session driver: the standing
+      # participants and the scheduler own the sessions) and leaves the stack up.
+      - name: Lifecycle e2e (scheduler, participants, one turnover)
+        run: bun --no-env-file scripts/smoke-e2e.ts --attached --keep
+        env:
+          CI: "true"
+          RM_ENV: stage
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+        timeout-minutes: 30
+      # CI scenario checks (issue #1026): what the boot used to run itself before
+      # a credential file made it stop at readiness. Against the stack the
+      # lifecycle step left up (`--keep`): the swarm session driver (two live
+      # sessions, the cross-role denials), the starter agent, the frontend and
+      # browser checks, the live steady-state and verify-live assertions, and the
+      # opt-in real-inference onboarding sweep. Its own step, so the documented
+      # boot and the lifecycle verdict stay as they are. The smoke:down step below
+      # ends the stack whatever this step did.
+      - name: CI scenario checks (session, starter agent, browser, live-smoke, verify-live, onboarding sweep)
+        run: bun --no-env-file scripts/smoke-ci-checks.ts
+        env:
+          CI: "true"
+          RM_ENV: stage
           # Stage 7 (§11 R8) + issue #289: the onboarding eval is OFF by default
           # on pull requests and opt-in per PR; issue #803 also took it OFF a
           # plain push to main. ONBOARDING_REAL_EVAL below resolves to "1" for
@@ -447,44 +500,12 @@ jobs:
           # byte-identical, which
           # scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts asserts.
           ONBOARDING_REAL_EVAL: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && '1' || '' }}
-          # The swarm session always requires live authoring. On an
-          # untrusted fork GitHub supplies an empty secret and the session fails
-          # loudly instead of fabricating a template take.
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
-        # 40 min for the pre-existing checks + headroom for the onboarding eval
-        # on the runs that spend one (the nightly schedule mirror, a
-        # `real-eval`-labelled PR, a dispatch with real_eval=true — issue #289;
-        # a plain push to main no longer spends one, issue #803; an ordinary PR
-        # run stops well short of this ceiling because no eval runs there; the
-        # ceiling is not split per event, so every eval-spending path keeps the
-        # same headroom). Headroom is DERIVED, not guessed: DEFAULT_TIMEOUT_MS is 30
-        # minutes per admission attempt (raised from 20 on measurement — see
-        # onboarding-eval.ts's comment: a real admission took 1183s) and
-        # runOnboardingEvalWithRetry allows 2 attempts with a 45s backoff, so
-        # the eval's own worst case is ~61 min. 40 + 61 ≈ 101, rounded to 105.
-        # Raising DEFAULT_TIMEOUT_MS without raising this would just move the
-        # truncation from the eval to the job, which reports as an infra kill
-        # rather than the honest `timed-out` outcome.
+        # The checks this step runs took 40 minutes before, plus headroom for the
+        # onboarding eval on the runs that spend one (see the derivation on the
+        # boot step's timeout: about 61 minutes worst case, so 105 in all).
         timeout-minutes: 105
-      # Lifecycle e2e (issue #1026, smoke spec §10 W1/W3, scheduler spec §10): the
-      # stack the boot above left running is checked for the real scheduler, one
-      # collecting session per active subject, an agent and a judge running as
-      # containers under `restart: unless-stopped`, and ONE turnover after one
-      # short epoch (the first session published, the second collecting). It then
-      # removes the scheduler's token file and stops its container to see the
-      # failures name it, and ends with `smoke:down`. Fixture keys only:
-      # test-fixtures/smoke. The boot above passes the fixture credential file, so
-      # it stops at readiness (no host-side session driver: the standing
-      # participants and the scheduler own the sessions) and leaves the stack up.
-      - name: Lifecycle e2e (scheduler, participants, one turnover)
-        run: bun --no-env-file scripts/smoke-e2e.ts --attached
-        env:
-          CI: "true"
-          RM_ENV: stage
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
-        timeout-minutes: 30
       - name: Stop this job's smoke stack (smoke:down)
         if: always()
         run: bun --no-env-file scripts/smoke-down.ts || echo "smoke:down had nothing to stop, or the compose teardown below is the gate"
