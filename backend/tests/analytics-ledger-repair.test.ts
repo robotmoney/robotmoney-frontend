@@ -272,10 +272,7 @@ beforeAll(async () => {
 
   // The deploy (0080 and anything after it), then the one-time repair.
   for (const file of (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql") && f >= MIGRATION).sort()) await applyMigration(file);
-  // This fixture's ledger rows have no raw_indicator_history rows behind them,
-  // so the repair's parity proof does not apply to it;
-  // tests/analytics-ledger-vintage-repair.test.ts runs the repair with it on.
-  await repairLedger(db, { proveRawHistoryParity: false });
+  await repairLedger(db);
 }, 180_000);
 
 afterAll(async () => {

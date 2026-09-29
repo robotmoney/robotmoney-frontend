@@ -333,7 +333,9 @@ beforeAll(async () => {
   // applies them. Then the one-time repair, as the runbook runs it.
   for (const file of files.filter((f) => f >= MIGRATION)) await applyMigrationFile(old, file);
   sizesBefore = await relationSizes(old);
-  await repairLedger(old);
+  const report = await repairLedger(old);
+  // Written by one sequence through both tables, so nothing disagrees.
+  expect(report.rawMismatches.after).toBe(0);
   sizesRepaired = await relationSizes(old);
 }, 180_000);
 

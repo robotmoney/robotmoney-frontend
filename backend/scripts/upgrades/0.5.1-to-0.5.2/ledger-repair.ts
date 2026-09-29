@@ -57,6 +57,8 @@ export interface LedgerRepairReport {
   vintages: number;
   manifestsRewritten: number;
   rawEvents: { replayed: number; dropped: number; rewritten: number; rowsRestored: number };
+  /** raw_indicator_history rows that disagree with the ledger's head. The repair may not ADD one. */
+  rawMismatches: { before: number; after: number; remaining: string[] };
 }
 
 // Thrown to roll a --dry-run back after every step and proof has run.
@@ -305,13 +307,25 @@ async function count(tx: Tx, table: string): Promise<number> {
 export interface LedgerRepairOptions {
   dryRun?: boolean;
   log?: (line: string) => void;
-  /**
-   * TEST SEAM, default true. False only for a fixture that builds ledger rows
-   * with no raw_indicator_history rows behind them, which no real database
-   * has. The command line cannot turn it off.
-   */
-  proveRawHistoryParity?: boolean;
 }
+
+// Every raw_indicator_history row that disagrees with the ledger's head for
+// its point: no head at all, or a value outside the source's tolerance of it
+// (the rule cutover/parity.ts applies). One index probe per raw row, so it
+// costs the same on the old writers' 19M versions as on the repaired ledger.
+const RAW_MISMATCHES = `
+SELECT r.indicator || '|' || r.date::text AS key
+FROM raw_indicator_history r
+LEFT JOIN LATERAL (
+  SELECT s.value FROM source_value_versions s
+  WHERE s.source_key = 'raw_indicator_history:' || r.indicator AND s.market_date = r.date AND s.market_instant IS NULL
+  ORDER BY s.knowledge_time DESC, s.id DESC LIMIT 1
+) h ON true
+WHERE h.value IS NULL
+   OR (r.value <> h.value
+       AND abs(r.value - h.value) > COALESCE(($1::jsonb ->> ('raw_indicator_history:' || r.indicator))::double precision, 0)
+                                    * greatest(abs(r.value), abs(h.value)))
+`;
 
 export async function repairLedger(db: Db, opts: LedgerRepairOptions = {}): Promise<LedgerRepairReport> {
   const log = opts.log ?? (() => {});
@@ -327,7 +341,6 @@ export async function repairLedger(db: Db, opts: LedgerRepairOptions = {}): Prom
   // Imported here, not at the top: store/run-ledger-store.ts pulls in
   // src/db/client.ts, which needs DATABASE_URL set, and main() sets it first.
   const { rebuildVintageManifests } = await import("../../../src/analytics/store/run-ledger-store.ts");
-  const { checkRawIndicatorHistoryParity } = await import("../../../src/analytics/cutover/parity.ts");
   let report: LedgerRepairReport | undefined;
 
   try {
@@ -359,6 +372,14 @@ export async function repairLedger(db: Db, opts: LedgerRepairOptions = {}): Prom
         SELECT vintage_id, sum(COALESCE(last_source_value_version_id - source_value_version_id + 1, 1))::bigint AS members
         FROM analytics_vintage_members GROUP BY vintage_id`);
 
+      const rawTol = Object.fromEntries(
+        Object.entries(SOURCE_TOLERANCES).filter(([k, t]) => k.startsWith(rawIndicatorSourceKey("")) && t.relative > 0).map(([k, t]) => [k, t.relative]),
+      );
+      const rawMismatches = async () =>
+        new Set(((await tx.unsafe(RAW_MISMATCHES, [JSON.stringify(rawTol)])) as unknown as { key: string }[]).map((r) => r.key));
+      const mismatchedBefore = await time("raw history mismatches before", rawMismatches);
+      log(`raw history rows that disagree with the ledger before the repair: ${mismatchedBefore.size}`);
+
       await tx.unsafe(SCRATCH);
       await tx.unsafe(SERIES_FN);
       await tx.unsafe(RAW_FN);
@@ -388,9 +409,6 @@ export async function repairLedger(db: Db, opts: LedgerRepairOptions = {}): Prom
       await time("re-point vintage members", () => tx.unsafe(REPOINT_MEMBERS));
 
       // ── 3. Replay raw_indicator_history's evidence ───────────────────────
-      const rawTol = Object.fromEntries(
-        Object.entries(SOURCE_TOLERANCES).filter(([k, t]) => k.startsWith(rawIndicatorSourceKey("")) && t.relative > 0).map(([k, t]) => [k, t.relative]),
-      );
       const [raw] = (await time("replay raw history evidence", () =>
         tx`SELECT * FROM pg_temp.ledger_repair_raw(${tx.json(rawTol)})`)) as unknown as
         { events: string; dropped: string; rewritten: string; restored: string }[];
@@ -469,16 +487,20 @@ export async function repairLedger(db: Db, opts: LedgerRepairOptions = {}): Prom
       // ── 6. Re-arm, then recompute every vintage's manifest ───────────────
       for (const [table, trigger] of GUARDS) await tx.unsafe(`ALTER TABLE ${table} ENABLE ALWAYS TRIGGER ${trigger}`);
       const manifests = await time("rebuild vintage manifests", () => rebuildVintageManifests(tx));
-      // raw_indicator_history must agree with the ledger's heads. Checked HERE,
-      // under the repair's own locks: after the commit a writer that was
-      // waiting on them lands its ledger rows before its raw rows, and a check
-      // that reads in between judges that writer, not the repair.
-      if (opts.proveRawHistoryParity ?? true) await time("prove raw history parity", async () => {
-        const parity = await checkRawIndicatorHistoryParity(tx);
-        if (!parity.matched) {
-          throw new Error(`raw_indicator_history would not match the ledger: ${JSON.stringify(parity.mismatches)}`);
-        }
-      });
+      // The repair may not make raw_indicator_history disagree with the ledger
+      // anywhere it agreed before. Checked HERE, under the repair's own locks:
+      // after the commit a writer that was waiting on them lands its ledger
+      // rows before its raw rows, and a check that reads in between judges
+      // that writer, not the repair. Rows that ALREADY disagreed are the
+      // database's own history (a run that saved its acquisitions and then
+      // failed to save its floor); they are reported, and the next successful
+      // run reconciles them.
+      const mismatchedAfter = await time("raw history mismatches after", rawMismatches);
+      const introduced = [...mismatchedAfter].filter((k) => !mismatchedBefore.has(k));
+      if (introduced.length > 0) {
+        throw new Error(`the repair would make ${introduced.length} raw_indicator_history row(s) disagree with the ledger: ${introduced.slice(0, 20).join(", ")}`);
+      }
+      log(`raw history rows that disagree with the ledger after the repair: ${mismatchedAfter.size} (none new)`);
       await tx.unsafe("DROP FUNCTION pg_temp.ledger_repair_series(text, double precision)");
       await tx.unsafe("DROP FUNCTION pg_temp.ledger_repair_raw(jsonb)");
 
@@ -494,6 +516,7 @@ export async function repairLedger(db: Db, opts: LedgerRepairOptions = {}): Prom
         coordinates,
         vintages: manifests.vintages,
         manifestsRewritten: manifests.rewritten,
+        rawMismatches: { before: mismatchedBefore.size, after: mismatchedAfter.size, remaining: [...mismatchedAfter].sort().slice(0, 50) },
         rawEvents: { replayed: Number(raw!.events), dropped: Number(raw!.dropped), rewritten: Number(raw!.rewritten), rowsRestored: Number(raw!.restored) },
       };
       log(`after: ${JSON.stringify(report.after)}`);
@@ -541,7 +564,7 @@ async function main(): Promise<number> {
       const { checkAppendOnlyGuard } = await import("../../../src/db/append-only-guard.ts");
       const ledger = await checkAnalyticsLedgerGuard(db);
       const appendOnly = await checkAppendOnlyGuard(db);
-      log(`analytics ledger guard: ${ledger.status}; append-only guard: ${appendOnly.status}; raw history parity: matched (proved before commit)`);
+      log(`analytics ledger guard: ${ledger.status}; append-only guard: ${appendOnly.status}; raw history: no new mismatch (proved before commit)`);
       if (ledger.status !== "armed" || appendOnly.status !== "armed") code = 1;
     }
     log(code === 0 ? (dryRun ? "DRY RUN OK" : "LEDGER REPAIRED") : "LEDGER REPAIRED, CHECKS FAILED");
