@@ -10,7 +10,7 @@
 // analytics-api-boundary.test.ts.
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import postgres from "postgres";
-import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { adminExec, adminUrl } from "./support/cluster.ts";
 
@@ -85,12 +85,12 @@ test("queue lifecycle works under the restricted role: enqueue → claim → com
 
 test("analytics data tables DENY insert/update/delete to the worker role (42501), reads still allowed", async () => {
   // Seed one row per table with the OWNER connection so UPDATE/DELETE have a target.
-  await sql`INSERT INTO raw_indicator_history (date, indicator, value) VALUES ('1997-01-01', 'ROLE_TEST', 1)
+  await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value) VALUES ('1997-01-01', 'ROLE_TEST', 1)
             ON CONFLICT (date, indicator) DO UPDATE SET value = 1`;
-  await sql`INSERT INTO regime_snapshots (date, composite, percentiles, indicators)
+  await fixtureDb`INSERT INTO regime_snapshots (date, composite, percentiles, indicators)
             VALUES ('1997-01-01', 0.5, '{}'::jsonb, '[]'::jsonb)
             ON CONFLICT (date) DO UPDATE SET composite = 0.5`;
-  await sql`INSERT INTO research_signals (signal_key, date, payload) VALUES ('role-test', '1997-01-01', '{}'::jsonb)
+  await fixtureDb`INSERT INTO research_signals (signal_key, date, payload) VALUES ('role-test', '1997-01-01', '{}'::jsonb)
             ON CONFLICT (signal_key, date) DO UPDATE SET payload = '{}'::jsonb`;
 
   const denied = async (q: Promise<unknown>) => {
@@ -168,9 +168,9 @@ test("wallet-backfill driver tables (chain_day_blocks/chain_address_floors/walle
   expect(state.status).toBe("filled");
 
   // Cleanup with the owner connection.
-  await sql`DELETE FROM chain_day_blocks WHERE sample_date = '1997-01-01'`;
-  await sql`DELETE FROM chain_address_floors WHERE address = '0xroletest'`;
-  await sql`DELETE FROM wallet_backfill_state WHERE sample_date = '1997-01-01'`;
+  await fixtureDb`DELETE FROM chain_day_blocks WHERE sample_date = '1997-01-01'`;
+  await fixtureDb`DELETE FROM chain_address_floors WHERE address = '0xroletest'`;
+  await fixtureDb`DELETE FROM wallet_backfill_state WHERE sample_date = '1997-01-01'`;
 });
 
 // Admin surface telemetry tables (migration 0017, issue #150): the worker
@@ -180,14 +180,14 @@ test("wallet-backfill driver tables (chain_day_blocks/chain_address_floors/walle
 // admin-surface-migration.test.ts; this pins the permission boundary against
 // the SAME shared, already-migrated database the rest of the suite uses.
 test("analytics telemetry tables (analytics_runs/analytics_stage_runs/analytics_artifacts) DENY insert/update/delete to the worker role, reads still allowed", async () => {
-  const [{ id: runId }] = await sql`
+  const [{ id: runId }] = await fixtureDb`
     INSERT INTO analytics_runs (job_kind, attempt, asof, source_mode, created_by)
     VALUES ('regime.classify', 1, '1997-01-01', 'hermetic', 'role-test')
     RETURNING id`;
-  const [{ id: stageId }] = await sql<{ id: number }[]>`
+  const [{ id: stageId }] = await fixtureDb<{ id: number }[]>`
     INSERT INTO analytics_stage_runs (analytics_run_id, tool_id, stage, sequence)
     VALUES (${runId}, 'regime', 'access', 1) RETURNING id`;
-  await sql`INSERT INTO analytics_artifacts (analytics_run_id, stage_run_id, tool_id, kind, artifact_key)
+  await fixtureDb`INSERT INTO analytics_artifacts (analytics_run_id, stage_run_id, tool_id, kind, artifact_key)
              VALUES (${runId}, ${stageId}, 'regime', 'indicator', 'ROLE_TEST_TELEMETRY')`;
 
   const denied = async (q: Promise<unknown>) => {
@@ -218,7 +218,7 @@ test("analytics telemetry tables (analytics_runs/analytics_stage_runs/analytics_
   expect(read.id).toBe(runId);
 
   // Cleanup with the owner connection (cascades stage runs + artifacts).
-  await sql`DELETE FROM analytics_runs WHERE id = ${runId}`;
+  await fixtureDb`DELETE FROM analytics_runs WHERE id = ${runId}`;
 });
 
 // Research pipeline telemetry tables (migration 0018, issue #151): structured
@@ -231,19 +231,19 @@ test("analytics telemetry tables (analytics_runs/analytics_stage_runs/analytics_
 // permission boundary against the SAME shared, already-migrated database the
 // rest of the suite uses.
 test("research pipeline telemetry tables (research_pipeline_runs/_stages/_warnings/_artifacts) DENY insert/update/delete to the worker role, reads still allowed", async () => {
-  const [{ id: runId }] = await sql<{ id: number }[]>`
+  const [{ id: runId }] = await fixtureDb<{ id: number }[]>`
     INSERT INTO research_pipeline_runs (kind, asof, source, status, started_at)
     VALUES ('regime', '1997-01-01', 'hermetic', 'succeeded', now())
     RETURNING id`;
-  const [{ id: stageId }] = await sql<{ id: number }[]>`
+  const [{ id: stageId }] = await fixtureDb<{ id: number }[]>`
     INSERT INTO research_pipeline_stages (run_id, stage, sequence, status, summary, started_at, finished_at)
     VALUES (${runId}, 'access', 1, 'ok', 'ok', now(), now())
     RETURNING id`;
-  const [{ id: warningId }] = await sql<{ id: number }[]>`
+  const [{ id: warningId }] = await fixtureDb<{ id: number }[]>`
     INSERT INTO research_pipeline_warnings (run_id, stage, message)
     VALUES (${runId}, 'access', 'role-test warning')
     RETURNING id`;
-  const [{ id: artifactId }] = await sql<{ id: number }[]>`
+  const [{ id: artifactId }] = await fixtureDb<{ id: number }[]>`
     INSERT INTO research_pipeline_artifacts (run_id, stage, kind, preview)
     VALUES (${runId}, 'access', 'indicator', '{}'::jsonb)
     RETURNING id`;
@@ -281,7 +281,7 @@ test("research pipeline telemetry tables (research_pipeline_runs/_stages/_warnin
   expect(read.id).toBe(runId);
 
   // Cleanup with the owner connection (cascades stages/warnings/artifacts).
-  await sql`DELETE FROM research_pipeline_runs WHERE id = ${runId}`;
+  await fixtureDb`DELETE FROM research_pipeline_runs WHERE id = ${runId}`;
 });
 
 test("scoped queue lifecycle (jobs.scope_type/scope_id) still works under the restricted role after migration 0017", async () => {
@@ -302,9 +302,9 @@ test("scoped queue lifecycle (jobs.scope_type/scope_id) still works under the re
 test("the judge's judgement record and config row DENY insert/update/delete to the worker role, reads still allowed", async () => {
   const subject = "judge-role-subject";
   const sessionId = crypto.randomUUID();
-  await sql`INSERT INTO swarm_subjects (id, name) VALUES (${subject}, 'Judge Role Subject')`;
-  await sql`INSERT INTO swarm_sessions (id, subject_id) VALUES (${sessionId}, ${subject})`;
-  const [{ id: judgementId }] = await sql<{ id: string }[]>`
+  await fixtureDb`INSERT INTO swarm_subjects (id, name) VALUES (${subject}, 'Judge Role Subject')`;
+  await fixtureDb`INSERT INTO swarm_sessions (id, subject_id) VALUES (${sessionId}, ${subject})`;
+  const [{ id: judgementId }] = await fixtureDb<{ id: string }[]>`
     INSERT INTO swarm_session_judgements
       (session_id, mode, source, fallback_reason, prompt_hash, inputs_digest, take_count, min_takes, opinion)
     VALUES (${sessionId}, 'shadow', 'fallback', 'model_unconfigured', 'p', 'd', 0, 3,
