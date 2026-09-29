@@ -156,6 +156,6 @@ test("a take's receipt draws its proposed weights as a ring", async ({ page }) =
   const section = page.locator("#take");
   await expect(section.locator(".rr-ring svg [data-sleeve]")).toHaveCount(4);
   await expect(section.locator(".rr-legend__row")).toHaveCount(4);
-  await section.locator(".rr-legend__row").filter({ hasText: "Agent Tokens" }).hover();
-  await expect(section.locator(".rr-ring figcaption")).toHaveText(/2%\s*Agent Tokens/);
+  await section.locator(".rr-legend__row").filter({ hasText: "Small Cap Tokens" }).hover();
+  await expect(section.locator(".rr-ring figcaption")).toHaveText(/2%\s*Small Cap Tokens/);
 });

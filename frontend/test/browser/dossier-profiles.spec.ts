@@ -113,6 +113,32 @@ test.describe("/lobster/:id CoinProfile", () => {
     await expect(thirtyD).not.toHaveClass(/is-active/);
   });
 
+  // The empty chart (.rm-nodata) lies over the chart's own box: one reading
+  // is not a line, and a period holding none of the coin's history says so
+  // until a period that holds it draws the line.
+  test("one reading shows the empty chart, not blank axes", async ({ page }) => {
+    mockApi(page, "**/api/dashboards/coins/c1", { ...COIN_PROFILE, priceHistory: [COIN_PROFILE.priceHistory[1]] });
+    await login(page, "/lobster/c1", "[data-coin-profile-view]");
+    await expect(page.locator("[data-coin-profile-chart-empty] .rm-nodata__h")).toHaveText("Not enough data yet");
+    await expect(page.locator("[data-coin-profile-chart-empty] .rm-nodata__d")).toHaveText("One reading so far");
+    await expect(page.locator("[data-coin-profile-chart-canvas]")).toHaveCount(0);
+  });
+
+  test("a period with none of the history shows the empty chart, and a period with it draws the line", async ({ page }) => {
+    const older = [
+      { date: daysAgoIso(60), priceUsd: 2.0, marketCapUsd: 800_000, volume24hUsd: 10_000 },
+      { date: daysAgoIso(50), priceUsd: 2.5, marketCapUsd: 900_000, volume24hUsd: 15_000 },
+    ];
+    mockApi(page, "**/api/dashboards/coins/c1", { ...COIN_PROFILE, priceHistory: older });
+    await login(page, "/lobster/c1", "[data-coin-profile-view]");
+    await expect(page.locator("[data-coin-profile-chart-empty] .rm-nodata__h")).toHaveText("No data yet");
+    await expect(page.locator("[data-coin-profile-chart-empty] .rm-nodata__d")).toHaveText("No price history in this period");
+
+    await page.locator('[data-coin-profile-period] [data-period="90d"]').click();
+    await expect(page.locator("[data-coin-profile-chart-empty]")).toHaveCount(0);
+    await expect(page.locator("[data-coin-profile-chart-canvas]")).toBeVisible();
+  });
+
   test("not-found state renders on a 404", async ({ page }) => {
     mockApi(page, "**/api/dashboards/coins/missing", { error: "not found" }, 404);
     await page.goto("/");
@@ -163,8 +189,8 @@ test.describe("/vaults/:id VaultProfile", () => {
     await expect(page.locator("[data-vault-profile-name]")).toContainText("Test Vault");
     await expect(page.locator("[data-vault-profile-source-badge]")).toHaveText("LIVE");
     await expect(page.locator("[data-vault-profile-tvl]")).toHaveText("$500.0K");
-    // D11: never a fabricated yield series — the honest empty state.
-    await expect(page.locator("[data-vault-profile-yield-empty]")).toHaveText("No yield history yet.");
+    // D11: never a fabricated yield series — the honest empty chart.
+    await expect(page.locator("[data-vault-profile-yield-empty]")).toHaveText("No data yet");
     await expect(page.locator("[data-vault-profile-linked-agents] [data-linked-agent-chip]")).toHaveText("Managing Agent");
     await expect(page.locator("[data-vault-profile-wallets-table] tbody tr")).toHaveCount(1);
     await expect(page.locator("[data-vault-profile-wallets-table] tbody tr")).toContainText("Vault Wallet");
@@ -239,8 +265,18 @@ test.describe("/wallets/:id WalletProfile", () => {
   test("empty snapshot history renders the honest empty state, not a fabricated line", async ({ page }) => {
     mockApi(page, "**/api/dashboards/wallets/w1", { ...WALLET_PROFILE, balanceHistory: [], balance30dAgoUsd: null, linkedAgent: null });
     await login(page, "/wallets/w1", "[data-wallet-profile-view]");
-    await expect(page.locator("[data-wallet-profile-history-empty]")).toHaveText("No snapshot history yet.");
+    await expect(page.locator("[data-wallet-profile-history-empty]")).toHaveText("No data yet");
     await expect(page.locator("[data-wallet-profile-sparkline] svg")).toHaveCount(0);
+  });
+
+  // renderSparkline draws nothing for one point; the card says why instead
+  // of standing blank.
+  test("a single snapshot shows the empty chart, not a blank card", async ({ page }) => {
+    mockApi(page, "**/api/dashboards/wallets/w1", { ...WALLET_PROFILE, balanceHistory: [WALLET_PROFILE.balanceHistory[3]] });
+    await login(page, "/wallets/w1", "[data-wallet-profile-view]");
+    await expect(page.locator("[data-wallet-profile-history-empty] .rm-nodata__h")).toHaveText("Not enough data yet");
+    await expect(page.locator("[data-wallet-profile-history-empty] .rm-nodata__d")).toHaveText("One reading so far");
+    await expect(page.locator("[data-wallet-profile-sparkline]")).toBeHidden();
   });
 
   test("not-found state renders on a 404", async ({ page }) => {

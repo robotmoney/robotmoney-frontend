@@ -30,7 +30,11 @@
           <!-- The signer's name is the page's subject. The way to their record
                is the breadcrumb, the Signer list and the record link, so the
                title is not a fourth one. -->
-          <h1 class="sv__detail-title" x-text="signer?.name || take.memberName"></h1>
+          <!-- A take's signer is an analyst: a judge files none. -->
+          <div class="rm-named">
+            <h1 class="sv__detail-title" x-text="signer?.name || take.memberName"></h1>
+            <span class="rm-role">Analyst</span>
+          </div>
           <!-- A receipt with no filing time is not a receipt. -->
           <p class="rr-when" x-show="take.receivedAt">
             <span>Filed <time :datetime="take.receivedAt" x-text="[formatDate(take.receivedAt, 'short'), take.receivedAt ? new Date(take.receivedAt).toISOString().slice(11, 16) + ' UTC' : '', take.revision > 1 ? `revision ${take.revision}` : ''].filter(Boolean).join(' · ')"></time></span>
@@ -60,6 +64,11 @@
               <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(take.verified, take.archival)"></span>
             </span>
           </span>
+          <!-- The subject it was about. The filed line above already dates it,
+               and the links below open its session. -->
+          <template x-if="session && subjectHref()">
+            <span class="rr-meta__i">Subject <a class="rr-lnk" :href="subjectHref()" x-text="session.subjectName || session.subjectId"></a></span>
+          </template>
         </div>
 
         <!-- SUPERSEDED, NOT REPLACED (issue #573, ADR D32). This URL still
@@ -138,8 +147,9 @@
 
         <!-- Where a reader goes next: the member's record, the swarm, and how
              a signature is checked. -->
-        <nav class="rr-recnav tk-next" aria-label="Related">
+        <nav class="rr-recnav rr-recnav--flow" aria-label="Related">
           <a :href="signerHref()" x-text="`${signer?.name || take.memberName}'s record`"></a>
+          <template x-if="sessionId"><a :href="sessionHref()">The session</a></template>
           <a href="/swarm">The swarm</a>
           <a href="/docs/investment-swarm/how-it-works">How verification works</a>
         </nav>
@@ -161,6 +171,5 @@
     /* A fingerprint is one unbreakable token; on a phone it wraps anywhere
        rather than widening the page. */
     .tk-fp { overflow-wrap: anywhere; white-space: normal; }
-    .tk-next { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem; }
   </style>
 </section>

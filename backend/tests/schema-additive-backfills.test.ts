@@ -33,10 +33,13 @@ useCleanDatabase(import.meta.file);
 const MIGRATIONS = join(import.meta.dir, "..", "migrations");
 const migrationText = (file: string): string => readFileSync(join(MIGRATIONS, file), "utf8");
 
-async function rerunAsOwner(file: string): Promise<void> {
+// `adapt` rewrites the file's text for the schema it is re-run against: 0077
+// names source_payloads, which 0080 (issue #1035) dropped later in the
+// ordered run, so a re-run on the fully migrated schema leaves that name out.
+async function rerunAsOwner(file: string, adapt: (text: string) => string = (text) => text): Promise<void> {
   await sql.begin(async (tx) => {
     await tx.unsafe("SET LOCAL ROLE rm_owner");
-    await tx.unsafe(migrationText(file));
+    await tx.unsafe(adapt(migrationText(file)));
   });
 }
 
@@ -221,7 +224,7 @@ describe("the migrations' own privilege narrowing, on the migrated path, with no
     // for rm_app on both tables. Put it back, then apply ONLY the migrations.
     await sql.unsafe("GRANT UPDATE ON swarm_recommendations, source_acquisitions TO rm_app");
     await rerunAsOwner("0075_swarm_recommendations_final.sql");
-    await rerunAsOwner("0077_immutable_ledger_grants.sql");
+    await rerunAsOwner("0077_immutable_ledger_grants.sql", (text) => text.replace("source_payloads, ", ""));
 
     const t = await seedTakes();
     await app.unsafe(legacyTake(t, 1));

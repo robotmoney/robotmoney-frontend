@@ -48,6 +48,7 @@ import {
   fmtUsd,
   freshnessLabel,
   gapParts,
+  pendingBps,
   hasTargetLayer,
   recommendationDate,
   recommendationHref,
@@ -56,7 +57,7 @@ import {
   vaultForBucket,
 } from "../../lib/vault-data.js";
 import * as weightChange from "../../lib/weight-change.js";
-import { sessionSummary, bucketShort } from "../../lib/session-summary.js";
+import { sessionSummary, bucketShort, bucketLabel } from "../../lib/session-summary.js";
 
 const shortAddress = (a) => {
   const s = String(a || "");
@@ -172,10 +173,10 @@ export function registerAllocationView(Alpine) {
       const strategy = this.allocationFw?.strategy || [];
       return buckets.map((b, i) => ({
         key: b.key,
-        // The served label, never a local rename: /swarm prints these same
-        // four strings from the same DTO, and two product surfaces naming
-        // the same sleeve differently is worse than an inelegant label.
-        name: b.label || strategy[i]?.label || b.key,
+        // The sleeve's name through the one display map every page uses
+        // (bucketLabel): the served label is the framework's first name,
+        // which the site no longer prints (RM-97).
+        name: bucketLabel(b.label || strategy[i]?.label || b.key),
         target: Number(strategy[i]?.targetPct ?? 0),
       }));
     },
@@ -275,7 +276,7 @@ export function registerAllocationView(Alpine) {
       return s === "Active" ? null : s;
     },
     // Recommended, Target and Actual once there is a target to read (the
-    // router's weights, else the published policy's), with the governance and
+    // router's weights, else the published policy's), with the pending and
     // flow gaps between them. Without one, Recommended and Actual, and the
     // one gap between them.
     threeLayers() { return hasTargetLayer(this.overview()); },
@@ -314,15 +315,18 @@ export function registerAllocationView(Alpine) {
           symbol: id.symbol,
           color: id.color,
           href: `/vault/${id.slug}`,
-          sub: status ? `${id.name} · ${status}` : id.name,
+          // The sleeve's name leads, its vault token beside it (RM-97), as
+          // every page names a vault.
+          name: id.name,
+          sub: status ? `${id.symbol} · ${status}` : id.symbol,
           recommended: fmtBps(r?.recommendedBps),
           recommendedUsd: this.usdLabel(usd.recommended),
           target: fmtBps(r?.targetBps),
           targetUsd: this.usdLabel(usd.target),
           actual: fmtBps(r?.actualBps),
           actualUsd: this.usdLabel(usd.actual),
-          governance: gapParts(r?.gaps?.governance),
-          governanceUsd: this.usdGap(usd.target, usd.recommended),
+          pending: gapParts(pendingBps(r?.gaps?.governance)),
+          pendingUsd: this.usdGap(usd.recommended, usd.target),
           flow: gapParts(r?.gaps?.flow),
           flowUsd: this.usdGap(usd.actual, usd.target),
           gap: gapParts(r?.gaps?.total),

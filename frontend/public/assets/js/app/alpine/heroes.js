@@ -882,9 +882,9 @@ export function registerHeroes(Alpine) {
             const cur = this.trail[this.trail.length - 1];
             this.p.noStroke();
             this.p.fill(this.color[0], this.color[1], this.color[2], 255);
+            // The head is a point, and nothing more: the translucent 16px
+            // halo that trailed it read as a cyan mass (RM-134).
             this.p.ellipse(cur.x, cur.y, 4);
-            this.p.fill(this.color[0], this.color[1], this.color[2], 30);
-            this.p.ellipse(cur.x, cur.y, 16);
           }
         }
       }
@@ -1516,7 +1516,7 @@ export function registerHeroes(Alpine) {
     },
   }));
 
-  // Bare branching trees for the /skills hero band.
+  // Bare branching trees for the /deposit and /skills hero bands.
   //
   // Follows the same recipe as the /tree effect on the production site:
   // recursive three-way branching, per-tree Perlin-noise wind so each one sways

@@ -23,6 +23,7 @@ import { CATEGORICAL } from "./chart-theme.js";
 import { actionLabel } from "./sleeve-explorer.js";
 import { vaultBySlug } from "./vault-data.js";
 import { BUCKET_NOTES } from "./sleeve-notes.js";
+import { analystSeats, judgeLabelHtml, judgeWroteRationale } from "./judgements.js";
 
 // Fixed reading direction, so a spread bar means the same thing on every
 // surface. A stance this build does not know keeps its count and sorts last
@@ -38,14 +39,20 @@ const VOTE_AXIS = ["bearish", "cautious", "neutral", "constructive", "bullish"];
 // four sleeves every time.
 export const BUCKET_ORDER = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"];
 
-// Named, not humanised from the key: "real world assets" is the transform a
-// slug gives you and "Real World Assets" is what the framework publishes.
+// Named, not humanised from the key. The names are RM-97's (2026-09-15):
+// the API and the archive still send the framework's first names, which match
+// through LEGACY_LABELS and never print.
 /** @type {Record<string, string>} */
 const BUCKET_LABELS = {
-  conservative_defi_yield: "Conservative DeFi Yield",
-  agent_tokens: "Agent Tokens",
+  conservative_defi_yield: "Fixed Income",
+  agent_tokens: "Small Cap Tokens",
   protocol_tokens: "Protocol Tokens",
   real_world_assets: "Real World Assets",
+};
+/** @type {Record<string, string>} */
+const LEGACY_LABELS = {
+  conservative_defi_yield: "Conservative DeFi Yield",
+  agent_tokens: "Agent Tokens",
 };
 
 // A chain id as its proper name. The id stays the key everywhere else (the
@@ -78,7 +85,7 @@ export function weightEntries(weights) {
 /** @param {unknown} idOrName */
 const bucketIndex = (idOrName) => {
   const n = normKey(idOrName);
-  return BUCKET_ORDER.findIndex((k) => normKey(k) === n || normKey(BUCKET_LABELS[k]) === n);
+  return BUCKET_ORDER.findIndex((k) => normKey(k) === n || normKey(BUCKET_LABELS[k]) === n || normKey(LEGACY_LABELS[k]) === n);
 };
 // A sleeve's place in the published order, unknown sleeves last. Payloads do
 // not keep it: Postgres jsonb stores object keys shortest first, so a weights
@@ -107,7 +114,7 @@ export function bucketLabel(idOrName) {
 // vault page's lede.
 // A sleeve's short name, for a narrow column on a phone.
 /** @type {Record<string, string>} */
-const BUCKET_SHORT = { conservative_defi_yield: "DeFi yield", agent_tokens: "Agent tokens", protocol_tokens: "Protocol tokens", real_world_assets: "RWA" };
+const BUCKET_SHORT = { conservative_defi_yield: "Fixed income", agent_tokens: "Small caps", protocol_tokens: "Protocol tokens", real_world_assets: "RWA" };
 /** @param {unknown} idOrName */
 export function bucketShort(idOrName) {
   const i = bucketIndex(idOrName);
@@ -174,8 +181,8 @@ export function bookSleeveShares(framework, snapshot, date) {
 // recommendation and history rows all word it here.
 /** @param {number} moved @param {"book" | "target"} basis */
 export function weightsOutcomeLine(moved, basis) {
-  if (!moved) return basis === "book" ? "Holds the book as it stands" : "Target weights retained";
-  return `${moved} ${moved === 1 ? "sleeve moves" : "sleeves move"} from ${basis === "book" ? "the book" : "target"}`;
+  if (!moved) return basis === "book" ? "Holdings kept as they are" : "Target weights retained";
+  return `${moved} ${moved === 1 ? "sleeve moves" : "sleeves move"} from ${basis === "book" ? "the holdings" : "target"}`;
 }
 
 export const sessionSummary = {
@@ -260,10 +267,12 @@ export const sessionSummary = {
   // "N of M took part" needs a roster size, which only the live record has.
   // An archived session knows how many filed and not how many could have, so
   // it says the half it can stand behind rather than inventing a denominator.
-  /** @param {any} s */
-  quorumText(s) {
+  // M counts the seats a take could fill: a seated judge files none, and the
+  // roster, when the surface holds one, is how it is known (lib/judgements.js).
+  /** @param {any} s @param {any[]} [roster] */
+  quorumText(s, roster = []) {
     const q = s?.swarmRecommendation?.quorum;
-    if (q) return `${q.submitted} of ${q.active} took part`;
+    if (q) return `${q.submitted} of ${analystSeats(s.swarmRecommendation, roster) ?? q.active} took part`;
     const n = takeRowsOf(s).length;
     return n ? `${n} took part` : "";
   },
@@ -271,13 +280,14 @@ export const sessionSummary = {
   // seat that sat the session out ("4 of 5"), or a take the tally does not
   // count (no stance, or one off the five-stance axis). "3 took part" beside a
   // 1/1/1 tally is the tally's own sum.
-  /** @param {any} s */
-  turnoutText(s) {
+  /** @param {any} s @param {any[]} [roster] */
+  turnoutText(s, roster = []) {
     const q = s?.swarmRecommendation?.quorum;
-    if (q && Number(q.submitted) < Number(q.active)) return this.quorumText(s);
+    const seats = analystSeats(s?.swarmRecommendation, roster);
+    if (q && seats != null && Number(q.submitted) < seats) return this.quorumText(s, roster);
     const tallied = this.stanceTally(s).reduce((/** @type {number} */ a, /** @type {{ n: number }} */ x) => a + x.n, 0);
     const filed = q ? Number(q.submitted) : takeRowsOf(s).length;
-    return Number.isFinite(filed) && filed > 0 && filed !== tallied ? this.quorumText(s) : "";
+    return Number.isFinite(filed) && filed > 0 && filed !== tallied ? this.quorumText(s, roster) : "";
   },
   // How many takes this session collected. The quorum is the authority when
   // the record has one; a row that carries its own count comes next (the
@@ -383,7 +393,10 @@ export const sessionSummary = {
   /** @param {any[]} rows @param {string | null} [active] */
   ringSvg(rows, active = null) {
     const arcs = this.ringArcs(rows);
-    if (!arcs.length) return "";
+    // No rows is no ring. Rows that all weigh zero (a vault stack before any
+    // deposit, a policy of zeros) are a ring with nothing on it: its bare
+    // track, as every empty ring is drawn, not a hole where it would be.
+    if (!arcs.length && !(Array.isArray(rows) && rows.length)) return "";
     const ring = (/** @type {string} */ stroke, /** @type {string} */ extra) =>
       `<circle cx="21" cy="21" r="15.9155" fill="none" stroke="${stroke}" stroke-width="4"${extra}></circle>`;
     // The track is drawn first and stays visible wherever the arcs do not
@@ -424,8 +437,9 @@ export const sessionSummary = {
     // The rationale under the same trust rule as everywhere else (rationaleOf):
     // a live rollup's is its template restating the tally, which printed
     // "Majority stance is cautious (1 of 3…)" beside a SPLIT chip. That
-    // session did publish, and made no call on any position.
-    const why = this.rationaleOf(s);
+    // session did publish, and made no call on any position. A judge's prose
+    // explains the takes; it is not a call either.
+    const why = judgeWroteRationale(s) ? "" : this.rationaleOf(s);
     if (why) return { kind: "text", text: why };
     return rec.rationale ? { kind: "none" } : null;
   },
@@ -469,11 +483,20 @@ export const sessionSummary = {
   actionLabel,
   // The recommendation's own prose, or "" when a rollup's template wrote it:
   // a live aggregate carries quorum/stances and its rationale restates the tally.
+  // A model judge replaces that template with its own words, which stand, and
+  // every surface that prints them names the judge (rationaleJudgeLabel).
   /** @param {any} s */
   rationaleOf(s) {
     const rec = s?.swarmRecommendation;
-    if (!rec || rec.quorum || rec.stances) return "";
+    if (!rec) return "";
+    if ((rec.quorum || rec.stances) && !judgeWroteRationale(s)) return "";
     return rec.rationale || "";
+  },
+  // "Judge: <name>" over a rationale a judge wrote, "" over any other. The
+  // name resolves through the roster when the surface holds one.
+  /** @param {any} s @param {any[]} [roster] */
+  rationaleJudgeLabel(s, roster = []) {
+    return judgeWroteRationale(s) ? judgeLabelHtml(s.swarmRecommendation.judge, roster, { pill: false }) : "";
   },
   // The positions it moves, holds left out: the held count says the rest.
   /** @param {any} s */

@@ -31,43 +31,68 @@ function close() {
   open = null;
 }
 
+// The bottom of the fixed site nav, or 0. A bubble above an icon that sits
+// just under the nav would otherwise open behind it: the nav is above the
+// bubble in the stacking order, so the room above an icon starts there, not
+// at the top of the window.
+function ceiling() {
+  const nav = document.querySelector("nav.nav");
+  if (!nav) return 0;
+  const pos = getComputedStyle(nav).position;
+  return pos === "fixed" || pos === "sticky" ? Math.max(0, nav.getBoundingClientRect().bottom) : 0;
+}
+
 /** Position the bubble so it stays inside the page box. */
 export function placeTip(tip) {
   const bub = bubble(tip);
   if (!bub) return;
+  const top = ceiling();
+  const icon = tip.getBoundingClientRect();
 
   // Phones render the bubble as a pinned sheet, so only its vertical offset
-  // needs setting, from the icon it belongs to.
+  // needs setting, from the icon it belongs to: below it, or above it when
+  // below would run off the bottom of the screen.
   if (matchMedia("(max-width: 699px)").matches) {
-    bub.style.top = `${tip.getBoundingClientRect().bottom + 8}px`;
+    bub.style.top = `${icon.bottom + 8}px`;
+    const h = bub.getBoundingClientRect().height;
+    if (icon.bottom + 8 + h > innerHeight - 8) {
+      bub.style.top = `${Math.max(top + 8, icon.top - 8 - h)}px`;
+    }
     return;
   }
   bub.style.top = "";
-  bub.style.setProperty("--rm-tip-nudge", "0px");
 
   // Above by default, below when there is no room above. A bubble's height is
   // its text's, and the role tip on the swarm roster is seven lines — enough
   // that scrolling its table header towards the top of the window would put
   // the bubble off it. Measured while hidden, which is `visibility: hidden`
   // and therefore still laid out.
-  if (tip.getBoundingClientRect().top < bub.getBoundingClientRect().height + 8) {
+  if (icon.top - top < bub.offsetHeight + 8) {
     bub.setAttribute("data-below", "1");
   } else {
     bub.removeAttribute("data-below");
   }
 
+  // Where the bubble rests before any nudge, worked out from the CSS anchoring
+  // (centred on the tip, or right-aligned for .rm-tip--end) rather than read
+  // from getBoundingClientRect: the bubble's transform carries the nudge and
+  // animates, so a reading taken just after resetting it still showed the LAST
+  // nudge, and every second open applied no shift and ran off the edge.
+  //
   // .rv__body is the regime dashboard's own 1280px gutter box, added when the
   // panel tables grew header tips: without it the nearest match is <main>, and
   // clamping to <main> lets a bubble on the rightmost panel card sit out in the
   // 1.5rem gutter — the exact "on screen but still sliced" case above.
   const host = tip.closest(".sv__body, .rv__body, .container, .cv, main, body") || document.body;
   const box = host.getBoundingClientRect();
-  const r = bub.getBoundingClientRect();
+  const w = bub.offsetWidth;
+  const left = tip.classList.contains("rm-tip--end") ? icon.right - w : icon.left + icon.width / 2 - w / 2;
+  const right = left + w;
   const pad = 8;
   let shift = 0;
-  if (r.left < box.left + pad) shift = (box.left + pad) - r.left;
-  else if (r.right > box.right - pad) shift = (box.right - pad) - r.right;
-  if (shift) bub.style.setProperty("--rm-tip-nudge", `${Math.round(shift)}px`);
+  if (left < box.left + pad) shift = (box.left + pad) - left;
+  else if (right > box.right - pad) shift = (box.right - pad) - right;
+  bub.style.setProperty("--rm-tip-nudge", `${Math.round(shift)}px`);
 }
 
 export function initTooltips() {

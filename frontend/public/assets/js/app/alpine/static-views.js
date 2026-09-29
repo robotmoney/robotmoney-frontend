@@ -6,7 +6,7 @@
 // worthwhile follow-up, not a drive-by.
 import { api, ROUTES, path } from "../lib/api.js";
 import { assetDot, subjectDot, resolveTokenColors } from "./views/shared.js";
-import { CATEGORICAL, SERIES } from "../lib/chart-theme.js";
+import { CATEGORICAL, SERIES, REGIME } from "../lib/chart-theme.js";
 import { forgetApplication, rememberApplication } from "../lib/application-memory.js";
 import { SWARM_DISCLAIMER } from "../lib/swarm-disclaimer.js";
 import { memberAvatarMarkup } from "../lib/member-mark.js";
@@ -15,19 +15,25 @@ import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
 import { timeAgo, timeLeft, absoluteUtc } from "../lib/relative-time.js";
-import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, bookSleeveShares, weightsOutcomeLine, BUCKET_ORDER } from "../lib/session-summary.js";
+import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, bookSleeveShares, weightsOutcomeLine, bucketShort, BUCKET_ORDER } from "../lib/session-summary.js";
 import * as weightChange from "../lib/weight-change.js";
 import { sessionTakes } from "../lib/session-takes.js";
 import { allocationFramework } from "../lib/allocation-framework.js";
 import { sessionBrief } from "../lib/session-brief.js";
 import { sleeveExplorer } from "../lib/sleeve-explorer.js";
+import { tagFilter } from "../lib/tag-filter.js";
 import { takeCard, takeWeightRows } from "../lib/take-card.js";
 import { canonicalUrlFor, setCanonicalUrl, citeTitle } from "../seo.js";
 import { VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
 import { nearestReading, shareChartSvg, shareChartTicks, shareChartXs } from "../lib/share-chart.js";
-import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
+import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, isVaultBookReading, portfolioTwr, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
 import { DEVNET_LABEL, loadVaultDetail, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
 import { tvlChart } from "./tvl-chart.js";
+import {
+  adviceOf, adviceCall, setsWeights, analystAbsent, analystCount, isJudge, roleLabel, judgeHref, judgeLabelHtml, judgeName, judgementHref, JUDGEMENT_ROUTES,
+  judgeWroteRationale, loadJudgement, loadMemberJudgements, loadRoster, loadSessionJudgements, normalizeJudgement,
+  MEMBER_JUDGEMENTS_MAX,
+} from "../lib/judgements.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
 // green mass (bullish deepest → constructive lighter), neutral as slate, and
@@ -236,6 +242,10 @@ export function camelMember(raw) {
     // legacy id exactly as before.
     handle: raw.handle,
     status: raw.status,
+    // "judge" files no takes and writes judgements (lib/judgements.js). The
+    // API emits it for every member since #1017; a payload from before, and
+    // the static archive's manifests, read as the member they always were.
+    role: raw.role === "judge" ? "judge" : "member",
     name: raw.name,
     tagline: raw.tagline,
     lens: raw.lens,
@@ -255,6 +265,17 @@ export function camelMember(raw) {
 // endpoint has always returned that field, but nothing mapped it before the
 // public subject profile, so every consumer saw `undefined` and rendered
 // nothing.
+// A portfolio's recorded readings without the smoke fixture's baskets. The
+// fixture (ensureSmokeSubjectFixtures) always writes a reading with no
+// wallets, and a release cutover ran it against production (#1030), while a
+// genuine reading lists the wallets it read. A subject whose readings never
+// list wallets keeps them all.
+/** @param {any[]} list */
+export function withoutFixtureReadings(list) {
+  const hasWallets = (/** @type {any} */ s) => Array.isArray(s?.wallets) && s.wallets.length > 0;
+  return list.some(hasWallets) ? list.filter(hasWallets) : list.slice();
+}
+
 // The house moved to robotmoney.network, and robotmoney.net is a domain
 // someone else once ran: a subject row still carrying the old host links to
 // the new one until its data is corrected.
@@ -518,10 +539,11 @@ export const helpers = {
   // looked the same as the two that agreed. Same ends as STANCE_COLORS (Pool
   // green for the constructive end, Beacon for the attention end, slate
   // neutral), carried by a <=8px dot rather than coloured text: Beacon is a
-  // POINT in the covenant, never a run of type.
+  // POINT in the covenant, never a run of type. The hues are REGIME in
+  // lib/chart-theme.js, the one regime palette /regime and the blog share.
   regimeColor(regime) {
     const key = String(regime || "").replace(/-/g, "_");
-    return ({ risk_on: "#10b981", neutral: "#7e889e", risk_off: "#ff7a29" })[key] || "#7e889e";
+    return REGIME[key] || REGIME.neutral;
   },
   // A 0-1 percentile as "71st". The backdrop panel prints percentiles as bare
   // integers next to a bar, where "71" could as easily be a score or a count;
@@ -645,6 +667,9 @@ export function registerStaticViews(Alpine) {
   // why the wording is production's verbatim and not this repo's to edit.
   Alpine.data("swarmDisclaimer", () => ({ text: SWARM_DISCLAIMER }));
   Alpine.data("sleeveExplorer", sleeveExplorer);
+  // A baked list narrowed by one tag, rows hidden and never removed: the
+  // smart contract risks index (lib/tag-filter.js).
+  Alpine.data("tagFilter", tagFilter);
   // The same explorer over the vault stack's book (the Robot Money Vault
   // subject's Holdings): one arc per vault at its actual weight, measured
   // against the weights in force, and a vault's positions in its drawer.
@@ -681,6 +706,13 @@ export function registerStaticViews(Alpine) {
     // session (issue #573). The receipt itself never changes — see take.html
     // for why a superseded permalink resolves rather than 404s or substitutes.
     supersededBy: null,
+    // The session it was filed in (the receipt names it since #1017): its date
+    // and subject. Read before the receipt draws, so nothing under the facts
+    // moves when it lands; a receipt with no session id waits on nothing. The
+    // page is this take's alone: what a judge made of the session is on the
+    // session and judgement pages.
+    sessionId: null,
+    session: null,
     async init() {
       const match = location.pathname.match(/^\/swarm\/takes\/([^/]+)\/?$/);
       if (!match) {
@@ -694,11 +726,25 @@ export function registerStaticViews(Alpine) {
         this.memo = receipt.memo;
         this.signer = receipt.signer;
         this.supersededBy = receipt.supersededBy ?? null;
+        this.sessionId = receipt.sessionId ?? null;
+        await this.loadSession();
       } catch (e) {
         this.error = e.message || "Take not found";
       } finally {
         this.loading = false;
       }
+    },
+    async loadSession() {
+      const id = this.sessionId;
+      if (!id) return;
+      try {
+        this.session = camelSession((await api.get(path(ROUTES.swarm.sessionById, { id })))?.session);
+      } catch (_) { /* the take reads without its session's facts */ }
+    },
+    sessionHref() { return this.sessionId ? `/swarm/sessions/${encodeURIComponent(this.sessionId)}` : null; },
+    subjectHref() {
+      const id = this.session?.subjectId;
+      return id ? `/swarm/subjects/${encodeURIComponent(id)}` : null;
     },
     // The member's proposed weights as the ring the subject and session pages
     // draw (lib/sleeve-explorer.js). No breakdown drawer: a take proposes
@@ -729,6 +775,147 @@ export function registerStaticViews(Alpine) {
       const norm = (s) => String(s || "").replace(/\s+/g, " ").trim();
       const body = norm(this.memo?.body);
       return !!body && body === norm(this.take?.body);
+    },
+  }));
+
+  // A consensus judge's public judgement (lib/judgements.js), at its own
+  // address, as a take's receipt is: who judged, the session and subject it
+  // judged, its advice on release when it advised a hold, its account of the
+  // takes, the questions it found them apart on, and what pins it (the prompt
+  // it was given and the inputs it read). It scores no take and sets no
+  // weight, and the page claims neither.
+  Alpine.data("swarmJudgement", () => ({
+    ...helpers,
+    loading: true,
+    error: null,
+    notFound: false,
+    judgement: null,
+    // Its session, for the takes a position links to, and its subject's name.
+    session: null,
+    takes: [],
+    subject: null,
+    roster: [],
+    async init() {
+      const routeAtEntry = location.pathname;
+      const match = location.pathname.match(/^\/swarm\/judgements\/([^/]+)\/?$/);
+      try {
+        this.judgement = match ? await loadJudgement(decodeURIComponent(match[1])) : null;
+        if (!this.judgement) {
+          this.notFound = true;
+          this.error = "Judgement not found";
+          // The route-level title is the raw id.
+          if (location.pathname === routeAtEntry) document.title = "Judgement not found: Robot Money Investment Swarm";
+          return;
+        }
+        const j = this.judgement;
+        // Each guarded on its own: the judgement reads whole without them,
+        // with ids where names would be and the session's page for every take.
+        const [detail, subject, roster] = await Promise.all([
+          j.sessionId ? api.get(path(ROUTES.swarm.sessionById, { id: j.sessionId })).catch(() => null) : null,
+          j.subjectId
+            ? api.get(path(ROUTES.swarm.subject, { id: j.subjectId })).then(camelSubject).catch(() => null)
+              .then((s) => s || loadArchiveSubject(j.subjectId).catch(() => null))
+            : null,
+          loadRoster(),
+        ]);
+        this.session = detail?.session ? camelSession(detail.session) : null;
+        this.takes = (detail?.takes || []).map(camelTake);
+        this.subject = subject;
+        this.roster = roster;
+        if (location.pathname === routeAtEntry) {
+          document.title = `Judgement by ${this.judgeName()}, ${this.formatDate(j.sessionDate, "short")}: Robot Money Investment Swarm`;
+        }
+      } catch (_) {
+        this.error = "This judgement could not be loaded.";
+        if (location.pathname === routeAtEntry) document.title = "Judgement unavailable: Robot Money Investment Swarm";
+      } finally {
+        this.loading = false;
+      }
+    },
+    judgeName() { return judgeName(this.judgement, this.roster) || "Judge"; },
+    judgeHref() { return judgeHref(this.judgement, this.roster); },
+    sessionHref() {
+      const id = this.judgement?.sessionId;
+      return id ? `/swarm/sessions/${encodeURIComponent(id)}` : "/swarm";
+    },
+    subjectHref() {
+      const id = this.judgement?.subjectId;
+      return id ? `/swarm/subjects/${encodeURIComponent(id)}` : "/swarm";
+    },
+    // The subject record's name, as every swarm page prints it; the session's
+    // stored one, then the id, when the record did not load.
+    subjectTitle() { return this.subject?.name || this.session?.subjectName || this.judgement?.subjectId || ""; },
+    advice() { return adviceOf(this.judgement?.releaseSafety); },
+    // The call only where the recommendation sets weights (setsWeights): read
+    // off the session when it loaded, else off the judgement's own field.
+    call() {
+      const applies = this.session ? setsWeights(this.session.swarmRecommendation) : this.judgement?.recommendsWeights === true;
+      return applies ? adviceCall(this.judgement?.releaseSafety) : null;
+    },
+    // Only a model's own words: a judgement recorded before the judge stopped
+    // writing templates (source "fallback") restates the tally.
+    rationale() { return this.judgement?.source === "model" ? this.judgement.rationale : ""; },
+    // "Sep 17, 2026 10:00 UTC": the date as every swarm page writes it, and the
+    // minute, in UTC, as the take receipt writes its filing time.
+    recordedAt() {
+      const at = this.judgement?.createdAt;
+      const t = Date.parse(at);
+      if (!Number.isFinite(t)) return "";
+      return `${this.formatDate(at, "short")} ${new Date(t).toISOString().slice(11, 16)} UTC`;
+    },
+    // A digest reads by its ends; the whole value is on hover and in the record.
+    shortHash(v) {
+      const h = String(v || "");
+      return h.length > 24 ? `${h.slice(0, 12)}…${h.slice(-8)}` : h;
+    },
+    recordHref() {
+      const id = this.judgement?.id;
+      return id ? path(JUDGEMENT_ROUTES.one, { id }) : null;
+    },
+    // The take a position belongs to, matched as the session page matches it:
+    // by id or handle, then on letters and digits, for v0's older slugs.
+    takeOf(memberId) {
+      const hit = this.takes.find((t) => t.memberId === memberId || t.memberHandle === memberId);
+      if (hit) return hit;
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const n = norm(memberId);
+      return n ? this.takes.find((t) => norm(t.memberHandle) === n || norm(t.memberId) === n) : undefined;
+    },
+    positionName(p) {
+      const m = (this.roster || []).find((r) => r.id === p?.member_id || r.handle === p?.member_id);
+      return m?.name || this.takeOf(p?.member_id)?.memberName || p?.member_id || "";
+    },
+    // A member's take on this session: its receipt when it has one, else its
+    // card on the session's page.
+    positionHref(p) {
+      const t = this.takeOf(p?.member_id);
+      const receipt = t ? takeHref(t) : null;
+      if (receipt) return receipt;
+      const anchor = t ? `take-${String(t.memberId || t.id || "").replace(/[^A-Za-z0-9_-]/g, "")}` : "takes";
+      return `${this.sessionHref()}#${anchor}`;
+    },
+    // A view that is a take's own body, verbatim, reads as the way to it.
+    isEcho(text) {
+      const norm = (s) => String(s || "").replace(/\s+/g, " ").trim();
+      const n = norm(text);
+      return !!n && this.takes.some((t) => norm(t.body) === n);
+    },
+    // A question's members as rows (views-table): the stance and confidence
+    // their take filed, and one way to it. Their view in words only when it
+    // is not their take's own body. With the takes not loaded, the way is to
+    // the session's takes; with them loaded and none of this member's, none.
+    viewRows(d) {
+      return (d?.positions || []).map((p) => {
+        const t = this.takeOf(p.member_id);
+        return {
+          key: `${d.topic}-${p.member_id}`,
+          name: this.positionName(p),
+          stance: t ? String(t.stance || "").toLowerCase() : "",
+          confidence: t && Number.isFinite(Number(t.confidence)) ? this.fmtPct(t.confidence) : "",
+          href: t || !this.takes.length ? this.positionHref(p) : null,
+          view: this.isEcho(p.view) ? "" : p.view || "",
+        };
+      });
     },
   }));
 
@@ -1223,6 +1410,10 @@ export function registerStaticViews(Alpine) {
     // rather than one target and then another.
     vaultStack: null,
     vaultStackSettled: false,
+    // The public roster, read only when a judge worked on the latest session:
+    // its name goes over the words it wrote, and a seated judge is no seat a
+    // take could fill (lib/judgements.js).
+    judgeRoster: [],
     // Every live vault's deposits and withdrawals, newest first, each naming
     // its vault; null when no vault's source serves activity (the Base feed).
     stackActivity: null,
@@ -1281,6 +1472,10 @@ export function registerStaticViews(Alpine) {
         // Whatever is in that table, this page is the wrong place to find out:
         // the subject declares it holds nothing.
         this.snapshots = this.isFramework() ? [] : await this.loadSnapshots(id);
+        if (!this.isFramework() && !this.isVaultStack()) {
+          const live = await this.loadLiveWalletBook();
+          if (live) this.snapshots = live;
+        }
         this.snapshot = this.snapshots.length ? normalizeSnapshot(this.snapshots[this.snapshots.length - 1]) : null;
         if (this.isVaultStack() && vaultMode().mode === "devnet") {
           const fixture = await loadVaultSubjectFixture({ hostname: location.hostname });
@@ -1292,6 +1487,9 @@ export function registerStaticViews(Alpine) {
         await this.loadHistory(id);
         this.latestRow = this.sessions[0] || null;
         this.heldRow = await this.loadHeld(id);
+        // Before the page draws, so the judge's name never flashes as its id:
+        // the recommendation shown, which a held one can be.
+        if (this.latest()?.swarmRecommendation?.judge) this.judgeRoster = await loadRoster();
         // The brief the last session opened with. Guarded like the rest: the
         // page describes the handover with or without it, and only the
         // figures depend on having a real one.
@@ -1335,9 +1533,48 @@ export function registerStaticViews(Alpine) {
       try {
         const res = await api.get(path(ROUTES.swarm.subjectSnapshots, { id }));
         const list = (Array.isArray(res) ? res : res.snapshots || []).filter(Boolean);
-        if (list.length) return list.slice().sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+        if (list.length) return withoutFixtureReadings(list).sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
       } catch (_) { /* fall through to the archive */ }
       return this.archiveSnapshots(id);
+    },
+    // The treasury's book, live. When every wallet a portfolio declares is one
+    // the site values live (the prop wallets behind /performance), their
+    // valuation is its book: today's holdings and a reading per day back,
+    // rather than recorded readings that stopped at the Aug 6 cutover (#1030).
+    // null for any other portfolio, which keeps its recorded readings.
+    async loadLiveWalletBook() {
+      const declared = (this.subject?.wallets || []).map((w) => String(w?.address || "").toLowerCase()).filter(Boolean);
+      if (!declared.length) return null;
+      try {
+        const sleeves = await api.get(ROUTES.dashboards.walletSleeves);
+        const valued = new Set((sleeves?.wallets || []).map((w) => String(w?.address || "").toLowerCase()));
+        if (!declared.every((a) => valued.has(a))) return null;
+        const wb = await api.get(ROUTES.dashboards.walletBalances);
+        const total = Number(wb?.totalUsd);
+        const asOf = String(wb?.asOf ?? "").slice(0, 10);
+        if (!Number.isFinite(total) || !asOf) return null;
+        const wallets = this.subject.wallets;
+        const days = (Array.isArray(wb.history) ? wb.history : [])
+          .filter((r) => r?.date && Number.isFinite(Number(r?.totalUsd)))
+          .map((r) => ({
+            date: String(r.date).slice(0, 10),
+            totalValueUsd: Number(r.totalUsd),
+            positions: Object.entries(r.byAsset || {}).filter(([, v]) => Number(v) > 0).map(([token, v]) => ({ token, chain: "base", value_usd: Number(v) })),
+            wallets,
+          }))
+          .filter((r) => r.date !== asOf);
+        const today = {
+          date: asOf,
+          totalValueUsd: total,
+          positions: (Array.isArray(wb.holdings) ? wb.holdings : []).map((h) => ({
+            token: h.symbol, chain: h.chain || "base", balance: h.amount, price_usd: h.priceUsd, value_usd: h.valueUsd,
+          })),
+          wallets,
+        };
+        return [...days, today].sort((a, b) => a.date.localeCompare(b.date));
+      } catch (_) {
+        return null;
+      }
     },
     // Static-archive fallback, the same path every other swarm surface has.
     // Without it this page renders a subject with an empty chart and a dashed
@@ -2013,7 +2250,12 @@ export function registerStaticViews(Alpine) {
     // every label (the axes, the ticks, the tooltip) is HTML over it, so text
     // stays at its real size at any width instead of scaling with the SVG.
     // The chart's empty frame: a line needs two readings.
-    chartEmptyLabel() { return this.windowed().length > 1 ? "No positions to draw" : "One reading so far"; },
+    // The chart's empty state (.rm-nodata): the state, then the fact. Readings
+    // that hold nothing are no data; one reading is not enough for a line.
+    chartEmptyTitle() { return this.windowed().length > 1 ? "No data yet" : "Not enough data yet"; },
+    // The fact under the title, when there is one: readings with no position
+    // in them. One reading needs none beyond "Not enough data yet".
+    chartEmptyLabel() { return this.windowed().length > 1 ? "No positions held" : ""; },
     chartModel() {
       const rows = this.windowed();
       const series = this.concentrationSeries();
@@ -2046,11 +2288,11 @@ export function registerStaticViews(Alpine) {
       const span = `${m.rows[0].date} to ${m.rows[m.rows.length - 1].date}`;
       if (this.isVaultStack()) {
         const t = this.stackTargetAt(m.rows[m.rows.length - 1].date);
-        const target = t ? ` ${this.stackTargetName()}: ${VAULTS.map((v) => `${v.symbol} ${this.fmtPctTrim(t[v.slug] / 100)}`).join(", ")}.` : "";
+        const target = t ? ` ${this.stackTargetName()}: ${VAULTS.map((v) => `${v.name} ${this.fmtPctTrim(t[v.slug] / 100)}`).join(", ")}.` : "";
         const dated = `${this.formatDate(m.rows[0].date, "short")} to ${this.formatDate(m.rows[m.rows.length - 1].date, "short")}`;
-        return `Share of the book by vault, stacked to 100%, ${dated}. Latest reading, top band first: ${named}.${target} Use the arrow keys to step through the readings.`;
+        return `Each sleeve's weight, stacked to 100%, ${dated}. Latest reading, top band first: ${named}.${target} Use the arrow keys to step through the readings.`;
       }
-      return `Share of the book by position, stacked to 100%, ${span}. Latest reading, top band first: ${named}. Use the arrow keys to step through the readings.`;
+      return `Each token's weight, stacked to 100%, ${span}. Latest reading, top band first: ${named}. Use the arrow keys to step through the readings.`;
     },
     // A tick under every reading, month and day; the ones between the ends drop
     // out on a narrow screen. The last reading's year is the positions label's
@@ -2129,16 +2371,44 @@ export function registerStaticViews(Alpine) {
     stackOnDevnet() { return this.isVaultStack() && !!this.vaultSnapshots; },
     // Off the devnet switch, Holdings is the vault feed: the read /allocation
     // and every /vault page make (lib/vault-source.js loadVaultOverview), one
-    // reading, now. Not the subject's own snapshots: on production those are
-    // the treasury's book scaled by 0.7234 (ROBOT and ETH in a USDC lending
-    // vault, $33.6k against a $250 vault) and stopped on Aug 6, so the page
-    // printed a book no vault holds. The sessions still show the book they
+    // reading, now. Not the subject's own snapshots for the book: on
+    // production the last of them is the smoke fixture's fabricated basket
+    // (ROBOT and ETH in a USDC lending vault, $33.6k against a $250 vault),
+    // written at the Aug 6 cutover, and nothing genuine follows it. Their
+    // genuine readings still draw the TVL line (tvlPoints). The sessions still show the book they
     // reviewed; this is what the vaults hold today. Until the feed answers,
     // nothing, rather than the snapshot and then the feed.
     stackSnapshots() {
       if (this.vaultSnapshots) return this.vaultSnapshots;
       const live = this.liveStackSnapshot();
-      return live ? [live] : [];
+      if (!live) return [];
+      // By day, later sources winning a shared day: the archive's readings of
+      // rmUSDC's own book (to Aug 4; isVaultBookReading keeps the fabricated
+      // rows out), each live vault's daily readings once the feed serves
+      // them, and the feed's reading now. TVL and Sleeves over time both draw
+      // from this, so the two charts cover the same days.
+      /** @type {Map<string, any>} */
+      const byDay = new Map();
+      for (const s of this.snapshots || []) {
+        if (s?.date && isVaultBookReading(s)) byDay.set(String(s.date).slice(0, 10), s);
+      }
+      /** @type {Map<string, any>} */
+      const served = new Map();
+      for (const v of this.vaultStack?.overview?.vaults || []) {
+        if (v?.availability !== "live" || !Array.isArray(v?.history?.tvl)) continue;
+        for (const r of v.history.tvl) {
+          const day = String(r?.t ?? "").slice(0, 10);
+          const usd = Number(r?.tvlUsd);
+          if (!day || !Number.isFinite(usd)) continue;
+          const e = served.get(day) ?? { date: day, totalValueUsd: 0, positions: [] };
+          e.totalValueUsd += usd;
+          e.positions.push({ token: v.symbol, chain: "base", vault: v.slug, value_usd: usd });
+          served.set(day, e);
+        }
+      }
+      for (const [day, e] of served) byDay.set(day, e);
+      if (live.date) byDay.set(live.date, live);
+      return [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([, snap]) => snap);
     },
     stackSnapshot() {
       if (!this.vaultSnapshots) return this.liveStackSnapshot();
@@ -2313,7 +2583,7 @@ export function registerStaticViews(Alpine) {
         const pct = g ? g.share * 100 : 0;
         const was = target ? target.by[v.slug] / 100 : null;
         return {
-          key: v.slug, label: v.symbol, hue: v.color, pct, meta: "", value: g ? g.value : 0,
+          key: v.slug, label: v.name, short: bucketShort(v.bucket), symbol: v.symbol, hue: v.color, pct, meta: "", value: g ? g.value : 0,
           // Drift: this vault's share against the target, in points, as
           // /allocation's Vaults table takes it.
           was, d: was == null ? null : Math.round((pct - was) * 10) / 10,
@@ -2380,10 +2650,11 @@ export function registerStaticViews(Alpine) {
     vaultUsd(v) { return fmtVaultUsd(v); },
 
     // ── the vault stack's TVL over time ─────────────────────────────────────
-    // The combined value on every reading of the book: the devnet fixture's
-    // fifteen, one on Base (the feed reads one day). Neutral, not a vault's hue.
+    // The combined value on every reading of the book (stackSnapshots): the
+    // devnet fixture's fifteen, or on Base the archive's own readings, the
+    // feed's daily history and its reading now. Neutral, not a vault's hue.
     tvlPoints() {
-      return this.isVaultStack() ? this.stackSnapshots().map((s) => ({ t: s?.date, tvlUsd: s?.totalValueUsd ?? s?.total_value_usd })) : [];
+      return this.isVaultStack() ? this.stackSnapshots().map((s) => ({ t: String(s?.date ?? "").slice(0, 10), tvlUsd: s?.totalValueUsd ?? s?.total_value_usd })) : [];
     },
     tvlAsOf() { return this.vaultStack?.overview?.asOf; },
     tvlColor() { return "var(--color-text-soft)"; },
@@ -2395,8 +2666,9 @@ export function registerStaticViews(Alpine) {
 
     // The vault stack's headline figures, first in the meta row: what it
     // holds, what it has returned, and how many vaults take deposits. Return
-    // is each vault's share price against the 1.00 it opened at, weighted by
-    // what the vault holds; depositors show once a vault serves them.
+    // is time-weighted since inception (vault-data.js portfolioTwr), from each
+    // vault's daily history where the source serves it; absent when it cannot
+    // be computed honestly. Depositors show once a vault serves them.
     stackFacts() {
       const ov = this.vaultStack?.overview;
       if (!ov) return [];
@@ -2404,18 +2676,47 @@ export function registerStaticViews(Alpine) {
       const facts = [];
       const tvl = Number(ov.combined?.tvlUsd ?? this.stackSnapshot()?.totalValueUsd);
       if (Number.isFinite(tvl)) facts.push({ key: "tvl", label: "TVL", value: fmtVaultUsd(tvl) });
-      const priced = live.filter((v) => Number.isFinite(Number(v.sharePrice)) && Number(v.tvlUsd) > 0);
-      const held = priced.reduce((n, v) => n + Number(v.tvlUsd), 0);
-      if (held > 0) {
-        const r = priced.reduce((n, v) => n + (Number(v.sharePrice) - 1) * Number(v.tvlUsd), 0) / held;
+      const r = portfolioTwr(live.map((v) => ({ ...v, history: this.stackDetails[v.slug]?.history ?? v.history })));
+      if (r !== null && Number.isFinite(r)) {
         const pct = Math.round(r * 10000) / 100;
-        facts.push({ key: "ret", label: "Return since launch", value: `${pct > 0 ? "+" : pct < 0 ? "−" : ""}${Math.abs(pct).toFixed(2)}%`, cls: this.changeClass(pct),
-          tip: "Each vault's share price against the 1.00 it opened at, weighted by what the vault holds." });
+        facts.push({ key: "ret", label: "Return since inception", value: `${pct > 0 ? "+" : pct < 0 ? "−" : ""}${Math.abs(pct).toFixed(2)}%`, cls: this.changeClass(pct),
+          tip: "Time-weighted from the 1.00 each vault opened at: each day's return is the vaults' share-price change, weighted by what each held the day before. Deposits and withdrawals do not move it." });
       }
       const details = live.map((v) => this.stackDetails[v.slug]).filter(Boolean);
       const deps = details.filter((d) => Number.isFinite(Number(d.depositors)));
       if (deps.some((d) => Number(d.depositors) > 0)) facts.push({ key: "dep", label: "Depositors", value: deps.reduce((n, d) => n + Number(d.depositors), 0).toLocaleString("en-US") });
       if (ov.vaults?.length) facts.push({ key: "live", label: "Vaults live", value: `${live.length} of ${ov.vaults.length}` });
+      return facts;
+    },
+
+    // The facts row's figures: the vault stack's (stackFacts), or a wallet
+    // portfolio's: its value and how it moved over a day and over 30 days,
+    // deposits and withdrawals included, so a change and not a return. Only
+    // from a reading at most two days old: a stale book is not a headline.
+    metaFacts() {
+      return this.isVaultStack() ? this.stackFacts() : this.portfolioFacts();
+    },
+    portfolioFacts() {
+      if (this.isFramework()) return [];
+      const list = this.snapshots || [];
+      const last = list[list.length - 1];
+      const at = (/** @type {any} */ snap) => Date.parse(`${String(snap?.date ?? "").slice(0, 10)}T00:00:00Z`);
+      const val = (/** @type {any} */ snap) => Number(snap?.totalValueUsd ?? snap?.total_value_usd);
+      const lastMs = at(last);
+      const now = val(last);
+      if (!last || !Number.isFinite(lastMs) || !Number.isFinite(now) || Date.now() - lastMs > 2 * 86400000) return [];
+      const facts = [{ key: "value", label: "Value", value: this.fmtUsd(now) }];
+      for (const [key, days, label] of /** @type {Array<[string, number, string]>} */ ([["d1", 1, "24h"], ["d30", 30, "30d"]])) {
+        let then = null;
+        for (const snap of list) if (at(snap) <= lastMs - days * 86400000) then = snap;
+        const was = val(then);
+        if (!then || !Number.isFinite(was) || was <= 0) continue;
+        const d = now - was;
+        const pct = Math.round((d / was) * 1000) / 10;
+        const sign = d > 0 ? "+" : d < 0 ? "−" : "";
+        facts.push({ key, label, value: `${sign}${this.fmtUsd(Math.abs(d))} (${sign}${Math.abs(pct).toFixed(1)}%)`, cls: this.changeClass(pct),
+          tip: key === "d30" ? "The change in value over 30 days, deposits and withdrawals included." : undefined });
+      }
       return facts;
     },
 
@@ -2432,7 +2733,7 @@ export function registerStaticViews(Alpine) {
         if (detail) this.stackDetails = { ...this.stackDetails, [v.slug]: detail };
         if (!Array.isArray(detail?.activity)) continue;
         served = true;
-        for (const a of detail.activity) rows.push({ ...a, vault: v.slug, symbol: v.symbol, color: v.color });
+        for (const a of detail.activity) rows.push({ ...a, vault: v.slug, symbol: v.symbol, name: v.name, color: v.color });
       }
       this.stackActivity = served ? rows.sort((a, b) => (Date.parse(b?.t) || 0) - (Date.parse(a?.t) || 0)) : null;
     },
@@ -2447,6 +2748,12 @@ export function registerStaticViews(Alpine) {
       return `${from}–${Math.min(n, from + 9)} of ${n}`;
     },
     stackActivityHasTx() { return (this.stackActivity || []).some((a) => !!a?.tx); },
+    // Who: the account the shares were minted to or burned from (ERC-4626's
+    // owner), linked on Base; the devnet has no explorer.
+    stackActivityHasAccount() { return (this.stackActivity || []).some((a) => !!a?.account); },
+    stackAccountHref(a) {
+      return a?.account && this.vaultStack?.overview?.network?.chainId === 8453 ? this.explorerHref("base", a.account) : null;
+    },
     activityEvent(a) {
       const k = String(a?.kind ?? "").toLowerCase();
       return k === "withdraw" || k === "withdrawal" ? "Withdrawal" : k === "deposit" ? "Deposit" : (k ? k[0].toUpperCase() + k.slice(1) : "—");
@@ -2582,6 +2889,12 @@ export function registerStaticViews(Alpine) {
     notFound: false,
     attemptedRef: null,
     members: [],
+    // A judge's record: its public judgements, newest first. A judge files no
+    // takes, so its page lists these where a member's lists takes.
+    judgements: [],
+    // Whether the judgements are served at all (RM-130): a release without
+    // #1017 serves none, and then the record is left out, not called empty.
+    judgementsServed: false,
     // subject id → the subject record's name. A take row carries the name its
     // session was filed under, which can lag a rename; /swarm and the subject
     // page print the record's name, so this page does too.
@@ -2660,9 +2973,13 @@ export function registerStaticViews(Alpine) {
             setCanonicalUrl(canonicalUrlFor(`/swarm/members/${this.member.handle}`), routeAtEntry);
           }
         }
-        this.rows = await this.loadRows(memberId);
+        if (isJudge(this.member)) {
+          const judgements = await loadMemberJudgements(memberId);
+          this.judgementsServed = judgements !== null;
+          this.judgements = judgements || [];
+        } else this.rows = await this.loadRows(memberId);
         try {
-          const ids = [...new Set(this.rows.map((r) => r.session.subjectId).filter(Boolean))];
+          const ids = [...new Set([...this.rows.map((r) => r.session.subjectId), ...this.judgements.map((j) => j.subjectId)].filter(Boolean))];
           const subs = await Promise.all(ids.map(async (id) => (await api.get(path(ROUTES.swarm.subject, { id })).then(camelSubject).catch(() => null)) || loadArchiveSubject(id).catch(() => null)));
           this.subjectNames = Object.fromEntries(ids.map((id, i) => [id, subs[i]?.name]).filter(([, n]) => n));
         } catch (_) { /* the stored names stand */ }
@@ -2785,6 +3102,24 @@ export function registerStaticViews(Alpine) {
     phaseChipClass(phase) {
       const key = phase === "live" ? "open" : phase === "closing" ? "aggregating" : phase === "closed" ? "closed" : "published";
       return `rm-sphase rm-sphase--${key}`;
+    },
+    isJudge(m) { return isJudge(m); },
+    roleLabel(m) { return roleLabel(m); },
+    // ── A judge's record ────────────────────────────────────────────────────
+    judgementHref(j) { return judgementHref(j); },
+    // A record card's call (the badge) and, for a hold, why.
+    // A card's call only where its session's recommendation set weights, as
+    // the judgement says (#1017); without the field, the reasons alone.
+    adviceCall(j) { return j?.recommendsWeights === true ? adviceCall(j?.releaseSafety) : null; },
+    adviceReason(j) { return adviceOf(j?.releaseSafety)?.reason || ""; },
+    // Only a model's own words, as on the session and judgement pages.
+    judgementProse(j) { return j?.source === "model" ? j.rationale || "" : ""; },
+    judgementsCapped() { return this.judgements.length >= MEMBER_JUDGEMENTS_MAX; },
+    judgeStats() {
+      return {
+        sessions: this.judgements.length,
+        holds: this.judgements.filter((j) => adviceOf(j.releaseSafety)).length,
+      };
     },
     allTakes() { return this.member ? this.rows : []; },
     // At the route's ceiling there may be more: the counts are the latest ones.
@@ -2923,6 +3258,8 @@ export function registerStaticViews(Alpine) {
     brief: null,
     takes: [],
     members: [],
+    // The session's public judgements, one per judge (loadJudgements()).
+    judgements: [],
     // subject id → name, for the brief's recent-session refs, which carry ids.
     subjectNames: {},
     // The sessions either side of this one on the same subject, for the
@@ -2952,8 +3289,10 @@ export function registerStaticViews(Alpine) {
       const k = this.session ? sessionPhase(this.session, this.now).key : "";
       return k === "open" || k === "aggregating" || k === "closed";
     },
+    // Of the members who file takes: a seated judge files none.
     filedCount() {
-      return this.isLive() && this.members.length ? `${this.takes.length} of ${this.members.length}` : String(this.takes.length);
+      const seats = analystCount(this.members);
+      return this.isLive() && seats ? `${this.takes.length} of ${seats}` : String(this.takes.length);
     },
     windowLeft() { return this.isLive() ? timeLeft(this.session?.windowClosesAt, this.now) : ""; },
     windowAgo() { return this.isLive() ? timeAgo(this.session?.windowClosesAt, this.now) : ""; },
@@ -2979,6 +3318,7 @@ export function registerStaticViews(Alpine) {
           const detail = await api.get(path(ROUTES.swarm.sessionById, { id: byId[1] }));
           const s = camelSession(detail.session);
           await this.loadApi(s.date, s.subjectId, detail);
+          await this.loadJudgements();
           this.loadEvidence();
           this.syncTitle(routeAtEntry);
         } catch (e) {
@@ -3007,6 +3347,7 @@ export function registerStaticViews(Alpine) {
         // in the database, the archive is a FALLBACK for checkouts with no
         // backend, not a competing source of truth for old dates.
         await this.loadApi(date, subject);
+        await this.loadJudgements();
         this.loadEvidence();
         this.syncTitle(routeAtEntry);
       } catch (primary) {
@@ -3120,6 +3461,21 @@ export function registerStaticViews(Alpine) {
         this.subjectNames = names;
       } catch (_) { /* ids stand in for names */ }
     },
+    // The session's public judgements (lib/judgements.js). Asked for only when
+    // the recommendation carries a judge block: a judgement is public once it
+    // has reached the published session, and reaching it is what writes that
+    // block, so a session without one has none to show. Asking anyway would put
+    // a 404 in every reader's console for as long as production runs a backend
+    // without the route. The one case this passes over is a session whose
+    // aggregation was re-run after judging, which replaces the block; its
+    // judgements stay on their own pages and on the judge's.
+    async loadJudgements() {
+      const s = this.session;
+      if (this.source !== "api" || !s?.id || s.state !== "published" || !s.swarmRecommendation?.judge) return;
+      // Not served (RM-130) reads as none: the opinion the recommendation
+      // carries still shows, with no way to a judgement page.
+      this.judgements = (await loadSessionJudgements(s.id)) || [];
+    },
     isFramework() { return this.subject?.source?.type === "framework"; },
     subjectHref() {
       const id = this.session?.subjectId || this.subject?.id;
@@ -3194,9 +3550,11 @@ export function registerStaticViews(Alpine) {
     // "absent: draco, 88efd6b9-e865-417d-afe1-45d84510338b". Resolve what we
     // can; an id we hold no member record for still prints, because silently
     // dropping it would understate who missed the session.
+    //
+    // A seated judge is not absent: it files no take (lib/judgements.js).
+    absentIds() { return analystAbsent(this.session?.swarmRecommendation, this.members); },
     absentNames() {
-      return (this.session?.swarmRecommendation?.absent || [])
-        .map((id) => this.memberById(id)?.name || id);
+      return this.absentIds().map((id) => this.memberById(id)?.name || id);
     },
     isRollupRecommendation() {
       const rec = this.session?.swarmRecommendation;
@@ -3211,8 +3569,12 @@ export function registerStaticViews(Alpine) {
     // behind the weights.
     // The rule itself is sessionSummary.rationaleOf(), so the subject page and
     // /swarm apply the same one.
+    //
+    // A judge's rationale is not repeated here: this page prints each judge's
+    // opinion in its own block under Reasoning & disagreement, and the one the
+    // session adopted is only the last of them.
     recommendationRationale() {
-      return this.rationaleOf(this.session);
+      return judgeWroteRationale(this.session) ? "" : this.rationaleOf(this.session);
     },
     // The recommendation's `actions`, as the payload carries them. Rollups
     // aggregated between 2026-08-06 and 2026-09-04 carry the same two
@@ -3324,7 +3686,7 @@ export function registerStaticViews(Alpine) {
       if (Array.isArray(rec.buckets) && rec.buckets.length) {
         return ranked(rec.buckets.map((b, i) => ({
           id: b.id || "",
-          name: b.name || bucketLabel(b.id),
+          name: bucketLabel(b.name || b.id),
           hue: bucketHue(b.id || b.name, i),
           target: num(b.target ?? b.target_weight),
           actual: num(b.actual ?? b.actual_weight),
@@ -3352,7 +3714,7 @@ export function registerStaticViews(Alpine) {
           // Prefer the framework's own spelling of the bucket name when it is
           // known; humanize() of an id cannot recover "DeFi".
           id,
-          name: framework?.label || bucket?.name || brief?.label || bucketLabel(id),
+          name: bucketLabel(framework?.label || bucket?.name || brief?.label || id),
           hue: bucketHue(id, i),
           // A brief that named any target names them all, so a sleeve it left
           // out has no target rather than borrowing the framework's.
@@ -3576,6 +3938,23 @@ export function registerStaticViews(Alpine) {
     },
     // Where a take card sits on this page, for the index above the cards.
     takeAnchor(t) { return `take-${String(t?.memberId || t?.id || "").replace(/[^A-Za-z0-9_-]/g, "")}`; },
+    // A question's members as rows (views-table): the stance and confidence
+    // their take filed, and one way to it, its card on this page. Their view
+    // in words only when it is not their take's own body (a v0 member wrote a
+    // line of their own).
+    viewRows(d) {
+      return (d?.positions || []).map((p) => {
+        const t = this.takeOf(p.member_id);
+        return {
+          key: `${d.topic}-${p.member_id}`,
+          name: this.memberById(p.member_id)?.name || t?.memberName || p.member_id,
+          stance: t ? String(t.stance || "").toLowerCase() : "",
+          confidence: t && Number.isFinite(Number(t.confidence)) ? this.fmtPct(t.confidence) : "",
+          href: t ? `#${this.takeAnchor(t)}` : null,
+          view: this.isEcho(p.view) ? "" : p.view || "",
+        };
+      });
+    },
     // THE DISCUSSION, when somebody wrote it. A live aggregate's consensus,
     // disagreements and synthesis are templates over the stance tally, the
     // quorum, the mean confidence and the regime percentile (domain.ts
@@ -3589,16 +3968,91 @@ export function registerStaticViews(Alpine) {
       if (this.isRollupRecommendation()) return [];
       return (this.session?.swarmRecommendation?.consensus || []).filter((c) => !this.isEcho(c));
     },
+    // The disagreements members wrote into a v0 session. A live aggregate's
+    // are a judge's, and read under that judge (judgeBlocks()).
     disagreements() {
-      const rec = this.session?.swarmRecommendation;
-      if (this.isRollupRecommendation() && rec?.judge?.source !== "model") return [];
-      return rec?.disagreements || [];
+      if (this.isRollupRecommendation()) return [];
+      return this.session?.swarmRecommendation?.disagreements || [];
     },
     showSynthesis() {
       return !this.isRollupRecommendation() && !!this.session?.synthesis && !this.synthesisIsEcho();
     },
     hasDiscussion() {
-      return this.showSynthesis() || this.consensusItems().length > 0 || this.disagreements().length > 0;
+      return this.showSynthesis() || this.consensusItems().length > 0 || this.disagreements().length > 0
+        || this.judgeBlocks().length > 0;
+    },
+    // ── the judge ────────────────────────────────────────────────────────
+    // ONE JUDGE PER SESSION (agreed with the backend owner, 2026-09-21): the
+    // house judge by default, one picked at random when several are seated,
+    // never one related to the session's subject or members. The page shows
+    // the judge whose opinion the recommendation carries (its judge.judged_by),
+    // else the newest public judgement, which covers a re-judged session; each
+    // judgement keeps its own page. On a
+    // backend that does not serve judgements, the opinion the recommendation
+    // carries stands in, under the judge it names, when a model wrote it; the
+    // fallback judge writes the aggregator's templates.
+    judgeBlocks() {
+      const rec = this.session?.swarmRecommendation;
+      if (this.judgements.length) {
+        const by = rec?.judge?.judged_by_member_id || rec?.judge?.judged_by;
+        const carried = by ? this.judgements.find((j) => j.judgedByMemberId === by || j.judgedBy === by) : null;
+        return [this.judgeBlockOf(carried || this.judgements[0])];
+      }
+      if (!this.isRollupRecommendation() || rec?.judge?.source !== "model") return [];
+      const adopted = normalizeJudgement({
+        ...rec.judge, rationale: rec.rationale, disagreements: rec.disagreements, release_safety: rec.release_safety,
+      });
+      return adopted ? [this.judgeBlockOf({ ...adopted, id: "" })] : [];
+    },
+    judgeBlockOf(j) {
+      const advice = adviceOf(j.releaseSafety);
+      return {
+        key: j.id || "adopted",
+        name: judgeName(j, this.members),
+        label: judgeLabelHtml(j, this.members),
+        advice,
+        // The call only where there is a target to act on (callApplies); the
+        // reason a judge held shows either way.
+        call: this.callApplies() ? adviceCall(j.releaseSafety) : null,
+        reason: advice ? advice.reason || advice.concerns[0] || "" : "",
+        // A judgement recorded before the judge stopped writing templates
+        // (source "fallback") restates the tally the page draws.
+        rationale: j.source === "model" ? j.rationale : "",
+        disagreements: j.disagreements || [],
+        page: judgementHref(j),
+      };
+    },
+    // Whether a judge's call has anything to act on: a weights recommendation
+    // that moves the target. A session that published no weights holds the
+    // target by itself, and a portfolio review has no target; there the
+    // judges' reasons show and no call does (RM-97, 2026-09-21).
+    callApplies() {
+      if (!setsWeights(this.session?.swarmRecommendation) || !this.isBucketWeights()) return false;
+      const known = this.bucketRows().filter((b) => b.recommended != null && b.target != null);
+      return !known.length || known.some((b) => Math.abs(b.recommended - b.target) >= 0.0005);
+    },
+    judge() { return this.judgeBlocks()[0] || null; },
+    // Where the judge found the takes apart, as the members it named, each
+    // once. The questions, and what would resolve each, are its judgement
+    // page's; the session page says who differs and how they stood.
+    judgeViewRows() {
+      const seen = new Set();
+      const out = [];
+      for (const d of this.judge()?.disagreements || []) {
+        for (const r of this.viewRows(d)) {
+          if (seen.has(r.name)) continue;
+          seen.add(r.name);
+          out.push({ ...r, key: `jv-${r.name}` });
+        }
+      }
+      return out;
+    },
+    // The judge, named in the facts row, a way to its block below.
+    judgedBy() { return this.judgeBlocks().filter((b) => b.name); },
+    // One count: the members' own disagreements on a v0 session, or the
+    // judge's questions.
+    disagreementCount() {
+      return this.disagreements().length || this.judge()?.disagreements.length || 0;
     },
 
     // ── the research record (RM-121) ────────────────────────────────────────

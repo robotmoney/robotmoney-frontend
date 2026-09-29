@@ -178,12 +178,12 @@ const insertVintageMembers = registerQuery({
   object: "analytics_vintage_members",
   privileges: ["INSERT"],
   site: "src/analytics/store/run-ledger-store:freezeVintage.insertMembers",
-  purpose: "Persist a vintage's flat membership, batched, in the transaction that froze it.",
+  purpose: "Persist a vintage's membership as runs of consecutive version ids, batched, in the transaction that froze it (issue #1035).",
   callers: [ANALYTICS_ROUTE],
   probe: {
-    statement: `INSERT INTO analytics_vintage_members (vintage_id, source_value_version_id, source_key)
-          SELECT $1::bigint, $2::bigint, $3 WHERE false`,
-    params: [1, 1, "probe"],
+    statement: `INSERT INTO analytics_vintage_members (vintage_id, source_value_version_id, last_source_value_version_id, source_key)
+          SELECT $1::bigint, $2::bigint, $3::bigint, $4 WHERE false`,
+    params: [1, 1, null, "probe"],
   },
 });
 
@@ -205,9 +205,15 @@ const selectVintage = registerQuery({
 
 const MEMBERS_PROBE = {
   statement: `SELECT svv.id, svv.source_key, svv.market_date::text AS market_date,
-           svv.market_instant::text AS market_instant, svv.value
+           svv.market_instant::text AS market_instant, svv.value, vm.source_key AS run_key
     FROM analytics_vintage_members vm
-    JOIN source_value_versions svv ON svv.id = vm.source_value_version_id
+    CROSS JOIN LATERAL generate_series(
+      vm.source_value_version_id,
+      COALESCE(vm.last_source_value_version_id, vm.source_value_version_id)) AS g(id)
+    CROSS JOIN LATERAL (
+      SELECT v.id, v.source_key, v.market_date, v.market_instant, v.value
+      FROM source_value_versions v WHERE v.id = g.id LIMIT 1
+    ) svv
     WHERE vm.vintage_id = $1::bigint`,
   params: [1],
 } as const;
@@ -216,8 +222,8 @@ const selectVintageMembers = registerQuery({
   role: "rm_app",
   object: "analytics_vintage_members",
   privileges: ["SELECT"],
-  site: "src/analytics/store/run-ledger-store:loadFrozenVintage.members",
-  purpose: "Reload a vintage's members, joined to the source value versions they name.",
+  site: "src/analytics/store/run-ledger-store:resolveVintageMembers.runs",
+  purpose: "Reload a vintage's stored runs of version ids, expanded to the source value versions they name (issue #1035).",
   callers: [ANALYTICS_ROUTE],
   probe: MEMBERS_PROBE,
 });
@@ -226,7 +232,7 @@ const selectVintageMemberValues = registerQuery({
   role: "rm_app",
   object: "source_value_versions",
   privileges: ["SELECT"],
-  site: "src/analytics/store/run-ledger-store:loadFrozenVintage.memberValues",
+  site: "src/analytics/store/run-ledger-store:resolveVintageMembers.values",
   purpose: "Read the source value versions a vintage's members name.",
   callers: [ANALYTICS_ROUTE],
   probe: MEMBERS_PROBE,
@@ -425,7 +431,8 @@ export class VintageConflictError extends Error {
 
 // Freeze one data vintage: select the boundary-eligible source-value-version
 // ids (loadHistoricalSourceValues), build the canonical manifest, and persist
-// both the manifest and its flat membership atomically. Idempotent on
+// both the manifest and its membership (as runs of consecutive ids — see
+// memberRanges) atomically. Idempotent on
 // (run_id, tool_id) (issue #977 AC8): resubmitting the SAME cutoffs +
 // methodology + build for an already-frozen (run, tool) replays the existing
 // vintage rather than erroring; resubmitting DIFFERENT ones raises
@@ -466,22 +473,22 @@ export async function freezeVintage(input: FreezeVintageInput): Promise<FreezeVi
                 ${tx.json(jsonValue(manifest))}, ${manifest.manifestDigest}, ${members.length})
         RETURNING id`;
       const vintageId = String(vintage!.id);
-      // Batched, never one round trip per member (the same rule as
-      // source-ledger-store.ts's value insert): a vintage spans every series
-      // in the ledger, so this is thousands of rows, and `sql.begin` holds one
-      // of the api's 10 pooled connections for the whole transaction. A
-      // per-row loop here would hold it open for one round trip per member.
-      // postgres.js binds one parameter per cell, so keep each statement well
-      // below PostgreSQL's 65,535-parameter limit (3 columns per row).
+      // One row per RUN of consecutive version ids, not one per member (issue
+      // #1035): see memberRanges below. Still batched, never one round trip per
+      // row: `sql.begin` holds one of the api's 10 pooled connections for the
+      // whole transaction. postgres.js binds one parameter per cell, so keep
+      // each statement well below PostgreSQL's 65,535-parameter limit (4
+      // columns per row).
       const MEMBER_INSERT_BATCH_SIZE = 10_000;
-      const memberRows = members.map((member) => ({
+      const memberRows = memberRanges(members).map((range) => ({
         vintage_id: vintageId,
-        source_value_version_id: member.versionId,
-        source_key: member.sourceKey,
+        source_value_version_id: range.firstVersionId,
+        last_source_value_version_id: range.lastVersionId,
+        source_key: range.sourceKey,
       }));
       for (let start = 0; start < memberRows.length; start += MEMBER_INSERT_BATCH_SIZE) {
         await on(tx, insertVintageMembers)`
-          INSERT INTO analytics_vintage_members ${tx(memberRows.slice(start, start + MEMBER_INSERT_BATCH_SIZE), "vintage_id", "source_value_version_id", "source_key")}`;
+          INSERT INTO analytics_vintage_members ${tx(memberRows.slice(start, start + MEMBER_INSERT_BATCH_SIZE), "vintage_id", "source_value_version_id", "last_source_value_version_id", "source_key")}`;
       }
       return { vintageId, manifest, memberCount: members.length, replayed: false };
     });
@@ -493,6 +500,49 @@ export async function freezeVintage(input: FreezeVintageInput): Promise<FreezeVi
     if (code === "23505") return freezeVintage(input);
     throw err;
   }
+}
+
+// Issue #1035: a vintage's membership, stored as runs of CONSECUTIVE
+// source_value_versions ids that share one source_key, instead of one row per
+// member.
+//
+// WHY. Every vintage selects the ledger head of every series — ~172k members in
+// production — and the old one-row-per-member copy wrote all of them again on
+// every freeze: 3.3M analytics_vintage_members rows a day, 1.7 GB in four days.
+// But one acquisition inserts a series' points in one statement, so their ids
+// are consecutive, and a vintage's members are overwhelmingly long unbroken
+// runs of them. A run [first, last] is exact: it contains EVERY id from first
+// to last, and each of those ids is a member. Only strictly consecutive
+// integers are merged — a gap in the id sequence (an aborted insert, or an
+// insert still in flight when the vintage froze) always ends a run, so no id
+// that was not a member at freeze time can ever fall inside one.
+//
+// The resolved membership is therefore the IDENTICAL set of versionIds, and
+// buildVintageManifest over it reproduces manifest_digest bit for bit — which
+// is what loadFrozenVintage's replay proof, and every vintage frozen before
+// this change (one row each, last_source_value_version_id NULL), depend on.
+export interface MemberRange {
+  firstVersionId: string;
+  /** NULL for a single-member row — the shape every pre-#1035 row has. */
+  lastVersionId: string | null;
+  sourceKey: string;
+}
+
+export function memberRanges(members: readonly FrozenSourceValue[]): MemberRange[] {
+  const sorted = [...members]
+    .map((m) => ({ id: BigInt(m.versionId), sourceKey: m.sourceKey }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const ranges: { first: bigint; last: bigint; sourceKey: string }[] = [];
+  for (const m of sorted) {
+    const open = ranges[ranges.length - 1];
+    if (open && open.sourceKey === m.sourceKey && m.id === open.last + 1n) open.last = m.id;
+    else ranges.push({ first: m.id, last: m.id, sourceKey: m.sourceKey });
+  }
+  return ranges.map((r) => ({
+    firstVersionId: r.first.toString(),
+    lastVersionId: r.last === r.first ? null : r.last.toString(),
+    sourceKey: r.sourceKey,
+  }));
 }
 
 export interface FrozenVintage {
@@ -509,6 +559,32 @@ export interface FrozenVintage {
   members: FrozenSourceValue[];
 }
 
+// A vintage's members, resolved from its stored runs (memberRanges above); a
+// single-id row is the one-id run [first, first]. Runs are expanded with
+// generate_series and joined on the id ALONE: a source_key term (or a
+// `BETWEEN` range) in the join lets the planner scan every version of the
+// run's key per member instead of probing the primary key, and the LIMIT 1
+// LATERAL keeps the probe from being flattened into a per-member hash join
+// (see migration 0080's fingerprint for the same shape). The source_key match
+// is checked on the result as a guard: a run can only be written over one key,
+// so a row it drops would be a corrupted run — and the callers' count checks
+// then refuse a membership that no longer matches what was frozen.
+export async function resolveVintageMembers(vintageId: string, db: DbHandle = sql): Promise<FrozenSourceValue[]> {
+  const resolved = (await on(db, selectVintageMembers, selectVintageMemberValues)`
+    SELECT svv.id, svv.source_key, svv.market_date::text AS market_date,
+           svv.market_instant::text AS market_instant, svv.value, vm.source_key AS run_key
+    FROM analytics_vintage_members vm
+    CROSS JOIN LATERAL generate_series(
+      vm.source_value_version_id,
+      COALESCE(vm.last_source_value_version_id, vm.source_value_version_id)) AS g(id)
+    CROSS JOIN LATERAL (
+      SELECT v.id, v.source_key, v.market_date, v.market_instant, v.value
+      FROM source_value_versions v WHERE v.id = g.id LIMIT 1
+    ) svv
+    WHERE vm.vintage_id = ${vintageId}::bigint`) as unknown as (SourceValueRow & { run_key: string })[];
+  return resolved.filter((r) => r.source_key === r.run_key).map(toFrozen);
+}
+
 // Reload a previously-frozen vintage from the ledger ALONE — no network, no
 // AnalyticsDataSource call (issue #977 AC7's offline replay). Recomputing
 // buildVintageManifest over `members` here must reproduce `manifestDigest`
@@ -520,12 +596,13 @@ export async function loadFrozenVintage(vintageId: string, db: DbHandle = sql): 
            manifest, manifest_digest, member_count
     FROM analytics_data_vintages WHERE id = ${vintageId}::bigint`;
   if (!vintage) return null;
-  const members = (await on(db, selectVintageMembers, selectVintageMemberValues)`
-    SELECT svv.id, svv.source_key, svv.market_date::text AS market_date,
-           svv.market_instant::text AS market_instant, svv.value
-    FROM analytics_vintage_members vm
-    JOIN source_value_versions svv ON svv.id = vm.source_value_version_id
-    WHERE vm.vintage_id = ${vintageId}::bigint`) as unknown as SourceValueRow[];
+  const members = await resolveVintageMembers(vintageId, db);
+  if (members.length !== Number(vintage.member_count)) {
+    throw new Error(
+      `vintage ${vintageId} resolves to ${members.length} members but was frozen with ${vintage.member_count} — ` +
+        "its membership can no longer reproduce its manifest digest",
+    );
+  }
   return {
     vintageId: String(vintage.id),
     runId: String(vintage.run_id),
@@ -537,7 +614,7 @@ export async function loadFrozenVintage(vintageId: string, db: DbHandle = sql): 
     manifest: vintage.manifest as VintageManifest,
     manifestDigest: vintage.manifest_digest,
     memberCount: vintage.member_count,
-    members: members.map(toFrozen),
+    members,
   };
 }
 

@@ -4459,3 +4459,267 @@ the execution test's load, and it pins privileges nothing uses.
 **What stays.** D54's version contract, D52's third-party gate, D53's deleted
 backend judge, D47's rule that `rm_owner` is typed at the terminal and never
 stored, and the state guard on every transition are unchanged.
+
+## D56 — The analytics ledger records information, not fetches: a per-source tolerance, no row for a re-observation, run-encoded vintage membership, and no raw response bodies (issue #1035)
+
+**Decision.** A re-acquired point adds a `source_value_versions` row only when it
+is new information. `saveSourceAcquisition` compares each point with the ledger
+head for its coordinate:
+
+- no head → `initial`;
+- a value outside the source's tolerance → `revision`;
+- a value within tolerance **and** the same provenance label → **no row at all**;
+- a value within tolerance under a different label → `unchanged`, carrying the
+  head's value and the new label.
+
+`saveRawIndicatorHistory` applies the same rule to `raw_indicator_history`: a
+point within tolerance under the same label is not rewritten (so migration
+0056's trigger writes no overwrite event), and one within tolerance under a new
+label rewrites only the label. Both writers call one function,
+`withinTolerance()` in `backend/src/analytics/source-tolerance.ts`, so the
+compatibility table and the ledger cannot drift apart by the noise the rule
+absorbs. The rule is `|next − prior| ≤ relative × max(|next|, |prior|)`; a
+relative of 0 is exact equality.
+
+A frozen vintage's membership is stored as runs of consecutive
+`source_value_versions` ids under one source_key
+(`analytics_vintage_members.last_source_value_version_id`), not one row per
+member. A run only ever joins strictly consecutive integers, so it resolves to
+the identical id set, and every manifest digest replays unchanged. (0080's
+#1050 repair re-points the vintages that existed before it and recomputes their
+digests; see the amendment below.)
+
+Migration `0080_analytics_ledger_compaction.sql` removes what the old writers
+wrote, under the same rule, drops `source_payloads` (see below), inside its own transaction, and re-arms every guard
+it disarms before that transaction ends. As extended by #1050 (amendment
+below) it keeps only what the fixed writers would have written, re-points every
+vintage and recomputes its digest, and leaves untouched only the coordinates
+whose chain does not follow its own time order. It verifies that every vintage
+keeps its member count and every coordinate keeps one head under the same label,
+and raises (rolling back, guards never observed off) if either would change.
+
+**Per-source tolerances.** Every source_key the extractors write:
+
+| source_key | provider | tolerance |
+|---|---|---|
+| `raw_indicator_history:T10Y2Y` | fred | exact |
+| `raw_indicator_history:DFII10` | fred | exact |
+| `raw_indicator_history:T5YIE` | fred | exact |
+| `raw_indicator_history:HY_OAS` | fred | exact |
+| `raw_indicator_history:DXY` | fred | exact |
+| `raw_indicator_history:ICSA` | fred | exact |
+| `raw_indicator_history:VIX` | yahoo | relative 1e-6 |
+| `raw_indicator_history:COPPER_GOLD` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:SPX_TREND` | yahoo | relative 1e-6 |
+| `raw_indicator_history:IWM_SPY` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:DEFI_TVL` | defillama_tvl | exact |
+| `raw_indicator_history:STABLES` | defillama_stables | exact |
+| `raw_indicator_history:BTC_ACTIVE` | blockchain_com | exact |
+| `raw_indicator_history:ETH_ACTIVE` | coinmetrics | exact |
+| `raw_indicator_history:BTC_MVRV` | coinmetrics | exact |
+| `raw_indicator_history:BTC_ETH` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:ETH_TREND` | yahoo | relative 1e-6 |
+| `raw_indicator_history:NEW_TOKENS` | geckoterminal_newpools | exact |
+| `raw_indicator_history:DEFI_GROWTH` | defillama_tvl | exact |
+| `raw_indicator_history:STABLES_GROWTH` | defillama_stables | exact |
+| `raw_indicator_history:SPHB_SPLV` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:MTUM_SPY` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:IWF_IWD` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:XLU_SPY` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:XLP_XLY` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:SHILLER_CAPE` | shiller_cape / multpl | exact |
+| `raw_indicator_history:MNA` | edgar | exact |
+| `research:BTC-USD` | yahoo | relative 1e-6 |
+| `research:QQQ` | yahoo | relative 1e-6 |
+| `research:SPY` | yahoo | relative 1e-6 |
+| `research:RSP` | yahoo | relative 1e-6 |
+| `research:NVDA` | yahoo | relative 1e-6 |
+| `research:MSFT` | yahoo | relative 1e-6 |
+| `research:AAPL` | yahoo | relative 1e-6 |
+| `research:GOOGL` | yahoo | relative 1e-6 |
+| `research:AMZN` | yahoo | relative 1e-6 |
+| `research:META` | yahoo | relative 1e-6 |
+| `research:AVGO` | yahoo | relative 1e-6 |
+| `research:MARGIN` | fred | exact |
+| `research:CONF` | fred | exact |
+| `backtest:^GSPC` | yahoo | relative 1e-6 |
+| `backtest:ETH-USD` | yahoo | relative 1e-6 |
+| `backtest:DTB3` | fred | exact |
+
+`backend/tests/analytics-source-tolerance.test.ts` reads the keys out of every
+capture call site under `src/analytics/extract` and `src/analytics/access`, and
+fails if one has no entry here or in `SOURCE_TOLERANCES`.
+
+**Why 1e-6 for Yahoo, and exact for everything else.** The only measured noise
+is Yahoo's. Its chart API serves float32-derived numbers
+(`18.719999313354492`), and the production ledger on 2026-09-24 showed the
+resulting `revision` rows a relative 1e-9 to 1e-6 off their prior. 1e-6 is the
+top of that measured band, and still well below a real Yahoo change: a one-cent
+correction on a $500 close is 2e-5, and a dividend or split re-adjustment is
+1e-4 and up. For every other provider there is no evidence of jitter — FRED,
+EDGAR and the Shiller file publish decimal text, and the on-chain and DeFi
+sources had no measured noise — so they stay exact. That is the conservative
+choice: an exact source still records every change it makes, exactly as before
+this decision, and at worst leaves some unmeasured noise in the ledger. A
+wider tolerance on no evidence could silently swallow a real revision, which
+the ledger exists to keep. A tolerance is widened only on measured evidence,
+recorded as an amendment here. An unlisted key is compared exactly for the
+same reason.
+
+**Why the value of record does not move within tolerance.** When a label
+changes on a value within tolerance, both writers keep the stored value and
+move only the label. If one writer stored the freshly fetched value and the
+other kept the old one, the two would differ by the noise itself, and
+`cutover/parity.ts` (which rounds at an absolute 1e-9) would record a
+permanent `matched:false`. The fetch itself stays on the record: every
+acquisition keeps its request, response status and the SHA-256 of the response
+body in `source_fetches`.
+
+**The ledger keeps no raw response bodies (owner decision, 2026-09-25).** "We
+should not duplicate any data. Our goal is to catch and tag revised source
+data, not store all payloads." Every fetch returns a series' whole history. So
+each new day, and each jittered point, stored that full history again as a new
+content-addressed blob in `source_payloads`. That was about 200 MB a day, never
+deleted, and no code read it back. What the ledger exists to keep is already in
+`source_value_versions`: each normalized value, and each revision of it, with
+its knowledge time. So:
+
+- `saveSourceAcquisition` writes no body anywhere, and the acquisition write
+  request carries no body. A `payloadBase64` field from an older producer is
+  ignored.
+- `source_fetches.response_checksum` stays, as a plain fingerprint of what each
+  response contained. Its foreign key into `source_payloads` is dropped.
+- Migration 0080 drops `source_payloads` outright rather than emptying it. An
+  empty append-only table would keep a write path, a grant set and two guard
+  triggers alive for data the ledger has decided not to hold. Dropping it
+  removes all of them. The table also leaves both guard inventories
+  (`src/db/analytics-ledger-guard.ts`, `src/db/append-only-guard.ts`), which
+  still report armed.
+
+The cost is that a response can no longer be re-parsed from the ledger alone. A
+parser fix is replayed by fetching the source again. The checksum still shows
+whether the provider returned the same bytes as before.
+
+**Why runs, not a delta against the previous vintage.** Before this decision
+every fetch re-versioned every point, so two consecutive vintages share almost
+no version ids. A delta between them would be about twice a full copy. Runs of
+consecutive ids compress both the old vintages and the new ones, because one
+acquisition writes a series in one statement.
+
+**The upgrade returns the disk space.** A DELETE frees nothing on disk. The
+space is only reused by later inserts, so 0080 alone would leave the database
+as large as before. VACUUM FULL cannot run inside a transaction, and every
+migration is one. So the migration runner (`reclaimAfterMigrations` in
+`backend/src/db/migrate.ts`) runs `VACUUM (FULL, ANALYZE)` on
+`source_value_versions`, `analytics_vintage_members` and
+`analytics_overwrite_events` right after 0080 commits. It runs once, only in
+the run that applied 0080, never on an ordinary boot. It runs on the migration
+connection as `rm_owner`, because only a table's owner may VACUUM FULL it. No
+grant changes. Each table is under ACCESS EXCLUSIVE while its own rewrite
+runs, and the rewrite cost follows its live rows. If that run is interrupted
+after 0080 commits, the dead space stays until the owner runs the same VACUUM
+FULL. The data is correct either way.
+
+**Point-in-time reads after compaction.** Every vintage, old or new, resolves
+to the versions the fixed writer would have written (amendment for #1050
+below). A vintage frozen later with a knowledge-time cutoff from before the
+migration selects the same kept versions an old vintage was re-pointed to.
+
+**Known limit (as merged in #1035; lifted by #1050).** The compaction as first
+merged kept every version a vintage referenced, because each vintage's digest
+hashed its members' ids. Production froze a vintage after almost every
+acquisition, so most duplicate rows would have stayed. The #1050 amendment
+removes them too. From this release on, growth tracks real changes rather than
+fetch frequency.
+
+**Alternatives rejected.**
+- **A single global tolerance** — it would either miss Yahoo's noise or blur a
+  real revision on an exact source.
+- **Selecting a vintage's membership again by its cutoffs instead of storing
+  it** — the knowledge-time cutoff comes from the producer's clock, and an
+  insert still in flight at freeze time can commit later with an earlier
+  `knowledge_time`. Re-running the selection is not guaranteed to return the
+  frozen set.
+- **Deleting vintage-referenced versions and storing an alias** — this breaks
+  the foreign key into the frozen set. It also moves the rows rather than
+  removing them, for a new table and a new guard family.
+
+### Amendment (issue #1050) — repaired vintages get recomputed digests, and no trace of the old ones is kept
+
+**Decision.** Migration 0080 is extended so the database ends exactly as the
+fixed writers would have left it, including every vintage frozen before it.
+Each existing vintage is re-pointed to the versions the fixed writer would have
+written. Its manifest, series fingerprints, `member_count` and
+`manifest_digest` are then recomputed from those members and overwritten. The
+old digests are not kept anywhere: no old-digest column, no mapping table from
+old to new version ids, no audit row of the repair.
+
+**The owner's reason (2026-09-25).** "The database must end in the state it
+would have been in if the bug had never been introduced. No mapping table, no
+old-digest column, and no other trace of the repair stays behind." The bug
+recorded re-observations and float noise as if they were information. Keeping
+vintages pinned to those rows, as 0080 first did, kept most of that
+duplication on disk, and kept the ledger saying something the source never
+said. A digest is a fingerprint of the members, not an independent fact: once
+the members are what the fixed writer would have frozen, the digest is what
+`freezeVintage` would have stored for them, and nothing else.
+
+**What the repair does, in the migration's one transaction.**
+
+- **Versions.** Each (source_key, market coordinate) is replayed oldest first
+  under D56's rule, holding the head the fixed writer would have had. A version
+  within tolerance of that head under the same label is deleted, even when a
+  vintage referenced it or it was the old head. Every kept version keeps its
+  id, acquisition, knowledge_time and provenance. It is re-linked by
+  `prior_version_id` to the previous kept version, and gets the
+  `revision_kind` the fixed writer would have assigned. A relabel within
+  tolerance also gets the head's value, as `saveSourceAcquisition` writes it.
+- **Vintage members.** Each member is mapped to the last kept version at or
+  before it in its coordinate's (knowledge_time, id) order: the fixed writer's
+  head at the moment that member was the head. This keeps one member per
+  coordinate, so every vintage keeps its member count. It deliberately does not
+  re-run a cutoff selection, which this decision already rejects: an insert in
+  flight at freeze time can commit later with an earlier knowledge_time. The
+  mapped ids are stored as runs, exactly as a new freeze stores them.
+- **Digests.** The recompute is TypeScript, not SQL. A canonical-JSON SHA-256
+  in plpgsql would have to reproduce JavaScript's number formatting byte for
+  byte. The migration runner runs `rebuildVintageManifests`
+  (in `src/db/migrate.ts`, which reads members through the store's registered
+  `resolveVintageMembers`) inside the same transaction, straight after
+  0080's SQL (`IN_TRANSACTION_AFTER_MIGRATION` in `src/db/migrate.ts`). It uses
+  the same `buildVintageManifest` every freeze and every replay uses. It runs
+  once, only in the run that applies 0080, with no manual step. A failure rolls
+  the whole migration back.
+- **raw_indicator_history and its overwrite evidence.** Each row's recorded
+  rewrites are replayed under `saveRawIndicatorHistory`'s rule. Evidence of a
+  rewrite the fixed writer would not have made is deleted. Each kept event
+  records the rewrite the fixed writer made, from the state it held. Each row
+  ends with the value and label the fixed writer would have left, so ledger
+  parity stays matched.
+- **Scratch state** lives in `TEMP ... ON COMMIT DROP` tables. They exist for
+  the migration's transaction only and leave nothing in the schema.
+
+**Left exactly as they are:** coordinates whose stored chain does not follow
+its own (knowledge_time, id) order. No writer order can be recovered for them,
+so no replay of them is safe. The fixed writer takes an advisory lock per
+source key, so it does not produce them. This is the option closest to "as if
+the bug never happened" that still never guesses.
+
+**Not recomputed (out of scope):** analysis outputs, reports and
+recommendations past runs derived from their vintages. A past run computed
+from members that are now replaced by versions within tolerance of them, or by
+the same value under an earlier knowledge_time.
+
+**Extended in place, not a new migration.** When #1050 extended 0080, no
+persistent database had recorded it. Production's `schema_migrations` ended at
+0062 (read from the read-only replica on 2026-09-25). The stage hosts ran
+branches without 0080, and only ephemeral test databases had applied it.
+Extending it keeps one migration, and production does the compaction once
+rather than twice.
+
+**Evidence.** `backend/tests/analytics-ledger-vintage-repair.test.ts` builds
+one acquisition sequence twice: once with the fixed writers, and once with the
+pre-#1035 writers followed by 0080. It asserts the two ledgers, vintages,
+raw-history rows and overwrite evidence are equal row for row, that every
+repaired digest replays, and that the schema matches the fixed writers'
+database.

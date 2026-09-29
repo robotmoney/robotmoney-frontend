@@ -1137,8 +1137,17 @@ CREATE TABLE public.analytics_vintage_members (
     vintage_id bigint NOT NULL,
     source_value_version_id bigint NOT NULL,
     source_key text NOT NULL,
+    last_source_value_version_id bigint,
+    CONSTRAINT analytics_vintage_members_range_check CHECK (((last_source_value_version_id IS NULL) OR (last_source_value_version_id > source_value_version_id))),
     CONSTRAINT analytics_vintage_members_source_key_check CHECK (((source_key <> ''::text) AND (length(source_key) <= 128)))
 );
+
+
+--
+-- Name: COLUMN analytics_vintage_members.last_source_value_version_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.analytics_vintage_members.last_source_value_version_id IS 'Issue #1035: when set, this row stands for EVERY source_value_versions id from source_value_version_id to this one inclusive (all consecutive, all under source_key). NULL means the single id source_value_version_id.';
 
 
 --
@@ -2202,17 +2211,10 @@ CREATE TABLE public.source_fetches (
 
 
 --
--- Name: source_payloads; Type: TABLE; Schema: public; Owner: -
+-- Name: COLUMN source_fetches.response_checksum; Type: COMMENT; Schema: public; Owner: -
 --
 
-CREATE TABLE public.source_payloads (
-    checksum text NOT NULL,
-    payload_bytes bytea NOT NULL,
-    byte_length bigint GENERATED ALWAYS AS (octet_length(payload_bytes)) STORED,
-    knowledge_time timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
-    CONSTRAINT source_payloads_check CHECK ((encode(public.digest(payload_bytes, 'sha256'::text), 'hex'::text) = checksum)),
-    CONSTRAINT source_payloads_checksum_check CHECK ((checksum ~ '^[0-9a-f]{64}$'::text))
-);
+COMMENT ON COLUMN public.source_fetches.response_checksum IS 'SHA-256 of the response body, a fingerprint only. The body itself is not stored (issue #1035, decision D56; source_payloads dropped by migration 0080).';
 
 
 --
@@ -4208,14 +4210,6 @@ ALTER TABLE ONLY public.source_fetches
 
 
 --
--- Name: source_payloads source_payloads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.source_payloads
-    ADD CONSTRAINT source_payloads_pkey PRIMARY KEY (checksum);
-
-
---
 -- Name: source_value_versions source_value_versions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4708,6 +4702,20 @@ CREATE INDEX analytics_runs_started_idx ON public.analytics_runs USING btree (st
 --
 
 CREATE INDEX analytics_submissions_status_created_idx ON public.analytics_submissions USING btree (status, created_at DESC);
+
+
+--
+-- Name: analytics_vintage_members_last_version_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX analytics_vintage_members_last_version_idx ON public.analytics_vintage_members USING btree (last_source_value_version_id) WHERE (last_source_value_version_id IS NOT NULL);
+
+
+--
+-- Name: analytics_vintage_members_version_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX analytics_vintage_members_version_idx ON public.analytics_vintage_members USING btree (source_value_version_id);
 
 
 --
@@ -5645,24 +5653,6 @@ ALTER TABLE public.source_fetches ENABLE ALWAYS TRIGGER source_fetches_immutable
 
 
 --
--- Name: source_payloads source_payloads_immutable; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER source_payloads_immutable BEFORE DELETE OR UPDATE OR TRUNCATE ON public.source_payloads FOR EACH STATEMENT EXECUTE FUNCTION public.rm_source_ledger_immutable();
-
-ALTER TABLE public.source_payloads ENABLE ALWAYS TRIGGER source_payloads_immutable;
-
-
---
--- Name: source_payloads source_payloads_immutable_row; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER source_payloads_immutable_row BEFORE DELETE OR UPDATE ON public.source_payloads FOR EACH ROW EXECUTE FUNCTION public.rm_source_ledger_immutable();
-
-ALTER TABLE public.source_payloads ENABLE ALWAYS TRIGGER source_payloads_immutable_row;
-
-
---
 -- Name: source_value_versions source_value_versions_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -6184,6 +6174,14 @@ ALTER TABLE ONLY public.analytics_stage_runs
 
 
 --
+-- Name: analytics_vintage_members analytics_vintage_members_last_version_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.analytics_vintage_members
+    ADD CONSTRAINT analytics_vintage_members_last_version_fkey FOREIGN KEY (last_source_value_version_id) REFERENCES public.source_value_versions(id);
+
+
+--
 -- Name: analytics_vintage_members analytics_vintage_members_source_value_version_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6405,14 +6403,6 @@ ALTER TABLE ONLY public.source_acquisition_events
 
 ALTER TABLE ONLY public.source_fetches
     ADD CONSTRAINT source_fetches_acquisition_id_fkey FOREIGN KEY (acquisition_id) REFERENCES public.source_acquisitions(id);
-
-
---
--- Name: source_fetches source_fetches_response_checksum_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.source_fetches
-    ADD CONSTRAINT source_fetches_response_checksum_fkey FOREIGN KEY (response_checksum) REFERENCES public.source_payloads(checksum);
 
 
 --

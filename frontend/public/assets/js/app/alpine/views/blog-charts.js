@@ -95,13 +95,17 @@ export function registerBlogCharts(Alpine) {
       this.drawIndex();
     },
     // Colour key shared by all three charts in this post so a reader learns
-    // one legend and reuses it: slate = legacy 2-panel, cyan = current
-    // 3-panel, beacon = the factor panel run standalone.
+    // one legend and reuses it. The panels and the composite take their
+    // STRATEGY_STYLE hue (shared.js), the one /regime draws them in: the
+    // 3-panel composite is the Composite line and the factor panel is slate.
+    // The legacy 2-panel composite is the post's reference, so it is drawn as
+    // every reference is (slate, dashed). No CATEGORICAL hue is free for it:
+    // mint is Conservative and emerald is Aggressive on the same backtests.
     _series() {
       return [
-        { key: "base", label: "/regime_2panel (legacy)", color: SERIES.slate, dash: [6, 3] },
-        { key: "eq", label: "/regime (3-panel current)", color: PALETTE.accent, dash: [] },
-        { key: "factor_alone", label: "Factor panel alone", color: SERIES.beacon, dash: [] },
+        { key: "base", label: "Legacy 2-panel", color: SERIES.slate, dash: [6, 3] },
+        { key: "eq", label: "3-panel (current)", color: STRATEGY_STYLE.composite.color, dash: [] },
+        { key: "factor_alone", label: "Factor panel alone", color: STRATEGY_STYLE.factor.color, dash: [] },
       ];
     },
     drawEquity() {
@@ -132,12 +136,17 @@ export function registerBlogCharts(Alpine) {
       const bt = this.data.backtest;
       if (!canvas || !bt) return;
       const portfolios = [["eth", "ETH / cash"], ["spx", "SP500 / cash"], ["mixed", "Mixed 50/50"]];
+      // Same hues as the line charts above. The composite is the one cyan
+      // series, and cyan is a line, never a mass, so its bars are drawn as an
+      // edge with no fill. The legacy 2-panel composite shares the factor
+      // panel's slate, as a hollow edge where the line charts dash it, so the
+      // two slate series still separate.
       const series = [
-        { key: "macro_alone", label: "Macro panel", color: PALETTE.warm },
-        { key: "onchain_alone", label: "On-chain panel", color: SERIES.teal },
-        { key: "factor_alone", label: "Factor panel", color: SERIES.beacon },
-        { key: "base", label: "2-panel composite", color: SERIES.slate },
-        { key: "eq", label: "3-panel composite", color: PALETTE.accent },
+        { key: "macro_alone", label: "Macro panel", color: STRATEGY_STYLE.macro.color },
+        { key: "onchain_alone", label: "On-chain panel", color: STRATEGY_STYLE.onchain.color },
+        { key: "factor_alone", label: "Factor panel", color: STRATEGY_STYLE.factor.color },
+        { key: "base", label: "2-panel composite", color: SERIES.slate, edge: true },
+        { key: "eq", label: "3-panel composite", color: STRATEGY_STYLE.composite.color, edge: true },
       ];
       new window.Chart(canvas, {
         type: "bar",
@@ -146,7 +155,9 @@ export function registerBlogCharts(Alpine) {
           datasets: series.map((s) => ({
             label: s.label,
             data: portfolios.map(([key]) => bt[key][s.key].sharpe),
-            backgroundColor: s.color,
+            backgroundColor: s.edge ? "transparent" : s.color,
+            borderColor: s.color,
+            borderWidth: s.edge ? 1.5 : 0,
           })),
         },
         options: {
@@ -198,10 +209,15 @@ export function registerBlogCharts(Alpine) {
     draw() {
       const canvas = this.$refs.chart;
       if (!canvas || !window.Chart || !this.data) return;
+      // Three weightings of one composite. Walk-forward is the one the post
+      // adopts as the standard, so it is the Composite line; the two it is
+      // measured against are references, in the slate family with distinct
+      // dashes as every baseline is (STRATEGY_STYLE). Teal is the on-chain
+      // panel's hue, so it no longer names a weighting here.
       const methods = [
         { key: "static_invcorr", label: "Static", color: SERIES.slate, dash: [6, 3] },
-        { key: "equal_1n", label: "Equal 1/N", color: SERIES.teal, dash: [] },
-        { key: "walk_forward", label: "Walk-forward (honest)", color: PALETTE.accent, dash: [] },
+        { key: "equal_1n", label: "Equal 1/N", color: SERIES.slate, dash: [2, 3] },
+        { key: "walk_forward", label: "Walk-forward (honest)", color: STRATEGY_STYLE.composite.color, dash: [] },
       ];
       const labels = this.data.methods.walk_forward.eth.composite.equity_curve.map((p) => p.date);
       new window.Chart(canvas, {

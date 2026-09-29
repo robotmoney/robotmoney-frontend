@@ -31,11 +31,14 @@ export const PHASE = {
   published: "published",
 };
 
-// Written to the DB by closeWindow()/aggregateSession(); both mean the window
-// is shut AND something is genuinely working on it.
-const AGGREGATING_STATES = new Set(["window_closed", "aggregated"]);
+// Written to the DB by closeWindow()/aggregateSession()/judgeSession(); each
+// means the window is shut AND something is genuinely working on it. `judged`
+// sits between aggregated and published, and reads as the aggregation still
+// under way: a reader has nothing new to see until the session publishes, and
+// left out it fell through to the orphaned "closed".
+const AGGREGATING_STATES = new Set(["window_closed", "aggregated", "judged"]);
 // The states worth announcing at all. `scheduled` exists but has no window yet.
-const LIVE_STATES = new Set(["collecting", "window_closed", "aggregated"]);
+const LIVE_STATES = new Set(["collecting", "window_closed", "aggregated", "judged"]);
 
 /**
  * @param {any} state

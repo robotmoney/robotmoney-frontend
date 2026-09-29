@@ -77,7 +77,7 @@ test("the loading skeleton holds the page still while the snapshot is in flight"
 
   await page.goto("/regime");
   await expect(page.locator(".rv__skel")).toBeVisible();
-  await expect(page.locator(".rv__panel-card").first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator(".rv__panel").first()).toBeVisible({ timeout: 20_000 });
   await page.waitForTimeout(1500);
 
   const cls = await page.evaluate(() => (window as any).__cls as number);
@@ -90,9 +90,10 @@ test("regime dashboard matches its visual baseline", async ({ page }) => {
   await page.goto("/");
   await navigate(page, "/regime");
 
-  // Deterministic capture: wait for the enriched view + every chart canvas, let
-  // fonts settle, and hold the Chart.js paints (all use animation:false anyway).
-  await expect(page.locator(".rv__bt-card:visible")).toHaveCount(3);
+  // Deterministic capture: wait for the enriched view, the backtests (they
+  // land after the first paint) and both charts, and let fonts settle.
+  await expect(page.locator(".rv__market")).toHaveCount(3);
+  await expect(page.locator("#backtests-sec .rr-area__plot:visible")).toHaveCount(1);
   await expect(page.locator(".rv__spark-svg").first()).toBeVisible();
   await page.evaluate(() => (document as any).fonts?.ready);
   await page.waitForTimeout(500);
@@ -105,44 +106,79 @@ test("regime dashboard matches its visual baseline", async ({ page }) => {
   });
 });
 
+// A chart with nothing to draw says so (.rm-nodata) in its own place. The
+// history line needs two readings: with one, a chart drew its axes around
+// nothing. It is not drawn at all: no plot, no axes.
+test("a history of one reading shows the empty chart, not axes around nothing", async ({ page }) => {
+  await stub(page);
+  const dto = regimeDto();
+  await page.route("**/api/dashboards/regime-snapshots*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...dto, history: dto.history.slice(-1) }) }));
+  await page.goto("/");
+  await navigate(page, "/regime");
+
+  const empty = page.locator("#history-sec .rm-nodata");
+  await expect(empty.locator(".rm-nodata__h")).toHaveText("Not enough data yet");
+  await expect(empty.locator(".rm-nodata__d")).toHaveText("One reading so far");
+  await expect(page.locator("#history-sec .rr-area")).toHaveCount(0);
+});
+
+// A failed read leaves no dashboard to render. Its place holds the empty
+// chart, under the outage line (api-unreachable.spec.ts), instead of the
+// methodology rising into a blank page.
+test("a failed read holds the dashboard's place with the empty chart", async ({ page }) => {
+  await stub(page);
+  await page.route("**/api/dashboards/regime-snapshots*", (route) =>
+    route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "database unavailable" }) }));
+  await page.goto("/");
+  await navigate(page, "/regime");
+
+  await expect(page.locator(".rv__error")).toBeVisible();
+  await expect(page.locator(".rv__body > .rm-nodata .rm-nodata__h")).toHaveText("No data available");
+  await expect(page.locator(".rv__dash")).toHaveCount(0);
+});
+
 // The baseline above is captured at ONE width and cannot see this: a panel
 // table wider than the card holding it. That had been true at every viewport
 // under about 1250px — the grid went three-across from 768px and the card's
 // `overflow: hidden` ate whatever did not fit, so the Weight column was simply
 // absent, with nothing to show it was missing. The clip is gone now (the header
 // tooltips have to be able to leave the card), so an overflow would spill
-// across the neighbouring panel rather than hide, and the column-count
-// breakpoints are what keep a table inside its track. Those numbers are tuned
-// to within a few pixels, so they are asserted rather than trusted.
+// past it rather than hide. So the fit is asserted rather than trusted.
 //
-// 1264/1263 straddle the three-across breakpoint; 900 is inside two-across;
-// 1440 is the width the visual baseline is captured at.
-const FIT_WIDTHS = [1440, 1264, 1263, 900];
+// The panels sit one at a time behind tabs, so each is checked while its tab is
+// open (a hidden card measures 0 and would pass without being looked at).
+// Below 900 the table scrolls in its own box (.rr-tablewrap), as every table
+// on the site does; 1440 is the width the visual baseline is captured at.
+const FIT_WIDTHS = [1440, 1024, 900];
 
-test("panel tables fit the cards they sit in, at every column count", async ({ page }) => {
+test("each panel table fits its card, at every width, with its tab open", async ({ page }) => {
   await stub(page);
   await page.setViewportSize({ width: FIT_WIDTHS[0], height: 900 });
   await page.goto("/");
   await navigate(page, "/regime");
   await expect(page.locator(".rv__spark-svg").first()).toBeVisible();
+  const tabs = page.getByRole("tab");
+  await expect(tabs).toHaveCount(3);
 
   for (const width of FIT_WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(() => (document as any).fonts?.ready);
     await page.waitForTimeout(250);
 
-    const fit = await page.evaluate(() =>
-      [...document.querySelectorAll(".rv__panel-card")].map((card) => {
-        const table = card.querySelector("table") as HTMLElement;
-        return {
-          card: Math.round(card.getBoundingClientRect().width),
-          table: Math.round(table.getBoundingClientRect().width),
-        };
-      }));
-
-    expect(fit.length, `panel count at ${width}px`).toBe(3);
-    for (const [i, panel] of fit.entries()) {
-      expect(panel.table, `panel ${i} table vs card at ${width}px`).toBeLessThanOrEqual(panel.card);
+    for (let t = 0; t < 3; t++) {
+      await tabs.nth(t).click();
+      const fit = await page.evaluate(() =>
+        [...document.querySelectorAll(".rv__panel")].filter((c) => (c as HTMLElement).offsetParent).map((card) => {
+          const table = card.querySelector("table") as HTMLElement;
+          return {
+            card: Math.round(card.getBoundingClientRect().width),
+            table: Math.round(table.getBoundingClientRect().width),
+          };
+        }));
+      expect(fit.length, `one panel shown at ${width}px, tab ${t}`).toBe(1);
+      expect(fit[0]!.card, `panel ${t} has width at ${width}px`).toBeGreaterThan(0);
+      expect(fit[0]!.table, `panel ${t} table vs card at ${width}px`).toBeLessThanOrEqual(fit[0]!.card);
     }
 
     // A tooltip bubble is `visibility: hidden` at rest, which still lays out and

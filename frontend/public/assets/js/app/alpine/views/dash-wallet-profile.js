@@ -54,6 +54,13 @@ export function registerWalletProfileView(Alpine) {
       const values = (this.profile?.balanceHistory || []).map((p) => p.balanceUsd);
       return renderSparkline(values, { width: 800, height: 120 });
     },
+    // Readings the sparkline can plot. renderSparkline draws nothing below
+    // two finite values, so the card counts the same way to decide between
+    // the line and the empty chart (.rm-nodata), rather than leaving a blank
+    // card for a wallet with one snapshot.
+    get balanceReadings() {
+      return (this.profile?.balanceHistory || []).filter((p) => typeof p.balanceUsd === "number" && Number.isFinite(p.balanceUsd)).length;
+    },
 
     get balanceDeltaUsd() {
       const cur = this.profile?.balanceUsd;

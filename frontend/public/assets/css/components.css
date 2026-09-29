@@ -45,7 +45,14 @@
 .btn-arrow__icon { transition: transform 0.3s; }
 .btn-arrow:hover .btn-arrow__icon { transform: translateX(4px); }
 
-/* ════════ Navigation ════════ */
+/* ════════ Navigation ════════
+   One list, two layouts (RM-124, index.html). At 1024px and up: a bar of
+   groups, each dropping a card of links from its label over a quiet scrim.
+   Below it: a sheet with every group open under a mono-caps heading, Deposit
+   pinned at the bottom. Square, solid, hairlines; no shadow, no gradient.
+   Two treatments, never mixed: the bar's labels are muted words over a drawn
+   underline (the current section keeps it), and a card's items are single
+   lines that light a quiet row with an arrow. */
 .nav {
   position: fixed;
   top: 0; left: 0; right: 0;
@@ -60,28 +67,30 @@
 }
 .nav__inner { max-width: 80rem; margin-inline: auto; padding-inline: 1.5rem; }
 .nav__row { display: flex; align-items: center; justify-content: space-between; height: 4rem; }
-.nav__logo { display: flex; align-items: center; height: 4rem; padding-block: 0.5rem; }
+.nav__logo { display: flex; align-items: center; height: 4rem; padding-block: 0.5rem; flex: none; }
 .nav__logo img { height: 45px; width: auto; object-fit: contain; }
 
-.nav__links, .nav__ctas { display: none; }
-.nav__links { align-items: center; gap: 0.25rem; }
-.nav__ctas { align-items: center; gap: 0.75rem; }
+.nav__groups, .nav__list, .nav__tree { list-style: none; margin: 0; padding: 0; }
 
-.nav__link {
+/* ── The bar's labels ── */
+.nav__top {
   position: relative;
+  display: inline-flex;
+  align-items: center;
   padding: 0.5rem 1rem;
+  background: none;
+  border: 0;
+  border-radius: 0;
   font-family: var(--font-sans);
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--color-text-muted);
   text-decoration: none;
+  cursor: pointer;
   transition: color 0.3s;
 }
-/* The nav treatment, monochrome like every link on the site: muted and bare at
-   rest, since a row of underlines is noise where every entry is a link, and on
-   hover the words go to full text colour as the rule draws in under them. */
-.nav__link:hover { color: var(--color-text); }
+.nav__top:hover, .nav__top[aria-expanded="true"], .nav__top--active { color: var(--color-text); }
 .nav__underline {
   position: absolute;
   bottom: 0; left: 1rem; right: 1rem;
@@ -91,34 +100,253 @@
   transform-origin: left;
   transition: transform 0.3s;
 }
-.nav__link:hover .nav__underline { transform: scaleX(1); }
+.nav__top:hover .nav__underline, .nav__top--active .nav__underline { transform: scaleX(1); }
+/* A square chevron, drawn from two hairlines: down when closed, up when open. */
+.nav__chev {
+  width: 5px; height: 5px;
+  margin: -3px 0 0 0.5rem;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.2s, margin 0.2s;
+}
+.nav__top[aria-expanded="true"] .nav__chev { transform: rotate(-135deg); margin-top: 3px; }
+
+/* ── A card's items ── */
+.nav__label {
+  margin: 0 0 0.625rem;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--color-text-muted);
+}
+/* A second section stacked in the same column (the Vaults card's Allocation). */
+.nav__list + .nav__label { margin-top: 1.25rem; }
+.nav__item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  padding: 0.5625rem 0.75rem;
+  margin-inline: -0.75rem;
+  text-decoration: none;
+  transition: background-color 0.16s;
+}
+.nav__item-t {
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  letter-spacing: 0.005em;
+  color: var(--color-text-soft);
+  white-space: nowrap;
+  transition: color 0.16s;
+}
+.nav__item-f {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+}
+/* A vault's value, from a live read only (alpine/site-nav.js): right-aligned
+   in a slot kept open before the figures land, so the card does not resize. */
+.nav__item-v {
+  margin-left: auto;
+  min-width: 5.5rem;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+}
+.nav__item:hover .nav__item-v, .nav__item:focus-visible .nav__item-v { color: var(--color-text-soft); }
+/* The arrow says where the row goes: across the site, or off it. Decorative,
+   so it is not part of the link's name (the second declaration; engines
+   without alt text keep the first). */
+.nav__item::after {
+  content: "\2192"; content: "\2192" / "";
+  margin-left: auto;
+  padding-left: 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  opacity: 0;
+  transform: translateX(-0.25rem);
+  transition: opacity 0.16s, transform 0.16s;
+}
+/* Off the site: the arrow points out, and it is always there, so an item
+   that leaves the site reads differently from one that stays before any
+   pointer reaches it. */
+.nav__item--out::after { content: "\2197"; content: "\2197" / ""; opacity: 1; transform: none; }
+/* Not a link yet (the leaderboard): muted, no highlight, no arrow. */
+.nav__item--soon { cursor: default; align-items: center; }
+.nav__item--soon .nav__item-t { color: var(--color-text-muted); }
+.nav__item--soon::after { content: none; }
+.nav__item--soon:hover { background: none; }
+.nav__item--soon:hover .nav__item-t { color: var(--color-text-muted); }
+.nav__item--fig::after { margin-left: 0; padding-left: 0.75rem; }
+.nav__item:hover, .nav__item:focus-visible { background: rgba(255, 255, 255, 0.04); }
+.nav__item:hover .nav__item-t, .nav__item:focus-visible .nav__item-t,
+.nav__item[aria-current="page"] .nav__item-t { color: var(--color-text); }
+.nav__item:hover::after, .nav__item:focus-visible::after { opacity: 1; transform: none; }
+/* The four vaults hang from the Robot Money Vault on a hairline tree. Each
+   row draws its own stretch of the rule, so the last one stops at its tick,
+   and a row's highlight starts clear of the ticks. */
+.nav__tree { margin-left: 0.25rem; padding-left: 1rem; }
+.nav__tree > li { position: relative; }
+.nav__tree > li::before, .nav__tree > li::after {
+  content: "";
+  position: absolute;
+  left: -1rem;
+  border-color: var(--color-border-light);
+  border-style: solid;
+  border-width: 0;
+}
+.nav__tree > li::before { top: 0; bottom: 0; border-left-width: 1px; }
+.nav__tree > li:last-child::before { bottom: 50%; }
+.nav__tree > li::after { top: 50%; width: 0.625rem; border-top-width: 1px; }
+.nav__tree .nav__item { margin-left: -0.25rem; padding-left: 0.25rem; }
+.nav__top:focus-visible, .nav__item:focus-visible, .nav__toggle:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 2px;
+}
 
 .nav__toggle {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 0.375rem;
-  width: 2.5rem; height: 2.5rem;
+  width: 2.75rem; height: 2.75rem;
   background: none; border: none; cursor: pointer;
 }
 .nav__bar { width: 1.25rem; height: 1px; background: var(--color-text); transition: all 0.3s; }
 .nav__bar--top-open { transform: rotate(45deg) translateY(3.5px); }
 .nav__bar--bot-open { transform: rotate(-45deg) translateY(-3.5px); }
+.nav__scrim { display: none; }
 
-.nav__mobile { background: var(--color-deep); border-top: 1px solid var(--color-border); }
-.nav__mobile-inner { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
-.nav__mlink {
-  font-family: var(--font-sans); font-size: 0.875rem;
-  text-transform: uppercase; letter-spacing: 0.1em;
-  color: var(--color-text-muted); text-decoration: none; text-decoration-thickness: 1px;
-  text-underline-offset: 4px; transition: color 0.2s;
+/* ── Phone and tablet: the sheet ── */
+@media (max-width: 1023.98px) {
+  .nav__menu { display: none; }
+  /* The bar's backdrop-filter makes the nav the containing block of anything
+     fixed inside it, so the sheet hangs off the bar as an absolute box sized
+     to the rest of the viewport. */
+  .nav__menu--open {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    top: 100%; left: 0; right: 0;
+    height: calc(100dvh - 4rem);
+    background: var(--color-deep);
+    border-top: 1px solid var(--color-border);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    /* Keeps a link that takes focus clear of the pinned button below. */
+    scroll-padding-bottom: calc(5rem + env(safe-area-inset-bottom));
+  }
+  .nav__groups { padding: 0 1.5rem 1rem; }
+  .nav__group { padding: 1.25rem 0 0.75rem; border-bottom: 1px solid var(--color-border); }
+  /* Every group is open here, so its label is a heading, not a button that
+     would do nothing. */
+  button.nav__top { display: none; }
+  .nav__head, .nav__top {
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--color-text-muted);
+  }
+  .nav__card { padding-top: 0.5rem; }
+  .nav__label { display: none; }
+  .nav__col + .nav__col, .nav__col > .nav__list ~ .nav__list { margin-top: 0.5rem; }
+  /* A value stays on one line, so a row keeps its height when the figures
+     land after the sheet has opened. */
+  .nav__item-v { min-width: 0; white-space: nowrap; }
+  .nav__item { min-height: 2.75rem; align-items: center; margin-inline: 0; padding-inline: 0; }
+  .nav__item::after { display: none; }
+  .nav__item--out::after { display: inline; margin-left: auto; }
+  .nav__ctas {
+    position: sticky;
+    bottom: 0;
+    margin-top: auto;
+    padding: 1rem 1.5rem calc(1rem + env(safe-area-inset-bottom));
+    background: var(--color-deep);
+    border-top: 1px solid var(--color-border);
+  }
+  .nav__cta { display: flex; justify-content: center; }
+  html.nav-sheet-open { overflow: hidden; }
 }
-.nav__mlink:hover { color: var(--color-text); text-decoration: underline; text-decoration-color: var(--color-link); }
-.nav__mobile-cta { margin-top: 1rem; justify-content: center; }
+/* On the narrowest phones a vault row cannot hold its name, token and value:
+   the token goes, the name and value stay. */
+@media (max-width: 359.98px) {
+  .nav__tree .nav__item-f { display: none; }
+}
 
+/* ── Desktop: the bar and its cards ── */
 @media (min-width: 1024px) {
   .nav__inner { padding-inline: 2rem; }
   .nav__row, .nav__logo { height: 5rem; }
-  .nav__links, .nav__ctas { display: flex; }
-  .nav__toggle, .nav__mobile { display: none; }
+  .nav__toggle, .nav__head { display: none; }
+  .nav__menu {
+    display: flex;
+    flex: 1;
+    align-self: stretch;
+    align-items: center;
+    justify-content: space-between;
+    margin-left: 2rem;
+  }
+  /* Each group fills the bar's height, so the pointer never leaves it on the
+     way from a label down to its card. */
+  .nav__groups { display: flex; align-self: stretch; gap: 0.25rem; }
+  .nav__group { position: relative; display: flex; align-items: center; }
+  .nav__ctas { display: flex; align-items: center; gap: 0.75rem; }
+
+  /* The card drops from its own label. The panel around it is transparent and
+     starts at the bar's edge, so the gap above the card is still the group.
+     Offset by the card's padding less the label's, so the card's first column
+     lines up under the label's text (the last two groups, from the right). */
+  .nav__panel {
+    display: none;
+    position: absolute;
+    top: 100%; left: -0.75rem;
+    padding-top: 0.5rem;
+  }
+  .nav__panel--end { left: auto; right: -0.75rem; }
+  .nav--js .nav__panel--open,
+  .nav:not(.nav--js) .nav__group:hover > .nav__panel,
+  .nav:not(.nav--js) .nav__group:focus-within > .nav__panel { display: block; }
+  .nav__card {
+    display: flex;
+    gap: 3rem;
+    padding: 1.375rem 1.75rem 1.5rem;
+    background: rgba(11, 14, 20, 0.97);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--color-border);
+  }
+  .nav__col { min-width: 13rem; }
+  .nav--js .nav__panel--open .nav__card { animation: navCardIn 0.18s cubic-bezier(0.2, 0.7, 0.2, 1); }
+
+  /* The page behind a card steps back. It hangs from the bar like the cards,
+     under them, and a click on it closes the card. */
+  .nav__scrim {
+    display: block;
+    position: absolute;
+    top: 100%; left: 0; right: 0;
+    height: 100vh;
+    z-index: -1;
+    background: rgba(3, 4, 6, 0.45);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s, visibility 0s linear 0.2s;
+  }
+  .nav--open .nav__scrim { opacity: 1; visibility: visible; transition: opacity 0.2s; }
+}
+@keyframes navCardIn {
+  from { opacity: 0; transform: translateY(-0.375rem); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav__underline, .nav__chev, .nav__top, .nav__item, .nav__item-t, .nav__item::after, .nav__scrim { transition: none; }
+  .nav--js .nav__panel--open .nav__card { animation: none; }
 }
 
 /* ════════ Hero ════════ */
@@ -294,20 +522,62 @@
    removed from views.css. Regime-DOMAIN styling (hero, backtests, correlations,
    sparklines, posbars, indicator cells, pie, methodology) stays in views.css. */
 
-/* eyebrow (kicker) */
+/* eyebrow (kicker): mono caps in the muted text colour at the site's 0.11em
+   label tracking, as on the research-record pages. Cyan is a line, never a run
+   of type, so no eyebrow carries it: the --accent modifier is retired, and
+   --quiet now matches the base, kept only because pages still name it. */
 .rm-eyebrow, .rv__eyebrow, .sv__eyebrow {
   font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.3em; color: var(--color-accent);
+  letter-spacing: 0.11em; color: var(--color-text-muted);
 }
-.rm-eyebrow--accent, .rv__eyebrow--accent { color: var(--color-accent); }
-/* The base above is cyan AND there is an --accent modifier setting the same
-   colour, which is what a base that was once neutral looks like after drift:
-   the modifier became a no-op. --quiet is the opt-out until the base itself is
-   flipped and every page audited for what actually needs the accent. */
 .rm-eyebrow--quiet, .sv__eyebrow--quiet { color: var(--color-text-muted); }
+
+/* A member's role, the same pill wherever a role shows (the roster, a
+   member's page, a take, a judgement, a judge's opinion): Analyst or Judge.
+   Mono caps on a hairline, square, and no hue: a role is a fact about the
+   seat, not a state or a value, so it wears no colour of its own. */
+.rm-role { display: inline-flex; align-items: center; padding: 0.25rem 0.5rem; border: 1px solid var(--color-border-light);
+  font-family: var(--font-mono); font-size: 0.625rem; font-weight: 500; line-height: 1; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--color-text-soft); white-space: nowrap; vertical-align: middle; }
+/* A page's title with the role pill beside it, centred on the title's line so
+   the line under the title stays where it was. */
+.rm-named { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.875rem; margin-top: 0.35rem; }
+.rm-named > .sv__detail-title { margin: 0; }
 
 /* loading / error states */
 .rm-loading, .sv__loading, .sv__empty { color: var(--color-text-muted); font-family: var(--font-mono); }
+
+/* A chart with nothing to draw, on every page that draws one: the chart's
+   ghost (its axes, faint gridlines and a dashed trace where the line would
+   run), then what is missing in two lines. The title is the state: "No data
+   yet", "Not enough data yet" or "No data available" for a read that failed;
+   the line under it, when there is one, is the fact ("One reading so far",
+   "No takes filed yet"). Line work only, in neutrals: an empty chart carries
+   no series hue, and Beacon never marks an empty state. The ghost is a mask,
+   so it takes the token colour and there is one drawing to change. */
+.rm-nodata { display: grid; place-content: center; justify-items: center; gap: 0.5rem; text-align: center; }
+.rm-nodata::before {
+  content: ""; width: 4.5rem; height: 2.8125rem; margin-bottom: 0.5rem; background: var(--color-text-muted);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 40' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='square'%3E%3Cpath d='M4.75 3v32.25H62'/%3E%3Cpath stroke-opacity='.45' stroke-dasharray='1.5 3' stroke-linecap='butt' d='M9 13h53M9 24h53'/%3E%3Cpath stroke-opacity='.8' stroke-dasharray='7 4' stroke-linecap='butt' stroke-linejoin='miter' d='M9 30l15-10 10 5 14-13 12 5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 40' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='square'%3E%3Cpath d='M4.75 3v32.25H62'/%3E%3Cpath stroke-opacity='.45' stroke-dasharray='1.5 3' stroke-linecap='butt' d='M9 13h53M9 24h53'/%3E%3Cpath stroke-opacity='.8' stroke-dasharray='7 4' stroke-linecap='butt' stroke-linejoin='miter' d='M9 30l15-10 10 5 14-13 12 5'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.rm-nodata__h { margin: 0; font-family: var(--font-mono); font-size: 0.6875rem; line-height: 1.5; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--color-text-soft); }
+.rm-nodata__d, .rm-nodata .rr-empty__t { margin: 0; font-family: var(--font-sans); font-size: 0.8125rem; line-height: 1.5;
+  letter-spacing: 0; text-transform: none; color: var(--color-text-muted); }
+/* A pie or donut's ghost is a donut's outline and its slice edges, not a
+   line chart's axes. Still, with no brighter arc (a spinner) and no edges
+   from the centre (a clock). */
+.rm-nodata--ring::before {
+  width: 2.8125rem;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40' fill='none' stroke='black' stroke-width='1.5'%3E%3Ccircle cx='20' cy='20' r='15' stroke-opacity='.6'/%3E%3Ccircle cx='20' cy='20' r='8' stroke-opacity='.6'/%3E%3Cpath d='M20 12V5M26.13 25.14l5.36 4.5M12.48 22.74l-6.58 2.39' stroke-opacity='.9'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40' fill='none' stroke='black' stroke-width='1.5'%3E%3Ccircle cx='20' cy='20' r='15' stroke-opacity='.6'/%3E%3Ccircle cx='20' cy='20' r='8' stroke-opacity='.6'/%3E%3Cpath d='M20 12V5M26.13 25.14l5.36 4.5M12.48 22.74l-6.58 2.39' stroke-opacity='.9'/%3E%3C/svg%3E");
+}
+/* Laid over a canvas chart's own box when it has nothing to draw: the box
+   keeps its size, so nothing under it moves. Its parent is the positioned
+   chart container; the chart itself is not drawn. */
+.rm-nodata--fill { position: absolute; inset: 0; }
+@media (forced-colors: active) { .rm-nodata::before { background: CanvasText; } }
 .rm-error, .rv__error, .sv__error { color: var(--color-warn); font-family: var(--font-mono); }
 
 /* section head + title + as-of */
@@ -317,17 +587,18 @@
 
 /* /regime row-level provenance badge (issue #397): which data source wrote the
    served snapshot. Stacks under the as-of label, right-aligned to match. 'live'
-   reads neutral (the healthy default); 'hermetic'/'fixture'/'seed' read amber
-   (the existing non-live warn tone, matching .alloc-aum__prov on /allocation)
-   since they mean the served data is not this run's real production fetch. */
+   reads quiet (the healthy default); 'hermetic'/'fixture'/'seed' step up to
+   the text colour on a brighter edge, since they mean the served data is not
+   this run's real production fetch. The words carry it, with no hue and no
+   fill: it was warn text on an amber wash, two hues on one badge. */
 .rv__asof-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 0.3rem; }
 .rv__prov {
   font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.15em; padding: 0.2rem 0.5rem; border-radius: var(--radius);
+  letter-spacing: 0.11em; padding: 0.2rem 0.5rem; border-radius: var(--radius);
   border: 1px solid var(--color-border); color: var(--color-text-muted);
 }
 .rv__prov--hermetic, .rv__prov--fixture, .rv__prov--seed {
-  color: var(--color-warn); border-color: rgba(232, 166, 64, 0.4); background: rgba(232, 166, 64, 0.08);
+  color: var(--color-text); border-color: var(--color-text-muted);
 }
 
 /* summary / stat card grid + card */
@@ -336,7 +607,7 @@
   background: rgba(16, 20, 28, 0.4); border: 1px solid var(--color-border);
   border-radius: var(--radius); padding: 1rem; display: flex; flex-direction: column;
 }
-.rm-card-eyebrow, .rv__card-eyebrow { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-muted); }
+.rm-card-eyebrow, .rv__card-eyebrow { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-muted); }
 .rm-card-val, .rv__card-val { font-size: 1.9rem; font-weight: 500; margin-top: 0.35rem; color: var(--color-text); font-family: var(--font-mono); }
 .rm-card-foot, .rv__card-foot { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-muted); margin-top: 0.55rem; }
 
@@ -344,18 +615,23 @@
 .rm-chartcard, .rv__chart-card { border: 1px solid var(--color-border); border-radius: var(--radius); padding: 1rem; background: rgba(16, 20, 28, 0.4); }
 .rm-chartcard-head, .rv__chart-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.7rem; margin-bottom: 0.7rem; }
 .rm-chartcard-title-group, .rv__chart-title-group { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-.rm-chartcard-title, .rv__chart-title { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-muted); }
+.rm-chartcard-title, .rv__chart-title { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-muted); }
 .rm-chart, .rv__chart { height: 260px; background: transparent; border: 0; border-radius: 0; padding: 0; margin: 0; }
 
 /* toggle chips: the button family's mono caps at the label size, square. A
    selected chip is edged and lettered in --color-text, never cyan. */
 .rm-chips, .rv__chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+/* Sized as the swarm page's filter chips (.mp-chip): a 34px target, the same
+   padding, and a selected chip on the surface ground. One chip, whichever
+   page it is on. */
 .rm-chip, .rv__chip {
+  display: inline-flex; align-items: center; gap: 0.42rem; min-height: 34px;
   font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.1em;
-  padding: 0.25rem 0.5rem; border-radius: var(--radius); border: 1px solid var(--color-border);
+  padding: 0.3rem 0.62rem; border-radius: var(--radius); border: 1px solid var(--color-border);
   color: var(--color-text-muted); background: transparent; cursor: pointer; transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
-.rm-chip[aria-pressed="true"], .rv__chip[aria-pressed="true"] { border-color: var(--color-text); color: var(--color-text); }
+.rm-chip:hover, .rv__chip:hover { color: var(--color-text); border-color: var(--color-border-light); }
+.rm-chip[aria-pressed="true"], .rv__chip[aria-pressed="true"] { border-color: var(--color-text); color: var(--color-text); background: var(--color-surface); }
 /* A chart overlay's chip carries its series' colour as a dot, not as its own
    border or label; off, the dot recedes with the label. */
 .rv__chip-dot { display: inline-block; width: 0.5rem; height: 0.5rem; margin-right: 0.5rem; vertical-align: 0.05em; }
@@ -476,6 +752,68 @@
 }
 @media (prefers-reduced-motion: reduce) { .rm-tip__bub { transition: opacity 0.01s; } }
 
+/* ─── Section links ────────────────────────────────────────────────────────
+   The "#" lib/heading-anchors.js appends to each h2/h3 with an id, on a page
+   whose content root carries data-anchors. Scoped under #view on purpose: the
+   per-view <style> blocks load after this sheet and style every `a` in their
+   prose, and the id outranks them without !important.
+
+   The glyph is generated content, so the heading's text is unchanged for
+   anything that reads it, and the link's name is its aria-label. The word
+   joiner in front of it keeps it on the line of the heading's last word: an
+   orphaned "#" on a line of its own reads as a stray character.
+
+   "Copied" is a small bubble in the tooltip skin (.rm-tip__bub), right-aligned
+   to the glyph so it grows leftwards into the heading and never past the page
+   edge on a phone. It opens BELOW the glyph: the click has just scrolled the
+   heading to 6rem from the top, and above it the bubble sat under the nav.
+
+   Every fragment target on these pages clears the fixed nav, not only the
+   headings: the glossary's links land on its indicator sections (#T10Y2Y).
+   The router's fragmentTop() reads this margin too, so a link followed in the
+   page and one arriving from another page stop at the same place. */
+#view [data-anchors] :is(h2, h3)[id], #view [data-anchors] [id] { scroll-margin-top: 6rem; }
+#view [data-anchors] .rm-hlink {
+  position: relative;
+  margin-left: 0.45em;
+  padding: 0.3rem 0.2rem;
+  font-family: var(--font-mono); font-size: 0.8125rem; font-weight: 400; font-style: normal;
+  line-height: 1; letter-spacing: 0; text-transform: none;
+  vertical-align: middle;
+  color: var(--color-text-muted);
+  text-decoration: none; border: 0; border-radius: 0; background: none;
+  opacity: 0;
+  transition: opacity 0.14s ease, color 0.14s ease;
+}
+#view [data-anchors] .rm-hlink::before { content: "\2060#"; content: "\2060#" / ""; }
+#view [data-anchors] :is(h2, h3):hover > .rm-hlink,
+#view [data-anchors] .rm-hlink:focus-visible,
+#view [data-anchors] .rm-hlink.is-copied { opacity: 1; }
+#view [data-anchors] .rm-hlink:hover { color: var(--color-text-soft); text-decoration: none; }
+#view [data-anchors] .rm-hlink:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
+/* No hover on a touch screen, so nothing would ever reveal it: always there,
+   faintly, and full strength once tapped. */
+@media (hover: none) {
+  #view [data-anchors] .rm-hlink { opacity: 0.5; }
+}
+#view [data-anchors] .rm-hlink::after {
+  content: "Copied"; content: "Copied" / "";
+  position: absolute; right: 0; top: calc(100% + 4px);
+  padding: 0.25rem 0.45rem;
+  background: var(--color-surface); border: 1px solid var(--color-border-light); border-radius: 0;
+  font-family: var(--font-mono); font-size: 0.6875rem; line-height: 1.2; letter-spacing: 0.04em;
+  color: var(--color-text-muted); white-space: nowrap;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translateY(-3px);
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0s linear 0.14s;
+}
+#view [data-anchors] .rm-hlink.is-copied::after {
+  opacity: 1; visibility: visible; transform: none; transition-delay: 0s;
+}
+@media (prefers-reduced-motion: reduce) {
+  #view [data-anchors] .rm-hlink, #view [data-anchors] .rm-hlink::after { transition: none; }
+}
+
 /* ─── Session phase ────────────────────────────────────────────────────────
    One treatment for "what phase is this session in", so /swarm, the apply
    page, the session page and a member profile cannot say the same fact four
@@ -523,6 +861,13 @@
 @media (prefers-reduced-motion: reduce) { .rm-pulse { animation: none; } }
 /* A plain fact worn as a pill (Coming soon): mono caps on a hairline, square,
    no hue, the role pill's shape. */
+/* Not yet: a vault not on the network, a page still being built. The status
+   pill's shape at a size that sits inside a menu row, drawn in the house's
+   line (cyan is a line: its hairline, never its words). */
+.rm-soon { display: inline-flex; align-items: center; padding: 0.1875rem 0.375rem;
+  border: 1px solid var(--color-accent-line);
+  font-family: var(--font-mono); font-size: 0.5625rem; font-weight: 500; line-height: 1; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--color-text-soft); white-space: nowrap; vertical-align: middle; }
 .rm-pill { display: inline-flex; align-items: center; padding: 0.25rem 0.5rem; border: 1px solid var(--color-border-light);
   font-family: var(--font-mono); font-size: 0.625rem; font-weight: 500; line-height: 1; letter-spacing: 0.1em;
   text-transform: uppercase; color: var(--color-text-soft); white-space: nowrap; vertical-align: middle; }
@@ -584,10 +929,11 @@
 
 /* A link that opens a new tab says so, site-wide: an arrow after its text.
    Text links only: a link that is an image, an icon, a card or a button
-   carries none, and the dashboards keep their own link style. The arrow is
+   carries none, the dashboards keep their own link style, and a nav card's
+   items draw their own (.nav__item--out). The arrow is
    generated rather than typed, so a copied link text stays its words, and its
    alternative text is empty: a screen reader announces the new tab itself. */
-a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(.rr-cta):not([data-dash-shell] *)::after {
+a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(.rr-cta):not(.nav__item):not([data-dash-shell] *)::after {
   content: "\2197"; content: "\2197" / "";
   display: inline-block; margin-left: 0.25em; text-decoration: none;
 }
@@ -813,7 +1159,8 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
    inline stylesheet still owns its size/genart; this only fixes the anchor.
    !important is used deliberately: the per-page inline <style> is injected
    after this shared sheet and would otherwise win the cascade. */
-.a2-hero, .sv__hero, .rv__hero, .tok__hero, .md-hero, .cl__hero, .sk__head {
+.a2-hero, .sv__hero, .rv__hero, .tok__hero, .md-hero, .cl__hero, .sk__head,
+.blog-idx__hero {
   /* Top-aligned, not centred. Centring looks right on any one page but breaks
      the thing this rule exists for: these blocks are different heights (a lede
      wraps to one line on /tokenomics and three on /projects), so centring made
@@ -823,7 +1170,7 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
   position: relative;
 }
 .a2-hero__inner, .sv__hero-inner, .rv__hero-inner, .tok__hero-inner,
-.md-hero__inner, .cl__hero-inner, .sk__head-inner {
+.md-hero__inner, .cl__hero-inner, .sk__head-inner, .blog-idx__hero-inner {
   /* 10rem rather than the original 8rem: it sits a typical block near the
      middle of the band instead of high in it, which was the complaint, while
      keeping every headline on the identical offset. */
@@ -849,7 +1196,8 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
    lose to the !important above; only their margins are page-specific. */
 .sk__title, .rv__title, .tok__h1, .a2-hero__title,
 .md-hero__title, .cl__h1, .sv__title,
-.sv__detail-title, .ap-hero__title, .alh__title {
+.sv__detail-title, .ap-hero__title, .alh__title,
+.blog-idx__title, .ri__title, .stub__title, .rs__title {
   font-family: var(--font-display) !important;
   font-weight: 700 !important;
   font-size: clamp(2.5rem, 4.2vw, 3.75rem) !important;
@@ -862,10 +1210,29 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
    (.vp__title left this list with views/vault.html, which RM-115 retired into
    /allocation's `#vault` section.) */
 .sk__title, .rv__title, .tok__h1, .a2-hero__title,
-.md-hero__title, .cl__h1, .sv__title {
+.md-hero__title, .cl__h1, .sv__title,
+.blog-idx__title, .ri__title, .stub__title, .rs__title {
   /* /regime and /swarm carried an 8px top margin, which is enough to read
      as a jump when the headline is otherwise pinned to the same offset. */
   margin-top: 0 !important;
+}
+
+/* ── Research documents ──
+   /regime/indicators (.ri), the .stub documents (/regime-detection,
+   /research/late-cycle-signals and the archived stubs; /smart-contract-risks
+   left them for the research record's hero band in RM-138) and
+   /research/channel-divergence (.rs) have no hero band: the head sits on the
+   page, a mono eyebrow over the title. Their own sheets pinned the EYEBROW at
+   10rem on desktop, which put the headline 33px lower than on every hero page,
+   and at another offset on a phone. Here the eyebrow hangs above the pinned
+   offset and the headline itself lands at 10rem at every width. 1.6875rem is
+   the eyebrow's one line (10px at 1.5) plus its 0.75rem gap, both fixed here
+   so the sum holds. */
+.ri, .stub, .rs { padding-top: calc(10rem - 1.6875rem) !important; }
+.ri__eyebrow, .stub__eyebrow, .rs__eyebrow {
+  font-size: 10px !important;
+  line-height: 1.5 !important;
+  margin: 0 0 0.75rem !important;
 }
 
 /* ── Hero legibility ──
@@ -880,7 +1247,7 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
    apply page already defines for long copy. Together they take /media to about
    7.9:1 while leaving the art plainly visible. */
 .a2-hero__viz, .sv__hero-field, .rv__hero-art, .tok__hero-art,
-.md-hero__art, .cl__hero-art, .sk__head-viz {
+.md-hero__art, .cl__hero-art, .sk__head-viz, .blog-idx__hero-art {
   z-index: 0;
 }
 /* ::before, not ::after. Four of these heroes already define their own ::after
@@ -888,7 +1255,7 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
    sheet, so an ::after veil here loses the cascade on exactly the pages whose
    art is busiest. No hero defines a ::before. */
 .a2-hero::before, .sv__hero::before, .rv__hero::before, .tok__hero::before,
-.md-hero::before, .cl__hero::before, .sk__head::before {
+.md-hero::before, .cl__hero::before, .sk__head::before, .blog-idx__hero::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -897,6 +1264,6 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
   z-index: 0;
 }
 .a2-hero__lede, .sv__lede, .rv__hero-sub, .tok__lede,
-.md-hero__lede, .cl__lede, .sk__lede {
+.md-hero__lede, .cl__lede, .sk__lede, .blog-idx__lede {
   color: #aeb6c6 !important;
 }

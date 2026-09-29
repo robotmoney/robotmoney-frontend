@@ -964,12 +964,6 @@
 .a3 .a3-lever-next { font-size: 0.8rem; color: hsl(var(--primary)); margin-top: 0.5rem; }
 
 .a3 .a3-chart-card { height: 12rem; margin-bottom: 1.5rem; }
-.a3 .a3-chart-placeholder {
-  height: 12rem; display: flex; align-items: center; justify-content: center;
-  border: 1px dashed hsl(var(--border)); border-radius: var(--radius); color: hsl(var(--muted-foreground));
-  font-size: 0.85rem; margin-bottom: 1.5rem;
-}
-
 .a3 .a3-usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; text-align: center; }
 
 .a3 .a3-copy-wallet.is-copied { color: hsl(var(--success)); border-color: hsl(var(--success) / 0.4); }

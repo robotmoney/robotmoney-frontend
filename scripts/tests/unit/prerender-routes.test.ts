@@ -12,7 +12,7 @@ beforeAll(() => {
   // fixture; static-assembly.sh does the same copy-then-prerender over an
   // arbitrary output dir, so point it at the same `_site` name this test
   // already expects and cleans up.
-  execSync("bash scripts/static-assembly.sh _site", { cwd: repoRoot, stdio: "ignore" });
+  execSync("bash scripts/static-assembly.sh _site", { cwd: repoRoot, stdio: "ignore", env: { ...process.env, PRERENDER_REGIME: "off" } });
 });
 
 afterAll(() => {

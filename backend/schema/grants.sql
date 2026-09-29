@@ -121,7 +121,7 @@ DECLARE
   -- migrations' grant instead of undoing it. DELETE and TRUNCATE are revoked too:
   -- D53 decision 6 counts these ledgers as append-only for preflight check 2.
   insert_only_for_runtime text[] := ARRAY[
-    'source_acquisitions', 'source_acquisition_events', 'source_payloads', 'source_fetches',
+    'source_acquisitions', 'source_acquisition_events', 'source_fetches',
     'source_value_versions',
     'analytics_ledger_methodology_versions', 'analytics_ledger_runs', 'analytics_ledger_run_events',
     'analytics_data_vintages', 'analytics_vintage_members',

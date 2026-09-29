@@ -17,8 +17,7 @@
 // from the map falls through to `avatar.path`, then to the derived mark, then
 // to initials -- the chain member-mark.js already implements.
 //
-// PROVENANCE. Two of these are the operator's own shipped asset. One is not,
-// and the difference matters if anyone asks:
+// PROVENANCE.
 //
 // - shodai.svg      The mark is inline SVG in shodai.network's nav; the site
 //                   ships no logo file and every conventional path 404s. Path
@@ -36,12 +35,13 @@
 //                   favicon.svg was the SVG-first candidate and was rejected:
 //                   its monogram is a live <text> element in Helvetica Black,
 //                   so it re-renders differently on any machine lacking that cut.
-// - woon.png        NOT A LOGO. woon.peaq.xyz ships no Woon mark at all, only
-//                   peaq's wordmark and character renders. This is a square
-//                   head crop taken from their own robot-hero.png. It matches
-//                   how Woon presents itself everywhere else, but it is our
-//                   crop rather than their asset, so it is worth peaq's nod
-//                   before it goes anywhere louder than a 40px avatar.
+// - peaq.png        Woon's mark is its operator's: peaq's logo, supplied by
+//                   the team, trimmed to the mark and padded square. It
+//                   replaces a head crop of peaq's robot-hero.png, which was
+//                   our crop rather than their asset.
+// - zyfai.png       Supplied by the team on an opaque #0C131C plate. The
+//                   plate is lifted out (edge pixels un-mixed against it) for
+//                   the same reason as shodai's; the mark itself is untouched.
 // - robot-money.svg Our own brand-assets/mark.svg, unchanged.
 //
 // Athena, Noop Analyst and Maximus deliberately keep derived marks. Athena and
@@ -55,7 +55,8 @@
 export const MEMBER_LOGOS = {
   shodai: "/avatars/swarm/shodai.svg",
   dualmint: "/avatars/swarm/dualmint.png",
-  woon: "/avatars/swarm/woon.png",
+  woon: "/avatars/swarm/peaq.png",
+  zyfai: "/avatars/swarm/zyfai.png",
   "robot-money": "/avatars/swarm/robot-money.svg",
 };
 

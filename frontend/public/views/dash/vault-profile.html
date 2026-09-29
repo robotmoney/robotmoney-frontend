@@ -76,19 +76,35 @@
             </template>
           </div>
         </div>
-        <template x-if="filteredTvlHistory.length === 0">
-          <p class="data-label" data-vault-profile-tvl-empty>No TVL history yet.</p>
-        </template>
-        <div style="height:14rem;" x-show="filteredTvlHistory.length > 0">
-          <canvas x-ref="tvlChart" data-vault-profile-tvl-chart-canvas></canvas>
+        <!-- The box keeps its height in every state: a period with nothing
+             to draw swaps the canvas for the empty chart laid over the same
+             box, instead of collapsing the card. The canvas leaves the DOM
+             rather than hiding, so an undrawn one never sits at its default
+             300px width on a phone. -->
+        <div style="height:14rem; position:relative;">
+          <template x-if="!tvlChartEmpty">
+            <canvas x-ref="tvlChart" data-vault-profile-tvl-chart-canvas></canvas>
+          </template>
+          <template x-if="tvlChartEmpty">
+            <div class="rm-nodata rm-nodata--fill" data-vault-profile-tvl-empty>
+              <p class="rm-nodata__h" x-text="tvlChartEmptyTitle()"></p>
+              <template x-if="tvlChartEmptyDetail()">
+                <p class="rm-nodata__d" x-text="tvlChartEmptyDetail()"></p>
+              </template>
+            </div>
+          </template>
         </div>
       </div>
 
       <div class="a3-card">
         <h2 class="a3-card-title">Yield History</h2>
         <!-- D11: honest empty state — this repo never fabricates the
-             original's seeded random-walk APY series. -->
-        <p class="data-label" data-vault-profile-yield-empty>No yield history yet.</p>
+             original's seeded random-walk APY series. It is the same empty
+             chart, at the TVL chart's height, so the two cards read as a
+             pair. -->
+        <div class="rm-nodata" style="height:14rem;" data-vault-profile-yield-empty>
+          <p class="rm-nodata__h">No data yet</p>
+        </div>
       </div>
 
       <div class="a3-card">

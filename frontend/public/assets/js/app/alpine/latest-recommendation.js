@@ -13,6 +13,7 @@ import { fmtDate } from "../lib/vault-data.js";
 import { sessionSummary } from "../lib/session-summary.js";
 import { sessionTakes } from "../lib/session-takes.js";
 import { stanceColor } from "../lib/stance.js";
+import { loadRoster } from "../lib/judgements.js";
 import { helpers } from "./static-views.js";
 
 const { sessionHref } = sessionTakes();
@@ -23,6 +24,10 @@ export function latestRecommendation() {
     recLatest: null,
     recLoaded: false,
     recError: false,
+    // The public roster, read only when a judge worked on that session: its
+    // name goes over the words it wrote, and a seated judge is no seat a take
+    // could fill (lib/judgements.js).
+    recRoster: [],
     /**
      * @param {string} hostname
      * @param {Promise<any>} [read] the read the view already made, so the
@@ -30,7 +35,9 @@ export function latestRecommendation() {
      */
     loadRecommendation(hostname, read) {
       const r = read ?? loadLatestRecommendation({ hostname }).catch(() => ({ rec: null, error: true }));
-      return r.then((res) => {
+      return r.then(async (res) => {
+        // Before the panel draws, so a judge's name never flashes as its id.
+        if (res?.session?.swarmRecommendation?.judge) this.recRoster = await loadRoster();
         this.recSession = res?.session ?? null;
         this.recLatest = res?.latest ?? null;
         this.recError = !!res?.error;
@@ -46,10 +53,12 @@ export function latestRecommendation() {
     /** @param {any} s */
     recHref(s) { return sessionHref(s); },
     recRationale() { return sessionSummary.rationaleOf.call(sessionSummary, this.recSession); },
+    // "Judge: <name>" over a rationale a judge wrote.
+    recRationaleLabel() { return sessionSummary.rationaleJudgeLabel.call(sessionSummary, this.recSession, this.recRoster); },
     recTally() { return this.recSession ? sessionSummary.stanceTally.call(sessionSummary, this.recSession) : []; },
     recTallyNote() {
       const s = this.recSession;
-      return s ? [sessionSummary.turnoutText.call(sessionSummary, s), sessionSummary.meanConfidenceText.call(sessionSummary, s)].filter(Boolean).join(" · ") : "";
+      return s ? [sessionSummary.turnoutText.call(sessionSummary, s, this.recRoster), sessionSummary.meanConfidenceText.call(sessionSummary, s)].filter(Boolean).join(" · ") : "";
     },
     /** @param {string} text */
     linkified(text) { return helpers.linkified(text); },

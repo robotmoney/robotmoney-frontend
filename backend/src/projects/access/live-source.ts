@@ -36,7 +36,44 @@ import type { CoinGeckoMarketRow, DexPayload } from "../transforms.ts";
 import type { DiscoveredProject, Erc4626Read, ProjectsDataSource } from "./data-source.ts";
 import { loadV0RosterWithManifest, type LoadedRosterSeed } from "../seed/roster-seed.ts";
 
-const CG_BASE = "https://api.coingecko.com/api/v3";
+// CoinGecko has two hosts. The public host serves the keyless, rate-limited
+// tier; a paid plan's key is honoured ONLY on the Pro host, and ONLY under the
+// x-cg-pro-api-key header (issue #1047). The key was once sent to the public
+// host as `x-cg-smoke-api-key`, a corruption of `x-cg-demo-api-key` from the
+// demo-to-smoke rename (#751), so CoinGecko ignored it and the paid plan never
+// applied. The free Demo-key tier is deliberately not a supported mode.
+const CG_PUBLIC_BASE = "https://api.coingecko.com/api/v3";
+const CG_PRO_BASE = "https://pro-api.coingecko.com/api/v3";
+
+interface CoinGeckoEndpoint {
+  tier: "pro" | "public";
+  base: string;
+  host: string;
+  headers: Record<string, string>;
+}
+
+// Pick the host and headers from COINGECKO_API_KEY. Set → the Pro host with
+// x-cg-pro-api-key. Unset or blank → exactly today's keyless public request,
+// with no x-cg-* header at all. The key only ever lands in `headers`; the
+// tier and host are what callers may log or put in an error.
+function coinGeckoEndpoint(rawKey: string | undefined = process.env.COINGECKO_API_KEY): CoinGeckoEndpoint {
+  const key = (rawKey ?? "").trim();
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (!key) return { tier: "public", base: CG_PUBLIC_BASE, host: new URL(CG_PUBLIC_BASE).host, headers };
+  // A key with a control character inside it (a stray CR/LF from a pasted
+  // secret) makes fetch throw "Header ... has invalid value: '<key>'", which
+  // the degraded run would copy into the log and job_runs. Refuse it here
+  // with an error that names the variable and host, never the value.
+  if (!/^[\x21-\x7e]+$/.test(key)) {
+    throw new Error(
+      `COINGECKO_API_KEY is not a valid header value (non-printable or non-ASCII character); ` +
+        `not calling ${new URL(CG_PRO_BASE).host}`,
+    );
+  }
+  headers["x-cg-pro-api-key"] = key;
+  return { tier: "pro", base: CG_PRO_BASE, host: new URL(CG_PRO_BASE).host, headers };
+}
+
 const DEX_BASE = "https://api.dexscreener.com/latest/dex/tokens";
 
 // Hard per-request timeout for every live provider fetch (mirrors the
@@ -116,12 +153,13 @@ export const liveProjectsDataSource: ProjectsDataSource = {
 
   async coinGeckoMarkets(ids: string[]): Promise<CoinGeckoMarketRow[]> {
     if (ids.length === 0) return [];
-    const key = process.env.COINGECKO_API_KEY || "";
-    const url = `${CG_BASE}/coins/markets?vs_currency=usd&ids=${ids.join(",")}&per_page=250&page=1&sparkline=false&price_change_percentage=24h`;
-    const headers: Record<string, string> = { accept: "application/json" };
-    if (key) headers["x-cg-smoke-api-key"] = key;
+    const { tier, base, host, headers } = coinGeckoEndpoint();
+    const url = `${base}/coins/markets?vs_currency=usd&ids=${ids.join(",")}&per_page=250&page=1&sparkline=false&price_change_percentage=24h`;
+    // Tier and host only — never the key. This line and the error below reach
+    // the worker log and the degraded job_runs result.
+    console.log(`[projects.coingecko] coins/markets via ${tier} tier (${host})`);
     const r = await timedFetch(url, { headers });
-    if (!r.ok) throw new Error(`coingecko markets ${r.status}`);
+    if (!r.ok) throw new Error(`coingecko markets ${host} ${r.status}`);
     return (await r.json()) as CoinGeckoMarketRow[];
   },
 

@@ -231,31 +231,81 @@
       <!-- History (90d) -->
       <div class="a3-profile__section" data-profile-history-section>
         <p class="data-label">History · 90d</p>
+        <!-- Under two days there is no line on any card, so the section is
+             one empty chart the height of the Token Price card rather than
+             five saying the same thing. -->
         <template x-if="historyEmpty()">
-          <p class="data-label" data-profile-history-empty style="text-transform:none; letter-spacing:normal;">Not enough history yet.</p>
+          <div class="metric-card rm-nodata" data-profile-history-empty style="height:12.25rem;">
+            <p class="rm-nodata__h" x-text="emptyChartTitle(historyDays())"></p>
+            <template x-if="historyDays() === 1"><p class="rm-nodata__d">One reading so far</p></template>
+          </div>
         </template>
+        <!-- A metric can be null on every day it has; that card alone gets the
+             empty chart, laid over its frame so the grid keeps its shape. Its
+             canvas leaves the DOM, so an undrawn one never sits at its default
+             300px width on a phone. -->
         <template x-if="!historyEmpty()">
           <div>
             <div class="metric-card a3-profile__chart-card" data-chart-card="tokenPriceUsd" style="margin-bottom:1rem;">
               <span class="data-label">Token Price</span>
-              <div class="a3-profile__chart-frame"><canvas x-ref="chartTokenPrice"></canvas></div>
+              <div class="a3-profile__chart-frame" style="position:relative;">
+                <template x-if="!chartEmpty('tokenPriceUsd')"><canvas x-ref="chartTokenPrice"></canvas></template>
+                <template x-if="chartEmpty('tokenPriceUsd')">
+                  <div class="rm-nodata rm-nodata--fill" data-chart-empty>
+                    <p class="rm-nodata__h" x-text="emptyChartTitle(chartReadings('tokenPriceUsd'))"></p>
+                    <template x-if="chartReadings('tokenPriceUsd') === 1"><p class="rm-nodata__d">One reading so far</p></template>
+                  </div>
+                </template>
+              </div>
             </div>
             <div class="a3-profile__charts">
               <div class="metric-card a3-profile__chart-card" data-chart-card="marketCapUsd">
                 <span class="data-label">Market Cap</span>
-                <div class="a3-profile__chart-frame"><canvas x-ref="chartMarketCap"></canvas></div>
+                <div class="a3-profile__chart-frame" style="position:relative;">
+                  <template x-if="!chartEmpty('marketCapUsd')"><canvas x-ref="chartMarketCap"></canvas></template>
+                  <template x-if="chartEmpty('marketCapUsd')">
+                    <div class="rm-nodata rm-nodata--fill" data-chart-empty>
+                      <p class="rm-nodata__h" x-text="emptyChartTitle(chartReadings('marketCapUsd'))"></p>
+                      <template x-if="chartReadings('marketCapUsd') === 1"><p class="rm-nodata__d">One reading so far</p></template>
+                    </div>
+                  </template>
+                </div>
               </div>
               <div class="metric-card a3-profile__chart-card" data-chart-card="dailyRevenueUsd">
                 <span class="data-label">Daily Revenue</span>
-                <div class="a3-profile__chart-frame"><canvas x-ref="chartDailyRevenue"></canvas></div>
+                <div class="a3-profile__chart-frame" style="position:relative;">
+                  <template x-if="!chartEmpty('dailyRevenueUsd')"><canvas x-ref="chartDailyRevenue"></canvas></template>
+                  <template x-if="chartEmpty('dailyRevenueUsd')">
+                    <div class="rm-nodata rm-nodata--fill" data-chart-empty>
+                      <p class="rm-nodata__h" x-text="emptyChartTitle(chartReadings('dailyRevenueUsd'))"></p>
+                      <template x-if="chartReadings('dailyRevenueUsd') === 1"><p class="rm-nodata__d">One reading so far</p></template>
+                    </div>
+                  </template>
+                </div>
               </div>
               <div class="metric-card a3-profile__chart-card" data-chart-card="treasuryUsd">
                 <span class="data-label">Treasury (Wallets + TVL)</span>
-                <div class="a3-profile__chart-frame"><canvas x-ref="chartTreasury"></canvas></div>
+                <div class="a3-profile__chart-frame" style="position:relative;">
+                  <template x-if="!chartEmpty('treasuryUsd')"><canvas x-ref="chartTreasury"></canvas></template>
+                  <template x-if="chartEmpty('treasuryUsd')">
+                    <div class="rm-nodata rm-nodata--fill" data-chart-empty>
+                      <p class="rm-nodata__h" x-text="emptyChartTitle(chartReadings('treasuryUsd'))"></p>
+                      <template x-if="chartReadings('treasuryUsd') === 1"><p class="rm-nodata__d">One reading so far</p></template>
+                    </div>
+                  </template>
+                </div>
               </div>
               <div class="metric-card a3-profile__chart-card" data-chart-card="avgProductivity">
                 <span class="data-label">Avg Agent Productivity</span>
-                <div class="a3-profile__chart-frame"><canvas x-ref="chartProductivity"></canvas></div>
+                <div class="a3-profile__chart-frame" style="position:relative;">
+                  <template x-if="!chartEmpty('avgProductivity')"><canvas x-ref="chartProductivity"></canvas></template>
+                  <template x-if="chartEmpty('avgProductivity')">
+                    <div class="rm-nodata rm-nodata--fill" data-chart-empty>
+                      <p class="rm-nodata__h" x-text="emptyChartTitle(chartReadings('avgProductivity'))"></p>
+                      <template x-if="chartReadings('avgProductivity') === 1"><p class="rm-nodata__d">One reading so far</p></template>
+                    </div>
+                  </template>
+                </div>
               </div>
             </div>
           </div>

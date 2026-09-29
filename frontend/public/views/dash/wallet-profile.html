@@ -85,10 +85,17 @@
 
       <div class="a3-card">
         <h2 class="a3-card-title">Balance History (30d)</h2>
-        <template x-if="profile.balanceHistory.length === 0">
-          <p class="data-label" data-wallet-profile-history-empty>No snapshot history yet.</p>
+        <!-- Held to the sparkline's 120px height, so the card does not
+             shrink to a line of text when there is no line to draw. -->
+        <template x-if="balanceReadings < 2">
+          <div class="rm-nodata" style="min-height:120px;" data-wallet-profile-history-empty>
+            <p class="rm-nodata__h" x-text="balanceReadings ? 'Not enough data yet' : 'No data yet'"></p>
+            <template x-if="balanceReadings === 1">
+              <p class="rm-nodata__d">One reading so far</p>
+            </template>
+          </div>
         </template>
-        <div x-show="profile.balanceHistory.length > 0" style="width:100%; overflow:hidden;" data-wallet-profile-sparkline x-html="balanceSparkSvg()"></div>
+        <div x-show="balanceReadings >= 2" style="width:100%; overflow:hidden;" data-wallet-profile-sparkline x-html="balanceSparkSvg()"></div>
       </div>
 
       <div class="a3-notice" data-wallet-profile-holdings-notice>

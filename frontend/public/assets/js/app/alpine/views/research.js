@@ -1,7 +1,7 @@
 // Alpine factory for the /research/* signal views (channel-divergence /
 // late-cycle-signals). Moved verbatim from the monolithic views.js (finding 025).
 import { api, ROUTES, path } from "../../lib/api.js";
-import { PALETTE, GRID_COLOR, rgba, monoAxis } from "../../lib/chart-theme.js";
+import { PALETTE, monoAxis } from "../../lib/chart-theme.js";
 
 export function registerResearchView(Alpine) {
   // ── Research signal (channel-divergence / late-cycle-signals) ─────────────
@@ -31,13 +31,34 @@ export function registerResearchView(Alpine) {
       return inds && typeof inds === "object" ? Object.keys(inds) : [];
     },
     prettify(k) { return String(k).replace(/_/g, " "); },
+    seriesPoints(key) {
+      const pts = this.payload?.indicators?.[key];
+      return Array.isArray(pts) ? pts.filter((p) => p && p.value != null).slice(-180) : [];
+    },
+    // The chart's empty state (.rm-nodata), or null while it can draw. Nothing
+    // is said while the read is in flight. A failed read is no data available;
+    // a series that is missing or all gaps is no data yet; one reading is not
+    // enough for a line (Chart.js draws a lone point as nothing at radius 0).
+    seriesEmpty(key) {
+      if (this.loading) return null;
+      if (this.error) return "No data available";
+      const n = this.seriesPoints(key).length;
+      return n === 0 ? "No data yet" : n === 1 ? "Not enough data yet" : null;
+    },
+    seriesEmptyDetail(key) {
+      return !this.loading && !this.error && this.seriesPoints(key).length === 1 ? "One reading so far" : "";
+    },
+    // The live panel's empty state: the same states, for the gauges.
+    gaugesEmpty() {
+      if (this.loading) return null;
+      if (this.error) return "No data available";
+      return this.payload?.gauges?.length ? null : "No data yet";
+    },
     drawSeriesCharts() {
-      const inds = this.payload?.indicators;
-      if (!inds || !window.Chart || !this.$root) return;
+      if (!this.payload?.indicators || !window.Chart || !this.$root) return;
       for (const canvas of this.$root.querySelectorAll("canvas[data-series]")) {
-        const key = canvas.getAttribute("data-series");
-        const pts = (inds[key] || []).filter((p) => p && p.value != null).slice(-180);
-        if (!pts.length) continue;
+        const pts = this.seriesPoints(canvas.getAttribute("data-series"));
+        if (pts.length < 2) continue;
         new window.Chart(canvas, {
           type: "line",
           data: {
@@ -61,14 +82,13 @@ export function registerResearchView(Alpine) {
         type: "line",
         data: {
           labels: pts.map((p) => p.date),
+          // A line with no area under it: cyan is a line, never a mass.
           datasets: [{ label: this.payload.series.label, data: pts.map((p) => p.value),
-            borderColor: PALETTE.accent, backgroundColor: rgba(PALETTE.accent, 0.12), fill: true, tension: 0.25, pointRadius: 0, borderWidth: 2 }],
+            borderColor: PALETTE.accent, fill: false, tension: 0.25, pointRadius: 0, borderWidth: 2 }],
         },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
-          scales: { y: { grid: { color: GRID_COLOR }, ticks: { color: PALETTE.textMuted } },
-            x: { grid: { display: false }, ticks: { color: PALETTE.textMuted, maxTicksLimit: 8 } } },
-          plugins: { legend: { labels: { color: PALETTE.textMuted } } },
+          scales: { y: monoAxis(), x: monoAxis({ ticks: { maxTicksLimit: 8 } }) },
         },
       });
     },

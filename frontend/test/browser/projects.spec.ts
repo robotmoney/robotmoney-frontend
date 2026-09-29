@@ -139,7 +139,7 @@ test("ANALYTICS is absent and /projects is de-advertised", async ({ page }) => {
   await page.goto("/");
 
   // Desktop and mobile nav omit the item, and no link retains either destination.
-  const analytics = page.locator('a.nav__link:has-text("Analytics"), a.nav__mlink:has-text("Analytics")');
+  const analytics = page.locator('.nav a:has-text("Analytics")');
   await expect(analytics).toHaveCount(0);
   await expect(page.locator('a[href="https://analytics.robotmoney.net/projects"]')).toHaveCount(0);
   await expect(page.locator('a[href="/projects"]')).toHaveCount(0);
@@ -179,9 +179,10 @@ test("navigate waits for the completion event for its requested route", async ({
   await navigate(page, "/regime");
   expect(await page.locator('meta[name="robots"]').getAttribute("content"))
     .toBe("index, follow, max-image-preview:large, max-snippet:-1");
-  const currentNavLinks = page.locator('a[href="/regime"][aria-current="page"]');
-  await expect(currentNavLinks).toHaveCount(2);
-  await expect(currentNavLinks.first()).toHaveClass(/nav__link--active/);
+  // One nav list serves desktop and phone (RM-124), so one current link, and
+  // its group keeps the section's underline.
+  await expect(page.locator('a[href="/regime"][aria-current="page"]')).toHaveCount(1);
+  await expect(page.locator('.nav__group[data-nav-section="research"] > .nav__top')).toHaveClass(/nav__top--active/);
 });
 
 test("navigate rejects within its configured timeout when completion never arrives", async ({ page }) => {

@@ -10,6 +10,7 @@
 // object literal would hand both surfaces the same slot.
 import { api, ROUTES } from "./api.js";
 import { CATEGORICAL } from "./chart-theme.js";
+import { bucketLabel } from "./session-summary.js";
 import { isLocalHost, vaultForBucket } from "./vault-data.js";
 
 export function allocationFramework() {
@@ -35,7 +36,9 @@ export function allocationFramework() {
       return rows.map((/** @type {any} */ r, /** @type {number} */ i) => ({
         // "Sleeve" is the published word for one of the four allocation rows;
         // `buckets` stays the manifest's own field name and is not renamed.
-        label: r?.label || `Sleeve ${i + 1}`,
+        // The sleeve's name through the one display map (RM-97): the served
+        // label is the framework's first name.
+        label: r?.label ? bucketLabel(r.label) : `Sleeve ${i + 1}`,
         pct: Number.isFinite(Number(r?.targetPct)) ? Number(r.targetPct) : null,
         hue: CATEGORICAL[i % CATEGORICAL.length],
       }));

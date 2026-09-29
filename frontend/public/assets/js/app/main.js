@@ -7,8 +7,10 @@ import { registerViews } from "./alpine/views.js";
 import { registerHeroes } from "./alpine/heroes.js";
 import { registerStaticViews } from "./alpine/static-views.js";
 import { registerDashUi } from "./alpine/dash-ui.js";
+import { registerSiteNav } from "./alpine/site-nav.js";
 import { applyChartDefaults } from "./lib/chart-theme.js";
 import { initTooltips } from "./lib/tooltip.js";
+import { initHeadingAnchors } from "./lib/heading-anchors.js";
 import { start } from "./router.js";
 import { startAnalytics } from "./analytics.js";
 import { api, apiUrl, gateApiOn, ROUTES } from "./lib/api.js";
@@ -100,6 +102,9 @@ function buildTerminalLines(bucketLines) {
 // Register every Alpine.data factory the views need, before Alpine starts.
 // .rm-tip behaviour, bound once by delegation (see lib/tooltip.js).
 initTooltips();
+// Section links on the pages that opt in with data-anchors (lib/heading-anchors.js).
+// Before start() below, so the first route's rm:view-changed is caught.
+initHeadingAnchors();
 
 document.addEventListener("alpine:init", () => {
   const Alpine = window.Alpine;
@@ -223,6 +228,7 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
+  registerSiteNav(Alpine);
   registerSubstrate(Alpine);
   registerViews(Alpine);
   registerHeroes(Alpine);

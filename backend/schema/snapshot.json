@@ -96,6 +96,7 @@
     "0077_immutable_ledger_grants.sql",
     "0078_automation_token_holders.sql",
     "0079_drop_swarm_scheduler_jobs.sql",
+    "0080_analytics_ledger_compaction.sql",
     "0080_stream_events_grant_only.sql",
     "0081_stream_event_counter.sql",
     "0082_judge_config_two_modes.sql",
@@ -120,7 +121,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "695bfd74cbf049b4e8a01dd73497dc928bce201eaaad3db16be043a4f5f89b62",
+  "contentHash": "fcb6e563c6f11d7da6a530c96305c97c1945f7b9da73a61c7bcc4f3735651037",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -871,6 +872,10 @@
       "type": "bigint",
       "notnull": "yes",
       "identity": "always"
+    },
+    "column public.analytics_vintage_members.last_source_value_version_id": {
+      "type": "bigint",
+      "notnull": "no"
     },
     "column public.analytics_vintage_members.source_key": {
       "type": "text",
@@ -2141,24 +2146,6 @@
     },
     "column public.source_fetches.sequence": {
       "type": "integer",
-      "notnull": "yes"
-    },
-    "column public.source_payloads.byte_length": {
-      "type": "bigint",
-      "notnull": "no",
-      "generated": "stored: octet_length(payload_bytes)"
-    },
-    "column public.source_payloads.checksum": {
-      "type": "text",
-      "notnull": "yes"
-    },
-    "column public.source_payloads.knowledge_time": {
-      "type": "timestamp with time zone",
-      "notnull": "yes",
-      "default": "clock_timestamp()"
-    },
-    "column public.source_payloads.payload_bytes": {
-      "type": "bytea",
       "notnull": "yes"
     },
     "column public.source_value_versions.acquisition_id": {
@@ -4029,8 +4016,14 @@
     "constraint public.analytics_submissions.analytics_submissions_status_check": {
       "definition": "CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text])))"
     },
+    "constraint public.analytics_vintage_members.analytics_vintage_members_last_version_fkey": {
+      "definition": "FOREIGN KEY (last_source_value_version_id) REFERENCES public.source_value_versions(id)"
+    },
     "constraint public.analytics_vintage_members.analytics_vintage_members_pkey": {
       "definition": "PRIMARY KEY (id)"
+    },
+    "constraint public.analytics_vintage_members.analytics_vintage_members_range_check": {
+      "definition": "CHECK (((last_source_value_version_id IS NULL) OR (last_source_value_version_id > source_value_version_id)))"
     },
     "constraint public.analytics_vintage_members.analytics_vintage_members_source_key_check": {
       "definition": "CHECK (((source_key <> ''::text) AND (length(source_key) <= 128)))"
@@ -4311,23 +4304,11 @@
     "constraint public.source_fetches.source_fetches_pkey": {
       "definition": "PRIMARY KEY (id)"
     },
-    "constraint public.source_fetches.source_fetches_response_checksum_fkey": {
-      "definition": "FOREIGN KEY (response_checksum) REFERENCES public.source_payloads(checksum)"
-    },
     "constraint public.source_fetches.source_fetches_response_status_check": {
       "definition": "CHECK (((response_status >= 100) AND (response_status <= 599)))"
     },
     "constraint public.source_fetches.source_fetches_sequence_check": {
       "definition": "CHECK ((sequence > 0))"
-    },
-    "constraint public.source_payloads.source_payloads_check": {
-      "definition": "CHECK ((encode(public.digest(payload_bytes, 'sha256'::text), 'hex'::text) = checksum))"
-    },
-    "constraint public.source_payloads.source_payloads_checksum_check": {
-      "definition": "CHECK ((checksum ~ '^[0-9a-f]{64}$'::text))"
-    },
-    "constraint public.source_payloads.source_payloads_pkey": {
-      "definition": "PRIMARY KEY (checksum)"
     },
     "constraint public.source_value_versions.source_value_versions_acquisition_id_fkey": {
       "definition": "FOREIGN KEY (acquisition_id) REFERENCES public.source_acquisitions(id)"
@@ -5030,8 +5011,14 @@
     "index public.analytics_submissions_status_created_idx": {
       "definition": "CREATE INDEX analytics_submissions_status_created_idx ON public.analytics_submissions USING btree (status, created_at DESC)"
     },
+    "index public.analytics_vintage_members_last_version_idx": {
+      "definition": "CREATE INDEX analytics_vintage_members_last_version_idx ON public.analytics_vintage_members USING btree (last_source_value_version_id) WHERE (last_source_value_version_id IS NOT NULL)"
+    },
     "index public.analytics_vintage_members_pkey": {
       "definition": "CREATE UNIQUE INDEX analytics_vintage_members_pkey ON public.analytics_vintage_members USING btree (id)"
+    },
+    "index public.analytics_vintage_members_version_idx": {
+      "definition": "CREATE INDEX analytics_vintage_members_version_idx ON public.analytics_vintage_members USING btree (source_value_version_id)"
     },
     "index public.analytics_vintage_members_vintage_id_source_value_version_i_key": {
       "definition": "CREATE UNIQUE INDEX analytics_vintage_members_vintage_id_source_value_version_i_key ON public.analytics_vintage_members USING btree (vintage_id, source_value_version_id)"
@@ -5272,9 +5259,6 @@
     },
     "index public.source_fetches_pkey": {
       "definition": "CREATE UNIQUE INDEX source_fetches_pkey ON public.source_fetches USING btree (id)"
-    },
-    "index public.source_payloads_pkey": {
-      "definition": "CREATE UNIQUE INDEX source_payloads_pkey ON public.source_payloads USING btree (checksum)"
     },
     "index public.source_value_versions_acquisition_key_idx": {
       "definition": "CREATE UNIQUE INDEX source_value_versions_acquisition_key_idx ON public.source_value_versions USING btree (acquisition_id, source_key, market_date, market_instant) NULLS NOT DISTINCT"
@@ -6138,9 +6122,6 @@
     "table public.source_fetches": {
       "owner": "rm_owner"
     },
-    "table public.source_payloads": {
-      "owner": "rm_owner"
-    },
     "table public.source_value_versions": {
       "owner": "rm_owner"
     },
@@ -6401,14 +6382,6 @@
     },
     "trigger public.source_fetches.source_fetches_immutable_row": {
       "definition": "CREATE TRIGGER source_fetches_immutable_row BEFORE DELETE OR UPDATE ON public.source_fetches FOR EACH ROW EXECUTE FUNCTION public.rm_source_ledger_immutable()",
-      "fires": "always"
-    },
-    "trigger public.source_payloads.source_payloads_immutable": {
-      "definition": "CREATE TRIGGER source_payloads_immutable BEFORE DELETE OR UPDATE OR TRUNCATE ON public.source_payloads FOR EACH STATEMENT EXECUTE FUNCTION public.rm_source_ledger_immutable()",
-      "fires": "always"
-    },
-    "trigger public.source_payloads.source_payloads_immutable_row": {
-      "definition": "CREATE TRIGGER source_payloads_immutable_row BEFORE DELETE OR UPDATE ON public.source_payloads FOR EACH ROW EXECUTE FUNCTION public.rm_source_ledger_immutable()",
       "fires": "always"
     },
     "trigger public.source_value_versions.source_value_versions_immutable": {

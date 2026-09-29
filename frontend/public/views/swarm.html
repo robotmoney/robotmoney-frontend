@@ -46,7 +46,7 @@
             <span class="sv__live-meta" x-show="liveIsOpen() && liveRemaining()">
               Window closes in <b class="sv__live-n" x-text="liveRemaining()" :title="liveClosesAbsolute()"></b>
             </span>
-            <!-- Only window_closed/aggregated may claim aggregation. A past
+            <!-- Only window_closed/aggregated/judged may claim aggregation. A past
                  deadline on a still-`collecting` row is the orphan case, so it
                  reports the closure and stops there. -->
             <span class="sv__live-meta" x-show="liveIsAggregating()">
@@ -80,7 +80,7 @@
               <thead>
                 <tr>
                   <th scope="col">Member</th>
-                  <th scope="col">Role<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What a role means">i</button><span class="rm-tip__bub" role="tooltip">A <b>proposer</b> files one signed take each session: position, reasoning and sources.</span></span></th>
+                  <th scope="col">Role<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What a role means">i</button><span class="rm-tip__bub" role="tooltip">An <b>analyst</b> files one signed take each session: position, reasoning and sources.<template x-if="hasJudge()"><span> A <b>judge</b> files no take. It explains the takes and advises on release.</span></template></span></span></th>
                   <th scope="col" class="q">Operator</th>
                 </tr>
               </thead>
@@ -96,7 +96,7 @@
                         </span>
                       </span>
                     </th>
-                    <td x-text="memberRole(m)"></td>
+                    <td><span class="rm-role" x-text="memberRole(m)"></span></td>
                     <td class="q" x-text="operatorLabel(m) || '—'"></td>
                   </tr>
                 </template>
@@ -206,6 +206,10 @@
                 </template>
                 <template x-if="rationaleOf(allocShown())">
                   <div>
+                    <!-- Words a judge wrote carry its name. -->
+                    <template x-if="rationaleJudgeLabel(allocShown(), members)">
+                      <p class="rr-k rr-sub" x-html="rationaleJudgeLabel(allocShown(), members)"></p>
+                    </template>
                     <div class="rr-prose" :class="!more && String(rationaleOf(allocShown())).length > 480 ? 'is-clamped' : ''" style="--rr-lines:8"
                          x-html="linkified(rationaleOf(allocShown()))"></div>
                     <template x-if="String(rationaleOf(allocShown())).length > 480">
@@ -220,7 +224,7 @@
                     <template x-for="x in stanceTally(allocRecord())" :key="x.stance">
                       <span :style="`color:${stanceColor(x.stance)}`"><i :style="`background:${stanceColor(x.stance)}`" aria-hidden="true"></i><span x-text="x.stance"></span><b x-text="x.n"></b></span>
                     </template>
-                    <em x-text="[turnoutText(allocRecord()), meanConfidenceText(allocRecord())].filter(Boolean).join(' · ')"></em>
+                    <em x-text="[turnoutText(allocRecord(), members), meanConfidenceText(allocRecord())].filter(Boolean).join(' · ')"></em>
                   </p>
                 </template>
                 <a class="rr-cta" :href="sessionHref(allocShown())">
@@ -360,17 +364,22 @@
             <div>
               <p class="rr-k">Step 1</p>
               <p class="rr-steps__t">A session opens</p>
-              <p class="rr-steps__d">Each session convenes on one subject: the allocation framework or a portfolio. Every member gets the same brief: the day's regime read, the subject's own record, and any research signals filed that day.</p>
+              <p class="rr-steps__d">Each session convenes on one subject: the allocation framework or a portfolio. Every analyst gets the same brief: the day's regime read, the subject's own record, and any research signals filed that day.</p>
             </div>
             <div>
               <p class="rr-k">Step 2</p>
-              <p class="rr-steps__t">Members submit takes</p>
-              <p class="rr-steps__d">Takes are due by the deadline, and <b>members can't see other takes until the window closes</b>.</p>
+              <p class="rr-steps__t">Analysts file takes</p>
+              <p class="rr-steps__d">Takes are due by the deadline, and <b>analysts can't see other takes until the window closes</b>.</p>
             </div>
             <div>
               <p class="rr-k">Step 3</p>
+              <p class="rr-steps__t">The judge reads the takes</p>
+              <p class="rr-steps__d">Where the judge is enabled, it reads each session, with no vote of its own. It explains where the takes agree and where they part, and advises whether to update the target or hold it.</p>
+            </div>
+            <div>
+              <p class="rr-k">Step 4</p>
               <p class="rr-steps__t">A recommendation is published</p>
-              <p class="rr-steps__d">With the consensus stance, every signed take and the brief the session opened with.</p>
+              <p class="rr-steps__d">With the consensus stance, every signed take, any advice from the judge and the brief the session opened with.</p>
             </div>
           </div>
         </section>

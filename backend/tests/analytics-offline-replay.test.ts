@@ -91,9 +91,14 @@ test(
 
     // Sanity: the vintage really is durable in Postgres, independent of the
     // in-memory `results` object this test just received.
-    const [{ n: memberRows }] = await sql`
-      SELECT COUNT(*)::int AS n FROM analytics_vintage_members WHERE vintage_id = ${original.vintageId}::bigint`;
+    // Rows are runs of consecutive version ids (issue #1035), so the member
+    // COUNT is the vintage header's member_count, not the row count.
+    const [{ n: memberRows, rows: storedRows }] = await sql`
+      SELECT v.member_count AS n,
+             (SELECT COUNT(*)::int FROM analytics_vintage_members WHERE vintage_id = v.id) AS rows
+      FROM analytics_data_vintages v WHERE v.id = ${original.vintageId}::bigint`;
     expect(memberRows).toBeGreaterThan(0);
+    expect(storedRows).toBeGreaterThan(0);
 
     // (2) Cut off every avenue back to a live source: the global fetch AND
     // every method of both production AnalyticsDataSource singletons.

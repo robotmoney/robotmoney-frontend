@@ -89,11 +89,23 @@
             </template>
           </div>
         </div>
-        <template x-if="filteredHistory.length === 0">
-          <p class="data-label" data-coin-profile-chart-empty>No price history yet.</p>
-        </template>
-        <div style="height:14rem;" x-show="filteredHistory.length > 0">
-          <canvas x-ref="priceChart" data-coin-profile-chart-canvas></canvas>
+        <!-- The box keeps its height in every state: a period with nothing
+             to draw swaps the canvas for the empty chart laid over the same
+             box, instead of collapsing the card. The canvas leaves the DOM
+             rather than hiding, so an undrawn one never sits at its default
+             300px width on a phone. -->
+        <div style="height:14rem; position:relative;">
+          <template x-if="!chartEmpty">
+            <canvas x-ref="priceChart" data-coin-profile-chart-canvas></canvas>
+          </template>
+          <template x-if="chartEmpty">
+            <div class="rm-nodata rm-nodata--fill" data-coin-profile-chart-empty>
+              <p class="rm-nodata__h" x-text="chartEmptyTitle()"></p>
+              <template x-if="chartEmptyDetail()">
+                <p class="rm-nodata__d" x-text="chartEmptyDetail()"></p>
+              </template>
+            </div>
+          </template>
         </div>
       </div>
 

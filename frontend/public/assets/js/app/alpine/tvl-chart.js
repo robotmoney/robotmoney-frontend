@@ -32,16 +32,15 @@ export function tvlChart() {
       return historyModel(host.tvlPoints() ?? [], host.tvlAsOf());
     },
     // How it moved across the window, beside the title: the change in dollars
-    // and in percent since the first reading. Empty with fewer than two.
+    // since the first reading. No percentage: TVL moves with deposits and
+    // withdrawals, so a percentage beside the return would read as one.
+    // Empty with fewer than two.
     tvlChange() {
       const pts = this.tvl().points;
       if (pts.length < 2) return "";
-      const a = pts[0].value;
-      const b = pts[pts.length - 1].value;
-      const d = b - a;
+      const d = pts[pts.length - 1].value - pts[0].value;
       const sign = d > 0 ? "+" : d < 0 ? "−" : "";
-      const pct = a > 0 ? ` · ${sign}${Math.abs((d / a) * 100).toFixed(1)}%` : "";
-      return `${sign}${fmtUsd(Math.abs(d))}${pct} since ${tickDate(pts[0].t, fmtDate(pts[0].t).slice(-4) === fmtDate(pts[pts.length - 1].t).slice(-4))}`;
+      return `${sign}${fmtUsd(Math.abs(d))} since ${tickDate(pts[0].t, fmtDate(pts[0].t).slice(-4) === fmtDate(pts[pts.length - 1].t).slice(-4))}`;
     },
     // One area and one edge per unbroken run; neither bridges a gap.
     tvlSvg() {

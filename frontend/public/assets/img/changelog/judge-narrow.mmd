@@ -1,0 +1,39 @@
+---
+# The narrow (below 760px) render of judge.mmd: the same flow top to bottom.
+# Baked in twice as inline SVG: this source (LR) above 760px, and below it
+# judge-narrow.mmd, the same flow top to bottom, since a wide chain does not
+# read at phone width. Render with Mermaid 11 in a page that has Space Grotesk
+# loaded, so the boxes are sized to the site's font.
+config:
+  theme: base
+  htmlLabels: false
+  fontFamily: "'Space Grotesk', system-ui, sans-serif"
+  flowchart:
+    curve: linear
+    padding: 16
+    nodeSpacing: 24
+    rankSpacing: 40
+    diagramPadding: 2
+  themeVariables:
+    darkMode: true
+    background: transparent
+    fontFamily: "'Space Grotesk', system-ui, sans-serif"
+    fontSize: 15px
+    primaryColor: "#06080c"
+    primaryTextColor: "#f2f4f9"
+    primaryBorderColor: "#2e3a4e"
+    nodeBorder: "#2e3a4e"
+    mainBkg: "#06080c"
+    lineColor: "#00e5ff"
+    textColor: "#c2c9d8"
+---
+flowchart TD
+  accTitle: The judge's role in a session
+  accDescr: Analysts file signed takes. The window closes and the takes roll up. The judge reads the frozen takes and explains where they agree and where they part. Where the session sets new weights, it advises updating the target or holding it. The recommendation is published either way, with the advice beside it.
+  takes["Analysts file<br/>signed takes"] --> rollup["The window closes<br/>and the takes roll up"]
+  rollup --> judge["The judge reads the takes,<br/>where they agree and part"]
+  judge --> update["Advice: update<br/>the target"]
+  judge --> hold["Advice: hold<br/>the target"]
+  update --> publish["Published, with the<br/>advice beside it"]
+  hold --> publish
+  linkStyle default stroke-width:1.5px

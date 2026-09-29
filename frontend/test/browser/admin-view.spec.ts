@@ -400,7 +400,7 @@ test("admin view: research run list, stage timeline, artifact preview, and links
   mockAdminApi(page);
   await login(page);
 
-  await page.getByRole("button", { name: "Research", exact: true }).click();
+  await page.locator("#view").getByRole("button", { name: "Research", exact: true }).click();
   await expect(page.getByRole("cell", { name: "regime.classify" }).first()).toBeVisible();
 
   await page.locator("table.adm-table tbody tr.adm-row").filter({ hasText: "regime.classify" }).first().click();
@@ -431,7 +431,7 @@ test("admin view: research run list, stage timeline, artifact preview, and links
 test("admin view: rerun requires kind/as-of/reason and links to the returned job", async ({ page }) => {
   mockAdminApi(page);
   await login(page);
-  await page.getByRole("button", { name: "Research", exact: true }).click();
+  await page.locator("#view").getByRole("button", { name: "Research", exact: true }).click();
 
   const submit = page.getByRole("button", { name: "Request rerun", exact: true });
   await expect(submit).toBeDisabled(); // no as-of / reason yet

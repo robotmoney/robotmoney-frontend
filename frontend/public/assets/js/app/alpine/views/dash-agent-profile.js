@@ -55,12 +55,13 @@ export function registerAgentProfileView(Alpine) {
     },
 
     // PerformanceChart (§5.8): x402 volume weekly series, dash Chart.js
-    // theme (§4.2). Only drawn when there is at least one nonzero week —
-    // the template shows the "No attributed x402 payment history yet."
-    // placeholder instead of an empty/flat chart otherwise.
+    // theme (§4.2). Only drawn when there is at least one nonzero week and a
+    // second week to draw a line to — the template shows the empty chart
+    // (.rm-nodata) instead of a flat line at zero, or a lone invisible point
+    // (pointRadius 0) on blank axes, otherwise.
     drawChart() {
       const canvas = this.$refs.perfChart;
-      if (!canvas || !window.Chart || !this.hasX402History) return;
+      if (!canvas || !window.Chart || this.perfChartEmpty) return;
       this._chart?.destroy();
       const series = this.agent.x402Sparkline;
       this._chart = new window.Chart(canvas, {
@@ -84,6 +85,12 @@ export function registerAgentProfileView(Alpine) {
 
     get hasX402History() {
       return (this.agent?.x402Sparkline || []).some((v) => typeof v === "number" && v > 0);
+    },
+    // The backend buckets only the weeks between the first and last
+    // snapshot, so an agent snapshotted within one week has a one-bucket
+    // series: volume, but not yet a line.
+    get perfChartEmpty() {
+      return !this.hasX402History || (this.agent?.x402Sparkline || []).length < 2;
     },
 
     // Wallet status copy (MoneyStrip, §5.8): trusted-balance rule collapsed

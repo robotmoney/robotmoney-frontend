@@ -75,7 +75,7 @@ detail = the overview row plus:
     weightBps, targetBps|null, priceSource|null, note|null}],
   history:{tvl:[{t, tvlUsd}], sharePrice:[{t, value}], weights:[{t, appliedBps, kind}],
     receipts:[{sessionId, t, recommendedBps, applied}]},
-  activity:[{t, kind, assets, shares, tx}]   (assets: the USDC moved, the Value column at $1; shares: the vault token, the Amount column)
+  activity:[{t, kind, assets, shares, tx, account}]   (assets: the USDC moved, the Assets column at $1; shares: the vault token, the Shares column; account: the ERC-4626 owner the shares were minted to or burned from, the Account column)
 ```
 
 Additive fields beyond the 2026-09-17 draft (no migrations):

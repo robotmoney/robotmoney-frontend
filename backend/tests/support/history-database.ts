@@ -113,3 +113,50 @@ export async function createHistoryDatabase(label: string, options: { max?: numb
     },
   };
 }
+
+/**
+ * A copy of a history database, owned by the bootstrap login: `CREATE DATABASE
+ * ... TEMPLATE`, which only the cluster admin may run and which needs the
+ * template to have NO open connection (the caller ends its handle first and
+ * reopens `urlFor()` afterwards). The copy carries the template's schema, rows
+ * and ledger exactly, so two databases can take the same history through two
+ * different next steps.
+ */
+export async function cloneHistoryDatabase(templateName: string, label: string, options: { max?: number } = {}): Promise<HistoryDatabase> {
+  await ensureBootstrapLogin();
+  const name = `rmh_${label.replace(/[^a-z0-9]+/gi, "_").toLowerCase().slice(0, 30)}_${crypto.randomUUID().slice(0, 8)}`;
+  // cluster admin: CREATE DATABASE ... TEMPLATE is the admin's job.
+  const admin = adminConnection();
+  try {
+    await admin.unsafe(`CREATE DATABASE ${name} TEMPLATE ${templateName} OWNER ${BOOTSTRAP_LOGIN}`);
+  } finally {
+    await admin.end({ timeout: 5 });
+  }
+  const urlFor = (role: string = BOOTSTRAP_LOGIN): string => roleUrl(role, name);
+  const db = postgres(urlFor(), { max: options.max ?? 4, onnotice: () => {} });
+  const files = async (): Promise<string[]> => (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
+  return {
+    db,
+    name,
+    urlFor,
+    files,
+    async apply(list) {
+      for (const file of list) {
+        const ddl = await readFile(join(MIGRATIONS_DIR, file), "utf8");
+        await db.begin(async (tx) => {
+          if (RUNS_AS_OWNER(file)) await tx.unsafe("SET LOCAL ROLE rm_owner");
+          await tx.unsafe(ddl);
+        });
+      }
+    },
+    async drop() {
+      await db.end({ timeout: 5 });
+      const cleanup = adminConnection();
+      try {
+        await cleanup.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+      } finally {
+        await cleanup.end({ timeout: 5 });
+      }
+    },
+  };
+}

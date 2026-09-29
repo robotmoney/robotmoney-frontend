@@ -143,13 +143,18 @@
       </template>
 
       <!-- PerformanceChart (§5.8) -->
-      <template x-if="hasX402History">
+      <template x-if="!perfChartEmpty">
         <div class="metric-card a3-chart-card" data-perf-chart-card>
           <canvas x-ref="perfChart"></canvas>
         </div>
       </template>
-      <template x-if="!hasX402History">
-        <div class="a3-chart-placeholder" data-perf-chart-placeholder>No attributed x402 payment history yet.</div>
+      <!-- The empty chart in the chart's own card, so the page does not
+           reflow between an agent with history and one without. -->
+      <template x-if="perfChartEmpty">
+        <div class="metric-card a3-chart-card rm-nodata" data-perf-chart-placeholder>
+          <p class="rm-nodata__h" x-text="hasX402History ? 'Not enough data yet' : 'No data yet'"></p>
+          <p class="rm-nodata__d" x-text="hasX402History ? 'One week so far' : 'No weekly x402 volume recorded'"></p>
+        </div>
       </template>
 
       <!-- x402 Usage Metrics (§5.8) — "unique buyers" is dropped: no schema

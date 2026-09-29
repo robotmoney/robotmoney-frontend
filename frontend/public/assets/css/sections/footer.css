@@ -20,11 +20,13 @@
   padding-block: 2.75rem;  /* reduced from py-12 */
 }
 
-/* <div className="grid md:grid-cols-5 gap-10"> */
+/* The site index (RM-124): the brand on its own row, then six columns in
+   the nav's order. Two to a row on a phone, three up to 1280px, then all six
+   in one row. */
 .footer__grid {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 2rem; /* reduced from gap-10 */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2.25rem 1.5rem;
 }
 
 /* <div className="space-y-4 ..."> — vertical rhythm between direct children */
@@ -32,39 +34,25 @@
   margin-top: 0.9rem; /* reduced from space-y-4 */
 }
 
-/* <div className="flex items-center gap-3"> */
+/* The brand row: the lockup and the tagline on one line, split by a hairline.
+   On a phone the tagline goes under the lockup. */
 .footer__brand {
   display: flex;
-  align-items: center;
-  gap: 0.75rem; /* gap-3 */
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.875rem;
+  margin-bottom: 2.75rem;
 }
-
-.footer__logo {
-  display: block;
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-}
-
-/* <span className="font-mono text-sm tracking-wider"> */
-.footer__wordmark {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 1.1rem;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-/* <p className="text-xs text-[var(--color-text-muted)] leading-relaxed"> */
-.footer__about {
+.footer__lockup { display: block; line-height: 0; }
+.footer__lockup img { display: block; height: 32px; width: auto; }
+.footer__tagline {
   margin: 0;
-  font-size: 0.82rem;
-  line-height: 1.6;
-  color: var(--color-text-muted);
-  max-width: 42ch;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  color: var(--color-text-soft);
 }
 
-/* Inline links inside the about copy. Monochrome, like every text link on
+/* Inline links inside the copyright line. Monochrome, like every text link on
    the site (David, 2026-09-18): a step lighter than the muted paragraph, over
    a neutral rule that goes to the link's own colour on hover. Never cyan. */
 .footer__about-link {
@@ -116,6 +104,9 @@
   text-decoration: underline;
   text-decoration-color: var(--color-link);
 }
+/* Listed, not linked yet (the leaderboard). */
+.footer__link--soon { display: flex; align-items: center; gap: 0.5rem; cursor: default; }
+.footer__link--soon:hover { color: var(--color-text-muted); text-decoration: none; }
 
 /* Bottom bar inner:
    <div className="... py-6 flex flex-col md:flex-row items-center justify-between gap-4"> */
@@ -136,27 +127,42 @@
   color: var(--color-text-muted);
 }
 
-/* legal blurb: max-w-2xl text-center md:text-left */
+/* The bottom bar: legal links and the copyright on one line, the disclaimer
+   under them (max-w-2xl, centred on a phone). */
 .footer__fineprint--legal {
+  order: 3;
   max-width: 42rem; /* max-w-2xl */
   text-align: center;
 }
+.footer__bottom > .footer__fineprint:not(.footer__fineprint--legal) { order: 2; }
+/* Legal, in the bottom bar: the same quiet mono as the fine print beside it. */
+.footer__legal { order: 1; display: flex; gap: 1.25rem; }
+.footer__legal-link {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  transition: color 0.2s var(--ease-out-expo);
+}
+.footer__legal-link:hover { color: var(--color-link); }
 
 /* ── md: breakpoint (Tailwind md = 768px) ── */
 @media (min-width: 768px) {
-  /* grid md:grid-cols-5 */
-  .footer__grid {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-  }
-  /* md:col-span-2 on the brand column */
-  .footer__col--brand {
-    grid-column: span 2 / span 2;
-  }
-  /* md:flex-row + md:text-left on the bottom bar */
+  .footer__brand { flex-direction: row; align-items: center; gap: 1.5rem; }
+  .footer__tagline { padding-left: 1.5rem; border-left: 1px solid var(--color-border); }
+  .footer__grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2.5rem 2rem; }
+  /* md:flex-row + md:text-left on the bottom bar; the disclaimer wraps to
+     its own line */
   .footer__bottom {
     flex-direction: row;
+    flex-wrap: wrap;
+    row-gap: 0.75rem;
   }
   .footer__fineprint--legal {
+    flex: 1 1 100%;
+    max-width: 48rem;
     text-align: left;
   }
 }
@@ -166,4 +172,9 @@
   .footer__inner {
     padding-inline: 2rem; /* px-8 */
   }
+}
+/* All six columns in one row once each is wide enough to hold its longest
+   link on one line ("Recommendation history" wrapped at 1024 and 1200). */
+@media (min-width: 1280px) {
+  .footer__grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2.75rem 1.75rem; }
 }

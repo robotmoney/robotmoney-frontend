@@ -535,7 +535,9 @@ test("a positions[] the model can ask for cheaply cannot be persisted expensivel
     disagreements: [{ topic: "timing", positions, what_settles: "Whether the composite crosses." }],
     release_safety: { release: "safe", concerns: [] },
   });
-  const long = Array.from({ length: 21 }, (_, i) => ({ member_id: members[i % members.length]!.id, view: "v" }));
+  // One past the bound (MAX_POSITIONS is the roster cap); every id is real, so
+  // nothing but the LENGTH is wrong with this response.
+  const long = Array.from({ length: ic.SWARM_ROSTER_CAP + 1 }, (_, i) => ({ member_id: members[i % members.length]!.id, view: "v" }));
   expect((await refusedJudgement(judge, session.id, answerWith(long))).error).toBe("judgement_refused:too_many_positions");
   const repeated = Array.from({ length: 5 }, () => ({ member_id: members[0]!.id, view: "v" }));
   expect((await refusedJudgement(judge, session.id, answerWith(repeated))).error)
