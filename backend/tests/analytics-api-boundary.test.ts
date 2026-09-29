@@ -36,6 +36,7 @@ import { sql } from "../src/db/client.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { processOneJob } from "../src/worker/loop.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { provisionAnalyticsToken, writeTokenFile } from "./support/automation-auth.ts";
 
 // Own database per TEST, cloned from the migrated template: these tests each
@@ -258,8 +259,8 @@ test(
       // this test's. Ordered DELETEs, not TRUNCATE ... CASCADE — audit_log,
       // swarm_session_events and analytics_runs reference jobs(id), and CASCADE
       // truncates a referencing table whole regardless of ON DELETE SET NULL.
-      await sql`DELETE FROM job_runs`;
-      await sql`DELETE FROM jobs`;
+      await fixtureDb`DELETE FROM job_runs`;
+      await fixtureDb`DELETE FROM jobs`;
       const asof = new Date().toISOString().slice(0, 10);
       // Direct insertion is test-only. No supported API/admin/scheduler path can
       // create these legacy consumer jobs after D25.
