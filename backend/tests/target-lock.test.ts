@@ -58,7 +58,7 @@ import {
   type TargetLock,
   type TargetState,
 } from "../src/db/target-lock.ts";
-import { adminExec, adminUrl, ROLE_PASSWORD } from "./support/cluster.ts";
+import { adminExec, adminUrl, harnessUrl, ROLE_PASSWORD } from "./support/cluster.ts";
 
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
 const MODULE = join(import.meta.dir, "..", "src", "db", "target-lock.ts");
@@ -121,7 +121,7 @@ async function withScratchDatabase<T>(
   await adminExec(`CREATE DATABASE "${name}" OWNER rm_owner`);
   const url = new URL(DATABASE_URL);
   url.pathname = `/${name}`;
-  const conn = postgres(url.toString(), { max: 1, onnotice: () => {} });
+  const conn = postgres(harnessUrl(name), { max: 1, onnotice: () => {} }); // scratch DDL is the owner's, not rm_app's
   try {
     await conn`CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
     await conn`CREATE TABLE schema_manifest (content_hash text NOT NULL)`;
@@ -133,7 +133,8 @@ async function withScratchDatabase<T>(
       await conn`INSERT INTO deployment_identity (identity) VALUES ('production')`;
     }
     for (const file of ledger) await conn`INSERT INTO schema_migrations (name) VALUES (${file})`;
-    return await body({ url: url.toString(), conn });
+    // The tool under test connects as the owner too: rm_app has no grants on a bare scratch database.
+    return await body({ url: harnessUrl(name), conn });
   } finally {
     // Release this file's locks on the scratch database before dropping it.
     while (opened.length > 0) await opened.pop()?.release();
@@ -816,7 +817,7 @@ describe("the seed and the identity write are fenced mutations — a competitor'
     const url = new URL(DATABASE_URL);
     url.pathname = `/${name}`;
     try {
-      return await body(url.toString());
+      return await body(harnessUrl(name)) /* mutations run as the owner, like the real tools */;
     } finally {
       await adminExec(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
     }
@@ -1094,7 +1095,7 @@ describe("every fenced mutation's REAL path waits on a competitor's fence, holdi
 
   test("RED CONTROL: a mutation that writes BEFORE taking the fence is caught holding a lock on its table", async () => {
     await withEnrolledCopy(async (url) => {
-      const unfenced = postgres(url, { max: 1, onnotice: () => {} });
+      const unfenced = postgres(asRole(url, "rm_owner", OWNER_PASSWORD), { max: 1, onnotice: () => {} });
       try {
         const order = await competitorBlocks(url, "deployment_identity", () =>
           unfenced.begin(async (tx) => {

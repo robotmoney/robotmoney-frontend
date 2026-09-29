@@ -39,6 +39,7 @@
 // when Docker/Postgres is absent — never a silent skip (test-coverage policy).
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { decodeAggregate3Calls, encodeAggregate3Result, type Aggregate3Result } from "../src/chain/base-rpc-client.ts";
 import { fetchWalletBalances, _resetWalletBalancesCacheForTests } from "../src/chain/wallet-balances.ts";
 import { _resetTokenPriceCacheForTests } from "../src/chain/token-prices.ts";
@@ -74,7 +75,7 @@ beforeEach(async () => {
   _resetTokenPriceCacheForTests();
   _resetWalletBalancesCacheForTests();
   _resetRateLimitStateForTests();
-  await sql`DELETE FROM wallet_balance_samples`;
+  await fixtureDb`DELETE FROM wallet_balance_samples`;
   // This file does not opt into useCleanDatabase (tests/support/clean-db.ts),
   // so it shares the ONE database every other non-opted-in file shares for the
   // whole `bun test` run. AC2 below asserts asset_prices has ZERO rows for
@@ -84,7 +85,7 @@ beforeEach(async () => {
   // unrelated earlier file (any test exercising sampleWalletSleeves's D41/#946
   // dual-write, or sampleWalletBalances succeeding fresh on a WETH price) left
   // a same-day WETH row in.
-  await sql`DELETE FROM asset_prices WHERE symbol = 'WETH' AND price_date = current_date`;
+  await fixtureDb`DELETE FROM asset_prices WHERE symbol = 'WETH' AND price_date = current_date`;
 });
 
 afterEach(async () => {
@@ -94,10 +95,10 @@ afterEach(async () => {
   _resetTokenPriceCacheForTests();
   _resetWalletBalancesCacheForTests();
   _resetRateLimitStateForTests();
-  await sql`DELETE FROM wallet_balance_samples`;
+  await fixtureDb`DELETE FROM wallet_balance_samples`;
   // Symmetric with beforeEach: don't leave a row for a LATER shared-database
   // file to trip over either.
-  await sql`DELETE FROM asset_prices WHERE symbol = 'WETH' AND price_date = current_date`;
+  await fixtureDb`DELETE FROM asset_prices WHERE symbol = 'WETH' AND price_date = current_date`;
 });
 
 // Transport mock: Base RPC (Multicall3 aggregate3) answers healthily so every
@@ -155,7 +156,7 @@ function mockPersistent429Transport(): { gecko: number; yahoo: number } {
 }
 
 async function seedYesterdayWethSample(): Promise<void> {
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (current_date - 1, 'WETH', 1.5, 2500, 3750, 'live', now() - interval '1 day')
   `;
@@ -210,9 +211,9 @@ test("smoke-readiness gate reaches ready under persistent 429s: the boot's cold-
   // migrate+seed step. Queue cleared first so the claim below deterministically
   // picks this job (same isolation discipline as tests/queue.test.ts; DELETE
   // instead of TRUNCATE CASCADE so FK'd telemetry tables just SET NULL).
-  await sql`DELETE FROM job_runs`;
-  await sql`DELETE FROM jobs`;
-  const [job] = await sql<{ id: number }[]>`
+  await fixtureDb`DELETE FROM job_runs`;
+  await fixtureDb`DELETE FROM jobs`;
+  const [job] = await fixtureDb<{ id: number }[]>`
     INSERT INTO jobs (kind, payload, dedupe_key)
     VALUES ('wallet.sample_balances', '{}', 'wallet.sample_balances:coldstart')
     RETURNING id
@@ -275,7 +276,7 @@ test("smoke-readiness gate reaches ready under persistent 429s: the boot's cold-
     const weth = payload.holdings.find((h) => h.symbol === "WETH");
     expect(weth).toMatchObject({ priceUsd: 2500, valueUsd: 3750, provenance: "stale" });
   } finally {
-    await sql`DELETE FROM job_runs`;
-    await sql`DELETE FROM jobs`;
+    await fixtureDb`DELETE FROM job_runs`;
+    await fixtureDb`DELETE FROM jobs`;
   }
 });
