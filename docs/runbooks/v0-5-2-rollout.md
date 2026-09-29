@@ -31,7 +31,7 @@ there, and lets a session go ahead when a regime save fails.
 | From | `v0.5.1` (`3ac99f9c`), running on `rm-frontend-prod-1` |
 | To | `v0.5.2-rc.N` → `v0.5.2`, cut from `releases-0.5.x` |
 | Migrations | **One, and not reversible:** `0080_analytics_ledger_compaction.sql`. Schema only: the vintage run column and its index, and drops `source_payloads`. Seconds, at boot. |
-| Ledger repair | **One-time script, not reversible:** `backend/scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts`, run by hand after the boot with the producer and workers stopped (R6.4c). One transaction: replays every series, keeps only what the fixed writers would have written (a label change alone is not a change; irregular chains re-linked by knowledge time), re-points every vintage, rebuilds `source_value_versions`, `analytics_vintage_members` and `analytics_overwrite_events` by `TRUNCATE` and re-insert, recomputes vintage manifests, raises if any vintage's member count or any chain's shape would change, re-arms every guard. No `VACUUM FULL`. The api stays up but its ledger reads wait for the repair. |
+| Ledger repair | **One-time script, not reversible:** `backend/scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts`, run by hand after the boot, in a maintenance window with the api, website, producer and workers all stopped (R6.4c). One transaction: replays every series, keeps only what the fixed writers would have written (a label change alone is not a change; irregular chains re-linked by knowledge time), re-points every vintage, rebuilds `source_value_versions`, `analytics_vintage_members` and `analytics_overwrite_events` by `TRUNCATE` and re-insert, recomputes vintage manifests, raises if any vintage's member count or any chain's shape would change, re-arms every guard. No `VACUUM FULL`. **The site is down for the repair**: it holds the ledger tables locked, and any api read that arrives waits on them until the api's 5-minute statement timeout (the R4.4 rehearsal of 2026-09-29 logged four, an issue 1035 symptom). |
 | Rollback | **Code alone cannot go back.** v0.5.1's writer inserts into `source_payloads`, which `0080` drops, and the repair deletes rows. Going back needs a database restore (R9). |
 
 ### 1.1 Decisions (owner)
@@ -133,14 +133,14 @@ As v0.5.1 R5. The owner's go names the cutover slot from R4.3a's measured window
 As v0.5.1 R6 (pre-cut session list R6.2a, stop the driver, check out the tag, boot `smoke:archive` in tmux with `--no-tui`), with:
 
 - **R6.4**: timestamp the boot log the same way R4.3 does (`… \| while IFS= read -r l; do printf '%s %s\n' "$(date -u +%T)" "$l"; done \| tee /root/smoke-archive-v0.5.2.log`), not a bare `tee`. The boot applies `0080` (seconds) and comes up READY.
-- **R6.4c — the ledger repair (once).** From `/root/robotmoney-frontend` (twin: `~/robotmoney-frontend`), with `STATE=.agents/smoke-state.json` and `RM_BACKUP_DIR` the R3 backup (its receipts folder gets this step's receipt). Stop the ledger's writers, run the repair, start them again:
+- **R6.4c — the ledger repair (once).** From `/root/robotmoney-frontend` (twin: `~/robotmoney-frontend`), with `STATE=.agents/smoke-state.json` and `RM_BACKUP_DIR` the R3 backup (its receipts folder gets this step's receipt). Stop everything that touches the ledger — the api and website too, not only the writers — run the repair, start them again. On the twin, also pause the `smoke:twin` driver first (`kill -STOP` its `bun` process) and resume it after (`kill -CONT`), or it keeps starting sessions against the stopped stack and the gate counts them as failures:
 
   ```bash
   PROJECT=$(bun -e "console.log(require('./$STATE').project)")
-  docker compose -p "$PROJECT" stop analytics-producer worker-analytics worker-research worker-swarm
+  docker compose -p "$PROJECT" stop website-server api analytics-producer worker-analytics worker-research worker-swarm
   bun backend/scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts --emit-receipt --step R6.4c.ledger-repair --backup-dir "$RM_BACKUP_DIR" \
     --database-url "$(grep -m1 '^MIGRATE_DATABASE_URL=' .env | cut -d= -f2-)" 2>&1 | tee /root/ledger-repair-v0.5.2.log
-  docker compose -p "$PROJECT" start analytics-producer worker-analytics worker-research worker-swarm
+  docker compose -p "$PROJECT" start api website-server analytics-producer worker-analytics worker-research worker-swarm
   ```
 
   On the twin the URL is the smoke-twin's own, which the state file stores redacted on purpose; read it from the running api: `--database-url "$(docker exec "$PROJECT-api-1" printenv DATABASE_URL)"`. Pass: it ends `LEDGER REPAIRED` and exits 0. It prints each series as it goes and the seconds of each step. A failure rolls everything back and changes nothing: fix the cause and run it again. `--dry-run` does all of it, proofs included, and rolls back.
