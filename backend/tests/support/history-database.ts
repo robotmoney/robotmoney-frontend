@@ -50,6 +50,7 @@ export interface HistoryDatabase {
 }
 
 async function ensureBootstrapLogin(): Promise<void> {
+  // cluster admin: CREATE ROLE / GRANT of role membership are superuser-only.
   const admin = adminConnection();
   try {
     // One statement, so two files racing to create it cannot both pass an EXISTS test.
@@ -75,6 +76,7 @@ async function ensureBootstrapLogin(): Promise<void> {
 export async function createHistoryDatabase(label: string, options: { max?: number } = {}): Promise<HistoryDatabase> {
   await ensureBootstrapLogin();
   const name = `rmh_${label.replace(/[^a-z0-9]+/gi, "_").toLowerCase().slice(0, 30)}_${crypto.randomUUID().slice(0, 8)}`;
+  // cluster admin: CREATE DATABASE (and the DROP below) is the admin's job.
   const admin = adminConnection();
   try {
     await admin.unsafe(`CREATE DATABASE ${name} OWNER ${BOOTSTRAP_LOGIN}`);

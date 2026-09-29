@@ -54,6 +54,7 @@ function uniqueName(label: string): string {
  */
 export async function createSnapshotTemplate(label: string): Promise<string> {
   const name = uniqueName(`${label}_tmpl`);
+  // cluster admin: CREATE DATABASE (and DROP below) is the admin's job.
   const admin = connectAdmin();
   try {
     await admin.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
@@ -62,6 +63,7 @@ export async function createSnapshotTemplate(label: string): Promise<string> {
   }
   // The provider's half (pgcrypto), as the cluster admin; then rm_owner logs in
   // and provisions the schema, as `--local blank` does.
+  // cluster admin: pgcrypto is provider-managed, so the provider (not rm_owner) installs it.
   const provider = connectAdmin(name);
   try {
     await provider.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
