@@ -3,6 +3,7 @@
 // raw price series and indicators dict that back the /research/* charts.
 import { expect, test } from "bun:test";
 import { sql } from "../../src/db/client.ts";
+import { fixtureDb } from "../support/fixture-db.ts";
 import { getResearchSignal } from "../../src/api/routes/dashboards.ts";
 
 const KEY = `test-signal-${crypto.randomUUID().slice(0, 8)}`;
@@ -22,17 +23,17 @@ const FULL_PAYLOAD = {
 };
 
 test("getResearchSignal without summaryView returns the full payload unchanged", async () => {
-  await sql`INSERT INTO research_signals (signal_key, date, payload) VALUES (${KEY}, ${DATE}, ${sql.json(FULL_PAYLOAD)})`;
+  await fixtureDb`INSERT INTO research_signals (signal_key, date, payload) VALUES (${KEY}, ${DATE}, ${fixtureDb.json(FULL_PAYLOAD)})`;
   try {
     const r = await getResearchSignal(KEY, false);
     expect(r?.payload).toEqual(FULL_PAYLOAD);
   } finally {
-    await sql`DELETE FROM research_signals WHERE signal_key = ${KEY}`;
+    await fixtureDb`DELETE FROM research_signals WHERE signal_key = ${KEY}`;
   }
 });
 
 test("getResearchSignal with summaryView=true drops the raw series/indicators, keeps the readable fields", async () => {
-  await sql`INSERT INTO research_signals (signal_key, date, payload) VALUES (${KEY}, ${DATE}, ${sql.json(FULL_PAYLOAD)})`;
+  await fixtureDb`INSERT INTO research_signals (signal_key, date, payload) VALUES (${KEY}, ${DATE}, ${fixtureDb.json(FULL_PAYLOAD)})`;
   try {
     const r = await getResearchSignal(KEY, true);
     expect(r?.payload).toEqual({
@@ -48,7 +49,7 @@ test("getResearchSignal with summaryView=true drops the raw series/indicators, k
     expect(r?.payload).not.toHaveProperty("qqq_price");
     expect(r?.payload).not.toHaveProperty("series");
   } finally {
-    await sql`DELETE FROM research_signals WHERE signal_key = ${KEY}`;
+    await fixtureDb`DELETE FROM research_signals WHERE signal_key = ${KEY}`;
   }
 });
 
