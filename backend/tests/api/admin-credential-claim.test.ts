@@ -16,6 +16,7 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import { createHash } from "node:crypto";
 import { sql } from "../../src/db/client.ts";
+import { fixtureDb } from "../support/fixture-db.ts";
 import { handleAdmin } from "../../src/api/routes/admin.ts";
 import { handleAdminWebauthn } from "../../src/api/routes/admin-webauthn.ts";
 import { isPrivileged } from "../../src/api/auth.ts";
@@ -100,7 +101,7 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
     // credential MUST keep working (the lockout #553 fixed)…
     const [row] = await sql<{ instance: string }[]>`
       SELECT instance FROM automation_tokens WHERE holder = 'operator'`;
-    const rotated = await provisionAutomationToken(row!.instance, ["admin"], { holder: "operator" });
+    const rotated = await provisionAutomationToken(row!.instance, ["admin"], { holder: "operator", db: fixtureDb });
     expect((await call(authReq(PASSWORD)))?.status).toBe(200);
     expect((await call(authReq(rotated.token)))?.status).toBe(200);
     // …and the rotated-out token is refused on the next request.
@@ -172,7 +173,7 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
   test("claim rolls back the credential when its required audit insert fails, then retries cleanly", async () => {
     const trigger = "rmtest_claim_audit_failure";
     const fn = "rmtest_claim_audit_failure_fn";
-    await sql.unsafe(`
+    await fixtureDb.unsafe(`
       CREATE FUNCTION ${fn}() RETURNS trigger AS $$
       BEGIN
         IF NEW.action = 'claim_admin_credential' THEN
@@ -181,12 +182,12 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
         RETURN NEW;
       END;
       $$ LANGUAGE plpgsql`);
-    await sql.unsafe(`CREATE TRIGGER ${trigger} BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
+    await fixtureDb.unsafe(`CREATE TRIGGER ${trigger} BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
     try {
       await expect(call(claimReq(PASSWORD, OPERATOR))).rejects.toThrow("forced claim audit failure");
     } finally {
-      await sql.unsafe(`DROP TRIGGER IF EXISTS ${trigger} ON audit_log`);
-      await sql.unsafe(`DROP FUNCTION IF EXISTS ${fn}()`);
+      await fixtureDb.unsafe(`DROP TRIGGER IF EXISTS ${trigger} ON audit_log`);
+      await fixtureDb.unsafe(`DROP FUNCTION IF EXISTS ${fn}()`);
     }
 
     // A failed claim is entirely absent: neither the credential nor its audit
@@ -235,7 +236,7 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
     // This is the state produced when migration 0029 is applied to an already
     // claimed installation. It cannot safely receive a generated code in SQL,
     // because there would be no one-time response in which to disclose it.
-    await sql`
+    await fixtureDb`
       INSERT INTO admin_credential (id, pass_hash, recovery_hash)
       VALUES (1, ${hashKey(PASSWORD)}, NULL)`;
 
@@ -348,7 +349,7 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
     const recoveryCode = (claimRes?.body as { recoveryCode: string }).recoveryCode;
     const trigger = "rmtest_recovery_audit_failure";
     const fn = "rmtest_recovery_audit_failure_fn";
-    await sql.unsafe(`
+    await fixtureDb.unsafe(`
       CREATE FUNCTION ${fn}() RETURNS trigger AS $$
       BEGIN
         IF NEW.action = 'recover_admin_password' THEN
@@ -357,12 +358,12 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
         RETURN NEW;
       END;
       $$ LANGUAGE plpgsql`);
-    await sql.unsafe(`CREATE TRIGGER ${trigger} BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
+    await fixtureDb.unsafe(`CREATE TRIGGER ${trigger} BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
     try {
       await expect(call(passwordRecoverReq(recoveryCode, "audit-failure-password"))).rejects.toThrow("forced recovery audit failure");
     } finally {
-      await sql.unsafe(`DROP TRIGGER IF EXISTS ${trigger} ON audit_log`);
-      await sql.unsafe(`DROP FUNCTION IF EXISTS ${fn}()`);
+      await fixtureDb.unsafe(`DROP TRIGGER IF EXISTS ${trigger} ON audit_log`);
+      await fixtureDb.unsafe(`DROP FUNCTION IF EXISTS ${fn}()`);
     }
 
     // The failed request disclosed no successor. Its predecessor must still
@@ -380,14 +381,14 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
     const rogueSession = (challenge: string) => `rogue-passkey-session-${challenge}`;
 
     const seedRogueCredential = async (challenge: string) => {
-      await sql`
+      await fixtureDb`
         INSERT INTO admin_passkey (id, public_key, counter, transports)
         VALUES (${rogueId(challenge)}, ${Buffer.from("not-used-before-lookup")}, 0, '{}')
       `;
-      await sql`INSERT INTO admin_session (token, expires_at) VALUES (${hashKey(rogueSession(challenge))}, now() + interval '1 day')`;
+      await fixtureDb`INSERT INTO admin_session (token, expires_at) VALUES (${hashKey(rogueSession(challenge))}, now() + interval '1 day')`;
       // A pending sign-in ceremony in one of the 32 slots (migration 0088):
       // slot 8, the first of the authentication slots (8..31).
-      await sql`
+      await fixtureDb`
         UPDATE admin_webauthn_challenge
            SET flow = 'authentication', challenge = ${challenge}, issued_at = now(),
                expires_at = now() + interval '5 minutes', consumed_at = NULL
