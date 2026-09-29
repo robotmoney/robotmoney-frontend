@@ -337,7 +337,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
   const RAW_SQL_ALLOWLIST: readonly string[] = [
     "src/api/routes/admin",
     "src/api/routes/admin-webauthn",
-    "src/ops/wallet-backfill",
     "src/swarm/admin",
     "src/swarm/consensus-receipt",
     "src/swarm/domain",

@@ -621,12 +621,21 @@ describe("the wallet repair pass as rm_worker with DELETE revoked", () => {
     // WITHOUT the tombstone filter, under configuration A (which still expects
     // aUSDC and the third wallet's sleeves).
     useConfig("A");
-    const { tombstoneColumn: _dropped, ...unfilteredBalanceDef } = seriesDef("wallet_balance_samples");
-    const { tombstoneColumn: _droppedSleeve, ...unfilteredSleeveDef } = seriesDef("wallet_sleeve_samples");
-    const unfiltered = {
-      balanceGaps: await detectGaps(unfilteredBalanceDef, sql, READ_NOW),
-      sleeveGaps: await detectGaps(unfilteredSleeveDef, sql, READ_NOW),
-    };
+    // The detector's statements are registered per series and always filter
+    // `superseded_at`, so the unfiltered read is built from the data instead:
+    // temp tables that shadow the two real ones (pg_temp is searched first)
+    // with every row's tombstone cleared, which is what a read without the
+    // filter sees.
+    const unfiltered = await sql.begin(async (tx) => {
+      await tx`CREATE TEMP TABLE wallet_balance_samples ON COMMIT DROP AS
+        SELECT sample_date, symbol, provenance, NULL::timestamptz AS superseded_at FROM public.wallet_balance_samples`;
+      await tx`CREATE TEMP TABLE wallet_sleeve_samples ON COMMIT DROP AS
+        SELECT sample_date, wallet_address, symbol, provenance, NULL::timestamptz AS superseded_at FROM public.wallet_sleeve_samples`;
+      return {
+        balanceGaps: await detectGaps(seriesDef("wallet_balance_samples"), tx, READ_NOW),
+        sleeveGaps: await detectGaps(seriesDef("wallet_sleeve_samples"), tx, READ_NOW),
+      };
+    });
 
     // THE OLD WORLD: what the delete-and-insert left for pass 2's inputs —
     // the date emptied, then exactly the statements the old pass issued,
