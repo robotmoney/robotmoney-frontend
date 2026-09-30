@@ -1209,26 +1209,81 @@ test("a subscriber that STOPS READING gets every frame it was sent, gapless, the
   }
 }, 60_000);
 
-test("RED CONTROL: with the backlog bound unread, the same stalled subscriber is never told — no resync, just a longer silence", async () => {
-  // The bound is what makes the API act. Put it out of reach (and leave the
-  // server's own limit to Bun's default) and the stalled socket is not ended
-  // for overflow while the flood sits queued: the subscriber that stopped
-  // reading gets no reason, which is the SSE behaviour D55 (11) replaced.
-  const cursor = await epoch.streamHeadSequence();
-  let why = null as string | null;
-  const server = streamServer({ keepaliveMs: 5_000, pollMs: 10, bufferBytes: Number.MAX_SAFE_INTEGER, onEnd: (w) => void (why = w) });
-  const client = stalledClient(server.ws, cursor, TOKEN);
+/**
+ * A server whose sink IGNORES Bun's own backpressure signal (`send` returning
+ * -1), so the ONLY thing that can end a stalled socket is the backlog bound.
+ * The serving loop has two triggers for `buffer_overflow`: the bound, and a
+ * send the socket reports as queued. On a real socket the second fires as soon
+ * as the kernel's loopback buffers fill, and how much they hold differs by
+ * kernel and by moment (a dev machine absorbs the 2.6 MB a red control floods;
+ * a GitHub runner does not). A control that leaves it live tests the machine.
+ */
+function streamServerBoundOnly(bufferBytes: number, onEnd: (why: string) => void) {
+  const server = Bun.serve<SchedulerStreamSocketData, never>({
+    port: 0,
+    fetch: (req, srv) => upgradeSchedulerStream(req, new URL(req.url), srv, { streamTiming: {} }),
+    websocket: {
+      ...schedulerStreamWebSocket,
+      open(ws) {
+        const sink: stream.StreamSink = {
+          send: (text) => (ws.send(text) === 0 ? "closed" : "sent"),
+          bufferedAmount: () => ws.getBufferedAmount(),
+          close: (code, reason) => ws.close(code, reason),
+        };
+        ws.data.handle = stream.serveSchedulerStream(ws.data.cursor, sink, { keepaliveMs: 5_000, pollMs: 10, bufferBytes, onEnd });
+      },
+    },
+  });
+  return { ws: `ws://127.0.0.1:${server.port}`, stop: () => server.stop(true) };
+}
+
+/** Wait, up to `budgetMs`, until an ordinary subscriber sees event `seq`: the flood is readable from the log. */
+async function logServes(seq: number, budgetMs = 30_000): Promise<void> {
+  const sub = await subscribeWs(FAST.ws, seq - 1, TOKEN);
   try {
-    await waitForLine(client.stderr as ReadableStream<Uint8Array>, "open");
-    process.kill(client.pid, "SIGSTOP");
-    await flood(40);
-    await Bun.sleep(1_500);
-    expect(why).toBeNull();
+    const deadline = Date.now() + budgetMs;
+    while (!sub.frames.some((f) => f.type === "event" && f.seq >= seq) && Date.now() < deadline) await Bun.sleep(20);
+    expect(sub.frames.some((f) => f.type === "event" && f.seq >= seq), `the log never served event ${seq}`).toBe(true);
   } finally {
-    client.kill("SIGKILL");
-    server.stop();
+    sub.end();
   }
-}, 60_000);
+}
+
+test("RED CONTROL: with the backlog bound unread, the same stalled subscriber is never told — no resync, just a longer silence", async () => {
+  // The bound is what makes the API act. Put it out of reach and the stalled
+  // socket is not ended for overflow while the flood sits queued: the
+  // subscriber that stopped reading gets no reason, which is the SSE behaviour
+  // D55 (11) replaced. Both halves run on a sink that ignores Bun's -1, so
+  // neither depends on how much the kernel buffers: with the bound at 256 KiB
+  // the flood ends the socket (the bound acts, alone); with it out of reach
+  // the same flood, the same stop, ends nothing.
+  const run = async (bufferBytes: number, n: number, settle: (why: () => string | null) => Promise<void>) => {
+    const cursor = await epoch.streamHeadSequence();
+    let why = null as string | null;
+    const server = streamServerBoundOnly(bufferBytes, (w) => void (why = w));
+    const client = stalledClient(server.ws, cursor, TOKEN);
+    try {
+      await waitForLine(client.stderr as ReadableStream<Uint8Array>, "open");
+      process.kill(client.pid, "SIGSTOP");
+      await flood(n);
+      await logServes(cursor + n);
+      await settle(() => why);
+      return why;
+    } finally {
+      client.kill("SIGKILL");
+      server.stop();
+    }
+  };
+  // The bound in reach: the stalled socket is ended, with its reason.
+  const bounded = await run(256 * 1024, 400, async (why) => {
+    for (let i = 0; i < 1_500 && why() === null; i++) await Bun.sleep(10);
+  });
+  expect(bounded, "with the bound in reach the stalled socket must be ended for overflow").toBe("buffer_overflow");
+  // The bound out of reach: nothing ends it, however long we look. 40 x 64 KiB
+  // stays far under Bun's own 16 MiB outbound limit.
+  const unread = await run(Number.MAX_SAFE_INTEGER, 40, () => Bun.sleep(1_500));
+  expect(unread, "with the bound unread the stalled socket is never ended for overflow").toBeNull();
+}, 90_000);
 
 test("an event pruned from the MIDDLE while a socket is open is a resync `log_truncated` and a close, never a jump", async () => {
   // The mid-stream half of §6.3's "never silently skips": the socket has
@@ -1355,9 +1410,10 @@ describe("the real api process", () => {
       expect(got.seqs.length).toBeGreaterThan(0);
       expect(got.seqs).toEqual(got.seqs.map((_, i) => cursor + 1 + i));
       expect(got.seqs.length).toBeLessThan(400);
-      expect(got.other.filter((f) => f.type === "resync").map((f) => f.reason)).toEqual(["buffer_overflow"]);
-      expect(got.other[got.other.length - 1]!.type).toBe("resync");
-      expect(got.code).toBe(stream.SCHEDULER_STREAM_CLOSE.resync);
+      const seen = `got ${got.seqs.length} events, close ${got.code}, frames ${JSON.stringify(got.other.slice(-3))}`;
+      expect(got.other.filter((f) => f.type === "resync").map((f) => f.reason), seen).toEqual(["buffer_overflow"]);
+      expect(got.other[got.other.length - 1]!.type, seen).toBe("resync");
+      expect(got.code, seen).toBe(stream.SCHEDULER_STREAM_CLOSE.resync);
     } finally {
       client.kill("SIGKILL");
     }
