@@ -137,11 +137,21 @@ export function runCommand(h: BootHarness, script: string, args: readonly string
   return { code: r.exitCode ?? -1, out: `${r.stdout.toString()}${r.stderr.toString()}` };
 }
 
-/** What a failed boot said about why: its refusal and failure lines, then the tail. */
+/**
+ * What a failed boot said about why: its own refusal and failure lines first,
+ * then the end of its output with the database's lines removed.
+ *
+ * The boot dumps every container's last 60 log lines when it fails, and the
+ * database's are the read-only startup probes' refused `WHERE false` statements
+ * (one ERROR and one STATEMENT each), so a plain tail showed only those and
+ * hid the real failure. A CI run that said "exit 1" and nothing else is why.
+ */
 export function bootFailureReport(boot: RunningBoot): string {
-  const out = boot.output();
-  const causes = out.split(/\r?\n/).filter((l) => /startup failed|FATAL: (?!\s*database)|Refusing|stopped:/.test(l) && !/^postgres-1/.test(l));
-  return `${causes.join("\n")}\n--- tail ---\n${out.slice(-2000)}`;
+  const lines = boot.output().split(/\r?\n/);
+  const fromService = (l: string) => /^[a-z0-9-]+-\d+\s+\|/.test(l);
+  const causes = lines.filter((l) => /startup failed|FATAL: (?!\s*database)|Refusing|stopped:|readiness|seed|FAIL|refused|Error:/.test(l) && !fromService(l));
+  const quiet = lines.filter((l) => !/^postgres-\d+\s+\|/.test(l));
+  return `${causes.join("\n").slice(0, 6000)}\n--- tail (database lines removed) ---\n${quiet.join("\n").slice(-8000)}`;
 }
 
 /**

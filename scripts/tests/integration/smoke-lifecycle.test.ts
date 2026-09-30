@@ -208,7 +208,7 @@ function printedPlan(run: RunningBoot): string {
 
 describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
   test("it exits 0 at readiness, and the stack outlives the process (spec §1)", () => {
-    expect({ exitCode, tail: exitCode === 0 ? "" : boot.output().slice(-3000) }).toEqual({ exitCode: 0, tail: "" });
+    expect({ exitCode, tail: exitCode === 0 ? "" : bootFailureReport(boot) }).toEqual({ exitCode: 0, tail: "" });
     // Docker keeps the stack up after `bun smoke` is gone (restart: unless-stopped).
     // RUNNING, not merely present: a crash-looping container is `restarting`,
     // and a service that never runs must not pass as one that survived.

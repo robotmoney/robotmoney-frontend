@@ -72,6 +72,12 @@ export interface StarterOptions extends StarterCredentials {
   transport: StarterTransport;
   backendUrl: string;
   authorTake?: AuthorTake;
+  /**
+   * Take part in the collecting epoch of THIS subject. Omitted, the newest
+   * collecting session on the stack is used. The e2e exercise names its own
+   * subject, because the newest session may belong to another run's roster.
+   */
+  subjectId?: string;
 }
 
 export interface StarterResult {
@@ -229,12 +235,20 @@ function verifiedTake(readback: { takes?: SwarmTake[] }, memberId: string): Swar
   return take;
 }
 
-async function runRest(options: StarterOptions): Promise<StarterResult> {
-  const session = await restJson<StarterSession | null>(
-    options.backendUrl,
-    ROUTES.swarm.openSession,
-    "discover open session",
+/** The collecting session of one subject, from the public sessions list; null when the scheduler has opened none. */
+export async function collectingSessionFor(backendUrl: string, subjectId: string): Promise<StarterSession | null> {
+  const body = await restJson<{ sessions?: (StarterSession & { state?: string })[] }>(
+    backendUrl,
+    `${ROUTES.swarm.sessions}?state=collecting&subject=${encodeURIComponent(subjectId)}&limit=5`,
+    `discover collecting session of ${subjectId}`,
   );
+  return (body.sessions ?? []).find((s) => s.state === "collecting" && s.subjectId === subjectId) ?? null;
+}
+
+async function runRest(options: StarterOptions): Promise<StarterResult> {
+  const session = options.subjectId
+    ? await collectingSessionFor(options.backendUrl, options.subjectId)
+    : await restJson<StarterSession | null>(options.backendUrl, ROUTES.swarm.openSession, "discover open session");
   if (!session) throw new Error("no swarm session is currently collecting");
   // Read the brief of THIS session by its id, not by (date, subject).
   // Since migration 0022 a subject may convene several times a day, and the
@@ -390,36 +404,39 @@ async function e2eCredentials(
   return { memberId, memberToken: registered.token, privateKey: keys.privateKey };
 }
 
-async function ensureE2eOpenSession(backendUrl: string, operatorToken: string): Promise<void> {
-  const open = await restJson<StarterSession | null>(
-    backendUrl,
-    ROUTES.swarm.openSession,
-    "discover starter e2e session",
-  );
-  if (open) return;
+/**
+ * The starter's own subject for one e2e run. Unique per run: an epoch freezes
+ * its roster when the scheduler opens it, so a subject that already has an
+ * epoch (from an earlier run, or another step) would refuse this member's take
+ * with 403 "member is not on this session's expected roster".
+ */
+export function e2eSubject(runId: string): { id: string; name: string } {
+  return { id: `starter-agent-${runId}`, name: "Starter Agent Exercise" };
+}
 
+/**
+ * Create the subject AFTER the member is registered, then wait for the
+ * scheduler to open its epoch, which seats the member. Nothing but
+ * system-scheduler opens an epoch (D55 (4)).
+ */
+async function openE2eEpoch(backendUrl: string, operatorToken: string, subject: { id: string; name: string }): Promise<StarterSession> {
   const date = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
-  const subject = { id: "starter-agent", name: "Starter Agent Exercise" };
   // The subject through the admin subject route, which publishes
-  // `subject.changed` (scheduler spec §6.2); the dispatcher's `subject`,
-  // `open` and `brief` actions that used to do this are gone (issue #1026).
-  // 409 is "already there", which is all this needs.
+  // `subject.changed` (scheduler spec 6.2); the dispatcher's `subject`, `open`
+  // and `brief` actions are gone (issue #1026).
   const created = await fetch(`${backendUrl}${ROUTES.swarm.admin.subjects}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Automation-Token": operatorToken },
     body: JSON.stringify({ ...subject, recommendationType: "position_actions", epochDuration: STARTER_EPOCH_SECONDS }),
   });
-  if (created.status !== 201 && created.status !== 409) {
+  if (created.status !== 201) {
     throw new Error(`starter e2e subject create failed with HTTP ${created.status}: ${await created.text()}`);
   }
   await adminJson(backendUrl, operatorToken, "subject_fixtures", { ...subject, date });
-  // §4.1: the SCHEDULER opens the epoch, from the subject's `subject.changed`.
-  // Nothing but system-scheduler calls an epoch transition (D55 (4)), so this
-  // waits for it to, on the public read, for at most one epoch.
   const deadline = Date.now() + STARTER_EPOCH_SECONDS * 1000;
   for (;;) {
-    const now = await restJson<StarterSession | null>(backendUrl, ROUTES.swarm.openSession, "discover starter e2e session");
-    if (now) return;
+    const open = await collectingSessionFor(backendUrl, subject.id);
+    if (open) return open;
     if (Date.now() >= deadline) {
       throw new Error(`starter e2e: the scheduler opened no epoch within ${STARTER_EPOCH_SECONDS}s of creating subject ${subject.id}`);
     }
@@ -436,12 +453,16 @@ async function main(): Promise<void> {
   const e2e = process.argv.includes("--e2e");
 
   let credentials: StarterCredentials;
+  let subject: { id: string; name: string } | undefined;
   if (e2e) {
     // The operator's service token (smoke spec §3), read from the file
     // RM_OPERATOR_TOKEN_FILE names — refused, loudly, when it is not set.
     const operatorToken = requireOperatorToken(process.env);
-    await ensureE2eOpenSession(backendUrl, operatorToken);
+    // ORDER MATTERS: register first, open the epoch second. The epoch freezes
+    // its roster when the scheduler opens it.
     credentials = await e2eCredentials(transport, backendUrl, operatorToken);
+    subject = e2eSubject(crypto.randomUUID().slice(0, 8));
+    await openE2eEpoch(backendUrl, operatorToken, subject);
   } else {
     credentials = {
       memberId: requiredEnv("SWARM_MEMBER_ID"),
@@ -454,6 +475,7 @@ async function main(): Promise<void> {
     ...credentials,
     transport,
     backendUrl,
+    ...(subject ? { subjectId: subject.id } : {}),
   });
   console.log(
     `starter swarm agent (${result.transport}) submitted take ${result.take.id} ` +

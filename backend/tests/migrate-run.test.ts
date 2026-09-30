@@ -208,8 +208,8 @@ async function withClone(
   try {
     await body({ fixtures, owner: cloneOwner, name });
   } finally {
-    await cloneOwner.end({ timeout: 5 });
-    await fixtures.end({ timeout: 5 });
+    console.log("TL fin0",Date.now());await cloneOwner.end({ timeout: 5 });console.log("TL fin1",Date.now());
+    await fixtures.end({ timeout: 5 });console.log("TL fin2",Date.now());
     await maintenance.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
     await maintenance.end({ timeout: 5 });
   }
@@ -836,14 +836,14 @@ describe("the migrate journal — written before each phase, closed on every exi
   });
 
   test("the lock connection killed between two commits: the next phase does not start, the journal names it, and a rerun recovers", async () => {
-    await withClone(async ({ fixtures, name }) => {
-      await setIdentity("rehearsal", fixtures);
+    const T0=Date.now();const tl=(m:string)=>console.log("TL",m,Date.now()-T0);await withClone(async ({ fixtures, name }) => {
+      tl("clone");await setIdentity("rehearsal", fixtures);tl("ident");
       const dir = mkdtempSync(join(tmpdir(), "rm-migrate-journal-"));
       plantedDirs.push(dir);
       // A published manifest first, so the planted pair below is an ordinary
       // pending run rather than a first-manifest baseline.
       await command(name, dir, journalIn(dir));
-      const manifestBefore = await readManifest(fixtures);
+      tl("first run");const manifestBefore = await readManifest(fixtures);
 
       const planted = migrationsWith({
         "0098_kill_probe_a.sql": `${ADDITIVE}CREATE TABLE rm_kill_probe_a (id integer);\n`,
@@ -854,7 +854,7 @@ describe("the migrate journal — written before each phase, closed on every exi
       const run = command(name, dir, journal, {
         migrationsDir: planted,
         afterCommit: async (file) => {
-          if (file !== "0098_kill_probe_a.sql") return;
+          if (file !== "0098_kill_probe_a.sql") return;tl("kill");
           // The command's OWN lock connection, found by the identity it
           // publishes, and only on this database.
           // cluster admin: terminating another login's backend is superuser-only.
@@ -862,10 +862,10 @@ describe("the migrate journal — written before each phase, closed on every exi
             `SELECT pg_terminate_backend(pid) AS killed FROM pg_stat_activity
               WHERE application_name LIKE 'rm-tl:migrate|%' AND datname = '${name}'`,
           );
-          killed = rows.filter((row) => row.killed).length;
+          tl("killed");killed = rows.filter((row) => row.killed).length;
         },
       });
-      await expect(run).rejects.toThrow("cannot be proven held");
+      tl("pre-await");try{await run}catch{};tl("run settled");await expect(run).rejects.toThrow("cannot be proven held");
       expect(killed).toBe(1);
 
       const file = readJournal(journal.path);
@@ -885,12 +885,12 @@ describe("the migrate journal — written before each phase, closed on every exi
       expect((await detectManifestState(fixtures)).kind).toBe("in_progress");
 
       // The next run recovers: it verifies 0098, applies 0099 and publishes.
-      const rerun = journalIn(dir);
+      tl("asserts done");const rerun = journalIn(dir);
       const { result } = await command(name, dir, rerun, { migrationsDir: planted });
       expect(result.resumedAndVerified).toContain("0098_kill_probe_a.sql");
       expect(result.applied).toEqual(["0099_kill_probe_b.sql"]);
       expect(readJournal(rerun.path).outcome).toBe("succeeded");
-      expect((await detectManifestState(fixtures)).kind).toBe("published");
+      expect((await detectManifestState(fixtures)).kind).toBe("published");tl("rerun done");
     });
   });
 });
