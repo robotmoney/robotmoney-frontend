@@ -19,6 +19,10 @@ useCleanDatabase(import.meta.file);
 
 const WORKER_PASSWORD = "rm_worker_ci_password";
 let worker: postgres.Sql<{}>;
+// The preload gives every file a WORKER_DATABASE_URL; this file swaps in a
+// password login and must hand the preload's value back, not delete it, or
+// every later file in the same process loses the variable.
+const preloadWorkerUrl = process.env.WORKER_DATABASE_URL;
 
 beforeAll(async () => {
   // Provision login credentials for the migration-created role (the migration
@@ -34,7 +38,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  delete process.env.WORKER_DATABASE_URL;
+  if (preloadWorkerUrl === undefined) delete process.env.WORKER_DATABASE_URL;
+  else process.env.WORKER_DATABASE_URL = preloadWorkerUrl;
   await restoreRoleBaseline();
   await worker?.end({ timeout: 5 });
 });

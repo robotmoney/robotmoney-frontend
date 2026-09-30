@@ -493,6 +493,17 @@ test("118: the analytics token opens only the analytics routes — not admin, no
   expect(await substitutions(api, analytics, ["admin", "lifecycle", "scheduler-read", "member"])).toEqual([]);
 }, 120_000);
 
+test("118 pin: POST /api/analytics/raw-history/seed admits the analytics token (past auth, to body validation) and refuses the operator's and the scheduler's", async () => {
+  const path = ROUTES.analytics.rawHistorySeed;
+  const status = async (token: string) => (await probe(api, "POST", path, everyHeader(token), {})).status;
+  // An empty body is the seed route's own 400: the analytics token got through
+  // the door. The other two holders and a forged token are turned away at it.
+  expect(await status(analytics)).toBe(400);
+  expect([401, 403]).toContain(await status(operator));
+  expect([401, 403]).toContain(await status(scheduler));
+  expect([401, 403]).toContain(await status(forged()));
+}, 60_000);
+
 test("118: the operator's admin token opens only the admin routes — not analytics, not the scheduler's, not a member's", async () => {
   expect(await substitutions(api, operator, ["analytics", "lifecycle", "scheduler-read", "member"])).toEqual([]);
 }, 120_000);

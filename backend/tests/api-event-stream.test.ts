@@ -1404,7 +1404,8 @@ describe("the real api process", () => {
       await waitForLine(client.stderr as ReadableStream<Uint8Array>, "open");
       process.kill(client.pid, "SIGSTOP");
       await flood();
-      await Bun.sleep(4_000);
+      // The api ends the stalled socket within its poll, then closes it; a peer that stays stopped past a few seconds after that is dropped at the transport (close 1006, nothing read), so the stall is short: past the 1 MiB bound, not past the transport's patience.
+      await Bun.sleep(2_000);
       process.kill(client.pid, "SIGCONT");
       const got = JSON.parse(await new Response(client.stdout).text()) as { seqs: number[]; other: Frame[]; code: number };
       expect(got.seqs.length).toBeGreaterThan(0);
@@ -1448,7 +1449,7 @@ describe("the real api process", () => {
       expect(await saw("clock running", 20_000)).toBe(true);
       process.kill(scheduler.pid, "SIGSTOP");
       await flood();
-      await Bun.sleep(4_000);
+      await Bun.sleep(2_000);
       process.kill(scheduler.pid, "SIGCONT");
       expect(await saw("rebuild (resync)", 30_000), out.join("")).toBe(true);
       // Healthy again on the rebuilt copy.

@@ -283,8 +283,8 @@ export function superuserSql(container: string, user: string, database: string, 
   return run.exitCode === 0 ? null : (run.stderr?.toString() ?? "").trim() || `psql exited ${run.exitCode}`;
 }
 
-/** What a Postgres that is still initializing answers — not a failure of the SQL. */
-const NOT_UP_YET = /the database system is (starting up|shutting down)|could not connect|No such file or directory|Connection refused/;
+/** What a Postgres that is still initializing answers (including the connection dropped when the init server stops mid-statement) — not a failure of the SQL. */
+const NOT_UP_YET = /the database system is (starting up|shutting down)|could not connect|No such file or directory|Connection refused|server closed the connection unexpectedly/;
 
 /**
  * {@link superuserSql}, waiting out a server that is still initializing. The
