@@ -565,7 +565,7 @@ services:
       # "Smoke reads this from the scheduler's health endpoint"). Loopback
       # only, host port assigned by Docker like every other publish in this
       # file: it is read by host tools on this machine and by nothing else.
-      - "8090"
+      - "127.0.0.1::8090"
     labels:
       <<: *smoke-labels
       # Which deployment instance (smoke spec §1.1) this clock serves.

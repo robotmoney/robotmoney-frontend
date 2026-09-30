@@ -55,6 +55,9 @@ import { prepareThrowawayDatabase } from "./throwaway-database.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+/** Attempts at `compose up` for the application services (see the retry in bringUp). */
+const START_SERVICES_ATTEMPTS = 2;
+
 export type StackPhase = "docker-preflight" | "build" | "postgres" | "migrate" | "services" | "ports" | "health" | "initialize";
 
 /**
@@ -682,7 +685,23 @@ export function createStack(
     assertContainerTokenFiles(cfg);
     await boundary("services");
     emit({ phase: "services", status: "start", detail: rest.join(", ") });
-    await composeAsync(upArgs(rest, { noBuild: shippedImages }), "start services");
+    // `up -d` is idempotent: a second pass starts only what the first left down.
+    // Docker hands out ephemeral host ports without coordinating between one
+    // service's loopback publish and another's wildcard publish, so two services
+    // can be given the same number and the later container fails to bind
+    // ("address already in use"). A retry gets fresh numbers. The publish stays
+    // on loopback: widening it to make the collision impossible would expose the
+    // scheduler's health surface on every interface.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await composeAsync(upArgs(rest, { noBuild: shippedImages }), "start services");
+        break;
+      } catch (e) {
+        if (attempt >= START_SERVICES_ATTEMPTS) throw e;
+        emit({ phase: "log", message: `start services failed (attempt ${attempt} of ${START_SERVICES_ATTEMPTS}); retrying once for a host port collision` });
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    }
     emit({ phase: "services", status: "done", detail: rest.join(", ") });
 
     // Only NOW do the host ports exist. Everything downstream — the health
