@@ -2,13 +2,16 @@
 // in frontend/public/assets/css/tokens.css so chart colours stop drifting from
 // the site palette. Buildless: no imports, `window.Chart` is the global.
 //
-// The `regimeView` dashboard is the reference look; every value here equals the
-// exact hex it already renders, so this is a pure consolidation — not a restyle.
+// The reference look is the research-record pages (/swarm/sessions/<id>,
+// /vault/rmusdc, /allocation and their .rr-* rules in views.css): hairline
+// chrome, square tips, round series dots, no gridline the reader does not need.
+// This file consolidated the hexes the charts already drew; it is not a palette
+// of its own.
 //
-// RM-102 is the single exception to that. It lifted the night-register text ramp
-// and retired its bottom rung, so `text` and `textMuted` below now carry the new
-// tokens.css values and `textDim` is gone. Chart TYPE moved with the ramp; the
-// SERIES and CATEGORICAL hexes below did not, because they encode data.
+// RM-102 lifted the night-register text ramp and retired its bottom rung, so
+// `text` and `textMuted` below carry the new tokens.css values and `textDim` is
+// gone. Chart TYPE moved with the ramp; the SERIES and CATEGORICAL hexes below
+// did not, because they encode data.
 
 // ── Design tokens (verbatim from tokens.css) ────────────────────────────────
 export const PALETTE = {
@@ -66,8 +69,21 @@ export const CATEGORICAL = [
   SERIES.mint,    // #9cffd2 mint   — 7th (light), rare
 ];
 
+// One regime palette, site-wide. A regime reading keeps these hues wherever it
+// appears: the session page's market-context dots, /regime and the blog's band
+// charts. Stance runs green to beacon; neutral is slate. Beacon is a POINT
+// colour (a dot, a line, a strip of 12px or less), never a filled area.
+export const REGIME = { risk_on: "#10b981", neutral: "#7e889e", risk_off: "#ff7a29" };
+
+/** @param {string} key risk_on | neutral | risk_off. Unknown keys read as neutral. */
+export function regimeHue(key) {
+  return REGIME[/** @type {keyof typeof REGIME} */ (key)] || REGIME.neutral;
+}
+
 // Shared axis typography (regime uses JetBrains Mono 10 everywhere).
-export const MONO_FONT = { family: "JetBrains Mono", size: 10 };
+// A fallback stack, not the face alone: before the web font arrives Chart.js
+// would otherwise draw its ticks in the browser's default serif.
+export const MONO_FONT = { family: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace", size: 10 };
 // Regime grid-line colour: --color-border at 40% alpha.
 export const GRID_COLOR = rgba(PALETTE.border, 0.4);
 
@@ -85,6 +101,35 @@ export function monoAxis({ ticks = {}, grid = {} } = {}) {
     ticks: { color: PALETTE.textMuted, font: MONO_FONT, ...ticks },
     grid: { color: GRID_COLOR, ...grid },
   };
+}
+
+// A legend key for a dashed series: a 10px run of its line in its dash, drawn
+// once per colour and dash and reused. Chart.js draws a canvas point style at
+// its own size, centred on the key's box. The dash is scaled down so a 10px
+// sample still shows two or three repeats and [6,3], [2,3] and [10,3,2,3]
+// stay tellable apart.
+/** @type {Map<string, HTMLCanvasElement>} */
+const _dashSamples = new Map();
+/** @param {string} color @param {number[]} dash @param {number} [width] */
+function dashSample(color, dash, width) {
+  const lw = Math.max(1.25, Number(width) || 0);
+  const key = `${color}|${dash.join(",")}|${lw}`;
+  let c = _dashSamples.get(key);
+  if (!c) {
+    c = document.createElement("canvas");
+    c.width = 10;
+    c.height = 4;
+    const g = /** @type {CanvasRenderingContext2D} */ (c.getContext("2d"));
+    g.strokeStyle = color;
+    g.lineWidth = lw;
+    g.setLineDash(dash.map((v) => Math.max(1, v * 0.6)));
+    g.beginPath();
+    g.moveTo(0, 2);
+    g.lineTo(10, 2);
+    g.stroke();
+    _dashSamples.set(key, c);
+  }
+  return c;
 }
 
 let _applied = false;
@@ -105,12 +150,44 @@ export function applyChartDefaults() {
   d.font.family = MONO_FONT.family;
   d.font.size = MONO_FONT.size;
 
-  d.plugins.legend.labels.color = PALETTE.textMuted;
+  // Gridlines belong to the value axis. Every chart on the site draws its x
+  // axis as a category scale (dates or groups), so that axis loses its grid
+  // here; a chart that wants one back sets `grid.display` itself.
+  d.set("scales.category", { grid: { display: false } });
+
+  // Legend keys are round 6px dots, not Chart.js's 40x10 hollow boxes. The
+  // legend draws a point of radius boxHeight * SQRT2 / 2, so this boxHeight is
+  // what makes the radius 3; the 8px box leaves room for a dash sample. A line
+  // series' dot takes its line colour (its fill is usually empty). A dashed
+  // line is a reference, and several share the slate family, told apart only
+  // by their dash, so its key is a short sample of that dash instead of a dot.
+  // The dash is read off the dataset: with point styles on, Chart.js builds a
+  // legend item from the POINT style, whose lineDash is always empty. Bars keep
+  // their own fill and edge.
+  const labels = d.plugins.legend.labels;
+  labels.color = PALETTE.textMuted;
+  labels.usePointStyle = true;
+  labels.pointStyle = "circle";
+  labels.boxWidth = 8;
+  labels.boxHeight = 6 / Math.SQRT2;
+  const generateLabels = labels.generateLabels;
+  /** @this {any} @param {any} chart */
+  labels.generateLabels = function (chart) {
+    return generateLabels.call(this, chart).map((/** @type {any} */ item) => {
+      if (chart.getDatasetMeta(item.datasetIndex)?.type !== "line") return item;
+      const ds = chart.data.datasets[item.datasetIndex] || {};
+      if (Array.isArray(ds.borderDash) && ds.borderDash.length) {
+        return { ...item, pointStyle: dashSample(item.strokeStyle, ds.borderDash, ds.borderWidth) };
+      }
+      return { ...item, fillStyle: item.strokeStyle, lineWidth: 0 };
+    });
+  };
 
   const t = d.plugins.tooltip;
   t.backgroundColor = rgba(PALETTE.deep, 0.95);
   t.borderColor = PALETTE.border;
   t.borderWidth = 1;
+  t.cornerRadius = 0;
   t.titleColor = PALETTE.text;
   t.bodyColor = PALETTE.text;
 }

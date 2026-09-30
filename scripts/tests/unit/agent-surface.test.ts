@@ -25,6 +25,7 @@ import {
   endpointsForRoute,
   openApiPath,
 } from "../../lib/agent-endpoints.ts";
+import { routeDownloads } from "../../../frontend/public/assets/js/app/seo.js";
 
 const repoRoot = join(import.meta.dir, "../../..");
 const read = (p: string) => readFileSync(join(repoRoot, p), "utf8");
@@ -160,7 +161,7 @@ describe("prerendered routes", () => {
   // and a fixture would keep passing after the injection stopped happening.
   const dir = mkdtempSync(join(tmpdir(), "rm-agent-surface-"));
   cpSync(join(repoRoot, "frontend/public"), dir, { recursive: true });
-  const result = Bun.spawnSync(["bun", "scripts/prerender.ts"], { cwd: repoRoot, env: { ...process.env, PRERENDER_DIR: dir } });
+  const result = Bun.spawnSync(["bun", "scripts/prerender.ts"], { cwd: repoRoot, env: { ...process.env, PRERENDER_DIR: dir, PRERENDER_REGIME: "off" } });
 
   test("prerender succeeds", () => {
     expect(new TextDecoder().decode(result.stderr)).toBe("");
@@ -194,6 +195,19 @@ describe("prerendered routes", () => {
     const html = readFileSync(join(dir, "faq/index.html"), "utf8");
     expect(html).toContain(`${ORIGIN}/openapi.json`);
     expect(html).toContain(`${ORIGIN}/llms.txt`);
+  });
+
+  test("a page that publishes a data file links it in <head> and lists it in <noscript>", () => {
+    // The smart contract risks cases as JSON (RM-138): seo.js's `downloads`,
+    // linked the way a data route's endpoints are.
+    const html = readFileSync(join(dir, "smart-contract-risks/index.html"), "utf8");
+    const downloads = routeDownloads("/smart-contract-risks");
+    expect(downloads.length).toBeGreaterThan(0);
+    for (const d of downloads) {
+      expect(html, `head link for ${d.url}`).toContain(`<link rel="alternate" type="${d.type}" href="${d.url}"`);
+      expect(html, `noscript entry for ${d.url}`).toContain(`<a href="${d.url}">${d.url}</a>`);
+    }
+    expect(html.indexOf(`<a href="${downloads[0]!.url}">`)).toBeGreaterThan(html.indexOf("<noscript>"));
   });
 
   test("a prerendered docs page has no empty view mount left for anything to inline into", () => {

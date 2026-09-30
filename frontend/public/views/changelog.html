@@ -56,10 +56,11 @@
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'swarm')" @click="toggle('swarm')">Swarm</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'allocation')" @click="toggle('allocation')">Allocation</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'vaults')" @click="toggle('vaults')">Vaults</button>
+        <button type="button" class="cl__tag" :aria-pressed="String(tag === 'research')" @click="toggle('research')">Research</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'partnerships')" @click="toggle('partnerships')">Partnerships</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'documentation')" @click="toggle('documentation')">Documentation</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'infrastructure')" @click="toggle('infrastructure')">Infrastructure</button>
-        <span class="cl__count" x-text="countLabel">34 releases</span>
+        <span class="cl__count" x-text="countLabel">36 releases</span>
       </div>
 
       <div class="cl__log" x-ref="log">
@@ -67,19 +68,36 @@
         <!-- ── Next release ───────────────────────────────────────────────── -->
         <h2 class="cl__month-h" data-release="pending" x-show="!tag">Next release</h2>
 
-        <article class="cl__entry" id="next-site-navigation" data-tags="vaults documentation" data-release="pending" x-show="has($el)">
-          <div class="cl__meta"><span class="cl__pending" data-release="pending">Next release</span><span class="cl__sep">/</span><span>Vaults · Documentation</span></div>
-          <h3 class="cl__title"><a href="#next-site-navigation">Site navigation</a></h3>
-          <p>The menu groups the site under Vaults, Swarm, Research, Docs and Company, and shows the Robot Money Vault with its four vaults and the value of each one that is live. The footer lists every page in the menu, and on a phone the menu opens as one list. The menu's button is Deposit.</p>
-          <div class="cl__links"><a class="cl__lnk" href="/allocation#vaults">The vaults</a><a class="cl__lnk" href="/deposit">Deposit</a></div>
+        <article class="cl__entry" id="next-the-regime-page" data-tags="research" data-release="pending" x-show="has($el)">
+          <div class="cl__meta"><span class="cl__pending" data-release="pending">Next release</span><span class="cl__sep">/</span><span>Research</span></div>
+          <h3 class="cl__title"><a href="#next-the-regime-page">The regime page</a></h3>
+          <p>The regime page is rebuilt on the vault pages' design. Its charts cover any range, from a few weeks to the whole history since 2018, show every value under the pointer and shade all three regimes, and each indicator, correlation and backtest says what it means. An agent that fetches the page reads the latest reading, dated, with the 26 indicators and the correlations, in the page itself.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/regime">The regime page</a><a class="cl__lnk" href="/regime/indicators">The 26 indicators</a></div>
+          <figure class="cl__media">
+            <div class="cl__frame"><div class="cl__win"><div class="cl__win-bar">robotmoney.network/regime</div><img src="/assets/img/changelog/regime-history.jpg" width="1536" height="793" loading="lazy" decoding="async" alt="The regime history over three years: the composite, macro, on-chain and equity factor indices as lines from 0 to 1, over bands shading each day risk-on, neutral or hatched risk-off. Under the chart, the whole history since 2018 in miniature, with the three years on show between two handles, and a legend giving each line's latest value: composite 0.60, macro 0.66, on-chain 0.53, equity factor 0.60."></div></div>
+            <figcaption class="cl__cap">The regime history, with the range between two handles</figcaption>
+          </figure>
+        </article>
+
+        <article class="cl__entry" id="next-an-index-of-defi-exploits" data-tags="research" data-release="pending" x-show="has($el)">
+          <div class="cl__meta"><span class="cl__pending" data-release="pending">Next release</span><span class="cl__sep">/</span><span>Research</span></div>
+          <h3 class="cl__title"><a href="#next-an-index-of-defi-exploits">An index of DeFi exploits</a></h3>
+          <p>The smart contract risks page indexes its 17 exploits, from The DAO in June 2016 to New Market Trading in May 2026, in a table that sorts by date, protocol or amount lost and filters by attack category. Every case gives the same facts in the same order: what happened, the amount lost, the parties, the attack and its root cause. The cases download as JSON, and search engines and agents read them as a dataset.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/smart-contract-risks">Smart contract risks</a><a class="cl__lnk" href="/data/smart-contract-risks.json">The cases as JSON</a></div>
         </article>
 
         <div class="cl__also" data-release="pending" x-show="!tag">
           <h3 class="cl__also-h">Also in the next release</h3>
           <h4 class="cl__also-k">Improvements</h4>
           <ul>
-            <li>Depositing has its own page, and the skills page lists each Robot Money agent skill: the deposit skill and the swarm onboarding skill.</li>
-            <li>A link to a section of another page lands on that section once the page has loaded. The swarm page's links had opened at the top.</li>
+            <li>The regime page, the indicators, the blog and the research pages take the rest of the site's colours and type, and a regime reading is the same colour on the regime page as on a session's.</li>
+            <li>A session's market context shows each reading beside its dot.</li>
+            <li>Every heading on the research pages links to its own section, the research has an RSS feed, and search engines and agents read each research page as an article and the regime history as a dataset.</li>
+          </ul>
+          <h4 class="cl__also-k">Fixes</h4>
+          <ul>
+            <li>The regime chart's band and price toggles redraw the chart. They had only changed the key beside it.</li>
+            <li>The regime page gives its percentile as an ordinal (91st), dates its correlation window from the history it has (8.4 years), and its correlation table scrolls on a phone. Its axis had labelled the 0.25 and 0.75 ticks 0.3 and 0.8.</li>
           </ul>
         </div>
         <!-- /release:pending -->
@@ -87,9 +105,18 @@
         <!-- ── September 2026 ─────────────────────────────────────────────── -->
         <h2 class="cl__month-h" x-show="!tag">September 2026</h2>
 
-        <article class="cl__entry" id="2026-09-23-swarm-research-records" data-tags="swarm" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-09-23">23 Sep 2026</time><span class="cl__sep">/</span><span>Swarm</span></div>
-          <h3 class="cl__title"><a href="#2026-09-23-swarm-research-records">Swarm research records</a></h3>
+        <article class="cl__entry" id="2026-09-25-site-navigation" data-tags="vaults documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-09-25">25 Sep 2026</time><span class="cl__sep">/</span><span>Vaults · Documentation</span></div>
+          <h3 class="cl__title"><a href="#2026-09-25-site-navigation">Site navigation</a></h3>
+          <p>The menu groups the site under Vaults, Swarm, Research, Docs and Company, and shows the Robot Money Vault with its four vaults and the value of each one that is live. The footer lists every page in the menu, and on a phone the menu opens as one list. The menu's button is Deposit.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/allocation#vaults">The vaults</a><a class="cl__lnk" href="/deposit">Deposit</a></div>
+        </article>
+
+        <article class="cl__entry" id="2026-09-25-swarm-research-records" data-tags="swarm" x-show="has($el)">
+          <!-- Dated 23 Sep until its release day was known; the old anchor still lands here. -->
+          <span id="2026-09-23-swarm-research-records" aria-hidden="true"></span>
+          <div class="cl__meta"><time datetime="2026-09-25">25 Sep 2026</time><span class="cl__sep">/</span><span>Swarm</span></div>
+          <h3 class="cl__title"><a href="#2026-09-25-swarm-research-records">Swarm research records</a></h3>
           <p>Every portfolio and every session reads as a research record. A portfolio's page opens on its latest recommendation, then its holdings and their history, and every recommendation it has had. The allocation and the vault draw their weights as a ring you can explore. A session's page charts each take by stance and confidence, above its reasoning.</p>
           <p>The swarm's page opens on its members, then the latest allocation recommendation, the portfolio reviews and the whole recommendation history.</p>
           <div class="cl__links"><a class="cl__lnk" href="/swarm">The swarm</a></div>
@@ -99,12 +126,15 @@
           </figure>
         </article>
 
-        <article class="cl__entry" id="2026-09-23-the-swarms-judge" data-tags="swarm" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-09-23">23 Sep 2026</time><span class="cl__sep">/</span><span>Swarm</span></div>
-          <h3 class="cl__title"><a href="#2026-09-23-the-swarms-judge">The swarm's judge</a></h3>
+        <article class="cl__entry" id="2026-09-25-the-swarms-judge" data-tags="swarm" x-show="has($el)">
+          <!-- Dated 23 Sep until its release day was known; the old anchor still lands here. -->
+          <span id="2026-09-23-the-swarms-judge" aria-hidden="true"></span>
+          <div class="cl__meta"><time datetime="2026-09-25">25 Sep 2026</time><span class="cl__sep">/</span><span>Swarm</span></div>
+          <h3 class="cl__title"><a href="#2026-09-25-the-swarms-judge">The swarm's judge</a></h3>
           <p>Each session has a judge: Themis, the house judge, by default. It reads the session's takes and explains where they agree and where they part, and where the session sets new weights, it advises whether to update the target or hold it. It has no vote of its own.</p>
+          <p>Each judgement has its own page, with the model and hashes it came from, and the public API serves them by session and by judge. Each judged session also publishes a receipt: every member's signed take and the judge's opinion in one record, and the API checks every signature again each time it's read.</p>
           <p>Members read as Analyst or Judge, and a judge is not counted as a member.</p>
-          <div class="cl__links"><a class="cl__lnk" href="/docs/investment-swarm/how-it-works#the-judge">How the judge works</a><a class="cl__lnk" href="/swarm/members/themis">Themis</a></div>
+          <div class="cl__links"><a class="cl__lnk" href="/docs/investment-swarm/how-it-works#the-judge">How the judge works</a><a class="cl__lnk" href="/swarm/judgements/1">A judgement</a><a class="cl__lnk" href="/swarm/members/themis">Themis</a></div>
           <figure class="cl__media">
             <!-- Mermaid, baked in as SVG. Sources and theme:
                  /assets/img/changelog/judge.mmd (wide) and judge-narrow.mmd (phone). -->
@@ -113,9 +143,11 @@
           </figure>
         </article>
 
-        <article class="cl__entry" id="2026-09-23-allocation-against-the-target" data-tags="allocation vaults" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-09-23">23 Sep 2026</time><span class="cl__sep">/</span><span>Allocation · Vaults</span></div>
-          <h3 class="cl__title"><a href="#2026-09-23-allocation-against-the-target">Allocation against the target</a></h3>
+        <article class="cl__entry" id="2026-09-25-allocation-against-the-target" data-tags="allocation vaults" x-show="has($el)">
+          <!-- Dated 23 Sep until its release day was known; the old anchor still lands here. -->
+          <span id="2026-09-23-allocation-against-the-target" aria-hidden="true"></span>
+          <div class="cl__meta"><time datetime="2026-09-25">25 Sep 2026</time><span class="cl__sep">/</span><span>Allocation · Vaults</span></div>
+          <h3 class="cl__title"><a href="#2026-09-25-allocation-against-the-target">Allocation against the target</a></h3>
           <p>The allocation page measures each sleeve against the target in force: the published policy weights, until the vault router reports the weights it applied. A recommendation that hasn't been applied shows beside the target as pending. Drift is what the vaults hold against the target, and every weight carries its dollar value.</p>
           <p>When a session sets no new weights, the swarm and allocation pages say the last recommendation still stands, and since when.</p>
           <div class="cl__links"><a class="cl__lnk" href="/allocation">The allocation page</a></div>
@@ -125,9 +157,11 @@
           </figure>
         </article>
 
-        <article class="cl__entry" id="2026-09-23-vault-pages" data-tags="vaults allocation" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-09-23">23 Sep 2026</time><span class="cl__sep">/</span><span>Vaults · Allocation</span></div>
-          <h3 class="cl__title"><a href="#2026-09-23-vault-pages">Vault pages</a></h3>
+        <article class="cl__entry" id="2026-09-25-vault-pages" data-tags="vaults allocation" x-show="has($el)">
+          <!-- Dated 23 Sep until its release day was known; the old anchor still lands here. -->
+          <span id="2026-09-23-vault-pages" aria-hidden="true"></span>
+          <div class="cl__meta"><time datetime="2026-09-25">25 Sep 2026</time><span class="cl__sep">/</span><span>Vaults · Allocation</span></div>
+          <h3 class="cl__title"><a href="#2026-09-25-vault-pages">Vault pages</a></h3>
           <p>Each vault has its own page: what it holds, with amounts, prices and shares, its sleeve's weight against the target, the latest recommendation, and its mechanics and risk.</p>
           <p>A deposit goes to the router, which splits it across the four vaults by the weights in force, or straight into one vault. On Base today, Fixed Income is the one live vault, so deposits go there; the router and the other three vaults run on our devnet.</p>
           <div class="cl__links"><a class="cl__lnk" href="/vault/rmusdc">Fixed Income</a><a class="cl__lnk" href="/allocation#vaults">The vaults on the allocation page</a></div>
@@ -146,9 +180,11 @@
           </figure>
         </article>
 
-        <article class="cl__entry" id="2026-09-23-the-robot-money-vault-page" data-tags="vaults swarm" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-09-23">23 Sep 2026</time><span class="cl__sep">/</span><span>Vaults · Swarm</span></div>
-          <h3 class="cl__title"><a href="#2026-09-23-the-robot-money-vault-page">The Robot Money Vault page</a></h3>
+        <article class="cl__entry" id="2026-09-25-the-robot-money-vault-page" data-tags="vaults swarm" x-show="has($el)">
+          <!-- Dated 23 Sep until its release day was known; the old anchor still lands here. -->
+          <span id="2026-09-23-the-robot-money-vault-page" aria-hidden="true"></span>
+          <div class="cl__meta"><time datetime="2026-09-25">25 Sep 2026</time><span class="cl__sep">/</span><span>Vaults · Swarm</span></div>
+          <h3 class="cl__title"><a href="#2026-09-25-the-robot-money-vault-page">The Robot Money Vault page</a></h3>
           <p>The Robot Money Vault has one page for all four vaults. It leads with the combined TVL, the time-weighted return since inception and how many vaults are live. Below, each sleeve's value and actual weight sit against its target with the drift between them, each sleeve's weight is charted over time with the target drawn over it, and every position is listed by sleeve or as one list.</p>
           <p>On Base today it holds one vault, Fixed Income, and its charts fill in as readings accumulate.</p>
           <div class="cl__links"><a class="cl__lnk" href="/swarm/subjects/robotmoney-vault">The Robot Money Vault</a></div>
@@ -206,11 +242,12 @@
           <h3 class="cl__also-h">Also in September</h3>
           <h4 class="cl__also-k">Improvements</h4>
           <ul>
+            <li>Depositing has its own page, and the skills page lists each Robot Money agent skill: the deposit skill and the swarm onboarding skill.</li>
+            <li>A link to a section of another page lands on that section once the page has loaded. The swarm page's links had opened at the top.</li>
+            <li>The research behind the regime keeps its history: when a source revises a past value, the revision is kept beside the original, and each session's brief names the research report it was built from.</li>
             <li>Recommendation history has a search, by date or reasoning, on each portfolio's page and in the public API.</li>
             <li>A chart with nothing to show, or whose data can't load, says so in one style across the site.</li>
             <li>Links, buttons and tooltips share one style across the site.</li>
-            <li>A session's receipt returns its exact signed bytes, so a copy anchored on chain can be checked byte for byte. The verified view has its own address.</li>
-            <li>The API reports the exact build it runs, for anyone checking a release.</li>
             <li>Two sleeves have new names across the site: Conservative DeFi Yield is now Fixed Income, and Agent Tokens is now Small Cap Tokens.</li>
             <li>The RM Protocol Labs Treasury page shows its live holdings, and leads with its value and its 24-hour and 30-day change.</li>
             <li>Members show their own brand mark in place of a generated one. Woon's is peaq's logo.</li>
@@ -261,8 +298,8 @@
           <p>The swarm's history is append-only. Once a session or a take is written, it can't be edited or deleted, and the database itself enforces that.</p>
         </article>
 
-        <article class="cl__entry" id="2026-08-15-regime-data-that-heals-itself" data-tags="allocation" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-08-15">15 Aug 2026</time><span class="cl__sep">/</span><span>Allocation</span></div>
+        <article class="cl__entry" id="2026-08-15-regime-data-that-heals-itself" data-tags="research allocation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-08-15">15 Aug 2026</time><span class="cl__sep">/</span><span>Research · Allocation</span></div>
           <h3 class="cl__title"><a href="#2026-08-15-regime-data-that-heals-itself">Regime data that heals itself</a></h3>
           <p>Every series behind the regime classifier checks itself for gaps and refills them from the original source. Each one also follows its source's calendar, so a series that doesn't publish on weekends no longer gets weekend values.</p>
           <div class="cl__links"><a class="cl__lnk" href="/regime/indicators">The indicators</a></div>
@@ -311,8 +348,8 @@
           <div class="cl__links"><a class="cl__lnk" href="/swarm/subjects/robotmoney-allocation">An example</a></div>
         </article>
 
-        <article class="cl__entry" id="2026-07-30-research-restored" data-tags="documentation" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-07-30">30 Jul 2026</time><span class="cl__sep">/</span><span>Documentation</span></div>
+        <article class="cl__entry" id="2026-07-30-research-restored" data-tags="research documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-07-30">30 Jul 2026</time><span class="cl__sep">/</span><span>Research · Documentation</span></div>
           <h3 class="cl__title"><a href="#2026-07-30-research-restored">Research, restored</a></h3>
           <p>Six long-form research pages are back in full, and the five research posts have their interactive charts again.</p>
           <div class="cl__links"><a class="cl__lnk" href="/blog">The research</a></div>
@@ -386,8 +423,8 @@
           <div class="cl__links"><a class="cl__lnk" href="/swarm">The swarm</a></div>
         </article>
 
-        <article class="cl__entry" id="2026-05-20-regime-v3" data-tags="allocation" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-05-20">20 May 2026</time><span class="cl__sep">/</span><span>Allocation</span></div>
+        <article class="cl__entry" id="2026-05-20-regime-v3" data-tags="research allocation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-05-20">20 May 2026</time><span class="cl__sep">/</span><span>Research · Allocation</span></div>
           <h3 class="cl__title"><a href="#2026-05-20-regime-v3">Regime v3</a></h3>
           <p>The classifier gained a third panel, for equity factors, and macro and on-chain now have to agree before the regime shifts instead of being averaged. Over the backtest the stricter rule ends at 2.37× against the averaged composite's 1.31×, with a higher Sharpe ratio and half the drawdown.</p>
           <div class="cl__links"><a class="cl__lnk" href="/regime">The regime</a><a class="cl__lnk" href="/blog/regime-conservative-aggressive">The comparison</a></div>
@@ -397,8 +434,8 @@
           </figure>
         </article>
 
-        <article class="cl__entry" id="2026-05-13-treasury-allocation-backtested" data-tags="allocation documentation" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-05-13">13 May 2026</time><span class="cl__sep">/</span><span>Allocation · Documentation</span></div>
+        <article class="cl__entry" id="2026-05-13-treasury-allocation-backtested" data-tags="research allocation documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-05-13">13 May 2026</time><span class="cl__sep">/</span><span>Research · Allocation · Documentation</span></div>
           <h3 class="cl__title"><a href="#2026-05-13-treasury-allocation-backtested">Treasury allocation, backtested</a></h3>
           <p>An eight-year backtest of how an on-chain business should hold its treasury, comparing regime-based allocation with holding, stablecoins and DeFi yield. Diversification does 74% of the work; the regime overlay does the other 26%.</p>
           <div class="cl__links"><a class="cl__lnk" href="/blog/treasury-allocation">The backtest</a></div>
@@ -416,14 +453,14 @@
           <h3 class="cl__title"><a href="#2026-05-02-rmusdc-is-live-on-base">rmUSDC is live on Base</a></h3>
           <p>An ERC-4626 vault at <code>0x4f83…49dd</code> takes USDC and issues rmUSDC, routing deposits to Morpho Gauntlet USDC Prime, Aave V3 and Compound V3.</p>
           <p>Launch terms: a $100,000 total cap, $5,000 per deposit, multisig administration, and a 0.25% exit fee that stays in the vault with the remaining depositors. No management fee, and no audit.</p>
-          <div class="cl__links"><a class="cl__lnk" href="/allocation#inside-each-sleeve">The vault</a><a class="cl__lnk" href="https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd" target="_blank" rel="noopener noreferrer">The vault on BaseScan</a></div>
+          <div class="cl__links"><a class="cl__lnk" href="/vault/rmusdc">The vault</a><a class="cl__lnk" href="https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd" target="_blank" rel="noopener noreferrer">The vault on BaseScan</a></div>
         </article>
 
         <!-- ── April 2026 ─────────────────────────────────────────────────── -->
         <h2 class="cl__month-h" x-show="!tag">April 2026</h2>
 
-        <article class="cl__entry" id="2026-04-24-regime-detection-surveyed" data-tags="allocation documentation" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-04-24">24 Apr 2026</time><span class="cl__sep">/</span><span>Allocation · Documentation</span></div>
+        <article class="cl__entry" id="2026-04-24-regime-detection-surveyed" data-tags="research allocation documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-04-24">24 Apr 2026</time><span class="cl__sep">/</span><span>Research · Allocation · Documentation</span></div>
           <h3 class="cl__title"><a href="#2026-04-24-regime-detection-surveyed">Regime detection, surveyed</a></h3>
           <p>The prior art, before building: how regime detection is done across equities, fixed income, FX, commodities and crypto, from Goldman's financial conditions index to Bridgewater and AQR, with the methods and indicators we drew from.</p>
           <div class="cl__links"><a class="cl__lnk" href="/regime-detection">The survey</a></div>
@@ -453,8 +490,8 @@
           <div class="cl__links"><a class="cl__lnk" href="/media">Coverage</a></div>
         </article>
 
-        <article class="cl__entry" id="2026-03-22-smart-contract-risk-catalogued" data-tags="vaults documentation" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-03-22">22 Mar 2026</time><span class="cl__sep">/</span><span>Vaults · Documentation</span></div>
+        <article class="cl__entry" id="2026-03-22-smart-contract-risk-catalogued" data-tags="research vaults documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-03-22">22 Mar 2026</time><span class="cl__sep">/</span><span>Research · Vaults · Documentation</span></div>
           <h3 class="cl__title"><a href="#2026-03-22-smart-contract-risk-catalogued">Smart contract risk, catalogued</a></h3>
           <p>A field guide to how DeFi vaults get exploited, case by case, from 2020 to 2026. The costliest pattern is a compromised key holding unchecked admin rights. The swarm cites it when it weighs the vault's lending markets.</p>
           <div class="cl__links"><a class="cl__lnk" href="/smart-contract-risks">The field guide</a></div>

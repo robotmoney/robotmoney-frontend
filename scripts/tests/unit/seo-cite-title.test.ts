@@ -6,9 +6,11 @@
 import { test, expect } from "bun:test";
 import { citeTitle, metaFor } from "../../../frontend/public/assets/js/app/seo.js";
 
-test("a blog post cites, and titles its tab, by its own title", () => {
-  expect(citeTitle("/blog/regime-conservative-aggressive")).toBe("Conservative vs aggressive: combining macro and on-chain regime signals");
-  expect(metaFor("/blog/regime-conservative-aggressive").title).toBe("Conservative vs aggressive: combining macro and on-chain regime signals — Robot Money Blog");
+test("a blog post cites, and titles its tab, by its own name", () => {
+  // The name is the post's h1 cut to fit a 60-character title (RM-134); the
+  // full h1 rides in the post's structured data as its headline.
+  expect(citeTitle("/blog/regime-conservative-aggressive")).toBe("Conservative vs aggressive regime signals");
+  expect(metaFor("/blog/regime-conservative-aggressive").title).toBe("Conservative vs aggressive regime signals | Robot Money");
 });
 
 test("a legacy path cites as the page it renders", () => {
@@ -18,6 +20,9 @@ test("a legacy path cites as the page it renders", () => {
 test("a page cites by the name before its qualifier", () => {
   expect(citeTitle("/smart-contract-risks")).toBe("Smart Contract Risks");
   expect(citeTitle("/regime-detection")).toBe("Regime Detection");
+  // A swarm brief's research links read these two (session-brief.js).
+  expect(citeTitle("/research/channel-divergence")).toBe("Channel Divergence");
+  expect(citeTitle("/research/late-cycle-signals")).toBe("Late-Cycle Signals");
 });
 
 test("a title qualified after a pipe cites by its name too", () => {
