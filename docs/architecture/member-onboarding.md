@@ -329,12 +329,101 @@ the code on `main`, release code, is broken by an input that changed while
 nobody was watching. No required reading, no "which suite was that and what are
 its pass semantics".
 
+**The one named exception: an explicitly exempted auditor.** "Nothing else runs
+on a nightly schedule" holds over the set of *product test suites*. One workflow
+sits outside it by name:
+`.github/workflows/production-drift-audit.yml` (`CI_CLASS: heavy`, `schedule:
+11 2 * * *`, no `push` and no `pull_request`). It observes robotmoney.network and
+robotmoney-core's release API and **reports**; it never gates, never blocks, and
+always exits 0, so a red report body on a green job is the intended outcome. A
+check it could not run is rendered UNKNOWN with its reason rather than omitted
+or passed — the same loud-skip-never invariant, pointed inward, because a
+silently dropped check is the one outcome nobody would ever notice.
+
+So a red nightly there means something **different** from a red merge, and
+saying otherwise is the failure mode E6 exists to prevent. A red merge means
+release code on `main` is broken by a commit. A red drift-audit nightly means
+one of FOUR things that no commit can fix: the `rmpc` release the onboarding
+skill pins has been yanked, replaced or re-uploaded, which breaks every new
+member's install; the endpoint has stopped serving a procedure, or stopped
+answering at all; the served document carries the unverified pipe-into-`tar`
+install form that issue #748 closed in the repo copy; or the endpoint's own
+negative control says a wrong document would slip through the other checks
+unchallenged. It is registered on `EXEMPT_FROM_MERGE_MIRROR` in
+`scripts/tests/unit/nightly-mirrors-merge-set.test.ts` beside
+`contribution-advisory-reviewer.yml` — the repo's own sanctioned mechanism for a
+scheduled workflow that is not a product test suite — with the justification
+carried in the entry rather than left to inference.
+
+**A FOURTH QUESTION WAS HERE AND IS NOW DELETED — NOTHING IN CI REPORTS A STALE
+DEPLOY.** This exemption originally covered a workflow with four checks; the
+fourth was the deploy-freshness byte comparison between the served skill and
+`frontend/public/skills/swarm-onboarding/SKILL.md` in the checkout, implemented
+by `contract/src/skill-parity.js`'s `describeSkillMismatch`. That module and its
+offline unit test have been **deleted**, and the question has been removed from
+this repository entirely rather than moved anywhere: not the auditor, not a
+merge gate, not an offline unit test, and not under a different name. It was
+the repository owner's decision, and this paragraph, the `L1` section in §3,
+and the headers of `scripts/production-drift-audit.ts` and
+`.github/workflows/production-drift-audit.yml` are the record of it.
+
+So an operator reading a red E6 nightly must know what is **not** in the list
+above: a stale deploy will never show up there, or in any other job in this
+repository. If `main` carries a correct skill and production is still serving
+the previous one, nothing here says so. Catching a stale deploy is now the
+**deploy pipeline's job** — it is a fact about whether a publish ran, and this
+repository has no deploy workflow, so the only place it can be observed is the
+deploy tooling or a human watching it. Do not reinstate a byte comparison to
+close this, and do not give the auditor a non-zero exit to compensate: the first
+is the check that was deliberately deleted, the second would re-create required
+reading whose exit is outside the repository.
+
+**What moved off the merge gate is every network assertion the live test held,
+not one.** The procedure assertions, the `| tar` floor and the red control all
+left the deleted live test file together — and the file, its directory, the
+`test:live` script and the `contract` job's live step were then DELETED — for
+one reason, which is not a preference for schedules:
+none of those questions is answerable by a commit here. Whether
+robotmoney.network answers depends on deploys, DNS, TLS, CDN state and renames
+in robotmoney-core, none of which a diff in this repository can repair, so a
+correct merge would red a required check for a reason whose only exit is outside
+the repository. It was measured: while this was being decided, the `contract` job
+was RED on an open pull request with `Received: 502`, caused by nobody in that
+pull request. They are now auditor checks B, C and D respectively.
+
+C moved as its OWN check, and must stay that way: it is a security guard
+asserted over the served body directly, with its own status line, and it reports
+DRIFT whatever else is true about the document — including precisely the case its
+deleted byte comparison would have swallowed, namely the repo copy itself
+regressing. Do not fold C into B. D is a check about the auditor rather than about
+the document, and it must stay its own row for the same reason: a control that is
+folded into the check it controls has stopped being a control, and B — a set of
+positive assertions over a body that is supposed to be good — cannot demonstrate
+that it can fail.
+
+**The consequence, stated so that nobody has to infer it: NOTHING ON A MERGE
+TRIGGER VERIFIES THE SKILL ENDPOINT.** The one assertion that remains
+merge-gated is hermetic and is about the constant rather than the served
+document — that the URL names a skill directory above `SKILL.md`
+(`contract/tests/unit/swarm-onboarding-skill-url.test.ts`, run by the required
+`contract` job) — which is what keeps the slug in B's `name:` discriminator
+meaningful. A `contract` red therefore still means exactly what this section
+says it means: the code on `main` is broken by a commit. A broken skill URL, a
+stubbed skill, a robotmoney.network outage, or a contributor without a working
+connection will NOT produce one. That is the trade this section records, made on
+purpose and paid for knowingly: the endpoint is watched once a night, by a report
+nobody is blocked by, and that is strictly better than a merge set that goes red
+for a fact about the internet. The workflow also carries no
+`github.event_name == 'schedule'` gate anywhere, job or step: a workflow with no
+second trigger has nothing to be asymmetric with.
+
 The relationship is enforced mechanically, not by convention:
 `scripts/tests/unit/nightly-mirrors-merge-set.test.ts` runs in the required
-`unit` job, asserts the equality in **both** directions, names any workflow on
-one side only, and additionally fails on any job or step gated with
-`github.event_name == 'schedule'` — nightly must run the merge set's work, not
-extra work. Cron minutes are staggered so the mirrors do not all start at once.
+`unit` job, asserts the equality in **both** directions modulo that exemption
+list, names any workflow on one side only, and additionally fails on any job or
+step gated with `github.event_name == 'schedule'` — nightly must run the merge
+set's work, not extra work. Cron minutes are staggered so the mirrors do not all
+start at once, and every scheduled workflow declares exactly one cron entry.
 
 The real-inference admission's scheduled home is therefore
 `.github/workflows/e2e.yml` itself, on the `schedule: 37 4 * * *` slot the

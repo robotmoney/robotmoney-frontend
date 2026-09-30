@@ -28,8 +28,7 @@
     "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
-    "test": "bun test tests/unit",
-    "test:live": "bun test tests/live"
+    "test": "bun test tests/unit"
   },
   "license": "MIT"
 }
