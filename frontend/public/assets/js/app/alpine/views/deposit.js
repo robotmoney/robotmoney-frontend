@@ -145,6 +145,35 @@ export function registerDepositView(Alpine) {
       // router scrolled to at render lands again.
       this.$nextTick(() => this.openFragment());
     },
+    // A FAQ row opens and closes by animating its answer's height (and
+    // fades it), rather than the native details' jump: opening sets `open`
+    // and grows the answer from 0; closing shrinks it, then clears `open`.
+    // A click mid-animation reverses from where the row is. Reduced motion,
+    // or no Web Animations, toggles at once.
+    toggleFaq(ev) {
+      const d = ev.currentTarget?.parentElement;
+      const a = d?.querySelector(".dp__faq-a");
+      if (!(d instanceof HTMLDetailsElement) || !a) return;
+      const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const closing = d.open && d.dataset.faq !== "closing";
+      if (reduce || typeof a.animate !== "function") { d.open = !closing; return; }
+      // A closed row still measures its full answer, so an opening one
+      // starts from nothing unless it is reversing a close. The padding
+      // animates with the height, or the row would stop at its padding.
+      const midway = !!d.dataset.faq;
+      const from = midway || d.open ? a.getBoundingClientRect().height : 0;
+      const pad = getComputedStyle(a).paddingBottom;
+      a.getAnimations().forEach((x) => x.cancel());
+      d.open = true;
+      const full = a.scrollHeight;
+      const at = (h) => ({ height: `${h}px`, paddingBottom: h ? pad : "0px", opacity: full ? Math.min(1, h / full) : 1 });
+      d.dataset.faq = closing ? "closing" : "opening";
+      const anim = a.animate([at(from), at(closing ? 0 : full)], { duration: closing ? 200 : 260, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+      anim.onfinish = () => {
+        if (closing) d.open = false;
+        delete d.dataset.faq;
+      };
+    },
     // A link to a FAQ row (#risks, #contracts) opens it, then lands on it.
     openFragment() {
       const id = decodeURIComponent(location.hash.slice(1));
@@ -212,7 +241,7 @@ export function registerDepositView(Alpine) {
     },
     explorerSvg() { return sessionSummary.ringSvg(this.explorerRows().map((r) => ({ ...r, colour: r.hue }))); },
     explorerLabel() { return this.explorerRows().map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", "); },
-    ringRestLabel() { return "Target in force"; },
+    ringRestLabel() { return "Allocation"; },
     hasActual() { return false; },
     hasBook() { return false; },
     bucketNote(key) { return sleeveNote(key); },

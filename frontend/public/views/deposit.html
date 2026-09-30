@@ -86,7 +86,7 @@
         <div>
           <p class="rr-k">Step 3</p>
           <p class="rr-steps__t">Your agent prepares it</p>
-          <p class="rr-steps__d">The skill splits the USDC across the live vaults by the target in force and simulates every transaction before anything is signed.</p>
+          <p class="rr-steps__d">The skill splits your USDC across the vaults to match the Robot Money allocation, and simulates every transaction before anything is signed.</p>
         </div>
         <div>
           <p class="rr-k">Step 4</p>
@@ -103,14 +103,15 @@
     <section class="rr-sec" id="allocation" aria-labelledby="buy-h">
       <div class="rr-sec__head">
         <h2 class="rr-sec__h" id="buy-h">What you buy</h2>
-        <template x-if="allocationAsOfLabel()"><span class="rr-sec__aside" x-text="`Target in force since ${allocationAsOfLabel()}`"></span></template>
+        <template x-if="allocationAsOfLabel()"><span class="rr-sec__aside" x-text="`Allocation set ${allocationAsOfLabel()}`"></span></template>
       </div>
+      <p class="dp__lede">A deposit buys the Robot Money allocation: four sleeves, each with a target share of every deposit, and the assets inside each sleeve.</p>
       <template x-if="hasTargets()">
         <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape.window="close()" @pointerleave="leave()"
              x-effect="if (rest === null && explorerRows().length) rest = (explorerRows().find((r) => r.pct > 0) || explorerRows()[0]).key">
           <div class="rr-mix">
             <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
-              <span class="sv__wdonut-host" role="img" :aria-label="`Target allocation: ${explorerLabel()}`"
+              <span class="sv__wdonut-host" role="img" :aria-label="`The Robot Money allocation: ${explorerLabel()}`"
                     x-html="explorerSvg()"
                     x-effect="active(); $nextTick(() => syncArcs($el))"></span>
               <figcaption>
@@ -164,10 +165,10 @@
       <template x-if="!loading && !hasTargets()">
         <figure class="rr-ring rr-ring--empty">
           <svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--color-border)" stroke-width="4"></circle></svg>
-          <figcaption><span class="rr-empty__t">Target weights unavailable</span></figcaption>
+          <figcaption><span class="rr-empty__t">Allocation unavailable</span></figcaption>
         </figure>
       </template>
-      <p class="dp__more"><a class="rr-lnk" href="/allocation">The allocation, target against actual</a></p>
+      <p class="dp__more"><a class="rr-lnk" href="/allocation">The allocation in full</a></p>
     </section>
 
     <!-- ── What you receive: one token per vault, in your wallet ─────── -->
@@ -282,7 +283,7 @@
             </figure>
             <div class="rr-tablewrap">
               <table class="rr-table dp__rets">
-                <thead><tr><th scope="col">Returns</th><th scope="col" class="q">Weight</th><template x-for="h in horizons" :key="h.id"><th scope="col" class="q" x-text="h.label"></th></template></tr></thead>
+                <thead><tr><th scope="col">Returns</th><th scope="col" class="q">Target</th><template x-for="h in horizons" :key="h.id"><th scope="col" class="q" x-text="h.label"></th></template></tr></thead>
                 <tbody>
                   <template x-for="r in returnRows()" :key="r.key">
                     <tr :class="{ 'dp__rets-total': r.kind === 'total', 'dp__rets-bench': r.kind === 'bench', 'is-zero': r.zero }">
@@ -295,7 +296,7 @@
               </table>
             </div>
             <p class="rr-note" x-show="capNote()" x-text="capNote()"></p>
-            <p class="rr-note">Split by the target in force and held without rebalancing, as a deposit is. Each sleeve follows its own daily prices. Returns are before the exit fee and gas. Past returns do not predict future returns.</p>
+            <p class="rr-note">Split by today's Robot Money allocation and not rebalanced afterwards, the way a deposit works. Each sleeve follows its own daily prices. Returns are before the exit fee and gas. Past returns do not predict future returns.</p>
           </div>
         </template>
         <template x-if="!loading && !(hasSim() && simResult())">
@@ -354,23 +355,27 @@
       </div>
       <div class="dp__faq">
         <details id="wallet">
-          <summary>Do I need a wallet?</summary>
+          <summary @click.prevent="toggleFaq($event)">Do I need a wallet?</summary>
           <div class="dp__faq-a"><p>Yes, one on Base holding the USDC you deposit and a little ETH for gas. About $0.01 to $0.05 of ETH covers ten vault transactions.</p></div>
         </details>
         <details>
-          <summary>Can I use the wallet I have?</summary>
+          <summary @click.prevent="toggleFaq($event)">Can I use the wallet I have?</summary>
           <div class="dp__faq-a"><p>Yes. MetaMask, a Ledger or any wallet that signs on Base: the agent prepares each transaction and you sign it in your wallet. The skill never holds your keys.</p></div>
         </details>
         <details>
-          <summary>Do I have to create a wallet?</summary>
+          <summary @click.prevent="toggleFaq($event)">Do I have to create a wallet?</summary>
           <div class="dp__faq-a"><p>No. If your agent should have its own, the skill creates one, keeps its key encrypted on your machine, and signs and broadcasts for you once you fund it.</p></div>
         </details>
         <details>
-          <summary>Where do the tokens go?</summary>
+          <summary @click.prevent="toggleFaq($event)">Where do the tokens go?</summary>
           <div class="dp__faq-a"><p>To the wallet that signed. They are ERC-20 tokens on Base, so any wallet can hold and send them.</p></div>
         </details>
+        <details id="allocation-changes">
+          <summary @click.prevent="toggleFaq($event)">What happens when the allocation changes?</summary>
+          <div class="dp__faq-a"><p>New deposits follow the new allocation. What you already hold stays as you bought it: the vaults do not move it between sleeves for you. To match the new allocation, ask your agent to rebalance. It redeems from the sleeves above their new share and deposits into the ones below, and each redeem pays that vault's exit fee.</p></div>
+        </details>
         <details id="risks">
-          <summary>What are the risks?</summary>
+          <summary @click.prevent="toggleFaq($event)">What are the risks?</summary>
           <div class="dp__faq-a">
             <dl class="rr-dl dp__risk">
               <div>
@@ -407,7 +412,7 @@
           </div>
         </details>
         <details id="contracts">
-          <summary>Which contracts does a deposit use?</summary>
+          <summary @click.prevent="toggleFaq($event)">Which contracts does a deposit use?</summary>
           <div class="dp__faq-a">
             <div class="rr-tablewrap">
               <table class="rr-table rr-table--compact dp__contracts">
@@ -592,6 +597,7 @@
 .dp__qa > div:last-of-type { border-bottom: 0; }
 .dp__more { margin: 1.25rem 0 0; font-size: 0.875rem; }
 /* The legend names each sleeve's vault token under it, in mono. */
+.dp__lede { margin: 0 0 1.5rem; font-size: 0.9375rem; line-height: 1.65; color: var(--color-text-soft); }
 .dp__legtok { margin-left: 0.625rem; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); }
 .dp__vault { display: inline-flex; align-items: baseline; gap: 0.5rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
 .dp__tokens { min-width: 40rem; }
@@ -658,7 +664,7 @@
 .dp__faq details[open] > summary::after { content: "−"; }
 .dp__faq summary:hover::after, .dp__faq summary:focus-visible::after { color: var(--color-text); }
 .dp__faq summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
-.dp__faq-a { padding: 0 0 1.5rem; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
+.dp__faq-a { overflow: hidden; padding: 0 0 1.5rem; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
 .dp__faq-a > p { margin: 0; }
 .dp__faq-a .rr-dl > div:last-of-type { border-bottom: 0; }
 .dp__contracts tbody th { width: 14rem; font-weight: 400; font-size: 0.75rem; }
