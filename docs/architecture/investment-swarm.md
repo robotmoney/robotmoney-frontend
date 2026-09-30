@@ -246,6 +246,13 @@ debt, not active producer paths.
 
 ### 9.7 The consensus judge
 
+The cross-repository contract from this producer through core receipt anchoring
+and governance execution is specified in
+[Investment Swarm to On-Chain Governance](../technical/committee-to-chain.md).
+The end-to-end delivery evidence is specified in
+[Project Fusion End-to-End Acceptance](../technical/project-fusion-acceptance.md);
+the GitHub Plan issue owns current task state.
+
 The portfolio allocation remains the deterministic output of
 `meanTakeWeights()`; a judge may explain the result but does not choose or
 rewrite weights. A valid model-authored judgement is a separate, attributable

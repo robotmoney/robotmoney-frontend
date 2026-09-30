@@ -127,6 +127,12 @@ roadmaps, task checklists, or phase ordering to `docs/`.
   evidence, and approval for future releases.
 - [Credential doctor](../runbooks/credential-doctor.md) — legacy GitHub secret
   utility, not the adopted deployment credential path.
+- [Investment Swarm to On-Chain Governance](../technical/committee-to-chain.md) —
+  the canonical cross-repository contract from signed takes to an executed
+  router-weight update.
+- [Project Fusion End-to-End Acceptance](../technical/project-fusion-acceptance.md) —
+  the durable evidence and acceptance contract; [frontend issue #1054](https://github.com/robotmoney/robotmoney-frontend/issues/1054)
+  is the execution tracker.
 - [Bot-analytics UI port plan](../bot-analytics-ui-port-plan.md) — the canonical
   spec for the Analytics Surface dashboard port (issues #379-#402 and
   siblings), with its companion
