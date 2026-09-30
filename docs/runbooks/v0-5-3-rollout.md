@@ -49,7 +49,7 @@ against this rule**: a claim about the api or the swarm needs the code that does
 
 | ID | Question | Decision |
 |---|---|---|
-| F1 | Who purges the Cloudflare edge cache after R6, and how | Open. The edge keeps static files for up to 4 hours (`max-age=14400`), and module JS is not hash-stamped. Without a purge, readers see the old pages for hours |
+| F1 | Cloudflare purge after R6 | Decided: none needed. Every JS import and stylesheet URL carries a content stamp (`docs/technical/static-asset-cache.md`), so an old cached file cannot be requested. Owner action, optional: set the zone's Browser Cache TTL to "Respect Existing Headers" |
 | F2 | The `main` merge-back | Not part of v0.5.3. `main` and `releases-0.5.x` have different migration lineages (main has five migrations the release lacks; the release has two main lacks), so it is its own work item |
 
 ## R1. Code readiness (workstation)
@@ -129,7 +129,7 @@ live checkout sits under the running host driver and must not move.
 | R6.1 | `D=/root/rm-site-$RC_SHA; git clone -q --depth 50 --branch releases-0.5.x "$(git -C /root/robotmoney-frontend remote get-url origin)" $D && git -C $D checkout -q "$RC_SHA" && bun install --frozen-lockfile --cwd $D && bun install --frozen-lockfile --cwd $D/backend` | `git -C $D rev-parse HEAD` = `RC_SHA` | path |
 | R6.2 | `cd $D && bun scripts/redeploy-website.ts --live /root/robotmoney-frontend --public https://robotmoney.network --dry-run` | every line `PASS`: the stack has six containers, the live site is `becb6897`, the changed-file guard passes, the build checks pass. The diff matches R4.4's | the output |
 | R6.3 | The same command without `--dry-run`. Record `T0=$(date -u +%FT%TZ)` first | `DONE in Ns`, `every one of 38 routes answers 200`, `only the website moved`. It prints the receipt and the undo command | receipt path |
-| R6.4 | Purge the Cloudflare cache (F1). Then `curl -s https://robotmoney.network/version.json` | the commit is `RC_SHA`'s first 8 characters. The tool's `public site` line warns until the purge is done | the output |
+| R6.4 | `curl -s https://robotmoney.network/version.json`, then `curl -s https://robotmoney.network/ \| grep -o 'assets/js/app/main.js[^"]*'` | the commit is `RC_SHA`'s first 8 characters, and the entry point carries `?v=` with 8 hex characters | the output |
 
 **Abort rules.** The tool changes nothing until its backup and swap, so *Ctrl-C is safe* at any point before the line
 `backup —`. It is abandoned if the build passes 10 minutes. After `swapped in` do not interrupt: the swap is about
@@ -159,7 +159,7 @@ for readers; otherwise it is a follow-up release.
 
 1. `bun /root/rm-site-$RC_SHA/scripts/redeploy-website.ts --live /root/robotmoney-frontend --rollback /root/site-backups/<the directory R6.3 printed>`
 2. Expect `rolled back — the site is commit becb6897; no container moved`.
-3. Purge the Cloudflare cache again (F1).
+3. No purge is needed (F1). Check that `version.json` shows the rollback commit.
 
 The rollback puts back exactly the files and permissions the backup holds. If the tool itself cannot run, the backup
 is a plain tarball: `tar -xzf /root/site-backups/<dir>/_static-becb6897.tar.gz -C /root/robotmoney-frontend/_static`
@@ -200,7 +200,7 @@ there, restores the backup and exits 1.
 **Files it writes:** `<live>/../site-builds/<commit>/` (removed on success) and `<live>/../site-backups/<time>-<commit>/`
 holding `_static-<commit>.tar.gz` and `receipt.json` (phases, diff counts, containers before and after).
 
-**Limits, stated:** it does not purge the Cloudflare edge; it cannot ship a change to `website-server/` (nginx
+**Limits, stated:** it does not touch the Cloudflare edge (no purge is needed, F1); it cannot ship a change to `website-server/` (nginx
 image) or to the compose files' other services; and it says nothing about the api, which it only checks through
 `/health`.
 

@@ -320,7 +320,7 @@ if (a.publicOrigin) {
   let served: string | undefined;
   try { served = (JSON.parse(pv.body) as { commit?: string }).commit; } catch { /* warn below */ }
   if (commitMatches(served, head)) ok("public site", `${a.publicOrigin} serves ${headShort}`);
-  else warn("public site", `${a.publicOrigin} still serves ${served ?? `HTTP ${pv.status}`}: the edge caches static files for hours; purge Cloudflare (runbook) before calling this live`);
+  else warn("public site", `${a.publicOrigin} still serves ${served ?? `HTTP ${pv.status}`}: the edge may serve the previous version.json briefly; recheck before calling this live`);
   receipt.publicServes = served ?? null;
 }
 
