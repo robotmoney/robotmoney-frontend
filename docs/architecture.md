@@ -228,17 +228,117 @@ System-correctness workflows (`backend`, `research-pipeline`, `integration`,
 workflows (`unit`, `repo-guards`, `contract`, `frontend`) continue to execute
 there — cheap enough (no Docker) to gate early regardless of draft state.
 
-The one live-network exception is deliberate and bounded (issue #484):
-`contract` runs `contract/tests/live` — a single HTTPS GET asserting
-`SWARM_ONBOARDING_SKILL_URL` still returns 200. It is the only discovery link in
-the D21 onboarding flow, a 404 there raises no error anywhere in this repo, and
-the guard's previous schedule-only home did not exist, so it had never executed
-in CI at all while the URL 404'd in production for two days. It runs on the
-per-PR path rather than nightly-only so the red lands on the PR that causes it,
-gated behind `contract`'s existing `contract/**` paths-filter. The accepted
-cost: a raw.githubusercontent.com outage reds a required check on `contract/**`
-PRs. That is the intended direction — per the loud-skip-never invariant, an
-unreachable external resource must fail, never skip.
+One live-network surface exists, and it is deliberately not a merge gate.
+
+The **observed, ungated** one is `.github/workflows/production-drift-audit.yml`
+(`CI_CLASS: heavy`): a schedule-only auditor that reports and never gates. It
+asks four questions, and these four only:
+
+| # | Check |
+|---|---|
+| **A** | Does the `rmpc` release the onboarding skill **pins** still exist, and does robotmoney-core still publish archives whose sha256 match the ones the skill **carries**? |
+| **B** | Does `SWARM_ONBOARDING_SKILL_URL` still serve a real, complete procedure rather than a deprecation stub? |
+| **C** | Does the **served** copy carry an unverified `curl … | tar xz` install form? |
+| **D** | **Negative control**: does a sibling `.md` path on the same host that cannot exist come back non-200, carrying none of the skill's markers? |
+
+**There is no gated live-network surface any more, and that is a decision, not a
+gap.** `contract`'s `contract/tests/live/` — the one directory whose cost class
+was "reaches the public internet", and the only merge gate that ever did — is
+**deleted**, along with the `test:live` script, the `contract.yml` step that ran
+it, and the file itself. Its assertions are B, C and D above; the one hermetic
+assertion it also held (that the URL constant names a skill directory above
+`SKILL.md`) is merge-gated at
+`contract/tests/unit/swarm-onboarding-skill-url.test.ts`.
+
+The reason is that **whether `robotmoney.network` answers is not a property of the
+commit under review.** It depends on deploys, DNS, TLS, CDN state, and renames
+and releases in robotmoney-core — none of which any diff in this repository can
+change. A required job that reaches the public internet on every pull request
+means any contributor with a flaky connection, and any upstream hiccup, holds an
+unmergeable PR for a reason the diff cannot fix. That was not a hypothetical: the
+`contract` job was RED on an open pull request with `Received: 502`, caused by
+nobody in that pull request. Required reading whose resolution is outside the
+repository is the shape D26 was written to delete, and it is now deleted on both
+counts.
+
+The accepted cost, stated so it is never discovered the hard way: **no required
+check in this repository verifies that the skill endpoint is alive, or that what
+it serves is the skill.** Not one, and not any nightly mirror of one. The 404
+that issue #484 was filed about — a guard that documented a `nightly-fetchers.yml`
+job which never existed, so it had executed in no CI job at any point in its life
+while the URL it guarded 404'd in production for two days — is now found by
+tonight's audit rather than by the pull request that caused it. Slower detection,
+bought on purpose, and paid for by a merge set that cannot go red for anything
+outside the repository.
+
+**What this auditor does NOT check, stated plainly because it is a decision and
+not an oversight.** It does not check deploy freshness — whether the bytes served
+at the skill URL match `frontend/public/skills/swarm-onboarding/SKILL.md` in this
+checkout. That comparison was implemented by `contract/src/skill-parity.js`
+(`describeSkillMismatch`); **that module and its offline unit test have been
+deleted**, and nothing in this repository asks the deploy-freshness question any
+more — not the auditor, not a merge gate, not a unit test, and not under some
+other name. The consequence, so it is never discovered the hard way: **nothing in
+CI reports a stale deploy.** If `main` carries a correct skill and production is
+still serving the previous one, no job in this repository will say so. Deploy
+freshness is now the **deploy pipeline's job**: it is a fact about whether a
+publish ran, and this repository has no deploy workflow, so the only place that
+fact can be observed is the deploy tooling or a human watching it. Do not
+"repair" this by reintroducing a served-vs-repo byte comparison, and do not
+"repair" it by giving the auditor a non-zero exit. The comparison was also never
+a strong check for the failure that actually breaks members: in the scenario
+that matters — robotmoney-core yanking or re-uploading the pinned `rmpc` release
+— the served copy and the repo copy keep matching each other perfectly, because
+neither of them moved. That is check A, and it is the one the merge set
+structurally cannot see.
+
+B, C and D are a **MOVE off the merge gate, not a new addition** — all three were
+code that sat in the deleted live test file, which was removed with them. They left for the reason above: a correct merge must
+not red a required check for something no commit can repair. B carries the merged
+assertion set — the 200, the front-matter `name:` that must agree with the slug
+the URL itself names, the `rmpc` marker, the whole procedure set, the
+deprecation-stub negative and the procedure floor — merged rather than copied, so
+that where the live test and the old B disagreed the stronger form won. C is a
+**security guard, not a content diff**, and its independence is deliberate and
+load-bearing: the unverified `curl … | tar xz` form pipes a downloaded archive
+into a root-privileged extractor with no checksum check, issue #748 closed it in
+the repo copy, and a stale deploy can still serve the pre-#748 block to a
+genuinely NEW member while every offline check stays green, because the offline
+checks read the repo file. C is asserted over the served body directly, keeps its
+own status line, and reports UNKNOWN — never a pass — when the fetch did not
+complete or when the origin answered with an error page instead of the document.
+Do not fold C into B and do not make it contingent on anything else in the
+auditor.
+
+B asserts the PROCEDURE, not the label, because a 200 with the right
+front-matter `name:` proved insufficient in production: robotmoney-core replaced
+the file with a 1,951-byte deprecation stub whose front matter kept the right
+`name:`, whose body mentioned `rmpc`, and which cleared every size floor, while
+reading, verbatim, "This file is a compatibility stub. It contains no
+instructions to follow." Agents were handed a signpost instead of a procedure and
+CI stayed green for two days.
+
+**D exists because B cannot check itself.** Every marker in B is a positive
+assertion over a body that is supposed to be good, and a positive assertion over
+a good input says nothing about whether it would have gone red on a bad one: an
+origin that answers 200 with an SPA shell, or an error page that happens to
+contain `rmpc`, renders B green over garbage. D fetches a sibling `.md` path that
+cannot exist — the `.md` is load-bearing, because the site server answers
+extension-less paths with the SPA shell at 200 (website-server/nginx.conf, #954) —
+and reports what came back. The direction of each outcome is the substance of the
+check, and it is written out at the D section of `scripts/production-drift-audit.ts`:
+a 404 carrying none of the markers is the only outcome that reports OK; a 200, or
+a 404 carrying a marker, reports DRIFT; and anything else — a 5xx, an unreachable
+host, a discriminator that could not be computed — reports UNKNOWN, never OK,
+because a non-404 failure status measures the origin's health rather than the
+discriminator. A reporter that always exits 0 cannot assert its control with an
+exit code, so it reports it as a row, and the row is only worth anything if
+somebody reads it.
+
+The auditor always exits 0 — a red report body on a green job is the intended
+outcome — and a check that could not run is reported UNKNOWN, never omitted and
+never rendered as a pass. Its red nightly means something different from a red
+merge; E6 records the exemption.
 
 **L2 — Shared code is named for its domain, never for its consumer.** `stack/`,
 `agent/`, `toolchain/` state what belongs in them; `lib/`, `utils/`, `helpers/`
@@ -251,8 +351,32 @@ Per-package test layout, by cost class:
 |---|---|---|---|
 | `<pkg>/tests/unit/` | unit | nothing | every PR (the default `bun test` target) |
 | `<pkg>/tests/integration/` | integration | Docker, a local stack | PR ready-for-review |
-| `<pkg>/tests/live/` | live | real external network | its package's workflow — PR (path-gated), merge to main, and the nightly mirror |
+| `<pkg>/tests/live/` | live | real external network | its package's workflow — PR (path-gated), merge to main, and the nightly mirror. **No package has a `tests/live/` directory today**, and that is a decision rather than an oversight: the one that existed (`contract/tests/live/`, the skill endpoint's reachability and procedure assertions) was removed because none of those assertions is a property of a commit, so a directory whose name promises "reaches the public internet" would be a lie and a merge gate over it would be required reading whose exit is outside the repository. Anything that genuinely needs the live network is a REPORTER (below), not a `live` suite. |
 | `evals/` | eval | Docker + network + **real inference** | nightly, sweep-only |
+
+**Why an empty `tests/live/` was not left behind.** `bun test <dir>` exits 1
+against an empty or a missing directory on bun 1.3.x — verified on 1.3.14, not
+assumed — so keeping the directory while deleting its last file would leave
+`bun run test:live` as a step that is permanently red, or (if the step went too)
+as a script that no workflow invokes. The second is the exact false green issue
+#484 was filed about: `test:live` sat declared in `contract/package.json` and
+invoked by zero of eleven workflows for the whole life of the guard it named.
+Deleted beats both, and
+`scripts/tests/unit/ci-workflows-structure.test.ts` now asserts the absence, so
+the next person to reach for a network test in a merge gate meets a red rather
+than a precedent.
+
+The one live-network surface in this repository sits outside that table on
+purpose: `.github/workflows/production-drift-audit.yml` (`CI_CLASS: heavy`)
+reaches robotmoney.network and robotmoney-core's release API, but it is not a
+test path, has no pass semantics, and never gates — schedule-only, exempt from
+the merge set (E6), always exit 0. It is a REPORTER, not a `live` suite; reading
+its findings as merge signal would re-create the gate it was split out to remove.
+All three of its served-document checks (B, C, D) MOVED out of
+`<pkg>/tests/live/` rather than being written fresh alongside it, so there is now
+no overlap to reason about and no second opinion: the auditor is the only place CI
+looks at what production is serving. It does not and never did cover deploy
+freshness; that question is answered by nothing in this repository (see above).
 
 `backend/tests/` is the reference implementation of this and needs no change: it
 is subdivided by surface (`api/`, `db/`), provisions its dependency in
@@ -4140,12 +4264,101 @@ the code on `main`, release code, is broken by an input that changed while
 nobody was watching. No required reading, no "which suite was that and what are
 its pass semantics".
 
+**The one named exception: an explicitly exempted auditor.** "Nothing else runs
+on a nightly schedule" holds over the set of *product test suites*. One workflow
+sits outside it by name:
+`.github/workflows/production-drift-audit.yml` (`CI_CLASS: heavy`, `schedule:
+11 2 * * *`, no `push` and no `pull_request`). It observes robotmoney.network and
+robotmoney-core's release API and **reports**; it never gates, never blocks, and
+always exits 0, so a red report body on a green job is the intended outcome. A
+check it could not run is rendered UNKNOWN with its reason rather than omitted
+or passed — the same loud-skip-never invariant, pointed inward, because a
+silently dropped check is the one outcome nobody would ever notice.
+
+So a red nightly there means something **different** from a red merge, and
+saying otherwise is the failure mode E6 exists to prevent. A red merge means
+release code on `main` is broken by a commit. A red drift-audit nightly means
+one of FOUR things that no commit can fix: the `rmpc` release the onboarding
+skill pins has been yanked, replaced or re-uploaded, which breaks every new
+member's install; the endpoint has stopped serving a procedure, or stopped
+answering at all; the served document carries the unverified pipe-into-`tar`
+install form that issue #748 closed in the repo copy; or the endpoint's own
+negative control says a wrong document would slip through the other checks
+unchallenged. It is registered on `EXEMPT_FROM_MERGE_MIRROR` in
+`scripts/tests/unit/nightly-mirrors-merge-set.test.ts` beside
+`contribution-advisory-reviewer.yml` — the repo's own sanctioned mechanism for a
+scheduled workflow that is not a product test suite — with the justification
+carried in the entry rather than left to inference.
+
+**A FOURTH QUESTION WAS HERE AND IS NOW DELETED — NOTHING IN CI REPORTS A STALE
+DEPLOY.** This exemption originally covered a workflow with four checks; the
+fourth was the deploy-freshness byte comparison between the served skill and
+`frontend/public/skills/swarm-onboarding/SKILL.md` in the checkout, implemented
+by `contract/src/skill-parity.js`'s `describeSkillMismatch`. That module and its
+offline unit test have been **deleted**, and the question has been removed from
+this repository entirely rather than moved anywhere: not the auditor, not a
+merge gate, not an offline unit test, and not under a different name. It was
+the repository owner's decision, and this paragraph, the `L1` section in §3,
+and the headers of `scripts/production-drift-audit.ts` and
+`.github/workflows/production-drift-audit.yml` are the record of it.
+
+So an operator reading a red E6 nightly must know what is **not** in the list
+above: a stale deploy will never show up there, or in any other job in this
+repository. If `main` carries a correct skill and production is still serving
+the previous one, nothing here says so. Catching a stale deploy is now the
+**deploy pipeline's job** — it is a fact about whether a publish ran, and this
+repository has no deploy workflow, so the only place it can be observed is the
+deploy tooling or a human watching it. Do not reinstate a byte comparison to
+close this, and do not give the auditor a non-zero exit to compensate: the first
+is the check that was deliberately deleted, the second would re-create required
+reading whose exit is outside the repository.
+
+**What moved off the merge gate is every network assertion the live test held,
+not one.** The procedure assertions, the `| tar` floor and the red control all
+left the deleted live test file together — and the file, its directory, the
+`test:live` script and the `contract` job's live step were then DELETED — for
+one reason, which is not a preference for schedules:
+none of those questions is answerable by a commit here. Whether
+robotmoney.network answers depends on deploys, DNS, TLS, CDN state and renames
+in robotmoney-core, none of which a diff in this repository can repair, so a
+correct merge would red a required check for a reason whose only exit is outside
+the repository. It was measured: while this was being decided, the `contract` job
+was RED on an open pull request with `Received: 502`, caused by nobody in that
+pull request. They are now auditor checks B, C and D respectively.
+
+C moved as its OWN check, and must stay that way: it is a security guard
+asserted over the served body directly, with its own status line, and it reports
+DRIFT whatever else is true about the document — including precisely the case its
+deleted byte comparison would have swallowed, namely the repo copy itself
+regressing. Do not fold C into B. D is a check about the auditor rather than about
+the document, and it must stay its own row for the same reason: a control that is
+folded into the check it controls has stopped being a control, and B — a set of
+positive assertions over a body that is supposed to be good — cannot demonstrate
+that it can fail.
+
+**The consequence, stated so that nobody has to infer it: NOTHING ON A MERGE
+TRIGGER VERIFIES THE SKILL ENDPOINT.** The one assertion that remains
+merge-gated is hermetic and is about the constant rather than the served
+document — that the URL names a skill directory above `SKILL.md`
+(`contract/tests/unit/swarm-onboarding-skill-url.test.ts`, run by the required
+`contract` job) — which is what keeps the slug in B's `name:` discriminator
+meaningful. A `contract` red therefore still means exactly what this section
+says it means: the code on `main` is broken by a commit. A broken skill URL, a
+stubbed skill, a robotmoney.network outage, or a contributor without a working
+connection will NOT produce one. That is the trade this section records, made on
+purpose and paid for knowingly: the endpoint is watched once a night, by a report
+nobody is blocked by, and that is strictly better than a merge set that goes red
+for a fact about the internet. The workflow also carries no
+`github.event_name == 'schedule'` gate anywhere, job or step: a workflow with no
+second trigger has nothing to be asymmetric with.
+
 The relationship is enforced mechanically, not by convention:
 `scripts/tests/unit/nightly-mirrors-merge-set.test.ts` runs in the required
-`unit` job, asserts the equality in **both** directions, names any workflow on
-one side only, and additionally fails on any job or step gated with
-`github.event_name == 'schedule'` — nightly must run the merge set's work, not
-extra work. Cron minutes are staggered so the mirrors do not all start at once.
+`unit` job, asserts the equality in **both** directions modulo that exemption
+list, names any workflow on one side only, and additionally fails on any job or
+step gated with `github.event_name == 'schedule'` — nightly must run the merge
+set's work, not extra work. Cron minutes are staggered so the mirrors do not all
+start at once, and every scheduled workflow declares exactly one cron entry.
 
 The real-inference admission's scheduled home is therefore
 `.github/workflows/e2e.yml` itself, on the `schedule: 37 4 * * *` slot the
