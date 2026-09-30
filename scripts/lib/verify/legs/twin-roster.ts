@@ -132,7 +132,7 @@ export const twinRosterLeg: VerifyLeg = {
       const rows = (body.sessions ?? []).slice(0, LOOKBACK);
       for (const row of rows) {
         const detail = await ctx.json<{ takes?: TakeRow[] }>(
-          routePath(ROUTES.swarm.session, { date: row.date, subject: row.subjectId }),
+          routePath(ROUTES.swarm.sessionById, { id: row.id }),
         );
         const live = liveTakes(detail.takes ?? []);
         if (!live.length) continue; // archival-only: restored history, not this boot's

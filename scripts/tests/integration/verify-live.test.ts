@@ -98,9 +98,20 @@ function serve(sessions: StubSession[], opts: { healthy?: boolean; members?: Stu
           receipt: { judge: { source: "model", mode: "enforce" } },
         });
       }
-      const m = url.pathname.match(/^\/api\/swarm\/sessions\/([^/]+)\/([^/]+)$/);
+      // By id only. The date/subject route answers with the scheduler's empty
+      // open epoch in the real product, so a leg reading it must fail here too.
+      const dated = url.pathname.match(/^\/api\/swarm\/sessions\/([^/]+)\/([^/]+)$/);
+      if (dated) {
+        const open = sessions.find((s) => s.date === dated[1] && s.subjectId === dated[2]);
+        if (!open) return new Response("not found", { status: 404 });
+        return Response.json({
+          session: { id: `open-${open.id}`, date: open.date, subjectId: open.subjectId, state: "collecting", windowClosesAt: null, publishedAt: null, swarmRecommendation: null },
+          takes: [],
+        });
+      }
+      const m = url.pathname.match(/^\/api\/swarm\/sessions\/([^/]+)$/);
       if (m) {
-        const found = sessions.find((s) => s.date === m[1] && s.subjectId === m[2]);
+        const found = sessions.find((s) => s.id === m[1]);
         if (!found) return new Response("not found", { status: 404 });
         const { takes, ...rest } = found;
         // `{ session, takes }` — the real shape. Getting this wrong in the leg

@@ -51,7 +51,7 @@ interface SessionRow {
   swarmRecommendation: { type?: string; weights?: { bucket: string; weight: number }[] } | null;
 }
 /**
- * GET /api/swarm/sessions/:date/:subject returns `{ session, takes }` — the
+ * GET /api/swarm/sessions/:id returns `{ session, takes }` — the
  * session is NOT at the top level. Reading it flat yields `undefined` for every
  * session field, which surfaces as "published but no publishedAt" for EVERY
  * row: a uniform failure across unrelated sessions, which is the signature of a
@@ -148,7 +148,7 @@ export const swarmPipelineLeg: VerifyLeg = {
     for (const row of recent) {
       let detail: SessionDetail;
       try {
-        detail = await ctx.json<SessionDetail>(routePath(ROUTES.swarm.session, { date: row.date, subject: row.subjectId }));
+        detail = await ctx.json<SessionDetail>(routePath(ROUTES.swarm.sessionById, { id: row.id }));
       } catch (e) {
         incomplete.push(`${row.id}: detail did not load — ${e instanceof Error ? e.message : String(e)}`);
         continue;
