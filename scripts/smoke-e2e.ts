@@ -372,6 +372,20 @@ async function turnoverAndRefusals({ paths, project, api, operatorToken, roster 
     `[e2e] rerun with the scheduler stopped exited ${stopped.code}; scheduler afterwards: ${after === null ? "not answering" : after.authenticated && after.streamSynchronized ? "healthy" : "unhealthy"}`,
   );
   check(stopped.code === 0 ? after !== null && after.authenticated : /system-scheduler/.test(stopped.out), "the rerun either recovered the scheduler or refused naming it", stopped.out.slice(-1200));
+  // The stack is handed to later CI steps (--keep), whose session driver waits
+  // for the scheduler to open epochs. A refused rerun leaves the scheduler
+  // stopped, so it is started again here: the container's own restart, not an
+  // early turnover or any write to the lifecycle.
+  if (after === null || !after.authenticated || !after.streamSynchronized) {
+    docker(["start", schedulerId]);
+    let healthy = false;
+    for (let i = 0; i < 60 && !healthy; i++) {
+      const h = await schedulerHealth(project);
+      healthy = h !== null && h.authenticated && h.streamSynchronized;
+      if (!healthy) await Bun.sleep(2000);
+    }
+    check(healthy, "the scheduler is running, authenticated and synchronized again for the steps that follow");
+  }
 }
 
 let fatal: unknown;
