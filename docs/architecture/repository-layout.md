@@ -293,7 +293,7 @@ Per-package test layout, by cost class:
 **Why an empty `tests/live/` was not left behind.** `bun test <dir>` exits 1
 against an empty or a missing directory on bun 1.3.x — verified on 1.3.14, not
 assumed — so keeping the directory while deleting its last file would leave
-`bun run test:live` as a step that is permanently red, or (if the step went too)
+the `test:live` script as a step that is permanently red, or (if the step went too)
 as a script that no workflow invokes. The second is the exact false green issue
 #484 was filed about: `test:live` sat declared in `contract/package.json` and
 invoked by zero of eleven workflows for the whole life of the guard it named.
