@@ -14,7 +14,7 @@
 //
 // Teardown is by the instance's own commands (`smoke:down --instance`, then
 // `smoke:clean --project`), so a test also exercises the path an operator uses.
-import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { instancePaths, readStackState, type InstancePaths } from "../../lib/smoke-state.ts";
@@ -151,7 +151,16 @@ export function bootFailureReport(boot: RunningBoot): string {
   const fromService = (l: string) => /^[a-z0-9-]+-\d+\s+\|/.test(l);
   const causes = lines.filter((l) => /startup failed|FATAL: (?!\s*database)|Refusing|stopped:|readiness|seed|FAIL|refused|Error:/.test(l) && !fromService(l));
   const quiet = lines.filter((l) => !/^postgres-\d+\s+\|/.test(l));
-  return `${causes.join("\n").slice(0, 6000)}\n--- tail (database lines removed) ---\n${quiet.join("\n").slice(-8000)}`;
+  // A local (non-CI) boot sends every child's output, a one-off `producer seed`
+  // included, to smoke.log only, so the console never shows why a step failed.
+  const logPath = /log file:\s+(\S+smoke\.log)/.exec(boot.output().replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ""))?.[1];
+  let logTail = "";
+  try {
+    if (logPath) logTail = readFileSync(logPath, "utf8").split(/\r?\n/).filter((l) => !/^postgres-\d+\s+\|/.test(l)).join("\n").slice(-12000);
+  } catch {
+    logTail = "(smoke.log unreadable)";
+  }
+  return `${causes.join("\n").slice(0, 6000)}\n--- smoke.log tail ---\n${logTail}\n--- tail (database lines removed) ---\n${quiet.join("\n").slice(-8000)}`;
 }
 
 /**
