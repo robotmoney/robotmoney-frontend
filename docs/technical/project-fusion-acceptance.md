@@ -22,7 +22,10 @@ deployment tools.
 4. **Release under administration.** Release through the rehearsal or
    production Safe and `TimelockController`, according to the environment.
    Retain schedule and execution evidence and prove that release does not
-   change router weights.
+   change router weights. For a Safe-backed run, verify the deployed Safe's
+   canonical proxy and singleton, owner set, threshold, modules, guard, and
+   fallback handler. Show that one owner signature and other invalid signer
+   sets cannot execute, while the configured threshold can.
 5. **Derive the proposal.** Build a draft from the released on-chain receipt.
    It must refetch and reverify the receipt, check vault eligibility, use the
    canonical bucket mapping, and produce proposal calldata matching the
@@ -61,9 +64,9 @@ state transitions, and before/after router weights. Frontend evidence ties the
 published receipt back to the frozen session and the verified take set.
 
 A local or staging run proves the behavior only in that environment. A
-one-owner rehearsal Safe is useful for exercising Safe/Timelock wiring; it is
-not evidence of a production multisig. Production claims require evidence from
-the actual production authority topology and custody process.
+staging Safe with throwaway keys proves quorum enforcement, not production key
+custody. Production claims require evidence from the actual production
+authority topology and custody process, including its signer custody process.
 
 ## Related implementation records
 
