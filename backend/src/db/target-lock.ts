@@ -422,6 +422,13 @@ export interface TargetLock extends HeldTargetLock {
 function makeLock(holder: LockHolder, client: postgresTypes.Sql<{}>, backendPid: number): TargetLock {
   const key = TARGET_LOCK_KEY;
   let released = false;
+  // Set when a round trip on this connection failed: the server ended the
+  // backend (an admin termination, a failover, a NAT timeout). postgres.js's
+  // `end({ timeout: N })` on such a client waits the whole N seconds for a
+  // connection that is already gone, once per release, which is what stalled
+  // a run (and a test) after a lost lock. A dead connection is destroyed at
+  // once instead.
+  let connectionLost = false;
   return {
     key,
     holder,
@@ -437,6 +444,7 @@ function makeLock(holder: LockHolder, client: postgresTypes.Sql<{}>, backendPid:
              AND ((classid::bigint << 32) | objid::bigint) = ${key.toString()}::bigint`;
         return Number(rows[0]?.count ?? "0") > 0;
       } catch {
+        connectionLost = true;
         return false;
       }
     },
@@ -448,8 +456,9 @@ function makeLock(holder: LockHolder, client: postgresTypes.Sql<{}>, backendPid:
         await client`SELECT pg_advisory_unlock(${hi}::int4, ${lo}::int4)`;
       } catch {
         // The connection is already gone, which released the lock for us.
+        connectionLost = true;
       }
-      await client.end({ timeout: 5 });
+      await client.end({ timeout: connectionLost ? 0 : 5 });
     },
   };
 }
