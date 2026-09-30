@@ -14,7 +14,7 @@
 //
 // Teardown is by the instance's own commands (`smoke:down --instance`, then
 // `smoke:clean --project`), so a test also exercises the path an operator uses.
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { instancePaths, readStackState, type InstancePaths } from "../../lib/smoke-state.ts";
@@ -147,20 +147,18 @@ export function runCommand(h: BootHarness, script: string, args: readonly string
  * hid the real failure. A CI run that said "exit 1" and nothing else is why.
  */
 export function bootFailureReport(boot: RunningBoot): string {
-  const lines = boot.output().split(/\r?\n/);
+  const raw = boot.output();
+  const plain = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+  const lines = plain.split(/\r?\n/);
   const fromService = (l: string) => /^[a-z0-9-]+-\d+\s+\|/.test(l);
   const causes = lines.filter((l) => /startup failed|FATAL: (?!\s*database)|Refusing|stopped:|readiness|seed|FAIL|refused|Error:/.test(l) && !fromService(l));
-  const quiet = lines.filter((l) => !/^postgres-\d+\s+\|/.test(l));
-  // A local (non-CI) boot sends every child's output, a one-off `producer seed`
-  // included, to smoke.log only, so the console never shows why a step failed.
-  const logPath = /log file:\s+(\S+smoke\.log)/.exec(boot.output().replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ""))?.[1];
-  let logTail = "";
-  try {
-    if (logPath) logTail = readFileSync(logPath, "utf8").split(/\r?\n/).filter((l) => !/^postgres-\d+\s+\|/.test(l)).join("\n").slice(-12000);
-  } catch {
-    logTail = "(smoke.log unreadable)";
-  }
-  return `${causes.join("\n").slice(0, 6000)}\n--- smoke.log tail ---\n${logTail}\n--- tail (database lines removed) ---\n${quiet.join("\n").slice(-8000)}`;
+  // Compose's progress spinner and the database's probe lines bury everything
+  // else; what is left, from the start of the boot's last phase, shows what ran
+  // and what each child printed (a failed one-off's own stderr included).
+  const quiet = lines.filter((l) => !/^postgres-\d+\s+\|/.test(l) && !/^[^A-Za-z]*(Container |\[\+\]|Network |Volume )/.test(l) && l.trim() !== "");
+  const lastPhase = quiet.map((l, i) => (/^phase: /.test(l) ? i : -1)).filter((i) => i >= 0).at(-1) ?? 0;
+  const fromPhase = quiet.slice(Math.max(0, lastPhase - 2));
+  return `${causes.join("\n").slice(0, 4000)}\n--- from the last phase (database lines and spinners removed) ---\n${fromPhase.join("\n").slice(0, 12000)}`;
 }
 
 /**
