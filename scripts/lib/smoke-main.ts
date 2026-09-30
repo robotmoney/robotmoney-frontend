@@ -1553,7 +1553,7 @@ async function main(): Promise<void> {
     log("analytics-producer seed command…");
     try {
       await stack.composeAsync(
-        ["run", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "seed"],
+        ["run", "-T", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "seed"],
         "analytics-producer seed",
         { stdout: outFd, stderr: errFd },
       );

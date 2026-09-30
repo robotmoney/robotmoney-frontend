@@ -1107,7 +1107,7 @@ async function runProducerRegimeContainer(rail: ProducerComposeRail, asof: strin
   // producer reads none of the names a deployment `.env` happens to carry.
   const producer = Bun.spawn(
     ["docker", ...composeArgs(rail.composeProject, [...rail.composeFiles]),
-      "run", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "regime", asof],
+      "run", "-T", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "regime", asof],
     { cwd: rail.repoRoot, env: rail.composeSpawnEnv, stdin: "ignore", stdout: "inherit", stderr: "inherit" },
   );
   const exit = await producer.exited;
