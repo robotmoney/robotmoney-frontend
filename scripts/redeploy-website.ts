@@ -16,8 +16,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
-  checkBuild, diffContainers, diffManifests, guardChangedFiles, manifestOf, parseSitemapRoutes, rsyncArgs, sameManifest,
-  type ContainerState,
+  checkBuild, commitMatches, diffContainers, diffManifests, guardChangedFiles, manifestOf, parseSitemapRoutes, rsyncArgs,
+  sameManifest, type ContainerState,
 } from "./lib/website-redeploy.ts";
 
 const repoRoot = resolve(import.meta.dir, "..");
@@ -173,7 +173,7 @@ async function verifyLive(l: Live, a: Args, expectDir: string, expectCommit: str
   const v = await httpGet(`${base}/version.json`);
   let served: string | undefined;
   try { served = (JSON.parse(v.body) as { commit?: string }).commit; } catch { /* reported below */ }
-  if (v.status !== 200 || served !== expectCommit) problems.push(`${base}/version.json answers ${v.status} commit ${served ?? "(none)"}, expected ${expectCommit}`);
+  if (v.status !== 200 || !commitMatches(served, expectCommit)) problems.push(`${base}/version.json answers ${v.status} commit ${served ?? "(none)"}, expected ${expectCommit}`);
 
   const health = await httpGet(`${base}/health`);
   if (health.status !== 200) problems.push(`${base}/health answers ${health.status}: the api behind the website is not reachable through it`);
@@ -289,7 +289,7 @@ let failure: string[] = [];
 try {
   swapIn(buildDir, l);
   log(`swapped in ${((Date.now() - swapStart) / 1000).toFixed(1)}s`);
-  failure = await verifyLive(l, a, buildDir, headShort, sitemapXml);
+  failure = await verifyLive(l, a, buildDir, head, sitemapXml);
 } catch (e) {
   failure = [String((e as Error).message ?? e)];
 }
@@ -319,7 +319,7 @@ if (a.publicOrigin) {
   const pv = await httpGet(`${a.publicOrigin.replace(/\/+$/, "")}/version.json`);
   let served: string | undefined;
   try { served = (JSON.parse(pv.body) as { commit?: string }).commit; } catch { /* warn below */ }
-  if (served === headShort) ok("public site", `${a.publicOrigin} serves ${headShort}`);
+  if (commitMatches(served, head)) ok("public site", `${a.publicOrigin} serves ${headShort}`);
   else warn("public site", `${a.publicOrigin} still serves ${served ?? `HTTP ${pv.status}`}: the edge caches static files for hours; purge Cloudflare (runbook) before calling this live`);
   receipt.publicServes = served ?? null;
 }

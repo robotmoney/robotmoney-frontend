@@ -110,6 +110,17 @@ export function checkBuild(input: BuildCheckInput): string[] {
   return problems;
 }
 
+/**
+ * Whether the commit a site reports is the commit we expect. `version.json` carries git's ABBREVIATED hash, and git
+ * abbreviates to 7 or 8 or more characters depending on the repository (a shallow clone of the release printed 7
+ * where the workstation printed 8, and an exact-length comparison rejected a correct deploy). Either may be the full
+ * hash, so one being a prefix of the other is a match; anything shorter than 7 characters is not evidence of anything.
+ */
+export function commitMatches(served: string | undefined | null, expected: string | undefined | null): boolean {
+  if (!served || !expected || served.length < 7 || expected.length < 7) return false;
+  return expected.startsWith(served) || served.startsWith(expected);
+}
+
 /** Every regular file under `dir`, as sorted relative paths. rsync's holding directories are not part of the site. */
 export function walk(dir: string): string[] {
   const out: string[] = [];

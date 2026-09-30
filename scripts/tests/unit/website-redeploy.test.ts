@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  checkBuild, diffContainers, diffManifests, guardChangedFiles, manifestOf, parseSitemapRoutes, routeFile, rsyncArgs,
+  checkBuild, commitMatches, diffContainers, diffManifests, guardChangedFiles, manifestOf, parseSitemapRoutes, routeFile, rsyncArgs,
   sameManifest, stylesheetStampProblems, walk,
 } from "../../lib/website-redeploy.ts";
 
@@ -152,6 +152,22 @@ describe("diffContainers: the proof that only the website moved", () => {
     expect(p.join("\n")).toContain("p-api-1 was recreated");
     expect(p.join("\n")).toContain("p-worker-1 was running and is gone");
     expect(p.join("\n")).toContain("p-extra-1 is new");
+  });
+});
+
+describe("commitMatches", () => {
+  const full = "2350293a1b2c3d4e5f60718293a4b5c6d7e8f901";
+  test("git abbreviates to 7 or 8 or more characters: any prefix of the full hash, either way round, matches", () => {
+    expect(commitMatches("2350293", full)).toBe(true);
+    expect(commitMatches("2350293a", full)).toBe(true);
+    expect(commitMatches(full, "2350293a")).toBe(true);
+    expect(commitMatches("2350293", "2350293a")).toBe(true);
+  });
+  test("a different commit, a missing one and an abbreviation too short to mean anything do not match", () => {
+    expect(commitMatches("2350294", full)).toBe(false);
+    expect(commitMatches(undefined, full)).toBe(false);
+    expect(commitMatches("", full)).toBe(false);
+    expect(commitMatches("23502", full)).toBe(false);
   });
 });
 
