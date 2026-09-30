@@ -171,17 +171,3 @@
   background: var(--color-surface);
 }
 
-/* dexscreener link adds: flex items-center gap-3 */
-.contract__action--arrow {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem; /* gap-3 */
-}
-
-/* span: transition-transform duration-300 group-hover:translate-x-1 */
-.contract__action-arrow {
-  transition: transform 0.3s;
-}
-.contract__action--arrow:hover .contract__action-arrow {
-  transform: translateX(0.25rem); /* translate-x-1 */
-}
