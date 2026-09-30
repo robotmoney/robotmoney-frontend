@@ -38,6 +38,7 @@ Where the two rules collide, §3 names the winner and the reason.
 | R11 | The API pool has `statement_timeout` and `idle_in_transaction_session_timeout` (`e0d40661`). |
 | R12 | A read-only database session (SQLSTATE 25006) reads as "unavailable", not "disarmed". The analytics-ledger-guard step runs in prod-bootstrap. The producer never receives `MIGRATE_DATABASE_URL`. `WORKER_DATABASE_URL` is forwarded only on `--db external` boots. |
 | R13 | The upgrade tooling that shipped each release is authoritative and complete: `backend/scripts/upgrades/0.4.0-to-0.5.0/*` (release's copies, which shipped v0.5.0), `0.5.0-to-0.5.1/*` and `0.5.1-to-0.5.2/*`, their tests, and `docs/runbooks/v0-5-{0,1,2}-rollout.md`. |
+| R15 | v0.5.3 (re-synced 2026-09-30, `cb82726f`): every JS import in the assembled site is stamped `?v=<commit>` (`scripts/stamp-assets.ts`, run by `static-assembly.sh` before prerender and before main's static manifest), and `bun run site:redeploy` redeploys only the website of a running stack. |
 | R14 | Release gate tooling keeps working: `verify:live` (loads each session by id; tier `readonly` on demo boots, `full` on twin boots), `twin:gate`, `prod:gate` with the default-deny log classification (`scripts/lib/gate/`), `smoke:twin`/`smoke:twin:once`, twin judge enablement (`enableTwinJudge`), the twin's adopted-window handling, and `stageCadenceApplies`. |
 
 ## 2. Kept from main
@@ -79,6 +80,7 @@ Where the two rules collide, §3 names the winner and the reason.
 | X15 | `frontend/test/unit.list`, `package.json` | Union of both sides. No script names collide. |
 | X16 | `docs/decisions.md`, `docs/architecture.md` | D56 is release's (R3). Every other decision from both sides is kept, and no D-number is duplicated. |
 | X17 | `0.4.0-to-0.5.0` upgrade scripts and `v0-5-0-rollout.md` (add/add) | Release's copies (R13). The runbook's header records that v0.5.0 shipped (`ec261867`). |
+| X21 | Found in the v0.5.3 re-sync: after a `site:redeploy` the site is assembled from a newer commit than the api image, so main's `/version` reports `static.matches_image: false` | Expected, and nothing gates on it (only `/version` reports it). Named here so an operator reading `/version` after a website-only release does not mistake it for a forgotten `static:assemble`. |
 | X18 | Production does not yet run `agent-launcher`, and has no `COINGECKO_API_KEY` | Not a code conflict. Recorded as prerequisites for the next release cut from `main` (§6). |
 | X19 | Found while resolving: main's `0062_rm_worker_analytics_ledger_read_grant` grants on `source_payloads`, which release's 0080 drops. On production that migration runs after 0080 and would fail. | **Deviation from M13, deliberate.** The file grants per table, only where the table exists. No database has recorded main's copy except environments built from main, and a recorded migration never re-runs. Evidence: `migration-history-merge.test.ts`. |
 | X20 | Found while resolving: with the judge out of process, a refusal logs `DEGRADED … judge_unavailable:<reason>` instead of throwing `JudgeUnavailable` in-process | `twin-gate` also treats `judge_unavailable:` as fatal (`twin-gate.test.ts`). |
@@ -179,7 +181,21 @@ network), the live twin rehearsal, and the Playwright prod/stage legs.
 | X3 | `0081_swarm_judge_model_bare_id.sql`; `judge-container-transport.test.ts` and `swarm-judge.test.ts` (`wireModelId` on the launcher body); `judge-model-policy-matches-registry.test.ts` |
 | X12 | `smoke-onboarding-external-db.test.ts` |
 | X16 | `docs-commands-exist.test.ts`, `judge-refusal-reasons-documented.test.ts`, `lint-docs.sh`; no D-number appears twice |
+| R15 | `stamp-assets.test.ts`, `website-redeploy.test.ts`; `stamp-assets.ts _static --verify` on the merged assembly (233 imports, main-only modules included); browser `stamped-assets.spec.ts` passes |
 | X20 | `twin-gate.test.ts` "a swarm.judge refusal logged by the worker is fatal" |
+
+**Re-sync with v0.5.3 (2026-09-30).** `releases-0.5.x` gained 12 commits
+(`cb82726f`); `main` had not moved (`3bbeb497`). Release's ports of #1042 and
+#1052 matched main's content exactly, so the merged `frontend/` is main's plus
+`stamped-assets.spec.ts`. The four conflicts resolved as follows: the changelog
+keeps main's pending entries for features this tree ships (20 seats, receipt
+bytes, build identity, the absent-list wrap), which gives 37 entries; the
+`views.css` stamp keeps `42ca53c4`, because the merged file is byte-identical to
+it; and `unit.list` is the union. After the re-sync: typecheck is clean,
+`test:unit` 2731 pass and 2 fail (`verifyTagSigner`, environmental), frontend
+unit 1015 pass. Of the browser specs, `the hero is full-bleed` fails at 415 px
+on both parents too; the rest of the failures are the proxy's certificate
+errors.
 
 Completeness: every file added or changed at `2605199..origin/main` and at
 `2605199..releases-0.5.x` is present in the merged tree, except the ones §4

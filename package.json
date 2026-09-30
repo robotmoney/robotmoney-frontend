@@ -20,6 +20,7 @@
     "preview": "bun scripts/preview-server.ts",
     "prerender": "bun scripts/prerender.ts",
     "static:assemble": "bash scripts/static-assembly.sh",
+    "site:redeploy": "bun scripts/redeploy-website.ts",
     "goldens:update": "bun scripts/update-goldens.ts",
     "smoke": "bun scripts/smoke.ts",
     "e2e:local": "bash scripts/e2e-local.sh",
