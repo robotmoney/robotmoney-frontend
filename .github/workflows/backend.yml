@@ -155,18 +155,18 @@ jobs:
         # bunfig.toml's `[test] timeout = 30000` and defaults to 5000ms per
         # test, which heavy DB suites exceed under parallel CI load.
         # Output is kept (pipefail is on in Actions' bash) for the next step.
-        # Under Actions bun prefixes each file header with ##[group], which the guards below accept.
+        # Under Actions bun prefixes each file header with ##[group], (written `::group::` in the file bun emits, rendered `##[group]` in the Actions log), which the guards below accept.
         shell: bash
         run: bun test --timeout=30000 --path-ignore-patterns='tests/geckoterminal-resilience.test.ts' --path-ignore-patterns='tests/token-prices-resilience.test.ts' 2>&1 | tee "$RUNNER_TEMP/backend-bun-test.log"
       - name: Schema proofs ran (spec §8.4)
         shell: bash
         run: |
           for f in tests/schema-equivalence.test.ts tests/upgrade-from-release.test.ts; do
-            grep -qE "^(##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/backend-bun-test.log" \
+            grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/backend-bun-test.log" \
               || { echo "::error::$f did not run in the backend suite: a spec §8.4 schema proof is excluded"; exit 1; }
           done
       - name: Registry execution proof ran (spec §7.1)
         shell: bash
         run: |
-          grep -qE '^(##\[group\])?tests/db-registry-execution\.test\.ts:$' "$RUNNER_TEMP/backend-bun-test.log" \
+          grep -qE '^(::group::|##\[group\])?tests/db-registry-execution\.test\.ts:$' "$RUNNER_TEMP/backend-bun-test.log" \
             || { echo "::error::tests/db-registry-execution.test.ts did not run in the backend suite: the spec §7.1 execution proof is excluded"; exit 1; }
