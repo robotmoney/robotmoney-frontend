@@ -34,6 +34,12 @@ cp -R frontend/public/. "$OUT"/
 # version it is, independently of the api's own version.
 bun scripts/web-client/version.ts > "$OUT/version.json"
 
+# Cache busting for the application JavaScript (docs/technical/static-asset-cache.md, C3): every module import, and the
+# module entry point in index.html, gets one `?v=<stamp>` derived from the scripts' own content. It runs BEFORE the
+# prerender because the per-route pages are cut from this index.html, and it fails the assembly if any import cannot be
+# stamped: a graph stamped except for one module would load that module twice.
+bun scripts/stamp-assets.ts "$OUT"
+
 PRERENDER_DIR="$OUT" bun scripts/prerender.ts
 
 # T26: the served SPA's own identity. `_static` is a bind mount of a build
