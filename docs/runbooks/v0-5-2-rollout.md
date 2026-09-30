@@ -182,7 +182,8 @@ The driver runs one session at a time with 6 h windows, so four subjects need ab
 | R8.i | Every session published since T0 has takes, a judgement and a receipt | all | The session pipeline is intact |
 | R8.j | The four sessions that were stuck at the cutover (listed at R6.2a) | all `published` by T0 + 24 h | They are adopted and finished (R8.4 of v0.5.1) |
 | R8.k | The 11 ledger triggers are `ENABLE ALWAYS` | 11 of 11 | The repair re-armed every guard |
-| R8.l | The newest vintage resolves to exactly its recorded `member_count` | equal | Vintage membership is intact after the re-point |
+| R8.l | The newest vintage: its runs add up to its `member_count` (every pulse); at gates also the full join that resolves every id to a version under the right key (1 min 44 s on production) | equal | Vintage membership is intact after the re-point |
+| R8.z | Any check query that errored | 0 | An error can read as an empty value, and an empty value can equal another one; it must never read as a pass |
 | R8.m | Connections idle in a transaction for over 60 s | 0 | No pool starvation, the issue 1035 mechanism |
 | R8.n | Host disk free | ≥ 5 GB (warn < 5, fail < 3) | The host had 9.5 GB free at the cutover |
 | R8.o | Error-like log lines per container since T0 | informational | The raw count behind the gate's classification |

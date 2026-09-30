@@ -25,6 +25,7 @@ for ev in $(echo $events | tr ' ' '\n' | sort -n); do
   else
     echo "== R8 pulse $(date -u +%FT%TZ)" >> /root/r8-soak-v052.log
   fi
-  bash /root/r8-checks-v052.sh $T0 2>&1 | cut -c1-320 >> /root/r8-soak-v052.log
+  full=0; [ "$kind" = gate ] && full=1
+  R8_FULL=$full bash /root/r8-checks-v052.sh $T0 2>&1 | cut -c1-320 >> /root/r8-soak-v052.log
 done
 echo "== R8 done $(date -u +%FT%TZ)" >> /root/r8-soak-v052.log

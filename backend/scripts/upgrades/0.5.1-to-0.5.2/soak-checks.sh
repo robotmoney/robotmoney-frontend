@@ -9,7 +9,10 @@ export PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=60000
 BASE_MB=963          # database size right after the cutover (2026-09-29 23:08Z)
 ANALYSTS_BASELINE=7
 FAILS=0; WARNS=0
-q() { psql "$M" -X -At -F '|' "$@" 2>&1; }
+QERRFILE=$(mktemp); trap 'rm -f "$QERRFILE"' EXIT
+# A query that errors must never read as a pass: an empty or ERROR value can compare equal to another one.
+q() { local out; out=$(psql "$M" -X -At -F '|' "$@" 2>&1); case "$out" in *ERROR:*) echo x >> "$QERRFILE";; esac; printf '%s\n' "$out"; }
+FULL=${R8_FULL:-0}   # 1 at gates: also run the slow full membership join (about 2 min on production)
 ck() { # level name detail
   case "$1" in FAIL) FAILS=$((FAILS+1));; WARN) WARNS=$((WARNS+1));; esac
   printf '  [%s] %s: %s\n' "$1" "$2" "$3"
@@ -36,7 +39,7 @@ cadence() { tool=$1; minute=$2; artifact=$3; label=$4
   elif [ "$ok" = "$total" ]; then ck PASS "$label" "$ok of $total scheduled runs produced their output"
   else ck FAIL "$label" "$ok of $total scheduled runs produced output; missing slots (UTC):$missing"; fi; }
 # A SUCCEEDED terminal package holds regime_snapshots AND research_signals whichever tool ran it; a failed one holds
-# warnings, logs and exceptions only (under v0.5.1 all 42 runs from 09-28 18:30 to 09-29 20:31 were the failed kind).
+# warnings, logs and exceptions only (under v0.5.1 every scheduled run from 09-28 18:30 to 09-29 20:31 was the failed kind).
 cadence regime 30 regime_snapshots "R8.a regime runs on the 3 h cron (:30)"
 cadence research 0 regime_snapshots "R8.b research runs on the 3 h cron (:00)"
 f=$(docker logs --since "$T0" rm_prod-analytics-producer-1 2>&1 | grep -a -c -E 'regime failed|research failed|analytics-producer\] fatal:|catch-up for .* failed')
@@ -88,10 +91,18 @@ r=$(q -c "SELECT count(*) || '|' || count(*) FILTER (WHERE tgenabled = 'A') FROM
 IFS='|' read -r tn ta <<< "$r"
 [ "$tn" = 11 ] && [ "$ta" = 11 ] && ck PASS "R8.k ledger guards" "11 of 11 triggers ENABLE ALWAYS" || ck FAIL "R8.k ledger guards" "$ta of $tn (expected 11 of 11) triggers armed"
 
-# R8.l  the newest vintage still resolves to its recorded member count
-r=$(q -c "WITH v AS (SELECT id, member_count FROM analytics_data_vintages ORDER BY id DESC LIMIT 1) SELECT v.id || '|' || v.member_count || '|' || (SELECT count(*) FROM analytics_vintage_members vm CROSS JOIN LATERAL generate_series(vm.source_value_version_id, COALESCE(vm.last_source_value_version_id, vm.source_value_version_id)) g(id) JOIN source_value_versions s ON s.id = g.id AND s.source_key = vm.source_key WHERE vm.vintage_id = v.id) FROM v")
-IFS='|' read -r vid vmc vres <<< "$r"
-[ "$vmc" = "$vres" ] && ck PASS "R8.l newest vintage integrity" "vintage $vid resolves to $vres members = member_count" || ck FAIL "R8.l newest vintage integrity" "vintage $vid: member_count $vmc, resolves to $vres"
+# R8.l  the newest vintage: always the cheap arithmetic (the run lengths add up to member_count); at gates also the full
+# join that resolves every member id to a version under the right key (1 min 44 s on production, so not at every pulse)
+r=$(q -c "WITH v AS (SELECT id, member_count FROM analytics_data_vintages ORDER BY id DESC LIMIT 1) SELECT v.id || '|' || v.member_count || '|' || (SELECT coalesce(sum(coalesce(vm.last_source_value_version_id - vm.source_value_version_id + 1, 1)), 0) FROM analytics_vintage_members vm WHERE vm.vintage_id = v.id) FROM v")
+IFS='|' read -r vid vmc vsum <<< "$r"
+if ! [[ "$vid$vmc$vsum" =~ ^[0-9]+$ ]]; then ck FAIL "R8.l newest vintage integrity" "could not be read: ${r:0:100}"
+elif [ "$vmc" != "$vsum" ]; then ck FAIL "R8.l newest vintage integrity" "vintage $vid: member_count $vmc but its runs cover $vsum ids"
+elif [ "$FULL" = 1 ]; then
+  rj=$(PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=400000' q -c "SELECT count(*) FROM analytics_vintage_members vm CROSS JOIN LATERAL generate_series(vm.source_value_version_id, COALESCE(vm.last_source_value_version_id, vm.source_value_version_id)) g(id) JOIN source_value_versions s ON s.id = g.id AND s.source_key = vm.source_key WHERE vm.vintage_id = $vid")
+  if ! [[ "$rj" =~ ^[0-9]+$ ]]; then ck FAIL "R8.l newest vintage integrity" "full join could not be read: ${rj:0:100}"
+  elif [ "$rj" = "$vmc" ]; then ck PASS "R8.l newest vintage integrity" "vintage $vid: runs add up to $vsum and all $rj ids resolve under their key = member_count"
+  else ck FAIL "R8.l newest vintage integrity" "vintage $vid: member_count $vmc, only $rj ids resolve under their key"; fi
+else ck PASS "R8.l newest vintage integrity" "vintage $vid: runs add up to $vsum = member_count (full join runs at gates)"; fi
 
 # R8.m  no connection-pool starvation (the issue 1035 mechanism): sessions idle in a transaction for over a minute
 r=$(q -c "SELECT count(*) FILTER (WHERE state = 'idle in transaction' AND now() - state_change > interval '60 seconds') || '|' || count(*) FROM pg_stat_activity WHERE datname = current_database()")
@@ -107,5 +118,7 @@ for c in $(docker ps --format '{{.Names}}' | grep '^rm_prod-'); do
   e=$(docker logs --since "$T0" "$c" 2>&1 | grep -a -v RM_TELEMETRY | grep -a -c -iE 'error|fatal|refus|denied|timed out|exception|panic')
   printf '  [INFO] R8.o %s: %s error-like lines since T0\n' "${c#rm_prod-}" "$e"
 done
+nq=$(wc -l < "$QERRFILE")
+[ "$nq" = 0 ] || ck FAIL "R8.z queries that errored" "$nq (any PASS above that shows an empty or ERROR value is not a pass)"
 echo "== R8 checks result: $FAILS FAIL, $WARNS WARN"
 [ "$FAILS" = 0 ]
