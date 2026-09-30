@@ -37,7 +37,10 @@ interface ConfigLike {
 }
 
 /** A model credential by name: the shapes a vendor key is delivered under. */
-const MODEL_KEY = /(^|_)(API_KEY|MODEL_KEY|INFERENCE_KEY)$|^OPENCODE_API_KEY$|^ANTHROPIC_|^OPENAI_/;
+const MODEL_KEY_SHAPE = /(^|_)(API_KEY|MODEL_KEY|INFERENCE_KEY)$|^OPENCODE_API_KEY$|^ANTHROPIC_|^OPENAI_/;
+/** Data-vendor keys the pipeline worker legitimately holds. They pay for market data, never for inference. */
+const DATA_VENDOR_KEYS: ReadonlySet<string> = new Set(["COINGECKO_API_KEY"]);
+const MODEL_KEY = { test: (name: string): boolean => MODEL_KEY_SHAPE.test(name) && !DATA_VENDOR_KEYS.has(name) };
 const isParticipant = (svc: ServiceLike | undefined): boolean => svc?.labels?.["robotmoney.participant"] === "1";
 
 function environmentOf(svc: ServiceLike | undefined): Record<string, string | null> {
@@ -166,6 +169,8 @@ describe("no rendered service other than a participant carries a model key (crit
     const timeouts = Object.entries(cfg.services ?? {}).filter(([, svc]) => "OPENCODE_TIMEOUT_MS" in environmentOf(svc));
     expect(timeouts.length).toBeGreaterThan(0); // present, and…
     expect(MODEL_KEY.test("OPENCODE_TIMEOUT_MS")).toBe(false); // …not flagged
+    expect(MODEL_KEY.test("COINGECKO_API_KEY")).toBe(false); // a data-vendor key is not an inference key
+    expect(MODEL_KEY.test("OPENCODE_API_KEY")).toBe(true); // red control: a real model key still flags
   });
 
   test("red control: a model key planted on api through a real render is caught and named; a participant's is not", () => {
