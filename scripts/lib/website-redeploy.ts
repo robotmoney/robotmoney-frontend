@@ -186,11 +186,17 @@ export function guardChangedFiles(files: string[]): { blockers: string[]; warnin
  * file under a holding name and renames them all into place at the end; `--delete-after` drops pages that left the
  * sitemap only once the new ones are in. Nothing here replaces the directory itself: the container's bind mount
  * follows the directory's inode.
+ *
+ * MODES. A deploy sets directories to 755 and files to 644, whoever built them: nginx in the container is another
+ * user and needs to enter every directory. (`D755,F644` and not `Du=rwx,go=rx,Fu=rw,go=r`: in rsync each clause
+ * applies to files AND directories unless it is prefixed, so the trailing `go=r` stripped the execute bit from every
+ * directory and the site answered 500. scripts/tests/site-redeploy-integration.sh found that.) A ROLLBACK passes
+ * `keepModes`: it must put back exactly what the backup holds, not what this tool believes modes should be.
  */
-export function rsyncArgs(src: string, dst: string): string[] {
+export function rsyncArgs(src: string, dst: string, opts: { keepModes?: boolean } = {}): string[] {
   return [
     "rsync", "-a", "--checksum", "--delay-updates", "--delete-after",
-    "--chmod=Du=rwx,go=rx,Fu=rw,go=r",
+    ...(opts.keepModes ? [] : ["--chmod=D755,F644"]),
     `${src.replace(/\/+$/, "")}/`, `${dst.replace(/\/+$/, "")}/`,
   ];
 }

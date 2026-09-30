@@ -174,4 +174,13 @@ describe("rsyncArgs", () => {
     expect(a.slice(-2)).toEqual(["/build/", "/live/_static/"]);
     expect(a).not.toContain("--delete");
   });
+  test("modes are 755 for directories and 644 for files, in the one unambiguous form", () => {
+    // Regression: `--chmod=Du=rwx,go=rx,Fu=rw,go=r` ended every directory at 744 (the last clause applies to
+    // directories too) and nginx in the container could not enter any of them: the whole site answered 500.
+    const chmod = rsyncArgs("/b", "/l").filter((x) => x.startsWith("--chmod"));
+    expect(chmod).toEqual(["--chmod=D755,F644"]);
+  });
+  test("a rollback keeps the backup's own modes instead of normalising them", () => {
+    expect(rsyncArgs("/b", "/l", { keepModes: true }).some((x) => x.startsWith("--chmod"))).toBe(false);
+  });
 });

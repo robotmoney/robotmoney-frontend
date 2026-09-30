@@ -150,8 +150,8 @@ function inspectLive(live: string): Live {
 }
 
 // ── swap and verification ────────────────────────────────────────────────────
-function swapIn(srcDir: string, l: Live) {
-  const args = rsyncArgs(srcDir, l.staticDir);
+function swapIn(srcDir: string, l: Live, opts: { keepModes?: boolean } = {}) {
+  const args = rsyncArgs(srcDir, l.staticDir, opts);
   const r = sh(args);
   if (r.code !== 0) throw new Error(`rsync failed (${r.code}): ${r.err.trim().slice(0, 300)}`);
 }
@@ -208,7 +208,7 @@ if (a.rollback) {
   const restoreCommit = liveCommit(tmp);
   if (!restoreCommit) refuse(`${tar} holds no version.json: it is not a backup of this site`);
   log(`rolling back to commit ${restoreCommit} from ${tar}`);
-  swapIn(tmp, l);
+  swapIn(tmp, l, { keepModes: true });
   const sitemap = existsSync(join(tmp, "sitemap.xml")) ? readFileSync(join(tmp, "sitemap.xml"), "utf8") : "";
   const problems = await verifyLive(l, a, tmp, restoreCommit!, sitemap);
   rmSync(tmp, { recursive: true, force: true });
@@ -300,7 +300,7 @@ if (failure.length > 0) {
     log("putting the old site back…");
     const tmp = mkdtempSync(join(tmpdir(), "site-restore-"));
     sh(["tar", "-xzf", tar, "-C", tmp]);
-    swapIn(tmp, l);
+    swapIn(tmp, l, { keepModes: true });
     const after = await verifyLive(l, a, tmp, from ?? "", sitemapXml);
     rmSync(tmp, { recursive: true, force: true });
     if (after.length > 0) for (const p of after) log(`FAIL after rollback: ${p}`);
