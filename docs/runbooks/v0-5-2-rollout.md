@@ -162,11 +162,32 @@ As v0.5.1 R7, with the gate run as:
 
 ## R8. Soak (T0 → T0 + 24 h)
 
-The driver runs one session at a time with 6 h windows, so four subjects need about 24 h. Gate every 6 h with `--defer-sessions`; at T0 + 24 h run it **without** it:
+The driver runs one session at a time with 6 h windows, so four subjects need about 24 h. The soak runs **unattended**, from `backend/scripts/upgrades/0.5.1-to-0.5.2/soak.sh` (copy it to `/root/r8-soak-v052.sh`, run it in tmux session `soak`; the log is `/root/r8-soak-v052.log`). It has two kinds of event:
 
-`… prod:gate -- --mode post-release --release v0.5.2 --since "$T0" --liveness-hours 12 …`
+- **Gates** at T0 + 6, 12, 18 and 24 h: `prod:gate --mode post-release --release v0.5.2 --since "$T0"`, with `--defer-sessions` except at 24 h, where it runs with `--liveness-hours 12` and grades the sessions. Each gate is followed by the release-claim checks below.
+- **Pulses** 20 minutes after every 3-hourly regime slot (00:50, 03:50, … UTC): the release-claim checks only. A failed regime or research run is seen within the hour, not at the next gate.
 
-Pass: every subject published a judged session with a receipt in the window; no gap over 12 h; no dead job whose cause is a regression of v0.5.2 or earlier (the parity sweep included); no issue 1035 symptom (a rule with `fixedIn: "0.5.2"`) in any log; R7.5/R7.6/R7.7's checks re-run and still hold, with R2.15's job-duration query re-run once and compared against the R2.15 baseline (regime and parity-sweep runs should be back near their pre-2026-09-25 durations, not just "not dead").
+`prod:gate` covers containers, database writes, the judge, dead jobs, log classification and the issue 1035 known-issue rules, and (24 h) the sessions and liveness. It does **not** prove what v0.5.2 claims to fix. The **release-claim checks** (`soak-checks.sh`, read-only, installed as `/root/r8-checks-v052.sh`) do:
+
+| ID | Check | Pass | Why (the claim it proves) |
+|---|---|---|---|
+| R8.a | Every scheduled **regime** slot (`30 */3 * * *` UTC) that has elapsed by 20 minutes has an `analytics_ledger_runs` row (`tool_id = 'regime'`) created in the next 20 minutes **whose package holds `regime_snapshots`** (a failed package holds only `warnings, logs, exceptions`) | every slot has one | Regime saves no longer time out. Under v0.5.1 all 46 runs in the 30 h before the cutover were the failed kind |
+| R8.b | Same for the **research** slots (`0 */3 * * *`) | every slot has one | Same |
+| R8.c | No `regime failed`, `research failed`, `fatal:` or `catch-up … failed` line in the producer log since T0 | 0 | The pool is no longer saturated by producer writes |
+| R8.d | Database size against the cutover size (963 MB) | growth ≤ 100 MB per 6 h | Ledger growth stops (v0.5.1: about 470 MB per 6 h) |
+| R8.e | Ledger versions written since T0 | 0 `unchanged`; 0 revisions within the key's own tolerance | Only real changes are recorded (label-only and noise-only changes write nothing) |
+| R8.f | `analytics.parity_sweep` jobs since T0 | none dead; max ≤ 300 s; p50 ≤ 126 s (v0.5.1 baseline) | Sweeps are fast again |
+| R8.g | Website 5xx responses since T0 | 0 (warn ≤ 10) | No 502 bursts (v0.5.1: 288 per 24 h) |
+| R8.h | `quorum_active` of every session published since T0 | equals the active analyst count | The judge is not counted as an analyst (v0.5.1: one too many) |
+| R8.i | Every session published since T0 has takes, a judgement and a receipt | all | The session pipeline is intact |
+| R8.j | The four sessions that were stuck at the cutover (listed at R6.2a) | all `published` by T0 + 24 h | They are adopted and finished (R8.4 of v0.5.1) |
+| R8.k | The 11 ledger triggers are `ENABLE ALWAYS` | 11 of 11 | The repair re-armed every guard |
+| R8.l | The newest vintage resolves to exactly its recorded `member_count` | equal | Vintage membership is intact after the re-point |
+| R8.m | Connections idle in a transaction for over 60 s | 0 | No pool starvation, the issue 1035 mechanism |
+| R8.n | Host disk free | ≥ 5 GB (warn < 5, fail < 3) | The host had 9.5 GB free at the cutover |
+| R8.o | Error-like log lines per container since T0 | informational | The raw count behind the gate's classification |
+
+Pass: every gate exits 0, every release-claim check is `PASS` (or `INFO` where nothing has happened yet) at the 24 h run, and R8.j shows all four stuck sessions published. Also at 24 h, compare R2.15's job-duration query with its baseline once, and record R8's log in the rollout report. A `FAIL` at any pulse is looked at within the hour; the response is R9 only when it shows data loss or a stopped site, and otherwise a follow-up release.
 
 ## R9. Rollback — needs a database restore
 
