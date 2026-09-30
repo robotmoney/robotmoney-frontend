@@ -100,15 +100,15 @@ Where the two rules collide, §3 names the winner and the reason.
 
 ## 5. Definition of done (evidence)
 
-- [ ] No conflict markers anywhere (`git grep -nE '^(<<<<<<<|>>>>>>>)( |$)'` is empty).
-- [ ] `bun run typecheck` and `cd backend && bunx tsc --noEmit` are clean.
-- [ ] `bun run test:unit`: no failures beyond those present on both parents (baseline recorded in §7).
-- [ ] `cd backend && bun test`: same.
-- [ ] `bun run check-contract`, `bun run check:agent-surface` and `bash scripts/lint-docs.sh` pass.
-- [ ] Contract unit tests pass (`cd contract && bun test tests/unit`).
-- [ ] X2's migration-history test passes.
-- [ ] Every ID in §1–§3 is backed by a named test or a grep, recorded in §7.
-- [ ] Every main-only and release-only file at the merge base..tip is present, except the files §4 lists.
+- [x] No conflict markers anywhere (`git grep -nE '^(<<<<<<<|>>>>>>>)( |$)'` is empty).
+- [x] `bun run typecheck` and `cd backend && bunx tsc --noEmit` are clean.
+- [x] `bun run test:unit`: no failures beyond those present on both parents (baseline recorded in §7).
+- [x] `cd backend && bun test`: same.
+- [x] `bun run check-contract`, `bun run check:agent-surface` and `bash scripts/lint-docs.sh` pass.
+- [x] Contract unit tests pass (`cd contract && bun test tests/unit`).
+- [x] X2's migration-history test passes.
+- [x] Every ID in §1–§3 is backed by a named test or a grep, recorded in §7.
+- [x] Every main-only and release-only file at the merge base..tip is present, except the files §4 lists.
 
 ## 6. Next-release prerequisites (not part of this merge)
 
@@ -120,4 +120,67 @@ Where the two rules collide, §3 names the winner and the reason.
 
 ## 7. Evidence
 
-_Filled in as the merge is resolved._
+Run on the merge commit `9f3277cd` and its follow-up, 2026-09-30, with CI's
+bun 1.3.5. The parents' baselines were run the same way on `origin/main`
+(`3bbeb497`) and `releases-0.5.x` (`3bddd2f1`).
+
+| Check | Merged | `main` | `releases-0.5.x` |
+|---|---|---|---|
+| Conflict markers | none | — | — |
+| `bun run typecheck`, backend `tsc --noEmit` | clean | clean | clean |
+| `bun run test:unit` | 2683 pass, 2 fail | 2475 pass, 1 fail\* | 2238 pass, 1 fail\* |
+| backend `bun test` (CI's ignore list) | 2367 pass, 1 fail | 2303 pass, 1 fail | 2196 pass, 1 fail |
+| contract `tests/unit` | 107 pass | — | — |
+| `check-contract`, `check:agent-surface`, `lint-docs.sh` | pass | — | — |
+| `frontend` unit (`bun run --cwd frontend test`) | 991 pass | — | — |
+| `frontend check` (Playwright, fixtures) | 12 pass, 38 fail | 12 pass, 38 fail (same tests) | — |
+
+Every failure is environmental and happens on the parents too:
+- `verifyTagSigner` ×2 and the rc tag's signer ×1: this container's global
+  git config routes SSH signing through its own program.
+- The 38 Playwright failures are `ERR_CERT_AUTHORITY_INVALID` on external
+  resources behind this container's TLS proxy.
+
+On a CI runner all of them should pass. \*The parents' unit baselines were
+taken before `ssh-keygen` was installed, so the signing file failed as one
+unnamed setup failure. Re-run afterwards, both parents fail the same two
+`verifyTagSigner` tests as the merge.
+
+**Not run here:** `scripts/tests/integration/*` (Docker image builds and the
+network), the live twin rehearsal, and the Playwright prod/stage legs.
+
+| ID | Evidence |
+|---|---|
+| R1, X1 | `0080` equals `releases-0.5.x`'s copy byte for byte (`git diff releases-0.5.x -- backend/migrations/0080*` is empty); `migrate.ts` hooks empty; `analytics-ledger-repair.test.ts` |
+| R2, X2, X19, M13 | `migration-history-merge.test.ts` (production's v0.5.2 set, then the rest, gives the fresh schema); `migrations-0-5-1.test.ts`; `restore-check-0-5-{1,2}` |
+| R3 | `decisions.md` D56 is release's text; `analytics-source-tolerance.test.ts`, `analytics-ledger-dual-write.test.ts` |
+| R4, X4 | `judge-refusal-reasons-documented.test.ts` (a `fallbackOutcome(` coming back goes red); `swarm-judge.test.ts`; `consensus-receipt-judge-roundtrip.test.ts` (old fallback rows still read) |
+| R5, R6, X6 | `swarm-judge.test.ts` "R6/X6: inputsDigest and promptHash reproduce what v0.5.2 recorded" |
+| R6, X10 | `swarm-judge.test.ts` "replaying published sessions … writes nothing"; `swarm-judge-replay` CLI follows `judge-replay.ts` |
+| R7, X5 | `swarm-session-judge-step.test.ts` ("a `failed` judge job is terminal too", `judgeWaitCeilingMs`); `swarm-session-publish-lane.test.ts` |
+| R8 | `swarm-quorum-excludes-judge.test.ts`; `roster-plan.test.ts` ("planAdoptions skips an active judge") |
+| R9 | `swarm-session-window.test.ts` |
+| R10 | `analytics-concurrency-cap.test.ts` |
+| R11, R12 | `backend/src/db/client.ts` timeouts; `append-only-guard-check.test.ts` (25006 reads as unavailable); `smoke-compose-passthrough` tests |
+| R13, X17 | Release's `0.4.0-to-0.5.0/*` and `rollout-steps-0-5-0.test.ts`; `restore-check-0-5-*`, `preflight-0-5-0-resume-prefix` |
+| R14, X11 | `smoke-schedule.test.ts` (a twin's `--cadence fast` does not change its cadence), `smoke-twin-command.test.ts`, `smoke-main-split.test.ts`, `twin-gate.test.ts`, `verify-judge-receipt.test.ts` |
+| M1 | `judge-transport-model-policy`, `judge-fault-injection{,-admin}`, `swarm-missing-receipt-alert`, `swarm-receipt-gap-driver-path`, `consensus-receipt-shared-vectors` tests |
+| M2 | `judge-container-transport.test.ts`, `judge-agent-rail.test.ts` (unit); `judge-container-launch` and `agent-launcher-compose-config` (integration, not run here) |
+| M3 | `worker-degrade-settlement.test.ts`; `swarm-admin-surface.test.ts` (judgeSessionAdmin keeps `judgeUnavailableReason`, 503) |
+| M4, X7 | `consensus-receipt-bare-bytes`, `consensus-receipt-envelope-shape` tests; `verify-judge-receipt.test.ts` (a missing `verified` fails) |
+| M5, X8, X9 | `consensus-receipt-publish.test.ts`, `swarm-analyst-weights-receipt.test.ts`; `swarm-agent-health.test.ts` (closeWindow) |
+| M6 | `swarm-take-weights*.test.ts`, `swarm-authored-takes.test.ts`, `swarm-take-weights-submission.test.ts` |
+| M7 | `SWARM_ROSTER_CAP = 20`; `e2e-active-member-count`; `swarm-judge.test.ts` (cap + 1 positions) |
+| M8, X14, X15 | `frontend` unit 991 pass; `seo-research`, `smart-contract-risks-data`, `seo-cite-title` tests |
+| M9 | `projects-coingecko-key.test.ts`, `smoke-coingecko-passthrough.test.ts` |
+| M10 | `onboarding-skill-rmpc-install-verified.test.ts` |
+| M11, X13 | `contract/tests/live` absent; `ci-workflows-structure.test.ts`; `swarm-onboarding-skill-url.test.ts` |
+| M12 | `.github/file-permissions.json` equals main's |
+| X3 | `0081_swarm_judge_model_bare_id.sql`; `judge-container-transport.test.ts` and `swarm-judge.test.ts` (`wireModelId` on the launcher body); `judge-model-policy-matches-registry.test.ts` |
+| X12 | `smoke-onboarding-external-db.test.ts` |
+| X16 | `docs-commands-exist.test.ts`, `judge-refusal-reasons-documented.test.ts`, `lint-docs.sh`; no D-number appears twice |
+| X20 | `twin-gate.test.ts` "a swarm.judge refusal logged by the worker is fatal" |
+
+Completeness: every file added or changed at `2605199..origin/main` and at
+`2605199..releases-0.5.x` is present in the merged tree, except the ones §4
+drops.
