@@ -18,6 +18,7 @@ OLD="${1:-}"
 pass() { echo "  PASS  $*"; }
 die() { echo "  FAIL  $*"; exit 1; }
 cleanup() {
+  if [ -n "${KEEP:-}" ]; then echo "KEEP set: stack $PROJECT and $WORK left in place"; return; fi
   docker compose -p "$PROJECT" -f "$WORK/docker-compose.yml" down -v --remove-orphans >/dev/null 2>&1 || true
   [ -n "${WT:-}" ] && git -C "$NEW" worktree remove --force "$WT" >/dev/null 2>&1 || true
   rm -rf "$WORK"
