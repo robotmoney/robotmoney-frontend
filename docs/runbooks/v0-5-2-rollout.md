@@ -171,7 +171,7 @@ The driver runs one session at a time with 6 h windows, so four subjects need ab
 
 | ID | Check | Pass | Why (the claim it proves) |
 |---|---|---|---|
-| R8.a | Every scheduled **regime** slot (`30 */3 * * *` UTC) that has elapsed by 20 minutes has an `analytics_ledger_runs` row (`tool_id = 'regime'`) created in the next 20 minutes **whose package holds `regime_snapshots`** (a failed package holds only `warnings, logs, exceptions`) | every slot has one | Regime saves no longer time out. Under v0.5.1 all 46 runs in the 30 h before the cutover were the failed kind |
+| R8.a | Every scheduled **regime** slot (`30 */3 * * *` UTC) that has elapsed by 20 minutes has an `analytics_ledger_runs` row (`tool_id = 'regime'`) created in the next 20 minutes **whose package holds `regime_snapshots`** (a failed package holds only `warnings, logs, exceptions`) | every slot has one | Regime saves no longer time out. Under v0.5.1 all 42 runs in the 30 h before the cutover were the failed kind |
 | R8.b | Same for the **research** slots (`0 */3 * * *`) | every slot has one | Same |
 | R8.c | No `regime failed`, `research failed`, `fatal:` or `catch-up … failed` line in the producer log since T0 | 0 | The pool is no longer saturated by producer writes |
 | R8.d | Database size against the cutover size (963 MB) | growth ≤ 100 MB per 6 h | Ledger growth stops (v0.5.1: about 470 MB per 6 h) |

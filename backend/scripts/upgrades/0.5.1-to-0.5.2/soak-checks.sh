@@ -36,7 +36,7 @@ cadence() { tool=$1; minute=$2; artifact=$3; label=$4
   elif [ "$ok" = "$total" ]; then ck PASS "$label" "$ok of $total scheduled runs produced their output"
   else ck FAIL "$label" "$ok of $total scheduled runs produced output; missing slots (UTC):$missing"; fi; }
 # A SUCCEEDED terminal package holds regime_snapshots AND research_signals whichever tool ran it; a failed one holds
-# warnings, logs and exceptions only (under v0.5.1 every scheduled run from 09-28 18:30 to 09-29 20:31 was the failed kind).
+# warnings, logs and exceptions only (under v0.5.1 all 42 runs from 09-28 18:30 to 09-29 20:31 were the failed kind).
 cadence regime 30 regime_snapshots "R8.a regime runs on the 3 h cron (:30)"
 cadence research 0 regime_snapshots "R8.b research runs on the 3 h cron (:00)"
 f=$(docker logs --since "$T0" rm_prod-analytics-producer-1 2>&1 | grep -a -c -E 'regime failed|research failed|analytics-producer\] fatal:|catch-up for .* failed')
