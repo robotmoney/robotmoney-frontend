@@ -33,7 +33,7 @@ served by `website-server`, a stock nginx container that holds no pages: it serv
 | To | `v0.5.3-rc.N` → `v0.5.3`, cut from `releases-0.5.x` |
 | Migrations | **None** |
 | Containers restarted | **None**. R6 fails if any service container's id or start time changes |
-| Window | No maintenance window. The swap itself is one `rsync` of about 80 files, measured at 0.1 s; the whole tool run is expected at **1 to 3 minutes** (mostly the build) and is abandoned if the build passes **10 minutes** |
+| Window | No maintenance window. The swap itself is one `rsync` of about 80 files, measured at **0.1 to 0.3 s**; the whole tool run measured **4 to 6 s** on stage-2 (the build is 1 s). Production has not been measured: expect under a minute, and abandon the run if the build passes **10 minutes** |
 | Rollback | `bun scripts/redeploy-website.ts --live /root/robotmoney-frontend --rollback <backup>`, about 5 s. No database involved |
 
 ### 1.1 What the changelog may claim
@@ -85,14 +85,32 @@ compose files, not the database.
 
 | Step | Command | Pass | Record |
 |---|---|---|---|
-| R4.1 | Wipe and check out v0.5.2: `bun run smoke:down; docker rm -f $(docker ps -aq); bun run smoke:clean`; `git checkout --detach v0.5.2` | 0 containers | HEAD |
+| R4.1 | Wipe and check out v0.5.2: `bun run smoke:down; docker rm -fv $(docker ps -aq); bun run smoke:clean`; `git checkout --detach v0.5.2` | 0 containers | HEAD |
 | R4.2 | Boot a stack on the repaired v0.5.2 backup (about 3 minutes): in tmux, `bun smoke:twin -- --reuse --backup-dir ~/rm-backup-v052-repaired --no-tui 2>&1 \| tee ~/twin-053.log` | `READY`, `131 checks · 0 failed` | READY time |
 | R4.3 | A scratch clone of the RC: `D=~/rm-site-$RC_SHA; git clone --depth 50 --branch releases-0.5.x <origin> $D; git -C $D checkout -q $RC_SHA; bun install --frozen-lockfile --cwd $D` | HEAD = `RC_SHA` | path |
 | R4.4 | `cd $D && bun scripts/redeploy-website.ts --live ~/robotmoney-frontend --dry-run` | every line `PASS`; "what changes" is about 74 changed, 7 added, 0 removed | the output |
 | R4.5 | The same without `--dry-run` | `DONE`; `every one of 38 routes answers 200`; `only the website moved` | the receipt |
 | R4.6 | `… --rollback <the backup it printed>` | `rolled back`; `version.json` is v0.5.2's commit again | the output |
 | R4.7 | Redeploy once more (R4.5) and leave it | as R4.5 | — |
-| R4.8 | Tear the stack down within 30 minutes: `bun run smoke:down; docker rm -f $(docker ps -aq); bun run smoke:clean`. A running twin spends inference credit on every session | 0 containers | time |
+| R4.8 | Tear the stack down within 30 minutes: `bun run smoke:down; docker rm -fv $(docker ps -aq); bun run smoke:clean`. A running twin spends inference credit on every session | 0 containers | time |
+
+### Rehearsal record, 2026-09-30, commit `d6ec0265`
+
+Stage-2, a real stack booted from the repaired v0.5.2 backup at `becb6897`, six service containers, `131 checks · 0 failed`.
+
+| Step | Result |
+|---|---|
+| R4.4 dry run | every line `PASS`; `74 changed, 7 added, 0 removed`; 38 routes prerendered; nothing changed |
+| R4.5 redeploy | swap **0.1 s**, `DONE in 4s`; `every one of 38 routes answers 200`; `only the website moved — 6 service containers: same ids, same start times`; `version.json` = `d6ec0265` |
+| R4.6 rollback | `rolled back — the site is commit becb6897; no container moved` |
+| R4.7 redeploy again | swap 0.3 s, `DONE in 6s`, same two proofs |
+| R4.8 teardown | 0 containers, 0 volumes |
+
+**What the rehearsals found, all fixed, each with a regression test.** (1) In the local integration test: the rsync mode spec
+left directories at 744 and nginx answered 500 (Appendix A). (2) On stage-2, first run: `version.json` holds git's
+*abbreviated* hash, 7 characters in a shallow clone and 8 on a workstation, and the tool demanded 8; it rejected a correct
+deploy and rolled it back, which also showed the automatic rollback working on a real stack. Hashes now match by prefix.
+(3) Teardown used `docker rm -f`, which leaves the postgres container's anonymous volume; it is `docker rm -fv`.
 
 ## R5. Go / no-go and RC tag
 
