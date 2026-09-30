@@ -99,10 +99,14 @@ re-read it without re-fetching:
 `rmpc` is the Robot Money client binary from
 [`robotmoney/robotmoney-core`](https://github.com/robotmoney/robotmoney-core).
 It manages swarm keygen and every signature. **Always install the
-released binary for this machine — never build from source.** Assets are
-published per OS/arch as `rmpc-<tag>-{linux,macos}-{amd64,arm64}.tar.gz` on
+released binary for this machine — never build from source.** This skill
+installs **`rmpc-v0.3.4`**, the release it is written and tested against, from
 the [releases page](https://github.com/robotmoney/robotmoney-core/releases),
-and every archive ships a matching `<archive>.tar.gz.sha256` beside it.
+where it is published per OS/arch as `rmpc-v0.3.4-{linux,macos}-{amd64,arm64}.tar.gz`.
+Its checksums are carried in the block below. To install a different release,
+the owner sets `RMPC_TAG` (for example `export RMPC_TAG=rmpc-v0.3.5`) before
+running it; that release's checksum then comes from the `.sha256` it publishes
+beside each archive.
 
 **Verify the checksum before you extract anything.** The next thing this
 binary does is generate the signing key this member's whole public record
@@ -111,14 +115,30 @@ piping `curl` straight into `tar`, which is unfixable in place: by the time you
 could compare a checksum, the archive is already unpacked. Download to
 a file, check it, and only then extract — the same order robotmoney-core's own
 `scripts/release/install-rmpc.sh` uses:
-**download → download `.sha256` → verify → extract → install.**
+**download → checksum → verify → extract → install.**
 
 ```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]' | sed 's/darwin/macos/')
 ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
-TAG=$(curl -fsSL https://api.github.com/repos/robotmoney/robotmoney-core/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
-ARCHIVE="rmpc-${TAG}-${OS}-${ARCH}.tar.gz"
+# The rmpc release this skill is tested against. RMPC_TAG, set by the owner,
+# installs another one instead.
+PINNED_TAG="rmpc-v0.3.4"
+TAG="${RMPC_TAG:-$PINNED_TAG}"
+ARCHIVE="rmpc-${TAG#rmpc-}-${OS}-${ARCH}.tar.gz"   # tags are rmpc-vX.Y.Z; the archive names the version once
 BASE="https://github.com/robotmoney/robotmoney-core/releases/download/${TAG}"
+
+# The pinned release's checksums, carried here rather than fetched, so an
+# archive replaced on the release, with its .sha256 replaced beside it, fails.
+case "$ARCHIVE" in
+  rmpc-v0.3.4-linux-amd64.tar.gz) PINNED_SHA=0dd68de6381dd0019237cdd272c933dd1739abe576fac7b733dfb5ccf0e3cbad ;;
+  rmpc-v0.3.4-linux-arm64.tar.gz) PINNED_SHA=c467dd677b0020dc66775b4606deec3e387283b71922646e52fcc02785f8dd79 ;;
+  rmpc-v0.3.4-macos-amd64.tar.gz) PINNED_SHA=61f61ce56d67eea63bd1d0fb843db1b586427dc718396d8f7cc5f49d50e0b69f ;;
+  rmpc-v0.3.4-macos-arm64.tar.gz) PINNED_SHA=c3451ec44eac5703ed5c3f5ff735aed93d0b211bd15e466166f7af4bf9d4343a ;;
+  *) PINNED_SHA="" ;;
+esac
+if [ "$TAG" = "$PINNED_TAG" ] && [ -z "$PINNED_SHA" ]; then
+  echo "no ${PINNED_TAG} build for ${OS}-${ARCH}; nothing was installed" >&2; exit 1
+fi
 
 # sha256sum on Linux, shasum -a 256 on macOS. With neither, STOP — never
 # degrade to installing unverified.
@@ -134,9 +154,14 @@ cd "$WORKDIR" || exit 1
 curl -fsSL -o "$ARCHIVE" "${BASE}/${ARCHIVE}" \
   || { echo "could not download ${ARCHIVE} — nothing was installed" >&2; exit 1; }
 
-# 2. download the checksum published beside it
-curl -fsSL -o "${ARCHIVE}.sha256" "${BASE}/${ARCHIVE}.sha256" \
-  || { echo "no published checksum for ${ARCHIVE} — refusing to install an unverifiable binary; nothing was installed" >&2; exit 1; }
+# 2. the checksum: this skill's own for the pinned release, otherwise the one
+#    the chosen release publishes beside the archive
+if [ -n "$PINNED_SHA" ]; then
+  printf '%s  %s\n' "$PINNED_SHA" "$ARCHIVE" > "${ARCHIVE}.sha256"
+else
+  curl -fsSL -o "${ARCHIVE}.sha256" "${BASE}/${ARCHIVE}.sha256" \
+    || { echo "no published checksum for ${ARCHIVE} — refusing to install an unverifiable binary; nothing was installed" >&2; exit 1; }
+fi
 
 # 3. VERIFY, before anything is unpacked. The .sha256 is data, not an
 #    instruction: `-c` verifies whichever filenames the file happens to list,
@@ -147,7 +172,7 @@ curl -fsSL -o "${ARCHIVE}.sha256" "${BASE}/${ARCHIVE}.sha256" \
   && grep -Eq "^[0-9a-f]{64} [ *]$(printf '%s' "$ARCHIVE" | sed 's/\./\\./g')$" "${ARCHIVE}.sha256" \
   || { echo "published checksum file does not name ${ARCHIVE} — refusing a checksum for some other file. Nothing was extracted and nothing was installed." >&2; exit 1; }
 $SHA_CHECK "${ARCHIVE}.sha256" \
-  || { echo "ChecksumMismatch: ${ARCHIVE} does not match its published sha256. Nothing was extracted and nothing was installed." >&2; exit 1; }
+  || { echo "ChecksumMismatch: ${ARCHIVE} does not match its expected sha256. Nothing was extracted and nothing was installed." >&2; exit 1; }
 
 # 4. only now extract and install
 tar xzf "$ARCHIVE"
@@ -155,16 +180,18 @@ install -m 755 rmpc ~/.local/bin/rmpc   # or any directory on PATH
 ```
 
 If the verify step fails, **stop and tell the owner**: the download does not
-match the checksum robotmoney-core published for it, so nothing was extracted
+match its expected checksum, so nothing was extracted
 and nothing was installed. Do not retry with the check removed, do not
 fall back to piping the download into `tar`, and do not build from source. Re-run the block as
 written; if it fails again, surface it and wait.
 
-Be precise about what that check buys: the `.sha256` comes from the same
-release over the same TLS session as the archive, and nothing signs either one,
-so this **detects a corrupted, truncated, or substituted download** — a mirror,
-proxy, or cache serving different bytes than the release holds. It does not
-authenticate the release itself.
+Be precise about what that check buys. For the pinned release the expected
+checksum is carried in this skill, so it **detects a corrupted, truncated or
+substituted download, and an archive replaced on the release itself**. With
+`RMPC_TAG` set, the `.sha256` comes from the same release over the same TLS
+session as the archive, and nothing signs either one: that detects a corrupted
+or substituted download (a mirror, proxy or cache serving different bytes than
+the release holds), but it does not authenticate the release.
 
 Confirm the install with `rmpc --help` — you should see the `committee-identity`
 subcommand. (Yes, "committee" — the pinned rmpc release's own CLI surface

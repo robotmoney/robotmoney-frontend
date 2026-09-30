@@ -314,13 +314,30 @@ describe("SWARM_ONBOARDING_SKILL_URL", () => {
   // failures are invisible from this repo: the agent simply never onboards.
   //
   // Serving the skill ourselves removes the coupling — the file and this
-  // constant ship in the same deploy, so they cannot skew. The limit of this
-  // assertion, stated plainly: it proves the STRING, not that the file is
-  // reachable or that it still contains a procedure. Both of those are proved
-  // only by the live test at
-  // contract/tests/live/swarm-onboarding-skill-url-live.test.ts, which is
-  // deliberately outside this (network-free) directory but runs in the SAME
-  // required `contract` job (issue #484 — before that it ran in no job at all).
+  // constant ship in the same deploy, so they cannot be edited apart without a
+  // diff landing in this repository. The limit of this assertion, stated
+  // plainly: it proves the STRING, not that the file is reachable or that it
+  // still contains a procedure. Those two questions are asked only by the
+  // schedule-only auditor (check B, with its negative control D), which reports
+  // and never gates — deliberately, because whether robotmoney.network answers
+  // is not a property of the commit under review, and gating a merge on it made
+  // pull requests unmergeable for a reason no diff here could fix (issue #484's
+  // guard used to be merge-gated and went red on a pull request with
+  // `Received: 502`, caused by nobody in it). The URL's own shape — that the
+  // constant names a skill directory above SKILL.md — is merge-gated and
+  // hermetic, in contract/tests/unit/swarm-onboarding-skill-url.test.ts, because
+  // that IS a property of this repository.
+  //
+  // Same-deploy does not mean published: this repository has no deploy
+  // workflow, so `main` can carry a correct skill while production still serves
+  // the previous one's bytes. That window is real, and nothing in this
+  // repository — including CI — reports a stale deploy any more; the
+  // deploy-freshness question was deliberately removed from this repository's
+  // tooling, and catching a stale deploy is the deploy pipeline's job (see the
+  // header of scripts/production-drift-audit.ts). What the schedule-only
+  // auditor does still watch is the served document's SHAPE — that it is a real
+  // procedure, and that it carries no unverified `| tar` install form — which is
+  // a different question, and a useful one even against a stale deploy.
   test("is served from our own origin, not a third-party repo host", () => {
     expect(new URL(SWARM_ONBOARDING_SKILL_URL).origin).toBe("https://robotmoney.network");
     expect(SWARM_ONBOARDING_SKILL_URL).not.toContain("raw.githubusercontent.com");

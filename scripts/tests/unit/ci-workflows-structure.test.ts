@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { EVIDENCE_DIR } from "../../../backend/scripts/lib/rollout-signing.ts";
 
@@ -118,13 +118,6 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
       "bash scripts/checks/check-model-selection.sh": "repo-guards.yml",
       // contract.yml
       "bun run check-contract": "contract.yml",
-      // Added after the split (issue #484): contract/tests/live's reachability
-      // guard for SWARM_ONBOARDING_SKILL_URL. It documented itself as running
-      // in a `nightly-fetchers.yml` that never existed, so it had executed in
-      // no CI job at any point in its life while the URL it guards 404'd in
-      // production. Pinned here so "the live selector is invoked by a real
-      // workflow" is an assertion, not a comment.
-      "bun run test:live": "contract.yml",
       // integration.yml
       "bun run test:integration": "integration.yml",
     };
@@ -166,6 +159,113 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
     // into an accidental single shared step.
     const backendYml = read("backend.yml");
     expect(backendYml).toMatch(/working-directory:\s*backend[\s\S]*?run:\s*bun run typecheck/);
+  });
+
+  // ── where the reachability guard went, and what keeps it from creeping back ──
+  //
+  // `bun run test:live` used to be an entry in the map above, pinning the
+  // contract package's live-network selector to contract.yml so that "the guard
+  // is invoked by a real workflow" would be an assertion rather than a comment
+  // (issue #484's whole point: the selector had been declared and invoked by
+  // zero of eleven workflows for the life of the guard it named).
+  //
+  // That selector is now GONE — the test, the `tests/live/` directory and the
+  // package script were all deleted — because every assertion it held is a
+  // question about production rather than about the commit under review, and a
+  // required job that reaches the public internet makes a pull request
+  // unmergeable for a reason no diff in this repository can fix. It was measured:
+  // the `contract` job was red on a pull request with `Received: 502`, caused by
+  // nobody in that pull request.
+  //
+  // Deleting the map entry is only honest if the guarantee it carried is
+  // replaced, so it is — by the two properties that are actually wanted now, both
+  // mechanical: the retired selector cannot come back as a live merge-gate step
+  // or as a declared-but-never-invoked script (the #484 false green), and the
+  // workflow that DOES own the endpoint's reachability cannot gain a merge
+  // trigger and become a gate by accident.
+  describe("the skill endpoint's reachability is audited, never merge-gated", () => {
+    /** Every `run:` command in every workflow, with the file it came from. */
+    const runSteps = (): Array<{ file: string; run: string }> => {
+      const steps: Array<{ file: string; run: string }> = [];
+      for (const file of allWorkflows()) {
+        for (const job of Object.values(parse(file).jobs ?? {})) {
+          for (const step of job.steps ?? []) if (step.run) steps.push({ file, run: step.run });
+        }
+      }
+      return steps;
+    };
+
+    /** The `on:` mapping, tolerating the YAML 1.1 bare-`on`→`true` fold. */
+    const triggersOf = (file: string): Record<string, unknown> => {
+      const wf = parse(file) as Workflow;
+      const on = (wf.on ?? wf.true) as unknown;
+      if (!on || typeof on !== "object" || Array.isArray(on)) {
+        throw new Error(`${file}: could not read an \`on:\` mapping — refusing to treat that as "no triggers"`);
+      }
+      return on as Record<string, unknown>;
+    };
+
+    test("the retired `bun run test:live` selector is invoked by no workflow, in any job", () => {
+      const offenders = runSteps().filter((s) => s.run.includes("test:live"));
+      expect(
+        offenders,
+        `these steps still run the retired live selector, so a network assertion is back on a merge trigger: ${offenders.map((s) => `${s.file}: ${s.run.trim()}`).join(" | ")}`,
+      ).toEqual([]);
+    });
+
+    test("contract declares no live selector and has no tests/live directory — the #484 false green cannot be re-added", () => {
+      const pkg = JSON.parse(readFileSync(join(root, "contract/package.json"), "utf8")) as { scripts?: Record<string, string> };
+      expect(Object.keys(pkg.scripts ?? {}), "contract/package.json declares no test:live script").not.toContain("test:live");
+      // A `test:live` script that no workflow invokes is the precise shape of
+      // the guard that never ran for the whole life of issue #484 — a script
+      // nobody executes looks like coverage and is not.
+      expect(existsSync(join(root, "contract/tests/live")), "contract/tests/live does not exist").toBe(false);
+      // And the default selector is the whole offline tier, so a live test
+      // cannot hide inside it either: `bun test tests/unit` selects by path.
+      expect(pkg.scripts?.test).toBe("bun test tests/unit");
+    });
+
+    test("the auditor that owns the reachability question runs on a schedule and on no merge trigger", () => {
+      const owners = runSteps()
+        .filter((s) => s.run.includes("scripts/production-drift-audit.ts"))
+        .map((s) => s.file);
+      expect(
+        [...new Set(owners)],
+        "exactly one workflow runs the auditor — a second one on a merge trigger would re-create the gate",
+      ).toEqual(["production-drift-audit.yml"]);
+
+      const on = triggersOf("production-drift-audit.yml");
+      expect(Object.keys(on), "the auditor has no push trigger, so no merge runs it").not.toContain("push");
+      expect(Object.keys(on), "the auditor has no pull_request trigger, so no PR is blocked by it").not.toContain("pull_request");
+      expect(Array.isArray(on.schedule), "the auditor runs on a schedule").toBe(true);
+    });
+
+    // RED CONTROL. Every assertion above is a grep, and a grep that matches
+    // nothing is indistinguishable from a grep that is broken. These are planted
+    // fixtures built from scratch — deliberately NOT derived from the real
+    // workflows, so this control keeps biting even when the real tree has already
+    // been planted (a control that reads the tree it is meant to police goes
+    // green the moment the tree is wrong, or red for the wrong reason).
+    test("red control: a re-added live-selector step, and a merge trigger on the auditor, are both caught", () => {
+      const planted: Workflow = {
+        jobs: {
+          contract: { steps: [{ name: "Contract tests (unit)", run: "bun run test" }, { name: "Contract tests (live URLs)", run: "bun run test:live" }] },
+        },
+      };
+      const plantedRuns: Array<{ file: string; run: string }> = Object.entries(planted.jobs ?? {}).flatMap(
+        ([, job]) => (job.steps ?? []).flatMap((s) => (s.run ? [{ file: "planted.yml", run: s.run }] : [])),
+      );
+      // The same two filters the assertions above use, on planted input.
+      expect(plantedRuns.filter((s) => s.run.includes("test:live")), "the live-selector matcher matches a planted step").toHaveLength(1);
+      expect(plantedRuns.filter((s) => s.run.includes("scripts/production-drift-audit.ts")), "the auditor-owner matcher does not match it").toHaveLength(0);
+
+      // A workflow triggered by `pull_request` must read as a merge trigger to
+      // the check above, which is what makes that check bite.
+      const mergeTriggered: Record<string, unknown> = { pull_request: { types: ["opened"] } };
+      expect(Object.keys(mergeTriggered), "pull_request counts as a merge trigger").toContain("pull_request");
+      const scheduleOnly = { schedule: [{ cron: "11 2 * * *" }] };
+      expect(Object.keys(scheduleOnly), "a schedule-only workflow has no merge trigger").not.toContain("pull_request");
+    });
   });
 
   test("test file headers claiming a workflow execution must cite a command that actually exists in that workflow (issue #517)", () => {
