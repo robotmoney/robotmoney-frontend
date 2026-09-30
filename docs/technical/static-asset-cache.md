@@ -76,9 +76,16 @@ route. The stamping step runs **after the copy and before the prerender**, so th
    a file in the tree. Such a module could not be stamped, and a graph that is stamped except for one module is the
    failure this design exists to prevent.
 
-Today the JavaScript tree has 221 static relative imports, 7 dynamic `import()` calls (all string literals), one entry
-point, no workers or service workers, no `import.meta.url` URL construction, and no `<script>` tags in view fragments.
-The guard in step 4 is what keeps that true.
+Today the tree has 92 scripts, 88 of them with relative imports: 233 specifiers in all (229 static and re-export, 4
+literal `import()`), one entry point, no workers or service workers, no `import.meta.url` URL construction, and no
+`<script>` tags in view fragments. The guard in step 4 is what keeps that true.
+
+How imports are found: Bun's transpiler reports each file's imports and ignores comments. The rewrite is a textual
+insertion anchored to the start of a statement (so a comment that quotes an import is not touched), and a JSDoc
+`import("./x.js")` type reference is skipped. The count rewritten must equal the count the transpiler reports, and
+removing the stamps must give back the original bytes. Any mismatch fails the assembly. The write is all-or-nothing.
+
+Check a built site: `bun scripts/stamp-assets.ts _static --verify`.
 
 The preview server (`scripts/preview-server.ts`, used by the browser tests) serves the **source** tree, which is
 unstamped; the stamping exists only in the assembled output.
@@ -87,7 +94,7 @@ unstamped; the stamping exists only in the assembled output.
 
 | Failure | Consequence | Caught by |
 |---|---|---|
-| One import left unstamped | The module loads under two URLs: two instances, broken shared state | `scripts/tests/unit/stamp-assets.test.ts`, and a verifier run over the real assembled site that checks every relative specifier is stamped and resolves |
+| One import left unstamped | The module loads under two URLs: two instances, broken shared state | `scripts/tests/unit/stamp-assets.test.ts` (every import form, plus the real tree), the `--verify` run over the assembled site, and `frontend/test/browser/stamped-assets.spec.ts` (Chromium, 4-hour max-age, a release switch, and an unstamped control) |
 | The stamp does not change when a script does | The old graph is served | The stamp is computed from content, and the test changes one byte and expects a new stamp |
 | A new URL was requested before its deploy and a 404 was cached | Readers get the 404 until it expires | Stamped URLs are new by construction: nothing has requested `main.js?v=<new stamp>` yet |
 | An image is overwritten in place | Stale image for up to the cache lifetime | Convention C6; there is no mechanical guard |
