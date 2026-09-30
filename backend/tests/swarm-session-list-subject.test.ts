@@ -12,6 +12,7 @@ import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { ROUTES } from "@robotmoney/contract";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { ensureProseSubject } from "./support/prose-subject.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -172,4 +173,37 @@ test("a brief's recent sessions name each session by id, newest first within a d
   const recent = (await ic.getBriefBySession(third.id))?.body?.recentSessions ?? [];
   expect(recent.map((r) => r.id)).toEqual([second.id, first.id]);
   expect(recent.every((r) => typeof r.convened_at === "string" && r.subject_id === subject)).toBe(true);
+});
+
+// `convened_at` (so `date` and `generatedAt`) is when the row was created in `scheduled`. A session can wait days for
+// its brief (2026-09-28: four rows created at 00:11 to 00:40 UTC were briefed on 09-29 and 09-30). `openedAt` is when
+// the brief went out and the window began, read from the first brief revision, with no column of its own.
+test("openedAt is the first brief revision's time, not the row's creation time, on the list, the detail and the full list", async () => {
+  const subj = rid("waits");
+  await ensureProseSubject(subj, "Waits");
+  const session = await ic.openSession(subj);
+  // The row sat in `scheduled` for two days before its brief.
+  await sql`UPDATE swarm_sessions SET convened_at = now() - interval '2 days', generated_at = now() - interval '2 days' WHERE id = ${session.id}`;
+
+  const before = (await ic.listSessions({ subject: subj })).sessions.find((s: any) => s.id === session.id) as any;
+  expect(before.openedAt).toBeNull();
+
+  const t0 = Date.now();
+  await ic.publishBrief(session.id, 60);
+  const [first] = await sql`SELECT min(created_at) AS at FROM swarm_brief_revisions WHERE session_id = ${session.id}`;
+  expect(new Date(first.at).getTime()).toBeGreaterThanOrEqual(t0 - 1000);
+
+  const paged = (await ic.listSessions({ subject: subj })).sessions.find((s: any) => s.id === session.id) as any;
+  const full = (await ic.listSessions({ full: true })).sessions.find((s: any) => s.id === session.id) as any;
+  const detail = (await ic.getSession(sessionDate(paged), subj))!.session as any;
+  for (const s of [paged, full, detail]) {
+    expect(new Date(s.openedAt).toISOString()).toBe(new Date(first.at).toISOString());
+    // Two days after the row's creation: the page must not print that creation as the session's moment.
+    expect(new Date(s.openedAt).getTime() - new Date(s.generatedAt).getTime()).toBeGreaterThan(47 * 3600 * 1000);
+  }
+
+  // A republished brief adds a revision; the opening time does not move.
+  await ic.publishBrief(session.id, 60).catch(() => null);
+  const again = (await ic.listSessions({ subject: subj })).sessions.find((s: any) => s.id === session.id) as any;
+  expect(again.openedAt).toBe(paged.openedAt);
 });
