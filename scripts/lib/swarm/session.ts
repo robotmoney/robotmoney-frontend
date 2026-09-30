@@ -1183,6 +1183,28 @@ export async function latestJudgementProvenance(
 // coordinates of the already-running stack; when omitted it is resolved from
 // this process's environment (the standalone CI entry point receives the
 // smoke's exact compose env).
+/**
+ * Register every member (present or no-show) BEFORE the subject exists, so the
+ * scheduler's epoch seats them. An epoch freezes its expected roster in the
+ * transaction that opens it (backend/src/swarm/epoch.ts insertEpoch); a member
+ * who registers after that is refused at submit with 403 "member is not on this
+ * session's expected roster" (domain.ts roster gate) and joins the NEXT epoch.
+ * Members used to enroll inside the session, after the open, which the operator
+ * driven session tolerated and the scheduler's epoch does not.
+ *
+ * A failed enrollment is logged and not fatal: a present member retries it in
+ * runAgent and fails there, a no-show is absent regardless.
+ */
+export async function enrollRoster(
+  rail: SessionRail,
+  members: readonly SessionMember[],
+  enrollMember: typeof enroll = enroll,
+): Promise<void> {
+  await Promise.all(members.map((m) => enrollMember(rail, m).catch((err) => {
+    console.log(`  ${m.memberId}: enrollment before the epoch failed — ${err instanceof Error ? err.message : err}`);
+  })));
+}
+
 export async function runSession(
   subject: SessionSubject,
   sessionIndex: number,
@@ -1248,6 +1270,7 @@ export async function runSession(
   // subject route, which publishes `subject.changed` (§6.2) — the retired
   // `subject` dispatcher action wrote an active subject the scheduler never
   // heard of.
+  await enrollRoster(rail, opts.members);
   await ensureSubjectViaAdmin(subject, rail.operatorToken, { epochDurationSeconds: epochSeconds });
   // THE WINDOW LENGTH IS A COLUMN ON THE SUBJECT (§2.2, §2.3), set through the
   // admin API — §8's supported way to make a test fast: "a test that needs a
@@ -1321,15 +1344,9 @@ export async function runSession(
   );
   emitSession("collecting", sessionId);
 
-  // Enroll the no-show (own container + persistent keystore — the harness
-  // never generates a key for it), then run present members, each in its OWN
-  // container on the member-agent rail.
+  // Every member, present or not, was enrolled BEFORE the epoch opened (top of
+  // this function): the roster froze then. Only the progress event is left.
   const absent = opts.members.filter((m) => !m.present);
-  await Promise.all(absent.map((m) => enroll(rail, m).catch((err) => {
-    // A failed no-show enrollment must not sink the session: absence is
-    // already this member's outcome either way. Logged, never fatal.
-    console.log(`  ${m.memberId}: no-show enrollment failed (absent regardless) — ${err instanceof Error ? err.message : err}`);
-  })));
   for (const m of absent) onProgress?.({ type: "member", memberId: m.memberId, stage: "absent" });
   const present = opts.members.filter((m) => m.present);
   // Settle so one failed member container cannot freeze the session lifecycle
@@ -1491,6 +1508,7 @@ async function main() {
   // along with the endpoint behind it — an ephemeral database is deleted or
   // inspected whole, and no bring-up may TRUNCATE rows it did not create.
   await runRegimeClassify(today, rail);
+  await enrollRoster(rail, members);
   await ensureSubjectViaAdmin(subjects[0], rail.operatorToken, { epochDurationSeconds: epochDurationSecondsFor(cadence) });
 
   // Session 1: today's subject
