@@ -251,8 +251,13 @@ describe("`bun run migrate` and `bun smoke` contend on the target lock as proces
     const failed = records.at(-1)!;
     expect(failed.status).toBe("failed");
     expect(failed.reason).toContain("cannot be proven held");
-    // No phase after the loss ran: nothing was replaced.
-    expect(records.some((r) => r.phase === "replace")).toBe(false);
+    // No phase after the loss ran: nothing was replaced. The loss is detected
+    // at whichever boundary the boot reaches next, and that boundary can be the
+    // one before `replace` (the boot is then journaled failed AT replace, which
+    // never began its work), so the proof is that no `replace`, `participants`
+    // or `readiness` record is anything but that one failed last record.
+    const after = records.slice(0, -1).filter((r) => ["replace", "participants", "readiness"].includes(r.phase));
+    expect(after).toEqual([]);
     expect(smokeRun.output()).toContain("The lock is not re-acquired");
   }, BOOT_TIMEOUT_MS);
 
