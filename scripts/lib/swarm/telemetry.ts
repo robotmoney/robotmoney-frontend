@@ -1,5 +1,6 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
+import { transcriptSpend } from "../../agent/transcript.ts";
 import {
   redactTelemetryText,
   type OnboardingEvent,
@@ -111,7 +112,7 @@ export function createSwarmSessionArtifactWriter(input: {
     result: join(directory, "result.json"),
   };
   for (const path of Object.values(paths)) writeFileSync(path, "", { mode: 0o600 });
-  writeFileSync(paths.manifest, JSON.stringify({
+  const manifest: Record<string, unknown> = {
     version: 1,
     composeProject: input.composeProject,
     sessionId: input.sessionId,
@@ -121,7 +122,22 @@ export function createSwarmSessionArtifactWriter(input: {
     timeoutMs: input.timeoutMs,
     startedAt: new Date().toISOString(),
     streamTailBytes: STREAM_TAIL_BYTES,
-  }, null, 2) + "\n", { mode: 0o600 });
+    // R19 — filled at finish() from the run's own transcript. Present from the
+    // start, and `null` until then, so a manifest for a run that DIED carries
+    // the field saying "nothing was reported" rather than lacking it: an absent
+    // key and an unreported spend are the same shape to every reader, and only
+    // one of them is a truthful answer.
+    spend: null,
+  };
+  const writeManifest = () =>
+    writeFileSync(paths.manifest, JSON.stringify(manifest, null, 2) + "\n", { mode: 0o600 });
+  writeManifest();
+
+  // R19 — the provider's own token/cost report for this member run, accumulated
+  // from the `step_finish` events as they stream rather than re-read from the
+  // bounded stdout tail at the end: the tail is capped and a long run's spend
+  // lines are exactly what a cap drops.
+  let spendTranscript = "";
 
   let stdout = "";
   let stderr = "";
@@ -141,6 +157,9 @@ export function createSwarmSessionArtifactWriter(input: {
     const eventBody = eventLines.join("");
     writeFileSync(paths.events, eventsTruncated ? marker + eventBody : eventBody, { mode: 0o600 });
     if (event.source === "agent" && event.stream === "stdout") {
+      // Only the step_finish lines are retained for the spend accumulator, so
+      // this buffer is bounded by the step count rather than by the transcript.
+      if (event.message.includes('"step_finish"')) spendTranscript += `${event.message}\n`;
       stdout = bounded(`${stdout}${safeEvent.message}\n`, redactions);
       writeFileSync(paths.stdout, stdout, { mode: 0o600 });
     }
@@ -166,6 +185,11 @@ export function createSwarmSessionArtifactWriter(input: {
       writeFileSync(paths.inspect, JSON.stringify(projection, null, 2) + "\n", { mode: 0o600 });
     },
     finish(result) {
+      // The manifest is rewritten, not appended to: it is the one file a reader
+      // opens to ask "what was this run, and what did it cost".
+      manifest.spend = transcriptSpend(spendTranscript);
+      manifest.finishedAt = new Date().toISOString();
+      writeManifest();
       writeFileSync(paths.result, redactTelemetryText(JSON.stringify(result, null, 2), redactions) + "\n", { mode: 0o600 });
     },
   };

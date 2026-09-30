@@ -1,0 +1,218 @@
+# Production drift audit — an OBSERVER, not a gate.
+#
+# WHAT THIS IS. A schedule-only job that asks FOUR questions about things
+# deployed OUTSIDE this repository and writes down what it saw:
+#
+#   A. Does the rmpc release the onboarding skill PINS still exist, and does
+#      robotmoney-core still publish archives whose sha256 match the ones the
+#      skill CARRIES? (release integrity)
+#   B. Does SWARM_ONBOARDING_SKILL_URL still serve a real, complete procedure
+#      rather than a compatibility stub? (see the stub incident below)
+#   C. Does the SERVED copy carry an unverified `| tar` install form? — asserted
+#      over the served body directly, so it fires whatever the rest of the site
+#      is doing. (issue #759 deliverable 1's explicit floor)
+#   D. NEGATIVE CONTROL: does a sibling path on the same host that cannot exist
+#      come back non-200, with none of the skill's markers? — the proof that B's
+#      discriminators can fail at all. A green B is only a statement about the
+#      document if D says a wrong document would have been caught.
+#
+# B, C AND D ARE ALL CODE THAT MOVED OFF THE MERGE GATE, and together they are
+# everything the deleted live test file used to assert. That file, the
+# `contract/tests/live/` directory, the `test:live` script and the `contract`
+# job's live step are all DELETED.
+# Why the reachability and procedure assertions left a REQUIRED check: whether
+# robotmoney.network answers is not a property of the commit under review. It
+# depends on deploys, DNS, TLS, CDN state, and renames and releases in
+# robotmoney-core — none of which a diff in this repository can change. Measured,
+# not argued: while this was being decided the `contract` job was RED on an open
+# pull request with `Received: 502`, caused by nobody in that pull request. A
+# required job that reaches the public internet on every PR gives any contributor
+# with a flaky connection, and any upstream hiccup, an unmergeable PR whose
+# resolution is outside the repository. So the question is asked here, nightly,
+# and the answer is reported rather than enforced.
+#
+# THE PLAIN CONSEQUENCE — NOTHING ON A MERGE TRIGGER VERIFIES THIS ENDPOINT, AND
+# THAT IS INTENDED. If the URL 404s, or production starts serving a stub, no
+# required check in this repository says so; this audit says so once a night, in
+# a report nobody is blocked by. The one assertion about this URL that IS
+# merge-gated is hermetic — that the constant names a skill directory above
+# SKILL.md (contract/tests/unit/swarm-onboarding-skill-url.test.ts) — because that
+# is a fact about this repository. The 404 that issue #484 was filed about is now
+# found by tonight's audit rather than by the pull request that caused it. That is
+# a slower detection, bought on purpose.
+#
+# THERE USED TO BE A FOURTH CHECK BEYOND A/B/C, AND IT WAS DELETED ON PURPOSE.
+# Before the control, the auditor's fourth check was "A" in the old numbering: do
+# the bytes served at SWARM_ONBOARDING_SKILL_URL match
+# frontend/public/skills/swarm-onboarding/SKILL.md — i.e. is the deploy fresh? It
+# called `describeSkillMismatch` from `contract/src/skill-parity.js`, and both
+# that module and its offline unit test are now deleted. This repository's
+# tooling does not ask the deploy-freshness question anywhere: not here, not on
+# any merge gate, not offline, and not under a different name. That was the
+# repository owner's decision, and the paragraphs here and at the top of
+# scripts/production-drift-audit.ts are the record of it.
+#
+# A SECOND CONSEQUENCE, ALSO PLAIN: NOTHING IN CI REPORTS A STALE DEPLOY. If `main`
+# carries a correct skill and production is still serving the previous one, no job
+# in this repository will say so. Deploy freshness is now the DEPLOY PIPELINE's
+# job: it is a fact about whether a publish ran, and this repository has no deploy
+# workflow, so the only place that fact can be observed is the deploy tooling or a
+# human watching it. Do not "fix" this by adding a parity check back to this
+# workflow, and do not "fix" it by giving this workflow a non-zero exit — the
+# first would be the check the owner declined, the second would re-create required
+# reading whose exit is outside the repository. Checks B, C and D are what remains,
+# and they are not a substitute for it: "what production is serving is safe to
+# install" (C) and "is the deploy fresh" were never the same question, and the
+# second one is no longer asked.
+#
+# B IS THE STUB-INCIDENT CHECK AND MUST KEEP ITS PROCEDURE ASSERTIONS. When
+# robotmoney-core replaced the file with a 1,951-byte deprecation stub whose front
+# matter kept the right `name:`, whose body mentioned `rmpc`, and which was
+# comfortably over every size floor, agents were handed a signpost instead of a
+# procedure and CI stayed green for two days. So B asserts the PROCEDURE — the
+# endpoint an application is POSTed to, the claim envelope, the completion gate,
+# the applicant's status URL, the deprecation-stub negative, the floor — and not
+# the label.
+#
+# D IS LOAD-BEARING BECAUSE B CANNOT CHECK ITSELF. Every marker in B is a
+# positive assertion over a body that is supposed to be good, and a positive
+# assertion over a good input says nothing about whether it would have gone red on
+# a bad one. If the origin answers 200 with an SPA shell, or an error page happens
+# to contain `rmpc`, B renders green over garbage. D fetches a sibling `.md` path
+# that cannot exist and reports what came back. The shape of its verdict matters
+# as much as the check itself, and the reasoning is at the D section of
+# scripts/production-drift-audit.ts: a 404 with none of the markers is the only
+# outcome that counts as OK, a 200 (or a 404 carrying a marker) is DRIFT, and
+# anything else — a 5xx, an unreachable host — is UNKNOWN, never OK, because a
+# non-404 failure status measures the ORIGIN's health rather than the
+# discriminator, and reading it as "the control fired" is the false green D
+# exists to prevent. D is its own row, is never folded into B, and is reported
+# even when it did not run.
+#
+# C IS DELIBERATELY ITS OWN CHECK AND MUST STAY THAT WAY. The unverified
+# `curl … | tar xz` form pipes a downloaded archive into a root-privileged
+# extractor with no checksum check. The floor was independent of the byte
+# comparison that used to sit beside it by design, and it is independent of
+# everything else here by the same design: it is asserted over the served body
+# directly, has its own status line, and reports UNKNOWN — never a pass — when the
+# fetch did not complete or when the origin answered with an error page rather
+# than the document. Do not fold C into B, and do not make it contingent on
+# anything else in the script. The comparison that used to carry it as a side
+# effect is gone; C is what is left, and it is a security guard, not a content
+# diff.
+#
+# WHY A IS WORTH A WORKFLOW OF ITS OWN. It is the question the merge set can
+# never see, and it is not a hypothetical. The skill pins an rmpc release tag
+# and carries that release's checksums inside its own bytes (RM-148). If
+# robotmoney-core ever yanks that release, re-uploads an archive, or replaces
+# it, every NEW member's install breaks at the verify step. A served-vs-repo
+# byte comparison was blind to it by construction, because in that scenario the
+# two copies keep matching each other perfectly — neither of them moved.
+#
+# WHY IT ALWAYS EXITS 0. The deliverable is the REPORT, not a verdict. A
+# non-zero exit would turn a question about production into a merge verdict,
+# which is exactly what this workflow exists to keep off the merge path, and a
+# red nightly for a question no change to this repository can answer is required
+# reading nobody should have to do. So a red report body on a green job is the
+# intended outcome, and the report says so at the top: **a green job here means
+# the AUDIT RAN, not that production is healthy.** Read the job summary and the
+# artifact.
+#
+# LOUD-SKIP-NEVER, INWARD. A check that could not run — DNS failure, timeout,
+# an HTTP 403 from a rate-limited GitHub, a non-JSON response, a body that
+# arrived with an error status instead of the document, a discriminator that
+# could not be computed — is reported UNKNOWN with the reason. Never omitted,
+# never rendered as a pass. It used to be the same invariant the deleted live
+# test enforced with a red exit, pointed the other way; that test is gone, so the
+# direction is no longer borrowed. There is no merge to protect here, and a
+# silently dropped check is now the one outcome nobody would ever notice.
+#
+# ON GITHUB API RATE LIMITS. Check A talks to api.github.com and does NOT send a
+# token: this repository's `GITHUB_TOKEN` is an installation token scoped to
+# robotmoney-frontend and is not valid against robotmoney-core, so sending it
+# would buy nothing and spend a retry. Unauthenticated is 60 requests/hour per
+# IP, and GitHub-hosted runners share IPs — so a rate-limited night is a real,
+# expected outcome, not an outage. It is reported as UNKNOWN with the reset
+# time, never as a pass. One release lookup per night is a wide margin against
+# 60/hour; the budget is the shared-IP reality, not this script's volume.
+#
+# CI taxonomy class: heavy. Chosen for TRIGGER SHAPE, not cost — this workflow
+# costs three HTTPS GETs and one API call, which is not what `heavy` usually
+# means. It is chosen because `heavy` is the class this repo already uses for
+# its one other scheduled, non-gating, exempt workflow
+# (`contribution-advisory-reviewer.yml`), and because the alternative classes
+# are all worse lies: `feature-correctness` and `system-correctness` both carry
+# the E6 promise that "a red means the code on `main` is broken", which is
+# precisely the claim this workflow exists to refuse — a drift finding here is
+# about production or about another repository, never about this commit. The
+# cost mismatch is called out here rather than hidden.
+#
+# WHY IT IS EXEMPT FROM E6. E6 (docs/architecture.md §11.3, docs/decisions.md
+# D26) is the isomorphism between the nightly set and the merge-to-main set, and
+# it is enforced mechanically by scripts/tests/unit/nightly-mirrors-merge-set.test.ts.
+# This workflow is registered on that file's `EXEMPT_FROM_MERGE_MIRROR` list —
+# the repo's own sanctioned mechanism for a scheduled workflow that is not a
+# product test suite — with a justification next to the entry. A red nightly
+# for THIS workflow therefore means something different from a red merge, and
+# docs/architecture.md says so in E6 rather than leaving the exception to be
+# rediscovered. No `github.event_name == 'schedule'` gate appears anywhere
+# here, job or step: this workflow has no second trigger to be asymmetric with.
+#
+# Cron: 02:11 UTC, a minute and an hour no other workflow in this repo uses.
+# The mirrors occupy 03:03–03:57 and 04:37/05:19; the staggered-cron assertion in
+# nightly-mirrors-merge-set.test.ts covers the push-to-main set, but this file
+# keeps clear of every existing slot anyway so a future widening of that
+# assertion cannot collide. It also runs BEFORE the mirrors, so a night that
+# found drift is on the record before the day's suites start.
+name: production-drift-audit
+env:
+  CI_CLASS: heavy
+
+on:
+  # Schedule ONLY. There is deliberately no `push` and no `pull_request`: a
+  # drift question has no answer that a commit can change, and putting it on a
+  # merge trigger would be the gate this workflow was created to remove.
+  schedule:
+    - cron: "11 2 * * *"
+
+# Read-only. The auditor observes and reports; it writes to the job summary and
+# an artifact, and it needs nothing else — no repository contents beyond the
+# checkout it already has, and no write scope anywhere.
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The default branch's head — the thing a deploy is supposed to be
+      # publishing. On a `schedule` event that is the tip of `main`, which is
+      # exactly the right reference: "production should be serving this".
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+
+      # The audit itself. Always exits 0 by construction — including when it
+      # cannot run at all, in which case it reports every check UNKNOWN rather
+      # than passing silently. The step is therefore NOT `continue-on-error`:
+      # a red here would mean the AUDITOR ITSELF broke, which is a real defect
+      # worth a red, and is not one of the findings it exists to report.
+      - name: Audit production for drift (report only — never gates)
+        run: bun scripts/production-drift-audit.ts
+
+      # `if: always()` so the report survives a red run — the same discipline
+      # e2e.yml's admission record uses. On success it is the primary artifact;
+      # on a red run it is the only thing that says what the auditor managed to
+      # learn before it broke.
+      - name: Upload the drift report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-drift-audit-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: production-drift-audit-report.md
+          if-no-files-found: warn
+          retention-days: 90

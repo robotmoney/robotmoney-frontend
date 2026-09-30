@@ -19,7 +19,7 @@
 import { STANCES } from "@robotmoney/contract";
 import { sql } from "../db/client.ts";
 import { buildRationale, loadFrozenTakeSet, majorityStance, meanTakeWeights } from "./domain.ts";
-import { DIGEST_SCHEME, inputsDigest, type JudgeOptions } from "./judge.ts";
+import { DIGEST_SCHEME, inputsDigest, JUDGE_PROMPT_HASH, type JudgeOptions } from "./judge.ts";
 import { getJudgeConfig, judgeInputFromFrozen, latestJudgement } from "./judge-session.ts";
 
 // WHAT IT USED TO CHECK, AND WHY THAT WAS WORTHLESS (issue #766). The original
@@ -146,6 +146,14 @@ export interface JudgeReplayResult {
   judgementFallbackReason: string | null;
   /** That row's model, or null. */
   judgementModel: string | null;
+  /**
+   * The two pinned digests TODAY'S code derives from the frozen input (kept
+   * from main's #969 replay). No model is asked for them: they are what the
+   * audit is about — `inputsDigest` is the value compared against the stored
+   * digest above, and `promptHash` names the judge template this build ships.
+   */
+  promptHash: string;
+  inputsDigest: string;
 }
 
 /**
@@ -305,6 +313,8 @@ export async function replaySessionJudge(
     judgementSource: judgementRow?.source == null ? null : String(judgementRow.source),
     judgementFallbackReason: judgementRow?.fallback_reason == null ? null : String(judgementRow.fallback_reason),
     judgementModel: judgementRow?.model == null ? null : String(judgementRow.model),
+    promptHash: JUDGE_PROMPT_HASH,
+    inputsDigest: inputsDigest(input),
   };
 }
 

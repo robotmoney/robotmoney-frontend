@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "session_id": "12440000-0000-4000-8000-000000000002",
+  "subject_id": "position-review",
+  "created_at": "2026-08-26T16:05:00Z",
+  "prompt_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+  "inputs_digest": "0x4444444444444444444444444444444444444444444444444444444444444444",
+  "quorum": {
+    "active": 3,
+    "submitted": 1,
+    "absent": 2,
+    "participation_bps": 3333
+  },
+  "stances": {
+    "bearish": 0,
+    "cautious": 1,
+    "neutral": 0,
+    "constructive": 0,
+    "bullish": 0
+  },
+  "judge": {
+    "rationale": "The session is preserved as a public record, but it contains no complete four-bucket allocation vector.",
+    "disagreements": [],
+    "release_safety": {
+      "release": "hold",
+      "thinly_supported": true,
+      "take_count": 1,
+      "min_takes": 2,
+      "concerns": [
+        "Thinly supported: 1 take submitted, below the minimum of 2 for this session.",
+        "The session produced no complete four-bucket allocation vector, so it cannot draft a RouterGovernance proposal."
+      ]
+    },
+    "source": "fallback"
+  },
+  "analyst_signatures": [
+    {
+      "member_id": "analyst-alpha",
+      "public_key": "yHpKXrITLSHd0VcGhH6N2KbFrd1v7jK22U0Tyq4D53g=",
+      "canonical_submission": "{\"memberId\":\"analyst-alpha\",\"date\":\"2026-08-26\",\"subjectId\":\"position-review\",\"nonce\":\"fusion-1244-alpha-2\",\"stance\":\"cautious\",\"confidence\":68,\"body\":\"No complete four-bucket vector was submitted for this subject.\",\"memoUrl\":\"https://robotmoney.net/swarm/memos/1244-alpha-no-weights\"}",
+      "signature": "13wL57dNz39bSRA/vzTnVz3VeLFEqSqPno+5Jx5v206POF8aukgNv+57eh81elbtEgfq7FRKHIYg2ZxfviyVAg=="
+    }
+  ]
+}

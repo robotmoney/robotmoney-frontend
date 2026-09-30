@@ -78,6 +78,22 @@ describe("nightly is isomorphic to the merge-to-main set", () => {
 
   const EXEMPT_FROM_MERGE_MIRROR = [
     "contribution-advisory-reviewer.yml", // PR-review bot, not a product test suite
+    // Production-drift AUDITOR, not a product test suite: it observes
+    // robotmoney.network and robotmoney-core, reports what it saw, and never
+    // gates — there is nothing here for "the code on main is broken" to be
+    // true of. Its questions (does an externally-pinned release still publish
+    // the checksums the skill carries? is the served document still a real
+    // procedure, and is its install form verified? can this audit's own
+    // discriminators fail at all?) have no answer any commit can change, which
+    // is exactly why they must NOT sit on the merge gate — and why the merge
+    // gate no longer runs the reachability test that used to sit beside them.
+    // Whether robotmoney.network is answering is a fact about deploys, DNS, TLS
+    // and CDN state, not about a commit; gating on it made pull requests
+    // unmergeable for reasons no diff in this repository could fix (a `contract`
+    // red on a pull request caused by nobody in it, `Received: 502`).
+    // Reports into $GITHUB_STEP_SUMMARY plus an artifact, always exits 0, and
+    // carries no `github.event_name == 'schedule'` gate.
+    "production-drift-audit.yml",
   ];
 
   test("the scan is non-vacuous — a walker regression cannot make this file green", () => {

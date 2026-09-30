@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
 import {
   CONTACT_EMAIL_RE,
   parseApply,
@@ -43,10 +44,10 @@ test("signing drafts and submissions share normalized fields", () => {
     stance: "constructive",
     confidence: 0.75,
     body: " analysis ",
-    weights: [{ bucket: " agents ", weight: 1 }, { bucket: "cash", weight: 3 }],
+    weights: [{ bucket: " agent_tokens ", weight: 1 }, { bucket: "protocol_tokens", weight: 3 }],
   };
   expect(parseSigningDraft(draft)?.memberId).toBe("athena");
-  expect(parseSigningDraft(draft)?.weights).toEqual([{ bucket: "agents", weight: 1 }, { bucket: "cash", weight: 3 }]);
+  expect(parseSigningDraft(draft)?.weights).toEqual([{ bucket: "agent_tokens", weight: 1 }, { bucket: "protocol_tokens", weight: 3 }]);
   expect(parseSubmission({ ...draft, signature: "signature" })?.body).toBe("analysis");
 });
 
@@ -55,9 +56,40 @@ test("weight validation requires distinct buckets, non-negative finite values, a
     memberId: "athena", date: "2026-07-01", subjectId: "woon", nonce: "nonce",
     stance: "constructive", confidence: 0.75,
   };
-  expect(parseSigningDraft({ ...draft, weights: [{ bucket: "cash", weight: -1 }] })).toBeNull();
-  expect(parseSigningDraft({ ...draft, weights: [{ bucket: "cash", weight: 0 }] })).toBeNull();
-  expect(parseSigningDraft({ ...draft, weights: [{ bucket: "cash", weight: 1 }, { bucket: "cash", weight: 2 }] })).toBeNull();
+  expect(parseSigningDraft({ ...draft, weights: [{ bucket: "agent_tokens", weight: -1 }] })).toBeNull();
+  expect(parseSigningDraft({ ...draft, weights: [{ bucket: "agent_tokens", weight: 0 }] })).toBeNull();
+  expect(parseSigningDraft({ ...draft, weights: [{ bucket: "agent_tokens", weight: 1 }, { bucket: "agent_tokens", weight: 2 }] })).toBeNull();
+});
+
+// T17 — THE BUCKET ALLOWLIST AND THE LENGTH CAP. A non-canonical vector must
+// never reach `canonicalizeSubmission`, because once it is signed it is
+// append-only history and only the receipt assembler can object — terminally.
+test("weights carry ONLY canonical buckets, and no more entries than there are of them", () => {
+  const draft = {
+    memberId: "athena", date: "2026-07-01", subjectId: "woon", nonce: "nonce",
+    stance: "constructive", confidence: 0.75,
+  };
+  const canonical = [...RECEIPT_CANONICAL_BUCKET_ORDER].map((bucket) => ({ bucket, weight: 0.25 }));
+
+  const unknown = validateSigningDraft({ ...draft, weights: [{ bucket: "memecoins", weight: 1 }] });
+  expect(unknown.ok).toBe(false);
+  expect((unknown as { error: string }).error).toContain("weights_bucket_not_canonical");
+  expect((unknown as { error: string }).error).toContain("memecoins");
+
+  const tooMany = validateSigningDraft({
+    ...draft,
+    weights: [...canonical, { bucket: "agent_tokens", weight: 0.1 }],
+  });
+  expect(tooMany.ok).toBe(false);
+  expect((tooMany as { error: string }).error).toContain("weights_not_canonical_four");
+
+  // The canonical four themselves still pass, in any order.
+  expect(validateSigningDraft({ ...draft, weights: [...canonical].reverse() }).ok).toBe(true);
+  // A SUBSET is still accepted HERE — which subject asked is not this layer's
+  // fact to know (a position_actions session may carry any subset). The
+  // four-bucket requirement is submitRecommendation's, where the subject is
+  // known and the refusal is still recoverable.
+  expect(validateSigningDraft({ ...draft, weights: canonical.slice(0, 2) }).ok).toBe(true);
 });
 
 test("strict stance string validation accepts valid vocabulary and rejects unknown stances", () => {

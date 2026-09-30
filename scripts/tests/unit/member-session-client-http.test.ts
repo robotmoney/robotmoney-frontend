@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import {
   fetchSigningPayload,
+  resolveRequireWeights,
   reportSnapshotIdFromBrief,
   restJson,
 } from "../../agent/member-session-client.ts";
@@ -91,6 +92,57 @@ describe("fetchSigningPayload", () => {
     await expect(fetchSigningPayload({ memberId: "athena" })).rejects.toThrow(
       /without a non-empty \.canonical string/,
     );
+  });
+});
+
+// T17 / D4 — THE MEMBER CLIENT ALWAYS LEARNS THE ASK. A weightless take is now
+// a 400 for a `bucket_weights` subject, so "the brief 404'd, therefore prose
+// only" is no longer a survivable guess: it would render the member absent on
+// every session whose brief this client outran. The subject endpoint is the
+// second witness, and it exists long before any brief does.
+describe("the allocation ask is resolved from the brief, and from the subject when there is no brief", () => {
+  const briefRoute = (sessionId: string) => `${ROUTES.swarm.brief}?session=${encodeURIComponent(sessionId)}`;
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+  test("the brief is the primary source", async () => {
+    const seen: string[] = [];
+    mockFetch(async (input) => {
+      const url = String(input);
+      seen.push(url);
+      if (url.includes(briefRoute("s1").split("?")[0]!)) {
+        return json(200, { body: { subject: { recommendationType: "bucket_weights" } } });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    expect(await resolveRequireWeights("s1", "vault")).toBe(true);
+    // The subject endpoint is NOT read when the brief already answered.
+    expect(seen.some((u) => u.includes("/subjects/"))).toBe(false);
+  });
+
+  test("a 404 brief falls back to the subject rather than assuming prose only", async () => {
+    mockFetch(async (input) => {
+      const url = String(input);
+      if (url.includes("/briefs") || url.includes(ROUTES.swarm.brief)) return json(404, { error: "no brief yet" });
+      if (url.includes("/subjects/")) return json(200, { id: "vault", recommendationType: "bucket_weights" });
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    expect(await resolveRequireWeights("s2", "vault")).toBe(true);
+  });
+
+  test("a position_actions subject still asks for prose only", async () => {
+    mockFetch(async (input) => {
+      const url = String(input);
+      if (url.includes(ROUTES.swarm.brief)) return json(404, { error: "no brief yet" });
+      if (url.includes("/subjects/")) return json(200, { id: "woon", recommendationType: "position_actions" });
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    expect(await resolveRequireWeights("s3", "woon")).toBe(false);
+  });
+
+  test("an upstream FAILURE on either read is still loud — it is never read as \"no allocation asked for\"", async () => {
+    mockFetch(async () => json(503, { error: "planted upstream failure" }));
+    await expect(resolveRequireWeights("s4", "vault")).rejects.toThrow("HTTP 503");
   });
 });
 

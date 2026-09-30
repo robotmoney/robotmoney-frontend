@@ -65,6 +65,7 @@ export const FATAL_LOG_PATTERNS: readonly string[] = [
   "REFUSING the boot", // api boot guards (handle-namespace, append-only, analytics-ledger)
   "— DEAD", // worker/loop.ts: a job exhausted its retries
   "JudgeUnavailable", // the judge produced no judgement
+  "judge_unavailable:", // worker: a swarm.judge refusal, logged as DEGRADED … judge_unavailable:<reason>
   "No space left on device", // e.g. Postgres shared memory (/dev/shm)
   "could not resize shared memory",
   "getaddrinfo", // a lane pointed at a host this stack does not have

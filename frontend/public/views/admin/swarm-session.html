@@ -209,6 +209,66 @@
           </table>
         </div>
 
+        <!-- ── Consensus receipt (issue #754) — the published, signed artifact
+             a judged-in-enforce session's publish step anchors. `null` with no
+             receiptError means "not published yet", the ordinary state for an
+             off/shadow-judged session or one nobody has published for. ────── -->
+        <h2 class="adm-h2">Consensus receipt</h2>
+        <p x-show="receiptError" x-text="receiptError" class="rm-error" data-testid="receipt-error"></p>
+        <p x-show="!receiptError && !receipt" class="adm-dim" data-testid="receipt-empty">
+          No consensus receipt published for this session.
+        </p>
+        <template x-if="receipt">
+          <div data-testid="receipt-panel">
+            <dl class="adm-meta-grid">
+              <dt>Verified</dt>
+              <dd><span :class="receiptStateClass()" :data-verified-state="receipt.verified ? 'verified' : 'unverified'" x-text="receipt.verified ? 'verified' : 'unverified'"></span></dd>
+              <dt>Published</dt><dd x-text="fmtUtc(receipt.publishedAt)"></dd>
+              <dt>Schema</dt><dd x-text="receipt.schemaVersion"></dd>
+              <dt>Judge mode</dt><dd x-text="receipt.receipt?.judge?.mode || '—'"></dd>
+              <dt>Participation</dt><dd x-text="receiptWeightPct(receipt.receipt?.quorum?.participation_bps)"></dd>
+            </dl>
+            <ul class="adm-bullet-list" x-show="(receipt.unverifiedReasons || []).length > 0" data-testid="receipt-unverified-reasons">
+              <template x-for="r in (receipt.unverifiedReasons || [])" :key="r"><li x-text="r"></li></template>
+            </ul>
+
+            <h3 class="adm-h2 adm-h2--flush">Weights</h3>
+            <p class="adm-dim" x-show="(receipt.receipt?.weights || []).length === 0" data-testid="receipt-weights-empty">
+              No bucket weights on this receipt (position_actions subject).
+            </p>
+            <ul class="adm-bullet-list" x-show="(receipt.receipt?.weights || []).length > 0" data-testid="receipt-weights">
+              <template x-for="w in (receipt.receipt?.weights || [])" :key="w.bucket">
+                <li><span x-text="w.bucket"></span>: <span x-text="receiptWeightPct(w.weight_bps)"></span></li>
+              </template>
+            </ul>
+
+            <h3 class="adm-h2 adm-h2--flush">Signatures</h3>
+            <div class="rm-table-scroll" data-testid="receipt-signatures">
+              <table class="rm-table adm-table">
+                <thead><tr><th>Member</th><th>Verified</th></tr></thead>
+                <tbody>
+                  <template x-for="s in (receipt.signatures || [])" :key="s.memberId">
+                    <tr>
+                      <td x-text="s.memberId"></td>
+                      <td><span :class="s.verified ? 'adm-badge adm-badge--ok' : 'adm-badge adm-badge--err'" x-text="s.verified ? 'verified' : 'unverified'"></span></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+
+            <button type="button" class="adm-btn adm-btn--ghost" @click="toggleReceiptRaw()" data-testid="receipt-raw-toggle">
+              <span x-text="receiptRawExpanded ? 'Hide raw receipt' : 'Show raw receipt'"></span>
+            </button>
+            <div x-show="receiptRawExpanded" data-testid="receipt-raw">
+              <p><strong>Rationale:</strong> <span x-text="receipt.receipt?.judge?.rationale || '—'"></span></p>
+              <p class="adm-dim"><strong>prompt_hash</strong> <span x-text="receipt.receipt?.prompt_hash"></span></p>
+              <p class="adm-dim"><strong>inputs_digest</strong> <span x-text="receipt.receipt?.inputs_digest"></span></p>
+              <p class="adm-dim" data-testid="receipt-canonical-bytes"><strong>canonical bytes</strong> <span x-text="receipt.canonicalBytes"></span></p>
+            </div>
+          </div>
+        </template>
+
         <!-- ── Aggregate (read-only; persisted onto the session row by the
              `aggregate` action — no edit/delete control exists) ──────────── -->
         <template x-if="aggregate()">

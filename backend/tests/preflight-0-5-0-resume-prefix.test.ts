@@ -28,6 +28,7 @@ import { type CheckResult, createChecker } from "../scripts/lib/checks.ts";
 import type { Db } from "../scripts/lib/preflight-utils.ts";
 import { NEW_RELEASE_TABLES_BY_MIGRATION, PRIOR_RELEASE_MIGRATIONS, RELEASE_MIGRATIONS } from "../scripts/upgrades/0.4.0-to-0.5.0/release.ts";
 import { runChecks } from "../scripts/upgrades/0.4.0-to-0.5.0/preflight.ts";
+import { POST_V052_MIGRATIONS } from "./support/post-v052-migrations.ts";
 
 const ADMIN_URL = process.env.DATABASE_URL!;
 const V4_TABLES = ["swarm_judge_config", "swarm_session_judgements", "swarm_consensus_receipts"];
@@ -51,6 +52,9 @@ const LATER_RELEASE_MIGRATIONS: readonly string[] = [
   "0063_swarm_judge_model_default.sql",
   // v0.5.2 (issue 1035): also never part of a v0.4.0 database.
   "0080_analytics_ledger_compaction.sql",
+  // Carried in by the 0.5.x -> main merge; never part of a v0.4.0 or a v0.5.0
+  // database either.
+  ...POST_V052_MIGRATIONS,
 ];
 
 let admin: ReturnType<typeof postgres>;

@@ -6,6 +6,9 @@
 //     a smoke-twin on a Docker-assigned port serves the tunnel a 502;
 //   - --smoke ALWAYS, because --db smoke-twin requires it (a restored database is
 //     populated and the smoke fixtures overwrite by design);
+//   - --cadence fast ALWAYS, because a twin is a TEST boot — production-shaped
+//     data run at the short ~2-min test cadence, never the 6 h production cadence
+//     the port pin alone would select;
 //   - capture unless --reuse, because "the latest dump" is the whole point.
 import { describe, expect, test } from "bun:test";
 import { defaultTwinDir, planTwin } from "../../smoke-twin.ts";
@@ -37,6 +40,14 @@ describe("planTwin — the decisions it will not let you skip", () => {
     expect(plan().args.join(" ")).toContain("--db smoke-twin");
   });
 
+  test("ALWAYS runs the short TEST cadence — --cadence fast, never the 6 h profile", () => {
+    for (const argv of [[], ["--reuse"], ["--no-tui"]]) {
+      const p = plan(...argv);
+      expect(p.args.join(" ")).toContain("--cadence fast");
+      expect(p.args.join(" ")).not.toContain("--cadence realistic");
+    }
+  });
+
   test("--backup-dir is forwarded to the boot", () => {
     const p = plan("--backup-dir", "/srv/b");
     expect(p.backupDir).toBe("/srv/b");
@@ -45,8 +56,8 @@ describe("planTwin — the decisions it will not let you skip", () => {
 
   test("--no-tui passes through; nothing else is invented", () => {
     const dir = defaultTwinDir();
-    expect(plan("--no-tui").args).toEqual(["--smoke", "--db", "smoke-twin", "--static-port", "--backup-dir", dir, "--no-tui"]);
-    expect(plan().args).toEqual(["--smoke", "--db", "smoke-twin", "--static-port", "--backup-dir", dir]);
+    expect(plan("--no-tui").args).toEqual(["--smoke", "--db", "smoke-twin", "--static-port", "--cadence", "fast", "--backup-dir", dir, "--no-tui"]);
+    expect(plan().args).toEqual(["--smoke", "--db", "smoke-twin", "--static-port", "--cadence", "fast", "--backup-dir", dir]);
   });
 
   test("boots from the twin's own directory, never the backup directory", () => {

@@ -33,12 +33,8 @@ import {
   receiptSemanticErrors,
   validateReceipt,
 } from "@robotmoney/contract";
-import { STUB_JUDGE_MODEL, useStubJudge } from "./support/stub-judge.ts";
-// A judgement is a model's opinion now — there is no modelless path — so a
-// suite that needs one on file answers through the stub endpoint.
-useStubJudge();
 import {
-  judge, parseJudgeResponse,
+  judge, JudgeUnavailableError, parseJudgeResponse, templateOpinion,
   type JudgeInput, type JudgeOpinion, type JudgeOutcome, type JudgeTransport,
 } from "../src/swarm/judge.ts";
 
@@ -170,7 +166,7 @@ test("a model judgement round-trips into an anchorable receipt, and `source` rec
   // The MODEL path, through the shipped orchestration rather than the parser
   // alone: a transport that returns the one-position answer.
   const transport: JudgeTransport = { model: "test-model", complete: async () => ONE_POSITION_ANSWER };
-  const modelOutcome: JudgeOutcome = await judge(input, { transport, timeoutMs: 5_000 });
+  const modelOutcome = await judge(input, { transport, timeoutMs: 5_000 });
   expect(modelOutcome.source).toBe("model");
   expect(modelOutcome.opinion.disagreements[0].positions).toHaveLength(1);
 
@@ -185,6 +181,30 @@ test("a model judgement round-trips into an anchorable receipt, and `source` rec
   assertAnchorable(receipt);
   expect(receipt.judge.source).toBe("model");
   expect(canonicalizeReceipt(receipt, spec)).toContain('"source":"model"');
+
+  // A RUNTIME FAILURE PRODUCES NO OPINION EITHER (R4, a42d6c5a). A model WAS
+  // called and could not be reached: that used to yield template prose with
+  // `source: "fallback"` in the canonical bytes. It now refuses with the
+  // reason, and there is nothing to anchor.
+  const brokenTransport: JudgeTransport = {
+    model: "test-model",
+    complete: async () => { throw new Error("connect ECONNREFUSED"); },
+  };
+  const refused = await judge(input, { transport: brokenTransport, timeoutMs: 5_000 }).then(() => null, (e) => e);
+  expect(refused).toBeInstanceOf(JudgeUnavailableError);
+  expect((refused as JudgeUnavailableError).reason).toStartWith("model_unavailable:");
+
+  await expect(judge(input, { transport: null, model: null })).rejects.toThrow(JudgeUnavailableError);
+});
+
+// …but a receipt WRITTEN BEFORE #969 must still read and validate. Those rows
+// are append-only history and some of them are already signed and served, so
+// the schema keeps `source: "fallback"` legal even though nothing emits it.
+test("a pre-#969 fallback receipt still validates — history stays readable", () => {
+  const historical = assembleReceipt(templateOpinion(input), "fallback");
+  assertAnchorable(historical);
+  expect(historical.judge.source).toBe("fallback");
+  expect(canonicalizeReceipt(historical, spec)).toContain('"source":"fallback"');
 });
 
 test("every JudgeOpinion field has a receipt field, and the receipt invents none", () => {

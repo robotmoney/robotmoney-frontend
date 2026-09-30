@@ -8,6 +8,12 @@
 import { sql } from "../db/client.ts";
 import { computeRegimeSnapshotStaleness, type RegimeStaleness } from "../analytics/report/regime-projection.ts";
 import { loadRosterSeedManifest } from "../projects/seed/roster-seed.ts";
+import {
+  describeMissingReceipt,
+  detectMissingReceiptSessions,
+  type MissingReceiptReport,
+} from "../swarm/receipt-gap.ts";
+import { JUDGE_FALLBACK_LOOKBACK_DAYS, summarizeJudgeSources } from "../swarm/judge-budget.ts";
 
 // Research signals are considered stale after this many UTC calendar days
 // without a new row — named per docs/architecture.md US-A2 ("Use a
@@ -41,8 +47,20 @@ export const SAMPLER_KINDS = [
   "buybacks.refresh",
 ] as const;
 
+// The consensus judge's cadence job. Monitored because the D-A7 ruling makes a
+// judge that cannot be ASKED — no model on `swarm_judge_config`, or no funded
+// OPENCODE_API_KEY in the swarm lane — fail closed with a 503, which the worker
+// records as a degraded `swarm.judge` run. Without this entry that degradation
+// was invisible in the one place an operator looks: the exact shape of the
+// failure that let production publish template prose under the judge's name for
+// months (issue #969, AC-MODEL-01). `judge_disabled` is deliberately NOT this —
+// worker/handlers/swarm.ts translates the shipped `off` default into a clean
+// `succeeded` run precisely so a control working as designed raises nothing.
+export const JUDGE_KIND = "swarm.judge" as const;
+
 export const MONITORED_KINDS = [
   ...PRODUCTION_KINDS,
+  JUDGE_KIND,
   "projects.discover",
   "projects.refresh_coins",
   "projects.refresh_wallets",
@@ -100,6 +118,17 @@ export interface AdminOverview {
   enabledAnalyticsSchedules: Array<{ id: number; kind: string; cron: string; nextRunAt: string | null }>;
   nextSwarmEvent: { jobId: number; kind: string; runAfter: string; scopeType: string | null; scopeId: string | null } | null;
   rosterSeed: RosterSeedHealth;
+  /**
+   * AC-FE-10. Published sessions that lost a consensus receipt they could have
+   * had — the one question `JUDGE_KIND` above cannot answer, because it is a
+   * question about SESSIONS and that alert is about the LANE. Eligibility is
+   * judged against the mode and threshold that applied to each session rather
+   * than against today's config, so an unrelated config change cannot retract
+   * it. See swarm/receipt-gap.ts for the staging episode that made the
+   * difference concrete, and for what `off`/`shadow` deliberately do not
+   * report.
+   */
+  missingReceipts: MissingReceiptReport;
   alerts: Alert[];
 }
 
@@ -154,6 +183,11 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
     else if (lastJob?.status === "dead") alert = "dead";
     else if (runningTooLong) alert = "running";
     else if (lastJob?.status === "running") alert = "running";
+    // A SETTLED-FAILED JOB IS THE HEADLINE, not the run under it (R16). A
+    // retry-exhausted degrade now settles `status='failed'` while its runs stay
+    // `degraded`; without this line the kind would report the softer of the two
+    // facts about the same job.
+    else if (lastJob?.status === "failed") alert = "failed";
     else if (lastRun?.status === "dead") alert = "dead";
     else if (lastRun?.status === "failed") alert = "failed";
     else if (lastRun?.status === "degraded") alert = "degraded";
@@ -310,6 +344,91 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
     });
   }
 
+  // ── Missing consensus receipts (AC-FE-10) ──────────────────────────────
+  // ONE ALERT PER SESSION, not one per kind. The lane alert above clears the
+  // moment the next session judges successfully; this one persists for as long
+  // as the artifact is actually missing, because it is derived from the missing
+  // artifact rather than from the last run's status. That is the whole
+  // difference between "the judge was unwell for a while" and "this session
+  // lost its receipt".
+  //
+  // NEVER FATAL TO THE PROJECTION. The overview is the page an operator opens
+  // when something is already wrong; a failure in this one query must not take
+  // the other nine panels with it, so it is reported as its own alert.
+  let missingReceipts: MissingReceiptReport = {
+    judgeMode: "unknown", minTakes: 0, lookbackDays: 0, sessions: [], count: 0,
+  };
+  try {
+    missingReceipts = await detectMissingReceiptSessions();
+    for (const session of missingReceipts.sessions) {
+      alerts.push({
+        level: "failed",
+        source: `swarm.consensus_receipt:${session.sessionId}`,
+        message: describeMissingReceipt(session),
+      });
+    }
+    // The individually-named list is capped; say so rather than under-reporting.
+    if (missingReceipts.count > missingReceipts.sessions.length) {
+      alerts.push({
+        level: "failed",
+        source: "swarm.consensus_receipt",
+        message:
+          `${missingReceipts.count} published session(s) in the last ${missingReceipts.lookbackDays} day(s) were eligible ` +
+          `for a consensus receipt and have none; the ${missingReceipts.sessions.length} most recent are listed individually`,
+      });
+    } else if (missingReceipts.judgeMode === "enforce" && missingReceipts.count === 0) {
+      // ONLY IN `enforce`. In `off` and in `shadow` a receipt is unreachable by
+      // construction (`shadow` withholds the judgement from the session), so
+      // "every eligible session has a consensus receipt" would be a healthy
+      // line about a thing that cannot happen.
+      alerts.push({
+        level: "healthy",
+        source: "swarm.consensus_receipt",
+        message: `every eligible session published in the last ${missingReceipts.lookbackDays} day(s) has a consensus receipt`,
+      });
+    }
+  } catch (e) {
+    alerts.push({
+      level: "failed",
+      source: "swarm.consensus_receipt",
+      message: `missing-receipt detection failed: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  }
+
+  // ── The judge's fallback SHARE (R17 / decision D15) ─────────────────────
+  // A misconfigured budget must not be able to masquerade as an upstream
+  // outage. Every OTHER signal on this page is green while the judge is in
+  // permanent fallback: the sessions publish, the receipts exist, nothing is
+  // missing, the lane's jobs succeed. The only thing that is wrong is that no
+  // model ever answered — and until this alert, the only place that fact
+  // existed was a column nobody selected.
+  //
+  // The thresholds are D15's, matching the postflight check exactly (both call
+  // summarizeJudgeSources): report always, and call it FAILED only at 100 %
+  // over the window, because AC-FE-05 makes a partial fallback a working
+  // feature rather than an incident.
+  try {
+    const judgeSources = await sql<{ source: string; fallback_reason: string | null; n: number }[]>`
+      SELECT source, coalesce(btrim(fallback_reason), '') AS fallback_reason, count(*)::int AS n
+        FROM swarm_session_judgements
+       WHERE created_at >= now() - (${JUDGE_FALLBACK_LOOKBACK_DAYS} || ' days')::interval
+       GROUP BY 1, 2`;
+    const summary = summarizeJudgeSources(
+      judgeSources.map((r) => ({ source: r.source, fallbackReason: r.fallback_reason || null, n: r.n })),
+    );
+    alerts.push({
+      level: summary.verdict === "FAIL" ? "failed" : summary.verdict === "WARN" && summary.fallback > 0 ? "degraded" : summary.verdict === "WARN" ? "stale" : "healthy",
+      source: "swarm.judge_fallback",
+      message: summary.detail,
+    });
+  } catch (e) {
+    alerts.push({
+      level: "failed",
+      source: "swarm.judge_fallback",
+      message: `judge fallback-share detection failed: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  }
+
   return {
     serverDate,
     queueCounts,
@@ -319,6 +438,7 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
     enabledAnalyticsSchedules,
     nextSwarmEvent,
     rosterSeed,
+    missingReceipts,
     alerts,
   };
 }

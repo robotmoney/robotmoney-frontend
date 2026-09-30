@@ -7,7 +7,7 @@
  * deterministic author so the signing and transport path can be exercised
  * without a model, API key, or hidden fallback.
  */
-import { canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
+import { canonicalizeSubmission, path as routePath, RECEIPT_CANONICAL_BUCKET_ORDER, ROUTES } from "@robotmoney/contract";
 import type { SwarmBrief, SwarmSession, SwarmTake } from "@robotmoney/contract";
 
 // D21 retired the MCP transport (docs/decisions.md D21); REST is the only
@@ -24,10 +24,24 @@ export interface AuthorTakeInput {
   brief: SwarmBrief;
 }
 
+export interface TakeWeight {
+  bucket: string;
+  weight: number;
+}
+
 export interface AuthoredTake {
   stance: "bearish" | "cautious" | "neutral" | "constructive" | "bullish";
   confidence: number;
   body: string;
+  /**
+   * The allocation vector. REQUIRED, and rejected with a 400 by the API if it
+   * is missing or is not exactly the canonical four, whenever the session's
+   * subject is `bucket_weights` — which the brief states on
+   * `takeSchema.weights.optional` (false) and `subject.recommendationType`.
+   * `briefRequiresWeights()` below reads that, and `assertAuthoredTake` refuses
+   * to sign a take the session cannot use.
+   */
+  weights?: TakeWeight[];
 }
 
 export type AuthorTake = (input: AuthorTakeInput) => AuthoredTake | Promise<AuthoredTake>;
@@ -67,6 +81,33 @@ export interface StarterResult {
   take: SwarmTake;
 }
 
+/**
+ * TRUE when this session asks for an allocation as well as prose.
+ *
+ * Read off the brief the member already fetched — `takeSchema.weights.optional`
+ * is false exactly for a `bucket_weights` subject — with the subject's own
+ * `recommendationType` as the second witness, so a brief from an older backend
+ * that predates the `optional` flag still answers correctly.
+ */
+export function briefRequiresWeights(brief: SwarmBrief): boolean {
+  const body = brief.body as
+    | { subject?: { recommendationType?: string | null } | null; takeSchema?: { weights?: { optional?: boolean } } }
+    | null;
+  if (body?.takeSchema?.weights?.optional === false) return true;
+  return body?.subject?.recommendationType === "bucket_weights";
+}
+
+/**
+ * An EVEN split across the canonical four. Model-free by design, like the
+ * deterministic body beside it: it exists so the signing and transport path can
+ * be exercised end to end on a `bucket_weights` session without a model. A real
+ * agent replaces it along with `deterministicAuthorTake`.
+ */
+export function evenCanonicalWeights(): TakeWeight[] {
+  const share = 1 / RECEIPT_CANONICAL_BUCKET_ORDER.length;
+  return [...RECEIPT_CANONICAL_BUCKET_ORDER].map((bucket) => ({ bucket, weight: share }));
+}
+
 /** A stable, model-free default. Replace this callback in a real agent. */
 export const deterministicAuthorTake: AuthorTake = ({ session, brief }) => ({
   stance: "neutral",
@@ -74,6 +115,7 @@ export const deterministicAuthorTake: AuthorTake = ({ session, brief }) => ({
   body:
     `Deterministic starter take for ${session.subjectId} on ${session.date}. ` +
     `Brief ${brief.id} was read successfully; replace deterministicAuthorTake with your model callback.`,
+  ...(briefRequiresWeights(brief) ? { weights: evenCanonicalWeights() } : {}),
 });
 
 /**
@@ -148,10 +190,34 @@ async function restJson<T>(
   return responseJson<T>(await fetch(`${backendUrl}${route}`, init), operation);
 }
 
-function assertAuthoredTake(take: AuthoredTake): void {
+function assertAuthoredTake(take: AuthoredTake, brief: SwarmBrief): void {
   if (!take.body.trim()) throw new Error("AuthorTake returned an empty body");
   if (!Number.isFinite(take.confidence) || take.confidence < 0 || take.confidence > 1) {
     throw new Error(`AuthorTake confidence must be between 0 and 1 (got ${take.confidence})`);
+  }
+  // THE ALLOCATION IS PART OF THE CONTRACT ON A `bucket_weights` SESSION. The
+  // API refuses a weightless or non-canonical-four take with a 400 — before
+  // that refusal existed, such a take was accepted and then permanently blocked
+  // the session's consensus receipt. Caught here so the failure names the
+  // AuthorTake callback that produced it rather than an HTTP status.
+  if (!briefRequiresWeights(brief)) return;
+  const named = new Set((take.weights ?? []).map((w) => w.bucket));
+  const canonical = [...RECEIPT_CANONICAL_BUCKET_ORDER];
+  if (named.size !== canonical.length || !canonical.every((bucket) => named.has(bucket))) {
+    throw new Error(
+      `this session asks for an allocation, so AuthorTake must return \`weights\` naming exactly ` +
+        `{${canonical.join(", ")}} — one non-negative entry each, not all zero. ` +
+        `It returned {${[...named].join(", ") || "nothing"}}, which the API refuses with ` +
+        `weights_required_for_bucket_weights_subject / weights_not_canonical_four.`,
+    );
+  }
+  for (const w of take.weights ?? []) {
+    if (!Number.isFinite(w.weight) || w.weight < 0) {
+      throw new Error(`AuthorTake weight for ${w.bucket} must be a finite non-negative number (got ${w.weight})`);
+    }
+  }
+  if (!((take.weights ?? []).reduce((sum, w) => sum + w.weight, 0) > 0)) {
+    throw new Error("AuthorTake weights allocate nothing — a vector that cannot be normalized is not an allocation");
   }
 }
 
@@ -184,7 +250,7 @@ async function runRest(options: StarterOptions): Promise<StarterResult> {
   if (!brief) throw new Error(`no brief exists for session ${session.id} (${session.date}/${session.subjectId})`);
 
   const authored = await (options.authorTake ?? deterministicAuthorTake)({ session, brief });
-  assertAuthoredTake(authored);
+  assertAuthoredTake(authored, brief);
   const memo = await restJson<{ ok?: boolean; url?: string; error?: string }>(
     options.backendUrl,
     ROUTES.swarm.memos,

@@ -9,6 +9,13 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+// ic.ensureSubject() defaults recommendation_type to 'bucket_weights' (T17),
+// which now REQUIRES a weight vector on every take — a rule this file's own
+// fixtures never carry, since it tests reportSnapshotId, an axis independent
+// of recommendationType. ensureProseSubject flips the subject to
+// 'position_actions' so these tests exercise reportSnapshotId in isolation,
+// the same way swarm.test.ts's other prose-only fixtures already do.
+import { ensureProseSubject } from "./support/prose-subject.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -70,7 +77,7 @@ async function freezeReportSnapshot(
 
 async function openSessionBoundToReport(prefix: string) {
   const subj = rid(prefix);
-  await ic.ensureSubject(subj, `${prefix} subject`);
+  await ensureProseSubject(subj, `${prefix} subject`);
   const s = await ic.openSession(subj);
   const date = sessionDate(s);
   const reportSnapshotId = await freezeReportSnapshot(date, rid(`${prefix}-tool`));
@@ -148,7 +155,7 @@ test("a take signed over a DIFFERENT reportSnapshotId than the one submitted fai
 
 test("a session with NO analytics report snapshot bound accepts a legacy (schema 1.0) take with no reportSnapshotId at all", async () => {
   const subj = rid("take-sig-no-report");
-  await ic.ensureSubject(subj, "no report subject");
+  await ensureProseSubject(subj, "no report subject");
   const s = await ic.openSession(subj);
   await ic.publishBrief(s.id, 60);
   const date = sessionDate(s);
@@ -171,7 +178,7 @@ test("a session with NO analytics report snapshot bound REJECTS (409) a take tha
   const foreignReportSnapshotId = await freezeReportSnapshot(otherDate, rid("take-sig-foreign-tool"), { publishCurrentView: false });
 
   const subj = rid("take-sig-unbound-with-id");
-  await ic.ensureSubject(subj, "unbound brief subject");
+  await ensureProseSubject(subj, "unbound brief subject");
   const s = await ic.openSession(subj);
   await ic.publishBrief(s.id, 60);
   const date = sessionDate(s);

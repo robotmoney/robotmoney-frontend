@@ -27,6 +27,15 @@ _static/
 # it into the job summary and uploads it.
 onboarding-admission-record.md
 
+# The production drift auditor's report (the schedule-only, non-gating
+# .github/workflows/production-drift-audit.yml run). Same shape as the record
+# above: a CI ARTIFACT, never source. scripts/production-drift-audit.ts writes
+# it to the working directory, the workflow folds it into $GITHUB_STEP_SUMMARY
+# and uploads it — and a developer running the auditor by hand to see what it
+# would say would otherwise leave an untracked file in the tree, which
+# backend/scripts/lib/rollout-receipt.ts reads as repo_dirty.
+production-drift-audit-report.md
+
 # Agent handoff scratch: written for the next session, stale the moment it is
 # read. Tracked once by mistake (7d1cd13b), which is why it is named here.
 next_agent.md

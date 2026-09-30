@@ -43,6 +43,10 @@ describe("evaluateSessions", () => {
 });
 
 describe("classifyLog", () => {
+  test("a swarm.judge refusal logged by the worker is fatal (the judge runs out of process since #1014)", () => {
+    const v = classifyLog(["job 9 (swarm.judge) DEGRADED — kept last-persisted, retry in 30s: judge_unavailable:launcher_unavailable"], []);
+    expect([...v.fatal.keys()]).toEqual(["judge_unavailable:"]);
+  });
   test("fatal patterns fail, warnings are only counted", () => {
     const v = classifyLog(["[api] REFUSING the boot: x", "job 7 (swarm.judge) failed — DEAD: y", "job 8 DEGRADED — kept", "fine"], []);
     expect([...v.fatal.keys()].sort()).toEqual(["REFUSING the boot", "— DEAD"]);

@@ -6,7 +6,6 @@ import { resolveSmokeEnv } from "./smoke-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { homeEnvFilePath } from "./env-role.ts";
 import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, requestsTwin, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { judgeCredentialEnv, shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
 import { twinMigrationCredential } from "./restore-container.ts";
 import { assertSmokeTwinIsTarget, resolveSmokeTwinDataPath, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration } from "./smoke-twin.ts";
 import { retimeAdoptedWindows, teardownContainer } from "./restore-container.ts";
@@ -33,6 +32,10 @@ import {
   type OnboardingIdentity,
   type OnboardingEvalResult,
 } from "./onboarding-eval.ts";
+import type { RmEnv } from "../../backend/src/acceptance-path.ts";
+import { resolveStackRmEnvOrExit, shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
+import { decideImagesOverride } from "./smoke-images-override.ts";
+import { preflightInferenceOrExit } from "./smoke-inference-preflight.ts";
 import { startProspectTranscript } from "./smoke-prospect-transcript.ts";
 import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./smoke-newcomers.ts";
 import {
@@ -43,6 +46,8 @@ import {
   withMemberAbsent,
   bootstrapStepNames,
   isSmokeMode,
+  newcomerOnboardingApplies,
+  resolveSeatAllRestored,
   scenarioPlan,
 } from "./smoke-mode.ts";
 import { admissionDelayMs, decideAdmission } from "./swarm/roster-plan.ts";
@@ -149,17 +154,22 @@ const STATIC_PORT_FLAG = "--static-port";
 const smokeMode = isSmokeMode(process.argv);
 const scenario = scenarioPlan(smokeMode);
 const staticPortMode = process.argv.includes(STATIC_PORT_FLAG);
+// AC-ID-05 — wiring only; the decision is scripts/lib/smoke-images-override.ts.
+const imagesOverrideDecision = decideImagesOverride(process.argv, process.env);
+for (const line of imagesOverrideDecision.banner) console.warn(`[smoke] ${line}`);
+const imagesOverride = imagesOverrideDecision.path;
 
 // …and the same argument selects the smoke's CADENCE PROFILE (issue #371) — the
 // swarm interval, the SUBMISSION WINDOW (#570), the subject phase offset and the
 // producer beats. A `--static-port` boot is the standing/public smoke (6 h per
-// subject); every other boot, CI included, keeps today's fast ~2-min values.
-// Every number lives in scripts/lib/smoke-schedule.ts, which also ASSERTS that
-// the constants resolved here are the ones this invocation claims — fatal if not.
+// subject); every other boot, CI included, keeps today's fast ~2-min values,
+// and an explicit `--cadence fast|realistic` overrides either. Every number
+// lives in scripts/lib/smoke-schedule.ts, which also ASSERTS that the constants
+// resolved here are the ones this invocation claims — fatal if not. Resolved
+// with the data-path resolve below, which owns the FATAL for both.
 // …EXCEPT on a twin, which is a test instrument and runs FAST however the port
 // is pinned — see stageCadenceApplies() in smoke-schedule.ts for why.
 const twinBoot = requestsTwin(process.argv);
-const cadence = resolveSmokeCadenceForBoot({ stage: stageCadenceApplies(staticPortMode, twinBoot), twin: twinBoot, env: process.env });
 
 // Loud, never silent. A stale `.env` (or an exported shell var) carrying
 // WEB_PORT/POSTGRES_PORT no longer influences anything; say so with the reason
@@ -187,6 +197,9 @@ if (staticPortMode) {
 // allocation — the port is 48787 either way (see assertStageWebPortFree's
 // comment on why this bind is not the TOCTOU pattern we just deleted).
 async function stagePreflight(): Promise<void> {
+  // FIRST, before the port: a stage boot on a development RM_ENV comes up green,
+  // serves the tunnel, and produces sessions that are not evidence (D13).
+  resolveStackRmEnvOrExit(true);
   try {
     await assertStageWebPortFree();
   } catch (err) {
@@ -206,6 +219,7 @@ async function stagePreflight(): Promise<void> {
   }
 }
 if (staticPortMode) await stagePreflight();
+const stackRmEnv: RmEnv = resolveStackRmEnvOrExit(staticPortMode);
 
 // --- Which database this boot runs against (--db) ----------------------------
 // Every decision the flag implies — the three modes, the refusals, the banner —
@@ -215,14 +229,22 @@ if (staticPortMode) await stagePreflight();
 // a bad invocation or a missing DATABASE_URL fails on an untouched host rather
 // than half-way through a bring-up.
 let requestedDataPath: ReturnType<typeof parseDataPath>["dataPath"];
+let cadence: ReturnType<typeof resolveSmokeCadenceForBoot>;
 try {
   const parsed = parseDataPath(process.argv, { envFilePath: homeEnvFilePath() });
   requestedDataPath = parsed.dataPath;
+  cadence = resolveSmokeCadenceForBoot({ stage: stageCadenceApplies(staticPortMode, twinBoot), twin: twinBoot, cadence: parsed.cadence, env: process.env });
   for (const w of parsed.warnings) console.warn(`[smoke] ${w}`);
 } catch (err) {
   console.error(`[smoke] FATAL: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
+// Twin/stage: seat the FULL restored committee, not just the three committed
+// personas. Enrollment rotates each restored member's key (register rebinds by
+// member id) so every member can sign a real take. Gated to production-shaped
+// (--smoke) boots on the pinned tunnel port or the smoke-twin data path.
+// Reasoning in smoke-mode.ts, pin in roster-plan.test.ts: `--db external` never qualifies.
+const seatAllRestored = resolveSeatAllRestored({ smoke: smokeMode, stage: staticPortMode, dataPath: requestedDataPath });
 // Two DIFFERENT questions, and for a smoke-twin they disagree — see smoke-db-mode.ts.
 // Both read only the mode, so they are known before a smoke-twin has been restored.
 const composePostgres = usesComposePostgres(requestedDataPath);
@@ -271,6 +293,8 @@ if (!composePostgres) console.warn(bannerFor(dataPath));
 // lanes need exactly that URL. See smoke-compose-env.ts.
 const externalDataPath = dataPath.kind === "external";
 for (const warning of shadowingStackEnvWarnings(process.env, { external: externalDataPath })) console.warn(`[smoke] ${warning}`);
+// The operator's allowlisted knobs; WORKER_DATABASE_URL only on --db external (R12).
+const operatorComposeEnv = smokePassthroughEnv(process.env, { external: externalDataPath });
 
 // The baked-in smoke database credentials and the two derived URLs now come from
 // the shared stack config (scripts/stack/config.ts), which carries the
@@ -347,6 +371,12 @@ if (pgDataDir) {
   composeFilesRun = `${composeFilesRun}:${overrideFile}`;
 }
 
+// LAST, after every generated overlay — compose merges later files over earlier
+// ones and the images pin must win. Also handed to the stack as a config field:
+// children spawned here inherit COMPOSE_FILE and must resolve the same
+// topology; createStack() dedupes, so both spellings make one `-f`.
+if (imagesOverride) composeFilesRun = `${composeFilesRun}:${imagesOverride}`;
+
 // Admin dashboard password (/admin — the task-queue jobs dashboard, guarded by
 // ADMIN_TOKEN). A FRESH random secret every launch. Issue #456: this used to
 // be published by mutating process.env.ADMIN_TOKEN on THIS process, so every
@@ -382,12 +412,11 @@ const analyticsToken = credentials.analyticsToken;
 // Resolve every model/data-path preflight before provisioning a bearer file.
 // A typo or missing funded model key must not leak a temp credential directory
 // for a stack that never reached creation.
-const smokeEnv = resolveSmokeEnv(process.env, { stage: staticPortMode });
-const analyticsTokenFile = provisionSmokeAnalyticsTokenAfterPreflight(project, analyticsToken, () => {
-  if (!process.env.CI || process.env.ONBOARDING_REAL_EVAL === "1") {
-    resolveModelConfig(process.env);
-  }
-});
+const smokeEnv = resolveSmokeEnv(process.env, { stage: staticPortMode, cadence: cadence.profile });
+// Model + credential before anything is provisioned (AC-MODEL-01) — what the standing stack refuses, and why: scripts/lib/smoke-inference-preflight.ts.
+const inferenceComposeEnv: Record<string, string> = {}; // filled by the preflight; buildSpawnEnv() drops process.env
+const analyticsTokenFile = provisionSmokeAnalyticsTokenAfterPreflight(project, analyticsToken, () =>
+  Object.assign(inferenceComposeEnv, preflightInferenceOrExit({ standingStack: staticPortMode, repoRoot, env: process.env })));
 credentials.analyticsTokenFile = analyticsTokenFile;
 process.env.ANALYTICS_TOKEN_FILE_HOST = analyticsTokenFile;
 delete process.env.ANALYTICS_TOKEN;
@@ -395,7 +424,6 @@ delete process.env.ANALYTICS_TOKEN;
 // Data-path resolution (issue #147: DEMO_HERMETIC and the stubbed/offline path
 // were removed entirely — every boot, local or CI, is production parity: live
 // Base mainnet RPC + live analytics + floor seed).
-
 // Env shared by every `docker compose` call — pins the project, selects the
 // smoke override, resolves the data path, and sets credentials. NO host ports:
 // the compose files publish container ports only and Docker picks the host
@@ -416,6 +444,10 @@ const dockerEnv: Record<string, string> = {
   DATABASE_URL: databaseUrl,
   // Guards the human /admin task-queue dashboard. Random
   // per launch; the value is shown ONLY in the interactive TUI (render()).
+  // Here as well as in buildComposeEnv(), for the same reason as the labels
+  // above: this map drives the DIRECT `docker compose` calls, which would
+  // otherwise fall back to the compose interpolation default (D13).
+  RM_ENV: stackRmEnv,
   ADMIN_TOKEN: adminPassword,
   AUTOMATION_TOKEN: automationToken,
   // Only the path crosses the host/compose environment. Docker mounts the
@@ -439,9 +471,10 @@ const smokeStackConfig: StackConfig = {
   database,
   credentials,
   environment: stackEnvironment,
-  // judgeCredentialEnv LAST: the judge lane's key is not an operator knob and
-  // must not be shadowable by one (see smoke-compose-env.ts).
-  extraComposeEnv: { ...smokeEnv.composeEnv, ...smokePassthroughEnv(process.env, { external: externalDataPath }), ...judgeCredentialEnv(process.env) },
+  rmEnv: stackRmEnv,
+  imagesOverride,
+  // The inference credential from the preflight, last, so no operator knob shadows it.
+  extraComposeEnv: { ...smokeEnv.composeEnv, ...operatorComposeEnv, ...inferenceComposeEnv },
 };
 
 // --- TUI + logging gating -------------------------------------------------
@@ -1164,14 +1197,14 @@ async function main(): Promise<void> {
     const session = await import(join(repoRoot, "scripts", "lib", "swarm", "session.ts"));
     const roster = await session.rosterMembers(undefined, automationToken);
     if (roster === null) throw new Error("smoke initializer restored no readable IC roster");
-    const members = adoptRestoredRoster(scenario, roster);
+    const members = adoptRestoredRoster(scenario, roster, undefined, { seatAllActive: seatAllRestored, twin: dataPath.kind === "smoke-twin" });
     const rail = {
       repoRoot,
       composeProject: project,
       composeFiles: composeFilesRun.split(":"),
       composeSpawnEnv: stack.spawnEnv,
       backendUrl,
-      modelConfig: resolveModelConfig(process.env),
+      modelConfig: resolveModelConfig(process.env, { standingStack: staticPortMode }),
       onboardedHomes: new Map<string, OnboardedMemberHome>(),
       automationToken,
     };
@@ -1511,9 +1544,9 @@ async function main(): Promise<void> {
   if (twinRoster) {
     log("twin: seating EVERY active member of the restored roster — a member with no committed key signs with a per-boot SIMULATED key");
   } else if (smokeMode) {
-    log(`smoke mode: seating only the restored personas (${SMOKE_MEMBERS.map((m) => m.name).join(", ")})`);
+    log(seatAllRestored ? "stage mode: seating the FULL restored committee — enrollment rotates each member's key (see seatAllActive in smoke-mode.ts)" : `smoke mode: seating only the restored personas (${SMOKE_MEMBERS.map((m) => m.name).join(", ")})`);
   }
-  if (twinRoster) await e2e.enableTwinJudge(resolveModelConfig(process.env).model, automationToken); // production ships the judge off; a twin must exercise it
+  if (twinRoster) await e2e.enableTwinJudge(resolveModelConfig(process.env, { standingStack: staticPortMode }).model, automationToken); // production ships the judge off; a twin must exercise it
   if (twinRoster && smokeTwinContainer) retimeAdoptedWindows(smokeTwinContainer, cadence.swarmWindowMs, log); // the twin's schedule, set at boot on its own copy
   const dbRoster = await e2e.rosterMembers(undefined, automationToken);
   if (dbRoster === null) {
@@ -1521,7 +1554,7 @@ async function main(): Promise<void> {
     log("roster unreadable at boot — continuing with this run's simulation members");
   } else {
     const before = sessionMembers.length;
-    sessionMembers = adoptRestoredRoster(scenario, dbRoster, sessionMembers, { twin: twinRoster });
+    sessionMembers = adoptRestoredRoster(scenario, dbRoster, sessionMembers, { seatAllActive: seatAllRestored, twin: twinRoster });
     if (sessionMembers.length > before) log(`swarm now ${sessionMembers.length} seats (${sessionMembers.length - before} restored identities reconnected)`);
     // Named every boot. These takes carry a real member's name over a signature
     // this stack minted, so the cheapest place to state that is where it happens.
@@ -1556,7 +1589,7 @@ async function main(): Promise<void> {
   // imported same-process swarm driver has no setup-token fallback.
   const sessionRail = {
     ...producerRail,
-    modelConfig: resolveModelConfig(process.env),
+    modelConfig: resolveModelConfig(process.env, { standingStack: staticPortMode }),
     onboardedHomes,
     automationToken,
   };
@@ -1747,7 +1780,7 @@ async function main(): Promise<void> {
         repoRoot,
         composeProject: project,
         identity,
-        model: resolveModelConfig(process.env).model,
+        model: resolveModelConfig(process.env, { standingStack: staticPortMode }).model,
       });
       log(`onboarding ${identity.name} transcript: ${transcript.directory} (tail -f ${join(transcript.directory, "events.ndjson")} while in progress)`);
       try {
@@ -1844,9 +1877,10 @@ async function main(): Promise<void> {
     log(`onboarding complete — all ${NEWCOMER_NAMES.length} named newcomers attempted, no more will join`);
   }
   // Scripted newcomers are a DEMO narrative. A smoke boot shows the restored
-  // committee and nothing else, so the driver never starts there; `bun smoke`
-  // keeps its unchanged behaviour (scripts/lib/smoke-mode.ts).
-  if (scenario.runsNewcomerOnboarding) void onboardingDriver();
+  // committee and nothing else, and an `--db external` boot never seats a test
+  // newcomer on a database it does not own (X12), so the driver never starts
+  // there; `bun smoke` keeps its unchanged behaviour (scripts/lib/smoke-mode.ts).
+  if (newcomerOnboardingApplies(scenario, dataPath)) void onboardingDriver();
 
   await new Promise<never>(() => { /* run forever; Ctrl-C/SIGTERM (or `smoke:down`) stops the stack */ });
 }

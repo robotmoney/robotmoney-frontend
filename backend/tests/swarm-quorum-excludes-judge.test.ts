@@ -8,6 +8,7 @@ import * as admin from "../src/swarm/admin.ts";
 import * as swarm from "../src/swarm/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { ensureProseSubject } from "./support/prose-subject.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -28,7 +29,10 @@ test("a session with no frozen roster counts analysts only: the judge is neither
   expect((await admin.setMemberRoleAdmin(judge.id, 1, "judge")).ok).toBe(true);
 
   const subjectId = rid("subject");
-  await swarm.ensureSubject(subjectId, subjectId);
+  // A prose subject: main's T17 gate refuses a weightless take on a
+  // `bucket_weights` subject at submission, and this test is about the quorum,
+  // not the allocation ask.
+  await ensureProseSubject(subjectId, subjectId);
   const opened = await swarm.openSession(subjectId);
   await swarm.publishBrief(opened.id, 60);
   const date = opened.date instanceof Date ? opened.date.toISOString().slice(0, 10) : String(opened.date).slice(0, 10);

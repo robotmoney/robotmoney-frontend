@@ -17,6 +17,17 @@ export function path(template, params = {}) {
 
 export const ROUTES = {
   health: "/health",
+  // GET — the build identity of the RUNNING PROCESS: the full commit SHA and
+  // the exact tag, baked into the image at `docker build` time
+  // (backend/Dockerfile's RM_BUILD_* args). AC-ID-03's "staging runs exactly
+  // the pinned candidates" is checked against THIS, never against a `git
+  // rev-parse` in a checkout beside the container — a checkout answers a
+  // question about itself and moves independently of the image. Unauthenticated
+  // and deliberately so: it carries no configuration, no secret and no state,
+  // and an identity endpoint an auditor cannot reach proves nothing. The same
+  // object also rides on /health as `build`, so an existing health check gains
+  // the identity without a second request.
+  version: "/version",
 
   comments: {
     list: "/api/comments", // GET ?page=
@@ -136,7 +147,22 @@ export const ROUTES = {
     // session id must be able to reach the receipt without first knowing its
     // digest. The path is derived from the session id alone, so it survives
     // every redeploy and every rebuild of the frontend.
-    sessionConsensusReceipt: "/api/swarm/sessions/:id/consensus-receipt", // GET — public, read-time-verified
+    //
+    // THIS IS THE ANCHORED URL, AND IT SERVES THE ANCHORED BYTES (decision
+    // D10). `robotmoney-core` writes this path on chain as `payloadUri` beside
+    // `payloadDigest`, so a GET here returns the BARE canonical receipt — the
+    // exact keccak256 preimage, `application/json`, byte-stable — and nothing
+    // wrapped around it. It used to answer the read-time verification envelope,
+    // whose keccak256 is not the anchored digest; a third party reading only
+    // the chain then had to know, from nowhere on chain, to unwrap `.receipt`
+    // and re-canonicalize. The envelope moved to `sessionConsensusReceiptVerified`.
+    sessionConsensusReceipt: "/api/swarm/sessions/:id/consensus-receipt", // GET — public, BARE canonical bytes (anchored as payloadUri)
+    // The read-time VERIFICATION envelope for the same receipt: the receipt
+    // plus `verified`, the per-signature verdicts and `unverifiedReasons`, all
+    // recomputed on the request. A sibling of the anchored path rather than a
+    // query parameter on it, so that "the anchored URL" stays a whole URL a
+    // verifier can compare for equality. Nothing anchors this path.
+    sessionConsensusReceiptVerified: "/api/swarm/sessions/:id/consensus-receipt/verified", // GET — public, read-time-verified envelope
     // GET — the session's PUBLIC judgements: one per judging party (its newest
     // opinion that reached the session in `enforce`), newest first, and only
     // once the session is published. `shadow` opinions are never served here —
@@ -222,7 +248,11 @@ export const ROUTES = {
       // the session, and what the parser dropped out of the model's response.
       sessionJudgements: "/api/swarm/admin/sessions/:id/judgements",
       rosterAdd: "/api/swarm/admin/sessions/:id/roster/add", // POST { memberId } — before collecting only
-      rosterExcuse: "/api/swarm/admin/sessions/:id/roster/excuse", // POST { memberId } — before collecting only
+      // POST { memberId, force?, reason? } — before collecting only, UNLESS
+      // `force` is set: the audited T17 lever that clears a session already
+      // stranded by a weightless take on file (refused on a terminal session,
+      // logged as `roster_excuse_forced` with the operator's reason).
+      rosterExcuse: "/api/swarm/admin/sessions/:id/roster/excuse",
       rosterRestore: "/api/swarm/admin/sessions/:id/roster/restore", // POST { memberId } — before collecting only
       sessionCancel: "/api/swarm/admin/sessions/:id/cancel", // POST — versioned guarded transition
       sessionClose: "/api/swarm/admin/sessions/:id/close", // POST — versioned guarded transition
@@ -346,7 +376,7 @@ export const ROUTES = {
     // gaps and a stale head, reported separately, for every persisted time
     // series the pipeline writes on a schedule.
     gaps: "/api/admin/gaps",
-    jobs: "/api/admin/jobs", // GET ?limit=&cursor=&kind=&status=&scopeType=&scopeId=&createdFrom=&createdTo= — task-queue jobs + schedules + status summary
+    jobs: "/api/admin/jobs", // GET ?id=&limit=&cursor=&kind=&status=&scopeType=&scopeId=&createdFrom=&createdTo= — task-queue jobs + schedules + status summary
     job: "/api/admin/jobs/:id", // GET — one job + its recent runs (the logs)
     jobRetry: "/api/admin/jobs/:id/retry", // POST — clone a dead job into a new pending job (US-Q1)
     runs: "/api/admin/runs", // GET ?kind=&status=&limit=&cursor= — recent job_runs feed (the logs)

@@ -1,0 +1,208 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://robotmoney.net/schemas/consensus-receipt/1.0",
+  "title": "ConsensusReceipt",
+  "description": "Canonical off-chain payload committed by a Project Fusion consensus receipt. The chain stores only the digest; analyst Ed25519 signatures remain payload data verified off-chain. VERSION POLICY: `schema_version` always equals the trailing segment of `$id`, and a receipt is validated against the schema its own `schema_version` names, never against \"latest\". Within a version the field order is immutable and new fields are optional and appended after every existing field AT THEIR OWN NESTING LEVEL, so bytes producible under that version stay reproducible forever. A bump publishes a NEW `$id` and a NEW document and is never retroactive: an already-published receipt keeps its own `schema_version`, keeps validating under it, and its canonical bytes and digest never change — the anchored digest is a commitment to those exact bytes, so a receipt \"fixed\" by a bump is a different receipt at a different digest. Minor bump = appending an optional trailing field. Major bump = anything that changes bytes already producible: reordering, renaming, removing, retyping, or changing a serialization or rounding rule.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "session_id",
+    "subject_id",
+    "created_at",
+    "prompt_hash",
+    "inputs_digest",
+    "quorum",
+    "stances",
+    "judge",
+    "analyst_signatures"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "The one frontend swarm session represented by this receipt. LOWERCASE HEX ONLY: a UUID's uppercase form is the same identifier but different canonical bytes and therefore a different anchored digest, so exactly one spelling is admitted. crypto.randomUUID() already emits lowercase; an assembler reading an id from anywhere else lowercases it before validating."
+    },
+    "subject_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$",
+      "description": "The session-scoped subject. Cross-subject aggregation is forbidden in schema 1.0."
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$",
+      "description": "EXACTLY ONE PERMITTED FORM: seconds-precision UTC with a literal trailing Z (2026-08-26T16:00:00Z). `format: date-time` is not used here on purpose — RFC 3339 admits fractional seconds and numeric offsets alike, and three spellings of the same instant are three sets of canonical bytes and three digests for one session. THE OBVIOUS PRODUCER PATH DOES NOT EMIT THIS FORM: a pg `timestamptz` read into a JS `Date` and passed through `toISOString()` gives milliseconds (…T16:00:00.000Z), so the assembler MUST normalize — truncate (never round) to whole seconds after converting to UTC — rather than pass the driver's string through. See consensus-receipt.canonicalization.json#timestamp_serialization."
+    },
+    "prompt_hash": {
+      "$ref": "#/definitions/hash32",
+      "description": "JudgeOutcome.promptHash — the digest of the judge INSTRUCTION TEMPLATE, saying under which instructions the prose was formed. IT DOES NOT ESTABLISH AUTHORSHIP: runJudge() records the same promptHash on the model path and on the template-fallback path (it is spread from one `base` object into both returns), so this field is identical whether a model read the takes or a timeout produced template prose. `judge.source` is the field that separates the two. judge.ts emits it as bare lowercase sha256 hex; the assembler 0x-prefixes it to match the chain-facing convention of every other hash in this payload."
+    },
+    "inputs_digest": {
+      "$ref": "#/definitions/hash32",
+      "description": "JudgeOutcome.inputsDigest — the digest of the exact brief and frozen take set the judge read, saying WHAT it read. Same 0x-prefixing note as prompt_hash. Together the two reproduce the rendered prompt byte-for-byte."
+    },
+    "quorum": {
+      "type": "object",
+      "required": ["active", "submitted", "absent", "participation_bps"],
+      "additionalProperties": false,
+      "properties": {
+        "active": { "type": "integer", "minimum": 1 },
+        "submitted": { "type": "integer", "minimum": 1 },
+        "absent": { "type": "integer", "minimum": 0 },
+        "participation_bps": { "type": "integer", "minimum": 0, "maximum": 10000 }
+      }
+    },
+    "stances": {
+      "type": "object",
+      "required": ["bearish", "cautious", "neutral", "constructive", "bullish"],
+      "additionalProperties": false,
+      "properties": {
+        "bearish": { "type": "integer", "minimum": 0 },
+        "cautious": { "type": "integer", "minimum": 0 },
+        "neutral": { "type": "integer", "minimum": 0 },
+        "constructive": { "type": "integer", "minimum": 0 },
+        "bullish": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "judge": {
+      "type": "object",
+      "description": "The shipped JudgeOpinion (backend/src/swarm/judge.ts) field for field — {rationale, disagreements, release_safety} — plus `source` from the JudgeOutcome envelope. The receipt is the signed artifact and the judge opinion is what the backend produces; keeping the two identical is what makes 'the receipt says what the judge said' checkable rather than asserted. The rest of the JudgeOutcome ENVELOPE is deliberately not mirrored: prompt_hash and inputs_digest ride at the receipt's top level (they pin the whole session, not just the prose), take_count and min_takes ride inside release_safety where a verifier needs them, and fallbackReason/model are omitted — fallbackReason interpolates model-controlled text and is operator debugging rather than a public commitment, and model is deployment configuration that would make the anchored bytes depend on a vendor string. Both remain appendable after `source` in a later minor version without changing any byte already published.",
+      "required": ["rationale", "disagreements", "release_safety", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Judge-authored explanation. The judge never authors weights; a model response carrying a weight-like key at any depth is rejected whole, so nothing here can have moved the vector."
+        },
+        "disagreements": {
+          "type": "array",
+          "description": "JudgeOpinion.disagreements verbatim. `positions[].view` is filled from the attributed member's own take body by parseJudgeResponse(), never from the model's text, so a receipt cannot attribute a sentence to a member who did not write it.",
+          "items": { "$ref": "#/definitions/disagreement" }
+        },
+        "release_safety": {
+          "type": "object",
+          "description": "The shipped JudgeReleaseSafety, carried WHOLE and not reduced to a boolean. `release` is advice, not a lock, and it is member-steerable: releaseSafety() sets \"hold\" when thin support OR any concern is present, and a model may ADD concerns drawn from member-authored take bodies (issue #767). Carrying take_count and min_takes alongside the flags is what lets a verifier RECOMPUTE rather than trust — thinly_supported MUST equal (take_count < min_takes), and release MUST equal \"safe\" iff (!thinly_supported and concerns is empty). A later-phase signer reads this field (judge.ts), so the receipt has to carry what that signer read, in the shape it read it.",
+          "required": ["release", "thinly_supported", "take_count", "min_takes", "concerns"],
+          "additionalProperties": false,
+          "properties": {
+            "release": {
+              "type": "string",
+              "enum": ["safe", "hold"],
+              "description": "Advice only. Nothing in the session lifecycle refuses to publish on \"hold\"."
+            },
+            "thinly_supported": {
+              "type": "boolean",
+              "description": "Arithmetic, never the model's call: true iff take_count < min_takes. Recomputable from the two fields beside it."
+            },
+            "take_count": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Size of the frozen latest-revision-per-member take set the judge read. Equals quorum.submitted for the same session."
+            },
+            "min_takes": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The swarm_judge_config.min_takes threshold in force when this opinion was formed, recorded so a historical receipt can be read against the threshold that actually applied to it rather than today's."
+            },
+            "concerns": {
+              "type": "array",
+              "description": "Ordered as releaseSafety() emits them: the generated thin-support concern first when thinly_supported, then any model-authored concerns. Model-authored entries are derived from member-written take bodies and are NOT independently verified prose.",
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "source": {
+          "type": "string",
+          "enum": ["model", "fallback"],
+          "description": "JudgeOutcome.source. THE ONLY FIELD THAT SEPARATES MODEL PROSE FROM TEMPLATE PROSE. templateOpinion() calls the same buildRationale()/buildDisagreements() the aggregator uses and runJudge() stamps the same prompt_hash and inputs_digest on both paths, so nothing else in this payload — not the hashes, not the shape of the opinion — tells a verifier whether a model actually read the takes. \"fallback\" is not a defect: it is the fail-closed path (model unconfigured, timed out, answered unparsably, or smuggled a weight), and a fallback receipt is a complete, valid, anchorable receipt. It is carried so the artifact is attributable to exactly what produced it, which is the reason this phase exists."
+        }
+      }
+    },
+    "analyst_signatures": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/analyst_signature" }
+    },
+    "weights": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "description": "Optional bps-native deterministic mean, EXACTLY the four canonical buckets in canonical order summing to 10,000 bps. The producer is looser than this: optionalWeights() (api/validation.ts) accepts any non-empty bucket string with no enum and no count, and meanTakeWeights() (swarm/domain.ts) unions whatever buckets appear across the takes, so a session where every member submitted a three-bucket vector yields a valid, publicly-served swarm_recommendation.weights that this schema cannot carry. THE ASSEMBLER OBLIGATION, so the gap can never become a signed artifact that contradicts the public API for the same session: omit `weights` ONLY when meanTakeWeights() returned undefined (no member submitted a vector at all — the valid-no-weights fixture), and REFUSE TO ASSEMBLE when a vector exists but is not the canonical four. The mismatch is then an operator-visible refusal rather than a receipt quietly asserting that a session produced no allocation while GET /api/swarm/sessions/:id serves one. See consensus-receipt.canonicalization.json#assembler_obligations.",
+      "items": { "$ref": "#/definitions/bucket_weight" }
+    }
+  },
+  "definitions": {
+    "hash32": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]{64}$",
+      "description": "0x-prefixed 32-byte digest, LOWERCASE HEX ONLY. An uppercase spelling is the same digest but different canonical bytes and therefore a different anchored receipt digest, so exactly one spelling is admitted. node:crypto's createHash().digest(\"hex\") already emits lowercase."
+    },
+    "disagreement": {
+      "type": "object",
+      "required": ["topic", "positions", "what_settles"],
+      "additionalProperties": false,
+      "properties": {
+        "topic": { "type": "string", "minLength": 1 },
+        "positions": {
+          "type": "array",
+          "minItems": 1,
+          "description": "AT LEAST ONE, matching parseJudgeResponse() verbatim — it refuses only an EMPTY positions array (judge.ts), so a model answer naming a single member under a disagreement topic is a routine, accepted, persisted opinion. The 1.0 draft required two, which meant such an opinion could be written into swarm_session_judgements.opinion — a table migration 0032 makes append-only, so the row can never be removed — and then be rejected by this schema forever, leaving the session permanently un-anchorable or forcing the assembler to pad or drop a disagreement and sign bytes that no longer say what the judge said. Reconciled toward the producer rather than the other way: a schema-side bound covers the rows already in the append-only table as well as future ones, whereas tightening the parser would not, and refusing the whole answer over a one-member disagreement would discard a good rationale with it. Pinned by backend/tests/consensus-receipt-judge-roundtrip.test.ts, which runs a 1-position model answer through parseJudgeResponse() and then through this schema.",
+          "items": {
+            "type": "object",
+            "required": ["member_id", "view"],
+            "additionalProperties": false,
+            "properties": {
+              "member_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$" },
+              "view": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "what_settles": { "type": "string", "minLength": 1 }
+      }
+    },
+    "analyst_signature": {
+      "type": "object",
+      "required": ["member_id", "public_key", "canonical_submission", "signature"],
+      "additionalProperties": false,
+      "properties": {
+        "member_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$",
+          "description": "Same case-pinned shape as subject_id. Member ids are server-minted lowercase UUIDs (migration 0033) or the lowercase slugs that predate it. Constraining the character set is what makes analyst_signature_order unambiguous: over these ids, Unicode code point order, UTF-8 byte order, and JavaScript's UTF-16 default sort are the same order, so a cross-repo implementer cannot pick a different one by accident."
+        },
+        "public_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{43}=$",
+          "description": "Standard padded base64 of a raw 32-byte Ed25519 public key."
+        },
+        "canonical_submission": {
+          "type": "string",
+          "minLength": 2,
+          "description": "Exact UTF-8 JSON bytes produced by robotmoney-frontend canonicalizeSubmission. Carrying the string avoids reparsing float weights before signature verification."
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{86}==$",
+          "description": "Standard padded base64 of the raw 64-byte Ed25519 signature over canonical_submission."
+        }
+      }
+    },
+    "bucket_weight": {
+      "type": "object",
+      "required": ["bucket", "weight_bps"],
+      "additionalProperties": false,
+      "properties": {
+        "bucket": {
+          "type": "string",
+          "enum": ["agent_tokens", "conservative_defi_yield", "protocol_tokens", "real_world_assets"]
+        },
+        "weight_bps": { "type": "integer", "minimum": 0, "maximum": 10000 }
+      }
+    }
+  }
+}

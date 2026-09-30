@@ -85,6 +85,17 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     sizeHint: "under 200 B",
   },
   {
+    id: "getVersion",
+    method: "GET",
+    path: ROUTES.version,
+    summary: "Which source commit and tag the running process was built from",
+    description:
+      "Returns the full git commit SHA and the exact tag baked into this deployment's image at build time. Use it to check that a host is running the release it is supposed to: compare `commit` against the tag's commit, not against a checkout on the host, which moves independently of the image. Either field is null with a named reason when the image was built without its identity, and a commit ending in `+dirty` was built from a modified tree and is not the tagged artifact. The same object is also on /health as `build`.",
+    backs: [],
+    contractType: "{ commit, tag, commit_unavailable?, tag_unavailable? }",
+    sizeHint: "under 200 B",
+  },
+  {
     id: "getVaultEconomics",
     method: "GET",
     path: ROUTES.dashboards.vaultEconomics,
@@ -156,7 +167,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.dashboards.regimeSnapshots,
     summary: "Daily cross-asset risk-on / risk-off classifier",
     description:
-      "The regime classifier: a composite score in 0..1 per day, its percentile, the label (risk_off below 0.33, neutral to 0.67, risk_on above), the macro / onchain / equity-factor indicator panels behind it, and the backtests. If all you want is today's reading it is `latest.composite` and `latest.regime`. Be aware of the size before you call: `range` trims the history but not the roughly 300 KB of backtests and correlations that ride on `latest`, so even range=1 is about 300 KB.",
+      "The regime classifier: a composite score in 0..1 per day, its 3-year rolling percentile, the label (risk_off, neutral or risk_on, bucketed on the percentile at 0.33 and 0.67), the macro / onchain / equity-factor indicator panels behind it, and, on request, the backtests. If all you want is today's reading it is `latest.composite` and `latest.regime`. `range` trims the history; the correlation matrices ride on `latest` whatever the range, and the backtests come only with `include=backtest`.",
     backs: ["/regime", "/regime/indicators", "/regime-detection"],
     params: [
       {
@@ -165,9 +176,15 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
         description: "Days of history. Defaults to 180, clamped to 1..3650.",
         example: "90",
       },
+      {
+        name: "include",
+        in: "query",
+        description: "`backtest` adds the three backtests to `latest`.",
+        example: "backtest",
+      },
     ],
     contractType: "{ latest: RegimeSnapshot, history: RegimeSnapshot[] }",
-    sizeHint: "about 490 KB at the default 180 days, and about 300 KB at any range",
+    sizeHint: "about 125 KB at the default 180 days and 33 KB at `?range=1`; `&include=backtest` adds about 125 KB of backtests",
   },
   {
     id: "getResearchSignal",
@@ -328,12 +345,24 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     id: "getConsensusReceipt",
     method: "GET",
     path: ROUTES.swarm.sessionConsensusReceipt,
-    summary: "The signed consensus receipt for a session",
+    summary: "The anchored consensus receipt bytes for a session",
     description:
-      "The aggregate receipt for one session: the signed consensus over the member takes, verified at read time. Addressed by session id rather than by content digest, so it survives redeploys and a reader holding only a session id can reach it. A receipt is only published for a session that reached the judged state, so most sessions do not have one.",
+      "The aggregate receipt for one session: the signed consensus over the member takes. THIS IS THE ANCHORED URL — it is what robotmoney-core writes on chain as `payloadUri`, and it returns the BARE canonical receipt, byte-stable, with nothing wrapped around it. To check the on-chain commitment, prepend the domain separator `robotmoney:consensus-receipt:v1\\n` to the body exactly as received and keccak256 the result: that is `payloadDigest`. Addressed by session id rather than by content digest, so it survives redeploys and a reader holding only a session id can reach it. A receipt is only published for a session that reached the judged state, so most sessions do not have one. For the read-time verification verdict, fetch the `/verified` sibling.",
     backs: ["/swarm"],
     params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
     contractType: "ConsensusReceipt",
+    sizeHint: "a few KB",
+  },
+  {
+    id: "getConsensusReceiptVerified",
+    method: "GET",
+    path: ROUTES.swarm.sessionConsensusReceiptVerified,
+    summary: "The consensus receipt with a read-time verification verdict",
+    description:
+      "The same receipt as its parent path, wrapped in a verification envelope recomputed on every request: the receipt, the canonical bytes it was published as, `verified`, a per-signature verdict, and `unverifiedReasons` when it is not. Served even when it does not verify — never withheld and never passed off as valid. This URL is NOT the anchored one: the envelope's keccak256 is not `payloadDigest`, so verify the commitment against the parent path instead.",
+    backs: ["/swarm"],
+    params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
+    contractType: "SwarmConsensusReceiptResponse",
     sizeHint: "a few KB",
   },
   {
@@ -612,7 +641,7 @@ export function assertCatalogCoversRoutes(): string[] {
   const credentialed = (p: string) => p.startsWith("/api/admin/") || p.startsWith("/api/swarm/admin/") || p.startsWith("/api/analytics/");
 
   const missing = flattenRoutes(ROUTES)
-    .filter((p) => p.startsWith("/api/") || p === ROUTES.health)
+    .filter((p) => p.startsWith("/api/") || p === ROUTES.health || p === ROUTES.version)
     .filter((p) => !credentialed(p))
     .filter((p) => !catalogued.has(p) && !excluded.has(p));
 

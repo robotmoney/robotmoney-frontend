@@ -29,4 +29,9 @@ export * from "./naming.ts";
 // atomically, and this module reads back what it chose. A surviving "pick a
 // free port" helper would only invite the TOCTOU race back in.
 export * from "./ports.ts";
+// images.ts is the AC-ID-05 shipping plan: which six images this repo builds,
+// what each one is called, the compose overlay that pins them, and where that
+// overlay may live. Pure — scripts/stack/ship-images.ts is the shell that runs
+// it, and it is deliberately NOT exported here (it is a CLI with a main).
+export * from "./images.ts";
 export * from "./stack.ts";

@@ -155,7 +155,14 @@ export interface ConsensusReceiptSignatureVerdict {
 }
 
 /**
- * The body served by `GET ROUTES.swarm.sessionConsensusReceipt` (issue #754).
+ * The body served by `GET ROUTES.swarm.sessionConsensusReceiptVerified`
+ * (issue #754; moved off the anchored path by decision D10).
+ *
+ * NOT the body of `ROUTES.swarm.sessionConsensusReceipt`. That path is the one
+ * anchored on chain as `payloadUri` and serves the BARE canonical receipt — the
+ * keccak256 preimage minus its pinned domain prefix, as `application/json` —
+ * because this envelope's keccak256 is not `payloadDigest` and a verifier
+ * reading only the chain cannot be expected to know to unwrap `.receipt`.
  *
  * `verified` is RECOMPUTED on every request — it is not a stored column. A
  * receipt with one bad embedded signature, one failed invariant, or a payload

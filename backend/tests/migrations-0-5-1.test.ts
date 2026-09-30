@@ -52,16 +52,20 @@ describe("0061 — rm_worker may write the wallet-backfill driver's own tables",
 describe("0063 — the judge has a model", () => {
   const ddl = readFileSync(join(MIGRATIONS, "0063_swarm_judge_model_default.sql"), "utf8");
 
-  test("a migrated database carries the CI/driver model", async () => {
+  test("a migrated database carries the CI/driver model (0081 then strips its `opencode/` prefix)", async () => {
     const [row] = await sql`SELECT model FROM swarm_judge_config WHERE id = 1`;
-    expect(row!.model).toBe("opencode/deepseek-v4-flash");
+    expect(row!.model).toBe("deepseek-v4-flash");
   });
 
   test("fills a NULL model and leaves mode alone", async () => {
-    await sql`UPDATE swarm_judge_config SET mode = 'enforce', model = NULL WHERE id = 1`;
+    // Production's row was enforce + NULL when 0063 ran. After the 0.5.x ->
+    // main merge, main's 0056 CHECK makes an ON judge with no model
+    // unrepresentable, so the fill is exercised on an `off` row here; 0063
+    // itself is byte-identical to what production recorded (R2).
+    await sql`UPDATE swarm_judge_config SET mode = 'off', model = NULL WHERE id = 1`;
     await sql.unsafe(ddl);
     const [row] = await sql`SELECT mode, model FROM swarm_judge_config WHERE id = 1`;
-    expect(row).toEqual({ mode: "enforce", model: "opencode/deepseek-v4-flash" });
+    expect(row).toEqual({ mode: "off", model: "opencode/deepseek-v4-flash" });
   });
 
   test("never overrides a model an operator chose", async () => {
@@ -76,5 +80,42 @@ describe("0063 — the judge has a model", () => {
     await sql.unsafe(ddl);
     const [row] = await sql`SELECT mode FROM swarm_judge_config WHERE id = 1`;
     expect(row!.mode).toBe("off");
+  });
+});
+
+describe("0081 — the judge model is stored as the bare wire id (X3)", () => {
+  const ddl = readFileSync(join(MIGRATIONS, "0081_swarm_judge_model_bare_id.sql"), "utf8");
+
+  test("strips a leading `opencode/` and leaves mode alone", async () => {
+    await sql`UPDATE swarm_judge_config SET mode = 'enforce', model = 'opencode/deepseek-v4-flash' WHERE id = 1`;
+    await sql.unsafe(ddl);
+    const [row] = await sql`SELECT mode, model FROM swarm_judge_config WHERE id = 1`;
+    expect(row).toEqual({ mode: "enforce", model: "deepseek-v4-flash" });
+    // Idempotent: a second run matches no row.
+    await sql.unsafe(ddl);
+    expect((await sql`SELECT model FROM swarm_judge_config WHERE id = 1`)[0]!.model).toBe("deepseek-v4-flash");
+  });
+
+  test("never touches another provider's id, a bare id, or a bare `opencode/`", async () => {
+    for (const model of ["vendor/some-judge", "deepseek-v4-flash"]) {
+      await sql`UPDATE swarm_judge_config SET mode = 'shadow', model = ${model} WHERE id = 1`;
+      await sql.unsafe(ddl);
+      expect((await sql`SELECT model FROM swarm_judge_config WHERE id = 1`)[0]!.model).toBe(model);
+    }
+    // Stripping `opencode/` would leave nothing: left as is rather than pushed
+    // into 0056's "on judge must have a model" CHECK (on an off row here).
+    await sql`UPDATE swarm_judge_config SET mode = 'off', model = 'opencode/' WHERE id = 1`;
+    await sql.unsafe(ddl);
+    expect((await sql`SELECT model FROM swarm_judge_config WHERE id = 1`)[0]!.model).toBe("opencode/");
+  });
+
+  test("the stored value is what setJudgeConfig() would store, and what the transport sends", async () => {
+    const { normalizeJudgeModel } = await import("../src/swarm/judge-session.ts");
+    const { wireModelId } = await import("../src/swarm/judge.ts");
+    await sql`UPDATE swarm_judge_config SET model = 'opencode/deepseek-v4-flash' WHERE id = 1`;
+    await sql.unsafe(ddl);
+    const stored = String((await sql`SELECT model FROM swarm_judge_config WHERE id = 1`)[0]!.model);
+    expect(stored).toBe(normalizeJudgeModel("opencode/deepseek-v4-flash"));
+    expect(stored).toBe(wireModelId("opencode/deepseek-v4-flash"));
   });
 });

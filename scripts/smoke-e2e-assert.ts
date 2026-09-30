@@ -9,8 +9,11 @@
 //      subject list is derived from the sessions feed exactly as
 //      frontend/public/assets/js/app/alpine/views/swarm.js's subjects() derives
 //      it, so this asserts what the site actually shows.
-//   2. RESTORED PERSONAS — the active roster is exactly the three archive
-//      personas, by id AND display name.
+//   2. RESTORED PERSONAS — the three committed archive personas are on the
+//      active roster under the right id AND display name. A twin/stage boot
+//      (seatAllActive) legitimately carries the FULL restored committee, so the
+//      roster is allowed to hold more active members than the three — but the
+//      three committed handles must be present and correctly named.
 //   3. IDENTITY CONTINUITY — the new published session carries a
 //      non-archival, verified take from one of those personas. Non-archival is
 //      the durable marker (#498/#499's nonce-derived projection), so this can
@@ -93,7 +96,11 @@ async function main(): Promise<void> {
     check(seen.get(id) === name, `subject ${id} is named "${name}" (got ${JSON.stringify(seen.get(id) ?? null)})`);
   }
 
-  // 3. Exactly the three restored personas on the active roster.
+  // 3. The three committed restored personas on the active roster. NOT an
+  // exact match: a twin/stage boot seats the full restored committee (smoke-
+  // mode.ts seatAllActive), so other active restored members are legitimate —
+  // but the three committed handles must all be present, active and correctly
+  // named, or the restore is stale/foreign and the boot must fail.
   const roster = await getJson<{ members: Member[] }>(ROUTES.swarm.members);
   const active = roster.members.filter((m) => m.status === "active");
   // By HANDLE, not id (issue #685): member ids are generated per deployment
@@ -102,13 +109,10 @@ async function main(): Promise<void> {
   // slugs. `handle` falls back to `id` on the wire for a pre-0030 row.
   const memberHandle = (m: Member) => m.handle ?? m.id;
   const expectedMembers = new Map(SMOKE_MEMBERS.map((m) => [m.handle, m.name]));
-  check(
-    active.map(memberHandle).sort().join(",") === [...expectedMembers.keys()].sort().join(","),
-    `active member handles are exactly [${[...expectedMembers.keys()].sort().join(", ")}] (got [${active.map(memberHandle).sort().join(", ")}])`,
-  );
   for (const [handle, name] of expectedMembers) {
     const m = active.find((x) => memberHandle(x) === handle);
-    check(m?.name === name, `member ${handle} displays as "${name}" (got ${JSON.stringify(m?.name ?? null)})`);
+    check(Boolean(m), `the committed restored persona ${handle} is on the active roster (got [${active.map(memberHandle).sort().join(", ")}])`);
+    if (m) check(m.name === name, `member ${handle} displays as "${name}" (got ${JSON.stringify(m?.name ?? null)})`);
   }
 
   const ordered = [...published].sort((a, b) => sortKey(a).localeCompare(sortKey(b)));

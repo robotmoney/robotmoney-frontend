@@ -12,6 +12,7 @@
 // NOT in scope here (issue #537's "Out of scope"): the archive import pipeline,
 // storage and read paths (#498/#499 own those), the production live-roster
 // seed/prune contract (#529/#530 own that), and any database migration.
+import { ownsData, type DbMode } from "./smoke-db-mode.ts";
 import { personaIdentity } from "./swarm/persona-keys.ts";
 import { planAdoptions } from "./swarm/roster-plan.ts";
 import type { RosterMember } from "./swarm/session.ts";
@@ -56,7 +57,7 @@ export interface ScenarioMember {
 export type ScenarioInitializer = "simulation" | "archive";
 export type ScenarioAssertion = "smoke" | "archive-continuity";
 export interface ScenarioPlan {
-  kind: "smoke" | "smoke";
+  kind: "simulation" | "archive-restore";
   initializer: ScenarioInitializer;
   migrateEnv: Readonly<Record<string, string>>;
   migrateScriptArgs: readonly string[];
@@ -133,7 +134,7 @@ export const SMOKE_MEMBERS: readonly { handle: string; name: string }[] = Object
 export function scenarioPlan(smoke: boolean): ScenarioPlan {
   return smoke
     ? {
-        kind: "smoke",
+        kind: "archive-restore",
         initializer: "archive",
         migrateEnv: SMOKE_MIGRATE_ENV,
         migrateScriptArgs: SMOKE_MIGRATE_SCRIPT_ARGS,
@@ -143,7 +144,7 @@ export function scenarioPlan(smoke: boolean): ScenarioPlan {
         runsNewcomerOnboarding: false,
       }
     : {
-        kind: "smoke",
+        kind: "simulation",
         initializer: "simulation",
         migrateEnv: DEMO_MIGRATE_ENV,
         migrateScriptArgs: DEMO_MIGRATE_SCRIPT_ARGS,
@@ -159,6 +160,51 @@ export const SMOKE_MEMBER_NAMES: ReadonlySet<string> = Object.freeze(
   new Set(SMOKE_MEMBERS.map((m) => m.name.toLowerCase())),
 ) as ReadonlySet<string>;
 
+export interface RosterAdoptionOpts {
+  /**
+   * Seat EVERY active restored member, not only the three committed personas.
+   * True for a production-shaped (--smoke) boot on the pinned tunnel port or
+   * the smoke-twin data path: those boots hold a throwaway copy of production,
+   * so re-keying a restored member at enrollment is free (register rebinds by
+   * member id), and seating the full committee is what makes its IC sessions
+   * realistic. Never true for a plain simulation boot.
+   */
+  seatAllActive: boolean;
+  /**
+   * This boot is a `--db smoke-twin` (release's twin rehearsal, R14/X11). Implies
+   * seat-all, and swaps the three-persona continuity check for the twin's own
+   * invariant: no active restored character is left unseated
+   * (unseatedActiveCharacters). Members with no committed key sign with a
+   * per-boot SIMULATED key, which simulatedSigners() names.
+   */
+  twin: boolean;
+}
+
+/**
+ * Whether THIS boot may seat the full restored committee — the one place that
+ * decides it, so the claim can be asserted rather than read off a module body
+ * (the same reason resolveSmokeCadenceForBoot() exists).
+ *
+ * `ownsData()` is the load-bearing term. Seat-all makes adoptionFilter return
+ * `() => true`, which drops the three-persona allowlist AND the
+ * `personaIdentity()` check that issue #537 added, and enrollment then rebinds
+ * every seated member's key and mints a fresh token. `--static-port` is only a
+ * CLI flag — stagePreflight() checks nothing but that the port is free — so
+ * `--smoke --static-port --db external`, which printResumeHint() itself suggests,
+ * would have re-keyed every active member of a REAL restored server. `external`
+ * is the one mode this boot does not own and cannot throw away, so it never
+ * qualifies however the other flags are set.
+ */
+export function resolveSeatAllRestored(boot: {
+  smoke: boolean;
+  stage: boolean;
+  dataPath: { kind: DbMode };
+}): boolean {
+  if (!boot.smoke) return false;
+  if (!ownsData(boot.dataPath)) return false;
+  return boot.stage || boot.dataPath.kind === "smoke-twin";
+}
+
 /**
  * The `hasCommittedIdentity` predicate handed to planAdoptions().
  *
@@ -171,8 +217,16 @@ export const SMOKE_MEMBER_NAMES: ReadonlySet<string> = Object.freeze(
  * committed fixture and returns a boolean. Adoption re-binds an already
  * committed key; minting one for a member the fixture does not know is exactly
  * the duplicate-making behaviour issue #537 keeps out.
+ *
+ * `opts.seatAllActive` is the twin/stage exception — a production-shaped boot
+ * on the pinned port restores members with NO committed fixture, and seating
+ * them all (and rotating their keys at enrollment) is the capability that
+ * exception exists for. Never set outside that gate.
  */
-export function adoptionFilter(smoke: boolean, twin = false): (name: string) => boolean {
+export function adoptionFilter(
+  smoke: boolean,
+  opts: Partial<RosterAdoptionOpts> = {},
+): (name: string) => boolean {
   // A TWIN seats the WHOLE restored roster, fixture or not.
   //
   // Both rules above exist to protect a PERSISTENT database: a member whose key
@@ -192,7 +246,7 @@ export function adoptionFilter(smoke: boolean, twin = false): (name: string) => 
   // SIMULATED member — real name, real lens, real history, a signature that is
   // ours and not theirs — and `simulatedSigners()` below is what makes the boot
   // say so out loud rather than leaving it to be inferred from a roster count.
-  if (twin) return () => true;
+  if (opts.twin || opts.seatAllActive) return () => true;
   return (name: string) => {
     if (smoke && !SMOKE_MEMBER_NAMES.has(name.trim().toLowerCase())) return false;
     return Boolean(personaIdentity(name));
@@ -244,13 +298,14 @@ export function adoptRestoredRoster(
   plan: ScenarioPlan,
   roster: readonly RosterMember[],
   seated: readonly ScenarioMember[] = plan.members,
-  opts: { twin?: boolean } = {},
+  opts: Partial<RosterAdoptionOpts> = {},
 ): ScenarioMember[] {
-  const twin = Boolean(opts.twin);
+  const twin = opts.twin === true;
+  const seatAll = twin || opts.seatAllActive === true;
   const result = planAdoptions(
     [...roster],
     new Set(seated.map((m) => m.memberId)),
-    adoptionFilter(plan.kind === "smoke", twin),
+    adoptionFilter(plan.kind === "archive-restore", { seatAllActive: seatAll, twin }),
   );
   const adopted = result.adopt.map((m) => ({
     memberId: m.id,
@@ -260,20 +315,36 @@ export function adoptRestoredRoster(
     present: true,
   }));
   if (twin) {
+    // THE TWIN'S INVARIANT (release, R14): every active restored character is
+    // seated. The three-persona check below does not apply to a twin — its
+    // roster is production's, whatever that holds.
     const missing = unseatedActiveCharacters(roster, [...seated, ...adopted]);
     if (missing.length) {
       throw new Error(`twin boot left ${missing.length} active roster character(s) unseated: ${missing.join(", ")}`);
     }
-  } else if (plan.kind === "smoke") {
+  } else if (plan.kind === "archive-restore") {
     // Compared by HANDLE (issue #685). The adopted rows carry whatever id this
     // deployment generated, so an id comparison could only ever be satisfied by
     // a seed that hardcoded slug ids — the thing this issue removes. The handle
     // is the stable public key, and `rosterMembers()` reads it off the admin
-    // API's `handle` field alongside the id it seats members with.
+    // API's `handle` field alongside the id it seats members with. seat-all
+    // relents from "exactly these handles" to "these three ARE present": other
+    // active restored members are legitimately seated and re-keyed too.
     const expected = SMOKE_MEMBERS.map((m) => m.handle).sort().join(",");
-    const actual = result.adopt.map((m) => m.handle ?? m.id).sort().join(",");
-    if (actual !== expected) {
-      throw new Error(`smoke initializer expected restored IC handles [${expected}], got [${actual || "none"}]`);
+    const actualSet = new Set(result.adopt.map((m) => m.handle ?? m.id));
+    const missing = SMOKE_MEMBERS.filter((m) => !actualSet.has(m.handle)).map((m) => m.handle);
+    if (seatAll) {
+      if (missing.length > 0) {
+        throw new Error(
+          `smoke initializer restored no '${missing.join(", ")}' persona(s) (issue #538) — ` +
+            `active handles: ${result.adopt.map((m) => m.handle ?? m.id).join(", ") || "none"}`,
+        );
+      }
+    } else {
+      const actual = result.adopt.map((m) => m.handle ?? m.id).sort().join(",");
+      if (actual !== expected) {
+        throw new Error(`smoke initializer expected restored IC handles [${expected}], got [${actual || "none"}]`);
+      }
     }
   }
   return [...seated.map((m) => ({ ...m })), ...adopted];
@@ -341,4 +412,23 @@ export async function runScenarioLifecycle<Context, SessionResult>(
  */
 export function runsNewcomerOnboarding(smoke: boolean): boolean {
   return !smoke;
+}
+
+/**
+ * Does THIS boot start the simulation onboarding driver (X12)?
+ *
+ * The plan decides for the scenario (never under `--smoke`), and the DATABASE
+ * decides the rest: an `--db external` boot runs against a database it does
+ * not own — the deployment's — and the driver admits a scripted newcomer
+ * whenever a seat is free. With 20 seats (#1033) there usually is one, so
+ * without this a simulation boot pointed at a real database would seat test
+ * characters on the real roster. `external` never qualifies, however the
+ * scenario is set.
+ */
+export function newcomerOnboardingApplies(
+  plan: Pick<ScenarioPlan, "runsNewcomerOnboarding">,
+  dataPath: { kind: DbMode },
+): boolean {
+  if (dataPath.kind === "external") return false;
+  return plan.runsNewcomerOnboarding;
 }

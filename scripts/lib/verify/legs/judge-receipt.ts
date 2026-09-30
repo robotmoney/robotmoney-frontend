@@ -37,8 +37,10 @@ interface SessionRow {
 }
 
 /**
- * What the ROUTE serves, which is not the receipt itself: the stored artifact
- * is nested under `receipt`, beside the signature material the page renders.
+ * What `sessionConsensusReceiptVerified` serves: the read-time VERIFICATION
+ * envelope — the stored receipt nested under `receipt`, beside `verified` and
+ * the signature material. (M4: `sessionConsensusReceipt` now serves the BARE
+ * canonical receipt, the anchored bytes, which carries no verdict at all.)
  * Reading `judge` off the top level (as the first cut of this leg did) makes
  * every receipt look unjudged — a FAIL that blames the product for a reader
  * bug, which is the failure this file's neighbour warns about.
@@ -73,14 +75,24 @@ interface Receipt {
  * `shadow` records an opinion the session never adopted, so a receipt carrying
  * one attests less than it appears to.
  */
-export function receiptVerdict(body: ReceiptResponse | Receipt): { ok: boolean; why: string } {
-  // Accepts the served envelope or a bare receipt, so a shape change surfaces
-  // as a failed assertion here rather than as "the product is unjudged".
-  const envelope = body as ReceiptResponse;
-  const receipt: Receipt = envelope.receipt ?? (body as Receipt);
+export function receiptVerdict(body: ReceiptResponse): { ok: boolean; why: string } {
+  // THE ENVELOPE, OR NOTHING. A bare receipt (what the anchored
+  // `/consensus-receipt` route serves since M4) carries no `verified` verdict,
+  // and this leg used to read "no verdict" as "not a lie" — so a shape change
+  // on the route silently turned the signature half of this check into a
+  // pass. A missing `receipt` or a missing `verified` is now a FAIL naming the
+  // route to read.
+  if (!body || typeof body !== "object" || !body.receipt || typeof body.receipt !== "object") {
+    return {
+      ok: false,
+      why: "response carries no `receipt` envelope — read ROUTES.swarm.sessionConsensusReceiptVerified " +
+        "(/consensus-receipt/verified); the bare /consensus-receipt route serves the anchored bytes without a verdict",
+    };
+  }
+  const receipt = body.receipt;
   const source = receipt.judge?.source;
   const mode = receipt.judge?.mode ?? receipt.judge?.judge_mode;
-  const verified = envelope.verified;
+  const verified = body.verified;
   if (!source) return { ok: false, why: "receipt carries no judge.source — it is not a judged receipt at all" };
   if (source !== "model") {
     return {
@@ -93,14 +105,19 @@ export function receiptVerdict(body: ReceiptResponse | Receipt): { ok: boolean; 
     return { ok: false, why: `judge_mode='${mode}' — only an enforce judgement is one the session adopted` };
   }
   // A CERTIFICATE THAT DOES NOT VERIFY IS NOT ONE. `verified` is the route's own
-  // answer on the stored canonical bytes against the published signature; only
-  // an explicit `false` fails, so a response that omits it is not read as a lie.
+  // answer on the stored canonical bytes against the published signature.
   if (verified === false) {
     return { ok: false, why: "receipt is served with verified=false — its canonical bytes do not match its signature" };
   }
+  if (verified !== true) {
+    return {
+      ok: false,
+      why: "receipt is served without a `verified` verdict — the signature was never checked, so this is not evidence of a certificate",
+    };
+  }
   return {
     ok: true,
-    why: `judge.source='model'${mode ? `, judge_mode='${mode}'` : ""}${verified === true ? ", signature verified" : ""}`,
+    why: `judge.source='model'${mode ? `, judge_mode='${mode}'` : ""}, signature verified`,
   };
 }
 
@@ -123,7 +140,7 @@ export const judgeReceiptLeg: VerifyLeg = {
         .slice(0, LOOKBACK);
       for (const row of published) {
         try {
-          const served = await ctx.json<ReceiptResponse>(routePath(ROUTES.swarm.sessionConsensusReceipt, { id: row.id }));
+          const served = await ctx.json<ReceiptResponse>(routePath(ROUTES.swarm.sessionConsensusReceiptVerified, { id: row.id }));
           const verdict = receiptVerdict(served);
           if (verdict.ok) return { row, why: verdict.why };
           lastSeen = `${row.id}: ${verdict.why}`;

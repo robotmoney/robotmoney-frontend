@@ -1,0 +1,107 @@
+{
+  "schema_version": "1.0",
+  "domain_separator": "robotmoney:consensus-receipt:v1\n",
+  "encoding": "UTF-8",
+  "digest_algorithm": "keccak256",
+  "receipt_id_derivation": {
+    "algorithm": "keccak256",
+    "bytes": "UTF-8 robotmoney:consensus-receipt-id:v1\\n + session_id + \\n + subject_id",
+    "uniqueness": "the contract accepts at most one receipt_id, enforcing one receipt per session per subject"
+  },
+  "json_serialization": "RFC 8259 compact JSON: no insignificant whitespace anywhere — no space after ':' or ',', no indentation, no newline inside the object. Escaping is normative and stated in string_escaping below, NOT by reference to any one language's serializer.",
+  "string_escaping": {
+    "escaped": "EXACTLY three things, and nothing else: U+0022 QUOTATION MARK as \\\", U+005C REVERSE SOLIDUS as \\\\, and the C0 control range U+0000-U+001F. Within C0, the short forms are used where RFC 8259 defines one — \\b (U+0008), \\t (U+0009), \\n (U+000A), \\f (U+000C), \\r (U+000D) — and every other C0 code point uses the lowercase-hex \\u00XX form.",
+    "raw": "EVERY other code point is emitted as raw UTF-8, with no \\uXXXX form. That includes all non-ASCII (accented Latin, CJK, Cyrillic, an em-dash, a curly quote), U+007F DELETE, U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR, and every astral-plane code point above U+FFFF, which is emitted as its 4-byte UTF-8 sequence and NEVER as an escaped surrogate pair. U+002F SOLIDUS is never escaped.",
+    "well_formed_input": "Strings are well-formed Unicode; a lone surrogate is not a legal input to canonicalization and an assembler must refuse rather than escape one.",
+    "why_it_is_stated_this_way": "The two most likely cross-repo implementations both diverge from this rule by DEFAULT while still reproducing an all-ASCII golden byte-for-byte: Go's encoding/json escapes U+003C, U+003E, U+0026, U+2028 and U+2029 unless SetEscapeHTML(false) is called, and Python's json.dumps escapes every non-ASCII code point unless ensure_ascii=False is passed. The text fields here are model- and member-authored free text, so the first real receipt carrying an accented name or an em-dash would silently anchor a different digest. consensus-receipt.escaping.json and its committed bytes exist to make that failure loud: it carries an em-dash, a non-Latin script, an ampersand, an angle bracket, an escaped newline, U+2028, and an astral-plane emoji.",
+    "reference": "JavaScript's JSON.stringify implements exactly this rule; it is named as an implementation of the rule, not as the rule."
+  },
+  "timestamp_serialization": {
+    "field": "created_at",
+    "form": "EXACTLY ONE: seconds-precision UTC with a literal trailing Z, matching ^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$ — for example 2026-08-26T16:00:00Z.",
+    "forbidden": "Fractional seconds (2026-08-26T16:00:00.000Z), a numeric UTC offset (2026-08-26T18:00:00+02:00), a lowercase z, and a space in place of T are all REFUSED, even though RFC 3339 admits them and they may denote the same instant. Three spellings of one instant would be three sets of canonical bytes and three anchored digests for one session.",
+    "producer_note": "THE OBVIOUS IMPLEMENTATION DOES NOT PRODUCE THIS FORM. A Postgres timestamptz read through a JS driver becomes a Date, and Date.prototype.toISOString() emits milliseconds. The assembler MUST normalize — convert to UTC, then TRUNCATE (never round) to whole seconds — rather than pass the driver's string through."
+  },
+  "trailing_newline": true,
+  "field_order": [
+    "schema_version",
+    "session_id",
+    "subject_id",
+    "created_at",
+    "prompt_hash",
+    "inputs_digest",
+    "quorum",
+    "stances",
+    "judge",
+    "analyst_signatures",
+    "weights"
+  ],
+  "optional_append_only_fields": ["weights"],
+  "analyst_signature_order": "member_id ASCENDING BY UNICODE CODE POINT — compare code point by code point, shorter string first on a prefix. This is identical to ascending UTF-8 byte order (UTF-8 preserves code point order) and is NOT JavaScript's default Array.prototype.sort, which compares UTF-16 code units and disagrees with both for every code point above U+FFFF. Schema 1.0 additionally pins member_id to ^[a-z0-9][a-z0-9_-]{0,127}$, so over every id the schema admits all three orders coincide; the code-point rule is stated so an implementation that relaxes the pattern still sorts the way the reference does. compareCodePoints() in contract/src/consensus-receipt.js is the reference comparator.",
+  "nested_field_order": {
+    "quorum": ["active", "submitted", "absent", "participation_bps"],
+    "stances": ["bearish", "cautious", "neutral", "constructive", "bullish"],
+    "judge": ["rationale", "disagreements", "release_safety", "source"],
+    "judge.disagreements[]": ["topic", "positions", "what_settles"],
+    "judge.disagreements[].positions[]": ["member_id", "view"],
+    "judge.release_safety": ["release", "thinly_supported", "take_count", "min_takes", "concerns"],
+    "analyst_signatures[]": ["member_id", "public_key", "canonical_submission", "signature"],
+    "weights[]": ["bucket", "weight_bps"]
+  },
+  "canonical_bucket_order": [
+    "agent_tokens",
+    "conservative_defi_yield",
+    "protocol_tokens",
+    "real_world_assets"
+  ],
+  "bps_conversion": {
+    "rule": "LARGEST REMAINDER (Hare quota)",
+    "input": "THE MEAN, COMPUTED IN FOUR STEPS, ALL OF WHICH DECIDE THE BYTES. The receipt carries only integers, so a verifier holding the frozen take set must recompute this mean to check `weights` — an unstated step is as fatal as a wrong one. (1) NORMALIZE each analyst vector to sum 1 on its own, dropping any vector that is not a well-formed non-negative vector summing above 0. (2) SUM the normalized vectors bucket by bucket and divide by the NUMBER OF SURVIVING VECTORS, accumulating in ASCENDING localeCompare ORDER of bucket name — which, over the four buckets of canonical_bucket_order, is canonical_bucket_order itself. (3) DIVIDE EVERY ENTRY A SECOND TIME by the sum of those averages, then ROUND EACH to 8 DECIMAL PLACES as Math.round(x * 1e8) / 1e8. (4) SETTLE THE POSITIONALLY LAST ENTRY: overwrite it with round(1 - (sum of the preceding entries), 8), same 8-decimal rounding. Step 4 is why an all-zero last bucket can arrive as EXACTLY -1e-8 rather than 0 — see negative_dust_clamp. meanTakeWeights() in backend/src/swarm/domain.ts (lines 1733-1751) is the reference implementation of this clause, and it is the ONLY thing in the system permitted to author a bucket weight.",
+    "denominator": 10000,
+    "arithmetic_domain": "IEEE-754 BINARY64, AND NOTHING ELSE. Every operation below — the multiply, the floor, the subtraction that yields the fractional part, and the comparison that orders the remainders — is performed on the binary64 double that carries mean_weight. DECIMAL, RATIONAL AND FIXED-POINT RECOMPUTATION ARE FORBIDDEN: an implementation that parses the 8-decimal share into decimal.Decimal, Fraction, BigDecimal or a scaled integer and applies this same prose PRODUCES DIFFERENT BYTES on real vectors (see divergent_example), and one divergence is a verification failure against an anchored digest. The rule is not \"round the way your language rounds\": it is this arithmetic, in this domain. Stated because the prose alone reads as domain-free, and reaching for exact decimal arithmetic in allocation code is the natural instinct — especially in Python.",
+    "floor_rule": "for every bucket of canonical_bucket_order compute raw = mean_weight * 10000 as a SINGLE IEEE-754 BINARY64 MULTIPLY — not a decimal scale, not a multiply-then-re-round, not a division by 1e-4 — and take floor(raw), its INTEGER PART — floor, never nearest.",
+    "remainder_rule": "the fractional part of a bucket is remainder = raw - floor(raw), COMPUTED IN BINARY64 AND IN EXACTLY THAT FORM. That subtraction is EXACT (Sterbenz: raw and floor(raw) are within a factor of two of each other over this range), so every conforming binary64 implementation gets the identical bits — which is what makes the tie-break below decidable at all. Do NOT obtain it as fmod, as (mean_weight * 10000) % 1 re-rounded, or by re-deriving it from a decimal string. The leftover, 10000 minus the sum of the integer parts, is then handed out ONE BASIS POINT AT A TIME to the buckets with the largest remainders, largest first. At most one bp reaches any bucket, and the vector therefore sums to exactly 10000 by construction, for every share vector, whatever the last bucket holds.",
+    "tie_break": "CANONICAL BUCKET ORDER. When two buckets have the SAME fractional part, the one appearing EARLIER in canonical_bucket_order takes the bp. This is part of the rule and not an artefact of a sort: two buckets holding the identical share hold the identical fractional part (a three-way mean of thirds does it), and which of them takes the leftover CHANGES THE CANONICAL BYTES and so the anchored digest. An implementation must not rely on its sort being stable — it must compare (fractional part descending, canonical_bucket_order index ascending) as a total order. THE TIE-BREAK FIRES ONLY ON BITWISE-EQUAL BINARY64 REMAINDERS. Two remainders that differ by a single ULP are NOT a tie and the larger simply wins; two remainders that a decimal or rational recomputation would make equal are NOT a tie either, unless they are equal as binary64. This is why arithmetic_domain has to be stated before this clause means anything: in another domain the SAME vector ties where this one does not, and the bp lands in a different bucket (divergent_example).",
+    "divergent_example": {
+      "why": "A SELF-TEST for arithmetic_domain, published so an implementer can prove their domain before anything is anchored. Convert this vector; if you do not get bps_binary64 exactly, your arithmetic is not binary64 and your receipts will not verify.",
+      "shares": {
+        "agent_tokens": 0.05649855,
+        "conservative_defi_yield": 0.91716132,
+        "protocol_tokens": 0.01047881,
+        "real_world_assets": 0.01586132
+      },
+      "bps_binary64": [565, 9171, 105, 159],
+      "bps_decimal_WRONG": [565, 9172, 105, 158],
+      "mechanism": "The floors are [564, 9171, 104, 158] and 3 bps are left over. agent_tokens (.9855) and protocol_tokens (.7881) take two of them uncontested. The third is contested by conservative_defi_yield and real_world_assets, whose shares both end .6132: IN DECIMAL those remainders are EXACTLY EQUAL, the tie-break fires, and canonical order awards the bp to conservative_defi_yield. IN BINARY64 they are 0.6131999999997788 and 0.6132000000000062 — not equal, one ULP-scale apart — so no tie exists and real_world_assets takes it outright. Same prose, same input, two different signed artifacts. 17 such divergences were measured in 300000 producer-shaped vectors."
+    },
+    "negative_dust_clamp": {
+      "rule": "A share in the CLOSED-OPEN RANGE -1e-6..0 (that is, at least -1e-6 and below 0) is FLOORED TO POSITIVE ZERO before the floor/remainder step, and the sum check reads the clamped value. NEGATIVE ZERO IS CLAMPED TOO: round(1 - prefixTotal, 8) returns -0 whenever the prefix overshoots by less than half a unit in the eighth decimal, -0 < 0 is FALSE in IEEE-754, and floor(-0 * 10000) is -0 — an integer weight_bps of -0 that JSON.stringify happens to serialize as \"0\" but that no implementation should be relying on. Clamp with `share > 0 ? share : 0`, never with `share < 0 ? 0 : share`. A share MORE NEGATIVE than -1e-6 is REFUSED BY NAME, as before. The bound is the share-sum tolerance itself and is not widened for this.",
+      "why": "THE PRODUCER EMITS NEGATIVE ZERO-DUST, so refusing it would reintroduce the very defect superseded_rule describes. input step 4 settles the positionally last entry to round(1 - prefixTotal, 8); when every member zeroes real_world_assets the three prefix roundings can sum just above 1 and that entry lands on EXACTLY -1e-8. Measured over 200000 producer-shaped zero-RWA sessions: 12.39% arrive negative. That is the same rate, on the same shape, as the refusal largest remainder was adopted to remove — and it would surface as an unnamed internal error rather than a named refusal.",
+      "authors_no_weight": "Flooring -1e-8 to 0 is a REPRESENTATION change of exactly the kind this whole clause performs. -1e-8 of a vault is not an allocation; it is the residue of an 8-decimal subtraction, and 0 is the only integer bps it can denote. The value moves by less than one ten-thousandth of a basis point, no other bucket is touched, and nothing is re-averaged or re-normalized. A share below the tolerance is a REAL negative allocation and stays refused."
+    },
+    "refusal": "The conversion refuses ONLY an input that is not a share vector: a bucket of canonical_bucket_order missing, a share outside 0..1, or a total more than 1e-6 away from 1. It NEVER refuses because of where a bucket sits in the order, it never refuses a vector whose last bucket is zero, and it never refuses the producer's own negative settle dust — see negative_dust_clamp, which floors a share in -1e-6..0 to 0 and refuses anything more negative BY NAME rather than as an unnamed internal error.",
+    "authors_no_weight": "This is a change of REPRESENTATION — a float in 0..1 to an integer in 0..10000 — forced by the rule that every number in the canonical bytes is a bare integer. It does not re-average, re-normalize or re-order anything.",
+    "superseded_rule": "Schema 1.0 originally rounded the first three canonical buckets to the NEAREST bp and settled the positionally last bucket (real_world_assets) to 10000 minus the prefix sum, rejecting a result outside 0..10000. When real_world_assets is exactly 0 the three prefix buckets carry the whole distribution, three independent nearest-integer roundings overshoot by +1 bp about ONE TIME IN EIGHT (12.5% measured over a 50000-vector corpus in robotmoney-core#1290), the settled entry becomes -1, and the vector had NO REPRESENTATION — no receipt could be assembled for that session. real_world_assets is 0 in four of the six real archived allocations, so the refusal sat on the committee's commonest shape. Those six convert IDENTICALLY under largest remainder, because their means are whole bps with nothing to redistribute; the rule change moves no already-settled data.",
+    "rejected_alternative": "Settling onto the largest-weight bucket rather than the positionally last one. Rejected in robotmoney-core#1290's own words: it \"only moves the failure: it still refuses when the largest bucket is itself near zero.\" Largest remainder sums exactly by construction, never refuses, and is the standard apportionment answer.",
+    "reference": "bucketSharesToBps() in contract/src/consensus-receipt.js is the reference implementation."
+  },
+  "assembler_obligations": {
+    "order": "VALIDATE, THEN CANONICALIZE, ALWAYS. canonicalizeReceipt() throws on any undefined required field rather than emitting bytes with the key missing (a plain JSON.stringify would silently omit it), so an assembler that canonicalizes first gets a refusal instead of a digest over a payload that would have failed validation. Structural validation (validateReceipt) and the arithmetic recomputations (receiptSemanticErrors) both precede it.",
+    "stances_zero_fill": "`stances` is a FIXED FIVE-KEY object — bearish, cautious, neutral, constructive, bullish — every one of them always present. The rollup it comes from is SPARSE: aggregateSession() (swarm/domain.ts) starts from {} and only sets a key for a stance that actually appears, so a session with two neutral takes and nothing else hands the assembler a one-key object. The assembler zero-fills the missing four; it never emits a short stances object and never treats an absent stance as unknown.",
+    "weights_cardinality": "Emit `weights` as EXACTLY the four canonical buckets, in canonical_bucket_order, summing to 10000 bps. OMIT `weights` only when meanTakeWeights() returned undefined — no member submitted a vector at all. When a vector exists but is not the canonical four (optionalWeights() in api/validation.ts accepts any bucket set of any size, and meanTakeWeights() unions whatever appears), REFUSE TO ASSEMBLE and surface the refusal to an operator. Silently omitting `weights` in that case would publish a signed artifact saying the session produced no allocation while GET /api/swarm/sessions/:id serves a concrete one for the same session.",
+    "participation_bps_rounding": "participation_bps = floor((submitted / active) * 10000 + 0.5) over the exact submitted/active ratio — ROUND HALF UP, not half-even, and computed from the two integers rather than from the stored `participation` float. `active` is quorum.active and must be at least 1. Half-up and half-even differ at an exact .5 boundary (1 of 8 members is 1250 either way; 1 of 16 is 625; the boundary cases are real and a receipt that disagrees on one is a receipt that fails to reproduce). participationBps() in contract/src/consensus-receipt.js is the reference.",
+    "created_at_normalization": "See timestamp_serialization: truncate to whole seconds in UTC, never round, never pass a driver's ISO string through.",
+    "case_normalization": "session_id, prompt_hash and inputs_digest are lowercased before validation. Uppercase hex denotes the same value and different bytes, so exactly one spelling is admitted rather than both being accepted and one silently anchored."
+  },
+  "evolution_rule": "Within a schema version, existing field order is immutable AT EVERY NESTING LEVEL. New optional fields append after every existing field of the object they join, and are omitted from the canonical bytes when absent, so bytes producible under this version stay reproducible forever. Unknown input fields are never serialized.",
+  "digest_note": "This repo pins the canonical BYTES (consensus-receipt.valid.canonical.txt), not a digest constant. keccak256 is not available to a zero-dependency Bun test here (sha3-256 is NIST-padded and different), so a digest checked in beside the bytes could only be an unasserted claim that silently goes stale — which is exactly what happened to the 1.0 draft's. The consumer computes keccak256 over the pinned bytes — and that is a CONSUMER OBLIGATION, not a discharged one: no test in this repo checks a keccak256 value, so robotmoney-core (or issue #754, wherever a keccak256 implementation is available) must commit the digest of consensus-receipt.valid.canonical.txt beside its own code and assert it, or the on-chain anchor is never checked against this pin in CI.",
+  "version_policy": {
+    "schema_id": "https://robotmoney.net/schemas/consensus-receipt/1.0",
+    "schema_version_matches_id": "schema_version always equals the trailing segment of $id.",
+    "selection": "A verifier picks the schema by the receipt's own schema_version, never by \"latest\".",
+    "retroactivity": "None. A bump publishes a new $id and a new document. An already-published receipt keeps its own schema_version, keeps validating under that version's schema, and its canonical bytes and digest never change — the anchored digest commits to those exact bytes, so a receipt \"fixed\" by a bump is a different receipt at a different digest.",
+    "minor_bump": "Appending an optional trailing field, per evolution_rule. Every previously published receipt still validates and still canonicalizes to identical bytes.",
+    "major_bump": "Anything that changes bytes already producible under the current version: reordering, renaming, removing, or retyping a field, or changing a serialization, ordering, or rounding rule."
+  },
+  "judge_block_source": "The judge block is JudgeOpinion from backend/src/swarm/judge.ts plus `source` from the JudgeOutcome envelope. Two deliberate divergences from the 1.0 draft, both reconciled here: `consensus` is DROPPED (no judge produces it; its only producer, buildConsensus() in backend/src/swarm/domain.ts, restates quorum/stances/meanConfidence/regimeSummary in English, and the first two are already signed structurally in this payload), and `release_safety` carries the SHIPPED shape whole rather than a {safe_to_release, opinion} reduction, so a verifier can recompute thinly_supported and release instead of trusting flags a member-authored concern can steer. A THIRD, DECIDED HERE RATHER THAN DEFERRED: `source` IS CARRIED. runJudge() spreads one `base` object — same promptHash, same inputsDigest — into both the model return and the template-fallback return, and templateOpinion() calls the same buildRationale()/buildDisagreements() the aggregator uses, so without `source` a published receipt has NO field separating \"a model read the takes and wrote this\" from \"the model timed out and a template produced this\". `fallbackReason` and `model` stay out: the first interpolates model-controlled text and is operator debugging rather than a public commitment, the second is deployment configuration that would make the anchored bytes depend on a vendor string. Both remain appendable after `source` under the minor-bump rule."
+}

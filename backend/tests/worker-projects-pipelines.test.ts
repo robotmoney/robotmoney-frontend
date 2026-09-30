@@ -166,6 +166,66 @@ test("a forced extractor failure leaves last-persisted rows intact and reports n
   expect(after).toBe(before); // last-persisted value untouched
 });
 
+// ── Issue #1047: the paid CoinGecko key never leaks through a degraded run ────
+// refreshCoins on the LIVE source with COINGECKO_API_KEY set, CoinGecko stubbed
+// to 401 at the process boundary. The run must degrade (nothing written), and
+// neither the returned result — which the loop copies into job_runs — nor the
+// console.error the degraded() helper writes may contain the key.
+test("refreshCoins with the CoinGecko key set and a 401 degrades without leaking the key", async () => {
+  const KEY = "cg-worker-test-key-5b1d02aa-never-log-me";
+  const prevKey = process.env.COINGECKO_API_KEY;
+  const realFetch = globalThis.fetch;
+  const realError = console.error;
+  const realLog = console.log;
+  const errors: string[] = [];
+  const urls: string[] = [];
+  process.env.COINGECKO_API_KEY = KEY;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    urls.push(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    return new Response(JSON.stringify({ status: { error_code: 401 } }), { status: 401 });
+  }) as typeof fetch;
+  const capture = (...args: unknown[]) => {
+    errors.push(args.map((a) => (a instanceof Error ? `${a.message}\n${a.stack ?? ""}` : String(a))).join(" "));
+  };
+  console.error = capture;
+  console.log = capture;
+
+  const slug = `wkcgkey_${crypto.randomUUID().slice(0, 8)}`;
+  let projectId: string | undefined;
+  try {
+    const [{ id }] = await sql<{ id: string }[]>`
+      INSERT INTO projects (slug, display_name, status) VALUES (${slug}, 'CG Key', 'active') RETURNING id`;
+    projectId = id;
+    await sql`INSERT INTO lobster_coins (project_id, name, ticker, coingecko_id, is_active, market_cap)
+              VALUES (${projectId}, 'CG Key Coin', 'CGK', 'virtual-protocol', true, 777)`;
+
+    const res = await refreshCoins({}, liveProjectsDataSource);
+
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe("degraded");
+    expect(urls.some((u) => u.startsWith("https://pro-api.coingecko.com/api/v3/coins/markets?"))).toBe(true);
+    expect(String(res.error)).toContain("pro-api.coingecko.com");
+    expect(String(res.error)).toContain("401");
+    expect(JSON.stringify(res)).not.toContain(KEY);
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.join("\n")).not.toContain(KEY);
+
+    const [{ mc }] = await sql<{ mc: number }[]>`
+      SELECT market_cap::float8 AS mc FROM lobster_coins WHERE project_id = ${projectId}`;
+    expect(mc).toBe(777); // degraded: last-persisted value untouched
+  } finally {
+    globalThis.fetch = realFetch;
+    console.error = realError;
+    console.log = realLog;
+    if (prevKey === undefined) delete process.env.COINGECKO_API_KEY;
+    else process.env.COINGECKO_API_KEY = prevKey;
+    if (projectId) {
+      await sql`DELETE FROM lobster_coins WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+    }
+  }
+});
+
 // ── Issue #346: per-wallet degrade (never a whole-run abort) ─────────────────
 // Before #346, ONE wallet's walletBalanceUsd throw aborted the entire
 // refreshWallets run — every wallet, including ones whose read would have
@@ -350,8 +410,19 @@ test("the loop records a degraded handler result as a non-'succeeded' job_runs s
     expect(retryRun.status).toBe("degraded");
     expect(retryRun.status).not.toBe("succeeded");
 
-    // Attempts exhausted (max_attempts=1): must NOT go 'dead' — settle
-    // 'succeeded' so the schedule survives, while still recording 'degraded'.
+    // Attempts exhausted (max_attempts=1): must NOT go 'dead' — the
+    // last-persisted rows are intact and the schedule must keep firing, so an
+    // operator requeue and the next cron slot both stay available.
+    //
+    // IT SETTLES 'failed', NOT 'succeeded' (R16). This assertion used to read
+    // 'succeeded', on the reasoning that the next cron slot re-enqueues a fresh
+    // attempt — which is true, and is unaffected by the status, because the
+    // scheduler enqueues NEW rows. What the old status did was make the row lie:
+    // staging job 83 read `succeeded, attempts 5, last_error judge_unavailable`
+    // for a judging that never happened, and the admin overview, the queue
+    // counts and swarm/receipt-gap.ts all had to work around a green row for
+    // work that was never done. The RUN keeps 'degraded', which is where the
+    // "kept last-persisted rows" distinction actually belongs.
     const [{ id: termId }] = await sql<{ id: number }[]>`
       INSERT INTO jobs (kind, priority, max_attempts) VALUES (${kind}, 1000000, 1) RETURNING id`;
     jobIds.push(termId);
@@ -359,7 +430,7 @@ test("the loop records a degraded handler result as a non-'succeeded' job_runs s
 
     const [termJob] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${termId}`;
     expect(termJob.status).not.toBe("dead"); // never escalate degrade to dead
-    expect(termJob.status).toBe("succeeded"); // last-persisted intact; next cron re-enqueues
+    expect(termJob.status).toBe("failed"); // honest terminal; next cron re-enqueues a fresh row
 
     const [termRun] = await sql<{ status: string }[]>`
       SELECT status FROM job_runs WHERE job_id = ${termId} ORDER BY id DESC LIMIT 1`;

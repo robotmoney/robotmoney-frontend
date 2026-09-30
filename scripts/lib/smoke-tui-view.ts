@@ -30,9 +30,15 @@ export interface MemberState { stage: "connect" | "fetch" | "thinking" | "report
 // that dynamic boundary.
 // `judgeMode` rides only on the `judged` event (issue #817) and says whether
 // the judgement that landed was recorded and withheld (`shadow`) or applied
-// (`enforce`) — the distinction the soak exists to observe.
+// (`enforce`) — the distinction the soak exists to observe. `judgeSource`
+// (issue #969) says WHO AUTHORED IT, which the mode cannot: `judged (enforce)`
+// was equally true of a session whose opinion came from a template because the
+// judge had no model at all.
 export type SessionProgress = (ev:
-  | { type: "session"; state: string; sessionId?: number; subject: string; date?: string; judgeMode?: string }
+  | {
+      type: "session"; state: string; sessionId?: number; subject: string; date?: string;
+      judgeMode?: string; judgeSource?: string;
+    }
   | { type: "member"; memberId: string; stage: MemberState["stage"]; stance?: string; confidence?: number }
 ) => void;
 // Per-subject swarm pane. Each subject (woon, mav, …) runs on its OWN
@@ -174,7 +180,17 @@ export function swarmProgress(state: SmokeState, subjectId: string, log: (msg: s
       }
       // The judge's mode is the whole point of the `judged` event: "judged"
       // alone cannot tell a recorded-and-withheld judgement from an applied one.
-      log(`swarm ${subjectId}: ${ev.state}${ev.judgeMode ? ` (${ev.judgeMode})` : ""}`);
+      // And the mode alone cannot tell either of those from an opinion no judge
+      // authored, so anything but `source=model` is called out IN THE LINE
+      // rather than left to be inferred from a mode that looks healthy (#969).
+      const judgeDetail = ev.judgeMode
+        ? ev.judgeSource && ev.judgeSource !== "model"
+          ? ` (${ev.judgeMode}, NOT MODEL-AUTHORED: source=${ev.judgeSource})`
+          : ev.judgeSource
+            ? ` (${ev.judgeMode}, source=${ev.judgeSource})`
+            : ` (${ev.judgeMode})`
+        : "";
+      log(`swarm ${subjectId}: ${ev.state}${judgeDetail}`);
     } else {
       c.members[ev.memberId] = { stage: ev.stage, stance: ev.stance, confidence: ev.confidence };
       // If this is an onboarding prospect, reflect its first live participation

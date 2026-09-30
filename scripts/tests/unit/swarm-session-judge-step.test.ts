@@ -27,7 +27,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SessionEvent } from "../../lib/swarm/session.ts";
-import { countJudgements, enqueueLifecycleJob, judgedProgress, judgeWaitCeilingMs, runJudgeStep, sessionEmitter } from "../../lib/swarm/session.ts";
+import {
+  countJudgements, enqueueLifecycleJob, judgeAttemptBudgetMs, judgedProgress, judgeWaitCeilingMs, runJudgeStep, sessionEmitter,
+  JUDGE_ATTEMPTS_COVERED, JUDGE_JOB_TERMINAL_STATUSES, JUDGE_LANE_CLAIM_SLACK_MS, JUDGE_LAUNCHER_STARTUP_HEADROOM_MS, JUDGE_WAIT_MS,
+} from "../../lib/swarm/session.ts";
+import { DEFAULT_JUDGE_TIMEOUT_MS } from "../../../backend/src/swarm/judge-budget.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const sessionSrc = readFileSync(join(repoRoot, "scripts", "lib", "swarm", "session.ts"), "utf8");
@@ -37,7 +41,11 @@ const SESSION_ID = "11111111-2222-3333-4444-555555555555";
 /** Records every effect runJudgeStep reaches for, in the order it reaches. */
 function harness(
   mode: string | null,
-  opts: { waitFails?: boolean; enqueueFails?: boolean; recorded?: number | null } = {},
+  opts: {
+    waitFails?: boolean; enqueueFails?: boolean; recorded?: number | null;
+    /** Who authored the in-force judgement (issue #969). Defaults to a real model. */
+    source?: string | null;
+  } = {},
 ) {
   const calls: string[] = [];
   const enqueued: { action: string; payload: Record<string, unknown> }[] = [];
@@ -59,12 +67,23 @@ function harness(
     },
     // Read ONLY on the expiry path, to say which failure this was.
     countJudgements: async () => { calls.push("countJudgements"); return "recorded" in opts ? opts.recorded! : 0; },
+    // WHO AUTHORED IT (issue #969). `judged (enforce)` was the strongest thing
+    // this step could report, and it was equally true of a session whose
+    // opinion came from a template because the judge had no model at all.
+    readProvenance: async () => {
+      calls.push("readProvenance");
+      const source = "source" in opts ? opts.source! : "model";
+      return { source, fallbackReason: source === "fallback" ? "model_unconfigured" : null, model: "judge-model" };
+    },
     log: (line: string) => { logs.push(line); },
   };
   return { calls, enqueued, logs, deps };
 }
 
-const run = (mode: string | null, opts?: { waitFails?: boolean; enqueueFails?: boolean; recorded?: number | null }) => {
+const run = (
+  mode: string | null,
+  opts?: { waitFails?: boolean; enqueueFails?: boolean; recorded?: number | null; source?: string | null },
+) => {
   const h = harness(mode, opts);
   return { h, result: runJudgeStep(SESSION_ID, "2026-08-31", "woon", "tok", h.deps) };
 };
@@ -108,14 +127,27 @@ describe("runJudgeStep — the driver's judge step, executed", () => {
     // later. Enqueue both back to back and the publish wins, the transition is
     // refused, the whole judging transaction rolls back, and the soak records
     // nothing.
-    expect(h.calls).toEqual(["readMode", "enqueue:judge", "waitForJudged"]);
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: true, recorded: null, judgeJobId: 77 });
+    expect(h.calls).toEqual(["readMode", "enqueue:judge", "waitForJudged", "readProvenance"]);
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: true, recorded: null, judgeJobId: 77, source: "model" });
   });
 
   test("`enforce` waits on the same terms", async () => {
     const { h, result } = run("enforce");
-    expect(await result).toEqual({ mode: "enforce", waitedForJudged: true, judged: true, recorded: null, judgeJobId: 77 });
-    expect(h.calls).toEqual(["readMode", "enqueue:judge", "waitForJudged"]);
+    expect(await result).toEqual({ mode: "enforce", waitedForJudged: true, judged: true, recorded: null, judgeJobId: 77, source: "model" });
+    expect(h.calls).toEqual(["readMode", "enqueue:judge", "waitForJudged", "readProvenance"]);
+  });
+
+  // ISSUE #969. Before this, `judged (enforce)` was the whole report, and it was
+  // true of a session whose opinion came from a template because the judge had
+  // no model. The step now carries WHO AUTHORED IT, and the log says so.
+  test("a judging no model authored is reported as such, not as a healthy `judged`", async () => {
+    const { h, result } = run("enforce", { source: "fallback" });
+    const out = await result;
+    expect(out.source).toBe("fallback");
+    expect(h.logs.join("\n")).toContain("source=fallback");
+    expect(h.logs.join("\n")).toContain("model_unconfigured");
+    // And the progress stream carries it to the TUI rather than stopping at the mode.
+    expect(judgedProgress(out)).toEqual({ judgeMode: "enforce", judgeSource: "fallback" });
   });
 
   test("an unreadable switch still queues the judging, and does not wait for a state it cannot predict", async () => {
@@ -131,7 +163,7 @@ describe("runJudgeStep — the driver's judge step, executed", () => {
     const out = await result;
     // `recorded` is carried out of the expiry path because it, not the wait's
     // opinion, is what the progress stream keys the `judged` event on (#817).
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, judgeJobId: 77 });
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, judgeJobId: 77, source: null });
     // Loud, not silent: the operator reading the driver's log learns the
     // session published without its judging, and why.
     expect(h.logs.join("\n")).toContain("publishing anyway");
@@ -155,7 +187,10 @@ describe("runJudgeStep — the driver's judge step, executed", () => {
     await result;
     const log = h.logs.join("\n");
     expect(h.calls, "the record is read only on the expiry path").toEqual(
-      ["readMode", "enqueue:judge", "waitForJudged", "countJudgements"],
+      // …and when it says rows DO exist, their provenance is read too: a
+      // judging that landed late is still a judging somebody has to have
+      // authored (issue #969).
+      ["readMode", "enqueue:judge", "waitForJudged", "countJudgements", "readProvenance"],
     );
     expect(log).toContain("judge job #77 was queued");
     expect(log).toContain("2 judgement row(s) ARE recorded");
@@ -215,6 +250,7 @@ describe("runJudgeStep's default wait reads the judge job's terminal state", () 
       enqueue: async () => { calls.push("enqueue:judge"); return { jobId: 77, kind: "swarm.judge" }; },
       // NO waitForJudged — the default (job-driven) wait is what is under test.
       countJudgements: async () => { calls.push("countJudgements"); return 0; },
+      readProvenance: async () => ({ source: "model", fallbackReason: null, model: "deepseek-v4-flash" }),
       readJob: async () => {
         calls.push("readJob");
         const row = sequence[Math.min(reads, sequence.length - 1)];
@@ -248,7 +284,7 @@ describe("runJudgeStep's default wait reads the judge job's terminal state", () 
 
     const h = harnessWithJob([{ status: "running" }, { status: "succeeded" }]);
     const out = await runJudgeStep(SESSION_ID, "2026-08-31", "woon", "tok", h.deps);
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: true, recorded: null, judgeJobId: 77 });
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: true, recorded: null, judgeJobId: 77, source: "model" });
     expect(h.calls).toContain("readJob");
     expect(h.calls).not.toContain("countJudgements");
   });
@@ -261,10 +297,37 @@ describe("runJudgeStep's default wait reads the judge job's terminal state", () 
 
     const h = harnessWithJob([{ status: "dead", attempts: 5, maxAttempts: 5, lastError: "HTTP 401: unsupported model id" }]);
     const out = await runJudgeStep(SESSION_ID, "2026-08-31", "woon", "tok", h.deps);
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, judgeJobId: 77 });
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, judgeJobId: 77, source: null });
     expect(h.logs.join("\n")).toContain("went DEAD after 5/5 attempts");
     expect(h.logs.join("\n")).toContain("HTTP 401: unsupported model id");
     expect(h.logs.join("\n")).toContain("publishing anyway");
+  });
+
+  // X5: main's worker loop settles an exhausted or terminally refused judge
+  // DEGRADE as `failed` (backend/src/worker/loop.ts, R16) — never `dead`, and
+  // never again. A wait that knew only succeeded/dead burned its whole ceiling
+  // on that row, and then blamed a wedged lane for a judging that had ended.
+  test("a `failed` judge job is terminal too — the wait stops at once, naming last_error", async () => {
+    process.env.BACKEND_URL = "http://judgejob.invalid";
+    globalThis.fetch = (async (_input: any): Promise<Response> => {
+      throw new Error("no session fetch should happen on the failed path");
+    }) as typeof fetch;
+
+    const h = harnessWithJob([
+      { status: "running" },
+      { status: "failed", attempts: 5, maxAttempts: 5, lastError: "judge_unavailable:launcher_unavailable" },
+    ]);
+    const started = Date.now();
+    const out = await runJudgeStep(SESSION_ID, "2026-08-31", "woon", "tok", {
+      ...h.deps,
+      // A ceiling far above what the test may take: reaching it would time the test out.
+      judgeWaitCeilingMs: 600_000,
+    });
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, judgeJobId: 77, source: null });
+    expect(h.logs.join("\n")).toContain("went FAILED after 5/5 attempts");
+    expect(h.logs.join("\n")).toContain("launcher_unavailable");
+    expect(h.logs.join("\n")).not.toContain("backstop ceiling");
   });
 
   test("a job still running at the backstop ceiling is named a wedged lane, not a slow judge", async () => {
@@ -278,7 +341,7 @@ describe("runJudgeStep's default wait reads the judge job's terminal state", () 
       ...h.deps,
       judgeWaitCeilingMs: 50,
     });
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, judgeJobId: 77 });
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, judgeJobId: 77, source: null });
     expect(h.logs.join("\n")).toContain("still running after the 0s backstop ceiling");
   });
 });
@@ -521,6 +584,9 @@ describe("the progress stream reports the judging (#817)", () => {
       subject: "woon",
       date: "2026-08-31",
       judgeMode: "shadow",
+      // Issue #969: the stream carries WHO AUTHORED the opinion, not only the
+      // mode it was recorded under.
+      judgeSource: "model",
     });
   });
 
@@ -657,16 +723,37 @@ describe("red controls: the judged-event graders must REPORT a regression", () =
   });
 });
 
-describe("judgeWaitCeilingMs — the wait outlives one full judge attempt and its retry", () => {
-  test("covers two 180 s attempts plus slack on a smoke/twin boot", () => {
-    expect(judgeWaitCeilingMs({ SWARM_JUDGE_TIMEOUT_MS: "180000" })).toBe(420_000);
+describe("judgeWaitCeilingMs — the wait outlives one full judge attempt and its retry (R7/X5)", () => {
+  const perAttempt = (budget: number) => budget + JUDGE_LAUNCHER_STARTUP_HEADROOM_MS;
+
+  test("derived from the backend's DEFAULT_JUDGE_TIMEOUT_MS when the env is silent", () => {
+    expect(judgeAttemptBudgetMs({})).toBe(DEFAULT_JUDGE_TIMEOUT_MS);
+    expect(judgeWaitCeilingMs({})).toBe(JUDGE_ATTEMPTS_COVERED * perAttempt(DEFAULT_JUDGE_TIMEOUT_MS) + JUDGE_LANE_CLAIM_SLACK_MS);
   });
 
-  test("defaults to the smoke/twin judge timeout when the env is silent", () => {
-    expect(judgeWaitCeilingMs({})).toBe(420_000);
+  test("an operator's SWARM_JUDGE_TIMEOUT_MS is the per-attempt budget instead", () => {
+    expect(judgeWaitCeilingMs({ SWARM_JUDGE_TIMEOUT_MS: "180000" })).toBe(
+      JUDGE_ATTEMPTS_COVERED * perAttempt(180_000) + JUDGE_LANE_CLAIM_SLACK_MS,
+    );
   });
 
-  test("never drops below the original 120 s floor", () => {
-    expect(judgeWaitCeilingMs({ SWARM_JUDGE_TIMEOUT_MS: "10000" })).toBe(120_000);
+  test("covers at least a full attempt AND its retry, launcher start-up included", () => {
+    expect(JUDGE_ATTEMPTS_COVERED).toBeGreaterThanOrEqual(2);
+    expect(JUDGE_LAUNCHER_STARTUP_HEADROOM_MS).toBeGreaterThan(0);
+    for (const env of [{}, { SWARM_JUDGE_TIMEOUT_MS: "180000" }, { SWARM_JUDGE_TIMEOUT_MS: "600000" }]) {
+      const budget = judgeAttemptBudgetMs(env);
+      expect(judgeWaitCeilingMs(env)).toBeGreaterThan(2 * (budget + JUDGE_LAUNCHER_STARTUP_HEADROOM_MS));
+    }
+  });
+
+  test("a malformed or tiny budget never drops the ceiling below JUDGE_WAIT_MS", () => {
+    expect(judgeAttemptBudgetMs({ SWARM_JUDGE_TIMEOUT_MS: "garbage" })).toBe(DEFAULT_JUDGE_TIMEOUT_MS);
+    expect(judgeWaitCeilingMs({ SWARM_JUDGE_TIMEOUT_MS: "10000" })).toBe(JUDGE_WAIT_MS);
+  });
+
+  test("succeeded, failed and dead are the terminal job statuses; running and pending are not", () => {
+    expect([...JUDGE_JOB_TERMINAL_STATUSES].sort()).toEqual(["dead", "failed", "succeeded"]);
+    expect(JUDGE_JOB_TERMINAL_STATUSES.has("running")).toBe(false);
+    expect(JUDGE_JOB_TERMINAL_STATUSES.has("pending")).toBe(false);
   });
 });

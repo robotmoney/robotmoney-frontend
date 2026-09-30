@@ -74,12 +74,14 @@ Where the two rules collide, §3 names the winner and the reason.
 | X10 | Replay shape differs | Release's replay (R6). `backend/scripts/swarm-judge-replay.ts` follows it. |
 | X11 | Smoke tooling solved the same problem twice (`requestsTwin`/`stageCadenceApplies`/`adoptionFilter`/`smoke:twin:once` vs `--cadence fast`/`seatAllActive`/`plan.kind` rename) | One design per concept. Release's twin behaviour is kept, because it was rehearsed on production dumps (R14). Main's `archive-restore` rename and `--cadence fast` are adopted where they don't change twin behaviour. Tests from both sides pass. |
 | X12 | The onboarding driver seats test newcomers when a seat is free, and 20 seats leaves room for more (#1033 note) | The simulation onboarding driver never seats a newcomer on an external database (`--db external`), and this is pinned by a unit test. |
-| X13 | `contract/tests/live/swarm-onboarding-skill-url-live.test.ts`: deleted on main, modified on release | Deleted (M11). |
+| X13 | the deleted live skill-URL test (`swarm-onboarding-skill-url-live.test.ts`): deleted on main, modified on release | Deleted (M11). |
 | X14 | Changelog dates | Main's structure. Entries that shipped in v0.5.1 are dated as main dates them; main's pending block stays as the next release. `changelog.spec.ts` passes. |
 | X15 | `frontend/test/unit.list`, `package.json` | Union of both sides. No script names collide. |
 | X16 | `docs/decisions.md`, `docs/architecture.md` | D56 is release's (R3). Every other decision from both sides is kept, and no D-number is duplicated. |
 | X17 | `0.4.0-to-0.5.0` upgrade scripts and `v0-5-0-rollout.md` (add/add) | Release's copies (R13). The runbook's header records that v0.5.0 shipped (`ec261867`). |
 | X18 | Production does not yet run `agent-launcher`, and has no `COINGECKO_API_KEY` | Not a code conflict. Recorded as prerequisites for the next release cut from `main` (§6). |
+| X19 | Found while resolving: main's `0062_rm_worker_analytics_ledger_read_grant` grants on `source_payloads`, which release's 0080 drops. On production that migration runs after 0080 and would fail. | **Deviation from M13, deliberate.** The file grants per table, only where the table exists. No database has recorded main's copy except environments built from main, and a recorded migration never re-runs. Evidence: `migration-history-merge.test.ts`. |
+| X20 | Found while resolving: with the judge out of process, a refusal logs `DEGRADED … judge_unavailable:<reason>` instead of throwing `JudgeUnavailable` in-process | `twin-gate` also treats `judge_unavailable:` as fatal (`twin-gate.test.ts`). |
 
 ## 4. Deliberately dropped
 
@@ -88,7 +90,13 @@ Where the two rules collide, §3 names the winner and the reason.
 | Main's `0080` body (541 lines) and its `rebuildVintageManifests` / VACUUM hooks in `migrate.ts` | X1. The repair runs once, as a script. |
 | Main's `fallbackOutcome` / `source: "fallback"` writes | X4 / R4. Rows with `source = 'fallback'` from before this change still read and display. |
 | Main's `0.4.0-to-0.5.0` upgrade copies | X17. They never shipped. |
-| `contract/tests/live/swarm-onboarding-skill-url-live.test.ts` | X13. |
+| Main's tests of those copies: `rollout-postflight-0-5-0`, `stage-rehearsal-fusion-receipt`, `stage-rehearsal-judge-diagnosis`, the three postflight `judge-source` database tests in `judge-budget-fallback-rate`, and `resolveAcceptanceFlag`'s tests in `acceptance-path-stack-config` | X17. They test code that never shipped. The fallback-share rule itself stays (`summarizeJudgeSources`), and its pure tests stay. |
+| `analytics-ledger-compaction-migration.test.ts` and `fixtures/ledger/0080_…as-merged-1046.sql` | X1. Release deleted both in `bc71ae12`; the merge had re-added main's copies. |
+| Release's `tests/support/stub-judge.ts` | Replaced by main's launcher stub (`judge-stub.ts`); nothing imports it. |
+| Release's control-line `WEIGHTS` format, and its edits to `swarm-inference-opencode-argv.test.ts` | M6. |
+| Main's `defaultSmokeTwinJudgeMode` | R14. Release's `enableTwinJudge` is the one path that turns on the twin's judge. |
+| Release's `judgeCredentialEnv` and its forced 180 s smoke judge timeout | M2. Main's inference preflight delivers the key, and 180 s is below main's 300 s budget. |
+| the deleted live skill-URL test (`swarm-onboarding-skill-url-live.test.ts`) | X13. |
 
 ## 5. Definition of done (evidence)
 

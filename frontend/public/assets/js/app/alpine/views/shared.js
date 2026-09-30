@@ -7,15 +7,25 @@
 // rather than a drive-by inside an unrelated change.
 //
 // Shared regime-dashboard chart/data helpers, moved verbatim from the top of
-// the old monolithic views.js (review-maintainability finding 025). Today
-// every export is consumed only by views/regime.js, but they are the shared
-// layer any other chart view should import from rather than re-declaring.
+// the old monolithic views.js (review-maintainability finding 025). The regime
+// page, the blog's backtest charts and the swarm views import from here; any
+// other chart view should too, rather than re-declaring a series colour.
 import { PALETTE, SERIES, CATEGORICAL, rgba } from "../../lib/chart-theme.js";
 
 // ── Shared regime-dashboard chart helpers ───────────────────────────────────
-// Background regime bands painted behind the line datasets, matching the
-// original RegimeDashboard: risk-off amber @10%, risk-on cyan @8%, neutral bare.
-export const REGIME_BAND = { risk_off: rgba(PALETTE.warm, 0.1), risk_on: rgba(PALETTE.accent, 0.08), neutral: null };
+// Background regime bands painted behind the line datasets, one treatment per
+// state: risk-on a light wash, neutral a fainter one, risk-off a diagonal
+// hatch. They are drawn in the text colour, not in a hue, because every hue
+// the palette has is already a series on these charts (the regime hues too:
+// emerald, slate and beacon are strategy lines), and a band in a series
+// colour reads as that series. Cyan is a line and beacon is a point, so
+// neither may be a full-height area anyway.
+export const REGIME_BAND = {
+  risk_on: { fill: rgba(PALETTE.text, 0.09) },
+  neutral: { fill: rgba(PALETTE.text, 0.03) },
+  risk_off: { hatch: rgba(PALETTE.text, 0.16) },
+};
+const HATCH_GAP = 6;
 export const regimeBandsPlugin = {
   id: "regimeBands",
   beforeDatasetsDraw(chart, _args, opts) {
@@ -31,12 +41,32 @@ export const regimeBandsPlugin = {
       const cur = regimes[i];
       let j = i;
       while (j + 1 < regimes.length && regimes[j + 1] === cur) j++;
-      const fill = cur ? REGIME_BAND[cur] : null;
-      if (fill) {
+      const band = cur ? REGIME_BAND[cur] : null;
+      if (band) {
         const x0 = x.getPixelForValue(i);
         const x1 = j + 1 < regimes.length ? x.getPixelForValue(j + 1) : right;
-        ctx.fillStyle = fill;
-        ctx.fillRect(x0, top, x1 - x0, bottom - top);
+        if (band.fill) {
+          ctx.fillStyle = band.fill;
+          ctx.fillRect(x0, top, x1 - x0, bottom - top);
+        }
+        if (band.hatch) {
+          // Lines of x + y = k ("/"), with k on one grid for the whole chart,
+          // so two neighbouring risk-off spans hatch as one surface.
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x0, top, x1 - x0, bottom - top);
+          ctx.clip();
+          ctx.strokeStyle = band.hatch;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          const k0 = Math.floor((x0 + top) / HATCH_GAP) * HATCH_GAP;
+          for (let k = k0; k <= x1 + bottom; k += HATCH_GAP) {
+            ctx.moveTo(k - top, top);
+            ctx.lineTo(k - bottom, bottom);
+          }
+          ctx.stroke();
+          ctx.restore();
+        }
       }
       i = j + 1;
     }
@@ -72,51 +102,40 @@ export const BASELINE_KEYS = new Set(["eth_hodl", "sp500_hodl", "blend_hodl", "s
 
 // Backtest markets: title, per-regime target weights (drive the allocation pie
 // glyphs), and the ordered strategy rows (key / label / description).
+//
+// Every strategy holds the same three mixes (a market's `weights`). What sets
+// one apart is which reading decides the regime each day: the composite, one
+// panel, or a rule across every panel (backend/src/analytics/analyze/
+// backtest.ts: combineConservativeN, combineAggressiveN, over all the
+// snapshot's panels). The names are the chart legend's (STRATEGY_STYLE); the
+// descriptions say the rule in words.
+const RULES = [
+  ["composite", "Composite", "Follows the published regime: the composite's own reading."],
+  ["macro", "Macro", "Follows the macro panel's reading alone."],
+  ["onchain", "On-chain", "Follows the on-chain panel's reading alone."],
+  ["factor", "Equity factor", "Follows the equity factor panel's reading alone."],
+  ["conservative", "Conservative", "Combines all three panels, equity factor included: risk-off if any reads risk-off, risk-on only when all read risk-on, else neutral."],
+  ["aggressive", "Aggressive", "Combines all three panels, equity factor included, by vote: +1 per risk-on, −1 per risk-off; above 0 is risk-on, below 0 risk-off, 0 neutral."],
+];
+const CASH = ["stables_only", "All stables", "Holds cash throughout, earning the 3-month T-bill (DTB3) yield."];
 export const BACKTESTS = [
   {
     key: "eth",
     title: "Backtest · ETH / cash",
     weights: { risk_off: { cash: 1 }, neutral: { cash: 0.5, eth: 0.5 }, risk_on: { eth: 1 } },
-    strategies: [
-      ["composite", "Composite bucket", "Default rule on the published composite."],
-      ["macro", "Macro bucket", "Macro panel only."],
-      ["onchain", "On-chain bucket", "On-chain panel only."],
-      ["factor", "Equity factor bucket", "Equity factor panel only (only present in /regime_eq)."],
-      ["conservative", "Conservative (N-panel)", "Any panel off → off; all panels on → on; else neutral."],
-      ["aggressive", "Aggressive (N-panel)", "Net sum > 0 → on, < 0 → off, = 0 → neutral."],
-      ["eth_hodl", "Buy-and-hold ETH", "Reference: 100% ETH."],
-      ["stables_only", "All-stables", "Reference: 100% DTB3 yield."],
-    ],
+    strategies: [...RULES, ["eth_hodl", "Buy-and-hold ETH", "Holds 100% ETH throughout."], CASH],
   },
   {
     key: "sp500",
     title: "Backtest · SP500 / cash",
     weights: { risk_off: { cash: 1 }, neutral: { cash: 0.5, sp500: 0.5 }, risk_on: { sp500: 1 } },
-    strategies: [
-      ["composite", "Composite bucket", "Default rule on the published composite."],
-      ["macro", "Macro bucket", "Macro panel only."],
-      ["onchain", "On-chain bucket", "On-chain panel only."],
-      ["factor", "Equity factor bucket", "Equity factor panel only (only present in /regime_eq)."],
-      ["conservative", "Conservative (N-panel)", "Any panel off → off; all panels on → on; else neutral."],
-      ["aggressive", "Aggressive (N-panel)", "Net sum > 0 → on, < 0 → off, = 0 → neutral."],
-      ["sp500_hodl", "Buy-and-hold SP500", "Reference: 100% SP500."],
-      ["stables_only", "All-stables", "Reference: 100% DTB3 yield."],
-    ],
+    strategies: [...RULES, ["sp500_hodl", "Buy-and-hold S&P 500", "Holds 100% S&P 500 throughout."], CASH],
   },
   {
     key: "mixed",
     title: "Backtest · ETH + SP500 + cash",
     weights: { risk_off: { cash: 1 }, neutral: { cash: 0.5, eth: 0.25, sp500: 0.25 }, risk_on: { eth: 0.5, sp500: 0.5 } },
-    strategies: [
-      ["composite", "Composite bucket", "Default rule on the published composite."],
-      ["macro", "Macro bucket", "Macro panel only."],
-      ["onchain", "On-chain bucket", "On-chain panel only."],
-      ["factor", "Equity factor bucket", "Equity factor panel only (only present in /regime_eq)."],
-      ["conservative", "Conservative (N-panel)", "Any panel off → off; all panels on → on; else neutral."],
-      ["aggressive", "Aggressive (N-panel)", "Net sum > 0 → on, < 0 → off, = 0 → neutral."],
-      ["blend_hodl", "50/50 ETH + SP500 HODL", "Reference: always max-risk."],
-      ["stables_only", "All-stables", "Reference: 100% DTB3 yield."],
-    ],
+    strategies: [...RULES, ["blend_hodl", "Buy-and-hold 50/50", "Holds 50% ETH and 50% S&P 500 throughout: the risk-on mix, always."], CASH],
   },
 ];
 // Strategy weight-pie slices (cash / ETH / SP500) — three categories, three
@@ -232,10 +251,29 @@ export const SOURCE_LABEL = {
   blockchain_com: "Blockchain.com", coinmetrics: "Coinmetrics", geckoterminal_newpools: "GeckoTerminal",
 };
 
-// The inline regime-band legend swatches (REGIME_BG_LEGEND from
-// regimeBandsPlugin.ts): shown next to "Full history" and each equity-curve chart.
+// The inline regime-band legend swatches, shown next to "Full history" and each
+// equity-curve chart: one per state, in REGIME_BAND's treatments, a little
+// stronger so a 10px square still reads. `bg` is a CSS background value; the
+// hatch is an SVG image rather than a repeating gradient, which the covenant
+// scan would flag.
+const HATCH_SWATCH = `url("data:image/svg+xml,${encodeURIComponent(
+  "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><path d='M3-1L-9 11M7-1L-5 11M11-1L-1 11M15-1L3 11M19-1L7 11' stroke='rgba(242,244,249,0.6)' stroke-width='1'/></svg>",
+)}")`;
+// The same three treatments as CSS backgrounds, for the bands behind the
+// site's own charts (lib/line-chart.js), where each run is a strip of HTML
+// under the lines. The hatch is a 6px tile, so it keeps its angle and pitch
+// however the plot stretches.
+const HATCH_TILE = `url("data:image/svg+xml,${encodeURIComponent(
+  "<svg xmlns='http://www.w3.org/2000/svg' width='6' height='6'><path d='M-1 1l2-2M0 6L6 0M5 7l2-2' stroke='rgba(242,244,249,0.16)' stroke-width='1'/></svg>",
+)}")`;
+export const REGIME_BAND_BG = {
+  risk_on: rgba(PALETTE.text, 0.09),
+  neutral: rgba(PALETTE.text, 0.03),
+  risk_off: HATCH_TILE,
+};
+
 export const REGIME_BG_LEGEND = [
-  { label: "risk-off", color: rgba(PALETTE.warm, 0.5) },
-  { label: "neutral", color: rgba(PALETTE.textMuted, 0.15) },
-  { label: "risk-on", color: rgba(PALETTE.accent, 0.4) },
+  { label: "risk-off", bg: HATCH_SWATCH },
+  { label: "neutral", bg: rgba(PALETTE.text, 0.1) },
+  { label: "risk-on", bg: rgba(PALETTE.text, 0.34) },
 ];

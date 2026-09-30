@@ -12,7 +12,6 @@
 // and the standalone main()'s former MCP-OAuth assertions changed.
 import { demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { runAgent, enroll, railFromEnv } from "./agent.ts";
-import { resolveAgentModel } from "../model-registry.ts";
 import type { AgentStage, SessionRail } from "./agent.ts";
 import { resolveSmokeCadence, swarmWindowMinutes } from "../smoke-schedule.ts";
 import type { SmokeCadence } from "../smoke-schedule.ts";
@@ -22,6 +21,18 @@ import { generateKeyPair } from "./crypto.ts";
 // The one builder for a compose prefix — argv topology AND the `--env-file`
 // that keeps the repo's own `.env` out of an interpolated container.
 import { composeArgs } from "../../stack/config.ts";
+// D22 rule 1's ONE model-selection signal — the same resolver every member
+// agent container runs under. The judge reads its model from a database row
+// (swarm_judge_config.model) rather than the registry, which is exactly how
+// stage and prod ended up with real models on every member and NULL on the
+// judge; the smoke closes that by seeding the row FROM the registry, so the
+// two selection paths cannot disagree on a booted stack (issue #969).
+import { isKeylessModel, resolveAgentModel, ZEN_PREFIX } from "../model-registry.ts";
+// The judge's per-call budget, from the LEAF that owns it (backend/src/swarm/
+// judge-budget.ts) — a constants-and-pure-functions module with no imports, so
+// this CLI does not acquire the backend's config or database wiring by reading
+// one number. Derived, never re-stated: see JUDGE_WAIT_MS below.
+import { DEFAULT_JUDGE_TIMEOUT_MS } from "../../../backend/src/swarm/judge-budget.ts";
 
 export function backendUrl(): string {
   return process.env.BACKEND_URL ?? "http://localhost:8787";
@@ -122,12 +133,24 @@ export function settledAttendance(
   return { failed, fulfilled };
 }
 
+// An allocation session is the one whose recommendation is a weight vector;
+// its takes carry REGIME and ALLOCATION, every other subject's REGIME and
+// SUBJECT. The recommendation's type alone decides it: any take may attach
+// optional weights, and one that does must not change which sections the
+// house members' takes are held to.
+export function sessionRequiresWeights(pub: any): boolean {
+  return pub?.session?.swarmRecommendation?.type === "bucket_weights";
+}
+
 export function assertAuthoredTakes(
   tag: string,
   takes: any[],
   attendance: AbsenceReport,
   observedAbsent: readonly string[],
   fulfilledMemberIds: readonly string[],
+  // Which sections a take must carry follows the subject (inference.ts
+  // takeSectionLeadIns): an allocation session's, or any other subject's.
+  sections: { requireWeights?: boolean } = {},
 ) {
   // Present-member takes are the ones that actually posted a body; absent
   // no-shows enrolled but never submitted, so they carry no body.
@@ -181,7 +204,7 @@ export function assertAuthoredTakes(
     if (OLD_TEMPLATE_RE.test(t.body)) {
       throw new Error(`${tag}: take for ${who} matches the retired template fingerprint — not a real inference body`);
     }
-    for (const lead of missingSectionLeadIns(t.body)) {
+    for (const lead of missingSectionLeadIns(t.body, sections)) {
       throw new Error(`${tag}: take for ${who} is missing the ${lead} lead-in`);
     }
     if (!VALID_STANCES.has(String(t.stance))) {
@@ -324,7 +347,14 @@ async function responseJson<T = any>(response: Response): Promise<T> {
 // something no other consumer of this stream can match on. It is a separate
 // optional field for that reason, and it is absent on every other event.
 export type SessionEvent =
-  | { type: "session"; state: string; sessionId?: number; subject: string; date: string; judgeMode?: string }
+  // `judgeSource` (issue #969) says WHO AUTHORED the opinion — "model", or a
+  // pre-#969 "fallback". The mode alone cannot draw that distinction: `judged
+  // (enforce)` was equally true of a session whose opinion came from a template
+  // because the judge had no model at all.
+  | {
+      type: "session"; state: string; sessionId?: number; subject: string; date: string;
+      judgeMode?: string; judgeSource?: string;
+    }
   | { type: "member"; memberId: string; stage: AgentStage | "absent"; stance?: string; confidence?: number };
 export type SessionProgress = (ev: SessionEvent) => void;
 
@@ -839,11 +869,22 @@ export async function enqueueLifecycleJob(action: string, payload: Record<string
 }
 
 // How long runJudgeStep will wait for a judging to land before publishing
-// anyway. The model call itself is bounded at ~60s (SWARM_JUDGE_TIMEOUT_MS),
-// and the judge job still has to be claimed off the swarm lane first, so this
-// is deliberately generous. It is a CEILING, not a budget: with the mode `off`
-// — the shipped default — nothing waits at all.
-const JUDGE_WAIT_MS = 120_000;
+// anyway.
+//
+// DERIVED, not chosen. The old value was a bare 120_000 whose comment said the
+// model call was "bounded at ~60s" — true of the old DEFAULT_JUDGE_TIMEOUT_MS
+// and false the moment it moved. A ceiling at or below the budget it is waiting
+// on is worse than no ceiling: it guarantees the driver gives up and publishes
+// while the judging it asked for is still legitimately in flight, so the
+// session publishes unjudged and the receipt is lost for good (`published` is
+// terminal). So it is the model budget plus the slack the REST of the path
+// needs: the job has to be claimed off the swarm lane, the takes loaded, the
+// response parsed and the row written.
+//
+// It is a CEILING, not a budget: with the mode `off` — the shipped default —
+// nothing waits at all.
+export const JUDGE_LANE_CLAIM_SLACK_MS = 60_000;
+export const JUDGE_WAIT_MS = DEFAULT_JUDGE_TIMEOUT_MS + JUDGE_LANE_CLAIM_SLACK_MS;
 
 /** The judge job succeeded and its judgement is recorded; the session just did not transition (#817). */
 class JudgedByRecord extends Error {
@@ -853,21 +894,54 @@ class JudgedByRecord extends Error {
 }
 
 /**
+ * How many full judge attempts the driver's wait must be able to cover: the
+ * first, and its retry (R7). A timed-out attempt is retried by the worker after
+ * a short backoff; a ceiling that cannot see the retry land publishes the
+ * session unjudged for want of a few minutes.
+ */
+export const JUDGE_ATTEMPTS_COVERED = 2;
+
+/**
+ * Per-attempt headroom for the agent-launcher to start the judge's short-lived
+ * container (M2, #1014) before the model call's own budget begins to matter —
+ * image already pulled, container create + start + spool read. Generous on
+ * purpose: this is a backstop, not a budget.
+ */
+export const JUDGE_LAUNCHER_STARTUP_HEADROOM_MS = 30_000;
+
+/** The per-attempt model budget the worker runs under: SWARM_JUDGE_TIMEOUT_MS, else the backend default. */
+export function judgeAttemptBudgetMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env.SWARM_JUDGE_TIMEOUT_MS?.trim());
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_JUDGE_TIMEOUT_MS;
+}
+
+/**
  * The judge wait's backstop ceiling, derived from the judge's OWN per-attempt
- * timeout rather than fixed below it.
+ * budget rather than fixed below it (X5).
  *
- * WHY. The worker bounds one model call at SWARM_JUDGE_TIMEOUT_MS — 180 s on a
- * smoke/twin boot (smoke-compose-env.ts judgeCredentialEnv) — and a timed-out
+ * WHY. The worker bounds one model call at SWARM_JUDGE_TIMEOUT_MS (default
+ * DEFAULT_JUDGE_TIMEOUT_MS, backend/src/swarm/judge-budget.ts) and a timed-out
  * attempt is retried after a short backoff. A fixed 120 s ceiling gave up while
  * a single attempt could still be running, and never let the retry land: the
  * 2026-09-25 v0.5.1 rehearsal published a session unjudged after one provider
- * timeout, and the next two lifecycle waits failed behind it on the lane. Two
- * full attempts plus a minute of claim/backoff slack, never less than before.
+ * timeout, and the next two lifecycle waits failed behind it on the lane. So:
+ * JUDGE_ATTEMPTS_COVERED full attempts, each with launcher start-up headroom,
+ * plus the lane-claim slack — never less than JUDGE_WAIT_MS.
  */
 export function judgeWaitCeilingMs(env: Record<string, string | undefined> = process.env): number {
-  const perAttempt = Number(env.SWARM_JUDGE_TIMEOUT_MS?.trim()) || 180_000;
-  return Math.max(JUDGE_WAIT_MS, 2 * perAttempt + 60_000);
+  const perAttempt = judgeAttemptBudgetMs(env) + JUDGE_LAUNCHER_STARTUP_HEADROOM_MS;
+  return Math.max(JUDGE_WAIT_MS, JUDGE_ATTEMPTS_COVERED * perAttempt + JUDGE_LANE_CLAIM_SLACK_MS);
 }
+
+/**
+ * The job statuses at which a `swarm.judge` job has STOPPED (X5). `succeeded`
+ * and `dead` (a thrown failure with no attempts left) as before, and `failed`:
+ * main's worker loop settles an exhausted or terminally refused DEGRADE —
+ * which is how a judging that was asked N times and never answered now ends —
+ * as `failed` (backend/src/worker/loop.ts, R16). Waiting on a `failed` row
+ * would burn the whole ceiling on a job that will never move again.
+ */
+export const JUDGE_JOB_TERMINAL_STATUSES: ReadonlySet<string> = new Set(["succeeded", "failed", "dead"]);
 
 /**
  * The judge's runtime mode, read from the switch itself
@@ -986,7 +1060,8 @@ export interface JudgeJobWaitDeps {
 }
 
 /**
- * Wait until the judge job reaches a TERMINAL state (`succeeded` or `dead`),
+ * Wait until the judge job reaches a TERMINAL state (`succeeded`, `failed` or
+ * `dead` — JUDGE_JOB_TERMINAL_STATUSES),
  * or the ceiling backstop expires. `running`/`pending` never consume the
  * ceiling: the process has not completed, so the wait continues. Returns the
  * job's last-read row so the caller's log names the live status on expiry
@@ -1007,7 +1082,7 @@ export async function waitForJudgeJobTerminal(
     const job = await read(jobId);
     if (job) {
       last = job;
-      if (job.status === "succeeded" || job.status === "dead") {
+      if (JUDGE_JOB_TERMINAL_STATUSES.has(job.status)) {
         return { job, reason: "terminal" };
       }
     }
@@ -1043,6 +1118,15 @@ export interface JudgeStepOutcome {
    * that wait must not expire against a lane nothing can free early.
    */
   judgeJobId: string | number | null;
+  /**
+   * WHO AUTHORED THE OPINION — "model", or a pre-#969 "fallback" (issue #969).
+   * `judged (enforce)` was the strongest thing this stream could say, and it is
+   * true of a judging that never happened: before #969 a session with no judge
+   * model recorded template prose and transitioned exactly like a real one.
+   * Null when unreadable, which is reported as unreadable rather than assumed
+   * good.
+   */
+  source?: string | null;
 }
 
 /**
@@ -1067,15 +1151,19 @@ export interface JudgeStepOutcome {
  * — and an event keyed on the wait's opinion rather than on the record would
  * reproduce, on the stream, exactly the wrong claim the expiry log used to make.
  */
-export function judgedProgress(outcome: JudgeStepOutcome): { judgeMode: string } | null {
+export function judgedProgress(outcome: JudgeStepOutcome): { judgeMode: string; judgeSource?: string } | null {
   if (outcome.mode !== "shadow" && outcome.mode !== "enforce") return null;
   const landed = outcome.judged || (outcome.recorded ?? 0) > 0;
-  return landed ? { judgeMode: outcome.mode } : null;
+  if (!landed) return null;
+  // The source rides along so the TUI can say WHO SPOKE, not merely that the
+  // session reached `judged` (issue #969).
+  return outcome.source ? { judgeMode: outcome.mode, judgeSource: outcome.source } : { judgeMode: outcome.mode };
 }
 
 /** Injection seam for runJudgeStep's effects. Real callers pass none. */
 export interface JudgeStepDeps {
   readMode?: () => Promise<string | null>;
+  readProvenance?: () => Promise<{ source: string | null; fallbackReason: string | null; model: string | null }>;
   enqueue?: (action: string, payload: Record<string, unknown>) => Promise<unknown>;
   waitForJudged?: () => Promise<unknown>;
   countJudgements?: () => Promise<number | null>;
@@ -1101,9 +1189,12 @@ export interface JudgeStepDeps {
  *
  * WHY IT WAITS, WHEN IT WAITS. The other steps are enqueued and then awaited by
  * state, and the judge has to be too — but for a stronger reason than symmetry.
- * `swarm.publish` is an unconditional `UPDATE ... SET state='published'`, while
- * `judgeSessionAdmin` needs the `aggregated -> judged` transition to still be
- * legal when its model call returns up to a minute later. Enqueue both back to
+ * `swarm.publish` publishes from `aggregated` as readily as from `judged` (T21
+ * gave it a state guard and a once-only `published_at`, but `aggregated` is
+ * still publishable — the guard refuses a CANCELLED or unaggregated session,
+ * not an unjudged one), while `judgeSessionAdmin` needs the
+ * `aggregated -> judged` transition to still be legal when its model call
+ * returns up to a minute later. Enqueue both back to
  * back and the publish very often wins: the transition is refused, the whole
  * judging transaction rolls back, and the soak records NOTHING while the job
  * queue fills with `degraded` rows. Waiting for `judged` removes the race.
@@ -1133,6 +1224,8 @@ export async function runJudgeStep(
   const enqueue = deps.enqueue
     ?? ((action: string, payload: Record<string, unknown>) => enqueueLifecycleJob(action, payload, automationToken));
   const judgementCount = deps.countJudgements ?? (() => countJudgements(sessionId, automationToken));
+  const readProvenance = deps.readProvenance
+    ?? (() => latestJudgementProvenance(sessionId, automationToken).catch(() => ({ source: null, fallbackReason: null, model: null })));
   const log = deps.log ?? ((line: string) => console.log(line));
 
   // Read the switch BEFORE enqueueing, so the branch below is about the mode
@@ -1158,10 +1251,10 @@ export async function runJudgeStep(
   // or `pending`, and (b) then enqueues publish BEHIND the still-running
   // judge on the single-concurrency lane — the publish wait that follows then
   // expires too, and the smoke crashes at the publish line rather than the
-  // judge line. waitForJudgeJobTerminal ends when the job ENDS (succeeded or
-  // dead), and the ceiling is only a backstop against a wedged lane. A
-  // `dead` job is a permanent failure — the wait stops at once, naming
-  // last_error, instead of burning the ceiling.
+  // judge line. waitForJudgeJobTerminal ends when the job ENDS (succeeded,
+  // failed or dead), and the ceiling is only a backstop against a wedged lane.
+  // A `failed` or `dead` job is a permanent failure — the wait stops at once,
+  // naming last_error, instead of burning the ceiling.
   const waitForJudged = deps.waitForJudged
     ?? (async () => {
       const ceilingMs = deps.judgeWaitCeilingMs ?? judgeWaitCeilingMs();
@@ -1192,9 +1285,9 @@ export async function runJudgeStep(
         return;
       }
       const job = terminal.job;
-      if (terminal.reason === "terminal" && job?.status === "dead") {
+      if (terminal.reason === "terminal" && (job?.status === "dead" || job?.status === "failed")) {
         throw new Error(
-          `swarm.judge job #${queuedJobId} went DEAD after ${job.attempts}/${job.maxAttempts} attempts` +
+          `swarm.judge job #${queuedJobId} went ${job.status.toUpperCase()} after ${job.attempts}/${job.maxAttempts} attempts` +
             (job.lastError ? ` — ${job.lastError}` : ""),
         );
       }
@@ -1205,11 +1298,20 @@ export async function runJudgeStep(
     });
   try {
     await waitForJudged();
-    log(`  judged (mode=${mode})`);
-    return { mode, waitedForJudged: true, judged: true, recorded: null, judgeJobId: queuedJobId ?? null };
+    // WHO SPOKE, not just that something did. A `source` other than "model" on
+    // a post-#969 stack means a pre-#969 row is still in force; either way the
+    // operator reads it here instead of inferring it from the mode.
+    const provenance = await readProvenance();
+    log(
+      `  judged (mode=${mode}, source=${provenance.source ?? "unreadable"}` +
+        `${provenance.model ? `, model=${provenance.model}` : ""}` +
+        `${provenance.fallbackReason ? `, ${provenance.fallbackReason}` : ""})`,
+    );
+    return { mode, waitedForJudged: true, judged: true, recorded: null, judgeJobId: queuedJobId ?? null, source: provenance.source };
   } catch (err) {
     if (err instanceof JudgedByRecord) {
-      return { mode, waitedForJudged: true, judged: false, recorded: err.recorded, judgeJobId: queuedJobId ?? null };
+      const provenance = await readProvenance();
+      return { mode, waitedForJudged: true, judged: false, recorded: err.recorded, judgeJobId: queuedJobId ?? null, source: provenance.source };
     }
     // SAY WHICH FAILURE THIS IS (issue #806). The wait no longer expires on a
     // mere slow judge — it ends on the job's terminal state or the backstop —
@@ -1228,7 +1330,8 @@ export async function runJudgeStep(
         `EXPIRED (mode=${mode}) — ${record}; publishing anyway rather than wedging the cadence: ` +
         `${err instanceof Error ? err.message : err}`,
     );
-    return { mode, waitedForJudged: true, judged: false, recorded, judgeJobId: queuedJobId ?? null };
+    const provenance = recorded != null && recorded > 0 ? await readProvenance() : { source: null };
+    return { mode, waitedForJudged: true, judged: false, recorded, judgeJobId: queuedJobId ?? null, source: provenance.source };
   }
 }
 
@@ -1309,7 +1412,6 @@ export async function runRegimeClassify(
 // let `main()` below grant the role and flip the mode for exactly one
 // session, then restore both.
 
-/** `POST /api/swarm/admin/judge` — the runtime switch (mode ∈ off|shadow|enforce). */
 /**
  * Turn the judge ON for a twin boot, with a model that costs real money.
  *
@@ -1328,33 +1430,67 @@ export async function runRegimeClassify(
  * REFUSES A KEYLESS MODEL. The point is to prove the judge against the model
  * production would use; a free model would make the receipt's provenance a
  * different claim than the one under test.
+ *
+ * WRITES THE BARE MODEL ID (X3) — see twinJudgeModelId().
  */
-export async function enableTwinJudge(model: string, automationToken?: string): Promise<void> {
-  if (model.startsWith("free/") || model === "free") {
+export function twinJudgeModelId(model: string): string {
+  // X3: the STORED id is the bare Zen id (`deepseek-v4-flash`), which is what
+  // the judge model policy's pinned acceptance model and the transport's
+  // wireModelId() agree on. The registry hands out `opencode/<id>`; strip it
+  // here rather than rely on the backend normalising it on the way in.
+  const bare = model.startsWith(ZEN_PREFIX) ? model.slice(ZEN_PREFIX.length) : model;
+  if (!bare || bare.startsWith("free/") || bare === "free" || isKeylessModel(bare)) {
     throw new Error(
       `twin judge refuses a keyless model (${model}): a receipt authored by a free model does not evidence the paid judge. ` +
         "Set AGENT_MODEL to a funded selector, or boot without --db smoke-twin.",
     );
   }
-  const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.judgeConfig}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
-    body: JSON.stringify({ mode: "enforce", model }),
-  });
-  if (!r.ok) {
-    throw new Error(`POST ${ROUTES.swarm.admin.judgeConfig} {mode:enforce,model:${model}} -> ${r.status}: ${await r.text()}`);
-  }
+  return bare;
+}
+
+export async function enableTwinJudge(registryModel: string, automationToken?: string): Promise<void> {
+  const model = twinJudgeModelId(registryModel);
+  // Mode and model in ONE request (migration 0056) — the same helper every
+  // other enable in this repo goes through.
+  await setJudgeMode("enforce", automationToken, model);
   console.log(`  judge: enforce, model=${model} — every session this boot is judged by a REAL model call (twin only)`);
 }
 
+/**
+ * `POST /api/swarm/admin/judge` — the runtime switch (mode ∈ off|shadow|enforce).
+ *
+ * ENABLING IS ONE REQUEST, MODE AND MODEL TOGETHER (migration 0056). The
+ * constraint is on the PAIR — `shadow`/`enforce` require a model — and the
+ * shipped default is `off` with `model` NULL, so the obvious two-step
+ * ("set the mode, then set the model") is refused by the database at step one.
+ * That is exactly what turned the GitHub e2e red on `off -> shadow`: the test
+ * updated only the mode, against a row whose model was still NULL.
+ *
+ * The guard below is deliberately a REFUSAL IN THIS PROCESS rather than a
+ * fixed-up call site. Patching the one caller that went red would leave the
+ * next one to rediscover it as a 400 from the admin route, or — worse, on a
+ * restored twin whose model happens to be set — to pass locally and fail on a
+ * fresh database. A caller that means to enable the judge knows which model it
+ * wants; one that does not is not ready to enable it.
+ */
 export async function setJudgeMode(
   mode: "off" | "shadow" | "enforce",
   automationToken?: string,
   model?: string,
 ): Promise<void> {
+  if (mode !== "off" && !model?.trim()) {
+    throw new Error(
+      `setJudgeMode(${mode}) needs the model in the SAME request: migration 0056 constrains the ` +
+        "mode/model pair, so enabling the judge against the shipped NULL model is refused by the " +
+        "database. Resolve the model first (setJudgeModel, or resolveAgentModel()) and pass it here. " +
+        'Only setJudgeMode("off") may omit it.',
+    );
+  }
   const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.judgeConfig}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
+    // Mode + model atomically when enabling: two independent requests permit
+    // another actor (or a stale restored row) to expose an invalid pair.
     body: JSON.stringify(model ? { mode, model } : { mode }),
   });
   if (!r.ok) {
@@ -1459,6 +1595,53 @@ export async function latestJudgedByMemberId(sessionId: string | number, automat
 }
 
 /**
+ * `POST /api/swarm/admin/judge` — seed the model the judge will actually run.
+ *
+ * WITHOUT THIS THE SMOKE PROVES NOTHING (issue #969). `swarm_judge_config.model`
+ * ships NULL, and a twin restores production's row rather than a fresh one, so
+ * every judged session on every smoke ran with no transport at all: judge()
+ * returned template prose under `source: "fallback"` and the coverage below
+ * still went green, because a fallback row lands, is attributed, and is
+ * counted exactly like a real one.
+ */
+export async function setJudgeModel(model: string, automationToken?: string): Promise<string> {
+  const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.judgeConfig}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
+    body: JSON.stringify({ model }),
+  });
+  if (!r.ok) {
+    throw new Error(`POST ${ROUTES.swarm.admin.judgeConfig} {model:${model}} -> ${r.status}: ${await r.text()}`);
+  }
+  // RETURN WHAT WAS STORED, not what was asked for. The backend normalises the
+  // `opencode/` provider prefix off the registry id (normalizeJudgeModel), so a
+  // caller logging its own argument would name a model the judge will never
+  // send — the exact string Zen answers with 401 "is not supported".
+  const body = await responseJson<{ judge?: { model?: string | null } }>(r).catch(() => ({}) as { judge?: { model?: string | null } });
+  return body.judge?.model ?? model;
+}
+
+/** The in-force judgement's provenance: did a MODEL author it, or a template? */
+export async function latestJudgementProvenance(
+  sessionId: string | number,
+  automationToken?: string,
+): Promise<{ source: string | null; fallbackReason: string | null; model: string | null }> {
+  const r = await fetch(
+    `${backendUrl()}${routePath(ROUTES.swarm.admin.sessionJudgements, { id: String(sessionId) })}`,
+    { headers: getAutomationHeaders(automationToken) },
+  );
+  if (!r.ok) throw new Error(`GET sessionJudgements ${sessionId} -> ${r.status}`);
+  const body = await responseJson<{
+    inForce?: { source?: string | null; fallbackReason?: string | null; model?: string | null } | null;
+  }>(r);
+  return {
+    source: body.inForce?.source ?? null,
+    fallbackReason: body.inForce?.fallbackReason ?? null,
+    model: body.inForce?.model ?? null,
+  };
+}
+
+/**
  * Grants `memberId` the judge role, flips `swarm_judge_config.mode` to
  * `shadow`, runs `runJudgedSession` (expected to be a single `runSession`
  * call whose roster already treats `memberId` as absent — a judge-role member
@@ -1487,10 +1670,16 @@ export async function runJudgeRoleCoverage(
 ): Promise<void> {
   await setMemberRole(memberId, "judge", automationToken);
   console.log(`  ${memberId}: granted judge role via ${ROUTES.swarm.admin.memberRole} (issue #845)`);
+  // SEED THE MODEL BEFORE THE MODE. Since #969 the backend refuses
+  // shadow/enforce while `model` is NULL, so this is no longer merely the
+  // difference between a real judging and a faked one — it is what makes the
+  // setJudgeMode() call below legal at all.
+  const selectedJudgeModel = resolveAgentModel();
+  const storedJudgeModel = await setJudgeModel(selectedJudgeModel, automationToken);
+  console.log(`  judge model: ${storedJudgeModel} (resolveAgentModel -> wire id, issue #969)`);
   const shippedJudgeMode = await readJudgeMode(automationToken);
   const restoreJudgeMode: "off" | "shadow" | "enforce" =
     shippedJudgeMode === "shadow" || shippedJudgeMode === "enforce" ? shippedJudgeMode : "off";
-  const selectedJudgeModel = resolveAgentModel();
   await setJudgeMode("shadow", automationToken, selectedJudgeModel);
   console.log(`  judge mode: ${shippedJudgeMode ?? "unreadable"} -> shadow for this session only (issue #845)`);
   try {
@@ -1526,8 +1715,27 @@ export async function runJudgeRoleCoverage(
     console.log(
       `  session ${judged.sessionId}: judgedByMemberId=${judgedByMemberId} matches granted persona '${memberId}' (issue #922)`,
     );
+    // AC: A MODEL AUTHORED IT (issue #969). The three assertions above — a row
+    // landed, it is attributed, it names the granted persona — are ALL true of
+    // a `source: "fallback"` row carrying template prose, which is how this
+    // coverage stayed green on every smoke and every twin while no judge had
+    // ever run. This is the one that could not pass without one.
+    const provenance = await latestJudgementProvenance(judged.sessionId, automationToken);
+    if (provenance.source !== "model") {
+      throw new Error(
+        `session ${judged.sessionId}: judgement source=${provenance.source ?? "null"}` +
+          `${provenance.fallbackReason ? ` (${provenance.fallbackReason})` : ""} — expected "model". ` +
+          "No judge authored this opinion; the smoke must not report coverage for a judging that did not happen (issue #969)",
+      );
+    }
+    console.log(
+      `  session ${judged.sessionId}: judgement authored by model=${provenance.model ?? "unknown"} (source=model, issue #969)`,
+    );
   } finally {
-    await setJudgeMode(restoreJudgeMode, automationToken);
+    // Restoring to `shadow`/`enforce` is an ENABLE like any other, so it carries
+    // the model too. Restoring to `off` must not: `off` with a model is legal,
+    // but the row this smoke found may legitimately have had none.
+    await setJudgeMode(restoreJudgeMode, automationToken, restoreJudgeMode === "off" ? undefined : storedJudgeModel);
     await setMemberRole(memberId, "member", automationToken);
     console.log(`  judge mode restored to ${restoreJudgeMode}; ${memberId} role restored to member (issue #845)`);
   }
@@ -1807,7 +2015,7 @@ export async function runSession(
 
   // Every present member's published take must be genuine live opencode
   // authoring (non-template body,
-  // REGIME/ALLOCATION/SUBJECT lead-ins, stance in the five-value set, confidence
+  // the subject's two lead-ins, stance in the five-value set, confidence
   // in [0,1], distinct across members). Throws → exit 1 on any failure.
   //
   // Absence is a DESIGNED outcome (#301/#319), so this does not require every
@@ -1821,7 +2029,9 @@ export async function runSession(
   // cross-role test identity) carry no ground truth and are not asserted on.
   const { failed, fulfilled } = settledAttendance(present, settled);
   const observedAbsent = [...absent.map((m) => m.memberId), ...failed];
-  assertAuthoredTakes(tag, pub.takes, attendance, observedAbsent, fulfilled);
+  assertAuthoredTakes(tag, pub.takes, attendance, observedAbsent, fulfilled, {
+    requireWeights: sessionRequiresWeights(pub),
+  });
 
   // Verify memos
   for (const r of results) {

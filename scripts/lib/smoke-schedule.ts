@@ -5,6 +5,19 @@
 // never by an env var — the same hard rule `--pg-data` and `--stage`'s port pin
 // already follow (docs/architecture.md §0). Cadence is a property of one
 // deliberate invocation, not of a shell that happens to have something exported.
+// An EXPLICIT `--cadence fast|realistic` argument overrides the profile the
+// invocation shape would otherwise imply: `--static-port --cadence fast` boots
+// on the pinned tunnel port while running the fast TEST cadence — never the 6 h
+// production one the port pin alone would select. The smoke-twin passes it too,
+// but does not depend on it: a twin is never stage-paced whatever its flags say
+// (stageCadenceApplies) and runs the fast spacing with its own wider window
+// (TWIN_WINDOW_MS).
+//
+// The BOOT resolver treats "production" as exactly "realistic cadence on the
+// pinned port" (see resolveSmokeCadenceForBoot), so the fast-cadence twin sits
+// in the non-production branch and must resolve fast — asserting probes both
+// directions, so a pinned-port boot CANNOT silently run the fast cadence and a
+// fast-cadence boot CANNOT silently inherit the 6 h one.
 //
 //   fast (default)      — `bun run smoke` and CI. Today's values, unchanged: a
 //                         swarm session per subject every ~2 min, subjects
@@ -162,10 +175,6 @@ const REALISTIC: SmokeCadence = {
 };
 
 /**
- * Resolve the cadence profile for one smoke invocation. `stage` is the `--stage`
- * ARGUMENT, never an env var.
- */
-/**
  * Does the STAGE (six-hour) cadence apply to this boot?
  *
  * `--static-port` means "this boot owns the tunnel port". For the standing
@@ -191,7 +200,16 @@ export function stageCadenceApplies(staticPort: boolean, twin: boolean): boolean
   return staticPort && !twin;
 }
 
-export function resolveSmokeCadence(opts: { stage?: boolean } = {}): SmokeCadence {
+/**
+ * Resolve the cadence profile for one smoke invocation. `stage` is the `--stage`
+ * ARGUMENT, never an env var. An explicit `cadence` override wins when present —
+ * that is the argument the fast smoke-twin passes (see the module header).
+ */
+export function resolveSmokeCadence(
+  opts: { stage?: boolean; cadence?: SmokeCadenceProfile } = {},
+): SmokeCadence {
+  if (opts.cadence === "fast") return FAST;
+  if (opts.cadence === "realistic") return REALISTIC;
   return opts.stage ? REALISTIC : FAST;
 }
 
@@ -406,14 +424,23 @@ export function assertProductionConstants(
 export const TWIN_WINDOW_MS = 6 * 60_000;
 
 export function resolveSmokeCadenceForBoot(
-  opts: { stage: boolean; twin?: boolean; env: Record<string, string | undefined> },
+  opts: { stage: boolean; twin?: boolean; cadence?: SmokeCadenceProfile; env: Record<string, string | undefined> },
 ): SmokeCadence {
-  const base = resolveSmokeCadence({ stage: opts.stage });
-  // Interval moves WITH the window: the dead-zone rule below (window ===
-  // interval) holds for every profile, the twin's included.
-  const twin = Boolean(opts.twin) && !opts.stage;
+  const base = resolveSmokeCadence({ stage: opts.stage, cadence: opts.cadence });
+  // "Production" means exactly "realistic cadence on the pinned port". An
+  // explicit `--cadence fast` on the pinned port is a TEST boot: it takes the
+  // NON-production branch, which demands fast (as resolved here, by
+  // construction). The opposite slip is equally fatal: a non-pinned boot cannot
+  // claim the realistic profile either.
+  const production = opts.stage && base.profile === "realistic";
+  // A TWIN (release, R14) is never production-paced: its caller passes
+  // `stage: stageCadenceApplies(staticPort, twin)`, which is false for a twin,
+  // and it runs the fast spacing with TWIN_WINDOW_MS. Interval moves WITH the
+  // window: the dead-zone rule below (window === interval) holds for every
+  // profile, the twin's included.
+  const twin = Boolean(opts.twin) && !production;
   const cadence = twin ? { ...base, swarmIntervalMs: TWIN_WINDOW_MS, swarmWindowMs: TWIN_WINDOW_MS } : base;
-  assertProductionConstants(cadence, opts.env, { production: opts.stage, twin });
+  assertProductionConstants(cadence, opts.env, { production, twin });
   return cadence;
 }
 

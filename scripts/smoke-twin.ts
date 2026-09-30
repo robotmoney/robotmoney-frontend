@@ -15,11 +15,22 @@
 //   2. --static-port  ALWAYS. This is the boot cloudflared points at, so its
 //                     host port must be the fixed one rather than whatever
 //                     Docker hands out.
+//   3. --cadence fast ALWAYS. A twin is a TEST environment — production-shaped
+//                     DATA, yes, but it must run at the short test cadence,
+//                     never the 6 h production one the port pin alone would
+//                     select. smoke-main already runs any twin fast
+//                     (stageCadenceApplies, with the twin's wider window
+//                     TWIN_WINDOW_MS); the flag makes that visible in the
+//                     printed invocation. smoke-main also turns the twin's
+//                     consensus judge on at boot (enableTwinJudge: ENFORCE, a
+//                     funded model), so each judged session publishes a
+//                     validator consensus receipt.
 //
 // HOW IT DIFFERS FROM ITS NEIGHBOURS:
 //   bun run smoke:stage    standing smoke, SIMULATED committee, ephemeral or .env db
-//   bun run smoke:twin:once one-shot rehearsal, docker-assigned port, tears down
+//   bun run smoke:twin:once     one-shot rehearsal, docker-assigned port, tears down
 //   bun run smoke:twin          standing smoke, PRODUCTION data, pinned tunnel port, stays up
+//                               (short test cadence, judge enforced)
 //
 // ⛔ THIS PUBLISHES A COPY OF PRODUCTION ON A PUBLIC URL. cloudflared routes
 // stage.robotmoney-labs.dev to the pinned port, so everything below is reachable
@@ -39,6 +50,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveZenKey } from "./lib/smoke-twin-rehearsal.ts";
+import { TWIN_WINDOW_MS } from "./lib/smoke-schedule.ts";
 
 const NAME = "smoke-twin";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -85,10 +97,13 @@ export function planTwin(passthrough: readonly string[]): SmokeTwinPlan | { erro
   const i = passthrough.indexOf("--backup-dir");
   const backupDir = i >= 0 ? passthrough[i + 1]! : defaultTwinDir();
 
-  // --static-port and --smoke are NOT optional here: the first is what makes
-  // this the tunnel's boot, the second is what --db smoke-twin requires (a restored
-  // database is populated, and the smoke scenario's fixtures overwrite by design).
-  const args = ["--smoke", "--db", "smoke-twin", "--static-port"];
+  // --static-port, --cadence fast and --smoke are NOT optional here: the first
+  // is what makes this the tunnel's boot, the second states on the command line
+  // what smoke-main already guarantees for any twin (stageCadenceApplies — a twin
+  // is a TEST boot, never the 6 h cadence the pin alone would select), and the
+  // third is what --db smoke-twin requires (a restored database is populated,
+  // and the smoke scenario's fixtures overwrite by design).
+  const args = ["--smoke", "--db", "smoke-twin", "--static-port", "--cadence", "fast"];
   args.push("--backup-dir", backupDir);
   if (passthrough.includes("--no-tui")) args.push("--no-tui");
 
@@ -114,6 +129,7 @@ if (import.meta.main) {
 
   log(`host port: PINNED (--static-port) — this is the boot cloudflared points at.`);
   log(`database:  a LOCAL TWIN restored from ${plan.capture ? "a FRESH capture of the production replica" : "the existing backup"}.`);
+  log(`cadence:   FAST spacing with the twin's ${TWIN_WINDOW_MS / 60_000}-min window, --cadence fast — a twin is a TEST boot. Judge set to ENFORCE at boot.`);
   log(`inference: production default model, OPENCODE_API_KEY from ${zen.source} — real spend on a real key.`);
   console.warn(
     `[${NAME}] ############################################################\n` +

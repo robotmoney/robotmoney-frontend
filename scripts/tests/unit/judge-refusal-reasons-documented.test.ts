@@ -2,10 +2,11 @@
 // to backend/src/swarm/judge.ts. Neither side may gain a reason the other does
 // not have.
 //
-// WHY THIS EXISTS. §9.7's failure paragraph
-// claims exhaustiveness — it is the only place an operator reading a
-// `JudgeUnavailable.reason` off `swarm_session_judgements` can find out what the value
-// means. It was written by hand in PR #778 (issue #773) and was ALREADY STALE
+// WHY THIS EXISTS. §9.7's "Failure is a REFUSAL, and records nothing."
+// paragraph claims exhaustiveness — it is the only place an operator reading a
+// refusal reason (`judgeUnavailableReason` on the admin API, `jobs.last_error`
+// as `judge_unavailable:<reason>`, or a historical row's `fallback_reason`) can
+// find out what the value means. It was written by hand in PR #778 (issue #773) and was ALREADY STALE
 // on the day it landed: PR #777 had merged `too_many_positions` and
 // `duplicate_position:<id>` hours earlier, and the freshly written list omitted
 // both. A hand-maintained enumeration of string literals living in prose drifts
@@ -25,10 +26,16 @@
 // EXTRACTION IS STRUCTURALLY GUARDED. A citation gate that silently matches
 // nothing is worse than none, so the source scan does not merely collect what
 // its regexes happen to find: it counts every `new JudgeResponseError(` and
-// every `refuse(` call site and REFUSES to run if any of them is written in
+// every judge-refusal `throw`, and REFUSES to run if any of them is written in
 // a shape it cannot read (a computed reason, a helper it does not know about).
 // A new failure path introduced in an unrecognised shape goes red as a
 // structural failure, not as a silent pass.
+//
+// THERE IS NO FALLBACK (release a42d6c5a, kept by the 0.5.x -> main merge).
+// Every failure — configuration, account, rail or a model that misbehaved —
+// throws, and §9.7 enumerates them all in one paragraph. A planted control
+// below proves a `fallbackOutcome(` call coming back would go red rather than
+// being silently scanned as one more reason.
 //
 // The planted-violation controls at the bottom are the load-bearing half: each
 // direction of the comparison, and each structural guard, is mutated in memory
@@ -57,6 +64,13 @@ const REASON_LITERAL = /^[a-z][a-z0-9_]*(?::.*)?$/;
 
 const keyOf = (literal: string) => literal.split(":")[0];
 
+// The only variable names a judge outcome may be produced from, and the only
+// functions allowed to decide one. Both lists are closed on purpose: an outcome
+// built from anything else is a reason this scan cannot pin to §9.7, and goes
+// red as a structural failure rather than passing silently.
+const OUTCOME_IDENTS: readonly string[] = ["reason", "gap"];
+const CLASSIFIERS: readonly string[] = ["judgeConfigGap", "judgeTransportGap"];
+
 // Every string / template literal inside a fragment of source.
 function literalsIn(fragment: string): string[] {
   const out: string[] = [];
@@ -71,16 +85,22 @@ function countOf(source: string, re: RegExp): number {
 }
 
 /**
- * Every fallback reason KEY reachable in judge.ts.
+ * Every refusal reason KEY reachable in judge.ts.
  *
- * Three producing shapes, and the guards that prove the scan saw all of them:
+ * Four producing shapes, and the guards that prove the scan saw all of them:
  *   1. `new JudgeResponseError("<reason>")` — caught at judge.ts's parse catch
  *      and recorded verbatim. Guard: every call site must pass a literal.
- *   2. `refuse("<reason>", model)` — the pre-transport outcomes. Guard: every
- *      call site must pass either a literal or the identifier `reason`.
- *   3. `const reason = … "<reason>" …` — the two catch blocks that pick a
- *      reason before handing it to `refuse(reason, …)`. Guard: there must be
- *      one such assignment for every identifier-passing `refuse()` call site.
+ *   2. `new Judge{Unavailable,NothingToJudge}Error("<reason>", …)` — every
+ *      refusal with a literal reason.
+ *   3. (removed: `fallbackOutcome(…)` — there is no fallback. Its return is a
+ *      structural failure; see the guard below.)
+ *   4. Shape 2 fed by the identifier `reason` or `gap`. Guard: every such site
+ *      must use exactly that name, and there must be one `const reason = …`
+ *      assignment carrying readable literals for each of them.
+ *   5. `judgeConfigGap()` — the exported classifier that decides WHICH
+ *      configuration is missing. It feeds one of shape 4's assignments, so its
+ *      own `return "<reason>"` literals are read from its body. Guard: the
+ *      function must exist and every return in it must be a literal.
  *
  * Throws — loudly, not silently returning a short set — when a guard trips.
  */
@@ -110,50 +130,91 @@ function reachableReasonKeys(source: string): Set<string> {
     );
   }
 
-  // 2. refuse() with a literal.
-  const refuseLiteralRe = /(?<![\w.$])refuse\(\s*(?:"([^"\\]*)"|`([^`\\]*)`)/g;
-  let refuseLiteralCount = 0;
-  while ((m = refuseLiteralRe.exec(source)) !== null) {
-    refuseLiteralCount += 1;
-    collect(m[1] ?? m[2] ?? "", "refuse()");
+  // NO FALLBACK. A template-prose outcome coming back is not "one more reason
+  // to document": it is the thing R4 forbids, so it trips here.
+  if (/\bfallbackOutcome\(|\btemplateOpinion\(\s*input\s*\)\s*,\s*source/.test(source)) {
+    throw new Error(`${SOURCE_PATH}: a fallback outcome is back — judge() must return a model opinion or throw (a42d6c5a).`);
   }
 
-  // 2b. refuse() with an identifier — only `reason` is understood.
-  const refuseIdentRe = /(?<![\w.$])refuse\(\s*([A-Za-z_$][\w$]*)\s*,/g;
-  let refuseIdentCount = 0;
-  while ((m = refuseIdentRe.exec(source)) !== null) {
-    refuseIdentCount += 1;
-    if (m[1] !== "reason") {
+  // 2. Every OUTCOME site: a refusal thrown.
+  const OUTCOME_SITE = String.raw`(?:new Judge(?:Unavailable|NothingToJudge)Error\()`;
+  const outcomeLiteralRe = new RegExp(`${OUTCOME_SITE}\\s*(?:"([^"\\\\]*)"|\`([^\`\\\\]*)\`)`, "g");
+  let outcomeLiteralCount = 0;
+  while ((m = outcomeLiteralRe.exec(source)) !== null) {
+    outcomeLiteralCount += 1;
+    collect(m[1] ?? m[2] ?? "", "judge outcome site");
+  }
+
+  // 4. An outcome site fed by an identifier — only `reason` (a literal-bearing
+  //    assignment) and `gap` (a classifier call, shape 5) are understood.
+  const outcomeIdentRe = new RegExp(`${OUTCOME_SITE}\\s*([A-Za-z_$][\\w$]*)\\s*,`, "g");
+  let outcomeIdentCount = 0;
+  while ((m = outcomeIdentRe.exec(source)) !== null) {
+    outcomeIdentCount += 1;
+    if (!OUTCOME_IDENTS.includes(m[1]!)) {
       throw new Error(
-        `${SOURCE_PATH}: refuse() is called with an unrecognised variable \`${m[1]}\` — this scan only follows \`reason\`, so its value cannot be pinned to ${DOC_PATH}.`,
+        `${SOURCE_PATH}: a judge outcome is produced with an unrecognised variable \`${m[1]}\` — this scan only follows ${OUTCOME_IDENTS.map((i) => `\`${i}\``).join(" and ")}, so its value cannot be pinned to ${DOC_PATH}.`,
       );
     }
   }
 
-  const refuseSites = countOf(source, /(?<![\w.$])refuse\(/g);
-  if (refuseLiteralCount + refuseIdentCount !== refuseSites) {
+  const outcomeSites = countOf(source, new RegExp(OUTCOME_SITE, "g"));
+  if (outcomeLiteralCount + outcomeIdentCount !== outcomeSites) {
     throw new Error(
-      `${SOURCE_PATH}: ${refuseSites} \`refuse(\` call sites but ${refuseLiteralCount + refuseIdentCount} readable (${refuseLiteralCount} literal, ${refuseIdentCount} via \`reason\`) — an unreadable reason cannot be pinned to ${DOC_PATH}.`,
+      `${SOURCE_PATH}: ${outcomeSites} judge outcome sites but ${outcomeLiteralCount + outcomeIdentCount} readable (${outcomeLiteralCount} literal, ${outcomeIdentCount} via \`reason\`) — an unreadable reason cannot be pinned to ${DOC_PATH}.`,
     );
   }
 
-  // 3. The `reason` assignments feeding 2b.
-  // `const reason = …` / `let reason = …` only. `this.reason = boundedReason(reason)`
-  // inside the JudgeResponseError constructor is a re-wrap of an already-collected
-  // value, not a producer, and must not be read as one.
-  const reasonAssignRe = /(?:const|let|var)\s+reason\s*=\s*([^;]+);/g;
+  // 5. The CLASSIFIERS the `gap` assignments are fed from, read so that every
+  //    fail-closed reason is collected from the one place that decides it:
+  //      judgeConfigGap()    — which CONFIGURATION is missing
+  //                            (`model_unconfigured` / `credential_unconfigured`)
+  //      judgeTransportGap() — which of Zen's own refusals is an account or an
+  //                            id problem rather than a model that misbehaved
+  //                            (`credit_exhausted`, `credential_rejected`,
+  //                            `model_not_supported`, `launcher_unavailable`),
+  //                            and `null` for the 5xx / network / timeout cases,
+  //                            which refuse with `model_timeout` /
+  //                            `model_unavailable:…` instead.
+  //    `return null` is the "not fail-closed" answer and is deliberately NOT a
+  //    reason: it is skipped rather than collected, and every OTHER return must
+  //    still be a readable literal.
+  for (const classifier of CLASSIFIERS) {
+    const gapStart = source.indexOf(`export function ${classifier}(`);
+    if (gapStart < 0) {
+      throw new Error(`${SOURCE_PATH}: ${classifier}() is gone — the fail-closed reasons are now decided somewhere this scan does not read.`);
+    }
+    const gapBody = source.slice(gapStart, source.indexOf("\n}\n", gapStart));
+    const gapReturns = [...gapBody.matchAll(/return\s+(?:"([^"\\]*)"|`([^`\\]*)`|(null))\s*;/g)];
+    const gapReturnSites = countOf(gapBody, /return\s/g);
+    const literals = gapReturns.filter((g) => g[3] === undefined);
+    if (literals.length === 0 || gapReturns.length !== gapReturnSites) {
+      throw new Error(
+        `${SOURCE_PATH}: ${classifier}() has ${gapReturnSites} return(s) but ${gapReturns.length} readable (${literals.length} reason literal(s)) — a computed fail-closed reason cannot be pinned to ${DOC_PATH}.`,
+      );
+    }
+    for (const g of literals) collect(g[1] ?? g[2] ?? "", `${classifier}() return`);
+  }
+
+  // The assignments feeding shape 4. A CLASSIFIER CALL is an allowed
+  // right-hand side — shape 5 already read its literals — so those are the only
+  // assignments that need not carry literals of their own; every other one must.
+  // `this.reason = boundedReason(reason)` inside the error constructors is a
+  // re-wrap of an already-collected value, not a producer, and is not matched.
+  const reasonAssignRe = new RegExp(String.raw`(?:const|let|var)\s+(?:${OUTCOME_IDENTS.join("|")})\s*=\s*([^;]+);`, "g");
   let reasonAssignCount = 0;
   while ((m = reasonAssignRe.exec(source)) !== null) {
     reasonAssignCount += 1;
-    const found = literalsIn(m[1]).filter((lit) => REASON_LITERAL.test(lit));
+    if (CLASSIFIERS.some((c) => m![1]!.includes(`${c}(`))) continue;
+    const found = literalsIn(m[1]!).filter((lit) => REASON_LITERAL.test(lit));
     if (found.length === 0) {
-      throw new Error(`${SOURCE_PATH}: \`const reason = ${m[1].trim()}\` yields no readable reason literal.`);
+      throw new Error(`${SOURCE_PATH}: \`const ${m[1].trim()}\` yields no readable reason literal.`);
     }
     for (const lit of found) collect(lit, "reason assignment");
   }
-  if (reasonAssignCount !== refuseIdentCount) {
+  if (reasonAssignCount !== outcomeIdentCount) {
     throw new Error(
-      `${SOURCE_PATH}: ${refuseIdentCount} \`refuse(reason, …)\` call sites but ${reasonAssignCount} \`reason =\` assignments — one of them is fed from somewhere this scan does not read.`,
+      `${SOURCE_PATH}: ${outcomeIdentCount} outcome site(s) fed by ${OUTCOME_IDENTS.map((i) => `\`${i}\``).join("/")} but ${reasonAssignCount} assignment(s) — one of them is fed from somewhere this scan does not read.`,
     );
   }
 
@@ -161,7 +222,7 @@ function reachableReasonKeys(source: string): Set<string> {
 }
 
 /** The §9.7 paragraph, proven to be inside §9.7 and not merely somewhere in the doc. */
-function fallbackParagraph(doc: string): string {
+function refusalParagraph(doc: string): string {
   const sectionStart = doc.indexOf(SECTION_HEADING);
   if (sectionStart < 0) throw new Error(`${DOC_PATH}: section heading "${SECTION_HEADING}" not found.`);
   const nextHeading = doc.indexOf("\n### ", sectionStart + 1);
@@ -170,7 +231,7 @@ function fallbackParagraph(doc: string): string {
   const anchor = doc.indexOf(PARAGRAPH_ANCHOR);
   if (anchor < 0) throw new Error(`${DOC_PATH}: paragraph anchor "${PARAGRAPH_ANCHOR}" not found.`);
   if (anchor < sectionStart || anchor >= sectionEnd) {
-    throw new Error(`${DOC_PATH}: the fallback-reason enumeration is no longer inside ${SECTION_HEADING} — §9.7 is where it is promised to live.`);
+    throw new Error(`${DOC_PATH}: the refusal-reason enumeration is no longer inside ${SECTION_HEADING} — §9.7 is where it is promised to live.`);
   }
   if (doc.indexOf(PARAGRAPH_ANCHOR, anchor + 1) >= 0) {
     throw new Error(`${DOC_PATH}: "${PARAGRAPH_ANCHOR}" appears more than once — this scan cannot tell which list is authoritative.`);
@@ -182,7 +243,7 @@ function fallbackParagraph(doc: string): string {
 
 /** Every reason KEY enumerated by §9.7. */
 function documentedReasonKeys(doc: string): Set<string> {
-  const paragraph = fallbackParagraph(doc);
+  const paragraph = refusalParagraph(doc);
   const keys = new Set<string>();
   const re = /`([^`]+)`/g;
   let m: RegExpExecArray | null;
@@ -195,7 +256,7 @@ function documentedReasonKeys(doc: string): Set<string> {
 
 const missing = (a: Set<string>, b: Set<string>) => [...a].filter((k) => !b.has(k)).sort();
 
-describe("§9.7's fallback-reason enumeration is pinned to judge.ts", () => {
+describe("§9.7's refusal-reason enumeration is pinned to judge.ts", () => {
   const source = read(SOURCE_PATH);
   const doc = read(DOC_PATH);
   const reachable = reachableReasonKeys(source);
@@ -204,7 +265,7 @@ describe("§9.7's fallback-reason enumeration is pinned to judge.ts", () => {
   test("every reason reachable in judge.ts is enumerated in §9.7", () => {
     expect(
       missing(reachable, documented),
-      `reachable in ${SOURCE_PATH} but absent from ${DOC_PATH} §9.7 — §9.7 claims exhaustiveness, so add these to its "Failure is an outcome, never an error." paragraph`,
+      `reachable in ${SOURCE_PATH} but absent from ${DOC_PATH} §9.7 — §9.7 claims exhaustiveness, so add these to its "Failure is a REFUSAL, and records nothing." paragraph`,
     ).toEqual([]);
   });
 
@@ -267,23 +328,104 @@ describe("planted violations are caught", () => {
     expect(() => reachableReasonKeys(mutated)).toThrow(/call sites but only/);
   });
 
-  test("a refuse() fed by an unknown variable trips the structural guard", () => {
-    const mutated = source.replace("refuse(reason, transport.model);", "refuse(otherReason, transport.model);");
+  test("a refusal fed by an unknown variable trips the structural guard", () => {
+    const mutated = source.replace("throw new JudgeUnavailableError(gap, opts.model ?? null);", "throw new JudgeUnavailableError(otherReason, opts.model ?? null);");
     expect(mutated).not.toBe(source);
     expect(() => reachableReasonKeys(mutated)).toThrow(/unrecognised variable/);
   });
 
-  test("a `refuse(reason, …)` with no matching assignment trips the structural guard", () => {
+  test("an outcome site fed by `reason` with no matching assignment trips the structural guard", () => {
     const mutated = source.replace(
-      'if (!transport) refuse("model_unconfigured", null);',
-      'if (!transport) refuse("model_unconfigured", null);\n  if (false) refuse(reason, null);',
+      "throw new JudgeUnavailableError(gap, opts.model ?? null);",
+      "throw new JudgeUnavailableError(gap, opts.model ?? null);\n    if (false) throw new JudgeUnavailableError(reason, null);",
     );
     expect(mutated).not.toBe(source);
-    expect(() => reachableReasonKeys(mutated)).toThrow(/assignments/);
+    expect(() => reachableReasonKeys(mutated)).toThrow(/assignment\(s\)/);
+  });
+
+  // ── No fallback: every runtime model failure is a refusal too ─────────────
+
+  test("a runtime-failure reason with no §9.7 entry is reported as undocumented", () => {
+    const mutated = source.replace(
+      'if (fault) throw new JudgeUnavailableError("malformed_output", transport.model);',
+      'if (fault) throw new JudgeUnavailableError("malformed_output", transport.model);\n  if (false) throw new JudgeUnavailableError("planted_runtime_reason", null);',
+    );
+    expect(mutated).not.toBe(source);
+    const gap = missing(reachableReasonKeys(mutated), documentedReasonKeys(doc));
+    expect(gap).toEqual(["planted_runtime_reason"]);
+  });
+
+  test("a computed refusal reason trips the structural guard", () => {
+    const mutated = source.replace(
+      'if (fault) throw new JudgeUnavailableError("malformed_output", transport.model);',
+      "if (fault) throw new JudgeUnavailableError(computeReason(), transport.model);",
+    );
+    expect(mutated).not.toBe(source);
+    expect(() => reachableReasonKeys(mutated)).toThrow(/judge outcome sites but/);
+  });
+
+  test("a fallback outcome coming back trips the no-fallback guard", () => {
+    const mutated = source.replace(
+      'if (fault) throw new JudgeUnavailableError("malformed_output", transport.model);',
+      'if (fault) return fallbackOutcome(input, "malformed_output", transport.model);',
+    );
+    expect(mutated).not.toBe(source);
+    expect(() => reachableReasonKeys(mutated)).toThrow(/fallback outcome is back/);
+  });
+
+  test("the runtime-failure reasons are reachable as refusals", () => {
+    const reachable = reachableReasonKeys(source);
+    for (const reason of ["model_timeout", "model_unavailable", "unparsable", "malformed_output", "no_takes", "no_take_bodies", "model_disallowed"]) {
+      expect(reachable.has(reason), `${reason} must be reachable in ${SOURCE_PATH}`).toBe(true);
+    }
+  });
+
+  test("losing judgeConfigGap() trips the classifier guard", () => {
+    const mutated = source.replace("export function judgeConfigGap(", "function judgeConfigGapRenamed(");
+    expect(mutated).not.toBe(source);
+    expect(() => reachableReasonKeys(mutated)).toThrow(/judgeConfigGap\(\) is gone/);
+  });
+
+  test("a computed judgeConfigGap() return trips the classifier guard", () => {
+    const mutated = source.replace('  return "model_unconfigured";\n}', "  return someComputedGap;\n}");
+    expect(mutated).not.toBe(source);
+    expect(() => reachableReasonKeys(mutated)).toThrow(/judgeConfigGap\(\) has/);
+  });
+
+  // ── The credit/credential half: Zen's own refusals are classified too ─────
+  // These three are the reasons an EXHAUSTED ACCOUNT must fail closed on
+  // (checklist §4.1). A scan that read only judgeConfigGap() would go green the
+  // moment someone deleted the classifier and let a 402 fall back again.
+
+  test("losing judgeTransportGap() trips the classifier guard", () => {
+    const mutated = source.replace("export function judgeTransportGap(", "function judgeTransportGapRenamed(");
+    expect(mutated).not.toBe(source);
+    expect(() => reachableReasonKeys(mutated)).toThrow(/judgeTransportGap\(\) is gone/);
+  });
+
+  test("a computed judgeTransportGap() return trips the classifier guard", () => {
+    const mutated = source.replace('return "credit_exhausted";', "return someComputedGap;");
+    expect(mutated).not.toBe(source);
+    expect(() => reachableReasonKeys(mutated)).toThrow(/judgeTransportGap\(\) has/);
+  });
+
+  test("the credit/credential reasons really are reachable and documented", () => {
+    const reachable = reachableReasonKeys(source);
+    const documented = documentedReasonKeys(doc);
+    for (const reason of ["credit_exhausted", "credential_rejected", "model_not_supported", "launcher_unavailable"]) {
+      expect(reachable.has(reason), `${reason} must be reachable in ${SOURCE_PATH}`).toBe(true);
+      expect(documented.has(reason), `${reason} must be enumerated in ${DOC_PATH} §9.7`).toBe(true);
+    }
+  });
+
+  test("a fail-closed reason dropped from §9.7 is reported as undocumented", () => {
+    const mutated = doc.replaceAll("`credit_exhausted`", "`   `");
+    expect(mutated).not.toBe(doc);
+    expect(missing(reachableReasonKeys(source), documentedReasonKeys(mutated))).toContain("credit_exhausted");
   });
 
   test("the enumeration moving out of §9.7 trips the section check", () => {
-    const paragraph = fallbackParagraph(doc);
+    const paragraph = refusalParagraph(doc);
     const mutated = doc.replace(paragraph, "") + `\n\n### 9.99 Elsewhere\n\n${paragraph}\n`;
     expect(() => documentedReasonKeys(mutated)).toThrow(/no longer inside/);
   });

@@ -228,17 +228,117 @@ System-correctness workflows (`backend`, `research-pipeline`, `integration`,
 workflows (`unit`, `repo-guards`, `contract`, `frontend`) continue to execute
 there — cheap enough (no Docker) to gate early regardless of draft state.
 
-The one live-network exception is deliberate and bounded (issue #484):
-`contract` runs `contract/tests/live` — a single HTTPS GET asserting
-`SWARM_ONBOARDING_SKILL_URL` still returns 200. It is the only discovery link in
-the D21 onboarding flow, a 404 there raises no error anywhere in this repo, and
-the guard's previous schedule-only home did not exist, so it had never executed
-in CI at all while the URL 404'd in production for two days. It runs on the
-per-PR path rather than nightly-only so the red lands on the PR that causes it,
-gated behind `contract`'s existing `contract/**` paths-filter. The accepted
-cost: a raw.githubusercontent.com outage reds a required check on `contract/**`
-PRs. That is the intended direction — per the loud-skip-never invariant, an
-unreachable external resource must fail, never skip.
+One live-network surface exists, and it is deliberately not a merge gate.
+
+The **observed, ungated** one is `.github/workflows/production-drift-audit.yml`
+(`CI_CLASS: heavy`): a schedule-only auditor that reports and never gates. It
+asks four questions, and these four only:
+
+| # | Check |
+|---|---|
+| **A** | Does the `rmpc` release the onboarding skill **pins** still exist, and does robotmoney-core still publish archives whose sha256 match the ones the skill **carries**? |
+| **B** | Does `SWARM_ONBOARDING_SKILL_URL` still serve a real, complete procedure rather than a deprecation stub? |
+| **C** | Does the **served** copy carry an unverified `curl … | tar xz` install form? |
+| **D** | **Negative control**: does a sibling `.md` path on the same host that cannot exist come back non-200, carrying none of the skill's markers? |
+
+**There is no gated live-network surface any more, and that is a decision, not a
+gap.** `contract`'s `contract/tests/live/` — the one directory whose cost class
+was "reaches the public internet", and the only merge gate that ever did — is
+**deleted**, along with the `test:live` script, the `contract.yml` step that ran
+it, and the file itself. Its assertions are B, C and D above; the one hermetic
+assertion it also held (that the URL constant names a skill directory above
+`SKILL.md`) is merge-gated at
+`contract/tests/unit/swarm-onboarding-skill-url.test.ts`.
+
+The reason is that **whether `robotmoney.network` answers is not a property of the
+commit under review.** It depends on deploys, DNS, TLS, CDN state, and renames
+and releases in robotmoney-core — none of which any diff in this repository can
+change. A required job that reaches the public internet on every pull request
+means any contributor with a flaky connection, and any upstream hiccup, holds an
+unmergeable PR for a reason the diff cannot fix. That was not a hypothetical: the
+`contract` job was RED on an open pull request with `Received: 502`, caused by
+nobody in that pull request. Required reading whose resolution is outside the
+repository is the shape D26 was written to delete, and it is now deleted on both
+counts.
+
+The accepted cost, stated so it is never discovered the hard way: **no required
+check in this repository verifies that the skill endpoint is alive, or that what
+it serves is the skill.** Not one, and not any nightly mirror of one. The 404
+that issue #484 was filed about — a guard that documented a `nightly-fetchers.yml`
+job which never existed, so it had executed in no CI job at any point in its life
+while the URL it guarded 404'd in production for two days — is now found by
+tonight's audit rather than by the pull request that caused it. Slower detection,
+bought on purpose, and paid for by a merge set that cannot go red for anything
+outside the repository.
+
+**What this auditor does NOT check, stated plainly because it is a decision and
+not an oversight.** It does not check deploy freshness — whether the bytes served
+at the skill URL match `frontend/public/skills/swarm-onboarding/SKILL.md` in this
+checkout. That comparison was implemented by `contract/src/skill-parity.js`
+(`describeSkillMismatch`); **that module and its offline unit test have been
+deleted**, and nothing in this repository asks the deploy-freshness question any
+more — not the auditor, not a merge gate, not a unit test, and not under some
+other name. The consequence, so it is never discovered the hard way: **nothing in
+CI reports a stale deploy.** If `main` carries a correct skill and production is
+still serving the previous one, no job in this repository will say so. Deploy
+freshness is now the **deploy pipeline's job**: it is a fact about whether a
+publish ran, and this repository has no deploy workflow, so the only place that
+fact can be observed is the deploy tooling or a human watching it. Do not
+"repair" this by reintroducing a served-vs-repo byte comparison, and do not
+"repair" it by giving the auditor a non-zero exit. The comparison was also never
+a strong check for the failure that actually breaks members: in the scenario
+that matters — robotmoney-core yanking or re-uploading the pinned `rmpc` release
+— the served copy and the repo copy keep matching each other perfectly, because
+neither of them moved. That is check A, and it is the one the merge set
+structurally cannot see.
+
+B, C and D are a **MOVE off the merge gate, not a new addition** — all three were
+code that sat in the deleted live test file, which was removed with them. They left for the reason above: a correct merge must
+not red a required check for something no commit can repair. B carries the merged
+assertion set — the 200, the front-matter `name:` that must agree with the slug
+the URL itself names, the `rmpc` marker, the whole procedure set, the
+deprecation-stub negative and the procedure floor — merged rather than copied, so
+that where the live test and the old B disagreed the stronger form won. C is a
+**security guard, not a content diff**, and its independence is deliberate and
+load-bearing: the unverified `curl … | tar xz` form pipes a downloaded archive
+into a root-privileged extractor with no checksum check, issue #748 closed it in
+the repo copy, and a stale deploy can still serve the pre-#748 block to a
+genuinely NEW member while every offline check stays green, because the offline
+checks read the repo file. C is asserted over the served body directly, keeps its
+own status line, and reports UNKNOWN — never a pass — when the fetch did not
+complete or when the origin answered with an error page instead of the document.
+Do not fold C into B and do not make it contingent on anything else in the
+auditor.
+
+B asserts the PROCEDURE, not the label, because a 200 with the right
+front-matter `name:` proved insufficient in production: robotmoney-core replaced
+the file with a 1,951-byte deprecation stub whose front matter kept the right
+`name:`, whose body mentioned `rmpc`, and which cleared every size floor, while
+reading, verbatim, "This file is a compatibility stub. It contains no
+instructions to follow." Agents were handed a signpost instead of a procedure and
+CI stayed green for two days.
+
+**D exists because B cannot check itself.** Every marker in B is a positive
+assertion over a body that is supposed to be good, and a positive assertion over
+a good input says nothing about whether it would have gone red on a bad one: an
+origin that answers 200 with an SPA shell, or an error page that happens to
+contain `rmpc`, renders B green over garbage. D fetches a sibling `.md` path that
+cannot exist — the `.md` is load-bearing, because the site server answers
+extension-less paths with the SPA shell at 200 (website-server/nginx.conf, #954) —
+and reports what came back. The direction of each outcome is the substance of the
+check, and it is written out at the D section of `scripts/production-drift-audit.ts`:
+a 404 carrying none of the markers is the only outcome that reports OK; a 200, or
+a 404 carrying a marker, reports DRIFT; and anything else — a 5xx, an unreachable
+host, a discriminator that could not be computed — reports UNKNOWN, never OK,
+because a non-404 failure status measures the origin's health rather than the
+discriminator. A reporter that always exits 0 cannot assert its control with an
+exit code, so it reports it as a row, and the row is only worth anything if
+somebody reads it.
+
+The auditor always exits 0 — a red report body on a green job is the intended
+outcome — and a check that could not run is reported UNKNOWN, never omitted and
+never rendered as a pass. Its red nightly means something different from a red
+merge; E6 records the exemption.
 
 **L2 — Shared code is named for its domain, never for its consumer.** `stack/`,
 `agent/`, `toolchain/` state what belongs in them; `lib/`, `utils/`, `helpers/`
@@ -251,8 +351,32 @@ Per-package test layout, by cost class:
 |---|---|---|---|
 | `<pkg>/tests/unit/` | unit | nothing | every PR (the default `bun test` target) |
 | `<pkg>/tests/integration/` | integration | Docker, a local stack | PR ready-for-review |
-| `<pkg>/tests/live/` | live | real external network | its package's workflow — PR (path-gated), merge to main, and the nightly mirror |
+| `<pkg>/tests/live/` | live | real external network | its package's workflow — PR (path-gated), merge to main, and the nightly mirror. **No package has a `tests/live/` directory today**, and that is a decision rather than an oversight: the one that existed (`contract/tests/live/`, the skill endpoint's reachability and procedure assertions) was removed because none of those assertions is a property of a commit, so a directory whose name promises "reaches the public internet" would be a lie and a merge gate over it would be required reading whose exit is outside the repository. Anything that genuinely needs the live network is a REPORTER (below), not a `live` suite. |
 | `evals/` | eval | Docker + network + **real inference** | nightly, sweep-only |
+
+**Why an empty `tests/live/` was not left behind.** `bun test <dir>` exits 1
+against an empty or a missing directory on bun 1.3.x — verified on 1.3.14, not
+assumed — so keeping the directory while deleting its last file would leave
+the deleted `test:live` script as a step that is permanently red, or (if the step went too)
+as a script that no workflow invokes. The second is the exact false green issue
+#484 was filed about: `test:live` sat declared in `contract/package.json` and
+invoked by zero of eleven workflows for the whole life of the guard it named.
+Deleted beats both, and
+`scripts/tests/unit/ci-workflows-structure.test.ts` now asserts the absence, so
+the next person to reach for a network test in a merge gate meets a red rather
+than a precedent.
+
+The one live-network surface in this repository sits outside that table on
+purpose: `.github/workflows/production-drift-audit.yml` (`CI_CLASS: heavy`)
+reaches robotmoney.network and robotmoney-core's release API, but it is not a
+test path, has no pass semantics, and never gates — schedule-only, exempt from
+the merge set (E6), always exit 0. It is a REPORTER, not a `live` suite; reading
+its findings as merge signal would re-create the gate it was split out to remove.
+All three of its served-document checks (B, C, D) MOVED out of
+`<pkg>/tests/live/` rather than being written fresh alongside it, so there is now
+no overlap to reason about and no second opinion: the auditor is the only place CI
+looks at what production is serving. It does not and never did cover deploy
+freshness; that question is answered by nothing in this repository (see above).
 
 `backend/tests/` is the reference implementation of this and needs no change: it
 is subdivided by surface (`api/`, `db/`), provisions its dependency in
@@ -1495,41 +1619,121 @@ Driver-created sessions have no such backlog: the driver enqueues the judging
 inside the run, so every session it starts from now on has one, and no session it
 started before has one no matter how long anyone waits.
 
-**Failure is a REFUSAL, and records nothing.** (Changed 2026-09-19. This
-paragraph used to read "Failure is an outcome, never an error", and described
-every failure below falling back to the SAME template producers the aggregator
-uses, recording the reason on the judgement row, and letting the session carry
-on. That kept a flaky model from blocking a live session — and bought it by
-recording the aggregator's own sentences AS THE JUDGE'S, which a consensus
-receipt then signed as an opinion the session adopted. The only thing telling
-such a row from a real judgement was one column nothing read. A judge that
-cannot reach a model has not judged.) Model unconfigured
-(`model_unconfigured`), a session with no takes at all (`no_takes`), a session
-where **every** take is stance-only so there is no member-authored sentence to
-quote (`no_take_bodies`), request timed out (`model_timeout`), the transport
-refused (`model_unavailable:…`), an empty answer (`empty_response`), prose
-instead of JSON (`not_json`), JSON of the wrong shape (`malformed_json`,
-`not_an_object`, `missing_rationale`, `missing_disagreements`,
-`too_many_disagreements`, `malformed_disagreement`, `malformed_position`,
-`missing_release_safety`, `malformed_release`, `malformed_concerns`), more
-than `MAX_POSITIONS` = 20 positions inside one disagreement
-(`too_many_positions`), the same member named twice inside one disagreement
-(`duplicate_position:<id>`), a disagreement attributed to a member who did not
-submit (`unknown_member:<id>`), a weight-like field anywhere in the response
-(`weight_like_field:<path>`), **a
-malformed `SWARM_JUDGE_TIMEOUT_MS` in the environment**
-(`invalid_timeout_config:…`), and anything else thrown while parsing
-(`unparsable:…`) — each THROWS `JudgeUnavailable`
-carrying that reason, and writes NOTHING. `swarm.judge` fails, retries, and an
-exhausted job leaves the session unjudged: no judgement row, and therefore no
-consensus receipt, which is the honest state. Every reason is still capped at
-120 characters, the two built out of the model's own text included — it matters
-more now, not less, because the reason travels through an exception message into
-`jobs.last_error` and the admin API's error JSON.
+**Failure is a REFUSAL, and records nothing.** (Changed 2026-09-19 on
+releases-0.5.x, commit a42d6c5a, and kept by the 0.5.x → main merge of 2026-09-30.
+This paragraph used to read "Failure is an outcome, never an error", and on
+main it later split failures into a fail-closed class and a
+deterministic-fallback class (issue #969, D-A7). Both versions recorded the
+aggregator's own sentences AS THE JUDGE'S whenever a model misbehaved, and a
+consensus receipt then signed them as an opinion the session adopted; the only
+thing telling such a row from a real judgement was one column nothing read. A
+judge that did not get a usable answer from a model has not judged.) Every
+failure below THROWS `JudgeUnavailableError` carrying its reason and writes
+NOTHING — configuration: no model on the judge config row
+(`model_unconfigured`), a model id this environment may not use
+(`model_disallowed` — the keyless free family anywhere, or anything but the
+pinned acceptance model on an acceptance path; AC-MODEL-01,
+`backend/src/swarm/judge-model-policy.ts`, asserted at the point of use as well
+as where the row is written), no OpenCode Zen credential in the process that
+must call it (`credential_unconfigured`), **a malformed `SWARM_JUDGE_TIMEOUT_MS`
+in the environment** (`invalid_timeout_config:…`); the account: an unfunded
+workspace, a `402` or a body naming credit/balance/quota (`credit_exhausted`),
+a revoked or wrong key (`credential_rejected`), an id the endpoint does not
+serve (`model_not_supported`); the rail: the `agent-launcher` service was
+unreachable, answered non-2xx or unreadably, or reported that the judge
+container never launched, hung past its ceiling, or exited without one
+well-formed answer line (`launcher_unavailable`, issue #1012); and a model that
+was reached and misbehaved: request timed out (`model_timeout`), the transport
+refused for any other reason (`model_unavailable:…`), an empty answer
+(`empty_response`), prose instead of JSON (`not_json`), JSON of the wrong shape
+(`malformed_json`, `not_an_object`, `missing_rationale`,
+`missing_disagreements`, `too_many_disagreements`, `malformed_disagreement`,
+`malformed_position`, `missing_release_safety`, `malformed_release`,
+`malformed_concerns`), more than `MAX_POSITIONS` (= `SWARM_ROSTER_CAP`, 20)
+positions inside one disagreement (`too_many_positions`), the same member named
+twice inside one disagreement (`duplicate_position:<id>`), a disagreement
+attributed to a member who did not submit (`unknown_member:<id>`), a
+weight-like field anywhere in the response (`weight_like_field:<path>`), a body
+supplied by the TEST-ONLY fault-injection lever described below
+(`malformed_output`), and anything else thrown while parsing (`unparsable:…`).
+NOT A FAILURE AT ALL — `JudgeNothingToJudgeError` carries a session with no
+takes (`no_takes`) and one where **every** take is stance-only so there is no
+member-authored sentence to quote (`no_take_bodies`): nothing to retry, no
+judgement row. `swarm.judge` fails, retries, and an exhausted job leaves the
+session unjudged: no judgement row, and therefore no consensus receipt, which is
+the honest state. The reason reaches `jobs.last_error` as
+"judge_unavailable:" plus the reason, and the admin judge route answers 503
+judge_unavailable with `judgeUnavailableReason` (commit e3ca6cc). Every reason is
+capped at 120 characters, the ones built out of the model's own text included.
 
 No session is BLOCKED on the judge — an unjudged session still publishes, it
 simply publishes without a judge block — and no partially-trusted model response
 ever reaches one.
+
+**THE BUDGET IS PART OF THE CONTRACT.** `model_timeout` above is a runtime
+failure by classification and, far more often, a MISCONFIGURATION by cause: the
+per-call budget was 60 s against a pinned model measured at 58-175 s on a real
+three-take prompt. `DEFAULT_JUDGE_TIMEOUT_MS`
+(`backend/src/swarm/judge-budget.ts`) is sized against the WORST measured
+latency rather than a round number, and `SWARM_JUDGE_TIMEOUT_MS` reaches a
+compose stack through the documented boot
+(`scripts/lib/smoke-compose-passthrough.ts`). The swarm driver's judge wait
+(`judgeWaitCeilingMs`, `scripts/lib/swarm/session.ts`) is derived from the same
+budget — two attempts plus launcher start-up — and ends early on the judge
+job's own terminal row (`succeeded`, `failed` or `dead`). The FALLBACK SHARE
+that `postflight.ts`'s `judge-source` check and `admin/overview.ts`'s
+`swarm.judge_fallback` alert report through `summarizeJudgeSources()` now reads
+only historical rows: nothing writes a fallback any more, so a stack that is
+not reaching its model shows up as unjudged sessions and `judge_unavailable:`
+job errors instead.
+
+**The TEST-ONLY fault-injection lever (R13, AC-E2E-06's malformed-output
+clause).** AC-E2E-06 requires an EXECUTED demonstration that a malformed judge
+response is not trusted and leaves the weight vector untouched.
+`swarm_judge_fault_injection` (migration 0058) holds one row: a body, a
+remaining-call count, and an optional session id. When it applies,
+`faultInjectedTransport()` returns that body INSTEAD of calling the model, and
+`judge()` neither parses nor trusts it: every injected call is refused with
+`malformed_output`, writes no judgement and no usage, and — the property the
+criterion is actually about — moves no weights, because `meanTakeWeights()` in
+`domain.ts` is their only author. THREE GATES, ALL REQUIRED: the row is writable
+only through `POST /api/swarm/admin/judge/fault-injection`, which writes an
+`audit_log` `judge_fault_injection` row in the same transaction; the judging
+process must carry `SWARM_JUDGE_FAULT_INJECTION`, so an armed row is inert in
+any process that was not started for it; and on an ACCEPTANCE path —
+`RM_ENV=prod`, which staging and production both run and which an unset
+`RM_ENV` resolves to under D13 — arming is REFUSED (403
+`fault_injection_refused`) unless the second explicit opt-in
+`SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN` is also present. Disarming is
+never refused. Arming it on staging is a RECORDED ACCEPTANCE MUTATION, and the
+pair of audit rows (armed, then disarmed) bounds that window.
+
+**What a judging COST (R19).** The provider's `usage` object — prompt,
+completion and total tokens, and the cost figure Zen reports — travels back with
+the completion text and is written to `swarm_session_judgements`'
+`usage_input_tokens` / `usage_output_tokens` / `usage_total_tokens` /
+`usage_cost_usd` (migration 0059), so a rollout can report its judge spend from
+its own rows rather than from a vendor dashboard. Every column is NULLABLE
+forever and NULL means NOT RECORDED, never zero: rows written before 0059, and
+historical fallback rows, carry none, and a provider that reports no usage must
+not be able to read as a free call. Nothing here recomputes a price from a rate
+card. The analyst half records the same figures per member run:
+`scripts/agent/transcript.ts`'s `transcriptSpend()` reads the `step_finish`
+events out of the `opencode run --format json` stream, the authored take
+carries them as `AuthoredTake.spend`, and the per-run `manifest.json` under
+`.agents/swarm-sessions/` carries them as `spend`.
+
+`source = 'fallback'` survives in the `swarm_session_judgements` CHECK and in
+the receipt schema only so the rows written before this change stay readable:
+the table is append-only, and some of those rows remain embedded in receipts
+already signed and served. Nothing writes one now, and a receipt over one is
+refused (`judgement_not_authored`, #1021). Migration
+`0056_swarm_judge_requires_model.sql` closes the configuration state that
+produced most of them — `shadow`/`enforce` require a model in the schema and in
+`setJudgeConfig()`, and the migration switches an already-misconfigured judge
+**off** on deploy — and `0063_swarm_judge_model_default.sql` (v0.5.1) and
+`0081_swarm_judge_model_bare_id.sql` give production's judge the pinned model,
+stored as the bare wire id.
 
 That list above is EXHAUSTIVE, and it is pinned to the source rather than
 maintained by hand: `scripts/tests/unit/judge-refusal-reasons-documented.test.ts`
@@ -1909,7 +2113,8 @@ payload, stores it once, and re-verifies it on every read.
 | The bytes, the schema, the arithmetic | **Imported** from `@robotmoney/contract/consensus-receipt` — `canonicalizeReceipt`, `validateReceipt`, `receiptSemanticErrors`, `participationBps`, `compareCodePoints`. Nothing about the format is restated in the backend. |
 | The assembly | `assembleConsensusReceipt()` — pure: no database, no clock, no configuration |
 | The database seam | `publishConsensusReceipt()` — idempotent, immutable, writes `swarm_consensus_receipts` |
-| The read | `GET /api/swarm/sessions/:id/consensus-receipt` — public, re-verified per request |
+| The read | `GET /api/swarm/sessions/:id/consensus-receipt` — public, the **anchored** path: the bare canonical JSON, byte-stable, `keccak256(domain separator + body) == payloadDigest` (decision D10) |
+| The verified read | `GET /api/swarm/sessions/:id/consensus-receipt/verified` — public, the same receipt in a verification envelope re-verified per request; never anchored |
 | The trigger | `POST /api/swarm/admin/sessions/:id/consensus-receipt` — privileged, idempotent |
 | The store | `swarm_consensus_receipts` (migration 0042) — append-only **and** UPDATE-refusing |
 
@@ -2478,7 +2683,10 @@ from this repo's own tables and pipelines instead of Supabase.
   `job_schedules` (`backend/src/db/seed.ts`) at the same cadence as the legacy
   crons. Within that ported set, coverage is uneven by design:
   - **Live and wired**: coin market data (CoinGecko `/coins/markets` +
-    DexScreener best-pair fallback), Virtuals/x402 revenue sync, ERC-4626
+    DexScreener best-pair fallback; with `COINGECKO_API_KEY` set in the worker
+    lanes the call uses the paid Pro host `pro-api.coingecko.com` with the
+    `x-cg-pro-api-key` header, and unset or blank keeps the keyless public
+    host — the worker logs the tier and host, never the key, issue #1047), Virtuals/x402 revenue sync, ERC-4626
     vault TVL reads (Base RPC), coverage-score recomputation, and (issue #346)
     per-wallet native-ETH balance on chain `"base"` — reusing the SAME
     batched-Multicall3 + GeckoTerminal-priced + persisted-fallback valuation
@@ -4038,12 +4246,101 @@ the code on `main`, release code, is broken by an input that changed while
 nobody was watching. No required reading, no "which suite was that and what are
 its pass semantics".
 
+**The one named exception: an explicitly exempted auditor.** "Nothing else runs
+on a nightly schedule" holds over the set of *product test suites*. One workflow
+sits outside it by name:
+`.github/workflows/production-drift-audit.yml` (`CI_CLASS: heavy`, `schedule:
+11 2 * * *`, no `push` and no `pull_request`). It observes robotmoney.network and
+robotmoney-core's release API and **reports**; it never gates, never blocks, and
+always exits 0, so a red report body on a green job is the intended outcome. A
+check it could not run is rendered UNKNOWN with its reason rather than omitted
+or passed — the same loud-skip-never invariant, pointed inward, because a
+silently dropped check is the one outcome nobody would ever notice.
+
+So a red nightly there means something **different** from a red merge, and
+saying otherwise is the failure mode E6 exists to prevent. A red merge means
+release code on `main` is broken by a commit. A red drift-audit nightly means
+one of FOUR things that no commit can fix: the `rmpc` release the onboarding
+skill pins has been yanked, replaced or re-uploaded, which breaks every new
+member's install; the endpoint has stopped serving a procedure, or stopped
+answering at all; the served document carries the unverified pipe-into-`tar`
+install form that issue #748 closed in the repo copy; or the endpoint's own
+negative control says a wrong document would slip through the other checks
+unchallenged. It is registered on `EXEMPT_FROM_MERGE_MIRROR` in
+`scripts/tests/unit/nightly-mirrors-merge-set.test.ts` beside
+`contribution-advisory-reviewer.yml` — the repo's own sanctioned mechanism for a
+scheduled workflow that is not a product test suite — with the justification
+carried in the entry rather than left to inference.
+
+**A FOURTH QUESTION WAS HERE AND IS NOW DELETED — NOTHING IN CI REPORTS A STALE
+DEPLOY.** This exemption originally covered a workflow with four checks; the
+fourth was the deploy-freshness byte comparison between the served skill and
+`frontend/public/skills/swarm-onboarding/SKILL.md` in the checkout, implemented
+by `contract/src/skill-parity.js`'s `describeSkillMismatch`. That module and its
+offline unit test have been **deleted**, and the question has been removed from
+this repository entirely rather than moved anywhere: not the auditor, not a
+merge gate, not an offline unit test, and not under a different name. It was
+the repository owner's decision, and this paragraph, the `L1` section in §3,
+and the headers of `scripts/production-drift-audit.ts` and
+`.github/workflows/production-drift-audit.yml` are the record of it.
+
+So an operator reading a red E6 nightly must know what is **not** in the list
+above: a stale deploy will never show up there, or in any other job in this
+repository. If `main` carries a correct skill and production is still serving
+the previous one, nothing here says so. Catching a stale deploy is now the
+**deploy pipeline's job** — it is a fact about whether a publish ran, and this
+repository has no deploy workflow, so the only place it can be observed is the
+deploy tooling or a human watching it. Do not reinstate a byte comparison to
+close this, and do not give the auditor a non-zero exit to compensate: the first
+is the check that was deliberately deleted, the second would re-create required
+reading whose exit is outside the repository.
+
+**What moved off the merge gate is every network assertion the live test held,
+not one.** The procedure assertions, the `| tar` floor and the red control all
+left the deleted live test file together — and the file, its directory, the
+`test:live` script and the `contract` job's live step were then DELETED — for
+one reason, which is not a preference for schedules:
+none of those questions is answerable by a commit here. Whether
+robotmoney.network answers depends on deploys, DNS, TLS, CDN state and renames
+in robotmoney-core, none of which a diff in this repository can repair, so a
+correct merge would red a required check for a reason whose only exit is outside
+the repository. It was measured: while this was being decided, the `contract` job
+was RED on an open pull request with `Received: 502`, caused by nobody in that
+pull request. They are now auditor checks B, C and D respectively.
+
+C moved as its OWN check, and must stay that way: it is a security guard
+asserted over the served body directly, with its own status line, and it reports
+DRIFT whatever else is true about the document — including precisely the case its
+deleted byte comparison would have swallowed, namely the repo copy itself
+regressing. Do not fold C into B. D is a check about the auditor rather than about
+the document, and it must stay its own row for the same reason: a control that is
+folded into the check it controls has stopped being a control, and B — a set of
+positive assertions over a body that is supposed to be good — cannot demonstrate
+that it can fail.
+
+**The consequence, stated so that nobody has to infer it: NOTHING ON A MERGE
+TRIGGER VERIFIES THE SKILL ENDPOINT.** The one assertion that remains
+merge-gated is hermetic and is about the constant rather than the served
+document — that the URL names a skill directory above `SKILL.md`
+(`contract/tests/unit/swarm-onboarding-skill-url.test.ts`, run by the required
+`contract` job) — which is what keeps the slug in B's `name:` discriminator
+meaningful. A `contract` red therefore still means exactly what this section
+says it means: the code on `main` is broken by a commit. A broken skill URL, a
+stubbed skill, a robotmoney.network outage, or a contributor without a working
+connection will NOT produce one. That is the trade this section records, made on
+purpose and paid for knowingly: the endpoint is watched once a night, by a report
+nobody is blocked by, and that is strictly better than a merge set that goes red
+for a fact about the internet. The workflow also carries no
+`github.event_name == 'schedule'` gate anywhere, job or step: a workflow with no
+second trigger has nothing to be asymmetric with.
+
 The relationship is enforced mechanically, not by convention:
 `scripts/tests/unit/nightly-mirrors-merge-set.test.ts` runs in the required
-`unit` job, asserts the equality in **both** directions, names any workflow on
-one side only, and additionally fails on any job or step gated with
-`github.event_name == 'schedule'` — nightly must run the merge set's work, not
-extra work. Cron minutes are staggered so the mirrors do not all start at once.
+`unit` job, asserts the equality in **both** directions modulo that exemption
+list, names any workflow on one side only, and additionally fails on any job or
+step gated with `github.event_name == 'schedule'` — nightly must run the merge
+set's work, not extra work. Cron minutes are staggered so the mirrors do not all
+start at once, and every scheduled workflow declares exactly one cron entry.
 
 The real-inference admission's scheduled home is therefore
 `.github/workflows/e2e.yml` itself, on the `schedule: 37 4 * * *` slot the

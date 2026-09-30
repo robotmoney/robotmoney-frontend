@@ -90,7 +90,7 @@ test("every contract ROUTES template is API-owned or an explicit rendered permal
   const renderedPermalinks = new Set([ROUTES.swarm.takePermalink]);
   for (const r of flattenRoutes(ROUTES)) {
     expect(
-      r === "/health" || r.startsWith("/api/") || renderedPermalinks.has(r),
+      r === "/health" || r === "/version" || r.startsWith("/api/") || renderedPermalinks.has(r),
       `unexpected contract route shape: ${r}`,
     ).toBe(true);
   }

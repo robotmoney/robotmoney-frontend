@@ -240,7 +240,7 @@ Grouped by what they mean for an operator:
 | **Deploy/docs** | `7acf6e7` (#720), `b4a2560` (#719) | Removes a build script — see §2.3. |
 | **Worktree noise** | `010bf29`, `d0d16b1` | No production effect. |
 
-### 2.2 🔴 The database delta — twenty-one migrations
+### 2.2 🔴 The database delta — twenty-two migrations
 
 **This is the part of the upgrade that cannot be rolled back by restarting.**
 

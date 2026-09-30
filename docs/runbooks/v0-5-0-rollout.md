@@ -1,5 +1,9 @@
 # v0.5.0 production rollout
 
+> **SHIPPED as `v0.5.0` (`ec261867`, tagged 2026-09-21) from `releases-0.5.x`;
+> superseded by `v0-5-1-rollout.md` and `v0-5-2-rollout.md`. Kept as the record
+> of what ran; the text below is as it stood before the cut.**
+>
 > Operator procedure for upgrading production from **v0.4.0** to **v0.5.0**.
 > **No RC is cut yet on this branch.** The candidate is whatever `v0.5.0-rc.*`
 > tag is next cut on `releases-0.5.x`; record its tag and SHA here when it
