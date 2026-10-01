@@ -1353,6 +1353,13 @@ not active producer paths.
 
 ### 9.7 The consensus judge — math decides, the judge explains
 
+The cross-repository contract from this producer through core receipt anchoring
+and governance execution is specified in
+[Investment Swarm to On-Chain Governance](./technical/committee-to-chain.md).
+The end-to-end delivery evidence is specified in
+[Project Fusion End-to-End Acceptance](./technical/project-fusion-acceptance.md);
+the GitHub Plan issue owns current task state.
+
 A session's allocation vector is computed by `meanTakeWeights()`
 (`backend/src/swarm/domain.ts`) from the frozen latest-revision-per-member take
 set, and by nothing else. The consensus judge (`backend/src/swarm/judge.ts`,
@@ -5775,6 +5782,12 @@ These documents describe current product and system commitments:
   chain balances and asset prices are loaded, audited, and repaired. Replaces
   the retired `data-self-healing.md`, whose analytics half is
   [regime-engine.md](./technical/regime-engine.md) §11.
+- [Investment Swarm to On-Chain Governance](./technical/committee-to-chain.md) —
+  the canonical cross-repository contract from signed takes to an executed
+  router-weight update.
+- [Project Fusion End-to-End Acceptance](./technical/project-fusion-acceptance.md) —
+  the durable evidence and acceptance contract; [frontend issue #1054](https://github.com/robotmoney/robotmoney-frontend/issues/1054)
+  is the execution tracker.
 - [Bot-analytics UI port plan](./bot-analytics-ui-port-plan.md) — the
   canonical spec for the Analytics Surface dashboard port (issues #379-#402
   and siblings), with its companion

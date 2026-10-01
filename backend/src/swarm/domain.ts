@@ -441,7 +441,7 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   if (opts.full && (opts.subject || search)) throw new Error("subject and search page the light index; drop full=1");
   if (search.length > SESSIONS_SEARCH_MAX_LENGTH) throw new Error(`search must be at most ${SESSIONS_SEARCH_MAX_LENGTH} characters`);
   if (opts.full) {
-    const rows = await sql`SELECT * FROM swarm_sessions ORDER BY date DESC, generated_at DESC, id DESC`;
+    const rows = await sql`SELECT *, ${openedAtSql()} FROM swarm_sessions ORDER BY date DESC, generated_at DESC, id DESC`;
     return { sessions: rows.map(toSession), nextCursor: null as string | null, nextSessionAt };
   }
 
@@ -470,7 +470,7 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   // and the target the session's own brief carried. Bounded by LIMIT, so they
   // run for at most one page of rows.
   const rows = await sql`
-    SELECT *, generated_at::text AS cursor_generated_at,
+    SELECT *, generated_at::text AS cursor_generated_at, ${openedAtSql()},
       (SELECT count(DISTINCT member_id)::int FROM swarm_recommendations r WHERE r.session_id = swarm_sessions.id) AS take_count,
       (SELECT b.body->'allocation' FROM swarm_briefs b WHERE b.session_id = swarm_sessions.id) AS reference_allocation
     FROM swarm_sessions ${where}
@@ -547,6 +547,12 @@ export async function getMemberTakes(memberId: string, limit?: number) {
   return { takes };
 }
 
+// When a session REALLY opened: its first brief revision, the moment the brief went out and the window began.
+// `convened_at` (and so `date` and `generated_at`) is when the row was created in `scheduled`, which can be days
+// earlier when a session waits for its brief (2026-09-28: four rows created at 00:11 to 00:40 UTC were briefed on
+// 09-29 and 09-30). No column holds it; the append-only revisions already record it. Null until the brief publishes.
+const openedAtSql = () => sql`(SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = swarm_sessions.id) AS opened_at`;
+
 export async function getOpenSession() {
   const r = await sql`SELECT id, date, subject_id, subject_name, state, window_closes_at
                       FROM swarm_sessions WHERE state = 'collecting'
@@ -563,7 +569,7 @@ export async function getSession(
   // session that day. That keeps every existing link and the frontend's
   // (date, subject) fetches working, and is the answer a reader wants: the most
   // recent word on that subject for that day.
-  const s = (await sql`SELECT * FROM swarm_sessions
+  const s = (await sql`SELECT *, ${openedAtSql()} FROM swarm_sessions
                        WHERE date = ${date} AND subject_id = ${subjectId}
                        ORDER BY convened_at DESC LIMIT 1`)[0];
   if (!s) return null;
@@ -583,7 +589,7 @@ export async function getSessionById(
   // rather than miss. Treat anything unparseable as simply not found — this is a
   // public GET and a 404 is the honest answer for "no session with that handle".
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
-  const s = (await sql`SELECT * FROM swarm_sessions WHERE id = ${id}`)[0];
+  const s = (await sql`SELECT *, ${openedAtSql()} FROM swarm_sessions WHERE id = ${id}`)[0];
   if (!s) return null;
   return withTakes(s);
 }
