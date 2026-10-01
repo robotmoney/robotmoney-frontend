@@ -128,6 +128,10 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     // From main, two grant repairs found after v0.5.1 went out.
     "0061_rm_worker_wallet_backfill_grant.sql",
     "0062_rm_worker_analytics_ledger_read_grant.sql",
+    // Production's own files from v0.5.1, ported so the ledger names match
+    // (issue #1064): the judge gets its model, stored as the bare wire id.
+    "0063_swarm_judge_model_default.sql",
+    "0081_swarm_judge_model_bare_id.sql",
     // From main, the analytics ledger compaction and vintage repair (#1035,
     // #1046, #1050, #1051, decision D56). It shares the number 0080 with the
     // deployment refactor's 0080_stream_events_grant_only.sql; the runner

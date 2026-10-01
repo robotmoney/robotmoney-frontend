@@ -81,6 +81,7 @@
     "0062_rm_readonly_sequence_select.sql",
     "0062_rm_worker_analytics_ledger_read_grant.sql",
     "0063_deployment_identity.sql",
+    "0063_swarm_judge_model_default.sql",
     "0064_schema_manifest.sql",
     "0065_append_only_grant_transition.sql",
     "0066_drop_swarm_notifications.sql",
@@ -99,6 +100,7 @@
     "0080_analytics_ledger_compaction.sql",
     "0080_stream_events_grant_only.sql",
     "0081_stream_event_counter.sql",
+    "0081_swarm_judge_model_bare_id.sql",
     "0082_judge_config_two_modes.sql",
     "0083_clear_forged_member_operator.sql",
     "0084_admin_revocation_tombstones.sql",
@@ -121,7 +123,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "b0c734bb070f73bafd079ecd30581579f6d14fc1a65efd3394eca1d6ed8d1985",
+  "contentHash": "fed908af5c497f7cb5a21d58900cba0f58e6e3245627ec307dfda31e057e2db2",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",

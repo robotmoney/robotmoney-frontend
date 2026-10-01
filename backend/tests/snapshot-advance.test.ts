@@ -189,6 +189,12 @@ function explain(diff: CatalogDiff): { unexplained: string[]; used: Set<string> 
   return { unexplained, used };
 }
 
+// Production's recorded ledger names a file below N that snapshot N's list does
+// not (v0.5.1's 0063, ported by issue #1064 so a database built from main and
+// production agree by filename). It is applied by the real run like any
+// migration above N, and it is the ONLY exception: the list is closed.
+const PORTED_BELOW_N: readonly string[] = ["0063_swarm_judge_model_default.sql"];
+
 describe("snapshot N + migrations = snapshot N+1 (spec §8.4)", () => {
   test("the fixture is snapshot N byte for byte: every file matches its sha256 pin", () => {
     const onDisk = (readdirSync(join(FIXTURE, "schema")) as string[]).map((f) => `schema/${f}`).sort();
@@ -202,12 +208,15 @@ describe("snapshot N + migrations = snapshot N+1 (spec §8.4)", () => {
 
   test("snapshot N's list is a strict prefix of this checkout's, ending at the fixture's `last`", () => {
     expect(snapshotN.filenames.at(-1)).toBe(fixture.last);
-    expect(current.filenames.slice(0, snapshotN.filenames.length)).toEqual([...snapshotN.filenames]);
-    expect(current.filenames.length).toBeGreaterThan(snapshotN.filenames.length);
+    const withoutPorted = current.filenames.filter((f) => !PORTED_BELOW_N.includes(f));
+    expect(withoutPorted.slice(0, snapshotN.filenames.length)).toEqual([...snapshotN.filenames]);
+    expect(withoutPorted.length).toBeGreaterThan(snapshotN.filenames.length);
+    expect(PORTED_BELOW_N.filter((f) => !current.filenames.includes(f))).toEqual([]);
   });
 
   test("the real migrate run applied exactly the migrations above N, in order, and published", () => {
-    expect(run.applied).toEqual(current.filenames.slice(snapshotN.filenames.length));
+    const aboveN = current.filenames.filter((f) => !PORTED_BELOW_N.includes(f)).slice(snapshotN.filenames.length);
+    expect(run.applied).toEqual([...PORTED_BELOW_N, ...aboveN]);
     expect(run.baselined).toBe(false);
     expect(run.manifest.filenames).toEqual([...current.filenames]);
   });

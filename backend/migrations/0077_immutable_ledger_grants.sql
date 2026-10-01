@@ -34,10 +34,26 @@
 -- ADDITIVE: every one of these writes was already refused by the family's
 -- immutability trigger, so no statement that used to succeed now fails.
 
-REVOKE UPDATE, DELETE, TRUNCATE ON
-  source_acquisitions, source_acquisition_events, source_payloads, source_fetches, source_value_versions,
-  analytics_ledger_methodology_versions, analytics_ledger_runs, analytics_ledger_run_events,
-  analytics_data_vintages, analytics_vintage_members,
-  analytics_output_snapshots, analytics_report_snapshots, swarm_brief_revisions,
-  analytics_parity_observations
-FROM rm_app, rm_worker;
+-- GUARDED PER TABLE. Production (v0.5.2) recorded the schema-only
+-- 0080_analytics_ledger_compaction.sql, which DROPS source_payloads, before
+-- this file reached it, so there this file runs AFTER 0080 and a single REVOKE
+-- naming source_payloads would fail and stop the boot
+-- (backend/tests/migration-history.test.ts). Each REVOKE is issued only for a
+-- table that exists, the same shape 0062_rm_worker_analytics_ledger_read_grant
+-- takes. A fresh database runs this before 0080 and revokes all fourteen.
+DO $$
+DECLARE
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'source_acquisitions', 'source_acquisition_events', 'source_payloads', 'source_fetches', 'source_value_versions',
+    'analytics_ledger_methodology_versions', 'analytics_ledger_runs', 'analytics_ledger_run_events',
+    'analytics_data_vintages', 'analytics_vintage_members',
+    'analytics_output_snapshots', 'analytics_report_snapshots', 'swarm_brief_revisions',
+    'analytics_parity_observations'
+  ] LOOP
+    IF to_regclass(format('public.%I', t)) IS NOT NULL THEN
+      EXECUTE format('REVOKE UPDATE, DELETE, TRUNCATE ON public.%I FROM rm_app, rm_worker', t);
+    END IF;
+  END LOOP;
+END $$;

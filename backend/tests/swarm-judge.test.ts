@@ -1044,7 +1044,14 @@ test("the judge switch has TWO modes: `shadow` is refused like any other nonsens
   expect(bad.ok).toBe(false);
   expect(bad.status).toBe(400);
   await expect(setJudgeConfig({ model: "   " })).rejects.toThrow(/invalid judge model/);
+
+  // A MIGRATED database is not model-less: 0063 gave production's judge the
+  // CI/driver model (`opencode/deepseek-v4-flash`), and 0081 stores it as the
+  // bare wire id setJudgeConfig() stores and the model policy pins.
+  expect((await getJudgeConfig()).model).toBe("deepseek-v4-flash");
+
   // Turning the judge ON without giving it a model is refused (issue #969).
+  await setJudgeConfig({ mode: "off", model: null });
   await expect(setJudgeConfig({ mode: "enforce", model: null })).rejects.toThrow(/requires a model/);
 
   const set = await admin.setJudgeConfigAdmin({ mode: "enforce", minTakes: 4, model: STUB_JUDGE_MODEL });
