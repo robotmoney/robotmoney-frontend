@@ -30,8 +30,8 @@ import { pinnedPoolForToken, resolveTrackedAssets, type TrackedAsset } from "../
 import { UA } from "../analytics/extract/http.ts";
 import { withFetchCache } from "../analytics/extract/fetch-cache.ts";
 import { serialized, retryAfterMs, sleep, _resetRateLimitStateForTests } from "./gecko-rate-limit.ts";
+import { geckoUrl, geckoAuthHeaders, tierOf, proRefused, fallBackToFree } from "./gecko-endpoint.ts";
 
-const GECKOTERMINAL_BASE = "https://api.geckoterminal.com/api/v2";
 const GECKO_TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
 
 // A keyless 429 was observed on the SIXTH call in ~15s against an endpoint this
@@ -52,13 +52,23 @@ async function getJson(url: string, timeoutMs: number): Promise<unknown> {
   return withFetchCache("json", url, async () => {
     const deadline = Date.now() + timeoutMs;
     const retries = intEnv("GECKO_OHLCV_MAX_RETRIES", 3, 0);
+    // The Pro host may refuse a call the plan does not include (401/403); that one request is retried on the free host.
+    let target = url;
     for (let attempt = 0; ; attempt++) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new Error(`geckoterminal: timeout for ${url}`);
       const res = await serialized(() =>
-        fetch(url, { signal: AbortSignal.timeout(remaining), headers: { "user-agent": UA, accept: "application/json" } }),
+        fetch(target, {
+          signal: AbortSignal.timeout(remaining),
+          headers: { "user-agent": UA, accept: "application/json", ...geckoAuthHeaders(target) },
+        }),
+        tierOf(target),
       );
       if (res.ok) return (await res.json()) as unknown;
+      if (proRefused(target, res.status)) {
+        target = fallBackToFree(target, res.status, `request for ${url}`);
+        continue;
+      }
       if (!GECKO_TRANSIENT_STATUSES.has(res.status) || attempt >= retries) {
         throw new Error(`${res.status} ${res.statusText} for ${url}`);
       }
@@ -285,7 +295,7 @@ export async function resolvePoolForToken(tokenAddress: string, timeoutMs = 15_0
   const cached = poolIdCache.get(lc);
   if (cached) return cached;
   const pending = (async () => {
-    const url = `${GECKOTERMINAL_BASE}/networks/base/tokens/${lc}/pools`;
+    const url = geckoUrl("token_pools", `/networks/base/tokens/${lc}/pools`);
     const body = (await getJson(url, timeoutMs)) as { data?: GeckoPool[] };
     const pools = Array.isArray(body?.data) ? body.data : [];
     let best: { key: string; volume: number } | null = null;
@@ -408,7 +418,8 @@ export async function fetchDailyCloses(
   let before = toSec + 86_400; // exclusive upper bound: one day past the newest wanted candle
   // Bounded so a server that keeps returning the same page can never spin.
   for (let page = 0; page < 12; page++) {
-    const url = `${GECKOTERMINAL_BASE}/networks/base/pools/${poolKey}/ohlcv/day?aggregate=1&limit=1000&before_timestamp=${before}&token=${token}&currency=usd`;
+    // OHLCV is not in the Basic plan: always the free host (chain/gecko-endpoint.ts).
+    const url = geckoUrl("ohlcv", `/networks/base/pools/${poolKey}/ohlcv/day?aggregate=1&limit=1000&before_timestamp=${before}&token=${token}&currency=usd`);
     const body = (await getJson(url, timeoutMs)) as GeckoOhlcvResponse;
     // Before a single candle is read: an unverifiable page is refused whole,
     // never mined for the rows that happen to look reasonable.

@@ -137,6 +137,8 @@ services:
   analytics-producer:
     environment:
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+      # Paid CoinGecko key for the GeckoTerminal new_pools sweep (issue #1062); blank keeps the keyless host.
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
 
   # Onboarding eval (docs/architecture.md §11 R8, Stage 5): a vanilla OpenCode
   # agent container, no Robot Money tooling preinstalled (see
