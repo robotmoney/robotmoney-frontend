@@ -4712,13 +4712,6 @@ CREATE INDEX analytics_vintage_members_last_version_idx ON public.analytics_vint
 
 
 --
--- Name: analytics_vintage_members_version_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX analytics_vintage_members_version_idx ON public.analytics_vintage_members USING btree (source_value_version_id);
-
-
---
 -- Name: analytics_vintage_members_vintage_idx; Type: INDEX; Schema: public; Owner: -
 --
 

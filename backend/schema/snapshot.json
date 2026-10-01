@@ -121,7 +121,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "fcb6e563c6f11d7da6a530c96305c97c1945f7b9da73a61c7bcc4f3735651037",
+  "contentHash": "b0c734bb070f73bafd079ecd30581579f6d14fc1a65efd3394eca1d6ed8d1985",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -5016,9 +5016,6 @@
     },
     "index public.analytics_vintage_members_pkey": {
       "definition": "CREATE UNIQUE INDEX analytics_vintage_members_pkey ON public.analytics_vintage_members USING btree (id)"
-    },
-    "index public.analytics_vintage_members_version_idx": {
-      "definition": "CREATE INDEX analytics_vintage_members_version_idx ON public.analytics_vintage_members USING btree (source_value_version_id)"
     },
     "index public.analytics_vintage_members_vintage_id_source_value_version_i_key": {
       "definition": "CREATE UNIQUE INDEX analytics_vintage_members_vintage_id_source_value_version_i_key ON public.analytics_vintage_members USING btree (vintage_id, source_value_version_id)"
