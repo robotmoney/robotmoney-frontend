@@ -192,6 +192,7 @@ describe("the cluster superuser is reached only by a pinned list of files", () =
     "first-production-migrate.test.ts",
     "identity-first-pass.test.ts",
     "migrate-run.test.ts",
+    "migration-history.test.ts",
     "migrations-under-production-privileges.test.ts",
     "preflight-0.2.2.test.ts",
     "preflight-0-5-0-resume-prefix.test.ts",
