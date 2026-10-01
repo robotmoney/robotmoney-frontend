@@ -56,8 +56,8 @@ const ALLOWED: Record<string, string> = {
   "backend/tests/consensus-receipt-publish.test.ts": "asserts DELETE and TRUNCATE of a published receipt are refused",
   "backend/tests/analytics-overwrite-events.test.ts":
     "asserts regime deletion is refused while allowed current-view deletes are captured",
-  "backend/tests/analytics-ledger-compaction-migration.test.ts":
-    "asserts migration 0080's re-armed guard refuses a DELETE, on a throwaway database of its own",
+  "backend/tests/analytics-ledger-repair.test.ts":
+    "asserts the v0.5.2 ledger repair's re-armed guard refuses a DELETE, on a throwaway database of its own",
   "backend/tests/database-role-taxonomy.test.ts":
     "asserts rm_app direct evidence DELETE and TRUNCATE are denied 42501",
   // The statements here are DATA, not code: fixture migration bodies handed to
@@ -77,18 +77,16 @@ const ALLOWED: Record<string, string> = {
   "backend/migrations/0059_swarm_framework_subject_snapshot_cleanup.sql":
     "cleans up fabricated snapshots on framework subjects (issue #960)",
 
-  // Migration 0080 removes the analytics_overwrite_events rows the fixed raw
-  // writer would never have recorded (issues #1035, #1050), guards re-armed
-  // in-transaction and proved armed by
-  // tests/analytics-ledger-compaction-migration.test.ts and
-  // tests/analytics-ledger-vintage-repair.test.ts.
-  "backend/migrations/0080_analytics_ledger_compaction.sql":
-    "removes overwrite evidence the fixed writer would not have recorded, under decision D56 (issues #1035, #1050)",
-  // 0080 as PR 1046 merged it, before #1050 extended it: the "0080 alone"
-  // baseline tests/analytics-ledger-vintage-repair.test.ts measures the repair
-  // against, applied only to a throwaway database of that test's own.
-  "backend/tests/fixtures/ledger/0080_analytics_ledger_compaction.as-merged-1046.sql":
-    "frozen copy of 0080 before #1050, applied only to a throwaway test database",
+  // The one-time v0.5.2 ledger repair (issues #1035, #1050) rebuilds
+  // source_value_versions, analytics_vintage_members and
+  // analytics_overwrite_events by TRUNCATE and re-insert of the rows the fixed
+  // writers would have written, under decision D56, in one transaction with
+  // its guards re-armed before commit. Proved by
+  // tests/analytics-ledger-repair.test.ts and
+  // tests/analytics-ledger-vintage-repair.test.ts; run by hand from runbook
+  // v0-5-2-rollout.md (R4.3h, R6.4c), never from a code path.
+  "backend/scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts":
+    "one-time repair: rebuilds the ledger tables with the rows the fixed writers would have written (issues #1035, #1050)",
 
   // The runtime check. Its probe statement is built by interpolation, so it
   // carries no literal table name — but the list of protected tables lives here

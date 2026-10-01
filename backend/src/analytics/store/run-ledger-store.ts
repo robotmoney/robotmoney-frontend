@@ -380,21 +380,21 @@ export async function loadFrozenVintage(vintageId: string, db: DbHandle = sql): 
 // Issue #1050: recompute every stored vintage's manifest, series fingerprints,
 // member_count and manifest_digest from the members it resolves to NOW.
 //
-// WHY. Migration 0080 re-points every vintage to the source_value_versions rows
-// the fixed ledger writer would have written (decision D56, amendment for
-// #1050), so the digests frozen over the old writer's rows no longer describe
-// their members. The owner's rule is that the database ends as if the old
-// writer had never run — so each vintage gets exactly the manifest freezeVintage
-// would have stored for these members, and the old digest is overwritten, not
-// kept anywhere.
+// WHY. The v0.5.2 ledger repair re-points every vintage to the
+// source_value_versions rows the fixed ledger writer would have written
+// (decision D56, amendment for #1050), so the digests frozen over the old
+// writer's rows no longer describe their members. The owner's rule is that the
+// database ends as if the old writer had never run — so each vintage gets
+// exactly the manifest freezeVintage would have stored for these members, and
+// the old digest is overwritten, not kept anywhere.
 //
-// Runs ONLY from the migration runner, inside the transaction that applied
-// 0080 (IN_TRANSACTION_AFTER_MIGRATION in src/db/migrate.ts), as rm_owner. A
-// canonical-JSON SHA-256 in plpgsql would have to reproduce JavaScript's number
-// formatting byte for byte; this reuses buildVintageManifest instead, the one
-// function every freeze and every replay already uses. analytics_data_vintages
-// is immutable, so its guard is disarmed for these UPDATEs and re-armed (ENABLE
-// ALWAYS) before returning; an error rolls the whole migration back with it.
+// Runs ONLY from that one-time repair (scripts/upgrades/0.5.1-to-0.5.2/
+// ledger-repair.ts), inside its transaction, as rm_owner. A canonical-JSON
+// SHA-256 in plpgsql would have to reproduce JavaScript's number formatting
+// byte for byte; this reuses buildVintageManifest instead, the one function
+// every freeze and every replay already uses. analytics_data_vintages is
+// immutable, so its guard is disarmed for these UPDATEs and re-armed (ENABLE
+// ALWAYS) before returning; an error rolls the whole repair back with it.
 export async function rebuildVintageManifests(db: DbHandle): Promise<{ vintages: number; rewritten: number }> {
   const vintages = (await db`
     SELECT id::text AS id, knowledge_time_cutoff::text AS knowledge_time_cutoff,

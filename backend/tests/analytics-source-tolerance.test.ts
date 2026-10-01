@@ -83,24 +83,13 @@ describe("issue #1035 AC8: a declared tolerance for every source_key the extract
     for (const [key, tolerance] of Object.entries(SOURCE_TOLERANCES)) {
       const line = d56.split("\n").find((l) => l.includes(`\`${key}\``));
       expect(line, `D56 must name ${key}`).toBeDefined();
-      const stated = tolerance.relative === 0 ? "exact" : "1e-6";
+      const stated = tolerance.relative === 0 ? "exact" : tolerance.relative === 5e-6 ? "5e-6" : "1e-6";
       expect({ key, line: line!.includes(stated) }).toEqual({ key, line: true });
     }
   });
 
-  test("migration 0080 compacted with exactly D56's non-zero tolerances", () => {
-    // 0080 is a frozen artefact: it applied the tolerances in force when it
-    // shipped. If D56 changes later, pin this assertion to 0080's own snapshot
-    // rather than editing the migration.
-    const sql = readFileSync(join(import.meta.dir, "..", "migrations", "0080_analytics_ledger_compaction.sql"), "utf8");
-    const map = /tol constant jsonb := '(\{[\s\S]*?\})'::jsonb/.exec(sql);
-    expect(map).not.toBeNull();
-    const applied = JSON.parse(map![1]!) as Record<string, number>;
-    const declared = Object.fromEntries(
-      Object.entries(SOURCE_TOLERANCES).filter(([, t]) => t.relative > 0).map(([k, t]) => [k, t.relative]),
-    );
-    expect(applied).toEqual(declared);
-  });
+  // The v0.5.2 ledger repair (scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts)
+  // reads SOURCE_TOLERANCES itself, so there is no second copy to keep in step.
 });
 
 describe("withinTolerance", () => {
