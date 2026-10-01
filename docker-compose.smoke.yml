@@ -98,6 +98,8 @@ services:
       # Same PROJECTS_SOURCE passthrough as api — the analytics worker runs the
       # projects.* pipelines (unset = offline fixture directory; smoke-legal).
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
+      # Paid CoinGecko key for the token-price and pool lookups (issue #1062); blank keeps the keyless host.
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
       ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
       FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
       FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
@@ -122,6 +124,8 @@ services:
   analytics-producer:
     environment:
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+      # Paid CoinGecko key for the GeckoTerminal new_pools sweep (issue #1062); blank keeps the keyless host.
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
 
   # Onboarding eval (docs/architecture.md §11 R8, Stage 5): a vanilla OpenCode
   # agent container, no Robot Money tooling preinstalled (see

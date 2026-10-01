@@ -613,6 +613,24 @@ and caller; one that finishes past the limit logs an error saying the client was
 docker logs rm_prod-api-1 2>&1 | grep -aE '\[api\] (slow request|request ran past)'
 ```
 
+### 5.2 The CoinGecko key and GeckoTerminal
+
+`COINGECKO_API_KEY` (host `~/.env`) is the paid CoinGecko key. The analytics-producer's `new_pools` sweep and the worker's
+token-price and pool lookups send it to `pro-api.coingecko.com/api/v3/onchain` (issue 1062), which is GeckoTerminal's data
+under CoinGecko's paid plan. Unset, they use the keyless host, where GeckoTerminal allows about 10 calls a minute per IP.
+(`projects.refresh_coins` also reads the key, and its header is fixed by issue 1047 / PR 1048, which is not on this branch.) Our plan is
+**Basic**: it includes `new_pools`, token pools and token price, and not pool OHLCV, so OHLCV stays on the free host
+(`PRO_CALLS` in `backend/src/chain/gecko-endpoint.ts`; Analyst and above would add it). A 401 or 403 from the Pro host falls
+back to the free host for ten minutes and logs `[gecko] pro-api.coingecko.com answered HTTP …` once. Check the tier in use:
+
+```
+docker logs rm_prod-analytics-producer-1 2>&1 | grep -a '\[gecko\] new_pools via'
+docker logs rm_prod-worker-analytics-1   2>&1 | grep -a '\[gecko\]'
+```
+
+The source ledger redacts every `*api-key` request header. Setting the key is an owner step; the container must be
+recreated to read a changed `~/.env` (`docker compose up -d analytics-producer worker-analytics`).
+
 ## 6. Least privilege, rotation, storage
 
 - **One scoped token per vendor per environment.** Never reuse a production token in
