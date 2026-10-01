@@ -310,3 +310,22 @@ The twin was torn down at 02:42 (0 containers, 0 volumes). The gate report is `~
 
 Not exercised on this run (only unit tests cover them): the buyback 413 halving, the keyed Gecko tier, a request over 5 s. The gate report is `~/twin-gate-reports/R4.4-rehearsal2.md` on stage-2.
 Decisions R5.1 (1) and (2) are moot: the dump held no stale `collecting` session and no judge timeout occurred. Decision (3) remains: the rehearsed SHA is the tip.
+
+### 2026-10-01, stage-2, second full rehearsal: fresh dump `rm-backup-v054-20261001T141703Z`, the keyed Gecko tier, the cumulative checks (code `e52bb8ba`, scripts at `28e5eb19`)
+
+The code under test is `e52bb8ba`; the later commits change only `soak-checks.sh`, the restore check and this runbook. The twin was left **up** on the owner's instruction (R4.12 not run).
+
+| Step | Result |
+|---|---|
+| R3.2 / R3.3 | dump from the replica, 229 MB; `restore-check`: 28 prior migrations recorded, none pending, 6 release tables present, judge `enforce` / `opencode/deepseek-v4-flash`, third parties off |
+| R4.3 | `READY` 14:37:09, `131 checks · 0 failed`, no `migrated:` line. The first boot had no key in the containers: the driver reads only its own shell (fixed in R4.3 and R6.4) |
+| R4.4 gate, first window | FAIL 3 of 21: (a) allocation `f0e1a470` and treasury `1db1aae4` published with 6 of 7 takes: one member each was rendered absent for a model outcome (`WEIGHTS clause omits the canonical bucket`, an invalid stance, a member container exiting without a verified submission). Classified **model outcome** (owner rule 2026-09-25), no platform fault, but the gate's attendance check does not treat it as such; (b) 7 × `submission window closed` and 1 × `published absent … omits` all belong to the vault session `dbe6b129`, the one the dump held `collecting` (its window had closed at 14:43 UTC; the twin adopted it at 14:54). This is the **expected D4 artifact**; (c) one `ERROR: "admin_credential" is not a sequence` in the restore container's log, from my own first draft of the sequence check. Fixed in the script |
+| R4.4 gate, second window (`--since` 15:25) | PASS on checks 1 to 4 (sessions, judge=enforce, no dead job, no container restart). Check 5 still fails on the same D4 lines, which sit in the driver log from the first window. `--waive` applies to the fatal-line scan only, not to the default-deny inventory, so D4 **cannot be waived by the command line**: it needs the owner's decision (an inventory rule scoped to the twin, or a gate that reads the driver log from `--since`) |
+| R4.5b date audit | before: 44 checks, 0 failed; after the gate: 44 checks, 0 failed (40 sessions read: 10 published that waited, 18 that did not, 1 collecting) |
+| **Control** | pre-fix website `0706bef7`: **20 of 41 checks failed**. After redeploying the release website (`28e5eb19`): 44 checks, 0 failed |
+| R4.6 | 7 `regime asof` lines in the driver log, all `2026-10-01` |
+| R4.9a Gecko keyed | `token_price` and `token_pools via pro tier (pro-api.coingecko.com)` (in the analytics worker's log, not the producer's); 0 lines of `429/401/403` |
+| R4.10 | ledger rows with the key header and no `REDACTED`: 0; 0 `COINGECKO` variables in the api and the website |
+| R4.11 | `verify:live --tier readonly`: VERIFIED WITH WARNINGS (the two higher-tier legs only); module pass: 0 page errors, one app stamp `29ba3ce9`; two avatar images 404 (production does too) |
+| R4.13 cumulative checks, at +1 h | **0 FAIL, 1 WARN**. The WARN is `R8.u2`: 8 requests over 5 s and 2 past the 10 s limit, all issue 1079 (`source-acquisitions` ×4, `vintages` ×3, `parity-sweep` ×2). PASS: cadence, growth, ledger versions, parity sweeps (1 succeeded, 23 s), guards 11 of 11, `source_payloads` absent, vintage ids 172191 resolve, no idle transaction, migrations identical (76), judge config, health and judgements 200, `openedAt`, no cut-off, buyback, Gecko pro tier, key containment, regime day |
+| R8.r grants | **not checkable on a dump or a twin** (`--no-privileges`). They are checked on production at R2.11 and R7.11. Whether production's `rm_worker` still lacks INSERT on `wallet_backfill_state`, `chain_day_blocks` and `chain_address_floors` (decision D2 of v0.5.1) is **not yet known** |
