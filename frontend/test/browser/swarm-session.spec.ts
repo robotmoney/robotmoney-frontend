@@ -1306,6 +1306,8 @@ test("a session created on one day and opened on another is shown on the day it 
   await expect(page.locator(".rr-crumbs")).not.toContainText("Sep 28");
   await expect(when).not.toContainText("September 28");
   await expect(when).not.toContainText("00:11");
+  // The row's creation time is dated, because it is not the day the header shows.
+  await expect(page.locator("#evidence .rr-dl > div").filter({ hasText: /Record generated|Row created/ }).locator("dd")).toHaveText("Sep 28, 2026 · 00:11 UTC");
 });
 
 test("a published session with no openedAt (an archive session) falls back to its publish day, then to its date", async ({ page }) => {
