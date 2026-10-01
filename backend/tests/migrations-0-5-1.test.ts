@@ -17,17 +17,13 @@ import { useCleanDatabase } from "./support/clean-db.ts";
 useCleanDatabase(import.meta.file);
 
 const MIGRATIONS = join(import.meta.dir, "..", "migrations");
-const WORKER_PASSWORD = "rm_worker_ci_password";
-
 describe("0061 — rm_worker may write the wallet-backfill driver's own tables", () => {
   let worker: postgres.Sql<{}>;
 
-  beforeAll(async () => {
-    await sql.unsafe(`ALTER ROLE rm_worker WITH LOGIN PASSWORD '${WORKER_PASSWORD}'`);
-    const url = new URL(process.env.DATABASE_URL!);
-    url.username = "rm_worker";
-    url.password = WORKER_PASSWORD;
-    worker = postgres(url.toString(), { max: 1, onnotice: () => {} });
+  beforeAll(() => {
+    // The harness provisions rm_worker's login (preload-roles.test.ts), and the
+    // test connection may not ALTER a role it has no ADMIN OPTION on.
+    worker = postgres(process.env.WORKER_DATABASE_URL!, { max: 1, onnotice: () => {} });
   });
 
   afterAll(async () => {
@@ -35,7 +31,8 @@ describe("0061 — rm_worker may write the wallet-backfill driver's own tables",
   });
 
   for (const table of ["wallet_backfill_state", "chain_day_blocks", "chain_address_floors"]) {
-    for (const priv of ["INSERT", "UPDATE", "DELETE"]) {
+    // No DELETE: 0089 (D55) leaves DELETE and TRUNCATE to rm_owner alone.
+    for (const priv of ["INSERT", "UPDATE"]) {
       test(`${priv} on ${table}`, async () => {
         const [row] = await worker`SELECT has_table_privilege(current_user, ${`public.${table}`}, ${priv}) AS ok`;
         expect(row!.ok).toBe(true);
@@ -98,7 +95,7 @@ describe("0081 — the judge model is stored as the bare wire id ", () => {
 
   test("never touches another provider's id, a bare id, or a bare `opencode/`", async () => {
     for (const model of ["vendor/some-judge", "deepseek-v4-flash"]) {
-      await sql`UPDATE swarm_judge_config SET mode = 'shadow', model = ${model} WHERE id = 1`;
+      await sql`UPDATE swarm_judge_config SET mode = 'enforce', model = ${model} WHERE id = 1`;
       await sql.unsafe(ddl);
       expect((await sql`SELECT model FROM swarm_judge_config WHERE id = 1`)[0]!.model).toBe(model);
     }
@@ -110,7 +107,7 @@ describe("0081 — the judge model is stored as the bare wire id ", () => {
   });
 
   test("the stored value is what setJudgeConfig() would store", async () => {
-    const { normalizeJudgeModel } = await import("../src/swarm/judge-session.ts");
+    const { normalizeJudgeModel } = await import("../src/swarm/judge-config.ts");
     await sql`UPDATE swarm_judge_config SET model = 'opencode/deepseek-v4-flash' WHERE id = 1`;
     await sql.unsafe(ddl);
     const stored = String((await sql`SELECT model FROM swarm_judge_config WHERE id = 1`)[0]!.model);

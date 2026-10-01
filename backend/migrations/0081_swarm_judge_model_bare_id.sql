@@ -1,3 +1,6 @@
+-- compat: additive
+-- metadata_version: 1
+--
 -- Store the judge model as the BARE wire id (`deepseek-v4-flash`), not the
 -- provider-qualified selector (`opencode/deepseek-v4-flash`).
 --
