@@ -88,10 +88,11 @@ compose files, not the database.
 | R4.1 | Wipe and check out v0.5.2: `bun run smoke:down; docker rm -fv $(docker ps -aq); bun run smoke:clean`; `git checkout --detach v0.5.2` | 0 containers | HEAD |
 | R4.2 | Boot a stack on the repaired v0.5.2 backup (about 3 minutes): in tmux, `bun smoke:twin -- --reuse --backup-dir ~/rm-backup-v052-repaired --no-tui 2>&1 \| tee ~/twin-053.log` | `READY`, `131 checks · 0 failed` | READY time |
 | R4.3 | A scratch clone of the RC: `D=~/rm-site-$RC_SHA; git clone --depth 50 --branch releases-0.5.x <origin> $D; git -C $D checkout -q $RC_SHA; bun install --frozen-lockfile --cwd $D` | HEAD = `RC_SHA` | path |
-| R4.4 | `cd $D && bun scripts/redeploy-website.ts --live ~/robotmoney-frontend --dry-run` | every line `PASS`; "what changes" is about 74 changed, 7 added, 0 removed | the output |
+| R4.4 | `cd $D && bun scripts/redeploy-website.ts --live ~/robotmoney-frontend --dry-run` | every line `PASS`; "what changes" is 124 changed, 7 added, 0 removed (every application script is rewritten by the cache-bust stamp; it was 74 before) | the output |
 | R4.5 | The same without `--dry-run` | `DONE`; `every one of 38 routes answers 200`; `only the website moved` | the receipt |
 | R4.6 | `… --rollback <the backup it printed>` | `rolled back`; `version.json` is v0.5.2's commit again | the output |
 | R4.7 | Redeploy once more (R4.5) and leave it | as R4.5 | — |
+| R4.7a | The checks R7 runs on production, run here first: `curl -s http://127.0.0.1:48787/ \| grep -o 'assets/js/app/main.js[^"]*'` (carries `?v=` and 8 hex), and a Chromium load of `/`, `/vaults`, `/vault/rmusdc`, `/swarm`, `/regime`, `/changelog` against `http://127.0.0.1:48787` counting module requests, any not ending in the stamp, any status 400 or above, and page errors; then `bun run verify:live --tier readonly` pointed at the stage site | stamp present; 0 unstamped, 0 failed, 0 page errors; `VERIFIED` with only the two higher-tier `skipped` warnings. Production must not be the first place these run (2026-09-30 they were) | the output |
 | R4.8 | Tear the stack down within 30 minutes: `bun run smoke:down; docker rm -fv $(docker ps -aq); bun run smoke:clean`. A running twin spends inference credit on every session | 0 containers | time |
 
 ### Rehearsal record, 2026-09-30, commit `d6ec0265`
@@ -127,7 +128,7 @@ live checkout sits under the running host driver and must not move.
 | Step | Command | Pass | Record |
 |---|---|---|---|
 | R6.1 | `D=/root/rm-site-$RC_SHA; git clone -q --depth 50 --branch releases-0.5.x "$(git -C /root/robotmoney-frontend remote get-url origin)" $D && git -C $D checkout -q "$RC_SHA" && bun install --frozen-lockfile --cwd $D && bun install --frozen-lockfile --cwd $D/backend` | `git -C $D rev-parse HEAD` = `RC_SHA` | path |
-| R6.2 | `cd $D && bun scripts/redeploy-website.ts --live /root/robotmoney-frontend --public https://robotmoney.network --dry-run` | every line `PASS`: the stack has six containers, the live site is `becb6897`, the changed-file guard passes, the build checks pass. The diff matches R4.4's | the output |
+| R6.2 | `cd $D && bun scripts/redeploy-website.ts --live /root/robotmoney-frontend --public https://robotmoney.network --dry-run` | every line `PASS`: the stack has six containers, the live site is `becb6897`, the changed-file guard passes, the build checks pass. The diff matches R4.4's (124 changed, 7 added, 0 removed) | the output |
 | R6.3 | The same command without `--dry-run`. Record `T0=$(date -u +%FT%TZ)` first | `DONE in Ns`, `every one of 38 routes answers 200`, `only the website moved`. It prints the receipt and the undo command | receipt path |
 | R6.4 | `curl -s https://robotmoney.network/version.json`, then `curl -s https://robotmoney.network/ \| grep -o 'assets/js/app/main.js[^"]*'` | the commit is `RC_SHA`'s first 8 characters, and the entry point carries `?v=` with 8 hex characters | the output |
 
@@ -155,6 +156,22 @@ site change can break: from `T0` to `T0 + 1 h`, at 15, 30 and 60 minutes, run R7
 Pass: no 5xx, no nginx `[error]`, the same six containers. A failure here is a rollback (R9) only if pages are broken
 for readers; otherwise it is a follow-up release.
 
+### Production record, 2026-09-30 (release candidate `v0.5.3-rc.1`, final tag `v0.5.3`, both on `cb82726f`)
+
+| Step | Result |
+|---|---|
+| R6.1, R6.2 | clone at `cb82726f`; dry run every line `PASS`; `124 changed, 7 added, 0 removed` |
+| R6.3 | `T0` 2026-09-30T20:11:21Z; backup `/root/site-backups/2026-09-30T201122Z-becb6897`; swap 0.1 s; `DONE in 1s`; `every one of 38 routes answers 200`; `only the website moved — 6 service containers: same ids, same start times`; `public site … serves cb82726f` |
+| R6.4 | `version.json` = `cb82726`; entry point `assets/js/app/main.js?v=aa327588` |
+| R7.1 | the same six containers, Up since the v0.5.2 boot (not restarted) |
+| R7.2 | 10 public pages 200; a Chromium load of 6 pages fetched 88 modules, all `?v=aa327588`, 0 failed, 0 page errors |
+| R7.3 | `verify:live --tier readonly` exit 0, the two higher-tier `skipped` warnings only; receipt `P8.verify-prod-v0.5.3` |
+| R7.5 | `v0.5.3` tagged and pushed |
+| R8 (checked at T0 + 4 h 18 min) | six containers Up and healthy, 8,044 website log lines. **One 5xx and one nginx `[error]`, both the same event:** 21:40:16 UTC, `GET /api/swarm/sessions/2026-09-28/woon` from the host driver (`Bun/1.3.14`), `upstream prematurely closed connection` from the api. That is an api drop on a driver request, not a website file, and the same class as the 00:30:11 502 recorded at R2.2. It did not touch readers' pages. The watch was not run at 15, 30 and 60 minutes as written; it was checked once, late |
+
+What this release did not catch: nothing in R4 looked at sessions. After it, a reader reported no completed sessions since 09-28
+(they were completing; the page showed the row-creation date). Fixes: opened-at (PR 1057) and the driver's regime day (PR 1059, issue 1058).
+
 ## R9. Rollback — seconds, and no database restore
 
 1. `bun /root/rm-site-$RC_SHA/scripts/redeploy-website.ts --live /root/robotmoney-frontend --rollback /root/site-backups/<the directory R6.3 printed>`
@@ -169,7 +186,7 @@ mount follows the directory's inode).
 ## R10. Completion
 
 1. `v0.5.3` is tagged at R7.5.
-2. Write the rollout report: every step's evidence, R4's output, the R6.3 receipt, R7.
+2. Write the rollout report: every step's evidence, R4's output, the R6.3 receipt, R7. The production record above is its source.
 3. The merge of `releases-0.5.x` into `main` is tracked separately (F2).
 
 ## Appendix A. `bun run site:redeploy`
