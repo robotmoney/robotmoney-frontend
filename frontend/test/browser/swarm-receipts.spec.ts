@@ -45,10 +45,11 @@ test("public swarm take shows an exact verified badge on the session view, membe
     // (state === "published" is now also enforced server-side above.)
     (candidate: any) => String(candidate.date) >= "2026-07-01" && candidate.state === "published",
   )) {
-    const detailResponse = await request.get(
-      `/api/swarm/sessions/${encodeURIComponent(session.date)}/${encodeURIComponent(session.subjectId)}`,
-    );
-    expect(detailResponse.ok(), `session read failed for ${session.date}/${session.subjectId}`).toBe(true);
+    // By the session's own id: the scheduler opens a subject's next epoch the
+    // moment the last one settles, so `date/subject` resolves to that day's
+    // LATEST session, which is the open epoch with no takes.
+    const detailResponse = await request.get(`/api/swarm/sessions/${encodeURIComponent(session.id)}`);
+    expect(detailResponse.ok(), `session read failed for ${session.id} (${session.date}/${session.subjectId})`).toBe(true);
     const detail = await detailResponse.json();
     const take = (detail.takes ?? []).find((candidate: any) => candidate.verified === true);
     if (take) {
@@ -61,7 +62,7 @@ test("public swarm take shows an exact verified badge on the session view, membe
   const { session, take } = selected!;
 
   // 1. Public session view: exact positive badge text, no negative class.
-  await page.goto(`/swarm/${encodeURIComponent(session.date)}/${encodeURIComponent(session.subjectId)}`);
+  await page.goto(`/swarm/sessions/${encodeURIComponent(session.id)}`);
   const sessionBadge = page.locator(`[data-verified-badge][data-take-id="${take.id}"]`);
   await expectPositiveBadge(sessionBadge);
 
@@ -77,7 +78,7 @@ test("public swarm take shows an exact verified badge on the session view, membe
   // 3. Per-take permalink: following the seal from the session view lands on a
   // real rendered page (not raw JSON), exact positive badge text, no negative
   // class.
-  await page.goto(`/swarm/${encodeURIComponent(session.date)}/${encodeURIComponent(session.subjectId)}`);
+  await page.goto(`/swarm/sessions/${encodeURIComponent(session.id)}`);
   const permalink = page.locator(`.rr-take a[data-verified-badge][data-take-id="${take.id}"][href="/swarm/takes/${take.id}"]`);
   await expect(permalink).toBeVisible();
   await permalink.click();

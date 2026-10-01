@@ -5,20 +5,22 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveAdmissionEvalModelConfig } from "./onboarding-eval-local.ts";
-import { admin, DEMO_MEMBERS, DEMO_SUBJECTS, runRegimeClassify, runSession } from "./lib/swarm/session.ts";
-import { resolveSmokeCadence } from "./lib/smoke-schedule.ts";
+import { DEMO_MEMBERS, DEMO_SUBJECTS, ensureSubjectViaAdmin, runRegimeClassify, runSession } from "./lib/swarm/session.ts";
+import { resolveSmokeCadence } from "./lib/smoke-cadence.ts";
 import {
   createStack,
   composeArgs,
   DEFAULT_COMPOSE_FILES,
   DEFAULT_STACK_DATABASE,
+  throwawayStackDatabase,
   dockerClientHostEnv,
-  generateStackCredentials,
+  instanceComposeEnv,
   internalDatabaseUrl,
   resolveStackEnvironment,
   stackProjectName,
 } from "./stack/index.ts";
-import { provisionSmokeAnalyticsToken, removeSmokeAnalyticsToken } from "./lib/smoke-secret.ts";
+import { readServiceToken } from "./lib/smoke-secret.ts";
+import { throwawayInstance } from "./lib/smoke-state.ts";
 
 export interface SwarmEvalCaseOptions {
   repoRoot?: string;
@@ -41,7 +43,8 @@ export interface SwarmEvalCaseResult {
 
 interface KeptSwarmEvalState {
   project: string;
-  analyticsTokenFile: string;
+  /** The stack's throwaway state directory (smoke-state.ts throwawayInstance), token files included. */
+  stateDir: string;
   composeFiles: string[];
   envClass: string;
   envHash: string;
@@ -84,16 +87,16 @@ export function cleanupKeptSwarmEval(
     POSTGRES_USER: db.user,
     POSTGRES_PASSWORD: db.password,
     POSTGRES_DB: db.name,
+    ...instanceComposeEnv({ name: project, stateDir: state.stateDir }),
   };
-  if (existsSync(state.analyticsTokenFile)) env.ANALYTICS_TOKEN_FILE_HOST = state.analyticsTokenFile;
   const code = runDown(
     ["docker", ...composeArgs(project, state.composeFiles), "down", "--volumes", "--remove-orphans"],
     env,
   );
   if (code !== 0) throw new Error(`swarm eval cleanup failed (docker compose exit ${code}); state retained at ${stateFile}`);
-  if (!removeSmokeAnalyticsToken(state.analyticsTokenFile, project)) {
-    throw new Error(`refused unsafe swarm eval token cleanup path: ${state.analyticsTokenFile}`);
-  }
+  // The throwaway state directory goes whole, its token files with it: the
+  // database whose rows they matched was just removed with its volume.
+  rmSync(dirname(state.stateDir), { recursive: true, force: true });
   rmSync(stateFile, { force: true });
 }
 
@@ -108,17 +111,20 @@ export async function runSwarmAuthoringEvalCase(
   const stackEnvironment = resolveStackEnvironment(env);
   const project = options.project ?? stackProjectName("eval-swarm", stackEnvironment);
   const selectedModel = modelConfig.model;
-  const credentials = generateStackCredentials();
-  credentials.analyticsTokenFile = provisionSmokeAnalyticsToken(project, credentials.analyticsToken);
+  // Not a deployment instance, but the compose model needs a state directory
+  // outside the checkout (RM_INSTANCE_STATE_DIR); thrown away with the stack.
+  // Its three service-token files land there when stack.up() provisions them
+  // on the stack's own database (scripts/stack/throwaway-database.ts).
+  const instance = throwawayInstance(project);
   const stack = createStack(
     {
       repoRoot,
       project,
       profile: "full",
       composeFiles: DEFAULT_COMPOSE_FILES,
-      database: DEFAULT_STACK_DATABASE,
-      credentials,
+      database: throwawayStackDatabase(instance.paths),
       environment: stackEnvironment,
+      instance: { name: instance.name, stateDir: instance.stateDir },
     },
     {
       hostEnv: env,
@@ -137,7 +143,7 @@ export async function runSwarmAuthoringEvalCase(
   if (keep) {
     keptStateFile = writeKeptSwarmEvalState(repoRoot, {
       project,
-      analyticsTokenFile: credentials.analyticsTokenFile,
+      stateDir: instance.stateDir,
       composeFiles: [...DEFAULT_COMPOSE_FILES],
       envClass: stackEnvironment.class,
       envHash: stackEnvironment.hash,
@@ -148,7 +154,8 @@ export async function runSwarmAuthoringEvalCase(
   try {
     await stack.up();
     process.env.BACKEND_URL = stack.backendUrl;
-    process.env.AUTOMATION_TOKEN = credentials.automationToken;
+    // The operator's token, provisioned into the throwaway instance by up().
+    const operatorToken = readServiceToken(instance.paths, "operator");
 
     await stack.waitForHttp(`${stack.backendUrl}${ROUTES.swarm.members}`, 30_000);
 
@@ -161,13 +168,9 @@ export async function runSwarmAuthoringEvalCase(
       backendUrl: stack.backendUrl,
       modelConfig,
       // Threaded explicitly (issue #461 finding): agent.ts's enroll() reads
-      // rail.automationToken directly now that its own env-reading
-      // automation-header fallback is retired. Without this, the
-      // X-Automation-Token header this eval's registration call sends is silently
-      // empty even though process.env.AUTOMATION_TOKEN is set above — that env
-      // var is for session.ts's standalone child-process entry point, not
-      // this in-process rail.
-      automationToken: credentials.automationToken,
+      // rail.operatorToken directly and has no env fallback of its own, so an
+      // in-process rail that omitted it would register with no credential.
+      operatorToken,
     };
     // No admin("reset") here either: the endpoint is gone. This eval runs on a
     // stack it created, so there is no prior history to clear — and if it is
@@ -175,7 +178,7 @@ export async function runSwarmAuthoringEvalCase(
     await runRegimeClassify(today, rail);
     const subject = DEMO_SUBJECTS[0];
     const members = DEMO_MEMBERS.map((member) => ({ ...member }));
-    await admin("subject", subject);
+    await ensureSubjectViaAdmin(subject, operatorToken);
 
     // Member-container rail (issue #361 Phase 2): the session's members run in
     // their own containers against this eval stack.
@@ -197,7 +200,7 @@ export async function runSwarmAuthoringEvalCase(
   } finally {
     if (!keep) {
       stack.down({ removeVolumes: true, removeOrphans: true });
-      removeSmokeAnalyticsToken(credentials.analyticsTokenFile!, project);
+      instance.dispose();
     } else {
       console.log(`[swarm-eval] --keep state: ${keptStateFile}`);
       console.log(`[swarm-eval] cleanup: bun scripts/swarm-eval-local.ts --cleanup --project ${project}`);

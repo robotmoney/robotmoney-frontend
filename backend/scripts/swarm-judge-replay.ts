@@ -114,16 +114,12 @@ for (const id of sessionIds) {
     judgeWroteNothing: replay.judgeWroteNothing,
     rationaleDisagrees: replay.rationale.disagrees,
     tiedStances: replay.rationale.tiedStances,
-    // NULL when the replay's own judge call refused (issue #969) — the normal
-    // state for an auditor pointed at production without a judge model of its
-    // own. Reported as a refusal rather than silently rendered as an opinion.
-    source: replay.outcome?.source ?? null,
-    judgeRefusal: replay.judgeRefusal,
-    thinlySupported: replay.outcome?.opinion.release_safety.thinly_supported ?? null,
-    release: replay.outcome?.opinion.release_safety.release ?? null,
-    // Input-derived, so they survive a refusal — see JudgeReplayResult.
-    promptHash: replay.promptHash,
-    inputsDigest: replay.inputsDigest,
+    // The judgement ON FILE, not one this replay authored. The auditor no
+    // longer calls judge() — see JudgeReplayResult §5.
+    source: replay.judgementSource,
+    fallbackReason: replay.judgementFallbackReason,
+    model: replay.judgementModel,
+    inputsDigest: replay.digestStored,
     digestVerdict: replay.digestVerdict,
     digestReproducible: replay.digestReproducible,
     digestScheme: replay.digestScheme,
@@ -149,10 +145,8 @@ for (const id of sessionIds) {
         replay.sessionId,
         `state=${replay.state}`,
         `takes=${replay.takeCount}`,
-        `judge=${replay.outcome?.source ?? `refused(${replay.judgeRefusal ?? "unknown"})`}`,
-        `release=${replay.outcome?.opinion.release_safety.release ?? "n/a"}`,
+        `judge=${replay.judgementSource ?? "never-judged"}${replay.judgementFallbackReason ? `(${replay.judgementFallbackReason})` : ""}`,
         digestBadge,
-        replay.outcome?.opinion.release_safety.thinly_supported ? "THIN" : "",
         replay.judgeWroteNothing ? "" : "JUDGE-WROTE-THE-VECTOR",
       ].join("  ").trimEnd(),
     );

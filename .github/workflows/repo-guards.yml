@@ -55,9 +55,9 @@ jobs:
       # silently matched nothing.
       - name: Model selection is registry-sourced, not ambient (D22 rule 1 as amended)
         run: bash scripts/checks/check-model-selection.sh
-      - name: AgentMail secret leak guard
-        run: |
-          if git grep -iE 'agentmail.*(key|token|secret).*['"'"'"][a-zA-Z0-9_-]{20,}['"'"'"]' -- '*.ts' '*.js' '*.json' '*.yml' '*.yaml' '*.toml' '*.sh' '*.md' '.env*' '*/.env*'; then
-            echo "AgentMail API key or secret literal found in committed files" >&2
-            exit 1
-          fi
+      # The mail-vendor secret-leak guard that used to sit here was removed with
+      # the swarm email feature itself (issue #1026 W5, decision D50 reversing
+      # D30). There is no mail vendor, no adapter and no API token left to leak,
+      # and scripts/tests/unit/no-swarm-email.test.ts now refuses the feature's
+      # return outright — a strictly stronger guard than scanning for a
+      # credential belonging to a vendor nothing calls.

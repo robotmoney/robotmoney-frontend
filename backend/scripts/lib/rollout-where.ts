@@ -33,6 +33,7 @@
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { homeEnvFilePath, loadEnvFile, urlForRole } from "../../../scripts/lib/env-role.ts";
 import {
   DEFAULT_BACKUP_DIR,
   changedSince,
@@ -391,16 +392,18 @@ function git(repoRoot: string, args: string[]): string {
   return new TextDecoder().decode(Bun.spawnSync(["git", ...args], { cwd: repoRoot, stderr: "pipe" }).stdout).trim();
 }
 
-/** Read-only identity from .env.readonly — presence and target, never the
+/** Read-only identity from $HOME/.env — presence and target, never the
  *  password, and deliberately without connecting (see the header: this probe
  *  has no side effects). "configured" is an honest claim; "reachable" would
- *  not be. */
+ *  not be. Reads the same single file the whole twin/rollout family uses
+ *  (issue #699): discrete tokens + the rm_readonly role line. */
 function replicaTarget(repoRoot: string): string | null {
-  const f = join(repoRoot, ".env.readonly");
-  if (!existsSync(f)) return null;
-  const get = (k: string) =>
-    readFileSync(f, "utf8").match(new RegExp(`^\\s*${k}\\s*=\\s*(.+)$`, "m"))?.[1]?.trim() ?? "?";
-  return `${get("username")}@${get("host")}:${get("port")}/${get("database")}`;
+  const env = loadEnvFile(homeEnvFilePath());
+  if (!env) return null;
+  const url = urlForRole(env, "rm_readonly");
+  if (!url) return null;
+  const u = new URL(url);
+  return `${u.username}@${u.hostname}:${u.port || "5432"}${u.pathname}`;
 }
 
 /**
@@ -470,7 +473,7 @@ function printState(ctx: Ctx, rows: Evaluated[]): void {
   p("");
   p(`HOST     ${ctx.hostname}${" ".repeat(Math.max(1, 22 - ctx.hostname.length))}role=${ctx.hostRole.toUpperCase()}`);
   p(`         ${ctx.hostWhy}`);
-  p(`         replica: ${ctx.replica ?? "not configured (.env.readonly absent)"}`);
+  p(`         replica: ${ctx.replica ?? "not configured (no rm_readonly line in $HOME/.env)"}`);
   p(`         receipts: ${receiptsDir(ctx.backupDir)}`);
   if (ctx.committedDir) {
     const rejected = ctx.rejectedEvidence.size;
@@ -486,7 +489,7 @@ function printState(ctx: Ctx, rows: Evaluated[]): void {
   // from the manifest — the trick that resolves the P9.tag literals — is wrong
   // here: v0.2.2's P2.rc-tag is filed at §7.2, but v0.3.0's is filed at §1, the
   // "read this first" section, which never cut a tag. So the neutral wording
-  // wins, and v0.2.2's probe loses a pointer into docs/archive/v0-2-2-rollout.md
+  // wins, and v0.2.2's probe loses a pointer into its retired historical guide
   // — a section reference in a runbook that has already been archived.
   // The tag's signer is REPORTED, not enforced: "who cut this rc" stops being an
   // assumption. An unsigned tag or an unlisted key reads as "unverified signer",

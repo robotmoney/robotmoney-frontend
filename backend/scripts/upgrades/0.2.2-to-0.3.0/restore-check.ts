@@ -1,14 +1,14 @@
-// ⛔ RUN THIS ON THE DEDICATED STAGING HOST, NEVER THE PRODUCTION API HOST
-// (docs/runbooks/rollout-procedure.md §4). Lighter than stage-rehearsal.ts — one small
+// ⛔ RUN THIS ON THE DEDICATED STAGING HOST, NEVER THE PRODUCTION API HOST.
+// Lighter than stage-rehearsal.ts — one small
 // container, no image build — but still real load, and the rule is "the
 // staging host," not "whichever checks seem cheap enough."
 //
-// Restore-verify the encrypted Gate C backup (docs/runbooks/rollout-procedure.md §5) into a
+// Restore-verify the encrypted Gate C backup into a
 // THROWAWAY local Postgres container, THEN run this release's full preflight
 // checks (preflight.ts's runChecks) against that restored copy. Touches
 // nothing on production — no network path to it at all once the encrypted
 // files are read from disk. This is deliberately the FIRST place preflight's
-// checks run: the runbook's process is dump -> restore -> check the dump ->
+// checks run: the historical process was dump -> restore -> check the dump ->
 // only then check the live replica, never production first.
 //
 // This is the FAST, SQL-only check. For a much heavier but much stronger

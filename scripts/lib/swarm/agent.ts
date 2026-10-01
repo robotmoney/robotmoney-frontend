@@ -30,7 +30,6 @@
 // its admission already bound its key, and a broken stored credential renders
 // it absent rather than re-keyed.
 import { ROUTES } from "@robotmoney/contract";
-import { personaIdentityEnv } from "./persona-keys.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -44,6 +43,7 @@ import {
 } from "../../agent/member-agent.ts";
 import { DEFAULT_API_URL_INTERNAL, resolveModelConfig } from "../onboarding-eval.ts";
 import { DEFAULT_COMPOSE_FILES } from "../../stack/config.ts";
+import { operatorTokenFromEnv } from "../operator-token.ts";
 import { createSwarmSessionArtifactWriter } from "./telemetry.ts";
 import { opencodeTimeoutEnv } from "../opencode-env.ts";
 import { resolveOpenCodeTimeoutMs } from "../../agent/opencode-run.ts";
@@ -122,10 +122,11 @@ export interface SessionRail {
   /** REST base the HARNESS reaches for the one-time public-key registration
    *  (default: BACKEND_URL env, then http://localhost:8787). */
   backendUrl?: string;
-  /** Automation token for that registration. The in-process smoke driver
-   *  threads it explicitly; railFromEnv() is the only legitimate place this
-   *  standalone entry point reads AUTOMATION_TOKEN from its child environment. */
-  automationToken?: string;
+  /** The operator's service token (smoke spec §3: the admin right) for that
+   *  registration. The in-process smoke driver threads it explicitly;
+   *  railFromEnv() reads it from the file RM_OPERATOR_TOKEN_FILE names — the
+   *  only place this standalone entry point learns it. */
+  operatorToken?: string;
   /** Per-member homes for members onboarded through the real §11 flow. */
   onboardedHomes?: Map<string, OnboardedMemberHome>;
 }
@@ -163,14 +164,14 @@ export function railFromEnv(env: Record<string, string | undefined> = process.en
     // having exported one, and an absent value would be the acceptance path
     // rather than the permissive one.
     modelConfig: resolveModelConfig(env),
-    // This is the ONE place agent.ts reads AUTOMATION_TOKEN from
-    // an environment object rather than taking it as an explicit argument —
-    // and it is legitimate env inheritance, not the retired global-mutation
-    // antipattern: railFromEnv() is only ever called by (or defaulted for)
-    // the standalone session.ts entry point, which runs as its own child
-    // process with AUTOMATION_TOKEN set on its own spawn env. Every other rail
-    // (e.g. smoke-main.ts's in-process sessionRail) sets it directly.
-    automationToken: env.AUTOMATION_TOKEN,
+    // This is the ONE place agent.ts learns the operator's token from its
+    // environment rather than as an explicit argument, and it learns only the
+    // file's PATH there (smoke spec §3: a service token is a file, never an
+    // env value). railFromEnv() is only ever called by (or defaulted for) the
+    // standalone session.ts entry point, which `bun smoke` starts with
+    // RM_OPERATOR_TOKEN_FILE on its spawn env. Every other rail sets it
+    // directly.
+    operatorToken: operatorTokenFromEnv(env),
   };
 }
 
@@ -325,17 +326,13 @@ async function ensureMemberIdentityUncached(
   const run = await runMemberContainer(rail, {
     mode: "enroll",
     runId: `${m.memberId}-enroll-${crypto.randomUUID().slice(0, 6)}`,
-    // A committed persona identity (scripts/lib/swarm/persona-keys.ts) is
-    // passed as OWNER material, not plain extraEnv: it carries a private key, so
-    // it belongs on the redacted-from-transcripts channel alongside the token and
-    // the rmpc passphrase. It is only ever present for the smoke's named
-    // characters; anyone else enrolls exactly as before.
+    // No committed identity is handed in: the container generates its own key
+    // in its home volume, and the harness registers that public key once. A key
+    // committed to the repository is a key anyone with a clone can sign with
+    // (#1026: persona-keys.json is gone; an in-house participant's key lives in
+    // credential.json and reaches only its own container).
     extraEnv: { RM_MEMBER_ID: m.memberId },
-    ownerEnv: personaIdentityEnv(m.name)
-      ? { ...personaIdentityEnv(m.name), ...(onboarded?.passphrase ? { RMPC_COMMITTEE_IDENTITY_PASSPHRASE: onboarded.passphrase } : {}) }
-      : onboarded?.passphrase
-      ? { RMPC_COMMITTEE_IDENTITY_PASSPHRASE: onboarded.passphrase }
-      : undefined,
+    ownerEnv: onboarded?.passphrase ? { RMPC_COMMITTEE_IDENTITY_PASSPHRASE: onboarded.passphrase } : undefined,
     homeVolume,
     timeoutMs: ENROLL_TIMEOUT_MS,
   });
@@ -367,12 +364,12 @@ async function ensureMemberIdentityUncached(
 
   // The ONE privileged step, performed by the harness AS the RM operator
   // seeding the smoke roster: register the container-generated PUBLIC key.
-  // The private key never left the member's volume. rail.automationToken is
-  // the only source — no local env-reading fallback lives here;
-  // the legitimate standalone-entry-point fallback already happened once,
-  // at railFromEnv() construction time, above.
-  const automationHeaders: Record<string, string> = rail.automationToken
-    ? { "X-Automation-Token": rail.automationToken }
+  // The private key never left the member's volume. rail.operatorToken is the
+  // only source — no local env-reading fallback lives here; the legitimate
+  // standalone-entry-point read already happened once, at railFromEnv()
+  // construction time, above. The operator token carries the `admin` right.
+  const automationHeaders: Record<string, string> = rail.operatorToken
+    ? { "X-Automation-Token": rail.operatorToken }
     : {};
   const res = await fetch(`${rail.backendUrl ?? backendUrl()}${ROUTES.swarm.register}`, {
     method: "POST",
@@ -417,10 +414,6 @@ export async function runAgent(rail: SessionRail, o: AgentOpts, onProgress?: Age
     ownerEnv: {
       ...(freshToken ? { RM_MEMBER_TOKEN: freshToken } : {}),
       ...(onboarded?.passphrase ? { RMPC_COMMITTEE_IDENTITY_PASSPHRASE: onboarded.passphrase } : {}),
-      // Same committed identity the enroll run seeded, so a participate run on a
-      // FRESH volume (every restart draws a new project hash, hence a new
-      // volume) still signs as this persona rather than as a stranger.
-      ...(personaIdentityEnv(o.name) ?? {}),
     },
     homeVolume,
     timeoutMs: participateTimeoutMs(),

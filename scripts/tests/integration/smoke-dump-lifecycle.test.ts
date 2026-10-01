@@ -1,0 +1,358 @@
+// `RM_ENV=stage bun smoke --local dump=<dir>` in a REAL process, against a
+// real gpg-encrypted backup — issue #1026 criteria 13 (the stage × `--local
+// dump` row of §4.3) and 76 (a dump restore leaves deployment_identity
+// `rehearsal`, and no runtime role can write it), smoke-production-spec.md §4.2,
+// §4.3, §5, §7.
+//
+// THE BACKUP is built by ../support/make-encrypted-backup.ts the way §5.1/§5.2
+// and `bun smoke:capture` build one — pg_dump --format=custom --no-owner
+// --no-privileges, pg_dumpall --globals-only, gpg --symmetric with a generated
+// passphrase file, `.last-stamp` — from a disposable Postgres of the test's
+// own, into a temp directory. Nothing secret is committed.
+//
+// THE ORDER smoke-main.ts implements for a dump, and that §7 names ("database
+// create/restore (local) → target lock (§2) → identity matrix (§4.3) →
+// authorized preparation → preflight"):
+//
+//   plan → prepare:instance (the four role passwords)
+//        → prepare:restore  (gpg → pg_restore into the smoke-twin container, then
+//                            dumpOwnershipSql by the restore superuser: the four
+//                            roles, every object to rm_owner)
+//        → prepare:assemble, prepare:web-compat (the site is assembled and
+//                            its API range decided BEFORE the first mutation of
+//                            the target, spec §13.3; writes only `_static`)
+//        → prepare:lock     (acquire as rm_readonly, re-read, the §4.3 matrix)
+//        → prepare:enroll   (rm_owner overwrites the enrollment with `rehearsal`)
+//        → prepare:migrate  (`--migrate`, as rm_owner, under the lock)
+//        → site, images, preflight, services
+//
+// WHERE EACH BOOT IS STOPPED. At the boundary after `prepare:migrate`. Past it
+// the boot builds images and runs preflight. The backup carries no default
+// privileges (capture's `--no-privileges`, backend/scripts/smoke-twin-capture.ts);
+// backend/schema/grants.sql now declares every `ALTER DEFAULT PRIVILEGES` the
+// snapshot records, so the migrate run's reconciliation restores them. Whether
+// preflight then passes on a restored copy is not driven here.
+//
+// WHAT THIS FILE DOES NOT PROVE:
+//   - No dump boot reaches services here: each boot stops after
+//     `prepare:migrate`, and readiness itself is w4-stack-readiness's. The
+//     baseline dump's `--migrate` publishing its first manifest is
+//     ./smoke-dump-identity-first.test.ts's.
+//   - `prepare:migrate` on the production-identity dump applies NOTHING: the
+//     source is already at branch head, so the step is only the grants
+//     reconciliation. The test asserts the empty list; the migrate step on a
+//     copy BEHIND head (the baseline dump, the six lower files first) is
+//     ./smoke-dump-identity-first.test.ts's.
+//   - smoke:capture itself cannot capture v0.5.0 (#699): the fixture dumps it
+//     as the superuser, and a case below keeps the rm_readonly refusal visible.
+//
+// THE THREE SOURCES:
+//   production-identity  a branch-schema database enrolled `production`, as
+//                        §9.1 leaves one. The row allows it (the matrix does not
+//                        consult a local dump's row) and smoke re-enrolls it
+//                        `rehearsal` through rm_owner before anything else runs.
+//                        A rerun of the same plan must then REATTACH the
+//                        restored copy (scripts/lib/smoke-main.ts, the committed
+//                        prepare:restore branch) with the row still `rehearsal`.
+//                        The reattach test below asserts exactly that.
+//   baseline             production's observed ledger (D55 (8)): v0.5.0 plus
+//                        0062_rm_readonly_sequence_select.sql, what a capture of
+//                        today's production restores. It predates 0063, so it
+//                        has no deployment_identity table; the enroll step takes
+//                        the `--local dump` identity-first pass (D55 (9), (10),
+//                        backend/scripts/smoke-prepare.ts): 0063 and `rehearsal`
+//                        in one transaction, before any other migration. The
+//                        copy ends `rehearsal`, and no migrate or service begins
+//                        before it does.
+//   v0.5.0               the v0.5.0 tag alone: one file short of the baseline.
+//                        A dump with any other pre-identity ledger refuses
+//                        (D55 (10)): the boot stops at enroll, names the
+//                        missing file, and writes nothing — no 0063, no row.
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { BOOT_TIMEOUT_MS, bootFailureReport, harness, journalNow, spawnBoot, teardown, waitFor, type BootHarness, type RunningBoot } from "./smoke-boot-harness.ts";
+import { makeEncryptedBackup, MARKER_PAGE, type EncryptedBackup } from "../support/make-encrypted-backup.ts";
+import { readRolePasswords, readStackState } from "../../lib/smoke-state.ts";
+import { roleUrl, type HostTarget } from "../../lib/smoke-database.ts";
+import { smokeTwinUrlFromContainer } from "../../lib/smoke-twin.ts";
+
+let productionDump: EncryptedBackup;
+let baselineDump: EncryptedBackup;
+let releaseDump: EncryptedBackup;
+beforeAll(async () => {
+  productionDump = await makeEncryptedBackup("production-identity");
+  baselineDump = await makeEncryptedBackup("baseline");
+  releaseDump = await makeEncryptedBackup("v0.5.0");
+}, 450_000);
+afterAll(() => {
+  productionDump?.close();
+  baselineDump?.close();
+  releaseDump?.close();
+});
+
+/** The restored copy this instance's boot recorded: its superuser URL and the host target. */
+function restoredCopy(h: BootHarness): { superuserUrl: string; target: HostTarget } {
+  const container = readStackState(h.paths)?.smokeTwinContainer;
+  if (!container) throw new Error("the boot recorded no smoke-twin container");
+  const superuserUrl = smokeTwinUrlFromContainer(container);
+  if (!superuserUrl) throw new Error(`the smoke-twin container ${container} is not answering`);
+  const url = new URL(superuserUrl);
+  return {
+    superuserUrl,
+    target: { host: url.hostname, port: Number(url.port), database: decodeURIComponent(url.pathname.slice(1)), sslmode: "disable" },
+  };
+}
+
+/** One statement over the host's psql; `ok` false carries psql's verbose error (with its SQLSTATE). */
+function psql(url: string, sql: string): { ok: boolean; out: string } {
+  const r = Bun.spawnSync(["psql", "-X", "-At", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=verbose", url, "-c", sql], { stdout: "pipe", stderr: "pipe" });
+  return { ok: r.exitCode === 0, out: `${r.stdout.toString()}${r.stderr.toString()}`.trim() };
+}
+
+function steps(h: BootHarness): string[] {
+  return (journalNow(h)?.phases ?? []).map((p) => `${p.phase}:${p.step ?? ""}:${p.status}`);
+}
+
+/** Stop `boot` at the boundary after its `step` preparation commits. */
+async function stopAfter(h: BootHarness, boot: RunningBoot, step: string): Promise<number> {
+  await waitFor(
+    () => (journalNow(h)?.phases ?? []).some((r) => r.phase === "prepare" && r.step === step && r.status === "committed"),
+    BOOT_TIMEOUT_MS,
+    `the boot to commit its ${step} preparation`,
+    boot,
+  );
+  boot.proc.kill("SIGINT");
+  return await boot.exited;
+}
+
+describe("`RM_ENV=stage bun smoke --local dump --migrate` against a real encrypted backup", () => {
+  // The production-identity instance, shared by its first boot and the rerun;
+  // torn down once both have run.
+  let prod: { h: BootHarness; boot?: RunningBoot; twin?: string } | undefined;
+  afterAll(() => {
+    if (!prod) return;
+    // smoke:down finds the restored copy only through the stack record, so a
+    // rerun that failed to keep it would leak the copy. Remove the copy by the
+    // name read before the rerun, FIRST: teardown's smoke:clean skips a volume
+    // a live container still holds.
+    if (prod.twin) Bun.spawnSync(["docker", "rm", "-f", "-v", prod.twin], { stdout: "ignore", stderr: "ignore" });
+    teardown(prod.h, prod.boot);
+  });
+
+  test("a production-enrolled dump: restore → ownership → lock → enroll → migrate, in that order, and the copy says rehearsal, written by rm_owner", async () => {
+    expect(productionDump.identity).toBe("production");
+    const h = harness("dumpprod");
+    prod = { h };
+    const boot = spawnBoot(h, [], { local: `dump=${productionDump.dir}`, env: { RM_ENV: "stage" } });
+    prod.boot = boot;
+    const code = await stopAfter(h, boot, "migrate");
+    // Stopped by the test at a phase boundary, never refused.
+    expect(code).toBe(130);
+    const out = boot.output();
+    expect(out).toContain(`restoring backup ${productionDump.stamp}`);
+    // A PLAN check only: the plan summary (smoke-journal.ts renderTarget),
+    // printed before the restore. What the copy says is read back below.
+    expect(out).toContain("RM_ENV=stage, deployment_identity rehearsal");
+    expect(out).toContain("target lock held");
+    expect(out).not.toContain("startup failed");
+
+    // The order, from the journal the boot wrote.
+    expect(steps(h).slice(0, 8)).toEqual([
+      "plan::committed",
+      "prepare:instance:committed",
+      "prepare:restore:committed",
+      "prepare:assemble:committed",
+      "prepare:web-compat:committed",
+      "prepare:lock:committed",
+      "prepare:enroll:committed",
+      "prepare:migrate:committed",
+    ]);
+    // The migrate step applied NO migration: the source is already at
+    // branch head, so it ran only the grants reconciliation. The real
+    // migrate path on a restored copy (a dump behind head) is not proven here.
+    const migrate = journalNow(h)!.phases.find((r) => r.phase === "prepare" && r.step === "migrate" && r.status === "committed");
+    expect(migrate?.outcome?.migrationsApplied).toEqual([]);
+
+    const copy = restoredCopy(h);
+    // The restore carried data, not only a schema.
+    expect(psql(copy.superuserUrl, `SELECT count(*) FROM comments WHERE page = '${MARKER_PAGE}'`).out).toBe("1");
+    // dumpOwnershipSql handed every application table to rm_owner.
+    expect(
+      psql(copy.superuserUrl, `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND pg_get_userbyid(c.relowner) <> 'rm_owner'`).out,
+    ).toBe("0");
+
+    // Criterion 76: the dump restore left ONE row, `rehearsal`, written by
+    // rm_owner — the production row the dump carried was overwritten (§4.2).
+    expect(psql(copy.superuserUrl, "SELECT count(*) || ':' || kind || ':' || written_by FROM deployment_identity GROUP BY kind, written_by").out).toBe("1:rehearsal:rm_owner");
+    expect(psql(copy.superuserUrl, "SELECT note FROM deployment_identity").out).toContain(productionDump.stamp);
+
+    // Criterion 76: each runtime LOGIN is refused a write to it BY GRANT
+    // (42501 insufficient_privilege), with the password smoke generated for
+    // it — the credential a container of this boot would hold.
+    const passwords = readRolePasswords(h.paths);
+    for (const role of ["rm_app", "rm_worker", "rm_readonly"] as const) {
+      const url = roleUrl(copy.target, role, passwords[role]);
+      expect(psql(url, "SELECT current_user").out).toBe(role);
+      for (const write of [
+        "UPDATE deployment_identity SET kind = 'production'",
+        "INSERT INTO deployment_identity (id, kind) VALUES (true, 'production') ON CONFLICT (id) DO UPDATE SET kind = EXCLUDED.kind",
+        "DELETE FROM deployment_identity",
+        "TRUNCATE deployment_identity",
+      ]) {
+        const r = psql(url, write);
+        expect({ role, write, ok: r.ok }).toEqual({ role, write, ok: false });
+        expect(r.out).toContain("42501");
+        expect(r.out).toContain("permission denied for table deployment_identity");
+      }
+    }
+    // And the row is unchanged after all twelve attempts.
+    expect(psql(copy.superuserUrl, "SELECT kind FROM deployment_identity").out).toBe("rehearsal");
+  }, BOOT_TIMEOUT_MS);
+
+  // The reattach half of criterion 76 (spec §1.3, §5). A rerun of the SAME
+  // plan whose restore committed must reattach the copy it recorded, restore
+  // nothing, and leave the row `rehearsal`. smoke-main.ts reads the recorded
+  // twin (recordedTwin) before prepare:instance rewrites the state file, so the
+  // record still names the restored container when the reattach branch runs.
+  test("a rerun of the same plan reattaches the restored copy, restores nothing, and the row still reads rehearsal", async () => {
+    if (!prod?.h) throw new Error("the production-identity boot above did not run");
+    const h = prod.h;
+    const copy = restoredCopy(h);
+    const container = readStackState(h.paths)!.smokeTwinContainer!;
+    prod.twin = container;
+    const first = journalNow(h)!;
+    const writtenAt = psql(copy.superuserUrl, "SELECT written_at FROM deployment_identity").out;
+    const boot = spawnBoot(h, [], { local: `dump=${productionDump.dir}`, env: { RM_ENV: "stage" } });
+    prod.boot = boot;
+    await waitFor(
+      () => (journalNow(h)?.phases ?? []).filter((r) => r.phase === "prepare" && r.step === "lock" && r.status === "committed").length >= 2,
+      BOOT_TIMEOUT_MS,
+      "the rerun to commit its own lock",
+      boot,
+    );
+    boot.proc.kill("SIGINT");
+    expect(await boot.exited).toBe(130);
+    const rerunOut = boot.output();
+    expect(rerunOut).toContain(`--local dump: reattached the restored copy ${container}`);
+    expect(rerunOut).not.toContain(`restoring backup ${productionDump.stamp}`);
+    expect(rerunOut).not.toContain("startup failed");
+    const second = journalNow(h)!;
+    // Same journal, same plan: resumed, not superseded.
+    expect({ planId: second.planId, openedAt: second.openedAt }).toEqual({ planId: first.planId, openedAt: first.openedAt });
+    // The rerun began no restore, enroll or migrate of its own.
+    const rerunSteps = steps(h).slice(first.phases.length);
+    expect(rerunSteps.filter((x) => /^prepare:(restore|enroll|migrate):/.test(x))).toEqual([]);
+    expect(rerunSteps).toContain("prepare:lock:committed");
+    // The same container, and the row still `rehearsal` by rm_owner, unwritten since run 1.
+    expect(readStackState(h.paths)!.smokeTwinContainer).toBe(container);
+    expect(psql(copy.superuserUrl, "SELECT kind || ':' || written_by FROM deployment_identity").out).toBe("rehearsal:rm_owner");
+    expect(psql(copy.superuserUrl, "SELECT written_at FROM deployment_identity").out).toBe(writtenAt);
+  }, BOOT_TIMEOUT_MS);
+
+  // ONE baseline boot, shared by the two tests below: the invariant, and the
+  // outcome §4.2, §5 and D55 (10) require.
+  let baseline: { steps: string[]; code: number | null; out: string; identity: string | null; tableExists: boolean } | undefined;
+
+  test("a baseline dump (production's ledger, predates 0063): nothing migrates and no service starts before the copy says rehearsal", async () => {
+    expect(baselineDump.identity).toBeNull();
+    expect(baselineDump.ledger).toHaveLength(73);
+    const h = harness("dumpbl");
+    let boot: RunningBoot | undefined;
+    try {
+      boot = spawnBoot(h, [], { local: `dump=${baselineDump.dir}`, env: { RM_ENV: "stage" } });
+      const b = boot;
+      // Either the boot ends on its own, or it commits migrate and is stopped there.
+      await waitFor(
+        () => b.exitCode() !== null || (journalNow(h)?.phases ?? []).some((r) => r.phase === "prepare" && r.step === "migrate" && r.status === "committed"),
+        BOOT_TIMEOUT_MS,
+        "the baseline boot to end or to commit migrate",
+      );
+      if (b.exitCode() === null) b.proc.kill("SIGINT");
+      const code = await b.exited;
+      const s = steps(h);
+      const copy = restoredCopy(h);
+      const tableExists = psql(copy.superuserUrl, "SELECT to_regclass('public.deployment_identity') IS NOT NULL").out === "t";
+      baseline = {
+        steps: s,
+        code,
+        out: b.output(),
+        tableExists,
+        identity: tableExists ? psql(copy.superuserUrl, "SELECT kind || ':' || written_by FROM deployment_identity").out : null,
+      };
+
+      // Restored and locked like any dump; the matrix does not consult a local dump's row.
+      expect({ steps: s.slice(0, 6), why: s.includes("prepare:lock:committed") ? "" : bootFailureReport(b) }).toEqual({
+        steps: [
+          "plan::committed", "prepare:instance:committed", "prepare:restore:committed",
+          "prepare:assemble:committed", "prepare:web-compat:committed", "prepare:lock:committed",
+        ],
+        why: "",
+      });
+      expect(baseline.out).toContain("target lock held");
+      expect(psql(copy.superuserUrl, `SELECT count(*) FROM comments WHERE page = '${MARKER_PAGE}'`).out).toBe("1");
+
+      // THE INVARIANT (§4.2, §7): no migrate, no site, no image, no service
+      // begins unless the enrollment committed first. (Assembly and the
+      // web-compat decision precede the lock by design, §13.3, and write only
+      // the checkout's `_static`.)
+      const enrolled = s.indexOf("prepare:enroll:committed");
+      const later = s.findIndex((x) => /^prepare:(migrate|site|images|build)|^(preflight|replace|participants|readiness):/.test(x));
+      if (later !== -1) expect(enrolled).toBeGreaterThan(-1);
+      if (later !== -1) expect(enrolled).toBeLessThan(later);
+    } finally {
+      teardown(h, boot);
+    }
+  }, BOOT_TIMEOUT_MS);
+
+  // Criteria 13 and 76, spec §4.2, §5, D55 (10): a `--local dump` restore of
+  // production's baseline ends `rehearsal`, written by rm_owner through the
+  // identity-first pass. (This was a KNOWN FAILURE until the pass existed:
+  // the boot stopped at enroll with 'relation "deployment_identity" does not
+  // exist'.)
+  test("a baseline dump boots on stage through enroll and the copy says rehearsal, written by rm_owner (spec §4.2, §5)", () => {
+    if (!baseline) throw new Error("the baseline boot above did not run");
+    expect(baseline.steps).toContain("prepare:enroll:committed");
+    expect(baseline.tableExists).toBe(true);
+    expect(baseline.identity).toBe("rehearsal:rm_owner");
+  });
+
+  test("a v0.5.0 dump (any other pre-identity ledger) refuses at enroll: no 0063, no row, no migrate, the missing file named", async () => {
+    expect(releaseDump.identity).toBeNull();
+    expect(releaseDump.ledger).toHaveLength(72);
+    const h = harness("dumprel");
+    let boot: RunningBoot | undefined;
+    try {
+      boot = spawnBoot(h, [], { local: `dump=${releaseDump.dir}`, env: { RM_ENV: "stage" } });
+      const code = await boot.exited;
+      const s = steps(h);
+      const copy = restoredCopy(h);
+      expect(code).not.toBe(0);
+      expect(s).toContain("prepare:lock:committed");
+      expect(s).not.toContain("prepare:enroll:committed");
+      expect(s.filter((x) => /^prepare:migrate:/.test(x))).toEqual([]);
+      const out = boot.output();
+      expect(out).toContain("Refusing the --local dump identity-first pass");
+      expect(out).toContain("1 missing (0062_rm_readonly_sequence_select.sql)");
+      for (const after of ["phase: prepare (migrate)", "phase: prepare (site)", "phase: prepare (images)", "phase: preflight", "phase: replace"]) {
+        expect(out).not.toContain(after);
+      }
+      // Nothing written: the release's ledger, no table, the data intact.
+      expect(psql(copy.superuserUrl, "SELECT to_regclass('public.deployment_identity') IS NULL").out).toBe("t");
+      expect(psql(copy.superuserUrl, "SELECT count(*) FROM schema_migrations").out).toBe(String(releaseDump.ledger.length));
+      expect(psql(copy.superuserUrl, `SELECT count(*) FROM comments WHERE page = '${MARKER_PAGE}'`).out).toBe("1");
+    } finally {
+      teardown(h, boot);
+    }
+  }, BOOT_TIMEOUT_MS);
+
+  // KNOWN GAP (#699), a fact about the v0.5.0 release, not about this branch:
+  // `bun smoke:capture` dumps as rm_readonly, read-only, and v0.5.0's
+  // rm_readonly cannot read the sequences 0056-0060 revoked from it (fixed
+  // after the tag by 0062). So the capture tool cannot produce the v0.5.0
+  // backup this file restores; the fixture dumps it as the superuser instead.
+  test("KNOWN GAP (#699): smoke:capture's rm_readonly dump of a v0.5.0 database is refused on a sequence", () => {
+    expect(releaseDump.readonlyCapture).not.toBeNull();
+    expect(releaseDump.readonlyCapture!.ok).toBe(false);
+    expect(releaseDump.readonlyCapture!.out).toMatch(/failed to get data for sequence .*lack SELECT privilege on the sequence/);
+  });
+});

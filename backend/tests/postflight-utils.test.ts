@@ -13,7 +13,7 @@ describe("fetchCheck — never throws, always reports ok/error", () => {
   });
 
   test("a genuinely reachable URL returns ok:true with a body", async () => {
-    const server = Bun.serve({ port: 0, fetch: () => new Response("hello", { status: 200 }) });
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("hello", { status: 200 }) });
     try {
       const r = await fetchCheck(`http://127.0.0.1:${server.port}/`);
       expect(r.ok).toBe(true);
@@ -25,7 +25,7 @@ describe("fetchCheck — never throws, always reports ok/error", () => {
   });
 
   test("a non-2xx response is reported ok:false with the status, not thrown", async () => {
-    const server = Bun.serve({ port: 0, fetch: () => new Response("nope", { status: 500 }) });
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("nope", { status: 500 }) });
     try {
       const r = await fetchCheck(`http://127.0.0.1:${server.port}/`);
       expect(r.ok).toBe(false);

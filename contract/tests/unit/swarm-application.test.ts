@@ -1,5 +1,4 @@
-// Stage 0 (docs/plans/onboarding-ic-workflow.md Phase 1 / docs/architecture.md
-// §11 R6) — canonical swarm-application serialization + the shared
+// Canonical swarm-application serialization + the shared
 // onboarding prompt/step-list constants. This is the foundation every later
 // stage (backend verify, rmpc Rust signer, frontend apply page, docs) imports,
 // so it is pinned here first.

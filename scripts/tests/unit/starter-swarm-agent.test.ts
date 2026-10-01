@@ -3,6 +3,8 @@ import { canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER, ROUTES } from "
 import type { SwarmBrief } from "@robotmoney/contract";
 import {
   briefRequiresWeights,
+  collectingSessionFor,
+  e2eSubject,
   canonicalizeDraftForTransport,
   deterministicAuthorTake,
   evenCanonicalWeights,
@@ -241,5 +243,68 @@ describe("starter swarm agent honours a brief's report-snapshot binding (issue #
   test("the brief is read for THIS session id, not merely its date and subject", async () => {
     const { calls } = await runAgainst(BOUND_REPORT_SNAPSHOT_ID);
     expect(calls.briefUrls.some((u) => u.includes("session=12"))).toBe(true);
+  });
+});
+
+// ── The scheduler-owned lifecycle: the e2e exercise must be seated ───────────
+//
+// CI's last run died with `HTTP 403: member is not on this session's expected
+// roster`. The exercise found the swarm-session step's collecting epoch (its
+// roster already frozen), registered afterwards, and signed into that epoch.
+// It now registers first, creates its OWN subject, and takes part in the epoch
+// the scheduler opens for that subject only.
+describe("starter swarm agent e2e is seated in its own scheduler-opened epoch", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test("collectingSessionFor asks for the subject's own collecting epoch and ignores others", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({ sessions: [
+        { id: "1", date: "2026-09-30", subjectId: "other", state: "collecting" },
+        { id: "2", date: "2026-09-30", subjectId: "starter-agent-ab", state: "window_closed" },
+        { id: "3", date: "2026-09-30", subjectId: "starter-agent-ab", state: "collecting" },
+      ] }), { status: 200 });
+    }) as typeof fetch;
+    const found = await collectingSessionFor("http://backend.test", "starter-agent-ab");
+    expect(String(found?.id)).toBe("3");
+    expect(urls[0]).toContain("state=collecting");
+    expect(urls[0]).toContain("subject=starter-agent-ab");
+  });
+
+  test("with a subjectId the agent joins that subject's session, not the newest open one", async () => {
+    const seen: string[] = [];
+    const stack = fakeLiveStack(null);
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      seen.push(url.pathname);
+      if (url.pathname === ROUTES.swarm.sessions) {
+        return new Response(JSON.stringify({ sessions: [
+          { id: 12, date: "2026-09-16", subjectId: "starter-agent", subjectName: "S", state: "collecting" },
+        ] }), { status: 200 });
+      }
+      return stack.fetch(input, init);
+    }) as typeof fetch;
+    const keys = (await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"])) as CryptoKeyPair;
+    await runStarterSwarmAgent({
+      memberId: "starter-rest", memberToken: "t", privateKey: keys.privateKey,
+      transport: "rest", backendUrl: "http://backend.test", subjectId: "starter-agent",
+    });
+    expect(seen).toContain(ROUTES.swarm.sessions);
+    expect(seen).not.toContain(ROUTES.swarm.openSession);
+  });
+
+  test("e2e subjects are unique per run, so a frozen roster is never reused", () => {
+    expect(e2eSubject("aaaa").id).not.toBe(e2eSubject("bbbb").id);
+  });
+
+  test("main registers the member BEFORE it creates the subject the scheduler opens", async () => {
+    const src = await Bun.file(new URL("../../starter-swarm-agent.ts", import.meta.url)).text();
+    const main = src.slice(src.indexOf("async function main()"));
+    expect(main.indexOf("await e2eCredentials(")).toBeGreaterThan(0);
+    expect(main.indexOf("await e2eCredentials(")).toBeLessThan(main.indexOf("await openE2eEpoch("));
   });
 });

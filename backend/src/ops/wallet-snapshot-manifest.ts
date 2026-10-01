@@ -6,6 +6,7 @@ import {
 } from "../config.ts";
 import { SLEEVE_DEFS, sleeveSymbols } from "../chain/wallet-valuation.ts";
 import type postgresTypes from "postgres";
+import { onStatement, registerStatement } from "../db/registry.ts";
 import { createHash } from "node:crypto";
 
 /**
@@ -21,8 +22,17 @@ export async function lockWalletSnapshotDate(
   db: postgresTypes.TransactionSql<{}>,
   sampleDate: string,
 ): Promise<void> {
-  await db`SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext(${sampleDate}))`;
+  await onStatement(db, snapshotDateLock)`SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext(${sampleDate}))`;
 }
+
+// Object-less (D55 (13)): an advisory lock names no relation.
+const snapshotDateLock = registerStatement({
+  role: "rm_worker",
+  shape: "walletSnapshotLock",
+  site: "src/ops/wallet-snapshot-manifest:lockWalletSnapshotDate",
+  purpose: "Serialize every live sampler and historical repair writing one wallet snapshot date.",
+  callers: ["src/worker/handlers/wallet", "src/worker/handlers/repair"],
+});
 
 export interface WalletSleeveManifestKey {
   walletIndex: number;

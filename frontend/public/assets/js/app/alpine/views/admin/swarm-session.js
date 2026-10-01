@@ -1,10 +1,17 @@
-// Alpine factory for /admin/swarm/sessions/:id — UTC-first timeline,
-// roster matrix (expected/excused/submitted/absent), read-only accepted
-// recommendation detail, aggregate display, and guarded lifecycle transition
-// controls. Issue #159 — docs/architecture.md §4 US-C3/US-C4/US-C5.
-// Nothing here can edit or delete an accepted recommendation — the roster
-// mutations only add/excuse/restore expected members, and only before the
-// session leaves `scheduled`/`collecting`.
+// Alpine factory for /admin/swarm/sessions/:id — UTC-first timeline, the
+// lifecycle the scheduler drove the session through, roster matrix
+// (expected/excused/submitted/absent), read-only accepted recommendation
+// detail and aggregate display. Issue #159 — docs/architecture.md §4
+// US-C3/US-C4/US-C5.
+//
+// OBSERVE-ONLY (issue #1026, D55 decision 4; docs/architecture/admin-surface.md
+// US-C4: "I can see every lifecycle transition the scheduler made, and I cannot
+// fire one myself"). The cancel/close/reopen/aggregate/judge/publish buttons are
+// gone with the routes they posted to: only `system-scheduler` drives the
+// epoch lifecycle. Nothing here can edit or delete an accepted recommendation,
+// and the roster mutations (add/excuse/restore) are offered only on a legacy
+// `scheduled` session — an epoch's roster is seated when it opens and locked
+// from its first instant.
 //
 // Reconciled to the REAL backend (issue #152/PR #169) per PR #172 review.
 // The admin API has NO single-session GET, NO admin session list, and NO
@@ -28,55 +35,29 @@
 //      used server-side to verify a submission) — the "disclosure" here
 //      shows body/memoUrl/verified only.
 // `session.version` and the two other timeline stamps (briefOpensAt/
-// publishAt) are NEVER exposed by any GET route (only transiently on the
-// create-session response) — they're dropped from the timeline display, and
-// lifecycle actions omit `expectedVersion` (the backend treats it as
-// optional: omitted, it skips the optimistic-lock check entirely).
+// publishAt) are NEVER exposed by any GET route — they're dropped from the
+// timeline display.
 // "Linked jobs" was dropped outright: GET /api/admin/jobs's list query never
 // selects `payload`/`scope_id`, so a job can't be attributed to a session
 // from the list endpoint at all.
 import { api, ROUTES, path } from "../../../lib/api.js";
 import { adminAuthState, fmtUtc, fmtLocal } from "./shared.js";
 
-// The only 6 lifecycle actions the admin HTTP surface exposes
-// (backend/src/api/routes/swarm-admin.ts sessions dispatcher).
-// scheduled→collecting ("publish_brief" in the job-kind vocabulary) is
-// worker/job-queue-driven only — there is no manual admin action for it.
-// `judge` (issue #752) answers 409 `judge_disabled` while the judge's runtime
-// mode is off, which is its shipped default — the button is offered from
-// `aggregated` and the backend, not the UI, decides whether the judge is on.
-const ACTION_ROUTE_KEY = {
-  cancel: "sessionCancel",
-  close: "sessionClose",
-  reopen: "sessionReopen",
-  aggregate: "sessionAggregate",
-  judge: "sessionJudge",
-  publish: "sessionPublish",
-};
-const ACTION_LABEL = {
-  cancel: "Cancel session",
-  close: "Close window",
-  reopen: "Reopen window",
-  aggregate: "Aggregate",
-  judge: "Judge",
-  publish: "Publish",
-};
-const REASON_REQUIRED = new Set(["cancel", "close", "reopen"]);
-
-// Mirrors backend/src/swarm/admin.ts's TRANSITIONS table, restricted to
-// the 5 actions actually reachable over HTTP (guardedTransition's full legal
-// matrix also includes scheduled->collecting and window_closed->collecting,
-// but nothing in the REST layer can request "collecting" directly except via
-// the "reopen" action, whose target state IS collecting).
-const LEGAL_ACTIONS_FOR_STATE = {
-  scheduled: ["cancel"],
-  collecting: ["close", "cancel"],
-  window_closed: ["reopen", "aggregate", "cancel"],
-  aggregated: ["close", "judge", "publish"],
-  judged: ["close", "publish"],
-  published: [],
-  cancelled: [],
-};
+// THE EPOCH LIFECYCLE, in order (system-scheduler-spec.md §4; the transitions
+// admin-surface.md US-C4 tabulates). Each step is one the scheduler makes;
+// this page shows which of them the session has passed, and fires none.
+// `judging` and `judged` are passed only when the captured judge mode was
+// `enforce` — under `off` finalize publishes straight from `aggregated`
+// (§4.4), so a published session that skipped them shows them as skipped.
+const LIFECYCLE_STEPS = [
+  { state: "collecting", label: "Collecting — the submission window is open" },
+  { state: "window_closed", label: "Window closed — turned over, absences recorded" },
+  { state: "aggregated", label: "Aggregated — takes rolled up" },
+  { state: "judging", label: "Judging requested — deadline stored" },
+  { state: "judged", label: "Judged — the judge of record's consensus recorded" },
+  { state: "published", label: "Published — finalized" },
+];
+const STEP_INDEX = Object.fromEntries(LIFECYCLE_STEPS.map((s, i) => [s.state, i]));
 
 export function registerAdminSwarmSession(Alpine) {
   Alpine.data("adminSwarmSession", () => ({
@@ -94,12 +75,6 @@ export function registerAdminSwarmSession(Alpine) {
     rosterForm: null, // { operation, memberId, reason }
     rosterError: null,
     rosterSubmitting: false,
-
-    // Lifecycle action confirmation dialog.
-    actionConfirm: null, // { action, reason }
-    actionError: null,
-    actionResult: null, // last transition's { state, idempotent }
-    actionSubmitting: false,
 
     // Consensus-judge record (issue #767). Every judge run for this session,
     // newest first, plus which opinion is IN FORCE. Loaded for every session,
@@ -335,7 +310,10 @@ export function registerAdminSwarmSession(Alpine) {
     toggleDisclosure(memberId) {
       this.expandedRecommendation = this.expandedRecommendation === memberId ? null : memberId;
     },
-    rosterEditable() { return this.session?.state === "scheduled" || this.session?.state === "collecting"; },
+    // Only a legacy `scheduled` session takes roster edits: the backend refuses
+    // add/excuse/restore once collection begins, and an epoch is `collecting`
+    // from its first instant, so offering them there would offer a 409.
+    rosterEditable() { return this.session?.state === "scheduled"; },
 
     openRosterForm(operation, memberId = "") {
       this.rosterForm = { operation, memberId, reason: "" };
@@ -370,58 +348,28 @@ export function registerAdminSwarmSession(Alpine) {
       }
     },
 
-    // ── Lifecycle actions ────────────────────────────────────────────────
-    legalActions() { return LEGAL_ACTIONS_FOR_STATE[this.session?.state] || []; },
-    isLegalAction(action) { return this.legalActions().includes(action); },
-    actionLabel(action) { return ACTION_LABEL[action] || action; },
-
-    openActionConfirm(action) {
-      this.actionConfirm = { action, reason: "" };
-      this.actionError = null;
-      this.actionResult = null;
+    // ── Lifecycle (observe-only) ─────────────────────────────────────────
+    // One row per epoch step, marked `done`, `current`, `pending` or
+    // `skipped`. A step before the current one that a published session never
+    // held (judging/judged under judge mode `off`) is `skipped`, which is read
+    // off the judgements panel: no judgement on record means judging never ran.
+    lifecycleSteps() {
+      const state = this.session?.state;
+      const current = STEP_INDEX[state];
+      const judged = this.judgements.length > 0;
+      return LIFECYCLE_STEPS.map((step, i) => {
+        let status = "pending";
+        if (state === "cancelled") status = "skipped";
+        else if (current === undefined) status = "pending";
+        else if (i === current) status = "current";
+        else if (i < current) status = (step.state === "judging" || step.state === "judged") && !judged ? "skipped" : "done";
+        return { ...step, status };
+      });
     },
-    cancelActionConfirm() { this.actionConfirm = null; this.actionError = null; },
-
-    async submitActionConfirm() {
-      const { action, reason } = this.actionConfirm;
-      const trimmed = String(reason || "").trim();
-      if (REASON_REQUIRED.has(action) && (trimmed.length < 10 || trimmed.length > 500)) {
-        this.actionError = "Reason must be 10–500 characters.";
-        return;
-      }
-      this.actionSubmitting = true;
-      this.actionError = null;
-      try {
-        // No `expectedVersion`: the backend never exposes a session's current
-        // version over any GET route, and the field is optional — omitted, the
-        // guarded transition skips the optimistic-lock check.
-        const body = {};
-        if (trimmed) body.reason = trimmed;
-        const res = await api.adminPost(
-          path(ROUTES.swarm.admin[ACTION_ROUTE_KEY[action]], { id: this.sessionId }),
-          this._token(),
-          body,
-        );
-        // Synchronous {ok, status, session:{id,state,version}, idempotent?} —
-        // never a 202 job envelope (no jobId/existing field exists on this
-        // backend). Defensively tolerate either shape rather than assuming one.
-        this.actionResult = {
-          state: res?.session?.state ?? null,
-          idempotent: !!res?.idempotent,
-          jobId: res?.jobId ?? null, // stays null on this backend; kept for forward-compat
-        };
-        this.actionConfirm = null;
-        await this.load();
-      } catch (e) {
-        if (e.status === 403) return this._handle403();
-        if (e.status === 409) {
-          this.actionError = "That transition is not legal from the session's current state (409).";
-          return;
-        }
-        this.actionError = e.message;
-      } finally {
-        this.actionSubmitting = false;
-      }
+    stepClass(status) {
+      if (status === "done") return "adm-badge adm-badge--ok";
+      if (status === "current") return "adm-badge adm-badge--run";
+      return "adm-badge adm-badge--idle";
     },
 
     // ── Aggregate (read-only; persisted by aggregateSession() onto the

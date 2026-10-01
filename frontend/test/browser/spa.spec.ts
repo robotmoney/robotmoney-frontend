@@ -54,17 +54,22 @@ async function expectNoBrowserErrors(errors: string[]): Promise<void> {
 // The take count is read the same way. The seed drives three members, and a
 // member whose model refuses or times out is recorded absent, as the session
 // is built to tolerate; the page is right to show the takes that landed.
-async function resolveSeededSession(page: Page, subjectId: string): Promise<{ date: string; takes: number }> {
+//
+// The session is resolved by id from the PUBLISHED sessions. The scheduler opens
+// a subject's next epoch the moment one settles, so the newest row for a subject
+// is an open epoch with no takes, and `/swarm/<date>/<subject>` (the LATEST
+// session that day) renders that one, not the session the driver ran.
+async function resolveSeededSession(page: Page, subjectId: string): Promise<{ id: string; date: string; takes: number }> {
   const match = await page.evaluate(async (id) => {
-    const res = await fetch(`/api/swarm/sessions?limit=50`);
+    const res = await fetch(`/api/swarm/sessions?state=published&limit=50`);
     const body = await res.json();
-    const row = (body.sessions as Array<{ subjectId: string; date: string; takeCount?: number }>).find((s) => s.subjectId === id);
-    return row ? { date: row.date, takes: Number(row.takeCount) } : null;
+    const row = (body.sessions as Array<{ id: string; subjectId: string; date: string; takeCount?: number }>).find((s) => s.subjectId === id && Number(s.takeCount) > 0);
+    return row ? { id: row.id, date: row.date, takes: Number(row.takeCount) } : null;
   }, subjectId);
   // Fail loudly rather than falling back to a computed date: a null here
   // means the seed did not run (or ran for a different subject), which is a
   // real defect this test must still catch — not paper over.
-  if (!match) throw new Error(`no swarm session found for subject "${subjectId}" — did the seed run?`);
+  if (!match) throw new Error(`no published swarm session with takes found for subject "${subjectId}" — did the seed run?`);
   if (!(match.takes > 0)) throw new Error(`the seeded ${subjectId} session carries no takes — no member filed`);
   return match;
 }
@@ -143,7 +148,7 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   await expect(page.locator(".profile-role")).not.toContainText("reads the session through");
 
   const woon = await resolveSeededSession(page, "woon");
-  await page.goto(`/swarm/${woon.date}/woon`);
+  await page.goto(`/swarm/sessions/${woon.id}`);
   await expect(page.locator(".session-title")).toHaveText("Woon Treasury");
   // The per-member submissions table became the vote chart (RM-121): one dot
   // per member who took part, keyed on the member like the table rows were

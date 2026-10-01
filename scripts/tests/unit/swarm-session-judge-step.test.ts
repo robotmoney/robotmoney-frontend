@@ -1,294 +1,164 @@
-// The HOST DRIVER schedules the consensus judge (issue #767) — executed, not
-// grepped, in the required per-PR `unit` job.
+// The HOST DRIVER OBSERVES settlement; it drives none of it (issue #1026 W4,
+// D55 (4)) — executed, not grepped, in the required per-PR `unit` job.
 //
-// WHAT THIS PROTECTS. There are two ways a swarm session comes into being, and
-// only one of them is the one production runs:
+// WHAT CHANGED UNDERNEATH THIS FILE. The driver used to run the judge step of
+// settlement itself: `epochs/request-judging`, a wait bounded by the stored
+// deadline, then `epochs/finalize`. D55 (4) makes `system-scheduler` the only
+// caller of every epoch lifecycle transition (open, turnover, aggregate,
+// request-judging, finalize), and those routes now refuse every credential but
+// the scheduler's. So that driver code and the cases that executed it are gone
+// with the feature, and what is tested here is what replaced it: the driver
+// WAITS for the real scheduler (system-scheduler-spec.md §8: "runs the real
+// scheduler; it does not bypass the scheduler") and REPORTS what the record
+// holds.
 //
-//   1. `POST /api/swarm/admin/sessions` -> `createSessionAdmin`, which enqueues
-//      all five lifecycle jobs up front at instants derived from the session's
-//      own timestamps. This is the admin form. Production does not use it.
-//   2. `scripts/lib/swarm/session.ts` — the host driver, the real scheduler
-//      whenever `SWARM_SCHEDULES_ENABLED` is "0" (see
-//      scripts/lib/smoke-schedule.ts). It opens a session with `open_session`
-//      (`domain.openSession` enqueues NOTHING) and then enqueues each step by
-//      hand as the previous one lands.
-//
-// #767 first put `swarm.judge` on path 1's job set only. That gave a judging to
-// admin-created sessions and to NO session production creates — a PATH gap, not
-// a temporal one: it does not close by waiting. These tests own path 2.
-//
-// runSession itself drives docker, the job queue and live inference, so it
-// cannot be executed here. The decision it delegates to — runJudgeStep — is
-// pure over four injected effects and IS executed, with no network and no
-// timers; its POSITION in runSession is pinned by source-text order, and each
-// order grader is graded against a broken fixture so it cannot go vacuously
-// green.
+// What survives unchanged is the reason this file exists (#817): the progress
+// stream must tell a session that recorded a judgement apart from one that
+// judged nothing, and must never announce a judging that did not land.
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SessionEvent } from "../../lib/swarm/session.ts";
-import { countJudgements, enqueueLifecycleJob, judgedProgress, runJudgeStep, sessionEmitter } from "../../lib/swarm/session.ts";
+import {
+  countJudgements,
+  judgedProgress,
+  OBSERVE_GRACE_MS,
+  planEpochAdoption,
+  sessionEmitter,
+  waitForSchedulerEpoch,
+  waitForSettlement,
+} from "../../lib/swarm/session.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const sessionSrc = readFileSync(join(repoRoot, "scripts", "lib", "swarm", "session.ts"), "utf8");
 
 const SESSION_ID = "11111111-2222-3333-4444-555555555555";
+const T0 = Date.parse("2026-09-25T12:00:00.000Z");
+const iso = (ms: number) => new Date(ms).toISOString();
 
-/** Records every effect runJudgeStep reaches for, in the order it reaches. */
-function harness(
-  mode: string | null,
-  opts: {
-    waitFails?: boolean; enqueueFails?: boolean; recorded?: number | null;
-    /** Who authored the in-force judgement (issue #969). Defaults to a real model. */
-    source?: string | null;
-  } = {},
-) {
-  const calls: string[] = [];
-  const enqueued: { action: string; payload: Record<string, unknown> }[] = [];
-  const logs: string[] = [];
-  const deps = {
-    readMode: async () => { calls.push("readMode"); return mode; },
-    enqueue: async (action: string, payload: Record<string, unknown>) => {
-      calls.push(`enqueue:${action}`);
-      enqueued.push({ action, payload });
-      // What enqueueLifecycleJob does on a non-2xx since #806: it throws rather
-      // than returning an error body the caller reads fields off.
-      if (opts.enqueueFails) throw new Error("enqueue-job 'judge' failed (HTTP 403): {\"error\":\"forbidden\"}");
-      return { jobId: 77, kind: `swarm.${action}` };
+/** A fake clock the waits sleep on: `wait` advances it and records the sleep. */
+function fakeClock() {
+  let now = T0;
+  const sleeps: number[] = [];
+  return {
+    now: () => now,
+    wait: async (ms: number) => {
+      sleeps.push(ms);
+      now += ms;
     },
-    waitForJudged: async () => {
-      calls.push("waitForJudged");
-      if (opts.waitFails) throw new Error("session did not reach 'judged' within 120000ms");
-      return {};
-    },
-    // Read ONLY on the expiry path, to say which failure this was.
-    countJudgements: async () => { calls.push("countJudgements"); return "recorded" in opts ? opts.recorded! : 0; },
-    // WHO AUTHORED IT (issue #969). `judged (enforce)` was the strongest thing
-    // this step could report, and it was equally true of a session whose
-    // opinion came from a template because the judge had no model at all.
-    readProvenance: async () => {
-      calls.push("readProvenance");
-      const source = "source" in opts ? opts.source! : "model";
-      return { source, fallbackReason: source === "fallback" ? "model_unconfigured" : null, model: "judge-model" };
-    },
-    log: (line: string) => { logs.push(line); },
+    sleeps,
   };
-  return { calls, enqueued, logs, deps };
 }
 
-const run = (
-  mode: string | null,
-  opts?: { waitFails?: boolean; enqueueFails?: boolean; recorded?: number | null; source?: string | null },
-) => {
-  const h = harness(mode, opts);
-  return { h, result: runJudgeStep(SESSION_ID, "2026-08-31", "woon", "tok", h.deps) };
-};
+// ---------------------------------------------------------------------------
+// The driver makes NO lifecycle transition (D55 (4)).
+// ---------------------------------------------------------------------------
+/** Code only: comments dropped, so a comment naming a route is not a call. */
+const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\n)\s*\/\/.*/g, "$1");
+const EPOCH_ROUTES = ["epochOpen", "epochTurnover", "epochAggregate", "epochRequestJudging", "epochFinalize"];
+const drivesAnEpoch = (src: string) => EPOCH_ROUTES.filter((r) => code(src).includes(`ROUTES.swarm.admin.${r}`) && !code(src).includes(`${r}, {`));
 
-describe("runJudgeStep — the driver's judge step, executed", () => {
-  test("the judging is ALWAYS queued, with the exact action the enqueue-job dispatcher maps to swarm.judge", async () => {
-    for (const mode of ["off", "shadow", "enforce", null]) {
-      const { h, result } = run(mode);
-      await result;
-      // `judge` is the key in backend/src/api/routes/swarm.ts's actionMap; any
-      // other string is a 400 `unknown action`, silently skipping the judging.
-      expect(h.enqueued.map((e) => e.action), `mode=${mode}`).toEqual(["judge"]);
-      expect(h.enqueued[0].payload, `mode=${mode}`).toEqual({ sessionId: SESSION_ID });
+describe("the session driver calls no epoch lifecycle route (D55 (4), scheduler spec §8)", () => {
+  test("session.ts names no epoch route outside its cross-role refusal probe", () => {
+    // The one survivor is the cross-role probe in main(), which POSTs a
+    // MEMBER's bearer at turnover to observe the refusal — a denial check,
+    // not a transition. Every other epoch route is gone from the driver.
+    const named = EPOCH_ROUTES.filter((r) => code(sessionSrc).includes(`ROUTES.swarm.admin.${r}`));
+    expect(named).toEqual(["epochTurnover"]);
+    const probe = code(sessionSrc).indexOf("ROUTES.swarm.admin.epochTurnover");
+    expect(code(sessionSrc).slice(probe - 400, probe + 400)).toContain("Bearer ${testToken}");
+    for (const gone of ["openEpoch(", "turnOverEpoch(", "aggregateEpoch(", "requestJudging(", "finalizeEpoch(", "runJudgeStep("]) {
+      expect({ gone, found: code(sessionSrc).includes(gone) }).toEqual({ gone, found: false });
     }
   });
 
-  test("the switch is read BEFORE the job is queued, so the branch is about the mode in force when the step ran", async () => {
-    const { h, result } = run("shadow");
-    await result;
-    expect(h.calls.indexOf("readMode")).toBe(0);
-    expect(h.calls.indexOf("readMode")).toBeLessThan(h.calls.indexOf("enqueue:judge"));
-  });
-
-  test("`off` — the shipped default — queues the judging and waits for NOTHING", async () => {
-    const { h, result } = run("off");
-    const out = await result;
-    // Waiting here would burn the two-minute ceiling on every session, for a
-    // `judged` state that a disabled judge never produces: the job drains as
-    // `{ skipped: "judge_disabled" }` and the session stays `aggregated`.
-    expect(h.calls).toEqual(["readMode", "enqueue:judge"]);
-    expect(out).toEqual({ mode: "off", waitedForJudged: false, judged: false, recorded: null });
-    expect(h.logs.join("\n")).toContain("judge mode=off");
-  });
-
-  test("`shadow` waits for 'judged' — which is what stops the publish that follows from beating the judging", async () => {
-    const { h, result } = run("shadow");
-    const out = await result;
-    // THE REGRESSION THIS CATCHES: `swarm.publish` is an unconditional
-    // `UPDATE ... SET state='published'`, and the judge needs `aggregated ->
-    // judged` to still be legal when its model call returns up to a minute
-    // later. Enqueue both back to back and the publish wins, the transition is
-    // refused, the whole judging transaction rolls back, and the soak records
-    // nothing.
-    expect(h.calls).toEqual(["readMode", "enqueue:judge", "waitForJudged", "readProvenance"]);
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: true, recorded: null, source: "model" });
-  });
-
-  test("`enforce` waits on the same terms", async () => {
-    const { h, result } = run("enforce");
-    expect(await result).toEqual({ mode: "enforce", waitedForJudged: true, judged: true, recorded: null, source: "model" });
-    expect(h.calls).toEqual(["readMode", "enqueue:judge", "waitForJudged", "readProvenance"]);
-  });
-
-  // ISSUE #969. Before this, `judged (enforce)` was the whole report, and it was
-  // true of a session whose opinion came from a template because the judge had
-  // no model. The step now carries WHO AUTHORED IT, and the log says so.
-  test("a judging no model authored is reported as such, not as a healthy `judged`", async () => {
-    const { h, result } = run("enforce", { source: "fallback" });
-    const out = await result;
-    expect(out.source).toBe("fallback");
-    expect(h.logs.join("\n")).toContain("source=fallback");
-    expect(h.logs.join("\n")).toContain("model_unconfigured");
-    // And the progress stream carries it to the TUI rather than stopping at the mode.
-    expect(judgedProgress(out)).toEqual({ judgeMode: "enforce", judgeSource: "fallback" });
-  });
-
-  test("an unreadable switch still queues the judging, and does not wait for a state it cannot predict", async () => {
-    const { h, result } = run(null);
-    const out = await result;
-    expect(h.calls).toEqual(["readMode", "enqueue:judge"]);
-    expect(out).toEqual({ mode: null, waitedForJudged: false, judged: false, recorded: null });
-    expect(h.logs.join("\n")).toContain("unreadable");
-  });
-
-  test("a wait that expires PUBLISHES ANYWAY — a slow judge must never wedge the session cadence", async () => {
-    const { h, result } = run("shadow", { waitFails: true });
-    const out = await result;
-    // `recorded` is carried out of the expiry path because it, not the wait's
-    // opinion, is what the progress stream keys the `judged` event on (#817).
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, source: null });
-    // Loud, not silent: the operator reading the driver's log learns the
-    // session published without its judging, and why.
-    expect(h.logs.join("\n")).toContain("publishing anyway");
-    // The line reports the WAIT expiring — an event this driver observed — and
-    // no longer asserts "the judge did not reach 'judged' in time", which on
-    // the single-worker lane is usually false (#817).
-    expect(h.logs.join("\n")).toContain("wait for the session to reach 'judged' EXPIRED");
-    expect(h.logs.join("\n")).not.toContain("did not reach 'judged' in time");
-  });
-
-  // ── The expiry log must not assert something it did not check (#806) ──────
-  //
-  // "did not reach 'judged' in time" reads as "the judge was slow". On the
-  // single-worker swarm lane that is usually FALSE: publish is enqueued only
-  // after this wait returns and cannot be claimed while the judge holds the
-  // lane, so an expiry here is far more often a judging that RAN and was
-  // refused, or one still queued behind a wedged lane. The record settles it.
-
-  test("the expiry log names the queued job and says whether a judgement row exists — 'the judging ran'", async () => {
-    const { h, result } = run("enforce", { waitFails: true, recorded: 2 });
-    await result;
-    const log = h.logs.join("\n");
-    expect(h.calls, "the record is read only on the expiry path").toEqual(
-      // …and when it says rows DO exist, their provenance is read too: a
-      // judging that landed late is still a judging somebody has to have
-      // authored (issue #969).
-      ["readMode", "enqueue:judge", "waitForJudged", "countJudgements", "readProvenance"],
-    );
-    expect(log).toContain("judge job #77 was queued");
-    expect(log).toContain("2 judgement row(s) ARE recorded");
-    expect(log).not.toContain("NO judgement row");
-  });
-
-  test("…and the other answer is distinguishable — 'the judging did not run to completion'", async () => {
-    const { h, result } = run("shadow", { waitFails: true, recorded: 0 });
-    await result;
-    expect(h.logs.join("\n")).toContain("NO judgement row was recorded");
-  });
-
-  test("an unreadable record says so rather than guessing either way", async () => {
-    const { h, result } = run("shadow", { waitFails: true, recorded: null });
-    await result;
-    expect(h.logs.join("\n")).toContain("could not read the judgement record");
-  });
-
-  // ── A FAILED ENQUEUE IS NOT A SLOW JUDGE (#806) ───────────────────────────
-  //
-  // The enqueue sits OUTSIDE the try/catch that guards the wait, and it has to:
-  // the judge step is the ONLY lifecycle step whose wait failure is caught, so
-  // an enqueue folded into that catch would be the only place in the driver
-  // where "the queue refused me" is survivable — and it would publish the
-  // session and blame a slow judge in the log.
-  test("a non-2xx enqueue ABORTS the run — it never falls through to the wait, and never to the publish", async () => {
-    const { h, result } = run("shadow", { enqueueFails: true });
-    await expect(result).rejects.toThrow(/enqueue-job 'judge' failed \(HTTP 403\)/);
-    // waitForJudged was never reached, so runSession's `publish` line — which
-    // follows this call — is never reached either: the run fails loudly.
-    expect(h.calls).toEqual(["readMode", "enqueue:judge"]);
-    expect(h.logs).toEqual([]);
-  });
-
-  test("it aborts at the shipped `off` too, where nothing waits and the failure would otherwise be invisible", async () => {
-    const { h, result } = run("off", { enqueueFails: true });
-    await expect(result).rejects.toThrow(/HTTP 403/);
-    expect(h.calls).toEqual(["readMode", "enqueue:judge"]);
+  test("red control: a driver that opens an epoch again is reported", () => {
+    const broken = `${sessionSrc}\nfetch(\`\${backendUrl()}\${ROUTES.swarm.admin.epochOpen}\`, { method: "POST" });\n`;
+    expect(drivesAnEpoch(broken)).toContain("epochOpen");
+    expect(drivesAnEpoch(sessionSrc)).not.toContain("epochOpen");
   });
 });
 
 // ---------------------------------------------------------------------------
-// enqueueLifecycleJob itself: the function that used to swallow the failure.
-// Executed against a stubbed fetch — no network, no server.
+// planEpochAdoption / waitForSchedulerEpoch — waiting for the REAL scheduler.
 // ---------------------------------------------------------------------------
-describe("enqueueLifecycleJob — a job that was not queued is an error, not a log line", () => {
-  const realFetch = globalThis.fetch;
-  const realBackend = process.env.BACKEND_URL;
-
-  function stubFetch(status: number, body: unknown) {
-    const seen: { url: string; body: unknown }[] = [];
-    globalThis.fetch = (async (input: any, init?: any) => {
-      seen.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : null });
-      return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-    }) as typeof fetch;
-    return seen;
-  }
-
-  afterEach(() => {
-    globalThis.fetch = realFetch;
-    if (realBackend === undefined) delete process.env.BACKEND_URL;
-    else process.env.BACKEND_URL = realBackend;
+describe("waitForSchedulerEpoch — the scheduler opens the epoch, the driver waits for it", () => {
+  test("no epoch yet is a wait; an epoch on this subject's short grid is adopted", () => {
+    expect(planEpochAdoption(T0, null, { epochSeconds: 120 }).action).toBe("wait");
+    const epoch = { sessionId: SESSION_ID, date: "2026-09-25", windowClosesAt: iso(T0 + 90_000) };
+    expect(planEpochAdoption(T0, epoch, { epochSeconds: 120 })).toMatchObject({ action: "adopt" });
   });
 
-  test("a 403 — the shape an automation-token rotation produces — throws", async () => {
-    process.env.BACKEND_URL = "http://enqueue.invalid";
-    stubFetch(403, { error: "forbidden" });
-    // BEFORE #806 this returned normally, printing `enqueued undefined (job
-    // #undefined)`, and the driver then waited 120s for a job that did not
-    // exist before publishing the session unjudged.
-    await expect(enqueueLifecycleJob("judge", { sessionId: SESSION_ID })).rejects.toThrow(/HTTP 403/);
+  test("an epoch the scheduler opened under a LONGER duration is refused, not waited out", () => {
+    // Nothing but the scheduler turns an epoch over, so the driver cannot
+    // shorten it; waiting would hang until a job timeout.
+    const long = { sessionId: SESSION_ID, date: "2026-09-25", windowClosesAt: iso(T0 + 3_600_000) };
+    const plan = planEpochAdoption(T0, long, { epochSeconds: 120 });
+    expect(plan.action).toBe("abort");
+    expect(plan.reason).toContain("longer duration");
+    // …and the boundary is the epoch plus the grace, no tighter.
+    const edge = { ...long, windowClosesAt: iso(T0 + 120_000 + OBSERVE_GRACE_MS) };
+    expect(planEpochAdoption(T0, edge, { epochSeconds: 120 }).action).toBe("adopt");
   });
 
-  test("a 400 `unknown action` throws, and the message names what to check", async () => {
-    process.env.BACKEND_URL = "http://enqueue.invalid";
-    stubFetch(400, { error: "unknown action: judgee" });
-    await expect(enqueueLifecycleJob("judgee", { sessionId: SESSION_ID }))
-      .rejects.toThrow(/nothing was queued/);
+  test("an epoch with no parseable window is refused", () => {
+    expect(planEpochAdoption(T0, { sessionId: SESSION_ID, date: "d", windowClosesAt: null }, { epochSeconds: 120 }).action).toBe("abort");
   });
 
-  test("a 200 with no jobId is ALSO a failure — the body is what the caller acts on", async () => {
-    process.env.BACKEND_URL = "http://enqueue.invalid";
-    stubFetch(200, { kind: "swarm.judge" });
-    await expect(enqueueLifecycleJob("judge", { sessionId: SESSION_ID })).rejects.toThrow(/nothing was queued/);
+  test("it polls until the scheduler's epoch appears, then returns it", async () => {
+    const clock = fakeClock();
+    let reads = 0;
+    const epoch = { sessionId: SESSION_ID, date: "2026-09-25", windowClosesAt: iso(T0 + 100_000) };
+    const got = await waitForSchedulerEpoch("woon", { epochSeconds: 120, maxWaitMs: 60_000 }, {
+      readEpoch: async () => ({ epoch: ++reads >= 3 ? epoch : null, serverNowMs: clock.now() }),
+      wait: clock.wait,
+      now: clock.now,
+    });
+    expect(got).toEqual(epoch);
+    expect(reads).toBe(3);
   });
 
-  test("a real enqueue returns the body, and a deduped one returns the job that already exists", async () => {
-    process.env.BACKEND_URL = "http://enqueue.invalid";
-    const fresh = stubFetch(200, { jobId: 12, kind: "swarm.judge", deduped: false });
-    expect(await enqueueLifecycleJob("judge", { sessionId: SESSION_ID })).toMatchObject({ jobId: 12 });
-    expect(fresh[0]!.body).toEqual({ action: "judge", sessionId: SESSION_ID });
-
-    stubFetch(200, { jobId: 12, kind: "swarm.judge", deduped: true, existingStatus: "pending" });
-    expect(await enqueueLifecycleJob("judge", { sessionId: SESSION_ID }))
-      .toMatchObject({ jobId: 12, deduped: true });
+  test("a scheduler that never opens one fails at the ceiling, naming where to look", async () => {
+    const clock = fakeClock();
+    await expect(
+      waitForSchedulerEpoch("woon", { epochSeconds: 120, maxWaitMs: 10_000 }, {
+        readEpoch: async () => ({ epoch: null, serverNowMs: clock.now() }),
+        wait: clock.wait,
+        now: clock.now,
+      }),
+    ).rejects.toThrow("smoke:status");
   });
 });
 
 // ---------------------------------------------------------------------------
-// countJudgements bounds fetch with an AbortSignal (issue #890).
-// Executed against a stubbed fetch — no network, no server.
+// waitForSettlement — the scheduler settles; the driver watches.
 // ---------------------------------------------------------------------------
+describe("waitForSettlement — every state the scheduler moved the session through, in order", () => {
+  test("it reports each distinct state once and returns at `published`", async () => {
+    const clock = fakeClock();
+    const script: (string | null)[] = ["window_closed", "window_closed", "aggregated", null, "judged", "published"];
+    const seen: string[] = [];
+    const out = await waitForSettlement(SESSION_ID, { maxWaitMs: 60_000 }, {
+      readState: async () => (script.length > 0 ? script.shift()! : "published"),
+      wait: clock.wait,
+      now: clock.now,
+    }, (s) => seen.push(s));
+    expect(out.states).toEqual(["window_closed", "aggregated", "judged", "published"]);
+    expect(seen).toEqual(out.states);
+  });
+
+  test("a session the scheduler never settles fails at the ceiling, naming what it saw", async () => {
+    const clock = fakeClock();
+    await expect(
+      waitForSettlement(SESSION_ID, { maxWaitMs: 10_000 }, {
+        readState: async () => "aggregated",
+        wait: clock.wait,
+        now: clock.now,
+      }),
+    ).rejects.toThrow("aggregated");
+  });
+});
+
 describe("countJudgements — bounded by an AbortSignal timeout (issue #890)", () => {
   const realFetch = globalThis.fetch;
   const realBackend = process.env.BACKEND_URL;
@@ -363,244 +233,86 @@ describe("countJudgements — bounded by an AbortSignal timeout (issue #890)", (
 });
 
 
-// ---------------------------------------------------------------------------
-// SOURCE-TEXT CHECK on runSession's ORDER: the judge sits between the rollup it
-// reads and the publish it must beat.
-// ---------------------------------------------------------------------------
-const JUDGE_CALL = "await runJudgeStep(sessionId, date, subject.id, rail.automationToken);";
-
-/** Ordered positions of the judge step's neighbours in runSession; -1 absent. */
-export function judgeStepOrder(src: string) {
-  return {
-    aggregate: src.indexOf('enqueueLifecycleJob("aggregate"'),
-    judge: src.indexOf(JUDGE_CALL),
-    publish: src.indexOf('enqueueLifecycleJob("publish"'),
-  };
-}
-
-describe("runSession puts the judge between aggregate and publish", () => {
-  const order = judgeStepOrder(sessionSrc);
-
-  test("every landmark is present — the driver calls runJudgeStep at all", () => {
-    for (const [name, at] of Object.entries(order)) expect(`${name}:${at >= 0}`).toBe(`${name}:true`);
-  });
-
-  test("aggregate, then judge, then publish", () => {
-    expect(order.aggregate).toBeLessThan(order.judge);
-    expect(order.judge).toBeLessThan(order.publish);
-  });
-
-  test("the driver enqueues no judge job of its own — it goes through runJudgeStep", () => {
-    // A bare `enqueueLifecycleJob("judge", …)` in runSession would queue the
-    // job and skip the wait, reintroducing the publish race wholesale.
-    expect(sessionSrc).not.toContain('enqueueLifecycleJob("judge"');
-  });
-});
-
-describe("red controls: the judge-order graders must REPORT a regression", () => {
-  test("it catches the judge step being deleted entirely", () => {
-    const broken = sessionSrc.replace(JUDGE_CALL, "");
-    expect(judgeStepOrder(broken).judge).toBe(-1);
-  });
-
-  test("it catches the judge step being moved after the publish", () => {
-    const broken = sessionSrc
-      .replace(JUDGE_CALL, "")
-      .replace('await enqueueLifecycleJob("publish", { sessionId }, rail.automationToken);',
-        `await enqueueLifecycleJob("publish", { sessionId }, rail.automationToken);\n  ${JUDGE_CALL}`);
-    const o = judgeStepOrder(broken);
-    expect(o.judge).toBeGreaterThan(o.publish);
-    expect(sessionSrc.length).toBeGreaterThan(1000); // the scan is over real text
-  });
-});
 
 // ---------------------------------------------------------------------------
-// THE PROGRESS STREAM (issue #817).
-//
-// The defect this section grades is not "no judgement was recorded" — the rows
-// were there all along. It is that the one surface an operator watches emitted
-// `aggregated` and then `published` whether the soak had judged or not, so a
-// judge running in shadow was indistinguishable from a judge that was off.
-// Every assertion below is therefore ON THE EVENTS, never on a judgement row.
-//
-// runSession drives docker, the job queue and live inference, so it cannot be
-// executed here. What CAN be executed is every piece it composes: the real
-// `sessionEmitter`, the real `runJudgeStep` over injected effects, and the real
-// `judgedProgress` decision. The segment below wires exactly those three in
-// exactly the order runSession wires them — and that ORDER is not taken on
-// trust: the source-text graders further down pin it against runSession itself,
-// each with a red control.
+// The progress stream reports the judging from the RECORD (#817, #969).
 // ---------------------------------------------------------------------------
+const EVENT_SESSION_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 
 /**
- * runSession's aggregate → judge → publish segment, over the real emitter and
- * the real decision, with only the judge's four effects injected.
- * Returns the events a viewer would have seen, in order.
+ * runSession's post-settlement segment over the real emitter and the real
+ * decision: the scheduler's states (judged and published held back), then the
+ * record's judgement, then published.
  */
-async function judgeSegmentStream(
-  mode: string | null,
-  opts: { waitFails?: boolean; recorded?: number | null } = {},
-) {
+function settlementStream(states: string[], record: { recorded: number | null; source: string | null }) {
   const events: SessionEvent[] = [];
-  const emitSession = sessionEmitter((ev) => events.push(ev), "woon", "2026-08-31");
-  const h = harness(mode, opts);
-
-  emitSession("aggregated", 42);
-  const judgeOutcome = await runJudgeStep(SESSION_ID, "2026-08-31", "woon", "tok", h.deps);
-  const judged = judgedProgress(judgeOutcome);
-  if (judged) emitSession("judged", 42, judged);
-  emitSession("published", 42);
-
-  return { events, states: events.map((e) => e.type === "session" ? e.state : e.type), logs: h.logs };
+  const emitSession = sessionEmitter((ev) => events.push(ev), "woon", "2026-09-25");
+  for (const state of states) {
+    if (state !== "collecting" && state !== "judged" && state !== "published") emitSession(state, EVENT_SESSION_ID);
+  }
+  const judged = judgedProgress(record);
+  if (judged) emitSession("judged", EVENT_SESSION_ID, judged);
+  emitSession("published", EVENT_SESSION_ID);
+  return events.map((e) => (e.type === "session" ? e.state : e.type));
 }
 
 describe("the progress stream reports the judging (#817)", () => {
-  test("`shadow` — a driver-run session emits aggregated, judged, published IN THAT ORDER", async () => {
-    const { events, states } = await judgeSegmentStream("shadow");
-    expect(states).toEqual(["aggregated", "judged", "published"]);
-    const judged = events[1];
-    expect(judged).toEqual({
-      type: "session",
-      state: "judged",
-      sessionId: 42,
-      subject: "woon",
-      date: "2026-08-31",
-      judgeMode: "shadow",
-      // Issue #969: the stream carries WHO AUTHORED the opinion, not only the
-      // mode it was recorded under.
-      judgeSource: "model",
-    });
+  test("a judgement on the record — aggregated, judged, published IN THAT ORDER", () => {
+    expect(settlementStream(["window_closed", "aggregated", "judging", "judged", "published"], { recorded: 1, source: "model" }))
+      .toEqual(["window_closed", "aggregated", "judging", "judged", "published"]);
   });
 
-  test("`off` — the shipped default — emits aggregated, published and NO judged", async () => {
-    const { states, events } = await judgeSegmentStream("off");
-    // This is the distinction the stream could not previously draw: "nothing
-    // was judged" now looks different from "a judgement was recorded and
-    // deliberately not applied".
-    expect(states).toEqual(["aggregated", "published"]);
-    expect(events.some((e) => e.type === "session" && e.state === "judged")).toBe(false);
+  test("`off` or `no_consensus` — nothing recorded — emits NO judged", () => {
+    expect(settlementStream(["window_closed", "aggregated", "published"], { recorded: 0, source: null }))
+      .toEqual(["window_closed", "aggregated", "published"]);
   });
 
-  test("`enforce` is distinguishable from `shadow` ON THE STREAM, not just in the database", async () => {
-    const shadow = await judgeSegmentStream("shadow");
-    const enforce = await judgeSegmentStream("enforce");
-    expect(shadow.states).toEqual(enforce.states); // same states…
-    const modeOf = (s: { events: SessionEvent[] }) =>
-      s.events.find((e) => e.type === "session" && e.state === "judged") as Extract<SessionEvent, { type: "session" }>;
-    // …so if the mode did not ride on the payload, a viewer could not tell a
-    // withheld judgement from an applied one at all.
-    expect(modeOf(shadow).judgeMode).toBe("shadow");
-    expect(modeOf(enforce).judgeMode).toBe("enforce");
-  });
-
-  test("a judging that LANDS AFTER THE WAIT EXPIRES still produces the event", async () => {
-    // review-reliability on PR #797: on the single-worker swarm lane the expiry
-    // is usually a false alarm — publish is enqueued only after this wait
-    // returns and cannot be claimed while the judge holds the lane, so the
-    // judging still lands. An event keyed on `judged` (the wait's opinion)
-    // would drop it; this one is keyed on the RECORD.
-    const { states, events, logs } = await judgeSegmentStream("shadow", { waitFails: true, recorded: 1 });
-    expect(states).toEqual(["aggregated", "judged", "published"]);
-    expect((events[1] as Extract<SessionEvent, { type: "session" }>).judgeMode).toBe("shadow");
-    // …and the log now agrees with the stream instead of contradicting it.
-    expect(logs.join("\n")).toContain("1 judgement row(s) ARE recorded");
-    expect(logs.join("\n")).not.toContain("did not reach 'judged' in time");
-  });
-
-  test("an expiry with NOTHING recorded emits no judged — the stream and the log say the same thing", async () => {
-    const { states, logs } = await judgeSegmentStream("shadow", { waitFails: true, recorded: 0 });
-    expect(states).toEqual(["aggregated", "published"]);
-    expect(logs.join("\n")).toContain("NO judgement row was recorded");
-  });
-
-  test("an unreadable judgement record is not treated as a judging", async () => {
-    // `null` means "could not read", which is not `0` and is certainly not a
-    // judgement. Claiming `judged` here would put a fact on the stream that
-    // nothing established.
-    const { states } = await judgeSegmentStream("shadow", { waitFails: true, recorded: null });
-    expect(states).toEqual(["aggregated", "published"]);
-  });
-
-  test("an unreadable judge switch emits no judged either", async () => {
-    expect((await judgeSegmentStream(null)).states).toEqual(["aggregated", "published"]);
+  test("an unreadable record is not treated as a judging", () => {
+    expect(settlementStream(["window_closed", "aggregated", "published"], { recorded: null, source: null })).not.toContain("judged");
   });
 });
 
 describe("judgedProgress — the decision, graded directly", () => {
-  const outcome = (o: Partial<Parameters<typeof judgedProgress>[0]>) =>
-    judgedProgress({ mode: null, waitedForJudged: false, judged: false, recorded: null, ...o });
-
-  test("it fires only for shadow/enforce, and only when a judging actually landed", () => {
-    expect(outcome({ mode: "shadow", judged: true })).toEqual({ judgeMode: "shadow" });
-    expect(outcome({ mode: "enforce", judged: true })).toEqual({ judgeMode: "enforce" });
-    expect(outcome({ mode: "shadow", judged: false, recorded: 3 })).toEqual({ judgeMode: "shadow" });
-    expect(outcome({ mode: "shadow", judged: false, recorded: 0 })).toBeNull();
-    expect(outcome({ mode: "shadow", judged: false, recorded: null })).toBeNull();
-    expect(outcome({ mode: "off", judged: false })).toBeNull();
-    expect(outcome({ mode: null, judged: false })).toBeNull();
-  });
-
-  test("`off` can never emit, even if the record somehow says otherwise", () => {
-    // Belt and braces on the acceptance criterion: `off` is the shipped
-    // default and must stay silent whatever else is true.
-    expect(outcome({ mode: "off", judged: true, recorded: 9 })).toBeNull();
+  test("it fires only when a judgement is on the record, and carries who authored it", () => {
+    expect(judgedProgress({ recorded: 1, source: "model" })).toEqual({ judgeMode: "enforce", judgeSource: "model" });
+    expect(judgedProgress({ recorded: 2, source: null })).toEqual({ judgeMode: "enforce" });
+    expect(judgedProgress({ recorded: 0, source: "model" })).toBeNull();
+    expect(judgedProgress({ recorded: null, source: null })).toBeNull();
   });
 });
 
 // ---------------------------------------------------------------------------
-// SOURCE-TEXT CHECK on the EVENT's position and on the return no longer being
-// discarded — the two things judgeSegmentStream above mirrors and therefore
-// cannot itself prove.
+// SOURCE-TEXT CHECK on runSession's ORDER: settle, then read the record, then
+// announce judged, then published.
 // ---------------------------------------------------------------------------
+const SETTLE = "await waitForSettlement(";
 const JUDGED_EMIT = 'if (judged) emitSession("judged", sessionId, judged);';
+const PUBLISHED_EMIT = 'emitSession("published", sessionId);';
 
-export function judgedEventOrder(src: string) {
+function settleOrder(src: string) {
+  const settle = src.indexOf(SETTLE);
   return {
-    aggregated: src.indexOf('emitSession("aggregated", sessionId);'),
-    judged: src.indexOf(JUDGED_EMIT),
-    published: src.indexOf('emitSession("published", sessionId);'),
+    open: src.indexOf("await waitForSchedulerEpoch("),
+    window: src.indexOf("await waitUntilWindowCloses("),
+    settle,
+    judged: src.indexOf(JUDGED_EMIT, settle),
+    published: src.indexOf(PUBLISHED_EMIT, settle),
   };
 }
 
-describe("runSession emits `judged` between `aggregated` and `published`", () => {
-  const order = judgedEventOrder(sessionSrc);
-
-  test("the event exists at all", () => {
-    for (const [name, at] of Object.entries(order)) expect(`${name}:${at >= 0}`).toBe(`${name}:true`);
+describe("runSession observes: epoch, window, settlement, judged, published", () => {
+  test("every landmark is present and in order", () => {
+    const o = settleOrder(sessionSrc);
+    for (const [name, at] of Object.entries(o)) expect({ name, at: at > -1 }).toEqual({ name, at: true });
+    expect(o.open).toBeLessThan(o.window);
+    expect(o.window).toBeLessThan(o.settle);
+    expect(o.settle).toBeLessThan(o.judged);
+    expect(o.judged).toBeLessThan(o.published);
   });
 
-  test("aggregated, then judged, then published", () => {
-    expect(order.aggregated).toBeLessThan(order.judged);
-    expect(order.judged).toBeLessThan(order.published);
-  });
-
-  test("the judge step's return value is READ, not discarded", () => {
-    // The whole defect: `await runJudgeStep(...)` with the result dropped.
-    expect(sessionSrc).toContain("const judgeOutcome = await runJudgeStep(sessionId, date, subject.id, rail.automationToken);");
-    expect(sessionSrc).toContain("const judged = judgedProgress(judgeOutcome);");
-  });
-
-  test("the emit is guarded — runSession never announces a judging unconditionally", () => {
-    expect(sessionSrc).not.toContain('emitSession("judged", sessionId);');
-  });
-});
-
-describe("red controls: the judged-event graders must REPORT a regression", () => {
-  test("it catches the event being deleted", () => {
-    expect(judgedEventOrder(sessionSrc.replace(JUDGED_EMIT, "")).judged).toBe(-1);
-  });
-
-  test("it catches the event being moved after the publish", () => {
-    const broken = sessionSrc
-      .replace(JUDGED_EMIT, "")
-      .replace('emitSession("published", sessionId);', `emitSession("published", sessionId);\n  ${JUDGED_EMIT}`);
-    const o = judgedEventOrder(broken);
-    expect(o.judged).toBeGreaterThan(o.published);
-  });
-
-  test("it catches the guard being dropped, which would announce a judging in `off`", () => {
-    const broken = sessionSrc.replace(JUDGED_EMIT, 'emitSession("judged", sessionId);');
-    expect(broken).toContain('emitSession("judged", sessionId);');
-    expect(judgedEventOrder(broken).judged).toBe(-1);
+  test("red control: a published announced before the judged is reported", () => {
+    const broken = sessionSrc.replace(JUDGED_EMIT, "").replace(PUBLISHED_EMIT, `${PUBLISHED_EMIT}\n  ${JUDGED_EMIT}`);
+    const o = settleOrder(broken);
+    expect(o.judged > o.published).toBe(true);
   });
 });

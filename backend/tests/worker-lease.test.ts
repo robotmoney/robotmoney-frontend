@@ -8,6 +8,7 @@
 // Runs in the required backend-integration job against ephemeral Postgres.
 import { test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { processOneJob, releaseOwnedJobs } from "../src/worker/loop.ts";
 import { LANES } from "../src/worker/lanes.ts";
@@ -39,9 +40,9 @@ afterAll(() => {
 });
 beforeEach(async () => {
   slowGate = gate();
-  await sql`DELETE FROM job_runs`;
-  await sql`DELETE FROM jobs`;
-  await sql`DELETE FROM job_schedules`;
+  await fixtureDb`DELETE FROM job_runs`;
+  await fixtureDb`DELETE FROM jobs`;
+  await fixtureDb`DELETE FROM job_schedules`;
 });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -57,12 +58,12 @@ async function waitForStatus(id: number, status: string, ms: number): Promise<vo
 }
 
 test("a live handler renews its lease across shortened visibility windows; only the abandoned control is reaped", async () => {
-  const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_slow', '{}') RETURNING id`;
-  const running = processOneJob({ lane: LANES.research, workerId: "lease-owner" });
+  const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload) VALUES ('research.test_slow', '{}') RETURNING id`;
+  const running = processOneJob({ lane: LANES.generic, workerId: "lease-owner" });
   await waitForStatus(id, "running", 2000);
 
   // Abandoned-worker control: 'running' with a stale lock and NO heartbeats.
-  const [{ id: control }] = await sql`
+  const [{ id: control }] = await fixtureDb`
     INSERT INTO jobs (kind, payload, status, locked_at, locked_by, attempts, max_attempts)
     VALUES ('research.test_ctl', '{}', 'running', now() - interval '1 minute', 'dead-worker', 1, 5) RETURNING id`;
 
@@ -80,9 +81,9 @@ test("a live handler renews its lease across shortened visibility windows; only 
   expect(Date.now() - new Date(live.locked_at).getTime()).toBeLessThan(2000); // renewed recently
 
   // No second worker can claim or execute it concurrently.
-  await sql`UPDATE jobs SET run_after = now() WHERE id = ${control}`; // skip the requeue backoff
-  expect(await processOneJob({ lane: LANES.research, workerId: "lease-thief" })).toBe(true); // claims the reaped CONTROL...
-  expect(await processOneJob({ lane: LANES.research, workerId: "lease-thief" })).toBe(false); // ...but never the live job
+  await fixtureDb`UPDATE jobs SET run_after = now() WHERE id = ${control}`; // skip the requeue backoff
+  expect(await processOneJob({ lane: LANES.generic, workerId: "lease-thief" })).toBe(true); // claims the reaped CONTROL...
+  expect(await processOneJob({ lane: LANES.generic, workerId: "lease-thief" })).toBe(false); // ...but never the live job
   slowGate.open();
   expect(await running).toBe(true);
   await waitForStatus(id, "succeeded", 2000);
@@ -92,12 +93,12 @@ test("a live handler renews its lease across shortened visibility windows; only 
 });
 
 test("lost lock mid-flight cancels the run: terminal write discarded, no duplicate job_runs", async () => {
-  const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_slow', '{}') RETURNING id`;
-  const running = processOneJob({ lane: LANES.research, workerId: "cancel-owner" });
+  const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload) VALUES ('research.test_slow', '{}') RETURNING id`;
+  const running = processOneJob({ lane: LANES.generic, workerId: "cancel-owner" });
   await waitForStatus(id, "running", 2000);
 
   // Steal the lock (what a reap + reclaim by another worker does).
-  await sql`UPDATE jobs SET locked_by = 'usurper', locked_at = now() WHERE id = ${id}`;
+  await fixtureDb`UPDATE jobs SET locked_by = 'usurper', locked_at = now() WHERE id = ${id}`;
   await sleep(700); // > one renewal tick: the owner observes the loss and stops renewing
 
   slowGate.open();
@@ -110,8 +111,8 @@ test("lost lock mid-flight cancels the run: terminal write discarded, no duplica
 });
 
 test("releaseOwnedJobs returns a worker's in-flight jobs to pending (shutdown path)", async () => {
-  const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_slow', '{}') RETURNING id`;
-  const running = processOneJob({ lane: LANES.research, workerId: "release-owner" });
+  const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload) VALUES ('research.test_slow', '{}') RETURNING id`;
+  const running = processOneJob({ lane: LANES.generic, workerId: "release-owner" });
   await waitForStatus(id, "running", 2000);
 
   expect(await releaseOwnedJobs("release-owner")).toBe(1);

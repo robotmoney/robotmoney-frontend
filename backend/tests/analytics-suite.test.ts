@@ -12,6 +12,7 @@
 // Deterministic + network-free. Loud-fails if the DB is absent (preload never skips).
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { runAnalytics } from "../src/analytics/index.ts";
 import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import type { Point } from "../src/analytics/types.ts";
@@ -82,8 +83,8 @@ test(
     const gt = expected[expected.length - 1]; // the freshly-computed (non-frozen) as-of row
     expect(gt.date).toBe(ASOF);
 
-    await sql`DELETE FROM raw_indicator_history`;
-    await sql`DELETE FROM research_signals WHERE date = ${ASOF}`;
+    await fixtureDb`DELETE FROM raw_indicator_history`;
+    await fixtureDb`DELETE FROM research_signals WHERE date = ${ASOF}`;
 
     const results = await runAnalytics(ASOF, undefined, await fixtureSource(), directAnalyticsPersistence);
     expect(Object.keys(results).sort()).toEqual(["channel-divergence", "late-cycle-signals", "regime"]);
@@ -246,7 +247,7 @@ test(
     // `date` is a STORED generated column derived from `convened_at` (issue
     // #150/committee_session_convened_at) — bind this session to ASOF by
     // setting the column it is actually generated from.
-    await sql`UPDATE swarm_sessions SET convened_at = ${ASOF}::date WHERE id = ${session.id}`;
+    await fixtureDb`UPDATE swarm_sessions SET convened_at = ${ASOF}::date WHERE id = ${session.id}`;
     await swarmDomain.publishBrief(session.id, 60);
     const [brief] = await sql`SELECT report_snapshot_id FROM swarm_briefs WHERE session_id = ${session.id}`;
     expect(brief.report_snapshot_id).not.toBeNull();

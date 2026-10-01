@@ -1,14 +1,18 @@
-// Alpine factory for /admin/swarm: topics/members/sessions overview,
-// topic create, member manual-add (one-time credential reveal), and session
-// scheduling. Issue #159 — see docs/architecture.md §4 US-C1/US-C2/US-C3.
+// Alpine factory for /admin/swarm: topics/members/sessions overview, topic
+// create and member manual-add (one-time credential reveal). Issue #159 — see
+// docs/architecture.md §4 US-C1/US-C2/US-C3.
+//
+// SESSIONS ARE OBSERVED, NEVER CREATED HERE (issue #1026, D55 decision 4). The
+// session-scheduling form is gone with the route it posted to: sessions are
+// epochs that `system-scheduler` opens and turns over, and an admin observes
+// them (docs/architecture/admin-surface.md US-C4). The Sessions tab lists them.
 //
 // Reconciled to the REAL backend (issue #152/PR #169, backend/src/api/routes/
 // swarm-admin.ts) per PR #172 review: routes live at
 // ROUTES.swarm.admin.* (not a since-removed ROUTES.admin.swarm.*),
 // topics/members list envelopes are keyed `subjects`/`members` (not `items`),
 // and there is no admin session-list endpoint at all — the sessions tab reads
-// the PUBLIC ROUTES.swarm.sessions list instead (issue #152's admin
-// surface only exposes session CREATE + per-session roster/lifecycle).
+// the PUBLIC ROUTES.swarm.sessions list instead.
 import { api, ROUTES, path } from "../../../lib/api.js";
 import { adminAuthState, apiErrorText, fmtUtc, fmtLocal } from "./shared.js";
 
@@ -66,30 +70,6 @@ function validateManualMember(form) {
   return errors;
 }
 
-function emptySessionForm() {
-  return { subjectId: "", date: "", briefOpensAt: "", windowClosesAt: "", publishAt: "", reason: "" };
-}
-
-function validateSession(form) {
-  const errors = {};
-  if (!form.subjectId) errors.subjectId = "Select an active topic.";
-  if (!form.date) errors.date = "Session date is required.";
-  if (!form.briefOpensAt) errors.briefOpensAt = "Brief-open time is required.";
-  if (!form.windowClosesAt) errors.windowClosesAt = "Window-close time is required.";
-  if (!form.publishAt) errors.publishAt = "Publish time is required.";
-  if (form.briefOpensAt && form.windowClosesAt && form.publishAt) {
-    const opens = Date.parse(form.briefOpensAt);
-    const closes = Date.parse(form.windowClosesAt);
-    const publishes = Date.parse(form.publishAt);
-    if (!(opens < closes && closes < publishes)) {
-      errors.order = "Times must satisfy briefOpensAt < windowClosesAt < publishAt.";
-    }
-  }
-  const reasonErr = reasonError(form.reason);
-  if (reasonErr) errors.reason = reasonErr;
-  return errors;
-}
-
 export function registerAdminSwarmOverview(Alpine) {
   Alpine.data("adminSwarmOverview", () => ({
     ...adminAuthState(),
@@ -116,10 +96,6 @@ export function registerAdminSwarmOverview(Alpine) {
     showMemberForm: false,
     credentialReveal: null, // { memberId, token }
 
-    sessionForm: emptySessionForm(),
-    sessionErrors: {},
-    sessionSubmitting: false,
-    showSessionForm: false,
 
     fmtUtc, fmtLocal,
 
@@ -172,9 +148,6 @@ export function registerAdminSwarmOverview(Alpine) {
       return this.members.filter((m) => (m.status || "applied") === this.memberFilter);
     },
 
-    activeTopics() {
-      return this.topics.filter((t) => t.status === "active");
-    },
 
     // ── Topic create ─────────────────────────────────────────────────────
     addWalletRow() { this.topicForm.wallets.push({ address: "", chain: "", label: "" }); },
@@ -249,25 +222,6 @@ export function registerAdminSwarmOverview(Alpine) {
       }
     },
     dismissCredential() { this.credentialReveal = null; },
-
-    // ── Session scheduling ───────────────────────────────────────────────
-    async submitSession() {
-      this.sessionErrors = validateSession(this.sessionForm);
-      if (Object.keys(this.sessionErrors).length > 0) return;
-      this.sessionSubmitting = true;
-      try {
-        const body = { ...this.sessionForm };
-        await api.adminPost(ROUTES.swarm.admin.sessionCreate, this._token(), body);
-        this.showSessionForm = false;
-        this.sessionForm = emptySessionForm();
-        await this.loadAll();
-      } catch (e) {
-        if (e.status === 403) return this._handle403();
-        this.sessionErrors.form = e.message;
-      } finally {
-        this.sessionSubmitting = false;
-      }
-    },
 
     stateClass(state) {
       const s = String(state || "");

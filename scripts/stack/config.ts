@@ -18,6 +18,7 @@
 //   3. Nothing here has an inference-off, injection, or skip affordance
 //      (D22 §11.3 E2). A missing dependency is the caller's problem to throw
 //      about, never something this layer papers over.
+import { join } from "node:path";
 import type { RmEnv } from "../../backend/src/acceptance-path.ts";
 import {
   ENV_CLASS_COMPOSE_VAR,
@@ -31,26 +32,29 @@ import {
 // origin every browser- and BACKEND_URL-based consumer of this stack loads
 // pages from (issue #892 — website-server/nginx.conf proxies /api/ and
 // /health to api, so the two together still present as one origin). `full`
-// adds the three worker execution lanes that the standing smoke drives. The
+// adds the two worker execution lanes the standing smoke drives, the
+// `system-scheduler` clock (issue #1026) and the independent producer. The
 // member-agent service is deliberately in NEITHER *running* list: it is
-// compose-profile gated (docker-compose.smoke.yml `profiles:
+// compose-profile gated (docker-compose.yml `profiles:
 // ["member-agent"]`) and is only ever started one-shot via `docker compose
 // run`.
 export type StackProfile = "core" | "full";
 
 export const CORE_SERVICES = ["postgres", "api", "website-server"] as const;
-export const WORKER_LANE_SERVICES = ["worker-swarm", "worker-analytics", "worker-research"] as const;
+export const WORKER_LANE_SERVICES = ["worker-analytics"] as const;
+// The clock (issue #1026). NOT a worker lane and deliberately its own list: it
+// claims no jobs, holds no database credential and shares none of the lanes'
+// wiring — system-scheduler-spec.md §1 gives it a database connection of
+// "**No.** Never." Anything that reasons about lanes (external-pg's
+// depends_on surgery, the lane telemetry tiles) must not pick it up by
+// accident, and anything that reasons about "the full stack" must.
+export const SCHEDULER_SERVICES = ["system-scheduler"] as const;
 export const PRODUCER_SERVICES = ["analytics-producer"] as const;
-// The one service that holds the Docker socket (issue #1012). It belongs to
-// `full` and NOT to `core` for the same reason the worker lanes do: `core` is
-// postgres + api + the static origin, which never judges a session and so never
-// needs a container started on its behalf. A `full` stack DOES judge, and a
-// judge with no launcher fails closed with `launcher_unavailable` on every
-// session — so leaving it out of this list would make the stack's own judging
-// permanently broken rather than merely unconfigured.
-export const LAUNCHER_SERVICES = ["agent-launcher"] as const;
 export const FULL_SERVICES = [
-  ...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES, ...LAUNCHER_SERVICES,
+  ...CORE_SERVICES,
+  ...WORKER_LANE_SERVICES,
+  ...SCHEDULER_SERVICES,
+  ...PRODUCER_SERVICES,
 ] as const;
 export const MEMBER_AGENT_SERVICE = "member-agent" as const;
 
@@ -83,11 +87,46 @@ export function buildServicesFor(profile: StackProfile, opts: { externalPostgres
   return profile === "full" ? [...running, MEMBER_AGENT_SERVICE] : running;
 }
 
+/**
+ * The build context of every service this repository BUILDS, relative to the
+ * repository root, exactly as the compose files declare it (`postgres` is a
+ * pulled image and has none).
+ *
+ * This is the plan id's image input (smoke spec §1.2 as amended by D52): each
+ * image hashes as the Git tree of its build context, so a rebuild from
+ * unchanged sources keeps the plan id and a changed source moves it. A literal
+ * map rather than a parse of the compose file at boot, because the boot must
+ * compute the plan BEFORE its first mutation and without a Docker round-trip;
+ * scripts/tests/integration/smoke-compose-config.test.ts renders the real
+ * compose config and fails when this map and the files disagree.
+ */
+export const SERVICE_BUILD_CONTEXTS: Readonly<Record<string, string>> = Object.freeze({
+  api: ".",
+  "website-server": "website-server",
+  "worker-analytics": ".",
+  "system-scheduler": ".",
+  "analytics-producer": ".",
+  [MEMBER_AGENT_SERVICE]: ".",
+});
+
+/** The build context of each service {@link buildServicesFor} builds for `profile`. */
+export function buildContextsFor(
+  profile: StackProfile,
+  opts: { externalPostgres?: boolean } = {},
+): Record<string, string> {
+  const contexts: Record<string, string> = {};
+  for (const service of buildServicesFor(profile, opts)) {
+    const context = SERVICE_BUILD_CONTEXTS[service];
+    if (context !== undefined) contexts[service] = context;
+  }
+  return contexts;
+}
+
 // The compose file list every consumer of this module defaults to. The smoke
 // overrides it (it may append the stage overlay and/or a generated pg-data bind
 // overlay); the eval harness and the rails check, which today each spell their
 // own copy out, take this one as they adopt the module.
-export const DEFAULT_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.smoke.yml"];
+export const DEFAULT_COMPOSE_FILES = ["docker-compose.yml"];
 
 // The `bun run smoke -- --stage` overlay: the ONLY file in the repo that names a
 // host port. APPENDED to the list above (never a replacement, and never
@@ -139,6 +178,24 @@ export interface StackDatabase {
    * real secret. Print `redactPostgresUrl()` instead.
    */
   url?: string;
+  /**
+   * THE RUNTIME ROLES' OWN URLS, as a container reaches the database: `app`
+   * for `api` (rm_app) and `worker` for the pipeline worker (rm_worker). When
+   * set, they are what buildComposeEnv() emits as DATABASE_URL and
+   * WORKER_DATABASE_URL, and no container is handed any other database login
+   * (smoke-production-spec §3, §7.2, §7.3: "tests connect as
+   * rm_app/rm_worker/rm_readonly, and nothing uses the superuser again").
+   * `bun smoke` always sets them — from the instance's generated passwords for
+   * a local mode, from `~/.env` for the remote database.
+   *
+   * Unset (a consumer that has not moved onto the role taxonomy, such as the
+   * onboarding eval's `core` stack), both variables fall back to the one URL
+   * above: that consumer's single legacy login, stated explicitly rather than
+   * left to docker-compose.yml, which no longer falls back from one to the other.
+   *
+   * NEVER log or serialize these.
+   */
+  roleUrls?: { readonly app: string; readonly worker: string };
 }
 
 // The baked-in smoke credentials (previously spelled out in smoke-main.ts). They
@@ -170,26 +227,27 @@ export function hostBackendUrl(port: number): string {
   return `http://127.0.0.1:${port}`;
 }
 
-// ── Credentials ─────────────────────────────────────────────────────────────
-export interface StackCredentials {
-  // Guards the /admin task-queue dashboard (X-Admin-Token) and every swarm
-  // admin route. Fresh per stack.
-  adminToken: string;
-  automationToken: string;
-  // Analytics-provider bearer (issue #106): the api verifies it, the worker
-  // submits with it. Fresh per stack, never printed anywhere.
-  analyticsToken: string;
-  /** Optional host path mounted as a Docker secret; avoids placing the token in child env. */
-  analyticsTokenFile?: string;
-}
+// ── Service tokens ──────────────────────────────────────────────────────────
+// NOT A CONFIG FIELD (smoke-production spec §3, D52). A stack carries no
+// service credential of any kind: the operator's admin token, the analytics
+// producer's and the scheduler's are each a row in the api's automation-token
+// store plus a per-holder file in the instance's state directory
+// (`tokens/<holder>/token`, scripts/lib/smoke-state.ts). docker-compose.yml
+// mounts each holder's own directory into that holder's container and hands the
+// api nothing. So there is nothing here to generate and nothing for
+// buildComposeEnv() to emit: the file under RM_INSTANCE_STATE_DIR is the whole
+// delivery.
 
-// A FUNCTION, called by the caller — never executed on import (invariant 1).
-export function generateStackCredentials(): StackCredentials {
-  return {
-    adminToken: crypto.randomUUID().replace(/-/g, "").slice(0, 20),
-    automationToken: crypto.randomUUID().replace(/-/g, "").slice(0, 20),
-    analyticsToken: crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, ""),
-  };
+/**
+ * The holders whose token file a `full` stack's containers mount: compose
+ * mounts each one's own directory into that holder (and the producer's into
+ * the worker's analytics client). The operator's never enters a container.
+ */
+export const CONTAINER_TOKEN_HOLDERS = ["system-scheduler", "analytics-producer"] as const;
+
+/** `tokens/<holder>/token` under an instance's state directory (smoke-state.ts `InstancePaths.tokenFiles`). */
+export function serviceTokenFile(stateDir: string, holder: "system-scheduler" | "analytics-producer" | "operator"): string {
+  return join(stateDir, "tokens", holder, "token");
 }
 
 // ── Config object ───────────────────────────────────────────────────────────
@@ -205,7 +263,6 @@ export interface StackConfig {
   // has to be filled in before the daemon is asked.
   composeFiles: string[];
   database: StackDatabase;
-  credentials: StackCredentials;
   // WHICH ENVIRONMENT started this stack (scripts/stack/naming.ts). REQUIRED,
   // not optional: it is the input to both the compose project name AND the
   // labels every container carries, and an optional field is one a spawner
@@ -230,6 +287,14 @@ export interface StackConfig {
    * resolves it with resolveStackRmEnv(), which knows the KIND of boot.
    */
   rmEnv?: RmEnv;
+  /**
+   * Whether `api` runs allow-insecure (RM_ALLOW_INSECURE=1: a privileged route
+   * with no token configured opens instead of refusing). Emitted by
+   * buildComposeEnv() and never accepted from extraComposeEnv. Absent means
+   * false: secure by default. Only `bun smoke --allow-insecure` sets it, and
+   * that flag is a refusal under `RM_ENV=prod` (scripts/lib/smoke-compose-env.ts).
+   */
+  allowInsecure?: boolean;
   // Extra compose interpolation values a specific consumer needs (the smoke
   // passes its resolved data-path env here). Merged LAST so a consumer can
   // extend, and deliberately never sourced from the ambient environment.
@@ -246,10 +311,51 @@ export interface StackConfig {
    * artifacts an exported variable can change.
    */
   imagesOverride?: string;
+  /**
+   * The deployment instance this stack belongs to (smoke spec §1.1) and its
+   * state directory. buildComposeEnv() emits both as `RM_INSTANCE` and
+   * `RM_INSTANCE_STATE_DIR`, which docker-compose.yml interpolates for the
+   * system-scheduler's token mount and website-server's site mount.
+   *
+   * Optional in the TYPE, required by the COMPOSE FILE: docker-compose.yml
+   * spells both with `:?`, so a stack that omits it fails compose's own
+   * interpolation, loudly, instead of mounting a checkout path. That is the
+   * point — the fallback it replaces (`./.agents/state`) put a credential
+   * mount inside the checkout.
+   */
+  instance?: StackInstance;
+}
+
+/** A deployment instance as a compose stack needs it: its name and its absolute state directory. */
+export interface StackInstance {
+  readonly name: string;
+  /** Absolute: a relative path would resolve against the compose file, i.e. the checkout. */
+  readonly stateDir: string;
+}
+
+/** The compose interpolation variables that carry {@link StackConfig.instance}. */
+export const INSTANCE_COMPOSE_VAR = "RM_INSTANCE";
+export const INSTANCE_STATE_DIR_COMPOSE_VAR = "RM_INSTANCE_STATE_DIR";
+
+/**
+ * `RM_INSTANCE` and `RM_INSTANCE_STATE_DIR` for one instance. Also what
+ * `smoke:status` / `smoke:down` add when they rebuild a stopped stack's env,
+ * because compose refuses to parse the file without them.
+ *
+ * Refuses a relative state directory, for the reason on
+ * {@link StackInstance.stateDir}.
+ */
+export function instanceComposeEnv(instance: StackInstance): Record<string, string> {
+  if (!instance.stateDir.startsWith("/")) {
+    throw new Error(
+      `Refusing: instance ${instance.name}'s state directory ${instance.stateDir} is relative; compose would resolve it inside the checkout.`,
+    );
+  }
+  return { [INSTANCE_COMPOSE_VAR]: instance.name, [INSTANCE_STATE_DIR_COMPOSE_VAR]: instance.stateDir };
 }
 
 // ── Compose env (PURE) ──────────────────────────────────────────────────────
-// Exactly the interpolation values docker-compose.yml / docker-compose.smoke.yml
+// Exactly the interpolation values docker-compose.yml
 // need, and nothing else. Deliberately does NOT spread the caller's ambient
 // environment, and deliberately does NOT set COMPOSE_FILE / COMPOSE_PROJECT_NAME:
 // topology is expressed as argv (`-p` / `-f`, see composeArgs) so a stale
@@ -262,25 +368,29 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
         "stack's configuration (D13).",
     );
   }
-  if (cfg.profile === "full" && !cfg.credentials.analyticsTokenFile) {
-    throw new Error(
-      "full stack profile requires credentials.analyticsTokenFile for the independent analytics producer",
-    );
+  if (cfg.extraComposeEnv && "RM_ALLOW_INSECURE" in cfg.extraComposeEnv) {
+    throw new Error("RM_ALLOW_INSECURE must not be passed through extraComposeEnv — it is a StackConfig field (`allowInsecure`).");
+  }
+  for (const key of [INSTANCE_COMPOSE_VAR, INSTANCE_STATE_DIR_COMPOSE_VAR]) {
+    if (cfg.extraComposeEnv && key in cfg.extraComposeEnv) {
+      throw new Error(`${key} must not be passed through extraComposeEnv; it comes from StackConfig.instance.`);
+    }
   }
   return {
     SMOKE_PROJECT: cfg.project,
     // The environment labels every smoke-overlay service and the pgdata volume
-    // stamp (docker-compose.smoke.yml). Threaded through compose interpolation
+    // stamp (docker-compose.yml). Threaded through compose interpolation
     // rather than applied by a wrapper so a bare `docker compose -f … up` gets
     // them too, and so `smoke:down`/`smoke:status` reproduce them from the state
     // file without a second code path.
     [ENV_CLASS_COMPOSE_VAR]: cfg.environment.class,
     [ENV_HASH_COMPOSE_VAR]: cfg.environment.hash,
-    DATABASE_URL: internalDatabaseUrl(cfg.database),
-    ADMIN_TOKEN: cfg.credentials.adminToken,
-    AUTOMATION_TOKEN: cfg.credentials.automationToken,
-    ANALYTICS_TOKEN: cfg.credentials.analyticsTokenFile ? "" : cfg.credentials.analyticsToken,
-    ANALYTICS_TOKEN_FILE_HOST: cfg.credentials.analyticsTokenFile ?? "/dev/null",
+    DATABASE_URL: cfg.database.roleUrls?.app ?? internalDatabaseUrl(cfg.database),
+    // The pipeline worker's credential (docker-compose.yml x-worker-env hands it
+    // to BOTH of the worker's pools, with no fallback to the api's).
+    WORKER_DATABASE_URL: cfg.database.roleUrls?.worker ?? internalDatabaseUrl(cfg.database),
+    // No service token of any kind (smoke spec §3): each holder's token is a
+    // file under RM_INSTANCE_STATE_DIR, mounted into that holder alone.
     // No WEB_PORT / POSTGRES_PORT. They were compose interpolation OUTPUTS
     // right up until the compose files stopped naming a host port at all
     // (`ports: ["8787"]` / `["5432"]` — Docker assigns the host side). Emitting
@@ -290,10 +400,15 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
     // D13: explicit, always, and NOT overridable from extraComposeEnv (asserted
     // above) — the whole point is that one place decides.
     RM_ENV: cfg.rmEnv ?? "prod",
+    // An empty value is "not insecure" (backend config.ts reads exactly "1").
+    RM_ALLOW_INSECURE: cfg.allowInsecure === true ? "1" : "",
     POSTGRES_USER: cfg.database.user,
     POSTGRES_PASSWORD: cfg.database.password,
     POSTGRES_DB: cfg.database.name,
     ...cfg.extraComposeEnv,
+    // LAST, and never from extraComposeEnv (refused above): which instance's
+    // state a container may mount is the stack's configuration, not a knob.
+    ...(cfg.instance ? instanceComposeEnv(cfg.instance) : {}),
   };
 }
 
@@ -335,8 +450,23 @@ export function buildSpawnEnv(cfg: StackConfig, hostEnv: Record<string, string |
 }
 
 // ── argv builders (PURE — every command shape is testable without Docker) ───
+// `--env-file /dev/null` is the third lock on the same door, and the only one
+// that closes it. buildSpawnEnv() hands the compose child an allowlisted
+// environment precisely so an ambient value cannot reach a container — but
+// compose ALSO loads `<project directory>/.env` by itself, for interpolation,
+// with no involvement from the environment we built. On a host whose checkout
+// carries a deployment `.env` that is not a theoretical leak: it put the
+// persistent stack's WORKER_DATABASE_URL (`…@postgres:5432`) into all three
+// worker lanes of a `--db smoke-twin` boot, which has no `postgres` service at
+// all, and every lane then died in DNS while the boot reported only unhealthy
+// workers. Dropping the name from the smoke's passthrough allowlist did NOT
+// fix it, because that allowlist was never the path — compose read the file.
+// Pointed at /dev/null, `${VAR:-default}` resolves from what buildComposeEnv()
+// put in the child's environment and from nothing else, which is what this
+// module has always claimed. Values we DO pass still win (an environment
+// variable outranks an env file), so nothing the stack owns changes.
 export function composeArgs(project: string, files: string[] = DEFAULT_COMPOSE_FILES): string[] {
-  return ["compose", "-p", project, ...files.flatMap((f) => ["-f", f])];
+  return ["compose", "--env-file", "/dev/null", "-p", project, ...files.flatMap((f) => ["-f", f])];
 }
 
 export function buildArgs(services: string[] = []): string[] {
@@ -370,12 +500,35 @@ export function composeFilesWithImagesOverride(files: string[], imagesOverride?:
 // `--no-deps` is safe (and correct) because up() waits for postgres to be ready
 // BEFORE migrating; if that ordering is ever rearranged, migrate fails loudly
 // with a connection error instead of implicitly starting postgres.
+//
+// THE MIGRATION CREDENTIAL BELONGS TO THIS EPHEMERAL CHILD, NOT TO A SERVICE.
+// `docker compose run` inherits the named service's `environment:` block, which
+// is why docker-compose.yml used to declare MIGRATE_DATABASE_URL on `api` — and
+// compose cannot scope that to the run-child, so the LONG-RUNNING api container
+// got it too, along with three worker lanes, analytics-producer and (meaning
+// nothing at all) postgres. Six persistent processes carrying a bootstrap login
+// that holds CREATEROLE and rm_owner membership, none of which ever read it:
+// `src/api/index.ts:51` says outright that the api process "invokes neither
+// migrate nor scripts/db-preflight.ts", and the worker lanes never did either.
+// That contradicts 0053's own rule -- "Runtime processes authenticate only as
+// rm_app or rm_worker" -- and deployment.md §4.3's "supply MIGRATE_DATABASE_URL
+// only to that command".
+//
+// Naming it BARE (`-e VAR`, no `=value`) rather than as a pair: docker then
+// reads the value from its own environment, which buildComposeEnv() already
+// populates through the MIGRATE_DATABASE_URL passthrough. A `-e VAR=secret`
+// pair would put the credential in the `docker compose` process's argv, where
+// `ps` shows it to every local user -- the same defect the provisioning script
+// was carrying until 2026-09-21.
+const MIGRATION_CREDENTIAL_VARS = ["MIGRATE_DATABASE_URL"] as const;
+
 export function migrateArgs(extraEnv: Record<string, string> = {}, scriptArgs: string[] = []): string[] {
   return [
     "run",
     "--rm",
     "--no-deps",
     "-T",
+    ...MIGRATION_CREDENTIAL_VARS.flatMap((k) => ["-e", k]),
     ...Object.entries(extraEnv).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
     "api",
     "bun",

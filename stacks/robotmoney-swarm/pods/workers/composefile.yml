@@ -1,10 +1,11 @@
-# workers pod: the three task-queue lanes plus the independent analytics
-# producer. Mirrors docker-compose.yml's x-worker-base / x-worker-env anchor
-# pattern — worker-swarm / worker-analytics / worker-research share the same
-# api image and differ only by WORKER_LANE (and, for worker-swarm, the judge
-# credential — see that service's own block, same reasoning as
-# docker-compose.yml: analytics/research never call a model, so the shared
-# anchor omits it).
+# workers pod: the one task-queue lane (worker-analytics) plus the independent
+# analytics producer. Mirrors docker-compose.yml's x-worker-base / x-worker-env
+# anchor pattern. The research lane is gone (issue #1026 wave 6). The worker
+# calls no model, so the shared anchor carries no inference credential.
+#
+# There is no swarm lane (issue #1026): session timing left the queue for its
+# own container, `system-scheduler` (system scheduler spec §1). This stack tree
+# does not declare that container yet — see stack.yml.
 #
 # Images are referenced by tag only — never `build:` here (field guide §3).
 #
@@ -54,52 +55,42 @@ x-worker-env: &worker-env
   # scripts/tests/integration/demo-compose-config.test.ts already asserts for
   # docker-compose.yml's identical declaration.
   OPENCODE_TIMEOUT_MS:
-  SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-}
-  SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL:-}
-  SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN:-}
 
 services:
-  worker-swarm:
-    <<: *worker-base
-    environment:
-      <<: *worker-env
-      WORKER_LANE: swarm
-      # Consensus judge (issue #752) — THIS LANE ONLY, same reasoning as
-      # docker-compose.yml: worker-analytics/worker-research never run
-      # swarm.judge, so the shared worker-env anchor omits the credential.
-      OPENCODE_API_KEY: ${STACK_SECRET_OPENCODE_API_KEY:-}
-      SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
-      SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
-
   worker-analytics:
     <<: *worker-base
     environment:
       <<: *worker-env
       WORKER_LANE: analytics
 
-  worker-research:
-    <<: *worker-base
-    environment:
-      <<: *worker-env
-      WORKER_LANE: research
-
   # Independent external producer (issue #361 Phase 4): no DATABASE_URL, no
-  # queue access, no ADMIN_TOKEN.
+  # queue access, no admin right.
   analytics-producer:
     image: robotmoney/robotmoney-producer:stack
     command: ["bun", "run", "src/producer/index.ts", "serve"]
     environment:
       ANALYTICS_API_URL: http://api:8787
-      # Plain env var, not ANALYTICS_TOKEN_FILE: stack has no docker-secrets-
-      # file mechanism, and producer/index.ts:23 already accepts either form
-      # (stack-orchestrator.md §6).
-      ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}
+      # A token FILE, never a plain env var (smoke spec §3): each service token
+      # is a file placed in the instance's state directory, named per instance
+      # and per holder, and mounted read-only, the same shape docker-compose.yml
+      # gives system-scheduler. producer/index.ts accepts ANALYTICS_TOKEN_FILE.
+      # A plain env var would put the secret in the container's environment,
+      # where every `docker inspect` shows it.
+      # `token` is TOKEN_FILE_NAME (scripts/lib/smoke-state.ts), the one file in
+      # the producer's own token directory mounted below.
+      ANALYTICS_TOKEN_FILE: /run/rm-token/token
       ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
       # No inline default — docker-compose.yml defaults these two crons;
       # forwarding-only here, same reasoning as RM_ENV above.
       PRODUCER_REGIME_CRON: ${PRODUCER_REGIME_CRON:-}
       PRODUCER_RESEARCH_CRON: ${PRODUCER_RESEARCH_CRON:-}
+    volumes:
+      # The producer's OWN token directory, never the instance directory (which
+      # holds role-passwords.json and every other holder's token), and no
+      # default: a missing value fails interpolation instead of mounting a
+      # checkout path.
+      - ${RM_INSTANCE_STATE_DIR:?RM_INSTANCE_STATE_DIR is required}/tokens/analytics-producer:/run/rm-token:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "bun", "run", "src/ops/healthcheck.ts"]

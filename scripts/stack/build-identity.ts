@@ -13,6 +13,12 @@
 // thin shell that obtains them through the caller's own runner, so the stack's
 // single spawn seam (StackRuntime) stays the only place a child process is
 // created.
+//
+// NOT THE PLAN'S IMAGE IDENTITY. This commit-and-tag pair is what an image
+// reports about itself at /version. The deployment plan id (smoke-production
+// spec §1.2, D52) hashes something narrower and stricter: the Git tree of each
+// image's build context, dirty edits included. That lives in
+// scripts/stack/source-identity.ts, which refuses where this module degrades.
 
 /** The compose interpolation variables docker-compose.yml's build args read. */
 export const BUILD_COMMIT_COMPOSE_VAR = "RM_BUILD_COMMIT";

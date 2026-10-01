@@ -1,3 +1,6 @@
+-- compat: breaking
+-- metadata_version: 1
+--
 -- Issues #1035 and #1050: return the analytics ledger to the state the fixed
 -- writers would have left it in, as if the re-observation / float-noise bug had
 -- never shipped, and give vintage membership a representation that does not copy
@@ -46,7 +49,7 @@
 --      have to reproduce JavaScript's number formatting byte for byte), and runs
 --      in THIS transaction, straight after this file, from the migration runner
 --      (IN_TRANSACTION_AFTER_MIGRATION in src/db/migrate.ts →
---      rebuildVintageManifests in src/analytics/store/run-ledger-store.ts).
+--      rebuildVintageManifests in src/db/migrate.ts).
 --      The old digests are overwritten, not kept anywhere.
 --
 -- Every scratch table below is TEMP ... ON COMMIT DROP: it lives for this

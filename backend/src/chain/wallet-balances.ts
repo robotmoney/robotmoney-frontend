@@ -22,6 +22,7 @@ import {
   type TrackedAsset,
 } from "../config.ts";
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import {
   QUARANTINED_PROVENANCE,
   readChainAmountsBatched,
@@ -30,7 +31,7 @@ import {
   type KeyedAssetRead,
   type Provenance,
 } from "./wallet-valuation.ts";
-import { ASSET_PRICE_TIME_BASIS } from "../ops/asset-prices.ts";
+import { ASSET_PRICE_TIME_BASIS } from "../ops/asset-price-basis.ts";
 import { ttlCached } from "./ttl-cache.ts";
 
 // Provenance ('seed' = a pre-launch backfilled history row, never a live chain
@@ -166,6 +167,80 @@ async function readChainAmounts(assets: TrackedAsset[], wallets: string[]): Prom
   return out;
 }
 
+// Every statement below is a registered query (smoke-production-spec.md §7.1).
+// The live read (fetchWalletBalances) is the wallet sampler's; the persisted
+// read (fetchPersistedWalletBalances) is GET /api/dashboards/wallet-balances.
+const lastHolding = registerQuery({
+  role: "rm_app",
+  object: "wallet_balance_samples",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-balances:lastPersistedHolding",
+  purpose: "Read a symbol's newest non-quarantined sample, for the stale-degrade path of a failed live read.",
+  callers: ["src/worker/handlers/wallet"],
+  probe: {
+    statement: `SELECT amount, price_usd, value_usd FROM wallet_balance_samples
+      WHERE symbol = $1 AND provenance <> $2 AND superseded_at IS NULL ORDER BY sample_date DESC LIMIT 1`,
+    params: ["USDC", QUARANTINED_PROVENANCE],
+  },
+});
+
+// The joined read below, as tests/db-registry-execution.test.ts runs it: the
+// call site's own statement (that test holds the two to the same text), under
+// both declarations it joins.
+const HISTORY_PROBE = {
+  statement: `SELECT wbs.sample_date, wbs.symbol, wbs.amount, wbs.value_usd, wbs.provenance,
+           ap.price_usd AS asset_price_usd,
+           (wbs.sample_date < (now() AT TIME ZONE 'UTC')::date) AS is_closed
+      FROM wallet_balance_samples wbs
+      LEFT JOIN asset_prices ap
+        ON ap.symbol = wbs.symbol
+       AND ap.price_date = wbs.sample_date
+       AND ap.time_basis = $1
+     WHERE wbs.superseded_at IS NULL
+       AND wbs.sample_date NOT IN (
+             SELECT sample_date FROM wallet_balance_samples
+              WHERE provenance = $2
+                AND superseded_at IS NULL
+           )
+     ORDER BY wbs.sample_date ASC, wbs.symbol ASC`,
+  params: [ASSET_PRICE_TIME_BASIS, QUARANTINED_PROVENANCE],
+};
+
+const historySamples = registerQuery({
+  role: "rm_app",
+  object: "wallet_balance_samples",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-balances:loadHistory.samples",
+  purpose: "Read the wallet's daily sample history, excluding quarantined days, for the balances payload.",
+  callers: ["src/api/routes/dashboards", "src/worker/handlers/wallet"],
+  probe: HISTORY_PROBE,
+});
+
+const historyPrices = registerQuery({
+  role: "rm_app",
+  object: "asset_prices",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-balances:loadHistory.prices",
+  purpose: "Join each closed day's settled asset price onto the wallet history, which the history read LEFT JOINs.",
+  callers: ["src/api/routes/dashboards", "src/worker/handlers/wallet"],
+  probe: HISTORY_PROBE,
+});
+
+const latestSamples = registerQuery({
+  role: "rm_app",
+  object: "wallet_balance_samples",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-balances:fetchPersistedWalletBalances",
+  purpose: "Read the last scheduled sample per symbol for the persisted, zero-RPC balances payload.",
+  callers: ["src/api/routes/dashboards"],
+  probe: {
+    statement: `SELECT DISTINCT ON (symbol) symbol, amount, price_usd, value_usd, provenance, strategy_nav_idle_only, sampled_at
+      FROM wallet_balance_samples WHERE provenance <> $1 AND superseded_at IS NULL
+      ORDER BY symbol, sample_date DESC, sampled_at DESC`,
+    params: [QUARANTINED_PROVENANCE],
+  },
+});
+
 interface PersistedHolding {
   amount: number | null;
   priceUsd: number | null;
@@ -173,11 +248,14 @@ interface PersistedHolding {
 }
 
 async function lastPersistedHolding(symbol: string): Promise<PersistedHolding | null> {
-  const rows = await sql<{ amount: string | null; price_usd: string | null; value_usd: string }[]>`
+  const rows = await on(sql, lastHolding)<{ amount: string | null; price_usd: string | null; value_usd: string }>`
     SELECT amount, price_usd, value_usd
       FROM wallet_balance_samples
      WHERE symbol = ${symbol}
        AND provenance <> ${QUARANTINED_PROVENANCE}
+       -- D55 (6): a row the repair pass superseded (migration 0086) is gone
+       -- for every reader, as the delete it replaces left it.
+       AND superseded_at IS NULL
      ORDER BY sample_date DESC
      LIMIT 1
   `;
@@ -297,7 +375,7 @@ function dominantProvenance(seen: Set<Provenance>): Provenance {
 // as arbitrary-precision `numeric` arithmetic and could differ in its last
 // digits.
 async function loadHistory(): Promise<{ history: WalletHistoryPoint[]; historyProvenance: Record<Provenance, number> }> {
-  const rows = await sql<{
+  const rows = await on(sql, historySamples, historyPrices)<{
     sample_date: Date;
     symbol: string;
     amount: string | null;
@@ -305,7 +383,7 @@ async function loadHistory(): Promise<{ history: WalletHistoryPoint[]; historyPr
     provenance: Provenance;
     asset_price_usd: string | null;
     is_closed: boolean;
-  }[]>`
+  }>`
     SELECT wbs.sample_date, wbs.symbol, wbs.amount, wbs.value_usd, wbs.provenance,
            ap.price_usd AS asset_price_usd,
            (wbs.sample_date < (now() AT TIME ZONE 'UTC')::date) AS is_closed
@@ -314,9 +392,14 @@ async function loadHistory(): Promise<{ history: WalletHistoryPoint[]; historyPr
         ON ap.symbol = wbs.symbol
        AND ap.price_date = wbs.sample_date
        AND ap.time_basis = ${ASSET_PRICE_TIME_BASIS}
-     WHERE wbs.sample_date NOT IN (
+     -- D55 (6): superseded rows (migration 0086) are filtered on both sides —
+     -- a superseded point is not drawn, and a superseded quarantined row does
+     -- not hide its day, exactly as the delete it replaces left the table.
+     WHERE wbs.superseded_at IS NULL
+       AND wbs.sample_date NOT IN (
              SELECT sample_date FROM wallet_balance_samples
               WHERE provenance = ${QUARANTINED_PROVENANCE}
+                AND superseded_at IS NULL
            )
      ORDER BY wbs.sample_date ASC, wbs.symbol ASC
   `;
@@ -410,12 +493,13 @@ export async function fetchPersistedWalletBalances(): Promise<WalletBalances> {
 
   // Latest sample per symbol. The (sample_date, symbol) upsert keeps one row per
   // symbol per UTC day, so "newest sample_date wins" is the last scheduled read.
-  const rows = await sql<
-    { symbol: string; amount: string | null; price_usd: string | null; value_usd: string | null; provenance: string; strategy_nav_idle_only: boolean | null; sampled_at: Date }[]
+  const rows = await on(sql, latestSamples)<
+    { symbol: string; amount: string | null; price_usd: string | null; value_usd: string | null; provenance: string; strategy_nav_idle_only: boolean | null; sampled_at: Date }
   >`
     SELECT DISTINCT ON (symbol) symbol, amount, price_usd, value_usd, provenance, strategy_nav_idle_only, sampled_at
       FROM wallet_balance_samples
      WHERE provenance <> ${QUARANTINED_PROVENANCE}
+       AND superseded_at IS NULL -- D55 (6), migration 0086
      ORDER BY symbol, sample_date DESC, sampled_at DESC
   `;
   const latest = new Map(rows.map((r) => [r.symbol, r]));

@@ -10,10 +10,11 @@
 // A terminal degrade — one a retry cannot fix — must not be retried at all.
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { processOneJob } from "../src/worker/loop.ts";
 import { LANES } from "../src/worker/lanes.ts";
-import { getOverviewProjection } from "../src/admin/overview.ts";
+import { getOverviewProjection, SAMPLER_KINDS } from "../src/admin/overview.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
@@ -27,19 +28,19 @@ afterAll(() => {
   delete handlers["research.test_terminal"];
 });
 beforeEach(async () => {
-  await sql`DELETE FROM job_runs`;
-  await sql`DELETE FROM jobs`;
+  await fixtureDb`DELETE FROM job_runs`;
+  await fixtureDb`DELETE FROM jobs`;
 });
 
 const drain = async (max = 12) => {
   for (let i = 0; i < max; i++) {
-    await sql`UPDATE jobs SET run_after = now() WHERE status = 'pending'`;
-    if (!(await processOneJob({ lane: LANES.research }))) return;
+    await fixtureDb`UPDATE jobs SET run_after = now() WHERE status = 'pending'`;
+    if (!(await processOneJob({ lane: LANES.generic }))) return;
   }
 };
 
 test("a degrade that exhausts its retries settles FAILED, not succeeded", async () => {
-  const [{ id }] = await sql`
+  const [{ id }] = await fixtureDb`
     INSERT INTO jobs (kind, payload, max_attempts) VALUES ('research.test_degrade', '{}', 3) RETURNING id`;
   await drain();
 
@@ -55,30 +56,36 @@ test("a degrade that exhausts its retries settles FAILED, not succeeded", async 
 });
 
 test("the exhausted degrade is VISIBLE on the admin overview", async () => {
-  await sql`INSERT INTO jobs (kind, payload, max_attempts) VALUES ('swarm.judge', '{}', 2)`;
-  handlers["swarm.judge.saved"] = handlers["swarm.judge"];
-  handlers["swarm.judge"] = async () => ({ ok: false, error: "judge_unavailable" });
+  // A MONITORED kind, with its real handler swapped for a degrading one for the
+  // length of the test. It used to be `swarm.judge`, which no longer exists as a
+  // monitored kind (issue #1026: the judge is a participant, not a queue job);
+  // a sampler kind is what the overview actually watches now. The lane is
+  // `generic`, which claims every kind.
+  const kind = SAMPLER_KINDS[0];
+  const original = handlers[kind];
+  await fixtureDb`INSERT INTO jobs (kind, payload, max_attempts) VALUES (${kind}, '{}', 2)`;
+  handlers[kind] = async () => ({ ok: false, error: "provider unreachable" });
   try {
     for (let i = 0; i < 6; i++) {
-      await sql`UPDATE jobs SET run_after = now() WHERE status = 'pending'`;
-      if (!(await processOneJob({ lane: LANES.swarm }))) break;
+      await fixtureDb`UPDATE jobs SET run_after = now() WHERE status = 'pending'`;
+      if (!(await processOneJob({ lane: LANES.generic }))) break;
     }
   } finally {
-    handlers["swarm.judge"] = handlers["swarm.judge.saved"];
-    delete handlers["swarm.judge.saved"];
+    if (original) handlers[kind] = original;
+    else delete handlers[kind];
   }
-  const [job] = await sql`SELECT status FROM jobs WHERE kind = 'swarm.judge' ORDER BY id DESC LIMIT 1`;
+  const [job] = await sql`SELECT status FROM jobs WHERE kind = ${kind} ORDER BY id DESC LIMIT 1`;
   expect(job.status).toBe("failed");
 
   const overview = await getOverviewProjection();
-  const health = overview.production.find((p) => p.kind === "swarm.judge")!;
+  const health = overview.production.find((p) => p.kind === kind)!;
   expect(health.lastJobStatus).toBe("failed");
-  expect(health.alert, "an exhausted judge lane is not healthy").not.toBe("healthy");
-  expect(overview.alerts.some((a) => a.source === "swarm.judge")).toBe(true);
+  expect(health.alert, "an exhausted monitored lane is not healthy").not.toBe("healthy");
+  expect(overview.alerts.some((a) => a.source === kind)).toBe(true);
 });
 
 test("a TERMINAL degrade is not retried at all — one attempt, one red row", async () => {
-  const [{ id }] = await sql`
+  const [{ id }] = await fixtureDb`
     INSERT INTO jobs (kind, payload, max_attempts) VALUES ('research.test_terminal', '{}', 5) RETURNING id`;
   await drain();
 

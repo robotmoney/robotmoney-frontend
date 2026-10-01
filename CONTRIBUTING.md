@@ -64,10 +64,9 @@ never derived from other fixtures — so their **field shapes** match what the
 backend actually returns:
 
 ```bash
-# Against a local full stack:
-bun run smoke                                             # brings up real backend + analytics
-BACKEND_URL=http://127.0.0.1:<smoke api port> bun run goldens:update
-# …or against a deployed test cluster:
+# Against a running backend (local or test):
+BACKEND_URL=http://127.0.0.1:<api port> bun run goldens:update
+# …or against another reachable test API:
 BACKEND_URL=https://<test-cluster> bun run goldens:update
 git add goldens/api-goldens.json && commit
 ```
@@ -82,14 +81,10 @@ Preview mode trades data realism for zero setup:
 - **Field shapes are real; values are mock / point-in-time.** Use preview for
   **layout, copy, components, and navigation** — do **not** trust the numbers,
   charts, or time-series you see there.
-- For **realistic, evolving data** (real analytics, live-ish simulations,
-  scheduled recomputes, swarm sessions), run the full stack:
-
-  ```bash
-  bun run smoke         # see docs/architecture.md — much better data simulations
-  bun run smoke:status
-  bun run smoke:down
-  ```
+- For **realistic, evolving data**, point the client or test at a running backend
+  that uses live providers. The adopted deployment design is documented in
+  [smoke-production-spec.md](docs/technical/smoke-production-spec.md), approved
+  for implementation but not yet shipped.
 
 - The smoke is the right surface for validating anything **data-dependent**;
   preview is the right surface for iterating quickly on the **marketing surface**
@@ -298,10 +293,10 @@ owner-review mechanism guarding them; the grant list **is** the guard.
 ## Where things are documented
 
 - Documentation map and canonical-vs-supporting ownership: [`docs/architecture.md`](docs/architecture.md)
-- Preview mode (wrapper, goldens, drift gate, hosted Cloudflare Pages): [`docs/architecture.md`](docs/architecture.md) §4
+- Preview mode (wrapper, goldens, drift gate; local-only): [`docs/architecture.md`](docs/architecture.md) §4
 - Overall architecture: [`docs/architecture.md`](docs/architecture.md)
-- Full-stack smoke: [`docs/architecture.md`](docs/architecture.md)
-- Design decisions (D14: why preview mode replaced the "frozen" bundle; D19/D20: hosted preview URLs via Cloudflare Git integration): [`docs/decisions.md`](docs/decisions.md)
+- Full-stack smoke and deployment design: [`docs/technical/smoke-production-spec.md`](docs/technical/smoke-production-spec.md)
+- Design decisions (D14: preview mode; D19/D20: unactivated hosted-preview proposals): [`docs/decisions.md`](docs/decisions.md)
 - Live-data endpoint contract (buybacks / token metrics / sleeves / framework DTOs + provenance rules): [`docs/architecture.md`](docs/architecture.md)
 - Infra/domain map (D13): [`docs/architecture.md`](docs/architecture.md)
-- Deployment & credentials (GitOps): [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md)
+- Release gates and approvals: [`docs/technical/release-runbooks.md`](docs/technical/release-runbooks.md)

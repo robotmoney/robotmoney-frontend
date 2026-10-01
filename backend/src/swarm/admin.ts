@@ -1,7 +1,7 @@
 // Swarm ADMIN domain layer (issue #152): topic/member CRUD with optimistic
-// concurrency, member lifecycle + one-time credential issuance, session
-// scheduling with a frozen roster snapshot, roster add/excuse/restore, guarded
-// session lifecycle transitions, and audit-log filtering.
+// concurrency, member lifecycle + one-time credential issuance, roster
+// add/excuse/restore, guarded session lifecycle transitions, and audit-log
+// filtering. Sessions are opened only by the epoch lifecycle (domain.ts).
 //
 // Kept as a SEPARATE module from swarm/domain.ts (the member/public-facing
 // surface) so the existing apply/activate/submit/open/publish/aggregate paths —
@@ -9,42 +9,595 @@
 // surface. Where this module's session lifecycle overlaps with domain.ts (e.g.
 // aggregateSessionGuarded still calls domain.aggregateSession for the rich
 // rollup), it composes those functions rather than duplicating them.
-import { createHash } from "node:crypto";
 import { sql, type DbHandle } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import { hashKey } from "../lib/keys.ts";
 import { isRegistrablePublicKey } from "../lib/signing.ts";
 import {
   activateMember,
   aggregateSession as domainAggregateSession,
   assertRosterCapacity,
-  getMember,
   isHandleUniqueViolation,
   SWARM_ROSTER_CAP,
-  countActiveMembersTx,
+  appendStreamEvent,
+  listJudgements,
+  sessionJudgeFingerprint,
 } from "./domain.ts";
 // Issue #562 — the one implementation of "what handle does this name get".
 import { deriveMemberHandle } from "./handle.ts";
-// Issue #752 — the consensus judge. Its runtime switch is a DATABASE row, not
-// an env var, because the swarm is live and an operator must be able to take
-// the judge off published sessions without restarting anything.
-import { getJudgeConfig, judgeSession, listJudgements, sessionJudgeFingerprint, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
+// Issue #752 — the consensus judge's runtime switch. A DATABASE row, not an env
+// var, because the swarm is live and an operator must be able to take the
+// judge off without restarting anything. The judge itself is a participant
+// (issue #1026): nothing in this module judges.
+import { getJudgeConfig, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-config.ts";
 import { ConsensusReceiptRefusal, publishConsensusReceipt } from "./consensus-receipt.ts";
-// R13 — the TEST-ONLY judge fault-injection lever (AC-E2E-06). Its ONLY writer
-// is the admin path below, so that every transition is an audited admin action
-// exactly as `swarm_judge_config.mode` already is.
-import {
-  assertFaultInjectionAllowed,
-  getJudgeFaultInjection,
-  JudgeFaultInjectionRefused,
-  writeJudgeFaultInjection,
-  type JudgeFaultInjectionState,
-} from "./judge-fault-injection.ts";
-import { enqueueSeatOpenNotifications } from "./notifications.ts";
 // The published shape of this module's member projection. Imported for the
 // `: AdminMember` return annotation on toMemberAdmin() below — see the comment
 // there (issue #572).
 import { ROUTES, path } from "@robotmoney/contract";
 import type { AdminMember } from "@robotmoney/contract";
+
+
+// ── The admin statements are registered (smoke-production-spec.md §7.1) ─────
+// Every one runs on the api's `rm_app` credential, reached from the admin
+// route. A statement that joins several relations declares each of them, and
+// its declarations carry one probe. The session lifecycle verbs that used to
+// live here (cancel, close, reopen, aggregate, publish) moved to the fixtures
+// that drive them: no production path reaches them (D55 (13)).
+const ADMIN_CALLERS = ["src/api/routes/swarm-admin"];
+const PROBE_UUID = "00000000-0000-0000-0000-000000000000";
+type Row = Record<string, any>;
+
+const SILENCE_NEVER_PROBE =
+  "WITH eligible AS (SELECT sm.member_id, count(*)::int AS sessions_seen FROM swarm_session_members sm " +
+  "JOIN swarm_sessions s ON s.id = sm.session_id JOIN swarm_members m ON m.id = sm.member_id " +
+  "WHERE m.status = 'active' AND m.role = 'member' AND sm.status != 'excused' AND s.convened_at > m.activated_at " +
+  "GROUP BY sm.member_id) SELECT e.member_id, e.sessions_seen FROM eligible e " +
+  "WHERE e.sessions_seen >= $1 AND NOT EXISTS (SELECT 1 FROM swarm_recommendations r WHERE r.member_id = e.member_id)";
+const SILENCE_QUIET_PROBE =
+  "WITH last_take AS (SELECT r.member_id, max(s.convened_at) AS last_take_at FROM swarm_recommendations r " +
+  "JOIN swarm_sessions s ON s.id = r.session_id GROUP BY r.member_id) " +
+  "SELECT sm.member_id, count(*)::int AS sessions_seen FROM swarm_session_members sm " +
+  "JOIN swarm_sessions s ON s.id = sm.session_id JOIN swarm_members m ON m.id = sm.member_id " +
+  "JOIN last_take lt ON lt.member_id = sm.member_id WHERE m.status = 'active' AND m.role = 'member' " +
+  "AND sm.status != 'excused' AND s.convened_at > lt.last_take_at GROUP BY sm.member_id HAVING count(*) >= $1";
+const SUBJECT_COLUMNS_PROBE =
+  "INSERT INTO swarm_subjects (id, status, name, operator, homepage, x_handle, thesis_blurb, wallets, nft_contracts, " +
+  "source, recommendation_type, linked_member_id, structural_notes, last_reviewed) " +
+  "SELECT $1, 'active', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13 WHERE false RETURNING *";
+const CLOSE_JOIN_PROBE =
+  "UPDATE swarm_sessions s SET state = 'window_closed', version = s.version + 1, " +
+  "judge_mode = COALESCE(s.judge_mode, COALESCE((SELECT CASE WHEN c.mode = 'enforce' THEN 'enforce' ELSE 'off' END " +
+  "FROM swarm_judge_config c WHERE c.id = 1), 'off')), " +
+  "judging_duration_seconds = COALESCE(s.judging_duration_seconds, t.judging_duration_seconds) " +
+  "FROM swarm_subjects t WHERE s.id = $1 AND t.id = s.subject_id RETURNING s.id, s.state, s.version";
+
+const auditInsert = registerQuery({
+  role: "rm_app", object: "audit_log", privileges: ["INSERT"],
+  site: "src/swarm/admin:audit",
+  purpose: "Append one audit row for an admin write.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "INSERT INTO audit_log (actor, action, scope) SELECT $1, $2, $3 WHERE false", params: ["a", "b", "{}"] },
+});
+
+const listSubjects = registerQuery({
+  role: "rm_app", object: "swarm_subjects", privileges: ["SELECT"],
+  site: "src/swarm/admin:listSubjectsAdmin",
+  purpose: "List every subject for the admin surface.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "SELECT * FROM swarm_subjects ORDER BY id" },
+});
+
+const subjectExists = registerQuery({
+  role: "rm_app", object: "swarm_subjects", privileges: ["SELECT"],
+  site: "src/swarm/admin:createSubjectAdmin.exists",
+  purpose: "Refuse a subject id that already exists.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "SELECT id FROM swarm_subjects WHERE id = $1", params: ["probe"] },
+});
+
+const insertSubject = registerQuery({
+  role: "rm_app", object: "swarm_subjects", privileges: ["INSERT", "SELECT"],
+  site: "src/swarm/admin:createSubjectAdmin.insert",
+  purpose: "Create an active subject; its scheduling columns take the column defaults.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: SUBJECT_COLUMNS_PROBE, params: ["probe", "probe", null, null, null, null, null, null, null, null, null, null, null] },
+});
+
+const setSubjectScheduling = registerQuery({
+  role: "rm_app", object: "swarm_subjects", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:createSubjectAdmin.scheduling",
+  purpose: "Apply the scheduling columns a create request named over the defaults the insert took.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE swarm_subjects SET epoch_duration_seconds = COALESCE($1, epoch_duration_seconds), " +
+      "epoch_anchor = COALESCE($2::text::timestamptz, epoch_anchor), " +
+      "judging_duration_seconds = COALESCE($3, judging_duration_seconds) WHERE id = $4 RETURNING *",
+    params: [null, null, null, "probe"],
+  },
+});
+
+const lockSubject = registerQuery({
+  role: "rm_app", object: "swarm_subjects", privileges: ["SELECT", "UPDATE"],
+  site: "src/swarm/admin:lockSubject",
+  purpose: "Read and lock a subject row before an optimistic-concurrency edit.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "SELECT * FROM swarm_subjects WHERE id = $1 FOR NO KEY UPDATE", params: ["probe"] },
+});
+
+const openCollectingClose = registerQuery({
+  role: "rm_app", object: "swarm_sessions", privileges: ["SELECT"],
+  site: "src/swarm/admin:updateSubjectAdmin.openWindow",
+  purpose: "Read the close of a subject's collecting window, so a duration change keeps it as the new anchor.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement: "SELECT window_closes_at::text AS closes FROM swarm_sessions WHERE subject_id = $1 AND state = 'collecting'",
+    params: ["probe"],
+  },
+});
+
+const updateSubject = registerQuery({
+  role: "rm_app", object: "swarm_subjects", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:updateSubjectAdmin.update",
+  purpose: "Write an edited subject under its expected version.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE swarm_subjects SET name = $1, operator = $2, homepage = $3, x_handle = $4, thesis_blurb = $5, " +
+      "wallets = $6, nft_contracts = $7, source = $8, recommendation_type = $9, linked_member_id = $10, " +
+      "structural_notes = $11, last_reviewed = $12, epoch_duration_seconds = $13, " +
+      "epoch_anchor = COALESCE($14::text::timestamptz, epoch_anchor), judging_duration_seconds = $15, " +
+      "version = version + 1, updated_at = now() WHERE id = $16 AND version = $17 RETURNING *",
+    params: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, "probe", 1],
+  },
+});
+
+const renameSessions = registerQuery({
+  role: "rm_app", object: "swarm_sessions", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:updateSubjectAdmin.renameSessions",
+  purpose: "Backfill the denormalized subject name onto a renamed subject's sessions.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "UPDATE swarm_sessions SET subject_name = $1 WHERE subject_id = $2", params: ["probe", "probe"] },
+});
+
+const deactivateSubject = registerQuery({
+  role: "rm_app", object: "swarm_subjects", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:deactivateSubjectAdmin",
+  purpose: "Set a subject inactive under its expected version.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE swarm_subjects SET status = 'inactive', version = version + 1, updated_at = now() " +
+      "WHERE id = $1 AND version = $2 RETURNING *",
+    params: ["probe", 1],
+  },
+});
+
+const activateSubject = registerQuery({
+  role: "rm_app", object: "swarm_subjects", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:activateSubjectAdmin",
+  purpose: "Set a subject active under its expected version.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE swarm_subjects SET status = 'active', version = version + 1, updated_at = now() " +
+      "WHERE id = $1 AND version = $2 RETURNING *",
+    params: ["probe", 1],
+  },
+});
+
+const listMembers = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["SELECT"],
+  site: "src/swarm/admin:listMembersAdmin",
+  purpose: "List every member for the admin surface.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "SELECT * FROM swarm_members ORDER BY id" },
+});
+
+const neverSubmittedSessionMembers = registerQuery({
+  role: "rm_app", object: "swarm_session_members", privileges: ["SELECT"],
+  site: "src/swarm/admin:getMemberSilenceFlags.neverSubmitted.sessionMembers",
+  purpose: "Flag active members seated in enough sessions since activation without ever submitting a take.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: SILENCE_NEVER_PROBE, params: [1] },
+});
+const neverSubmittedSessions = registerQuery({
+  role: "rm_app", object: "swarm_sessions", privileges: ["SELECT"],
+  site: "src/swarm/admin:getMemberSilenceFlags.neverSubmitted.sessions",
+  purpose: "Flag active members seated in enough sessions since activation without ever submitting a take.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: SILENCE_NEVER_PROBE, params: [1] },
+});
+const neverSubmittedMembers = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["SELECT"],
+  site: "src/swarm/admin:getMemberSilenceFlags.neverSubmitted.members",
+  purpose: "Flag active members seated in enough sessions since activation without ever submitting a take.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: SILENCE_NEVER_PROBE, params: [1] },
+});
+const neverSubmittedTakes = registerQuery({
+  role: "rm_app", object: "swarm_recommendations", privileges: ["SELECT"],
+  site: "src/swarm/admin:getMemberSilenceFlags.neverSubmitted.takes",
+  purpose: "Flag active members seated in enough sessions since activation without ever submitting a take.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: SILENCE_NEVER_PROBE, params: [1] },
+});
+
+const goneQuietTakes = registerQuery({
+  role: "rm_app", object: "swarm_recommendations", privileges: ["SELECT"],
+  site: "src/swarm/admin:getMemberSilenceFlags.goneQuiet.takes",
+  purpose: "Flag established members with no take in the enough eligible sessions since their latest one.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: SILENCE_QUIET_PROBE, params: [1] },
+});
+const goneQuietSessions = registerQuery({
+  role: "rm_app", object: "swarm_sessions", privileges: ["SELECT"],
+  site: "src/swarm/admin:getMemberSilenceFlags.goneQuiet.sessions",
+  purpose: "Flag established members with no take in the enough eligible sessions since their latest one.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: SILENCE_QUIET_PROBE, params: [1] },
+});
+const goneQuietSessionMembers = registerQuery({
+  role: "rm_app", object: "swarm_session_members", privileges: ["SELECT"],
+  site: "src/swarm/admin:getMemberSilenceFlags.goneQuiet.sessionMembers",
+  purpose: "Flag established members with no take in the enough eligible sessions since their latest one.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: SILENCE_QUIET_PROBE, params: [1] },
+});
+const goneQuietMembers = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["SELECT"],
+  site: "src/swarm/admin:getMemberSilenceFlags.goneQuiet.members",
+  purpose: "Flag established members with no take in the enough eligible sessions since their latest one.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: SILENCE_QUIET_PROBE, params: [1] },
+});
+
+const listApplicationsByStatus = registerQuery({
+  role: "rm_app", object: "swarm_applications", privileges: ["SELECT"],
+  site: "src/swarm/admin:listApplicationsAdmin.byStatus",
+  purpose: "List the applications in one status, newest first.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement: "SELECT id, member_id, status, created_at, reviewed_at FROM swarm_applications WHERE status = $1 ORDER BY created_at DESC",
+    params: ["pending"],
+  },
+});
+
+const listApplications = registerQuery({
+  role: "rm_app", object: "swarm_applications", privileges: ["SELECT"],
+  site: "src/swarm/admin:listApplicationsAdmin.all",
+  purpose: "List every application, newest first.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "SELECT id, member_id, status, created_at, reviewed_at FROM swarm_applications ORDER BY created_at DESC" },
+});
+
+const keyOwner = registerQuery({
+  role: "rm_app", object: "swarm_member_keys", privileges: ["SELECT"],
+  site: "src/swarm/admin:addMemberAdmin.keyOwner",
+  purpose: "Refuse a public key that already belongs to a member.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "SELECT member_id FROM swarm_member_keys WHERE public_key = $1 LIMIT 1", params: ["probe"] },
+});
+
+const insertManualMember = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["INSERT"],
+  site: "src/swarm/admin:addMemberAdmin.insert",
+  purpose: "Seat an active member the operator added by hand.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "INSERT INTO swarm_members (id, status, name, lens, contact_email, applied_at, activated_at) " +
+      "SELECT $1, 'active', $2, $3, $4, now(), now() WHERE false",
+    params: ["probe", "probe", null, null],
+  },
+});
+
+const setMemberHandle = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:addMemberAdmin.handle",
+  purpose: "Write the derived handle onto a member added by hand.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "UPDATE swarm_members SET handle = $1 WHERE id = $2 RETURNING *", params: ["probe", "probe"] },
+});
+
+const insertMemberKey = registerQuery({
+  role: "rm_app", object: "swarm_member_keys", privileges: ["INSERT"],
+  site: "src/swarm/admin:insertMemberKey",
+  purpose: "Register an active key and token hash for a member.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash) SELECT $1, $2, true, $3 WHERE false",
+    params: ["probe", "probe", "probe"],
+  },
+});
+
+const lockMemberStatus = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["SELECT", "UPDATE"],
+  site: "src/swarm/admin:reviewApplicationAdmin.lock",
+  purpose: "Lock the applicant row a rejection is about to fold to inactive.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "SELECT id, status FROM swarm_members WHERE id = $1 FOR UPDATE", params: ["probe"] },
+});
+
+const rejectMember = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:reviewApplicationAdmin.member",
+  purpose: "Fold a rejected applicant's member row to inactive.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement: "UPDATE swarm_members SET status = 'inactive', version = version + 1, updated_at = now() WHERE id = $1",
+    params: ["probe"],
+  },
+});
+
+const rejectApplication = registerQuery({
+  role: "rm_app", object: "swarm_applications", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:reviewApplicationAdmin.application",
+  purpose: "Record the rejection on the member's pending application.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE swarm_applications SET status = 'rejected', reviewed_at = now() WHERE member_id = $1 AND status = 'pending'",
+    params: ["probe"],
+  },
+});
+
+const lockMember = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["SELECT", "UPDATE"],
+  site: "src/swarm/admin:lockMember",
+  purpose: "Read and lock a member row before an optimistic-concurrency edit.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "SELECT * FROM swarm_members WHERE id = $1 FOR UPDATE", params: ["probe"] },
+});
+
+const setMemberRole = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:setMemberRoleAdmin.update",
+  purpose: "Change a member's duty under its expected version.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE swarm_members SET role = $1, version = version + 1, updated_at = now() WHERE id = $2 AND version = $3 RETURNING *",
+    params: ["member", "probe", 1],
+  },
+});
+
+const excuseJudgeFromScheduled = registerQuery({
+  role: "rm_app", object: "swarm_session_members", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:setMemberRoleAdmin.excuse.sessionMembers",
+  purpose: "Excuse a newly granted judge from the rosters of sessions not yet collecting.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE swarm_session_members sm SET status = 'excused', excused_at = now(), reason = 'member holds judge role' " +
+      "FROM swarm_sessions s WHERE sm.session_id = s.id AND sm.member_id = $1 AND s.state = 'scheduled' AND sm.status = 'expected'",
+    params: ["probe"],
+  },
+});
+const excuseJudgeFromScheduledSessions = registerQuery({
+  role: "rm_app", object: "swarm_sessions", privileges: ["SELECT"],
+  site: "src/swarm/admin:setMemberRoleAdmin.excuse.sessions",
+  purpose: "Excuse a newly granted judge from the rosters of sessions not yet collecting.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE swarm_session_members sm SET status = 'excused', excused_at = now(), reason = 'member holds judge role' " +
+      "FROM swarm_sessions s WHERE sm.session_id = s.id AND sm.member_id = $1 AND s.state = 'scheduled' AND sm.status = 'expected'",
+    params: ["probe"],
+  },
+});
+
+const handleTaken = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["SELECT"],
+  site: "src/swarm/admin:updateMemberAdmin.handleTaken",
+  purpose: "Refuse a handle equal to another member's handle or id.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement: "SELECT 1 FROM swarm_members WHERE (handle = $1 OR id = $2) AND id <> $3 LIMIT 1",
+    params: ["probe", "probe", "probe"],
+  },
+});
+
+const updateMember = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:updateMemberAdmin.update",
+  purpose: "Write an edited member profile under its expected version.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE swarm_members SET handle = $1, name = $2, lens = $3, contact_email = $4, tagline = $5, mandate = $6, " +
+      "biases = $7, voice_md = $8, mode = $9, operator = $10, avatar = $11, version = version + 1, updated_at = now() " +
+      "WHERE id = $12 AND version = $13 RETURNING *",
+    params: [null, null, null, null, null, null, null, null, null, null, null, "probe", 1],
+  },
+});
+
+const deactivateMember = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:deactivateMemberAdmin.update",
+  purpose: "Set a member inactive under its expected version.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE swarm_members SET status = 'inactive', version = version + 1, updated_at = now() WHERE id = $1 AND version = $2 RETURNING *",
+    params: ["probe", 1],
+  },
+});
+
+const revokeActiveKeys = registerQuery({
+  role: "rm_app", object: "swarm_member_keys", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:revokeActiveKeys",
+  purpose: "Deactivate every active key of a member, on deactivation, reactivation and rotation.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "UPDATE swarm_member_keys SET active = false WHERE member_id = $1 AND active = true", params: ["probe"] },
+});
+
+const lastMemberKey = registerQuery({
+  role: "rm_app", object: "swarm_member_keys", privileges: ["SELECT"],
+  site: "src/swarm/admin:reactivateMemberAdmin.lastKey",
+  purpose: "Read a member's newest on-file key to carry forward on reactivation.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement: "SELECT public_key FROM swarm_member_keys WHERE member_id = $1 ORDER BY created_at DESC LIMIT 1",
+    params: ["probe"],
+  },
+});
+
+const reactivateMember = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:reactivateMemberAdmin.update",
+  purpose: "Set a member active under its expected version.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE swarm_members SET status = 'active', version = version + 1, updated_at = now() WHERE id = $1 AND version = $2 RETURNING *",
+    params: ["probe", 1],
+  },
+});
+
+const lockMemberVersion = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["SELECT", "UPDATE"],
+  site: "src/swarm/admin:rotateMemberKeyAdmin.lock",
+  purpose: "Lock the member row whose key is being rotated.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "SELECT id, version FROM swarm_members WHERE id = $1 FOR UPDATE", params: ["probe"] },
+});
+
+const priorActiveKey = registerQuery({
+  role: "rm_app", object: "swarm_member_keys", privileges: ["SELECT"],
+  site: "src/swarm/admin:rotateMemberKeyAdmin.priorKey",
+  purpose: "Read a member's active key so a key-less rotation can carry it forward.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement: "SELECT public_key FROM swarm_member_keys WHERE member_id = $1 AND active = true ORDER BY created_at DESC LIMIT 1",
+    params: ["probe"],
+  },
+});
+
+const bumpMemberVersion = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:rotateMemberKeyAdmin.bump",
+  purpose: "Advance a member's version after its key rotated.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "UPDATE swarm_members SET version = version + 1, updated_at = now() WHERE id = $1", params: ["probe"] },
+});
+
+const setMemberAvatar = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:uploadMemberAvatarAdmin.pointer",
+  purpose: "Point a member's avatar at the uploaded bytes.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE swarm_members SET avatar = $1, version = version + 1, updated_at = now() WHERE id = $2 RETURNING id",
+    params: ["{}", "probe"],
+  },
+});
+
+const upsertAvatarBytes = registerQuery({
+  role: "rm_app", object: "swarm_member_avatars", privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/swarm/admin:uploadMemberAvatarAdmin.bytes",
+  purpose: "Store a member's uploaded avatar bytes, replacing any earlier upload.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "INSERT INTO swarm_member_avatars (member_id, content_type, bytes, byte_size) SELECT $1, $2, $3, $4 WHERE false " +
+      "ON CONFLICT (member_id) DO UPDATE SET content_type = EXCLUDED.content_type, bytes = EXCLUDED.bytes, " +
+      "byte_size = EXCLUDED.byte_size, uploaded_at = now()",
+    params: ["probe", "image/png", "probe", 1],
+  },
+});
+
+const lockSession = registerQuery({
+  role: "rm_app", object: "swarm_sessions", privileges: ["SELECT", "UPDATE"],
+  site: "src/swarm/admin:lockSession",
+  purpose: "Read and lock a session row before a roster edit.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "SELECT id, state FROM swarm_sessions WHERE id = $1 FOR UPDATE", params: [PROBE_UUID] },
+});
+
+const readSessionState = registerQuery({
+  role: "rm_app", object: "swarm_sessions", privileges: ["SELECT"],
+  site: "src/swarm/admin:getSessionJudgementsAdmin.session",
+  purpose: "Read a session's state before listing its judgements.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "SELECT id, state FROM swarm_sessions WHERE id = $1", params: [PROBE_UUID] },
+});
+
+const readRoster = registerQuery({
+  role: "rm_app", object: "swarm_session_members", privileges: ["SELECT"],
+  site: "src/swarm/admin:getSessionRoster",
+  purpose: "Read a session's roster for the admin surface.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "SELECT member_id, member_name, member_lens, status, included_at, excused_at, reason FROM swarm_session_members " +
+      "WHERE session_id = $1 ORDER BY member_id",
+    params: [PROBE_UUID],
+  },
+});
+
+const rosterMember = registerQuery({
+  role: "rm_app", object: "swarm_members", privileges: ["SELECT"],
+  site: "src/swarm/admin:rosterAddAdmin.member",
+  purpose: "Read the member a roster add names, for the name, lens and role it snapshots.",
+  callers: ADMIN_CALLERS,
+  probe: { statement: "SELECT id, name, lens, role FROM swarm_members WHERE id = $1", params: ["probe"] },
+});
+
+const rosterInsert = registerQuery({
+  role: "rm_app", object: "swarm_session_members", privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/swarm/admin:rosterAddAdmin.insert",
+  purpose: "Seat a member on a session's roster, restoring it to expected if it was excused.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "INSERT INTO swarm_session_members (session_id, member_id, member_name, member_lens, status) " +
+      "SELECT $1, $2, $3, $4, 'expected' WHERE false " +
+      "ON CONFLICT (session_id, member_id) DO UPDATE SET status = 'expected', excused_at = NULL",
+    params: [PROBE_UUID, "probe", "probe", null],
+  },
+});
+
+const rosterExcuse = registerQuery({
+  role: "rm_app", object: "swarm_session_members", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:rosterExcuseAdmin.update",
+  purpose: "Excuse a member from a session's roster.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE swarm_session_members SET status = 'excused', excused_at = now() WHERE session_id = $1 AND member_id = $2 RETURNING member_id",
+    params: [PROBE_UUID, "probe"],
+  },
+});
+
+const rosterRestore = registerQuery({
+  role: "rm_app", object: "swarm_session_members", privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/admin:rosterRestoreAdmin.update",
+  purpose: "Restore an excused member to a session's roster.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "UPDATE swarm_session_members SET status = 'expected', excused_at = NULL WHERE session_id = $1 AND member_id = $2 RETURNING member_id",
+    params: [PROBE_UUID, "probe"],
+  },
+});
+
+const listAudit = registerQuery({
+  role: "rm_app", object: "audit_log", privileges: ["SELECT"],
+  site: "src/swarm/admin:listAuditLog",
+  purpose: "Read the audit log, filtered by any of actor, action and a time range, newest first.",
+  callers: ADMIN_CALLERS,
+  probe: {
+    statement:
+      "SELECT id, actor, action, scope, at FROM audit_log WHERE ($1::text IS NULL OR actor = $2) " +
+      "AND ($3::text IS NULL OR action = $4) AND ($5::timestamptz IS NULL OR at >= $6) " +
+      "AND ($7::timestamptz IS NULL OR at <= $8) ORDER BY at DESC LIMIT $9",
+    params: [null, null, null, null, null, null, null, null, 1],
+  },
+});
 
 type Actor = string;
 export const ADMIN_ACTOR = "admin";
@@ -62,7 +615,7 @@ function err(status: number, error: string): AdminResult {
 }
 
 async function audit(actor: Actor, action: string, scope: Record<string, unknown>, tx: DbHandle = sql) {
-  await tx`INSERT INTO audit_log (actor, action, scope) VALUES (${actor}, ${action}, ${tx.json(scope as any)})`;
+  await on(tx, auditInsert)`INSERT INTO audit_log (actor, action, scope) VALUES (${actor}, ${action}, ${tx.json(scope as any)})`;
 }
 
 // ── Redacted projections (never expose key_hash/token_hash/public_key) ────
@@ -83,6 +636,13 @@ function toSubjectAdmin(row: Record<string, any>) {
     linkedMemberId: row.linked_member_id ?? null,
     structuralNotes: row.structural_notes ?? null,
     lastReviewed: row.last_reviewed ?? null,
+    // The subject's three scheduling columns (scheduler spec §2.2, D53 (7)).
+    // Surfaced on every admin read because §2.3 makes this route the only way
+    // they change, and an operator cannot change a value the surface never
+    // shows.
+    epochDuration: row.epoch_duration_seconds != null ? Number(row.epoch_duration_seconds) : null,
+    epochAnchor: row.epoch_anchor != null ? new Date(row.epoch_anchor).toISOString() : null,
+    judgingDurationSeconds: row.judging_duration_seconds != null ? Number(row.judging_duration_seconds) : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -144,29 +704,113 @@ export interface SubjectInput {
   linkedMemberId?: string;
   structuralNotes?: unknown;
   lastReviewed?: string;
+  // The three scheduling columns (scheduler spec §2.2, D53 (7)). Typed
+  // `unknown` because they arrive straight off a request body and are
+  // validated here, in this module, with refusals that name the field. Omitted
+  // on create means the schema default; present-but-null is refused (§2.4).
+  /** Grid spacing in seconds — the length of every full window. */
+  epochDuration?: unknown;
+  /** One instant on the grid, as an ISO-8601 timestamp with a zone. */
+  epochAnchor?: unknown;
+  /** Seconds judging waits for a consensus once requested (§4.4). */
+  judgingDurationSeconds?: unknown;
 }
 
 export async function listSubjectsAdmin() {
-  const rows = await sql`SELECT * FROM swarm_subjects ORDER BY id`;
+  const rows = await on(sql, listSubjects)<Row>`SELECT * FROM swarm_subjects ORDER BY id`;
   return rows.map(toSubjectAdmin);
 }
 
 export async function createSubjectAdmin(input: SubjectInput, actor: Actor = ADMIN_ACTOR): Promise<AdminResult> {
-  const existing = (await sql`SELECT id FROM swarm_subjects WHERE id = ${input.id}`)[0];
+  const existing = (await on(sql, subjectExists)`SELECT id FROM swarm_subjects WHERE id = ${input.id}`)[0];
   if (existing) return err(409, "subject id already exists");
-  const rows = await sql`
-    INSERT INTO swarm_subjects
-      (id, status, name, operator, homepage, x_handle, thesis_blurb, wallets, nft_contracts,
-       source, recommendation_type, linked_member_id, structural_notes, last_reviewed)
-    VALUES
-      (${input.id}, 'active', ${input.name}, ${input.operator ?? null}, ${input.homepage ?? null},
-       ${input.xHandle ?? null}, ${input.thesisBlurb ?? null}, ${sql.json((input.wallets ?? null) as any)},
-       ${sql.json((input.nftContracts ?? null) as any)}, ${sql.json((input.source ?? null) as any)},
-       ${input.recommendationType ?? null}, ${input.linkedMemberId ?? null},
-       ${sql.json((input.structuralNotes ?? null) as any)}, ${input.lastReviewed ?? null})
-    RETURNING *`;
-  await audit(actor, "subject_create", { subjectId: input.id });
-  return { ok: true, status: 201, subject: toSubjectAdmin(rows[0]) };
+  const refused = schedulingRefusal(input);
+  if (refused) return refused;
+  // ONE TRANSACTION, because a created subject is an ACTIVE subject and §6.2
+  // makes activation a `subject.changed` event the scheduler acts on by opening
+  // that subject's first epoch. A create that committed without its event would
+  // leave an active subject the clock never hears about until its next rebuild.
+  return sql.begin(async (tx) => {
+    let rows = await on(tx, insertSubject)<Row>`
+      INSERT INTO swarm_subjects
+        (id, status, name, operator, homepage, x_handle, thesis_blurb, wallets, nft_contracts,
+         source, recommendation_type, linked_member_id, structural_notes, last_reviewed)
+      VALUES
+        (${input.id}, 'active', ${input.name}, ${input.operator ?? null}, ${input.homepage ?? null},
+         ${input.xHandle ?? null}, ${input.thesisBlurb ?? null}, ${tx.json((input.wallets ?? null) as any)},
+         ${tx.json((input.nftContracts ?? null) as any)}, ${tx.json((input.source ?? null) as any)},
+         ${input.recommendationType ?? null}, ${input.linkedMemberId ?? null},
+         ${tx.json((input.structuralNotes ?? null) as any)}, ${input.lastReviewed ?? null})
+      RETURNING *`;
+    // The three scheduling columns take their column defaults on the insert.
+    // A create request that names any of them applies them here, in the same
+    // transaction, over those defaults (a column left out keeps its default).
+    if (input.epochDuration !== undefined || input.epochAnchor !== undefined || input.judgingDurationSeconds !== undefined) {
+      rows = await on(tx, setSubjectScheduling)<Row>`
+        UPDATE swarm_subjects SET
+          epoch_duration_seconds = COALESCE(${(input.epochDuration as number | undefined) ?? null}, epoch_duration_seconds),
+          epoch_anchor = COALESCE(${(input.epochAnchor as string | undefined) ?? null}::text::timestamptz, epoch_anchor),
+          judging_duration_seconds = COALESCE(${(input.judgingDurationSeconds as number | undefined) ?? null}, judging_duration_seconds)
+        WHERE id = ${input.id}
+        RETURNING *`;
+    }
+    await appendStreamEvent(tx, "subject.changed", {
+      subjectId: input.id,
+      payload: { reason: "activated", ...schedulingPayload(rows[0]) },
+    });
+    await audit(actor, "subject_create", { subjectId: input.id }, tx);
+    return { ok: true, status: 201, subject: toSubjectAdmin(rows[0]) };
+  });
+}
+
+/**
+ * A whole, positive number of seconds — the only shape a duration may take
+ * (scheduler spec §2.2/§2.4, migrations 0067 and 0073's CHECKs).
+ */
+function isPositiveWholeSeconds(v: unknown): v is number {
+  return typeof v === "number" && Number.isInteger(v) && v > 0;
+}
+
+/**
+ * An instant with an explicit zone. An anchor without one would be read in
+ * whatever time zone the connection happened to have: two grids for one input.
+ */
+const INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$/;
+function isInstant(v: unknown): v is string {
+  return typeof v === "string" && INSTANT_RE.test(v) && !Number.isNaN(Date.parse(v));
+}
+
+/**
+ * The refusal for a scheduling column that is present and wrong, or null.
+ *
+ * `undefined` means "not supplied" and is never refused. Anything else must be
+ * the column's shape: §2.4 says there is no on/off state for scheduling, so a
+ * `null`, a zero or a negative duration is not "disabled" — it is refused here
+ * with the field named, before the write, rather than surfacing as a 23514
+ * from the column's CHECK.
+ */
+function schedulingRefusal(
+  input: { epochDuration?: unknown; epochAnchor?: unknown; judgingDurationSeconds?: unknown },
+): AdminResult | null {
+  if (input.epochDuration !== undefined && !isPositiveWholeSeconds(input.epochDuration)) {
+    return err(400, "epochDuration must be a positive whole number of seconds");
+  }
+  if (input.judgingDurationSeconds !== undefined && !isPositiveWholeSeconds(input.judgingDurationSeconds)) {
+    return err(400, "judgingDurationSeconds must be a positive whole number of seconds");
+  }
+  if (input.epochAnchor !== undefined && !isInstant(input.epochAnchor)) {
+    return err(400, "epochAnchor must be an ISO-8601 timestamp with a zone (e.g. 2026-01-01T22:45:00Z)");
+  }
+  return null;
+}
+
+/** The scheduling columns as `subject.changed` carries them — what the scheduler re-reads (§6.2). */
+function schedulingPayload(row: Record<string, any>) {
+  return {
+    epochDurationSeconds: Number(row.epoch_duration_seconds),
+    epochAnchor: new Date(row.epoch_anchor).toISOString(),
+    judgingDurationSeconds: Number(row.judging_duration_seconds),
+  };
 }
 
 export type SubjectPatch = Partial<Omit<SubjectInput, "id">>;
@@ -177,10 +821,35 @@ export async function updateSubjectAdmin(
   patch: SubjectPatch,
   actor: Actor = ADMIN_ACTOR,
 ): Promise<AdminResult> {
+  // Refused before the transaction: a wrong value is wrong whatever the row says.
+  const refused = schedulingRefusal(patch);
+  if (refused) return refused;
   return sql.begin(async (tx) => {
-    const row = (await tx`SELECT * FROM swarm_subjects WHERE id = ${id} FOR UPDATE`)[0];
+    // `FOR NO KEY UPDATE`, not `FOR UPDATE`: a take in flight holds its
+    // session row and needs a key-share lock on this row for its foreign key,
+    // and this transaction may go on to write that session (the rename
+    // backfill below). `FOR UPDATE` would refuse the take its key share and
+    // deadlock the two.
+    const row = (await on(tx, lockSubject)<Row>`SELECT * FROM swarm_subjects WHERE id = ${id} FOR NO KEY UPDATE`)[0];
     if (!row) return err(404, "subject not found");
     if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
+
+    // §2.2 DURATION CHANGE: "Changing `epoch_duration` through the admin API
+    // also sets `epoch_anchor` to the current window's `window_closes_at`, in
+    // the same transaction; a subject with no open window keeps its anchor."
+    // The current window keeps the close it was opened with, and the grid
+    // continues from that close with the new spacing (§6.2). An anchor the
+    // operator names in the SAME request is what they asked for, and wins.
+    // Read as text so the anchor is that close to the microsecond.
+    const durationChanged = patch.epochDuration !== undefined &&
+      Number(patch.epochDuration) !== Number(row.epoch_duration_seconds);
+    let anchor: string | null = patch.epochAnchor !== undefined ? (patch.epochAnchor as string) : null;
+    if (anchor === null && durationChanged) {
+      const [open] = await on(tx, openCollectingClose)<{ closes: string | null }>`
+        SELECT window_closes_at::text AS closes FROM swarm_sessions
+         WHERE subject_id = ${id} AND state = 'collecting'`;
+      anchor = open?.closes ?? null;
+    }
     const merged = {
       name: patch.name ?? row.name,
       operator: patch.operator ?? row.operator,
@@ -194,15 +863,20 @@ export async function updateSubjectAdmin(
       linked_member_id: patch.linkedMemberId ?? row.linked_member_id,
       structural_notes: patch.structuralNotes !== undefined ? patch.structuralNotes : row.structural_notes,
       last_reviewed: patch.lastReviewed ?? row.last_reviewed,
+      epoch_duration_seconds: (patch.epochDuration as number | undefined) ?? row.epoch_duration_seconds,
+      judging_duration_seconds: (patch.judgingDurationSeconds as number | undefined) ?? row.judging_duration_seconds,
     };
-    const upd = await tx`
+    const upd = await on(tx, updateSubject)<Row>`
       UPDATE swarm_subjects SET
         name = ${merged.name}, operator = ${merged.operator}, homepage = ${merged.homepage},
         x_handle = ${merged.x_handle}, thesis_blurb = ${merged.thesis_blurb},
         wallets = ${tx.json(merged.wallets as any)}, nft_contracts = ${tx.json(merged.nft_contracts as any)},
         source = ${tx.json(merged.source as any)}, recommendation_type = ${merged.recommendation_type},
         linked_member_id = ${merged.linked_member_id}, structural_notes = ${tx.json(merged.structural_notes as any)},
-        last_reviewed = ${merged.last_reviewed}, version = version + 1, updated_at = now()
+        last_reviewed = ${merged.last_reviewed}, epoch_duration_seconds = ${merged.epoch_duration_seconds},
+        epoch_anchor = COALESCE(${anchor}::text::timestamptz, epoch_anchor),
+        judging_duration_seconds = ${merged.judging_duration_seconds},
+        version = version + 1, updated_at = now()
       WHERE id = ${id} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
@@ -214,36 +888,124 @@ export async function updateSubjectAdmin(
     // the same transaction as the swarm_subjects UPDATE above, makes the
     // rename atomic across both places the name is stored.
     if (patch.name != null && patch.name !== row.name) {
-      await tx`UPDATE swarm_sessions SET subject_name = ${merged.name} WHERE subject_id = ${id}`;
+      await on(tx, renameSessions)`UPDATE swarm_sessions SET subject_name = ${merged.name} WHERE subject_id = ${id}`;
     }
 
+    // Scheduler spec §6.2: `subject.changed` — "a scheduling column changed,
+    // or subject activated / deactivated". Published for ANY subject edit, not
+    // only a duration change: the scheduler's documented reaction is to re-read
+    // the subject, and deciding here which fields it cares about would make
+    // this function the second place that knowledge lives. Written inside the
+    // same transaction as the edit (§9), so the clock is never told about a
+    // change that rolled back.
+    await appendStreamEvent(tx, "subject.changed", {
+      subjectId: id,
+      payload: { reason: "updated", ...schedulingPayload(upd[0]) },
+    });
     await audit(actor, "subject_update", { subjectId: id }, tx);
     return { ok: true, status: 200, subject: toSubjectAdmin(upd[0]) };
   });
 }
 
+/**
+ * Deactivate a subject: `active → inactive`, versioned.
+ *
+ * A SUBJECT EDIT, AND NOTHING ELSE (D55 (4) as corrected 2026-09-25: "the
+ * window runs to its close"). It sets the subject inactive, publishes
+ * `subject.changed` with reason `deactivated`, and writes its audit row — in
+ * one transaction (§9), so the clock is never told about a deactivation that
+ * rolled back and never misses one that committed. It CLOSES NOTHING:
+ *
+ *   * the open window stays `collecting` until its grid boundary and accepts
+ *     takes until `window_closes_at` (§4.2, §4.5);
+ *   * at that boundary `system-scheduler` turns the epoch over as usual —
+ *     the turnover closes and settles N and opens no N+1, because the subject
+ *     is inactive (domain.ts `turnOverEpoch`);
+ *   * a reactivation inside that window opens nothing, because the subject
+ *     still has its `collecting` session.
+ *
+ * A close here would be the admin early close D55 (4) forbids, and a
+ * deactivate-then-activate pair would be the banned early turnover in two
+ * calls.
+ */
 export async function deactivateSubjectAdmin(
   id: string,
   expectedVersion: number,
   actor: Actor = ADMIN_ACTOR,
 ): Promise<AdminResult> {
   return sql.begin(async (tx) => {
-    const row = (await tx`SELECT * FROM swarm_subjects WHERE id = ${id} FOR UPDATE`)[0];
+    // `FOR NO KEY UPDATE` for updateSubjectAdmin's reason, and so a boundary
+    // turnover of this subject (which takes the same lock) reads the status
+    // either before or after this edit, never half of it.
+    const row = (await on(tx, lockSubject)<Row>`SELECT * FROM swarm_subjects WHERE id = ${id} FOR NO KEY UPDATE`)[0];
     if (!row) return err(404, "subject not found");
     if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
-    const upd = await tx`
+    const upd = await on(tx, deactivateSubject)<Row>`
       UPDATE swarm_subjects SET status = 'inactive', version = version + 1, updated_at = now()
       WHERE id = ${id} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
+    // §6.2: on deactivation the scheduler keeps the open session's boundary
+    // timer, so the boundary turns it over with no successor (§4.5). The
+    // event carries no closed epoch, because none closed.
+    await appendStreamEvent(tx, "subject.changed", {
+      subjectId: id,
+      payload: { reason: "deactivated" },
+    });
     await audit(actor, "subject_deactivate", { subjectId: id }, tx);
+    return { ok: true, status: 200, subject: toSubjectAdmin(upd[0]) };
+  });
+}
+
+/**
+ * Re-activate a subject: `inactive → active`, versioned like deactivate.
+ *
+ * A SUBJECT EDIT, NOT AN EPOCH ROUTE (D55 (4)). Scheduler spec §3: "A first
+ * epoch is opened by the rebuild, or by the scheduler on an activation's
+ * `subject.changed`, and by nothing else." So this flips the status and
+ * publishes `subject.changed` with reason `activated`, and opens NO session.
+ * When the subject has no `collecting` session, `system-scheduler` opens its
+ * first epoch from the event through `openEpoch`, which places the window on
+ * the subject's grid. When it still has one — a reactivation inside the window
+ * a deactivation left running (§4.5) — nothing opens, and that window's
+ * boundary opens N+1 as usual. An admin path that opened the epoch itself
+ * would be the operator lifecycle lever D55 removed.
+ *
+ * Same transaction as the status flip (§9): the clock is never told about an
+ * activation that rolled back, and never misses one that committed.
+ *
+ * Refusals: 404 for an unknown subject, 409 `stale_version` for a version the
+ * caller did not read, 409 `already_active` for a subject that is active —
+ * re-publishing the event for it would ask the scheduler to open an epoch it
+ * already holds.
+ */
+export async function activateSubjectAdmin(
+  id: string,
+  expectedVersion: number,
+  actor: Actor = ADMIN_ACTOR,
+): Promise<AdminResult> {
+  return sql.begin(async (tx) => {
+    const row = (await on(tx, lockSubject)<Row>`SELECT * FROM swarm_subjects WHERE id = ${id} FOR NO KEY UPDATE`)[0];
+    if (!row) return err(404, "subject not found");
+    if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
+    if (row.status === "active") return err(409, "already_active");
+    const upd = await on(tx, activateSubject)<Row>`
+      UPDATE swarm_subjects SET status = 'active', version = version + 1, updated_at = now()
+      WHERE id = ${id} AND version = ${expectedVersion}
+      RETURNING *`;
+    if (upd.length === 0) return err(409, "stale_version");
+    await appendStreamEvent(tx, "subject.changed", {
+      subjectId: id,
+      payload: { reason: "activated", ...schedulingPayload(upd[0]) },
+    });
+    await audit(actor, "subject_activate", { subjectId: id }, tx);
     return { ok: true, status: 200, subject: toSubjectAdmin(upd[0]) };
   });
 }
 
 // ── Members ─────────────────────────────────────────────────────────────────
 export async function listMembersAdmin() {
-  const rows = await sql`SELECT * FROM swarm_members ORDER BY id`;
+  const rows = await on(sql, listMembers)<Row>`SELECT * FROM swarm_members ORDER BY id`;
   return rows.map(toMemberAdmin);
 }
 
@@ -300,7 +1062,7 @@ export interface MemberSilenceFlag {
 // merge without either wondering whether the other assigned the same member
 // two answers.
 export async function getMemberSilenceFlags(tx: DbHandle = sql): Promise<Record<string, MemberSilenceFlag>> {
-  const neverSubmitted = await tx<{ member_id: string; sessions_seen: number }[]>`
+  const neverSubmitted = await on(tx, neverSubmittedSessionMembers, neverSubmittedSessions, neverSubmittedMembers, neverSubmittedTakes)<{ member_id: string; sessions_seen: number }>`
     WITH eligible AS (
       SELECT sm.member_id, count(*)::int AS sessions_seen
       FROM swarm_session_members sm
@@ -316,7 +1078,7 @@ export async function getMemberSilenceFlags(tx: DbHandle = sql): Promise<Record<
     WHERE e.sessions_seen >= ${SWARM_SILENCE_THRESHOLD_SESSIONS}
       AND NOT EXISTS (SELECT 1 FROM swarm_recommendations r WHERE r.member_id = e.member_id)`;
 
-  const goneQuiet = await tx<{ member_id: string; sessions_seen: number }[]>`
+  const goneQuiet = await on(tx, goneQuietSessionMembers, goneQuietTakes, goneQuietSessions, goneQuietMembers)<{ member_id: string; sessions_seen: number }>`
     WITH last_take AS (
       SELECT r.member_id, max(s.convened_at) AS last_take_at
       FROM swarm_recommendations r
@@ -346,8 +1108,8 @@ export async function getMemberSilenceFlags(tx: DbHandle = sql): Promise<Record<
 
 export async function listApplicationsAdmin(status?: string) {
   const rows = status
-    ? await sql`SELECT id, member_id, status, created_at, reviewed_at FROM swarm_applications WHERE status = ${status} ORDER BY created_at DESC`
-    : await sql`SELECT id, member_id, status, created_at, reviewed_at FROM swarm_applications ORDER BY created_at DESC`;
+    ? await on(sql, listApplicationsByStatus)`SELECT id, member_id, status, created_at, reviewed_at FROM swarm_applications WHERE status = ${status} ORDER BY created_at DESC`
+    : await on(sql, listApplications)`SELECT id, member_id, status, created_at, reviewed_at FROM swarm_applications ORDER BY created_at DESC`;
   return rows;
 }
 
@@ -390,7 +1152,7 @@ export async function addMemberAdmin(input: ManualMemberInput, actor: Actor = AD
   // refusal already guards the public path (applyMember). It is also what keeps
   // the realistic accident — an operator submitting the add form twice — a 409
   // rather than two members with one credential between them.
-  const existingKey = (await sql<{ member_id: string }[]>`
+  const existingKey = (await on(sql, keyOwner)<{ member_id: string }>`
     SELECT member_id FROM swarm_member_keys WHERE public_key = ${input.publicKey} LIMIT 1`)[0];
   if (existingKey) return err(409, MANUAL_MEMBER_KEY_CONFLICT);
   const token = `tok_${memberId}_${crypto.randomUUID()}`;
@@ -408,7 +1170,7 @@ export async function addMemberAdmin(input: ManualMemberInput, actor: Actor = AD
       // renames a member to a freshly minted UUID — the only handle this create
       // can contend for is the DERIVED one, and it contends for it in the
       // UPDATE, which is where the catch below picks the loser up.
-      await tx`
+      await on(tx, insertManualMember)`
         INSERT INTO swarm_members (id, status, name, lens, contact_email, applied_at, activated_at)
         VALUES (${memberId}, 'active', ${input.name}, ${input.lens ?? null}, ${input.contact ?? null}, now(), now())`;
       // Issue #562: the manual add seats an ACTIVE member in one shot, so it is
@@ -418,9 +1180,9 @@ export async function addMemberAdmin(input: ManualMemberInput, actor: Actor = AD
       // lowest free numeric suffix, and the id remains the immutable identity
       // that keeps resolving as a public reference (getMember reads both names).
       const handle = await deriveMemberHandle(tx, { memberId, name: input.name });
-      const derived = await tx`
+      const derived = await on(tx, setMemberHandle)<Row>`
         UPDATE swarm_members SET handle = ${handle} WHERE id = ${memberId} RETURNING *`;
-      await tx`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash)
+      await on(tx, insertMemberKey)`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash)
                VALUES (${memberId}, ${input.publicKey}, true, ${hashKey(token)})`;
       await audit(actor, "member_manual_add", { memberId, handle }, tx);
       return { ok: true, status: 201, member: toMemberAdmin(derived[0]), token };
@@ -446,8 +1208,8 @@ export async function reviewApplicationAdmin(
 ): Promise<AdminResult> {
   if (decision === "approve") {
     // Reuse the SAME activation transaction the public path uses. Approval
-    // activates the pending key, queues the email, and flips status active;
-    // bearer plaintext is minted only by the member's first signed claim.
+    // activates the pending key and flips status active; bearer plaintext is
+    // minted only by the member's first signed claim.
     const res = await activateMember(memberId, role);
     if (!res.ok) return res as AdminResult;
     return {
@@ -457,19 +1219,18 @@ export async function reviewApplicationAdmin(
       memberStatus: "active",
       role,
       claimRequired: true,
-      notificationQueued: res.notificationQueued,
     };
   }
   return sql.begin(async (tx) => {
-    const row = (await tx`SELECT id, status FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
+    const row = (await on(tx, lockMemberStatus)<Row>`SELECT id, status FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
     if (!row) return err(404, "no such applicant");
     if (row.status !== "applied") return err(409, `cannot reject a member in status=${row.status}`);
     // swarm_members.status has no 'rejected' value (CHECK constraint from
     // #150's migration 0017_admin_surface.sql only allows applied/active/
     // inactive) — the rejection itself is recorded on the APPLICATION; the
     // member row folds to 'inactive', its key stays inactive (never issued).
-    await tx`UPDATE swarm_members SET status = 'inactive', version = version + 1, updated_at = now() WHERE id = ${memberId}`;
-    await tx`UPDATE swarm_applications SET status = 'rejected', reviewed_at = now() WHERE member_id = ${memberId} AND status = 'pending'`;
+    await on(tx, rejectMember)`UPDATE swarm_members SET status = 'inactive', version = version + 1, updated_at = now() WHERE id = ${memberId}`;
+    await on(tx, rejectApplication)`UPDATE swarm_applications SET status = 'rejected', reviewed_at = now() WHERE member_id = ${memberId} AND status = 'pending'`;
     await audit(actor, "member_reject", { memberId }, tx);
     return { ok: true, status: 200, memberId, memberStatus: "inactive", applicationStatus: "rejected" };
   });
@@ -485,12 +1246,12 @@ export async function setMemberRoleAdmin(
   actor: Actor = ADMIN_ACTOR,
 ): Promise<AdminResult> {
   return sql.begin(async (tx) => {
-    const row = (await tx`SELECT * FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
+    const row = (await on(tx, lockMember)<Row>`SELECT * FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
     if (!row) return err(404, "member not found");
     if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
     if (row.status !== "active") return err(409, "only active members may hold the judge role");
     if (row.role === role) return { ok: true, status: 200, member: toMemberAdmin(row) };
-    const upd = await tx`
+    const upd = await on(tx, setMemberRole)<Row>`
       UPDATE swarm_members SET role = ${role}, version = version + 1, updated_at = now()
       WHERE id = ${memberId} AND version = ${expectedVersion}
       RETURNING *`;
@@ -498,7 +1259,7 @@ export async function setMemberRoleAdmin(
     // Scheduled rosters are still mutable, so the standing no-take rule is
     // reflected immediately. Later rosters are historical snapshots.
     if (role === "judge") {
-      await tx`
+      await on(tx, excuseJudgeFromScheduled, excuseJudgeFromScheduledSessions)`
         UPDATE swarm_session_members sm SET status = 'excused', excused_at = now(), reason = 'member holds judge role'
         FROM swarm_sessions s
         WHERE sm.session_id = s.id AND sm.member_id = ${memberId} AND s.state = 'scheduled' AND sm.status = 'expected'`;
@@ -567,7 +1328,7 @@ async function updateMemberAdminTx(
   reason?: string,
 ): Promise<AdminResult> {
   return sql.begin(async (tx) => {
-    const row = (await tx`SELECT * FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
+    const row = (await on(tx, lockMember)<Row>`SELECT * FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
     if (!row) return err(404, "member not found");
     if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
 
@@ -580,7 +1341,7 @@ async function updateMemberAdminTx(
     // URL that has been published for someone else. Both are refused with the
     // same 409 the rest of this surface uses for a lost race.
     if (patch.handle !== undefined && patch.handle !== row.handle) {
-      const taken = (await tx`
+      const taken = (await on(tx, handleTaken)`
         SELECT 1 FROM swarm_members
         WHERE (handle = ${patch.handle} OR id = ${patch.handle}) AND id <> ${memberId}
         LIMIT 1`)[0];
@@ -607,7 +1368,7 @@ async function updateMemberAdminTx(
       avatar: keep(patch.avatar, row.avatar),
     };
 
-    const upd = await tx`
+    const upd = await on(tx, updateMember)<Row>`
       UPDATE swarm_members SET
         handle = ${merged.handle}, name = ${merged.name}, lens = ${merged.lens},
         contact_email = ${merged.contact_email}, tagline = ${merged.tagline},
@@ -644,22 +1405,20 @@ export async function deactivateMemberAdmin(
   actor: Actor = ADMIN_ACTOR,
 ): Promise<AdminResult> {
   return sql.begin(async (tx) => {
-    const row = (await tx`SELECT * FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
+    const row = (await on(tx, lockMember)<Row>`SELECT * FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
     if (!row) return err(404, "member not found");
     if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
-    const wasActive = row.status === "active";
-    const upd = await tx`
+    const upd = await on(tx, deactivateMember)<Row>`
       UPDATE swarm_members SET status = 'inactive', version = version + 1, updated_at = now()
       WHERE id = ${memberId} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
-    await tx`UPDATE swarm_member_keys SET active = false WHERE member_id = ${memberId} AND active = true`;
-    if (wasActive) {
-      const activeCount = await countActiveMembersTx(tx);
-      if (activeCount < SWARM_ROSTER_CAP) {
-        await enqueueSeatOpenNotifications(tx);
-      }
-    }
+    await on(tx, revokeActiveKeys)`UPDATE swarm_member_keys SET active = false WHERE member_id = ${memberId} AND active = true`;
+    // A seat opening used to mail the waitlist here (enqueueSeatOpenNotifications).
+    // Swarm email is removed — issue #1026 W5, decision D50 reversing D30 — so
+    // deactivation now just frees the seat. The waitlist itself is untouched:
+    // rows keep accumulating through POST /api/swarm/waitlist and an operator
+    // reads them directly when a seat opens.
     await audit(actor, "member_deactivate", { memberId }, tx);
     return { ok: true, status: 200, member: toMemberAdmin(upd[0]) };
   });
@@ -687,10 +1446,10 @@ export async function reactivateMemberAdmin(
   actor: Actor = ADMIN_ACTOR,
 ): Promise<AdminResult> {
   return sql.begin(async (tx) => {
-    const row = (await tx`SELECT * FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
+    const row = (await on(tx, lockMember)<Row>`SELECT * FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
     if (!row) return err(404, "member not found");
     if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
-    const lastKey = (await tx`SELECT public_key FROM swarm_member_keys WHERE member_id = ${memberId} ORDER BY created_at DESC LIMIT 1`)[0] as
+    const lastKey = (await on(tx, lastMemberKey)<{ public_key: string }>`SELECT public_key FROM swarm_member_keys WHERE member_id = ${memberId} ORDER BY created_at DESC LIMIT 1`)[0] as
       | { public_key: string }
       | undefined;
     if (!lastKey) return err(409, "member has no on-file public key; use rotate-key with a new one");
@@ -699,14 +1458,14 @@ export async function reactivateMemberAdmin(
     // is currently 'inactive') must fit under SWARM_ROSTER_CAP — no exemption.
     const cap = await assertRosterCapacity(tx);
     if (!cap.ok) return err(cap.status, cap.error);
-    const upd = await tx`
+    const upd = await on(tx, reactivateMember)<Row>`
       UPDATE swarm_members SET status = 'active', version = version + 1, updated_at = now()
       WHERE id = ${memberId} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
-    await tx`UPDATE swarm_member_keys SET active = false WHERE member_id = ${memberId} AND active = true`;
+    await on(tx, revokeActiveKeys)`UPDATE swarm_member_keys SET active = false WHERE member_id = ${memberId} AND active = true`;
     const token = `tok_${memberId}_${crypto.randomUUID()}`;
-    await tx`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash) VALUES (${memberId}, ${lastKey.public_key}, true, ${hashKey(token)})`;
+    await on(tx, insertMemberKey)`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash) VALUES (${memberId}, ${lastKey.public_key}, true, ${hashKey(token)})`;
     await audit(actor, "member_reactivate", { memberId }, tx);
     return { ok: true, status: 200, member: toMemberAdmin(upd[0]), token };
   });
@@ -723,9 +1482,9 @@ export async function rotateMemberKeyAdmin(
   actor: Actor = ADMIN_ACTOR,
 ): Promise<AdminResult> {
   return sql.begin(async (tx) => {
-    const member = (await tx`SELECT id, version FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
+    const member = (await on(tx, lockMemberVersion)<Row>`SELECT id, version FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
     if (!member) return err(404, "member not found");
-    const priorActive = (await tx`SELECT public_key FROM swarm_member_keys WHERE member_id = ${memberId} AND active = true ORDER BY created_at DESC LIMIT 1`)[0] as
+    const priorActive = (await on(tx, priorActiveKey)<{ public_key: string }>`SELECT public_key FROM swarm_member_keys WHERE member_id = ${memberId} AND active = true ORDER BY created_at DESC LIMIT 1`)[0] as
       | { public_key: string }
       | undefined;
     const publicKey = opts.publicKey ?? priorActive?.public_key;
@@ -733,10 +1492,10 @@ export async function rotateMemberKeyAdmin(
     // The route already screened a SUPPLIED publicKey; this catches the
     // carried-forward one (and any direct caller of this function).
     if (!isRegistrablePublicKey(publicKey)) return err(409, CARRIED_KEY_UNREGISTRABLE);
-    await tx`UPDATE swarm_member_keys SET active = false WHERE member_id = ${memberId} AND active = true`;
+    await on(tx, revokeActiveKeys)`UPDATE swarm_member_keys SET active = false WHERE member_id = ${memberId} AND active = true`;
     const token = `tok_${memberId}_${crypto.randomUUID()}`;
-    await tx`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash) VALUES (${memberId}, ${publicKey}, true, ${hashKey(token)})`;
-    await tx`UPDATE swarm_members SET version = version + 1, updated_at = now() WHERE id = ${memberId}`;
+    await on(tx, insertMemberKey)`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash) VALUES (${memberId}, ${publicKey}, true, ${hashKey(token)})`;
+    await on(tx, bumpMemberVersion)`UPDATE swarm_members SET version = version + 1, updated_at = now() WHERE id = ${memberId}`;
     await audit(actor, "member_rotate_key", { memberId }, tx);
     return { ok: true, status: 200, memberId, token };
   });
@@ -809,12 +1568,12 @@ export async function uploadMemberAvatarAdmin(
   const avatar = { path: avatarPath, source_url: null, credit: "Uploaded by admin" };
 
   return sql.begin(async (tx) => {
-    const upd = await tx`
+    const upd = await on(tx, setMemberAvatar)<Row>`
       UPDATE swarm_members SET avatar = ${tx.json(avatar as any)}, version = version + 1, updated_at = now()
       WHERE id = ${memberId}
       RETURNING id`;
     if (upd.length === 0) return err(404, "member not found");
-    await tx`
+    await on(tx, upsertAvatarBytes)`
       INSERT INTO swarm_member_avatars (member_id, content_type, bytes, byte_size)
       VALUES (${memberId}, ${type}, ${Buffer.from(input.bytes)}, ${input.bytes.byteLength})
       ON CONFLICT (member_id) DO UPDATE
@@ -827,197 +1586,22 @@ export async function uploadMemberAvatarAdmin(
   });
 }
 
-// ── Sessions: creation with a frozen roster snapshot ────────────────────────
-// Field/validation shape matches docs/architecture.md §6.3
-// SessionCreateRequest: three explicit ISO instants, ordering
-// briefOpensAt < windowClosesAt < publishAt, and `date` must equal the UTC
-// date of briefOpensAt.
-export interface SessionCreateInput {
-  date: string; // YYYY-MM-DD, UTC calendar date
-  subjectId: string;
-  briefOpensAt: string; // ISO instant
-  windowClosesAt: string; // ISO instant
-  publishAt: string; // ISO instant
-}
-
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function isValidUtcDate(date: string): boolean {
-  if (!DATE_RE.test(date)) return false;
-  const d = new Date(`${date}T00:00:00Z`);
-  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === date;
-}
-
-// Job kinds + their canonical scoped dedupe key, per docs §4 US-C3/§6.3:
-// `swarm:<session-id>:<action>`.
-//
-// `swarm.judge` is ON THIS LIST (issue #767) and that is the ONLY thing that
-// makes `swarm_judge_config.mode` mean anything on the cadence. The handler,
-// the per-session enqueue endpoint and the admin button all shipped with #752,
-// but nothing SCHEDULED a judging — so a session was judged only when a human
-// asked for one, and flipping the mode to `shadow` changed nothing about what
-// the swarm actually did. The mode switch stays the on/off control; this list
-// is what gives it something to switch.
-const SESSION_JOB_KINDS = ["swarm.publish_brief", "swarm.close_window", "swarm.aggregate", "swarm.judge", "swarm.publish"] as const;
-
-// The narrowest gap a session may declare between two of its own instants
-// (issue #806). Validation used to be strict `<` on millisecond timestamps,
-// which admits a ONE-MILLISECOND window — and the lifecycle needs three
-// distinct instants between `windowClosesAt` and `publishAt` to order
-// aggregate, judge and publish at all. Below three seconds the clamp below can
-// only collapse them onto each other, and once `aggregate` and `judge` share a
-// `run_after` the claim order among them is a tiebreak, not a schedule. Stating
-// the requirement in validation is cheaper than making every consumer of the
-// queue defend against a degenerate one that was accepted.
-//
-// The clamp is KEPT even though validation now guarantees the room it needs:
-// it is the property (monotonic, never crossing) and this is the input bound,
-// and a bound is not a substitute for the property holding.
-export const MIN_SESSION_STEP_MS = 3_000;
-
-const JOB_ACTION: Record<(typeof SESSION_JOB_KINDS)[number], string> = {
-  "swarm.publish_brief": "publish_brief",
-  "swarm.close_window": "close_window",
-  "swarm.aggregate": "aggregate",
-  "swarm.judge": "judge",
-  "swarm.publish": "publish",
-};
-
-export async function createSessionAdmin(input: SessionCreateInput, actor: Actor = ADMIN_ACTOR): Promise<AdminResult> {
-  if (!isValidUtcDate(input.date)) return err(400, "date must be a valid UTC calendar date (YYYY-MM-DD)");
-  const briefOpensAt = new Date(input.briefOpensAt);
-  const windowClosesAt = new Date(input.windowClosesAt);
-  const publishAt = new Date(input.publishAt);
-  if ([briefOpensAt, windowClosesAt, publishAt].some((d) => Number.isNaN(d.getTime())))
-    return err(400, "briefOpensAt, windowClosesAt, and publishAt must be valid ISO timestamps");
-  if (briefOpensAt.toISOString().slice(0, 10) !== input.date)
-    return err(400, "briefOpensAt date does not match date (date mismatch)");
-  if (!(briefOpensAt.getTime() < windowClosesAt.getTime() && windowClosesAt.getTime() < publishAt.getTime()))
-    return err(400, "invalid timestamp ordering: briefOpensAt < windowClosesAt < publishAt required");
-  // A MINIMUM, not merely an ordering (issue #806) — see MIN_SESSION_STEP_MS.
-  if (windowClosesAt.getTime() - briefOpensAt.getTime() < MIN_SESSION_STEP_MS)
-    return err(400, `collection window is ${windowClosesAt.getTime() - briefOpensAt.getTime()}ms; at least ${MIN_SESSION_STEP_MS}ms is required between briefOpensAt and windowClosesAt`);
-  if (publishAt.getTime() - windowClosesAt.getTime() < MIN_SESSION_STEP_MS)
-    return err(400, `only ${publishAt.getTime() - windowClosesAt.getTime()}ms between windowClosesAt and publishAt; at least ${MIN_SESSION_STEP_MS}ms is required to order aggregate, judge and publish`);
-
-  const subject = (await sql`SELECT id, status, name FROM swarm_subjects WHERE id = ${input.subjectId}`)[0] as
-    | { id: string; status: string; name: string }
-    | undefined;
-  if (!subject) return err(404, "subject not found");
-  if (subject.status !== "active") return err(409, "topic is not active");
-
-  // Newest first: a subject may now have several sessions on one date
-  // (migration 0022 dropped UNIQUE(date, subject_id)), and it is the most recent
-  // one that decides whether this create is a re-schedule or a conflict.
-  const existing = (await sql`SELECT id, state FROM swarm_sessions
-                              WHERE date = ${input.date} AND subject_id = ${input.subjectId}
-                              ORDER BY convened_at DESC LIMIT 1`)[0] as
-    | { id: string; state: string }
-    | undefined;
-  if (existing && existing.state !== "scheduled") return err(409, "a session already exists for this date/topic");
-
-  return sql.begin(async (tx) => {
-    const rows = existing
-      ? await tx`
-          UPDATE swarm_sessions SET
-            brief_opens_at = ${briefOpensAt}, window_closes_at = ${windowClosesAt}, publish_at = ${publishAt}, version = version + 1
-          WHERE id = ${existing.id}
-          RETURNING id, date, subject_id, subject_name, state, version`
-      : await tx`
-          -- No date column here: since migration 0022 it is generated from
-          -- convened_at. An admin-scheduled session convenes at briefOpensAt, so
-          -- that instant IS its convened_at, and the derived date necessarily
-          -- equals the input.date already validated to agree with it above.
-          -- The admin still chooses WHEN a session sits; nobody chooses a date
-          -- that disagrees with when it sat.
-          INSERT INTO swarm_sessions (convened_at, subject_id, subject_name, state, brief_opens_at, window_closes_at, publish_at)
-          VALUES (${briefOpensAt}, ${input.subjectId}, ${subject.name}, 'scheduled', ${briefOpensAt}, ${windowClosesAt}, ${publishAt})
-          RETURNING id, date, subject_id, subject_name, state, version`;
-    const session = rows[0];
-    const sessionId = session.id as string;
-
-    // Frozen roster: snapshot every currently-active member (name/lens
-    // denormalized at snapshot time) into the CANONICAL swarm_session_members
-    // table (docs §5.3 / issue #150's migration). Later member activation/
-    // deactivation NEVER rewrites this list — roster add/excuse are the only
-    // sanctioned edits, and only before collecting begins.
-    const activeMembers = await tx<{ id: string; name: string; lens: string | null }[]>`
-      SELECT id, name, lens FROM swarm_members WHERE status = 'active' AND role = 'member'`;
-    for (const m of activeMembers) {
-      await tx`
-        INSERT INTO swarm_session_members (session_id, member_id, member_name, member_lens, status)
-        VALUES (${sessionId}, ${m.id}, ${m.name}, ${m.lens}, 'expected')
-        ON CONFLICT (session_id, member_id) DO NOTHING`;
-    }
-
-    // One deduplicated, session-scoped job per lifecycle step (docs §4 US-C3):
-    // dedupe key `swarm:<session-id>:<action>` so re-creating a still-scheduled
-    // session never double-enqueues.
-    //
-    // ORDERING, not spacing, is what these instants buy. The queue claims
-    // `ORDER BY priority DESC, run_after` (worker/loop.ts), so a lane draining
-    // serially runs aggregate before judge before publish purely because their
-    // run_after values are ordered — the seconds between them are not a bet on
-    // how long a step takes. The judge reads the AGGREGATED take set and must
-    // land before the session publishes, so it sits one second behind aggregate
-    // and is clamped strictly below publishAt.
-    //
-    // BOTH intermediate instants are clamped, not just the judge's. Validation
-    // guarantees only `windowClosesAt < publishAt` — a gap that may be a single
-    // millisecond — so `windowClosesAt + 1s` can itself land at or beyond
-    // publish. Clamping the judge alone then pulled it BELOW the aggregate and
-    // inverted the one pair whose order is the whole point. Clamping downward
-    // from publish keeps the sequence monotonic for any legal input; on a gap
-    // too narrow to hold three distinct instants they collapse onto each other
-    // rather than crossing, which a two-second window is already wide enough to
-    // avoid.
-    const lastBeforePublish = publishAt.getTime() - 1;
-    const judgeMs = Math.max(windowClosesAt.getTime(), Math.min(windowClosesAt.getTime() + 2_000, lastBeforePublish));
-    const aggregateMs = Math.max(windowClosesAt.getTime(), Math.min(windowClosesAt.getTime() + 1_000, judgeMs));
-    const jobTimes: Record<(typeof SESSION_JOB_KINDS)[number], Date> = {
-      "swarm.publish_brief": briefOpensAt,
-      "swarm.close_window": windowClosesAt,
-      "swarm.aggregate": new Date(aggregateMs),
-      "swarm.judge": new Date(judgeMs),
-      "swarm.publish": publishAt,
-    };
-    const jobIds: number[] = [];
-    for (const kind of SESSION_JOB_KINDS) {
-      const dedupeKey = `swarm:${sessionId}:${JOB_ACTION[kind]}`;
-      // RESCHEDULE RE-ARMS THE JOB, IT DOES NOT LEAVE IT BEHIND. This used to
-      // be `ON CONFLICT DO NOTHING`, which meant re-creating a still-scheduled
-      // session silently kept each job's STALE run_after and SPENT attempts —
-      // a session moved to a new date never actually ran on it. DO UPDATE
-      // moves run_after to the new instant and resets status/attempts/lock
-      // fields so a previously-succeeded or exhausted row runs again on the
-      // new timeline exactly like a fresh insert would.
-      const r = await tx`
-        INSERT INTO jobs (kind, payload, run_after, dedupe_key, scope_type, scope_id, requested_by)
-        VALUES (${kind}, ${tx.json({ sessionId } as any)}, ${jobTimes[kind]}, ${dedupeKey}, 'swarm_session', ${sessionId}, ${actor})
-        ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET
-          run_after = EXCLUDED.run_after, status = 'pending', attempts = 0,
-          locked_at = NULL, locked_by = NULL, last_error = NULL, updated_at = now()
-        RETURNING id`;
-      if (r[0]) jobIds.push(Number(r[0].id));
-    }
-
-    await audit(actor, "session_create", { sessionId, date: input.date, subjectId: input.subjectId }, tx);
-    return {
-      ok: true,
-      status: existing ? 200 : 201,
-      session: { id: sessionId, date: session.date, subjectId: session.subject_id, subjectName: session.subject_name, state: session.state, version: Number(session.version) },
-      rosterSize: activeMembers.length,
-      jobIds,
-    };
-  });
-}
+// ── Sessions: no admin creation (issue #1026, D55 decision 4) ───────────────
+// There is no admin session create. `createSessionAdmin` convened a session in
+// `scheduled` with three admin-chosen instants and snapshotted the roster; D55
+// makes `system-scheduler` the only caller of the epoch lifecycle, and the
+// scheduler spec has no `scheduled` state (§4.1: a session is `collecting` from
+// its first instant). Its route already answered 410. The roster snapshot it
+// took is now taken by the epoch itself (domain.ts insertEpoch), in the
+// transaction that opens it; a member activated afterwards joins the next
+// epoch (docs/architecture/admin-surface.md US-C3).
 
 // ── Roster add/excuse/restore (only before collecting begins) ──────────────
 // Backed by the CANONICAL swarm_session_members table (issue #150). Status
 // vocabulary is 'expected' | 'excused' (not 'active'); there is no separate
 // "restored" marker — restoring simply flips status back to 'expected'.
 async function requireRosterEditable(tx: DbHandle, sessionId: string) {
-  const s = (await tx`SELECT id, state FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`)[0] as
+  const s = (await on(tx, lockSession)<{ id: string; state: string }>`SELECT id, state FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`)[0] as
     | { id: string; state: string }
     | undefined;
   if (!s) return { ok: false as const, status: 404, error: "session not found" };
@@ -1026,7 +1610,7 @@ async function requireRosterEditable(tx: DbHandle, sessionId: string) {
 }
 
 export async function getSessionRoster(sessionId: string) {
-  return sql`
+  return on(sql, readRoster)<Row>`
     SELECT member_id, member_name, member_lens, status, included_at, excused_at, reason
     FROM swarm_session_members WHERE session_id = ${sessionId} ORDER BY member_id`;
 }
@@ -1035,10 +1619,10 @@ export async function rosterAddAdmin(sessionId: string, memberId: string, actor:
   return sql.begin(async (tx) => {
     const gate = await requireRosterEditable(tx, sessionId);
     if (!gate.ok) return err(gate.status, gate.error);
-    const member = (await tx<{ id: string; name: string; lens: string | null; role: string }[]>`SELECT id, name, lens, role FROM swarm_members WHERE id = ${memberId}`)[0];
+    const member = (await on(tx, rosterMember)<{ id: string; name: string; lens: string | null; role: string }>`SELECT id, name, lens, role FROM swarm_members WHERE id = ${memberId}`)[0];
     if (!member) return err(404, "member not found");
     if (member.role === "judge") return err(409, "judge_role_cannot_join_take_roster");
-    await tx`
+    await on(tx, rosterInsert)`
       INSERT INTO swarm_session_members (session_id, member_id, member_name, member_lens, status)
       VALUES (${sessionId}, ${memberId}, ${member.name}, ${member.lens}, 'expected')
       ON CONFLICT (session_id, member_id) DO UPDATE SET status = 'expected', excused_at = NULL`;
@@ -1088,7 +1672,7 @@ export async function rosterExcuseAdmin(
   return sql.begin(async (tx) => {
     let state: string | undefined;
     if (options.force) {
-      const s = (await tx`SELECT id, state FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`)[0] as
+      const s = (await on(tx, lockSession)<{ id: string; state: string }>`SELECT id, state FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`)[0] as
         | { id: string; state: string }
         | undefined;
       if (!s) return err(404, "session not found");
@@ -1100,7 +1684,7 @@ export async function rosterExcuseAdmin(
       const gate = await requireRosterEditable(tx, sessionId);
       if (!gate.ok) return err(gate.status, gate.error);
     }
-    const upd = await tx`UPDATE swarm_session_members SET status = 'excused', excused_at = now() WHERE session_id = ${sessionId} AND member_id = ${memberId} RETURNING member_id`;
+    const upd = await on(tx, rosterExcuse)`UPDATE swarm_session_members SET status = 'excused', excused_at = now() WHERE session_id = ${sessionId} AND member_id = ${memberId} RETURNING member_id`;
     if (upd.length === 0) return err(404, "member is not on this session's roster");
     if (options.force) {
       await audit(actor, "roster_excuse_forced", {
@@ -1120,243 +1704,11 @@ export async function rosterRestoreAdmin(sessionId: string, memberId: string, ac
   return sql.begin(async (tx) => {
     const gate = await requireRosterEditable(tx, sessionId);
     if (!gate.ok) return err(gate.status, gate.error);
-    const upd = await tx`UPDATE swarm_session_members SET status = 'expected', excused_at = NULL WHERE session_id = ${sessionId} AND member_id = ${memberId} RETURNING member_id`;
+    const upd = await on(tx, rosterRestore)`UPDATE swarm_session_members SET status = 'expected', excused_at = NULL WHERE session_id = ${sessionId} AND member_id = ${memberId} RETURNING member_id`;
     if (upd.length === 0) return err(404, "member is not on this session's roster");
     await audit(actor, "roster_restore", { sessionId, memberId }, tx);
     return { ok: true, status: 200, sessionId, memberId };
   });
-}
-
-// ── Guarded lifecycle transitions ───────────────────────────────────────────
-// Session states: scheduled → collecting → window_closed → aggregated →
-// [judged] → published, with `cancelled` reachable from any non-terminal state
-// and `window_closed` reopenable back to `collecting`. published/cancelled are
-// terminal — no further transition is ever legal. Action names and the legal
-// matrix match docs/architecture.md §4 US-C4 exactly.
-//
-// `judged` (issue #752) is the JUDGED-BUT-UNSIGNED state, and it is OPTIONAL BY
-// CONSTRUCTION: `aggregated -> published` remains legal, so a deployment with
-// the judge off publishes exactly the sessions it publishes today and the state
-// never appears. It reopens like `aggregated` does, so a session whose judge
-// said "hold" can go back for more takes rather than being stuck one step from
-// terminal.
-//
-// EVERY STATE ADDED HERE IS ALSO A DECISION ABOUT THE AMENDMENT WINDOW. The
-// take-amendment gate in domain.ts is an ALLOWLIST (`TAKES_AMENDABLE_STATES`)
-// precisely so that adding a row to this table cannot silently reopen it — a
-// new state is frozen until someone says otherwise there. `swarm-take-
-// revisions.test.ts` walks SESSION_STATES below and asserts the two agree.
-const TERMINAL = new Set(["published", "cancelled"]);
-const TRANSITIONS: Record<string, readonly string[]> = {
-  scheduled: ["collecting", "cancelled"],
-  collecting: ["window_closed", "cancelled"],
-  window_closed: ["collecting", "aggregated", "cancelled"],
-  aggregated: ["window_closed", "judged", "published"],
-  judged: ["window_closed", "published"],
-  published: [],
-  cancelled: [],
-};
-/** Every session state the lifecycle knows about. Exported so a test can walk
- *  the whole set rather than a hand-copied literal. */
-export const SESSION_STATES: readonly string[] = Object.freeze(Object.keys(TRANSITIONS));
-
-const ACTION_FOR_TO_STATE: Record<string, string> = {
-  collecting: "publish_brief", // scheduled -> collecting; window_closed -> collecting is "reopen" (passed explicitly)
-  window_closed: "close_window",
-  aggregated: "aggregate",
-  judged: "judge",
-  published: "publish",
-  cancelled: "cancel",
-};
-
-export interface GuardedTransitionResult extends AdminResult {
-  session?: { id: string; state: string; version: number };
-  idempotent?: boolean;
-}
-
-// Advances swarm_sessions.state under an optimistic-concurrency + legal-
-// transition guard, and writes exactly one swarm_session_events row
-// (with the NOT NULL `action` column the canonical schema requires) and one
-// audit_log row for every REAL transition, transactionally. Re-requesting the
-// CURRENT state is idempotent (200, no version bump, no new event/audit row);
-// requesting a transition out of a terminal state, or one not in the legal
-// table, is 409.
-export async function guardedTransition(
-  sessionId: string,
-  toState: string,
-  actor: Actor,
-  opts: { expectedVersion?: number; action?: string; reason?: string } = {},
-): Promise<GuardedTransitionResult> {
-  return sql.begin((tx) => transitionWithin(tx, sessionId, toState, actor, opts));
-}
-
-/**
- * The same guard, run inside a transaction the CALLER owns. Extracted for
- * judgeSessionAdmin, which has to put the transition, the judgement row and the
- * opinion's effect on the session in ONE transaction — a transition that
- * commits on its own advertises a fact (`judged`) that no row yet supports, and
- * anything failing afterwards strands the session there.
- */
-async function transitionWithin(
-  tx: DbHandle,
-  sessionId: string,
-  toState: string,
-  actor: Actor,
-  opts: { expectedVersion?: number; action?: string; reason?: string } = {},
-): Promise<GuardedTransitionResult> {
-  const action = opts.action ?? ACTION_FOR_TO_STATE[toState] ?? toState;
-  const row = (await tx`SELECT id, state, version FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`)[0] as
-    | { id: string; state: string; version: number }
-    | undefined;
-  if (!row) return err(404, "session not found");
-  if (opts.expectedVersion != null && Number(row.version) !== opts.expectedVersion) return err(409, "stale_version");
-  if (row.state === toState) {
-    return { ok: true, status: 200, idempotent: true, session: { id: row.id, state: row.state, version: Number(row.version) } };
-  }
-  if (TERMINAL.has(row.state)) return err(409, `terminal_state:${row.state}`);
-  const legal = TRANSITIONS[row.state] ?? [];
-  if (!legal.includes(toState)) return err(409, `illegal_transition:${row.state}->${toState}`);
-  const upd = await tx`UPDATE swarm_sessions SET state = ${toState}, version = version + 1 WHERE id = ${sessionId} RETURNING id, state, version`;
-  await tx`
-    INSERT INTO swarm_session_events (session_id, from_state, to_state, action, actor, reason)
-    VALUES (${sessionId}, ${row.state}, ${toState}, ${action}, ${actor}, ${opts.reason ?? null})`;
-  await audit(actor, "session_transition", { sessionId, from: row.state, to: toState, action }, tx);
-  return { ok: true, status: 200, session: { id: upd[0].id, state: upd[0].state, version: Number(upd[0].version) } };
-}
-
-/**
- * A READ-ONLY dry run of the same guard, so a caller that must do expensive
- * work BEFORE the transition (judgeSessionAdmin: a model call of up to 60s) can
- * refuse an illegal one without paying for it. It is not a substitute for the
- * guard — `transitionWithin` re-checks under `FOR UPDATE` inside the
- * transaction, and that check is the authority.
- */
-async function preflightTransition(sessionId: string, toState: string, expectedVersion?: number): Promise<AdminResult> {
-  const row = (await sql`SELECT state, version FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
-    | { state: string; version: number }
-    | undefined;
-  if (!row) return err(404, "session not found");
-  if (expectedVersion != null && Number(row.version) !== expectedVersion) return err(409, "stale_version");
-  if (row.state === toState) return { ok: true, status: 200 };
-  if (TERMINAL.has(row.state)) return err(409, `terminal_state:${row.state}`);
-  if (!(TRANSITIONS[row.state] ?? []).includes(toState)) return err(409, `illegal_transition:${row.state}->${toState}`);
-  return { ok: true, status: 200 };
-}
-
-export async function cancelSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR, reason?: string) {
-  return guardedTransition(sessionId, "cancelled", actor, { expectedVersion, reason });
-}
-
-export async function closeSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR, reason?: string) {
-  return guardedTransition(sessionId, "window_closed", actor, { expectedVersion, reason });
-}
-
-export async function reopenSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR, reason?: string) {
-  return guardedTransition(sessionId, "collecting", actor, { expectedVersion, action: "reopen", reason });
-}
-
-export async function aggregateSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR) {
-  const t = await guardedTransition(sessionId, "aggregated", actor, { expectedVersion });
-  if (!t.ok) return t;
-  const rollup = await domainAggregateSession(sessionId);
-  return { ...t, ...rollup, status: t.status };
-}
-
-// Judge a session that has already been aggregated. THE ORDER MATTERS, and it
-// is not the obvious one:
-//
-//   1. Read the mode ONCE. It is then passed down to judgeSession() rather than
-//      re-read there. Reading it twice meant an operator flipping the switch to
-//      `off` mid-run — precisely what the switch exists for — got a session
-//      advanced to `judged` and then a 409, i.e. a state whose name asserts a
-//      fact no row supports.
-//   2. Dry-run the state guard. A disabled judge or an illegal transition costs
-//      no model call.
-//   3. Form the opinion. OUTSIDE any transaction: this is a network call of up
-//      to 60s and nothing may hold a row lock or a pooled connection across it.
-//   4. Transition, record the judgement, and (in `enforce`) apply it — ALL IN
-//      ONE TRANSACTION, under an advisory lock on the session id. So the
-//      `judged` state and the row that justifies it commit together or not at
-//      all, and two judges racing the same session (the admin POST in the api
-//      process against a `swarm.judge` job in worker-swarm) are serialized
-//      rather than interleaved.
-//
-// A judge that falls back to template prose is still a successful judging — see
-// swarm/judge.ts on why failure is an outcome here rather than an error.
-export async function judgeSessionAdmin(
-  sessionId: string,
-  expectedVersion: number | undefined,
-  actor: Actor = ADMIN_ACTOR,
-  opts: { force?: boolean } = {},
-) {
-  const config = await getJudgeConfig();
-  if (config.mode === "off") return err(409, "judge_disabled");
-  const pre = await preflightTransition(sessionId, "judged", expectedVersion);
-  if (!pre.ok) return pre;
-
-  // Named-judge attribution (issue #918). Resolved by HANDLE, not hardcoded to
-  // an id, because the id is generated per deployment (roster-seed.ts). An
-  // environment that has not run seedLiveRoster() — most of this repo's own
-  // tests — resolves nothing here, and `judgeMemberId` MUST then stay
-  // `undefined` (never `""`) so judgeSession() takes its unnamed-judge path
-  // and every judgement keeps naming 'robotmoney-in-house', unchanged.
-  //
-  // NO STATUS/ROLE/CONFLICT CHECK HERE. judgeSession() already runs all three
-  // — active-status, role==='judge', and the take-conflict check — inside its
-  // own transaction once `judgeMemberId` is passed (judge-session.ts). Redoing
-  // any of them here would be a second, separately-maintained copy of a rule
-  // that must have exactly one source.
-  const namedJudge = await getMember("themis");
-  const judgeMemberId = namedJudge?.id;
-
-  let t: GuardedTransitionResult | undefined;
-  const result = await judgeSession(sessionId, {
-    config,
-    judgeMemberId,
-    force: opts.force,
-    // Runs inside the judge's transaction, after its advisory lock and before
-    // the judgement row is written. A refusal here rolls the whole thing back.
-    beforeRecord: async (tx) => {
-      t = await transitionWithin(tx, sessionId, "judged", actor, { expectedVersion });
-      return t;
-    },
-  });
-  // PRESERVE THE FULL RESULT, not just status/error via err()'s minimal shape.
-  // `judgeUnavailableReason` (credit_exhausted / credential_rejected /
-  // model_not_supported — see JudgeUnavailableError in judge.ts) is the one
-  // field that says WHICH fail-closed class this is, and `err()` here used to
-  // drop it silently: qualifyJudgeUnavailable() (worker/handlers/swarm.ts)
-  // reads exactly this field to turn the bare `judge_unavailable` into
-  // `judge_unavailable:<reason>` before it reaches job_runs.last_error and the
-  // console — but by the time judgeSession()'s cron handler received this
-  // object, the field was already gone, so the qualifier had nothing to
-  // qualify and every occurrence logged as the bare word forever. Confirmed
-  // against a real staging failure (2026-09-18): the actual cause was
-  // unrecoverable once the session/job was gone, because nothing between the
-  // throw site and the console ever wrote it down.
-  if (!result.ok) return { ...result, ok: false as const, error: result.error ?? "judge failed" };
-  await audit(actor, "session_judged", {
-    sessionId, mode: result.mode, applied: result.applied === true,
-    appliedSkippedReason: result.appliedSkippedReason ?? null,
-    source: result.outcome?.source, fallbackReason: result.outcome?.fallbackReason ?? null,
-    promptHash: result.outcome?.promptHash, inputsDigest: result.outcome?.inputsDigest,
-  });
-  return {
-    ...(t ?? { ok: true, status: 200 }),
-    status: t?.status ?? 200,
-    judge: {
-      mode: result.mode,
-      applied: result.applied === true,
-      appliedSkippedReason: result.appliedSkippedReason ?? null,
-      judgementId: result.judgementId,
-      source: result.outcome?.source,
-      fallbackReason: result.outcome?.fallbackReason ?? null,
-      model: result.outcome?.model ?? null,
-      promptHash: result.outcome?.promptHash,
-      inputsDigest: result.outcome?.inputsDigest,
-      releaseSafety: result.outcome?.opinion.release_safety,
-    },
-  };
 }
 
 // The runtime switch itself. Audited like every other admin write, because
@@ -1389,16 +1741,15 @@ export async function getJudgeConfigAdmin(): Promise<AdminResult<{ judge: JudgeC
  */
 export function judgeModeWarnings(mode: JudgeMode): string[] {
   if (mode === "off") return [];
-  const warnings = [
-    // Not a defect: `FOR UPDATE SKIP LOCKED` is what makes the queue safe under
-    // N workers, and the swarm lane's ordering is bought by run_after, which is
-    // a CLAIM-order property. It holds today by topology, not by construction.
-    "ordering assumes EXACTLY ONE `swarm`-lane worker: `FOR UPDATE SKIP LOCKED` hands " +
-      "`swarm.judge` and `swarm.publish` to two workers the instant both are due, and the judge " +
-      "holds its worker for up to 60s on the model call. docker-compose.yml declares one " +
-      "`worker-swarm` with no replicas; scaling the lane requires making the ordering " +
-      "independent of worker count first (docs/architecture.md §9.7).",
-  ];
+  // THE SINGLE-WORKER ORDERING WARNING IS DELETED, NOT SUPPRESSED (issue #1026
+  // W4). It said judging and publishing were two queue rows whose order held
+  // only because exactly one worker claimed the lane. Neither is a queue row
+  // any more: system-scheduler-spec.md §4.4 makes settlement "a chain the
+  // scheduler drives through the API, each step as soon as the previous one
+  // returns", so the steps are sequenced by the caller rather than by
+  // run_after and claim order. This file's own rule is that a warning naming a
+  // fixed problem is deleted rather than left standing.
+  const warnings: string[] = [];
   if (mode === "enforce") {
     // Not a defect either: the aggregator OWNS the recommendation, and #806
     // chose to report this loss rather than prevent it. But an operator reading
@@ -1436,106 +1787,18 @@ export async function setJudgeConfigAdmin(
   return { ok: true, status: 200, judge, warnings };
 }
 
-/**
- * READ the fault lever. Safe on every path and in every environment — knowing
- * whether the judge is being faulted is exactly what an operator staring at a
- * run of `malformed_output` judgements needs, and refusing to answer would make
- * an armed lever harder to find than to arm.
- *
- * The body is NOT projected. It is operator-supplied text chosen to be
- * malformed, it can be 20,000 characters, and a GET that echoes it turns the
- * admin surface into a place to park a payload. Its length and digest are
- * enough to say WHICH body is armed.
- */
-export async function getJudgeFaultInjectionAdmin(): Promise<AdminResult> {
-  const state = await getJudgeFaultInjection();
-  return { ok: true, status: 200, faultInjection: projectFaultInjection(state) };
-}
-
-function projectFaultInjection(state: JudgeFaultInjectionState) {
-  return {
-    enabled: state.enabled,
-    bodyChars: state.body.length,
-    bodyDigest: state.body ? createHash("sha256").update(state.body, "utf8").digest("hex").slice(0, 16) : null,
-    remaining: state.remaining,
-    sessionId: state.sessionId,
-    note: state.note,
-    updatedBy: state.updatedBy,
-    updatedAt: state.updatedAt,
-  };
-}
-
-/**
- * ARM OR DISARM the fault lever (R13) — the one documented, audited way to make
- * the judge transport answer with a body an operator chose.
- *
- * THE REFUSAL IS THE FEATURE. `assertFaultInjectionAllowed` runs BEFORE the
- * write and only for `enabled: true`: a process without
- * `SWARM_JUDGE_FAULT_INJECTION` refuses (403 `fault_injection_refused`), and on
- * an ACCEPTANCE path — RM_ENV=prod, which staging and production both run, and
- * which an unset RM_ENV resolves to under D13 — it refuses again unless the
- * second opt-in `SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN` is also
- * present. Disarming is never refused.
- *
- * THE AUDIT ROW IS THE ACCEPTANCE ARTIFACT. Arming this on staging is a
- * RECORDED ACCEPTANCE MUTATION — while it is on, the judge is not exercising
- * the model, so nothing it writes is evidence about the model — and the pair of
- * `judge_fault_injection` rows (on, then off) is what an acceptance bundle
- * cites to bound the window. The BODY never reaches the audit row for the same
- * reason it never reaches the GET.
- */
-export async function setJudgeFaultInjectionAdmin(
-  patch: { enabled: boolean; body?: string; remaining?: number; sessionId?: string | null; note?: string | null },
-  actor: Actor = ADMIN_ACTOR,
-): Promise<AdminResult> {
-  if (patch.enabled) {
-    try {
-      assertFaultInjectionAllowed();
-    } catch (e) {
-      if (e instanceof JudgeFaultInjectionRefused) {
-        return { ...err(403, e.message), reason: e.gate, error: "fault_injection_refused", detail: e.message };
-      }
-      throw e;
-    }
-  }
-  let state: JudgeFaultInjectionState;
-  try {
-    state = await writeJudgeFaultInjection(patch, actor);
-  } catch (e) {
-    return err(400, e instanceof Error ? e.message : "invalid judge fault injection");
-  }
-  const projected = projectFaultInjection(state);
-  await audit(actor, "judge_fault_injection", {
-    ...projected,
-    acceptanceMutation: true,
-    testOnly: true,
-  });
-  return {
-    ok: true,
-    status: 200,
-    faultInjection: projected,
-    warnings: state.enabled
-      ? [
-        "TEST-ONLY: the consensus judge is now answering from swarm_judge_fault_injection, not from its model. " +
-        "Judgements written while this is armed are NOT evidence of model behaviour — they are a recorded acceptance " +
-        "mutation. Disarm it ({ enabled: false }) as the last step of the demonstration.",
-      ]
-      : [],
-  };
-}
-
-// ── The soak's read path (issue #767, folded from #768) ────────────────────
+// ── The judgement record's read path (issue #767, folded from #768) ────────
 //
-// `shadow` exists to accumulate judge opinions against live traffic until they
-// can be trusted. Until this route existed there was nothing to accumulate them
-// INTO that anyone could read: `swarm_session_judgements` had no admin route, no
-// UI, and `latestJudgement()` had no production caller at all — inspecting a
-// soak meant `psql` against production. A soak nobody can read is not a soak.
+// Built for the `shadow` soak, which D53 retired; it stays because it is the
+// only place an operator can read every judgement a session received — the
+// judge of record's, a second seated judge's that changed no outcome, late
+// evidence after publication, and historical `shadow` rows — beside what the
+// session itself carries.
 //
-// PRIVILEGED like everything else under /api/swarm/admin/*. The opinions include
-// model-authored prose about named members that `shadow` deliberately keeps off
-// the public session page; serving it unauthenticated would publish, through the
-// read path, exactly what the mode exists to withhold.
+// PRIVILEGED like everything else under /api/swarm/admin/*. Rows that never
+// reached the session carry model-authored prose about named members that the
+// public session page does not show; serving them unauthenticated would publish
+// through the read path what the lifecycle kept off the session.
 
 /**
  * One judgement row, camelCased and with the operator-facing facts up front.
@@ -1546,7 +1809,7 @@ export async function setJudgeFaultInjectionAdmin(
  */
 function toJudgementAdmin(
   r: Record<string, unknown>,
-  carried: { promptHash: string; inputsDigest: string } | null,
+  carried: { promptHash: string; inputsDigest: string; judgedByMemberId: string | null } | null,
 ) {
   const dropped = { positions: Number(r.dropped_positions ?? 0), disagreements: Number(r.dropped_disagreements ?? 0) };
   // Does the session STILL carry this opinion? (issue #806.) `applied` is a
@@ -1557,9 +1820,14 @@ function toJudgementAdmin(
   // replaces `swarm_recommendation` wholesale and the judge's prose,
   // release_safety and fingerprint go with it. So the read path reconciles
   // instead of trusting the column.
+  //
+  // The JUDGE is compared too: two seated judges reading the same take set
+  // under the same prompt share both digests, and only the judge of record's
+  // judgement is on the session (system-scheduler-spec.md §4.4).
   const carriedBySession = carried != null
     && carried.inputsDigest === String(r.inputs_digest)
-    && carried.promptHash === String(r.prompt_hash);
+    && carried.promptHash === String(r.prompt_hash)
+    && carried.judgedByMemberId === ((r.judged_by_member_id as string | null) ?? null);
   return {
     id: String(r.id),
     mode: String(r.mode),
@@ -1592,7 +1860,8 @@ function toJudgementAdmin(
     createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
     // Reconciliation against the session as it stands NOW (issue #806).
     carriedBySession,
-    // Only an `applied` row can be SUPERSEDED — a shadow row was never on the
+    // Only an `applied` row can be SUPERSEDED — an unapplied row (a second
+    // judge's, late evidence, a historical shadow row) was never on the
     // session, and saying "superseded" about it would invent a loss.
     supersededReason: r.applied === true && !carriedBySession
       ? (carried == null ? "recommendation_overwritten" : "session_carries_a_different_opinion")
@@ -1602,7 +1871,7 @@ function toJudgementAdmin(
 
 export async function getSessionJudgementsAdmin(sessionId: string, limit = 50): Promise<AdminResult> {
   return sql.begin(async (tx) => {
-    const session = (await tx`SELECT id, state FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
+    const session = (await on(tx, readSessionState)<{ id: string; state: string }>`SELECT id, state FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
       | { id: string; state: string }
       | undefined;
     if (!session) return err(404, "session not found");
@@ -1652,10 +1921,11 @@ export async function getSessionJudgementsAdmin(sessionId: string, limit = 50): 
 // the receipt's bytes stay immutable and anchored. A session an operator may
 // still want to reopen must be reopened BEFORE its receipt exists.
 //
-// AND JUDGE IT IN `enforce`. A `shadow` judgement is deliberately withheld from
-// the session, so there is nothing for a receipt to attest to
-// (`judgement_not_adopted`): the receipt embeds the session's own judge block
-// or it embeds nothing.
+// AND IT MUST HAVE A CONSENSUS. Only the judge of record's judgement reaches the
+// session's own record; any other judgement (a second judge's, late evidence,
+// a historical `shadow` row) is never on the session, so there is nothing for a
+// receipt to attest to (`judgement_not_adopted`): the receipt embeds the
+// session's own judge block or it embeds nothing.
 //
 // EVERY REFUSAL REACHES THE OPERATOR with its reason code. Besides the two
 // above: `session_not_reaggregated` (a late FIRST take arrived after the rollup
@@ -1711,13 +1981,6 @@ export async function publishConsensusReceiptAdmin(sessionId: string, actor: Act
   };
 }
 
-export async function publishSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR) {
-  const t = await guardedTransition(sessionId, "published", actor, { expectedVersion });
-  if (!t.ok) return t;
-  await sql`UPDATE swarm_sessions SET published_at = now() WHERE id = ${sessionId} AND published_at IS NULL`;
-  return t;
-}
-
 // ── Audit log (redacted; scope never carries credential material) ──────────
 export interface AuditFilter {
   actor?: string;
@@ -1729,11 +1992,17 @@ export interface AuditFilter {
 
 export async function listAuditLog(filter: AuditFilter = {}) {
   const limit = filter.limit && filter.limit > 0 ? Math.min(filter.limit, 500) : 100;
-  const conds = [];
-  if (filter.actor) conds.push(sql`actor = ${filter.actor}`);
-  if (filter.action) conds.push(sql`action = ${filter.action}`);
-  if (filter.since) conds.push(sql`at >= ${filter.since}`);
-  if (filter.until) conds.push(sql`at <= ${filter.until}`);
-  const where = conds.length ? sql`WHERE ${conds.reduce((a, b) => sql`${a} AND ${b}`)}` : sql``;
-  return sql`SELECT id, actor, action, scope, at FROM audit_log ${where} ORDER BY at DESC LIMIT ${limit}`;
+  // ONE statement whatever the filter: a filter that is absent is NULL and
+  // matches every row, so no fragment is built outside the registered call.
+  const actor = filter.actor || null;
+  const action = filter.action || null;
+  const since = filter.since || null;
+  const until = filter.until || null;
+  return on(sql, listAudit)<Row>`
+    SELECT id, actor, action, scope, at FROM audit_log
+    WHERE (${actor}::text IS NULL OR actor = ${actor})
+      AND (${action}::text IS NULL OR action = ${action})
+      AND (${since}::timestamptz IS NULL OR at >= ${since})
+      AND (${until}::timestamptz IS NULL OR at <= ${until})
+    ORDER BY at DESC LIMIT ${limit}`;
 }

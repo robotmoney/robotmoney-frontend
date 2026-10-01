@@ -6,6 +6,7 @@
 // 4) Thrown RPC read inside sampler persists no row (no fabricated zero) and leaves previous sample intact
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { config, resolveVaultAdapters } from "../src/config.ts";
 import { sampleWalletSleeves } from "../src/worker/handlers/wallet.ts";
 import { sampleVaultAdapters } from "../src/worker/handlers/vault.ts";
@@ -94,8 +95,8 @@ function mockRpc(failAdapters: string[] = [], failAll = false) {
 }
 
 beforeEach(async () => {
-  await sql`DELETE FROM wallet_sleeve_samples`;
-  await sql`DELETE FROM vault_adapter_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM vault_adapter_samples`;
 });
 
 afterEach(() => {
@@ -170,7 +171,7 @@ test("A thrown RPC read inside a sampler persists no row (no fabricated zero) an
   // Seed initial sample
   const hour = new Date();
   hour.setUTCMinutes(0, 0, 0);
-  await sql`
+  await fixtureDb`
     INSERT INTO vault_adapter_samples
       (vault_address, adapter_address, adapter_name, sample_hour, balance_usd, configured, provenance, sampled_at)
     VALUES

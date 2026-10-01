@@ -80,11 +80,11 @@ test("updateMemberProfile writes only the fields present in the patch, leaving t
   expect(after?.operator).toBe("peaq");
 });
 
-// Issue #925: defense in depth. Once judge-session.ts's in-house exemption is
-// re-keyed off `handle` (which self-service can never set), a self-declared
-// `operator: 'robotmoney'` no longer gates anything security-relevant — but
-// GET /api/swarm/members still renders `operator` verbatim (#918), so the
-// literal in-house value is refused here to close the cosmetic forgery angle.
+// Issue #925, re-armed by D52: the judge's third-party gate is keyed on
+// `operator` (swarm/domain.ts submitJudgement), so a self-declared
+// `operator: 'robotmoney'` would pass as in-house. The route refuses the
+// literal here, and updateMemberProfile refuses it at the writer too
+// (swarm-judge-third-party-flag.test.ts).
 test("POST /api/swarm/members/:id/profile refuses a self-service operator write of 'robotmoney' (any case), but an ordinary value still succeeds", async () => {
   const member = await activeMember();
 

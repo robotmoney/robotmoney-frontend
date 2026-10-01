@@ -43,11 +43,119 @@ import {
 // not silently keep reproducing an older document's bytes.
 import spec from "@robotmoney/contract/fixtures/consensus-receipt.canonicalization.json" with { type: "json" };
 import schema from "@robotmoney/contract/fixtures/consensus-receipt.schema.json" with { type: "json" };
+
+// THE RECEIPT STATEMENTS ARE REGISTERED (smoke-production-spec.md §7.1), all on
+// the api's `rm_app` credential. Publishing is reached from the admin route,
+// serving from the public receipts route.
+const PUBLISH_CALLERS = ["src/api/routes/swarm-admin"];
+const SESSION_ID_PROBE = "00000000-0000-0000-0000-000000000000";
+
+const readMemberKeys = registerQuery({
+  role: "rm_app",
+  object: "swarm_member_keys",
+  privileges: ["SELECT"],
+  site: "src/swarm/consensus-receipt:resolveSigningKey",
+  purpose: "Read a member's registered public keys, active first, to find the one that verifies a take's signature.",
+  callers: PUBLISH_CALLERS,
+  probe: {
+    statement: "SELECT public_key FROM swarm_member_keys WHERE member_id = $1 ORDER BY active DESC, created_at DESC",
+    params: ["probe"],
+  },
+});
+
+const countJudgements = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/swarm/consensus-receipt:loadAssemblyInput.judgementCount",
+  purpose: "Count the judgements on file for a session, so an unjudged session is refused by name.",
+  callers: PUBLISH_CALLERS,
+  probe: {
+    statement: "SELECT count(*)::int AS n FROM swarm_session_judgements WHERE session_id = $1",
+    params: [SESSION_ID_PROBE],
+  },
+});
+
+const readAuthoredJudgement = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/swarm/consensus-receipt:loadAssemblyInput.authored",
+  purpose: "Read the source of the enforce judgement a session adopted, so template prose is refused.",
+  callers: PUBLISH_CALLERS,
+  probe: {
+    statement:
+      "SELECT source, fallback_reason FROM swarm_session_judgements WHERE session_id = $1 AND mode = 'enforce' " +
+      "AND prompt_hash = $2 AND inputs_digest = $3 ORDER BY id DESC LIMIT 1",
+    params: [SESSION_ID_PROBE, "probe", "probe"],
+  },
+});
+
+const readAdoptedCandidates = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/swarm/consensus-receipt:loadAssemblyInput.candidates",
+  purpose: "Read the enforce judgements formed over the adopted prompt and inputs, for the receipt's judge block.",
+  callers: PUBLISH_CALLERS,
+  probe: {
+    statement:
+      "SELECT id, mode, source, prompt_hash, inputs_digest, opinion FROM swarm_session_judgements " +
+      "WHERE session_id = $1 AND mode = 'enforce' AND prompt_hash = $2 AND inputs_digest = $3 ORDER BY id DESC",
+    params: [SESSION_ID_PROBE, "probe", "probe"],
+  },
+});
+
+const readForeignNonces = registerQuery({
+  role: "rm_app",
+  object: "swarm_recommendations",
+  privileges: ["SELECT"],
+  site: "src/swarm/consensus-receipt:loadAssemblyInput.foreignNonces",
+  purpose: "Find a take whose (member, nonce) is already filed against a different session, so a replay is refused.",
+  callers: PUBLISH_CALLERS,
+  probe: {
+    statement:
+      "SELECT r.member_id, r.nonce FROM swarm_recommendations r " +
+      "JOIN jsonb_to_recordset($1::jsonb) AS p(member_id text, nonce text) ON r.member_id = p.member_id AND r.nonce = p.nonce " +
+      "WHERE r.session_id <> $2 LIMIT 1",
+    params: ["[]", SESSION_ID_PROBE],
+  },
+});
+
+const insertReceipt = registerQuery({
+  role: "rm_app",
+  object: "swarm_consensus_receipts",
+  // SELECT as well: ON CONFLICT (session_id) reads the arbiter column.
+  privileges: ["INSERT", "SELECT"],
+  site: "src/swarm/consensus-receipt:publishConsensusReceipt",
+  purpose: "File the signed consensus receipt of a published session once, keeping the first on a repeat.",
+  callers: PUBLISH_CALLERS,
+  probe: {
+    statement:
+      "INSERT INTO swarm_consensus_receipts (session_id, subject_id, schema_version, judgement_id, session_version, receipt, canonical_bytes) " +
+      "SELECT $1, $2, $3, $4, $5, $6, $7 WHERE false ON CONFLICT (session_id) DO NOTHING",
+    params: [SESSION_ID_PROBE, "probe", "1.0", 1, 1, "{}", "probe"],
+  },
+});
+
+const readReceipt = registerQuery({
+  role: "rm_app",
+  object: "swarm_consensus_receipts",
+  privileges: ["SELECT"],
+  site: "src/swarm/consensus-receipt:readStoredReceipt",
+  purpose: "Read the stored receipt of a session, the bytes the public route serves and the publish path re-checks.",
+  callers: [...PUBLISH_CALLERS, "src/api/routes/swarm/receipts"],
+  probe: {
+    statement:
+      "SELECT session_id, subject_id, schema_version, receipt, canonical_bytes, published_at FROM swarm_consensus_receipts WHERE session_id = $1",
+    params: [SESSION_ID_PROBE],
+  },
+});
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import { verifyDetachedSignature } from "../lib/signing.ts";
-import { loadFrozenTakeSet, normalizedTakeWeights } from "./domain.ts";
+import { judgeInputFromFrozen, loadFrozenTakeSet, normalizedTakeWeights, takeRevision } from "./domain.ts";
 import { inputsDigest, type JudgeOpinion } from "./judge.ts";
-import { judgeInputFromFrozen } from "./judge-session.ts";
 
 /** One contributing analyst, as the assembler needs them. */
 export interface ConsensusReceiptAnalystInput {
@@ -113,9 +221,13 @@ export type ConsensusReceiptRefusalReason =
   | "session_not_published"
   | "session_not_reaggregated"
   | "not_judged"
+  // Finalize decided `no_consensus` (system-scheduler-spec.md §4.4): judging was
+  // requested and no eligible consensus was recorded by the deadline. Such a
+  // session "is published in that state with no consensus certificate".
+  | "no_consensus"
   | "judgement_not_adopted"
   // The adopted judgement exists and the session took it, but no MODEL wrote
-  // it — `source='fallback'`, i.e. templateOpinion()'s prose. A receipt is a
+  // it — `source='fallback'`, i.e. the retired template fallback's prose. A receipt is a
   // claim about authorship, so this is a refusal and not a warning.
   | "judgement_not_authored"
   | "judgement_stale"
@@ -488,7 +600,7 @@ export function assembleConsensusReceipt(input: ConsensusReceiptAssemblyInput): 
  * signature in it.
  */
 async function resolveSigningKey(memberId: string, canonicalSubmission: string, signature: string): Promise<string | null> {
-  const rows = (await sql`
+  const rows = (await on(sql, readMemberKeys)`
     SELECT public_key FROM swarm_member_keys
     WHERE member_id = ${memberId}
     ORDER BY active DESC, created_at DESC`) as unknown as { public_key: string }[];
@@ -574,12 +686,27 @@ async function loadAssemblyInput(
     );
   }
 
+  // ── 1b. FINALIZE DECIDED THERE IS NO CONSENSUS ────────────────────────────
+  // The outcome is decided once, by finalize, from stored instants (§4.4), and
+  // `no_consensus` means "no consensus certificate". Checked on the stored
+  // outcome rather than inferred from whether a judge block happens to be on
+  // the record, so no later change to how an opinion reaches a session can
+  // turn a `no_consensus` session into a certified one.
+  if (String(session.judging_outcome ?? "") === "no_consensus") {
+    throw new ConsensusReceiptRefusal(
+      "no_consensus",
+      `session ${sessionId} was published with judging outcome no_consensus — judging was requested and no eligible consensus was recorded by its deadline, ` +
+        "so it is published with no consensus certificate (system-scheduler-spec.md §4.4). A judgement kept after the deadline is a record, not a consensus.",
+    );
+  }
+
   // ── 2. THE ROLLUP DESCRIBES THE TAKES THAT EXIST NOW ──────────────────────
-  // A member filing their FIRST take after aggregation is deliberate, supported
-  // behaviour: the timing contract is the advertised `window_closes_at`
-  // TIMESTAMP and not the state (domain.ts submitRecommendation), so only
-  // AMENDMENTS are confined to TAKES_AMENDABLE_STATES. The rollup written at
-  // aggregation then describes one member fewer than the take set does.
+  // Under the epoch model a take lands only while its session is `collecting`
+  // and before `window_closes_at` (D51, domain.ts submitRecommendation), so a
+  // take can no longer arrive after aggregation. Sessions convened under the
+  // pre-epoch lifecycle could take a member's FIRST take after an early close,
+  // and the rollup written at aggregation then describes one member fewer than
+  // the take set does. That history still reaches this assembler.
   //
   // Assembly was already refused in that case — but as `semantics_invalid` with
   // "stances: counts do not sum to quorum.submitted" and "release_safety:
@@ -590,7 +717,7 @@ async function loadAssemblyInput(
     throw new ConsensusReceiptRefusal(
       "session_not_reaggregated",
       `session ${sessionId} now has ${frozen.takes.length} take(s) but its rollup was computed over ${rolledUp} — re-aggregate and re-judge the session, then publish the receipt. ` +
-        "A member may file a FIRST take up to the advertised window_closes_at whatever state the session is in, so this is ordinary product behaviour rather than corruption.",
+        "A session convened before the epoch model could take a member's FIRST take after an early close, so this is recorded history rather than corruption.",
     );
   }
 
@@ -613,7 +740,7 @@ async function loadAssemblyInput(
   // NEVER JUDGED AT ALL is its own, older, still-correct reason — checked first
   // so an operator who simply has not judged the session is not told about
   // adoption.
-  const onFile = (await sql`
+  const onFile = (await on(sql, countJudgements)`
     SELECT count(*)::int AS n FROM swarm_session_judgements WHERE session_id = ${sessionId}`)[0] as { n: number };
   if (Number(onFile.n) === 0) {
     throw new ConsensusReceiptRefusal(
@@ -638,11 +765,31 @@ async function loadAssemblyInput(
     throw new ConsensusReceiptRefusal(
       "judgement_not_adopted",
       `session ${sessionId} has ${onFile.n} judgement(s) on file but carries no judge block on its own record, so no opinion has ever reached it. ` +
-        "A judgement recorded in `shadow` is deliberately withheld from the session — that is the whole point of the mode — and the receipt carries " +
-        "only an opinion the session adopted, so judge the session in `enforce` mode before publishing its receipt.",
+        "Only the judge of record's judgement reaches the session; a second judge's, late evidence after publication and a historical " +
+        "`shadow` row never do, and the receipt carries only an opinion the session adopted.",
     );
   }
-  const candidates = (await sql`
+  // AND IT MUST BE THE MODEL'S. `source='fallback'` means the opinion in that
+  // row came from the retired template fallback — the aggregator's own
+  // sentences — and a certificate saying "the judge read the takes and
+  // concluded this" over them attests something that never happened. Only
+  // pre-#969 history can carry one; nothing writes it now. The refusal is kept
+  // separate from `judgement_not_adopted` because it names a different fact.
+  const authored = (await on(sql, readAuthoredJudgement)`
+    SELECT source, fallback_reason FROM swarm_session_judgements
+    WHERE session_id = ${sessionId} AND mode = 'enforce'
+      AND prompt_hash = ${adopted.prompt_hash} AND inputs_digest = ${adopted.inputs_digest}
+    ORDER BY id DESC LIMIT 1`) as unknown as { source: string; fallback_reason: string | null }[];
+  if (authored[0] && authored[0].source !== "model") {
+    throw new ConsensusReceiptRefusal(
+      "judgement_not_authored",
+      `session ${sessionId}'s adopted judgement has source='${authored[0].source}'` +
+        `${authored[0].fallback_reason ? ` (${authored[0].fallback_reason})` : ""} — its opinion is TEMPLATE PROSE, not a model's. ` +
+        "A consensus receipt attests that the judge read the takes and wrote this; publishing one over a template would make that false. " +
+        "Nothing writes a fallback row any more (the judge is a participant that refuses rather than fakes); this row is pre-#969 history.",
+    );
+  }
+  const candidates = (await on(sql, readAdoptedCandidates)`
     SELECT id, mode, source, prompt_hash, inputs_digest, opinion
     FROM swarm_session_judgements
     WHERE session_id = ${sessionId} AND mode = 'enforce'
@@ -672,17 +819,17 @@ async function loadAssemblyInput(
     );
   }
   // AND IT MUST BE THE MODEL'S. `source='fallback'` means the opinion in that
-  // row came from templateOpinion() — the aggregator's own sentences — and a
-  // certificate saying "the judge read the takes and concluded this" over them
-  // attests something that never happened. The refusal is separate from
-  // `judgement_not_adopted` because the fix is different: that one says judge in
-  // enforce, this one says give the judge a model it can actually reach.
+  // row came from the retired template fallback — the aggregator's own
+  // sentences — and a certificate saying "the judge read the takes and
+  // concluded this" over them attests something that never happened. Only
+  // pre-#969 history can carry one; nothing writes it now. The refusal is kept
+  // separate from `judgement_not_adopted` because it names a different fact.
   if (judgement.source !== "model") {
     throw new ConsensusReceiptRefusal(
       "judgement_not_authored",
       `session ${sessionId}'s adopted judgement has source='${judgement.source}' — its opinion is TEMPLATE PROSE, not a model's. ` +
         "A consensus receipt attests that the judge read the takes and wrote this; publishing one over a template would make that false. " +
-        "Configure swarm_judge_config.model and give the judge lane OPENCODE_API_KEY, then re-judge in enforce.",
+        "Nothing writes a fallback row any more (the judge is a participant that refuses rather than fakes); this row is pre-#969 history.",
     );
   }
 
@@ -801,7 +948,7 @@ async function loadAssemblyInput(
       signature,
       public_key: publicKey,
       nonce: String(take.nonce ?? (payload as { nonce?: unknown }).nonce ?? ""),
-      revision: Number(take.revision ?? 1),
+      revision: takeRevision(take.revision),
     });
   }
 
@@ -812,7 +959,7 @@ async function loadAssemblyInput(
   // database constraint held" is not a fact it carries.
   if (analysts.length > 0) {
     const pairs = analysts.map((a) => ({ member_id: a.member_id, nonce: a.nonce }));
-    const foreign = (await sql`
+    const foreign = (await on(sql, readForeignNonces)`
       SELECT r.member_id, r.nonce FROM swarm_recommendations r
       JOIN jsonb_to_recordset(${sql.json(pairs as never)}::jsonb) AS p(member_id text, nonce text)
         ON r.member_id = p.member_id AND r.nonce = p.nonce
@@ -893,7 +1040,7 @@ export async function publishConsensusReceipt(sessionId: string, now: Date = new
 
   const input = await loadAssemblyInput(sessionId, now);
   const { receipt, canonicalBytes } = assembleConsensusReceipt(input);
-  await sql`
+  await on(sql, insertReceipt)`
     INSERT INTO swarm_consensus_receipts
       (session_id, subject_id, schema_version, judgement_id, session_version, receipt, canonical_bytes)
     VALUES (${sessionId}, ${input.subject_id}, ${RECEIPT_SCHEMA_VERSION}, ${input.judgementId},
@@ -905,7 +1052,7 @@ export async function publishConsensusReceipt(sessionId: string, now: Date = new
 }
 
 async function readStoredReceipt(sessionId: string): Promise<StoredConsensusReceipt | null> {
-  const row = (await sql`
+  const row = (await on(sql, readReceipt)`
     SELECT session_id, subject_id, schema_version, receipt, canonical_bytes, published_at
     FROM swarm_consensus_receipts WHERE session_id = ${sessionId}`)[0] as
     | { session_id: string; subject_id: string; schema_version: string; receipt: Record<string, unknown>; canonical_bytes: string; published_at: Date }

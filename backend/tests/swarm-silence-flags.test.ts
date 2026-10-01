@@ -5,7 +5,14 @@
 //
 // Runs against the ephemeral Postgres from tests/preload.ts (already fully
 // migrated).
-import { expect, test } from "bun:test";
+//
+// SESSIONS ARE EPOCHS (issue #1026, D55 decision 4). These tests used to
+// convene each session through the retired admin session create. They now
+// drive a subject's epochs the way `system-scheduler` does: open the first,
+// then turn each over into the next. An epoch seats every active member in the
+// transaction that opens it (domain.ts insertEpoch), which is the eligibility
+// record silence is counted from.
+import { beforeEach, expect, test } from "bun:test";
 import * as admin from "../src/swarm/admin.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { sql } from "../src/db/client.ts";
@@ -13,13 +20,21 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
-
-const INSECURE = { adminToken: null, allowInsecure: true } as const;
+import { activeSubject as epochSubject, sessionDate, sessionRow } from "./support/epoch-fixtures.ts";
+import { provisionOperatorToken } from "./support/automation-auth.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 const N = admin.SWARM_SILENCE_THRESHOLD_SESSIONS;
 
 useCleanDatabasePerTest(import.meta.file);
+
+// The admin route is opened by the operator's store token (smoke spec §3,
+// D52 (1)); there is no insecure mode. Per test, because each test gets its
+// own database (the clone hook above runs first).
+let OPERATOR = "";
+beforeEach(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 
 // addMemberAdmin, not registerMember: it sets activated_at = now() at
 // creation (registerMember, the smoke/e2e shortcut most other swarm tests use,
@@ -34,54 +49,62 @@ async function activeMember(name: string) {
 }
 
 async function activeSubject() {
-  const id = rid("subj");
-  await sql`INSERT INTO swarm_subjects (id, status, name) VALUES (${id}, 'active', ${id})`;
-  return id;
+  return epochSubject("subj", 3600);
 }
 
-function sessionTimes(date: string) {
-  return {
-    date,
-    briefOpensAt: `${date}T09:00:00Z`,
-    windowClosesAt: `${date}T10:00:00Z`,
-    publishAt: `${date}T10:05:00Z`,
-  };
+// The subject's current collecting epoch, per subject, so each call convenes
+// the NEXT session: the first call opens an epoch, every later call turns the
+// current one over (closing it, recording its absences, opening its
+// successor) — exactly the scheduler's boundary.
+const currentEpoch = new Map<string, string>();
+
+async function nextSession(subjectId: string): Promise<string> {
+  const current = currentEpoch.get(subjectId);
+  if (!current) {
+    const opened = await ic.openEpoch(subjectId);
+    if (!opened.ok) throw new Error(`openEpoch(${subjectId}) failed: ${JSON.stringify(opened)}`);
+    currentEpoch.set(subjectId, opened.sessionId);
+    return opened.sessionId;
+  }
+  const turned = await ic.turnOverEpoch(subjectId, current);
+  if (!turned.ok) throw new Error(`turnOverEpoch(${subjectId}) failed: ${JSON.stringify(turned)}`);
+  currentEpoch.set(subjectId, turned.openedSessionId!);
+  return turned.openedSessionId!;
 }
 
-async function createSession(subjectId: string, date: string) {
-  const created = await admin.createSessionAdmin({ ...sessionTimes(date), subjectId });
-  if (created.status !== 201 && created.status !== 200) throw new Error(`createSession(${date}) failed: ${JSON.stringify(created)}`);
-  return (created as any).session.id as string;
+/** Convene `count` consecutive sessions for the subject; returns their ids in order. */
+async function convene(subjectId: string, count: number): Promise<string[]> {
+  const ids: string[] = [];
+  for (let i = 0; i < count; i += 1) ids.push(await nextSession(subjectId));
+  return ids;
 }
 
-async function submit(m: { id: string; token: string; privateKey: CryptoKey }, date: string, subjectId: string) {
+async function submit(m: { id: string; token: string; privateKey: CryptoKey }, sessionId: string, subjectId: string) {
+  const date = sessionDate(await sessionRow(sessionId));
   const sub = { memberId: m.id, date, subjectId, nonce: rid("n"), stance: "bullish", confidence: 0.7, body: "x" };
   const signature = await signMessage(canonicalizeSubmission(sub), m.privateKey);
   const r = await ic.submitRecommendation(m.token, { ...sub, signature });
-  if (r.status !== 201) throw new Error(`submit(${m.id}, ${date}) failed: ${JSON.stringify(r)}`);
+  if (r.status !== 201) throw new Error(`submit(${m.id}, ${sessionId}) failed: ${JSON.stringify(r)}`);
   return r;
 }
 
-// Sequential UTC dates beginning tomorrow. They must remain after the real
-// clock because submitRecommendation deliberately checks the advertised
-// window against Date.now() and Postgres now(); hard-coding a once-future day
-// turns this behavioural suite into a calendar bomb. Starting tomorrow also
-// keeps every session after activated_at (set to real now() by addMemberAdmin).
-function datesFrom(startDay: number, count: number): string[] {
-  const tomorrow = new Date();
-  tomorrow.setUTCHours(0, 0, 0, 0);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + startDay);
-  return Array.from({ length: count }, (_, i) => {
-    const date = new Date(tomorrow);
-    date.setUTCDate(date.getUTCDate() + i);
-    return date.toISOString().slice(0, 10);
-  });
+/**
+ * File one take in the subject's CURRENT epoch, which is collecting. A take
+ * lands only in a collecting epoch before its close (system-scheduler-spec.md
+ * §4.2); the next `nextSession` then turns it over, as the boundary would.
+ */
+async function submitInWindow(
+  m: { id: string; token: string; privateKey: CryptoKey },
+  sessionId: string,
+  subjectId: string,
+) {
+  return submit(m, sessionId, subjectId);
 }
 
 test("never fires on a single missed session — the issue's explicit constraint", async () => {
   const subjectId = await activeSubject();
   const quiet = await activeMember("quiet-once");
-  await createSession(subjectId, datesFrom(1, 1)[0]!);
+  await convene(subjectId, 1);
 
   const flags = await admin.getMemberSilenceFlags();
   expect(flags[quiet.id]).toBeUndefined();
@@ -90,14 +113,13 @@ test("never fires on a single missed session — the issue's explicit constraint
 test("never_submitted: fires only once an active member has been eligible for >= N sessions with zero takes", async () => {
   const subjectId = await activeSubject();
   const neverSubmits = await activeMember("never-submits");
-  const dates = datesFrom(1, N);
 
   // One short of the threshold: not flagged yet.
-  for (const date of dates.slice(0, N - 1)) await createSession(subjectId, date);
+  await convene(subjectId, N - 1);
   expect((await admin.getMemberSilenceFlags())[neverSubmits.id]).toBeUndefined();
 
   // The Nth eligible session tips it over.
-  await createSession(subjectId, dates[N - 1]!);
+  await convene(subjectId, 1);
   const flags = await admin.getMemberSilenceFlags();
   expect(flags[neverSubmits.id]).toEqual({ type: "never_submitted", sessionsSinceReference: N });
 });
@@ -105,23 +127,25 @@ test("never_submitted: fires only once an active member has been eligible for >=
 test("never_submitted: a single take anywhere clears the flag, even after N eligible sessions", async () => {
   const subjectId = await activeSubject();
   const m = await activeMember("submits-once");
-  const dates = datesFrom(1, N);
-  for (const date of dates) await createSession(subjectId, date);
-  await submit(m, dates[dates.length - 1]!, subjectId);
+  const ids = await convene(subjectId, N);
+  await submitInWindow(m, ids[ids.length - 1]!, subjectId);
 
   expect((await admin.getMemberSilenceFlags())[m.id]).toBeUndefined();
 });
 
 test("never_submitted: a session the member was never seated in does not count toward N", async () => {
   const subjectId = await activeSubject();
-  const dates = datesFrom(1, N);
-  // Seat the member for only N-1 of the N sessions by creating it AFTER the
-  // first session's roster is already frozen — createSessionAdmin snapshots
-  // whoever is active at creation time, so this member is absent from
-  // session 1's swarm_session_members entirely (not merely non-submitting).
-  await createSession(subjectId, dates[0]!);
+  // Seat the member for only N-1 of the N sessions by activating it AFTER the
+  // first epoch opened — an epoch seats whoever is active when it opens and a
+  // member activated afterwards joins the next one (admin-surface.md US-C3),
+  // so this member is absent from session 1's swarm_session_members entirely
+  // (not merely non-submitting).
+  const [first] = await convene(subjectId, 1);
   const lateJoiner = await activeMember("late-joiner");
-  for (const date of dates.slice(1)) await createSession(subjectId, date);
+  await convene(subjectId, N - 1);
+  const seatedIn = await sql<{ session_id: string }[]>`
+    SELECT session_id FROM swarm_session_members WHERE member_id = ${lateJoiner.id}`;
+  expect(seatedIn.map((r) => String(r.session_id))).not.toContain(String(first));
 
   expect((await admin.getMemberSilenceFlags())[lateJoiner.id]).toBeUndefined();
 });
@@ -129,11 +153,12 @@ test("never_submitted: a session the member was never seated in does not count t
 test("never_submitted: an excused session does not count toward N — silence is not exclusion", async () => {
   const subjectId = await activeSubject();
   const m = await activeMember("excused-member");
-  const dates = datesFrom(1, N + 1);
-  for (const date of dates) {
-    const sessionId = await createSession(subjectId, date);
-    if (date !== dates[dates.length - 1]) {
-      expect((await admin.rosterExcuseAdmin(sessionId, m.id)).status).toBe(200);
+  for (let i = 0; i < N + 1; i += 1) {
+    const sessionId = await nextSession(subjectId);
+    if (i < N) {
+      // An epoch is `collecting` from its first instant, so the roster is
+      // already live: the excusal is the audited forced one.
+      expect((await admin.rosterExcuseAdmin(sessionId, m.id, admin.ADMIN_ACTOR, { force: true })).status).toBe(200);
     }
   }
   // N sessions ran, but all but one were excused — only one eligible session
@@ -144,15 +169,12 @@ test("never_submitted: an excused session does not count toward N — silence is
 test("gone_quiet: an established member with N silent sessions since its own last take is flagged, distinctly from never_submitted", async () => {
   const subjectId = await activeSubject();
   const wentQuiet = await activeMember("went-quiet");
-  const firstDate = datesFrom(1, 1)[0]!;
-  await createSession(subjectId, firstDate);
-  await submit(wentQuiet, firstDate, subjectId);
+  await submitInWindow(wentQuiet, await nextSession(subjectId), subjectId);
 
-  const silentDates = datesFrom(2, N);
-  for (const date of silentDates.slice(0, N - 1)) await createSession(subjectId, date);
+  await convene(subjectId, N - 1);
   expect((await admin.getMemberSilenceFlags())[wentQuiet.id]).toBeUndefined();
 
-  await createSession(subjectId, silentDates[N - 1]!);
+  await convene(subjectId, 1);
   const flags = await admin.getMemberSilenceFlags();
   expect(flags[wentQuiet.id]).toEqual({ type: "gone_quiet", sessionsSinceReference: N });
 });
@@ -160,14 +182,11 @@ test("gone_quiet: an established member with N silent sessions since its own las
 test("gone_quiet: a fresh take on the most recent eligible session resets the silence window", async () => {
   const subjectId = await activeSubject();
   const m = await activeMember("resumes-late");
-  const dates = datesFrom(1, N + 1);
-  await createSession(subjectId, dates[0]!);
-  await submit(m, dates[0]!, subjectId);
-  for (const date of dates.slice(1, dates.length - 1)) await createSession(subjectId, date);
+  await submitInWindow(m, await nextSession(subjectId), subjectId);
+  await convene(subjectId, N - 1);
   // One more session, and THIS TIME the member submits again — the reference
   // point for "since" moves to here, so it is no longer silent.
-  await createSession(subjectId, dates[dates.length - 1]!);
-  await submit(m, dates[dates.length - 1]!, subjectId);
+  await submitInWindow(m, await nextSession(subjectId), subjectId);
 
   expect((await admin.getMemberSilenceFlags())[m.id]).toBeUndefined();
 });
@@ -175,7 +194,7 @@ test("gone_quiet: a fresh take on the most recent eligible session resets the si
 test("an inactive (deactivated) member is never flagged, regardless of session history", async () => {
   const subjectId = await activeSubject();
   const m = await activeMember("deactivated-quiet");
-  for (const date of datesFrom(1, N)) await createSession(subjectId, date);
+  await convene(subjectId, N);
   expect((await admin.getMemberSilenceFlags())[m.id]).toEqual({ type: "never_submitted", sessionsSinceReference: N });
 
   const deact = await admin.deactivateMemberAdmin(m.id, 1);
@@ -186,12 +205,11 @@ test("an inactive (deactivated) member is never flagged, regardless of session h
 test("the admin members-list route serves silenceFlags alongside members, keyed by member id", async () => {
   const subjectId = await activeSubject();
   const flagged = await activeMember("route-flagged");
-  for (const date of datesFrom(1, N)) await createSession(subjectId, date);
+  await convene(subjectId, N);
 
   const res = await handleSwarmAdmin(
-    new Request("http://x/api/swarm/admin/members", { method: "GET" }),
+    new Request("http://x/api/swarm/admin/members", { method: "GET", headers: { "X-Admin-Token": OPERATOR } }),
     new URL("http://x/api/swarm/admin/members"),
-    INSECURE,
   );
   expect(res?.status).toBe(200);
   const body = res!.body as { members: unknown[]; silenceFlags: Record<string, unknown> };

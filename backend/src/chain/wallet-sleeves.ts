@@ -10,6 +10,7 @@ import {
   type TrackedAsset,
 } from "../config.ts";
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import {
   persistedFallbackWalletPriceReader,
   QUARANTINED_PROVENANCE,
@@ -21,7 +22,7 @@ import {
   type Provenance,
   type WalletPriceReader,
 } from "./wallet-valuation.ts";
-import { ASSET_PRICE_TIME_BASIS } from "../ops/asset-prices.ts";
+import { ASSET_PRICE_TIME_BASIS } from "../ops/asset-price-basis.ts";
 import { ttlCached } from "./ttl-cache.ts";
 
 export type { Provenance };
@@ -56,6 +57,49 @@ export interface WalletSleeveReaders {
   readChainAmounts(reads: KeyedAssetRead[], logLabel: string): Promise<Map<string, ChainAmount>>;
   priceReader: WalletPriceReader;
 }
+
+// Registered queries (smoke-production-spec.md §7.1): the sleeve read joins the
+// settled asset price, so it declares both relations. GET
+// /api/dashboards/wallet-sleeves is the only entry that reaches it.
+// The joined read below, as tests/db-registry-execution.test.ts runs it: the
+// call site's own statement (that test holds the two to the same text), under
+// both declarations it joins.
+const SLEEVE_PROBE = {
+  statement: `SELECT DISTINCT ON (wss.symbol) wss.symbol, wss.amount, wss.price_usd, wss.value_usd,
+             wss.provenance, wss.sampled_at,
+             ap.price_usd AS asset_price_usd,
+             (wss.sample_date < (now() AT TIME ZONE 'UTC')::date) AS is_closed
+        FROM wallet_sleeve_samples wss
+        LEFT JOIN asset_prices ap
+          ON ap.symbol = wss.symbol
+         AND ap.price_date = wss.sample_date
+         AND ap.time_basis = $1
+       WHERE lower(wss.wallet_address) = lower($2)
+         AND wss.provenance <> $3
+         AND wss.superseded_at IS NULL
+       ORDER BY wss.symbol, wss.sample_date DESC, wss.sampled_at DESC`,
+  params: [ASSET_PRICE_TIME_BASIS, "0x0000000000000000000000000000000000000001", QUARANTINED_PROVENANCE],
+};
+
+const sleeveSamples = registerQuery({
+  role: "rm_app",
+  object: "wallet_sleeve_samples",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-sleeves:computeWalletSleeves.samples",
+  purpose: "Read each sleeve wallet's newest non-quarantined sample per symbol for the sleeves payload.",
+  callers: ["src/api/routes/dashboards"],
+  probe: SLEEVE_PROBE,
+});
+
+const sleevePrices = registerQuery({
+  role: "rm_app",
+  object: "asset_prices",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-sleeves:computeWalletSleeves.prices",
+  purpose: "Join each closed day's settled asset price onto the sleeve samples, which the sleeve read LEFT JOINs.",
+  callers: ["src/api/routes/dashboards"],
+  probe: SLEEVE_PROBE,
+});
 
 const defaultWalletSleeveReaders: WalletSleeveReaders = {
   readChainAmounts: readChainAmountsBatched,
@@ -100,7 +144,7 @@ async function computeWalletSleeves(
     // same JS double that produced the sample row's `value_usd`, so the JS
     // product reproduces it bit-for-bit rather than Postgres `numeric`
     // arithmetic's differently-rounded product.
-    const rows = await sql<
+    const rows = await on(sql, sleeveSamples, sleevePrices)<
       {
         symbol: string;
         amount: string | null;
@@ -110,7 +154,7 @@ async function computeWalletSleeves(
         sampled_at: Date;
         asset_price_usd: string | null;
         is_closed: boolean;
-      }[]
+      }
     >`
       SELECT DISTINCT ON (wss.symbol) wss.symbol, wss.amount, wss.price_usd, wss.value_usd,
              wss.provenance, wss.sampled_at,
@@ -123,6 +167,9 @@ async function computeWalletSleeves(
          AND ap.time_basis = ${ASSET_PRICE_TIME_BASIS}
        WHERE lower(wss.wallet_address) = lower(${address})
          AND wss.provenance <> ${QUARANTINED_PROVENANCE}
+         -- D55 (6): a row the repair pass superseded (migration 0086) is
+         -- gone for every reader, as the delete it replaces left it.
+         AND wss.superseded_at IS NULL
        ORDER BY wss.symbol, wss.sample_date DESC, wss.sampled_at DESC
     `;
     const sampleMap = new Map(rows.map((r) => [r.symbol, r]));

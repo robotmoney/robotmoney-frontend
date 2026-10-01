@@ -21,8 +21,8 @@
 # from its first commit — their private halves were never written down and no
 # agent holds them, so nothing can sign as either principal yet. That is the
 # intended state: provisioning the real host keys is deliberately a separate
-# change (see the "Receipts" subsection of docs/runbooks/rollout-procedure.md,
-# which documents the host-side setup). Registering a real key means replacing
+# change. See docs/technical/release-runbooks.md for the standing release
+# evidence and approval policy. Registering a real key means replacing
 # that principal's line with the contents of the host's own `.pub` file, in a
 # reviewed commit — the review IS the key-distribution ceremony.
 

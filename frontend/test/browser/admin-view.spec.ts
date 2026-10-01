@@ -572,8 +572,7 @@ function baseTakes() {
 }
 
 // Public session summary (swarm/projections.ts toSession()) — the ONLY
-// session read surface. No version/briefOpensAt/publishAt field exists here
-// (those are only ever returned transiently by the create-session response).
+// session read surface. No version/briefOpensAt/publishAt field exists here.
 function sessionSummary(overrides: Record<string, unknown> = {}) {
   return {
     id: "sess-1", date: "2026-07-20", subjectId: "woon-vault", subjectName: "Woon Vault",
@@ -627,6 +626,17 @@ function baseJudgements() {
       judgedBy: "robotmoney-in-house", judgedByMemberId: null,
     },
   };
+}
+
+/** Every retired session-verb POST the admin UI made on a page (see mockSwarmApi). */
+const RETIRED_SESSION_CALLS = new WeakMap<Page, string[]>();
+function retiredSessionCalls(page: Page): string[] {
+  let calls = RETIRED_SESSION_CALLS.get(page);
+  if (!calls) {
+    calls = [];
+    RETIRED_SESSION_CALLS.set(page, calls);
+  }
+  return calls;
 }
 
 async function mockSwarmApi(
@@ -685,15 +695,16 @@ async function mockSwarmApi(
     route.fulfill(jsonReply({ ok: true, status: 200, member: { ...MEMBER_ACTIVE, version: 3 } })));
 
   // ── Sessions ────────────────────────────────────────────────────────────
-  await page.route(/\/api\/swarm\/admin\/sessions$/, (route) => {
-    if (route.request().method() === "POST") {
-      return route.fulfill(jsonReply({
-        ok: true, status: 201,
-        session: { id: "sess-1", date: "2026-07-20", subjectId: "woon-vault", subjectName: "Woon Vault", state: "scheduled", version: 1 },
-        rosterSize: 3, jobIds: [501, 502, 503, 504],
-      }, 201));
-    }
-    return route.fulfill(jsonReply({ error: "no admin session-list route exists" }, 404));
+  // THE RETIRED SESSION VERBS (issue #1026, D55 decision 4): the admin session
+  // create and cancel/close/reopen/aggregate/judge/publish answer 410 on the
+  // real API. The admin UI must never call one, so each is answered 410 here
+  // AND recorded; tests assert the record stays empty.
+  const retired = retiredSessionCalls(page);
+  retired.length = 0;
+  await page.route(/\/api\/swarm\/admin\/sessions(\/[^/]+\/(cancel|close|reopen|aggregate|judge|publish))?$/, (route) => {
+    if (route.request().method() !== "POST") return route.fulfill(jsonReply({ error: "no admin session-list route exists" }, 404));
+    retired.push(new URL(route.request().url()).pathname);
+    return route.fulfill(jsonReply({ ok: false, status: 410, error: "retired" }, 410));
   });
   // No admin session-list route exists — the overview's Sessions tab and the
   // session detail page both read the PUBLIC list/detail routes instead.
@@ -713,12 +724,8 @@ async function mockSwarmApi(
     const memberId = route.request().postDataJSON()?.memberId;
     return route.fulfill(jsonReply({ ok: true, status: 200, sessionId: "sess-1", memberId }));
   });
-  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/close$/, (route) =>
-    route.fulfill(jsonReply({ ok: true, status: 200, session: { id: "sess-1", state: "window_closed", version: 3 } })));
-  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/aggregate$/, (route) =>
-    route.fulfill(jsonReply({ ok: true, status: 200, idempotent: true, session: { id: "sess-1", state: "aggregated", version: 3 } })));
-  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/cancel$/, (route) =>
-    route.fulfill(jsonReply({ ok: false, status: 409, error: "illegal_transition:published->cancelled" }, 409)));
+  await page.route(/\/api\/swarm\/admin\/subjects\/woon-vault\/activate$/, (route) =>
+    route.fulfill(jsonReply({ ok: true, status: 200, subject: { ...TOPIC_FIXTURE, status: "active", version: 4 } })));
 }
 
 // Type the admin password and submit, without waiting for the outcome. Only
@@ -969,6 +976,55 @@ test("swarm admin: topic deactivate flow posts to the dedicated endpoint with ex
 
   await expect(page.getByTestId("deactivate-confirm")).not.toBeVisible();
   expect(captured).toMatchObject({ expectedVersion: 3, reason: "Deactivating this topic for coverage." });
+});
+
+// AC (issue #1026, wave 3 open problem 5): an INACTIVE topic offers Activate —
+// an admin subject edit (D55 decision 4) against its own endpoint, carrying
+// the topic's expectedVersion — and an active one offers only Deactivate.
+test("swarm admin: an inactive topic offers Activate, which posts expectedVersion and reason to the activate endpoint", async ({ page }) => {
+  await mockSwarmApi(page);
+  const inactive = { ...TOPIC_FIXTURE, status: "inactive", version: 5 };
+  let listed = inactive;
+  await page.route(/\/api\/swarm\/admin\/subjects$/, (route) => route.fulfill(jsonReply({ subjects: [listed] })));
+  let captured: unknown = null;
+  await page.route(/\/api\/swarm\/admin\/subjects\/woon-vault\/activate$/, async (route) => {
+    captured = route.request().postDataJSON();
+    listed = { ...TOPIC_FIXTURE, status: "active", version: 6 };
+    return route.fulfill(jsonReply({ ok: true, status: 200, subject: listed }));
+  });
+  await signIn(page, "/admin/swarm/subjects/woon-vault");
+  await expect(page.getByRole("heading", { name: /Topic woon-vault/ })).toBeVisible();
+
+  await expect(page.getByTestId("topic-deactivate-toggle")).toBeHidden();
+  await page.getByTestId("topic-activate-toggle").click();
+  await expect(page.getByTestId("activate-confirm")).toBeVisible();
+  // The reason is required, as for deactivation.
+  await page.getByTestId("activate-confirm-submit").click();
+  await expect(page.getByTestId("activate-error")).toContainText("Reason must be 10–500 characters.");
+  expect(captured).toBeNull();
+
+  await page.getByTestId("activate-reason").fill("Reactivating this topic for the next cycle.");
+  await page.getByTestId("activate-confirm-submit").click();
+  await expect(page.getByTestId("activate-confirm")).not.toBeVisible();
+  expect(captured).toMatchObject({ expectedVersion: 5, reason: "Reactivating this topic for the next cycle." });
+
+  // After the reload the topic is active: Deactivate is offered, Activate is not.
+  await expect(page.getByTestId("topic-deactivate-toggle")).toBeVisible();
+  await expect(page.getByTestId("topic-activate-toggle")).toBeHidden();
+});
+
+test("swarm admin: a stale activate (409) says to reload and changes nothing", async ({ page }) => {
+  await mockSwarmApi(page);
+  await page.route(/\/api\/swarm\/admin\/subjects$/, (route) =>
+    route.fulfill(jsonReply({ subjects: [{ ...TOPIC_FIXTURE, status: "inactive", version: 5 }] })));
+  await page.route(/\/api\/swarm\/admin\/subjects\/woon-vault\/activate$/, (route) =>
+    route.fulfill(jsonReply({ ok: false, status: 409, error: "stale_version" }, 409)));
+  await signIn(page, "/admin/swarm/subjects/woon-vault");
+  await page.getByTestId("topic-activate-toggle").click();
+  await page.getByTestId("activate-reason").fill("Reactivating this topic for the next cycle.");
+  await page.getByTestId("activate-confirm-submit").click();
+  await expect(page.getByTestId("activate-error")).toContainText("reload");
+  await expect(page.getByTestId("activate-confirm")).toBeVisible();
 });
 
 // AC: applied/active/inactive filtering + one-time credential reveal + no
@@ -1315,26 +1371,21 @@ test("swarm admin: an inactive member refused reactivation can take the rotate-k
 // gone (no session-scoped job read exists on the real backend — see
 // mockSwarmApi's header comment), and legal actions are now the 5 real
 // action names, computed client-side from the session's `state`.
-test("swarm admin: session create validation, UTC/local timeline, roster, and disabled illegal actions", async ({ page }) => {
+// AC (issue #1026, D55 decision 4; admin-surface.md US-C4): sessions are
+// OBSERVED. The overview offers no schedule form, the session page offers no
+// lifecycle control, and nothing the pages do posts a retired session verb.
+// The create form's own validation was retired with the create route.
+test("swarm admin: sessions are observe-only — no schedule form, UTC/local timeline, roster, and no lifecycle control", async ({ page }) => {
   await mockSwarmApi(page);
   await signIn(page, "/admin/swarm");
   await page.getByRole("button", { name: "Sessions" }).click();
-  await page.getByTestId("new-session-toggle").click();
-
-  await page.getByTestId("session-submit").click();
-  await expect(page.getByTestId("session-form").getByText("Select an active topic.")).toBeVisible();
-
-  await page.getByTestId("session-subject").selectOption("woon-vault");
-  await page.getByTestId("session-date").fill("2026-07-20");
-  await page.getByTestId("session-brief-opens").fill("2026-07-20T20:00:00Z");
-  await page.getByTestId("session-window-closes").fill("2026-07-20T14:00:00Z"); // before brief-opens: illegal order
-  await page.getByTestId("session-publish-at").fill("2026-07-20T21:00:00Z");
-  await page.getByTestId("session-reason").fill("Scheduling this session for coverage.");
-  await page.getByTestId("session-submit").click();
-  await expect(page.getByText(/briefOpensAt < windowClosesAt < publishAt/)).toBeVisible();
+  await expect(page.getByTestId("sessions-observe-only")).toBeVisible();
+  await expect(page.getByTestId("new-session-toggle")).toHaveCount(0);
+  await expect(page.getByTestId("session-form")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Schedule/ })).toHaveCount(0);
 
   await page.goto("/admin/swarm/sessions/sess-1");
-  // Timeline now only has Window closes / Published (no version/briefOpensAt/
+  // Timeline has only Window closes / Published (no version/briefOpensAt/
   // publishAt — no GET route exposes them).
   await expect(page.locator(".adm-meta-grid").getByText("2026-07-20 20:00:00 UTC")).toBeVisible();
   await expect(page.getByText(/local\)/)).toHaveCount(1);
@@ -1343,18 +1394,17 @@ test("swarm admin: session create validation, UTC/local timeline, roster, and di
   await expect(page.getByRole("cell", { name: "Nova", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "Robotmoney", exact: true })).toBeVisible();
 
-  // Default fixture state is "collecting" → only close/cancel are legal
-  // (backend/src/swarm/admin.ts TRANSITIONS, restricted to the 5 real
-  // HTTP actions).
-  await expect(page.getByTestId("session-action-close")).toBeEnabled();
-  await expect(page.getByTestId("session-action-cancel")).toBeEnabled();
-  await expect(page.getByTestId("session-action-publish")).toBeDisabled();
-  await expect(page.getByTestId("session-action-aggregate")).toBeDisabled();
-  await expect(page.getByTestId("session-action-reopen")).toBeDisabled();
-  // `judge` (issue #752) is only legal from `aggregated`, and the UI offers it
-  // rather than hiding it — whether the judge is switched ON is the backend's
-  // call (409 `judge_disabled`), not the button's.
-  await expect(page.getByTestId("session-action-judge")).toBeDisabled();
+  // No lifecycle control of any kind, in any state the fixture can hold.
+  await expect(page.getByTestId("lifecycle-observe-only")).toBeVisible();
+  for (const action of ["close", "reopen", "aggregate", "judge", "publish", "cancel"]) {
+    await expect(page.getByTestId(`session-action-${action}`)).toHaveCount(0);
+  }
+  await expect(page.getByTestId("session-action-confirm")).toHaveCount(0);
+  // A collecting epoch's roster is locked from its first instant, so no roster
+  // edit is offered either.
+  await expect(page.getByTestId("roster-add")).toBeHidden();
+  await expect(page.getByTestId("roster-excuse-nova")).toBeHidden();
+  expect(retiredSessionCalls(page)).toEqual([]);
 });
 
 // AC (issue #767): the shadow soak is READABLE from the admin session page.
@@ -1456,7 +1506,10 @@ test("swarm admin: excused roster row renders distinctly and excuse/restore subm
       included_at: "2026-07-19T00:00:00.000Z", excused_at: "2026-07-19T01:00:00.000Z",
       reason: "Conflict of interest disclosed." },
   ];
-  await mockSwarmApi(page, { rosterRows: excusedRosterRows });
+  // A LEGACY `scheduled` session: the only state whose roster still takes
+  // edits. An epoch is born `collecting` with its roster locked (the
+  // observe-only test above asserts no edit control is offered there).
+  await mockSwarmApi(page, { rosterRows: excusedRosterRows, session: sessionSummary({ state: "scheduled" }) });
   await signIn(page, "/admin/swarm/sessions/sess-1");
 
   // The excused row renders distinctly (its own state cell) alongside the
@@ -1528,50 +1581,51 @@ test("swarm admin: aggregate view renders quorum, stance counts, synthesis, and 
   await expect(page.getByText("The swarm reads a bullish tilt across the panel.")).toBeVisible();
 });
 
-// AC: lifecycle actions — confirm+reason required, synchronous state-change
-// response (never a 202 job envelope — no jobId/existing field exists on this
-// backend), idempotent no-op handling, and a visible 409 error.
-test("swarm admin: lifecycle action requires confirm+reason, shows the new state, idempotent reuse, and 409", async ({ page }) => {
+// AC (admin-surface.md US-C4: "I can see every lifecycle transition the
+// scheduler made, and I cannot fire one myself"): the Lifecycle panel marks
+// each epoch step done/current/pending, and marks judging/judged SKIPPED on a
+// session published under judge mode `off` (no judgement on record) — the
+// lifecycle actions that used to stand here were retired with their routes
+// (D55 decision 4).
+test("swarm admin: the lifecycle panel shows the steps the scheduler made, and fires none", async ({ page }) => {
+  // Collecting: the first step is current, the rest pending.
   await mockSwarmApi(page);
   await signIn(page, "/admin/swarm/sessions/sess-1");
+  const step = (state: string) => page.getByTestId(`lifecycle-step-${state}`);
+  await expect(step("collecting")).toHaveAttribute("data-status", "current");
+  for (const later of ["window_closed", "aggregated", "judging", "judged", "published"]) {
+    await expect(step(later)).toHaveAttribute("data-status", "pending");
+  }
 
-  let capturedBody: unknown = null;
-  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/close$/, async (route) => {
-    capturedBody = route.request().postDataJSON();
-    return route.fulfill(jsonReply({ ok: true, status: 200, session: { id: "sess-1", state: "window_closed", version: 3 } }));
-  });
-
-  await page.getByTestId("session-action-close").click();
-  await page.getByTestId("action-confirm-submit").click();
-  await expect(page.getByText("Reason must be 10–500 characters.")).toBeVisible();
-
-  await page.getByTestId("action-reason").fill("Closing the window ahead of schedule.");
-  await page.getByTestId("action-confirm-submit").click();
-  await expect(page.getByTestId("action-result")).toContainText("window_closed");
-  // No `expectedVersion` — the backend never exposes a session's current
-  // version over any GET route, and the field is optional when omitted.
-  expect(capturedBody).toMatchObject({ reason: "Closing the window ahead of schedule." });
-  expect(capturedBody).not.toHaveProperty("expectedVersion");
-  expect(capturedBody).not.toHaveProperty("version");
-
-  // Re-open the session detail in `window_closed` (aggregate/reopen/cancel are
-  // legal from there) to exercise the idempotent no-op branch on aggregate.
-  await mockSwarmApi(page, { session: sessionSummary({ state: "window_closed" }) });
-  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/aggregate$/, (route) =>
-    route.fulfill(jsonReply({ ok: true, status: 200, idempotent: true, session: { id: "sess-1", state: "window_closed", version: 3 } })));
+  // Judged under enforce (the fixture carries judgements): every earlier step
+  // done, judged current, published pending.
+  await mockSwarmApi(page, { session: sessionSummary({ state: "judged" }) });
   await page.goto("/admin/swarm/sessions/sess-1");
-  await page.getByTestId("session-action-aggregate").click();
-  await page.getByTestId("action-reason").fill("Aggregating after window close.");
-  await page.getByTestId("action-confirm-submit").click();
-  await expect(page.getByTestId("action-result")).toContainText("idempotent");
+  for (const done of ["collecting", "window_closed", "aggregated", "judging"]) {
+    await expect(step(done)).toHaveAttribute("data-status", "done");
+  }
+  await expect(step("judged")).toHaveAttribute("data-status", "current");
+  await expect(step("published")).toHaveAttribute("data-status", "pending");
 
-  // A concurrent state change surfaces the server's 409 clearly.
-  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/cancel$/, (route) =>
-    route.fulfill(jsonReply({ ok: false, status: 409, error: "terminal_state:published" }, 409)));
-  await page.getByTestId("session-action-cancel").click();
-  await page.getByTestId("action-reason").fill("Cancelling due to topic deprecation.");
-  await page.getByTestId("action-confirm-submit").click();
-  await expect(page.getByTestId("action-error")).toContainText("409");
+  // Published under judge mode `off`: no judgement on record, so the judging
+  // steps were skipped rather than passed.
+  await mockSwarmApi(page, {
+    session: sessionSummary({ state: "published", publishedAt: "2026-07-20T20:05:00.000Z" }),
+  });
+  // Registered after mockSwarmApi, so it answers first: no judgement on record.
+  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/judgements(\?.*)?$/, (route) =>
+    route.fulfill(jsonReply({ ok: true, status: 200, sessionId: "sess-1", state: "published", inForce: null, judgements: [] })));
+  await page.goto("/admin/swarm/sessions/sess-1");
+  for (const done of ["collecting", "window_closed", "aggregated"]) {
+    await expect(step(done)).toHaveAttribute("data-status", "done");
+  }
+  await expect(step("judging")).toHaveAttribute("data-status", "skipped");
+  await expect(step("judged")).toHaveAttribute("data-status", "skipped");
+  await expect(step("published")).toHaveAttribute("data-status", "current");
+
+  // In every state: no control, and no retired verb was ever posted.
+  await expect(page.getByRole("button", { name: /Close window|Reopen|Aggregate|Judge|Publish|Cancel session/ })).toHaveCount(0);
+  expect(retiredSessionCalls(page)).toEqual([]);
 });
 
 // Audit filters/rendering/redaction coverage moved: issue #159 originally
