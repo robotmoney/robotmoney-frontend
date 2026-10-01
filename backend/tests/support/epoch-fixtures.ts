@@ -125,3 +125,12 @@ export async function refusedByDatabase(run: () => Promise<unknown>): Promise<Er
   }
   throw new Error("expected the database to refuse this statement, and it did not");
 }
+
+/**
+ * Record a consensus the way `submitJudgement` does: `recordJudgingConsensusTx`
+ * in a transaction of its own. Settlement tests use it to record a consensus
+ * and then move its stored instant. No route or worker calls a standalone form.
+ */
+export function recordConsensus(sessionId: string, judgementId: number) {
+  return sql.begin((tx) => ic.recordJudgingConsensusTx(tx, sessionId, judgementId));
+}

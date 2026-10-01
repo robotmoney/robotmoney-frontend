@@ -37,7 +37,7 @@ import * as epoch from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { activeSubject, collectingSessions, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
+import { activeSubject, collectingSessions, recordConsensus, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
 import { inHouseJudge } from "./support/stub-judge.ts";
 import { provisionSchedulerToken, schedulerHeaders } from "./support/automation-auth.ts";
 
@@ -637,7 +637,7 @@ test("a consensus aborted at COMMIT publishes no session.judged and leaves the s
     RETURNING id`;
   const head = await epoch.streamHeadSequence();
 
-  const error = await abortedAtCommit(() => epoch.recordJudgingConsensus(sessionId, Number(j.id)));
+  const error = await abortedAtCommit(() => recordConsensus(sessionId, Number(j.id)));
   expect(error).toBe(`planted commit-time failure after event ${head + 1}`);
 
   expect(await epoch.streamHeadSequence()).toBe(head);

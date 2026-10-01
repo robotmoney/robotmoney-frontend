@@ -33,8 +33,9 @@ import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
 //     credential: backend/schema/grants.sql gives `rm_app` no DELETE on
 //     ordinary tables, so the two `job_schedules` retirement DELETEs below were
 //     refused there on a snapshot-built database.
-//   - `bun run src/db/seed.ts [--smoke-schedules]`, run directly with an
-//     `rm_owner` DATABASE_URL, also fenced (the block at the bottom).
+//   - `bun run src/db/seed.ts`, run directly with an `rm_owner` DATABASE_URL,
+//     also fenced (the block at the bottom). It seeds the canonical schedules
+//     only: the smoke's schedule changes ride `bun smoke --seed` (`seedDemo`).
 //   - scripts/prod-bootstrap's seed step, on the credential that also migrates.
 // An UPDATE or DELETE declares SELECT too, because Postgres checks a WHERE
 // clause's columns as a read.
@@ -51,10 +52,16 @@ const SMOKE_CALLERS = ["src/db/seed", "scripts/smoke-prepare"];
 const insertSchedule = registerQuery({
   role: "rm_owner",
   object: "job_schedules",
-  privileges: ["INSERT"],
+  privileges: ["INSERT", "SELECT"],
   site: "src/db/seed:seedJobSchedules.insert",
   purpose: "Insert each canonical schedule once, never overwriting the scheduler-managed columns of an existing row.",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO job_schedules (kind, cron, payload, timezone, enabled, catchup_policy)
+      VALUES ($1, $2, $3::jsonb, $4, $5, $6)
+      ON CONFLICT (kind, cron) DO NOTHING`,
+    params: ["probe.kind", "0 0 1 1 *", "{}", "UTC", true, "all"],
+  },
 });
 
 const disableProducerSchedules = registerQuery({
@@ -64,6 +71,10 @@ const disableProducerSchedules = registerQuery({
   site: "src/db/seed:seedJobSchedules.disableProducer",
   purpose: "Disable the retired consumer-DB regime/research schedules an older deployment left enabled.",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `UPDATE job_schedules SET enabled = false
+     WHERE kind IN ('regime.classify', 'research.refresh') AND enabled`,
+  },
 });
 
 const deadLetterProducerJobs = registerQuery({
@@ -73,6 +84,13 @@ const deadLetterProducerJobs = registerQuery({
   site: "src/db/seed:seedJobSchedules.deadLetterProducer",
   purpose: "Dead-letter pending or running regime/research jobs the independent producer now owns.",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `UPDATE jobs
+       SET status = 'dead', locked_at = NULL, locked_by = NULL,
+           last_error = 'retired consumer job: independent analytics-producer owns this execution',
+           updated_at = now()
+     WHERE kind IN ('regime.classify', 'research.refresh') AND status IN ('pending', 'running')`,
+  },
 });
 
 const deleteAnalyticsRunSchedule = registerQuery({
@@ -82,6 +100,9 @@ const deleteAnalyticsRunSchedule = registerQuery({
   site: "src/db/seed:seedJobSchedules.deleteAnalyticsRun",
   purpose: "Delete the retired combined analytics.run schedule rows (issue #107).",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `DELETE FROM job_schedules WHERE kind = 'analytics.run'`,
+  },
 });
 
 const deadLetterAnalyticsRunJobs = registerQuery({
@@ -91,6 +112,14 @@ const deadLetterAnalyticsRunJobs = registerQuery({
   site: "src/db/seed:seedJobSchedules.deadLetterAnalyticsRun",
   purpose: "Dead-letter not-yet-terminal jobs of the retired analytics.run kind (issue #107).",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `UPDATE jobs
+       SET status = 'dead',
+           locked_at = NULL, locked_by = NULL,
+           last_error = 'retired kind: analytics.run was split into regime.classify + research.refresh (issue #107)',
+           updated_at = now()
+     WHERE kind = 'analytics.run' AND status IN ('pending', 'running')`,
+  },
 });
 
 const deleteHourlyRepairSchedule = registerQuery({
@@ -100,15 +129,24 @@ const deleteHourlyRepairSchedule = registerQuery({
   site: "src/db/seed:seedJobSchedules.deleteHourlyRepair",
   purpose: "Delete the superseded hourly ops.repair_gaps row so exactly one repair cadence remains.",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `DELETE FROM job_schedules WHERE kind = 'ops.repair_gaps' AND cron = '25 * * * *'`,
+  },
 });
 
 const insertSmokeSchedule = registerQuery({
   role: "rm_owner",
   object: "job_schedules",
-  privileges: ["INSERT"],
+  privileges: ["INSERT", "SELECT"],
   site: "src/db/seed:seedSmokeJobSchedules.insert",
   purpose: "Insert the smoke's quota-safe schedule rows once, idempotently.",
   callers: SMOKE_CALLERS,
+  probe: {
+    statement: `INSERT INTO job_schedules (kind, cron, payload, timezone, enabled)
+      VALUES ($1, $2, $3::jsonb, $4, $5)
+      ON CONFLICT (kind, cron) DO NOTHING`,
+    params: ["probe.kind", "0 0 1 1 *", "{}", "UTC", true],
+  },
 });
 
 const disableSmokeSchedule = registerQuery({
@@ -118,33 +156,58 @@ const disableSmokeSchedule = registerQuery({
   site: "src/db/seed:seedSmokeJobSchedules.disable",
   purpose: "Disable the per-minute samplers, the superseded fast rows and coverage recompute on a smoke database.",
   callers: SMOKE_CALLERS,
+  probe: {
+    statement: `UPDATE job_schedules SET enabled = false
+       WHERE kind = $1 AND cron = $2 AND enabled`,
+    params: ["probe.kind", "0 0 1 1 *"],
+  },
 });
 
 const enqueueColdStart = registerQuery({
   role: "rm_owner",
   object: "jobs",
-  privileges: ["INSERT"],
+  privileges: ["INSERT", "SELECT"],
   site: "src/db/seed:seed.coldStart",
   purpose: "Enqueue one cold-start job per sampler and the gap repair, at most once per database via a constant dedupe_key.",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO jobs (kind, payload, dedupe_key)
+      VALUES ($1, $2::jsonb, $3)
+      ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+    params: ["probe.cold_start", "{}", "probe.cold_start:coldstart"],
+  },
 });
 
 const insertWalletHistorySeed = registerQuery({
   role: "rm_owner",
   object: "wallet_balance_samples",
-  privileges: ["INSERT"],
+  privileges: ["INSERT", "SELECT"],
   site: "src/db/seed:backfillWalletHistory",
   purpose: "Insert the pre-launch prop-wallet history, provenance 'seed', never clobbering a live sample.",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO wallet_balance_samples
+        (sample_date, symbol, amount, price_usd, value_usd, provenance)
+      VALUES
+        ($1, $2, NULL, NULL, $3, 'seed')
+      ON CONFLICT (sample_date, symbol) DO NOTHING`,
+    params: ["2019-03-01", "PROBE", 1],
+  },
 });
 
 const insertAllocationFramework = registerQuery({
   role: "rm_owner",
   object: "allocation_framework",
-  privileges: ["INSERT"],
+  privileges: ["INSERT", "SELECT"],
   site: "src/db/seed:seed.allocationFramework",
   purpose: "Fill the single allocation_framework row on an empty table, never overwriting an admin rewrite.",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO allocation_framework (id, asof, vault_contract, buckets)
+    VALUES (1, $1, $2, $3::jsonb)
+    ON CONFLICT (id) DO NOTHING`,
+    params: ["2026-01-01", "0x0000000000000000000000000000000000000000", "[]"],
+  },
 });
 
 const insertDemoSubject = registerQuery({
@@ -390,6 +453,15 @@ export async function seedJobSchedules(db: RegistryDb = sql): Promise<void> {
   await on(db, deleteHourlyRepairSchedule)`DELETE FROM job_schedules WHERE kind = 'ops.repair_gaps' AND cron = '25 * * * *'`;
 }
 
+/** The jobs enqueued once per database at seed, each under the dedupe_key `<kind>:coldstart`. */
+const COLD_START_KINDS = [
+  "wallet.sample_balances",
+  "wallet.sample_sleeves",
+  "vault.sample_adapters",
+  "vault.sample_share_price",
+  "ops.repair_gaps",
+] as const;
+
 /** Apply the smoke's quota-safe schedule changes explicitly and idempotently. */
 export async function seedSmokeJobSchedules(db: RegistryDb = sql): Promise<void> {
   for (const s of [...FAST_DEMO_SCHEDULES, ...SLOW_DEMO_SAMPLER_SCHEDULES]) {
@@ -400,24 +472,25 @@ export async function seedSmokeJobSchedules(db: RegistryDb = sql): Promise<void>
     `;
   }
 
-  await on(db, disableSmokeSchedule)`
-    UPDATE job_schedules SET enabled = false
-     WHERE kind IN ('wallet.sample_balances', 'wallet.sample_sleeves') AND cron = '* * * * *' AND enabled
-  `;
+  const disable = async (rows: readonly { kind: string; cron: string }[]): Promise<void> => {
+    for (const s of rows) {
+      await on(db, disableSmokeSchedule)`
+        UPDATE job_schedules SET enabled = false
+         WHERE kind = ${s.kind} AND cron = ${s.cron} AND enabled
+      `;
+    }
+  };
+
+  await disable([
+    { kind: "wallet.sample_balances", cron: "* * * * *" },
+    { kind: "wallet.sample_sleeves", cron: "* * * * *" },
+  ]);
   console.log("smoke schedules: disabled per-minute wallet samplers (hourly cadence owns sampling)");
 
-  for (const s of SUPERSEDED_FAST_DEMO_SCHEDULES) {
-    await on(db, disableSmokeSchedule)`
-      UPDATE job_schedules SET enabled = false
-       WHERE kind = ${s.kind} AND cron = ${s.cron} AND enabled
-    `;
-  }
+  await disable(SUPERSEDED_FAST_DEMO_SCHEDULES);
   console.log("smoke schedules: confirmed retired consumer analytics schedules disabled");
 
-  await on(db, disableSmokeSchedule)`
-    UPDATE job_schedules SET enabled = false
-     WHERE kind = 'projects.recompute_coverage' AND cron = '0 3 * * *' AND enabled
-  `;
+  await disable([{ kind: "projects.recompute_coverage", cron: "0 3 * * *" }]);
   console.log("smoke schedules: disabled projects.recompute_coverage (curated scores are preserved)");
 }
 
@@ -452,27 +525,7 @@ export async function seed(db: RegistryDb = sql): Promise<void> {
   // guarantees the sampler issues at least one real aggregate3 eth_call within
   // seconds of boot, rather than waiting on the cron. ON CONFLICT mirrors the
   // scheduler's partial unique index on dedupe_key.
-  await on(db, enqueueColdStart)`
-    INSERT INTO jobs (kind, payload, dedupe_key)
-    VALUES ('wallet.sample_balances', ${db.json(jsonValue({}))}, 'wallet.sample_balances:coldstart')
-    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-  `;
-  await on(db, enqueueColdStart)`
-    INSERT INTO jobs (kind, payload, dedupe_key)
-    VALUES ('wallet.sample_sleeves', ${db.json(jsonValue({}))}, 'wallet.sample_sleeves:coldstart')
-    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-  `;
-  await on(db, enqueueColdStart)`
-    INSERT INTO jobs (kind, payload, dedupe_key)
-    VALUES ('vault.sample_adapters', ${db.json(jsonValue({}))}, 'vault.sample_adapters:coldstart')
-    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-  `;
-  await on(db, enqueueColdStart)`
-    INSERT INTO jobs (kind, payload, dedupe_key)
-    VALUES ('vault.sample_share_price', ${db.json(jsonValue({}))}, 'vault.sample_share_price:coldstart')
-    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-  `;
-  // Cold start for the gap repair, same mechanism and same reason — but the wait
+  // The last kind, the gap repair, is a cold start for the gap repair, same mechanism and same reason — but the wait
   // it removes is longer. ops.repair_gaps runs at `*/5 * * * *`, and
   // worker/scheduler.ts seeds a brand-new schedule's next_run_at to the next
   // FUTURE occurrence, so a fresh boot does no repair work for up to five
@@ -484,11 +537,15 @@ export async function seed(db: RegistryDb = sql): Promise<void> {
   // than double work: the dispatcher declines while a window job is in flight
   // (worker/handlers/repair.ts), and a CONSTANT dedupe_key fires this at most
   // once per database.
-  await on(db, enqueueColdStart)`
-    INSERT INTO jobs (kind, payload, dedupe_key)
-    VALUES ('ops.repair_gaps', ${db.json(jsonValue({}))}, 'ops.repair_gaps:coldstart')
-    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-  `;
+  // One statement for every kind (the registry holds one statement per site):
+  // the four samplers first, then the gap repair.
+  for (const kind of COLD_START_KINDS) {
+    await on(db, enqueueColdStart)`
+      INSERT INTO jobs (kind, payload, dedupe_key)
+      VALUES (${kind}, ${db.json(jsonValue({}))}, ${`${kind}:coldstart`})
+      ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+    `;
+  }
   console.log("enqueued cold-start sampler jobs (idempotent on dedupe_key)");
 
   // One-time prop-wallet history backfill (issue #84): seed the pre-launch
@@ -585,7 +642,12 @@ export async function seed(db: RegistryDb = sql): Promise<void> {
  */
 export async function assertSeedable(
   db: RegistryDb,
-  request: { readonly rmEnv: string | undefined; readonly explicitlyRequested: boolean },
+  request: {
+    readonly rmEnv: string | undefined;
+    readonly explicitlyRequested: boolean;
+    /** `remote` makes an un-enrolled refusal name the D55 (10) runbook. */
+    readonly connection?: "remote" | "local";
+  },
 ): Promise<void> {
   const identity = await readIdentityKind(db);
   const gate = requireRehearsalTarget({
@@ -593,6 +655,7 @@ export async function assertSeedable(
     rmEnv: request.rmEnv,
     identity,
     explicitlyRequested: request.explicitlyRequested,
+    ...(request.connection === "remote" ? { connection: "remote" as const } : {}),
   });
   if (!gate.allow) throw new Error(`Refusing --seed: ${gate.reason} Nothing was written.`);
   const populated = await populatedTables(db, await loadSnapshot());
@@ -613,22 +676,20 @@ export async function assertSeedable(
  */
 export async function seedDemo(
   tx: RegistryDb,
-  request: { readonly rmEnv: string | undefined },
+  request: { readonly rmEnv: string | undefined; readonly connection?: "remote" | "local" },
 ): Promise<void> {
-  await assertSeedable(tx, { rmEnv: request.rmEnv, explicitlyRequested: true });
+  await assertSeedable(tx, { rmEnv: request.rmEnv, explicitlyRequested: true, connection: request.connection });
   await seed(tx);
   await seedSmokeJobSchedules(tx);
   await seedDemoSubjects(tx);
 }
 
-// Run directly: `bun run src/db/seed.ts [--smoke-schedules]`, with an rm_owner
-// DATABASE_URL. The canonical seed is idempotent and not demo data, so it is
-// not gated; it IS a mutation, so it runs inside the §2 fence like every other
+// Run directly: `bun run src/db/seed.ts`, with an rm_owner DATABASE_URL. The
+// canonical seed is idempotent and not demo data, so it is not gated; it IS a mutation, so it runs inside the §2 fence like every other
 // one, on a connection of its own from the same URL.
 if (import.meta.url === `file://${process.argv[1]}`) {
   withMutationFence({ databaseUrl: process.env.DATABASE_URL ?? "", label: "seed" }, async (tx) => {
     await seed(tx);
-    if (process.argv.includes("--smoke-schedules")) await seedSmokeJobSchedules(tx);
   })
     .then(closeDb)
     .catch((err) => {

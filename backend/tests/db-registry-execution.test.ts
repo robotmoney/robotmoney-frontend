@@ -63,29 +63,16 @@ const REGISTRY_FILE = join(SRC, "db", "registry.ts");
 const ROLES: readonly RmRole[] = ["rm_owner", "rm_app", "rm_worker", "rm_readonly"];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PROBE_PENDING — registered sites with no probe yet. Recorded 2026-09-25
-// (#1026 W3) with 11 entries, every one of them src/db/seed's: seed.ts is
-// owned by another package this wave, and w5-epoch-registry gives these sites
-// their probes. An entry leaves when its site gains a probe (the stale check
-// below fails until it does); NEVER ADD A LINE HERE — a new site ships with
-// its probe.
+// PROBE_PENDING — registered sites with no probe yet. EMPTY (#1086): the 11
+// src/db/seed sites recorded here on 2026-09-25 (#1026 W3) each gained a probe
+// that runs as rm_owner on the disposable database. The test below fails when a
+// site is registered without a probe, so nothing may be added here: a new site
+// ships with its probe.
 // ─────────────────────────────────────────────────────────────────────────────
-const PROBE_PENDING: readonly string[] = [
-  "src/db/seed:backfillWalletHistory",
-  "src/db/seed:seed.allocationFramework",
-  "src/db/seed:seed.coldStart",
-  "src/db/seed:seedJobSchedules.deadLetterAnalyticsRun",
-  "src/db/seed:seedJobSchedules.deadLetterProducer",
-  "src/db/seed:seedJobSchedules.deleteAnalyticsRun",
-  "src/db/seed:seedJobSchedules.deleteHourlyRepair",
-  "src/db/seed:seedJobSchedules.disableProducer",
-  "src/db/seed:seedJobSchedules.insert",
-  "src/db/seed:seedSmokeJobSchedules.disable",
-  "src/db/seed:seedSmokeJobSchedules.insert",
-];
+const PROBE_PENDING: readonly string[] = [];
 
 /** The count PROBE_PENDING was recorded with; it may only go down. */
-const PROBE_PENDING_CEILING = 11;
+const PROBE_PENDING_CEILING = 0;
 
 /**
  * The number of probed sites that ran when this test was last extended. The
@@ -94,7 +81,7 @@ const PROBE_PENDING_CEILING = 11;
  * as sites are added. Lower it only in the change that deletes a registering
  * module, saying which.
  */
-const EXECUTED_FLOOR = 270;
+const EXECUTED_FLOOR = 281;
 
 /**
  * The number of `on(...)` call sites the static reader resolved when it was

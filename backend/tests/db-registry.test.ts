@@ -1018,3 +1018,33 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
     }
   });
 });
+
+// D55 (13), #1086: a registered function with no production caller is deleted,
+// with the tests that only exercised it. The registry declares entry modules,
+// never tests, so "declared callers are only tests" cannot be read off a
+// declaration. The deletions are pinned by name instead, as no-inline-judge does.
+describe("registered functions with no production caller stay deleted (D55 (13))", () => {
+  const BACKEND = join(import.meta.dir, "..");
+  const DELETED = [
+    "getRosterCapacityStatus",
+    "recordJudgingConsensus",
+    "canonicalSha256",
+    "buildCanonicalWalletSnapshotManifest",
+    "validateWalletSnapshotExactSets",
+  ];
+  const sources = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? sources(join(dir, e.name)) : e.name.endsWith(".ts") ? [join(dir, e.name)] : [],
+    );
+
+  test("no module under backend/src or backend/tests names a deleted function", () => {
+    const self = resolve(import.meta.path);
+    const found: string[] = [];
+    for (const file of [...sources(join(BACKEND, "src")), ...sources(join(BACKEND, "tests"))]) {
+      if (resolve(file) === self) continue;
+      const text = readFileSync(file, "utf8");
+      for (const name of DELETED) if (new RegExp(`\\b${name}\\b`).test(text)) found.push(`${file}: ${name}`);
+    }
+    expect(found).toEqual([]);
+  });
+});

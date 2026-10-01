@@ -23,6 +23,8 @@
 //      changed roster/image/target does not reuse completed phases."
 //   - "Receipt read by `smoke:status`."
 import { afterAll, describe, expect, test } from "bun:test";
+import { healthPayload } from "../../lib/system-scheduler/health.ts";
+import { evaluateReadiness, READINESS_CHECKS } from "../../lib/smoke-readiness-scheduler.ts";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -1096,6 +1098,56 @@ describe("receipt — §1.4, the artifact that outlives the run", () => {
     await writeReceipt(paths, receiptFor(p));
     expect(readReceipt(paths)?.images).toEqual({ api: DIGEST_B, worker: DIGEST_B });
     expect(summarizeProgress(null, readReceipt(paths))).toContain(`service api: running ${DIGEST_B}`);
+  });
+
+  test("a receipt built from the boot's real readiness checks records every one by name (#1086)", async () => {
+    const paths = freshPaths();
+    const p = plan();
+    openJournal(paths, { kind: "fresh-start", reason: "none" }, p);
+    // The gate smoke-main runs, over an observation where everything holds; its
+    // `checks` are what smoke-main hands the receipt (`readiness = verdict.checks`).
+    const checks = evaluateReadiness({
+      apiHealth: { ok: true, detail: "http://127.0.0.1:1/health answered 200" },
+      scheduler: healthPayload({
+        authenticated: true,
+        streamSynchronized: true,
+        initialRebuildComplete: true,
+        exhausted: [],
+        healthy: true,
+        lastError: null,
+        timers: { boundaries: 1, deadlines: 0 },
+      }),
+      subjects: { active: ["woon"], collecting: ["woon"] },
+      workers: [{ service: "worker-analytics", health: "healthy", line: { kind: "passed" } }],
+      producer: { health: "healthy", phase: "armed", authenticated: true, detail: "heartbeat phase=armed" },
+      seed: { completed: true, detail: "exited 0" },
+    });
+    await writeReceipt(paths, receiptFor(p, { readiness: checks }));
+    const recorded = readReceipt(paths)?.readiness.map((r) => r.check);
+    for (const name of [
+      "api-health",
+      "pipeline-worker-startup",
+      "analytics-producer-authenticated",
+      "analytics-producer-seed",
+      "scheduler-authenticated",
+      "scheduler-stream-synchronized",
+      "scheduler-initial-rebuild",
+      "scheduler-no-exhausted-work",
+      "epoch-per-active-subject",
+    ]) {
+      expect(recorded).toContain(name);
+    }
+    expect(recorded).toEqual([...READINESS_CHECKS]);
+    expect(readReceipt(paths)?.readiness.every((r) => r.pass && r.detail.length > 0)).toBe(true);
+  });
+
+  test("a readiness check that failed is named in the refusal and no receipt is written (#1086)", async () => {
+    const paths = freshPaths();
+    const p = plan();
+    openJournal(paths, { kind: "fresh-start", reason: "none" }, p);
+    const failing = [{ check: "analytics-producer-seed", pass: false, detail: "exited 1" }];
+    await expect(writeReceipt(paths, receiptFor(p, { readiness: failing }))).rejects.toThrow(/analytics-producer-seed/);
+    expect(readReceipt(paths)).toBeNull();
   });
 
   test("a version-1 receipt (no `images`) refuses rather than parsing as the new type", () => {

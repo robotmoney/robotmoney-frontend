@@ -343,13 +343,6 @@ export async function getRosterCapacity(): Promise<{ rosterCap: number; seatsFil
   };
 }
 
-/** Roster capacity and available seats surface (#236 / #238 contract seam). */
-export async function getRosterCapacityStatus(tx: DbHandle = sql): Promise<{ active: number; cap: number; seatsAvailable: number }> {
-  const active = await countActiveMembersTx(tx);
-  const seatsAvailable = Math.max(0, SWARM_ROSTER_CAP - active);
-  return { active, cap: SWARM_ROSTER_CAP, seatsAvailable };
-}
-
 // Serialize every roster-admission transaction on one advisory key. A bare
 // count()-then-write is a TOCTOU race: two concurrent activations each read
 // count=CAP-1 and both admit, blowing past SWARM_ROSTER_CAP. A txn-scoped

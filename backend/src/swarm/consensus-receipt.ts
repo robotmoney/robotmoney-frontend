@@ -649,7 +649,7 @@ async function loadAssemblyInput(
   const frozen = await loadFrozenTakeSet(sessionId);
   if (!frozen) throw new ConsensusReceiptRefusal("no_session", `no such session ${sessionId}`);
   // THE SAME FROZEN SET THE JUDGE READ. `loadFrozenTakeSet()` is the one query
-  // (latest revision per member, filtered to the frozen roster) the aggregator
+  // (the final take per member, D51, filtered to the frozen roster) the aggregator
   // and the judge both go through, so `inputs_digest` on the judgement is a
   // claim about exactly the takes this receipt attests to. Re-querying here
   // would make the receipt attest to a take set nobody judged.

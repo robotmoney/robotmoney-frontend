@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import * as ic from "../src/swarm/domain.ts";
-import { SWARM_ROSTER_CAP, getRosterCapacityStatus } from "../src/swarm/domain.ts";
+import { SWARM_ROSTER_CAP, getRosterCapacity } from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { sql } from "../src/db/client.ts";
 import { canonicalizeApplication } from "@robotmoney/contract";
@@ -70,15 +70,15 @@ test("POST /api/swarm/waitlist — input validation & privacy bounds", async () 
   expect(Number(rows2[0].n)).toBe(1);
 });
 
-test("getRosterCapacityStatus() — returns active count, cap, and available seats seam", async () => {
-  let status = await getRosterCapacityStatus();
-  expect(status.cap).toBe(SWARM_ROSTER_CAP);
-  expect(status.active).toBe(0);
+test("getRosterCapacity() — returns seats filled, cap, and available seats", async () => {
+  let status = await getRosterCapacity();
+  expect(status.rosterCap).toBe(SWARM_ROSTER_CAP);
+  expect(status.seatsFilled).toBe(0);
   expect(status.seatsAvailable).toBe(SWARM_ROSTER_CAP);
 
   await onboard("m1");
-  status = await getRosterCapacityStatus();
-  expect(status.active).toBe(1);
+  status = await getRosterCapacity();
+  expect(status.seatsFilled).toBe(1);
   expect(status.seatsAvailable).toBe(SWARM_ROSTER_CAP - 1);
 });
 
@@ -100,8 +100,8 @@ test("a seat opening frees the seat and sends nothing — the waitlist survives 
     const m = await onboard(`seat_member_${i}`);
     members.push(m.memberId);
   }
-  let capStatus = await getRosterCapacityStatus();
-  expect(capStatus.active).toBe(SWARM_ROSTER_CAP);
+  let capStatus = await getRosterCapacity();
+  expect(capStatus.seatsFilled).toBe(SWARM_ROSTER_CAP);
   expect(capStatus.seatsAvailable).toBe(0);
 
   await callApi("POST", "/api/swarm/waitlist", { email: "waitlist1@example.com" });
@@ -115,8 +115,8 @@ test("a seat opening frees the seat and sends nothing — the waitlist survives 
   const deactRes = await admin.deactivateMemberAdmin(targetMember.id, targetMember.version);
   expect(deactRes.ok).toBe(true);
 
-  capStatus = await getRosterCapacityStatus();
-  expect(capStatus.active).toBe(SWARM_ROSTER_CAP - 1);
+  capStatus = await getRosterCapacity();
+  expect(capStatus.seatsFilled).toBe(SWARM_ROSTER_CAP - 1);
   expect(capStatus.seatsAvailable).toBe(1);
 
   // The list is intact and readable — that is the whole feature now.
