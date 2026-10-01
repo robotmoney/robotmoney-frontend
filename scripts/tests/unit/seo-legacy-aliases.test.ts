@@ -110,7 +110,7 @@ test("/vault is an exact alias: the bare path is /allocation, each vault page is
   }
 
   // Anything else under /vault/ is not found, not a vault page.
-  expect(metaFor("/vault/nope").title).toBe("Page Not Found — Robot Money");
+  expect(metaFor("/vault/nope").title).toBe("Page Not Found | Robot Money");
   expect(metaFor("/vault/nope").robots).toBe("noindex, follow");
   expect(canonicalUrlFor("/vault/nope")).toBe("https://robotmoney.network/vault/nope");
 });

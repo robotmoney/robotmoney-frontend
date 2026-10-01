@@ -327,7 +327,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         ]);
         expect(r.exitCode, `${asset.path}: ${r.stderr}`).toBe(0);
         expect(r.stdout).toContain(asset.marker);
-        expect(r.stdout).not.toContain("<title>Robot Money — Autonomous Treasury for the Agent Economy</title>");
+        expect(r.stdout).not.toContain("<title>Robot Money: The Treasury Layer for the Agent Economy</title>");
       }
     },
     TEST_TIMEOUT_MS,

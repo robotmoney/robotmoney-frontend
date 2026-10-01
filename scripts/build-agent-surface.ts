@@ -134,7 +134,9 @@ function buildLlmsBlock(): string {
     // rather than as a link: a link invites a crawler to request the literal
     // template and record a 404. The ids that fill it come out of the
     // collection endpoint listed above it.
-    const target = e.params?.some((p) => p.in === "path") ? `\`${url}\`` : `[${url}](${url})`;
+    const target = e.requiredQuery
+      ? `\`${url}${e.requiredQuery}\``
+      : e.params?.some((p) => p.in === "path") ? `\`${url}\`` : `[${url}](${url})`;
     lines.push(`- ${target}: ${e.summary}.${size}`);
   }
   return lines.join("\n");
