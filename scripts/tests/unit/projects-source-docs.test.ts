@@ -5,7 +5,7 @@
 // documented NOWHERE an operator looks, so a prod deployment following the
 // shipped compose/env files crash-looped on an undiscoverable env var. This
 // test pins the fix: every operator surface (.env.example, both compose files,
-// docs/runbooks/deployment.md) must keep mentioning PROJECTS_SOURCE, so the
+// docs/architecture.md) must keep mentioning PROJECTS_SOURCE, so the
 // documentation can never silently regress. It also pins the .env.example
 // adapter-block honesty fix: PR #112 made the REAL deployed Base adapter
 // addresses the config defaults (backend/src/config.ts resolveVaultAdapters),
@@ -24,8 +24,7 @@ const read = (rel: string) => readFileSync(join(repoRoot, rel), "utf8");
 const OPERATOR_SURFACES = [
   ".env.example",
   "docker-compose.yml",
-  "docker-compose.smoke.yml",
-  "docs/runbooks/deployment.md",
+  "docs/architecture/projects-directory.md",
 ] as const;
 
 describe("PROJECTS_SOURCE is documented on every operator surface", () => {
@@ -40,15 +39,14 @@ describe("PROJECTS_SOURCE is documented on every operator surface", () => {
     expect(read(".env.example")).toContain("PROJECTS_SOURCE=live");
   });
 
-  test("docs/runbooks/deployment.md documents the prod fail-closed contract (PROJECTS_SOURCE=live)", () => {
-    expect(read("docs/runbooks/deployment.md")).toContain("PROJECTS_SOURCE=live");
+  test("docs/architecture/projects-directory.md documents the prod fail-closed contract (PROJECTS_SOURCE=live)", () => {
+    expect(read("docs/architecture/projects-directory.md")).toContain("PROJECTS_SOURCE=live");
   });
 
-  test("both compose files pass PROJECTS_SOURCE through to the containers", () => {
+  test("the compose file passes PROJECTS_SOURCE through to the containers", () => {
     // The passthrough (`${PROJECTS_SOURCE:-}`) is what lets a droplet/.env set
-    // the knob without editing the compose files.
+    // the knob without editing the compose file.
     expect(read("docker-compose.yml")).toContain("${PROJECTS_SOURCE:-}");
-    expect(read("docker-compose.smoke.yml")).toContain("${PROJECTS_SOURCE:-}");
   });
 });
 

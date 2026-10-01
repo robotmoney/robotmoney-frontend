@@ -12,7 +12,7 @@
 //      baked into it would say so (`<sha>+dirty`) far too late.
 //   2. BUILD, with the same Dockerfiles and the same compose model the stack
 //      runs — `docker compose build` over docker-compose.yml +
-//      docker-compose.smoke.yml with an images override that names the tagged
+//      docker-compose.yml with an images override that names the tagged
 //      refs, so what is built and what is later started cannot drift apart.
 //      Nothing is re-derived from a second copy of the topology.
 //   3. SHIP, `docker save <six refs> | ssh <host> docker load`. One stream, no
@@ -32,6 +32,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { composeArgs } from "./config.ts";
 import {
   HOST_IMAGES_MANIFEST_PATH,
   HOST_IMAGES_OVERRIDE_DIR,
@@ -153,12 +154,17 @@ if (import.meta.main) {
   const overridePath = join(stagingDir, "images.override.yaml");
   const generatedAt = new Date().toISOString();
   writeFileSync(overridePath, imagesOverrideYaml(args.tag, { sourceCommit: commit, generatedAt }));
+  // Built through composeArgs(), not by hand. The prefix is assembled in ONE
+  // place (scripts/stack/config.ts) so every compose call in the repo carries
+  // `--env-file /dev/null`. A prefix spelled out by hand here would let the
+  // host checkout's deployment `.env` be auto-loaded into the build, which is
+  // exactly the failure that rule exists for.
   const composeArgv = [
-    "docker", "compose",
-    "-p", `rm_ship_images_${args.tag.replace(/[^A-Za-z0-9]/g, "_")}`,
-    "-f", "docker-compose.yml",
-    "-f", "docker-compose.smoke.yml",
-    "-f", overridePath,
+    "docker",
+    ...composeArgs(`rm_ship_images_${args.tag.replace(/[^A-Za-z0-9]/g, "_")}`, [
+      "docker-compose.yml",
+      overridePath,
+    ]),
   ];
   // The identity every image carries, from the tree verified in step 1 — the
   // same two build args scripts/stack/stack.ts passes, so an image built here
@@ -230,5 +236,5 @@ if (import.meta.main) {
     );
   }
   console.log(`\n[ship-images] DONE. ${built.length} images built on $(hostname) at ${args.tag} and verified on ${args.host}.`);
-  console.log(`[ship-images] Next: on ${args.host}, RM_IMAGES_OVERRIDE=${HOST_IMAGES_OVERRIDE_PATH} bun run smoke:stage`);
+  console.log(`[ship-images] Next: on ${args.host}, bun smoke --static-port --images-override ${HOST_IMAGES_OVERRIDE_PATH}`);
 }

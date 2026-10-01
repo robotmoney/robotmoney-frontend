@@ -52,6 +52,16 @@ export interface SeriesDef {
    *
    *  Today this carries one case: the samples migration 0036 quarantined. */
   uncounted?: { column: string; values: readonly string[] };
+  /** A tombstone column: a row where it is NOT NULL is not live and covers
+   *  nothing, whatever its other columns say.
+   *
+   *  D55 (6): the wallet repair pass (ops/wallet-backfill.ts) no longer
+   *  deletes the rows it stops writing; it sets `superseded_at` on them
+   *  (migration 0086) and every read filters `superseded_at IS NULL`. The
+   *  detector is one of those reads — without this a superseded row would keep
+   *  its slot looking covered after the delete it replaces would have opened
+   *  the gap. */
+  tombstoneColumn?: string;
   /** Natural keys that must ALL exist before a slot counts as covered. Extra
    * keys are tolerated; a missing expected key makes the whole slot a gap. */
   expectedKeys?: {
@@ -88,6 +98,7 @@ export const SERIES_REGISTRY: SeriesDef[] = [
     seriesStart: "2026-03-18", // chain/wallet-history-seed.ts's earliest seeded day
     remediationClass: "C",
     uncounted: { column: "provenance", values: [QUARANTINED_PROVENANCE] },
+    tombstoneColumn: "superseded_at",
     expectedKeys: {
       columns: ["symbol"],
       resolve: (asOf?: string) => resolveWalletSnapshotManifest(undefined, undefined, asOf).balanceAssets.map((asset) => [asset.symbol]),
@@ -102,6 +113,7 @@ export const SERIES_REGISTRY: SeriesDef[] = [
     seriesStart: "2026-03-18",
     remediationClass: "C",
     uncounted: { column: "provenance", values: [QUARANTINED_PROVENANCE] },
+    tombstoneColumn: "superseded_at",
     expectedKeys: {
       columns: ["wallet_address", "symbol"],
       resolve: (asOf?: string) => resolveWalletSnapshotManifest(undefined, undefined, asOf).sleeveKeys.map((key) => [key.walletAddress, key.asset.symbol]),

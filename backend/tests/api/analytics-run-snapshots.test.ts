@@ -5,11 +5,10 @@
 // dual-write), injected rollback, failed-run diagnostics, exact report
 // retrieval, unchanged current-view reads, and telemetry/historical-artifact
 // separation.
-import { test, expect, afterEach } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
 import { createHash } from "node:crypto";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
-import { config } from "../../src/config.ts";
 import { handleAnalytics } from "../../src/api/routes/analytics.ts";
 import {
   insertOutputSnapshots,
@@ -18,23 +17,20 @@ import {
 } from "../../src/analytics/store/output-snapshot-store.ts";
 import { getRegimeSnapshots, getResearchSignal } from "../../src/api/routes/dashboards.ts";
 import { useCleanDatabase } from "../support/clean-db.ts";
+import { provisionAnalyticsToken, provisionOperatorToken } from "../support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
 
 const A = ROUTES.analytics;
-const TOKEN = "tok_analytics_test_secret";
-const ADMIN = "tok_admin_test_secret";
+let TOKEN = "";
+let ADMIN = "";
 
-const orig = { analyticsToken: config.analyticsToken, adminToken: config.adminToken, allowInsecure: config.allowInsecure };
-function prodAuth() {
-  config.analyticsToken = TOKEN;
-  config.adminToken = ADMIN;
-  config.allowInsecure = false;
-}
-afterEach(() => {
-  config.analyticsToken = orig.analyticsToken;
-  config.adminToken = orig.adminToken;
-  config.allowInsecure = orig.allowInsecure;
+// Store-issued, like the real credentials (smoke spec §3, D52 (1)): the
+// producer's token is the only one the analytics boundary accepts, and the
+// operator's admin token is refused there, in every env.
+beforeAll(async () => {
+  TOKEN = await provisionAnalyticsToken();
+  ADMIN = await provisionOperatorToken();
 });
 
 function req(method: string, path: string, body?: unknown, token?: string): Request {
@@ -139,7 +135,6 @@ function failedPackage(runId: string, asof: string, overrides: Record<string, un
 
 // ── AC1 ──────────────────────────────────────────────────────────────────────
 test("POST run-packages (succeeded): auth required, complete output artifacts and exact report bytes are inserted, checksums recompute clean, and current-view rows change in the SAME committed transaction", async () => {
-  prodAuth();
   const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof: "2026-06-01", toolId: "ac1-test" });
   const asof = "2026-06-01";
   const body = succeededPackage(runId, asof);
@@ -180,7 +175,6 @@ test("POST run-packages (succeeded): auth required, complete output artifacts an
 });
 
 test("POST run-packages: idempotent retry on the SAME runId replays the existing package rather than duplicating rows", async () => {
-  prodAuth();
   const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof: "2026-06-02", toolId: "ac1-idempotent" });
   const body = succeededPackage(runId, "2026-06-02");
   const first = await call(req("POST", A.runPackage, body, TOKEN));
@@ -194,7 +188,6 @@ test("POST run-packages: idempotent retry on the SAME runId replays the existing
 
 // ── AC2 ──────────────────────────────────────────────────────────────────────
 test("a failed terminal package stores its complete warning/log/exception artifacts and leaves current projection rows unchanged", async () => {
-  prodAuth();
   const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof: "2026-06-03", toolId: "ac2-failed" });
   const asof = "2026-06-03";
   const [{ regimeBefore, signalBefore }] = await sql`SELECT
@@ -225,7 +218,6 @@ test("a failed terminal package stores its complete warning/log/exception artifa
 });
 
 test("failure-injection: an error between the immutable output insert and the compatibility projection update rolls back BOTH sides, atomically", async () => {
-  prodAuth();
   const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof: "2026-06-04", toolId: "ac2-injected" });
   const asof = "2026-06-04";
   const pkg = (succeededPackage(runId, asof) as any).package;
@@ -253,7 +245,6 @@ test("failure-injection: an error between the immutable output insert and the co
 
 // ── AC3 ──────────────────────────────────────────────────────────────────────
 test("GET reports: byte-exact retrieval by immutable id, and a later run for the SAME market date gets a DIFFERENT id without touching the first snapshot", async () => {
-  prodAuth();
   const asof = "2026-06-05";
   const { runId: runA } = await beginRun({ runKey: crypto.randomUUID(), asof, toolId: "ac3-a" });
   const bodyA = succeededPackage(runA, asof, { reportBase64: Buffer.from("report A bytes, exact fixture").toString("base64") });
@@ -286,7 +277,6 @@ test("GET reports: byte-exact retrieval by immutable id, and a later run for the
 
 // ── AC8 ──────────────────────────────────────────────────────────────────────
 test("telemetry rejects an artifact larger than its preview cap, while the complete-artifact (run-package) endpoint accepts and stores the full bounded-by-contract artifact — telemetry and historical artifacts stay separate stores", async () => {
-  prodAuth();
   const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof: "2026-06-06", toolId: "ac8-telemetry" });
   const asof = "2026-06-06";
 
@@ -331,7 +321,6 @@ test("telemetry rejects an artifact larger than its preview cap, while the compl
 
 // ── AC7 ──────────────────────────────────────────────────────────────────────
 test("existing dashboard regime and research-signal response fields retain their established values once the immutable snapshot dual-write is enabled", async () => {
-  prodAuth();
   const asof = "2026-06-07";
   const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof, toolId: "ac7-regression" });
   const res = await call(req("POST", A.runPackage, succeededPackage(runId, asof), TOKEN));
@@ -353,7 +342,6 @@ test("existing dashboard regime and research-signal response fields retain their
 
 // ── FIX2 (replay-integrity gap) ──────────────────────────────────────────────
 test("an IDENTICAL resubmission for the same run_id still replays with 200, byte-for-byte", async () => {
-  prodAuth();
   const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof: "2026-06-08", toolId: "fix2-identical" });
   const asof = "2026-06-08";
   const body = succeededPackage(runId, asof);
@@ -370,7 +358,6 @@ test("an IDENTICAL resubmission for the same run_id still replays with 200, byte
 });
 
 test("a DIFFERENT-content resubmission for the same run_id is rejected with 409 and does not overwrite the original stored artifacts", async () => {
-  prodAuth();
   const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof: "2026-06-09", toolId: "fix2-conflict" });
   const asof = "2026-06-09";
   const originalBody = succeededPackage(runId, asof);
@@ -402,7 +389,6 @@ test("a DIFFERENT-content resubmission for the same run_id is rejected with 409 
 // is also a content conflict, not a replay — proves the comparison checks
 // the kind SET, not merely per-kind checksums of whatever happens to overlap.
 test("resubmitting a DIFFERENT status (failed) for an already-succeeded run_id is rejected with 409", async () => {
-  prodAuth();
   const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof: "2026-06-10", toolId: "fix2-status-conflict" });
   const asof = "2026-06-10";
   const first = await call(req("POST", A.runPackage, succeededPackage(runId, asof), TOKEN));
@@ -417,7 +403,6 @@ test("resubmitting a DIFFERENT status (failed) for an already-succeeded run_id i
 
 // ── FIX3 (asof cross-check gap) ──────────────────────────────────────────────
 test("a package.asof that disagrees with the run's own recorded asof (analytics_ledger_runs) is rejected with 400 and writes nothing", async () => {
-  prodAuth();
   const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof: "2026-06-11", toolId: "fix3-asof-mismatch" });
   // The run's ledger asof is 2026-06-11; submit a package claiming a DIFFERENT
   // market date — a caller bug that must never freeze a report snapshot
@@ -436,7 +421,6 @@ test("a package.asof that disagrees with the run's own recorded asof (analytics_
 });
 
 test("a package.asof that MATCHES the run's own recorded asof is accepted normally", async () => {
-  prodAuth();
   const asof = "2026-06-13";
   const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof, toolId: "fix3-asof-match" });
   const res = await call(req("POST", A.runPackage, succeededPackage(runId, asof), TOKEN));

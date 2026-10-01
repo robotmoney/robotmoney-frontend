@@ -5,7 +5,7 @@ what it computes, why it is built the way it is, and where the numbers a user
 sees actually come from. It intentionally does **not** re-explain the six-stage
 access → extract → transform → analyze → store → report plumbing, the
 persistence boundary, or the seed-artifact tooling — that's
-[`architecture.md` §7.1](../architecture.md#71-analytics-suite-six-stage-pipeline),
+[`architecture.md` §7.1](../architecture/task-queue-and-workers.md#71-analytics-suite-six-stage-pipeline),
 and this document links into it rather than restating it.
 
 Companion document: [`research-signals.md`](research-signals.md) covers the two
@@ -1806,7 +1806,7 @@ guarantee: the figures still do not change, but the *page* around them does.
 
 ## See also
 
-- [`architecture.md` §7.1](../architecture.md#71-analytics-suite-six-stage-pipeline) — the six-stage plumbing this document deliberately does not restate.
+- [`architecture.md` §7.1](../architecture/task-queue-and-workers.md#71-analytics-suite-six-stage-pipeline) — the six-stage plumbing this document deliberately does not restate.
 - [`research-signals.md`](research-signals.md) — `channel-divergence` / `late-cycle-signals`, and why their percentile convention now matches this document's (§4) by design, correcting an earlier divergence.
 - [`markets-asset-pricing-ingest.md`](markets-asset-pricing-ingest.md) — market-data ingest, audit and repair. The analytics half of the retired `data-self-healing.md` is §11 of this document.
 - [`docs/audits/v0-v1-parity/A1-regime-core-procedures.md`](../audits/v0-v1-parity/A1-regime-core-procedures.md) — the full executed-evidence procedural parity audit (findings F1-F8) this document's §7 and §9 summarize.

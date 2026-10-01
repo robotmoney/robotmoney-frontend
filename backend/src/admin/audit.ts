@@ -5,6 +5,27 @@
 // through `redactDeep` so no credential material ever reaches the response.
 import type { DbHandle } from "../db/client.ts";
 import { jsonValue } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
+
+// The writer is a registered query (smoke-production-spec.md §7.1). Its only
+// entry is the admin route, which runs it inside the transaction of the
+// mutation it records.
+const insertAuditRow = registerQuery({
+  role: "rm_app",
+  object: "audit_log",
+  // SELECT because of RETURNING. Never DELETE: audit_log is append-only.
+  privileges: ["INSERT", "SELECT"],
+  site: "src/admin/audit:recordAudit",
+  purpose: "Append one admin-mutation audit row in the same transaction as the change it records.",
+  callers: ["src/api/routes/admin"],
+  probe: {
+    statement: `INSERT INTO audit_log (actor, action, scope, target_type, target_id, reason,
+                             before_state, after_state, outcome, job_id, session_id)
+      VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10::bigint, $11::uuid)
+      RETURNING id, request_id`,
+    params: ["probe-admin", "probe.action", null, "job", "1", "probe", null, "{\"ok\":true}", "succeeded", null, null],
+  },
+});
 
 export interface RecordAuditInput {
   actor: string;
@@ -32,7 +53,7 @@ export interface AuditRow {
 // return its id/request_id so the caller can echo `auditRequestId` in its API
 // response. Must run inside the SAME transaction as the mutation it records.
 export async function recordAudit(db: DbHandle, input: RecordAuditInput): Promise<AuditRow> {
-  const [row] = await db`
+  const [row] = await on(db, insertAuditRow)<AuditRow>`
     INSERT INTO audit_log (
       actor, action, scope, target_type, target_id, reason,
       before_state, after_state, outcome, job_id, session_id
@@ -44,7 +65,7 @@ export async function recordAudit(db: DbHandle, input: RecordAuditInput): Promis
       ${input.outcome ?? "succeeded"}, ${input.jobId ?? null}, ${input.sessionId ?? null}
     )
     RETURNING id, request_id`;
-  return row as AuditRow;
+  return row!;
 }
 
 // Keys that must never leave the admin surface, matched case-insensitively

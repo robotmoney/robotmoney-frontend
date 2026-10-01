@@ -2,15 +2,30 @@
 // backend test preload supplies real ephemeral Postgres and fails loudly when
 // Docker is unavailable; this fixture supplies a deterministic software
 // authenticator so registration and assertion verification execute in CI.
+//
+// The file takes a database of its own (useCleanDatabase) and removes nothing:
+// the routes themselves never delete (D55 (6)), and each case uses fresh
+// credential ids and counts only what it added. The 32-slot bound on the
+// challenge store is proved under the real rm_app login in
+// tests/webauthn-challenge-slots.test.ts.
 import { createHash, createSign, generateKeyPairSync, randomBytes } from "node:crypto";
-import { expect, test } from "bun:test";
+import { expect, test, beforeAll } from "bun:test";
 import { sql } from "../../src/db/client.ts";
 import { isPrivileged } from "../../src/api/auth.ts";
 import { handleAdminWebauthn, relyingParty } from "../../src/api/routes/admin-webauthn.ts";
-import { hashKey } from "../../src/lib/keys.ts";
+import { provisionOperatorToken } from "../support/automation-auth.ts";
+import { useCleanDatabase } from "../support/clean-db.ts";
+
+useCleanDatabase(import.meta.file);
+
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on.
+let OPERATOR = "";
+beforeAll(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 
 const ORIGIN = "http://localhost";
-const ADMIN = { adminToken: "passkey-test-admin-token", allowInsecure: false } as const;
 
 function base64url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64url");
@@ -67,7 +82,7 @@ function request(method: string, path: string, body?: unknown, token?: string): 
 
 async function call(method: string, path: string, body?: unknown, token?: string) {
   const req = request(method, path, body, token);
-  return handleAdminWebauthn(req, new URL(req.url), ADMIN);
+  return handleAdminWebauthn(req, new URL(req.url));
 }
 
 test("WebAuthn zero-counter registration and authentication verify an ES256 passkey", async () => {
@@ -80,7 +95,7 @@ test("WebAuthn zero-counter registration and authentication verify an ES256 pass
 
   // Registration starts behind the existing admin gate and persists a
   // one-time challenge before the authenticator response is accepted.
-  const registrationOptions = await call("GET", "/api/admin/webauthn/register/options", undefined, ADMIN.adminToken);
+  const registrationOptions = await call("GET", "/api/admin/webauthn/register/options", undefined, OPERATOR);
   expect(registrationOptions?.status).toBe(200);
   const registrationChallenge = (registrationOptions?.body as { challenge: string; rp: { id: string; name: string } }).challenge;
   expect((registrationOptions?.body as { rp: { id: string; name: string } }).rp).toEqual({ id: "localhost", name: "Robot Money" });
@@ -96,7 +111,7 @@ test("WebAuthn zero-counter registration and authentication verify an ES256 pass
     rawId: credentialID64,
     type: "public-key",
     response: { clientDataJSON: base64url(registrationClientData), attestationObject: base64url(attestationObject) },
-  }, ADMIN.adminToken);
+  }, OPERATOR);
   expect(registered).toEqual({ status: 200, body: { verified: true } });
   expect(Array.from(await sql`SELECT id, counter FROM admin_passkey WHERE id = ${credentialID64}`)).toEqual([{ id: credentialID64, counter: "0" }]);
 
@@ -129,7 +144,7 @@ test("WebAuthn zero-counter registration and authentication verify an ES256 pass
   expect(authenticated?.status).toBe(200);
   const sessionToken = (authenticated?.body as { verified: boolean; token: string }).token;
   expect(sessionToken).toHaveLength(43);
-  expect(await isPrivileged(request("GET", "/api/admin/overview", undefined, sessionToken), ADMIN)).toBe(true);
+  expect(await isPrivileged(request("GET", "/api/admin/overview", undefined, sessionToken))).toBe(true);
   expect(Array.from(await sql`SELECT counter, last_used_at FROM admin_passkey WHERE id = ${credentialID64}`)).toEqual([
     { counter: "0", last_used_at: expect.any(Date) },
   ]);
@@ -147,9 +162,6 @@ test("WebAuthn zero-counter registration and authentication verify an ES256 pass
     },
   });
   expect(replay?.status).toBe(400);
-
-  await sql`DELETE FROM admin_session WHERE token = ${hashKey(sessionToken)}`;
-  await sql`DELETE FROM admin_passkey WHERE id = ${credentialID64}`;
 });
 
 test("concurrent out-of-order assertions never regress a passkey counter", async () => {
@@ -160,7 +172,7 @@ test("concurrent out-of-order assertions never regress a passkey counter", async
   if (!jwk.x || !jwk.y) throw new Error("P-256 fixture did not export public coordinates");
   const publicKeyCOSE = cbor([[1, 2], [3, -7], [-1, 1], [-2, Buffer.from(jwk.x, "base64url")], [-3, Buffer.from(jwk.y, "base64url")]]);
 
-  const registrationOptions = await call("GET", "/api/admin/webauthn/register/options", undefined, ADMIN.adminToken);
+  const registrationOptions = await call("GET", "/api/admin/webauthn/register/options", undefined, OPERATOR);
   const registrationChallenge = (registrationOptions?.body as { challenge: string }).challenge;
   const attestationObject = cbor([
     ["fmt", "none"],
@@ -175,7 +187,7 @@ test("concurrent out-of-order assertions never regress a passkey counter", async
       clientDataJSON: base64url(clientData("webauthn.create", registrationChallenge)),
       attestationObject: base64url(attestationObject),
     },
-  }, ADMIN.adminToken))?.status).toBe(200);
+  }, OPERATOR))?.status).toBe(200);
 
   const makeAssertion = (challenge: string, counter: number) => {
     const data = clientData("webauthn.get", challenge);
@@ -196,6 +208,9 @@ test("concurrent out-of-order assertions never regress a passkey counter", async
   };
   const lowOptions = await call("GET", "/api/admin/webauthn/auth/options");
   const highOptions = await call("GET", "/api/admin/webauthn/auth/options");
+  const countSessions = async () =>
+    Number(((await sql`SELECT count(*)::int AS n FROM admin_session`) as unknown as { n: number }[])[0]!.n);
+  const sessionsBefore = await countSessions();
   const lowAssertion = makeAssertion((lowOptions?.body as { challenge: string }).challenge, 1);
   const highAssertion = makeAssertion((highOptions?.body as { challenge: string }).challenge, 2);
 
@@ -218,7 +233,7 @@ test("concurrent out-of-order assertions never regress a passkey counter", async
       },
     }),
   });
-  const lowResult = handleAdminWebauthn(delayedLowRequest, new URL(delayedLowRequest.url), ADMIN);
+  const lowResult = handleAdminWebauthn(delayedLowRequest, new URL(delayedLowRequest.url));
   const highResult = await call("POST", "/api/admin/webauthn/auth/verify", highAssertion);
   releaseLowBody();
   const lateLowResult = await lowResult;
@@ -230,37 +245,38 @@ test("concurrent out-of-order assertions never regress a passkey counter", async
   // the old value before another request committed.
   expect(lateLowResult).toEqual({ status: 400, body: { error: "passkey verification failed" } });
   expect(Array.from(await sql`SELECT counter FROM admin_passkey WHERE id = ${credentialID64}`)).toEqual([{ counter: "2" }]);
-  expect(await sql`SELECT token FROM admin_session`).toHaveLength(1);
-
-  await sql`DELETE FROM admin_session`;
-  await sql`DELETE FROM admin_webauthn_challenge`;
-  await sql`DELETE FROM admin_passkey WHERE id = ${credentialID64}`;
+  // Exactly one session was minted, by the higher assertion.
+  expect(await countSessions()).toBe(sessionsBefore + 1);
 });
 
-test("public authentication options clean expiry and retain a bounded challenge set", async () => {
+test("public authentication options overwrite the authentication slot issued longest ago, and the store stays at 32 slots", async () => {
+  // Every authentication slot (8..31, migration 0088) holds a ceremony: slot
+  // 15 the oldest (expired), slot 11 the next oldest (still live), the rest
+  // newer and live. The registration slots (0..7) hold ceremonies OLDER than
+  // all of them, and are never chosen by an authentication issuance.
   const prefix = `challenge-cap-${randomBytes(12).toString("hex")}`;
-  const expired = `${prefix}-expired`;
-  const oldestLive = `${prefix}-oldest-live`;
   await sql`
-    INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at)
-    VALUES ('authentication', ${expired}, now() - interval '1 minute'),
-           ('authentication', ${oldestLive}, now() + interval '1 minute')
-  `;
-  for (let index = 0; index < 31; index++) {
-    await sql`
-      INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at)
-      VALUES ('authentication', ${`${prefix}-live-${index}`}, now() + interval '2 minutes')
-    `;
-  }
+    UPDATE admin_webauthn_challenge
+       SET flow = CASE WHEN slot < 8 THEN 'registration' ELSE 'authentication' END,
+           challenge = ${prefix} || '-' || slot,
+           issued_at = now() - make_interval(secs => CASE WHEN slot < 8 THEN 1000 WHEN slot = 15 THEN 200 WHEN slot = 11 THEN 150 ELSE 100 - slot END),
+           expires_at = CASE WHEN slot = 15 THEN now() - interval '1 minute' ELSE now() + interval '2 minutes' END,
+           consumed_at = NULL`;
+  const slotOf = async (challenge: string) =>
+    ((await sql`SELECT slot FROM admin_webauthn_challenge WHERE challenge = ${challenge}`) as unknown as { slot: number }[])[0]
+      ?.slot ?? null;
 
-  const options = await call("GET", "/api/admin/webauthn/auth/options");
-  expect(options?.status).toBe(200);
-  const issued = (options?.body as { challenge: string }).challenge;
-  expect(await sql`SELECT challenge FROM admin_webauthn_challenge WHERE challenge = ${expired}`).toHaveLength(0);
-  expect(await sql`SELECT challenge FROM admin_webauthn_challenge WHERE challenge = ${oldestLive}`).toHaveLength(0);
-  expect(Array.from(await sql<{ count: string }[]>`SELECT count(*) FROM admin_webauthn_challenge WHERE flow = 'authentication'`)).toEqual([{ count: "32" }]);
-
-  await sql`DELETE FROM admin_webauthn_challenge WHERE challenge LIKE ${`${prefix}%`} OR challenge = ${issued}`;
+  const first = await call("GET", "/api/admin/webauthn/auth/options");
+  expect(first?.status).toBe(200);
+  expect(await slotOf((first?.body as { challenge: string }).challenge)).toBe(15);
+  // The next issuance takes the next oldest, even though it is still live:
+  // the bound is the shape of the table, not a cleanup.
+  const second = await call("GET", "/api/admin/webauthn/auth/options");
+  expect(await slotOf((second?.body as { challenge: string }).challenge)).toBe(11);
+  expect(await slotOf(`${prefix}-11`)).toBeNull();
+  // The older registration ceremonies were left alone.
+  for (let slot = 0; slot < 8; slot++) expect(await slotOf(`${prefix}-${slot}`)).toBe(slot);
+  expect(Array.from(await sql<{ count: string }[]>`SELECT count(*) FROM admin_webauthn_challenge`)).toEqual([{ count: "32" }]);
 });
 
 test("relyingParty() prefers WEBAUTHN_ORIGIN over the plain-HTTP request origin behind a TLS proxy", () => {

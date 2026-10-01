@@ -1,19 +1,54 @@
 -- Production database role taxonomy (issue #692).
 --
--- `rm_owner` is deliberately NOLOGIN: it owns schema objects but no persistent
--- process can authenticate as it.  A human-run deployment connects with the
--- short-lived MIGRATE_DATABASE_URL and SET ROLE rm_owner for DDL.  Runtime
--- processes authenticate only as rm_app or rm_worker.
+-- compat: additive
+-- metadata_version: 1
+--
+-- The reviewed claim (spec §8.4): every query the older registry declares still
+-- succeeds with the same semantics after this file.  It moves OWNERSHIP to
+-- rm_owner and revokes the schema's PUBLIC grants, then re-grants each runtime
+-- role explicitly -- rm_app keeps SELECT/INSERT/UPDATE/DELETE, rm_worker its
+-- allow-list, rm_readonly SELECT -- so no privilege a runtime path needs is
+-- removed, no bootstrap row is reshaped, and no table changes shape.  What it
+-- takes away is DDL and ownership, which no application query uses.
+--
+-- `rm_owner` is LOGIN (smoke-production-spec.md §3, D47): it owns the schema and
+-- it is the migration login.  `bun run migrate` connects AS rm_owner with a
+-- password typed at the terminal for that one run and never stored, so no
+-- persistent process holds it.  Runtime processes authenticate only as rm_app,
+-- rm_worker or rm_readonly.  This file creates it LOGIN on a FRESH cluster
+-- only: the CREATE is guarded, and a database that already recorded 0053 is
+-- never re-applied, so an existing NOLOGIN rm_owner moves through spec §9.1
+-- step 1 (`ALTER ROLE rm_owner LOGIN PASSWORD ...` via doadmin) instead.
+-- rm_owner never holds CREATEROLE (§3).
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rm_owner') THEN
-    CREATE ROLE rm_owner NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+    CREATE ROLE rm_owner LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
   END IF;
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rm_app') THEN
     CREATE ROLE rm_app LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
   END IF;
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rm_readonly') THEN
     CREATE ROLE rm_readonly LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+  END IF;
+  -- rm_worker is 0016's role, and for a long time this file only RE-ATTRIBUTED
+  -- it (the ALTER below) on the assumption that 0016 had already run.  That
+  -- holds in the migration runner, which applies 0016 before 0053, and in the
+  -- test harness, which clones a fully-migrated template -- so nothing in CI
+  -- could ever see the gap.  It does NOT hold on the one path that matters
+  -- here: scripts/ops/provision-db-role-taxonomy.sh applies THIS FILE ALONE,
+  -- out-of-band, before any migration can `SET LOCAL ROLE rm_owner`.  Against a
+  -- cluster where 0016 has never run -- a brand-new primary, a fresh staging
+  -- host, a restored twin started from an empty database -- the ALTER aborted
+  -- the whole provisioning run with `role "rm_worker" does not exist`, and the
+  -- operator got no roles at all rather than three of four.
+  --
+  -- Created with 0016's attributes, not 0054's grants: this block establishes
+  -- WHO the roles are, and the allow-list that says what rm_worker may write
+  -- stays 0054's job.  Guarded like its three siblings, so an existing
+  -- rm_worker keeps its password and its grants.
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rm_worker') THEN
+    CREATE ROLE rm_worker LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
   END IF;
   -- NO NOSUPERUSER/NOREPLICATION/NOBYPASSRLS HERE, deliberately.  Postgres
   -- requires SUPERUSER to set those three attributes in ALTER ROLE even when
@@ -27,13 +62,14 @@ BEGIN
   -- those attributes to begin with.  The attributes that DO need pinning here
   -- are settable by a CREATEROLE login holding ADMIN OPTION on the target,
   -- which doadmin holds for rm_worker and rm_readonly.
-  ALTER ROLE rm_owner NOLOGIN NOINHERIT NOCREATEDB NOCREATEROLE;
+  ALTER ROLE rm_owner LOGIN NOINHERIT NOCREATEDB NOCREATEROLE;
   ALTER ROLE rm_app LOGIN NOINHERIT NOCREATEDB NOCREATEROLE;
   ALTER ROLE rm_worker LOGIN NOINHERIT NOCREATEDB NOCREATEROLE;
   ALTER ROLE rm_readonly LOGIN NOINHERIT NOCREATEDB NOCREATEROLE;
 
-  -- The bootstrap/migration login may assume the non-login owner.  This is
-  -- intentionally the current role, never either runtime role.
+  -- The provisioning login may assume the owner, so the rest of this file and
+  -- the legacy SET LOCAL ROLE runner can act as it.  This is intentionally the
+  -- current role, never a runtime role.
   EXECUTE format('GRANT rm_owner TO %I', current_user);
 END
 $$;

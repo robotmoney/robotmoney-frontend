@@ -1,6 +1,12 @@
 // Alpine factory for /admin/swarm/subjects/:id — topic detail, edit (with
-// optimistic-lock version conflicts), and deactivation. Issue #159 —
+// optimistic-lock version conflicts), deactivation and activation. Issue #159 —
 // docs/architecture.md §4 US-C1.
+//
+// ACTIVATE AND DEACTIVATE ARE ADMIN SUBJECT EDITS (issue #1026, D55 decision
+// 4). Deactivation closes the topic's open session and opens none; activation
+// opens nothing either — `system-scheduler` opens the first epoch from the
+// `subject.changed` event either edit publishes. Both carry the topic's
+// `expectedVersion`, so an edit made against a stale read is refused (409).
 //
 // Reconciled to the REAL backend (issue #152/PR #169) per PR #172 review: the
 // backend has no GET .../subjects/:id at all (swarm-admin.ts's `subjects`
@@ -35,6 +41,10 @@ export function registerAdminSwarmSubject(Alpine) {
     deactivateOpen: false,
     deactivateReason: "",
     deactivateError: null,
+
+    activateOpen: false,
+    activateReason: "",
+    activateError: null,
 
     fmtUtc,
 
@@ -176,6 +186,32 @@ export function registerAdminSwarmSubject(Alpine) {
         if (e.status === 403) return this._handle403();
         if (e.status === 409) { this.deactivateError = "This topic changed since you loaded it (stale version) — reload and try again."; return; }
         this.deactivateError = e.message;
+      } finally {
+        this.submitting = false;
+      }
+    },
+
+    openActivate() { this.activateOpen = true; this.activateReason = ""; this.activateError = null; },
+    cancelActivate() { this.activateOpen = false; },
+
+    async confirmActivate() {
+      const err = reasonError(this.activateReason);
+      if (err) { this.activateError = err; return; }
+      this.submitting = true;
+      try {
+        await api.adminPost(
+          path(ROUTES.swarm.admin.subjectActivate, { id: this.subjectId }),
+          this._token(),
+          { expectedVersion: this.topic.version, reason: this.activateReason.trim() },
+        );
+        this.activateOpen = false;
+        await this.load();
+      } catch (e) {
+        if (e.status === 403) return this._handle403();
+        // The route answers 409 both for a stale version and for a topic that
+        // is already active — either way, what this page shows is out of date.
+        if (e.status === 409) { this.activateError = "This topic changed since you loaded it (stale version, or already active) — reload and try again."; return; }
+        this.activateError = e.message;
       } finally {
         this.submitting = false;
       }

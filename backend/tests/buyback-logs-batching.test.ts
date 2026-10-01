@@ -16,6 +16,7 @@
 // scan execute. Offline, no skips.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { indexBuybacks, _resetBuybackScanCachesForTests } from "../src/chain/buyback-logs.ts";
 import { _resetRpcConcurrencyForTests, _resetRpcRateLimiterForTests } from "../src/chain/base-rpc-client.ts";
 import { _resetRateLimitStateForTests } from "../src/chain/gecko-rate-limit.ts";
@@ -52,9 +53,11 @@ const BLOCK_TS: Record<number, number> = {
 };
 
 let posts: { method: string; batched: boolean }[] = [];
+/** Every ROBOTMONEY-in scan read the node was asked for, as [from, to] blocks, and whether it answered 413. */
+let scanReads: { from: number; to: number; status: number }[] = [];
 
 /** A node that answers the scan's three method shapes, single or batched. */
-function serve(opts: { dropBatchEntries?: boolean } = {}): void {
+function serve(opts: { dropBatchEntries?: boolean; maxScanRange?: number; maxScanRangeEverywhere?: boolean } = {}): void {
   const answerOne = (method: string, params: unknown[]): unknown => {
     if (method === "eth_blockNumber") return hex(43_742_000);
     if (method === "eth_getBlockByNumber") {
@@ -97,6 +100,14 @@ function serve(opts: { dropBatchEntries?: boolean } = {}): void {
       return new Response("nope", { status: 404 });
     }
     const body = JSON.parse(String(init.body));
+    // A provider that refuses a scan read whose range would return too much: HTTP 413, before any JSON-RPC.
+    if (!Array.isArray(body) && body.method === "eth_getLogs" && body.params[0].topics[2]) {
+      const from = parseInt(body.params[0].fromBlock, 16);
+      const to = parseInt(body.params[0].toBlock, 16);
+      const tooBig = opts.maxScanRange !== undefined && to - from + 1 > opts.maxScanRange;
+      scanReads.push({ from, to, status: tooBig ? 413 : 200 });
+      if (tooBig) return new Response("request entity too large", { status: 413 });
+    }
     const batched = Array.isArray(body);
     const entries = batched ? body : [body];
     posts.push({ method: entries[0].method, batched });
@@ -113,12 +124,13 @@ function serve(opts: { dropBatchEntries?: boolean } = {}): void {
 }
 
 async function cleanup(): Promise<void> {
-  await sql`DELETE FROM buyback_swaps WHERE tx_hash = ANY(${SWAPS.map((s) => s.tx.toLowerCase())}::text[])`;
-  await sql`DELETE FROM buyback_scan_state WHERE id = 1`;
+  await fixtureDb`DELETE FROM buyback_swaps WHERE tx_hash = ANY(${SWAPS.map((s) => s.tx.toLowerCase())}::text[])`;
+  await fixtureDb`DELETE FROM buyback_scan_state WHERE id = 1`;
 }
 
 beforeEach(async () => {
   posts = [];
+  scanReads = [];
   _resetBuybackScanCachesForTests();
   process.env.BASE_RPC_SOURCE = "live";
   process.env.PRICE_SOURCE = "live";
@@ -201,4 +213,54 @@ test("when a batch answers only part of a window, the missing blocks are re-read
     SELECT count(*)::int AS n FROM buyback_swaps WHERE tx_hash = ANY(${SWAPS.map((s) => s.tx.toLowerCase())}::text[])
   `;
   expect(row!.n).toBe(3); // all three still indexed
+});
+
+// Issue 1061. A provider answered HTTP 413 to the scan's `eth_getLogs` and the run left buyback data where it was.
+test("a scan read the provider refuses as too large (413) is halved until it fits, and every swap is indexed exactly once", async () => {
+  serve({ maxScanRange: 100 });
+  const res = await indexBuybacks();
+  expect(res.skipped).toBeNull();
+
+  const rows = await sql<{ tx_hash: string }[]>`
+    SELECT tx_hash FROM buyback_swaps WHERE tx_hash = ANY(${SWAPS.map((s) => s.tx.toLowerCase())}::text[]) ORDER BY block_number, tx_hash`;
+  // All three, each once (the primary key is tx_hash, so a double count could not be stored; the count proves none is lost).
+  expect(rows.map((r) => r.tx_hash).sort()).toEqual(SWAPS.map((s) => s.tx.toLowerCase()).sort());
+
+  // The accepted reads are disjoint and none is wider than the provider's limit: no log can be counted twice.
+  const accepted = scanReads.filter((r) => r.status === 200).sort((a, b) => a.from - b.from);
+  expect(accepted.length).toBeGreaterThan(1);
+  for (const r of accepted) expect(r.to - r.from + 1).toBeLessThanOrEqual(100);
+  for (let i = 1; i < accepted.length; i++) expect(accepted[i]!.from).toBeGreaterThan(accepted[i - 1]!.to);
+  expect(scanReads.some((r) => r.status === 413)).toBe(true);
+});
+
+test("a scan read the provider accepts is one request: nothing is split", async () => {
+  serve();
+  await indexBuybacks();
+  expect(scanReads.filter((r) => r.status === 413).length).toBe(0);
+  // One request per chunk, none repeated.
+  expect(new Set(scanReads.map((r) => `${r.from}-${r.to}`)).size).toBe(scanReads.length);
+});
+
+test("one block the provider still refuses cannot be split: the failure is logged loudly, nothing is indexed and the cursor does not move", async () => {
+  serve({ maxScanRange: 0 });
+  const errors: string[] = [];
+  const realError = console.error;
+  console.error = (...a: unknown[]) => { errors.push(a.map(String).join(" ")); };
+  const realWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const res = await indexBuybacks();
+    expect(res.indexed).toBe(0);
+    expect(res.scannedToBlock).toBeNull();
+  } finally {
+    console.error = realError;
+    console.warn = realWarn;
+  }
+  expect(errors.some((e) => e.includes("live index failed") && e.includes("Base RPC HTTP 413"))).toBe(true);
+  const [rows] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM buyback_swaps WHERE tx_hash = ANY(${SWAPS.map((s) => s.tx.toLowerCase())}::text[])`;
+  expect(rows!.n).toBe(0);
+  const [cursor] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM buyback_scan_state WHERE id = 1`;
+  expect(cursor!.n).toBe(0);
 });

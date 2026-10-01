@@ -482,3 +482,30 @@ test("a judged session not yet published reads as aggregation under way, not as 
   // who file them: five, not the six seats on the roster.
   await expect(page.locator(".rr-meta .rr-meta__i", { hasText: "Takes" }).locator("b")).toHaveText("3 of 5");
 });
+
+// Issue 1084. The judged session was created on 2026-09-17 and its brief went out on 2026-09-19: the judgement's page says
+// when the session OPENED (`sessionOpenedAt`), in the title, the crumb and the Session fact; an older record without the
+// field (an archive row, or a backend before this field) falls back to `sessionDate`.
+test("a judgement is dated by the day its session opened, and falls back to the session date when the field is absent", async ({ page }) => {
+  const opened = judgement({ sessionOpenedAt: "2026-09-19T08:30:00Z", createdAt: "2026-09-19T09:00:00Z" }); // recorded after the session opened
+  await stub(page, {
+    "/api/swarm/judgements/41": opened,
+    [`/api/swarm/sessions/${S1}`]: { session: judgedSession(S1, THEMIS_BLOCK), takes: TAKES },
+    "/api/swarm/members": ROSTER,
+  });
+  await page.goto("/swarm/judgements/41");
+  await expect(page.locator("h1")).toHaveText("Themis");
+  await expect(page).toHaveTitle("Judgement by Themis, Sep 19, 2026: Robot Money Investment Swarm");
+  await expect(page.locator(".rr-crumbs a")).toHaveText(["Swarm", "Robot Money Allocation", "Sep 19, 2026"]);
+  await expect(page.locator(".rr-meta .rr-meta__i", { hasText: "Session" }).locator("a")).toHaveText("Sep 19, 2026");
+  await expect(page.locator("body")).not.toContainText("Sep 17, 2026");
+
+  await page.unroute("**/api/**");
+  await stub(page, {
+    "/api/swarm/judgements/41": judgement({ sessionOpenedAt: null }),
+    [`/api/swarm/sessions/${S1}`]: { session: judgedSession(S1, THEMIS_BLOCK), takes: TAKES },
+    "/api/swarm/members": ROSTER,
+  });
+  await page.goto("/swarm/judgements/41");
+  await expect(page).toHaveTitle("Judgement by Themis, Sep 17, 2026: Robot Money Investment Swarm");
+});

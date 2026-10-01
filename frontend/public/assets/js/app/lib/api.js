@@ -78,7 +78,38 @@ function detailFrom(text) {
 const NOT_THE_API =
   "The API did not answer this request — a web page came back instead of data, which means the backend is unreachable and something else answered in its place.";
 
+// The API-version gate (D54). main.js starts the compatibility check at load
+// (lib/api-compat.js) and hands its verdict here as a promise of "may this page
+// call the API?". Every request waits on it, so nothing reaches /api/* before
+// the answer is in, and when the answer is no, nothing reaches it at all: the
+// call fails here with code "incompatible" and the page's reload notice says
+// why. The promise never rejects — an unknown answer resolves `true`, so an
+// outage still reaches the api-unreachable path below exactly as before.
+let apiAllowed = null;
+
+export function gateApiOn(allowed) {
+  apiAllowed = allowed;
+}
+
+// An absolute or same-origin URL for a contract route, for the one caller that
+// must reach the API without going through the gate: the version check itself.
+// null when /config.js has not set an API base, which the check reads as
+// "don't know" rather than as a failure.
+export function apiUrl(route) {
+  try {
+    return base() + route;
+  } catch {
+    return null;
+  }
+}
+
+const OUT_OF_DATE =
+  "This page is out of date for the API it talks to, so it has stopped loading data. Reload the page to get the current site.";
+
 async function request(method, route, { query, body, headers } = {}) {
+  if (apiAllowed && !(await apiAllowed)) {
+    throw new ApiError(0, OUT_OF_DATE, { code: "incompatible", url: route });
+  }
   let url = base() + route;
   if (query) {
     const qs = new URLSearchParams(query).toString();
@@ -146,8 +177,9 @@ async function request(method, route, { query, body, headers } = {}) {
 
 export class ApiError extends Error {
   // `status` is the HTTP status, or 0 when the request never got an answer.
-  // `code` says which of the three shapes this is — "http", "not_json",
-  // "unreachable" — for callers that want to branch without matching prose.
+  // `code` says which shape this is — "http", "not_json", "unreachable", or
+  // "incompatible" (the API is outside this page's range and was never
+  // called) — for callers that want to branch without matching prose.
   // `detail` is the raw body (untruncated, never rendered): the thing you want
   // in the console when a deployment is answering with someone else's page.
   // `reason` is the `{ error }` token out of the API's own envelope, kept

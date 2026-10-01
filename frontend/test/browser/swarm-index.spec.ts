@@ -603,3 +603,28 @@ test("a session that waited for its brief is shown on the day it opened, not the
   await expect(row.locator("th small")).toContainText("16:33 UTC");
   await expect(page.locator(".rr-hist")).not.toContainText("Sep 28, 2026");
 });
+
+// The history lists sessions newest first by when each OPENED, across every subject. The API pages by (date, generated_at),
+// both the row's creation: on 2026-09-28 treasury was created at 00:40 and allocation at 00:39, yet allocation opened on
+// 10-01 and treasury on 09-29. Served in API order, treasury (Sep 29) printed above allocation (Oct 1).
+test("the history is ordered by when each session opened, not by when its row was created", async ({ page }) => {
+  await page.route("**/api/swarm/members*", (route) =>
+    route.fulfill(json({ members: [{ id: "m1", status: "active", name: "Athena", lens: "macro" }] })));
+  const row = (id: string, subjectId: string, name: string, generatedAt: string, openedAt: string) => ({
+    id, date: "2026-09-28", subjectId, subjectName: name, state: "published", windowClosesAt: openedAt,
+    openedAt, publishedAt: openedAt, regimeSummary: null, swarmRecommendation: AUTHORED_REC, synthesis: "x", socialDraftId: null, generatedAt,
+  });
+  await page.route("**/api/swarm/subjects/*", (route) => route.fulfill(json({ id: "x", name: "X", operator: "o", source: { type: "rpc" } })));
+  await page.route("**/api/swarm/sessions*", (route) =>
+    route.fulfill(json({
+      // API order: by (date, generated_at) descending, i.e. creation order.
+      sessions: [
+        row("sess-treasury", "robotmoney-treasury", "Treasury", "2026-09-28T00:40:35Z", "2026-09-29T18:26:00Z"),
+        row("sess-alloc", "robotmoney-allocation", "Allocation", "2026-09-28T00:39:40Z", "2026-10-01T02:01:00Z"),
+      ],
+      nextCursor: null,
+    })));
+  await page.goto("/swarm");
+  const dates = page.locator(".rr-hist tbody tr th a");
+  await expect(dates).toHaveText(["Oct 1, 2026", "Sep 29, 2026"]);
+});

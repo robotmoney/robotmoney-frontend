@@ -29,8 +29,13 @@ const smokeMain = readFileSync(join(repoRoot, "scripts/lib/smoke-main.ts"), "utf
 
 describe("runSession's initializer is a stated obligation, not a default", () => {
   test("the opts field is REQUIRED — an omitted initializer must not compile", () => {
-    expect(session).toContain("initializer: ScenarioInitializer;");
-    expect(session).not.toContain("initializer?: ScenarioInitializer;");
+    // Was `ScenarioInitializer` (smoke-mode.ts) before the archive scenario
+    // retired: "archive" became "adopt" — real/restored data, never a
+    // default — and the type moved inline since smoke-mode.ts no longer
+    // needs to name it. Still REQUIRED, still no `?`, which is the property
+    // this test actually defends.
+    expect(session).toContain('initializer: "simulation" | "adopt";');
+    expect(session).not.toContain('initializer?: "simulation" | "adopt";');
   });
 
   test("the guard compares the value directly, with no defaulting fallback", () => {
@@ -51,14 +56,35 @@ describe("runSession's initializer is a stated obligation, not a default", () =>
 });
 
 describe("every smoke-side session caller states its scenario", () => {
-  test("both the first session and the STANDING loop pass the scenario's initializer", () => {
-    const passes = smokeMain.match(/initializer: scenario\.initializer/g) ?? [];
-    // One for the opening session, one for the standing loop that runs forever.
-    // The standing loop was the omission that caused the corruption.
-    expect(passes.length).toBeGreaterThanOrEqual(2);
+  // The uniform `initializer: scenario.initializer` this test used to pin
+  // retired along with the archive scenario: the two call sites now compute
+  // it differently on purpose (the CI-twin session is unconditionally real,
+  // the standing loop has to ask which data path it's on), so this checks
+  // the SAME safety property — every caller states a real/adopt-aware value,
+  // none defaults or hardcodes fiction — against each site's own expression.
+  test("the CI-twin one-shot session states adopt, unconditionally (it is always real)", () => {
+    expect(smokeMain).toContain('initializer: "adopt"');
   });
 
-  test("no smoke-side caller hardcodes simulation, which would defeat a smoke boot", () => {
-    expect(smokeMain).not.toContain('initializer: "simulation"');
+  test("there is no STANDING loop left to omit the question — the boot convenes only the CI-twin session", () => {
+    // Issue #1026: `bun smoke` exits at readiness (smoke spec §1), so the
+    // standing loop that had to ask `dataPath.kind === "ephemeral" ? "simulation"
+    // : "adopt"` is gone with it; sessions are the system-scheduler's. The one
+    // session the boot still runs is the CI twin's, which states adopt above.
+    const calls = smokeMain.match(/\brunSession\(/g) ?? [];
+    expect(calls.length).toBe(1);
+    expect(smokeMain).toMatch(/runSession\([^)]*initializer: "adopt"/);
+  });
+
+  test("red control: a second, data-path-blind session caller is counted", () => {
+    const planted = `${smokeMain}\nawait e2e.runSession(subject, 1, { rail, members, cadence });\n`;
+    expect((planted.match(/\brunSession\(/g) ?? []).length).toBe(2);
+  });
+
+  test("no smoke-side caller hardcodes simulation unconditionally, which would defeat a real or twin boot", () => {
+    // Bare `initializer: "simulation"` (immediately closed by `,`/`}`) would be
+    // an unconditional default; the ternary above is fine because "simulation"
+    // there is never the whole expression, only one branch of it.
+    expect(smokeMain).not.toMatch(/initializer:\s*"simulation"\s*[,}]/);
   });
 });

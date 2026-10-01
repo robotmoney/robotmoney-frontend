@@ -9,12 +9,14 @@
 # layout; the two specs frontend.yml ran (preview-smoke, api-unreachable)
 # still run here, now alongside a route sweep and the client's unit tests.
 #
-# The client is meant to ship fast and often, so ONLY four things block a
-# merge (Lucas, 2026-09-17):
+# The client is meant to ship fast and often, so ONLY these things block a
+# merge (Lucas, 2026-09-17; (e) added by D54 on 2026-09-24):
 #   a) the client unit tests (bun run --cwd frontend test) fail
 #   b) the static assembly / prerender ("the html") does not build
 #   c) the preview page cannot load at all
 #   d) the Chrome console logs an error while Playwright loads it
+#   e) frontend/package.json's apiRange excludes contract/package.json's
+#      version (D54, scripts/web-client/api-range.ts)
 # (c) and (d) are both covered by frontend/test/browser/preview-routes.spec.ts
 # sweeping every sitemap route inside the FIXTURES-mode preview (goldens
 # answer /api/*, scripts/preview-server.ts — no Docker, no live backend, no
@@ -76,6 +78,12 @@ jobs:
               - 'frontend/**'
               - 'goldens/**'
               - 'playwright.config.ts'
+              # D54: the api-range step below reads contract/package.json, so a
+              # contract bump that leaves frontend/package.json's apiRange
+              # behind must re-run this gate.
+              - 'contract/package.json'
+              - 'scripts/web-client/**'
+              - 'scripts/lib/api-range.ts'
 
   web-client:
     needs: [changes]
@@ -104,6 +112,13 @@ jobs:
             grep -rn "github.com/robotmoney/robotmoney-frontend" frontend/public/views/
             exit 1
           fi
+
+      # ── (e) BLOCKING: the site accepts the API this tree builds (D54) ───
+      # frontend/package.json apiRange must admit contract/package.json's
+      # version, or the site built from this commit would tell every reader
+      # to reload against the API built from the same commit.
+      - name: Site API range admits the contract version
+        run: bun scripts/web-client/api-range.ts
 
       # ── (a) BLOCKING: the client's own unit tests ───────────────────────
       - name: Web client unit tests

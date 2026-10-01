@@ -20,7 +20,9 @@ import {
   type BaseRpcSource,
 } from "../config.ts";
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import {
+  BaseRpcHttpError,
   decodeUint256,
   encodeAddressArg,
   ethBlockNumber,
@@ -79,11 +81,84 @@ function num(v: string | null): number {
   return v == null ? 0 : Number(v);
 }
 
+// Registered queries (smoke-production-spec.md §7.1). The read serves GET
+// /api/dashboards/buybacks; the indexer's cursor reads and writes run in the
+// buybacks job handler, which issues them on the api's pool (db/client.ts),
+// so every site declares rm_app.
+const DASHBOARDS = "src/api/routes/dashboards";
+const BUYBACKS_HANDLER = "src/worker/handlers/buybacks";
+
+const swapRows = registerQuery({
+  role: "rm_app",
+  object: "buyback_swaps",
+  privileges: ["SELECT"],
+  site: "src/chain/buyback-logs:readRows",
+  purpose: "Read every persisted buyback swap, newest first, for the buybacks payload.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT tx_hash, occurred_on, weth_spent, value_usd, robotmoney_received, provenance FROM buyback_swaps
+      ORDER BY occurred_on DESC NULLS LAST, block_number DESC NULLS LAST, log_index DESC NULLS LAST, id ASC`,
+  },
+});
+
+const scanCursor = registerQuery({
+  role: "rm_app",
+  object: "buyback_scan_state",
+  privileges: ["SELECT"],
+  site: "src/chain/buyback-logs:indexBuybacks.cursor",
+  purpose: "Read the indexer's durable last-scanned block so a scan resumes where the previous one stopped.",
+  callers: [BUYBACKS_HANDLER],
+  probe: { statement: "SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1" },
+});
+
+const maxIndexedBlock = registerQuery({
+  role: "rm_app",
+  object: "buyback_swaps",
+  privileges: ["SELECT"],
+  site: "src/chain/buyback-logs:indexBuybacks.maxBlock",
+  purpose: "Read the highest already-indexed live block, below which a scan never resumes.",
+  callers: [BUYBACKS_HANDLER],
+  probe: { statement: "SELECT MAX(block_number)::text AS mx FROM buyback_swaps" },
+});
+
+const insertSwap = registerQuery({
+  role: "rm_app",
+  object: "buyback_swaps",
+  // SELECT because ON CONFLICT (tx_hash) reads the arbiter column.
+  privileges: ["INSERT", "SELECT"],
+  site: "src/chain/buyback-logs:indexBuybacks.insert",
+  purpose: "Insert one decoded live buyback swap, idempotent on its transaction hash.",
+  callers: [BUYBACKS_HANDLER],
+  probe: {
+    statement: `INSERT INTO buyback_swaps
+        (block_number, tx_hash, log_index, occurred_on, weth_spent, value_usd, robotmoney_received, provenance)
+      VALUES ($1::bigint, $2, $3::integer, $4::date, $5::numeric, $6::numeric, $7::numeric, 'live')
+      ON CONFLICT (tx_hash) DO NOTHING`,
+    params: [1, "0xprobe", 0, "2026-01-01", "1", "1", "1"],
+  },
+});
+
+const advanceCursor = registerQuery({
+  role: "rm_app",
+  object: "buyback_scan_state",
+  // UPDATE for ON CONFLICT DO UPDATE; SELECT because the conflict target and
+  // EXCLUDED are read.
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/chain/buyback-logs:indexBuybacks.advance",
+  purpose: "Advance the indexer's durable cursor after each scanned chunk.",
+  callers: [BUYBACKS_HANDLER],
+  probe: {
+    statement: `INSERT INTO buyback_scan_state (id, last_scanned_block, updated_at) VALUES (1, $1::bigint, now())
+      ON CONFLICT (id) DO UPDATE SET last_scanned_block = EXCLUDED.last_scanned_block, updated_at = now()`,
+    params: [1],
+  },
+});
+
 async function readRows(): Promise<DbRow[]> {
   // Newest-first: live rows (with a block number) precede the null-block seeds;
   // among same-day rows, higher block/log index is more recent; id ASC is the
   // final tiebreak so the seed set keeps its inserted (contract-golden) order.
-  return sql<DbRow[]>`
+  return on(sql, swapRows)<DbRow>`
     SELECT tx_hash, occurred_on, weth_spent, value_usd, robotmoney_received, provenance
       FROM buyback_swaps
      ORDER BY occurred_on DESC NULLS LAST,
@@ -330,6 +405,32 @@ async function wethSpentForTx(
   return matched ? Number(raw) / WEI_18 : null;
 }
 
+/**
+ * `eth_getLogs` over [from, to], halving the range when the provider answers HTTP 413 (the response would be too big).
+ *
+ * A busy range can exceed a provider's response limit even when it is under the block-range cap that
+ * BUYBACK_LOG_CHUNK was sized for. On production, 2026-09-29 to 09-30, the scan failed five times with
+ * `Base RPC HTTP 413` and left the persisted rows (and so the buyback figures) where they were (issue 1061).
+ * The halves are disjoint and are read low then high, so every log is returned once and in block order. A range
+ * that never answers 413 makes one request. A single block that still answers 413 throws: it cannot be split.
+ */
+async function getLogsSplittingOn413(
+  filter: { address: string; topics: (string | null)[] },
+  from: number,
+  to: number,
+): Promise<EthLog[]> {
+  try {
+    return await ethGetLogs({ ...filter, fromBlock: "0x" + from.toString(16), toBlock: "0x" + to.toString(16) }, rpcOpts());
+  } catch (err) {
+    if (!(err instanceof BaseRpcHttpError) || err.status !== 413 || from >= to) throw err;
+    const mid = from + Math.floor((to - from) / 2);
+    console.warn(`[buyback-logs] eth_getLogs ${from}-${to} answered HTTP 413; reading ${from}-${mid} and ${mid + 1}-${to} separately`);
+    const low = await getLogsSplittingOn413(filter, from, mid);
+    const high = await getLogsSplittingOn413(filter, mid + 1, to);
+    return [...low, ...high];
+  }
+}
+
 export interface IndexResult {
   indexed: number;
   skipped: string | null;
@@ -369,8 +470,8 @@ export async function indexBuybacks(): Promise<IndexResult> {
     // MAX(block_number), so the old row-derived cursor never advanced). We also
     // never resume before the highest already-indexed live block.
     const [cursorRow, maxRow] = await Promise.all([
-      sql<{ b: string | null }[]>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`,
-      sql<{ mx: string | null }[]>`SELECT MAX(block_number)::text AS mx FROM buyback_swaps`,
+      on(sql, scanCursor)<{ b: string | null }>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`,
+      on(sql, maxIndexedBlock)<{ mx: string | null }>`SELECT MAX(block_number)::text AS mx FROM buyback_swaps`,
     ]);
     const cursor = cursorRow[0]?.b == null ? null : Number(cursorRow[0].b);
     const persistedMax = maxRow[0]?.mx == null ? null : Number(maxRow[0].mx);
@@ -389,14 +490,10 @@ export async function indexBuybacks(): Promise<IndexResult> {
     // block's day candle below, cached per day so a many-swap day costs one call.
     for (let c = 0; c < maxChunks && from <= latest; c++) {
       const to = Math.min(from + chunk - 1, latest);
-      const logs: EthLog[] = await ethGetLogs(
-        {
-          address: cfg.robotmoneyToken,
-          topics: [TRANSFER_TOPIC, null, topicAddress(cfg.primaryWallet)],
-          fromBlock: "0x" + from.toString(16),
-          toBlock: "0x" + to.toString(16),
-        },
-        rpcOpts(),
+      const logs: EthLog[] = await getLogsSplittingOn413(
+        { address: cfg.robotmoneyToken, topics: [TRANSFER_TOPIC, null, topicAddress(cfg.primaryWallet)] },
+        from,
+        to,
       );
       // ONE batched prefetch per chunk, before the per-swap loop below.
       // Every swap needs its block's timestamp and its block's WETH-out logs,
@@ -429,7 +526,7 @@ export async function indexBuybacks(): Promise<IndexResult> {
         // duplicates a swap. NOTE: a single tx emitting multiple ROBOTMONEY-in
         // legs records only the first (robotmoney_received slightly undercounts
         // such txs); acceptable for the buyback pattern, tracked as a follow-up.
-        const res = await sql`
+        const res = await on(sql, insertSwap)`
           INSERT INTO buyback_swaps
             (block_number, tx_hash, log_index, occurred_on, weth_spent, value_usd, robotmoney_received, provenance)
           VALUES
@@ -441,7 +538,7 @@ export async function indexBuybacks(): Promise<IndexResult> {
       // Advance + persist the scan cursor for THIS window regardless of hits, so
       // the next run resumes past it. scannedToBlock reflects real coverage.
       scannedToBlock = to;
-      await sql`
+      await on(sql, advanceCursor)`
         INSERT INTO buyback_scan_state (id, last_scanned_block, updated_at)
         VALUES (1, ${to}, now())
         ON CONFLICT (id) DO UPDATE SET last_scanned_block = EXCLUDED.last_scanned_block, updated_at = now()

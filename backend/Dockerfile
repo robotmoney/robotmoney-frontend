@@ -29,5 +29,41 @@ RUN bun install
 
 COPY backend/ /app/
 
-# Overridden by compose command (api vs worker).
+# `system-scheduler` ships from this image too (issue #1026 W4). It is NOT a
+# backend module and deliberately cannot be one: scheduler spec §7 forbids it a
+# database credential, and `backend/src/config.ts` requires DATABASE_URL at
+# module scope, so anything living under `backend/` would acquire one by import.
+# It therefore lives in `scripts/` and is copied in explicitly.
+#
+# ONLY these two paths, not `scripts/` wholesale. The rest of `scripts/` is
+# operator tooling — it reaches Docker, reads `~/.env`, and holds the smoke
+# driver — and none of it belongs inside a running container. A blanket
+# `COPY scripts/` would put the deployment tooling in the image it deploys.
+#
+# The entrypoint imports `./lib/system-scheduler/*.ts` relatively, so the two
+# paths have to keep their shape under /app.
+COPY scripts/system-scheduler.ts /app/scripts/
+COPY scripts/lib/system-scheduler/ /app/scripts/lib/system-scheduler/
+
+# The STANDING PARTICIPANT ships from this image too (smoke spec §6.2, issue
+# #1026): one container per credential-file entry, started by `bun smoke`'s
+# `participants` phase with `bun run scripts/agent/participant/main.ts`, which
+# routes an agent to its poll loop and a judge to its subscription. Like the
+# scheduler it holds no database credential (it refuses one at startup), so it
+# lives in `scripts/`, not in `backend/src/` whose config demands one.
+#
+# ONLY the participant's own directory and the one library it imports at run
+# time (the credential-key list its startup check refuses by). Its other
+# `scripts/lib` imports are `import type`, which Bun erases.
+#
+# The judge client reads the server's own prompt and digest from
+# `backend/src/swarm/judge.ts` by its repository path: from
+# /app/scripts/agent/participant, `../../../backend/...` is /app/backend/...,
+# so the one symlink below gives that path its meaning here — /app/backend is
+# this image's /app, the same sources, never a second copy that could drift.
+COPY scripts/agent/participant/ /app/scripts/agent/participant/
+COPY scripts/lib/db-credential-keys.ts /app/scripts/lib/db-credential-keys.ts
+RUN ln -s . /app/backend
+
+# Overridden by compose command (api vs worker vs system-scheduler vs participant).
 CMD ["bun", "run", "src/api/index.ts"]

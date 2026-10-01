@@ -35,6 +35,8 @@
 // sampler never writes a LIVE-SPOT price under today's date" case, which the
 // distinction above still holds.
 import { sql as defaultSql, type DbHandle } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
+import { ASSET_PRICE_TIME_BASIS } from "./asset-price-basis.ts";
 import type { TrackedAsset } from "../config.ts";
 import type { AssetPriceFloor, AssetPriceFloorCache } from "../chain/asset-price-floor.ts";
 import { loadHistoricalPrices, resolvePoolForToken, type HistoricalPriceTable } from "../chain/historical-prices.ts";
@@ -42,8 +44,177 @@ import { resolveTrackedAssets, resolvePropWallets, pinnedPoolForToken } from "..
 import { resolveWalletSnapshotManifest } from "./wallet-snapshot-manifest.ts";
 import { QUARANTINED_PROVENANCE } from "../chain/wallet-valuation.ts";
 
+// Every statement here runs as rm_worker: the price dual-write and the floor
+// cache belong to the wallet sampler and the repair pass, and the coverage
+// backfill is a scheduled job (db/seed.ts's `ops.backfill_asset_prices`).
+const WALLET_HANDLER = "src/worker/handlers/wallet";
+const REPAIR_HANDLER = "src/worker/handlers/repair";
+const HANDLER_INDEX = "src/worker/handlers/index";
+
+const readExistingPrice = registerQuery({
+  role: "rm_worker",
+  object: "asset_prices",
+  privileges: ["SELECT"],
+  site: "src/ops/asset-prices:writeAssetPrice.readExisting",
+  purpose: "Read the price a (date, symbol) already holds, so a disagreeing dual-write is reported.",
+  callers: [WALLET_HANDLER, REPAIR_HANDLER],
+  probe: {
+    statement: `SELECT price_usd FROM asset_prices
+     WHERE price_date = $1 AND symbol = $2 AND time_basis = $3`,
+    params: ["2000-01-01", "probe", "probe"],
+  },
+});
+
+const upsertPrice = registerQuery({
+  role: "rm_worker",
+  object: "asset_prices",
+  // SELECT as well: ON CONFLICT (price_date, symbol, time_basis) reads its arbiter columns.
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/ops/asset-prices:writeAssetPrice.upsert",
+  purpose: "Dual-write one (date, symbol) price row at the utc-daily-close time basis (D41).",
+  callers: [WALLET_HANDLER, REPAIR_HANDLER],
+  probe: {
+    statement: `INSERT INTO asset_prices
+      (price_date, symbol, time_basis, price_usd, currency, source,
+       pool_key, token_address, observed_at, fetched_at, config_identity)
+    SELECT
+      $1::date, $2, $3, $4::numeric, 'USD', $5,
+       $6, $7, $8::timestamptz, $9::timestamptz, $10 WHERE false
+    ON CONFLICT (price_date, symbol, time_basis) DO UPDATE SET
+      price_usd       = EXCLUDED.price_usd,
+      source          = EXCLUDED.source,
+      pool_key        = EXCLUDED.pool_key,
+      token_address   = EXCLUDED.token_address,
+      observed_at     = EXCLUDED.observed_at,
+      fetched_at      = EXCLUDED.fetched_at,
+      config_identity = EXCLUDED.config_identity`,
+    params: ["2000-01-01", "probe", "probe", 1, "probe", null, null, "2000-01-01T00:00:00Z", "2000-01-01T00:00:00Z", "probe"],
+  },
+});
+
+const readFloor = registerQuery({
+  role: "rm_worker",
+  object: "asset_price_floors",
+  privileges: ["SELECT"],
+  site: "src/ops/asset-prices:assetPriceFloorCache.get",
+  purpose: "Read a symbol's permanent first-priceable day.",
+  callers: [WALLET_HANDLER, REPAIR_HANDLER, HANDLER_INDEX],
+  probe: {
+    statement: "SELECT first_priceable_date, proven FROM asset_price_floors WHERE symbol = $1",
+    params: ["probe"],
+  },
+});
+
+const upsertFloor = registerQuery({
+  role: "rm_worker",
+  object: "asset_price_floors",
+  // SELECT as well: ON CONFLICT (symbol) reads its arbiter column.
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/ops/asset-prices:assetPriceFloorCache.set",
+  purpose: "Record or advance a symbol's first-priceable day.",
+  callers: [WALLET_HANDLER, REPAIR_HANDLER, HANDLER_INDEX],
+  probe: {
+    statement: `INSERT INTO asset_price_floors (symbol, first_priceable_date, proven)
+        SELECT $1, $2::date, $3::boolean WHERE false
+        ON CONFLICT (symbol) DO UPDATE SET
+          first_priceable_date = EXCLUDED.first_priceable_date,
+          proven               = EXCLUDED.proven,
+          resolved_at          = now()`,
+    params: ["probe", "2000-01-01", false],
+  },
+});
+
+const readPersistedPrices = registerQuery({
+  role: "rm_worker",
+  object: "asset_prices",
+  privileges: ["SELECT"],
+  site: "src/ops/asset-prices:detectAssetPriceGaps.persisted",
+  purpose: "Read the persisted price days per symbol for the price-side gap report.",
+  callers: [REPAIR_HANDLER],
+  probe: {
+    statement: `SELECT symbol, price_date FROM asset_prices
+     WHERE symbol = ANY($1::text[]) AND time_basis = $2`,
+    params: ["{}", "probe"],
+  },
+});
+
+const CANDIDATE_DAYS_PROBE = {
+  statement: `SELECT DISTINCT wbs.sample_date
+      FROM wallet_balance_samples wbs
+     WHERE wbs.sample_date < $1
+       AND wbs.symbol = ANY($2::text[])
+       AND wbs.provenance <> $3
+       AND wbs.superseded_at IS NULL
+       AND NOT EXISTS (
+             SELECT 1 FROM asset_prices ap
+              WHERE ap.symbol = wbs.symbol
+                AND ap.price_date = wbs.sample_date
+                AND ap.time_basis = $4
+           )
+     ORDER BY wbs.sample_date ASC
+     LIMIT $5`,
+  params: ["2000-01-01", "{}", QUARANTINED_PROVENANCE, "probe", 1],
+} as const;
+
+const readCandidateDays = registerQuery({
+  role: "rm_worker",
+  object: "wallet_balance_samples",
+  privileges: ["SELECT"],
+  site: "src/ops/asset-prices:backfillAssetPricesForCleanDays.candidateDays",
+  purpose: "Find closed, cleanly sampled days that lack an asset_prices row for a priced symbol.",
+  callers: [HANDLER_INDEX],
+  probe: CANDIDATE_DAYS_PROBE,
+});
+
+const readCandidateDayPrices = registerQuery({
+  role: "rm_worker",
+  object: "asset_prices",
+  privileges: ["SELECT"],
+  site: "src/ops/asset-prices:backfillAssetPricesForCleanDays.candidateDayPrices",
+  purpose: "Anti-join the candidate days against the prices already persisted.",
+  callers: [HANDLER_INDEX],
+  probe: CANDIDATE_DAYS_PROBE,
+});
+
+const readBalanceCompleteness = registerQuery({
+  role: "rm_worker",
+  object: "wallet_balance_samples",
+  privileges: ["SELECT"],
+  site: "src/ops/asset-prices:backfillAssetPricesForCleanDays.balanceSymbols",
+  purpose: "Read which symbols a day's live balance snapshot holds, to prove the day complete.",
+  callers: [HANDLER_INDEX],
+  probe: {
+    statement: `SELECT
+        ARRAY_AGG(DISTINCT symbol) FILTER (WHERE provenance <> $1) AS balance_symbols,
+        COUNT(DISTINCT symbol) FILTER (WHERE provenance <> $1) AS balance_rows
+      FROM wallet_balance_samples
+      WHERE sample_date = $2
+        AND superseded_at IS NULL`,
+    params: [QUARANTINED_PROVENANCE, "2000-01-01"],
+  },
+});
+
+const readSleeveCompleteness = registerQuery({
+  role: "rm_worker",
+  object: "wallet_sleeve_samples",
+  privileges: ["SELECT"],
+  site: "src/ops/asset-prices:backfillAssetPricesForCleanDays.sleeveKeys",
+  purpose: "Read which sleeve keys a day's live snapshot holds, to prove the day complete.",
+  callers: [HANDLER_INDEX],
+  probe: {
+    statement: `SELECT
+        ARRAY_AGG(DISTINCT wallet_address || '|' || symbol) FILTER (WHERE provenance <> $1) AS sleeve_keys,
+        COUNT(DISTINCT wallet_address || '|' || symbol) FILTER (WHERE provenance <> $1) AS sleeve_rows
+      FROM wallet_sleeve_samples
+      WHERE sample_date = $2
+        AND superseded_at IS NULL
+        AND lower(wallet_address) = ANY($3::text[])`,
+    params: [QUARANTINED_PROVENANCE, "2000-01-01", "{}"],
+  },
+});
+
 export type AssetPriceSource = "geckoterminal" | "pinned";
-export const ASSET_PRICE_TIME_BASIS = "utc-daily-close" as const;
+export { ASSET_PRICE_TIME_BASIS };
 
 export interface AssetPriceWrite {
   priceDate: string;
@@ -96,7 +267,7 @@ export function assetPricesDisagree(previous: number, fresh: number): boolean {
  * the day's result/log, not a reason to leave stale data in place.
  */
 export async function writeAssetPrice(db: DbHandle, row: AssetPriceWrite): Promise<AssetPriceDisagreement | null> {
-  const [existing] = await db<{ price_usd: string }[]>`
+  const [existing] = await on(db, readExistingPrice)<{ price_usd: string }>`
     SELECT price_usd FROM asset_prices
      WHERE price_date = ${row.priceDate} AND symbol = ${row.symbol} AND time_basis = ${ASSET_PRICE_TIME_BASIS}
   `;
@@ -113,7 +284,7 @@ export async function writeAssetPrice(db: DbHandle, row: AssetPriceWrite): Promi
       };
     }
   }
-  await db`
+  await on(db, upsertPrice)`
     INSERT INTO asset_prices
       (price_date, symbol, time_basis, price_usd, currency, source,
        pool_key, token_address, observed_at, fetched_at, config_identity)
@@ -137,7 +308,7 @@ export async function writeAssetPrice(db: DbHandle, row: AssetPriceWrite): Promi
 export function assetPriceFloorCache(db: DbHandle): AssetPriceFloorCache {
   return {
     async get(symbol) {
-      const [row] = await db<{ first_priceable_date: Date; proven: boolean }[]>`
+      const [row] = await on(db, readFloor)<{ first_priceable_date: Date; proven: boolean }>`
         SELECT first_priceable_date, proven FROM asset_price_floors WHERE symbol = ${symbol}
       `;
       if (!row) return null;
@@ -148,7 +319,7 @@ export function assetPriceFloorCache(db: DbHandle): AssetPriceFloorCache {
       };
     },
     async set(floor: AssetPriceFloor) {
-      await db`
+      await on(db, upsertFloor)`
         INSERT INTO asset_price_floors (symbol, first_priceable_date, proven)
         VALUES (${floor.symbol}, ${floor.firstPriceableDate}, ${floor.proven})
         ON CONFLICT (symbol) DO UPDATE SET
@@ -209,7 +380,7 @@ export async function detectAssetPriceGaps(
   const cache = assetPriceFloorCache(db);
 
   const symbols = priced.map((a) => a.symbol);
-  const rows = await db<{ symbol: string; price_date: Date }[]>`
+  const rows = await on(db, readPersistedPrices)<{ symbol: string; price_date: Date }>`
     SELECT symbol, price_date FROM asset_prices
      WHERE symbol = ANY(${symbols}) AND time_basis = ${ASSET_PRICE_TIME_BASIS}
   `;
@@ -313,12 +484,15 @@ export async function backfillAssetPricesForCleanDays(
   // An anti-join (rather than "every closed day, always") keeps a caught-up
   // deployment's run cheap: once a day is covered it is never re-selected,
   // re-fetched, or re-written on a later tick.
-  const candidateDays = await db<{ sample_date: Date }[]>`
+  const candidateDays = await on(db, readCandidateDays, readCandidateDayPrices)<{ sample_date: Date }>`
     SELECT DISTINCT wbs.sample_date
       FROM wallet_balance_samples wbs
      WHERE wbs.sample_date < ${cutoff}
        AND wbs.symbol = ANY(${pricedSymbols})
        AND wbs.provenance <> ${QUARANTINED_PROVENANCE}
+       -- D55 (6): a row the wallet repair superseded (migration 0086) is not
+       -- a sample any more; it neither makes a day a candidate nor covers it.
+       AND wbs.superseded_at IS NULL
        AND NOT EXISTS (
              SELECT 1 FROM asset_prices ap
               WHERE ap.symbol = wbs.symbol
@@ -342,25 +516,27 @@ export async function backfillAssetPricesForCleanDays(
 
     // Check if this day has a complete snapshot (both balance and sleeve)
     const manifest = resolveWalletSnapshotManifest(assets, wallets, date);
-    const [balanceResult] = await db<{
+    const [balanceResult] = await on(db, readBalanceCompleteness)<{
       balance_symbols: string[];
       balance_rows: number;
-    }[]>`
+    }>`
       SELECT
         ARRAY_AGG(DISTINCT symbol) FILTER (WHERE provenance <> ${QUARANTINED_PROVENANCE}) AS balance_symbols,
         COUNT(DISTINCT symbol) FILTER (WHERE provenance <> ${QUARANTINED_PROVENANCE}) AS balance_rows
       FROM wallet_balance_samples
       WHERE sample_date = ${date}
+        AND superseded_at IS NULL
     `;
-    const [sleeveResult] = await db<{
+    const [sleeveResult] = await on(db, readSleeveCompleteness)<{
       sleeve_keys: string[];
       sleeve_rows: number;
-    }[]>`
+    }>`
       SELECT
         ARRAY_AGG(DISTINCT wallet_address || '|' || symbol) FILTER (WHERE provenance <> ${QUARANTINED_PROVENANCE}) AS sleeve_keys,
         COUNT(DISTINCT wallet_address || '|' || symbol) FILTER (WHERE provenance <> ${QUARANTINED_PROVENANCE}) AS sleeve_rows
       FROM wallet_sleeve_samples
       WHERE sample_date = ${date}
+        AND superseded_at IS NULL
         AND lower(wallet_address) = ANY(${wallets.map((w) => w.toLowerCase())}::text[])
     `;
 

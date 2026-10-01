@@ -3,33 +3,42 @@
 // the preload THROWS, so this file fails loudly rather than silently skipping
 // (test-coverage policy).
 //
-// Design under test (strict setup-token revocation — issue #584):
-//  • unclaimed: the per-boot ADMIN_TOKEN env credential (or allowInsecure)
-//    authorizes exactly as before;
+// Design under test (D32, with D52 (1) retiring the env ADMIN_TOKEN):
+//  • unclaimed: the operator's store token (smoke spec §3, right `admin`) is
+//    the setup credential; no env value and no RM_ENV opens the gate;
 //  • claim: the token holder persists a password — stored ONLY as sha256 hex;
-//  • claimed: the stored hash is the durable operator credential and survives
-//    any restart (a restart = a NEW random adminToken in cfg); every setup
-//    ADMIN_TOKEN is revoked, and allowInsecure no longer opens the gate;
+//  • claimed: the stored hash is a durable credential that survives a rotation
+//    of the operator token; the operator token keeps its `admin` right (it is
+//    the admin routes' service credential, §3), and a rotated-out token is
+//    refused;
 //  • the claim is one-time: a second claim is 409 until an operator deletes
 //    the row.
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, beforeEach } from "bun:test";
 import { createHash } from "node:crypto";
 import { sql } from "../../src/db/client.ts";
-import { handleAdmin, type AdminAuthConfig } from "../../src/api/routes/admin.ts";
+import { fixtureDb } from "../support/fixture-db.ts";
+import { handleAdmin } from "../../src/api/routes/admin.ts";
 import { handleAdminWebauthn } from "../../src/api/routes/admin-webauthn.ts";
 import { isPrivileged } from "../../src/api/auth.ts";
 import { hashKey } from "../../src/lib/keys.ts";
 import { useCleanDatabasePerTest } from "../support/clean-db.ts";
+import { provisionOperatorToken } from "../support/automation-auth.ts";
+import { provisionAutomationToken } from "../../src/db/automation-tokens.ts";
 
 // Own database per TEST, cloned from the migrated template: these tests each
 // start from an empty table, which used to mean wiping one the previous test
 // filled. See support/clean-db.ts.
 useCleanDatabasePerTest(import.meta.file);
 
-const CFG: AdminAuthConfig = { adminToken: "s3cret-admin-token", allowInsecure: false };
+// The operator's store token, provisioned into each test's own database (the
+// beforeEach above clones it first, so this runs second).
+let OPERATOR = "";
+beforeEach(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 const PASSWORD = "operator-chosen-password"; // ≥ 12 chars
 
-const call = (req: Request, cfg: AdminAuthConfig = CFG) => handleAdmin(req, new URL(req.url), cfg);
+const call = (req: Request) => handleAdmin(req, new URL(req.url));
 const authReq = (token?: string | null) =>
   new Request("http://localhost/api/admin/auth", {
     method: "POST",
@@ -56,14 +65,14 @@ const passwordRecoverReq = (recoveryCode: unknown, newPassword: unknown) =>
 const isClaimedReq = () => new Request("http://localhost/api/admin/is-claimed", { method: "GET" });
 
 describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
-  test("full lifecycle: unclaimed setup token → claim → durable credential survives restart", async () => {
-    // Unclaimed: probe says so, and the env token authorizes (pre-claim behaviour).
+  test("full lifecycle: unclaimed operator token → claim → durable credential survives a rotation", async () => {
+    // Unclaimed: probe says so, and the operator's store token authorizes.
     expect(await call(isClaimedReq())).toEqual({ status: 200, body: { claimed: false } });
-    expect((await call(authReq(CFG.adminToken)))?.status).toBe(200);
+    expect((await call(authReq(OPERATOR)))?.status).toBe(200);
     expect((await call(authReq("wrong")))?.status).toBe(403);
 
     // Claim with the current credential. The response echoes NOTHING secret except the one-time recovery code.
-    const claimedRes = await call(claimReq(PASSWORD, CFG.adminToken));
+    const claimedRes = await call(claimReq(PASSWORD, OPERATOR));
     expect(claimedRes?.status).toBe(200);
     const claimedBody = claimedRes?.body as { ok: boolean; recoveryCode: string };
     expect(claimedBody.ok).toBe(true);
@@ -83,18 +92,20 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
     // The claimed credential authenticates.
     expect((await call(authReq(PASSWORD)))?.status).toBe(200);
 
-    // A claim revokes the one-time setup token. Stack automation has a distinct
-    // AUTOMATION_TOKEN and cannot use the human login endpoint as a substitute.
-    expect((await call(authReq(CFG.adminToken)))?.status).toBe(403);
+    // The operator token is the admin routes' service credential (smoke spec
+    // §3), not a per-boot setup value, so a claim leaves it valid — it is
+    // retired by rotation, which the next block proves.
+    expect((await call(authReq(OPERATOR)))?.status).toBe(200);
 
-    // Simulated restart: a fresh boot mints an unrelated random token. The
-    // claimed credential MUST keep working (the lockout this issue fixes)…
-    const restarted = { adminToken: "brand-new-boot-token-123", allowInsecure: false };
-    expect((await call(authReq(PASSWORD), restarted))?.status).toBe(200);
-    // No future setup token can authenticate a claimed human-admin surface.
-    expect((await call(authReq(restarted.adminToken), restarted))?.status).toBe(403);
-    // The previous boot's token remains revoked too.
-    expect((await call(authReq(CFG.adminToken), restarted))?.status).toBe(403);
+    // Rotation: re-provisioning the operator replaces its row. The claimed
+    // credential MUST keep working (the lockout #553 fixed)…
+    const [row] = await sql<{ instance: string }[]>`
+      SELECT instance FROM automation_tokens WHERE holder = 'operator'`;
+    const rotated = await provisionAutomationToken(row!.instance, ["admin"], { holder: "operator", db: fixtureDb });
+    expect((await call(authReq(PASSWORD)))?.status).toBe(200);
+    expect((await call(authReq(rotated.token)))?.status).toBe(200);
+    // …and the rotated-out token is refused on the next request.
+    expect((await call(authReq(OPERATOR)))?.status).toBe(403);
   });
 
   test("claiming requires the current admin credential", async () => {
@@ -106,7 +117,7 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
   });
 
   test("claim is one-time: a second claim is 409 and does not overwrite the hash", async () => {
-    expect((await call(claimReq(PASSWORD, CFG.adminToken)))?.status).toBe(200);
+    expect((await call(claimReq(PASSWORD, OPERATOR)))?.status).toBe(200);
     const again = await call(claimReq("some-other-password", PASSWORD));
     expect(again).toEqual({ status: 409, body: { error: "admin credential already claimed" } });
     // Original claimed credential still the one that authenticates.
@@ -116,20 +127,21 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
 
   test("a short or missing password is rejected before any write", async () => {
     for (const bad of ["", "short", "elevenchars", 42, null]) {
-      const res = await call(claimReq(bad, CFG.adminToken));
+      const res = await call(claimReq(bad, OPERATOR));
       expect(res).toEqual({ status: 400, body: { error: "password must be at least 12 characters" } });
     }
     expect(await call(isClaimedReq())).toEqual({ status: 200, body: { claimed: false } });
   });
 
-  test("allowInsecure no longer opens the admin gate once claimed", async () => {
-    const insecure = { adminToken: null, allowInsecure: true };
-    // Pre-claim: insecure mode opens the gate (historical behaviour).
-    expect((await call(authReq(), insecure))?.status).toBe(200);
-    expect((await call(claimReq(PASSWORD, CFG.adminToken)))?.status).toBe(200);
-    // Post-claim: a claim is an explicit security opt-in — insecure mode is out.
-    expect((await call(authReq(), insecure))?.status).toBe(403);
-    expect((await call(authReq(PASSWORD), insecure))?.status).toBe(200);
+  test("RM_ENV=ephemeral opens the admin gate neither before nor after a claim (D52 (1))", async () => {
+    // Pre-claim used to be open under insecure mode; there is no such mode now.
+    expect(process.env.RM_ENV).toBe("ephemeral");
+    expect((await call(authReq()))?.status).toBe(403);
+    expect((await call(claimReq(PASSWORD)))?.status).toBe(403);
+    expect(await call(isClaimedReq())).toEqual({ status: 200, body: { claimed: false } });
+    expect((await call(claimReq(PASSWORD, OPERATOR)))?.status).toBe(200);
+    expect((await call(authReq()))?.status).toBe(403);
+    expect((await call(authReq(PASSWORD)))?.status).toBe(200);
   });
 
   test("the plaintext password never reaches logs, response bodies, or the audit trail", async () => {
@@ -140,7 +152,7 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
     console.log = capture; console.info = capture; console.warn = capture; console.error = capture;
     let claimBody: unknown, probeBody: unknown, authBody: unknown;
     try {
-      claimBody = (await call(claimReq(PASSWORD, CFG.adminToken)))?.body;
+      claimBody = (await call(claimReq(PASSWORD, OPERATOR)))?.body;
       probeBody = (await call(isClaimedReq()))?.body;
       authBody = (await call(authReq(PASSWORD)))?.body;
     } finally {
@@ -161,7 +173,7 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
   test("claim rolls back the credential when its required audit insert fails, then retries cleanly", async () => {
     const trigger = "rmtest_claim_audit_failure";
     const fn = "rmtest_claim_audit_failure_fn";
-    await sql.unsafe(`
+    await fixtureDb.unsafe(`
       CREATE FUNCTION ${fn}() RETURNS trigger AS $$
       BEGIN
         IF NEW.action = 'claim_admin_credential' THEN
@@ -170,21 +182,21 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
         RETURN NEW;
       END;
       $$ LANGUAGE plpgsql`);
-    await sql.unsafe(`CREATE TRIGGER ${trigger} BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
+    await fixtureDb.unsafe(`CREATE TRIGGER ${trigger} BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
     try {
-      await expect(call(claimReq(PASSWORD, CFG.adminToken))).rejects.toThrow("forced claim audit failure");
+      await expect(call(claimReq(PASSWORD, OPERATOR))).rejects.toThrow("forced claim audit failure");
     } finally {
-      await sql.unsafe(`DROP TRIGGER IF EXISTS ${trigger} ON audit_log`);
-      await sql.unsafe(`DROP FUNCTION IF EXISTS ${fn}()`);
+      await fixtureDb.unsafe(`DROP TRIGGER IF EXISTS ${trigger} ON audit_log`);
+      await fixtureDb.unsafe(`DROP FUNCTION IF EXISTS ${fn}()`);
     }
 
     // A failed claim is entirely absent: neither the credential nor its audit
-    // event is committed, so the original setup credential may retry safely.
+    // event is committed, so the operator may retry safely.
     expect(await sql`SELECT 1 FROM admin_credential WHERE id = 1`).toHaveLength(0);
     expect(await sql`SELECT 1 FROM audit_log WHERE action = 'claim_admin_credential'`).toHaveLength(0);
-    expect((await call(authReq(CFG.adminToken)))?.status).toBe(200);
+    expect((await call(authReq(OPERATOR)))?.status).toBe(200);
 
-    const retried = await call(claimReq(PASSWORD, CFG.adminToken));
+    const retried = await call(claimReq(PASSWORD, OPERATOR));
     expect(retried?.status).toBe(200);
     expect(await sql`SELECT 1 FROM admin_credential WHERE id = 1`).toHaveLength(1);
     expect(await sql`SELECT 1 FROM audit_log WHERE action = 'claim_admin_credential'`).toHaveLength(1);
@@ -192,7 +204,7 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
 
   test("password change requires valid current password and updates hash", async () => {
     // First, claim it
-    await call(claimReq(PASSWORD, CFG.adminToken));
+    await call(claimReq(PASSWORD, OPERATOR));
     
     // Attempt change with wrong current password
     expect(await call(passwordChangeReq("wrong-password", "new-password-1234", PASSWORD))).toEqual({
@@ -224,7 +236,7 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
     // This is the state produced when migration 0029 is applied to an already
     // claimed installation. It cannot safely receive a generated code in SQL,
     // because there would be no one-time response in which to disclose it.
-    await sql`
+    await fixtureDb`
       INSERT INTO admin_credential (id, pass_hash, recovery_hash)
       VALUES (1, ${hashKey(PASSWORD)}, NULL)`;
 
@@ -241,7 +253,7 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
   });
 
   test("a change authenticated before recovery cannot overwrite the recovered password", async () => {
-    const claimRes = await call(claimReq(PASSWORD, CFG.adminToken));
+    const claimRes = await call(claimReq(PASSWORD, OPERATOR));
     const recoveryCode = (claimRes?.body as { recoveryCode: string }).recoveryCode;
     const interleaving = { recovery: null as { status: number; body: unknown } | null };
     let sent = false;
@@ -277,7 +289,7 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
 
   test("password recovery uses recovery code, updates hash, and issues new recovery code", async () => {
     // First, claim it and get recovery code
-    const claimRes = await call(claimReq(PASSWORD, CFG.adminToken));
+    const claimRes = await call(claimReq(PASSWORD, OPERATOR));
     const { recoveryCode } = claimRes?.body as any;
 
     // Attempt recovery with wrong code
@@ -306,7 +318,7 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
   });
 
   test("concurrent recoveries consume one recovery code exactly once", async () => {
-    const claimRes = await call(claimReq(PASSWORD, CFG.adminToken));
+    const claimRes = await call(claimReq(PASSWORD, OPERATOR));
     const { recoveryCode } = claimRes?.body as { recoveryCode: string };
     const candidates = ["concurrent-winner-password", "concurrent-loser-password"];
 
@@ -333,11 +345,11 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
   });
 
   test("recovery rolls back code consumption when its audit insert fails", async () => {
-    const claimRes = await call(claimReq(PASSWORD, CFG.adminToken));
+    const claimRes = await call(claimReq(PASSWORD, OPERATOR));
     const recoveryCode = (claimRes?.body as { recoveryCode: string }).recoveryCode;
     const trigger = "rmtest_recovery_audit_failure";
     const fn = "rmtest_recovery_audit_failure_fn";
-    await sql.unsafe(`
+    await fixtureDb.unsafe(`
       CREATE FUNCTION ${fn}() RETURNS trigger AS $$
       BEGIN
         IF NEW.action = 'recover_admin_password' THEN
@@ -346,12 +358,12 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
         RETURN NEW;
       END;
       $$ LANGUAGE plpgsql`);
-    await sql.unsafe(`CREATE TRIGGER ${trigger} BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
+    await fixtureDb.unsafe(`CREATE TRIGGER ${trigger} BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
     try {
       await expect(call(passwordRecoverReq(recoveryCode, "audit-failure-password"))).rejects.toThrow("forced recovery audit failure");
     } finally {
-      await sql.unsafe(`DROP TRIGGER IF EXISTS ${trigger} ON audit_log`);
-      await sql.unsafe(`DROP FUNCTION IF EXISTS ${fn}()`);
+      await fixtureDb.unsafe(`DROP TRIGGER IF EXISTS ${trigger} ON audit_log`);
+      await fixtureDb.unsafe(`DROP FUNCTION IF EXISTS ${fn}()`);
     }
 
     // The failed request disclosed no successor. Its predecessor must still
@@ -362,20 +374,25 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
   });
 
   test("password rotation revokes rogue passkeys and their sessions before either change or recovery returns", async () => {
-    const claimed = await call(claimReq(PASSWORD, CFG.adminToken));
+    const claimed = await call(claimReq(PASSWORD, OPERATOR));
     const initialRecoveryCode = (claimed?.body as { recoveryCode: string }).recoveryCode;
-    const rogueId = "rogue-passkey";
-    const rogueSession = "rogue-passkey-session";
+    // One rogue credential per rotation: the first one's rows stay, revoked.
+    const rogueId = (challenge: string) => `rogue-passkey-${challenge}`;
+    const rogueSession = (challenge: string) => `rogue-passkey-session-${challenge}`;
 
     const seedRogueCredential = async (challenge: string) => {
-      await sql`
+      await fixtureDb`
         INSERT INTO admin_passkey (id, public_key, counter, transports)
-        VALUES (${rogueId}, ${Buffer.from("not-used-before-lookup")}, 0, '{}')
+        VALUES (${rogueId(challenge)}, ${Buffer.from("not-used-before-lookup")}, 0, '{}')
       `;
-      await sql`INSERT INTO admin_session (token, expires_at) VALUES (${hashKey(rogueSession)}, now() + interval '1 day')`;
-      await sql`
-        INSERT INTO admin_webauthn_challenge (flow, challenge, expires_at)
-        VALUES ('authentication', ${challenge}, now() + interval '5 minutes')
+      await fixtureDb`INSERT INTO admin_session (token, expires_at) VALUES (${hashKey(rogueSession(challenge))}, now() + interval '1 day')`;
+      // A pending sign-in ceremony in one of the 32 slots (migration 0088):
+      // slot 8, the first of the authentication slots (8..31).
+      await fixtureDb`
+        UPDATE admin_webauthn_challenge
+           SET flow = 'authentication', challenge = ${challenge}, issued_at = now(),
+               expires_at = now() + interval '5 minutes', consumed_at = NULL
+         WHERE slot = 8
       `;
     };
     const assertRogueRejected = async (challenge: string) => {
@@ -383,14 +400,20 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
       const req = new Request("http://localhost/api/admin/webauthn/auth/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: rogueId, response: { clientDataJSON } }),
+        body: JSON.stringify({ id: rogueId(challenge), response: { clientDataJSON } }),
       });
-      expect(await handleAdminWebauthn(req, new URL(req.url), CFG)).toEqual({ status: 400, body: { error: "passkey not found" } });
+      expect(await handleAdminWebauthn(req, new URL(req.url))).toEqual({ status: 400, body: { error: "passkey not found" } });
       expect(await isPrivileged(new Request("http://localhost/api/admin/overview", {
-        headers: { "X-Admin-Token": rogueSession },
-      }), CFG)).toBe(false);
-      expect(await sql`SELECT id FROM admin_passkey WHERE id = ${rogueId}`).toHaveLength(0);
-      expect(await sql`SELECT token FROM admin_session WHERE token = ${hashKey(rogueSession)}`).toHaveLength(0);
+        headers: { "X-Admin-Token": rogueSession(challenge) },
+      }))).toBe(false);
+      // Revoked by tombstone in the rotating transaction, never deleted
+      // (D55 (6)): the rows stay, and nothing live is left.
+      expect(Array.from(await sql`SELECT revoked_at IS NOT NULL AS revoked FROM admin_passkey WHERE id = ${rogueId(challenge)}`))
+        .toEqual([{ revoked: true }]);
+      expect(Array.from(await sql`SELECT revoked_at IS NOT NULL AS revoked FROM admin_session WHERE token = ${hashKey(rogueSession(challenge))}`))
+        .toEqual([{ revoked: true }]);
+      expect(await sql`SELECT 1 FROM admin_passkey WHERE revoked_at IS NULL`).toHaveLength(0);
+      expect(await sql`SELECT 1 FROM admin_session WHERE revoked_at IS NULL`).toHaveLength(0);
     };
 
     await seedRogueCredential("rogue-before-change");

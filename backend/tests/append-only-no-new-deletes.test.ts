@@ -20,9 +20,10 @@
 // (and an executed test asserts the two agree), so a third copy would be a
 // third thing to forget.
 import { expect, test } from "bun:test";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { APPEND_ONLY_TABLES } from "../src/db/append-only-guard.ts";
+import { RUNTIME_DELETE_REVOKED_TABLES } from "../src/db/preflight.ts";
 
 // Scanned from the REPOSITORY root, not backend/. The statement this guard is
 // really aimed at — a hand-run `psql` — is not written in application code; it
@@ -60,6 +61,14 @@ const ALLOWED: Record<string, string> = {
     "asserts migration 0080's re-armed guard refuses a DELETE, on a throwaway database of its own",
   "backend/tests/database-role-taxonomy.test.ts":
     "asserts rm_app direct evidence DELETE and TRUNCATE are denied 42501",
+  // The offending statements are `GRANT TRUNCATE ON swarm_members TO rm_app`:
+  // the file GRANTS a destructive privilege precisely so preflight check 2's
+  // denylist can be proved to catch it, then revokes it in a `finally`. No row
+  // is ever deleted or truncated — the privilege is the subject, not the data
+  // (spec §7 check 2, issue #1026 W2). Once W2.2's grant-transition migration
+  // lands, this same grant is what production must NOT have.
+  "backend/tests/db-preflight-checks.test.ts":
+    "GRANTs TRUNCATE so the preflight denylist can be proved to refuse it; deletes nothing",
   // The statements here are DATA, not code: fixture migration bodies handed to
   // preflight's scanner as strings so it can be proved to turn red on them. The
   // file opens no writeable connection to a protected table at all — its only
@@ -70,8 +79,34 @@ const ALLOWED: Record<string, string> = {
   "backend/tests/preflight-0-3-0-append-only-safety.test.ts":
     "fixture SQL asserted to FAIL preflight's destructive-statement scan; never executed",
 
+  // DDL, not the DML this guard's triggers intercept (0032's own header says
+  // so): drops the table outright, in this file's own useCleanDatabase()
+  // clone, to exercise checkSchemaCurrent()'s "never migrated at all" branch.
+  "backend/tests/schema-current.test.ts": "DROP TABLE in an isolated clone, to test the never-migrated branch",
+
   // The migration that installs the guard names every table it protects.
   "backend/migrations/0032_append_only_history.sql": "installs the guard",
+
+  // Same statements as 0032, for the same reason: the snapshot declaration
+  // (spec §8.1, issue #1026 W2) is the canonical description of the schema, so
+  // it carries every `CREATE TRIGGER ... BEFORE DELETE OR TRUNCATE ON <table>`
+  // the guard installs. Those are the protection, not a use of it — the file
+  // creates objects on a blank database and deletes no row anywhere.
+  "backend/schema/snapshot.sql": "the snapshot declaration installs the guard's triggers",
+
+  // Same statements again, for the same reason, in the fixture snapshot the
+  // snapshot tests build on disk: its declaration carries
+  // `CREATE TRIGGER ... BEFORE DELETE OR TRUNCATE ON schema_migrations` so the
+  // fixture is honest about embodying 0032 and preflight check 3a can be run
+  // against it. Installing the guard is not using it — the file deletes no row.
+  "backend/tests/schema-snapshot.test.ts": "its fixture declaration installs the guard's triggers",
+
+  // And once more: snapshot N for spec §8.4's "snapshot N + migrations =
+  // snapshot N+1" (tests/snapshot-advance.test.ts) is a byte-for-byte,
+  // sha256-pinned copy of an earlier backend/schema/snapshot.sql, so it carries
+  // the same trigger declarations for the same reason. It deletes no row.
+  "backend/tests/fixtures/snapshots/0078_automation_token_holders/schema/snapshot.sql":
+    "pinned copy of an earlier snapshot declaration; installs the guard's triggers",
 
   // Migration 0059 cleans up fabricated snapshots on framework subjects (issue #960).
   "backend/migrations/0059_swarm_framework_subject_snapshot_cleanup.sql":
@@ -97,16 +132,51 @@ const ALLOWED: Record<string, string> = {
   "backend/src/db/append-only-guard.ts": "declares the protected set; the probe interpolates the table name",
 };
 
-const TABLES = APPEND_ONLY_TABLES.join("|");
+/**
+ * THE GRANT-ONLY TABLES (D53 (2)) and the files allowed to prune them.
+ *
+ * `swarm_stream_events` left APPEND_ONLY_TABLES when migration 0080 dropped its
+ * triggers so rm_owner can prune it. Leaving the append-only set must not also
+ * take it out of this guard: a DELETE against it is still a decision, and the
+ * only correct one is rm_owner's. D55 (12): the log keeps a time window of at
+ * least 7 days and is pruned only by the manual, receipted `bun run prune`
+ * (backend/scripts/prune.ts), plus the tests that prove what that prune does.
+ * So it is scanned as well, against its OWN pinned list — never the
+ * append-only ALLOWED map above, which would excuse a file for every protected
+ * table at once. Each entry must carry a statement against the table (no stale
+ * entry) and must act as `rm_owner`, the only role that may prune: a test by
+ * `SET LOCAL ROLE rm_owner`, the command by declaring its statement an
+ * rm_owner registry site and logging in as rm_owner.
+ */
+const GRANT_ONLY_TABLES: readonly string[] = RUNTIME_DELETE_REVOKED_TABLES.filter(
+  (t) => !(APPEND_ONLY_TABLES as readonly string[]).includes(t),
+);
+const PRUNE_SITES: Record<string, string> = {
+  "backend/scripts/prune.ts": "`bun run prune`, the one pruning path: typed rm_owner, fenced, receipted (D55 (12))",
+  "backend/tests/stream-events-retention.test.ts":
+    "proves rm_owner may prune below the floor while rm_app and rm_worker get 42501",
+  "backend/tests/api-event-stream.test.ts": "prunes as rm_owner to prove a cursor below the floor is a resync",
+};
+
 // `TRUNCATE a, b, c` is one statement over several tables, so look past the
 // keyword for the table — but only across characters a TABLE LIST can contain.
 // Anything else (a backtick, a semicolon, a paren, an operator) ends the search,
 // or `DELETE FROM admin_passkey`; …; `INSERT INTO audit_log` would read as one
 // destructive statement against audit_log.
-const DESTRUCTIVE = new RegExp(
-  String.raw`(DELETE\s+FROM|TRUNCATE(\s+TABLE)?|DROP\s+TABLE(\s+IF\s+EXISTS)?)[\w\s,."']{0,120}?\b(${TABLES})\b`,
-  "gi",
-);
+//
+// NOR ACROSS THE WORD `ON`. No removal statement puts `ON` between its keyword
+// and its table (`TRUNCATE ONLY t` is `ONLY`, a different word), but every
+// privilege does: `GRANT TRUNCATE ON t`, and the preflight refusal text "holds
+// DELETE/TRUNCATE on t". Those name the privilege, not a removal of rows, and
+// reading them as a prune forced a test to spell the table through a variable
+// to get past this guard — which also hid that file from it for good.
+const destructiveAgainst = (tables: readonly string[]) =>
+  new RegExp(
+    String.raw`(DELETE\s+FROM|TRUNCATE(\s+TABLE)?|DROP\s+TABLE(\s+IF\s+EXISTS)?)(?:(?!\bon\b)[\w\s,."']){0,120}?\b(${tables.join("|")})\b`,
+    "gi",
+  );
+const DESTRUCTIVE = destructiveAgainst(APPEND_ONLY_TABLES);
+const DESTRUCTIVE_GRANT_ONLY = destructiveAgainst(GRANT_ONLY_TABLES);
 
 // Scan CODE, not prose: every one of these tables is named in comments that
 // explain why it must NOT be deleted, and a guard that fired on its own
@@ -200,15 +270,71 @@ test("no new DELETE/TRUNCATE/DROP TABLE against an append-only table", () => {
   ).toEqual([]);
 });
 
+/**
+ * The statements in `text` that remove rows from a grant-only table.
+ *
+ * A GRANT or REVOKE names the privilege, not a removal: migration 0080's
+ * `REVOKE DELETE, TRUNCATE ON swarm_stream_events FROM rm_app, rm_worker` is
+ * the protection itself. Privilege statements are dropped before matching, and
+ * the pattern does not cross `ON` (destructiveAgainst), so what is left to
+ * match is a statement that removes rows.
+ */
+function grantOnlyRemovals(text: string, file: string): string[] {
+  const code = stripToCode(text, file).replace(/\b(?:GRANT|REVOKE)\b[^;`"]*?\b(?:TO|FROM)\s+[\w, ]+/gi, "");
+  return [...code.matchAll(DESTRUCTIVE_GRANT_ONLY)].map((m) => m[0].replace(/\s+/g, " ").trim());
+}
+
+test("no DELETE/TRUNCATE/DROP TABLE against a grant-only table outside its pinned prune sites (D53 (2))", () => {
+  expect(GRANT_ONLY_TABLES, "swarm_stream_events is grant-only, and must still be scanned").toContain(
+    "swarm_stream_events",
+  );
+  const offenders: string[] = [];
+  for (const file of walk(root)) {
+    const rel = relative(root, file);
+    if (rel in ALLOWED || rel in PRUNE_SITES) continue;
+    for (const hit of grantOnlyRemovals(readFileSync(file, "utf8"), file)) offenders.push(`${rel}: ${hit}`);
+  }
+  expect(
+    offenders,
+    "Only rm_owner prunes swarm_stream_events, through `bun run prune` and only past its 7-day window (D55 (12)). " +
+      "A new prune site is a decision: add it to PRUNE_SITES with the reason.",
+  ).toEqual([]);
+  for (const [rel, why] of Object.entries(PRUNE_SITES)) {
+    const code = codeOnly(join(root, rel));
+    expect({ rel, why, prunes: [...code.matchAll(DESTRUCTIVE_GRANT_ONLY)].length > 0 }).toEqual({ rel, why, prunes: true });
+    // A test switches to rm_owner; the command declares every statement it
+    // issues as an rm_owner site, and none as a runtime role's.
+    const actsAsOwner =
+      code.includes("SET LOCAL ROLE rm_owner") ||
+      (/\brole:\s*"rm_owner"/.test(code) && !/\brole:\s*"rm_(app|worker|readonly)"/.test(code));
+    expect({ rel, actsAsOwner }).toEqual({ rel, actsAsOwner: true });
+  }
+});
+
 // A guard that matches nothing is a guard that has silently stopped working —
 // the exact failure mode this file exists to prevent elsewhere.
+// An exemption for a file that no longer exists is a dead key a later file of
+// the same name would inherit silently. The snapshot-N fixture's entry is the
+// one most likely to go stale: spec §8.4 deletes the old fixture directory
+// when the fixture advances, so its ALLOWED key must move with it.
+test("every ALLOWED and PRUNE_SITES entry names a file that exists", () => {
+  const missing = [...Object.keys(ALLOWED), ...Object.keys(PRUNE_SITES)].filter((rel) => !existsSync(join(root, rel)));
+  expect(missing).toEqual([]);
+});
+
 test("the guard's pattern actually matches the statements it forbids", () => {
+  for (const table of GRANT_ONLY_TABLES) {
+    expect([...`DELETE FROM ${table} WHERE seq < 10`.matchAll(DESTRUCTIVE_GRANT_ONLY)].length).toBeGreaterThan(0);
+    expect([...`TRUNCATE ${table}`.matchAll(DESTRUCTIVE_GRANT_ONLY)].length).toBeGreaterThan(0);
+  }
   for (const table of APPEND_ONLY_TABLES) {
     for (const stmt of [`DELETE FROM ${table} WHERE x`, `TRUNCATE ${table}`, `DROP TABLE IF EXISTS ${table}`]) {
       expect([...stmt.matchAll(DESTRUCTIVE)].length, `pattern must match: ${stmt}`).toBeGreaterThan(0);
     }
   }
   expect([...`TRUNCATE jobs, job_runs, ${APPEND_ONLY_TABLES[0]}`.matchAll(DESTRUCTIVE)].length).toBeGreaterThan(0);
+  expect([...`TRUNCATE ONLY ${APPEND_ONLY_TABLES[0]}`.matchAll(DESTRUCTIVE)].length).toBeGreaterThan(0);
+  expect([...`DELETE FROM ONLY ${APPEND_ONLY_TABLES[0]} WHERE x`.matchAll(DESTRUCTIVE)].length).toBeGreaterThan(0);
   // …and does not fire on an unprotected table or on a plain SELECT.
   expect([...`DELETE FROM jobs WHERE id = 1`.matchAll(DESTRUCTIVE)].length).toBe(0);
   expect([...`SELECT * FROM audit_log`.matchAll(DESTRUCTIVE)].length).toBe(0);
@@ -238,4 +364,31 @@ test("Markdown is read as fenced code only — a runbook STEP still fires, a sen
 
   // Non-Markdown is untouched by the fence rule — a bare .sql/.sh step still fires.
   expect([...stripToCode(`DELETE FROM ${table};`, "x.sql").matchAll(DESTRUCTIVE)].length).toBeGreaterThan(0);
+});
+
+// The privilege rule NARROWS what the grant-only scan reads, so it has to be
+// shown that it narrowed the right half: a test file that GRANTs the privilege
+// and quotes check 2's refusal is not a prune site, and the same file with a
+// real removal written into it is caught (red control).
+test("a grant-only table named in a privilege is not a prune, and a real DELETE or TRUNCATE in the same test file still is", () => {
+  const table = GRANT_ONLY_TABLES[0]!;
+  const privilegeOnly = [
+    `await sql.unsafe("GRANT DELETE ON ${table} TO rm_app");`,
+    `await sql.unsafe(\`GRANT DELETE, TRUNCATE ON ${table} TO rm_app, rm_worker\`);`,
+    `expect(reasons).toEqual(["rm_app holds DELETE/TRUNCATE on ${table}, which D53 (2) keeps revoked"]);`,
+    `await sql.unsafe("REVOKE DELETE ON ${table} FROM rm_app");`,
+  ].join("\n");
+  expect(grantOnlyRemovals(privilegeOnly, "synthetic.test.ts")).toEqual([]);
+
+  for (const removal of [
+    `await sql.unsafe("DELETE FROM ${table} WHERE seq < 10");`,
+    `await sql\`DELETE FROM public.${table} WHERE true\`;`,
+    `await sql.unsafe("TRUNCATE ${table}");`,
+    `await sql.unsafe("TRUNCATE TABLE ONLY ${table} RESTART IDENTITY");`,
+  ]) {
+    expect({ removal, hits: grantOnlyRemovals(`${privilegeOnly}\n${removal}`, "synthetic.test.ts").length }).toEqual({
+      removal,
+      hits: 1,
+    });
+  }
 });

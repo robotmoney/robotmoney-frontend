@@ -84,7 +84,7 @@ describe("check-model-selection.sh (executed, not merely present)", () => {
       ...ANCHOR,
       "scripts/lib/documented.ts": '// default is `opencode/deepseek-v4-flash`, resolved via the registry\nconst m = resolveAgentModel();\n',
       ".github/workflows/dl.yml": '      - run: curl -L "https://github.com/anomalyco/opencode/releases/download/v1.2.3/opencode-linux-x64.tar.gz"\n',
-      "docker-compose.smoke.yml": "  # unset takes the repo default (`opencode/deepseek-v4-flash`)\n",
+      "docker-compose.yml": "  # unset takes the repo default (`opencode/deepseek-v4-flash`)\n",
     });
     const r = run(root);
     expect(r.out).toContain("check-model-selection: OK");

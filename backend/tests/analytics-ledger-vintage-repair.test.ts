@@ -35,6 +35,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import * as client from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { buildVintageManifest } from "../src/analytics/run-ledger.ts";
 import {
   beginRun,
@@ -48,6 +49,7 @@ import { checkRawIndicatorHistoryParity, recordParityObservation } from "../src/
 import { checkAnalyticsLedgerGuard } from "../src/db/analytics-ledger-guard.ts";
 import { checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
 import { applyMigrationFile, reclaimAfterMigrations } from "../src/db/migrate.ts";
+import { cloneHistoryDatabase, createHistoryDatabase, type HistoryDatabase } from "./support/history-database.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
@@ -58,21 +60,14 @@ const MIGRATION = "0080_analytics_ledger_compaction.sql";
 // 0080 byte for byte as PR 1046 merged it (89e1268b), before #1050 extended it.
 const MIGRATION_AS_MERGED_1046 = join(testsDir, "fixtures", "ledger", "0080_analytics_ledger_compaction.as-merged-1046.sql");
 
-const DB_URL = process.env.DATABASE_URL;
-// Loud, never skipped: without tests/preload.ts there is no Postgres to migrate.
-if (!DB_URL) throw new Error("DATABASE_URL is unset — tests/preload.ts must provision the ephemeral Postgres first");
-
 type Db = ReturnType<typeof postgres>;
-let admin: Db;
+// History databases on the suite's cluster (tests/support/history-database.ts):
+// owned by the provider's bootstrap login and migrated as rm_owner the way the
+// runner migrates. The cluster admin only creates and drops them.
+let history: HistoryDatabase;
+let aloneHistory: HistoryDatabase;
 let old: Db; // the pre-#1035 database, repaired by 0080 in beforeAll
 let alone: Db; // the same pre-#1035 database, taken through 0080 as merged in 1046
-const names: string[] = [];
-
-function urlFor(database: string): string {
-  const url = new URL(DB_URL!);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
 const fixed = () => client.sql;
 
 // ── Fixture ─────────────────────────────────────────────────────────────────
@@ -257,13 +252,8 @@ let sizesAlone: Record<string, number> = {};
 let sizesRepaired: Record<string, number> = {};
 
 beforeAll(async () => {
-  admin = postgres(urlFor("postgres"), { max: 1, onnotice: () => {} });
-  const suffix = randomUUID().replace(/-/g, "").slice(0, 12);
-  const oldName = `tmp_vintage_repair_${suffix}`;
-  const aloneName = `tmp_vintage_repair_alone_${suffix}`;
-  await admin.unsafe(`CREATE DATABASE ${oldName}`);
-  names.push(oldName);
-  old = postgres(urlFor(oldName), { max: 1, onnotice: () => {} });
+  history = await createHistoryDatabase("vintage-repair", { max: 2 });
+  old = history.db;
 
   await old`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
   const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
@@ -336,10 +326,10 @@ beforeAll(async () => {
   // "0080 alone": the pre-#1035 database copied, then taken through 0080 as
   // PR 1046 merged it, plus the runner's VACUUM FULL.
   await old.end({ timeout: 5 });
-  await admin.unsafe(`CREATE DATABASE ${aloneName} TEMPLATE ${oldName}`);
-  names.push(aloneName);
-  old = postgres(urlFor(oldName), { max: 1, onnotice: () => {} });
-  alone = postgres(urlFor(aloneName), { max: 1, onnotice: () => {} });
+  // A template must have no open connection: `old` is closed above and reopened.
+  aloneHistory = await cloneHistoryDatabase(history.name, "vintage-repair-alone", { max: 2 });
+  old = postgres(history.urlFor(), { max: 2, onnotice: () => {} });
+  alone = aloneHistory.db;
   const asMerged = await readFile(MIGRATION_AS_MERGED_1046, "utf8");
   await alone.begin(async (tx) => {
     await tx.unsafe("SET LOCAL ROLE rm_owner");
@@ -358,9 +348,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await old?.end({ timeout: 5 });
-  await alone?.end({ timeout: 5 });
-  for (const name of names) await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-  await admin?.end({ timeout: 5 });
+  await aloneHistory?.drop();
+  await history?.drop();
 });
 
 // A version as the fixed writer's rules define it: everything but the id.
@@ -437,7 +426,7 @@ describe("issue #1050: the repaired ledger is the ledger the fixed writers write
              a.attnotnull, a.attisdropped
       FROM pg_class c
       JOIN pg_namespace n ON n.oid = c.relnamespace
-      LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0
+      LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
       WHERE n.nspname = 'public'
       ORDER BY c.relname, a.attnum`)].map((r) => JSON.stringify(r));
     expect(await shape(old)).toEqual(await shape(fixed()));
@@ -449,12 +438,12 @@ describe("issue #1050: the repaired ledger is the ledger the fixed writers write
     const raw = async (db: Db | typeof client.sql) => [...(await db`
       SELECT indicator, date::text AS date, value, source FROM raw_indicator_history
       WHERE indicator = ANY(${[...RAW]}::text[]) ORDER BY indicator, date`)];
-    expect(await raw(old)).toEqual(await raw(fixed()));
+    expect(await raw(old)).toEqual(await raw(fixtureDb));
     const events = async (db: Db | typeof client.sql) => [...(await db`
       SELECT operation, natural_key, previous_row, replacement_row FROM analytics_overwrite_events
       WHERE table_name = 'raw_indicator_history' AND natural_key ->> 'indicator' = ANY(${[...RAW]}::text[])
       ORDER BY natural_key ->> 'indicator', natural_key ->> 'date', id`)];
-    const expected = await events(fixed());
+    const expected = await events(fixtureDb);
     expect(expected.length).toBeGreaterThan(0);
     expect(await events(old)).toEqual(expected);
   });

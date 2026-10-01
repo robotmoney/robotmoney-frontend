@@ -82,8 +82,15 @@ in argv order, so this ordering is enforced by running `runtime` to completion
 in its **own** `bun test` process first; only once that process has fully
 exited does a second process run the other three, reading runtime's outcome
 from a suite-scoped handoff file. Both processes are wrapped in the single
-target below, which is also the command `.github/workflows/onboarding-evals-
-nightly.yml`'s `heavy`, schedule-only job runs:
+target below, which is the only invocation that preserves that ordering:
+
+> **On demand, not nightly** (corrected 2026-09-18). This used to be what
+> `.github/workflows/onboarding-evals-nightly.yml`'s `heavy`, schedule-only job
+> ran. Issue #378 retired that workflow — and deleted this `package.json` target
+> with it, while leaving the four evals and both documents that name it in
+> place, so the command documented here did not exist for seven weeks. The
+> target is restored because the evals it orders are still here; the nightly
+> schedule is not coming back.
 
 ```bash
 bun run eval:onboarding:isolated

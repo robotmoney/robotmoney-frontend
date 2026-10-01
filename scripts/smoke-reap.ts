@@ -23,13 +23,22 @@
 //   --env-class <c>      ci | local | all (default all). `ci` can never match the
 //                        standing stage smoke or an operator's shell.
 //   --dry-run            print the plan, mutate nothing.
+//   --instance <name>    only this deployment instance's compose project
+//                        (spec §1.1). Its own stack record does not protect it
+//                        from a sweep the operator aimed at it by name; the
+//                        live-project guard still does.
+//
+// G1 (the active-project guard) protects the compose project EVERY instance on
+// this host recorded in its state directory (scripts/lib/smoke-state.ts). It
+// used to read one `.agents/smoke-state.json` in the checkout, so a second
+// instance's stack was unprotected.
 //
 // Exit codes: 0 when the sweep completed (including "nothing to reap" — finding
 // and clearing a prior run's orphan is SUCCESS, not a regression to fail a PR
 // over). Non-zero when docker itself failed, an argument was invalid, or a
 // removal we ATTEMPTED did not succeed — an attempted-and-failed removal is a
 // surviving leak and must never read as green.
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import {
   executeReap,
   formatAge,
@@ -42,9 +51,7 @@ import {
 } from "./lib/smoke-reap.ts";
 import { makeDockerRunner } from "./lib/smoke-volumes.ts";
 import { isGithubActions, resolveStackEnvironment } from "./stack/naming.ts";
-
-const repoRoot = join(import.meta.dir, "..");
-const stateFile = join(repoRoot, ".agents", "smoke-state.json");
+import { instanceFlag, listInstances, readStackState, selectExistingInstance, stateRoot } from "./lib/smoke-state.ts";
 
 function flagValue(name: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -80,7 +87,32 @@ const envClass = envClassRaw as EnvClassSelector;
 // container and merely give a false sense of a guard.
 const selfEnvHash = isGithubActions(process.env) ? resolveStackEnvironment(process.env).hash : undefined;
 
-const active = readActiveProjects(stateFile);
+// Every instance's recorded project is active (G1); `--instance` narrows the
+// sweep to one instance's project instead.
+let scopedProject: string | undefined;
+let active: { projects: string[]; note: string };
+try {
+  const root = stateRoot(process.env);
+  const named = instanceFlag(process.argv.slice(2));
+  if (named !== undefined) {
+    const record = readStackState(selectExistingInstance(root, named));
+    if (record === null) {
+      console.error(`[smoke:reap] instance ${named} has no stack record, so it names no compose project to sweep.`);
+      process.exit(2);
+    }
+    scopedProject = record.project;
+    active = { projects: [], note: `--instance ${named}: sweeping only project=${scopedProject}` };
+  } else {
+    const reads = (existsSync(root) ? listInstances(root) : []).map((entry) => readActiveProjects(entry.paths.stackStateFile));
+    active = {
+      projects: reads.flatMap((r) => r.projects),
+      note: reads.length === 0 ? `no instance state under ${root} — G1 (active-project guard) has nothing to protect; G2 (live-project guard) still applies` : reads.map((r) => r.note).join("; "),
+    };
+  }
+} catch (err) {
+  console.error(`[smoke:reap] ${err instanceof Error ? err.message : err}`);
+  process.exit(2);
+}
 
 console.log(`[smoke:reap] ${dryRun ? "DRY RUN — nothing will be removed" : "REAPING"}`);
 console.log(`[smoke:reap]   scope:      robotmoney.env=${envClass === "all" ? "<any> (label present)" : envClass}`);
@@ -93,10 +125,10 @@ const run = makeDockerRunner();
 let containers;
 let networks;
 try {
-  containers = listLabeledContainers(run, envClass);
+  containers = listLabeledContainers(run, envClass).filter((c) => scopedProject === undefined || c.project === scopedProject);
   // Deliberately independent of the container result: interrupted Compose
   // teardown commonly leaves `<project>_default` after every container is gone.
-  networks = listManagedNetworks(run, envClass);
+  networks = listManagedNetworks(run, envClass).filter((n) => scopedProject === undefined || n.project === scopedProject);
 } catch (err) {
   // A dead daemon or incomplete discovery must never read as "no leaks".
   console.error(`[smoke:reap] could not enumerate managed resources: ${err instanceof Error ? err.message : err}`);

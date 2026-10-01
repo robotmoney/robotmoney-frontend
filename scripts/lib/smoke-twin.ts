@@ -1,4 +1,4 @@
-// BRINGING UP A DIGITAL TWIN for `bun smoke -- --db smoke-twin`.
+// BRINGING UP A DIGITAL TWIN for `bun smoke --local dump`.
 //
 // WHAT A TWIN IS. A local Postgres container holding a restored copy of the
 // production database, which the stack then boots against. It exists so an
@@ -57,7 +57,7 @@ function bridgeGateway(): string {
     "docker", "network", "inspect", "bridge", "--format", "{{(index .IPAM.Config 0).Gateway}}",
   ]);
   const gw = new TextDecoder().decode(out.stdout).trim();
-  if (!gw) throw new Error("--db smoke-twin: could not determine the Docker bridge gateway (docker network inspect bridge)");
+  if (!gw) throw new Error("--local dump: could not determine the Docker bridge gateway (docker network inspect bridge)");
   return gw;
 }
 
@@ -80,10 +80,10 @@ export async function bringUpTwin(opts: {
   log: (m: string) => void;
 }): Promise<SmokeTwinHandle> {
   const backup = resolveBackupFiles(opts.backupDir);
-  if ("error" in backup) throw new Error(`--db smoke-twin: ${backup.error}`);
+  if ("error" in backup) throw new Error(`--local dump: ${backup.error}`);
 
   const volume = smokeTwinVolumeName(opts.project, backup.stamp);
-  opts.log(`--db smoke-twin: restoring backup ${backup.stamp} into a local container (this takes a few minutes)`);
+  opts.log(`--local dump: restoring backup ${backup.stamp} into a local container (this takes a few minutes)`);
   const restored = await restoreBackupIntoContainer(backup, opts.log, {
     bindHost: bridgeGateway(),
     project: opts.project,
@@ -93,7 +93,7 @@ export async function bringUpTwin(opts: {
     // Tear the half-built container down here: it is not yet recorded anywhere
     // the normal cleanup path can find it.
     if (restored.container) teardownContainer(restored.container, opts.log);
-    throw new Error(`--db smoke-twin: ${restored.error}`);
+    throw new Error(`--local dump: ${restored.error}`);
   }
 
   const url = `postgres://${restored.username}:${restored.password}@${restored.host}:${restored.port}/${restored.database}`;
@@ -135,7 +135,7 @@ export async function bringUpTwin(opts: {
 export function assertSmokeTwinIsTarget(spawnEnv: Record<string, string>, smokeTwinUrl: string): void {
   if (spawnEnv.DATABASE_URL !== smokeTwinUrl) {
     throw new Error(
-      `--db smoke-twin: the compose environment's DATABASE_URL is NOT the smoke-twin's — refusing to boot. ` +
+      `--local dump: the compose environment's DATABASE_URL is NOT the smoke-twin's — refusing to boot. ` +
         `The stack would have migrated and written to ${redactPostgresUrl(spawnEnv.DATABASE_URL ?? "(unset)")} ` +
         `instead of the restored copy. (The repo-root .env is auto-loaded by compose; the stack config must win.)`,
     );
@@ -174,55 +174,6 @@ export function smokeTwinTeardownNarration(dp: ResolvedDataPath): string | undef
 }
 
 /**
- * Default the restored twin's consensus judge to ENFORCE — WITH A MODEL — before
- * any session sits.
- *
- * A restored dump carries whatever swarm_judge_config.mode the production replica
- * last shipped — normally 'off', which enqueues a judge job and SKIPS it, so a
- * default twin would publish no validator consensus receipts at all. Enforce is
- * what makes every judged session genuinely publish one, which is the standing
- * twin's reason to exist.
- *
- * THE MODEL IS NOT OPTIONAL AND IS SET FIRST (issue #969). A restored dump also
- * carries production's `swarm_judge_config.model`, which is NULL — and `enforce`
- * with no model is exactly the state that made every published receipt on this
- * twin's predecessor an attestation of template prose. Since #969 the backend
- * refuses the combination outright, so setting the mode alone does not merely
- * produce a fake judging, it now FAILS the boot. The model comes from
- * resolveAgentModel(), D22 rule 1's single selection signal and the same one
- * every member agent container runs under, so the judge and the committee it
- * judges cannot end up on different models.
- *
- * Lives HERE not in smoke-main.ts (which is under a hard size ceiling,
- * smoke-main-split.test.ts), and runs through the real admin API after the stack
- * is healthy and BEFORE any session convenes — a fast-cadence twin fires its
- * first session within minutes — so the CI `--once` rehearsal and the standing
- * tunnel boot both exercise the same default a cutover sees. The CI judge-role
- * coverage block later flips modes around ONE judged session and restores what IT
- * read: enforce, because this ran first.
- */
-export async function defaultSmokeTwinJudgeMode(
-  backendUrl: string,
-  automationToken: string,
-  log: (m: string) => void = (m) => console.log(`[smoke] ${m}`),
-): Promise<void> {
-  process.env.BACKEND_URL = backendUrl;
-  const session = await import("./swarm/session.ts");
-  const { resolveAgentModel } = await import("./model-registry.ts");
-  // Model BEFORE mode: the backend validates the pair against the resulting
-  // row, so `enforce` would be refused while the restored NULL is still in place.
-  // The STORED id comes back — the backend strips the registry's `opencode/`
-  // provider prefix, which Zen's REST endpoint answers with 401, so logging the
-  // argument instead would name a model no judging will ever use.
-  const model = await session.setJudgeModel(resolveAgentModel(), automationToken);
-  // The STORED id goes back in the enable request (migration 0056 constrains the
-  // pair, and setJudgeMode refuses to enable without it) — not the registry id,
-  // whose `opencode/` prefix Zen answers with a 401.
-  await session.setJudgeMode("enforce", automationToken, model);
-  log(`smoke-twin: consensus judge set to ENFORCE with model=${model} — every judged session will publish a receipt a model actually authored.`);
-}
-
-/**
  * What to tell the operator after a smoke-twin boot ends.
  *
  * Deliberately NOT called "resume": an ephemeral or --pg-data boot rejoins the
@@ -234,7 +185,7 @@ export function smokeTwinResumeHint(dp: ResolvedDataPath): string[] {
   if (dp.kind !== "smoke-twin") return [];
   return [
     `the smoke-twin's restored copy of production is KEPT in volume ${dp.volume}.`,
-    `  re-run (restores a FRESH copy):  bun smoke -- --db smoke-twin`,
+    `  re-run (restores a FRESH copy):  bun smoke --local dump --migrate`,
     `  reclaim the copy:                bun run smoke:clean`,
   ];
 }

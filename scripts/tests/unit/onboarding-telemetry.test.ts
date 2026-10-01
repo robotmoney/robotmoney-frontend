@@ -116,6 +116,10 @@ describe("onboarding telemetry stream", () => {
       'claim response {"claimToken":"tok_generated_abcdef123456","memberId":"member-7"}',
       'token claim response {"token":"generated-bearer-without-prefix"}',
       "ADMIN_TOKEN=admin-secret-123456",
+      // Any `*_TOKEN=` assignment, not a list of names: the service tokens
+      // are files now (smoke spec §3), and a value that still reaches a
+      // transcript under any token-shaped name is redacted.
+      "GITHUB_TOKEN=gh-secret-123456",
       '"analytics_token": "analytics-secret-123456"',
       "RMPC_COMMITTEE_IDENTITY_PASSPHRASE=pass-secret-123456",
       '"privateKey":"base64-private-material"',
@@ -128,6 +132,7 @@ describe("onboarding telemetry stream", () => {
       "tok_generated_abcdef123456",
       "generated-bearer-without-prefix",
       "admin-secret-123456",
+      "gh-secret-123456",
       "analytics-secret-123456",
       "pass-secret-123456",
       "base64-private-material",

@@ -12,7 +12,23 @@
 //      configured minimum window)
 //   5. insufficient count (fewer than the configured minimum observations)
 import { sql, type DbHandle } from "../../db/client.ts";
+import { on, registerQuery } from "../../db/registry.ts";
 import { ALL_PARITY_DOMAINS, type ParityDomain } from "./parity.ts";
+
+// A registered query (smoke-production-spec.md §7.1). The gate is evaluated
+// by the operator's cutover CLI and by setAnalyticsReadMode('ledger'), which
+// only that CLI calls; both run on the api's pool.
+const readObservations = registerQuery({
+  role: "rm_app",
+  object: "analytics_parity_observations",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/gate:evaluateCutoverGate",
+  purpose: "Read every parity observation, oldest first per domain, to decide whether ledger-mode reads may be armed.",
+  callers: ["scripts/analytics-ledger-cutover-gate"],
+  probe: {
+    statement: "SELECT domain, observed_at, matched FROM analytics_parity_observations ORDER BY domain, observed_at ASC",
+  },
+});
 
 export interface CutoverGateConfig {
   minWindowMs: number;
@@ -49,9 +65,9 @@ export async function evaluateCutoverGate(
   config: CutoverGateConfig = defaultCutoverGateConfig(),
   now: Date = new Date(),
 ): Promise<CutoverGateResult> {
-  const rows = (await db`
+  const rows = await on(db, readObservations)<ObservationRow>`
     SELECT domain, observed_at, matched FROM analytics_parity_observations ORDER BY domain, observed_at ASC
-  `) as unknown as ObservationRow[];
+  `;
 
   const byDomain = new Map<ParityDomain, ObservationRow[]>();
   for (const row of rows) {

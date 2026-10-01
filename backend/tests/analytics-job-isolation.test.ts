@@ -20,6 +20,7 @@ import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { directTelemetrySink } from "../src/analytics/store/telemetry-direct.ts";
 
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 // Own database, cloned from the migrated template — see support/clean-db.ts.
 useCleanDatabase(import.meta.file);
@@ -30,9 +31,9 @@ useCleanDatabase(import.meta.file);
 // table WHOLE regardless of its `ON DELETE SET NULL`. The queue fixture was
 // destroying the audit trail; a DELETE merely detaches it.
 beforeEach(async () => {
-  await sql`DELETE FROM job_runs`;
-  await sql`DELETE FROM jobs`;
-  await sql`DELETE FROM job_schedules`;
+  await fixtureDb`DELETE FROM job_runs`;
+  await fixtureDb`DELETE FROM jobs`;
+  await fixtureDb`DELETE FROM job_schedules`;
 });
 
 test("registry: regime.classify and research.refresh are distinct kinds; analytics.run is retired", () => {
@@ -63,10 +64,10 @@ test("research.refresh invokes ONLY the research tools (never regime, never the 
 
 test("seed: independent regime/research cadences; analytics.run schedules deleted and queued jobs dead-lettered", async () => {
   // Simulate an existing deployment that still carries the retired combined kind.
-  await sql`INSERT INTO job_schedules (kind, cron) VALUES ('analytics.run', '30 22 * * *')`;
-  const [{ id: staleJob }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('analytics.run', '{}') RETURNING id`;
+  await fixtureDb`INSERT INTO job_schedules (kind, cron) VALUES ('analytics.run', '30 22 * * *')`;
+  const [{ id: staleJob }] = await fixtureDb`INSERT INTO jobs (kind, payload) VALUES ('analytics.run', '{}') RETURNING id`;
 
-  await seed();
+  await seed(fixtureDb);
 
   const rows = await sql<{ kind: string; cron: string }[]>`
     SELECT kind, cron FROM job_schedules WHERE kind IN ('regime.classify', 'research.refresh', 'analytics.run')`;
@@ -137,7 +138,7 @@ test("research.refresh folds each tool's telemetry outcome — including a per-t
 });
 
 test("scheduler: separate per-kind dedupe keys — one slot per kind, never cross-kind", async () => {
-  await sql`INSERT INTO job_schedules (kind, cron, enabled, next_run_at)
+  await fixtureDb`INSERT INTO job_schedules (kind, cron, enabled, next_run_at)
             VALUES ('regime.classify', '*/2 * * * *', true, now() - interval '3 minutes'),
                    ('research.refresh', '1-59/2 * * * *', true, now() - interval '3 minutes')`;
   expect(await tickScheduler()).toBeGreaterThan(0);
@@ -169,8 +170,8 @@ test(
     const originalHandler = handlers["regime.classify"];
     handlers["regime.classify"] = makeAnalyticsHandlers(directRunner).regimeClassify;
     try {
-      const [{ id: jobId }] = await sql<{ id: number }[]>`
-        INSERT INTO jobs (kind, payload) VALUES ('regime.classify', ${sql.json({ asof: "2026-05-15" })}) RETURNING id`;
+      const [{ id: jobId }] = await fixtureDb<{ id: number }[]>`
+        INSERT INTO jobs (kind, payload) VALUES ('regime.classify', ${fixtureDb.json({ asof: "2026-05-15" })}) RETURNING id`;
 
       expect(await processOneJob({ lane: LANES.analytics })).toBe(true);
 

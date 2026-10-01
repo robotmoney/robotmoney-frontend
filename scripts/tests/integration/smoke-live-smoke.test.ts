@@ -32,7 +32,7 @@ import {
   LIVE_SMOKE_DEADLINE_MS,
   RESEARCH_KEYS,
 } from "../../smoke-live-smoke.ts";
-import { resolveSmokeCadence } from "../../lib/smoke-schedule.ts";
+import { resolveSmokeCadence } from "../../lib/smoke-cadence.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 
@@ -81,7 +81,7 @@ interface StubOverrides {
 }
 function startStubBackend(o: StubOverrides = {}) {
   return Bun.serve({
-    port: 0,
+    port: 0, hostname: "127.0.0.1",
     fetch(req) {
       const p = new URL(req.url).pathname;
       if (p === ROUTES.swarm.sessions) return Response.json(o.sessions ?? sessionsPayload());

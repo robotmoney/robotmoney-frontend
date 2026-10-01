@@ -4,7 +4,7 @@
 // stdout. Both are now recorded on a durable, queryable, append-only event
 // log (swarm_agent_health_events) and exposed admin-only via
 // GET /api/swarm/admin/agent-health.
-import { test, expect } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,9 +14,12 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
+import { provisionOperatorToken } from "./support/automation-auth.ts";
+import { adminUrl, harnessConnection } from "./support/cluster.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
@@ -32,6 +35,13 @@ const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 // file admits into is its own, with no reset of anyone else's rows.
 useCleanDatabase(import.meta.file);
 
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on.
+let OPERATOR = "";
+beforeAll(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
+
 async function activeMember() {
   const id = rid("m");
   const { publicKeyB64, privateKey } = await generateKeyPair();
@@ -45,7 +55,7 @@ async function activeMember() {
 }
 
 async function getAgentHealth(query: string) {
-  const req = new Request(`http://test/api/swarm/admin/agent-health${query}`);
+  const req = new Request(`http://test/api/swarm/admin/agent-health${query}`, { headers: { "X-Admin-Token": OPERATOR } });
   return handleSwarmAdmin(req, new URL(req.url));
 }
 
@@ -107,6 +117,61 @@ test("closeWindow records exactly one absent event per missing expected roster m
 
   const excludedByPresentMember = await getAgentHealth(`?memberId=${present.id}`);
   expect((excludedByPresentMember?.body as { events: unknown[] }).events).toHaveLength(0);
+});
+
+test("closeWindow closes the window even when the absence record cannot be written (telemetry never rolls back the transition)", async () => {
+  // The production incident that motivates this: closeWindow used to run the
+  // state transition and the absence inserts in ONE transaction, so a failure
+  // in the inserts (here: the partial unique index the ON CONFLICT clause
+  // depends on is missing) rolled the transition back. The job retried and
+  // settled `dead`, and the session stayed `collecting` forever — blocking
+  // every later lifecycle step and every submission for its subject.
+  const subj = rid("s3");
+  // PROSE ONLY. This session is scenery for the telemetry path — it asserts
+  // nothing about an allocation — and since T17 a weightless take filed against
+  // an `ensureSubject()` (bucket_weights) subject is refused 400 at submission.
+  await ensureProseSubject(subj, "S3");
+  const present = await activeMember();
+  const absent = await activeMember();
+  const session = await ic.openSession(subj);
+  const date = sessionDate(session);
+  for (const m of [present, absent]) {
+    await sql`INSERT INTO swarm_session_members (session_id, member_id, member_name, status)
+              VALUES (${session.id}, ${m.id}, ${m.id}, 'expected')`;
+  }
+  await ic.publishBrief(session.id, 60);
+
+  const sub = { memberId: present.id, date, subjectId: subj, nonce: rid("n"), stance: "neutral", confidence: 0.5, body: "present" };
+  const signature = await signMessage(canonicalizeSubmission(sub), present.privateKey);
+  expect((await ic.submitRecommendation(present.token, { ...sub, signature })).status).toBe(201);
+
+  // Break the absence-record path: drop the partial unique index that the
+  // insert's ON CONFLICT (session_id, member_id) WHERE event_type='absent'
+  // clause targets. Every such insert now fails.
+  await fixtureDb`DROP INDEX swarm_agent_health_events_absent_once_idx`;
+  try {
+    const result = await ic.closeWindow(session.id);
+    // The transition COMMITTED despite the telemetry failure...
+    const state = (await sql<{ state: string }[]>`SELECT state FROM swarm_sessions WHERE id = ${session.id}`)[0]!.state;
+    expect(state).toBe("window_closed");
+    // ...and the failure is surfaced in the return value, not thrown.
+    expect(result).toMatchObject({ sessionId: session.id, state: "window_closed" });
+    const warnings = (result as { telemetryWarnings?: string[] }).telemetryWarnings ?? [];
+    expect(warnings.some((w) => w.includes("absence event for"))).toBe(true);
+    // The session closed with no absence event on the record — the honest
+    // outcome of a broken telemetry path; the alternative (an open window)
+    // is the incident.
+    const rows = await sql`SELECT id FROM swarm_agent_health_events WHERE session_id = ${session.id}`;
+    expect(rows).toHaveLength(0);
+
+    // A re-close is still a no-op and still does not throw.
+    await ic.closeWindow(session.id);
+  } finally {
+    await fixtureDb`
+      CREATE UNIQUE INDEX IF NOT EXISTS swarm_agent_health_events_absent_once_idx
+        ON swarm_agent_health_events (session_id, member_id)
+        WHERE event_type = 'absent'`;
+  }
 });
 
 test("a wrong-key/tampered submission is rejected 400 and recorded to the durable rejected-signature surface", async () => {
@@ -190,7 +255,7 @@ test("closeWindow commits window_closed even when absence-event recording fails,
   const signature = await signMessage(canonicalizeSubmission(sub), present.privateKey);
   expect((await ic.submitRecommendation(present.token, { ...sub, signature })).status).toBe(201);
 
-  await sql.unsafe(`DROP INDEX swarm_agent_health_events_absent_once_idx`);
+  await fixtureDb.unsafe(`DROP INDEX swarm_agent_health_events_absent_once_idx`);
 
   const result = await ic.closeWindow(session.id);
   expect(result.state).toBe("window_closed");
@@ -224,15 +289,14 @@ test("closeWindow commits window_closed even when absence-event recording fails,
 // 0020, to genuinely re-test 0020's idempotency against the schema shape it
 // was actually written for (same pattern as swarm-claim.test.ts's 0019 test).
 test("0020 migration is idempotent when executed repeatedly against real Postgres", async () => {
-  const base = new URL(config.databaseUrl);
+  const base = new URL(adminUrl());
   const dbName = `tmp_0020_idem_${crypto.randomUUID().slice(0, 8)}`;
+  // cluster admin: CREATE/DROP DATABASE is superuser-only here; the schema is the owner's.
   const admin = postgres(base.toString(), { max: 1, onnotice: () => {} });
-  await admin.unsafe(`CREATE DATABASE ${dbName}`);
+  await admin.unsafe(`CREATE DATABASE ${dbName} OWNER rm_owner`);
   await admin.end();
 
-  const tmpUrl = new URL(base.toString());
-  tmpUrl.pathname = `/${dbName}`;
-  const db = postgres(tmpUrl.toString(), { max: 1, onnotice: () => {} });
+  const db = harnessConnection(dbName);
   try {
     const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
     const upTo0020 = files.filter((f) => f <= "0020_committee_agent_health.sql");

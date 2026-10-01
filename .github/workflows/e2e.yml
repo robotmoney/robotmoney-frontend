@@ -205,6 +205,13 @@ jobs:
       RMPC_CACHE_DIR: ${{ github.workspace }}/.rmpc-cache
     steps:
       - uses: actions/checkout@v4
+      # Instance state (tokens, journal, receipt) lives outside the checkout
+      # (smoke spec §1.1) and, on this shared runner, in a directory of this job
+      # alone, so the lifecycle step below finds exactly one instance. The
+      # `runner` context is not available in a job-level `env`, so the path is
+      # exported from a step, where RUNNER_TEMP is set.
+      - name: Set the smoke state root
+        run: echo "RM_SMOKE_STATE_ROOT=$RUNNER_TEMP/smoke-state" >> "$GITHUB_ENV"
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.5"
@@ -356,36 +363,45 @@ jobs:
       # infrastructure behind it any more.
       - name: Set up Docker builder
         uses: docker/setup-buildx-action@v3
+      # The compose project this job's boot will use. NOT chosen here: `bun
+      # smoke` derives it from the job's own identity (scripts/stack/naming.ts,
+      # `class: "ci"`, hashed from GITHUB_WORKFLOW/RUN_ID/RUN_ATTEMPT/JOB, stable
+      # for every step of one job), and refuses an exported SMOKE_PROJECT (spec
+      # §1 retires it with no alias). This step asks the same helper the boot
+      # asks, BEFORE the boot runs, so the billing diagnostic and the always()
+      # teardown below can name the project even when the boot is killed.
+      # The `rm_ci_` prefix is the single fact a reaper needs before it touches
+      # anything on this shared host; scripts/tests/unit/stack-naming.test.ts
+      # asserts this step resolves through the helper and that the boot step
+      # pins nothing.
+      - name: Resolve this run's smoke project
+        id: smoke-project
+        run: bun --no-env-file scripts/stack/print-project-name.ts >> "$GITHUB_OUTPUT"
       - name: Full-stack smoke (smoke readiness gate)
         # Keep the complete transcript locally until the next step. `pipefail`
         # preserves smoke's exit status through tee, so capturing evidence can
-        # never turn a failed readiness gate green.
+        # never turn a failed readiness gate green. `--local blank --migrate
+        # --seed`: no local mode implies either preparation step (spec §4.3,
+        # §5), so this job asks for both — its own fresh local stack, migrated,
+        # with demo data, never production. `--no-env-file`: the boot refuses an
+        # environment bun filled from the checkout's `.env`.
+        #
+        # UNATTENDED (spec §10 W2 "Unattended CI boot `--local blank --migrate
+        # --seed`"): RM_ENV=stage is the policy (§4.1: stage, test and CI share
+        # it), stdin is closed, and a local mode has no terminal prompt (§5:
+        # the owner password is the one smoke generated). A boot that asked for
+        # rm_owner or a y/n here would be waiting on nobody, so the transcript
+        # is checked for either prompt and the step fails if one appeared.
         run: |
           set -o pipefail
-          bun run scripts/smoke.ts 2>&1 | tee "$RUNNER_TEMP/e2e-smoke.log"
+          bun --no-env-file scripts/smoke.ts --local blank --migrate --seed --credentials test-fixtures/smoke/empty-roster.credentials.json < /dev/null 2>&1 | tee "$RUNNER_TEMP/e2e-smoke.log"
+          if grep -Eq "rm_owner password|type y to continue" "$RUNNER_TEMP/e2e-smoke.log"; then
+            echo "::error::the unattended CI boot printed an interactive prompt (spec §5: no terminal prompt exists in local modes)"
+            exit 1
+          fi
         env:
           CI: "true"
-          # Pin a deterministic, per-run compose project name (issue: smoke
-          # persistent volumes). Teardown now keeps the postgres volume by default,
-          # so this required boot on the SHARED self-hosted runner must reclaim its
-          # OWN volume and no one else's. A pinned name makes the volume label
-          # (robotmoney.smoke.project=<this>) unique per run+attempt, so both the
-          # in-process cleanup (smoke-main.ts cleanCiVolume) and the always() backstop
-          # step below can scope the delete to exactly this run — never the co-tenant
-          # standing smoke. run_attempt makes reruns collision-free.
-          #
-          # The `rm_ci_` prefix is the CI half of the environment-scoped naming
-          # scheme (scripts/stack/naming.ts, CI_PROJECT_PREFIX) — the single fact
-          # a reaper needs before it touches anything on this shared host: a
-          # `rm_smoke_*` container belongs to the standing stage smoke or to an
-          # operator's shell and must never be swept by CI. Spelled from the
-          # GitHub context rather than left to the helper's default because the
-          # `always()` teardown step below has to name the same project from
-          # YAML; scripts/tests/unit/stack-naming.test.ts asserts both values
-          # here carry the prefix. Every container ALSO carries
-          # robotmoney.env=ci + robotmoney.env.hash labels from the helper, which
-          # is the channel tooling should select on.
-          SMOKE_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
+          RM_ENV: stage
           # Swarm takes are always live-authored through opencode. A missing
           # credential, CLI, or model response fails this required gate loudly;
           # there is no deterministic memo fallback.
@@ -400,6 +416,59 @@ jobs:
           # than the retired hermetic boot was — an accepted, deliberate
           # consequence of issue #147/#163, not a bug in this workflow.
           #
+          # ONBOARDING_REAL_EVAL is set on the "CI scenario checks" step below: the
+          # boot stops at readiness and no longer reads it.
+          # The swarm session always requires live authoring. On an
+          # untrusted fork GitHub supplies an empty secret and the session fails
+          # loudly instead of fabricating a template take.
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+        # 40 min for the pre-existing checks + headroom for the onboarding eval
+        # on the runs that spend one (the nightly schedule mirror, a
+        # `real-eval`-labelled PR, a dispatch with real_eval=true — issue #289;
+        # a plain push to main no longer spends one, issue #803; an ordinary PR
+        # run stops well short of this ceiling because no eval runs there; the
+        # ceiling is not split per event, so every eval-spending path keeps the
+        # same headroom). Headroom is DERIVED, not guessed: DEFAULT_TIMEOUT_MS is 30
+        # minutes per admission attempt (raised from 20 on measurement — see
+        # onboarding-eval.ts's comment: a real admission took 1183s) and
+        # runOnboardingEvalWithRetry allows 2 attempts with a 45s backoff, so
+        # the eval's own worst case is ~61 min. 40 + 61 ≈ 101, rounded to 105.
+        # Raising DEFAULT_TIMEOUT_MS without raising this would just move the
+        # truncation from the eval to the job, which reports as an infra kill
+        # rather than the honest `timed-out` outcome.
+        timeout-minutes: 105
+      # Lifecycle e2e (issue #1026, smoke spec §10 W1/W3, scheduler spec §10): the
+      # stack the boot above left running is checked for the real scheduler, one
+      # collecting session per active subject, an agent and a judge running as
+      # containers under `restart: unless-stopped`, and ONE turnover after one
+      # short epoch (the first session published, the second collecting). It then
+      # removes the scheduler's token file and stops its container to see the
+      # failures name it, and leaves the stack up (`--keep`) for the checks step
+      # below. Fixture keys only: test-fixtures/smoke. The boot above passes the fixture credential file, so
+      # it stops at readiness (no host-side session driver: the standing
+      # participants and the scheduler own the sessions) and leaves the stack up.
+      - name: Lifecycle e2e (scheduler, participants, one turnover)
+        run: bun --no-env-file scripts/smoke-e2e.ts --attached --keep
+        env:
+          CI: "true"
+          RM_ENV: stage
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+        timeout-minutes: 30
+      # CI scenario checks (issue #1026): what the boot used to run itself before
+      # a credential file made it stop at readiness. Against the stack the
+      # lifecycle step left up (`--keep`): the swarm session driver (two live
+      # sessions, the cross-role denials), the starter agent, the frontend and
+      # browser checks, the live steady-state and verify-live assertions, and the
+      # opt-in real-inference onboarding sweep. Its own step, so the documented
+      # boot and the lifecycle verdict stay as they are. The smoke:down step below
+      # ends the stack whatever this step did.
+      - name: CI scenario checks (session, starter agent, browser, live-smoke, verify-live, onboarding sweep)
+        run: bun --no-env-file scripts/smoke-ci-checks.ts
+        env:
+          CI: "true"
+          RM_ENV: stage
           # Stage 7 (§11 R8) + issue #289: the onboarding eval is OFF by default
           # on pull requests and opt-in per PR; issue #803 also took it OFF a
           # plain push to main. ONBOARDING_REAL_EVAL below resolves to "1" for
@@ -434,26 +503,23 @@ jobs:
           # byte-identical, which
           # scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts asserts.
           ONBOARDING_REAL_EVAL: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && '1' || '' }}
-          # The swarm session always requires live authoring. On an
-          # untrusted fork GitHub supplies an empty secret and the session fails
-          # loudly instead of fabricating a template take.
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
-        # 40 min for the pre-existing checks + headroom for the onboarding eval
-        # on the runs that spend one (the nightly schedule mirror, a
-        # `real-eval`-labelled PR, a dispatch with real_eval=true — issue #289;
-        # a plain push to main no longer spends one, issue #803; an ordinary PR
-        # run stops well short of this ceiling because no eval runs there; the
-        # ceiling is not split per event, so every eval-spending path keeps the
-        # same headroom). Headroom is DERIVED, not guessed: DEFAULT_TIMEOUT_MS is 30
-        # minutes per admission attempt (raised from 20 on measurement — see
-        # onboarding-eval.ts's comment: a real admission took 1183s) and
-        # runOnboardingEvalWithRetry allows 2 attempts with a 45s backoff, so
-        # the eval's own worst case is ~61 min. 40 + 61 ≈ 101, rounded to 105.
-        # Raising DEFAULT_TIMEOUT_MS without raising this would just move the
-        # truncation from the eval to the job, which reports as an infra kill
-        # rather than the honest `timed-out` outcome.
+          # The paid CoinGecko key (issue #1062). GeckoTerminal is CoinGecko's: with the key, the smoke's new_pools sweep
+          # and token-price lookups use pro-api.coingecko.com/api/v3/onchain instead of the keyless host, which allows
+          # ~10 calls a minute per IP and which this runner shares with the standing rm_smoke_* stack, so the keyless
+          # path 429s in CI (see "still throttled (HTTP 429)" in earlier runs). It reaches the containers through
+          # DEMO_COMPOSE_PASSTHROUGH. On a fork PR GitHub supplies an empty secret and the smoke falls back to the keyless
+          # host, exactly as before. The source ledger redacts the key header (source-ledger.ts), so it is not saved in
+          # the database or in any artifact built from it.
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+        # The checks this step runs took 40 minutes before, plus headroom for the
+        # onboarding eval on the runs that spend one (see the derivation on the
+        # boot step's timeout: about 61 minutes worst case, so 105 in all).
         timeout-minutes: 105
+      - name: Stop this job's smoke stack (smoke:down)
+        if: always()
+        run: bun --no-env-file scripts/smoke-down.ts || echo "smoke:down had nothing to stop, or the compose teardown below is the gate"
       # The OpenCode client emits this typed marker only after Zen reports an
       # exhausted balance. Surface it in the job summary, where an operator can
       # distinguish an external billing prerequisite from an application/E2E
@@ -465,7 +531,7 @@ jobs:
       - name: Diagnose OpenCode billing exhaustion
         if: ${{ failure() }}
         env:
-          SMOKE_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
+          SMOKE_PROJECT: ${{ steps.smoke-project.outputs.name }}
         run: |
           set -euo pipefail
           diagnostic_paths=("$RUNNER_TEMP/e2e-smoke.log")
@@ -502,20 +568,23 @@ jobs:
       # given (scripts/smoke-clean.ts's header), so this step can no longer be
       # green while a leak survives.
       #
-      # Strictly scoped to THIS run: `-p "$SMOKE_PROJECT"` (byte-identical to the
-      # boot step's SMOKE_PROJECT above) and the same project label on the volume.
+      # Strictly scoped to THIS run: `-p "$SMOKE_PROJECT"` (the name the
+      # "Resolve this run's smoke project" step read from the same helper the
+      # boot uses) and the same project label on the volume.
       # This runner is shared with the standing stage smoke, which must never be
       # touched — hence no bare `docker compose down`, no `docker system prune`,
       # no name globbing. `--remove-orphans` is what kills the dynamically
       # spawned member-agent eval containers that the compose model does not
       # declare; `-v` reclaims this project's volumes in the same pass.
       #
-      # WEB_PORT / POSTGRES_PORT are placeholders purely to satisfy compose
-      # INTERPOLATION: docker-compose.yml's port lines are `${VAR:?…}` and refuse
-      # to resolve without a value (c0d34f4). `down` publishes nothing, so the
-      # numbers only have to exist — same trick scripts/smoke-down.ts uses. The
-      # `|| true` is deliberate: a compose-down failure must not skip the
-      # smoke-clean verdict below, which is the step's actual gate.
+      # RM_INSTANCE / RM_INSTANCE_STATE_DIR are placeholders purely to satisfy
+      # compose INTERPOLATION: docker-compose.yml spells both `${VAR:?…}` (the
+      # instance's state directory has no checkout fallback, spec §1.1) and
+      # refuses to parse without them. `down` mounts nothing, so the values only
+      # have to exist; `-p "$SMOKE_PROJECT"` is what selects this run's stack.
+      # (WEB_PORT / POSTGRES_PORT are the same trick, kept for older compose
+      # files.) The `|| echo` is deliberate: a compose-down failure must not
+      # skip the smoke-clean verdict below, which is the step's actual gate.
       # ── The admission RECORD (issue #373) ─────────────────────────────────
       # Reporting on the admission that ALREADY ran — no new harness, no
       # sampling loop, no second stack bring-up. scripts/lib/smoke-main.ts
@@ -557,14 +626,17 @@ jobs:
           set -u
           echo "::group::docker compose -p $SMOKE_PROJECT down -v --remove-orphans"
           docker compose -p "$SMOKE_PROJECT" \
-            -f docker-compose.yml -f docker-compose.smoke.yml \
+            --env-file /dev/null \
+            -f docker-compose.yml \
             down -v --remove-orphans || echo "compose down exited non-zero — smoke-clean below is the gate"
           echo "::endgroup::"
           bun run scripts/smoke-clean.ts --project "$SMOKE_PROJECT"
         env:
-          SMOKE_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
+          SMOKE_PROJECT: ${{ steps.smoke-project.outputs.name }}
           WEB_PORT: "1"
           POSTGRES_PORT: "1"
+          RM_INSTANCE: teardown
+          RM_INSTANCE_STATE_DIR: /nonexistent-teardown-placeholder
       # Cross-run orphan reaper (the third gap behind run 30406428674): even a
       # perfect teardown above only ever cleans ITS OWN run, so a run whose
       # teardown was killed outright leaked forever. This host had accumulated

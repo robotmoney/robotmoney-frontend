@@ -1,6 +1,5 @@
 // Inference-OFF rails check for the real-inference onboarding eval
-// (scripts/lib/onboarding-eval.ts, docs/architecture.md §11 R8, Stage 5 of
-// docs/plans/onboarding-ic-workflow.md). This is a rails check, NOT a
+// (scripts/lib/onboarding-eval.ts and docs/architecture.md §11 R8). This is a rails check, NOT a
 // substitute for the eval: it proves every piece the eval rides on works — the
 // member-agent image builds and starts, it can reach the swarm REST API
 // over the compose network, and a signed apply built with the real `rmpc`
@@ -62,14 +61,15 @@ import {
   createStack,
   DEFAULT_COMPOSE_FILES,
   DEFAULT_STACK_DATABASE,
-  generateStackCredentials,
+  throwawayStackDatabase,
   resolveStackEnvironment,
   stackProjectName,
   type Stack,
-  type StackCredentials,
   type StackEnvironment,
 } from "../../stack/index.ts";
 import { makeDockerRunner, purgeSmokeEvalContainers } from "../../lib/smoke-volumes.ts";
+import { throwawayInstance } from "../../lib/smoke-state.ts";
+import { readServiceToken } from "../../lib/smoke-secret.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -95,7 +95,11 @@ const TEST_TIMEOUT_MS = 2 * 60_000;
 // compose call — so merely importing this file costs nothing. All of it happens
 // in the beforeAll below.
 let stack: Stack | null = null;
-let stackCredentials: StackCredentials | null = null;
+/** The operator's service token, read from the throwaway instance once up() provisioned it. */
+let operatorToken: string | null = null;
+// The compose file requires an instance state directory outside the checkout
+// (RM_INSTANCE_STATE_DIR; smoke spec §1.1); a rails check gets a throwaway one.
+let stackInstance: ReturnType<typeof throwawayInstance> | null = null;
 
 // This file's environment identity (scripts/stack/naming.ts) — `ci`/<job hash>
 // under Actions, `local`/<random> otherwise. Computed inside a FUNCTION, not at
@@ -119,7 +123,6 @@ function unreachableDaemonStack(): Stack {
       profile: "core",
       composeFiles: DEFAULT_COMPOSE_FILES,
       database: DEFAULT_STACK_DATABASE,
-      credentials: generateStackCredentials(),
       environment,
     },
     { hostEnv: { PATH: process.env.PATH, DOCKER_HOST: "tcp://127.0.0.1:1" } },
@@ -139,7 +142,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     // would only slow this "fast, cheap" check down for nothing. (D21: no mcp
     // service — the swarm surface is the api's REST API.)
     const environment = infraEnvironment();
-    stackCredentials = generateStackCredentials();
+    stackInstance = throwawayInstance(stackProjectName("infra", environment));
     stack = createStack(
       {
         repoRoot,
@@ -149,9 +152,9 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         project: stackProjectName("infra", environment),
         profile: "core",
         composeFiles: DEFAULT_COMPOSE_FILES,
-        database: DEFAULT_STACK_DATABASE,
-        credentials: stackCredentials,
+        database: throwawayStackDatabase(stackInstance.paths),
         environment,
+        instance: { name: stackInstance.name, stateDir: stackInstance.stateDir },
       },
       { hostEnv: process.env, io: { stdout: "pipe", stderr: "pipe" } },
     );
@@ -160,6 +163,10 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     // answers.
     await stack.up();
     await stack.waitForHttp(`${stack.backendUrl}${ROUTES.swarm.members}`, 30_000);
+    // up() provisioned the three service tokens on the stack's own database
+    // (scripts/stack/throwaway-database.ts, under the target lock); the admin calls below present
+    // the operator's, which carries the `admin` right (smoke spec §3).
+    operatorToken = readServiceToken(stackInstance.paths, "operator");
 
     // Build (never run yet — that's the inference-off "container starts" test
     // below) the member-agent image now so its cost is paid once in beforeAll,
@@ -196,6 +203,8 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
       console.error(
         `[onboarding-eval-infra] teardown for project ${stack.config.project} failed (exit ${r.exitCode}): ${r.stderr}`,
       );
+    } else {
+      stackInstance?.dispose();
     }
   }, SETUP_TIMEOUT_MS);
 
@@ -446,7 +455,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-Automation-Token": stackCredentials!.automationToken,
+            "X-Automation-Token": operatorToken!,
           },
           body: JSON.stringify({ decision: "approve" }),
         });
@@ -506,30 +515,37 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
           });
           expect(enrollRun.transcript).not.toContain(claimed.token);
 
-          // Open a real collecting session. Core profile intentionally has no
-          // worker, so the existing admin dispatcher drives the same domain
-          // lifecycle synchronously instead of adding another service.
-          const admin = async (action: string, input: Record<string, unknown>) => {
+          // Open a real collecting session: the subject through the admin
+          // subject route and the epoch through epochs/open, the two calls the
+          // retired `subject`/`open`/`brief` dispatcher actions stood in for
+          // (issue #1026). No scheduler runs in the core profile, so the test
+          // opens the epoch itself.
+          // The subject is the operator's (the `admin` right); the epoch
+          // transition is system-scheduler's (`lifecycle_transitions`), so it
+          // is presented with that holder's own token (smoke spec §3).
+          const admin = async (route: string, input: Record<string, unknown>, expected = 200, token = operatorToken!) => {
             const res = await fetch(
-              `${stack!.backendUrl}${routePath(ROUTES.swarm.admin.action, { action })}`,
+              `${stack!.backendUrl}${route}`,
               {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
-                  "X-Automation-Token": stackCredentials!.automationToken,
+                  "X-Automation-Token": token,
                 },
                 body: JSON.stringify(input),
               },
             );
             const responseBody = await res.json();
-            expect(res.status, `${action}: ${JSON.stringify(responseBody)}`).toBe(200);
+            expect(res.status, `${route}: ${JSON.stringify(responseBody)}`).toBe(expected);
             return responseBody;
           };
           const date = new Date().toISOString().slice(0, 10);
           const subjectId = `continuity-${crypto.randomUUID().slice(0, 8)}`;
-          await admin("subject", { id: subjectId, name: "Identity Continuity Fixture" });
-          const opened = await admin("open", { date, subjectId });
-          await admin("brief", { sessionId: String(opened.id), windowMinutes: 10 });
+          await admin(ROUTES.swarm.admin.subjects, {
+            id: subjectId, name: "Identity Continuity Fixture", recommendationType: "bucket_weights",
+          }, 201);
+          const epoch = await admin(ROUTES.swarm.admin.epochOpen, { subjectId }, 201, readServiceToken(stackInstance!.paths, "system-scheduler"));
+          const opened = { id: epoch.sessionId as string };
 
           // The only deterministic seam is external model prose. The
           // production participation client still fetches its own context,
@@ -552,8 +568,8 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
             "- Accept the take only under the originally admitted public key.",
             "",
             // THE ALLOCATION VECTOR, because this subject is a `bucket_weights`
-            // one. `admin("subject")` -> `ensureSubject()` INSERTs
-            // recommendation_type = 'bucket_weights' (domain.ts), so the brief
+            // one: the subject above is created with recommendationType
+            // = 'bucket_weights', so the brief
             // this member reads declares `takeSchema.weights.optional = false`,
             // `participate()` sets `requireWeights`, and `authorTake()` re-samples
             // and then throws on a take with no WEIGHTS line — which would exit
@@ -720,7 +736,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         composeSpawnEnv: stack!.spawnEnv,
         modelConfig: keyless,
         backendUrl: stack!.backendUrl,
-        automationToken: stackCredentials!.automationToken,
+        operatorToken: operatorToken!,
       };
       const identity = await ensureMemberIdentity(rail, { memberId, name: "Rails Check", lens: "infra" });
       expect(typeof identity.freshToken).toBe("string");

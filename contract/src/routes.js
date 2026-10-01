@@ -28,6 +28,16 @@ export const ROUTES = {
   // object also rides on /health as `build`, so an existing health check gains
   // the identity without a second request.
   version: "/version",
+  // GET — the API's CONTRACT version, `{api, commit}` (D54). `api` is
+  // contract/package.json's version: the version of THIS file's route table
+  // and the DTOs beside it, which is what a separately deployed website has to
+  // agree with. `/version` above answers "which build is this process"; this
+  // answers "which API does it speak". The site declares the range it accepts
+  // (frontend/package.json `apiRange`, carried in its /version.json) and checks
+  // this at load. Unauthenticated and database-free by construction, so it
+  // still answers while Postgres is down. Under /api/ so website-server's
+  // existing /api/ proxy carries it with no new nginx rule.
+  apiVersion: "/api/version",
 
   comments: {
     list: "/api/comments", // GET ?page=
@@ -193,6 +203,54 @@ export const ROUTES = {
     register: "/api/swarm/register", // POST (privileged) — apply+activate shortcut for demo/E2E
     regime: "/api/swarm/regime", // POST (analytics-provider bearer) — provider SUBMITS computed snapshots ({ snapshots }); never a server-side recompute
     submit: "/api/swarm/submit", // POST (member bearer, ed25519-signed)
+
+    // ── The scheduler's stream (issue #1026 W4.4, system-scheduler-spec.md §6.3)
+    // NOT under `admin`, deliberately. These are the surface of ONE credential:
+    // the automation token §7 issues to `system-scheduler`, carrying the
+    // read_subjects / read_sessions / lifecycle_transitions rights and nothing
+    // else. An operator's admin token does not open them, and they open nothing
+    // an operator would drive by hand.
+    scheduler: {
+      fullRead: "/api/swarm/scheduler/full-read", // GET → §3's four parts + the cursor, one consistent snapshot
+      // WebSocket upgrade (D55 (11)): GET ?cursor=N, and NOTHING else in the
+      // URL — the scheduler token rides only in the upgrade's
+      // `Authorization: Bearer` header, and a URL carrying any other parameter
+      // is refused (400). JSON text frames: event | keepalive (carries the
+      // head) | resync. Every keepalive re-authorizes the token; the socket
+      // closes 4000 after a resync (cursor above the head, below the retained
+      // floor, a backlog past its bound, a database error) and 4001 when the
+      // token was revoked or rotated. A plain GET with no upgrade is 426.
+      subscribe: "/api/swarm/scheduler/subscribe",
+      // No job-ack route: §6.3 (amended 2026-09-24, D52) — "The stream carries
+      // change events only ... there is no ad-hoc job kind for the API to push,
+      // ack or redeliver."
+    },
+
+    // ── Participants (smoke-production-spec.md §6.2)
+    // The judge's own contract, authenticated by the judge's member bearer.
+    // `judgeSubscribe` serves STATE — every session in `judging` this judge has
+    // not submitted — on every connect, so it carries no cursor and no sequence
+    // and is not the scheduler's stream above.
+    participants: {
+      // The AGENT's side of §6.2: agents poll, judges subscribe. This path was
+      // a literal inside scripts/agent/participant/main.ts, which is why a
+      // standing participant could poll a 404 for ever and read it as "no
+      // work" — a client-side constant cannot be compared against the server's
+      // route table, and nothing did. It belongs here, where both sides read
+      // the same string.
+      // GET ?member=<id> (member bearer) → { pending: PendingWork[] }: every
+      // `collecting` session this member may still file a first take into,
+      // soonest close first; an empty list is "no work". Each item is
+      // { sessionId, subjectId, date, windowClosesAt }.
+      pending: "/api/swarm/participants/pending",
+      judgeSubscribe: "/api/swarm/participants/judge/subscribe", // GET (judge bearer) → text/event-stream: pending | keepalive
+      // POST (judge bearer) { sessionId, opinion, model, promptHash,
+      // inputsDigest, nonce, signature, usage? } — `usage` is the model call's
+      // spend { inputTokens?, outputTokens?, totalTokens?, costUsd? } (D55
+      // decision 3), outside the signed bytes.
+      judgement: "/api/swarm/participants/judgement",
+    },
+
     // Admin lifecycle (X-Admin-Token). The backend registers ONE dispatcher at
     // admin.action; the named entries below enumerate the verbs it accepts so
     // drivers can reference them without re-hardcoding the path.
@@ -208,12 +266,10 @@ export const ROUTES = {
       // and the independent producer owns its own cadence.
       subject: "/api/swarm/admin/subject", // POST — ensure a subject row
       subjectFixtures: "/api/swarm/admin/subject_fixtures", // POST — seed reference-shaped demo fixtures
-      open: "/api/swarm/admin/open", // POST — open a session
-      brief: "/api/swarm/admin/brief", // POST — publish the brief, open the window
-      close: "/api/swarm/admin/close", // POST — close the submission window
-      aggregate: "/api/swarm/admin/aggregate", // POST — deterministic rollup
-      publish: "/api/swarm/admin/publish", // POST — publish the session
-      enqueueJob: "/api/swarm/admin/enqueue-job", // POST — drive lifecycle via the worker job queue
+      // NO OPERATOR SESSION ACTIONS (D55 (4)). The generic `open`, `brief`,
+      // `close`, `aggregate`, `publish` and `enqueue-job` admin actions are not
+      // in this table: the api answers each 410, and only `system-scheduler`
+      // drives an epoch, through the five `epoch*` routes below.
 
       // Admin surface (issue #152): topics/members/roster/lifecycle/audit.
       // Distinct sub-resource paths (never a single-segment :action) so they
@@ -221,6 +277,23 @@ export const ROUTES = {
       subjects: "/api/swarm/admin/subjects", // GET list (all statuses) / POST create
       subjectUpdate: "/api/swarm/admin/subjects/:id/update", // POST — versioned edit (409 stale_version)
       subjectDeactivate: "/api/swarm/admin/subjects/:id/deactivate", // POST — versioned deactivate
+      // POST { expectedVersion } — versioned inactive → active. A subject edit,
+      // not an epoch route: it publishes `subject.changed` and opens NO session;
+      // `system-scheduler` opens the first epoch from that event (scheduler spec
+      // §2.4, §3, §6.2; D55 (4)).
+      subjectActivate: "/api/swarm/admin/subjects/:id/activate",
+
+      // ── The epoch lifecycle (issue #1026 W4.2, system-scheduler-spec.md §4)
+      // Every one of these is a STATE-GUARDED transition that `system-scheduler`
+      // calls at an instant it already holds, and ONLY `system-scheduler` calls
+      // them (D55, §4.3): there is no operator or admin early turnover, and the
+      // operator admin token holds only `admin`, which these routes refuse. The
+      // API decides nothing about timing on its own.
+      epochOpen: "/api/swarm/admin/epochs/open", // POST { subjectId } — create+brief+window, one transaction
+      epochTurnover: "/api/swarm/admin/epochs/turnover", // POST { subjectId, expectedSessionId } — close N, open N+1
+      epochAggregate: "/api/swarm/admin/epochs/aggregate", // POST { sessionId } — deterministic rollup
+      epochRequestJudging: "/api/swarm/admin/epochs/request-judging", // POST { sessionId } — stores the absolute deadline
+      epochFinalize: "/api/swarm/admin/epochs/finalize", // POST { sessionId } — decide the outcome from stored instants
 
       // GET list (all statuses, redacted) / POST manual add.
       // POST body is { name, publicKey, lens?, contact? } — issue #690: the id is
@@ -240,7 +313,12 @@ export const ROUTES = {
       // (issue #625) needs to prefer it over the derived mark.
       memberAvatar: "/api/swarm/admin/members/:id/avatar",
 
-      sessionCreate: "/api/swarm/admin/sessions", // POST — UTC-validated, snapshots the roster, enqueues 5 scoped jobs
+      // NO SESSION VERBS (issue #1026, D55 decision 4). The admin session
+      // create and the cancel/close/reopen/aggregate/publish/judge verbs are
+      // retired: `system-scheduler` is the only caller of the epoch lifecycle,
+      // and an admin observes sessions (docs/architecture/admin-surface.md
+      // US-C4). The API answers 410 on those paths for a client built against
+      // an older contract.
       sessionRoster: "/api/swarm/admin/sessions/:id/roster", // GET — the frozen expected roster
       // GET ?limit= — the shadow soak's read path (issue #767). Every judge run
       // for one session, newest first, plus which one is in force: mode,
@@ -254,17 +332,10 @@ export const ROUTES = {
       // logged as `roster_excuse_forced` with the operator's reason).
       rosterExcuse: "/api/swarm/admin/sessions/:id/roster/excuse",
       rosterRestore: "/api/swarm/admin/sessions/:id/roster/restore", // POST { memberId } — before collecting only
-      sessionCancel: "/api/swarm/admin/sessions/:id/cancel", // POST — versioned guarded transition
-      sessionClose: "/api/swarm/admin/sessions/:id/close", // POST — versioned guarded transition
-      sessionReopen: "/api/swarm/admin/sessions/:id/reopen", // POST — versioned guarded transition
-      sessionAggregate: "/api/swarm/admin/sessions/:id/aggregate", // POST — versioned guarded transition
-      sessionPublish: "/api/swarm/admin/sessions/:id/publish", // POST — versioned guarded transition
-      // Consensus judge (issue #752). `sessionJudge` moves aggregated -> judged
-      // and records the opinion; `judgeConfig` is the runtime switch (GET reads
-      // it, POST { mode, minTakes } sets it) that lets an operator take the
-      // judge off published sessions WITHOUT a redeploy.
-      sessionJudge: "/api/swarm/admin/sessions/:id/judge", // POST — versioned guarded transition
-      judgeConfig: "/api/swarm/admin/judge", // GET | POST { mode: off|shadow|enforce, minTakes }
+      // Consensus judge (issue #752). `judgeConfig` is the runtime switch (GET
+      // reads it, POST { mode, minTakes } sets it) that lets an operator take
+      // the judge off published sessions WITHOUT a redeploy.
+      judgeConfig: "/api/swarm/admin/judge", // GET | POST { mode: off|enforce, minTakes } — `shadow` retired (D53 (1))
       // Assemble, sign-collect and PUBLISH the consensus receipt for a judged
       // session (issue #754). Immutable once published: a second POST returns
       // the receipt already on file rather than re-assembling it.

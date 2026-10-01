@@ -769,7 +769,7 @@ describe("the expression interpreter reproduces Actions semantics", () => {
 // ---------------------------------------------------------------------------
 describe("the coverage that replaces the per-PR eval is really there", () => {
   test("a failed smoke prominently classifies exhausted OpenCode credit", () => {
-    const smoke = stepContaining(e2eYml, "bun run scripts/smoke.ts", "e2e.yml");
+    const smoke = stepContaining(e2eYml, "bun --no-env-file scripts/smoke.ts", "e2e.yml");
     expect(smoke).toContain('set -o pipefail');
     expect(smoke).toContain('tee "$RUNNER_TEMP/e2e-smoke.log"');
 

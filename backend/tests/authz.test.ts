@@ -1,16 +1,31 @@
-import { test, expect, afterEach } from "bun:test";
-import { config } from "../src/config.ts";
+import { test, expect, beforeAll } from "bun:test";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { generateKeyPair } from "../src/lib/signing.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-
-// privileged() reads config at call time, so we flip config per test (restored after).
-const orig = { adminToken: config.adminToken, allowInsecure: config.allowInsecure };
-afterEach(() => { config.adminToken = orig.adminToken; config.allowInsecure = orig.allowInsecure; });
+import {
+  adminHeaders,
+  bearerHeaders,
+  provisionAnalyticsToken,
+  provisionOperatorToken,
+  provisionSchedulerToken,
+  schedulerHeaders,
+} from "./support/automation-auth.ts";
 
 // Own database per file, cloned from the migrated template — the roster this
 // file admits into is its own, with no reset of anyone else's rows.
 useCleanDatabase(import.meta.file);
+
+// The three store-issued service tokens (smoke spec §3, D52 (1)). There is no
+// env ADMIN_TOKEN to set and no insecure mode to flip: the store row's right is
+// the whole answer, in every env.
+let operator = "";
+let scheduler = "";
+let analytics = "";
+beforeAll(async () => {
+  operator = await provisionOperatorToken();
+  scheduler = await provisionSchedulerToken();
+  analytics = await provisionAnalyticsToken();
+});
 
 const REG = "/api/swarm/register"; // privileged + non-destructive
 // A REAL Ed25519 public key, not a 44-character filler string. Since issue #789
@@ -29,19 +44,26 @@ function regReq(headers: Record<string, string> = {}) {
 }
 const call = (req: Request) => handleSwarm(req, new URL(req.url));
 
-test("fail-closed: no token and not insecure → 403", async () => {
-  config.adminToken = null; config.allowInsecure = false;
+test("fail-closed: no token → 403", async () => {
   expect((await call(regReq()))?.status).toBe(403);
 });
 
-test("RM_ALLOW_INSECURE/ephemeral opens privileged endpoints without a token", async () => {
-  config.adminToken = null; config.allowInsecure = true;
-  expect((await call(regReq()))?.status).toBe(201);
+test("RM_ENV=ephemeral no longer opens privileged endpoints without a token (D52 (1))", async () => {
+  // tests/preload.ts runs this process as RM_ENV=ephemeral — the env that used
+  // to wave a tokenless caller through.
+  expect(process.env.RM_ENV).toBe("ephemeral");
+  expect((await call(regReq()))?.status).toBe(403);
 });
 
-test("admin token: required when set, and sufficient", async () => {
-  config.adminToken = "s3cret"; config.allowInsecure = false;
-  expect((await call(regReq()))?.status).toBe(403);
-  expect((await call(regReq({ "X-Admin-Token": "s3cret" })))?.status).toBe(201);
-  expect((await call(regReq({ "X-Admin-Token": "wrong" })))?.status).toBe(403);
+test("the operator token: required, and sufficient; a wrong string is refused", async () => {
+  expect((await call(regReq(adminHeaders(operator))))?.status).toBe(201);
+  expect((await call(regReq(adminHeaders("s3cret"))))?.status).toBe(403);
+});
+
+test("neither the scheduler's nor the producer's token substitutes for the operator's", async () => {
+  for (const token of [scheduler, analytics]) {
+    for (const headers of [adminHeaders(token), bearerHeaders(token), schedulerHeaders(token)]) {
+      expect((await call(regReq(headers)))?.status).toBe(403);
+    }
+  }
 });

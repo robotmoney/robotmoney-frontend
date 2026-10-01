@@ -4,6 +4,7 @@ import { sessionPhase, isLiveState } from "../../lib/session-phase.js";
 import { timeAgo, timeLeft, absoluteUtc } from "../../lib/relative-time.js";
 import { stanceColor, stanceClass, stanceStyle } from "../../lib/stance.js";
 import { operatorName } from "../../lib/operator.js";
+import { sessionWhen as whenOf } from "../../lib/session-when.js";
 // typechecked .ts file (scripts/tests/unit/swarm-synthesis-preview.test.ts),
 // which pulls the whole file into the root TS program transitively and
 // surfaces a pile of pre-existing implicit-any errors unrelated to this
@@ -86,10 +87,6 @@ const ROW_BLURBS = {
 };
 const rowBlurb = (p) => ROW_BLURBS[String(p?.name || "").trim()] || p?.thesisBlurb || "";
 
-/** The instant a session is shown as happening: when it opened, else when it published, else its row date. */
-function whenOf(s) {
-  return s?.openedAt || s?.publishedAt || s?.date || "";
-}
 
 export function registerSwarmView(Alpine) {
   // ── Investment Swarm ──────────────────────────────────────────────────
@@ -448,8 +445,11 @@ export function registerSwarmView(Alpine) {
     // from the panel link, which hid half the swarm's work behind a filter
     // the reader could not see. The chips below separate allocation from
     // the books; the feed itself does not.
+    // Newest first by when each session OPENED, across every subject. The API pages by (date, generated_at), both the row's
+    // creation, so a session that waited for its brief sorts among the days it was created, not the day it opened.
     publishedSessions() {
-      return this.sessions.filter((s) => s.state === "published");
+      return this.sessions.filter((s) => s.state === "published")
+        .sort((a, b) => String(whenOf(b)).localeCompare(String(whenOf(a))));
     },
     // A framework subject that folds into a vault is not a fourth BOOK. It
     // still has its own sessions, listed above; it does not get a row in

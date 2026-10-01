@@ -184,7 +184,7 @@ export async function drain(stream: ReadableStream<Uint8Array>): Promise<string>
 // project (scripts/stack/naming.ts: `rm_ci_stack_<job hash>` /
 // `rm_smoke_eval_<random>` / …). So an eval container is attributable to the
 // environment that spawned it by NAME, and — since `docker compose run` applies
-// docker-compose.smoke.yml's member-agent labels — by robotmoney.env /
+// docker-compose.yml's member-agent labels — by robotmoney.env /
 // robotmoney.env.hash LABEL as well.
 export function memberAgentContainerName(project: string, runId: string): string {
   return `${project}-member-agent-eval-${runId}`;
@@ -377,7 +377,7 @@ export function ensureMemberVolume(
 // ENVIRONMENT. `docker compose run` re-resolves the WHOLE compose model, not
 // just the service named on the command line, and `ensureProjectVolumes` then
 // compares every project volume against the `com.docker.compose.config-hash`
-// label recorded when that volume was created. docker-compose.smoke.yml's
+// label recorded when that volume was created. docker-compose.yml's
 // pgdata volume carries `robotmoney.smoke.project: ${SMOKE_PROJECT}`, so a child
 // that does not carry SMOKE_PROJECT hashes a volume definition whose label is
 // the empty string — a DIFFERENT hash from the one `stack.up()` recorded, which

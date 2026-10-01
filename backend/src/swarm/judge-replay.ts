@@ -4,10 +4,11 @@
 // ITS OWN MODULE, AND THAT IS THE POINT. This is the one place in the swarm
 // tree outside `domain.ts` permitted to CALL `meanTakeWeights()`, and
 // `backend/tests/swarm-consensus-weights.test.ts` allowlists exactly this file
-// for it. Keeping it out of `judge-session.ts` is what lets that guard stay
-// absolutely strict about the production seam: the judging path still may not
-// reach the derivation, may not author a `weights` field, and is still pinned
-// by the same test. An auditor that reads the derivation and a writer that must
+// for it. Keeping it out of the judging modules is what lets that guard stay
+// absolutely strict about the production seam: the judging path — judge.ts,
+// judge-config.ts and domain.ts's `applyOpinion` — still may not reach the
+// derivation, may not author a `weights` field, and is still pinned by the
+// same test. An auditor that reads the derivation and a writer that must
 // never touch it do not belong in one file.
 //
 // NOTHING HERE WRITES. No judgement row, no session update, no state
@@ -18,16 +19,80 @@
 // this paragraph.
 import { STANCES } from "@robotmoney/contract";
 import { sql } from "../db/client.ts";
-import { buildRationale, loadFrozenTakeSet, majorityStance, meanTakeWeights } from "./domain.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import {
-  DIGEST_SCHEME, inputsDigest, judge, JUDGE_PROMPT_HASH, JudgeNothingToJudgeError, JudgeUnavailableError,
-  type JudgeOptions, type JudgeOutcome,
-} from "./judge.ts";
-import { getJudgeConfig, judgeInputFromFrozen, latestJudgement } from "./judge-session.ts";
+  buildRationale, judgeInputFromFrozen, latestJudgement, loadFrozenTakeSet, majorityStance, meanTakeWeights,
+} from "./domain.ts";
+import { DIGEST_SCHEME, inputsDigest } from "./judge.ts";
+import { getJudgeConfig } from "./judge-config.ts";
+
+// Registered queries (smoke-production-spec.md §7.1), all reads of
+// swarm_sessions. The replay audit is an operator CLI on the api's pool (the
+// same role getJudgeConfig declares for it); the rationale-ladder drift report
+// is reached only from that CLI too.
+const REPLAY_CLI = "scripts/swarm-judge-replay";
+const SAMPLE_SESSION = "00000000-0000-0000-0000-000000000000";
+
+const sessionBefore = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/judge-replay:replaySessionJudge.before",
+  purpose: "Read a session's state and stored recommendation before the replay compares it.",
+  callers: [REPLAY_CLI],
+  probe: {
+    statement: "SELECT state, swarm_recommendation FROM swarm_sessions WHERE id = $1::uuid",
+    params: [SAMPLE_SESSION],
+  },
+});
+
+const sessionAfter = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/judge-replay:replaySessionJudge.after",
+  purpose: "Re-read the session's recommendation after the replay, to show it did not move.",
+  callers: [REPLAY_CLI],
+  probe: {
+    statement: "SELECT swarm_recommendation FROM swarm_sessions WHERE id = $1::uuid",
+    params: [SAMPLE_SESSION],
+  },
+});
+
+const ladderCandidates = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/judge-replay:listRationaleLadderDrift",
+  purpose: "Read published sessions carrying stances and a rationale, to report rationale-ladder drift.",
+  callers: [REPLAY_CLI],
+  probe: {
+    statement: `SELECT id, date, subject_id, subject_name, swarm_recommendation, regime_summary FROM swarm_sessions
+      WHERE state = 'published'
+        AND jsonb_typeof(swarm_recommendation -> 'stances') = 'object'
+        AND jsonb_typeof(swarm_recommendation -> 'rationale') = 'string'
+      ORDER BY date DESC, id LIMIT $1`,
+    params: [5000],
+  },
+});
+
+const judgeableSessions = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/judge-replay:recentJudgeableSessions",
+  purpose: "List the most recently convened sessions that have something to judge.",
+  callers: [REPLAY_CLI],
+  probe: {
+    statement: `SELECT id FROM swarm_sessions WHERE state IN ('aggregated', 'judged', 'published')
+      ORDER BY convened_at DESC LIMIT $1`,
+    params: [10],
+  },
+});
 
 // WHAT IT USED TO CHECK, AND WHY THAT WAS WORTHLESS (issue #766). The original
-// version read `swarm_recommendation.weights`, called `judge()` — which writes
-// nothing, as judge-session.ts's header says — then re-read the SAME COLUMN and
+// version read `swarm_recommendation.weights`, called the (since deleted)
+// backend `judge()` — which wrote nothing — then re-read the SAME COLUMN and
 // compared the two. A comparison of a value against itself across a call that
 // cannot write is true by construction: the only defect it could ever report is
 // `judge()` starting to write. docs/architecture.md presented that as the
@@ -111,10 +176,10 @@ export interface JudgeReplayResult {
   /** Convenience: `weightsVerdict !== "mismatch"`. */
   weightsReproducible: boolean;
 
-  // ── 2. The kept, explicitly-named "judge wrote nothing" assertion.
+  // ── 2. The kept, explicitly-named "the replay wrote nothing" assertion.
   weightsBefore: unknown;
   weightsAfter: unknown;
-  /** The stored column is byte-identical either side of the `judge()` call. */
+  /** The stored column is byte-identical either side of this replay. */
   judgeWroteNothing: boolean;
 
   // ── 3. Per-session rationale/ladder agreement (the D42 half, one session).
@@ -134,24 +199,21 @@ export interface JudgeReplayResult {
   /** Convenience: true unless `digestVerdict === "mismatch"` — a historical divergence is not a fault. */
   digestReproducible: boolean;
 
-  /**
-   * The opinion the replay's own judge call formed, or NULL when it refused
-   * (issue #969). A refusal is an ordinary observation for an offline audit —
-   * this tool points at production with a read-only role and no judge model of
-   * its own, so `model_unconfigured` is its NORMAL state, not a fault. What the
-   * call is here to demonstrate holds either way: judging writes nothing.
-   */
-  outcome: JudgeOutcome | null;
-  /** Why the replay's judge call refused, or null if it formed an opinion. */
-  judgeRefusal: string | null;
-  /**
-   * The two pinned digests, DERIVED FROM THE INPUT and therefore present even
-   * when the judge refused (issue #969). They are what the audit is actually
-   * about — a refusal takes the opinion away, not the reproducibility of the
-   * bytes the opinion would have been formed over.
-   */
-  promptHash: string;
-  inputsDigest: string;
+  // ── 5. What the RECORDED judgement says, read off the row.
+  //
+  // This used to be `outcome: JudgeOutcome` — a judgement this auditor authored
+  // ITSELF, by calling judge() during the replay. That was wrong twice over.
+  // It audited a fresh opinion instead of the one on file, which is the only
+  // one anything published; and with no model configured (the normal case for
+  // an offline audit) the opinion it graded was template prose, so the auditor's
+  // headline field described the fallback path rather than the record. An
+  // auditor reports what IS recorded.
+  /** `swarm_session_judgements.source` for the latest judgement, or null if never judged. */
+  judgementSource: string | null;
+  /** That row's `fallback_reason` — historical rows only; nothing writes one now. */
+  judgementFallbackReason: string | null;
+  /** That row's model, or null. */
+  judgementModel: string | null;
 }
 
 /**
@@ -183,7 +245,6 @@ function canonicalWeights(value: unknown): string | null {
 
 export async function replaySessionJudge(
   sessionId: string,
-  opts: JudgeOptions = {},
   minTakesOverride?: number,
 ): Promise<JudgeReplayResult | null> {
   const config = await getJudgeConfig();
@@ -195,9 +256,8 @@ export async function replaySessionJudge(
   if (!frozen) return null;
   const input = await judgeInputFromFrozen(frozen, minTakes);
 
-  const before = (await sql`SELECT state, swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
-    | { state: string; swarm_recommendation: Record<string, unknown> | null }
-    | undefined;
+  const [before] = await on(sql, sessionBefore)<{ state: string; swarm_recommendation: Record<string, unknown> | null }>`
+    SELECT state, swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`;
   const rec = (before?.swarm_recommendation ?? {}) as Record<string, unknown>;
   const weightsBefore = rec.weights ?? null;
 
@@ -226,28 +286,16 @@ export async function replaySessionJudge(
     ? "reproduced"
     : "mismatch";
 
-  // THE CALL IS THE SUBJECT OF THE ASSERTION BELOW, not a source of data: the
-  // re-read that follows proves judging did not move the vector. Since #969
-  // judge() refuses rather than fabricating, and an auditor running without a
-  // judge model refuses EVERY time — which is fine, because a refusal writes
-  // nothing just as emphatically as an opinion does. Swallowing it here would
-  // hide it; crashing on it would make the audit unusable against production.
-  let outcome: JudgeOutcome | null = null;
-  let judgeRefusal: string | null = null;
-  try {
-    outcome = await judge(input, { model: config.model, ...opts });
-  } catch (err) {
-    if (err instanceof JudgeUnavailableError || err instanceof JudgeNothingToJudgeError) {
-      judgeRefusal = err.reason;
-    } else {
-      throw err;
-    }
-  }
+  // NO judge() CALL. The audit is arithmetic and comparison: meanTakeWeights()
+  // over the frozen set against the stored vector, and inputsDigest() over that
+  // same set against the digest on file. Authoring an opinion proved nothing
+  // about either, cost a model call per session at cutover scale, and — with no
+  // model configured — graded template prose. The "wrote nothing" assertion
+  // below is now a property of the whole replay rather than of one call inside it.
 
   // ── 2. The kept assertion, under its own name.
-  const after = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
-    | { swarm_recommendation: Record<string, unknown> | null }
-    | undefined;
+  const [after] = await on(sql, sessionAfter)<{ swarm_recommendation: Record<string, unknown> | null }>`
+    SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`;
   const weightsAfter = after?.swarm_recommendation?.weights ?? null;
 
   // ── 4. inputs_digest reproducibility (issue #829, D44). The digest ON FILE
@@ -255,8 +303,10 @@ export async function replaySessionJudge(
   // already loaded above, and reported as a comparison rather than printed
   // as a bare value.
   const judgement = await latestJudgement(sessionId) as
-    | { inputs_digest: unknown; min_takes: unknown; digest_scheme: unknown }
+    | { inputs_digest: unknown; min_takes: unknown; digest_scheme: unknown; source?: unknown; fallback_reason?: unknown; model?: unknown }
     | null;
+  // Same row, read for §5 as well: the auditor reports the judgement ON FILE.
+  const judgementRow = judgement;
   let digestStored: string | null = null;
   let digestRederived: string | null = null;
   let digestScheme: string | null = null;
@@ -317,10 +367,9 @@ export async function replaySessionJudge(
     digestScheme,
     digestVerdict,
     digestReproducible: digestVerdict !== "mismatch",
-    outcome,
-    judgeRefusal,
-    promptHash: JUDGE_PROMPT_HASH,
-    inputsDigest: inputsDigest(input),
+    judgementSource: judgementRow?.source == null ? null : String(judgementRow.source),
+    judgementFallbackReason: judgementRow?.fallback_reason == null ? null : String(judgementRow.fallback_reason),
+    judgementModel: judgementRow?.model == null ? null : String(judgementRow.model),
   };
 }
 
@@ -474,21 +523,21 @@ export interface RationaleLadderReport {
  */
 export async function listRationaleLadderDrift(limit = 5000): Promise<RationaleLadderReport> {
   const bounded = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 20000) : 5000;
-  const rows = (await sql`
-    SELECT id, date, subject_id, subject_name, swarm_recommendation, regime_summary
-      FROM swarm_sessions
-     WHERE state = 'published'
-       AND jsonb_typeof(swarm_recommendation -> 'stances') = 'object'
-       AND jsonb_typeof(swarm_recommendation -> 'rationale') = 'string'
-     ORDER BY date DESC, id
-     LIMIT ${bounded}`) as unknown as {
+  const rows = await on(sql, ladderCandidates)<{
       id: string;
       date: Date | string;
       subject_id: string;
       subject_name: string | null;
       swarm_recommendation: Record<string, unknown> | null;
       regime_summary: unknown;
-    }[];
+    }>`
+    SELECT id, date, subject_id, subject_name, swarm_recommendation, regime_summary
+      FROM swarm_sessions
+     WHERE state = 'published'
+       AND jsonb_typeof(swarm_recommendation -> 'stances') = 'object'
+       AND jsonb_typeof(swarm_recommendation -> 'rationale') = 'string'
+     ORDER BY date DESC, id
+     LIMIT ${bounded}`;
 
   const report: RationaleLadderReport = { scanned: rows.length, tied: 0, templateShaped: 0, drifted: [] };
   for (const row of rows) {
@@ -512,9 +561,9 @@ export async function listRationaleLadderDrift(limit = 5000): Promise<RationaleL
 
 /** The N most recently convened sessions that have something to judge. */
 export async function recentJudgeableSessions(limit = 10): Promise<string[]> {
-  const rows = (await sql`
+  const rows = await on(sql, judgeableSessions)<{ id: string }>`
     SELECT id FROM swarm_sessions
     WHERE state IN ('aggregated', 'judged', 'published')
-    ORDER BY convened_at DESC LIMIT ${Math.max(1, Math.min(limit, 200))}`) as unknown as { id: string }[];
+    ORDER BY convened_at DESC LIMIT ${Math.max(1, Math.min(limit, 200))}`;
   return rows.map((r) => String(r.id));
 }

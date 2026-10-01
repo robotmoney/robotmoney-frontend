@@ -16,6 +16,7 @@
 // the full rationale (no `wallet_holdings`-equivalent table for Holdings; no
 // buyer/holder column anywhere in this schema for Buyers/Txn).
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import type {
   ProjectActivityEntry,
   ProjectDetail,
@@ -49,8 +50,195 @@ const ACTIVITY_FETCH_LIMIT = 30;
 // active project should resolve even if that project doesn't (yet) clear the
 // directory listing's bar. `status = 'active'` is still enforced so a
 // pending-review/inactive project 404s the same as an unknown slug.
+// Registered queries (smoke-production-spec.md §7.1): reads, reached only
+// through GET /api/projects/:slug. The activity read joins the live agent
+// name, so it declares both relations.
+const PROJECTS_ROUTE = "src/api/routes/projects";
+const SAMPLE_ID = "00000000-0000-0000-0000-000000000000";
+
+const detailProject = registerQuery({
+  role: "rm_app",
+  object: "projects",
+  privileges: ["SELECT"],
+  site: "src/projects/profile-projections:fetchProjectDetail.project",
+  purpose: "Read one active project's profile and coverage columns by slug.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT id, slug, display_name, logo_url, overview_short, overview_long,
+             website_url, twitter_handle, data_coverage_score, is_sticky,
+             breadth_score, identity_score, onchain_score, activity_score,
+             coverage_calculated_at, has_agent
+      FROM projects WHERE slug = $1 AND status = 'active'`,
+    params: ["probe-project"],
+  },
+});
+
+const detailAgents = registerQuery({
+  role: "rm_app",
+  object: "openclaw_agents",
+  privileges: ["SELECT"],
+  site: "src/projects/profile-projections:fetchProjectDetail.agents",
+  purpose: "Read the project's active agents.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT id, name, protocol_standard, x402_score, x402_txn_count, x402_resources_count,
+             x402_volume_usd, productivity_score, is_active
+      FROM openclaw_agents WHERE project_id = $1::uuid AND is_active = true`,
+    params: [SAMPLE_ID],
+  },
+});
+
+const detailCoins = registerQuery({
+  role: "rm_app",
+  object: "lobster_coins",
+  privileges: ["SELECT"],
+  site: "src/projects/profile-projections:fetchProjectDetail.coins",
+  purpose: "Read the project's active coins.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT id, name, ticker, market_cap, fdv, percent_change_24h, price_usd, volume_24h, chain, refreshed_at
+      FROM lobster_coins WHERE project_id = $1::uuid AND is_active = true`,
+    params: [SAMPLE_ID],
+  },
+});
+
+const detailWallets = registerQuery({
+  role: "rm_app",
+  object: "tracked_wallets",
+  privileges: ["SELECT"],
+  site: "src/projects/profile-projections:fetchProjectDetail.wallets",
+  purpose: "Read the project's active tracked wallets.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT id, label, chain, balance_usd, address, last_tx_at, refreshed_at
+      FROM tracked_wallets WHERE project_id = $1::uuid AND is_active = true`,
+    params: [SAMPLE_ID],
+  },
+});
+
+const detailVaults = registerQuery({
+  role: "rm_app",
+  object: "agent_vaults",
+  privileges: ["SELECT"],
+  site: "src/projects/profile-projections:fetchProjectDetail.vaults",
+  purpose: "Read the project's active vaults.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT id, name, protocol, chain, strategy_type, tvl_usd, yield_apy, vault_address, refreshed_at
+      FROM agent_vaults WHERE project_id = $1::uuid AND is_active = true`,
+    params: [SAMPLE_ID],
+  },
+});
+
+const detailRevenue = registerQuery({
+  role: "rm_app",
+  object: "agent_revenue_daily",
+  privileges: ["SELECT"],
+  site: "src/projects/profile-projections:fetchProjectDetail.revenue",
+  purpose: "Read the project agents' last 90 days of revenue.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT agent_id, revenue_usd, revenue_date::text AS revenue_date FROM agent_revenue_daily
+      WHERE agent_id IN ($1::uuid) AND revenue_date >= $2::date ORDER BY revenue_date ASC`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const detailCoinSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_coin_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/profile-projections:fetchProjectDetail.coinSnapshots",
+  purpose: "Read the project coins' last 90 days of price and cap.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT coin_id, snapshot_date::text AS snapshot_date, price_usd, market_cap FROM daily_coin_snapshots
+      WHERE coin_id IN ($1::uuid) AND snapshot_date >= $2::date ORDER BY snapshot_date ASC`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const detailAgentSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_agent_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/profile-projections:fetchProjectDetail.agentSnapshots",
+  purpose: "Read the project agents' last 90 days of productivity scores.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT agent_id, snapshot_date::text AS snapshot_date, productivity_score FROM daily_agent_snapshots
+      WHERE agent_id IN ($1::uuid) AND snapshot_date >= $2::date ORDER BY snapshot_date ASC`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const detailWalletSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_wallet_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/profile-projections:fetchProjectDetail.walletSnapshots",
+  purpose: "Read the project wallets' last 90 days of balances.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT wallet_id, snapshot_date::text AS snapshot_date, total_balance_usd FROM daily_wallet_snapshots
+      WHERE wallet_id IN ($1::uuid) AND snapshot_date >= $2::date ORDER BY snapshot_date ASC`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const detailVaultSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_tvl_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/profile-projections:fetchProjectDetail.vaultSnapshots",
+  purpose: "Read the project vaults' last 90 days of TVL.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT vault_id, snapshot_date::text AS snapshot_date, tvl_usd FROM daily_tvl_snapshots
+      WHERE vault_id IN ($1::uuid) AND snapshot_date >= $2::date ORDER BY snapshot_date ASC`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+// The joined read below, as tests/db-registry-execution.test.ts runs it: the
+// call site's own statement (that test holds the two to the same text), under
+// both declarations it joins.
+const DETAIL_ACTIVITY_PROBE = {
+  statement: `SELECT al.id, al.occurred_at, al.agent_id, al.agent_name, oa.name AS live_agent_name,
+                   al.action_type, al.status, al.commit_summary
+            FROM agent_activity_log al
+            LEFT JOIN openclaw_agents oa ON oa.id = al.agent_id
+            WHERE al.agent_id IN ($1::uuid) AND (al.score IS NULL OR al.score <> 0)
+            ORDER BY al.occurred_at DESC
+            LIMIT $2`,
+  params: [SAMPLE_ID, ACTIVITY_FETCH_LIMIT],
+};
+
+const detailActivity = registerQuery({
+  role: "rm_app",
+  object: "agent_activity_log",
+  privileges: ["SELECT"],
+  site: "src/projects/profile-projections:fetchProjectDetail.activity",
+  purpose: "Read the project agents' newest non-noise actions.",
+  callers: [PROJECTS_ROUTE],
+  probe: DETAIL_ACTIVITY_PROBE,
+});
+
+const detailActivityAgents = registerQuery({
+  role: "rm_app",
+  object: "openclaw_agents",
+  privileges: ["SELECT"],
+  site: "src/projects/profile-projections:fetchProjectDetail.activityAgents",
+  purpose: "Join each action's live agent name, which the activity read LEFT JOINs.",
+  callers: [PROJECTS_ROUTE],
+  probe: DETAIL_ACTIVITY_PROBE,
+});
+
+/** A row whose `chain` column feeds the project's primary chain. */
+type ChainRow = Record<string, unknown> & { chain: string | null };
+
 export async function fetchProjectDetail(slug: string): Promise<ProjectDetail | null> {
-  const [project] = await sql`
+  const [project] = await on(sql, detailProject)`
     SELECT id, slug, display_name, logo_url, overview_short, overview_long,
            website_url, twitter_handle, data_coverage_score, is_sticky,
            breadth_score, identity_score, onchain_score, activity_score,
@@ -63,15 +251,15 @@ export async function fetchProjectDetail(slug: string): Promise<ProjectDetail | 
   const pid = project.id as string;
 
   const [agents, coins, wallets, vaults] = await Promise.all([
-    sql`SELECT id, name, protocol_standard, x402_score, x402_txn_count, x402_resources_count,
+    on(sql, detailAgents)`SELECT id, name, protocol_standard, x402_score, x402_txn_count, x402_resources_count,
                x402_volume_usd, productivity_score, is_active
         FROM openclaw_agents WHERE project_id = ${pid} AND is_active = true`,
-    sql`SELECT id, name, ticker, market_cap, fdv, percent_change_24h, price_usd, volume_24h,
+    on(sql, detailCoins)<ChainRow>`SELECT id, name, ticker, market_cap, fdv, percent_change_24h, price_usd, volume_24h,
                chain, refreshed_at
         FROM lobster_coins WHERE project_id = ${pid} AND is_active = true`,
-    sql`SELECT id, label, chain, balance_usd, address, last_tx_at, refreshed_at
+    on(sql, detailWallets)<ChainRow>`SELECT id, label, chain, balance_usd, address, last_tx_at, refreshed_at
         FROM tracked_wallets WHERE project_id = ${pid} AND is_active = true`,
-    sql`SELECT id, name, protocol, chain, strategy_type, tvl_usd, yield_apy, vault_address, refreshed_at
+    on(sql, detailVaults)<ChainRow>`SELECT id, name, protocol, chain, strategy_type, tvl_usd, yield_apy, vault_address, refreshed_at
         FROM agent_vaults WHERE project_id = ${pid} AND is_active = true`,
   ]);
 
@@ -84,27 +272,27 @@ export async function fetchProjectDetail(slug: string): Promise<ProjectDetail | 
 
   const [revenue90, coinSnaps90, agentSnaps90, walletSnaps90, vaultSnaps90, activityRows] = await Promise.all([
     agentIds.length
-      ? sql`SELECT agent_id, revenue_usd, revenue_date::text AS revenue_date FROM agent_revenue_daily
+      ? on(sql, detailRevenue)`SELECT agent_id, revenue_usd, revenue_date::text AS revenue_date FROM agent_revenue_daily
             WHERE agent_id IN ${sql(agentIds)} AND revenue_date >= ${cutoff90} ORDER BY revenue_date ASC`
       : Promise.resolve([] as Record<string, unknown>[]),
     coinIds.length
-      ? sql`SELECT coin_id, snapshot_date::text AS snapshot_date, price_usd, market_cap FROM daily_coin_snapshots
+      ? on(sql, detailCoinSnapshots)`SELECT coin_id, snapshot_date::text AS snapshot_date, price_usd, market_cap FROM daily_coin_snapshots
             WHERE coin_id IN ${sql(coinIds)} AND snapshot_date >= ${cutoff90} ORDER BY snapshot_date ASC`
       : Promise.resolve([] as Record<string, unknown>[]),
     agentIds.length
-      ? sql`SELECT agent_id, snapshot_date::text AS snapshot_date, productivity_score FROM daily_agent_snapshots
+      ? on(sql, detailAgentSnapshots)`SELECT agent_id, snapshot_date::text AS snapshot_date, productivity_score FROM daily_agent_snapshots
             WHERE agent_id IN ${sql(agentIds)} AND snapshot_date >= ${cutoff90} ORDER BY snapshot_date ASC`
       : Promise.resolve([] as Record<string, unknown>[]),
     walletIds.length
-      ? sql`SELECT wallet_id, snapshot_date::text AS snapshot_date, total_balance_usd FROM daily_wallet_snapshots
+      ? on(sql, detailWalletSnapshots)`SELECT wallet_id, snapshot_date::text AS snapshot_date, total_balance_usd FROM daily_wallet_snapshots
             WHERE wallet_id IN ${sql(walletIds)} AND snapshot_date >= ${cutoff90} ORDER BY snapshot_date ASC`
       : Promise.resolve([] as Record<string, unknown>[]),
     vaultIds.length
-      ? sql`SELECT vault_id, snapshot_date::text AS snapshot_date, tvl_usd FROM daily_tvl_snapshots
+      ? on(sql, detailVaultSnapshots)`SELECT vault_id, snapshot_date::text AS snapshot_date, tvl_usd FROM daily_tvl_snapshots
             WHERE vault_id IN ${sql(vaultIds)} AND snapshot_date >= ${cutoff90} ORDER BY snapshot_date ASC`
       : Promise.resolve([] as Record<string, unknown>[]),
     agentIds.length
-      ? sql`SELECT al.id, al.occurred_at, al.agent_id, al.agent_name, oa.name AS live_agent_name,
+      ? on(sql, detailActivity, detailActivityAgents)`SELECT al.id, al.occurred_at, al.agent_id, al.agent_name, oa.name AS live_agent_name,
                    al.action_type, al.status, al.commit_summary
             FROM agent_activity_log al
             LEFT JOIN openclaw_agents oa ON oa.id = al.agent_id

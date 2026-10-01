@@ -681,7 +681,7 @@ describe("the fix is wired into every workflow that boots a smoke stack", () => 
 
   test("the reaper is a first-class package script (operators get `bun run smoke:reap`)", () => {
     const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { scripts: Record<string, string> };
-    expect(pkg.scripts["smoke:reap"]).toBe("bun scripts/smoke-reap.ts");
+    expect(pkg.scripts["smoke:reap"]).toBe("bun --no-env-file scripts/smoke-reap.ts");
   });
 
   test("the CI reap threshold is longer than the e2e job's own ceiling — otherwise one run could reap another's live stack", () => {

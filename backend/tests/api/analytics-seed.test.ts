@@ -6,19 +6,25 @@
 // value wins), authorization (401/403, zero row changes), and the retired
 // research-eligibility control path's authenticated 409 with zero schedule/job
 // mutations. Analytics cadence belongs to the independent producer (D25).
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test, beforeAll } from "bun:test";
 import { gzipSync } from "node:zlib";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "../../src/db/client.ts";
-import { config } from "../../src/config.ts";
+import { fixtureDb } from "../support/fixture-db.ts";
 import { handleAnalytics } from "../../src/api/routes/analytics.ts";
 import { canonicalCsv, buildManifest, type EdgarSeedRow } from "../../src/analytics/extract/edgar-seed.ts";
 import { bootstrapEdgarSeed } from "../../src/analytics/edgar-seed-loader.ts";
 import type { AnalyticsApiConfig } from "../../src/analytics/api-client.ts";
+import { provisionAnalyticsToken } from "../support/automation-auth.ts";
 
-const TOKEN = "tok_edgar_seed_test";
+// analytics-producer's store-issued token (smoke spec §3, D52 (1)): the API
+// validates the bearer against the store, with no configuration to flip.
+let TOKEN = "";
+beforeAll(async () => {
+  TOKEN = await provisionAnalyticsToken();
+});
 
 const SEED_ROWS: EdgarSeedRow[] = [
   { date: "2021-01-31", indicator: "MNA", value: 100 },
@@ -46,8 +52,6 @@ let fixtureDir: string | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
 let requests: { method: string; path: string; auth: string | null }[] = [];
 let cfg: AnalyticsApiConfig;
-const origAnalyticsToken = config.analyticsToken;
-const origAllowInsecure = config.allowInsecure;
 
 async function postResearchEligibility(token: string | null): Promise<Response> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -59,7 +63,7 @@ beforeEach(async () => {
   ({ dir: fixtureDir } = installSeedFixture());
   requests = [];
   server = Bun.serve({
-    port: 0,
+    port: 0, hostname: "127.0.0.1",
     async fetch(req) {
       const url = new URL(req.url);
       requests.push({ method: req.method, path: url.pathname, auth: req.headers.get("Authorization") });
@@ -69,11 +73,9 @@ beforeEach(async () => {
     },
   });
   cfg = { baseUrl: `http://localhost:${server.port}`, token: TOKEN };
-  config.analyticsToken = TOKEN;
-  config.allowInsecure = false;
 
-  await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
-  await sql`DELETE FROM job_schedules WHERE kind = 'research.refresh'`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+  await fixtureDb`DELETE FROM job_schedules WHERE kind = 'research.refresh'`;
 });
 
 afterEach(async () => {
@@ -81,12 +83,10 @@ afterEach(async () => {
   if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
   delete process.env.EDGAR_SEED_PATH;
   delete process.env.EDGAR_SEED_MANIFEST_PATH;
-  config.analyticsToken = origAnalyticsToken;
-  config.allowInsecure = origAllowInsecure;
-  await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
-  await sql`DELETE FROM job_schedules WHERE kind = 'research.refresh'`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+  await fixtureDb`DELETE FROM job_schedules WHERE kind = 'research.refresh'`;
   // #287: leave no cold-start job behind for later test files.
-  await sql`DELETE FROM jobs WHERE dedupe_key = 'research.refresh:coldstart'`;
+  await fixtureDb`DELETE FROM jobs WHERE dedupe_key = 'research.refresh:coldstart'`;
 });
 
 // ── cold-DB load: empty → exact projection; second load is a no-op ─────────
@@ -116,7 +116,7 @@ test("bootstrapEdgarSeed loads an empty DB to EXACTLY the manifest's projection;
 
 test("overlap precedence: a pre-existing DIFFERENT real value wins; every genuinely missing month is filled", async () => {
   // Simulate a warm DB where 2021-02-28 already holds a REAL observed value (999).
-  await sql`
+  await fixtureDb`
     INSERT INTO raw_indicator_history (date, indicator, value) VALUES ('2021-02-28', 'MNA', 999)`;
 
   const res = await bootstrapEdgarSeed(cfg);
@@ -147,7 +147,7 @@ test("wrong credentials: bootstrap client gets 403 and writes zero rows", async 
 });
 
 test("missing/invalid credentials: retired research-eligibility endpoint 401/403s before any mutation", async () => {
-  await sql`
+  await fixtureDb`
     INSERT INTO job_schedules (kind, cron, enabled) VALUES ('research.refresh', '0 23 * * *', false)`;
 
   expect((await postResearchEligibility(null)).status).toBe(401);
@@ -160,7 +160,7 @@ test("missing/invalid credentials: retired research-eligibility endpoint 401/403
 // ── retired research-eligibility control plane ─────────────────────────────
 
 test("authenticated research-eligibility fails closed without enabling schedules or enqueueing consumer research", async () => {
-  await sql`
+  await fixtureDb`
     INSERT INTO job_schedules (kind, cron, enabled) VALUES
       ('research.refresh', '0 23 * * *', false),
       ('research.refresh', '37 * * * *', false),
@@ -186,7 +186,7 @@ test("authenticated research-eligibility fails closed without enabling schedules
 });
 
 test("seed ingestion succeeds while the retired control path remains fail-closed", async () => {
-  await sql`
+  await fixtureDb`
     INSERT INTO job_schedules (kind, cron, enabled) VALUES ('research.refresh', '0 23 * * *', false)`;
   const [beforeJobs] = await sql<{ n: number }[]>`
     SELECT count(*)::int AS n FROM jobs WHERE kind = 'research.refresh'`;

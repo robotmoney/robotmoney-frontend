@@ -5,7 +5,9 @@ import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { sql } from "../src/db/client.ts";
+// The test replays migration 0038 and exercises its triggers as the schema owner (the
+// role that runs migrations), so its handle is the fixture owner handle, not rm_app.
+import { fixtureDb as sql } from "./support/fixture-db.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { AUM_GUARD_TRIGGERS } from "../scripts/upgrades/0.2.2-to-0.3.0/release.ts";
 import { checkAppendOnlyIntact } from "../scripts/upgrades/0.2.2-to-0.3.0/postflight.ts";

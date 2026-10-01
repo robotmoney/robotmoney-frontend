@@ -2,10 +2,10 @@
 //
 //  1. Compose topology (docker compose config — offline interpolation, no
 //     containers): the smoke stack starts one worker container per execution
-//     lane (worker-swarm reserved / worker-analytics / worker-research),
-//     each with its WORKER_LANE pinned; the old undifferentiated `worker`
-//     service is gone. Fails loudly if the topology regresses to generic
-//     workers (which could consume the reserved swarm capacity).
+//     lane (worker-analytics only; the research lane is gone), with its WORKER_LANE
+//     pinned; the old undifferentiated `worker` service is gone. Fails loudly
+//     if the topology regresses to generic workers. There is no session lane:
+//     issue #1026 moved session timing out of the queue entirely.
 //
 //  2. TUI wiring (source-level assertions on scripts/lib/smoke-main.ts, which
 //     cannot be imported without side effects): the Startup pane names each
@@ -16,14 +16,13 @@
 // Docker is a hard dependency of this repo's test harness; a missing docker CLI
 // fails this test loudly — never a silent skip (test-coverage policy).
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dir, "../../..");
 
 const WORKER_LANE_SERVICES: Record<string, string> = {
-  "worker-swarm": "swarm",
   "worker-analytics": "analytics",
-  "worker-research": "research",
 };
 
 interface ComposeConfig {
@@ -41,9 +40,12 @@ function composeConfig(): ComposeConfig {
   // though this test only inspects the resolved service environments.
   env.WEB_PORT = "18788";
   env.POSTGRES_PORT = "15433";
-  env.ANALYTICS_TOKEN_FILE_HOST = "/dev/null"; // compose-config only; no producer launch
+  // docker-compose.yml requires the instance and its state directory (`${RM_INSTANCE_STATE_DIR:?…}`, no
+  // checkout fallback; smoke spec §1.1). Nothing is mounted by `config`, so any absolute path renders.
+  env.RM_INSTANCE = "rm_local_lanetopo";
+  env.RM_INSTANCE_STATE_DIR = "/var/empty/rm_local_lanetopo";
   const r = Bun.spawnSync(
-    ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.smoke.yml", "config", "--format", "json"],
+    ["docker", "compose", "-f", "docker-compose.yml", "config", "--format", "json"],
     { cwd: repoRoot, env, stdout: "pipe", stderr: "pipe" },
   );
   if (r.exitCode !== 0) {
@@ -73,27 +75,29 @@ describe("smoke lane topology (issue #107)", () => {
   });
 });
 
-describe("smoke TUI is lane-aware (issue #107)", async () => {
+describe("smoke readiness polling is lane-aware (issue #107)", async () => {
   const src = await Bun.file(join(repoRoot, "scripts/lib/smoke-main.ts")).text();
-  // Issue #456: the readiness-probe polling (including these SQL kind
-  // clauses) moved out of smoke-main.ts into its own module.
-  const pollingSrc = await Bun.file(join(repoRoot, "scripts/lib/smoke-readiness-polling.ts")).text();
+  // Issue #1026: `bun smoke` draws no TUI (spec §1), so smoke-main.ts no longer
+  // holds a startup pane naming the lanes. The lanes a failed boot must STOP
+  // are still named, in the decisions module smoke-main.ts does import.
+  const failureSrc = await Bun.file(join(repoRoot, "scripts/lib/smoke-failure.ts")).text();
 
-  test("startup pane names each worker lane container", () => {
+  test("every worker lane container is one a failed boot stops", () => {
     for (const svc of Object.keys(WORKER_LANE_SERVICES)) {
-      expect(src).toContain(`"${svc}"`);
+      expect(failureSrc).toContain(`"${svc}"`);
     }
   });
 
-  test("research pane polls the two distinct kinds and never the retired analytics.run", () => {
-    expect(pollingSrc).toContain("j.kind IN ('regime.classify','research.refresh')");
-    expect(pollingSrc).toContain("kind IN ('regime.classify','research.refresh')");
-    expect(pollingSrc).not.toContain("analytics.run");
+  // The research PANE and its poller retired with the TUI (issue #1026, smoke
+  // spec §1): `bun smoke` polls no job kinds at all now. What must still hold
+  // is that nothing in the boot names the retired analytics.run kind.
+  test("the boot never names the retired analytics.run kind, and runs no job poller", () => {
     expect(src).not.toContain("analytics.run");
+    expect(src).not.toContain("smoke-readiness-polling");
   });
 
-  test("independent countdown per kind (regime vs research)", () => {
-    expect(src).toContain('secsUntilNext("regime.classify")');
-    expect(src).toContain('secsUntilNext("research.refresh")');
+  test("the per-kind countdown retired with the poller, and the boot paints none", () => {
+    expect(existsSync(join(repoRoot, "scripts/lib/smoke-readiness-polling.ts"))).toBe(false);
+    expect(src).not.toContain("secsUntilNext(");
   });
 });
