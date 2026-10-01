@@ -25,7 +25,7 @@
 // and the receipt's one real property is that anyone holding the take set can
 // recompute the vector themselves.
 //
-// WHAT A JUDGEMENT IS. Given the frozen latest-revision-per-member take set and
+// WHAT A JUDGEMENT IS. Given the frozen final-take-per-member set (D51) and
 // the session brief, a judge authors three things: a rationale, the
 // disagreements it actually finds in the takes, and an opinion on whether the
 // session is safe to release. All three are prose about numbers someone else
@@ -85,7 +85,7 @@ export interface JudgeInput {
   subjectLabel: string;
   /** The brief body exactly as stored, or null when the session has no brief row. */
   brief: unknown;
-  /** The frozen latest-revision-per-member take set, in the aggregator's order. */
+  /** The frozen final-take-per-member set (D51), in the aggregator's order. */
   takes: JudgeTake[];
   /** Threshold below which the release-safety opinion must flag thin support. */
   minTakes: number;
