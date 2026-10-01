@@ -29,6 +29,7 @@ import { nearestReading, shareChartSvg, shareChartTicks, shareChartXs } from "..
 import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, isVaultBookReading, portfolioTwr, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
 import { DEVNET_LABEL, loadVaultDetail, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
 import { tvlChart } from "./tvl-chart.js";
+import { sessionWhen } from "../lib/session-when.js";
 import {
   adviceOf, adviceCall, setsWeights, analystAbsent, analystCount, isJudge, roleLabel, judgeHref, judgeLabelHtml, judgeName, judgementHref, JUDGEMENT_ROUTES,
   judgeWroteRationale, loadJudgement, loadMemberJudgements, loadRoster, loadSessionJudgements, normalizeJudgement,
@@ -126,7 +127,7 @@ function archivePreferred(date) {
   return String(date || "") <= ARCHIVE_LAST_DATE;
 }
 
-function camelSession(raw) {
+export function camelSession(raw) {
   if (!raw) return null;
   return {
     id: raw.id || `${raw.date}-${raw.subject_id || raw.subjectId}`,
@@ -166,6 +167,12 @@ function camelSession(raw) {
     // rewritten, so it still carries the old field name.
     swarmRecommendation: raw.swarmRecommendation || raw.swarm_recommendation || raw.committee_recommendation || null,
     generatedAt: raw.generatedAt || raw.generated_at || null,
+    // When the session actually opened (its first brief went out), and when it published. `date` and `generatedAt`
+    // are when the ROW was created, which can be days earlier when a session waits for its brief. This whitelist used
+    // to name neither, so the session page printed the creation day for a session opened days later (issue 1081).
+    // Archive sessions carry neither; the page falls back to `date` for them.
+    openedAt: raw.openedAt || raw.opened_at || null,
+    publishedAt: raw.publishedAt || raw.published_at || null,
     // The API serves this and this transform used to drop it, so the session
     // page had no deadline to reason about and printed `state` raw — which is
     // how the same session read "closed" on /swarm and "collecting" one click
@@ -554,6 +561,9 @@ export const helpers = {
     if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
     return `${n}${({ 1: "st", 2: "nd", 3: "rd" })[n % 10] || "th"}`;
   },
+  // The moment a session is shown as happening: when it opened, else published, else its row's date (issue 1081).
+  /** @param {any} s */
+  whenOf(s) { return sessionWhen(s); },
   formatDate(value, style = "short") {
     if (!value) return "—";
     const date = String(value).includes("T") ? new Date(value) : new Date(`${value}T00:00:00Z`);
@@ -1797,6 +1807,7 @@ export function registerStaticViews(Alpine) {
           subjectId: s.subjectId ?? s.subject_id,
           subjectName: s.subjectName ?? s.subject_name,
           generatedAt: s.generatedAt ?? s.generated_at ?? null,
+          openedAt: s.openedAt ?? s.opened_at ?? null,
         }));
       const remember = (list) => {
         const names = { ...this.subjectNames };
@@ -1851,6 +1862,7 @@ export function registerStaticViews(Alpine) {
           synthesis: full?.synthesis || "",
           swarmRecommendation: full?.swarmRecommendation || null,
           regimeSummary: full?.regimeSummary || null,
+          openedAt: full?.openedAt || null,
           publishedAt: full?.publishedAt || null,
           takes: (detail.takes || []).length,
           takeRows: (detail.takes || []).map(camelTake),
@@ -4087,16 +4099,18 @@ export function registerStaticViews(Alpine) {
       if (this.source !== "api" || !at || !Number.isFinite(Date.parse(at))) return "";
       return `${new Date(at).toISOString().slice(11, 16)} UTC`;
     },
-    // Record generated, as a time when it is the session's own day (the header
-    // prints that date), dated only when generated on another. Guarded:
-    // toISOString() throws on an unparseable stamp, so that one prints as is.
+    // When the row was created, as a time when that is the day the header shows (the header prints the day the session
+    // OPENED, issue 1081), dated when it is another: a session that waited for its brief was created days before it
+    // opened, and a bare "00:11 UTC" beside "October 1" would read as Oct 1 00:11. Guarded: toISOString() throws on an
+    // unparseable stamp, so that one prints as is.
     generatedLabel() {
       const at = this.session?.generatedAt || this.session?.generated_at;
       const t = Date.parse(at);
       if (!Number.isFinite(t)) return at || "";
       const iso = new Date(t).toISOString();
       const time = `${iso.slice(11, 16)} UTC`;
-      return iso.slice(0, 10) === String(this.session?.date || "").slice(0, 10) ? time : `${this.formatDate(at, "short")} · ${time}`;
+      const shown = String(sessionWhen(this.session) || "").slice(0, 10);
+      return iso.slice(0, 10) === shown ? time : `${this.formatDate(at, "short")} · ${time}`;
     },
     sessionJsonHref() {
       const s = this.session;
@@ -4436,6 +4450,7 @@ function historyRowOf(s) {
     subjectId: full?.subjectId,
     subjectName: full?.subjectName,
     generatedAt: full?.generatedAt ?? null,
+    openedAt: full?.openedAt ?? null,
     publishedAt: s?.publishedAt ?? s?.published_at ?? null,
     synthesis: full?.synthesis || "",
     swarmRecommendation: full?.swarmRecommendation || null,
@@ -4474,7 +4489,7 @@ async function subjectSessionIndex(subjectId) {
     .filter((s) => (s.subjectId ?? s.subject_id) === subjectId && s.state === "published")
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))
       || String(b.generatedAt || b.generated_at || "").localeCompare(String(a.generatedAt || a.generated_at || "")))
-    .map((s) => ({ id: s.id ?? `${s.date}-${subjectId}`, date: s.date, subjectId }));
+    .map((s) => ({ id: s.id ?? `${s.date}-${subjectId}`, date: s.date, subjectId, openedAt: s.openedAt ?? null, publishedAt: s.publishedAt ?? s.published_at ?? null }));
   try {
     const list = pick(await publishedSessionList());
     if (list.length) return list;
