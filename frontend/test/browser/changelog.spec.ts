@@ -196,7 +196,8 @@ test("pending entries read Next release, styled as a date", async ({ page }) => 
   await expect(frame.locator(".cl__month-h").first()).toHaveAttribute("data-release", "pending");
   const also = frame.locator('.cl__also[data-release="pending"]');
   if (await also.count()) await expect(also.locator(".cl__also-h")).toHaveText("Also in the next release");
-  await expect(frame.locator('.cl__updated .cl__pending[data-release="pending"]')).toHaveText("with the next release");
+  // The hero carries no "Updated" line: the top entry's date already says it.
+  await expect(frame.locator(".cl__updated")).toHaveCount(0);
 
   const read = await page.evaluate(() => {
     const iframe = document.querySelector("#frame") as HTMLIFrameElement;
