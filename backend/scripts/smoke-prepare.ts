@@ -203,7 +203,7 @@ async function main(): Promise<PrepareResult> {
         // read-only, over the rm_readonly reader while the boot holds the lock,
         // so a seed that will be refused never asks for rm_owner or a y. They
         // run again inside the fence (seedDemo), where they decide.
-        await assertSeedable(reader, { rmEnv: request.rmEnv ?? undefined, explicitlyRequested: true });
+        await assertSeedable(reader, { rmEnv: request.rmEnv ?? undefined, explicitlyRequested: true, connection: request.connection });
         const password = await promptOwnerPassword(
           { ...gate, nonInteractive: request.nonInteractive, localOwnerPassword: request.connection === "local" ? ownerPassword(request) : undefined },
           readerUrl,
@@ -211,7 +211,7 @@ async function main(): Promise<PrepareResult> {
         await confirmRemoteTarget({ connection: request.connection, nonInteractive: request.nonInteractive }, redactedTarget(readerUrl));
         await assertStillHeld(lock, "prepare seed");
         await withMutationFence({ databaseUrl: urlAsRole(readerUrl, "rm_owner", password), label: "seed" }, (tx) =>
-          seedDemo(tx, { rmEnv: request.rmEnv ?? undefined }),
+          seedDemo(tx, { rmEnv: request.rmEnv ?? undefined, connection: request.connection }),
         );
         return done({});
       }

@@ -585,7 +585,12 @@ export async function seed(db: RegistryDb = sql): Promise<void> {
  */
 export async function assertSeedable(
   db: RegistryDb,
-  request: { readonly rmEnv: string | undefined; readonly explicitlyRequested: boolean },
+  request: {
+    readonly rmEnv: string | undefined;
+    readonly explicitlyRequested: boolean;
+    /** `remote` makes an un-enrolled refusal name the D55 (10) runbook. */
+    readonly connection?: "remote" | "local";
+  },
 ): Promise<void> {
   const identity = await readIdentityKind(db);
   const gate = requireRehearsalTarget({
@@ -593,6 +598,7 @@ export async function assertSeedable(
     rmEnv: request.rmEnv,
     identity,
     explicitlyRequested: request.explicitlyRequested,
+    ...(request.connection === "remote" ? { connection: "remote" as const } : {}),
   });
   if (!gate.allow) throw new Error(`Refusing --seed: ${gate.reason} Nothing was written.`);
   const populated = await populatedTables(db, await loadSnapshot());
@@ -613,9 +619,9 @@ export async function assertSeedable(
  */
 export async function seedDemo(
   tx: RegistryDb,
-  request: { readonly rmEnv: string | undefined },
+  request: { readonly rmEnv: string | undefined; readonly connection?: "remote" | "local" },
 ): Promise<void> {
-  await assertSeedable(tx, { rmEnv: request.rmEnv, explicitlyRequested: true });
+  await assertSeedable(tx, { rmEnv: request.rmEnv, explicitlyRequested: true, connection: request.connection });
   await seed(tx);
   await seedSmokeJobSchedules(tx);
   await seedDemoSubjects(tx);
