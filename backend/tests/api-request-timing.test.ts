@@ -12,12 +12,12 @@ import { withRequestTiming } from "../src/api/request-timing.ts";
 const get = (path: string, ua = "Bun/1.3.14") => new Request(`http://api.test${path}`, { headers: { "user-agent": ua } });
 const ok = async () => new Response("ok", { status: 200 });
 
-test("the limit is a named constant above the old 10 s default and below nginx's 60 s", () => {
-  expect(API_IDLE_TIMEOUT_SECONDS).toBeGreaterThan(10);
-  expect(API_IDLE_TIMEOUT_SECONDS).toBeLessThan(60);
+test("the limit is a named constant, deliberately not above Bun's old 10 s default, and below nginx's 60 s", () => {
+  // Raising it would hide CPU- or database-bound work on the request path instead of exposing it (issue 1060).
+  expect(API_IDLE_TIMEOUT_SECONDS).toBeLessThanOrEqual(10);
+  expect(API_IDLE_TIMEOUT_SECONDS).toBeGreaterThan(API_SLOW_REQUEST_MS / 1000);
   expect(Number.isInteger(API_IDLE_TIMEOUT_SECONDS)).toBe(true);
-  expect(API_IDLE_TIMEOUT_SECONDS).toBeLessThanOrEqual(255); // Bun's maximum
-  expect(API_SLOW_REQUEST_MS).toBeLessThan(API_IDLE_TIMEOUT_SECONDS * 1000);
+    expect(API_SLOW_REQUEST_MS).toBeLessThan(API_IDLE_TIMEOUT_SECONDS * 1000);
 });
 
 test("the api's Bun.serve is given that constant, so no other value is in effect", () => {

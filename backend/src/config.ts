@@ -549,14 +549,16 @@ export function resolveBuybackConfig(
 // costs catch-up latency, never coverage.
 export const BUYBACK_LOG_CHUNK = 9000;
 
-// The api's request time limit, in seconds, passed to Bun.serve as `idleTimeout`. Bun's own default is 10 s, and
-// before this constant nothing set it, so the limit was an accident: on 2026-09-30 one request that stalled past 10 s
-// was cut off and nginx answered 502 (issue 1060); an earlier ledger write did the same (source-ledger-store.ts).
-// 30 s is above any request this api serves in normal operation (the slowest read answers in about a second) and
-// below nginx's 60 s proxy_read_timeout, so the api, not the proxy, is what ends a stuck request. Bun allows at most 255.
-export const API_IDLE_TIMEOUT_SECONDS = 30;
-// A request that takes longer than this is logged once with its method, path, duration and caller, so a stall can be
-// traced to a cause instead of surfacing only as a 502 (see api/request-timing.ts).
+// The api's request time limit, in seconds, passed to Bun.serve as `idleTimeout`. 10 s is Bun's own default, and before
+// this constant nothing set it, so it was an accident; it is now a decision (issue 1060). It is deliberately NOT raised.
+// No api request should take anywhere near it: a request that runs past a few seconds means CPU-bound or database-bound
+// work is on the request path, and the fix is to take that work off the path (a worker, a batch, an async submit), not to
+// give it longer. A longer limit hides the defect and lets one slow request hold a connection and the event loop. On
+// 2026-09-30 one request ran past 10 s and nginx answered 502; the log said nothing about which request or how long.
+// Bun allows at most 255; nginx's proxy_read_timeout is 60 s, so the api, not the proxy, ends a stuck request.
+export const API_IDLE_TIMEOUT_SECONDS = 10;
+// A request that takes longer than this is logged once with its method, path, duration and caller (api/request-timing.ts).
+// Treat every such line as a defect to fix: a healthy api call does not take 5 seconds.
 export const API_SLOW_REQUEST_MS = 5_000;
 export const BUYBACK_MAX_CHUNKS = 25;
 

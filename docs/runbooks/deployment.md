@@ -603,11 +603,12 @@ its subdomain) — not a secret.
 
 ### 5.1 The api's request time limit
 
-The api ends a request that runs longer than **30 seconds** (`API_IDLE_TIMEOUT_SECONDS` in `backend/src/config.ts`, passed to
-`Bun.serve` as `idleTimeout`). It is below nginx's 60 s `proxy_read_timeout`, so the api, not the proxy, ends a stuck
-request. Bun's own default is 10 s and nothing set it before issue 1060, which is how one slow request on 2026-09-30
-became a 502. A request over **5 seconds** (`API_SLOW_REQUEST_MS`) logs one line with its method, path, duration, status
-and caller; one that finishes past the limit logs an error saying the client was cut off:
+The api ends a request that runs longer than **10 seconds** (`API_IDLE_TIMEOUT_SECONDS` in `backend/src/config.ts`, passed to
+`Bun.serve` as `idleTimeout`). That is Bun's own default; before issue 1060 nothing set it, so it was an accident, and it
+is now a decision. It is **not to be raised**: no api request should come near it, and a request over **5 seconds**
+(`API_SLOW_REQUEST_MS`) means CPU-bound or database-bound work is on the request path. The fix is to take that work off the
+path (a worker, a batch, an async submit), not to give it longer. Such a request logs one line with its method, path,
+duration, status and caller, and one that finishes past the limit logs an error saying the client was cut off:
 
 ```
 docker logs rm_prod-api-1 2>&1 | grep -aE '\[api\] (slow request|request ran past)'
