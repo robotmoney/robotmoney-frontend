@@ -191,4 +191,48 @@ does not return it, and the older site shows `date` as it did before.
 
 ## Appendix A. Rehearsal record
 
-*(filled in after R4 runs; the first rehearsal is on stage-2, 2026-10-01)*
+### 2026-10-01, stage-2, commit `0706bef7` (release tip before the session-page date fix): the gate FAILED, 6 of 20 checks
+
+Twin booted READY at 01:58:45 on the repaired v0.5.2 backup, `131 checks · 0 failed`, **no migration applied** (R4.3a). `twin:gate`
+ran 40 minutes, finished 02:39:40, and failed. No waiver was applied, and none of the failures is attributable to the five changes in
+section 0. Each is classified here so the owner can decide (R5.1); this release is **not yet cleared by the gate**.
+
+| Gate check | Result | Cause |
+|---|---|---|
+| Every subject published a judged, attended session | FAIL | `robotmoney-treasury` session `16113cf1`: **a dump artifact.** The backup (09-29 19:00) holds it `collecting` with its window closed at 18:32. The twin adopts it, publishes it with **0 of 7 takes** and cannot judge it (`no_takes`). v0.5.1's runbook records that a twin cannot rehearse adopting a `collecting` session. Allocation, vault and woon published 7 of 7 with a judgement and a receipt |
+| The driver logged every subject as published with `judge=enforce` | FAIL | treasury (the artifact) and **vault: `model_timeout`**. The judge model (`opencode/deepseek-v4-flash`) ran past the driver's 420 s wait, so the driver published with `judge=none`. The database shows the vault session judged and receipted afterwards. Inference latency, not code |
+| No job created after T0 is dead | FAIL | 1 dead `swarm.judge`: the treasury `no_takes` session |
+| Every distinct error is classified | FAIL | `analytics.parity_sweep` "Unable to connect" ×2 at 01:58:33, **before the api was ready** (boot race); `swarm.judge` `no_takes` and `model_timeout` lines (the two above) |
+| Log scan: worker-swarm | FAIL | the one `DEAD` line (treasury) |
+| Log scan: driver | FAIL | `NO judgement row was recorded` ×2, `JudgeUnavailable` ×2, `swarm session failed` ×1: treasury and vault, as above |
+| Containers running, healthy, never restarted | PASS | 6 of 6, 0 restarts |
+| Log scans: producer, website, api, research, analytics worker, restore, seven members | PASS | |
+
+**The five changes, observed on this twin** (checked directly, not by the gate):
+
+| Change | Observed |
+|---|---|
+| Session date (`openedAt`) | the API returns it for every session that has a brief: treasury created 09-28 00:40, opened 09-29 18:26; allocation opened 10-01 02:01; `scheduled` and unbriefed sessions return null |
+| Regime day | every `regime asof` line reads `2026-10-01`, including for the sessions adopted from 09-28 |
+| Buyback 413 | the real provider answered 413 and the scan split 66 times; `live index failed` 0 (production: 5 failures in 30 h) |
+| api limit | 10 s, 0 `timed out after` lines; the slow-request log works and names every slow route (below) |
+| Gecko key | **not exercised on stage** (no key on stage-2; the producer's sweep had not run). Exercised by the e2e job in CI on PR 1077: `[gecko] new_pools via pro tier`, no 429. The ledger holds no unredacted key header (0 rows) |
+
+**What the new slow-request log found** (16 lines in the first minutes, all over 5 s): `POST /api/analytics/source-acquisitions`,
+`/api/swarm/register`, `/api/analytics/vintages`, `/api/analytics/run-packages`, `/api/analytics/telemetry`; and later **11 requests to
+`POST /api/analytics/parity-sweep` that took 17 to 25 s and were cut off at the 10 s limit** (the worker's 35 queued sweeps from the
+dump ran back to back). Production's hourly sweeps succeeded 48 of 48 in the last 48 h, so production is not affected today. Each of these is
+work on the request path (issue 1079). The gate did not flag the cut-offs: `twin:gate` treats the `[api] request ran past the limit` line as
+neither an error nor a warning (issue 1078).
+
+**Site check, after `site:redeploy` of `634d9e1a` onto the twin** (the session-page fix, issue 1081): `https://stage.robotmoney-labs.dev/swarm/sessions/12a04ae6-…` reads
+"October 1, 2026 · 02:11 UTC" with the breadcrumb and title on Oct 1; `/swarm` lists sessions newest-opened first (Oct 1 02:24, 02:11, 02:01, then Sep 29 18:26);
+the subject page's newest row reads Oct 1. The browser module pass (88 modules, one stamp, 0 failed, 0 page errors) passed on `0b2154c5`. `verify:live`
+works against stage (it reads `.agents/smoke-state.json`); its one blocking finding was the same treasury artifact.
+
+**What the owner decides (R5.1):**
+1. Waive the treasury artifact (D4, a recorded waiver with this explanation) **or** take a fresh backup so no session is `collecting` past its window, and rerun R4.
+2. The vault `model_timeout`: rerun (inference latency), or accept with the database proof that it was judged.
+3. The rehearsal ran on `0706bef7`; the tip is now `634d9e1a` (frontend only: the session-page fix, checked above by `site:redeploy` on the twin). R5.1 asks for the **same** commit: decide whether the frontend-only difference needs the full gate again.
+
+The twin was torn down at 02:42 (0 containers, 0 volumes). The gate report is `~/twin-gate-reports/R4.4-0706bef7.md` on stage-2.
