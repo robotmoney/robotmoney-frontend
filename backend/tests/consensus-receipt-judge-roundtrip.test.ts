@@ -20,12 +20,16 @@
 // change to either bound turns this red rather than producing an opinion the
 // signed artifact cannot represent.
 //
-// NO MOCKING OF EITHER SIDE. `parseJudgeResponse` and `judge()` are the shipped
-// functions, the transport is injected rather than reached over a network, and
-// the validator is the same `contract/src/consensus-receipt.js` module the
-// contract fixture test and issue #754's assembler use.
+// NO MOCKING OF EITHER SIDE. `parseJudgeResponse` is the shipped parser the API
+// runs over every judgement, the model's answer arrives through the shipped
+// participant runner (`scripts/agent/participant/judge-runner.ts`) on its real
+// transport against a local vendor-shaped endpoint, and the validator is the
+// same `contract/src/consensus-receipt.js` module the contract fixture test and
+// issue #754's assembler use. The backend `judge()` this file used to drive is
+// deleted (D53 point 4): the judge is a participant, and this is its path.
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   canonicalizeReceipt,
@@ -34,9 +38,13 @@ import {
   validateReceipt,
 } from "@robotmoney/contract";
 import {
-  judge, JudgeUnavailableError, parseJudgeResponse, templateOpinion,
-  type JudgeInput, type JudgeOpinion, type JudgeOutcome, type JudgeTransport,
+  inputsDigest, parseJudgeResponse, renderJudgePrompt,
+  type JudgeInput, type JudgeOpinion,
 } from "../src/swarm/judge.ts";
+import { runJudge } from "../../scripts/agent/participant/judge-runner.ts";
+import { judgeInputFromFrozen, TAKE_REVISION_DEFAULT, takeRevision, type FrozenTakeSet } from "../src/swarm/domain.ts";
+import { toTake } from "../src/swarm/projections.ts";
+import type { DbHandle } from "../src/db/client.ts";
 
 const FIXTURES = join(import.meta.dir, "../../contract/src/__fixtures__");
 const readJson = (name: string): any => JSON.parse(readFileSync(join(FIXTURES, name), "utf8"));
@@ -162,51 +170,63 @@ test("the two lower bounds coincide: zero positions is refused by the parser AND
   expect(schema.definitions.disagreement.properties.positions.minItems).toBe(1);
 });
 
-// ISSUE #969 REMOVED ONE OF THE TWO SOURCES. This used to assert that BOTH a
-// model opinion and a template "fallback" opinion round-trip into an anchorable
-// receipt — which is precisely the defect: a receipt is a signed attestation,
-// and one carrying template prose under the judge's name attests to a judging
-// that never happened. There is now exactly one source a new receipt can carry.
-test("model and runtime-fallback opinions both round-trip; a misconfigured judge yields nothing to anchor", async () => {
-  // The MODEL path, through the shipped orchestration rather than the parser
-  // alone: a transport that returns the one-position answer.
-  const transport: JudgeTransport = { model: "test-model", complete: async () => ONE_POSITION_ANSWER };
-  const modelOutcome = await judge(input, { transport, timeoutMs: 5_000 });
-  expect(modelOutcome.source).toBe("model");
-  expect(modelOutcome.opinion.disagreements[0].positions).toHaveLength(1);
+/** Run the participant's runner against a local endpoint answering `status`/`body`. */
+async function throughTheRunner(status: number, body: string) {
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch: () => new Response(body, { status, headers: { "content-type": "application/json" } }),
+  });
+  const dir = mkdtempSync(join(tmpdir(), "rm-roundtrip-"));
+  const promptFile = join(dir, "prompt.txt");
+  writeFileSync(promptFile, renderJudgePrompt(input));
+  try {
+    return await runJudge({
+      promptFile, endpoint: `http://127.0.0.1:${server.port}`, model: "deepseek-v4-flash", apiKey: "k", timeoutMs: 5_000,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    server.stop(true);
+  }
+}
 
-  const receipt = assembleReceipt(modelOutcome.opinion, modelOutcome.source);
+// ISSUE #969 REMOVED ONE OF THE TWO SOURCES, AND D53 DELETED THE CODE THAT HAD
+// IT. A receipt is a signed attestation, and one carrying template prose under
+// the judge's name attests to a judging that never happened. A NEW receipt can
+// carry exactly one source: a model's answer, parsed by the API.
+test("a model judgement round-trips into an anchorable receipt, and `source` records that it was one", async () => {
+  // The MODEL path, as it runs now: the participant's runner receives the
+  // model's text on its real transport, and the API's parser turns it into
+  // the opinion the session adopts.
+  const answer = await throughTheRunner(200, JSON.stringify({ choices: [{ message: { content: ONE_POSITION_ANSWER } }] }));
+  expect(answer).toEqual({ kind: "ok", body: ONE_POSITION_ANSWER });
+  const opinion = parseJudgeResponse(answer.kind === "ok" ? answer.body : "", input);
+  expect(opinion.disagreements[0].positions).toHaveLength(1);
+
+  // THERE IS NO SECOND PATH. A vendor that refuses produces no text at all —
+  // the runner reports the status and there is nothing to parse, so nothing
+  // can reach a receipt.
+  const refused = await throughTheRunner(402, '{"error":"Payment Required"}');
+  expect(refused.kind).toBe("model_status");
+
+  const receipt = assembleReceipt(opinion, "model");
   assertAnchorable(receipt);
   expect(receipt.judge.source).toBe("model");
   expect(canonicalizeReceipt(receipt, spec)).toContain('"source":"model"');
-
-  // THE RUNTIME-FAILURE PATH still produces an anchorable receipt (AC-FE-05):
-  // a model WAS called and timed out / answered unusably, the deterministic
-  // producers supply the prose, and the provenance says `fallback` in the
-  // canonical bytes so nothing downstream can mistake it for model authorship.
-  const brokenTransport: JudgeTransport = {
-    model: "test-model",
-    complete: async () => { throw new Error("connect ECONNREFUSED"); },
-  };
-  const fallbackOutcome = await judge(input, { transport: brokenTransport, timeoutMs: 5_000 });
-  expect(fallbackOutcome.source).toBe("fallback");
-  expect(fallbackOutcome.fallbackReason).toStartWith("model_unavailable:");
-  const fallbackReceipt = assembleReceipt(fallbackOutcome.opinion, fallbackOutcome.source);
-  assertAnchorable(fallbackReceipt);
-  expect(canonicalizeReceipt(fallbackReceipt, spec)).toContain('"source":"fallback"');
-
-  // THE MISCONFIGURATION PATH PRODUCES NO OPINION AT ALL (D-A7 / AC-MODEL-01).
-  // There is nothing to assemble, which is the point: a deployment that was
-  // never given a model or a credential publishes no consensus receipt rather
-  // than publishing one nobody authored.
-  await expect(judge(input, { transport: null, model: null })).rejects.toThrow(JudgeUnavailableError);
 });
 
-// …but a receipt WRITTEN BEFORE #969 must still read and validate. Those rows
-// are append-only history and some of them are already signed and served, so
-// the schema keeps `source: "fallback"` legal even though nothing emits it.
+// …but a receipt WRITTEN BEFORE the fallback was removed must still read and
+// validate. Those rows are append-only history and some of them are already
+// signed and served, so the schema keeps `source: "fallback"` legal even
+// though nothing emits it any more. The opinion below is written out as such a
+// row held it — nothing in the codebase can produce one now.
 test("a pre-#969 fallback receipt still validates — history stays readable", () => {
-  const historical = assembleReceipt(templateOpinion(input), "fallback");
+  const HISTORICAL_FALLBACK: JudgeOpinion = {
+    rationale: "Treasury allocation: 1 constructive, 1 neutral across 2 takes (mean confidence 0.78).",
+    disagreements: [],
+    release_safety: { release: "safe", thinly_supported: false, take_count: 2, min_takes: 2, concerns: [] },
+  };
+  const historical = assembleReceipt(HISTORICAL_FALLBACK, "fallback");
   assertAnchorable(historical);
   expect(historical.judge.source).toBe("fallback");
   expect(canonicalizeReceipt(historical, spec)).toContain('"source":"fallback"');
@@ -217,7 +237,7 @@ test("every JudgeOpinion field has a receipt field, and the receipt invents none
   // property set is the opinion's property set plus exactly the two ENVELOPE
   // fields — `source` (which produced the prose) and `mode` (whether the
   // session adopted it). Neither is part of JudgeOpinion; both come off the
-  // JudgeOutcome envelope and the judgement row, so the split is stated here
+  // judgement row, so the split is stated here
   // rather than left to whichever list happens to be longer.
   const ENVELOPE = ["source", "mode"];
   const opinion = parseJudgeResponse(ONE_POSITION_ANSWER, input);
@@ -236,4 +256,59 @@ test("every JudgeOpinion field has a receipt field, and the receipt invents none
   expect(Object.keys(opinion.disagreements[0].positions[0]).sort()).toEqual(
     Object.keys(schema.definitions.disagreement.properties.positions.items.properties).sort(),
   );
+});
+
+// ── ONE REVISION DEFAULT, ONE DIGEST (criterion 128, D51) ───────────────────
+//
+// D51: "Two paths already default `revision` differently, `?? 0` in
+// `judge-session.ts` and `?? 1` in `projections.ts` and `consensus-receipt.ts`.
+// The same take set can therefore produce two different digests." The judge's
+// input is now built in domain.ts (`judgeInputFromFrozen`, served to the
+// participant judge, which signs `inputsDigest` over exactly that object), and
+// every reader resolves an absent revision through `takeRevision()`.
+test("a take with an ABSENT revision digests exactly as one at the database default, and every path reads the same value", async () => {
+  // judgeInputFromFrozen reads the session's brief through the handle it is
+  // given; this one has no brief to return, and touches no database.
+  const noBrief = (async () => []) as unknown as DbHandle;
+  const frozenFor = (revision: unknown): FrozenTakeSet => ({
+    session: {
+      id: input.sessionId,
+      date: input.date,
+      subject_id: input.subjectId,
+      subject_name: input.subjectLabel,
+      swarm_recommendation: { stances: input.byStance, meanConfidence: input.meanConfidence },
+      regime_summary: null,
+    },
+    takes: input.takes.map((t) => ({ ...t, revision })),
+    activeMembers: input.takes.map((t) => ({ id: t.member_id })),
+    rosterFrozen: false,
+  });
+
+  const absent = await judgeInputFromFrozen(frozenFor(undefined), input.minTakes, noBrief);
+  const nulled = await judgeInputFromFrozen(frozenFor(null), input.minTakes, noBrief);
+  const atDefault = await judgeInputFromFrozen(frozenFor(TAKE_REVISION_DEFAULT), input.minTakes, noBrief);
+  expect(TAKE_REVISION_DEFAULT).toBe(1); // migration 0028: `revision integer NOT NULL DEFAULT 1`
+  expect(absent.takes.map((t) => t.revision)).toEqual([1, 1]);
+  expect(inputsDigest(absent)).toBe(inputsDigest(atDefault));
+  expect(inputsDigest(nulled)).toBe(inputsDigest(atDefault));
+
+  // RED CONTROL: the retired `?? 0` default is a DIFFERENT digest, so the
+  // equality above is the one-default property, not a digest blind to revision.
+  const atZero = await judgeInputFromFrozen(frozenFor(0), input.minTakes, noBrief);
+  expect(inputsDigest(atZero)).not.toBe(inputsDigest(absent));
+
+  // The public projection (and so the served session and receipt page) and
+  // the consensus receipt's analyst entry read the same default.
+  const row = { id: "t1", member_id: "analyst-alpha", member_name: "Alpha", stance: "constructive", body: ALPHA_BODY, verified: true };
+  expect(toTake(row).revision).toBe(absent.takes[0]!.revision);
+  expect(toTake({ ...row, revision: null }).revision).toBe(absent.takes[0]!.revision);
+  expect(takeRevision(undefined)).toBe(absent.takes[0]!.revision);
+
+  // And no reader spells its own default: every `revision` fallback in the
+  // three digest paths goes through takeRevision().
+  for (const file of ["src/swarm/domain.ts", "src/swarm/projections.ts", "src/swarm/consensus-receipt.ts"]) {
+    const text = readFileSync(join(import.meta.dir, "..", file), "utf8");
+    expect(text, file).not.toMatch(/revision\s*\?\?\s*\d/);
+    expect(text, file).not.toMatch(/revision\s*==\s*null\s*\?\s*\d/);
+  }
 });

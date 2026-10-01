@@ -24,6 +24,7 @@
 // week's value forward when a week has no rows) for price/TVL/balance
 // series, `sum` for revenue/volume series.
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import {
   num,
   isStale,
@@ -106,15 +107,172 @@ function toWeeklyBuckets(
 // The full unified /list table feed: one row per tracked agent/coin/vault/
 // wallet, spanning every project (not MIN_SCORE-gated — /list is the
 // "every tracked X" surface, /projects is the coverage-gated directory).
+// Registered queries (smoke-production-spec.md §7.1): reads, reached only
+// through GET /api/dashboards/entities and GET /api/dashboards/market-overview.
+const DASHBOARDS = "src/api/routes/dashboards";
+const SAMPLE_ID = "00000000-0000-0000-0000-000000000000";
+
+const entitiesAgents = registerQuery({
+  role: "rm_app",
+  object: "openclaw_agents",
+  privileges: ["SELECT"],
+  site: "src/projects/entities-projections:fetchEntities.agents",
+  purpose: "Read every agent for the entities feed.",
+  callers: [DASHBOARDS],
+  probe: { statement: "SELECT id, name, protocol_standard, x402_score, is_active, enriched_at FROM openclaw_agents" },
+});
+
+const entitiesCoins = registerQuery({
+  role: "rm_app",
+  object: "lobster_coins",
+  privileges: ["SELECT"],
+  site: "src/projects/entities-projections:fetchEntities.coins",
+  purpose: "Read every coin for the entities feed.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: "SELECT id, name, ticker, market_cap, volume_24h, percent_change_24h, chain, is_active, refreshed_at FROM lobster_coins",
+  },
+});
+
+const entitiesVaults = registerQuery({
+  role: "rm_app",
+  object: "agent_vaults",
+  privileges: ["SELECT"],
+  site: "src/projects/entities-projections:fetchEntities.vaults",
+  purpose: "Read every vault for the entities feed.",
+  callers: [DASHBOARDS],
+  probe: { statement: "SELECT id, name, protocol, strategy_type, tvl_usd, yield_apy, is_active, refreshed_at FROM agent_vaults" },
+});
+
+const entitiesWallets = registerQuery({
+  role: "rm_app",
+  object: "tracked_wallets",
+  privileges: ["SELECT"],
+  site: "src/projects/entities-projections:fetchEntities.wallets",
+  purpose: "Read every tracked wallet for the entities feed.",
+  callers: [DASHBOARDS],
+  probe: { statement: "SELECT id, label, chain, balance_usd, address, last_tx_at, is_active, refreshed_at FROM tracked_wallets" },
+});
+
+const entitiesRevenue = registerQuery({
+  role: "rm_app",
+  object: "agent_revenue_daily",
+  privileges: ["SELECT"],
+  site: "src/projects/entities-projections:fetchEntities.revenue",
+  purpose: "Read the agents' last 182 days of daily revenue.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT agent_id, revenue_date::text AS revenue_date, revenue_usd FROM agent_revenue_daily
+      WHERE agent_id IN ($1::uuid) AND revenue_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const entitiesCoinSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_coin_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/entities-projections:fetchEntities.coinSnapshots",
+  purpose: "Read the coins' last 182 days of prices.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT coin_id, snapshot_date::text AS snapshot_date, price_usd FROM daily_coin_snapshots
+      WHERE coin_id IN ($1::uuid) AND snapshot_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const entitiesVaultSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_tvl_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/entities-projections:fetchEntities.vaultSnapshots",
+  purpose: "Read the vaults' last 182 days of TVL.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT vault_id, snapshot_date::text AS snapshot_date, tvl_usd FROM daily_tvl_snapshots
+      WHERE vault_id IN ($1::uuid) AND snapshot_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const entitiesWalletSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_wallet_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/entities-projections:fetchEntities.walletSnapshots",
+  purpose: "Read the wallets' last 182 days of balances.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT wallet_id, snapshot_date::text AS snapshot_date, total_balance_usd FROM daily_wallet_snapshots
+      WHERE wallet_id IN ($1::uuid) AND snapshot_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const overviewAgents = registerQuery({
+  role: "rm_app",
+  object: "openclaw_agents",
+  privileges: ["SELECT"],
+  site: "src/projects/entities-projections:fetchMarketOverview.agents",
+  purpose: "Read every agent's scores for the market overview's top lists.",
+  callers: [DASHBOARDS],
+  probe: { statement: "SELECT id, name, x402_score, productivity_score, is_active FROM openclaw_agents" },
+});
+
+const overviewCoins = registerQuery({
+  role: "rm_app",
+  object: "lobster_coins",
+  privileges: ["SELECT"],
+  site: "src/projects/entities-projections:fetchMarketOverview.coins",
+  purpose: "Read every coin's market cap for the market overview.",
+  callers: [DASHBOARDS],
+  probe: { statement: "SELECT id, name, market_cap, is_active FROM lobster_coins" },
+});
+
+const overviewVaults = registerQuery({
+  role: "rm_app",
+  object: "agent_vaults",
+  privileges: ["SELECT"],
+  site: "src/projects/entities-projections:fetchMarketOverview.vaults",
+  purpose: "Read every vault's TVL for the market overview.",
+  callers: [DASHBOARDS],
+  probe: { statement: "SELECT id, name, tvl_usd, is_active FROM agent_vaults" },
+});
+
+const overviewWallets = registerQuery({
+  role: "rm_app",
+  object: "tracked_wallets",
+  privileges: ["SELECT"],
+  site: "src/projects/entities-projections:fetchMarketOverview.wallets",
+  purpose: "Read every tracked wallet's balance for the market overview.",
+  callers: [DASHBOARDS],
+  probe: { statement: "SELECT id, label, balance_usd, is_active FROM tracked_wallets" },
+});
+
+const overviewTvl7d = registerQuery({
+  role: "rm_app",
+  object: "daily_tvl_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/entities-projections:fetchMarketOverview.tvl7d",
+  purpose: "Read the active vaults' last seven days of TVL for the overview sparkline.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT snapshot_date::text AS snapshot_date, tvl_usd FROM daily_tvl_snapshots
+      WHERE vault_id IN ($1::uuid) AND snapshot_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
 export async function fetchEntities(): Promise<EntitiesResponse> {
   const [agents, coins, vaults, wallets] = await Promise.all([
-    sql`SELECT id, name, protocol_standard, x402_score, is_active, enriched_at
+    on(sql, entitiesAgents)`SELECT id, name, protocol_standard, x402_score, is_active, enriched_at
         FROM openclaw_agents`,
-    sql`SELECT id, name, ticker, market_cap, volume_24h, percent_change_24h, chain, is_active, refreshed_at
+    on(sql, entitiesCoins)`SELECT id, name, ticker, market_cap, volume_24h, percent_change_24h, chain, is_active, refreshed_at
         FROM lobster_coins`,
-    sql`SELECT id, name, protocol, strategy_type, tvl_usd, yield_apy, is_active, refreshed_at
+    on(sql, entitiesVaults)`SELECT id, name, protocol, strategy_type, tvl_usd, yield_apy, is_active, refreshed_at
         FROM agent_vaults`,
-    sql`SELECT id, label, chain, balance_usd, address, last_tx_at, is_active, refreshed_at
+    on(sql, entitiesWallets)`SELECT id, label, chain, balance_usd, address, last_tx_at, is_active, refreshed_at
         FROM tracked_wallets`,
   ]);
 
@@ -127,19 +285,19 @@ export async function fetchEntities(): Promise<EntitiesResponse> {
 
   const [revenue, coinSnaps, vaultSnaps, walletSnaps] = await Promise.all([
     agentIds.length
-      ? sql`SELECT agent_id, revenue_date::text AS revenue_date, revenue_usd FROM agent_revenue_daily
+      ? on(sql, entitiesRevenue)`SELECT agent_id, revenue_date::text AS revenue_date, revenue_usd FROM agent_revenue_daily
             WHERE agent_id IN ${sql(agentIds)} AND revenue_date >= ${cutoff182}`
       : Promise.resolve([] as Record<string, unknown>[]),
     coinIds.length
-      ? sql`SELECT coin_id, snapshot_date::text AS snapshot_date, price_usd FROM daily_coin_snapshots
+      ? on(sql, entitiesCoinSnapshots)`SELECT coin_id, snapshot_date::text AS snapshot_date, price_usd FROM daily_coin_snapshots
             WHERE coin_id IN ${sql(coinIds)} AND snapshot_date >= ${cutoff182}`
       : Promise.resolve([] as Record<string, unknown>[]),
     vaultIds.length
-      ? sql`SELECT vault_id, snapshot_date::text AS snapshot_date, tvl_usd FROM daily_tvl_snapshots
+      ? on(sql, entitiesVaultSnapshots)`SELECT vault_id, snapshot_date::text AS snapshot_date, tvl_usd FROM daily_tvl_snapshots
             WHERE vault_id IN ${sql(vaultIds)} AND snapshot_date >= ${cutoff182}`
       : Promise.resolve([] as Record<string, unknown>[]),
     walletIds.length
-      ? sql`SELECT wallet_id, snapshot_date::text AS snapshot_date, total_balance_usd FROM daily_wallet_snapshots
+      ? on(sql, entitiesWalletSnapshots)`SELECT wallet_id, snapshot_date::text AS snapshot_date, total_balance_usd FROM daily_wallet_snapshots
             WHERE wallet_id IN ${sql(walletIds)} AND snapshot_date >= ${cutoff182}`
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
@@ -281,13 +439,13 @@ export async function fetchEntities(): Promise<EntitiesResponse> {
 // applies to the summary cards above it.
 export async function fetchMarketOverview(): Promise<MarketOverview> {
   const [agents, coins, vaults, wallets] = await Promise.all([
-    sql<{ id: string; name: string | null; x402_score: string | null; productivity_score: string | null; is_active: boolean }[]>`
+    on(sql, overviewAgents)<{ id: string; name: string | null; x402_score: string | null; productivity_score: string | null; is_active: boolean }>`
       SELECT id, name, x402_score, productivity_score, is_active FROM openclaw_agents`,
-    sql<{ id: string; name: string | null; market_cap: string | null; is_active: boolean }[]>`
+    on(sql, overviewCoins)<{ id: string; name: string | null; market_cap: string | null; is_active: boolean }>`
       SELECT id, name, market_cap, is_active FROM lobster_coins`,
-    sql<{ id: string; name: string | null; tvl_usd: string | null; is_active: boolean }[]>`
+    on(sql, overviewVaults)<{ id: string; name: string | null; tvl_usd: string | null; is_active: boolean }>`
       SELECT id, name, tvl_usd, is_active FROM agent_vaults`,
-    sql<{ id: string; label: string | null; balance_usd: string | null; is_active: boolean }[]>`
+    on(sql, overviewWallets)<{ id: string; label: string | null; balance_usd: string | null; is_active: boolean }>`
       SELECT id, label, balance_usd, is_active FROM tracked_wallets`,
   ]);
 
@@ -301,7 +459,7 @@ export async function fetchMarketOverview(): Promise<MarketOverview> {
   const walletBalUsd = activeWallets.reduce((s, w) => s + (num(w.balance_usd) ?? 0), 0);
 
   const vaultSnaps = vaultIds.length
-    ? await sql`SELECT snapshot_date::text AS snapshot_date, tvl_usd FROM daily_tvl_snapshots
+    ? await on(sql, overviewTvl7d)`SELECT snapshot_date::text AS snapshot_date, tvl_usd FROM daily_tvl_snapshots
         WHERE vault_id IN ${sql(vaultIds)} AND snapshot_date >= ${since7()}`
     : [];
   const tvlByDate = new Map<string, number>();

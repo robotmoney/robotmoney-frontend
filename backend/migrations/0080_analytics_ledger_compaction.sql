@@ -1,3 +1,6 @@
+-- compat: breaking
+-- metadata_version: 1
+--
 -- Issue #1035: the schema the fixed analytics-ledger writers need. Vintage
 -- membership gets a representation that does not copy itself on every freeze,
 -- and the raw response bodies nothing reads stop being kept.

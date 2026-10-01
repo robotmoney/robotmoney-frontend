@@ -250,7 +250,7 @@ describe("red controls: a reintroduced selection path is caught", () => {
   });
 
   test("RULE A — a raw model id in a COMPOSE file is RED", () => {
-    const root = tree({ "docker-compose.smoke.yml": '      OPENCODE_DEFAULT: "opencode/gpt-5.4"\n' });
+    const root = tree({ "docker-compose.yml": '      OPENCODE_DEFAULT: "opencode/gpt-5.4"\n' });
     expect(competingSelectionPaths(root).map((f) => f.rule)).toEqual(["model-id-literal"]);
   });
 

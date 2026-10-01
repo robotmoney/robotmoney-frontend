@@ -1,18 +1,25 @@
 // Admin-managed project overviews (issue #93). Runs against the ephemeral
 // Postgres the preload provisions (real DB, never mocked) — if Postgres is
 // absent the preload THROWS, so this suite fails red rather than skipping.
-// Asserts: a valid X-Admin-Token write updates overview_short + overview_long
-// and the change is reflected by GET /api/projects; a prod-mode config with
-// no/invalid token returns 403; there is NO AI/LLM call anywhere on the path.
-import { test, expect } from "bun:test";
+// Asserts: a write under the operator's store token (X-Admin-Token) updates
+// overview_short + overview_long and the change is reflected by GET
+// /api/projects; no token, a wrong one, or another holder's token returns 403
+// (the route's own env ADMIN_TOKEN comparison is gone, D52 (1)); there is NO
+// AI/LLM call anywhere on the path.
+import { test, expect, beforeAll } from "bun:test";
 import { sql } from "../../src/db/client.ts";
 import { getProjects, updateProjectOverview } from "../../src/api/routes/projects.ts";
+import { provisionAnalyticsToken, provisionOperatorToken, provisionSchedulerToken } from "../support/automation-auth.ts";
+
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on.
+let OPERATOR = "";
+beforeAll(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
-// Prod-mode auth: a token is configured and the insecure convenience path is off,
-// so a request WITHOUT the matching X-Admin-Token must be rejected (fail-closed).
-const PROD = { adminToken: "s3cret-admin-token", allowInsecure: false } as const;
 
 async function insertProject(slug: string): Promise<string> {
   const [r] = await sql`
@@ -31,14 +38,13 @@ function adminReq(slug: string, body: unknown, token?: string): Request {
   });
 }
 
-test("a valid X-Admin-Token write updates overview_short + overview_long; GET /api/projects reflects it", async () => {
+test("an operator-token write updates overview_short + overview_long; GET /api/projects reflects it", async () => {
   const slug = rid("admin-ovr");
   const id = await insertProject(slug);
 
   const res = await updateProjectOverview(
-    adminReq(slug, { overview_short: "Curated short blurb", overview_long: "A much longer admin-authored overview." }, PROD.adminToken),
+    adminReq(slug, { overview_short: "Curated short blurb", overview_long: "A much longer admin-authored overview." }, OPERATOR),
     slug,
-    PROD,
   );
   expect(res.status).toBe(200);
   const project = (res.body as { project: Record<string, unknown> }).project;
@@ -62,8 +68,8 @@ test("a partial write leaves omitted overview fields untouched", async () => {
   const slug = rid("admin-partial");
   const id = await insertProject(slug);
 
-  await updateProjectOverview(adminReq(slug, { overview_short: "first short", overview_long: "first long" }, PROD.adminToken), slug, PROD);
-  const res = await updateProjectOverview(adminReq(slug, { overview_short: "updated short" }, PROD.adminToken), slug, PROD);
+  await updateProjectOverview(adminReq(slug, { overview_short: "first short", overview_long: "first long" }, OPERATOR), slug);
+  const res = await updateProjectOverview(adminReq(slug, { overview_short: "updated short" }, OPERATOR), slug);
   expect(res.status).toBe(200);
 
   const [row] = await sql<{ overview_short: string; overview_long: string }[]>`
@@ -72,16 +78,21 @@ test("a partial write leaves omitted overview fields untouched", async () => {
   expect(row.overview_long).toBe("first long"); // untouched
 });
 
-test("prod-mode config rejects a write with a missing or invalid admin token (403)", async () => {
+test("a write with no, a wrong, or another holder's token is rejected (403) and persists nothing", async () => {
   const slug = rid("admin-403");
   const id = await insertProject(slug);
   const body = { overview_short: "should not persist" };
 
-  const noToken = await updateProjectOverview(adminReq(slug, body), slug, PROD);
+  const noToken = await updateProjectOverview(adminReq(slug, body), slug);
   expect(noToken.status).toBe(403);
 
-  const wrongToken = await updateProjectOverview(adminReq(slug, body, "wrong-token"), slug, PROD);
+  const wrongToken = await updateProjectOverview(adminReq(slug, body, "wrong-token"), slug);
   expect(wrongToken.status).toBe(403);
+
+  // Neither the scheduler's nor the producer's store token is an admin credential.
+  for (const token of [await provisionSchedulerToken(), await provisionAnalyticsToken()]) {
+    expect((await updateProjectOverview(adminReq(slug, body, token), slug)).status).toBe(403);
+  }
 
   // Nothing was written under a rejected request.
   const [row] = await sql<{ overview_short: string | null }[]>`SELECT overview_short FROM projects WHERE id = ${id}`;
@@ -93,9 +104,9 @@ test("returns 404 for an unknown slug and 400 when no overview fields are suppli
   await insertProject(slug);
 
   const unknown = rid("nope");
-  const missing = await updateProjectOverview(adminReq(unknown, { overview_short: "x" }, PROD.adminToken), unknown, PROD);
+  const missing = await updateProjectOverview(adminReq(unknown, { overview_short: "x" }, OPERATOR), unknown);
   expect(missing.status).toBe(404);
 
-  const empty = await updateProjectOverview(adminReq(slug, {}, PROD.adminToken), slug, PROD);
+  const empty = await updateProjectOverview(adminReq(slug, {}, OPERATOR), slug);
   expect(empty.status).toBe(400);
 });

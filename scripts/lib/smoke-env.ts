@@ -28,12 +28,12 @@
 // It is ALSO where the smoke's cadence profile reaches the analytics-producer:
 // ONLY a RESOLVED realistic cadence (`--stage`, or an explicit `--cadence
 // realistic` override) injects the realistic profile's PRODUCER_REGIME_CRON /
-// PRODUCER_RESEARCH_CRON (scripts/lib/smoke-schedule.ts) so research cadence and
+// PRODUCER_RESEARCH_CRON (scripts/lib/smoke-cadence.ts) so research cadence and
 // swarm cadence are stated in ONE file. A fast-cadence boot — CI, plain
 // `bun run smoke`, and the smoke-twin's deliberate `--static-port --cadence fast`
 // — injects neither, so compose resolves the COMMITTED production defaults
 // untouched and the CI smoke path is byte-for-byte unaffected.
-import { resolveSmokeCadence, type SmokeCadenceProfile } from "./smoke-schedule.ts";
+import { resolveSmokeCadence, type SmokeCadenceProfile } from "./smoke-cadence.ts";
 
 export const NORMAL_DEMO_CACHE_TTL_MS = 3_600_000;
 

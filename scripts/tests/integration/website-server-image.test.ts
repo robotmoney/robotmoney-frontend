@@ -19,10 +19,17 @@ const PROJECT = "rm-website-server-image-test";
 const IMAGE_TAG = `${PROJECT}-website-server`;
 
 // `docker compose build <service>` still interpolates the WHOLE file (every
-// service's env), not just website-server's — these two are the only
-// required (no-default `${VAR:?...}`) interpolations in docker-compose.yml,
-// and their value is irrelevant to a build (never a boot).
-const composeEnv = { ...process.env, WEB_PORT: "1", POSTGRES_PORT: "1" };
+// service's env), not just website-server's — so every required
+// (no-default `${VAR:?...}`) interpolation in docker-compose.yml needs a value,
+// including the instance and its state directory (smoke spec §1.1: no checkout
+// fallback). Their values are irrelevant to a build (never a boot).
+const composeEnv = {
+  ...process.env,
+  WEB_PORT: "1",
+  POSTGRES_PORT: "1",
+  RM_INSTANCE: "rm_local_imagetest",
+  RM_INSTANCE_STATE_DIR: "/var/empty/rm_local_imagetest",
+};
 const composeArgv = ["compose", "-p", PROJECT, "-f", "docker-compose.yml"];
 
 function buildWebsiteServer(): void {

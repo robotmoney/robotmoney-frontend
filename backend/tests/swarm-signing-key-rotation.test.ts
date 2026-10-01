@@ -23,6 +23,7 @@ import * as admin from "../src/swarm/admin.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
 
@@ -67,6 +68,9 @@ test("a historical take still verifies after its author RE-REGISTERS (registerMe
   const subj = rid("s");
   await ensureProseSubject(subj, "Re-register Rotation Subject");
   const session = await ic.openSession(subj);
+  // Publish the brief so the session is `collecting`: a take lands only in a
+  // collecting epoch (system-scheduler-spec.md §4.2).
+  await ic.publishBrief(session.id, 60);
   const date = sessionDate(session);
 
   const keyA: Signer = await generateKeyPair();
@@ -111,6 +115,9 @@ test("a historical take still verifies after an ADMIN key rotation (rotateMember
   const subj = rid("s");
   await ensureProseSubject(subj, "Admin Rotation Subject");
   const session = await ic.openSession(subj);
+  // Publish the brief so the session is `collecting`: a take lands only in a
+  // collecting epoch (system-scheduler-spec.md §4.2).
+  await ic.publishBrief(session.id, 60);
   const date = sessionDate(session);
 
   const keyA: Signer = await generateKeyPair();
@@ -151,6 +158,9 @@ test("submitRecommendation records the exact key row that verified it (signing_k
   const subj = rid("s");
   await ensureProseSubject(subj, "Signing Key Id Subject");
   const session = await ic.openSession(subj);
+  // Publish the brief so the session is `collecting`: a take lands only in a
+  // collecting epoch (system-scheduler-spec.md §4.2).
+  await ic.publishBrief(session.id, 60);
   const date = sessionDate(session);
 
   const keyA: Signer = await generateKeyPair();
@@ -178,6 +188,9 @@ test("a pre-#697 row (signing_key_id NULL) falls back to the currently-active-ke
   const subj = rid("s");
   await ensureProseSubject(subj, "Cutover Fallback Subject");
   const session = await ic.openSession(subj);
+  // Publish the brief so the session is `collecting`: a take lands only in a
+  // collecting epoch (system-scheduler-spec.md §4.2).
+  await ic.publishBrief(session.id, 60);
   const date = sessionDate(session);
 
   const key: Signer = await generateKeyPair();
@@ -186,7 +199,7 @@ test("a pre-#697 row (signing_key_id NULL) falls back to the currently-active-ke
 
   const submitted = await submitSignedTake({ token: registered.token, signer: key, memberId, date, subjectId: subj, nonce: "n1" });
 
-  await sql`UPDATE swarm_recommendations SET signing_key_id = NULL WHERE id = ${submitted.recommendationId}`;
+  await fixtureDb`UPDATE swarm_recommendations SET signing_key_id = NULL WHERE id = ${submitted.recommendationId}`;
 
   const after = await ic.getTakeReceipt(submitted.recommendationId);
   expect(after?.take.verified).toBe(true);

@@ -13,7 +13,7 @@ import type {
 import { path as routePath, ROUTES } from "@robotmoney/contract";
 import { verifyStoredSubmissionSignature } from "../lib/signing.ts";
 import { isV0ArchiveNonce } from "./v0-archive.ts";
-import { normalizedTakeWeights } from "./domain.ts";
+import { normalizedTakeWeights, takeRevision } from "./domain.ts";
 
 type Row = Record<string, any>;
 
@@ -198,8 +198,10 @@ export function toTake(row: Row): SwarmTake {
     // #573). Defaults to 1 rather than being omitted when the column is not
     // selected, because "revision 1" is exactly what every row was before
     // migration 0028 and what every archival row still is — an absent field
-    // here would make a caller guess.
-    revision: row.revision == null ? 1 : Number(row.revision),
+    // here would make a caller guess. The default is domain.ts's
+    // TAKE_REVISION_DEFAULT, shared with the judge input and the receipt, so
+    // one take set yields one inputs_digest (criterion 128).
+    revision: takeRevision(row.revision),
     receivedAt: instant(row.received_at) ?? "",
   };
 }
@@ -251,7 +253,7 @@ export function toBrief(row: Row): SwarmBrief {
 // payloads are embedded at publishBrief() and persisted into swarm_briefs.body
 // exactly as they were on the day they were written, so projecting here also
 // shrinks every EXISTING brief, needs no backfill, and leaves what
-// judge-session.ts reads (straight off the row, never through this function)
+// the judge's input reads (judgeInputFromFrozen, straight off the row, never through this function)
 // untouched. `?include=researchSignals` restores the legacy embedded shape for
 // a caller that genuinely wants it inline.
 export function projectBriefResearchSignals(brief: SwarmBrief, includeFull: boolean): SwarmBrief {
@@ -297,6 +299,7 @@ export function toPublicJudgement(row: Row): SwarmJudgement {
     sessionId: row.session_id,
     subjectId: row.subject_id,
     sessionDate: day(row.session_date),
+    sessionOpenedAt: instant(row.session_opened_at),
     judgedBy: row.judged_by,
     judgedByMemberId: row.judged_by_member_id ?? null,
     source: row.source === "model" ? "model" : "fallback",

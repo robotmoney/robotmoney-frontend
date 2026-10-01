@@ -6,8 +6,13 @@
 // of scripts/lib/smoke-main.ts — the same split issue #456 and #537 already
 // applied to the TUI view and the smoke plan. smoke-main.ts keeps only the
 // wiring: running `docker compose stop`, and reading the log file off disk.
-import { color, hr, truncate } from "./tui.ts";
-import type { FatalState, WriterQuiesce } from "./smoke-tui-view.ts";
+//
+// NO TUI. `bun smoke` draws no TUI (smoke spec §1): a failure is printed as
+// plain lines and the process exits. writerQuiesceLine() below is the one line
+// of that report that is a decision rather than a message; the failure pane
+// that used to paint it (smoke-tui-view.ts) is retired with the TUI.
+// scripts/tests/unit/smoke-tui.test.ts walks the import graph and fails if a
+// TUI module comes back through here.
 
 /**
  * Every compose service that WRITES to the database — the set a failed startup
@@ -31,26 +36,13 @@ import type { FatalState, WriterQuiesce } from "./smoke-tui-view.ts";
 export const DB_WRITER_SERVICES: readonly string[] = Object.freeze([
   "api",
   "analytics-producer",
-  "worker-swarm",
   "worker-analytics",
-  "worker-research",
 ]);
-
-/**
- * One line stating, plainly, whether the database is still being written to.
- *
- * The operator's next decision depends on this more than on the error text, so
- * it is never implied — a failed quiesce says so in as many words, because the
- * writes it could not stop are the ones no teardown can roll back.
- */
-export function writerQuiesceLine(w: WriterQuiesce): string {
-  switch (w) {
-    case "stopped": return `${color("32", "✓")} database writers stopped — nothing is still writing`;
-    case "pending": return `${color("33", "…")} stopping database writers…`;
-    case "none": return `${color("2", "·")} no database writers were running`;
-    case "failed": return color("1;31", "! could NOT stop the database writers — they may STILL be writing; run `bun run smoke:down`");
-  }
-}
+// `system-scheduler` is absent because it writes to no database: it holds one
+// API credential and no role password (system-scheduler-spec.md §7), so a
+// failed boot that leaves it running leaves nothing drifting. Quiescing the
+// `api` above already closes the only channel through which it can change
+// state.
 
 /**
  * Lines worth showing: the ones a bootstrap prints when it refuses to proceed.
@@ -93,20 +85,20 @@ export function selectFailureDetail(logText: string, logFile: string): string[] 
   return [...picked, `full log: ${logFile}`];
 }
 
+/** Whether a failed boot stopped the database writers (DB_WRITER_SERVICES). */
+export type WriterQuiesce = "stopped" | "failed" | "none";
+
 /**
- * The failure pane.
+ * One line stating, plainly, whether the database is still being written to.
  *
- * The boot is over, but the TUI stays up and keeps painting this, so the cause
- * is readable on the screen that was already showing the run — rather than
- * printed to a terminal the process just abandoned. Rendered directly under the
- * Startup pane so the ✗ step above and the reason here read together.
+ * The operator's next decision depends on this more than on the error text, so
+ * it is never implied: a failed quiesce says so in as many words, because the
+ * writes it could not stop are the ones no teardown can roll back.
  */
-export function renderFailurePane(fatal: FatalState, width: number, project: string): string[] {
-  const out = [hr(width, "STARTUP FAILED")];
-  const where = fatal.step ? `${fatal.step}: ` : "";
-  out.push(truncate(`  ${color("1;31", "✗")} ${color("1", where)}${fatal.message}`, width));
-  for (const d of fatal.detail) out.push(truncate(color("2", `      ${d}`), width));
-  out.push(truncate(`  ${writerQuiesceLine(fatal.writers)}`, width));
-  out.push(truncate(color("2", `  inspect: bun run smoke:status   ·   logs: docker compose -p ${project} logs -f`), width));
-  return out;
+export function writerQuiesceLine(w: WriterQuiesce): string {
+  switch (w) {
+    case "stopped": return "database writers: stopped — nothing is still writing";
+    case "none": return "database writers: none were running";
+    case "failed": return "database writers: could NOT stop them — they may STILL be writing; run `bun smoke:down`";
+  }
 }

@@ -4,6 +4,7 @@
 // overwrites rather than duplicating.
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import {
   loadRawIndicatorHistory,
   saveRawIndicatorHistory,
@@ -15,7 +16,7 @@ const A = "TEST_RAW_A";
 const B = "TEST_RAW_B";
 
 async function cleanup() {
-  await sql`DELETE FROM raw_indicator_history WHERE indicator IN (${A}, ${B})`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator IN (${A}, ${B})`;
 }
 
 test("saveRawIndicatorHistory → loadRawIndicatorHistory: round-trips, grouped and sorted", async () => {

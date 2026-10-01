@@ -5,11 +5,29 @@
 # issue #892 — website-server/nginx.conf proxies /api/ and /health through to
 # `api` so this stack still presents as one origin, matching frontend/public/
 # config.js's same-origin default and this repo's own local dev/smoke/e2e
-# harness, which loads pages from `backendUrl`). `api` no longer SERVES any
-# static content — see website-server/Dockerfile — but still reads the same
-# `_static` mount read-only, for AC-ID-03/T26 identity purposes only (see the
-# STATIC_DIR comment on the api service; tracked for removal once the static
-# bundle is baked into website-server's own image instead of assembled here).
+# harness, which loads pages from `backendUrl`). `api` serves no static content
+# and mounts none (D55 (1)): the site reports itself at /version.json and the
+# api at /api/version.
+#
+# THIS IS THE ONLY BASE COMPOSE FILE. The former smoke overlay is gone (smoke
+# spec §4.4): its reap-by-label stamps and data-path passthroughs live here, and
+# its one surviving knob is the explicit `bun smoke --allow-insecure` flag, which
+# refuses under RM_ENV=prod.
+#
+# CONTAINER LABELS — the reap-by-label channel (scripts/stack/naming.ts). Every
+# standing service, the pgdata volume and the default network carry the same
+# three labels:
+#
+#   robotmoney.smoke.project=<compose project>  which RUN created it
+#   robotmoney.env=ci|local                    which ENVIRONMENT CLASS created it
+#   robotmoney.env.hash=<10 hex>               which environment INSTANCE
+#
+# Names encode the same facts, but tools must select on these LABELS:
+# name-substring matching is the fragile channel, and on a host that runs the
+# standing stage smoke, the CI runner and local evals at once a wrong selector
+# kills the live site. The two RM_STACK_* values are set by
+# scripts/stack/config.ts's buildComposeEnv and reproduced from the instance's
+# stack-state.json by smoke:down / smoke:status. Unset, they resolve empty.
 #
 # HOST PORTS ARE ASSIGNED BY DOCKER, NEVER BY US. Both published ports below
 # use the container-port-only short form (`- "8787"`), which makes the Docker
@@ -30,7 +48,8 @@
 #
 # Read the assignment back with `docker compose -p <project> port <svc> <port>`
 # (scripts/stack/ports.ts's parseComposePortOutput); `bun run smoke` prints both
-# in its READY banner and records them in .agents/smoke-state.json.
+# in its READY banner and records them in the instance's stack-state.json
+# (scripts/lib/smoke-state.ts), never in the checkout.
 #
 # THE ONE FIXED PORT in the whole system is the stage tunnel origin, and it
 # lives in its own overlay: docker-compose.stage.yml pins api to 48787 with
@@ -43,19 +62,25 @@
 #   ephemeral (CI)  : run with a throwaway volume / `docker compose down -v`
 #   demo            : named volume `pgdata` persists across restarts
 #   prod            : point DATABASE_URL at an external/managed Postgres and run
-#                     `api` + internal worker lanes + independent producer
-#                     (docker compose up api worker-swarm worker-analytics worker-research analytics-producer)
+#                     `api` + internal worker lanes + the scheduler + producer
+#                     (docker compose up api worker-analytics system-scheduler analytics-producer)
 
 # Task-queue worker lanes (issue #107): one container per execution lane. This
 # IS the production/default lane topology:
-#   worker-swarm — RESERVED for interactive swarm session-lifecycle
-#                      jobs (swarm.%); no other lane may claim them.
 #   worker-analytics — internal scheduled pipelines (vault/wallet/buybacks/
-#                      projects), excluding swarm.% / research.%.
-#   worker-research  — compatibility lane for unreachable legacy research.%
-#                      queue handlers; D25 producer execution does not use it.
+#                      projects). It is the only queue worker: the research
+#                      lane and its container are gone (issue #1026 wave 6).
 #   analytics-producer — owns regime/research timers and submits over REST; no
 #                        DATABASE_URL or admin credential.
+#
+# THERE IS NO `worker-swarm` LANE (issue #1026). Session timing is not queue
+# work and never was: it is a clock, and it now lives in its own container,
+# `system-scheduler`, declared at the bottom of this file. System scheduler
+# spec §1 — "`system-scheduler` is one long-running container. It replaces the
+# process formerly called `worker-swarm`." The five `swarm.*` schedule rows,
+# their cron variables and their enable flag went with it; smoke-production
+# spec §6.3 — "There is nothing to enable … There are no schedule rows, no cron
+# strings, no `next_run_at`, and no enable command."
 # WORKER_LANE is REQUIRED by the worker entry (fails loudly when empty/unknown);
 # WORKER_ID defaults to `<lane>-<pid>` (unique per container, lane-visible in
 # locked_by/logs/admin dashboard). The producer is not a queue lane.
@@ -68,6 +93,11 @@
 # 10m x 3 per container: enough history to see a crash loop develop across
 # several restarts, capped at ~30MB x 6 services. Applied to EVERY service —
 # a service without it silently keeps the unbounded default.
+x-smoke-labels: &smoke-labels
+  robotmoney.smoke.project: ${SMOKE_PROJECT:-}
+  robotmoney.env: ${RM_STACK_ENV_CLASS:-}
+  robotmoney.env.hash: ${RM_STACK_ENV_HASH:-}
+
 x-logging: &default-logging
   driver: json-file
   options:
@@ -120,11 +150,16 @@ x-worker-base: &worker-base
 # worker needs PROJECTS_SOURCE=live (fail-closed — unset throws in prod; unset
 # elsewhere = offline fixture).
 x-worker-env: &worker-env
-  DATABASE_URL: ${DATABASE_URL}
-  # Optional queue-scoped restricted role (migrations/0016_worker_role.sql):
-  # point the worker's pool at rm_worker so DB permissions enforce that it can
-  # never mutate analytics data tables (issue #106). Falls back to DATABASE_URL
-  # when unset.
+  # THE PIPELINE WORKER HOLDS rm_worker AND NOTHING ELSE (smoke-production-spec
+  # §7.2: "the pipeline worker running the vault, wallet, buyback and project
+  # jobs as `rm_worker`"). Both of the backend's pools — config.ts's DATABASE_URL
+  # and db/worker-client.ts's WORKER_DATABASE_URL — are the worker credential,
+  # which scripts/stack/config.ts buildComposeEnv() emits from the stack's own
+  # role URLs. There is NO fallback to the api's DATABASE_URL: that fallback is
+  # how every lane used to run on the api's rm_app login. Unset, the worker's
+  # DATABASE_URL is empty and config.ts refuses to start — loudly, never on
+  # someone else's credential.
+  DATABASE_URL: ${WORKER_DATABASE_URL:-}
   WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
   # FAIL-CLOSED DEFAULT (D13). This interpolation default must never be reached:
   # scripts/stack/config.ts's buildComposeEnv() emits RM_ENV explicitly for every
@@ -155,10 +190,19 @@ x-worker-env: &worker-env
   # pacing off entirely, which also stops the backfill (it refuses to run
   # unpaced). Passing it through here is still what makes an override reachable
   # inside the container at all.
-  # (BASE_RPC_URL / BASE_RPC_SOURCE are deliberately NOT added here: their
-  # absence from this allowlist is the pre-existing defect class tracked in
-  # #641/#643, and fixing it belongs there rather than riding along on this
-  # change. The code defaults they fall through to are the production values.)
+  # Data-path knobs (issue #50). With nothing set every one resolves EMPTY, so
+  # backend config.ts / analytics/index.ts fall through to their own live
+  # production defaults (BASE_RPC_URL -> https://mainnet.base.org,
+  # ANALYTICS_SOURCE / BASE_RPC_SOURCE -> live). scripts/lib/smoke-env.ts pins
+  # them explicitly for `bun run smoke`; an explicit override always wins.
+  BASE_RPC_URL: ${BASE_RPC_URL:-}
+  BASE_RPC_SOURCE: ${BASE_RPC_SOURCE:-}
+  ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
+  # Cold-DB floor seed: load the vendored raw floor once so a fresh LIVE boot
+  # does not re-fetch years of history. Idempotent; off unless set.
+  ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
+  FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
+  FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
   BASE_RPC_MAX_CALLS_PER_SEC: ${BASE_RPC_MAX_CALLS_PER_SEC:-}
   BASE_RPC_RATE_BURST: ${BASE_RPC_RATE_BURST:-}
   # Blast-radius bounds on the repair driver (worker/handlers/repair.ts).
@@ -167,11 +211,13 @@ x-worker-env: &worker-env
   # Minimum spacing between GeckoTerminal OHLCV requests (a keyless 429 was
   # observed on the 6th call in ~15s). Unrelated to the Base RPC budget above.
   GECKO_OHLCV_MIN_INTERVAL_MS: ${GECKO_OHLCV_MIN_INTERVAL_MS:-}
-  # (The consensus judge's three knobs are NOT here. This anchor is shared by
-  # all three worker lanes and only worker-swarm runs `swarm.judge`, so putting
-  # a live inference credential in it hands one to worker-analytics and
-  # worker-research, which never call a model. They are declared on
-  # worker-swarm's own environment block instead — issue #757 review.)
+  # (The consensus judge's knobs are NOT here, and no longer anywhere among the
+  # worker lanes: the lane that ran `swarm.judge` is gone (issue #1026) and the
+  # judge is a participant now, receiving its model key the way every
+  # participant does — smoke-production spec §3 "the judge receives its key the
+  # way every participant does, from `credential.json`". worker-analytics
+  # calls no model, so this anchor carries no inference
+  # credential at all.)
   # Optional per-call inference bound (issue #537), read by
   # scripts/lib/swarm/inference.ts's timeoutMs(). Declared with a NULL value —
   # not `${OPENCODE_TIMEOUT_MS:-}` — deliberately: the `:-` form resolves to the
@@ -182,11 +228,6 @@ x-worker-env: &worker-env
   # the committed default stays in force. Asserted both ways in
   # scripts/tests/integration/demo-compose-config.test.ts.
   OPENCODE_TIMEOUT_MS:
-  # Activation notifications are persisted by the API and delivered by the
-  # reserved swarm worker through the deployment's HTTP mail adapter.
-  SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-swarm-demo@robotmoney.invalid}
-  SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL: ${SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL:-}
-  SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN: ${SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN:-}
 
 services:
   postgres:
@@ -203,8 +244,10 @@ services:
     # of work; do not bump it here in passing (issue #691 was scoped to the
     # harness on purpose).
     image: postgres:17-alpine
+    labels: *smoke-labels
     logging: *default-logging
     environment:
+      PG_POOL_MAX: "2"
       POSTGRES_USER: ${POSTGRES_USER:-robotmoney}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-robotmoney}
       POSTGRES_DB: ${POSTGRES_DB:-robotmoney}
@@ -220,6 +263,9 @@ services:
       - "5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # Docker restarts it after a crash or a daemon restart, like every other
+    # standing service (smoke spec §1): `bun smoke` is not what keeps it up.
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-robotmoney}"]
       interval: 5s
@@ -235,8 +281,23 @@ services:
         RM_BUILD_COMMIT: ${RM_BUILD_COMMIT:-}
         RM_BUILD_TAG: ${RM_BUILD_TAG:-}
     command: ["bun", "run", "src/api/index.ts"]
+    labels: *smoke-labels
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      # `bun smoke --allow-insecure` only (smoke spec §4.4): scripts/stack/config.ts
+      # buildComposeEnv() emits `1` for that flag and empty otherwise, and the flag
+      # is a refusal under RM_ENV=prod. A bare `docker compose` resolves empty:
+      # secure by default. Nothing in a compose file pins it.
+      RM_ALLOW_INSECURE: ${RM_ALLOW_INSECURE:-}
+      # Data-path knobs (issue #50, #147): every boot is production-parity LIVE.
+      # With nothing set each resolves EMPTY and backend config.ts falls through
+      # to its live production default. An explicit override always wins.
+      BASE_RPC_URL: ${BASE_RPC_URL:-}
+      BASE_RPC_SOURCE: ${BASE_RPC_SOURCE:-}
+      ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
+      ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
+      FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
+      FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
       # FAIL-CLOSED DEFAULT (D13). This interpolation default must never be reached:
       # scripts/stack/config.ts's buildComposeEnv() emits RM_ENV explicitly for every
       # service, so the value is a property of the stack config rather than of
@@ -282,16 +343,13 @@ services:
       # No API_PORT here on purpose — see the `ports:` comment below. The api
       # listens on backend/src/config.ts's 8787 default, which is the single
       # source of truth for the container-internal port.
-      # Guards the privileged surface incl. the /admin task-queue dashboard
-      # (X-Admin-Token). The api process is the one that authenticates HTTP; the
-      # demo sets a random per-launch value (worker doesn't serve the API).
-      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
-      AUTOMATION_TOKEN: ${AUTOMATION_TOKEN:-}
-      # Analytics-provider bearer credential (issue #106): the api VERIFIES it on
-      # POST /api/swarm/regime + every /api/analytics/* route. Fail-closed:
-      # unset locks those routes except under RM_ALLOW_INSECURE/ephemeral.
-      ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}
-      ANALYTICS_TOKEN_FILE: /run/secrets/analytics_token
+      # NO SERVICE TOKEN, AND NO TOKEN FILE (smoke-production spec §3, D52).
+      # The api validates every service bearer — the scheduler's, the analytics
+      # producer's and the operator's — against its own automation-token store
+      # (backend/src/db/automation-tokens.ts): a row holding the token's hash and
+      # its rights. There is no shared secret for it to compare against, so
+      # ADMIN_TOKEN, AUTOMATION_TOKEN, ANALYTICS_TOKEN and the old
+      # `analytics_token` Docker secret are gone from this service, not blanked.
       # Passkey relying-party origin/host (issue #617): cloudflared terminates
       # TLS in front of this plain-HTTP Bun server, so the request's own
       # url.origin is http://... while the browser's real origin is
@@ -309,59 +367,31 @@ services:
       # Optional capability TTLs. Blank/unset preserves backend defaults.
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
       TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
-      SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-swarm-demo@robotmoney.invalid}
-      # Swarm session-lifecycle cron cadence (issue #208). Read at
-      # `bun run migrate` time (seed() -> resolveSwarmSchedules) — this is
-      # the SINGLE-BOX/prod compose file, so it explicitly enables the daily
-      # 06:00-08:00 UTC sequence by default; docker-compose.smoke.yml pins
-      # SWARM_SCHEDULES_ENABLED off (repo demo/e2e never auto-runs the
-      # swarm on its own). Staging overrides any of these per-kind crons
-      # (or SWARM_WINDOW_MINUTES) to an accelerated cadence via its own env.
-      SWARM_SCHEDULES_ENABLED: ${SWARM_SCHEDULES_ENABLED:-1}
-      SWARM_OPEN_SESSION_CRON: ${SWARM_OPEN_SESSION_CRON:-0 6 * * *}
-      SWARM_PUBLISH_BRIEF_CRON: ${SWARM_PUBLISH_BRIEF_CRON:-0 7 * * *}
-      SWARM_CLOSE_WINDOW_CRON: ${SWARM_CLOSE_WINDOW_CRON:-0 8 * * *}
-      SWARM_AGGREGATE_CRON: ${SWARM_AGGREGATE_CRON:-0 9 * * *}
-      SWARM_PUBLISH_CRON: ${SWARM_PUBLISH_CRON:-0 10 * * *}
-      SWARM_WINDOW_MINUTES: ${SWARM_WINDOW_MINUTES:-60}
-      # Consensus judge (issue #752). ITS ON/OFF SWITCH IS NOT HERE, and neither
-      # is WHICH MODEL it uses — both are columns on `swarm_judge_config`, set
-      # over POST /api/swarm/admin/judge without restarting anything. The model
-      # is a row rather than a `SWARM_JUDGE_MODEL` env var because D22 rule 1
-      # keeps model selection to one reviewable signal. What is left here is the
-      # shared OpenCode Zen credential (the member agents' existing key, not a
-      # second one), the endpoint, and the per-call bound. All blank by default.
-      # An unconfigured model no longer means template prose and a recorded
-      # reason (issue #969): `shadow`/`enforce` REQUIRE a model, and a judge
-      # that cannot be reached stops the judging rather than authoring prose
-      # under its own name and letting it reach a signed receipt.
-      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
-      SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
-      SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
-      # WHERE THE JUDGE'S CONTAINER IS STARTED (issue #1012). This process does
-      # NOT hold the Docker socket and must never be given it: it asks the
-      # agent-launcher service below for one short-lived judge container and
-      # reads the answer back over the compose network. A launcher that cannot
-      # be reached is its own fail-closed reason (`launcher_unavailable`), never
-      # a model or credential verdict.
-      SWARM_AGENT_LAUNCHER_URL: ${SWARM_AGENT_LAUNCHER_URL:-http://agent-launcher:8799}
-      # THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (R13, backend/src/swarm/
-      # judge-fault-injection.ts). This service arms/disarms the row over
-      # POST /api/swarm/admin/judge/fault-injection (swarm/admin.ts), and
-      # `assertFaultInjectionAllowed()` runs on THIS process's env before that
-      # write — a row armed without the flag present here is refused at arm
-      # time, not merely inert. Blank by default so no deployment honours a
-      # fault-injected judge unless an operator explicitly sets these.
-      SWARM_JUDGE_FAULT_INJECTION: ${SWARM_JUDGE_FAULT_INJECTION:-}
-      SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN: ${SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN:-}
-      # READ-ONLY, FOR AC-ID-03/T26 IDENTITY ONLY (issue #892 follow-up tracked
-      # separately: this mount should not exist by the time that work lands —
-      # the static bundle should be baked into website-server's own image, and
-      # deploy-time should only write/check a small identity JSON, never build
-      # anything). website-server, not this process, SERVES the SPA from the
-      # same underlying `_static` directory; api reads the manifest here purely
-      # to compare its own build identity against what was assembled.
-      STATIC_DIR: /srv/frontend
+      # NO SESSION-SCHEDULING VARIABLE IS DECLARED HERE, and that is the whole
+      # of issue #1026. There used to be seven — an enable flag and six cadence
+      # knobs read at seed time. A subject's epoch duration is now the entire
+      # schedule: set by the bootstrap data on a blank database, changed
+      # afterwards only through the admin API, and never disabled (system
+      # scheduler spec §2.2, §2.3, §2.4). Smoke-production spec §6.3 states the
+      # consequence for this file: "There is nothing to enable … There are no
+      # schedule rows, no cron strings, no `next_run_at`, and no enable
+      # command." An operator looking for the knob is looking for a subject.
+      #
+      # The api's side of the credential `system-scheduler` presents is its
+      # row in the token store; the scheduler's own copy is a FILE, never an
+      # env var (smoke-production spec §3).
+      # NO MODEL KEY (D52, smoke spec §6.2). `api` used to carry the shared
+      # OpenCode Zen key, the judge endpoint and its per-call bound, for an
+      # inline judge. Nothing in `api` judges any more: the judge is a
+      # participant, a standing container that takes its own model key from
+      # credential.json. A database-holding process holding a model key is the
+      # combination §7 forbids, so the three keys are gone, not blanked.
+      # scripts/tests/integration/no-docker-socket-compose-config.test.ts
+      # asserts no non-participant service in any composition carries one.
+      # NO JUDGE FAULT-INJECTION LEVER. D55 (3) retires it: the stack no
+      # longer hands `api` SWARM_JUDGE_FAULT_INJECTION or its acceptance
+      # opt-in, so no composition can arm a fault-injected judge (the backend
+      # code and its table go in later #1026 waves).
     ports:
       # HOST side: ABSENT on purpose — the short form publishes the container
       # port on a host port the Docker daemon picks and binds atomically (see
@@ -385,12 +415,6 @@ services:
       # `ports` by APPENDING, so the overlay must override rather than add —
       # otherwise --stage would publish 48787 AND a second ephemeral port.
       - "8787"
-    volumes:
-      # READ-ONLY, FOR AC-ID-03/T26 IDENTITY ONLY — api does not serve from
-      # this mount (website-server does). See the STATIC_DIR comment above.
-      - ./_static:/srv/frontend:ro
-    secrets:
-      - analytics_token
     depends_on:
       postgres:
         condition: service_healthy
@@ -415,12 +439,22 @@ services:
   # why mounting `frontend/public` directly breaks every route's metadata.
   # website-server/nginx.conf proxies /api/ and /health to the api service and
   # replicates the old routeShell() fallback order for everything else.
+  #
+  # WHAT IT SERVES is the instance's site directory, not the checkout's
+  # `_static`: `bun smoke` places each assembled `_static` as an immutable
+  # `web/<siteId>/` and swaps the `current` symlink (scripts/lib/smoke-site.ts),
+  # and nginx serves `/srv/web/current`. A site switch is then a symlink rename
+  # that touches no container, and a rebuild of `_static` in the checkout can no
+  # longer change what a running stack serves underneath it.
   website-server:
     build:
       context: ./website-server
       dockerfile: Dockerfile
+    labels:
+      <<: *smoke-labels
+      robotmoney.instance: ${RM_INSTANCE:?RM_INSTANCE is required; bun smoke sets it from the resolved instance}
     volumes:
-      - ./_static:/srv/frontend:ro
+      - ${RM_INSTANCE_STATE_DIR:?RM_INSTANCE_STATE_DIR is required; bun smoke sets it to the instance's state directory}/web:/srv/web:ro
     ports:
       # Docker-assigned host port, same convention as every other service in
       # this file (see the header comment) — CONTAINER side is nginx.conf's
@@ -437,68 +471,144 @@ services:
       retries: 3
       start_period: 10s
 
-  worker-swarm:
-    <<: *worker-base
-    environment:
-      <<: *worker-env
-      WORKER_LANE: swarm
-      # Consensus judge (issue #752) — THIS LANE ONLY. `swarm.judge` runs here
-      # and nowhere else among the workers, so the shared OpenCode Zen
-      # credential, the endpoint and the per-call bound are declared on this
-      # service rather than in the *worker-env anchor above: worker-analytics
-      # and worker-research would otherwise receive a live inference credential
-      # they never use. Without them HERE the one process that actually runs the
-      # judge on a schedule cannot reach a model at all — which since issue #969
-      # STOPS the judging loudly (503 judge_unavailable, session left unjudged)
-      # instead of falling back to template prose silently, which is what this
-      # comment used to warn about and what production actually did.
-      # On/off AND which model are database rows, not env vars; see the api
-      # block above.
-      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
-      SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
-      SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
-      # WHERE THE JUDGE'S CONTAINER IS STARTED (issue #1012). This process does
-      # NOT hold the Docker socket and must never be given it: it asks the
-      # agent-launcher service below for one short-lived judge container and
-      # reads the answer back over the compose network. A launcher that cannot
-      # be reached is its own fail-closed reason (`launcher_unavailable`), never
-      # a model or credential verdict.
-      SWARM_AGENT_LAUNCHER_URL: ${SWARM_AGENT_LAUNCHER_URL:-http://agent-launcher:8799}
-      # THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (R13, backend/src/swarm/
-      # judge-fault-injection.ts) — THIS LANE ONLY, same reasoning as the three
-      # knobs above: `selectFaultInjection()` runs inside `swarm.judge`, which
-      # only this worker lane executes. Without the flag present here the
-      # lever stays inert even once armed through the api. Blank by default so
-      # no deployment honours a fault-injected judge unless an operator
-      # explicitly sets these.
-      SWARM_JUDGE_FAULT_INJECTION: ${SWARM_JUDGE_FAULT_INJECTION:-}
-      SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN: ${SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN:-}
-
   worker-analytics:
     <<: *worker-base
+    labels: *smoke-labels
     environment:
+      PG_POOL_MAX: "2"
       <<: *worker-env
       WORKER_LANE: analytics
       # `analytics.parity_sweep` (issue #979 fix) claims on this lane and now
       # calls the API process over authenticated HTTP (analytics/api-client.ts
       # triggerParitySweep()) instead of holding its own rm_app-credentialed
-      # pool — same ANALYTICS_API_URL + analytics_token wiring as
-      # analytics-producer below, declared HERE (not the shared *worker-env
-      # anchor) so worker-swarm/worker-research never receive a credential
-      # they have no job kind that needs.
+      # pool. It presents the analytics ingestion token, the one holder that
+      # carries the `analytics_ingestion` right (smoke spec §3), read from the
+      # analytics-producer holder's directory mounted read-only below. Declared
+      # HERE (not the shared *worker-env anchor) so the credential stays scoped
+      # to the one lane whose job kinds need it.
       ANALYTICS_API_URL: http://api:8787
-      ANALYTICS_TOKEN_FILE: /run/secrets/analytics_token
-    secrets:
-      - analytics_token
+      ANALYTICS_TOKEN_FILE: /run/rm-token/token
+    volumes:
+      - ${RM_INSTANCE_STATE_DIR:?RM_INSTANCE_STATE_DIR is required; bun smoke sets it to the instance's state directory}/tokens/analytics-producer:/run/rm-token:ro
 
-  worker-research:
-    <<: *worker-base
+  # THE CLOCK (issue #1026). One long-running container that holds one timer per
+  # active subject, fires each subject's epoch boundary, drives settlement and
+  # rebuilds all of it from the API after any interruption. System scheduler
+  # spec §1: "`system-scheduler` is one long-running container. It replaces the
+  # process formerly called `worker-swarm`. There is no separate clock process
+  # and no separate executor process."
+  #
+  # WHY THIS SERVICE CARRIES NO DATABASE CREDENTIAL. Spec §1's role table says
+  # of the scheduler's database connection: "**No.** Never." §7 spells out what
+  # that leaves it: "`system-scheduler` holds exactly one: an **API
+  # credential**, an automation token with the rights to read subjects and
+  # sessions and to perform lifecycle transitions. It signs nothing, so it has
+  # no signing key … It never touches the database, so it has no role password.
+  # It calls no model, so it has no model key. It holds no Docker socket."
+  #
+  # So the absences below are the specification, not an oversight, and each one
+  # is load-bearing:
+  #   - no DATABASE_URL / WORKER_DATABASE_URL — the clock cannot read or write
+  #     state directly, so a scheduler bug cannot corrupt a session; every
+  #     transition goes through the API's own authorization and invariants.
+  #   - no model-vendor key of any kind — it calls no model. Takes and
+  #     judgements are participants' work (smoke-production spec §6). (The
+  #     variable is deliberately not spelled out here: no-inline-judge.test.ts
+  #     reads this file as service blocks and a mention inside a comment is
+  #     indistinguishable from a declaration.)
+  #   - no RM_CREDENTIALS / signing key — it authors nothing that is signed.
+  #   - no /var/run/docker.sock — smoke-production spec §3: "No container holds
+  #     a Docker socket. Not a participant, and not `api`, `worker` or
+  #     `system-scheduler` either." Nothing is spawned at runtime.
+  # `scripts/tests/unit/system-scheduler-health.test.ts` asserts the module
+  # graph that makes the first absence true by construction rather than by
+  # discipline, and no-docker-socket-compose-config.test.ts asserts the last.
+  #
+  # NOT `*worker-base`: that anchor sets the worker entrypoint, a
+  # `depends_on: postgres` and the heartbeat healthcheck read out of the
+  # database — all three wrong here. The `build:` block is spelled out instead
+  # so this still ships from the one image the rest of the stack ships from
+  # (scripts/stack/images.ts's SHIPPED_IMAGE_SERVICES).
+  system-scheduler:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        AUM_PRODUCER_REVISION: ${AUM_PRODUCER_REVISION:-}
+        RM_BUILD_COMMIT: ${RM_BUILD_COMMIT:-}
+        RM_BUILD_TAG: ${RM_BUILD_TAG:-}
+    command: ["bun", "run", "scripts/system-scheduler.ts"]
     environment:
-      <<: *worker-env
-      WORKER_LANE: research
+      # The API this clock drives. A service name on the compose network, not a
+      # published host port: nothing outside the stack routes to it, and spec §1
+      # gives the API sole ownership of state, so this is the scheduler's only
+      # channel to anything.
+      SCHEDULER_API_URL: http://api:8787
+      # THE ONE CREDENTIAL, AND IT IS A PATH, NOT A SECRET. Smoke-production
+      # spec §3: the token is "handed to the container the way a participant's
+      # key is handed to its container — a file the boot places in the
+      # instance's state directory, named per instance, never in `~/.env` and
+      # never in the image." An `environment:` entry holding the token itself
+      # would be visible in `docker inspect`, inherited by every child process,
+      # and committed into whatever file an operator generated it from; a path
+      # to a read-only mount is none of those. Rotation is a re-provision by the
+      # boot plus a restart of this container, with no edit to this file.
+      # `token` is TOKEN_FILE_NAME in scripts/lib/smoke-state.ts: the one file
+      # in the holder's own token directory mounted below.
+      SCHEDULER_TOKEN_FILE: /run/rm-token/token
+      # Explicit rather than relying on readSchedulerEnv()'s 8090 default, so
+      # the healthcheck below and the process cannot disagree silently.
+      SCHEDULER_HEALTH_PORT: "8090"
+    ports:
+      # The health surface, published so `bun smoke`'s readiness and
+      # `bun smoke:status` read the scheduler's own answer (smoke spec §6.3:
+      # "Smoke reads this from the scheduler's health endpoint"). Loopback
+      # only, host port assigned by Docker like every other publish in this
+      # file: it is read by host tools on this machine and by nothing else.
+      - "127.0.0.1::8090"
+    labels:
+      <<: *smoke-labels
+      # Which deployment instance (smoke spec §1.1) this clock serves.
+      robotmoney.instance: ${RM_INSTANCE:?RM_INSTANCE is required; bun smoke sets it from the resolved instance}
+    volumes:
+      # The scheduler's OWN token directory, READ-ONLY, and nothing else of the
+      # instance's state (criterion 113). Not the instance directory: that holds
+      # role-passwords.json and every other holder's token, and §7 gives this
+      # clock exactly one credential. A directory rather than a single-file bind
+      # so a rotation (write-and-rename inside it) is visible without a
+      # remount. No default: a boot that did not say which instance it serves
+      # fails compose's interpolation here instead of mounting a checkout path.
+      - ${RM_INSTANCE_STATE_DIR:?RM_INSTANCE_STATE_DIR is required; bun smoke sets it to the instance's state directory}/tokens/system-scheduler:/run/rm-token:ro
+    depends_on:
+      # Start ordering only, deliberately not `condition: service_healthy`: the
+      # process serves its own health surface BEFORE its first rebuild
+      # (scripts/system-scheduler.ts step 3) precisely so an operator watching a
+      # scheduler that cannot reach its API sees WHY rather than a refused
+      # connection. Gating the start on api health would hide that.
+      - api
+    restart: unless-stopped
+    logging: *default-logging
+    # Spec §6.3 of smoke-production defines scheduler readiness — authenticated,
+    # stream synchronized, initial rebuild complete, every active subject
+    # holding a `collecting` session — and the process answers exactly that on
+    # /health: 200 when all of it holds, 503 with the degradation and its
+    # subject/session otherwise. So an HTTP status IS the whole check; nothing
+    # here has to know the semantics.
+    #
+    # `bun -e` rather than curl or wget, for the same reason the api service
+    # uses it: the image is oven/bun:1.3.5 and carries neither.
+    healthcheck:
+      test: ["CMD", "bun", "-e", "process.exit((await fetch('http://127.0.0.1:8090/health')).ok ? 0 : 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      # Covers container start plus the startup check and the first rebuild. A
+      # scheduler still rebuilding is honestly 503, and a slow start is not a
+      # failure.
+      start_period: 60s
 
   # Independent external producer (issue #361 Phase 4): no DATABASE_URL, no
-  # queue access, no ADMIN_TOKEN. It computes regime/research outputs in its own
+  # queue access, no admin right. It computes regime/research outputs in its own
   # container and can persist only through the analytics REST submission gate.
   analytics-producer:
     build:
@@ -509,9 +619,14 @@ services:
         RM_BUILD_COMMIT: ${RM_BUILD_COMMIT:-}
         RM_BUILD_TAG: ${RM_BUILD_TAG:-}
     command: ["bun", "run", "src/producer/index.ts", "serve"]
+    labels: *smoke-labels
     environment:
       ANALYTICS_API_URL: http://api:8787
-      ANALYTICS_TOKEN_FILE: /run/secrets/analytics_token
+      # Its ONE credential, a path to its own token file (smoke spec §3: the
+      # producer "holds one API credential and no other kind"). The file is
+      # `tokens/analytics-producer/token` in the instance's state directory,
+      # whose hash and `analytics_ingestion` right sit in the api's token store.
+      ANALYTICS_TOKEN_FILE: /run/rm-token/token
       ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
       # This process performs HTTP extraction but never token-price lookup.
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
@@ -520,8 +635,10 @@ services:
       COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
       PRODUCER_REGIME_CRON: ${PRODUCER_REGIME_CRON:-30 22 * * *}
       PRODUCER_RESEARCH_CRON: ${PRODUCER_RESEARCH_CRON:-0 23 * * *}
-    secrets:
-      - analytics_token
+    volumes:
+      # Its OWN token directory, read-only, and nothing else of the instance's
+      # state — the same shape as system-scheduler's mount.
+      - ${RM_INSTANCE_STATE_DIR:?RM_INSTANCE_STATE_DIR is required; bun smoke sets it to the instance's state directory}/tokens/analytics-producer:/run/rm-token:ro
     depends_on:
       - api
     restart: unless-stopped
@@ -542,85 +659,54 @@ services:
       # cover container start up to that first record.
       start_period: 300s
 
-  # ── The one service that holds the Docker socket (issue #1012) ─────────────
+  # Onboarding eval (docs/architecture.md §11 R8, Stage 5): a vanilla OpenCode
+  # agent container, no Robot Money tooling preinstalled (see
+  # scripts/lib/member-agent/Dockerfile). This is a TEMPLATE, not a standing
+  # service: the `member-agent` profile is never active by default, and
+  # scripts/lib/onboarding-eval.ts launches one short-lived instance per
+  # admission with `docker compose run`, naming the service explicitly. It is
+  # the one service WITHOUT `restart: unless-stopped`: a one-shot that restarted
+  # itself would re-run an admission nobody asked for.
   #
-  # THE JUDGE IS AN ACTOR LIKE ANY OTHER. A member agent gets its own
-  # short-lived container with its credential injected by one explicit `-e`
-  # (scripts/agent/member-agent.ts). The judge used to be the exception: a bare
-  # in-process fetch() from inside the long-running worker-swarm service, fed a
-  # credential only by this file's `${OPENCODE_API_KEY:-}` interpolation — which
-  # is precisely why one path's credential delivery drifted from the other's and
-  # CI judged every session `credential_unconfigured`. It now rides the same
-  # rail, and this service is what starts the container for it.
+  # Egress: the `api` service (the swarm REST API the agent applies against; D21
+  # retired the MCP server), GitHub Releases (the `rmpc` binary and the
+  # swarm-onboarding skill the agent installs itself), and OpenCode Zen.
   #
-  # WHY A SEPARATE SERVICE AT ALL. Starting a container needs the Docker socket,
-  # and the Docker socket IS root on the host — there is no read-only mode for
-  # it and no capability to drop that makes it safe. Mounting it into `api` or
-  # `worker-swarm` would put root behind every request handler and every piece
-  # of model-derived text those processes touch. So it is concentrated here,
-  # behind one internal route with one verb, and they ask over HTTP instead.
-  # scripts/tests/integration/agent-launcher-compose-config.test.ts asserts that
-  # exactly one service in every composition (base / smoke / stage) has this
-  # mount, so a future `- /var/run/docker.sock` added to any other service is a
-  # red gate rather than a quiet privilege escalation.
-  #
-  # NO `ports:`, EVER. This surface has no authentication of its own because it
-  # is reachable only from the compose network. Publishing it would hand
-  # anything that can reach the host's port a container-start primitive.
-  agent-launcher:
+  # Which agent runs is switchable per environment by AGENT_MODEL, resolved
+  # against scripts/lib/model-registry.ts. Both values reach the container by
+  # explicit `-e` injection from scripts/agent/member-agent.ts at
+  # `docker compose run` time — a container inherits no ambient environment, so
+  # there is deliberately no service-level environment fallback.
+  member-agent:
+    labels: *smoke-labels
     build:
       context: .
-      dockerfile: scripts/lib/agent-launcher/Dockerfile
-    environment:
-      # ITS OWN COPY, not a per-request parameter. The launcher injects this
-      # into each judge container the way runMemberAgent() injects a member's;
-      # a key travelling in the request body would be logged by every hop
-      # between worker-swarm and here.
-      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
-      SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
-      SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
-      # Which compose project the judge containers join. Emitted for every
-      # service by scripts/stack/config.ts's buildComposeEnv(); the launcher
-      # refuses to start without it rather than guessing a project name.
-      SMOKE_PROJECT: ${SMOKE_PROJECT:-}
-      COMPOSE_FILE: ${COMPOSE_FILE:-}
-      # The labels docker-compose.smoke.yml stamps on every container it starts,
-      # so a judge container this service leaks is attributable to the run that
-      # leaked it by LABEL and reapable by `bun run smoke:reap`.
-      RM_STACK_ENV_CLASS: ${RM_STACK_ENV_CLASS:-}
-      RM_STACK_ENV_HASH: ${RM_STACK_ENV_HASH:-}
-      SWARM_LAUNCHER_SPOOL_DIR: ${SWARM_LAUNCHER_SPOOL_DIR:-/tmp/rm-agent-launcher}
-    volumes:
-      # THE SOCKET. The only one in this file, and the reason for this service.
-      - /var/run/docker.sock:/var/run/docker.sock
-      # The shared spool, bound at the SAME PATH on both sides. `-v` sources are
-      # resolved by the daemon against the HOST filesystem, so the judge-runner
-      # bundle and the prompt file this process writes have to live somewhere
-      # that means the same thing here and there — see
-      # scripts/agent/judge-agent.ts's header.
-      - ${SWARM_LAUNCHER_SPOOL_DIR:-/tmp/rm-agent-launcher}:${SWARM_LAUNCHER_SPOOL_DIR:-/tmp/rm-agent-launcher}
-    restart: unless-stopped
-    logging: *default-logging
-    healthcheck:
-      # `bun -e`, not curl/wget: the oven/bun image is Debian-based and ships
-      # neither — the same constraint the api's own check works around.
-      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:8799/internal/health'); process.exit(r.ok ? 0 : 1)"]
-      interval: 15s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
+      dockerfile: scripts/lib/member-agent/Dockerfile
+    profiles: ["member-agent"] # never started by `docker compose up` alone
+    depends_on:
+      - api
+    restart: "no"
 
-  # D21 retired the member-facing MCP server: swarm members reach the
-  # swarm REST API on the `api` service directly (docs/decisions.md D21).
-
+# The postgres data volume is labeled so `bun run smoke:clean`
+# (scripts/smoke-clean.ts) finds and deletes smoke pgdata volumes by LABEL, never
+# by name-substring matching:
+#   - robotmoney.smoke=1              → "this volume belongs to the smoke".
+#   - robotmoney.smoke.project=<proj> → which run created it.
+# Teardown (SIGTERM/Ctrl-C and `smoke:down`) keeps this volume — `docker compose
+# down` WITHOUT -v — so data survives a reboot; `smoke:clean` is the ONLY path
+# that deletes it. With `bun run smoke -- --pg-data <host-dir>` postgres is
+# bind-mounted to that host dir instead, so no named volume is created.
 volumes:
   pgdata:
+    labels:
+      <<: *smoke-labels
+      robotmoney.smoke: "1"
 
-secrets:
-  analytics_token:
-    # Compose resolves every top-level secret even when the requested command
-    # only targets postgres/core services (or is merely `config`, `ps`, or
-    # `down`).  Keep parsing independent of producer launch; the shared full
-    # stack preflight validates a real non-empty file before `up`, and the
-    # producer itself refuses to boot from this empty sentinel.
-    file: ${ANALYTICS_TOKEN_FILE_HOST:-/dev/null}
+# A Compose network can outlive every container when a run is interrupted after
+# container cleanup but before `compose down`. Label it explicitly so smoke:reap
+# can discover that network-only orphan without deriving it from `docker ps`.
+networks:
+  default:
+    labels:
+      <<: *smoke-labels
+      robotmoney.smoke.network: "1"

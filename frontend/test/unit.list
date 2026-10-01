@@ -18,6 +18,7 @@ scripts/tests/unit/dash-format.test.ts
 scripts/tests/unit/docs-parity-354.test.ts
 scripts/tests/unit/e2e-route-rename-guard.test.ts
 scripts/tests/unit/frontend-routes.test.ts
+scripts/tests/unit/camel-session.test.ts
 scripts/tests/unit/member-avatar-precedence.test.ts
 scripts/tests/unit/member-mark-distinctness.test.ts
 scripts/tests/unit/prerender-content.test.ts
@@ -37,6 +38,7 @@ scripts/tests/unit/swarm-synthesis-preview.test.ts
 scripts/tests/unit/swarm-take-memo-link.test.ts
 scripts/tests/unit/seo-cite-title.test.ts
 scripts/tests/unit/vault-data.test.ts
+scripts/tests/unit/web-client-api-range.test.ts
 
 # Asserts on shipped client files
 scripts/tests/unit/admin-webauthn-local-assets.test.ts

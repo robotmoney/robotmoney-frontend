@@ -9,31 +9,28 @@
 // analytics/cutover/ledger-current.ts) have identical natural keys, canonical
 // values, row counts, and checksums — after an initial insert, an unchanged
 // replay, and a genuine revision.
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test, beforeAll } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
-import { config } from "../src/config.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { payloadChecksum } from "../src/analytics/source-ledger.ts";
 import { checkRawIndicatorHistoryParity, checkRegimeSnapshotsParity, checkResearchSignalsParity } from "../src/analytics/cutover/parity.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
+import { provisionAnalyticsToken, provisionOperatorToken } from "./support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
 
 const A = ROUTES.analytics;
-const TOKEN = "tok_analytics_test_secret";
-const ADMIN = "tok_admin_test_secret";
+let TOKEN = "";
+let ADMIN = "";
 
-const orig = { analyticsToken: config.analyticsToken, adminToken: config.adminToken, allowInsecure: config.allowInsecure };
-function prodAuth() {
-  config.analyticsToken = TOKEN;
-  config.adminToken = ADMIN;
-  config.allowInsecure = false;
-}
-afterEach(() => {
-  config.analyticsToken = orig.analyticsToken;
-  config.adminToken = orig.adminToken;
-  config.allowInsecure = orig.allowInsecure;
+// Store-issued, like the real credentials (smoke spec §3, D52 (1)): the
+// producer's token is the only one the analytics boundary accepts, and the
+// operator's admin token is refused there, in every env.
+beforeAll(async () => {
+  TOKEN = await provisionAnalyticsToken();
+  ADMIN = await provisionOperatorToken();
 });
 
 function req(method: string, path: string, body?: unknown): Request {
@@ -177,7 +174,6 @@ async function submitRegimeAndResearch(
 
 describe("dual-write parity: raw-history, regime, and research through the authenticated analytics API", () => {
   test("INSERT: compatibility and ledger-derived current rows have identical natural keys, values, row counts, and checksums", async () => {
-    prodAuth();
     await submitRawHistoryPoint("DUALWRITE_IND", "2024-01-01", 1.5);
     await submitRegimeAndResearch("2024-01-01", 10, "dualwrite-signal", "v1");
 
@@ -199,7 +195,6 @@ describe("dual-write parity: raw-history, regime, and research through the authe
   });
 
   test("UNCHANGED REPLAY: resubmitting the identical content converges (no duplication) and parity still matches", async () => {
-    prodAuth();
     await submitRawHistoryPoint("DUALWRITE_REPLAY", "2024-02-01", 2.5);
     const before = await checkRawIndicatorHistoryParity();
     expect(before.matched).toBe(true);
@@ -231,7 +226,6 @@ describe("dual-write parity: raw-history, regime, and research through the authe
   });
 
   test("REVISION: a genuinely changed value still converges to matching compatibility and ledger current rows", async () => {
-    prodAuth();
     await submitRawHistoryPoint("DUALWRITE_REVISED", "2024-03-01", 5);
     await submitRegimeAndResearch("2024-03-01", 30, "dualwrite-revision-signal", "v1");
     expect((await checkRawIndicatorHistoryParity()).matched).toBe(true);
@@ -267,7 +261,6 @@ describe("dual-write parity: raw-history, regime, and research through the authe
 // halves, and that a difference beyond tolerance is still caught.
 describe("dual-write parity: raw-history values within tolerance, labels not compared", () => {
   test("two tables holding different labels for one value match", async () => {
-    prodAuth();
     await submitRawHistoryPoint("DUALWRITE_LABEL_SPLIT", "2024-05-01", 1.25, { provenance: "live", source: "seed" });
     // The split is real on both sides, not a fixture that failed to write.
     const [legacyRow] = (await sql`
@@ -284,12 +277,11 @@ describe("dual-write parity: raw-history values within tolerance, labels not com
   });
 
   test("values within the source's tolerance match, with equal checksums; beyond it they do not", async () => {
-    prodAuth();
     // IWF_IWD is a Yahoo ratio: relative 5e-6 (D56).
     const date = "2024-06-01";
     const base = 0.4797323800499549;
-    await sql`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES (${date}, 'IWF_IWD', ${base}, 'live')`;
-    await sql`
+    await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES (${date}, 'IWF_IWD', ${base}, 'live')`;
+    await fixtureDb`
       INSERT INTO source_value_versions (source_key, market_date, value, revision_kind)
       VALUES ('raw_indicator_history:IWF_IWD', ${date}, ${base * (1 + 1.5e-6)}, 'legacy_baseline')`;
     const within = await checkRawIndicatorHistoryParity();
@@ -298,8 +290,8 @@ describe("dual-write parity: raw-history values within tolerance, labels not com
     expect(within.legacyChecksum).toBe(within.ledgerChecksum);
 
     // An exact source has no tolerance: the same relative difference is real.
-    await sql`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES (${date}, 'T10Y2Y', 1.25, 'live')`;
-    await sql`
+    await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES (${date}, 'T10Y2Y', 1.25, 'live')`;
+    await fixtureDb`
       INSERT INTO source_value_versions (source_key, market_date, value, revision_kind)
       VALUES ('raw_indicator_history:T10Y2Y', ${date}, ${1.25 * (1 + 1.5e-6)}, 'legacy_baseline')`;
     const beyond = await checkRawIndicatorHistoryParity();
@@ -324,7 +316,6 @@ describe("dual-write parity: raw-history values within tolerance, labels not com
 // ALREADY-settled date still correctly does.
 describe("dual-write parity: mid-run race immunity (issue #979 fix)", () => {
   test("RACE: compat-only current rows with no frozen terminal package yet are not compared, so they cannot false-mismatch", async () => {
-    prodAuth();
     const date = "2024-04-01";
 
     // The standalone `POST /api/analytics/regime-snapshots` /
@@ -335,10 +326,10 @@ describe("dual-write parity: mid-run race immunity (issue #979 fix)", () => {
     // honest shape in the merged model: a direct, out-of-band INSERT (the
     // v0-seed archive / import-regime-eq / legacy smoke subject — precisely
     // the rows publishBrief deliberately does NOT bind).
-    await sql`INSERT INTO regime_snapshots (date, composite, regime) VALUES (${date}, 99, 'risk_on')`;
-    await sql`
+    await fixtureDb`INSERT INTO regime_snapshots (date, composite, regime) VALUES (${date}, 99, 'risk_on')`;
+    await fixtureDb`
       INSERT INTO research_signals (signal_key, date, payload)
-      VALUES ('race-signal', ${date}, ${sql.json({ asof: date, title: "in-flight", question: "q", spec: {}, gauges: [] })})`;
+      VALUES ('race-signal', ${date}, ${fixtureDb.json({ asof: date, title: "in-flight", question: "q", spec: {}, gauges: [] })})`;
 
     // The compat rows really landed — this is not a no-op test.
     const compatRegime = await sql`SELECT composite FROM regime_snapshots WHERE date = ${date}`;
@@ -380,7 +371,6 @@ describe("dual-write parity: mid-run race immunity (issue #979 fix)", () => {
   });
 
   test("PERSISTENT MISMATCH: a genuine divergence on an already-SETTLED date still records matched:false", async () => {
-    prodAuth();
     const date = "2024-04-02";
     // Freeze this asof for real (A.runPackage) — analytics_report_snapshots
     // now has a row for it, so it is settled and eligible for comparison.
@@ -391,9 +381,9 @@ describe("dual-write parity: mid-run race immunity (issue #979 fix)", () => {
     // Drift the COMPATIBILITY table only, out of band, after settlement — the
     // ledger keeps the frozen value. This is a real, persistent divergence,
     // not a timing artifact, and AC2 requires it to still block cutover.
-    await sql`UPDATE regime_snapshots SET composite = 424242 WHERE date = ${date}`;
-    await sql`
-      UPDATE research_signals SET payload = ${sql.json({ asof: date, title: "drifted-out-of-band", question: "q", spec: {}, gauges: [] })}
+    await fixtureDb`UPDATE regime_snapshots SET composite = 424242 WHERE date = ${date}`;
+    await fixtureDb`
+      UPDATE research_signals SET payload = ${fixtureDb.json({ asof: date, title: "drifted-out-of-band", question: "q", spec: {}, gauges: [] })}
       WHERE signal_key = 'persistent-mismatch-signal' AND date = ${date}
     `;
 

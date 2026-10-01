@@ -14,7 +14,7 @@ import {
   resolveBuildIdentityEnv,
 } from "../../stack/build-identity.ts";
 import { createStack, type StackRuntime } from "../../stack/stack.ts";
-import { DEFAULT_STACK_DATABASE, generateStackCredentials } from "../../stack/config.ts";
+import { DEFAULT_STACK_DATABASE } from "../../stack/config.ts";
 
 const SHA = "ebc588b4542de4d5a61aecdba0a967af35afcd6b";
 
@@ -187,7 +187,6 @@ describe("the stack actually wires it into the build", () => {
         profile: "core",
         composeFiles: ["docker-compose.yml"],
         database: DEFAULT_STACK_DATABASE,
-        credentials: generateStackCredentials(),
         environment: { class: "ci", hash: "deadbeef" },
       },
       { runtime },

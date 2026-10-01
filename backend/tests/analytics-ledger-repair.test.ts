@@ -28,18 +28,17 @@ import { checkAnalyticsLedgerGuard } from "../src/db/analytics-ledger-guard.ts";
 import { checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
 import { applyMigrationFile } from "../src/db/migrate.ts";
 import { repairLedger } from "../scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts";
+import { createHistoryDatabase, type HistoryDatabase } from "./support/history-database.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const MIGRATION = "0080_analytics_ledger_compaction.sql";
 
-const DB_URL = process.env.DATABASE_URL;
-// Loud, never skipped: without tests/preload.ts there is no Postgres to migrate.
-if (!DB_URL) throw new Error("DATABASE_URL is unset — tests/preload.ts must provision the ephemeral Postgres first");
-
 type Db = ReturnType<typeof postgres>;
-let admin: Db;
+// A history database on the suite's cluster (tests/support/history-database.ts):
+// owned by the provider's bootstrap login, migrated as rm_owner the way the
+// runner migrates. No test holds CREATEDB or a superuser of its own.
+let history: HistoryDatabase;
 let db: Db;
-let dbName: string;
 
 async function applyMigration(file: string): Promise<void> {
   // The runner's own per-file step (src/db/migrate.ts): one transaction per
@@ -164,12 +163,8 @@ async function chainOf(sourceKey: string, date: string): Promise<{ id: string; p
 }
 
 beforeAll(async () => {
-  admin = postgres(DB_URL, { max: 1, onnotice: () => {} });
-  dbName = `tmp_ledger_compaction_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
-  await admin.unsafe(`CREATE DATABASE ${dbName}`);
-  const url = new URL(DB_URL);
-  url.pathname = `/${dbName}`;
-  db = postgres(url.toString(), { max: 1, onnotice: () => {} });
+  history = await createHistoryDatabase("ledger-compaction", { max: 2 });
+  db = history.db;
 
   await db`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
   const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
@@ -276,9 +271,7 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
-  await db?.end({ timeout: 5 });
-  if (dbName) await admin.unsafe(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
-  await admin?.end({ timeout: 5 });
+  await history?.drop();
 });
 
 describe("issue #1035 AC6: compaction keeps every vintage and every head, and drops the duplication", () => {
@@ -440,9 +433,7 @@ describe("issue #1035 review: member runs resolve by primary-key equality, never
   test("loadFrozenVintage's member query, captured from the production loader", async () => {
     await db.unsafe("ANALYZE");
     const captured: { query: string; params: unknown[] }[] = [];
-    const url = new URL(DB_URL!);
-    url.pathname = `/${dbName}`;
-    const spy = postgres(url.toString(), {
+    const spy = postgres(history.urlFor(), {
       max: 1, onnotice: () => {},
       debug: (_connection, query, params) => { captured.push({ query, params: params as unknown[] }); },
     });

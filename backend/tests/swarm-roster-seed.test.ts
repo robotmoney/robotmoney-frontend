@@ -34,11 +34,20 @@
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { LIVE_ROSTER, LIVE_ROSTER_HANDLES, pruneToLiveRoster, readLiveRoster, seedLiveRoster } from "../src/swarm/roster-seed.ts";
+import { LIVE_ROSTER, LIVE_ROSTER_HANDLES, pruneToLiveRoster, seedLiveRoster } from "../src/swarm/roster-seed.ts";
 import { getMembers } from "../src/swarm/domain.ts";
 import { seed } from "../src/db/seed.ts";
-import { sql } from "../src/db/client.ts";
+import { setDatabase, sql } from "../src/db/client.ts";
+import { harnessUrl } from "./support/cluster.ts";
+import { toMember } from "../src/swarm/projections.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+
+// The live roster as the API projects it. It lives here, not in roster-seed:
+// the seed had no production caller for it (D55 (13)).
+async function readLiveRoster() {
+  const rows = await sql`SELECT * FROM swarm_members WHERE handle = ANY(${[...LIVE_ROSTER_HANDLES]}) ORDER BY handle`;
+  return rows.map(toMember);
+}
 
 // Own database per TEST, cloned from the migrated template: these tests each
 // start from an empty table, which used to mean wiping one the previous test
@@ -209,21 +218,35 @@ test("seeding leaves credentials and lifecycle timestamps alone", async () => {
   }
 });
 
+// seed() is the schema owner's program (`bun run migrate` runs it as rm_owner) and
+// SWARM_SEED_ROSTER writes through the process pool, so the process pool is the
+// owner login for the call and the runtime login again afterwards.
+async function seedAsOwner(): Promise<void> {
+  const runtimeUrl = process.env.DATABASE_URL!;
+  const database = new URL(runtimeUrl).pathname.replace(/^\//, "");
+  await setDatabase(harnessUrl(database));
+  try {
+    await seed();
+  } finally {
+    await setDatabase(runtimeUrl);
+  }
+}
+
 // The gate, driven through the REAL seed() entry point `bun run migrate` calls
 // — not by re-reading the env var here. With the flag unset, CI, `bun run smoke`
 // and a local dev seed must produce exactly the database they produced before
 // this issue.
 test("SWARM_SEED_ROSTER gates the seeding: inert unset, seats when =1", async () => {
   delete process.env.SWARM_SEED_ROSTER;
-  await seed();
+  await seedAsOwner();
   expect(await readLiveRoster()).toEqual([]);
 
   process.env.SWARM_SEED_ROSTER = "0";
-  await seed();
+  await seedAsOwner();
   expect(await readLiveRoster()).toEqual([]);
 
   process.env.SWARM_SEED_ROSTER = "1";
-  await seed();
+  await seedAsOwner();
   expect((await readLiveRoster()).map((m) => m.handle).sort()).toEqual([...LIVE_ROSTER_HANDLES].sort());
 });
 
@@ -299,7 +322,7 @@ test("SWARM_SEED_ROSTER_PRUNE gates the pruning: inert alone, inert unset, retir
 
   delete process.env.SWARM_SEED_ROSTER;
   process.env.SWARM_SEED_ROSTER_PRUNE = "1";
-  await seed();
+  await seedAsOwner();
   expect(await readLiveRoster()).toEqual([]);
   expect(await statusOf("prune-fixture-draco")).toBe("active");
 
@@ -307,18 +330,18 @@ test("SWARM_SEED_ROSTER_PRUNE gates the pruning: inert alone, inert unset, retir
   // the off-roster member is left exactly where it was.
   process.env.SWARM_SEED_ROSTER = "1";
   delete process.env.SWARM_SEED_ROSTER_PRUNE;
-  await seed();
+  await seedAsOwner();
   expect((await readLiveRoster()).map((m) => m.handle).sort()).toEqual([...LIVE_ROSTER_HANDLES].sort());
   expect(await statusOf("prune-fixture-draco")).toBe("active");
 
   process.env.SWARM_SEED_ROSTER_PRUNE = "0";
-  await seed();
+  await seedAsOwner();
   expect(await statusOf("prune-fixture-draco")).toBe("active");
 
   // Both flags set: the convergence run retires the off-roster member and
   // leaves the seated roster active.
   process.env.SWARM_SEED_ROSTER_PRUNE = "1";
-  await seed();
+  await seedAsOwner();
   expect(await statusOf("prune-fixture-draco")).toBe("inactive");
   for (const h of LIVE_ROSTER_HANDLES) expect(await statusOfHandle(h)).toBe("active");
   expect((await readLiveRoster()).map((m) => m.handle).sort()).toEqual([...LIVE_ROSTER_HANDLES].sort());

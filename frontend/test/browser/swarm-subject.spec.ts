@@ -1250,3 +1250,43 @@ test("a portfolio of live-valued wallets reads its book and its facts live", asy
   await expect(page.locator("#holdings")).not.toContainText("46,448");
   await expectNoBrowserErrors(errors);
 });
+
+// Issue 1081. A session created on 2026-09-28 whose brief went out on 2026-10-01: the subject page says when it OPENED
+// (its history row, and the "Read the ... session" link), not the day its row was created.
+test("a subject page shows a session on the day it opened, not the day its row was created", async ({ page }) => {
+  const session = {
+    id: "3f2b9c10-77aa-4d1e-9a3c-0b5e6f8d2c41",
+    date: "2026-09-28",
+    subjectId: "robotmoney-allocation",
+    subjectName: "Robot Money Allocation",
+    state: "published",
+    generatedAt: "2026-09-28T00:39:40.958Z",
+    openedAt: "2026-10-01T02:01:00.000Z",
+    publishedAt: "2026-10-01T02:08:00.000Z",
+    synthesis: "The swarm held the 95/5/0/0 frame.",
+    swarmRecommendation: {
+      type: "bucket_weights",
+      weights: { conservative_defi_yield: 0.95, agent_tokens: 0.05, protocol_tokens: 0, real_world_assets: 0 },
+      stances: { constructive: 4, cautious: 1 },
+      quorum: { submitted: 5, active: 7 },
+      meanConfidence: 0.62,
+    },
+  };
+  const ok = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  await page.route("**/api/swarm/subjects/robotmoney-allocation", (route) =>
+    route.fulfill(ok({ id: "robotmoney-allocation", name: "Robot Money Allocation", source: { type: "framework" }, structural_notes: [], wallets: [] })));
+  await page.route("**/api/swarm/subjects/robotmoney-allocation/snapshots", (route) => route.fulfill(ok({ snapshots: [] })));
+  await page.route("**/api/swarm/sessions?**", (route) => route.fulfill(ok({ sessions: [session], nextCursor: null })));
+  await page.route("**/api/swarm/sessions", (route) => route.fulfill(ok({ sessions: [session], nextCursor: null })));
+  await page.route(`**/api/swarm/sessions/${session.id}`, (route) => route.fulfill(ok({ session, takes: [] })));
+  await page.route("**/api/swarm/members*", (route) => route.fulfill(ok({ members: [] })));
+  await page.route("**/api/dashboards/**", (route) => route.fulfill({ status: 404, contentType: "application/json", body: "{}" }));
+
+  await page.goto("/swarm/subjects/robotmoney-allocation");
+  const row = page.locator(".sv__session-title").first();
+  await expect(row).toHaveText("Oct 1, 2026");
+  await expect(row).toHaveAttribute("href", /3f2b9c10-77aa-4d1e-9a3c-0b5e6f8d2c41/);
+  await expect(page.locator("body")).not.toContainText("Sep 28, 2026");
+  const read = page.getByText(/^Read the .* session$/);
+  if (await read.count()) await expect(read.first()).toHaveText("Read the Oct 1, 2026 session");
+});

@@ -1,4 +1,5 @@
 import { sql, jsonValue } from "../../db/client.ts";
+import { on, onStatement, registerQuery, registerStatement } from "../../db/registry.ts";
 import type { SourceAcquisitionEvidence, SourceValueEvidence } from "../source-ledger.ts";
 import { withinTolerance } from "../source-tolerance.ts";
 
@@ -31,6 +32,150 @@ function classify(
   return withinTolerance(value.sourceKey, prior.value, value.value) ? null : "revision";
 }
 
+/** The only entry module that reaches this store: the analytics ingestion route. */
+const ANALYTICS_ROUTE = "src/api/routes/analytics";
+
+const findAcquisition = registerQuery({
+  role: "rm_app",
+  object: "source_acquisitions",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/source-ledger-store:saveSourceAcquisition.findAcquisition",
+  purpose: "Detect a replayed acquisition submission by its producer-generated id.",
+  callers: [ANALYTICS_ROUTE],
+  probe: { statement: "SELECT id FROM source_acquisitions WHERE id = $1::uuid", params: ["00000000-0000-0000-0000-000000000000"] },
+});
+
+const insertAcquisition = registerQuery({
+  role: "rm_app",
+  object: "source_acquisitions",
+  privileges: ["INSERT"],
+  site: "src/analytics/store/source-ledger-store:saveSourceAcquisition.insertAcquisition",
+  purpose: "Persist the header of one source acquisition, immutable from then on.",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity, requested_by_run_id)
+      SELECT $1::uuid, $2, $3, $4, $5 WHERE false`,
+    params: ["00000000-0000-0000-0000-000000000000", "probe", "probe", "probe", null],
+  },
+});
+
+const insertAcquisitionEvents = registerQuery({
+  role: "rm_app",
+  object: "source_acquisition_events",
+  privileges: ["INSERT"],
+  site: "src/analytics/store/source-ledger-store:saveSourceAcquisition.insertEvents",
+  purpose: "Persist an acquisition's ordered events in one statement.",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `INSERT INTO source_acquisition_events (acquisition_id, sequence, event_type, detail)
+        SELECT $1::uuid, $2::integer, $3, $4 WHERE false`,
+    params: ["00000000-0000-0000-0000-000000000000", 1, "probe", null],
+  },
+});
+
+const insertFetches = registerQuery({
+  role: "rm_app",
+  object: "source_fetches",
+  privileges: ["INSERT"],
+  site: "src/analytics/store/source-ledger-store:saveSourceAcquisition.insertFetches",
+  purpose: "Persist an acquisition's fetch records, batched.",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `INSERT INTO source_fetches (id, acquisition_id, sequence, request_identity, cache_status, response_status, response_checksum, provider_release_id, error_detail)
+          SELECT $1::uuid, $2::uuid, $3::integer, $4::jsonb, $5, $6::integer, $7, $8, $9 WHERE false`,
+    params: ["00000000-0000-0000-0000-000000000000", "00000000-0000-0000-0000-000000000000", 1, "{}", "probe", null, null, null, null],
+  },
+});
+
+const sourceKeyLock = registerStatement({
+  role: "rm_app",
+  shape: "sourceKeyLock",
+  site: "src/analytics/store/source-ledger-store:saveSourceAcquisition.sourceKeyLock",
+  purpose: "Serialize competing revisions of one source key without over-serializing unrelated series.",
+  callers: [ANALYTICS_ROUTE],
+});
+
+const priorValue = registerQuery({
+  role: "rm_app",
+  object: "source_value_versions",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/source-ledger-store:saveSourceAcquisition.priorValue",
+  purpose: "Read one value's prior revision, chained inside a batch that names the same coordinate twice.",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `SELECT id, value, provenance
+          FROM source_value_versions
+          WHERE source_key = $1
+            AND market_date IS NOT DISTINCT FROM $2::date
+            AND market_instant IS NOT DISTINCT FROM $3::timestamptz
+          ORDER BY knowledge_time DESC, id DESC
+          LIMIT 1`,
+    params: ["probe", null, null],
+  },
+});
+
+const insertValues = registerQuery({
+  role: "rm_app",
+  object: "source_value_versions",
+  privileges: ["INSERT"],
+  site: "src/analytics/store/source-ledger-store:saveSourceAcquisition.insertValues",
+  purpose: "Append source value revisions, one row or a batch, never updating a prior one.",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `INSERT INTO source_value_versions (acquisition_id, source_key, market_date, market_instant, value, prior_version_id, revision_kind, provenance)
+          SELECT $1::uuid, $2, $3::date, $4::timestamptz, $5::float8, $6::bigint, $7, $8 WHERE false`,
+    params: ["00000000-0000-0000-0000-000000000000", "probe", null, null, 1, null, "initial", null],
+  },
+});
+
+const priorDated = registerQuery({
+  role: "rm_app",
+  object: "source_value_versions",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/source-ledger-store:saveSourceAcquisition.priorDated",
+  purpose: "Resolve every dated value's prior revision in one round trip.",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `SELECT k.idx, svv.id, svv.value, svv.provenance
+          FROM unnest($1::text[], $2::date[], $3::int[])
+            AS k(source_key, market_date, idx)
+          LEFT JOIN LATERAL (
+            SELECT id, value, provenance
+            FROM source_value_versions v
+            WHERE v.source_key = k.source_key
+              AND v.market_date = k.market_date
+              AND v.market_instant IS NULL
+            ORDER BY v.knowledge_time DESC, v.id DESC
+            LIMIT 1
+          ) svv ON true`,
+    params: ["{}", "{}", "{}"],
+  },
+});
+
+const priorInstants = registerQuery({
+  role: "rm_app",
+  object: "source_value_versions",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/source-ledger-store:saveSourceAcquisition.priorInstants",
+  purpose: "Resolve every timestamped value's prior revision in one round trip.",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `SELECT k.idx, svv.id, svv.value, svv.provenance
+          FROM unnest($1::text[], $2::timestamptz[], $3::int[])
+            AS k(source_key, market_instant, idx)
+          LEFT JOIN LATERAL (
+            SELECT id, value, provenance
+            FROM source_value_versions v
+            WHERE v.source_key = k.source_key
+              AND v.market_instant = k.market_instant
+              AND v.market_date IS NULL
+            ORDER BY v.knowledge_time DESC, v.id DESC
+            LIMIT 1
+          ) svv ON true`,
+    params: ["{}", "{}", "{}"],
+  },
+});
+
 export async function saveSourceAcquisition(
   evidence: SourceAcquisitionEvidence,
 ): Promise<{ acquisitionId: string; replayed: boolean }> {
@@ -38,10 +183,10 @@ export async function saveSourceAcquisition(
     // The producer-generated acquisition UUID is the idempotency key. A replay
     // is a read-only success; a partially persisted acquisition is impossible
     // because every first submission is one transaction.
-    const existing = await tx`SELECT id FROM source_acquisitions WHERE id = ${evidence.id}::uuid`;
+    const existing = await on(tx, findAcquisition)`SELECT id FROM source_acquisitions WHERE id = ${evidence.id}::uuid`;
     if (existing.length > 0) return { acquisitionId: evidence.id, replayed: true };
 
-    await tx`
+    await on(tx, insertAcquisition)`
       INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity, requested_by_run_id)
       VALUES (${evidence.id}::uuid, ${evidence.provider}, ${evidence.parserVersion},
               ${evidence.cacheIdentity}, ${evidence.requestedByRunId ?? null})`;
@@ -60,7 +205,7 @@ export async function saveSourceAcquisition(
         event_type: event.type,
         detail: event.detail ?? null,
       }));
-      await tx`
+      await on(tx, insertAcquisitionEvents)`
         INSERT INTO source_acquisition_events ${tx(events, "acquisition_id", "sequence", "event_type", "detail")}`;
     }
 
@@ -81,7 +226,7 @@ export async function saveSourceAcquisition(
       // Nine parameters a row against PostgreSQL's 65,535-parameter ceiling.
       const FETCH_INSERT_BATCH_SIZE = 2_000;
       for (let start = 0; start < fetches.length; start += FETCH_INSERT_BATCH_SIZE) {
-        await tx`
+        await on(tx, insertFetches)`
           INSERT INTO source_fetches ${tx(fetches.slice(start, start + FETCH_INSERT_BATCH_SIZE), "id", "acquisition_id", "sequence", "request_identity", "cache_status", "response_status", "response_checksum", "provider_release_id", "error_detail")}`;
       }
     }
@@ -94,7 +239,7 @@ export async function saveSourceAcquisition(
     // max_locks_per_transaction and fail with SQLSTATE 53200 "out of shared memory").
     const sourceKeys = Array.from(new Set(evidence.values.map((v) => v.sourceKey)));
     for (const sourceKey of sourceKeys) {
-      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${sourceKey}, 0))`;
+      await onStatement(tx, sourceKeyLock)`SELECT pg_advisory_xact_lock(hashtextextended(${sourceKey}, 0))`;
     }
 
     // Coordinate key used both to look up a value's own prior revision and to
@@ -117,7 +262,7 @@ export async function saveSourceAcquisition(
       // transaction. The bulk path below assumes distinct coordinates, so it
       // cannot be used here.
       for (const value of evidence.values) {
-        const [prior] = await tx`
+        const [prior] = await on(tx, priorValue)`
           SELECT id, value, provenance
           FROM source_value_versions
           WHERE source_key = ${value.sourceKey}
@@ -126,11 +271,11 @@ export async function saveSourceAcquisition(
           ORDER BY knowledge_time DESC, id DESC
           LIMIT 1`;
         const revisionKind = classify(
-          prior === undefined ? undefined : { value: Number(prior.value), provenance: prior.provenance ?? null },
+          prior === undefined ? undefined : { value: Number(prior.value), provenance: (prior.provenance as string | null) ?? null },
           value,
         );
         if (revisionKind === null) continue;
-        await tx`
+        await on(tx, insertValues)`
           INSERT INTO source_value_versions
             (acquisition_id, source_key, market_date, market_instant, value,
              prior_version_id, revision_kind, provenance)
@@ -166,7 +311,7 @@ export async function saveSourceAcquisition(
       });
 
       if (dated.length > 0) {
-        const rows = await tx`
+        const rows = await on(tx, priorDated)`
           SELECT k.idx, svv.id, svv.value, svv.provenance
           FROM unnest(${dated.map((d) => d.v.sourceKey)}::text[], ${dated.map((d) => d.v.marketDate)}::date[], ${dated.map((d) => d.idx)}::int[])
             AS k(source_key, market_date, idx)
@@ -179,10 +324,10 @@ export async function saveSourceAcquisition(
             ORDER BY v.knowledge_time DESC, v.id DESC
             LIMIT 1
           ) svv ON true`;
-        for (const r of rows) priorByIdx.set(Number(r.idx), r.id === null ? undefined : { id: Number(r.id), value: Number(r.value), provenance: r.provenance ?? null });
+        for (const r of rows) priorByIdx.set(Number(r.idx), r.id === null ? undefined : { id: Number(r.id), value: Number(r.value), provenance: (r.provenance as string | null) ?? null });
       }
       if (instants.length > 0) {
-        const rows = await tx`
+        const rows = await on(tx, priorInstants)`
           SELECT k.idx, svv.id, svv.value, svv.provenance
           FROM unnest(${instants.map((d) => d.v.sourceKey)}::text[], ${instants.map((d) => d.v.marketInstant)}::timestamptz[], ${instants.map((d) => d.idx)}::int[])
             AS k(source_key, market_instant, idx)
@@ -195,7 +340,7 @@ export async function saveSourceAcquisition(
             ORDER BY v.knowledge_time DESC, v.id DESC
             LIMIT 1
           ) svv ON true`;
-        for (const r of rows) priorByIdx.set(Number(r.idx), r.id === null ? undefined : { id: Number(r.id), value: Number(r.value), provenance: r.provenance ?? null });
+        for (const r of rows) priorByIdx.set(Number(r.idx), r.id === null ? undefined : { id: Number(r.id), value: Number(r.value), provenance: (r.provenance as string | null) ?? null });
       }
 
       const rows = evidence.values.flatMap((value, i) => {
@@ -218,7 +363,7 @@ export async function saveSourceAcquisition(
       // a historical acquisition can contain more than 8,000 values.
       const VALUE_INSERT_BATCH_SIZE = 5_000;
       for (let start = 0; start < rows.length; start += VALUE_INSERT_BATCH_SIZE) {
-        await tx`
+        await on(tx, insertValues)`
           INSERT INTO source_value_versions ${tx(rows.slice(start, start + VALUE_INSERT_BATCH_SIZE), "acquisition_id", "source_key", "market_date", "market_instant", "value", "prior_version_id", "revision_kind", "provenance")}`;
       }
     }

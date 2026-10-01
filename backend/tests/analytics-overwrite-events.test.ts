@@ -5,7 +5,6 @@ import { expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import net from "node:net";
 import postgres from "postgres";
 import { saveRawIndicatorHistory } from "../src/analytics/store/raw-history-store.ts";
 import { saveRegimeSnapshots } from "../src/analytics/store/regime-store.ts";
@@ -13,8 +12,9 @@ import { persistResearchSignal } from "../src/analytics/store/research-store.ts"
 import type { ResearchPayload } from "../src/analytics/analyze/research.ts";
 import type { RegimeSnapshotRow } from "../src/analytics/store/regime-store.ts";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { POSTGRES_IMAGE } from "../../scripts/lib/postgres-image.ts";
+import { createHistoryDatabase } from "./support/history-database.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -31,15 +31,15 @@ interface OverwriteEvent {
 }
 
 async function events(table: string, key: Record<string, unknown>): Promise<OverwriteEvent[]> {
-  return await sql<OverwriteEvent[]>`
+  return await fixtureDb<OverwriteEvent[]>`
     SELECT table_name, operation, natural_key, previous_row, replacement_row, recorded_at
     FROM analytics_overwrite_events
-    WHERE table_name = ${table} AND natural_key = ${sql.json(key as never)}
+    WHERE table_name = ${table} AND natural_key = ${fixtureDb.json(key as never)}
     ORDER BY id`;
 }
 
 async function rowJson(table: string, where: string): Promise<Record<string, unknown>> {
-  const [row] = await sql.unsafe<{ row: Record<string, unknown> }[]>(
+  const [row] = await fixtureDb.unsafe<{ row: Record<string, unknown> }[]>(
     `SELECT to_jsonb(t) AS row FROM ${table} t WHERE ${where}`,
   );
   if (!row) throw new Error(`missing fixture row in ${table}: ${where}`);
@@ -105,10 +105,10 @@ test("issue #1035 AC3: sub-tolerance changes update no raw_indicator_history row
     value: 0.8123456789 + i / 1000,
   }));
   await saveRawIndicatorHistory({ [indicator]: history }, undefined, "live");
-  const rowsBefore = await sql`
+  const rowsBefore = await fixtureDb`
     SELECT date::text AS date, value, source, xmin::text AS xmin FROM raw_indicator_history
     WHERE indicator = ${indicator} AND date >= '2042-01-01' ORDER BY date`;
-  const [{ n: eventsBefore }] = await sql`SELECT count(*)::int AS n FROM analytics_overwrite_events`;
+  const [{ n: eventsBefore }] = await fixtureDb`SELECT count(*)::int AS n FROM analytics_overwrite_events`;
 
   // Every point re-submitted a relative 1e-7 off — inside tolerance, and each
   // one a DIFFERENT double, so an exact comparison would rewrite all 25.
@@ -116,12 +116,12 @@ test("issue #1035 AC3: sub-tolerance changes update no raw_indicator_history row
   expect(jittered.every((p, i) => p.value !== history[i]!.value)).toBe(true);
   await saveRawIndicatorHistory({ [indicator]: jittered }, undefined, "live");
 
-  const rowsAfter = await sql`
+  const rowsAfter = await fixtureDb`
     SELECT date::text AS date, value, source, xmin::text AS xmin FROM raw_indicator_history
     WHERE indicator = ${indicator} AND date >= '2042-01-01' ORDER BY date`;
   // xmin unchanged: not one row was rewritten, not merely rewritten back.
   expect(rowsAfter).toEqual(rowsBefore);
-  const [{ n: eventsAfter }] = await sql`SELECT count(*)::int AS n FROM analytics_overwrite_events`;
+  const [{ n: eventsAfter }] = await fixtureDb`SELECT count(*)::int AS n FROM analytics_overwrite_events`;
   expect(eventsAfter - eventsBefore).toBe(0);
 
   // Control: a change beyond tolerance on one point is still one material
@@ -211,7 +211,7 @@ test("allowed deletes retain complete old rows while regime deletion stays refus
   const rawIndicator = "OVERWRITE_RAW_DELETE";
   await saveRawIndicatorHistory({ [rawIndicator]: [{ date: rawDate, value: 9 }] }, undefined, "live");
   const rawBefore = await rowJson("raw_indicator_history", `date = '${rawDate}' AND indicator = '${rawIndicator}'`);
-  await sql`DELETE FROM raw_indicator_history WHERE date = ${rawDate} AND indicator = ${rawIndicator}`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE date = ${rawDate} AND indicator = ${rawIndicator}`;
   const rawEvents = await events("raw_indicator_history", { date: rawDate, indicator: rawIndicator });
   expect(rawEvents).toHaveLength(1);
   expect(rawEvents[0]).toMatchObject({ operation: "delete", previous_row: rawBefore, replacement_row: null });
@@ -223,7 +223,7 @@ test("allowed deletes retain complete old rows while regime deletion stays refus
     "research_signals",
     `signal_key = '${signalKey}' AND date = '${signalDate}'`,
   );
-  await sql`DELETE FROM research_signals WHERE signal_key = ${signalKey} AND date = ${signalDate}`;
+  await fixtureDb`DELETE FROM research_signals WHERE signal_key = ${signalKey} AND date = ${signalDate}`;
   const researchEvents = await events("research_signals", { signal_key: signalKey, date: signalDate });
   expect(researchEvents).toHaveLength(1);
   expect(researchEvents[0]).toMatchObject({ operation: "delete", previous_row: researchBefore, replacement_row: null });
@@ -232,7 +232,7 @@ test("allowed deletes retain complete old rows while regime deletion stays refus
   await saveRegimeSnapshots([regime(regimeDate, 0.4, "live")]);
   let refusal: { code?: string; message?: string } | null = null;
   try {
-    await sql`DELETE FROM regime_snapshots WHERE date = ${regimeDate}`;
+    await fixtureDb`DELETE FROM regime_snapshots WHERE date = ${regimeDate}`;
   } catch (error) {
     refusal = error as { code?: string; message?: string };
   }
@@ -261,41 +261,10 @@ test("rolling back a current-view update also rolls back its evidence", async ()
   expect(await events("raw_indicator_history", { date, indicator })).toHaveLength(0);
 });
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
 test("0056 installs over pre-existing current rows without fabricating historical events", async () => {
-  const port = await freePort();
-  const container = `rmtest_overwrite_migration_${crypto.randomUUID().slice(0, 8)}`;
-  const up = Bun.spawnSync([
-    "docker", "run", "-d", "--rm", "--name", container,
-    "-e", "POSTGRES_PASSWORD=robotmoney", "-e", "POSTGRES_USER=robotmoney", "-e", "POSTGRES_DB=robotmoney",
-    "-p", `${port}:5432`, POSTGRES_IMAGE,
-  ]);
-  if (up.exitCode !== 0) {
-    throw new Error(`analytics overwrite migration test requires Docker+Postgres:\n${up.stderr.toString()}`);
-  }
-
-  const db = postgres(`postgres://robotmoney:robotmoney@localhost:${port}/robotmoney`, { max: 1, onnotice: () => {} });
+  const history = await createHistoryDatabase("analytics-overwrite-events", { max: 1 });
+  const db = history.db;
   try {
-    const started = Date.now();
-    for (;;) {
-      try {
-        await db`SELECT 1`;
-        break;
-      } catch (error) {
-        if (Date.now() - started > 30_000) throw error;
-        await Bun.sleep(200);
-      }
-    }
 
     await db`CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
     const files = (await readdir(migrationsDir)).filter((file) => file.endsWith(".sql")).sort();
@@ -336,7 +305,6 @@ test("0056 installs over pre-existing current rows without fabricating historica
       )::int AS "currentRows"`;
     expect(currentRows).toBe(3);
   } finally {
-    await db.end({ timeout: 5 });
-    Bun.spawnSync(["docker", "rm", "-f", container]);
+    await history.drop();
   }
 }, 120_000);

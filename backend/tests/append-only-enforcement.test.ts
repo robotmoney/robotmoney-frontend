@@ -31,9 +31,13 @@
 import { expect, test, describe, beforeAll } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { sql } from "../src/db/client.ts";
+// The subject is the guard triggers refusing a removal even from a role that HOLDS
+// DELETE, so every statement here runs as the fixture owner: the runtime role would
+// be refused earlier, by a missing privilege, which proves nothing about the trigger.
+import { fixtureDb } from "./support/fixture-db.ts";
 import {
   APPEND_ONLY_MIGRATIONS,
+  APPEND_ONLY_RELEASED,
   APPEND_ONLY_TABLE_MIGRATION,
   APPEND_ONLY_TABLES,
   LEDGER_IMMUTABLE_FAMILIES,
@@ -68,13 +72,13 @@ type Raised = { message: string; code: string | null } | null;
 const COUNT_ALL = APPEND_ONLY_TABLES.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(" UNION ALL ");
 
 async function counts(): Promise<Record<string, number>> {
-  const rows = (await sql.unsafe(COUNT_ALL)) as unknown as { t: string; n: number }[];
+  const rows = (await fixtureDb.unsafe(COUNT_ALL)) as unknown as { t: string; n: number }[];
   return Object.fromEntries(rows.map((r) => [r.t, r.n]));
 }
 
 async function attempt(statement: string): Promise<Raised> {
   try {
-    await sql.unsafe(statement);
+    await fixtureDb.unsafe(statement);
     return null;
   } catch (e) {
     const err = e as { message?: string; code?: string };
@@ -112,33 +116,33 @@ let SESSION = "";
 
 beforeAll(async () => {
   SESSION = crypto.randomUUID();
-  await sql`INSERT INTO swarm_subjects (id, name) VALUES (${SUBJECT}, 'Append Only Subject')`;
-  await sql`INSERT INTO swarm_sessions (id, subject_id) VALUES (${SESSION}, ${SUBJECT})`;
-  await sql`INSERT INTO swarm_members (id, name, status) VALUES (${MEMBER}, 'Append Only Member', 'inactive')`;
+  await fixtureDb`INSERT INTO swarm_subjects (id, name) VALUES (${SUBJECT}, 'Append Only Subject')`;
+  await fixtureDb`INSERT INTO swarm_sessions (id, subject_id) VALUES (${SESSION}, ${SUBJECT})`;
+  await fixtureDb`INSERT INTO swarm_members (id, name, status) VALUES (${MEMBER}, 'Append Only Member', 'inactive')`;
   // Issue #697: swarm_member_keys joined the protected set (migration 0050).
-  await sql`INSERT INTO swarm_member_keys (member_id, public_key) VALUES (${MEMBER}, 'append-only-test-pubkey')`;
-  await sql`INSERT INTO swarm_briefs (date, subject_id, session_id) VALUES ('2031-01-02', ${SUBJECT}, ${SESSION})`;
-  await sql`
+  await fixtureDb`INSERT INTO swarm_member_keys (member_id, public_key) VALUES (${MEMBER}, 'append-only-test-pubkey')`;
+  await fixtureDb`INSERT INTO swarm_briefs (date, subject_id, session_id) VALUES ('2031-01-02', ${SUBJECT}, ${SESSION})`;
+  await fixtureDb`
     INSERT INTO swarm_recommendations (session_id, member_id, subject_id, date, nonce, stance, payload, signature)
     VALUES (${SESSION}, ${MEMBER}, ${SUBJECT}, '2031-01-02', 'append-only-nonce', 'neutral', '{}'::jsonb, 'sig')`;
-  await sql`INSERT INTO swarm_memos (member_id, session_id, body) VALUES (${MEMBER}, ${SESSION}, 'memo body')`;
-  await sql`
+  await fixtureDb`INSERT INTO swarm_memos (member_id, session_id, body) VALUES (${MEMBER}, ${SESSION}, 'memo body')`;
+  await fixtureDb`
     INSERT INTO swarm_session_events (session_id, to_state, action, actor)
     VALUES (${SESSION}, 'scheduled', 'convene', 'append-only-test')`;
   // The attendance roster for that same session, and the portfolio state its
   // takes were made about — both added to the protected set in review, and both
   // seeded here so the "the rows survive" assertions below are about real data
   // rather than an empty table (which would pass for the wrong reason).
-  await sql`
+  await fixtureDb`
     INSERT INTO swarm_session_members (session_id, member_id, member_name, member_lens, status)
     VALUES (${SESSION}, ${MEMBER}, 'Append Only Member', 'append-only', 'expected')`;
-  await sql`
+  await fixtureDb`
     INSERT INTO swarm_subject_snapshots (subject_id, date, total_value_usd)
     VALUES (${SUBJECT}, '2031-01-02', 1234.5)`;
   // One consensus-judge run for that session (issue #752, protected by
   // migration 0040). Seeded like every other row here so the "it survived"
   // assertions below are about real data rather than an empty table.
-  await sql`
+  await fixtureDb`
     INSERT INTO swarm_session_judgements
       (session_id, mode, source, fallback_reason, prompt_hash, inputs_digest, take_count, min_takes, opinion)
     VALUES (${SESSION}, 'shadow', 'fallback', 'model_unconfigured', 'append-only-prompt-hash',
@@ -149,28 +153,32 @@ beforeAll(async () => {
   // assembler because what is under test here is the guard, not the assembly —
   // but it satisfies 0042's own CHECK constraints, so an empty or malformed row
   // could not stand in for it.
-  const [judgementRow] = (await sql`
+  const [judgementRow] = (await fixtureDb`
     SELECT id FROM swarm_session_judgements WHERE session_id = ${SESSION} ORDER BY id DESC LIMIT 1`) as unknown as { id: string }[];
-  await sql`
+  await fixtureDb`
     INSERT INTO swarm_consensus_receipts (session_id, subject_id, schema_version, judgement_id, session_version, receipt, canonical_bytes)
     VALUES (${SESSION}, ${SUBJECT}, '1.0', ${judgementRow!.id}, 1,
-            ${sql.json({ schema_version: "1.0", session_id: SESSION, subject_id: SUBJECT } as never)},
+            ${fixtureDb.json({ schema_version: "1.0", session_id: SESSION, subject_id: SUBJECT } as never)},
             ${"robotmoney:consensus-receipt:v1\n{\"schema_version\":\"1.0\"}\n"})`;
-  await sql`INSERT INTO swarm_applications (payload) VALUES ('{}'::jsonb)`;
-  await sql`INSERT INTO audit_log (actor, action) VALUES ('append-only-test', 'probe')`;
-  await sql`INSERT INTO agent_activity_log (action_type, status) VALUES ('probe', 'success')`;
-  await sql`INSERT INTO regime_snapshots (date) VALUES ('2031-01-02')`;
+  await fixtureDb`INSERT INTO swarm_applications (payload) VALUES ('{}'::jsonb)`;
+  // The epoch scheduler's two logs, which migration 0072 opted in, are not
+  // seeded: both have left the protected set (APPEND_ONLY_RELEASED — the job
+  // ledger is dropped by 0079, the event log is grant-only under D53 (2) since
+  // 0080). The "released" case below asserts what each became instead.
+  await fixtureDb`INSERT INTO audit_log (actor, action) VALUES ('append-only-test', 'probe')`;
+  await fixtureDb`INSERT INTO agent_activity_log (action_type, status) VALUES ('probe', 'success')`;
+  await fixtureDb`INSERT INTO regime_snapshots (date) VALUES ('2031-01-02')`;
   // 0056's evidence ledger is populated only by a material current-view
   // mutation. Seed it through that production mechanism, not with a fabricated
   // direct event, so every table in APPEND_ONLY_TABLES contains a real row.
-  await sql`
+  await fixtureDb`
     INSERT INTO raw_indicator_history (date, indicator, value, source)
     VALUES ('2031-01-02', 'APPEND_ONLY_EVIDENCE_PROBE', 1, 'seed')`;
-  await sql`
+  await fixtureDb`
     UPDATE raw_indicator_history SET value = 2, source = 'live'
     WHERE date = '2031-01-02' AND indicator = 'APPEND_ONLY_EVIDENCE_PROBE'`;
 
-  const parents = (await sql`
+  const parents = (await fixtureDb`
     SELECT DISTINCT confrelid::regclass::text AS parent FROM pg_constraint WHERE contype = 'f'
   `) as unknown as { parent: string }[];
   for (const p of parents) fkParents.add(p.parent);
@@ -203,7 +211,7 @@ describe("append-only: every protected table holds data that cannot be removed",
     // session_replication_role='replica'), 'D' = disabled, 'R' = replica only,
     // 'A' = ALWAYS. Anything but 'A' is absent during the restore or apply that
     // would erase history. tgtype bit 0 set = FOR EACH ROW.
-    const rows = (await sql`
+    const rows = (await fixtureDb`
       SELECT c.relname::text AS table_name, t.tgname::text AS trigger_name,
              t.tgenabled::text AS enabled, (t.tgtype & 1) = 1 AS is_row,
              p.proname::text AS function_name
@@ -251,7 +259,15 @@ describe("append-only: every protected table holds data that cannot be removed",
       for (const name of names) declaredBy[name] = file;
     }
     expect(new Set(inMigrations).size, "no table may be declared by two migrations").toBe(inMigrations.length);
-    expect([...inMigrations].sort()).toEqual([...APPEND_ONLY_TABLES].sort());
+    // A table a later migration released (APPEND_ONLY_RELEASED) is still in its
+    // frozen declaring array; it leaves the union only through that record,
+    // and only as declared by the migration the record names.
+    for (const [table, { declaredBy: file }] of Object.entries(APPEND_ONLY_RELEASED)) {
+      expect({ table, declaredBy: declaredBy[table] }).toEqual({ table, declaredBy: file });
+      expect((APPEND_ONLY_TABLES as readonly string[]).includes(table), `${table} is released, not protected`).toBe(false);
+    }
+    const released = new Set(Object.keys(APPEND_ONLY_RELEASED));
+    expect(inMigrations.filter((t) => !released.has(t)).sort()).toEqual([...APPEND_ONLY_TABLES].sort());
 
     // And each table maps to the migration that ACTUALLY declares it. The
     // Record type pins the key set; nothing but this pins the values, and a
@@ -260,7 +276,47 @@ describe("append-only: every protected table holds data that cannot be removed",
     expect(
       APPEND_ONLY_TABLE_MIGRATION as Record<string, string>,
       "every protected table must name the migration that declares it",
-    ).toEqual(declaredBy);
+    ).toEqual(Object.fromEntries(Object.entries(declaredBy).filter(([t]) => !released.has(t))));
+  });
+
+  test("each RELEASED table is released by a real migration that removed its guard, and carries no trigger now", async () => {
+    // Criterion 104 / D53 (2) for `swarm_stream_events`, criteria 94/105 for
+    // `swarm_scheduler_jobs`. A release is only honest if the database agrees:
+    // the releasing file is on disk, it drops the triggers (or the table), and
+    // the migrated schema carries no 0032 trigger on the table any more.
+    for (const [table, { releasedBy }] of Object.entries(APPEND_ONLY_RELEASED)) {
+      const ddl = readFileSync(join(import.meta.dir, "..", "migrations", releasedBy), "utf8").replace(/--.*$/gm, "");
+      const names = triggerNames(table);
+      const dropsTable = new RegExp(`DROP TABLE IF EXISTS ${table}\\b`).test(ddl);
+      const dropsTriggers =
+        ddl.includes(`DROP TRIGGER IF EXISTS ${names.statement} ON ${table}`) &&
+        ddl.includes(`DROP TRIGGER IF EXISTS ${names.row} ON ${table}`);
+      expect({ table, releasedBy, removesGuard: dropsTable || dropsTriggers }).toEqual({
+        table,
+        releasedBy,
+        removesGuard: true,
+      });
+    }
+    const triggers = (await fixtureDb`
+      SELECT c.relname::text AS table_name, t.tgname::text AS trigger_name
+        FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+       WHERE NOT t.tgisinternal AND c.relname = ANY(${Object.keys(APPEND_ONLY_RELEASED)})
+    `) as unknown as { table_name: string; trigger_name: string }[];
+    expect(triggers).toEqual([]);
+    const [jobs] = (await fixtureDb`SELECT to_regclass('public.swarm_scheduler_jobs')::text AS reg`) as unknown as {
+      reg: string | null;
+    }[];
+    expect(jobs!.reg).toBeNull();
+    // Grant-only is still a protection: the runtime roles hold neither DELETE
+    // nor TRUNCATE on the event log (stream-events-retention.test.ts executes
+    // the refusal as each role).
+    const held = (await fixtureDb`
+      SELECT r.rolname::text AS role, p.privilege
+        FROM (VALUES ('rm_app'), ('rm_worker')) AS r(rolname)
+        CROSS JOIN (VALUES ('DELETE'), ('TRUNCATE')) AS p(privilege)
+       WHERE has_table_privilege(r.rolname, 'public.swarm_stream_events', p.privilege)
+    `) as unknown as { role: string; privilege: string }[];
+    expect(held).toEqual([]);
   });
 
   // Ledger tables a later migration dropped outright, with the migration that
@@ -348,8 +404,8 @@ describe("append-only: every protected table holds data that cannot be removed",
     // no-statement shape as a replication apply, and the row-level trigger
     // closes both. Built here rather than asserted about, because "no migration
     // uses INHERITS today" is a fact about today.
-    await sql.unsafe(`CREATE TABLE rm_inherit_probe (LIKE audit_log)`);
-    await sql.unsafe(`ALTER TABLE audit_log INHERIT rm_inherit_probe`);
+    await fixtureDb.unsafe(`CREATE TABLE rm_inherit_probe (LIKE audit_log)`);
+    await fixtureDb.unsafe(`ALTER TABLE audit_log INHERIT rm_inherit_probe`);
     try {
       const before = await counts();
       const raised = await attempt(`DELETE FROM rm_inherit_probe`);
@@ -358,8 +414,8 @@ describe("append-only: every protected table holds data that cannot be removed",
       expectGuardRefused(raised, "audit_log", "DELETE", "DELETE via an inheritance parent");
       expect(await counts(), "a refused inherited DELETE must not have removed anything").toEqual(before);
     } finally {
-      await sql.unsafe(`ALTER TABLE audit_log NO INHERIT rm_inherit_probe`);
-      await sql.unsafe(`DROP TABLE rm_inherit_probe`);
+      await fixtureDb.unsafe(`ALTER TABLE audit_log NO INHERIT rm_inherit_probe`);
+      await fixtureDb.unsafe(`DROP TABLE rm_inherit_probe`);
     }
   });
 
@@ -370,7 +426,7 @@ describe("append-only: every protected table holds data that cannot be removed",
     // matters under replication is actually working.
     let detail: string | null = null;
     try {
-      await sql.unsafe(`DELETE FROM audit_log WHERE false`);
+      await fixtureDb.unsafe(`DELETE FROM audit_log WHERE false`);
     } catch (e) {
       detail = (e as { detail?: string }).detail ?? null;
     }
@@ -450,7 +506,7 @@ describe("append-only: every protected table holds data that cannot be removed",
       const before = await counts();
       let raised: Raised = null;
       try {
-        await sql.begin(async (tx) => {
+        await fixtureDb.begin(async (tx) => {
           await tx.unsafe("SET LOCAL session_replication_role = 'replica'");
           await tx.unsafe(`DELETE FROM ${table}`);
         });
@@ -482,9 +538,9 @@ describe("append-only: every protected table holds data that cannot be removed",
     // A guard that also blocked writes would break every normal flow, so prove
     // the allowed operations still pass.
     const id = `append-only-probe-${crypto.randomUUID()}`;
-    await sql`INSERT INTO swarm_members (id, name, status) VALUES (${id}, 'Append Probe', 'inactive')`;
-    await sql`UPDATE swarm_members SET name = 'Append Probe 2' WHERE id = ${id}`;
-    const [row] = await sql`SELECT name FROM swarm_members WHERE id = ${id}`;
+    await fixtureDb`INSERT INTO swarm_members (id, name, status) VALUES (${id}, 'Append Probe', 'inactive')`;
+    await fixtureDb`UPDATE swarm_members SET name = 'Append Probe 2' WHERE id = ${id}`;
+    const [row] = await fixtureDb`SELECT name FROM swarm_members WHERE id = ${id}`;
     expect(row.name).toBe("Append Probe 2");
     // Deliberately NOT cleaned up: this database is thrown away at the end of
     // the run, and deleting the probe is the exact operation under test.
@@ -506,9 +562,9 @@ describe("append-only: the limits the migration header claims, held to the same 
     // of MEANING while its row count never changes, and nothing here detects
     // it. Stated in the header; asserted here so the statement is checkable.
     const id = `append-only-update-residual-${crypto.randomUUID()}`;
-    await sql`INSERT INTO swarm_members (id, name, status) VALUES (${id}, 'Original Name', 'inactive')`;
-    await sql`UPDATE swarm_members SET name = '', lens = NULL WHERE id = ${id}`;
-    const [row] = await sql`SELECT name, lens FROM swarm_members WHERE id = ${id}`;
+    await fixtureDb`INSERT INTO swarm_members (id, name, status) VALUES (${id}, 'Original Name', 'inactive')`;
+    await fixtureDb`UPDATE swarm_members SET name = '', lens = NULL WHERE id = ${id}`;
+    const [row] = await fixtureDb`SELECT name, lens FROM swarm_members WHERE id = ${id}`;
     expect(row.name).toBe("");
     expect(row.lens).toBeNull();
   });
@@ -519,17 +575,17 @@ describe("append-only: the limits the migration header claims, held to the same 
     // the audit row and loses the fact that row recorded about which job did
     // it. Demonstrated on the real schema rather than reasoned about, because
     // the edge is easy to add and easy to forget.
-    const [job] = (await sql`
+    const [job] = (await fixtureDb`
       INSERT INTO jobs (kind, payload) VALUES ('append-only.residual', '{}'::jsonb) RETURNING id
     `) as unknown as { id: number }[];
-    const [entry] = (await sql`
+    const [entry] = (await fixtureDb`
       INSERT INTO audit_log (actor, action, job_id) VALUES ('append-only-test', 'provenance', ${job!.id})
       RETURNING id
     `) as unknown as { id: number }[];
 
-    await sql`DELETE FROM jobs WHERE id = ${job!.id}`;
+    await fixtureDb`DELETE FROM jobs WHERE id = ${job!.id}`;
 
-    const [after] = (await sql`SELECT job_id FROM audit_log WHERE id = ${entry!.id}`) as unknown as
+    const [after] = (await fixtureDb`SELECT job_id FROM audit_log WHERE id = ${entry!.id}`) as unknown as
       { job_id: number | null }[];
     expect(after!.job_id, "the audit row survives; the job it names does not, and the link is now NULL").toBeNull();
   });
@@ -539,16 +595,16 @@ describe("append-only: the limits the migration header claims, held to the same 
     // this tamper-evidence. Run on a table this file creates, so the assertion
     // costs nothing: the point is that the OWNER can do it, not that audit_log
     // specifically is droppable.
-    await sql.unsafe(`CREATE TABLE rm_drop_residual (LIKE audit_log)`);
-    await sql.unsafe(
+    await fixtureDb.unsafe(`CREATE TABLE rm_drop_residual (LIKE audit_log)`);
+    await fixtureDb.unsafe(
       `CREATE TRIGGER rm_drop_residual_append_only BEFORE DELETE OR TRUNCATE ON rm_drop_residual
        FOR EACH STATEMENT EXECUTE FUNCTION rm_append_only_guard()`,
     );
-    await sql.unsafe(`ALTER TABLE rm_drop_residual ENABLE ALWAYS TRIGGER rm_drop_residual_append_only`);
+    await fixtureDb.unsafe(`ALTER TABLE rm_drop_residual ENABLE ALWAYS TRIGGER rm_drop_residual_append_only`);
     expect(await attempt(`DELETE FROM rm_drop_residual`), "the guard is genuinely armed on it").not.toBeNull();
     // …and it goes anyway.
     expect(await attempt(`DROP TABLE rm_drop_residual`)).toBeNull();
-    const [{ gone }] = (await sql`SELECT to_regclass('public.rm_drop_residual') IS NULL AS gone`) as unknown as
+    const [{ gone }] = (await fixtureDb`SELECT to_regclass('public.rm_drop_residual') IS NULL AS gone`) as unknown as
       { gone: boolean }[];
     expect(gone).toBe(true);
   });
@@ -572,14 +628,14 @@ describe("source acquisition ledger: complete immutability and runtime-role boun
     const fetchId = crypto.randomUUID();
     const bytes = new TextEncoder().encode("append-only-source-payload");
     const checksum = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
-    await sql`INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity) VALUES (${acquisition}, 'fixture', '1', 'append-only')`;
-    await sql`INSERT INTO source_acquisition_events (acquisition_id, sequence, event_type) VALUES (${acquisition}, 1, 'started')`;
-    await sql`INSERT INTO source_fetches (id, acquisition_id, sequence, request_identity, cache_status, response_status, response_checksum)
+    await fixtureDb`INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity) VALUES (${acquisition}, 'fixture', '1', 'append-only')`;
+    await fixtureDb`INSERT INTO source_acquisition_events (acquisition_id, sequence, event_type) VALUES (${acquisition}, 1, 'started')`;
+    await fixtureDb`INSERT INTO source_fetches (id, acquisition_id, sequence, request_identity, cache_status, response_status, response_checksum)
               VALUES (${fetchId}, ${acquisition}, 1, '{"method":"GET","url":"https://example.invalid","headers":{}}', 'disabled', 200, ${checksum})`;
-    await sql`INSERT INTO source_value_versions (acquisition_id, source_key, market_date, value, revision_kind)
+    await fixtureDb`INSERT INTO source_value_versions (acquisition_id, source_key, market_date, value, revision_kind)
               VALUES (${acquisition}, 'append-only:probe', '2024-01-01', 1, 'initial')`;
 
-    const triggers = await sql`
+    const triggers = await fixtureDb`
       SELECT c.relname AS table_name, t.tgname, t.tgenabled, (t.tgtype & 1) = 1 AS is_row
       FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
       WHERE NOT t.tgisinternal AND c.relname = ANY(${[...tables]}::text[])`;
@@ -597,7 +653,7 @@ describe("source acquisition ledger: complete immutability and runtime-role boun
   });
 
   test("rm_worker cannot fabricate evidence and rm_readonly can inspect it", async () => {
-    const privileges = await sql`
+    const privileges = await fixtureDb`
       SELECT table_name,
              has_table_privilege('rm_worker', 'public.' || table_name, 'INSERT') AS worker_insert,
              has_table_privilege('rm_readonly', 'public.' || table_name, 'SELECT') AS readonly_select
@@ -621,32 +677,32 @@ describe("analytics run ledger (issue #977): complete immutability, content pres
   let sourceValueVersionId = "";
 
   beforeAll(async () => {
-    const [methodology] = (await sql`
+    const [methodology] = (await fixtureDb`
       INSERT INTO analytics_ledger_methodology_versions (tool_id, version_label, config, config_digest)
       VALUES ('append-only-test', 'v-test', '{"k":"v"}'::jsonb, ${"0".repeat(64)})
       RETURNING id
     `) as unknown as { id: string }[];
     methodologyId = String(methodology!.id);
 
-    const [run] = (await sql`
+    const [run] = (await fixtureDb`
       INSERT INTO analytics_ledger_runs (run_key, asof, tool_id, source_label, methodology_version_id, build_identity)
       VALUES (${crypto.randomUUID()}, '2031-01-02', 'append-only-test', 'fixture', ${methodologyId}::bigint, 'append-only-build')
       RETURNING id
     `) as unknown as { id: string }[];
     runId = String(run!.id);
 
-    await sql`
+    await fixtureDb`
       INSERT INTO analytics_ledger_run_events (run_id, sequence, event_type)
       VALUES (${runId}::bigint, 1, 'started')`;
 
-    const [svv] = (await sql`
+    const [svv] = (await fixtureDb`
       INSERT INTO source_value_versions (source_key, market_date, value, revision_kind)
       VALUES ('append-only-run-ledger:probe', '2031-01-02', 1, 'legacy_baseline')
       RETURNING id
     `) as unknown as { id: string }[];
     sourceValueVersionId = String(svv!.id);
 
-    const [vintage] = (await sql`
+    const [vintage] = (await fixtureDb`
       INSERT INTO analytics_data_vintages
         (run_id, tool_id, knowledge_time_cutoff, market_time_cutoff, methodology_version_id, build_identity, manifest, manifest_digest, member_count)
       VALUES (${runId}::bigint, 'append-only-test', now(), '2031-01-02', ${methodologyId}::bigint, 'append-only-build',
@@ -655,13 +711,13 @@ describe("analytics run ledger (issue #977): complete immutability, content pres
     `) as unknown as { id: string }[];
     vintageId = String(vintage!.id);
 
-    await sql`
+    await fixtureDb`
       INSERT INTO analytics_vintage_members (vintage_id, source_value_version_id, source_key)
       VALUES (${vintageId}::bigint, ${sourceValueVersionId}::bigint, 'append-only-run-ledger:probe')`;
   });
 
   test("every row seeded above really exists (a fixture that failed to insert would pass every refusal test for free)", async () => {
-    const counts = (await sql`
+    const counts = (await fixtureDb`
       SELECT
         (SELECT count(*)::int FROM analytics_ledger_methodology_versions WHERE id = ${methodologyId}::bigint) AS methodology,
         (SELECT count(*)::int FROM analytics_ledger_runs WHERE id = ${runId}::bigint) AS run,
@@ -673,7 +729,7 @@ describe("analytics run ledger (issue #977): complete immutability, content pres
   });
 
   test("UPDATE, DELETE, TRUNCATE are all refused on every table, with the run-ledger's own stable message, and content survives", async () => {
-    const before = (await sql.unsafe(
+    const before = (await fixtureDb.unsafe(
       tables.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(" UNION ALL "),
     )) as unknown as { t: string; n: number }[];
 
@@ -702,19 +758,19 @@ describe("analytics run ledger (issue #977): complete immutability, content pres
       }
     }
 
-    const after = (await sql.unsafe(
+    const after = (await fixtureDb.unsafe(
       tables.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(" UNION ALL "),
     )) as unknown as { t: string; n: number }[];
     expect(after).toEqual(before); // every refused operation left the data exactly as it was
 
     // Content-preservation, not merely row-count preservation: the run
     // header's own build_identity survives a rejected UPDATE attempt intact.
-    const [run] = await sql`SELECT build_identity FROM analytics_ledger_runs WHERE id = ${runId}::bigint`;
+    const [run] = await fixtureDb`SELECT build_identity FROM analytics_ledger_runs WHERE id = ${runId}::bigint`;
     expect(run.build_identity).toBe("append-only-build");
   });
 
   test("BOTH guards are installed on every table, at the right level, as ENABLE ALWAYS", async () => {
-    const rows = (await sql`
+    const rows = (await fixtureDb`
       SELECT c.relname::text AS table_name, t.tgname::text AS trigger_name,
              t.tgenabled::text AS enabled, (t.tgtype & 1) = 1 AS is_row, p.proname::text AS function_name
       FROM pg_trigger t
@@ -732,27 +788,27 @@ describe("analytics run ledger (issue #977): complete immutability, content pres
   });
 
   test("a DELETE through an INHERITANCE PARENT is refused", async () => {
-    await sql.unsafe(`CREATE TABLE rm_run_ledger_inherit_probe (LIKE analytics_ledger_run_events)`);
-    await sql.unsafe(`ALTER TABLE analytics_ledger_run_events INHERIT rm_run_ledger_inherit_probe`);
+    await fixtureDb.unsafe(`CREATE TABLE rm_run_ledger_inherit_probe (LIKE analytics_ledger_run_events)`);
+    await fixtureDb.unsafe(`ALTER TABLE analytics_ledger_run_events INHERIT rm_run_ledger_inherit_probe`);
     try {
-      const [{ n: before }] = await sql`SELECT count(*)::int AS n FROM analytics_ledger_run_events`;
+      const [{ n: before }] = await fixtureDb`SELECT count(*)::int AS n FROM analytics_ledger_run_events`;
       const raised = await attempt(`DELETE FROM rm_run_ledger_inherit_probe`);
       expect(raised?.code).toBe("0A000");
       expect(raised?.message).toMatch(/^analytics run ledger is immutable: DELETE is not permitted on analytics_ledger_run_events/);
-      const [{ n: after }] = await sql`SELECT count(*)::int AS n FROM analytics_ledger_run_events`;
+      const [{ n: after }] = await fixtureDb`SELECT count(*)::int AS n FROM analytics_ledger_run_events`;
       expect(after).toBe(before);
     } finally {
-      await sql.unsafe(`ALTER TABLE analytics_ledger_run_events NO INHERIT rm_run_ledger_inherit_probe`);
-      await sql.unsafe(`DROP TABLE rm_run_ledger_inherit_probe`);
+      await fixtureDb.unsafe(`ALTER TABLE analytics_ledger_run_events NO INHERIT rm_run_ledger_inherit_probe`);
+      await fixtureDb.unsafe(`DROP TABLE rm_run_ledger_inherit_probe`);
     }
   });
 
   test("a replica-role session cannot delete from any run-ledger table", async () => {
     for (const table of tables) {
-      const [{ n: before }] = await sql`SELECT count(*)::int AS n FROM ${sql(table)}`;
+      const [{ n: before }] = await fixtureDb`SELECT count(*)::int AS n FROM ${fixtureDb(table)}`;
       let raised: Raised = null;
       try {
-        await sql.begin(async (tx) => {
+        await fixtureDb.begin(async (tx) => {
           await tx.unsafe("SET LOCAL session_replication_role = 'replica'");
           await tx.unsafe(`DELETE FROM ${table}`);
         });
@@ -762,13 +818,13 @@ describe("analytics run ledger (issue #977): complete immutability, content pres
       }
       expect(raised?.code, `replica-role DELETE FROM ${table}`).toBe("0A000");
       expect(raised?.message).toMatch(new RegExp(`^analytics run ledger is immutable: DELETE is not permitted on ${table}`));
-      const [{ n: after }] = await sql`SELECT count(*)::int AS n FROM ${sql(table)}`;
+      const [{ n: after }] = await fixtureDb`SELECT count(*)::int AS n FROM ${fixtureDb(table)}`;
       expect(after).toBe(before);
     }
   });
 
   test("rm_worker cannot fabricate a run/vintage and rm_readonly can inspect the ledger", async () => {
-    const privileges = await sql`
+    const privileges = await fixtureDb`
       SELECT table_name,
              has_table_privilege('rm_worker', 'public.' || table_name, 'INSERT') AS worker_insert,
              has_table_privilege('rm_readonly', 'public.' || table_name, 'SELECT') AS readonly_select
@@ -787,12 +843,12 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
   let outputSnapshotId = "";
 
   beforeAll(async () => {
-    const [methodology] = (await sql`
+    const [methodology] = (await fixtureDb`
       INSERT INTO analytics_ledger_methodology_versions (tool_id, version_label, config, config_digest)
       VALUES ('append-only-output-test', 'v-test', '{"k":"v"}'::jsonb, ${"2".repeat(64)})
       RETURNING id
     `) as unknown as { id: string }[];
-    const [run] = (await sql`
+    const [run] = (await fixtureDb`
       INSERT INTO analytics_ledger_runs (run_key, asof, tool_id, source_label, methodology_version_id, build_identity)
       VALUES (${crypto.randomUUID()}, '2031-01-03', 'append-only-output-test', 'fixture', ${methodology!.id}::bigint, 'append-only-output-build')
       RETURNING id
@@ -801,7 +857,7 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
 
     const payloadBytes = new TextEncoder().encode(`["append-only-output-probe"]`);
     const payloadChecksum = new Bun.CryptoHasher("sha256").update(payloadBytes).digest("hex");
-    const [outputSnapshot] = (await sql`
+    const [outputSnapshot] = (await fixtureDb`
       INSERT INTO analytics_output_snapshots (run_id, artifact_kind, payload_bytes, checksum)
       VALUES (${runId}::bigint, 'regime_snapshots', ${Buffer.from(payloadBytes)}, ${payloadChecksum})
       RETURNING id
@@ -810,7 +866,7 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
 
     const reportBytes = new TextEncoder().encode("append-only report probe bytes");
     const reportChecksum = new Bun.CryptoHasher("sha256").update(reportBytes).digest("hex");
-    const [reportSnapshot] = (await sql`
+    const [reportSnapshot] = (await fixtureDb`
       INSERT INTO analytics_report_snapshots (run_id, asof, report_bytes, checksum)
       VALUES (${runId}::bigint, '2031-01-03', ${Buffer.from(reportBytes)}, ${reportChecksum})
       RETURNING id
@@ -819,13 +875,13 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
 
     const bodyBytes = new TextEncoder().encode(`{"probe":"append-only-brief-revision"}`);
     const bodyChecksum = new Bun.CryptoHasher("sha256").update(bodyBytes).digest("hex");
-    await sql`
+    await fixtureDb`
       INSERT INTO swarm_brief_revisions (session_id, revision, body_bytes, checksum, report_snapshot_id)
       VALUES (${SESSION}, 1, ${Buffer.from(bodyBytes)}, ${bodyChecksum}, ${reportSnapshotId}::bigint)`;
   });
 
   test("every row seeded above really exists (a fixture that failed to insert would pass every refusal test for free)", async () => {
-    const counts = (await sql`
+    const counts = (await fixtureDb`
       SELECT
         (SELECT count(*)::int FROM analytics_output_snapshots WHERE id = ${outputSnapshotId}::bigint) AS output,
         (SELECT count(*)::int FROM analytics_report_snapshots WHERE id = ${reportSnapshotId}::bigint) AS report,
@@ -835,7 +891,7 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
   });
 
   test("UPDATE, DELETE, TRUNCATE are all refused on every table, with the output ledger's own stable message, and content survives", async () => {
-    const before = (await sql.unsafe(
+    const before = (await fixtureDb.unsafe(
       tables.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(" UNION ALL "),
     )) as unknown as { t: string; n: number }[];
 
@@ -859,22 +915,22 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
       }
     }
 
-    const after = (await sql.unsafe(
+    const after = (await fixtureDb.unsafe(
       tables.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(" UNION ALL "),
     )) as unknown as { t: string; n: number }[];
     expect(after).toEqual(before);
 
-    const [outputRow] = await sql`SELECT artifact_kind FROM analytics_output_snapshots WHERE id = ${outputSnapshotId}::bigint`;
+    const [outputRow] = await fixtureDb`SELECT artifact_kind FROM analytics_output_snapshots WHERE id = ${outputSnapshotId}::bigint`;
     expect(outputRow.artifact_kind).toBe("regime_snapshots");
   });
 
   test("a correction is allowed to be APPENDED under a new run / a new revision, rather than mutating the rejected row", async () => {
-    const [methodology] = (await sql`
+    const [methodology] = (await fixtureDb`
       INSERT INTO analytics_ledger_methodology_versions (tool_id, version_label, config, config_digest)
       VALUES ('append-only-output-correction', 'v-test', '{"k":"v"}'::jsonb, ${"3".repeat(64)})
       RETURNING id
     `) as unknown as { id: string }[];
-    const [run] = (await sql`
+    const [run] = (await fixtureDb`
       INSERT INTO analytics_ledger_runs (run_key, asof, tool_id, source_label, methodology_version_id, build_identity)
       VALUES (${crypto.randomUUID()}, '2031-01-03', 'append-only-output-correction', 'fixture', ${methodology!.id}::bigint, 'append-only-output-correction')
       RETURNING id
@@ -882,7 +938,7 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
     const newRunId = String(run!.id);
     const bytes = new TextEncoder().encode("a correction, not an edit");
     const checksum = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
-    const [newReport] = (await sql`
+    const [newReport] = (await fixtureDb`
       INSERT INTO analytics_report_snapshots (run_id, asof, report_bytes, checksum)
       VALUES (${newRunId}::bigint, '2031-01-03', ${Buffer.from(bytes)}, ${checksum})
       RETURNING id
@@ -891,15 +947,15 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
 
     const revisionBytes = new TextEncoder().encode(`{"probe":"append-only-brief-revision-2"}`);
     const revisionChecksum = new Bun.CryptoHasher("sha256").update(revisionBytes).digest("hex");
-    await sql`
+    await fixtureDb`
       INSERT INTO swarm_brief_revisions (session_id, revision, body_bytes, checksum, report_snapshot_id)
       VALUES (${SESSION}, 2, ${Buffer.from(revisionBytes)}, ${revisionChecksum}, ${newReport!.id}::bigint)`;
-    const revisions = await sql`SELECT revision FROM swarm_brief_revisions WHERE session_id = ${SESSION} ORDER BY revision`;
+    const revisions = await fixtureDb`SELECT revision FROM swarm_brief_revisions WHERE session_id = ${SESSION} ORDER BY revision`;
     expect(revisions.map((r) => Number(r.revision))).toEqual([1, 2]);
   });
 
   test("BOTH guards are installed on every table, at the right level, as ENABLE ALWAYS", async () => {
-    const rows = (await sql`
+    const rows = (await fixtureDb`
       SELECT c.relname::text AS table_name, t.tgname::text AS trigger_name,
              t.tgenabled::text AS enabled, (t.tgtype & 1) = 1 AS is_row, p.proname::text AS function_name
       FROM pg_trigger t
@@ -918,10 +974,10 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
 
   test("a replica-role session cannot delete from any of these tables", async () => {
     for (const table of tables) {
-      const [{ n: before }] = await sql`SELECT count(*)::int AS n FROM ${sql(table)}`;
+      const [{ n: before }] = await fixtureDb`SELECT count(*)::int AS n FROM ${fixtureDb(table)}`;
       let raised: Raised = null;
       try {
-        await sql.begin(async (tx) => {
+        await fixtureDb.begin(async (tx) => {
           await tx.unsafe("SET LOCAL session_replication_role = 'replica'");
           await tx.unsafe(`DELETE FROM ${table}`);
         });
@@ -931,13 +987,13 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
       }
       expect(raised?.code, `replica-role DELETE FROM ${table}`).toBe("0A000");
       expect(raised?.message).toMatch(new RegExp(`^analytics output ledger is immutable: DELETE is not permitted on ${table}`));
-      const [{ n: after }] = await sql`SELECT count(*)::int AS n FROM ${sql(table)}`;
+      const [{ n: after }] = await fixtureDb`SELECT count(*)::int AS n FROM ${fixtureDb(table)}`;
       expect(after).toBe(before);
     }
   });
 
   test("rm_worker cannot fabricate an output/report snapshot or brief revision and rm_readonly can inspect them", async () => {
-    const privileges = await sql`
+    const privileges = await fixtureDb`
       SELECT table_name,
              has_table_privilege('rm_worker', 'public.' || table_name, 'INSERT') AS worker_insert,
              has_table_privilege('rm_readonly', 'public.' || table_name, 'SELECT') AS readonly_select
@@ -954,7 +1010,7 @@ describe("analytics cutover ledger (issue #979): the dual-write parity observati
   let observationId = "";
 
   beforeAll(async () => {
-    const [obs] = (await sql`
+    const [obs] = (await fixtureDb`
       INSERT INTO analytics_parity_observations (
         domain, legacy_row_count, ledger_row_count, legacy_checksum, ledger_checksum, matched, detail
       ) VALUES (
@@ -966,7 +1022,7 @@ describe("analytics cutover ledger (issue #979): the dual-write parity observati
   });
 
   test("every row seeded above really exists (a fixture that failed to insert would pass every refusal test for free)", async () => {
-    const [{ n }] = await sql`
+    const [{ n }] = await fixtureDb`
       SELECT count(*)::int AS n FROM analytics_parity_observations WHERE id = ${observationId}::bigint`;
     expect(n).toBeGreaterThan(0);
   });
@@ -986,14 +1042,14 @@ describe("analytics cutover ledger (issue #979): the dual-write parity observati
         new RegExp(`^analytics cutover ledger is immutable: (UPDATE|DELETE|TRUNCATE) is not permitted on analytics_parity_observations`),
       );
     }
-    const [{ n: after }] = await sql`SELECT count(*)::int AS n FROM analytics_parity_observations`;
+    const [{ n: after }] = await fixtureDb`SELECT count(*)::int AS n FROM analytics_parity_observations`;
     expect(after).toBe(1);
-    const [row] = await sql`SELECT matched FROM analytics_parity_observations WHERE id = ${observationId}::bigint`;
+    const [row] = await fixtureDb`SELECT matched FROM analytics_parity_observations WHERE id = ${observationId}::bigint`;
     expect(row.matched).toBe(true);
   });
 
   test("BOTH guards are installed, at the right level, as ENABLE ALWAYS, calling rm_analytics_cutover_immutable", async () => {
-    const rows = (await sql`
+    const rows = (await fixtureDb`
       SELECT t.tgname::text AS trigger_name, t.tgenabled::text AS enabled, (t.tgtype & 1) = 1 AS is_row,
              p.proname::text AS function_name
       FROM pg_trigger t
@@ -1010,7 +1066,7 @@ describe("analytics cutover ledger (issue #979): the dual-write parity observati
   test("a replica-role session cannot delete parity observations", async () => {
     let raised: Raised = null;
     try {
-      await sql.begin(async (tx) => {
+      await fixtureDb.begin(async (tx) => {
         await tx.unsafe("SET LOCAL session_replication_role = 'replica'");
         await tx.unsafe("DELETE FROM analytics_parity_observations");
       });
@@ -1023,7 +1079,7 @@ describe("analytics cutover ledger (issue #979): the dual-write parity observati
   });
 
   test("a parity observation can be SUPERSEDED only by a NEW row — a correction is an append, never an edit", async () => {
-    const [obs] = (await sql`
+    const [obs] = (await fixtureDb`
       INSERT INTO analytics_parity_observations (
         domain, legacy_row_count, ledger_row_count, legacy_checksum, ledger_checksum, matched, detail
       ) VALUES (
@@ -1032,12 +1088,12 @@ describe("analytics cutover ledger (issue #979): the dual-write parity observati
       RETURNING id
     `) as unknown as { id: string }[];
     expect(String(obs!.id)).not.toBe(observationId);
-    const rows = await sql`SELECT id FROM analytics_parity_observations ORDER BY id`;
+    const rows = await fixtureDb`SELECT id FROM analytics_parity_observations ORDER BY id`;
     expect(rows).toHaveLength(2);
   });
 
   test("rm_worker cannot fabricate a parity observation and rm_readonly can inspect the ledger", async () => {
-    const privileges = await sql`
+    const privileges = await fixtureDb`
       SELECT has_table_privilege('rm_worker', 'public.analytics_parity_observations', 'INSERT') AS worker_insert,
              has_table_privilege('rm_readonly', 'public.analytics_parity_observations', 'SELECT') AS readonly_select`;
     expect(privileges[0].worker_insert).toBe(false);

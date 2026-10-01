@@ -1,12 +1,16 @@
 // Minimal forward-only migration runner. Applies every backend/migrations/*.sql
-// in filename order exactly once, tracked in schema_migrations. Idempotent:
-// safe to run on every boot (ephemeral CI, smoke, or prod).
+// in filename order exactly once, tracked in schema_migrations. Idempotent.
+// It takes no target lock, fence, manifest or receipt, so it is for local dev,
+// tests and ephemeral CI only. Production migrates through `bun run migrate`
+// (scripts/migrate.ts, smoke-production-spec.md §8.5); prod-bootstrap no
+// longer calls this runner.
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type postgresTypes from "postgres";
-import { sql, closeDb, setDatabase } from "./client.ts";
-import { seed, seedSmokeJobSchedules } from "./seed.ts";
+import { sql, closeDb, setDatabase, jsonValue, type DbHandle } from "./client.ts";
+import { buildVintageManifest } from "../analytics/run-ledger.ts";
+import { resolveVintageMembers } from "../analytics/store/run-ledger-store.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "migrations");
 
@@ -28,7 +32,7 @@ async function waitForDb(timeoutMs = 30_000): Promise<void> {
   }
 }
 
-export async function migrate(options: { seedSmokeSchedules?: boolean } = {}): Promise<void> {
+export async function migrate(): Promise<void> {
   // Deploy-time migrations have their own credential.  It is deliberately not
   // inherited from a long-lived API process.  Local/ephemeral environments
   // retain DATABASE_URL for bootstrap compatibility.
@@ -58,13 +62,13 @@ export async function migrate(options: { seedSmokeSchedules?: boolean } = {}): P
   }
   console.log(`migrations up to date (${files.length} total)`);
   await reclaimAfterMigrations(sql, appliedNow);
-
-  // Seed required rows (job_schedules etc.) after schema is current. Idempotent,
-  // so safe on every boot — gives the worker recurring work without a manual
-  // admin trigger. See seed.ts.
-  await seed();
-  if (options.seedSmokeSchedules) await seedSmokeJobSchedules();
 }
+
+// migrate() MIGRATES, and nothing else. Seeding is a separate concern with its
+// own tool (backend/src/db/seed.ts, run as `bun run src/db/seed.ts`) and its own
+// callers — the test template (backend/tests/preload.ts) and the boot's seed
+// step both invoke it explicitly. Keeping seed out of here is what makes
+// `bun run migrate` a schema-only operation safe to run against production.
 
 // Apply one migration file: its SQL, then any TypeScript step it needs, then
 // its schema_migrations row — all in ONE transaction, so a failure anywhere
@@ -81,6 +85,70 @@ export async function applyMigrationFile(db: postgresTypes.Sql<{}>, file: string
     await IN_TRANSACTION_AFTER_MIGRATION[file]?.(tx);
     await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
   });
+}
+
+// Issue #1050: recompute every stored vintage's manifest, series fingerprints,
+// member_count and manifest_digest from the members it resolves to NOW.
+//
+// WHY. The ledger repair re-points every vintage to the source_value_versions rows
+// the fixed ledger writer would have written (decision D56, amendment for
+// #1050), so the digests frozen over the old writer's rows no longer describe
+// their members. The owner's rule is that the database ends as if the old
+// writer had never run — so each vintage gets exactly the manifest freezeVintage
+// would have stored for these members, and the old digest is overwritten, not
+// kept anywhere.
+//
+// Runs ONLY from the one-time ledger repair
+// (scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts), inside its transaction, as
+// rm_owner. A
+// canonical-JSON SHA-256 in plpgsql would have to reproduce JavaScript's number
+// formatting byte for byte; this reuses buildVintageManifest instead, the one
+// function every freeze and every replay already uses. analytics_data_vintages
+// is immutable, so its guard is disarmed for these UPDATEs and re-armed (ENABLE
+// ALWAYS) before returning; an error rolls the whole migration back with it.
+//
+// IT LIVES HERE, NOT IN THE STORE (#1026 W6). analytics_data_vintages is
+// immutable: a statement trigger refuses even a zero-row UPDATE, so no
+// registered call site could carry a probe for this UPDATE, and the registry
+// forbids raw SQL outside the db layer's infrastructure files. This is a
+// migration step, run by the migration runner alone as rm_owner. Membership is
+// resolved through the store's registered read (resolveVintageMembers), the one
+// function every replay uses; only the vintage list, the guard toggling and the
+// UPDATE are issued here.
+export async function rebuildVintageManifests(db: DbHandle): Promise<{ vintages: number; rewritten: number }> {
+  const vintages = (await db`
+    SELECT id::text AS id, knowledge_time_cutoff::text AS knowledge_time_cutoff,
+           market_time_cutoff::text AS market_time_cutoff, methodology_version_id::text AS methodology_version_id,
+           build_identity, manifest_digest, member_count
+    FROM analytics_data_vintages ORDER BY id`) as unknown as {
+    id: string;
+    knowledge_time_cutoff: string;
+    market_time_cutoff: string;
+    methodology_version_id: string;
+    build_identity: string;
+    manifest_digest: string;
+    member_count: number;
+  }[];
+  if (vintages.length === 0) return { vintages: 0, rewritten: 0 };
+  await db.unsafe("ALTER TABLE analytics_data_vintages DISABLE TRIGGER analytics_data_vintages_immutable");
+  await db.unsafe("ALTER TABLE analytics_data_vintages DISABLE TRIGGER analytics_data_vintages_immutable_row");
+  let rewritten = 0;
+  for (const v of vintages) {
+    const members = await resolveVintageMembers(v.id, db);
+    const { manifest } = buildVintageManifest(
+      members, v.methodology_version_id, v.build_identity, v.knowledge_time_cutoff, v.market_time_cutoff,
+    );
+    if (manifest.manifestDigest === v.manifest_digest && members.length === Number(v.member_count)) continue;
+    await db`
+      UPDATE analytics_data_vintages
+      SET manifest = ${db.json(jsonValue(manifest))}, manifest_digest = ${manifest.manifestDigest},
+          member_count = ${members.length}
+      WHERE id = ${v.id}::bigint`;
+    rewritten++;
+  }
+  await db.unsafe("ALTER TABLE analytics_data_vintages ENABLE ALWAYS TRIGGER analytics_data_vintages_immutable");
+  await db.unsafe("ALTER TABLE analytics_data_vintages ENABLE ALWAYS TRIGGER analytics_data_vintages_immutable_row");
+  return { vintages: vintages.length, rewritten };
 }
 
 // Work a migration needs that SQL cannot do well, run by the runner right
@@ -130,7 +198,7 @@ export async function reclaimAfterMigrations(db: postgresTypes.Sql<{}>, appliedN
 
 // Run directly: `bun run src/db/migrate.ts`
 if (import.meta.url === `file://${process.argv[1]}`) {
-  migrate({ seedSmokeSchedules: process.argv.includes("--seed-smoke-schedules") })
+  migrate()
     .then(closeDb)
     .catch((err) => {
       console.error(err);

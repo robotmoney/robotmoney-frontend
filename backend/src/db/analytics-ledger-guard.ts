@@ -12,7 +12,7 @@
 // evidence ledger (not merely the older swarm/audit history) is protected.
 import type postgresTypes from "postgres";
 import { sql } from "./client.ts";
-import { createNamespaceGuardClient } from "./handle-namespace.ts";
+import { createNamespaceGuardClient } from "./guard-client.ts";
 
 export type AnalyticsLedgerDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<{}>;
 
@@ -156,7 +156,14 @@ async function triggerInventory(db: AnalyticsLedgerDb, family: LedgerFamily, tab
   return problems;
 }
 
-const INCONCLUSIVE_CODES = new Set(["57014", "55P03", "57P01", "57P02", "57P03", "53300", "42501"]);
+// The database declining to answer: a timeout, a lock, a shutdown, a full
+// connection table, a connection exception. `42501 insufficient_privilege` is
+// NOT one of these. The api connects as rm_app, which holds SELECT and INSERT on
+// the ledgers and no UPDATE or DELETE (0077, and D55 (6) on every table), so its
+// probe is refused by the executor before the trigger runs: the expected,
+// conclusive answer (`isPrivilegeRefusal`). Counting it as inconclusive made the
+// whole check "unavailable" on every runtime boot.
+const INCONCLUSIVE_CODES = new Set(["57014", "55P03", "57P01", "57P02", "57P03", "53300"]);
 function isInconclusive(err: unknown): boolean {
   const code = (err as { code?: string } | null)?.code;
   if (typeof code !== "string" || !/^[0-9A-Z]{5}$/.test(code)) return true;
@@ -167,6 +174,14 @@ function isFamilyRefusal(err: unknown, family: LedgerFamily, table: string, op: 
   const e = err as { message?: string; code?: string } | null;
   if (e?.code !== "0A000") return false;
   return new RegExp(`^${family.label} is immutable: ${op} is not permitted on ${table}`).test(String(e?.message ?? ""));
+}
+
+/** The executor refused the statement for want of the privilege. From a role
+ *  that holds no UPDATE or DELETE on a ledger — every runtime role — this is a
+ *  refusal no trigger edit can disarm; the trigger inventory still checks the
+ *  catalog half, and the guard function's own refusal is probed as the owner. */
+function isPrivilegeRefusal(err: unknown): boolean {
+  return (err as { code?: string } | null)?.code === "42501";
 }
 
 class LedgerGuardInconclusive extends Error {}
@@ -191,6 +206,7 @@ async function probeFamily(db: AnalyticsLedgerDb, family: LedgerFamily, tables: 
         continue;
       }
       if (isFamilyRefusal(raised, family, table, op)) continue;
+      if (isPrivilegeRefusal(raised)) continue;
       if (isInconclusive(raised)) {
         const e = raised as { message?: string; code?: string };
         throw new LedgerGuardInconclusive(`probing ${table} (${op}): ${e?.code ?? "no SQLSTATE"}: ${String(e?.message ?? raised).split("\n")[0]}`);

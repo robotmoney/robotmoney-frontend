@@ -13,6 +13,7 @@ import {
   startProducerSchedules,
 } from "../src/producer/index.ts";
 import type { AnalyticsDataSource } from "../src/analytics/access/data-source.ts";
+import { writeTokenFile } from "./support/automation-auth.ts";
 
 const DAY_MS = 86_400_000;
 const NOW = new Date("2026-08-10T12:00:00Z");
@@ -176,7 +177,7 @@ test("catchUpMissedResearchDays: running it twice converges — the second pass 
 test("startProducerSchedules: runs catch-up before arming the daily crons", async () => {
   const order: string[] = [];
   await startProducerSchedules({
-    env: { ANALYTICS_API_URL: "http://unused:1", ANALYTICS_TOKEN: "t" },
+    env: { ANALYTICS_API_URL: "http://unused:1", ANALYTICS_TOKEN_FILE: writeTokenFile("t") },
     waitUntilReady: async () => { order.push("ready"); },
     catchUp: async () => { order.push("catchup"); },
     catchUpIndicators: async () => { order.push("catchupIndicators"); },

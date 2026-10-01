@@ -1,18 +1,22 @@
 // Admin task-queue dashboard (read-only over jobs/job_schedules/job_runs). Runs
 // against the ephemeral Postgres the preload provisions (real DB, never mocked) —
 // if Postgres is absent the preload THROWS, so this suite fails red rather than
-// skipping. Asserts the fail-closed auth guard (403 without a token in prod-mode,
-// 200 with the right X-Admin-Token, 403 with a wrong one, 200 when insecure), and
-// that the endpoints surface the inserted job + its runs' output/error (the logs).
-import { test, expect, afterAll } from "bun:test";
-import { sql, jsonValue } from "../../src/db/client.ts";
+// skipping. Asserts the fail-closed auth guard (403 without a credential, 200
+// with the operator's store token as X-Admin-Token, 403 with a wrong one — and
+// still 403 without one in this RM_ENV=ephemeral process, which used to open
+// the dashboard; D52 (1)), and that the endpoints surface the inserted job +
+// its runs' output/error (the logs).
+import { test, expect, afterAll, beforeAll } from "bun:test";
+import { jsonValue } from "../../src/db/client.ts";
+import { fixtureDb } from "../support/fixture-db.ts";
 import { handleAdmin } from "../../src/api/routes/admin.ts";
+import { provisionOperatorToken } from "../support/automation-auth.ts";
 
-// Prod-mode auth: a token is configured and the insecure convenience path is off,
-// so a request WITHOUT the matching X-Admin-Token must be rejected (fail-closed).
-const PROD = { adminToken: "s3cret-admin-token", allowInsecure: false } as const;
-const INSECURE = { adminToken: null, allowInsecure: true } as const;
-const LOCKED = { adminToken: null, allowInsecure: false } as const;
+// The operator's admin token, issued by the store like the real one.
+let OPERATOR = "";
+beforeAll(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 
 // A unique kind per run so the summary/feed assertions don't collide with rows
 // another test (or the seed) may have left behind.
@@ -23,54 +27,53 @@ function req(method: string, path: string, token?: string): Request {
   if (token !== undefined) headers["X-Admin-Token"] = token;
   return new Request(`http://x${path}`, { method, headers });
 }
-const call = (r: Request, cfg: typeof PROD | typeof INSECURE | typeof LOCKED) =>
-  handleAdmin(r, new URL(r.url), cfg);
+const call = (r: Request) => handleAdmin(r, new URL(r.url));
 
 // Insert one job + two runs (one succeeded with jsonb output, one failed with an
 // error string) — the runs' output/error are the "logs" the dashboard renders.
 async function seed(): Promise<number> {
-  const [job] = await sql`
-    INSERT INTO jobs ${sql({ kind: KIND, status: "succeeded", attempts: 1, last_error: null })}
+  const [job] = await fixtureDb`
+    INSERT INTO jobs ${fixtureDb({ kind: KIND, status: "succeeded", attempts: 1, last_error: null })}
     RETURNING id`;
   const jobId = Number(job.id);
-  await sql`
-    INSERT INTO job_runs ${sql({
+  await fixtureDb`
+    INSERT INTO job_runs ${fixtureDb({
       job_id: jobId, kind: KIND, status: "succeeded", error: null,
-      output: sql.json(jsonValue({ ran: true, note: "analytics ok" })),
+      output: fixtureDb.json(jsonValue({ ran: true, note: "analytics ok" })),
     })}`;
-  await sql`
-    INSERT INTO job_runs ${sql({
+  await fixtureDb`
+    INSERT INTO job_runs ${fixtureDb({
       job_id: jobId, kind: KIND, status: "failed", error: "boom: upstream 500",
-      output: sql.json(jsonValue({ ran: false })),
+      output: fixtureDb.json(jsonValue({ ran: false })),
     })}`;
   return jobId;
 }
 
 afterAll(async () => {
-  await sql`DELETE FROM job_runs WHERE kind = ${KIND}`;
-  await sql`DELETE FROM jobs WHERE kind = ${KIND}`;
+  await fixtureDb`DELETE FROM job_runs WHERE kind = ${KIND}`;
+  await fixtureDb`DELETE FROM jobs WHERE kind = ${KIND}`;
 });
 
-test("prod-mode with no token → 403 on every owned admin route (fail-closed)", async () => {
+test("no credential → 403 on every owned admin route (fail-closed)", async () => {
   const jobId = await seed();
-  expect((await call(req("POST", "/api/admin/auth"), PROD))?.status).toBe(403);
-  expect((await call(req("GET", "/api/admin/jobs"), PROD))?.status).toBe(403);
-  expect((await call(req("GET", `/api/admin/jobs/${jobId}`), PROD))?.status).toBe(403);
-  expect((await call(req("GET", "/api/admin/runs"), PROD))?.status).toBe(403);
+  expect((await call(req("POST", "/api/admin/auth")))?.status).toBe(403);
+  expect((await call(req("GET", "/api/admin/jobs")))?.status).toBe(403);
+  expect((await call(req("GET", `/api/admin/jobs/${jobId}`)))?.status).toBe(403);
+  expect((await call(req("GET", "/api/admin/runs")))?.status).toBe(403);
 });
 
 test("wrong token → 403", async () => {
-  expect((await call(req("GET", "/api/admin/jobs", "nope"), PROD))?.status).toBe(403);
-  expect((await call(req("POST", "/api/admin/auth", "nope"), PROD))?.status).toBe(403);
+  expect((await call(req("GET", "/api/admin/jobs", "nope")))?.status).toBe(403);
+  expect((await call(req("POST", "/api/admin/auth", "nope")))?.status).toBe(403);
 });
 
 test("correct X-Admin-Token → auth ok + jobs list with the inserted job and a summary", async () => {
   const jobId = await seed();
-  const auth = await call(req("POST", "/api/admin/auth", PROD.adminToken), PROD);
+  const auth = await call(req("POST", "/api/admin/auth", OPERATOR));
   expect(auth?.status).toBe(200);
   expect((auth?.body as { ok: boolean }).ok).toBe(true);
 
-  const res = await call(req("GET", "/api/admin/jobs", PROD.adminToken), PROD);
+  const res = await call(req("GET", "/api/admin/jobs", OPERATOR));
   expect(res?.status).toBe(200);
   const body = res?.body as {
     jobs: { id: number; kind: string }[];
@@ -86,7 +89,7 @@ test("correct X-Admin-Token → auth ok + jobs list with the inserted job and a 
 
 test("job detail returns the job + its runs including the output/error logs", async () => {
   const jobId = await seed();
-  const res = await call(req("GET", `/api/admin/jobs/${jobId}`, PROD.adminToken), PROD);
+  const res = await call(req("GET", `/api/admin/jobs/${jobId}`, OPERATOR));
   expect(res?.status).toBe(200);
   const body = res?.body as {
     job: { id: number; kind: string };
@@ -100,6 +103,32 @@ test("job detail returns the job + its runs including the output/error logs", as
   expect((ok?.output as { note: string }).note).toBe("analytics ok");
 });
 
+// The `?id=` filter — the exact-lookup the swarm driver's judge wait uses to
+// poll ONE known job by id (`GET /api/admin/jobs?id=<jobId>`). Must return
+// precisely that job (never siblings sharing a kind), 400 on a malformed id,
+// and the SAME row shape the list serves.
+test("jobs list filters by exact id, and rejects a malformed id", async () => {
+  const jobId = await seed();
+  const otherId = await seed();
+
+  const res = await call(req("GET", `/api/admin/jobs?id=${jobId}`, OPERATOR));
+  expect(res?.status).toBe(200);
+  const body = res?.body as { jobs: { id: number; kind: string; status: string; attempts: number }[] };
+  expect(body.jobs).toHaveLength(1);
+  expect(Number(body.jobs[0]!.id)).toBe(jobId);
+  expect(body.jobs[0]!.kind).toBe(KIND);
+  expect(body.jobs[0]!.status).toBe("succeeded");
+
+  // A sibling sharing the same kind is NOT returned.
+  const onlyOther = await call(req("GET", `/api/admin/jobs?id=${otherId}`, OPERATOR));
+  const otherBody = onlyOther?.body as { jobs: { id: number }[] };
+  expect(otherBody.jobs.map((j) => Number(j.id))).toEqual([otherId]);
+
+  // Malformed id → 400, same discipline as the other strict filters.
+  expect((await call(req("GET", "/api/admin/jobs?id=abc", OPERATOR)))?.status).toBe(400);
+  expect((await call(req("GET", "/api/admin/jobs?id=0", OPERATOR)))?.status).toBe(400);
+});
+
 // AC3 (issue #151) — a non-fatal telemetry write failure must still be
 // visible in admin status. worker/loop.ts persists whatever the handler
 // returns (including a `telemetry` field folded in by
@@ -107,21 +136,21 @@ test("job detail returns the job + its runs including the output/error logs", as
 // endpoint returns that output verbatim — proven generically above by the
 // `note` field; this asserts the specific `telemetry` shape survives too.
 test("job detail surfaces a non-fatal telemetry failure recorded in a run's output (AC3: job output + admin status)", async () => {
-  const [job] = await sql`
-    INSERT INTO jobs ${sql({ kind: KIND, status: "succeeded", attempts: 1, last_error: null })}
+  const [job] = await fixtureDb`
+    INSERT INTO jobs ${fixtureDb({ kind: KIND, status: "succeeded", attempts: 1, last_error: null })}
     RETURNING id`;
   const jobId = Number(job.id);
-  await sql`
-    INSERT INTO job_runs ${sql({
+  await fixtureDb`
+    INSERT INTO job_runs ${fixtureDb({
       job_id: jobId, kind: KIND, status: "succeeded", error: null,
-      output: sql.json(jsonValue({
+      output: fixtureDb.json(jsonValue({
         asof: "2026-07-15",
         tools: ["regime"],
         telemetry: { ok: false, error: "simulated telemetry outage" },
       })),
     })}`;
 
-  const res = await call(req("GET", `/api/admin/jobs/${jobId}`, PROD.adminToken), PROD);
+  const res = await call(req("GET", `/api/admin/jobs/${jobId}`, OPERATOR));
   expect(res?.status).toBe(200);
   const body = res?.body as { runs: { output: { telemetry: { ok: boolean; error: string } } }[] };
   const run = body.runs.find((r) => (r.output as any)?.telemetry !== undefined);
@@ -132,33 +161,36 @@ test("job detail surfaces a non-fatal telemetry failure recorded in a run's outp
 
 test("runs feed filtered by ?kind= returns the inserted runs (the log feed)", async () => {
   await seed();
-  const res = await call(req("GET", `/api/admin/runs?kind=${KIND}`, PROD.adminToken), PROD);
+  const res = await call(req("GET", `/api/admin/runs?kind=${KIND}`, OPERATOR));
   expect(res?.status).toBe(200);
   const body = res?.body as { runs: { kind: string; job_id: number }[] };
   expect(body.runs.length).toBeGreaterThanOrEqual(2);
   expect(body.runs.every((r) => r.kind === KIND)).toBe(true);
 
   // ?status= narrows it further.
-  const failedOnly = await call(req("GET", `/api/admin/runs?kind=${KIND}&status=failed`, PROD.adminToken), PROD);
+  const failedOnly = await call(req("GET", `/api/admin/runs?kind=${KIND}&status=failed`, OPERATOR));
   const fb = failedOnly?.body as { runs: { status: string }[] };
   expect(fb.runs.length).toBeGreaterThanOrEqual(1);
   expect(fb.runs.every((r) => r.status === "failed")).toBe(true);
 });
 
-test("insecure config (RM_ALLOW_INSECURE/ephemeral) opens the dashboard without a token", async () => {
+test("RM_ENV=ephemeral no longer opens the dashboard without a credential (D52 (1))", async () => {
+  // This process runs under RM_ENV=ephemeral (tests/preload.ts), which is
+  // exactly the env that used to wave a tokenless caller through.
+  expect(process.env.RM_ENV).toBe("ephemeral");
   const jobId = await seed();
-  expect((await call(req("POST", "/api/admin/auth"), INSECURE))?.status).toBe(200);
-  expect((await call(req("GET", "/api/admin/jobs"), INSECURE))?.status).toBe(200);
-  expect((await call(req("GET", `/api/admin/jobs/${jobId}`), INSECURE))?.status).toBe(200);
+  expect((await call(req("POST", "/api/admin/auth")))?.status).toBe(403);
+  expect((await call(req("GET", "/api/admin/jobs")))?.status).toBe(403);
+  expect((await call(req("GET", `/api/admin/jobs/${jobId}`)))?.status).toBe(403);
 });
 
 test("bad shapes: non-numeric id → 400; unknown numeric id → 404", async () => {
-  const bad = await call(req("GET", "/api/admin/jobs/abc", PROD.adminToken), PROD);
+  const bad = await call(req("GET", "/api/admin/jobs/abc", OPERATOR));
   expect(bad?.status).toBe(400);
-  const missing = await call(req("GET", "/api/admin/jobs/99999999", PROD.adminToken), PROD);
+  const missing = await call(req("GET", "/api/admin/jobs/99999999", OPERATOR));
   expect(missing?.status).toBe(404);
 });
 
 test("a path this handler does not own returns null (index.ts falls through to 404)", async () => {
-  expect(await call(req("GET", "/api/admin/nope"), INSECURE)).toBeNull();
+  expect(await call(req("GET", "/api/admin/nope"))).toBeNull();
 });

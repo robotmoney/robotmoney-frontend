@@ -346,9 +346,9 @@ export async function repairLedger(db: Db, opts: LedgerRepairOptions = {}): Prom
     log(`${step}: ${seconds[step]}s`);
     return out;
   };
-  // Imported here, not at the top: store/run-ledger-store.ts pulls in
+  // Imported here, not at the top: db/migrate.ts pulls in
   // src/db/client.ts, which needs DATABASE_URL set, and main() sets it first.
-  const { rebuildVintageManifests } = await import("../../../src/analytics/store/run-ledger-store.ts");
+  const { rebuildVintageManifests } = await import("../../../src/db/migrate.ts");
   let report: LedgerRepairReport | undefined;
 
   try {

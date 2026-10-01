@@ -5,19 +5,16 @@ import { canonicalizeSubmission, ROUTES } from "@robotmoney/contract";
 import * as ic from "../../swarm/domain.ts";
 import * as judgements from "../../swarm/judgements.ts";
 import { projectBriefResearchSignals } from "../../swarm/projections.ts";
-import * as swarmAdmin from "../../swarm/admin.ts";
 import { handleSwarmAdmin } from "./swarm-admin.ts";
 import { isRegistrablePublicKey, isValidEd25519PublicKey, PUBLIC_KEY_REFUSAL } from "../../lib/signing.ts";
 import { saveRegimeSnapshots } from "../../analytics/store/regime-store.ts";
 import { parseSnapshots } from "./analytics.ts";
-import { bearer, hasAnalyticsProviderRole, isPrivileged, hasAutomationRole } from "../auth.ts";
-import { jsonValue, sql } from "../../db/client.ts";
+import { bearer, hasAnalyticsProviderRole, isPrivileged } from "../auth.ts";
 import {
   CONTACT_EMAIL_RE,
   isIsoDate,
   parseApply,
   parseRegisterMember,
-  parsePositiveNumber,
   parseSigningDraft,
   parseSubmission,
   readJsonObject,
@@ -28,7 +25,7 @@ import {
 } from "../validation.ts";
 import { SWARM_ROUTE_EXTENSIONS } from "./swarm/extensions.ts";
 
-// bearer()/secretEq()/isPrivileged()/hasAnalyticsProviderRole() live in
+// bearer()/isPrivileged()/hasAnalyticsProviderRole() live in
 // api/auth.ts (issue #106) so the /api/analytics boundary reuses the exact same
 // constant-time credential idioms as this router.
 
@@ -269,13 +266,11 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     return { status: 200, body: { memberId } };
   }
 
-  // Member onboarding + admin lifecycle are PRIVILEGED. Guard: if ADMIN_TOKEN is
-  // set, require it as X-Admin-Token (works in every env, incl. a public box);
-  // if unset, allow only outside prod (smoke/ephemeral convenience). This closes
-  // the unauthenticated identity-takeover / state-drive holes. Proper
-  // per-member onboarding + OAuth is the IC-remainder work.
-  // Role definitions + the fail-closed rule live in api/auth.ts (issue #106).
-  const privileged = async () => await isPrivileged(req) || hasAutomationRole(req);
+  // Member onboarding (`register`) and the admin dispatcher below are ADMIN
+  // routes: isPrivileged() — an admin session, the operator's store token or
+  // the claimed password — in every env, with no env token and no insecure
+  // opt-out (D52 (1)). This closes the unauthenticated identity-takeover /
+  // state-drive holes. Role definitions live in api/auth.ts (issue #106).
 
   // PUBLIC onboarding (§11 R1-R6, setup-gated apply): a prospective member
   // submits {name, contact, lens?, publicKey, signature} — an rmpc signature
@@ -309,7 +304,9 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     // Shared with validateMemberAdminPatch (issue #567) so apply and the admin
     // edit route can never disagree about what an address is.
     if (!CONTACT_EMAIL_RE.test(b.contact)) {
-      return { status: 400, body: { error: "valid contact email required for activation notification" } };
+      // No notification rides on this address (D50: there is no activation
+      // email). It is the operator's way to reach an applicant, nothing more.
+      return { status: 400, body: { error: "valid contact email required" } };
     }
     if (!await isValidEd25519PublicKey(b.publicKey)) {
       // Also the refusal for the 14 low-order point encodings (issue #789):
@@ -336,7 +333,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
   // issue #978's snapshot layer and still writes the current view with no run
   // behind it, unlike POST /api/analytics/run-packages.
   if (m === "POST" && p === C.regime) {
-    if (!hasAnalyticsProviderRole(req)) return { status: 403, body: { error: "analytics-provider role required" } };
+    if (!(await hasAnalyticsProviderRole(req))) return { status: 403, body: { error: "analytics-provider role required" } };
     const parsed = parseSnapshots(await readJsonObject(req));
     if (!Array.isArray(parsed)) return { status: 400, body: { error: parsed.error } };
     await saveRegimeSnapshots(parsed);
@@ -347,7 +344,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
   // bearer token in one shot (apply + activate combined). Kept for the smoke/E2E
   // harness. Privileged because it can rotate/replace an existing member's key.
   if (m === "POST" && p === C.register) {
-    if (!(await privileged())) return { status: 403, body: { error: "onboarding requires admin authorization" } };
+    if (!(await isPrivileged(req))) return { status: 403, body: { error: "onboarding requires admin authorization" } };
     const b = parseRegisterMember(await readJsonObject(req));
     if (!b) return { status: 400, body: { error: "valid memberId, name, and publicKey required" } };
     // Issue #789 — the SAME gate the public apply route applies, not the old
@@ -379,7 +376,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
 
   // Admin lifecycle. Drives a session for smokes/E2E.
   if (m === "POST" && p.startsWith(ADMIN_PREFIX)) {
-    if (!(await privileged())) return { status: 403, body: { error: "admin authorization required" } };
+    if (!(await isPrivileged(req))) return { status: 403, body: { error: "admin authorization required" } };
     const action = p.split("/").pop();
     const b = await readJsonObject(req) ?? {};
     switch (action) {
@@ -405,149 +402,88 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
       // owns its own cadence; neither this dispatcher nor `enqueue-job` can
       // create a consumer-worker analytics job. An old caller reaching for the
       // removed action falls through to the 404 default — loud, not silent.
-      case "subject": {
-        const id = requiredString(b, "id", 100);
-        const name = requiredString(b, "name", 200);
-        return id && name
-          ? { status: 200, body: await ic.ensureSubject(id, name) }
-          : { status: 400, body: { error: "id and name required" } };
-      }
-      // Seed the reference-shaped smoke fixtures (subject row + subject snapshot the
+      // THE SUBJECT AND SESSION DOORS THAT BYPASSED THE EPOCH MODEL ARE GONE
+      // (issue #1026, scheduler spec §2.3, §4 and §6.2). Each wrote state the
+      // scheduler waits on without the event that tells it so:
+      //
+      //   subject    upserted an ACTIVE subject with no `subject.changed`, so
+      //              the clock never heard of it until its next rebuild.
+      //   open       inserted a `scheduled` session — a state §4.1 abolishes.
+      //   brief      moved a session to `collecting` on a window the API chose
+      //              off this process's clock, not the subject's grid (§2.2).
+      //   close      closed a window with no epoch binding and no captured
+      //   aggregate  judge mode or judging duration (§4.3, §4.4), which is the
+      //   publish    NULL-mode source the judge-server work traced; and
+      //              published with no judging outcome at all.
+      //
+      // The replacements are the admin subject routes (create, update,
+      // deactivate — each publishing `subject.changed` in its own transaction)
+      // and the five `epochs/*` transitions. 410, not 404: the verbs were real
+      // and their absence is deliberate, so a stale client is told where to go
+      // rather than that it mistyped a URL.
+      case "subject":
+        return {
+          status: 410,
+          body: {
+            error: "the subject action is gone: create a subject with POST /api/swarm/admin/subjects, which publishes " +
+              "subject.changed so the scheduler opens its first epoch (system-scheduler-spec.md §3, §6.2)",
+          },
+        };
+      case "open":
+      case "brief":
+      case "close":
+      case "aggregate":
+      case "publish":
+        return {
+          status: 410,
+          body: {
+            error: `the ${action} action is gone: sessions open, close and settle only through the epoch transitions ` +
+              "(POST /api/swarm/admin/epochs/{open,turnover,aggregate,request-judging,finalize}), which system-scheduler " +
+              "drives on the subject's grid (system-scheduler-spec.md §4)",
+          },
+        };
+      // Seed the reference-shaped smoke fixtures (subject snapshot the
       // portfolio donut reads + trailing regime history for the sparkline) so the
-      // LIVE session path renders the same charts as the committed archive. Called
-      // by the smoke before opening a session. Idempotent.
+      // LIVE session path renders the same charts as the committed archive.
+      // Idempotent.
+      //
+      // FIXTURES ONLY, NEVER A SUBJECT. `ensureSmokeSubjectFixtures` upserts the
+      // subject row, and on a missing subject that upsert is an INSERT of an
+      // active subject with no `subject.changed` — the same bypass the
+      // `subject` action above was removed for. So an unknown subject is
+      // refused here: it must be created through the admin subject route first.
       case "subject_fixtures": {
         const id = requiredString(b, "id", 100);
         const name = requiredString(b, "name", 200);
         const date = typeof b.date === "string" ? b.date.slice(0, 10) : undefined;
-        return id && name
-          ? { status: 200, body: await ic.ensureSmokeSubjectFixtures(id, name, date) }
-          : { status: 400, body: { error: "id and name required" } };
-      }
-      case "open": {
-        // No `date` input. The session's date is derived from the convened_at
-        // Postgres stamps (migration 0022); a caller-supplied date is exactly
-        // the affordance the smoke used to invent synthetic days. A body that
-        // still carries one is accepted and ignored rather than rejected, so an
-        // older client keeps working.
-        const subjectId = requiredString(b, "subjectId", 100);
-        return subjectId
-          ? { status: 200, body: await ic.openSession(subjectId) }
-          : { status: 400, body: { error: "subjectId required" } };
-      }
-      case "brief":
-      case "close":
-      case "aggregate":
-      case "publish": {
-        const sessionId = requiredString(b, "sessionId", 100);
-        if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
-        if (action === "brief") return { status: 200, body: await ic.publishBrief(sessionId, parsePositiveNumber(b.windowMinutes, 60)) };
-        if (action === "close") return { status: 200, body: await ic.closeWindow(sessionId) };
-        // STATE-GUARDED (issue #806). `domain.aggregateSession` replaces
-        // `swarm_recommendation` WHOLESALE and has no state opinion of its own,
-        // so reaching it directly here was a second unguarded door onto a
-        // judged or published session's prose. `aggregateSessionAdmin` is the
-        // same rollup behind `guardedTransition`; a caller that asked for an
-        // impossible aggregation is told 409 rather than silently getting one.
-        if (action === "aggregate") {
-          const res = await swarmAdmin.aggregateSessionAdmin(sessionId, undefined);
-          return { status: res.status, body: res };
+        if (!id || !name) return { status: 400, body: { error: "id and name required" } };
+        if (!(await ic.getSubject(id))) {
+          return {
+            status: 404,
+            body: { error: "subject not found: create it with POST /api/swarm/admin/subjects before seeding its fixtures" },
+          };
         }
-        return { status: 200, body: await ic.publishSession(sessionId) };
+        return { status: 200, body: await ic.ensureSmokeSubjectFixtures(id, name, date) };
       }
       case "enqueue-job": {
-        const actionMap: Record<string, string> = {
-          open_session: "swarm.open_session",
-          publish_brief: "swarm.publish_brief",
-          close_window: "swarm.close_window",
-          aggregate: "swarm.aggregate",
-          // Issue #752, scheduled since #767: `swarm.judge` is now in
-          // SESSION_JOB_KINDS (swarm/admin.ts), so every session created
-          // through the admin path already has one queued. This stays the
-          // manual lever — re-judging, and repairing a session scheduled
-          // before #767 shipped, which carries only the original four jobs.
-          judge: "swarm.judge",
-          publish: "swarm.publish",
-        };
-        const queueAction = requiredString(b, "action", 100);
-        const kind = queueAction ? actionMap[queueAction] : undefined;
-        if (!kind) return { status: 400, body: { error: `unknown action: ${b.action}` } };
-        const { action: _, force: _force, ...payload } = b;
-        // THE JUDGE, AND ONLY THE JUDGE, IS DEDUPLICATED HERE (issue #806).
+        // GONE WITH THE QUEUE IT FED (issue #1026 W4). This endpoint inserted a
+        // `swarm.%` row for one of six lifecycle actions. No handler for any of
+        // them is registered any more (worker/handlers/index.ts) and no lane
+        // claims them (worker/lanes.ts), so an insert here would be a row that
+        // sits pending forever while the caller waits on a state it can never
+        // reach — worse than a refusal.
         //
-        // WHY IT IS DEDUPLICATED. This endpoint INSERTed with no key at all.
-        // Executed: two `judge` enqueues for one session both succeeded and
-        // produced TWO judgement rows — in `enforce` both said `applied: true`
-        // and the recommendation was rewritten twice, second write winning. The
-        // advisory lock serializes them; it does not deduplicate them, and
-        // `transitionWithin` treats `judged -> judged` as idempotent success. A
-        // driver restart that re-adopts an in-flight session (the case
-        // `waitForSubjectSession` exists for) is enough to trigger it.
-        //
-        // WHY ONLY THE JUDGE. `jobs_dedupe_key_idx` is
-        // `UNIQUE (dedupe_key) WHERE dedupe_key IS NOT NULL` across the WHOLE
-        // table INCLUDING TERMINAL ROWS, so a key makes a job that once died
-        // permanently un-re-enqueueable. `worker/handlers/repair.ts` documents
-        // the same hazard and deliberately carries no key for it. Applied to
-        // `close_window`, that is fatal to the driver rather than merely lossy:
-        // the job goes `dead`, `openSession` keeps returning the same still-
-        // `collecting` session, every later re-enqueue is suppressed, and
-        // `waitForSessionState` times out — a wedged subject, not a degraded one.
-        // The judge is the one action that can carry the key safely, because it
-        // is the one step whose absence the driver tolerates by design
-        // (`runJudgeStep` publishes anyway and says so).
-        //
-        // THE KEY IS STICKY ACROSS TERMINAL STATES, and that is the point rather
-        // than an oversight: treating a `succeeded` judge job as re-enqueueable
-        // would hand a re-adopting driver a second judging of a session that has
-        // already been judged, which is precisely the defect above.
-        //
-        // MANUAL RE-JUDGING STAYS AVAILABLE, EXPLICITLY. It is a real lever —
-        // re-running a judging after fixing a model, repairing a pre-#767
-        // session — so it is kept, as `force: true`, which enqueues with NO
-        // dedupe key. What is gone is getting it by accident.
-        const rawSessionId = payload.sessionId;
-        const sessionId = typeof rawSessionId === "string" || typeof rawSessionId === "number"
-          ? String(rawSessionId).slice(0, 100)
-          : "";
-        const force = b.force === true;
-        const jobPayload = force ? { ...payload, force: true } : payload;
-        const dedupeKey = sessionId && !force && queueAction === "judge"
-          ? `swarm:${sessionId}:judge`
-          : null;
-        // SCOPE THE ROW TO ITS SESSION AT THE WRITER (T04, AC-FE-10).
-        //
-        // `createSessionAdmin` has always set `scope_type`/`scope_id`; this
-        // endpoint — the DRIVER'S path, and the one production actually uses —
-        // INSERTed `(kind, payload, dedupe_key)` and nothing else. So every
-        // consumer that asked "which job belongs to this session?" by the scope
-        // columns matched zero rows on the shape production writes, and a
-        // session that lost its consensus receipt to a judge outage was
-        // recorded as a clean success. `swarm/receipt-gap.ts` matches both
-        // shapes for the rows already on file; this stops new ones being
-        // written half-identified.
-        //
-        // Only for the SESSION kinds, which are every kind in `actionMap`: the
-        // scope is read off `payload.sessionId`, so a row without one carries
-        // no scope rather than a fabricated one.
-        const scopeType = sessionId ? "swarm_session" : null;
-        const rows = await sql`
-          INSERT INTO jobs (kind, payload, dedupe_key, scope_type, scope_id)
-          VALUES (${kind}, ${sql.json(jsonValue(jobPayload))}, ${dedupeKey}, ${scopeType}, ${sessionId || null})
-          ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-          RETURNING id, kind`;
-        if (rows[0]) return { status: 200, body: { jobId: rows[0].id, kind: rows[0].kind, deduped: false } };
-        // Suppressed by the key: the job this caller asked for already exists.
-        // Answer with IT rather than with `undefined` — the driver logs the job
-        // id and then waits on a session state that this very row will produce.
-        const existing = (await sql`
-          SELECT id, kind, status FROM jobs WHERE dedupe_key = ${dedupeKey}`)[0] as
-          | { id: number; kind: string; status: string }
-          | undefined;
-        if (!existing) return { status: 500, body: { error: "enqueue-job: dedupe conflict with no surviving row" } };
+        // Per system-scheduler-spec.md §4.4 settlement is "not scheduled — a
+        // chain the scheduler drives through the API, each step as soon as the
+        // previous one returns", so the replacement is the epoch routes driven
+        // by `system-scheduler`, not a queued job. 410, not 404: the action was
+        // real and its absence is deliberate.
         return {
-          status: 200,
-          body: { jobId: existing.id, kind: existing.kind, deduped: true, existingStatus: existing.status },
+          status: 410,
+          body: {
+            error: "enqueue-job is gone: session lifecycle steps are no longer queue jobs — " +
+              "system-scheduler drives them through the epoch routes (system-scheduler-spec.md §4.4)",
+          },
         };
       }
       default: return { status: 404, body: { error: "unknown admin action" } };

@@ -12,8 +12,52 @@
 // tests/analytics-api-boundary.test.ts. Writers accept an injectable Sql handle
 // so the API routes can wrap a whole ingestion batch in ONE transaction.
 import { sql, type DbHandle } from "../../db/client.ts";
+import { on, registerQuery } from "../../db/registry.ts";
 import type { Point, RawIndicatorHistory } from "../types.ts";
 import { rawIndicatorSourceKey, withinTolerance } from "../source-tolerance.ts";
+
+// Registered queries (smoke-production-spec.md §7.1), reached only through the
+// analytics ingestion routes (directly, and through the floor-seed gap fill).
+const readFloor = registerQuery({
+  role: "rm_app",
+  object: "raw_indicator_history",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/raw-history-store:loadRawIndicatorHistory",
+  purpose: "Read the whole persisted raw-indicator floor, grouped by indicator, for the orchestrator's merge.",
+  callers: ["src/api/routes/analytics"],
+  probe: { statement: "SELECT indicator, date::text AS date, value FROM raw_indicator_history ORDER BY indicator, date" },
+});
+
+const readFloorForIndicators = registerQuery({
+  role: "rm_app",
+  object: "raw_indicator_history",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/raw-history-store:saveRawIndicatorHistory.readStored",
+  purpose: "Read the stored value of the indicators about to be rewritten, so a sub-tolerance rewrite is skipped (issue #1035).",
+  callers: ["src/api/routes/analytics"],
+  probe: {
+    statement: `SELECT indicator, date::text AS date, value
+    FROM raw_indicator_history
+    WHERE indicator = ANY($1::text[])`,
+    params: ["{}"],
+  },
+});
+
+const upsertFloor = registerQuery({
+  role: "rm_app",
+  object: "raw_indicator_history",
+  // UPDATE for ON CONFLICT DO UPDATE ("fetched wins on overlap"); SELECT
+  // because the conflict target and EXCLUDED are read. Never DELETE.
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/analytics/store/raw-history-store:saveRawIndicatorHistory",
+  purpose: "Upsert merged raw-indicator points on (date, indicator), tagging each row with its source.",
+  callers: ["src/api/routes/analytics"],
+  probe: {
+    statement: `INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES ($1::date, $2, $3, $4)
+      ON CONFLICT (date, indicator) DO UPDATE SET value = EXCLUDED.value, source = EXCLUDED.source`,
+    params: ["2026-01-01", "probe_indicator", 1.5, "live"],
+  },
+});
 
 // Back-compat aliases: the row shapes now live in the pure types module
 // (analytics/types.ts) so updater/API-client code can import them without
@@ -25,7 +69,7 @@ export type { RawIndicatorHistory };
 // ascending. `date::text` yields a clean 'YYYY-MM-DD' string (postgres.js would
 // otherwise hand back a JS Date).
 export async function loadRawIndicatorHistory(db: DbHandle = sql): Promise<RawIndicatorHistory> {
-  const rows = await db<{ indicator: string; date: string; value: number }[]>`
+  const rows = await on(db, readFloor)<{ indicator: string; date: string; value: number }>`
     SELECT indicator, date::text AS date, value
     FROM raw_indicator_history
     ORDER BY indicator, date`;
@@ -66,7 +110,7 @@ export async function saveRawIndicatorHistory(
   const indicators = Object.keys(byIndicator);
   if (indicators.length === 0) return;
   const stored = new Map<string, number>();
-  const current = await db<{ indicator: string; date: string; value: number }[]>`
+  const current = await on(db, readFloorForIndicators)<{ indicator: string; date: string; value: number }>`
     SELECT indicator, date::text AS date, value
     FROM raw_indicator_history
     WHERE indicator = ANY(${indicators}::text[])`;
@@ -89,7 +133,7 @@ export async function saveRawIndicatorHistory(
   const CHUNK = 5000; // 5000 × 4 = 20000 params per statement
   for (let i = 0; i < rows.length; i += CHUNK) {
     const batch = rows.slice(i, i + CHUNK);
-    await db`
+    await on(db, upsertFloor)`
       INSERT INTO raw_indicator_history ${db(batch, "date", "indicator", "value", "source")}
       ON CONFLICT (date, indicator) DO UPDATE SET value = EXCLUDED.value, source = EXCLUDED.source`;
   }

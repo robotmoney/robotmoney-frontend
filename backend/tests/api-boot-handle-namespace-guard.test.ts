@@ -5,9 +5,8 @@
 // the pair rather than only the one it is named after.
 //
 // WHAT MAKES THIS THE PRODUCTION PATH. docker-compose.yml's api service runs
-// `command: ["bun", "run", "src/api/index.ts"]`, and that is the whole bring-up
-// documented at docs/runbooks/deployment.md — no migrate step, no
-// scripts/db-preflight.ts. So this file spawns THAT file, as a real process,
+// `command: ["bun", "run", "src/api/index.ts"]`, and that is the current
+// bring-up command. So this file spawns THAT file, as a real process,
 // against a real database, and grades the process: a violating database must
 // produce a non-zero exit with both members named and NO port bound, and every
 // other database shape must still boot and serve.
@@ -50,45 +49,35 @@ import {
   parseGuardBudgetMs,
   type NamespaceDb,
 } from "../src/db/handle-namespace.ts";
+import { createHistoryDatabase, type HistoryDatabase } from "./support/history-database.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const backendDir = join(here, "..");
 const migrationsDir = join(backendDir, "migrations");
 
-const created: string[] = [];
-
-function adminUrl(): string {
-  return new URL(config.databaseUrl).toString();
-}
+// Each throwaway database is a history database: created by the cluster admin
+// (CREATE DATABASE only), provisioned by the provider's bootstrap login, which
+// is not a superuser.
+const created = new Map<string, HistoryDatabase>();
 
 function urlFor(dbName: string): string {
-  const u = new URL(config.databaseUrl);
-  u.pathname = `/${dbName}`;
-  return u.toString();
+  return created.get(dbName)!.urlFor();
 }
 
 async function createThrowawayDb(label: string): Promise<string> {
-  const name = `tmp_apiboot_${label}_${crypto.randomUUID().slice(0, 8)}`;
-  const admin = postgres(adminUrl(), { max: 1, onnotice: () => {} });
-  try {
-    await admin.unsafe(`CREATE DATABASE ${name}`);
-  } finally {
-    await admin.end();
-  }
-  created.push(name);
-  return name;
+  const history = await createHistoryDatabase(`apiboot_${label}`, { max: 1 });
+  created.set(history.name, history);
+  return history.name;
 }
 
-async function applyAllMigrations(db: postgres.Sql<{}>): Promise<void> {
-  const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
+async function applyAllMigrations(dbName: string): Promise<void> {
+  const history = created.get(dbName)!;
+  const files = await history.files();
   expect(files.length).toBeGreaterThan(0);
-  await db`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
+  await history.db`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
   for (const file of files) {
-    const ddl = await readFile(join(migrationsDir, file), "utf8");
-    await db.begin(async (tx) => {
-      await tx.unsafe(ddl);
-      await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
-    });
+    await history.apply([file]);
+    await history.db`INSERT INTO schema_migrations (name) VALUES (${file})`;
   }
 }
 
@@ -165,17 +154,7 @@ async function bootAndServe(
 }
 
 afterAll(async () => {
-  const admin = postgres(adminUrl(), { max: 1, onnotice: () => {} });
-  try {
-    for (const name of created) {
-      await admin.unsafe(
-        `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${name}'`,
-      );
-      await admin.unsafe(`DROP DATABASE IF EXISTS ${name}`);
-    }
-  } finally {
-    await admin.end();
-  }
+  for (const history of created.values()) await history.drop();
 });
 
 // ── AC1: the production boot path refuses a violating database ──────────────
@@ -188,7 +167,7 @@ test(
     const holder = "boot-holder";
     const shadowed = "boot-shadowed";
     try {
-      await applyAllMigrations(db);
+      await applyAllMigrations(dbName);
       // The restore shape, forced: 0031's trigger is ENABLE ALWAYS, so even
       // `session_replication_role = replica` cannot place the pair — a real
       // pg_restore gets in only because its COPY precedes CREATE TRIGGER. This
@@ -465,7 +444,7 @@ test(
     let lockSettled = false;
     let lockTxn: Promise<unknown> | undefined;
     try {
-      await applyAllMigrations(db);
+      await applyAllMigrations(dbName);
 
       let lockTaken!: () => void;
       const taken = new Promise<void>((r) => (lockTaken = r));
@@ -549,7 +528,7 @@ test(
     const holder = "ovr-holder";
     const shadowed = "ovr-shadowed";
     try {
-      await applyAllMigrations(db);
+      await applyAllMigrations(dbName);
       await db`ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_handle_namespace_trigger`;
       await db`INSERT INTO swarm_members (id, status, name, handle)
                VALUES (${shadowed}, 'active', 'Shadowed', ${`${shadowed}-h`})`;
@@ -622,7 +601,7 @@ test(
     const dbName = await createThrowawayDb("armedclean");
     const db = postgres(urlFor(dbName), { max: 2, onnotice: () => {} });
     try {
-      await applyAllMigrations(db);
+      await applyAllMigrations(dbName);
       await db`INSERT INTO swarm_members (id, status, name, handle)
                VALUES ('armed-a', 'active', 'A', 'armed-a-h')`;
     } finally {
@@ -659,7 +638,7 @@ test(
     const dbName = await createThrowawayDb("unarmedclean");
     const db = postgres(urlFor(dbName), { max: 2, onnotice: () => {} });
     try {
-      await applyAllMigrations(db);
+      await applyAllMigrations(dbName);
       await db`INSERT INTO swarm_members (id, status, name, handle)
                VALUES ('unarmed-a', 'active', 'A', 'unarmed-a-h')`;
     } finally {
@@ -726,7 +705,7 @@ test(
     const dbName = await createThrowawayDb("disarmed");
     const db = postgres(urlFor(dbName), { max: 2, onnotice: () => {} });
     try {
-      await applyAllMigrations(db);
+      await applyAllMigrations(dbName);
 
       // Control FIRST: the same database, untouched, boots and serves and says
       // so at /health. Without this, the refusal below is also satisfied by an
@@ -783,7 +762,7 @@ test(
     const dbName = await createThrowawayDb("pre0032");
     const db = postgres(urlFor(dbName), { max: 2, onnotice: () => {} });
     try {
-      await applyAllMigrations(db);
+      await applyAllMigrations(dbName);
       // Roll the ledger back to before 0032 and remove what it installed — the
       // shape of a database whose migrate() has not run yet.
       await db.unsafe(`ALTER TABLE schema_migrations DISABLE TRIGGER USER`);

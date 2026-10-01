@@ -6,17 +6,15 @@
 // stack-purity.test.ts says so in as many words). Importing it from a test is
 // therefore not possible, so the one thing an operator most needs to be true —
 // "the variable I exported actually arrives in the container" — was asserted
-// nowhere. It cost this release two findings: `OPENCODE_API_KEY`, rescued
-// during the release itself, and `SWARM_JUDGE_TIMEOUT_MS`, whose absence made
-// the judge budget unreachable through the documented `bun run smoke:stage`
-// boot and forced a QA run to recreate a service by hand with 27 values
-// re-supplied.
+// nowhere. It cost one release two findings: `OPENCODE_API_KEY` and
+// `SWARM_JUDGE_TIMEOUT_MS`, both since removed from the stack entirely (D52:
+// the judge is a participant and no stack service carries a model key).
 //
 // Everything here is a constant and a pure function. No environment read at
 // module scope, nothing spawned.
 
 /**
- * Exported values `bun smoke` / `bun run smoke:stage` forwards to the compose
+ * Exported values `bun smoke` forwards to the compose
  * stack. Every entry must also be interpolated in `docker-compose.yml` with a
  * `:-default`, so an unset value behaves exactly as before.
  *
@@ -26,39 +24,25 @@
  */
 export const DEMO_COMPOSE_PASSTHROUGH = [
   "BASE_RPC_URL",
-  "SWARM_AGGREGATE_CRON",
-  "SWARM_CLOSE_WINDOW_CRON",
-  "SWARM_NOTIFICATION_EMAIL_FROM",
-  "SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN",
-  "SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL",
-  "SWARM_OPEN_SESSION_CRON",
-  "SWARM_PUBLISH_BRIEF_CRON",
-  "SWARM_PUBLISH_CRON",
-  "SWARM_SCHEDULES_ENABLED",
-  "SWARM_WINDOW_MINUTES",
-  // THE JUDGE'S TRANSPORT SETTINGS (this release). `docker-compose.yml` has
-  // interpolated both into api and worker-swarm since the judge shipped, but
-  // nothing carried them from the operator's shell to compose — so exporting
-  // `SWARM_JUDGE_TIMEOUT_MS` produced an EMPTY variable in the container and
-  // `resolveJudgeTimeoutMs()` fell back to the default, silently. The budget an
-  // operator sets is the one lever over a judge that is timing out; it has to
-  // reach the container through the boot the runbook documents.
-  "SWARM_JUDGE_BASE_URL",
-  "SWARM_JUDGE_TIMEOUT_MS",
-  // THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (backend/src/swarm/
-  // judge-fault-injection.ts, R13). `docker-compose.yml` interpolates both
-  // into api and worker-swarm, but the same gap as SWARM_JUDGE_TIMEOUT_MS
-  // above meant exporting either produced an EMPTY variable in the
-  // container: an operator staging AC-E2E-06 through the documented
-  // `bun run smoke:stage` boot got a silent "flag_absent" refusal instead of
-  // the lever they set. Blank by default (never enabled unless set).
-  "SWARM_JUDGE_FAULT_INJECTION",
-  "SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN",
+  // NO SESSION-SCHEDULING VARIABLE (issue #1026). Seven used to sit here — an
+  // enable flag, five cron strings and a window. They are not merely
+  // unforwarded, they no longer exist: a subject's epoch duration is the whole
+  // schedule and it lives on the subject, set by bootstrap and changed only
+  // through the admin API (system-scheduler-spec.md §2.2, §2.3). An operator
+  // who exports one of the old names now gets exactly what the name deserves —
+  // nothing, in every container.
+  // NO JUDGE TRANSPORT SETTINGS. SWARM_JUDGE_BASE_URL and SWARM_JUDGE_TIMEOUT_MS
+  // were forwarded here for an inline judge inside `api`; `api` no longer
+  // interpolates either (D52: the judge is a participant), so forwarding them
+  // would only carry a value to nothing.
+  // NO JUDGE FAULT-INJECTION LEVER. D55 (3) retired it: docker-compose.yml no
+  // longer interpolates SWARM_JUDGE_FAULT_INJECTION or its acceptance opt-in
+  // into any service, so forwarding either would carry a value to nothing.
   "FETCH_CACHE_DIR",
   "FLOOR_SEED_PATH",
   "PROJECTS_SOURCE",
-  // THE PAID COINGECKO KEY (issue #1047). Both compose files interpolate it
-  // into the three worker lanes, where projects.refresh_coins sends it to the
+  // THE PAID COINGECKO KEY (issue #1047). The compose file interpolates it
+  // into the worker lane, where projects.refresh_coins sends it to the
   // Pro host. Without this entry an exported key reached no container.
   "COINGECKO_API_KEY",
   // NO "RM_ENV". It is a first-class StackConfig field now (`rmEnv`,
@@ -66,7 +50,9 @@ export const DEMO_COMPOSE_PASSTHROUGH = [
   // resolveStackRmEnv(), and buildComposeEnv() refuses to see it in the extras
   // map. Passing it through from the operator's shell is exactly what made the
   // acceptance path a property of what somebody last typed (D13).
-  "WORKER_DATABASE_URL",
+  // NO "WORKER_DATABASE_URL" either. It is the pipeline worker's rm_worker
+  // credential, which buildComposeEnv() emits from the stack's own role URLs
+  // (StackDatabase.roleUrls); an exported value must never shadow it.
 ] as const;
 
 export function smokePassthroughEnv(env: Record<string, string | undefined>): Record<string, string> {
