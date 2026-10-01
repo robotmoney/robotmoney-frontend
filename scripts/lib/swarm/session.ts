@@ -1189,18 +1189,6 @@ export function regimeRefreshDay(regimeAsof: string | undefined, now: Date = new
   return regimeAsof ?? now.toISOString().slice(0, 10);
 }
 
-/**
- * The day to refresh the regime for when a session starts: an explicit `regimeAsof`, else TODAY (UTC).
- *
- * NOT the session's own date. That is `convened_at`'s day, the day its row was created in `scheduled`, and a session
- * that waits for its brief keeps it: on 2026-09-28 four rows were created at 00:11 to 00:40 UTC and briefed on 09-29
- * and 09-30, and each asked for the 09-28 regime, so the briefs carried a stale one (issue 1058). A snapshot can never
- * be dated after today (#382), and a session is never dated after today, so "today" is always the freshest valid day.
- */
-export function regimeRefreshDay(regimeAsof: string | undefined, now: Date = new Date()): string {
-  return regimeAsof ?? now.toISOString().slice(0, 10);
-}
-
 // The member-container rail (issue #361 Phase 2): every present member runs in
 // its OWN container via the shared runMemberAgent() primitive; this driver
 // only drives the session lifecycle and observes. `rail` carries the compose
