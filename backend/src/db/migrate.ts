@@ -90,7 +90,7 @@ export async function applyMigrationFile(db: postgresTypes.Sql<{}>, file: string
 // Issue #1050: recompute every stored vintage's manifest, series fingerprints,
 // member_count and manifest_digest from the members it resolves to NOW.
 //
-// WHY. Migration 0080 re-points every vintage to the source_value_versions rows
+// WHY. The ledger repair re-points every vintage to the source_value_versions rows
 // the fixed ledger writer would have written (decision D56, amendment for
 // #1050), so the digests frozen over the old writer's rows no longer describe
 // their members. The owner's rule is that the database ends as if the old
@@ -98,8 +98,9 @@ export async function applyMigrationFile(db: postgresTypes.Sql<{}>, file: string
 // would have stored for these members, and the old digest is overwritten, not
 // kept anywhere.
 //
-// Runs ONLY from the migration runner, inside the transaction that applied
-// 0080 (IN_TRANSACTION_AFTER_MIGRATION in src/db/migrate.ts), as rm_owner. A
+// Runs ONLY from the one-time ledger repair
+// (scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts), inside its transaction, as
+// rm_owner. A
 // canonical-JSON SHA-256 in plpgsql would have to reproduce JavaScript's number
 // formatting byte for byte; this reuses buildVintageManifest instead, the one
 // function every freeze and every replay already uses. analytics_data_vintages
@@ -155,15 +156,9 @@ export async function rebuildVintageManifests(db: DbHandle): Promise<{ vintages:
 // (rm_owner). It runs once, only in the run that applies the file, and a throw
 // rolls the file back with it. Keep this list short: each entry is a step a
 // reader of the .sql file cannot see there, so the file must say it exists.
-//
-// 0080 (issue #1050): after the SQL re-points every vintage to the rows the
-// fixed ledger writer would have written, each vintage's manifest and
-// manifest_digest are recomputed with the same canonical-JSON SHA-256 every
-// freeze uses (analytics/run-ledger.ts buildVintageManifest). Reproducing that
-// in plpgsql would mean matching JavaScript's number formatting byte for byte.
-export const IN_TRANSACTION_AFTER_MIGRATION: Readonly<Record<string, (tx: postgresTypes.TransactionSql<{}>) => Promise<unknown>>> = {
-  "0080_analytics_ledger_compaction.sql": rebuildVintageManifests,
-};
+// Empty today: 0080's ledger repair, the one step that used it, is a one-time
+// script (scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts), not a migration.
+export const IN_TRANSACTION_AFTER_MIGRATION: Readonly<Record<string, (tx: postgresTypes.TransactionSql<{}>) => Promise<unknown>>> = {};
 
 // Tables a migration rewrote heavily enough that its DELETEs left most of the
 // table as dead tuples. A DELETE frees nothing on disk: the space is only
@@ -178,11 +173,11 @@ export const IN_TRANSACTION_AFTER_MIGRATION: Readonly<Record<string, (tx: postgr
 // a table's owner may VACUUM FULL it; no grant changes.
 //
 // Each table is held under ACCESS EXCLUSIVE for the length of its own rewrite,
-// which is proportional to its LIVE rows — small once 0080 has removed the
-// duplication (issue #1035).
-export const RECLAIM_AFTER_MIGRATION: Readonly<Record<string, readonly string[]>> = {
-  "0080_analytics_ledger_compaction.sql": ["source_value_versions", "analytics_vintage_members", "analytics_overwrite_events"],
-};
+// which is proportional to its LIVE rows.
+//
+// Empty today: the ledger repair (issue #1035) rebuilds its tables with
+// TRUNCATE and re-insert, which returns the space at commit with no VACUUM.
+export const RECLAIM_AFTER_MIGRATION: Readonly<Record<string, readonly string[]>> = {};
 
 export async function reclaimAfterMigrations(db: postgresTypes.Sql<{}>, appliedNow: readonly string[]): Promise<void> {
   const tables = appliedNow.flatMap((file) => RECLAIM_AFTER_MIGRATION[file] ?? []);

@@ -133,16 +133,14 @@ test("issue #1035 AC3: sub-tolerance changes update no raw_indicator_history row
   expect(Number(captured[0]!.replacement_row!.value)).toBe(target.value * (1 + 1e-4));
 });
 
-test("issue #1035: a relabel within tolerance rewrites only the label, keeping the stored value", async () => {
+test("a relabel within tolerance rewrites nothing and records no overwrite (owner, 2026-09-29)", async () => {
   const indicator = "SPHB_SPLV";
   const date = "2042-03-01";
   await saveRawIndicatorHistory({ [indicator]: [{ date, value: 0.9 }] }, undefined, "seed");
   await saveRawIndicatorHistory({ [indicator]: [{ date, value: 0.9 * (1 + 1e-7) }] }, undefined, "live");
   const row = await rowJson("raw_indicator_history", `date = '${date}' AND indicator = '${indicator}'`);
-  expect(row).toEqual({ date, indicator, value: 0.9, source: "live" });
-  const captured = await events("raw_indicator_history", { date, indicator });
-  expect(captured).toHaveLength(1);
-  expect(captured[0]!.previous_row).toEqual({ date, indicator, value: 0.9, source: "seed" });
+  expect(row).toEqual({ date, indicator, value: 0.9, source: "seed" });
+  expect(await events("raw_indicator_history", { date, indicator })).toHaveLength(0);
 });
 
 test("regime and research persistence paths each record exactly one material overwrite", async () => {

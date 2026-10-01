@@ -6,6 +6,7 @@
 // (gate.ts) later reads.
 import { sql, type DbHandle } from "../../db/client.ts";
 import { canonicalStringify, sha256Hex } from "../run-ledger.ts";
+import { rawIndicatorSourceKey, withinTolerance } from "../source-tolerance.ts";
 import {
   ledgerCurrentRawIndicatorHistory,
   ledgerCurrentRegimeSnapshots,
@@ -47,9 +48,9 @@ const legacyRawHistory = registerQuery({
   object: "raw_indicator_history",
   privileges: ["SELECT"],
   site: "src/analytics/cutover/parity:checkRawIndicatorHistoryParity",
-  purpose: "Read the whole compatibility raw-indicator floor, source included, in one statement.",
+  purpose: "Read the whole compatibility raw-indicator floor in one statement.",
   callers: [PARITY_ROUTE],
-  probe: { statement: "SELECT indicator, date::text AS date, value, source FROM raw_indicator_history ORDER BY indicator, date" },
+  probe: { statement: "SELECT indicator, date::text AS date, value FROM raw_indicator_history ORDER BY indicator, date" },
 });
 
 const legacyRegime = registerQuery({
@@ -243,94 +244,46 @@ function rawKey(indicator: string, date: string): string {
   return `${indicator}\u0000${date}`;
 }
 
-// Issue #979 AC3 fix: `source` is a field of the raw-history DTO, so it is a
-// field of raw-history parity.
+// WHAT COUNTS AS A MATCH (owner, 2026-09-29; decision D56's amendment).
 //
-// raw_indicator_history.source (#397) and source_value_versions.provenance
-// (migration 0061) are the same field in the two models, and
-// GET /api/admin/research/raw-series/:indicator returns whichever model is
-// armed. While `source` was left out of the canonical row below, a fully green
-// observation window could green-light a cutover that silently changed that
-// field for every point — exactly the failure 0061 exists to prevent, and
-// invisible to the gate that is supposed to prevent it.
+// VALUES match when they are within the source's tolerance of each other —
+// withinTolerance(), the ONE function both writers use to decide whether a
+// value is new information. The two tables are fed at different moments, and
+// each holds its value until a change exceeds tolerance, so two values the
+// writers themselves call "the same observation" must not fail this check. A
+// ledger value within tolerance enters the ledger checksum as the
+// compatibility value, so the two checksums agree exactly when every row
+// matches.
 //
-// THE SCOPE. `provenance` did not exist before 0061, so every ledger version
-// recorded before that migration ran is NULL and — source_value_versions being
-// append-only — permanently so. That NULL-against-a-real-'live'/'seed' label
-// difference on historical rows is an ACCEPTED product cost (old rows lose the
-// label, new ones keep it), not a regression, and comparing those rows would
-// park the gate permanently red on history alone. So `source` joins the
-// canonical row for exactly those natural keys whose CURRENT ledger version
-// was recorded at or after 0061's `applied_at`, and is absent from BOTH sides
-// otherwise.
-//
-// WHY THAT CANNOT HIDE A REAL REGRESSION. The exemption is decided by WHEN the
-// current version was written, never by what it says:
-//   * a writer that stops stamping provenance still lands a post-0061 version
-//     — NULL against a legacy 'live'/'seed' — which is in scope and mismatches;
-//   * a writer that stamps the WRONG label (the producer catch-up's
-//     'live'-vs-'seed' bug) is in scope and mismatches;
-//   * any later write to an exempt key appends a NEW current version, which is
-//     post-0061 and therefore in scope — an exempt row cannot stay exempt once
-//     anything writes to it again.
-// The only uncompared keys are ones no code has written since before the
-// column existed, and for those the legacy label is information the ledger
-// provably never recorded. knowledge_time cannot be backdated into the exempt
-// window either: 0057 declares it `NOT NULL DEFAULT clock_timestamp()` and no
-// writer names the column.
-const PROVENANCE_MIGRATION = "0061_source_value_provenance.sql";
-
-async function provenanceComparableFromMs(db: DbHandle): Promise<number | null> {
-  const rows = await on(db, migrationAppliedAt)<{ applied_epoch: string | number }>`
-    SELECT EXTRACT(EPOCH FROM applied_at) AS applied_epoch
-    FROM schema_migrations WHERE name = ${PROVENANCE_MIGRATION}
-  `;
-  if (rows.length === 0) return null; // 0061 unapplied here: the column cannot exist
-  return Math.round(Number(rows[0]!.applied_epoch) * 1000);
-}
-
+// `source` IS NOT COMPARED. It was (issue #979 AC3), while a label change was
+// itself recorded as a change. It no longer is: a row keeps the label of the
+// write that last changed its value, and the two tables can have taken that
+// write from different writers ('live' fetch, 'seed' catch-up) at the same
+// value. A difference no writer records is not one this gate can hold a
+// cutover on.
 export async function checkRawIndicatorHistoryParity(db: DbHandle = sql): Promise<ParityResult> {
-  // ONE statement for the compatibility side. loadRawIndicatorHistory() plus a
-  // second read for `source` could straddle the orchestrator's whole-floor
-  // rewrite (analytics/index.ts's saveRawHistory) and record a spurious — and,
-  // because analytics_parity_observations is append-only, PERMANENT —
-  // matched:false.
-  const legacyRows = await on(db, legacyRawHistory)<{
-    indicator: string;
-    date: string;
-    value: number;
-    source: string | null;
-  }>`
-    SELECT indicator, date::text AS date, value, source
+  // ONE statement for the compatibility side, so the read cannot straddle the
+  // orchestrator's whole-floor rewrite (analytics/index.ts's saveRawHistory)
+  // and record a spurious — and, because analytics_parity_observations is
+  // append-only, PERMANENT — matched:false.
+  const legacyRows = await on(db, legacyRawHistory)<{ indicator: string; date: string; value: number }>`
+    SELECT indicator, date::text AS date, value
     FROM raw_indicator_history
     ORDER BY indicator, date`;
   const ledgerPoints = await ledgerCurrentRawIndicatorHistory(db);
-  const comparableFromMs = await provenanceComparableFromMs(db);
-  const comparableSource = new Set<string>();
-  if (comparableFromMs !== null) {
-    for (const p of ledgerPoints) {
-      if (p.knowledgeTimeEpochMs >= comparableFromMs) comparableSource.add(rawKey(p.indicator, p.date));
-    }
-  }
+  const legacyValue = new Map<string, number>();
   const legacy = new Map<string, Record<string, unknown>>();
   for (const r of legacyRows) {
     const k = rawKey(r.indicator, r.date);
-    legacy.set(k, {
-      indicator: r.indicator,
-      date: r.date,
-      value: canonicalNumber(Number(r.value)),
-      ...(comparableSource.has(k) ? { source: r.source ?? null } : {}),
-    });
+    legacyValue.set(k, Number(r.value));
+    legacy.set(k, { indicator: r.indicator, date: r.date, value: canonicalNumber(Number(r.value)) });
   }
   const ledger = new Map<string, Record<string, unknown>>();
   for (const p of ledgerPoints) {
     const k = rawKey(p.indicator, p.date);
-    ledger.set(k, {
-      indicator: p.indicator,
-      date: p.date,
-      value: canonicalNumber(p.value),
-      ...(comparableSource.has(k) ? { source: p.source } : {}),
-    });
+    const compat = legacyValue.get(k);
+    const same = compat !== undefined && withinTolerance(rawIndicatorSourceKey(p.indicator), compat, p.value);
+    ledger.set(k, { indicator: p.indicator, date: p.date, value: canonicalNumber(same ? compat : p.value) });
   }
   return buildResult("raw_indicator_history", legacy, ledger);
 }
@@ -482,12 +435,19 @@ export async function checkDomainParity(domain: ParityDomain, db: DbHandle = sql
 // (migration 0060) — so a re-check after fixing a mismatch is a fresh,
 // separately-timestamped data point, never an edit of the failed one.
 export async function recordParityObservation(result: ParityResult, db: DbHandle = sql): Promise<string> {
+  // rawKey() joins indicator and date with a NUL so no pair can forge another
+  // in memory — but Postgres jsonb refuses \u0000 ("unsupported Unicode escape
+  // sequence"), so every raw_indicator_history observation WITH a mismatch
+  // failed to insert, and analytics.parity_sweep retried until it was dead
+  // (production, 2026-09-23/25). The evidence carries the visible U+241F
+  // SYMBOL FOR UNIT SEPARATOR instead; the in-memory key is unchanged.
+  const mismatches = result.mismatches.map((m) => ({ ...m, naturalKey: m.naturalKey.replaceAll("\u0000", "\u241F") }));
   const [row] = await on(db, insertObservation)<{ id: string }>`
     INSERT INTO analytics_parity_observations
       (domain, legacy_row_count, ledger_row_count, legacy_checksum, ledger_checksum, matched, detail)
     VALUES (${result.domain}, ${result.legacyRowCount}, ${result.ledgerRowCount},
             ${result.legacyChecksum}, ${result.ledgerChecksum}, ${result.matched},
-            ${db.json(({ mismatches: result.mismatches } as unknown) as never)})
+            ${db.json(({ mismatches } as unknown) as never)})
     RETURNING id
   `;
   return String(row!.id);

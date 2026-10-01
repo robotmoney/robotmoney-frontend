@@ -4571,14 +4571,12 @@ head for its coordinate:
 
 - no head → `initial`;
 - a value outside the source's tolerance → `revision`;
-- a value within tolerance **and** the same provenance label → **no row at all**;
-- a value within tolerance under a different label → `unchanged`, carrying the
-  head's value and the new label.
+- a value within tolerance → **no row at all**, whatever its provenance label
+  (amended 2026-09-29, below: a label change alone is not a change).
 
 `saveRawIndicatorHistory` applies the same rule to `raw_indicator_history`: a
-point within tolerance under the same label is not rewritten (so migration
-0056's trigger writes no overwrite event), and one within tolerance under a new
-label rewrites only the label. Both writers call one function,
+point within tolerance is not rewritten, whatever its label (so migration
+0056's trigger writes no overwrite event). Both writers call one function,
 `withinTolerance()` in `backend/src/analytics/source-tolerance.ts`, so the
 compatibility table and the ledger cannot drift apart by the noise the rule
 absorbs. The rule is `|next − prior| ≤ relative × max(|next|, |prior|)`; a
@@ -4592,14 +4590,15 @@ the identical id set, and every manifest digest replays unchanged. (0080's
 #1050 repair re-points the vintages that existed before it and recomputes their
 digests; see the amendment below.)
 
-Migration `0080_analytics_ledger_compaction.sql` removes what the old writers
-wrote, under the same rule, drops `source_payloads` (see below), inside its own transaction, and re-arms every guard
-it disarms before that transaction ends. As extended by #1050 (amendment
-below) it keeps only what the fixed writers would have written, re-points every
-vintage and recomputes its digest, and leaves untouched only the coordinates
-whose chain does not follow its own time order. It verifies that every vintage
-keeps its member count and every coordinate keeps one head under the same label,
-and raises (rolling back, guards never observed off) if either would change.
+Migration `0080_analytics_ledger_compaction.sql` adds the run column and drops
+`source_payloads` (see below). Removing what the old writers wrote is a
+one-time repair script, `backend/scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts`
+(amendment of 2026-09-29, below). It keeps only what the fixed writers would
+have written, re-points every vintage and recomputes its digest, re-links every
+coordinate in its own time order, and re-arms every guard it disarms before its
+one transaction ends. It verifies that every vintage keeps its member count and
+every coordinate keeps exactly one chain, and raises (rolling back, guards never
+observed off) if either would change.
 
 **Per-source tolerances.** Every source_key the extractors write:
 
@@ -4612,24 +4611,24 @@ and raises (rolling back, guards never observed off) if either would change.
 | `raw_indicator_history:DXY` | fred | exact |
 | `raw_indicator_history:ICSA` | fred | exact |
 | `raw_indicator_history:VIX` | yahoo | relative 1e-6 |
-| `raw_indicator_history:COPPER_GOLD` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:COPPER_GOLD` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:SPX_TREND` | yahoo | relative 1e-6 |
-| `raw_indicator_history:IWM_SPY` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:IWM_SPY` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:DEFI_TVL` | defillama_tvl | exact |
 | `raw_indicator_history:STABLES` | defillama_stables | exact |
 | `raw_indicator_history:BTC_ACTIVE` | blockchain_com | exact |
 | `raw_indicator_history:ETH_ACTIVE` | coinmetrics | exact |
 | `raw_indicator_history:BTC_MVRV` | coinmetrics | exact |
-| `raw_indicator_history:BTC_ETH` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:BTC_ETH` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:ETH_TREND` | yahoo | relative 1e-6 |
 | `raw_indicator_history:NEW_TOKENS` | geckoterminal_newpools | exact |
 | `raw_indicator_history:DEFI_GROWTH` | defillama_tvl | exact |
 | `raw_indicator_history:STABLES_GROWTH` | defillama_stables | exact |
-| `raw_indicator_history:SPHB_SPLV` | yahoo ratio | relative 1e-6 |
-| `raw_indicator_history:MTUM_SPY` | yahoo ratio | relative 1e-6 |
-| `raw_indicator_history:IWF_IWD` | yahoo ratio | relative 1e-6 |
-| `raw_indicator_history:XLU_SPY` | yahoo ratio | relative 1e-6 |
-| `raw_indicator_history:XLP_XLY` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:SPHB_SPLV` | yahoo ratio | relative 5e-6 |
+| `raw_indicator_history:MTUM_SPY` | yahoo ratio | relative 5e-6 |
+| `raw_indicator_history:IWF_IWD` | yahoo ratio | relative 5e-6 |
+| `raw_indicator_history:XLU_SPY` | yahoo ratio | relative 5e-6 |
+| `raw_indicator_history:XLP_XLY` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:SHILLER_CAPE` | shiller_cape / multpl | exact |
 | `raw_indicator_history:MNA` | edgar | exact |
 | `research:BTC-USD` | yahoo | relative 1e-6 |
@@ -4826,3 +4825,58 @@ pre-#1035 writers followed by 0080. It asserts the two ledgers, vintages,
 raw-history rows and overwrite evidence are equal row for row, that every
 repaired digest replays, and that the schema matches the fixed writers'
 database.
+
+### Amendment (2026-09-29) — a label change alone is not a change; irregular chains are re-linked; the repair is a one-time script
+
+**What the stage-2 rehearsal found.** On the full v0.5.1 dump (2026-09-28),
+0080's repair ran as one statement past the api's 5-minute
+`statement_timeout` and was cancelled. The loop was not the slow part: a
+set-based rewrite of it took longer (5 min 17 s against 4 min 27 s). The
+volume was. And the repair would still have left about 4.5M of the 19.4M
+versions, far more than the ~172k points the ledger describes:
+
+- **~1.39M were relabels.** The live fetch stamps `live` and the producer's gap
+  catch-up (`CATCH_UP_PROVENANCE`) stamps `seed` on the SAME points. Each turn
+  was recorded as an `unchanged` version, about 13 per point, with the value
+  never moving (`SPX_TREND`: 185,936 label flips, 20 value changes).
+- **~3.1M sat in 25,295 "irregular" coordinates** whose stored links did not
+  follow their own (knowledge_time, id) order, which the repair left exactly
+  as they were.
+
+**Decisions (owner, 2026-09-29).**
+
+- **Labels are ignored.** A value within tolerance writes nothing, in
+  `saveSourceAcquisition` and in `saveRawIndicatorHistory`, whatever its label.
+  A version keeps the label it was written with; a row's `source` is the label
+  of the write that last changed its value. Both writers still move together,
+  so raw-history parity still matches.
+- **Irregular coordinates are re-linked** in (knowledge_time, id) order, the
+  order the writer's own head lookup uses, and replayed like every other
+  coordinate. The ledger is append-only, so nothing else would ever repair
+  them. This supersedes "Left exactly as they are" above.
+- **The repair is a one-time script, not a migration.** Only production and
+  twins restored from it hold the old writers' rows. As a script it runs once,
+  on purpose, with the writers stopped (runbook `v0-5-2-rollout.md` R4.3h and
+  R6.4c), one series per statement with its progress printed, and leaves a
+  receipt. 0080 keeps only the schema changes. It rebuilds its three tables by
+  `TRUNCATE` and re-insert of the kept rows with their original ids, so the
+  space returns at commit and no `VACUUM FULL` is needed.
+
+- **Ratio series get a tolerance of 5e-6.** A ratio of two Yahoo series
+  carries both series' jitter. On the repaired twin, 102,721 of the ratio
+  series' ~121k kept "revisions" were a relative 1e-6 to 2e-6 off their prior,
+  and only 184 fell between 2e-6 and 1e-5. 5e-6 is above the measured noise and
+  four times below the smallest real revision (2e-5).
+- **Raw-history parity compares values within tolerance and does not compare
+  `source`.** The compatibility table and the ledger are fed at different
+  moments and each holds its value until a change exceeds tolerance, so they
+  can settle on two values the writers call the same observation. The parity
+  check calls the same `withinTolerance()`. `source` was compared since issue
+  #979 AC3; with a label change no longer recorded, the two tables can hold
+  different labels for one value, and no writer would ever reconcile them.
+
+**Evidence.** The same two tests, now running 0080 and then the script:
+`backend/tests/analytics-ledger-vintage-repair.test.ts` (row-for-row equal to
+the fixed writers, relabels included) and
+`backend/tests/analytics-ledger-repair.test.ts` (an irregular coordinate
+becomes one chain; guards armed; tables smaller on disk).

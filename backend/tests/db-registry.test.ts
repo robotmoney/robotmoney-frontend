@@ -360,6 +360,11 @@ describe("structural enforcement — a raw sql call outside the interface is det
   // listed here), and an entry whose file stops issuing raw statements or
   // disappears must leave. `0.5.0-to-0.5.1` is deliberately absent: v0.5.1
   // has no release tag, so its tooling is live backlog, not history.
+  //
+  // One entry joined after the first recording (issue 1065): the v0.5.2 ledger
+  // repair. v0.5.2 shipped (tag v0.5.2) from the release branch before main
+  // carried its tooling, so the file is ported history, the evidence the
+  // production repair ran under, not a new program main's deployments run.
   const HISTORICAL_RELEASE_TOOLING: ReadonlyMap<string, string> = new Map([
     ["scripts/upgrades/0.2.1-to-0.2.2/postflight", "graded the shipped v0.2.1 -> v0.2.2 cutover"],
     ["scripts/upgrades/0.2.1-to-0.2.2/preflight", "gated the shipped v0.2.1 -> v0.2.2 cutover"],
@@ -374,6 +379,7 @@ describe("structural enforcement — a raw sql call outside the interface is det
     ["scripts/upgrades/0.4.0-to-0.5.0/closed-day-allocation", "checked closed-day allocations across the shipped v0.5.0 read-path switch"],
     ["scripts/upgrades/0.4.0-to-0.5.0/postflight", "graded the shipped v0.4.0 -> v0.5.0 cutover"],
     ["scripts/upgrades/0.4.0-to-0.5.0/preflight", "gated the shipped v0.4.0 -> v0.5.0 cutover"],
+    ["scripts/upgrades/0.5.1-to-0.5.2/ledger-repair", "the one-time ledger repair the shipped v0.5.2 runbook ran (R4.3h, R6.4c), ported from the release (issue 1065)"],
   ]);
 
   /** Module id → its raw statements, for every module under `root` (src/ by
@@ -547,7 +553,7 @@ describe("structural enforcement — a raw sql call outside the interface is det
     }
   });
 
-  test("the shipped-release tooling set is exactly the thirteen recorded modules, and never grows", () => {
+  test("the shipped-release tooling set is exactly the fourteen recorded modules, and never grows", () => {
     // Pinned by value, like INFRA: a new entry is an edit here AND a failing
     // expectation, never one quiet line.
     expect([...HISTORICAL_RELEASE_TOOLING.keys()].sort()).toEqual([
@@ -564,12 +570,13 @@ describe("structural enforcement — a raw sql call outside the interface is det
       "scripts/upgrades/0.4.0-to-0.5.0/closed-day-allocation",
       "scripts/upgrades/0.4.0-to-0.5.0/postflight",
       "scripts/upgrades/0.4.0-to-0.5.0/preflight",
+      "scripts/upgrades/0.5.1-to-0.5.2/ledger-repair",
     ]);
     // Every entry is a shipped release's upgrade directory, carries its reason,
     // still issues raw statements (else it leaves), and is on no other list.
     const stillRaw = rawStatementModules(SCRIPTS);
     for (const [moduleId, reason] of HISTORICAL_RELEASE_TOOLING) {
-      expect(/^scripts\/upgrades\/(0\.2\.1-to-0\.2\.2|0\.2\.2-to-0\.3\.0|0\.3\.0-to-0\.4\.0|0\.4\.0-to-0\.5\.0)\//.test(moduleId), moduleId).toBe(true);
+      expect(/^scripts\/upgrades\/(0\.2\.1-to-0\.2\.2|0\.2\.2-to-0\.3\.0|0\.3\.0-to-0\.4\.0|0\.4\.0-to-0\.5\.0|0\.5\.1-to-0\.5\.2)\//.test(moduleId), moduleId).toBe(true);
       expect(reason.length, moduleId).toBeGreaterThan(10);
       expect(stillRaw.has(moduleId), moduleId).toBe(true);
       expect(SCRIPTS_RAW_SQL_EXCEPTIONS.has(moduleId), moduleId).toBe(false);

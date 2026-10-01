@@ -57,7 +57,9 @@
 //         by the migrate run and the blank bootstrap, both of which refuse any
 //         session but rm_owner), and the manual prune (scripts/prune.ts, the
 //         operator's `bun run prune`, which logs in as rm_owner with a typed
-//         password and is imported by nothing, D55 (12)).
+//         password and is imported by nothing, D55 (12)), and the one-time v0.5.2
+//         ledger repair (scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts,
+//         which sets rm_owner before it truncates and is imported by nothing).
 //   (iii) a guard PROBE: `DELETE FROM public.<t> WHERE false`, issued to prove
 //         the append-only or ledger guard refuses it. It matches no row in any
 //         outcome, so it removes nothing (src/db/append-only-guard.ts
@@ -282,6 +284,12 @@ const OWNER_SITES: ReadonlyMap<string, number> = new Map([
   ["scripts/prune.ts declaration swarm_stream_events", 1],
   ["scripts/prune.ts statement admin_session", 2],
   ["scripts/prune.ts declaration admin_session", 1],
+  // The v0.5.2 ledger repair (issue 1065), ported from the shipped release: two
+  // TRUNCATEs inside its transaction, after SET LOCAL ROLE rm_owner. It is run
+  // once by the operator and is imported by nothing (proved below).
+  ["scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts statement analytics_vintage_members", 1],
+  ["scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts statement source_value_versions", 1],
+  ["scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts statement analytics_overwrite_events", 1],
 ]);
 
 /** (iii) Guard probes: `DELETE ... WHERE false`, table computed per guard. */
@@ -389,6 +397,13 @@ describe("the rm_owner sites are reachable only from rm_owner entries", () => {
       (JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
     expect(pkg(join(BACKEND, "..")).prune).toBe("bun run --cwd backend scripts/prune.ts");
     expect(pkg(BACKEND).prune).toBe("bun run scripts/prune.ts");
+  });
+
+  test("the v0.5.2 ledger repair is imported by no src/ or scripts/ module, and truncates only after SET LOCAL ROLE rm_owner", () => {
+    expect(importersOf("scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts")).toEqual([]);
+    const text = readFileSync(join(BACKEND, "scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts"), "utf8");
+    expect(text.indexOf('SET LOCAL ROLE rm_owner')).toBeGreaterThan(-1);
+    expect(text.indexOf('SET LOCAL ROLE rm_owner')).toBeLessThan(text.indexOf("TRUNCATE analytics_vintage_members"));
   });
 
   test("writeManifest (schema-manifest.ts's delete) is called only by the migrate run and the blank bootstrap, each of which refuses any session but rm_owner", () => {

@@ -13,25 +13,23 @@ import { withinTolerance } from "../source-tolerance.ts";
 // none of it was information — the acquisition itself (source_acquisitions,
 // source_fetches with each response's checksum) already proves the fetch
 // happened and fingerprints what it returned. So a value within its source's tolerance (source-tolerance.ts,
-// decision D56) of the head, carrying the same provenance label, leaves the head
-// as it is.
+// decision D56) of the head leaves the head as it is.
 //
-// A label change on a value within tolerance is still recorded, as 'unchanged',
-// carrying the HEAD's value and the new label: raw_indicator_history rewrites
-// only its `source` in that case (store/raw-history-store.ts applies the same
-// rule), and the two must move together or cutover/parity.ts reports a
-// mismatch. The value of record changes only when a change exceeds tolerance;
-// the fetch itself stays on the record in source_fetches either way.
-type RevisionKind = "initial" | "unchanged" | "revision";
+// A LABEL CHANGE ALONE IS NOT A CHANGE (owner, 2026-09-29). The live fetch
+// stamps 'live' and the producer's gap catch-up stamps 'seed' on the SAME
+// points, so recording a relabel wrote a row per point every time the two took
+// turns: ~1.4M production rows, about 13 per point, none of them information.
+// The head keeps the label it was written with until its VALUE changes.
+// store/raw-history-store.ts applies the same rule to `source`, so the two
+// still move together and cutover/parity.ts still matches.
+type RevisionKind = "initial" | "revision";
 
 function classify(
   prior: { value: number; provenance: string | null } | undefined,
   value: SourceValueEvidence,
 ): RevisionKind | null {
   if (prior === undefined) return "initial";
-  const same = withinTolerance(value.sourceKey, prior.value, value.value);
-  if (same && prior.provenance === (value.provenance ?? null)) return null;
-  return same ? "unchanged" : "revision";
+  return withinTolerance(value.sourceKey, prior.value, value.value) ? null : "revision";
 }
 
 /** The only entry module that reaches this store: the analytics ingestion route. */
@@ -283,7 +281,7 @@ export async function saveSourceAcquisition(
              prior_version_id, revision_kind, provenance)
           VALUES
             (${evidence.id}::uuid, ${value.sourceKey}, ${value.marketDate ?? null}::date,
-             ${value.marketInstant ?? null}::timestamptz, ${revisionKind === "unchanged" ? Number(prior!.value) : value.value}, ${prior?.id ?? null},
+             ${value.marketInstant ?? null}::timestamptz, ${value.value}, ${prior?.id ?? null},
              ${revisionKind}, ${value.provenance ?? null})`;
       }
     } else if (evidence.values.length > 0) {
@@ -354,7 +352,7 @@ export async function saveSourceAcquisition(
           source_key: value.sourceKey,
           market_date: value.marketDate ?? null,
           market_instant: value.marketInstant ?? null,
-          value: revisionKind === "unchanged" ? prior!.value : value.value,
+          value: value.value,
           prior_version_id: prior?.id ?? null,
           revision_kind: revisionKind,
           provenance: value.provenance ?? null,
