@@ -36,6 +36,9 @@ const MIN_PUBLISHED_SESSIONS = 2;
  *  cutover against a feed with hundreds of rows and each one is a fetch; the
  *  newest are the ones a regression would have touched. */
 const RECOMPUTE_DEPTH = 5;
+/** How far back the published-only listing looks for a session that carries a
+ *  vector; the API caps a page at 100. */
+const PUBLISHED_LOOKBACK = 100;
 
 /** A session may sit in `collecting` for its window; past the window plus this
  *  grace it is wedged, not waiting. */
@@ -131,8 +134,20 @@ export const swarmPipelineLeg: VerifyLeg = {
       rows.slice().sort((a, b) => (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""));
 
     const recentRows = newest(feed.published).slice(0, RECOMPUTE_DEPTH);
+    // The recompute wants sessions that PUBLISHED A VECTOR. The scheduler opens
+    // the next epoch of every active subject the moment one settles
+    // (system-scheduler-spec.md §3), so a subject nobody is filing on turns
+    // over an empty epoch every duration, and the newest slice of the feed is
+    // soon nothing but those. They carry no vector, so they are read from a
+    // deeper, published-only listing rather than from the default page.
+    const deeper = await ctx.json<{ sessions?: SessionRow[] }>(
+      `${ROUTES.swarm.sessions}?state=published&limit=${PUBLISHED_LOOKBACK}`,
+    );
+    const publishedDeep = (deeper.sessions ?? []).filter((s) => s.state === "published");
     const weightRows = newest(
-      feed.published.filter((s) => s.swarmRecommendation?.type === "bucket_weights"),
+      publishedDeep.filter(
+        (s) => s.swarmRecommendation?.type === "bucket_weights" && (s.swarmRecommendation.weights?.length ?? 0) > 0,
+      ),
     ).slice(0, RECOMPUTE_DEPTH);
     // Union, so a bucket_weights session outside the newest slice still gets
     // its lifecycle checked, and the newest slice still gets recomputed if it
@@ -140,6 +155,7 @@ export const swarmPipelineLeg: VerifyLeg = {
     const recent = [...new Map([...recentRows, ...weightRows].map((r) => [r.id, r])).values()];
 
     const incomplete: string[] = [];
+    const emptyEpochs: string[] = [];
     const divergent: string[] = [];
     const unverifiable: string[] = [];
     const archivalClaims: string[] = [];
@@ -175,16 +191,25 @@ export const swarmPipelineLeg: VerifyLeg = {
       }
 
       const published = session.swarmRecommendation.weights;
+      const takes = detail.takes ?? [];
       if (!published || published.length === 0) {
-        // Legitimate for a position_actions subject; suspicious for a
-        // bucket_weights one, which is exactly what the type field is for.
+        // Legitimate for a position_actions subject. For a bucket_weights one
+        // it depends on what was filed: an epoch nobody filed a weighted take
+        // in has nothing to aggregate, and the scheduler publishes it with no
+        // vector rather than inventing one (nothing is fabricated). A vector
+        // missing while weighted takes ARE on file is the partial row this
+        // check exists to catch.
         if (session.swarmRecommendation.type === "bucket_weights") {
-          incomplete.push(`${session.id}: bucket_weights session published no weights`);
+          const weighted = takes.filter((t) => (t.weights?.length ?? 0) > 0);
+          if (weighted.length > 0) {
+            incomplete.push(`${session.id}: bucket_weights session published no weights though ${weighted.length} weighted take(s) are on file`);
+          } else {
+            emptyEpochs.push(session.id);
+          }
         }
         continue;
       }
 
-      const takes = detail.takes ?? [];
       if (takes.length === 0) {
         unverifiable.push(`${session.id}: published a vector but serves no takes — the claim cannot be checked by anyone`);
         continue;
@@ -205,7 +230,10 @@ export const swarmPipelineLeg: VerifyLeg = {
     checker.record(
       "swarm:lifecycle-complete",
       incomplete.length ? "FAIL" : "PASS",
-      incomplete.length ? incomplete : `${recent.length} newest published session(s) carry a complete recommendation`,
+      incomplete.length
+        ? incomplete
+        : `${recent.length} newest published session(s) carry a complete recommendation` +
+          (emptyEpochs.length ? ` (${emptyEpochs.length} of them an empty epoch: no weighted take filed, no vector published)` : ""),
       "A published session missing its recommendation or publish timestamp means the aggregate/publish step wrote a partial row.",
     );
 

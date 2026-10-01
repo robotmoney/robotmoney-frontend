@@ -204,12 +204,27 @@ describe("verify-live — each forced defect turns it red and names the leg", ()
     expect(out).toContain("swarm:archival-semantics");
   }, 60_000);
 
-  test("a bucket_weights session publishing no weights at all fails", async () => {
-    const empty = HEALTHY();
-    empty[0]!.swarmRecommendation = { type: "bucket_weights" };
-    const { code, out } = await runDriver(serve(empty));
+  test("a bucket_weights session publishing no weights while weighted takes are on file fails", async () => {
+    const partial = HEALTHY();
+    partial[0]!.swarmRecommendation = { type: "bucket_weights" };
+    const { code, out } = await runDriver(serve(partial));
     expect(code).toBe(1);
     expect(out).toContain("swarm:lifecycle-complete");
+    expect(out).toContain("weighted take(s) are on file");
+  }, 60_000);
+
+  test("an empty epoch — no take filed, no vector published — is complete, not a partial row", async () => {
+    // The scheduler opens the next epoch of every active subject the moment
+    // one settles, so a subject nobody is filing on publishes an empty epoch
+    // every duration. Nothing was aggregated and nothing was fabricated.
+    const withEmpty = HEALTHY();
+    withEmpty[0]!.swarmRecommendation = { type: "bucket_weights" };
+    withEmpty[0]!.takes = [];
+    const { code, out } = await runDriver(serve(withEmpty));
+    expect(code).toBe(0);
+    expect(out).toContain("1 of them an empty epoch");
+    // The recompute still ran on the sessions that did publish a vector.
+    expect(out).toMatch(/2 published vector\(s\) recompute exactly/);
   }, 60_000);
 });
 
