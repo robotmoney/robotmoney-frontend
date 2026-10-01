@@ -601,6 +601,18 @@ its subdomain) — not a secret.
 
 ---
 
+### 5.1 The api's request time limit
+
+The api ends a request that runs longer than **30 seconds** (`API_IDLE_TIMEOUT_SECONDS` in `backend/src/config.ts`, passed to
+`Bun.serve` as `idleTimeout`). It is below nginx's 60 s `proxy_read_timeout`, so the api, not the proxy, ends a stuck
+request. Bun's own default is 10 s and nothing set it before issue 1060, which is how one slow request on 2026-09-30
+became a 502. A request over **5 seconds** (`API_SLOW_REQUEST_MS`) logs one line with its method, path, duration, status
+and caller; one that finishes past the limit logs an error saying the client was cut off:
+
+```
+docker logs rm_prod-api-1 2>&1 | grep -aE '\[api\] (slow request|request ran past)'
+```
+
 ## 6. Least privilege, rotation, storage
 
 - **One scoped token per vendor per environment.** Never reuse a production token in

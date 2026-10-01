@@ -3,7 +3,8 @@
 // the sibling `website-server` nginx image (issue #892), which proxies /api/
 // and /health here so a single-box deployment still presents as one origin.
 import { ROUTES } from "@robotmoney/contract";
-import { config, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured } from "../config.ts";
+import { config, API_IDLE_TIMEOUT_SECONDS, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured } from "../config.ts";
+import { withRequestTiming } from "./request-timing.ts";
 import { isDatabaseUnavailable, sql } from "../db/client.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
@@ -101,6 +102,8 @@ export const PARITY_SWEEP_REQUEST_TIMEOUT_S = 240;
 
 const server = Bun.serve({
   port: config.apiPort,
+  // Explicit, not Bun's 10 s default (issue 1060). See API_IDLE_TIMEOUT_SECONDS in config.ts.
+  idleTimeout: API_IDLE_TIMEOUT_SECONDS,
   async fetch(req, server) {
     const url = new URL(req.url);
     const { pathname } = url;
@@ -123,7 +126,7 @@ const server = Bun.serve({
     const clientIp = resolveClientIp(peer, config.trustProxy, req.headers.get("x-forwarded-for"));
 
     try {
-      return withCors(await route(req, url, pathname, clientIp), req, pathname);
+      return withCors(await withRequestTiming(req, pathname, () => route(req, url, pathname, clientIp)), req, pathname);
     } catch (err) {
       // Malformed percent-encoding (decodeURIComponent) → 400; anything else →
       // a sanitized 500 (never leak a stack). No unhandled rejections from fetch.
