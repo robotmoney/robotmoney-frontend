@@ -2,6 +2,10 @@
 // page, like a take, and a session judged by several judges shows each judge's
 // opinion (operators who run a judge want to find theirs).
 //
+// WHEN THE SESSION OPENED (#1084). `sessionDate` is the session's `date`, the day its row was created; a session that
+// waited for its brief opened later. `sessionOpenedAt` is the instant of its first brief revision, read at query time,
+// so the judgement pages can show the day the session happened. rm_app already reads swarm_brief_revisions (0059).
+//
 // READ ONLY, AND NO MIGRATION. Everything here reads `swarm_session_judgements`
 // (migrations 0039/0040/0041/0043) as it already stands. The privileged
 // `GET /api/swarm/admin/sessions/:id/judgements` (admin.ts) stays the full
@@ -50,6 +54,7 @@ const PUBLIC_SET_HEAD = `SELECT * FROM (
              j.id, j.session_id, j.judged_by, j.judged_by_member_id, j.source, j.model,
              j.prompt_hash, j.inputs_digest, j.opinion, j.created_at,
              s.subject_id, s.date AS session_date,
+             (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = j.session_id) AS session_opened_at,
              COALESCE(s.swarm_recommendation->>'type' = 'bucket_weights', false)
                AND CASE jsonb_typeof(s.swarm_recommendation->'weights')
                      WHEN 'array' THEN jsonb_array_length(s.swarm_recommendation->'weights') > 0
@@ -138,6 +143,36 @@ const byJudgementSessions = registerQuery({
   probe: PUBLIC_BY_JUDGEMENT_PROBE,
 });
 
+const bySessionOpenedAt = registerQuery({
+  role: "rm_app",
+  object: "swarm_brief_revisions",
+  privileges: ["SELECT"],
+  site: "src/swarm/judgements:publicJudgements.bySession.openedAt",
+  purpose: "Read when each judged session really opened: the instant of its first brief revision (#1084), for one session.",
+  callers: [SWARM_ROUTE],
+  probe: PUBLIC_BY_SESSION_PROBE,
+});
+
+const byMemberOpenedAt = registerQuery({
+  role: "rm_app",
+  object: "swarm_brief_revisions",
+  privileges: ["SELECT"],
+  site: "src/swarm/judgements:publicJudgements.byMember.openedAt",
+  purpose: "Read when each judged session really opened: the instant of its first brief revision (#1084), for one judging member.",
+  callers: [SWARM_ROUTE],
+  probe: PUBLIC_BY_MEMBER_PROBE,
+});
+
+const byJudgementOpenedAt = registerQuery({
+  role: "rm_app",
+  object: "swarm_brief_revisions",
+  privileges: ["SELECT"],
+  site: "src/swarm/judgements:publicJudgements.byJudgement.openedAt",
+  purpose: "Read when each judged session really opened: the instant of its first brief revision (#1084), for the judgement permalink.",
+  callers: [SWARM_ROUTE],
+  probe: PUBLIC_BY_JUDGEMENT_PROBE,
+});
+
 const sessionExists = registerQuery({
   role: "rm_app",
   object: "swarm_sessions",
@@ -184,12 +219,13 @@ async function publicJudgements(scope: JudgementScope, limit?: number): Promise<
   const cap = limit ?? null;
   const rows =
     scope.kind === "session"
-      ? await on(sql, bySessionJudgements, bySessionSessions)`
+      ? await on(sql, bySessionJudgements, bySessionSessions, bySessionOpenedAt)`
     SELECT * FROM (
       SELECT DISTINCT ON (j.session_id, j.judged_by)
              j.id, j.session_id, j.judged_by, j.judged_by_member_id, j.source, j.model,
              j.prompt_hash, j.inputs_digest, j.opinion, j.created_at,
              s.subject_id, s.date AS session_date,
+             (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = j.session_id) AS session_opened_at,
              COALESCE(s.swarm_recommendation->>'type' = 'bucket_weights', false)
                AND CASE jsonb_typeof(s.swarm_recommendation->'weights')
                      WHEN 'array' THEN jsonb_array_length(s.swarm_recommendation->'weights') > 0
@@ -205,12 +241,13 @@ async function publicJudgements(scope: JudgementScope, limit?: number): Promise<
     ORDER BY id DESC
     LIMIT ${cap}`
       : scope.kind === "member"
-        ? await on(sql, byMemberJudgements, byMemberSessions)`
+        ? await on(sql, byMemberJudgements, byMemberSessions, byMemberOpenedAt)`
     SELECT * FROM (
       SELECT DISTINCT ON (j.session_id, j.judged_by)
              j.id, j.session_id, j.judged_by, j.judged_by_member_id, j.source, j.model,
              j.prompt_hash, j.inputs_digest, j.opinion, j.created_at,
              s.subject_id, s.date AS session_date,
+             (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = j.session_id) AS session_opened_at,
              COALESCE(s.swarm_recommendation->>'type' = 'bucket_weights', false)
                AND CASE jsonb_typeof(s.swarm_recommendation->'weights')
                      WHEN 'array' THEN jsonb_array_length(s.swarm_recommendation->'weights') > 0
@@ -225,12 +262,13 @@ async function publicJudgements(scope: JudgementScope, limit?: number): Promise<
     ) public_judgements
     ORDER BY id DESC
     LIMIT ${cap}`
-        : await on(sql, byJudgementJudgements, byJudgementSessions)`
+        : await on(sql, byJudgementJudgements, byJudgementSessions, byJudgementOpenedAt)`
     SELECT * FROM (
       SELECT DISTINCT ON (j.session_id, j.judged_by)
              j.id, j.session_id, j.judged_by, j.judged_by_member_id, j.source, j.model,
              j.prompt_hash, j.inputs_digest, j.opinion, j.created_at,
              s.subject_id, s.date AS session_date,
+             (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = j.session_id) AS session_opened_at,
              COALESCE(s.swarm_recommendation->>'type' = 'bucket_weights', false)
                AND CASE jsonb_typeof(s.swarm_recommendation->'weights')
                      WHEN 'array' THEN jsonb_array_length(s.swarm_recommendation->'weights') > 0

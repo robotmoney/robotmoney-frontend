@@ -72,6 +72,9 @@ export function normalizeJudgement(raw) {
     sessionId: String(raw.sessionId ?? raw.session_id ?? ""),
     subjectId: String(raw.subjectId ?? raw.subject_id ?? ""),
     sessionDate: String(raw.sessionDate ?? raw.session_date ?? "").slice(0, 10),
+    // When the session really opened (its first brief). `sessionDate` is the day its row was created, which can be days
+    // earlier; pages show the opened instant and fall back to the date (issue 1084).
+    sessionOpenedAt: raw.sessionOpenedAt ?? raw.session_opened_at ?? null,
     judgedBy: raw.judgedBy ?? raw.judged_by ?? null,
     judgedByMemberId: raw.judgedByMemberId ?? raw.judged_by_member_id ?? null,
     source: raw.source === "model" ? "model" : "fallback",
