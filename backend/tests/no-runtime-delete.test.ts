@@ -257,7 +257,8 @@ const BACKLOG: ReadonlyMap<string, number> = new Map<string, number>([
 /** (ii) rm_owner sites, reachable only from an rm_owner entry (proved below). */
 const OWNER_SITES: ReadonlyMap<string, number> = new Map([
   // seedJobSchedules's retired-row cleanup: two statements, two declarations.
-  ["src/db/seed.ts statement job_schedules", 2],
+  // Each of the two DELETEs appears twice: at its call site and as its registered probe (#1086).
+  ["src/db/seed.ts statement job_schedules", 4],
   ["src/db/seed.ts declaration job_schedules", 2],
   // seedSmokeProjects, called only from src/db/seed.ts: each DELETE, its registry
   // probe and its declaration.
