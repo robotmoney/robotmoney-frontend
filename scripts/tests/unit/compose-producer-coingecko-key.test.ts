@@ -4,6 +4,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { smokePassthroughEnv } from "../../lib/smoke-compose-env.ts";
 
 for (const file of ["docker-compose.yml", "docker-compose.smoke.yml"]) {
   test(`${file} interpolates COINGECKO_API_KEY into analytics-producer`, () => {
@@ -32,4 +33,13 @@ test("docker-compose.smoke.yml passes COINGECKO_API_KEY to the worker lanes (the
   const next = text.slice(start + 1).search(/\n  [a-z][a-z0-9-]*:\n/);
   const block = text.slice(start, next === -1 ? undefined : start + 1 + next);
   expect(block).toContain("COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}");
+});
+
+// The driver builds the compose environment from an allowlist (DEMO_COMPOSE_PASSTHROUGH). A name not on it never reaches a
+// container, however compose interpolates it.
+test("an exported COINGECKO_API_KEY is forwarded to the compose environment, and a blank one is not", () => {
+  expect(smokePassthroughEnv({ COINGECKO_API_KEY: "cg-unit-key" }).COINGECKO_API_KEY).toBe("cg-unit-key");
+  expect(smokePassthroughEnv({ COINGECKO_API_KEY: "cg-unit-key" }, { external: true }).COINGECKO_API_KEY).toBe("cg-unit-key");
+  expect(smokePassthroughEnv({})).not.toHaveProperty("COINGECKO_API_KEY");
+  expect(smokePassthroughEnv({ COINGECKO_API_KEY: "" })).not.toHaveProperty("COINGECKO_API_KEY");
 });

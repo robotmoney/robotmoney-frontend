@@ -34,6 +34,11 @@ const DEMO_COMPOSE_PASSTHROUGH = [
   "FETCH_CACHE_DIR",
   "FLOOR_SEED_PATH",
   "PROJECTS_SOURCE",
+  // THE PAID COINGECKO KEY (issue #1062). docker-compose.yml and docker-compose.smoke.yml interpolate it into the worker
+  // lanes and the analytics-producer, where GeckoTerminal's on-chain calls send it to the Pro host. Without this entry an
+  // exported key (the host's ~/.env, which bun auto-loads into the driver) became an EMPTY variable in every container.
+  // (On main this entry arrived with issue #1047.)
+  "COINGECKO_API_KEY",
   "RM_ENV",
   // NOT "WORKER_DATABASE_URL" — except on an --db external boot, see
   // EXTERNAL_ONLY_PASSTHROUGH below. It was on this list from the 2026-07-28 extraction
