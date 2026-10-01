@@ -86,25 +86,45 @@ Run from a scratch clone at `RC_SHA`, never from the live checkout, which sits u
 | R2.9 | `tmux ls; tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_current_command}'` | the pane running `bun smoke:archive` is identified. An idle `claude` session in pane `0:1.0` is noted and left alone | output |
 | R2.10 | `ls /root/site-backups` and the newest database backup under `/root` | the latest website backup (rollback of the website half) exists | paths |
 
-## R3. Backup
+## R3. A fresh dump for the rehearsal (stage-2, against the replica)
 
-No database backup is required: nothing in this release writes the schema or any row in a new shape (R1.3). The website
-half is backed up by `site:redeploy` (R6.7). If R1.3 fails, stop.
+**Every rehearsal restores a dump taken for that rehearsal, a few hours before it, never an older one.** An old dump carries
+the sessions production had open when it was taken: restored days later, their windows are long closed, the twin adopts them
+as dead rows, and the gate fails on them (the 2026-10-01 rehearsal on a 09-29 dump failed 4 of its 6 checks that way, with a
+treasury session published with 0 takes). A dump is not a backup of production (production is not migrated by this release, so
+it needs none); it is the data the twin tests the release on, and it must look like production now.
+
+As v0.5.1 R3, on `rm-frontend-stage-2`, never the production host: a full dump against production's **read replica**.
+
+| Step | Command (on stage-2, `~/robotmoney-frontend` at `RC_SHA`) | Pass | Record |
+|---|---|---|---|
+| R3.0 | `df -h ~` | free ≥ 3 × the last dump | free GB |
+| R3.1 | `export RM_BACKUP_DIR=~/rm-backup-v054-$(date -u +%Y%m%dT%H%M%SZ)` | a **new** directory, named with today's stamp | path |
+| R3.2 | In tmux: `bun run smoke:capture 2>&1 \| tee ~/r3-capture.log` | exit 0; the log says `pg_is_in_recovery()=true` (the replica) | stamp, dump size, time |
+| R3.3 | `bun backend/scripts/upgrades/0.5.3-to-0.5.4/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt` | `DUMP SAFE FOR 0.5.4`: v0.5.3's 76 migrations recorded, **none pending**, the tables this release touches present | receipt |
+| R3.4 | Record the sessions the dump holds open: restore it and `q "SELECT id, subject_id, state, window_closes_at FROM swarm_sessions WHERE state IN ('scheduled','collecting') ORDER BY convened_at"` (R4.3a) | listed | rows |
+
+Production always has one subject's session `collecting`: windows are 6 h and the driver opens the next within about two minutes
+of a publish. A twin that restores the dump therefore adopts exactly that session, and a twin cannot rehearse adopting a
+`collecting` session (v0.5.1 R4): the driver skips an adopted window, so it publishes with fewer takes than a production
+session would. The gate reports it as `no_takes`. Record it as the **one expected artifact** (waiver D4, naming the session
+id from R3.4 and nothing else); every other gate failure is a finding.
 
 ## R4. Rehearsal on stage-2 (`rm-frontend-stage-2`), on the repaired production backup
 
 The rehearsal must prove the five changes on a stack booted from production's own data, and that sessions still publish.
-A twin runs accelerated sessions (2 to 6 minute windows) and **spends inference credit on every one**: tear it down (R4.12).
+A twin runs accelerated sessions (2 to 6 minute windows) and **spends inference credit on every one**: tear it down (R4.12). R4.3 refuses a dump older than 6 hours: `test $(( $(date +%s) - $(date -d "$(stat -c %y "$RM_BACKUP_DIR")" +%s) )) -lt 21600`.
 
 | Step | Command (on stage-2, `~/robotmoney-frontend`) | Pass | Record |
 |---|---|---|---|
 | R4.1 | Wipe: `bun run smoke:down; docker rm -fv $(docker ps -aq); bun run smoke:clean` | 0 containers, 0 volumes | — |
 | R4.2 | `git fetch origin --tags && git checkout --detach "$RC_SHA" && bun install --force && bun install --force --cwd backend` | HEAD = `RC_SHA` | HEAD |
-| R4.3 | In tmux: `bun smoke:twin -- --reuse --backup-dir ~/rm-backup-v052-repaired --no-tui 2>&1 \| while IFS= read -r l; do printf '%s %s\n' "$(date -u +%T)" "$l"; done \| tee ~/twin-$RC_SHA.log` | `READY`; `131 checks · 0 failed` | READY time = T0 |
-| R4.3a | `grep -E 'migrated: 00' ~/twin-$RC_SHA.log` | **no** `migrated:` line for a new migration (the backup already has all 79) | lines |
+| R4.3 | In tmux: `bun smoke:twin -- --reuse --backup-dir "$RM_BACKUP_DIR" --no-tui 2>&1 \| while IFS= read -r l; do printf '%s %s\n' "$(date -u +%T)" "$l"; done \| tee ~/twin-$RC_SHA.log` | `READY`; `131 checks · 0 failed` | READY time = T0 |
+| R4.3a | `grep -E 'migrated: 00' ~/twin-$RC_SHA.log`; and the R3.4 query on the twin (`C=$PROJECT-api-1`) | **no** `migrated:` line (the dump already has all 76); the open sessions match R3.4 | lines |
 | R4.4 | `bun run twin:gate -- --driver-log ~/twin-$RC_SHA.log --report ~/twin-gate-reports/R4.4-$RC_SHA.md --wait 40 --sessions 2 --min-attendance 1` | exit 0: two sessions publish, a take from every active analyst, an applied judgement and a receipt, no dead job, no container restart | the report |
 | R4.5 | **The opened-at change.** `curl -s "http://127.0.0.1:48787/api/swarm/sessions?limit=5"` and the detail of the newest published session | every published session carries `openedAt` (an ISO instant), never null; for a session convened after T0 it is within a minute of its brief and **after** `generatedAt` when the row waited; `date` is unchanged | the JSON |
 | R4.5a | Browser pass on the twin's site (`/swarm`, a published session, `/vault/rmusdc`): the index row, the "Latest session" fact and the session header show the `openedAt` day and time (UTC) | the day matches `openedAt`, not `date`, for an adopted session | screenshots |
+| R4.5b | **The date audit, from a workstation with Chromium:** `bun scripts/stage-date-audit.ts https://stage.robotmoney-labs.dev` (read-only). It reads the API, loads the pages that name a session (the `/swarm` history and facts, a session page for a session that waited, one that did not and one still collecting, the subject page, a judgement page and its judge's member page) and compares the day and time each prints with the API's `openedAt` | exit 0, **0 failed**, and no `NOTE` saying a case was not covered (the dump holds sessions that waited, and R4.4's adopted sessions add more). A FAIL is a finding. Run it again after R4.4 so the sessions the twin published are checked too | the output |
 | R4.6 | **The regime day.** `grep -E 'regime asof' ~/twin-$RC_SHA.log` | every line reads **today's UTC date**, including the lines for sessions the twin adopted from the backup (those were convened on an earlier day) | lines |
 | R4.7 | **The api limit and the slow-request log.** The limit is 10 s on purpose: a request over 5 s means work that does not belong on the request path. Every `[api] slow request` line is a finding to record (issue 1079 is the known one: `POST /api/analytics/source-acquisitions`). `docker logs "$PROJECT-api-1" 2>&1 \| grep -aE '\[api\] (slow request\|request ran past)\|timed out after'` and `grep -n 'idleTimeout' backend/src/api/index.ts` | no `timed out after`; each `[api] slow request` line is listed with its path and duration (the acquisitions route is expected until issue 1079 ships); `idleTimeout: API_IDLE_TIMEOUT_SECONDS` | lines |
 | R4.8 | **Buyback.** `docker logs "$PROJECT-worker-analytics-1" 2>&1 \| grep -aE 'Base RPC HTTP 413\|eth_getLogs .* answered HTTP 413\|live index failed'` | no `live index failed`. A `413` is followed by a `reading … separately` line | lines |
@@ -146,6 +166,7 @@ steps that must; clones for everything else.
 | R7.2 | `bun run verify:live --tier readonly --emit-receipt=P8.verify-prod-v0.5.4` | exit 0; the two higher-tier `skipped` warnings only |
 | R7.3 | Ten public pages 200 (`/`, `/vaults`, `/vault/rmusdc`, `/swarm`, `/deposit`, `/changelog`, `/skills`, `/regime`, `/regime/indicators`, `/smart-contract-risks`), then the browser module pass on six of them | 0 failed, 0 unstamped, 0 page errors |
 | R7.4 | `curl -s "https://robotmoney.network/api/swarm/sessions?limit=8"` | every published session carries `openedAt`; the sessions still `collecting` carry it too if their brief went out |
+| R7.4a | `bun scripts/stage-date-audit.ts https://robotmoney.network` (from a workstation) | exit 0, 0 failed. Every page prints the day the session opened: the adopted sessions that were dated 09-28 on production on 2026-10-01 are the cases it checks first |
 | R7.5 | The first session the new driver opens or adopts: `grep -E 'regime asof' /root/smoke-archive-v0.5.4.log` | the line's date is **T0's UTC date** (or later), not the creation day of an adopted row |
 | R7.6 | `docker logs --since "$T0" rm_prod-website-server-1 2>&1 \| grep -aEc '" 5[0-9][0-9] '`, and `docker logs --since "$T0" rm_prod-api-1 2>&1 \| grep -aE 'timed out after\|\[api\] request ran past'` | the count is no higher than R2.3's rate; the second grep is empty |
 | R7.7 | `docker logs --since "$T0" rm_prod-worker-analytics-1 2>&1 \| grep -aE 'Base RPC HTTP 413\|live index failed'` | no `live index failed` |
