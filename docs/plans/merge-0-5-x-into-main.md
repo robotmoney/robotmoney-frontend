@@ -197,6 +197,13 @@ unit 1015 pass. Of the browser specs, `the hero is full-bleed` fails at 415 px
 on both parents too; the rest of the failures are the proxy's certificate
 errors.
 
+**Re-sync of 2026-10-01.** `main` gained #1055 (Project Fusion docs), #1056
+(asset stamping, byte-identical to release's v0.5.3 copy already merged) and
+#1057 (a session shows on the day it opened). `releases-0.5.x` gained its
+port of #1057 (`4a0b1581`), identical to main's. Both merged without
+conflicts (`a9222b31`, `64b4421e`), and the branch contains both tips. Main's
+new Fusion docs agree with R4: a fallback judgement blocks the receipt.
+
 Completeness: every file added or changed at `2605199..origin/main` and at
 `2605199..releases-0.5.x` is present in the merged tree, except the ones §4
 drops.
