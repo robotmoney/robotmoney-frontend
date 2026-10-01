@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import postgres from "postgres";
 import { applyMigrationFile } from "../src/db/migrate.ts";
+import { adminConnection, adminUrl } from "./support/cluster.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 /**
@@ -114,7 +115,36 @@ const NOT_IN_PRODUCTION = [
   "0058_swarm_judge_fault_injection.sql",
   "0059_swarm_judgement_completion_usage.sql",
   "0062_rm_worker_analytics_ledger_read_grant.sql",
+  "0063_deployment_identity.sql",
+  "0064_schema_manifest.sql",
+  "0065_append_only_grant_transition.sql",
+  "0066_drop_swarm_notifications.sql",
+  "0067_subject_epoch_duration.sql",
+  "0068_session_epoch_lifecycle.sql",
+  "0069_automation_tokens.sql",
+  "0070_swarm_scheduler_jobs.sql",
+  "0072_drop_swarm_schedules.sql",
+  "0073_subject_grid_columns.sql",
+  "0074_session_judging_duration.sql",
+  "0075_swarm_recommendations_final.sql",
+  "0076_ledger_write_revoke.sql",
+  "0077_immutable_ledger_grants.sql",
+  "0078_automation_token_holders.sql",
+  "0079_drop_swarm_scheduler_jobs.sql",
+  "0080_stream_events_grant_only.sql",
+  "0081_stream_event_counter.sql",
   "0081_swarm_judge_model_bare_id.sql",
+  "0082_judge_config_two_modes.sql",
+  "0083_clear_forged_member_operator.sql",
+  "0084_admin_revocation_tombstones.sql",
+  "0085_webauthn_challenge_consumed_at.sql",
+  "0086_wallet_sample_superseded_at.sql",
+  "0087_member_key_spoof_generation.sql",
+  "0088_webauthn_challenge_slots.sql",
+  "0089_revoke_runtime_delete.sql",
+  "0090_stream_events_retention_comment.sql",
+  "0091_rm_worker_wallet_evidence_insert.sql",
+  "0092_drop_swarm_judge_fault_injection.sql",
 ] as const;
 
 useCleanDatabase(import.meta.file);
@@ -131,16 +161,13 @@ const made: { name: string; db: Db }[] = [];
 let onDisk: string[] = [];
 let production: string[] = [];
 
-function urlFor(database: string): string {
-  const url = new URL(DB_URL!);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
+// The test's own DATABASE_URL role may not CREATE DATABASE (CI's is rm_app), so
+// the throw-away databases are made and used as the cluster admin.
 
 async function freshDatabase(label: string): Promise<Db> {
   const name = `tmp_mig_hist_${label}_${randomUUID().replace(/-/g, "").slice(0, 10)}`;
   await admin.unsafe(`CREATE DATABASE ${name}`);
-  const db = postgres(urlFor(name), { max: 1, onnotice: () => {} });
+  const db = postgres(adminUrl(name), { max: 1, onnotice: () => {} });
   made.push({ name, db });
   await db`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
   return db;
@@ -197,7 +224,7 @@ let fresh: Db;
 let appliedOnUpgrade: string[] = [];
 
 beforeAll(async () => {
-  admin = postgres(urlFor("postgres"), { max: 1, onnotice: () => {} });
+  admin = adminConnection("postgres");
   onDisk = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
   production = onDisk.filter((f) => (PRODUCTION_RECORDED as readonly string[]).includes(f));
 

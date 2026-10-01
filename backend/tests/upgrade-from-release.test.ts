@@ -631,7 +631,9 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
         model: string | null;
         stamped: boolean;
       }[];
-      expect(config).toEqual({ mode: "off", model: null, stamped: true });
+      // Switched off by 0056, then given the CI/driver model by 0063 and the
+      // bare wire id by 0081: off, but not model-less.
+      expect(config).toEqual({ mode: "off", model: "deepseek-v4-flash", stamped: true });
     });
 
     // ── Code at N against N+additive ──────────────────────────────────────
