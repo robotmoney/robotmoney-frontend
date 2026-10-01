@@ -55,6 +55,12 @@ const insertSchedule = registerQuery({
   site: "src/db/seed:seedJobSchedules.insert",
   purpose: "Insert each canonical schedule once, never overwriting the scheduler-managed columns of an existing row.",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO job_schedules (kind, cron, payload, timezone, enabled, catchup_policy)
+      VALUES ($1, $2, $3::jsonb, $4, $5, $6)
+      ON CONFLICT (kind, cron) DO NOTHING`,
+    params: ["probe.kind", "0 0 1 1 *", "{}", "UTC", true, "all"],
+  },
 });
 
 const disableProducerSchedules = registerQuery({
@@ -64,6 +70,10 @@ const disableProducerSchedules = registerQuery({
   site: "src/db/seed:seedJobSchedules.disableProducer",
   purpose: "Disable the retired consumer-DB regime/research schedules an older deployment left enabled.",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `UPDATE job_schedules SET enabled = false
+     WHERE kind IN ('regime.classify', 'research.refresh') AND enabled`,
+  },
 });
 
 const deadLetterProducerJobs = registerQuery({
@@ -73,6 +83,13 @@ const deadLetterProducerJobs = registerQuery({
   site: "src/db/seed:seedJobSchedules.deadLetterProducer",
   purpose: "Dead-letter pending or running regime/research jobs the independent producer now owns.",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `UPDATE jobs
+       SET status = 'dead', locked_at = NULL, locked_by = NULL,
+           last_error = 'retired consumer job: independent analytics-producer owns this execution',
+           updated_at = now()
+     WHERE kind IN ('regime.classify', 'research.refresh') AND status IN ('pending', 'running')`,
+  },
 });
 
 const deleteAnalyticsRunSchedule = registerQuery({
@@ -82,6 +99,9 @@ const deleteAnalyticsRunSchedule = registerQuery({
   site: "src/db/seed:seedJobSchedules.deleteAnalyticsRun",
   purpose: "Delete the retired combined analytics.run schedule rows (issue #107).",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `DELETE FROM job_schedules WHERE kind = 'analytics.run'`,
+  },
 });
 
 const deadLetterAnalyticsRunJobs = registerQuery({
@@ -91,6 +111,14 @@ const deadLetterAnalyticsRunJobs = registerQuery({
   site: "src/db/seed:seedJobSchedules.deadLetterAnalyticsRun",
   purpose: "Dead-letter not-yet-terminal jobs of the retired analytics.run kind (issue #107).",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `UPDATE jobs
+       SET status = 'dead',
+           locked_at = NULL, locked_by = NULL,
+           last_error = 'retired kind: analytics.run was split into regime.classify + research.refresh (issue #107)',
+           updated_at = now()
+     WHERE kind = 'analytics.run' AND status IN ('pending', 'running')`,
+  },
 });
 
 const deleteHourlyRepairSchedule = registerQuery({
@@ -100,6 +128,9 @@ const deleteHourlyRepairSchedule = registerQuery({
   site: "src/db/seed:seedJobSchedules.deleteHourlyRepair",
   purpose: "Delete the superseded hourly ops.repair_gaps row so exactly one repair cadence remains.",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `DELETE FROM job_schedules WHERE kind = 'ops.repair_gaps' AND cron = '25 * * * *'`,
+  },
 });
 
 const insertSmokeSchedule = registerQuery({
@@ -109,6 +140,12 @@ const insertSmokeSchedule = registerQuery({
   site: "src/db/seed:seedSmokeJobSchedules.insert",
   purpose: "Insert the smoke's quota-safe schedule rows once, idempotently.",
   callers: SMOKE_CALLERS,
+  probe: {
+    statement: `INSERT INTO job_schedules (kind, cron, payload, timezone, enabled)
+      VALUES ($1, $2, $3::jsonb, $4, $5)
+      ON CONFLICT (kind, cron) DO NOTHING`,
+    params: ["probe.kind", "0 0 1 1 *", "{}", "UTC", true],
+  },
 });
 
 const disableSmokeSchedule = registerQuery({
@@ -118,6 +155,11 @@ const disableSmokeSchedule = registerQuery({
   site: "src/db/seed:seedSmokeJobSchedules.disable",
   purpose: "Disable the per-minute samplers, the superseded fast rows and coverage recompute on a smoke database.",
   callers: SMOKE_CALLERS,
+  probe: {
+    statement: `UPDATE job_schedules SET enabled = false
+       WHERE kind = $1 AND cron = $2 AND enabled`,
+    params: ["probe.kind", "0 0 1 1 *"],
+  },
 });
 
 const enqueueColdStart = registerQuery({
@@ -127,6 +169,12 @@ const enqueueColdStart = registerQuery({
   site: "src/db/seed:seed.coldStart",
   purpose: "Enqueue one cold-start job per sampler and the gap repair, at most once per database via a constant dedupe_key.",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO jobs (kind, payload, dedupe_key)
+      VALUES ($1, $2::jsonb, $3)
+      ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+    params: ["probe.cold_start", "{}", "probe.cold_start:coldstart"],
+  },
 });
 
 const insertWalletHistorySeed = registerQuery({
@@ -136,6 +184,14 @@ const insertWalletHistorySeed = registerQuery({
   site: "src/db/seed:backfillWalletHistory",
   purpose: "Insert the pre-launch prop-wallet history, provenance 'seed', never clobbering a live sample.",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO wallet_balance_samples
+        (sample_date, symbol, amount, price_usd, value_usd, provenance)
+      VALUES
+        ($1, $2, NULL, NULL, $3, 'seed')
+      ON CONFLICT (sample_date, symbol) DO NOTHING`,
+    params: ["2019-03-01", "PROBE", 1],
+  },
 });
 
 const insertAllocationFramework = registerQuery({
@@ -145,6 +201,12 @@ const insertAllocationFramework = registerQuery({
   site: "src/db/seed:seed.allocationFramework",
   purpose: "Fill the single allocation_framework row on an empty table, never overwriting an admin rewrite.",
   callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO allocation_framework (id, asof, vault_contract, buckets)
+    VALUES (1, $1, $2, $3::jsonb)
+    ON CONFLICT (id) DO NOTHING`,
+    params: ["2026-01-01", "0x0000000000000000000000000000000000000000", "[]"],
+  },
 });
 
 const insertDemoSubject = registerQuery({
