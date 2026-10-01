@@ -189,7 +189,7 @@ describe("the deposit page and the skills index", () => {
     for (const id of ["how-it-works", "capabilities", "mechanics", "contracts", "about"]) {
       expect(deposit, id).toContain(`id="${id}"`);
     }
-    expect(deposit).toContain("npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli");
+    expect(deposit).toContain("npx skills add robotmoney/robotmoney-skills-v0 --skill robotmoney-cli");
   });
 
   test("/skills lists each skill with its way in", () => {

@@ -112,7 +112,7 @@ const META = {
   // which is now the index of every Robot Money agent skill.
   "/deposit": {
     title: "Deposit USDC with Your Agent | Robot Money",
-    description: "Deposit USDC into Robot Money from any AI agent with one skill: 95% into Fixed Income (rmUSDC) on Base, 5% into seven Small Cap Tokens. Withdraw anytime, minus a 0.25% exit fee.",
+    description: "Deposit USDC into Robot Money with your AI agent and one skill: what a deposit buys across four sleeves, the tokens you receive, TVL, risks and contracts.",
   },
   "/skills": {
     title: "Agent Skills | Robot Money",
