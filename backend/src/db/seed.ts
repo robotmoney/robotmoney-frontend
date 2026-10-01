@@ -51,7 +51,7 @@ const SMOKE_CALLERS = ["src/db/seed", "scripts/smoke-prepare"];
 const insertSchedule = registerQuery({
   role: "rm_owner",
   object: "job_schedules",
-  privileges: ["INSERT"],
+  privileges: ["INSERT", "SELECT"],
   site: "src/db/seed:seedJobSchedules.insert",
   purpose: "Insert each canonical schedule once, never overwriting the scheduler-managed columns of an existing row.",
   callers: SEED_CALLERS,
@@ -105,7 +105,7 @@ const deleteHourlyRepairSchedule = registerQuery({
 const insertSmokeSchedule = registerQuery({
   role: "rm_owner",
   object: "job_schedules",
-  privileges: ["INSERT"],
+  privileges: ["INSERT", "SELECT"],
   site: "src/db/seed:seedSmokeJobSchedules.insert",
   purpose: "Insert the smoke's quota-safe schedule rows once, idempotently.",
   callers: SMOKE_CALLERS,
@@ -123,7 +123,7 @@ const disableSmokeSchedule = registerQuery({
 const enqueueColdStart = registerQuery({
   role: "rm_owner",
   object: "jobs",
-  privileges: ["INSERT"],
+  privileges: ["INSERT", "SELECT"],
   site: "src/db/seed:seed.coldStart",
   purpose: "Enqueue one cold-start job per sampler and the gap repair, at most once per database via a constant dedupe_key.",
   callers: SEED_CALLERS,
@@ -132,7 +132,7 @@ const enqueueColdStart = registerQuery({
 const insertWalletHistorySeed = registerQuery({
   role: "rm_owner",
   object: "wallet_balance_samples",
-  privileges: ["INSERT"],
+  privileges: ["INSERT", "SELECT"],
   site: "src/db/seed:backfillWalletHistory",
   purpose: "Insert the pre-launch prop-wallet history, provenance 'seed', never clobbering a live sample.",
   callers: SEED_CALLERS,
@@ -141,7 +141,7 @@ const insertWalletHistorySeed = registerQuery({
 const insertAllocationFramework = registerQuery({
   role: "rm_owner",
   object: "allocation_framework",
-  privileges: ["INSERT"],
+  privileges: ["INSERT", "SELECT"],
   site: "src/db/seed:seed.allocationFramework",
   purpose: "Fill the single allocation_framework row on an empty table, never overwriting an admin rewrite.",
   callers: SEED_CALLERS,
@@ -390,6 +390,15 @@ export async function seedJobSchedules(db: RegistryDb = sql): Promise<void> {
   await on(db, deleteHourlyRepairSchedule)`DELETE FROM job_schedules WHERE kind = 'ops.repair_gaps' AND cron = '25 * * * *'`;
 }
 
+/** The jobs enqueued once per database at seed, each under the dedupe_key `<kind>:coldstart`. */
+const COLD_START_KINDS = [
+  "wallet.sample_balances",
+  "wallet.sample_sleeves",
+  "vault.sample_adapters",
+  "vault.sample_share_price",
+  "ops.repair_gaps",
+] as const;
+
 /** Apply the smoke's quota-safe schedule changes explicitly and idempotently. */
 export async function seedSmokeJobSchedules(db: RegistryDb = sql): Promise<void> {
   for (const s of [...FAST_DEMO_SCHEDULES, ...SLOW_DEMO_SAMPLER_SCHEDULES]) {
@@ -400,24 +409,25 @@ export async function seedSmokeJobSchedules(db: RegistryDb = sql): Promise<void>
     `;
   }
 
-  await on(db, disableSmokeSchedule)`
-    UPDATE job_schedules SET enabled = false
-     WHERE kind IN ('wallet.sample_balances', 'wallet.sample_sleeves') AND cron = '* * * * *' AND enabled
-  `;
+  const disable = async (rows: readonly { kind: string; cron: string }[]): Promise<void> => {
+    for (const s of rows) {
+      await on(db, disableSmokeSchedule)`
+        UPDATE job_schedules SET enabled = false
+         WHERE kind = ${s.kind} AND cron = ${s.cron} AND enabled
+      `;
+    }
+  };
+
+  await disable([
+    { kind: "wallet.sample_balances", cron: "* * * * *" },
+    { kind: "wallet.sample_sleeves", cron: "* * * * *" },
+  ]);
   console.log("smoke schedules: disabled per-minute wallet samplers (hourly cadence owns sampling)");
 
-  for (const s of SUPERSEDED_FAST_DEMO_SCHEDULES) {
-    await on(db, disableSmokeSchedule)`
-      UPDATE job_schedules SET enabled = false
-       WHERE kind = ${s.kind} AND cron = ${s.cron} AND enabled
-    `;
-  }
+  await disable(SUPERSEDED_FAST_DEMO_SCHEDULES);
   console.log("smoke schedules: confirmed retired consumer analytics schedules disabled");
 
-  await on(db, disableSmokeSchedule)`
-    UPDATE job_schedules SET enabled = false
-     WHERE kind = 'projects.recompute_coverage' AND cron = '0 3 * * *' AND enabled
-  `;
+  await disable([{ kind: "projects.recompute_coverage", cron: "0 3 * * *" }]);
   console.log("smoke schedules: disabled projects.recompute_coverage (curated scores are preserved)");
 }
 
@@ -452,27 +462,7 @@ export async function seed(db: RegistryDb = sql): Promise<void> {
   // guarantees the sampler issues at least one real aggregate3 eth_call within
   // seconds of boot, rather than waiting on the cron. ON CONFLICT mirrors the
   // scheduler's partial unique index on dedupe_key.
-  await on(db, enqueueColdStart)`
-    INSERT INTO jobs (kind, payload, dedupe_key)
-    VALUES ('wallet.sample_balances', ${db.json(jsonValue({}))}, 'wallet.sample_balances:coldstart')
-    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-  `;
-  await on(db, enqueueColdStart)`
-    INSERT INTO jobs (kind, payload, dedupe_key)
-    VALUES ('wallet.sample_sleeves', ${db.json(jsonValue({}))}, 'wallet.sample_sleeves:coldstart')
-    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-  `;
-  await on(db, enqueueColdStart)`
-    INSERT INTO jobs (kind, payload, dedupe_key)
-    VALUES ('vault.sample_adapters', ${db.json(jsonValue({}))}, 'vault.sample_adapters:coldstart')
-    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-  `;
-  await on(db, enqueueColdStart)`
-    INSERT INTO jobs (kind, payload, dedupe_key)
-    VALUES ('vault.sample_share_price', ${db.json(jsonValue({}))}, 'vault.sample_share_price:coldstart')
-    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-  `;
-  // Cold start for the gap repair, same mechanism and same reason — but the wait
+  // The last kind, the gap repair, is a cold start for the gap repair, same mechanism and same reason — but the wait
   // it removes is longer. ops.repair_gaps runs at `*/5 * * * *`, and
   // worker/scheduler.ts seeds a brand-new schedule's next_run_at to the next
   // FUTURE occurrence, so a fresh boot does no repair work for up to five
@@ -484,11 +474,15 @@ export async function seed(db: RegistryDb = sql): Promise<void> {
   // than double work: the dispatcher declines while a window job is in flight
   // (worker/handlers/repair.ts), and a CONSTANT dedupe_key fires this at most
   // once per database.
-  await on(db, enqueueColdStart)`
-    INSERT INTO jobs (kind, payload, dedupe_key)
-    VALUES ('ops.repair_gaps', ${db.json(jsonValue({}))}, 'ops.repair_gaps:coldstart')
-    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-  `;
+  // One statement for every kind (the registry holds one statement per site):
+  // the four samplers first, then the gap repair.
+  for (const kind of COLD_START_KINDS) {
+    await on(db, enqueueColdStart)`
+      INSERT INTO jobs (kind, payload, dedupe_key)
+      VALUES (${kind}, ${db.json(jsonValue({}))}, ${`${kind}:coldstart`})
+      ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+    `;
+  }
   console.log("enqueued cold-start sampler jobs (idempotent on dedupe_key)");
 
   // One-time prop-wallet history backfill (issue #84): seed the pre-launch
