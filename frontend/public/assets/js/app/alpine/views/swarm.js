@@ -86,6 +86,11 @@ const ROW_BLURBS = {
 };
 const rowBlurb = (p) => ROW_BLURBS[String(p?.name || "").trim()] || p?.thesisBlurb || "";
 
+/** The instant a session is shown as happening: when it opened, else when it published, else its row date. */
+function whenOf(s) {
+  return s?.openedAt || s?.publishedAt || s?.date || "";
+}
+
 export function registerSwarmView(Alpine) {
   // ── Investment Swarm ──────────────────────────────────────────────────
   Alpine.data("swarmView", () => ({
@@ -197,8 +202,8 @@ export function registerSwarmView(Alpine) {
       }));
       // Two subjects can convene on one date; the later one leads, as each row
       // prints its time.
-      return rows.filter(Boolean).sort((a, b) => String(b.date).localeCompare(String(a.date))
-        || String(b.generatedAt || b.publishedAt || "").localeCompare(String(a.generatedAt || a.publishedAt || "")));
+      return rows.filter(Boolean).sort((a, b) => String(whenOf(b)).localeCompare(String(whenOf(a)))
+        || String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
     },
     async loadSubjects() {
       const ids = [...new Set(this.sessions.map((s) => s.subjectId).filter(Boolean))];
@@ -266,7 +271,7 @@ export function registerSwarmView(Alpine) {
     allocTakeRows: [],
     facts() {
       const published = this.publishedSessions();
-      const latest = published.reduce((acc, s) => (!acc || String(s.date) > String(acc) ? s.date : acc), null);
+      const latest = published.reduce((acc, s) => (!acc || String(whenOf(s)) > String(acc) ? whenOf(s) : acc), null);
       // Members who file takes: a judge sits on the roster and files none.
       const rows = [
         { k: "Members", v: String(analystCount(this.members)) },
@@ -422,7 +427,7 @@ export function registerSwarmView(Alpine) {
     allocationMeta() {
       const rows = this.allocationSessions();
       if (!rows.length) return "";
-      const latest = rows.reduce((acc, s) => (String(s.date) > String(acc) ? s.date : acc), rows[0].date);
+      const latest = rows.reduce((acc, s) => (String(whenOf(s)) > String(acc) ? whenOf(s) : acc), whenOf(rows[0]));
       const noun = rows.length === 1 ? "session" : "sessions";
       return `${rows.length} ${noun} · latest ${this.formatDate(latest)}`;
     },
@@ -741,6 +746,10 @@ export function registerSwarmView(Alpine) {
     stanceColor(s) { return stanceColor(s); },
     stanceClass(s) { return stanceClass(s); },
     stanceStyle(s) { return stanceStyle(s); },
+    // The moment a session is shown as happening. A session's `date` is the day its row was
+    // created (convened_at), which can be days before its brief went out, so a session is shown on
+    // the day it opened (`openedAt`). `date` still names the session: it is in the URL and in what members sign.
+    whenOf(s) { return whenOf(s); },
     formatDate(value, style = "short") {
       const date = String(value || "").includes("T") ? new Date(value) : new Date(`${value}T00:00:00Z`);
       const opts = style === "long"

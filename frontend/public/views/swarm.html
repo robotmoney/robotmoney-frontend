@@ -125,9 +125,9 @@
                ring keeps the weights that stand, and the newest is named. -->
           <template x-if="allocHeldBy() && mixOf(allocShown()).length">
             <div class="rr-meta rr-meta--lead">
-              <span class="rr-meta__i">Latest session <b><a class="rr-lnk" :href="sessionHref(allocHeldBy())" x-text="formatDate(allocHeldBy().date)"></a></b></span>
+              <span class="rr-meta__i">Latest session <b><a class="rr-lnk" :href="sessionHref(allocHeldBy())" x-text="formatDate(whenOf(allocHeldBy()))"></a></b></span>
               <span class="rr-meta__i">Recommendation <b>Target held</b></span>
-              <span class="rr-meta__i">Since <b x-text="formatDate(allocShown().date)"></b></span>
+              <span class="rr-meta__i">Since <b x-text="formatDate(whenOf(allocShown()))"></b></span>
             </div>
           </template>
           <template x-if="allocShown() && mixOf(allocShown()).length">
@@ -228,7 +228,7 @@
                   </p>
                 </template>
                 <a class="rr-cta" :href="sessionHref(allocShown())">
-                  <span x-text="`Read the ${formatDate(allocShown().date)} session`"></span><span aria-hidden="true">→</span>
+                  <span x-text="`Read the ${formatDate(whenOf(allocShown()))} session`"></span><span aria-hidden="true">→</span>
                 </a>
               </div>
             </div>
@@ -237,7 +237,7 @@
           <template x-if="!allocShown() || !mixOf(allocShown()).length">
             <figure class="rr-ring rr-ring--empty">
               <svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--color-border)" stroke-width="4"></circle></svg>
-              <figcaption><span class="rr-empty__t" x-text="allocShown() ? `No weights published · ${formatDate(allocShown().date)}` : 'No recommendation yet'"></span></figcaption>
+              <figcaption><span class="rr-empty__t" x-text="allocShown() ? `No weights published · ${formatDate(whenOf(allocShown()))}` : 'No recommendation yet'"></span></figcaption>
             </figure>
           </template>
         </section>
@@ -319,7 +319,7 @@
                 <template x-for="s in visibleSessions()" :key="s.id">
                   <tr>
                     <th scope="row">
-                      <a class="rr-lnk" :href="sessionHref(s)" x-text="formatDate(s.date, 'short')"></a>
+                      <a class="rr-lnk" :href="sessionHref(s)" x-text="formatDate(whenOf(s), 'short')"></a>
                       <small x-text="[rowTime(s), takesOf(s)].filter(Boolean).join(' · ')"></small>
                     </th>
                     <td class="rr-hist__subj" x-show="!subjectFilter"><a class="rr-lnk" :href="`/swarm/subjects/${encodeURIComponent(s.subjectId || '')}`" x-text="sessionSubjectName(s)"></a></td>
