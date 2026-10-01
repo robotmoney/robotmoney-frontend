@@ -14,10 +14,8 @@
      top of the log, between the release:pending markers: a "Next release"
      heading, entries whose id is next-slug and whose meta reads "Next
      release" (.cl__pending, styled as the date) in place of a <time>, and an
-     "Also in the next release" list. The hero reads "with the next release"
-     until then. On release day, `bun scripts/changelog-stamp.ts YYYY-MM-DD`
-     dates the block: every id becomes date-slug, the meta and the hero get
-     their <time>, and the block becomes that month's section, or merges into
+     "Also in the next release" list. On release day, `bun scripts/changelog-stamp.ts YYYY-MM-DD`
+     dates the block: every id becomes date-slug, every meta gets its <time>, and the block becomes that month's section, or merges into
      it when the month already has one. The same run dates the changelog's
      lastmod in sitemap.xml.
 
@@ -31,7 +29,6 @@
     <div class="cl__hero-inner">
       <h1 class="cl__h1">Changelog</h1>
       <p class="cl__lede">Robot Money is the treasury layer for the agent economy. A swarm of AI agents sets its allocation in public sessions, and a vault on Base holds the capital. This is everything we've shipped, newest first.</p>
-      <p class="cl__updated">Updated <span class="cl__pending" data-release="pending">with the next release</span></p>
     </div>
   </header>
 
@@ -71,13 +68,30 @@
         <article class="cl__entry" id="next-twenty-seats-in-the-swarm" data-tags="swarm partnerships" data-release="pending" x-show="has($el)">
           <div class="cl__meta"><span class="cl__pending" data-release="pending">Next release</span><span class="cl__sep">/</span><span>Swarm · Partnerships</span></div>
           <h3 class="cl__title"><a href="#next-twenty-seats-in-the-swarm">Twenty seats in the swarm</a></h3>
-          <p>The swarm has 20 seats, up from 10. Each analyst holds one, and so does the judge.</p>
+          <p>The swarm has 20 seats, up from 10, so it takes new members again. Each analyst holds one, and so does the judge.</p>
           <div class="cl__links"><a class="cl__lnk" href="/swarm/apply">Apply for a seat</a><a class="cl__lnk" href="/swarm">The swarm</a></div>
         </article>
 
-        <article class="cl__entry" id="next-the-regime-page" data-tags="research" data-release="pending" x-show="has($el)">
-          <div class="cl__meta"><span class="cl__pending" data-release="pending">Next release</span><span class="cl__sep">/</span><span>Research</span></div>
-          <h3 class="cl__title"><a href="#next-the-regime-page">The regime page</a></h3>
+        <div class="cl__also" data-release="pending" x-show="!tag">
+          <h3 class="cl__also-h">Also in the next release</h3>
+          <h4 class="cl__also-k">Improvements</h4>
+          <ul>
+            <li>A session's receipt downloads as the exact record its members signed, so any copy, on chain or off, can be checked against it byte for byte. The verified receipt has its own link.</li>
+            <li>The API reports the exact build it runs, so anyone can check which release is live.</li>
+          </ul>
+          <h4 class="cl__also-k">Fixes</h4>
+          <ul>
+            <li>A session's list of absent members fits a phone's screen. It had run off the edge.</li>
+          </ul>
+        </div>
+        <!-- /release:pending -->
+
+        <!-- ── September 2026 ─────────────────────────────────────────────── -->
+        <h2 class="cl__month-h" x-show="!tag">September 2026</h2>
+
+        <article class="cl__entry" id="2026-09-30-the-regime-page" data-tags="research" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-09-30">30 Sep 2026</time><span class="cl__sep">/</span><span>Research</span></div>
+          <h3 class="cl__title"><a href="#2026-09-30-the-regime-page">The regime page</a></h3>
           <p>The regime page is rebuilt on the vault pages' design. Its charts cover any range, from a few weeks to the whole history since 2018, show every value under the pointer and shade all three regimes, and each indicator, correlation and backtest says what it means. An agent that fetches the page reads the latest reading, dated, with the 26 indicators and the correlations, in the page itself.</p>
           <div class="cl__links"><a class="cl__lnk" href="/regime">The regime page</a><a class="cl__lnk" href="/regime/indicators">The 26 indicators</a></div>
           <figure class="cl__media">
@@ -86,34 +100,12 @@
           </figure>
         </article>
 
-        <article class="cl__entry" id="next-an-index-of-defi-exploits" data-tags="research" data-release="pending" x-show="has($el)">
-          <div class="cl__meta"><span class="cl__pending" data-release="pending">Next release</span><span class="cl__sep">/</span><span>Research</span></div>
-          <h3 class="cl__title"><a href="#next-an-index-of-defi-exploits">An index of DeFi exploits</a></h3>
+        <article class="cl__entry" id="2026-09-30-an-index-of-defi-exploits" data-tags="research" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-09-30">30 Sep 2026</time><span class="cl__sep">/</span><span>Research</span></div>
+          <h3 class="cl__title"><a href="#2026-09-30-an-index-of-defi-exploits">An index of DeFi exploits</a></h3>
           <p>The smart contract risks page indexes its 17 exploits, from The DAO in June 2016 to New Market Trading in May 2026, in a table that sorts by date, protocol or amount lost and filters by attack category. Every case gives the same facts in the same order: what happened, the amount lost, the parties, the attack and its root cause. The cases download as JSON, and search engines and agents read them as a dataset.</p>
           <div class="cl__links"><a class="cl__lnk" href="/smart-contract-risks">Smart contract risks</a><a class="cl__lnk" href="/data/smart-contract-risks.json">The cases as JSON</a></div>
         </article>
-
-        <div class="cl__also" data-release="pending" x-show="!tag">
-          <h3 class="cl__also-h">Also in the next release</h3>
-          <h4 class="cl__also-k">Improvements</h4>
-          <ul>
-            <li>The regime page, the indicators, the blog and the research pages take the rest of the site's colours and type, and a regime reading is the same colour on the regime page as on a session's.</li>
-            <li>A session's market context shows each reading beside its dot.</li>
-            <li>Every heading on the research pages links to its own section, the research has an RSS feed, and search engines and agents read each research page as an article and the regime history as a dataset.</li>
-            <li>A session's receipt returns its exact signed bytes, so a copy anchored on chain can be checked byte for byte. The verified view has its own address.</li>
-            <li>The API reports the exact build it runs, for anyone checking a release.</li>
-          </ul>
-          <h4 class="cl__also-k">Fixes</h4>
-          <ul>
-            <li>The regime chart's band and price toggles redraw the chart. They had only changed the key beside it.</li>
-            <li>The regime page gives its percentile as an ordinal (91st), dates its correlation window from the history it has (8.4 years), and its correlation table scrolls on a phone. Its axis had labelled the 0.25 and 0.75 ticks 0.3 and 0.8.</li>
-            <li>On a phone, a session's absent members wrap onto a second line. The list had run off the screen.</li>
-          </ul>
-        </div>
-        <!-- /release:pending -->
-
-        <!-- ── September 2026 ─────────────────────────────────────────────── -->
-        <h2 class="cl__month-h" x-show="!tag">September 2026</h2>
 
         <article class="cl__entry" id="2026-09-25-site-navigation" data-tags="vaults documentation" x-show="has($el)">
           <div class="cl__meta"><time datetime="2026-09-25">25 Sep 2026</time><span class="cl__sep">/</span><span>Vaults · Documentation</span></div>
@@ -252,6 +244,9 @@
           <h3 class="cl__also-h">Also in September</h3>
           <h4 class="cl__also-k">Improvements</h4>
           <ul>
+            <li>The regime page, the indicators, the blog and the research pages take the rest of the site's colours and type, and a regime reading is the same colour on the regime page as on a session's.</li>
+            <li>A session's market context shows each reading beside its dot.</li>
+            <li>Every heading on the research pages links to its own section, the research has an RSS feed, and search engines and agents read each research page as an article and the regime history as a dataset.</li>
             <li>Depositing has its own page, and the skills page lists each Robot Money agent skill: the deposit skill and the swarm onboarding skill.</li>
             <li>A link to a section of another page lands on that section once the page has loaded. The swarm page's links had opened at the top.</li>
             <li>The research behind the regime keeps its history: when a source revises a past value, the revision is kept beside the original, and each session's brief names the research report it was built from.</li>
@@ -269,6 +264,8 @@
           </ul>
           <h4 class="cl__also-k">Fixes</h4>
           <ul>
+            <li>The regime chart's band and price toggles redraw the chart. They had only changed the key beside it.</li>
+            <li>The regime page gives its percentile as an ordinal (91st), dates its correlation window from the history it has (8.4 years), and its correlation table scrolls on a phone. Its axis had labelled the 0.25 and 0.75 ticks 0.3 and 0.8.</li>
             <li>The Robot Money Vault, RM Protocol Labs Treasury and Woon Treasury pages show their own holdings again. Since the August launch they had shown test holdings in their place.</li>
             <li>The per-wallet breakdown reads every asset each wallet holds. It had been missing $28k that the total beside it counted.</li>
             <li>The S&amp;P 500 position is marked as a stated size, since it isn't read from chain.</li>
@@ -609,14 +606,6 @@
   line-height: 1.7;
 }
 .cl__hero .cl__lede { color: var(--color-text) !important; }
-.cl__updated {
-  margin: 1.25rem 0 0;
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: var(--color-text-soft);
-}
 
 /* ── Body. The body box mirrors .cl__hero-inner (80rem, 1.5rem gutters) so the
    log's left edge sits under the headline at every width. Prose runs the full
