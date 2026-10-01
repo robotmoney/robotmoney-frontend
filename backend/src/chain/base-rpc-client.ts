@@ -579,6 +579,13 @@ async function backoffOrGiveUp(waitMs: number, deadline: number, method: string,
   await sleep(waitMs);
 }
 
+/** A non-2xx answer the transport did not retry (or ran out of retries for). The message is the one callers have always seen. */
+export class BaseRpcHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`Base RPC HTTP ${status}`);
+    this.name = "BaseRpcHttpError";
+  }
+}
 
 // The SINGLE JSON-RPC transport for every Base read in the app. Throws on
 // transport failure, a non-2xx HTTP status (after exhausting bounded retries on
@@ -668,7 +675,7 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
       }
       // Exhausted / non-transient: THROW so the caller degrades to stale. Never
       // fabricate, never report live off a dead endpoint.
-      throw new Error(`Base RPC HTTP ${res.status}`);
+      throw new BaseRpcHttpError(res.status);
     }
   }
 }

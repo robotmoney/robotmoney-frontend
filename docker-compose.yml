@@ -515,6 +515,9 @@ services:
       ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
       # This process performs HTTP extraction but never token-price lookup.
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+      # The paid CoinGecko key (issue #1062). The producer's GeckoTerminal new_pools sweep sends it to the Pro host as
+      # x-cg-pro-api-key; blank keeps the keyless 10-a-minute host. The source ledger redacts the header.
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
       PRODUCER_REGIME_CRON: ${PRODUCER_REGIME_CRON:-30 22 * * *}
       PRODUCER_RESEARCH_CRON: ${PRODUCER_RESEARCH_CRON:-0 23 * * *}
     secrets:
