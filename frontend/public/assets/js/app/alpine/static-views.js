@@ -3493,7 +3493,7 @@ export function registerStaticViews(Alpine) {
     syncTitle(routeAtEntry) {
       const name = this.subjectTitle();
       if (!name || !this.session?.date || location.pathname !== routeAtEntry) return;
-      document.title = `${name}, ${this.formatDate(this.session.date, "short")}: Robot Money Investment Swarm`;
+      document.title = `${name}, ${this.formatDate((this.session.openedAt || this.session.publishedAt || this.session.date), "short")}: Robot Money Investment Swarm`;
     },
     // The session in the shape the shared review band reads (lib/
     // session-summary.js): the record, with its takes on it as `takeRows`.
@@ -4083,7 +4083,7 @@ export function registerStaticViews(Alpine) {
     // The time of day matters once a subject convenes more than once a day.
     sessionTime() {
       // When it convened, the moment the date beside it names (rowTime).
-      const at = this.session?.generatedAt || this.session?.publishedAt;
+      const at = this.session?.openedAt || this.session?.generatedAt || this.session?.publishedAt;
       if (this.source !== "api" || !at || !Number.isFinite(Date.parse(at))) return "";
       return `${new Date(at).toISOString().slice(11, 16)} UTC`;
     },

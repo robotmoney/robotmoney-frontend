@@ -400,6 +400,8 @@ export interface SwarmSession {
   // never sets it.
   state: "scheduled" | "collecting" | "window_closed" | "aggregated" | "judged" | "published" | "cancelled";
   windowClosesAt: string | null;
+  /** When the brief went out and the window began; null until then. `date` and `generatedAt` are when the row was created, which can be days earlier. */
+  openedAt: string | null;
   publishedAt: string | null;
   regimeSummary: RegimeSummary | null;
   subjectSnapshotTotalValueUsd: number | null;
@@ -431,6 +433,8 @@ export interface SwarmSessionListItem {
   subjectName: string | null;
   state: SwarmSession["state"];
   windowClosesAt: string | null;
+  /** When the brief went out and the window began; null until then. `date` and `generatedAt` are when the row was created, which can be days earlier. */
+  openedAt: string | null;
   publishedAt: string | null;
   regimeSummary: RegimeSummaryListItem | null;
   synthesis: string | null;

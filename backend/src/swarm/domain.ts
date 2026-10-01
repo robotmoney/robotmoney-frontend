@@ -698,8 +698,10 @@ export async function getNextSwarmSession(): Promise<{ sessionId: string; subjec
   return row ? { sessionId: String(row.id), subjectId: row.subject_id, at: instant(row.window_closes_at)! } : null;
 }
 
+const SESSIONS_FULL_PROBE = { statement: `SELECT *, (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = swarm_sessions.id) AS opened_at FROM swarm_sessions ORDER BY date DESC, generated_at DESC, id DESC` } as const;
 const SESSIONS_PAGE_PROBE = {
   statement: `SELECT *, generated_at::text AS cursor_generated_at,
+      (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = swarm_sessions.id) AS opened_at,
       (SELECT count(*)::int FROM swarm_recommendations r WHERE r.session_id = swarm_sessions.id AND r.final) AS take_count,
       (SELECT b.body->'allocation' FROM swarm_briefs b WHERE b.session_id = swarm_sessions.id) AS reference_allocation
     FROM swarm_sessions
@@ -718,7 +720,16 @@ const sessionsFull = registerQuery({
   site: "src/swarm/domain:listSessions.full",
   purpose: "Read every session with its full payload, for the admin views that still need every field.",
   callers: [SWARM_ROUTE, ADMIN_ROUTE],
-  probe: { statement: "SELECT * FROM swarm_sessions ORDER BY date DESC, generated_at DESC, id DESC" },
+  probe: SESSIONS_FULL_PROBE,
+});
+const sessionOpenedAt_listSessions_full = registerQuery({
+  role: "rm_app",
+  object: "swarm_brief_revisions",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:listSessions.full.openedAt",
+  purpose: "Read when the session really opened: the instant of its first brief revision (#1057).",
+  callers: [SWARM_ROUTE],
+  probe: SESSIONS_FULL_PROBE,
 });
 const sessionsPage = registerQuery({
   role: "rm_app",
@@ -747,6 +758,24 @@ const sessionsPageBriefs = registerQuery({
   callers: [SWARM_ROUTE],
   probe: SESSIONS_PAGE_PROBE,
 });
+// When a session REALLY opened: its first brief revision, the moment the brief
+// went out and the window began. `convened_at` (and so `date` and
+// `generated_at`) is when the row was created in `scheduled`, which can be days
+// earlier when a session waits for its brief (2026-09-28: four rows created at
+// 00:11 to 00:40 UTC were briefed on 09-29 and 09-30). No column holds it; the
+// append-only revisions already record it. Null until the brief publishes.
+// Each session read below writes the subquery out (a statement is one piece of
+// text) and declares the read it makes with an `openedAt` registration whose
+// probe is that same statement (#1057).
+const sessionOpenedAt_listSessions_page = registerQuery({
+  role: "rm_app",
+  object: "swarm_brief_revisions",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:listSessions.page.openedAt",
+  purpose: "Read when the session really opened: the instant of its first brief revision (#1057).",
+  callers: [SWARM_ROUTE],
+  probe: SESSIONS_PAGE_PROBE,
+});
 export async function listSessions(opts: ListSessionsOptions = {}) {
   const nextSessionAt = await getNextSwarmSessionAt();
   const search = opts.search?.trim() ?? "";
@@ -755,7 +784,7 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   if (opts.full && (opts.subject || search)) throw new Error("subject and search page the light index; drop full=1");
   if (search.length > SESSIONS_SEARCH_MAX_LENGTH) throw new Error(`search must be at most ${SESSIONS_SEARCH_MAX_LENGTH} characters`);
   if (opts.full) {
-    const rows = await on(sql, sessionsFull)<any>`SELECT * FROM swarm_sessions ORDER BY date DESC, generated_at DESC, id DESC`;
+    const rows = await on(sql, sessionsFull, sessionOpenedAt_listSessions_full)<any>`SELECT *, (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = swarm_sessions.id) AS opened_at FROM swarm_sessions ORDER BY date DESC, generated_at DESC, id DESC`;
     return { sessions: rows.map(toSession), nextCursor: null as string | null, nextSessionAt };
   }
 
@@ -781,8 +810,9 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   // (issue #991): how many members filed (one final take per member, D51, not
   // revisions), and the target the session's own brief carried. Bounded by
   // LIMIT, so they run for at most one page of rows.
-  const rows = await on(sql, sessionsPage, sessionsPageTakes, sessionsPageBriefs)<any>`
+  const rows = await on(sql, sessionsPage, sessionsPageTakes, sessionsPageBriefs, sessionOpenedAt_listSessions_page)<any>`
     SELECT *, generated_at::text AS cursor_generated_at,
+      (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = swarm_sessions.id) AS opened_at,
       (SELECT count(*)::int FROM swarm_recommendations r WHERE r.session_id = swarm_sessions.id AND r.final) AS take_count,
       (SELECT b.body->'allocation' FROM swarm_briefs b WHERE b.session_id = swarm_sessions.id) AS reference_allocation
     FROM swarm_sessions
@@ -939,6 +969,12 @@ export async function getOpenSession() {
   return r[0] ? toSession(r[0]) : null;
 }
 
+const SESSION_BY_DATE_PROBE = {
+  statement: `SELECT *, (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = swarm_sessions.id) AS opened_at FROM swarm_sessions
+                       WHERE date = $1 AND subject_id = $2
+                       ORDER BY convened_at DESC LIMIT 1`,
+  params: ["2000-01-01", "probe"],
+} as const;
 const sessionByDate = registerQuery({
   role: "rm_app",
   object: "swarm_sessions",
@@ -946,12 +982,16 @@ const sessionByDate = registerQuery({
   site: "src/swarm/domain:getSession",
   purpose: "Resolve a (date, subject) to that day's latest session.",
   callers: [SWARM_ROUTE],
-  probe: {
-    statement: `SELECT * FROM swarm_sessions
-                       WHERE date = $1 AND subject_id = $2
-                       ORDER BY convened_at DESC LIMIT 1`,
-    params: ["2000-01-01", "probe"],
-  },
+  probe: SESSION_BY_DATE_PROBE,
+});
+const sessionOpenedAt_getSession = registerQuery({
+  role: "rm_app",
+  object: "swarm_brief_revisions",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:getSession.openedAt",
+  purpose: "Read when the session really opened: the instant of its first brief revision (#1057).",
+  callers: [SWARM_ROUTE],
+  probe: SESSION_BY_DATE_PROBE,
 });
 export async function getSession(
   date: string,
@@ -962,7 +1002,7 @@ export async function getSession(
   // session that day. That keeps every existing link and the frontend's
   // (date, subject) fetches working, and is the answer a reader wants: the most
   // recent word on that subject for that day.
-  const s = (await on(sql, sessionByDate)<any>`SELECT * FROM swarm_sessions
+  const s = (await on(sql, sessionByDate, sessionOpenedAt_getSession)<any>`SELECT *, (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = swarm_sessions.id) AS opened_at FROM swarm_sessions
                        WHERE date = ${date} AND subject_id = ${subjectId}
                        ORDER BY convened_at DESC LIMIT 1`)[0];
   if (!s) return null;
@@ -975,6 +1015,7 @@ export async function getSession(
  * multi-session day is unreachable through it; this is how a list row links to
  * the exact session it is describing.
  */
+const SESSION_BY_ID_PROBE = { statement: `SELECT *, (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = swarm_sessions.id) AS opened_at FROM swarm_sessions WHERE id = $1`, params: [SAMPLE_ID] } as const;
 const sessionById = registerQuery({
   role: "rm_app",
   object: "swarm_sessions",
@@ -982,7 +1023,16 @@ const sessionById = registerQuery({
   site: "src/swarm/domain:getSessionById",
   purpose: "Read one session by its own id.",
   callers: [SWARM_ROUTE],
-  probe: { statement: "SELECT * FROM swarm_sessions WHERE id = $1", params: [SAMPLE_ID] },
+  probe: SESSION_BY_ID_PROBE,
+});
+const sessionOpenedAt_getSessionById = registerQuery({
+  role: "rm_app",
+  object: "swarm_brief_revisions",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:getSessionById.openedAt",
+  purpose: "Read when the session really opened: the instant of its first brief revision (#1057).",
+  callers: [SWARM_ROUTE],
+  probe: SESSION_BY_ID_PROBE,
 });
 export async function getSessionById(
   id: string,
@@ -991,7 +1041,7 @@ export async function getSessionById(
   // rather than miss. Treat anything unparseable as simply not found — this is a
   // public GET and a 404 is the honest answer for "no session with that handle".
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
-  const s = (await on(sql, sessionById)<any>`SELECT * FROM swarm_sessions WHERE id = ${id}`)[0];
+  const s = (await on(sql, sessionById, sessionOpenedAt_getSessionById)<any>`SELECT *, (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = swarm_sessions.id) AS opened_at FROM swarm_sessions WHERE id = ${id}`)[0];
   if (!s) return null;
   return withTakes(s);
 }

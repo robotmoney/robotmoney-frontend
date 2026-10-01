@@ -82,6 +82,7 @@ export function toSession(row: Row): SwarmSession {
     subjectName: row.subject_name ?? null,
     state: row.state,
     windowClosesAt: instant(row.window_closes_at),
+    openedAt: instant(row.opened_at),
     publishedAt: instant(row.published_at),
     regimeSummary: row.regime_summary ?? null,
     subjectSnapshotTotalValueUsd: row.subject_snapshot_total_value_usd == null
@@ -136,6 +137,7 @@ export function toSessionListItem(row: Row): SwarmSessionListItem {
     subjectName: row.subject_name ?? null,
     state: row.state,
     windowClosesAt: instant(row.window_closes_at),
+    openedAt: instant(row.opened_at),
     publishedAt: instant(row.published_at),
     regimeSummary: toRegimeSummaryListItem(row.regime_summary),
     synthesis: synthesisExcerpt(row.synthesis),

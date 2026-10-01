@@ -29,14 +29,14 @@
         <nav class="rr-crumbs" aria-label="Breadcrumb">
           <a href="/swarm">Swarm</a><span aria-hidden="true">/</span>
           <a :href="subjectHref()" x-text="subjectTitle()"></a><span aria-hidden="true">/</span>
-          <span aria-current="page" x-text="formatDate(session.date, 'short')"></span>
+          <span aria-current="page" x-text="formatDate(session.openedAt || session.publishedAt || session.date, 'short')"></span>
         </nav>
 
         <header class="rr-head">
           <p class="sv__eyebrow sv__eyebrow--quiet" x-text="`${subjectKindOf(subject)} · session`">portfolio · session</p>
           <h1 class="sv__detail-title session-title" x-text="subjectTitle()"></h1>
           <p class="rr-when">
-            <time :datetime="session.date" x-text="[formatDate(session.date, 'long'), sessionTime()].filter(Boolean).join(' · ')"></time>
+            <time :datetime="session.openedAt || session.publishedAt || session.date" x-text="[formatDate(session.openedAt || session.publishedAt || session.date, 'long'), sessionTime()].filter(Boolean).join(' · ')"></time>
           </p>
         </header>
 
