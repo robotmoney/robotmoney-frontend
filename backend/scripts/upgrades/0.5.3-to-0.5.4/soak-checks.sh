@@ -168,9 +168,9 @@ b4=$(docker logs --since "$T0" "$PROJECT-worker-analytics-1" 2>&1 | grep -a -c '
 [ "$bl" = 0 ] && ck PASS "R8.v buyback" "0 'live index failed' ($b4 HTTP 413 answers, each halved)" || ck FAIL "R8.v buyback" "$bl 'live index failed'"
 # R8.w  Gecko: the tier matches the key (1062); no 429/401/403; the key is in no ledger row and no api/website environment
 has_key=$(docker exec "$PROJECT-worker-analytics-1" sh -c 'test -n "$COINGECKO_API_KEY" && echo yes || echo no' 2>/dev/null)
-gl=$(docker logs --since "$T0" "$PROJECT-analytics-producer-1" 2>&1 | grep -a '\[gecko\]')
+gl=$( { docker logs --since "$T0" "$PROJECT-analytics-producer-1" 2>&1; docker logs --since "$T0" "$PROJECT-worker-analytics-1" 2>&1; } | grep -a '\[gecko\]')
 tier_pro=$(printf '%s\n' "$gl" | grep -a -c 'pro tier'); tier_free=$(printf '%s\n' "$gl" | grep -a -c 'free tier')
-if [ "$has_key" = yes ] && [ "$tier_pro$tier_free" = 00 ]; then ck INFO "R8.w gecko tier" "key set; no [gecko] line yet (the producer logs one when its sweep runs)"
+if [ "$has_key" = yes ] && [ "$tier_pro$tier_free" = 00 ]; then ck INFO "R8.w gecko tier" "key set; no [gecko] line yet (the analytics worker or producer logs one when its sweep runs)"
 elif [ "$has_key" = yes ]; then [ "$tier_pro" -ge 1 ] && [ "$tier_free" = 0 ] && ck PASS "R8.w gecko tier" "key set: $tier_pro line(s) via the pro tier, 0 via free" || ck FAIL "R8.w gecko tier" "key set but pro=$tier_pro free=$tier_free"
 else [ "$tier_pro" = 0 ] && ck PASS "R8.w gecko tier" "no key: $tier_free line(s) via the free tier" || ck FAIL "R8.w gecko tier" "no key set but $tier_pro line(s) via pro"; fi
 g4=$( { docker logs --since "$T0" "$PROJECT-analytics-producer-1" 2>&1; docker logs --since "$T0" "$PROJECT-worker-analytics-1" 2>&1; } | grep -a -c -E 'answered HTTP 40[13]|Gecko.*HTTP 429|\[gecko\].*429')
@@ -178,13 +178,17 @@ g4=$( { docker logs --since "$T0" "$PROJECT-analytics-producer-1" 2>&1; docker l
 kl=$(q -c "SELECT count(*) FROM source_fetches WHERE request_identity::text ~* 'x-cg-pro-api-key' AND request_identity::text !~ 'REDACTED'")
 ke=$(for s in api website-server; do docker exec "$PROJECT-$s-1" sh -c 'env | grep -c COINGECKO' 2>/dev/null; done | paste -sd+ | bc)
 [ "$kl" = 0 ] && [ "${ke:-0}" = 0 ] && ck PASS "R8.w3 key containment" "0 unredacted ledger rows; 0 COINGECKO variables in the api and the website" || ck FAIL "R8.w3 key containment" "ledger rows=$kl api+website vars=$ke"
-# R8.x  the regime day (1058): every `regime asof D` line carries the UTC day it was logged on (docker -t stamps)
-rl=$(docker logs -t --since "$T0" "$PROJECT-analytics-producer-1" 2>&1 | grep -a 'regime asof')
-nr=$(printf '%s\n' "$rl" | grep -a -c .)
-bd=$(printf '%s\n' "$rl" | grep -a . | awk '{d=substr($1,1,10); match($0,/regime asof [0-9-]+/); a=substr($0,RSTART+12,RLENGTH-12); if (a != d) print}' | wc -l)
-if [ "$nr" = 0 ]; then ck INFO "R8.x regime day" "no regime line since T0 yet"
-elif [ "$bd" = 0 ]; then ck PASS "R8.x regime day" "$nr regime line(s), each dated the UTC day it ran"
-else ck FAIL "R8.x regime day" "$bd of $nr regime line(s) name a day other than the day they ran"; fi
+# R8.x  the regime day (1058): the DRIVER logs `regime asof D` (no container does). Pass the driver log in DRIVER_LOG
+# (each line there starts with the UTC time it was logged; a twin log is stamped by the runbook's tee, production's by R6.4's).
+# Every `regime asof` line must name the UTC day it was written. The driver log carries no date, so compare to today's UTC date.
+if [ -n "${DRIVER_LOG:-}" ] && [ -r "$DRIVER_LOG" ]; then
+  today=$(date -u +%F)
+  nr=$(grep -a -c 'regime asof' "$DRIVER_LOG")
+  bd=$(grep -a 'regime asof' "$DRIVER_LOG" | grep -a -v "regime asof $today" | wc -l)
+  if [ "$nr" = 0 ]; then ck INFO "R8.x regime day" "no regime line in the driver log yet"
+  elif [ "$bd" = 0 ]; then ck PASS "R8.x regime day" "$nr regime line(s), all dated today ($today UTC)"
+  else ck WARN "R8.x regime day" "$bd of $nr line(s) are not dated $today (expected only if the log spans midnight UTC; check by hand)"; fi
+else ck INFO "R8.x regime day" "set DRIVER_LOG to the driver log to check it (R4.6 and R7.5 do this by hand)"; fi
 
 # R8.o  informational: error-like lines per container since T0 (the gate classifies them; this is the raw count)
 for c in $(docker ps --format '{{.Names}}' | grep "^$PROJECT-"); do
