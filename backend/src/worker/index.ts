@@ -1,7 +1,7 @@
 // Always-on worker process entry: resolves this process's execution lane,
 // runs preflight checks 1-3 as rm_worker, and only then runs the
 // drain/scheduler/reaper loops via runtime.ts. Run with
-// `WORKER_LANE=<analytics|research|generic> bun run src/worker/index.ts`.
+// `WORKER_LANE=<analytics|generic> bun run src/worker/index.ts`.
 //
 // WORKER_LANE is REQUIRED (issue #107): an empty or unknown lane fails loudly
 // here instead of silently claiming every kind — the compose topology runs
