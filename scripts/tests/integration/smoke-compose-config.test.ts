@@ -812,20 +812,21 @@ describe("boot-guard operator controls reach the api container (issue #602)", ()
   });
 });
 
-// The paid CoinGecko key (issue #1047). projects.refresh_coins runs in the
-// worker lanes and sends the key to the Pro host; the api has no CoinGecko
-// caller, so the key must never be delivered there. Only a rendered config
+// The paid CoinGecko key (issues #1047, #1062). projects.refresh_coins and the token-price lookups run in the worker
+// lanes, and the GeckoTerminal new_pools sweep runs in the analytics-producer; all send the key to the Pro host. The api
+// has no CoinGecko caller, so the key must never be delivered there, nor to any other service. Only a rendered config
 // proves this, because each service's `environment:` block is an allowlist.
-describe("the paid CoinGecko key reaches the worker lanes only (issue #1047)", () => {
+describe("the paid CoinGecko key reaches the worker lanes and the analytics-producer only (issues #1047, #1062)", () => {
   const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
     ["base", BASE_COMPOSE_FILES],
     ["smoke", DEMO_COMPOSE_FILES],
     ["stage", STAGE_COMPOSE_FILES],
   ];
-  const WORKER_LANES = ["worker-swarm", "worker-analytics", "worker-research"] as const;
+  // The three worker lanes, plus the producer that makes the new_pools calls (issue #1062).
+  const WORKER_LANES = ["worker-swarm", "worker-analytics", "worker-research", "analytics-producer"] as const;
 
   for (const [label, files] of COMPOSITIONS) {
-    test(`the ${label} composition puts an exported key on every worker lane and on nothing else`, () => {
+    test(`the ${label} composition puts an exported key on every worker lane and the producer, and on nothing else`, () => {
       const cfg = composeConfig({ COINGECKO_API_KEY: "cg-compose-test-key" }, files);
       for (const lane of WORKER_LANES) {
         expect(`${label}:${lane}:${serviceEnv(cfg, lane).COINGECKO_API_KEY ?? "missing"}`)
@@ -839,7 +840,7 @@ describe("the paid CoinGecko key reaches the worker lanes only (issue #1047)", (
       expect(`${label}:api:${"COINGECKO_API_KEY" in serviceEnv(cfg, "api")}`).toBe(`${label}:api:false`);
     });
 
-    test(`the ${label} composition resolves the key EMPTY on every worker lane when unset`, () => {
+    test(`the ${label} composition resolves the key EMPTY on every worker lane and the producer when unset`, () => {
       const cfg = composeConfig({}, files);
       for (const lane of WORKER_LANES) {
         const env = serviceEnv(cfg, lane);
