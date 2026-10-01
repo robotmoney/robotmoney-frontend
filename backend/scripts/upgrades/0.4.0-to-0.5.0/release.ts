@@ -113,6 +113,10 @@ export const WORKER_WRITABLE_TABLES = [
   // 0054's allow-list dropped them by omission, which read as PASS here while
   // the live worker got "permission denied" (checklist B05).
   "chain_day_blocks", "wallet_backfill_state", "chain_address_floors",
+  // 0062_rm_readonly_sequence_select (production, applied in the 0.5.0 cycle):
+  // the samplers' writeAssetPrice() upserts these two (1,968 production
+  // "permission denied for table asset_prices" failures before the grant).
+  "asset_prices", "asset_price_floors",
 ] as const;
 
 /** 0055's new index — makes getMembers()'s per-member `max(received_at)`
