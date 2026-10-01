@@ -1002,22 +1002,10 @@ export type RecordConsensusResult = {
  * when finalize was called — §9: "An event's arrival time never decides an
  * outcome."
  *
- * NO ROUTE CALLS THIS. A consensus reaches the API through `submitJudgement`
- * alone; the `epochs/consensus` admin route that took a bare judgement id is
- * retired. This standalone form survives so the settlement tests can record a
- * consensus and then move its stored instant — and it enforces the SAME
- * eligibility `submitJudgement` does (see `recordJudgingConsensusTx`), so a
- * test cannot record a consensus the product would have refused.
- */
-export async function recordJudgingConsensus(
-  sessionId: string,
-  judgementId: number,
-): Promise<RecordConsensusResult | Refusal> {
-  return sql.begin((tx) => recordJudgingConsensusTx(tx, sessionId, judgementId));
-}
-
-/**
- * The same transition inside a transaction the caller already holds.
+ * A consensus reaches the API through `submitJudgement` alone; the
+ * `epochs/consensus` admin route that took a bare judgement id is retired.
+ *
+ * Runs inside a transaction the caller already holds.
  *
  * `submitJudgement` needs it: the judgement row and the consensus it forms are
  * written in ONE transaction, so a crash between the two can never leave a

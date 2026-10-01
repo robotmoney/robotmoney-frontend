@@ -42,7 +42,7 @@ import {
 } from "../src/api/routes/swarm-stream.ts";
 import { provisionAutomationToken } from "../src/db/automation-tokens.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { activeSubject, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
+import { activeSubject, recordConsensus, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
 import { inHouseJudge } from "./support/stub-judge.ts";
 import { bootApi, writeTokenFile, type ApiProcess } from "./support/automation-auth.ts";
 
@@ -265,7 +265,7 @@ test("the full read returns every closed-but-unpublished session with its state"
 
   const judged = await judgingSession("fr_judged");
   const judgementId = await plantJudgement(judged.sessionId);
-  await epoch.recordJudgingConsensus(judged.sessionId, judgementId);
+  await recordConsensus(judged.sessionId, judgementId);
   wanted.set(judged.sessionId, "judged");
 
   const read = await stream.fullRead();
@@ -1102,7 +1102,7 @@ test("the stream routes own only their own paths", async () => {
 
 const url = (p: string) => new URL(`http://test${p}`);
 
-// Authored by the session's judge of record: `recordJudgingConsensus` refuses
+// Authored by the session's judge of record: `recordJudgingConsensusTx` refuses
 // a consensus from anyone else (§4.4, issue #1026 wave 2).
 async function plantJudgement(sessionId: string): Promise<number> {
   const judge = await inHouseJudge();

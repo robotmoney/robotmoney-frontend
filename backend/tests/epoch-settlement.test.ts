@@ -43,6 +43,7 @@ import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import {
   activeMember,
   activeSubject,
+  recordConsensus,
   refusedByDatabase,
   sessionDate,
   sessionRow,
@@ -87,7 +88,7 @@ async function plantJudgement(sessionId: string, judge?: TestJudge): Promise<num
 
 /** Record the judge of record's consensus, then pin its acceptance instant. */
 async function recordConsensusAt(sessionId: string, at: Date) {
-  const r = await epoch.recordJudgingConsensus(sessionId, await plantJudgement(sessionId));
+  const r = await recordConsensus(sessionId, await plantJudgement(sessionId));
   await sql`UPDATE swarm_sessions SET consensus_recorded_at = ${at} WHERE id = ${sessionId}`;
   return r;
 }
@@ -185,7 +186,7 @@ test("enforce: finalize before the deadline WITH an eligible consensus publishes
   const { sessionId } = await closedEpoch("st_early_ok", "enforce");
   await epoch.aggregateEpoch(sessionId);
   await epoch.requestJudging(sessionId);
-  const recorded = await epoch.recordJudgingConsensus(sessionId, await plantJudgement(sessionId));
+  const recorded = await recordConsensus(sessionId, await plantJudgement(sessionId));
   expect(recorded.ok).toBe(true);
   expect((await sessionRow(sessionId)).state).toBe("judged");
 
@@ -323,7 +324,7 @@ test("only the judge of record's judgement can become the consensus: every other
 
   // The non-record judge answers FIRST: recorded as evidence, never the consensus.
   for (const author of [other, thirdParty, inactive]) {
-    const r = await epoch.recordJudgingConsensus(sessionId, await plantJudgement(sessionId, author));
+    const r = await recordConsensus(sessionId, await plantJudgement(sessionId, author));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toBe("judgement_not_from_judge_of_record");
   }
@@ -333,14 +334,14 @@ test("only the judge of record's judgement can become the consensus: every other
       (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion)
     VALUES (${sessionId}, 'enforce', 'model', 'test/x', 'ph', 'id', 1, 1, '{"verdict":"ok"}'::jsonb)
     RETURNING id`;
-  const anon = await epoch.recordJudgingConsensus(sessionId, Number(anonymous.id));
+  const anon = await recordConsensus(sessionId, Number(anonymous.id));
   expect(anon.ok).toBe(false);
   let s = await sessionRow(sessionId);
   expect(s.state).toBe("judging");
   expect(s.consensus_recorded_at).toBeNull();
 
   // The judge of record's own judgement is the consensus.
-  const r = await epoch.recordJudgingConsensus(sessionId, await plantJudgement(sessionId, ofRecord));
+  const r = await recordConsensus(sessionId, await plantJudgement(sessionId, ofRecord));
   expect(r.ok).toBe(true);
   s = await sessionRow(sessionId);
   expect(s.state).toBe("judged");
@@ -361,9 +362,9 @@ test("a judge that holds a take in the session is not eligible, and the next jud
   await epoch.aggregateEpoch(sessionId);
   await epoch.requestJudging(sessionId);
 
-  const refused = await epoch.recordJudgingConsensus(sessionId, await plantJudgement(sessionId, low));
+  const refused = await recordConsensus(sessionId, await plantJudgement(sessionId, low));
   expect(refused.ok).toBe(false);
-  const accepted = await epoch.recordJudgingConsensus(sessionId, await plantJudgement(sessionId, high));
+  const accepted = await recordConsensus(sessionId, await plantJudgement(sessionId, high));
   expect(accepted.ok).toBe(true);
 });
 
@@ -414,14 +415,14 @@ test("a DUPLICATED session.judged changes no outcome: the second finalize it tri
   const { sessionId } = await closedEpoch("st_dup_event", "enforce");
   await epoch.aggregateEpoch(sessionId);
   await epoch.requestJudging(sessionId);
-  const recorded = await epoch.recordJudgingConsensus(sessionId, await plantJudgement(sessionId));
+  const recorded = await recordConsensus(sessionId, await plantJudgement(sessionId));
   expect(recorded.ok).toBe(true);
   // The same consensus delivered twice: the second is the original result,
   // and writes no second event.
   const head = await epoch.streamHeadSequence();
   const [{ id: firstJudgement }] = await sql<{ id: string }[]>`
     SELECT id FROM swarm_session_judgements WHERE session_id = ${sessionId} ORDER BY id LIMIT 1`;
-  const again = await epoch.recordJudgingConsensus(sessionId, Number(firstJudgement));
+  const again = await recordConsensus(sessionId, Number(firstJudgement));
   expect(again.ok).toBe(true);
   expect(await epoch.streamHeadSequence()).toBe(head);
 
@@ -440,7 +441,7 @@ test("a consensus arriving after publication is recorded as late evidence and ch
   await epoch.finalizeEpoch(sessionId);
   expect((await sessionRow(sessionId)).state).toBe("published");
 
-  const late = await epoch.recordJudgingConsensus(sessionId, await plantJudgement(sessionId));
+  const late = await recordConsensus(sessionId, await plantJudgement(sessionId));
   expect(late.ok).toBe(true);
   if (!late.ok) return;
   expect(late.lateEvidence).toBe(true);

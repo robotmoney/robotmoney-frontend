@@ -290,7 +290,7 @@ test("the submission records the consensus with its acceptance instant", async (
 
   // Wired to part 1's transition rather than duplicating it: the judgement row
   // this route wrote is the one the consensus points at, and the `session.judged`
-  // event exists because `recordJudgingConsensus` wrote it in its own
+  // event exists because `recordJudgingConsensusTx` wrote it in its own
   // transaction.
   const [judgement] = await sql<{ judged_by_member_id: string }[]>`
     SELECT judged_by_member_id FROM swarm_session_judgements WHERE id = ${ok.judgementId}`;

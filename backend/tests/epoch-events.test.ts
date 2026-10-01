@@ -28,7 +28,7 @@ import * as epoch from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { activeSubject, rid, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
+import { activeSubject, recordConsensus, rid, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
 import { inHouseJudge } from "./support/stub-judge.ts";
 import { provisionOperatorToken } from "./support/automation-auth.ts";
 
@@ -149,7 +149,7 @@ test("recording a consensus publishes session.judged; late evidence after public
 
   const head = await epoch.streamHeadSequence();
   const judgementId = await plantJudgement(sessionId);
-  const recorded = await epoch.recordJudgingConsensus(sessionId, judgementId);
+  const recorded = await recordConsensus(sessionId, judgementId);
   expect(recorded.ok).toBe(true);
 
   const rows = await eventsAbove(head);
@@ -162,7 +162,7 @@ test("recording a consensus publishes session.judged; late evidence after public
   await epoch.finalizeEpoch(sessionId);
   expect((await sessionRow(sessionId)).state).toBe("published");
   const afterPublish = await epoch.streamHeadSequence();
-  const late = await epoch.recordJudgingConsensus(sessionId, await plantJudgement(sessionId));
+  const late = await recordConsensus(sessionId, await plantJudgement(sessionId));
   expect(late.ok).toBe(true);
   if (late.ok) expect(late.lateEvidence).toBe(true);
   expect((await eventsAbove(afterPublish)).length).toBe(0);
@@ -269,7 +269,7 @@ test("a refused subject edit publishes nothing", async () => {
 
 /**
  * A judgement row authored by the session's judge of record — the only author
- * `recordJudgingConsensus` accepts as a consensus (§4.4). The in-house judge
+ * `recordJudgingConsensusTx` accepts as a consensus (§4.4). The in-house judge
  * is seated once and reused, so it stays the lowest-id eligible judge.
  */
 async function plantJudgement(sessionId: string): Promise<number> {

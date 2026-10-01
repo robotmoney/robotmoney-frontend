@@ -7,7 +7,6 @@ import {
 import { SLEEVE_DEFS, sleeveSymbols } from "../chain/wallet-valuation.ts";
 import type postgresTypes from "postgres";
 import { onStatement, registerStatement } from "../db/registry.ts";
-import { createHash } from "node:crypto";
 
 /**
  * One lock protocol for every writer that can touch a wallet snapshot date.
@@ -150,116 +149,8 @@ export function canonicalJsonString(value: unknown): string {
   return JSON.stringify(normalizeCanonicalJson(value));
 }
 
-export function canonicalSha256(value: unknown): string {
-  return createHash("sha256").update(canonicalJsonString(value), "utf8").digest("hex");
-}
-
-function nonEmpty(value: string, field: string): string {
-  const normalized = value.trim();
-  if (!normalized) throw new Error(`wallet snapshot manifest requires ${field}`);
-  return normalized;
-}
-
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-function exactCanonicalKeys(keys: readonly string[], field: string): string[] {
-  const normalized = keys.map((key, index) => nonEmpty(key, `${field}[${index}]`)).sort(compareText);
-  const duplicate = normalized.find((key, index) => index > 0 && key === normalized[index - 1]);
-  if (duplicate) throw new Error(`wallet snapshot manifest contains duplicate ${field} key: ${duplicate}`);
-  return normalized;
-}
-
-export interface CanonicalWalletBalanceAsset {
-  symbol: string;
-  address: string | null;
-  decimals: number;
-  valuationKind: TrackedAsset["valuationKind"];
-  priceKind: TrackedAsset["priceKind"];
-  poolId: string | null;
-}
-
-export interface CanonicalWalletSleeveKey {
-  walletIndex: number;
-  walletAddress: string;
-  symbol: string;
-}
-
-export interface CanonicalWalletSnapshotManifest {
-  manifestVersion: string;
-  valuationPolicyVersion: string;
-  configIdentity: string;
-  balanceAssets: CanonicalWalletBalanceAsset[];
-  sleeveKeys: CanonicalWalletSleeveKey[];
-  expectedBalanceKeys: string[];
-  expectedSleeveKeys: string[];
-}
-
-export interface BuildCanonicalWalletSnapshotManifestOptions {
-  manifestVersion: string;
-  valuationPolicyVersion: string;
-  configIdentity: string;
-}
-
-/** Convert either publisher's resolved manifest to one deterministic envelope.
- * The caller decides which assets are expected (P0 still excludes config-valued
- * SP500); this function records that decision exactly and does not add/remove
- * assets on its own. */
-export function buildCanonicalWalletSnapshotManifest(
-  manifest: WalletSnapshotManifest,
-  options: BuildCanonicalWalletSnapshotManifestOptions,
-): { manifest: CanonicalWalletSnapshotManifest; manifestJson: string; manifestHash: string } {
-  const balanceAssets = manifest.balanceAssets
-    .map((asset) => {
-      if (!Number.isSafeInteger(asset.decimals) || asset.decimals < 0) {
-        throw new Error(`wallet snapshot manifest requires non-negative integer decimals for ${asset.symbol}`);
-      }
-      return {
-        symbol: nonEmpty(asset.symbol, "balance asset symbol"),
-        address: asset.address === null ? null : nonEmpty(asset.address, `${asset.symbol} address`).toLowerCase(),
-        decimals: asset.decimals,
-        valuationKind: asset.valuationKind,
-        priceKind: asset.priceKind,
-        poolId: asset.poolId === null ? null : nonEmpty(asset.poolId, `${asset.symbol} poolId`),
-      };
-    })
-    .sort((a, b) => compareText(a.symbol, b.symbol));
-  const sleeveKeys = manifest.sleeveKeys
-    .map((key) => {
-      if (!Number.isSafeInteger(key.walletIndex) || key.walletIndex < 0) {
-        throw new Error("wallet snapshot manifest requires non-negative integer walletIndex");
-      }
-      return {
-        walletIndex: key.walletIndex,
-        walletAddress: nonEmpty(key.walletAddress, "sleeve wallet address").toLowerCase(),
-        symbol: nonEmpty(key.asset.symbol, "sleeve symbol"),
-      };
-    })
-    .sort((a, b) =>
-      compareText(a.walletAddress, b.walletAddress)
-      || compareText(a.symbol, b.symbol)
-      || a.walletIndex - b.walletIndex,
-    );
-
-  const canonical: CanonicalWalletSnapshotManifest = {
-    manifestVersion: nonEmpty(options.manifestVersion, "manifestVersion"),
-    valuationPolicyVersion: nonEmpty(options.valuationPolicyVersion, "valuationPolicyVersion"),
-    configIdentity: nonEmpty(options.configIdentity, "configIdentity"),
-    balanceAssets,
-    sleeveKeys,
-    expectedBalanceKeys: exactCanonicalKeys(balanceAssets.map((asset) => asset.symbol), "balance"),
-    expectedSleeveKeys: exactCanonicalKeys(
-      sleeveKeys.map((key) => persistedSleeveManifestKey(key.walletAddress, key.symbol)),
-      "sleeve",
-    ),
-  };
-  const manifestJson = canonicalJsonString(canonical);
-  return {
-    manifest: canonical,
-    manifestJson,
-    manifestHash: createHash("sha256").update(manifestJson, "utf8").digest("hex"),
-  };
 }
 
 export interface ExactSetValidation {
@@ -303,19 +194,4 @@ export function validateExactSet(expectedValues: readonly string[], presentValue
       && expected.duplicates.length === 0
       && present.duplicates.length === 0,
   };
-}
-
-export interface WalletSnapshotExactValidation {
-  balances: ExactSetValidation;
-  sleeves: ExactSetValidation;
-  exact: boolean;
-}
-
-export function validateWalletSnapshotExactSets(
-  expected: Pick<CanonicalWalletSnapshotManifest, "expectedBalanceKeys" | "expectedSleeveKeys">,
-  present: { balanceKeys: readonly string[]; sleeveKeys: readonly string[] },
-): WalletSnapshotExactValidation {
-  const balances = validateExactSet(expected.expectedBalanceKeys, present.balanceKeys);
-  const sleeves = validateExactSet(expected.expectedSleeveKeys, present.sleeveKeys);
-  return { balances, sleeves, exact: balances.exact && sleeves.exact };
 }
