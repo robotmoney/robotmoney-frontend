@@ -60,10 +60,10 @@ A release adds its own checks to this list. It never drops one, unless the migra
 
 | Invariant | Since | Where it is checked |
 |---|---|---|
-| The dump holds every prior migration, none pending, the tables this release uses; `rm_worker` can INSERT into the chain-state tables; the judge is `enforce` with a model set and third parties off | 0.5.0, 0.5.1 | R3.3 (`restore-check.ts`) |
+| The dump holds every prior migration, none pending, the tables this release uses; the judge is `enforce` with a model set | 0.5.0, 0.5.1 | R3.3 (`restore-check.ts`) |
 | `schema_migrations` is identical before and after the cutover (no migration ran) | 0.5.1 | R2.11 baseline, R4, R6.6, R7.11 (`R8.p`) |
 | Judge config: `mode=enforce`, the pinned model, `third_party_enabled=false`; the judge's key is present and funded | 0.5.0, 0.5.1 | R2.12 (key probe), R7.11 (`R8.q`) |
-| Roles: the api connects as `rm_app`, never `doadmin`; `rm_worker` grants; `rm_readonly` reads every sequence | 0.5.0, 0.5.1 | R7.11 (`R8.r`) |
+| Roles: the api connects as `rm_app`, never `doadmin`; `rm_worker` can INSERT into the chain-state tables; `rm_readonly` reads every sequence | 0.5.0, 0.5.1 | R2.11, R7.11 (`R8.r`, production only: a dump and a twin hold no grants) |
 | Six containers up and healthy, never restarted; the database writable; no dead job; every distinct log error classified (default deny) | 0.5.0 | `prod:gate` / `twin:gate` (R2.2, R4.4, R7.1, R8) |
 | Every subject publishes a judged, attended session with takes, a judgement and a receipt; quorum counts the active analysts (the judge is excluded); no session wedged past its window | 0.5.0, 0.5.1 | `twin:gate`, `prod:gate`, `R8.h`, `R8.i`, `R8.j` |
 | Regime runs at `:30` and research at `:00` every 3 h, each producing its output; no producer failure line | 0.5.2 | `R8.a`, `R8.b`, `R8.c` |
@@ -129,7 +129,7 @@ As v0.5.1 R3, on `rm-frontend-stage-2`, never the production host: a full dump a
 | R3.0 | `df -h ~` | free ≥ 3 × the last dump | free GB |
 | R3.1 | `export RM_BACKUP_DIR=~/rm-backup-v054-$(date -u +%Y%m%dT%H%M%SZ)` | a **new** directory, named with today's stamp | path |
 | R3.2 | In tmux: `bun run smoke:capture 2>&1 \| tee ~/r3-capture.log` | exit 0; the log says `pg_is_in_recovery()=true` (the replica) | stamp, dump size, time |
-| R3.3 | `bun backend/scripts/upgrades/0.5.3-to-0.5.4/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt` | `DUMP SAFE FOR 0.5.4`: every prior-release migration recorded, **none pending**, the tables this release touches present, `rm_worker` grants and judge config as production's (4 PASS lines; the receipt prints the counts) | receipt |
+| R3.3 | `bun backend/scripts/upgrades/0.5.3-to-0.5.4/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt` | `DUMP SAFE FOR 0.5.4`: every prior-release migration recorded, **none pending**, the tables this release touches present, and the judge config enforce with a model set (4 PASS lines). Grants are not in a dump (it is taken `--no-privileges`), so they are checked on production only (R2.11, R7.11) | receipt |
 | R3.4 | Record the sessions the dump holds open: restore it and `q "SELECT id, subject_id, state, window_closes_at FROM swarm_sessions WHERE state IN ('scheduled','collecting') ORDER BY convened_at"` (R4.3a) | listed | rows |
 
 Production always has one subject's session `collecting`: windows are 6 h and the driver opens the next within about two minutes

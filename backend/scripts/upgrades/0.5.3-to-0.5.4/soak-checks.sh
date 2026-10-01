@@ -136,22 +136,23 @@ else ck FAIL "R8.p schema_migrations" "differs from the baseline: $(diff "$R8_ST
 r=$(q -c "SELECT mode || '|' || coalesce(model, 'NULL') || '|' || third_party_enabled FROM swarm_judge_config LIMIT 1")
 [ "$r" = "enforce|opencode/deepseek-v4-flash|false" ] || [ "$r" = "enforce|deepseek-v4-flash|false" ] && ck PASS "R8.q judge config" "$r" || ck FAIL "R8.q judge config" "$r (expected enforce, the pinned model, third_party_enabled false)"
 # R8.r  role and grant integrity (0.5.0 4.4, 0.5.1 R2.7/R2.8): rm_worker INSERTs, the api connects as rm_app, rm_readonly reads sequences
+if [ "$PROJECT" != rm_prod ]; then ck INFO "R8.r grants" "not checked on a twin: the dump is taken with --no-privileges, so a twin holds no grants. Production is checked at R2.11 and R7.11"
+else
 r=$(q -c "SELECT bool_and(has_table_privilege('rm_worker', t, 'INSERT')) FROM unnest(array['wallet_backfill_state','chain_day_blocks','chain_address_floors']) t")
 [ "$r" = true ] && ck PASS "R8.r rm_worker grants" "INSERT on the 3 chain-state tables" || ck FAIL "R8.r rm_worker grants" "rm_worker lacks INSERT on a chain-state table ($r)"
 r=$(q -c "SELECT current_user")
-if [ "$PROJECT" != rm_prod ]; then ck INFO "R8.r api role" "$r (a twin has one role for everything; checked on production only)"
-elif [ "$r" = rm_app ]; then ck PASS "R8.r api role" "rm_app (never doadmin)"
-else ck FAIL "R8.r api role" "$r"; fi
-r=$(q -c "SELECT bool_and(has_sequence_privilege('rm_readonly', c.oid, 'SELECT')) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'S' AND n.nspname = 'public'")
+[ "$r" = rm_app ] && ck PASS "R8.r api role" "rm_app (never doadmin)" || ck FAIL "R8.r api role" "$r"
+r=$(q -c "SELECT bool_and(CASE WHEN c.relkind = 'S' THEN has_sequence_privilege('rm_readonly', c.oid, 'SELECT') ELSE true END) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'S'")
 [ "$r" = true ] && ck PASS "R8.r rm_readonly sequences" "SELECT on every public sequence" || ck FAIL "R8.r rm_readonly sequences" "$r"
+fi
 # R8.s  api and public health (0.5.1 R7.5): /health and the judgements route answer 200
 h=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/health"); h2=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/api/health")
 sid=$(q -c "SELECT id FROM swarm_sessions WHERE state = 'published' ORDER BY published_at DESC LIMIT 1")
 j=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/api/swarm/sessions/$sid/judgements")
 { [ "$h" = 200 ] || [ "$h2" = 200 ]; } && [ "$j" = 200 ] && ck PASS "R8.s health and judgements" "/health $h, /api/health $h2, judgements $j" || ck FAIL "R8.s health and judgements" "/health $h, /api/health $h2, judgements $j"
 # R8.t  every published session since T0 has openedAt, never null (v0.5.4)
-r=$(curl -s "$BASE_URL/api/swarm/sessions?limit=50" | python3 -c "import json,sys; s=json.load(sys.stdin)['sessions']; print(sum(1 for x in s if not x.get('openedAt') and x['date'] >= '2026-09-22'))" 2>/dev/null)
-[ "$r" = 0 ] && ck PASS "R8.t openedAt" "0 of the 50 newest sessions dated 2026-09-22 or later lack it (older sessions have no brief revision to read)" || ck FAIL "R8.t openedAt" "${r:-unreadable} sessions from 2026-09-22 on lack it"
+r=$(curl -s "$BASE_URL/api/swarm/sessions?limit=50" | python3 -c "import json,sys; s=json.load(sys.stdin)['sessions']; print(sum(1 for x in s if x['state'] == 'published' and not x.get('openedAt') and x['date'] >= '2026-09-22'))" 2>/dev/null)
+[ "$r" = 0 ] && ck PASS "R8.t openedAt" "0 of the 50 newest published sessions dated 2026-09-22 or later lack it (older sessions have no brief revision to read)" || ck FAIL "R8.t openedAt" "${r:-unreadable} sessions from 2026-09-22 on lack it"
 
 # ---- v0.5.4 claims (issues 1057/1081/1084, 1058, 1060, 1061, 1062) ----
 # R8.u  the api: no cut-off at the 10 s limit on a reader; every request over 5 s is listed (issue 1079 owns the known ones)
@@ -169,7 +170,8 @@ b4=$(docker logs --since "$T0" "$PROJECT-worker-analytics-1" 2>&1 | grep -a -c '
 has_key=$(docker exec "$PROJECT-worker-analytics-1" sh -c 'test -n "$COINGECKO_API_KEY" && echo yes || echo no' 2>/dev/null)
 gl=$(docker logs --since "$T0" "$PROJECT-analytics-producer-1" 2>&1 | grep -a '\[gecko\]')
 tier_pro=$(printf '%s\n' "$gl" | grep -a -c 'pro tier'); tier_free=$(printf '%s\n' "$gl" | grep -a -c 'free tier')
-if [ "$has_key" = yes ]; then [ "$tier_pro" -ge 1 ] && [ "$tier_free" = 0 ] && ck PASS "R8.w gecko tier" "key set: $tier_pro line(s) via the pro tier, 0 via free" || ck FAIL "R8.w gecko tier" "key set but pro=$tier_pro free=$tier_free"
+if [ "$has_key" = yes ] && [ "$tier_pro$tier_free" = 00 ]; then ck INFO "R8.w gecko tier" "key set; no [gecko] line yet (the producer logs one when its sweep runs)"
+elif [ "$has_key" = yes ]; then [ "$tier_pro" -ge 1 ] && [ "$tier_free" = 0 ] && ck PASS "R8.w gecko tier" "key set: $tier_pro line(s) via the pro tier, 0 via free" || ck FAIL "R8.w gecko tier" "key set but pro=$tier_pro free=$tier_free"
 else [ "$tier_pro" = 0 ] && ck PASS "R8.w gecko tier" "no key: $tier_free line(s) via the free tier" || ck FAIL "R8.w gecko tier" "no key set but $tier_pro line(s) via pro"; fi
 g4=$( { docker logs --since "$T0" "$PROJECT-analytics-producer-1" 2>&1; docker logs --since "$T0" "$PROJECT-worker-analytics-1" 2>&1; } | grep -a -c -E 'answered HTTP 40[13]|Gecko.*HTTP 429|\[gecko\].*429')
 [ "$g4" = 0 ] && ck PASS "R8.w2 gecko errors" "0 lines of HTTP 429/401/403" || ck FAIL "R8.w2 gecko errors" "$g4 lines of HTTP 429/401/403"
