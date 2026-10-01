@@ -110,7 +110,7 @@ describe("applyForm: roster-full waitlist capture (issue #245 AC2)", () => {
       await f.joinWaitlist();
       expect(f.waitlisted).toBe(true);
       const href = (globalThis as any).window.location.href as string;
-      expect(href.startsWith("mailto:hi@robotmoney.net")).toBe(true);
+      expect(href.startsWith("mailto:david@robotmoney.network")).toBe(true);
       expect(href).toContain(encodeURIComponent("operator@example.test"));
     } finally {
       (globalThis as any).window = savedWindow;

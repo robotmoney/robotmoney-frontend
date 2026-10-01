@@ -1319,7 +1319,7 @@ export function registerStaticViews(Alpine) {
       return `/swarm/members/${encodeURIComponent(this.id)}`;
     },
     recoveryMailto() {
-      return `mailto:hi@robotmoney.net?subject=${encodeURIComponent(`Key rotation for swarm member ${this.id}`)}`;
+      return `mailto:david@robotmoney.network?subject=${encodeURIComponent(`Key rotation for swarm member ${this.id}`)}`;
     },
     // The member id is a 36-character UUID that support, the admin surface and
     // the API all key on, so it gets a copy control rather than an invitation
