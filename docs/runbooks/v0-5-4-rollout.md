@@ -257,3 +257,24 @@ works against stage (it reads `.agents/smoke-state.json`); its one blocking find
 3. The rehearsal ran on `0706bef7`; the tip is now `634d9e1a` (frontend only: the session-page fix, checked above by `site:redeploy` on the twin). R5.1 asks for the **same** commit: decide whether the frontend-only difference needs the full gate again.
 
 The twin was torn down at 02:42 (0 containers, 0 volumes). The gate report is `~/twin-gate-reports/R4.4-0706bef7.md` on stage-2.
+
+### 2026-10-01, stage-2, commit `11f4dd65`, a fresh dump (`rm-backup-v054-20261001T132455Z`, captured from the replica): PASSED, nothing waived
+
+| Step | Result |
+|---|---|
+| R3.3 restore check | `DUMP SAFE FOR 0.5.4`: 28 v0.5.3 migrations recorded, none pending, 6 release tables present |
+| R4.3 twin boot | `READY` 13:38:56 in about 2 minutes; `131 checks · 0 failed`; no `migrated:` line |
+| R4.4 gate | PASS, 21 checks, 16 log sources, exit 0: every subject published a judged session, no dead job, no container restart. No waiver was needed |
+| R4.5 `openedAt` | 20 sessions read, 0 null; an adopted session shows `openedAt` after `generatedAt`; `date` unchanged |
+| R4.5b date audit | before the gate: 44 checks, 0 failed. After the gate: 44 checks, 0 failed (40 sessions: 10 published that waited, 15 that did not, 1 collecting) |
+| **Control** | `site:redeploy` of the pre-fix website `0706bef7` onto the twin: the audit FAILED 18 of 38 checks (session, subject and judgement pages and the `/swarm` order). After redeploying `11f4dd65`: 44 checks, 0 failed. The audit detects the bug |
+| R4.6 regime day | 3 `regime asof` lines, all `2026-10-01` (today, UTC) |
+| R4.7 api limit | 0 `[api] slow request`, 0 `timed out after`; `idleTimeout: API_IDLE_TIMEOUT_SECONDS` in `backend/src/api/index.ts:106`. This dump did not trigger the acquisitions route (issue 1079) |
+| R4.8 buyback | 0 `HTTP 413`, 0 `live index failed`: the 413 path was not exercised on this run |
+| R4.9 Gecko (keyless) | `token_price` and `token_pools via free tier (api.geckoterminal.com)`; 0 `429/401/403`. No `new_pools` line appeared in this run |
+| R4.10 key | ledger rows with the key header and no `REDACTED`: 0; the key is configured for exactly `analytics-producer`, `worker-analytics`, `worker-research`, `worker-swarm`; the api container has none |
+| R4.11 website | `verify:live --tier readonly`: VERIFIED WITH WARNINGS (only the two legs that need `--tier full`); browser pass over 6 pages: 0 page errors, every app module carries one stamp (`29ba3ce9`); the unstamped requests are `config.js` and the versioned vendor files. Two avatar images 404 (`athena.jpg`, `woon.jpg`); production 404s the same, so it predates this release |
+| R4.12 teardown | 14:03 UTC: 0 containers, 0 volumes (one orphan anonymous volume left by the restore check was removed by hand) |
+
+Not exercised on this run (only unit tests cover them): the buyback 413 halving, the keyed Gecko tier, a request over 5 s. The gate report is `~/twin-gate-reports/R4.4-rehearsal2.md` on stage-2.
+Decisions R5.1 (1) and (2) are moot: the dump held no stale `collecting` session and no judge timeout occurred. Decision (3) remains: the rehearsed SHA is the tip.
