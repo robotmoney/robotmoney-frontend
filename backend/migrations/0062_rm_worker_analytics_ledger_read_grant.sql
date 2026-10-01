@@ -16,11 +16,32 @@
 -- SELECT ONLY, matching 0054's own grant shape: rm_worker reads projections
 -- and configuration, and nothing here is a table the worker's own handlers
 -- write to, so there is no INSERT/UPDATE/DELETE to add alongside it.
-GRANT SELECT ON
-  analytics_data_vintages, analytics_ledger_methodology_versions,
-  analytics_ledger_run_events, analytics_ledger_runs, analytics_output_snapshots,
-  analytics_overwrite_events, analytics_parity_observations, analytics_read_mode,
-  analytics_report_snapshots, analytics_vintage_members,
-  source_acquisition_events, source_acquisitions, source_fetches, source_payloads,
-  source_value_versions, swarm_brief_revisions
-TO rm_worker;
+--
+-- GUARDED PER TABLE. Production (v0.5.2) recorded the schema-only
+-- 0080_analytics_ledger_compaction.sql, which DROPS source_payloads, before
+-- this file reached it, so there this file runs AFTER 0080, and a single
+-- GRANT naming source_payloads would fail and stop the boot
+-- (backend/tests/migration-history.test.ts). Each grant is therefore issued
+-- only for a table that exists. A fresh database still runs this before 0080
+-- and grants all sixteen; 0080 then drops source_payloads with its grant, so
+-- both paths end with the same privileges. A database that already recorded
+-- the one-statement form is unaffected: a recorded file never runs again.
+DO $$
+DECLARE
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'analytics_data_vintages', 'analytics_ledger_methodology_versions',
+    'analytics_ledger_run_events', 'analytics_ledger_runs', 'analytics_output_snapshots',
+    'analytics_overwrite_events', 'analytics_parity_observations', 'analytics_read_mode',
+    'analytics_report_snapshots', 'analytics_vintage_members',
+    'source_acquisition_events', 'source_acquisitions', 'source_fetches', 'source_payloads',
+    'source_value_versions', 'swarm_brief_revisions'
+  ] LOOP
+    IF to_regclass(format('public.%I', t)) IS NULL THEN
+      RAISE NOTICE '% absent (dropped by 0080 on a database that applied it first) — no grant needed', t;
+    ELSE
+      EXECUTE format('GRANT SELECT ON public.%I TO rm_worker', t);
+    END IF;
+  END LOOP;
+END $$;

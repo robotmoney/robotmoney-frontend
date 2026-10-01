@@ -275,6 +275,8 @@ const PRE_COMPAT_HEADERLESS: string[] = [
   "0062_rm_readonly_sequence_select.sql",
   "0062_rm_worker_analytics_ledger_read_grant.sql",
   "0063_deployment_identity.sql",
+  // Production's own file (v0.5.1), ported so the ledger names match (issue #1064).
+  "0063_swarm_judge_model_default.sql",
 ];
 
 describe("the pre-compat baseline — 0001-0063 may be header-less, nothing after may", () => {
