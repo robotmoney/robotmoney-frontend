@@ -103,7 +103,7 @@ function stripComments(file: string, text: string): string {
   return text;
 }
 
-function sweep(): { file: string; text: string }[] {
+function sweep(literal = false): { file: string; text: string }[] {
   const out: { file: string; text: string }[] = [];
   const seen = new Set<string>();
   for (const pattern of SWEEP_GLOBS) {
@@ -111,13 +111,22 @@ function sweep(): { file: string; text: string }[] {
       if (seen.has(rel)) continue;
       if (rel.includes("node_modules/")) continue;
       seen.add(rel);
-      out.push({ file: rel, text: stripComments(rel, readFileSync(join(REPO, rel), "utf8")) });
+      const raw = readFileSync(join(REPO, rel), "utf8");
+      out.push({ file: rel, text: literal ? raw : stripComments(rel, raw) });
     }
   }
   return out;
 }
 
 const FILES = sweep();
+// The same files with their comments left in. The removed settings are matched
+// against THIS, so a comment that still names one fails too (#1086).
+const LITERAL_FILES = sweep(true);
+
+function literalHits(needle: string | RegExp): string[] {
+  const test_ = (t: string): boolean => (typeof needle === "string" ? t.includes(needle) : needle.test(t));
+  return LITERAL_FILES.filter((f) => !(f.file in PINNED) && test_(f.text)).map((f) => f.file).sort();
+}
 
 function hits(needle: string | RegExp): string[] {
   const test_ = (t: string): boolean => (typeof needle === "string" ? t.includes(needle) : needle.test(t));
@@ -178,15 +187,15 @@ describe("the five swarm.* schedule kinds are gone", () => {
 
 describe("the enable flag, the enable command and the cron variables are gone", () => {
   test("SWARM_SCHEDULES_ENABLED appears nowhere — it is defaulted to 1 in the production compose today", () => {
-    expect(hits("SWARM_SCHEDULES_ENABLED")).toEqual([]);
+    expect(literalHits("SWARM_SCHEDULES_ENABLED")).toEqual([]);
   });
 
   test("no SWARM_*_CRON variable survives", () => {
-    expect(hits(/SWARM_[A-Z_]+_CRON/)).toEqual([]);
+    expect(literalHits(/SWARM_[A-Z_]+_CRON/)).toEqual([]);
   });
 
   test("SWARM_WINDOW_MINUTES is gone — the epoch duration is the whole schedule (§2.2)", () => {
-    expect(hits("SWARM_WINDOW_MINUTES")).toEqual([]);
+    expect(literalHits("SWARM_WINDOW_MINUTES")).toEqual([]);
   });
 
   test("nothing enables a schedule: `schedules:enable` and its script are gone", () => {
@@ -380,10 +389,14 @@ describe("the swarm lane and the worker-swarm service are gone", () => {
     expect(hits("worker-swarm")).toEqual([]);
   });
 
+  test("seed.ts has no `--smoke-schedules` flag: the smoke schedules ride `seedDemo` alone (#1086)", () => {
+    expect(readFileSync(join(REPO, "backend/src/db/seed.ts"), "utf8")).not.toContain("--smoke-schedules");
+  });
+
   test("scripts/lib/smoke-schedule.ts is gone", () => {
-    // The MODULE, by its path. Not the bare word: `--smoke-schedules` is a
-    // surviving seed flag for the non-swarm fast-demo overlays, and a needle
-    // that swept it up would be pressure to rename a thing that is fine.
+    // The MODULE, by its path. Not the bare word: `seedSmokeJobSchedules` is
+    // the surviving seed step for the non-swarm fast-demo overlays, and a
+    // needle that swept it up would be pressure to rename a thing that is fine.
     expect(hits("smoke-schedule.ts")).toEqual([]);
     expect(hits("lib/smoke-schedule")).toEqual([]);
     expect(hits('from "./smoke-schedule')).toEqual([]);

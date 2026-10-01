@@ -33,8 +33,9 @@ import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
 //     credential: backend/schema/grants.sql gives `rm_app` no DELETE on
 //     ordinary tables, so the two `job_schedules` retirement DELETEs below were
 //     refused there on a snapshot-built database.
-//   - `bun run src/db/seed.ts [--smoke-schedules]`, run directly with an
-//     `rm_owner` DATABASE_URL, also fenced (the block at the bottom).
+//   - `bun run src/db/seed.ts`, run directly with an `rm_owner` DATABASE_URL,
+//     also fenced (the block at the bottom). It seeds the canonical schedules
+//     only: the smoke's schedule changes ride `bun smoke --seed` (`seedDemo`).
 //   - scripts/prod-bootstrap's seed step, on the credential that also migrates.
 // An UPDATE or DELETE declares SELECT too, because Postgres checks a WHERE
 // clause's columns as a read.
@@ -621,14 +622,12 @@ export async function seedDemo(
   await seedDemoSubjects(tx);
 }
 
-// Run directly: `bun run src/db/seed.ts [--smoke-schedules]`, with an rm_owner
-// DATABASE_URL. The canonical seed is idempotent and not demo data, so it is
-// not gated; it IS a mutation, so it runs inside the §2 fence like every other
+// Run directly: `bun run src/db/seed.ts`, with an rm_owner DATABASE_URL. The
+// canonical seed is idempotent and not demo data, so it is not gated; it IS a mutation, so it runs inside the §2 fence like every other
 // one, on a connection of its own from the same URL.
 if (import.meta.url === `file://${process.argv[1]}`) {
   withMutationFence({ databaseUrl: process.env.DATABASE_URL ?? "", label: "seed" }, async (tx) => {
     await seed(tx);
-    if (process.argv.includes("--smoke-schedules")) await seedSmokeJobSchedules(tx);
   })
     .then(closeDb)
     .catch((err) => {
