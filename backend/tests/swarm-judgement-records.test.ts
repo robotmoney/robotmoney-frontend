@@ -383,12 +383,13 @@ test("Themis judging through judgeSessionAdmin: the session names Themis, and th
 // opened later, and the judgement pages show the day the session happened, so the three public reads carry
 // `sessionOpenedAt`: the instant of the session's first brief revision, read at query time (no column).
 test("the three public judgement reads carry when the session really opened, not only the day its row was created", async () => {
-  const a = await seatJudge({ prefix: "judge_open" });
-  const s = await judging("opened");
-  await judgeWith(a, s.sessionId, "The judge of record's view.");
+  const j = await judgeMember("opened");
+  const s = await aggregated("opened");
+  await setJudgeConfig({ mode: "enforce", model: STUB_JUDGE_MODEL, thirdPartyEnabled: true });
+  expect((await judgeSession(s.sessionId, { judgeMemberId: j.id, transport: answer("The judge of record's view.") })).applied).toBe(true);
   // The row sat in `scheduled` for two days before its brief went out.
   await sql`UPDATE swarm_sessions SET convened_at = now() - interval '2 days', generated_at = now() - interval '2 days' WHERE id = ${s.sessionId}`;
-  expect((await publish(s.sessionId)).outcome).toBe("judged");
+  expect((await ic.publishSession(s.sessionId)).state).toBe("published");
 
   const [first] = await sql`SELECT min(created_at) AS at FROM swarm_brief_revisions WHERE session_id = ${s.sessionId}`;
   const opened = new Date(first!.at).toISOString();
@@ -399,13 +400,13 @@ test("the three public judgement reads carry when the session really opened, not
   const id = String(bySession[0].id);
   const byId = (await judgementById(id)).body as any;
   const byMember = (await memberJudgements(String(bySession[0].judgedBy))).body.judgements as any[];
-  const mine = byMember.find((j) => String(j.id) === id);
+  const mine = byMember.find((x) => String(x.id) === id);
   expect(mine).toBeDefined();
 
-  for (const j of [bySession[0], byId, mine]) {
-    expect(j.sessionOpenedAt).toBe(opened);
+  for (const x of [bySession[0], byId, mine]) {
+    expect(x.sessionOpenedAt).toBe(opened);
     // the row's creation day is still served, and is two days before the opening
-    expect(j.sessionDate).toBe(created!.d);
-    expect(Date.parse(opened) - Date.parse(`${j.sessionDate}T00:00:00Z`)).toBeGreaterThan(24 * 3600 * 1000);
+    expect(x.sessionDate).toBe(created!.d);
+    expect(Date.parse(opened) - Date.parse(`${x.sessionDate}T00:00:00Z`)).toBeGreaterThan(24 * 3600 * 1000);
   }
 });
