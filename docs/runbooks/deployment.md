@@ -577,15 +577,34 @@ its subdomain) — not a secret.
 
 ### 5.1 The api's request time limit
 
-The api ends a request that runs longer than **30 seconds** (`API_IDLE_TIMEOUT_SECONDS` in `backend/src/config.ts`, passed to
-`Bun.serve` as `idleTimeout`). It is below nginx's 60 s `proxy_read_timeout`, so the api, not the proxy, ends a stuck
-request. Bun's own default is 10 s and nothing set it before issue 1060, which is how one slow request on 2026-09-30
-became a 502. A request over **5 seconds** (`API_SLOW_REQUEST_MS`) logs one line with its method, path, duration, status
-and caller; one that finishes past the limit logs an error saying the client was cut off:
+The api ends a request that runs longer than **10 seconds** (`API_IDLE_TIMEOUT_SECONDS` in `backend/src/config.ts`, passed to
+`Bun.serve` as `idleTimeout`). That is Bun's own default; before issue 1060 nothing set it, so it was an accident, and it
+is now a decision. It is **not to be raised**: no api request should come near it, and a request over **5 seconds**
+(`API_SLOW_REQUEST_MS`) means CPU-bound or database-bound work is on the request path. The fix is to take that work off the
+path (a worker, a batch, an async submit), not to give it longer. Such a request logs one line with its method, path,
+duration, status and caller, and one that finishes past the limit logs an error saying the client was cut off:
 
 ```
 docker logs rm_prod-api-1 2>&1 | grep -aE '\[api\] (slow request|request ran past)'
 ```
+
+### 5.2 The CoinGecko key and GeckoTerminal
+
+`COINGECKO_API_KEY` (host `~/.env`) is one paid CoinGecko key with three users. The worker's `projects.refresh_coins` sends it
+to `pro-api.coingecko.com/api/v3` (issue 1047). The analytics-producer's `new_pools` sweep and the worker's token-price and
+pool lookups send it to `pro-api.coingecko.com/api/v3/onchain` (issue 1062), which is GeckoTerminal's data under CoinGecko's
+paid plan. Unset, they all use the keyless hosts, where GeckoTerminal allows about 10 calls a minute per IP. Our plan is
+**Basic**: it includes `new_pools`, token pools and token price, and not pool OHLCV, so OHLCV stays on the free host
+(`PRO_CALLS` in `backend/src/chain/gecko-endpoint.ts`; Analyst and above would add it). A 401 or 403 from the Pro host falls
+back to the free host for ten minutes and logs `[gecko] pro-api.coingecko.com answered HTTP …` once. Check the tier in use:
+
+```
+docker logs rm_prod-analytics-producer-1 2>&1 | grep -a '\[gecko\] new_pools via'
+docker logs rm_prod-worker-analytics-1   2>&1 | grep -a '\[gecko\]'
+```
+
+The source ledger redacts every `*api-key` request header. Setting the key is an owner step; the container must be
+recreated to read a changed `~/.env` (`docker compose up -d analytics-producer worker-analytics`).
 
 ## 6. Least privilege, rotation, storage
 
