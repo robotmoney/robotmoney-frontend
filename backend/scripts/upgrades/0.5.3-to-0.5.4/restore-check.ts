@@ -55,6 +55,16 @@ async function run(): Promise<number> {
       const absent = REQUIRED_TABLES.filter((t) => !present.has(t));
       record("release-tables", absent.length ? "FAIL" : "PASS", absent.length ? [`absent: ${absent.join(", ")}`] : `${REQUIRED_TABLES.length} tables the v0.5.4 changes read or write are present`,
         "The dump is not a v0.5.3 production database.");
+      // Standing invariant (0.5.0 4.4, 0.5.1 R2.7): rm_worker can INSERT into the three chain-state tables. A dump without it is not production now.
+      const grants = (await db`SELECT t AS tbl, has_table_privilege('rm_worker', t, 'INSERT') AS ok FROM unnest(array['wallet_backfill_state','chain_day_blocks','chain_address_floors']) t`) as unknown as { tbl: string; ok: boolean }[];
+      const noGrant = grants.filter((r) => !r.ok).map((r) => r.tbl);
+      record("rm-worker-grants", noGrant.length ? "FAIL" : "PASS", noGrant.length ? [`rm_worker lacks INSERT on: ${noGrant.join(", ")}`] : "rm_worker can INSERT into the 3 chain-state tables",
+        "Production's grants drifted from the v0.5.0 baseline: fix before the rehearsal.");
+      const judge = (await db`SELECT mode, model, third_party_enabled FROM swarm_judge_config LIMIT 1`) as unknown as { mode: string; model: string | null; third_party_enabled: boolean }[];
+      const j = judge[0];
+      record("judge-config", j && j.mode === "enforce" && j.model && !j.third_party_enabled ? "PASS" : "FAIL",
+        j ? `mode=${j.mode} model=${j.model ?? "NULL"} third_party_enabled=${j.third_party_enabled}` : ["swarm_judge_config has no row"],
+        "The judge must be enforce, with a model set, and third parties off (0.5.0 6.8, 0.5.1 R6.5).");
       return printVerdict(results, { logPrefix: PREFIX, okAll: "DUMP SAFE FOR 0.5.4", okWithWarnings: "DUMP SAFE FOR 0.5.4", blocked: "DUMP BLOCKED" });
     } finally { await db.end({ timeout: 5 }); }
   } finally { teardownContainer(restored.container, console.log); }

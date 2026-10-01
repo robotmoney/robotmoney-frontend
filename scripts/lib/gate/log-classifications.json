@@ -96,6 +96,36 @@
     "reason": "An nginx access-log line for a successful request; it matched an error word only through its URL, referrer or user agent (e.g. ?state=failed, a bot's .invalid URL)."
   },
   {
+    "id": "known-api-slow-request",
+    "match": "\\[api\\] slow request:",
+    "class": "known-issue",
+    "issue": "1079",
+    "reason": "A request that took over 5 s: work that does not belong on the request path. Reported on every gate so none hides; issue 1079 moves the known routes (source-acquisitions, swarm/register, analytics/vintages, run-packages, telemetry, parity-sweep) off it. The 10 s limit is a decision and is never raised."
+  },
+  {
+    "id": "known-api-request-ran-past-limit",
+    "match": "\\[api\\] request ran past the <n>s limit",
+    "class": "known-issue",
+    "issue": "1079",
+    "reason": "A request cut off at the explicit 10 s limit (v0.5.4 names the route and duration). Reported on every gate; issue 1079 owns the fix."
+  },
+  {
+    "id": "known-buyback-413-not-halved",
+    "match": "live index failed.*HTTP 413",
+    "class": "known-issue",
+    "issue": "1061",
+    "fixedIn": "0.5.4",
+    "reason": "The buyback eth_getLogs scan failing on a range the provider refuses (HTTP 413). v0.5.4 halves the range, so a recurrence after v0.5.4 is a regression."
+  },
+  {
+    "id": "known-gecko-paid-tier-refused",
+    "match": "(pro-api\\.coingecko\\.com|\\[gecko\\]).*(HTTP 429|HTTP 40[13])",
+    "class": "known-issue",
+    "issue": "1062",
+    "fixedIn": "0.5.4",
+    "reason": "The paid CoinGecko tier answering 429, 401 or 403. v0.5.4 uses the Basic plan key on the paid host, so a refusal after v0.5.4 is a regression (a bad key, or a plan limit reached)."
+  },
+  {
     "id": "external-geckoterminal",
     "match": "geckoterminal.*(throttled|retry budget exhausted|HTTP <n> — retrying|HTTP 429)",
     "class": "external",

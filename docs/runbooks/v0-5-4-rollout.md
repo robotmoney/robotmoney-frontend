@@ -1,6 +1,6 @@
 # v0.5.4 production rollout — a backend and driver patch, no migration
 
-> **Status: proposal (2026-10-01), not yet rehearsed or adopted.** It follows `docs/technical/release-runbooks.md`
+> **Status: rehearsed twice on stage-2 (2026-10-01); adopted pending the owner's go.** The checks are **cumulative** (section 1.3): every standing invariant of v0.5.0 to v0.5.3 is still checked here. It follows `docs/technical/release-runbooks.md`
 > (policy) and `docs/runbooks/rollout-procedure.md` (mechanics), and reuses `v0-5-1-rollout.md` and
 > `v0-5-2-rollout.md` where a step is the same. Where it says "as v0.5.1 R6.3", run that step as written there.
 > The tracking issue for what this patch does not explain is 1078.
@@ -38,7 +38,7 @@ Each change below is a thing that was seen in production on 2026-09-28 to 09-30:
 
 | # | Decision | Needed |
 |---|---|---|
-| D1 | Is `COINGECKO_API_KEY` set in `/root/.env` for this release? Without it, the Gecko change is inert (everything stays keyless) and the release is still correct. With it, R7.8 must pass. The key is an owner step: this runbook never reads or prints it | yes / no, and the time |
+| D1 | **Decided 2026-10-01: yes.** `COINGECKO_API_KEY` is set in `~/.env` on stage-2 and on production. R4.9a (stage) and R7.8 (production) must pass; the keyless path is not rehearsed. This runbook never reads or prints the key (counts only) | done |
 | D2 | A cutover window. The api and the website are down for the recreate (R6.4) | time |
 
 ### 1.2 The read-only query helper
@@ -52,6 +52,31 @@ q() { docker exec "$C" bun -e 'import postgres from "postgres"; const sql = post
 ```
 
 Only `SELECT` statements are used in this runbook.
+
+### 1.3 The cumulative invariants (what every 0.5.x release must still hold)
+
+A release adds its own checks to this list. It never drops one, unless the migration or fix that made it necessary is gone for good.
+`backend/scripts/upgrades/0.5.3-to-0.5.4/soak-checks.sh` runs most of them read-only against any stack (`PROJECT=rm_prod` on production, `PROJECT=<twin project> BASE_URL=http://127.0.0.1:48787` on a twin). It runs at R2 (baseline), R4 (twin), R7 (postflight) and at every R8 pulse. `prod:gate` and `twin:gate` run beside it.
+
+| Invariant | Since | Where it is checked |
+|---|---|---|
+| The dump holds every prior migration, none pending, the tables this release uses; `rm_worker` can INSERT into the chain-state tables; the judge is `enforce` with a model set and third parties off | 0.5.0, 0.5.1 | R3.3 (`restore-check.ts`) |
+| `schema_migrations` is identical before and after the cutover (no migration ran) | 0.5.1 | R2.11 baseline, R4, R6.6, R7.11 (`R8.p`) |
+| Judge config: `mode=enforce`, the pinned model, `third_party_enabled=false`; the judge's key is present and funded | 0.5.0, 0.5.1 | R2.12 (key probe), R7.11 (`R8.q`) |
+| Roles: the api connects as `rm_app`, never `doadmin`; `rm_worker` grants; `rm_readonly` reads every sequence | 0.5.0, 0.5.1 | R7.11 (`R8.r`) |
+| Six containers up and healthy, never restarted; the database writable; no dead job; every distinct log error classified (default deny) | 0.5.0 | `prod:gate` / `twin:gate` (R2.2, R4.4, R7.1, R8) |
+| Every subject publishes a judged, attended session with takes, a judgement and a receipt; quorum counts the active analysts (the judge is excluded); no session wedged past its window | 0.5.0, 0.5.1 | `twin:gate`, `prod:gate`, `R8.h`, `R8.i`, `R8.j` |
+| Regime runs at `:30` and research at `:00` every 3 h, each producing its output; no producer failure line | 0.5.2 | `R8.a`, `R8.b`, `R8.c` |
+| The ledger stays bounded: database growth within 100 MB per 6 h of the baseline; no `unchanged` or noise-only revisions; `source_payloads` stays absent; 11 of 11 ledger guards armed; the newest vintage's members add up | 0.5.2 | `R8.d`, `R8.e`, `R8.k`, `R8.k2`, `R8.l` |
+| Parity sweeps: none dead, none over 300 s (p50 near 126 s) | 0.5.1, 0.5.2 | `R8.f` |
+| No connection-pool starvation (no session idle in a transaction over 60 s); host disk free at least 5 GB | 0.5.2 | `R8.m`, `R8.n` |
+| The public site: 38 routes 200, one `?v=` stamp on every app module, no website 5xx or nginx `[error]`, `/health` and the judgements route 200 | 0.5.1, 0.5.3 | R6.7, R7.3, `R8.g`, `R8.s` |
+| Every page prints the day the session **opened** (`openedAt`, never null); the date audit passes | 0.5.4 | R4.5, R4.5b, R7.4, R7.4a, `R8.t` |
+| The regime day: each `regime asof` is the UTC day it ran | 0.5.4 | R4.6, R7.5, `R8.x` |
+| The api limit is an explicit 10 s: no `timed out after`; every request over 5 s is listed (issue 1079 owns the known ones) | 0.5.4 | R4.7, R7.6, `R8.u`, `R8.u2`, and the `known-api-*` rules in `scripts/lib/gate/log-classifications.json` |
+| The buyback scan never fails on a refused range (413 halves it) | 0.5.4 | R4.8, R7.7, `R8.v` |
+| Gecko uses the paid tier when the key is set; no 429/401/403; the key is in no ledger row, no api or website environment | 0.5.4 | R4.9a, R4.10, R7.8, R7.9, `R8.w`, `R8.w2`, `R8.w3` |
+| Known issues a release fixes carry a `known-issue` rule with `fixedIn`, so a recurrence fails the next gate | 0.5.1, 0.5.2, 0.5.4 | `log-classifications.json` (this release: `known-buyback-413-not-halved`, `known-gecko-paid-tier-refused`; the two 1079 rules warn until it ships) |
 
 ## R1. Code readiness (workstation)
 
@@ -67,6 +92,7 @@ Only `SELECT` statements are used in this runbook.
 | R1.8 | `cd backend && bun test --timeout=30000` | 0 fail, including `tests/gecko-endpoint.test.ts`, `tests/api-request-timing.test.ts`, `tests/buyback-logs-batching.test.ts`, `tests/swarm-session-list-subject.test.ts`, `tests/no-new-vendor.test.ts` | pass count |
 | R1.9 | `bun run --cwd frontend assemble` | "prerendered 38 routes" | route count |
 | R1.10 | `gh api repos/robotmoney/robotmoney-frontend/commits/$RC_SHA/check-runs --jq '.check_runs[]\|"\(.conclusion) \(.name)"'` | every required job `success` | list |
+| R1.12 | `bash -n backend/scripts/upgrades/0.5.3-to-0.5.4/soak-checks.sh && bun test scripts/tests/unit/gate-log-inventory.test.ts` | exit 0 (the cumulative checks parse; the classification rules load) | — |
 | R1.11 | Each PR in section 0 is merged to `main` and cherry-picked here: `git log --oneline v0.5.3..$RC_SHA \| grep -E '#(1057\|1058\|1060\|1061\|1062)'` | five lines | list |
 
 ## R2. Production baseline (read-only, `rm-frontend-prod-1`)
@@ -84,6 +110,8 @@ Run from a scratch clone at `RC_SHA`, never from the live checkout, which sits u
 | R2.7 | Every session in `scheduled` or `collecting`: `C=rm_prod-api-1; q "SELECT id, subject_id, state, window_closes_at FROM swarm_sessions WHERE state IN ('scheduled','collecting') ORDER BY convened_at"` (and R2.2's report lists them) | listed. A `collecting` session is interrupted by the driver restart: wait for it to publish, or record an owner waiver | the rows |
 | R2.8 | `df -h /` and `docker system df` | free ≥ 10 GB (the rebuild adds images) | GB |
 | R2.9 | `tmux ls; tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_current_command}'` | the pane running `bun smoke:archive` is identified. An idle `claude` session in pane `0:1.0` is noted and left alone | output |
+| R2.11 | **Record the baseline** the cumulative checks diff against: `cd /root/rm-gate-$RC_SHA && PROJECT=rm_prod R8_RECORD=1 R8_FULL=1 bash backend/scripts/upgrades/0.5.3-to-0.5.4/soak-checks.sh "$(date -u -d '-3 hours' +%FT%TZ)" 2>&1 \| tee /root/prod-gate-reports/R2-soak-$RC_SHA.txt` | no FAIL (a WARN is triaged like R2.2's); this saves the `schema_migrations` list and the database size under `~/.r8-rm_prod` | the file, `wc -l` of the migrations list |
+| R2.12 | The judge's key is present and **funded**: the probe in v0.5.1 R2.9 (prints a status code, never the key) | `200` (a `401` or `402` blocks the cutover) | status |
 | R2.10 | `ls /root/site-backups` and the newest database backup under `/root` | the latest website backup (rollback of the website half) exists | paths |
 
 ## R3. A fresh dump for the rehearsal (stage-2, against the replica)
@@ -101,7 +129,7 @@ As v0.5.1 R3, on `rm-frontend-stage-2`, never the production host: a full dump a
 | R3.0 | `df -h ~` | free ≥ 3 × the last dump | free GB |
 | R3.1 | `export RM_BACKUP_DIR=~/rm-backup-v054-$(date -u +%Y%m%dT%H%M%SZ)` | a **new** directory, named with today's stamp | path |
 | R3.2 | In tmux: `bun run smoke:capture 2>&1 \| tee ~/r3-capture.log` | exit 0; the log says `pg_is_in_recovery()=true` (the replica) | stamp, dump size, time |
-| R3.3 | `bun backend/scripts/upgrades/0.5.3-to-0.5.4/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt` | `DUMP SAFE FOR 0.5.4`: v0.5.3's 76 migrations recorded, **none pending**, the tables this release touches present | receipt |
+| R3.3 | `bun backend/scripts/upgrades/0.5.3-to-0.5.4/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt` | `DUMP SAFE FOR 0.5.4`: every prior-release migration recorded, **none pending**, the tables this release touches present, `rm_worker` grants and judge config as production's (4 PASS lines; the receipt prints the counts) | receipt |
 | R3.4 | Record the sessions the dump holds open: restore it and `q "SELECT id, subject_id, state, window_closes_at FROM swarm_sessions WHERE state IN ('scheduled','collecting') ORDER BY convened_at"` (R4.3a) | listed | rows |
 
 Production always has one subject's session `collecting`: windows are 6 h and the driver opens the next within about two minutes
@@ -120,7 +148,7 @@ A twin runs accelerated sessions (2 to 6 minute windows) and **spends inference 
 | R4.1 | Wipe: `bun run smoke:down; docker rm -fv $(docker ps -aq); bun run smoke:clean` | 0 containers, 0 volumes | — |
 | R4.2 | `git fetch origin --tags && git checkout --detach "$RC_SHA" && bun install --force && bun install --force --cwd backend` | HEAD = `RC_SHA` | HEAD |
 | R4.3 | In tmux: `bun smoke:twin -- --reuse --backup-dir "$RM_BACKUP_DIR" --no-tui 2>&1 \| while IFS= read -r l; do printf '%s %s\n' "$(date -u +%T)" "$l"; done \| tee ~/twin-$RC_SHA.log` | `READY`; `131 checks · 0 failed` | READY time = T0 |
-| R4.3a | `grep -E 'migrated: 00' ~/twin-$RC_SHA.log`; and the R3.4 query on the twin (`C=$PROJECT-api-1`) | **no** `migrated:` line (the dump already has all 76); the open sessions match R3.4 | lines |
+| R4.3a | `grep -E 'migrated: 00' ~/twin-$RC_SHA.log`; and the R3.4 query on the twin (`C=$PROJECT-api-1`) | **no** `migrated:` line (the dump already has every migration); the open sessions match R3.4 | lines |
 | R4.4 | `bun run twin:gate -- --driver-log ~/twin-$RC_SHA.log --report ~/twin-gate-reports/R4.4-$RC_SHA.md --wait 40 --sessions 2 --min-attendance 1` | exit 0: two sessions publish, a take from every active analyst, an applied judgement and a receipt, no dead job, no container restart | the report |
 | R4.5 | **The opened-at change.** `curl -s "http://127.0.0.1:48787/api/swarm/sessions?limit=5"` and the detail of the newest published session | every published session carries `openedAt` (an ISO instant), never null; for a session convened after T0 it is within a minute of its brief and **after** `generatedAt` when the row waited; `date` is unchanged | the JSON |
 | R4.5a | Browser pass on the twin's site (`/swarm`, a published session, `/vault/rmusdc`): the index row, the "Latest session" fact and the session header show the `openedAt` day and time (UTC) | the day matches `openedAt`, not `date`, for an adopted session | screenshots |
@@ -128,10 +156,11 @@ A twin runs accelerated sessions (2 to 6 minute windows) and **spends inference 
 | R4.6 | **The regime day.** `grep -E 'regime asof' ~/twin-$RC_SHA.log` | every line reads **today's UTC date**, including the lines for sessions the twin adopted from the backup (those were convened on an earlier day) | lines |
 | R4.7 | **The api limit and the slow-request log.** The limit is 10 s on purpose: a request over 5 s means work that does not belong on the request path. Every `[api] slow request` line is a finding to record (issue 1079 is the known one: `POST /api/analytics/source-acquisitions`). `docker logs "$PROJECT-api-1" 2>&1 \| grep -aE '\[api\] (slow request\|request ran past)\|timed out after'` and `grep -n 'idleTimeout' backend/src/api/index.ts` | no `timed out after`; each `[api] slow request` line is listed with its path and duration (the acquisitions route is expected until issue 1079 ships); `idleTimeout: API_IDLE_TIMEOUT_SECONDS` | lines |
 | R4.8 | **Buyback.** `docker logs "$PROJECT-worker-analytics-1" 2>&1 \| grep -aE 'Base RPC HTTP 413\|eth_getLogs .* answered HTTP 413\|live index failed'` | no `live index failed`. A `413` is followed by a `reading … separately` line | lines |
-| R4.9 | **Gecko, keyless (the default on stage-2).** `docker logs "$PROJECT-analytics-producer-1" 2>&1 \| grep -aE '\[gecko\]'` | `new_pools via free tier (api.geckoterminal.com)`. If the owner exported `COINGECKO_API_KEY` on stage-2, R4.9a replaces this | lines |
-| R4.9a | **Gecko, keyed (only if the key is set on stage-2).** The same grep, and `grep -aE 'HTTP 429\|answered HTTP 40[13]'` on the producer and analytics-worker logs | `new_pools via pro tier (pro-api.coingecko.com)`; 0 lines for the second grep | lines |
+| R4.9 | **Gecko, keyless (not used: D1 is yes, so run R4.9a).** `docker logs "$PROJECT-analytics-producer-1" 2>&1 \| grep -aE '\[gecko\]'` | `new_pools via free tier (api.geckoterminal.com)`. If the owner exported `COINGECKO_API_KEY` on stage-2, R4.9a replaces this | lines |
+| R4.9a | **Gecko, keyed (the key is set on stage-2).** The same grep, and `grep -aE 'HTTP 429\|answered HTTP 40[13]'` on the producer and analytics-worker logs | `new_pools via pro tier (pro-api.coingecko.com)`; 0 lines for the second grep | lines |
 | R4.10 | **The key never reaches the ledger or the api.** `q "SELECT count(*)::int AS n FROM source_fetches WHERE request_identity::text ~* 'x-cg-pro-api-key' AND request_identity::text !~ 'REDACTED'"` (0 even when no key is set), and `docker compose -p "$PROJECT" config --format json \| python3 -c "import json,sys; c=json.load(sys.stdin); print(sorted(k for k,v in c['services'].items() if 'COINGECKO_API_KEY' in (v.get('environment') or {})))"` | `n` is 0; the list is exactly `['analytics-producer', 'worker-analytics', 'worker-research', 'worker-swarm']` (the api and the website have none) | both |
 | R4.11 | The website checks R7 will run, run here first: the browser module pass (`/`, `/vaults`, `/vault/rmusdc`, `/swarm`, `/regime`, `/changelog` against the twin site: 0 module requests without the stamp, 0 failed, 0 page errors) and `bun run verify:live --tier readonly` on stage-2, which reads the twin from `.agents/smoke-state.json` (or pass `--base http://127.0.0.1:48787`). The browser pass can also run from a workstation against `https://stage.robotmoney-labs.dev`, which serves the twin | modules all carry one stamp; `verify:live` has no blocking condition. A session from the dump that was `collecting` past its window at the dump instant is reported as wedged until the twin closes it: re-run after R4.4 and record both | output |
+| R4.13 | **The cumulative checks on the twin**, twice: at READY with `R8_RECORD=1` (the baseline), and after R4.4 with `R8_FULL=1`: `PROJECT=$PROJECT BASE_URL=http://127.0.0.1:48787 [R8_RECORD=1] [R8_FULL=1] bash backend/scripts/upgrades/0.5.3-to-0.5.4/soak-checks.sh "$T0"` (`T0` is the READY instant, ISO). On a twin the first `:00`/`:30` slot after READY decides `R8.a`/`R8.b`: run the second pass at least 30 minutes after READY | no FAIL. A WARN is listed and triaged (an `R8.u2` warn for a route issue 1079 owns is expected on the twin) | both outputs |
 | R4.12 | Tear down within 30 minutes: stop the `smoke:twin` process (`tmux kill-session -t twin`), then R4.1's wipe | 0 containers, 0 volumes | time |
 
 ## R5. Go / no-go and RC tag
@@ -154,7 +183,7 @@ steps that must; clones for everything else.
 | R6.3 | Stop the driver: `tmux attach -t driver`; Ctrl-C the `smoke:archive`; then `cd /root/robotmoney-frontend && bun run smoke:down && docker compose ls` | `rm_prod` gone, 0 `rm_prod` containers. (Ctrl-C alone leaves the containers up; `smoke:down` is required.) `T0=$(date -u +%FT%TZ)` | output |
 | R6.4 | `cd /root/robotmoney-frontend && git status --porcelain` (nothing tracked); `git fetch origin --tags && git checkout v0.5.4-rc.N && git rev-parse HEAD` (= `RC_SHA`); `bun install --force && bun install --force --cwd backend`; `echo "CI=[$CI]"` (empty); then in tmux: `SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui 2>&1 \| while IFS= read -r l; do printf '%s %s\n' "$(date -u +%T)" "$l"; done \| tee /root/smoke-archive-v0.5.4.log` | `READY` printed; **no** `migrated:` line; the boot guards report armed | READY time |
 | R6.5 | `docker ps --format '{{.Names}} {{.Status}}'; docker exec rm_prod-worker-swarm-1 sh -c 'test -n "$OPENCODE_API_KEY" && echo key-set'` | six services Up and healthy; `key-set`. If D1: `docker exec rm_prod-analytics-producer-1 sh -c 'test -n "$COINGECKO_API_KEY" && echo key-set'` prints `key-set`, and the same on `rm_prod-worker-analytics-1` | output |
-| R6.6 | `q "SELECT name FROM schema_migrations ORDER BY name"` diffed against the same query run in R2 | identical (no migration ran) | diff |
+| R6.6 | `q "SELECT name FROM schema_migrations ORDER BY name"` diffed against R2.11's saved list (`~/.r8-rm_prod/migrations-base.txt`) | identical (no migration ran) | diff |
 | R6.7 | The website half, from the R6.1 clone: `cd $D && bun scripts/redeploy-website.ts --live /root/robotmoney-frontend --public https://robotmoney.network --dry-run`, then without `--dry-run`. (The boot may already have published the new SPA: `curl -s https://robotmoney.network/version.json` first, and skip if it already reads `RC_SHA`'s first 8 characters.) | `DONE`; every one of 38 routes 200; `version.json` = `RC_SHA` | receipt |
 | R6.8 | `curl -s https://robotmoney.network/ \| grep -o 'assets/js/app/main.js[^"]*'` | `?v=` and 8 hex characters | output |
 
@@ -168,22 +197,25 @@ steps that must; clones for everything else.
 | R7.4 | `curl -s "https://robotmoney.network/api/swarm/sessions?limit=8"` | every published session carries `openedAt`; the sessions still `collecting` carry it too if their brief went out |
 | R7.4a | `bun scripts/stage-date-audit.ts https://robotmoney.network` (from a workstation) | exit 0, 0 failed. Every page prints the day the session opened: the adopted sessions that were dated 09-28 on production on 2026-10-01 are the cases it checks first |
 | R7.5 | The first session the new driver opens or adopts: `grep -E 'regime asof' /root/smoke-archive-v0.5.4.log` | the line's date is **T0's UTC date** (or later), not the creation day of an adopted row |
-| R7.6 | `docker logs --since "$T0" rm_prod-website-server-1 2>&1 \| grep -aEc '" 5[0-9][0-9] '`, and `docker logs --since "$T0" rm_prod-api-1 2>&1 \| grep -aE 'timed out after\|\[api\] request ran past'` | the count is no higher than R2.3's rate; the second grep is empty |
+| R7.6 | `docker logs --since "$T0" rm_prod-website-server-1 2>&1 \| grep -aEc '" 5[0-9][0-9] '`, and `docker logs --since "$T0" rm_prod-api-1 2>&1 \| grep -aE 'timed out after\|\[api\] request ran past'` | 0, or at most 10 (a warning, listed); the second grep is empty. Compare with R2.3's 24 h count only as context: R2.3 is a 24 h window, this one starts at T0 |
 | R7.7 | `docker logs --since "$T0" rm_prod-worker-analytics-1 2>&1 \| grep -aE 'Base RPC HTTP 413\|live index failed'` | no `live index failed` |
 | R7.8 | If D1: `docker logs --since "$T0" rm_prod-analytics-producer-1 2>&1 \| grep -aE '\[gecko\]\|HTTP 429'` | `new_pools via pro tier`; no `HTTP 429`; no `answered HTTP 40[13]`. If D1 is no: `via free tier` and the 429s may remain (recorded, not a failure) |
 | R7.9 | If D1: `C=rm_prod-api-1; q "SELECT count(*)::int AS n FROM source_fetches WHERE request_identity::text ~* 'x-cg-pro-api-key' AND request_identity::text !~ 'REDACTED'"` | `n` is 0 |
-| R7.10 | **Tag now.** `git tag -a v0.5.4 "$RC_SHA" -m v0.5.4 && git push origin v0.5.4` (a release is tagged when its post-deploy checks pass, before any watch) | tag pushed |
+| R7.11 | **The cumulative checks on production:** `cd /root/rm-gate-$RC_SHA && PROJECT=rm_prod R8_FULL=1 bash backend/scripts/upgrades/0.5.3-to-0.5.4/soak-checks.sh "$T0" 2>&1 \| tee /root/prod-gate-reports/R7-soak-$RC_SHA.txt` | no FAIL; `R8.p` says the migrations are identical to R2.11's list | output |
+| R7.10 | **Tag now.** Only after R7.11 passes. `git tag -a v0.5.4 "$RC_SHA" -m v0.5.4 && git push origin v0.5.4` (a release is tagged when its post-deploy checks pass, before any watch) | tag pushed |
 
 ## R8. Watch (T0 → T0 + 8 h)
 
 Production opens one session per subject every 6 h with a 6 h window, so the first session this driver opens publishes at
 about T0 + 6 h. The watch runs **unattended**, so it cannot be skipped (issue 1078 item 8). In a second tmux window:
 
-`for m in 15 30 60 120 240 420; do sleep $((m*60 - $(date +%s) + $(date -d "$T0" +%s))); bun run prod:gate -- --mode post-release --release v0.5.4 --since "$T0" --defer-sessions --db-capacity-gb 30 --state-file /root/robotmoney-frontend/.agents/smoke-state.json --driver-log /root/smoke-archive-v0.5.4.log --report /root/prod-gate-reports/R8-${m}m-$RC_SHA.md; done`
+`for m in 15 30 60 120 240 420; do sleep $((m*60 - $(date +%s) + $(date -d "$T0" +%s))); bun run prod:gate -- --mode post-release --release v0.5.4 --since "$T0" --defer-sessions --db-capacity-gb 30 --state-file /root/robotmoney-frontend/.agents/smoke-state.json --driver-log /root/smoke-archive-v0.5.4.log --report /root/prod-gate-reports/R8-${m}m-$RC_SHA.md; (cd /root/rm-gate-$RC_SHA && PROJECT=rm_prod bash backend/scripts/upgrades/0.5.3-to-0.5.4/soak-checks.sh "$T0" 2>&1 | tee /root/prod-gate-reports/R8-${m}m-soak-$RC_SHA.txt); done`
+
+At the last pulse also run it with `R8_FULL=1`.
 
 | Step | When | Check | Pass |
 |---|---|---|---|
-| R8.1 | each pulse | the gate's exit code, R7.6, R7.7, R7.8 | exit 0; the same six containers, never restarted |
+| R8.1 | each pulse | the gate's exit code, and the cumulative checks (R7.6 to R7.9 are `R8.g`, `R8.u`, `R8.v`, `R8.w`) | exit 0; the same six containers, never restarted |
 | R8.2 | T0 + 8 h | the gate **without** `--defer-sessions` | exit 0: every subject published a session convened after T0 or adopted and briefed after T0, with takes ≥ half the analysts and a judgement; each session's `openedAt` is after its row's `generatedAt` and within its window; the driver log's `regime asof` is the day it ran |
 | R8.3 | T0 + 8 h | every session R2.7 listed was adopted and published, or is explained in writing | per-session line |
 
