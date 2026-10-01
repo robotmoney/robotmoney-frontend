@@ -132,6 +132,12 @@
     "reason": "GeckoTerminal rate limiting; the code retries, then degrades to last-persisted data."
   },
   {
+    "id": "external-wallet-balances-live-read-degraded",
+    "match": "wallet-balances: \\w+ live read failed, degrading to last-persisted sample",
+    "class": "external",
+    "reason": "A wallet-balances live price read failed (production 2026-10-01: GeckoTerminal HTTP 429, retry budget exhausted, the keyless tier v0.5.4 replaces) and the code degrades to the last persisted sample. The cause is on its own stack lines, which the inventory does not join to this headline."
+  },
+  {
     "id": "external-market-data-timeout",
     "match": "\\[extract\\] fetch \\S+ \\((yahoo|blockchain_com|fred|defillama\\w*|geckoterminal\\w*|coinmetrics)\\) FAILED: The operation timed out",
     "class": "external",
