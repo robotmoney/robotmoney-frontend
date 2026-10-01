@@ -505,6 +505,14 @@ jobs:
           ONBOARDING_REAL_EVAL: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && '1' || '' }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+          # The paid CoinGecko key (issue #1062). GeckoTerminal is CoinGecko's: with the key, the smoke's new_pools sweep
+          # and token-price lookups use pro-api.coingecko.com/api/v3/onchain instead of the keyless host, which allows
+          # ~10 calls a minute per IP and which this runner shares with the standing rm_smoke_* stack, so the keyless
+          # path 429s in CI (see "still throttled (HTTP 429)" in earlier runs). It reaches the containers through
+          # DEMO_COMPOSE_PASSTHROUGH. On a fork PR GitHub supplies an empty secret and the smoke falls back to the keyless
+          # host, exactly as before. The source ledger redacts the key header (source-ledger.ts), so it is not saved in
+          # the database or in any artifact built from it.
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
         # The checks this step runs took 40 minutes before, plus headroom for the
         # onboarding eval on the runs that spend one (see the derivation on the
         # boot step's timeout: about 61 minutes worst case, so 105 in all).

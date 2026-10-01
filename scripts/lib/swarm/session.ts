@@ -1177,6 +1177,18 @@ export async function latestJudgementProvenance(
   };
 }
 
+/**
+ * The day to refresh the regime for when a session starts: an explicit `regimeAsof`, else TODAY (UTC).
+ *
+ * NOT the session's own date. That is `convened_at`'s day, the day its row was created in `scheduled`, and a session
+ * that waits for its brief keeps it: on 2026-09-28 four rows were created at 00:11 to 00:40 UTC and briefed on 09-29
+ * and 09-30, and each asked for the 09-28 regime, so the briefs carried a stale one (issue 1058). A snapshot can never
+ * be dated after today (#382), and a session is never dated after today, so "today" is always the freshest valid day.
+ */
+export function regimeRefreshDay(regimeAsof: string | undefined, now: Date = new Date()): string {
+  return regimeAsof ?? now.toISOString().slice(0, 10);
+}
+
 // The member-container rail (issue #361 Phase 2): every present member runs in
 // its OWN container via the shared runMemberAgent() primitive; this driver
 // only drives the session lifecycle and observes. `rail` carries the compose
@@ -1302,7 +1314,7 @@ export async function runSession(
   // moving it here would reintroduce the foreign-key failure a clean database
   // hits on its first session.
   //
-  // `regimeAsof` (defaulting to the session's own date) stays a SEPARATE knob
+  // `regimeAsof` (defaulting to TODAY, see regimeRefreshDay) stays a SEPARATE knob
   // from the session date, and is still worth having after 0022 even though the
   // reason it was introduced is gone. A regime SNAPSHOT classifies real market
   // indicators, so it can never be produced for a date that has not happened —
@@ -1314,7 +1326,7 @@ export async function runSession(
   // ability to pin a classification to a different day than the sitting — e.g.
   // a session convened just after midnight UTC reading yesterday's snapshot.
   if (sessionIndex > 0) {
-    await runRegimeClassify(opts?.regimeAsof ?? date, rail);
+    await runRegimeClassify(regimeRefreshDay(opts?.regimeAsof), rail);
   }
 
   // Seed the reference-shaped subject fixtures (subject row + subject snapshot the

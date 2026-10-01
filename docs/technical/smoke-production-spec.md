@@ -107,6 +107,15 @@ One protocol for every tool that mutates or deploys against a database: `bun smo
 
 **What this replaces.** `#1014` (`a9f2008b`) delivered the judge's credential by a different route. One `agent-launcher` service held the Docker socket and the judge's `OPENCODE_API_KEY`, and injected that key into a short-lived judge container it spawned for each judging. That is credential management by socket, and it is reversed: the launcher, its socket mount and its per-request injection are gone, and the judge receives its key the way every participant does, from `credential.json`. `scripts/tests/integration/no-docker-socket-compose-config.test.ts` asserts that no service in any composition mounts the socket, and proves itself with a planted mount.
 
+**The CoinGecko key and GeckoTerminal.** `COINGECKO_API_KEY` (host `~/.env`) is one paid CoinGecko key with three users. The worker's `projects.refresh_coins` sends it to `pro-api.coingecko.com/api/v3` (issue 1047). The analytics-producer's `new_pools` sweep and the worker's token-price and pool lookups send it to `pro-api.coingecko.com/api/v3/onchain` (issue 1062), which is GeckoTerminal's data under CoinGecko's paid plan. Unset, they all use the keyless hosts, where GeckoTerminal allows about 10 calls a minute per IP. Our plan is **Basic**: it includes `new_pools`, token pools and token price, and not pool OHLCV, so OHLCV stays on the free host (`PRO_CALLS` in `backend/src/chain/gecko-endpoint.ts`; Analyst and above would add it). A 401 or 403 from the Pro host falls back to the free host for ten minutes and logs `[gecko] pro-api.coingecko.com answered HTTP …` once. Check the tier in use:
+
+```
+docker logs rm_prod-analytics-producer-1 2>&1 | grep -a '\[gecko\] new_pools via'
+docker logs rm_prod-worker-analytics-1   2>&1 | grep -a '\[gecko\]'
+```
+
+The source ledger redacts every `*api-key` request header. Setting the key is an owner step: the container must be recreated to read a changed `~/.env` (`docker compose up -d analytics-producer worker-analytics`).
+
 ## 4. Environment and target
 
 ### 4.1 `RM_ENV` (policy)
