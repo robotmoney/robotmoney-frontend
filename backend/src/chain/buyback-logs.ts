@@ -21,6 +21,7 @@ import {
 } from "../config.ts";
 import { sql } from "../db/client.ts";
 import {
+  BaseRpcHttpError,
   decodeUint256,
   encodeAddressArg,
   ethBlockNumber,
@@ -330,6 +331,32 @@ async function wethSpentForTx(
   return matched ? Number(raw) / WEI_18 : null;
 }
 
+/**
+ * `eth_getLogs` over [from, to], halving the range when the provider answers HTTP 413 (the response would be too big).
+ *
+ * A busy range can exceed a provider's response limit even when it is under the block-range cap that
+ * BUYBACK_LOG_CHUNK was sized for. On production, 2026-09-29 to 09-30, the scan failed five times with
+ * `Base RPC HTTP 413` and left the persisted rows (and so the buyback figures) where they were (issue 1061).
+ * The halves are disjoint and are read low then high, so every log is returned once and in block order. A range
+ * that never answers 413 makes one request. A single block that still answers 413 throws: it cannot be split.
+ */
+async function getLogsSplittingOn413(
+  filter: { address: string; topics: (string | null)[] },
+  from: number,
+  to: number,
+): Promise<EthLog[]> {
+  try {
+    return await ethGetLogs({ ...filter, fromBlock: "0x" + from.toString(16), toBlock: "0x" + to.toString(16) }, rpcOpts());
+  } catch (err) {
+    if (!(err instanceof BaseRpcHttpError) || err.status !== 413 || from >= to) throw err;
+    const mid = from + Math.floor((to - from) / 2);
+    console.warn(`[buyback-logs] eth_getLogs ${from}-${to} answered HTTP 413; reading ${from}-${mid} and ${mid + 1}-${to} separately`);
+    const low = await getLogsSplittingOn413(filter, from, mid);
+    const high = await getLogsSplittingOn413(filter, mid + 1, to);
+    return [...low, ...high];
+  }
+}
+
 export interface IndexResult {
   indexed: number;
   skipped: string | null;
@@ -389,14 +416,10 @@ export async function indexBuybacks(): Promise<IndexResult> {
     // block's day candle below, cached per day so a many-swap day costs one call.
     for (let c = 0; c < maxChunks && from <= latest; c++) {
       const to = Math.min(from + chunk - 1, latest);
-      const logs: EthLog[] = await ethGetLogs(
-        {
-          address: cfg.robotmoneyToken,
-          topics: [TRANSFER_TOPIC, null, topicAddress(cfg.primaryWallet)],
-          fromBlock: "0x" + from.toString(16),
-          toBlock: "0x" + to.toString(16),
-        },
-        rpcOpts(),
+      const logs: EthLog[] = await getLogsSplittingOn413(
+        { address: cfg.robotmoneyToken, topics: [TRANSFER_TOPIC, null, topicAddress(cfg.primaryWallet)] },
+        from,
+        to,
       );
       // ONE batched prefetch per chunk, before the per-swap loop below.
       // Every swap needs its block's timestamp and its block's WETH-out logs,
