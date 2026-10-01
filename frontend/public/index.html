@@ -7,31 +7,31 @@
     <!-- Primary meta. This is the STATIC baseline (home) served to crawlers and
          link-unfurlers that do not run JS; once JS runs, the client router
          rewrites <title>/description/canonical/OG per route via
-         assets/js/app/seo.js. Baking per-route content for no-JS crawlers is the
-         deploy-time prerender step, tracked separately. -->
-    <title>Robot Money — Autonomous Treasury for the Agent Economy</title>
-    <meta name="description" content="Robot Money is an autonomous USDC treasury on Base. One deposit spreads across multi-protocol DeFi yield and agent tokens; withdraw at NAV anytime." />
+         assets/js/app/seo.js. scripts/prerender.ts writes the same tags, and the
+         route's own content, into every page in sitemap.xml at deploy time. -->
+    <title>Robot Money: The Treasury Layer for the Agent Economy</title>
+    <meta name="description" content="The treasury layer for the agent economy. One USDC deposit on Base spreads across multi-protocol DeFi yield and agent tokens; withdraw at NAV anytime." />
     <link rel="canonical" href="https://robotmoney.network/" />
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
     <meta name="theme-color" content="#06080c" />
     <meta name="author" content="Robot Money" />
-    <meta name="keywords" content="autonomous treasury, agent economy, USDC vault, DeFi yield, Base, AI agents, MCP skill, onchain, $ROBOTMONEY" />
+    <meta name="keywords" content="treasury layer, agent economy, USDC vault, DeFi yield, Base, AI agents, agent skill, investment swarm, onchain, $ROBOTMONEY" />
 
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Robot Money" />
-    <meta property="og:title" content="Robot Money — Autonomous Treasury for the Agent Economy" />
-    <meta property="og:description" content="One USDC deposit, actively managed across multi-protocol DeFi yield and a curated agent-token basket. Withdraw at NAV anytime — and any AI agent can do it autonomously via the MCP skill." />
+    <meta property="og:title" content="Robot Money: The Treasury Layer for the Agent Economy" />
+    <meta property="og:description" content="One USDC deposit, actively managed across multi-protocol DeFi yield and a curated agent-token basket. Withdraw at NAV anytime, and any AI agent can do it on its own with the deposit skill." />
     <meta property="og:url" content="https://robotmoney.network/" />
     <meta property="og:image" content="https://robotmoney.network/assets/og-image.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Robot Money — an autonomous treasury for the agent economy" />
+    <meta property="og:image:alt" content="Robot Money, the treasury layer for the agent economy" />
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:site" content="@RobotMoneyAgent" />
-    <meta name="twitter:title" content="Robot Money — Autonomous Treasury for the Agent Economy" />
+    <meta name="twitter:title" content="Robot Money: The Treasury Layer for the Agent Economy" />
     <meta name="twitter:description" content="One USDC deposit, actively managed across multi-protocol DeFi yield and a curated agent-token basket. Withdraw at NAV anytime." />
     <meta name="twitter:image" content="https://robotmoney.network/assets/og-image.png" />
 
@@ -66,7 +66,7 @@
           "name": "Robot Money",
           "url": "https://robotmoney.network",
           "logo": "https://robotmoney.network/assets/icon-512.png",
-          "description": "An autonomous treasury for the agent economy — a managed USDC yield vault on Base.",
+          "description": "The treasury layer for the agent economy: a managed USDC yield vault on Base.",
           "sameAs": [
             "https://x.com/RobotMoneyAgent",
             "https://t.me/+aFxo8CRpkI80YmM0",
@@ -300,10 +300,10 @@
 
     <!-- scripts/prerender.ts replaces this marker with the route's no-script
          data block: the absolute API URLs that fill this page. It sits AFTER
-         the closing tag on purpose: backend/src/api/static.ts matches the
-         empty view mount above as an exact string in order to inline docs
-         fragments, so anything placed INSIDE the mount would silently stop
-         docs pages server-rendering. Do not repeat that literal here. -->
+         the closing tag on purpose: scripts/prerender.ts matches the empty
+         view mount above as an exact string to inline each route's view, so
+         anything placed INSIDE the mount would silently stop pages
+         prerendering. Do not repeat that literal here. -->
     <!--AGENT-DATA-->
 
     <!-- ── Footer (site-wide; rendered once by the shell) ── -->
@@ -373,6 +373,7 @@
               <div class="footer__links">
                 <a href="/tokenomics" class="footer__link">Token</a>
                 <a href="/media" class="footer__link">Media coverage</a>
+                <a href="/faq" class="footer__link">FAQ</a>
                 <a href="/performance" class="footer__link">Protocol wallets</a>
                 <a href="/swarm/subjects/robotmoney-treasury" class="footer__link">RM Protocol Labs Treasury</a>
                 <a href="/deposit#contracts" class="footer__link">Contracts</a>

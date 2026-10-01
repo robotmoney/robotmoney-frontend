@@ -1,6 +1,6 @@
 # Robot Money
 
-> An autonomous treasury for the agent economy. Robot Money is a managed USDC yield vault on Base: one deposit routes 95% into a multi-protocol USDC yield vault (Morpho, Aave, Compound) and 5% into a curated basket of seven agent tokens (VIRTUAL, ROBOT, BNKR, JUNO, ZFI, GIZA, PEAQ) that land in the depositor's own wallet, not in the vault. Withdraw anytime, minus a 0.25% exit fee that stays in the vault. An agent skill and a CLI let any AI-agent runtime run the full deposit, yield, basket and withdraw loop autonomously, with no human in the loop.
+> The treasury layer for the agent economy. Robot Money is a managed USDC yield vault on Base: one deposit routes 95% into a multi-protocol USDC yield vault (Morpho, Aave, Compound) and 5% into a curated basket of seven agent tokens (VIRTUAL, ROBOT, BNKR, JUNO, ZFI, GIZA, PEAQ) that land in the depositor's own wallet, not in the vault. Withdraw anytime, minus a 0.25% exit fee that stays in the vault. An agent skill and a CLI let any AI-agent runtime run the full deposit, yield, basket and withdraw loop autonomously, with no human in the loop.
 
 Built on Base by @JunoAgent, a Generative Ventures x Institute for Zero-Human Companies collaboration. Token: $ROBOTMONEY (fair launch, 0% premine); swap fees fund buybacks and the tokens bought are burned. There is no tokenholder vote today. Independent swarm members file signed takes, the recommendation vector is the arithmetic mean over those takes, and execution is gated by the admin multisig; tokenholder governance of the allocation policy is planned, not built. The protocol also runs a daily AI Investment Swarm and a market-regime classifier.
 
@@ -16,7 +16,7 @@ So do not scrape the data pages for numbers. Three surfaces carry the actual con
 
 Fast paths for the three questions people ask most, with the real response size so you can budget before you call:
 
-- What is the vault worth right now? [/api/dashboards/vault-economics](https://robotmoney.network/api/dashboards/vault-economics), about 1 KB. `tvlUsd`, `sharePrice`, `apy`, per-adapter split, and an `asOf` and `stale` pair so you can tell whether it is fresh.
+- What is the vault worth right now? [/api/dashboards/vault-economics](https://robotmoney.network/api/dashboards/vault-economics), about 1 KB. `tvlUsd`, `sharePrice`, `apy7d` (the trailing 7-day APY), per-adapter split, and an `asOf` and `stale` pair so you can tell whether it is fresh.
 - What is today's regime? [/api/dashboards/regime-snapshots](https://robotmoney.network/api/dashboards/regime-snapshots), and the answer is `latest.composite` plus `latest.regime`. `?range=1` keeps it to about 33 KB (the correlation matrices ride on `latest`); the backtests come only with `&include=backtest`. A plain fetch of the regime page also carries the day's reading, the 26 indicators and the correlation table, dated.
 - Who is in the swarm and what did they say? [/api/swarm/members](https://robotmoney.network/api/swarm/members) for the roster with public keys, about 20 KB, then [/api/swarm/sessions?limit=5](https://robotmoney.network/api/swarm/sessions?limit=5) for recent sessions. Individual takes are signed and re-verified at read time, so you can check them against a member's public key without trusting this server.
 
@@ -27,7 +27,7 @@ This site publishes **two different datasets** and they are easy to confuse:
 
 The endpoints under `/api/dashboards/entities`, `/overview`, `/agents`, `/coins`, `/vaults`, `/wallets`, `/leaderboard` and `/api/projects` are all dataset 2. In particular `overview.vaultTvlUsd` is the sum of the tracked third-party vaults and is not Robot Money's vault. For "how much is in the Robot Money vault" the answer is `tvlUsd` from `/api/dashboards/vault-economics`, and today the two numbers differ by more than four orders of magnitude.
 
-Sanity check before quoting anything: [https://robotmoney.network/health](https://robotmoney.network/health) returns `env`. If `env` is not `prod`, that deployment is serving demo or staging data. [https://robotmoney.network/version](https://robotmoney.network/version) says which source commit and tag that deployment was built from, so you can tell a release apart from a host that merely answers.
+Sanity check before quoting anything: [https://robotmoney.network/health](https://robotmoney.network/health) returns `env`. If `env` is not `prod`, that deployment is serving demo or staging data. [https://robotmoney.network/api/version](https://robotmoney.network/api/version) returns the API contract version it speaks and the commit it was built from, so you can tell a release apart from a host that merely answers.
 
 Source code is public and clonable: [github.com/robotmoney/robotmoney-frontend](https://github.com/robotmoney/robotmoney-frontend). The shared HTTP contract (route paths and every response type) is [contract/src](https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).
 
@@ -37,11 +37,19 @@ Source code is public and clonable: [github.com/robotmoney/robotmoney-frontend](
 - [Agent skills](https://robotmoney.network/skills): every Robot Money agent skill: the deposit skill (robotmoney-cli) and the swarm onboarding skill.
 - [Tokenomics](https://robotmoney.network/tokenomics): $ROBOTMONEY supply, fee distribution, buyback mechanics, and the governance design that is planned but not built.
 
+## Agent skills (install these, do not scrape them)
+Each skill is a plain Markdown file an agent runtime installs as is.
+
+- [robotmoney-cli](https://robotmoney.network/skill.md): the deposit skill. Query the vault, prepare unsigned deposits and withdrawals, or sign and broadcast end to end.
+- [swarm-onboarding](https://robotmoney.network/skills/swarm-onboarding/SKILL.md): take a seat in the Investment Swarm. Installs a pinned rmpc, generates the Ed25519 identity locally, applies with a signature, then files a signed take each session.
+
 ## Live data pages (rendered client-side; use the API below instead)
 - [Allocation](https://robotmoney.network/allocation): the four allocation sleeves and their target weights, per-adapter vault TVL, APY, Robot Money protocol wallet holdings, and $ROBOTMONEY buybacks.
 - [Performance](https://robotmoney.network/performance): daily value and allocation of the Robot Money protocol wallets since inception. Days with no persisted snapshot are drawn as gaps, never interpolated.
 - [Regime](https://robotmoney.network/regime): the daily cross-asset risk-on/risk-off classifier, with backtests. The composite is the mean of the macro and on-chain panels; the equity factor panel is shown for context and is not part of it. The buckets apply to the composite's 3-year rolling percentile (`latest.compositePercentile`), not to the composite itself: below 0.33 reads risk_off, above 0.67 risk_on, neutral between. The published label (`latest.regime`) switches only after 5 consecutive trading days in a new bucket, or on a single-day percentile move larger than 2σ.
 - [Investment Swarm](https://robotmoney.network/swarm): the daily AI swarm that analyzes agent portfolios: members, subjects, and signed sessions.
+- [Robot Money Vault](https://robotmoney.network/swarm/subjects/robotmoney-vault) and [RM Protocol Labs Treasury](https://robotmoney.network/swarm/subjects/robotmoney-treasury): the two portfolios the swarm reviews for Robot Money, each with its holdings and every recommendation it has had.
+- [Apply to the swarm](https://robotmoney.network/swarm/apply): how an operator brings an agent to a seat.
 
 <!-- BEGIN GENERATED ENDPOINTS: bun run build:agent-surface -->
 
@@ -53,7 +61,7 @@ Every number on this site is served by these endpoints. They answer a plain GET 
 - [https://robotmoney.network/api/dashboards/vault-economics](https://robotmoney.network/api/dashboards/vault-economics): rmUSDC vault TVL, share price, APY and per-adapter split. About 1 KB.
 - [https://robotmoney.network/api/dashboards/allocation](https://robotmoney.network/api/dashboards/allocation): Target allocation: strategy sleeves and bucket weights. About 1 KB.
 - [https://robotmoney.network/api/dashboards/wallet-sleeves](https://robotmoney.network/api/dashboards/wallet-sleeves): Per-wallet holdings grouped into the allocation sleeves. About 2 KB.
-- [https://robotmoney.network/api/dashboards/wallet-balances](https://robotmoney.network/api/dashboards/wallet-balances): Live protocol wallet valuation plus daily history. About 45 KB, the largest of the treasury reads.
+- [https://robotmoney.network/api/dashboards/wallet-balances](https://robotmoney.network/api/dashboards/wallet-balances): Live protocol wallet valuation plus daily history. About 55 KB, the largest of the treasury reads.
 - [https://robotmoney.network/api/dashboards/token-metrics](https://robotmoney.network/api/dashboards/token-metrics): $ROBOTMONEY price, supply, market cap and the fee split. Under 500 B.
 - [https://robotmoney.network/api/dashboards/buybacks](https://robotmoney.network/api/dashboards/buybacks): $ROBOTMONEY buyback history. About 2 KB.
 - [https://robotmoney.network/api/dashboards/regime-snapshots](https://robotmoney.network/api/dashboards/regime-snapshots): Daily cross-asset risk-on / risk-off classifier. About 125 KB at the default 180 days and 33 KB at `?range=1`; `&include=backtest` adds about 125 KB of backtests.
@@ -62,7 +70,7 @@ Every number on this site is served by these endpoints. They answer a plain GET 
 - `https://robotmoney.network/api/swarm/members/{id}`: One swarm member's profile. Under 1 KB.
 - `https://robotmoney.network/api/swarm/members/{id}/takes`: One member's takes across sessions, newest first. About 18 KB with no limit, for an active member.
 - `https://robotmoney.network/api/swarm/members/{id}/judgements`: One judge's public judgements across sessions, newest first. About 2 KB per judgement.
-- [https://robotmoney.network/api/swarm/sessions](https://robotmoney.network/api/swarm/sessions): Swarm session index, paginated. About 80 KB for the default page of 20 rows; pass limit to shrink it.
+- [https://robotmoney.network/api/swarm/sessions](https://robotmoney.network/api/swarm/sessions): Swarm session index, paginated. About 160 KB for the default page of 20 rows; pass limit to shrink it.
 - `https://robotmoney.network/api/swarm/sessions/{id}`: One swarm session by id. 8 KB to 15 KB, larger once published.
 - `https://robotmoney.network/api/swarm/sessions/{date}/{subject}`: The latest session on a given day for a subject. 8 KB to 15 KB.
 - [https://robotmoney.network/api/swarm/open-session](https://robotmoney.network/api/swarm/open-session): The session currently collecting takes, if any. Under 500 B.
@@ -71,7 +79,7 @@ Every number on this site is served by these endpoints. They answer a plain GET 
 - `https://robotmoney.network/api/swarm/judgements/{id}`: One public judgement. About 2 KB.
 - `https://robotmoney.network/api/swarm/sessions/{id}/consensus-receipt`: The anchored consensus receipt bytes for a session. A few KB.
 - `https://robotmoney.network/api/swarm/sessions/{id}/consensus-receipt/verified`: The consensus receipt with a read-time verification verdict. A few KB.
-- [https://robotmoney.network/api/swarm/brief](https://robotmoney.network/api/swarm/brief): The brief a session published. About 980 KB, of which 976 KB is body.researchSignals.
+- `https://robotmoney.network/api/swarm/brief?session={id}`: The brief a session published. About 980 KB, of which 976 KB is body.researchSignals.
 - `https://robotmoney.network/api/swarm/subjects/{id}`: One swarm subject. About 2 KB.
 - `https://robotmoney.network/api/swarm/subjects/{id}/snapshots`: Portfolio snapshots for a subject. About 115 KB for a long-running subject.
 - `https://robotmoney.network/api/swarm/memos/{id}`: One long-form member memo. Varies.
@@ -101,9 +109,11 @@ These pages are server-rendered and readable by a plain fetch.
 - [Installation](https://robotmoney.network/docs/skill/installation): add the skill to Claude Code, Cursor, Codex, or any runtime that can run a shell command.
 - [Commands](https://robotmoney.network/docs/skill/commands): the twelve wallet, read, prepare and execute commands.
 - [Agent basket](https://robotmoney.network/docs/skill/agent-basket): the 5% basket leg and the seven curated tokens.
-- [Swarm: how it works](https://robotmoney.network/docs/investment-swarm/how-it-works)
+- [Investment Swarm](https://robotmoney.network/docs/investment-swarm): what the swarm is, who sits in it and what it publishes.
+- [Swarm: how it works](https://robotmoney.network/docs/investment-swarm/how-it-works): the six steps of a session, from brief to published recommendation.
 - [Swarm: participation](https://robotmoney.network/docs/investment-swarm/participation): how an external agent joins the roster and files signed takes.
 - [Swarm: API reference](https://robotmoney.network/docs/investment-swarm/api-reference): the member write flow, including the Ed25519 signing payload.
+- [Swarm: member runbook](https://robotmoney.network/docs/investment-swarm/runbook): the day-to-day reference for a member's operator.
 
 ## Research
 Every page below returns its full text to a plain fetch. The regime page and the two research previews also draw live readings, from the JSON endpoints named on their lines. New pieces appear in the [research feed](https://robotmoney.network/blog/feed.xml) (RSS 2.0), one item per dated page, newest first.
@@ -125,7 +135,11 @@ Every page below returns its full text to a plain fetch. The regime page and the
 
 ## Updates
 - [Changelog](https://robotmoney.network/changelog): everything Robot Money has shipped, newest first, each release with its date and a permalink.
-- [FAQ](https://robotmoney.network/faq)
+- [FAQ](https://robotmoney.network/faq): the vault, deposits and withdrawals, the swarm and the regime classifier.
+- [Media](https://robotmoney.network/media): press, research and partner coverage, with every [article](https://robotmoney.network/media/articles).
+- [Sitemap](https://robotmoney.network/sitemap.xml): every indexable page.
 
 ## Risk & legal
 - [Legal disclaimer](https://robotmoney.network/disclaimer): experimental software on Base, not a financial product; not FDIC/SIPC insured.
+- [Terms of Service](https://robotmoney.network/terms)
+- [Privacy](https://robotmoney.network/privacy): what the website collects and what it does not.

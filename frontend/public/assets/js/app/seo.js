@@ -7,11 +7,10 @@
 // Twitter tags so each route is distinct to crawlers that execute JS (Googlebot)
 // and to in-app history/bookmarks.
 //
-// Crawlers and link-unfurlers that do NOT run JS still see only the shell's
-// static tags — the real per-route fix for them is the deploy-time prerender
-// step (tracked separately, outside the frontend). This module is the client
-// half of that story and the single source of per-route copy the prerender can
-// reuse.
+// Crawlers and link-unfurlers that do NOT run JS get the same tags from the
+// deploy-time prerender (scripts/prerender.ts), which calls renderMeta below
+// for every route in sitemap.xml. This module is the single source of that
+// per-route copy for both paths.
 
 // The smart contract risks page's cases and categories, written from its view
 // by scripts/build-smart-contract-risks-data.ts (RM-138).
@@ -105,22 +104,22 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
 /** @type {Record<string, RouteMeta>} */
 const META = {
   "/": {
-    title: "Robot Money — Autonomous Treasury for the Agent Economy",
-    description: "Robot Money is an autonomous USDC treasury on Base. One deposit spreads across multi-protocol DeFi yield and agent tokens; withdraw at NAV anytime.",
+    title: "Robot Money: The Treasury Layer for the Agent Economy",
+    description: "The treasury layer for the agent economy. One USDC deposit on Base spreads across multi-protocol DeFi yield and agent tokens; withdraw at NAV anytime.",
   },
   // /deposit is the site's main action (RM-129); until then it was /skills,
   // which is now the index of every Robot Money agent skill.
   "/deposit": {
     title: "Deposit USDC with Your Agent | Robot Money",
-    description: "Deposit USDC into Robot Money from any AI agent with one skill: 95% into Fixed Income (rmUSDC) on Base, 5% into seven Small Cap Tokens. Withdraw anytime, minus a 0.25% exit fee.",
+    description: "Deposit USDC from any AI agent with one skill: 95% into Fixed Income (rmUSDC) on Base, 5% into seven Small Cap Tokens. Withdraw anytime, less a 0.25% fee.",
   },
   "/skills": {
     title: "Agent Skills | Robot Money",
-    description: "Robot Money's agent skills: the deposit skill (robotmoney-cli) for depositing into and withdrawing from the vault, and the swarm onboarding skill for taking a seat in the investment swarm.",
+    description: "Robot Money's agent skills: robotmoney-cli to deposit into and withdraw from the vault, and the swarm onboarding skill to take a seat in the investment swarm.",
   },
   "/tokenomics": {
-    title: "$ROBOTMONEY Tokenomics & Governance — Robot Money",
-    description: "$ROBOTMONEY directs allocation of the Robot Money USDC vault on Base. Holders vote which agent tokens it holds; protocol revenue funds buybacks and burns.",
+    title: "$ROBOTMONEY Tokenomics & Governance | Robot Money",
+    description: "$ROBOTMONEY supply, fee split and buybacks: swap fees buy the token back and burn it. Tokenholder governance of the allocation is planned, not built.",
   },
   "/allocation": {
     title: "Allocation: Target Sleeves and Vaults | Robot Money",
@@ -150,7 +149,7 @@ const META = {
     robots: "noindex, follow",
   },
   "/performance": {
-    title: "Wallet Performance & AUM History — Robot Money",
+    title: "Wallet Performance & AUM History | Robot Money",
     description: "Track Robot Money's historical AUM and allocation since inception. Daily portfolio snapshots across all strategy wallets, drawn from live onchain data.",
   },
   "/regime": {
@@ -161,11 +160,11 @@ const META = {
     modified: RESEARCH_REVISED,
   },
   "/swarm": {
-    title: "AI Investment Swarm — Robot Money",
+    title: "AI Investment Swarm | Robot Money",
     // The trailing caveat is production's and is not decoration: this string is
     // the swarm's search-results surface, where a reader meets stances and
     // "recommendation" with none of the page's own disclaimer around them.
-    description: "Robot Money's AI Investment Swarm analyzes agent portfolios daily on Base — multiple lenses, one portfolio per session, one signed take per member. Auto-generated content, not financial advice.",
+    description: "Robot Money's AI Investment Swarm analyzes agent portfolios daily on Base, one signed take per member per session. Auto-generated content, not financial advice.",
   },
   // Linked from the footer of every page ("Apply to Swarm") and the entry point
   // to the whole external-member funnel, yet it had no entry here and none in
@@ -175,7 +174,7 @@ const META = {
   // home page's content. An unlisted /swarm/apply would serve the front page.
   "/swarm/apply": {
     title: "Apply to the Investment Swarm | Robot Money",
-    description: "Bring your agent to the Robot Money Investment Swarm. Generate an Ed25519 identity locally, submit a signed application, and file signed takes over the REST API.",
+    description: "Bring your agent to the Robot Money Investment Swarm: generate an Ed25519 identity locally, submit a signed application, then file signed takes over REST.",
   },
   "/projects": {
     title: "Agentic Economy Ecosystem — Robot Money",
@@ -188,23 +187,81 @@ const META = {
     robots: "noindex, follow",
   },
   "/media": {
-    title: "Media Coverage & Press — Robot Money",
-    description: "Browse press, research, token listings, and partner coverage of Robot Money, the autonomous treasury and USDC vault on Base for AI agents.",
+    title: "Media Coverage & Press | Robot Money",
+    description: "Press, research, token listings and partner coverage of Robot Money, the treasury layer for the agent economy.",
   },
   "/changelog": {
-    title: "Changelog — Robot Money",
+    title: "Changelog | Robot Money",
     description: "What Robot Money has shipped, month by month: the investment swarm, the vault on Base, the allocation and the regime classifier behind it.",
   },
   "/docs": {
-    title: "Robot Money Docs — Vault, Swarm & Agent Skill",
+    title: "Robot Money Docs: Vault, Swarm & Agent Skill",
     description: "Explore Robot Money's developer docs: the ERC-4626 USDC vault on Base, the daily AI Investment Swarm, and the robotmoney-cli skill for AI agents.",
   },
+  // Each docs and media page names itself. They had fallen to SECTIONS below,
+  // which titled them from the slug ("Api Reference") and gave all nine docs
+  // pages the hub's description, so search results could not tell them apart.
+  "/docs/skill": {
+    title: "Robot Money Skill (robotmoney-cli) | Robot Money Docs",
+    description: "robotmoney-cli lets any AI agent query the Robot Money vault on Base, prepare unsigned transactions, or sign and broadcast end to end, with JSON output.",
+  },
+  "/docs/skill/installation": {
+    title: "Install the Robot Money Skill | Robot Money Docs",
+    description: "Add the Robot Money skill to Claude Code, Cursor, Codex or any runtime that runs a shell command: an npm package run through npx, no global install.",
+  },
+  "/docs/skill/commands": {
+    title: "Skill Commands | Robot Money Docs",
+    description: "Every robotmoney-cli command: reads that query the vault, prepares that return unsigned calldata, and executes that sign and broadcast on Base.",
+  },
+  "/docs/skill/agent-basket": {
+    title: "Agent Token Basket | Robot Money Docs",
+    description: "The basket leg of a Robot Money deposit: a fixed allocation across seven agent-economy tokens beside the vault deposit. Optional, atomic and set per call.",
+  },
+  "/docs/investment-swarm": {
+    title: "Investment Swarm | Robot Money Docs",
+    description: "The Robot Money Investment Swarm: a daily review of three portfolios by independent AI agents, each filing a signed take. Open to peers, published in full.",
+  },
+  "/docs/investment-swarm/how-it-works": {
+    title: "How the Investment Swarm Works | Robot Money Docs",
+    description: "How an Investment Swarm session runs: the six steps from brief to published recommendation, what data flows where, and what the session produces.",
+  },
+  "/docs/investment-swarm/participation": {
+    title: "Join the Investment Swarm | Robot Money Docs",
+    description: "Bring an agent into the Robot Money Investment Swarm: generate an identity, apply with a signature, and file a signed take each session. Any LLM, any language.",
+  },
+  "/docs/investment-swarm/api-reference": {
+    title: "Investment Swarm API Reference | Robot Money Docs",
+    description: "The Investment Swarm API: every endpoint, the exact request and response shapes, the Ed25519 signing payload and each status code it returns.",
+  },
+  "/docs/investment-swarm/runbook": {
+    title: "Swarm Member Runbook | Robot Money Docs",
+    description: "The day-to-day reference for a swarm member's operator: install the skill, let the agent onboard and file a take every session, and verify its takes.",
+  },
+  "/media/articles": {
+    title: "Articles | Robot Money Media",
+    description: "Press coverage, research and commentary on Robot Money, on-chain treasuries and the agent economy.",
+  },
+  "/media/videos": {
+    title: "Videos | Robot Money Media",
+    description: "Videos, interviews and demos about Robot Money and the agent economy.",
+  },
+  // The two subjects the nav and footer link on every page. In sitemap.xml so
+  // the prerender writes them a page of their own; any other subject still
+  // takes SWARM_DETAIL below.
+  "/swarm/subjects/robotmoney-vault": {
+    title: "Robot Money Vault | Robot Money Investment Swarm",
+    description: "The Robot Money Vault as the Investment Swarm reviews it: its holdings and their history, and every recommendation the swarm has made for it.",
+  },
+  "/swarm/subjects/robotmoney-treasury": {
+    title: "RM Protocol Labs Treasury | Robot Money Investment Swarm",
+    description: "The RM Protocol Labs Treasury as the Investment Swarm reviews it: its holdings and their history, and every recommendation the swarm has made for it.",
+  },
   "/faq": {
-    title: "Robot Money FAQ — Autonomous Treasury Vault on Base",
-    description: "Find answers about Robot Money — the ERC-4626 USDC vault on Base, autonomous DeFi allocation, the regime classifier, and permissionless NAV withdrawals.",
+    title: "Robot Money FAQ: The USDC Vault on Base",
+    description: "Answers about Robot Money: the ERC-4626 USDC vault on Base, autonomous DeFi allocation, the regime classifier, and permissionless NAV withdrawals.",
   },
   "/disclaimer": {
-    title: "Legal Disclaimers — Robot Money",
+    title: "Legal Disclaimers | Robot Money",
     description: "Read the legal disclaimers for the Robot Money protocol on Base: experimental DeFi software with smart contract, regulatory, and market risks.",
   },
   // Static site policy pages (issue #395) — general marketing pages, not part
@@ -212,11 +269,11 @@ const META = {
   // dashboard pages, see the dashboard entries further below). Indexable
   // like /disclaimer above; no `robots` override needed.
   "/terms": {
-    title: "Terms of Service — Robot Money",
+    title: "Terms of Service | Robot Money",
     description: "The Terms of Service governing your use of the Robot Money website and analytics dashboard on Base.",
   },
   "/privacy": {
-    title: "Privacy Policy — Robot Money",
+    title: "Privacy Policy | Robot Money",
     description: "What data the Robot Money website collects, what it does not, and how onchain data is treated as public.",
   },
   // A placeholder hub nothing links to since the footer became the site index
@@ -397,6 +454,22 @@ const META = {
   },
 };
 
+// The swarm's per-record pages. Their ids are not known at build time, so the
+// prerender cannot write them and they reach a crawler through the shell; this
+// is what the client sets once the page loads. A session, take or judgement is
+// addressed by an opaque id, so its title names the kind of record rather than
+// the id. An application status page is one person's application: never indexed.
+const SWARM_DETAIL = [
+  { re: /^\/swarm\/members\/([^/]+)$/, kind: "Swarm Member", description: "A member of Robot Money's AI Investment Swarm: its lens, its public key and every signed take it has filed. Auto-generated content, not financial advice." },
+  { re: /^\/swarm\/subjects\/([^/]+)$/, kind: "Swarm Portfolio", description: "A portfolio the Robot Money Investment Swarm reviews: its holdings and their history, and every recommendation the swarm has made for it." },
+  { re: /^\/swarm\/(?:sessions\/[^/]+|\d{4}-\d{2}-\d{2}\/[^/]+)$/, kind: "Swarm Session", description: "One Investment Swarm session: each member's signed take, the recommendation they average to, and the judge's opinion. Auto-generated, not financial advice." },
+  { re: /^\/swarm\/takes\/[^/]+$/, kind: "Signed Take", description: "One swarm member's signed take on a portfolio, with its stance, confidence and reasoning, verified at read time. Auto-generated content, not financial advice." },
+  { re: /^\/swarm\/judgements\/[^/]+$/, kind: "Swarm Judgement", description: "The swarm judge's published opinion on one session, with the model and the hashes it came from. Auto-generated content, not financial advice." },
+  { re: /^\/swarm\/apply\/[^/]+$/, kind: "Application Status", description: "The status of one application to the Robot Money Investment Swarm.", robots: "noindex, nofollow" },
+];
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // Dynamic detail routes (/docs/*, /blog/*, /swarm/*, /media/*) inherit a base
 // description from their section and get a title derived from the last path
 // segment, so they are still unique and descriptive without hand-authoring each.
@@ -470,6 +543,18 @@ const BLOG_POSTS = {
   },
 };
 
+// The data a backtest post is built from, published beside it in /data. The
+// posts cite these only in source comments, so a reader that wanted the
+// numbers had no way to find them; as `downloads` they reach the page head and
+// its no-script block.
+/** @type {Record<string, string>} */
+const BLOG_DATA = {
+  "treasury-allocation": "/data/treasury-allocation.json",
+  "regime-eq-vs-base": "/data/regime-eq-comparison.json",
+  "honest-backtesting-weights": "/data/weighting-comparison.json",
+  "regime-conservative-aggressive": "/data/regime-conservative-aggressive.json",
+};
+
 /** @type {Record<string, RouteMeta>} */
 const POST_META = Object.fromEntries(
   Object.entries(BLOG_POSTS).map(([slug, p]) => [
@@ -482,6 +567,7 @@ const POST_META = Object.fromEntries(
       type: "BlogPosting",
       published: p.published,
       modified: RESEARCH_REVISED,
+      ...(BLOG_DATA[slug] ? { downloads: [{ path: BLOG_DATA[slug], title: "The backtest behind this post, as JSON", type: "application/json" }] } : {}),
     },
   ]),
 );
@@ -536,7 +622,7 @@ const LEGACY_ALIASES = [
 // here and be noindexed — deliberate, and the same trade the stub-prefix checks
 // already make. Add the entry with the page.
 const NOT_FOUND_META = {
-  title: "Page Not Found — Robot Money",
+  title: "Page Not Found | Robot Money",
   description: "This Robot Money page does not exist. Browse the vault, regime classifier, research and investment swarm from the navigation.",
   robots: "noindex, follow",
 };
@@ -638,12 +724,24 @@ export function metaFor(pathname) {
   const p = canonicalPath(pathname);
   if (META[p]) return META[p];
   if (POST_META[p]) return POST_META[p];
+  for (const d of SWARM_DETAIL) {
+    const m = d.re.exec(p);
+    if (!m) continue;
+    // A member or subject is addressed by a readable handle ("athena"), which
+    // names the page; a UUID does not.
+    const handle = m[1] && !UUID_RE.test(m[1]) ? titleize(m[1]) : "";
+    return {
+      title: `${handle || d.kind} | Robot Money Investment Swarm`,
+      description: d.description,
+      ...(d.robots ? { robots: d.robots } : {}),
+    };
+  }
   for (const { prefix, suffix } of SECTIONS) {
     if (p === prefix || p.startsWith(prefix + "/")) {
       const seg = p.split("/").filter(Boolean).pop();
       const name = titleize(seg || "");
       return {
-        title: name ? `${name} — ${suffix}` : suffix,
+        title: name ? `${name} | ${suffix}` : suffix,
         description: (META[prefix] || META["/"]).description,
       };
     }
@@ -1039,8 +1137,8 @@ function escapeHtml(str) {
  * route they do not have a prerendered file for, which is every dynamic route —
  * so a shared member or session link unfurls as the home page.
  *
- * `robots` is substituted here and is NOT substituted by the prerenderer today,
- * which is why every `noindex` in this file has so far been render-time only.
+ * `robots` is substituted here too, so a `noindex` above reaches the raw HTML
+ * of every prerendered route.
  *
  * A tag missing from the shell is left missing rather than injected: each
  * replace is a no-op when its pattern does not match, so an unexpected shell
