@@ -2,6 +2,10 @@
 // page, like a take, and a session judged by several judges shows each judge's
 // opinion (operators who run a judge want to find theirs).
 //
+// WHEN THE SESSION OPENED (#1084). `sessionDate` is the session's `date`, the day its row was created; a session that
+// waited for its brief opened later. `sessionOpenedAt` is the instant of its first brief revision, read at query time,
+// so the judgement pages can show the day the session happened.
+//
 // READ ONLY, AND NO MIGRATION. Everything here reads `swarm_session_judgements`
 // (migrations 0039/0040/0041/0043) as it already stands. The privileged
 // `GET /api/swarm/admin/sessions/:id/judgements` (admin.ts) stays the full
@@ -57,6 +61,7 @@ async function publicJudgements(scope: Fragment, limit?: number): Promise<SwarmJ
              j.id, j.session_id, j.judged_by, j.judged_by_member_id, j.source, j.model,
              j.prompt_hash, j.inputs_digest, j.opinion, j.created_at,
              s.subject_id, s.date AS session_date,
+             (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = j.session_id) AS session_opened_at,
              -- Whether the session's recommendation set weights: only then has
              -- the judge's call a target to update (a session that published
              -- none, or a portfolio review, has nothing to update). A live

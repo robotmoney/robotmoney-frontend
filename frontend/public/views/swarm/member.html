@@ -170,7 +170,7 @@
                 <div class="rr-take__top">
                   <div class="rr-take__what">
                     <a class="rr-take__name" :href="`/swarm/subjects/${encodeURIComponent(j.subjectId)}`" x-text="subjectNames[j.subjectId] || j.subjectId"></a>
-                    <time class="mp-take__date" :datetime="j.sessionDate" x-text="formatDate(j.sessionDate, 'short')"></time>
+                    <time class="mp-take__date" :datetime="j.sessionOpenedAt || j.sessionDate" x-text="formatDate(j.sessionOpenedAt || j.sessionDate, 'short')"></time>
                   </div>
                   <div class="rr-take__stance">
                     <template x-if="adviceCall(j)">

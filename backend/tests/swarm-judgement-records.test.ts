@@ -212,7 +212,7 @@ test("a session's public judgements: enforce, applied and published only, one pe
   const [inHouse, seated] = list;
   expect(Object.keys(inHouse).sort()).toEqual([
     "createdAt", "disagreements", "id", "inputsDigest", "judgedBy", "judgedByMemberId", "model",
-    "promptHash", "rationale", "recommendsWeights", "releaseSafety", "sessionDate", "sessionId", "source", "subjectId",
+    "promptHash", "rationale", "recommendsWeights", "releaseSafety", "sessionDate", "sessionId", "sessionOpenedAt", "source", "subjectId",
   ]);
   // A prose session sets no weights: its judges' calls have nothing to update.
   expect(inHouse).toMatchObject({
@@ -377,4 +377,35 @@ test("Themis judging through judgeSessionAdmin: the session names Themis, and th
   const record = (await memberJudgements("themis")).body.judgements as any[];
   expect(record.map((x) => [x.sessionId, x.judgedBy])).toEqual([[s.sessionId, themisId]]);
   expect((await sessionJudgements(s.sessionId)).body.judgements).toEqual(record);
+});
+
+// Issue 1084. `sessionDate` is the session's `date`, the day its row was created. A session that waited for its brief
+// opened later, and the judgement pages show the day the session happened, so the three public reads carry
+// `sessionOpenedAt`: the instant of the session's first brief revision, read at query time (no column).
+test("the three public judgement reads carry when the session really opened, not only the day its row was created", async () => {
+  const a = await seatJudge({ prefix: "judge_open" });
+  const s = await judging("opened");
+  await judgeWith(a, s.sessionId, "The judge of record's view.");
+  // The row sat in `scheduled` for two days before its brief went out.
+  await sql`UPDATE swarm_sessions SET convened_at = now() - interval '2 days', generated_at = now() - interval '2 days' WHERE id = ${s.sessionId}`;
+  expect((await publish(s.sessionId)).outcome).toBe("judged");
+
+  const [first] = await sql`SELECT min(created_at) AS at FROM swarm_brief_revisions WHERE session_id = ${s.sessionId}`;
+  const opened = new Date(first!.at).toISOString();
+  const [created] = await sql`SELECT date::text AS d FROM swarm_sessions WHERE id = ${s.sessionId}`;
+
+  const bySession = (await sessionJudgements(s.sessionId)).body.judgements as any[];
+  expect(bySession.length).toBeGreaterThan(0);
+  const id = String(bySession[0].id);
+  const byId = (await judgementById(id)).body as any;
+  const byMember = (await memberJudgements(String(bySession[0].judgedBy))).body.judgements as any[];
+  const mine = byMember.find((j) => String(j.id) === id);
+  expect(mine).toBeDefined();
+
+  for (const j of [bySession[0], byId, mine]) {
+    expect(j.sessionOpenedAt).toBe(opened);
+    // the row's creation day is still served, and is two days before the opening
+    expect(j.sessionDate).toBe(created!.d);
+    expect(Date.parse(opened) - Date.parse(`${j.sessionDate}T00:00:00Z`)).toBeGreaterThan(24 * 3600 * 1000);
+  }
 });

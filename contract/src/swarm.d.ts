@@ -365,6 +365,8 @@ export interface SwarmJudgement {
   sessionId: string;
   subjectId: string;
   sessionDate: string;
+  /** When the session really opened: the instant of its first brief revision. `sessionDate` is the day its row was created, which can be days earlier. */
+  sessionOpenedAt: string | null;
   /** The judging party: an immutable member id, or `robotmoney-in-house`. */
   judgedBy: string;
   /** The judge's member id when the judge is a seated member, else null. */
