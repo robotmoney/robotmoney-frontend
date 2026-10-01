@@ -32,7 +32,7 @@
 // when it sits in the build context; if a Dockerfile ever COPYs one, that file
 // has to become tracked for the plan id to see it.
 
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, normalize } from "node:path";
 
@@ -105,13 +105,17 @@ export function resolveSourceTrees(run: SourceRunner, contexts: readonly string[
   const unique = [...new Set(contexts.map(normalizeContext))].sort();
   if (unique.length === 0) return {};
 
-  const realIndex = must(run, ["git", "rev-parse", "--path-format=absolute", "--git-path", "index"]);
   const scratch = mkdtempSync(join(tmpdir(), "rm-source-identity-"));
   try {
     const index = join(scratch, "index");
-    // Starting from the real index keeps Git's stat cache, so unchanged files
-    // are not re-hashed; a repository with no index yet starts empty.
-    if (existsSync(realIndex)) copyFileSync(realIndex, index);
+    // The scratch index starts EMPTY, so `git add` hashes every file in the
+    // contexts instead of trusting a stat cache. Copying the real index kept
+    // that cache, and a cache entry is trusted whenever a file's size and
+    // mtime match: an edit of the same size made within the same timestamp tick
+    // as the last index write could be missed, so the identity would name the
+    // source from before the edit (a CI run caught exactly that in the
+    // "uncommitted edit changes it" test). Hashing the contexts costs a read of
+    // their tracked and unignored files, which is small beside an image build.
     const env = { GIT_INDEX_FILE: index };
     must(run, ["git", "add", "--all", "--", ...unique], env);
     const root = must(run, ["git", "write-tree"], env);
