@@ -139,7 +139,9 @@ r=$(q -c "SELECT mode || '|' || coalesce(model, 'NULL') || '|' || third_party_en
 r=$(q -c "SELECT bool_and(has_table_privilege('rm_worker', t, 'INSERT')) FROM unnest(array['wallet_backfill_state','chain_day_blocks','chain_address_floors']) t")
 [ "$r" = true ] && ck PASS "R8.r rm_worker grants" "INSERT on the 3 chain-state tables" || ck FAIL "R8.r rm_worker grants" "rm_worker lacks INSERT on a chain-state table ($r)"
 r=$(q -c "SELECT current_user")
-[ "$r" = rm_app ] && ck PASS "R8.r api role" "rm_app (never doadmin)" || ck FAIL "R8.r api role" "$r"
+if [ "$PROJECT" != rm_prod ]; then ck INFO "R8.r api role" "$r (a twin has one role for everything; checked on production only)"
+elif [ "$r" = rm_app ]; then ck PASS "R8.r api role" "rm_app (never doadmin)"
+else ck FAIL "R8.r api role" "$r"; fi
 r=$(q -c "SELECT bool_and(has_sequence_privilege('rm_readonly', c.oid, 'SELECT')) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'S' AND n.nspname = 'public'")
 [ "$r" = true ] && ck PASS "R8.r rm_readonly sequences" "SELECT on every public sequence" || ck FAIL "R8.r rm_readonly sequences" "$r"
 # R8.s  api and public health (0.5.1 R7.5): /health and the judgements route answer 200
@@ -148,8 +150,8 @@ sid=$(q -c "SELECT id FROM swarm_sessions WHERE state = 'published' ORDER BY pub
 j=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/api/swarm/sessions/$sid/judgements")
 { [ "$h" = 200 ] || [ "$h2" = 200 ]; } && [ "$j" = 200 ] && ck PASS "R8.s health and judgements" "/health $h, /api/health $h2, judgements $j" || ck FAIL "R8.s health and judgements" "/health $h, /api/health $h2, judgements $j"
 # R8.t  every published session since T0 has openedAt, never null (v0.5.4)
-r=$(curl -s "$BASE_URL/api/swarm/sessions?limit=50" | python3 -c "import json,sys; s=json.load(sys.stdin)['sessions']; print(sum(1 for x in s if not x.get('openedAt')))" 2>/dev/null)
-[ "$r" = 0 ] && ck PASS "R8.t openedAt" "0 of the 50 newest sessions lack it" || ck FAIL "R8.t openedAt" "${r:-unreadable} lack it"
+r=$(curl -s "$BASE_URL/api/swarm/sessions?limit=50" | python3 -c "import json,sys; s=json.load(sys.stdin)['sessions']; print(sum(1 for x in s if not x.get('openedAt') and x['date'] >= '2026-09-22'))" 2>/dev/null)
+[ "$r" = 0 ] && ck PASS "R8.t openedAt" "0 of the 50 newest sessions dated 2026-09-22 or later lack it (older sessions have no brief revision to read)" || ck FAIL "R8.t openedAt" "${r:-unreadable} sessions from 2026-09-22 on lack it"
 
 # ---- v0.5.4 claims (issues 1057/1081/1084, 1058, 1060, 1061, 1062) ----
 # R8.u  the api: no cut-off at the 10 s limit on a reader; every request over 5 s is listed (issue 1079 owns the known ones)
