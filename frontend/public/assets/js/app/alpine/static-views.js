@@ -5,6 +5,7 @@
 // quo rather than weakening existing coverage. JSDoc-typing this file is a
 // worthwhile follow-up, not a drive-by.
 import { api, ROUTES, path } from "../lib/api.js";
+import { archiveHasSnapshot, loadArchiveBrief } from "../lib/swarm-archive.js";
 import { assetDot, subjectDot, resolveTokenColors } from "./views/shared.js";
 import { CATEGORICAL, SERIES, REGIME } from "../lib/chart-theme.js";
 import { forgetApplication, rememberApplication } from "../lib/application-memory.js";
@@ -373,6 +374,7 @@ export async function loadArchiveSubject(id) {
 }
 
 export async function loadArchiveSnapshot(subject, date) {
+  if (!(await archiveHasSnapshot(subject, date))) return null;
   try { return normalizeSnapshot(await fetchJson(`/data/swarm/subjects/${subject}/${date}.json`)); }
   catch (_) { return null; }
 }
@@ -1627,7 +1629,7 @@ export function registerStaticViews(Alpine) {
         const res = await api.get(`${ROUTES.swarm.brief}${qs}`);
         if (res && !res.error) return res;
       } catch (_) { /* fall through to the archive */ }
-      return fetchJson(`/data/swarm/briefs/${date}-${id}.json`).catch(() => null);
+      return loadArchiveBrief(date, id);
     },
     latestRow: null,
     // A weights subject whose newest session set no weights held its target:
@@ -1848,7 +1850,7 @@ export function registerStaticViews(Alpine) {
           if (b && !b.error) return b;
         }
         return archivePreferred(s.date)
-          ? fetchJson(`/data/swarm/briefs/${s.date}-${s.subjectId}.json`).catch(() => null)
+          ? loadArchiveBrief(s.date, s.subjectId)
           : null;
       };
       const withBrief = async (row) => ({ ...row, reference: referenceWeights(await briefFor()) });
@@ -3394,7 +3396,7 @@ export function registerStaticViews(Alpine) {
       const ids = [...new Set([...this.takes.map((t) => t.memberId), ...KNOWN_ARCHIVE_MEMBERS])];
       const members = await Promise.all(ids.map((id) => loadArchiveMember(id).catch(() => null)));
       this.members = members.filter(Boolean);
-      this.brief = await fetchJson(`/data/swarm/briefs/${date}-${subject}.json`).catch(() => null);
+      this.brief = await loadArchiveBrief(date, subject);
       // The archive path set no allocation at all, so a bucket_weights session
       // read from a backendless checkout drew Recommended alone — no target to
       // compare it against and no way to see whether it deviated. Same fallback
