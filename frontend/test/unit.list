@@ -52,6 +52,7 @@ scripts/tests/unit/no-baked-allocation-literals.test.ts
 scripts/tests/unit/no-client-side-feeds.test.ts
 scripts/tests/unit/onboarding-skill-rmpc-install-verified.test.ts
 scripts/tests/unit/regime-indicator-glossary-links.test.ts
+scripts/tests/unit/swarm-archive-index.test.ts
 scripts/tests/unit/swarm-docs-rmpc-and-routes.test.ts
 scripts/tests/unit/swarm-session-take-key.test.ts
 scripts/tests/unit/relative-time-left.test.ts
