@@ -4099,16 +4099,18 @@ export function registerStaticViews(Alpine) {
       if (this.source !== "api" || !at || !Number.isFinite(Date.parse(at))) return "";
       return `${new Date(at).toISOString().slice(11, 16)} UTC`;
     },
-    // Record generated, as a time when it is the session's own day (the header
-    // prints that date), dated only when generated on another. Guarded:
-    // toISOString() throws on an unparseable stamp, so that one prints as is.
+    // When the row was created, as a time when that is the day the header shows (the header prints the day the session
+    // OPENED, issue 1081), dated when it is another: a session that waited for its brief was created days before it
+    // opened, and a bare "00:11 UTC" beside "October 1" would read as Oct 1 00:11. Guarded: toISOString() throws on an
+    // unparseable stamp, so that one prints as is.
     generatedLabel() {
       const at = this.session?.generatedAt || this.session?.generated_at;
       const t = Date.parse(at);
       if (!Number.isFinite(t)) return at || "";
       const iso = new Date(t).toISOString();
       const time = `${iso.slice(11, 16)} UTC`;
-      return iso.slice(0, 10) === String(this.session?.date || "").slice(0, 10) ? time : `${this.formatDate(at, "short")} · ${time}`;
+      const shown = String(sessionWhen(this.session) || "").slice(0, 10);
+      return iso.slice(0, 10) === shown ? time : `${this.formatDate(at, "short")} · ${time}`;
     },
     sessionJsonHref() {
       const s = this.session;
