@@ -823,7 +823,7 @@ export function registerStaticViews(Alpine) {
         this.subject = subject;
         this.roster = roster;
         if (location.pathname === routeAtEntry) {
-          document.title = `Judgement by ${this.judgeName()}, ${this.formatDate(j.sessionDate, "short")}: Robot Money Investment Swarm`;
+          document.title = `Judgement by ${this.judgeName()}, ${this.formatDate(j.sessionOpenedAt || j.sessionDate, "short")}: Robot Money Investment Swarm`;
         }
       } catch (_) {
         this.error = "This judgement could not be loaded.";
@@ -1258,7 +1258,7 @@ export function registerStaticViews(Alpine) {
         verifiable: verifiable.length,
         archival: this.record.length - verifiable.length,
         verified: verifiable.filter((r) => r.take?.verified).length,
-        lastFiled: this.record[0] ? this.formatDate(this.record[0].sessionDate, "short") : "—",
+        lastFiled: this.record[0] ? this.formatDate(this.record[0].take?.receivedAt || this.record[0].sessionDate, "short") : "—",
         last: this.record[0] || null,
       };
     },

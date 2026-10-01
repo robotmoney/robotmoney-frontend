@@ -1195,8 +1195,8 @@ test("a session page opens on its date and phase, then leads with the recommenda
   await expect(first.locator(".sv__stance-badge")).toHaveText("cautious");
   await expect(first.locator(".rr-conf")).toHaveText("Confidence 72%");
 
-  // The record's generation time, without the date the header already gives.
-  await expect(page.locator("#evidence .rr-dl > div").filter({ hasText: "Record generated" }).locator("dd")).toHaveText("23:58 UTC");
+  // The row's creation time (`generatedAt`), without the date the header already gives. Labelled for what it is: the header shows when the session OPENED (issue 1084).
+  await expect(page.locator("#evidence .rr-dl > div").filter({ hasText: "Row created" }).locator("dd")).toHaveText("23:58 UTC");
 });
 
 // The targets the session's OWN brief handed it are what its outcome is

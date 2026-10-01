@@ -299,6 +299,7 @@ export function toPublicJudgement(row: Row): SwarmJudgement {
     sessionId: row.session_id,
     subjectId: row.subject_id,
     sessionDate: day(row.session_date),
+    sessionOpenedAt: instant(row.session_opened_at),
     judgedBy: row.judged_by,
     judgedByMemberId: row.judged_by_member_id ?? null,
     source: row.source === "model" ? "model" : "fallback",

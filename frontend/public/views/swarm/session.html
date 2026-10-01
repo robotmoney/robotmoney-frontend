@@ -659,7 +659,7 @@
             <template x-if="takes.length"><div><p class="rr-k rr-sub" x-text="signatureHeadline()"></p></div></template>
             <dl class="rr-dl">
               <template x-if="(session.generatedAt || session.generated_at) && generatedLabel() !== sessionTime()">
-                <div><dt>Record generated</dt><dd><time :datetime="session.generatedAt || session.generated_at" x-text="generatedLabel()"></time></dd></div>
+                <div><dt>Row created</dt><dd><time :datetime="session.generatedAt || session.generated_at" x-text="generatedLabel()"></time></dd></div>
               </template>
               <!-- Weights sessions only: a portfolio's targets are in its brief,
                    and this row could only contradict them. -->
