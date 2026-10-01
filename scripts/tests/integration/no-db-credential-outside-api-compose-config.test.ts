@@ -362,6 +362,7 @@ describe("only the named services carry a database credential (§9, §10)", () =
     "ANALYTICS_API_URL",
     "ANALYTICS_SOURCE",
     "ANALYTICS_TOKEN_FILE",
+    "COINGECKO_API_KEY",
     "HTTP_FETCH_CACHE_TTL_MS",
     "PRODUCER_REGIME_CRON",
     "PRODUCER_RESEARCH_CRON",
@@ -369,8 +370,17 @@ describe("only the named services carry a database credential (§9, §10)", () =
   /** Keys shaped like a credential: a token, a password, a secret, a key, or a database URL. */
   const CREDENTIAL_SHAPED = /TOKEN|PASSWORD|SECRET|_KEY$|DATABASE_URL|^PG/;
 
+  /**
+   * A data-vendor key is not a credential to the database or to this system:
+   * the producer fetches market data (GeckoTerminal) with the paid CoinGecko
+   * key (#1077). It is allowed by name and nothing else key-shaped is.
+   */
+  const DATA_VENDOR_KEYS: ReadonlySet<string> = new Set(["COINGECKO_API_KEY"]);
+
   function producerCredentialKeys(env: Record<string, unknown>): string[] {
-    return Object.keys(env).filter((k) => CREDENTIAL_SHAPED.test(k)).sort();
+    return Object.keys(env)
+      .filter((k) => CREDENTIAL_SHAPED.test(k) && !DATA_VENDOR_KEYS.has(k))
+      .sort();
   }
 
   test("`analytics-producer`'s only credential is its token FILE, in every composition", () => {
