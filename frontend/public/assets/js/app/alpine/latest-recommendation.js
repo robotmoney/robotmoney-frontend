@@ -49,7 +49,7 @@ export function latestRecommendation() {
       return latest && this.recSession && latest.id !== this.recSession.id ? latest : null;
     },
     /** @param {any} s */
-    recDate(s) { return s?.date ? fmtDate(s.date) : ""; },
+    recDate(s) { const at = s?.openedAt || s?.publishedAt || s?.date; return at ? fmtDate(at) : ""; },
     /** @param {any} s */
     recHref(s) { return sessionHref(s); },
     recRationale() { return sessionSummary.rationaleOf.call(sessionSummary, this.recSession); },

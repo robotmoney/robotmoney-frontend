@@ -738,9 +738,9 @@
         </section>
 
         <nav class="rr-recnav" aria-label="Session navigation">
-          <span><template x-if="neighbours.older"><a :href="sessionHrefOf(neighbours.older)" x-text="`← ${formatDate(neighbours.older.date, 'short')}`"></a></template></span>
+          <span><template x-if="neighbours.older"><a :href="sessionHrefOf(neighbours.older)" x-text="`← ${formatDate(whenOf(neighbours.older), 'short')}`"></a></template></span>
           <a :href="subjectHref()">All sessions on this subject</a>
-          <span><template x-if="neighbours.newer"><a :href="sessionHrefOf(neighbours.newer)" x-text="`${formatDate(neighbours.newer.date, 'short')} →`"></a></template></span>
+          <span><template x-if="neighbours.newer"><a :href="sessionHrefOf(neighbours.newer)" x-text="`${formatDate(whenOf(neighbours.newer), 'short')} →`"></a></template></span>
         </nav>
       </div>
     </template>

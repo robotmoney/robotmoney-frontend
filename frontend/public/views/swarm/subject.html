@@ -94,8 +94,8 @@
                  newer session and since when, as /swarm and /allocation do. -->
             <template x-if="heldBy()">
               <div class="rr-meta rr-meta--lead">
-                <span class="rr-meta__i">Latest session <b><a class="rr-lnk" :href="sessionHref(heldBy())" x-text="formatDate(heldBy().date, 'short')"></a></b></span>
-                <span class="rr-meta__i">Recommendation <b>Held since <span x-text="formatDate(latest().date, 'short')"></span></b></span>
+                <span class="rr-meta__i">Latest session <b><a class="rr-lnk" :href="sessionHref(heldBy())" x-text="formatDate(whenOf(heldBy()), 'short')"></a></b></span>
+                <span class="rr-meta__i">Recommendation <b>Held since <span x-text="formatDate(whenOf(latest()), 'short')"></span></b></span>
               </div>
             </template>
             <div class="rr-split rr-split--rule">
@@ -263,7 +263,7 @@
                   </p>
                 </template>
                 <a class="rr-cta" :href="sessionHref(latest())">
-                  <span x-text="`Read the ${formatDate(latest().date, 'short')} session`"></span><span aria-hidden="true">→</span>
+                  <span x-text="`Read the ${formatDate(whenOf(latest()), 'short')} session`"></span><span aria-hidden="true">→</span>
                 </a>
               </div>
             </div>
@@ -710,7 +710,7 @@
                   <template x-for="row in sessions" :key="row.id">
                     <tr class="sv__session-card">
                       <th scope="row">
-                        <a class="rr-lnk sv__session-title" :href="sessionHref(row)" x-text="formatDate(row.date, 'short')"></a>
+                        <a class="rr-lnk sv__session-title" :href="sessionHref(row)" x-text="formatDate(whenOf(row), 'short')"></a>
                         <small x-text="[rowTime(row), row.takes == null ? '' : `${row.takes} ${row.takes === 1 ? 'take' : 'takes'}`].filter(Boolean).join(' · ')"></small>
                         <template x-if="rowState(row)"><small class="sp-state" x-text="rowState(row)"></small></template>
                       </th>
@@ -744,7 +744,7 @@
                   <template x-for="row in sessions" :key="row.id">
                     <tr class="sv__session-card">
                       <th scope="row">
-                        <a class="rr-lnk sv__session-title" :href="sessionHref(row)" x-text="formatDate(row.date, 'short')"></a>
+                        <a class="rr-lnk sv__session-title" :href="sessionHref(row)" x-text="formatDate(whenOf(row), 'short')"></a>
                         <small x-text="[rowTime(row), row.takes == null ? '' : `${row.takes} ${row.takes === 1 ? 'take' : 'takes'}`].filter(Boolean).join(' · ')"></small>
                       </th>
                       <td>
