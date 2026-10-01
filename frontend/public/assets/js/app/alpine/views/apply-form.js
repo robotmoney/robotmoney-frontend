@@ -190,7 +190,7 @@ export function registerApplyForm(Alpine) {
       } catch {
         const subject = encodeURIComponent("Robot Money swarm waitlist");
         const body = encodeURIComponent(`Please add ${email} to the swarm waitlist.`);
-        window.location.href = `mailto:hi@robotmoney.net?subject=${subject}&body=${body}`;
+        window.location.href = `mailto:david@robotmoney.network?subject=${subject}&body=${body}`;
         this.waitlisted = true;
       }
     },
