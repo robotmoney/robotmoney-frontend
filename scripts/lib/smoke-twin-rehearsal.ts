@@ -34,8 +34,8 @@
 // inside this function's try block — the finally below tears it down. Telling an
 // operator to "run postflight against the smoke-twin afterwards" is therefore an
 // instruction to race a watcher against teardown from a second terminal, which
-// is not a procedure. G8 (docs/runbooks/rollout-procedure.md) makes that window
-// part of the contract instead, and `onReady` is where a release plugs into it.
+// is not a procedure. The historical G8 procedure required checks to run
+// before teardown, and `onReady` is where a release plugs into that window.
 //
 // WHAT REPLACED THE ISOLATED WORKTREE. This used to `git worktree add` a
 // throwaway checkout, symlink node_modules into it and write a throwaway `.env`,
@@ -43,10 +43,14 @@
 // overwriting that file on a staging host risks corrupting a real credential.
 // `--db smoke-twin` constructs its URL in-process and writes no file, so all of it is
 // gone, and smoke-twin.ts's assertSmokeTwinIsTarget() covers the risk it existed for.
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homeEnvFilePath } from "./env-role.ts";
 import { smokeTwinUrlFromContainer } from "./smoke-twin.ts";
+import { instancePaths, stateRoot } from "./smoke-state.ts";
+import { refuseCheckoutEnvFile } from "../smoke.ts";
 
 /**
  * How long the boot gets to reach readiness. Generous on purpose: a cold run
@@ -70,8 +74,17 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 interface SmokeState {
   project: string;
   apiPort: number;
-  /** Written only by a `--db smoke-twin` boot — see smoke-main.ts's writeStateFile(). */
+  /**
+   * website-server's host port — the static/SPA origin since issue #892, and
+   * the one a page fetch must use. The api port answers /views/* with the SPA
+   * shell, so checking content against it misses every assertion while looking
+   * like a content regression.
+   */
+  webPort?: number;
+  /** Written only by a `--local dump` boot — see smoke-main.ts's writeStateFile(). */
   smokeTwinContainer?: string;
+  /** When the boot wrote the file; a file older than this rehearsal's boot is a previous run's. */
+  createdAt?: string;
 }
 
 async function spawn(
@@ -88,18 +101,10 @@ async function spawn(
   return proc.exited;
 }
 
-/** First `key=`/`key =` value in a dotenv-shaped file, or null. */
-function readEnvKey(file: string, key: string): string | null {
-  if (!existsSync(file)) return null;
-  for (const line of readFileSync(file, "utf8").split("\n")) {
-    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (m && m[1] === key) return m[2]!.trim().replace(/^["']|["']$/g, "") || null;
-  }
-  return null;
-}
-
-/** The ONE credential file every smoke-twin/rollout command reads. */
-export const READONLY_ENV_FILE = ".env.readonly";
+/** The ONE credential file every smoke-twin/rollout command reads: $HOME/.env
+ *  (the same file .env.example describes — discrete DO tokens plus one role
+ *  line per role; the staging host's copy carries only rm_readonly). */
+export const READONLY_ENV_FILE = homeEnvFilePath();
 
 /**
  * The funded OpenCode Zen credential, which this rehearsal REQUIRES.
@@ -111,18 +116,14 @@ export const READONLY_ENV_FILE = ".env.readonly";
  * that model choice is not neutral for swarm authorship (some families refuse
  * the persona task outright), so a green `free` run does not predict production.
  *
- * `.env.readonly` IS THE ONLY FILE CONSULTED, and `.env` is deliberately NOT in
- * the chain any more. On a staging host `.env` is where the application's WRITER
- * DATABASE_URL lives, and every command in this family — smoke:capture,
- * smoke:smoke-twin --once, `bun run smoke:smoke-twin`, the release preflight — is defined by NOT
- * needing that credential. Reading `.env` made the smoke-twin tooling depend on the
- * one file it exists to stay away from, and made "which key did that run use?"
- * a question with two possible answers. One low-privilege file now serves the
- * whole family, which is exactly what .env.readonly.example describes it as.
- *
- * The process environment still wins, because that is how CI and a one-off shell
- * override supply it; it is not a file and cannot be the writer credential by
- * accident.
+ * FROM THE PROCESS ENVIRONMENT, AND NOWHERE ELSE. It used to be read from
+ * $HOME/.env as a fallback. Spec §3 (as amended by D52) makes that file hold
+ * EXACTLY the connection values, the three runtime role passwords, RM_ENV and
+ * RM_CREDENTIALS — "It must not contain ... a model key" — and preflight check 4
+ * refuses any other key there on prod. A model key belongs to the participant
+ * that spends it (its credential.json entry); the operator running a one-off
+ * rehearsal supplies this one to this command, in the shell that runs it (CI:
+ * the repository secret), and the file never learns it.
  *
  * The key is passed to the boot in its ENVIRONMENT, never written to a file.
  * That does not violate the flags-not-env-vars rule, which is scoped to
@@ -134,13 +135,11 @@ export function resolveZenKey(
 ): { key: string; source: string } | { error: string } {
   const fromEnv = env.OPENCODE_API_KEY?.trim();
   if (fromEnv) return { key: fromEnv, source: "process environment" };
-  const found = readEnvKey(join(repoRoot, READONLY_ENV_FILE), "OPENCODE_API_KEY");
-  if (found) return { key: found, source: READONLY_ENV_FILE };
   return {
     error:
-      `OPENCODE_API_KEY is not set. This command reads it from ./${READONLY_ENV_FILE} (or the process ` +
-      `environment) — NOT from ./.env, which holds the writer credential this family of commands ` +
-      `deliberately does not use. Add OPENCODE_API_KEY to ./${READONLY_ENV_FILE} and re-run. ` +
+      "OPENCODE_API_KEY is not set in this command's environment. Export it in the shell that runs the " +
+      `rehearsal; it is never read from ${READONLY_ENV_FILE}, which holds only the §3 keys (spec §3, preflight ` +
+      "check 4), nor from a repo-root .env. " +
       "Do NOT work around this with AGENT_MODEL=free: that rehearses a different model than production, " +
       "and model choice materially changes swarm authorship (scripts/lib/swarm/inference.ts).",
   };
@@ -165,12 +164,12 @@ export interface RehearsalOptions {
    * This release's own checks, run against the migrated smoke-twin after the boot
    * serves and BEFORE teardown (G8). Return 0 to pass; any other value fails
    * the rehearsal. Omit it and the rehearsal grades restore + boot + serve
-   * only, which is what `bun run smoke:smoke:smoke-twin --once` does.
+   * only, which is what `bun run smoke:twin:once` does.
    *
    * THE DURATION OF THIS AWAIT IS THE TWIN'S LIFETIME. That is the whole
    * hold-open mechanism — there is no flag, and deliberately so (a flag would
    * mean an unsupervised standing smoke-twin holding production-derived data with a
-   * graded receipt attached to nothing, which is what `bun run smoke:smoke-twin` is for and
+   * graded receipt attached to nothing, which is what `bun run smoke:twin` is for and
    * why it carries the warning it does). A release that needs to observe
    * something slow — a scheduled job firing, a backfill completing — simply
    * takes longer to return, and `checkDeadlineMs` below is what keeps that
@@ -205,6 +204,16 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
   const log = (m: string) => console.log(`[${opts.name}] ${m}`);
   const err = (m: string) => console.error(`[${opts.name}] ${m}`);
 
+  // No env file from the checkout (criterion 122). The boot below inherits this
+  // process's environment, so a `.env` bun loaded HERE would reach it even
+  // though the child itself runs with --no-env-file. package.json runs this as
+  // `bun --no-env-file`; a hand-typed run without it is refused, not trusted.
+  const envFileRefusal = refuseCheckoutEnvFile(process.execArgv, { script: "smoke:twin:once", file: "scripts/smoke-twin-rehearse.ts" });
+  if (envFileRefusal) {
+    err(`FATAL: ${envFileRefusal}`);
+    return 2;
+  }
+
   // Resolve the credential BEFORE the expensive work. Discovering a missing key
   // after a restore and a multi-minute image build is a wasted window.
   const zen = resolveZenKey();
@@ -213,14 +222,28 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
     return 2;
   }
 
-  // Compose project names must be lowercase alphanumeric/hyphen/underscore.
-  const project = `rm_smoke_rehearsal_${opts.name.toLowerCase().replace(/[^a-z0-9_]+/g, "_")}`;
+  // The compose project is NOT chosen here. It used to be pinned through
+  // SMOKE_PROJECT, which spec §1 retires with no alias: the boot names its own
+  // project from its environment, and this rehearsal learns it from the state
+  // file the boot writes (the first one written after the boot started).
+  let project: string | null = null;
+  let rehearsalInstance: string | null = null;
   let bootProc: Bun.Subprocess | null = null;
+  const bootStartedAt = Date.now();
 
   try {
-    const args = ["bun", "scripts/smoke.ts", "--smoke", "--db", "smoke-twin", "--no-tui"];
-    if (opts.backupDir) args.push("--backup-dir", opts.backupDir);
-    log(`booting: ${args.slice(1).join(" ")}  (project=${project}, this can take several minutes)`);
+    // `--migrate` is explicit because no mode implies it (spec §4.3, §5): a
+    // restored dump sits on the schema production had when it was taken, and
+    // the non-superuser migration RM_TWIN_PRODUCTION_PRIVILEGES shapes below is
+    // the thing this rehearsal exists to run. Without it the boot refuses a
+    // stale schema rather than serving it (smoke-main.ts's preflight).
+    // Its OWN deployment instance (spec §1.1), so its journal, receipt and stack
+    // record never mix with the host's standing instance, and teardown can name
+    // exactly this stack.
+    const instance = `rm_twin_rehearsal_${randomBytes(4).toString("hex")}`;
+    rehearsalInstance = instance;
+    const args = ["bun", "--no-env-file", "scripts/smoke.ts", "--local", opts.backupDir ? `dump=${opts.backupDir}` : "dump", "--migrate", "--instance", instance];
+    log(`booting: ${args.slice(2).join(" ")}  (this can take several minutes)`);
     log(`inference: production default model, OPENCODE_API_KEY from ${zen.source} — real spend on a real key`);
 
     // CI is STRIPPED: this must be the boot a cutover runs, and a truthy CI
@@ -229,7 +252,17 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
     const { CI: _ci, ...envWithoutCi } = process.env as Record<string, string | undefined>;
     bootProc = Bun.spawn(args, {
       cwd: repoRoot,
-      env: { ...envWithoutCi, SMOKE_PROJECT: project, OPENCODE_API_KEY: zen.key },
+      env: {
+        ...envWithoutCi,
+        OPENCODE_API_KEY: zen.key,
+        // A REHEARSAL migrates the way a cutover does: as a non-superuser
+        // bootstrap login, not as the twin container's superuser. Without this
+        // the boot bypasses every ACL check a production migration faces, and
+        // the rehearsal cannot see an ownership or grant defect — which is how
+        // 0053 reached a production runbook with three of them. See
+        // shapeTwinToProductionPrivileges() in restore-container.ts.
+        RM_TWIN_PRODUCTION_PRIVILEGES: "1",
+      },
       stdout: "inherit",
       stderr: "inherit",
       stdin: "ignore",
@@ -239,12 +272,11 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
       bootExit = c;
     });
 
-    // SUPERVISED, NOT AWAITED. With CI unset the boot never self-terminates BY
-    // DESIGN: it falls past smoke-main's CI-gated exits into the LIVE
-    // steady-state loop and cycles sessions forever. That is correct for a
-    // cutover, where the stack must stay up serving — so awaiting it here would
-    // hang the rehearsal permanently.
-    const stateFile = join(repoRoot, ".agents", "smoke-state.json");
+    // SUPERVISED, NOT AWAITED. `bun smoke` exits 0 at readiness (spec §1) and
+    // leaves the stack up under Docker; a non-zero exit before readiness is the
+    // failure. The record of what it brought up is the instance's
+    // stack-state.json, polled here together with GET /health.
+    const stateFile = instancePaths(stateRoot(process.env), instance).stackStateFile;
     log(`waiting for readiness (deadline ${Math.round(READY_DEADLINE_MS / 60000)}m): ${stateFile} + GET /health`);
     const startedAt = Date.now();
     let ready: SmokeState | null = null;
@@ -252,14 +284,16 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
     while (Date.now() - startedAt < READY_DEADLINE_MS) {
       // Fail fast rather than burning the whole deadline: with CI unset a boot
       // that exits AT ALL has failed (a healthy one runs forever).
-      if (bootExit !== null) {
+      if (bootExit !== null && bootExit !== 0) {
         err(`boot exited ${bootExit} before becoming ready — this release's migrations did not apply cleanly against production-shaped data, or the stack did not come up`);
         return 1;
       }
       if (existsSync(stateFile)) {
         try {
           const state = JSON.parse(readFileSync(stateFile, "utf8")) as SmokeState;
-          if (state?.apiPort && state.project === project) {
+          const fresh = state?.createdAt !== undefined && Date.parse(state.createdAt) >= bootStartedAt;
+          if (state?.apiPort && fresh) {
+            project = state.project;
             const health = await fetch(`http://127.0.0.1:${state.apiPort}/health`).catch(() => null);
             if (health?.ok) {
               ready = state;
@@ -268,10 +302,10 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
             lastNote = `api port ${state.apiPort} not healthy yet (${health?.status ?? "no response"})`;
           }
         } catch {
-          lastNote = "smoke-state.json present but not yet parseable";
+          lastNote = "stack-state.json present but not yet parseable";
         }
       } else {
-        lastNote = "smoke-state.json not written yet (still building/starting)";
+        lastNote = "stack-state.json not written yet (still building/starting)";
       }
       await Bun.sleep(READY_POLL_MS);
     }
@@ -282,8 +316,61 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
       return 1;
     }
 
-    const backendUrl = `http://127.0.0.1:${ready.apiPort}`;
-    log(`ready after ${Math.round((Date.now() - startedAt) / 1000)}s: project=${ready.project} api=${backendUrl} (/health OK)`);
+    // /health is the api's; the frontend checks fetch PAGES, which only
+    // website-server serves (issue #892). Deliberately no fallback to apiPort:
+    // that is exactly the misconfiguration this fixes, and it fails as a wall
+    // of "MISSING" content assertions that reads like a broken frontend.
+    if (!ready.webPort) {
+      err("stack-state.json has no webPort — the boot never recorded the website-server port it was assigned");
+      return 1;
+    }
+    const backendUrl = `http://127.0.0.1:${ready.webPort}`;
+    log(`ready after ${Math.round((Date.now() - startedAt) / 1000)}s: project=${ready.project} api=http://127.0.0.1:${ready.apiPort} (/health OK) web=${backendUrl}`);
+
+    // WORKER LANES MUST BE HEALTHY, not merely running.
+    //
+    // /health above is the API's alone, and the frontend checks below assert
+    // static CONTENT — neither can see a wedged worker lane, so a rehearsal
+    // could report a clean release while swarm/analytics/research were failing
+    // every cycle. That is not hypothetical: the gap was found by booting a
+    // standing twin and looking at the lanes by hand, which is exactly the
+    // inspection a green rehearsal is supposed to make unnecessary.
+    //
+    // The lanes' own healthcheck is the right signal precisely because it is
+    // not "the process exists": each writes a heartbeat from INSIDE its work
+    // loop with its own staleness budget (backend/src/ops/healthcheck.ts), so
+    // an idle lane stays green and a deadlocked one goes red.
+    const laneDeadline = Date.now() + 180_000;
+    let lanes = "";
+    for (;;) {
+      const ps = Bun.spawnSync(["docker", "ps", "--filter", `label=com.docker.compose.project=${ready.project}`, "--format", "{{.Names}}\t{{.Status}}"]);
+      lanes = new TextDecoder().decode(ps.stdout).trim();
+      // `docker compose run` children (analytics-producer-run-*, the per-member
+      // member-agent containers) carry the same project label but are one-shot
+      // and come and go mid-rehearsal; gating on them would stall on a
+      // container that is *supposed* to exit.
+      const rows = lanes.split("\n").filter(Boolean).filter((r) => !/-run-[0-9a-f]{6,}/.test(r));
+      // Only containers that DECLARE a healthcheck report one; the rest are
+      // judged by still being up, which is all docker can tell us about them.
+      const unhealthy = rows.filter((r) => /unhealthy/i.test(r));
+      const starting = rows.filter((r) => /health: starting/i.test(r));
+      if (rows.length && unhealthy.length === 0 && starting.length === 0) {
+        log(`all ${rows.length} container(s) healthy:\n${lanes.split("\n").map((l) => `  ${l}`).join("\n")}`);
+        break;
+      }
+      if (Date.now() > laneDeadline) {
+        err("container health did not settle within 180s — a lane is unhealthy or never left 'starting':");
+        for (const r of [...unhealthy, ...starting]) err(`  ${r}`);
+        for (const r of unhealthy) {
+          const name = r.split("\t")[0]!;
+          const insp = Bun.spawnSync(["docker", "inspect", "--format", "{{range .State.Health.Log}}{{.Output}}{{end}}", name]);
+          const why = new TextDecoder().decode(insp.stdout).trim().split("\n").slice(-3).join(" | ");
+          if (why) err(`  ${name}: ${why}`);
+        }
+        return 1;
+      }
+      await Bun.sleep(5000);
+    }
 
     log("running scripts/smoke-frontend-check.ts against the booted stack (same checks CI runs)");
     const checkCode = await spawn(["bun", "scripts/smoke-frontend-check.ts"], {
@@ -294,9 +381,21 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
       return 1;
     }
 
+    // PRODUCT invariants, same driver CI and the cutover run. The frontend
+    // checks above assert CONTENT; this asserts that the swarm pipeline
+    // produced decisions and that each published allocation vector still
+    // recomputes from its own published takes (D42). tier=full: a twin may be
+    // driven.
+    log("verifying product invariants against the migrated stack (verify-live)");
+    const verifyCode = await spawn(["bun", "run", "scripts/verify-live.ts", "--base", backendUrl, "--tier", "full"]);
+    if (verifyCode !== 0) {
+      err("product verification failed against the migrated, booted stack");
+      return 1;
+    }
+
     if (opts.onReady) {
       // The smoke-twin's URL is recovered from the container, not from
-      // smoke-state.json, which redacts it — see smokeTwinUrlFromContainer().
+      // the stack record, which redacts it — see smokeTwinUrlFromContainer().
       const databaseUrl = ready.smokeTwinContainer ? smokeTwinUrlFromContainer(ready.smokeTwinContainer) : null;
       if (!databaseUrl) {
         // NEVER a pass. A release's checks not running is indistinguishable, in
@@ -328,6 +427,16 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
       // 2026-08-22: two runs finished all their work and stayed resident. A
       // deadline added to enforce G1 ("it terminates on its own, always") must
       // not be the thing that breaks it.
+      // The boot itself exits at readiness now (spec §1), so "the boot died" is
+      // "this project's api container stopped running": polled, and cancelled
+      // with the deadline for the reason given below.
+      let goneTimer: ReturnType<typeof setInterval> | undefined;
+      const stackGone = new Promise<void>((resolve) => {
+        goneTimer = setInterval(() => {
+          const ps = Bun.spawnSync(["docker", "ps", "-q", "--filter", `label=com.docker.compose.project=${ready!.project}`, "--filter", "label=com.docker.compose.service=api"]);
+          if (ps.exitCode === 0 && new TextDecoder().decode(ps.stdout).trim() === "") resolve();
+        }, 10_000);
+      });
       let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<number>((resolve) => {
         deadlineTimer = setTimeout(() => resolve(TIMED_OUT as unknown as number), deadlineMs);
@@ -337,10 +446,11 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
         hookCode = await Promise.race([
           opts.onReady({ backendUrl, databaseUrl, log, err }),
           deadline,
-          bootProc.exited.then(() => BOOT_DIED as unknown as number),
+          stackGone.then(() => BOOT_DIED as unknown as number),
         ]);
       } finally {
         clearTimeout(deadlineTimer);
+        clearInterval(goneTimer);
       }
       if ((hookCode as unknown) === TIMED_OUT) {
         err(
@@ -350,7 +460,7 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
       }
       if ((hookCode as unknown) === BOOT_DIED) {
         err(
-          `the boot exited ${bootExit} DURING this release's checks, after ${Math.round((Date.now() - checksStartedAt) / 1000)}s — any check that had already passed graded a stack that is now gone. This is a failed rehearsal.`,
+          `the stack's api stopped DURING this release's checks, after ${Math.round((Date.now() - checksStartedAt) / 1000)}s — any check that had already passed graded a stack that is now gone. This is a failed rehearsal.`,
         );
         return 1;
       }
@@ -379,12 +489,12 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
       }
     }
 
-    // 2. SMOKE_PROJECT explicitly: smoke-down resolves the project from state, and
-    //    this still has to work when the boot died before writing it. smoke-down
-    //    also removes the smoke-twin CONTAINER, which is why nothing here does.
-    await spawn(["bun", "scripts/smoke-down.ts"], {
-      env: { ...process.env, SMOKE_PROJECT: project },
-    }).catch(() => {});
+    // 2. smoke-down resolves the project from the state file the boot wrote
+    //    (on success, or best-effort on a failed boot). It also removes the
+    //    dump's CONTAINER, which is why nothing here does.
+    if (rehearsalInstance) {
+      await spawn(["bun", "--no-env-file", "scripts/smoke-down.ts", "--instance", rehearsalInstance], {}).catch(() => {});
+    }
 
     // 3. smoke-down deliberately KEEPS volumes — including the smoke-twin's, whose
     //    contract is that it survives teardown. For a REHEARSAL they are pure
@@ -392,14 +502,16 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
     //    data derived from production. Scoped to this run's project, never a
     //    bare smoke:clean, which is host-wide.
     try {
+      if (!project) throw new Error("the boot never recorded its project; no volume to scope a cleanup to");
       const ls = Bun.spawnSync(["docker", "volume", "ls", "-q", "--filter", `name=${project}`]);
       const vols = new TextDecoder().decode(ls.stdout).split("\n").map((v) => v.trim()).filter(Boolean);
       if (vols.length) {
         Bun.spawnSync(["docker", "volume", "rm", ...vols]);
         log(`removed ${vols.length} leftover volume(s) holding production-derived data`);
       }
-    } catch {
-      /* best effort */
+    } catch (e) {
+      // Best effort, but never silent: a skipped cleanup leaves production data on disk.
+      err(`volume cleanup skipped: ${e instanceof Error ? e.message : String(e)} — reclaim with bun run smoke:clean`);
     }
   }
 }

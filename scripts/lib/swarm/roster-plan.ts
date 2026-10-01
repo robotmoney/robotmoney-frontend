@@ -90,9 +90,12 @@ export interface AdoptionPlan {
  *   - ACTIVE only. An `applied`/`deactivated` row is not a swarm member.
  *   - NOT ALREADY SEATED. The built-in characters are on the list already, under
  *     the same ids the database holds.
- *   - HAS A COMMITTED IDENTITY. Only the smoke's own characters have a key in
- *     fixtures/persona-keys.json; anyone else is somebody's real member, and
- *     inventing a key for them is precisely the behaviour being removed.
+ *   - ADOPTABLE. The caller's predicate (smoke-mode.ts `adoptionFilter`): a
+ *     member this host holds a credential for, by the credential file's roster
+ *     (spec §6.1). Anyone else is somebody's real member, and inventing a key
+ *     for them is precisely the behaviour being removed. The predicate is
+ *     handed the whole row, because the credential file names members by
+ *     HANDLE.
  *
  * One seat per NAME even when the database holds several actives for that
  * character, so a roster polluted by the old duplicate-admission bug does not
@@ -101,7 +104,7 @@ export interface AdoptionPlan {
 export function planAdoptions(
   roster: readonly RosterRow[],
   seatedIds: ReadonlySet<string>,
-  hasCommittedIdentity: (name: string) => boolean,
+  isAdoptable: (member: RosterRow) => boolean,
 ): AdoptionPlan {
   const adopt: RosterRow[] = [];
   const duplicates: RosterRow[] = [];
@@ -109,7 +112,7 @@ export function planAdoptions(
   for (const m of roster) {
     if (m.status !== "active") continue;
     if (seatedIds.has(m.id)) continue;
-    if (!hasCommittedIdentity(m.name)) continue;
+    if (!isAdoptable(m)) continue;
     const key = m.name.trim().toLowerCase();
     if (seenNames.has(key)) {
       duplicates.push(m);

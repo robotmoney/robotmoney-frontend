@@ -22,6 +22,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { QUARANTINED_PROVENANCE } from "../src/chain/wallet-valuation.ts";
 import { getWalletBalances } from "../src/api/routes/dashboards.ts";
 import { detectGaps } from "../src/ops/gap-detector.ts";
@@ -38,15 +39,15 @@ const BAD_PRICE = 59_988.42;
 const AMOUNT = 15.4378;
 
 async function cleanup(): Promise<void> {
-  await sql`DELETE FROM wallet_balance_samples WHERE sample_date = ANY(${OURS}::date[])`;
-  await sql`DELETE FROM wallet_sleeve_samples WHERE sample_date = ANY(${OURS}::date[])`;
+  await fixtureDb`DELETE FROM wallet_balance_samples WHERE sample_date = ANY(${OURS}::date[])`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples WHERE sample_date = ANY(${OURS}::date[])`;
 }
 
 beforeEach(cleanup);
 afterEach(cleanup);
 
 test("T0.2: a quarantined day is absent from the served history", async () => {
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${PAST}, 'WETH', ${AMOUNT}, ${BAD_PRICE}, ${AMOUNT * BAD_PRICE}, ${QUARANTINED_PROVENANCE}, ${`${PAST}T23:59:00Z`})
   `;
@@ -60,7 +61,7 @@ test("T0.2: a day is dropped WHOLE — a partial total is a wrong number, not a 
   // one leg trustworthy. Serving the day with only the good leg would publish
   // an AUM total that silently omits a holding — plausible, undisclosed, and
   // wrong. Absence is the only honest answer.
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES
       (${PAST}, 'WETH', ${AMOUNT}, ${BAD_PRICE}, ${AMOUNT * BAD_PRICE}, ${QUARANTINED_PROVENANCE}, ${`${PAST}T23:59:00Z`}),
@@ -85,7 +86,7 @@ test("T0.2: a quarantined row is not served as a current holding, even when it i
   expect(target).toBeDefined();
   const symbol = target!.symbol;
 
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${FUTURE}, ${symbol}, ${AMOUNT}, ${BAD_PRICE}, ${AMOUNT * BAD_PRICE}, ${QUARANTINED_PROVENANCE}, ${`${FUTURE}T23:59:00Z`})
   `;
@@ -97,7 +98,7 @@ test("T0.2: a quarantined row is not served as a current holding, even when it i
 });
 
 test("T0.2: the wrong numbers are still in the table — quarantine preserves the evidence", async () => {
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${PAST}, 'WETH', ${AMOUNT}, ${BAD_PRICE}, ${AMOUNT * BAD_PRICE}, ${QUARANTINED_PROVENANCE}, ${`${PAST}T23:59:00Z`})
   `;
@@ -120,14 +121,16 @@ test("T0.2: a quarantined day reads as a GAP, so the operator surface and the AP
   // would never be told to look at it.
   const def = getSeriesDef("wallet_balance_samples")!;
   await sql.begin(async (tx) => {
-    await tx`CREATE TEMP TABLE wallet_balance_samples (sample_date date, symbol text, provenance text) ON COMMIT DROP`;
+    // superseded_at mirrors the real table (migration 0086): the detector
+    // filters it (SeriesDef.tombstoneColumn, D55 (6)), and every row here is live.
+    await tx`CREATE TEMP TABLE wallet_balance_samples (sample_date date, symbol text, provenance text, superseded_at timestamptz) ON COMMIT DROP`;
     const expectedSymbols = def.expectedKeys!.resolve().map(([symbol]) => symbol!);
     for (const date of ["2026-03-18", "2026-03-19", "2026-03-21"]) {
       for (const symbol of expectedSymbols) {
-        await tx`INSERT INTO wallet_balance_samples VALUES (${date}::date, ${symbol}, 'seed')`;
+        await tx`INSERT INTO wallet_balance_samples VALUES (${date}::date, ${symbol}, 'seed', NULL)`;
       }
     }
-    await tx`INSERT INTO wallet_balance_samples VALUES ('2026-03-20'::date, ${expectedSymbols[0]}, ${QUARANTINED_PROVENANCE})`;
+    await tx`INSERT INTO wallet_balance_samples VALUES ('2026-03-20'::date, ${expectedSymbols[0]}, ${QUARANTINED_PROVENANCE}, NULL)`;
     const report = await detectGaps(def, tx, new Date("2026-03-21T12:00:00Z"));
     expect(report.interiorGaps).toEqual(["2026-03-20T00:00:00.000Z"]);
     expect(report.clean).toBe(false);

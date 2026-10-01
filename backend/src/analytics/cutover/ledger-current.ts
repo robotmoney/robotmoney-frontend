@@ -16,6 +16,99 @@
 import { sql, type DbHandle } from "../../db/client.ts";
 import type { RegimeSnapshotRow } from "../report/regime-projection.ts";
 import type { ResearchPayload } from "../analyze/research.ts";
+import { on, registerQuery } from "../../db/registry.ts";
+
+// Registered queries (smoke-production-spec.md §7.1), all reads of the
+// immutable ledgers. Reached from the analytics parity sweep, the admin
+// analytics reads, the dashboards' ledger-mode projections and a brief's
+// ledger-mode body on the public swarm route.
+const SAMPLE_SESSION = "00000000-0000-0000-0000-000000000000";
+
+const rawHistoryHeads = registerQuery({
+  role: "rm_app",
+  object: "source_value_versions",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/ledger-current:ledgerCurrentRawIndicatorHistory",
+  purpose: "Read the head version of every raw-indicator point from the source-value ledger, for the parity sweep.",
+  callers: ["src/api/routes/analytics"],
+  probe: {
+    statement: `SELECT svv.source_key, svv.market_date::text AS market_date, svv.value, svv.provenance,
+             EXTRACT(EPOCH FROM svv.knowledge_time) AS knowledge_epoch
+      FROM source_value_versions svv
+      WHERE svv.source_key LIKE $1 AND svv.market_date IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM source_value_versions nxt WHERE nxt.prior_version_id = svv.id)`,
+    params: ["raw_indicator_history:%"],
+  },
+});
+
+const rawSeriesHeads = registerQuery({
+  role: "rm_app",
+  object: "source_value_versions",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/ledger-current:ledgerCurrentRawIndicatorSeries",
+  purpose: "Read one indicator's head versions, newest first, for the admin series read in ledger mode.",
+  callers: ["src/api/routes/admin"],
+  probe: {
+    statement: `SELECT svv.market_date::text AS market_date, svv.value, svv.provenance FROM source_value_versions svv
+      WHERE svv.source_key = $1 AND svv.market_date IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM source_value_versions nxt WHERE nxt.prior_version_id = svv.id)
+      ORDER BY svv.market_date DESC`,
+    params: ["raw_indicator_history:probe"],
+  },
+});
+
+const regimeArtifacts = registerQuery({
+  role: "rm_app",
+  object: "analytics_output_snapshots",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/ledger-current:ledgerCurrentRegimeSnapshots",
+  purpose: "Read every regime-snapshot artifact in run order, to replay the regime table from the ledger.",
+  callers: ["src/api/routes/analytics", "src/api/routes/dashboards"],
+  probe: {
+    statement: `SELECT aos.payload_bytes FROM analytics_output_snapshots aos
+      WHERE aos.artifact_kind = 'regime_snapshots' ORDER BY aos.run_id ASC`,
+  },
+});
+
+const researchArtifacts = registerQuery({
+  role: "rm_app",
+  object: "analytics_output_snapshots",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/ledger-current:ledgerCurrentResearchSignals",
+  purpose: "Read every research-signal artifact in run order, to replay the research table from the ledger.",
+  callers: ["src/api/routes/admin", "src/api/routes/analytics", "src/api/routes/dashboards"],
+  probe: {
+    statement: `SELECT aos.payload_bytes FROM analytics_output_snapshots aos
+      WHERE aos.artifact_kind = 'research_signals' ORDER BY aos.run_id ASC`,
+  },
+});
+
+const briefRevision = registerQuery({
+  role: "rm_app",
+  object: "swarm_brief_revisions",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/ledger-current:ledgerCurrentBriefBySession.revision",
+  purpose: "Read a session brief's newest ledger revision, for a brief served in ledger mode.",
+  callers: ["src/api/routes/swarm"],
+  probe: {
+    statement: `SELECT body_bytes, report_snapshot_id::text AS report_snapshot_id, created_at FROM swarm_brief_revisions
+      WHERE session_id = $1::uuid ORDER BY revision DESC LIMIT 1`,
+    params: [SAMPLE_SESSION],
+  },
+});
+
+const briefSession = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/ledger-current:ledgerCurrentBriefBySession.session",
+  purpose: "Read the brief's session date and subject, which the ledger revision does not carry.",
+  callers: ["src/api/routes/swarm"],
+  probe: {
+    statement: "SELECT date::text AS date, subject_id FROM swarm_sessions WHERE id = $1::uuid",
+    params: [SAMPLE_SESSION],
+  },
+});
 
 export interface LedgerRawIndicatorPoint {
   indicator: string;
@@ -49,7 +142,13 @@ const RAW_HISTORY_PREFIX = "raw_indicator_history:";
 export async function ledgerCurrentRawIndicatorHistory(
   db: DbHandle = sql,
 ): Promise<LedgerRawIndicatorPoint[]> {
-  const rows = (await db`
+  const rows = await on(db, rawHistoryHeads)<{
+    source_key: string;
+    market_date: string;
+    value: number;
+    provenance: string | null;
+    knowledge_epoch: string | number;
+  }>`
     SELECT svv.source_key, svv.market_date::text AS market_date, svv.value, svv.provenance,
            EXTRACT(EPOCH FROM svv.knowledge_time) AS knowledge_epoch
     FROM source_value_versions svv
@@ -58,13 +157,7 @@ export async function ledgerCurrentRawIndicatorHistory(
       AND NOT EXISTS (
         SELECT 1 FROM source_value_versions nxt WHERE nxt.prior_version_id = svv.id
       )
-  `) as unknown as {
-    source_key: string;
-    market_date: string;
-    value: number;
-    provenance: string | null;
-    knowledge_epoch: string | number;
-  }[];
+  `;
   return rows.map((r) => ({
     indicator: r.source_key.slice(RAW_HISTORY_PREFIX.length),
     date: r.market_date,
@@ -90,7 +183,7 @@ export async function ledgerCurrentRawIndicatorSeries(
   indicator: string,
   db: DbHandle = sql,
 ): Promise<{ date: string; value: number; source: string | null }[]> {
-  const rows = (await db`
+  const rows = await on(db, rawSeriesHeads)<{ market_date: string; value: number; provenance: string | null }>`
     SELECT svv.market_date::text AS market_date, svv.value, svv.provenance
     FROM source_value_versions svv
     WHERE svv.source_key = ${RAW_HISTORY_PREFIX + indicator}
@@ -99,7 +192,7 @@ export async function ledgerCurrentRawIndicatorSeries(
         SELECT 1 FROM source_value_versions nxt WHERE nxt.prior_version_id = svv.id
       )
     ORDER BY svv.market_date DESC
-  `) as unknown as { market_date: string; value: number; provenance: string | null }[];
+  `;
   return rows.map((r) => ({ date: r.market_date, value: Number(r.value), source: r.provenance ?? null }));
 }
 
@@ -116,12 +209,12 @@ function decodeArtifact<T>(bytes: Buffer | Uint8Array): T[] {
 // on `date` — reproducing saveRegimeSnapshots' own ON CONFLICT (date) DO
 // UPDATE semantics from the immutable ledger alone.
 export async function ledgerCurrentRegimeSnapshots(db: DbHandle = sql): Promise<RegimeSnapshotRow[]> {
-  const rows = (await db`
+  const rows = await on(db, regimeArtifacts)<{ payload_bytes: Buffer }>`
     SELECT aos.payload_bytes
     FROM analytics_output_snapshots aos
     WHERE aos.artifact_kind = 'regime_snapshots'
     ORDER BY aos.run_id ASC
-  `) as unknown as { payload_bytes: Buffer }[];
+  `;
   const byDate = new Map<string, RegimeSnapshotRow>();
   for (const row of rows) {
     for (const snapshot of decodeArtifact<RegimeSnapshotRow>(row.payload_bytes)) {
@@ -141,12 +234,12 @@ export interface LedgerResearchSignalRow {
 // on (signal_key, date) — reproducing persistResearchSignal's own
 // ON CONFLICT (signal_key, date) DO UPDATE semantics from the ledger alone.
 export async function ledgerCurrentResearchSignals(db: DbHandle = sql): Promise<LedgerResearchSignalRow[]> {
-  const rows = (await db`
+  const rows = await on(db, researchArtifacts)<{ payload_bytes: Buffer }>`
     SELECT aos.payload_bytes
     FROM analytics_output_snapshots aos
     WHERE aos.artifact_kind = 'research_signals'
     ORDER BY aos.run_id ASC
-  `) as unknown as { payload_bytes: Buffer }[];
+  `;
   const byKeyDate = new Map<string, LedgerResearchSignalRow>();
   for (const row of rows) {
     for (const signal of decodeArtifact<{ key: string; date: string; payload: ResearchPayload }>(row.payload_bytes)) {
@@ -188,16 +281,16 @@ export interface LedgerBrief {
 // opaque handle, not history.
 export async function ledgerCurrentBriefBySession(sessionId: string, db: DbHandle = sql): Promise<LedgerBrief | null> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) return null;
-  const [revision] = (await db`
+  const [revision] = await on(db, briefRevision)<{ body_bytes: Buffer; report_snapshot_id: string | null; created_at: Date }>`
     SELECT body_bytes, report_snapshot_id::text AS report_snapshot_id, created_at
     FROM swarm_brief_revisions
     WHERE session_id = ${sessionId}
     ORDER BY revision DESC LIMIT 1
-  `) as unknown as { body_bytes: Buffer; report_snapshot_id: string | null; created_at: Date }[];
+  `;
   if (!revision) return null;
-  const [session] = (await db`
+  const [session] = await on(db, briefSession)<{ date: string; subject_id: string }>`
     SELECT date::text AS date, subject_id FROM swarm_sessions WHERE id = ${sessionId}
-  `) as unknown as { date: string; subject_id: string }[];
+  `;
   if (!session) return null;
   const bodyText = revision.body_bytes.toString("utf8");
   return {

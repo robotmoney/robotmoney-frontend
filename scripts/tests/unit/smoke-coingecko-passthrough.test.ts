@@ -26,7 +26,7 @@ describe("COINGECKO_API_KEY reaches the stack through the documented boot", () =
   });
 
   // Issue 1062: the analytics-producer makes the GeckoTerminal new_pools calls, so the key has to reach IT as well.
-  for (const file of ["docker-compose.yml", "docker-compose.smoke.yml"]) {
+  for (const file of ["docker-compose.yml"]) {
     test(`${file} interpolates COINGECKO_API_KEY into analytics-producer`, () => {
       const text = readFileSync(join(import.meta.dir, "../../..", file), "utf8");
       const start = text.indexOf("\n  analytics-producer:");

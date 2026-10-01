@@ -107,6 +107,111 @@ function generateLocalPassword(): string {
 // by line.
 const RESTORE_ROLES = ["rm_readonly", "rm_worker"] as const;
 
+/**
+ * The smoke-twin's stand-in for the production primary's bootstrap login.
+ *
+ * WHY THIS EXISTS. The twin restores with `--no-owner --no-privileges` and then
+ * migrates as the container SUPERUSER, so it has no ownership topology to
+ * change and no privilege constraint while changing it. That makes the
+ * rehearsal structurally unable to rehearse the one migration whose entire
+ * purpose is ownership and grants (0053) — three separate defects in that file
+ * were invisible to the twin, to this suite, and to the live preflight, which
+ * audits role STATE read-only and never executes the migration SQL.
+ *
+ * Reshaping the twin to own its objects under a NON-superuser role, and then
+ * pointing MIGRATE_DATABASE_URL at that role, is what makes the boot exercise
+ * the path a production cutover actually takes.
+ */
+export const TWIN_BOOTSTRAP_ROLE = "rm_twin_bootstrap";
+
+/** doadmin's exact production attribute set: rolsuper=false, the rest true. */
+const TWIN_BOOTSTRAP_ATTRS = "LOGIN CREATEROLE CREATEDB BYPASSRLS REPLICATION";
+
+/**
+ * Give a restored twin production's privilege shape and return the URL a
+ * migration run should use.
+ *
+ * Mirrors the production primary before 0053 has ever run: one non-superuser
+ * bootstrap login owning `public` and everything in it, holding ADMIN OPTION on
+ * the roles that predate the taxonomy (doadmin holds exactly that on rm_worker
+ * and rm_readonly). Extension-owned objects are deliberately left alone — they
+ * belong to the extension's lifecycle, and re-owning them fails outright for a
+ * non-superuser.
+ *
+ * Returns the bootstrap URL; the caller sets it as MIGRATE_DATABASE_URL for the
+ * boot. DATABASE_URL is untouched, so the running application is unaffected.
+ */
+// NOT A SMOKE PATH ANY MORE. `bun smoke --local dump` no longer migrates a
+// restored copy through this bootstrap login: after the restore, the copy's
+// superuser creates the four roles and hands every application object to
+// rm_owner (scripts/lib/smoke-database.ts dumpOwnershipSql), rm_owner writes
+// `deployment_identity = rehearsal`, and `--migrate` runs as rm_owner under
+// the boot's target lock (spec §4.2, §8.5). This reshaping remains for the
+// tooling that rehearses 0053 itself (backend/tests/
+// twin-production-privilege-shaping.test.ts pins its shape).
+export function shapeTwinToProductionPrivileges(
+  superuserUrl: string,
+  log: (m: string) => void,
+): { url: string } | { error: string } {
+  const password = `rk_${crypto.randomUUID().replaceAll("-", "")}`;
+  // psql, not a postgres client: `scripts/` cannot import backend's `postgres`
+  // dependency, and every other database step in this module already shells to
+  // psql for exactly that reason.
+  const ddl = `
+    DROP ROLE IF EXISTS ${TWIN_BOOTSTRAP_ROLE};
+    CREATE ROLE ${TWIN_BOOTSTRAP_ROLE} ${TWIN_BOOTSTRAP_ATTRS} PASSWORD '${password}';
+    ${RESTORE_ROLES.map((r) => `GRANT ${r} TO ${TWIN_BOOTSTRAP_ROLE} WITH ADMIN OPTION;`).join("\n    ")}
+    ALTER SCHEMA public OWNER TO ${TWIN_BOOTSTRAP_ROLE};
+    DO $shape$
+    DECLARE r record;
+    BEGIN
+      FOR r IN
+        SELECT c.relkind, c.oid::regclass AS object_name
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind IN ('r','p','S','v','m','f')
+          AND (c.relkind <> 'S' OR NOT EXISTS (
+            SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype IN ('a','i')))
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
+      LOOP
+        EXECUTE format('ALTER %s %s OWNER TO ${TWIN_BOOTSTRAP_ROLE}',
+          CASE r.relkind WHEN 'S' THEN 'SEQUENCE' WHEN 'v' THEN 'VIEW'
+                         WHEN 'm' THEN 'MATERIALIZED VIEW' WHEN 'f' THEN 'FOREIGN TABLE'
+                         ELSE 'TABLE' END, r.object_name);
+      END LOOP;
+      FOR r IN
+        SELECT p.oid::regprocedure AS object_name
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
+      LOOP
+        EXECUTE format('ALTER FUNCTION %s OWNER TO ${TWIN_BOOTSTRAP_ROLE}', r.object_name);
+      END LOOP;
+    END
+    $shape$;`;
+  const applied = Bun.spawnSync(["psql", "-X", "-v", "ON_ERROR_STOP=1", superuserUrl, "-c", ddl], { stderr: "pipe" });
+  if (applied.exitCode !== 0) {
+    return { error: `twin privilege shaping failed: ${new TextDecoder().decode(applied.stderr).trim()}` };
+  }
+  const counted = Bun.spawnSync(
+    ["psql", "-X", "-Atc",
+      `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+       WHERE n.nspname='public' AND c.relkind IN ('r','p')
+         AND pg_get_userbyid(c.relowner) = '${TWIN_BOOTSTRAP_ROLE}'`, superuserUrl],
+    { stderr: "pipe" },
+  );
+  const owned = new TextDecoder().decode(counted.stdout).trim();
+  log(`twin reshaped to production privileges: ${TWIN_BOOTSTRAP_ROLE} (NOT superuser) owns ${owned} public table(s)`);
+  const u = new URL(superuserUrl);
+  u.username = TWIN_BOOTSTRAP_ROLE;
+  u.password = password;
+  return { url: u.toString() };
+}
+
+
 async function run(cmd: string[], opts: { stdin?: ReadableStream | number; log: (m: string) => void }): Promise<number> {
   const proc = Bun.spawn(cmd, { stdin: opts.stdin ?? "ignore", stdout: "inherit", stderr: "pipe" });
   const stderr = await new Response(proc.stderr).text();
@@ -153,8 +258,9 @@ export async function restoreBackupIntoContainer(
      * labels so `smoke:clean` reclaims it by the same label scoping it uses for
      * every other volume a boot creates.
      *
-     * Omitted (restore-check.ts) the data lives in the container's writable
-     * layer and dies with it, which is right for a check that tears down in a
+     * Omitted (restore-check.ts) the data lives in the image's ANONYMOUS
+     * volume and dies with the container only because teardownContainer()
+     * removes it with `-v`, which is right for a check that tears down in a
      * `finally`. A `--db smoke-twin` boot passes one because its contract is the
      * ephemeral-pgdata contract: teardown keeps the data, smoke:clean reclaims it.
      *
@@ -176,7 +282,7 @@ export async function restoreBackupIntoContainer(
   const volumeArgs: string[] = [];
   if (opts.volume) {
     // SMOKE_VOLUME_LABEL ("robotmoney.smoke=1") is what smoke:clean filters on —
-    // docker-compose.smoke.yml stamps it on pgdata, and this is the non-compose
+    // docker-compose.yml stamps it on pgdata, and this is the non-compose
     // equivalent. Without it the volume is unreclaimable by the documented path.
     const created = await run(
       ["docker", "volume", "create", "--label", "robotmoney.smoke=1", ...dockerLabelFlags(labels), opts.volume],
@@ -287,10 +393,7 @@ export async function restoreBackupIntoContainer(
     ["gpg", "--batch", "--yes", "--passphrase-file", backup.passphraseFile, "--decrypt", backup.dumpEnc],
     { stdout: "pipe", stderr: "inherit" },
   );
-  const pgRestore = Bun.spawn(
-    ["pg_restore", ...connArgs, `--dbname=${LOCAL_DB}`, "--no-owner", "--no-privileges", "--exit-on-error"],
-    { stdin: gpgDump.stdout, stdout: "inherit", stderr: "inherit", env },
-  );
+  const pgRestore = Bun.spawn(restoreDumpArgv(container), { stdin: gpgDump.stdout, stdout: "inherit", stderr: "inherit" });
   const restoreExit = await pgRestore.exited;
   log(`pg_restore exit=${restoreExit}`);
   if (restoreExit !== 0) return { error: "pg_restore failed", container };
@@ -305,9 +408,44 @@ export async function restoreBackupIntoContainer(
   };
 }
 
+/**
+ * The pg_restore that reads the decrypted archive: the RESTORE CONTAINER'S own
+ * client, over its local socket, never the host's.
+ *
+ * A custom-format archive can be read only by a pg_restore at least as new as
+ * the pg_dump that wrote it, and `bun smoke:capture` refuses a pg_dump older
+ * than the server it dumps (its GUARD 3) — so a real backup is written in the
+ * archive format of production's major, and a host whose pg_restore is older
+ * refuses it outright ("unsupported version (1.16) in file header": a host
+ * pg_restore 16 against an 18 archive, the failure
+ * scripts/tests/integration/smoke-dump-lifecycle.test.ts met first). The
+ * restore container runs POSTGRES_IMAGE, the pinned production major, so its
+ * client reads any archive production can produce. Its local socket trusts the
+ * container's own superuser, so no password travels here either.
+ */
+export function restoreDumpArgv(container: string): string[] {
+  return [
+    "docker", "exec", "-i", container,
+    "pg_restore", `--username=${LOCAL_USER}`, `--dbname=${LOCAL_DB}`, "--no-owner", "--no-privileges", "--exit-on-error",
+  ];
+}
+
+/**
+ * Remove the restore container AND its anonymous volume. The postgres image
+ * declares its data directory a VOLUME, so a container started without a named
+ * one (restore-check.ts, stage-rehearsal.ts) keeps its cluster — a complete
+ * copy of production — in an anonymous volume that `docker rm -f` alone leaves
+ * behind, unlabelled and invisible to smoke:clean. `-v` never removes a NAMED
+ * volume, so a `--local dump` boot's labelled volume is still kept for
+ * smoke:clean, as its contract says.
+ */
+export function teardownArgv(container: string): string[] {
+  return ["docker", "rm", "-f", "-v", container];
+}
+
 export function teardownContainer(container: string, log: (m: string) => void): void {
-  log(`cleaning up: docker rm -f ${container}`);
-  Bun.spawnSync(["docker", "rm", "-f", container]);
+  log(`cleaning up: docker rm -f -v ${container}`);
+  Bun.spawnSync(teardownArgv(container));
 }
 
 /**

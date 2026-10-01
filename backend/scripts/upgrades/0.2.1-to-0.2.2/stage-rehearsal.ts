@@ -41,6 +41,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../../../scripts/lib/restore-container.ts";
+import { instancePaths, stateRoot } from "../../../../scripts/lib/smoke-state.ts";
 import { deriveHostRole, emitReceipt, gitFacts } from "../../lib/rollout-receipt.ts";
 import { TAG_GLOB } from "./release.ts";
 
@@ -200,7 +201,7 @@ async function main(backupDirArg?: string): Promise<number> {
     // rehearsal permanently, which is exactly what it used to do. Setting CI
     // is NOT the fix: a truthy CI tears the stack down regardless of exit
     // code, leaving the frontend checks below nothing to hit.
-    bootProc = Bun.spawn(["bun", "scripts/smoke.ts", "--smoke", "--external-pg", "--no-tui"], {
+    bootProc = Bun.spawn(["bun", "scripts/smoke.ts", "--smoke", "--external-pg", "--no-tui", "--instance", project], {
       cwd: worktree,
       env: bootEnv,
       stdout: "inherit",
@@ -212,15 +213,17 @@ async function main(backupDirArg?: string): Promise<number> {
       bootExit = c;
     });
 
-    const stateFile = join(worktree, ".agents", "smoke-state.json");
+    // The boot records its stack in its INSTANCE's state directory (smoke spec
+    // §1.1), never the checkout, so the worktree has no state file to read.
+    const stateFile = instancePaths(stateRoot(process.env), project).stackStateFile;
     log(`waiting for readiness (deadline ${Math.round(READY_DEADLINE_MS / 60000)}m): ${stateFile} + GET /health`);
     const startedAt = Date.now();
     let ready: SmokeState | null = null;
     let lastNote = "";
     while (Date.now() - startedAt < READY_DEADLINE_MS) {
-      // Fail fast rather than burning the whole deadline: with CI unset a
-      // boot that exits AT ALL has failed (a healthy one runs forever).
-      if (bootExit !== null) {
+      // Fail fast rather than burning the whole deadline. `bun smoke` exits 0 at
+      // readiness (smoke spec §1), so only a NON-ZERO exit is a failure.
+      if (bootExit !== null && bootExit !== 0) {
         err(`boot exited ${bootExit} before becoming ready — this release's migrations did not apply cleanly against production-shaped data, or the stack did not come up`);
         return 1;
       }
@@ -236,10 +239,10 @@ async function main(backupDirArg?: string): Promise<number> {
             lastNote = `api port ${state.apiPort} not healthy yet (${health?.status ?? "no response"})`;
           }
         } catch {
-          lastNote = "smoke-state.json present but not yet parseable";
+          lastNote = "stack-state.json present but not yet parseable";
         }
       } else {
-        lastNote = "smoke-state.json not written yet (still building/starting)";
+        lastNote = "stack-state.json not written yet (still building/starting)";
       }
       await Bun.sleep(READY_POLL_MS);
     }

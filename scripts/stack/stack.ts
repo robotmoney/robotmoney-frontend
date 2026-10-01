@@ -26,6 +26,7 @@ import {
   buildComposeEnv,
   buildSpawnEnv,
   composeArgs,
+  CONTAINER_TOKEN_HOLDERS,
   composeFilesWithImagesOverride,
   downArgs,
   hostBackendUrl,
@@ -34,6 +35,7 @@ import {
   pgReadyArgs,
   portArgs,
   POSTGRES_CONTAINER_PORT,
+  serviceTokenFile,
   servicesFor,
   upArgs,
   WEBSITE_SERVER_CONTAINER_PORT,
@@ -48,10 +50,34 @@ import {
 import { parseComposePortOutput, PortDiscoveryError } from "./ports.ts";
 import { inspectArgs, missingImageRefs, parseImagesOverrideRefs, assertOverrideOutsideCheckout } from "./images.ts";
 import { ensureContractInstallFresh } from "../lib/contract-freshness.ts";
+import { placeSite, WEB_DIR_NAME } from "../lib/smoke-site.ts";
+import { prepareThrowawayDatabase } from "./throwaway-database.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+/** Attempts at `compose up` for the application services (see the retry in bringUp). */
+const START_SERVICES_ATTEMPTS = 2;
+
 export type StackPhase = "docker-preflight" | "build" | "postgres" | "migrate" | "services" | "ports" | "health" | "initialize";
+
+/**
+ * The steps up() takes, in order, as {@link StackUpOptions.beforeStep} names
+ * them. Not a {@link StackPhase}: the event sequence is pinned by
+ * scripts/tests/unit/stack-lifecycle-order.test.ts, and these are boundaries a
+ * caller may act at, not narration.
+ */
+export type StackStep =
+  | "assemble"
+  | "database"
+  | "site"
+  | "build"
+  | "postgres"
+  | "preflight"
+  | "migrate"
+  | "services"
+  | "health"
+  | "initialize"
+  | "deferred";
 
 export type StackEvent =
   | { phase: StackPhase; status: "start" | "done"; detail?: string }
@@ -80,6 +106,15 @@ export interface StackUpOptions {
   migrateEnv?: Record<string, string>;
   migrateScriptArgs?: string[];
   /**
+   * Run the one-shot migrate container at all. Defaults to `true` — unchanged
+   * behaviour for ephemeral/smoke-twin, which own their data and always
+   * migrate. `--db external` passes `false` unless the operator opted in with
+   * `--migrate` (scripts/lib/smoke-db-mode.ts): rm_app cannot `SET LOCAL ROLE
+   * rm_owner`, so an unopted migrate() against a production server with
+   * pending migrations would die mid-boot rather than serve today's schema.
+   */
+  migrate?: boolean;
+  /**
    * Last chance to refuse BEFORE anything is written.
    *
    * Runs after build() and the postgres phase — so images exist and the server
@@ -90,6 +125,20 @@ export interface StackUpOptions {
    * stage of bring-up.
    */
   preflight?: () => Promise<void>;
+  /**
+   * The DATABASE half of a deployment, run FIRST — before assembly, the image
+   * build or any application service — when given. `bun smoke` passes its
+   * spec §7 sequence here: database create/restore (a local mode starts its
+   * own `postgres` service through `compose`), the §2 target lock, the §4.3
+   * identity matrix, then the authorized preparation (bootstrap, enrollment,
+   * `--migrate`, `--seed`). None of it needs an application image, and an
+   * operator typing a remote rm_owner password should not wait on a build to
+   * be asked for it. A throw aborts the bring-up with nothing built. Not a
+   * StackPhase: the event sequence is pinned by
+   * scripts/tests/unit/stack-lifecycle-order.test.ts, and the caller journals
+   * its own steps.
+   */
+  prepareDatabase?: () => Promise<void>;
   /** Scenario-specific initialization after services start but before the
    * stack is declared ready. Migration remains owned by this method exactly once. */
   initialize?: () => Promise<void>;
@@ -97,6 +146,15 @@ export interface StackUpOptions {
    * durable input. They are started with Compose's health barrier so a caller
    * cannot consume a process still busy with boot-time catch-up. */
   deferredServices?: string[];
+  /**
+   * Awaited before each step up() takes (only the steps this call will take:
+   * no `migrate` when migrate is off, no `preflight` or `initialize` without
+   * their callbacks). The seam a deployment journal (smoke spec §1.3) hangs
+   * its phase boundaries on: `bun smoke` journals a phase and honours a
+   * Ctrl-C here, between steps, never inside one. A throw aborts the bring-up
+   * at that boundary with nothing of the next step begun.
+   */
+  beforeStep?: (step: StackStep) => Promise<void>;
   pgTimeoutMs?: number;
   healthTimeoutMs?: number;
 }
@@ -133,25 +191,33 @@ export interface Stack {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * A full stack starts the independent analytics producer, so its Docker-secret
- * source must exist and contain a credential before Docker does any work.
- * Core/status/down operations deliberately do not have this requirement.
+ * A `full` stack starts `system-scheduler` and `analytics-producer`, and each
+ * reads its own token file from the instance's state directory (smoke spec §3).
+ * Refuse BEFORE any application service starts when one is missing or empty:
+ * a scheduler started without its file crash-loops on "automation token file
+ * not found", and a boot that let it would report containers up while nothing
+ * could authenticate. Checked after the database half, which is where `bun
+ * smoke` provisions them. Core/status/down operations have no such service.
  */
-export function assertFullStackProducerCredential(cfg: StackConfig): void {
-  if (cfg.profile !== "full") return;
-  const file = cfg.credentials.analyticsTokenFile;
-  if (!file) {
-    throw new Error("full stack profile requires credentials.analyticsTokenFile for the independent analytics producer");
+export function assertContainerTokenFiles(cfg: StackConfig): void {
+  // No instance: compose itself refuses the model before any service starts
+  // (docker-compose.yml spells RM_INSTANCE_STATE_DIR with `:?`), so there is no
+  // file to look for and nothing that could start without one.
+  if (cfg.profile !== "full" || !cfg.instance) return;
+  for (const holder of CONTAINER_TOKEN_HOLDERS) {
+    const file = serviceTokenFile(cfg.instance.stateDir, holder);
+    let value = "";
+    try {
+      value = readFileSync(file, "utf8").trim();
+    } catch (error) {
+      throw new Error(
+        `the ${holder} token file ${file} is not readable (${error instanceof Error ? error.message : String(error)}). ` +
+          "`bun smoke --local blank|dump` provisions it; production and a remote rehearsal target provision it " +
+          "explicitly with `bun scripts/prod-init.ts provision-tokens`.",
+      );
+    }
+    if (!value) throw new Error(`the ${holder} token file ${file} is empty`);
   }
-  let value: string;
-  try {
-    value = readFileSync(file, "utf8").trim();
-  } catch (error) {
-    throw new Error(
-      `full stack analytics producer credential file is not readable: ${file} (${error instanceof Error ? error.message : String(error)})`,
-    );
-  }
-  if (!value) throw new Error(`full stack analytics producer credential file is empty: ${file}`);
 }
 
 function decode(buf: unknown): string {
@@ -242,6 +308,13 @@ export function createStack(
   // `docker` from cfg.repoRoot with the allowlisted spawnEnv and a closed
   // stdin. A caller that passes nothing gets exactly the behaviour this module
   // has always had.
+  // EVERY CHILD IN ITS OWN PROCESS GROUP (`detached`: a new session). A
+  // terminal's Ctrl-C is delivered to the whole foreground process group; with
+  // the build, `compose up` and the static assembly in it, a second Ctrl-C
+  // killed the step mid-flight and the journal recorded it `failed` (wave-2
+  // open problem 10). Detached, only the orchestrator receives the signal, and
+  // `bun smoke` stops at the next phase boundary with the step complete (spec
+  // §1.4). stdout and stderr are still the caller's; stdin is never read.
   const runtime: StackRuntime = opts.runtime ?? {
     runSync(argv, io) {
       const r = Bun.spawnSync(argv, {
@@ -250,7 +323,8 @@ export function createStack(
         stdin: "ignore",
         stdout: (io.stdout ?? "pipe") as "pipe",
         stderr: (io.stderr ?? "pipe") as "pipe",
-      });
+        detached: true,
+      } as Parameters<typeof Bun.spawnSync>[1]);
       return { exitCode: r.exitCode ?? -1, stdout: decode(r.stdout), stderr: decode(r.stderr) };
     },
     async run(argv, io, cwd) {
@@ -260,6 +334,7 @@ export function createStack(
         stdin: "ignore",
         stdout: (io.stdout ?? "pipe") as "pipe",
         stderr: (io.stderr ?? "pipe") as "pipe",
+        detached: true,
       });
       return (await proc.exited) ?? -1;
     },
@@ -472,8 +547,45 @@ export function createStack(
     return hostBackendUrl(discovered.webPort);
   }
 
+  /**
+   * A THROWAWAY stack's database — an eval's or a rails test's own compose
+   * postgres — prepared the way `bun smoke --local blank` prepares one: the
+   * four roles by the stack's superuser, then the snapshot bootstrap and the
+   * three service tokens as rm_owner under the target lock
+   * (scripts/stack/throwaway-database.ts). `bun smoke` never comes here: it
+   * prepares inside its own journaled plan (`prepareDatabase`).
+   *
+   * The containers must already be configured with the runtime roles' URLs
+   * (throwawayStackDatabase): the api and worker preflights refuse the
+   * superuser (spec §7.2), so a stack that would hand it to them is refused
+   * here, before anything is written.
+   */
+  async function prepareOwnDatabase(): Promise<void> {
+    if (!cfg.instance) throw new Error("a throwaway stack's database needs an instance: the role passwords and token files live in its state directory");
+    if (!cfg.database.roleUrls) {
+      throw new Error(
+        "this stack's containers would log in as the postgres superuser, which the api and worker preflights refuse " +
+          "(smoke-production-spec.md §7.2): build its database config with throwawayStackDatabase(instance.paths)",
+      );
+    }
+    emit({ phase: "migrate", status: "start", detail: "blank preparation: roles, snapshot bootstrap, service tokens" });
+    await prepareThrowawayDatabase({
+      repoRoot: cfg.repoRoot,
+      instance: cfg.instance,
+      database: cfg.database,
+      postgresContainer: () => {
+        const r = compose(["ps", "-q", "postgres"], { stdout: "pipe", stderr: "pipe" });
+        const id = r.stdout.split("\n")[0]?.trim();
+        if (r.exitCode !== 0 || !id) throw new Error(`the stack's postgres container could not be found: ${r.stderr.trim() || "no container"}`);
+        return id;
+      },
+      publishedPostgresPort: () => publishedPort("postgres", POSTGRES_CONTAINER_PORT),
+      log: (message) => emit({ phase: "log", message }),
+    });
+    emit({ phase: "migrate", status: "done", detail: "blank preparation" });
+  }
+
   async function up(upOpts: StackUpOptions = {}): Promise<StackHostPorts> {
-    assertFullStackProducerCredential(cfg);
     assertDockerAvailable();
     // R18 / C-18. Bun COPIES `file:` deps, so `node_modules/@robotmoney/contract`
     // is a point-in-time copy: the rc.1→rc.2 repin moved the checkout past a
@@ -488,10 +600,37 @@ export function createStack(
     // Both the static manifest (T26) and any build below report the identity of
     // THIS tree, and they must not be able to disagree about it.
     resolveIdentityOnce();
+    const boundary = async (step: StackStep): Promise<void> => {
+      if (upOpts.beforeStep) await upOpts.beforeStep(step);
+    };
+    // ASSEMBLE FIRST, then the database. Assembly writes only the checkout's
+    // `_static`; it touches no target. Running it before prepareDatabase lets
+    // a caller decide on the assembled site at the `database` boundary, BEFORE
+    // the first mutation of the target (smoke spec §13.3: the web-compat
+    // refusal must leave the database and every container as they were).
+    await boundary("assemble");
     await assembleStaticDir();
+    if (upOpts.prepareDatabase) {
+      await boundary("database");
+      await upOpts.prepareDatabase();
+    }
+    if (cfg.instance) {
+      // The assembled site becomes the instance's current one (website-server
+      // serves `web/current`; scripts/lib/smoke-site.ts). Every consumer of this
+      // module gets it, so an eval's website-server serves the same bytes a
+      // smoke's does. Idempotent: an unchanged site is neither copied nor swapped.
+      await boundary("site");
+      const site = placeSite(join(cfg.instance.stateDir, WEB_DIR_NAME), join(cfg.repoRoot, "_static"));
+      emit({
+        phase: "log",
+        message: `site ${site.siteId}: ${site.copied ? "placed" : "already placed"}${site.swapped ? `, now current (was ${site.previous ?? "none"})` : ", already current"}`,
+      });
+    }
+    await boundary("build");
     if (shippedImages) assertShippedImagesPresent();
     else await build();
 
+    await boundary("postgres");
     emit({ phase: "postgres", status: "start" });
     if (externalPostgres) {
       // Nothing to start and nothing to poll: the server is somebody else's,
@@ -507,9 +646,33 @@ export function createStack(
 
     // Refuse before the first write, not after it. migrate() is that first
     // write — it does not only migrate, it seeds.
-    if (upOpts.preflight) await upOpts.preflight();
+    if (upOpts.preflight) {
+      await boundary("preflight");
+      await upOpts.preflight();
+    }
 
-    await migrate(upOpts.migrateEnv, upOpts.migrateScriptArgs);
+    if ((upOpts.migrate ?? true) && cfg.instance && !externalPostgres && !upOpts.prepareDatabase) {
+      // A throwaway stack on its own compose postgres: the blank preparation,
+      // not the legacy superuser migrate — its services log in as the runtime
+      // roles and authenticate with store-issued tokens like every other
+      // stack's (spec §3, §7.2, §7.3).
+      await boundary("migrate");
+      await prepareOwnDatabase();
+    } else if (upOpts.migrate ?? true) {
+      await boundary("migrate");
+      try {
+        await migrate(upOpts.migrateEnv, upOpts.migrateScriptArgs);
+      } finally {
+        // A caller that set MIGRATE_DATABASE_URL for this one run (an
+        // interactively-typed doadmin credential, or a rehearsal's
+        // twinMigrationCredential()) never wants it outliving the call it was
+        // for — this process keeps running long after migrate() returns.
+        delete process.env.MIGRATE_DATABASE_URL;
+      }
+    } else {
+      emit({ phase: "migrate", status: "start", detail: "skipped — pass --migrate to run it" });
+      emit({ phase: "migrate", status: "done", detail: "skipped" });
+    }
 
     // Named explicitly from the profile — never a bare `docker compose up -d` —
     // so a compose service added later can never leak into `core`.
@@ -519,8 +682,26 @@ export function createStack(
       throw new Error(`deferred services are not in the ${cfg.profile} profile: ${unknownDeferred.join(", ")}`);
     }
     const rest = services.filter((s) => s !== "postgres" && !requestedDeferred.has(s));
+    assertContainerTokenFiles(cfg);
+    await boundary("services");
     emit({ phase: "services", status: "start", detail: rest.join(", ") });
-    await composeAsync(upArgs(rest, { noBuild: shippedImages }), "start services");
+    // `up -d` is idempotent: a second pass starts only what the first left down.
+    // Docker hands out ephemeral host ports without coordinating between one
+    // service's loopback publish and another's wildcard publish, so two services
+    // can be given the same number and the later container fails to bind
+    // ("address already in use"). A retry gets fresh numbers. The publish stays
+    // on loopback: widening it to make the collision impossible would expose the
+    // scheduler's health surface on every interface.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await composeAsync(upArgs(rest, { noBuild: shippedImages }), "start services");
+        break;
+      } catch (e) {
+        if (attempt >= START_SERVICES_ATTEMPTS) throw e;
+        emit({ phase: "log", message: `start services failed (attempt ${attempt} of ${START_SERVICES_ATTEMPTS}); retrying once for a host port collision` });
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    }
     emit({ phase: "services", status: "done", detail: rest.join(", ") });
 
     // Only NOW do the host ports exist. Everything downstream — the health
@@ -535,6 +716,7 @@ export function createStack(
       detail: `api=:${ports.apiPort} web=:${ports.webPort} pg=${ports.pgPort === null ? "external" : `:${ports.pgPort}`}`,
     });
 
+    await boundary("health");
     emit({ phase: "health", status: "start" });
     // api's own /health directly first: a database-connectivity problem is a
     // more specific diagnostic there than the same check proxied through
@@ -553,6 +735,7 @@ export function createStack(
     // API that was up but not yet listening. Readiness is a precondition of
     // initialization, so it is sequenced as one.
     if (upOpts.initialize) {
+      await boundary("initialize");
       emit({ phase: "initialize", status: "start" });
       await upOpts.initialize();
       emit({ phase: "initialize", status: "done" });
@@ -560,6 +743,7 @@ export function createStack(
 
     if (requestedDeferred.size > 0) {
       const deferred = [...requestedDeferred];
+      await boundary("deferred");
       emit({ phase: "services", status: "start", detail: deferred.join(", ") });
       await composeAsync(
         upArgs(deferred, { wait: true, waitTimeoutSeconds: 600 }),

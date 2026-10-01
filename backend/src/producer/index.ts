@@ -22,7 +22,7 @@ export function requireProducerApiConfig(
   const cfg = resolveAnalyticsApiConfig(env);
   if (!cfg.token) {
     throw new Error(
-      "analytics producer requires ANALYTICS_TOKEN or a non-empty ANALYTICS_TOKEN_FILE before startup",
+      "analytics producer requires ANALYTICS_TOKEN_FILE naming its store-issued token file before startup",
     );
   }
   return cfg;
@@ -144,7 +144,7 @@ export async function catchUpMissedResearchDays(deps: ResearchCatchUpDeps = {}):
 // implemented for raw_indicator_history despite the criterion being ticked on
 // the closed #614 (docs/technical/markets-asset-pricing-ingest.md §9's standing warning
 // about exactly this pattern). raw_indicator_history is API-owned (#106): the
-// shared worker where `ops.repair_gaps` runs holds no ANALYTICS_TOKEN by
+// shared worker where `ops.repair_gaps` runs holds no analytics token by
 // design (D25), so — same as Class B's research_signals self-heal above —
 // this belongs in the independent producer, the one process that both
 // computes indicator data and holds the analytics-provider credential.

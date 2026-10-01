@@ -22,7 +22,10 @@ test("the limit is a named constant, deliberately not above Bun's old 10 s defau
 
 test("the api's Bun.serve is given that constant, so no other value is in effect", () => {
   const src = readFileSync(join(import.meta.dir, "../src/api/index.ts"), "utf8");
-  const serve = src.slice(src.indexOf("Bun.serve({"), src.indexOf("async fetch(req, server)"));
+  // `Bun.serve<Data, never>({` since the scheduler stream's socket (D55 (11)) gave it a type argument.
+  const serveAt = src.search(/Bun\.serve(<[^>]*>)?\(\{/);
+  expect(serveAt).toBeGreaterThan(-1);
+  const serve = src.slice(serveAt, src.indexOf("async fetch(req, server)"));
   expect(serve).toContain("idleTimeout: API_IDLE_TIMEOUT_SECONDS");
   expect(src.match(/idleTimeout/g)!.length).toBe(1); // set once, to the constant
   // and the router runs inside the timer

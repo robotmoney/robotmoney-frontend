@@ -9,6 +9,7 @@
 // Runs in the required backend-integration job against ephemeral Postgres.
 import { test, expect, afterEach, beforeAll, beforeEach } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { LANES } from "../src/worker/lanes.ts";
 import { startWorker, type WorkerHandle } from "../src/worker/runtime.ts";
@@ -32,9 +33,9 @@ beforeAll(() => {
 });
 beforeEach(async () => {
   hangGate = gate();
-  await sql`DELETE FROM job_runs`;
-  await sql`DELETE FROM jobs`;
-  await sql`DELETE FROM job_schedules`;
+  await fixtureDb`DELETE FROM job_runs`;
+  await fixtureDb`DELETE FROM jobs`;
+  await fixtureDb`DELETE FROM job_schedules`;
 });
 
 // Every handle this file starts, so no loop can outlive the test that made it.
@@ -81,7 +82,7 @@ async function waitForStatus(id: number, status: string, ms: number): Promise<vo
 }
 
 test("idle shutdown: all lanes signaled together exit bounded with no orphaned work", async () => {
-  const workers: WorkerHandle[] = [LANES.swarm, LANES.analytics, LANES.research].map((lane) =>
+  const workers: WorkerHandle[] = [LANES.analytics, LANES.generic].map((lane) =>
     launch({ lane, workerId: `idle-${lane.name}`, ...fastOpts, shutdownTimeoutMs: 5000 }));
   await sleep(150); // loops spinning idle
 
@@ -97,7 +98,7 @@ test("idle shutdown: all lanes signaled together exit bounded with no orphaned w
 
 test("active shutdown: in-flight job finishes, exactly one terminal job_runs row, no orphaned running job", async () => {
   const worker = launch({ lane: LANES.analytics, workerId: "active-analytics", ...fastOpts, shutdownTimeoutMs: 5000 });
-  const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('test.shutdown_slow', '{}') RETURNING id`;
+  const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload) VALUES ('test.shutdown_slow', '{}') RETURNING id`;
   await waitForStatus(id, "running", 3000);
 
   const t0 = Date.now();
@@ -115,8 +116,8 @@ test("active shutdown: in-flight job finishes, exactly one terminal job_runs row
 });
 
 test("hung handler: bounded exit at the deadline, job released to pending (never orphaned), zombie write discarded", async () => {
-  const worker = launch({ lane: LANES.research, workerId: "hung-research", ...fastOpts, shutdownTimeoutMs: 500 });
-  const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_shutdown_hang', '{}') RETURNING id`;
+  const worker = launch({ lane: LANES.generic, workerId: "hung-research", ...fastOpts, shutdownTimeoutMs: 500 });
+  const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload) VALUES ('research.test_shutdown_hang', '{}') RETURNING id`;
   await waitForStatus(id, "running", 3000);
 
   const t0 = Date.now();
@@ -143,8 +144,8 @@ test("stop() resolving is NOT proof the loops exited — drained() is, and it fa
   // that a drain guarantee is making a claim the runtime does not honour, and
   // the symptom of being wrong is not a failure here — it is a query from an
   // escaped loop against a database some LATER file already dropped.
-  const worker = launch({ lane: LANES.research, workerId: "drain-research", ...fastOpts, shutdownTimeoutMs: 300 });
-  const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('research.test_shutdown_hang', '{}') RETURNING id`;
+  const worker = launch({ lane: LANES.generic, workerId: "drain-research", ...fastOpts, shutdownTimeoutMs: 300 });
+  const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload) VALUES ('research.test_shutdown_hang', '{}') RETURNING id`;
   await waitForStatus(id, "running", 3000);
 
   await worker.stop(); // bounded — returns at shutdownTimeoutMs with the handler still parked

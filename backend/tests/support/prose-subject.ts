@@ -14,10 +14,10 @@
 // were. A test about allocations keeps `ensureSubject` (or sets the type
 // itself) and submits the four-bucket vector.
 import * as ic from "../../src/swarm/domain.ts";
-import { sql } from "../../src/db/client.ts";
+import { fixtureDb } from "./fixture-db.ts";
 
 export async function ensureProseSubject(id: string, name: string) {
   const subject = await ic.ensureSubject(id, name);
-  await sql`UPDATE swarm_subjects SET recommendation_type = 'position_actions' WHERE id = ${id}`;
+  await fixtureDb`UPDATE swarm_subjects SET recommendation_type = 'position_actions' WHERE id = ${id}`;
   return subject;
 }

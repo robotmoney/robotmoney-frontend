@@ -33,6 +33,7 @@ import {
   type TrackedAsset,
 } from "../config.ts";
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import {
   decodeAggregate3,
   decodeUint256,
@@ -50,7 +51,7 @@ import {
   type RpcCallOptions,
 } from "./base-rpc-client.ts";
 import { fetchAssetPriceUsd } from "./token-prices.ts";
-import { ASSET_PRICE_TIME_BASIS } from "../ops/asset-prices.ts";
+import { ASSET_PRICE_TIME_BASIS } from "../ops/asset-price-basis.ts";
 
 // 'seed' = a pre-launch history row backfilled from the ported baked constants
 // (chain/wallet-history-seed.ts), NOT a live chain read — honesty invariant from
@@ -153,15 +154,60 @@ export const MAX_PERSISTED_PRICE_AGE_MS = 5 * 60_000;
 // `price_usd`), and it is the exact same JS double `amount * price` the
 // sampler computed at sample time — so a row missing `price_usd` derives it
 // back out as `value_usd / amount` instead.
+// Registered queries (smoke-production-spec.md §7.1). The persisted-price
+// fallback is reached by the wallet sampler's valueLeg and by the projects
+// pipeline's live source; the request path never reads a price through it.
+// The fallback read below, as tests/db-registry-execution.test.ts runs it: the
+// call site's own statement (that test holds the two to the same text), under
+// both declarations it joins.
+const RECENT_PRICE_PROBE = {
+  statement: `SELECT wbs.price_usd, wbs.amount, wbs.value_usd, wbs.sampled_at,
+           ap.price_usd AS asset_price_usd,
+           (wbs.sample_date < (now() AT TIME ZONE 'UTC')::date) AS is_closed
+      FROM wallet_balance_samples wbs
+      LEFT JOIN asset_prices ap
+        ON ap.symbol = wbs.symbol
+       AND ap.price_date = wbs.sample_date
+       AND ap.time_basis = $1
+     WHERE wbs.symbol = $2
+       AND (wbs.price_usd IS NOT NULL OR (wbs.value_usd IS NOT NULL AND wbs.amount IS NOT NULL AND wbs.amount <> 0))
+       AND wbs.sampled_at <= now()
+       AND wbs.provenance <> $3
+       AND wbs.superseded_at IS NULL
+     ORDER BY wbs.sampled_at DESC
+     LIMIT 1`,
+  params: [ASSET_PRICE_TIME_BASIS, "USDC", QUARANTINED_PROVENANCE],
+};
+
+const fallbackSample = registerQuery({
+  role: "rm_app",
+  object: "wallet_balance_samples",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-valuation:recentPersistedPrice.samples",
+  purpose: "Read a symbol's newest recent sample price, for the fallback when a live price read fails.",
+  callers: ["src/worker/handlers/wallet", "src/worker/handlers/projects"],
+  probe: RECENT_PRICE_PROBE,
+});
+
+const fallbackPrice = registerQuery({
+  role: "rm_app",
+  object: "asset_prices",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-valuation:recentPersistedPrice.prices",
+  purpose: "Join the settled asset price for the fallback sample's day, which the fallback read LEFT JOINs.",
+  callers: ["src/worker/handlers/wallet", "src/worker/handlers/projects"],
+  probe: RECENT_PRICE_PROBE,
+});
+
 async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number; sampledAt: string } | null> {
-  const rows = await sql<{
+  const rows = await on(sql, fallbackSample, fallbackPrice)<{
     price_usd: string | null;
     amount: string | null;
     value_usd: string | null;
     sampled_at: Date;
     asset_price_usd: string | null;
     is_closed: boolean;
-  }[]>`
+  }>`
     SELECT wbs.price_usd, wbs.amount, wbs.value_usd, wbs.sampled_at,
            ap.price_usd AS asset_price_usd,
            (wbs.sample_date < (now() AT TIME ZONE 'UTC')::date) AS is_closed
@@ -183,6 +229,9 @@ async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number;
        -- unrelated policies, which is exactly the "correct today by luck"
        -- shape §3 of the review is about; the predicate above makes it
        -- correct by construction instead.
+       -- D55 (6): nor is a row the repair pass superseded (migration 0086):
+       -- the delete it replaces left no such row to serve.
+       AND wbs.superseded_at IS NULL
      ORDER BY wbs.sampled_at DESC
      LIMIT 1
   `;

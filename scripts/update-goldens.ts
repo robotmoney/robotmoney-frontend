@@ -60,6 +60,8 @@ async function main(): Promise<void> {
 
   // Static routes.
   routes[ROUTES.health] = await get(ROUTES.health);
+  // D54: main.js checks this against the site's apiRange before any other call.
+  routes[ROUTES.apiVersion] = await get(ROUTES.apiVersion);
   routes[ROUTES.dashboards.regimeSnapshots] = await get(`${ROUTES.dashboards.regimeSnapshots}?range=180`);
   routes[ROUTES.dashboards.vaultEconomics] = await get(ROUTES.dashboards.vaultEconomics);
   routes[ROUTES.dashboards.walletBalances] = await get(ROUTES.dashboards.walletBalances);

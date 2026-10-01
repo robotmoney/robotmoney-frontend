@@ -7,9 +7,16 @@
 //
 // WORKER_DATABASE_URL points this pool at the restricted `rm_worker` role
 // provisioned by migrations/0016_worker_role.sql (grants on everything EXCEPT
-// analytics-table writes). It falls back to DATABASE_URL for ephemeral/CI and
-// local convenience — deployments that want DB-level enforcement either set
-// WORKER_DATABASE_URL or hand the worker process a restricted DATABASE_URL.
+// analytics-table writes). It is REQUIRED in every environment, with no
+// fallback to DATABASE_URL (smoke-production-spec.md §7.2: "the pipeline worker
+// running the vault, wallet, buyback and project jobs as `rm_worker`"). The
+// fallback used to apply everywhere but `prod`, which is how a worker came to
+// run on whatever credential DATABASE_URL carried — the api's rm_app login, or
+// an owner — without a word. Unset, this module refuses at import, before any
+// pool exists. worker/index.ts tests the variable before importing this module,
+// so the worker reports the missing credential as its check 1 refusal line
+// rather than as an uncaught throw, then runs preflight checks 1-3 as rm_worker
+// against this same URL before it claims anything.
 //
 // Source-level boundary: worker/** imports THIS module, never db/client.ts —
 // enforced by tests/analytics-api-boundary.test.ts.
@@ -17,8 +24,19 @@ import postgres from "postgres";
 import type postgresTypes from "postgres";
 import { config } from "../config.ts";
 
-if (config.env === "prod" && !process.env.WORKER_DATABASE_URL) {
-  throw new Error("missing required env var: WORKER_DATABASE_URL (production workers must use rm_worker)");
+const WORKER_URL = process.env.WORKER_DATABASE_URL;
+if (!WORKER_URL) {
+  throw new Error(
+    "missing required env var: WORKER_DATABASE_URL (the pipeline worker connects as rm_worker and never falls " +
+      "back to DATABASE_URL — smoke-production-spec.md §7.2)",
+  );
+}
+
+/** The connection string this process was started with — WORKER_DATABASE_URL,
+ *  read once at import. worker/index.ts hands it to the startup preflight, so
+ *  checks 1-3 judge exactly the credential the pool below uses. */
+export function workerDatabaseUrl(): string {
+  return WORKER_URL!;
 }
 
 // Server-side timeouts, applied as startup parameters so EVERY statement and
@@ -46,7 +64,7 @@ function makePool(url: string): postgresTypes.Sql<{}> {
 // `let`, not `const`, for exactly one reason: setDatabase() below. Importers
 // use `import { sql }`, an ESM live binding, so they observe the rebuilt pool.
 // Nothing in production ever reassigns it.
-export let sql = makePool(process.env.WORKER_DATABASE_URL || config.databaseUrl);
+export let sql = makePool(WORKER_URL);
 
 // Point this pool at a different database, closing the old one.
 //
@@ -57,15 +75,15 @@ export let sql = makePool(process.env.WORKER_DATABASE_URL || config.databaseUrl)
 // would leave every queue lifecycle call still writing to the shared one — the
 // two would silently disagree about which jobs exist.
 //
-// The WORKER_DATABASE_URL fallback is deliberately NOT re-applied: the caller
-// is naming the database this process must now use, and tests never provision
-// the restricted `rm_worker` role's URL.
+// WORKER_DATABASE_URL is deliberately NOT re-read: the caller is naming the
+// database this process must now use, and tests never provision the
+// restricted `rm_worker` role's URL.
 //
-// Which is exactly why this REFUSES OUTSIDE `ephemeral`. Dropping that fallback
-// is a privilege change, not just a redirect: a call in a deployed worker would
+// Which is exactly why this REFUSES OUTSIDE `ephemeral`. Replacing the URL is
+// a privilege change, not just a redirect: a call in a deployed worker would
 // move the process off the restricted `rm_worker` role
-// (migrations/0016_worker_role.sql:42) and onto the owner role in
-// `config.databaseUrl` — silently undoing the analytics write boundary that
+// (migrations/0016_worker_role.sql:42) and onto whatever role `url` names —
+// silently undoing the analytics write boundary that
 // tests/analytics-worker-role.test.ts exists to prove. `config.env` fails
 // closed to "prod" when RM_ENV is unset (config.ts).
 export async function setDatabase(url: string): Promise<void> {

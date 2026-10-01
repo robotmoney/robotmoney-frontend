@@ -1195,8 +1195,8 @@ test("a session page opens on its date and phase, then leads with the recommenda
   await expect(first.locator(".sv__stance-badge")).toHaveText("cautious");
   await expect(first.locator(".rr-conf")).toHaveText("Confidence 72%");
 
-  // The record's generation time, without the date the header already gives.
-  await expect(page.locator("#evidence .rr-dl > div").filter({ hasText: "Record generated" }).locator("dd")).toHaveText("23:58 UTC");
+  // The row's creation time (`generatedAt`), without the date the header already gives. Labelled for what it is: the header shows when the session OPENED (issue 1084).
+  await expect(page.locator("#evidence .rr-dl > div").filter({ hasText: "Row created" }).locator("dd")).toHaveText("23:58 UTC");
 });
 
 // The targets the session's OWN brief handed it are what its outcome is
@@ -1275,4 +1275,57 @@ test("a sleeve published with no weight is not drawn as a move to zero", async (
   await expect(legendRow(page, "Small Cap Tokens").locator(".alp__mv")).toHaveCount(0);
   await expect(legendRow(page, "Small Cap Tokens")).not.toContainText("−5 pp");
   await expect(outcome(page).getByRole("button", { name: "Full comparison" })).toHaveCount(0);
+});
+
+// Issue 1081. A session waits for its brief: this row was created on 2026-09-28 and its brief went out on 2026-10-01 at
+// 02:11 UTC. The page must say when it OPENED, not when the row was created. `camelSession` used to drop `openedAt` and
+// `publishedAt`, so the header, breadcrumb and title all printed the creation day (the v0.5.4 rehearsal, stage twin).
+test("a session created on one day and opened on another is shown on the day it opened: header, breadcrumb and title", async ({ page }) => {
+  const id = "12a04ae6-9d4e-4462-ac62-85d3800b8139";
+  const session = {
+    id, date: "2026-09-28", subjectId: "robotmoney-vault", subjectName: "Robot Money Vault", state: "collecting",
+    generatedAt: "2026-09-28T00:11:45.953Z", openedAt: "2026-10-01T02:11:10.439Z", publishedAt: null,
+    windowClosesAt: "2026-10-01T08:11:10.439Z", regimeSummary: null, synthesis: null, swarmRecommendation: null,
+  };
+  await page.route("**/api/**", (route) => {
+    const u = new URL(route.request().url());
+    if (u.pathname === `/api/swarm/sessions/${id}`) return route.fulfill(json({ session, takes: [] }));
+    if (u.pathname === "/api/swarm/members") return route.fulfill(json(MEMBERS));
+    if (u.pathname.startsWith("/api/")) return route.fulfill(notFound);
+    return route.continue();
+  });
+  await page.goto(`/swarm/sessions/${id}`);
+  await expect(page.locator(".sv__error")).toBeHidden();
+
+  await expect(page.locator(".rr-crumbs [aria-current='page']")).toHaveText(/Oct 1, 2026/i);
+  const when = page.locator("time").first();
+  await expect(when).toHaveText("October 1, 2026 · 02:11 UTC");
+  await expect(when).toHaveAttribute("datetime", "2026-10-01T02:11:10.439Z");
+  await expect(page).toHaveTitle(/Oct 1, 2026/);
+  // The creation day appears nowhere in what the page says about WHEN the session happened.
+  await expect(page.locator(".rr-crumbs")).not.toContainText("Sep 28");
+  await expect(when).not.toContainText("September 28");
+  await expect(when).not.toContainText("00:11");
+  // The row's creation time is dated, because it is not the day the header shows.
+  await expect(page.locator("#evidence .rr-dl > div").filter({ hasText: /Record generated|Row created/ }).locator("dd")).toHaveText("Sep 28, 2026 · 00:11 UTC");
+});
+
+test("a published session with no openedAt (an archive session) falls back to its publish day, then to its date", async ({ page }) => {
+  const id = "0f0f0f0f-1111-4222-8333-444444444444";
+  const base = { id, date: "2026-09-20", subjectId: "robotmoney-vault", subjectName: "Robot Money Vault", state: "published", generatedAt: "2026-09-20T05:00:00Z", regimeSummary: null, synthesis: "x", swarmRecommendation: null };
+  const serve = (session: Record<string, unknown>) => page.route("**/api/**", (route) => {
+    const u = new URL(route.request().url());
+    if (u.pathname === `/api/swarm/sessions/${id}`) return route.fulfill(json({ session, takes: [] }));
+    if (u.pathname === "/api/swarm/members") return route.fulfill(json(MEMBERS));
+    if (u.pathname.startsWith("/api/")) return route.fulfill(notFound);
+    return route.continue();
+  });
+  await serve({ ...base, publishedAt: "2026-09-21T03:30:00Z" });
+  await page.goto(`/swarm/sessions/${id}`);
+  await expect(page.locator("time").first()).toContainText("September 21, 2026");
+
+  await page.unroute("**/api/**");
+  await serve({ ...base, publishedAt: null });
+  await page.goto(`/swarm/sessions/${id}`);
+  await expect(page.locator("time").first()).toContainText("September 20, 2026");
 });

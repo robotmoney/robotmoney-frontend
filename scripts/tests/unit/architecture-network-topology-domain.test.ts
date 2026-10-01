@@ -16,8 +16,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dir, "../../..");
-const ARCHITECTURE_MD = "docs/architecture.md";
+const ARCHITECTURE_MD = "docs/architecture/network-topology.md";
+const ARCHITECTURE_README = "docs/architecture/README.md";
 const architecture = readFileSync(join(repoRoot, ARCHITECTURE_MD), "utf8");
+const architectureReadme = readFileSync(join(repoRoot, ARCHITECTURE_README), "utf8");
 
 const SECTION_HEADING = "## Network topology — DNS, origins & vendors";
 const NEXT_TOP_LEVEL_HEADING = "\n## 10. Relationship to existing decisions";
@@ -77,13 +79,13 @@ describe("architecture.md Network topology section leaves the deploy subdomains 
 
 describe("architecture.md's two historical robotmoney.net mentions near the top are unchanged", () => {
   test('the "clean rewrite" sentence still names robotmoney.net', () => {
-    expect(architecture).toContain(
+    expect(architectureReadme).toContain(
       "Robot Money frontend + analytics backend. A clean rewrite of robotmoney.net that",
     );
   });
 
   test('the "preserve the marketing UI" bullet still names robotmoney.net', () => {
-    expect(architecture).toContain(
+    expect(architectureReadme).toContain(
       "- **Preserve the marketing UI** of robotmoney.net (reproduce the look exactly).",
     );
   });

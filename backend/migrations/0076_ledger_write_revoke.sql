@@ -1,0 +1,48 @@
+-- compat: additive
+-- metadata_version: 1
+--
+-- The migration ledger is a trusted input, so the runtime roles may read it
+-- and nothing else — issue #1026 W2, docs/technical/smoke-production-spec.md
+-- §8.2/§8.3.
+--
+-- §8.3: "Only `rm_owner` may write it [the manifest] or the ledger's
+-- `compat`/`metadata_version` columns; they are trusted inputs to boot
+-- decisions." §8.4 is the decision they feed: code built for snapshot N boots
+-- against a database at M only if every ledger row outside its own filename
+-- list says `compat = additive`. A runtime role that could write that column
+-- could make any breaking migration look additive to an older image, and a
+-- role that could INSERT a ledger row could make a migration that never ran
+-- look applied.
+--
+-- WHAT WAS WRONG. Migration 0053 granted rm_app
+-- `SELECT, INSERT, UPDATE, DELETE ON ALL TABLES`, `schema_migrations`
+-- included. 0065 took back DELETE and TRUNCATE (the table is append-only) but
+-- left INSERT and UPDATE, and backend/schema/grants.sql re-granted
+-- `SELECT, INSERT, UPDATE` on every reconciliation because the table was not
+-- in its read-only list. So the §8.3 rule held only because
+-- `recordMigrationCompat` (src/db/schema-compat.ts) checks `current_user` in
+-- TypeScript — a check the database never saw.
+--
+-- WHY A TABLE-LEVEL REVOKE AND NOT A COLUMN-LEVEL ONE. §8.3 names the two
+-- columns because they are the ones a boot decision reads, but `name` is just
+-- as trusted: it is the ledger's claim that a migration ran. Every writer of
+-- this table is the migrate step, running as rm_owner (src/db/migrate.ts and
+-- backend/scripts/migrate-run.ts both `SET LOCAL ROLE rm_owner` before the
+-- INSERT), so no runtime role has a legitimate write to keep.
+--
+-- SELECT STAYS, for rm_app and rm_worker both. The api's append-only guard
+-- reads the ledger at boot (src/db/append-only-guard.ts) and §7.2 has every
+-- database-holding container run preflight check 3 under its own credential,
+-- which reads the ledger (src/db/schema-manifest.ts's `detectManifestState`).
+-- `schema_manifest` already has this shape from 0064; this migration gives the
+-- ledger the same one. schema/grants.sql re-asserts both on every run.
+--
+-- The two row-removing privileges are 0065's and are not repeated here: that
+-- migration revoked them from both roles as §9.1 step 2, and
+-- backend/schema/grants.sql re-asserts it on every run.
+--
+-- ADDITIVE: no runtime code writes the ledger, so no supported behaviour of
+-- older code changes.
+
+REVOKE INSERT, UPDATE ON schema_migrations FROM rm_app, rm_worker;
+GRANT SELECT ON schema_migrations TO rm_app, rm_worker, rm_readonly;

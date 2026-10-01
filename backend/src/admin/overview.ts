@@ -6,6 +6,8 @@
 // healthy — never guessed, always derived from the same columns the rest of
 // the admin surface reads.
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
+import { getNextSwarmSession } from "../swarm/domain.ts";
 import { computeRegimeSnapshotStaleness, type RegimeStaleness } from "../analytics/report/regime-projection.ts";
 import { loadRosterSeedManifest } from "../projects/seed/roster-seed.ts";
 import {
@@ -47,20 +49,16 @@ export const SAMPLER_KINDS = [
   "buybacks.refresh",
 ] as const;
 
-// The consensus judge's cadence job. Monitored because the D-A7 ruling makes a
-// judge that cannot be ASKED — no model on `swarm_judge_config`, or no funded
-// OPENCODE_API_KEY in the swarm lane — fail closed with a 503, which the worker
-// records as a degraded `swarm.judge` run. Without this entry that degradation
-// was invisible in the one place an operator looks: the exact shape of the
-// failure that let production publish template prose under the judge's name for
-// months (issue #969, AC-MODEL-01). `judge_disabled` is deliberately NOT this —
-// worker/handlers/swarm.ts translates the shipped `off` default into a clean
-// `succeeded` run precisely so a control working as designed raises nothing.
-export const JUDGE_KIND = "swarm.judge" as const;
-
+// NO JUDGE KIND. `swarm.judge` used to be monitored here as the judge's lane,
+// and it is deliberately gone (issue #1026): no queue job judges any more — the
+// judge is a participant that subscribes over HTTP (smoke-production-spec.md
+// §6.2) — so a monitored `swarm.judge` could only ever report "not run", which
+// is a green-looking line about nothing. What an operator needs from the judge
+// is per SESSION and is still here: a session published `no_consensus`, or one
+// that lost a receipt it could have had, is named by `missingReceipts` below
+// (swarm/receipt-gap.ts) from the session's own stored outcome.
 export const MONITORED_KINDS = [
   ...PRODUCTION_KINDS,
-  JUDGE_KIND,
   "projects.discover",
   "projects.refresh_coins",
   "projects.refresh_wallets",
@@ -116,16 +114,15 @@ export interface AdminOverview {
   regime: RegimeStaleness;
   research: Array<{ signalKey: string; latestDate: string | null; ageDays: number | null; stale: boolean }>;
   enabledAnalyticsSchedules: Array<{ id: number; kind: string; cron: string; nextRunAt: string | null }>;
-  nextSwarmEvent: { jobId: number; kind: string; runAfter: string; scopeType: string | null; scopeId: string | null } | null;
+  nextSwarmEvent: { jobId: number | null; kind: string; runAfter: string; scopeType: string | null; scopeId: string | null } | null;
   rosterSeed: RosterSeedHealth;
   /**
    * AC-FE-10. Published sessions that lost a consensus receipt they could have
-   * had — the one question `JUDGE_KIND` above cannot answer, because it is a
-   * question about SESSIONS and that alert is about the LANE. Eligibility is
-   * judged against the mode and threshold that applied to each session rather
-   * than against today's config, so an unrelated config change cannot retract
-   * it. See swarm/receipt-gap.ts for the staging episode that made the
-   * difference concrete, and for what `off`/`shadow` deliberately do not
+   * had — a question about SESSIONS, which no lane alert can answer.
+   * Eligibility is judged against the mode and threshold that applied to each
+   * session rather than against today's config, so an unrelated config change
+   * cannot retract it. See swarm/receipt-gap.ts for the staging episode that
+   * made the difference concrete, and for what `off` deliberately does not
    * report.
    */
   missingReceipts: MissingReceiptReport;
@@ -148,6 +145,106 @@ export interface RosterSeedHealth {
   error: string | null; // manifest unreadable/unsupported — the seed cannot load at all
 }
 
+// Registered queries (smoke-production-spec.md §7.1), all reads, reached only
+// through GET /api/admin/overview.
+const ADMIN_ROUTE = "src/api/routes/admin";
+
+const jobsByStatus = registerQuery({
+  role: "rm_app",
+  object: "jobs",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.queueCounts",
+  purpose: "Count jobs by status for the overview's queue panel.",
+  callers: [ADMIN_ROUTE],
+  probe: { statement: "SELECT status, count(*)::int AS n FROM jobs GROUP BY status" },
+});
+
+const lastJobOfKind = registerQuery({
+  role: "rm_app",
+  object: "jobs",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.lastJob",
+  purpose: "Read a monitored kind's newest job, to tell dead, stuck and running apart.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: "SELECT id, status, locked_at FROM jobs WHERE kind = $1 ORDER BY id DESC LIMIT 1",
+    params: ["regime.classify"],
+  },
+});
+
+const lastRunOfKind = registerQuery({
+  role: "rm_app",
+  object: "job_runs",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.lastRun",
+  purpose: "Read a monitored kind's newest run and its outcome.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: "SELECT status, started_at, finished_at FROM job_runs WHERE kind = $1 ORDER BY started_at DESC LIMIT 1",
+    params: ["regime.classify"],
+  },
+});
+
+const latestRegime = registerQuery({
+  role: "rm_app",
+  object: "regime_snapshots",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.regime",
+  purpose: "Read the newest regime snapshot's indicators to judge its staleness.",
+  callers: [ADMIN_ROUTE],
+  probe: { statement: "SELECT indicators FROM regime_snapshots ORDER BY date DESC LIMIT 1" },
+});
+
+const latestResearchDate = registerQuery({
+  role: "rm_app",
+  object: "research_signals",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.research",
+  purpose: "Read a research signal's newest date to judge its staleness.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: "SELECT date FROM research_signals WHERE signal_key = $1 ORDER BY date DESC LIMIT 1",
+    params: ["probe_signal"],
+  },
+});
+
+const enabledSchedules = registerQuery({
+  role: "rm_app",
+  object: "job_schedules",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.schedules",
+  purpose: "List the enabled production analytics schedules and their next run.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: "SELECT id, kind, cron, next_run_at FROM job_schedules WHERE enabled = true AND kind = ANY($1::text[]) ORDER BY kind",
+    params: ["{regime.classify,research.refresh}"],
+  },
+});
+
+const activeProjects = registerQuery({
+  role: "rm_app",
+  object: "projects",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.activeProjects",
+  purpose: "Count the active, resolved projects for the roster-seed health panel.",
+  callers: [ADMIN_ROUTE],
+  probe: { statement: "SELECT count(*)::int AS n FROM projects WHERE status = 'active' AND resolved_at IS NOT NULL" },
+});
+
+const judgementSources = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/admin/overview:getOverviewProjection.judgeSources",
+  purpose: "Count recent judgements by source and fallback reason for the judge fallback-share alert.",
+  callers: [ADMIN_ROUTE],
+  probe: {
+    statement: `SELECT source, coalesce(btrim(fallback_reason), '') AS fallback_reason, count(*)::int AS n
+      FROM swarm_session_judgements WHERE created_at >= now() - ($1 || ' days')::interval GROUP BY 1, 2`,
+    params: [7],
+  },
+});
+
 function visibilityTimeoutSeconds(): number {
   return Number(process.env.JOB_VISIBILITY_TIMEOUT ?? 300);
 }
@@ -157,18 +254,19 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
   const alerts: Alert[] = [];
 
   // ── Queue counts ───────────────────────────────────────────────────────
-  const statusRows = await sql`SELECT status, count(*)::int AS n FROM jobs GROUP BY status`;
+  const statusRows = await on(sql, jobsByStatus)<{ status: string; n: number }>`
+    SELECT status, count(*)::int AS n FROM jobs GROUP BY status`;
   const queueCounts: Record<string, number> = {};
   for (const r of statusRows) queueCounts[r.status] = r.n;
 
   // ── Production-kind health ────────────────────────────────────────────
   const production: ProductionKindHealth[] = [];
   for (const kind of MONITORED_KINDS) {
-    const [lastJob] = await sql`
+    const [lastJob] = await on(sql, lastJobOfKind)<{ id: string; status: string; locked_at: Date | null }>`
       SELECT id, status, locked_at
         FROM jobs WHERE kind = ${kind}
        ORDER BY id DESC LIMIT 1`;
-    const [lastRun] = await sql`
+    const [lastRun] = await on(sql, lastRunOfKind)<{ status: string; started_at: Date | null; finished_at: Date | null }>`
       SELECT status, started_at, finished_at
         FROM job_runs WHERE kind = ${kind}
        ORDER BY started_at DESC LIMIT 1`;
@@ -228,7 +326,8 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
   // #398), never from its `date` column — that column is forward-filled to
   // today on every pipeline run regardless of whether the underlying sources
   // actually refreshed, so it can never surface a frozen data source.
-  const [regimeRow] = await sql`SELECT indicators FROM regime_snapshots ORDER BY date DESC LIMIT 1`;
+  const [regimeRow] = await on(sql, latestRegime)<{ indicators: Parameters<typeof computeRegimeSnapshotStaleness>[0] }>`
+    SELECT indicators FROM regime_snapshots ORDER BY date DESC LIMIT 1`;
   const regime = computeRegimeSnapshotStaleness(regimeRow?.indicators ?? null, serverDate);
   if (regime.stale) alerts.push({ level: "stale", source: "regime", message: "regime snapshot is stale" });
   else alerts.push({ level: "healthy", source: "regime", message: "regime snapshot is fresh" });
@@ -236,7 +335,8 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
   // ── Research signal freshness (RESEARCH_STALE_DAYS) ───────────────────
   const research: AdminOverview["research"] = [];
   for (const key of RESEARCH_SIGNAL_KEYS) {
-    const [row] = await sql`SELECT date FROM research_signals WHERE signal_key = ${key} ORDER BY date DESC LIMIT 1`;
+    const [row] = await on(sql, latestResearchDate)<{ date: string | Date }>`
+      SELECT date FROM research_signals WHERE signal_key = ${key} ORDER BY date DESC LIMIT 1`;
     const latestDate = row?.date
       ? typeof row.date === "string" ? row.date : new Date(row.date).toISOString().slice(0, 10)
       : null;
@@ -257,7 +357,7 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
   }
 
   // ── Enabled analytics schedules ────────────────────────────────────────
-  const scheduleRows = await sql`
+  const scheduleRows = await on(sql, enabledSchedules)<{ id: string; kind: string; cron: string; next_run_at: Date | null }>`
     SELECT id, kind, cron, next_run_at
       FROM job_schedules
      WHERE enabled = true AND kind = ANY(${[...PRODUCTION_KINDS]})
@@ -269,20 +369,21 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
     nextRunAt: r.next_run_at ? new Date(r.next_run_at).toISOString() : null,
   }));
 
-  // ── Next swarm event (derived from the queue only — swarm session
-  // scheduling itself is out of this issue's scope) ─────────────────────
-  const [swarmJob] = await sql`
-    SELECT id, kind, run_after, scope_type, scope_id
-      FROM jobs
-     WHERE kind LIKE 'swarm.%' AND status = 'pending'
-     ORDER BY run_after ASC LIMIT 1`;
-  const nextSwarmEvent = swarmJob
+  // ── Next swarm event: the next epoch boundary ─────────────────────────
+  // Read off the SESSIONS, not the job queue (issue #1026). No queue job drives
+  // a session any more: the scheduler turns an epoch over at its stored
+  // `window_closes_at` (system-scheduler-spec.md §4.3), so the earliest open
+  // window's close IS the next swarm event, and a pending `swarm.*` job row in
+  // an upgraded database is a leftover that schedules nothing. `jobId` is null
+  // because there is no job.
+  const nextSession = await getNextSwarmSession();
+  const nextSwarmEvent = nextSession
     ? {
-        jobId: Number(swarmJob.id),
-        kind: swarmJob.kind,
-        runAfter: new Date(swarmJob.run_after).toISOString(),
-        scopeType: swarmJob.scope_type ?? null,
-        scopeId: swarmJob.scope_id ?? null,
+        jobId: null,
+        kind: "session.window_close",
+        runAfter: nextSession.at,
+        scopeType: "swarm_session",
+        scopeId: nextSession.sessionId,
       }
     : null;
 
@@ -292,7 +393,7 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
   // actually live" are the two numbers that say whether the public directory is
   // current — and neither was reachable anywhere before this. Manifest only: the
   // ~1.1 MB data file is not read on an admin request.
-  const [activeRow] = await sql`
+  const [activeRow] = await on(sql, activeProjects)<{ n: number }>`
     SELECT count(*)::int AS n FROM projects WHERE status = 'active' AND resolved_at IS NOT NULL`;
   const activeProjectCount = Number(activeRow?.n ?? 0);
   let rosterSeed: RosterSeedHealth = {
@@ -377,9 +478,8 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
           `for a consensus receipt and have none; the ${missingReceipts.sessions.length} most recent are listed individually`,
       });
     } else if (missingReceipts.judgeMode === "enforce" && missingReceipts.count === 0) {
-      // ONLY IN `enforce`. In `off` and in `shadow` a receipt is unreachable by
-      // construction (`shadow` withholds the judgement from the session), so
-      // "every eligible session has a consensus receipt" would be a healthy
+      // ONLY IN `enforce`. In `off` a receipt is unreachable by construction,
+      // so "every eligible session has a consensus receipt" would be a healthy
       // line about a thing that cannot happen.
       alerts.push({
         level: "healthy",
@@ -396,19 +496,24 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
   }
 
   // ── The judge's fallback SHARE (R17 / decision D15) ─────────────────────
-  // A misconfigured budget must not be able to masquerade as an upstream
-  // outage. Every OTHER signal on this page is green while the judge is in
-  // permanent fallback: the sessions publish, the receipts exist, nothing is
-  // missing, the lane's jobs succeed. The only thing that is wrong is that no
-  // model ever answered — and until this alert, the only place that fact
-  // existed was a column nobody selected.
+  // HISTORY-ONLY SIGNAL. Nothing writes a `source = 'fallback'` judgement any
+  // more: the template fallback is deleted (D53 point 4) and a judge that
+  // cannot answer refuses, so the session publishes `no_consensus`. On a
+  // current stack this alert therefore reads 0 % fallback, or "stale" when no
+  // judgement landed in the window; a non-zero share can only come from rows
+  // written before the removal.
   //
-  // The thresholds are D15's, matching the postflight check exactly (both call
-  // summarizeJudgeSources): report always, and call it FAILED only at 100 %
-  // over the window, because AC-FE-05 makes a partial fallback a working
-  // feature rather than an incident.
+  // Why it was built: when the template fallback existed, every OTHER signal on
+  // this page stayed green while the judge was in permanent fallback — the
+  // sessions published, the receipts existed, the lane's jobs succeeded — and
+  // the only place the fact lived was a column nobody selected. The thresholds
+  // are D15's, matching the postflight check exactly (both call
+  // summarizeJudgeSources): report always, FAILED only at 100 % over the
+  // window. AC-FE-05 once made a partial fallback a working feature; that
+  // feature is gone, and the thresholds were not re-tuned because nothing new
+  // can reach them.
   try {
-    const judgeSources = await sql<{ source: string; fallback_reason: string | null; n: number }[]>`
+    const judgeSources = await on(sql, judgementSources)<{ source: string; fallback_reason: string | null; n: number }>`
       SELECT source, coalesce(btrim(fallback_reason), '') AS fallback_reason, count(*)::int AS n
         FROM swarm_session_judgements
        WHERE created_at >= now() - (${JUDGE_FALLBACK_LOOKBACK_DAYS} || ' days')::interval

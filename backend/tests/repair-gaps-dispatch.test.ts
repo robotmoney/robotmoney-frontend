@@ -16,6 +16,9 @@
 // feature exists to repair. It must decline, not proceed.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/worker-client.ts";
+// The worker pool is a real runtime role and may not DELETE (D55 (6)); the
+// cleanup between cases is the schema owner's, through the fixture handle.
+import { fixtureDb as owner } from "./support/fixture-db.ts";
 import { repairGaps } from "../src/worker/handlers/repair.ts";
 
 const BACKFILL_KIND = "wallet.backfill_day";
@@ -34,10 +37,10 @@ beforeEach(async () => {
   // bucket to exhaust under the stub, so the stub would pass either way and
   // prove nothing.
   process.env.BASE_RPC_SOURCE = "live";
-  await sql`DELETE FROM jobs WHERE kind IN (${BACKFILL_KIND}, ${WINDOW_KIND})`;
+  await owner`DELETE FROM jobs WHERE kind IN (${BACKFILL_KIND}, ${WINDOW_KIND})`;
 });
 afterEach(async () => {
-  await sql`DELETE FROM jobs WHERE kind IN (${BACKFILL_KIND}, ${WINDOW_KIND})`;
+  await owner`DELETE FROM jobs WHERE kind IN (${BACKFILL_KIND}, ${WINDOW_KIND})`;
   if (priorBudget === undefined) delete process.env.BASE_RPC_MAX_CALLS_PER_SEC;
   else process.env.BASE_RPC_MAX_CALLS_PER_SEC = priorBudget;
   if (priorSource === undefined) delete process.env.BASE_RPC_SOURCE;

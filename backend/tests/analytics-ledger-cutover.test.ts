@@ -2,18 +2,17 @@
 // equivalence, non-destructive rollback, legacy-baseline semantics, and
 // migration/cutover/rollback stability of both the ledger and the
 // pre-existing legacy tables.
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test, beforeEach } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import net from "node:net";
 import postgres from "postgres";
 import { ROUTES } from "@robotmoney/contract";
-import { POSTGRES_IMAGE } from "../../scripts/lib/postgres-image.ts";
+import { createHistoryDatabase } from "./support/history-database.ts";
 import { sql } from "../src/db/client.ts";
-import { config } from "../src/config.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
-import { handleAdmin, type AdminAuthConfig } from "../src/api/routes/admin.ts";
+import { handleAdmin } from "../src/api/routes/admin.ts";
 import { getRegimeSnapshots, getRegimeSnapshotsSummary, getResearchSignal } from "../src/api/routes/dashboards.ts";
 import { ensureSubject, openSession, publishBrief, getBriefBySession } from "../src/swarm/domain.ts";
 import { captureSourceAcquisition, payloadChecksum } from "../src/analytics/source-ledger.ts";
@@ -28,6 +27,7 @@ import { getAnalyticsReadMode, setAnalyticsReadMode, CutoverGateNotPassedError }
 import type { ParityDomain } from "../src/analytics/cutover/parity.ts";
 import { canonicalStringify, sha256Hex } from "../src/analytics/run-ledger.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { provisionAnalyticsToken, provisionOperatorToken } from "./support/automation-auth.ts";
 
 // PER TEST, not per file: analytics_parity_observations is immutable
 // (migration 0060 refuses DELETE/UPDATE/TRUNCATE), so a shared database would
@@ -43,21 +43,25 @@ const TEST_GATE_ENV = {
 };
 
 const A = ROUTES.analytics;
-const TOKEN = "tok_analytics_test_secret";
-const ADMIN_TOKEN = "tok_admin_test_secret";
+let TOKEN = "";
+let ADMIN_TOKEN = "";
 
-const orig = { analyticsToken: config.analyticsToken, adminToken: config.adminToken, allowInsecure: config.allowInsecure };
+// Store-issued, like the real credentials (smoke spec §3, D52 (1)): the
+// producer's token is the only one the analytics boundary accepts, and the
+// operator's admin token is refused there, in every env.
+beforeEach(async () => {
+  TOKEN = await provisionAnalyticsToken();
+  ADMIN_TOKEN = await provisionOperatorToken();
+});
+
 const origGateEnv = Object.fromEntries(Object.keys(TEST_GATE_ENV).map((k) => [k, process.env[k]]));
 for (const [k, v] of Object.entries(TEST_GATE_ENV)) process.env[k] = v;
 afterEach(async () => {
-  config.analyticsToken = orig.analyticsToken;
-  config.adminToken = orig.adminToken;
-  config.allowInsecure = orig.allowInsecure;
   // Every test leaves the switch back on 'compatibility' — a raw SQL reset,
   // not setAnalyticsReadMode(), because a prior test may have left the gate
   // unsatisfied (compatibility is never gated, but this keeps every test
   // file's teardown identical and independent of gate state).
-  await sql`UPDATE analytics_read_mode SET mode = 'compatibility', updated_by = 'test-teardown' WHERE id = true`;
+  await fixtureDb`UPDATE analytics_read_mode SET mode = 'compatibility', updated_by = 'test-teardown' WHERE id = true`;
 });
 afterAll(() => {
   for (const [k, v] of Object.entries(origGateEnv)) {
@@ -65,11 +69,6 @@ afterAll(() => {
     else process.env[k] = v;
   }
 });
-function prodAuth() {
-  config.analyticsToken = TOKEN;
-  config.adminToken = ADMIN_TOKEN;
-  config.allowInsecure = false;
-}
 
 function req(method: string, path: string, body?: unknown, token = TOKEN): Request {
   return new Request(`http://x${path}`, {
@@ -80,11 +79,10 @@ function req(method: string, path: string, body?: unknown, token = TOKEN): Reque
 }
 const call = (r: Request) => handleAnalytics(r, new URL(r.url));
 
-const ADMIN_CFG: AdminAuthConfig = { adminToken: ADMIN_TOKEN, allowInsecure: false };
 function adminReq(path: string): Request {
   return new Request(`http://x${path}`, { headers: { "X-Admin-Token": ADMIN_TOKEN } });
 }
-const callAdmin = (r: Request) => handleAdmin(r, new URL(r.url), ADMIN_CFG);
+const callAdmin = (r: Request) => handleAdmin(r, new URL(r.url));
 
 // `provenance` is the acquisition-time data-source label (issue #979,
 // migration 0061). Omitted here means the submitter observed none, which is
@@ -168,7 +166,7 @@ async function submitRegimeAndResearch(date: string, composite: number, signalKe
 async function insertObservation(domain: ParityDomain, observedAt: Date, matched: boolean): Promise<void> {
   const rows = [{ domain, value: matched ? "ok" : "bad" }];
   const checksum = sha256Hex(canonicalStringify(rows));
-  await sql`
+  await fixtureDb`
     INSERT INTO analytics_parity_observations
       (domain, observed_at, legacy_row_count, ledger_row_count, legacy_checksum, ledger_checksum, matched, detail)
     VALUES (${domain}, ${observedAt.toISOString()}::timestamptz, 1, ${matched ? 1 : 0},
@@ -288,7 +286,6 @@ describe("issue #979 AC2: the cutover gate's observation window", () => {
 
 describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destructive rollback", () => {
   test("dashboard, admin, raw-history, swarm-brief, and regime-summary reads return identical DTOs in both modes, and rollback restores the legacy fixture with zero ledger drift", async () => {
-    prodAuth();
     const indicator = INDICATORS[0]!.id;
     const signalKey = "channel-divergence";
     const date = "2024-05-01";
@@ -300,7 +297,7 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     // value neither writer would produce by default.
     await submitRawHistoryPoint(indicator, date, 3.25, RAW_SOURCE);
     await submitRegimeAndResearch(date, 55, signalKey, "cutover-dto-check");
-    await sql`UPDATE raw_indicator_history SET source = ${RAW_SOURCE} WHERE indicator = ${indicator}`;
+    await fixtureDb`UPDATE raw_indicator_history SET source = ${RAW_SOURCE} WHERE indicator = ${indicator}`;
 
     const subjectId = `cutover-subject-${crypto.randomUUID()}`;
     await ensureSubject(subjectId, "Cutover DTO Subject");
@@ -385,7 +382,7 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     // sentinel the ledger cannot know about: ledger mode must keep returning
     // the frozen value, and rollback must return the drifted one.
     const DRIFT = 424243;
-    await sql`UPDATE regime_snapshots SET composite = ${DRIFT} WHERE date = ${date}`;
+    await fixtureDb`UPDATE regime_snapshots SET composite = ${DRIFT} WHERE date = ${date}`;
     const stillLedger = await getRegimeSnapshots(new URL("http://x?range=10"));
     expect(JSON.stringify(stillLedger), "ledger mode must ignore a legacy-table edit").not.toContain(String(DRIFT));
     expect(stillLedger).toEqual(compatRegime);
@@ -397,7 +394,7 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
 
     // Put the legacy fixture back and confirm the original DTO returns — the
     // AC's literal "reads use the legacy fixture again".
-    await sql`UPDATE regime_snapshots SET composite = 55 WHERE date = ${date}`;
+    await fixtureDb`UPDATE regime_snapshots SET composite = 55 WHERE date = ${date}`;
     const revertedRegime = await getRegimeSnapshots(new URL("http://x?range=10"));
     const revertedBrief = await getBriefBySession(session.id);
     expect(revertedRegime).toEqual(compatRegime);
@@ -421,7 +418,6 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
   // owner, 2026-09-17), not a defect to route around, and this test pins the
   // divergence itself rather than a comfortable claim that there is none.
   test("a row written without provenance reads NULL in ledger mode and its real legacy label in compatibility mode, and the append-only ledger refuses to backfill it", async () => {
-    prodAuth();
     // A real registry id: the admin raw-series route only serves allowlisted
     // indicators, and this test has to read the DTO through that route in both
     // modes rather than assert on the tables behind it.
@@ -467,8 +463,8 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     // (see the AC7 test below), so counting over it as-is would be 0 out of 0
     // — vacuous. Seed a probe the way that AC7 test does, re-running 0057's
     // backfill statement verbatim, so this counts a real population.
-    await sql`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES ('2024-01-02', 'PROVENANCE_BASELINE_PROBE', 2, 'seed')`;
-    await sql.unsafe(`
+    await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES ('2024-01-02', 'PROVENANCE_BASELINE_PROBE', 2, 'seed')`;
+    await fixtureDb.unsafe(`
       INSERT INTO source_value_versions (source_key, market_date, value, revision_kind, knowledge_time)
       SELECT 'raw_indicator_history:' || indicator, date, value, 'legacy_baseline', statement_timestamp()
       FROM raw_indicator_history WHERE indicator = 'PROVENANCE_BASELINE_PROBE'
@@ -487,7 +483,7 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     // statement would also satisfy.
     let raised: { message: string; code: string | null } | null = null;
     try {
-      await sql.unsafe(`UPDATE source_value_versions SET provenance = 'backfilled' WHERE id = ${Number(row!.id)}`);
+      await fixtureDb.unsafe(`UPDATE source_value_versions SET provenance = 'backfilled' WHERE id = ${Number(row!.id)}`);
     } catch (e) {
       const err = e as { message?: string; code?: string };
       raised = { message: err?.message ?? String(e), code: err?.code ?? null };
@@ -508,7 +504,6 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
   // 'seed', so ledger mode and compatibility mode answered DIFFERENTLY for a
   // row written after 0061 — new data, not accepted history.
   test("a producer catch-up row carries ONE label into both models, so both modes return the same `source` for it", async () => {
-    prodAuth();
     const indicator = INDICATORS[0]!.id;
     const date = "2024-09-01";
 
@@ -592,7 +587,6 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
 // record a permanent matched:false for a value in the thousands.
 describe("issue #1035 AC4: parity stays matched after a sub-tolerance refetch", () => {
   test("a Yahoo refetch a relative 1e-7 off leaves both models on the head value, and parity records matched:true", async () => {
-    prodAuth();
     const indicator = "IWF_IWD"; // a Yahoo ratio: D56 tolerance 1e-6
     const date = "2024-10-01";
     const value = 4523.68017578125;
@@ -646,17 +640,6 @@ async function snapshotLedgerTables(): Promise<Record<string, { count: number; c
 // comment).
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, () => {
-      const port = (server.address() as net.AddressInfo).port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
 // Legacy-table row counts + primary-key checksums — issue #979 AC9.
 const LEGACY_TABLES: { table: string; pk: string }[] = [
   { table: "raw_indicator_history", pk: "indicator, date" },
@@ -675,7 +658,6 @@ async function snapshotLegacyTables(): Promise<Record<string, { count: number; c
 
 describe("issue #979 AC9: legacy row counts and PK checksums survive cutover and rollback unchanged", () => {
   test("recording legacy state, cutting over, and rolling back leaves it byte-for-byte identical", async () => {
-    prodAuth();
     await submitRawHistoryPoint("AC9_IND", "2024-06-01", 9.5);
     await submitRegimeAndResearch("2024-06-01", 60, "late-cycle-signals", "ac9-check");
 
@@ -701,23 +683,11 @@ describe("issue #979 AC9: legacy row counts and PK checksums survive cutover and
   // same harness shape as tests/source-ledger-migration.test.ts, which proves
   // 0057's backfill against a real, populated legacy table for the same reason.
   test("legacy row counts and PK checksums are identical before and after migrations 0057-0061 are applied for real", async () => {
-    const port = await freePort();
-    const container = `rmtest_ac9_migration_${crypto.randomUUID().slice(0, 8)}`;
-    const up = Bun.spawnSync([
-      "docker", "run", "-d", "--rm", "--name", container,
-      "-e", "POSTGRES_PASSWORD=robotmoney", "-e", "POSTGRES_USER=robotmoney", "-e", "POSTGRES_DB=robotmoney",
-      "-p", `${port}:5432`, POSTGRES_IMAGE,
-    ]);
-    // Loud, never a silent skip: without Docker there is no migration boundary
-    // to test, and that is a broken runner, not a passing test.
-    if (up.exitCode !== 0) throw new Error(`AC9 migration-boundary test requires Docker+Postgres:\n${up.stderr.toString()}`);
-    const db = postgres(`postgres://robotmoney:robotmoney@localhost:${port}/robotmoney`, { max: 1, onnotice: () => {} });
+    // A history database on the suite's own cluster, owned by the provider's
+    // bootstrap login (tests/support/history-database.ts), not a container of this test's own.
+    const history = await createHistoryDatabase("ac9_migration", { max: 1 });
+    const db = history.db;
     try {
-      const started = Date.now();
-      for (;;) {
-        try { await db`SELECT 1`; break; }
-        catch (error) { if (Date.now() - started > 30_000) throw error; await Bun.sleep(200); }
-      }
       await db`CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
       const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
       const apply = async (file: string) => {
@@ -768,8 +738,7 @@ describe("issue #979 AC9: legacy row counts and PK checksums survive cutover and
 
       expect(await snapshot(), "no Phase A migration may alter a legacy table").toEqual(beforeMigration);
     } finally {
-      await db.end({ timeout: 5 }).catch(() => {});
-      Bun.spawnSync(["docker", "rm", "-f", container]);
+      await history.drop().catch(() => {});
     }
   }, 180_000);
 });
@@ -782,8 +751,8 @@ describe("issue #979 AC7: legacy-baseline source rows are never upgraded to hist
     // verbatim from backend/migrations/0057_source_acquisition_ledger.sql)
     // against a seeded row makes this a real, non-vacuous check of what that
     // statement actually does, not merely an assertion over an empty set.
-    await sql`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES ('2024-01-01', 'AC7_BACKFILL_PROBE', 1, 'seed')`;
-    await sql.unsafe(`
+    await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES ('2024-01-01', 'AC7_BACKFILL_PROBE', 1, 'seed')`;
+    await fixtureDb.unsafe(`
       INSERT INTO source_value_versions (source_key, market_date, value, revision_kind, knowledge_time)
       SELECT 'raw_indicator_history:' || indicator, date, value, 'legacy_baseline', statement_timestamp()
       FROM raw_indicator_history
@@ -800,10 +769,10 @@ describe("issue #979 AC7: legacy-baseline source rows are never upgraded to hist
 
   test("the schema itself refuses a row that claims BOTH legacy_baseline and a real acquisition — no code path could 'upgrade' one in place", async () => {
     const acquisitionId = crypto.randomUUID();
-    await sql`INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity) VALUES (${acquisitionId}, 'fixture', '1', 'ac7-check')`;
+    await fixtureDb`INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity) VALUES (${acquisitionId}, 'fixture', '1', 'ac7-check')`;
     let raised: { message?: string; code?: string } | null = null;
     try {
-      await sql`
+      await fixtureDb`
         INSERT INTO source_value_versions (acquisition_id, source_key, market_date, value, revision_kind)
         VALUES (${acquisitionId}::uuid, 'ac7:test', '2024-01-01', 1, 'legacy_baseline')`;
     } catch (e) {
@@ -814,12 +783,11 @@ describe("issue #979 AC7: legacy-baseline source rows are never upgraded to hist
   });
 
   test("a real revision for a key that has a legacy_baseline predecessor is never recorded as another legacy_baseline, and the baseline is not rewritten", async () => {
-    prodAuth();
     // The predecessor has to actually EXIST, or the writer takes its
     // `no prior version` branch and this proves nothing about the
     // legacy-baseline path. Seed one exactly as migration 0057's backfill
     // does: no acquisition, revision_kind 'legacy_baseline'.
-    await sql`
+    await fixtureDb`
       INSERT INTO source_value_versions (source_key, market_date, value, revision_kind, knowledge_time)
       VALUES ('raw_indicator_history:AC7_REAL_IND', '2024-07-01', 10, 'legacy_baseline', now())`;
 
@@ -840,7 +808,6 @@ describe("issue #979 AC7: legacy-baseline source rows are never upgraded to hist
   });
 
   test("no projection or admin read exposes a legacy_baseline row as historically reproducible", async () => {
-    prodAuth();
     await submitRawHistoryPoint("AC7_PROJ_IND", "2024-07-02", 4);
     const res = await callAdmin(adminReq(`/api/admin/research/raw-series/AC7_PROJ_IND`));
     // AC7_PROJ_IND is not on the admin allowlist (only real registry
