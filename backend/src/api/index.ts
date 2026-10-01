@@ -3,7 +3,8 @@
 // the sibling `website-server` nginx image (issue #892), which proxies /api/
 // and /health here so a single-box deployment still presents as one origin.
 import { ROUTES } from "@robotmoney/contract";
-import { config, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured } from "../config.ts";
+import { config, API_IDLE_TIMEOUT_SECONDS, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured } from "../config.ts";
+import { withRequestTiming } from "./request-timing.ts";
 import { isDatabaseUnavailable } from "../db/client.ts";
 import { databaseAnswers } from "../db/connection-check.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
@@ -132,6 +133,8 @@ await assertAnalyticsLedgerGuardArmed();
 
 const server = Bun.serve<SchedulerStreamSocketData, never>({
   port: config.apiPort,
+  // Explicit, not Bun's 10 s default (issue 1060). See API_IDLE_TIMEOUT_SECONDS in config.ts.
+  idleTimeout: API_IDLE_TIMEOUT_SECONDS,
   // THE SCHEDULER STREAM'S SOCKET (D55 (11), scheduler spec §6.3). The only
   // WebSocket this process serves; routes/swarm-stream.ts owns its handler.
   websocket: schedulerStreamWebSocket,
@@ -163,7 +166,7 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
     const clientIp = resolveClientIp(peer, config.trustProxy, req.headers.get("x-forwarded-for"));
 
     try {
-      return withCors(await route(req, url, pathname, clientIp), req, pathname);
+      return withCors(await withRequestTiming(req, pathname, () => route(req, url, pathname, clientIp)), req, pathname);
     } catch (err) {
       // Malformed percent-encoding (decodeURIComponent) → 400; anything else →
       // a sanitized 500 (never leak a stack). No unhandled rejections from fetch.
