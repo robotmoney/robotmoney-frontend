@@ -345,7 +345,12 @@ export function adoptRestoredRoster(
     // set is the allowlist narrowed to the credential file's agents.
     const adoptable = SMOKE_MEMBERS.filter((m) => held.has(m.handle));
     const expected = adoptable.map((m) => m.handle).sort().join(",");
-    const actualSet = new Set(result.adopt.map((m) => m.handle ?? m.id));
+    // A judge is never adopted (it holds no take seat), but under seat-all it
+    // must still EXIST in the restored roster, so count active judges as present.
+    const actualSet = new Set([
+      ...result.adopt.map((m) => m.handle ?? m.id),
+      ...roster.filter((m) => m.status === "active" && m.role === "judge").map((m) => m.handle ?? m.id),
+    ]);
     const missing = SMOKE_MEMBERS.filter((m) => !actualSet.has(m.handle)).map((m) => m.handle);
     if (seatAll) {
       if (missing.length > 0) {
