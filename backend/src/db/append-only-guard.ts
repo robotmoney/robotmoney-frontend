@@ -695,7 +695,7 @@ function isPrivilegeRefusal(err: unknown): boolean {
  * conclusive (`PRIVILEGE_REFUSED` above). Counting it as "could not answer"
  * would turn every runtime boot's check into "unavailable".
  */
-const INCONCLUSIVE_CODES = new Set(["57014", "55P03", "57P01", "57P02", "57P03", "53300"]);
+const INCONCLUSIVE_CODES = new Set(["57014", "55P03", "57P01", "57P02", "57P03", "53300", "25006"]);
 
 function isInconclusive(err: unknown): boolean {
   const code = (err as { code?: string } | null)?.code;
@@ -755,6 +755,21 @@ async function deleteProbe(db: AppendOnlyDb, tables: string[], spec: GuardSpec):
   return problems;
 }
 
+/**
+ * Run the behavioural probe. If the database cannot answer it (inconclusive) the
+ * catalog inventory is still a fact: when it already found a missing trigger the
+ * answer is "disarmed", not "unavailable". Without this a persistent 25006
+ * (read-only session) would hide a real disarm behind an UNCHECKED boot.
+ */
+async function probeUnlessInconclusive(inventoryProblems: string[], probe: () => Promise<string[]>): Promise<string[]> {
+  try {
+    return await probe();
+  } catch (e) {
+    if (e instanceof GuardCheckInconclusive && inventoryProblems.length > 0) return [];
+    throw e;
+  }
+}
+
 /** Whether migration 0032 is recorded as applied. `false` means this database
  *  legitimately predates the guard (a first boot, a partially-migrated
  *  deployment) and its absence is not a violation — `migrate()` will install it.
@@ -791,7 +806,7 @@ async function checkLedgerFamily(db: AppendOnlyDb, family: LedgerImmutableFamily
         `but the table is not there. The ledger and the schema disagree.`,
     );
   problems.push(...(await triggerInventory(db, present, spec)));
-  problems.push(...(await deleteProbe(db, present, spec)));
+  problems.push(...(await probeUnlessInconclusive(problems, () => deleteProbe(db, present, spec))));
   return problems;
 }
 
@@ -829,15 +844,13 @@ export async function checkAppendOnlyGuard(db: AppendOnlyDb = sql): Promise<Appe
     // rule for the 0032 family, which had only ever gated on 0032 itself.
     const appliedMigrations = await appliedAppendOnlyMigrations(db);
     const tables = tablesExpectedProtected(existing, appliedMigrations);
-    const problems = [
-      ...(await triggerInventory(db, tables, APPEND_ONLY_SPEC)),
-      ...(await deleteProbe(db, tables, APPEND_ONLY_SPEC)),
-    ];
+    const problems = [...(await triggerInventory(db, tables, APPEND_ONLY_SPEC))];
+    problems.push(...(await probeUnlessInconclusive(problems, () => deleteProbe(db, tables, APPEND_ONLY_SPEC))));
     // The ledger families (0057/0058/0059/0060) are checked on the SAME boot path,
     // because a trigger that only a migration installs is a trigger a restore
     // can leave out — the reason this module exists at all.
     for (const family of LEDGER_IMMUTABLE_FAMILIES) {
-      problems.push(...(await checkLedgerFamily(db, family)));
+      problems.push(...(await probeUnlessInconclusive(problems, () => checkLedgerFamily(db, family))));
     }
     return problems.length > 0 ? { status: "disarmed", problems } : { status: "armed", problems: [] };
   } catch (err) {
@@ -978,7 +991,7 @@ export async function assertAppendOnlyGuardArmed(db?: AppendOnlyDb): Promise<voi
     if (result.status === "unavailable") {
       console.error(
         `[api] append-only guard check could NOT run — database not queryable: ${result.detail}. ` +
-          `Serving anyway (an unreachable database is not a disarmed guard), but this boot is UNCHECKED.`,
+          `Serving anyway (an unreachable database is not a disarmed guard), but this boot is UNCHECKED: the append-only guard was NOT verified (a read-only session, 25006, lands here too). See append_only_guard at /health.`,
       );
       guardOutcome = "unchecked";
       return;
