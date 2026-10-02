@@ -159,7 +159,7 @@
 # here, job or step: this workflow has no second trigger to be asymmetric with.
 #
 # Cron: 02:11 UTC, a minute and an hour no other workflow in this repo uses.
-# The mirrors occupy 03:03–03:57 and 04:37/05:19; the staggered-cron assertion in
+# The mirrors occupy 03:03–03:57 and 04:15/04:37/05:19; the staggered-cron assertion in
 # nightly-mirrors-merge-set.test.ts covers the push-to-main set, but this file
 # keeps clear of every existing slot anyway so a future widening of that
 # assertion cannot collide. It also runs BEFORE the mirrors, so a night that

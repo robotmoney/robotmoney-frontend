@@ -28,7 +28,9 @@ COPY contract/ /contract/
 # backend re-exports it through shims at the old analytics/ paths. From
 # /app/src/analytics/<dir>/ the shims reach `../../../../packages/analyst-sdk`,
 # which is /packages/analyst-sdk here, the same way contract/ sits at /contract.
-COPY packages/analyst-sdk/ /packages/analyst-sdk/
+# src and package.json only: tests/ (fixtures, goldens, ~4.7 MB) are not runtime.
+COPY packages/analyst-sdk/package.json /packages/analyst-sdk/package.json
+COPY packages/analyst-sdk/src/ /packages/analyst-sdk/src/
 COPY backend/package.json backend/bun.lock* /app/
 RUN bun install
 

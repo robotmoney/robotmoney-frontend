@@ -57,7 +57,7 @@ jobs:
           bun-version: "1.3.5"
       - name: Install
         working-directory: packages/analyst-sdk
-        run: bun install
+        run: bun install --frozen-lockfile
       - name: Typecheck
         working-directory: packages/analyst-sdk
         # Spelled out because ci-workflows-structure.test.ts pins the package-script
@@ -66,14 +66,16 @@ jobs:
       - name: SDK tests (fetch is a thrower)
         working-directory: packages/analyst-sdk
         run: bun test
-      # Copy ONLY the package into a fresh directory, install, and diff the CLI
+      # Export ONLY the package's tracked files (no node_modules from the install
+      # above) into a fresh directory, install from the lockfile, and diff the CLI
       # output against the committed golden. Fails if the SDK reaches outside
       # its own directory for anything.
       - name: Standalone install reproduces the golden
         shell: bash
         run: |
           d="$(mktemp -d)"
-          cp -r packages/analyst-sdk/. "$d/"
+          git archive HEAD packages/analyst-sdk | tar -x -C "$d" --strip-components=2
+          test ! -e "$d/node_modules"
           cd "$d"
-          bun install
+          bun install --frozen-lockfile
           bun run regime tests/fixtures/raw-indicator-history.csv | diff - tests/golden/regime-report.json
