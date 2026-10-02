@@ -725,6 +725,28 @@ describe("loadVaultOverview", () => {
     expect(requests.some((u) => u.startsWith("/api/swarm"))).toBe(false);
   });
 
+  test("the contract declares the manifest-derived route, so the client reads it by default", async () => {
+    const { ROUTES } = await import("../../../frontend/public/assets/js/app/contract/routes.js");
+    expect(ROUTES.dashboards.robotmoneyVaults).toBe(VAULTS_ENDPOINT);
+    serve({ [VAULTS_ENDPOINT]: json(DEVNET) });
+    const load = await loadVaultOverview(baseAt("robotmoney.network"));
+    expect(load.source).toBe("api");
+  });
+
+  test("a manifest row's registered name and risk label win over the built-in identity; deposits use its gateway", async () => {
+    const feed = {
+      ...DEVNET,
+      contracts: { gateway: "0x" + "5".repeat(40), router: "0x" + "4".repeat(40), registry: "0x" + "3".repeat(40) },
+      vaults: DEVNET.vaults.map((r: any) => (r.slug === "rmagent" ? { ...r, registeredName: "Manifest Name", riskLabel: "VOLATILE" } : r)),
+    };
+    serve({ [VAULTS_ENDPOINT]: json(feed) });
+    const load = await loadVaultOverview({ ...baseAt("robotmoney.network"), endpoint: VAULTS_ENDPOINT });
+    const agent = bySlug(load.overview, "rmagent");
+    expect(agent.registeredName).toBe("Manifest Name");
+    expect(agent.riskLabel).toBe("VOLATILE");
+    expect(depositTarget(load.overview)).toEqual({ gateway: feed.contracts.gateway, router: feed.contracts.router });
+  });
+
   test("the route absent (404): the Base feed with the archive's recommendation, on a local host", async () => {
     serve({ [VAULTS_ENDPOINT]: statusOnly(404), "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS) });
     const load = await loadVaultOverview(baseAt("127.0.0.1"));
@@ -740,13 +762,6 @@ describe("loadVaultOverview", () => {
     serve({ [VAULTS_ENDPOINT]: spaShell, "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS) });
     const load = await loadVaultOverview({ ...baseAt("127.0.0.1"), endpoint: VAULTS_ENDPOINT });
     expect(load.source).toBe("legacy");
-  });
-
-  test("the route is not requested until the contract declares it", async () => {
-    serve({ [VAULTS_ENDPOINT]: json(DEVNET), "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS) });
-    const load = await loadVaultOverview(baseAt("robotmoney.network"));
-    expect(load.source).toBe("legacy");
-    expect(requests.some((u) => u.split("?")[0] === VAULTS_ENDPOINT)).toBe(false);
   });
 
   test("on Base the policy's targets are the vaults' targets until a router reports its own (RM-115)", async () => {

@@ -27,6 +27,7 @@ import { latestRecommendation } from "../latest-recommendation.js";
 import { tvlChart } from "../tvl-chart.js";
 import {
   canDeposit,
+  depositTarget,
   explorerLink,
   fmtBps,
   fmtDate,
@@ -613,7 +614,8 @@ export function registerVaultView(Alpine) {
     },
     contractLinks() {
       const c = this.record()?.contracts || {};
-      return [["Router", c.router], ["Registry", c.registry]]
+      const t = this.depositTarget();
+      return [["Gateway", t?.gateway ?? c.gateway], ["Router", c.router], ["Registry", c.registry]]
         .map(([label, a]) => ({ label, address: a, href: explorerLink(this.network(), a), text: `${label} ${shortAddress(a)}` }))
         .filter((x) => x.href);
     },
@@ -621,7 +623,12 @@ export function registerVaultView(Alpine) {
     // ── deposit ──────────────────────────────────────────────────────────────
     canDepositHere() {
       const r = this.record();
-      return canDeposit(r, this.network(), r?.flags);
+      return canDeposit(r, this.network(), r?.flags, this.depositTarget());
+    },
+    // The gateway deposits go through and the router it carries, from the
+    // deployment manifest via the overview; null when the feed has none.
+    depositTarget() {
+      return depositTarget(this.overview());
     },
   }));
 }

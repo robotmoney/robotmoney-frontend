@@ -53,6 +53,12 @@ const vendorScripts = {
 const publicDir = join(process.cwd(), "frontend/public");
 const readJson = (rel: string): any => JSON.parse(readFileSync(join(publicDir, rel), "utf8"));
 const DEVNET = readJson("data/vaults/devnet/overview.json");
+// The one-deployment-scheme fixtures (frontend 1103): the manifest-derived
+// overview the backend serves at /api/dashboards/robotmoney-vaults, and the
+// four registered names with their risk labels.
+const fixtureJson = (rel: string): any => JSON.parse(readFileSync(join(process.cwd(), "test-fixtures/vault-set", rel), "utf8"));
+const VAULT_SET = fixtureJson("overview.json");
+const VAULT_NAMES = fixtureJson("vault-names.json");
 const SAVED_BASE = readJson("data/vaults/base/vault-economics.json");
 
 function loadGolden<T>(route: string): T {
@@ -69,7 +75,7 @@ type Mode = "base" | "devnet" | "devnet-unreadable" | "devnet-no-recommendation"
 
 const SLUGS = [
   { slug: "rmusdc", symbol: "rmUSDC", name: "Fixed Income" },
-  { slug: "rmagent", symbol: "rmAGENT", name: "Small Cap Tokens" },
+  { slug: "rmagent", symbol: "rmAGENT", name: "Agent Tokens" },
   { slug: "rmproto", symbol: "rmPROTO", name: "Protocol Tokens" },
   { slug: "rmrwa", symbol: "rmRWA", name: "Real World Assets" },
 ];
@@ -492,7 +498,7 @@ test("the vaults unreadable: the head from the slug, the error in place of the f
   await openVault(page, "rmagent");
   await expect(page.locator(".rr-crumbs a")).toHaveAttribute("href", "/allocation#vaults");
   await expect(page.locator("h1")).toHaveText("rmAGENT");
-  await expect(page.locator(".rr-head .sv__eyebrow")).toContainText("Small Cap Tokens");
+  await expect(page.locator(".rr-head .sv__eyebrow")).toContainText("Agent Tokens");
   await expect(page.locator(".sv__error")).toHaveText("Vault data unavailable");
   await expect(page.locator(".rr-meta")).toBeHidden();
   await expect(page.locator("section.rr-sec")).toHaveCount(0);
@@ -911,7 +917,7 @@ test("the vault subject on the devnet: the router and four vaults, one book grou
 
   // The chart stacks the four vaults with the target drawn over them.
   await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText(["TVL", "Sleeves over time"]);
-  await expect(hold.locator(".rr-area__legend li")).toHaveText(["Fixed Income", "Small Cap Tokens", "Protocol Tokens", "Real World Assets", "Target"]);
+  await expect(hold.locator(".rr-area__legend li")).toHaveText(["Fixed Income", "Agent Tokens", "Protocol Tokens", "Real World Assets", "Target"]);
   await expect(hold.locator(".rr-area__legend li i.is-target")).toHaveCount(1);
   await expect(hold.locator('.rr-area__svg polyline[data-token="target"]')).toHaveCount(3);
 
@@ -1235,4 +1241,41 @@ test("a new-tab link carries the arrow after its text, and its text is only its 
   expect(await contract.textContent()).not.toContain("↗");
   const after = await contract.evaluate((el) => getComputedStyle(el, "::after").content);
   expect(after).toContain("↗");
+});
+
+// ── the manifest-derived vault set (frontend 1103) ──────────────────────────
+
+test("the four registered names in the overview fixture are the ones the indexer is held to", () => {
+  expect(VAULT_SET.vaults.map((r: any) => r.slug).sort()).toEqual(VAULT_NAMES.names.map((n: any) => n.slug).sort());
+  for (const row of VAULT_SET.vaults) {
+    expect(row.registeredName).toBe(VAULT_NAMES.names.find((x: any) => x.slug === row.slug).name);
+  }
+});
+
+test("rmAGENT from the manifest feed: paused and empty, headed Agent Tokens, no deposit", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await stubSaved(page);
+  await page.route("**/api/dashboards/robotmoney-vaults", (route) => route.fulfill(json(VAULT_SET)));
+  await page.goto("/index.html");
+  await navigate(page, "/vault/rmagent");
+  await expect(page.locator("h1")).toHaveText("rmAGENT");
+  await expect(page.locator(".rr-head .sv__eyebrow")).toContainText("Agent Tokens");
+  await expect(page.locator(".rr-head .sv__eyebrow")).not.toContainText("Small Cap");
+  await expect(page.locator("#deposit")).toHaveCount(0);
+  await expectNoBrowserErrors(errors);
+});
+
+test("rmUSDC's deposit section names the gateway the manifest feed carries", async ({ page }) => {
+  // The fixture is the Twin chain; deposits are offered on Base only, so the
+  // same rows are presented as Base with the manifest's contracts on each row.
+  const onBase = {
+    ...VAULT_SET,
+    network: { chainId: 8453, testData: false },
+    vaults: VAULT_SET.vaults.map((r: any) => ({ ...r, contracts: { ...VAULT_SET.contracts, vault: r.address } })),
+  };
+  await stubSaved(page);
+  await page.route("**/api/dashboards/robotmoney-vaults", (route) => route.fulfill(json(onBase)));
+  await page.goto("/index.html");
+  await navigate(page, "/vault/rmusdc");
+  await expect(page.locator("[data-testid=deposit-gateway]")).toContainText(VAULT_SET.contracts.gateway);
 });

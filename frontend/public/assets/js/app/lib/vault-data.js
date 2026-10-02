@@ -98,7 +98,7 @@ export const VAULTS = [
   {
     slug: "rmagent",
     symbol: "rmAGENT",
-    name: "Small Cap Tokens",
+    name: "Agent Tokens",
     legacyName: "Agent Tokens",
     bucket: "agent_tokens",
     key: "agent-tokens",
@@ -183,8 +183,9 @@ export function depositTarget(overview) {
   return gateway && router ? { gateway, router } : null;
 }
 
-// The four-vault read the backend will serve (Lucas's lane). Deliberately not
-// in contract ROUTES until it exists: vault-source.js probes it and falls back.
+// The four-vault read, derived from the deployment manifests (contract
+// ROUTES.dashboards.robotmoneyVaults). It answers 404 when no manifest is
+// configured: vault-source.js then falls back to the single-vault read.
 export const VAULTS_ENDPOINT = "/api/dashboards/robotmoney-vaults";
 
 // What each sleeve IS, keyed on the allocation DTO's bucket key: the swarm
@@ -445,9 +446,17 @@ export function normalizeOverview(source) {
       ["live", "not_on_network", "unavailable"].includes(raw.availability) ? raw.availability : "unavailable"
     );
     const tvl = numberOrNull(raw.tvlUsd);
+    // The manifest row names the vault and its risk label; the built-in
+    // identity is only the fallback for a feed that does not carry them.
+    const manifest = {
+      registeredName: typeof raw.registeredName === "string" ? raw.registeredName : identity.registeredName,
+      riskLabel: ["STABLE_YIELD", "VOLATILE", "SPECULATIVE"].includes(raw.riskLabel) ? raw.riskLabel : identity.riskLabel,
+      kind: raw.kind === "lending" || raw.kind === "basket" ? raw.kind : identity.kind,
+    };
     return {
       ...raw,
       ...identity,
+      ...manifest,
       availability,
       status: raw.status ?? null,
       address: raw.address ?? null,
@@ -779,8 +788,12 @@ export function statusLabel(row, networkLabel) {
 // The one production deposit path: rmUSDC on Base, at the address skill.md
 // names, live and accepting deposits. Anything else (another vault, test
 // data, the devnet, a different contract) gets no deposit call to action.
-/** @param {any} row @param {any} network @param {any} [flags] */
-export function canDeposit(row, network, flags) {
+// `target` is depositTarget(overview): when the manifest names the gateway and
+// router, the row's own address (the manifest's vault) is the one to deposit
+// into, so a redeploy needs no edit here. Without it the built-in rmUSDC
+// address is the only one accepted.
+/** @param {any} row @param {any} network @param {any} [flags] @param {{ gateway: string, router: string } | null} [target] */
+export function canDeposit(row, network, flags, target = null) {
   const f = flags ?? row?.flags ?? null;
   return (
     row?.slug === "rmusdc" &&
@@ -788,7 +801,8 @@ export function canDeposit(row, network, flags) {
     network?.testData !== true &&
     row?.availability === "live" &&
     typeof row?.address === "string" &&
-    row.address.toLowerCase() === VAULTS[0].baseAddress &&
+    (row.address.toLowerCase() === VAULTS[0].baseAddress ||
+      (target !== null && row.contracts?.vault?.toLowerCase?.() === row.address.toLowerCase())) &&
     !["paused", "retired", "shutdown"].includes(row?.status) &&
     !f?.shutdown &&
     !f?.depositsPaused

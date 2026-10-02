@@ -48,6 +48,7 @@ export const ROUTES = {
     regimeSnapshots: "/api/dashboards/regime-snapshots", // GET ?range=
     researchSignal: "/api/dashboards/research-signals/:key", // GET
     vaultEconomics: "/api/dashboards/vault-economics", // GET
+    robotmoneyVaults: "/api/dashboards/robotmoney-vaults", // GET → manifest-derived four-vault overview (404 when no deployment manifest is configured)
     walletBalances: "/api/dashboards/wallet-balances", // GET — live prop-wallet valuation (#84)
     buybacks: "/api/dashboards/buybacks", // GET → token buyback history
     tokenMetrics: "/api/dashboards/token-metrics", // GET → ROBOTMONEY price/supply/marketCap + fee split

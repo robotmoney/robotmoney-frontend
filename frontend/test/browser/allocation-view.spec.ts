@@ -247,7 +247,7 @@ test("the Vaults section binds rmUSDC to the golden and states the other three a
 
   const rows = vaultRows(page);
   await expect(rows).toHaveCount(4);
-  await expect(rows.locator("th a")).toHaveText(["Fixed Income", "Small Cap Tokens", "Protocol Tokens", "Real World Assets"]);
+  await expect(rows.locator("th a")).toHaveText(["Fixed Income", "Agent Tokens", "Protocol Tokens", "Real World Assets"]);
   for (const [i, slug] of ["rmusdc", "rmagent", "rmproto", "rmrwa"].entries()) {
     await expect(rows.nth(i).locator("th a")).toHaveAttribute("href", `/vault/${slug}`);
   }
