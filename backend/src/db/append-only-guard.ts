@@ -695,7 +695,7 @@ function isPrivilegeRefusal(err: unknown): boolean {
  * conclusive (`PRIVILEGE_REFUSED` above). Counting it as "could not answer"
  * would turn every runtime boot's check into "unavailable".
  */
-const INCONCLUSIVE_CODES = new Set(["57014", "55P03", "57P01", "57P02", "57P03", "53300"]);
+const INCONCLUSIVE_CODES = new Set(["57014", "55P03", "57P01", "57P02", "57P03", "53300", "25006"]);
 
 function isInconclusive(err: unknown): boolean {
   const code = (err as { code?: string } | null)?.code;

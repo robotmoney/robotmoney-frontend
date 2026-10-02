@@ -131,6 +131,9 @@ await assertAnalyticsLedgerGuardArmed();
   }
 }
 
+/** Seconds the parity-sweep request may run before Bun closes it (Bun's cap is 255). */
+export const PARITY_SWEEP_REQUEST_TIMEOUT_S = 240;
+
 const server = Bun.serve<SchedulerStreamSocketData, never>({
   port: config.apiPort,
   // Explicit, not Bun's 10 s default (issue 1060). See API_IDLE_TIMEOUT_SECONDS in config.ts.
@@ -141,6 +144,12 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
   async fetch(req, server) {
     const url = new URL(req.url);
     const { pathname } = url;
+
+    // The parity sweep re-derives every domain's counts and checksums inside this one
+    // request, which outlives the api's 10 s idle timeout on a production-sized ledger.
+    // Lift the limit for this request only. Set before any routing so no early return skips it.
+    const isParitySweep = pathname === ROUTES.analytics.paritySweep && req.method === "POST";
+    if (isParitySweep) server.timeout(req, PARITY_SWEEP_REQUEST_TIMEOUT_S);
 
     if (req.method === "OPTIONS") return corsPreflightResponse(req, pathname);
 
@@ -166,7 +175,7 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
     const clientIp = resolveClientIp(peer, config.trustProxy, req.headers.get("x-forwarded-for"));
 
     try {
-      return withCors(await withRequestTiming(req, pathname, () => route(req, url, pathname, clientIp)), req, pathname);
+      return withCors(await withRequestTiming(req, pathname, () => route(req, url, pathname, clientIp), isParitySweep ? { limitMs: PARITY_SWEEP_REQUEST_TIMEOUT_S * 1000 } : {}), req, pathname);
     } catch (err) {
       // Malformed percent-encoding (decodeURIComponent) → 400; anything else →
       // a sanitized 500 (never leak a stack). No unhandled rejections from fetch.

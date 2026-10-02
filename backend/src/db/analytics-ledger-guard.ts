@@ -163,7 +163,7 @@ async function triggerInventory(db: AnalyticsLedgerDb, family: LedgerFamily, tab
 // probe is refused by the executor before the trigger runs: the expected,
 // conclusive answer (`isPrivilegeRefusal`). Counting it as inconclusive made the
 // whole check "unavailable" on every runtime boot.
-const INCONCLUSIVE_CODES = new Set(["57014", "55P03", "57P01", "57P02", "57P03", "53300"]);
+const INCONCLUSIVE_CODES = new Set(["57014", "55P03", "57P01", "57P02", "57P03", "53300", "25006"]);
 function isInconclusive(err: unknown): boolean {
   const code = (err as { code?: string } | null)?.code;
   if (typeof code !== "string" || !/^[0-9A-Z]{5}$/.test(code)) return true;
