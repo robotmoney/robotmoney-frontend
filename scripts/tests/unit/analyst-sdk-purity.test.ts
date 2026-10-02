@@ -6,6 +6,9 @@
 // Forbidden under packages/analyst-sdk/src:
 //   - an import of node:fs (or fs, node:fs/promises), postgres, bun:sqlite
 //   - an import path containing /db/, /chain/, /store/ or /cutover/
+//   - an import of the backend-only extract modules (fetch-cache, source-ledger,
+//     geckoterminal, edgar-seed, floor-seed): the extractors reach the network
+//     and the ledger only through the injectable seam in extract/http.ts
 //   - any reference to process.env
 //
 // Also asserted here: the SDK imports nothing from backend/src, and
@@ -51,6 +54,8 @@ function codeOnly(text: string): string {
 
 const FORBIDDEN_MODULES = new Set(["node:fs", "fs", "node:fs/promises", "fs/promises", "postgres", "bun:sqlite"]);
 const FORBIDDEN_PATH_PARTS = ["/db/", "/chain/", "/store/", "/cutover/"];
+// Extract-stage modules that stay in the backend (issue #1095 part B).
+const BACKEND_ONLY_EXTRACT = /(^|\/)(fetch-cache|source-ledger|geckoterminal|edgar-seed|floor-seed)(-generator)?(\.ts)?$/;
 
 export function purityViolations(file: string, text: string): string[] {
   const code = codeOnly(text);
@@ -59,6 +64,7 @@ export function purityViolations(file: string, text: string): string[] {
     if (FORBIDDEN_MODULES.has(spec)) found.push(`${file}: imports ${spec}`);
     // Trailing slash so a specifier ending in the directory (../db) counts too.
     if (FORBIDDEN_PATH_PARTS.some((p) => `${spec}/`.includes(p))) found.push(`${file}: imports ${spec} (forbidden path)`);
+    if (BACKEND_ONLY_EXTRACT.test(spec)) found.push(`${file}: imports ${spec} (backend-only extract module)`);
   }
   if (/\bprocess\.env\b/.test(code)) found.push(`${file}: references process.env`);
   return found;
@@ -74,6 +80,14 @@ describe("analyst-sdk purity", () => {
   test("no file under packages/analyst-sdk/src has a forbidden import or process.env reference", () => {
     const violations = files.flatMap((f) => purityViolations(relative(root, f), readFileSync(f, "utf8")));
     expect(violations).toEqual([]);
+  });
+
+  test("the scan covers the extractor files and none of the backend-only ones", () => {
+    const extract = files.filter((f) => f.includes("/src/extract/")).map((f) => relative(SDK_SRC, f)).sort();
+    for (const name of ["blockchain-com", "coinmetrics", "defillama", "edgar", "floor-seed-calendar", "fred", "http", "shiller", "sources", "yahoo"]) {
+      expect(extract, name).toContain(`extract/${name}.ts`);
+    }
+    expect(extract.filter((f) => BACKEND_ONLY_EXTRACT.test(f))).toEqual([]);
   });
 
   test("the SDK imports nothing from backend/src", () => {
@@ -122,6 +136,11 @@ describe("analyst-sdk purity", () => {
       ["/chain/ path", 'import { x } from "../chain/gecko-endpoint.ts";'],
       ["/store/ path", 'export * from "../store/raw.ts";'],
       ["/cutover/ path", 'const m = await import("../cutover/parity.ts");'],
+      ["fetch-cache import in an extractor", 'import { withFetchCache } from "./fetch-cache.ts";'],
+      ["source-ledger import in an extractor", 'import { recordSourceFetch } from "../source-ledger.ts";'],
+      ["geckoterminal import in an extractor", 'import { fetchGeckoTerminalNewPools } from "./geckoterminal.ts";'],
+      ["edgar-seed import in an extractor", 'import { loadEdgarSeed } from "./edgar-seed.ts";'],
+      ["floor-seed import in an extractor", 'import { loadRawFloorSeed } from "./floor-seed.ts";'],
       ["process.env", "const k = process.env.API_KEY;"],
     ];
     for (const [name, code] of planted) {

@@ -95,3 +95,7 @@ bin/regime.ts    the `bun run regime` entry (reads one file; the only I/O)
 `src/` stays pure: no `node:fs`, `postgres`, `bun:sqlite`, no `process.env`, nothing
 from the backend. `scripts/tests/unit/analyst-sdk-purity.test.ts` in the repository
 root enforces it.
+
+## Rebuilding inputs from raw sources (optional)
+
+`src/extract/` holds the keyless source clients (FRED, Yahoo, DefiLlama, blockchain.com, Coin Metrics, Shiller, EDGAR) and the indicator-to-fetch map. They are the only SDK code that touches the network, and only through `src/extract/http.ts`. Pass your own `fetch` with `configureHttp({ fetch })`. Add `cache` and `recordFetch` hooks to wrap each GET. With no hooks they use `globalThis.fetch` directly. The geckoterminal source needs a host adapter (`SourceExtensions`) and throws without one.
