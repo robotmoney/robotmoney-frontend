@@ -339,8 +339,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
     ["scripts/lib/rollout-receipt", { statements: 1, reason: "CATALOG: records the server address, port and recovery state of the database a receipt graded (inet_server_addr, pg_is_in_recovery), as whatever operator credential ran the rollout." }],
     ["scripts/migrate-run", { statements: 13, reason: "MIGRATION and CATALOG: applies a migration file's DDL and the grants file, and reads pg_roles, pg_class ACLs, to_regclass and information_schema of a database whose schema may be any historical shape, plus a `SELECT ${column}` whose column depends on which shape it is. Its fixed-shape reads and writes of schema_migrations are registered." }],
     ["scripts/smoke-twin-capture", { statements: 8, reason: "CATALOG: inventories the objects, owners, roles and privileges of a foreign production database (pg_class, pg_namespace, pg_roles) to prove a twin capture is read-only and complete. It runs as an operator credential on a database whose roles are not ours." }],
-    ["scripts/upgrades/0.5.0-to-0.5.1/postflight", { statements: 2, reason: "CATALOG: proves rm_readonly can read every sequence (has_sequence_privilege over pg_class) and that a fixture role is gone (pg_roles). Every table it reads is registered." }],
-    ["scripts/upgrades/0.5.0-to-0.5.1/preflight", { statements: 5, reason: "CATALOG: grades the four roles' attributes, memberships and grants (pg_roles, pg_auth_members, has_schema_privilege, has_table_privilege, has_sequence_privilege) on the production target. The ledger read it needs is registered." }],
   ]);
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -358,13 +356,19 @@ describe("structural enforcement — a raw sql call outside the interface is det
   // It is NOT a way around the ratchet. It is pinned by equality below, it can
   // never grow (a release that ships later gets its tooling registered, not
   // listed here), and an entry whose file stops issuing raw statements or
-  // disappears must leave. `0.5.0-to-0.5.1` is deliberately absent: v0.5.1
-  // has no release tag, so its tooling is live backlog, not history.
+  // disappears must leave. v0.5.1 and v0.5.2 are tagged, so their upgrade
+  // directories are history too (issue 1074). The v0.5.1 steps, preflight and
+  // postflight main once carried described a record that never happened and
+  // were retired, which is why their two exceptions left the backlog above.
   //
   // One entry joined after the first recording (issue 1065): the v0.5.2 ledger
   // repair. v0.5.2 shipped (tag v0.5.2) from the release branch before main
   // carried its tooling, so the file is ported history, the evidence the
   // production repair ran under, not a new program main's deployments run.
+  //
+  // Two entries joined with issue 1074: the v0.5.1 and v0.5.2 restore-checks,
+  // ported from the release branch as the Gate C evidence those shipped
+  // rollouts ran under.
   const HISTORICAL_RELEASE_TOOLING: ReadonlyMap<string, string> = new Map([
     ["scripts/upgrades/0.2.1-to-0.2.2/postflight", "graded the shipped v0.2.1 -> v0.2.2 cutover"],
     ["scripts/upgrades/0.2.1-to-0.2.2/preflight", "gated the shipped v0.2.1 -> v0.2.2 cutover"],
@@ -379,7 +383,9 @@ describe("structural enforcement — a raw sql call outside the interface is det
     ["scripts/upgrades/0.4.0-to-0.5.0/closed-day-allocation", "checked closed-day allocations across the shipped v0.5.0 read-path switch"],
     ["scripts/upgrades/0.4.0-to-0.5.0/postflight", "graded the shipped v0.4.0 -> v0.5.0 cutover"],
     ["scripts/upgrades/0.4.0-to-0.5.0/preflight", "gated the shipped v0.4.0 -> v0.5.0 cutover"],
+    ["scripts/upgrades/0.5.0-to-0.5.1/restore-check", "proved the v0.5.0 backup restorable before v0.5.1 shipped, ported from the release (issue 1074)"],
     ["scripts/upgrades/0.5.1-to-0.5.2/ledger-repair", "the one-time ledger repair the shipped v0.5.2 runbook ran (R4.3h, R6.4c), ported from the release (issue 1065)"],
+    ["scripts/upgrades/0.5.1-to-0.5.2/restore-check", "proved the v0.5.1 backup restorable before v0.5.2 shipped, ported from the release (issue 1074)"],
   ]);
 
   /** Module id → its raw statements, for every module under `root` (src/ by
@@ -526,7 +532,7 @@ describe("structural enforcement — a raw sql call outside the interface is det
     expect(scriptsGateOffenders(SCRIPTS_RAW_SQL_EXCEPTIONS, HISTORICAL_RELEASE_TOOLING, found)).toEqual([]);
   });
 
-  test("the scripts exceptions are exactly the nine recorded modules, each with a reason, and never grow", () => {
+  test("the scripts exceptions are exactly the seven recorded modules, each with a reason, and never grow", () => {
     const stillRaw = rawStatementModules(SCRIPTS);
     // Pinned by value, like INFRA: a new entry is an edit here AND a failing
     // expectation, never one quiet line.
@@ -538,11 +544,9 @@ describe("structural enforcement — a raw sql call outside the interface is det
       "scripts/lib/rollout-receipt",
       "scripts/migrate-run",
       "scripts/smoke-twin-capture",
-      "scripts/upgrades/0.5.0-to-0.5.1/postflight",
-      "scripts/upgrades/0.5.0-to-0.5.1/preflight",
     ]);
     // The recorded total, the sum of every pin. A larger sum is an addition.
-    expect([...SCRIPTS_RAW_SQL_EXCEPTIONS.values()].reduce((sum, e) => sum + e.statements, 0)).toBeLessThanOrEqual(41);
+    expect([...SCRIPTS_RAW_SQL_EXCEPTIONS.values()].reduce((sum, e) => sum + e.statements, 0)).toBeLessThanOrEqual(34);
     for (const [moduleId, entry] of SCRIPTS_RAW_SQL_EXCEPTIONS) {
       expect(moduleId.startsWith("scripts/"), moduleId).toBe(true);
       expect(entry.reason.length, moduleId).toBeGreaterThan(80);
@@ -553,7 +557,7 @@ describe("structural enforcement — a raw sql call outside the interface is det
     }
   });
 
-  test("the shipped-release tooling set is exactly the fourteen recorded modules, and never grows", () => {
+  test("the shipped-release tooling set is exactly the sixteen recorded modules, and never grows", () => {
     // Pinned by value, like INFRA: a new entry is an edit here AND a failing
     // expectation, never one quiet line.
     expect([...HISTORICAL_RELEASE_TOOLING.keys()].sort()).toEqual([
@@ -570,13 +574,15 @@ describe("structural enforcement — a raw sql call outside the interface is det
       "scripts/upgrades/0.4.0-to-0.5.0/closed-day-allocation",
       "scripts/upgrades/0.4.0-to-0.5.0/postflight",
       "scripts/upgrades/0.4.0-to-0.5.0/preflight",
+      "scripts/upgrades/0.5.0-to-0.5.1/restore-check",
       "scripts/upgrades/0.5.1-to-0.5.2/ledger-repair",
+      "scripts/upgrades/0.5.1-to-0.5.2/restore-check",
     ]);
     // Every entry is a shipped release's upgrade directory, carries its reason,
     // still issues raw statements (else it leaves), and is on no other list.
     const stillRaw = rawStatementModules(SCRIPTS);
     for (const [moduleId, reason] of HISTORICAL_RELEASE_TOOLING) {
-      expect(/^scripts\/upgrades\/(0\.2\.1-to-0\.2\.2|0\.2\.2-to-0\.3\.0|0\.3\.0-to-0\.4\.0|0\.4\.0-to-0\.5\.0|0\.5\.1-to-0\.5\.2)\//.test(moduleId), moduleId).toBe(true);
+      expect(/^scripts\/upgrades\/(0\.2\.1-to-0\.2\.2|0\.2\.2-to-0\.3\.0|0\.3\.0-to-0\.4\.0|0\.4\.0-to-0\.5\.0|0\.5\.0-to-0\.5\.1|0\.5\.1-to-0\.5\.2)\//.test(moduleId), moduleId).toBe(true);
       expect(reason.length, moduleId).toBeGreaterThan(10);
       expect(stillRaw.has(moduleId), moduleId).toBe(true);
       expect(SCRIPTS_RAW_SQL_EXCEPTIONS.has(moduleId), moduleId).toBe(false);
@@ -584,26 +590,32 @@ describe("structural enforcement — a raw sql call outside the interface is det
   });
 
   test("RED CONTROL: an unreleased upgrade's raw statements are not excused by the history set", () => {
-    // The v0.5.1 tooling has no release tag, so the only thing admitting its
-    // raw statements is its pinned exception. This runs the gate itself
-    // (scriptsGateOffenders) with each v0.5.1 module dropped from the
-    // exceptions in turn, and requires the gate to name exactly that module — so
-    // a gate that stopped reading the exceptions, or that let the history set
-    // excuse an unreleased upgrade, fails here.
-    const found = rawStatementModules(SCRIPTS);
-    const unreleased = [...found.keys()].filter((m) => m.startsWith("scripts/upgrades/0.5.0-to-0.5.1/"));
-    expect(unreleased.length).toBeGreaterThan(0);
-    for (const moduleId of unreleased) {
-      expect(HISTORICAL_RELEASE_TOOLING.has(moduleId), moduleId).toBe(false);
-      const without = new Map([...SCRIPTS_RAW_SQL_EXCEPTIONS].filter(([m]) => m !== moduleId));
-      expect(without.size, moduleId).toBe(SCRIPTS_RAW_SQL_EXCEPTIONS.size - 1);
-      const offenders = scriptsGateOffenders(without, HISTORICAL_RELEASE_TOOLING, found);
-      expect(offenders.map((line) => line.slice(0, line.indexOf(":"))), moduleId).toEqual([moduleId]);
-    }
+    // An unreleased upgrade has no release tag, so the only thing admitting
+    // its raw statements is a pinned exception. This runs the gate itself
+    // (scriptsGateOffenders) with that exception dropped, and requires the gate
+    // to name exactly that module, so a gate that stopped reading the
+    // exceptions, or that let the history set excuse an unreleased upgrade,
+    // fails here.
+    const real = rawStatementModules(SCRIPTS);
+    const found = new Map(real);
+    // No upgrade directory is unreleased today (v0.5.1 and v0.5.2 are tagged),
+    // so the control plants one: a made-up release with the statements of a
+    // real module, which only its pinned exception could admit.
+    const planted = "scripts/upgrades/9.9.9-to-9.9.10/preflight";
+    const statements = found.get("scripts/upgrades/0.4.0-to-0.5.0/preflight");
+    expect(statements, "the planted module borrows this one's statements").toBeDefined();
+    found.set(planted, statements!);
+    const exceptions = new Map(SCRIPTS_RAW_SQL_EXCEPTIONS);
+    exceptions.set(planted, { statements: statements!.length, reason: "CATALOG: planted by the red control to stand for an unreleased upgrade's pinned exception." });
+    expect(HISTORICAL_RELEASE_TOOLING.has(planted)).toBe(false);
+    expect(scriptsGateOffenders(exceptions, HISTORICAL_RELEASE_TOOLING, found)).toEqual([]);
+    const without = new Map([...exceptions].filter(([m]) => m !== planted));
+    const offenders = scriptsGateOffenders(without, HISTORICAL_RELEASE_TOOLING, found);
+    expect(offenders.map((line) => line.slice(0, line.indexOf(":")))).toEqual([planted]);
     // And the history set really is consulted: with every shipped module
     // dropped from it, the gate names each one.
     const shipped = [...HISTORICAL_RELEASE_TOOLING.keys()].sort();
-    const withoutHistory = scriptsGateOffenders(SCRIPTS_RAW_SQL_EXCEPTIONS, new Map(), found);
+    const withoutHistory = scriptsGateOffenders(SCRIPTS_RAW_SQL_EXCEPTIONS, new Map(), real);
     expect(withoutHistory.map((line) => line.slice(0, line.indexOf(":")))).toEqual(shipped);
   });
 
