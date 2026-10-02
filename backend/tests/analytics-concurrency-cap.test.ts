@@ -4,7 +4,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ANALYTICS_CONCURRENCY, createLimiter } from "../src/api/routes/analytics.ts";
+import { ROUTES } from "@robotmoney/contract";
+import { ANALYTICS_CONCURRENCY, ANALYTICS_PATHS, createLimiter } from "../src/api/routes/analytics.ts";
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -45,5 +46,11 @@ describe("handleAnalytics", () => {
     expect(src).toContain("if (!ANALYTICS_PATHS.has(url.pathname) || url.pathname === A.readiness) return handleAnalyticsUnbounded(req, url);");
     expect(src).toContain("const release = await analyticsSlots.acquire();");
     expect(ANALYTICS_CONCURRENCY).toBeLessThanOrEqual(Number(process.env.PG_POOL_MAX ?? 10) / 4);
+  });
+});
+
+describe("ANALYTICS_PATHS", () => {
+  test("equals the analytics route table, so a new route cannot 404 silently", () => {
+    expect([...ANALYTICS_PATHS].sort()).toEqual(Object.values(ROUTES.analytics).sort());
   });
 });

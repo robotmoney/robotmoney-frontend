@@ -62,7 +62,6 @@ import {
   WORKER_LANE_SERVICES,
 } from "../stack/index.ts";
 import { gitRunner, resolveSourceIdentities } from "../stack/source-identity.ts";
-import { ROUTES } from "@robotmoney/contract";
 import { DB_WRITER_SERVICES, selectFailureDetail, writerQuiesceLine } from "./smoke-failure.ts";
 import { POSTGRES_IMAGE } from "./postgres-image.ts";
 import {

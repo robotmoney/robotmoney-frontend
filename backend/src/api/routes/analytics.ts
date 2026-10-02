@@ -602,7 +602,7 @@ function parseTerminalRunPackage(body: unknown): TerminalRunPackageInput | Inval
   return { runId: String(v.runId), asof: v.asof, status, warnings, logs, exceptions };
 }
 
-const ANALYTICS_PATHS: ReadonlySet<string> = new Set([
+export const ANALYTICS_PATHS: ReadonlySet<string> = new Set([
   A.readiness, A.rawHistory, A.rawHistorySeed, A.researchSignalDates, A.rawHistoryGaps,
   A.sourceAcquisitions, A.researchEligibility, A.telemetry, A.runs, A.runEvents,
   A.vintages, A.vintage, A.runPackage, A.reportSnapshot, A.paritySweep,

@@ -541,4 +541,20 @@ describe("a READ-ONLY session (a managed-Postgres failover in progress)", () => 
     const result = await checkAnalyticsLedgerGuard(ro);
     expect(result.status).not.toBe("disarmed");
   });
+
+  test("a dropped trigger is still 'disarmed' on a read-only session", async () => {
+    await fixtureDb.unsafe(`DROP TRIGGER swarm_recommendations_append_only_row ON swarm_recommendations`);
+    try {
+      const result = await checkAppendOnlyGuard(ro);
+      expect(result.status).toBe("disarmed");
+      expect(result.problems).toEqual([
+        expect.stringContaining("swarm_recommendations: the row-level trigger 'swarm_recommendations_append_only_row' is MISSING"),
+      ]);
+    } finally {
+      await fixtureDb.unsafe(
+        `CREATE TRIGGER swarm_recommendations_append_only_row BEFORE DELETE ON swarm_recommendations
+         FOR EACH ROW EXECUTE FUNCTION rm_append_only_guard()`,
+      );
+    }
+  });
 });
