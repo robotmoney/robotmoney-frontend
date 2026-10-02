@@ -70,6 +70,8 @@ import {
   type Receipt,
   type StateExpectations,
 } from "../../lib/smoke-journal.ts";
+import { planConfiguration, SPOOF_EVERY_IN_HOUSE_MEMBER } from "../../lib/smoke-plan-configuration.ts";
+import { spoofKeysRequest } from "../../lib/swarm/spoof-keys.ts";
 import { generateRolePasswords, instancePaths, type InstancePaths } from "../../lib/smoke-state.ts";
 import { gitRunner, resolveSourceIdentities } from "../../stack/source-identity.ts";
 
@@ -489,6 +491,44 @@ describe("the plan is redacted by structure — §1.2, the printed plan holds no
     expectRefused(plan({ configuration: { UPSTREAM: "postgres://rm_app:hunter2@db.example.invalid/robotmoney" } }), "hunter2");
     expectRefused(plan({ configuration: { UPSTREAM: "rm_app:hunter2@db.example.invalid/robotmoney" } }), "hunter2");
     expectRefused(plan({ configuration: { DATABASE_URL: "anything" } }), "anything");
+  });
+
+  // The producer and the guard, composed. Both landed in the deployment
+  // refactor (#1028) with tests of their own and none together, so the plan's
+  // `--spoof-keys` field shipped named SPOOF_KEYS and the first twin rehearsal
+  // (2026-10-02) was refused by the guard before it booted. The real builder
+  // runs here through the real guard, for every spoof shape argv can carry.
+  describe("the plan's own configuration passes its own guard (producer composed with guard)", () => {
+    const base = {
+      stackRmEnv: "stage" as const,
+      cadenceProfile: "fast" as const,
+      staticPortMode: true,
+      shippedImages: false,
+      analyticsSource: "live",
+      analyticsFloorSeed: "1",
+    };
+    for (const [argv, expected] of [
+      [["bun", "smoke"], null],
+      [["bun", "smoke", "--spoof-keys"], SPOOF_EVERY_IN_HOUSE_MEMBER],
+      [["bun", "smoke", "--spoof-keys=athena"], "athena"],
+      [["bun", "smoke", "--spoof-keys=athena,themis"], "athena,themis"],
+    ] as const) {
+      test(`${JSON.stringify(argv.slice(2))}: accepted, and named for what it carries`, () => {
+        const configuration = planConfiguration({ ...base, spoofRequest: spoofKeysRequest(argv) });
+        const p = plan({ configuration });
+        expect(() => assertPlanRedacted(p)).not.toThrow();
+        expect(() => computePlanId(p)).not.toThrow();
+        expect(renderPlan(p, computePlanId(p), { secrets: [] })).not.toMatch(/SPOOF_KEYS/);
+        if (expected === null) expect(configuration).not.toHaveProperty("SPOOF_MEMBERS");
+        else expect(configuration.SPOOF_MEMBERS).toBe(expected);
+      });
+    }
+
+    test("the guard still refuses a key named SPOOF_KEYS — the rename is the fix, not a loosened guard", () => {
+      expect(() => assertPlanRedacted(plan({ configuration: { SPOOF_KEYS: "athena" } }))).toThrow(
+        /plan\.configuration\.SPOOF_KEYS is named like a secret/,
+      );
+    });
   });
 
   test("a field the plan does not define is refused rather than carried", () => {
