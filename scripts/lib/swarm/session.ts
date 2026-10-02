@@ -422,6 +422,14 @@ export async function adminCall(
 export const OBSERVE_POLL_MS = 2_000;
 /** Slack past a short epoch for the scheduler to open its successor or settle. */
 export const OBSERVE_GRACE_MS = 30_000;
+/**
+ * The longest a freshly opened epoch's window can legitimately run, in epoch
+ * durations. Scheduler spec §2.2: a first epoch closes at the first grid instant
+ * at least HALF a duration away, so its window is between 0.5 and 1.5 durations.
+ * Bounding adoption at one duration refused a correct 120 s epoch that closed
+ * 169 s out, on whichever runs landed late in a grid slot.
+ */
+export const FIRST_EPOCH_MAX_DURATIONS = 1.5;
 
 /** One `collecting` session as the public list reports it. */
 export interface CollectingEpoch {
@@ -456,7 +464,8 @@ export function planEpochAdoption(
   if (!Number.isFinite(closesAt)) {
     return { action: "abort", reason: `session ${epoch.sessionId} advertises no parseable windowClosesAt (${epoch.windowClosesAt})` };
   }
-  const bound = serverNowMs + limits.epochSeconds * 1000 + (limits.graceMs ?? OBSERVE_GRACE_MS);
+  const bound =
+    serverNowMs + limits.epochSeconds * 1000 * FIRST_EPOCH_MAX_DURATIONS + (limits.graceMs ?? OBSERVE_GRACE_MS);
   if (closesAt > bound) {
     return {
       action: "abort",
@@ -1417,7 +1426,7 @@ export async function runSession(
   // `no_consensus` or `not_judged` outcome is published and is not a failure.
   const settlement = await waitForSettlement(
     sessionId,
-    { maxWaitMs: OBSERVE_GRACE_MS * 4 + epochSeconds * 1000 },
+    { maxWaitMs: OBSERVE_GRACE_MS * 4 + epochSeconds * 1000 * FIRST_EPOCH_MAX_DURATIONS },
     {},
     (state) => {
       // `judged` and `published` are announced below, from the record, in
