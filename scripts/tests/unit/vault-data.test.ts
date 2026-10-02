@@ -49,6 +49,9 @@ import {
   withRecommendation,
   portfolioTwr,
   isVaultBookReading,
+  riskLabelForName,
+  isPausedEmpty,
+  depositTarget,
 } from "../../../frontend/public/assets/js/app/lib/vault-data.js";
 import {
   _resetVaultProbe,
@@ -1122,5 +1125,62 @@ describe("a reading of rmUSDC's own book", () => {
     expect(isVaultBookReading({ positions: [{ token: "MORPHO" }, { token: "AAVE" }, { token: "COMPOUND" }, { token: "USDC" }] })).toBe(true);
     expect(isVaultBookReading({ positions: [{ token: "ROBOT" }, { token: "ETH" }, { token: "USDC" }, { token: "rmUSDC" }, { token: "ROBOTMONEY" }] })).toBe(false);
     expect(isVaultBookReading({ positions: [] })).toBe(false);
+  });
+});
+
+// The one-deployment-scheme contract set (frontend 1103): fixtures written
+// with the new manifest keys, four vaults, rmAGENT deployed empty and paused,
+// rmRWA a plain basket row.
+describe("new contract set fixture", () => {
+  const SET = JSON.parse(readFileSync(join(repoRoot, "test-fixtures/vault-set/overview.json"), "utf8"));
+  const NAMES = JSON.parse(readFileSync(join(repoRoot, "test-fixtures/vault-set/vault-names.json"), "utf8"));
+  const row = (o: any, slug: string) => o.vaults.find((v: any) => v.slug === slug);
+
+  test("four vaults render from the registry, each with its registered name and risk label", () => {
+    const o = normalizeOverview(SET);
+    expect(o.vaults.map((v: any) => v.slug)).toEqual(["rmusdc", "rmagent", "rmproto", "rmrwa"]);
+    for (const v of o.vaults) expect(v.registeredName).toBe(NAMES.names.find((n: any) => n.slug === v.slug).name);
+    expect(o.vaults.map((v: any) => v.riskLabel)).toEqual(["STABLE_YIELD", "SPECULATIVE", "VOLATILE", "SPECULATIVE"]);
+  });
+
+  test("name to risk label matches the shared fixture for all four registered names, and null for an unknown name", () => {
+    for (const n of NAMES.names) expect(riskLabelForName(n.name)).toBe(n.risk_label);
+    expect(riskLabelForName("Robot Money Mystery")).toBeNull();
+    expect(riskLabelForName("")).toBeNull();
+  });
+
+  test("older indexer names still classify to the same labels", () => {
+    expect(riskLabelForName("RM Protocol")).toBe("VOLATILE");
+    expect(riskLabelForName("RM RWA / Thematic")).toBe("SPECULATIVE");
+  });
+
+  test("rmAGENT is paused with zero assets and no fabricated figures", () => {
+    const agent = row(normalizeOverview(SET), "rmagent");
+    expect(statusLabel(agent)).toBe("Paused");
+    expect(agent.tvlUsd).toBe(0);
+    expect(agent.sharePrice).toBeNull();
+    expect(agent.holdings).toEqual([]);
+    expect(isPausedEmpty(agent)).toBe(true);
+    expect(canDeposit(agent, SET.network)).toBe(false);
+  });
+
+  test("rmRWA is a basket row holding deSPXA as a plain asset", () => {
+    const rwa = row(normalizeOverview(SET), "rmrwa");
+    expect(rwa.kind).toBe("basket");
+    expect(rwa.assets.map((a: any) => a.symbol)).toEqual(["deSPXA"]);
+    expect(isPausedEmpty(rwa)).toBe(false);
+    expect(row(normalizeOverview(SET), "rmusdc").kind).toBe("lending");
+  });
+
+  test("a paused row with a balance or holdings is not empty", () => {
+    expect(isPausedEmpty({ status: "paused", tvlUsd: 5 })).toBe(false);
+    expect(isPausedEmpty({ status: "paused", tvlUsd: 0, holdings: [{ label: "x" }] })).toBe(false);
+    expect(isPausedEmpty({ status: "active", tvlUsd: 0 })).toBe(false);
+  });
+
+  test("deposits go to the gateway that carries the router, both from the overview", () => {
+    const t = depositTarget(normalizeOverview(SET));
+    expect(t).toEqual({ gateway: SET.contracts.gateway, router: SET.contracts.router });
+    expect(depositTarget(normalizeOverview({ ...SET, contracts: { gateway: SET.contracts.gateway }, router: { address: null } }))).toBeNull();
   });
 });

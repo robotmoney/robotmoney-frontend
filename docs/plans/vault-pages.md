@@ -107,3 +107,7 @@ The Holdings target is the weights in force: the router's applied weights when t
 2. /allocation's donut and ledger read the framework in force (seeded 95/5/0/0, in force since Jun 2, 2026), while the Vaults table's Recommended reads the latest published recommendation (95/3/0/2). Does the donut and ledger baseline move to the latest published recommendation (RM-115)? On the devnet the gap is wider: the Vaults table reads Applied 70/10/15/5 while the donut, ledger and sleeve cards still read 95/5/0/0. Should the recipe follow the router's applied weights once the router is live (as the vault subject's target already does)?
 4. The rmUSDC lede, shared with the /allocation sleeve card, ends "aimed at capital preservation", which now sits above a deposit link. Keep it, or cut it to "Lending USDC. The lowest-volatility sleeve."?
 3. The devnet fixtures ship publicly under `/data/vaults/devnet/`, though no page on a production host reads them. Keep them, or exclude them from the production static assembly?
+
+## Contract set (frontend 1103)
+
+The pages consume the one-deployment-scheme set. Manifests are read by `backend/src/chain/deployment-manifest.ts` (file names from core's `scripts/deploy/stage-table.json`). All four vaults render with their registered names and risk labels (Robot Money USDC STABLE_YIELD, Protocol VOLATILE, Agent Tokens SPECULATIVE, RWA SPECULATIVE). rmAGENT shows paused with nothing in it. rmRWA is a plain basket row. Deposits go to the gateway, which carries the router. Both addresses come from the manifest.

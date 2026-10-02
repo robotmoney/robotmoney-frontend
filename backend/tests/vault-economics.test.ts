@@ -588,3 +588,29 @@ test("fetchVaultEconomics: freshness budget boundary pair (budget-1s -> stale fa
   await fixtureDb`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
 });
 
+
+// One-deployment-scheme (frontend 1103): the gateway and router addresses come
+// from the renamed manifest keys, and a manifest with an old key is refused.
+test("gateway and router addresses come from the manifest keys gateway/gateway_router and router", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { resolveDeployment } = await import("../src/chain/deployment-manifest.ts");
+  const dir = join(import.meta.dir, "../../test-fixtures/deployments/new-keys");
+  const gw = JSON.parse(readFileSync(join(dir, "gateway.json"), "utf8"));
+  const rt = JSON.parse(readFileSync(join(dir, "router.json"), "utf8"));
+  const set = resolveDeployment({ DEPLOYMENT_MANIFEST_DIR: dir });
+  expect(set.gateway).toBe(gw.gateway);
+  expect(set.router).toBe(rt.router);
+  expect(set.gatewayRouter).toBe(gw.gateway_router);
+  expect(set.router).toBe(set.gatewayRouter);
+  // config carries the same addresses when the dir is set at load; unset it is null or env.
+  expect(config.vault.gateway === null || typeof config.vault.gateway === "string").toBe(true);
+});
+
+test("old manifest key is a negative case: morpho_adapter makes the set unreadable", async () => {
+  const { parseDeploymentSet } = await import("../src/chain/deployment-manifest.ts");
+  const a = (n: string) => "0x" + n.repeat(20);
+  expect(() =>
+    parseDeploymentSet({ "vault.json": { chain_id: 1, vault: a("21"), morpho_adapter: a("22") } }),
+  ).toThrow(/morpho_adapter/);
+});

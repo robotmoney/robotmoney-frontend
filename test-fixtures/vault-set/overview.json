@@ -1,0 +1,86 @@
+{
+  "asOf": "2026-10-02T10:00:00Z",
+  "network": {
+    "chainId": 918453,
+    "label": "Twin chain",
+    "testData": true
+  },
+  "freshness": {
+    "blockNumber": 100,
+    "indexedAt": "2026-10-02T10:00:00Z",
+    "stale": false
+  },
+  "router": {
+    "address": "0x4040404040404040404040404040404040404040",
+    "availability": "live",
+    "appliedAt": null
+  },
+  "contracts": {
+    "gateway": "0x5050505050505050505050505050505050505050",
+    "router": "0x4040404040404040404040404040404040404040",
+    "registry": "0x3030303030303030303030303030303030303030"
+  },
+  "recommendation": null,
+  "vaults": [
+    {
+      "slug": "rmusdc",
+      "registeredName": "Robot Money USDC",
+      "availability": "live",
+      "status": "active",
+      "address": "0x2121212121212121212121212121212121212121",
+      "kind": "lending",
+      "tvlUsd": 1,
+      "sharePrice": 1,
+      "exitFeeBps": 25,
+      "appliedBps": null
+    },
+    {
+      "slug": "rmagent",
+      "registeredName": "Robot Money Agent Tokens",
+      "availability": "live",
+      "status": "paused",
+      "address": "0x7070707070707070707070707070707070707070",
+      "kind": "basket",
+      "tvlUsd": 0,
+      "sharePrice": null,
+      "exitFeeBps": null,
+      "holdings": [],
+      "assets": []
+    },
+    {
+      "slug": "rmproto",
+      "registeredName": "Robot Money Protocol",
+      "availability": "live",
+      "status": "active",
+      "address": "0x6060606060606060606060606060606060606060",
+      "kind": "basket",
+      "tvlUsd": 0,
+      "sharePrice": null,
+      "exitFeeBps": null,
+      "assets": [
+        {
+          "symbol": "wETH"
+        },
+        {
+          "symbol": "cbBTC"
+        }
+      ]
+    },
+    {
+      "slug": "rmrwa",
+      "registeredName": "Robot Money RWA",
+      "availability": "live",
+      "status": "active",
+      "address": "0x8080808080808080808080808080808080808080",
+      "kind": "basket",
+      "tvlUsd": 0,
+      "sharePrice": null,
+      "exitFeeBps": null,
+      "assets": [
+        {
+          "symbol": "deSPXA"
+        }
+      ]
+    }
+  ]
+}
