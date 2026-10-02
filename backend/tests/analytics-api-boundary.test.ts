@@ -45,6 +45,10 @@ import { provisionAnalyticsToken, writeTokenFile } from "./support/automation-au
 useCleanDatabasePerTest(import.meta.file);
 
 const SRC = join(import.meta.dir, "..", "src");
+// Issue #1095: the pure compute moved to packages/analyst-sdk/src, with
+// re-export shims left at the old analytics/ paths. The zero-database-access
+// rule has to follow it, or moving a file there would take it out of the scan.
+const SDK_SRC = join(import.meta.dir, "..", "..", "packages", "analyst-sdk", "src");
 
 function tsFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -94,8 +98,14 @@ test("updater/orchestrator modules (analytics/** minus store,report,cutover) car
     // allowedPrefixes list below).
     return !rel.startsWith("store/") && !rel.startsWith("report/") && !rel.startsWith("cutover/");
   });
-  expect(files.length).toBeGreaterThan(15); // canary: the updater surface is known-large
-  const violations = scan(files, [IMPORT_DB_CLIENT, IMPORT_WORKER_CLIENT, IMPORT_POSTGRES, SQL_TAG, IMPORT_STORE]);
+  const sdkFiles = tsFiles(SDK_SRC);
+  // Canaries: the updater surface is known-large, and the SDK directory really
+  // is in the scan (the old threshold of 15 was set before analyze/ and
+  // transform/ moved there, so it would no longer notice the SDK going missing).
+  expect(files.length).toBeGreaterThan(15);
+  expect(sdkFiles.length).toBeGreaterThan(15);
+  expect(files.length + sdkFiles.length).toBeGreaterThan(60);
+  const violations = scan([...files, ...sdkFiles], [IMPORT_DB_CLIENT, IMPORT_WORKER_CLIENT, IMPORT_POSTGRES, SQL_TAG, IMPORT_STORE]);
   expect(violations).toEqual([]);
 });
 

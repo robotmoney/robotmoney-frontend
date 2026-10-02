@@ -4880,3 +4880,56 @@ versions, far more than the ~172k points the ledger describes:
 the fixed writers, relabels included) and
 `backend/tests/analytics-ledger-repair.test.ts` (an irregular coordinate
 becomes one chain; guards armed; tables smaller on disk).
+
+---
+
+## D57 — `packages/analyst-sdk` is a second shared seam beside `contract/` (refines D10, D23, D43; issue #1095)
+
+**Decision.** The pure regime compute moves out of `backend/src/analytics/` into
+`packages/analyst-sdk/`, and the backend imports it from there. The package
+holds `analyze/{backtest,compute,correlations,indicators,regime-eq-comparison,
+regime-versions,research,research-signals,weighting-comparison,tool}.ts`,
+`transform/*`, `types.ts` and `access/provider.ts`, plus a loader for a
+raw-indicator-history CSV (`date,indicator,value,source`) or the equivalent
+JSON, and a `bun run regime` entry. `contract/` stays the shared seam for route
+paths and DTO types. `packages/analyst-sdk` is the second, and it is a different
+kind of seam: shared **compute**, not shared types.
+
+- **One source of truth, shims at the old paths.** Each moved file is replaced
+  in `backend/src/analytics/` by a one-line `export * from` into the package.
+  Every existing importer, and the three fidelity tests, keep their import
+  lines. `backend/src/api` imports nothing from `packages/` directly, only
+  through those analytics shims.
+- **The package is pure and installs alone.** No `node:fs`, `postgres`,
+  `bun:sqlite`, no `/db/`, `/chain/`, `/store/` or `/cutover/` path, no
+  `process.env`, no import from `backend/`, and no `file:` dependency. Reading a
+  file is the entry script's job (`bin/regime.ts`), outside `src/`. Its tests run
+  with `globalThis.fetch` replaced by a thrower. Enforced by
+  `scripts/tests/unit/analyst-sdk-purity.test.ts`, which also runs the scanner
+  against planted violations.
+- **`analyze/regime.ts` stays in the backend.** Its own header calls it dead in
+  production, and the claim holds: the only references under `backend/src` are
+  comments, and its importers are the tests `analytics.test.ts`, `store.test.ts`,
+  `report.test.ts` and `regime-thresholds.test.ts`. It imports
+  `@robotmoney/contract` through a `file:` dependency, which would break a
+  standalone checkout. Moving it would also put a second, different classifier in
+  the package an analyst reads to audit the real one (`compute.ts`'s `bucketFn`).
+- **The image copies the package.** `backend/Dockerfile` copies
+  `packages/analyst-sdk` to `/packages/analyst-sdk`, where the shims'
+  `../../../../packages/...` path resolves, the same way `contract/` sits at
+  `/contract`.
+- **CI follows the code.** `backend.yml`'s path filter adds `packages/**`, so a
+  change that touches only the package still runs the backend job. The new
+  `analyst-sdk.yml` runs the package's own tests and a standalone-install check.
+
+**Why.** An analyst or agent auditing the regime calculation had to check out and
+install the whole backend, whose CI filters, Dockerfile and tsconfig all assume
+the compute lives inside it. A package that installs alone and reads a CSV makes
+the calculation auditable without a database or any credential, and the shims keep
+the backend from growing a second copy that could drift.
+
+**Rejected.** Bun workspaces: nothing here uses them, and the root `postinstall`
+installs `backend/` on its own. Publishing the package to npm: out of scope,
+analysts clone it (shallow, see its README). Copying the files instead of moving
+them: two copies of the classifier is the drift D56's fidelity tests exist to
+prevent.

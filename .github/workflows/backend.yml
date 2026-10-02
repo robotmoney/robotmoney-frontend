@@ -84,6 +84,11 @@ jobs:
             backend:
               - 'backend/**'
               - 'docker-compose*.yml'
+              # The backend re-exports packages/analyst-sdk through shims and
+              # copies it into its image (backend/Dockerfile), so a change
+              # there can break the backend even when backend/** is untouched
+              # (issue #1095). analyst-sdk.yml runs the package's own tests.
+              - 'packages/**'
               # Committed rollout evidence lives OUTSIDE backend/ on purpose: it
               # must match no step's dependsOn glob, or recording one step's
               # receipt would count as code drift and invalidate the next one.

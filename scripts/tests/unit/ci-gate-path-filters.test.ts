@@ -24,7 +24,7 @@ const read = (name: string) => readFileSync(join(wfDir, name), "utf8");
 // PATH_GATED_WORKFLOWS — duplicated rather than imported, per this repo's
 // convention that sibling unit files stay independent of each other's
 // internals (see that file's own header comment).
-const PATH_GATED_WORKFLOWS = ["backend.yml", "contract.yml", "integration.yml", "web-client.yml", "research-pipeline.yml", "onboarding-eval-rails.yml"];
+const PATH_GATED_WORKFLOWS = ["backend.yml", "contract.yml", "analyst-sdk.yml", "integration.yml", "web-client.yml", "research-pipeline.yml", "onboarding-eval-rails.yml"];
 
 interface FilterStep {
   uses?: string;
@@ -136,6 +136,9 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
     ["backend/src/chain/token-prices.ts", ["backend.yml", "research-pipeline.yml"]],
     ["backend/src/swarm/apply.ts", ["backend.yml", "onboarding-eval-rails.yml"]],
     ["contract/src/index.ts", ["contract.yml"]],
+    // Issue #1095: the SDK is its own gated workflow AND the backend's, because
+    // the backend re-exports it and copies it into its image.
+    ["packages/analyst-sdk/src/run.ts", ["analyst-sdk.yml", "backend.yml"]],
     ["scripts/tests/unit/smoke-env.test.ts", ["integration.yml"]],
     ["scripts/lib/swarm/inference.ts", ["integration.yml", "onboarding-eval-rails.yml"]],
     ["scripts/lib/member-agent/Dockerfile", ["integration.yml", "onboarding-eval-rails.yml"]],
