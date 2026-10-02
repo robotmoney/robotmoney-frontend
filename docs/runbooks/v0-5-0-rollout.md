@@ -1,5 +1,8 @@
 # v0.5.0 production rollout
 
+> **Frozen historical record of releases-0.5.x.** Its commands are retired under D47 and must not be copied.
+> For how deployment works now, read `docs/technical/smoke-production-spec.md`.
+
 > Operator procedure for upgrading production from **v0.4.0** to **v0.5.0**.
 > **No RC is cut yet on this branch.** The candidate is whatever `v0.5.0-rc.*`
 > tag is next cut on `releases-0.5.x`; record its tag and SHA here when it

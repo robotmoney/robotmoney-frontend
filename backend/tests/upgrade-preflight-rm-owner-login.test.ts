@@ -18,6 +18,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createChecker, type CheckResult } from "../scripts/lib/checks.ts";
 import { roleReadinessCheck as check050 } from "../scripts/upgrades/0.4.0-to-0.5.0/preflight.ts";
+import { roleReadinessCheck as check051 } from "../scripts/upgrades/0.5.0-to-0.5.1/preflight.ts";
 import { sql } from "../src/db/client.ts";
 import { adminExec } from "./support/cluster.ts";
 
@@ -48,6 +49,7 @@ async function roleReadiness(check: typeof check050): Promise<CheckResult> {
 
 for (const [label, check] of [
   ["0.4.0-to-0.5.0", check050],
+  ["0.5.0-to-0.5.1", check051],
 ] as const) {
   describe(`${label} preflight — role-readiness reads rm_owner the way D47 left it`, () => {
     test("rm_owner LOGIN without CREATEROLE raises no rm_owner problem", async () => {

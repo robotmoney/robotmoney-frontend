@@ -1,5 +1,8 @@
 # Postmortem: the v0.5.2 ledger repair ran on the production database
 
+> **Frozen historical record of releases-0.5.x.** Its commands are retired under D47 and must not be copied.
+> For how deployment works now, read `docs/technical/smoke-production-spec.md`.
+
 Date: 2026-09-29
 Status: **Draft, updated after the cutover completed.** The 24-hour soak (R8) is still running; its result is not in this document.
 Release: `v0.5.2-rc.2` (`becb6897`), from `releases-0.5.x`

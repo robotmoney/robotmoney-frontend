@@ -1,5 +1,8 @@
 # v0.5.2 production rollout — PROPOSED
 
+> **Frozen historical record of releases-0.5.x.** Its commands are retired under D47 and must not be copied.
+> For how deployment works now, read `docs/technical/smoke-production-spec.md`.
+
 > **Status: proposal (2026-09-28).** Walk this runbook on `v0.5.2-rc.0` (then
 > `rc.1`, …). It follows `docs/runbooks/v0-5-1-rollout.md` step for step; only
 > the differences are argued here. Stage steps (R1, R3, R4) run on this machine

@@ -1,30 +1,83 @@
-// Manifest-only consistency checks for the v0.5.0 -> v0.5.1 release record.
-// Filesystem-only: no database, no docker, no network.
+// Manifest-only consistency checks for the v0.5.0 -> v0.5.1 rollout steps.
+// Filesystem-only — no database, no docker, no network — so it runs in any CI
+// job and cannot be skipped for being slow, matching rollout-steps-0-5-0's
+// own stated reason for the same property.
 //
-// v0.5.1 SHIPPED (tag v0.5.1). Production recorded v0.5.0's set plus
-// 0062_rm_readonly_sequence_select (applied out of band on 2026-09-22) before
-// it, and v0.5.1 applied exactly 0061_rm_worker_wallet_backfill_grant and
-// 0063_swarm_judge_model_default. The manifest is a frozen record of that, so
-// migrations arriving later are declared in LANDED_AFTER_V051 below rather than
-// edited into it. The v0.5.1 steps, preflight and rehearsal tooling main once
-// carried described a different release (0062 as the one migration) and was
-// retired with issue 1074.
+// v0.5.1 applied exactly two migrations to production (0061, 0063) on top of
+// v0.5.0's set and the out-of-band 0062 (issue 1074). This file pins that
+// PRIOR_RELEASE_MIGRATIONS is the exact union of v0.4.0's set, v0.5.0's and
+// 0062, and that the union matches what is actually on disk. That last one is
+// the load-bearing case: the only way the record goes stale is a migration
+// landing on this branch that nobody accounted for.
+//
+// v0.5.1 HAS SHIPPED, so its manifest is a frozen record and migrations now
+// keep arriving for the NEXT release. See LANDED_AFTER_V051 below for how the
+// guard tells "missing from this release's manifest" apart from "not this
+// release's migration at all" without editing the frozen record.
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { STEPS, TAG_GLOB } from "../scripts/upgrades/0.5.0-to-0.5.1/steps.ts";
 import {
+  PRESERVED_RELEASE_TABLES,
   PRIOR_RELEASE_MIGRATIONS,
   RELEASE_MIGRATIONS,
-  TAG_GLOB,
 } from "../scripts/upgrades/0.5.0-to-0.5.1/release.ts";
 import { PRIOR_RELEASE_MIGRATIONS as V050_PRIOR, RELEASE_MIGRATIONS as V050_RELEASE } from "../scripts/upgrades/0.4.0-to-0.5.0/release.ts";
 
-describe("v0.5.1 as production recorded it", () => {
-  test("the tag glob names v0.5.1", () => {
+describe("0.5.0-to-0.5.1 rollout manifest", () => {
+  test("step ids are unique", () => {
+    expect(new Set(STEPS.map((s) => s.id)).size).toBe(STEPS.length);
+  });
+
+  test("requires references resolve to real steps, and point backwards", () => {
+    const index = new Map(STEPS.map((s, i) => [s.id, i]));
+    for (const [i, step] of STEPS.entries()) {
+      for (const req of step.requires) {
+        expect({ step: step.id, req, known: index.has(req) }).toEqual({ step: step.id, req, known: true });
+        expect({ step: step.id, req, before: index.get(req)! < i }).toEqual({ step: step.id, req, before: true });
+      }
+    }
+  });
+
+  test("P6.rc-tag requires stage preflight and rehearsal, and files after both", () => {
+    const rcTag = STEPS.find((s) => s.id === "P6.rc-tag")!;
+    expect(rcTag.requires).toEqual(["P4.preflight-live", "P5.rehearsal"]);
+    const ids = STEPS.map((s) => s.id);
+    expect(ids.indexOf("P4.preflight-live")).toBeLessThan(ids.indexOf("P6.rc-tag"));
+    expect(ids.indexOf("P5.rehearsal")).toBeLessThan(ids.indexOf("P6.rc-tag"));
+  });
+
+  test("P6.rc-tag's verify names THIS release's rc series, not the previous one", () => {
+    // The copy-paste a release directory forked from its predecessor is most
+    // likely to carry: a v0.5.1 manifest that greps for v0.5.0-rc.* would
+    // report the PREVIOUS release's tag as this one's and pass P6 on it.
+    const rcTag = STEPS.find((s) => s.id === "P6.rc-tag")!;
+    expect(rcTag.verify).toContain("v0.5.1-rc.*");
+    expect(rcTag.verify).not.toContain("v0.5.0-rc.*");
     expect(TAG_GLOB).toBe("v0.5.1*");
   });
 
-  test("RELEASE_MIGRATIONS is 0061 and 0063: what v0.5.1 applied to production", () => {
+  test("P5.rehearsal requires the LIVE preflight, not just Gate C", () => {
+    // The one ordering v0.5.1 changes from its predecessor, and the reason is
+    // release-shaped: a rehearsal of a release that applies no migration is
+    // only meaningful once the live target is known to be at the baseline the
+    // release patches. See steps.ts's header.
+    const p5 = STEPS.find((s) => s.id === "P5.rehearsal")!;
+    expect(p5.requires).toEqual(["P3.gate-c", "P4.preflight-live"]);
+  });
+
+  test("P8.verify-prod is the LAST cutover step and requires postflight", () => {
+    const ids = STEPS.map((s) => s.id);
+    expect(ids[ids.length - 1]).toBe("P8.verify-prod");
+    expect(STEPS.find((s) => s.id === "P8.verify-prod")!.requires).toEqual(["P8.postflight-prod"]);
+  });
+});
+
+describe("v0.5.1 applies 0061 and 0063; 0062 was recorded before it", () => {
+  test("RELEASE_MIGRATIONS is 0061 and 0063 and nothing else", () => {
+    // Issue 1074: production shipped v0.5.1 with these two pending. Main once
+    // said 0062 was the one migration; that record was wrong.
     expect([...RELEASE_MIGRATIONS]).toEqual([
       "0061_rm_worker_wallet_backfill_grant.sql",
       "0063_swarm_judge_model_default.sql",
@@ -37,11 +90,9 @@ describe("v0.5.1 as production recorded it", () => {
   });
 
   test("PRIOR_RELEASE_MIGRATIONS is v0.4.0's set, v0.5.0's, and the out-of-band 0062", () => {
-    expect([...PRIOR_RELEASE_MIGRATIONS]).toEqual([
-      ...V050_PRIOR,
-      ...V050_RELEASE,
-      "0062_rm_readonly_sequence_select.sql",
-    ]);
+    // Restated by hand in release.ts (a release directory is a frozen artefact
+    // and must not import across directories), so this keeps it honest.
+    expect([...PRIOR_RELEASE_MIGRATIONS]).toEqual([...V050_PRIOR, ...V050_RELEASE, "0062_rm_readonly_sequence_select.sql"]);
   });
 
   // MIGRATIONS THAT LANDED AFTER v0.5.1 WAS CUT.
@@ -76,8 +127,9 @@ describe("v0.5.1 as production recorded it", () => {
     "0057_swarm_judge_policy_stamp.sql",
     "0058_swarm_judge_fault_injection.sql",
     "0059_swarm_judgement_completion_usage.sql",
-    // From main, a grant repair and the bare wire id for the judge model.
+    // From main, a grant repair found after v0.5.1 went out.
     "0062_rm_worker_analytics_ledger_read_grant.sql",
+    // From main, the bare wire id for the judge model (issue #1064).
     "0081_swarm_judge_model_bare_id.sql",
     // From main, the analytics ledger compaction and vintage repair (#1035,
     // #1046, #1050, #1051, decision D56). It shares the number 0080 with the
@@ -218,5 +270,10 @@ describe("v0.5.1 as production recorded it", () => {
       .sort();
     const newest = onDisk.filter((n) => n >= "0039");
     expect(newest).toEqual([...PRIOR_RELEASE_MIGRATIONS, ...RELEASE_MIGRATIONS, ...LANDED_AFTER_V051].sort());
+  });
+
+  test("every preserved table is named by a v0.5.0 migration, and none is duplicated", () => {
+    expect(new Set(PRESERVED_RELEASE_TABLES).size).toBe(PRESERVED_RELEASE_TABLES.length);
+    expect(PRESERVED_RELEASE_TABLES.length).toBeGreaterThan(0);
   });
 });

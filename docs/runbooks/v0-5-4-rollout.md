@@ -1,5 +1,8 @@
 # v0.5.4 production rollout — a backend and driver patch, no migration
 
+> **Frozen historical record of releases-0.5.x.** Its commands are retired under D47 and must not be copied.
+> For how deployment works now, read `docs/technical/smoke-production-spec.md`.
+
 > **Status: rehearsed twice on stage-2 (2026-10-01); adopted pending the owner's go.** The checks are **cumulative** (section 1.3): every standing invariant of v0.5.0 to v0.5.3 is still checked here. It follows `docs/technical/release-runbooks.md`
 > (policy) and `docs/runbooks/rollout-procedure.md` (mechanics), and reuses `v0-5-1-rollout.md` and
 > `v0-5-2-rollout.md` where a step is the same. Where it says "as v0.5.1 R6.3", run that step as written there.

@@ -1,5 +1,8 @@
 # v0.5.3 production rollout — the website only
 
+> **Frozen historical record of releases-0.5.x.** Its commands are retired under D47 and must not be copied.
+> For how deployment works now, read `docs/technical/smoke-production-spec.md`.
+
 > **Status: proposal (2026-09-30).** Walk this runbook on `v0.5.3-rc.0` (then `rc.1`, …). Stage steps (R1, R4) run on
 > this machine and `rm-frontend-stage-2`. Production steps (R2, R6–R8) run on `rm-frontend-prod-1` and start only on the
 > owner's go. It is the first release that uses `bun run site:redeploy`.
