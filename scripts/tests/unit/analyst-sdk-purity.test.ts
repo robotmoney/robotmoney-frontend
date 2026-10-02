@@ -40,16 +40,27 @@ function tsFiles(dir: string, out: string[] = []): string[] {
 /** Module specifiers named by `from "x"`, `import("x")`, `require("x")` and bare `import "x"`. */
 function specifiers(code: string): string[] {
   const out: string[] = [];
-  const re = /\bfrom\s+["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)|\brequire\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s+["']([^"']+)["']/gm;
+  const re = /\bfrom\s+["']([^"']+)["']|\bimport\s*\(\s*["'`]([^"'`]+)["'`]\s*\)|\brequire\s*\(\s*["'`]([^"'`]+)["'`]\s*\)|^\s*import\s+["']([^"']+)["']|\bimport\s*\(\s*`([^`]*)`/gm;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(code))) out.push((m[1] ?? m[2] ?? m[3] ?? m[4])!);
+  while ((m = re.exec(code))) out.push((m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5])!);
   return out;
 }
 
+// True when a `/` here starts a regex literal rather than dividing: the last
+// significant character before it cannot end an operand.
+function startsRegex(before: string): boolean {
+  const t = before.trimEnd();
+  if (t === "") return true;
+  if (/[(,=:[!&|?{};+\-*%<>~^]$/.test(t)) return true;
+  return /(?:^|[^\w$.])(?:return|typeof|case|in|of|delete|void|throw|new|else|do|yield|await)$/.test(t);
+}
+
 /**
- * Blank out comments with a small scanner that tracks string and template
- * literals, so prose naming a forbidden thing does not trip the scan and a
- * leading block comment cannot hide code on the same line. Newlines are kept.
+ * Blank out comments and regex literals with a small scanner that tracks string
+ * and template literals, so prose naming a forbidden thing does not trip the
+ * scan, a leading block comment cannot hide code on the same line, and a quote
+ * inside a regex literal (`/["']/`, `/https?:\/\//`) cannot open a phantom string
+ * that swallows the code after it. Newlines are kept.
  */
 function codeOnly(text: string): string {
   let out = "";
@@ -64,6 +75,19 @@ function codeOnly(text: string): string {
       while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) out += text[i++] === "\n" ? "\n" : "";
       i += 2;
       out += " ";
+    } else if (c === "/" && startsRegex(out)) {
+      // Regex literal: skip to the closing unescaped `/` (a `/` inside [...] does not close it), then the flags.
+      i++;
+      let inClass = false;
+      while (i < text.length && text[i] !== "\n" && (inClass || text[i] !== "/")) {
+        if (text[i] === "\\") i++;
+        else if (text[i] === "[") inClass = true;
+        else if (text[i] === "]") inClass = false;
+        i++;
+      }
+      i++;
+      while (i < text.length && /[a-z]/i.test(text[i]!)) i++;
+      out += "/_/";
     } else if (c === '"' || c === "'" || c === "`") {
       out += c;
       i++;
@@ -95,6 +119,8 @@ const FORBIDDEN_CODE: Array<[RegExp, string]> = [
   [/\bBun\s*(\.\s*(env|file|write|spawn|spawnSync|\$)\b|\[)/, "uses Bun.env or Bun file/process access"],
   [/\bimport\.meta\.env\b/, "references import.meta.env"],
   [/\bDeno\s*\./, "uses Deno"],
+  [/\bimport\s*\(\s*`[^`]*\$\{/, "dynamic import with a computed template specifier"],
+  [/\bimport\s*\(\s*(?!["'`])[^\s)]/, "dynamic import with a non-literal specifier"],
 ];
 const FORBIDDEN_PATH_PARTS = ["/db/", "/chain/", "/store/", "/cutover/"];
 // Extract-stage modules that stay in the backend (issue #1095 part B).
@@ -191,6 +217,12 @@ describe("analyst-sdk purity", () => {
       ["Bun.file", 'const f = Bun.file("x");'],
       ["import.meta.env", "const k = import.meta.env.X;"],
       ["node:child_process import", 'import a from "node:child_process";'],
+      ["process.env after a regex literal holding a quote and slashes", "const re = /https?:\\/\\//;\nconst k = process.env.X;"],
+      ["process.env after a regex literal with a quote class", "const re = /[\"']/g;\nconst k = process.env.X;"],
+      ["backtick dynamic import of a forbidden path", "const m = await import(`../db/client.ts`);"],
+      ["backtick dynamic import of node:fs", "const m = await import(`node:fs`);"],
+      ["backtick dynamic import with a computed specifier", "const m = await import(`node:${name}`);"],
+      ["dynamic import of a variable", "const m = await import(spec);"],
       ["import after a leading block comment", '/* c */ import fs from "node:fs";'],
       ["import after a multi-line block comment", '/* a\n b */ import fs from "node:fs";'],
     ];
@@ -199,6 +231,10 @@ describe("analyst-sdk purity", () => {
         expect(purityViolations("planted.ts", code), name).not.toEqual([]);
       });
     }
+    test("regex literals and division are told apart, and a clean regex is not flagged", () => {
+      expect(purityViolations("ok.ts", 'const re = /https?:\\/\\//; const half = a / b / c; const s = "x";')).toEqual([]);
+      expect(purityViolations("ok.ts", "const a = 4 / 2; const r = x.replace(/[\"']/g, ''); const q = `${a}`;")).toEqual([]);
+    });
     test("a comment that merely names a forbidden thing is not flagged", () => {
       expect(purityViolations("ok.ts", '// never import node:fs or read process.env here\nimport type { Point } from "../types.ts";')).toEqual([]);
     });

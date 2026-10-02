@@ -25,9 +25,18 @@ export class CsvHeaderError extends Error {
 }
 
 export class InputRowError extends Error {
-  override readonly name = "InputRowError";
+  override readonly name: string = "InputRowError";
   constructor(readonly row: number, reason: string) {
     super(`input row ${row}: ${reason}`);
+  }
+}
+
+// CSV quoting is not supported: a quote would silently shift the field splits
+// below, so any quote anywhere in a row is refused by name.
+export class CsvQuotedFieldError extends InputRowError {
+  override readonly name = "CsvQuotedFieldError";
+  constructor(row: number) {
+    super(row, 'quoted CSV fields are not supported (found a `"`); remove the quotes, ids and sources must not contain commas');
   }
 }
 
@@ -49,11 +58,13 @@ export function parseRawCsv(text: string): RawRow[] {
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i]!;
     if (line.trim() === "") continue;
-    // Indicator ids and sources contain no commas; the source is the last field.
+    // Indicator ids and sources contain no commas or quotes; the source is the last field.
+    if (line.includes('"')) throw new CsvQuotedFieldError(i + 1);
     const c1 = line.indexOf(",");
     const c2 = line.indexOf(",", c1 + 1);
     const c3 = line.indexOf(",", c2 + 1);
     if (c1 < 0 || c2 < 0 || c3 < 0) throw new InputRowError(i + 1, `expected 4 fields, got "${line}"`);
+    if (line.indexOf(",", c3 + 1) >= 0) throw new InputRowError(i + 1, `expected 4 fields, got more: "${line}"`);
     out.push(checkRow(i + 1, line.slice(0, c1), line.slice(c1 + 1, c2), line.slice(c2 + 1, c3), line.slice(c3 + 1)));
   }
   return out;
