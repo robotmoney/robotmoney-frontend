@@ -12,6 +12,11 @@
     },
     "./routes": "./src/routes.js",
     "./package.json": "./package.json",
+    "./public-analytics": {
+      "types": "./src/public-analytics.d.ts",
+      "import": "./src/public-analytics.js"
+    },
+    "./schemas/*": "./src/schemas/*",
     "./consensus-receipt": {
       "types": "./src/consensus-receipt.d.ts",
       "import": "./src/consensus-receipt.js"

@@ -21,6 +21,7 @@ import { handleSwarm } from "./routes/swarm.ts";
 import { handleAdmin } from "./routes/admin.ts";
 import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
+import { handlePublicAnalytics } from "./routes/public-analytics.ts";
 import { schedulerStreamWebSocket, upgradeSchedulerStream, type SchedulerStreamSocketData } from "./routes/swarm-stream.ts";
 import { corsPreflightResponse, withCors } from "./cors.ts";
 import { resolveClientIp } from "./client-ip.ts";
@@ -163,7 +164,7 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
     // the trust/parsing rules — TRUST_PROXY=1 only when a known proxy (now
     // website-server, issue #892) sits in front of this process.
     const peer = server.requestIP(req)?.address || "";
-    const clientIp = resolveClientIp(peer, config.trustProxy, req.headers.get("x-forwarded-for"));
+    const clientIp = resolveClientIp(peer, config.trustProxy, req.headers.get("x-forwarded-for"), req.headers.get("cf-connecting-ip"));
 
     try {
       return withCors(await withRequestTiming(req, pathname, () => route(req, url, pathname, clientIp)), req, pathname);
@@ -407,6 +408,14 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
       // untouched rather than being re-wrapped by json().
       if (r instanceof Response) return r;
       if (r) return json(r.body, r.status);
+    }
+
+    // Tokenless public analytics reads (issue #1095, D58). Its own prefix, NOT
+    // under /api/analytics/ below: that one is auth-gated by a startsWith match
+    // and is a credentialed-CORS prefix. GET only (405 otherwise), rate limited
+    // per ip, and the handler answers every request itself.
+    if (pathname.startsWith("/api/public/analytics/")) {
+      return handlePublicAnalytics(req, url, clientIp);
     }
 
     // Analytics ingestion boundary (issue #106): the analytics-provider-only

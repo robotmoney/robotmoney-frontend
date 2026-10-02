@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robotmoney.network/contract/schemas/public-analytics-overwrite-events.schema.json",
+  "title": "GET /api/public/analytics/overwrite-events",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "limit",
+    "excludedProviders",
+    "events",
+    "nextCursor"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000
+    },
+    "excludedProviders": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "table_name",
+          "operation",
+          "natural_key",
+          "previous_row",
+          "replacement_row",
+          "recorded_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "table_name": {
+            "enum": [
+              "raw_indicator_history",
+              "regime_snapshots",
+              "research_signals"
+            ]
+          },
+          "operation": {
+            "enum": [
+              "update",
+              "delete"
+            ]
+          },
+          "natural_key": {
+            "type": "object"
+          },
+          "previous_row": {
+            "type": "object"
+          },
+          "replacement_row": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "nextCursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

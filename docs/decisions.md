@@ -4933,3 +4933,115 @@ installs `backend/` on its own. Publishing the package to npm: out of scope,
 analysts clone it (shallow, see its README). Copying the files instead of moving
 them: two copies of the classifier is the drift D56's fidelity tests exist to
 prevent.
+
+---
+
+## D58 — Raw analytics data is readable without a token, under `/api/public/analytics/`, minus Yahoo-sourced rows (refines D52; issue #1095)
+
+**Decision.** Four read-only routes serve the raw analytics inputs to anyone, with
+no credential: `raw-history` (`raw_indicator_history`), `asset-prices`
+(`asset_prices`; the `prices` table from migration 0002 is dead and is not served),
+`vintages` (`analytics_data_vintages` joined to `analytics_ledger_runs` and
+`analytics_ledger_methodology_versions`, with `analytics_vintage_members` id ranges
+expanded) and `overwrite-events` (`analytics_overwrite_events`). Until now these
+were readable only with a store token carrying `analytics_ingestion` (the
+analytics-provider role, D52), or by an admin. That stays true of `/api/analytics/`
+and `/api/admin/`. This decision adds a second, public read path beside them and
+changes nothing about who may write.
+
+- **Its own prefix.** `/api/public/analytics/`, not under `/api/analytics/`: the
+  auth gate for that one is a `startsWith` match in `api/index.ts`, and its CORS
+  prefix in `api/cors.ts` is credentialed. A public route under it would inherit
+  both. GET only; every other method is `405`. A bearer token, if sent, is ignored:
+  the body is the same with or without it. No write route will ever exist under this
+  prefix.
+- **A contract of its own.** `ROUTES.publicAnalytics` in `contract/`, and one JSON
+  schema per route in `contract/src/schemas/`, each requiring `schemaVersion` (1).
+  A breaking change to a body bumps it.
+- **Bounded reads.** Every list route takes `limit` (default 100, cap 1000, a larger
+  value clamped) and an opaque keyset `cursor`. Responses carry
+  `Cache-Control: public, max-age=300` and a weak `ETag` (a matching `If-None-Match`
+  is `304`), and a body over 256 KB is gzip-encoded for a client that accepts it.
+  Vintage members are served one vintage at a time (`include=members` with `run_key`
+  and `tool_id`), because a production vintage has ~170k member ids.
+- **Rate limit.** One sliding window per client ip, shared by the four routes: 100
+  requests a minute, then `429` with `Retry-After`. It lives in the api process's
+  memory, so it is **per process**. One api replica runs today. A second replica
+  would double every client's allowance, and the limiter would move behind a shared
+  store before that happens.
+- **Client ip.** `resolveClientIp` reads `CF-Connecting-IP` when `TRUST_PROXY=1`
+  and honors `X-Forwarded-For` (last hop) only from a loopback peer. Before this,
+  any peer's `X-Forwarded-For` was trusted whenever `TRUST_PROXY=1`, so a sender
+  that reached the api could pick the identity the limiter saw. Cloudflare (D13)
+  sets `CF-Connecting-IP` on every proxied request and nginx passes it through.
+  A stack with no Cloudflare in front now resolves every client to its proxy's
+  address, so on such a stack (a local smoke) the limiter and the comments and
+  submissions `ip_hash` see one client. That is the safe direction to be wrong in.
+- **Regime outputs are not duplicated.** They and the correlations stay on
+  `GET /api/dashboards/regime-snapshots?include=backtest`. That response now states
+  `source`, `regime_snapshots` or `ledger`, which says which read path
+  (`report/projections.ts`, `fetchRegimeSnapshots`) produced it.
+- **One grant.** `analytics_overwrite_events` was readable only by `rm_readonly`:
+  migration 0056 revoked ALL from `rm_app`, which took the read with the write.
+  Migration 0093 grants `rm_app` SELECT on it and nothing else, and
+  `schema/grants.sql` re-asserts it on every migrate run. No runtime role gains any
+  write, and `rm_worker` still has no access. The EXPLAIN check
+  (`backend/tests/analytics-public-explain.test.ts`) found every query served by an
+  existing index, so no index migration is needed.
+
+**What is withheld, and the per-source terms.** Redistributing a provider's data
+needs a right to do so, and for most of these sources it is documented only on the
+provider's terms page. The table records, for each source, what the public API
+serves from it and where its terms are. `pending` means the terms are linked and
+the operator has not recorded a sign-off here; it is a to-do for the operator, not a
+finding that the terms allow or forbid anything. The same table is in
+`packages/analyst-sdk/README.md`.
+
+| source | what is served | terms | status |
+| ------ | -------------- | ----- | ------ |
+| FRED | `T10Y2Y`, `DFII10`, `T5YIE`, `HY_OAS`, `DXY`, `ICSA` | https://fred.stlouisfed.org/docs/api/terms_of_use.html | pending; `HY_OAS` is ICE content republished by FRED |
+| DefiLlama | `DEFI_TVL`, `STABLES`, `DEFI_GROWTH`, `STABLES_GROWTH` | https://defillama.com/docs/api | pending |
+| blockchain.com | `BTC_ACTIVE` | https://www.blockchain.com/legal/terms | pending |
+| Coin Metrics community data | `ETH_ACTIVE`, `BTC_MVRV` | https://coinmetrics.io/community-network-data/ | pending |
+| GeckoTerminal | `NEW_TOKENS`; `asset_prices` rows from `geckoterminal` | https://www.coingecko.com/en/api_terms | pending |
+| Shiller / multpl.com | `SHILLER_CAPE` | http://www.econ.yale.edu/~shiller/data.htm | pending |
+| SEC EDGAR | `MNA` | https://www.sec.gov/privacy#dissemination | public information |
+| pinned prices | `asset_prices` rows from `pinned` | our own configuration | ours |
+| Yahoo Finance | indicators whose registry source is `yahoo` | n/a | **withheld** |
+
+**Yahoo is withheld unless the operator signs off here.** No redistribution right
+for Yahoo Finance data is on record, so its rows are not served: not from
+`raw-history`, not as `asset_prices` rows whose `source` names yahoo, not as vintage
+members whose `source_key` is Yahoo-backed, and not as `overwrite-events` on
+`raw_indicator_history` for a Yahoo indicator. **Operator sign-off to serve Yahoo
+data: none recorded.** The exclusion is a filter with no configuration and no
+switch. The set is derived from the indicator registry (`source: "yahoo"`) and from
+the keys D56's tolerance table marks `yahoo-*`, so it cannot be turned off at
+deploy time and cannot drift from the extractors. Serving Yahoo rows takes a change
+to this decision and to that derivation, in one commit. The response says what it
+withheld (`excludedProviders: ["yahoo"]`). Derived outputs (regime snapshots,
+research signals and their overwrite events) are not raw provider data and are
+served as before.
+
+**Why.** An analyst or agent auditing the regime calculation needs the raw inputs,
+the prices, the frozen vintage a run used and every revision of a stored row, and
+had to be handed a credential meant for the producer to read them. Reading is
+public information about a public product. Writing is not, and stays gated.
+
+**Rejected.** Opening `/api/analytics/` reads to anonymous callers: that prefix
+mixes reads and writes behind one gate, and its CORS is credentialed. A config
+switch for Yahoo rows: a switch is how a deployment ends up serving what nobody
+signed off on. Duplicating regime outputs under the public prefix: two copies of
+the classifier's output can disagree, and the dashboards endpoint already serves
+them. A shared rate-limit store now: one replica runs, and a store is a new moving
+part with its own failure mode.
+
+**Enforced by** `backend/tests/api/public-analytics.test.ts` (every route 200
+without a token and valid against its schema, 405 for each non-GET, `limit=1001`
+clamped with a cursor that yields the seeded set once, Yahoo rows absent, the
+overwrite event produced by the 0056 trigger, vintage fields and expanded members,
+gzip and `304`, the 101st request a `429`, `*` CORS, and the same over a real api
+process), `backend/tests/api/client-ip.test.ts`,
+`backend/tests/analytics-public-explain.test.ts`, and
+`scripts/tests/unit/analyst-sdk-readme-links.test.ts` (every route the SDK README
+lists exists in `contract/`, and every contract route is listed).

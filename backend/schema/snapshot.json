@@ -111,7 +111,8 @@
     "0089_revoke_runtime_delete.sql",
     "0090_stream_events_retention_comment.sql",
     "0091_rm_worker_wallet_evidence_insert.sql",
-    "0092_drop_swarm_judge_fault_injection.sql"
+    "0092_drop_swarm_judge_fault_injection.sql",
+    "0093_rm_app_overwrite_events_read.sql"
   ],
   "exclusions": {
     "roles": [
@@ -123,7 +124,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "fed908af5c497f7cb5a21d58900cba0f58e6e3245627ec307dfda31e057e2db2",
+  "contentHash": "f088cb0e187a3e9bb2cc9c90af7b33d8261a7b2d438f072ca7addb43e07c0154",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",

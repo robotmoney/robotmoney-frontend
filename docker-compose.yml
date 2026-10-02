@@ -320,6 +320,11 @@ services:
       # value must never be able to silently turn this back off.
       # scripts/tests/integration/smoke-compose-config.test.ts asserts this
       # resolves to "1" in every composition (base/smoke/stage).
+      # Issue #1095: with this set the api reads CF-Connecting-IP first (Cloudflare
+      # sets it and nginx passes it through) and honors X-Forwarded-For only from a
+      # LOOPBACK peer, which website-server (a docker-network address) is not. A
+      # stack with no Cloudflare in front therefore sees one client, the proxy's
+      # address, until it forwards CF-Connecting-IP itself. See D58.
       TRUST_PROXY: "1"
       # The handle/id namespace boot guard's two operator controls (issue #602):
       # its escape hatch and its wall-clock budget. ENUMERATED HERE BECAUSE THIS

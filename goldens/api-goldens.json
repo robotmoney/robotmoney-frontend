@@ -31764,7 +31764,8 @@
           },
           "extras": null
         }
-      ]
+      ],
+      "source": "regime_snapshots"
     },
     "/api/dashboards/research-signals/channel-divergence": {
       "signalKey": "channel-divergence",
@@ -166269,14 +166270,128 @@
         }
       ]
     },
-    "/api/version": {
-      "api": "0.4.0",
-      "commit": null
+    "/api/public/analytics/asset-prices": {
+      "schemaVersion": 1,
+      "limit": 3,
+      "excludedProviders": [
+        "yahoo"
+      ],
+      "rows": [
+        {
+          "price_date": "2026-07-10",
+          "symbol": "ROBOTMONEY",
+          "time_basis": "utc-daily-close",
+          "price_usd": 0.00123,
+          "currency": "USD",
+          "source": "geckoterminal",
+          "pool_key": "base_0xpool",
+          "token_address": "0x0000000000000000000000000000000000000001",
+          "observed_at": "2026-07-10T23:59:59.000Z",
+          "fetched_at": "2026-07-11T00:05:00.000Z",
+          "config_identity": "gecko:pinned-pools:v1"
+        },
+        {
+          "price_date": "2026-07-10",
+          "symbol": "USDC",
+          "time_basis": "utc-daily-close",
+          "price_usd": 1,
+          "currency": "USD",
+          "source": "pinned",
+          "pool_key": null,
+          "token_address": null,
+          "observed_at": "2026-07-10T23:59:59.000Z",
+          "fetched_at": "2026-07-11T00:05:00.000Z",
+          "config_identity": "pinned:usdc:v1"
+        }
+      ],
+      "nextCursor": null
     },
-    "/health": {
-      "status": "ok",
-      "env": "demo",
-      "db": "up"
+    "/api/public/analytics/overwrite-events": {
+      "schemaVersion": 1,
+      "limit": 3,
+      "excludedProviders": [
+        "yahoo"
+      ],
+      "events": [
+        {
+          "id": 1,
+          "table_name": "raw_indicator_history",
+          "operation": "update",
+          "natural_key": {
+            "date": "2026-07-10",
+            "indicator": "T10Y2Y"
+          },
+          "previous_row": {
+            "date": "2026-07-10",
+            "value": 0.49,
+            "source": "live",
+            "indicator": "T10Y2Y"
+          },
+          "replacement_row": {
+            "date": "2026-07-10",
+            "value": 0.47,
+            "source": "live",
+            "indicator": "T10Y2Y"
+          },
+          "recorded_at": "2026-10-02T16:49:31.705Z"
+        }
+      ],
+      "nextCursor": null
+    },
+    "/api/public/analytics/raw-history": {
+      "schemaVersion": 1,
+      "limit": 3,
+      "excludedProviders": [
+        "yahoo"
+      ],
+      "rows": [
+        {
+          "date": "2026-07-09",
+          "indicator": "T10Y2Y",
+          "value": 0.51,
+          "source": "live"
+        },
+        {
+          "date": "2026-07-10",
+          "indicator": "T10Y2Y",
+          "value": 0.47,
+          "source": "live"
+        },
+        {
+          "date": "2026-07-11",
+          "indicator": "T10Y2Y",
+          "value": 0.5,
+          "source": "live"
+        }
+      ],
+      "nextCursor": null
+    },
+    "/api/public/analytics/vintages": {
+      "schemaVersion": 1,
+      "limit": 3,
+      "excludedProviders": [
+        "yahoo"
+      ],
+      "vintages": [
+        {
+          "run_key": "5f0e5b1e-3c2b-4a2e-9a56-6f1f0c7f1a11",
+          "tool_id": "regime",
+          "asof": "2026-07-11",
+          "source_label": "live",
+          "knowledge_time_cutoff": "2026-07-11T06:00:00.000Z",
+          "market_time_cutoff": "2026-07-11",
+          "manifest_digest": "7a6d9028467d6e2dc65847776544dedbdbafdef51382567cb3abcded7cbec792",
+          "member_count": 0,
+          "build_identity": "rc-golden",
+          "methodology": {
+            "tool_id": "regime",
+            "version_label": "v1",
+            "config_digest": "a0da1fce57d0e4f9f0ae4e4cbe040d34dcc046255c6c8d18e97f55aaed0655f0"
+          },
+          "created_at": "2026-10-02T16:49:31.736Z"
+        }
+      ],
+      "nextCursor": null
     },
     "/api/swarm/brief": {
       "id": "0fa8a61a-c788-46ec-a64e-9afbaa1a1eab",
@@ -167904,6 +168019,15 @@
           ]
         }
       ]
+    },
+    "/api/version": {
+      "api": "0.4.0",
+      "commit": null
+    },
+    "/health": {
+      "status": "ok",
+      "env": "demo",
+      "db": "up"
     }
   }
 }
