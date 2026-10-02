@@ -1107,7 +1107,7 @@ export interface SchemaIdentity {
 /**
  * The keys §3 allows in `~/.env`, and nothing else: "the remote connection
  * (host, port, dbname); the runtime role passwords `rm_app`, `rm_worker` and
- * `rm_readonly`; `RM_ENV`; and `RM_CREDENTIALS`."
+ * `rm_readonly`; `RM_ENV`; `RM_CREDENTIALS`; and `COINGECKO_API_KEY`."
  *
  * The connection keys are spelled the way scripts/lib/env-role.ts's
  * `CONNECTION_TOKENS` reads them — the DigitalOcean panel's `host`, `port`,
@@ -1134,6 +1134,7 @@ export const ENV_FILE_ALLOWED_KEYS: readonly string[] = Object.freeze([
   "rm_readonly",
   "RM_ENV",
   "RM_CREDENTIALS",
+  "COINGECKO_API_KEY",
 ]);
 
 /**
