@@ -36,4 +36,11 @@ describe("COINGECKO_API_KEY reaches the stack through the documented boot", () =
       expect(block).toContain("COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}");
     });
   }
+
+  // Issue #1098: the ~/.env key must reach compose from the real call site, spread
+  // BEFORE the shell passthrough so an exported key wins.
+  test("smoke-main.ts merges the ~/.env key into extraComposeEnv ahead of the shell passthrough", () => {
+    const text = readFileSync(join(import.meta.dir, "..", "..", "lib", "smoke-main.ts"), "utf8");
+    expect(text).toMatch(/extraComposeEnv: \{[^}]*\.\.\.homeEnvComposeEnv\(homeEnv\)[^}]*\.\.\.smokePassthroughEnv\(process\.env\)[^}]*\}/s);
+  });
 });
