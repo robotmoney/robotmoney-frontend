@@ -118,6 +118,17 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     sizeHint: "about 1 KB",
   },
   {
+    id: "getRobotmoneyVaults",
+    method: "GET",
+    path: ROUTES.dashboards.robotmoneyVaults,
+    summary: "The four Robot Money vaults read from the deployment manifests",
+    description:
+      "Which Robot Money vaults exist (rmUSDC, rmPROTO, rmAGENT, rmRWA), which are paused, their risk labels, and the gateway, router and registry addresses, all read from the deployment manifests core writes under deployments/<chain>/. Answers 404 when no deployment manifest is configured. No address is hard-coded: a vault missing from the manifests is absent here.",
+    backs: ["/allocation"],
+    contractType: "{ asOf, network, contracts, vaults }",
+    sizeHint: "about 2 KB",
+  },
+  {
     id: "getAllocation",
     method: "GET",
     path: ROUTES.dashboards.allocation,

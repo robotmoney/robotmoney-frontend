@@ -98,7 +98,7 @@ export const VAULTS = [
   {
     slug: "rmagent",
     symbol: "rmAGENT",
-    name: "Agent Tokens",
+    name: "Small Cap Tokens",
     legacyName: "Agent Tokens",
     bucket: "agent_tokens",
     key: "agent-tokens",

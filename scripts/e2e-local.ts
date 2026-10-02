@@ -10,6 +10,7 @@
 // written, never put on a command line.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { composeArgs } from "./stack/config.ts";
 
 const root = join(import.meta.dir, "..");
 const PINNED_OPENCODE_VERSION = "1.18.1";
@@ -75,9 +76,9 @@ if (import.meta.main) {
   if (!project) {
     console.log("teardown skipped: the boot never logged its project (it refused before creating anything)");
   } else {
-    const logs = Bun.spawnSync(["docker", "compose", "-p", project, "--env-file", "/dev/null", "-f", "docker-compose.yml", "logs", "--no-color"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+    const logs = Bun.spawnSync(["docker", ...composeArgs(project), "logs", "--no-color"], { cwd: root, stdout: "pipe", stderr: "pipe" });
     await Bun.write(containerLog, logs.stdout.toString() + logs.stderr.toString());
-    run(["docker", "compose", "-p", project, "--env-file", "/dev/null", "-f", "docker-compose.yml", "down", "-v", "--remove-orphans"]);
+    run(["docker", ...composeArgs(project), "down", "-v", "--remove-orphans"]);
     run(["bun", "run", "scripts/smoke-clean.ts", "--project", project], { ...process.env, WEB_PORT: "1", POSTGRES_PORT: "1" });
     console.log(`teardown ${project}`);
   }
