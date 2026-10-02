@@ -224,19 +224,29 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MIN_DATE = "0001-01-01";
 const MAX_DATE = "9999-12-31";
 
+// A real calendar day in Postgres' date range. The ISO round-trip rejects
+// 2024-13-45 and 2023-02-29; the bounds reject 0000-01-01, which JS accepts and
+// Postgres' ::date does not.
+function isCalendarDate(v: string): boolean {
+  if (!DATE_RE.test(v) || v < MIN_DATE || v > MAX_DATE) return false;
+  const t = Date.parse(`${v}T00:00:00Z`);
+  return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === v;
+}
+
+// Postgres text cannot hold a NUL byte; it raises instead of storing or comparing.
+const hasNul = (v: string): boolean => v.includes("\u0000");
+
 function dateParam(url: URL, name: string): string | null {
   const v = url.searchParams.get(name);
   if (v === null) return null;
-  if (!DATE_RE.test(v) || Number.isNaN(Date.parse(`${v}T00:00:00Z`)) || new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) !== v) {
-    throw new BadRequest(`${name} must be a valid YYYY-MM-DD date`);
-  }
+  if (!isCalendarDate(v)) throw new BadRequest(`${name} must be a valid YYYY-MM-DD date`);
   return v;
 }
 
 function textParam(url: URL, name: string, maxLength = 128): string | null {
   const v = url.searchParams.get(name);
   if (v === null) return null;
-  if (v === "" || v.length > maxLength) throw new BadRequest(`${name} must be 1 to ${maxLength} characters`);
+  if (v === "" || v.length > maxLength || hasNul(v)) throw new BadRequest(`${name} must be 1 to ${maxLength} characters, without NUL`);
   return v;
 }
 
@@ -265,7 +275,8 @@ function decodeCursor(url: URL, shape: readonly ("date" | "text" | "id")[]): (st
     parts.length === shape.length &&
     parts.every((p, i) =>
       typeof p === "string" && p.length <= 256 &&
-      (shape[i] === "date" ? DATE_RE.test(p) : shape[i] === "id" ? /^\d{1,18}$/.test(p) : true),
+      !hasNul(p) &&
+      (shape[i] === "date" ? isCalendarDate(p) : shape[i] === "id" ? /^\d{1,18}$/.test(p) : true),
     );
   if (!ok) throw new BadRequest("cursor is not valid");
   return parts as string[];
@@ -547,6 +558,10 @@ export async function handlePublicAnalytics(req: Request, url: URL, clientIp: st
     return ok(req, await handler(url));
   } catch (err) {
     if (err instanceof BadRequest) return problem(400, err.message);
+    // A value that passed the checks above but Postgres still refuses is the
+    // caller's input, not a server fault: SQLSTATE class 22 is "data exception".
+    const code = (err as { code?: unknown } | null)?.code;
+    if (typeof code === "string" && code.startsWith("22")) return problem(400, "a parameter is out of range");
     throw err;
   }
 }

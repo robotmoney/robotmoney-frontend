@@ -1,7 +1,7 @@
 // packages/analyst-sdk is pure compute (issue #1095): no filesystem, no
 // database, no environment, no reach into the backend. Mechanical, not
 // conventional: this file scans every .ts under packages/analyst-sdk/src and
-// fails on the first forbidden import or `process.env` reference.
+// fails on the first forbidden import or environment/filesystem reference.
 //
 // Forbidden under packages/analyst-sdk/src:
 //   - an import of node:fs (or fs, node:fs/promises), postgres, bun:sqlite
@@ -9,7 +9,9 @@
 //   - an import of the backend-only extract modules (fetch-cache, source-ledger,
 //     geckoterminal, edgar-seed, floor-seed): the extractors reach the network
 //     and the ledger only through the injectable seam in extract/http.ts
-//   - any reference to process.env
+//   - node:child_process, worker_threads, net, http(s), os and similar modules
+//   - any reference to process.env, process["env"], Bun.env, Bun.file,
+//     import.meta.env, or destructuring of process/Bun
 //
 // Also asserted here: the SDK imports nothing from backend/src, and
 // backend/src/api imports nothing from packages/ (the API reaches the SDK only
@@ -44,15 +46,56 @@ function specifiers(code: string): string[] {
   return out;
 }
 
-/** Drop comment-only lines so prose that names a forbidden thing does not trip the scan. */
+/**
+ * Blank out comments with a small scanner that tracks string and template
+ * literals, so prose naming a forbidden thing does not trip the scan and a
+ * leading block comment cannot hide code on the same line. Newlines are kept.
+ */
 function codeOnly(text: string): string {
-  return text
-    .split("\n")
-    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
-    .join("\n");
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    const n = text[i + 1];
+    if (c === "/" && n === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+    } else if (c === "/" && n === "*") {
+      i += 2;
+      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) out += text[i++] === "\n" ? "\n" : "";
+      i += 2;
+      out += " ";
+    } else if (c === '"' || c === "'" || c === "`") {
+      out += c;
+      i++;
+      while (i < text.length && text[i] !== c) {
+        if (text[i] === "\\") out += text[i++];
+        out += text[i++] ?? "";
+      }
+      out += text[i++] ?? "";
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
 }
 
-const FORBIDDEN_MODULES = new Set(["node:fs", "fs", "node:fs/promises", "fs/promises", "postgres", "bun:sqlite"]);
+// Anything that reaches the filesystem, a process, the network stack or a
+// database. The SDK's own network access goes through the injected fetch.
+const FORBIDDEN_MODULES = new Set([
+  "node:fs", "fs", "node:fs/promises", "fs/promises", "postgres", "bun:sqlite",
+  "node:child_process", "child_process", "node:worker_threads", "worker_threads",
+  "node:cluster", "cluster", "node:net", "net", "node:http", "http", "node:https", "https",
+  "node:os", "os", "node:process", "process", "bun",
+]);
+// Environment and filesystem reach that needs no import.
+const FORBIDDEN_CODE: Array<[RegExp, string]> = [
+  [/\bprocess\s*(\.\s*env\b|\[\s*["'`]env["'`]\s*\])/, "references process.env"],
+  [/\bconst\s*\{[^}]*\}\s*=\s*(process|Bun|import\.meta)\b/, "destructures process, Bun or import.meta"],
+  [/\bBun\s*(\.\s*(env|file|write|spawn|spawnSync|\$)\b|\[)/, "uses Bun.env or Bun file/process access"],
+  [/\bimport\.meta\.env\b/, "references import.meta.env"],
+  [/\bDeno\s*\./, "uses Deno"],
+];
 const FORBIDDEN_PATH_PARTS = ["/db/", "/chain/", "/store/", "/cutover/"];
 // Extract-stage modules that stay in the backend (issue #1095 part B).
 const BACKEND_ONLY_EXTRACT = /(^|\/)(fetch-cache|source-ledger|geckoterminal|edgar-seed|floor-seed)(-generator)?(\.ts)?$/;
@@ -66,7 +109,7 @@ export function purityViolations(file: string, text: string): string[] {
     if (FORBIDDEN_PATH_PARTS.some((p) => `${spec}/`.includes(p))) found.push(`${file}: imports ${spec} (forbidden path)`);
     if (BACKEND_ONLY_EXTRACT.test(spec)) found.push(`${file}: imports ${spec} (backend-only extract module)`);
   }
-  if (/\bprocess\.env\b/.test(code)) found.push(`${file}: references process.env`);
+  for (const [re, what] of FORBIDDEN_CODE) if (re.test(code)) found.push(`${file}: ${what}`);
   return found;
 }
 
@@ -142,6 +185,14 @@ describe("analyst-sdk purity", () => {
       ["edgar-seed import in an extractor", 'import { loadEdgarSeed } from "./edgar-seed.ts";'],
       ["floor-seed import in an extractor", 'import { loadRawFloorSeed } from "./floor-seed.ts";'],
       ["process.env", "const k = process.env.API_KEY;"],
+      ['process["env"]', 'const k = process["env"].X;'],
+      ["destructured process", "const { env } = process;"],
+      ["Bun.env", "const k = Bun.env.X;"],
+      ["Bun.file", 'const f = Bun.file("x");'],
+      ["import.meta.env", "const k = import.meta.env.X;"],
+      ["node:child_process import", 'import a from "node:child_process";'],
+      ["import after a leading block comment", '/* c */ import fs from "node:fs";'],
+      ["import after a multi-line block comment", '/* a\n b */ import fs from "node:fs";'],
     ];
     for (const [name, code] of planted) {
       test(`flags ${name}`, () => {

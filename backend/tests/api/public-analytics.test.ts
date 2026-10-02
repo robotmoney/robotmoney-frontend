@@ -218,6 +218,21 @@ describe("limit and cursor", () => {
     expect(body.rows.map((r: any) => r.date)).toEqual([day(10), day(11), day(12)]);
   });
 
+  test("a well-formed but unparseable cursor, date or NUL byte is a 400, never a 500", async () => {
+    const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
+    for (const q of [
+      `cursor=${b64(["2024-99-99", "x"])}`,
+      `cursor=${b64(["2024-13-45", "X"])}`,
+      `cursor=${b64(["2024-01-01", "a\u0000b"])}`,
+      "from=0000-01-01",
+      "indicator=a%00b",
+    ]) {
+      const res = await get(`${P.rawHistory}?${q}`);
+      expect(res.status, q).toBe(400);
+    }
+    expect((await get(`${P.assetPrices}?symbol=a%00b`)).status).toBe(400);
+  });
+
   test("a bad limit, date, cursor or include is a 400 that names the problem", async () => {
     for (const q of ["limit=0", "limit=-1", "limit=abc", "limit=1.5", "from=2000-13-01", "to=yesterday", "cursor=%%%", "cursor=e30"]) {
       const res = await get(`${P.rawHistory}?${q}`);

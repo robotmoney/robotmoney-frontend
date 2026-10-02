@@ -120,6 +120,20 @@ jobs:
       - name: Install deps
         working-directory: backend
         run: bun install --frozen-lockfile
+      # Issue #1095 Part A: moving the pure compute into the SDK may change only
+      # the import lines of the three fidelity tests. Nothing else keeps that true.
+      - name: Fidelity tests changed import lines only (issue #1095)
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          bad=$(git diff --unified=0 FETCH_HEAD...HEAD -- backend/tests/regime-fidelity.test.ts backend/tests/backtest-correlations-fidelity.test.ts backend/tests/research-fidelity.test.ts \
+            | grep -E '^[+-][^+-]' | grep -vE '^[+-][[:space:]]*(import|export)[[:space:]].*|^[+-][[:space:]]*(\}[[:space:]]*)?from[[:space:]]|^[+-][[:space:]]*[A-Za-z_$][A-Za-z0-9_$]*,?[[:space:]]*$' || true)
+          if [ -n "$bad" ]; then echo "::error::fidelity tests changed beyond import lines:"; echo "$bad"; exit 1; fi
+      # The image copies packages/analyst-sdk before bun install. e2e builds it
+      # only after merge, so build it here to catch a broken COPY on the PR.
+      - name: Backend image builds (issue #1095)
+        run: docker build -f backend/Dockerfile -t backend-ci:pr .
       - name: Typecheck backend
         working-directory: backend
         run: bun run typecheck

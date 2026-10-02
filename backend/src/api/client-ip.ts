@@ -21,6 +21,8 @@
 //      `$proxy_add_x_forwarded_for` APPENDS the real peer, so the last entry is
 //      the proxy's own view of its immediate peer, never something the client
 //      fully controls: that held only while the sender really was nginx.
+// Residual risk (D58): CF-Connecting-IP is not tied to the peer. Cloudflare
+// overwrites it, but a client reaching the origin directly can set it.
 // A trusted-proxy request with neither usable header is the raw peer.
 //
 // Bun's `server.requestIP(req).address` reports an IPv4 peer in its

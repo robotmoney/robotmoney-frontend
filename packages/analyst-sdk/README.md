@@ -100,7 +100,7 @@ curl -s "$API/api/public/analytics/raw-history?indicator=T10Y2Y&from=2024-01-01&
 # asset prices
 curl -s "$API/api/public/analytics/asset-prices?symbol=ROBOTMONEY&from=2026-03-01&limit=5"
 
-# data vintages, newest page first by id; one vintage with its members expanded
+# data vintages, oldest first, by id; one vintage with its members expanded
 curl -s "$API/api/public/analytics/vintages?limit=5"
 curl -s "$API/api/public/analytics/vintages?run_key=<run_key>&tool_id=<tool_id>&include=members&limit=1000"
 

@@ -138,7 +138,7 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
     ["contract/src/index.ts", ["contract.yml"]],
     // Issue #1095: the SDK is its own gated workflow AND the backend's, because
     // the backend re-exports it and copies it into its image.
-    ["packages/analyst-sdk/src/run.ts", ["analyst-sdk.yml", "backend.yml"]],
+    ["packages/analyst-sdk/src/run.ts", ["analyst-sdk.yml", "backend.yml", "research-pipeline.yml"]],
     ["scripts/tests/unit/smoke-env.test.ts", ["integration.yml"]],
     ["scripts/lib/swarm/inference.ts", ["integration.yml", "onboarding-eval-rails.yml"]],
     ["scripts/lib/member-agent/Dockerfile", ["integration.yml", "onboarding-eval-rails.yml"]],

@@ -4976,7 +4976,14 @@ changes nothing about who may write.
   sets `CF-Connecting-IP` on every proxied request and nginx passes it through.
   A stack with no Cloudflare in front now resolves every client to its proxy's
   address, so on such a stack (a local smoke) the limiter and the comments and
-  submissions `ip_hash` see one client. That is the safe direction to be wrong in.
+  submissions `ip_hash` see one client. That is the safe direction to be wrong in
+  for the no-Cloudflare case only. Residual risk: `CF-Connecting-IP` is taken from
+  any peer, and nginx neither sets nor strips it, so a client that reaches the api
+  or website-server host port directly (both are published) can choose its own
+  rate-limit bucket and forge `ip_hash`. Cloudflare overwrites the header on
+  proxied traffic, so the spoof needs direct origin access. Closing it means a
+  Cloudflare-range allowlist or an nginx `real_ip` rewrite at the origin, or
+  not publishing the origin ports.
 - **Regime outputs are not duplicated.** They and the correlations stay on
   `GET /api/dashboards/regime-snapshots?include=backtest`. That response now states
   `source`, `regime_snapshots` or `ledger`, which says which read path
