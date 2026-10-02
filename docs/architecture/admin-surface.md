@@ -217,8 +217,7 @@ copied into telemetry JSON.
 Raw history is not admin-only: the same rows, and asset prices, data vintages and
 overwrite events, are public and tokenless under `/api/public/analytics/` (D58). The
 admin raw-series route below is the allowlisted, in-console view of one indicator;
-the public routes are for anyone auditing or rebuilding the inputs, and withhold
-Yahoo-sourced rows, which the admin view still shows.
+the public routes are for anyone auditing or rebuilding the inputs.
 
 ### US-R3 — Navigate research datapoints
 

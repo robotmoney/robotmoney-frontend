@@ -166273,45 +166273,52 @@
     "/api/public/analytics/asset-prices": {
       "schemaVersion": 1,
       "limit": 3,
-      "excludedProviders": [
-        "yahoo"
-      ],
       "rows": [
         {
-          "price_date": "2026-07-10",
-          "symbol": "ROBOTMONEY",
+          "price_date": "2026-10-02",
+          "symbol": "BNKR",
           "time_basis": "utc-daily-close",
-          "price_usd": 0.00123,
+          "price_usd": 0.000405050061599593,
           "currency": "USD",
           "source": "geckoterminal",
-          "pool_key": "base_0xpool",
-          "token_address": "0x0000000000000000000000000000000000000001",
-          "observed_at": "2026-07-10T23:59:59.000Z",
-          "fetched_at": "2026-07-11T00:05:00.000Z",
-          "config_identity": "gecko:pinned-pools:v1"
+          "pool_key": "0xcdd442e2de893c07146b2f1072f8e077559f9aa4",
+          "token_address": "0x22af33fe49fd1fa80c7149773dde5890d3c76f3b",
+          "observed_at": "2026-10-03T00:00:00.000Z",
+          "fetched_at": "2026-10-02T20:14:49.157Z",
+          "config_identity": "geckoterminal:pool:0xcdd442e2de893c07146b2f1072f8e077559f9aa4"
         },
         {
-          "price_date": "2026-07-10",
-          "symbol": "USDC",
+          "price_date": "2026-10-02",
+          "symbol": "ETH",
+          "time_basis": "utc-daily-close",
+          "price_usd": 2668.13,
+          "currency": "USD",
+          "source": "geckoterminal",
+          "pool_key": "0x6c561b446416e1a00e8e93e221854d6ea4171372",
+          "token_address": "0x4200000000000000000000000000000000000006",
+          "observed_at": "2026-10-03T00:00:00.000Z",
+          "fetched_at": "2026-10-02T20:14:43.207Z",
+          "config_identity": "geckoterminal:pool:0x6c561b446416e1a00e8e93e221854d6ea4171372"
+        },
+        {
+          "price_date": "2026-10-02",
+          "symbol": "GIZA-SS1",
           "time_basis": "utc-daily-close",
           "price_usd": 1,
           "currency": "USD",
           "source": "pinned",
           "pool_key": null,
           "token_address": null,
-          "observed_at": "2026-07-10T23:59:59.000Z",
-          "fetched_at": "2026-07-11T00:05:00.000Z",
-          "config_identity": "pinned:usdc:v1"
+          "observed_at": "2026-10-03T00:00:00.000Z",
+          "fetched_at": "2026-10-02T20:14:49.178Z",
+          "config_identity": "pinned:usd:1.00"
         }
       ],
-      "nextCursor": null
+      "nextCursor": "WyIyMDI2LTEwLTAyIiwiR0laQS1TUzEiLCJ1dGMtZGFpbHktY2xvc2UiXQ"
     },
     "/api/public/analytics/overwrite-events": {
       "schemaVersion": 1,
       "limit": 3,
-      "excludedProviders": [
-        "yahoo"
-      ],
       "events": [
         {
           "id": 1,
@@ -166341,57 +166348,85 @@
     "/api/public/analytics/raw-history": {
       "schemaVersion": 1,
       "limit": 3,
-      "excludedProviders": [
-        "yahoo"
-      ],
       "rows": [
         {
-          "date": "2026-07-09",
-          "indicator": "T10Y2Y",
-          "value": 0.51,
+          "date": "1871-02-01",
+          "indicator": "SHILLER_CAPE",
+          "value": 10.92,
           "source": "live"
         },
         {
-          "date": "2026-07-10",
-          "indicator": "T10Y2Y",
-          "value": 0.47,
+          "date": "1871-03-01",
+          "indicator": "SHILLER_CAPE",
+          "value": 11.19,
           "source": "live"
         },
         {
-          "date": "2026-07-11",
-          "indicator": "T10Y2Y",
-          "value": 0.5,
+          "date": "1871-04-01",
+          "indicator": "SHILLER_CAPE",
+          "value": 12.05,
           "source": "live"
         }
       ],
-      "nextCursor": null
+      "nextCursor": "WyIxODcxLTA0LTAxIiwiU0hJTExFUl9DQVBFIl0"
     },
     "/api/public/analytics/vintages": {
       "schemaVersion": 1,
       "limit": 3,
-      "excludedProviders": [
-        "yahoo"
-      ],
       "vintages": [
         {
-          "run_key": "5f0e5b1e-3c2b-4a2e-9a56-6f1f0c7f1a11",
-          "tool_id": "regime",
-          "asof": "2026-07-11",
+          "run_key": "7571423b-80e1-4f37-bce8-37ded0d16684",
+          "tool_id": "research",
+          "asof": "2026-10-02",
           "source_label": "live",
-          "knowledge_time_cutoff": "2026-07-11T06:00:00.000Z",
-          "market_time_cutoff": "2026-07-11",
-          "manifest_digest": "7a6d9028467d6e2dc65847776544dedbdbafdef51382567cb3abcded7cbec792",
-          "member_count": 0,
-          "build_identity": "rc-golden",
+          "knowledge_time_cutoff": "2026-10-02T20:14:32.747Z",
+          "market_time_cutoff": "2026-10-02",
+          "manifest_digest": "9e4675f9249d8eb8cea09bc5c764d38f70dc416ef55ed79207b3c595b2aeab4c",
+          "member_count": 42984,
+          "build_identity": "pkg:0.1.0+bun:1.3.5",
           "methodology": {
-            "tool_id": "regime",
-            "version_label": "v1",
-            "config_digest": "a0da1fce57d0e4f9f0ae4e4cbe040d34dcc046255c6c8d18e97f55aaed0655f0"
+            "tool_id": "research",
+            "version_label": "v3",
+            "config_digest": "8be9c8241c6df38d5ad43b1123687e0194c43ceb340f3874512d5171dc22d28e"
           },
-          "created_at": "2026-10-02T16:49:31.736Z"
+          "created_at": "2026-10-02T20:14:33.073Z"
+        },
+        {
+          "run_key": "703d79f3-d36c-47c7-833f-39259062a9ab",
+          "tool_id": "research",
+          "asof": "2026-09-18",
+          "source_label": "live",
+          "knowledge_time_cutoff": "2026-10-02T20:14:39.716Z",
+          "market_time_cutoff": "2026-09-18",
+          "manifest_digest": "fc60d3eaf025b2a26357b510675a2cab51a7b947603a6a8053c30fedf48f4078",
+          "member_count": 42869,
+          "build_identity": "pkg:0.1.0+bun:1.3.5",
+          "methodology": {
+            "tool_id": "research",
+            "version_label": "v3",
+            "config_digest": "8be9c8241c6df38d5ad43b1123687e0194c43ceb340f3874512d5171dc22d28e"
+          },
+          "created_at": "2026-10-02T20:14:40.028Z"
+        },
+        {
+          "run_key": "1f74b774-0a6d-4f0d-bcc7-9aee644b1829",
+          "tool_id": "research",
+          "asof": "2026-09-19",
+          "source_label": "live",
+          "knowledge_time_cutoff": "2026-10-02T20:14:42.861Z",
+          "market_time_cutoff": "2026-09-19",
+          "manifest_digest": "92685f5b95c966a168af13d19b80d0231daf2d27f276ca602d288290d8a0ba50",
+          "member_count": 42870,
+          "build_identity": "pkg:0.1.0+bun:1.3.5",
+          "methodology": {
+            "tool_id": "research",
+            "version_label": "v3",
+            "config_digest": "8be9c8241c6df38d5ad43b1123687e0194c43ceb340f3874512d5171dc22d28e"
+          },
+          "created_at": "2026-10-02T20:14:43.169Z"
         }
       ],
-      "nextCursor": null
+      "nextCursor": "WyIzIl0"
     },
     "/api/swarm/brief": {
       "id": "0fa8a61a-c788-46ec-a64e-9afbaa1a1eab",

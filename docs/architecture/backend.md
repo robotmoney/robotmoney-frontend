@@ -90,7 +90,7 @@ Four distinctions, kept deliberately separate:
   credential under `/api/public/analytics/`, a prefix of its own (not under
   `/api/analytics/`, which stays analytics-provider-only and credentialed). The
   routes are GET only, rate limited per client ip per process, cacheable, gzip
-  over 256 KB, and withhold Yahoo-sourced rows; regime outputs stay on
+  over 256 KB; regime outputs stay on
   `GET /api/dashboards/regime-snapshots`, which states its `source`. Reading
   `analytics_overwrite_events` as `rm_app` is migration 0093's one grant. The
   write side is unchanged: only the analytics provider writes this data.

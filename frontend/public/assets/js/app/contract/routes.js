@@ -367,8 +367,8 @@ export const ROUTES = {
     overwriteEvents: "/api/public/analytics/overwrite-events", // GET ?table_name=&limit=&cursor= → recorded revisions
   },
 
-  // Analytics-provider ingestion boundary (issue #106). Every route requires the
-  // ANALYTICS_TOKEN bearer (analytics-provider role); updater processes call
+  // Analytics-provider ingestion boundary (issue #106). Every route requires an
+  // analytics-provider store token (D52); updater processes call
   // these instead of writing SQL. Mutations validate the whole payload before
   // opening a transaction and are idempotent on their natural keys. There is NO
   // generic SQL-over-HTTP endpoint.

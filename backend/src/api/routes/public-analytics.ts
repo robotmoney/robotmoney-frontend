@@ -18,12 +18,9 @@
 // route here writes. A bearer token, if one is sent, is ignored: the body is
 // the same with or without it.
 //
-// WHAT IT WITHHOLDS. Yahoo-sourced rows (D58): the indicators whose registry
-// source is yahoo, from raw-history, from the vintage members and from
-// overwrite events on raw_indicator_history, and any asset_prices row whose
-// provider is yahoo. The set is derived from the indicator registry and the
-// source-tolerance table, not from configuration, so it cannot be changed at
-// deploy time and cannot drift from the extractors.
+// WHAT IT SERVES FROM WHICH PROVIDER. All of it. Yahoo-sourced rows are served
+// like any other (D58: the repo operator signed off on 2026-10-02), so no route
+// filters by provider and no response lists excluded providers.
 //
 // WHAT EVERY LIST RESPONSE CARRIES. `schemaVersion`, the effective `limit`
 // (default 100, cap 1000, anything above is clamped) and `nextCursor` (opaque,
@@ -46,8 +43,6 @@ import {
 } from "@robotmoney/contract";
 import { sql } from "../../db/client.ts";
 import { on, registerQuery } from "../../db/registry.ts";
-import { INDICATORS } from "../../analytics/analyze/indicators.ts";
-import { SOURCE_TOLERANCES } from "../../analytics/source-tolerance.ts";
 import { createRateLimiter } from "../rate-limit.ts";
 
 const ROUTE = "src/api/routes/public-analytics";
@@ -55,8 +50,15 @@ const ROUTE = "src/api/routes/public-analytics";
 export const PUBLIC_ANALYTICS_RATE_MAX = 100;
 export const PUBLIC_ANALYTICS_RATE_WINDOW_MS = 60_000;
 // overwrite-events rows carry whole previous/replacement rows, and a
-// regime_snapshots row is ~0.5 MB. A page stops adding rows once this many
-// bytes are in it (it always holds at least one), and says so with a cursor.
+// regime_snapshots row is ~0.5 MB. The bound is applied IN SQL, before any row
+// reaches this process: a running sum of pg_column_size(previous_row) +
+// pg_column_size(replacement_row) over the page window keeps rows only while the
+// sum BEFORE them is under OVERWRITE_PAGE_STORED_BYTES (so a page always holds
+// the first row, and says so with a cursor when it stops short). pg_column_size
+// is the stored (possibly compressed) size and reads no TOAST data, and the
+// window only buffers TOAST pointers, so only the rows kept are ever detoasted. Stored size understates JSON text size, so the in-process
+// OVERWRITE_PAGE_BYTE_BUDGET stays as a backstop on the serialized text.
+export const OVERWRITE_PAGE_STORED_BYTES = 1024 * 1024;
 const OVERWRITE_PAGE_BYTE_BUDGET = 8 * 1024 * 1024;
 
 const limiter = createRateLimiter({ max: PUBLIC_ANALYTICS_RATE_MAX, windowMs: PUBLIC_ANALYTICS_RATE_WINDOW_MS });
@@ -64,24 +66,6 @@ const limiter = createRateLimiter({ max: PUBLIC_ANALYTICS_RATE_MAX, windowMs: PU
 export function _resetPublicAnalyticsRateLimitForTests(): void {
   limiter.reset();
 }
-
-// ── What is withheld (D58) ──────────────────────────────────────────────────
-
-/** raw_indicator_history ids whose registry source is Yahoo. */
-export function yahooIndicatorIds(): string[] {
-  return INDICATORS.filter((i) => i.source === "yahoo").map((i) => i.id);
-}
-
-/** Every ledger source_key backed by Yahoo: the registry's, plus the research and backtest overlays D56 tolerances name. */
-export function yahooSourceKeys(): string[] {
-  const keys = new Set(yahooIndicatorIds().map((id) => `raw_indicator_history:${id}`));
-  for (const [key, tolerance] of Object.entries(SOURCE_TOLERANCES)) {
-    if (tolerance.basis.startsWith("yahoo")) keys.add(key);
-  }
-  return [...keys].sort();
-}
-
-const EXCLUDED_PROVIDERS = ["yahoo"];
 
 // ── Registered queries ──────────────────────────────────────────────────────
 // ORDER BY names the TABLE's column (`raw_indicator_history.date`), never the
@@ -96,17 +80,16 @@ const readRawHistory = registerQuery({
   object: "raw_indicator_history",
   privileges: ["SELECT"],
   site: "src/api/routes/public-analytics:listRawHistory",
-  purpose: "Page raw_indicator_history by (date, indicator) for GET /api/public/analytics/raw-history, withholding Yahoo-sourced indicators.",
+  purpose: "Page raw_indicator_history by (date, indicator) for GET /api/public/analytics/raw-history.",
   callers: [ROUTE],
   probe: {
     statement: `SELECT date::text AS date, indicator, value, source FROM raw_indicator_history
       WHERE (date, indicator) > ($1::date, $2::text)
         AND date >= $3::date AND date <= $4::date
         AND ($5::text IS NULL OR indicator = $6::text)
-        AND indicator <> ALL($7::text[])
       ORDER BY raw_indicator_history.date, raw_indicator_history.indicator
-      LIMIT $8`,
-    params: ["0001-01-01", "", "0001-01-01", "9999-12-31", null, null, "{}", 2],
+      LIMIT $7`,
+    params: ["0001-01-01", "", "0001-01-01", "9999-12-31", null, null, 2],
   },
 });
 
@@ -115,7 +98,7 @@ const readAssetPrices = registerQuery({
   object: "asset_prices",
   privileges: ["SELECT"],
   site: "src/api/routes/public-analytics:listAssetPrices",
-  purpose: "Page asset_prices by (price_date, symbol, time_basis) for GET /api/public/analytics/asset-prices, withholding Yahoo-sourced rows.",
+  purpose: "Page asset_prices by (price_date, symbol, time_basis) for GET /api/public/analytics/asset-prices.",
   callers: [ROUTE],
   probe: {
     statement: `SELECT price_date::text AS price_date, symbol, time_basis, price_usd::float8 AS price_usd, currency, source,
@@ -124,7 +107,6 @@ const readAssetPrices = registerQuery({
       WHERE (price_date, symbol, time_basis) > ($1::date, $2::text, $3::text)
         AND price_date >= $4::date AND price_date <= $5::date
         AND ($6::text IS NULL OR symbol = $7::text)
-        AND lower(source) NOT LIKE '%yahoo%'
       ORDER BY asset_prices.price_date, asset_prices.symbol, asset_prices.time_basis
       LIMIT $8`,
     params: ["0001-01-01", "", "", "0001-01-01", "9999-12-31", null, null, 2],
@@ -179,7 +161,7 @@ const readVintageMembers = registerQuery({
   object: "analytics_vintage_members",
   privileges: ["SELECT"],
   site: "src/api/routes/public-analytics:listVintageMembers",
-  purpose: "Page one vintage's members, each id range expanded to one row per source_value_versions id, withholding Yahoo-backed source keys.",
+  purpose: "Page one vintage's members, each id range expanded to one row per source_value_versions id.",
   callers: [ROUTE],
   probe: {
     statement: `SELECT m.source_key, g.id::text AS source_value_version_id
@@ -190,29 +172,39 @@ const readVintageMembers = registerQuery({
       ) AS g(id)
       WHERE m.vintage_id = $2::bigint
         AND COALESCE(m.last_source_value_version_id, m.source_value_version_id) > $3::bigint
-        AND m.source_key <> ALL($4::text[])
       ORDER BY m.source_value_version_id, g.id
-      LIMIT $5`,
-    params: [0, 0, 0, "{}", 2],
+      LIMIT $4`,
+    params: [0, 0, 0, 2],
   },
 });
+
+const OVERWRITE_STATEMENT = `WITH win AS (
+        SELECT id, table_name, operation, natural_key, previous_row, replacement_row, recorded_at,
+            COALESCE(pg_column_size(previous_row), 0) + COALESCE(pg_column_size(replacement_row), 0) AS stored_bytes
+          FROM analytics_overwrite_events
+          WHERE id > $1::bigint
+            AND ($2::text IS NULL OR table_name = $3::text)
+          ORDER BY analytics_overwrite_events.id
+          LIMIT $4
+      ), sized AS (
+        SELECT win.*, sum(stored_bytes) OVER (ORDER BY id) AS running_bytes, count(*) OVER () AS window_rows FROM win
+      )
+      SELECT id::text AS id, table_name, operation, natural_key, previous_row, replacement_row, recorded_at,
+          window_rows::int AS window_rows
+        FROM sized
+        WHERE running_bytes - stored_bytes < $5::bigint
+        ORDER BY sized.id`;
 
 const readOverwriteEvents = registerQuery({
   role: "rm_app",
   object: "analytics_overwrite_events",
   privileges: ["SELECT"],
   site: "src/api/routes/public-analytics:listOverwriteEvents",
-  purpose: "Page recorded revisions by id for GET /api/public/analytics/overwrite-events, withholding Yahoo-sourced raw_indicator_history rows.",
+  purpose: "Page recorded revisions by id for GET /api/public/analytics/overwrite-events, bounded in SQL by the stored size of the rows it returns.",
   callers: [ROUTE],
   probe: {
-    statement: `SELECT id::text AS id, table_name, operation, natural_key, previous_row, replacement_row, recorded_at
-      FROM analytics_overwrite_events
-      WHERE id > $1::bigint
-        AND ($2::text IS NULL OR table_name = $3::text)
-        AND NOT (table_name = 'raw_indicator_history' AND natural_key->>'indicator' = ANY($4::text[]))
-      ORDER BY analytics_overwrite_events.id
-      LIMIT $5`,
-    params: [0, null, null, "{}", 2],
+    statement: OVERWRITE_STATEMENT,
+    params: [0, null, null, 2, 1048576],
   },
 });
 
@@ -297,7 +289,6 @@ async function rawHistory(url: URL) {
       WHERE (date, indicator) > (${cursor[0]}::date, ${cursor[1]}::text)
         AND date >= ${from}::date AND date <= ${to}::date
         AND (${indicator}::text IS NULL OR indicator = ${indicator}::text)
-        AND indicator <> ALL(${yahooIndicatorIds()}::text[])
       ORDER BY raw_indicator_history.date, raw_indicator_history.indicator
       LIMIT ${limit + 1}`;
   const page = rows.slice(0, limit);
@@ -305,7 +296,6 @@ async function rawHistory(url: URL) {
   return {
     schemaVersion: PUBLIC_ANALYTICS_SCHEMA_VERSION,
     limit,
-    excludedProviders: EXCLUDED_PROVIDERS,
     rows: page.map((r) => ({ date: r.date, indicator: r.indicator, value: Number(r.value), source: r.source })),
     nextCursor: rows.length > limit && last ? encodeCursor([last.date, last.indicator]) : null,
   };
@@ -327,7 +317,6 @@ async function assetPrices(url: URL) {
       WHERE (price_date, symbol, time_basis) > (${cursor[0]}::date, ${cursor[1]}::text, ${cursor[2]}::text)
         AND price_date >= ${from}::date AND price_date <= ${to}::date
         AND (${symbol}::text IS NULL OR symbol = ${symbol}::text)
-        AND lower(source) NOT LIKE '%yahoo%'
       ORDER BY asset_prices.price_date, asset_prices.symbol, asset_prices.time_basis
       LIMIT ${limit + 1}`;
   const page = rows.slice(0, limit);
@@ -335,7 +324,6 @@ async function assetPrices(url: URL) {
   return {
     schemaVersion: PUBLIC_ANALYTICS_SCHEMA_VERSION,
     limit,
-    excludedProviders: EXCLUDED_PROVIDERS,
     rows: page.map((r) => ({
       price_date: r.price_date,
       symbol: r.symbol,
@@ -408,7 +396,6 @@ async function vintages(url: URL) {
   return {
     schemaVersion: PUBLIC_ANALYTICS_SCHEMA_VERSION,
     limit,
-    excludedProviders: EXCLUDED_PROVIDERS,
     vintages: out,
     nextCursor: !withMembers && rows.length > limit && last ? encodeCursor([last.id]) : null,
   };
@@ -425,7 +412,6 @@ async function vintageMembers(url: URL, vintageId: string, limit: number) {
       ) AS g(id)
       WHERE m.vintage_id = ${vintageId}::bigint
         AND COALESCE(m.last_source_value_version_id, m.source_value_version_id) > ${after}::bigint
-        AND m.source_key <> ALL(${yahooSourceKeys()}::text[])
       ORDER BY m.source_value_version_id, g.id
       LIMIT ${limit + 1}`;
   const page = rows.slice(0, limit);
@@ -445,22 +431,32 @@ async function overwriteEvents(url: URL) {
     throw new BadRequest(`table_name must be one of ${OVERWRITE_TABLES.join(", ")}`);
   }
   const cursor = decodeCursor(url, ["id"]);
-  const rows = await on(sql, readOverwriteEvents)<{
+  const all = await on(sql, readOverwriteEvents)<{
     id: string; table_name: string; operation: string; natural_key: unknown; previous_row: unknown;
-    replacement_row: unknown; recorded_at: Date;
-  }>`
-    SELECT id::text AS id, table_name, operation, natural_key, previous_row, replacement_row, recorded_at
-      FROM analytics_overwrite_events
-      WHERE id > ${cursor?.[0] ?? "0"}::bigint
-        AND (${tableName}::text IS NULL OR table_name = ${tableName}::text)
-        AND NOT (table_name = 'raw_indicator_history' AND natural_key->>'indicator' = ANY(${yahooIndicatorIds()}::text[]))
-      ORDER BY analytics_overwrite_events.id
-      LIMIT ${limit + 1}`;
+    replacement_row: unknown; recorded_at: Date; window_rows: number;
+  }>`WITH win AS (
+        SELECT id, table_name, operation, natural_key, previous_row, replacement_row, recorded_at,
+            COALESCE(pg_column_size(previous_row), 0) + COALESCE(pg_column_size(replacement_row), 0) AS stored_bytes
+          FROM analytics_overwrite_events
+          WHERE id > ${cursor?.[0] ?? "0"}::bigint
+            AND (${tableName}::text IS NULL OR table_name = ${tableName}::text)
+          ORDER BY analytics_overwrite_events.id
+          LIMIT ${limit + 1}
+      ), sized AS (
+        SELECT win.*, sum(stored_bytes) OVER (ORDER BY id) AS running_bytes, count(*) OVER () AS window_rows FROM win
+      )
+      SELECT id::text AS id, table_name, operation, natural_key, previous_row, replacement_row, recorded_at,
+          window_rows::int AS window_rows
+        FROM sized
+        WHERE running_bytes - stored_bytes < ${OVERWRITE_PAGE_STORED_BYTES}::bigint
+        ORDER BY sized.id`;
+  const rows = all.slice(0, limit);
+  const windowRows = all[0]?.window_rows ?? 0;
   const events: Record<string, unknown>[] = [];
   let bytes = 0;
-  let more = rows.length > limit;
+  let more = windowRows > rows.length;
   let lastId = "";
-  for (const r of rows.slice(0, limit)) {
+  for (const r of rows) {
     const event = {
       id: Number(r.id),
       table_name: r.table_name,
@@ -481,7 +477,6 @@ async function overwriteEvents(url: URL) {
   return {
     schemaVersion: PUBLIC_ANALYTICS_SCHEMA_VERSION,
     limit,
-    excludedProviders: EXCLUDED_PROVIDERS,
     events,
     nextCursor: more && lastId ? encodeCursor([lastId]) : null,
   };

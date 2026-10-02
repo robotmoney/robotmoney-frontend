@@ -9,8 +9,6 @@ export const PUBLIC_ANALYTICS_SCHEMAS: Record<string, string>;
 export interface PublicAnalyticsPage {
   schemaVersion: 1;
   limit: number;
-  /** Providers whose rows are withheld (D58). */
-  excludedProviders: string[];
   nextCursor: string | null;
 }
 

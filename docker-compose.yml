@@ -324,10 +324,9 @@ services:
       # sets it and nginx passes it through) and honors X-Forwarded-For only from a
       # LOOPBACK peer, which website-server (a docker-network address) is not. A
       # stack with no Cloudflare in front therefore sees one client, the proxy's
-      # address, until it forwards CF-Connecting-IP itself. The header is taken from
-      # any peer, so a client that reaches a published origin port directly can pick
-      # its own bucket and ip_hash; Cloudflare only overwrites it on proxied traffic.
-      # See D58.
+      # address, until it forwards CF-Connecting-IP itself. The api port is
+      # unreachable except through the Cloudflare to nginx path, so the header is
+      # always the value Cloudflare wrote. See D58.
       TRUST_PROXY: "1"
       # The handle/id namespace boot guard's two operator controls (issue #602):
       # its escape hatch and its wall-clock budget. ENUMERATED HERE BECAUSE THIS

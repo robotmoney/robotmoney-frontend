@@ -9,8 +9,8 @@ designed so each becomes its own repo via `git filter-repo`, with no code change
 
 ```
 robotmoney-frontend/
-  contract/    # the ONLY thing shared across the boundary: route paths + DTO types
-  packages/analyst-sdk/  # pure regime compute (backend re-exports it); installs and runs alone, see D57
+  contract/    # the shared seam for the frontend/backend boundary: route paths + DTO types (D10, D23, D43)
+  packages/analyst-sdk/  # second shared seam beside contract/: pure regime compute (backend re-exports it); installs and runs alone, see D57
   frontend/    # buildless SPA (static files): shell, views, Alpine, CSS, assets
   backend/     # Bun API (Bun.serve) + Postgres task queue/workers + SQL migrations (owns the DB)
   docs/        # this documentation

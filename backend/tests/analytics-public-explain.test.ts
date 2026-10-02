@@ -137,14 +137,14 @@ test("seed enough rows that a missing index would show", async () => {
 }, 120_000);
 
 test("raw-history page: an index scan on the primary key, ordered by it, no sort and no sequential scan", async () => {
-  const nodes = await plan("src/api/routes/public-analytics:listRawHistory", ["1990-06-01", "EX_2", "0001-01-01", "9999-12-31", null, null, "{VIX}", 1001]);
+  const nodes = await plan("src/api/routes/public-analytics:listRawHistory", ["1990-06-01", "EX_2", "0001-01-01", "9999-12-31", null, null, 1001]);
   expect(indexes(nodes)).toContain("raw_indicator_history_pkey");
   expect(types(nodes)).not.toContain("Sort");
   expect(types(nodes)).not.toContain("Seq Scan");
 });
 
 test("raw-history page filtered to one indicator is still a bounded index scan", async () => {
-  const nodes = await plan("src/api/routes/public-analytics:listRawHistory", ["1990-06-01", "", "0001-01-01", "9999-12-31", "EX_2", "EX_2", "{VIX}", 1001]);
+  const nodes = await plan("src/api/routes/public-analytics:listRawHistory", ["1990-06-01", "", "0001-01-01", "9999-12-31", "EX_2", "EX_2", 1001]);
   expect(types(nodes)).not.toContain("Sort");
   expect(types(nodes)).not.toContain("Seq Scan");
 });
@@ -157,14 +157,14 @@ test("asset-prices page: an index scan on the primary key, no sort and no sequen
 });
 
 test("overwrite-events page by id: an index scan on the primary key, no sort and no sequential scan", async () => {
-  const nodes = await plan("src/api/routes/public-analytics:listOverwriteEvents", [15000, null, null, "{VIX}", 1001]);
+  const nodes = await plan("src/api/routes/public-analytics:listOverwriteEvents", [15000, null, null, 1001, 1048576]);
   expect(indexes(nodes)).toContain("analytics_overwrite_events_pkey");
   expect(types(nodes)).not.toContain("Sort");
   expect(types(nodes)).not.toContain("Seq Scan");
 });
 
 test("overwrite-events page filtered by table_name: the primary key scan filters, with no sort and no sequential scan", async () => {
-  const nodes = await plan("src/api/routes/public-analytics:listOverwriteEvents", [15000, "regime_snapshots", "regime_snapshots", "{VIX}", 1001]);
+  const nodes = await plan("src/api/routes/public-analytics:listOverwriteEvents", [15000, "regime_snapshots", "regime_snapshots", 1001, 1048576]);
   expect(types(nodes)).not.toContain("Sort");
   expect(types(nodes)).not.toContain("Seq Scan");
 });
@@ -185,7 +185,7 @@ test("vintages filtered by run_key reach the run through its unique index", asyn
 
 test("vintage members: the (vintage_id, source_value_version_id) index supplies the order, so the page does not sort the expansion", async () => {
   const [target] = await fixtureDb<{ id: string }[]>`SELECT min(id)::text AS id FROM analytics_data_vintages`;
-  const nodes = await plan("src/api/routes/public-analytics:listVintageMembers", [0, Number(target!.id), 0, "{raw_indicator_history:VIX}", 1001]);
+  const nodes = await plan("src/api/routes/public-analytics:listVintageMembers", [0, Number(target!.id), 0, 1001]);
   expect(types(nodes)).not.toContain("Seq Scan");
   expect(nodes.filter((n) => n["Node Type"] === "Sort")).toEqual([]);
   expect(indexes(nodes).some((i) => i.startsWith("analytics_vintage_members_"))).toBe(true);

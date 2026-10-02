@@ -23,9 +23,28 @@ export interface RateLimiter {
   reset(): void;
 }
 
-export function createRateLimiter(opts: { max: number; windowMs: number }): RateLimiter {
+/** Most distinct keys held at once. A flood of spoofed or rotating ips cannot grow the map past this. */
+export const DEFAULT_MAX_KEYS = 10_000;
+
+export function createRateLimiter(opts: { max: number; windowMs: number; maxKeys?: number }): RateLimiter {
+  const maxKeys = opts.maxKeys ?? DEFAULT_MAX_KEYS;
+  // Insertion order is recency order: every touch deletes then re-sets the key,
+  // so the first key in the map is the least recently seen one.
   const log = new Map<string, number[]>();
   let sweepCounter = 0;
+
+  // Store a key's window, evicting the oldest-seen keys first when a NEW key
+  // would take the map past maxKeys. An evicted ip starts a fresh window, which
+  // is the safe direction: the cap bounds memory, it does not tighten the limit.
+  function put(key: string, timestamps: number[]): void {
+    log.delete(key);
+    while (log.size >= maxKeys) {
+      const oldest = log.keys().next();
+      if (oldest.done) break;
+      log.delete(oldest.value);
+    }
+    log.set(key, timestamps);
+  }
 
   // Drop keys whose window has fully aged out, so the map cannot grow without
   // bound under many distinct ips. Cheap amortized sweep.
@@ -45,11 +64,11 @@ export function createRateLimiter(opts: { max: number; windowMs: number }): Rate
       const cutoff = now - opts.windowMs;
       const recent = (log.get(key) ?? []).filter((t) => t > cutoff);
       if (recent.length >= opts.max) {
-        log.set(key, recent);
+        put(key, recent);
         return { limited: true, retryAfterSeconds: Math.max(1, Math.ceil((recent[0]! + opts.windowMs - now) / 1000)) };
       }
       recent.push(now);
-      log.set(key, recent);
+      put(key, recent);
       sweep(now);
       return { limited: false, retryAfterSeconds: 0 };
     },

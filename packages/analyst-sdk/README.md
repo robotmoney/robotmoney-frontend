@@ -126,8 +126,7 @@ immutable run ledger), which says which read path produced it.
   rows than `limit` and still have a `nextCursor`.
 - **Vintage members** are listed with `include=members`, one vintage at a time (name it
   with `run_key` and `tool_id`). The same `limit` and `cursor` then page that vintage's
-  members, one row per `source_value_versions` id. `member_count` is the frozen count
-  before the withheld rows below are removed.
+  members, one row per `source_value_versions` id.
 - **Caching**: `Cache-Control: public, max-age=300` and a weak `ETag`. Send it back as
   `If-None-Match` and an unchanged page is a `304`. A body over 256 KB is gzip-encoded
   when you send `Accept-Encoding: gzip` (curl: `--compressed`).
@@ -139,26 +138,10 @@ immutable run ledger), which says which read path produced it.
 
 ### Data terms
 
-The rows are third-party data. What each source allows us to republish is recorded in
-decision D58 in `docs/decisions.md`, and summarized here. Rows of a source marked
-"withheld" are never served, whatever you ask for (the response says
-`excludedProviders: ["yahoo"]`). Status "pending" means the terms page is linked and the
-operator has not yet recorded a sign-off. Check the linked terms before you republish.
-
-| source | feeds | terms | status |
-| ------ | ----- | ----- | ------ |
-| FRED | `T10Y2Y`, `DFII10`, `T5YIE`, `HY_OAS`, `DXY`, `ICSA` | https://fred.stlouisfed.org/docs/api/terms_of_use.html | pending; `HY_OAS` is third-party (ICE) content on FRED |
-| DefiLlama | `DEFI_TVL`, `STABLES`, `DEFI_GROWTH`, `STABLES_GROWTH` | https://defillama.com/docs/api | pending |
-| blockchain.com | `BTC_ACTIVE` | https://www.blockchain.com/legal/terms | pending |
-| Coin Metrics community data | `ETH_ACTIVE`, `BTC_MVRV` | https://coinmetrics.io/community-network-data/ | pending |
-| GeckoTerminal | `NEW_TOKENS`, `asset-prices` rows from `geckoterminal` | https://www.coingecko.com/en/api_terms | pending |
-| Shiller / multpl.com | `SHILLER_CAPE` | http://www.econ.yale.edu/~shiller/data.htm | pending |
-| SEC EDGAR | `MNA` | https://www.sec.gov/privacy#dissemination | public information |
-| pinned prices | `asset-prices` rows from `pinned` (USDC and the strategy shares) | our own configuration | ours |
-| Yahoo Finance | `VIX`, `COPPER_GOLD`, `SPX_TREND`, `IWM_SPY`, `BTC_ETH`, `ETH_TREND`, `SPHB_SPLV`, `MTUM_SPY`, `IWF_IWD`, `XLU_SPY`, `XLP_XLY` | n/a | **withheld**: no redistribution right is on record |
-
-You can still rebuild the Yahoo-backed indicators yourself with the extractors in
-`src/extract/`, from your own copy of the data.
+Yahoo-sourced rows are served like every other row. The repo operator signed off on that
+on 2026-10-02, and recorded it in decision D58 in `docs/decisions.md`. The implementer did
+not review any provider's terms of use, and the operator accepts responsibility for serving
+the data. Check each provider's terms before you republish what you download.
 
 ## Layout
 

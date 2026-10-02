@@ -194,7 +194,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
         example: "backtest",
       },
     ],
-    contractType: "{ latest: RegimeSnapshot, history: RegimeSnapshot[], staleness, source: \"regime_snapshots\" | \"ledger\" }",
+    contractType: "RegimeSnapshotsResponse",
     sizeHint: "about 125 KB at the default 180 days and 33 KB at `?range=1`; `&include=backtest` adds about 125 KB of backtests",
   },
   {
@@ -203,7 +203,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.publicAnalytics.rawHistory,
     summary: "Raw indicator history the regime is computed from",
     description:
-      "Every stored raw indicator point as date, indicator, value and source, ordered by date then indicator. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Rows from Yahoo Finance are withheld (`excludedProviders`). Page with `nextCursor` until it is null.",
+      "Every stored raw indicator point as date, indicator, value and source, ordered by date then indicator. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.",
     backs: [],
     params: [
       { name: "indicator", in: "query", description: "One indicator id, for example T10Y2Y.", example: "T10Y2Y" },
@@ -221,7 +221,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.publicAnalytics.assetPrices,
     summary: "Daily USD closes of the tracked assets",
     description:
-      "One row per asset per UTC day with the price, the provider, the pool it came from and when it was observed and fetched. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Rows from Yahoo Finance are withheld (`excludedProviders`). Page with `nextCursor` until it is null.",
+      "One row per asset per UTC day with the price, the provider, the pool it came from and when it was observed and fetched. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.",
     backs: [],
     params: [
       { name: "symbol", in: "query", description: "One asset symbol.", example: "ROBOTMONEY" },
@@ -239,7 +239,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.publicAnalytics.vintages,
     summary: "Frozen data vintages an analytics run committed to",
     description:
-      "Each vintage: the run key, tool, as-of date, knowledge-time and market-time cutoffs, manifest digest, member count, build identity and methodology. With `include=members` and a `run_key` and `tool_id` naming one vintage, `limit` and `cursor` page that vintage's members, one row per stored source value id (about 170,000 for a production vintage). Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Rows from Yahoo Finance are withheld (`excludedProviders`). Page with `nextCursor` until it is null.",
+      "Each vintage: the run key, tool, as-of date, knowledge-time and market-time cutoffs, manifest digest, member count, build identity and methodology. With `include=members` and a `run_key` and `tool_id` naming one vintage, `limit` and `cursor` page that vintage's members, one row per stored source value id (about 170,000 for a production vintage). Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.",
     backs: [],
     params: [
       { name: "run_key", in: "query", description: "The run key, a UUID.", example: "00000000-0000-4000-8000-000000000000" },
@@ -257,7 +257,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.publicAnalytics.overwriteEvents,
     summary: "Every recorded revision of a stored analytics row",
     description:
-      "Each time a raw indicator, regime snapshot or research signal row was replaced or removed, the row as it was and as it became, in the order recorded. A page can hold fewer rows than `limit` when the rows are large. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Rows from Yahoo Finance are withheld (`excludedProviders`). Page with `nextCursor` until it is null.",
+      "Each time a raw indicator, regime snapshot or research signal row was replaced or removed, the row as it was and as it became, in the order recorded. A page can hold fewer rows than `limit` when the rows are large. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.",
     backs: [],
     params: [
       { name: "table_name", in: "query", description: "`raw_indicator_history`, `regime_snapshots` or `research_signals`.", example: "raw_indicator_history" },

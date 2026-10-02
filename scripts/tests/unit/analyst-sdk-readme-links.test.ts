@@ -6,7 +6,7 @@
 //   - every route in contract/ is listed in the README with a curl example;
 //   - the README carries the CSV header, the shallow-clone command, the pointer
 //     to the dashboards endpoint for regime outputs, and the data terms for
-//     Yahoo (withheld).
+//     Yahoo (served, operator sign-off in D58).
 //
 // RED CONTROL: the checker is also run on a README with a route the contract
 // lacks, and on one with a route missing, and must flag both.
@@ -56,15 +56,15 @@ describe("packages/analyst-sdk/README.md", () => {
     expect(Object.keys(PUBLIC_ANALYTICS_SCHEMAS).sort()).toEqual([...contractRoutes].sort());
   });
 
-  test("carries the CSV header, the shallow-clone command, the regime pointer and the per-source terms", () => {
+  test("carries the CSV header, the shallow-clone command, the regime pointer and the Yahoo sign-off", () => {
     expect(README).toContain("date,indicator,value,source");
     expect(README).toContain("git clone --depth 1 --filter=blob:none --sparse");
     expect(README).toContain("git sparse-checkout set packages/analyst-sdk");
     expect(README).toContain("GET /api/dashboards/regime-snapshots?include=backtest");
     expect(README).toContain("### Data terms");
-    expect(README).toContain("Yahoo Finance");
-    expect(README).toMatch(/\*\*withheld\*\*/);
-    expect(README).toContain("fred.stlouisfed.org");
+    expect(README).toContain("Yahoo-sourced rows are served");
+    expect(README).toContain("2026-10-02");
+    expect(README).not.toMatch(/withheld|excludedProviders|are never served/i);
   });
 
   test("RED CONTROL: a README naming a route the contract lacks, or missing one, is flagged", () => {

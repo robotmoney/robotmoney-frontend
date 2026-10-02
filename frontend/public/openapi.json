@@ -274,7 +274,7 @@
       "get": {
         "operationId": "getRegimeSnapshots",
         "summary": "Daily cross-asset risk-on / risk-off classifier",
-        "description": "The regime classifier: a composite score in 0..1 per day, its 3-year rolling percentile, the label (risk_off, neutral or risk_on, bucketed on the percentile at 0.33 and 0.67), the macro / onchain / equity-factor indicator panels behind it, and, on request, the backtests. If all you want is today's reading it is `latest.composite` and `latest.regime`. `range` trims the history; the correlation matrices ride on `latest` whatever the range, and the backtests come only with `include=backtest`. `source` says which read path produced the response: `regime_snapshots` (the current-view table) or `ledger` (the immutable run ledger). This is where regime outputs live; the raw inputs are under /api/public/analytics/.\n\nResponse size: about 125 KB at the default 180 days and 33 KB at `?range=1`; `&include=backtest` adds about 125 KB of backtests.\n\nResponse type: `{ latest: RegimeSnapshot, history: RegimeSnapshot[], staleness, source: \"regime_snapshots\" | \"ledger\" }` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "The regime classifier: a composite score in 0..1 per day, its 3-year rolling percentile, the label (risk_off, neutral or risk_on, bucketed on the percentile at 0.33 and 0.67), the macro / onchain / equity-factor indicator panels behind it, and, on request, the backtests. If all you want is today's reading it is `latest.composite` and `latest.regime`. `range` trims the history; the correlation matrices ride on `latest` whatever the range, and the backtests come only with `include=backtest`. `source` says which read path produced the response: `regime_snapshots` (the current-view table) or `ledger` (the immutable run ledger). This is where regime outputs live; the raw inputs are under /api/public/analytics/.\n\nResponse size: about 125 KB at the default 180 days and 33 KB at `?range=1`; `&include=backtest` adds about 125 KB of backtests.\n\nResponse type: `RegimeSnapshotsResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -305,7 +305,7 @@
             "example": "backtest"
           }
         ],
-        "x-contract-type": "{ latest: RegimeSnapshot, history: RegimeSnapshot[], staleness, source: \"regime_snapshots\" | \"ledger\" }",
+        "x-contract-type": "RegimeSnapshotsResponse",
         "responses": {
           "200": {
             "description": "Daily cross-asset risk-on / risk-off classifier",
@@ -313,7 +313,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "description": "{ latest: RegimeSnapshot, history: RegimeSnapshot[], staleness, source: \"regime_snapshots\" | \"ledger\" }"
+                  "description": "RegimeSnapshotsResponse"
                 }
               }
             }
@@ -325,7 +325,7 @@
       "get": {
         "operationId": "getPublicRawHistory",
         "summary": "Raw indicator history the regime is computed from",
-        "description": "Every stored raw indicator point as date, indicator, value and source, ordered by date then indicator. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Rows from Yahoo Finance are withheld (`excludedProviders`). Page with `nextCursor` until it is null.\n\nResponse size: about 80 B a row; 8 KB at the default 100.\n\nResponse type: `PublicRawHistoryResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Every stored raw indicator point as date, indicator, value and source, ordered by date then indicator. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.\n\nResponse size: about 80 B a row; 8 KB at the default 100.\n\nResponse type: `PublicRawHistoryResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -400,7 +400,7 @@
       "get": {
         "operationId": "getPublicAssetPrices",
         "summary": "Daily USD closes of the tracked assets",
-        "description": "One row per asset per UTC day with the price, the provider, the pool it came from and when it was observed and fetched. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Rows from Yahoo Finance are withheld (`excludedProviders`). Page with `nextCursor` until it is null.\n\nResponse size: about 400 B a row.\n\nResponse type: `PublicAssetPricesResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "One row per asset per UTC day with the price, the provider, the pool it came from and when it was observed and fetched. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.\n\nResponse size: about 400 B a row.\n\nResponse type: `PublicAssetPricesResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -475,7 +475,7 @@
       "get": {
         "operationId": "getPublicVintages",
         "summary": "Frozen data vintages an analytics run committed to",
-        "description": "Each vintage: the run key, tool, as-of date, knowledge-time and market-time cutoffs, manifest digest, member count, build identity and methodology. With `include=members` and a `run_key` and `tool_id` naming one vintage, `limit` and `cursor` page that vintage's members, one row per stored source value id (about 170,000 for a production vintage). Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Rows from Yahoo Finance are withheld (`excludedProviders`). Page with `nextCursor` until it is null.\n\nResponse size: about 600 B a vintage; members about 70 B a row.\n\nResponse type: `PublicVintagesResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Each vintage: the run key, tool, as-of date, knowledge-time and market-time cutoffs, manifest digest, member count, build identity and methodology. With `include=members` and a `run_key` and `tool_id` naming one vintage, `limit` and `cursor` page that vintage's members, one row per stored source value id (about 170,000 for a production vintage). Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.\n\nResponse size: about 600 B a vintage; members about 70 B a row.\n\nResponse type: `PublicVintagesResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -550,7 +550,7 @@
       "get": {
         "operationId": "getPublicOverwriteEvents",
         "summary": "Every recorded revision of a stored analytics row",
-        "description": "Each time a raw indicator, regime snapshot or research signal row was replaced or removed, the row as it was and as it became, in the order recorded. A page can hold fewer rows than `limit` when the rows are large. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Rows from Yahoo Finance are withheld (`excludedProviders`). Page with `nextCursor` until it is null.\n\nResponse size: from 300 B a row for raw history to about 0.5 MB for a regime snapshot.\n\nResponse type: `PublicOverwriteEventsResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Each time a raw indicator, regime snapshot or research signal row was replaced or removed, the row as it was and as it became, in the order recorded. A page can hold fewer rows than `limit` when the rows are large. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.\n\nResponse size: from 300 B a row for raw history to about 0.5 MB for a regime snapshot.\n\nResponse type: `PublicOverwriteEventsResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],

@@ -21,8 +21,7 @@ import { withCors } from "../../src/api/cors.ts";
 import {
   _resetPublicAnalyticsRateLimitForTests,
   handlePublicAnalytics,
-  yahooIndicatorIds,
-  yahooSourceKeys,
+  OVERWRITE_PAGE_STORED_BYTES,
 } from "../../src/api/routes/public-analytics.ts";
 import { handleAnalytics } from "../../src/api/routes/analytics.ts";
 import { saveRawIndicatorHistory } from "../../src/analytics/store/raw-history-store.ts";
@@ -144,7 +143,7 @@ describe("every route: 200 with no Authorization header, a body that validates a
   });
 
   test("the schema checker is not vacuous: a body missing a required field, or with a wrong type, fails", () => {
-    const good = { schemaVersion: 1, limit: 1, excludedProviders: [], rows: [], nextCursor: null };
+    const good = { schemaVersion: 1, limit: 1, rows: [], nextCursor: null };
     expect(validateJsonSchema(schemaFor(P.rawHistory), good)).toEqual([]);
     expect(validateJsonSchema(schemaFor(P.rawHistory), { ...good, schemaVersion: 2 })).not.toEqual([]);
     expect(validateJsonSchema(schemaFor(P.rawHistory), { ...good, nextCursor: 7 })).not.toEqual([]);
@@ -245,36 +244,25 @@ describe("limit and cursor", () => {
   });
 });
 
-describe("Yahoo-sourced rows are withheld (D58)", () => {
-  test("the withheld set is derived from the registry, not configured", () => {
-    expect(yahooIndicatorIds()).toContain("VIX");
-    expect(yahooIndicatorIds()).not.toContain("T10Y2Y"); // fred
-    expect(yahooSourceKeys()).toContain("raw_indicator_history:VIX");
-    expect(yahooSourceKeys()).toContain("backtest:^GSPC"); // a D56 tolerance key, not in the registry
-    expect(yahooSourceKeys()).not.toContain("raw_indicator_history:T10Y2Y");
-  });
-
-  test("raw-history never serves a Yahoo indicator, even when asked for it by name", async () => {
+describe("Yahoo-sourced rows are served (D58 operator sign-off, 2026-10-02)", () => {
+  test("raw-history serves a Yahoo indicator, by name and in the full listing, and says nothing about exclusions", async () => {
     const all = await pageAll(P.rawHistory, "rows", 1000);
-    expect(all.rows.some((r) => r.indicator === "VIX")).toBe(false);
+    expect(all.rows.filter((r) => r.indicator === "VIX")).toHaveLength(5);
     const named = await json(`${P.rawHistory}?indicator=VIX`);
-    expect(named.rows).toEqual([]);
-    expect(named.excludedProviders).toEqual(["yahoo"]);
-    // The rows are really there: it is the route that withholds them.
-    const [{ n }] = await fixtureDb`SELECT count(*)::int AS n FROM raw_indicator_history WHERE indicator = 'VIX'`;
-    expect(n).toBe(5);
+    expect(named.rows).toHaveLength(5);
+    expect(named.excludedProviders).toBeUndefined();
   });
 
-  test("asset-prices never serves a row whose provider is yahoo, whatever the casing or suffix", async () => {
+  test("asset-prices serves a row whose provider is yahoo, whatever the casing or suffix", async () => {
     const all = await pageAll(P.assetPrices, "rows", 1000);
-    expect(all.rows.filter((r) => /yahoo/i.test(r.source))).toEqual([]);
-    expect((await json(`${P.assetPrices}?symbol=YAHOOPX`)).rows).toEqual([]);
-    expect((await json(`${P.assetPrices}?symbol=YAHOOPX2`)).rows).toEqual([]);
+    expect(all.rows.filter((r) => /yahoo/i.test(r.source)).map((r) => r.symbol).sort()).toEqual(["YAHOOPX", "YAHOOPX2"]);
+    expect((await json(`${P.assetPrices}?symbol=YAHOOPX`)).rows).toHaveLength(1);
+    expect((await json(`${P.assetPrices}?symbol=YAHOOPX2`)).rows).toHaveLength(1);
   });
 });
 
 describe("overwrite-events", () => {
-  test("an overwrite fires the 0056 trigger and the event appears; a Yahoo indicator's event does not", async () => {
+  test("an overwrite fires the 0056 trigger and the event appears, and so does a Yahoo indicator's", async () => {
     const indicator = "PUB_OVERWRITE";
     await saveRawIndicatorHistory({ [indicator]: [{ date: "2041-01-02", value: 10 }] }, undefined, "seed");
     await saveRawIndicatorHistory({ [indicator]: [{ date: "2041-01-02", value: 12.5 }] }, undefined, "live");
@@ -295,7 +283,7 @@ describe("overwrite-events", () => {
       previous_row: { date: "2041-01-02", indicator, value: 10, source: "seed" },
       replacement_row: { date: "2041-01-02", indicator, value: 12.5, source: "live" },
     });
-    expect(events.some((e) => e.natural_key.indicator === "VIX")).toBe(false);
+    expect(events.some((e) => e.natural_key.indicator === "VIX")).toBe(true);
     expectValid(P.overwriteEvents, await json(P.overwriteEvents));
 
     // Filtered by table, and paged by id: ids strictly increase across pages.
@@ -317,6 +305,64 @@ describe("overwrite-events", () => {
     }
     expect(await privilege("rm_app", "SELECT")).toBe(true);
     expect(await privilege("rm_worker", "SELECT")).toBe(false);
+  });
+});
+
+describe("overwrite-events: the page is bounded in SQL by stored size (F1)", () => {
+  const EVENTS = 24;
+  const PAD = 160_000; // chars per padded row; random hex, so it does not compress away
+  let ids: number[] = [];
+
+  beforeAll(async () => {
+    // Direct inserts as the fixture owner: this test is about the page bound, not the trigger.
+    await fixtureDb`
+      INSERT INTO analytics_overwrite_events (table_name, operation, natural_key, previous_row, replacement_row)
+      SELECT 'regime_snapshots', 'update', jsonb_build_object('n', g),
+             jsonb_build_object('pad', (SELECT string_agg(md5(random()::text || g::text || k::text), '') FROM generate_series(1, ${PAD / 32}) k)),
+             jsonb_build_object('pad', (SELECT string_agg(md5(random()::text || g::text || k::text), '') FROM generate_series(1, ${PAD / 32}) k))
+      FROM generate_series(1, ${EVENTS}) g`;
+    ids = (await fixtureDb<{ id: string }[]>`
+      SELECT id::text AS id FROM analytics_overwrite_events WHERE table_name = 'regime_snapshots'`).map((r) => Number(r.id)).sort((a, b) => a - b);
+    expect(ids).toHaveLength(EVENTS);
+  }, 60_000);
+
+  test("limit=1000 over events of ~300 KB each returns a few rows, not 1000, and the stored size of a page stays near the budget", async () => {
+    const res = await get(`${P.overwriteEvents}?table_name=regime_snapshots&limit=1000`);
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expectValid(P.overwriteEvents, body);
+    // ~300 KB stored per event; the sum BEFORE a row must be under 1 MiB, so at most 4 rows.
+    expect(body.events.length).toBeGreaterThanOrEqual(1);
+    expect(body.events.length).toBeLessThanOrEqual(4);
+    expect(body.nextCursor).not.toBeNull();
+    const [{ stored }] = await fixtureDb<{ stored: string }[]>`
+      SELECT sum(pg_column_size(previous_row) + pg_column_size(replacement_row))::text AS stored
+      FROM analytics_overwrite_events WHERE id = ANY(${body.events.map((e: any) => e.id)}::bigint[])`;
+    expect(Number(stored)).toBeLessThan(OVERWRITE_PAGE_STORED_BYTES + 400_000);
+    expect(JSON.stringify(body).length).toBeLessThan(2 * OVERWRITE_PAGE_STORED_BYTES + 1_000_000);
+  });
+
+  test("a row larger than the whole budget is still served alone, so paging always advances", async () => {
+    const body: any = await json(`${P.overwriteEvents}?table_name=regime_snapshots&limit=1`);
+    expect(body.events).toHaveLength(1);
+    expect(body.nextCursor).not.toBeNull();
+  });
+
+  test("cursor paging with limit=1000 yields every event exactly once, in id order, in more than one page", async () => {
+    const { rows, pages } = await pageAll(`${P.overwriteEvents}?table_name=regime_snapshots`, "events", 1000);
+    expect(rows.map((e) => e.id)).toEqual(ids);
+    expect(pages).toBeGreaterThan(3);
+    expect(pages).toBeLessThanOrEqual(EVENTS);
+  });
+
+  test("cursor paging with a small limit yields every event exactly once", async () => {
+    const { rows } = await pageAll(`${P.overwriteEvents}?table_name=regime_snapshots`, "events", 5);
+    expect(rows.map((e) => e.id)).toEqual(ids);
+  });
+
+  test("small events are not cut short: the last page ends with a null cursor", async () => {
+    const { rows } = await pageAll(`${P.overwriteEvents}?table_name=raw_indicator_history`, "events", 1000);
+    expect(rows.length).toBeGreaterThan(0);
   });
 });
 
@@ -389,12 +435,12 @@ describe("vintages", () => {
     });
     expect(v.manifest_digest).toMatch(/^[0-9a-f]{64}$/);
     expect(v.methodology.config_digest).toMatch(/^[0-9a-f]{64}$/);
-    // The frozen count, before any withholding: 6 + 3 + 4.
+    // The frozen count: 6 + 3 + 4.
     expect(v.member_count).toBe(13);
     expect(v.members).toBeUndefined();
   });
 
-  test("members are expanded from the stored id ranges, one row per source_value_versions id, with Yahoo-backed keys withheld", async () => {
+  test("members are expanded from the stored id ranges, one row per source_value_versions id", async () => {
     const [{ id: vintageId }] = await fixtureDb<{ id: string }[]>`
       SELECT v.id::text AS id FROM analytics_data_vintages v JOIN analytics_ledger_runs r ON r.id = v.run_id WHERE r.run_key = ${runKey}`;
     const stored = await fixtureDb<{ source_key: string; first: string; last: string | null }[]>`
@@ -406,10 +452,10 @@ describe("vintages", () => {
 
     const expected: { source_key: string; source_value_version_id: number }[] = [];
     for (const m of stored) {
-      if (m.source_key === YAHOO_KEY) continue;
       for (let id = Number(m.first); id <= Number(m.last ?? m.first); id++) expected.push({ source_key: m.source_key, source_value_version_id: id });
     }
-    expect(expected).toHaveLength(10); // 6 + 4, the 3 Yahoo ids withheld
+    expect(expected).toHaveLength(13); // 6 + 3 + 4, the 3 Yahoo ids included
+    expect(expected.filter((m) => m.source_key === YAHOO_KEY)).toHaveLength(3);
 
     const path = `${P.vintages}?run_key=${runKey}&tool_id=pub-test&include=members`;
     const whole = await json(path);
@@ -428,9 +474,9 @@ describe("vintages", () => {
       cursor = page.vintages[0].members.nextCursor;
       pages++;
     } while (cursor && pages < 20);
-    expect(pages).toBe(4);
+    expect(pages).toBe(5);
     expect(got).toEqual(expected);
-    expect(got.some((m) => m.source_key === YAHOO_KEY)).toBe(false);
+    expect(got.some((m) => m.source_key === YAHOO_KEY)).toBe(true);
   });
 
   test("vintages page by id with a cursor and filter by tool_id", async () => {
