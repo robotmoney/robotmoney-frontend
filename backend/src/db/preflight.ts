@@ -1209,7 +1209,7 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
         severity,
         message:
           `${path} line ${line.number} is not a KEY = VALUE line (it has no \`=\`): §3 allows only the connection values, the three ` +
-          "runtime role passwords, RM_ENV and RM_CREDENTIALS, and a bare value is none of them",
+          "runtime role passwords, RM_ENV, RM_CREDENTIALS and COINGECKO_API_KEY, and a bare value is none of them",
       });
       continue;
     }
@@ -1223,8 +1223,8 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
         message:
           `${path} line ${line.number} has a key that is not a plain name, ` +
           `${reason === null ? "so it is none of the keys §3 lists" : `and it names ${reason}`} — §3 allows only the connection values ` +
-          "(host, port, database/dbname, sslmode), the rm_app, rm_worker and rm_readonly passwords, RM_ENV and " +
-          "RM_CREDENTIALS",
+          "(host, port, database/dbname, sslmode), the rm_app, rm_worker and rm_readonly passwords, RM_ENV, " +
+          "RM_CREDENTIALS and COINGECKO_API_KEY",
       });
       continue;
     }
@@ -1234,8 +1234,8 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
       severity,
       message:
         `${path} holds ${line.key}, ${reason ?? "a key §3 does not list"} — §3 allows only the connection values ` +
-        "(host, port, database/dbname, sslmode), the rm_app, rm_worker and rm_readonly passwords, RM_ENV and " +
-        "RM_CREDENTIALS",
+        "(host, port, database/dbname, sslmode), the rm_app, rm_worker and rm_readonly passwords, RM_ENV, " +
+        "RM_CREDENTIALS and COINGECKO_API_KEY",
     });
   }
 

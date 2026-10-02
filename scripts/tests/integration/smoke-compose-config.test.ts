@@ -30,6 +30,7 @@ import { SERVICE_BUILD_CONTEXTS } from "../../stack/config.ts";
 import { randomBytes } from "node:crypto";
 import { planParticipants, type CredentialFile } from "../../lib/swarm/credential-file.ts";
 import { applyParticipantPlan, listRunningParticipants, type DockerRun } from "../../lib/participant-compose.ts";
+import { homeEnvComposeEnv, smokePassthroughEnv } from "../../lib/smoke-compose-env.ts";
 import { credentialEntry, credentialFile, entriesOf, secretsOf, writeParticipantOverlay, type WrittenOverlay } from "./participant-fixture.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
@@ -1051,6 +1052,50 @@ describe("the paid CoinGecko key reaches the worker lane and the analytics-produ
       expect(`${label}:api:${"COINGECKO_API_KEY" in serviceEnv(cfg, "api")}`).toBe(`${label}:api:false`);
     });
   }
+
+  // Issue #1098: a key that lives ONLY in ~/.env (the shell has none) must
+  // reach the lanes. This builds the compose env the way smoke-main.ts does
+  // (home-env key first, shell passthrough on top) and renders the config.
+  // The value reuses the prewarmed key so no cold render is needed.
+  const composeEnvFor = (home: Record<string, string>, shell: Record<string, string>) => ({
+    ...homeEnvComposeEnv(home),
+    ...smokePassthroughEnv(shell),
+  });
+  const HOME_ENV_WITH_OTHER_KEYS = {
+    COINGECKO_API_KEY: "cg-compose-test-key",
+    rm_app: "pw-app",
+    rm_worker: "pw-worker",
+    RM_ENV: "prod",
+  };
+
+  for (const [label, files] of COMPOSITIONS) {
+    test(`the ${label} composition delivers a key that is only in ~/.env to the lanes and the producer`, () => {
+      const knobs = composeEnvFor(HOME_ENV_WITH_OTHER_KEYS, {});
+      expect(Object.keys(knobs)).toEqual(["COINGECKO_API_KEY"]); // no other ~/.env value is forwarded
+      const cfg = composeConfig(knobs, files);
+      for (const lane of WORKER_LANES) {
+        expect(`${label}:${lane}:${serviceEnv(cfg, lane).COINGECKO_API_KEY ?? "missing"}`)
+          .toBe(`${label}:${lane}:cg-compose-test-key`);
+      }
+      expect(`${label}:api:${"COINGECKO_API_KEY" in serviceEnv(cfg, "api")}`).toBe(`${label}:api:false`);
+    });
+
+    // RED CONTROL: without the home-env forwarding (the pre-fix wiring: shell
+    // only) the same ~/.env leaves the lanes keyless. This is the bug.
+    test(`control: the ${label} composition is keyless when only the shell is forwarded`, () => {
+      const cfg = composeConfig(smokePassthroughEnv({}), files);
+      for (const lane of WORKER_LANES) {
+        expect(`${label}:${lane}:${serviceEnv(cfg, lane).COINGECKO_API_KEY ?? ""}`).toBe(`${label}:${lane}:`);
+      }
+    });
+  }
+
+  test("an empty or absent ~/.env key forwards nothing, and a shell key wins over ~/.env", () => {
+    expect(homeEnvComposeEnv({})).toEqual({});
+    expect(homeEnvComposeEnv({ COINGECKO_API_KEY: "" })).toEqual({});
+    expect(composeEnvFor({ COINGECKO_API_KEY: "from-home" }, { COINGECKO_API_KEY: "from-shell" }).COINGECKO_API_KEY)
+      .toBe("from-shell");
+  });
 });
 
 // TRUST_PROXY must reach the api container in every composition (issue #892
