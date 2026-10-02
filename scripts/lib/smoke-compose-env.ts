@@ -106,6 +106,20 @@ export function smokePassthroughEnv(env: Record<string, string | undefined>): Re
   return out;
 }
 
+/**
+ * The ONE `~/.env` value forwarded into the compose environment: the paid
+ * CoinGecko key (issue #1098). Preflight check 4 allows it in `~/.env` and
+ * compose interpolates it into worker-analytics and analytics-producer, but
+ * only the shell's environment used to reach compose. Only that key, only when
+ * set and non-empty; the role passwords, RM_ENV and RM_CREDENTIALS are never
+ * returned. The value is never logged. Spread it BEFORE smokePassthroughEnv so
+ * a shell-exported key still wins.
+ */
+export function homeEnvComposeEnv(homeEnv: Record<string, string | undefined>): Record<string, string> {
+  const v = homeEnv.COINGECKO_API_KEY;
+  return v !== undefined && v !== "" ? { COINGECKO_API_KEY: v } : {};
+}
+
 // NO JUDGE CREDENTIAL (D52). A `judgeCredentialEnv()` used to live here and
 // hand `api` the shared OpenCode Zen key plus the judge's per-call bound, for
 // an inline judge. Nothing in the stack judges inline any more: the judge is a

@@ -6,7 +6,7 @@ import { hostname } from "node:os";
 import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { databaseName, homeEnvFilePath, urlForRole } from "./env-role.ts";
 import { ALLOW_INSECURE_FLAG, bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { dropShellMigrationCredential, shadowingStackEnvWarnings, smokePassthroughEnv, refuseAllowInsecureOnProd, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
+import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, refuseAllowInsecureOnProd, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
 import { resolveBackupFiles } from "./restore-container.ts";
 import { resolveDeploymentPolicy, resolveRmEnv } from "./smoke-env-policy.ts";
 import { requireRehearsalTarget } from "./smoke-identity.ts";
@@ -820,6 +820,7 @@ function makeStackConfig(): StackConfig {
     // a model.
     extraComposeEnv: {
       ...smokeEnv.composeEnv,
+      ...homeEnvComposeEnv(homeEnv), // the ~/.env CoinGecko key only; shell wins
       ...smokePassthroughEnv(process.env),
       ...inferenceComposeEnv,
     },
