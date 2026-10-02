@@ -190,7 +190,7 @@
       "get": {
         "operationId": "getWalletBalances",
         "summary": "Live protocol wallet valuation plus daily history",
-        "description": "Every tracked protocol wallet, every holding in it, and the daily total-value history since inception. Each holding carries a `provenance` field (live, stub, stale, seed, backfilled): treat anything other than `live` as an estimate. Days with no persisted snapshot are absent from the history rather than interpolated, so gaps are real gaps.\n\nResponse size: about 45 KB, the largest of the treasury reads.\n\nResponse type: `WalletBalances` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Every tracked protocol wallet, every holding in it, and the daily total-value history since inception. Each holding carries a `provenance` field (live, stub, stale, seed, backfilled): treat anything other than `live` as an estimate. Days with no persisted snapshot are absent from the history rather than interpolated, so gaps are real gaps.\n\nResponse size: about 55 KB, the largest of the treasury reads.\n\nResponse type: `WalletBalances` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -569,7 +569,7 @@
       "get": {
         "operationId": "listSwarmSessions",
         "summary": "Swarm session index, paginated",
-        "description": "Light index rows with an opaque `nextCursor` (null when exhausted); the default page is 20. Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.\n\nAlso carries `nextSessionAt`: the instant the earliest open submission window closes, which is the same instant its subject's next epoch opens, or null when no subject has one open. Present on every page, including `?full=1`.\n\nEach light row carries `takeCount` (distinct members who filed) and `referenceAllocation` (the sleeve targets that session's own brief carried, or null).\n\nResponse size: about 80 KB for the default page of 20 rows; pass limit to shrink it.\n\nResponse type: `SwarmSessionListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Light index rows with an opaque `nextCursor` (null when exhausted); the default page is 20. Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.\n\nAlso carries `nextSessionAt`: the instant the earliest open submission window closes, which is the same instant its subject's next epoch opens, or null when no subject has one open. Present on every page, including `?full=1`.\n\nEach light row carries `takeCount` (distinct members who filed) and `referenceAllocation` (the sleeve targets that session's own brief carried, or null).\n\nResponse size: about 160 KB for the default page of 20 rows; pass limit to shrink it.\n\nResponse type: `SwarmSessionListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],

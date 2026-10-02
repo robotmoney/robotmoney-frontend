@@ -433,8 +433,8 @@ test("the noindex override does not leak onto the next route", async ({ page }) 
 // to NOT_FOUND_META and served "Page Not Found — Robot Money" under
 // `noindex, follow` while rendering its content perfectly well.
 const MEDIA_SECTION_ROUTES = [
-  { path: "/media/articles", title: "Articles — Robot Money Media" },
-  { path: "/media/videos", title: "Videos — Robot Money Media" },
+  { path: "/media/articles", title: "Articles | Robot Money Media" },
+  { path: "/media/videos", title: "Videos | Robot Money Media" },
 ];
 
 for (const { path, title } of MEDIA_SECTION_ROUTES) {
@@ -472,10 +472,9 @@ test("a legacy /docs/investment-committee URL is canonical to its renamed addres
     "content",
     "https://robotmoney.network/docs/investment-swarm/how-it-works",
   );
-  // The rewrite must not cost the page its own copy — before it, this path
-  // still reached the /docs section prefix and got a real title, and it should
-  // keep exactly that one.
-  await expect(page).toHaveTitle("How It Works — Robot Money Docs");
+  // The rewrite must not cost the page its own copy: the legacy path takes the
+  // docs page's own title, exactly as the new path does.
+  await expect(page).toHaveTitle("How the Investment Swarm Works | Robot Money Docs");
 
   await expectNoBrowserErrors(errors);
 });
