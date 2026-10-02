@@ -4435,9 +4435,9 @@ const frozenActive = registerQuery({
   object: "swarm_members",
   privileges: ["SELECT"],
   site: "src/swarm/domain:loadFrozenTakeSet.active",
-  purpose: "For a session with no roster, count every active member as expected.",
+  purpose: "For a session with no roster, count every active analyst (role member, never the judge) as expected.",
   callers: [ADMIN_ROUTE, JUDGE_ROUTE, SWARM_ROUTE],
-  probe: { statement: "SELECT id FROM swarm_members WHERE status = 'active'" },
+  probe: { statement: "SELECT id FROM swarm_members WHERE status = 'active' AND role = 'member'" },
 });
 export async function loadFrozenTakeSet(sessionId: string, h: DbHandle = sql): Promise<FrozenTakeSet | null> {
   const s = (await on(h, frozenSession)<any>`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
@@ -4501,9 +4501,14 @@ export async function loadFrozenTakeSet(sessionId: string, h: DbHandle = sql): P
   // unchanged.
   const rosterRows = await on(h, frozenRosterRead)<{ id: string }>`
     SELECT member_id AS id FROM swarm_session_members WHERE session_id = ${sessionId} AND status != 'excused'`;
+  // role = 'member': a judge (Themis) files no take, so it is not an analyst
+  // seat. Without the filter every session opened by the host driver (which
+  // freezes no roster, so it takes this fallback) published the judge as absent:
+  // "7 of 8 members (88% participation)" when all seven analysts filed.
+  // admin.ts's roster freeze already filters the same way.
   const activeMembers = rosterRows.length > 0
     ? rosterRows
-    : (await on(h, frozenActive)`SELECT id FROM swarm_members WHERE status = 'active'`) as unknown as { id: string }[];
+    : (await on(h, frozenActive)`SELECT id FROM swarm_members WHERE status = 'active' AND role = 'member'`) as unknown as { id: string }[];
   const frozenRoster = new Set(activeMembers.map((member: any) => member.id));
   const takes = rosterRows.length > 0
     ? takeRows.filter((take: any) => frozenRoster.has(take.member_id))
