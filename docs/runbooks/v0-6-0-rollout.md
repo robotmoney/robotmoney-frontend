@@ -38,27 +38,27 @@ Plan and status: phase issue 1099.
 stricter four-weight submit rule (notice: 1124); the stray `v0.6.0-rc.0` tag is deleted
 (2026-10-03), so the first candidate is `v0.6.0-rc.0`; the log gates are ported (1071).
 
-**Cutover stays blocked until every row is closed with evidence.**
+**Cutover stays blocked until every row is closed with evidence.** State at releases-0.6.x
+tip 41d75aaa (2026-10-03): code for B1-B8 is merged and CI is green. What remains is proof
+on stage-2 with the real restored dump, plus the three open rows below.
 
-| # | Blocker | Issue |
-|---|---|---|
-| B1 | The first production migrate refused production's 76-name ledger twice (baseline list, then the gap rule). The baseline is now the 2026-10-01 ledger, and the unreleased migrations are numbered 0081 to 0110, above `0080_analytics_ledger_compaction`. Confirm the real ledger still matches, read-only (R2.3). | 1097 |
-| B2 | Sessions in `window_closed`, `aggregated` or `judged` at cutover never publish (0086 leaves no judge mode, 0089 deletes their jobs). The upgrade itself must carry them through; there is no drain step. | 1111 |
-| B3 | 0085 moves every subject to hourly sessions. Production runs 6 h. | 1112 |
-| B5 | The hourly parity sweep is cut off at the 10 s limit (the 240 s exemption was dropped in 1101). | 1114 |
-| B6 | Production parity: persona-voiced sectioned takes with memos (1116), judge retry (1117), judge model from the database (1118), verified consensus-receipt path (1119), today's regime in the brief (1108), `noop-analyst` stays in-house (1120), absence recording never blocks turnover (1122). | listed |
-| B7 | Gates: `twin:gate` and `prod:gate` ported to main's instance model, with the default-deny log inventory. `verify:live` is not a substitute. | 1071 |
-| B8 | `e2e` is intermittently red on main (mid-window dump adoption). Green `e2e` on the RC commit. | 1121 |
-| B9 | Tracking issue `release:v0.6.0` exists, scope frozen, phase 1099 complete (policy section 6). | to file |
-| B10 | `rebind-members` order relative to the first boot is not fixed by the spec on the breaking-migration path. Settled by the stage rehearsal (R3.8). | none |
+| # | Blocker | Code | Proof still owed |
+|---|---|---|---|
+| B1 | Baseline: production's 76-name ledger replaces the old one; unreleased migrations renumbered 0081-0110 so no pending file sorts inside the recorded range (1097) | merged | first production migrate on the real 2026-10-01 dump (R3.2, R6.3); read the live ledger (R2.3) |
+| B2 | In-flight sessions finish on their normal timing, no drain step (1111) | merged | a dump with sessions in each state publishes them (R3) |
+| B3 | Existing subjects stay on 6 h epochs, grid continued from each subject's last close (1112) | merged | R7.4a on the rehearsal; the owner confirms the grid against prod session history |
+| B4 | Settings reach the containers; prod refuses without `PROJECTS_SOURCE=live` (1113) | merged | list of keys taken from the old host's checkout `.env` (R6.2a) |
+| B5 | Parity sweep keeps its 240 s exemption (1114) | merged | a 25 s sweep completes on stage |
+| B6 | Production parity: judge retry (1117), judge model from the database (1118), verified receipt path (1119), today's regime (1108), in-house seats keep their operator (1120), absence savepoint (1122) | merged | R7 checks. **Persona-voiced sectioned takes (1116): PR 1131 open, waiting on the owner's decision** |
+| B7 | Log gates `twin:gate` and `prod:gate` ported (1071) | merged | first live run will show unclassified lines; add a rule only with evidence |
+| B8 | Mid-window dump adoption and the first-epoch bound (1121) | merged | `e2e` green on the RC commit |
+| B9 | `release:v0.6.0` tracking issue | open | to file |
+| B10 | `rebind-members` order on the breaking-migration path | none | settled by R3.8 |
 
-Closed: the CoinGecko key allowlist and its delivery from `~/.env` (1098, PR 1105);
-checkout-`.env` settings delivery and the `PROJECTS_SOURCE` boot refusal (1113);
-the judge prompt (1100), judge-never-an-analyst (1107), api resilience minus the sweep
-(1101), twin shm and slim dumps (1102), the v0.5.x record (1106).
-
-Also required before cutover, not blockers: tell external members of the four-weight
-rule (1124); fix the `judging` banner (1115) and the admin items in 1123.
+Also open: the notice to external members about the four-weight rule (1124); the
+`judging` banner (1115, merged) and admin items (1123, merged) need only the R7 spot check.
+Known flake: the smoke integration suites hit an EPIPE in the boot child (1141); re-run, do
+not treat as a product failure.
 
 ## 1. Release identity
 
