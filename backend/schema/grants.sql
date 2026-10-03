@@ -18,8 +18,8 @@
 --
 -- ONLY rm_owner MAY DELETE OR TRUNCATE (§3, D55 (6)). No runtime role holds either
 -- privilege on any table, append-only or not. Migration 0053 granted rm_app
--- `SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public`; 0065 took DELETE
--- back on the append-only tables and 0089 on every table, for every runtime role
+-- `SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public`; 0083 took DELETE
+-- back on the append-only tables and 0107 on every table, for every runtime role
 -- (§9.1 step 3: "Check 2 fails until they land"). §9.1 calls the transition "a
 -- migration": reconciliation only runs inside a migrate run, and §8.5 keeps a
 -- production migrate run out of the boot, so a transition carried by reconciliation
@@ -34,14 +34,14 @@
 DO $$
 DECLARE
   -- rm_worker's grants, as the migrations give them (0016's default, narrowed
-  -- by 0054's explicit allowlist, then 0061 and 0062, less the DELETE 0089
+  -- by 0054's explicit allowlist, then 0061 and 0062, less the DELETE 0107
   -- revoked). Declared here because the snapshot carries no grants: before this
   -- list a `--local blank` bootstrap left rm_worker holding nothing, so the
   -- pipeline worker could not even claim a job. Everything else rm_worker holds
   -- is SELECT (0062: "GRANT SELECT ON ALL TABLES/SEQUENCES ... TO rm_app,
   -- rm_worker" and its default for later tables), and the loop below re-asserts
   -- exactly that. The worker's writes are inserts, updates and upserts; a
-  -- superseded wallet sample is tombstoned (0086), never deleted.
+  -- superseded wallet sample is tombstoned (0104), never deleted.
   worker_dml text[] := ARRAY[
     'agent_revenue_daily', 'agent_vaults', 'chain_address_floors', 'chain_day_blocks', 'daily_agent_snapshots',
     'daily_coin_snapshots', 'daily_tvl_snapshots', 'daily_wallet_snapshots', 'job_runs', 'job_schedules', 'jobs',
@@ -53,7 +53,7 @@ DECLARE
   worker_insert_update text[] := ARRAY['asset_price_floors', 'asset_prices'];
   -- The wallet repair pass's immutable evidence (0037): it copies a day's
   -- samples here before rewriting the day, so it INSERTs, and 0037's guard
-  -- refuses every UPDATE. Granted by 0091; 0054's allowlist had left it out,
+  -- refuses every UPDATE. Granted by 0109; 0054's allowlist had left it out,
   -- and the repair of every incomplete day failed 42501 on the copy.
   worker_insert_only text[] := ARRAY['wallet_balance_sample_evidence', 'wallet_sleeve_sample_evidence'];
   -- The serial sequences behind rm_worker's inserts (0054, 0061); every other
@@ -80,22 +80,22 @@ DECLARE
   fn text;
   -- Tables a later migration narrowed on purpose; the sweep below must not hand them
   -- back. 0056 revoked ALL on `analytics_overwrite_events` from rm_app/rm_worker;
-  -- 0063 left the runtime roles SELECT only on `deployment_identity`, which §4.2
+  -- 0081 left the runtime roles SELECT only on `deployment_identity`, which §4.2
   -- makes "writable only by rm_owner".
-  -- 0064 added `schema_manifest`, which §8.3 makes "a trusted input to boot
+  -- 0082 added `schema_manifest`, which §8.3 makes "a trusted input to boot
   -- decisions" writable only by rm_owner. It is listed here rather than left to the
   -- ordinary sweep because the sweep would hand rm_app INSERT and UPDATE on it on
   -- every single run -- that is, it would grant the application the ability to forge
   -- the answer preflight check 3a trusts. SELECT is restored below, because §7.2
   -- has every database-holding container run check 3a under its own credential.
-  -- 0069 added `automation_tokens`, the API automation-credential store (smoke
+  -- 0087 added `automation_tokens`, the API automation-credential store (smoke
   -- spec §3). Same reasoning as `schema_manifest`: the ordinary sweep would hand
   -- rm_app INSERT and UPDATE on the very rows that decide whether a presented
   -- bearer is authorized, so the application could mint itself a credential. It is
   -- provisioned by rm_owner and only ever READ at runtime. The rows hold a sha256
   -- hash and a rights list, never a secret, so SELECT is no wider a capability than
   -- the reader roles already hold over `admin_credential`.
-  -- 0076 narrowed `schema_migrations`, the ledger, for `schema_manifest`'s reason:
+  -- 0093 narrowed `schema_migrations`, the ledger, for `schema_manifest`'s reason:
   -- §8.3 says "Only `rm_owner` may write it or the ledger's `compat`/
   -- `metadata_version` columns; they are trusted inputs to boot decisions". The
   -- sweep used to hand rm_app INSERT and UPDATE on it every run, so a runtime role
@@ -117,7 +117,7 @@ DECLARE
   -- `SELECT, INSERT` (0057:108, 0058:137, 0059:113, 0060:76), and each family's
   -- trigger refuses UPDATE, DELETE and TRUNCATE. The ordinary sweep handed rm_app
   -- UPDATE on every one of them on every run, which left the trigger as the only
-  -- protection; 0077 took that back. Listed here so reconciliation re-asserts the
+  -- protection; 0094 took that back. Listed here so reconciliation re-asserts the
   -- migrations' grant instead of undoing it. DELETE and TRUNCATE are revoked too:
   -- D53 decision 6 counts these ledgers as append-only for preflight check 2.
   insert_only_for_runtime text[] := ARRAY[
@@ -161,8 +161,8 @@ BEGIN
     ORDER BY c.relname
   LOOP
     IF rel.name = ANY(read_only_for_runtime) THEN
-      -- A later migration deliberately narrowed these to SELECT (0063 on
-      -- `deployment_identity`, 0064 on `schema_manifest`) or to nothing at all for
+      -- A later migration deliberately narrowed these to SELECT (0081 on
+      -- `deployment_identity`, 0082 on `schema_manifest`) or to nothing at all for
       -- the writing roles (0056 on `analytics_overwrite_events`). Reconciliation
       -- must RE-ASSERT that narrowing, not undo it: a sweep that hands every table
       -- back to rm_app would quietly widen the tables whose whole point is that the
@@ -179,7 +179,7 @@ BEGIN
       EXECUTE format('GRANT SELECT, INSERT ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
     ELSIF rel.name = 'swarm_recommendations' THEN
-      -- D51 (migration 0075): a take's content is never UPDATEd, and the final
+      -- D51 (migration 0092): a take's content is never UPDATEd, and the final
       -- flag is the one column the accepting transaction sets and unsets. The
       -- table-level REVOKE also drops column grants, so it runs first and the
       -- column GRANT second — every run, so a hand-widened UPDATE does not survive.
@@ -188,7 +188,7 @@ BEGIN
       EXECUTE format('GRANT UPDATE (final) ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
     ELSIF rel.name = 'admin_webauthn_challenge' THEN
-      -- The 32 WebAuthn challenge slots (migration 0088, D55 (6)): rm_app
+      -- The 32 WebAuthn challenge slots (migration 0106, D55 (6)): rm_app
       -- overwrites and consumes a slot in place and never adds one, so the
       -- table an unauthenticated request writes stays at exactly 32 rows. The
       -- ordinary sweep below would hand rm_app INSERT on every run.
@@ -196,7 +196,7 @@ BEGIN
       EXECUTE format('GRANT SELECT, UPDATE ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
     ELSIF rel.name = 'swarm_stream_head' THEN
-      -- The event counter's one row (migration 0081): rm_app reads it and
+      -- The event counter's one row (migration 0098): rm_app reads it and
       -- increments it, and nothing else. The row is seeded by the migration and
       -- bootstrap-data.sql, so no runtime role ever INSERTs one; the ordinary
       -- sweep below would hand rm_app INSERT on every run. rm_worker's SELECT is
@@ -286,7 +286,7 @@ GRANT USAGE ON SCHEMA public TO rm_app, rm_worker, rm_readonly;
 -- "There are no default write grants. A later migration must name every new runtime
 -- capability explicitly, making a missing grant fail closed"; 0053 and 0062 set
 -- exactly SELECT on tables for all three runtime roles and SELECT on sequences for
--- all three, and 0089 re-asserted that no default carries DELETE or TRUNCATE. This
+-- all three, and 0107 re-asserted that no default carries DELETE or TRUNCATE. This
 -- file used to add a default `GRANT SELECT, INSERT, UPDATE ON TABLES TO rm_app`,
 -- which contradicted that rule on every run; the REVOKEs take every write back.
 --

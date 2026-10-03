@@ -6,7 +6,7 @@
 // redesigned into one of three shapes" (a tombstone every read filters on, an
 // expiry-filtered read with pruning left to rm_owner, or an upsert), and
 // "rm_owner deletes only inside migrate, seed, or an explicit operator
-// command". The redesign and the revoking migration (0089) land together in
+// command". The redesign and the revoking migration (0107) land together in
 // wave 5; this file makes the set of deleting code a CLOSED, NAMED set, so the
 // wave had an exact worklist and nothing new can join it.
 //
@@ -46,8 +46,8 @@
 //   (i)   the wave-5 BACKLOG — runtime deletes D55 (6) redesigns. It is now
 //         EMPTY: the admin revocations (routes/admin.ts) and the WebAuthn
 //         challenge consume, cleanup and cap (routes/admin-webauthn.ts) became
-//         tombstones (0084, 0085) and 32 fixed slots (0088), and the wallet
-//         repair pass (ops/wallet-backfill.ts) became an upsert onto 0086's
+//         tombstones (0102, 0103) and 32 fixed slots (0106), and the wallet
+//         repair pass (ops/wallet-backfill.ts) became an upsert onto 0104's
 //         `superseded_at`. Shrink-only: nothing is ever added back.
 //   (ii)  an rm_owner site reachable only from an rm_owner entry: seed
 //         (db/seed.ts, declared rm_owner; projects/smoke-seed.ts, called only
@@ -249,11 +249,11 @@ function tally(hits: readonly Hit[]): Map<string, number> {
  */
 const BACKLOG: ReadonlyMap<string, number> = new Map<string, number>([
   // Converted in wave 5 and deleted from here: routes/admin.ts's password
-  // change and recovery (now `revoked_at` tombstones, 0084),
+  // change and recovery (now `revoked_at` tombstones, 0102),
   // routes/admin-webauthn.ts's challenge consume, cleanup and cap (now
-  // `consumed_at` and 32 fixed slots, 0085 and 0088), and
+  // `consumed_at` and 32 fixed slots, 0103 and 0106), and
   // ops/wallet-backfill.ts's delete-the-day (now an upsert plus
-  // `superseded_at`, 0086). The backlog is empty and stays empty.
+  // `superseded_at`, 0104). The backlog is empty and stays empty.
 ]);
 
 /** (ii) rm_owner sites, reachable only from an rm_owner entry (proved below). */

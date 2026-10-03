@@ -250,7 +250,7 @@ test("concurrent out-of-order assertions never regress a passkey counter", async
 });
 
 test("public authentication options overwrite the authentication slot issued longest ago, and the store stays at 32 slots", async () => {
-  // Every authentication slot (8..31, migration 0088) holds a ceremony: slot
+  // Every authentication slot (8..31, migration 0106) holds a ceremony: slot
   // 15 the oldest (expired), slot 11 the next oldest (still live), the rest
   // newer and live. The registration slots (0..7) hold ceremonies OLDER than
   // all of them, and are never chosen by an authentication issuance.

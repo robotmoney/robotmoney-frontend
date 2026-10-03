@@ -16,7 +16,7 @@
 --
 -- WHAT WAS WRONG. Migration 0053 granted rm_app
 -- `SELECT, INSERT, UPDATE, DELETE ON ALL TABLES`, `schema_migrations`
--- included. 0065 took back DELETE and TRUNCATE (the table is append-only) but
+-- included. 0083 took back DELETE and TRUNCATE (the table is append-only) but
 -- left INSERT and UPDATE, and backend/schema/grants.sql re-granted
 -- `SELECT, INSERT, UPDATE` on every reconciliation because the table was not
 -- in its read-only list. So the §8.3 rule held only because
@@ -34,10 +34,10 @@
 -- reads the ledger at boot (src/db/append-only-guard.ts) and §7.2 has every
 -- database-holding container run preflight check 3 under its own credential,
 -- which reads the ledger (src/db/schema-manifest.ts's `detectManifestState`).
--- `schema_manifest` already has this shape from 0064; this migration gives the
+-- `schema_manifest` already has this shape from 0082; this migration gives the
 -- ledger the same one. schema/grants.sql re-asserts both on every run.
 --
--- The two row-removing privileges are 0065's and are not repeated here: that
+-- The two row-removing privileges are 0083's and are not repeated here: that
 -- migration revoked them from both roles as §9.1 step 2, and
 -- backend/schema/grants.sql re-asserts it on every run.
 --

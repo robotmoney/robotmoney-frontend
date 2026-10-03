@@ -150,7 +150,7 @@ export class SchedulerClock {
 
   /**
    * subjectId → the boundary timer of that subject's ONE collecting session
-   * (§3; migration 0068 allows no second). Held whether the subject is active
+   * (§3; migration 0086 allows no second). Held whether the subject is active
    * or not: an inactive subject's window runs to its close (§4.5, D55 (4)).
    */
   #boundaries = new Map<string, { at: number; sessionId: string; handle: TimerHandle }>();

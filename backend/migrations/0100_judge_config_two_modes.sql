@@ -24,7 +24,7 @@
 -- published receipt that says a judgement ran in `shadow` must stay readable.
 --
 -- WHY `additive`. §8.4: every query the older registry declares still
--- succeeds with the same semantics. Code built for 0081 already writes only
+-- succeeds with the same semantics. Code built for 0099 already writes only
 -- `off` or `enforce` and reads `shadow` as `off`, so the tighter CHECK refuses
 -- nothing it does, and the healed row reads the same to it as before.
 --
@@ -45,7 +45,7 @@ BEGIN
     RETURNING id
   )
   INSERT INTO audit_log (actor, action, scope, target_type, target_id, reason, before_state, after_state)
-  SELECT 'migration 0082', 'judge_config', jsonb_build_object('mode', 'off'), 'swarm_judge_config', id::text,
+  SELECT 'migration 0100', 'judge_config', jsonb_build_object('mode', 'off'), 'swarm_judge_config', id::text,
          'D53 (1): shadow retired; the column now admits off | enforce',
          jsonb_build_object('mode', 'shadow'), jsonb_build_object('mode', 'off')
     FROM healed;

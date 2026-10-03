@@ -765,7 +765,7 @@ export async function createSubjectAdmin(input: SubjectInput, actor: Actor = ADM
 
 /**
  * A whole, positive number of seconds — the only shape a duration may take
- * (scheduler spec §2.2/§2.4, migrations 0067 and 0073's CHECKs).
+ * (scheduler spec §2.2/§2.4, migrations 0085 and 0090's CHECKs).
  */
 function isPositiveWholeSeconds(v: unknown): v is number {
   return typeof v === "number" && Number.isInteger(v) && v > 0;

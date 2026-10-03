@@ -13,7 +13,7 @@
 // (tests/db-preflight-checks.test.ts keeps those).
 //
 // Every grant is planted in this file's own database (useCleanDatabase), where
-// migration 0089 has already revoked every runtime DELETE, and revoked again in
+// migration 0107 has already revoked every runtime DELETE, and revoked again in
 // `finally`. The assertions read the denylist (`findDenylistViolations`) and
 // the check's own refusal text (`checkPrivileges`), never a statement that
 // would delete.
@@ -59,8 +59,8 @@ describe("check 2's DELETE/TRUNCATE rule covers every table (D55 (6))", () => {
           expect(violations).toEqual([{ rule: "append_only_write", role, object: "jobs" }]);
           expect(await refusalsOn("jobs")).toEqual([
             `${role} holds DELETE/TRUNCATE on jobs: only rm_owner may DELETE or TRUNCATE, on any table (D55 (6)). ` +
-              "Migration 0089 revokes both from every runtime role and every migrate run re-asserts it, so this " +
-              "database has not reached 0089, or a grant re-widened it since",
+              "Migration 0107 revokes both from every runtime role and every migrate run re-asserts it, so this " +
+              "database has not reached 0107, or a grant re-widened it since",
           ]);
         } finally {
           await fixtureDb.unsafe(`REVOKE ${privilege} ON jobs FROM ${role}`);

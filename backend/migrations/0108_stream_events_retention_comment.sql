@@ -4,8 +4,8 @@
 -- The event log's table comment names the retention rule that governs it —
 -- issue #1026, decision D55 (12).
 --
--- D55 (12): "A later migration corrects the table comment 0080 wrote, which
--- still names the cursor bound." 0080's comment says only rm_owner may delete
+-- D55 (12): "A later migration corrects the table comment 0097 wrote, which
+-- still names the cursor bound." 0097's comment says only rm_owner may delete
 -- "only rows below the oldest servable cursor (D52, D53 (2))". D55 (12)
 -- superseded that bound: the oldest cursor the API may still be asked to serve
 -- is not knowable while a scheduler is down, so the log keeps a time window of

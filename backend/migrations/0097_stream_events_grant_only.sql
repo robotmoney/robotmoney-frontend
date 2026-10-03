@@ -7,7 +7,7 @@
 --
 -- §6.3 Retention: "The event log is append-only and is retained at least as far
 -- back as the oldest cursor the API may still be asked to serve. Pruning above
--- that point is permitted; pruning below it is forbidden." Migration 0072 put
+-- that point is permitted; pruning below it is forbidden." Migration 0089 put
 -- 0032's `rm_append_only_guard()` triggers on this table, which refuse every
 -- DELETE and TRUNCATE from every role — rm_owner included — so the permitted
 -- prune could not run at all. D53 (2) settles the conflict for the retention
@@ -28,9 +28,9 @@
 -- falls below the pruned floor is answered with a resync, never a skip (§6.3).
 --
 -- WHY `breaking`. §8.4: additive means old code's supported behaviour is
--- preserved. Code built for 0072-0079 lists this table in APPEND_ONLY_TABLES,
+-- preserved. Code built for 0089-0079 lists this table in APPEND_ONLY_TABLES,
 -- and its boot guard (`assertAppendOnlyGuardArmed`, src/db/append-only-guard.ts)
--- expects both triggers on every listed table once 0072 is recorded. That code
+-- expects both triggers on every listed table once 0089 is recorded. That code
 -- booted against this database reports the guard disarmed and refuses to
 -- serve. A code-only rollback past this file is therefore closed, explicitly.
 

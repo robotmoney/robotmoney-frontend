@@ -1,5 +1,5 @@
 // D55 (10), issue #1026 [smoke-twin-remote-refusal]: a production dump from
-// before 0063 cannot become a remote twin through any tool. The twin tooling
+// before 0081 cannot become a remote twin through any tool. The twin tooling
 // only ever restores into a local container, and every stage tool that reads a
 // remote target with no `deployment_identity` table refuses, changes nothing,
 // and names the one-off intervention in the runbook.
@@ -55,7 +55,7 @@ describe("a remote target with no deployment_identity refuses and names the runb
     expect(existsSync(path)).toBe(true);
     const text = readFileSync(path, "utf8");
     expect(text).toContain("rm_owner");
-    expect(text).toContain("0063");
+    expect(text).toContain("0081");
     expect(text).toContain("rehearsal");
   });
 });

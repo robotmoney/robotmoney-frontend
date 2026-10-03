@@ -15,7 +15,7 @@
 -- `SELECT, INSERT, UPDATE` to rm_app on every table it did not list as
 -- read-only, and it listed none of these, so every migrate run that reconciled
 -- widened all fourteen to UPDATE. The triggers still refused the write, but a
--- trigger and a grant are two protections, not one (0072's header says the
+-- trigger and a grant are two protections, not one (0089's header says the
 -- same): a privilege refusal survives a dropped trigger, and a trigger
 -- survives a re-widened grant. With the grant widened, a single disabled
 -- trigger was the whole defence. grants.sql now carries an insert-only list and
@@ -28,7 +28,7 @@
 -- would fail that check.
 --
 -- rm_worker is named in the REVOKE for the same belt-and-braces reason as
--- 0072: its grants are an allowlist, and a hand-widened grant must not survive
+-- 0089: its grants are an allowlist, and a hand-widened grant must not survive
 -- the migration. Its SELECT (0062) is left alone.
 --
 -- ADDITIVE: every one of these writes was already refused by the family's

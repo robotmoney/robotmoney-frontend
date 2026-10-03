@@ -453,7 +453,7 @@ test("a consensus arriving after publication is recorded as late evidence and ch
 
 test("no_consensus and not_judged are OUTCOMES, never lifecycle states: the database refuses them as a state", async () => {
   // §4.4: "`no_consensus` and `not_judged` are outcomes only and never
-  // lifecycle states." Migration 0068's state CHECK is what makes that a
+  // lifecycle states." Migration 0086's state CHECK is what makes that a
   // fact rather than a convention.
   const { sessionId } = await closedEpoch("st_states", "enforce");
   for (const bad of ["no_consensus", "not_judged"]) {
@@ -510,7 +510,7 @@ test("a session with nothing captured is refused by request-judging and finalize
   // close path in the code now captures (turnover — of an active or an
   // inactive subject's window, D55 (4) — and the
   // route-unreachable legacy closes, asserted first below), so an uncaptured
-  // session is a row closed before migration 0074 — modelled here by clearing
+  // session is a row closed before migration 0091 — modelled here by clearing
   // the two columns. RED CONTROL: the code before this refusal treated the
   // NULL mode as `enforce` and COALESCEd the duration from the subject at
   // request time, so the admin change below reached the settling session as a

@@ -381,10 +381,10 @@ export type DenylistRule =
    *  decision, and adds a table's own reason where it has one
    *  (`protectedFromDeletion()`).
    *
-   *  Migration 0089 is spec §9.1 step 3, the transition that revokes 0053's
+   *  Migration 0107 is spec §9.1 step 3, the transition that revokes 0053's
    *  `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO
-   *  rm_app` (and every other runtime DELETE) on every table; 0065 did it for
-   *  the append-only set first. Before 0089 this rule refuses every boot, which
+   *  rm_app` (and every other runtime DELETE) on every table; 0083 did it for
+   *  the append-only set first. Before 0107 this rule refuses every boot, which
    *  is what §9.1 means by "Check 2 fails until they land".
    *  tests/preflight-delete-denylist.test.ts plants a grant of each privilege
    *  for each runtime role on an ordinary table. */
@@ -538,8 +538,8 @@ function denylistMessage(violation: DenylistViolation): string {
       }
       return (
         `${violation.role} holds DELETE/TRUNCATE on ${violation.object}: only rm_owner may DELETE or TRUNCATE, on ` +
-        "any table (D55 (6)). Migration 0089 revokes both from every runtime role and every migrate run " +
-        "re-asserts it, so this database has not reached 0089, or a grant re-widened it since"
+        "any table (D55 (6)). Migration 0107 revokes both from every runtime role and every migrate run " +
+        "re-asserts it, so this database has not reached 0107, or a grant re-widened it since"
       );
   }
 }
@@ -551,7 +551,7 @@ function denylistMessage(violation: DenylistViolation): string {
  * "DELETE/TRUNCATE stay revoked from rm_app and rm_worker". It is pruned only
  * by the manual, receipted `bun run prune`, and only rows older than its
  * retention window of at least 7 days (D55 (12), backend/scripts/prune.ts).
- * `swarm_stream_head` is that log's counter row (migration 0081): a runtime
+ * `swarm_stream_head` is that log's counter row (migration 0098): a runtime
  * role that could remove it could stop every transition that writes an event.
  *
  * Check 2 refuses a runtime DELETE or TRUNCATE on every table; this list only
@@ -1380,7 +1380,7 @@ export async function checkEnvIdentity(
  * `"unreadable"` for an absent table, a table with no enrollment column, or a
  * value that is neither kind — none of which is evidence of rehearsal.
  *
- * The enrollment column is `kind` (§4.2, migration 0063), resolved from the
+ * The enrollment column is `kind` (§4.2, migration 0081), resolved from the
  * catalog rather than assumed, because this check also runs against databases
  * restored or hand-built before that migration (`identity`), and a column error
  * there would read as "the check is broken" rather than "this target is not
@@ -1451,7 +1451,7 @@ export const SUBJECT_SCHEDULING_COLUMNS: readonly string[] = Object.freeze([
  * and "only the subjects' epoch durations differ" (scheduler spec §8). A stage
  * subject with no anchor is exactly as broken as a production one.
  *
- * WHY IT CAN STILL FIND ANYTHING. Migrations 0067 and 0073 make all three
+ * WHY IT CAN STILL FIND ANYTHING. Migrations 0085 and 0090 make all three
  * columns NOT NULL with defaults, so on a database they have reached this passes
  * by construction. That is the point of a preflight: it measures rather than
  * assumes, and the case it exists for is a column that is absent or was relaxed

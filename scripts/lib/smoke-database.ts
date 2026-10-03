@@ -143,7 +143,7 @@ ${PROVISIONING_DEFAULT_PRIVILEGES_SQL}`;
  * nor an `identity` column" (the first real `--local dump` boot, scripts/tests/
  * integration/smoke-dump-lifecycle.test.ts). So the runtime roles get back
  * exactly the read the schema itself declares on those three tables — SELECT,
- * as 0063 grants it on `deployment_identity` and backend/schema/grants.sql's
+ * as 0081 grants it on `deployment_identity` and backend/schema/grants.sql's
  * `select_for_runtime` on all three — on whichever of them the restored
  * version has, and nothing else. Every other grant is the roles-and-grants
  * reconciliation's, run by `--migrate` as `rm_owner` (§8.1, §8.3); no write,

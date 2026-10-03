@@ -84,7 +84,7 @@ function options(over: Partial<MigrateGateOptions & { nonInteractive: boolean }>
   return { caller: "smoke_flag", env: "stage", connection: "local", nonInteractive: true, ...over };
 }
 
-// The REAL enrollment table, migration 0063's: one row at most (its key is a
+// The REAL enrollment table, migration 0081's: one row at most (its key is a
 // boolean pinned true), zero rows allowed, which is exactly the missing-row
 // case.
 async function setIdentity(value: "production" | "rehearsal" | null, db: postgres.Sql<{}> = sql): Promise<void> {
@@ -609,7 +609,7 @@ describe("runMigrate under the §2 target lock — no private lock, proof at eve
     await withClone(async ({ fixtures, owner: cloneOwner, name }) => {
       await setIdentity("rehearsal", fixtures);
       await migrate(cloneOwner, name);
-      const dir = migrationsWith({ "0099_lock_probe.sql": `${ADDITIVE}CREATE TABLE rm_lock_probe (id integer);\n` });
+      const dir = migrationsWith({ "0199_lock_probe.sql": `${ADDITIVE}CREATE TABLE rm_lock_probe (id integer);\n` });
       const seen: { objsubid: number; pid: number }[] = [];
       await withTargetLock(urlFor(name), async (lock) => {
         await runMigrate(cloneOwner, { ...options(), lock }, {
@@ -846,15 +846,15 @@ describe("the migrate journal — written before each phase, closed on every exi
       tl("first run");const manifestBefore = await readManifest(fixtures);
 
       const planted = migrationsWith({
-        "0098_kill_probe_a.sql": `${ADDITIVE}CREATE TABLE rm_kill_probe_a (id integer);\n`,
-        "0099_kill_probe_b.sql": `${ADDITIVE}CREATE TABLE rm_kill_probe_b (id integer);\n`,
+        "0198_kill_probe_a.sql": `${ADDITIVE}CREATE TABLE rm_kill_probe_a (id integer);\n`,
+        "0199_kill_probe_b.sql": `${ADDITIVE}CREATE TABLE rm_kill_probe_b (id integer);\n`,
       });
       let killed = 0;
       const journal = journalIn(dir);
       const run = command(name, dir, journal, {
         migrationsDir: planted,
         afterCommit: async (file) => {
-          if (file !== "0098_kill_probe_a.sql") return;tl("kill");
+          if (file !== "0198_kill_probe_a.sql") return;tl("kill");
           // The command's OWN lock connection, found by the identity it
           // publishes, and only on this database.
           // cluster admin: terminating another login's backend is superuser-only.
@@ -870,25 +870,25 @@ describe("the migrate journal — written before each phase, closed on every exi
 
       const file = readJournal(journal.path);
       expect(file.outcome).toBe("failed");
-      // 0098 committed; the loss is found at the next boundary, whose phase
-      // never starts — 0099 was not applied.
+      // 0198 committed; the loss is found at the next boundary, whose phase
+      // never starts — 0199 was not applied.
       expect(steps(file).slice(-2)).toEqual([
-        ["migrate: apply 0098_kill_probe_a.sql", "committed"],
-        ["migrate: apply 0099_kill_probe_b.sql", "failed"],
+        ["migrate: apply 0198_kill_probe_a.sql", "committed"],
+        ["migrate: apply 0199_kill_probe_b.sql", "failed"],
       ]);
       expect(file.phases.at(-1)?.reason).toContain("The lock is not re-acquired");
-      expect(await ledgerNames(fixtures)).toContain("0098_kill_probe_a.sql");
-      expect(await ledgerNames(fixtures)).not.toContain("0099_kill_probe_b.sql");
+      expect(await ledgerNames(fixtures)).toContain("0198_kill_probe_a.sql");
+      expect(await ledgerNames(fixtures)).not.toContain("0199_kill_probe_b.sql");
       // §8.3's in-progress state: the ledger is ahead of the manifest, which
       // did not move.
       expect(await readManifest(fixtures)).toEqual(manifestBefore);
       expect((await detectManifestState(fixtures)).kind).toBe("in_progress");
 
-      // The next run recovers: it verifies 0098, applies 0099 and publishes.
+      // The next run recovers: it verifies 0198, applies 0199 and publishes.
       tl("asserts done");const rerun = journalIn(dir);
       const { result } = await command(name, dir, rerun, { migrationsDir: planted });
-      expect(result.resumedAndVerified).toContain("0098_kill_probe_a.sql");
-      expect(result.applied).toEqual(["0099_kill_probe_b.sql"]);
+      expect(result.resumedAndVerified).toContain("0198_kill_probe_a.sql");
+      expect(result.applied).toEqual(["0199_kill_probe_b.sql"]);
       expect(readJournal(rerun.path).outcome).toBe("succeeded");
       expect((await detectManifestState(fixtures)).kind).toBe("published");tl("rerun done");
     });
@@ -1289,9 +1289,9 @@ describe("runMigrate — every pending migration declares additive or breaking",
 
       const dir = migrationsWith({
         "0098_headed_probe.sql": `${ADDITIVE}CREATE TABLE rm_headed_probe (id integer);\n`,
-        "0099_headerless_probe.sql": "-- a probe with prose and no declaration\nCREATE TABLE rm_headerless_probe (id integer);\n",
+        "0199_headerless_probe.sql": "-- a probe with prose and no declaration\nCREATE TABLE rm_headerless_probe (id integer);\n",
       });
-      await expect(migrate(cloneOwner, name, {}, { migrationsDir: dir })).rejects.toThrow("0099_headerless_probe.sql");
+      await expect(migrate(cloneOwner, name, {}, { migrationsDir: dir })).rejects.toThrow("0199_headerless_probe.sql");
       await expect(migrate(cloneOwner, name, {}, { migrationsDir: dir })).rejects.toThrow(/compat/);
 
       expect(await ledgerNames(fixtures)).toEqual(ledgerBefore);
@@ -1302,7 +1302,7 @@ describe("runMigrate — every pending migration declares additive or breaking",
     });
   });
 
-  test("a header-less file at or below the 0063 baseline is applied as pre-compat and records NULL compat", async () => {
+  test("a header-less file at or below the 0081 baseline is applied as pre-compat and records NULL compat", async () => {
     await withClone(async ({ fixtures, owner: cloneOwner, name }) => {
       await setIdentity("rehearsal", fixtures);
       // The first manifest is baselined against the real snapshot first; the
@@ -1311,16 +1311,16 @@ describe("runMigrate — every pending migration declares additive or breaking",
       await migrate(cloneOwner, name);
       const dir = migrationsWith({
         "0063_zz_precompat_probe.sql": "-- no declaration: pre-compat\nCREATE TABLE rm_precompat_probe (id integer);\n",
-        "0099_declared_probe.sql": `${ADDITIVE}CREATE TABLE rm_declared_probe (id integer);\n`,
+        "0199_declared_probe.sql": `${ADDITIVE}CREATE TABLE rm_declared_probe (id integer);\n`,
       });
       const result = await migrate(cloneOwner, name, {}, { migrationsDir: dir });
-      expect(result.applied).toEqual(["0063_zz_precompat_probe.sql", "0099_declared_probe.sql"]);
+      expect(result.applied).toEqual(["0063_zz_precompat_probe.sql", "0199_declared_probe.sql"]);
       const rows = await fixtures<{ name: string; compat: string | null; metadata_version: number | null }[]>`
         SELECT name, compat, metadata_version FROM schema_migrations
-        WHERE name IN ('0063_zz_precompat_probe.sql', '0099_declared_probe.sql') ORDER BY name`;
+        WHERE name IN ('0063_zz_precompat_probe.sql', '0199_declared_probe.sql') ORDER BY name`;
       expect(rows.map((r) => ({ ...r }))).toEqual([
         { name: "0063_zz_precompat_probe.sql", compat: null, metadata_version: null },
-        { name: "0099_declared_probe.sql", compat: "additive", metadata_version: 1 },
+        { name: "0199_declared_probe.sql", compat: "additive", metadata_version: 1 },
       ]);
     });
   });
@@ -1336,31 +1336,31 @@ describe("runMigrate — recovery from an interrupted run", () => {
       await setIdentity("rehearsal", fixtures);
       await migrate(cloneOwner, name);
       const dir = migrationsWith({
-        "0098_interrupt_probe_a.sql": `${ADDITIVE}CREATE TABLE rm_interrupt_probe_a (id integer);\n`,
-        "0099_interrupt_probe_b.sql": `${ADDITIVE}CREATE TABLE rm_interrupt_probe_b (id integer);\n`,
+        "0198_interrupt_probe_a.sql": `${ADDITIVE}CREATE TABLE rm_interrupt_probe_a (id integer);\n`,
+        "0199_interrupt_probe_b.sql": `${ADDITIVE}CREATE TABLE rm_interrupt_probe_b (id integer);\n`,
       });
 
-      const killed = new Error("injected: the process died after 0098 committed");
+      const killed = new Error("injected: the process died after 0198 committed");
       await expect(
         migrate(cloneOwner, name, {}, {
           migrationsDir: dir,
           afterCommit: (file) => {
-            if (file === "0098_interrupt_probe_a.sql") throw killed;
+            if (file === "0198_interrupt_probe_a.sql") throw killed;
           },
         }),
       ).rejects.toThrow(killed.message);
 
       const state = await detectManifestState(fixtures);
       expect(state.kind).toBe("in_progress");
-      if (state.kind === "in_progress") expect(state.ahead).toEqual(["0098_interrupt_probe_a.sql"]);
+      if (state.kind === "in_progress") expect(state.ahead).toEqual(["0198_interrupt_probe_a.sql"]);
       const ledger = await ledgerNames(fixtures);
-      expect(ledger).toContain("0098_interrupt_probe_a.sql");
-      expect(ledger).not.toContain("0099_interrupt_probe_b.sql");
+      expect(ledger).toContain("0198_interrupt_probe_a.sql");
+      expect(ledger).not.toContain("0199_interrupt_probe_b.sql");
       const committed = await appliedAtByName(fixtures);
 
       const rerun = await migrate(cloneOwner, name, {}, { migrationsDir: dir });
-      expect(rerun.resumedAndVerified).toEqual(["0098_interrupt_probe_a.sql"]);
-      expect(rerun.applied).toEqual(["0099_interrupt_probe_b.sql"]);
+      expect(rerun.resumedAndVerified).toEqual(["0198_interrupt_probe_a.sql"]);
+      expect(rerun.applied).toEqual(["0199_interrupt_probe_b.sql"]);
       expect((await detectManifestState(fixtures)).kind).toBe("published");
 
       const after = await appliedAtByName(fixtures);
@@ -1374,7 +1374,7 @@ describe("runMigrate — recovery from an interrupted run", () => {
       await migrate(cloneOwner, name);
       const manifestBefore = await readManifest(fixtures);
       const dir = migrationsWith({
-        "0099_reconcile_probe.sql": `${ADDITIVE}CREATE TABLE rm_reconcile_probe (id integer);\n`,
+        "0199_reconcile_probe.sql": `${ADDITIVE}CREATE TABLE rm_reconcile_probe (id integer);\n`,
       });
       // cluster admin: handing a table to rm_app (a role rm_owner is not a member of) is superuser-only.
       await adminExec("CREATE TABLE rm_migrate_foreign_probe (id integer)", name);
@@ -1383,14 +1383,14 @@ describe("runMigrate — recovery from an interrupted run", () => {
       await expect(migrate(cloneOwner, name, {}, { migrationsDir: dir })).rejects.toThrow("owned by a runtime role");
       // The migration committed in its own transaction; the manifest did not,
       // because it publishes in the reconciliation's.
-      expect(await ledgerNames(fixtures)).toContain("0099_reconcile_probe.sql");
+      expect(await ledgerNames(fixtures)).toContain("0199_reconcile_probe.sql");
       expect(await readManifest(fixtures)).toEqual(manifestBefore);
       const committed = await appliedAtByName(fixtures);
 
       await adminExec("DROP TABLE rm_migrate_foreign_probe", name);
       const rerun = await migrate(cloneOwner, name, {}, { migrationsDir: dir });
       expect(rerun.applied).toEqual([]);
-      expect(rerun.resumedAndVerified).toContain("0099_reconcile_probe.sql");
+      expect(rerun.resumedAndVerified).toContain("0199_reconcile_probe.sql");
       expect(await readManifest(fixtures)).toEqual(rerun.manifest);
 
       const after = await appliedAtByName(fixtures);
@@ -1511,7 +1511,7 @@ describe("MigrateRunSeams — migrationsDir with snapshotDir publishes M's manif
       await setIdentity("rehearsal", fixtures);
       await migrate(cloneOwner, name);
 
-      const synthesized = "0099_synthesized_additive.sql";
+      const synthesized = "0199_synthesized_additive.sql";
       const migrationsDir = migrationsWith({ [synthesized]: `${ADDITIVE}CREATE TABLE rm_synthesized (id integer);\n` });
       // The snapshot fixture: backend/schema/ with M appended to its filename
       // list and the hash recomputed over the same declaration — the smallest

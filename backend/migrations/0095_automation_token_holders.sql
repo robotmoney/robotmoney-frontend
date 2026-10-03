@@ -12,7 +12,7 @@
 -- holding the token's hash and its rights ... Each instance holds its own
 -- tokens, so provisioning one never invalidates another's."
 --
--- Migration 0069 built the store for the first holder only: keyed on
+-- Migration 0087 built the store for the first holder only: keyed on
 -- `instance` alone, so one instance could hold one token, and with rights
 -- limited to the scheduler's three. This migration makes the key
 -- (instance, holder) and adds the two holders' rights.
@@ -24,7 +24,7 @@
 -- own, so two holders can never share one secret either.
 --
 -- THE HOLDER DEFAULTS TO `system-scheduler`, which is what every existing row
--- is: 0069's store had no other holder, and its only rights were the
+-- is: 0087's store had no other holder, and its only rights were the
 -- scheduler's. The default also keeps an INSERT that names no holder meaning
 -- what it meant before.
 --
@@ -33,7 +33,7 @@
 -- holder's rights are a subset of that holder's own list and nothing else —
 -- the scheduler cannot be provisioned `admin`, and the producer cannot be
 -- provisioned `lifecycle_transitions`. The constraint is in the database, not
--- only in src/db/automation-tokens.ts, for 0069's reason: a value that gets
+-- only in src/db/automation-tokens.ts, for 0087's reason: a value that gets
 -- past the module is still refused.
 --
 --   system-scheduler    read_subjects, read_sessions, lifecycle_transitions

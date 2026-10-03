@@ -1,13 +1,31 @@
 {
-  "name": "v0.5.0+0062_rm_readonly_sequence_select (production ledger 2026-09-25)",
+  "name": "v0.5.0+0061+0062+0063+0080 (production ledger 2026-10-01)",
   "release": "v0.5.0",
-  "source": "production schema_migrations, read 2026-09-25 as rm_readonly on the read-only replica (owner-verified ground truth)",
+  "source": "production schema_migrations, read 2026-10-01 (the capture restored on stage-2; owner-verified ground truth, issue 1097). Production has shipped v0.5.3 and v0.5.4 since with no migration, and the v0.5.4 tree (1cda4085) holds exactly these 76 files.",
   "outOfBand": [
+    {
+      "file": "0061_rm_worker_wallet_backfill_grant.sql",
+      "sha256": "8f2c97243bb77edc9891fc0b2770ec0fa8d5c03bf35780cc366976ba0af80d89",
+      "source": "shipped by v0.5.1 (the branch copy is byte for byte the v0.5.4 copy)",
+      "appliedAt": "2026-09-25T21:38Z"
+    },
     {
       "file": "0062_rm_readonly_sequence_select.sql",
       "sha256": "fa483194653f60974223796e4440c3658aaef87890af7b3e50d40bbe0b2c9ee8",
       "source": "archive/releases-0.5.x-2026-09-24 at c3a68812 (file added by 61fab107, whose SQL lacks the rm_readonly_test drop and the rm_worker INSERT/UPDATE grants). Production ran the c3a68812 SQL, verified 2026-09-25 as rm_readonly on the prod replica: rm_readonly_test does not exist, and rm_worker holds INSERT and UPDATE on asset_prices, asset_price_floors and chain_address_floors, which v0.5.0 never grants. The branch copy (550f3288) differs from these bytes in comments only.",
       "appliedAt": "2026-09-22T03:35Z"
+    },
+    {
+      "file": "0063_swarm_judge_model_default.sql",
+      "sha256": "560cf7fb92e7c22f60e17314cb146e166703961be680e13c1ac09bfc95b95e05",
+      "source": "shipped by v0.5.1 (the branch copy is byte for byte the v0.5.4 copy)",
+      "appliedAt": "2026-09-25T21:38Z"
+    },
+    {
+      "file": "0080_analytics_ledger_compaction.sql",
+      "sha256": "eb8b4c80d01bfd266f6d5f4b1f138fd087db02ff32bb546dc2bdaa3fb4631b98",
+      "source": "shipped by v0.5.2 and unchanged through v0.5.4 (v0.5.2, v0.5.3 and 1cda4085 carry these bytes). The branch copy adds only a compat header, so these bytes are kept verbatim beside baseline.json.",
+      "appliedAt": "2026-09-29T20:46Z"
     }
   ],
   "ledger": [
@@ -296,12 +314,24 @@
       "appliedAt": "2026-09-21 01:55"
     },
     {
+      "file": "0061_rm_worker_wallet_backfill_grant.sql",
+      "appliedAt": "2026-09-25 21:38"
+    },
+    {
       "file": "0061_source_value_provenance.sql",
       "appliedAt": "2026-09-21 01:55"
     },
     {
       "file": "0062_rm_readonly_sequence_select.sql",
       "appliedAt": "2026-09-22 03:35"
+    },
+    {
+      "file": "0063_swarm_judge_model_default.sql",
+      "appliedAt": "2026-09-25 21:38"
+    },
+    {
+      "file": "0080_analytics_ledger_compaction.sql",
+      "appliedAt": "2026-09-29 20:46"
     }
   ]
 }

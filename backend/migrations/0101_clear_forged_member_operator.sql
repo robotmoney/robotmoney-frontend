@@ -51,7 +51,7 @@
 -- — another value, admin-written, roster-seeded, archive-seeded, or never
 -- written — is left exactly as it is.
 --
--- RECORDED. Each cleared member gets an audit_log row (actor `migration 0083`,
+-- RECORDED. Each cleared member gets an audit_log row (actor `migration 0101`,
 -- action `member_operator_cleared`) naming the id and the value removed, and a
 -- NOTICE naming the member (id and handle). Replayed by hand, the text is
 -- still a no-op the second time: a cleared operator is NULL and no longer
@@ -101,12 +101,12 @@ BEGIN
        SET operator = NULL, version = version + 1, updated_at = now()
      WHERE id = forged.id;
     INSERT INTO audit_log (actor, action, scope, target_type, target_id, reason, before_state, after_state)
-    VALUES ('migration 0083', 'member_operator_cleared',
+    VALUES ('migration 0101', 'member_operator_cleared',
             jsonb_build_object('memberId', forged.id, 'fields', jsonb_build_array('operator')),
             'swarm_member', forged.id,
             'D55 (2): robotmoney operator set through the member self-write path with no later admin write',
             jsonb_build_object('operator', forged.operator), jsonb_build_object('operator', NULL));
-    RAISE NOTICE 'migration 0083: cleared the self-written operator % on member % (%)',
+    RAISE NOTICE 'migration 0101: cleared the self-written operator % on member % (%)',
       forged.operator, forged.id, forged.handle;
   END LOOP;
 END

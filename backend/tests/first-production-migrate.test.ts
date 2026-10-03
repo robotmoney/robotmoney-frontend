@@ -1,7 +1,7 @@
 // The first production migrate — smoke-production-spec.md §10 W2, verbatim:
 //
 //   "First production migrate: with no `deployment_identity` row and a ledger
-//   exactly equal to the production baseline (the 73-name ledger of §9.1),
+//   exactly equal to the production baseline (the 76-name ledger of §9.1),
 //   `RM_ENV=prod`, a typed `rm_owner` and `y` migrate once and receipt the
 //   pre-identity state. A ledger with one file more or less (a pure v0.5.0
 //   ledger included), `RM_ENV=stage`, a missing owner password, or any answer
@@ -9,7 +9,7 @@
 //   refuses."
 //
 // And the next bullet's first half (D55 (9)): "Identity first: the production
-// pass applies 0063 and commits its DDL, its ledger row and `production` in
+// pass applies 0081 and commits its DDL, its ledger row and `production` in
 // the same transaction, before any other migration." Its kill-and-rerun half
 // and the normal path's acceptance of the state a pass leaves are
 // identity-first-pass.test.ts's.
@@ -29,21 +29,23 @@
 // database compared before and after — never by a module call.
 //
 // WHICH LEDGER IS "v0.5.0's". The gate's text predates the read of
-// production's ledger (2026-09-25): production holds v0.5.0's 72 files plus
-// 0062_rm_readonly_sequence_select.sql, applied out of band, and the owner
-// ruled that observed set the one supported baseline
-// (backend/src/db/supported-releases.ts). So "exact" below is that set, and
-// v0.5.0's pure list is the "one file less" case, which refuses.
+// production's ledger: production holds v0.5.0's 72 files plus
+// 0061_rm_worker_wallet_backfill_grant.sql, 0062_rm_readonly_sequence_select.sql,
+// 0063_swarm_judge_model_default.sql and 0080_analytics_ledger_compaction.sql
+// (read 2026-10-01), and the owner ruled that observed set the one supported
+// baseline (backend/src/db/supported-releases.ts). So "exact" below is that
+// set. v0.5.0's pure list, and the same set with one file missing, refuse.
 //
-// THE DATABASES. The baseline predates 0063, so its database has no
+// THE DATABASES. The baseline predates 0081, so its database has no
 // `deployment_identity` table at all, which is the case production is in. It
-// is built from the baseline's own bytes (v0.5.0's tag, then the archived
-// out-of-band file) by v0.5.0's runner loop, once, without its last file; the
-// ledger variants are copies of that one:
+// is built from the baseline's own bytes (v0.5.0's tag, then the four files
+// production added, as it ran them) by v0.5.0's runner loop, once, without its
+// last file; the ledger variants are copies of that one:
 //   exact    — plus the last file: the ledger IS production's observed list;
-//   less     — as built: one file missing, which is v0.5.0's pure list;
+//   less     — as built: 75 names, one file missing;
 //   renamed  — plus the last file's DDL recorded under another name;
-//   more     — exact plus the first branch file the baseline lacks, applied.
+//   more     — exact plus the first branch file the baseline lacks, applied;
+//   v050     — v0.5.0's pure list: four files missing.
 // §9.1 step 1 (`rm_owner LOGIN PASSWORD …` through the provisioning login) is
 // performed on the cluster first, as it must be before any migrate run.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -90,6 +92,7 @@ const DB = {
   base: `rm_fpm_base_${suffix}`,
   exact: `rm_fpm_exact_${suffix}`,
   less: `rm_fpm_less_${suffix}`,
+  v050: `rm_fpm_v050_${suffix}`,
   renamed: `rm_fpm_renamed_${suffix}`,
   more: `rm_fpm_more_${suffix}`,
   norow: `rm_fpm_norow_${suffix}`,
@@ -197,6 +200,12 @@ beforeAll(async () => {
   for (const name of [DB.exact, DB.less, DB.renamed]) {
     await admin.unsafe(`CREATE DATABASE ${name} TEMPLATE ${DB.base}`);
   }
+  await admin.unsafe(`CREATE DATABASE ${DB.v050}`);
+  try {
+    await withDb(DB.v050, (db) => applyAsReleaseRunner(db, releaseSteps(loadRelease("v0.5.0"))));
+  } finally {
+    await restoreLogins(admin, saved);
+  }
   await withDb(DB.exact, (db) => applyAsReleaseRunner(db, [lastStep]));
   await withDb(DB.renamed, (db) => applyAsReleaseRunner(db, [{ file: RENAMED, ddl: lastStep.ddl }]));
   await admin.unsafe(`CREATE DATABASE ${DB.more} TEMPLATE ${DB.exact}`);
@@ -205,7 +214,7 @@ beforeAll(async () => {
   );
   await withDb(DB.exact, (db) => revokeLoginDefaults(db, LOGIN));
   // tablenorow — exact, plus a deployment_identity table made out of band:
-  // 0063's DDL with no ledger row and no identity row.
+  // 0081's DDL with no ledger row and no identity row.
   await admin.unsafe(`CREATE DATABASE ${DB.tablenorow} TEMPLATE ${DB.exact}`);
   const tablenorow = harnessConnection(DB.tablenorow);
   try {
@@ -236,17 +245,18 @@ afterAll(async () => {
 describe("the fixtures are the §10 gate's cases", () => {
   test("SUPPORTED_RELEASES is production's observed ledger alone, and `exact` records exactly its list with no identity table", async () => {
     expect(SUPPORTED_RELEASES.map((r) => r.name)).toEqual([TAG]);
-    expect(LAST).toBe("0062_rm_readonly_sequence_select.sql");
+    expect(LAST).toBe("0080_analytics_ledger_compaction.sql");
+    expect(RELEASE_FILES).toHaveLength(76);
     const exact = await fingerprint(DB.exact);
     expect(exact.ledger).toEqual([...SUPPORTED_RELEASES[0]!.migrations]);
     expect(exact.relations).not.toContain("deployment_identity");
     expect(exact.relations).not.toContain("schema_manifest");
   });
 
-  test("each variant differs from the baseline's list by exactly one file, and `less` is v0.5.0's pure list", async () => {
+  test("each variant differs from the baseline's list by exactly one file, and `v050` is v0.5.0's pure list", async () => {
     const list = SUPPORTED_RELEASES[0]!.migrations;
     expect((await fingerprint(DB.less)).ledger).toEqual(list.filter((file) => file !== LAST));
-    expect((await fingerprint(DB.less)).ledger).toEqual(loadRelease("v0.5.0").migrations.map((m) => m.file));
+    expect((await fingerprint(DB.v050)).ledger).toEqual(loadRelease("v0.5.0").migrations.map((m) => m.file));
     expect((await fingerprint(DB.more)).ledger).toEqual([...list, FIRST_UNSHIPPED].sort());
     expect((await fingerprint(DB.renamed)).ledger).toEqual([...list.filter((file) => file !== LAST), RENAMED].sort());
   });
@@ -256,7 +266,7 @@ describe("the baseline is production's state, not only its ledger", () => {
   // Production ran c3a68812's SQL for 0062_rm_readonly_sequence_select.sql,
   // verified on the replica 2026-09-25: rm_worker holds INSERT and UPDATE on
   // the three sampler tables, which v0.5.0 never grants. The fixture replays
-  // the archive tag's bytes, so `exact` must show the same grants and `less`
+  // the archive tag's bytes, so `exact` must show the same grants and `v050`
   // (v0.5.0 alone) must not; a replay of 61fab107's bytes would fail here.
   const SAMPLER_TABLES = ["asset_prices", "asset_price_floors", "chain_address_floors"];
   async function workerWrites(database: string): Promise<boolean[]> {
@@ -276,8 +286,8 @@ describe("the baseline is production's state, not only its ledger", () => {
     expect(await workerWrites(DB.exact)).toEqual([true, true, true]);
   });
 
-  test("red control — less, v0.5.0 alone: it may not", async () => {
-    expect(await workerWrites(DB.less)).toEqual([false, false, false]);
+  test("red control — v0.5.0 alone: it may not", async () => {
+    expect(await workerWrites(DB.v050)).toEqual([false, false, false]);
   });
 });
 
@@ -299,12 +309,22 @@ describe("§10 W2 — First production migrate", () => {
     await expectRefusedAndUnchanged(DB.more, run, before, "gates");
   });
 
-  test("a ledger with one file LESS — v0.5.0's pure list — refuses at the gates, naming the missing file, and changes nothing", async () => {
+  test("a ledger with one file LESS (75 names) refuses at the gates, naming the missing file, and changes nothing", async () => {
     const before = await fingerprint(DB.less);
     const run = await operator(DB.less, "prod", typed("y"));
     expect(run.screen).toContain(`1 missing (${LAST})`);
     expect(run.screen).not.toContain(PASSWORD_PROMPT);
     await expectRefusedAndUnchanged(DB.less, run, before, "gates");
+  });
+
+  test("v0.5.0's pure list refuses at the gates, naming the four files it lacks, and changes nothing", async () => {
+    const before = await fingerprint(DB.v050);
+    const run = await operator(DB.v050, "prod", typed("y"));
+    expect(run.screen).toContain(
+      "4 missing (0061_rm_worker_wallet_backfill_grant.sql, 0062_rm_readonly_sequence_select.sql, 0063_swarm_judge_model_default.sql, 0080_analytics_ledger_compaction.sql)",
+    );
+    expect(run.screen).not.toContain(PASSWORD_PROMPT);
+    await expectRefusedAndUnchanged(DB.v050, run, before, "gates");
   });
 
   test("a ledger with one file RENAMED refuses at the gates, naming both names, and changes nothing", async () => {
@@ -317,7 +337,7 @@ describe("§10 W2 — First production migrate", () => {
 
   test("a deployment_identity table with NO row and the exact baseline ledger refuses at the gates, before any password is asked for", async () => {
     // Criterion 170 admits the pass only with no table at all. The baseline
-    // predates 0063, so a table with no row was made out of band; the pass
+    // predates 0081, so a table with no row was made out of band; the pass
     // would refuse it under its fence, so the gates refuse it first.
     const before = await fingerprint(DB.tablenorow);
     const run = await operator(DB.tablenorow, "prod", typed("y"));
@@ -381,16 +401,15 @@ describe("§10 W2 — First production migrate", () => {
     // §9.1: "no identity row existed, the supported release the ledger
     // matched, and that ledger's filename list".
     expect(receipt.preIdentity).toEqual({ identity: "no table", release: TAG, ledger: RELEASE_FILES });
-    // D55 (9): 0063 FIRST, out of filename order; then every other pending
-    // file in filename order — the six the baseline lacks below 0063 included.
+    // D55 (9): 0081 FIRST, out of filename order; then every other pending
+    // file in filename order — the five the baseline lacks below 0081 included.
     const pending = HEAD_FILES.filter((file) => !RELEASE_FILES.includes(file));
     expect(receipt.applied).toEqual([IDENTITY_MIGRATION, ...pending.filter((file) => file !== IDENTITY_MIGRATION)]);
-    expect(receipt.applied.slice(1, 7)).toEqual([
+    expect(receipt.applied.slice(1, 6)).toEqual([
       "0056_swarm_judge_requires_model.sql",
       "0057_swarm_judge_policy_stamp.sql",
       "0058_swarm_judge_fault_injection.sql",
       "0059_swarm_judgement_completion_usage.sql",
-      "0061_rm_worker_wallet_backfill_grant.sql",
       "0062_rm_worker_analytics_ledger_read_grant.sql",
     ]);
     expect(receipt.identityWritten).toMatchObject({ kind: "production", writtenBy: "rm_owner" });
@@ -403,7 +422,7 @@ describe("§10 W2 — First production migrate", () => {
     await withDb(DB.exact, async (db) => {
       // §9.1 step 4, D55 (9): `production`, written by rm_owner...
       expect([...(await db`SELECT kind, written_by FROM deployment_identity`)]).toEqual([{ kind: "production", written_by: "rm_owner" }]);
-      // ...in the SAME transaction as 0063's ledger row: the two rows carry one
+      // ...in the SAME transaction as 0081's ledger row: the two rows carry one
       // creating transaction id and one transaction timestamp. (The table's
       // own pg_class row is rewritten by every later grant, so its xmin says
       // nothing; a killed pass is identity-first-pass.test.ts's proof that the
@@ -440,7 +459,7 @@ describe("§10 W2 — First production migrate", () => {
       identityWritten: unknown;
       resumedAfterIdentityPass: unknown;
     };
-    // The rows before 0063 still equal the baseline, but a published manifest
+    // The rows before 0081 still equal the baseline, but a published manifest
     // means no resume happened: the receipt must not claim one.
     expect(receipt).toMatchObject({ applied: [], preIdentity: null, identityWritten: null, resumedAfterIdentityPass: null });
     expect(run.screen).not.toContain("resumed after the identity-first pass");

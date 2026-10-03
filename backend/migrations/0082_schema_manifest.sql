@@ -21,7 +21,7 @@
 -- §8.4's definition, so `compat: additive` keeps code-only rollback alive
 -- across it.
 --
--- ONE ROW, ENFORCED BY THE KEY, for the reason 0063 gives about
+-- ONE ROW, ENFORCED BY THE KEY, for the reason 0081 gives about
 -- `deployment_identity`: a second manifest is not an ambiguity to resolve at
 -- read time, it is a constraint violation at write time. `readManifest`
 -- (src/db/schema-manifest.ts) still refuses two rows, because it also runs
@@ -33,7 +33,7 @@
 -- §7.2 has the database-holding containers run checks 1-3 "at startup against
 -- their own credential", and check 3a compares the live schema with "the
 -- manifest for M stored in the database" — so api, worker and worker-swarm
--- cannot boot at all without SELECT here. Exactly the split 0063 made for
+-- cannot boot at all without SELECT here. Exactly the split 0081 made for
 -- `deployment_identity`: the write restriction is the whole protection, and it
 -- is a grant, never a TypeScript check on top of one.
 

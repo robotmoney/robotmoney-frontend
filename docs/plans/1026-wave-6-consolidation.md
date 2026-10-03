@@ -14,7 +14,7 @@ Run `cd backend && bun test` and `bun test scripts/tests/integration`. Tick each
 
 Likely done, per the 2026-09-28 audit (verify, then tick):
 
-- Epoch grid columns: migration 0073 adds `epoch_anchor` and `judging_duration` [epoch-duration]
+- Epoch grid columns: migration 0090 adds `epoch_anchor` and `judging_duration` [epoch-duration]
 - Epoch lifecycle routes require `lifecycle_transitions` [automation-token, epoch-turnover]
 - `PARTICIPANT_PENDING_PATH` comes from `ROUTES` (contract half of the client-side criterion) [participant-judge-runner]
 - `api` and the pipeline worker call `runStartupPreflight` [db-preflight-checks]

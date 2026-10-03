@@ -9,9 +9,9 @@
 -- the subject's `judging_duration` at the instant it closes. An admin changing
 -- either afterwards affects later sessions, never one already settling."
 --
--- Migration 0068 captured the judge mode (`swarm_sessions.judge_mode`). This
+-- Migration 0086 captured the judge mode (`swarm_sessions.judge_mode`). This
 -- is the other half: the duration, copied from
--- `swarm_subjects.judging_duration_seconds` (migration 0073) in the turnover
+-- `swarm_subjects.judging_duration_seconds` (migration 0090) in the turnover
 -- transaction. The judging deadline is then the request instant plus THIS
 -- column, never plus the subject's current value, so an operator shortening a
 -- subject's judging wait cannot move the deadline of a session that is already
@@ -24,7 +24,7 @@
 --
 -- WHAT A NULL MEANS TO SETTLEMENT. This column is read once, at the turnover,
 -- to COMPUTE `judging_deadline_at`; settlement compares against that stored
--- absolute instant (0068), never against this column. So:
+-- absolute instant (0086), never against this column. So:
 --   * NULL here, `judging_deadline_at` stored — a LEGACY session. It closed
 --     before this migration, or during §8.5's migrate-then-boot window when
 --     the old code was still turning epochs over, or after a code-only
@@ -36,7 +36,7 @@
 --
 -- NO BACKFILL. Existing closed sessions settled (or are settling) under the
 -- hardcoded 900-second deadline, and their `judging_deadline_at` is already
--- stored as an absolute instant (0068), which is what finalize compares
+-- stored as an absolute instant (0086), which is what finalize compares
 -- against. Writing 900 into them would record a capture that never happened.
 --
 -- ADDITIVE: a nullable column with no default changes nothing any existing

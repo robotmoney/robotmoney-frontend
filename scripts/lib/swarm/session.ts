@@ -586,7 +586,7 @@ export function epochDurationSecondsFor(cadence: SmokeCadence): number {
   if (!Number.isInteger(seconds) || seconds <= 0) {
     throw new Error(
       `cadence profile '${cadence.profile}' has swarmWindowMs=${cadence.swarmWindowMs}, which is not a ` +
-        "positive whole number of seconds; migration 0067's CHECK refuses it",
+        "positive whole number of seconds; migration 0085's CHECK refuses it",
     );
   }
   return seconds;

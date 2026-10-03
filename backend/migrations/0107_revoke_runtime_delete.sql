@@ -12,7 +12,7 @@
 --
 -- WHAT IT UNDOES.
 --   * 0053: `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA
---     public TO rm_app`. 0065 took DELETE back on the append-only tables; every
+--     public TO rm_app`. 0083 took DELETE back on the append-only tables; every
 --     ordinary table that existed at 0053 kept it.
 --   * 0054/0061: rm_worker's DELETE on its allowlisted tables (the job queue,
 --     the samplers, the wallet repair pass).

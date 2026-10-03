@@ -911,7 +911,7 @@ export async function getMemberTakes(memberId: string, limit?: number) {
   // not three — and the LIMIT is a count of sessions, so without this it would
   // silently start returning fewer sessions than asked for. The flag, not
   // `ORDER BY revision`, says which row counts: the partial unique index
-  // `swarm_recommendations_one_final_per_member` (migration 0075) makes it one.
+  // `swarm_recommendations_one_final_per_member` (migration 0092) makes it one.
   const rows = await on(sql, memberTakesTakes, memberTakesSessions, memberTakesMembers, memberTakesKeys)<any>`
     SELECT r.id, r.member_id, m.handle AS member_handle, m.name AS member_name,
            r.stance, r.confidence, r.body,
@@ -1046,7 +1046,7 @@ export async function getSessionById(
 // member_id)`), each its own immutable signed row. This is a session's CURRENT
 // reading, so it selects the rows flagged final — exactly one per member, which
 // the partial unique index `swarm_recommendations_one_final_per_member`
-// (migration 0075) makes structural. Without the flag the session page would
+// (migration 0092) makes structural. Without the flag the session page would
 // render one card per amendment, and its stance/confidence table would count
 // one member several times.
 //
@@ -1971,7 +1971,7 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
     // lose on the constraint and be answered with a 409 in the catch below, and
     // NO in-place edit of the winner's content ever happens.
     //
-    // THE FINAL FLAG IS SET BY THE DATABASE, not here. Migration 0075's
+    // THE FINAL FLAG IS SET BY THE DATABASE, not here. Migration 0092's
     // BEFORE INSERT trigger clears the member's previous final take and marks
     // the new row final when it is the newest revision — which, inside the
     // lock, it always is. One implementation of D51's acceptance rule, in the
@@ -4448,7 +4448,7 @@ export async function loadFrozenTakeSet(sessionId: string, h: DbHandle = sql): P
   // A superseded body reaching that snapshot would publish, permanently, a
   // sentence the member has already withdrawn. The set is selected on the
   // flag, never by ordering on `revision`: the flag is what the accepting
-  // transaction set, and migration 0075's partial unique index makes it one row
+  // transaction set, and migration 0092's partial unique index makes it one row
   // per member, so the aggregator, the judge's digest and the receipt all read
   // the one take per member that counts.
   // The outer `ORDER BY received_at` is the ordering this query has always had
@@ -5017,7 +5017,7 @@ export async function updateMemberProfile(token: string, memberRef: string, patc
 // carries change events only. Every piece of work the scheduler does follows
 // from an event or a timer; there is no ad-hoc job kind for the API to push,
 // ack or redeliver." The job ledger, its push/ack functions, the `job` frame
-// and the ack route were deleted with migration 0079, which drops the table.
+// and the ack route were deleted with migration 0096, which drops the table.
 
 /**
  * How a connection behaves. Every value is a default a test may shorten; NONE

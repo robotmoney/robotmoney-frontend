@@ -535,7 +535,7 @@ describe("revalidateAfterAcquire — §2, the plan is re-checked against the loc
 describe("an unenrolled or legacy-enrolled target — §4.2/§4.3, absence is `missing`, never `rehearsal` [integration tier]", () => {
   test("a database with NO deployment_identity table reads as missing and still acquires", async () => {
     // A fresh `--local blank` database before bootstrap, a fresh cluster before
-    // §9.1, or a pre-0063 production: the `bun run migrate` that creates the
+    // §9.1, or a pre-0081 production: the `bun run migrate` that creates the
     // table must be able to take the lock on it.
     await withScratchDatabase(
       ["0001_first.sql"],

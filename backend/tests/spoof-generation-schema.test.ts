@@ -1,5 +1,5 @@
 // The spoof generation is recorded on the key row the rebind inserts — issue
-// #1026, migration 0087, smoke-production-spec.md §6.4, criteria 146 and 147.
+// #1026, migration 0105, smoke-production-spec.md §6.4, criteria 146 and 147.
 //
 // §6.4's recovery: a rerun "finds the database ALREADY at that generation,
 // skips (1) and (2), and performs only (3) and (4)"
@@ -43,7 +43,7 @@ beforeAll(async () => {
   await advanced`INSERT INTO swarm_members (id, name, status) VALUES (${PRE_MEMBER}, 'Pre-generation Member', 'active')`;
   await advanced`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash) VALUES (${PRE_MEMBER}, 'pre-key', true, 'pre-token-hash')`;
   const run = await dbs.migrate(advanced, name);
-  expect(run.applied).toContain("0087_member_key_spoof_generation.sql");
+  expect(run.applied).toContain("0105_member_key_spoof_generation.sql");
   await advanced.unsafe("RESET ROLE");
 }, 180_000);
 
@@ -101,7 +101,7 @@ describe("swarm_member_keys.spoof_generation_id (spec §6.4)", () => {
     }[];
     expect(rows).toEqual([{ spoof_generation_id: null }]);
     const [ledger] = (await advanced`
-      SELECT compat FROM schema_migrations WHERE name = '0087_member_key_spoof_generation.sql'`) as unknown as {
+      SELECT compat FROM schema_migrations WHERE name = '0105_member_key_spoof_generation.sql'`) as unknown as {
       compat: string;
     }[];
     expect(ledger?.compat).toBe("additive");

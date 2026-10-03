@@ -41,7 +41,7 @@ beforeAll(async () => {
   OPERATOR = await provisionOperatorToken();
 });
 
-const MIGRATION_0067 = new URL("../migrations/0067_subject_epoch_duration.sql", import.meta.url).pathname;
+const MIGRATION_0067 = new URL("../migrations/0085_subject_epoch_duration.sql", import.meta.url).pathname;
 const SNAPSHOT = new URL("../schema/snapshot.sql", import.meta.url).pathname;
 const COLUMNS = ["epoch_duration_seconds", "epoch_anchor", "judging_duration_seconds"] as const;
 

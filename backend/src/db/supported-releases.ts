@@ -4,17 +4,17 @@
 //
 // Governed by smoke-production-spec.md §8.4 ("an upgrade from a populated
 // database of each supported release (`SUPPORTED_RELEASES`: production's
-// observed 73-name ledger, v0.5.0 plus `0062_rm_readonly_sequence_select`)
-// passes its data assertions") and §9.1 ("The first production migrate runs
-// before the identity row exists"). The spec and D55 (8) first said "v0.5.0
-// alone", before the production ledger read below; both were amended on
-// 2026-09-25 to name that ledger (see WHICH BASELINE).
+// observed 76-name ledger, v0.5.0 plus four files) passes its data
+// assertions") and §9.1 ("The first production migrate runs before the
+// identity row exists"). The spec and D55 (8) first said "v0.5.0 alone", then
+// named the 73-name ledger read on 2026-09-25; both now name the 76-name ledger
+// read on 2026-10-01 (see WHICH BASELINE).
 //
 // WHY THE FILENAME LIST, AND NOT A TAG OR A NUMBER. §8.1: "the exact filename
 // list of the migrations it embodies (a number alone is not an identity)". This
-// repository has two files numbered 0059, and five files v0.5.0 lacks
-// (0056_swarm_judge_requires_model.sql and four more up to
-// 0061_rm_worker_wallet_backfill_grant.sql) sort BETWEEN files it has. So a
+// repository has two files numbered 0059, and five files the baseline lacks
+// (0056_swarm_judge_requires_model.sql and three more up to
+// 0062_rm_worker_analytics_ledger_read_grant.sql) sort BETWEEN files it has. So a
 // release is identified by its whole list, and a ledger matches it only when
 // the two lists are equal: no file missing, none extra, none renamed. A ledger
 // that is a prefix, a superset or a near miss is a partly migrated or
@@ -22,26 +22,33 @@
 //
 // WHICH BASELINE: WHAT PRODUCTION'S LEDGER ACTUALLY HOLDS. D55 (8) named
 // v0.5.0 as the release production runs. Production's `schema_migrations`,
-// read on 2026-09-25 as rm_readonly on the read-only replica, holds 73 rows:
-// all 72 files of the v0.5.0 tag plus `0062_rm_readonly_sequence_select.sql`,
-// applied 2026-09-22 03:35 UTC. That file is in neither v0.5.0 nor the current
-// releases-0.5.x: it came from the archived 0.5.x line (commit 61fab107, last
-// changed by c3a68812; tag `archive/releases-0.5.x-2026-09-24`). Production
-// ran c3a68812's SQL, not 61fab107's (verified on the replica: the
-// rm_readonly_test role is gone and rm_worker holds the INSERT/UPDATE grants
-// only c3a68812 adds), so tests replay the archive tag's bytes. Lucas, the
-// owner, confirmed that observed set as the one supported baseline on
-// 2026-09-25 (D55 (8), as corrected that day), so the one supported baseline
-// is that exact set, named for its provenance. A pure v0.5.0 ledger is
-// NOT supported: no database holds it (production, and every rehearsal dump
-// taken from production, carries the 0062 row), and it is the "one file less"
-// case the first production migrate refuses.
+// read on 2026-10-01 (the capture restored on stage-2), holds 76 rows: all 72
+// files of the v0.5.0 tag plus four more.
+//   - 0062_rm_readonly_sequence_select.sql, applied 2026-09-22 03:35 UTC. It is
+//     in neither v0.5.0 nor the current releases-0.5.x line as production ran
+//     it: it came from the archived 0.5.x line (commit 61fab107, last changed by
+//     c3a68812; tag `archive/releases-0.5.x-2026-09-24`). Production ran
+//     c3a68812's SQL, not 61fab107's (verified on the replica: the
+//     rm_readonly_test role is gone and rm_worker holds the INSERT/UPDATE grants
+//     only c3a68812 adds), so tests replay the archive tag's bytes.
+//   - 0061_rm_worker_wallet_backfill_grant.sql and
+//     0063_swarm_judge_model_default.sql, shipped by v0.5.1 and applied
+//     2026-09-25 21:38 UTC.
+//   - 0080_analytics_ledger_compaction.sql, shipped by v0.5.2 and applied
+//     2026-09-29 20:46 UTC.
+// Production has since shipped v0.5.3 and v0.5.4 with no migration, so the
+// ledger is the same at v0.5.4. Lucas, the owner, replaced the 73-name
+// baseline of 2026-09-25 with this one on 2026-10-03 (issue 1097, D55 (8)):
+// the one supported baseline is the exact set production holds, named for its
+// provenance. A pure v0.5.0 ledger, and the old 73-name ledger, are NOT
+// supported: no database holds them, and each is the "files missing" case the
+// first production migrate refuses.
 //
 // The list is pinned twice, and a test fails when either disagrees: the v0.5.0
 // part in backend/tests/fixtures/releases/v0.5.0/release.json with a sha256 per
 // file (read from the tag), and the whole observed ledger in
-// backend/tests/fixtures/releases/production-2026-09-25/baseline.json, which
-// also keeps the out-of-band file's archived bytes
+// backend/tests/fixtures/releases/production-2026-10-01/baseline.json, which
+// also keeps the bytes production ran for the files v0.5.0 lacks
 // (backend/tests/upgrade-from-release.test.ts). Adding or changing a baseline
 // takes an owner decision.
 
@@ -52,7 +59,7 @@ export interface SupportedRelease {
   readonly name: string;
   /** The release tag the baseline starts from. */
   readonly release: string;
-  /** Files the ledger records that the tag did not ship, applied out of band. */
+  /** Files the ledger records that the tag did not ship: applied out of band, or shipped by a later release. */
   readonly outOfBand: readonly string[];
   /** Where the list comes from. */
   readonly provenance: string;
@@ -139,14 +146,26 @@ const V0_5_0_MIGRATIONS: readonly string[] = [
 /** Production's observed ledger (see the header). Adding one takes an owner decision. */
 export const SUPPORTED_RELEASES: readonly SupportedRelease[] = [
   {
-    name: "v0.5.0+0062_rm_readonly_sequence_select (production ledger 2026-09-25)",
+    name: "v0.5.0+0061+0062+0063+0080 (production ledger 2026-10-01)",
     release: "v0.5.0",
-    outOfBand: ["0062_rm_readonly_sequence_select.sql"],
+    outOfBand: [
+      "0061_rm_worker_wallet_backfill_grant.sql",
+      "0062_rm_readonly_sequence_select.sql",
+      "0063_swarm_judge_model_default.sql",
+      "0080_analytics_ledger_compaction.sql",
+    ],
     provenance:
-      "production schema_migrations read 2026-09-25 as rm_readonly on the read-only replica: the 72 files of " +
-      "v0.5.0 plus 0062_rm_readonly_sequence_select.sql (archived 0.5.x line, c3a68812 SQL), applied " +
-      "2026-09-22 03:35 UTC",
-    migrations: [...V0_5_0_MIGRATIONS, "0062_rm_readonly_sequence_select.sql"],
+      "production schema_migrations read 2026-10-01 (the capture restored on stage-2): the 72 files of v0.5.0 plus " +
+      "0062_rm_readonly_sequence_select.sql (archived 0.5.x line, c3a68812 SQL, applied 2026-09-22 03:35 UTC), " +
+      "0061_rm_worker_wallet_backfill_grant.sql and 0063_swarm_judge_model_default.sql (v0.5.1, applied 2026-09-25 21:38 UTC) " +
+      "and 0080_analytics_ledger_compaction.sql (v0.5.2, applied 2026-09-29 20:46 UTC)",
+    migrations: [
+      ...V0_5_0_MIGRATIONS,
+      "0061_rm_worker_wallet_backfill_grant.sql",
+      "0062_rm_readonly_sequence_select.sql",
+      "0063_swarm_judge_model_default.sql",
+      "0080_analytics_ledger_compaction.sql",
+    ].sort(),
   },
 ];
 

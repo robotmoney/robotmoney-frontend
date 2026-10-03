@@ -16,8 +16,8 @@
 -- WHY `breaking` AND NOT `additive`. §8.4 defines additive as "old code's
 -- supported behavior is preserved". Old code INSERTs into
 -- `swarm_notification_outbox` on every public application and every admin
--- approval, and SELECTs `notified_at` on the waitlist path. A pre-0066 release
--- booted against a 0066 database would take a 42P01 on its front door. That is
+-- approval, and SELECTs `notified_at` on the waitlist path. A pre-0084 release
+-- booted against a 0084 database would take a 42P01 on its front door. That is
 -- exactly what `breaking` is for, and declaring it is what closes code-only
 -- rollback past this migration instead of letting a rollback discover it at
 -- runtime.
@@ -40,7 +40,7 @@ DROP TABLE IF EXISTS swarm_notification_outbox;
 
 ALTER TABLE swarm_waitlist DROP COLUMN IF EXISTS notified_at;
 
--- Retire any delivery job left queued by a pre-0066 deployment. Their handler
+-- Retire any delivery job left queued by a pre-0084 deployment. Their handler
 -- kinds are no longer registered, so the worker would otherwise fail each one
 -- through its full retry budget before settling it 'dead' — noise about a
 -- feature that no longer exists. 'cancelled' is the honest terminal state:
