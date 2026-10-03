@@ -20,7 +20,7 @@
 // stores `off` wherever a legacy `shadow` stood. That half is pinned in the
 // backend suite, against the route and the registry. The column CHECK does
 // NOT forbid it yet: `swarm_judge_config_mode_check` still admits
-// off|shadow|enforce (backend/schema/snapshot.sql, through migration 0078).
+// off|shadow|enforce (backend/schema/snapshot.sql, through migration 0095).
 // Tightening it to off|enforce is pending, in a separate migration owned by the
 // wave's migration package. This file claims only the scripts: no driver
 // enables the judge or names `shadow`.

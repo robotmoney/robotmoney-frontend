@@ -41,7 +41,7 @@
 // THE FIRST PRODUCTION MIGRATE (§9.1, D55 (5), (9)) is this command, unchanged:
 // under RM_ENV=prod, against a database with no identity row whose ledger
 // equals a supported release's, the gates let it through, the confirmation
-// names that state, the run applies 0063 first with `production` in its
+// names that state, the run applies 0081 first with `production` in its
 // transaction (migrate-run.ts applyIdentityFirst), and the receipt records the
 // pre-identity state and the row. A run killed after that transaction reruns
 // as an ordinary `bun run migrate`.
@@ -126,7 +126,7 @@ if (forbidden.length > 0) {
 }
 
 // The lock, the plan and the gates go through the least-privileged role that
-// can read `deployment_identity`: §3 puts `rm_readonly` in `~/.env` and 0063
+// can read `deployment_identity`: §3 puts `rm_readonly` in `~/.env` and 0081
 // grants it SELECT there. It can take a session advisory lock; it can do no DDL.
 const readonlyUrl = urlForRole(env, "rm_readonly");
 if (!readonlyUrl) {
@@ -177,7 +177,7 @@ try {
     );
   }
   if (result.resumedAfterIdentityPass) {
-    log(`resumed after the identity-first pass: the rows before 0063 equal ${result.resumedAfterIdentityPass} (spec §9.1)`);
+    log(`resumed after the identity-first pass: the rows before 0081 equal ${result.resumedAfterIdentityPass} (spec §9.1)`);
   }
   log(`manifest ${result.manifest.contentHash} published`);
   log(`receipt ${receipt}`);

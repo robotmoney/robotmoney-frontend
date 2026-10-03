@@ -2,15 +2,15 @@
 // smoke-production-spec.md §9.1 ("Identity first", "The normal path accepts the
 // state the pass leaves") and §10 W2, D55 (9); issue #1026 criterion 170.
 //
-//   §10 W2: "Kill and rerun, for each of the three passes: kill it before 0063
-//   commits, and the rerun takes the pass again; kill it after 0063, and the
-//   rerun resumes through the normal path and applies the six files below 0063
+//   §10 W2: "Kill and rerun, for each of the three passes: kill it before 0081
+//   commits, and the rerun takes the pass again; kill it after 0081, and the
+//   rerun resumes through the normal path and applies the five files below 0081
 //   (§9.1)."
-//   §10 W2: "The normal path applies a pending file below a recorded 0063 only
+//   §10 W2: "The normal path applies a pending file below a recorded 0081 only
 //   when the identity row exists and the rest of the ledger equals the baseline
-//   plus 0063, plus files applied after it; every other out-of-order state
+//   plus 0081, plus files applied after it; every other out-of-order state
 //   refuses."
-//   §10 W2: "Applying 0063 out of order outside the three passes of §4.3
+//   §10 W2: "Applying 0081 out of order outside the three passes of §4.3
 //   refuses."
 //
 // This file holds the PRODUCTION pass's kill-and-rerun (`bun run migrate`) and
@@ -24,15 +24,15 @@
 // `startMigrateAtTerminal`), the operator types rm_owner and `y`, and the test
 // SIGKILLs the migrate process while one of its statements is blocked on a lock
 // the test holds: no exit handler, no lock release, no journal close runs.
-//   - BEFORE 0063 COMMITS: the test holds an uncommitted ledger row under
-//     0063's name, invisible to every read, so the pass's own ledger INSERT —
-//     the statement after 0063's DDL, inside 0063's transaction — waits on the
-//     test's transaction. The process dies with 0063's transaction open, so
+//   - BEFORE 0081 COMMITS: the test holds an uncommitted ledger row under
+//     0081's name, invisible to every read, so the pass's own ledger INSERT —
+//     the statement after 0081's DDL, inside 0081's transaction — waits on the
+//     test's transaction. The process dies with 0081's transaction open, so
 //     the DDL rolls back with it.
-//   - AFTER 0063 COMMITS: the test holds SHARE on swarm_judge_config, which
-//     0063's transaction never touches and the next file,
+//   - AFTER 0081 COMMITS: the test holds SHARE on swarm_judge_config, which
+//     0081's transaction never touches and the next file,
 //     0056_swarm_judge_requires_model.sql, UPDATEs first. The process dies with
-//     0063 committed and 0056's transaction open.
+//     0081 committed and 0056's transaction open.
 // The blocked backend outlives its client until it next talks to it, so the
 // test releases its lock and waits for every rm_owner backend to end before it
 // reads what was left.
@@ -71,13 +71,12 @@ import { withTargetLock } from "./support/target-lock.ts";
 const TAG = SUPPORTED_RELEASES[0]!.name;
 const BASELINE = loadBaseline(TAG);
 const BASELINE_FILES = BASELINE.migrations.map((m) => m.file);
-/** The six files production lacks below 0063, in the order the normal path applies them. */
-const LOWER_SIX = [
+/** The five files production lacks below 0081, in the order the normal path applies them. */
+const LOWER_FIVE = [
   "0056_swarm_judge_requires_model.sql",
   "0057_swarm_judge_policy_stamp.sql",
   "0058_swarm_judge_fault_injection.sql",
   "0059_swarm_judgement_completion_usage.sql",
-  "0061_rm_worker_wallet_backfill_grant.sql",
   "0062_rm_worker_analytics_ledger_read_grant.sql",
 ];
 
@@ -277,26 +276,26 @@ afterAll(async () => {
   }
 });
 
-describe("the template is production's baseline: no table, the 73-name ledger", () => {
+describe("the template is production's baseline: no table, the 76-name ledger", () => {
   test("the baseline template records exactly the supported baseline and has no deployment_identity table", async () => {
     const state = await stateOf(TEMPLATE);
     expect(state).toEqual({ ledger: [...SUPPORTED_RELEASES[0]!.migrations], table: false, identity: [], manifest: false });
-    expect(BASELINE_FILES.filter((f) => LOWER_SIX.includes(f))).toEqual([]);
-    expect(HEAD_FILES).toEqual(expect.arrayContaining(LOWER_SIX));
+    expect(BASELINE_FILES.filter((f) => LOWER_FIVE.includes(f))).toEqual([]);
+    expect(HEAD_FILES).toEqual(expect.arrayContaining(LOWER_FIVE));
   });
 });
 
 describe("§10 W2 — kill the production pass and rerun it (`bun run migrate`, a real process, SIGKILL)", () => {
-  test("killed BEFORE 0063 commits: nothing is left, and the rerun takes the pass again", async () => {
+  test("killed BEFORE 0081 commits: nothing is left, and the rerun takes the pass again", async () => {
     const name = await copyOf(TEMPLATE, "killbefore");
-    // An uncommitted ledger row under 0063's own name: every read and every
+    // An uncommitted ledger row under 0081's own name: every read and every
     // privilege probe passes it, and the pass's INSERT of the same key waits
-    // on this transaction — after 0063's DDL, inside 0063's transaction.
+    // on this transaction — after 0081's DDL, inside 0081's transaction.
     const blocker = await holdLock(name, `INSERT INTO schema_migrations (name) VALUES ('${IDENTITY_MIGRATION}')`);
     let run: LiveTerminal | undefined;
     try {
       run = await startTyped(name);
-      // Blocked on 0063's ledger INSERT, inside 0063's transaction, after its DDL.
+      // Blocked on 0081's ledger INSERT, inside 0081's transaction, after its DDL.
       await waitBlocked(name, "%INSERT INTO schema_migrations%", run);
       expect(run.screen()).toContain("FIRST PRODUCTION MIGRATE");
       await run.kill();
@@ -319,20 +318,20 @@ describe("§10 W2 — kill the production pass and rerun it (`bun run migrate`, 
     expect(receipt.preIdentity).toEqual({ identity: "no table", release: TAG, ledger: BASELINE_FILES });
     expect(receipt.identityWritten).toMatchObject({ kind: "production" });
     expect(receipt.applied[0]).toBe(IDENTITY_MIGRATION);
-    expect(receipt.applied.slice(1, 7)).toEqual(LOWER_SIX);
+    expect(receipt.applied.slice(1, 6)).toEqual(LOWER_FIVE);
     expect(await stateOf(name)).toEqual({ ledger: HEAD_FILES, table: true, identity: ["production"], manifest: true });
   }, 240_000);
 
-  test("killed AFTER 0063 commits: 0063 holds its row, and the rerun resumes through the normal path, the six lower files first", async () => {
+  test("killed AFTER 0081 commits: 0081 holds its row, and the rerun resumes through the normal path, the five lower files first", async () => {
     const name = await copyOf(TEMPLATE, "killafter");
     const blocker = await holdLock(name, "LOCK TABLE swarm_judge_config IN SHARE MODE");
     let run: LiveTerminal | undefined;
     let whileBlocked: State;
     try {
       run = await startTyped(name);
-      // Blocked in 0056_swarm_judge_requires_model's transaction: 0063's has committed.
+      // Blocked in 0056_swarm_judge_requires_model's transaction: 0081's has committed.
       await waitBlocked(name, "%swarm_judge_config%", run);
-      // The committed state at this instant: 0063 WITH its row, nothing else.
+      // The committed state at this instant: 0081 WITH its row, nothing else.
       whileBlocked = await stateOf(name);
       await run.kill();
     } finally {
@@ -344,10 +343,10 @@ describe("§10 W2 — kill the production pass and rerun it (`bun run migrate`, 
     const passLeft = { ledger: [...BASELINE_FILES, IDENTITY_MIGRATION].sort(), table: true, identity: ["production"], manifest: false };
     expect(whileBlocked!).toEqual(passLeft);
     expect(await stateOf(name)).toEqual(passLeft);
-    expect(journalOf(run!).phases.at(-1)).toMatchObject({ phase: `migrate: apply ${LOWER_SIX[0]}`, status: "started" });
+    expect(journalOf(run!).phases.at(-1)).toMatchObject({ phase: `migrate: apply ${LOWER_FIVE[0]}`, status: "started" });
 
     // The rerun is ordinary: the row exists, so no exception is asked for; the
-    // normal path accepts the state the pass left and applies the six lower
+    // normal path accepts the state the pass left and applies the five lower
     // files first, then the rest, in filename order.
     const { run: second, receipt } = await rerun(name);
     expect(second.screen).not.toContain("FIRST PRODUCTION MIGRATE");
@@ -355,14 +354,14 @@ describe("§10 W2 — kill the production pass and rerun it (`bun run migrate`, 
     expect(receipt.identityWritten).toBeNull();
     expect(receipt.resumedAfterIdentityPass).toBe(TAG);
     expect(receipt.applied).toEqual(HEAD_FILES.filter((f) => !BASELINE_FILES.includes(f) && f !== IDENTITY_MIGRATION));
-    expect(receipt.applied.slice(0, 6)).toEqual(LOWER_SIX);
+    expect(receipt.applied.slice(0, 5)).toEqual(LOWER_FIVE);
     expect(receipt.baselined).toBe(true);
     expect(await stateOf(name)).toEqual({ ledger: HEAD_FILES, table: true, identity: ["production"], manifest: true });
   }, 240_000);
 });
 
 /**
- * A pass's result built by hand on a copy, as rm_owner: 0063's DDL, its ledger
+ * A pass's result built by hand on a copy, as rm_owner: 0081's DDL, its ledger
  * row and `kind`, in one transaction, on top of whatever ledger the copy has.
  * For the normal path's red controls, whose states no pass would leave.
  */
@@ -387,7 +386,7 @@ function operatorRun(database: string) {
 }
 
 describe("§10 W2 — the normal path accepts the state a pass leaves, and no other out-of-order state", () => {
-  test("RED CONTROL: rows before 0063 that are v0.5.0 alone (one file less than the baseline) refuse the lower files, applying nothing", async () => {
+  test("RED CONTROL: rows before 0081 that are v0.5.0 alone (four files less than the baseline) refuse the lower files, applying nothing", async () => {
     const name = await copyOf(V050_TEMPLATE, "v050pass");
     await passShape(name, "production");
     const before = await stateOf(name);
@@ -397,10 +396,10 @@ describe("§10 W2 — the normal path accepts the state a pass leaves, and no ot
     expect(await stateOf(name)).toEqual(before);
   }, 120_000);
 
-  test("RED CONTROL: a lower file applied BEFORE 0063 (the baseline plus one) refuses, applying nothing", async () => {
+  test("RED CONTROL: a lower file applied BEFORE 0081 (the baseline plus one) refuses, applying nothing", async () => {
     const name = await copyOf(TEMPLATE, "extrabefore");
     await withDb(name, (db) =>
-      applyAsReleaseRunner(db, [{ file: LOWER_SIX[0]!, ddl: readFileSync(join(MIGRATIONS_DIR, LOWER_SIX[0]!), "utf8") }]),
+      applyAsReleaseRunner(db, [{ file: LOWER_FIVE[0]!, ddl: readFileSync(join(MIGRATIONS_DIR, LOWER_FIVE[0]!), "utf8") }]),
     );
     await passShape(name, "production");
     const before = await stateOf(name);
@@ -408,54 +407,54 @@ describe("§10 W2 — the normal path accepts the state a pass leaves, and no ot
     expect(await stateOf(name)).toEqual(before);
   }, 120_000);
 
-  test("RED CONTROL: a gap AMONG the rows applied after 0063 (0058 recorded, 0057 run through psql with no row) refuses, applying nothing", async () => {
+  test("RED CONTROL: a gap AMONG the rows applied after 0081 (0058 recorded, 0057 run through psql with no row) refuses, applying nothing", async () => {
     // The pass's state, then a resume that went wrong out of band: 0056 by the
     // runner, 0057's DDL by hand with no ledger row, 0058 by the runner. The
-    // rows before 0063 still equal the baseline, so readIdentityPassRemainder
+    // rows before 0081 still equal the baseline, so readIdentityPassRemainder
     // matches — and 0057 must still refuse, or the runner would apply it a
     // second time onto a schema that already has it.
     const name = await copyOf(TEMPLATE, "gapafter");
     await passShape(name, "production");
     const step = (file: string) => ({ file, ddl: readFileSync(join(MIGRATIONS_DIR, file), "utf8") });
-    await withDb(name, (db) => applyAsReleaseRunner(db, [step(LOWER_SIX[0]!)]));
+    await withDb(name, (db) => applyAsReleaseRunner(db, [step(LOWER_FIVE[0]!)]));
     const owner = connect(name, asOwner);
     try {
-      await owner.unsafe(step(LOWER_SIX[1]!).ddl);
+      await owner.unsafe(step(LOWER_FIVE[1]!).ddl);
     } finally {
       await owner.end({ timeout: 5 });
     }
-    await withDb(name, (db) => applyAsReleaseRunner(db, [step(LOWER_SIX[2]!)]));
+    await withDb(name, (db) => applyAsReleaseRunner(db, [step(LOWER_FIVE[2]!)]));
     const before = await stateOf(name);
-    expect(before.ledger).toEqual([...BASELINE_FILES, LOWER_SIX[0]!, LOWER_SIX[2]!, IDENTITY_MIGRATION].sort());
+    expect(before.ledger).toEqual([...BASELINE_FILES, LOWER_FIVE[0]!, LOWER_FIVE[2]!, IDENTITY_MIGRATION].sort());
     await expect(operatorRun(name)).rejects.toThrow(
-      `the snapshot embodies ${LOWER_SIX[1]!}, which the ledger does not record although later files are recorded`,
+      `the snapshot embodies ${LOWER_FIVE[1]!}, which the ledger does not record although later files are recorded`,
     );
     expect(await stateOf(name)).toEqual(before);
   }, 120_000);
 
-  test("a resume the runner itself left (0056 and 0057 applied after 0063, in order) is accepted and applies the rest", async () => {
+  test("a resume the runner itself left (0056 and 0057 applied after 0081, in order) is accepted and applies the rest", async () => {
     const name = await copyOf(TEMPLATE, "orderedafter");
     await passShape(name, "production");
     await withDb(name, (db) =>
       applyAsReleaseRunner(
         db,
-        LOWER_SIX.slice(0, 2).map((file) => ({ file, ddl: readFileSync(join(MIGRATIONS_DIR, file), "utf8") })),
+        LOWER_FIVE.slice(0, 2).map((file) => ({ file, ddl: readFileSync(join(MIGRATIONS_DIR, file), "utf8") })),
       ),
     );
     const result = await operatorRun(name);
-    expect(result.applied.slice(0, 4)).toEqual(LOWER_SIX.slice(2));
+    expect(result.applied.slice(0, 3)).toEqual(LOWER_FIVE.slice(2));
     expect(result.resumedAfterIdentityPass).toBe(TAG);
     expect(await stateOf(name)).toEqual({ ledger: HEAD_FILES, table: true, identity: ["production"], manifest: true });
   }, 180_000);
 
-  // A ledger whose rows share 0063's applied_at (one snapshot bootstrap
+  // A ledger whose rows share 0081's applied_at (one snapshot bootstrap
   // transaction wrote them all) is not a pass's state either: prod-baseline.test.ts's
   // "a ledger that never recorded 0053" case holds that refusal on a
   // production-enrolled, snapshot-built database.
 
-  test("out-of-order 0063 outside the passes refuses: a table made out of band, with a row, never lets the apply loop run 0063 or the lower files", async () => {
+  test("out-of-order 0081 outside the passes refuses: a table made out of band, with a row, never lets the apply loop run 0081 or the lower files", async () => {
     const name = await copyOf(TEMPLATE, "outofband");
-    // deployment_identity created without 0063's ledger row, then enrolled —
+    // deployment_identity created without 0081's ledger row, then enrolled —
     // the one way a normal-path run could meet the baseline with a row.
     const owner = connect(name, asOwner);
     try {
@@ -473,7 +472,7 @@ describe("§10 W2 — the normal path accepts the state a pass leaves, and no ot
 });
 
 describe("the identity-first pass itself (applyIdentityFirst), on the fenced path", () => {
-  test("a `rehearsal` pass over a REMOTE connection refuses inside its transaction: no 0063, no row (the store carries the remote flag)", async () => {
+  test("a `rehearsal` pass over a REMOTE connection refuses inside its transaction: no 0081, no row (the store carries the remote flag)", async () => {
     const name = await copyOf(TEMPLATE, "remoterehearsal");
     const owner = connect(name, asOwner);
     try {
@@ -503,7 +502,7 @@ describe("the identity-first pass itself (applyIdentityFirst), on the fenced pat
     expect((await stateOf(name)).table).toBe(false);
   }, 60_000);
 
-  test("a local `rehearsal` pass commits 0063, its ledger row and the row in one transaction, and the normal path then resumes", async () => {
+  test("a local `rehearsal` pass commits 0081, its ledger row and the row in one transaction, and the normal path then resumes", async () => {
     const name = await copyOf(TEMPLATE, "localrehearsal");
     const owner = connect(name, asOwner);
     try {
@@ -531,7 +530,7 @@ describe("the identity-first pass itself (applyIdentityFirst), on the fenced pat
       const result = await withTargetLock(urlFor(name).toString(), (lock) =>
         runMigrate(owner2, { caller: "smoke_flag", env: "stage", connection: "local", nonInteractive: true, lock }),
       );
-      expect(result.applied.slice(0, 6)).toEqual(LOWER_SIX);
+      expect(result.applied.slice(0, 5)).toEqual(LOWER_FIVE);
       expect(result.resumedAfterIdentityPass).toBe(TAG);
     } finally {
       await owner2.end({ timeout: 5 });

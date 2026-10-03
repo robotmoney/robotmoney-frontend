@@ -667,7 +667,7 @@ async function effectiveRole(db: SnapshotDb): Promise<string> {
 /**
  * The one-row enrollment's value, or `null` when the table or the row is absent.
  *
- * The column is resolved from the catalog rather than assumed: migration 0063
+ * The column is resolved from the catalog rather than assumed: migration 0081
  * spells it `kind` and the snapshot fixtures spell it `identity`, and a
  * bootstrap that hard-coded either would refuse to read the other — which for
  * the `production` check means failing open on the shape it did not expect.

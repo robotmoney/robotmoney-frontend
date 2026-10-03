@@ -167,7 +167,7 @@ async function computeWalletSleeves(
          AND ap.time_basis = ${ASSET_PRICE_TIME_BASIS}
        WHERE lower(wss.wallet_address) = lower(${address})
          AND wss.provenance <> ${QUARANTINED_PROVENANCE}
-         -- D55 (6): a row the repair pass superseded (migration 0086) is
+         -- D55 (6): a row the repair pass superseded (migration 0104) is
          -- gone for every reader, as the delete it replaces left it.
          AND wss.superseded_at IS NULL
        ORDER BY wss.symbol, wss.sample_date DESC, wss.sampled_at DESC

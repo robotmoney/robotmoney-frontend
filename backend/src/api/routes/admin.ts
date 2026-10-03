@@ -677,6 +677,14 @@ export async function handleAdmin(
             body: { error: "analytics production is owned by the independent producer; admin cannot retry it" },
           };
         }
+        // No handler serves a `swarm.*` kind any more (the system-scheduler owns
+        // sessions), so a clone would sit pending forever. Refuse it.
+        if (typeof job.kind === "string" && job.kind.startsWith("swarm.")) {
+          return {
+            status: 409,
+            body: { error: "swarm jobs are no longer served by any handler; admin cannot retry them" },
+          };
+        }
         const dedupeKey = `admin-retry:${id}:${randomUUID()}`;
         const auditRequestId = randomUUID();
         const [clone] = await on(tx, cloneJob)<Row>`

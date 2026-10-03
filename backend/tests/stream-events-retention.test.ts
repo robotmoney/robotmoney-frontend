@@ -7,8 +7,8 @@
 // command prunes it ... It deletes only events older than a retention window of
 // at least 7 days."), D55 (12), which supersedes D52's retention bullet and
 // D53 (2)'s bound of the oldest servable cursor, and D53 (2): the retention
-// rule beats migration 0072's triggers. Migration 0080 drops them; DELETE and
-// TRUNCATE stay revoked from rm_app and rm_worker (0089 revokes both from every
+// rule beats migration 0089's triggers. Migration 0097 drops them; DELETE and
+// TRUNCATE stay revoked from rm_app and rm_worker (0107 revokes both from every
 // runtime role on every table), grant reconciliation re-asserts that on every
 // relation, and preflight check 2 refuses either grant. The command itself is
 // backend/scripts/prune.ts; tests/prune-command.test.ts proves its terminal,
@@ -122,8 +122,8 @@ test("the event log has left every append-only roster, and is on the grant-only 
   expect("swarm_stream_events" in APPEND_ONLY_TABLE_MIGRATION).toBe(false);
   expect((POSTFLIGHT_ROSTER as readonly string[]).includes("swarm_stream_events")).toBe(false);
   expect(APPEND_ONLY_RELEASED.swarm_stream_events).toEqual({
-    declaredBy: "0072_drop_swarm_schedules.sql",
-    releasedBy: "0080_stream_events_grant_only.sql",
+    declaredBy: "0089_drop_swarm_schedules.sql",
+    releasedBy: "0097_stream_events_grant_only.sql",
   });
   expect(RUNTIME_DELETE_REVOKED_TABLES).toContain("swarm_stream_events");
 });
@@ -281,7 +281,7 @@ test("grant reconciliation also takes DELETE and TRUNCATE back on a view — eve
   }
 });
 
-test("grant reconciliation gives rm_app exactly SELECT and UPDATE on the counter row, as 0081 does — never INSERT", async () => {
+test("grant reconciliation gives rm_app exactly SELECT and UPDATE on the counter row, as 0098 does — never INSERT", async () => {
   const grantsSql = (await loadSnapshot()).grantsSql;
   const held = async (): Promise<string[]> =>
     ((await sql`
@@ -322,15 +322,15 @@ test("preflight check 2 refuses a runtime DELETE grant on the log, which it no l
   expect(await onLog()).toEqual([]);
 });
 
-test("migration 0081 seeds the counter from the log it finds, so an upgraded database never reissues a number", async () => {
-  // A database that reached 0080 numbered its log with MAX + 1. 0081 must start
+test("migration 0098 seeds the counter from the log it finds, so an upgraded database never reissues a number", async () => {
+  // A database that reached 0097 numbered its log with MAX + 1. 0098 must start
   // the counter at that MAX, or the first event after the upgrade would take a
-  // number a subscriber already holds. Rebuilt here from 0081's own text on a
+  // number a subscriber already holds. Rebuilt here from 0098's own text on a
   // log whose rows are already numbered.
   await commitEvents("ret_seed", 2);
   const [{ max }] = (await sql`SELECT MAX(seq)::int AS max FROM swarm_stream_events`) as unknown as { max: number }[];
   expect(max).toBeGreaterThan(0);
-  const ddl = readFileSync(join(import.meta.dir, "..", "migrations", "0081_stream_event_counter.sql"), "utf8");
+  const ddl = readFileSync(join(import.meta.dir, "..", "migrations", "0098_stream_event_counter.sql"), "utf8");
   expect(ddl.split("\n")[0]).toBe("-- compat: breaking");
   // As the migrate step runs it: one transaction, as rm_owner.
   await asOwner(async (tx) => {
@@ -345,8 +345,8 @@ test("migration 0081 seeds the counter from the log it finds, so an upgraded dat
   expect(await sqlstate(logins.get("rm_worker")!, "UPDATE swarm_stream_head SET seq = seq + 1")).toBe("42501");
 });
 
-test("migration 0080 is what dropped the triggers, and it keeps the revoke in the same file", () => {
-  const ddl = readFileSync(join(import.meta.dir, "..", "migrations", "0080_stream_events_grant_only.sql"), "utf8");
+test("migration 0097 is what dropped the triggers, and it keeps the revoke in the same file", () => {
+  const ddl = readFileSync(join(import.meta.dir, "..", "migrations", "0097_stream_events_grant_only.sql"), "utf8");
   expect(ddl.split("\n")[0]).toBe("-- compat: breaking");
   expect(ddl).toContain("DROP TRIGGER IF EXISTS swarm_stream_events_append_only ON swarm_stream_events;");
   expect(ddl).toContain("DROP TRIGGER IF EXISTS swarm_stream_events_append_only_row ON swarm_stream_events;");

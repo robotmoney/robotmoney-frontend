@@ -490,7 +490,7 @@ export async function backfillAssetPricesForCleanDays(
      WHERE wbs.sample_date < ${cutoff}
        AND wbs.symbol = ANY(${pricedSymbols})
        AND wbs.provenance <> ${QUARANTINED_PROVENANCE}
-       -- D55 (6): a row the wallet repair superseded (migration 0086) is not
+       -- D55 (6): a row the wallet repair superseded (migration 0104) is not
        -- a sample any more; it neither makes a day a candidate nor covers it.
        AND wbs.superseded_at IS NULL
        AND NOT EXISTS (

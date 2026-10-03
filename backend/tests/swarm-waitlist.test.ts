@@ -89,7 +89,7 @@ test("getRosterCapacity() — returns seats filled, cap, and available seats", a
 // `swarm.send_seat_open_notification` jobs and stamped a "notified" timestamp
 // on the waitlist row.
 // All three are gone — the outbox table and the column are dropped by migration
-// 0066 and the handler kind is unregistered (decision D50, reversing D30). What
+// 0084 and the handler kind is unregistered (decision D50, reversing D30). What
 // has to remain true is everything the waitlist is actually FOR: an address
 // submitted is stored, and a seat freed by a deactivation is genuinely free. An
 // operator reads the list and invites by hand.

@@ -55,7 +55,7 @@ function manifest(over: Partial<SchemaManifest> = {}): SchemaManifest {
   };
 }
 
-/** Migration 0064 creates the manifest table, but the afterEach below drops it
+/** Migration 0082 creates the manifest table, but the afterEach below drops it
  *  so "no manifest table" stays reachable; a test that needs the table builds
  *  it here, owned by rm_owner as §8.3's write restriction requires. */
 async function createManifestTable(): Promise<void> {
@@ -68,7 +68,7 @@ async function createManifestTable(): Promise<void> {
       singleton      boolean NOT NULL DEFAULT true UNIQUE CHECK (singleton)
     )`);
   await fixtureDb.unsafe(`ALTER TABLE ${MANIFEST_TABLE} OWNER TO rm_owner`);
-  // Migration 0064's own grant: the runtime role reads the manifest, nothing more.
+  // Migration 0082's own grant: the runtime role reads the manifest, nothing more.
   await fixtureDb.unsafe(`GRANT SELECT ON ${MANIFEST_TABLE} TO rm_app`);
 }
 
@@ -221,7 +221,7 @@ describe("readManifest / writeManifest — round trip", () => {
   });
 
   test("refuses more than one row — no choice between two manifests is defensible", async () => {
-    // Migration 0064 creates `schema_manifest` with the singleton constraint,
+    // Migration 0082 creates `schema_manifest` with the singleton constraint,
     // so this builds the unconstrained shape on its own clone: what is under
     // test is readManifest's refusal to choose between two rows, not who
     // created the table, and the two-row state has to be constructible at all.
@@ -494,16 +494,16 @@ describe("rm_app is refused every write to the manifest and the ledger, by grant
   // and any other outcome (success, or a constraint error that only a
   // privileged writer could reach) fails the equality below.
   //
-  // WHY THE MANIFEST TABLE IS REBUILT FROM THE REAL 0064. This file's afterEach
+  // WHY THE MANIFEST TABLE IS REBUILT FROM THE REAL 0082. This file's afterEach
   // drops `schema_manifest` after every test, so the table the migrations built
   // is long gone by now. Re-running the migration's own text as rm_owner puts
-  // back exactly what 0064 creates, grants included. The later cases plant the
+  // back exactly what 0082 creates, grants included. The later cases plant the
   // default privilege the old reconciliation left behind — every NEW rm_owner
   // table handed `SELECT, INSERT, UPDATE` for rm_app — which is the state in
-  // which 0064's REVOKE is the only thing between rm_app and a forged manifest,
+  // which 0082's REVOKE is the only thing between rm_app and a forged manifest,
   // and then prove the real reconciliation (backend/schema/grants.sql) takes
   // that default back.
-  const MIGRATION_0064 = readFileSync(join(MIGRATIONS_DIR, "0064_schema_manifest.sql"), "utf8");
+  const MIGRATION_0064 = readFileSync(join(MIGRATIONS_DIR, "0082_schema_manifest.sql"), "utf8");
   let app: postgres.Sql<{}>;
 
   beforeAll(async () => {
@@ -522,7 +522,7 @@ describe("rm_app is refused every write to the manifest and the ledger, by grant
     });
   }
 
-  /** Put back 0064's table and one manifest row, as the migration and a
+  /** Put back 0082's table and one manifest row, as the migration and a
    *  migrate run would leave them. */
   async function rebuildManifestFromMigration(): Promise<void> {
     await fixtureDb.unsafe(`DROP TABLE IF EXISTS ${MANIFEST_TABLE}`);
@@ -594,15 +594,15 @@ describe("rm_app is refused every write to the manifest and the ledger, by grant
     }
   }
 
-  test("under a default privilege that hands rm_app writes, 0064's own REVOKE is what refuses them", async () => {
+  test("under a default privilege that hands rm_app writes, 0082's own REVOKE is what refuses them", async () => {
     // Every database the old reconciliation ran on carries a default
     // `GRANT SELECT, INSERT, UPDATE ON TABLES TO rm_app` for rm_owner — the line
     // grants.sql used to end with, against 0053's no-default-write rule. That
-    // is planted here, and 0064 creates the table under it: the order a
+    // is planted here, and 0082 creates the table under it: the order a
     // production database met them in.
     await asOwner("ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO rm_app");
     // Red control: the planted default really does hand a new table's writes
-    // to rm_app, so the refusal below is 0064's REVOKE and not an absence.
+    // to rm_app, so the refusal below is 0082's REVOKE and not an absence.
     expect(await newTableAdmitsAppInsert()).toBe(true);
     await rebuildManifestFromMigration();
     await assertRefusedByGrant();

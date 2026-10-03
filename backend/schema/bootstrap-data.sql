@@ -31,7 +31,7 @@ SET row_security = off;
 --
 -- Data for Name: admin_webauthn_challenge; Type: TABLE DATA; Schema: public; Owner: rm_owner
 --
--- The 32 empty WebAuthn challenge slots (migration 0088, D55 (6)). The runtime
+-- The 32 empty WebAuthn challenge slots (migration 0106, D55 (6)). The runtime
 -- holds no INSERT on the table, so these are the only rows it will ever have.
 -- One statement per row, as pg_dump writes them: the --seed gate counts
 -- bootstrap rows by their INSERT statements (src/db/schema-snapshot.ts

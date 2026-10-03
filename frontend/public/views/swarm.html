@@ -46,7 +46,7 @@
             <span class="sv__live-meta" x-show="liveIsOpen() && liveRemaining()">
               Window closes in <b class="sv__live-n" x-text="liveRemaining()" :title="liveClosesAbsolute()"></b>
             </span>
-            <!-- Only window_closed/aggregated/judged may claim aggregation. A past
+            <!-- Only window_closed/aggregated/judging/judged may claim aggregation. A past
                  deadline on a still-`collecting` row is the orphan case, so it
                  reports the closure and stops there. -->
             <span class="sv__live-meta" x-show="liveIsAggregating()">

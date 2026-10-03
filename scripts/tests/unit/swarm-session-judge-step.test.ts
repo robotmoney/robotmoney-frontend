@@ -22,6 +22,7 @@ import type { SessionEvent } from "../../lib/swarm/session.ts";
 import {
   countJudgements,
   judgedProgress,
+  FIRST_EPOCH_MAX_DURATIONS,
   OBSERVE_GRACE_MS,
   planEpochAdoption,
   sessionEmitter,
@@ -96,9 +97,16 @@ describe("waitForSchedulerEpoch — the scheduler opens the epoch, the driver wa
     const plan = planEpochAdoption(T0, long, { epochSeconds: 120 });
     expect(plan.action).toBe("abort");
     expect(plan.reason).toContain("longer duration");
-    // …and the boundary is the epoch plus the grace, no tighter.
-    const edge = { ...long, windowClosesAt: iso(T0 + 120_000 + OBSERVE_GRACE_MS) };
+    // …and the boundary is the first-epoch maximum (1.5 durations, spec §2.2)
+    // plus the grace, no tighter.
+    const edge = { ...long, windowClosesAt: iso(T0 + 120_000 * FIRST_EPOCH_MAX_DURATIONS + OBSERVE_GRACE_MS) };
     expect(planEpochAdoption(T0, edge, { epochSeconds: 120 }).action).toBe("adopt");
+    expect(planEpochAdoption(T0, { ...edge, windowClosesAt: iso(T0 + 120_000 * FIRST_EPOCH_MAX_DURATIONS + OBSERVE_GRACE_MS + 1) }, { epochSeconds: 120 }).action).toBe("abort");
+  });
+
+  test("a correct first epoch that closes 169 s out on a 120 s grid is adopted (the CI flake)", () => {
+    const late = { sessionId: SESSION_ID, date: "2026-09-25", windowClosesAt: iso(T0 + 169_000) };
+    expect(planEpochAdoption(T0, late, { epochSeconds: 120 })).toMatchObject({ action: "adopt" });
   });
 
   test("an epoch with no parseable window is refused", () => {

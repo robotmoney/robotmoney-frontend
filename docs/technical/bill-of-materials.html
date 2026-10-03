@@ -1643,7 +1643,7 @@ footer {
     </tbody>
   </table>
   <p class="note">There is no queue kind, cron schedule or on/off switch for the lifecycle. Migration
-    <span class="file-path">0072_drop_swarm_schedules.sql</span> deleted the old swarm schedule rows. The per-session
+    <span class="file-path">0089_drop_swarm_schedules.sql</span> deleted the old swarm schedule rows. The per-session
     admin verbs (<code>/api/swarm/admin/sessions/:id/{cancel,close,reopen,aggregate,publish}</code>) remain for an
     operator acting by hand, behind the same state guard.</p>
 
@@ -1668,7 +1668,7 @@ footer {
   <p><strong>The swarm sends no email.</strong> The onboarding email feature — the outbox table, the three delivery
     job kinds, the mail adapter and its transport settings — was removed in full by issue #1026 W5
     (<a href="../decisions.md">decision D50</a>, reversing D30). Migration
-    <span class="file-path">0066_drop_swarm_notifications.sql</span> drops the schema behind it.</p>
+    <span class="file-path">0084_drop_swarm_notifications.sql</span> drops the schema behind it.</p>
   <p>What replaces it: an applicant receives their member id in the <code>POST /api/swarm/apply</code> response body,
     which is where the onboarding skill reads it from and always was; <code>swarm_waitlist</code> keeps collecting
     addresses and an operator reads the list by hand when a seat opens. Nothing in the repository holds a mail

@@ -229,7 +229,7 @@ async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number;
        -- unrelated policies, which is exactly the "correct today by luck"
        -- shape §3 of the review is about; the predicate above makes it
        -- correct by construction instead.
-       -- D55 (6): nor is a row the repair pass superseded (migration 0086):
+       -- D55 (6): nor is a row the repair pass superseded (migration 0104):
        -- the delete it replaces left no such row to serve.
        AND wbs.superseded_at IS NULL
      ORDER BY wbs.sampled_at DESC

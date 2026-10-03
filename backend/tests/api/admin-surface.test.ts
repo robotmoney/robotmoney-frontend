@@ -434,6 +434,17 @@ test("retry: admin cannot retry analytics producer jobs", async () => {
   }
 });
 
+test("retry: admin cannot retry a dead swarm.* job (no handler serves it)", async () => {
+  const deadId = await insertJob({ kind: "swarm.judge", status: "dead" });
+  const before = await sql`SELECT count(*)::int AS n FROM jobs`;
+  const res = await call(
+    req("POST", `/api/admin/jobs/${deadId}/retry`, OPERATOR, { reason: "swarm job boundary test" }),
+  );
+  expect(res?.status).toBe(409);
+  const after = await sql`SELECT count(*)::int AS n FROM jobs`;
+  expect(after[0].n).toBe(before[0].n);
+});
+
 // ── PATCH /api/admin/schedules/:id ──────────────────────────────────────────
 
 test("schedule toggle: admin cannot enable retired consumer analytics schedules", async () => {

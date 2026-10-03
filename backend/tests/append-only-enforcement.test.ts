@@ -161,10 +161,10 @@ beforeAll(async () => {
             ${fixtureDb.json({ schema_version: "1.0", session_id: SESSION, subject_id: SUBJECT } as never)},
             ${"robotmoney:consensus-receipt:v1\n{\"schema_version\":\"1.0\"}\n"})`;
   await fixtureDb`INSERT INTO swarm_applications (payload) VALUES ('{}'::jsonb)`;
-  // The epoch scheduler's two logs, which migration 0072 opted in, are not
+  // The epoch scheduler's two logs, which migration 0089 opted in, are not
   // seeded: both have left the protected set (APPEND_ONLY_RELEASED — the job
-  // ledger is dropped by 0079, the event log is grant-only under D53 (2) since
-  // 0080). The "released" case below asserts what each became instead.
+  // ledger is dropped by 0096, the event log is grant-only under D53 (2) since
+  // 0097). The "released" case below asserts what each became instead.
   await fixtureDb`INSERT INTO audit_log (actor, action) VALUES ('append-only-test', 'probe')`;
   await fixtureDb`INSERT INTO agent_activity_log (action_type, status) VALUES ('probe', 'success')`;
   await fixtureDb`INSERT INTO regime_snapshots (date) VALUES ('2031-01-02')`;

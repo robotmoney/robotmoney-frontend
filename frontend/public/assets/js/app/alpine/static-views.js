@@ -3057,7 +3057,7 @@ export function registerStaticViews(Alpine) {
           .map((s) => ({ date: s.date, subjectId: s.subjectId ?? s.subject_id, subjectName: s.subjectName ?? s.subject_name ?? s.subject_id, state: "published" }))
           .sort((a, b) => String(b.date).localeCompare(String(a.date)));
       }
-      const inProgress = all.filter((s) => ["collecting", "window_closed", "aggregated", "judged"].includes(s.state));
+      const inProgress = all.filter((s) => ["collecting", "window_closed", "aggregated", "judging", "judged"].includes(s.state));
       const published = all.filter((s) => s.state === "published").slice(0, 20);
       const details = await Promise.all([...inProgress, ...published].map(async (s) => {
         try {
@@ -3087,7 +3087,7 @@ export function registerStaticViews(Alpine) {
     },
     takePhase(state) {
       if (state === "collecting") return "live";
-      if (state === "window_closed" || state === "aggregated" || state === "judged") return "closing";
+      if (state === "window_closed" || state === "aggregated" || state === "judging" || state === "judged") return "closing";
       return "published";
     },
     // Only `collecting` turns on the deadline (lib/session-phase.js): past it,

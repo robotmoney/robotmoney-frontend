@@ -42,9 +42,9 @@ stricter four-weight submit rule (notice: 1124); the stray `v0.6.0-rc.0` tag is 
 
 | # | Blocker | Issue |
 |---|---|---|
-| B1 | The first production migrate refuses production's 76-name ledger twice (baseline list, then the gap rule). Fix: replace the baseline with the 2026-10-01 ledger and renumber the unreleased 0.6.x migrations above `0080_analytics_ledger_compaction`. Confirm the real ledger read-only first (R2.3). | 1097 |
-| B2 | Sessions in `window_closed`, `aggregated` or `judged` at cutover never publish (0068 leaves no judge mode, 0072 deletes their jobs). The upgrade itself must carry them through; there is no drain step. | 1111 |
-| B3 | 0067 moves every subject to hourly sessions. Production runs 6 h. | 1112 |
+| B1 | The first production migrate refused production's 76-name ledger twice (baseline list, then the gap rule). The baseline is now the 2026-10-01 ledger, and the unreleased migrations are numbered 0081 to 0110, above `0080_analytics_ledger_compaction`. Confirm the real ledger still matches, read-only (R2.3). | 1097 |
+| B2 | Sessions in `window_closed`, `aggregated` or `judged` at cutover never publish (0086 leaves no judge mode, 0089 deletes their jobs). The upgrade itself must carry them through; there is no drain step. | 1111 |
+| B3 | 0085 moves every subject to hourly sessions. Production runs 6 h. | 1112 |
 | B5 | The hourly parity sweep is cut off at the 10 s limit (the 240 s exemption was dropped in 1101). | 1114 |
 | B6 | Production parity: persona-voiced sectioned takes with memos (1116), judge retry (1117), judge model from the database (1118), verified consensus-receipt path (1119), today's regime in the brief (1108), `noop-analyst` stays in-house (1120), absence recording never blocks turnover (1122). | listed |
 | B7 | Gates: `twin:gate` and `prod:gate` ported to main's instance model, with the default-deny log inventory. `verify:live` is not a substitute. | 1071 |
@@ -83,14 +83,14 @@ bun install --force && bun install --force --cwd backend   # re-run after every 
 Classification is each file's own `compat:` header at `d20429ca`. Re-derive at the RC:
 `comm -13 <(ledger) <(ls backend/migrations | sort)`.
 
-- **No `compat:` header (6, they predate the runner's metadata):** `0056_swarm_judge_requires_model`, `0057_swarm_judge_policy_stamp`, `0058_swarm_judge_fault_injection`, `0059_swarm_judgement_completion_usage`, `0062_rm_worker_analytics_ledger_read_grant`, `0063_deployment_identity`. `0063` is applied first by the guarded pass (R6.3). A `NULL` compat refuses an older image (spec §8.4); confirm the runner treats these as the spec requires at R3.
-- **Breaking (8):** `0066` (drops the notification outbox table), `0072_drop_swarm_schedules`, `0079_drop_swarm_scheduler_jobs`, `0080_stream_events_grant_only`, `0081_stream_event_counter`, `0088_webauthn_challenge_slots`, `0089_revoke_runtime_delete`, `0092_drop_swarm_judge_fault_injection`.
-- **Additive:** the rest (`0064`–`0065`, `0067`–`0078`, `0081_swarm_judge_model_bare_id`, `0082`–`0087`, `0090`, `0091`).
+- **No `compat:` header (6, they predate the runner's metadata):** `0056_swarm_judge_requires_model`, `0057_swarm_judge_policy_stamp`, `0058_swarm_judge_fault_injection`, `0059_swarm_judgement_completion_usage`, `0062_rm_worker_analytics_ledger_read_grant`, `0081_deployment_identity`. `0081` is applied first by the guarded pass (R6.3). A `NULL` compat refuses an older image (spec §8.4); confirm the runner treats these as the spec requires at R3.
+- **Breaking (8):** `0084` (drops the notification outbox table), `0089_drop_swarm_schedules`, `0096_drop_swarm_scheduler_jobs`, `0097_stream_events_grant_only`, `0098_stream_event_counter`, `0106_webauthn_challenge_slots`, `0107_revoke_runtime_delete`, `0110_drop_swarm_judge_fault_injection`.
+- **Additive:** the rest (`0082`–`0083`, `0085`–`0095`, `0099_swarm_judge_model_bare_id`, `0100`–`0105`, `0108`, `0109`).
 
 Because any pending migration is `breaking`, the order is fixed by spec §8.5:
 **`bun smoke:down` → `bun run migrate` → `bun smoke --static-port`.** There is no rolling variant.
 
-`0089_revoke_runtime_delete` takes `DELETE`/`TRUNCATE` from every runtime role. The old
+`0107_revoke_runtime_delete` takes `DELETE`/`TRUNCATE` from every runtime role. The old
 code deletes rows at runtime, so **old code cannot run against the migrated database**
 (spec §3, D55 (6)). A code-only rollback after R6.3 is impossible. Recovery after that
 point is a database restore (section 8).
@@ -166,13 +166,15 @@ R2.3 **Read the real ledger** (this is what B1 turns on). Through the replica as
 ```sql
 SELECT count(*) FROM schema_migrations;
 SELECT name FROM schema_migrations ORDER BY name;      -- save as ledger-prod-<date>.txt
-SELECT to_regclass('public.deployment_identity');      -- expect NULL (pre-0063)
+SELECT to_regclass('public.deployment_identity');      -- expect NULL (pre-0081)
 SELECT rolname, rolcanlogin, rolcreaterole FROM pg_roles
  WHERE rolname IN ('rm_owner','rm_app','rm_worker','rm_readonly','doadmin');
 ```
 
 Then compare with the matcher (`matchSupportedRelease` in
-`backend/src/db/supported-releases.ts`). Expect `NO MATCH` until B1 is closed.
+`backend/src/db/supported-releases.ts`). Expect a match with
+`v0.5.0+0061+0062+0063+0080 (production ledger 2026-10-01)`. Any other result means
+production's ledger moved: stop, and read the `describeUnmatchedLedger` difference.
 
 R2.4 Save, with the dump: row counts of `swarm_sessions`, `swarm_recommendations`,
 `swarm_consensus_receipts`, `swarm_session_judgements`, `source_value_versions`; database
@@ -183,7 +185,7 @@ postflight comparison baseline.
 
 Run on a stage host (`rm-frontend-stage-2`, `stage.robotmoney-labs.dev`, or stage-1).
 The twin is **`--local dump`**: Docker Postgres that smoke owns, restored from the R2 dump.
-A pre-0063 dump gets its identity-first pass automatically, but only when its ledger equals
+A pre-0081 dump gets its identity-first pass automatically, but only when its ledger equals
 a supported baseline (spec §9.1). A dump that does not match refuses, which is the same
 as B1 and proves it on stage before production sees it.
 
@@ -269,7 +271,7 @@ git push origin v0.6.0-rc.N
 | Before R6.3 commits | Stack down, database untouched | `bun smoke --static-port` on the **old** checkout (v0.5.4). Old host driver restarted by hand |
 | `bun run migrate` fails or is killed | Ledger partly ahead of manifest ("in progress"); application boot refuses it | **Rerun `bun run migrate`.** It validates committed work and resumes (spec §8.3). Do not edit rows. Do not boot |
 | Migrate done, boot or preflight refuses | New schema, no service running | Fix forward: rerun `bun smoke --static-port`. The journal says the phase |
-| Migrate done, product wrong | New schema, new code live | **No code-only rollback** (0089, section 1.1). Either fix forward on a new rc, or restore the R2 dump into a fresh primary and repoint, which loses everything written after the dump |
+| Migrate done, product wrong | New schema, new code live | **No code-only rollback** (0107, section 1.1). Either fix forward on a new rc, or restore the R2 dump into a fresh primary and repoint, which loses everything written after the dump |
 | After replace started | The old services may be gone | `bun smoke:status` for new/old per service; rerun resumes; `bun smoke:down` stops all |
 
 The database restore path is a **decision for the operator at the time**, recorded with the
@@ -325,8 +327,8 @@ R6.2b **One-time role step**, before R6.3 needs the login. If R2.3 showed `rm_ow
 Spec §9.1 step 1. The password is not written to any file.
 
 R6.3 **The first production migrate.** Typed `rm_owner`, then `y`. It applies
-`0063_deployment_identity` **first** with `production` written in the same transaction,
-then every other pending file in filename order (including the six below 0063).
+`0081_deployment_identity` **first** with `production` written in the same transaction,
+then every other pending file in filename order (including the five below 0081).
 
 ```bash
 bun run migrate               # RM_ENV=prod; receipt + journal land in ~/.local/state/robotmoney-smoke/rm_prod/
@@ -334,7 +336,7 @@ bun run migrate               # RM_ENV=prod; receipt + journal land in ~/.local/
 
 Pass = the receipt records the pre-identity state, the matched baseline, and 35 applied
 files. A refusal here changes nothing; read the message (B1 is the expected one).
-If interrupted after 0063 committed, rerun the same command (normal path, resumes).
+If interrupted after 0081 committed, rerun the same command (normal path, resumes).
 
 R6.4 `bun scripts/prod-init.ts set-identity` — reads `production` through `rm_owner` and
 receipts it. It writes nothing.

@@ -360,10 +360,10 @@ export const APPEND_ONLY_TABLES = [
   // historical release's delta, but postflight's live-schema roster is kept
   // byte-identical to the runtime guard as the drift test requires.
   "analytics_overwrite_events",
-  // Migration 0072 opted the epoch scheduler's two logs in, and both have left
+  // Migration 0089 opted the epoch scheduler's two logs in, and both have left
   // the runtime guard since (APPEND_ONLY_RELEASED in src/db/append-only-guard.ts):
   // `swarm_stream_events` is protected by grant alone under D53 (2) (migration
-  // 0080), and `swarm_scheduler_jobs` is dropped with the job pushes (0079).
+  // 0097), and `swarm_scheduler_jobs` is dropped with the job pushes (0096).
   // The roster follows the guard, so neither is listed.
 ] as const;
 

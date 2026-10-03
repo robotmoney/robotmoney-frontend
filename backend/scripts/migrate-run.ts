@@ -92,9 +92,9 @@
 // THE ONE RUN WITHOUT AN IDENTITY ROW
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// The first of §4.3's three named exceptions, D55 (5): production runs v0.5.0 plus one out-of-band
-// file (its observed ledger, ../src/db/supported-releases.ts), which predates
-// the `deployment_identity` table (0063), so the first `bun run migrate` there
+// The first of §4.3's three named exceptions, D55 (5): production runs v0.5.0 plus four more
+// files (its observed 76-name ledger, ../src/db/supported-releases.ts), which predates
+// the `deployment_identity` table (0081), so the first `bun run migrate` there
 // meets no row and no table. It may run anyway exactly when RM_ENV=prod, the
 // ledger's filename list equals one SUPPORTED_RELEASES baseline's list exactly, `rm_owner` is typed at the terminal, and
 // the operator answers an explicit `y`. `readPreIdentityState` decides the
@@ -103,27 +103,27 @@
 // `runMigrate`, which re-reads it on the owner connection and refuses unless it
 // is the same one. The receipt records it.
 //
-// IDENTITY FIRST (D55 (9), §9.1). The pass applies `0063_deployment_identity`
-// BEFORE any other pending file, out of filename order, and 0063's DDL, its
+// IDENTITY FIRST (D55 (9), §9.1). The pass applies `0081_deployment_identity`
+// BEFORE any other pending file, out of filename order, and 0081's DDL, its
 // ledger row and the `production` row commit in ONE fenced transaction
 // (`applyIdentityFirst`, which re-reads the pre-identity state under the fence
 // and refuses unless it is the confirmed one). Only then do the remaining
 // pending files take the normal path, in filename order, one transaction
-// each. So no committed state ever holds 0063 without the row: a run killed
+// each. So no committed state ever holds 0081 without the row: a run killed
 // before that transaction commits leaves the baseline ledger and no table,
 // and the rerun takes the pass again; a run killed after it leaves the row,
 // and the rerun is an ordinary run. Either way the exception is never
-// available again once 0063 has committed.
+// available again once 0081 has committed.
 //
 // THE NORMAL PATH ACCEPTS THE STATE A PASS LEAVES. Production's baseline lacks
-// six files that sort below 0063 (0056_swarm_judge_requires_model.sql to
+// five files that sort below 0081 (0056_swarm_judge_requires_model.sql to
 // 0062_rm_worker_analytics_ledger_read_grant.sql). A first-manifest run
 // otherwise refuses a pending file below a recorded one as an out-of-band gap
 // (`assertBaselineGap`). It accepts them in exactly one state
-// (`readIdentityPassRemainder`): an identity row exists, 0063 is recorded, and
-// the ledger rows applied before 0063 equal one supported baseline, with every
+// (`readIdentityPassRemainder`): an identity row exists, 0081 is recorded, and
+// the ledger rows applied before 0081 equal one supported baseline, with every
 // other row applied after it. Every other out-of-order state still refuses,
-// and out-of-order 0063 itself happens only in the passes (this one and the
+// and out-of-order 0081 itself happens only in the passes (this one and the
 // `--local dump` preparation, backend/scripts/smoke-prepare.ts), never in the
 // apply loop.
 //
@@ -230,7 +230,7 @@ const qReadLedgerSides = registerQuery({
        FROM schema_migrations m, (SELECT applied_at FROM schema_migrations WHERE name = $1) p
       WHERE m.name <> $1
       ORDER BY m.name`,
-    params: ["0063_deployment_identity.sql"],
+    params: ["0081_deployment_identity.sql"],
   },
 });
 
@@ -244,7 +244,7 @@ const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migr
 /** The migration that creates `deployment_identity` (§4.2). The only file any
  *  path applies out of filename order, and only in the identity-first passes
  *  of §4.3 (D55 (9)). */
-export const IDENTITY_MIGRATION = "0063_deployment_identity.sql";
+export const IDENTITY_MIGRATION = "0081_deployment_identity.sql";
 
 /** Which of the two callers of §8.5 is running. They differ only in what they
  *  refuse, never in what the run does. */
@@ -298,7 +298,7 @@ export interface MigrateRunOptions extends MigrateGateOptions {
  * matched, and that ledger's filename list").
  */
 export interface PreIdentityState {
-  /** Which absence. Only one qualifies: production's baseline predates 0063,
+  /** Which absence. Only one qualifies: production's baseline predates 0081,
    *  so it has no `deployment_identity` table at all. A table with no row was
    *  created out of band or emptied, and refuses at the gates (D55 (5), (9);
    *  issue #1026 criterion 170). */
@@ -351,12 +351,12 @@ export interface MigrateRunResult {
   /** The state this run started from when it was the first production migrate
    *  (§9.1, D55 (5)); `null` for every other run. */
   readonly preIdentity: PreIdentityState | null;
-  /** The `production` row the identity-first pass committed in 0063's
+  /** The `production` row the identity-first pass committed in 0081's
    *  transaction (D55 (9)); `null` for every other run. */
   readonly identityWritten: DeploymentIdentityRow | null;
   /** When this run resumed after an identity-first pass (the normal path
    *  accepting the state a pass leaves, §9.1): the baseline the rows applied
-   *  before 0063 equal. `null` otherwise. */
+   *  before 0081 equal. `null` otherwise. */
   readonly resumedAfterIdentityPass: string | null;
 }
 
@@ -381,7 +381,7 @@ export interface MigrateRunResult {
  *   5. Headers — every pending file's §8.2 header is parsed before the first
  *      commit, so a missing declaration refuses with nothing applied.
  *   6. Apply — on the first production migrate, `applyIdentityFirst` first:
- *      0063's DDL, its ledger row and `production` in one fenced transaction.
+ *      0081's DDL, its ledger row and `production` in one fenced transaction.
  *      Then each other pending migration in its own fenced transaction, in
  *      filename order, with `recordMigrationCompat()` writing
  *      `compat`/`metadata_version` inside it.
@@ -395,16 +395,16 @@ export interface MigrateRunResult {
  * state it reads, or a `confirmedPreIdentity` on a database that no longer
  * qualifies; the database is blank (no ledger — that is the
  * snapshot's bootstrap, §8.1, never a replay); `resumePlan` refused; a pending
- * migration above the pre-compat baseline (0063, D53) has no parseable compat
+ * migration above the pre-compat baseline (0081, D53) has no parseable compat
  * header; the first manifest's baseline found a gap or a difference (named,
  * nothing published); the identity-first pass found its state moved under its
  * fence (nothing applied).
  *
- * Serves spec §10 W2 "Identity first: the production pass applies 0063 and
+ * Serves spec §10 W2 "Identity first: the production pass applies 0081 and
  * commits its DDL, its ledger row and `production` in the same transaction,
  * before any other migration", "The normal path applies a pending file below a
- * recorded 0063 only when the identity row exists and the rest of the ledger
- * equals the baseline plus 0063, plus files applied after it; every other
+ * recorded 0081 only when the identity row exists and the rest of the ledger
+ * equals the baseline plus 0081, plus files applied after it; every other
  * out-of-order state refuses", "Migrate fails between commits and during grant
  * reconciliation; rerun reaches a verified final state", "Production baseline:
  * a live schema that differs from the snapshot blocks the first manifest
@@ -449,7 +449,7 @@ export async function runMigrate(
   // backend/migrations/.
   const snapshot = await loadSnapshot(seams.snapshotDir, seams.snapshotDir ? migrationsDir : undefined);
   // The state an identity-first pass leaves (D55 (9)), read only when this run
-  // is not the pass itself AND no manifest exists yet. The rows before 0063
+  // is not the pass itself AND no manifest exists yet. The rows before 0081
   // equal the baseline forever, so once a manifest is published the state no
   // longer says anything about a resume, and the receipt must not claim one.
   const afterPass = preIdentity === null && firstManifest ? await readIdentityPassRemainder(db) : null;
@@ -484,7 +484,7 @@ export async function runMigrate(
   }
 
   // 6. APPLY. The first production migrate's identity-first pass comes first
-  //    (D55 (9)): 0063, its ledger row and `production`, in ONE fenced
+  //    (D55 (9)): 0081, its ledger row and `production`, in ONE fenced
   //    transaction, before any other pending file. The pass re-reads the
   //    pre-identity state under its fence and refuses unless it is the one
   //    the operator confirmed.
@@ -625,24 +625,26 @@ function describePreIdentity(state: PreIdentityState): string {
  *
  * TWO STATES ARE NOT PREFIXES AND STILL NOT A GAP (`accepted`),
  * both an identity-first pass's (D55 (9)). Production's observed list (v0.5.0
- * plus 0062_rm_readonly_sequence_select.sql) lacks six files that sort between
- * files it has (0056_swarm_judge_requires_model.sql and five more up to
+ * plus 0061, 0062, 0063 and 0080) lacks five files that sort between files it
+ * has (0056_swarm_judge_requires_model.sql and four more up to
  * 0062_rm_worker_analytics_ledger_read_grant.sql): the branch numbered them
- * after the tag was cut.
+ * after the tag was cut. Every other pending file is numbered above the last
+ * name production records (0080_analytics_ledger_compaction.sql), so none of
+ * them is a gap.
  *   - A ledger EQUAL to a baseline's list (`preIdentity`, D55 (5)) is that
  *     baseline, whole, so every embodied file it does not record is a file it
  *     never ran, and it is pending like any other.
  *   - The state a pass leaves (`readIdentityPassRemainder`): an identity row,
- *     0063 recorded, the rows applied before it equal to a baseline and every
+ *     0081 recorded, the rows applied before it equal to a baseline and every
  *     other row applied after it. The unrecorded lower files are the ones the
  *     baseline never ran, still pending.
  * The acceptance is per FILE, never for the whole ledger: an unrecorded file
- * that sorts below a recorded one is accepted only when it sorts below 0063,
+ * that sorts below a recorded one is accepted only when it sorts below 0081,
  * the matched baseline does not record it, and it sorts above every row
- * applied after 0063. The runner applies pending files in filename order, so
- * a real resume never leaves a row applied after 0063 above a file it has not
- * yet applied. A gap among those later rows — 0058 recorded after 0063
- * without 0057, or 0066 without 0065 — is the psql case above and refuses.
+ * applied after 0081. The runner applies pending files in filename order, so
+ * a real resume never leaves a row applied after 0081 above a file it has not
+ * yet applied. A gap among those later rows — 0058 recorded after 0081
+ * without 0057, or 0084 without 0083 — is the psql case above and refuses.
  * Every other ledger with an embodied file missing below a recorded one
  * refuses.
  */
@@ -716,10 +718,10 @@ async function assertBaselineMatches(tx: ReadDb, snapshot: Snapshot, filenames: 
 /**
  * Record one migration's declaration, inside that migration's transaction.
  *
- * The ledger's `compat`/`metadata_version` columns arrive with migration 0064.
- * A file ABOVE the pre-compat baseline always runs after 0064, so a missing
+ * The ledger's `compat`/`metadata_version` columns arrive with migration 0082.
+ * A file ABOVE the pre-compat baseline always runs after 0082, so a missing
  * column there is drift (someone dropped it) and refuses. A pre-compat file
- * that happens to declare itself (0053 does) may run on a database 0064 has
+ * that happens to declare itself (0053 does) may run on a database 0082 has
  * not reached yet; its row then stays NULL, which is what every other
  * pre-compat row holds and what §8.4 reads it as.
  */
@@ -735,7 +737,7 @@ async function recordDeclaration(tx: ReadDb, header: MigrationHeader): Promise<v
   if (requiresCompatHeader(header.filename)) {
     throw new Error(
       `Refusing the migrate run: ${header.filename} must record its compat declaration, and schema_migrations ` +
-        "has no compat/metadata_version columns. Migration 0064 adds them; a database without them after 0064 " +
+        "has no compat/metadata_version columns. Migration 0082 adds them; a database without them after 0082 " +
         "has drifted (spec §8.2).",
     );
   }
@@ -1127,7 +1129,7 @@ export async function readPreIdentityState(db: ReadDb, options: MigrateGateOptio
  * named exceptions, D55 (9)): no `deployment_identity` table, and a ledger
  * whose filename list equals one SUPPORTED_RELEASES entry's exactly. `null`
  * when either does not hold. A table with no row does not qualify: every
- * supported baseline predates 0063, so that table was created out of band
+ * supported baseline predates 0081, so that table was created out of band
  * (or emptied), and the pass would refuse it under its fence anyway — the
  * gates refuse it first, before a password is asked for. Who may take a pass on that state — the
  * policy, the connection, the credential, the confirmation — is each pass's
@@ -1181,7 +1183,7 @@ export interface IdentityFirstPass {
   readonly expected: PreIdentityState;
   /** What the identity row's note records. */
   readonly note: string;
-  /** Where 0063 is read from. Defaults to backend/migrations/. */
+  /** Where 0081 is read from. Defaults to backend/migrations/. */
   readonly migrationsDir?: string;
 }
 
@@ -1189,25 +1191,25 @@ export interface IdentityFirstPass {
 export interface IdentityFirstResult {
   /** The pre-identity state the pass read under its fence. */
   readonly preIdentity: PreIdentityState;
-  /** The row it wrote in 0063's transaction. */
+  /** The row it wrote in 0081's transaction. */
   readonly row: DeploymentIdentityRow;
 }
 
 /**
- * The identity-first pass: 0063's DDL, its `schema_migrations` row and the
+ * The identity-first pass: 0081's DDL, its `schema_migrations` row and the
  * identity row, in ONE fenced transaction (§2, §4.3, D55 (9)).
  *
  * Inputs: an `rm_owner` pool and the pass. Output: what it committed.
  *
  * Every step runs inside the fence's transaction, in this order: the
  * pre-identity state is re-read (no table, a ledger exactly equal to
- * a supported baseline, and equal to `expected`); 0063's DDL; its ledger row
+ * a supported baseline, and equal to `expected`); 0081's DDL; its ledger row
  * with its declaration when it carries one; the identity row, written through
  * `transactionIdentityStore` with the pass's remote flag by
  * `enrollAsProduction` or `enrollAsRehearsal`, whose own guards then hold on
  * this path too. Any refusal or failure rolls the whole transaction back, so
  * the database is left exactly as it was: a baseline ledger, no table, no row.
- * A commit leaves 0063 recorded WITH its row. No committed state holds one
+ * A commit leaves 0081 recorded WITH its row. No committed state holds one
  * without the other.
  *
  * Refusals: the state under the fence is not a pre-identity baseline (no
@@ -1250,23 +1252,23 @@ export async function applyIdentityFirst(db: MigrateDb, pass: IdentityFirstPass)
 
 /** The state an identity-first pass left, as the normal path reads it. */
 export interface IdentityPassRemainder {
-  /** The SUPPORTED_RELEASES baseline the rows applied before 0063 equal. */
+  /** The SUPPORTED_RELEASES baseline the rows applied before 0081 equal. */
   readonly release: string;
-  /** The rows applied before 0063: that baseline's filename list. */
+  /** The rows applied before 0081: that baseline's filename list. */
   readonly baseline: readonly string[];
-  /** The rows applied after 0063, in filename order. */
+  /** The rows applied after 0081, in filename order. */
   readonly appliedAfter: readonly string[];
 }
 
 /**
  * Whether this database is in the state an identity-first pass leaves (§9.1:
- * "The normal path may apply a pending file that sorts below a recorded 0063
+ * "The normal path may apply a pending file that sorts below a recorded 0081
  * only when the identity row exists and the rest of the ledger equals the
- * baseline plus 0063, plus any files applied after it"), else `null`.
+ * baseline plus 0081, plus any files applied after it"), else `null`.
  *
  * Holds exactly when: the identity row exists (`production` or `rehearsal`);
- * 0063 is recorded; every other ledger row was applied strictly before or
- * strictly after it (the pass commits 0063 in a transaction of its own, so a
+ * 0081 is recorded; every other ledger row was applied strictly before or
+ * strictly after it (the pass commits 0081 in a transaction of its own, so a
  * row sharing its `applied_at` came from somewhere else — a snapshot bootstrap
  * writes every row in one transaction); and the rows applied before it equal
  * one supported baseline exactly. The comparison runs in SQL, on the
@@ -1312,7 +1314,7 @@ async function describeWhyNoPreIdentityException(
 
 /** Why a table with no row never qualifies for an identity-first pass. */
 const TABLE_WITHOUT_ROW =
-  "deployment_identity exists with no row. Every supported baseline predates 0063, which creates the table, so it " +
+  "deployment_identity exists with no row. Every supported baseline predates 0081, which creates the table, so it " +
   "was created out of band or emptied, and the identity-first pass runs only where the table does not exist (D55 (9)). " +
   "Repair it by the §9.1 operator steps first";
 
@@ -1336,7 +1338,7 @@ type IdentityRead =
  * as unreadable (never evidence of either kind) and only §9.1's first
  * production migrate reads as its own case; a table with no row is `null`. The
  * value is read from whichever column carries it: §4.2 names it `kind`
- * (migration 0063); a database enrolled
+ * (migration 0081); a database enrolled
  * before that migration carries it in `identity`. Refusing to read the row
  * because of the column's name would turn an enrolled production database into
  * an un-enrolled one, which is the one misreading with a catastrophic direction.
@@ -1412,7 +1414,7 @@ export async function writeMigrateReceipt(
     // §9.1: the first production migrate's receipt "records the pre-identity
     // state"; every other run's says there was none.
     preIdentity: result.preIdentity,
-    // D55 (9): the row the pass committed in 0063's transaction, and — on the
+    // D55 (9): the row the pass committed in 0081's transaction, and — on the
     // run that resumed after a pass — the baseline it resumed from.
     identityWritten: result.identityWritten,
     resumedAfterIdentityPass: result.resumedAfterIdentityPass,

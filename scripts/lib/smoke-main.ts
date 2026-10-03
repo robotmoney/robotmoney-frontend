@@ -14,7 +14,7 @@ import { dumpOwnershipSql, hostReadTargetState, instanceRolePasswords, localSupe
 import { acquireTargetLock, assertStillHeld, readTargetState, type TargetLock, type TargetState } from "../../backend/src/db/target-lock.ts";
 import type { GeneratedRolePasswords } from "./smoke-state.ts";
 import { assertSmokeTwinIsTarget, bringUpTwin, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration, smokeTwinUrlFromContainer, smokeTwinVolumeName } from "./smoke-twin.ts";
-import { teardownContainer } from "./restore-container.ts";
+import { retimeAdoptedWindows, teardownContainer } from "./restore-container.ts";
 import { listSmokeVolumes, makeDockerRunner, purgeSmokeEvalContainers, removeSmokeVolumes } from "./smoke-volumes.ts";
 import { OPERATOR_TOKEN_FILE_ENV } from "./operator-token.ts";
 import { readServiceToken, runTokenProvisioning, tokenReuseRefusal } from "./smoke-secret.ts";
@@ -1745,6 +1745,9 @@ async function runCiScenario(stack: Stack): Promise<never> {
     // restored personas, (3) imported history still serves under #498's
     // archival semantics. No judge coverage: nothing on this stack judges
     // inline (D48/D53) — it returns with the participant judge.
+    // The twin's schedule, set at boot on its own copy: a dump captured mid-window
+    // restores production's open window (hours out), which the driver refuses.
+    if (smokeTwinContainer) retimeAdoptedWindows(smokeTwinContainer, cadence.swarmWindowMs, (m) => console.log(`[smoke] ${m}`));
     console.log("\n[smoke] dump: running one live swarm session with the restored personas…");
     process.env.BACKEND_URL = backendUrl;
     const session = await import(join(repoRoot, "scripts", "lib", "swarm", "session.ts"));

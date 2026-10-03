@@ -4,12 +4,12 @@
 // rehearsal-only gate that `--migrate`, `--seed` and `--spoof-keys` share.
 //
 // Implemented for issue #1026, W1 step 2. The table itself is created by
-// backend/migrations/0063_deployment_identity.sql. Its runtime callers write
+// backend/migrations/0081_deployment_identity.sql. Its runtime callers write
 // through {@link transactionIdentityStore}, inside the §2 mutation fence, as
 // rm_owner: `bun smoke --local dump` (backend/scripts/smoke-prepare.ts
 // `enroll`) overwrites a restored copy's row with `rehearsal`; the
 // identity-first passes of §4.3 (D55 (9), backend/scripts/migrate-run.ts
-// applyIdentityFirst) write `production` or `rehearsal` in 0063's own
+// applyIdentityFirst) write `production` or `rehearsal` in 0081's own
 // transaction on a database that had no table; `bun scripts/prod-init.ts
 // set-identity` (backend/scripts/set-identity.ts) reports production's row. A
 // `--local blank` bootstrap writes `rehearsal` inside its own snapshot
@@ -65,7 +65,7 @@
 //   §6.4  `--spoof-keys` refuses unless the row says `rehearsal`.
 //   §8.5  `--migrate` refuses on `RM_ENV=prod` or identity ≠ `rehearsal`.
 //   §9.1  the first production migrate writes `production` exactly once, via
-//         `rm_owner`, in 0063's transaction, receipted, never through
+//         `rm_owner`, in 0081's transaction, receipted, never through
 //         `bun smoke` (D55 (9)).
 //
 // Acceptance gates served (spec §10): W1 — the identity half of the policy
@@ -350,7 +350,7 @@ export async function enrollAsRehearsal(
  * initialization (§9.1).
  *
  * "`production` is written once by production initialization" (§4.2). Once, by
- * the first production migrate in 0063's own fenced transaction (§9.1 "Identity
+ * the first production migrate in 0081's own fenced transaction (§9.1 "Identity
  * first", D55 (9)), and reported — never rewritten — by `bun scripts/prod-init.ts
  * set-identity` afterwards. Never by `bun smoke`: spec §4.3 makes production
  * initialization "a set of separate commands allowed on `production`, each
@@ -426,7 +426,7 @@ export interface TransactionIdentityContext {
  * fence as rm_owner (backend/src/db/target-lock.ts withMutationFence) and hands
  * its transaction here; {@link enrollAsRehearsal} then writes through it. The
  * identity-first passes of §4.3 (backend/scripts/migrate-run.ts
- * applyIdentityFirst, D55 (9)) write through it too, inside 0063's own
+ * applyIdentityFirst, D55 (9)) write through it too, inside 0081's own
  * transaction.
  *
  * The store is registered as writable by rm_owner with the caller's `remote`
