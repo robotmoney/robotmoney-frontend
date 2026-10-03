@@ -166270,7 +166270,7 @@
       ]
     },
     "/api/version": {
-      "api": "0.4.0",
+      "api": "0.4.1",
       "commit": null
     },
     "/health": {
