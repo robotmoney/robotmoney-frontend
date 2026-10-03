@@ -25,6 +25,7 @@ scripts/tests/unit/prerender-content.test.ts
 scripts/tests/unit/prerender-routes.test.ts
 scripts/tests/unit/seo-legacy-aliases.test.ts
 scripts/tests/unit/seo-research.test.ts
+scripts/tests/unit/session-phase.test.ts
 scripts/tests/unit/site-nav.test.ts
 scripts/tests/unit/stamp-assets.test.ts
 scripts/tests/unit/smart-contract-risks-data.test.ts
