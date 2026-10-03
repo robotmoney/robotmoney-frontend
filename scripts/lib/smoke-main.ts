@@ -6,7 +6,7 @@ import { hostname } from "node:os";
 import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { databaseName, homeEnvFilePath, urlForRole } from "./env-role.ts";
 import { ALLOW_INSECURE_FLAG, bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { dropShellMigrationCredential, shadowingStackEnvWarnings, smokePassthroughEnv, refuseAllowInsecureOnProd, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
+import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, refuseAllowInsecureOnProd, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
 import { resolveBackupFiles } from "./restore-container.ts";
 import { resolveDeploymentPolicy, resolveRmEnv } from "./smoke-env-policy.ts";
 import { requireRehearsalTarget } from "./smoke-identity.ts";
@@ -22,7 +22,6 @@ import { awaitReadiness, READINESS_POLL_MS, READINESS_TIMEOUT_MS, type GateCheck
 import { makeReadinessObserver } from "./smoke-readiness-probes.ts";
 import { readWebCompatPlan, webCompatRefusal } from "./smoke-web-compat.ts";
 import { readContractVersion } from "./api-range.ts";
-import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
 import { renderCadenceLine, resolveSmokeCadenceForBoot, stageCadenceApplies } from "./smoke-cadence.ts";
 import {
   admissionRecord,
@@ -63,7 +62,6 @@ import {
   WORKER_LANE_SERVICES,
 } from "../stack/index.ts";
 import { gitRunner, resolveSourceIdentities } from "../stack/source-identity.ts";
-import { ROUTES } from "@robotmoney/contract";
 import { DB_WRITER_SERVICES, selectFailureDetail, writerQuiesceLine } from "./smoke-failure.ts";
 import { POSTGRES_IMAGE } from "./postgres-image.ts";
 import {
@@ -820,6 +818,7 @@ function makeStackConfig(): StackConfig {
     // a model.
     extraComposeEnv: {
       ...smokeEnv.composeEnv,
+      ...homeEnvComposeEnv(homeEnv), // the ~/.env CoinGecko key only; shell wins
       ...smokePassthroughEnv(process.env),
       ...inferenceComposeEnv,
     },
@@ -1672,8 +1671,9 @@ async function main(): Promise<void> {
   const readiness = verdict.checks;
 
   if (!process.env.CI) {
-    // Non-fatal, as it always was: data freshness is logged, never a boot failure.
-    await ensureFreshRegime(stack);
+    // No market-data refresh at startup: the regime comes from the producer's own
+    // schedule. A startup refresh put a write burst on the database at boot and
+    // tore production down on 2026-09-25.
     await run(["bun", "run", "scripts/smoke-frontend-check.ts"], repoRoot,
       { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "frontend checks")
       .then(() => log("frontend checks passed"))
@@ -1727,42 +1727,6 @@ async function main(): Promise<void> {
   // §2: "It is released explicitly on exit."
   await releaseTargetLock();
   process.exit(0);
-}
-
-// One-time regime snapshot at boot, then verify it landed FRESH before handing
-// off to the producer's own recurring timer (issue #361 Phase 4). NOTHING IS
-// WIPED: no bring-up may TRUNCATE rows it did not create. The fresh/rerun/
-// give-up decision is the pure decideRegimeBootAction (regime-boot.ts); this
-// keeps only the I/O.
-async function ensureFreshRegime(stack: Stack): Promise<void> {
-  // The session driver captures BACKEND_URL at module load, so set it BEFORE the
-  // dynamic import.
-  process.env.BACKEND_URL = backendUrl;
-  const e2e = await import(join(repoRoot, "scripts", "lib", "swarm", "session.ts"));
-  const producerRail = {
-    repoRoot,
-    composeProject: project,
-    composeFiles: composeFilesRun.split(":"),
-    composeSpawnEnv: stack.spawnEnv,
-    backendUrl,
-  };
-  const today = new Date().toISOString().slice(0, 10);
-  await e2e.runRegimeClassify(today, producerRail).catch((err: unknown) => log(`regime run failed: ${err instanceof Error ? err.message : err}`));
-  for (let attempt = 1; attempt <= REGIME_BOOT_MAX_ATTEMPTS; attempt++) {
-    let staleness: RegimeBootStaleness | null = null;
-    try {
-      const snap = await fetch(`${backendUrl}${ROUTES.dashboards.regimeSnapshots}?range=1`).then((r) => (r.ok ? r.json() : null));
-      staleness = snap?.staleness ?? null;
-    } catch (err) {
-      log(`regime freshness check failed (attempt ${attempt}/${REGIME_BOOT_MAX_ATTEMPTS}): ${err instanceof Error ? err.message : err}`);
-    }
-    const decision = decideRegimeBootAction(staleness, attempt);
-    log(decision.message);
-    if (decision.action === "fresh") break;
-    if (decision.action === "rerun") {
-      await e2e.runRegimeClassify(today, producerRail).catch((err: unknown) => log(`regime re-run failed: ${err instanceof Error ? err.message : err}`));
-    }
-  }
 }
 
 // CI: the scenario checks against the booted stack, then the shared teardown.

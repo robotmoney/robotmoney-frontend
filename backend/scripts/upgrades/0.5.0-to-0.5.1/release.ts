@@ -2,32 +2,32 @@
 export const TAG_GLOB = "v0.5.1*";
 
 /**
- * v0.5.1 CARRIES EXACTLY ONE MIGRATION, and it exists to repair a defect the
- * release did not cause.
+ * v0.5.1 APPLIES TWO MIGRATIONS to production: 0061 and 0063.
  *
- * The release began as code-only: the application delta over `v0.5.0-rc.9` is
- * the swarm session lifecycle fixes, the API pool timeouts, the judge-job wait
- * and the e2e verify gates, none of which touches the schema. It stopped being
- * code-only when the stage gates found that `pg_dump` could not run as
- * `rm_readonly` -- twelve of production's forty `public` sequences deny it a
- * read, so P3.backup fails before a rollout can start.
+ * Production shipped v0.5.1 from the release branch with these two pending
+ * (issue 1074 corrected main's earlier record, which named 0062 as the one
+ * migration). Both are small repairs, not features:
  *
- * `0062` is therefore a GATE REPAIR, not a feature: it is the migration that
- * makes the next backup possible. It ships here rather than in v0.6 because
- * the alternative is a manual `psql` GRANT against the production primary
- * before every release, which is the kind of undocumented hand-step that
- * produced the defect in the first place. Deploying v0.5.1 fixes production;
- * nobody has to remember anything.
+ * - `0061_rm_worker_wallet_backfill_grant.sql`: rm_worker writes the
+ *   wallet-backfill tables (chain_day_blocks, wallet_backfill_state,
+ *   chain_address_floors), which 0054's allow-list missed.
+ * - `0063_swarm_judge_model_default.sql`: the judge gets the CI model where
+ *   none is set.
  *
- * See `backend/tests/migration-readonly-sequence-grant.test.ts` for the guard
- * that stops the pattern returning, which is the durable half of the fix.
+ * `0062_rm_readonly_sequence_select.sql` is NOT part of this release. It
+ * fixed `pg_dump` as `rm_readonly` and production applied it out of band on
+ * 2026-09-22, so it is already recorded before v0.5.1 and does not run.
  */
-export const RELEASE_MIGRATIONS = ["0062_rm_readonly_sequence_select.sql"] as const;
+export const RELEASE_MIGRATIONS = [
+  "0061_rm_worker_wallet_backfill_grant.sql",
+  "0063_swarm_judge_model_default.sql",
+] as const;
 
 /**
  * Everything v0.5.1 must find already recorded and must preserve unchanged:
  * v0.4.0's six migrations plus the eighteen v0.5.0 ships (0045-0061; 0059
- * numbers two files). This is the union of `0.4.0-to-0.5.0`'s own
+ * numbers two files), plus the out-of-band 0062 (see RELEASE_MIGRATIONS).
+ * The first twenty-four are the union of `0.4.0-to-0.5.0`'s own
  * PRIOR_RELEASE_MIGRATIONS and RELEASE_MIGRATIONS, restated here rather than
  * imported: a release directory is a frozen artefact, and importing across
  * directories would make this release's gate depend on a file its `dependsOn`
@@ -61,6 +61,8 @@ export const PRIOR_RELEASE_MIGRATIONS = [
   "0059_swarm_framework_subject_snapshot_cleanup.sql",
   "0060_analytics_ledger_cutover.sql",
   "0061_source_value_provenance.sql",
+  // Applied to production out of band on 2026-09-22, before v0.5.1.
+  "0062_rm_readonly_sequence_select.sql",
 ] as const;
 
 /** The v0.4.0 runtime tables both gates assert remain present. */
@@ -68,11 +70,14 @@ export const REQUIRED_TABLES = [
   "swarm_judge_config",
   "swarm_session_judgements",
   "swarm_consensus_receipts",
+  // The tables 0061 grants on.
+  "wallet_backfill_state",
+  "chain_day_blocks",
 ] as const;
 
 /**
- * v0.5.1 creates NO table. `0062` is grants only -- one GRANT over existing
- * sequences and one ALTER DEFAULT PRIVILEGES. Kept as a named export so the
+ * v0.5.1 creates NO table. `0061` is grants only and `0063` sets a default
+ * on an existing table. Kept as a named export so the
  * "does this release add tables?" question has the same shape of answer in
  * every release directory instead of being absent where the answer is no.
  */

@@ -228,9 +228,12 @@ async function main() {
   if (regimeRes.ok && regimeType.includes("application/json")) {
     const regime = await regimeRes.json();
     const rows = regime.history?.length ?? 0;
+    // A fresh stack has no snapshot until the producer's own schedule runs (the boot
+    // writes none). A well-formed EMPTY answer is that state, not a broken endpoint.
+    const noRunYet = regime.latest == null && rows === 0;
     checks.push({
       name: `GET ${ROUTES.dashboards.regimeSnapshots} returns a parseable snapshot the /regime page can draw`,
-      ok: regime.latest != null && typeof regime.latest.composite === "number" && rows > 0,
+      ok: noRunYet || (regime.latest != null && typeof regime.latest.composite === "number" && rows > 0),
       detail: `latest.composite=${regime.latest?.composite ?? "none"}, ${rows} history rows, asof=${regime.staleness?.asof ?? "none"}`,
     });
   } else {

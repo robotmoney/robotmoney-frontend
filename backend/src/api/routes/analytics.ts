@@ -602,27 +602,62 @@ function parseTerminalRunPackage(body: unknown): TerminalRunPackageInput | Inval
   return { runId: String(v.runId), asof: v.asof, status, warnings, logs, exceptions };
 }
 
+export const ANALYTICS_PATHS: ReadonlySet<string> = new Set([
+  A.readiness, A.rawHistory, A.rawHistorySeed, A.researchSignalDates, A.rawHistoryGaps,
+  A.sourceAcquisitions, A.researchEligibility, A.telemetry, A.runs, A.runEvents,
+  A.vintages, A.vintage, A.runPackage, A.reportSnapshot, A.paritySweep,
+]);
+
+/**
+ * How many analytics-provider requests the api runs at once.
+ *
+ * WHY A CAP. Every route here is the analytics producer's, and on 2026-09-25..28
+ * a regime run sent many ledger writes at once. Each became a slow query on the
+ * bloated ledger (issue 1035), together they held every connection of the api's
+ * pool (PG_POOL_MAX, 10), and every public request waited past Bun's ~10 s idle
+ * timeout: minutes of 502s on each run. With this cap the producer can hold at
+ * most this many connections; the rest always serve the site. Excess producer
+ * requests wait here, in line, instead of in the pool. The readiness probe is
+ * exempt: it touches no data.
+ */
+export const ANALYTICS_CONCURRENCY = 2;
+
+/** A counting semaphore: `acquire()` resolves to a release function, in FIFO order. */
+export function createLimiter(limit: number): { acquire: () => Promise<() => void>; inFlight: () => number; waiting: () => number } {
+  let active = 0;
+  const queue: (() => void)[] = [];
+  const release = () => {
+    active--;
+    const next = queue.shift();
+    if (next) { active++; next(); }
+  };
+  return {
+    acquire: () => new Promise<() => void>((resolve) => {
+      const grant = () => { let done = false; resolve(() => { if (!done) { done = true; release(); } }); };
+      if (active < limit) { active++; grant(); } else queue.push(grant);
+    }),
+    inFlight: () => active,
+    waiting: () => queue.length,
+  };
+}
+
+const analyticsSlots = createLimiter(ANALYTICS_CONCURRENCY);
+
 // Returns { status, body } or null if the path isn't an analytics route.
 export async function handleAnalytics(req: Request, url: URL): Promise<{ status: number; body: unknown } | null> {
+  if (!ANALYTICS_PATHS.has(url.pathname) || url.pathname === A.readiness) return handleAnalyticsUnbounded(req, url);
+  const release = await analyticsSlots.acquire();
+  try {
+    return await handleAnalyticsUnbounded(req, url);
+  } finally {
+    release();
+  }
+}
+
+async function handleAnalyticsUnbounded(req: Request, url: URL): Promise<{ status: number; body: unknown } | null> {
   const p = url.pathname;
   const m = req.method;
-  const isAnalyticsRoute =
-    p === A.readiness ||
-    p === A.rawHistory ||
-    p === A.rawHistorySeed ||
-    p === A.researchSignalDates ||
-    p === A.rawHistoryGaps ||
-    p === A.sourceAcquisitions ||
-    p === A.researchEligibility ||
-    p === A.telemetry ||
-    p === A.runs ||
-    p === A.runEvents ||
-    p === A.vintages ||
-    p === A.vintage ||
-    p === A.runPackage ||
-    p === A.reportSnapshot ||
-    p === A.paritySweep;
-  if (!isAnalyticsRoute) return null;
+  if (!ANALYTICS_PATHS.has(p)) return null;
 
   // Authenticate FIRST — reads and mutations alike are analytics-provider-only.
   // 401 when no credential was presented, 403 when one was presented but its
