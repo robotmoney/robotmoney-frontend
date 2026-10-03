@@ -12,6 +12,7 @@
 
 # Executes client JS
 scripts/tests/unit/admin-api-error-text.test.ts
+scripts/tests/unit/admin-nits-1123.test.ts
 scripts/tests/unit/ask-roboto-matcher.test.ts
 scripts/tests/unit/dash-color-css-lockstep.test.ts
 scripts/tests/unit/dash-format.test.ts

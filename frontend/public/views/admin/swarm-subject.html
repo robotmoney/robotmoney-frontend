@@ -51,7 +51,7 @@
         <div x-show="deactivateOpen" x-cloak class="adm-modal" data-testid="deactivate-confirm">
           <div class="adm-modal__panel">
             <h3>Deactivate <span x-text="topic.name"></span>?</h3>
-            <p class="adm-dim">Closes the topic's open session (absences recorded) and opens no new one; the scheduler settles what it closed. Briefs, snapshots, and recommendations are unchanged.</p>
+            <p class="adm-dim">The open session keeps collecting until its scheduled close, then the scheduler settles it and opens no new one. Briefs, snapshots, and recommendations are unchanged.</p>
             <label class="adm-field">
               <span>Reason</span>
               <textarea x-model="deactivateReason" class="adm-input" rows="2" placeholder="10–500 characters" data-testid="deactivate-reason"></textarea>
