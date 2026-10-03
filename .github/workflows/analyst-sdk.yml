@@ -1,0 +1,81 @@
+# Analyst SDK tier: the package's own tests (`bun test` inside
+# packages/analyst-sdk) with fetch replaced by a thrower, a typecheck, and a
+# standalone install from a copy holding ONLY the package, so the SDK cannot
+# quietly grow a dependency on the rest of the monorepo (issue #1095).
+#
+# The purity test (no node:fs, postgres, bun:sqlite, db/chain/store/cutover
+# paths or process.env under packages/analyst-sdk/src) lives in
+# scripts/tests/unit/analyst-sdk-purity.test.ts and runs in unit.yml.
+#
+# CI taxonomy class: feature-correctness. Pure compute, no Docker, no network,
+# so it runs on every PR (draft AND ready) when its paths change.
+#
+# Path-gated like contract.yml: a job-level `if:` skip driven by
+# dorny/paths-filter, never workflow-level `on.paths`, so a skipped run reports
+# a real `skipped` conclusion. `push` to main is never path-filtered. A PR that
+# touches only packages/analyst-sdk also selects backend.yml, because
+# backend.yml's filter names `packages/**`.
+name: analyst-sdk
+env:
+  CI_CLASS: feature-correctness
+on:
+  push:
+    branches: [main, "releases-*", "fusion/**"]
+  # NIGHTLY MIRROR of the merge-to-main set (issue #373); see unit.yml.
+  schedule:
+    - cron: "15 4 * * *"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  changes:
+    env:
+      CI_CLASS: ignore
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      analyst-sdk: ${{ steps.filter.outputs.analyst-sdk }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+        id: filter
+        with:
+          filters: |
+            analyst-sdk:
+              - 'packages/analyst-sdk/**'
+
+  analyst-sdk:
+    needs: [changes]
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.analyst-sdk == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - name: Install
+        working-directory: packages/analyst-sdk
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        working-directory: packages/analyst-sdk
+        # Spelled out because ci-workflows-structure.test.ts pins the package-script
+        # form of this command to unit.yml and backend.yml.
+        run: bunx tsc --noEmit
+      - name: SDK tests (fetch is a thrower)
+        working-directory: packages/analyst-sdk
+        run: bun test
+      # Export ONLY the package's tracked files (no node_modules from the install
+      # above) into a fresh directory, install from the lockfile, and diff the CLI
+      # output against the committed golden. Fails if the SDK reaches outside
+      # its own directory for anything.
+      - name: Standalone install reproduces the golden
+        shell: bash
+        run: |
+          d="$(mktemp -d)"
+          git archive HEAD packages/analyst-sdk | tar -x -C "$d" --strip-components=2
+          test ! -e "$d/node_modules"
+          cd "$d"
+          bun install --frozen-lockfile
+          bun run regime tests/fixtures/raw-indicator-history.csv | diff - tests/golden/regime-report.json

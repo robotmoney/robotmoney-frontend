@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robotmoney.network/contract/schemas/public-analytics-vintages.schema.json",
+  "title": "GET /api/public/analytics/vintages",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "limit",
+    "vintages",
+    "nextCursor"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000
+    },
+    "vintages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "run_key",
+          "tool_id",
+          "asof",
+          "source_label",
+          "knowledge_time_cutoff",
+          "market_time_cutoff",
+          "manifest_digest",
+          "member_count",
+          "build_identity",
+          "methodology",
+          "created_at"
+        ],
+        "properties": {
+          "run_key": {
+            "type": "string"
+          },
+          "tool_id": {
+            "type": "string"
+          },
+          "asof": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "source_label": {
+            "enum": [
+              "live",
+              "hermetic",
+              "fixture"
+            ]
+          },
+          "knowledge_time_cutoff": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "market_time_cutoff": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "manifest_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "member_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "build_identity": {
+            "type": "string"
+          },
+          "methodology": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "tool_id",
+              "version_label",
+              "config_digest"
+            ],
+            "properties": {
+              "tool_id": {
+                "type": "string"
+              },
+              "version_label": {
+                "type": "string"
+              },
+              "config_digest": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "members": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "rows",
+              "nextCursor"
+            ],
+            "properties": {
+              "rows": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "source_key",
+                    "source_value_version_id"
+                  ],
+                  "properties": {
+                    "source_key": {
+                      "type": "string"
+                    },
+                    "source_value_version_id": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              },
+              "nextCursor": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "nextCursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}
