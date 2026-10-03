@@ -149,6 +149,15 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
     expect(r.out).not.toContain("refusing");
   }, 300_000);
 
+  test("prod × remote × production without PROJECTS_SOURCE: refused before the lock, nothing started (issue #1113)", () => {
+    db.setIdentity("production");
+    const op = db.operator("prod_no_projects_source");
+    const r = remoteRefusal(op, { RM_ENV: "prod", AGENT_MODEL: "deepseek", OPENCODE_API_KEY: "sk-placeholder-never-spent", PROJECTS_SOURCE: undefined }, null);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain("PROJECTS_SOURCE=live is required");
+    expect(r.out).not.toContain("target lock held");
+  }, 120_000);
+
   for (const kind of ["rehearsal", null] as const) {
     test(`prod × remote × ${kind ?? "no row"}: refused by the matrix on the locked read, before anything after the lock`, () => {
       db.setIdentity(kind);
