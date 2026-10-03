@@ -215,10 +215,10 @@ export function registerAdminSwarmSession(Alpine) {
     },
 
     // ── Consensus receipt (issue #754) ────────────────────────────────────
-    // The route is public (GET /api/swarm/sessions/:id/consensus-receipt/verified,
+    // The route is public (GET /api/swarm/sessions/:id/consensus-receipt,
     // the read-time-verified ENVELOPE — this page renders `verified`, the
     // per-signature verdicts and `unverifiedReasons`, so it wants the envelope
-    // and not the anchored bare bytes its sibling path serves (decision D10) —
+    // and not the bare bytes the `/canonical` sibling serves —
     // same admin-page-calls-a-public-route shape load()
     // already uses for the per-member take detail above), and 404 means "not
     // published yet", not a failure: an off/shadow-judged session, or an
@@ -229,7 +229,7 @@ export function registerAdminSwarmSession(Alpine) {
       this.receiptError = null;
       try {
         this.receipt = await api.adminGet(
-          path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: this.sessionId }),
+          path(ROUTES.swarm.sessionConsensusReceipt, { id: this.sessionId }),
           this._token(),
         );
       } catch (e) {
@@ -331,10 +331,13 @@ export function registerAdminSwarmSession(Alpine) {
         // Three separate endpoints (add/excuse/restore), never a single PATCH
         // with an `operation` field. No version — roster rows aren't locked.
         const routeKey = { add: "rosterAdd", excuse: "rosterExcuse", restore: "rosterRestore" }[operation];
+        // The API refuses `reason` on a non-forced excuse (400); it records a
+        // reason only for a forced one, which this form never sends.
+        const body = operation === "excuse" ? { memberId } : { memberId, reason: trimmed };
         await api.adminPost(
           path(ROUTES.swarm.admin[routeKey], { id: this.sessionId }),
           this._token(),
-          { memberId, reason: trimmed },
+          body,
         );
         this.rosterForm = null;
         await this.load();
@@ -383,7 +386,7 @@ export function registerAdminSwarmSession(Alpine) {
       const s = String(state || "");
       if (s === "published") return "adm-badge adm-badge--ok";
       if (s === "cancelled") return "adm-badge adm-badge--err";
-      if (s === "collecting" || s === "window_closed" || s === "aggregated" || s === "judged") return "adm-badge adm-badge--run";
+      if (s === "collecting" || s === "window_closed" || s === "aggregated" || s === "judging" || s === "judged") return "adm-badge adm-badge--run";
       return "adm-badge adm-badge--idle";
     },
   }));

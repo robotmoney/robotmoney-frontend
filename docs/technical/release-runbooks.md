@@ -318,6 +318,22 @@ invariants a given target cannot yet exercise. And "the product is wrong"
 (exit 1) must stay distinguishable from "nothing was asserted" (exit 2);
 collapsing them lets an unreachable stack read as a product failure.
 
+### 4.7.2. Log gates
+
+`verify:live` reads the product over HTTP and cannot see a log. The log gates
+do: `bun run twin:gate` grades a twin rehearsal and `bun run prod:gate` grades
+production, before (`--mode baseline`) and after (`--mode post-release`) the
+cutover. Each selects its stack by `--instance` and that instance's stack
+record, reads every container's log (participants included), and reads the
+database read-only through the api container. Neither needs an admin token.
+
+The rule is default deny. Every distinct error in every log must match a
+classification in `scripts/lib/gate/log-classifications.json` with a written
+reason, or the gate fails. A new failure mode is added to that file only with
+evidence and a reason, never to make a run pass. A model timeout or a rejected
+take is a model outcome and is reported. A dead judge, or a session that
+published without a model judgement and a receipt, fails.
+
 ### 4.8. Recovery and rollback
 
 The release runbook must define recovery for each destructive or partially

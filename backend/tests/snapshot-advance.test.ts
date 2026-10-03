@@ -33,17 +33,17 @@
 // so snapshot N is pinned in the repository: the files of the named commit in
 // fixture.json whose snapshot ended at the fixture's `last` migration, byte for
 // byte, each sha256-pinned the way tests/fixtures/releases/ pins a release's
-// migrations. It is pinned at 0078, the last snapshot before wave 3 of #1026,
-// so every migration waves 3 and 4 added (0079's table drop, 0080's trigger
-// drop, 0081's counter table, 0082's CHECK change, 0083's data clear, and
-// 0084-0087's additive columns) is applied onto a snapshot-built database here,
+// migrations. It is pinned at 0095, the last snapshot before wave 3 of #1026,
+// so every migration waves 3 and 4 added (0096's table drop, 0097's trigger
+// drop, 0098's counter table, 0100's CHECK change, 0101's data clear, and
+// 0102-0105's additive columns) is applied onto a snapshot-built database here,
 // not only in the full replay. How the fixture advances is spec §8.4's rule
 // (the paragraph "Snapshot N").
 //
 // RECORDED, NOT HIDDEN. Snapshot N was written before cause F of
 // schema-equivalence.test.ts was fixed, so it carries none of the COMMENT ON
 // statements the migrations at or below N declare. The ones a later migration
-// re-declares (0080 and 0081 re-comment swarm_stream_events) are not listed. Those comments are the one recorded difference below, as
+// re-declares (0097 and 0098 re-comment swarm_stream_events) are not listed. Those comments are the one recorded difference below, as
 // an exact list, held to the same two rules: every difference is recorded, and
 // every recorded entry still occurs. The list empties when the fixture next
 // advances (to a snapshot that carries its comments) and never grows: a
@@ -189,11 +189,16 @@ function explain(diff: CatalogDiff): { unexplained: string[]; used: Set<string> 
   return { unexplained, used };
 }
 
-// Production's recorded ledger names a file below N that snapshot N's list does
-// not (v0.5.1's 0063, ported by issue #1064 so a database built from main and
-// production agree by filename). It is applied by the real run like any
-// migration above N, and it is the ONLY exception: the list is closed.
-const PORTED_BELOW_N: readonly string[] = ["0063_swarm_judge_model_default.sql"];
+// Production's recorded ledger names two files below N that snapshot N's list
+// does not: v0.5.1's 0063 (ported by issue #1064 so a database built from main
+// and production agree by filename) and v0.5.2's 0080_analytics_ledger_compaction,
+// which sorts below the renumbered identity migration (0081, issue 1097) that
+// opens N's tail. Each is applied by the real run like any migration above N,
+// and they are the ONLY exceptions: the list is closed.
+const PORTED_BELOW_N: readonly string[] = [
+  "0063_swarm_judge_model_default.sql",
+  "0080_analytics_ledger_compaction.sql",
+];
 
 describe("snapshot N + migrations = snapshot N+1 (spec §8.4)", () => {
   test("the fixture is snapshot N byte for byte: every file matches its sha256 pin", () => {
@@ -264,14 +269,14 @@ describe("snapshot N + migrations = snapshot N+1 (spec §8.4)", () => {
   });
 
   test("RED CONTROL: a migration above N that disagrees with the snapshot edit it landed with fails, naming the object", async () => {
-    // A planted copy of backend/migrations/ in which 0084 forgets
+    // A planted copy of backend/migrations/ in which 0102 forgets
     // admin_passkey.revoked_at, while the snapshot (N+1) still declares it:
     // exactly "a migration landed with a snapshot edit that is merely
     // plausible". The real run applies it; the comparison must name the column
     // and its comment, and nothing the plant did not touch.
     const dir = mkdtempSync(join(scratch, "planted-"));
     for (const name of readdirSync(MIGRATIONS)) copyFileSync(join(MIGRATIONS, name), join(dir, name));
-    const target = join(dir, "0084_admin_revocation_tombstones.sql");
+    const target = join(dir, "0102_admin_revocation_tombstones.sql");
     const original = readFileSync(target, "utf8");
     const planted = original
       .replace("ALTER TABLE admin_passkey ADD COLUMN IF NOT EXISTS revoked_at timestamptz;\n", "")
@@ -281,7 +286,7 @@ describe("snapshot N + migrations = snapshot N+1 (spec §8.4)", () => {
 
     const { db, run: plantedRun } = await advance(`rm_advance_red_${suffix}`, dir);
     await db.unsafe("RESET ROLE");
-    expect(plantedRun.applied).toContain("0084_admin_revocation_tombstones.sql");
+    expect(plantedRun.applied).toContain("0102_admin_revocation_tombstones.sql");
     const { unexplained } = explain(diffCatalogs(await normalizedCatalog(db), currentCatalog));
     expect(unexplained.sort()).toEqual([
       "only in snapshot N+1: column public.admin_passkey.revoked_at",

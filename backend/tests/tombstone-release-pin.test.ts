@@ -1,14 +1,14 @@
 // D55 (6), issue #1086: tombstone-writing code ships in the same release as the
-// breaking revoke migration (0089).
+// breaking revoke migration (0107).
 //
 // D55 (6): "No release may ship code that writes a revocation or consumption
 // tombstone unless the same release carries the `compat: breaking` migration
-// that revokes runtime `DELETE`." Until now only 0089's own comment said so.
+// that revokes runtime `DELETE`." Until now only 0107's own comment said so.
 // This file reads the tree the release is built from, so the two cannot part:
 //
 //   - the CODE side: every non-test source file under backend/src that sets one
 //     of the tombstone columns (`revoked_at`, `consumed_at`, `superseded_at`,
-//     added by the additive migrations 0084, 0085 and 0086) on one of their
+//     added by the additive migrations 0102, 0103 and 0104) on one of their
 //     tables;
 //   - the MIGRATION side: a migration labelled `-- compat: breaking` that
 //     revokes DELETE and TRUNCATE from every runtime role, numbered after the
@@ -103,12 +103,12 @@ describe("D55 (6): tombstone writes and the breaking revoke ship in one release"
     expect(writers).toContain("src/ops/wallet-backfill.ts");
   });
 
-  test("0089 is the breaking revoke, numbered after the migrations that add the tombstone columns", () => {
-    expect(revokeMigrations(migrations).map((m) => m.file)).toEqual(["0089_revoke_runtime_delete.sql"]);
+  test("0107 is the breaking revoke, numbered after the migrations that add the tombstone columns", () => {
+    expect(revokeMigrations(migrations).map((m) => m.file)).toEqual(["0107_revoke_runtime_delete.sql"]);
     expect(columnMigrations(migrations).map((m) => m.file)).toEqual([
-      "0084_admin_revocation_tombstones.sql",
-      "0085_webauthn_challenge_consumed_at.sql",
-      "0086_wallet_sample_superseded_at.sql",
+      "0102_admin_revocation_tombstones.sql",
+      "0103_webauthn_challenge_consumed_at.sql",
+      "0104_wallet_sample_superseded_at.sql",
     ]);
   });
 
@@ -117,17 +117,17 @@ describe("D55 (6): tombstone writes and the breaking revoke ship in one release"
   });
 
   test("tombstone code with the revoke migration removed is a violation", () => {
-    const withoutRevoke = migrations.filter((m) => m.file !== "0089_revoke_runtime_delete.sql");
+    const withoutRevoke = migrations.filter((m) => m.file !== "0107_revoke_runtime_delete.sql");
     expect(tombstoneReleaseViolations(sources, withoutRevoke).join(" ")).toContain("no `compat: breaking` migration revokes");
   });
 
   test("the revoke relabelled additive is a violation", () => {
-    const relabelled = migrations.map((m) => (m.file.startsWith("0089_") ? { ...m, sql: m.sql.replace("-- compat: breaking", "-- compat: additive") } : m));
+    const relabelled = migrations.map((m) => (m.file.startsWith("0107_") ? { ...m, sql: m.sql.replace("-- compat: breaking", "-- compat: additive") } : m));
     expect(tombstoneReleaseViolations(sources, relabelled)).not.toEqual([]);
   });
 
   test("a revoke numbered before the column migrations is a violation", () => {
-    const early = migrations.map((m) => (m.file.startsWith("0089_") ? { ...m, file: "0050_revoke_runtime_delete.sql" } : m));
+    const early = migrations.map((m) => (m.file.startsWith("0107_") ? { ...m, file: "0050_revoke_runtime_delete.sql" } : m));
     expect(tombstoneReleaseViolations(sources, early).join(" ")).toContain("numbered at or before");
   });
 

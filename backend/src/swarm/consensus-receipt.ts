@@ -1143,13 +1143,13 @@ export async function verifyAssembledReceipt(
 export interface PublicConsensusReceipt extends StoredConsensusReceipt, ConsensusReceiptVerification {}
 
 /**
- * The ANCHORED read (decision D10): the stored receipt and its published
+ * The CANONICAL read: the stored receipt and its published
  * `canonical_bytes`, with NO verification verdict attached.
  *
  * Separate from `getConsensusReceipt` on purpose. The route that serves the
  * bytes `payloadDigest` commits to must hand over the stored text column
  * unchanged and must not depend on a read-time verdict — a verifier fetching
- * the anchored URL checks the commitment themselves with keccak256, and bytes
+ * the canonical URL checks the commitment themselves with keccak256, and bytes
  * withheld or altered because this server privately disagreed with them would
  * make the on-chain anchor unresolvable precisely when it matters. It is also
  * the cheaper read: no signature verification, no re-canonicalization.

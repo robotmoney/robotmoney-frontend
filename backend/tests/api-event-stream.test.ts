@@ -526,7 +526,7 @@ test("the keepalive's head moves with the log, so a quiet subscriber still learn
 // kind for the API to push, ack or redeliver." Each case below fails on the
 // code that had them: the module exported pushJob/unackedJobs/ackJob, the
 // subscription sent every unacked job as a `job` frame, the ack route answered,
-// and migration 0070's table held the keys.
+// and migration 0088's table held the keys.
 
 test("the domain module has no job surface: no push, no outstanding list, no ack", () => {
   for (const name of ["pushJob", "unackedJobs", "ackJob"]) {
@@ -534,16 +534,16 @@ test("the domain module has no job surface: no push, no outstanding list, no ack
   }
 });
 
-test("the pushed-job table is gone, dropped by a forward migration rather than a deleted 0070", async () => {
-  // Criterion 105: 0070 may have reached a shared database, so its file stays
-  // and 0079 drops the table. Both are recorded in the ledger of every
+test("the pushed-job table is gone, dropped by a forward migration rather than a deleted 0088", async () => {
+  // Criterion 105: 0088 may have reached a shared database, so its file stays
+  // and 0096 drops the table. Both are recorded in the ledger of every
   // migrated database.
   const [table] = await sql<{ reg: string | null }[]>`SELECT to_regclass('public.swarm_scheduler_jobs')::text AS reg`;
   expect(table.reg).toBeNull();
   const ledger = (await sql<{ name: string }[]>`
     SELECT name FROM schema_migrations
-     WHERE name IN ('0070_swarm_scheduler_jobs.sql', '0079_drop_swarm_scheduler_jobs.sql') ORDER BY name`).map((r) => r.name);
-  expect(ledger).toEqual(["0070_swarm_scheduler_jobs.sql", "0079_drop_swarm_scheduler_jobs.sql"]);
+     WHERE name IN ('0088_swarm_scheduler_jobs.sql', '0096_drop_swarm_scheduler_jobs.sql') ORDER BY name`).map((r) => r.name);
+  expect(ledger).toEqual(["0088_swarm_scheduler_jobs.sql", "0096_drop_swarm_scheduler_jobs.sql"]);
 });
 
 test("the contract has no job-ack route, and the old path is not served", async () => {
@@ -926,7 +926,7 @@ test("an unknown bearer reads nothing from the stream", async () => {
 test("the analytics producer's and the operator's tokens read nothing from the stream — rights are per holder", async () => {
   // Smoke spec §3: the scheduler's rights are "read subjects and sessions,
   // perform lifecycle transitions"; the other two holders on the SAME instance
-  // hold only their own (migration 0078). A valid, store-issued token of the
+  // hold only their own (migration 0095). A valid, store-issued token of the
   // wrong holder is refused exactly like a forged one.
   const producer = await provisionAutomationToken("rm_stream_holders", ["analytics_ingestion"], {
     db: fixtureDb, holder: "analytics-producer",

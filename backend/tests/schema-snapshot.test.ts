@@ -51,7 +51,7 @@ const ON_DISK = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).so
 const DECLARATION_SQL = [
   "CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());",
   "CREATE TABLE job_schedules (kind text PRIMARY KEY, cron text NOT NULL, enabled boolean NOT NULL DEFAULT false);",
-  // `kind`, per spec §4.2 and migration 0063 — the fixture declares the same
+  // `kind`, per spec §4.2 and migration 0081 — the fixture declares the same
   // column the real declaration does.
   "CREATE TABLE deployment_identity (kind text NOT NULL, singleton boolean NOT NULL DEFAULT true UNIQUE CHECK (singleton));",
   // 0032's append-only guard, on the one table this fixture declares that is in

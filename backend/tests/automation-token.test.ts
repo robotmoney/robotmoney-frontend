@@ -13,7 +13,7 @@
 //
 // D52 amended §3 to three holders — "`system-scheduler` ..., `analytics-producer`
 // (the analytics ingestion routes), and the operator (the admin routes)" — each
-// "a store-issued row with hash and rights". Migration 0078 keyed the store on
+// "a store-issued row with hash and rights". Migration 0095 keyed the store on
 // (instance, holder); the third block below proves three holders coexist on one
 // instance, each confined to its own rights, and that rotating one leaves the
 // other two valid.
@@ -71,7 +71,7 @@ const provisionAutomationToken: typeof provisionAsGiven = (instance, rights, opt
   provisionAsGiven(instance, rights, { db: fixtureDb, ...options });
 
 // The scheduler's three rights (scheduler spec §7). Every case below that
-// predates migration 0078 provisions the default holder, `system-scheduler`,
+// predates migration 0095 provisions the default holder, `system-scheduler`,
 // which may hold these and nothing else.
 const SCHEDULER_RIGHTS = HOLDER_RIGHTS["system-scheduler"];
 
@@ -174,7 +174,7 @@ test("the store authorizes the epoch lifecycle routes, and a rightless token doe
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Three holders per instance (smoke spec §3 as amended by D52, migration 0078)
+// Three holders per instance (smoke spec §3 as amended by D52, migration 0095)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Provision all three holders on one instance, each with its full list. */
@@ -264,7 +264,7 @@ test("a holder cannot be provisioned another holder's right — the module refus
   ).rejects.toThrow("holder");
 
   // Table half: a statement that bypasses the module is still refused by
-  // migration 0078's constraints — 23514 is check_violation.
+  // migration 0095's constraints — 23514 is check_violation.
   const hash = "a".repeat(64);
   for (const [holder, rights] of [
     ["system-scheduler", ["admin"]],
@@ -280,7 +280,7 @@ test("a holder cannot be provisioned another holder's right — the module refus
   expect((await sql`SELECT 1 FROM automation_tokens WHERE instance = 'rm_cross_rights'`).length).toBe(0);
 });
 
-test("a row written with no holder is the scheduler's — the default keeps pre-0078 inserts meaning what they meant", async () => {
+test("a row written with no holder is the scheduler's — the default keeps pre-0095 inserts meaning what they meant", async () => {
   const hash = "b".repeat(64);
   await fixtureDb`
     INSERT INTO automation_tokens (instance, token_hash, rights)
@@ -373,7 +373,7 @@ const PUBLIC = new Set([
   "projects.list", "projects.detail",
   "swarm.members", "swarm.waitlist", "swarm.member", "swarm.memberTakes", "swarm.memberJudgements",
   "swarm.memberAvatar", "swarm.subject", "swarm.subjectSnapshots", "swarm.sessions", "swarm.session",
-  "swarm.sessionById", "swarm.sessionConsensusReceipt", "swarm.sessionConsensusReceiptVerified",
+  "swarm.sessionById", "swarm.sessionConsensusReceipt", "swarm.sessionConsensusReceiptCanonical",
   "swarm.sessionJudgements", "swarm.take", "swarm.takePermalink", "swarm.judgement", "swarm.openSession",
   "swarm.brief", "swarm.signingPayload", "swarm.memo", "swarm.apply", "swarm.applyStatus",
   "swarm.applicationStatus", "swarm.claimChallenge", "swarm.claimToken",

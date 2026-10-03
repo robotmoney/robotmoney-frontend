@@ -3,8 +3,8 @@ export interface SwarmRouteResult {
   body: unknown;
 }
 
-// A raw `Response` is an admitted return, not an escape hatch: the anchored
-// consensus-receipt route (decision D10) serves stored canonical bytes verbatim
+// A raw `Response` is an admitted return, not an escape hatch: the canonical
+// consensus-receipt route serves stored canonical bytes verbatim
 // with its own content-type, and re-wrapping those in a `{status, body}` JSON
 // envelope is exactly the re-serialization that would change the digest. The
 // dispatcher already passes a `Response` through untouched (the avatar route),

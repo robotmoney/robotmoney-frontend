@@ -12,7 +12,7 @@
 //      destroyed.
 //   2. One FINAL take per member on every read that means "the session's
 //      takes" (D51): the accepting transaction marks the new take final and
-//      unsets the prior one (migration 0075's trigger), and reads select on
+//      unsets the prior one (migration 0092's trigger), and reads select on
 //      the flag. swarm-take-idempotent.test.ts proves the reads use the flag
 //      rather than revision order.
 //   3. Participation and quorum from DISTINCT MEMBERS, not `takes.length`.

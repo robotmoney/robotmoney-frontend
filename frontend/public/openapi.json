@@ -934,56 +934,8 @@
     "/api/swarm/sessions/{id}/consensus-receipt": {
       "get": {
         "operationId": "getConsensusReceipt",
-        "summary": "The anchored consensus receipt bytes for a session",
-        "description": "The aggregate receipt for one session: the signed consensus over the member takes. THIS IS THE ANCHORED URL — it is what robotmoney-core writes on chain as `payloadUri`, and it returns the BARE canonical receipt, byte-stable, with nothing wrapped around it. To check the on-chain commitment, prepend the domain separator `robotmoney:consensus-receipt:v1\\n` to the body exactly as received and keccak256 the result: that is `payloadDigest`. Addressed by session id rather than by content digest, so it survives redeploys and a reader holding only a session id can reach it. A receipt is only published for a session that reached the judged state, so most sessions do not have one. For the read-time verification verdict, fetch the `/verified` sibling.\n\nResponse size: a few KB.\n\nResponse type: `ConsensusReceipt` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
-        "tags": [
-          "public-read"
-        ],
-        "x-backs-pages": [
-          "https://robotmoney.network/swarm"
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "description": "Session id (UUID).",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "x-contract-type": "ConsensusReceipt",
-        "responses": {
-          "200": {
-            "description": "The anchored consensus receipt bytes for a session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "description": "ConsensusReceipt"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such resource.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/swarm/sessions/{id}/consensus-receipt/verified": {
-      "get": {
-        "operationId": "getConsensusReceiptVerified",
         "summary": "The consensus receipt with a read-time verification verdict",
-        "description": "The same receipt as its parent path, wrapped in a verification envelope recomputed on every request: the receipt, the canonical bytes it was published as, `verified`, a per-signature verdict, and `unverifiedReasons` when it is not. Served even when it does not verify — never withheld and never passed off as valid. This URL is NOT the anchored one: the envelope's keccak256 is not `payloadDigest`, so verify the commitment against the parent path instead.\n\nResponse size: a few KB.\n\nResponse type: `SwarmConsensusReceiptResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "The aggregate receipt for one session: the signed consensus over the member takes, wrapped in a verification envelope recomputed on every request: the receipt, the canonical bytes it was published as, `verified`, a per-signature verdict, and `unverifiedReasons` when it is not. Served even when it does not verify, never withheld and never passed off as valid. Addressed by session id rather than by content digest, so it survives redeploys and a reader holding only a session id can reach it. A receipt is only published for a session that reached the judged state, so most sessions do not have one. The envelope's keccak256 is not `payloadDigest`: to check the on-chain commitment, fetch the `/canonical` sibling.\n\nResponse size: a few KB.\n\nResponse type: `SwarmConsensusReceiptResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -1010,6 +962,54 @@
                 "schema": {
                   "type": "object",
                   "description": "SwarmConsensusReceiptResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/swarm/sessions/{id}/consensus-receipt/canonical": {
+      "get": {
+        "operationId": "getConsensusReceiptCanonical",
+        "summary": "The canonical consensus receipt bytes for a session",
+        "description": "The same receipt as its parent path, as the BARE canonical bytes, byte-stable, with nothing wrapped around them. To check the on-chain commitment, prepend the domain separator `robotmoney:consensus-receipt:v1\\n` to the body exactly as received and keccak256 the result: that is `payloadDigest`.\n\nResponse size: a few KB.\n\nResponse type: `ConsensusReceipt` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "tags": [
+          "public-read"
+        ],
+        "x-backs-pages": [
+          "https://robotmoney.network/swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Session id (UUID).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-contract-type": "ConsensusReceipt",
+        "responses": {
+          "200": {
+            "description": "The canonical consensus receipt bytes for a session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "ConsensusReceipt"
                 }
               }
             }

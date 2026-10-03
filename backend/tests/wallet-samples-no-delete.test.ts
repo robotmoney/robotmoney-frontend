@@ -6,7 +6,7 @@
 // deleting every wallet_balance_samples and wallet_sleeve_samples row on the
 // date and inserting the rows it computed, as rm_worker — the one runtime
 // DELETE the pipeline worker issued. It now upserts each row it writes on the
-// table's natural key and sets `superseded_at` (migration 0086) on each live
+// table's natural key and sets `superseded_at` (migration 0104) on each live
 // row of the date it no longer writes, and every read of either table filters
 // `superseded_at IS NULL`.
 //

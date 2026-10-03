@@ -111,7 +111,7 @@ export const COMPAT_METADATA_VERSION = 1;
 /**
  * The last migration written before the header scheme existed (D53, decision 3).
  *
- * Files 0001-0063 predate §8.2's header. They are accepted without one as
+ * Files 0001-0081 predate §8.2's header. They are accepted without one as
  * PRE-COMPAT and are not backfilled: a header added years later would be a
  * reviewed claim nobody reviewed, and every image that could boot against
  * those files already ships them, so §8.4 never evaluates them as surplus.
@@ -124,7 +124,7 @@ export const COMPAT_METADATA_VERSION = 1;
  * backend/tests/schema-compat.test.ts also pins the exact set of header-less
  * files at or below it. Anything new gets a number above it.
  */
-export const COMPAT_HEADER_BASELINE = 63;
+export const COMPAT_HEADER_BASELINE = 81;
 
 /** The migration number a filename starts with, or a refusal. */
 export function migrationNumber(filename: string): number {

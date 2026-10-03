@@ -62,6 +62,7 @@ beforeAll(() => {
     "oven/bun:1.3.5", "bun", "-e",
     `Bun.serve({ port: 8787, hostname: "0.0.0.0", fetch(req) {
        const u = new URL(req.url);
+       if (u.pathname === "/version") return Response.json({ commit: "build-${RUN}", tag: null });
        if (u.pathname === "/api/version") return Response.json(${JSON.stringify(UPSTREAM_BODY)});
        return new Response("stand-in: " + u.pathname, { status: 404 });
      } });`,
@@ -125,4 +126,13 @@ test("control: an /api/ path the stand-in does not serve comes back as the stand
   const res = await getThroughNginx("/api/not-a-route");
   expect(res.status).toBe(404);
   expect(await res.text()).toBe("stand-in: /api/not-a-route");
+}, 60_000);
+
+test("GET /version through website-server reaches the api, not the SPA shell", async () => {
+  // llms.txt and openapi.json advertise /version. Without a proxy location it
+  // fell through to the SPA fallback and returned index.html.
+  const res = await getThroughNginx("/version");
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("application/json");
+  expect(await res.json()).toEqual({ commit: `build-${RUN}`, tag: null });
 }, 60_000);

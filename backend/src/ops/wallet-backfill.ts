@@ -33,7 +33,7 @@
 //     complete replacement snapshot is committed (markets §6.5's append-only boundary).
 //   * It never deletes a row (D55 (6); smoke-production-spec.md §3, "Only
 //     rm_owner may DELETE or TRUNCATE"). The replacement snapshot upserts each
-//     row it writes in place and marks `superseded_at` (migration 0086) on the
+//     row it writes in place and marks `superseded_at` (migration 0104) on the
 //     day's live rows it no longer writes; every read of either table filters
 //     `superseded_at IS NULL`, so what a reader sees is exactly what the old
 //     delete-and-insert left.
@@ -1065,7 +1065,7 @@ interface WalletSnapshotCompleteness {
 
 /** Inspect active rows against the same manifest the writer uses.
  *
- * "Active" is live: a row a repair pass superseded (D55 (6), migration 0086)
+ * "Active" is live: a row a repair pass superseded (D55 (6), migration 0104)
  * is neither coverage nor a row awaiting archival — it was archived when it
  * was live, before the pass that superseded it wrote anything.
  *

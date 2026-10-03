@@ -50,7 +50,7 @@ const SAMPLE_TEXT = "2000-01-01 00:00:00+00";
 // head-sequence keepalive exists to catch. Writing it inside makes the case
 // impossible rather than detectable.
 //
-// THE NUMBER COMES FROM ONE COUNTER ROW (§6.3, D52; migration 0081). "Each
+// THE NUMBER COMES FROM ONE COUNTER ROW (§6.3, D52; migration 0098). "Each
 // event takes its number by incrementing one counter row inside the
 // transaction that makes the change. The row lock serializes event-writing
 // transactions, so numbers are assigned in commit order and a rolled-back
@@ -103,7 +103,7 @@ export async function appendStreamEvent(
   target: { subjectId?: string | null; sessionId?: string | null; payload?: Record<string, unknown> },
 ): Promise<number> {
   const [head] = await on(tx, advanceHead)<{ seq: string }>`UPDATE swarm_stream_head SET seq = seq + 1 RETURNING seq`;
-  if (!head) throw new Error("swarm_stream_head holds no row: the event counter (migration 0081) is missing");
+  if (!head) throw new Error("swarm_stream_head holds no row: the event counter (migration 0098) is missing");
   await on(tx, insertEvent)`
     INSERT INTO swarm_stream_events (seq, kind, subject_id, session_id, payload)
     VALUES (${head.seq}, ${kind}, ${target.subjectId ?? null}, ${target.sessionId ?? null},
@@ -128,7 +128,7 @@ const readHead = registerQuery({
  */
 export async function streamHeadSequence(h: DbHandle = sql): Promise<number> {
   const [row] = await on(h, readHead)<{ seq: string }>`SELECT seq FROM swarm_stream_head`;
-  if (!row) throw new Error("swarm_stream_head holds no row: the event counter (migration 0081) is missing");
+  if (!row) throw new Error("swarm_stream_head holds no row: the event counter (migration 0098) is missing");
   return Number(row.seq);
 }
 
@@ -179,8 +179,8 @@ export async function streamHeadSequence(h: DbHandle = sql): Promise<number> {
 //     certificate or a template opinion when a real one is missing (§4.4).
 
 // There is no judging-duration constant. §2.2 makes `judging_duration` a
-// subject column (`judging_duration_seconds`, migration 0073, D53 (7)), and
-// §4.4 captures it onto the session at turnover (migration 0074) beside the
+// subject column (`judging_duration_seconds`, migration 0090, D53 (7)), and
+// §4.4 captures it onto the session at turnover (migration 0091) beside the
 // judge mode. `requestJudging` adds THAT captured value to the request instant.
 
 export type JudgeMode = "off" | "enforce";
@@ -333,7 +333,7 @@ export type OpenResult = {
  * never a sliver nobody could submit into.
  *
  * CONCURRENCY. Two callers reaching this at once both try to INSERT a
- * `collecting` row, and migration 0068's partial unique index lets exactly one
+ * `collecting` row, and migration 0086's partial unique index lets exactly one
  * through. The loser does not fail: it reads the winner's session and returns
  * it, which is §4.1's "the second call returns it." The race is resolved by the
  * database rather than by a lock we take first, because a lock would have to be
@@ -707,7 +707,22 @@ export async function turnOverEpoch(
                 SET state = 'window_closed', judge_mode = ${judgeMode},
                     judging_duration_seconds = ${subject.judging_duration_seconds}
               WHERE id = ${expectedSessionId} AND state = 'collecting'`;
-    await recordAbsencesTx(expectedSessionId, tx);
+    // Absences are bookkeeping about a window that has already closed, not a
+    // condition of closing it. Production committed the close first and
+    // recorded absences outside (release e0d40661), so a failing absence
+    // insert could never wedge a subject. Here they stay in this transaction
+    // (atomic turnover, scheduler spec 4.3) inside a savepoint: a failure
+    // rolls back only the absence rows, becomes a warning, and the close and
+    // the next-epoch open still commit.
+    try {
+      await tx.savepoint(async (sp) => {
+        await recordAbsencesTx(expectedSessionId, sp as unknown as typeof tx);
+      });
+    } catch (err) {
+      console.warn(
+        `[swarm] absences for session ${expectedSessionId} not recorded: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
     // §2.2 turnover rule, against ONE reading of the clock taken here — after
     // the subject lock is held, so a turnover that waited on another never
@@ -926,7 +941,7 @@ export type RequestJudgingResult = {
  *
  * NOTHING CAPTURED, NOTHING REQUESTED (§4.4: "Judge mode and judging duration
  * are captured at turnover"). A session whose `judge_mode` or
- * `judging_duration_seconds` is NULL (migration 0074) was closed before
+ * `judging_duration_seconds` is NULL (migration 0091) was closed before
  * capture existed — by the retired admin `close` verb, or by `closeWindow`
  * before it began capturing — and has no captured value to settle by. It is refused with `judging_not_captured`. It is
  * NOT settled from the subject's live column: that value is whatever an admin
@@ -1265,7 +1280,7 @@ async function currentJudgeMode(h: DbHandle): Promise<JudgeMode> {
   return cfg?.mode === "enforce" ? "enforce" : "off";
 }
 
-/** Migration 0068's partial unique index, by name — the only violation this module interprets. */
+/** Migration 0086's partial unique index, by name — the only violation this module interprets. */
 function isOneCollectingViolation(err: unknown): boolean {
   const e = err as { code?: string; constraint_name?: string; message?: string };
   return e?.code === "23505" &&

@@ -67,12 +67,12 @@ const PACKAGE_MANIFESTS = ["package.json", "backend/package.json", "frontend/pac
  * to catch, so each entry says what it is and why it cannot be removed.
  */
 const PINNED: Record<string, string> = {
-  "backend/migrations/0072_drop_swarm_schedules.sql":
+  "backend/migrations/0089_drop_swarm_schedules.sql":
     "the migration that DELETES the rows has to name them",
   "scripts/tests/unit/no-swarm-cron.test.ts": "this gate",
   "backend/tests/fixtures/releases/v0.5.0/release.json":
     "the record of what the SHIPPED v0.5.0 release seeded and queued, read from the tag, so the upgrade test " +
-    "seeds exactly that and proves 0072 and 0066 clear it — history, not a live seed",
+    "seeds exactly that and proves 0089 and 0084 clear it — history, not a live seed",
   "scripts/tests/unit/swarm-session-window.test.ts":
     "it asserts the ABSENCE of `SWARM_WINDOW_MINUTES` from the session driver, so it has to name it",
 };

@@ -1,25 +1,14 @@
-// THE ANCHORED URL SERVES THE ANCHORED BYTES (decision D10).
+// THE CANONICAL ROUTE SERVES THE ANCHORED BYTES.
 //
-// WHAT WAS WRONG. `payloadUri` is written on chain beside `payloadDigest`.
-// Until this change `payloadUri` pointed at
-// GET /api/swarm/sessions/:id/consensus-receipt, which answered a READ-TIME
-// VERIFICATION ENVELOPE — {sessionId, …, receipt, canonicalBytes, verified, …}
-// — whose keccak256 is NOT payloadDigest. Only the `canonicalBytes` string
-// inside it hashes to the anchor. A third party holding nothing but the chain
-// could not check the commitment without knowing, from nowhere on chain, to
-// unwrap `.receipt`, re-canonicalize it under the v1 rules and hash that; and
-// that unwrap rule had grown five implementations in three languages
-// (phase3/3.1-FINDING-the-anchored-url-does-not-serve-the-anchored-bytes.txt,
-// review task T24).
-//
-// WHAT D10 DECIDED, option (a): the anchored route returns the BARE CANONICAL
-// BYTES — the exact preimage, byte for byte — and the envelope moves to the
-// sibling route .../consensus-receipt/verified. That turns "verify the anchor"
-// into fetch + keccak256 + compare, and turns T01's "refuse unless the URL
-// drafted from is the anchored payloadUri" into plain string equality.
+// `payloadDigest` is keccak256 of the receipt's canonical bytes. The path
+// GET /api/swarm/sessions/:id/consensus-receipt answers a READ-TIME
+// VERIFICATION ENVELOPE, exactly as production v0.5.4 does, and that
+// envelope's keccak256 is NOT payloadDigest. A verifier holding only the chain
+// needs the bare preimage, so it is served at the sibling path
+// .../consensus-receipt/canonical: fetch + keccak256 + compare.
 //
 // WHAT THIS FILE ASSERTS, and why each case is here rather than implied:
-//   1. the bare route's response body is byte-identical to the stored
+//   1. the canonical route's response body is byte-identical to the stored
 //      `canonical_bytes` column minus its pinned domain prefix — not deep-equal
 //      JSON, byte-identical, because a digest is taken over bytes and Postgres
 //      jsonb does not round-trip key order (the sibling test in
@@ -34,13 +23,13 @@
 //      — which parses the fetched body — could not read it. Prepending a
 //      constant pinned in the shared fixture is not an unwrap rule: there is no
 //      field to select and no second canonicalization, which is the whole
-//      difference D10 bought;
+//      difference the bare route buys;
 //   3. it is byte-stable across requests, since an anchor is a promise about
 //      every future fetch, not about the first one;
 //   4. it is served as application/json with no envelope keys at the top level,
 //      so `rmpc receipt verify --receipt-url` parses it directly;
 //   5. the envelope still exists, unchanged in shape and still `verified: true`,
-//      at the new URL — the human/verifier surface is moved, not deleted.
+//      at the base URL, as in production.
 import { expect, test } from "bun:test";
 import { RECEIPT_DOMAIN_SEPARATOR, ROUTES, canonicalizeReceipt, path } from "@robotmoney/contract";
 import { readFileSync } from "node:fs";
@@ -64,8 +53,8 @@ const spec = JSON.parse(readFileSync(join(FIXTURES, "consensus-receipt.canonical
 const PINNED_DIGEST = "0xd3e85fdd5fdbc7da72d0853bfeaa3f3a4288ad5392c39f2e0dee0d82c7f7b2d1";
 
 const call = (p: string) => handleSwarm(new Request(`http://localhost${p}`), new URL(`http://localhost${p}`));
-const bareUrl = (id: string) => path(ROUTES.swarm.sessionConsensusReceipt, { id });
-const verifiedUrl = (id: string) => path(ROUTES.swarm.sessionConsensusReceiptVerified, { id });
+const bareUrl = (id: string) => path(ROUTES.swarm.sessionConsensusReceiptCanonical, { id });
+const verifiedUrl = (id: string) => path(ROUTES.swarm.sessionConsensusReceipt, { id });
 
 async function seedStoredReceipt(): Promise<void> {
   const receipt = ENVELOPE.receipt;
@@ -103,7 +92,7 @@ test("the keccak256 helper is right before anything is judged by it", () => {
   expect(keccak256(utf8("abc"))).not.toBe(keccak256(utf8("abd")));
 });
 
-test("the ANCHORED route serves the BARE canonical bytes, byte for byte", async () => {
+test("the CANONICAL route serves the BARE canonical bytes, byte for byte", async () => {
   await seedStoredReceipt();
   const res = (await call(bareUrl(ENVELOPE.sessionId))) as Response;
   expect(res).toBeInstanceOf(Response);
@@ -112,7 +101,7 @@ test("the ANCHORED route serves the BARE canonical bytes, byte for byte", async 
   expect(res.headers.get("content-type")).toBe("application/json");
 
   const served = await res.text();
-  // THE assertion of decision D10: what the URL returns is the preimage's JSON
+  // THE assertion: what the URL returns is the preimage's JSON
   // segment, not a wrapper around it. Compared as a string, not parsed, because
   // parsing is exactly the step that would hide a byte difference.
   expect(RECEIPT_DOMAIN_SEPARATOR + served).toBe(ENVELOPE.canonicalBytes);
@@ -168,14 +157,14 @@ test("the anchored bytes are stable across requests", async () => {
   expect(keccak256(new TextEncoder().encode(RECEIPT_DOMAIN_SEPARATOR + a))).toBe(PINNED_DIGEST);
 });
 
-test("the ENVELOPE lives at the sibling /verified route, unchanged in shape", async () => {
+test("the ENVELOPE stays at the base route, unchanged in shape", async () => {
   await seedStoredReceipt();
   const res = (await call(verifiedUrl(ENVELOPE.sessionId))) as { status: number; body: Record<string, unknown> };
   expect(res.status).toBe(200);
   expect(res.body).toEqual(ENVELOPE);
   expect(Object.keys(res.body)).toEqual(Object.keys(ENVELOPE));
   expect(res.body.verified).toBe(true);
-  // The envelope's own copy of the bytes is the same object the bare route
+  // The envelope's own copy of the bytes is the same object the canonical route
   // serves — one receipt, two representations, no third.
   expect(res.body.canonicalBytes).toBe(
     RECEIPT_DOMAIN_SEPARATOR + (await ((await call(bareUrl(ENVELOPE.sessionId))) as Response).text()),

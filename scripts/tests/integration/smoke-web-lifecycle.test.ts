@@ -23,7 +23,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readContractVersion } from "../../lib/api-range.ts";
+import { apiVersionInRange, readContractVersion, readFrontendApiRange } from "../../lib/api-range.ts";
 import { currentSite, previousSite } from "../../lib/smoke-site.ts";
 import { readStackState } from "../../lib/smoke-state.ts";
 import { readWebJournal, readWebReceipt, type WebReceipt } from "../../lib/website-release.ts";
@@ -113,7 +113,11 @@ describe("bun smoke:web deploys a site version onto a running stack", () => {
   test("the boot placed a site, and it declares a range the running API is inside", async () => {
     expect(bootSite).not.toBeNull();
     const site = await servedSite(webPort);
-    expect(site.apiRange).toBe(`^${API_VERSION}`);
+    // The site publishes the range frontend/package.json declares (not a string rebuilt from the
+    // contract version: a contract patch bump leaves a caret range valid, web-client.yml only
+    // requires the range to ADMIT the version), and that range admits the running API.
+    expect(site.apiRange).toBe(readFrontendApiRange());
+    expect(apiVersionInRange(API_VERSION, site.apiRange)).toBe(true);
     const api = (await (await fetch(`http://127.0.0.1:${webPort}/api/version`)).json()) as { api: string };
     expect(api.api).toBe(API_VERSION);
   });

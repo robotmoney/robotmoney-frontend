@@ -1540,7 +1540,7 @@ test("swarm admin: excused roster row renders distinctly and excuse/restore subm
   expect(capturedRestore).not.toHaveProperty("operation");
   expect(capturedRestore).not.toHaveProperty("version");
 
-  // Excuse Nova (expected → excused) — its own endpoint, body {memberId, reason}.
+  // Excuse Nova (expected → excused) — its own endpoint, body {memberId}.
   let capturedExcuse: unknown = null;
   await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/roster\/excuse$/, async (route) => {
     capturedExcuse = route.request().postDataJSON();
@@ -1551,9 +1551,8 @@ test("swarm admin: excused roster row renders distinctly and excuse/restore subm
   await page.getByTestId("roster-reason").fill("Excusing Nova due to a scheduling conflict.");
   await page.getByTestId("roster-submit").click();
   await expect(page.getByTestId("roster-form")).not.toBeVisible();
-  expect(capturedExcuse).toMatchObject({
-    memberId: "nova", reason: "Excusing Nova due to a scheduling conflict.",
-  });
+  // The API answers 400 to a `reason` without `force`, so a plain excuse sends only the member.
+  expect(capturedExcuse).toEqual({ memberId: "nova" });
 });
 
 // AC: aggregate fields render from a read-only aggregated session. Unlike the

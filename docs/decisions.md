@@ -3806,7 +3806,7 @@ on activation and on a seat opening, the `SWARM_NOTIFICATION_EMAIL_FROM` /
 `_TRANSPORT_URL` / `_TRANSPORT_TOKEN` settings with their compose and stack
 passthroughs, the outbox table and the waitlist's "notified" stamp. There is no
 flag that turns it back on and no vendor left to bill. Migration
-`0066_drop_swarm_notifications.sql` drops the schema.
+`0084_drop_swarm_notifications.sql` drops the schema.
 
 **Why.** Three emails were ever sent — an application receipt, an approval
 notice and a seat-open notice to the waitlist — and none of them was the only
@@ -3894,7 +3894,7 @@ instead of `ORDER BY revision DESC`; keep `swarm-take-revisions.test.ts` and
 extend it for the flag. Tracked under the deployment refactor issue (#1026),
 W3.
 
-**Implemented.** Migration 0075 added the flag, the backfill, the partial
+**Implemented.** Migration 0092 added the flag, the backfill, the partial
 unique index `(session_id, member_id) WHERE final`, the `UPDATE (final)`-only
 grant to `rm_app`, and the `BEFORE INSERT` trigger that marks the newest
 revision final and unsets the member's prior one. That trigger is the one
@@ -4007,7 +4007,7 @@ and `currentJudgeMode` already turns `shadow` into `off` for every new session.
 A soak against the retired backend judge would measure code that no longer
 decides anything.
 
-**Decision 2: D52's retention rule beats migration 0072's triggers.** A forward
+**Decision 2: D52's retention rule beats migration 0089's triggers.** A forward
 migration drops the `DELETE` and `TRUNCATE` guard triggers on
 `swarm_stream_events`. `DELETE` and `TRUNCATE` stay revoked from `rm_app` and
 `rm_worker`, so only `rm_owner` can prune, and only rows older than the oldest
@@ -4026,11 +4026,11 @@ gap.
 > receipted `rm_owner` command prunes, and it removes only rows older than a
 > retention window of at least 7 days.
 
-**Decision 3: compat headers start after a baseline of 0063.** The migration
+**Decision 3: compat headers start after a baseline of 0081.** The migration
 runner refuses a pending migration with no `-- compat: additive` or
 `-- compat: breaking` header, except one numbered at or below the baseline
-constant `0063`, which it accepts as pre-compat. A test proves every migration
-above `0063` carries a header. Files `0001` to `0063` are not backfilled.
+constant `0081`, which it accepts as pre-compat. A test proves every migration
+above `0081` carries a header. Files `0001` to `0081` are not backfilled.
 *Why.* Production still runs a release whose pending set includes header-less
 files, so a strict rule would refuse `bun run migrate` and a `--local` dump of
 production outright. Backfilling 63 headers by hand would write compatibility
@@ -4160,7 +4160,7 @@ route table and the response shapes.
 
 <a id="d55"></a>
 
-## D55 — Thirteen owner calls: version reports, forged operators, judge levers, who drives epochs, the first production migrate, who may delete, 0072's label, the supported baseline, the identity-first pass, the stream transport, the stream prune and object-less statements (Lucas, 2026-09-25)
+## D55 — Thirteen owner calls: version reports, forged operators, judge levers, who drives epochs, the first production migrate, who may delete, 0089's label, the supported baseline, the identity-first pass, the stream transport, the stream prune and object-less statements (Lucas, 2026-09-25)
 
 **Status.** Accepted 2026-09-25; not yet implemented. Recorded from issue
 #1026, where each point was a question the earlier decisions left open or a
@@ -4171,7 +4171,9 @@ deactivation among the scheduler's transitions, and decisions 5 to 8 were
 added. Amended again the same day: decision 8 was corrected to name
 production's observed 73-name ledger rather than v0.5.0 alone, and decisions 9
 to 13 were added. Amended on 2026-09-28: decision 10 records the owner's call
-that no tool turns a pre-0063 production dump into a remote twin (below).
+that no tool turns a pre-0081 production dump into a remote twin (below).
+Amended on 2026-10-03: decision 8's baseline is production's 76-name ledger,
+read on 2026-10-01 (issue 1097, below).
 
 **Corrected on 2026-09-25, after a review of the recorded answers.** A review
 checked every call above against the owner's own words and the code. The owner
@@ -4180,13 +4182,13 @@ it wins over any earlier wording of this decision, commit 88a1ced5 included.
 - Decision 4: a deactivation no longer closes the open epoch. The window runs
   to its close (the owner's answer).
 - Decision 8: the 73-name baseline is the owner's confirmed call. A pure
-  v0.5.0 ledger is refused.
+  v0.5.0 ledger is refused. Replaced on 2026-10-03 by the 76-name ledger.
 - Decision 12: pruning is a manual, receipted `rm_owner` command with a 7-day
   minimum window (the owner's answer). It supersedes [D52](#d52)'s retention
   bullet and [D53](#d53) (2)'s cursor bound.
 - Decision 10: its remote twin clause was replaced on 2026-09-28 by the
   owner's call recorded in decision 10.
-- Decisions 5, 9 and 10: the passes that may apply 0063 first are named, each
+- Decisions 5, 9 and 10: the passes that may apply 0081 first are named, each
   with its own guard, and all share one transaction rule.
 - Decision 2 is narrowed to `robotmoney`. Decisions 3, 6 and 11 gained
   implementation constraints. Decision 11's reason is recorded as a transport
@@ -4212,9 +4214,9 @@ these hold:
 - the member is not seeded from the roster, so `themis` keeps its operator.
 
 It applies once per database, as every migration does. It changes nothing on a
-database with no such row. Migration 0083 as built clears every self-written
+database with no such row. Migration 0101 as built clears every self-written
 value, which is wider than the owner approved. If no shared database, stage-2
-included, has recorded 0083, 0083 is corrected in place. If one has, a forward
+included, has recorded 0101, 0101 is corrected in place. If one has, a forward
 migration carries the correction. Criterion 166 is reworded to match.
 Implementation lands in wave 3.
 *Why.* The judge's third-party gate passes a member whose operator is
@@ -4285,7 +4287,7 @@ drives the clock a right it never needs.
 
 **Decision 5: the first production migrate may run once with no
 `deployment_identity` row.** Production runs v0.5.0, which predates the
-`deployment_identity` table (0063) and the schema manifest (0064). Every
+`deployment_identity` table (0081) and the schema manifest (0082). Every
 `bun run migrate` refuses a database with no identity row, and nothing else may
 run a migration. So production cannot reach the release that creates the row.
 One guarded production exception closes the gap. `bun run migrate` accepts a
@@ -4300,7 +4302,7 @@ these holds:
 
 Its receipt records the pre-identity state: that no identity row existed, the
 release the ledger matched, and that ledger's filename list. The pass writes
-`production` with 0063 (decision 9,
+`production` with 0081 (decision 9,
 [`smoke-production-spec.md`](technical/smoke-production-spec.md) §9.1). Every
 later run requires the row. Decision 9 names the one rehearsal pass that
 shares this pass's identity-first shape. Decision 10 names the one-off
@@ -4348,32 +4350,50 @@ if only a manual owner prune removed its rows, so its size is fixed by shape.
 Code built before the tombstone does not read it, so a rollback to that code
 would serve a revoked key again. The breaking label closes that rollback.
 
-**Decision 7: migration 0072 is `compat: breaking`.** 0072's header said
+**Decision 7: migration 0089 is `compat: breaking`.** 0089's header said
 `additive`. The migration deletes the `swarm.*` `job_schedules` rows and the
-pending `swarm.*` jobs that code built at 0070 seeded and read. The smoke spec
+pending `swarm.*` jobs that code built at 0088 seeded and read. The smoke spec
 §8.4 says additive means no bootstrap row old code relies on is removed, so the
 label was wrong. The file's header now says `breaking`. A ledger that already
-recorded 0072 keeps `additive`, because the runner writes a ledger row once, at
+recorded 0089 keeps `additive`, because the runner writes a ledger row once, at
 apply, and never rewrites it. On such a database the stale label changes no
-boot decision once 0079 is applied, because 0079, 0080 and 0081 are
-`breaking` and close rollback past 0072 by themselves. Production runs
-v0.5.0, which predates 0063, so it has not applied 0072 and will record the
+boot decision once 0096 is applied, because 0096, 0097 and 0098 are
+`breaking` and close rollback past 0089 by themselves. Production runs
+v0.5.0, which predates 0081, so it has not applied 0089 and will record the
 corrected label.
-*Why.* The label is a promise to older code. A wrong promise lets code at 0070
+*Why.* The label is a promise to older code. A wrong promise lets code at 0088
 boot and then schedule nothing, with no refusal to explain why.
 
 **Decision 8: production's observed ledger is the only supported upgrade
-source.** Lucas confirmed this baseline on 2026-09-25. `SUPPORTED_RELEASES`
-holds one baseline: the 73 filenames production's `schema_migrations` recorded
-when it was read on 2026-09-25. They are the 72 files of v0.5.0 plus
-`0062_rm_readonly_sequence_select.sql`, which production applied out of band
-on 2026-09-22 with the SQL of commit c3a68812 (tag
-`archive/releases-0.5.x-2026-09-24`). Upgrade tests replay those archived
-bytes. An upgrade from any other ledger is refused, and a pure v0.5.0 ledger
-is refused too. Decision 5's ledger match reads this list, so the first-migrate
-exception accepts only the 73-name ledger. Adding a baseline to the list takes
-a new decision. `backend/src/db/supported-releases.ts` holds the list, and
-`backend/tests/fixtures/releases/production-2026-09-25/` pins it.
+source.** Lucas confirmed the first baseline on 2026-09-25 and replaced it on
+2026-10-03 (issue 1097). `SUPPORTED_RELEASES` holds one baseline: the 76
+filenames production's `schema_migrations` recorded when it was read on
+2026-10-01. They are the 72 files of v0.5.0 plus four:
+- `0062_rm_readonly_sequence_select.sql`, which production applied out of band
+  on 2026-09-22 with the SQL of commit c3a68812 (tag
+  `archive/releases-0.5.x-2026-09-24`);
+- `0061_rm_worker_wallet_backfill_grant.sql` and
+  `0063_swarm_judge_model_default.sql`, shipped by v0.5.1 and applied on
+  2026-09-25;
+- `0080_analytics_ledger_compaction.sql`, shipped by v0.5.2 and applied on
+  2026-09-29.
+
+Production has run v0.5.3 and v0.5.4 since, with no new migration. Upgrade
+tests replay the bytes production ran. An upgrade from any other ledger is
+refused: a pure v0.5.0 ledger, the 73-name ledger of 2026-09-25, a ledger with
+one file more or less. Decision 5's ledger match reads this list, so the
+first-migrate exception accepts only the 76-name ledger. Adding a baseline to
+the list takes a new decision. `backend/src/db/supported-releases.ts` holds the
+list, and `backend/tests/fixtures/releases/production-2026-10-01/` pins it.
+
+Production records `0080_analytics_ledger_compaction`, so a pending file
+numbered 0063 to 0079 sorts below the last recorded row and the gap rule
+refuses it as out of band. The owner kept the rule strict and renumbered the
+never-shipped migrations instead. `0063_deployment_identity` to
+`0092_drop_swarm_judge_fault_injection` became 0081 to 0110, in their old
+order, one number each (the identity migration is
+`0081_deployment_identity`). Only five pending files sort below it, the ones
+decision 9 names. A looser rule would also wave through a hand-edited ledger.
 *Why.* Every supported baseline is a fixture, an upgrade test and a ledger the
 first-migrate exception must accept. No database will take a path from an
 older release, so each extra entry would be cost with no user. The first text
@@ -4382,9 +4402,9 @@ taken from it carry the 0062 row, so a v0.5.0 list would refuse the one
 database the exception exists for. This is the owner's call. It replaces the
 earlier wording that credited the ruling to the owner before he had made it.
 
-**Decision 9: two named passes apply 0063 first and write the identity row
+**Decision 9: two named passes apply 0081 first and write the identity row
 with it.** Only two tool passes may run against a database with no
-`deployment_identity` row. Each applies `0063_deployment_identity` before any
+`deployment_identity` row. Each applies `0081_deployment_identity` before any
 other pending migration, out of filename order:
 - **The production first pass** (decision 5), `bun run migrate`. It needs a
   remote connection, `RM_ENV=prod`, a typed `rm_owner` password and an
@@ -4397,10 +4417,10 @@ other pending migration, out of filename order:
   acknowledgement says.
 
 Both share three rules:
-- 0063's DDL, its `schema_migrations` row and the identity row commit in one
+- 0081's DDL, its `schema_migrations` row and the identity row commit in one
   fenced transaction (smoke spec §2).
-- Before the pass, the ledger must equal the 73-name baseline of decision 8.
-- No tool applies 0063 out of order outside these two passes.
+- Before the pass, the ledger must equal the 76-name baseline of decision 8.
+- No tool applies 0081 out of order outside these two passes.
 
 No tool pass exists for a remote twin. Decision 10's one-off operator
 intervention is a hand step outside every tool, and it keeps the first two
@@ -4408,26 +4428,26 @@ rules.
 
 The rest of the pending migrations then take the normal path, and the normal
 path accepts the state a pass leaves. It may apply a pending file that sorts
-below a recorded 0063 only when the identity row exists and the rest of the
-ledger equals the baseline plus 0063, plus any files applied after it. Every
-other out-of-order state refuses. Production lacks six files below 0063:
+below a recorded 0081 only when the identity row exists and the rest of the
+ledger equals the baseline plus 0081, plus any files applied after it. Every
+other out-of-order state refuses. Production lacks five files below 0081:
 `0056_swarm_judge_requires_model`, `0057_swarm_judge_policy_stamp`,
-`0058_swarm_judge_fault_injection`, `0059_swarm_judgement_completion_usage`,
-`0061_rm_worker_wallet_backfill_grant` and
-`0062_rm_worker_analytics_ledger_read_grant`. The normal path applies them
-after 0063.
+`0058_swarm_judge_fault_injection`, `0059_swarm_judgement_completion_usage` and
+`0062_rm_worker_analytics_ledger_read_grant` (the first text counted six,
+before production's ledger was read to record `0061`). The normal path applies
+them after 0081.
 
-So an interruption after 0063 commits leaves the row in place. A rerun takes
+So an interruption after 0081 commits leaves the row in place. A rerun takes
 the normal path and resumes from the first unapplied migration (smoke spec
-§8.3). An interruption before 0063 commits leaves the ledger on the baseline,
+§8.3). An interruption before 0081 commits leaves the ledger on the baseline,
 and a rerun takes the same pass again. This replaces decision 5's first order,
 in which production initialization wrote the row after the whole migrate run.
 
 Criterion 18 gains a process test that kills a migrate between two commits and
 proves the rerun resumes. Each of the two passes gains two kill-and-rerun
-tests. Kill it before 0063 commits: the rerun takes the pass again. Kill it after 0063: the
-rerun resumes through the normal path and applies the six lower files.
-Criterion 170 says the identity row commits in the same transaction as 0063. A
+tests. Kill it before 0081 commits: the rerun takes the pass again. Kill it after 0081: the
+rerun resumes through the normal path and applies the five lower files.
+Criterion 170 says the identity row commits in the same transaction as 0081. A
 wave package implements this. It also hardens `transactionIdentityStore` so
 the store carries the connection's remote flag, and the rehearsal guard
 applies on the fenced path too.
@@ -4435,39 +4455,39 @@ applies on the fenced path too.
 commit left a ledger that matched no supported baseline and no identity row.
 Both the exception and the normal path refused it, so that database had no
 legal way forward. The first text of this decision said the runner already
-resumed the state a pass leaves after 0063. It did not: the normal path
-refused the six lower files as a gap. With the row written first, and the
+resumed the state a pass leaves after 0081. It did not: the normal path
+refused the lower files as a gap. With the row written first, and the
 normal path accepting exactly the state a pass leaves, every interruption
-after 0063 is an ordinary partial migrate. Naming each pass with its own guard
+after 0081 is an ordinary partial migrate. Naming each pass with its own guard
 keeps the exception from spreading. The ledger cannot tell production from a
 dump of it, so the rehearsal pass proves instead that its own run restored
 the local container.
 
-**Decision 10: a production dump from before 0063 becomes a twin through `bun
+**Decision 10: a production dump from before 0081 becomes a twin through `bun
 smoke --local dump`; a remote twin of it needs a one-off operator
 intervention.** A dump of production restored for rehearsal has no
 `deployment_identity` table, because production has none yet.
 - **A `--local dump`.** When its restored ledger equals the production
   baseline (decision 8), smoke's preparation takes decision 9's local pass: it
-  applies 0063 first and writes `rehearsal` in the same transaction, before any
+  applies 0081 first and writes `rehearsal` in the same transaction, before any
   other pending migration. It needs no `RM_ENV=prod`, typed password or `y`,
   because smoke owns the container and generated its owner password (smoke
   spec §5).
 - **A remote twin.** Lucas's call on 2026-09-28: a production dump from before
-  0063 cannot become a remote twin through any tool.
+  0081 cannot become a remote twin through any tool.
   - The twin tooling and every stage tool refuse a remote target with no
     `deployment_identity` table. The refusal changes nothing, and its message
     names the one-off operator intervention.
   - That intervention is a receipted `rm_owner` step, run by hand.
     [`docs/runbooks/pre-identity-remote-twin.md`](runbooks/pre-identity-remote-twin.md)
     documents it. In one transaction, fenced on the target-lock key (smoke
-    spec §2), it applies 0063, records 0063's ledger row and writes
-    `rehearsal`. The ledger must equal the 73-name baseline before it starts.
+    spec §2), it applies 0081, records 0081's ledger row and writes
+    `rehearsal`. The ledger must equal the 76-name baseline before it starts.
     The operator types the `rm_owner` password, and the receipt is the psql
     session log.
   - After it, the database is in the state decision 9's normal path accepts.
-    A stage `bun run migrate` or `--migrate` then applies the six files below
-    0063 and the rest.
+    A stage `bun run migrate` or `--migrate` then applies the five files below
+    0081 and the rest.
   - Otherwise a twin of such a dump uses `bun smoke --local dump`.
 
 A dump with any other pre-identity ledger refuses. A wave package implements
@@ -4484,7 +4504,7 @@ and never reach a remote database. So a remote pass would be a new tool that
 writes `rehearsal` onto a remote database full of production data. A remote
 database cannot prove who restored it, and the operator who ran the restore
 can. The owner chose a one-off hand step over that tool. The need ends when
-production applies 0063, because every later dump carries the table.
+production applies 0081, because every later dump carries the table.
 
 **Decision 11: the scheduler event stream moves from SSE to WebSocket.** The
 subscription that serves the §6.3 event stream of
@@ -4532,7 +4552,7 @@ rebuild. This supersedes [D52](#d52)'s retention bullet and [D53](#d53) (2)'s
 bound of "only rows older than the oldest cursor the API may still be asked to
 serve". Criteria 93 and 104 are reworded to this rule: time-window retention,
 pruned only by the manual `rm_owner` command, with resync-and-close below the
-floor. A later migration corrects the table comment 0080 wrote, which still
+floor. A later migration corrects the table comment 0097 wrote, which still
 names the cursor bound. A later package on issue #1026 implements the command,
 and it has its own issue criterion.
 *Why.* The oldest cursor the API may still be asked to serve is not knowable:

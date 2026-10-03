@@ -400,7 +400,7 @@ export interface SwarmSession {
   // "cancelled" (issue #152) is reachable via the admin surface's guarded
   // lifecycle transitions (swarm/admin.ts); the pre-#152 smoke/worker path
   // never sets it.
-  state: "scheduled" | "collecting" | "window_closed" | "aggregated" | "judged" | "published" | "cancelled";
+  state: "scheduled" | "collecting" | "window_closed" | "aggregated" | "judging" | "judged" | "published" | "cancelled";
   windowClosesAt: string | null;
   /** When the brief went out and the window began; null until then. `date` and `generatedAt` are when the row was created, which can be days earlier. */
   openedAt: string | null;

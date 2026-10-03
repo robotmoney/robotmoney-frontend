@@ -1,5 +1,5 @@
-// The D55 (6) tombstone columns are additive — issue #1026, migrations 0084,
-// 0085 and 0086, smoke-production-spec.md §8.4.
+// The D55 (6) tombstone columns are additive — issue #1026, migrations 0102,
+// 0103 and 0104, smoke-production-spec.md §8.4.
 //
 // D55 (6): "only `rm_owner` may `DELETE` or `TRUNCATE`", and every runtime
 // delete becomes "a tombstone column that every read filters on, a read that
@@ -22,7 +22,7 @@
 //      them, and leave the new columns NULL. Its DELETEs, and its WebAuthn
 //      challenge INSERT, are refused on every path: wave 5 of #1026 (D55 (6))
 //      shipped the tombstone writes with the `compat: breaking` migrations
-//      0088 (the 32 challenge slots) and 0089 (DELETE and TRUNCATE revoked
+//      0106 (the 32 challenge slots) and 0107 (DELETE and TRUNCATE revoked
 //      from every runtime role), so that code refuses to boot on the current
 //      version (tests/pre-revoke-boot-refusal.test.ts) and the refusals below
 //      are what it would meet if it ran;
@@ -63,7 +63,7 @@ beforeAll(async () => {
   migrated = await dbs.migrated(`rm_tomb_migrated_${suffix}`);
 
   // Snapshot N predates every tombstone column: write one row per table there,
-  // then run the real migrate, which applies 0084 onward.
+  // then run the real migrate, which applies 0102 onward.
   const name = `rm_tomb_advanced_${suffix}`;
   advanced = await dbs.atSnapshotN(name);
   await advanced.unsafe(`
@@ -76,7 +76,7 @@ beforeAll(async () => {
     INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
       VALUES ('${DAY}', '0x00000000000000000000000000000000000000aa', 'PRE', 1, 1, 'live', now());`);
   const run = await dbs.migrate(advanced, name);
-  expect(run.applied).toContain("0086_wallet_sample_superseded_at.sql");
+  expect(run.applied).toContain("0104_wallet_sample_superseded_at.sql");
   await advanced.unsafe("RESET ROLE");
 }, 180_000);
 
@@ -147,8 +147,8 @@ describe("each tombstone column exists on every path to the current version (spe
   test("the migrations are compat: additive in the ledger the real migrate run wrote", async () => {
     const rows = (await advanced`
       SELECT name, compat FROM schema_migrations
-      WHERE name IN ('0084_admin_revocation_tombstones.sql', '0085_webauthn_challenge_consumed_at.sql',
-                     '0086_wallet_sample_superseded_at.sql')
+      WHERE name IN ('0102_admin_revocation_tombstones.sql', '0103_webauthn_challenge_consumed_at.sql',
+                     '0104_wallet_sample_superseded_at.sql')
       ORDER BY name`) as unknown as { name: string; compat: string }[];
     expect(rows.map((r) => r.compat)).toEqual(["additive", "additive", "additive"]);
   });
@@ -198,7 +198,7 @@ describe("the pre-tombstone code's statements against the new columns (spec §8.
                  (SELECT superseded_at FROM wallet_balance_samples WHERE sample_date = ${DAY} AND symbol = 'OLDCODE') AS balance_tombstone,
                  (SELECT superseded_at FROM wallet_sleeve_samples WHERE sample_date = ${DAY} AND symbol = 'OLDCODE') AS sleeve_tombstone`;
         // src/ops/wallet-backfill.ts, the pre-D55 (6) repair pass: delete the
-        // day. Refused since 0089: the repair pass upserts instead.
+        // day. Refused since 0107: the repair pass upserts instead.
         await tx`SAVEPOINT old_repair`;
         const balance = await sqlState(() => tx`DELETE FROM wallet_balance_samples WHERE sample_date = ${DAY}`);
         await tx`ROLLBACK TO SAVEPOINT old_repair`;
@@ -278,7 +278,7 @@ describe("the tombstone writes wave 5 makes need no new privilege", () => {
       await tx`UPDATE admin_passkey SET revoked_at = now() WHERE revoked_at IS NULL`;
       const live = await tx`
         SELECT 1 FROM admin_session WHERE token = 'tok-new-code' AND expires_at > now() AND revoked_at IS NULL`;
-      // A challenge is issued by overwriting a slot in place (0088).
+      // A challenge is issued by overwriting a slot in place (0106).
       await tx`
         UPDATE admin_webauthn_challenge
            SET flow = 'registration', challenge = 'ch-new-code', issued_at = now(),
@@ -374,7 +374,7 @@ describe("the tombstone writes wave 5 makes need no new privilege", () => {
     expect(outcome).toEqual({ unpublished: null, legacy: null, published: "0A000" });
   });
 
-  test("no runtime role holds DELETE or TRUNCATE on a tombstoned table — full replay, blank bootstrap, snapshot N + migrate (D55 (6), 0089)", async () => {
+  test("no runtime role holds DELETE or TRUNCATE on a tombstoned table — full replay, blank bootstrap, snapshot N + migrate (D55 (6), 0107)", async () => {
     for (const db of [migrated, fresh, advanced]) {
       const rows = (await db`
         SELECT t AS table, r AS role

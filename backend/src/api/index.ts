@@ -131,6 +131,9 @@ await assertAnalyticsLedgerGuardArmed();
   }
 }
 
+/** Seconds the parity-sweep request may run before Bun closes it (Bun's cap is 255). */
+export const PARITY_SWEEP_REQUEST_TIMEOUT_S = 240;
+
 const server = Bun.serve<SchedulerStreamSocketData, never>({
   port: config.apiPort,
   // Explicit, not Bun's 10 s default (issue 1060). See API_IDLE_TIMEOUT_SECONDS in config.ts.
@@ -141,6 +144,14 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
   async fetch(req, server) {
     const url = new URL(req.url);
     const { pathname } = url;
+
+    // TEMPORARY exemption (smoke-production-spec section 3; exit owned by
+    // issue 1079). The parity sweep re-derives every domain's row counts and
+    // checksums inside this one request, and on a production-sized ledger that
+    // runs 17-25 s: past the 10 s limit the connection was cut mid-sweep and
+    // production recorded 24 dead sweeps in 24 h (2026-09-25). Lift the limit
+    // for this request only; every other route keeps API_IDLE_TIMEOUT_SECONDS.
+    if (pathname === ROUTES.analytics.paritySweep && req.method === "POST") server.timeout(req, PARITY_SWEEP_REQUEST_TIMEOUT_S);
 
     if (req.method === "OPTIONS") return corsPreflightResponse(req, pathname);
 
