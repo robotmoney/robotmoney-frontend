@@ -70,6 +70,11 @@ describe("the sessions query", () => {
     expect(q).toContain("s.judging_outcome AS outcome");
   });
 
+  test("judged means an applied model judgement in enforce mode, not any judgement row", () => {
+    const q = sessionsQuery("2026-10-03T00:00:00.000Z");
+    expect(q).toContain("AND j.source = 'model' AND j.mode = 'enforce' AND j.applied) AS judged");
+  });
+
   test("a database row becomes a SessionRow", () => {
     expect(toSessionRow({ id: "s", subject: "a", state: "published", outcome: "judged", age: "12.5", pub: "1759500000000", takes: "4", judged: true, receipt: false })).toEqual({
       id: "s", subject: "a", state: "published", outcome: "judged", ageMin: 12.5, publishedAtMs: 1759500000000, takes: 4, judged: true, receipt: false,

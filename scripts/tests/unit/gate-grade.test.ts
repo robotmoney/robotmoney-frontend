@@ -102,4 +102,11 @@ describe("evaluateJudgeConfig and evaluateContainers", () => {
     expect(base.warnings).toEqual(["s: restarted 1 time(s)"]);
     expect(evaluateContainers([], "p", true).failures).toEqual(["no service containers found for project p"]);
   });
+
+  test("a stopped service and an unhealthy service fail; a service with no healthcheck is fine", () => {
+    const base: ContainerState = { name: "s", running: true, health: "healthy", restarts: 0, startedAt: "", oneShot: false, participantKind: null };
+    expect(evaluateContainers([{ ...base, running: false }], "p", true).failures).toEqual(["s: not running"]);
+    expect(evaluateContainers([{ ...base, health: "unhealthy" }], "p", true).failures).toEqual(["s: health 'unhealthy'"]);
+    expect(evaluateContainers([{ ...base, health: "none" }], "p", true).failures).toEqual([]);
+  });
 });
