@@ -31,6 +31,8 @@ import * as epoch from "../src/swarm/domain.ts";
 import * as judge from "../src/swarm/domain.ts";
 import { inputsDigest } from "../src/swarm/judge.ts";
 import { handleJudgeParticipant } from "../src/api/routes/swarm-judge-participant.ts";
+import { getOverviewProjection } from "../src/admin/overview.ts";
+import { _resetJudgeRefusals } from "../src/swarm/judge-refusals.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import {
   activeSubject, activeMember, sessionDate, setJudgeMode, sessionRow, submitTake, type TestMember,
@@ -195,6 +197,18 @@ test("the same work is served AGAIN on a reconnect, until this judge submits", a
   const second = await readFrames(judge.openJudgeStream(j.id, { keepaliveMs: 5000, refreshMs: 20 }), 1);
   expect(second[0].type).toBe("pending");
   expect(second[0].data.pending.map((p: any) => p.sessionId)).toContain(sessionId);
+});
+
+test("an UNCHANGED pending set is re-sent on the resend timer, so a refused item gets another chance (#1117)", async () => {
+  const j = await activeJudge();
+  const { sessionId } = await judgingSession("js_resend");
+
+  // Three `pending` frames with no change to the set: the first on connect, the
+  // others only because the timer fired. Without the timer the stream writes
+  // keepalives instead and a judge whose model call failed is never told again.
+  const frames = await readFrames(judge.openJudgeStream(j.id, { keepaliveMs: 5000, refreshMs: 20, resendMs: 50 }), 3);
+  expect(frames.map((f) => f.type)).toEqual(["pending", "pending", "pending"]);
+  for (const f of frames) expect(f.data.pending.map((p: any) => p.sessionId)).toContain(sessionId);
 });
 
 test("once this judge has submitted, the session is no longer served to it", async () => {
@@ -445,6 +459,34 @@ test("the subscribe route refuses a missing or unknown bearer, and a non-judge m
     url("/api/swarm/participants/judge/subscribe"),
   );
   expect((wrongRole as { status: number }).status).toBe(403);
+});
+
+test("a judge's reported refusal reaches the admin overview with its reason, and decides nothing (#1117)", async () => {
+  _resetJudgeRefusals();
+  const j = await activeJudge();
+  const { sessionId } = await judgingSession("js_refusal_report");
+  const post = (token: string | null, body: unknown) =>
+    handleJudgeParticipant(
+      new Request("http://test/api/swarm/participants/judge/refusal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(body),
+      }),
+      url("/api/swarm/participants/judge/refusal"),
+    ) as Promise<{ status: number; body: any }>;
+
+  expect((await post(null, {})).status).toBe(401);
+  expect((await post((await activePlainMember()).token, { sessionId, reason: "model_timeout" })).status).toBe(403);
+  expect((await post(j.token, { sessionId, reason: "not a code!" })).status).toBe(400);
+  expect((await post(j.token, { sessionId, reason: "model_timeout", detail: "no answer within 300000 ms", attempt: 2 })).status).toBe(200);
+
+  const overview = await getOverviewProjection();
+  const alert = overview.alerts.find((a) => a.source === `swarm.judge_refusal:${sessionId}`);
+  expect(alert?.message).toContain("model_timeout");
+  expect(alert?.message).toContain("no answer within 300000 ms");
+
+  // Reporting a refusal moved nothing: the session is still waiting in judging.
+  expect((await sessionRow(sessionId)).state).toBe("judging");
 });
 
 test("the submission route posts a judgement under the judge's credential", async () => {

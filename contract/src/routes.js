@@ -249,6 +249,10 @@ export const ROUTES = {
       // spend { inputTokens?, outputTokens?, totalTokens?, costUsd? } (D55
       // decision 3), outside the signed bytes.
       judgement: "/api/swarm/participants/judgement",
+      // POST (judge bearer) { sessionId, reason, detail?, attempt? } — a judge
+      // reporting that one attempt submitted nothing, by its D-A7 name. It
+      // decides nothing: the admin overview reads it to say WHY (issue #1117).
+      judgeRefusal: "/api/swarm/participants/judge/refusal",
     },
 
     // Admin lifecycle (X-Admin-Token). The backend registers ONE dispatcher at

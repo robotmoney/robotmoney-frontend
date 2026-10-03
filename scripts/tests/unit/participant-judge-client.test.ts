@@ -489,6 +489,8 @@ describe("the subscription", () => {
     const done = runJudgeClient(CONFIG, controller.signal, {
       fetchImpl: impl,
       log: () => {},
+      // The fixture's deadline is fixed; judge as of a moment before it.
+      now: () => Date.parse(PENDING.judgingDeadlineAt) - 60_000,
       runJudgeImpl: async () => ({ kind: "ok", body: ANSWER }),
     });
     // One pass through the stream is enough; stop before it reconnects.
@@ -510,5 +512,91 @@ describe("the subscription", () => {
   test("a 403 on the subscription is terminal, not something to reconnect through", async () => {
     const impl = (async () => new Response("{}", { status: 403 })) as unknown as typeof globalThis.fetch;
     await expect(runJudgeClient(CONFIG, undefined, { fetchImpl: impl, log: () => {} })).rejects.toThrow("403");
+  });
+});
+
+describe("a refused judgement is retried until the deadline (#1117)", () => {
+  const DEADLINE = Date.parse(PENDING.judgingDeadlineAt);
+
+  /** A subscription that serves the same pending set `frames` times, then closes. */
+  function harness(frames: number) {
+    const calls: Recorded[] = [];
+    const impl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const headers = new Headers(init?.headers as HeadersInit);
+      let body: unknown = null;
+      if (typeof init?.body === "string") body = JSON.parse(init.body);
+      calls.push({ method: (init?.method ?? "GET").toUpperCase(), path: url.pathname, body, auth: headers.get("Authorization") });
+      if (url.pathname === ROUTES.swarm.participants.judgeSubscribe) {
+        const frame = `event: pending\ndata: ${JSON.stringify({ pending: [PENDING] })}\n\n`;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              for (let i = 0; i < frames; i += 1) c.enqueue(new TextEncoder().encode(frame));
+              c.close();
+            },
+          }),
+        );
+      }
+      if (url.pathname === ROUTES.swarm.participants.judgement) {
+        return Response.json({ sessionId: "s-1", judgementId: 3, duplicate: false, lateEvidence: false });
+      }
+      return Response.json({ ok: true });
+    }) as unknown as typeof globalThis.fetch;
+    return { calls, impl };
+  }
+
+  async function run(h: ReturnType<typeof harness>, answers: JudgeAnswer[], clock: () => number) {
+    const controller = new AbortController();
+    let n = 0;
+    let closed!: () => void;
+    const streamClosed = new Promise<void>((r) => (closed = r));
+    const done = runJudgeClient({ ...CONFIG, reconnectMs: 10_000, retryBaseMs: 1_000 }, controller.signal, {
+      fetchImpl: h.impl,
+      log: (m) => {
+        if (m === "subscription closed") closed();
+      },
+      now: clock,
+      runJudgeImpl: async () => answers[Math.min(n++, answers.length - 1)]!,
+    });
+    // The stream closes after its frames; the client then sleeps `reconnectMs`.
+    await streamClosed;
+    controller.abort();
+    await done;
+    return n;
+  }
+
+  test("a first call that times out is retried on the next frame and submits before the deadline", async () => {
+    const h = harness(3);
+    let t = DEADLINE - 600_000;
+    // Each clock read moves 2 s on: past the 1 s backoff, far from the deadline.
+    const asked = await run(h, [{ kind: "timeout", timeoutMs: 1_000 }, { kind: "ok", body: ANSWER }], () => (t += 2_000));
+    expect(asked).toBe(2);
+    expect(h.calls.filter((c) => c.path === ROUTES.swarm.participants.judgement)).toHaveLength(1);
+    // The refusal reason reached the API for the overview.
+    const report = h.calls.find((c) => c.path === ROUTES.swarm.participants.judgeRefusal);
+    expect(report?.body).toMatchObject({ sessionId: "s-1", reason: "model_timeout", attempt: 1 });
+    expect(report?.auth).toBe("Bearer judge-bearer");
+  });
+
+  test("a frame that arrives inside the backoff does not trigger another call", async () => {
+    const h = harness(3);
+    const t = DEADLINE - 600_000; // the clock never moves, so the backoff never ends
+    const asked = await run(h, [{ kind: "timeout", timeoutMs: 1_000 }, { kind: "ok", body: ANSWER }], () => t);
+    expect(asked).toBe(1);
+    expect(h.calls.filter((c) => c.path === ROUTES.swarm.participants.judgement)).toHaveLength(0);
+  });
+
+  test("nothing is retried after the judging deadline", async () => {
+    const h = harness(3);
+    let t = DEADLINE - 1_000;
+    // The first read is before the deadline; every later read is past it.
+    const asked = await run(h, [{ kind: "timeout", timeoutMs: 1_000 }, { kind: "ok", body: ANSWER }], () => {
+      const v = t;
+      t += 60_000;
+      return v;
+    });
+    expect(asked).toBe(1);
+    expect(h.calls.filter((c) => c.path === ROUTES.swarm.participants.judgement)).toHaveLength(0);
   });
 });

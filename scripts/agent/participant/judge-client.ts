@@ -105,6 +105,8 @@ export interface JudgeClientConfig {
   timeoutMs: number;
   /** Backoff after a dropped subscription, in milliseconds. */
   reconnectMs: number;
+  /** First retry delay for a refused item; doubles per attempt up to `RETRY_MAX_MS`. */
+  retryBaseMs?: number;
 }
 
 /**
@@ -406,6 +408,32 @@ export async function* readPendingFrames(body: ReadableStream<Uint8Array>): Asyn
   }
 }
 
+const RETRY_BASE_MS = 15_000;
+const RETRY_MAX_MS = 300_000;
+
+/** Delay after n failed attempts: base, 2x, 4x ... capped. */
+export function backoffMs(attempts: number, base: number = RETRY_BASE_MS): number {
+  return Math.min(RETRY_MAX_MS, base * 2 ** Math.max(0, attempts - 1));
+}
+
+/**
+ * Tell the API a judgement was refused, so the admin overview can say why.
+ * Best effort and decision-free: the server decides no outcome from it, and a
+ * failure to send changes nothing about the retry.
+ */
+async function reportRefusal(
+  config: JudgeClientConfig,
+  outcome: Extract<JudgeOutcome, { kind: "refused" }>,
+  attempt: number,
+  fetchImpl: typeof globalThis.fetch,
+): Promise<void> {
+  await fetchImpl(`${config.apiUrl}${ROUTES.swarm.participants.judgeRefusal}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId: outcome.sessionId, reason: outcome.reason, detail: outcome.detail, attempt }),
+  });
+}
+
 /**
  * The container's whole life: connect, judge what arrives, reconnect.
  *
@@ -423,11 +451,15 @@ export async function runJudgeClient(
     log?: (m: string) => void;
     /** Injected so the loop is testable without a model credential or a network. */
     runJudgeImpl?: typeof runJudge;
+    /** Injected so backoff and the deadline are testable without waiting. */
+    now?: () => number;
   } = {},
 ): Promise<void> {
   const doFetch = deps.fetchImpl ?? fetch;
   const log = deps.log ?? ((m: string) => console.log(`[judge:${config.name}] ${m}`));
   const done = new Set<string>();
+  const retries = new Map<string, { attempts: number; nextAt: number }>();
+  const now = deps.now ?? Date.now;
 
   while (!signal?.aborted) {
     try {
@@ -447,15 +479,38 @@ export async function runJudgeClient(
         for (const item of pending) {
           if (signal?.aborted) return;
           if (done.has(item.sessionId)) continue;
+          const t = now();
+          // NEVER RETRY AFTER THE DEADLINE (scheduler spec §4.4). Past it the
+          // session is finalized from stored instants, and a judgement that
+          // lands now is late evidence only. An attempt already under way may
+          // still land late; a fresh attempt is not started.
+          const deadline = Date.parse(item.judgingDeadlineAt);
+          if (Number.isFinite(deadline) && t >= deadline) {
+            if (retries.delete(item.sessionId)) {
+              log(`session ${item.sessionId} is past its judging deadline; not retrying`);
+            }
+            continue;
+          }
+          const state = retries.get(item.sessionId);
+          if (state && t < state.nextAt) continue; // still backing off
           const outcome = await judgeOne(config, item, {
             fetchImpl: doFetch,
             runJudgeImpl: deps.runJudgeImpl,
           });
           log(JSON.stringify(outcome));
-          // Remembered only on a SUBMITTED outcome. A refusal is not remembered,
-          // so a model that recovers before the deadline still gets its chance
-          // when the next frame or the next connect re-serves the session.
-          if (outcome.kind === "submitted") done.add(item.sessionId);
+          if (outcome.kind === "submitted") {
+            done.add(item.sessionId);
+            retries.delete(item.sessionId);
+            continue;
+          }
+          // A refusal or a failed submit is NOT remembered as done. The server
+          // re-sends the pending set on a timer, and each re-send is a new
+          // chance once the backoff has passed, until the deadline.
+          const attempts = (state?.attempts ?? 0) + 1;
+          retries.set(item.sessionId, { attempts, nextAt: now() + backoffMs(attempts, config.retryBaseMs) });
+          if (outcome.kind === "refused") {
+            await reportRefusal(config, outcome, attempts, doFetch).catch(() => undefined);
+          }
         }
       }
       log("subscription closed");
