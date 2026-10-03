@@ -165,4 +165,13 @@ describe("the one-shot refuses a take that is not sectioned, and posts a memo fo
     await expect(authorTakeDraft(ENV, fakeFetch(api))).rejects.toThrow(/control line/);
     expect(api.calls.model).toBe(1);
   });
+
+  test("cygnus keeps production's provenance footnote on the stored body and the memo; no other member gets it", async () => {
+    const api = newApi([GOOD_SUBJECT]);
+    const draft = await authorTakeDraft({ ...ENV, RM_MEMBER_ID: "cygnus", RM_MEMBER_NAME: "Cygnus" }, fakeFetch(api));
+    expect(String(draft.body)).toEndWith("_Provenance: RM classifier: composite 0.412 → neutral_");
+    expect(api.calls.memos[0]?.body).toBe(draft.body);
+    const other = await authorTakeDraft(ENV, fakeFetch(newApi([GOOD_SUBJECT])));
+    expect(String(other.body)).not.toContain("Provenance");
+  });
 });
