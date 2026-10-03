@@ -11,7 +11,7 @@
 //   acknowledgement says."
 //   "Kill and rerun, for each of the three passes: kill it before 0081
 //   commits, and the rerun takes the pass again; kill it after 0081, and the
-//   rerun resumes through the normal path and applies the six files below 0081
+//   rerun resumes through the normal path and applies the five files below 0081
 //   (§9.1)."
 //
 // THE BACKUP is production's baseline (the 73-name ledger, D55 (8)), built and
@@ -50,12 +50,11 @@ import { acquireTargetLock, readTargetStateAt } from "../../../backend/src/db/ta
 
 const IDENTITY_MIGRATION = "0081_deployment_identity.sql";
 const BASELINE = SUPPORTED_RELEASES[0]!;
-const LOWER_SIX = [
+const LOWER_FIVE = [
   "0056_swarm_judge_requires_model.sql",
   "0057_swarm_judge_policy_stamp.sql",
   "0058_swarm_judge_fault_injection.sql",
   "0059_swarm_judgement_completion_usage.sql",
-  "0061_rm_worker_wallet_backfill_grant.sql",
   "0062_rm_worker_analytics_ledger_read_grant.sql",
 ];
 
@@ -207,7 +206,7 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
   // step did, and that the migrate step committed.
   let base: { steps: string[]; applyOrder: string[]; headLedger: boolean; why: string; migrateError: string } | undefined;
 
-  test("enroll applies 0081 and writes rehearsal in ONE transaction, then --migrate applies the six lower files first and the rest", async () => {
+  test("enroll applies 0081 and writes rehearsal in ONE transaction, then --migrate applies the five lower files first and the rest", async () => {
     const h = harness("dumpbase");
     let boot: RunningBoot | undefined;
     try {
@@ -238,10 +237,10 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
       ).toBe("t");
 
       // Then the migrate step, the normal path: 0081 was committed first (by
-      // the pass), then the six lower files, then the rest, one transaction
+      // the pass), then the five lower files, then the rest, one transaction
       // each in filename order — every pending file of the checkout applied.
       expect(base.applyOrder).toEqual([IDENTITY_MIGRATION, ...PENDING_AFTER_PASS]);
-      expect(base.applyOrder.slice(1, 7)).toEqual(LOWER_SIX);
+      expect(base.applyOrder.slice(1, 6)).toEqual(LOWER_FIVE);
       expect(base.headLedger).toBe(true);
       expect(psql(copy.superuserUrl, "SELECT kind FROM deployment_identity")).toBe("rehearsal");
     } finally {
@@ -289,7 +288,7 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
     }
   }, BOOT_TIMEOUT_MS);
 
-  test("KILLED AFTER 0081 COMMITS: the copy holds 0081 with rehearsal, and the rerun of --migrate resumes through the normal path, the six lower files first", async () => {
+  test("KILLED AFTER 0081 COMMITS: the copy holds 0081 with rehearsal, and the rerun of --migrate resumes through the normal path, the five lower files first", async () => {
     const h = harness("dumpkilla");
     let boot: RunningBoot | undefined;
     let blocker: { release(): Promise<void> } | undefined;
@@ -313,7 +312,7 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
       expect(journalNow(h)!.phases.filter((r) => r.phase === "prepare" && r.step === "migrate").map((r) => r.status)).toEqual(["started"]);
 
       // The rerun of the killed step resumes through the normal path: every
-      // pending file, the six lower files first, 0081 never again, and it
+      // pending file, the five lower files first, 0081 never again, and it
       // publishes the first manifest.
       const again = await rerunStep(h, "migrate");
       expect({ ok: again.ok, error: again.ok ? "" : again.error }).toEqual({ ok: true, error: "" });
