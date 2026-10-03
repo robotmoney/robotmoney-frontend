@@ -45,7 +45,6 @@ stricter four-weight submit rule (notice: 1124); the stray `v0.6.0-rc.0` tag is 
 | B1 | The first production migrate refused production's 76-name ledger twice (baseline list, then the gap rule). The baseline is now the 2026-10-01 ledger, and the unreleased migrations are numbered 0081 to 0110, above `0080_analytics_ledger_compaction`. Confirm the real ledger still matches, read-only (R2.3). | 1097 |
 | B2 | Sessions in `window_closed`, `aggregated` or `judged` at cutover never publish (0086 leaves no judge mode, 0089 deletes their jobs). The upgrade itself must carry them through; there is no drain step. | 1111 |
 | B3 | 0085 moves every subject to hourly sessions. Production runs 6 h. | 1112 |
-| B4 | `PROJECTS_SOURCE=live`, `BASE_RPC_URL`, `WEBAUTHN_ORIGIN` reach the containers today through the checkout `.env`; on main they have no path. | 1113 |
 | B5 | The hourly parity sweep is cut off at the 10 s limit (the 240 s exemption was dropped in 1101). | 1114 |
 | B6 | Production parity: persona-voiced sectioned takes with memos (1116), judge retry (1117), judge model from the database (1118), verified consensus-receipt path (1119), today's regime in the brief (1108), `noop-analyst` stays in-house (1120), absence recording never blocks turnover (1122). | listed |
 | B7 | Gates: `twin:gate` and `prod:gate` ported to main's instance model, with the default-deny log inventory. `verify:live` is not a substitute. | 1071 |
@@ -54,6 +53,7 @@ stricter four-weight submit rule (notice: 1124); the stray `v0.6.0-rc.0` tag is 
 | B10 | `rebind-members` order relative to the first boot is not fixed by the spec on the breaking-migration path. Settled by the stage rehearsal (R3.8). | none |
 
 Closed: the CoinGecko key allowlist and its delivery from `~/.env` (1098, PR 1105);
+checkout-`.env` settings delivery and the `PROJECTS_SOURCE` boot refusal (1113);
 the judge prompt (1100), judge-never-an-analyst (1107), api resilience minus the sweep
 (1101), twin shm and slim dumps (1102), the v0.5.x record (1106).
 
@@ -230,6 +230,7 @@ R3.2 Prepare a rehearsal credential file with **spoofed** keys, never the produc
 
 ```bash
 export RM_ENV=stage
+export PROJECTS_SOURCE=live   # --static-port runs the containers as prod; without this the boot refuses (R6.2a)
 bun smoke --local dump=<R2 dump dir> --instance rehearse-060 \
   --credentials rehearsal-creds.json --spoof-keys --migrate --static-port
 ```
@@ -328,11 +329,24 @@ at the path `RM_CREDENTIALS` names, with the in-house roster (agents `athena`,
 `noop-analyst`, `robot-money`; judge `themis`). Production's seated members still hold
 fixture keys until R6.7.
 
-R6.2a **Settings the containers need** (B4, issue 1113). Export, in the shell that runs
-`bun smoke --static-port`, every key production's checkout `.env` carried that the
-containers read: at least `PROJECTS_SOURCE=live`, `BASE_RPC_URL` if a private RPC is used,
-and `WEBAUTHN_ORIGIN`. Record the list (names only) from the old host. A prod boot with
-`PROJECTS_SOURCE` unset must refuse.
+R6.2a **Settings the containers need** (issue 1113). `bun smoke` runs `--no-env-file`, so
+the checkout `.env` reaches nothing. Non-secret settings have one path: `export` them in
+the shell that runs `bun smoke --static-port`. Secrets never go in the shell or the repo.
+
+| Key | Where it lives | Reaches |
+|---|---|---|
+| `PROJECTS_SOURCE=live` | shell export, **required**: a prod boot without it refuses before anything starts | api, `worker-analytics` |
+| `BASE_RPC_URL` | shell export, if production used a private RPC (the boot prints a note when it is unset) | api, `worker-analytics` |
+| `WEBAUTHN_ORIGIN`, `WEBAUTHN_RP_ID` | shell export (the boot prints a note when `WEBAUTHN_ORIGIN` is unset; admin passkeys otherwise use the request origin) | api |
+| `BASE_RPC_MAX_CALLS_PER_SEC`, `BASE_RPC_RATE_BURST`, `WALLET_BACKFILL_MAX_DAYS_PER_RUN`, `WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY`, `GECKO_OHLCV_MIN_INTERVAL_MS` | shell export only if production's `.env` set them; unset keeps the built-in default | `worker-analytics` |
+| `PG_NAMESPACE_GUARD_TIMEOUT_MS` | same | api |
+| `COINGECKO_API_KEY` | `~/.env` (allowlisted, forwarded) | `worker-analytics`, `analytics-producer` |
+| Role passwords, `RM_ENV`, `RM_CREDENTIALS` | `~/.env` | the boot |
+
+Read the key names (not values) from the old host's checkout `.env` and export each one
+that is in the table. Everything else in that file is dropped on purpose: tokens, session
+schedules and judge settings no longer exist in the stack.
+`RM_ALLOW_HANDLE_NAMESPACE_VIOLATION` is never forwarded.
 
 R6.2b **One-time role step**, before R6.3 needs the login. If R2.3 showed `rm_owner`
 `rolcanlogin = f` (expected on an existing cluster), the operator runs, as `doadmin`:
