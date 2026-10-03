@@ -4211,7 +4211,10 @@ these hold:
 - `lower(trim(operator)) = 'robotmoney'`;
 - a member self-write, through the path issue #925 closed, could have set it;
 - no later admin write named the operator;
-- the member is not seeded from the roster, so `themis` keeps its operator.
+- the member is not an in-house seat. `athena`, `noop-analyst`, `robot-money`
+  and `themis` keep their operator. `noop-analyst` is seated on production
+  without being seeded from the roster, and its `robotmoney` is genuine
+  (issue 1120).
 
 It applies once per database, as every migration does. It changes nothing on a
 database with no such row. Migration 0101 as built clears every self-written

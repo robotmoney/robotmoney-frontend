@@ -171,6 +171,33 @@ SELECT rolname, rolcanlogin, rolcreaterole FROM pg_roles
  WHERE rolname IN ('rm_owner','rm_app','rm_worker','rm_readonly','doadmin');
 ```
 
+Also list who migration 0101 would clear (D55 (2), issue 1120). It is read-only and
+mirrors the migration's rule. Run it, save the output as `would-clear-prod-<date>.txt`,
+and read it before cutover. Every row must be a member you accept losing `robotmoney`
+for. An in-house seat in the list (`athena`, `noop-analyst`, `robot-money`, `themis`) is
+a defect: stop.
+
+```sql
+WITH self_writes AS (
+  SELECT scope->>'memberId' AS member_id, max(id) AS last_id FROM audit_log
+   WHERE action = 'update_profile' AND scope ? 'memberId'
+     AND (NOT (scope ? 'fields') OR (scope->'fields') ? 'operator')
+   GROUP BY 1),
+admin_writes AS (
+  SELECT scope->>'memberId' AS member_id, max(id) AS last_id FROM audit_log
+   WHERE action = 'member_update' AND scope ? 'memberId'
+     AND jsonb_typeof(scope->'fields') = 'array' AND (scope->'fields') ? 'operator'
+   GROUP BY 1)
+SELECT m.id, m.handle, m.operator, s.last_id AS self_write_audit_id, w.last_id AS admin_write_audit_id
+  FROM swarm_members m
+  JOIN self_writes s ON s.member_id = m.id
+  LEFT JOIN admin_writes w ON w.member_id = m.id
+ WHERE lower(trim(m.operator)) = 'robotmoney'
+   AND (w.last_id IS NULL OR w.last_id < s.last_id)
+   AND m.handle <> ALL (ARRAY['athena','noop-analyst','robot-money','themis'])
+ ORDER BY m.id;
+```
+
 Then compare with the matcher (`matchSupportedRelease` in
 `backend/src/db/supported-releases.ts`). Expect a match with
 `v0.5.0+0061+0062+0063+0080 (production ledger 2026-10-01)`. Any other result means
