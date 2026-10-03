@@ -172,7 +172,7 @@ describe("--seed gives a blank rehearsal active subjects (scheduler spec §2.1, 
       for (const row of rows) {
         expect({ id: row.id, status: row.status }).toEqual({ id: row.id, status: "active" });
         // Only the admin route writes the columns (§2.3): the seed leaves the defaults.
-        expect(row.epoch_duration_seconds).toBe(3600);
+        expect(row.epoch_duration_seconds).toBe(21600);
         expect(row.judging_duration_seconds).toBe(900);
         expect(row.default_anchor).toBe(true);
       }

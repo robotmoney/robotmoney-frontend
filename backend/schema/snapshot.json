@@ -123,7 +123,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "d01d33e6f24768359bb6894a586b13d8cecf1876d588bdbb1715a2b0425a7136",
+  "contentHash": "da4da313cbdf8d7649513103821fb8b8c4edc32e5833a8f96f23cad6897af082",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -2997,7 +2997,7 @@
     "column public.swarm_subjects.epoch_duration_seconds": {
       "type": "integer",
       "notnull": "yes",
-      "default": "3600"
+      "default": "21600"
     },
     "column public.swarm_subjects.homepage": {
       "type": "text",

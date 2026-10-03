@@ -104,14 +104,30 @@ beforeAll(async () => {
   const themis = (await sql`SELECT id FROM swarm_members WHERE handle = 'themis'`)[0] as { id: string };
   await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${themis.id}, 'update_profile', ${sql.json({ memberId: themis.id } as never)})`;
   ids.themis = themis.id;
+
+  // 8. Production-shaped: noop-analyst is seated, holds the manifest's
+  //    `robotmoney`, is NOT in LIVE_ROSTER, and wrote its profile through the
+  //    self-write route (issue #1120). Its audit row is the pre-#925 shape.
+  const noop = await activeMember();
+  await sql`UPDATE swarm_members SET handle = 'noop-analyst' WHERE id = ${noop.id}`;
+  await forgePre925(noop.id, "robotmoney");
+  ids.noop = noop.id;
 });
 
-test("0101 is additive, and its roster list is LIVE_ROSTER's in-house members", () => {
+test("0101 is additive, and its exempt list is every in-house seat: LIVE_ROSTER plus noop-analyst", () => {
   expect(MIGRATION.split("\n").slice(0, 2)).toEqual(["-- compat: additive", "-- metadata_version: 1"]);
   const handles = /roster_handles text\[\] := ARRAY\[([^\]]*)\]/.exec(MIGRATION)![1]!;
   expect([...handles.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]).sort()).toEqual(
-    LIVE_ROSTER.filter((m) => m.operator === "robotmoney").map((m) => m.handle).sort(),
+    [...LIVE_ROSTER.filter((m) => m.operator === "robotmoney").map((m) => m.handle), "noop-analyst"].sort(),
   );
+  // noop-analyst is in-house by its manifest, though production seats it without the seed.
+  const manifest = JSON.parse(
+    readFileSync(
+      join(import.meta.dir, "..", "..", "frontend", "public", "data", "swarm", "manifests", "members", "noop-analyst.json"),
+      "utf8",
+    ),
+  ) as { operator: string };
+  expect(manifest.operator).toBe("robotmoney");
   expect(new Set(LIVE_ROSTER.map((m) => m.operator))).toEqual(new Set(["robotmoney"]));
 });
 
@@ -144,6 +160,7 @@ test("the migration clears every self-written robotmoney operator and keeps ever
     corrected: await operatorOf(ids.corrected!),
     archived: await operatorOf(ids.archived!),
     themis: await operatorOf(ids.themis!),
+    noop: await operatorOf(ids.noop!),
   }).toEqual({
     forged: null,
     selfNamed: "acme-labs",
@@ -152,6 +169,7 @@ test("the migration clears every self-written robotmoney operator and keeps ever
     corrected: "partner-co",
     archived: "peaq",
     themis: "robotmoney",
+    noop: "robotmoney",
   });
   // A cleared row is an edit: its version moves, so a stale admin form cannot
   // write the forged value back.
