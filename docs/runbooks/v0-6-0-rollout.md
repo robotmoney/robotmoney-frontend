@@ -25,19 +25,40 @@ onto the adopted design (spec §9.3).
 | Roster by `--agents` | The roster is `credential.json` (`RM_CREDENTIALS`) |
 | Site shipped with the API (`static:assemble`) | Own release unit: `bun smoke:web`, checked against `apiRange` |
 | Per-release `upgrades/A-to-B/*.ts` | None exist for 0.6.0. Gates are the spec's, run by the tools below. `verify:live` is the product check |
-| `twin:gate`, `prod:gate`, `soak-checks.sh` | **Not on main** (issue 1071 undecided). See B3 |
+| `twin:gate`, `prod:gate`, `soak-checks.sh` | Decided: ported to main's instance model (1071). Blocker B7 until they land |
 
-## 0. Blockers (cutover stays blocked until each is closed)
+## 0. Rule, decisions and blockers
 
-| # | Blocker | Evidence | What clears it |
-|---|---|---|---|
-| B1 | **Production's ledger is not the supported baseline.** `SUPPORTED_RELEASES` holds one entry, the 73-name ledger read 2026-09-25 (v0.5.0 + `0062`). Production has since shipped v0.5.1–v0.5.4. Computed from the `v0.5.4` tree (76 names), the matcher says `NO MATCH`: 3 extra (`0061_rm_worker_wallet_backfill_grant`, `0063_swarm_judge_model_default`, `0080_analytics_ledger_compaction`). The first production migrate refuses a ledger that matches no entry (spec §9.1). The same 73-name check is in the pre-identity twin runbook. | `backend/src/db/supported-releases.ts`; issue 1074 | **Owner decision** (D55 (8): adding a baseline takes one). Then a PR into `releases-0.6.x` adding the entry, its fixture and the matching spec/runbook text. A separate PR evaluates the cherry-pick onto `main` only after stage proves it. The ledger also records `0080_analytics_ledger_compaction` without `0064`-`0079`: the first-migrate gap check (`assertBaselineGap` in `backend/scripts/migrate-run.ts`) refuses that today, so the fix needs both the baseline entry and that check, with tests. Until both land, R3.2 refuses at enroll, and that refusal is the expected R3 result Confirm the real ledger first (R2.3), do not trust the tag-derived list |
-| B2 | `e2e` failed on `main` at `d20429ca` (2026-10-02 10:42Z). | `gh run list --branch main` | Green `e2e` on the RC commit |
-| B3 | No product or log gate on main for a rehearsal: `twin:gate` and `prod:gate` were not ported (issue 1071). `verify:live` is all there is. | issue 1071 | Owner decides port-or-retire. The runbook uses `verify:live` plus the checks in R3/R7 until then, and says so in the report |
-| B4 | The stray tag `v0.6.0-rc.0` already exists on origin. It points at `bd62e32e` (the v0.3.0 runbook commit, "cut whole from v0.5.0-rc.8"), not at this line. | `git ls-remote --tags origin 'v0.6*'` | Owner decides: delete it (it is a placeholder, never deployed) or start at `rc.1`. Do not re-point a pushed tag without that decision |
-| B5 | No `release:v0.6.0` tracking issue; Phases tasklist not complete (open: 1086, 1079, 1078, 1074, 1071). | `gh issue list` | Policy §4.1: file the issue, freeze scope, close or defer each open item in writing |
-| B7 | **The paid CoinGecko key has no allowed home.** Spec §3 says `COINGECKO_API_KEY` lives in host `~/.env`, but `ENV_FILE_ALLOWED_KEYS` (`backend/src/db/preflight.ts:1126`) does not list it. Preflight check 4 **refuses the boot on prod** for any other key. Without the key the Gecko calls fall back to the keyless host (about 10 calls a minute per IP, which 429ed the `new_pools` sweep on 2026-09-28 to 09-30). | `backend/src/db/preflight.ts`; spec §3 | A PR into `releases-0.6.x` that adds the key to the allowlist (or moves its delivery). Until then the rollout either ships keyless or cannot boot |
-| B6 | Whether `rebind-members` (needs a running api) comes before or after the first boot is not fixed by the spec for the breaking-migration path. | R6.7 | Settled by the stage rehearsal (R3.8) and recorded here before R6 |
+**Rule (owner, 2026-10-03).** v0.6.0 changes how production is deployed, not what the
+product does. Where main differs from production (v0.5.4), production's behavior wins
+unless a recorded decision says otherwise. An upgrade does not change usual schedules.
+Plan and status: phase issue 1099.
+
+**Decided, not built:** operator cancel/reopen stays removed (D55 (4)); main keeps its
+stricter four-weight submit rule (notice: 1124); the stray `v0.6.0-rc.0` tag is deleted
+(2026-10-03), so the first candidate is `v0.6.0-rc.0`; the log gates are ported (1071).
+
+**Cutover stays blocked until every row is closed with evidence.**
+
+| # | Blocker | Issue |
+|---|---|---|
+| B1 | The first production migrate refuses production's 76-name ledger twice (baseline list, then the gap rule). Fix: replace the baseline with the 2026-10-01 ledger and renumber the unreleased 0.6.x migrations above `0080_analytics_ledger_compaction`. Confirm the real ledger read-only first (R2.3). | 1097 |
+| B2 | Sessions in `window_closed`, `aggregated` or `judged` at cutover never publish (0068 leaves no judge mode, 0072 deletes their jobs). The upgrade itself must carry them through; there is no drain step. | 1111 |
+| B3 | 0067 moves every subject to hourly sessions. Production runs 6 h. | 1112 |
+| B4 | `PROJECTS_SOURCE=live`, `BASE_RPC_URL`, `WEBAUTHN_ORIGIN` reach the containers today through the checkout `.env`; on main they have no path. | 1113 |
+| B5 | The hourly parity sweep is cut off at the 10 s limit (the 240 s exemption was dropped in 1101). | 1114 |
+| B6 | Production parity: persona-voiced sectioned takes with memos (1116), judge retry (1117), judge model from the database (1118), verified consensus-receipt path (1119), today's regime in the brief (1108), `noop-analyst` stays in-house (1120), absence recording never blocks turnover (1122). | listed |
+| B7 | Gates: `twin:gate` and `prod:gate` ported to main's instance model, with the default-deny log inventory. `verify:live` is not a substitute. | 1071 |
+| B8 | `e2e` is intermittently red on main (mid-window dump adoption). Green `e2e` on the RC commit. | 1121 |
+| B9 | Tracking issue `release:v0.6.0` exists, scope frozen, phase 1099 complete (policy section 6). | to file |
+| B10 | `rebind-members` order relative to the first boot is not fixed by the spec on the breaking-migration path. Settled by the stage rehearsal (R3.8). | none |
+
+Closed: the CoinGecko key allowlist and its delivery from `~/.env` (1098, PR 1105);
+the judge prompt (1100), judge-never-an-analyst (1107), api resilience minus the sweep
+(1101), twin shm and slim dumps (1102), the v0.5.x record (1106).
+
+Also required before cutover, not blockers: tell external members of the four-weight
+rule (1124); fix the `judging` banner (1115) and the admin items in 1123.
 
 ## 1. Release identity
 
@@ -46,7 +67,7 @@ onto the adopted design (spec §9.3).
 | Branch | `releases-0.6.x` (cut from `origin/main` at `d20429ca`, 2026-10-02) |
 | From (production today) | v0.5.4: backend at `becb6897` (v0.5.2), site at v0.5.3, 76-name ledger (to be confirmed at R2.3) |
 | To | v0.6.0 |
-| RC tags | `v0.6.0-rc.N`, cut only after stage passes (policy §3). `N` per B4 |
+| RC tags | `v0.6.0-rc.N`, cut only after stage passes (policy §3). `N` starts at 0 (the stray tag is gone) |
 | Final tag | `v0.6.0`, same commit as the deployed rc, after R7 passes |
 | Window | **Long and breaking.** Pending migrations include `breaking` ones, so the stack is **down** from R6.1 until R6.9. Plan for the api, the site and every participant to be unavailable |
 
@@ -63,7 +84,7 @@ Classification is each file's own `compat:` header at `d20429ca`. Re-derive at t
 `comm -13 <(ledger) <(ls backend/migrations | sort)`.
 
 - **No `compat:` header (6, they predate the runner's metadata):** `0056_swarm_judge_requires_model`, `0057_swarm_judge_policy_stamp`, `0058_swarm_judge_fault_injection`, `0059_swarm_judgement_completion_usage`, `0062_rm_worker_analytics_ledger_read_grant`, `0063_deployment_identity`. `0063` is applied first by the guarded pass (R6.3). A `NULL` compat refuses an older image (spec §8.4); confirm the runner treats these as the spec requires at R3.
-- **Breaking (8):** `0066_drop_swarm_notifications`, `0072_drop_swarm_schedules`, `0079_drop_swarm_scheduler_jobs`, `0080_stream_events_grant_only`, `0081_stream_event_counter`, `0088_webauthn_challenge_slots`, `0089_revoke_runtime_delete`, `0092_drop_swarm_judge_fault_injection`.
+- **Breaking (8):** `0066` (drops the notification outbox table), `0072_drop_swarm_schedules`, `0079_drop_swarm_scheduler_jobs`, `0080_stream_events_grant_only`, `0081_stream_event_counter`, `0088_webauthn_challenge_slots`, `0089_revoke_runtime_delete`, `0092_drop_swarm_judge_fault_injection`.
 - **Additive:** the rest (`0064`–`0065`, `0067`–`0078`, `0081_swarm_judge_model_bare_id`, `0082`–`0087`, `0090`, `0091`).
 
 Because any pending migration is `breaking`, the order is fixed by spec §8.5:
@@ -86,7 +107,7 @@ point is a database restore (section 8).
 | Deletes | No runtime role deletes. Pruning is `bun run prune` (typed `rm_owner`, 7-day floor) | Not part of the cutover |
 | Site | Own unit. `bun smoke:web` refuses a site whose `apiRange` excludes the running api, and `bun smoke` refuses an api outside the live site's range | R6.10 |
 | API limit | Explicit 10 s request limit; a request over 5 s is logged | Read in R7 |
-| Gecko | The paid key is not on the `~/.env` allowlist today. See B7 | Close B7 first |
+| Gecko | The paid key is on the `~/.env` allowlist and forwarded to the worker lanes (1098) | None |
 
 
 ## 3. Roles and what each step may hold
@@ -106,11 +127,11 @@ pipe or environment.
 
 ## 4. R0 Go/no-go (policy §4.1)
 
-- [ ] B1–B7 each closed, with the decision written in the tracking issue.
-- [ ] `release:v0.6.0` tracking issue exists, scope frozen, Phases complete (policy §6).
-- [ ] Every intended commit is on `releases-0.6.x`: `git log --oneline origin/main..releases-0.6.x` and the reverse are empty or fully explained.
-- [ ] `gh run list --branch releases-0.6.x` shows green `e2e`, `unit`, `backend`, `integration`, `contract`, `web-client`, `repo-guards`, `docs-lint`.
-- [ ] Operator names the cutover window and the rollback authority.
+- B1–B10 each closed, with the decision written in the tracking issue.
+- `release:v0.6.0` tracking issue exists, scope frozen, Phases complete (policy §6).
+- Every intended commit is on `releases-0.6.x`: `git log --oneline origin/main..releases-0.6.x` and the reverse are empty or fully explained.
+- `gh run list --branch releases-0.6.x` shows green `e2e`, `unit`, `backend`, `integration`, `contract`, `web-client`, `repo-guards`, `docs-lint`.
+- Operator names the cutover window and the rollback authority.
 
 ## 5. R1 Gate on the RC commit (local, no network spend)
 
@@ -217,7 +238,7 @@ bun smoke:web --instance rehearse-060
 bun smoke:web --instance rehearse-060 --rollback
 ```
 
-R3.8 **The production-shaped sequence (settles B6).** Repeat R6.3–R6.9 on a **remote**
+R3.8 **The production-shaped sequence (settles B10).** Repeat R6.3–R6.9 on a **remote**
 stage database enrolled `rehearsal` (restore the dump there by hand per
 [`pre-identity-remote-twin.md`](./pre-identity-remote-twin.md), or use a `--local volume`),
 with real `bun run migrate` prompts and `prod-init provision-tokens` under `RM_ENV=stage`.
@@ -231,12 +252,12 @@ section 8 states. Record the restore time.
 
 R3.10 Rehearsal report (policy §4.5): RC SHA, dump identity, plan id, preflight and
 readiness receipts, participant results, `verify:live` output, interruption results, what
-could not be covered (state B3), and a go/no-go signed by the operator.
+could not be covered (the log gates, until B7 closes), and a go/no-go signed by the operator.
 
 ### R3.11 Cut the RC tag (only after R3.10 is a go)
 
 ```bash
-git tag -a v0.6.0-rc.N "$RC_SHA" -m 'v0.6.0-rc.N'   # N per B4
+git tag -a v0.6.0-rc.N "$RC_SHA" -m 'v0.6.0-rc.N'   # N starts at 0
 git push origin v0.6.0-rc.N
 ```
 
@@ -277,6 +298,12 @@ R6.2 Host files. `~/.env` holds exactly the keys in section 2; remove everything
 at the path `RM_CREDENTIALS` names, with the in-house roster (agents `athena`,
 `noop-analyst`, `robot-money`; judge `themis`). Production's seated members still hold
 fixture keys until R6.7.
+
+R6.2a **Settings the containers need** (B4, issue 1113). Export, in the shell that runs
+`bun smoke --static-port`, every key production's checkout `.env` carried that the
+containers read: at least `PROJECTS_SOURCE=live`, `BASE_RPC_URL` if a private RPC is used,
+and `WEBAUTHN_ORIGIN`. Record the list (names only) from the old host. A prod boot with
+`PROJECTS_SOURCE` unset must refuse.
 
 R6.2b **One-time role step**, before R6.3 needs the login. If R2.3 showed `rm_owner`
 `rolcanlogin = f` (expected on an existing cluster), the operator runs, as `doadmin`:
@@ -347,6 +374,11 @@ bun run verify:live --instance rm_prod --emit-receipt=R7.verify-prod
 ```
 
 R7.4 Read the result: 0 pass, 1 wrong, 2 nothing asserted. WARN is not pass.
+
+R7.4a Schedule parity (owner rule: an upgrade does not change usual schedules): every
+active subject reads `epoch_duration_seconds = 21600`; each session that was in flight at
+cutover published on its normal time; the next regime run lands at :30; the hourly parity
+sweep completes without a 10 s cut-off.
 
 R7.5 Compare against the R2.4 baseline: row counts only grow, nothing shrank; the
 published AUM figure did not step; the ledger did not balloon (database size within the
