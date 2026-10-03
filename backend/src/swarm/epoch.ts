@@ -707,7 +707,22 @@ export async function turnOverEpoch(
                 SET state = 'window_closed', judge_mode = ${judgeMode},
                     judging_duration_seconds = ${subject.judging_duration_seconds}
               WHERE id = ${expectedSessionId} AND state = 'collecting'`;
-    await recordAbsencesTx(expectedSessionId, tx);
+    // Absences are bookkeeping about a window that has already closed, not a
+    // condition of closing it. Production committed the close first and
+    // recorded absences outside (release e0d40661), so a failing absence
+    // insert could never wedge a subject. Here they stay in this transaction
+    // (atomic turnover, scheduler spec 4.3) inside a savepoint: a failure
+    // rolls back only the absence rows, becomes a warning, and the close and
+    // the next-epoch open still commit.
+    try {
+      await tx.savepoint(async (sp) => {
+        await recordAbsencesTx(expectedSessionId, sp as unknown as typeof tx);
+      });
+    } catch (err) {
+      console.warn(
+        `[swarm] absences for session ${expectedSessionId} not recorded: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
     // §2.2 turnover rule, against ONE reading of the clock taken here — after
     // the subject lock is held, so a turnover that waited on another never
