@@ -372,7 +372,7 @@ const PUBLIC = new Set([
   "projects.list", "projects.detail",
   "swarm.members", "swarm.waitlist", "swarm.member", "swarm.memberTakes", "swarm.memberJudgements",
   "swarm.memberAvatar", "swarm.subject", "swarm.subjectSnapshots", "swarm.sessions", "swarm.session",
-  "swarm.sessionById", "swarm.sessionConsensusReceipt", "swarm.sessionConsensusReceiptVerified",
+  "swarm.sessionById", "swarm.sessionConsensusReceipt", "swarm.sessionConsensusReceiptCanonical",
   "swarm.sessionJudgements", "swarm.take", "swarm.takePermalink", "swarm.judgement", "swarm.openSession",
   "swarm.brief", "swarm.signingPayload", "swarm.memo", "swarm.apply", "swarm.applyStatus",
   "swarm.applicationStatus", "swarm.claimChallenge", "swarm.claimToken",

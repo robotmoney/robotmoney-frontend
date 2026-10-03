@@ -215,10 +215,10 @@ export function registerAdminSwarmSession(Alpine) {
     },
 
     // ── Consensus receipt (issue #754) ────────────────────────────────────
-    // The route is public (GET /api/swarm/sessions/:id/consensus-receipt/verified,
+    // The route is public (GET /api/swarm/sessions/:id/consensus-receipt,
     // the read-time-verified ENVELOPE — this page renders `verified`, the
     // per-signature verdicts and `unverifiedReasons`, so it wants the envelope
-    // and not the anchored bare bytes its sibling path serves (decision D10) —
+    // and not the bare bytes the `/canonical` sibling serves —
     // same admin-page-calls-a-public-route shape load()
     // already uses for the per-member take detail above), and 404 means "not
     // published yet", not a failure: an off/shadow-judged session, or an
@@ -229,7 +229,7 @@ export function registerAdminSwarmSession(Alpine) {
       this.receiptError = null;
       try {
         this.receipt = await api.adminGet(
-          path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: this.sessionId }),
+          path(ROUTES.swarm.sessionConsensusReceipt, { id: this.sessionId }),
           this._token(),
         );
       } catch (e) {
