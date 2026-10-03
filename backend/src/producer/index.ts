@@ -331,6 +331,8 @@ export function armedScheduleSnapshot(): ReadonlyMap<ProducerKind, ScheduleState
 /** Test seam: cancel and forget every armed schedule. Without the clearTimeout
  *  a test that arms a real cron would leave a live timer holding the runner. */
 export function resetProducerSchedules(): void {
+  if (dayRollTimer) clearTimeout(dayRollTimer);
+  dayRollTimer = undefined;
   for (const state of armedSchedules.values()) if (state.timer) clearTimeout(state.timer);
   armedSchedules.clear();
 }
@@ -366,10 +368,60 @@ function schedule(kind: ProducerKind, cron: string): void {
   arm();
 }
 
+// ── Day-roll regime refresh (issue 1108) ─────────────────────────────────────
+// Production refreshed today's regime right before each session, so an epoch
+// opening just after 00:00 UTC briefed that day's regime. Main has no such
+// driver, and the brief reads the latest SAVED regime row, so an epoch opened
+// 00:00-00:30 UTC briefed yesterday until the first :30 run. This one extra
+// fire, a few seconds after each UTC midnight, saves the new day's regime
+// before the first epochs of the day open. It is off the api request path
+// (the producer computes, the api only stores), needs no scheduler credential,
+// and writes nothing at boot: the first fire is the next midnight. The
+// regime cron itself is unchanged.
+export const DAY_ROLL_DELAY_MS = 5_000;
+
+/** Pure: ms from `now` to the next UTC midnight plus the settle delay. */
+export function msUntilDayRoll(now: Date): number {
+  const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  return next - now.getTime() + DAY_ROLL_DELAY_MS;
+}
+
+/** Run the regime tool once for the UTC day `now` falls in. Never throws. */
+export async function fireDayRollRegime(
+  now: Date = new Date(),
+  deps: { run?: (kind: ProducerKind, asof: string) => Promise<unknown> } = {},
+): Promise<string> {
+  const asof = now.toISOString().slice(0, 10);
+  try {
+    await (deps.run ?? ((k, d) => runProducerOnce(k, d)))("regime", asof);
+  } catch (err) {
+    console.error(`[analytics-producer] day-roll regime ${asof} failed: ${err instanceof Error ? err.message : err}`);
+  }
+  return asof;
+}
+
+let dayRollTimer: ReturnType<typeof setTimeout> | undefined;
+
+export function armDayRollRegime(): void {
+  const arm = () => {
+    dayRollTimer = setTimeout(async () => {
+      try {
+        await fireDayRollRegime();
+      } finally {
+        arm();
+      }
+    }, msUntilDayRoll(new Date()));
+    dayRollTimer.unref?.();
+  };
+  arm();
+}
+
 export interface ProducerServeDeps {
   env?: Record<string, string | undefined>;
   waitUntilReady?: (cfg: AnalyticsApiConfig) => Promise<void>;
   scheduleKind?: (kind: ProducerKind, cron: string) => void;
+  /** Test seam: replaces arming the UTC day-roll regime fire (issue 1108). */
+  scheduleDayRoll?: () => void;
   /** Test seam: override the boot-time catch-up call. Defaults to the real
    *  catchUpMissedResearchDays against the resolved API config. */
   catchUp?: (persistence: AnalyticsPersistence) => Promise<unknown>;
@@ -410,6 +462,7 @@ export async function startProducerSchedules(deps: ProducerServeDeps = {}): Prom
   const scheduleKind = deps.scheduleKind ?? schedule;
   scheduleKind("regime", deps.env?.PRODUCER_REGIME_CRON || process.env.PRODUCER_REGIME_CRON || "30 22 * * *");
   scheduleKind("research", deps.env?.PRODUCER_RESEARCH_CRON || process.env.PRODUCER_RESEARCH_CRON || "0 23 * * *");
+  (deps.scheduleDayRoll ?? armDayRollRegime)();
   return cfg;
 }
 
