@@ -30,6 +30,7 @@ import { sql } from "../src/db/client.ts";
 import * as epoch from "../src/swarm/domain.ts";
 import * as judge from "../src/swarm/domain.ts";
 import { inputsDigest } from "../src/swarm/judge.ts";
+import { getJudgeConfig, setJudgeConfig } from "../src/swarm/judge-config.ts";
 import { handleJudgeParticipant } from "../src/api/routes/swarm-judge-participant.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import {
@@ -158,6 +159,47 @@ test("each request carries the frozen input the judge is to read — the object 
   // recomputes from the frozen take set: a submission signed over it lands.
   const signed = await signedJudgement(j, sessionId, OPINION, { inputsDigest: inputsDigest(served.input) });
   expect((await judge.submitJudgement(j.token, signed)).ok).toBe(true);
+});
+
+// Issue 1118. The participant holds no database credential, so the model it
+// runs travels in the request. It must be the column's value at the moment the
+// frame is built, so an admin switch needs no restart and the admin GET
+// (getJudgeConfig) never names a model the judge is not using.
+test("each request carries swarm_judge_config.model, and an admin switch reaches the next request", async () => {
+  const j = await activeJudge();
+  const { sessionId } = await judgingSession("js_model");
+  const served = async () => (await judge.pendingJudgingFor(j.id)).find((p) => p.sessionId === sessionId)!;
+
+  expect((await served()).model).toBe("test/epoch-fixture-judge");
+
+  await setJudgeConfig({ model: "test/switched-judge" });
+  expect((await served()).model).toBe("test/switched-judge");
+  expect((await getJudgeConfig()).model).toBe((await served()).model);
+
+  // The bare wire id is what is stored and what is served (migration 0081).
+  await setJudgeConfig({ model: "opencode/test/prefixed" });
+  expect((await served()).model).toBe("test/prefixed");
+});
+
+test("a configured model of NULL is served as null, never as some other model", async () => {
+  const j = await activeJudge();
+  const { sessionId } = await judgingSession("js_model_null");
+  await setJudgeConfig({ mode: "off", model: null });
+  expect((await judge.pendingJudgingFor(j.id)).find((p) => p.sessionId === sessionId)!.model).toBeNull();
+});
+
+test("a model switched while a session waits re-serves it on an open subscription", async () => {
+  const j = await activeJudge();
+  await judgingSession("js_model_stream");
+  await setJudgeConfig({ mode: "enforce", model: "test/stream-a" });
+  const res = judge.openJudgeStream(j.id, { refreshMs: 25, keepaliveMs: 60_000 });
+  const reading = readFrames(res, 2, 4000);
+  await Bun.sleep(150);
+  await setJudgeConfig({ model: "test/stream-b" });
+  const frames = await reading;
+  const models = frames.filter((f) => f.type === "pending").map((f) => f.data.pending[0]?.model);
+  expect(models[0]).toBe("test/stream-a");
+  expect(models).toContain("test/stream-b");
 });
 
 test("a session this judge has a TAKE in is not its work, and is never served to it", async () => {
