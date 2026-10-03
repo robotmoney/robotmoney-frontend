@@ -373,3 +373,29 @@ describe("red controls: the order grader must REPORT a regression", () => {
     expect(sessionSrc.length).toBeGreaterThan(1000); // the scan is over real text
   });
 });
+
+describe("a dump restored mid-window boots to an adoptable session (issue 1121)", () => {
+  test("the retime moves only restored mid-window sessions, and only earlier", async () => {
+    const { retimeAdoptedWindowsSql } = await import("../../lib/restore-container.ts");
+    const sql = retimeAdoptedWindowsSql(120_000);
+    expect(sql).toContain("SET window_closes_at = now() + interval '120000 milliseconds'");
+    expect(sql).toContain("WHERE state = 'collecting' AND window_closes_at > now() + interval '120000 milliseconds'");
+    expect(() => retimeAdoptedWindowsSql(0)).toThrow("positive window");
+  });
+
+  test("a production 6 h window is refused as restored and adopted once re-timed", async () => {
+    const { planEpochAdoption } = await import("../../lib/swarm/session.ts");
+    const T0 = Date.parse("2026-10-03T12:00:00Z");
+    const restored = { sessionId: "s", date: "d", windowClosesAt: new Date(T0 + 6 * 3_600_000).toISOString() };
+    expect(planEpochAdoption(T0, restored, { epochSeconds: 120 }).action).toBe("abort");
+    const retimed = { ...restored, windowClosesAt: new Date(T0 + 120_000).toISOString() };
+    expect(planEpochAdoption(T0, retimed, { epochSeconds: 120 }).action).toBe("adopt");
+  });
+
+  test("smoke-main applies the retime to the twin's own container before the dump session", () => {
+    const mainSrc = readFileSync(join(repoRoot, "scripts", "lib", "smoke-main.ts"), "utf8");
+    const call = "if (smokeTwinContainer) retimeAdoptedWindows(smokeTwinContainer, cadence.swarmWindowMs,";
+    expect(mainSrc).toContain(call);
+    expect(mainSrc.indexOf(call)).toBeLessThan(mainSrc.indexOf("dump: running one live swarm session"));
+  });
+});
