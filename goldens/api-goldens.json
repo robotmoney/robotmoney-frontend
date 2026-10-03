@@ -168056,7 +168056,7 @@
       ]
     },
     "/api/version": {
-      "api": "0.4.0",
+      "api": "0.5.0",
       "commit": null
     },
     "/health": {
