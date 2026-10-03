@@ -102,6 +102,7 @@ import {
 } from "./smoke-journal.ts";
 import { CredentialFileRefusal, loadCredentialFile, planParticipants, resolveCredentialPath, type CredentialEntry, type CredentialPathResolution } from "./swarm/credential-file.ts";
 import { runSpoofRebind, SpoofKeysRefusal, spoofKeysRequest } from "./swarm/spoof-keys.ts";
+import { planConfiguration } from "./smoke-plan-configuration.ts";
 import { applyParticipantPlan, fetchMemberRoles, listRunningParticipants, participantContainerIds, renderParticipantServices, summarizeParticipantApply, writeParticipantFiles, type DockerRun, type ParticipantsReconciled } from "./participant-compose.ts";
 import { ZEN_API_BASE_URL } from "./opencode-key.ts";
 import { resolveAgentModel, ZEN_PREFIX } from "./model-registry.ts";
@@ -709,20 +710,17 @@ const plan: DeploymentPlan = (() => {
       target: planTarget(),
       images: Object.fromEntries(Object.entries(sources).map(([service, source]) => [service, { source, digest: null }])),
       roster: roster.members,
-      // Every non-secret value that changes what this boot does. Not the compose
-      // project (derived from the instance, and random-looking enough that the
-      // redaction check would rightly refuse it), not a URL (a Base RPC URL can
-      // carry an API key in its path).
-      configuration: {
-        RM_ENV: stackRmEnv,
-        SMOKE_CADENCE: cadence.profile,
-        STATIC_PORT: String(staticPortMode),
-        SHIPPED_IMAGES: String(Boolean(imagesOverride)),
-        ANALYTICS_SOURCE: smokeEnv.analyticsSource,
-        ANALYTICS_FLOOR_SEED: smokeEnv.analyticsFloorSeed,
-        // Which members `--spoof-keys` names; every in-house one when bare.
-        ...(spoofRequest.explicit ? { SPOOF_KEYS: spoofRequest.names.join(",") || "operator=robotmoney" } : {}),
-      },
+      // Every non-secret value that changes what this boot does
+      // (smoke-plan-configuration.ts says what is left out, and why).
+      configuration: planConfiguration({
+        stackRmEnv,
+        cadenceProfile: cadence.profile,
+        staticPortMode,
+        shippedImages: Boolean(imagesOverride),
+        analyticsSource: smokeEnv.analyticsSource,
+        analyticsFloorSeed: smokeEnv.analyticsFloorSeed,
+        spoofRequest,
+      }),
       mutations: [
         ...(requestsMigrate(process.argv) ? (["migrate"] as const) : []),
         ...(shouldSeed(process.argv) ? (["seed"] as const) : []),

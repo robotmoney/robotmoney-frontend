@@ -235,12 +235,19 @@ instead of restating their values.
 
 If the isolated rehearsal or stage report finds an issue that affects
 production safety or acceptance criteria, do not proceed to production
-execution. Apply the fix and follow §3's tag sequence:
+execution. Fix it as follows, then follow §3's tag sequence.
 
-1. Open PRs with fixes against `main`.
-2. Merge the fixes to `main`.
-3. Cherry-pick the merged fixes to the release branch (`releases-A.B.x`).
-4. If no candidate has yet been deployed to production, leave the corrected
+A fix is developed in a development environment and never on a rehearsal,
+stage or production host. A host runs a clean checkout of a pushed commit
+(`git status --porcelain` empty, no host-side commits). A rehearsal on a host
+whose code differs from the release branch is not evidence for the release.
+
+1. Branch the fix from the release branch (`releases-A.B.x`), not from `main`.
+2. Develop and test the fix in a local worktree.
+3. Open a PR into the release branch and merge it there. A change to a
+   supported baseline needs the owner's decision first (D55 (8)).
+4. Redeploy a clean checkout of the new release-branch tip to the stage host.
+   If no candidate has yet been deployed to production, leave the corrected
    branch tip untagged and repeat stage preflight and rehearsal. A stage failure
    does not consume an rc number. If a deployed candidate failed postflight,
    cut the next rc only after the corrected tip passes stage.
@@ -405,7 +412,9 @@ the rollout.
 
 Any fix discovered on the `releases-A.B.x` branch during rollout is carried
 back to `main` outside this runbook's flow, by whoever picks up work on
-`main` next — this document prescribes nothing more about it.
+`main` next. It is never assumed for `main`: `main` may have moved past that
+release's lifecycle. Only after stage has proven the fix, a separate PR
+evaluates the cherry-pick onto `main`.
 
 ---
 

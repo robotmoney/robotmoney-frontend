@@ -187,7 +187,14 @@ A pre-0063 dump gets its identity-first pass automatically, but only when its le
 a supported baseline (spec §9.1). A dump that does not match refuses, which is the same
 as B1 and proves it on stage before production sees it.
 
-R3.1 Check out the RC commit. `git status --porcelain` must be empty.
+R3.1 Check out the RC commit as a clean checkout of a pushed commit. `git status --porcelain` must be empty and `git log origin/releases-0.6.x..HEAD` must be empty. **Never edit or commit on the stage host.** A blocker is fixed in a dev worktree branched from `releases-0.6.x`, merged there, and the host is re-checked-out at the new tip (policy §4.6). A host that ran other code proves nothing.
+
+Prerequisites found on stage-2 (2026-10-02):
+
+- `OPENCODE_API_KEY` must be in the process environment for the boot (export that one key from `~/.env`; the preflight warns it is not on the §3 list).
+- A `--static-port` boot refuses while another stack holds `:48787`. Take the old stack down first (`bun run smoke:down` from its own checkout).
+- Reset a failed attempt with `bun smoke:down --instance rehearse-060`, remove the `rm-restore-*` container, then `bun run smoke:clean`.
+- A bare `--spoof-keys` with no credentials file boots with an empty roster (no agents, no judges). Pass `--credentials rehearsal-creds.json` (R3.2) to exercise participants.
 
 R3.2 Prepare a rehearsal credential file with **spoofed** keys, never the production
 `credential.json`:
