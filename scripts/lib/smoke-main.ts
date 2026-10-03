@@ -6,7 +6,7 @@ import { hostname } from "node:os";
 import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { databaseName, homeEnvFilePath, urlForRole } from "./env-role.ts";
 import { ALLOW_INSECURE_FLAG, bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, refuseAllowInsecureOnProd, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
+import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, missingProdSettingNotes, refuseAllowInsecureOnProd, refuseProdWithoutProjectsSource, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
 import { resolveBackupFiles } from "./restore-container.ts";
 import { resolveDeploymentPolicy, resolveRmEnv } from "./smoke-env-policy.ts";
 import { requireRehearsalTarget } from "./smoke-identity.ts";
@@ -306,6 +306,13 @@ const allowInsecureRequested = process.argv.includes(ALLOW_INSECURE_FLAG);
 if (staticPortMode) await stagePreflight();
 // The containers' RM_ENV: the policy, and `prod` on the standing stack by rule.
 const stackRmEnv: RmEnv = stackRmEnvFor(staticPortMode, policy);
+// Issue #1113: a prod boot without PROJECTS_SOURCE=live refuses here, before
+// any credential is minted or container created.
+{
+  const refusal = refuseProdWithoutProjectsSource(stackRmEnv, process.env);
+  if (refusal !== null) fatal(refusal);
+  for (const note of missingProdSettingNotes(stackRmEnv, process.env)) console.warn(`[smoke] ${note}`);
+}
 // …and this process's own, so every host-side reader of RM_ENV (the inference
 // preflight below, the drivers this boot starts) judges the boot by the policy
 // the matrix resolved — an unset RM_ENV under `--local` is `stage` (§4.3), a

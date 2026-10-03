@@ -7,7 +7,9 @@
 --
 -- There are no session-scheduling rows here. Per system-scheduler-spec.md §2.2 a
 -- subject's epoch duration IS its whole schedule, so §8.1 now says bootstrap data
--- carries that duration on the subject; there is nothing to enable (§12).
+-- carries that duration on the subject; there is nothing to enable (§12). The
+-- duration is the column default in snapshot.sql, 21600 s (six hours), which is
+-- production's cadence, so a blank database starts on the schedule an upgraded one keeps.
 --
 -- PostgreSQL database dump
 --

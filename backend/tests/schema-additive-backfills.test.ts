@@ -10,9 +10,11 @@
 // EXISTS`, `CREATE ... IF NOT EXISTS`, `DROP CONSTRAINT IF EXISTS`) — and reads
 // the result back.
 //
-//   0090  epoch_anchor backfills to the subject's open window's close, so the
-//         open window is on the new grid (k = 0) and nothing it waits on moves;
-//         a subject with no open window keeps the fixed default.
+//   0090  epoch_anchor backfills to the close of the subject's latest session
+//         (its open window's close when it has one), so the open window is on
+//         the new grid (k = 0), nothing it waits on moves, and a subject with
+//         no open window continues the grid production's driver was walking;
+//         a subject that never had a session keeps the fixed default.
 //   0092  the newest revision per (session, member) becomes final, and only it
 //         (D51: "backfills each legacy session's newest revision per member as
 //         final"); a take inserted afterwards by code that predates the column
@@ -92,28 +94,45 @@ const legacyTake = (t: { subject: string; member: string; session: string }, rev
           '{}'::jsonb, 'sig-${revision}', ${revision})`;
 
 describe("0090 — epoch_anchor backfill", () => {
-  test("a subject with an open window is anchored at that window's close; one without keeps the unix-epoch default", async () => {
+  test("the anchor is the subject's latest recorded close, open window or not; a subject with no session keeps the unix-epoch default", async () => {
     const open = `anchor-open-${uid()}`;
     const idle = `anchor-idle-${uid()}`;
-    await sql`INSERT INTO swarm_subjects (id, name) VALUES (${open}, 'Open'), (${idle}, 'Idle')`;
+    const fresh = `anchor-fresh-${uid()}`;
+    await sql`INSERT INTO swarm_subjects (id, name) VALUES (${open}, 'Open'), (${idle}, 'Idle'), (${fresh}, 'Fresh')`;
     const closes = new Date("2026-09-24T18:30:00Z");
+    const idleLast = new Date("2026-09-20T06:00:07Z");
     await sql`
-      INSERT INTO swarm_sessions (subject_id, state, window_closes_at)
-      VALUES (${open}, 'collecting', ${closes}), (${idle}, 'published', ${new Date("2026-09-20T00:00:00Z")})`;
+      INSERT INTO swarm_sessions (subject_id, state, window_closes_at, convened_at)
+      VALUES (${open}, 'collecting', ${closes}, ${new Date("2026-09-24T12:30:00Z")}),
+             (${idle}, 'published', ${new Date("2026-09-19T18:00:00Z")}, ${new Date("2026-09-19T12:00:00Z")}),
+             (${idle}, 'published', ${idleLast}, ${new Date("2026-09-20T00:00:00Z")}),
+             (${idle}, 'cancelled', ${new Date("2026-09-30T00:00:00Z")}, ${new Date("2026-09-29T00:00:00Z")})`;
     // The state before 0090 ran: every subject on the column default.
-    await sql`UPDATE swarm_subjects SET epoch_anchor = DEFAULT WHERE id IN (${open}, ${idle})`;
+    await sql`UPDATE swarm_subjects SET epoch_anchor = DEFAULT WHERE id IN (${open}, ${idle}, ${fresh})`;
 
     await rerunAsOwner("0090_subject_grid_columns.sql");
 
     const rows = await sql<{ id: string; epoch_anchor: Date; judging_duration_seconds: number }[]>`
-      SELECT id, epoch_anchor, judging_duration_seconds FROM swarm_subjects WHERE id IN (${open}, ${idle})`;
+      SELECT id, epoch_anchor, judging_duration_seconds FROM swarm_subjects WHERE id IN (${open}, ${idle}, ${fresh})`;
     const byId = new Map(rows.map((r) => [r.id, r]));
     expect(byId.get(open)?.epoch_anchor.toISOString()).toBe(closes.toISOString());
-    // A published session is not an open window.
-    expect(byId.get(idle)?.epoch_anchor.toISOString()).toBe("1970-01-01T00:00:00.000Z");
-    // The judging duration is the value the code hardcodes today.
+    // No open window: the grid continues from the last real close (production's
+    // driver was on that six-hour cycle). A cancelled row's close was never a slot.
+    expect(byId.get(idle)?.epoch_anchor.toISOString()).toBe(idleLast.toISOString());
+    expect(byId.get(fresh)?.epoch_anchor.toISOString()).toBe("1970-01-01T00:00:00.000Z");
+    // The judging duration is a deadline looser than v0.5.4's 420 s driver wait.
     expect(byId.get(open)?.judging_duration_seconds).toBe(900);
     expect(byId.get(idle)?.judging_duration_seconds).toBe(900);
+  });
+});
+
+describe("0085 — the epoch duration is production's six hours", () => {
+  test("the column default is 21600, so existing rows and new subjects read the cadence v0.5.4 ran", async () => {
+    const id = `dur-${uid()}`;
+    await sql`INSERT INTO swarm_subjects (id, name) VALUES (${id}, 'Default duration')`;
+    const [row] = await sql<{ epoch_duration_seconds: number }[]>`
+      SELECT epoch_duration_seconds FROM swarm_subjects WHERE id = ${id}`;
+    expect(row?.epoch_duration_seconds).toBe(21600);
   });
 });
 

@@ -66,6 +66,9 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
+import * as client from "../src/db/client.ts";
+import * as epoch from "../src/swarm/epoch.ts";
+import * as domain from "../src/swarm/domain.ts";
 import { adminConnection, adminUrl, harnessUrl, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import {
   checkSchemaCompatibility,
@@ -183,6 +186,12 @@ function scheduleKindsDeletedBy0089(): string[] {
 const SESSION_PUBLISHED = "00000000-0000-4000-8000-00000000a001";
 const SESSION_OLD_OPEN = "00000000-0000-4000-8000-00000000a002";
 const SESSION_NEW_OPEN = "00000000-0000-4000-8000-00000000a003";
+// In flight on a v0.5.4 database (issue 1111): the cron driver closed, aggregated
+// and judged these, and none of them is published. SESSION_OLD_OPEN becomes the
+// `window_closed` one (0086 closes the older of two collecting sessions).
+const SESSION_AGGREGATED = "00000000-0000-4000-8000-00000000a004";
+const SESSION_JUDGED_ENFORCE = "00000000-0000-4000-8000-00000000a005";
+const SESSION_JUDGED_SHADOW = "00000000-0000-4000-8000-00000000a006";
 
 /** The release's populated data. Every swarm.* schedule row the release
  *  seeded, and a pending job of every swarm.* kind it could queue, come from
@@ -204,8 +213,14 @@ INSERT INTO audit_log (actor, action, scope) VALUES
 INSERT INTO swarm_subjects (id, name) VALUES ('subj-1', 'Subject One');
 INSERT INTO swarm_sessions (id, subject_id, subject_name, state, window_closes_at, convened_at, published_at) VALUES
   ('${SESSION_PUBLISHED}', 'subj-1', 'Subject One', 'published',  '2026-09-01T12:00:00Z', '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'),
-  ('${SESSION_OLD_OPEN}',  'subj-1', 'Subject One', 'collecting', '2026-09-20T12:00:00Z', '2026-09-20T11:00:00Z', NULL),
-  ('${SESSION_NEW_OPEN}',  'subj-1', 'Subject One', 'collecting', '2026-09-21T12:00:00Z', '2026-09-21T11:00:00Z', NULL);
+  ('${SESSION_OLD_OPEN}',  'subj-1', 'Subject One', 'collecting', '2026-09-20T12:00:00Z', '2026-09-20T06:00:00Z', NULL),
+  ('${SESSION_NEW_OPEN}',  'subj-1', 'Subject One', 'collecting', '2026-09-21T12:00:00Z', '2026-09-21T06:00:00Z', NULL),
+  ('${SESSION_AGGREGATED}', 'subj-1', 'Subject One', 'aggregated', '2026-09-10T12:00:00Z', '2026-09-10T11:00:00Z', NULL),
+  ('${SESSION_JUDGED_ENFORCE}', 'subj-1', 'Subject One', 'judged', '2026-09-11T12:00:00Z', '2026-09-11T11:00:00Z', NULL),
+  ('${SESSION_JUDGED_SHADOW}', 'subj-1', 'Subject One', 'judged', '2026-09-12T12:00:00Z', '2026-09-12T11:00:00Z', NULL);
+INSERT INTO swarm_session_judgements (session_id, mode, source, fallback_reason, prompt_hash, inputs_digest, take_count, min_takes, opinion, created_at) VALUES
+  ('${SESSION_JUDGED_ENFORCE}', 'enforce', 'fallback', 'model_unconfigured', 'ph', 'id', 1, 3, '{"rationale":"x"}', '2026-09-11T12:30:00Z'),
+  ('${SESSION_JUDGED_SHADOW}',  'shadow',  'fallback', 'model_unconfigured', 'ph', 'id', 1, 3, '{"rationale":"x"}', '2026-09-12T12:30:00Z');
 INSERT INTO swarm_recommendations (session_id, member_id, subject_id, date, nonce, stance, payload, signature, verified, revision) VALUES
   ('${SESSION_PUBLISHED}', 'm-alpha', 'subj-1', '2026-09-01', 'n-alpha-1', 'buy',  '{"take":"alpha r1"}', 'sig-alpha-1', true, 1),
   ('${SESSION_PUBLISHED}', 'm-alpha', 'subj-1', '2026-09-01', 'n-alpha-2', 'hold', '{"take":"alpha r2"}', 'sig-alpha-2', true, 2),
@@ -522,18 +537,30 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
       ]);
     });
 
-    test("the subject gains its grid: defaults for the durations, the anchor from its open window (0085, 0090)", async () => {
+    test("the subject keeps production's six-hour schedule: 21600 s, and the next three closes are the instants v0.5.4's driver would have used (0085, 0090, issue 1112)", async () => {
       const [subject] = (await db`
         SELECT epoch_duration_seconds, judging_duration_seconds, epoch_anchor FROM swarm_subjects WHERE id = 'subj-1'`) as unknown as {
         epoch_duration_seconds: number;
         judging_duration_seconds: number;
         epoch_anchor: Date;
       }[];
-      expect(subject?.epoch_duration_seconds).toBe(3600);
+      // v0.5.4 ran one session per subject every six hours, window = interval
+      // (scripts/lib/smoke-schedule.ts, REALISTIC). An upgrade does not change it.
+      expect(subject?.epoch_duration_seconds).toBe(21600);
       expect(subject?.judging_duration_seconds).toBe(900);
       // 0086 leaves ONE collecting session per subject (the newest); 0090
       // anchors the grid on that window's close.
       expect(subject?.epoch_anchor.toISOString()).toBe("2026-09-21T12:00:00.000Z");
+      // The open window is 06:00 -> 12:00 (six hours). Production's driver opens
+      // the next session at 12:00 and walks 6 h slots, so the next three closes
+      // are 18:00, 00:00 and 06:00. The grid the scheduler will use, read back
+      // from the migrated columns, must produce exactly those.
+      const grid = (await db`
+        SELECT to_char(epoch_anchor + k * make_interval(secs => epoch_duration_seconds),
+                       'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at
+          FROM swarm_subjects, generate_series(1, 3) AS k
+         WHERE id = 'subj-1' ORDER BY k`) as unknown as { at: string }[];
+      expect(grid.map((g) => g.at)).toEqual(["2026-09-21T18:00:00Z", "2026-09-22T00:00:00Z", "2026-09-22T06:00:00Z"]);
     });
 
     test("one collecting session per subject: the older is closed, the newest stays open, history untouched (0086)", async () => {
@@ -541,6 +568,10 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
         await rows(db`SELECT id, state, published_at IS NOT NULL AS published FROM swarm_sessions ORDER BY convened_at`),
       ).toEqual([
         { id: SESSION_PUBLISHED, state: "published", published: true },
+        { id: SESSION_AGGREGATED, state: "aggregated", published: false },
+        { id: SESSION_JUDGED_ENFORCE, state: "judged", published: false },
+        // A `shadow` judgement never reached its session: back to `aggregated` (0091).
+        { id: SESSION_JUDGED_SHADOW, state: "aggregated", published: false },
         { id: SESSION_OLD_OPEN, state: "window_closed", published: false },
         { id: SESSION_NEW_OPEN, state: "collecting", published: false },
       ]);
@@ -721,6 +752,143 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
       expect(messages.some((m) => m.includes("compat is NULL"))).toBe(lacksPreCompat);
       if (lacksBreaking) expect(messages.some((m) => m.startsWith(`${lastBreaking()}: declared breaking`))).toBe(true);
     });
+
+    // ── Sessions in flight at the upgrade (issue 1111) ────────────────────
+    //
+    // A v0.5.4 database holds sessions the cron driver had closed, aggregated
+    // or judged and not yet published. The epoch scheduler refuses a session
+    // whose judge_mode was never captured, and 0089 has just deleted the
+    // pending swarm.* jobs that would have finished them. The owner rule
+    // (2026-10-03): they finish on their normal timing, with no operator step.
+    // Everything below runs on the database the real migrate run produced, and
+    // drives epoch.ts exactly as the scheduler's API client does.
+
+    async function withUpgradedDatabase<T>(run: () => Promise<T>): Promise<T> {
+      const previous = process.env.DATABASE_URL!;
+      await client.setDatabase(urlFor(name));
+      try {
+        return await run();
+      } finally {
+        await client.setDatabase(previous);
+      }
+    }
+
+    /** Aggregate, request judging, and finalize one session as the scheduler's chain does. */
+    async function settleAsScheduler(sessionId: string): Promise<{ requested: string; outcome?: string }> {
+      const agg = await epoch.aggregateEpoch(sessionId);
+      expect(agg.ok).toBe(true);
+      const req = await epoch.requestJudging(sessionId);
+      if (!req.ok) {
+        // `off`: nothing waits, `aggregated -> publish` with `not_judged` (spec 4.4).
+        expect(req.error).toBe("judge_mode_off");
+        const fin = await epoch.finalizeEpoch(sessionId);
+        expect(fin.ok).toBe(true);
+        return { requested: "off", outcome: (fin as { outcome: string }).outcome };
+      }
+      return { requested: "judging" };
+    }
+
+    test("every in-flight session carries a captured judge mode and judging duration, and its timestamps are unchanged (0091)", async () => {
+      const captured = await rows(db`
+        SELECT id, state, judge_mode, judging_duration_seconds,
+               judging_requested_at IS NOT NULL AS requested, judging_deadline_at IS NOT NULL AS has_deadline,
+               consensus_recorded_at IS NOT NULL AS consensus
+          FROM swarm_sessions
+         WHERE id IN (${SESSION_OLD_OPEN}, ${SESSION_AGGREGATED}, ${SESSION_JUDGED_ENFORCE}, ${SESSION_JUDGED_SHADOW}, ${SESSION_NEW_OPEN})
+         ORDER BY convened_at`);
+      expect(captured).toEqual([
+        // aggregated: mode in force (0056 switched the planted judge off), subject duration
+        { id: SESSION_AGGREGATED, state: "aggregated", judge_mode: "off", judging_duration_seconds: 900, requested: false, has_deadline: false, consensus: false },
+        // judged under an enforce judgement: keeps that mode and settles by it
+        { id: SESSION_JUDGED_ENFORCE, state: "judged", judge_mode: "enforce", judging_duration_seconds: 900, requested: true, has_deadline: true, consensus: true },
+        // judged under shadow: the judge never reached the session, back to aggregated, mode off
+        { id: SESSION_JUDGED_SHADOW, state: "aggregated", judge_mode: "off", judging_duration_seconds: 900, requested: false, has_deadline: false, consensus: false },
+        // window_closed
+        { id: SESSION_OLD_OPEN, state: "window_closed", judge_mode: "off", judging_duration_seconds: 900, requested: false, has_deadline: false, consensus: false },
+        // collecting: the turnover captures at close, so nothing yet
+        { id: SESSION_NEW_OPEN, state: "collecting", judge_mode: null, judging_duration_seconds: null, requested: false, has_deadline: false, consensus: false },
+      ]);
+      const stamps = await rows(db`
+        SELECT id, window_closes_at, convened_at FROM swarm_sessions
+         WHERE id IN (${SESSION_AGGREGATED}, ${SESSION_JUDGED_ENFORCE}, ${SESSION_JUDGED_SHADOW}, ${SESSION_OLD_OPEN}) ORDER BY convened_at`);
+      expect(stamps.map((r) => [r.id, (r.window_closes_at as Date).toISOString(), (r.convened_at as Date).toISOString()])).toEqual([
+        [SESSION_AGGREGATED, "2026-09-10T12:00:00.000Z", "2026-09-10T11:00:00.000Z"],
+        [SESSION_JUDGED_ENFORCE, "2026-09-11T12:00:00.000Z", "2026-09-11T11:00:00.000Z"],
+        [SESSION_JUDGED_SHADOW, "2026-09-12T12:00:00.000Z", "2026-09-12T11:00:00.000Z"],
+        [SESSION_OLD_OPEN, "2026-09-20T12:00:00.000Z", "2026-09-20T06:00:00.000Z"],
+      ]);
+      // The enforce judgement's own instant becomes the request and the consensus; the deadline is that plus the duration.
+      const [je] = await rows(db`
+        SELECT judging_requested_at, judging_deadline_at, consensus_recorded_at FROM swarm_sessions WHERE id = ${SESSION_JUDGED_ENFORCE}`);
+      expect([je!.judging_requested_at, je!.judging_deadline_at, je!.consensus_recorded_at].map((d) => (d as Date).toISOString())).toEqual([
+        "2026-09-11T12:30:00.000Z",
+        "2026-09-11T12:45:00.000Z",
+        "2026-09-11T12:30:00.000Z",
+      ]);
+    });
+
+    test("the scheduler's own calls publish the window_closed, aggregated and judged sessions and the collecting one turns over and settles, with no operator step", async () => {
+      await withUpgradedDatabase(async () => {
+        // window_closed and both aggregated (the shadow-judged one was returned to aggregated): judge off, so not_judged.
+        for (const id of [SESSION_OLD_OPEN, SESSION_AGGREGATED, SESSION_JUDGED_SHADOW]) {
+          expect(await settleAsScheduler(id)).toEqual({ requested: "off", outcome: "not_judged" });
+        }
+        // judged under enforce: finalize decides `judged` from the stored instants (consensus at or before the deadline).
+        const fin = await epoch.finalizeEpoch(SESSION_JUDGED_ENFORCE);
+        expect(fin).toMatchObject({ ok: true, state: "published", outcome: "judged" });
+        // collecting: its window closed on the subject's grid long ago, the turnover captures and the chain settles it.
+        const turned = await epoch.turnOverEpoch("subj-1", SESSION_NEW_OPEN);
+        expect(turned.ok).toBe(true);
+        expect(await settleAsScheduler(SESSION_NEW_OPEN)).toEqual({ requested: "off", outcome: "not_judged" });
+      });
+      const states = await rows(db`
+        SELECT id, state, judging_outcome FROM swarm_sessions
+         WHERE id IN (${SESSION_OLD_OPEN}, ${SESSION_AGGREGATED}, ${SESSION_JUDGED_ENFORCE}, ${SESSION_JUDGED_SHADOW}, ${SESSION_NEW_OPEN})
+         ORDER BY convened_at`);
+      expect(states).toEqual([
+        { id: SESSION_AGGREGATED, state: "published", judging_outcome: "not_judged" },
+        { id: SESSION_JUDGED_ENFORCE, state: "published", judging_outcome: "judged" },
+        { id: SESSION_JUDGED_SHADOW, state: "published", judging_outcome: "not_judged" },
+        { id: SESSION_OLD_OPEN, state: "published", judging_outcome: "not_judged" },
+        { id: SESSION_NEW_OPEN, state: "published", judging_outcome: "not_judged" },
+      ]);
+    });
+
+    test("a session the old driver was judging when 0089 deleted its swarm.judge job reaches the judge through the stream under enforce, and publishes when the deadline passes", async () => {
+      // The planted judge was switched off by 0056, so this run's sessions took
+      // `off`. A production judge in `enforce` needs the same migration run
+      // against the same shapes, so the migration's own backfill block is
+      // executed here, from the file, over fresh legacy-shaped rows.
+      const sqlText = readFileSync(join(MIGRATIONS_DIR, "0091_session_judging_duration.sql"), "utf8");
+      const block = /\nDO \$\$[\s\S]*?\n\$\$;/.exec(sqlText)?.[0];
+      expect(block).toBeDefined();
+      const legacyWindowClosed = "00000000-0000-4000-8000-00000000a0b1";
+      const legacyAggregated = "00000000-0000-4000-8000-00000000a0b2";
+      await db.begin(async (tx) => {
+        await tx.unsafe("SET LOCAL ROLE rm_owner");
+        await tx`UPDATE swarm_judge_config SET mode = 'enforce', model = 'test/model' WHERE id = 1`;
+        await tx`UPDATE swarm_members SET operator = 'robotmoney' WHERE id = 'm-judge'`;
+        await tx`INSERT INTO swarm_sessions (id, subject_id, subject_name, state, window_closes_at, convened_at) VALUES
+          (${legacyWindowClosed}, 'subj-1', 'Subject One', 'window_closed', '2026-09-13T12:00:00Z', '2026-09-13T11:00:00Z'),
+          (${legacyAggregated},   'subj-1', 'Subject One', 'aggregated',   '2026-09-14T12:00:00Z', '2026-09-14T11:00:00Z')`;
+        await tx`INSERT INTO swarm_recommendations (session_id, member_id, subject_id, date, nonce, stance, payload, signature, verified, revision) VALUES
+          (${legacyWindowClosed}, 'm-alpha', 'subj-1', '2026-09-13', 'n-lc-1', 'buy', '{"take":"a"}', 'sig-lc-1', true, 1),
+          (${legacyAggregated},   'm-alpha', 'subj-1', '2026-09-14', 'n-lc-2', 'buy', '{"take":"a"}', 'sig-lc-2', true, 1)`;
+        await tx.unsafe(block!);
+      });
+      await withUpgradedDatabase(async () => {
+        expect(await settleAsScheduler(legacyWindowClosed)).toEqual({ requested: "judging" });
+        expect(await settleAsScheduler(legacyAggregated)).toEqual({ requested: "judging" });
+        const pending = (await domain.pendingJudgingFor("m-judge")).map((p) => p.sessionId);
+        expect(pending).toContain(legacyWindowClosed);
+        expect(pending).toContain(legacyAggregated);
+        // No judge answers: the stored deadline is the scheduler's only timer.
+        await db`UPDATE swarm_sessions SET judging_deadline_at = now() - interval '1 second' WHERE id IN (${legacyWindowClosed}, ${legacyAggregated})`;
+        for (const id of [legacyWindowClosed, legacyAggregated]) {
+          expect(await epoch.finalizeEpoch(id)).toMatchObject({ ok: true, state: "published", outcome: "no_consensus" });
+        }
+      });
+    }, 60_000);
   });
 }
 
