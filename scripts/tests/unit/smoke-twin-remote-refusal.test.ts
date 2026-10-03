@@ -66,7 +66,7 @@ describe("the twin tooling never targets a remote database", () => {
     expect("error" in plan).toBe(false);
     if ("error" in plan) return;
     expect(plan.args).toContain("--local");
-    expect(plan.args).toContain("dump");
+    expect(plan.args.some((a) => a === "dump" || a.startsWith("dump="))).toBe(true);
     for (const flag of ["--db", "--external-pg", "--remote", "--local volume"]) {
       expect(plan.args.join(" ")).not.toContain(flag);
       expect("error" in planTwin([flag])).toBe(true);

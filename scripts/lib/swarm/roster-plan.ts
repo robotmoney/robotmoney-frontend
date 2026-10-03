@@ -46,6 +46,8 @@ export interface RosterRow {
   name: string;
   lens?: string | null;
   status: string;
+  /** 'judge' rows are never seated: a judge is refused a take. Absent = analyst. */
+  role?: string;
 }
 
 export type AdmissionDecision =
@@ -111,6 +113,8 @@ export function planAdoptions(
   const seenNames = new Set<string>();
   for (const m of roster) {
     if (m.status !== "active") continue;
+    // A judge files no takes (domain.ts refuses them), so it is never a seat.
+    if (m.role === "judge") continue;
     if (seatedIds.has(m.id)) continue;
     if (!isAdoptable(m)) continue;
     const key = m.name.trim().toLowerCase();

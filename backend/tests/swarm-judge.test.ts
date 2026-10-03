@@ -345,6 +345,10 @@ test("a judgement signed over a DIFFERENT take set is refused as stale — the d
   expect(await judgementCount(session.id)).toBe(0);
 });
 
+test("JUDGE_PROMPT_HASH equals the value v0.5.1 to v0.5.4 recorded (one position per member per disagreement)", () => {
+  expect(JUDGE_PROMPT_HASH).toBe("7765d57eede1ce88906fa4f44944351caec7d94cccc77db50efe0573317a3beb");
+});
+
 test("promptHash pins the instructions and inputsDigest pins exactly the takes and brief consumed", async () => {
   const { session, subj, date } = await aggregatedSession("judge-digest");
   const input = await frozenInput(session.id);

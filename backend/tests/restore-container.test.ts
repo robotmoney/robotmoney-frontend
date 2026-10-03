@@ -3,11 +3,11 @@
 // for real by backend/scripts/upgrades/0.2.1-to-0.2.2/restore-check.ts and
 // stage-rehearsal.ts against an actual backup, which this test suite cannot
 // safely fabricate (it would need a real gpg-encrypted pg_dump).
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { resolveBackupFiles } from "../../scripts/lib/restore-container.ts";
+import { resolveBackupFiles, SHM_FLAGS } from "../../scripts/lib/restore-container.ts";
 
 describe("resolveBackupFiles", () => {
   let dir: string;
@@ -52,5 +52,14 @@ describe("resolveBackupFiles", () => {
     // directory would produce (present or missing depending on this host).
     const r = resolveBackupFiles();
     expect(typeof r).toBe("object");
+  });
+});
+
+describe("restored Postgres container", () => {
+  test("gets 1 GB of /dev/shm: Docker's 64 MB default dies on parallel queries against a production-size restore", () => {
+    expect([...SHM_FLAGS]).toEqual(["--shm-size", "1g"]);
+    const src = readFileSync(join(import.meta.dir, "../../scripts/lib/restore-container.ts"), "utf8");
+    // The flags must actually be spread into the docker run, not merely exported.
+    expect(src).toContain("...SHM_FLAGS,");
   });
 });

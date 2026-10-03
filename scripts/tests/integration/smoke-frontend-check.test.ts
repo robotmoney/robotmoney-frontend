@@ -46,7 +46,7 @@ function walletPayload(provenance: "live" | "stub" = "live", legOverrides: Recor
 // the reported incident produced: a proxy or static fallback served the SPA
 // shell with HTTP 200 and text/html, so a consumer that only checks the status
 // code sails past it and then fails on parse.
-type RegimeAnswer = "ok" | "spa-shell";
+type RegimeAnswer = "ok" | "spa-shell" | "empty" | "half-empty";
 
 function regimePayload() {
   return {
@@ -77,6 +77,8 @@ function startStubBackend(
             headers: { "Content-Type": "text/html; charset=utf-8" },
           });
         }
+        if (regime === "empty") return Response.json({ latest: null, history: [], staleness: null });
+        if (regime === "half-empty") return Response.json({ latest: null, history: [{ date: "2026-09-10", composite: 0.41, regime: "neutral" }], staleness: null });
         return Response.json(regimePayload());
       }
       const rel = url.pathname === "/" ? "/index.html" : url.pathname;
@@ -132,6 +134,26 @@ describe("scripts/smoke-frontend-check.ts (smoke readiness gate self-test)", () 
       expect(exitCode).not.toBe(0);
       expect(stdout).toContain(ROUTES.dashboards.regimeSnapshots);
       expect(stdout).toContain("text/html");
+    } finally {
+      backend.stop(true);
+    }
+  }, 20_000);
+
+  // A fresh boot writes no regime snapshot (the producer's schedule does), so a
+  // well-formed empty answer passes. A latest-less answer that still has history does not.
+  test("exits 0 when the regime snapshot is well-formed but empty (no producer run yet)", async () => {
+    const backend = startStubBackend({}, walletPayload("live"), "empty");
+    try {
+      expect((await runCheck(backend)).exitCode).toBe(0);
+    } finally {
+      backend.stop(true);
+    }
+  }, 20_000);
+
+  test("exits non-zero when the regime snapshot has history but no latest row", async () => {
+    const backend = startStubBackend({}, walletPayload("live"), "half-empty");
+    try {
+      expect((await runCheck(backend)).exitCode).not.toBe(0);
     } finally {
       backend.stop(true);
     }

@@ -48,10 +48,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { SOURCE_TOLERANCES, rawIndicatorSourceKey, toleranceFor } from "../../../src/analytics/source-tolerance.ts";
-// The release this repair shipped in. On releases-0.5.x it is read from
-// ./release.ts; that file and the rest of the 0.5.x upgrade chain reach main
-// with the v0.5.x records (issue #1074), so it is written out here until then.
-const TAG_GLOB = "v0.5.2*";
+import { TAG_GLOB } from "./release.ts";
 
 type Db = postgres.Sql<{}>;
 type Tx = postgres.TransactionSql<{}>;

@@ -33,6 +33,7 @@ import {
   triggerNames,
 } from "../src/db/append-only-guard.ts";
 const MEMBER_KEYS_MIGRATION = "0050_swarm_member_keys_append_only.sql";
+import { checkAnalyticsLedgerGuard } from "../src/db/analytics-ledger-guard.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { roleUrl } from "./support/cluster.ts";
 
@@ -503,6 +504,57 @@ describe("the runtime check under the PRODUCTION role (rm_app), which holds no D
          FOR EACH ROW EXECUTE FUNCTION public.${family.functionName}()`,
       );
       await fixtureDb.unsafe(`ALTER TABLE public.source_fetches ENABLE ALWAYS TRIGGER ${names.row}`);
+    }
+  });
+});
+
+describe("a READ-ONLY session (a managed-Postgres failover in progress)", () => {
+  // A session that cannot write has said nothing about the guard: the answer is
+  // "unavailable" (serve, unchecked), never "disarmed" (refuse to boot).
+  let ro: postgres.Sql<{}>;
+
+  beforeAll(() => {
+    ro = postgres(process.env.DATABASE_URL!, { max: 1, onnotice: () => {}, connection: { default_transaction_read_only: true } });
+  });
+
+  afterAll(async () => {
+    await ro?.end({ timeout: 5 });
+  });
+
+  test("the session really is read-only (25006 on a DELETE)", async () => {
+    let raised: { code?: string } | null = null;
+    try {
+      await ro.unsafe(`DELETE FROM public.swarm_members WHERE false`);
+    } catch (e) {
+      raised = e as { code?: string };
+    }
+    expect(raised?.code).toBe("25006");
+  });
+
+  test("checkAppendOnlyGuard answers 'unavailable', not 'disarmed'", async () => {
+    const result = await checkAppendOnlyGuard(ro);
+    expect(result.status).toBe("unavailable");
+    expect(result.problems).toEqual([]);
+  });
+
+  test("checkAnalyticsLedgerGuard does not answer 'disarmed'", async () => {
+    const result = await checkAnalyticsLedgerGuard(ro);
+    expect(result.status).not.toBe("disarmed");
+  });
+
+  test("a dropped trigger is still 'disarmed' on a read-only session", async () => {
+    await fixtureDb.unsafe(`DROP TRIGGER swarm_recommendations_append_only_row ON swarm_recommendations`);
+    try {
+      const result = await checkAppendOnlyGuard(ro);
+      expect(result.status).toBe("disarmed");
+      expect(result.problems).toEqual([
+        expect.stringContaining("swarm_recommendations: the row-level trigger 'swarm_recommendations_append_only_row' is MISSING"),
+      ]);
+    } finally {
+      await fixtureDb.unsafe(
+        `CREATE TRIGGER swarm_recommendations_append_only_row BEFORE DELETE ON swarm_recommendations
+         FOR EACH ROW EXECUTE FUNCTION rm_append_only_guard()`,
+      );
     }
   });
 });

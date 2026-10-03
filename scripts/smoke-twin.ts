@@ -21,7 +21,11 @@
 //                     pin alone would select. Nothing here touches the judge:
 //                     the judge is a participant (smoke spec §6.2), and no
 //                     boot writes judge mode (D48, D53).
-//   4. --migrate      ALWAYS. No mode implies it (spec §4.3, §5), and a dump
+//   4. slim dump     BY DEFAULT, into <backup dir>-twin. The analytics ledger's
+//                     rows are skipped (schema only; --full-dump keeps them).
+//                     A slim dump is not a backup, so it never lands in the
+//                     backup directory itself.
+//   5. --migrate      ALWAYS. No mode implies it (spec §4.3, §5), and a dump
 //                     carries production's schema, which the checkout is
 //                     usually ahead of. Absent, the boot refuses the stale
 //                     schema rather than serving it.
@@ -63,9 +67,21 @@ const log = (m: string) => console.log(`[${NAME}] ${m}`);
 export interface SmokeTwinPlan {
   /** Run smoke:capture first? */
   capture: boolean;
+  /** Capture with --twin-slim (ledger rows skipped)? False only under --full-dump. */
+  slim: boolean;
   /** The argv handed to scripts/smoke.ts. */
   args: string[];
-  backupDir?: string;
+  backupDir: string;
+}
+
+/**
+ * The twin's own dump directory, beside the backup directory and never in it:
+ * smoke-twin-capture.ts's twinOutDir(), restated here because this file runs
+ * from the repo root and does not import backend/. A slim dump is not a backup,
+ * so it must never be what a restore-from-backup finds by `.last-stamp`.
+ */
+export function defaultTwinDir(env: Record<string, string | undefined> = process.env): string {
+  return `${env.RM_BACKUP_DIR?.trim() || join(env.HOME ?? "/root", "rm-backup-v022")}-twin`;
 }
 
 /**
@@ -74,7 +90,7 @@ export interface SmokeTwinPlan {
  */
 export function planTwin(passthrough: readonly string[]): SmokeTwinPlan | { error: string } {
   // `--no-tui` is gone with the TUI (smoke spec §1): refused as unknown.
-  const known = new Set(["--reuse", "--backup-dir"]);
+  const known = new Set(["--reuse", "--backup-dir", "--full-dump"]);
   for (let i = 0; i < passthrough.length; i++) {
     const a = passthrough[i]!;
     if (!a.startsWith("--")) return { error: `unexpected argument "${a}".` };
@@ -88,7 +104,7 @@ export function planTwin(passthrough: readonly string[]): SmokeTwinPlan | { erro
     }
   }
   const i = passthrough.indexOf("--backup-dir");
-  const backupDir = i >= 0 ? passthrough[i + 1] : undefined;
+  const backupDir = i >= 0 ? passthrough[i + 1]! : defaultTwinDir();
 
   // `--local dump`, --static-port and --cadence fast are NOT optional here: the
   // first is the restored production copy (spec §5: a twin is a use case, not a
@@ -98,9 +114,9 @@ export function planTwin(passthrough: readonly string[]): SmokeTwinPlan | { erro
   // `--migrate` is explicit for the same reason: no mode implies it, and a
   // fresh dump is on production's schema, which the checkout is usually ahead
   // of. Without it the boot refuses the stale schema instead of serving it.
-  const args = ["--local", backupDir ? `dump=${backupDir}` : "dump", "--migrate", "--static-port", "--cadence", "fast"];
+  const args = ["--local", `dump=${backupDir}`, "--migrate", "--static-port", "--cadence", "fast"];
 
-  return { capture: !passthrough.includes("--reuse"), args, ...(backupDir ? { backupDir } : {}) };
+  return { capture: !passthrough.includes("--reuse"), slim: !passthrough.includes("--full-dump"), args, backupDir };
 }
 
 if (import.meta.main) {
@@ -112,7 +128,7 @@ if (import.meta.main) {
   const plan = planTwin(process.argv.slice(2));
   if ("error" in plan) {
     console.error(`[${NAME}] ${plan.error}`);
-    console.error(`[${NAME}] usage: bun run smoke:twin [-- --reuse] [--backup-dir DIR]`);
+    console.error(`[${NAME}] usage: bun run smoke:twin [-- --reuse] [--backup-dir DIR] [--full-dump]`);
     process.exit(2);
   }
 
@@ -146,7 +162,8 @@ if (import.meta.main) {
 
   if (plan.capture) {
     const captureArgs = ["bun", "run", "--cwd", join(repoRoot, "backend"), "scripts/smoke-twin-capture.ts"];
-    if (plan.backupDir) captureArgs.push("--out", plan.backupDir);
+    captureArgs.push("--out", plan.backupDir);
+    if (plan.slim) captureArgs.push("--twin-slim");
     log("capturing the latest dump from the production replica…");
     const cap = Bun.spawn(captureArgs, {
       cwd: repoRoot,
