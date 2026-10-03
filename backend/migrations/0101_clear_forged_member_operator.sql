@@ -8,8 +8,8 @@
 -- `operator` of `robotmoney`." The migration clears `operator` on a member row
 -- only when all of these hold: `lower(trim(operator)) = 'robotmoney'`; a member
 -- self-write, through the path issue #925 closed, could have set it; no later
--- admin write named the operator; the member is not seeded from the roster, so
--- `themis` keeps its operator. "It applies once per database, as every
+-- admin write named the operator; the member is not an in-house seat, so
+-- `athena`, `noop-analyst`, `robot-money` and `themis` keep their operator. "It applies once per database, as every
 -- migration does."
 -- Why: the judge's third-party gate passes a member whose operator is
 -- `robotmoney` (D52, `submitJudgement`, smoke-production-spec.md §6.2), so a
@@ -40,6 +40,11 @@
 --     every run and logs nothing. The judge of record, themis, is one of them:
 --     clearing its operator would fail D52's third-party gate for the real
 --     judge. A roster member is never touched.
+--   * `noop-analyst`, an in-house seat on production whose manifest operator is
+--     `robotmoney` (frontend/public/data/swarm/manifests/members/) but which
+--     LIVE_ROSTER does not seed (issue #1120). It wrote its profile through the
+--     self-write route, so it matches the forgery signature, yet its value is
+--     genuine. It is exempt by handle, like the three seeded seats.
 --   * the one-time v0 archive backfill (scripts/v0-seed-bootstrap.ts), which
 --     also logs nothing. It is recognised by what it leaves: a member with no
 --     self-write row at all never wrote its own operator, so it is not touched.
@@ -47,7 +52,7 @@
 -- THE RULE. A member's operator is cleared when `lower(trim(operator))` is
 -- `robotmoney`, the member has a self-write row that could have set it, no
 -- admin row naming `operator` came after the newest such self-write
--- (audit_log.id order), and the member is not a roster member. Everything else
+-- (audit_log.id order), and the member is not an in-house seat. Everything else
 -- — another value, admin-written, roster-seeded, archive-seeded, or never
 -- written — is left exactly as it is.
 --
@@ -64,10 +69,10 @@
 
 DO $$
 DECLARE
-  -- The in-house roster, whose members the seed writes `robotmoney` for. Kept
-  -- in step with LIVE_ROSTER in src/swarm/roster-seed.ts by
-  -- backend/tests/member-operator-provenance.test.ts.
-  roster_handles text[] := ARRAY['athena', 'robot-money', 'themis'];
+  -- The in-house seats: the three LIVE_ROSTER members (src/swarm/roster-seed.ts)
+  -- plus `noop-analyst`, seated on production but not seeded. Kept in step with
+  -- the manifests by backend/tests/member-operator-provenance.test.ts.
+  roster_handles text[] := ARRAY['athena', 'noop-analyst', 'robot-money', 'themis'];
   forged record;
 BEGIN
   FOR forged IN
