@@ -201,6 +201,7 @@ R3.2 Prepare a rehearsal credential file with **spoofed** keys, never the produc
 
 ```bash
 export RM_ENV=stage
+export PROJECTS_SOURCE=live   # --static-port runs the containers as prod; without this the boot refuses (R6.2a)
 bun smoke --local dump=<R2 dump dir> --instance rehearse-060 \
   --credentials rehearsal-creds.json --spoof-keys --migrate --static-port
 ```
