@@ -880,7 +880,7 @@ describe("the real snapshot (backend/schema/) — fingerprint, preflight, bootst
         judging_duration_seconds: number;
       }[];
       expect(subject?.status).toBe("active");
-      expect(subject?.epoch_duration_seconds).toBe(3600);
+      expect(subject?.epoch_duration_seconds).toBe(21600);
       expect(subject?.epoch_anchor.toISOString()).toBe("1970-01-01T00:00:00.000Z");
       expect(subject?.judging_duration_seconds).toBe(900);
 

@@ -2474,7 +2474,7 @@ CREATE TABLE public.swarm_subjects (
     last_reviewed date,
     version integer DEFAULT 1 CONSTRAINT committee_subjects_version_not_null NOT NULL,
     updated_at timestamp with time zone DEFAULT now() CONSTRAINT committee_subjects_updated_at_not_null NOT NULL,
-    epoch_duration_seconds integer DEFAULT 3600 NOT NULL,
+    epoch_duration_seconds integer DEFAULT 21600 NOT NULL,
     epoch_anchor timestamp with time zone DEFAULT '1970-01-01 00:00:00+00'::timestamp with time zone NOT NULL,
     judging_duration_seconds integer DEFAULT 900 NOT NULL,
     CONSTRAINT swarm_subjects_epoch_duration_seconds_check CHECK ((epoch_duration_seconds > 0)),
