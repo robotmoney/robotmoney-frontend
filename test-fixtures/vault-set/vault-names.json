@@ -1,0 +1,24 @@
+{
+  "names": [
+    {
+      "name": "Robot Money USDC",
+      "slug": "rmusdc",
+      "risk_label": "STABLE_YIELD"
+    },
+    {
+      "name": "Robot Money Protocol",
+      "slug": "rmproto",
+      "risk_label": "VOLATILE"
+    },
+    {
+      "name": "Robot Money Agent Tokens",
+      "slug": "rmagent",
+      "risk_label": "SPECULATIVE"
+    },
+    {
+      "name": "Robot Money RWA",
+      "slug": "rmrwa",
+      "risk_label": "SPECULATIVE"
+    }
+  ]
+}

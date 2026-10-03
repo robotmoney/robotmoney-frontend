@@ -131,6 +131,33 @@
         }
       }
     },
+    "/api/dashboards/robotmoney-vaults": {
+      "get": {
+        "operationId": "getRobotmoneyVaults",
+        "summary": "The four Robot Money vaults read from the deployment manifests",
+        "description": "Which Robot Money vaults exist (rmUSDC, rmPROTO, rmAGENT, rmRWA), which are paused, their risk labels, and the gateway, router and registry addresses, all read from the deployment manifests core writes under deployments/<chain>/. Answers 200 with an empty `vaults` list when no deployment manifest is configured. No address is hard-coded: a vault missing from the manifests is absent here.\n\nResponse size: about 2 KB.\n\nResponse type: `{ asOf, network, contracts, vaults }` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "tags": [
+          "public-read"
+        ],
+        "x-backs-pages": [
+          "https://robotmoney.network/allocation"
+        ],
+        "x-contract-type": "{ asOf, network, contracts, vaults }",
+        "responses": {
+          "200": {
+            "description": "The four Robot Money vaults read from the deployment manifests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "{ asOf, network, contracts, vaults }"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/dashboards/allocation": {
       "get": {
         "operationId": "getAllocation",

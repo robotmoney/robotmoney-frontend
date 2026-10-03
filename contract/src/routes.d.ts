@@ -9,6 +9,7 @@ export const ROUTES: {
     regimeSnapshots: string;
     researchSignal: string;
     vaultEconomics: string;
+    robotmoneyVaults: string;
     walletBalances: string;
     buybacks: string;
     tokenMetrics: string;

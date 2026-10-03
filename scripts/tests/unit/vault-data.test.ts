@@ -49,6 +49,9 @@ import {
   withRecommendation,
   portfolioTwr,
   isVaultBookReading,
+  riskLabelForName,
+  isPausedEmpty,
+  depositTarget,
 } from "../../../frontend/public/assets/js/app/lib/vault-data.js";
 import {
   _resetVaultProbe,
@@ -722,6 +725,28 @@ describe("loadVaultOverview", () => {
     expect(requests.some((u) => u.startsWith("/api/swarm"))).toBe(false);
   });
 
+  test("the contract declares the manifest-derived route, so the client reads it by default", async () => {
+    const { ROUTES } = await import("../../../frontend/public/assets/js/app/contract/routes.js");
+    expect(ROUTES.dashboards.robotmoneyVaults).toBe(VAULTS_ENDPOINT);
+    serve({ [VAULTS_ENDPOINT]: json(DEVNET) });
+    const load = await loadVaultOverview(baseAt("robotmoney.network"));
+    expect(load.source).toBe("api");
+  });
+
+  test("a manifest row's registered name and risk label win over the built-in identity; deposits use its gateway", async () => {
+    const feed = {
+      ...DEVNET,
+      contracts: { gateway: "0x" + "5".repeat(40), router: "0x" + "4".repeat(40), registry: "0x" + "3".repeat(40) },
+      vaults: DEVNET.vaults.map((r: any) => (r.slug === "rmagent" ? { ...r, registeredName: "Manifest Name", riskLabel: "VOLATILE" } : r)),
+    };
+    serve({ [VAULTS_ENDPOINT]: json(feed) });
+    const load = await loadVaultOverview({ ...baseAt("robotmoney.network"), endpoint: VAULTS_ENDPOINT });
+    const agent = bySlug(load.overview, "rmagent");
+    expect(agent.registeredName).toBe("Manifest Name");
+    expect(agent.riskLabel).toBe("VOLATILE");
+    expect(depositTarget(load.overview)).toEqual({ gateway: feed.contracts.gateway, router: feed.contracts.router });
+  });
+
   test("the route absent (404): the Base feed with the archive's recommendation, on a local host", async () => {
     serve({ [VAULTS_ENDPOINT]: statusOnly(404), "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS) });
     const load = await loadVaultOverview(baseAt("127.0.0.1"));
@@ -737,13 +762,6 @@ describe("loadVaultOverview", () => {
     serve({ [VAULTS_ENDPOINT]: spaShell, "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS) });
     const load = await loadVaultOverview({ ...baseAt("127.0.0.1"), endpoint: VAULTS_ENDPOINT });
     expect(load.source).toBe("legacy");
-  });
-
-  test("the route is not requested until the contract declares it", async () => {
-    serve({ [VAULTS_ENDPOINT]: json(DEVNET), "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS) });
-    const load = await loadVaultOverview(baseAt("robotmoney.network"));
-    expect(load.source).toBe("legacy");
-    expect(requests.some((u) => u.split("?")[0] === VAULTS_ENDPOINT)).toBe(false);
   });
 
   test("on Base the policy's targets are the vaults' targets until a router reports its own (RM-115)", async () => {
@@ -1122,5 +1140,62 @@ describe("a reading of rmUSDC's own book", () => {
     expect(isVaultBookReading({ positions: [{ token: "MORPHO" }, { token: "AAVE" }, { token: "COMPOUND" }, { token: "USDC" }] })).toBe(true);
     expect(isVaultBookReading({ positions: [{ token: "ROBOT" }, { token: "ETH" }, { token: "USDC" }, { token: "rmUSDC" }, { token: "ROBOTMONEY" }] })).toBe(false);
     expect(isVaultBookReading({ positions: [] })).toBe(false);
+  });
+});
+
+// The one-deployment-scheme contract set (frontend 1103): fixtures written
+// with the new manifest keys, four vaults, rmAGENT deployed empty and paused,
+// rmRWA a plain basket row.
+describe("new contract set fixture", () => {
+  const SET = JSON.parse(readFileSync(join(repoRoot, "test-fixtures/vault-set/overview.json"), "utf8"));
+  const NAMES = JSON.parse(readFileSync(join(repoRoot, "test-fixtures/vault-set/vault-names.json"), "utf8"));
+  const row = (o: any, slug: string) => o.vaults.find((v: any) => v.slug === slug);
+
+  test("four vaults render from the registry, each with its registered name and risk label", () => {
+    const o = normalizeOverview(SET);
+    expect(o.vaults.map((v: any) => v.slug)).toEqual(["rmusdc", "rmagent", "rmproto", "rmrwa"]);
+    for (const v of o.vaults) expect(v.registeredName).toBe(NAMES.names.find((n: any) => n.slug === v.slug).name);
+    expect(o.vaults.map((v: any) => v.riskLabel)).toEqual(["STABLE_YIELD", "SPECULATIVE", "VOLATILE", "SPECULATIVE"]);
+  });
+
+  test("name to risk label matches the shared fixture for all four registered names, and null for an unknown name", () => {
+    for (const n of NAMES.names) expect(riskLabelForName(n.name)).toBe(n.risk_label);
+    expect(riskLabelForName("Robot Money Mystery")).toBeNull();
+    expect(riskLabelForName("")).toBeNull();
+  });
+
+  test("older indexer names still classify to the same labels", () => {
+    expect(riskLabelForName("RM Protocol")).toBe("VOLATILE");
+    expect(riskLabelForName("RM RWA / Thematic")).toBe("SPECULATIVE");
+  });
+
+  test("rmAGENT is paused with zero assets and no fabricated figures", () => {
+    const agent = row(normalizeOverview(SET), "rmagent");
+    expect(statusLabel(agent)).toBe("Paused");
+    expect(agent.tvlUsd).toBe(0);
+    expect(agent.sharePrice).toBeNull();
+    expect(agent.holdings).toEqual([]);
+    expect(isPausedEmpty(agent)).toBe(true);
+    expect(canDeposit(agent, SET.network)).toBe(false);
+  });
+
+  test("rmRWA is a basket row holding deSPXA as a plain asset", () => {
+    const rwa = row(normalizeOverview(SET), "rmrwa");
+    expect(rwa.kind).toBe("basket");
+    expect(rwa.assets.map((a: any) => a.symbol)).toEqual(["deSPXA"]);
+    expect(isPausedEmpty(rwa)).toBe(false);
+    expect(row(normalizeOverview(SET), "rmusdc").kind).toBe("lending");
+  });
+
+  test("a paused row with a balance or holdings is not empty", () => {
+    expect(isPausedEmpty({ status: "paused", tvlUsd: 5 })).toBe(false);
+    expect(isPausedEmpty({ status: "paused", tvlUsd: 0, holdings: [{ label: "x" }] })).toBe(false);
+    expect(isPausedEmpty({ status: "active", tvlUsd: 0 })).toBe(false);
+  });
+
+  test("deposits go to the gateway that carries the router, both from the overview", () => {
+    const t = depositTarget(normalizeOverview(SET));
+    expect(t).toEqual({ gateway: SET.contracts.gateway, router: SET.contracts.router });
+    expect(depositTarget(normalizeOverview({ ...SET, contracts: { gateway: SET.contracts.gateway }, router: { address: null } }))).toBeNull();
   });
 });

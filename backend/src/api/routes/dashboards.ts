@@ -4,6 +4,8 @@
 // shapes are unchanged.
 import { fetchRegimeSnapshots, fetchLatestResearchSignal, toRegimeSummary } from "../../analytics/report/projections.ts";
 import { fetchVaultEconomics } from "../../chain/vault-economics.ts";
+import { buildVaultsOverview, type VaultReads } from "../../chain/vault-overview.ts";
+import { config } from "../../config.ts";
 import { fetchPersistedWalletBalances } from "../../chain/wallet-balances.ts";
 // Live-data contract (#50 honesty): each chain/db module owns its own short-TTL
 // cache + degrade-to-stale/seed logic, so these handlers stay thin adapters.
@@ -53,6 +55,26 @@ export async function getResearchSignal(key: string, summaryView = false) {
 // share price, adapters, 7-day APY), degraded/stale on RPC failure.
 export async function getVaultEconomics() {
   return fetchVaultEconomics();
+}
+
+// GET /api/dashboards/robotmoney-vaults → the manifest-derived four-vault
+// overview (frontend 1103), or null (404) when no DEPLOYMENT_MANIFEST_DIR is
+// set. Only rmUSDC has a TVL reader today; the other rows carry null figures,
+// never invented ones.
+export async function getRobotmoneyVaults(
+  set = config.deployment,
+  readEconomics: typeof fetchVaultEconomics = fetchVaultEconomics,
+) {
+  const reads: VaultReads = {};
+  if (set.vaults.some((v) => v.key === "USDC")) {
+    try {
+      const e = await readEconomics();
+      reads.USDC = { tvlUsd: e.tvlUsd, sharePrice: e.sharePrice };
+    } catch {
+      // No reading: the row shows null figures.
+    }
+  }
+  return buildVaultsOverview(set, reads);
 }
 
 // GET /api/dashboards/wallet-balances → prop-wallet valuation (issue #84) served

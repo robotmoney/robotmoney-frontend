@@ -27,7 +27,7 @@
 //   1. GET /api/dashboards/robotmoney-vaults (the four-vault read), once the
 //      contract declares it as ROUTES.dashboards.robotmoneyVaults. Its
 //      recommendation is authoritative.
-//   2. That route undeclared, or absent (404, or the SPA shell answering an
+//   2. That route undeclared, or absent (404, an empty vaults list, or the SPA shell answering an
 //      unknown path):
 //      GET /api/dashboards/vault-economics, the single Base vault, with the
 //      latest published robotmoney-allocation recommendation laid over it.
@@ -492,6 +492,10 @@ export async function loadVaultOverview({ hostname = currentHostname(), recommen
     try {
       // Authoritative: the four-vault route carries the router's weights.
       const dto = await api.get(endpoint);
+      // The backend answers 200 with no vaults when no deployment manifest is
+      // configured (a 404 would print a console error on every visit): that
+      // is the same absence as a 404.
+      if (!Array.isArray(dto?.vaults) || dto.vaults.length === 0) throw Object.assign(new Error("no manifest"), { status: 404 });
       return {
         overview: normalizeOverview(dto),
         source: "api",

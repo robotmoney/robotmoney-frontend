@@ -29,6 +29,9 @@ import { BUCKET_NOTES } from "./sleeve-notes.js";
  * @property {string} color       CATEGORICAL by published position: one hue everywhere.
  * @property {string} category
  * @property {string | null} baseAddress  The production contract on Base, where one exists.
+ * @property {string} registeredName  The name the vault registry holds (core Deploy*Vault scripts); the indexer derives risk_label from it.
+ * @property {"STABLE_YIELD" | "VOLATILE" | "SPECULATIVE"} riskLabel  Matches the registered name (core 1434).
+ * @property {"lending" | "basket"} kind  rmUSDC lends; the other three are token baskets.
  */
 
 /**
@@ -84,6 +87,9 @@ export const VAULTS = [
     legacyName: "Conservative DeFi Yield",
     bucket: "conservative_defi_yield",
     key: "defi-yield",
+    registeredName: "Robot Money USDC",
+    riskLabel: "STABLE_YIELD",
+    kind: "lending",
     color: CATEGORICAL[0],
     category: "Lending",
     // The ERC-4626 vault on Base; source of truth frontend/public/skill.md.
@@ -96,6 +102,9 @@ export const VAULTS = [
     legacyName: "Agent Tokens",
     bucket: "agent_tokens",
     key: "agent-tokens",
+    registeredName: "Robot Money Agent Tokens",
+    riskLabel: "SPECULATIVE",
+    kind: "basket",
     color: CATEGORICAL[1],
     category: "Token basket",
     baseAddress: null,
@@ -106,6 +115,9 @@ export const VAULTS = [
     name: "Protocol Tokens",
     bucket: "protocol_tokens",
     key: "protocol-tokens",
+    registeredName: "Robot Money Protocol",
+    riskLabel: "VOLATILE",
+    kind: "basket",
     color: CATEGORICAL[2],
     category: "Token basket",
     baseAddress: null,
@@ -116,6 +128,9 @@ export const VAULTS = [
     name: "Real World Assets",
     bucket: "real_world_assets",
     key: "rwa",
+    registeredName: "Robot Money RWA",
+    riskLabel: "SPECULATIVE",
+    kind: "basket",
     color: CATEGORICAL[3],
     category: "Token basket",
     baseAddress: null,
@@ -124,8 +139,53 @@ export const VAULTS = [
 
 export const VAULT_SLUGS = VAULTS.map((v) => v.slug);
 
-// The four-vault read the backend will serve (Lucas's lane). Deliberately not
-// in contract ROUTES until it exists: vault-source.js probes it and falls back.
+// Names an older indexer registered the same vaults under. Matched so a stale
+// row still classifies; never printed (core 1434 aligns the indexer).
+/** @type {Record<string, string>} */
+const OLD_REGISTERED_NAMES = {
+  "RM USDC": "rmusdc",
+  "RM Protocol": "rmproto",
+  "RM Agent Tokens": "rmagent",
+  "RM RWA / Thematic": "rmrwa",
+};
+
+// A registered vault name to its risk label, or null for a name nobody
+// registered here. Never a default: an unknown vault gets no label rather
+// than a reassuring one.
+/** @param {unknown} name @returns {"STABLE_YIELD" | "VOLATILE" | "SPECULATIVE" | null} */
+export function riskLabelForName(name) {
+  const n = String(name ?? "");
+  const slug = OLD_REGISTERED_NAMES[n];
+  const v = VAULTS.find((x) => x.registeredName === n || (slug && x.slug === slug));
+  return v ? v.riskLabel : null;
+}
+
+// A vault the manifest deployed paused and nobody has funded: shown as
+// paused with nothing in it, never with invented figures. TVL zero or
+// unreported both count as empty; any holdings or a positive TVL do not.
+/** @param {any} row */
+export function isPausedEmpty(row) {
+  if (!row || row.status !== "paused") return false;
+  const tvl = numberOrNull(row.tvlUsd);
+  const holdings = Array.isArray(row.holdings) ? row.holdings : [];
+  return (tvl === null || tvl === 0) && holdings.length === 0;
+}
+
+// Where a deposit goes: the gateway, which carries the router. Both come from
+// the deployment manifest through the overview, never from a literal here. A
+// gateway without its router is no deposit target.
+/** @param {any} overview @returns {{ gateway: string, router: string } | null} */
+export function depositTarget(overview) {
+  const rows = Array.isArray(overview?.vaults) ? overview.vaults : [];
+  const c = overview?.contracts ?? rows.find((/** @type {any} */ r) => r?.contracts?.gateway)?.contracts ?? null;
+  const gateway = typeof c?.gateway === "string" ? c.gateway : null;
+  const router = typeof c?.router === "string" ? c.router : typeof overview?.router?.address === "string" ? overview.router.address : null;
+  return gateway && router ? { gateway, router } : null;
+}
+
+// The four-vault read, derived from the deployment manifests (contract
+// ROUTES.dashboards.robotmoneyVaults). It answers 404 when no manifest is
+// configured: vault-source.js then falls back to the single-vault read.
 export const VAULTS_ENDPOINT = "/api/dashboards/robotmoney-vaults";
 
 // What each sleeve IS, keyed on the allocation DTO's bucket key: the swarm
@@ -386,9 +446,17 @@ export function normalizeOverview(source) {
       ["live", "not_on_network", "unavailable"].includes(raw.availability) ? raw.availability : "unavailable"
     );
     const tvl = numberOrNull(raw.tvlUsd);
+    // The manifest row names the vault and its risk label; the built-in
+    // identity is only the fallback for a feed that does not carry them.
+    const manifest = {
+      registeredName: typeof raw.registeredName === "string" ? raw.registeredName : identity.registeredName,
+      riskLabel: ["STABLE_YIELD", "VOLATILE", "SPECULATIVE"].includes(raw.riskLabel) ? raw.riskLabel : identity.riskLabel,
+      kind: raw.kind === "lending" || raw.kind === "basket" ? raw.kind : identity.kind,
+    };
     return {
       ...raw,
       ...identity,
+      ...manifest,
       availability,
       status: raw.status ?? null,
       address: raw.address ?? null,
@@ -720,8 +788,12 @@ export function statusLabel(row, networkLabel) {
 // The one production deposit path: rmUSDC on Base, at the address skill.md
 // names, live and accepting deposits. Anything else (another vault, test
 // data, the devnet, a different contract) gets no deposit call to action.
-/** @param {any} row @param {any} network @param {any} [flags] */
-export function canDeposit(row, network, flags) {
+// `target` is depositTarget(overview): when the manifest names the gateway and
+// router, the row's own address (the manifest's vault) is the one to deposit
+// into, so a redeploy needs no edit here. Without it the built-in rmUSDC
+// address is the only one accepted.
+/** @param {any} row @param {any} network @param {any} [flags] @param {{ gateway: string, router: string } | null} [target] */
+export function canDeposit(row, network, flags, target = null) {
   const f = flags ?? row?.flags ?? null;
   return (
     row?.slug === "rmusdc" &&
@@ -729,7 +801,8 @@ export function canDeposit(row, network, flags) {
     network?.testData !== true &&
     row?.availability === "live" &&
     typeof row?.address === "string" &&
-    row.address.toLowerCase() === VAULTS[0].baseAddress &&
+    (row.address.toLowerCase() === VAULTS[0].baseAddress ||
+      (target !== null && row.contracts?.vault?.toLowerCase?.() === row.address.toLowerCase())) &&
     !["paused", "retired", "shutdown"].includes(row?.status) &&
     !f?.shutdown &&
     !f?.depositsPaused

@@ -410,6 +410,9 @@
             <div class="rr-sec__head">
               <h2 class="rr-sec__h" id="dep-h">Deposit</h2>
             </div>
+            <template x-if="depositTarget()">
+              <p class="rr-note" data-testid="deposit-gateway">Deposits go through the gateway <code x-text="depositTarget().gateway"></code>.</p>
+            </template>
             <a class="rr-cta" href="/deposit" style="margin-top:0"><span>Deposit skill</span><span aria-hidden="true">→</span></a>
           </section>
         </template>

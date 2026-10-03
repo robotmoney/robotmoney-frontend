@@ -61,3 +61,8 @@ jobs:
       # and scripts/tests/unit/no-swarm-email.test.ts now refuses the feature's
       # return outright — a strictly stronger guard than scanning for a
       # credential belonging to a vendor nothing calls.
+      # One deployment scheme (frontend 1103): no manifest or fixture may carry
+      # a key the new contract set removed. Planted-violation tests:
+      # scripts/tests/unit/old-manifest-key-guard.test.ts.
+      - name: No removed deployment-manifest keys in manifests or fixtures
+        run: bun run check:old-manifest-keys

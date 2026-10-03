@@ -53,6 +53,12 @@ const vendorScripts = {
 const publicDir = join(process.cwd(), "frontend/public");
 const readJson = (rel: string): any => JSON.parse(readFileSync(join(publicDir, rel), "utf8"));
 const DEVNET = readJson("data/vaults/devnet/overview.json");
+// The one-deployment-scheme fixtures (frontend 1103): the manifest-derived
+// overview the backend serves at /api/dashboards/robotmoney-vaults, and the
+// four registered names with their risk labels.
+const fixtureJson = (rel: string): any => JSON.parse(readFileSync(join(process.cwd(), "test-fixtures/vault-set", rel), "utf8"));
+const VAULT_SET = fixtureJson("overview.json");
+const VAULT_NAMES = fixtureJson("vault-names.json");
 const SAVED_BASE = readJson("data/vaults/base/vault-economics.json");
 
 function loadGolden<T>(route: string): T {
@@ -123,6 +129,8 @@ async function stubSaved(page: Page) {
 
 async function stubLive(page: Page, economics: unknown = goldenVault()) {
   await stubSaved(page);
+  // No manifest configured: the four-vault route answers 200 with no vaults.
+  await page.route("**/api/dashboards/robotmoney-vaults", (route) => route.fulfill(json({ asOf: "2026-09-01T00:00:00.000Z", network: { chainId: null }, contracts: { gateway: null, router: null, registry: null }, vaults: [] })));
   await page.route("**/api/dashboards/vault-economics", (route) => route.fulfill(json(economics)));
   await page.route("**/api/dashboards/allocation", (route) => route.fulfill(json(loadGolden("/api/dashboards/allocation"))));
   await page.route("**/api/swarm/sessions**", (route) => route.fulfill(json({ sessions: [LIVE_SESSION], nextCursor: null })));
@@ -1235,4 +1243,41 @@ test("a new-tab link carries the arrow after its text, and its text is only its 
   expect(await contract.textContent()).not.toContain("↗");
   const after = await contract.evaluate((el) => getComputedStyle(el, "::after").content);
   expect(after).toContain("↗");
+});
+
+// ── the manifest-derived vault set (frontend 1103) ──────────────────────────
+
+test("the four registered names in the overview fixture are the ones the indexer is held to", () => {
+  expect(VAULT_SET.vaults.map((r: any) => r.slug).sort()).toEqual(VAULT_NAMES.names.map((n: any) => n.slug).sort());
+  for (const row of VAULT_SET.vaults) {
+    expect(row.registeredName).toBe(VAULT_NAMES.names.find((x: any) => x.slug === row.slug).name);
+  }
+});
+
+test("rmAGENT from the manifest feed: paused and empty, headed Small Cap Tokens, no deposit", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await stubSaved(page);
+  await page.route("**/api/dashboards/robotmoney-vaults", (route) => route.fulfill(json(VAULT_SET)));
+  await page.goto("/index.html");
+  await navigate(page, "/vault/rmagent");
+  await expect(page.locator("h1")).toHaveText("rmAGENT");
+  await expect(page.locator(".rr-head .sv__eyebrow")).toContainText("Small Cap Tokens");
+  await expect(page.locator(".rr-head .sv__eyebrow")).not.toContainText("Agent Tokens");
+  await expect(page.locator("#deposit")).toHaveCount(0);
+  await expectNoBrowserErrors(errors);
+});
+
+test("rmUSDC's deposit section names the gateway the manifest feed carries", async ({ page }) => {
+  // The fixture is the Twin chain; deposits are offered on Base only, so the
+  // same rows are presented as Base with the manifest's contracts on each row.
+  const onBase = {
+    ...VAULT_SET,
+    network: { chainId: 8453, testData: false },
+    vaults: VAULT_SET.vaults.map((r: any) => ({ ...r, contracts: { ...VAULT_SET.contracts, vault: r.address } })),
+  };
+  await stubSaved(page);
+  await page.route("**/api/dashboards/robotmoney-vaults", (route) => route.fulfill(json(onBase)));
+  await page.goto("/index.html");
+  await navigate(page, "/vault/rmusdc");
+  await expect(page.locator("[data-testid=deposit-gateway]")).toContainText(VAULT_SET.contracts.gateway);
 });

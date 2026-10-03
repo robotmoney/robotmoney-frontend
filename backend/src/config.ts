@@ -2,6 +2,7 @@
 // RM_ENV selects behavior hints (ephemeral | smoke | prod) but the connection
 // itself is always driven by DATABASE_URL so the same code runs everywhere.
 import { RM_ENV_VALUES } from "./acceptance-path.ts";
+import { resolveDeployment } from "./chain/deployment-manifest.ts";
 
 function required(name: string): string {
   const v = process.env[name];
@@ -642,6 +643,8 @@ if (RM_ENV === "prod" && new URL(databaseUrl).username === "doadmin") {
   throw new Error("DATABASE_URL must use the rm_app runtime role in production, never doadmin");
 }
 
+const DEPLOYMENT = resolveDeployment();
+
 export const config = {
   env: RM_ENV as (typeof VALID_ENVS)[number],
   // Trust X-Forwarded-For for client-ip (rate limiting) only behind a known proxy.
@@ -675,6 +678,10 @@ export const config = {
   // eth_call vault-economics pipeline (backend/src/chain). No API key required
   // for the public default; override for a private/rate-limited provider.
   baseRpcUrl: process.env.BASE_RPC_URL || "https://mainnet.base.org",
+  // The one-deployment-scheme manifests (DEPLOYMENT_MANIFEST_DIR =
+  // deployments/<chain>/). Empty when unset. When set, the vault, gateway and
+  // router addresses below come from it, never from a literal.
+  deployment: DEPLOYMENT,
   vault: {
     // RobotMoneyVault on Base, documented publicly at
     // frontend/public/views/docs/skill/installation.html and skill.html.
@@ -685,7 +692,14 @@ export const config = {
     // normalizing it once here — matching resolveRobotmoneyToken/resolveWeth's
     // existing `.toLowerCase()` precedent — keeps the writer and reader
     // identity-equal without a citext migration.
-    address: (process.env.VAULT_ADDRESS || "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd").toLowerCase(),
+    address: (
+      DEPLOYMENT.vaults.find((v) => v.key === "USDC")?.address
+      || process.env.VAULT_ADDRESS
+      || "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd"
+    ).toLowerCase(),
+    // Gateway and the router it carries: manifest first, else env, else null.
+    gateway: (DEPLOYMENT.gateway || process.env.GATEWAY_ADDRESS || "").toLowerCase() || null,
+    router: (DEPLOYMENT.router || process.env.ROUTER_ADDRESS || "").toLowerCase() || null,
     // USDC on Base, same doc pages.
     usdc: process.env.USDC_ADDRESS || "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     // Load-time snapshot of the adapter set (see resolveVaultAdapters above,

@@ -14,7 +14,7 @@ import { apiVersionResponse } from "../ops/api-version.ts";
 import { analyticsLedgerGuardOutcome, assertAnalyticsLedgerGuardArmed } from "../db/analytics-ledger-guard.ts";
 import { runStartupPreflight } from "../db/preflight.ts";
 import { createComment, listComments } from "./routes/comments.ts";
-import { getRegimeSnapshots, getRegimeSnapshotsSummary, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
+import { getRegimeSnapshots, getRegimeSnapshotsSummary, getResearchSignal, getVaultEconomics, getRobotmoneyVaults, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
 import { getProjectDetail, getProjects, updateProjectOverview } from "./routes/projects.ts";
 import { handleSwarm } from "./routes/swarm.ts";
@@ -263,6 +263,14 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname === ROUTES.dashboards.vaultEconomics && req.method === "GET") {
       return json(await getVaultEconomics());
+    }
+
+    if (pathname === ROUTES.dashboards.robotmoneyVaults && req.method === "GET") {
+      const overview = await getRobotmoneyVaults();
+      // No manifest configured: 200 with no vaults, not 404, so a browser
+      // that asks first logs no failed request. The web client reads an empty
+      // list as absent and falls back to the single-vault read.
+      return json(overview ?? { asOf: new Date().toISOString(), network: { chainId: null }, contracts: { gateway: null, router: null, registry: null }, vaults: [] });
     }
 
     if (pathname === ROUTES.dashboards.walletBalances && req.method === "GET") {
