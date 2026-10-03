@@ -1,0 +1,323 @@
+[
+  {
+    "id": "fragment-stack-frame",
+    "match": "^<n> \\|",
+    "class": "fragment",
+    "reason": "A source-code line bun prints under an error; the error's headline line is classified on its own."
+  },
+  {
+    "id": "fragment-postgres-field",
+    "match": "^\\s*(severity|severity_local|code|detail|hint|where|file|line|routine|position|schema_name|table_name|column_name|constraint_name|errno)\\s*:",
+    "class": "fragment",
+    "reason": "A field of a printed PostgresError object; the PostgresError line itself is classified on its own."
+  },
+  {
+    "id": "fragment-worker-loop-headline",
+    "match": "^\\[[^\\]]+\\] (loop|scheduler) error: <n> \\|",
+    "class": "fragment",
+    "reason": "The worker runtime's headline for a caught error (worker/runtime.ts '[<worker id>] loop error:' and 'scheduler error:'); the cause (PostgresError, connection error) follows on its own line and is classified there."
+  },
+  {
+    "id": "fragment-api-error-headline",
+    "match": "^api error: <n> \\|",
+    "class": "fragment",
+    "reason": "The api's headline for a caught error; the PostgresError line that follows is classified on its own."
+  },
+  {
+    "id": "expected-guard-probe-immutable",
+    "match": "is immutable: (DELETE|UPDATE) is not permitted on",
+    "class": "expected",
+    "reason": "The boot's ledger guard probes each immutable table and REQUIRES this refusal; a missing refusal is what fails the boot."
+  },
+  {
+    "id": "expected-guard-probe-append-only",
+    "match": "is append-only: row deletion is not permitted|refused by trigger \\w+_append_only",
+    "class": "expected",
+    "reason": "The boot's append-only guard probes each protected table and REQUIRES this refusal from rm_append_only_guard()."
+  },
+  {
+    "id": "expected-guard-probe-context",
+    "match": "CONTEXT: PL/pgSQL function public\\.rm_\\w+\\(\\) line|STATEMENT: DELETE FROM public\\.\\w+ WHERE false",
+    "class": "expected",
+    "reason": "Postgres context lines for the guard probes' own DELETE ... WHERE false statements."
+  },
+  {
+    "id": "expected-fetch-floor-fallback",
+    "match": "fetch returned <n> rows — using persisted <n> rows",
+    "class": "expected",
+    "reason": "A live source returned nothing and the code used the real persisted floor, never synthetic data; the failed fetch itself is classified separately."
+  },
+  {
+    "id": "expected-edgar-status",
+    "match": "EDGAR MNA refresh: status=updated|\\[edgar\\] MNA refresh .*status=updated",
+    "class": "expected",
+    "reason": "A successful EDGAR refresh summary; it contains the counter name 'rejected='."
+  },
+  {
+    "id": "expected-reaper-recovery",
+    "match": "reaper requeued/killed <n> stuck job\\(s\\)",
+    "class": "expected",
+    "reason": "The worker reaper recovering jobs whose lease lapsed; the failure that caused the lapse is logged and classified on its own."
+  },
+  {
+    "id": "expected-nginx-buffered",
+    "match": "an upstream response is buffered to a temporary file",
+    "class": "expected",
+    "reason": "nginx spilling a large response to disk; informational."
+  },
+  {
+    "id": "expected-nginx-access-line-2xx-3xx",
+    "match": "^\\S+ - - \\[[^\\]]+\\] \"(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) [^\"]*\" [23][0-9][0-9] ",
+    "class": "expected",
+    "reason": "An nginx access-log line for a successful request; it matched an error word only through its URL, referrer or user agent (e.g. ?state=failed, a bot's .invalid URL)."
+  },
+  {
+    "id": "known-api-slow-request",
+    "match": "\\[api\\] slow request:",
+    "class": "known-issue",
+    "issue": "1079",
+    "reason": "A request that took over 5 s: work that does not belong on the request path. Reported on every gate so none hides; issue 1079 moves the known routes (source-acquisitions, swarm/register, analytics/vintages, run-packages, telemetry, parity-sweep) off it. The 10 s limit is a decision and is never raised."
+  },
+  {
+    "id": "known-api-request-ran-past-limit",
+    "match": "\\[api\\] request ran past the <n>s limit",
+    "class": "known-issue",
+    "issue": "1079",
+    "reason": "A request cut off at the explicit 10 s limit (v0.5.4 names the route and duration). Reported on every gate; issue 1079 owns the fix."
+  },
+  {
+    "id": "known-buyback-413-not-halved",
+    "match": "live index failed.*HTTP 413",
+    "class": "known-issue",
+    "issue": "1061",
+    "fixedIn": "0.5.4",
+    "reason": "The buyback eth_getLogs scan failing on a range the provider refuses (HTTP 413). v0.5.4 halves the range, so a recurrence after v0.5.4 is a regression."
+  },
+  {
+    "id": "known-gecko-paid-tier-refused",
+    "match": "(pro-api\\.coingecko\\.com|\\[gecko\\]).*(HTTP 429|HTTP 40[13])",
+    "class": "known-issue",
+    "issue": "1062",
+    "fixedIn": "0.5.4",
+    "reason": "The paid CoinGecko tier answering 429, 401 or 403. v0.5.4 uses the Basic plan key on the paid host, so a refusal after v0.5.4 is a regression (a bad key, or a plan limit reached)."
+  },
+  {
+    "id": "external-geckoterminal",
+    "match": "geckoterminal.*(throttled|retry budget exhausted|HTTP <n> — retrying|HTTP 429)",
+    "class": "external",
+    "reason": "GeckoTerminal rate limiting; the code retries, then degrades to last-persisted data."
+  },
+  {
+    "id": "external-wallet-balances-live-read-degraded",
+    "match": "wallet-balances: \\w+ live read failed, degrading to last-persisted sample",
+    "class": "external",
+    "reason": "A wallet-balances live price read failed (production 2026-10-01: GeckoTerminal HTTP 429, retry budget exhausted, the keyless tier v0.5.4 replaces) and the code degrades to the last persisted sample. The cause is on its own stack lines, which the inventory does not join to this headline."
+  },
+  {
+    "id": "external-market-data-timeout",
+    "match": "\\[extract\\] fetch \\S+ \\((yahoo|blockchain_com|fred|defillama\\w*|geckoterminal\\w*|coinmetrics)\\) FAILED: The operation timed out",
+    "class": "external",
+    "reason": "A market-data fetch timing out. Either the provider was slow, or the run's shared deadline was used up waiting on the api under analytics-ledger load (issue 1035), which shows as every fetch timing out in the same millisecond. Either way the extractor falls back to the persisted real floor, never synthetic data."
+  },
+  {
+    "id": "external-regime-run-deadline",
+    "match": "\\[analytics-producer\\] regime failed: The operation timed out",
+    "class": "external",
+    "reason": "The producer's regime run hit its shared fetch deadline while every provider fetch was still outstanding (production 2026-09-25 18:35:17: every source timed out in the same millisecond); no vintage is written for that slot, nothing synthetic, and the next scheduled run retries."
+  },
+  {
+    "id": "external-base-rpc",
+    "match": "Base RPC HTTP|buyback-logs: live index failed",
+    "class": "external",
+    "reason": "The Base chain RPC endpoint failing; buyback indexing keeps its persisted rows."
+  },
+  {
+    "id": "external-token-metrics",
+    "match": "token-metrics: price read failed, degrading",
+    "class": "external",
+    "reason": "A token price read failing; the metric degrades to null, never a fabricated price."
+  },
+  {
+    "id": "external-edgar-refresh-degraded",
+    "match": "(EDGAR MNA refresh: status=degraded|\\[edgar\\] MNA refresh \\(\\w+\\) DEGRADED:|late-cycle-signals: EDGAR refresh degraded)",
+    "class": "external",
+    "reason": "SEC EDGAR's M&A refresh did not complete in its deadline, or a month came back missing or failed validation; the producer keeps the last good data and signal and publishes nothing partial."
+  },
+  {
+    "id": "external-fred-series-timeout",
+    "match": "\\[extract\\] FRED \\S+ FAILED: The operation timed out",
+    "class": "external",
+    "reason": "A FRED series fetch timing out; the extractor keeps the persisted real floor for that series."
+  },
+  {
+    "id": "external-participant-take-timeout",
+    "match": "^\\[agent:[^\\]]+\\] \\{.*\"oneShot\":\"timeout\"",
+    "class": "external",
+    "reason": "An agent participant's model did not answer within its take timeout (take-runner.ts reports oneShot=timeout, nothing submitted); the member is absent from that session, never given a template take, and attendance is graded separately. An outcome of the model, not a platform failure (owner, 2026-09-25)."
+  },
+  {
+    "id": "external-participant-take-rejected",
+    "match": "^\\[agent:[^\\]]+\\] \\{.*\"submission\":\"refused\".*\"reason\":\"weights_",
+    "class": "external",
+    "reason": "The server refused an agent's take because its model wrote a weight vector that is not the four canonical buckets (weights_required_for_bucket_weights_subject, weights_not_canonical_four); by design the member is absent, never defaulted, and attendance is graded separately. An outcome of the model, not a platform failure (owner, 2026-09-25). Any other refusal (a closed window, a roster mismatch) stays unclassified and fails."
+  },
+  {
+    "id": "external-judge-attempt-timeout",
+    "match": "^\\[judge:[^\\]]+\\] \\{.*\"kind\":\"refused\".*\"reason\":\"model_timeout\"",
+    "class": "external",
+    "reason": "The judge participant's model did not answer within its timeout and the judge submitted nothing (judge-client.ts, D-A7 model_timeout). This is the model's outcome; if no attempt lands a consensus by the deadline the session publishes no_consensus, and the sessions check fails that as an unjudged publish. Every other judge refusal (credit_exhausted, credential_rejected, model_not_supported, model_unconfigured, runner) is a dead judge and stays unclassified."
+  },
+  {
+    "id": "known-db-read-only",
+    "match": "cannot execute (UPDATE|INSERT|DELETE|SELECT FOR UPDATE) in a read-only transaction|a DELETE was refused, but NOT by the guard .* read-only transaction",
+    "class": "known-issue",
+    "issue": "1035",
+    "fixedIn": "0.5.2",
+    "reason": "The managed cluster switches to read-only as its disk fills with analytics-ledger rows (8.2 GB on 2026-09-25)."
+  },
+  {
+    "id": "known-db-disk-full",
+    "match": "No space left on device|could not (extend|write to) file",
+    "class": "known-issue",
+    "issue": "1035",
+    "fixedIn": "0.5.2",
+    "reason": "The managed cluster's disk is full (analytics-ledger growth)."
+  },
+  {
+    "id": "known-db-connection-dropped",
+    "match": "CONNECTION_CLOSED|CONNECT_TIMEOUT|terminating connection due to administrator command|database unavailable|connect ECONNREFUSED [0-9.]+:25060",
+    "class": "known-issue",
+    "issue": "1035",
+    "fixedIn": "0.5.2",
+    "reason": "Connections dropped while the managed cluster protected itself from a full disk; also the managed cluster refusing connections (port 25060) while it restarts, e.g. the storage upsize on 2026-09-25 17:43."
+  },
+  {
+    "id": "known-db-boot-refusal",
+    "match": "REFUSING the boot: the append-only guard is NOT armed",
+    "class": "known-issue",
+    "issue": "D4",
+    "fixedIn": "0.5.1",
+    "reason": "The guard misread a read-only session as a disarmed guard and refused boots; fixed in v0.5.1 (25006 is inconclusive)."
+  },
+  {
+    "id": "known-db-write-500",
+    "match": "POST /api/analytics/(source-acquisitions|telemetry|vintages) failed: HTTP <n>",
+    "class": "known-issue",
+    "issue": "1035",
+    "fixedIn": "0.5.2",
+    "reason": "The api's analytics writes fail while the cluster is read-only or full; the api's own PostgresError is classified separately."
+  },
+  {
+    "id": "known-upstream-closed",
+    "match": "upstream prematurely closed connection|connect\\(\\) failed \\(<n>: Connection refused\\) while connecting to upstream",
+    "class": "known-issue",
+    "issue": "1035",
+    "fixedIn": "0.5.2",
+    "reason": "nginx losing the api during database stalls and refused boots; follows from the database state."
+  },
+  {
+    "id": "known-repair-gaps-dead",
+    "match": "ops\\.repair_gaps\\) failed",
+    "class": "known-issue",
+    "issue": "1035",
+    "fixedIn": "0.5.2",
+    "reason": "The gap-repair job fails on dropped database connections."
+  },
+  {
+    "id": "known-wallet-backfill-grant",
+    "match": "permission denied for table (wallet_backfill_state|chain_day_blocks|chain_address_floors)",
+    "class": "known-issue",
+    "issue": "D2",
+    "fixedIn": "0.5.1",
+    "reason": "rm_worker lacked the wallet-backfill grants; migration 0061 grants them in v0.5.1."
+  },
+  {
+    "id": "known-parity-nul",
+    "match": "\\\\u<n> cannot be converted to text|unsupported Unicode escape sequence",
+    "class": "known-issue",
+    "issue": "D4",
+    "fixedIn": "0.5.1",
+    "reason": "Parity evidence carried a NUL into jsonb; fixed in v0.5.1 (61ee2a0d)."
+  },
+  {
+    "id": "known-producer-api-stale-socket",
+    "match": "\\[analytics-producer\\] (indicator catch-up|catch-up|regime failed): .*The socket connection was closed unexpectedly",
+    "class": "known-issue",
+    "issue": "producer-api-stale-socket",
+    "reason": "The analytics producer's first call to the api after a long idle gap fails on a closed kept-alive socket (production 2026-09-25 21:30 and 21:31, 29 min after its previous call; the api logged nothing and did not restart). The producer skips that pass and retries on its next schedule. Pre-existing in v0.5.0.",
+    "tolerateAfterRelease": "Pre-existing in v0.5.0 and untouched by v0.5.1; tolerated at the cutover (triage 2026-09-25 21:35), to be fixed in a later release."
+  },
+  {
+    "id": "known-producer-research-failed-under-load",
+    "match": "\\[analytics-producer\\] research failed: (The operation timed out|The socket connection was closed unexpectedly)",
+    "class": "known-issue",
+    "issue": "1035",
+    "fixedIn": "0.5.2",
+    "reason": "The producer's research run could not write through the api while analytics-ledger writes saturated its database pool (production 2026-09-27/28). No partial results are published."
+  },
+  {
+    "id": "known-producer-catch-up-failed-under-load",
+    "match": "\\[analytics-producer\\] catch-up for <n>-<n>-<n> failed \\(will retry next pass\\): (The operation timed out|The socket connection was closed unexpectedly)",
+    "class": "known-issue",
+    "issue": "1035",
+    "fixedIn": "0.5.2",
+    "reason": "The producer's gap catch-up could not write through the api while analytics-ledger writes saturated its database pool (production baseline 2026-09-29, x7); it retries on the next pass. Same cause as known-producer-research-failed-under-load."
+  },
+  {
+    "id": "known-producer-fatal-under-load",
+    "match": "\\[analytics-producer\\] fatal: (The operation timed out|The socket connection was closed unexpectedly)",
+    "class": "known-issue",
+    "issue": "1035",
+    "fixedIn": "0.5.2",
+    "reason": "The analytics producer gave up while the api was saturated by analytics-ledger writes (issue 1035); it restarts under its supervisor and resumes."
+  },
+  {
+    "id": "known-api-statement-timeout-under-load",
+    "match": "PostgresError: canceling statement due to statement timeout",
+    "class": "known-issue",
+    "issue": "1035",
+    "fixedIn": "0.5.2",
+    "reason": "The api pool's statement timeout (v0.5.1) cancelling a query that ran too long on the bloated analytics ledger, e.g. the parity sweep's full-table scan. The guard is working; the slow query is issue 1035."
+  },
+  {
+    "id": "known-ledger-successor-refused-overlapping-runs",
+    "match": "source_value_versions_one_successor_idx|POST /api/analytics/source-acquisitions failed: HTTP 500",
+    "class": "known-issue",
+    "issue": "1035",
+    "fixedIn": "0.5.2",
+    "reason": "Two regime runs overlapped after a timed-out run's writes kept executing; the ledger's unique successor index refused the second version, so the version chain never forks. A symptom of issue 1035's load."
+  },
+  {
+    "id": "known-telemetry-submit-timeout-under-load",
+    "match": "telemetry submission failed \\(non-fatal, canonical analytics unaffected\\): The operation timed out",
+    "class": "known-issue",
+    "issue": "1035",
+    "fixedIn": "0.5.2",
+    "reason": "The producer's non-fatal telemetry write timed out against the saturated api; canonical analytics are unaffected by design."
+  },
+  {
+    "id": "known-api-idle-timeout-under-ledger-load",
+    "match": "\\[Bun\\.serve\\]: request timed out after <n> seconds",
+    "class": "known-issue",
+    "issue": "1035",
+    "fixedIn": "0.5.2",
+    "reason": "The api's ~10 s idle timeout closing a request while analytics-ledger writes saturate its database pool (production 2026-09-25/26, during regime runs). The line names no route, so it is attributed to the load, not to the parity sweep."
+  },
+  {
+    "id": "known-parity-sweep-timeout",
+    "match": "parity_sweep\\) failed.*socket connection was closed",
+    "class": "known-issue",
+    "issue": "parity-sweep-timeout",
+    "fixedIn": "0.5.1",
+    "reason": "The parity sweep outlived the api's ~10 s idle timeout; v0.5.1 lifts it to 240 s for that request. (Log-line form, attributed by the job name; the api's own '[Bun.serve] request timed out' line names no route and is classified separately.)"
+  },
+  {
+    "id": "known-parity-sweep-timeout-job",
+    "match": "socket connection was closed unexpectedly",
+    "source": "^jobs:analytics\\.parity_sweep$",
+    "class": "known-issue",
+    "issue": "parity-sweep-timeout",
+    "fixedIn": "0.5.1",
+    "reason": "The same sweep timeout, as the dead job's own last_error (prod:gate grades dead jobs by their stored error)."
+  }
+]
