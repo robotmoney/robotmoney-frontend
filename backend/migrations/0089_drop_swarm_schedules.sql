@@ -38,7 +38,7 @@
 -- BREAKING (relabelled from `additive` by D55 (7), 2026-09-25). §8.4 defines
 -- additive as old code's supported behaviour preserved, and says no bootstrap
 -- row old code relies on is removed. This file removes exactly such rows: code
--- built at 0070 seeded these `job_schedules` rows and read them through
+-- built at 0088 seeded these `job_schedules` rows and read them through
 -- `resolveSwarmSchedules`, `seedSwarmSchedules`, the `swarm` worker lane and
 -- the six `swarm.*` handlers. That code is deleted in the same change, but an
 -- old binary rolled back onto this database would boot, find no rows and
@@ -46,7 +46,7 @@
 -- refuse that rollback instead.
 --
 -- A ledger that already recorded this file keeps `additive`: the runner writes
--- a ledger row once, at apply, and never rewrites it. 0079, 0080 and 0081 are
+-- a ledger row once, at apply, and never rewrites it. 0096, 0097 and 0098 are
 -- `breaking` and later, so once they are applied they close rollback past this
 -- file by themselves and the stale label decides nothing.
 
@@ -71,16 +71,16 @@ DELETE FROM job_schedules
 -- PART 2 — THE NEW SCHEDULER'S TWO LOGS ARE APPEND-ONLY
 -- ─────────────────────────────────────────────────────────────────────────────
 --
--- `swarm_stream_events` (migration 0068) is the event log §6.3's whole contract
+-- `swarm_stream_events` (migration 0086) is the event log §6.3's whole contract
 -- rests on: "A gap — a sequence number that is not the last applied plus one —
 -- means the copy is no longer provably current." A deleted row IS a gap, and it
 -- is a gap the scheduler cannot tell from a lost frame: it would stop, rebuild,
 -- find the same hole and stop again. The sequence's gaplessness is a guarantee,
 -- and a guarantee anything can punch a hole in is not one.
 --
--- `swarm_scheduler_jobs` (migration 0070) holds the idempotency keys §6.3
--- requires for pushed work. 0070 already grants no DELETE; its own header says
--- why the row outlives the ack. What 0070 did NOT do is install the triggers or
+-- `swarm_scheduler_jobs` (migration 0088) holds the idempotency keys §6.3
+-- requires for pushed work. 0088 already grants no DELETE; its own header says
+-- why the row outlives the ack. What 0088 did NOT do is install the triggers or
 -- revoke TRUNCATE, and TRUNCATE is the one that matters most here: the triggers
 -- installed below are row-level and statement-level, and the grant is the only
 -- protection a TRUNCATE ever meets.

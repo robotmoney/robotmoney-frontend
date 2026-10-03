@@ -104,6 +104,6 @@ GRANT SELECT, UPDATE ON admin_webauthn_challenge TO rm_app;
 COMMENT ON TABLE admin_webauthn_challenge IS
   'The 32 WebAuthn challenge slots (D55 (6)): 0..7 registration, 8..31 authentication. Issuing a challenge overwrites the slot of its flow with the oldest issued_at under CHALLENGE_ISSUE_LOCK; consuming it is a single-use conditional UPDATE of consumed_at. The runtime holds no INSERT or DELETE, so the table always has exactly 32 rows and needs no prune.';
 COMMENT ON COLUMN admin_webauthn_challenge.slot IS
-  'The slot number, 0..31. The primary key: there are exactly 32 slots, written by migration 0088 or the blank bootstrap. Slots 0..7 hold registration ceremonies and 8..31 authentication ones, so a public flood of sign-in options never evicts a pending enrolment.';
+  'The slot number, 0..31. The primary key: there are exactly 32 slots, written by migration 0106 or the blank bootstrap. Slots 0..7 hold registration ceremonies and 8..31 authentication ones, so a public flood of sign-in options never evicts a pending enrolment.';
 COMMENT ON COLUMN admin_webauthn_challenge.issued_at IS
   'When the ceremony in this slot was issued. The next issuance overwrites the slot with the oldest issued_at (an empty slot, NULL, first). NULL = empty slot.';

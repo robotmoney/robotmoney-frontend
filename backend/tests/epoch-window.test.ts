@@ -242,7 +242,7 @@ test("a take that read N before a turnover committed AHEAD of N's stored close, 
   // not the database's (§4.2), so a turnover can still commit while N's stored
   // close is minutes ahead. That is the case held here. The turnover is held
   // open AFTER it has closed N and recorded its absences: the test holds the
-  // stream's counter row (`swarm_stream_head`, migration 0081), which the
+  // stream's counter row (`swarm_stream_head`, migration 0098), which the
   // turnover must lock to number `epoch.turned_over`.
   // While it waits, the take reads N as the newest session (N+1 is not yet
   // committed), passes every early check — the window is minutes from closing

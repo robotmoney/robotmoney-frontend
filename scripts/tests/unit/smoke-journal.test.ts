@@ -340,7 +340,7 @@ describe("computePlanId — §1.2, the plan id is a content hash of exactly the 
   });
 
   test("state a journaled phase changes cannot enter the id: a plan carrying a schema version or a timestamp refuses", () => {
-    const withSchema = { ...plan(), schemaHead: "0072_drop_swarm_schedules.sql" } as unknown as DeploymentPlan;
+    const withSchema = { ...plan(), schemaHead: "0089_drop_swarm_schedules.sql" } as unknown as DeploymentPlan;
     expect(() => computePlanId(withSchema)).toThrow(/plan\.schemaHead is not one §1\.2 lists/);
     const withTime = { ...plan(), createdAt: "2026-09-24T00:00:00Z" } as unknown as DeploymentPlan;
     expect(() => computePlanId(withTime)).toThrow(/plan\.createdAt/);

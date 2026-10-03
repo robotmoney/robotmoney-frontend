@@ -6,20 +6,20 @@
 --
 -- §6.3 now says: "No job pushes. The stream carries change events only. Every
 -- piece of work the scheduler does follows from an event or a timer; there is
--- no ad-hoc job kind for the API to push, ack or redeliver." Migration 0070
+-- no ad-hoc job kind for the API to push, ack or redeliver." Migration 0088
 -- built `swarm_scheduler_jobs` for the rule that sentence replaced. The code
 -- that wrote and read it — `pushJob`, `unackedJobs`, `ackJob`, the stream's
 -- `job` frame and the `jobAck` route — is deleted in the same change, so the
 -- table has no reader and no writer left.
 --
--- A FORWARD MIGRATION, NOT A DELETED 0070. 0070 may already be recorded in
+-- A FORWARD MIGRATION, NOT A DELETED 0088. 0088 may already be recorded in
 -- `schema_migrations` on a shared database (stage-2 ran this branch), and a
 -- file deleted from disk leaves that ledger row naming a migration nobody can
--- read, while the table it made stays behind. Criterion 105: "If 0070 has
+-- read, while the table it made stays behind. Criterion 105: "If 0088 has
 -- reached any shared database, a forward migration drops the table rather than
 -- the file being deleted."
 --
--- THE APPEND-ONLY TRIGGERS GO WITH IT. 0072 installed `_append_only` and
+-- THE APPEND-ONLY TRIGGERS GO WITH IT. 0089 installed `_append_only` and
 -- `_append_only_row` on this table; DROP TABLE removes a table's triggers, and
 -- neither fires on a DROP (they are DELETE and TRUNCATE triggers). The table
 -- leaves APPEND_ONLY_TABLES, APPEND_ONLY_TABLE_MIGRATION and the 0.2.2-to-0.3.0
@@ -29,7 +29,7 @@
 -- relies on.
 --
 -- WHY `breaking`. §8.4: additive means "every query the older registry
--- declares still succeeds". Code built for 0070-0078 INSERTs into this table
+-- declares still succeeds". Code built for 0088-0078 INSERTs into this table
 -- from `pushJob` and SELECTs it on every scheduler subscription (`unackedJobs`
 -- runs before the first event is served). That code booted against this
 -- database takes a 42P01 on its stream route, so a code-only rollback past this

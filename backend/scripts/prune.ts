@@ -11,7 +11,7 @@
 // prune ... It never prunes a security tombstone or audit history."
 //
 // WHY IT EXISTS. D55 (6) took DELETE and TRUNCATE from every runtime role on
-// every table (migration 0089), so the only way a row leaves the database is an
+// every table (migration 0107), so the only way a row leaves the database is an
 // rm_owner run, and rm_owner is typed at the terminal and never stored (§3,
 // D47). This is that run: the one pruning path, for the tables whose rows stop
 // mattering after a while.
@@ -33,7 +33,7 @@
 // `revoked_at`), `swarm_member_keys`, `automation_tokens`, `audit_log`, every
 // append-only history table and every analytics ledger. The WebAuthn challenge
 // slots need no prune: there are always exactly 32, overwritten in place
-// (migration 0088).
+// (migration 0106).
 //
 // THE WINDOW. `--retention-days <n>`, default 7. A value below 7 refuses before
 // anything connects: the window is a floor the owner confirmed, configurable

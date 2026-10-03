@@ -70,7 +70,7 @@ function seen(services: Record<string, string>, ledger: string[] = []): StateExp
   return { ledger, manifestHash: null, identity: "rehearsal", participants: [], services, spoofGeneration: null };
 }
 
-const MIGRATIONS = ["0001_init.sql", "0078_automation_token_holders.sql"];
+const MIGRATIONS = ["0001_init.sql", "0095_automation_token_holders.sql"];
 
 /** A run that reached readiness and wrote its receipt. */
 async function completedRun(paths: InstancePaths, instance: string): Promise<Receipt> {
@@ -130,7 +130,7 @@ describe("the receipt is read back (§1.4, criterion 29)", () => {
       lockHolder: null,
     }).join("\n");
     expect(lines).toContain(`source: receipt (HISTORY) — reached readiness under plan ${receipt.planId}`);
-    expect(lines).toContain(`schema: manifest ${receipt.schema.manifestHash}; 2 migration(s), ending 0078_automation_token_holders.sql`);
+    expect(lines).toContain(`schema: manifest ${receipt.schema.manifestHash}; 2 migration(s), ending 0095_automation_token_holders.sql`);
     expect(lines).toContain("preflight schema-current: pass (schema is current: 78 migration(s) applied)");
     expect(lines).toContain("readiness api-health: pass");
     expect(lines).toMatch(/service api: 222222222222 at readiness — running now/);

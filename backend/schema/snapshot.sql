@@ -604,7 +604,7 @@ COMMENT ON COLUMN public.admin_webauthn_challenge.consumed_at IS 'When this chal
 -- Name: COLUMN admin_webauthn_challenge.slot; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON COLUMN public.admin_webauthn_challenge.slot IS 'The slot number, 0..31. The primary key: there are exactly 32 slots, written by migration 0088 or the blank bootstrap. Slots 0..7 hold registration ceremonies and 8..31 authentication ones, so a public flood of sign-in options never evicts a pending enrolment.';
+COMMENT ON COLUMN public.admin_webauthn_challenge.slot IS 'The slot number, 0..31. The primary key: there are exactly 32 slots, written by migration 0106 or the blank bootstrap. Slots 0..7 hold registration ceremonies and 8..31 authentication ones, so a public flood of sign-in options never evicts a pending enrolment.';
 
 
 --
@@ -2763,7 +2763,7 @@ COMMENT ON TABLE public.swarm_stream_events IS 'The scheduler event stream (spec
 -- Name: COLUMN swarm_stream_events.seq; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON COLUMN public.swarm_stream_events.seq IS 'Global monotonic sequence, gapless and in commit order: taken from swarm_stream_head inside the writing transaction, never from a sequence and never from MAX(seq) (migration 0081).';
+COMMENT ON COLUMN public.swarm_stream_events.seq IS 'Global monotonic sequence, gapless and in commit order: taken from swarm_stream_head inside the writing transaction, never from a sequence and never from MAX(seq) (migration 0098).';
 
 
 --

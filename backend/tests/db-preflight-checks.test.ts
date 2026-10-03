@@ -224,7 +224,7 @@ async function publishManifest(): Promise<void> {
   });
 }
 
-/** Enroll this clone as `rehearsal`, as rm_owner — the only role 0063 lets
+/** Enroll this clone as `rehearsal`, as rm_owner — the only role 0081 lets
  *  write it. */
 async function enrollRehearsal(): Promise<void> {
   await fixtureDb.begin(async (tx) => {
@@ -533,15 +533,15 @@ describe("check 2, denylist half — the fixed list of things no runtime role ma
     // This case used to read the state 0053 line 129 left behind
     // (`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO
     // rm_app`, append-only tables included) and assert the denylist reported
-    // every one of them. Migration 0065 is §9.1 step 2 — it revokes exactly
+    // every one of them. Migration 0083 is §9.1 step 2 — it revokes exactly
     // that grant — so an assertion resting on the grant's presence would be
     // ERASED by the fix rather than kept honest by it, and two later migrations
-    // (0056 on `analytics_overwrite_events`, 0065 on the rest) already made the
+    // (0056 on `analytics_overwrite_events`, 0083 on the rest) already made the
     // ambient set a moving target no literal could track.
     //
     // The property under test is "the denylist detects a DELETE grant on an
     // append-only table", one finding per table. That property has to survive
-    // 0065, so the grant is made here and revoked in `finally`, which is what
+    // 0083, so the grant is made here and revoked in `finally`, which is what
     // every other case in this describe already does.
     const tables = [...APPEND_ONLY_TABLES].sort();
     const relations = tables.map((t) => `"${t}"`).join(", ");
@@ -698,7 +698,7 @@ describe("check 2, the asymmetry — the registry is not an allowlist", () => {
   });
 
   test("rm_app holding DELETE on an append-only table FAILS check 2 — the grant §9.1 step 2 exists to remove", async () => {
-    // Spec §9.1 step 2: "Check 2 fails until it lands." Migration 0065 IS that
+    // Spec §9.1 step 2: "Check 2 fails until it lands." Migration 0083 IS that
     // step, so the grant 0053 left behind is gone from this database and this
     // case constructs it instead of reading it. The thing being proved is
     // unchanged and is the reason the step exists: while a runtime role holds
@@ -735,11 +735,11 @@ describe("check 2, the asymmetry — the registry is not an allowlist", () => {
 // Check 2 × spec §9.1 step 2 — the append-only grant transition, replayed
 // ───────────────────────────────────────────────────────────────────────────
 
-describe("check 2 fails before the append-only grant transition and passes after it (0065 + 0072 PART 2)", () => {
-  const TRANSITION_0065 = readFileSync(join(MIGRATIONS_DIR, "0065_append_only_grant_transition.sql"), "utf8");
-  const MIGRATION_0072 = readFileSync(join(MIGRATIONS_DIR, "0072_drop_swarm_schedules.sql"), "utf8");
+describe("check 2 fails before the append-only grant transition and passes after it (0083 + 0089 PART 2)", () => {
+  const TRANSITION_0065 = readFileSync(join(MIGRATIONS_DIR, "0083_append_only_grant_transition.sql"), "utf8");
+  const MIGRATION_0072 = readFileSync(join(MIGRATIONS_DIR, "0089_drop_swarm_schedules.sql"), "utf8");
 
-  /** 0072's PART 2 DO block, verbatim: the first `DO $$ … $$;` after the
+  /** 0089's PART 2 DO block, verbatim: the first `DO $$ … $$;` after the
    *  PART 2 banner. PART 1 deletes the retired schedule rows and is not part
    *  of the grant transition. */
   function part2Of0072(): string {
@@ -813,7 +813,7 @@ describe("check 2 fails before the append-only grant transition and passes after
   });
 
   test("the transition's arrays cover every APPEND_ONLY_TABLES entry — no append-only table can skip it", async () => {
-    // 0065 revokes on the 0032-era set and 0072 on the two scheduler logs. A
+    // 0083 revokes on the 0032-era set and 0089 on the two scheduler logs. A
     // table added to APPEND_ONLY_TABLES without a revoking migration would
     // pass every test above that builds its own grants, and still hold 0053's
     // DELETE in production. A new append-only table needs its own revoking
@@ -834,7 +834,7 @@ describe("check 2 fails before the append-only grant transition and passes after
     // check 2 refuses a DELETE grant on.
     const protectedSet = new Set(protectedFromDeletion());
     // A table the transition revoked on and a later migration DROPPED
-    // (`swarm_scheduler_jobs`, 0079: no job pushes) holds no grant to refuse.
+    // (`swarm_scheduler_jobs`, 0096: no job pushes) holds no grant to refuse.
     // It is exempt only while it does not exist in the migrated schema.
     const dropped = new Set<string>();
     for (const table of union) {
@@ -905,7 +905,7 @@ describe("check 2 fails before the append-only grant transition and passes after
     expect(protectedFromDeletion()).toContain("swarm_stream_head");
     expect(APPEND_ONLY_TABLES as readonly string[]).not.toContain("swarm_stream_head");
 
-    // The control: the clean clone does not already say it (0081 grants rm_app
+    // The control: the clean clone does not already say it (0098 grants rm_app
     // SELECT, UPDATE and rm_worker SELECT only).
     expect(
       (await findDenylistViolations(sql, WRITERS)).filter((v) => v.object === "swarm_stream_head"),
@@ -1621,10 +1621,10 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
 
 describe("check 5 — RM_ENV x deployment_identity resolve per the §4.3 matrix", () => {
   // The enrollment column is `kind` — spec §4.2 ("`deployment_identity.kind ∈
-  // {production, rehearsal}`") and migration 0063, which is what the template
+  // {production, rehearsal}`") and migration 0081, which is what the template
   // database this test runs against actually holds. The fixture replaces the
-  // table rather than reusing 0063's so that the zero-row and two-row cases
-  // below are expressible at all: 0063 pins one row with a boolean primary key.
+  // table rather than reusing 0081's so that the zero-row and two-row cases
+  // below are expressible at all: 0081 pins one row with a boolean primary key.
   async function withIdentity(value: "production" | "rehearsal" | null, body: () => Promise<void>): Promise<void> {
     await fixtureDb.unsafe("DROP TABLE IF EXISTS deployment_identity");
     await fixtureDb.unsafe(`
@@ -1633,7 +1633,7 @@ describe("check 5 — RM_ENV x deployment_identity resolve per the §4.3 matrix"
         singleton boolean NOT NULL DEFAULT true UNIQUE CHECK (singleton)
       )`);
     // The replacement table is the owner's; the check reads it as a runtime role, as
-    // 0063's real one allows.
+    // 0081's real one allows.
     await fixtureDb.unsafe("GRANT SELECT ON deployment_identity TO rm_app, rm_worker, rm_readonly");
     if (value) await fixtureDb`INSERT INTO deployment_identity (kind) VALUES (${value})`;
     try {
@@ -1732,7 +1732,7 @@ describe("check 5 — RM_ENV x deployment_identity resolve per the §4.3 matrix"
 // schedule rows were enabled and their crons parsed, and later only the epoch
 // duration; the check now covers all three columns, in every environment.
 //
-// The columns are NOT NULL (0067, 0073), so a NULL is reachable only by
+// The columns are NOT NULL (0085, 0090), so a NULL is reachable only by
 // relaxing the column first — which is exactly the drift this check exists
 // for. This file clones a clean database per test, so nothing is restored.
 
@@ -1885,7 +1885,7 @@ describe("runPreflight — one library, three callers (§7.2)", () => {
 
   test("runs every check before deciding — a database failing 2, 3 and 5 says so in one boot", async () => {
     // Check 2's failure is CONSTRUCTED. It used to come for free from 0053's
-    // ambient `DELETE ON ALL TABLES` grant, but migration 0065 is §9.1 step 2
+    // ambient `DELETE ON ALL TABLES` grant, but migration 0083 is §9.1 step 2
     // and removes it — so borrowing it here would quietly reduce this case to
     // "3 and 5" the day the transition landed, which is the opposite of what it
     // is for. What is under test is that one boot reports EVERY failing check

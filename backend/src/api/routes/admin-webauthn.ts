@@ -11,14 +11,14 @@ const BAD = (error: string) => ({ status: 400, body: { error } }) as const;
 // passkey before it has a session, so the one-time challenge store is a table
 // unauthenticated requests write. D55 (6): such a table "stays bounded with no
 // `rm_owner` run", and no runtime role may DELETE. So the store is a fixed set
-// of 32 slots (migration 0088): issuing a challenge overwrites the slot with
+// of 32 slots (migration 0106): issuing a challenge overwrites the slot with
 // the oldest `issued_at` in place, and consuming one is a single-use
 // conditional UPDATE of `consumed_at`. rm_app holds no INSERT and no DELETE on
 // the table, so a caller can make us evict old pending ceremonies but can never
 // change the row count. The transaction advisory lock serializes issuance, so
 // two concurrent requests never pick, and overwrite, the same slot.
 //
-// Each flow owns its own slots (0088's slot_flow_check): registration 0..7,
+// Each flow owns its own slots (0106's slot_flow_check): registration 0..7,
 // authentication 8..31. Registration options need an admin credential and
 // authentication options do not, so an unauthenticated flood overwrites only
 // authentication slots and can never evict a signed-in admin's pending passkey
@@ -199,9 +199,9 @@ async function storeChallenge(flow: "registration" | "authentication", challenge
       RETURNING slot
     `;
     if (written.length !== 1) {
-      // 0088 and the blank bootstrap write the 32 slots; the runtime cannot
-      // add one. A table with none is a database that never reached 0088.
-      throw new Error("admin_webauthn_challenge holds no slot to overwrite: migration 0088 has not been applied");
+      // 0106 and the blank bootstrap write the 32 slots; the runtime cannot
+      // add one. A table with none is a database that never reached 0106.
+      throw new Error("admin_webauthn_challenge holds no slot to overwrite: migration 0106 has not been applied");
     }
   });
 }

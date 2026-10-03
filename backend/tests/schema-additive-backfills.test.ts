@@ -1,4 +1,4 @@
-// The backfills in migrations 0073 and 0075 — issue #1026, run against a
+// The backfills in migrations 0090 and 0092 — issue #1026, run against a
 // POPULATED database, the only kind a backfill exists for.
 //
 // A blank bootstrap never runs a backfill (the snapshot's declaration already
@@ -10,15 +10,15 @@
 // EXISTS`, `CREATE ... IF NOT EXISTS`, `DROP CONSTRAINT IF EXISTS`) — and reads
 // the result back.
 //
-//   0073  epoch_anchor backfills to the subject's open window's close, so the
+//   0090  epoch_anchor backfills to the subject's open window's close, so the
 //         open window is on the new grid (k = 0) and nothing it waits on moves;
 //         a subject with no open window keeps the fixed default.
-//   0075  the newest revision per (session, member) becomes final, and only it
+//   0092  the newest revision per (session, member) becomes final, and only it
 //         (D51: "backfills each legacy session's newest revision per member as
 //         final"); a take inserted afterwards by code that predates the column
 //         still leaves exactly one final take, the newest; and the migration's
 //         own REVOKE narrows rm_app to UPDATE (final) with no grants.sql run.
-//   0077  the migration's own REVOKE refuses rm_app an UPDATE on an immutable
+//   0094  the migration's own REVOKE refuses rm_app an UPDATE on an immutable
 //         ledger, again with no grants.sql run.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -33,7 +33,7 @@ useCleanDatabase(import.meta.file);
 const MIGRATIONS = join(import.meta.dir, "..", "migrations");
 const migrationText = (file: string): string => readFileSync(join(MIGRATIONS, file), "utf8");
 
-// `adapt` rewrites the file's text for the schema it is re-run against: 0077
+// `adapt` rewrites the file's text for the schema it is re-run against: 0094
 // names source_payloads, which 0080 (issue #1035) dropped later in the
 // ordered run, so a re-run on the fully migrated schema leaves that name out.
 async function rerunAsOwner(file: string, adapt: (text: string) => string = (text) => text): Promise<void> {
@@ -84,14 +84,14 @@ async function seedTakes(): Promise<{ subject: string; member: string; session: 
   return { subject, member, session: session!.id };
 }
 
-/** An INSERT exactly as the pre-0075 accepting code writes it: no `final`. */
+/** An INSERT exactly as the pre-0092 accepting code writes it: no `final`. */
 const legacyTake = (t: { subject: string; member: string; session: string }, revision: number): string => `
   INSERT INTO swarm_recommendations
     (session_id, member_id, subject_id, date, nonce, stance, payload, signature, revision)
   VALUES ('${t.session}', '${t.member}', '${t.subject}', CURRENT_DATE, 'legacy-${t.member}-${revision}', 'hold',
           '{}'::jsonb, 'sig-${revision}', ${revision})`;
 
-describe("0073 — epoch_anchor backfill", () => {
+describe("0090 — epoch_anchor backfill", () => {
   test("a subject with an open window is anchored at that window's close; one without keeps the unix-epoch default", async () => {
     const open = `anchor-open-${uid()}`;
     const idle = `anchor-idle-${uid()}`;
@@ -100,10 +100,10 @@ describe("0073 — epoch_anchor backfill", () => {
     await sql`
       INSERT INTO swarm_sessions (subject_id, state, window_closes_at)
       VALUES (${open}, 'collecting', ${closes}), (${idle}, 'published', ${new Date("2026-09-20T00:00:00Z")})`;
-    // The state before 0073 ran: every subject on the column default.
+    // The state before 0090 ran: every subject on the column default.
     await sql`UPDATE swarm_subjects SET epoch_anchor = DEFAULT WHERE id IN (${open}, ${idle})`;
 
-    await rerunAsOwner("0073_subject_grid_columns.sql");
+    await rerunAsOwner("0090_subject_grid_columns.sql");
 
     const rows = await sql<{ id: string; epoch_anchor: Date; judging_duration_seconds: number }[]>`
       SELECT id, epoch_anchor, judging_duration_seconds FROM swarm_subjects WHERE id IN (${open}, ${idle})`;
@@ -117,7 +117,7 @@ describe("0073 — epoch_anchor backfill", () => {
   });
 });
 
-describe("0075 — final-take backfill", () => {
+describe("0092 — final-take backfill", () => {
   test("the newest revision per (session, member) is final, and no other row is", async () => {
     const subject = `final-backfill-${uid()}`;
     const alice = `alice-${uid()}`;
@@ -144,10 +144,10 @@ describe("0075 — final-take backfill", () => {
         VALUES (${session}, ${member}, ${subject}, CURRENT_DATE, ${`n-${session}-${member}-${revision}`}, 'hold',
                 '{}'::jsonb, ${`sig-${revision}`}, ${revision})`;
     }
-    // Before 0075: nothing final (the column did not exist).
+    // Before 0092: nothing final (the column did not exist).
     await sql`UPDATE swarm_recommendations SET final = false WHERE subject_id = ${subject}`;
 
-    await rerunAsOwner("0075_swarm_recommendations_final.sql");
+    await rerunAsOwner("0092_swarm_recommendations_final.sql");
 
     const rows = await sql<{ session_id: string; member_id: string; revision: number; final: boolean }[]>`
       SELECT session_id, member_id, revision, final FROM swarm_recommendations
@@ -157,20 +157,20 @@ describe("0075 — final-take backfill", () => {
     expect(rows.filter((r) => !r.final)).toHaveLength(2);
 
     // Re-running is a no-op: the migration is safe to resume over.
-    await rerunAsOwner("0075_swarm_recommendations_final.sql");
+    await rerunAsOwner("0092_swarm_recommendations_final.sql");
     const [again] = await sql<{ n: number }[]>`
       SELECT count(*)::int AS n FROM swarm_recommendations WHERE subject_id = ${subject} AND final`;
     expect(again?.n).toBe(3);
   });
 });
 
-describe("0075 — writers that predate `final`, after the backfill has run", () => {
+describe("0092 — writers that predate `final`, after the backfill has run", () => {
   test("a first take and then an amendment, inserted as rm_app without naming `final`, each leave exactly one final take — the newest", async () => {
     // §8.5 runs an additive migrate against the running stack, so the OLD code
-    // keeps accepting takes after 0075 applies — and again after a code-only
+    // keeps accepting takes after 0092 applies — and again after a code-only
     // rollback. The backfill ran once; this is what keeps D51 true afterwards.
     const t = await seedTakes();
-    await rerunAsOwner("0075_swarm_recommendations_final.sql");
+    await rerunAsOwner("0092_swarm_recommendations_final.sql");
     const finals = async (): Promise<number[]> =>
       (
         await sql<{ revision: number }[]>`
@@ -219,12 +219,12 @@ describe("0075 — writers that predate `final`, after the backfill has run", ()
 });
 
 describe("the migrations' own privilege narrowing, on the migrated path, with no grants.sql run", () => {
-  test("0075 leaves rm_app UPDATE on `final` only; 0077 refuses rm_app every UPDATE on an immutable ledger", async () => {
+  test("0092 leaves rm_app UPDATE on `final` only; 0094 refuses rm_app every UPDATE on an immutable ledger", async () => {
     // The state production is in before these files: 0053's table-wide UPDATE
     // for rm_app on both tables. Put it back, then apply ONLY the migrations.
     await sql.unsafe("GRANT UPDATE ON swarm_recommendations, source_acquisitions TO rm_app");
-    await rerunAsOwner("0075_swarm_recommendations_final.sql");
-    await rerunAsOwner("0077_immutable_ledger_grants.sql", (text) => text.replace("source_payloads, ", ""));
+    await rerunAsOwner("0092_swarm_recommendations_final.sql");
+    await rerunAsOwner("0094_immutable_ledger_grants.sql", (text) => text.replace("source_payloads, ", ""));
 
     const t = await seedTakes();
     await app.unsafe(legacyTake(t, 1));

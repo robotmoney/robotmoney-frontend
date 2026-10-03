@@ -1,6 +1,6 @@
 // WebAuthn challenges live in 32 fixed slots: unauthenticated option requests
 // can never grow the table, and a challenge is consumed at most once — issue
-// #1026 criterion 171, decision D55 (6), migration 0088.
+// #1026 criterion 171, decision D55 (6), migration 0106.
 //
 // D55 (6): "A table that unauthenticated requests write stays bounded with no
 // `rm_owner` run. WebAuthn challenges use a fixed set of 32 slots. A new
@@ -30,7 +30,7 @@ import { harnessConnection, restoreRoleBaselineAfterAll } from "./support/cluste
 
 const APP = { name: "rm_app", password: `rm_app_slots_${randomBytes(6).toString("hex")}` };
 const SLOTS = 32;
-/** Slots 0..7 are registration's, 8..31 authentication's (migration 0088). */
+/** Slots 0..7 are registration's, 8..31 authentication's (migration 0106). */
 const REGISTRATION_SLOTS = 8;
 
 let name = "";

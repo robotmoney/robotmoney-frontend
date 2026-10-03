@@ -10,11 +10,11 @@
 -- order and a rolled-back transaction leaves no hole ... The full read takes
 -- its cursor from the counter value visible in its own snapshot."
 --
--- WHY THE MAX + 1 SCHEME IT REPLACES IS NOT ENOUGH. 0068 numbered each event
+-- WHY THE MAX + 1 SCHEME IT REPLACES IS NOT ENOUGH. 0086 numbered each event
 -- as MAX(seq) + 1 under a transaction-scoped advisory lock. While the log is
 -- never pruned the two are equivalent: the lock serializes writers exactly as a
 -- row lock does, and a rolled-back insert leaves MAX unchanged. D52 lets
--- rm_owner prune rows below the oldest servable cursor (migration 0080), and
+-- rm_owner prune rows below the oldest servable cursor (migration 0097), and
 -- there the equivalence breaks: prune the newest row, or every row, and
 -- MAX(seq) + 1 hands out a number some subscriber already holds as its cursor.
 -- That subscriber then drops the new event as a duplicate — the silent skip
@@ -40,7 +40,7 @@
 -- runtime roles: the row is the stream's identity, not data.
 --
 -- WHY `breaking`. §8.4: additive means old code's supported behaviour is
--- preserved. Code built for 0068-0080 numbers events as MAX(seq) + 1 and never
+-- preserved. Code built for 0086-0097 numbers events as MAX(seq) + 1 and never
 -- touches this row. Run beside this code, the two schemes hand out the same
 -- number — the old writer's MAX + 1 is the counter's next value — and one of
 -- the two transitions fails on the primary key. Old code booted alone against
@@ -86,4 +86,4 @@ GRANT SELECT ON swarm_stream_head TO rm_worker, rm_readonly;
 COMMENT ON TABLE swarm_stream_head IS
   'The event stream''s one counter row (spec §6.3): seq is the last number handed out. Incremented by UPDATE ... RETURNING inside each event-writing transaction, so numbers are gapless and in commit order. Never moves back.';
 COMMENT ON COLUMN swarm_stream_events.seq IS
-  'Global monotonic sequence, gapless and in commit order: taken from swarm_stream_head inside the writing transaction, never from a sequence and never from MAX(seq) (migration 0081).';
+  'Global monotonic sequence, gapless and in commit order: taken from swarm_stream_head inside the writing transaction, never from a sequence and never from MAX(seq) (migration 0098).';

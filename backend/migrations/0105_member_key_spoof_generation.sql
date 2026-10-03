@@ -35,12 +35,12 @@
 -- NULL. The CHECK accepts every existing row and refuses only an empty string,
 -- which no writer produces (a generation id is `gen-` plus hex).
 --
--- IDEMPOTENT, like 0084-0086: re-applied to a schema that already carries the
+-- IDEMPOTENT, like 0102-0086: re-applied to a schema that already carries the
 -- column (a snapshot-built database whose ledger lacks this row, §9.1 step 2)
 -- it changes nothing.
 --
 -- GRANTS: none. The rebind INSERTs through the role that already inserts key
--- rows (rm_app holds SELECT, INSERT, UPDATE; 0065 revoked DELETE and TRUNCATE
+-- rows (rm_app holds SELECT, INSERT, UPDATE; 0083 revoked DELETE and TRUNCATE
 -- and grants.sql re-asserts that). A new column inherits the table's
 -- privileges.
 

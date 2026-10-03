@@ -30,7 +30,7 @@
 -- beside it unchanged. IDEMPOTENT: a GRANT already held is a no-op
 -- (tests/prod-baseline.test.ts re-applies the newest migration).
 --
--- A TABLE 0037 NEVER CREATED IS SKIPPED, the way 0082 skips an absent
+-- A TABLE 0037 NEVER CREATED IS SKIPPED, the way 0100 skips an absent
 -- swarm_judge_config: a database that has not run 0037 has no evidence to
 -- grant on, and the repair pass that writes it cannot run there either.
 

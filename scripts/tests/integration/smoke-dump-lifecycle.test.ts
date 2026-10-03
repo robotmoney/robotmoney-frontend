@@ -56,18 +56,18 @@
 //                        prepare:restore branch) with the row still `rehearsal`.
 //                        The reattach test below asserts exactly that.
 //   baseline             production's observed ledger (D55 (8)): v0.5.0 plus
-//                        0062_rm_readonly_sequence_select.sql, what a capture of
-//                        today's production restores. It predates 0063, so it
+//                        0061, 0062, 0063 and 0080, what a capture of
+//                        today's production restores. It predates 0081, so it
 //                        has no deployment_identity table; the enroll step takes
 //                        the `--local dump` identity-first pass (D55 (9), (10),
-//                        backend/scripts/smoke-prepare.ts): 0063 and `rehearsal`
+//                        backend/scripts/smoke-prepare.ts): 0081 and `rehearsal`
 //                        in one transaction, before any other migration. The
 //                        copy ends `rehearsal`, and no migrate or service begins
 //                        before it does.
 //   v0.5.0               the v0.5.0 tag alone: one file short of the baseline.
 //                        A dump with any other pre-identity ledger refuses
 //                        (D55 (10)): the boot stops at enroll, names the
-//                        missing file, and writes nothing — no 0063, no row.
+//                        missing file, and writes nothing — no 0081, no row.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { BOOT_TIMEOUT_MS, bootFailureReport, harness, journalNow, spawnBoot, teardown, waitFor, type BootHarness, type RunningBoot } from "./smoke-boot-harness.ts";
 import { makeEncryptedBackup, MARKER_PAGE, type EncryptedBackup } from "../support/make-encrypted-backup.ts";
@@ -253,9 +253,9 @@ describe("`RM_ENV=stage bun smoke --local dump --migrate` against a real encrypt
   // outcome §4.2, §5 and D55 (10) require.
   let baseline: { steps: string[]; code: number | null; out: string; identity: string | null; tableExists: boolean } | undefined;
 
-  test("a baseline dump (production's ledger, predates 0063): nothing migrates and no service starts before the copy says rehearsal", async () => {
+  test("a baseline dump (production's ledger, predates 0081): nothing migrates and no service starts before the copy says rehearsal", async () => {
     expect(baselineDump.identity).toBeNull();
-    expect(baselineDump.ledger).toHaveLength(73);
+    expect(baselineDump.ledger).toHaveLength(76);
     const h = harness("dumpbl");
     let boot: RunningBoot | undefined;
     try {
@@ -316,7 +316,7 @@ describe("`RM_ENV=stage bun smoke --local dump --migrate` against a real encrypt
     expect(baseline.identity).toBe("rehearsal:rm_owner");
   });
 
-  test("a v0.5.0 dump (any other pre-identity ledger) refuses at enroll: no 0063, no row, no migrate, the missing file named", async () => {
+  test("a v0.5.0 dump (any other pre-identity ledger) refuses at enroll: no 0081, no row, no migrate, the missing files named", async () => {
     expect(releaseDump.identity).toBeNull();
     expect(releaseDump.ledger).toHaveLength(72);
     const h = harness("dumprel");
@@ -332,7 +332,9 @@ describe("`RM_ENV=stage bun smoke --local dump --migrate` against a real encrypt
       expect(s.filter((x) => /^prepare:migrate:/.test(x))).toEqual([]);
       const out = boot.output();
       expect(out).toContain("Refusing the --local dump identity-first pass");
-      expect(out).toContain("1 missing (0062_rm_readonly_sequence_select.sql)");
+      expect(out).toContain(
+        "4 missing (0061_rm_worker_wallet_backfill_grant.sql, 0062_rm_readonly_sequence_select.sql, 0063_swarm_judge_model_default.sql, 0080_analytics_ledger_compaction.sql)",
+      );
       for (const after of ["phase: prepare (migrate)", "phase: prepare (site)", "phase: prepare (images)", "phase: preflight", "phase: replace"]) {
         expect(out).not.toContain(after);
       }

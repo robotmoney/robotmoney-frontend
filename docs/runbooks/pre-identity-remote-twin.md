@@ -2,7 +2,7 @@
 
 > **Authority.** [D55](../decisions.md#d55) (10), Lucas's call of 2026-09-28,
 > and [smoke production spec](../technical/smoke-production-spec.md) §4.2.
-> A production dump from before migration 0063 cannot become a remote twin
+> A production dump from before migration 0081 cannot become a remote twin
 > through any tool. This runbook is the one hand step that makes it one.
 
 ## When to use it
@@ -11,7 +11,7 @@ Use it only when all of these hold:
 
 - You restored a production `pg_dump` into a **remote** Postgres database
   yourself, and you want to use that database as a twin.
-- The dump predates 0063, so the restored database has no
+- The dump predates 0081, so the restored database has no
   `deployment_identity` table.
 - A stage tool refused the database and named this runbook.
 
@@ -28,15 +28,15 @@ production guard.
 One transaction, run as `rm_owner` with the password typed at the terminal,
 fenced on the target-lock key (smoke spec §2):
 
-1. checks that the ledger equals the 73-name production baseline
+1. checks that the ledger equals the 76-name production baseline
    ([D55](../decisions.md#d55) (8));
-2. applies `backend/migrations/0063_deployment_identity.sql`;
-3. records `0063_deployment_identity.sql` in `schema_migrations`;
+2. applies `backend/migrations/0081_deployment_identity.sql`;
+3. records `0081_deployment_identity.sql` in `schema_migrations`;
 4. writes `deployment_identity.kind = 'rehearsal'`.
 
 It commits all four or none. The psql session log is the receipt. Afterwards
 the database is in the state the normal migrate path accepts (smoke spec
-§9.1). A stage `bun run migrate` then applies the six files below 0063 and the
+§9.1). A stage `bun run migrate` then applies the five files below 0081 and the
 rest.
 
 ## Before you start
@@ -77,13 +77,13 @@ RECEIPT="$RECEIPT_DIR/pre-identity-twin-$(date -u +%Y%m%dT%H%M%SZ).log"
   echo "target:   host=$TWIN_HOST port=$TWIN_PORT dbname=$TWIN_DB"
   echo "checkout: $(git rev-parse HEAD)"
   echo "dump:     $DUMP_FILE $(sha256sum "$DUMP_FILE" | cut -d' ' -f1)"
-  echo "0063:     $(sha256sum backend/migrations/0063_deployment_identity.sql | cut -d' ' -f1)"
+  echo "0081:     $(sha256sum backend/migrations/0081_deployment_identity.sql | cut -d' ' -f1)"
 } >> "$RECEIPT"
 
 jq -r '.ledger[].file' \
-  backend/tests/fixtures/releases/production-2026-09-25/baseline.json \
+  backend/tests/fixtures/releases/production-2026-10-01/baseline.json \
   | LC_ALL=C sort > "$RECEIPT_DIR/baseline-ledger.txt"
-wc -l < "$RECEIPT_DIR/baseline-ledger.txt"   # must print 73
+wc -l < "$RECEIPT_DIR/baseline-ledger.txt"   # must print 76
 ```
 
 ### 2. Connect as `rm_owner`
@@ -115,7 +115,7 @@ SELECT to_regclass('public.deployment_identity') AS identity_table;
 ```
 
 **Stop** unless `identity_table` is empty (null). A value means the dump is
-from after 0063, and this runbook does not apply: smoke spec §4.2's remote
+from after 0081, and this runbook does not apply: smoke spec §4.2's remote
 restore procedure does.
 
 Save the ledger beside the receipt and compare it with the baseline:
@@ -140,19 +140,19 @@ SELECT pg_advisory_xact_lock(7726322199513601);
 DO $$
 BEGIN
   IF to_regclass('public.deployment_identity') IS NOT NULL THEN
-    RAISE EXCEPTION 'deployment_identity exists: this is not a pre-0063 database';
+    RAISE EXCEPTION 'deployment_identity exists: this is not a pre-0081 database';
   END IF;
-  IF (SELECT count(*) FROM schema_migrations) <> 73 THEN
-    RAISE EXCEPTION 'the ledger is not the 73-name production baseline';
+  IF (SELECT count(*) FROM schema_migrations) <> 76 THEN
+    RAISE EXCEPTION 'the ledger is not the 76-name production baseline';
   END IF;
-  IF EXISTS (SELECT 1 FROM schema_migrations WHERE name = '0063_deployment_identity.sql') THEN
-    RAISE EXCEPTION '0063 is already recorded';
+  IF EXISTS (SELECT 1 FROM schema_migrations WHERE name = '0081_deployment_identity.sql') THEN
+    RAISE EXCEPTION '0081 is already recorded';
   END IF;
 END $$;
 
-\i backend/migrations/0063_deployment_identity.sql
+\i backend/migrations/0081_deployment_identity.sql
 
-INSERT INTO schema_migrations (name) VALUES ('0063_deployment_identity.sql');
+INSERT INTO schema_migrations (name) VALUES ('0081_deployment_identity.sql');
 
 INSERT INTO deployment_identity (kind, note)
 VALUES ('rehearsal', 'D55 (10) one-off pre-identity remote twin intervention');
@@ -163,7 +163,7 @@ SELECT count(*) AS ledger_rows FROM schema_migrations;
 
 If any statement failed, Postgres has aborted the transaction. Type
 `ROLLBACK;`, and nothing has changed. Otherwise check that `kind` is
-`rehearsal`, `written_by` is `rm_owner` and `ledger_rows` is `74`. Then type:
+`rehearsal`, `written_by` is `rm_owner` and `ledger_rows` is `77`. Then type:
 
 ```sql
 COMMIT;
@@ -184,7 +184,7 @@ chmod 600 "$RECEIPT"
 ```
 
 Keep the receipt. It records the pre-identity state, the ledger match, the
-0063 bytes and the committed row.
+0081 bytes and the committed row.
 
 ### 6. Finish with the normal path
 
@@ -198,7 +198,6 @@ RM_ENV=stage bun run migrate --instance "$TWIN_INSTANCE"
 
 It applies `0056_swarm_judge_requires_model`, `0057_swarm_judge_policy_stamp`,
 `0058_swarm_judge_fault_injection`, `0059_swarm_judgement_completion_usage`,
-`0061_rm_worker_wallet_backfill_grant`,
 `0062_rm_worker_analytics_ledger_read_grant` and every later file, then
 publishes the first manifest. Stage tools may connect only after it succeeds.
 
@@ -207,7 +206,7 @@ publishes the first manifest. Stage tools may connect only after it succeeds.
 - **Before `COMMIT`.** The transaction rolls back when the connection closes.
   The ledger is still the baseline, and there is still no table. Start again
   from step 2.
-- **After `COMMIT`, before step 6.** The row and 0063 are in place. Do not
+- **After `COMMIT`, before step 6.** The row and 0081 are in place. Do not
   repeat step 4, whose checks refuse. Go to step 6.
 - **During step 6.** Rerun step 6. It resumes from the first unapplied
   migration (smoke spec §8.3).

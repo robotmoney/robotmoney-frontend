@@ -296,7 +296,7 @@ describe("runSession closes on the WINDOW, not on its own agents settling", () =
     const realistic = resolveSmokeCadence({ stage: true });
     expect(epochDurationSecondsFor(fast)).toBe(fast.swarmWindowMs / 1000);
     expect(epochDurationSecondsFor(realistic)).toBe(realistic.swarmWindowMs / 1000);
-    // Migration 0067's CHECK refuses anything else, so a profile that could not
+    // Migration 0085's CHECK refuses anything else, so a profile that could not
     // produce a positive whole number is refused here rather than by a 23514.
     expect(() => epochDurationSecondsFor({ ...fast, swarmWindowMs: 0 })).toThrow(/positive whole number of seconds/);
     expect(() => epochDurationSecondsFor({ ...fast, swarmWindowMs: -1_000 })).toThrow(/positive whole number of seconds/);

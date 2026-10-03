@@ -41,7 +41,7 @@ const PINNED: Record<string, string> = {
   // APPLIED HISTORY. 0019 created `committee_notification_outbox`, 0021/0022
   // extended it, 0025 renamed it and 0033 remapped its member ids. A migration
   // that has run on production is a fact, not a file — rewriting one to satisfy
-  // a grep would desynchronise every deployed ledger. 0066 is the DROP itself,
+  // a grep would desynchronise every deployed ledger. 0084 is the DROP itself,
   // and it has to name what it drops.
   "backend/migrations/0019_committee_self_serve_claim.sql": "applied history: created the outbox",
   "backend/migrations/0021_committee_waitlist.sql": "applied history: extended the outbox kinds",
@@ -49,13 +49,13 @@ const PINNED: Record<string, string> = {
     "applied history: extended the outbox kinds",
   "backend/migrations/0025_swarm_rename.sql": "applied history: committee_* → swarm_* rename",
   "backend/migrations/0033_swarm_member_uuid_ids.sql": "applied history: remapped member ids",
-  "backend/migrations/0066_drop_swarm_notifications.sql": "the migration that removes it names what it removes",
-  "docs/technical/bill-of-materials.html": "cites 0066 by filename while stating that no email is sent",
-  "backend/schema/snapshot.json": "the snapshot's identity is its migration filename list, 0066 included",
-  "backend/tests/fixtures/snapshots/0078_automation_token_holders/schema/snapshot.json":
-    "byte-for-byte copy of the 0078 snapshot.json (snapshot N, spec §8.4); its identity is the same filename list, 0066 included",
-  "backend/tests/rollout-steps-0-5-1.test.ts": "names 0066 as a post-v0.5.1 arrival; a filename list, not a feature",
-  "backend/tests/migration-history.test.ts": "lists 0066 among the files production has not recorded; a filename list, not a feature",
+  "backend/migrations/0084_drop_swarm_notifications.sql": "the migration that removes it names what it removes",
+  "docs/technical/bill-of-materials.html": "cites 0084 by filename while stating that no email is sent",
+  "backend/schema/snapshot.json": "the snapshot's identity is its migration filename list, 0084 included",
+  "backend/tests/fixtures/snapshots/0095_automation_token_holders/schema/snapshot.json":
+    "byte-for-byte copy of the 0095 snapshot.json (snapshot N, spec §8.4); its identity is the same filename list, 0084 included",
+  "backend/tests/rollout-steps-0-5-1.test.ts": "names 0084 as a post-v0.5.1 arrival; a filename list, not a feature",
+  "backend/tests/migration-history.test.ts": "lists 0084 among the files production has not recorded; a filename list, not a feature",
 
   // A DIFFERENT COMPANY. `agentmail-16d51f` is an x402 ecosystem project in the
   // seeded projects roster. It has never been our mail vendor's record and is
@@ -101,7 +101,7 @@ describe(`nothing in the repo sends swarm email (/${PATTERN}/i)`, () => {
     // the pattern, the pathspecs and the cwd are all live.
     const found = grepFiles();
     expect(found.length).toBeGreaterThan(0);
-    expect(found).toContain("backend/migrations/0066_drop_swarm_notifications.sql");
+    expect(found).toContain("backend/migrations/0084_drop_swarm_notifications.sql");
   });
 
   test("every pinned path still exists — a stale exemption is a blind spot", () => {

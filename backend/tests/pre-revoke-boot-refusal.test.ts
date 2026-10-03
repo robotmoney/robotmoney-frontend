@@ -14,7 +14,7 @@
 // THE DATABASE is built the way a real one reaches this release: snapshot N
 // (the pinned fixture, tests/fixtures/snapshots/) bootstrapped by rm_owner,
 // then the REAL migrate run with this checkout's migrations, which applies
-// 0088 (the WebAuthn slots), 0089 (the revoke), 0090 and 0091 and records each one's
+// 0106 (the WebAuthn slots), 0107 (the revoke), 0108 and 0109 and records each one's
 // declared compat in the ledger.
 //
 // THE CODE is the real api entrypoint (`bun run src/api/index.ts`), logged in
@@ -22,13 +22,13 @@
 //   * as built here — it serves: the database is healthy and this code's
 //     filename list holds every ledger row;
 //   * as built before this wave — its schema snapshot's filename list ends at
-//     `0087_member_key_spoof_generation.sql`, the last file of the tree before
-//     0088 (f59bbac7). That list is the only input check 3b takes from the
+//     `0105_member_key_spoof_generation.sql`, the last file of the tree before
+//     0106 (f59bbac7). That list is the only input check 3b takes from the
 //     image (runStartupPreflight: `codeFilenames`), so the image is modelled by
 //     exactly that list, handed in through `bun --preload` the way
 //     tests/support/automation-auth.ts's red controls rewrite one line of a
-//     real process. It must refuse by check 3b, naming 0088 and 0089 as
-//     breaking — and not 0090 or 0091, whose `additive` it may run beside.
+//     real process. It must refuse by check 3b, naming 0106 and 0107 as
+//     breaking — and not 0108 or 0109, whose `additive` it may run beside.
 import { restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
@@ -41,11 +41,11 @@ import { BACKEND_DIR, connectAdmin, databaseUrl, freePort, portIsBound } from ".
 
 const APP = { name: "rm_app", password: `rm_app_prerevoke_${randomBytes(6).toString("hex")}` };
 /** The last migration of the tree before this wave's (f59bbac7). */
-const LAST_BEFORE_REVOKE = "0087_member_key_spoof_generation.sql";
-const REVOKE = "0089_revoke_runtime_delete.sql";
-const SLOTS = "0088_webauthn_challenge_slots.sql";
-const COMMENT = "0090_stream_events_retention_comment.sql";
-const WORKER_EVIDENCE = "0091_rm_worker_wallet_evidence_insert.sql";
+const LAST_BEFORE_REVOKE = "0105_member_key_spoof_generation.sql";
+const REVOKE = "0107_revoke_runtime_delete.sql";
+const SLOTS = "0106_webauthn_challenge_slots.sql";
+const COMMENT = "0108_stream_events_retention_comment.sql";
+const WORKER_EVIDENCE = "0109_rm_worker_wallet_evidence_insert.sql";
 
 const dbs = new ScratchDatabases();
 const suffix = crypto.randomUUID().slice(0, 8);
@@ -131,7 +131,7 @@ afterAll(async () => {
 });
 
 describe("the breaking revoke closes rollback to code that ignores the tombstones (D55 (6))", () => {
-  test("the real migrate run recorded 0088 and 0089 as breaking, and 0090 and 0091 as additive", async () => {
+  test("the real migrate run recorded 0106 and 0107 as breaking, and 0108 and 0109 as additive", async () => {
     const rows = (await db`
       SELECT name, compat FROM schema_migrations
        WHERE name IN (${SLOTS}, ${REVOKE}, ${COMMENT}, ${WORKER_EVIDENCE}) ORDER BY name`) as unknown as {
@@ -158,7 +158,7 @@ describe("the breaking revoke closes rollback to code that ignores the tombstone
     }).toEqual({ append_only_guard: "armed", analytics_ledger_guard: "armed" });
   }, 120_000);
 
-  test("the code built before the revoke refuses to boot by check 3b, naming 0088 and 0089 as breaking and not 0090 or 0091", async () => {
+  test("the code built before the revoke refuses to boot by check 3b, naming 0106 and 0107 as breaking and not 0108 or 0109", async () => {
     // Its filename list, as its own snapshot carried it: this tree's up to the
     // last file before this wave. Nothing else about the image changes.
     const own = (await loadSnapshot()).filenames;
@@ -175,12 +175,12 @@ describe("the breaking revoke closes rollback to code that ignores the tombstone
     expect(boot.outcome).toBe("exited");
     expect(boot.code).toBe(1);
     expect(await portIsBound(boot.port)).toBe(false);
-    // One refusal per breaking row, exactly these three: 0092 (the fault-injection
+    // One refusal per breaking row, exactly these three: 0110 (the fault-injection
     // table's drop, D55 (3)) is also breaking and also unknown to this old code.
     expect(boot.lines).toEqual([
       `startup_preflight: refused check 3: ${SLOTS}: declared breaking — code-only rollback past it is closed, explicitly (§8.4).`,
       `startup_preflight: refused check 3: ${REVOKE}: declared breaking — code-only rollback past it is closed, explicitly (§8.4).`,
-      "startup_preflight: refused check 3: 0092_drop_swarm_judge_fault_injection.sql: declared breaking — code-only rollback past it is closed, explicitly (§8.4).",
+      "startup_preflight: refused check 3: 0110_drop_swarm_judge_fault_injection.sql: declared breaking — code-only rollback past it is closed, explicitly (§8.4).",
     ]);
   }, 120_000);
 });

@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS automation_tokens (
 
 -- The API reads this table on every authenticated automation request and never
 -- writes it; provisioning is `rm_owner`'s, exactly like `deployment_identity`
--- (migration 0063), because it is part of authorized preparation rather than
+-- (migration 0081), because it is part of authorized preparation rather than
 -- part of serving traffic. REVOKE first: 0053 handed `rm_app` DELETE on ALL
 -- TABLES, so a bare GRANT SELECT would leave the runtime role able to delete
 -- its own credential store.

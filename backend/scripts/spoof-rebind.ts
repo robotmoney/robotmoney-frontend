@@ -12,7 +12,7 @@
 // THE KEY MECHANISM IS THE EXISTING ONE (D55 (6)). A rebind supersedes the
 // member's active key rows with `active = false` — the tombstone `rotate-key`
 // writes — and inserts the new active row carrying the generation's public key,
-// the generation id (`spoof_generation_id`, migration 0087) and, once issued,
+// the generation id (`spoof_generation_id`, migration 0105) and, once issued,
 // ONLY the hash of the generation's bearer (`token_hash`, the column the API
 // authenticates a member bearer against). Nothing is deleted: the superseded
 // rows stay as the verification history past takes and judgements were signed
