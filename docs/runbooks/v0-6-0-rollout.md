@@ -84,7 +84,7 @@ Classification is each file's own `compat:` header at `d20429ca`. Re-derive at t
 `comm -13 <(ledger) <(ls backend/migrations | sort)`.
 
 - **No `compat:` header (6, they predate the runner's metadata):** `0056_swarm_judge_requires_model`, `0057_swarm_judge_policy_stamp`, `0058_swarm_judge_fault_injection`, `0059_swarm_judgement_completion_usage`, `0062_rm_worker_analytics_ledger_read_grant`, `0063_deployment_identity`. `0063` is applied first by the guarded pass (R6.3). A `NULL` compat refuses an older image (spec §8.4); confirm the runner treats these as the spec requires at R3.
-- **Breaking (8):** `0066_drop_swarm_notifications`, `0072_drop_swarm_schedules`, `0079_drop_swarm_scheduler_jobs`, `0080_stream_events_grant_only`, `0081_stream_event_counter`, `0088_webauthn_challenge_slots`, `0089_revoke_runtime_delete`, `0092_drop_swarm_judge_fault_injection`.
+- **Breaking (8):** `0066` (drops the notification outbox table), `0072_drop_swarm_schedules`, `0079_drop_swarm_scheduler_jobs`, `0080_stream_events_grant_only`, `0081_stream_event_counter`, `0088_webauthn_challenge_slots`, `0089_revoke_runtime_delete`, `0092_drop_swarm_judge_fault_injection`.
 - **Additive:** the rest (`0064`–`0065`, `0067`–`0078`, `0081_swarm_judge_model_bare_id`, `0082`–`0087`, `0090`, `0091`).
 
 Because any pending migration is `breaking`, the order is fixed by spec §8.5:
@@ -127,11 +127,11 @@ pipe or environment.
 
 ## 4. R0 Go/no-go (policy §4.1)
 
-- [ ] B1–B10 each closed, with the decision written in the tracking issue.
-- [ ] `release:v0.6.0` tracking issue exists, scope frozen, Phases complete (policy §6).
-- [ ] Every intended commit is on `releases-0.6.x`: `git log --oneline origin/main..releases-0.6.x` and the reverse are empty or fully explained.
-- [ ] `gh run list --branch releases-0.6.x` shows green `e2e`, `unit`, `backend`, `integration`, `contract`, `web-client`, `repo-guards`, `docs-lint`.
-- [ ] Operator names the cutover window and the rollback authority.
+- B1–B10 each closed, with the decision written in the tracking issue.
+- `release:v0.6.0` tracking issue exists, scope frozen, Phases complete (policy §6).
+- Every intended commit is on `releases-0.6.x`: `git log --oneline origin/main..releases-0.6.x` and the reverse are empty or fully explained.
+- `gh run list --branch releases-0.6.x` shows green `e2e`, `unit`, `backend`, `integration`, `contract`, `web-client`, `repo-guards`, `docs-lint`.
+- Operator names the cutover window and the rollback authority.
 
 ## 5. R1 Gate on the RC commit (local, no network spend)
 
