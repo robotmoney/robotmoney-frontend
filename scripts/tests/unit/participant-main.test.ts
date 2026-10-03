@@ -682,7 +682,6 @@ describe("runParticipant — the namespace decides the loop", () => {
     RM_MEMBER_ID: "m-themis",
     RM_MEMBER_TOKEN: "themis-bearer",
     RM_INFERENCE_KEY: "themis-own-model-key",
-    RM_JUDGE_MODEL: "deepseek-v4-flash",
     RM_JUDGE_BASE_URL: "https://models.example/v1",
     RM_ENV: "stage",
   };
@@ -713,21 +712,12 @@ describe("runParticipant — the namespace decides the loop", () => {
     expect(config.memberId).toBe("m-themis");
     expect(config.token).toBe("themis-bearer");
     expect(config.apiKey).toBe("themis-own-model-key");
-    expect(config.model).toBe("deepseek-v4-flash");
     expect(config.identity).toEqual(IDENTITY);
   });
 
   test("a judge whose token or identity fails the HTTP diagnostic never subscribes", async () => {
     const { ran, loops } = recordingLoops({ ...GREEN, serverMemberId: "m-someone-else", identityMatchesRoster: false });
     await expect(runParticipant(JUDGE_ENV, { loops, read: { dockerSocketProbePaths: [] } })).rejects.toThrow(/refuses to subscribe/);
-    expect(ran).toEqual([]);
-  });
-
-  test("a judge with no usable model refuses by its D-A7 name before anything connects", async () => {
-    const { ran, loops } = recordingLoops();
-    await expect(
-      runParticipant({ ...JUDGE_ENV, RM_JUDGE_MODEL: "nemotron-3-ultra-free" }, { loops, read: { dockerSocketProbePaths: [] } }),
-    ).rejects.toThrow(/model_disallowed/);
     expect(ran).toEqual([]);
   });
 

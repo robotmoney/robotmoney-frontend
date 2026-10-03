@@ -5321,6 +5321,15 @@ export interface PendingJudging {
   judgingDeadlineAt: string;
   judgingRequestedAt: string | null;
   /**
+   * The model the judge is to run, read from `swarm_judge_config.model` at the
+   * moment this frame is built (issue 1118). The participant holds no database
+   * credential, so the API hands it the configured wire id here; a change made
+   * through the admin route reaches the next judging with no restart. `null`
+   * when the row names none: the judge then refuses `model_unconfigured`
+   * rather than run some other model the admin surface does not report.
+   */
+  model: string | null;
+  /**
    * EXACTLY what the judge is to read: the session's frozen take set, its
    * brief and its rollup facts, as `judgeInputFromFrozen` builds them.
    *
@@ -5427,6 +5436,15 @@ const pendingJudgingTakes = registerQuery({
   callers: [JUDGE_ROUTE],
   probe: PENDING_JUDGING_PROBE,
 });
+const pendingJudgingModel = registerQuery({
+  role: "rm_app",
+  object: "swarm_judge_config",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:pendingJudgingFor.model",
+  purpose: "Read the configured judge model, which the judge participant runs at judging time.",
+  callers: [JUDGE_ROUTE],
+  probe: { statement: "SELECT model FROM swarm_judge_config WHERE id = 1" },
+});
 export async function pendingJudgingFor(memberId: string): Promise<PendingJudging[]> {
   const rows = await on(sql, pendingJudgingSessions, pendingJudgingMembers, pendingJudgingConfig, pendingJudgingJudgements, pendingJudgingTakes)<
     { id: string; subject_id: string; date: Date | string; judging_deadline_at: Date; judging_requested_at: Date | null }
@@ -5447,6 +5465,8 @@ export async function pendingJudgingFor(memberId: string): Promise<PendingJudgin
           WHERE r.session_id = s.id AND r.member_id = ${memberId})
      ORDER BY s.judging_deadline_at`;
   const minTakes = await judgeMinTakes(sql);
+  const [modelRow] = await on(sql, pendingJudgingModel)<{ model: string | null }>`SELECT model FROM swarm_judge_config WHERE id = 1`;
+  const model = modelRow?.model == null || String(modelRow.model).trim() === "" ? null : String(modelRow.model).trim();
   const pending: PendingJudging[] = [];
   for (const r of rows) {
     const frozen = await loadFrozenTakeSet(String(r.id));
@@ -5457,6 +5477,7 @@ export async function pendingJudgingFor(memberId: string): Promise<PendingJudgin
       date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10),
       judgingDeadlineAt: new Date(r.judging_deadline_at).toISOString(),
       judgingRequestedAt: r.judging_requested_at ? new Date(r.judging_requested_at).toISOString() : null,
+      model,
       input: await judgeInputFromFrozen(frozen, minTakes),
     });
   }
@@ -6301,7 +6322,9 @@ export function openJudgeStream(memberId: string, opts: JudgeStreamOptions = {})
         while (live) {
           const pending = await pendingJudgingFor(memberId).catch(() => null);
           if (pending) {
-            const fingerprint = JSON.stringify(pending.map((p) => p.sessionId));
+            // The model is part of the fingerprint: a switch made while a
+            // session waits must re-serve it, or the judge keeps the old one.
+            const fingerprint = JSON.stringify(pending.map((p) => [p.sessionId, p.model]));
             if (fingerprint !== lastServed) {
               lastServed = fingerprint;
               send("pending", { pending });

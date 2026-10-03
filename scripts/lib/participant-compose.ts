@@ -142,8 +142,9 @@ export function participantEnv(entry: RosterEntry, options: ParticipantRenderOpt
     env[INFERENCE_URL_ENV] = options.inference.baseUrl;
     env[INFERENCE_WIRE_ID_ENV] = options.inference.wireId;
   } else {
-    // The judge client's own names, read from it rather than spelled twice.
-    env[JUDGE_CLIENT_ENV.model] = options.inference.wireId;
+    // The judge client's own name, read from it rather than spelled twice. The
+    // MODEL is not delivered here: the judge runs `swarm_judge_config.model`,
+    // served with each judging request (issue 1118).
     env[JUDGE_CLIENT_ENV.endpoint] = options.inference.baseUrl;
   }
   if (entry.generation !== undefined) env.RM_SPOOF_GENERATION_ID = entry.generation;

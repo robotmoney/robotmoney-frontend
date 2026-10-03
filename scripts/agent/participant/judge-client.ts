@@ -86,6 +86,13 @@ export interface PendingJudging {
   date: string;
   judgingDeadlineAt: string;
   judgingRequestedAt: string | null;
+  /**
+   * The model to run, as `swarm_judge_config.model` named it when the API built
+   * this frame (issue 1118). The only source of the judge's model: there is no
+   * boot-time value to fall back on, so the admin surface never names a model
+   * the judge is not using. Absent or blank means none is configured.
+   */
+  model?: string | null;
   /** The frozen take set, brief and rollup facts this judge is to read — and the digest's subject. */
   input: JudgeInput;
 }
@@ -98,8 +105,6 @@ export interface JudgeClientConfig {
   name: string;
   /** This judge's own signing key, from its `credential.json` entry (§6.1). */
   identity: PersonaIdentity;
-  /** The model this judge calls, as the vendor spells it on the wire. */
-  model: string;
   endpoint: string;
   apiKey: string;
   timeoutMs: number;
@@ -133,7 +138,6 @@ export const JUDGE_CLIENT_ENV = {
   memberId: "RM_MEMBER_ID",
   name: "RM_MEMBER_NAME",
   identity: "RM_MEMBER_IDENTITY",
-  model: "RM_JUDGE_MODEL",
   endpoint: "RM_JUDGE_BASE_URL",
   apiKey: INFERENCE_KEY_ENV,
   timeoutMs: "RM_JUDGE_TIMEOUT_MS",
@@ -145,21 +149,15 @@ export function readJudgeClientConfig(env: Record<string, string | undefined> = 
     if (!v) throw new JudgeClientConfigError(`${key} was not injected`, reason);
     return v;
   };
-  // The model and the credential are REQUIRED, and each gap refuses by its
-  // D-A7 name. A judge container without them would connect, receive work and
-  // refuse every item — visibly, but only after a deadline had passed.
-  // Refusing at startup puts the misconfiguration in front of the operator
-  // immediately, and the container crash-loops under `restart: unless-stopped`,
-  // which is the right outcome.
-  const model = need(JUDGE_CLIENT_ENV.model, "model_unconfigured");
+  // The credential is REQUIRED and its gap refuses by its D-A7 name. A judge
+  // container without it would connect, receive work and refuse every item —
+  // visibly, but only after a deadline had passed. Refusing at startup puts
+  // the misconfiguration in front of the operator immediately, and the
+  // container crash-loops under `restart: unless-stopped`.
+  //
+  // THE MODEL IS NOT READ HERE (issue 1118). It is `swarm_judge_config.model`,
+  // served with each judging request and checked per request in `judgeOne`.
   const apiKey = need(JUDGE_CLIENT_ENV.apiKey, "credential_unconfigured");
-  try {
-    // WHICH model, not merely some model (AC-MODEL-01): the keyless free family
-    // everywhere, and anything but the pinned model on an acceptance path.
-    assertJudgeModelAllowed(model, env);
-  } catch (err) {
-    throw new JudgeClientConfigError(err instanceof Error ? err.message : String(err), "model_disallowed");
-  }
   const timeout = Number.parseInt(env[JUDGE_CLIENT_ENV.timeoutMs] ?? "", 10);
   return {
     apiUrl: need(JUDGE_CLIENT_ENV.apiUrl).replace(/\/$/, ""),
@@ -167,7 +165,6 @@ export function readJudgeClientConfig(env: Record<string, string | undefined> = 
     memberId: need(JUDGE_CLIENT_ENV.memberId),
     name: need(JUDGE_CLIENT_ENV.name),
     identity: readIdentity(need(JUDGE_CLIENT_ENV.identity)),
-    model,
     endpoint: need(JUDGE_CLIENT_ENV.endpoint),
     apiKey,
     timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : 300_000,
@@ -241,10 +238,28 @@ export async function judgeOne(
   deps: {
     fetchImpl?: typeof globalThis.fetch;
     runJudgeImpl?: typeof runJudge;
+    /** The environment the model policy reads (RM_ENV). Defaults to the process's. */
+    env?: Record<string, string | undefined>;
   } = {},
 ): Promise<JudgeOutcome> {
   const doFetch = deps.fetchImpl ?? fetch;
   const run = deps.runJudgeImpl ?? runJudge;
+
+  // THE MODEL IS THE ONE THE API SERVED (issue 1118): `swarm_judge_config.model`
+  // at the moment the frame was built. None configured, or one this environment
+  // may not use, refuses by its D-A7 name and submits nothing.
+  const model = typeof pending.model === "string" ? pending.model.trim() : "";
+  if (model === "") {
+    return { kind: "refused", sessionId: pending.sessionId, reason: "model_unconfigured", detail: "swarm_judge_config.model is not set" };
+  }
+  try {
+    // WHICH model, not merely some model (AC-MODEL-01): the keyless free family
+    // everywhere, and anything but the pinned model on an acceptance path.
+    assertJudgeModelAllowed(model, deps.env ?? process.env);
+  } catch (err) {
+    const detail = (err instanceof Error ? err.message : String(err)).slice(0, DETAIL_MAX);
+    return { kind: "refused", sessionId: pending.sessionId, reason: "model_disallowed", detail };
+  }
 
   if (!pending.input || !Array.isArray(pending.input.takes)) {
     // A frame with no input is a protocol fault between this container and the
@@ -260,7 +275,7 @@ export async function judgeOne(
     answer = await run({
       promptFile,
       endpoint: config.endpoint,
-      model: config.model,
+      model,
       apiKey: config.apiKey,
       timeoutMs: config.timeoutMs,
     });
@@ -279,7 +294,7 @@ export async function judgeOne(
 
   // The call's spend goes with the judgement it paid for (D55 (3)); a vendor
   // that reported none sends none, and the API stores NULL rather than 0.
-  return submitJudgement(config, pending, answer.body, doFetch, answer.usage);
+  return submitJudgement(config, pending, answer.body, doFetch, answer.usage, model);
 }
 
 /**
@@ -331,12 +346,13 @@ export async function submitJudgement(
   opinion: string,
   fetchImpl: typeof globalThis.fetch = fetch,
   usage?: JudgeUsage,
+  model: string = (pending.model ?? "").trim(),
 ): Promise<JudgeOutcome> {
   const sessionId = pending.sessionId;
   const body = {
     sessionId,
     opinion,
-    model: config.model,
+    model,
     promptHash: JUDGE_PROMPT_HASH,
     inputsDigest: inputsDigest(pending.input),
     nonce: crypto.randomUUID(),
