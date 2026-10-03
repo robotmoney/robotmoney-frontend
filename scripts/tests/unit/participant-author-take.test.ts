@@ -1,0 +1,168 @@
+// The standing participants' take one-shot writes PRODUCTION's take (issue 1116).
+//
+// Production's analysts wrote persona-voiced, sectioned takes with a memo:
+// the prompt carries the member's lens and bias, the regime numbers and the
+// bold sections, a take missing a section marks the member absent, and every
+// take posts a memo whose url rides the signed draft. The one-shot used to ask
+// one generic "your reasoning in plain prose" question. These tests pin the
+// production shape at the one-shot's own seams, with a stubbed `fetch`.
+//
+// Cost class `unit` (docs/architecture.md §3 L1): no Docker, no network.
+import { describe, expect, test } from "bun:test";
+import { RECEIPT_CANONICAL_BUCKET_ORDER, ROUTES } from "@robotmoney/contract";
+import {
+  authorTakeDraft,
+  readAuthorTakeEnv,
+  readTakeContext,
+  STRUCTURE_ATTEMPTS,
+  takePrompt,
+} from "../../agent/participant/author-take.ts";
+import { IN_HOUSE_PERSONAS, promptFor } from "../../agent/participant/take-prompt.ts";
+import { DEMO_MEMBERS } from "../../lib/smoke-mode.ts";
+
+const ENV = {
+  RM_API_URL: "http://api.test",
+  RM_MEMBER_ID: "athena",
+  RM_MEMBER_NAME: "Athena",
+  RM_MEMBER_TOKEN: "tok",
+  RM_SESSION_ID: "s-1",
+  RM_SUBJECT_ID: "woon",
+  RM_SESSION_DATE: "2026-10-03",
+  RM_INFERENCE_KEY: "k",
+  RM_INFERENCE_URL: "http://model.test/v1",
+  RM_INFERENCE_WIRE_ID: "w",
+};
+
+const WEIGHTS_LINE = `WEIGHTS: ${RECEIPT_CANONICAL_BUCKET_ORDER.map((b, i) => `${b}=${[0.55, 0.15, 0.2, 0.1][i]}`).join(" | ")}`;
+const GOOD_SUBJECT = "**REGIME**\n- composite 0.41\n\n**SUBJECT**\n- Woon is long beta into a cautious tape.\n\nSTANCE: cautious | CONFIDENCE: 0.6";
+const GOOD_ALLOCATION = `**REGIME**\n- composite 0.41\n\n**ALLOCATION**\n- Tilt to yield.\n\n${WEIGHTS_LINE}\nSTANCE: cautious | CONFIDENCE: 0.6`;
+
+interface Api {
+  recommendationType: string;
+  answers: string[];
+  memoStatus?: number;
+  calls: { memos: Record<string, unknown>[]; model: number; prompts: string[] };
+}
+
+function fakeFetch(api: Api): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname === ROUTES.swarm.brief) {
+      return Response.json({
+        body: {
+          subject: { recommendationType: api.recommendationType },
+          allocation: { buckets: [{ id: "agent_tokens", name: "Agent Tokens", target_weight: 0.05, items: [{ name: "Virtuals" }] }] },
+        },
+      });
+    }
+    if (url.pathname === ROUTES.dashboards.regimeSnapshots) {
+      return Response.json({ latest: { composite: 0.412, regime: "neutral", macro_regime: "tight", macro_percentile: 0.7 } });
+    }
+    if (url.pathname.startsWith("/api/swarm/members/")) return Response.json({ id: "athena", lens: "macro risk" });
+    if (url.pathname === ROUTES.swarm.memos) {
+      api.calls.memos.push(JSON.parse(String(init?.body)));
+      return Response.json({ ok: true, url: "https://example.test/memo/1" }, { status: api.memoStatus ?? 200 });
+    }
+    if (url.pathname === "/v1/chat/completions") {
+      api.calls.model += 1;
+      api.calls.prompts.push(JSON.parse(String(init?.body)).messages[0].content);
+      const content = api.answers.shift() ?? "";
+      return Response.json({ choices: [{ message: { content } }] });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+}
+
+const newApi = (answers: string[], recommendationType = "stance"): Api => ({
+  recommendationType,
+  answers,
+  calls: { memos: [], model: 0, prompts: [] },
+});
+
+describe("the take prompt is production's persona prompt", () => {
+  test("athena's prompt carries her lens, her cautious bias, the regime numbers and the sections", async () => {
+    const cfg = readAuthorTakeEnv(ENV);
+    const context = await readTakeContext(cfg, fakeFetch(newApi([])));
+    const prompt = takePrompt(cfg, context);
+    expect(prompt).toBe(
+      promptFor({ memberId: "athena", name: "Athena", lens: "macro risk", bias: -0.1 }, context.regime, "woon", {
+        requireWeights: false,
+        targets: [],
+      }),
+    );
+    expect(prompt).toContain("You are Athena, an autonomous voice on the Robot Money Investment Swarm.");
+    expect(prompt).toContain("through a macro risk lens");
+    expect(prompt).toContain("leans cautious");
+    expect(prompt).toContain("Composite 0.412");
+    expect(prompt).toContain("**REGIME**");
+    expect(prompt).toContain("**SUBJECT**");
+    expect(prompt).not.toContain("your reasoning in plain prose");
+  });
+
+  test("a bucket_weights subject asks for the four-weight line and the brief's own targets", async () => {
+    const cfg = readAuthorTakeEnv(ENV);
+    const context = await readTakeContext(cfg, fakeFetch(newApi([], "bucket_weights")));
+    expect(context.requireWeights).toBe(true);
+    const prompt = takePrompt(cfg, context);
+    expect(prompt).toContain("**ALLOCATION**");
+    expect(prompt).toContain("Sleeve targets in force: Agent Tokens 5% (Virtuals)");
+    for (const bucket of RECEIPT_CANONICAL_BUCKET_ORDER) expect(prompt).toContain(`${bucket}=<0-1>`);
+  });
+
+  test("the in-house lens and bias table is the one the scenario roster uses", () => {
+    for (const [id, persona] of Object.entries(IN_HOUSE_PERSONAS)) {
+      const member = DEMO_MEMBERS.find((m) => m.memberId === id);
+      expect({ id, lens: member?.lens, bias: member?.bias }).toEqual({ id, lens: persona.lens, bias: persona.bias });
+    }
+  });
+});
+
+describe("the one-shot refuses a take that is not sectioned, and posts a memo for one that is", () => {
+  test("a sectionless answer is asked for again, then refused: no memo, no draft", async () => {
+    const api = newApi(["Athena thinks it is fine.\nSTANCE: cautious | CONFIDENCE: 0.6", "Still no sections.\nSTANCE: cautious | CONFIDENCE: 0.6"]);
+    await expect(authorTakeDraft(ENV, fakeFetch(api))).rejects.toThrow(/omitted the \*\*REGIME\*\*, \*\*SUBJECT\*\* sections/);
+    expect(api.calls.model).toBe(STRUCTURE_ATTEMPTS);
+    expect(api.calls.memos).toEqual([]);
+  });
+
+  test("a take that drops one section is re-sampled, and the second sample is published", async () => {
+    const api = newApi(["**REGIME**\n- only this\n\nSTANCE: cautious | CONFIDENCE: 0.6", GOOD_SUBJECT]);
+    const draft = await authorTakeDraft(ENV, fakeFetch(api));
+    expect(api.calls.model).toBe(2);
+    expect(draft).toMatchObject({ memberId: "athena", subjectId: "woon", stance: "cautious", confidence: 0.6, memoUrl: "https://example.test/memo/1" });
+  });
+
+  test("a good take posts its body as the member's memo and carries the memo url", async () => {
+    const api = newApi([GOOD_SUBJECT]);
+    const draft = await authorTakeDraft(ENV, fakeFetch(api));
+    expect(api.calls.memos).toEqual([{ sessionId: "s-1", title: "Athena's analysis of woon", body: draft.body }]);
+    expect(draft.memoUrl).toBe("https://example.test/memo/1");
+    expect(String(draft.body)).toContain("**SUBJECT**");
+    expect(String(draft.body)).not.toContain("STANCE:");
+    expect(draft).not.toHaveProperty("weights");
+  });
+
+  test("a memo that cannot be posted fails the take", async () => {
+    const api = newApi([GOOD_SUBJECT]);
+    api.memoStatus = 500;
+    await expect(authorTakeDraft(ENV, fakeFetch(api))).rejects.toThrow(/memos failed with HTTP 500/);
+  });
+
+  test("a bucket_weights take carries exactly the four weights, and one without them is refused", async () => {
+    const ok = newApi([GOOD_ALLOCATION], "bucket_weights");
+    const draft = await authorTakeDraft(ENV, fakeFetch(ok));
+    expect(draft.weights).toEqual(RECEIPT_CANONICAL_BUCKET_ORDER.map((bucket, i) => ({ bucket, weight: [0.55, 0.15, 0.2, 0.1][i] })));
+    expect(String(draft.body)).not.toContain("WEIGHTS");
+
+    const noWeights = "**REGIME**\n- x\n\n**ALLOCATION**\n- y\n\nSTANCE: cautious | CONFIDENCE: 0.6";
+    const bad = newApi([noWeights, noWeights], "bucket_weights");
+    await expect(authorTakeDraft(ENV, fakeFetch(bad))).rejects.toThrow(/WEIGHTS/);
+    expect(bad.calls.memos).toEqual([]);
+  });
+
+  test("a missing control line is not re-sampled: the member is absent", async () => {
+    const api = newApi(["**REGIME**\n- x\n\n**SUBJECT**\n- y"]);
+    await expect(authorTakeDraft(ENV, fakeFetch(api))).rejects.toThrow(/control line/);
+    expect(api.calls.model).toBe(1);
+  });
+});
