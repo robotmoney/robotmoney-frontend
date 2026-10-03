@@ -17,16 +17,26 @@
 -- exactly one open window" — reachable at all on a fresh database: every
 -- subject that has ever existed, and every subject created afterwards, carries
 -- a usable duration from its first instant without an operator doing anything.
--- Existing rows take the same value, which is the honest choice: the system had
--- no per-subject duration before this migration, so there is nothing to
--- preserve and nothing to guess.
+-- Existing rows take the same value, so one number states the cadence for a
+-- blank database, a new subject and a migrated production database alike.
 --
--- WHY 3600. It is the cadence the retired `SWARM_*_CRON` schedules already
--- ran at (a one-hour submission window, backend/src/swarm/domain.ts's
--- `publishBrief(sessionId, windowMinutes = 60)`), so a database migrated by
--- this file behaves as it did the day before. It is a starting value, not a
--- policy: §2.3 says an operator changes it through the admin API, and a
--- rehearsal that wants short epochs does exactly that.
+-- WHY 21600. It is production's cadence. Release v0.5.4 ran one session per
+-- subject every six hours: the host driver's REALISTIC profile in
+-- scripts/lib/smoke-schedule.ts (swarmIntervalMs = swarmWindowMs = 21_600_000,
+-- asserted at boot by PRODUCTION_CADENCE_INTENT), with the backend's own
+-- backend cron schedules switched off, so the driver was the scheduler. v0.6.0
+-- changes how production is deployed, not what the product does, so an upgrade
+-- must not change a subject's schedule: an earlier draft of this file used 3600
+-- and claimed the old crons ran hourly, which would have moved every existing
+-- subject to six times the sessions, model spend and member load.
+--
+-- WHAT THIS DOES NOT SAY. Length is only half of "the same schedule". Where the
+-- windows fall on the clock is `epoch_anchor`, and migration 0090 backfills it
+-- from each subject's last recorded window close so the grid continues from
+-- where production's driver left it. 21600 is a starting value, not a policy:
+-- §2.3 says an operator changes it through the admin API, and a rehearsal that
+-- wants short epochs does exactly that (CI and twins set theirs when they
+-- create or adopt a subject).
 --
 -- WHY NOT NULL WITH A POSITIVE CHECK. §2.4: "There is no on/off state for
 -- scheduling." A nullable column, or one admitting zero, would BE that state —
@@ -41,7 +51,7 @@
 -- exactly as expressive as the spec needs and has one representation.
 
 ALTER TABLE swarm_subjects
-  ADD COLUMN IF NOT EXISTS epoch_duration_seconds integer NOT NULL DEFAULT 3600;
+  ADD COLUMN IF NOT EXISTS epoch_duration_seconds integer NOT NULL DEFAULT 21600;
 
 ALTER TABLE swarm_subjects
   DROP CONSTRAINT IF EXISTS swarm_subjects_epoch_duration_seconds_check;

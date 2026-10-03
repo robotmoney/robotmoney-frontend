@@ -204,8 +204,8 @@ INSERT INTO audit_log (actor, action, scope) VALUES
 INSERT INTO swarm_subjects (id, name) VALUES ('subj-1', 'Subject One');
 INSERT INTO swarm_sessions (id, subject_id, subject_name, state, window_closes_at, convened_at, published_at) VALUES
   ('${SESSION_PUBLISHED}', 'subj-1', 'Subject One', 'published',  '2026-09-01T12:00:00Z', '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'),
-  ('${SESSION_OLD_OPEN}',  'subj-1', 'Subject One', 'collecting', '2026-09-20T12:00:00Z', '2026-09-20T11:00:00Z', NULL),
-  ('${SESSION_NEW_OPEN}',  'subj-1', 'Subject One', 'collecting', '2026-09-21T12:00:00Z', '2026-09-21T11:00:00Z', NULL);
+  ('${SESSION_OLD_OPEN}',  'subj-1', 'Subject One', 'collecting', '2026-09-20T12:00:00Z', '2026-09-20T06:00:00Z', NULL),
+  ('${SESSION_NEW_OPEN}',  'subj-1', 'Subject One', 'collecting', '2026-09-21T12:00:00Z', '2026-09-21T06:00:00Z', NULL);
 INSERT INTO swarm_recommendations (session_id, member_id, subject_id, date, nonce, stance, payload, signature, verified, revision) VALUES
   ('${SESSION_PUBLISHED}', 'm-alpha', 'subj-1', '2026-09-01', 'n-alpha-1', 'buy',  '{"take":"alpha r1"}', 'sig-alpha-1', true, 1),
   ('${SESSION_PUBLISHED}', 'm-alpha', 'subj-1', '2026-09-01', 'n-alpha-2', 'hold', '{"take":"alpha r2"}', 'sig-alpha-2', true, 2),
@@ -522,18 +522,30 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
       ]);
     });
 
-    test("the subject gains its grid: defaults for the durations, the anchor from its open window (0085, 0090)", async () => {
+    test("the subject keeps production's six-hour schedule: 21600 s, and the next three closes are the instants v0.5.4's driver would have used (0085, 0090, issue 1112)", async () => {
       const [subject] = (await db`
         SELECT epoch_duration_seconds, judging_duration_seconds, epoch_anchor FROM swarm_subjects WHERE id = 'subj-1'`) as unknown as {
         epoch_duration_seconds: number;
         judging_duration_seconds: number;
         epoch_anchor: Date;
       }[];
-      expect(subject?.epoch_duration_seconds).toBe(3600);
+      // v0.5.4 ran one session per subject every six hours, window = interval
+      // (scripts/lib/smoke-schedule.ts, REALISTIC). An upgrade does not change it.
+      expect(subject?.epoch_duration_seconds).toBe(21600);
       expect(subject?.judging_duration_seconds).toBe(900);
       // 0086 leaves ONE collecting session per subject (the newest); 0090
       // anchors the grid on that window's close.
       expect(subject?.epoch_anchor.toISOString()).toBe("2026-09-21T12:00:00.000Z");
+      // The open window is 06:00 -> 12:00 (six hours). Production's driver opens
+      // the next session at 12:00 and walks 6 h slots, so the next three closes
+      // are 18:00, 00:00 and 06:00. The grid the scheduler will use, read back
+      // from the migrated columns, must produce exactly those.
+      const grid = (await db`
+        SELECT to_char(epoch_anchor + k * make_interval(secs => epoch_duration_seconds),
+                       'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at
+          FROM swarm_subjects, generate_series(1, 3) AS k
+         WHERE id = 'subj-1' ORDER BY k`) as unknown as { at: string }[];
+      expect(grid.map((g) => g.at)).toEqual(["2026-09-21T18:00:00Z", "2026-09-22T00:00:00Z", "2026-09-22T06:00:00Z"]);
     });
 
     test("one collecting session per subject: the older is closed, the newest stays open, history untouched (0086)", async () => {
