@@ -815,7 +815,7 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
         [SESSION_AGGREGATED, "2026-09-10T12:00:00.000Z", "2026-09-10T11:00:00.000Z"],
         [SESSION_JUDGED_ENFORCE, "2026-09-11T12:00:00.000Z", "2026-09-11T11:00:00.000Z"],
         [SESSION_JUDGED_SHADOW, "2026-09-12T12:00:00.000Z", "2026-09-12T11:00:00.000Z"],
-        [SESSION_OLD_OPEN, "2026-09-20T12:00:00.000Z", "2026-09-20T11:00:00.000Z"],
+        [SESSION_OLD_OPEN, "2026-09-20T12:00:00.000Z", "2026-09-20T06:00:00.000Z"],
       ]);
       // The enforce judgement's own instant becomes the request and the consensus; the deadline is that plus the duration.
       const [je] = await rows(db`

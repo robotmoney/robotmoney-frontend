@@ -93,6 +93,15 @@ DO $$
 DECLARE
   config_mode text;
 BEGIN
+  -- The v0.3.0 preflight test replays every migration outside that release on
+  -- a database that never ran 0039, so the judge tables can be absent. No
+  -- session can carry a judgement there, and nothing is in flight: skip.
+  IF to_regclass('public.swarm_judge_config') IS NULL
+     OR to_regclass('public.swarm_session_judgements') IS NULL THEN
+    RAISE NOTICE 'judge tables absent (0039 has not run); no in-flight sessions to backfill';
+    RETURN;
+  END IF;
+
   SELECT CASE WHEN mode = 'enforce' THEN 'enforce' ELSE 'off' END
     INTO config_mode FROM swarm_judge_config WHERE id = 1;
   config_mode := COALESCE(config_mode, 'off');
