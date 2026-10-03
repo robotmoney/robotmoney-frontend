@@ -365,6 +365,7 @@ const MEMBER = new Set([
   "swarm.participants.pending",
   "swarm.participants.judgeSubscribe",
   "swarm.participants.judgement",
+  "swarm.participants.judgeRefusal",
 ]);
 // Public reads and the unauthenticated onboarding doors.
 const PUBLIC = new Set([

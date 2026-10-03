@@ -6274,13 +6274,19 @@ export interface JudgeStreamOptions {
   keepaliveMs?: number;
   /** How often this connection recomputes the judge's pending set. */
   refreshMs?: number;
+  /**
+   * How often the pending set is re-sent even though it has not changed. A
+   * judge retries a refused item on its own backoff, and a frame is what wakes
+   * it (issue #1117).
+   */
+  resendMs?: number;
 }
 
 // Under `Bun.serve`'s 10-second default idle timeout: a quiet SSE connection
 // has to write something first, or the server cuts it. The
 // keepalive threshold sits under the refresh interval, so an unchanged pending
 // set still writes a keepalive on every refresh — at most five seconds apart.
-const JUDGE_STREAM_DEFAULTS = { keepaliveMs: 4_000, refreshMs: 5_000 } as const;
+const JUDGE_STREAM_DEFAULTS = { keepaliveMs: 4_000, refreshMs: 5_000, resendMs: 30_000 } as const;
 
 /**
  * Hold a judge's subscription open, serving its pending set.
@@ -6292,9 +6298,12 @@ const JUDGE_STREAM_DEFAULTS = { keepaliveMs: 4_000, refreshMs: 5_000 } as const;
  *
  * While the connection lives, the set is recomputed and re-sent whenever it
  * CHANGES — a new request appears, or this judge's own submission clears one.
- * Resending an unchanged set would be noise, and sending nothing at all would
- * make a judge that connected a second before a request wait for its own
- * reconnect.
+ * An unchanged non-empty set is also re-sent every `resendMs` (issue #1117).
+ * A judge whose model call failed submits nothing and the set does not change,
+ * so without this it would never be told again, and one provider timeout would
+ * end the session `no_consensus`. The set is STATE, so a repeat is harmless:
+ * the judge decides from its own backoff and the item's deadline whether to
+ * try again, and the server decides nothing from a resend.
  *
  * Like the scheduler's stream, everything here belongs to the open connection
  * and stops with it. Nothing runs when no judge is connected.
@@ -6302,6 +6311,7 @@ const JUDGE_STREAM_DEFAULTS = { keepaliveMs: 4_000, refreshMs: 5_000 } as const;
 export function openJudgeStream(memberId: string, opts: JudgeStreamOptions = {}): Response {
   const keepaliveMs = opts.keepaliveMs ?? JUDGE_STREAM_DEFAULTS.keepaliveMs;
   const refreshMs = opts.refreshMs ?? JUDGE_STREAM_DEFAULTS.refreshMs;
+  const resendMs = opts.resendMs ?? JUDGE_STREAM_DEFAULTS.resendMs;
   let live = true;
 
   const body = new ReadableStream<Uint8Array>({
@@ -6318,6 +6328,7 @@ export function openJudgeStream(memberId: string, opts: JudgeStreamOptions = {})
 
       let lastServed = "";
       let lastFrameAt = 0;
+      let lastPendingAt = 0;
       void (async () => {
         while (live) {
           const pending = await pendingJudgingFor(memberId).catch(() => null);
@@ -6325,10 +6336,11 @@ export function openJudgeStream(memberId: string, opts: JudgeStreamOptions = {})
             // The model is part of the fingerprint: a switch made while a
             // session waits must re-serve it, or the judge keeps the old one.
             const fingerprint = JSON.stringify(pending.map((p) => [p.sessionId, p.model]));
-            if (fingerprint !== lastServed) {
+            if (fingerprint !== lastServed || (pending.length > 0 && Date.now() - lastPendingAt >= resendMs)) {
               lastServed = fingerprint;
               send("pending", { pending });
               lastFrameAt = Date.now();
+              lastPendingAt = lastFrameAt;
             } else if (Date.now() - lastFrameAt >= keepaliveMs) {
               send("keepalive", {});
               lastFrameAt = Date.now();

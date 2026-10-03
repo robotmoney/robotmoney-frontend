@@ -76,6 +76,7 @@ export const ROUTES: {
       pending: string;
       judgeSubscribe: string;
       judgement: string;
+      judgeRefusal: string;
     };
     admin: {
       action: string;
