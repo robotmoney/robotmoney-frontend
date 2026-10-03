@@ -75,7 +75,7 @@ type Mode = "base" | "devnet" | "devnet-unreadable" | "devnet-no-recommendation"
 
 const SLUGS = [
   { slug: "rmusdc", symbol: "rmUSDC", name: "Fixed Income" },
-  { slug: "rmagent", symbol: "rmAGENT", name: "Agent Tokens" },
+  { slug: "rmagent", symbol: "rmAGENT", name: "Small Cap Tokens" },
   { slug: "rmproto", symbol: "rmPROTO", name: "Protocol Tokens" },
   { slug: "rmrwa", symbol: "rmRWA", name: "Real World Assets" },
 ];
@@ -129,6 +129,8 @@ async function stubSaved(page: Page) {
 
 async function stubLive(page: Page, economics: unknown = goldenVault()) {
   await stubSaved(page);
+  // No manifest configured: the four-vault route answers 200 with no vaults.
+  await page.route("**/api/dashboards/robotmoney-vaults", (route) => route.fulfill(json({ asOf: "2026-09-01T00:00:00.000Z", network: { chainId: null }, contracts: { gateway: null, router: null, registry: null }, vaults: [] })));
   await page.route("**/api/dashboards/vault-economics", (route) => route.fulfill(json(economics)));
   await page.route("**/api/dashboards/allocation", (route) => route.fulfill(json(loadGolden("/api/dashboards/allocation"))));
   await page.route("**/api/swarm/sessions**", (route) => route.fulfill(json({ sessions: [LIVE_SESSION], nextCursor: null })));
@@ -498,7 +500,7 @@ test("the vaults unreadable: the head from the slug, the error in place of the f
   await openVault(page, "rmagent");
   await expect(page.locator(".rr-crumbs a")).toHaveAttribute("href", "/allocation#vaults");
   await expect(page.locator("h1")).toHaveText("rmAGENT");
-  await expect(page.locator(".rr-head .sv__eyebrow")).toContainText("Agent Tokens");
+  await expect(page.locator(".rr-head .sv__eyebrow")).toContainText("Small Cap Tokens");
   await expect(page.locator(".sv__error")).toHaveText("Vault data unavailable");
   await expect(page.locator(".rr-meta")).toBeHidden();
   await expect(page.locator("section.rr-sec")).toHaveCount(0);
@@ -917,7 +919,7 @@ test("the vault subject on the devnet: the router and four vaults, one book grou
 
   // The chart stacks the four vaults with the target drawn over them.
   await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText(["TVL", "Sleeves over time"]);
-  await expect(hold.locator(".rr-area__legend li")).toHaveText(["Fixed Income", "Agent Tokens", "Protocol Tokens", "Real World Assets", "Target"]);
+  await expect(hold.locator(".rr-area__legend li")).toHaveText(["Fixed Income", "Small Cap Tokens", "Protocol Tokens", "Real World Assets", "Target"]);
   await expect(hold.locator(".rr-area__legend li i.is-target")).toHaveCount(1);
   await expect(hold.locator('.rr-area__svg polyline[data-token="target"]')).toHaveCount(3);
 
@@ -1252,15 +1254,15 @@ test("the four registered names in the overview fixture are the ones the indexer
   }
 });
 
-test("rmAGENT from the manifest feed: paused and empty, headed Agent Tokens, no deposit", async ({ page }) => {
+test("rmAGENT from the manifest feed: paused and empty, headed Small Cap Tokens, no deposit", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await stubSaved(page);
   await page.route("**/api/dashboards/robotmoney-vaults", (route) => route.fulfill(json(VAULT_SET)));
   await page.goto("/index.html");
   await navigate(page, "/vault/rmagent");
   await expect(page.locator("h1")).toHaveText("rmAGENT");
-  await expect(page.locator(".rr-head .sv__eyebrow")).toContainText("Agent Tokens");
-  await expect(page.locator(".rr-head .sv__eyebrow")).not.toContainText("Small Cap");
+  await expect(page.locator(".rr-head .sv__eyebrow")).toContainText("Small Cap Tokens");
+  await expect(page.locator(".rr-head .sv__eyebrow")).not.toContainText("Agent Tokens");
   await expect(page.locator("#deposit")).toHaveCount(0);
   await expectNoBrowserErrors(errors);
 });

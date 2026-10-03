@@ -1,7 +1,7 @@
 // The manifest-derived four-vault overview served at
 // ROUTES.dashboards.robotmoneyVaults (frontend 1103). Rows come from
 // overviewRowsFromDeployment; no vault list or address is written here. Returns
-// null when no deployment manifest is configured, so the route answers 404 and
+// null when no deployment manifest is configured, so the route answers 200 with no vaults and
 // the web client falls back to the single-vault read.
 import { overviewRowsFromDeployment, type DeploymentSet, type VaultKey } from "./deployment-manifest.ts";
 

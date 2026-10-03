@@ -29,7 +29,7 @@ The switch is a query parameter kept per tab in sessionStorage (`rm.vaults`), so
 - `/allocation?vaults=devnet-unreadable`, and likewise `devnet-no-recommendation`, `devnet-stale`, `devnet-paused`
 - `?vaults=base` switches back (the default).
 
-Base mode reads, in order: `GET /api/dashboards/robotmoney-vaults`, once contract ROUTES declares it; if it is undeclared or absent (404, or the SPA shell answering), `GET /api/dashboards/vault-economics` with the latest published robotmoney-allocation recommendation laid over it; if a read fails otherwise, the saved Base snapshot on a local host ("Saved Base snapshot"), "Vault data unavailable" elsewhere. On the static preview every `/api` call fails, so base mode shows the saved snapshot and the archive's 2026-06-24 recommendation (95/3/0/2).
+Base mode reads, in order: `GET /api/dashboards/robotmoney-vaults`, once contract ROUTES declares it; if it is undeclared or absent (404, an empty vaults list, or the SPA shell answering), `GET /api/dashboards/vault-economics` with the latest published robotmoney-allocation recommendation laid over it; if a read fails otherwise, the saved Base snapshot on a local host ("Saved Base snapshot"), "Vault data unavailable" elsewhere. On the static preview every `/api` call fails, so base mode shows the saved snapshot and the archive's 2026-06-24 recommendation (95/3/0/2).
 
 ## Fixtures
 

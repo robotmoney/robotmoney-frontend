@@ -135,8 +135,8 @@ const META = {
     robots: "noindex, follow",
   },
   "/vault/rmagent": {
-    title: "rmAGENT: Agent Tokens Vault | Robot Money",
-    description: "rmAGENT, the Robot Money vault for the Agent Tokens sleeve.",
+    title: "rmAGENT: Small Cap Tokens Vault | Robot Money",
+    description: "rmAGENT, the Robot Money vault for the Small Cap Tokens sleeve.",
     robots: "noindex, follow",
   },
   "/vault/rmproto": {

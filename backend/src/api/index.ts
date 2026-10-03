@@ -267,7 +267,10 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname === ROUTES.dashboards.robotmoneyVaults && req.method === "GET") {
       const overview = await getRobotmoneyVaults();
-      return json(overview ?? { error: "not found" }, overview ? 200 : 404);
+      // No manifest configured: 200 with no vaults, not 404, so a browser
+      // that asks first logs no failed request. The web client reads an empty
+      // list as absent and falls back to the single-vault read.
+      return json(overview ?? { asOf: new Date().toISOString(), network: { chainId: null }, contracts: { gateway: null, router: null, registry: null }, vaults: [] });
     }
 
     if (pathname === ROUTES.dashboards.walletBalances && req.method === "GET") {

@@ -1,6 +1,6 @@
 // The manifest-derived four-vault overview route (frontend 1103): rows from
 // the deployment manifests, the gateway and router exposed, and no route
-// (null, so 404) when no manifest is configured.
+// (null, so the route answers 200 with no vaults) when no manifest is configured.
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { emptyDeploymentSet, loadDeploymentManifests } from "../src/chain/deployment-manifest.ts";
@@ -10,7 +10,7 @@ import { getRobotmoneyVaults } from "../src/api/routes/dashboards.ts";
 const DIR = join(import.meta.dir, "../../test-fixtures/deployments/new-keys");
 const set = () => loadDeploymentManifests(DIR);
 
-test("no manifest configured: no overview (the route answers 404)", () => {
+test("no manifest configured: no overview (the route answers 200 with an empty vaults list)", () => {
   expect(buildVaultsOverview(emptyDeploymentSet())).toBeNull();
 });
 
