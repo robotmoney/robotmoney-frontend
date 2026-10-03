@@ -116,21 +116,6 @@ function generateLocalPassword(): string {
 const RESTORE_ROLES = ["rm_readonly", "rm_worker"] as const;
 
 /**
- * The smoke-twin's stand-in for the production primary's bootstrap login.
- *
- * WHY THIS EXISTS. The twin restores with `--no-owner --no-privileges` and then
- * migrates as the container SUPERUSER, so it has no ownership topology to
- * change and no privilege constraint while changing it. That makes the
- * rehearsal structurally unable to rehearse the one migration whose entire
- * purpose is ownership and grants (0053) — three separate defects in that file
- * were invisible to the twin, to this suite, and to the live preflight, which
- * audits role STATE read-only and never executes the migration SQL.
- *
- * Reshaping the twin to own its objects under a NON-superuser role, and then
- * pointing MIGRATE_DATABASE_URL at that role, is what makes the boot exercise
- * the path a production cutover actually takes.
- */
-/**
  * PURE. The twin's schedule for the sessions it restored mid-window.
  *
  * A restored dump carries production's open sessions with production's
@@ -164,6 +149,21 @@ export function retimeAdoptedWindows(container: string, windowMs: number, log: (
   return rows.length;
 }
 
+/**
+ * The smoke-twin's stand-in for the production primary's bootstrap login.
+ *
+ * WHY THIS EXISTS. The twin restores with `--no-owner --no-privileges` and then
+ * migrates as the container SUPERUSER, so it has no ownership topology to
+ * change and no privilege constraint while changing it. That makes the
+ * rehearsal structurally unable to rehearse the one migration whose entire
+ * purpose is ownership and grants (0053) — three separate defects in that file
+ * were invisible to the twin, to this suite, and to the live preflight, which
+ * audits role STATE read-only and never executes the migration SQL.
+ *
+ * Reshaping the twin to own its objects under a NON-superuser role, and then
+ * pointing MIGRATE_DATABASE_URL at that role, is what makes the boot exercise
+ * the path a production cutover actually takes.
+ */
 export const TWIN_BOOTSTRAP_ROLE = "rm_twin_bootstrap";
 
 /** doadmin's exact production attribute set: rolsuper=false, the rest true. */
