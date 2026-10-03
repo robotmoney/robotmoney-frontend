@@ -3,9 +3,9 @@
 // docs/architecture.md §4 US-C1.
 //
 // ACTIVATE AND DEACTIVATE ARE ADMIN SUBJECT EDITS (issue #1026, D55 decision
-// 4). Deactivation closes the topic's open session and opens none; activation
-// opens nothing either — `system-scheduler` opens the first epoch from the
-// `subject.changed` event either edit publishes. Both carry the topic's
+// 4). Deactivation closes nothing: the open session runs to its scheduled close,
+// then none opens. Activation opens nothing either — `system-scheduler` opens
+// the first epoch from the `subject.changed` event either edit publishes. Both carry the topic's
 // `expectedVersion`, so an edit made against a stale read is refused (409).
 //
 // Reconciled to the REAL backend (issue #152/PR #169) per PR #172 review: the

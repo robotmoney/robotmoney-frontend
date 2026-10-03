@@ -331,10 +331,13 @@ export function registerAdminSwarmSession(Alpine) {
         // Three separate endpoints (add/excuse/restore), never a single PATCH
         // with an `operation` field. No version — roster rows aren't locked.
         const routeKey = { add: "rosterAdd", excuse: "rosterExcuse", restore: "rosterRestore" }[operation];
+        // The API refuses `reason` on a non-forced excuse (400); it records a
+        // reason only for a forced one, which this form never sends.
+        const body = operation === "excuse" ? { memberId } : { memberId, reason: trimmed };
         await api.adminPost(
           path(ROUTES.swarm.admin[routeKey], { id: this.sessionId }),
           this._token(),
-          { memberId, reason: trimmed },
+          body,
         );
         this.rosterForm = null;
         await this.load();
