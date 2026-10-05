@@ -257,7 +257,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         opencodeConfigPath: "/tmp/x/opencode.json",
         title: "onboarding-eval-abc",
         prompt: "the injected prompt",
-        modelConfig: { model: "opencode/deepseek-v4-flash", apiKeyEnv: "OPENCODE_API_KEY", apiKey: "sk-zen" },
+        modelConfig: { model: "opencode/deepseek-v4.1-flash", apiKeyEnv: "OPENCODE_API_KEY", apiKey: "sk-zen" },
         ownerEnv: { [KEYSTORE_PASSPHRASE_ENV]: "pass-phrase-xyz" },
       });
       // Only the flags AFTER the `run` subcommand belong to `opencode run`;

@@ -19,7 +19,7 @@ import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
-const MODEL = "deepseek-v4-flash";
+const MODEL = "deepseek-v4.1-flash";
 const OTHER = "kimi-k3";
 
 test("a mode-only patch preserves the stored model through every transition", async () => {

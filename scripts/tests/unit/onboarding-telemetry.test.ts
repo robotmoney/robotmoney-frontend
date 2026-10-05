@@ -211,7 +211,7 @@ describe("onboarding eval artifacts", () => {
           repoRoot: root,
           composeProject: "project",
           runId,
-          model: "opencode/deepseek-v4-flash",
+          model: "opencode/deepseek-v4.1-flash",
           contact,
           prompt: `prompt for ${runId}`,
           skillPath: skill,

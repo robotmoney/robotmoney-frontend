@@ -50,7 +50,7 @@ export interface ModelFamily {
 export const MODEL_FAMILIES: Record<string, ModelFamily> = {
   deepseek: {
     default: "v4-flash",
-    models: { "v4-flash": "deepseek-v4-flash", "v4-pro": "deepseek-v4-pro" },
+    models: { "v4-flash": "deepseek-v4.1-flash", "v4-pro": "deepseek-v4-pro" },
     note: "Repo default. Fast, cheap ($0.95/$4 per 1M), and — unlike the Claude family on Zen — it does NOT refuse the swarm-take persona.",
   },
   kimi: {
