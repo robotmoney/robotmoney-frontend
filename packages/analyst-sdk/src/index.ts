@@ -6,3 +6,4 @@ export { INDICATORS, PANELS, type Indicator, type Panel } from "./analyze/indica
 export { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 export { computeBacktest, stripDailyFromSnapshot, type BacktestPayload } from "./analyze/backtest.ts";
 export { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
+export { forwardFillAge, MAX_FORWARD_FILL_DAYS } from "./transform/math.ts";

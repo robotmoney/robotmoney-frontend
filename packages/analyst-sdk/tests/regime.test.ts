@@ -2,6 +2,9 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import {
   CsvHeaderError,
+  INDICATORS,
+  MAX_FORWARD_FILL_DAYS,
+  forwardFillAge,
   CsvQuotedFieldError,
   InputRowError,
   buildReport,
@@ -89,5 +92,83 @@ describe("input loader", () => {
       { date: "2024-01-01", indicator: "X", value: 1, source: "a" },
       { date: "2024-01-02", indicator: "X", value: 2, source: "b" },
     ]);
+  }, TEST_TIMEOUT_MS);
+});
+
+describe("runRegime asof, panels and forward-fill ages", () => {
+  const raw = toHistory(parseRawHistory(csvText));
+  const newest = Object.values(raw).reduce((m, rows) => (rows.length && rows[rows.length - 1]!.date > m ? rows[rows.length - 1]!.date : m), "");
+  const addDays = (d: string, n: number) => new Date(Date.parse(d) + n * 86400000).toISOString().slice(0, 10);
+  const D = addDays(newest, -30);
+  const D1 = addDays(D, 1);
+
+  test("rows after asof are ignored, equal to the input with those rows removed, and the input is not mutated", () => {
+    const before = JSON.stringify(raw);
+    const withTrailing = buildReport(runRegime(raw, { asof: D }), { full: true });
+    expect(JSON.stringify(raw)).toBe(before);
+    const trimmed: typeof raw = {};
+    for (const id in raw) trimmed[id] = raw[id]!.filter((r) => r.date <= D);
+    const without = buildReport(runRegime(trimmed), { full: true });
+    expect(JSON.stringify(withTrailing)).toBe(JSON.stringify(without));
+    expect(withTrailing.asof).toBe(D);
+  }, TEST_TIMEOUT_MS);
+
+  test("asof D vs D+1 changes only the D row (forced final-day weight refresh), by < 1e-3", () => {
+    const a = buildReport(runRegime(raw, { asof: D }), { full: true }).series!;
+    const b = buildReport(runRegime(raw, { asof: D1 }), { full: true }).series!;
+    expect(b.length).toBe(a.length + 1);
+    let differing = 0;
+    for (let i = 0; i < a.length; i++) {
+      if (Object.is(a[i]!.composite, b[i]!.composite) && Object.is(a[i]!.compositePercentile, b[i]!.compositePercentile) && a[i]!.regime === b[i]!.regime) continue;
+      differing++;
+      expect(a[i]!.date).toBe(D);
+      expect(Math.abs(a[i]!.composite - b[i]!.composite)).toBeLessThan(1e-2);
+    }
+    expect(differing).toBeLessThanOrEqual(1);
+  }, TEST_TIMEOUT_MS);
+
+  test("a factor-panel run yields finite factor index and percentile", () => {
+    const run = runRegime(raw, { panels: ["macro", "onchain", "factor"] });
+    const last = run.dateAxis.length - 1;
+    expect(Number.isFinite(run.result.factorIndex![last]!)).toBe(true);
+    expect(Number.isFinite(run.result.factorPercentile![last]!)).toBe(true);
+    const report = buildReport(run);
+    expect(Number.isFinite(report.regime.panels.factor!.index!)).toBe(true);
+    expect(Number.isFinite(report.regime.panels.factor!.percentile!)).toBe(true);
+  }, TEST_TIMEOUT_MS);
+
+  test("forwardFillAge is exported and an indicator last observed >120 days before asof gets weight 0", () => {
+    expect(MAX_FORWARD_FILL_DAYS).toBe(120);
+    expect(forwardFillAge([{ date: "2024-01-02", value: 1 }], ["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-05"])).toEqual([NaN, 0, 1, 2]);
+    const victim = INDICATORS.find((i) => i.panel === "macro" && i.align !== "zero_fill" && (raw[i.id]?.length ?? 0) > 400)!;
+    const baseline = buildReport(runRegime(raw, { asof: newest }));
+    expect(baseline.indicators.find((i) => i.id === victim.id)!.weight).toBeGreaterThan(0);
+    // Keep only the first ~100 days of the victim: its last observation is far
+    // more than 120 days before asof, so every later day is aged out (NaN) and
+    // too few valid observations remain in the trailing window to earn weight.
+    const cutoff = addDays(raw[victim.id]![0]!.date, 100);
+    const stale: typeof raw = { ...raw, [victim.id]: raw[victim.id]!.filter((r) => r.date <= cutoff) };
+    const run = runRegime(stale, { asof: newest });
+    const last = run.dateAxis.length - 1;
+    expect(Number.isNaN(run.result.signed[victim.id]![last]!)).toBe(true);
+    expect(buildReport(run).indicators.find((i) => i.id === victim.id)!.weight ?? 0).toBe(0);
+  }, TEST_TIMEOUT_MS);
+
+  test("invalid asof, start and panels are rejected", () => {
+    const bad = (o: Parameters<typeof runRegime>[1]) => expect(() => runRegime(raw, o)).toThrow(RangeError);
+    for (const asof of ["banana", "", "2026-13-45", "2026-02-30", "2000-01-01", "2017-12-31"]) bad({ asof });
+    bad({ start: "nope" });
+    bad({ start: addDays(D, 1), asof: D });
+    bad({ panels: ["bogus" as never] });
+    bad({ panels: [] });
+    bad({ panels: ["macro", "macro", "onchain"] });
+  }, TEST_TIMEOUT_MS);
+
+  test("the CLI rejects a trailing --asof or --panels and an empty --panels", async () => {
+    const fx = join(DIR, "fixtures/raw-indicator-history.csv");
+    for (const a of [["--asof"], ["--panels"], ["--panels", ""], ["--asof", "banana"]]) {
+      const p = Bun.spawnSync(["bun", join(DIR, "../bin/regime.ts"), fx, ...a], { stderr: "pipe", stdout: "pipe" });
+      expect(p.exitCode).not.toBe(0);
+    }
   }, TEST_TIMEOUT_MS);
 });

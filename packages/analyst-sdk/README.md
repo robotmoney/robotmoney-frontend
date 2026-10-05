@@ -3,8 +3,28 @@
 Pure regime analytics for Robot Money. Give it a raw indicator history, get back the
 regime label, per-indicator ranks and weights, correlations and the backtest. It
 never calls the network, never reads a database and never reads the environment.
-The backend runs this same code (`backend/src/analytics/` re-exports it), so what you
-audit here is what production computes. See decision D57 in `docs/decisions.md`.
+The backend runs this same code (`backend/src/analytics/` re-exports it). See decision
+D57 in `docs/decisions.md`.
+
+What reproduces, and how exactly. The compute core (`compute.ts`, `math.ts`,
+`transforms.ts`, `indicators.ts`, `backtest.ts`, `correlations.ts`) lives here; the
+backend files are one-line re-exports of these, so the backend runs the same source
+files. On the audited run (ledger run 390, 3066 of 3066 days, 5232 of 5232 correlation
+and backtest leaves) the composite, the panel indices, the percentiles, the labels, the
+correlations and the backtest reproduced bit-exactly from the persisted inputs. The
+Yahoo-sourced indicators are the exception and can drift on another run: they are
+persisted only to a relative tolerance (1e-6 for float32 series, 5e-6 for ratios of
+two series; decision D56, `backend/src/analytics/source-tolerance.ts`), while a run
+computes from the freshly fetched values. A replay can therefore differ, by an
+amount that is not bounded by that tolerance. The tolerance applies to `VIX`, `SPX_TREND`, `ETH_TREND` (float32) and
+`COPPER_GOLD`, `IWM_SPY`, `BTC_ETH`, `SPHB_SPLV`, `MTUM_SPY`, `IWF_IWD`, `XLU_SPY`,
+`XLP_XLY` (ratios) in the registry, and to the `backtest:^GSPC` and `backtest:ETH-USD`
+price series. Observed on one audited run: `factor_index` differed on some days by up
+to 1.4e-4 (30 to 100 times the tolerance, amplified through ranking and weights), and
+the last-day weights differed by up to 1.2e-6. The size of the drift on another run is
+unknown. The fetched values are not stored, so that
+cause is an inference, not a measurement. See "Reproducing a published run" and
+"What changes after publication, and why" below.
 
 ## Get the source
 
@@ -59,20 +79,124 @@ A real example lives in `tests/fixtures/raw-indicator-history.csv` (and `.json`)
 bun run regime tests/fixtures/raw-indicator-history.csv            # JSON report on stdout
 bun run regime tests/fixtures/raw-indicator-history.json --full    # adds the per-day series
 bun run regime my-history.csv --start 2018-01-01                   # first day of the date axis
+bun run regime my-history.csv --asof 2026-10-05                    # last day of the date axis
+bun run regime my-history.csv --panels macro,onchain,factor        # also report the factor panel
 bun test                                                            # package tests, fetch is a thrower
 bunx tsc --noEmit                                                   # typecheck
 ```
 
 The default report is checked against `tests/golden/regime-report.json`.
 
+Options (CLI flag, or the `runRegime(raw, opts)` field):
+
+| option | meaning |
+| ------ | ------- |
+| `--start D` / `start` | first day of the date axis. Default `2018-01-01`. |
+| `--asof D` / `asof` | last day of the date axis, `YYYY-MM-DD`. Input rows dated after it are ignored. Default: the newest date in the input. |
+| `--panels a,b` / `panels` | which panels to compute. Default `macro,onchain` (`PANELS`). Pass `macro,onchain,factor` (in code `["macro", "onchain", "factor"]`) to also get `factor_*`. In production the factor panel is display-only, computed by a second `computeRegime` call; `runRegime` does not do that. With `factor` in `panels` the factor panel enters the composite, so `composite`, `compositePercentile` and the top-level label no longer match the published table. Only the two-panel call reproduces the published composite; `factor_*` figures are checked from a factor run on their own. Invalid values throw a `RangeError` (the CLI exits 2): `asof` and `start` must be real `YYYY-MM-DD` dates, `asof` must not be before `start`, or before every input row (an `asof` later than the newest row is fine: values are forward-filled, as in production), and `panels` must be a non-empty list of distinct names from `macro`, `onchain`, `factor`. `--asof` and `--panels` need a value. |
+
+`runRegime` always passes forward-fill ages to `computeRegime` (`forwardFillAge`, for
+every indicator that is not `zero_fill`), as `backend/src/analytics/index.ts` does. A
+forward-filled value older than `MAX_FORWARD_FILL_DAYS` (120) is not carried further.
+Both are exported from `src/index.ts`.
+
 From code:
 
 ```ts
-import { parseRawHistory, toHistory, runRegime, buildReport } from "./src/index.ts";
+import {
+  parseRawHistory,
+  toHistory,
+  runRegime,
+  buildReport,
+  forwardFillAge,
+  MAX_FORWARD_FILL_DAYS,
+} from "./src/index.ts";
 
 const rows = parseRawHistory(await Bun.file("my-history.csv").text());
 const report = buildReport(runRegime(toHistory(rows)));
+
+// cut the axis at a day, and compute the factor panel too
+const asOf = buildReport(
+  runRegime(toHistory(rows), { asof: "2026-10-05", panels: ["macro", "onchain", "factor"] }),
+);
 ```
+
+### Current-month values (MNA)
+
+The current month's value of a monthly series such as `MNA` (EDGAR filing counts) is
+stored at its month-end date and updated through the month. A raw history can
+therefore hold a row dated after today (for example `2026-10-31` on 2026-10-05).
+Without a cut, the date axis would end there. Use `--asof` (or `runRegime`'s `asof`)
+to cut it at the day you mean.
+
+## Reproducing a published run
+
+Each regime run is recorded in the immutable run ledger. To check a published figure,
+replay that run's inputs, not the current table.
+
+1. Take the run's payload from `analytics_output_snapshots` (columns `run_id`,
+   `artifact_kind`, `payload_bytes` (bytea), `checksum`; `payload_json` exists only in
+   the CSV export), joined to `analytics_ledger_runs` on `run_id` with
+   `tool_id = 'regime'` and `artifact_kind = 'regime_snapshots'`.
+   Do not use `regime_snapshots`: that is a current view (next section). The ledger
+   starts on 2026-09-21 (migrations 0058/0059). Before that there is no record of
+   published payloads or revisions.
+2. Rebuild the inputs from `source_value_versions`: the rows with
+   `knowledge_time <=` the run's vintage cutoff
+   (`analytics_data_vintages.knowledge_time_cutoff`, not the run's start: the cutoff
+   falls after the run row is created, and revisions are written in between), newest
+   revision per `source_key` and `market_date`. `analytics_vintage_members` lists the
+   exact ids. In SQL shape:
+
+   ```sql
+   SELECT DISTINCT ON (source_key, market_date) source_key, market_date, value
+   FROM source_value_versions
+   WHERE knowledge_time <= :knowledge_time_cutoff
+   ORDER BY source_key, market_date, knowledge_time DESC, id DESC;
+   ```
+
+   The keys are `raw_indicator_history:<ID>` for each indicator, and
+   `backtest:^GSPC`, `backtest:ETH-USD` and `backtest:DTB3` for the `SPX`, `ETH` and
+   `TBILL3M` price series.
+3. Write them in the input format above and run with `--asof` set to the run's as-of
+   date (and `--panels macro,onchain,factor` if you want to check the factor figures):
+
+   ```sh
+   bun run regime run-inputs.csv --asof 2026-10-05 --full
+   ```
+
+The composite, panel indices, percentiles, labels, correlations and backtest then match
+the payload on the audited run (390); the Yahoo-sourced series are the exception, as
+above.
+
+## What changes after publication, and why
+
+`regime_snapshots` is a current view. The ledger is the record. A figure you saw on day
+D can differ from the same day's figure in the table today, with no change to the
+compute code. The reasons:
+
+- **Full-history recompute.** Methodology v3 recomputes every day on every run
+  (every run recomputes the full history) and rewrites the table. Only the ledger payloads
+  keep what an earlier run showed.
+- **FRED publication lag.** A value that arrives late replaces what had been
+  forward-filled. `DXY` can arrive up to 7 days late, and `HY_OAS` and `DFII10` over a
+  weekend.
+- **DefiLlama restates deep history.** `DEFI_TVL` and `DEFI_GROWTH` rows far back in
+  history change from run to run, and every run recomputes from them.
+- **The final axis day gets a weight refresh.** Weights refresh every 21 days and on
+  the last day of the axis. The as-of day uses weights refreshed that day, and the
+  same date recomputed the next day uses the 21-day schedule. The composite moves by
+  about 2e-4 (for example 0.501801 to 0.501573 for as-of 2026-10-04 against 10-05).
+- **Labels are more fragile than the composite.** Labels go through smoothing, so a
+  composite change of 3.5e-4 flipped six historical labels in one restatement.
+
+Worked case, as-of 2026-09-26. When shown, the `DXY` value had been forward-filled from
+2026-09-18 and `HY_OAS` from 2026-09-24. The real values arrived on 2026-09-28 and the
+`HY_OAS` percentile moved from 0.755 to 0.574 and the `DXY` percentile from 0.822 to
+0.677. The composite moved from 0.6176 to 0.5482, its percentile from 0.878 to 0.636,
+which is below the 0.67 `risk_on` bucket, and the label changed from `risk_on` to
+`neutral`. No compute code changed. The ledger payload of the original run still shows
+`risk_on`.
 
 ## Public data API
 
@@ -115,6 +239,11 @@ Regime outputs and correlations are not duplicated under `/api/public/analytics/
 Read them from `GET /api/dashboards/regime-snapshots?include=backtest`. Its response
 carries `source`, either `regime_snapshots` (the current-view table) or `ledger` (the
 immutable run ledger), which says which read path produced it.
+
+When you count published regime runs in `analytics_output_snapshots`, filter on
+`analytics_ledger_runs.tool_id = 'regime'` (join on `run_id`; `tool_id` is not a column
+of `analytics_output_snapshots`). Artifacts named `regime_snapshots` are empty for research runs
+(98 of 239 in the audited export), so counting them overcounts.
 
 ### Paging, caching, limits
 

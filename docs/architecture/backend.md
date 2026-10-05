@@ -94,5 +94,11 @@ Four distinctions, kept deliberately separate:
   `GET /api/dashboards/regime-snapshots`, which states its `source`. Reading
   `analytics_overwrite_events` as `rm_app` is migration 0094's one grant. The
   write side is unchanged: only the analytics provider writes this data.
+  Raw keys are never deleted, but a value is revised in place when a fetched
+  value differs beyond its source's D56 tolerance; each revision lands in
+  `analytics_overwrite_events` and `source_value_versions`.
+  `regime_snapshots` is a current view; the ledger (from 2026-09-21, migrations
+  0058/0059) is the record of what was published. Regime ledger runs are idempotent
+  per `run_key`; vintages per (run_id, tool_id). Restoring missed as-of days is tracked in #1162.
 
 ---
