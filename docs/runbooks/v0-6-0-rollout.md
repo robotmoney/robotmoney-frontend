@@ -130,6 +130,13 @@ An agent may run every command below up to a prompt. **The operator types the
 `rm_owner` and `doadmin` passwords and each `y`.** No step reads them from a file,
 pipe or environment.
 
+**On a twin there is no human in the loop.** A `--local dump`/`--local volume` instance
+owns a throwaway copy, and smoke generated its `rm_owner` password into the instance state
+directory (`role-passwords.json`); smoke's own `enroll`, `migrate` and `tokens` phases type it
+for you. Every R3 step, R3.8 included, is therefore runnable by an agent on a stage host; the
+typed-at-the-keyboard rule binds R6 on production only. (Clarified 2026-10-05 after an agent
+waited on the operator for a twin's password.)
+
 ## 4. R0 Go/no-go (policy §4.1)
 
 - B1–B10 each closed, with the decision written in the tracking issue.
@@ -282,6 +289,17 @@ R3.8 **The production-shaped sequence (settles B10).** Repeat R6.3–R6.9 on a *
 stage database enrolled `rehearsal` (restore the dump there by hand per
 [`pre-identity-remote-twin.md`](./pre-identity-remote-twin.md), or use a `--local volume`),
 with real `bun run migrate` prompts and `prod-init provision-tokens` under `RM_ENV=stage`.
+
+The `--local volume` form on stage-2 needs nobody at the keyboard: the twin's migrate and
+tokens are smoke's phases on the generated credentials (section 3), so what is left to
+rehearse is the ORDER of `bun smoke --static-port`, `prod-init rebind-members` and a second
+boot, with the restored members holding keys the credential file does not (production's
+case: fixture keys vs `credential.json`). Boot the migrated volume WITHOUT `--spoof-keys`
+(move the persisted spoof generation aside) and with `--credentials rehearsal-creds.json`,
+then `bun scripts/prod-init.ts rebind-members --instance rehearse-060 --credentials
+~/rehearsal-creds.json --api http://127.0.0.1:<api port>`, then boot again and watch the
+participants' takes. Do not run `bun run migrate` on stage-2: its `~/.env` points at
+production's read replica.
 Write down the exact order that works for `rebind-members` and whether the participants
 need a second `bun smoke --static-port` afterwards. Edit R6.7 to match, in a commit on
 this branch, before any rc tag.
