@@ -52,6 +52,8 @@ import {
   type ParticipantConfig,
   type ParticipantLoops,
   type StartupDiagnostic,
+  takeRetryDelayMs,
+  TAKE_RETRY_MAX_MS,
 } from "../../agent/participant/main.ts";
 import type { JudgeClientConfig } from "../../agent/participant/judge-client.ts";
 import { DB_CREDENTIAL_KEYS } from "../../lib/db-credential-keys.ts";
@@ -735,3 +737,20 @@ describe("runParticipant — the namespace decides the loop", () => {
     expect(main).not.toContain("runParticipantLoop(");
   });
 });
+
+describe("takeRetryDelayMs — a take that did not submit backs off, never re-runs on the next tick (stage-2 2026-10-05: 7 seats, ~1,750 crashed takes each per hour, 429 for everyone)", () => {
+  test("a submitted take resets: nothing to retry", () => {
+    expect(takeRetryDelayMs({ submission: "submitted" }, 4, 5_000)).toBeNull();
+  });
+  test("a crashed one-shot doubles from the poll interval per prior failure of the session", () => {
+    expect([0, 1, 2, 3].map((n) => takeRetryDelayMs({ submission: null }, n, 5_000))).toEqual([5_000, 10_000, 20_000, 40_000]);
+  });
+  test("an unconfirmed submission is retried on the same policy", () => {
+    expect(takeRetryDelayMs({ submission: "unconfirmed" }, 1, 5_000)).toBe(10_000);
+  });
+  test("the delay caps at five minutes, however long the outage", () => {
+    expect(takeRetryDelayMs({ submission: null }, 12, 5_000)).toBe(TAKE_RETRY_MAX_MS);
+    expect(takeRetryDelayMs({ submission: null }, 400, 5_000)).toBe(TAKE_RETRY_MAX_MS);
+  });
+});
+

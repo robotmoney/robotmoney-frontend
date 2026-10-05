@@ -653,6 +653,7 @@ export async function runParticipantLoop(
       + `serverMemberId=${diagnostic.serverMemberId ?? "none"} expected=${config.memberId}`,
     );
   }
+  const failures = new Map<string, number>();
   while (!signal?.aborted) {
     // A signed submission the server never confirmed goes out again first, as
     // the same bytes: a crash-restart resends, it never re-authors.
@@ -664,10 +665,39 @@ export async function runParticipantLoop(
       // One take at a time: the next poll waits for this take to finish.
       const outcome = await runTake(config, work);
       console.log(`[${config.kind}:${config.name}] ${JSON.stringify(outcome)}`);
+      // A take that did not submit is retried, but never on the very next
+      // tick: the work is still pending, so a `continue` here re-ran the same
+      // crashed one-shot back to back, and seven seats turned one model
+      // hiccup into ~1,750 requests each per hour and a 429 for everyone on
+      // the key (stage-2, 2026-10-05, 55967256). The delay grows per failure
+      // of this session and is capped; a submission resets it.
+      const delay = takeRetryDelayMs(outcome, failures.get(work.sessionId) ?? 0, config.pollIntervalMs);
+      if (delay === null) {
+        failures.delete(work.sessionId);
+        continue;
+      }
+      failures.set(work.sessionId, (failures.get(work.sessionId) ?? 0) + 1);
+      console.log(`[${config.kind}:${config.name}] take for ${work.sessionId} did not submit; next attempt in ${delay} ms`);
+      await sleep(delay, signal);
       continue;
     }
     await sleep(config.pollIntervalMs, signal);
   }
+}
+
+/** The longest a failed take waits before its next attempt. */
+export const TAKE_RETRY_MAX_MS = 5 * 60_000;
+
+/**
+ * How long to wait before re-attempting a take that did not submit, or `null`
+ * when it did (nothing to retry). Doubles from the poll interval per prior
+ * failure of the same session — 5 s, 10 s, 20 s, … — and caps at
+ * TAKE_RETRY_MAX_MS, so a provider outage costs one request every five minutes
+ * per seat instead of one every tick. Pure, so the policy is pinned by test.
+ */
+export function takeRetryDelayMs(outcome: { submission: string | null }, priorFailures: number, pollIntervalMs: number): number | null {
+  if (outcome.submission === "submitted") return null;
+  return Math.min(TAKE_RETRY_MAX_MS, pollIntervalMs * 2 ** Math.min(priorFailures, 30));
 }
 
 /** Sleep, but wake immediately when `docker stop` sends its SIGTERM. */
