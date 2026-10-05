@@ -99,10 +99,10 @@ test("swarm inference passes OpenCode's real auto-approval flag", async () => {
     expect(call.argv).toContain("--auto");
     expect(call.argv).not.toContain("--dangerously-skip-permissions");
     expect(call.argv.slice(call.argv.indexOf("--model"), call.argv.indexOf("--model") + 2)).toEqual([
-      "--model", "opencode/deepseek-v4-flash",
+      "--model", "opencode/deepseek-v4.1-flash",
     ]);
     expect(call.argv).toContain("--title");
-    expect(call.argv[call.argv.indexOf("--title") + 1]).toBe("robotmoney-swarm-opencode-deepseek-v4-flash");
+    expect(call.argv[call.argv.indexOf("--title") + 1]).toBe("robotmoney-swarm-opencode-deepseek-v4.1-flash");
     expect(call.argv).toContain("--print-logs");
     expect(call.argv.slice(call.argv.indexOf("--log-level"), call.argv.indexOf("--log-level") + 2)).toEqual(["--log-level", "DEBUG"]);
   }
@@ -110,7 +110,7 @@ test("swarm inference passes OpenCode's real auto-approval flag", async () => {
     "inference_requested", "cli_spawn_requested", "cli_spawned", "first_stdout_byte",
     "first_ndjson_event", "primary_stream_observed", "first_assistant_text_part", "process_exit", "completion",
   ]));
-  expect(telemetry.every((event) => event.model === "opencode/deepseek-v4-flash")).toBe(true);
+  expect(telemetry.every((event) => event.model === "opencode/deepseek-v4.1-flash")).toBe(true);
 });
 
 // ── Issue #361 Phase 0: the spawn environment is an ALLOWLIST, not an inherit ─
@@ -526,7 +526,7 @@ console.log(JSON.stringify({type:"text",part:{type:"text",text:"**REGIME**\\n- o
     const take = await authorTake(persona("title-error"), { composite: 0.5 }, "subject-1", {
       telemetry: (event) => milestones.push(event.milestone),
     });
-    expect(take.model).toBe("opencode/deepseek-v4-flash");
+    expect(take.model).toBe("opencode/deepseek-v4.1-flash");
     expect(milestones).toContain("auxiliary_title_error");
     expect(milestones).toContain("primary_stream_observed");
     expect(milestones).toContain("completion");

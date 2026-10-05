@@ -95,7 +95,7 @@ describe("the standing stack refuses to boot rather than produce nothing", () =>
 
   test("a raw opencode/<id> override is refused on the standing stack (D22 rule 1)", () => {
     let thrown: unknown;
-    try { run({ [ZEN_KEY_ENV]: FAKE_KEY, AGENT_MODEL: "opencode/deepseek-v4-flash", RM_ENV: "prod" }); } catch (err) { thrown = err; }
+    try { run({ [ZEN_KEY_ENV]: FAKE_KEY, AGENT_MODEL: "opencode/deepseek-v4.1-flash", RM_ENV: "prod" }); } catch (err) { thrown = err; }
     expect(thrown).toBeInstanceOf(Error);
   });
 });

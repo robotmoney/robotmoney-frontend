@@ -188,7 +188,7 @@ describe("configuration refuses at startup, by the D-A7 name", () => {
 
   test("on an acceptance path only the pinned model is allowed", () => {
     expect(refusal({ ...base, RM_ENV: "prod", RM_JUDGE_MODEL: "kimi-k3" }).reason).toBe("model_disallowed");
-    expect(() => readJudgeClientConfig({ ...base, RM_ENV: "prod", RM_JUDGE_MODEL: "deepseek-v4-flash" })).not.toThrow();
+    expect(() => readJudgeClientConfig({ ...base, RM_ENV: "prod", RM_JUDGE_MODEL: "deepseek-v4.1-flash" })).not.toThrow();
   });
 
   test("a missing endpoint, bearer or signing identity refuses by the variable's name", () => {
@@ -383,7 +383,7 @@ describe("a judge refuses rather than fakes — and says WHY, by the D-A7 name",
     const { outcome, posts } = await judgeWith({
       kind: "model_status",
       status: 401,
-      body: '{"type":"error","error":{"type":"ModelError","message":"Model opencode/deepseek-v4-flash is not supported"}}',
+      body: '{"type":"error","error":{"type":"ModelError","message":"Model opencode/deepseek-v4.1-flash is not supported"}}',
     });
     expect(outcome).toMatchObject({ kind: "refused", reason: "model_not_supported" });
     expect(posts).toEqual([]);
