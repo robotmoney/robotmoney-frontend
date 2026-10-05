@@ -275,7 +275,7 @@ describe("refuseWeakeningFlagsOnProd — §4.4, the one surviving overlay knob i
     const main = readFileSync(join(import.meta.dir, "..", "..", "lib", "smoke-main.ts"), "utf8");
     const refusal = main.indexOf("refuseAllowInsecureOnProd(policy, allowInsecureRequested)");
     expect(refusal).toBeGreaterThan(0);
-    expect(refusal).toBeLessThan(main.indexOf("if (staticPortMode) await stagePreflight();"));
+    expect(refusal).toBeLessThan(main.indexOf("if (staticPortMode) await stagePreflight(project);"));
     expect(main).toContain("allowInsecure: stackAllowInsecureFor(policy, allowInsecureRequested)");
     // Never a default: without the flag the stack config asks for nothing.
     expect(stackAllowInsecureFor("stage", false)).toBe(false);
