@@ -302,21 +302,25 @@ enrolled `rehearsal`, with the restored members holding keys the credential file
   not `~/.env`. What is left to rehearse is the ORDER of `bun smoke --static-port`,
   `prod-init rebind-members` and the participants picking up the new bearers.
 
-The twin route, on stage-2:
+The twin route, on stage-2, run 2026-10-05 at `7a4f19ac` (script `r38c.sh`):
 
-1. Boot the twin WITHOUT `--spoof-keys` (move the persisted spoof generation aside) and
-   with `--credentials ~/rehearsal-creds.json`. Preflight and readiness must pass with every
-   restored member seated on its fixture key.
-2. `bun scripts/prod-init.ts rebind-members --instance rehearse-060 --credentials
-   ~/rehearsal-creds.json` (the api address comes from the instance's stack state).
-3. `bun smoke --static-port --instance rehearse-060 ...` again with the same plan id, and
-   watch the participants' takes with the new bearers.
+1. Boot the twin (R3.2). Every restored member is seated on a generated key.
+2. Give `~/rehearsal-creds.json` fresh keys, so it holds keys the database does not.
+3. `bun scripts/prod-init.ts rebind-members --instance rehearse-060 --credentials
+   ~/rehearsal-creds.json`. **Observed:** 8 of 8 rebound against the twin, no prompt but `y`.
+4. **Observed:** the running participants, still on their old bearers, answer 401 and
+   print `refuses to poll: tokenValid=false`. A rebind therefore always needs the
+   participants recreated, so R6.7's re-run of `bun smoke --static-port` after
+   `rebind-members` is REQUIRED, not conditional.
+5. **Observed:** that re-run is a NEW plan, never a resume. The plan id includes the
+   credential file's key fingerprints, and the rebind just changed them.
 
-Known limits of the twin route: a twin cannot be re-booted from its own volume
-(`--local volume=<twin volume>` fails, issue 1174), so the "boot again" step is a resume of
-the running twin, not a cold start; a cold second boot is only rehearsable on the remote
-route until 1174 closes. Never run `bun run migrate` on stage-2: its `~/.env` points at
-production's read replica.
+Limit of the twin route: step 5 cannot finish on a twin. A new plan under `--local dump`
+restores a fresh copy beside the live twin and fails with `Postgres never became ready`;
+`--local volume` cannot reattach a dump twin (issue 1174). So the twin proves steps 1 to 4
+and the order. The second boot is only rehearsable on a remote stage database, or once
+1174 closes. Never run `bun run migrate` on stage-2: its `~/.env` points at production's
+read replica.
 Write down the exact order that works for `rebind-members` and whether the participants
 need a second `bun smoke --static-port` afterwards. Edit R6.7 to match, in a commit on
 this branch, before any rc tag.
@@ -432,7 +436,7 @@ Then, with the api up, rotate each seated member from fixture keys to `credentia
 bun scripts/prod-init.ts rebind-members
 ```
 
-Re-run `bun smoke --static-port` if R3.8 showed participants need it to pick up the new bearers.
+Re-run `bun smoke --static-port` now. It is required: R3.8 showed every running participant answers 401 after the rebind until a new plan recreates it with the new bearers.
 
 R6.8 Preflight must pass at boot. If it refuses, the printed check number names the cause
 (1 role auth, 2 privileges, 3a manifest, 3b compat, 4 `~/.env` keys, 5 identity, 6 subject
