@@ -322,13 +322,29 @@ export function participantContainerIds(project: string, run: DockerRun): Map<st
   return ids;
 }
 
+/** How long `fetchMemberRoles` keeps retrying a transport failure before it refuses. */
+export const MEMBER_ROLES_DEADLINE_MS = 60_000;
+
 /**
  * The database's role for every member, as the running API reports it on the
  * admin members route (`swarm_members.role`), for credential-file.ts's role
  * check (spec §6.1, D52). Read with the operator's service token (§3), over
  * HTTP: this process holds no database credential of its own at this phase.
  *
- * Refusals: the route does not answer 200 with a `members` list. The roles
+ * THE API MAY NOT BE LISTENING YET. The participants phase follows the replace
+ * phase by well under a second, and Docker publishes the api's host port the
+ * moment the container starts: docker-proxy accepts the connection and closes
+ * it when nothing inside listens. On stage-2 (2026-10-05, c74aa2a7) that read
+ * went out 244 ms before the api logged `listening`, Bun reported "The socket
+ * connection was closed unexpectedly", and the boot's failure path then
+ * stopped the writers it had just started. A boot with no roster never made
+ * this call, which is why the 2026-10-02 rehearsal did not see it. So a
+ * TRANSPORT failure (the fetch throws: closed, refused, reset) is retried until
+ * `deadlineMs`; an HTTP answer is never retried, because the api that answered
+ * is the api, and its answer stands.
+ *
+ * Refusals: the route does not answer 200 with a `members` list, or no answer
+ * arrives before the deadline (the last transport error is named). The roles
  * decide whether the boot may start anyone, so an unknown answer is never
  * read as "no members".
  */
@@ -336,10 +352,30 @@ export async function fetchMemberRoles(
   apiUrl: string,
   operatorToken: string,
   fetchImpl: typeof fetch = fetch,
+  clock: { deadlineMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
 ): Promise<ReadonlyMap<string, { role: string }>> {
-  const res = await fetchImpl(`${apiUrl.replace(/\/+$/, "")}${ROUTES.swarm.admin.members}`, {
-    headers: { "X-Automation-Token": operatorToken },
-  });
+  const deadlineMs = clock.deadlineMs ?? MEMBER_ROLES_DEADLINE_MS;
+  const now = clock.now ?? (() => Date.now());
+  const sleep = clock.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const url = `${apiUrl.replace(/\/+$/, "")}${ROUTES.swarm.admin.members}`;
+  const started = now();
+  let res: Response | undefined;
+  let attempts = 0;
+  while (res === undefined) {
+    attempts += 1;
+    try {
+      res = await fetchImpl(url, { headers: { "X-Automation-Token": operatorToken } });
+    } catch (err) {
+      const elapsed = now() - started;
+      if (elapsed >= deadlineMs) {
+        throw new Error(
+          `${ROUTES.swarm.admin.members} gave no answer in ${attempts} attempt(s) over ${elapsed} ms ` +
+            `(last: ${err instanceof Error ? err.message : String(err)}); the roster's roles cannot be checked, so no participant is started`,
+        );
+      }
+      await sleep(Math.min(500, deadlineMs - elapsed));
+    }
+  }
   if (!res.ok) throw new Error(`${ROUTES.swarm.admin.members} answered HTTP ${res.status}; the roster's roles cannot be checked, so no participant is started`);
   const body = (await res.json()) as { members?: { id?: unknown; role?: unknown }[] };
   if (!Array.isArray(body.members)) throw new Error(`${ROUTES.swarm.admin.members} answered without a members list`);

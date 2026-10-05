@@ -224,6 +224,8 @@ Prerequisites found on stage-2 (2026-10-02):
 - A `--static-port` boot refuses while another stack holds `:48787`. Take the old stack down first (`bun run smoke:down` from its own checkout).
 - Reset a failed attempt with `bun smoke:down --instance rehearse-060`, remove the `rm-restore-*` container, then `bun run smoke:clean`.
 - A bare `--spoof-keys` with no credentials file boots with an empty roster (no agents, no judges). Pass `--credentials rehearsal-creds.json` (R3.2) to exercise participants.
+- Kill any `bun smoke:twin` (or other `bun smoke`) still running from the OLD checkout (`ps -eo pid,etimes,cmd | grep smoke`). On 2026-10-05 a four-day-old `smoke:twin --reuse` from `~/robotmoney-frontend` (v0.5.4) was still alive beside the new instance.
+- `--spoof-keys` only spoofs members whose operator is `robotmoney` (athena, robot-money on the 2026-10-01 dump). `noop-analyst` and `themis` carry operator `RM Protocol Labs` and refuse ("a third party's key is theirs"), so the rehearsal roster is the two agents and NO judge until that is decided: sessions end `no_consensus`, and `verify:live`'s judge invariants cannot be exercised on this twin.
 
 R3.2 Prepare a rehearsal credential file with **spoofed** keys, never the production
 `credential.json`:
