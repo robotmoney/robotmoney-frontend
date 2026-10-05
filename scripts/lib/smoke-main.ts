@@ -105,6 +105,7 @@ import { runSpoofRebind, SpoofKeysRefusal, spoofKeysRequest } from "./swarm/spoo
 import { planConfiguration } from "./smoke-plan-configuration.ts";
 import {
   applyParticipantPlan,
+  assertTwinSeatsEveryActiveMember,
   fetchMemberRoles,
   listRunningParticipants,
   participantContainerIds,
@@ -225,9 +226,7 @@ if (staticPortMode) {
 // up` so the operator gets the actionable version: name the holder, refuse to
 // boot, exit non-zero. A diagnostic, not an allocation.
 async function stagePreflight(ownProject: string): Promise<void> {
-  // A run interrupted after replace (§1.4) leaves this instance's own
-  // website-server on the port; the rerun must pass here to resume (ports.ts
-  // heldOnlyByOwnInstance). Any other holder still refuses.
+  // A rerun after replace resumes over this instance's own website-server (ports.ts heldOnlyByOwnInstance); any other holder refuses.
   const own = { project: ownProject, run: makeCommandRunner(process.env) };
   try {
     await assertStageWebPortFree(STAGE_WEB_PORT, STAGE_WEB_PORT_PURPOSE, own);
@@ -385,8 +384,7 @@ const stackEnvironment = resolveStackEnvironment(process.env, { seed: instance.n
 // used to be overridable by an exported SMOKE_PROJECT; spec §1 retires that
 // with no alias (refused at the top of this file).
 const project = stackProjectName("stack", stackEnvironment);
-// The --static-port pre-flight needs the project name to tell this instance's
-// own website-server (a resume) from a real conflict, so it runs here.
+// Here, not earlier: the pre-flight needs the project name to tell this instance's own website-server (a resume) from a conflict.
 if (staticPortMode) await stagePreflight(project);
 /** The pgdata volume compose creates for this instance's own postgres. */
 const instanceVolume = `${project}_pgdata`;
@@ -1186,13 +1184,12 @@ async function reconcileParticipants(apiUrl: string): Promise<ParticipantsReconc
     memberRole: (memberId) => roles.get(memberId),
   });
   const desired = [...planned.start, ...planned.keep];
+  // A twin seats the WHOLE restored roster (smoke-mode.ts resolveSeatAllRestored, issue #1152).
+  if (seatAllRestored && credentialResolution.configured) await assertTwinSeatsEveryActiveMember(apiUrl, desired.filter((d) => d.kind === "agent").map((d) => d.name));
   // Participants run the image `api` runs (backend/Dockerfile carries them).
   const runningApiImage = runningServices().api ?? "";
   if (desired.length > 0 && runningApiImage === "") throw new Error("participants: the api container is not running, so there is no image to start them from");
-  const chosenImage =
-    desired.length > 0
-      ? resolveParticipantImage(runningApiImage, `${project}-api:latest`, (ref) => dockerRunIn(process.env)(["image", "inspect", ref]).exitCode === 0)
-      : { image: runningApiImage, fallback: null };
+  const chosenImage = desired.length > 0 ? resolveParticipantImage(runningApiImage, `${project}-api:latest`, (ref) => dockerRunIn(process.env)(["image", "inspect", ref]).exitCode === 0) : { image: runningApiImage, fallback: null };
   if (chosenImage.fallback) log(`participants: ${chosenImage.fallback}`);
   const apiImage = chosenImage.image;
   // The one model every participant calls, from the single selection signal.
@@ -1565,6 +1562,7 @@ async function main(): Promise<void> {
         lock: { backendPid: targetLock!.backendPid, holder: { ...targetLock!.holder } },
         names: spoofRequest.names,
         flagExplicit: spoofRequest.explicit,
+        seatAll: seatAllRestored,
         rmEnv: policy,
         credentialPath: credentialResolution.configured ? credentialResolution.path : null,
       }, prepareChildEnv(process.env));

@@ -93,3 +93,22 @@ describe("resolveParticipantImage — the image participants run after a resume 
     expect(() => resolveParticipantImage("sha256:old", "rm_x-api:latest", present([]))).toThrow(/neither the running api's image sha256:old nor rm_x-api:latest exists/);
   });
 });
+
+import { unseatedTwinMembers } from "../../lib/participant-compose.ts";
+
+describe("unseatedTwinMembers — the twin seats every active restored member (issue #1152)", () => {
+  const roster = [
+    { id: "a1", handle: "athena", status: "active", role: "member" },
+    { id: "z1", handle: "zyfai", status: "active", role: "member" },
+    { id: "d1", handle: "DualMint", status: "active", role: "member" },
+    { id: "t1", handle: "themis", status: "active", role: "judge" },
+    { id: "r1", handle: "retired-one", status: "retired", role: "member" },
+    { id: "nohandle", handle: null, status: "active", role: "member" },
+  ];
+  test("names the active non-judge members the agents roster does not carry, by handle, case-insensitively", () => {
+    expect(unseatedTwinMembers(roster, ["Athena", "dualmint"])).toEqual(["nohandle", "zyfai"]);
+  });
+  test("a full roster leaves nobody unseated; a judge is never a seat", () => {
+    expect(unseatedTwinMembers(roster, ["athena", "zyfai", "dualmint", "nohandle"])).toEqual([]);
+  });
+});
