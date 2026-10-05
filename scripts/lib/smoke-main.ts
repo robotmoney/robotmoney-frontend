@@ -44,6 +44,7 @@ import {
   DEFAULT_STACK_DATABASE,
   describePortHolders,
   composeArgs,
+  heldOnlyByOwnInstance,
   dockerClientHostEnv,
   hostBackendUrl,
   internalDatabaseUrl,
@@ -54,6 +55,7 @@ import {
   stalePortEnvWarnings,
   STAGE_COMPOSE_FILE,
   STAGE_WEB_PORT,
+  STAGE_WEB_PORT_PURPOSE,
   type Stack,
   type StackConfig,
   type StackEvent,
@@ -211,9 +213,16 @@ if (staticPortMode) {
 // opaque, and silent about WHO holds the port. This check runs BEFORE `compose
 // up` so the operator gets the actionable version: name the holder, refuse to
 // boot, exit non-zero. A diagnostic, not an allocation.
-async function stagePreflight(): Promise<void> {
+async function stagePreflight(ownProject: string): Promise<void> {
+  // A run interrupted after replace (§1.4) leaves this instance's own
+  // website-server on the port; the rerun must pass here to resume (ports.ts
+  // heldOnlyByOwnInstance). Any other holder still refuses.
+  const own = { project: ownProject, run: makeCommandRunner(process.env) };
   try {
-    await assertStageWebPortFree();
+    await assertStageWebPortFree(STAGE_WEB_PORT, STAGE_WEB_PORT_PURPOSE, own);
+    if (heldOnlyByOwnInstance(STAGE_WEB_PORT, own)) {
+      console.error(`[smoke] :${STAGE_WEB_PORT} is held by this instance's own containers (project ${ownProject}); resuming over them`);
+    }
   } catch (err) {
     if (err instanceof PortUnavailableError) {
       console.error(`[smoke] FATAL: ${err.message}`);
@@ -303,7 +312,6 @@ const allowInsecureRequested = process.argv.includes(ALLOW_INSECURE_FLAG);
   const refusal = refuseAllowInsecureOnProd(policy, allowInsecureRequested);
   if (refusal !== null) fatal(refusal);
 }
-if (staticPortMode) await stagePreflight();
 // The containers' RM_ENV: the policy, and `prod` on the standing stack by rule.
 const stackRmEnv: RmEnv = stackRmEnvFor(staticPortMode, policy);
 // Issue #1113: a prod boot without PROJECTS_SOURCE=live refuses here, before
@@ -366,6 +374,9 @@ const stackEnvironment = resolveStackEnvironment(process.env, { seed: instance.n
 // used to be overridable by an exported SMOKE_PROJECT; spec §1 retires that
 // with no alias (refused at the top of this file).
 const project = stackProjectName("stack", stackEnvironment);
+// The --static-port pre-flight needs the project name to tell this instance's
+// own website-server (a resume) from a real conflict, so it runs here.
+if (staticPortMode) await stagePreflight(project);
 /** The pgdata volume compose creates for this instance's own postgres. */
 const instanceVolume = `${project}_pgdata`;
 
