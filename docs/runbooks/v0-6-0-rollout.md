@@ -55,10 +55,10 @@ on stage-2 with the real restored dump, plus the three open rows below.
 | B9 | `release:v0.6.0` tracking issue | open | to file |
 | B10 | `rebind-members` order on the breaking-migration path | none | settled by R3.8 |
 | B11 | The buyback index runs in the worker as `rm_worker` but its `buyback_scan_state` queries are registered to `rm_app`, so every sweep on the migrated dump logs `permission denied` and is swallowed; buybacks would freeze after the cutover (1150) | open | found on the R3.2 of 2026-10-05; `docker logs <project>-worker-analytics-1 \| grep -A3 "live index failed"` must be empty on the rehearsal |
-| B12 | The twin seated only `credential.json` members: the seat-all path ran only under CI and `--spoof-keys` refused third parties, so the 2026-10-01 twin ran 2 of 7 silently; `verify:live`'s `twin-roster:every-active-member-seated` caught it (1152) | fixed on the branch (spec §6.4 owned-twin exception; the boot refuses an unseated twin) | re-run R3.2 and R3.4 with the full rehearsal roster |
+| B12 | The twin seated only `credential.json` members; the verify leg `twin-roster:every-active-member-seated` caught it (1152) | fixed (1164), verified: 7 of 7 seated on `7d69d17c` | — |
 | B13 | The old checkout's `bun run migrate` runs clean against the migrated database and re-seeds the `swarm.*` job_schedules 0089 deleted (1155) | closed, no action (owner 2026-10-05) | section 8 says: never run the old checkout after R6.3; R6.1 renames it |
-| B14 | A rerun that resumes after replace rebuilds the api image, and the participants overlay pins the api image by the sha256 id the rebuild pruned, so participants cannot start and the failure path stops the api (1160) | open | R3.6 second half on 2026-10-05: interrupt after replace stops cleanly and the rerun resumes to participants, then fails here. Fix on the branch, then repeat R3.6 |
-| B15 | The participant loop re-ran a failed take on the next tick with no delay; seven seats turned a transient Zen 404 into ~1,750 requests each per hour and a 429 on the shared key, judge included (1167). The take one-shot also could not find its script from the per-take workspace (#1166) | fixed on the branch (backoff per session, capped at 5 min) | R3.4 after the fix: takes land on the 8-seat twin, `docker logs` of a seat shows no back-to-back crashed one-shots |
+| B14 | A resume after replace could not start participants from the pruned api image id (1160) | fixed (1161), verified on `62ec5920` | — |
+| B15 | A failed take re-ran on the next tick with no delay; seven seats hammered the shared Zen key (see the issue). The take one-shot also could not find its script from the per-take workspace (1166) | fixed: backoff (1168) and give-up after 5 failed takes (1169, owner rule), verified on `7d69d17c` | — |
 
 Also open: the notice to external members about the four-weight rule (1124); the
 `judging` banner (1115, merged) and admin items (1123, merged) need only the R7 spot check.
@@ -225,6 +225,7 @@ R3.1 Check out the RC commit as a clean checkout of a pushed commit. `git status
 
 Prerequisites found on stage-2 (2026-10-02):
 
+- The model is `deepseek-v4.1-flash` since the merge of main's #1159 (migration `0111` here renames the judge row); Zen answers 404 for the old id.
 - `OPENCODE_API_KEY` must be in the process environment for the boot (export that one key from `~/.env`; the preflight warns it is not on the §3 list).
 - A `--static-port` boot refuses while another stack holds `:48787`. Take the old stack down first (`bun run smoke:down` from its own checkout).
 - Reset a failed attempt with `bun smoke:down --instance rehearse-060`, remove the `rm-restore-*` container, then `bun run smoke:clean`. A changed spoof request (a different member set) also needs the instance's persisted spoof generation moved aside (`~/.local/state/robotmoney-smoke/rehearse-060/spoof-generation`): a generation is reused only by a rerun of the same request, and the restored copy is fresh anyway. Seen 2026-10-05 when the roster grew from 2 to 8 seats.
@@ -256,7 +257,7 @@ bun run verify:live --instance rehearse-060 --tier full --emit-receipt=R3.verify
 ```
 
 Exit 0 = pass; 1 = product wrong; 2 = nothing asserted. A WARN is not a pass. List which
-invariants this target could not exercise. Every leg must PASS; `twin-roster:every-active-member-seated` is the twin's own seating proof (B12).
+invariants this target could not exercise. Passed 2026-10-05 on `7d69d17c` with the full roster: 9/9 PASS, exit 0 (receipt `R3.verify-twin-8seats.json`). Every leg must PASS; `twin-roster:every-active-member-seated` is the twin's own seating proof (B12).
 
 R3.5 Prove the schema gates on the twin (the lines from spec §10 this release depends on):
 migrations all recorded once; `deployment_identity.kind = 'rehearsal'`; `schema_manifest`
