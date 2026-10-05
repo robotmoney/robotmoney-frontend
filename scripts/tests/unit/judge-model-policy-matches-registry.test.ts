@@ -11,7 +11,7 @@
 // keyless.
 //
 // It also pins the ACCEPTANCE model itself: AC-MODEL-01 names exactly
-// `opencode/deepseek-v4-flash`, the registry's default resolves to it, and the
+// `opencode/deepseek-v4.1-flash`, the registry's default resolves to it, and the
 // judge's `PINNED_JUDGE_MODEL` is that same id with the `opencode/` prefix
 // stripped — the wire form Zen's REST endpoint accepts (the prefixed form 401s,
 // which is what commit a8fcbf26 exists for).
@@ -33,7 +33,7 @@ import { isAcceptancePath, resolveInferencePath } from "../../../backend/src/acc
 
 describe("the judge's model policy agrees with the pinned registry", () => {
   test("PINNED_JUDGE_MODEL is the registry's default, in wire form", () => {
-    expect(DEFAULT_AGENT_MODEL).toBe(`${ZEN_PREFIX}deepseek-v4-flash`);
+    expect(DEFAULT_AGENT_MODEL).toBe(`${ZEN_PREFIX}deepseek-v4.1-flash`);
     expect(PINNED_JUDGE_MODEL).toBe(DEFAULT_AGENT_MODEL.slice(ZEN_PREFIX.length));
     // And the wire form is NOT the prefixed one — the defect a8fcbf26 fixed.
     expect(PINNED_JUDGE_MODEL.startsWith(ZEN_PREFIX)).toBe(false);
@@ -121,5 +121,23 @@ describe("assertJudgeModelAllowed refuses what AC-MODEL-01 disqualifies", () => 
     // an environment that forgot to say what it is must get the strict rules.
     expect(isAcceptanceJudgeEnv({})).toBe(true);
     expect(() => assertJudgeModelAllowed("test/judge-model", {})).toThrow(/not the pinned acceptance model/);
+  });
+});
+
+// REGRESSION GUARD. 2026-10-05: OpenCode Zen renamed `deepseek-v4-flash` to
+// `deepseek-v4.1-flash`. The old id answers `AI_APICallError: Not Found`, which
+// failed every e2e run, swarm take, onboarding eval and judge call.
+describe("the retired Zen model id is gone from the runtime", () => {
+  const RETIRED = "deepseek-v4-flash";
+  const message = `"${RETIRED}" was retired by OpenCode Zen on 2026-10-05 (renamed "deepseek-v4.1-flash"); it returns "Not Found". Do not pin it.`;
+
+  test("the registry names no retired id", () => {
+    const ids = Object.values(MODEL_FAMILIES).flatMap((f) => Object.values(f.models));
+    expect({ message, retired: ids.filter((id) => id === RETIRED) }).toEqual({ message, retired: [] });
+    expect(DEFAULT_AGENT_MODEL).not.toContain(RETIRED);
+  });
+
+  test("the judge pin names no retired id", () => {
+    expect({ message, pinned: (PINNED_JUDGE_MODEL as string) === RETIRED }).toEqual({ message, pinned: false });
   });
 });

@@ -86,7 +86,7 @@ function readEnvKey(file: string, key: string): string | null {
  * The funded OpenCode Zen credential, which this rehearsal REQUIRES.
  *
  * A rehearsal exists to run what production runs. AGENT_MODEL unset resolves
- * to DEFAULT_AGENT_MODEL (`opencode/deepseek-v4-flash`) — production's model —
+ * to DEFAULT_AGENT_MODEL (`opencode/deepseek-v4.1-flash`) — production's model —
  * and that needs OPENCODE_API_KEY. An earlier version of this script pinned
  * AGENT_MODEL=free to avoid spending the key, which quietly rehearsed a
  * DIFFERENT system: scripts/lib/swarm/inference.ts documents that model choice
@@ -108,7 +108,7 @@ function resolveZenKey(): { key: string; source: string } | { error: string } {
   return {
     error:
       "OPENCODE_API_KEY is not set (checked the process environment, ./.env and ./.env.readonly). " +
-      "This rehearsal boots the production model (AGENT_MODEL unset -> opencode/deepseek-v4-flash), " +
+      "This rehearsal boots the production model (AGENT_MODEL unset -> opencode/deepseek-v4.1-flash), " +
       "which requires a funded Zen key. Set it and re-run. Do NOT work around this with AGENT_MODEL=free: " +
       "that rehearses a different model than production, and model choice materially changes swarm " +
       "authorship (scripts/lib/swarm/inference.ts).",

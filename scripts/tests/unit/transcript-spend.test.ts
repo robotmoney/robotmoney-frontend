@@ -75,7 +75,7 @@ test("the per-run manifest carries the spend, and says so when there is none", (
     sessionId: "42",
     memberId: "athena",
     runId: "athena-s42-spend",
-    model: "deepseek-v4-flash",
+    model: "deepseek-v4.1-flash",
     timeoutMs: 300_000,
   });
   const manifestPath = join(writer.directory, "manifest.json");
@@ -92,7 +92,7 @@ test("the per-run manifest carries the spend, and says so when there is none", (
   expect(manifest.spend).toMatchObject({ inputTokens: 1820, outputTokens: 611, costUsd: 0.00042, steps: 2 });
   expect(typeof manifest.finishedAt).toBe("string");
   // The rest of the manifest survived the rewrite.
-  expect(manifest.model).toBe("deepseek-v4-flash");
+  expect(manifest.model).toBe("deepseek-v4.1-flash");
   expect(manifest.sessionId).toBe("42");
 });
 
@@ -105,7 +105,7 @@ test("a run that produced no step_finish finishes with a null spend", () => {
     sessionId: "42",
     memberId: "athena",
     runId: "athena-s42-dead",
-    model: "deepseek-v4-flash",
+    model: "deepseek-v4.1-flash",
     timeoutMs: 1000,
   });
   writer.sink({ source: "agent", stream: "stderr", message: "boom" } as any);

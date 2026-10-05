@@ -22,7 +22,7 @@
 //                     large ones, are never read in full
 //   vintage members   analytics_vintage_members' (vintage_id, source_value_version_id)
 //                     unique index, in order, so LIMIT stops the expansion early
-// The one migration this change DOES ship (0093) is a GRANT, not an index: the
+// The one migration this change DOES ship (0094) is a GRANT, not an index: the
 // api's role could not read analytics_overwrite_events at all.
 //
 // The statements come from the registry's own probes (the call sites' text), so

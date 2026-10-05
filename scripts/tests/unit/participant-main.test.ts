@@ -74,7 +74,7 @@ const ENV = {
   RM_TAKE_COMMAND: JSON.stringify(TAKE_COMMAND),
   RM_INFERENCE_KEY: "athena-own-model-key",
   RM_INFERENCE_URL: "https://models.example/v1",
-  RM_INFERENCE_WIRE_ID: "deepseek-v4-flash",
+  RM_INFERENCE_WIRE_ID: "deepseek-v4.1-flash",
   RM_POLL_INTERVAL_MS: "5000",
   RM_TAKE_TIMEOUT_MS: "600000",
   RM_WORKSPACE_ROOT: "/var/lib/rm/takes",
@@ -89,7 +89,7 @@ const config = (over: Partial<ParticipantConfig> = {}): ParticipantConfig => ({
   identity: IDENTITY,
   modelKey: "athena-own-model-key",
   inferenceUrl: "https://models.example/v1",
-  inferenceWireId: "deepseek-v4-flash",
+  inferenceWireId: "deepseek-v4.1-flash",
   takeCommand: TAKE_COMMAND,
   pollIntervalMs: 5_000,
   takeTimeoutMs: 600_000,
@@ -682,7 +682,7 @@ describe("runParticipant — the namespace decides the loop", () => {
     RM_MEMBER_ID: "m-themis",
     RM_MEMBER_TOKEN: "themis-bearer",
     RM_INFERENCE_KEY: "themis-own-model-key",
-    RM_JUDGE_MODEL: "deepseek-v4-flash",
+    RM_JUDGE_MODEL: "deepseek-v4.1-flash",
     RM_JUDGE_BASE_URL: "https://models.example/v1",
     RM_ENV: "stage",
   };
@@ -713,7 +713,7 @@ describe("runParticipant — the namespace decides the loop", () => {
     expect(config.memberId).toBe("m-themis");
     expect(config.token).toBe("themis-bearer");
     expect(config.apiKey).toBe("themis-own-model-key");
-    expect(config.model).toBe("deepseek-v4-flash");
+    expect(config.model).toBe("deepseek-v4.1-flash");
     expect(config.identity).toEqual(IDENTITY);
   });
 

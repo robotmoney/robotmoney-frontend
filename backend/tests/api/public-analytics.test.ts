@@ -294,7 +294,7 @@ describe("overwrite-events", () => {
     expect(ids).toEqual([...ids].sort((a, b) => a - b));
   });
 
-  test("the api's role may READ the table and nothing else, and no runtime role can write it, so the only rows are the trigger's (migration 0093)", async () => {
+  test("the api's role may READ the table and nothing else, and no runtime role can write it, so the only rows are the trigger's (migration 0094)", async () => {
     const privilege = async (role: string, p: string): Promise<boolean> => {
       const [r] = await fixtureDb<{ ok: boolean }[]>`SELECT has_table_privilege(${role}, 'public.analytics_overwrite_events', ${p}) AS ok`;
       return r!.ok;

@@ -207,13 +207,13 @@ describe("railFromEnv — the standalone session driver's rail resolution", () =
     // The control: the same selection WITH a credential resolves, and resolves
     // to the pinned paid id rather than substituting anything.
     const rail = railFromEnv({ SMOKE_PROJECT: "p", AGENT_MODEL: "deepseek", RM_ENV: "prod", OPENCODE_API_KEY: "sk-not-real" });
-    expect(rail.modelConfig.model).toBe("opencode/deepseek-v4-flash");
+    expect(rail.modelConfig.model).toBe("opencode/deepseek-v4.1-flash");
     expect(rail.modelConfig.apiKeyEnv).toBe("OPENCODE_API_KEY");
   });
 
   test("a raw opencode/<id> override is refused on an acceptance path (D22 rule 1)", () => {
     expect(() => railFromEnv({
-      SMOKE_PROJECT: "p", AGENT_MODEL: "opencode/deepseek-v4-flash", RM_ENV: "prod", OPENCODE_API_KEY: "sk-not-real",
+      SMOKE_PROJECT: "p", AGENT_MODEL: "opencode/deepseek-v4.1-flash", RM_ENV: "prod", OPENCODE_API_KEY: "sk-not-real",
     })).toThrow();
   });
 

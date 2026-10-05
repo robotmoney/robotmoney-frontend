@@ -129,7 +129,7 @@
 #       scripts/lib/swarm/inference.ts already
 #       uses for real swarm takes.
 #   (b) That model is FUNDED (D22 as amended 2026-07-28): the default is
-#       `opencode/deepseek-v4-flash`, billed to the `OPENCODE_API_KEY` repo
+#       `opencode/deepseek-v4.1-flash`, billed to the `OPENCODE_API_KEY` repo
 #       secret. Which model runs is selected by `AGENT_MODEL` against
 #       scripts/lib/model-registry.ts; `AGENT_MODEL=free` still runs keyless.
 #       The key only ever resolves in a trusted context: any non-pull_request

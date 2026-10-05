@@ -145,7 +145,8 @@ const NOT_IN_PRODUCTION = [
   "0090_stream_events_retention_comment.sql",
   "0091_rm_worker_wallet_evidence_insert.sql",
   "0092_drop_swarm_judge_fault_injection.sql",
-  "0093_rm_app_overwrite_events_read.sql",
+  "0093_swarm_judge_model_deepseek_v4_1_flash.sql",
+  "0094_rm_app_overwrite_events_read.sql",
 ] as const;
 
 useCleanDatabase(import.meta.file);
@@ -277,8 +278,8 @@ describe("production's migration history meets the files it has not recorded", (
 
   test("the judge keeps its mode and ends on the bare model id, on both paths", async () => {
     const [u] = await upgraded`SELECT mode, model FROM swarm_judge_config WHERE id = 1`;
-    expect(u).toEqual({ mode: "enforce", model: "deepseek-v4-flash" });
+    expect(u).toEqual({ mode: "enforce", model: "deepseek-v4.1-flash" });
     const [f] = await fresh`SELECT model FROM swarm_judge_config WHERE id = 1`;
-    expect(f!.model).toBe("deepseek-v4-flash");
+    expect(f!.model).toBe("deepseek-v4.1-flash");
   });
 });

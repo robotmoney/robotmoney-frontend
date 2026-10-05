@@ -11,7 +11,7 @@
 //
 // Real inference is the DEFAULT mode here, never an optional extra. The model
 // is whatever AGENT_MODEL resolves to against ./model-registry.ts — by default
-// `opencode/deepseek-v4-flash`, a funded model billed to the environment's own
+// `opencode/deepseek-v4.1-flash`, a funded model billed to the environment's own
 // OPENCODE_API_KEY (D22 as amended 2026-07-28).
 //
 // This used to pin the free, no-credential `opencode/big-pickle`. That pin is

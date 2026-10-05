@@ -92,7 +92,7 @@ Four distinctions, kept deliberately separate:
   routes are GET only, rate limited per client ip per process, cacheable, gzip
   over 256 KB; regime outputs stay on
   `GET /api/dashboards/regime-snapshots`, which states its `source`. Reading
-  `analytics_overwrite_events` as `rm_app` is migration 0093's one grant. The
+  `analytics_overwrite_events` as `rm_app` is migration 0094's one grant. The
   write side is unchanged: only the analytics provider writes this data.
 
 ---

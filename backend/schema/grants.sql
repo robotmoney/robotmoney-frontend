@@ -79,7 +79,7 @@ DECLARE
   ];
   fn text;
   -- Tables a later migration narrowed on purpose; the sweep below must not hand them
-  -- back. 0056 revoked ALL on `analytics_overwrite_events` from rm_app/rm_worker (0093 gives rm_app its SELECT back);
+  -- back. 0056 revoked ALL on `analytics_overwrite_events` from rm_app/rm_worker (0094 gives rm_app its SELECT back);
   -- 0063 left the runtime roles SELECT only on `deployment_identity`, which §4.2
   -- makes "writable only by rm_owner".
   -- 0064 added `schema_manifest`, which §8.3 makes "a trusted input to boot
@@ -112,7 +112,7 @@ DECLARE
   -- reads the ledger and the manifest (src/db/schema-manifest.ts), under its own
   -- credential. Dropping a name from this list stops those boots.
   select_for_runtime text[] := ARRAY['deployment_identity', 'schema_manifest', 'automation_tokens', 'schema_migrations'];
-  -- SELECT restored to rm_app ALONE (migration 0093, issue #1095): the api serves
+  -- SELECT restored to rm_app ALONE (migration 0094, issue #1095): the api serves
   -- GET /api/public/analytics/overwrite-events from `analytics_overwrite_events`,
   -- whose READ 0056's REVOKE ALL took along with the write. rm_worker reads
   -- nothing from it, so it is not in select_for_runtime above.
