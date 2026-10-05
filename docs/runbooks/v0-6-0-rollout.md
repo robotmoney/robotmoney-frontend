@@ -57,6 +57,7 @@ on stage-2 with the real restored dump, plus the three open rows below.
 | B11 | The buyback index runs in the worker as `rm_worker` but its `buyback_scan_state` queries are registered to `rm_app`, so every sweep on the migrated dump logs `permission denied` and is swallowed; buybacks would freeze after the cutover (1150) | open | found on the R3.2 of 2026-10-05; `docker logs <project>-worker-analytics-1 \| grep -A3 "live index failed"` must be empty on the rehearsal |
 | B12 | `verify:live --tier full` fails only on `twin-roster:every-active-member-seated`: the leg asserts the retired host-driver twin (every restored member seated), which a `credential.json` twin cannot satisfy for third parties (1152) | open | owner rescopes or retires the leg; until then R3.4 is read as all legs but this one, and the report says so |
 | B13 | The old checkout's `bun run migrate` runs clean against the migrated database as `rm_owner` ("76 total, up to date") and re-seeds the `swarm.*` job_schedules that 0089 deleted; only its runtime DELETEs are refused (1155) | open | R3.9 found it on 2026-10-05. Owner picks procedural (rename the old checkout on the prod host before R6.3) and/or a schema guard; section 8 corrected below |
+| B14 | A rerun that resumes after replace rebuilds the api image, and the participants overlay pins the api image by the sha256 id the rebuild pruned, so participants cannot start and the failure path stops the api (1160) | open | R3.6 second half on 2026-10-05: interrupt after replace stops cleanly and the rerun resumes to participants, then fails here. Fix on the branch, then repeat R3.6 |
 
 Also open: the notice to external members about the four-weight rule (1124); the
 `judging` banner (1115, merged) and admin items (1123, merged) need only the R7 spot check.
@@ -262,7 +263,9 @@ hash matches the ledger; `rm_app`/`rm_worker`/`rm_readonly` hold no `DELETE`/`TR
 (preflight check 2 passing is the proof); 32 WebAuthn challenge slots.
 
 R3.6 **Interruption.** Kill `bun smoke` at a phase boundary before replace, then rerun
-under the same plan id: it resumes. Repeat once after replace began. Kill `bun run migrate`
+under the same plan id: it resumes. Repeat once after replace began. Done 2026-10-05 at `62ec5920`: before replace
+(stopped before preflight, resumed to READY) passes; after replace (stopped before participants) resumes
+and then fails on B14. A `--static-port` rerun over this instance's own website-server is accepted since #1157. Kill `bun run migrate`
 between two commits (the stage form: `bun smoke --local volume --migrate`): the rerun
 resumes. Record the journal phase each time.
 

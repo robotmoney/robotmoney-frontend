@@ -103,7 +103,18 @@ import {
 import { CredentialFileRefusal, loadCredentialFile, planParticipants, resolveCredentialPath, type CredentialEntry, type CredentialPathResolution } from "./swarm/credential-file.ts";
 import { runSpoofRebind, SpoofKeysRefusal, spoofKeysRequest } from "./swarm/spoof-keys.ts";
 import { planConfiguration } from "./smoke-plan-configuration.ts";
-import { applyParticipantPlan, fetchMemberRoles, listRunningParticipants, participantContainerIds, renderParticipantServices, summarizeParticipantApply, writeParticipantFiles, type DockerRun, type ParticipantsReconciled } from "./participant-compose.ts";
+import {
+  applyParticipantPlan,
+  fetchMemberRoles,
+  listRunningParticipants,
+  participantContainerIds,
+  renderParticipantServices,
+  resolveParticipantImage,
+  summarizeParticipantApply,
+  type DockerRun,
+  type ParticipantsReconciled,
+  writeParticipantFiles,
+} from "./participant-compose.ts";
 import { ZEN_API_BASE_URL } from "./opencode-key.ts";
 import { resolveAgentModel, ZEN_PREFIX } from "./model-registry.ts";
 
@@ -1176,8 +1187,14 @@ async function reconcileParticipants(apiUrl: string): Promise<ParticipantsReconc
   });
   const desired = [...planned.start, ...planned.keep];
   // Participants run the image `api` runs (backend/Dockerfile carries them).
-  const apiImage = runningServices().api ?? "";
-  if (desired.length > 0 && apiImage === "") throw new Error("participants: the api container is not running, so there is no image to start them from");
+  const runningApiImage = runningServices().api ?? "";
+  if (desired.length > 0 && runningApiImage === "") throw new Error("participants: the api container is not running, so there is no image to start them from");
+  const chosenImage =
+    desired.length > 0
+      ? resolveParticipantImage(runningApiImage, `${project}-api:latest`, (ref) => dockerRunIn(process.env)(["image", "inspect", ref]).exitCode === 0)
+      : { image: runningApiImage, fallback: null };
+  if (chosenImage.fallback) log(`participants: ${chosenImage.fallback}`);
+  const apiImage = chosenImage.image;
   // The one model every participant calls, from the single selection signal.
   // No host key is asked for here: each participant spends its OWN model key.
   const model = desired.length > 0 ? resolveAgentModel(process.env) : "";

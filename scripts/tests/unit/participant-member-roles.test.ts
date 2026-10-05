@@ -76,3 +76,20 @@ describe("fetchMemberRoles waits for an api that is still starting", () => {
     await expect(fetchMemberRoles("http://api", "tok", fetchImpl)).rejects.toThrow(/without a members list/);
   });
 });
+
+import { resolveParticipantImage } from "../../lib/participant-compose.ts";
+
+describe("resolveParticipantImage — the image participants run after a resume rebuilt the api (issue #1160)", () => {
+  const present = (have: string[]) => (ref: string) => have.includes(ref);
+  test("the running api's image, while Docker still has it", () => {
+    expect(resolveParticipantImage("sha256:old", "rm_x-api:latest", present(["sha256:old", "rm_x-api:latest"]))).toEqual({ image: "sha256:old", fallback: null });
+  });
+  test("a pruned id falls back to the project's api tag, and says so", () => {
+    const r = resolveParticipantImage("sha256:old", "rm_x-api:latest", present(["rm_x-api:latest"]));
+    expect(r.image).toBe("rm_x-api:latest");
+    expect(r.fallback).toMatch(/sha256:old is no longer in Docker .* participants start from rm_x-api:latest/);
+  });
+  test("neither present refuses, naming both", () => {
+    expect(() => resolveParticipantImage("sha256:old", "rm_x-api:latest", present([]))).toThrow(/neither the running api's image sha256:old nor rm_x-api:latest exists/);
+  });
+});

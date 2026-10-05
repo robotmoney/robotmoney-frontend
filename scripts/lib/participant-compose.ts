@@ -386,6 +386,35 @@ export async function fetchMemberRoles(
   return roles;
 }
 
+/**
+ * The image the participants run. "Participants run the image `api` runs"
+ * (spec §6.2): the running api container's image id, as long as Docker still
+ * holds it. A rerun that resumes after replace (§1.4) rebuilds the images in
+ * its prepare phase, moves `<project>-api:latest` to the new id and prunes the
+ * old one, while the kept api container still reports the old id — on stage-2
+ * (2026-10-05, 62ec5920) compose then tried to PULL that id and the resume
+ * failed at participants (issue #1160). So an id Docker no longer has falls
+ * back to the project's api tag, which is the same sources the resume just
+ * built, and the caller logs and receipts the fallback.
+ */
+export function resolveParticipantImage(
+  runningApiImage: string,
+  projectApiTag: string,
+  imagePresent: (ref: string) => boolean,
+): { image: string; fallback: string | null } {
+  if (runningApiImage !== "" && imagePresent(runningApiImage)) return { image: runningApiImage, fallback: null };
+  if (!imagePresent(projectApiTag)) {
+    throw new Error(
+      `participants: neither the running api's image ${runningApiImage || "(none)"} nor ${projectApiTag} exists; ` +
+        "there is no image to start them from",
+    );
+  }
+  return {
+    image: projectApiTag,
+    fallback: `the running api's image ${runningApiImage || "(none)"} is no longer in Docker (a resume rebuilt it); participants start from ${projectApiTag}`,
+  };
+}
+
 /** What `applyParticipantPlan` needs to run compose for the participants overlay. */
 export interface ApplyParticipantsOptions {
   /** The instance's compose project. */
