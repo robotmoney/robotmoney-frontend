@@ -98,9 +98,8 @@ Options (CLI flag, or the `runRegime(raw, opts)` field):
 
 `runRegime` builds its inputs with `prepareRegimeInputs`, the same function production
 calls, so the as-of cut for indicator rows, forward-fill and the 120-day cap
-(`MAX_FORWARD_FILL_DAYS`) behave as in production. One known divergence: production
-feeds `SPX`, `ETH` and `TBILL3M` rows dated after the as-of day to the correlations and
-backtest unfiltered, while `runRegime` cuts them (section 8.1). Their semantics are in [`docs/technical/regime-engine.md` section 8.1](../../docs/technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay). Both names are exported
+(`MAX_FORWARD_FILL_DAYS`) behave as in production. `SPX`, `ETH` and `TBILL3M` rows
+dated after the as-of day are cut in both places too (`cutAtAsof`, section 8.1). Their semantics are in [`docs/technical/regime-engine.md` section 8.1](../../docs/technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay). Both names are exported
 from `src/index.ts`.
 
 From code:

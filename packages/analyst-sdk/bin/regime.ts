@@ -38,5 +38,8 @@ try {
   console.log(JSON.stringify(report, null, 2));
 } catch (e) {
   console.error(`${(e as Error).name}: ${(e as Error).message}`);
-  process.exit(1);
+  // A rejected option value (RangeError from runRegime) is a usage error like a
+  // missing value or an unknown flag: exit 2. Anything else (unreadable file,
+  // malformed CSV) is a runtime failure: exit 1.
+  process.exit(e instanceof RangeError ? 2 : 1);
 }

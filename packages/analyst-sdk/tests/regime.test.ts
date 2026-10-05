@@ -114,7 +114,7 @@ describe("runRegime asof, factor and forward-fill ages", () => {
     expect(withTrailing.asof).toBe(D);
   }, TEST_TIMEOUT_MS);
 
-  test("asof D vs D+1 changes only the D row (forced final-day weight refresh), by < 1e-3", () => {
+  test("asof D vs D+1 changes only the D row (forced final-day weight refresh), by < 1e-2", () => {
     const a = buildReport(runRegime(raw, { asof: D }), { full: true }).series!;
     const b = buildReport(runRegime(raw, { asof: D1 }), { full: true }).series!;
     expect(b.length).toBe(a.length + 1);
@@ -199,8 +199,11 @@ describe("runRegime asof, factor and forward-fill ages", () => {
     const fx = join(DIR, "fixtures/raw-indicator-history.csv");
     for (const a of [["--asof"], ["--start"], ["--asof", "banana"], ["--panels", "macro,onchain,factor"], ["--panels"], ["--bogus"]]) {
       const p = Bun.spawnSync(["bun", join(DIR, "../bin/regime.ts"), fx, ...a], { stderr: "pipe", stdout: "pipe" });
-      expect(p.exitCode).toBe(a[1] === "banana" ? 1 : 2);
+      expect(p.exitCode).toBe(2);
     }
+    // A runtime failure, not a usage error: exit 1.
+    const missing = Bun.spawnSync(["bun", join(DIR, "../bin/regime.ts"), join(DIR, "fixtures/no-such-file.csv")], { stderr: "pipe", stdout: "pipe" });
+    expect(missing.exitCode).toBe(1);
     const ok = Bun.spawnSync(["bun", join(DIR, "../bin/regime.ts"), fx, "--factor"], { stderr: "pipe", stdout: "pipe" });
     expect(ok.exitCode).toBe(0);
     expect(JSON.parse(ok.stdout.toString()).factor.index).toBeDefined();

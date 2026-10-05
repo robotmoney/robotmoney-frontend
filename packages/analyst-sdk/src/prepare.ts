@@ -19,8 +19,16 @@ export interface PreparedRegimeInputs {
   lastRaw: Record<string, { date: string; value: number } | null>;
 }
 
+// Rows on or before `asof`, in input order. Backtest extras (SPX, ETH, TBILL3M)
+// do not go through the axis, so the backend job and runRegime both cut them with
+// this before computeCorrelations/computeBacktest (issue #1162 Part 0: without the
+// cut, a job run for a past as-of day read prices dated after it).
+export function cutAtAsof<T extends { date: string }>(rows: readonly T[], asof: string): T[] {
+  return rows.filter((r) => r.date <= asof);
+}
+
 // Axis start..asof (inclusive). Rows dated after asof never land on the axis, so
-// they are ignored (indicator rows; backtest extras are a separate path, see D59).
+// they are ignored (indicator rows; backtest extras are cut with cutAtAsof above).
 // An indicator with no rows is all-NaN (weight 0 downstream): the aligners return
 // NaN for an empty series and no transform maps all-NaN to a number; both are
 // pinned by tests/prepare.test.ts. `indicators` defaults to the registry; the

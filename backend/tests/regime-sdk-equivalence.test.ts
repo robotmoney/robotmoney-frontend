@@ -25,25 +25,22 @@
 // last observation 200 days before asof, so the 120-day forward-fill age cap
 // bites), FUTURE (month-end rows dated AFTER asof on indicators and extras, so
 // the date axis must stop at asof). FUTURE_EXTRAS adds future rows to the
-// spx/eth/tbill3m extras too; that one is test.failing, because it exposes a REAL
-// divergence: runAnalytics hands fetchBacktestExtras() output to
+// spx/eth/tbill3m extras too. Until issue #1162 Part 0 landed (in PR #1109) it was
+// test.failing: runAnalytics handed fetchBacktestExtras() output to
 // computeCorrelations/computeBacktest unfiltered, so extras rows dated after asof
-// feed the forward-return correlations (look-ahead; n=2923 vs the SDK's 2915 at
-// 90d), while runRegime cuts every input at asof. Remove `.failing` once the
-// backend cuts extras at asof (or the compute core ignores them).
+// fed the forward-return correlations (look-ahead; n=2923 vs the SDK's 2915 at
+// 90d), while runRegime cut every input at asof. Both now cut extras with
+// `cutAtAsof` from the seam, and the case is an ordinary passing test.
 //
-// RED CONTROL (recorded 2026-10-05). The same test, pointed at the previous
-// implementation (git show a7dbae26:packages/analyst-sdk/src/run.ts: no ages, no
-// asof; the copy gets only a factor pass added, with no ages, so the failure is
-// isolated to ages/asof), FAILS on the STALE and FUTURE scenarios while BASE
-// passes. Command (scratchpad = /tmp/claude-0/-root-robotmoney-frontend/
-// 87d3427f-4753-4327-8117-d1b07543487f/scratchpad):
-//   git show a7dbae26:packages/analyst-sdk/src/run.ts > $SCRATCH/old-run.ts
-//   (patch imports to absolute SDK paths; add a factor pass; sed the test's
-//    ../../packages/analyst-sdk/src/run.ts import and ./ ../src imports to
-//    absolute paths into $SCRATCH/regime-sdk-equivalence-old.test.ts)
-//   cd backend && bun test $SCRATCH/regime-sdk-equivalence-old.test.ts
-// Result: BASE pass, STALE fail, FUTURE fail (see the task report for the output).
+// RED CONTROLS (recorded 2026-10-05). Pointed at the previous runRegime (git show
+// a7dbae26:packages/analyst-sdk/src/run.ts: no ages, no asof; the copy got only a
+// factor pass added, so the failure is isolated to ages/asof), this file FAILS on
+// STALE and FUTURE while BASE passes: STALE because the uncapped copy keeps
+// forward-filling HY_OAS past 120 days, FUTURE because its axis runs to the
+// month-end row after asof. Before the extras cut in runAnalytics, FUTURE_EXTRAS
+// failed on `correlations` (the 90d sample counts differed, 2923 vs 2915). To
+// repeat either: copy the old run.ts beside this file with its imports made
+// absolute, point the import below at it, and run this file alone.
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { runAnalytics } from "../src/analytics/index.ts";
@@ -54,6 +51,7 @@ import type { Indicator } from "../src/analytics/analyze/indicators.ts";
 import type { AnalyticsDataSource, ResearchInputs } from "../src/analytics/access/data-source.ts";
 import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 import { MAX_FORWARD_FILL_DAYS } from "../src/analytics/transform/math.ts";
+import { computeCorrelations } from "../src/analytics/analyze/correlations.ts";
 import { runRegime } from "../../packages/analyst-sdk/src/run.ts";
 import { loadRawIndicatorHistory, loadJsonGz } from "./fixtures/regime/load.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
@@ -254,9 +252,13 @@ test("FUTURE: month-end rows dated after asof never extend the axis or move any 
   expect(rows[rows.length - 1].composite).toBe(nn(baseSdk.result.composite[baseSdk.dateAxis.length - 1]));
 }, TIMEOUT);
 
-test.failing("FUTURE_EXTRAS (known divergence): extras rows after asof leak into backend correlations", async () => {
+test("FUTURE_EXTRAS: extras rows after asof reach neither backend nor SDK correlations and backtest", async () => {
   const { asof, extras } = await build("future_extras");
   expect(extras.spx.some((p) => p.date > asof)).toBe(true);
   const { raw: rawFx, sdk, rows } = await runBoth("future_extras");
   assertEquivalent(asof, sdk, rows, rawFx);
+  // Not vacuous: the future rows would have changed the answer. This is exactly
+  // what the backend computed before the cut (uncut extras over the same axis).
+  const uncut = computeCorrelations(sdk.dateAxis, sdk.result, { spx: extras.spx, eth: extras.eth });
+  expect(JSON.stringify(uncut)).not.toBe(JSON.stringify(sdk.correlations));
 }, TIMEOUT);

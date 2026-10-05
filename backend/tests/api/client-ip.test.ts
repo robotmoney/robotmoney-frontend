@@ -18,7 +18,10 @@
 // TRUST_PROXY=1 CF-Connecting-IP is read first, and X-Forwarded-For (last hop)
 // is honored only from a LOOPBACK peer. From any other peer it is ignored, so a
 // sender that is not the local proxy cannot choose the identity the shared
-// public-analytics rate limiter and the ip_hash audit field see.
+// public-analytics rate limiter and the ip_hash audit field see. The matching
+// nginx half (CF-Connecting-IP is passed through only from a Cloudflare or
+// same-host peer and overwritten with the peer address otherwise) is pinned by
+// scripts/tests/unit/website-server-client-ip.test.ts.
 import { expect, test } from "bun:test";
 import { resolveClientIp } from "../../src/api/client-ip.ts";
 

@@ -12,7 +12,7 @@ import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 import { computeBacktest, stripDailyFromSnapshot, type BacktestPayload } from "./analyze/backtest.ts";
 import { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
-import { prepareRegimeInputs } from "./prepare.ts";
+import { cutAtAsof, prepareRegimeInputs } from "./prepare.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
 
 export const BACKFILL_START = "2018-01-01";
@@ -81,7 +81,7 @@ export function runRegime(rawIn: RawIndicatorHistory, opts: RunOptions = {}): Ru
   }
   // Never mutate the caller's input: with asof, build a filtered copy.
   const raw: RawIndicatorHistory = {};
-  for (const id in rawIn) raw[id] = asof === undefined ? rawIn[id]! : rawIn[id]!.filter((r) => r.date <= asof);
+  for (const id in rawIn) raw[id] = asof === undefined ? rawIn[id]! : cutAtAsof(rawIn[id]!, asof);
   let maxDate = start;
   for (const id in raw) {
     const rows = raw[id]!;

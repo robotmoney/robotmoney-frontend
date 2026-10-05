@@ -3,8 +3,9 @@
 //
 //   1. load the persisted raw floor (raw_indicator_history)
 //   2. fetch every registry indicator via the real keyless fetchers
-//   3. mergeSeries(persisted, fetched) per id — append-only: the persisted floor
-//      is never deleted, the fetched value wins on overlap. Persist the merge back.
+//   3. mergeSeries(persisted, fetched) per id — keys are never deleted; the fetched
+//      value wins on overlap, so a value is revised in place when it differs beyond
+//      the D56 tolerance (recorded in analytics_overwrite_events). Persist the merge back.
 //   4. build the 2018-01-01..asof date axis, align (fwd/zero-fill) + applyTransform
 //      (prepareRegimeInputs, shared with the analyst SDK's runRegime)
 //   5. computeRegime for the 2-panel [macro,onchain] composite AND the 3-panel
@@ -22,7 +23,7 @@
 // never referenced on this path. Tests inject a fixture-backed AnalyticsDataSource.
 import { INDICATORS, PANELS } from "./analyze/indicators.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
-import { prepareRegimeInputs } from "./prepare.ts";
+import { cutAtAsof, prepareRegimeInputs } from "./prepare.ts";
 import {
   MAX_FORWARD_FILL_DAYS,
   mergeSeries,
@@ -267,13 +268,13 @@ export async function runAnalytics(
       t0,
     );
 
-    // Persist the append-only merged floor back before computing. Tag every
+    // Persist the merged floor back before computing. Tag every
     // row with which AnalyticsDataSource actually produced it this run
     // (issue #397 provenance).
     t0 = new Date();
     await persistence.saveRawHistory(merged, sourceLabel);
     mergedRaw = merged;
-    collector.stage("store", "ok", "persisted append-only merged raw indicator floor", t0);
+    collector.stage("store", "ok", "persisted merged raw indicator floor", t0);
 
     t0 = new Date();
     // #402: `ages` is the forward-fill age per non-zero_fill indicator (days since
@@ -291,7 +292,11 @@ export async function runAnalytics(
     // (SPX/ETH price levels + DTB3 yield; NOT registry indicators). A failed
     // extras fetch degrades to []: correlations/backtest simply carry fewer/no
     // pairs rather than throwing. Baked onto the latest snapshot row (asof view).
-    const extras = await source.fetchBacktestExtras(logger, acquisitionSink, jobId ?? null);
+    // Cut at asof like every other input (issue #1162 Part 0): a run for a past
+    // as-of day must not read prices dated after it. Live runs have no such rows,
+    // so this changes nothing on the live path; regime-sdk-equivalence pins it.
+    const fetchedExtras = await source.fetchBacktestExtras(logger, acquisitionSink, jobId ?? null);
+    const extras = { spx: cutAtAsof(fetchedExtras.spx, asof), eth: cutAtAsof(fetchedExtras.eth, asof), tbill3m: cutAtAsof(fetchedExtras.tbill3m, asof) };
     let backtest: BacktestPayload | null = null;
     let correlations: CorrelationsPayload | null = null;
     let analyzeStatus: "ok" | "warn" = "ok";

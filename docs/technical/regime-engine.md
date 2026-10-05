@@ -302,13 +302,13 @@ Every stage above is orchestrated end to end by
 
 **As-of and the axis.** A run has an as-of day D. The date axis runs from
 `BACKFILL_START` (2018-01-01) to D inclusive. Indicator rows dated after D never
-land on the axis, so they are ignored. (Backtest extras, the `SPX`, `ETH` and
-`TBILL3M` price series, are the exception in production: `runAnalytics` hands
-`fetchBacktestExtras()` output to `computeCorrelations` and `computeBacktest`
-unfiltered, so extras rows dated after D still feed them. `runRegime` cuts them at
-D. Known open divergence, pinned as `test.failing` in
-`backend/tests/regime-sdk-equivalence.test.ts`; at 90d the correlation sample is
-n=2923 in production against 2915 in the SDK.) An indicator with no rows is all-NaN and carries
+land on the axis, so they are ignored. Backtest extras, the `SPX`, `ETH` and
+`TBILL3M` price series, do not go through the axis, so `runAnalytics` and
+`runRegime` both cut them at D with `cutAtAsof` before `computeCorrelations` and
+`computeBacktest` (issue #1162 Part 0, landed in PR #1109; before it, production
+fed extras rows dated after D to both, and a run for a past as-of day saw a 90d
+correlation sample of n=2923 against the SDK's 2915). Pinned by the `FUTURE_EXTRAS`
+case of `backend/tests/regime-sdk-equivalence.test.ts`. An indicator with no rows is all-NaN and carries
 no weight.
 
 **Forward-fill and ages.** Every indicator except `zero_fill` ones is forward-filled
@@ -357,9 +357,12 @@ from 2026-09-21 (migrations `0058_analytics_run_ledger` and
 
 **The seam.** `prepareRegimeInputs` (`packages/analyst-sdk/src/prepare.ts`, shimmed
 at `backend/src/analytics/prepare.ts`) is the one place the axis, alignment,
-transforms and forward-fill ages are built. Its two callers are
-`backend/src/analytics/index.ts::runAnalytics` (production) and
-`packages/analyst-sdk/src/run.ts::runRegime`. See [D59](../decisions.md#d59).
+transforms and forward-fill ages are built. Its callers are
+`backend/src/analytics/index.ts::runAnalytics` (production),
+`packages/analyst-sdk/src/run.ts::runRegime`, the research comparisons
+`computeRegimeEqComparison` and `computeWeightingComparison`, and
+`backend/scripts/regime-goldens-regenerate.ts`. `scripts/tests/unit/regime-seam-guard.test.ts`
+fails on any other call to the axis or alignment primitives for regime inputs. See [D59](../decisions.md#d59).
 
 ## 9. Deliberate v0 divergences
 
@@ -1106,15 +1109,19 @@ and retaining a *superseded* version is a further one, which is PD12.
 #### 11.8.3 This reverses v3's stated semantics, and should be v4
 
 Today `version` is a **methodology tag**: which algorithm produced the row. It is
-not a publication vintage. `regime-versions.ts:1-7` says so directly — it
-describes itself as a *"Methodology version tag stamped on every persisted regime
-snapshot row"*, and v3 explicitly disclaims freezing:
+not a publication vintage. `regime-versions.ts` said so directly when this section
+was written — it describes itself as a *"Methodology version tag stamped on every
+persisted regime snapshot row"*, and v3 explicitly disclaims freezing:
 
 > v3: point-in-time inverse-correlation weighting (trailing 3y window per day,
 > 21-day refresh, 25% cap), **no frozen lockout** — every run recomputes the full
 > history on best-available raw data. Raw inputs remain strictly append-only
 > (`raw_indicator_history` via `mergeSeries`); only the DERIVED labels are
 > recomputed.
+
+(The "strictly append-only" clause was corrected after the 2026-10-05 audit, D59:
+raw keys are never deleted, but values are revised in place beyond the D56
+tolerance. The header now says so; the vintage argument below is unchanged.)
 
 **v0 was the frozen one.** Its `data/regime/regime-history.csv` is frozen-vintage
 via `mergeFrozenIntoResult` (`update.js:131`), so a published row stayed as

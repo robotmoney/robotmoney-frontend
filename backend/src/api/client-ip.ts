@@ -10,8 +10,12 @@
 // website-server/nginx.conf sits in front of `api` for every request in every
 // composition — issue #892). Two headers, in this order (issue #1095):
 //   1. CF-Connecting-IP — what Cloudflare (D13) puts on every request it
-//      proxies, and what nginx passes through untouched. It is the real client
-//      whatever the number of hops between Cloudflare and this process.
+//      proxies. nginx (website-server/nginx.conf) passes it through only from a
+//      Cloudflare or same-host peer and otherwise OVERWRITES it with the peer
+//      address, so by the time it reaches this process it is nginx's account of
+//      the client, never the sender's. A request that bypassed nginx and reached
+//      the api port directly could still write it, which is why that port is
+//      never published (compose-internal only).
 //   2. X-Forwarded-For, LAST hop — but ONLY from a loopback peer. A proxy on
 //      the same host is the one place the header is the proxy's own account of
 //      its peer. From any other peer (a docker-network address, a LAN host, the
@@ -21,8 +25,6 @@
 //      `$proxy_add_x_forwarded_for` APPENDS the real peer, so the last entry is
 //      the proxy's own view of its immediate peer, never something the client
 //      fully controls: that held only while the sender really was nginx.
-// The api port is unreachable except through the Cloudflare to nginx path (D58),
-// so CF-Connecting-IP is always the value Cloudflare wrote.
 // A trusted-proxy request with neither usable header is the raw peer.
 //
 // Bun's `server.requestIP(req).address` reports an IPv4 peer in its

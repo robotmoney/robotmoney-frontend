@@ -5051,11 +5051,17 @@ refresh); the missing ages had no effect on current data. The research compariso
 (`regime-eq-comparison`, `weighting-comparison`) and the goldens regenerator now go
 through the seam too.
 
+**Rejected.** Keeping a second copy of the axis and alignment in `runRegime`
+behind a parity test: the audit found that copy had already drifted (axis end,
+missing ages) while the parity tests it had were green. A seam the backend only
+calls through its shim, with the SDK's copy deleted: that is what was done.
+
 **Enforced by** `backend/tests/regime-sdk-equivalence.test.ts`, which runs both
-paths on one input and compares every day exactly, including a stale series and
-indicator rows dated after the as-of day. The seam covers axis, alignment, transforms
-and ages only. Backtest extras dated after the as-of day are a known open divergence:
-production feeds them to correlations and backtest unfiltered and `runRegime` cuts them
-(`test.failing` in that file). Seam internals are pinned by
+paths on one input and compares every day exactly, including a stale series,
+indicator rows dated after the as-of day and extras rows dated after it. The seam
+covers axis, alignment, transforms and ages; backtest extras are cut at the as-of day
+by `cutAtAsof` from the same module in both callers (issue #1162 Part 0, landed in
+PR #1109). `scripts/tests/unit/regime-seam-guard.test.ts` fails on any other call to
+the axis or alignment primitives for regime inputs. Seam internals are pinned by
 `packages/analyst-sdk/tests/prepare.test.ts`. The run semantics are in
 [`docs/technical/regime-engine.md` §8.1](technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay).
