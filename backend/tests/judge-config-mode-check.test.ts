@@ -1,19 +1,19 @@
 // The judge switch admits two modes — issue #1026, decision D53 (1), migration
-// 0082.
+// 0100.
 //
 // AUTHORITY: D53 (1) waives D48's judge-replay prerequisite and removes
 // `shadow` from every write path; docs/technical/system-scheduler-spec.md §4.4
 // captures "the judge mode in force (`off` or `enforce`, per D48)".
 //
 // THREE PROPERTIES, each executed against the real migration text:
-//   1. a database still holding `shadow` is healed to `off` by 0082, with an
+//   1. a database still holding `shadow` is healed to `off` by 0100, with an
 //      audit row naming the migration, and a rerun changes nothing;
-//   2. after 0082 the column refuses `shadow` from ANY writer, including one
+//   2. after 0100 the column refuses `shadow` from ANY writer, including one
 //      that bypasses src/swarm/judge-config.ts;
-//   3. historical judgements and their mode stay readable: 0082 does not touch
+//   3. historical judgements and their mode stay readable: 0100 does not touch
 //      `swarm_session_judgements`, whose CHECK still admits `shadow`.
 //
-// The pre-0082 state is rebuilt in this file's own database (useCleanDatabase)
+// The pre-0100 state is rebuilt in this file's own database (useCleanDatabase)
 // by putting 0039's CHECK back, which is exactly the catalog every database
 // had before this migration.
 import { expect, test } from "bun:test";
@@ -28,7 +28,7 @@ import { activeSubject } from "./support/epoch-fixtures.ts";
 
 useCleanDatabase(import.meta.file);
 
-const MIGRATION = readFileSync(join(import.meta.dir, "..", "migrations", "0082_judge_config_two_modes.sql"), "utf8");
+const MIGRATION = readFileSync(join(import.meta.dir, "..", "migrations", "0100_judge_config_two_modes.sql"), "utf8");
 
 async function sqlstate(statement: () => Promise<unknown>): Promise<string | null> {
   try {
@@ -39,7 +39,7 @@ async function sqlstate(statement: () => Promise<unknown>): Promise<string | nul
   }
 }
 
-/** Put 0039's three-mode CHECK back and plant a `shadow` row, as a pre-0082 database holds it. */
+/** Put 0039's three-mode CHECK back and plant a `shadow` row, as a pre-0100 database holds it. */
 async function plantPre0082Shadow(): Promise<void> {
   await fixtureDb.unsafe(`
     ALTER TABLE swarm_judge_config DROP CONSTRAINT swarm_judge_config_mode_check;
@@ -50,11 +50,11 @@ async function plantPre0082Shadow(): Promise<void> {
 
 const healRows = async (): Promise<number> =>
   Number(
-    ((await sql`SELECT count(*)::int AS n FROM audit_log WHERE actor = 'migration 0082'`) as unknown as { n: number }[])[0]!
+    ((await sql`SELECT count(*)::int AS n FROM audit_log WHERE actor = 'migration 0100'`) as unknown as { n: number }[])[0]!
       .n,
   );
 
-test("0082 declares itself additive and tightens the CHECK to off | enforce", async () => {
+test("0100 declares itself additive and tightens the CHECK to off | enforce", async () => {
   expect(MIGRATION.split("\n").slice(0, 2)).toEqual(["-- compat: additive", "-- metadata_version: 1"]);
   const [{ def }] = (await sql`
     SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
@@ -62,7 +62,7 @@ test("0082 declares itself additive and tightens the CHECK to off | enforce", as
   expect(def).toBe("CHECK ((mode = ANY (ARRAY['off'::text, 'enforce'::text])))");
 });
 
-test("after 0082 no writer can store `shadow` — not even one that bypasses judge-config.ts", async () => {
+test("after 0100 no writer can store `shadow` — not even one that bypasses judge-config.ts", async () => {
   expect(await sqlstate(() => sql`UPDATE swarm_judge_config SET mode = 'shadow', model = 'x/y' WHERE id = 1`)).toBe(
     "23514",
   );
@@ -84,7 +84,7 @@ test("a database still holding `shadow` is healed to `off`, audited, and a rerun
   expect(row!.mode).toBe("off");
   expect((await getJudgeConfig()).mode).toBe("off");
   const [audit] = (await sql`
-    SELECT action, before_state, after_state FROM audit_log WHERE actor = 'migration 0082' ORDER BY id DESC LIMIT 1`) as unknown as {
+    SELECT action, before_state, after_state FROM audit_log WHERE actor = 'migration 0100' ORDER BY id DESC LIMIT 1`) as unknown as {
     action: string;
     before_state: unknown;
     after_state: unknown;
@@ -101,7 +101,7 @@ test("a database still holding `shadow` is healed to `off`, audited, and a rerun
   expect((await sql`SELECT mode FROM swarm_judge_config WHERE id = 1`)[0]!.mode).toBe("off");
 });
 
-test("judgements recorded under `shadow` stay on file and readable — 0082 touches only the switch", async () => {
+test("judgements recorded under `shadow` stay on file and readable — 0100 touches only the switch", async () => {
   const subjectId = await activeSubject("judge_mode_history", 600);
   const opened = await openEpoch(subjectId);
   if (!opened.ok) throw new Error("openEpoch failed");
@@ -126,9 +126,9 @@ test("judgements recorded under `shadow` stay on file and readable — 0082 touc
 test("a legacy `shadow` row reads as `off`, and the next write through the switch stores `off`", async () => {
   // Moved here from swarm-judge.test.ts, whose database it left on 0039's
   // three-mode CHECK for every later case. The reader and the writer agree
-  // with the lifecycle for a pre-0082 row, which captures `off` (domain.ts
+  // with the lifecycle for a pre-0100 row, which captures `off` (domain.ts
   // currentJudgeMode). The tightened CHECK is put back in `finally` by running
-  // 0082 itself, so no later case runs where `shadow` is writable.
+  // 0100 itself, so no later case runs where `shadow` is writable.
   await plantPre0082Shadow();
   try {
     expect((await getJudgeConfig()).mode).toBe("off");

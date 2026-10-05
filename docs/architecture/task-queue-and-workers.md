@@ -17,7 +17,7 @@ serves subscriptions and runs no background orchestration. Participants
 and §9.4 below. The `swarm` lane, the `worker-swarm` container and the five
 `swarm.*` job kinds are GONE as of issue #1026 W4: the lane is no longer in
 `worker/lanes.ts`, the container is no longer in any composition, the schedule
-rows are deleted by migration 0072, and nothing enqueues those kinds. What
+rows are deleted by migration 0089, and nothing enqueues those kinds. What
 this section describes below is the queue that remains, which the vault,
 wallet, buyback and project pipelines depend on.
 

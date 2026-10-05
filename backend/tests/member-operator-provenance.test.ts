@@ -1,5 +1,5 @@
 // Forged `robotmoney` member operators are cleared by a forward migration —
-// issue #1026, decision D55 (2), migration 0083.
+// issue #1026, decision D55 (2), migration 0101.
 //
 // D55 (2): the owner "approved clearing one forged value: a self-written
 // `operator` of `robotmoney`", only where a member self-write could have set
@@ -19,7 +19,7 @@
 // and an `update_profile` audit row holding only `{ memberId }` (ce2c4427).
 //
 // The migration was applied when the template was built; each case plants its
-// state in this file's own database (useCleanDatabase) and then runs 0083's
+// state in this file's own database (useCleanDatabase) and then runs 0101's
 // own text again, as rm_owner, the way the migrate step applies it.
 import { beforeAll, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -34,7 +34,7 @@ import { activeMember } from "./support/epoch-fixtures.ts";
 useCleanDatabase(import.meta.file);
 
 const MIGRATION = readFileSync(
-  join(import.meta.dir, "..", "migrations", "0083_clear_forged_member_operator.sql"),
+  join(import.meta.dir, "..", "migrations", "0101_clear_forged_member_operator.sql"),
   "utf8",
 );
 
@@ -45,7 +45,7 @@ const versionOf = async (id: string): Promise<number> =>
   Number(((await sql`SELECT version FROM swarm_members WHERE id = ${id}`) as unknown as { version: number }[])[0]!.version);
 const clearedIds = async (): Promise<string[]> =>
   ((await sql`
-    SELECT target_id FROM audit_log WHERE actor = 'migration 0083' AND action = 'member_operator_cleared'
+    SELECT target_id FROM audit_log WHERE actor = 'migration 0101' AND action = 'member_operator_cleared'
      ORDER BY target_id`) as unknown as { target_id: string }[]).map((r) => r.target_id);
 
 /** The pre-#925 forgery, exactly as that code left it. */
@@ -104,18 +104,34 @@ beforeAll(async () => {
   const themis = (await sql`SELECT id FROM swarm_members WHERE handle = 'themis'`)[0] as { id: string };
   await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${themis.id}, 'update_profile', ${sql.json({ memberId: themis.id } as never)})`;
   ids.themis = themis.id;
+
+  // 8. Production-shaped: noop-analyst is seated, holds the manifest's
+  //    `robotmoney`, is NOT in LIVE_ROSTER, and wrote its profile through the
+  //    self-write route (issue #1120). Its audit row is the pre-#925 shape.
+  const noop = await activeMember();
+  await sql`UPDATE swarm_members SET handle = 'noop-analyst' WHERE id = ${noop.id}`;
+  await forgePre925(noop.id, "robotmoney");
+  ids.noop = noop.id;
 });
 
-test("0083 is additive, and its roster list is LIVE_ROSTER's in-house members", () => {
+test("0101 is additive, and its exempt list is every in-house seat: LIVE_ROSTER plus noop-analyst", () => {
   expect(MIGRATION.split("\n").slice(0, 2)).toEqual(["-- compat: additive", "-- metadata_version: 1"]);
   const handles = /roster_handles text\[\] := ARRAY\[([^\]]*)\]/.exec(MIGRATION)![1]!;
   expect([...handles.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]).sort()).toEqual(
-    LIVE_ROSTER.filter((m) => m.operator === "robotmoney").map((m) => m.handle).sort(),
+    [...LIVE_ROSTER.filter((m) => m.operator === "robotmoney").map((m) => m.handle), "noop-analyst"].sort(),
   );
+  // noop-analyst is in-house by its manifest, though production seats it without the seed.
+  const manifest = JSON.parse(
+    readFileSync(
+      join(import.meta.dir, "..", "..", "frontend", "public", "data", "swarm", "manifests", "members", "noop-analyst.json"),
+      "utf8",
+    ),
+  ) as { operator: string };
+  expect(manifest.operator).toBe("robotmoney");
   expect(new Set(LIVE_ROSTER.map((m) => m.operator))).toEqual(new Set(["robotmoney"]));
 });
 
-/** 0083's text as the migrate step applies it: one transaction, as rm_owner. */
+/** 0101's text as the migrate step applies it: one transaction, as rm_owner. */
 async function applyMigration(): Promise<void> {
   await sql.begin(async (tx) => {
     await tx.unsafe("SET LOCAL ROLE rm_owner");
@@ -144,6 +160,7 @@ test("the migration clears every self-written robotmoney operator and keeps ever
     corrected: await operatorOf(ids.corrected!),
     archived: await operatorOf(ids.archived!),
     themis: await operatorOf(ids.themis!),
+    noop: await operatorOf(ids.noop!),
   }).toEqual({
     forged: null,
     selfNamed: "acme-labs",
@@ -152,6 +169,7 @@ test("the migration clears every self-written robotmoney operator and keeps ever
     corrected: "partner-co",
     archived: "peaq",
     themis: "robotmoney",
+    noop: "robotmoney",
   });
   // A cleared row is an edit: its version moves, so a stale admin form cannot
   // write the forged value back.
@@ -163,7 +181,7 @@ test("the migration clears every self-written robotmoney operator and keeps ever
   expect(recorded.sort()).toEqual([ids.forged!, ids.overwritten!].sort());
   const [row] = (await sql`
     SELECT before_state, after_state, scope FROM audit_log
-     WHERE actor = 'migration 0083' AND target_id = ${ids.forged!}`) as unknown as {
+     WHERE actor = 'migration 0101' AND target_id = ${ids.forged!}`) as unknown as {
     before_state: unknown;
     after_state: unknown;
     scope: unknown;

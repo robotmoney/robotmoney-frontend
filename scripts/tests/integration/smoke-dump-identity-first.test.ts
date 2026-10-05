@@ -1,17 +1,17 @@
-// `bun smoke --local dump` of a production dump that predates 0063 — the
+// `bun smoke --local dump` of a production dump that predates 0081 — the
 // identity-first `--local dump` pass (D55 (9), (10)), issue #1026 criterion 174,
 // and the baseline-dump halves of criteria 13 and 76. smoke-production-spec.md
 // §4.3 (the three named exceptions), §9.1 ("A production dump takes the same
 // path"), §10 W2:
 //
-//   "A `--local dump` whose ledger equals the production baseline applies 0063
+//   "A `--local dump` whose ledger equals the production baseline applies 0081
 //   first, writes `rehearsal` in the same transaction, and boots; a dump with
 //   any other pre-identity ledger refuses. Pointed at a remote connection, the
 //   local dump preparation refuses, whatever `RM_ENV`, password or
 //   acknowledgement says."
-//   "Kill and rerun, for each of the three passes: kill it before 0063
-//   commits, and the rerun takes the pass again; kill it after 0063, and the
-//   rerun resumes through the normal path and applies the six files below 0063
+//   "Kill and rerun, for each of the three passes: kill it before 0081
+//   commits, and the rerun takes the pass again; kill it after 0081, and the
+//   rerun resumes through the normal path and applies the five files below 0081
 //   (§9.1)."
 //
 // THE BACKUP is production's baseline (the 73-name ledger, D55 (8)), built and
@@ -26,8 +26,8 @@
 // THE KILLS are of the WHOLE boot (its process group, SIGKILL: the smoke parent
 // and the preparation child die together, no handler runs) while the child's
 // statement waits on a lock this test holds in the restored copy:
-//   - before 0063 commits: an uncommitted ledger row under 0063's own name,
-//     which the pass's ledger INSERT waits on, inside 0063's transaction;
+//   - before 0081 commits: an uncommitted ledger row under 0081's own name,
+//     which the pass's ledger INSERT waits on, inside 0081's transaction;
 //   - after 0063 commits: SHARE on swarm_judge_config, which the migrate step's
 //     first file, 0056_swarm_judge_requires_model.sql, UPDATEs first.
 // THE RERUN is of the killed STEP, as the smoke parent runs it: the same child
@@ -48,20 +48,19 @@ import { smokeTwinUrlFromContainer } from "../../lib/smoke-twin.ts";
 import { SUPPORTED_RELEASES } from "../../../backend/src/db/supported-releases.ts";
 import { acquireTargetLock, readTargetStateAt } from "../../../backend/src/db/target-lock.ts";
 
-const IDENTITY_MIGRATION = "0063_deployment_identity.sql";
+const IDENTITY_MIGRATION = "0081_deployment_identity.sql";
 const BASELINE = SUPPORTED_RELEASES[0]!;
-const LOWER_SIX = [
+const LOWER_FIVE = [
   "0056_swarm_judge_requires_model.sql",
   "0057_swarm_judge_policy_stamp.sql",
   "0058_swarm_judge_fault_injection.sql",
   "0059_swarm_judgement_completion_usage.sql",
-  "0061_rm_worker_wallet_backfill_grant.sql",
   "0062_rm_worker_analytics_ledger_read_grant.sql",
 ];
 
 /** Every migration file of this checkout, in filename (apply) order. */
 const HEAD_FILES = readdirSync(join(repoRoot, "backend", "migrations")).filter((f) => f.endsWith(".sql")).sort();
-/** What the migrate step applies after the pass: every file the baseline lacks but 0063, in filename order. */
+/** What the migrate step applies after the pass: every file the baseline lacks but 0081, in filename order. */
 const PENDING_AFTER_PASS = HEAD_FILES.filter((f) => !BASELINE.migrations.includes(f) && f !== IDENTITY_MIGRATION);
 
 let dump: EncryptedBackup;
@@ -207,7 +206,7 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
   // step did, and that the migrate step committed.
   let base: { steps: string[]; applyOrder: string[]; headLedger: boolean; why: string; migrateError: string } | undefined;
 
-  test("enroll applies 0063 and writes rehearsal in ONE transaction, then --migrate applies the six lower files first and the rest", async () => {
+  test("enroll applies 0081 and writes rehearsal in ONE transaction, then --migrate applies the five lower files first and the rest", async () => {
     const h = harness("dumpbase");
     let boot: RunningBoot | undefined;
     try {
@@ -227,7 +226,7 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
         migrateError: /startup failed: migrate: (.*)/.exec(out)?.[1] ?? "",
       };
 
-      // The pass: enroll committed, 0063 and the row by rm_owner in one
+      // The pass: enroll committed, 0081 and the row by rm_owner in one
       // transaction, the note naming the dump and the pass.
       expect({ enrolled: steps.includes("prepare:enroll:committed"), why: steps.includes("prepare:enroll:committed") ? "" : base.why }).toEqual({ enrolled: true, why: "" });
       expect(psql(copy.superuserUrl, "SELECT kind || ':' || written_by FROM deployment_identity")).toBe("rehearsal:rm_owner");
@@ -237,11 +236,11 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
         psql(copy.superuserUrl, `SELECT (SELECT xmin::text FROM schema_migrations WHERE name = '${IDENTITY_MIGRATION}') = (SELECT xmin::text FROM deployment_identity)`),
       ).toBe("t");
 
-      // Then the migrate step, the normal path: 0063 was committed first (by
-      // the pass), then the six lower files, then the rest, one transaction
+      // Then the migrate step, the normal path: 0081 was committed first (by
+      // the pass), then the five lower files, then the rest, one transaction
       // each in filename order — every pending file of the checkout applied.
       expect(base.applyOrder).toEqual([IDENTITY_MIGRATION, ...PENDING_AFTER_PASS]);
-      expect(base.applyOrder.slice(1, 7)).toEqual(LOWER_SIX);
+      expect(base.applyOrder.slice(1, 6)).toEqual(LOWER_FIVE);
       expect(base.headLedger).toBe(true);
       expect(psql(copy.superuserUrl, "SELECT kind FROM deployment_identity")).toBe("rehearsal");
     } finally {
@@ -260,7 +259,7 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
     expect({ migrated: base.steps.includes("prepare:migrate:committed"), error: base.migrateError }).toEqual({ migrated: true, error: "" });
   });
 
-  test("KILLED BEFORE 0063 COMMITS: the copy keeps its baseline with no table, and the rerun takes the pass again", async () => {
+  test("KILLED BEFORE 0081 COMMITS: the copy keeps its baseline with no table, and the rerun takes the pass again", async () => {
     const h = harness("dumpkillb");
     let boot: RunningBoot | undefined;
     let blocker: { release(): Promise<void> } | undefined;
@@ -289,7 +288,7 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
     }
   }, BOOT_TIMEOUT_MS);
 
-  test("KILLED AFTER 0063 COMMITS: the copy holds 0063 with rehearsal, and the rerun of --migrate resumes through the normal path, the six lower files first", async () => {
+  test("KILLED AFTER 0081 COMMITS: the copy holds 0081 with rehearsal, and the rerun of --migrate resumes through the normal path, the five lower files first", async () => {
     const h = harness("dumpkilla");
     let boot: RunningBoot | undefined;
     let blocker: { release(): Promise<void> } | undefined;
@@ -313,7 +312,7 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
       expect(journalNow(h)!.phases.filter((r) => r.phase === "prepare" && r.step === "migrate").map((r) => r.status)).toEqual(["started"]);
 
       // The rerun of the killed step resumes through the normal path: every
-      // pending file, the six lower files first, 0063 never again, and it
+      // pending file, the five lower files first, 0081 never again, and it
       // publishes the first manifest.
       const again = await rerunStep(h, "migrate");
       expect({ ok: again.ok, error: again.ok ? "" : again.error }).toEqual({ ok: true, error: "" });
@@ -401,7 +400,7 @@ describe("pointed at a REMOTE database with no identity table and the baseline l
     ["prod", { rmEnv: "prod" }],
     ["claimslocal", { connection: "local" }],
   ] as const) {
-    test(`the --local dump preparation refuses (${label}): 0063 not applied, no row written`, async () => {
+    test(`the --local dump preparation refuses (${label}): 0081 not applied, no row written`, async () => {
       const result = await enrollRemote(label, over as Partial<PrepareStep>);
       expect(result.ok).toBe(false);
       expect((result as { error: string }).error).toContain("Refusing the --local dump identity-first pass");
@@ -523,7 +522,7 @@ describe("pointed at a REMOTE database with no identity table and the baseline l
     }
   }, BOOT_TIMEOUT_MS);
 
-  test("RM_ENV=stage `bun smoke` against it refuses at the §4.3 matrix under the target lock: 0063 not applied, no row written", async () => {
+  test("RM_ENV=stage `bun smoke` against it refuses at the §4.3 matrix under the target lock: 0081 not applied, no row written", async () => {
     const op = remote.operator("stagebaseline", [], BASELINE_DB);
     holdTokenFiles(op, "rm_it_stagebaseline");
     const r = Bun.spawnSync(

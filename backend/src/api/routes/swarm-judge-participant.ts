@@ -30,6 +30,7 @@
 import { ROUTES } from "@robotmoney/contract";
 import { bearer } from "../auth.ts";
 import { isJudgeMember, memberIdForToken, openJudgeStream, pendingTakesFor, submitJudgement } from "../../swarm/domain.ts";
+import { recordJudgeRefusal } from "../../swarm/judge-refusals.ts";
 import { readJsonObject } from "../validation.ts";
 import type { SwarmRouteResult } from "./swarm/types.ts";
 
@@ -69,6 +70,22 @@ export async function handleJudgeParticipant(
     // deadlines fall, which is not its business.
     if (!(await isJudgeMember(memberId))) return { status: 403, body: { error: "judge_role_required" } };
     return openJudgeStream(memberId);
+  }
+
+  if (p === P.judgeRefusal && m === "POST") {
+    const token = bearer(req);
+    if (!token) return { status: 401, body: { error: "missing bearer token" } };
+    const memberId = await memberIdForToken(token);
+    if (!memberId) return { status: 401, body: { error: "invalid token" } };
+    if (!(await isJudgeMember(memberId))) return { status: 403, body: { error: "judge_role_required" } };
+    const b = (await readJsonObject(req)) ?? {};
+    const sessionId = typeof b.sessionId === "string" ? b.sessionId : "";
+    if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return { status: 400, body: { error: "sessionId_invalid" } };
+    // Recorded for the admin overview and read by nothing that decides a
+    // session (issue #1117): a refusal changes no outcome.
+    const result = recordJudgeRefusal({ memberId, sessionId, reason: b.reason, detail: b.detail, attempt: b.attempt });
+    if (!result.ok) return { status: result.status, body: { error: result.error } };
+    return { status: 200, body: { ok: true } };
   }
 
   if (p === P.judgement && m === "POST") {

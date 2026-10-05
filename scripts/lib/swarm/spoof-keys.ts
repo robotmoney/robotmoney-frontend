@@ -511,7 +511,7 @@ export interface SpoofRebindDeps {
   /**
    * The generation id the database currently records for `generation`'s
    * members: the id every one of their active keys carries, or `null` when
-   * they do not all carry one and the same id (migration 0087
+   * they do not all carry one and the same id (migration 0105
    * `spoof_generation_id`, written only by the rebind's INSERT).
    */
   readInstalledGeneration(generation: SpoofGeneration): Promise<string | null>;

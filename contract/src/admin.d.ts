@@ -445,6 +445,7 @@ export type SwarmSessionState =
   | "collecting"
   | "window_closed"
   | "aggregated"
+  | "judging"
   | "judged"
   | "published"
   | "cancelled";

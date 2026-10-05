@@ -6,7 +6,7 @@ import { hostname } from "node:os";
 import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { databaseName, homeEnvFilePath, urlForRole } from "./env-role.ts";
 import { ALLOW_INSECURE_FLAG, bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, refuseAllowInsecureOnProd, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
+import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, missingProdSettingNotes, refuseAllowInsecureOnProd, refuseProdWithoutProjectsSource, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
 import { resolveBackupFiles } from "./restore-container.ts";
 import { resolveDeploymentPolicy, resolveRmEnv } from "./smoke-env-policy.ts";
 import { requireRehearsalTarget } from "./smoke-identity.ts";
@@ -14,7 +14,7 @@ import { dumpOwnershipSql, hostReadTargetState, instanceRolePasswords, localSupe
 import { acquireTargetLock, assertStillHeld, readTargetState, type TargetLock, type TargetState } from "../../backend/src/db/target-lock.ts";
 import type { GeneratedRolePasswords } from "./smoke-state.ts";
 import { assertSmokeTwinIsTarget, bringUpTwin, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration, smokeTwinUrlFromContainer, smokeTwinVolumeName } from "./smoke-twin.ts";
-import { teardownContainer } from "./restore-container.ts";
+import { retimeAdoptedWindows, teardownContainer } from "./restore-container.ts";
 import { listSmokeVolumes, makeDockerRunner, purgeSmokeEvalContainers, removeSmokeVolumes } from "./smoke-volumes.ts";
 import { OPERATOR_TOKEN_FILE_ENV } from "./operator-token.ts";
 import { readServiceToken, runTokenProvisioning, tokenReuseRefusal } from "./smoke-secret.ts";
@@ -306,6 +306,13 @@ const allowInsecureRequested = process.argv.includes(ALLOW_INSECURE_FLAG);
 if (staticPortMode) await stagePreflight();
 // The containers' RM_ENV: the policy, and `prod` on the standing stack by rule.
 const stackRmEnv: RmEnv = stackRmEnvFor(staticPortMode, policy);
+// Issue #1113: a prod boot without PROJECTS_SOURCE=live refuses here, before
+// any credential is minted or container created.
+{
+  const refusal = refuseProdWithoutProjectsSource(stackRmEnv, process.env);
+  if (refusal !== null) fatal(refusal);
+  for (const note of missingProdSettingNotes(stackRmEnv, process.env)) console.warn(`[smoke] ${note}`);
+}
 // …and this process's own, so every host-side reader of RM_ENV (the inference
 // preflight below, the drivers this boot starts) judges the boot by the policy
 // the matrix resolved — an unset RM_ENV under `--local` is `stage` (§4.3), a
@@ -1738,6 +1745,9 @@ async function runCiScenario(stack: Stack): Promise<never> {
     // restored personas, (3) imported history still serves under #498's
     // archival semantics. No judge coverage: nothing on this stack judges
     // inline (D48/D53) — it returns with the participant judge.
+    // The twin's schedule, set at boot on its own copy: a dump captured mid-window
+    // restores production's open window (hours out), which the driver refuses.
+    if (smokeTwinContainer) retimeAdoptedWindows(smokeTwinContainer, cadence.swarmWindowMs, (m) => console.log(`[smoke] ${m}`));
     console.log("\n[smoke] dump: running one live swarm session with the restored personas…");
     process.env.BACKEND_URL = backendUrl;
     const session = await import(join(repoRoot, "scripts", "lib", "swarm", "session.ts"));

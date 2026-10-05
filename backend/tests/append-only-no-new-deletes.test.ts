@@ -105,7 +105,7 @@ const ALLOWED: Record<string, string> = {
   // snapshot N+1" (tests/snapshot-advance.test.ts) is a byte-for-byte,
   // sha256-pinned copy of an earlier backend/schema/snapshot.sql, so it carries
   // the same trigger declarations for the same reason. It deletes no row.
-  "backend/tests/fixtures/snapshots/0078_automation_token_holders/schema/snapshot.sql":
+  "backend/tests/fixtures/snapshots/0095_automation_token_holders/schema/snapshot.sql":
     "pinned copy of an earlier snapshot declaration; installs the guard's triggers",
 
   // Migration 0059 cleans up fabricated snapshots on framework subjects (issue #960).
@@ -133,7 +133,7 @@ const ALLOWED: Record<string, string> = {
 /**
  * THE GRANT-ONLY TABLES (D53 (2)) and the files allowed to prune them.
  *
- * `swarm_stream_events` left APPEND_ONLY_TABLES when migration 0080 dropped its
+ * `swarm_stream_events` left APPEND_ONLY_TABLES when migration 0097 dropped its
  * triggers so rm_owner can prune it. Leaving the append-only set must not also
  * take it out of this guard: a DELETE against it is still a decision, and the
  * only correct one is rm_owner's. D55 (12): the log keeps a time window of at
@@ -271,7 +271,7 @@ test("no new DELETE/TRUNCATE/DROP TABLE against an append-only table", () => {
 /**
  * The statements in `text` that remove rows from a grant-only table.
  *
- * A GRANT or REVOKE names the privilege, not a removal: migration 0080's
+ * A GRANT or REVOKE names the privilege, not a removal: migration 0097's
  * `REVOKE DELETE, TRUNCATE ON swarm_stream_events FROM rm_app, rm_worker` is
  * the protection itself. Privilege statements are dropped before matching, and
  * the pattern does not cross `ON` (destructiveAgainst), so what is left to

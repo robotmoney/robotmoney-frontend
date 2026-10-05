@@ -242,7 +242,7 @@ test("a take that read N before a turnover committed AHEAD of N's stored close, 
   // not the database's (§4.2), so a turnover can still commit while N's stored
   // close is minutes ahead. That is the case held here. The turnover is held
   // open AFTER it has closed N and recorded its absences: the test holds the
-  // stream's counter row (`swarm_stream_head`, migration 0081), which the
+  // stream's counter row (`swarm_stream_head`, migration 0098), which the
   // turnover must lock to number `epoch.turned_over`.
   // While it waits, the take reads N as the newest session (N+1 is not yet
   // committed), passes every early check — the window is minutes from closing
@@ -350,4 +350,30 @@ test("the constraint does not block a closed epoch sitting beside its successor"
   const states = await sql<{ state: string }[]>`
     SELECT state FROM swarm_sessions WHERE subject_id = ${subjectId} ORDER BY convened_at`;
   expect(states.map((s) => s.state)).toEqual(["window_closed", "collecting"]);
+});
+
+test("a failing absence insert does not roll back the turnover", async () => {
+  const { subjectId, sessionId } = await openedEpoch("win_absence_fail");
+  const silent = await activeMember();
+  await seat(sessionId, silent);
+
+  await fixtureDb`CREATE OR REPLACE FUNCTION test_fail_absence() RETURNS trigger AS $$
+    BEGIN RAISE EXCEPTION 'injected absence failure'; END $$ LANGUAGE plpgsql`;
+  await fixtureDb`CREATE TRIGGER test_fail_absence BEFORE INSERT ON swarm_agent_health_events
+    FOR EACH ROW WHEN (NEW.event_type = 'absent') EXECUTE FUNCTION test_fail_absence()`;
+  try {
+    const turned = await epoch.turnOverEpoch(subjectId, sessionId);
+    expect(turned.ok).toBe(true);
+    if (!turned.ok) return;
+    const [closed] = await sql<{ state: string; successor_session_id: string | null }[]>`
+      SELECT state, successor_session_id FROM swarm_sessions WHERE id = ${sessionId}`;
+    expect(closed.state).toBe("window_closed");
+    expect(closed.successor_session_id).not.toBeNull();
+    const absences = await sql`SELECT 1 FROM swarm_agent_health_events
+      WHERE session_id = ${sessionId} AND event_type = 'absent'`;
+    expect(absences.length).toBe(0);
+  } finally {
+    await fixtureDb`DROP TRIGGER test_fail_absence ON swarm_agent_health_events`;
+    await fixtureDb`DROP FUNCTION test_fail_absence()`;
+  }
 });

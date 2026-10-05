@@ -51,7 +51,7 @@ const ON_DISK = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).so
 const DECLARATION_SQL = [
   "CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());",
   "CREATE TABLE job_schedules (kind text PRIMARY KEY, cron text NOT NULL, enabled boolean NOT NULL DEFAULT false);",
-  // `kind`, per spec §4.2 and migration 0063 — the fixture declares the same
+  // `kind`, per spec §4.2 and migration 0081 — the fixture declares the same
   // column the real declaration does.
   "CREATE TABLE deployment_identity (kind text NOT NULL, singleton boolean NOT NULL DEFAULT true UNIQUE CHECK (singleton));",
   // 0032's append-only guard, on the one table this fixture declares that is in
@@ -880,7 +880,7 @@ describe("the real snapshot (backend/schema/) — fingerprint, preflight, bootst
         judging_duration_seconds: number;
       }[];
       expect(subject?.status).toBe("active");
-      expect(subject?.epoch_duration_seconds).toBe(3600);
+      expect(subject?.epoch_duration_seconds).toBe(21600);
       expect(subject?.epoch_anchor.toISOString()).toBe("1970-01-01T00:00:00.000Z");
       expect(subject?.judging_duration_seconds).toBe(900);
 

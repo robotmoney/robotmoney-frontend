@@ -532,7 +532,7 @@ test("audit: listAuditLog filters by actor/action and redacts to non-credential 
 
 // ── D55 (3): the judge fault-injection lever is gone ────────────────────────
 test("the judge fault-injection route, table and admin functions are gone, and the lever's old audit_log rows and the judgements stay readable [no-judge-fault-injection]", async () => {
-  // Migration 0092 dropped the table. The route is not owned any more, so it is
+  // Migration 0110 dropped the table. The route is not owned any more, so it is
   // unknown like any other path, and nothing exports the lever's functions.
   const { handleSwarm } = await import("../src/api/routes/swarm.ts");
   const { provisionOperatorToken, adminHeaders } = await import("./support/automation-auth.ts");

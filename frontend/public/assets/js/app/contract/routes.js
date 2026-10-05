@@ -158,21 +158,18 @@ export const ROUTES = {
     // digest. The path is derived from the session id alone, so it survives
     // every redeploy and every rebuild of the frontend.
     //
-    // THIS IS THE ANCHORED URL, AND IT SERVES THE ANCHORED BYTES (decision
-    // D10). `robotmoney-core` writes this path on chain as `payloadUri` beside
-    // `payloadDigest`, so a GET here returns the BARE canonical receipt — the
-    // exact keccak256 preimage, `application/json`, byte-stable — and nothing
-    // wrapped around it. It used to answer the read-time verification envelope,
-    // whose keccak256 is not the anchored digest; a third party reading only
-    // the chain then had to know, from nowhere on chain, to unwrap `.receipt`
-    // and re-canonicalize. The envelope moved to `sessionConsensusReceiptVerified`.
-    sessionConsensusReceipt: "/api/swarm/sessions/:id/consensus-receipt", // GET — public, BARE canonical bytes (anchored as payloadUri)
-    // The read-time VERIFICATION envelope for the same receipt: the receipt
-    // plus `verified`, the per-signature verdicts and `unverifiedReasons`, all
-    // recomputed on the request. A sibling of the anchored path rather than a
-    // query parameter on it, so that "the anchored URL" stays a whole URL a
-    // verifier can compare for equality. Nothing anchors this path.
-    sessionConsensusReceiptVerified: "/api/swarm/sessions/:id/consensus-receipt/verified", // GET — public, read-time-verified envelope
+    // This path answers the read-time VERIFICATION ENVELOPE, exactly as
+    // production (v0.5.4) does: the receipt plus `verified`, the per-signature
+    // verdicts and `unverifiedReasons`, all recomputed on the request. The
+    // deployment refactor does not change what the product serves (owner rule,
+    // 2026-10-03), so this URL keeps its production body.
+    sessionConsensusReceipt: "/api/swarm/sessions/:id/consensus-receipt", // GET — public, read-time-verified envelope
+    // The BARE canonical bytes of the same receipt: the keccak256 preimage of
+    // `payloadDigest` minus its pinned domain prefix, `application/json`,
+    // byte-stable. A sibling path rather than a query parameter, so each URL
+    // stays a whole URL a verifier can compare for equality. Added after
+    // v0.5.4; production has no such path.
+    sessionConsensusReceiptCanonical: "/api/swarm/sessions/:id/consensus-receipt/canonical", // GET — public, BARE canonical bytes
     // GET — the session's PUBLIC judgements: one per judging party (its newest
     // opinion that reached the session in `enforce`), newest first, and only
     // once the session is published. `shadow` opinions are never served here —
@@ -249,6 +246,10 @@ export const ROUTES = {
       // spend { inputTokens?, outputTokens?, totalTokens?, costUsd? } (D55
       // decision 3), outside the signed bytes.
       judgement: "/api/swarm/participants/judgement",
+      // POST (judge bearer) { sessionId, reason, detail?, attempt? } — a judge
+      // reporting that one attempt submitted nothing, by its D-A7 name. It
+      // decides nothing: the admin overview reads it to say WHY (issue #1117).
+      judgeRefusal: "/api/swarm/participants/judge/refusal",
     },
 
     // Admin lifecycle (X-Admin-Token). The backend registers ONE dispatcher at

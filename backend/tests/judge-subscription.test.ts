@@ -30,7 +30,10 @@ import { sql } from "../src/db/client.ts";
 import * as epoch from "../src/swarm/domain.ts";
 import * as judge from "../src/swarm/domain.ts";
 import { inputsDigest } from "../src/swarm/judge.ts";
+import { getJudgeConfig, setJudgeConfig } from "../src/swarm/judge-config.ts";
 import { handleJudgeParticipant } from "../src/api/routes/swarm-judge-participant.ts";
+import { getOverviewProjection } from "../src/admin/overview.ts";
+import { _resetJudgeRefusals } from "../src/swarm/judge-refusals.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import {
   activeSubject, activeMember, sessionDate, setJudgeMode, sessionRow, submitTake, type TestMember,
@@ -160,6 +163,47 @@ test("each request carries the frozen input the judge is to read — the object 
   expect((await judge.submitJudgement(j.token, signed)).ok).toBe(true);
 });
 
+// Issue 1118. The participant holds no database credential, so the model it
+// runs travels in the request. It must be the column's value at the moment the
+// frame is built, so an admin switch needs no restart and the admin GET
+// (getJudgeConfig) never names a model the judge is not using.
+test("each request carries swarm_judge_config.model, and an admin switch reaches the next request", async () => {
+  const j = await activeJudge();
+  const { sessionId } = await judgingSession("js_model");
+  const served = async () => (await judge.pendingJudgingFor(j.id)).find((p) => p.sessionId === sessionId)!;
+
+  expect((await served()).model).toBe("test/epoch-fixture-judge");
+
+  await setJudgeConfig({ model: "test/switched-judge" });
+  expect((await served()).model).toBe("test/switched-judge");
+  expect((await getJudgeConfig()).model).toBe((await served()).model);
+
+  // The bare wire id is what is stored and what is served (migration 0081).
+  await setJudgeConfig({ model: "opencode/test/prefixed" });
+  expect((await served()).model).toBe("test/prefixed");
+});
+
+test("a configured model of NULL is served as null, never as some other model", async () => {
+  const j = await activeJudge();
+  const { sessionId } = await judgingSession("js_model_null");
+  await setJudgeConfig({ mode: "off", model: null });
+  expect((await judge.pendingJudgingFor(j.id)).find((p) => p.sessionId === sessionId)!.model).toBeNull();
+});
+
+test("a model switched while a session waits re-serves it on an open subscription", async () => {
+  const j = await activeJudge();
+  await judgingSession("js_model_stream");
+  await setJudgeConfig({ mode: "enforce", model: "test/stream-a" });
+  const res = judge.openJudgeStream(j.id, { refreshMs: 25, keepaliveMs: 60_000 });
+  const reading = readFrames(res, 2, 4000);
+  await Bun.sleep(150);
+  await setJudgeConfig({ model: "test/stream-b" });
+  const frames = await reading;
+  const models = frames.filter((f) => f.type === "pending").map((f) => f.data.pending[0]?.model);
+  expect(models[0]).toBe("test/stream-a");
+  expect(models).toContain("test/stream-b");
+});
+
 test("a session this judge has a TAKE in is not its work, and is never served to it", async () => {
   // Scheduler spec §4.4: an eligible judgement is signed by a judge "that has
   // no take in that session". The author's own member row is made a judge
@@ -195,6 +239,18 @@ test("the same work is served AGAIN on a reconnect, until this judge submits", a
   const second = await readFrames(judge.openJudgeStream(j.id, { keepaliveMs: 5000, refreshMs: 20 }), 1);
   expect(second[0].type).toBe("pending");
   expect(second[0].data.pending.map((p: any) => p.sessionId)).toContain(sessionId);
+});
+
+test("an UNCHANGED pending set is re-sent on the resend timer, so a refused item gets another chance (#1117)", async () => {
+  const j = await activeJudge();
+  const { sessionId } = await judgingSession("js_resend");
+
+  // Three `pending` frames with no change to the set: the first on connect, the
+  // others only because the timer fired. Without the timer the stream writes
+  // keepalives instead and a judge whose model call failed is never told again.
+  const frames = await readFrames(judge.openJudgeStream(j.id, { keepaliveMs: 5000, refreshMs: 20, resendMs: 50 }), 3);
+  expect(frames.map((f) => f.type)).toEqual(["pending", "pending", "pending"]);
+  for (const f of frames) expect(f.data.pending.map((p: any) => p.sessionId)).toContain(sessionId);
 });
 
 test("once this judge has submitted, the session is no longer served to it", async () => {
@@ -445,6 +501,34 @@ test("the subscribe route refuses a missing or unknown bearer, and a non-judge m
     url("/api/swarm/participants/judge/subscribe"),
   );
   expect((wrongRole as { status: number }).status).toBe(403);
+});
+
+test("a judge's reported refusal reaches the admin overview with its reason, and decides nothing (#1117)", async () => {
+  _resetJudgeRefusals();
+  const j = await activeJudge();
+  const { sessionId } = await judgingSession("js_refusal_report");
+  const post = (token: string | null, body: unknown) =>
+    handleJudgeParticipant(
+      new Request("http://test/api/swarm/participants/judge/refusal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(body),
+      }),
+      url("/api/swarm/participants/judge/refusal"),
+    ) as Promise<{ status: number; body: any }>;
+
+  expect((await post(null, {})).status).toBe(401);
+  expect((await post((await activePlainMember()).token, { sessionId, reason: "model_timeout" })).status).toBe(403);
+  expect((await post(j.token, { sessionId, reason: "not a code!" })).status).toBe(400);
+  expect((await post(j.token, { sessionId, reason: "model_timeout", detail: "no answer within 300000 ms", attempt: 2 })).status).toBe(200);
+
+  const overview = await getOverviewProjection();
+  const alert = overview.alerts.find((a) => a.source === `swarm.judge_refusal:${sessionId}`);
+  expect(alert?.message).toContain("model_timeout");
+  expect(alert?.message).toContain("no answer within 300000 ms");
+
+  // Reporting a refusal moved nothing: the session is still waiting in judging.
+  expect((await sessionRow(sessionId)).state).toBe("judging");
 });
 
 test("the submission route posts a judgement under the judge's credential", async () => {

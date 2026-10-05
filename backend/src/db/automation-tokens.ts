@@ -1,9 +1,9 @@
 // The API automation-token store (issue #1026 W4.5).
 //
 // Governed by docs/technical/smoke-production-spec.md §3 and
-// docs/technical/system-scheduler-spec.md §7. Migration 0069 is the table; this
+// docs/technical/system-scheduler-spec.md §7. Migration 0087 is the table; this
 // module is the only thing that writes it and the only thing that reads it.
-// Migration 0078 keyed it on (instance, holder) for §3's three holders: the
+// Migration 0095 keyed it on (instance, holder) for §3's three holders: the
 // scheduler, the analytics producer and the operator.
 //
 // WHY PROVISIONING LIVES HERE AND NOT IN A SCRIPT. The secret is generated,
@@ -21,7 +21,7 @@ import { hashKey } from "../lib/keys.ts";
 /**
  * Who presents a service token — smoke spec §3's three holders.
  *
- * `system-scheduler` was the store's only holder until migration 0078. It is
+ * `system-scheduler` was the store's only holder until migration 0095. It is
  * still the default, so a caller that names no holder means what it always did.
  */
 export const AUTOMATION_HOLDERS = ["system-scheduler", "analytics-producer", "operator"] as const;
@@ -35,7 +35,7 @@ export type AutomationHolder = (typeof AUTOMATION_HOLDERS)[number];
  * ingestion routes". The operator: "the admin routes; this replaces the
  * `ADMIN_TOKEN` environment variable" (smoke spec §3). The first two "hold one
  * API credential and no other kind", so a right from another holder's list is
- * refused rather than recorded. Migration 0078's
+ * refused rather than recorded. Migration 0095's
  * `automation_tokens_holder_rights_check` holds the same table, so a value that
  * gets past this module is still refused by the database.
  */
@@ -47,7 +47,7 @@ export const HOLDER_RIGHTS = {
 
 /**
  * Every right any holder may carry. The scheduler's three come first, in the
- * order migration 0069 declared them; migration 0078's
+ * order migration 0087 declared them; migration 0095's
  * `automation_tokens_rights_known_check` holds the same list.
  */
 export const AUTOMATION_RIGHTS = [
@@ -66,7 +66,7 @@ export interface AutomationGrant {
 /**
  * THE TWO STATEMENTS, REGISTERED (smoke-production-spec.md §7.1).
  *
- * Provisioning runs as `rm_owner`: migration 0069 grants the runtime roles
+ * Provisioning runs as `rm_owner`: migration 0087 grants the runtime roles
  * SELECT on this table and nothing else, because a token is written by "the
  * same authorized preparation that writes `deployment_identity`" (§3), and
  * that table is "writable only by `rm_owner`" (§4.2).
@@ -133,7 +133,7 @@ const TOKEN_PREFIX = "rmat_";
  * The key is (instance, holder), so re-provisioning one holder replaces that
  * holder's row and no other: "provisioning one never invalidates another's".
  * `holder` defaults to `system-scheduler`, the store's only holder before
- * migration 0078, so existing callers keep their meaning.
+ * migration 0095, so existing callers keep their meaning.
  *
  * `db` is the handle the write runs on. The provisioning entry module passes
  * its fenced `rm_owner` transaction (§2: every mutation "runs in a transaction

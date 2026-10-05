@@ -41,7 +41,7 @@
 // each an exact record of a known difference: privileges (0053's rm_app
 // DELETE, cause B), the replaying login's default privileges (cause E),
 // comments (cause F) and others before them. Wave 5 of #1026 closed the last
-// two with D55 (6) — migration 0089 revokes DELETE and TRUNCATE from every
+// two with D55 (6) — migration 0107 revokes DELETE and TRUNCATE from every
 // runtime role on every table, and the provisioning step takes the login's
 // defaults back — and the list was deleted with them. The two sides must now
 // be equal, object for object; any difference fails, naming the object.

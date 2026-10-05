@@ -446,12 +446,12 @@ describe("the runtime check under the PRODUCTION role (rm_app), which holds no D
   });
 
   test("a replaced guard function is UNREACHABLE from this role, because the privilege is gone too", async () => {
-    // THIS CASE CHANGED WHEN MIGRATION 0065 LANDED, and the change is a
+    // THIS CASE CHANGED WHEN MIGRATION 0083 LANDED, and the change is a
     // narrowing of what rm_app can do, not of what is checked.
     //
     // It used to assert that the live probe catches a one-statement disarm from
     // the rm_app connection, and its premise was stated in as many words: "rm_app
-    // DOES hold DELETE on 0032's own tables". Migration 0065 is spec §9.1 step 2
+    // DOES hold DELETE on 0032's own tables". Migration 0083 is spec §9.1 step 2
     // and removes exactly that — `REVOKE DELETE, TRUNCATE` on every append-only
     // table from rm_app and rm_worker — because preflight check 2's denylist
     // refuses a runtime role that holds it. So the premise is now false by
@@ -464,7 +464,7 @@ describe("the runtime check under the PRODUCTION role (rm_app), which holds no D
     // reachable from rm_app, because the executor refuses a DELETE at 42501
     // before any trigger runs. Spec §7 check 2 is explicit that this is the
     // design: "Append-only protection is both absent privilege and the existing
-    // triggers." Under 0065 the first half carries the production role, and the
+    // triggers." Under 0083 the first half carries the production role, and the
     // probe still runs in full under rm_owner — the describe above this one.
     await fixtureDb.unsafe(DISARM);
 
@@ -476,7 +476,7 @@ describe("the runtime check under the PRODUCTION role (rm_app), which holds no D
     } catch (e) {
       raised = e as { code?: string };
     }
-    expect(raised?.code, "0065 revoked DELETE on every append-only table from rm_app").toBe("42501");
+    expect(raised?.code, "0083 revoked DELETE on every append-only table from rm_app").toBe("42501");
 
     // And the check does not pretend otherwise: an unreachable table is reported
     // as neither armed-by-probe nor broken, never as "inconclusive" (which would

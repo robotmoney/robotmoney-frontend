@@ -46,7 +46,7 @@ Only the last step changes weights. Everything before it is signalling.
 - `payloadDigest = keccak256(bytes)`. `receiptId = keccak256("robotmoney:consensus-receipt-id:v1\n" + session_id + "\n" + subject_id)`.
 - Bucket order: `agent_tokens`, `conservative_defi_yield`, `protocol_tokens`, `real_world_assets`.
 - Shares to bps: largest-remainder in IEEE-754 binary64. Total is exactly 10,000. Do not recompute in decimal: the two can differ by 1 bp per bucket.
-- Served at `GET /api/swarm/sessions/:id/consensus-receipt`. Fixtures are mirrored in `contract/src/__fixtures__/` and `robotmoney-core/tests/fixtures/`.
+- Served at `GET /api/swarm/sessions/:id/consensus-receipt` as the read-time verification envelope, and as the bare canonical bytes at `GET /api/swarm/sessions/:id/consensus-receipt/canonical`. Fixtures are mirrored in `contract/src/__fixtures__/` and `robotmoney-core/tests/fixtures/`.
 
 | Bucket | Vault |
 | --- | --- |

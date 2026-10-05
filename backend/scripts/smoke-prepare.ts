@@ -32,8 +32,8 @@
 //   enroll     `--local dump`: the restored copy's enrollment overwritten with
 //              `rehearsal` through rm_owner (enrollAsRehearsal, §4.2), before
 //              any stage tool connects to it. A copy with NO table — a
-//              production dump that predates 0063 — takes the identity-first
-//              pass instead (localDumpIdentityFirst, D55 (9), (10)): 0063 and
+//              production dump that predates 0081 — takes the identity-first
+//              pass instead (localDumpIdentityFirst, D55 (9), (10)): 0081 and
 //              `rehearsal` in one fenced transaction, only on the container
 //              this run restored, never over a remote connection, never under
 //              RM_ENV=prod, only from the production baseline ledger.
@@ -156,7 +156,7 @@ async function main(): Promise<PrepareResult> {
         // (scripts/lib/restore-container.ts). That it is the container this
         // run restored is proved by the pass itself (proveRestoredByThisPlan).
         const remote = request.connection !== "local" || request.credentials.source !== "instance";
-        // A dump restored from a database that predates 0063 has no table to
+        // A dump restored from a database that predates 0081 has no table to
         // write `rehearsal` into: that is the `--local dump` identity-first
         // pass (D55 (9), (10)), and it proves its own guards first.
         const { identityTableExists } = await import("./migrate-run.ts");
@@ -260,10 +260,10 @@ async function main(): Promise<PrepareResult> {
 
 /**
  * The `--local dump` identity-first pass — the second of §4.3's three named
- * exceptions (D55 (9), (10)): a restored production dump that predates 0063
+ * exceptions (D55 (9), (10)): a restored production dump that predates 0081
  * has no `deployment_identity` table, so the enrollment §4.2 requires has
  * nowhere to land. When the restored ledger equals the production baseline,
- * this applies 0063 and writes `rehearsal` in ONE fenced transaction as
+ * this applies 0081 and writes `rehearsal` in ONE fenced transaction as
  * rm_owner (migrate-run.ts applyIdentityFirst), before any other pending
  * migration; `--migrate` then takes the normal path, which accepts the state
  * the pass leaves.

@@ -386,7 +386,7 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
         VALUES (${rogueId(challenge)}, ${Buffer.from("not-used-before-lookup")}, 0, '{}')
       `;
       await fixtureDb`INSERT INTO admin_session (token, expires_at) VALUES (${hashKey(rogueSession(challenge))}, now() + interval '1 day')`;
-      // A pending sign-in ceremony in one of the 32 slots (migration 0088):
+      // A pending sign-in ceremony in one of the 32 slots (migration 0106):
       // slot 8, the first of the authentication slots (8..31).
       await fixtureDb`
         UPDATE admin_webauthn_challenge

@@ -14,7 +14,7 @@
 // target key, on the `rm_owner` connection that performs the write. A competitor
 // that won the session lock after the caller's connection died still waits for
 // this transaction to end. The runtime roles hold SELECT on the table and nothing
-// else (migration 0069), so only this path can write it.
+// else (migration 0087), so only this path can write it.
 //
 // RE-PROVISIONING REPLACES IN PLACE (D55 (6)). The row is keyed on (instance,
 // holder) and the write is an upsert: a holder's new hash overwrites its old one

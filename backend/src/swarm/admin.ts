@@ -765,7 +765,7 @@ export async function createSubjectAdmin(input: SubjectInput, actor: Actor = ADM
 
 /**
  * A whole, positive number of seconds — the only shape a duration may take
- * (scheduler spec §2.2/§2.4, migrations 0067 and 0073's CHECKs).
+ * (scheduler spec §2.2/§2.4, migrations 0085 and 0090's CHECKs).
  */
 function isPositiveWholeSeconds(v: unknown): v is number {
   return typeof v === "number" && Number.isInteger(v) && v > 0;
@@ -1966,15 +1966,12 @@ export async function publishConsensusReceiptAdmin(sessionId: string, actor: Act
       // From the contract, never a literal — routes.js is the single source of
       // truth for URLs (finding 019).
       //
-      // `url` is the ANCHORED one (decision D10): it serves the bare canonical
-      // bytes, so `keccak256(domain separator + body)` is the `payloadDigest`
-      // robotmoney-core writes beside it, and "the URL drafted from IS the
-      // anchored payloadUri" stays a string equality. `verifiedUrl` is the
-      // read-time verification envelope — the human/verifier surface — and is
-      // never anchored. Both are returned so a caller never has to build either
-      // by hand.
+      // `url` is unchanged from production v0.5.4 and serves the read-time
+      // verification envelope. `canonicalUrl` serves the bare canonical bytes,
+      // whose `keccak256(domain separator + body)` is `payloadDigest`. Both are
+      // returned so a caller never has to build either by hand.
       url: path(ROUTES.swarm.sessionConsensusReceipt, { id: stored.sessionId }),
-      verifiedUrl: path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: stored.sessionId }),
+      canonicalUrl: path(ROUTES.swarm.sessionConsensusReceiptCanonical, { id: stored.sessionId }),
       canonicalBytes: stored.canonicalBytes,
       receipt: stored.receipt,
     },

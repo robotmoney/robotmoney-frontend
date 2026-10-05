@@ -374,7 +374,7 @@ export function parseSubjectCreate(body: JsonObject | null): {
     // with a message naming the field (§2.4: no NULL, no non-positive
     // duration). Dropping a non-number here would silently turn an explicit
     // `null` into "use the schema default", and a second check here would be a
-    // second place for the rule to drift from migrations 0067/0073's CHECKs.
+    // second place for the rule to drift from migrations 0085/0090's CHECKs.
     epochDuration: "epochDuration" in body ? body.epochDuration : undefined,
     epochAnchor: "epochAnchor" in body ? body.epochAnchor : undefined,
     judgingDurationSeconds: "judgingDurationSeconds" in body ? body.judgingDurationSeconds : undefined,

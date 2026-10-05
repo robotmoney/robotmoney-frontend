@@ -75,7 +75,7 @@ function header(lines: readonly string[]): string {
 }
 
 /** Add §8.2's two ledger columns to this database's `schema_migrations`.
- *  Migration 0064 creates them, so the cloned template starts with them; the
+ *  Migration 0082 creates them, so the cloned template starts with them; the
  *  afterEach below drops them so "the column does not exist" stays reachable,
  *  and a test that needs them re-adds them here. */
 async function addCompatColumns(): Promise<void> {
@@ -193,7 +193,7 @@ describe("parseMigrationHeader — the declaration §8.2 requires of every migra
 // The pre-compat baseline (D53 decision 3)
 // ───────────────────────────────────────────────────────────────────────────
 
-/** Every migration at or below the 0063 baseline that has no compat header,
+/** Every migration at or below the 0081 baseline that has no compat header,
  *  as of D53 (2026-09-24). Closed: see the test that pins it. */
 const PRE_COMPAT_HEADERLESS: string[] = [
   "0001_backends.sql",
@@ -274,12 +274,12 @@ const PRE_COMPAT_HEADERLESS: string[] = [
   "0061_source_value_provenance.sql",
   "0062_rm_readonly_sequence_select.sql",
   "0062_rm_worker_analytics_ledger_read_grant.sql",
-  "0063_deployment_identity.sql",
   // Production's own file (v0.5.1), ported so the ledger names match (issue #1064).
   "0063_swarm_judge_model_default.sql",
+  "0081_deployment_identity.sql",
 ];
 
-describe("the pre-compat baseline — 0001-0063 may be header-less, nothing after may", () => {
+describe("the pre-compat baseline — 0001-0081 may be header-less, nothing after may", () => {
   const dir = `${import.meta.dir}/../migrations`;
   async function migrations(): Promise<{ file: string; text: string }[]> {
     const { readdir } = await import("node:fs/promises");
@@ -287,13 +287,13 @@ describe("the pre-compat baseline — 0001-0063 may be header-less, nothing afte
     return Promise.all(files.map(async (file) => ({ file, text: await Bun.file(`${dir}/${file}`).text() })));
   }
 
-  test("the baseline is 0063", () => {
-    expect(COMPAT_HEADER_BASELINE).toBe(63);
-    expect(requiresCompatHeader("0063_deployment_identity.sql")).toBe(false);
-    expect(requiresCompatHeader("0064_schema_manifest.sql")).toBe(true);
+  test("the baseline is 0081", () => {
+    expect(COMPAT_HEADER_BASELINE).toBe(81);
+    expect(requiresCompatHeader("0081_deployment_identity.sql")).toBe(false);
+    expect(requiresCompatHeader("0082_schema_manifest.sql")).toBe(true);
   });
 
-  test("EVERY migration above 0063 carries a parseable header", async () => {
+  test("EVERY migration above 0081 carries a parseable header", async () => {
     const above = (await migrations()).filter(({ file }) => requiresCompatHeader(file));
     // RED CONTROL: the loop below must have something to check.
     expect(above.length).toBeGreaterThan(0);
@@ -302,7 +302,7 @@ describe("the pre-compat baseline — 0001-0063 may be header-less, nothing afte
     }
   });
 
-  test("the baseline is load-bearing: files at or below 0063 exist without a header, and are not backfilled", async () => {
+  test("the baseline is load-bearing: files at or below 0081 exist without a header, and are not backfilled", async () => {
     const headerless = (await migrations()).filter(
       ({ file, text }) => !requiresCompatHeader(file) && parsePendingHeader(file, text) === null,
     );
@@ -310,13 +310,13 @@ describe("the pre-compat baseline — 0001-0063 may be header-less, nothing afte
     expect(headerless.map((m) => m.file)).toContain("0001_backends.sql");
   });
 
-  test("the header-less set at or below 0063 is CLOSED: a new low-numbered file cannot skip the header", async () => {
+  test("the header-less set at or below 0081 is CLOSED: a new low-numbered file cannot skip the header", async () => {
     // The baseline is a number, and this repo already repeats numbers (two or
     // three files each at 0021-0023, 0028-0029, 0032-0033, 0056-0062). A new
     // header-less `0059_x.sql` would therefore pass `parsePendingHeader` for
-    // ever, and the "above 0063" test cannot see it. So the exact set of
+    // ever, and the "above 0081" test cannot see it. So the exact set of
     // pre-compat files that carry no header is pinned here: today's list, no
-    // more. A new migration takes a number above 0063 and declares itself.
+    // more. A new migration takes a number above 0081 and declares itself.
     const headerless = (await migrations())
       .filter(({ file, text }) => !requiresCompatHeader(file) && parsePendingHeader(file, text) === null)
       .map((m) => m.file);
@@ -324,12 +324,12 @@ describe("the pre-compat baseline — 0001-0063 may be header-less, nothing afte
   });
 
   test("a header-less file at or below the baseline is pre-compat: null, not a default", () => {
-    expect(parsePendingHeader("0063_precompat.sql", "-- prose only\nSELECT 1;\n")).toBeNull();
+    expect(parsePendingHeader("0081_precompat.sql", "-- prose only\nSELECT 1;\n")).toBeNull();
   });
 
   test("a header-less file above the baseline refuses, naming itself", () => {
-    expect(() => parsePendingHeader("0073_undeclared.sql", "-- prose only\nSELECT 1;\n")).toThrow(
-      "0073_undeclared.sql",
+    expect(() => parsePendingHeader("0099_undeclared.sql", "-- prose only\nSELECT 1;\n")).toThrow(
+      "0099_undeclared.sql",
     );
   });
 

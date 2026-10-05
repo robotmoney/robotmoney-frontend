@@ -7,7 +7,9 @@
 --
 -- There are no session-scheduling rows here. Per system-scheduler-spec.md §2.2 a
 -- subject's epoch duration IS its whole schedule, so §8.1 now says bootstrap data
--- carries that duration on the subject; there is nothing to enable (§12).
+-- carries that duration on the subject; there is nothing to enable (§12). The
+-- duration is the column default in snapshot.sql, 21600 s (six hours), which is
+-- production's cadence, so a blank database starts on the schedule an upgraded one keeps.
 --
 -- PostgreSQL database dump
 --
@@ -31,7 +33,7 @@ SET row_security = off;
 --
 -- Data for Name: admin_webauthn_challenge; Type: TABLE DATA; Schema: public; Owner: rm_owner
 --
--- The 32 empty WebAuthn challenge slots (migration 0088, D55 (6)). The runtime
+-- The 32 empty WebAuthn challenge slots (migration 0106, D55 (6)). The runtime
 -- holds no INSERT on the table, so these are the only rows it will ever have.
 -- One statement per row, as pg_dump writes them: the --seed gate counts
 -- bootstrap rows by their INSERT statements (src/db/schema-snapshot.ts

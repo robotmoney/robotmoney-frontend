@@ -506,7 +506,7 @@ test("the judge mode in force is captured on the closing epoch, and a later chan
 test("the judging duration in force is captured on the closing epoch, and a later change does not reach it", async () => {
   // §4.4: "Judge mode and judging duration are captured at turnover … An admin
   // changing either afterwards affects later sessions, never one already
-  // settling." The capture is the SESSION column (migration 0074), never a
+  // settling." The capture is the SESSION column (migration 0091), never a
   // live read of the subject.
   const { subjectId, sessionId } = await openedEpoch("to_judging_duration");
   await sql`UPDATE swarm_subjects SET judging_duration_seconds = 240 WHERE id = ${subjectId}`;

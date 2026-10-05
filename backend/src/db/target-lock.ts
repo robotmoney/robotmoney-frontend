@@ -610,9 +610,9 @@ export async function acquireTargetLock(options: {
 export interface TargetState {
   /**
    * `deployment_identity.kind` (§4.2), or `missing` when the target is not
-   * enrolled: no table (a database without migration 0063, such as a fresh
+   * enrolled: no table (a database without migration 0081, such as a fresh
    * `--local blank` database before bootstrap, a fresh cluster before §9.1
-   * initialization, or a pre-0063 production) or a table with no row.
+   * initialization, or a pre-0081 production) or a table with no row.
    *
    * `missing` is its own value and never reads as `rehearsal`: absence of
    * evidence is not evidence of rehearsal (§4.3's "anything else" row). Keeping
@@ -643,8 +643,8 @@ export type TargetIdentity = "production" | "rehearsal" | "missing";
  * backend/src/db/schema-snapshot.ts):
  *
  *  - an ABSENT table is an answer (`missing`), like an absent ledger or manifest;
- *  - the value is read from `kind` (§4.2, migration 0063), or from the legacy
- *    `identity` column a database enrolled before 0063 carries, resolved from
+ *  - the value is read from `kind` (§4.2, migration 0081), or from the legacy
+ *    `identity` column a database enrolled before 0081 carries, resolved from
  *    the catalog so a column-name error never reads as "not enrolled";
  *  - no row is `missing`; more than one row, an unknown value, a table with
  *    neither column, or a table this role cannot read are NOT answers.

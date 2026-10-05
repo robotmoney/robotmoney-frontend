@@ -99,9 +99,9 @@ export const handlers: Record<string, JobHandler> = {
   // The three swarm email delivery kinds (application receipt, activation
   // approval, waitlist seat-open) were REMOVED with the swarm email feature
   // itself — issue #1026 W5, decision D50 reversing D30. Nothing enqueues them
-  // any more and migration 0066 drops the outbox they delivered from; 0066 is
+  // any more and migration 0084 drops the outbox they delivered from; 0084 is
   // also the one place their names still appear, because it settles any row a
-  // pre-0066 deployment left queued. Leaving the kinds unregistered is the right
+  // pre-0084 deployment left queued. Leaving the kinds unregistered is the right
   // end state: loop.ts fails a job whose kind has no handler.
   // projects "Agentic Economy Ecosystem" data pipelines (issue #87). Ported from
   // the deprecated bot-analytics edge functions onto the kind→handler pattern.

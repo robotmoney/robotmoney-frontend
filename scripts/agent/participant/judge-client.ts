@@ -86,6 +86,13 @@ export interface PendingJudging {
   date: string;
   judgingDeadlineAt: string;
   judgingRequestedAt: string | null;
+  /**
+   * The model to run, as `swarm_judge_config.model` named it when the API built
+   * this frame (issue 1118). The only source of the judge's model: there is no
+   * boot-time value to fall back on, so the admin surface never names a model
+   * the judge is not using. Absent or blank means none is configured.
+   */
+  model?: string | null;
   /** The frozen take set, brief and rollup facts this judge is to read — and the digest's subject. */
   input: JudgeInput;
 }
@@ -98,13 +105,13 @@ export interface JudgeClientConfig {
   name: string;
   /** This judge's own signing key, from its `credential.json` entry (§6.1). */
   identity: PersonaIdentity;
-  /** The model this judge calls, as the vendor spells it on the wire. */
-  model: string;
   endpoint: string;
   apiKey: string;
   timeoutMs: number;
   /** Backoff after a dropped subscription, in milliseconds. */
   reconnectMs: number;
+  /** First retry delay for a refused item; doubles per attempt up to `RETRY_MAX_MS`. */
+  retryBaseMs?: number;
 }
 
 /**
@@ -133,7 +140,6 @@ export const JUDGE_CLIENT_ENV = {
   memberId: "RM_MEMBER_ID",
   name: "RM_MEMBER_NAME",
   identity: "RM_MEMBER_IDENTITY",
-  model: "RM_JUDGE_MODEL",
   endpoint: "RM_JUDGE_BASE_URL",
   apiKey: INFERENCE_KEY_ENV,
   timeoutMs: "RM_JUDGE_TIMEOUT_MS",
@@ -145,21 +151,15 @@ export function readJudgeClientConfig(env: Record<string, string | undefined> = 
     if (!v) throw new JudgeClientConfigError(`${key} was not injected`, reason);
     return v;
   };
-  // The model and the credential are REQUIRED, and each gap refuses by its
-  // D-A7 name. A judge container without them would connect, receive work and
-  // refuse every item — visibly, but only after a deadline had passed.
-  // Refusing at startup puts the misconfiguration in front of the operator
-  // immediately, and the container crash-loops under `restart: unless-stopped`,
-  // which is the right outcome.
-  const model = need(JUDGE_CLIENT_ENV.model, "model_unconfigured");
+  // The credential is REQUIRED and its gap refuses by its D-A7 name. A judge
+  // container without it would connect, receive work and refuse every item —
+  // visibly, but only after a deadline had passed. Refusing at startup puts
+  // the misconfiguration in front of the operator immediately, and the
+  // container crash-loops under `restart: unless-stopped`.
+  //
+  // THE MODEL IS NOT READ HERE (issue 1118). It is `swarm_judge_config.model`,
+  // served with each judging request and checked per request in `judgeOne`.
   const apiKey = need(JUDGE_CLIENT_ENV.apiKey, "credential_unconfigured");
-  try {
-    // WHICH model, not merely some model (AC-MODEL-01): the keyless free family
-    // everywhere, and anything but the pinned model on an acceptance path.
-    assertJudgeModelAllowed(model, env);
-  } catch (err) {
-    throw new JudgeClientConfigError(err instanceof Error ? err.message : String(err), "model_disallowed");
-  }
   const timeout = Number.parseInt(env[JUDGE_CLIENT_ENV.timeoutMs] ?? "", 10);
   return {
     apiUrl: need(JUDGE_CLIENT_ENV.apiUrl).replace(/\/$/, ""),
@@ -167,7 +167,6 @@ export function readJudgeClientConfig(env: Record<string, string | undefined> = 
     memberId: need(JUDGE_CLIENT_ENV.memberId),
     name: need(JUDGE_CLIENT_ENV.name),
     identity: readIdentity(need(JUDGE_CLIENT_ENV.identity)),
-    model,
     endpoint: need(JUDGE_CLIENT_ENV.endpoint),
     apiKey,
     timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : 300_000,
@@ -241,10 +240,28 @@ export async function judgeOne(
   deps: {
     fetchImpl?: typeof globalThis.fetch;
     runJudgeImpl?: typeof runJudge;
+    /** The environment the model policy reads (RM_ENV). Defaults to the process's. */
+    env?: Record<string, string | undefined>;
   } = {},
 ): Promise<JudgeOutcome> {
   const doFetch = deps.fetchImpl ?? fetch;
   const run = deps.runJudgeImpl ?? runJudge;
+
+  // THE MODEL IS THE ONE THE API SERVED (issue 1118): `swarm_judge_config.model`
+  // at the moment the frame was built. None configured, or one this environment
+  // may not use, refuses by its D-A7 name and submits nothing.
+  const model = typeof pending.model === "string" ? pending.model.trim() : "";
+  if (model === "") {
+    return { kind: "refused", sessionId: pending.sessionId, reason: "model_unconfigured", detail: "swarm_judge_config.model is not set" };
+  }
+  try {
+    // WHICH model, not merely some model (AC-MODEL-01): the keyless free family
+    // everywhere, and anything but the pinned model on an acceptance path.
+    assertJudgeModelAllowed(model, deps.env ?? process.env);
+  } catch (err) {
+    const detail = (err instanceof Error ? err.message : String(err)).slice(0, DETAIL_MAX);
+    return { kind: "refused", sessionId: pending.sessionId, reason: "model_disallowed", detail };
+  }
 
   if (!pending.input || !Array.isArray(pending.input.takes)) {
     // A frame with no input is a protocol fault between this container and the
@@ -260,7 +277,7 @@ export async function judgeOne(
     answer = await run({
       promptFile,
       endpoint: config.endpoint,
-      model: config.model,
+      model,
       apiKey: config.apiKey,
       timeoutMs: config.timeoutMs,
     });
@@ -279,7 +296,7 @@ export async function judgeOne(
 
   // The call's spend goes with the judgement it paid for (D55 (3)); a vendor
   // that reported none sends none, and the API stores NULL rather than 0.
-  return submitJudgement(config, pending, answer.body, doFetch, answer.usage);
+  return submitJudgement(config, pending, answer.body, doFetch, answer.usage, model);
 }
 
 /**
@@ -331,12 +348,13 @@ export async function submitJudgement(
   opinion: string,
   fetchImpl: typeof globalThis.fetch = fetch,
   usage?: JudgeUsage,
+  model: string = (pending.model ?? "").trim(),
 ): Promise<JudgeOutcome> {
   const sessionId = pending.sessionId;
   const body = {
     sessionId,
     opinion,
-    model: config.model,
+    model,
     promptHash: JUDGE_PROMPT_HASH,
     inputsDigest: inputsDigest(pending.input),
     nonce: crypto.randomUUID(),
@@ -406,6 +424,32 @@ export async function* readPendingFrames(body: ReadableStream<Uint8Array>): Asyn
   }
 }
 
+const RETRY_BASE_MS = 15_000;
+const RETRY_MAX_MS = 300_000;
+
+/** Delay after n failed attempts: base, 2x, 4x ... capped. */
+export function backoffMs(attempts: number, base: number = RETRY_BASE_MS): number {
+  return Math.min(RETRY_MAX_MS, base * 2 ** Math.max(0, attempts - 1));
+}
+
+/**
+ * Tell the API a judgement was refused, so the admin overview can say why.
+ * Best effort and decision-free: the server decides no outcome from it, and a
+ * failure to send changes nothing about the retry.
+ */
+async function reportRefusal(
+  config: JudgeClientConfig,
+  outcome: Extract<JudgeOutcome, { kind: "refused" }>,
+  attempt: number,
+  fetchImpl: typeof globalThis.fetch,
+): Promise<void> {
+  await fetchImpl(`${config.apiUrl}${ROUTES.swarm.participants.judgeRefusal}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId: outcome.sessionId, reason: outcome.reason, detail: outcome.detail, attempt }),
+  });
+}
+
 /**
  * The container's whole life: connect, judge what arrives, reconnect.
  *
@@ -423,11 +467,15 @@ export async function runJudgeClient(
     log?: (m: string) => void;
     /** Injected so the loop is testable without a model credential or a network. */
     runJudgeImpl?: typeof runJudge;
+    /** Injected so backoff and the deadline are testable without waiting. */
+    now?: () => number;
   } = {},
 ): Promise<void> {
   const doFetch = deps.fetchImpl ?? fetch;
   const log = deps.log ?? ((m: string) => console.log(`[judge:${config.name}] ${m}`));
   const done = new Set<string>();
+  const retries = new Map<string, { attempts: number; nextAt: number }>();
+  const now = deps.now ?? Date.now;
 
   while (!signal?.aborted) {
     try {
@@ -447,15 +495,38 @@ export async function runJudgeClient(
         for (const item of pending) {
           if (signal?.aborted) return;
           if (done.has(item.sessionId)) continue;
+          const t = now();
+          // NEVER RETRY AFTER THE DEADLINE (scheduler spec §4.4). Past it the
+          // session is finalized from stored instants, and a judgement that
+          // lands now is late evidence only. An attempt already under way may
+          // still land late; a fresh attempt is not started.
+          const deadline = Date.parse(item.judgingDeadlineAt);
+          if (Number.isFinite(deadline) && t >= deadline) {
+            if (retries.delete(item.sessionId)) {
+              log(`session ${item.sessionId} is past its judging deadline; not retrying`);
+            }
+            continue;
+          }
+          const state = retries.get(item.sessionId);
+          if (state && t < state.nextAt) continue; // still backing off
           const outcome = await judgeOne(config, item, {
             fetchImpl: doFetch,
             runJudgeImpl: deps.runJudgeImpl,
           });
           log(JSON.stringify(outcome));
-          // Remembered only on a SUBMITTED outcome. A refusal is not remembered,
-          // so a model that recovers before the deadline still gets its chance
-          // when the next frame or the next connect re-serves the session.
-          if (outcome.kind === "submitted") done.add(item.sessionId);
+          if (outcome.kind === "submitted") {
+            done.add(item.sessionId);
+            retries.delete(item.sessionId);
+            continue;
+          }
+          // A refusal or a failed submit is NOT remembered as done. The server
+          // re-sends the pending set on a timer, and each re-send is a new
+          // chance once the backoff has passed, until the deadline.
+          const attempts = (state?.attempts ?? 0) + 1;
+          retries.set(item.sessionId, { attempts, nextAt: now() + backoffMs(attempts, config.retryBaseMs) });
+          if (outcome.kind === "refused") {
+            await reportRefusal(config, outcome, attempts, doFetch).catch(() => undefined);
+          }
         }
       }
       log("subscription closed");
