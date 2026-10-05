@@ -55,6 +55,7 @@ on stage-2 with the real restored dump, plus the three open rows below.
 | B9 | `release:v0.6.0` tracking issue | open | to file |
 | B10 | `rebind-members` order on the breaking-migration path | none | settled by R3.8 |
 | B11 | The buyback index runs in the worker as `rm_worker` but its `buyback_scan_state` queries are registered to `rm_app`, so every sweep on the migrated dump logs `permission denied` and is swallowed; buybacks would freeze after the cutover (1150) | open | found on the R3.2 of 2026-10-05; `docker logs <project>-worker-analytics-1 \| grep -A3 "live index failed"` must be empty on the rehearsal |
+| B12 | `verify:live --tier full` fails only on `twin-roster:every-active-member-seated`: the leg asserts the retired host-driver twin (every restored member seated), which a `credential.json` twin cannot satisfy for third parties (1152) | open | owner rescopes or retires the leg; until then R3.4 is read as all legs but this one, and the report says so |
 
 Also open: the notice to external members about the four-weight rule (1124); the
 `judging` banner (1115, merged) and admin items (1123, merged) need only the R7 spot check.
@@ -252,7 +253,7 @@ bun run verify:live --instance rehearse-060 --tier full --emit-receipt=R3.verify
 ```
 
 Exit 0 = pass; 1 = product wrong; 2 = nothing asserted. A WARN is not a pass. List which
-invariants this target could not exercise.
+invariants this target could not exercise. Known on this twin (B12): `twin-roster:every-active-member-seated` fails for third-party seats; every other leg must PASS.
 
 R3.5 Prove the schema gates on the twin (the lines from spec §10 this release depends on):
 migrations all recorded once; `deployment_identity.kind = 'rehearsal'`; `schema_manifest`
