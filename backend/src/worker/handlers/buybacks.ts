@@ -6,7 +6,12 @@
 // never reaches a live log indexer. Idempotent and degrade-safe: an RPC failure
 // leaves the persisted rows untouched rather than 5xx-ing the worker.
 import { indexBuybacks } from "../../chain/buyback-logs.ts";
+import { sql } from "../../db/worker-client.ts";
 
+// On the WORKER's pool (rm_worker, spec §3): the indexer's four sites declare
+// rm_worker and grants.sql allows its writes (B11, issue #1150). Handing it
+// db/client.ts's pool here would be rm_worker on a 0.6 stack anyway, with no
+// grant behind it: that is how every sweep on the 2026-10-01 twin was refused.
 export async function refreshBuybacks(_payload: Record<string, unknown>): Promise<unknown> {
-  return indexBuybacks();
+  return indexBuybacks(sql);
 }
