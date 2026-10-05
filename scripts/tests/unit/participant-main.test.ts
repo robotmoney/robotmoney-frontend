@@ -52,7 +52,8 @@ import {
   type ParticipantConfig,
   type ParticipantLoops,
   type StartupDiagnostic,
-  takeRetryDelayMs,
+  takeRetryPolicy,
+  TAKE_MAX_ATTEMPTS,
   TAKE_RETRY_MAX_MS,
 } from "../../agent/participant/main.ts";
 import type { JudgeClientConfig } from "../../agent/participant/judge-client.ts";
@@ -738,19 +739,21 @@ describe("runParticipant — the namespace decides the loop", () => {
   });
 });
 
-describe("takeRetryDelayMs — a take that did not submit backs off, never re-runs on the next tick (stage-2 2026-10-05: 7 seats, ~1,750 crashed takes each per hour, 429 for everyone)", () => {
+describe("takeRetryPolicy — a take that did not submit backs off, and the seat gives up on the session after TAKE_MAX_ATTEMPTS (owner 2026-10-05: fail instead of spending)", () => {
   test("a submitted take resets: nothing to retry", () => {
-    expect(takeRetryDelayMs({ submission: "submitted" }, 4, 5_000)).toBeNull();
+    expect(takeRetryPolicy({ submission: "submitted" }, 4, 5_000)).toEqual({ kind: "submitted" });
   });
   test("a crashed one-shot doubles from the poll interval per prior failure of the session", () => {
-    expect([0, 1, 2, 3].map((n) => takeRetryDelayMs({ submission: null }, n, 5_000))).toEqual([5_000, 10_000, 20_000, 40_000]);
+    expect([0, 1, 2, 3].map((n) => takeRetryPolicy({ submission: null }, n, 5_000))).toEqual([
+      { kind: "retry", delayMs: 5_000 }, { kind: "retry", delayMs: 10_000 }, { kind: "retry", delayMs: 20_000 }, { kind: "retry", delayMs: 40_000 },
+    ]);
   });
-  test("an unconfirmed submission is retried on the same policy", () => {
-    expect(takeRetryDelayMs({ submission: "unconfirmed" }, 1, 5_000)).toBe(10_000);
+  test("the fifth failure gives the session up: five model calls per seat per session, no more", () => {
+    expect(TAKE_MAX_ATTEMPTS).toBe(5);
+    expect(takeRetryPolicy({ submission: null }, TAKE_MAX_ATTEMPTS - 1, 5_000)).toEqual({ kind: "give-up" });
+    expect(takeRetryPolicy({ submission: "unconfirmed" }, 40, 5_000)).toEqual({ kind: "give-up" });
   });
-  test("the delay caps at five minutes, however long the outage", () => {
-    expect(takeRetryDelayMs({ submission: null }, 12, 5_000)).toBe(TAKE_RETRY_MAX_MS);
-    expect(takeRetryDelayMs({ submission: null }, 400, 5_000)).toBe(TAKE_RETRY_MAX_MS);
+  test("a retry delay never exceeds five minutes, whatever the poll interval", () => {
+    expect(takeRetryPolicy({ submission: null }, 3, 120_000)).toEqual({ kind: "retry", delayMs: TAKE_RETRY_MAX_MS });
   });
 });
-

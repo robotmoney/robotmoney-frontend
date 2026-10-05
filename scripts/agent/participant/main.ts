@@ -654,13 +654,16 @@ export async function runParticipantLoop(
     );
   }
   const failures = new Map<string, number>();
+  /** Sessions this seat gave up on: no further inference spend for them (TAKE_MAX_ATTEMPTS). */
+  const abandoned = new Set<string>();
   while (!signal?.aborted) {
     // A signed submission the server never confirmed goes out again first, as
     // the same bytes: a crash-restart resends, it never re-authors.
     for (const outcome of await resendPendingSubmissions(config)) {
       console.log(`[${config.kind}:${config.name}] ${JSON.stringify(outcome)}`);
     }
-    const work = await pollForWork(config);
+    const polled = await pollForWork(config);
+    const work = polled && abandoned.has(polled.sessionId) ? null : polled;
     if (work) {
       // One take at a time: the next poll waits for this take to finish.
       const outcome = await runTake(config, work);
@@ -671,14 +674,24 @@ export async function runParticipantLoop(
       // hiccup into ~1,750 requests each per hour and a 429 for everyone on
       // the key (stage-2, 2026-10-05, 55967256). The delay grows per failure
       // of this session and is capped; a submission resets it.
-      const delay = takeRetryDelayMs(outcome, failures.get(work.sessionId) ?? 0, config.pollIntervalMs);
-      if (delay === null) {
+      const prior = failures.get(work.sessionId) ?? 0;
+      const next = takeRetryPolicy(outcome, prior, config.pollIntervalMs);
+      if (next.kind === "submitted") {
         failures.delete(work.sessionId);
         continue;
       }
-      failures.set(work.sessionId, (failures.get(work.sessionId) ?? 0) + 1);
-      console.log(`[${config.kind}:${config.name}] take for ${work.sessionId} did not submit; next attempt in ${delay} ms`);
-      await sleep(delay, signal);
+      if (next.kind === "give-up") {
+        // The owner's rule: at some point the seat FAILS instead of spending.
+        // The session ends with this member absent (the scheduler records it);
+        // nothing here is retried until a new session comes.
+        abandoned.add(work.sessionId);
+        failures.delete(work.sessionId);
+        console.log(`[${config.kind}:${config.name}] gave up on ${work.sessionId} after ${prior + 1} failed attempt(s): no further inference spend for this session`);
+        continue;
+      }
+      failures.set(work.sessionId, prior + 1);
+      console.log(`[${config.kind}:${config.name}] take for ${work.sessionId} did not submit (attempt ${prior + 1} of ${TAKE_MAX_ATTEMPTS}); next attempt in ${next.delayMs} ms`);
+      await sleep(next.delayMs, signal);
       continue;
     }
     await sleep(config.pollIntervalMs, signal);
@@ -687,17 +700,24 @@ export async function runParticipantLoop(
 
 /** The longest a failed take waits before its next attempt. */
 export const TAKE_RETRY_MAX_MS = 5 * 60_000;
+/** Attempts a seat makes on one session before it gives up on it (owner, 2026-10-05: "at some point the agent needs to fail instead of consume inference costs"). */
+export const TAKE_MAX_ATTEMPTS = 5;
+
+export type TakeRetryDecision = { kind: "submitted" } | { kind: "retry"; delayMs: number } | { kind: "give-up" };
 
 /**
- * How long to wait before re-attempting a take that did not submit, or `null`
- * when it did (nothing to retry). Doubles from the poll interval per prior
- * failure of the same session — 5 s, 10 s, 20 s, … — and caps at
- * TAKE_RETRY_MAX_MS, so a provider outage costs one request every five minutes
- * per seat instead of one every tick. Pure, so the policy is pinned by test.
+ * What the seat does after a take: nothing more when it submitted; otherwise
+ * a retry that doubles from the poll interval per prior failure of the same
+ * session — 5 s, 10 s, 20 s, 40 s — capped at TAKE_RETRY_MAX_MS; and once
+ * TAKE_MAX_ATTEMPTS have failed, give up on that session for good. Five
+ * attempts bound the spend at five model calls per seat per session, and the
+ * session then records this member absent. Pure, so the policy is pinned by
+ * test.
  */
-export function takeRetryDelayMs(outcome: { submission: string | null }, priorFailures: number, pollIntervalMs: number): number | null {
-  if (outcome.submission === "submitted") return null;
-  return Math.min(TAKE_RETRY_MAX_MS, pollIntervalMs * 2 ** Math.min(priorFailures, 30));
+export function takeRetryPolicy(outcome: { submission: string | null }, priorFailures: number, pollIntervalMs: number): TakeRetryDecision {
+  if (outcome.submission === "submitted") return { kind: "submitted" };
+  if (priorFailures + 1 >= TAKE_MAX_ATTEMPTS) return { kind: "give-up" };
+  return { kind: "retry", delayMs: Math.min(TAKE_RETRY_MAX_MS, pollIntervalMs * 2 ** Math.min(priorFailures, 30)) };
 }
 
 /** Sleep, but wake immediately when `docker stop` sends its SIGTERM. */
