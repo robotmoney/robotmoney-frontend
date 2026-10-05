@@ -55,8 +55,8 @@ on stage-2 with the real restored dump, plus the three open rows below.
 | B9 | `release:v0.6.0` tracking issue | open | to file |
 | B10 | `rebind-members` order on the breaking-migration path | none | settled by R3.8 |
 | B11 | The buyback index runs in the worker as `rm_worker` but its `buyback_scan_state` queries are registered to `rm_app`, so every sweep on the migrated dump logs `permission denied` and is swallowed; buybacks would freeze after the cutover (1150) | open | found on the R3.2 of 2026-10-05; `docker logs <project>-worker-analytics-1 \| grep -A3 "live index failed"` must be empty on the rehearsal |
-| B12 | `verify:live --tier full` fails only on `twin-roster:every-active-member-seated`: the leg asserts the retired host-driver twin (every restored member seated), which a `credential.json` twin cannot satisfy for third parties (1152) | open | owner rescopes or retires the leg; until then R3.4 is read as all legs but this one, and the report says so |
-| B13 | The old checkout's `bun run migrate` runs clean against the migrated database as `rm_owner` ("76 total, up to date") and re-seeds the `swarm.*` job_schedules that 0089 deleted; only its runtime DELETEs are refused (1155) | open | R3.9 found it on 2026-10-05. Owner picks procedural (rename the old checkout on the prod host before R6.3) and/or a schema guard; section 8 corrected below |
+| B12 | The twin seats only `credential.json` members: the seat-all path (`adoptRestoredRoster`, simulated per-boot keys, throw on an unseated active member) runs only under CI, and `--spoof-keys` refuses third parties, so the 2026-10-01 twin ran 2 of 7 silently; `verify:live`'s `twin-roster:every-active-member-seated` is the check that caught it (1152) | open | a twin must seat every active restored member (judge included) with simulated per-boot keys, and refuse when it cannot; until then R3.4 cannot be a go on this leg |
+| B13 | The old checkout's `bun run migrate` runs clean against the migrated database and re-seeds the `swarm.*` job_schedules 0089 deleted (1155) | closed, no action (owner 2026-10-05) | section 8 says: never run the old checkout after R6.3; R6.1 renames it |
 | B14 | A rerun that resumes after replace rebuilds the api image, and the participants overlay pins the api image by the sha256 id the rebuild pruned, so participants cannot start and the failure path stops the api (1160) | open | R3.6 second half on 2026-10-05: interrupt after replace stops cleanly and the rerun resumes to participants, then fails here. Fix on the branch, then repeat R3.6 |
 
 Also open: the notice to external members about the four-weight rule (1124); the
@@ -255,7 +255,7 @@ bun run verify:live --instance rehearse-060 --tier full --emit-receipt=R3.verify
 ```
 
 Exit 0 = pass; 1 = product wrong; 2 = nothing asserted. A WARN is not a pass. List which
-invariants this target could not exercise. Known on this twin (B12): `twin-roster:every-active-member-seated` fails for third-party seats; every other leg must PASS.
+invariants this target could not exercise. Known on this twin (B12): `twin-roster:every-active-member-seated` fails because the 0.6 twin seats only the credential-file members; that is the twin's defect, not the leg's. Every other leg must PASS.
 
 R3.5 Prove the schema gates on the twin (the lines from spec §10 this release depends on):
 migrations all recorded once; `deployment_identity.kind = 'rehearsal'`; `schema_manifest`
