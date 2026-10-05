@@ -415,6 +415,53 @@ export function resolveParticipantImage(
   };
 }
 
+/**
+ * The twin's seating invariant, as a value: active non-judge members of the
+ * restored roster that this boot's agents roster does not name. A twin exists
+ * to rehearse the swarm it restored; a seat count below the roster count is a
+ * SILENT defect — a session with two of seven members looks, on the page, like
+ * five members had nothing to say (issue #1152, the v0.5.x twin's 3-of-7).
+ * Matched by handle, case-insensitively, the way the credential file names
+ * members. A judge is never seated, so never unseated.
+ */
+export function unseatedTwinMembers(
+  members: readonly { id: string; handle?: string | null; status: string; role?: string | null }[],
+  desiredAgentNames: readonly string[],
+): string[] {
+  const desired = new Set(desiredAgentNames.map((n) => n.trim().toLowerCase()));
+  const out: string[] = [];
+  for (const m of members) {
+    if (m.status !== "active" || m.role === "judge") continue;
+    const handle = (m.handle ?? m.id).trim().toLowerCase();
+    if (!desired.has(handle)) out.push(m.handle ?? m.id);
+  }
+  return out.sort();
+}
+
+/**
+ * The twin's seating refusal: on an owned twin (smoke-mode.ts
+ * resolveSeatAllRestored) an active non-judge member the agents roster does
+ * not name refuses the boot, naming them — the silent 2-of-7 twin of issue
+ * #1152 becomes a loud one. Read from the public members list, like the
+ * verify leg that caught it.
+ */
+export async function assertTwinSeatsEveryActiveMember(
+  apiUrl: string,
+  desiredAgentNames: readonly string[],
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const res = await fetchImpl(`${apiUrl.replace(/\/+$/, "")}${ROUTES.swarm.members}`, { signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`participants: ${ROUTES.swarm.members} answered HTTP ${res.status}; the twin cannot prove it seats every active member`);
+  const body = (await res.json()) as { members?: { id: string; handle?: string | null; status: string; role?: string | null }[] };
+  const unseated = unseatedTwinMembers(body.members ?? [], desiredAgentNames);
+  if (unseated.length > 0) {
+    throw new Error(
+      `participants: this twin leaves ${unseated.length} active member(s) unseated: ${unseated.join(", ")}. ` +
+        "A twin seats every active restored member (spec §6.4 owned-twin exception): list them in the rehearsal credential file and boot with --spoof-keys.",
+    );
+  }
+}
+
 /** What `applyParticipantPlan` needs to run compose for the participants overlay. */
 export interface ApplyParticipantsOptions {
   /** The instance's compose project. */

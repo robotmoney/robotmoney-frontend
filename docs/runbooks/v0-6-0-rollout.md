@@ -55,7 +55,7 @@ on stage-2 with the real restored dump, plus the three open rows below.
 | B9 | `release:v0.6.0` tracking issue | open | to file |
 | B10 | `rebind-members` order on the breaking-migration path | none | settled by R3.8 |
 | B11 | The buyback index runs in the worker as `rm_worker` but its `buyback_scan_state` queries are registered to `rm_app`, so every sweep on the migrated dump logs `permission denied` and is swallowed; buybacks would freeze after the cutover (1150) | open | found on the R3.2 of 2026-10-05; `docker logs <project>-worker-analytics-1 \| grep -A3 "live index failed"` must be empty on the rehearsal |
-| B12 | The twin seats only `credential.json` members: the seat-all path (`adoptRestoredRoster`, simulated per-boot keys, throw on an unseated active member) runs only under CI, and `--spoof-keys` refuses third parties, so the 2026-10-01 twin ran 2 of 7 silently; `verify:live`'s `twin-roster:every-active-member-seated` is the check that caught it (1152) | open | a twin must seat every active restored member (judge included) with simulated per-boot keys, and refuse when it cannot; until then R3.4 cannot be a go on this leg |
+| B12 | The twin seated only `credential.json` members: the seat-all path ran only under CI and `--spoof-keys` refused third parties, so the 2026-10-01 twin ran 2 of 7 silently; `verify:live`'s `twin-roster:every-active-member-seated` caught it (1152) | fixed on the branch (spec §6.4 owned-twin exception; the boot refuses an unseated twin) | re-run R3.2 and R3.4 with the full rehearsal roster |
 | B13 | The old checkout's `bun run migrate` runs clean against the migrated database and re-seeds the `swarm.*` job_schedules 0089 deleted (1155) | closed, no action (owner 2026-10-05) | section 8 says: never run the old checkout after R6.3; R6.1 renames it |
 | B14 | A rerun that resumes after replace rebuilds the api image, and the participants overlay pins the api image by the sha256 id the rebuild pruned, so participants cannot start and the failure path stops the api (1160) | open | R3.6 second half on 2026-10-05: interrupt after replace stops cleanly and the rerun resumes to participants, then fails here. Fix on the branch, then repeat R3.6 |
 
@@ -229,7 +229,7 @@ Prerequisites found on stage-2 (2026-10-02):
 - Reset a failed attempt with `bun smoke:down --instance rehearse-060`, remove the `rm-restore-*` container, then `bun run smoke:clean`.
 - A bare `--spoof-keys` with no credentials file boots with an empty roster (no agents, no judges). Pass `--credentials rehearsal-creds.json` (R3.2) to exercise participants.
 - Kill any `bun smoke:twin` (or other `bun smoke`) still running from the OLD checkout (`ps -eo pid,etimes,cmd | grep smoke`). On 2026-10-05 a four-day-old `smoke:twin --reuse` from `~/robotmoney-frontend` (v0.5.4) was still alive beside the new instance.
-- `--spoof-keys` only spoofs members whose operator is `robotmoney` (athena, robot-money on the 2026-10-01 dump). `noop-analyst` and `themis` carry operator `RM Protocol Labs` and refuse ("a third party's key is theirs"), so the rehearsal roster is the two agents and NO judge until that is decided: sessions end `no_consensus`, and `verify:live`'s judge invariants cannot be exercised on this twin.
+- On a twin, `--spoof-keys` (bare) spoofs EVERY active member, third parties and the judge included (spec §6.4 owned-twin exception, 2026-10-05), and the boot refuses a twin that leaves an active non-judge member unseated. So `rehearsal-creds.json` lists every active member of the dump — 7 agents and the judge `themis` on the 2026-10-01 dump — each with a throwaway key and the stage model key (`~/make-rehearsal-creds.ts` on stage-2 writes it from the member ids).
 
 R3.2 Prepare a rehearsal credential file with **spoofed** keys, never the production
 `credential.json`:
@@ -255,7 +255,7 @@ bun run verify:live --instance rehearse-060 --tier full --emit-receipt=R3.verify
 ```
 
 Exit 0 = pass; 1 = product wrong; 2 = nothing asserted. A WARN is not a pass. List which
-invariants this target could not exercise. Known on this twin (B12): `twin-roster:every-active-member-seated` fails because the 0.6 twin seats only the credential-file members; that is the twin's defect, not the leg's. Every other leg must PASS.
+invariants this target could not exercise. Every leg must PASS; `twin-roster:every-active-member-seated` is the twin's own seating proof (B12).
 
 R3.5 Prove the schema gates on the twin (the lines from spec §10 this release depends on):
 migrations all recorded once; `deployment_identity.kind = 'rehearsal'`; `schema_manifest`
