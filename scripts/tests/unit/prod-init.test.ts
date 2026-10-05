@@ -269,29 +269,31 @@ describe("a remote rehearsal target's tokens come only from the explicit command
   });
 });
 
+/** A credential.json with three members and an operator token for instance rm_prod. */
+const credentialEntry = (memberId: string, publicKeyB64: string) => ({
+  memberId,
+  publicKeyB64,
+  privateJwk: { kty: "OKP", crv: "Ed25519", x: publicKeyB64, d: `${publicKeyB64}-d` },
+  bearer: `tok_${memberId}_fixture`,
+  modelKey: `model-${memberId}`,
+});
+
+function setup(rec: Recorder, instance = "rm_prod"): { credentialPath: string } {
+  const paths = instancePaths(rec.root, instance, { create: true });
+  mkdirSync(paths.tokenDirs.operator, { recursive: true, mode: 0o700 });
+  writeFileSync(paths.tokenFiles.operator, "rmat_operator\n", { mode: 0o600 });
+  const credentialPath = join(rec.root, "credential.json");
+  writeFileSync(
+    credentialPath,
+    JSON.stringify({ agents: { athena: credentialEntry("m-athena", "pkA"), boreas: credentialEntry("m-boreas", "pkB") }, judges: { themis: credentialEntry("m-themis", "pkT") } }, null, 2),
+    { mode: 0o600 },
+  );
+  chmodSync(credentialPath, 0o600);
+  return { credentialPath };
+}
+
+
 describe("rebind-members writes each returned bearer back into its credential.json entry", () => {
-  const entry = (memberId: string, publicKeyB64: string) => ({
-    memberId,
-    publicKeyB64,
-    privateJwk: { kty: "OKP", crv: "Ed25519", x: publicKeyB64, d: `${publicKeyB64}-d` },
-    bearer: `tok_${memberId}_fixture`,
-    modelKey: `model-${memberId}`,
-  });
-
-  function setup(rec: Recorder): { credentialPath: string } {
-    const paths = instancePaths(rec.root, "rm_prod", { create: true });
-    mkdirSync(paths.tokenDirs.operator, { recursive: true, mode: 0o700 });
-    writeFileSync(paths.tokenFiles.operator, "rmat_operator\n", { mode: 0o600 });
-    const credentialPath = join(rec.root, "credential.json");
-    writeFileSync(
-      credentialPath,
-      JSON.stringify({ agents: { athena: entry("m-athena", "pkA"), boreas: entry("m-boreas", "pkB") }, judges: { themis: entry("m-themis", "pkT") } }, null, 2),
-      { mode: 0o600 },
-    );
-    chmodSync(credentialPath, 0o600);
-    return { credentialPath };
-  }
-
   test("one member at a time, through rotate-key with the entry's key, each bearer written to its own entry", async () => {
     const rec = fake({ env: { RM_ENV: "prod" } });
     const { credentialPath } = setup(rec);
@@ -305,7 +307,7 @@ describe("rebind-members writes each returned bearer back into its credential.js
     expect(after.judges.themis.bearer).toBe("tok_m-themis_new");
     // Every other field of every entry is exactly what it was.
     expect(after.agents.athena).toMatchObject({ memberId: "m-athena", publicKeyB64: "pkA", modelKey: "model-m-athena" });
-    expect(after.judges.themis.privateJwk).toEqual(entry("m-themis", "pkT").privateJwk);
+    expect(after.judges.themis.privateJwk).toEqual(credentialEntry("m-themis", "pkT").privateJwk);
     // Atomic: the rename left no temporary beside it, and the mode is kept.
     expect(readdirSync(dirname(credentialPath)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
     expect((await Bun.file(credentialPath).stat()).mode & 0o777).toBe(0o600);
@@ -391,5 +393,68 @@ describe("production initialization is unreachable from `bun smoke` and scripts/
     const planted = resolve(REPO, "scripts/lib/__planted__.ts");
     const graph = importGraph(planted, (file) => (file === planted ? 'import { runProdInit } from "../prod-init.ts";\n' : existsSync(file) ? readFileSync(file, "utf8") : null));
     expect(graph.has(resolve(REPO, "scripts/prod-init.ts"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3.8: under RM_ENV=stage, rebind-members addresses the instance's own
+// smoke-owned twin through its generated rm_readonly, never ~/.env (which on a
+// stage host names production's read replica). Under prod the twin is ignored.
+// ---------------------------------------------------------------------------
+describe("rebind-members targets the instance's own twin under RM_ENV=stage", () => {
+  function twin(rec: Recorder, instance: string): void {
+    const paths = instancePaths(rec.root, instance, { create: true });
+    writeStackState(paths, {
+      instance, project: "p", apiPort: 41234, webPort: 41235, pgPort: null, stage: true, envClass: "local", envHash: "h",
+      composeFiles: "docker-compose.yml", db: "smoke-twin", externalPg: true,
+      databaseUrl: "postgres://restore_check:rc-pw@172.17.0.1:32823/rm_restore_check", dbUser: "", dbPassword: "", dbName: "",
+      logFile: paths.logFile, createdAt: "now",
+    });
+    writeFileSync(paths.rolePasswordsFile, JSON.stringify({ rm_owner: "o", rm_app: "a", rm_worker: "w", rm_readonly: "twin-ro-pw" }), { mode: 0o600 });
+  }
+
+  test("the twin's generated rm_readonly is the target, and the receipt names it", async () => {
+    const rec = fake({ env: { RM_ENV: "stage" }, identity: "rehearsal" });
+    const { credentialPath } = setup(rec, "rehearse");
+    twin(rec, "rehearse");
+    const targets: string[] = [];
+    const inner = rec.deps.readTarget;
+    rec.deps.readTarget = async (url) => {
+      targets.push(url);
+      return inner(url);
+    };
+    const receipt = await runProdInit(["rebind-members", "--instance", "rehearse", "--credentials", credentialPath], rec.deps);
+    expect(targets).toEqual(["postgres://rm_readonly:twin-ro-pw@172.17.0.1:32823/rm_restore_check"]);
+    expect(receipt.target).toBe("rm_readonly@172.17.0.1:32823/rm_restore_check");
+    expect(rec.calls).not.toContain("promptSecret");
+  });
+
+  test("a stage host with no ~/.env still reaches its twin", async () => {
+    const rec = fake({ env: { RM_ENV: "stage" }, identity: "rehearsal", homeEnv: undefined });
+    const { credentialPath } = setup(rec, "rehearse");
+    twin(rec, "rehearse");
+    const receipt = await runProdInit(["rebind-members", "--instance", "rehearse", "--credentials", credentialPath], rec.deps);
+    expect(receipt.outcome).toBe("completed");
+  });
+
+  test("under RM_ENV=prod the twin is ignored: ~/.env's connection is the target", async () => {
+    const rec = fake({ env: { RM_ENV: "prod" } });
+    const { credentialPath } = setup(rec);
+    twin(rec, "rm_prod");
+    const targets: string[] = [];
+    const inner = rec.deps.readTarget;
+    rec.deps.readTarget = async (url) => {
+      targets.push(url);
+      return inner(url);
+    };
+    const receipt = await runProdInit(["rebind-members", "--instance", "rm_prod", "--credentials", credentialPath], rec.deps);
+    expect(targets[0]).toContain("@db.example.internal:25060/defaultdb");
+    expect(receipt.target).toBe("rm_readonly@db.example.internal:25060/defaultdb");
+  });
+
+  test("provision-tokens under stage never takes the twin route: a twin's tokens are smoke's phase", async () => {
+    const rec = fake({ env: { RM_ENV: "stage" }, identity: "production" });
+    twin(rec, "rehearse");
+    await refused(["provision-tokens", "--instance", "rehearse"], rec, /enrolled `rehearsal`.*reads `production`/);
   });
 });
