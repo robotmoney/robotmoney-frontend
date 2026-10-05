@@ -40,6 +40,15 @@ export class CsvQuotedFieldError extends InputRowError {
   }
 }
 
+// INPUT RULE (two layers, deliberate, tested): PARSE is STRICT, MERGE is
+// TOLERANT. This loader is the user-facing boundary: a non-finite value (NaN,
+// Infinity, blank, non-numeric) throws InputRowError so analysts are told. The
+// backend's mergeSeries (transform/math.ts) instead drops non-finite values
+// because upstream providers emit holes. The layers are not forced to behave
+// identically; instead, for every input BOTH accept, the series reaching
+// alignment are identical: a repeated (indicator, date) keeps the LAST row,
+// output ascending by date. See tests/input-rule.test.ts and
+// backend/tests/input-rule-parity.test.ts.
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 function checkRow(row: number, date: unknown, indicator: unknown, value: unknown, source: unknown): RawRow {

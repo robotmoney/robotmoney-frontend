@@ -298,6 +298,69 @@ Every stage above is orchestrated end to end by
 `backend/src/analytics/index.ts::runAnalytics` — the entry point named in
 `README.md`'s pointer paragraph.
 
+### 8.1 Run semantics (as-of, forward-fill, replay)
+
+**As-of and the axis.** A run has an as-of day D. The date axis runs from
+`BACKFILL_START` (2018-01-01) to D inclusive. Indicator rows dated after D never
+land on the axis, so they are ignored. (Backtest extras, the `SPX`, `ETH` and
+`TBILL3M` price series, are the exception in production: `runAnalytics` hands
+`fetchBacktestExtras()` output to `computeCorrelations` and `computeBacktest`
+unfiltered, so extras rows dated after D still feed them. `runRegime` cuts them at
+D. Known open divergence, pinned as `test.failing` in
+`backend/tests/regime-sdk-equivalence.test.ts`; at 90d the correlation sample is
+n=2923 in production against 2915 in the SDK.) An indicator with no rows is all-NaN and carries
+no weight.
+
+**Forward-fill and ages.** Every indicator except `zero_fill` ones is forward-filled
+onto the axis, and `forwardFillAge` records the days since its last real observation.
+`computeRegime` treats a day whose age exceeds `MAX_FORWARD_FILL_DAYS` (120) as
+missing before ranking. That is what "expired" means: the persisted row's
+`forward_fill_expired` is true when the age is above 120. A real observation resets
+the age to 0. `zero_fill` indicators have no ages, because a gap there is a real 0.
+
+**FRED publication lag.** A value that arrives late replaces what had been
+forward-filled. `DXY` can arrive up to 7 days late, and `HY_OAS` and `DFII10` 3 days
+over a weekend (audit of run 390: `DXY` for 2026-09-21..25 all arrived 2026-09-28).
+A provisional as-of row built on forward-filled values therefore changes when the
+real value lands, with no change to the compute code.
+
+**DefiLlama restates deep history.** `DEFI_TVL` and `DEFI_GROWTH` rows far back in
+history change from run to run, and every run recomputes from them. The audit saw
+about 600 rows restated per run, 3,581 rows back to 2021-12 in the 09-27 to 09-29
+window, and 947 rows back to 2024-03 on 2026-10-04 (median change 0.05%).
+
+**Labels amplify small composite changes.** Labels go through `smoothRegimes`
+(smoothing and hysteresis). Smoothing looks backward only, so it is not a source of
+revision, but it makes a label more sensitive than the composite to a small
+revision: the 2026-10-04 restatement moved the composite by at most 3.5e-4 and still
+flipped six historical labels (2024-07-04, 2024-07-05, 2026-08-20..23).
+
+**Final-day weight refresh.** Weights refresh on the 21-day schedule and on the
+last axis day, so the as-of day is revised by construction when D moves forward one
+day. The mechanism is described under "Why 21-day weight refresh, not daily?" in
+section 6 and is not restated here.
+
+**Persistence tolerance (D56).** The persisted raw floor is the compute input only
+up to the per-source tolerance of D56 (`docs/decisions.md`): a point within tolerance
+is not rewritten (Yahoo ratios relative 5e-6, Yahoo float32 relative 1e-6). A run
+computes from the freshly fetched in-memory values, so a replay from the stored floor
+or ledger can differ slightly. The audit saw `factor_index` differ by up to 1.4e-4
+on 786 of 3,066 days (an inference from the stored data, not confirmed, because the
+fetched values are not recorded anywhere). Replaying a run from the ledger is described in
+[`packages/analyst-sdk/README.md`](../../packages/analyst-sdk/README.md#reproducing-a-published-run).
+
+**`regime_snapshots` is a current view; the ledger is the record.** Every run
+recomputes the full history and rewrites the table. What an earlier run showed
+survives only in the ledger payloads (`analytics_output_snapshots`), which exist
+from 2026-09-21 (migrations `0058_analytics_run_ledger` and
+`0059_analytics_output_and_report_snapshots`). Before that there is no record.
+
+**The seam.** `prepareRegimeInputs` (`packages/analyst-sdk/src/prepare.ts`, shimmed
+at `backend/src/analytics/prepare.ts`) is the one place the axis, alignment,
+transforms and forward-fill ages are built. Its two callers are
+`backend/src/analytics/index.ts::runAnalytics` (production) and
+`packages/analyst-sdk/src/run.ts::runRegime`. See [D59](../decisions.md#d59).
+
 ## 9. Deliberate v0 divergences
 
 v1's regime **procedure** (the pure math in `compute.ts`/`indicators.ts`/
@@ -1811,4 +1874,5 @@ guarantee: the figures still do not change, but the *page* around them does.
 - [`markets-asset-pricing-ingest.md`](markets-asset-pricing-ingest.md) — market-data ingest, audit and repair. The analytics half of the retired `data-self-healing.md` is §11 of this document.
 - [`docs/audits/v0-v1-parity/A1-regime-core-procedures.md`](../audits/v0-v1-parity/A1-regime-core-procedures.md) — the full executed-evidence procedural parity audit (findings F1-F8) this document's §7 and §9 summarize.
 - [`docs/code-review/20260814-review-data-integrity-macro-index-discrepancy.md`](../code-review/20260814-review-data-integrity-macro-index-discrepancy.md) — the full D1-D7 data-integrity investigation this document's §10 summarizes.
+- [`packages/analyst-sdk/README.md`](../../packages/analyst-sdk/README.md) — running and replaying the regime pipeline outside the backend; §8.1 is the semantics it links to.
 - [`docs/decisions.md` D38](../decisions.md#d38--seed-provenance-verify-runs-as-a-prod-bootstrapts-deploy-step-not-a-worker-cron-issue-638) — why the seed-provenance cleanup runs where it runs.

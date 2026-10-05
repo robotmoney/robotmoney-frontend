@@ -390,6 +390,17 @@ export function buildDateAxis(startIso: string, endIso: string): string[] {
 // Append-only merge of a daily indicator series. `prior` is the floor (every
 // date survives); `fetched` wins on overlap. Both [{date,value}]. Output is
 // date-sorted ascending, deduped. Pure.
+//
+// INPUT RULE (two layers, deliberate): parse is STRICT, merge is TOLERANT.
+//   - src/input/load.ts (user-facing boundary) throws InputRowError on a
+//     non-finite value so analysts are told about bad data.
+//   - mergeSeries (backend ingest) silently DROPS non-finite values and rows
+//     without a date, because upstream providers emit holes; a dropped fetched
+//     hole leaves the persisted floor value for that date intact.
+// For every input both layers accept (finite values, any duplicates, any
+// order) the series are identical: the LAST row wins (fetched after prior),
+// ascending by date (ISO days sort identically under any locale). Pinned by
+// tests/input-rule.test.ts and backend/tests/input-rule-parity.test.ts.
 export function mergeSeries(
   prior: { date: string; value: number }[],
   fetched: { date: string; value: number }[],

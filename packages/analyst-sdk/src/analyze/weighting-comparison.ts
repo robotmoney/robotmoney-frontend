@@ -24,12 +24,10 @@
 //
 // Pure and deterministic: same inputs, same outputs. No I/O, no Date.now().
 import { INDICATORS as DEFAULT_INDICATORS, PANELS, ROLLING_WINDOW_DAYS, type Indicator, type Panel } from "./indicators.ts";
-import { applyTransform } from "../transform/transforms.ts";
+import { prepareRegimeInputs } from "../prepare.ts";
 import {
   rollingPercentileRank,
   inverseCorrelationWeights,
-  alignDailyForwardFill,
-  buildDateAxis,
 } from "../transform/math.ts";
 import { smoothRegimes, bucketFn } from "./compute.ts";
 import type { Point } from "../types.ts";
@@ -108,12 +106,13 @@ export function computeWeightingComparison(input: WeightingComparisonInput): Wei
       if (row.date > maxDate) maxDate = row.date;
     }
   }
-  const dateAxis = buildDateAxis("2018-01-01", maxDate);
+  // The axis, alignment and transform come from the shared seam (D59).
+  const { dateAxis, transformed } = prepareRegimeInputs(raw, { start: "2018-01-01", asof: maxDate, indicators: INDICATORS });
 
   // ── load + prepare sign-aligned percentile ranks (shared by all 3 methods) ──
   const signed: Record<string, number[]> = {};
   for (const ind of INDICATORS) {
-    const t = applyTransform(ind.transform, alignDailyForwardFill(raw[ind.id] || [], dateAxis));
+    const t = transformed[ind.id]!;
     const r = rollingPercentileRank(t, ROLLING_WINDOW_DAYS);
     signed[ind.id] = r.map((v) => (Number.isFinite(v) ? (ind.sign >= 0 ? v : 1 - v) : NaN));
   }

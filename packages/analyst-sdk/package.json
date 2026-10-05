@@ -9,6 +9,7 @@
   },
   "scripts": {
     "regime": "bun run bin/regime.ts",
+    "golden:regenerate": "bun run scripts/golden-regenerate.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

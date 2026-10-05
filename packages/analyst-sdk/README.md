@@ -80,7 +80,7 @@ bun run regime tests/fixtures/raw-indicator-history.csv            # JSON report
 bun run regime tests/fixtures/raw-indicator-history.json --full    # adds the per-day series
 bun run regime my-history.csv --start 2018-01-01                   # first day of the date axis
 bun run regime my-history.csv --asof 2026-10-05                    # last day of the date axis
-bun run regime my-history.csv --panels macro,onchain,factor        # also report the factor panel
+bun run regime my-history.csv --factor                            # also report the factor panel
 bun test                                                            # package tests, fetch is a thrower
 bunx tsc --noEmit                                                   # typecheck
 ```
@@ -93,12 +93,15 @@ Options (CLI flag, or the `runRegime(raw, opts)` field):
 | ------ | ------- |
 | `--start D` / `start` | first day of the date axis. Default `2018-01-01`. |
 | `--asof D` / `asof` | last day of the date axis, `YYYY-MM-DD`. Input rows dated after it are ignored. Default: the newest date in the input. |
-| `--panels a,b` / `panels` | which panels to compute. Default `macro,onchain` (`PANELS`). Pass `macro,onchain,factor` (in code `["macro", "onchain", "factor"]`) to also get `factor_*`. In production the factor panel is display-only, computed by a second `computeRegime` call; `runRegime` does not do that. With `factor` in `panels` the factor panel enters the composite, so `composite`, `compositePercentile` and the top-level label no longer match the published table. Only the two-panel call reproduces the published composite; `factor_*` figures are checked from a factor run on their own. Invalid values throw a `RangeError` (the CLI exits 2): `asof` and `start` must be real `YYYY-MM-DD` dates, `asof` must not be before `start`, or before every input row (an `asof` later than the newest row is fine: values are forward-filled, as in production), and `panels` must be a non-empty list of distinct names from `macro`, `onchain`, `factor`. `--asof` and `--panels` need a value. |
+| `--factor` / `factor: true` | also run production's second `computeRegime` call (macro, onchain, factor) and report `factor` (`index`, `percentile`, `regime`, `weights` for the last day, plus a per-day `series` with `--full`). The factor panel is display-only in production, so `composite`, `compositePercentile` and the labels stay the two-panel ones and match the published table. |
+| validation | invalid values throw a `RangeError` (the CLI exits 2): `asof` and `start` must be real `YYYY-MM-DD` dates, `asof` must not be before `start`, or before every input row (an `asof` later than the newest row is fine: values are forward-filled, as in production). `--start` and `--asof` need a value, and an unknown flag (such as the former `--panels`) or option field exits 2 or throws rather than being ignored. |
 
-`runRegime` always passes forward-fill ages to `computeRegime` (`forwardFillAge`, for
-every indicator that is not `zero_fill`), as `backend/src/analytics/index.ts` does. A
-forward-filled value older than `MAX_FORWARD_FILL_DAYS` (120) is not carried further.
-Both are exported from `src/index.ts`.
+`runRegime` builds its inputs with `prepareRegimeInputs`, the same function production
+calls, so the as-of cut for indicator rows, forward-fill and the 120-day cap
+(`MAX_FORWARD_FILL_DAYS`) behave as in production. One known divergence: production
+feeds `SPX`, `ETH` and `TBILL3M` rows dated after the as-of day to the correlations and
+backtest unfiltered, while `runRegime` cuts them (section 8.1). Their semantics are in [`docs/technical/regime-engine.md` section 8.1](../../docs/technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay). Both names are exported
+from `src/index.ts`.
 
 From code:
 
@@ -117,7 +120,7 @@ const report = buildReport(runRegime(toHistory(rows)));
 
 // cut the axis at a day, and compute the factor panel too
 const asOf = buildReport(
-  runRegime(toHistory(rows), { asof: "2026-10-05", panels: ["macro", "onchain", "factor"] }),
+  runRegime(toHistory(rows), { asof: "2026-10-05", factor: true }),
 );
 ```
 
@@ -159,7 +162,7 @@ replay that run's inputs, not the current table.
    `backtest:^GSPC`, `backtest:ETH-USD` and `backtest:DTB3` for the `SPX`, `ETH` and
    `TBILL3M` price series.
 3. Write them in the input format above and run with `--asof` set to the run's as-of
-   date (and `--panels macro,onchain,factor` if you want to check the factor figures):
+   date (and `--factor` if you want to check the factor figures):
 
    ```sh
    bun run regime run-inputs.csv --asof 2026-10-05 --full
@@ -173,22 +176,11 @@ above.
 
 `regime_snapshots` is a current view. The ledger is the record. A figure you saw on day
 D can differ from the same day's figure in the table today, with no change to the
-compute code. The reasons:
-
-- **Full-history recompute.** Methodology v3 recomputes every day on every run
-  (every run recomputes the full history) and rewrites the table. Only the ledger payloads
-  keep what an earlier run showed.
-- **FRED publication lag.** A value that arrives late replaces what had been
-  forward-filled. `DXY` can arrive up to 7 days late, and `HY_OAS` and `DFII10` over a
-  weekend.
-- **DefiLlama restates deep history.** `DEFI_TVL` and `DEFI_GROWTH` rows far back in
-  history change from run to run, and every run recomputes from them.
-- **The final axis day gets a weight refresh.** Weights refresh every 21 days and on
-  the last day of the axis. The as-of day uses weights refreshed that day, and the
-  same date recomputed the next day uses the 21-day schedule. The composite moves by
-  about 2e-4 (for example 0.501801 to 0.501573 for as-of 2026-10-04 against 10-05).
-- **Labels are more fragile than the composite.** Labels go through smoothing, so a
-  composite change of 3.5e-4 flipped six historical labels in one restatement.
+compute code: full-history recompute on every run, FRED publication lag, DefiLlama
+restating deep history, and the forced weight refresh on the final axis day. Labels
+amplify small composite changes, so a restatement that barely moves the composite can
+flip a historical label. The mechanisms and the persistence tolerance are described in
+[`docs/technical/regime-engine.md` section 8.1](../../docs/technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay).
 
 Worked case, as-of 2026-09-26. When shown, the `DXY` value had been forward-filled from
 2026-09-18 and `HY_OAS` from 2026-09-24. The real values arrived on 2026-09-28 and the

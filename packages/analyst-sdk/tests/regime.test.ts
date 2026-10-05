@@ -11,6 +11,7 @@ import {
   parseRawCsv,
   parseRawHistory,
   runRegime,
+  prepareRegimeInputs,
   toHistory,
 } from "../src/index.ts";
 
@@ -95,7 +96,7 @@ describe("input loader", () => {
   }, TEST_TIMEOUT_MS);
 });
 
-describe("runRegime asof, panels and forward-fill ages", () => {
+describe("runRegime asof, factor and forward-fill ages", () => {
   const raw = toHistory(parseRawHistory(csvText));
   const newest = Object.values(raw).reduce((m, rows) => (rows.length && rows[rows.length - 1]!.date > m ? rows[rows.length - 1]!.date : m), "");
   const addDays = (d: string, n: number) => new Date(Date.parse(d) + n * 86400000).toISOString().slice(0, 10);
@@ -127,14 +128,44 @@ describe("runRegime asof, panels and forward-fill ages", () => {
     expect(differing).toBeLessThanOrEqual(1);
   }, TEST_TIMEOUT_MS);
 
-  test("a factor-panel run yields finite factor index and percentile", () => {
-    const run = runRegime(raw, { panels: ["macro", "onchain", "factor"] });
+  test("factor:true leaves the two-panel result identical and adds finite factor figures", () => {
+    const base = runRegime(raw);
+    const run = runRegime(raw, { factor: true });
+    expect(JSON.stringify(run.result)).toBe(JSON.stringify(base.result));
     const last = run.dateAxis.length - 1;
-    expect(Number.isFinite(run.result.factorIndex![last]!)).toBe(true);
-    expect(Number.isFinite(run.result.factorPercentile![last]!)).toBe(true);
-    const report = buildReport(run);
-    expect(Number.isFinite(report.regime.panels.factor!.index!)).toBe(true);
-    expect(Number.isFinite(report.regime.panels.factor!.percentile!)).toBe(true);
+    expect(Number.isFinite(run.factor!.factorIndex![last]!)).toBe(true);
+    expect(Number.isFinite(run.factor!.factorPercentile![last]!)).toBe(true);
+    const report = buildReport(run, { full: true });
+    const plain = buildReport(base, { full: true });
+    const { factor, ...rest } = report as typeof report & { factor: any };
+    expect(JSON.stringify(rest)).toBe(JSON.stringify(plain));
+    expect(Number.isFinite(factor.index)).toBe(true);
+    expect(Number.isFinite(factor.percentile)).toBe(true);
+    expect(typeof factor.regime).toBe("string");
+    expect(Object.keys(factor.weights).length).toBeGreaterThan(0);
+    expect(factor.series.length).toBe(report.days);
+    expect("factor" in buildReport(base)).toBe(false);
+  }, TEST_TIMEOUT_MS);
+
+  test("prepareRegimeInputs is pure, ignores rows after asof and matches runRegime", () => {
+    const before = JSON.stringify(raw);
+    const a = prepareRegimeInputs(raw, { start: "2018-01-01", asof: D });
+    const b = prepareRegimeInputs(raw, { start: "2018-01-01", asof: D });
+    expect(JSON.stringify(raw)).toBe(before);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+    expect(a.dateAxis[a.dateAxis.length - 1]).toBe(D);
+    const trimmed: typeof raw = {};
+    for (const id in raw) trimmed[id] = raw[id]!.filter((r) => r.date <= D);
+    const c = prepareRegimeInputs(trimmed, { start: "2018-01-01", asof: D });
+    expect(JSON.stringify(a.transformed)).toBe(JSON.stringify(c.transformed));
+    expect(JSON.stringify(a.ages)).toBe(JSON.stringify(c.ages));
+    const empty = prepareRegimeInputs({}, { start: "2018-01-01", asof: "2018-01-05" });
+    for (const id in empty.transformed) {
+      expect(empty.transformed[id]!.length).toBe(5);
+      expect(empty.transformed[id]!.every(Number.isNaN)).toBe(true);
+      expect(empty.lastRaw[id]).toBeNull();
+    }
+    expect(Object.keys(runRegime(raw, { asof: D }).result.signed).sort()).toEqual(Object.keys(a.transformed).sort());
   }, TEST_TIMEOUT_MS);
 
   test("forwardFillAge is exported and an indicator last observed >120 days before asof gets weight 0", () => {
@@ -154,21 +185,24 @@ describe("runRegime asof, panels and forward-fill ages", () => {
     expect(buildReport(run).indicators.find((i) => i.id === victim.id)!.weight ?? 0).toBe(0);
   }, TEST_TIMEOUT_MS);
 
-  test("invalid asof, start and panels are rejected", () => {
+  test("invalid asof and start are rejected", () => {
     const bad = (o: Parameters<typeof runRegime>[1]) => expect(() => runRegime(raw, o)).toThrow(RangeError);
     for (const asof of ["banana", "", "2026-13-45", "2026-02-30", "2000-01-01", "2017-12-31"]) bad({ asof });
     bad({ start: "nope" });
     bad({ start: addDays(D, 1), asof: D });
-    bad({ panels: ["bogus" as never] });
-    bad({ panels: [] });
-    bad({ panels: ["macro", "macro", "onchain"] });
+    bad({ panels: ["macro", "onchain", "factor"] } as never);
+    bad({ factor: "yes" } as never);
+    bad({ bogus: 1 } as never);
   }, TEST_TIMEOUT_MS);
 
-  test("the CLI rejects a trailing --asof or --panels and an empty --panels", async () => {
+  test("the CLI rejects a trailing --start/--asof, a bad --asof and unknown flags such as --panels", async () => {
     const fx = join(DIR, "fixtures/raw-indicator-history.csv");
-    for (const a of [["--asof"], ["--panels"], ["--panels", ""], ["--asof", "banana"]]) {
+    for (const a of [["--asof"], ["--start"], ["--asof", "banana"], ["--panels", "macro,onchain,factor"], ["--panels"], ["--bogus"]]) {
       const p = Bun.spawnSync(["bun", join(DIR, "../bin/regime.ts"), fx, ...a], { stderr: "pipe", stdout: "pipe" });
-      expect(p.exitCode).not.toBe(0);
+      expect(p.exitCode).toBe(a[1] === "banana" ? 1 : 2);
     }
+    const ok = Bun.spawnSync(["bun", join(DIR, "../bin/regime.ts"), fx, "--factor"], { stderr: "pipe", stdout: "pipe" });
+    expect(ok.exitCode).toBe(0);
+    expect(JSON.parse(ok.stdout.toString()).factor.index).toBeDefined();
   }, TEST_TIMEOUT_MS);
 });

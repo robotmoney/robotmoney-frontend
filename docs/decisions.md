@@ -5031,3 +5031,31 @@ process), `backend/tests/api/client-ip.test.ts`,
 `backend/tests/analytics-public-explain.test.ts`, and
 `scripts/tests/unit/analyst-sdk-readme-links.test.ts` (every route the SDK README
 lists exists in `contract/`, and every contract route is listed).
+
+---
+
+<a id="d59"></a>
+## D59 — One orchestration seam: `prepareRegimeInputs` is the only place the axis, alignment, transforms and forward-fill ages are built (refines D57; issue #1095)
+
+**Decision.** `packages/analyst-sdk/src/prepare.ts` exports `prepareRegimeInputs`.
+It is the only place the date axis (start..as-of), per-indicator alignment,
+transforms and forward-fill ages are built. `backend/src/analytics/index.ts`
+(production) and `runRegime` in the SDK both call it, so the two cannot drift.
+The backend reaches it through the shim `backend/src/analytics/prepare.ts`.
+
+**Why.** The audit of run 390 found the shipped `runRegime` (a7dbae26) ended its axis
+at the newest input date instead of the as-of day and passed no forward-fill ages,
+each a second copy of logic production owned. Only the axis end changed current
+figures (through the `MNA` row dated 2026-10-31, which moves the forced weight
+refresh); the missing ages had no effect on current data. The research comparisons
+(`regime-eq-comparison`, `weighting-comparison`) and the goldens regenerator now go
+through the seam too.
+
+**Enforced by** `backend/tests/regime-sdk-equivalence.test.ts`, which runs both
+paths on one input and compares every day exactly, including a stale series and
+indicator rows dated after the as-of day. The seam covers axis, alignment, transforms
+and ages only. Backtest extras dated after the as-of day are a known open divergence:
+production feeds them to correlations and backtest unfiltered and `runRegime` cuts them
+(`test.failing` in that file). Seam internals are pinned by
+`packages/analyst-sdk/tests/prepare.test.ts`. The run semantics are in
+[`docs/technical/regime-engine.md` §8.1](technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay).
