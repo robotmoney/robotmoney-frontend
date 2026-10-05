@@ -31,7 +31,7 @@ function directContainerTail(model: string, titleScope = "robotmoney-swarm"): st
 
 describe("shared OpenCode run contract", () => {
   for (const [name, env, model] of [
-    ["DeepSeek default", {}, "opencode/deepseek-v4-flash"],
+    ["DeepSeek default", {}, "opencode/deepseek-v4.1-flash"],
     ["custom model", { AGENT_MODEL: "opencode/vendor-custom-7" }, "opencode/vendor-custom-7"],
   ] as const) {
     test(`${name}: direct onboarding and session inference have identical common argv`, () => {
@@ -46,12 +46,12 @@ describe("shared OpenCode run contract", () => {
   test("a deterministic title always suppresses the auxiliary GPT title call", () => {
     const run = resolveOpenCodeRun({
       env: {},
-      model: "opencode/deepseek-v4-flash",
+      model: "opencode/deepseek-v4.1-flash",
       titleScope: "robotmoney-swarm",
     });
     const argv = buildOpenCodeRunArgs(run, PROMPT);
     expect(argv.slice(argv.indexOf("--title"), argv.indexOf("--title") + 2)).toEqual([
-      "--title", "robotmoney-swarm-opencode-deepseek-v4-flash",
+      "--title", "robotmoney-swarm-opencode-deepseek-v4.1-flash",
     ]);
     expect(argv).not.toContain("gpt-5.4-nano");
     expect(argv.at(-1)).toBe(PROMPT);

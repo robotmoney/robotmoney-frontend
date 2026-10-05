@@ -181,8 +181,17 @@ export function assertAuthoredTakes(
         `published payload — a submission this driver verified did not land`,
     );
   }
+  // THE FORMAT CHECKS BELOW GRADE ONLY THE TAKES THIS DRIVER AUTHORED. An
+  // outside member files through its own client, in its own format: in
+  // production (2026-09-26/27) Woon's takes carried no **SUBJECT** lead-in, and
+  // this loop threw `swarm session failed` after every session had already
+  // published, judged, with a receipt. The comment above already says members
+  // the driver did not run carry no driver ground truth; that now holds for the
+  // format checks too. The attendance checks above still cover everyone.
+  const driven = new Set(fulfilledMemberIds.map(String));
+  const drivenTakes = authored.filter((t) => driven.has(String(t.memberId)));
   const seenBodies = new Map<string, string>();
-  for (const t of authored) {
+  for (const t of drivenTakes) {
     const who = String(t.memberId);
     if (OLD_TEMPLATE_RE.test(t.body)) {
       throw new Error(`${tag}: take for ${who} matches the retired template fingerprint — not a real inference body`);
@@ -204,7 +213,7 @@ export function assertAuthoredTakes(
     }
     seenBodies.set(who, t.body);
   }
-  console.log(`${tag}: authored-take invariants passed for ${authored.length} present member(s)`);
+  console.log(`${tag}: authored-take invariants passed for ${drivenTakes.length} driver-run member(s); ${authored.length - drivenTakes.length} outside member take(s) not format-checked`);
 }
 
 // ── Attendance reporting (issue #501) ───────────────────────────────────────
@@ -739,6 +748,12 @@ export interface RosterMember {
   name: string;
   lens: string | null;
   status: string;
+  /**
+   * 'member' (an analyst) or 'judge'. A judge-role member is refused a take
+   * (`judge_role_cannot_submit_takes`, domain.ts), so a driver must never seat
+   * one: the 2026-09-25 twin seated Themis and logged it absent every session.
+   */
+  role?: string;
 }
 
 /** The full roster (every status), or null when it cannot be read. */
@@ -747,7 +762,7 @@ export async function rosterMembers(targetUrl: string = backendUrl(), operatorTo
     const r = await fetch(`${targetUrl}${ROUTES.swarm.admin.members}`, { headers: operatorHeaders(operatorToken) });
     if (!r.ok) throw new Error(`GET ${ROUTES.swarm.admin.members} -> ${r.status}`);
     const body = await responseJson(r) as {
-      members?: { id?: string; handle?: string; name?: string; lens?: string | null; status?: string }[];
+      members?: { id?: string; handle?: string; name?: string; lens?: string | null; status?: string; role?: string }[];
     };
     if (!Array.isArray(body.members)) throw new Error("admin members response has no members array");
     return body.members
@@ -758,6 +773,7 @@ export async function rosterMembers(targetUrl: string = backendUrl(), operatorTo
         name: String(m.name),
         lens: m.lens ?? null,
         status: String(m.status ?? ""),
+        role: String(m.role ?? "member"),
       }));
   } catch (err) {
     console.error(`[e2e] rosterMembers: ${err instanceof Error ? err.message : err}`);

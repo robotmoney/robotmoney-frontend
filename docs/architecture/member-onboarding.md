@@ -102,7 +102,7 @@ credential-file roster in the adopted smoke spec is not populated by this flow.
   configuration (endpoints, credentials) and who triggers approval and when (R7).
   The container is a **vanilla OpenCode install** (D22) running the model
   `AGENT_MODEL` resolves against `scripts/lib/model-registry.ts` — by default
-  `opencode/deepseek-v4-flash`, billed to the environment's own
+  `opencode/deepseek-v4.1-flash`, billed to the environment's own
   `OPENCODE_API_KEY`. The eval suite requires keyed access and rejects
   no-credential selections before Docker. There is **no inference-off mode** — an eval always makes a real model call, and a
   missing prerequisite (Docker, egress, or a funded key for a paid model) fails
@@ -191,7 +191,7 @@ Every layer runs a **vanilla OpenCode install** — no repo-specific harness, no
 pre-seeded state. Which model it runs is resolved from the versioned registry in
 `scripts/lib/model-registry.ts` by the single `AGENT_MODEL` selector, billed to
 the environment's own `OPENCODE_API_KEY`; the repo default is
-`opencode/deepseek-v4-flash`. The **ids live in source**, so the environment
+`opencode/deepseek-v4.1-flash`. The **ids live in source**, so the environment
 carries a selector (`deepseek`, `kimi/k2.6`) and never a raw model id, and an
 unknown family or member **throws** rather than falling back — an eval can never
 quietly run a model other than the one it was asked for. The executable suite

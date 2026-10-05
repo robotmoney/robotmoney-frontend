@@ -443,7 +443,7 @@ describe("seatAllActive — twin/stage seats the full restored committee", () =>
     // roster carries it. It is a `judges` entry, never an `agents` one, so
     // seat-all adopts it and the plain smoke allowlist does not — the two
     // expectations below differ for exactly that reason.
-    { id: "t1", handle: "themis", name: "Themis", lens: null, status: "active" },
+    { id: "t1", handle: "themis", name: "Themis", lens: null, status: "active", role: "judge" },
     { id: "d1", handle: "dualmint", name: "DualMint", lens: null, status: "active" },
     { id: "m1", handle: "maximus", name: "Maximus", lens: null, status: "active" },
     { id: "s1", handle: "shodai", name: "ShodAI", lens: null, status: "active" },
@@ -453,7 +453,7 @@ describe("seatAllActive — twin/stage seats the full restored committee", () =>
 
   test("the seat-all filter adopts every ACTIVE member, credential or not", () => {
     const plan = planAdoptions([...RESTORED_FULL], new Set(), adoptionFilter(true, { seatAllActive: true }));
-    expect(plan.adopt.map((m) => m.id).sort()).toEqual(["a1", "d1", "m1", "n1", "r1", "s1", "t1", "w1"]);
+    expect(plan.adopt.map((m) => m.id).sort()).toEqual(["a1", "d1", "m1", "n1", "r1", "s1", "w1"]);
   });
 
   test("the allowlist still excludes the same members when seat-all is OFF", () => {
@@ -463,13 +463,20 @@ describe("seatAllActive — twin/stage seats the full restored committee", () =>
 
   test("adoptRestoredRoster seats every active restored member and keeps the in-house handles", () => {
     const seated = adoptRestoredRoster(scenarioPlan(true), RESTORED_FULL, [], { seatAllActive: true });
-    expect(seated.map((m) => m.memberId).sort()).toEqual(["a1", "d1", "m1", "n1", "r1", "s1", "t1", "w1"]);
+    expect(seated.map((m) => m.memberId).sort()).toEqual(["a1", "d1", "m1", "n1", "r1", "s1", "w1"]);
     expect(seated.every((m) => m.present)).toBe(true);
   });
 
   test("seat-all still THROWS when an in-house persona is missing from the restore", () => {
     const noNoop = RESTORED_FULL.filter((m) => m.handle !== "noop-analyst");
     expect(() => adoptRestoredRoster(scenarioPlan(true), noNoop, [], { seatAllActive: true })).toThrow(/no 'noop-analyst'/);
+  });
+
+  test("seat-all still THROWS when the judge persona is missing, and does not adopt it when present", () => {
+    const noJudge = RESTORED_FULL.filter((m) => m.handle !== "themis");
+    expect(() => adoptRestoredRoster(scenarioPlan(true), noJudge, [], { seatAllActive: true })).toThrow(/no 'themis'/);
+    const seated = adoptRestoredRoster(scenarioPlan(true), RESTORED_FULL, [], { seatAllActive: true });
+    expect(seated.map((m) => m.memberId)).not.toContain("t1");
   });
 
   // THREE, not four: `themis` is allowlisted but is a `judges` entry, so the
@@ -540,5 +547,28 @@ describe("scenarioPlan — kind distinguishes archive-restore from a plain simul
     expect(() => adoptRestoredRoster(scenarioPlan(true), [], [], { credentialHandles: IN_HOUSE })).toThrow(
       /expected restored IC handles \[athena,noop-analyst,robot-money\]/,
     );
+  });
+});
+
+describe("judge-role members are never seats (2026-09-25 twin: Themis refused judge_role_cannot_submit_takes every session)", () => {
+  test("planAdoptions skips an active judge", () => {
+    const roster = [
+      { id: "a", handle: "athena", name: "Athena", status: "active", role: "member" },
+      { id: "t", handle: "themis", name: "Themis", status: "active", role: "judge" },
+    ];
+    const plan = planAdoptions(roster, new Set(), () => true);
+    expect(plan.adopt.map((m) => m.handle)).toEqual(["athena"]);
+  });
+
+  test("a row with no role is an analyst, as before the role column", () => {
+    expect(planAdoptions([{ id: "a", name: "Athena", status: "active" }], new Set(), () => true).adopt).toHaveLength(1);
+  });
+
+  test("an unseated judge is not an unseated character", () => {
+    const roster = [
+      { name: "Athena", status: "active", role: "member" },
+      { name: "Themis", status: "active", role: "judge" },
+    ];
+    expect(unseatedActiveCharacters(roster, [{ name: "Athena" }])).toEqual([]);
   });
 });

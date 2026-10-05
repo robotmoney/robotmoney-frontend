@@ -16,7 +16,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { planTwin } from "../../smoke-twin.ts";
+import { defaultTwinDir, planTwin } from "../../smoke-twin.ts";
 import { requestsMigrate, RETIRED_FLAGS, validateArgv } from "../../smoke.ts";
 import { resolveZenKey, READONLY_ENV_FILE } from "../../lib/smoke-twin-rehearsal.ts";
 
@@ -64,7 +64,18 @@ describe("planTwin — the decisions it will not let you skip", () => {
   });
 
   test("nothing else is invented", () => {
-    expect(plan().args).toEqual(["--local", "dump", "--migrate", "--static-port", "--cadence", "fast"]);
+    expect(plan().args).toEqual(["--local", `dump=${defaultTwinDir()}`, "--migrate", "--static-port", "--cadence", "fast"]);
+  });
+
+  test("boots from the twin's own directory, never the backup directory", () => {
+    expect(defaultTwinDir({ HOME: "/home/op" })).toBe("/home/op/rm-backup-v022-twin");
+    expect(defaultTwinDir({ RM_BACKUP_DIR: "/srv/backups" })).toBe("/srv/backups-twin");
+    expect(plan().backupDir).toBe(defaultTwinDir());
+  });
+
+  test("captures slim by default; --full-dump captures every row", () => {
+    expect(plan().slim).toBe(true);
+    expect(plan("--full-dump").slim).toBe(false);
   });
 
   test("ALWAYS migrates — no mode implies --migrate, and a dump is on production's older schema", () => {

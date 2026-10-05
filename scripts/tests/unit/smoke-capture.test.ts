@@ -40,10 +40,10 @@ describe("argument surface — there is no override", () => {
     expect(parseArgs(["--out", "/srv/b", "--allow-primary"])).toEqual({ error: 'unknown flag "--allow-primary".' });
   });
 
-  test("the parsed args carry only --out and --env-file", () => {
+  test("the parsed args carry only --out, --env-file and the slim-twin switch (a dump shape, not an override)", () => {
     const a = parseArgs(["--out", "/srv/b", "--env-file", "/srv/e"]);
     if ("error" in a) throw new Error(a.error);
-    expect(Object.keys(a).sort()).toEqual(["envFile", "out"]);
+    expect(Object.keys(a).sort()).toEqual(["envFile", "out", "twinSlim"]);
   });
 
   test("a flag missing its value is an error", () => {

@@ -163,7 +163,7 @@ async function triggerInventory(db: AnalyticsLedgerDb, family: LedgerFamily, tab
 // probe is refused by the executor before the trigger runs: the expected,
 // conclusive answer (`isPrivilegeRefusal`). Counting it as inconclusive made the
 // whole check "unavailable" on every runtime boot.
-const INCONCLUSIVE_CODES = new Set(["57014", "55P03", "57P01", "57P02", "57P03", "53300"]);
+const INCONCLUSIVE_CODES = new Set(["57014", "55P03", "57P01", "57P02", "57P03", "53300", "25006"]);
 function isInconclusive(err: unknown): boolean {
   const code = (err as { code?: string } | null)?.code;
   if (typeof code !== "string" || !/^[0-9A-Z]{5}$/.test(code)) return true;
@@ -228,7 +228,14 @@ async function checkFamily(db: AnalyticsLedgerDb, family: LedgerFamily): Promise
       problems: [`${family.migration} is recorded in schema_migrations but none of its ${family.tables.length} tables exist.`],
     };
   }
-  const problems = [...(await triggerInventory(db, family, tables)), ...(await probeFamily(db, family, tables))];
+  const problems = [...(await triggerInventory(db, family, tables))];
+  // A probe the database cannot answer (a read-only session, 25006, included) does not
+  // hide what the catalog inventory already found: that is still "disarmed".
+  try {
+    problems.push(...(await probeFamily(db, family, tables)));
+  } catch (e) {
+    if (!(e instanceof LedgerGuardInconclusive) || problems.length === 0) throw e;
+  }
   return { status: problems.length > 0 ? "disarmed" : "armed", problems };
 }
 
@@ -295,7 +302,7 @@ export async function assertAnalyticsLedgerGuardArmed(db?: AnalyticsLedgerDb): P
       process.exit(1);
     }
     if (result.status === "unavailable") {
-      console.error(`[api] analytics ledger guard check could NOT run — database not queryable: ${result.detail}. Serving anyway, UNCHECKED.`);
+      console.error(`[api] analytics ledger guard check could NOT run — database not queryable: ${result.detail}. Serving anyway: the analytics ledger guard was NOT verified, this boot is UNCHECKED (a read-only session, 25006, lands here too). See analytics_ledger_guard at /health.`);
       guardOutcome = "unchecked" as LedgerGuardStatus;
       return;
     }

@@ -344,7 +344,7 @@ describe("the twin wrappers hand the boot no checkout .env (criterion 122)", () 
 
   test("smoke:twin as package.json runs it: the boot never sees the planted SMOKE_PROJECT", () => {
     const r = run(["--no-env-file", twin, "--reuse"]);
-    expect(r.out).toContain("equivalent: bun smoke --local dump --migrate");
+    expect(r.out).toMatch(/equivalent: bun smoke --local dump=\S+-twin --migrate/);
     expect(r.out).toContain('RM_ENV="bogus" is not a policy value');
     expect(r.out).not.toContain("SMOKE_PROJECT is retired");
     expect(r.code).toBe(1);

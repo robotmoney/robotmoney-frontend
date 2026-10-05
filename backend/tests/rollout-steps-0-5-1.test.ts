@@ -3,12 +3,11 @@
 // job and cannot be skipped for being slow, matching rollout-steps-0-5-0's
 // own stated reason for the same property.
 //
-// v0.5.1 is the repo's FIRST code-only release, so this file carries cases its
-// siblings have no reason to: that RELEASE_MIGRATIONS really is empty, that
-// PRIOR_RELEASE_MIGRATIONS is the exact union of v0.4.0's set and v0.5.0's,
-// and that the union matches what is actually on disk. That last one is the
-// load-bearing case — a code-only release's whole premise is "the schema is
-// already final", and the only way that premise goes stale is a migration
+// v0.5.1 applied exactly two migrations to production (0061, 0063) on top of
+// v0.5.0's set and the out-of-band 0062 (issue 1074). This file pins that
+// PRIOR_RELEASE_MIGRATIONS is the exact union of v0.4.0's set, v0.5.0's and
+// 0062, and that the union matches what is actually on disk. That last one is
+// the load-bearing case: the only way the record goes stale is a migration
 // landing on this branch that nobody accounted for.
 //
 // v0.5.1 HAS SHIPPED, so its manifest is a frozen record and migrations now
@@ -75,22 +74,25 @@ describe("0.5.0-to-0.5.1 rollout manifest", () => {
   });
 });
 
-describe("v0.5.1 carries exactly one migration, and it is the gate repair", () => {
-  test("RELEASE_MIGRATIONS is 0062 and nothing else", () => {
-    // The release began code-only and acquired 0062 to repair the backup gate
-    // (rm_readonly could not read twelve sequences, so pg_dump refused). If a
-    // FEATURE migration ever lands here, that is a different release.
-    expect([...RELEASE_MIGRATIONS]).toEqual(["0062_rm_readonly_sequence_select.sql"]);
+describe("v0.5.1 applies 0061 and 0063; 0062 was recorded before it", () => {
+  test("RELEASE_MIGRATIONS is 0061 and 0063 and nothing else", () => {
+    // Issue 1074: production shipped v0.5.1 with these two pending. Main once
+    // said 0062 was the one migration; that record was wrong.
+    expect([...RELEASE_MIGRATIONS]).toEqual([
+      "0061_rm_worker_wallet_backfill_grant.sql",
+      "0063_swarm_judge_model_default.sql",
+    ]);
   });
 
-  test("0062 is not in PRIOR — the release does not claim its own repair as inherited", () => {
-    expect([...PRIOR_RELEASE_MIGRATIONS]).not.toContain("0062_rm_readonly_sequence_select.sql");
+  test("0062 is already recorded before v0.5.1: it was applied out of band on 2026-09-22", () => {
+    expect([...PRIOR_RELEASE_MIGRATIONS]).toContain("0062_rm_readonly_sequence_select.sql");
+    expect([...RELEASE_MIGRATIONS]).not.toContain("0062_rm_readonly_sequence_select.sql");
   });
 
-  test("PRIOR_RELEASE_MIGRATIONS is exactly v0.4.0's set plus v0.5.0's", () => {
+  test("PRIOR_RELEASE_MIGRATIONS is v0.4.0's set, v0.5.0's, and the out-of-band 0062", () => {
     // Restated by hand in release.ts (a release directory is a frozen artefact
     // and must not import across directories), so this keeps it honest.
-    expect([...PRIOR_RELEASE_MIGRATIONS]).toEqual([...V050_PRIOR, ...V050_RELEASE]);
+    expect([...PRIOR_RELEASE_MIGRATIONS]).toEqual([...V050_PRIOR, ...V050_RELEASE, "0062_rm_readonly_sequence_select.sql"]);
   });
 
   // MIGRATIONS THAT LANDED AFTER v0.5.1 WAS CUT.
@@ -125,12 +127,9 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     "0057_swarm_judge_policy_stamp.sql",
     "0058_swarm_judge_fault_injection.sql",
     "0059_swarm_judgement_completion_usage.sql",
-    // From main, two grant repairs found after v0.5.1 went out.
-    "0061_rm_worker_wallet_backfill_grant.sql",
+    // From main, a grant repair found after v0.5.1 went out.
     "0062_rm_worker_analytics_ledger_read_grant.sql",
-    // Production's own files from v0.5.1, ported so the ledger names match
-    // (issue #1064): the judge gets its model, stored as the bare wire id.
-    "0063_swarm_judge_model_default.sql",
+    // From main, the bare wire id for the judge model (issue #1064).
     "0081_swarm_judge_model_bare_id.sql",
     // From main, the analytics ledger compaction and vintage repair (#1035,
     // #1046, #1050, #1051, decision D56). It shares the number 0080 with the
@@ -230,6 +229,7 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     "0090_stream_events_retention_comment.sql",
     "0091_rm_worker_wallet_evidence_insert.sql",
     "0092_drop_swarm_judge_fault_injection.sql",
+    "0093_swarm_judge_model_deepseek_v4_1_flash.sql",
   ];
 
   test("the job ledger 0070 created is dropped by a later file, never by deleting 0070 (criterion 105)", () => {

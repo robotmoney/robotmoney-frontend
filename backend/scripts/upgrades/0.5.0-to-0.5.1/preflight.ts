@@ -1,3 +1,6 @@
+// NOTE (issue 1074): the prose below was written when 0062 was thought to be
+// v0.5.1's one migration. Production shipped v0.5.1 with 0061 and 0063 pending
+// and 0062 already recorded out of band; the data in ./release.ts is the record.
 // Read-only preflight for the v0.5.0 -> v0.5.1 rollout.
 //
 // WHAT IS DIFFERENT ABOUT THIS ONE. v0.5.1's application delta is code-only;

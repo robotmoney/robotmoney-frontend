@@ -557,7 +557,7 @@ describe("the real scheduler drives the real API (§3, §4)", () => {
   test("DEADLINE RECONSTRUCTION: a restart before the judging deadline fires at the ORIGINALLY STORED instant; after it, finalize runs at once (98)", async () => {
     // Enforce, through the admin route, with no judge seated: every judging
     // request runs to its deadline and publishes `no_consensus`.
-    expect((await adminPost("/api/swarm/admin/judge", { mode: "enforce", model: "deepseek-v4-flash" })).status).toBe(200);
+    expect((await adminPost("/api/swarm/admin/judge", { mode: "enforce", model: "deepseek-v4.1-flash" })).status).toBe(200);
     try {
       const judgingOf = async (id: string, judgingDurationSeconds: number) => {
         await createSubject(id, 60, { judgingDurationSeconds });

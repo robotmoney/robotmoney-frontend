@@ -1416,8 +1416,26 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
     // env-role.ts is the one resolver the host-side tools use, so its
     // CONNECTION_TOKENS and ROLES are pinned here; `dbname` is §3's own
     // spelling of `database` and is accepted beside it.
-    const expected = [...CONNECTION_TOKENS, "dbname", ...ROLES, "RM_ENV", "RM_CREDENTIALS"];
+    const expected = [...CONNECTION_TOKENS, "dbname", ...ROLES, "RM_ENV", "RM_CREDENTIALS", "COINGECKO_API_KEY"];
     expect([...ENV_FILE_ALLOWED_KEYS].sort()).toEqual([...new Set(expected)].sort());
+  });
+
+  test("spec §3's ~/.env paragraph names every non-connection key the allowlist holds (issue 1098)", () => {
+    const spec = readFileSync(join(import.meta.dir, "..", "..", "docs", "technical", "smoke-production-spec.md"), "utf8");
+    const para = spec.split("\n").find((l) => l.startsWith("**`~/.env`**"));
+    expect(para).toBeDefined();
+    const connection = new Set<string>([...CONNECTION_TOKENS, "dbname"]);
+    for (const key of ENV_FILE_ALLOWED_KEYS) {
+      if (connection.has(key)) continue;
+      expect(para).toContain("`" + key + "`");
+    }
+    expect(para).toContain("host, port, dbname");
+  });
+
+  test("a file holding COINGECKO_API_KEY beside the §3 keys passes on prod, and the value is never printed (issue 1098)", async () => {
+    const envFilePath = writeEnvFile("coingecko.env", [...SAFE, "COINGECKO_API_KEY=CG-not-printed"]);
+    const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    expect(result.findings).toEqual([]);
   });
 
   test("criterion 150: the checkout's .env.example — the ~/.env template — passes check 4 on PROD with no finding at all", async () => {
