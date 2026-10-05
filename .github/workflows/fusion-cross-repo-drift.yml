@@ -37,7 +37,7 @@ on:
   # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
   # runs on `push: branches: [main]` also runs on a nightly schedule, and
   # nothing else does. Enforced by scripts/tests/unit/nightly-mirrors-merge-set.test.ts.
-  # Minute staggered against the other ten mirrors.
+  # Minute staggered against the other eleven mirrors.
   schedule:
     - cron: "57 3 * * *"
   pull_request:

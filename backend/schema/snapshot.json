@@ -112,7 +112,8 @@
     "0090_stream_events_retention_comment.sql",
     "0091_rm_worker_wallet_evidence_insert.sql",
     "0092_drop_swarm_judge_fault_injection.sql",
-    "0093_swarm_judge_model_deepseek_v4_1_flash.sql"
+    "0093_swarm_judge_model_deepseek_v4_1_flash.sql",
+    "0094_rm_app_overwrite_events_read.sql"
   ],
   "exclusions": {
     "roles": [
@@ -124,7 +125,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "625dc295d7f69b52320cbeeb5fdde8ddb99ac6392b7c83064c6e22d84c7eaf57",
+  "contentHash": "a12221a7e26395113873397a50375e69551645785d39f4b563a8ea8d1a1a9fa5",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",

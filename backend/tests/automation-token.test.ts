@@ -390,7 +390,9 @@ function familyOf(key: string): Family | null {
   if (key.startsWith("swarm.admin.") || key === "swarm.register" || key === "projects.adminUpdate") return "admin";
   if (key.startsWith("admin.")) return PUBLIC_ADMIN.has(key) ? "public" : "admin";
   if (MEMBER.has(key)) return "member";
-  if (PUBLIC.has(key) || key.startsWith("dashboards.") || key.startsWith("comments.")) return "public";
+  // publicAnalytics.* (issue #1095, D58): the tokenless raw-data reads. Public by
+  // construction, and under /api/public/, which no credential gate matches.
+  if (PUBLIC.has(key) || key.startsWith("dashboards.") || key.startsWith("comments.") || key.startsWith("publicAnalytics.")) return "public";
   return null;
 }
 

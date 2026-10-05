@@ -79,7 +79,7 @@ DECLARE
   ];
   fn text;
   -- Tables a later migration narrowed on purpose; the sweep below must not hand them
-  -- back. 0056 revoked ALL on `analytics_overwrite_events` from rm_app/rm_worker;
+  -- back. 0056 revoked ALL on `analytics_overwrite_events` from rm_app/rm_worker (0094 gives rm_app its SELECT back);
   -- 0063 left the runtime roles SELECT only on `deployment_identity`, which §4.2
   -- makes "writable only by rm_owner".
   -- 0064 added `schema_manifest`, which §8.3 makes "a trusted input to boot
@@ -112,6 +112,11 @@ DECLARE
   -- reads the ledger and the manifest (src/db/schema-manifest.ts), under its own
   -- credential. Dropping a name from this list stops those boots.
   select_for_runtime text[] := ARRAY['deployment_identity', 'schema_manifest', 'automation_tokens', 'schema_migrations'];
+  -- SELECT restored to rm_app ALONE (migration 0094, issue #1095): the api serves
+  -- GET /api/public/analytics/overwrite-events from `analytics_overwrite_events`,
+  -- whose READ 0056's REVOKE ALL took along with the write. rm_worker reads
+  -- nothing from it, so it is not in select_for_runtime above.
+  select_for_app_only text[] := ARRAY['analytics_overwrite_events'];
   -- The immutable analytics ledgers (LEDGER_FAMILIES in
   -- src/db/analytics-ledger-guard.ts). Their migrations granted rm_app exactly
   -- `SELECT, INSERT` (0057:108, 0058:137, 0059:113, 0060:76), and each family's
@@ -170,6 +175,9 @@ BEGIN
       EXECUTE format('REVOKE ALL ON %s FROM rm_app, rm_worker', rel.ident);
       IF rel.name = ANY(select_for_runtime) THEN
         EXECUTE format('GRANT SELECT ON %s TO rm_app, rm_worker', rel.ident);
+      END IF;
+      IF rel.name = ANY(select_for_app_only) THEN
+        EXECUTE format('GRANT SELECT ON %s TO rm_app', rel.ident);
       END IF;
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
     ELSIF rel.name = ANY(insert_only_for_runtime) THEN

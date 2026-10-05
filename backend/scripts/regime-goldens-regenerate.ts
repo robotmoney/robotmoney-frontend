@@ -41,8 +41,7 @@ import { dirname, join } from "node:path";
 
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { computeRegime, type RegimeComputeResult } from "../src/analytics/analyze/compute.ts";
-import { applyTransform } from "../src/analytics/transform/transforms.ts";
-import { buildDateAxis, alignDailyForwardFill, alignDailyZeroFill } from "../src/analytics/transform/math.ts";
+import { prepareRegimeInputs } from "../src/analytics/prepare.ts";
 import { CURRENT_REGIME_VERSION } from "../src/analytics/analyze/regime-versions.ts";
 import { computeBacktest, stripDailyFromSnapshot, type BacktestExtras } from "../src/analytics/analyze/backtest.ts";
 import { computeCorrelations, type CorrelationExtras } from "../src/analytics/analyze/correlations.ts";
@@ -116,20 +115,10 @@ async function main(): Promise<void> {
     const rows = raw[id];
     if (rows.length && rows[rows.length - 1].date > maxDate) maxDate = rows[rows.length - 1].date;
   }
-  const dateAxis = buildDateAxis(BACKFILL_START, maxDate);
-  const nanSeries = new Array(dateAxis.length).fill(NaN);
-  const transformed: Record<string, number[]> = {};
-  const lastRaw: Record<string, RawRow | null> = {};
-  for (const ind of INDICATORS) {
-    const series = raw[ind.id] ?? [];
-    lastRaw[ind.id] = series.length ? series[series.length - 1] : null;
-    if (series.length === 0) {
-      transformed[ind.id] = nanSeries.slice();
-      continue;
-    }
-    const aligner = (ind as any).align === "zero_fill" ? alignDailyZeroFill : alignDailyForwardFill;
-    transformed[ind.id] = applyTransform(ind.transform, aligner(series, dateAxis));
-  }
+  // Axis, alignment, transform and last-raw come from the shared seam (D59), so a
+  // regenerated golden cannot drift from production. `ages` is deliberately not
+  // passed to computeRegime below: these fixtures were frozen without it.
+  const { dateAxis, transformed, lastRaw } = prepareRegimeInputs(raw, { start: BACKFILL_START, asof: maxDate });
 
   const r2 = computeRegime(transformed, dateAxis); // [macro, onchain]
   const r3 = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"]); // +factor

@@ -130,7 +130,12 @@ function ledgerRowToSnapshot(r: RegimeSnapshotRow): RegimeSnapshot {
   } as unknown as RegimeSnapshot;
 }
 
-// The most recent `range` regime snapshots → { latest, history, staleness }
+// Which read path produced a regime response (issue #1095): the compatibility
+// table or the immutable ledger. Stated in the response so an auditor pulling
+// regime outputs from the dashboards endpoint knows what they are looking at.
+export type RegimeReadSource = "regime_snapshots" | "ledger";
+
+// The most recent `range` regime snapshots → { latest, history, staleness, source }
 // (chronological). `staleness` flags whether the newest served snapshot is fresh
 // enough to trust: a frozen snapshot (analytics job not running in the deployment)
 // would otherwise be served silently as current — the frontend renders history[]
@@ -156,14 +161,20 @@ function ledgerRowToSnapshot(r: RegimeSnapshotRow): RegimeSnapshot {
 export async function fetchRegimeSnapshots(
   range: number,
   includeBacktest = false,
-): Promise<{ latest: RegimeSnapshot | null; history: RegimeHistoryPoint[]; staleness: RegimeStaleness }> {
+): Promise<{
+  latest: RegimeSnapshot | null;
+  history: RegimeHistoryPoint[];
+  staleness: RegimeStaleness;
+  source: RegimeReadSource;
+}> {
   const today = new Date().toISOString().slice(0, 10);
   // Issue #979: ledger mode derives the exact same rows PURELY from
   // analytics_output_snapshots (never from regime_snapshots) — see
   // cutover/ledger-current.ts. The compatibility table keeps being
   // dual-written either way; only the READ resolves differently.
+  const source: RegimeReadSource = (await getAnalyticsReadMode()) === "ledger" ? "ledger" : "regime_snapshots";
   const full =
-    (await getAnalyticsReadMode()) === "ledger"
+    source === "ledger"
       ? (await ledgerCurrentRegimeSnapshots())
           .filter((r) => r.date <= today)
           .slice(-range)
@@ -184,5 +195,5 @@ export async function fetchRegimeSnapshots(
   // aliasing caused — they're now separate objects, one full (minus backtest
   // unless asked for) and one projected, rather than the same object twice.
   const latest = latestFull && !includeBacktest ? { ...latestFull, backtest: null } : latestFull;
-  return { latest, history: full.map(forHistory), staleness };
+  return { latest, history: full.map(forHistory), staleness, source };
 }

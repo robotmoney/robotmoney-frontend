@@ -9,7 +9,8 @@ designed so each becomes its own repo via `git filter-repo`, with no code change
 
 ```
 robotmoney-frontend/
-  contract/    # the ONLY thing shared across the boundary: route paths + DTO types
+  contract/    # the shared seam for the frontend/backend boundary: route paths + DTO types (D10, D23, D43)
+  packages/analyst-sdk/  # second shared seam beside contract/: pure regime compute (backend re-exports it); installs and runs alone, see D57
   frontend/    # buildless SPA (static files): shell, views, Alpine, CSS, assets
   backend/     # Bun API (Bun.serve) + Postgres task queue/workers + SQL migrations (owns the DB)
   docs/        # this documentation
@@ -27,6 +28,15 @@ robotmoney-frontend/
   topology's [subdomain map](network-topology.md#3-the-surfaces--subdomain-map)).
 - The database schema and migrations live in `backend/`; the frontend knows only
   the DTOs in `contract`.
+
+### `packages/analyst-sdk/`
+
+A second shared seam, for compute rather than types (D57, issue #1095). The pure
+regime pipeline (`analyze/`, `transform/`, `types.ts`, `access/provider.ts`) lives
+there; `backend/src/analytics/` keeps one-line re-export shims at the old paths.
+It imports nothing from `backend/`, touches no filesystem, database or
+environment variable in `src/`, and installs in a directory holding only the
+package. `scripts/tests/unit/analyst-sdk-purity.test.ts` enforces that.
 
 ### `contract/`
 
