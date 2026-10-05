@@ -82,7 +82,7 @@ import {
   rmSync,
   writeSync,
 } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
 import type { ParticipantConfig, PendingWork } from "./main.ts";
 
@@ -223,14 +223,31 @@ export interface OneShotResult {
  * Refusals: none; a failure is a returned status, not a throw, because the
  * caller must always reach its cleanup.
  */
+/** Where this participant started (the image's /app): the root a relative script path in the take command means. */
+const START_DIR = process.cwd();
+
+/**
+ * The one-shot's argv with a relative script path made absolute against the
+ * participant's start directory. The one-shot runs with `cwd` set to the take's
+ * FRESH WORKSPACE (§6.2), so `["bun", "run", "scripts/agent/participant/author-take.ts"]`
+ * — the argv every rendered agent carries — resolved nothing there: on stage-2
+ * (2026-10-05, b35459bd) all eight seats crashed every take with "Module not
+ * found", filed nothing, and the twin looked like a swarm with nothing to say.
+ * Only arguments that name an existing file under the start directory are
+ * rewritten; the command itself and everything else pass through untouched.
+ */
+export function resolveOneShotArgv(argv: readonly string[], startDir: string, fileExists: (p: string) => boolean = existsSync): string[] {
+  return argv.map((a, i) => (i > 0 && !isAbsolute(a) && fileExists(join(startDir, a)) ? join(startDir, a) : a));
+}
+
 export async function runOneShot(
   workspace: TakeWorkspace,
-  argv: readonly string[],
+  argvAsGiven: readonly string[],
   env: Record<string, string>,
   timeoutMs: number,
 ): Promise<OneShotResult> {
   const started = Date.now();
-  const [command, ...args] = argv;
+  const [command, ...args] = resolveOneShotArgv(argvAsGiven, START_DIR);
   if (!command) {
     return { status: "crashed", exitCode: null, stdout: "", stderr: "no command given", durationMs: 0 };
   }
