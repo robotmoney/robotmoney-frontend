@@ -56,6 +56,7 @@ on stage-2 with the real restored dump, plus the three open rows below.
 | B10 | `rebind-members` order on the breaking-migration path | none | settled by R3.8 |
 | B11 | The buyback index runs in the worker as `rm_worker` but its `buyback_scan_state` queries are registered to `rm_app`, so every sweep on the migrated dump logs `permission denied` and is swallowed; buybacks would freeze after the cutover (1150) | open | found on the R3.2 of 2026-10-05; `docker logs <project>-worker-analytics-1 \| grep -A3 "live index failed"` must be empty on the rehearsal |
 | B12 | `verify:live --tier full` fails only on `twin-roster:every-active-member-seated`: the leg asserts the retired host-driver twin (every restored member seated), which a `credential.json` twin cannot satisfy for third parties (1152) | open | owner rescopes or retires the leg; until then R3.4 is read as all legs but this one, and the report says so |
+| B13 | The old checkout's `bun run migrate` runs clean against the migrated database as `rm_owner` ("76 total, up to date") and re-seeds the `swarm.*` job_schedules that 0089 deleted; only its runtime DELETEs are refused (1155) | open | R3.9 found it on 2026-10-05. Owner picks procedural (rename the old checkout on the prod host before R6.3) and/or a schema guard; section 8 corrected below |
 
 Also open: the notice to external members about the four-weight rule (1124); the
 `judging` banner (1115, merged) and admin items (1123, merged) need only the R7 spot check.
@@ -282,7 +283,9 @@ this branch, before any rc tag.
 
 R3.9 **Rollback rehearsal.** Restore the R2 dump into a fresh local database and prove the
 **old** (v0.5.4) code refuses or cannot run against the migrated one only in the ways
-section 8 states. Record the restore time.
+section 8 states. Record the restore time. Done 2026-10-05: restore of the 2026-10-01 dump takes
+2 min 10 s on stage-2; runtime DELETEs as `rm_app`/`rm_worker` are refused; the old `bun run migrate`
+is NOT refused (B13).
 
 R3.10 Rehearsal report (policy §4.5): RC SHA, dump identity, plan id, preflight and
 readiness receipts, participant results, `verify:live` output, interruption results, what
@@ -303,6 +306,7 @@ git push origin v0.6.0-rc.N
 | `bun run migrate` fails or is killed | Ledger partly ahead of manifest ("in progress"); application boot refuses it | **Rerun `bun run migrate`.** It validates committed work and resumes (spec §8.3). Do not edit rows. Do not boot |
 | Migrate done, boot or preflight refuses | New schema, no service running | Fix forward: rerun `bun smoke --static-port`. The journal says the phase |
 | Migrate done, product wrong | New schema, new code live | **No code-only rollback** (0107, section 1.1). Either fix forward on a new rc, or restore the R2 dump into a fresh primary and repoint, which loses everything written after the dump |
+| Any step after R6.3, old checkout still on the host | The old `bun run migrate` (as `rm_owner`) does NOT refuse the migrated database: it reports its 76 files current and re-seeds the `swarm.*` job_schedules 0089 deleted (B13). Only the old api/worker's runtime DELETEs are refused (0107) | Never run anything from the old checkout after R6.3. R6.1 renames it (`mv ~/robotmoney-frontend ~/robotmoney-frontend.v0.5.4-retired`) before the window closes |
 | After replace started | The old services may be gone | `bun smoke:status` for new/old per service; rerun resumes; `bun smoke:down` stops all |
 
 The database restore path is a **decision for the operator at the time**, recorded with the
