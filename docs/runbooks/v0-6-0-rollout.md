@@ -54,6 +54,7 @@ on stage-2 with the real restored dump, plus the three open rows below.
 | B8 | Mid-window dump adoption and the first-epoch bound (1121) | merged | `e2e` green on the RC commit |
 | B9 | `release:v0.6.0` tracking issue | open | to file |
 | B10 | `rebind-members` order on the breaking-migration path | none | settled by R3.8 |
+| B11 | The buyback index runs in the worker as `rm_worker` but its `buyback_scan_state` queries are registered to `rm_app`, so every sweep on the migrated dump logs `permission denied` and is swallowed; buybacks would freeze after the cutover (1150) | open | found on the R3.2 of 2026-10-05; `docker logs <project>-worker-analytics-1 \| grep -A3 "live index failed"` must be empty on the rehearsal |
 
 Also open: the notice to external members about the four-weight rule (1124); the
 `judging` banner (1115, merged) and admin items (1123, merged) need only the R7 spot check.

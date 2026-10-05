@@ -60,6 +60,7 @@ import {
   READ_ONLY_DOCKER_SUBCOMMANDS,
   readOnlyRunner,
   type ProbeRunner,
+  readWorkerStartup,
 } from "../../lib/smoke-readiness-probes.ts";
 import { evaluateHeartbeat } from "../../../backend/src/ops/heartbeat.ts";
 
@@ -599,3 +600,44 @@ describe("the REAL readiness path issues read-only docker commands only — smok
     expect(code).not.toContain('check: "website-server-health", pass: true');
   });
 });
+
+describe("readWorkerStartup reads the whole worker log (the startup line is first, then the worker works)", () => {
+  // stage-2, 2026-10-05: the buyback indexer wrote 580 lines in the readiness
+  // window on the production dump, so a `--tail 400` read never held line 1
+  // and readiness timed out with `startup_preflight: passed` in the log.
+  function fakeDocker(logLines: string[]) {
+    const calls: string[][] = [];
+    const run = (args: readonly string[]) => {
+      calls.push([...args]);
+      if (args[0] === "ps") return { exitCode: 0, stdout: "abc123\n", stderr: "" };
+      if (args[0] === "inspect") return { exitCode: 0, stdout: "healthy\n", stderr: "" };
+      if (args[0] === "logs") {
+        const tail = args.indexOf("--tail");
+        const lines = tail === -1 ? logLines : logLines.slice(-Number(args[tail + 1]));
+        return { exitCode: 0, stdout: lines.join("\n"), stderr: "" };
+      }
+      throw new Error(`unexpected docker ${args.join(" ")}`);
+    };
+    return { run, calls };
+  }
+  const noisy = ["startup_preflight: passed", ...Array.from({ length: 1000 }, (_, i) => `[buyback-logs] eth_getLogs ${i} answered HTTP 413; reading separately`)];
+
+  test("a worker whose startup line scrolled 1000 lines back still reads as passed", () => {
+    const { run, calls } = fakeDocker(noisy);
+    expect(readWorkerStartup(run, "proj", "worker-analytics")).toEqual({ service: "worker-analytics", health: "healthy", line: { kind: "passed" } });
+    const logs = calls.find((c) => c[0] === "logs")!;
+    expect(logs).not.toContain("--tail");
+  });
+
+  test("red control: the same log read through a 400-line tail loses the line", () => {
+    const { run } = fakeDocker(noisy);
+    const tailed = (args: readonly string[]) => (args[0] === "logs" ? run(["logs", "--tail", "400", ...args.slice(1)]) : run(args));
+    expect(readWorkerStartup(tailed, "proj", "worker-analytics").line).toBeNull();
+  });
+
+  test("a refusal is still the last startup line, wherever it sits", () => {
+    const { run } = fakeDocker(["startup_preflight: refused check 2: rm_worker holds DELETE on runs", ...noisy.slice(1)]);
+    expect(readWorkerStartup(run, "proj", "worker-analytics").line).toEqual({ kind: "refused", detail: "check 2: rm_worker holds DELETE on runs" });
+  });
+});
+
