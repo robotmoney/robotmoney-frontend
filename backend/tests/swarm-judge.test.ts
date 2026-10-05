@@ -1008,8 +1008,8 @@ test("the no-weights CHECK is a real schema backstop: a NESTED weight is refused
 
 test("the judge's model is stored as the WIRE id: the opencode/ provider prefix is stripped", async () => {
   await setJudgeConfig({ mode: "off", model: null });
-  await setJudgeConfig({ model: "opencode/deepseek-v4-flash" });
-  expect((await getJudgeConfig()).model).toBe("deepseek-v4-flash");
+  await setJudgeConfig({ model: "opencode/deepseek-v4.1-flash" });
+  expect((await getJudgeConfig()).model).toBe("deepseek-v4.1-flash");
   await setJudgeConfig({ model: "vendor/some-judge" });
   expect((await getJudgeConfig()).model).toBe("vendor/some-judge");
   await expect(setJudgeConfig({ model: "opencode/" })).rejects.toThrow(/invalid judge model/);
@@ -1050,9 +1050,9 @@ test("the judge switch has TWO modes: `shadow` is refused like any other nonsens
   await expect(setJudgeConfig({ model: "   " })).rejects.toThrow(/invalid judge model/);
 
   // A MIGRATED database is not model-less: 0063 gave production's judge the
-  // CI/driver model (`opencode/deepseek-v4-flash`), and 0081 stores it as the
+  // CI/driver model (`opencode/deepseek-v4.1-flash`), and 0081 stores it as the
   // bare wire id setJudgeConfig() stores and the model policy pins.
-  expect((await getJudgeConfig()).model).toBe("deepseek-v4-flash");
+  expect((await getJudgeConfig()).model).toBe("deepseek-v4.1-flash");
 
   // Turning the judge ON without giving it a model is refused (issue #969).
   await setJudgeConfig({ mode: "off", model: null });
