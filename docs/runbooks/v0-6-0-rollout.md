@@ -54,7 +54,7 @@ on stage-2 with the real restored dump, plus the three open rows below.
 | B8 | Mid-window dump adoption and the first-epoch bound (1121) | merged | `e2e` green on the RC commit |
 | B9 | `release:v0.6.0` tracking issue | open | to file |
 | B10 | `rebind-members` order on the breaking-migration path | none | settled by R3.8 |
-| B11 | The buyback indexer ran in the worker as `rm_worker` while its `buyback_scan_state`/`buyback_swaps` sites declared `rm_app`, so every sweep on the migrated dump was refused and swallowed; production's v0.5.x worker holds the api's URL under `RM_ENV=smoke`, which is why buybacks work there today (1150) | fixed on the branch: the handler runs the indexer on the worker's pool, the four sites declare `rm_worker`, grants.sql allows the two tables | R3/R7: `docker logs <project>-worker-analytics-1 \| grep "live index failed"` empty, and `buyback_scan_state.updated_at` advancing on the twin |
+| B11 | The buyback indexer ran in the worker as `rm_worker` while its `buyback_scan_state`/`buyback_swaps` sites declared `rm_app`, so every sweep on the migrated dump was refused and swallowed; production's v0.5.x worker holds the api's URL under `RM_ENV=smoke`, which is why buybacks work there today (1150) | fixed (1171), verified on `90f00c8b`: rm_worker holds INSERT/SELECT/UPDATE on `buyback_scan_state`, no `live index failed` line, the sweep scans | R3/R7: `docker logs <project>-worker-analytics-1 \| grep "live index failed"` empty, and `buyback_scan_state.updated_at` advancing on the twin |
 | B12 | The twin seated only `credential.json` members; the verify leg `twin-roster:every-active-member-seated` caught it (1152) | fixed (1164), verified: 7 of 7 seated on `7d69d17c` | — |
 | B13 | The old checkout's `bun run migrate` runs clean against the migrated database and re-seeds the `swarm.*` job_schedules 0089 deleted (1155) | closed, no action (owner 2026-10-05) | section 8 says: never run the old checkout after R6.3; R6.1 renames it |
 | B14 | A resume after replace could not start participants from the pruned api image id (1160) | fixed (1161), verified on `62ec5920` | — |
@@ -83,7 +83,11 @@ git rev-parse HEAD            # record as RC_SHA; do not tag yet
 bun install --force && bun install --force --cwd backend   # re-run after every switch/checkout
 ```
 
-### 1.1 Pending migrations (35 files, from the 76-name ledger)
+### 1.1 Pending migrations (36 files, from the 76-name ledger)
+
+> **Owner, 2026-10-05 (1173):** from v0.6.0 the migration strategy is to become ONE idempotent,
+> lossless schema file runnable at any database version. That is filed, not started; this
+> release still ships the numbered files below, and this runbook describes that path.
 
 Classification is each file's own `compat:` header at `d20429ca`. Re-derive at the RC:
 `comm -13 <(ledger) <(ls backend/migrations | sort)`.
@@ -392,8 +396,8 @@ then every other pending file in filename order (including the five below 0081).
 bun run migrate               # RM_ENV=prod; receipt + journal land in ~/.local/state/robotmoney-smoke/rm_prod/
 ```
 
-Pass = the receipt records the pre-identity state, the matched baseline, and 35 applied
-files. A refusal here changes nothing; read the message (B1 is the expected one).
+Pass = the receipt records the pre-identity state, the matched baseline, and 36 applied
+files (35 plus `0111_swarm_judge_model_deepseek_v4_1_flash` since the merge of main's #1159). A refusal here changes nothing; read the message (B1 is the expected one).
 If interrupted after 0081 committed, rerun the same command (normal path, resumes).
 
 R6.4 `bun scripts/prod-init.ts set-identity` — reads `production` through `rm_owner` and

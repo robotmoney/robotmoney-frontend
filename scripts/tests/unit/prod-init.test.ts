@@ -128,10 +128,14 @@ describe("every command refuses before anything changes", () => {
     }
   });
 
-  test("RM_ENV=stage refuses set-identity and rebind-members: production initialization is prod's", async () => {
-    for (const command of ["set-identity", "rebind-members"]) {
-      await refused([command], fake({ env: { RM_ENV: "stage" } }), /requires RM_ENV=prod/);
-    }
+  test("RM_ENV=stage refuses set-identity: it reports `production`, which a rehearsal target never holds", async () => {
+    await refused(["set-identity"], fake({ env: { RM_ENV: "stage" } }), /requires RM_ENV=prod/);
+  });
+
+  test("RM_ENV=stage lets rebind-members past the policy gate (R3.8/B10, owner 2026-10-05) and then holds it to a `rehearsal` target", async () => {
+    // Past the policy: the next gate is the target's enrollment, which a
+    // production-enrolled target fails under stage policy (§4.3).
+    await refused(["rebind-members"], fake({ env: { RM_ENV: "stage" }, identity: "production" }), /requires .* enrolled `rehearsal`/);
   });
 
   test("any other RM_ENV refuses provision-tokens", async () => {

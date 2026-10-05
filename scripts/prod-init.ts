@@ -134,11 +134,16 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
   const rest = argv.slice(1);
 
   // §4.1/§4.3: the policy. Production initialization runs under `prod`; the
-  // one stage use is provisioning a remote REHEARSAL target's tokens (§5).
+  // stage uses are provisioning a REHEARSAL target's tokens (§5) and, since
+  // 2026-10-05 (owner, runbook R3.8/B10), rebinding a REHEARSAL target's
+  // seated members: the rebind order is the one cutover step that can only be
+  // learned by running it, it writes through the API with the operator token,
+  // and on a rehearsal target every key is throwaway. set-identity stays
+  // prod's: it reports `production`, which a rehearsal target never holds.
   const rmEnv = deps.env.RM_ENV ?? deps.homeEnv?.RM_ENV;
-  if (command === "provision-tokens") {
+  if (command === "provision-tokens" || command === "rebind-members") {
     if (rmEnv !== "prod" && rmEnv !== "stage") {
-      refuse(`provision-tokens requires RM_ENV=prod (production, §9.1 step 5) or RM_ENV=stage against a remote rehearsal target (§5); RM_ENV is ${rmEnv === undefined ? "unset" : `"${rmEnv}"`}.`);
+      refuse(`${command} requires RM_ENV=prod (production, §9.1) or RM_ENV=stage against a rehearsal target (§5, R3.8); RM_ENV is ${rmEnv === undefined ? "unset" : `"${rmEnv}"`}.`);
     }
   } else if (rmEnv !== "prod") {
     refuse(`${command} requires RM_ENV=prod (§9.1, §4.3); RM_ENV is ${rmEnv === undefined ? "unset" : `"${rmEnv}"`}.`);
@@ -191,7 +196,7 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
   } else if (policy === "prod" && state.identity !== "production") {
     refuse(`${command} under RM_ENV=prod requires ${target} enrolled \`production\`; it reads \`${state.identity}\` (run set-identity first, §9.1 step 4).`);
   } else if (policy === "stage" && state.identity !== "rehearsal") {
-    refuse(`provision-tokens under RM_ENV=stage requires ${target} enrolled \`rehearsal\` (§4.3: stage policy never touches production data); it reads \`${state.identity}\`.`);
+    refuse(`${command} under RM_ENV=stage requires ${target} enrolled \`rehearsal\` (§4.3: stage policy never touches production data); it reads \`${state.identity}\`.`);
   }
 
   if (!deps.isTerminal) {
