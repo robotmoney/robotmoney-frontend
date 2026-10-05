@@ -53,7 +53,7 @@ on stage-2 with the real restored dump, plus the three open rows below.
 | B7 | Log gates `twin:gate` and `prod:gate` ported (1071) | merged | first live run will show unclassified lines; add a rule only with evidence |
 | B8 | Mid-window dump adoption and the first-epoch bound (1121) | merged | `e2e` green on the RC commit |
 | B9 | `release:v0.6.0` tracking issue | open | to file |
-| B10 | `rebind-members` order on the breaking-migration path | none | settled by R3.8 |
+| B10 | `rebind-members` order on the breaking-migration path | none | settled by R3.8; the twin route needed PR 1176 (prod-init targets the twin) and is bounded by 1174 (no cold re-boot of a twin) |
 | B11 | The buyback indexer ran in the worker as `rm_worker` while its `buyback_scan_state`/`buyback_swaps` sites declared `rm_app`, so every sweep on the migrated dump was refused and swallowed; production's v0.5.x worker holds the api's URL under `RM_ENV=smoke`, which is why buybacks work there today (1150) | fixed (1171), verified on `90f00c8b`: rm_worker holds INSERT/SELECT/UPDATE on `buyback_scan_state`, no `live index failed` line, the sweep scans | R3/R7: `docker logs <project>-worker-analytics-1 \| grep "live index failed"` empty, and `buyback_scan_state.updated_at` advancing on the twin |
 | B12 | The twin seated only `credential.json` members; the verify leg `twin-roster:every-active-member-seated` caught it (1152) | fixed (1164), verified: 7 of 7 seated on `7d69d17c` | — |
 | B13 | The old checkout's `bun run migrate` runs clean against the migrated database and re-seeds the `swarm.*` job_schedules 0089 deleted (1155) | closed, no action (owner 2026-10-05) | section 8 says: never run the old checkout after R6.3; R6.1 renames it |
@@ -289,20 +289,33 @@ bun smoke:web --instance rehearse-060
 bun smoke:web --instance rehearse-060 --rollback
 ```
 
-R3.8 **The production-shaped sequence (settles B10).** Repeat R6.3–R6.9 on a **remote**
-stage database enrolled `rehearsal` (restore the dump there by hand per
-[`pre-identity-remote-twin.md`](./pre-identity-remote-twin.md), or use a `--local volume`),
-with real `bun run migrate` prompts and `prod-init provision-tokens` under `RM_ENV=stage`.
+R3.8 **The production-shaped sequence (settles B10).** Repeat R6.3–R6.9 against a target
+enrolled `rehearsal`, with the restored members holding keys the credential file does not
+(production's case: fixture keys vs `credential.json`). Two targets qualify:
 
-The `--local volume` form on stage-2 needs nobody at the keyboard: the twin's migrate and
-tokens are smoke's phases on the generated credentials (section 3), so what is left to
-rehearse is the ORDER of `bun smoke --static-port`, `prod-init rebind-members` and a second
-boot, with the restored members holding keys the credential file does not (production's
-case: fixture keys vs `credential.json`). Boot the migrated volume WITHOUT `--spoof-keys`
-(move the persisted spoof generation aside) and with `--credentials rehearsal-creds.json`,
-then `bun scripts/prod-init.ts rebind-members --instance rehearse-060 --credentials
-~/rehearsal-creds.json --api http://127.0.0.1:<api port>`, then boot again and watch the
-participants' takes. Do not run `bun run migrate` on stage-2: its `~/.env` points at
+- A **remote** stage database (restore the dump there by hand per
+  [`pre-identity-remote-twin.md`](./pre-identity-remote-twin.md)), with real `bun run migrate`
+  prompts and `prod-init provision-tokens` under `RM_ENV=stage`. None exists as of 2026-10-05.
+- The instance's **own twin** on stage-2. Nobody is at the keyboard: migrate and tokens are
+  smoke's phases on the generated credentials (section 3), and `prod-init rebind-members`
+  under `RM_ENV=stage` addresses the twin through its generated `rm_readonly` (PR 1176),
+  not `~/.env`. What is left to rehearse is the ORDER of `bun smoke --static-port`,
+  `prod-init rebind-members` and the participants picking up the new bearers.
+
+The twin route, on stage-2:
+
+1. Boot the twin WITHOUT `--spoof-keys` (move the persisted spoof generation aside) and
+   with `--credentials ~/rehearsal-creds.json`. Preflight and readiness must pass with every
+   restored member seated on its fixture key.
+2. `bun scripts/prod-init.ts rebind-members --instance rehearse-060 --credentials
+   ~/rehearsal-creds.json` (the api address comes from the instance's stack state).
+3. `bun smoke --static-port --instance rehearse-060 ...` again with the same plan id, and
+   watch the participants' takes with the new bearers.
+
+Known limits of the twin route: a twin cannot be re-booted from its own volume
+(`--local volume=<twin volume>` fails, issue 1174), so the "boot again" step is a resume of
+the running twin, not a cold start; a cold second boot is only rehearsable on the remote
+route until 1174 closes. Never run `bun run migrate` on stage-2: its `~/.env` points at
 production's read replica.
 Write down the exact order that works for `rebind-members` and whether the participants
 need a second `bun smoke --static-port` afterwards. Edit R6.7 to match, in a commit on
