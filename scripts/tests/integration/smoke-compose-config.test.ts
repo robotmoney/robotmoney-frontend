@@ -1407,7 +1407,7 @@ describe("participant services: N agents and M judges render exactly N+M, each h
     const athena = threeOne.cfg.services["participant-agent-athena"]!.environment!;
     expect(JSON.parse(String(athena.RM_TAKE_COMMAND))).toEqual(["bun", "run", "scripts/agent/participant/author-take.ts"]);
     expect(athena.RM_INFERENCE_URL).toBe("https://opencode.ai/zen/v1");
-    expect(athena.RM_INFERENCE_WIRE_ID).toBe("deepseek-v4-flash");
+    expect(athena.RM_INFERENCE_WIRE_ID).toBe("deepseek-v4.1-flash");
     const themis = threeOne.cfg.services["participant-judge-themis"]!.environment!;
     expect(themis.RM_JUDGE_BASE_URL).toBe("https://opencode.ai/zen/v1");
     expect(themis.RM_PARTICIPANT_KIND).toBe("judge");

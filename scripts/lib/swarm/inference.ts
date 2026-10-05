@@ -13,7 +13,7 @@
 // robotmoney-site scripts/swarm/generate-session.js.
 //
 // MODEL + CREDENTIAL: the model comes from AGENT_MODEL resolved against
-// ../model-registry.ts (default `opencode/deepseek-v4-flash`); the credential is
+// ../model-registry.ts (default `opencode/deepseek-v4.1-flash`); the credential is
 // OPENCODE_API_KEY. The member-agent launcher injects both explicitly into the
 // member container, and this module passes only its documented allowlist to
 // the spawned CLI. No compose-service or host ambient credential fallback

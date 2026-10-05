@@ -960,7 +960,7 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
           workspaceRoot: root,
           apiUrl: `http://127.0.0.1:${server.port}`,
           inferenceUrl: `http://127.0.0.1:${server.port}/v1`,
-          inferenceWireId: "deepseek-v4-flash",
+          inferenceWireId: "deepseek-v4.1-flash",
           modelKey: "athena-own-model-key-0123456789",
           takeCommand,
         }),
@@ -968,7 +968,7 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
       );
       expect({ oneShot: outcome.oneShot, submission: outcome.submission, reason: outcome.reason }).toEqual({ oneShot: "ok", submission: "submitted", reason: undefined });
       // ONE model call, on this member's own key, for the model the boot resolved.
-      expect(seen).toEqual([{ auth: "Bearer athena-own-model-key-0123456789", model: "deepseek-v4-flash" }]);
+      expect(seen).toEqual([{ auth: "Bearer athena-own-model-key-0123456789", model: "deepseek-v4.1-flash" }]);
       // The signed draft is what the model authored, bound to the brief's report.
       expect(api.signingDrafts[0]).toMatchObject({ memberId: MEMBER_ID, subjectId: "woon", date: "2026-09-23", stance: "constructive", confidence: 0.72, reportSnapshotId: "rs-7" });
     } finally {

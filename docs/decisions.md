@@ -914,9 +914,15 @@ exactly this reason.
 > Every eval runs a model resolved from the **versioned registry** in
 > `scripts/lib/model-registry.ts`, selected by the single `AGENT_MODEL` signal
 > and billed to the environment's own `OPENCODE_API_KEY`. The repo default is
-> `opencode/deepseek-v4-flash`. A keyless run remains **available and
+> `opencode/deepseek-v4.1-flash`. A keyless run remains **available and
 > supported** — `AGENT_MODEL=free` selects Zen's no-credential tier — but it is
 > no longer mandatory.
+>
+> *Note, 2026-10-05 (provider rename):* OpenCode Zen renamed the default
+> member from `deepseek-v4-flash` to `deepseek-v4.1-flash`; the old id now
+> answers `Not Found`. The selector (`AGENT_MODEL=deepseek`) is unchanged and
+> the registry maps it to the new id. `deepseek-v4-pro` was not verified as
+> renamed and is left as it was.
 
 Rules 2, 3, and 4 are **unchanged and still binding**: no inference-off mode on
 an eval path, layered not monolithic, scored by sampling.

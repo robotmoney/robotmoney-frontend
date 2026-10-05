@@ -537,9 +537,9 @@ describe("the runner on its real transport, into the API's parser", () => {
     });
     const v = vendor(200, JSON.stringify({ choices: [{ message: { content: answerText } }] }));
     try {
-      const answer = await withPrompt((file) => runJudge(options({ promptFile: file, endpoint: v.endpoint, model: "deepseek-v4-flash" })));
+      const answer = await withPrompt((file) => runJudge(options({ promptFile: file, endpoint: v.endpoint, model: "deepseek-v4.1-flash" })));
       expect(answer).toEqual({ kind: "ok", body: answerText });
-      expect(v.seen).toEqual([{ auth: "Bearer zen-key", model: "deepseek-v4-flash" }]);
+      expect(v.seen).toEqual([{ auth: "Bearer zen-key", model: "deepseek-v4.1-flash" }]);
       const opinion = parseJudgeResponse(answer.kind === "ok" ? answer.body : "", input);
       expect(opinion.disagreements[0]!.positions[0]).toEqual({ member_id: "analyst-alpha", view: TAKE });
       expect(opinion.release_safety.take_count).toBe(1);

@@ -298,7 +298,7 @@ describe("red controls: a reintroduced selection path is caught", () => {
 
   test("prose naming a model id is NOT red — a guard that cries wolf gets deleted", () => {
     const root = tree({
-      "scripts/lib/documented.ts": "// the default is `opencode/deepseek-v4-flash`, resolved via the registry\n",
+      "scripts/lib/documented.ts": "// the default is `opencode/deepseek-v4.1-flash`, resolved via the registry\n",
       ".github/workflows/dl.yml": '      - run: curl -L "https://github.com/anomalyco/opencode/releases/download/v1/x.tar.gz"\n',
     });
     expect(competingSelectionPaths(root)).toEqual([]);

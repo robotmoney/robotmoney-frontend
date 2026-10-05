@@ -195,7 +195,7 @@ describe("the model is the one swarm_judge_config names, served with the request
 
   test("on an acceptance path only the pinned model is allowed", async () => {
     expect((await modelsAsked({ ...PENDING, model: "kimi-k3" }, { RM_ENV: "prod" })).outcome).toMatchObject({ kind: "refused", reason: "model_disallowed" });
-    expect((await modelsAsked({ ...PENDING, model: "deepseek-v4-flash" }, { RM_ENV: "prod" })).outcome.kind).toBe("submitted");
+    expect((await modelsAsked({ ...PENDING, model: "deepseek-v4.1-flash" }, { RM_ENV: "prod" })).outcome.kind).toBe("submitted");
   });
 });
 
@@ -427,7 +427,7 @@ describe("a judge refuses rather than fakes — and says WHY, by the D-A7 name",
     const { outcome, posts } = await judgeWith({
       kind: "model_status",
       status: 401,
-      body: '{"type":"error","error":{"type":"ModelError","message":"Model opencode/deepseek-v4-flash is not supported"}}',
+      body: '{"type":"error","error":{"type":"ModelError","message":"Model opencode/deepseek-v4.1-flash is not supported"}}',
     });
     expect(outcome).toMatchObject({ kind: "refused", reason: "model_not_supported" });
     expect(posts).toEqual([]);
