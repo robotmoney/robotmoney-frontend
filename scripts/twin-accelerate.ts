@@ -37,6 +37,7 @@
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { Buffer } from "node:buffer";
 import { ROUTES, path as routePath } from "@robotmoney/contract";
 import { resolveGateStack } from "./lib/gate/stack.ts";
 import { serviceContainer, sh } from "./lib/gate/io.ts";
@@ -83,6 +84,21 @@ export const RETIME_SQL =
   "UPDATE swarm_sessions SET window_closes_at = :'close'::timestamptz " +
   "WHERE state = 'collecting' AND subject_id = :'sid' AND window_closes_at > :'close'::timestamptz " +
   "RETURNING id, window_closes_at";
+
+/**
+ * PURE. The re-time's psql argv. The SQL goes on STDIN (`-f -`): psql substitutes
+ * `:'var'` only in input it reads, never in a `-c` command (stage-2, 2026-10-06:
+ * "syntax error at or near ':'").
+ */
+export function retimeArgv(twin: string, close: string, subjectId: string): string[] {
+  return ["docker", "exec", "-i", twin, "psql", "-U", "restore_check", "-d", "rm_restore_check", "-X", "-A", "-t", "-F", "\t",
+    "-v", "ON_ERROR_STOP=1", "-v", `close=${close}`, "-v", `sid=${subjectId}`, "-f", "-"];
+}
+
+function psqlStdin(argv: string[], sqlText: string): { code: number; out: string } {
+  const p = Bun.spawnSync(argv, { stdin: Buffer.from(sqlText + "\n"), stdout: "pipe", stderr: "pipe" });
+  return { code: p.exitCode ?? 1, out: `${p.stdout.toString()}${p.stderr.toString()}` };
+}
 
 /** The refusal for this environment, or null. */
 export function refusal(env: Record<string, string | undefined>): string | null {
@@ -131,8 +147,7 @@ async function main(argv: string[]): Promise<number> {
   for (const { subjectId, closeMs } of plan) {
     const subject = active.find((s) => s.id === subjectId)!;
     const close = new Date(closeMs).toISOString();
-    const r = sh(["docker", "exec", twin, "psql", "-U", "restore_check", "-d", "rm_restore_check", "-X", "-A", "-t", "-F", "\t",
-      "-v", "ON_ERROR_STOP=1", "-v", `close=${close}`, "-v", `sid=${subjectId}`, "-c", RETIME_SQL]);
+    const r = psqlStdin(retimeArgv(twin, close, subjectId), RETIME_SQL);
     if (r.code !== 0) { console.error(`[${NAME}] re-time of ${subjectId} failed: ${r.out}`); return 1; }
     const retimed = r.out.split("\n").filter((l) => /^[0-9a-f-]{36}\t/.test(l)).map((l) => l.split("\t")[0]);
     const body: Record<string, unknown> = { expectedVersion: subject.version, epochDuration: args.epoch, epochAnchor: close };
