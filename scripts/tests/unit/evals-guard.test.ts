@@ -71,7 +71,7 @@ describe("eval wiring keeps evals/ off the per-PR path", () => {
 // of it reads a workflow's TRIGGERS, so the one edit that actually puts real
 // model inference (hours of wall clock, and now real spend) on every PR — a
 // `pull_request:` trigger on a scheduled eval workflow, or `bun test
-// evals/...` wired into e2e.yml — would land with every guard above still
+// evals/...` wired into an e2e-*.yml — would land with every guard above still
 // green. That is the "a guard that proves one thing and is assumed to prove
 // another" class exactly. This closes it (D22 rule 2 / §11.3 E2).
 describe("real-inference evals stay OFF the per-PR trigger", () => {
@@ -80,9 +80,9 @@ describe("real-inference evals stay OFF the per-PR trigger", () => {
   // Matched against PARSED `run` scalars, never raw file text — and against a
   // COMMAND SHAPE, never the bare word. Three things in this repo legitimately
   // say "eval" inside a per-PR `run:` and must not go red:
-  //   * e2e.yml's job-summary step, whose prose explains where the eval DOES
+  //   * e2e-onboarding.yml's job-summary step, whose prose explains where the eval DOES
   //     run and mentions "per-PR evals" in so many words;
-  //   * e2e.yml's inference-off rails step, which executes
+  //   * onboarding-eval-rails.yml's inference-off rails step, which executes
   //     scripts/tests/integration/onboarding-eval-infra.test.ts; and
   //   * this very suite, scripts/tests/unit/evals-guard.test.ts.
   // A false RED on any of them is as much an instrument lie as a false green,
@@ -151,8 +151,8 @@ describe("real-inference evals stay OFF the per-PR trigger", () => {
   });
 
   // ── negative controls: the assertion above must be able to FAIL ───────────
-  test("FIRES when an eval target is wired into the per-PR e2e workflow", () => {
-    const e2e = readFileSync(join(wfDir, "e2e.yml"), "utf8").replace("bun --no-env-file scripts/smoke.ts", "bun run eval");
+  test("FIRES when an eval target is wired into a per-PR e2e workflow", () => {
+    const e2e = readFileSync(join(wfDir, "e2e-lifecycle.yml"), "utf8").replace("bun --no-env-file scripts/smoke-e2e.ts --attached --keep", "bun run eval");
     const offenders = evalRunsUnderPullRequest(e2e);
     expect(offenders).toHaveLength(1);
     expect(offenders[0]).toContain("bun run eval");
@@ -172,8 +172,8 @@ describe("real-inference evals stay OFF the per-PR trigger", () => {
   });
 
   // ── false-RED controls: it must NOT fire on the legitimate per-PR work ────
-  test("does NOT fire on e2e.yml's job-summary step, whose PROSE says the word", () => {
-    const e2e = readFileSync(join(wfDir, "e2e.yml"), "utf8");
+  test("does NOT fire on e2e-onboarding.yml's job-summary step, whose PROSE says the word", () => {
+    const e2e = readFileSync(join(wfDir, "e2e-onboarding.yml"), "utf8");
     // The trap is really present, so this control cannot go stale unnoticed:
     // a `run:` scalar on a pull_request-triggered workflow containing the bare
     // word — a word-boundary matcher would have cried wolf here.

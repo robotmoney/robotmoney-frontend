@@ -1,6 +1,6 @@
 // Self-test for the LIVE-path smoke gate (issue #128; issue #147 made this the
 // unconditional assertion every CI smoke boot runs — the required per-PR
-// `e2e.yml` gate, its push-to-main run, and its nightly `schedule` mirror;
+// `e2e-swarm.yml` gate, its push-to-main run, and its nightly `schedule` mirror;
 // issue #373 retired the duplicate smoke-live-smoke-nightly.yml).
 // scripts/smoke-live-smoke.ts
 // is the assertion driver. Its whole value is the loud-failure guarantee —

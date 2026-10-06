@@ -1,0 +1,100 @@
+name: e2e-teardown
+description: >-
+  The shared teardown of every e2e-*.yml workflow. Call it in a step with
+  `if: always()` after ./e2e-setup. Every step here runs whatever happened
+  before it, because a boot killed by a timeout or a cancellation never reaches
+  its own teardown. A composite step cannot set `timeout-minutes`, so the
+  calling job carries the ceiling.
+
+inputs:
+  smoke-project:
+    description: "The project ./e2e-setup resolved (its `smoke-project` output)."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Stop this job's smoke stack (smoke:down)
+      if: always()
+      shell: bash
+      run: bun --no-env-file scripts/smoke-down.ts || echo "smoke:down had nothing to stop, or the compose teardown below is the gate"
+    # The OpenCode client emits a typed marker only after Zen reports an
+    # exhausted balance. Surface it in the job summary so an operator can tell an
+    # external billing prerequisite from an application regression without
+    # trawling the smoke transcript. Strictly diagnostic: the failing step stays
+    # red and every other failure keeps its normal signal. (It runs on every
+    # teardown, not only after a failure: a composite's `failure()` sees only the
+    # composite's own steps, not the calling job's. With no marker it writes
+    # nothing.)
+    - name: Diagnose OpenCode billing exhaustion
+      if: always()
+      shell: bash
+      env:
+        SMOKE_PROJECT: ${{ inputs.smoke-project }}
+      run: |
+        set -euo pipefail
+        diagnostic_paths=()
+        [ -f "$RUNNER_TEMP/e2e-smoke.log" ] && diagnostic_paths+=("$RUNNER_TEMP/e2e-smoke.log")
+        for path in \
+          ".agents/swarm-sessions/$SMOKE_PROJECT" \
+          ".agents/onboarding-evals/$SMOKE_PROJECT"; do
+          [ -d "$path" ] && diagnostic_paths+=("$path")
+        done
+        if [ "${#diagnostic_paths[@]}" -gt 0 ] && rg -Fq -- "cause=exhausted-credits" "${diagnostic_paths[@]}"; then
+          {
+            echo "## E2E blocked by OpenCode billing credit"
+            echo
+            echo 'Zen/OpenCode reported `cause=exhausted-credits` in the smoke transcript.'
+            echo "This is an external billing prerequisite, not an application regression."
+            echo "**Action:** add balance to the configured OpenCode/Zen workspace, then re-run this job."
+          } >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "No typed OpenCode billing-exhaustion marker found in the smoke evidence."
+        fi
+    # Stack-leak backstop (hardened after e2e run 30406428674). THE ORDER IS THE
+    # FIX: `compose down` must come FIRST so the volume is unreferenced by the
+    # time smoke-clean reaches it, and smoke-clean EXITS NON-ZERO on an in-use
+    # skip when --project is given (scripts/smoke-clean.ts's header), so this
+    # step cannot be green while a leak survives.
+    #
+    # Strictly scoped to THIS run: `-p "$SMOKE_PROJECT"` and the same project
+    # label on the volume. No bare `docker compose down`, no `docker system
+    # prune`, no name globbing. `--remove-orphans` is what kills the dynamically
+    # spawned member-agent eval containers the compose model does not declare;
+    # `-v` reclaims this project's volumes in the same pass.
+    #
+    # RM_INSTANCE / RM_INSTANCE_STATE_DIR are placeholders purely to satisfy
+    # compose INTERPOLATION: docker-compose.yml spells both `${VAR:?…}` and
+    # refuses to parse without them. `down` mounts nothing, so the values only
+    # have to exist. The `|| echo` is deliberate: a compose-down failure must not
+    # skip the smoke-clean verdict, which is the step's actual gate.
+    - name: Tear down this run's smoke stack (no leaks on the shared runner)
+      if: always()
+      shell: bash
+      run: |
+        set -u
+        echo "::group::docker compose -p $SMOKE_PROJECT down -v --remove-orphans"
+        docker compose -p "$SMOKE_PROJECT" \
+          --env-file /dev/null \
+          -f docker-compose.yml \
+          down -v --remove-orphans || echo "compose down exited non-zero — smoke-clean below is the gate"
+        echo "::endgroup::"
+        bun run scripts/smoke-clean.ts --project "$SMOKE_PROJECT"
+      env:
+        SMOKE_PROJECT: ${{ inputs.smoke-project }}
+        WEB_PORT: "1"
+        POSTGRES_PORT: "1"
+        RM_INSTANCE: teardown
+        RM_INSTANCE_STATE_DIR: /nonexistent-teardown-placeholder
+    # Cross-run orphan reaper: a perfect teardown only ever cleans ITS OWN run,
+    # so a run whose teardown was killed outright leaked forever. Selection is by
+    # the robotmoney.env LABEL pinned to `ci` (never `local`, i.e. never the
+    # standing stage smoke or an operator's shell), and the 6h threshold is
+    # longer than any e2e job's ceiling, so no live run can reap another's
+    # stack. Full guard rationale: scripts/lib/smoke-reap.ts. Non-blocking: a
+    # prior run's orphan is housekeeping, not a defect in THIS PR.
+    - name: Reap CI container leftovers from prior runs
+      if: always()
+      continue-on-error: true
+      shell: bash
+      run: bun run scripts/smoke-reap.ts --env-class ci --older-than 6h

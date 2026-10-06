@@ -5,7 +5,7 @@
 // nightly `schedule` mirror all invoke it via the same
 // scripts/lib/smoke-main.ts CI path. Issue #373 retired the separate
 // smoke-live-smoke-nightly.yml: it booted the same stack and ran these same
-// assertions, so once e2e.yml carried the nightly schedule it was pure
+// assertions, so once e2e-swarm.yml carried the nightly schedule it was pure
 // duplication.)
 //
 // WHY THIS EXISTS

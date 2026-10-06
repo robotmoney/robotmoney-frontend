@@ -1,0 +1,238 @@
+# e2e, domain 4 of 4: ONBOARDING, the real-inference admission eval (Stage 7,
+# docs/plans/onboarding-ic-workflow.md §11 R8, issue #289). A member-agent
+# container, driven by a live model, reads the onboarding skill, registers
+# through the REST API, and must reach the active roster on a freshly booted
+# LIVE stack. See e2e-lifecycle.yml for how the four e2e-*.yml domains divide
+# the old e2e.yml, and for the CI taxonomy class and draft deferral that apply
+# here too.
+#
+# This workflow does NOT spend a real model call on an ORDINARY `pull_request`
+# run. Exactly what runs where:
+#   - EVERY PR, drafts and forks included, via the separate
+#     .github/workflows/onboarding-eval-rails.yml (issue #275 addendum): the
+#     inference-off infra-rails check, scripts/tests/integration/
+#     onboarding-eval-infra.test.ts. It proves every rail the real eval rides on
+#     (member-agent image builds and starts, reaches the swarm REST API over the
+#     compose network, a signed apply lands through POST /api/swarm/apply)
+#     without spending a model token.
+#   - PUSH TO MAIN: does NOT spend the real-inference eval (issue #803, below).
+#   - OPT-IN PER PR (the `real-eval` label, below): the real-inference eval, on
+#     demand, for the one PR that needs it.
+#   - MANUAL RUN: `workflow_dispatch` with the `real_eval` input set true.
+#     (Actions reads dispatch inputs from the DEFAULT BRANCH's copy of this file,
+#     so this route only works once the file is on main; the label route works
+#     from a PR head immediately, which is why the label is the primary route.)
+#   - NIGHTLY (issue #373, unchanged by #803): the real-inference measurement's
+#     SCHEDULED HOME is this workflow's own `schedule: 37 4 * * *` (nightly 04:37
+#     UTC), the slot the retired swarm-opencode-nightly.yml held. It spends one
+#     real admission a night, which is thirty samples a month read off run
+#     history through the admission record, and is the measurement's ONLY
+#     continuously-recurring route.
+#
+# THE JOB ALWAYS RUNS, THE EVAL DOES NOT. The first step resolves whether this
+# run asked for the eval and writes the answer, and how to opt a PR in, to the
+# job summary. Withholding a runtime assertion must never be silent. Only when
+# the eval was requested do the later steps boot a stack; on an ordinary PR or a
+# plain push the job is a few seconds long and its summary says "DELIBERATELY NOT
+# RUN".
+#
+# WHY PUSH TO MAIN DOES NOT SPEND IT (issue #803): it used to. That made a
+# stochastic third-party model call part of the signal read off every push to
+# main: with `runOnboardingEvalWithRetry`'s two 30-minute attempts, a `timed-out`
+# outcome (observed ~50/50 per #304) turned an otherwise-green push red for a
+# reason unrelated to the code that landed. The nightly measures the identical
+# surface once a night and is read as a trend rather than a per-run verdict.
+# `docs/decisions.md` D26's "Not in scope" bullet already ruled out treating any
+# real-inference measurement as a required branch-protection check.
+#
+# OPTING ONE PR IN: add the label `real-eval` to the pull request. That is the
+# whole procedure: `pull_request.types` below includes `labeled`, so adding it
+# re-triggers this workflow immediately, and ONBOARDING_REAL_EVAL on the sweep
+# step resolves to "1" for that run and every later run of the PR while the label
+# is attached. Remove the label to go back to zero model spend. Two guards keep
+# the opt-in from leaking cost:
+#   - the job `if:` IGNORES a `labeled` event whose label is not `real-eval`, so
+#     labelling a PR `docs` does not run this job.
+#   - the label is read from the PR payload at trigger time, so a fork PR that
+#     carries the label still cannot reach OPENCODE_API_KEY; the first step
+#     reports CANNOT RUN there rather than degrading silently.
+#
+# WHY IT IS OFF BY DEFAULT (issue #289): the eval used to run on every non-draft
+# PR, and `runOnboardingEvalWithRetry` retries on a 429/overload signal, a model
+# refusal, or a bare timeout, so one job could spend several model runs. The
+# default model is FUNDED now (D22 as amended), so cost is money rather than an
+# exhaustible quota, but an eval per PR is still minutes of runner time per PR
+# against a stochastic metric. Off by default, opt-in per PR, nightly for the
+# trend: a deliberate, recorded default, not a silent one.
+#
+# The funded model is `opencode/deepseek-v4.1-flash`, billed to the
+# `OPENCODE_API_KEY` repo secret. Which model runs is selected by `AGENT_MODEL`
+# against scripts/lib/model-registry.ts; `AGENT_MODEL=free` runs keyless. The key
+# only resolves in a trusted context: any non-pull_request event, or a
+# `real-eval`-labelled PR from a branch in THIS repo. A labelled fork PR resolves
+# no key and fails loudly instead of degrading.
+#
+# The REAL_EVAL_REQUESTED expression in the first step MUST stay textually
+# identical to ONBOARDING_REAL_EVAL on the sweep step: one expression, two
+# consumers, so the notice can never claim the eval was skipped on a run that
+# spent one, or vice versa. Asserted by
+# scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts.
+name: e2e-onboarding
+env:
+  CI_CLASS: system-correctness
+on:
+  push:
+    branches: [main, "releases-*", "fusion/**"]
+  # NIGHTLY MIRROR of the merge-to-main set (issue #373). This keeps 04:37 UTC,
+  # the slot the retired swarm-opencode-nightly.yml held: a `schedule` run of
+  # THIS workflow is the real-inference onboarding admission's scheduled home
+  # (ONBOARDING_REAL_EVAL resolves to "1" on `schedule`, below).
+  schedule:
+    - cron: "37 4 * * *"
+  pull_request:
+    # `labeled` is here ONLY so that adding the `real-eval` opt-in label
+    # re-triggers this workflow on an already-open PR. The job `if:` below drops
+    # any `labeled` event carrying a different label.
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  workflow_dispatch:
+    inputs:
+      real_eval:
+        description: "Run the §11 R8 real-inference onboarding eval (spends real model tokens)."
+        type: boolean
+        default: false
+
+jobs:
+  e2e-onboarding:
+    # Two guards, both evaluated before a runner is allocated:
+    #   1. Deferred until ready-for-review: run on push/dispatch (non-PR) and on
+    #      non-draft PRs; skip while the PR is still a draft.
+    #   2. A `labeled` event only proceeds when the label added is the
+    #      `real-eval` opt-in.
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event.action != 'labeled' || github.event.label.name == 'real-eval') }}
+    runs-on: ubuntu-latest
+    # The ceiling for the whole job. DEFAULT_TIMEOUT_MS is 30 minutes per
+    # admission attempt (a real admission took 1183s) and
+    # runOnboardingEvalWithRetry allows 2 attempts with a 45s backoff, so the
+    # eval's own worst case is ~61 min. Raising DEFAULT_TIMEOUT_MS without
+    # raising this would move the truncation from the eval to the job, which
+    # reports as an infra kill rather than the honest `timed-out` outcome.
+    timeout-minutes: 120
+    env:
+      # Read by scripts/lib/rmpc-fetch.ts's fetchRmpc() for the eval. The infra-
+      # rails check in onboarding-eval-rails.yml uses the SAME cache key
+      # pattern, so GitHub Actions' cross-workflow cache sharing (scoped by key,
+      # not by workflow file) avoids a redundant download.
+      RMPC_CACHE_DIR: ${{ github.workspace }}/.rmpc-cache
+    steps:
+      - uses: actions/checkout@v4
+      # Resolves, and RECORDS, what the real-inference eval does on this run. When
+      # the eval IS requested (the nightly schedule, the `real-eval` label, or a
+      # dispatch that asked for it) this step resolves whether the configured key
+      # is present, and says so. Its `requested` output gates every step below.
+      - name: Configure onboarding real-inference eval
+        id: onboarding-gate
+        env:
+          IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
+          IS_PUSH: ${{ github.event_name == 'push' }}
+          REAL_EVAL_REQUESTED: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && '1' || '' }}
+          TRUSTED_CONTEXT: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          HAS_ZEN_KEY: ${{ secrets.OPENCODE_API_KEY != '' }}
+        run: |
+          if [ "$REAL_EVAL_REQUESTED" = "1" ]; then
+            echo "requested=true" >> "$GITHUB_OUTPUT"
+            if [ "$TRUSTED_CONTEXT" = "true" ] && [ "$HAS_ZEN_KEY" = "true" ]; then
+              MSG="§11 R8 real-inference onboarding eval: RUNNING on the configured paid default model (trusted context, OPENCODE_API_KEY configured) in the onboarding sweep step below. Credential presence does not attest provider balance: Zen must retain pay-as-you-go credit. A typed cause=exhausted-credits is an external billing prerequisite — top up that workspace, then re-run; do not substitute a fixture or disable this live gate. Requested by: the nightly schedule mirror, the 'real-eval' pull-request label, or workflow_dispatch with real_eval=true — whichever triggered this run."
+            else
+              MSG="§11 R8 real-inference onboarding eval: **CANNOT RUN** — the eval was requested for this run, but no OPENCODE_API_KEY is available in this context (fork PR, or the secret is unset). The default model is paid, so the eval will fail loudly rather than silently degrade. Configure a Zen credential with pay-as-you-go credit, or set AGENT_MODEL=free to run keyless."
+            fi
+          else
+            echo "requested=false" >> "$GITHUB_OUTPUT"
+            if [ "$IS_PULL_REQUEST" = "true" ]; then
+              MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent. Off by default, not removed: issue #289 (an exhaustible free tier) plus the runner time per-PR evals cost against a stochastic metric. TO OPT THIS PR IN: add the label 'real-eval' to the pull request — that re-triggers this workflow at once and every subsequent run of the PR spends a real eval until the label is removed. Where it ALSO runs: THIS SAME WORKFLOW's nightly schedule mirror at 04:37 UTC (cron '37 4 * * *'), plus workflow_dispatch with real_eval=true — a plain push to main no longer spends it (issue #803). Issue #373 retired .github/workflows/swarm-opencode-nightly.yml, which used to hold that slot: each of those runs now spends exactly one real admission and writes an admission record to the job summary and an uploaded artifact, so the admission rate over time is read off run history — thirty nights is thirty samples. What this PR run DID assert about that surface: the separate, inference-off .github/workflows/onboarding-eval-rails.yml workflow (issue #275 addendum), which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full whenever its own path filter matches."
+            elif [ "$IS_PUSH" = "true" ]; then
+              MSG="§11 R8 real-inference onboarding eval: **NOT RUN** on this push — issue #803 moved the real-inference admission off push-to-main because its ~50/50 30-minute-attempt timeout rate (see #304) turned an unrelated change red on a report nobody reads before the next push. ZERO model tokens are spent here. The measurement's home is now THIS SAME WORKFLOW's nightly schedule mirror at 04:37 UTC (cron '37 4 * * *'), read as a trend over run history — thirty nights is thirty samples. Opt a specific PR in with the 'real-eval' label, or spend one on demand via workflow_dispatch with real_eval=true."
+            else
+              MSG="§11 R8 real-inference onboarding eval: NOT REQUESTED on this manual run — re-dispatch this workflow with real_eval=true to spend one. ZERO model tokens are spent here. The separate onboarding-eval-rails.yml workflow still covers the inference-off rails check."
+            fi
+          fi
+          echo "$MSG"
+          echo "$MSG" >> "$GITHUB_STEP_SUMMARY"
+      - name: Boot a LIVE smoke stack
+        id: stack
+        if: ${{ steps.onboarding-gate.outputs.requested == 'true' }}
+        uses: ./.github/actions/e2e-setup
+        with:
+          opencode-api-key: ${{ secrets.OPENCODE_API_KEY }}
+          agent-model: ${{ vars.AGENT_MODEL || '' }}
+      # The pinned rmpc release binary (scripts/lib/rmpc-fetch.ts), cached by tag
+      # so a GitHub Releases asset is not re-downloaded on every run for a binary
+      # that only changes when RMPC_VERSION is bumped. Needs the repo installed,
+      # so it follows the boot.
+      - name: Resolve pinned rmpc release version (cache key)
+        id: rmpc-version
+        if: ${{ steps.onboarding-gate.outputs.requested == 'true' }}
+        run: |
+          VERSION=$(bun -e 'import("./scripts/lib/rmpc-fetch.ts").then((m) => console.log(m.RMPC_VERSION))')
+          echo "resolved rmpc version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Cache rmpc release binary
+        if: ${{ steps.onboarding-gate.outputs.requested == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.rmpc-cache
+          key: rmpc-${{ steps.rmpc-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Onboarding eval (real-inference admission sweep)
+        if: ${{ steps.onboarding-gate.outputs.requested == 'true' }}
+        run: bun --no-env-file scripts/smoke-ci-checks.ts --check onboarding
+        env:
+          CI: "true"
+          RM_ENV: stage
+          # This expression is duplicated as REAL_EVAL_REQUESTED on the first
+          # step so the job summary always describes what actually happened; the
+          # two must stay byte-identical, which
+          # scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts asserts.
+          # OPENCODE_API_KEY below is injected ONLY into the short-lived
+          # member-agent container scripts/lib/onboarding-eval.ts launches, and
+          # only when the first step resolved one, so a labelled FORK PR gets no
+          # key and a loud failure rather than a silent degrade. AGENT_MODEL is
+          # left unset so the repo default applies; set it to a family name (e.g.
+          # `kimi`) to switch which agent this gate measures.
+          ONBOARDING_REAL_EVAL: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && '1' || '' }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+          # The paid CoinGecko key (issue #1062), forwarded to the containers
+          # through DEMO_COMPOSE_PASSTHROUGH; see e2e-swarm.yml.
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+      # ── The admission RECORD (issue #373) ─────────────────────────────────
+      # Reporting on the admission that ALREADY ran: no new harness, no sampling
+      # loop, no second stack. scripts/smoke-ci-checks.ts classifies the run with
+      # scripts/agent/classify-outcome.ts and writes onboarding-admission-
+      # record.md (outcome, resolved model id, duration, member id, agent-
+      # liveness counts) BEFORE it throws, so a RED admission records exactly as
+      # much as a green one. Both steps are `if: always()` for the same reason.
+      # The admission rate over time is derivable from run history: one record
+      # per nightly mirror, plus one per opted-in PR run or real_eval dispatch.
+      # A run that spent no eval writes no file; both steps are no-ops there.
+      - name: Record the real-inference onboarding admission
+        if: always()
+        run: |
+          set -u
+          if [ -f onboarding-admission-record.md ]; then
+            cat onboarding-admission-record.md >> "$GITHUB_STEP_SUMMARY"
+            cat onboarding-admission-record.md
+          else
+            echo "no admission record on this run (no real-inference eval was spent)"
+          fi
+      - name: Upload the admission record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-admission-record-${{ github.run_id }}-${{ github.run_attempt }}
+          path: onboarding-admission-record.md
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: Tear down this job's smoke stack
+        if: ${{ always() && steps.onboarding-gate.outputs.requested == 'true' }}
+        uses: ./.github/actions/e2e-teardown
+        with:
+          smoke-project: ${{ steps.stack.outputs.smoke-project }}

@@ -49,21 +49,25 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dir, "../../..");
-const e2eYml = readFileSync(join(repoRoot, ".github/workflows/e2e.yml"), "utf8");
-// Issue #275 addendum: the inference-off infra-rails step moved out of e2e.yml
+// The eval lives in its own domain workflow now (the old single e2e.yml was split
+// by domain); its boot and teardown steps live in the shared composite actions.
+const e2eYml = readFileSync(join(repoRoot, ".github/workflows/e2e-onboarding.yml"), "utf8");
+const setupAction = readFileSync(join(repoRoot, ".github/actions/e2e-setup/action.yml"), "utf8");
+const teardownAction = readFileSync(join(repoRoot, ".github/actions/e2e-teardown/action.yml"), "utf8");
+// Issue #275 addendum: the inference-off infra-rails step moved out of the old e2e.yml
 // into its own workflow (it never needed the full LIVE smoke boot).
 const onboardingRailsYml = readFileSync(
   join(repoRoot, ".github/workflows/onboarding-eval-rails.yml"),
   "utf8",
 );
 
-/** The opt-in label. Changing it here without changing e2e.yml fails these tests. */
+/** The opt-in label. Changing it here without changing e2e-onboarding.yml fails these tests. */
 const OPT_IN_LABEL = "real-eval";
 
 // ---------------------------------------------------------------------------
 // A miniature GitHub-Actions expression interpreter.
 //
-// Supports exactly what e2e.yml's gating expressions use: `||`, `&&`, `!`,
+// Supports exactly what e2e-onboarding.yml's gating expressions use: `||`, `&&`, `!`,
 // `==`, `!=`, parentheses, single-quoted strings, `true`/`false`/`null`,
 // context paths (including the `.*.` array filter) and `contains()`. It
 // reproduces Actions' value-returning `&&`/`||` (they yield an operand, not a
@@ -475,7 +479,7 @@ export function jobGuardIsLabelNarrowed(expr: string): string | null {
 export function prSummaryNamesTheNightly(workflow: string): string | null {
   let step: string;
   try {
-    step = stepContaining(workflow, "GITHUB_STEP_SUMMARY", "e2e.yml");
+    step = stepContaining(workflow, "GITHUB_STEP_SUMMARY", "e2e-onboarding.yml");
   } catch {
     return "no step writes to GITHUB_STEP_SUMMARY";
   }
@@ -511,7 +515,7 @@ export function prSummaryNamesTheNightly(workflow: string): string | null {
 export function pushSummaryExplainsWhyNotRun(workflow: string): string | null {
   let step: string;
   try {
-    step = stepContaining(workflow, "GITHUB_STEP_SUMMARY", "e2e.yml");
+    step = stepContaining(workflow, "GITHUB_STEP_SUMMARY", "e2e-onboarding.yml");
   } catch {
     return "no step writes to GITHUB_STEP_SUMMARY";
   }
@@ -552,7 +556,7 @@ export function noticeTracksTheSpend(workflow: string): string | null {
   }
   let step: string;
   try {
-    step = stepContaining(workflow, "GITHUB_STEP_SUMMARY", "e2e.yml");
+    step = stepContaining(workflow, "GITHUB_STEP_SUMMARY", "e2e-onboarding.yml");
   } catch {
     return "no step writes to GITHUB_STEP_SUMMARY";
   }
@@ -571,7 +575,7 @@ export function noticeTracksTheSpend(workflow: string): string | null {
 // ---------------------------------------------------------------------------
 // 1. The real workflow passes every check.
 // ---------------------------------------------------------------------------
-describe("e2e.yml spends no onboarding eval on an unlabelled pull_request", () => {
+describe("e2e-onboarding.yml spends no onboarding eval on an unlabelled pull_request", () => {
   test("the spend expression resolves to '' on ordinary PRs and '1' on the opt-in routes", () => {
     const expr = unwrap(soleMappingValue(e2eYml, "ONBOARDING_REAL_EVAL"), "ONBOARDING_REAL_EVAL");
     expect(realEvalSpendIsOptIn(expr)).toBeNull();
@@ -769,13 +773,17 @@ describe("the expression interpreter reproduces Actions semantics", () => {
 // ---------------------------------------------------------------------------
 describe("the coverage that replaces the per-PR eval is really there", () => {
   test("a failed smoke prominently classifies exhausted OpenCode credit", () => {
-    const smoke = stepContaining(e2eYml, "bun --no-env-file scripts/smoke.ts", "e2e.yml");
+    const smoke = stepContaining(setupAction, "bun --no-env-file scripts/smoke.ts", "e2e-setup action");
     expect(smoke).toContain('set -o pipefail');
     expect(smoke).toContain('tee "$RUNNER_TEMP/e2e-smoke.log"');
 
-    const diagnosis = stepContaining(e2eYml, "E2E blocked by OpenCode billing credit", "e2e.yml");
+    const diagnosis = stepContaining(teardownAction, "E2E blocked by OpenCode billing credit", "e2e-teardown action");
     expect(diagnosis).toContain("Diagnose OpenCode billing exhaustion");
-    expect(diagnosis).toContain("if: ${{ failure() }}");
+    // `always()`, not `failure()`: a composite's failure() sees only the
+    // composite's own steps, never the calling job's, so a `failure()` guard
+    // here would never fire. With no marker the step writes nothing.
+    expect(diagnosis).toContain("if: always()");
+    expect(diagnosis).not.toContain("failure()");
     expect(diagnosis).toContain('rg -Fq -- "cause=exhausted-credits" "${diagnostic_paths[@]}"');
     expect(diagnosis).toContain('.agents/swarm-sessions/$SMOKE_PROJECT');
     expect(diagnosis).toContain('.agents/onboarding-evals/$SMOKE_PROJECT');
@@ -793,9 +801,9 @@ describe("the coverage that replaces the per-PR eval is really there", () => {
     expect(e2eYml).not.toContain("RUNNING on the funded default model");
   });
 
-  // Issue #275 addendum: this step moved out of e2e.yml into its own
+  // Issue #275 addendum: this step moved out of the old e2e.yml into its own
   // onboarding-eval-rails.yml workflow (it never needed the full LIVE smoke
-  // boot e2e.yml exists for — its own minimal postgres+api stack was always
+  // boot the e2e workflows exist for — its own minimal postgres+api stack was always
   // enough). The STEP itself still carries no additional if: guard beyond the
   // JOB-level draft+path gate onboarding-eval-rails.yml declares — an `if:`
   // on the step would let the last onboarding-surface assertion a relevant PR
@@ -808,12 +816,12 @@ describe("the coverage that replaces the per-PR eval is really there", () => {
     );
     expect(step).toContain("Onboarding eval infra rails (inference-off, fail-fast)");
     expect(step).not.toMatch(/^\s*if:/m);
-    // e2e.yml no longer runs this test directly — the split moved it, not
+    // e2e-onboarding.yml does not run this test directly — the split moved it, not
     // duplicated it.
     expect(e2eYml).not.toContain("bun test scripts/tests/integration/onboarding-eval-infra.test.ts");
   });
 
-  test("onboarding-eval-rails.yml's job defers on draft PRs, same as the e2e job it split from", () => {
+  test("onboarding-eval-rails.yml's job defers on draft PRs, same as the e2e-onboarding job", () => {
     expect(onboardingRailsYml).toMatch(/github\.event\.pull_request\.draft == false/);
   });
 
@@ -821,7 +829,7 @@ describe("the coverage that replaces the per-PR eval is really there", () => {
   // SAME real-inference admission this workflow used to spend on a push to
   // main, so the nightly it held became this workflow's own `schedule:` — and
   // the coverage that replaces the per-PR eval must therefore be found HERE, in
-  // e2e.yml, or it is nowhere. Issue #803 later took the spend OFF push, which
+  // e2e-onboarding.yml, or it is nowhere. Issue #803 later took the spend OFF push, which
   // makes this schedule route this measurement's ONLY continuously-recurring
   // home — dropping it here would leave nothing recurring at all.
   test("this workflow itself carries the retired nightly's 04:37 slot", () => {

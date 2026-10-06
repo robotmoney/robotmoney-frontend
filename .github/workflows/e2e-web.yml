@@ -1,0 +1,60 @@
+# e2e, domain 3 of 4: the WEB client against a LIVE stack. The core-surface
+# checks (scripts/smoke-frontend-check.ts, the loud-failure guard that keeps a
+# broken smoke off main; self-tested by scripts/tests/integration/
+# smoke-frontend-check.test.ts) and the Playwright specs (`bun run test:browser`)
+# with BACKEND_URL pointed at the stack the boot left up.
+#
+# The specs that stub `/api/**` themselves also run, with no stack, in
+# web-client.yml (D45). The ones that need a real api, named in
+# scripts/web-client/static-specs.ts, run only here. See e2e-lifecycle.yml for
+# how the four e2e-*.yml domains divide the old e2e.yml, and for the CI taxonomy
+# class and draft deferral that apply here too.
+name: e2e-web
+env:
+  CI_CLASS: system-correctness
+on:
+  push:
+    branches: [main, "releases-*", "fusion/**"]
+  schedule:
+    - cron: "27 4 * * *"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+jobs:
+  e2e-web:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    # The ceiling for the whole job. The specs took ~10 minutes live; the rest is
+    # headroom for a slow provider.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Boot a LIVE smoke stack
+        id: stack
+        uses: ./.github/actions/e2e-setup
+        with:
+          browser: "true"
+          opencode-api-key: ${{ secrets.OPENCODE_API_KEY }}
+          agent-model: ${{ vars.AGENT_MODEL || '' }}
+      - name: Core-surface checks (smoke-frontend-check)
+        run: bun --no-env-file scripts/smoke-ci-checks.ts --check frontend
+        env:
+          CI: "true"
+          RM_ENV: stage
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+      - name: Playwright specs on the live stack
+        run: bun --no-env-file scripts/smoke-ci-checks.ts --check browser
+        env:
+          CI: "true"
+          RM_ENV: stage
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+      - name: Tear down this job's smoke stack
+        if: always()
+        uses: ./.github/actions/e2e-teardown
+        with:
+          smoke-project: ${{ steps.stack.outputs.smoke-project }}

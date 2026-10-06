@@ -1848,7 +1848,7 @@ async function runCiScenario(stack: Stack): Promise<never> {
       { ...process.env } as Record<string, string>, "live product verification");
 
     // Additive, env-gated (issue #104): the rmpc-release-e2e nightly reuses this
-    // EXACT boot. Unset (a no-op) in e2e.yml.
+    // EXACT boot. Unset (a no-op) in e2e-*.yml.
     if (process.env.RMPC_RELEASE_E2E === "1") {
       console.log("\n[smoke] running rmpc release e2e driver…");
       await run(["bun", "run", "scripts/rmpc-release-e2e.ts"], repoRoot,
@@ -1856,7 +1856,7 @@ async function runCiScenario(stack: Stack): Promise<never> {
     }
 
     // Additive, env-gated REAL-INFERENCE onboarding admission sweep (§11 R8),
-    // reusing this EXACT stack. ONBOARDING_REAL_EVAL=1 only on e2e.yml's nightly
+    // reusing this EXACT stack. ONBOARDING_REAL_EVAL=1 only on e2e-onboarding.yml's nightly
     // `schedule` mirror, a `real-eval`-labelled PR, or a real_eval dispatch
     // (issue #289, #373, #803). A failed/timed-out admission THROWS; provider
     // flake is retried inside runOnboardingEvalWithRetry. ONBOARDING_SWEEP_MODELS
@@ -1891,7 +1891,7 @@ async function runCiScenario(stack: Stack): Promise<never> {
         }
       }
       // Written BEFORE the throw below so a RED run records exactly as much as a
-      // green one does; e2e.yml folds this file into $GITHUB_STEP_SUMMARY.
+      // green one does; e2e-onboarding.yml folds this file into $GITHUB_STEP_SUMMARY.
       writeFileSync(join(repoRoot, ADMISSION_RECORD_FILE), `${formatAdmissionRecords(records)}\n`);
       console.log(`[smoke] wrote onboarding admission record to ${ADMISSION_RECORD_FILE}`);
       const failed = sweepResults.filter((r) => !r.result.admitted);

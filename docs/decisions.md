@@ -5088,3 +5088,70 @@ PR #1109). `scripts/tests/unit/regime-seam-guard.test.ts` fails on any other cal
 the axis or alignment primitives for regime inputs. Seam internals are pinned by
 `packages/analyst-sdk/tests/prepare.test.ts`. The run semantics are in
 [`docs/technical/regime-engine.md` §8.1](technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay).
+
+<a id="d60"></a>
+
+## D60 — The live-stack e2e gate is one workflow per domain, `e2e-*.yml`, sharing setup through composite actions (refines D26, D45)
+
+> Earlier decisions and the code review notes name `e2e.yml`. That is the
+> workflow this decision replaces, so read those as the four workflows below.
+
+**Decision.** There is no `e2e.yml`. Four workflows replace it, and each is its own
+check with its own live stack:
+
+| Workflow | Domain | What it runs (`scripts/smoke-ci-checks.ts --check …`) |
+|---|---|---|
+| `e2e-lifecycle.yml` | the stack runs itself | `scripts/smoke-e2e.ts --attached --keep`: the scheduler, the participants, one turnover |
+| `e2e-swarm.yml` | the swarm publishes | `swarm-session`, `starter-agent`, `live-smoke`, `verify-live` |
+| `e2e-web.yml` | the web client on a live api | `frontend` (core surfaces), `browser` (the Playwright specs) |
+| `e2e-onboarding.yml` | admission by a live model | `onboarding` (the §11 R8 real-inference sweep), opt-in |
+
+The setup and the teardown are shared, not copied: `.github/actions/e2e-setup`
+(toolchain, host deps, the unattended `bun smoke --local blank --migrate --seed`
+boot, and the resolved project name as an output) and `.github/actions/e2e-teardown`
+(`smoke:down`, the billing diagnostic, the scoped `compose down` plus `smoke-clean`,
+the CI reaper), always called under `if: always()`. Each domain runs one check per
+step, so the red step names the failing check.
+
+**Why.** One job booted one stack and ran every check in one step, 15 of its 17
+minutes. A red `e2e` said nothing about which domain broke, and a reader had to open
+the log and find a `[ci-checks]` line. The boot is about a minute, so a stack per
+domain is cheap: the domains run in parallel and the wall time falls from the sum of
+the domains to the longest one (the Playwright specs, about 10 minutes, against 5 for
+the swarm session driver and 1 for the lifecycle).
+
+**What stays the same.** Every trigger: push to `main`, `releases-*` and `fusion/**`,
+the nightly mirror (D26, one staggered cron each, `e2e-onboarding.yml` keeping the
+`37 4 * * *` slot of the real-inference measurement), and draft deferral. The
+onboarding eval keeps its opt-in (the `real-eval` label, a dispatch, the nightly), its
+`ONBOARDING_REAL_EVAL` expression and its job-summary notice. That job still runs on
+an ordinary PR and push so the notice is written ("DELIBERATELY NOT RUN"), and it
+boots a stack only when the eval was requested. No test was dropped: the checks moved
+between files and each runs exactly once.
+
+**Constraints the split forced.**
+- A composite action cannot read `secrets`, so each workflow passes
+  `OPENCODE_API_KEY` in as an input. It cannot set a step `timeout-minutes`, so each
+  job carries its own ceiling, and the CI reap threshold (6 hours) stays longer than
+  every one (`scripts/tests/unit/smoke-reap.test.ts`). Its `failure()` sees only its
+  own steps, so the billing diagnostic runs under `always()` and writes nothing unless
+  the typed marker is there.
+- Each workflow is its own `GITHUB_WORKFLOW`, so `scripts/stack/naming.ts` derives a
+  different project name for each domain and two domains on one host cannot collide.
+- `live-smoke` and `verify-live` assert what the session driver publishes, so they run
+  in `e2e-swarm.yml` after it. The Playwright specs stay in `e2e-web.yml` whole.
+
+**Rejected.**
+- Keep one job and split only the steps: the check name is still `e2e`, and the
+  domains still run in series.
+- One reusable workflow called by four thin files: the checks then read
+  `e2e-swarm / run`, and the step list lives in a place the domain's own file does not
+  show.
+- Share one booted stack across jobs: a Docker stack does not survive a job boundary.
+
+**Enforced by** `scripts/tests/unit/e2e-split-structure.test.ts` (no `e2e.yml`; the
+four domains; name, job id and file agree; shared setup and teardown; no copy of the
+boot), `scripts/tests/unit/smoke-ci-check-select.test.ts` (each `--check` is run by
+exactly one workflow, so a check cannot run twice or never), and the retargeted
+`nightly-mirrors-merge-set`, `stack-naming`, `smoke-reap`, `admission-record`,
+`evals-guard` and `e2e-onboarding-eval-pr-cost` tests.

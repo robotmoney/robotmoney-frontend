@@ -23,7 +23,7 @@ _site/
 _static/
 
 # The real-inference admission record a CI/demo run renders (issue #373). A CI
-# ARTIFACT, never source: scripts/lib/demo-main.ts writes it and e2e.yml folds
+# ARTIFACT, never source: scripts/lib/demo-main.ts writes it and e2e-onboarding.yml folds
 # it into the job summary and uploads it.
 onboarding-admission-record.md
 
