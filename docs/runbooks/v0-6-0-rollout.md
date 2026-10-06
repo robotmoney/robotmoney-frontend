@@ -7,6 +7,23 @@
 > that moved. Policy: [`release-runbooks.md`](../technical/release-runbooks.md).
 > Mechanism: [`smoke-production-spec.md`](../technical/smoke-production-spec.md) (D47).
 
+## Inherits the standing runbook
+
+This runbook runs **every check in [`release-standing-runbook.md`](./release-standing-runbook.md)**
+(written against the commit that adds it) and adds the 0.6.0-specific checks below. It cites
+standing checks by ID. **Exceptions:** none granted. Two standing rows are `gap` and block the
+cutover until they close: SR.7 and SW.2 (the cumulative standing invariants, issue 1179, B16).
+
+Where the standing runbook says to run a check and a step below does not repeat it, run it anyway.
+The standing checks this release's steps map to:
+
+| Phase | Standing checks | Where it runs below |
+|---|---|---|
+| Preflight and baseline | SP.1 to SP.7 | R1, R2, `bun smoke` preflight; **SP.5 `prod:gate --mode baseline` is R2.5** |
+| Stage rehearsal | SR.1 to SR.8 | R3.2 to R3.10; **SR.4 `twin:gate` is R3.4a** |
+| Cutover and verification | SC.1, SC.2, SV.1 to SV.6 | R6, R7; **SV.4 `prod:gate --mode post-release` is R7.3a** |
+| Watch | SW.1 to SW.3 | R7.6, R7.8 |
+
 ## Why this runbook is not like the 0.5.x ones
 
 Every 0.5.x runbook drove one stack with `bun run smoke:stage`, shipped images with
@@ -25,7 +42,8 @@ onto the adopted design (spec §9.3).
 | Roster by `--agents` | The roster is `credential.json` (`RM_CREDENTIALS`) |
 | Site shipped with the API (`static:assemble`) | Own release unit: `bun smoke:web`, checked against `apiRange` |
 | Per-release `upgrades/A-to-B/*.ts` | None exist for 0.6.0. Gates are the spec's, run by the tools below. `verify:live` is the product check |
-| `twin:gate`, `prod:gate`, `soak-checks.sh` | Decided: ported to main's instance model (1071). Blocker B7 until they land |
+| `twin:gate`, `prod:gate` | Ported to main's instance model (1071, B7 merged). Run at R2.5, R3.4a, R7.3a |
+| `soak-checks.sh` (cumulative R8 invariants) | **Not ported.** Issue 1179, blocker B16. Standing runbook rows SR.7 and SW.2 |
 
 ## 0. Rule, decisions and blockers
 
@@ -59,6 +77,7 @@ on stage-2 with the real restored dump, plus the three open rows below.
 | B13 | The old checkout's `bun run migrate` runs clean against the migrated database and re-seeds the `swarm.*` job_schedules 0089 deleted (1155) | closed, no action (owner 2026-10-05) | section 8 says: never run the old checkout after R6.3; R6.1 renames it |
 | B14 | A resume after replace could not start participants from the pruned api image id (1160) | fixed (1161), verified on `62ec5920` | — |
 | B15 | A failed take re-ran on the next tick with no delay; seven seats hammered the shared Zen key (see the issue). The take one-shot also could not find its script from the per-take workspace (1166) | fixed: backoff (1168) and give-up after 5 failed takes (1169, owner rule), verified on `7d69d17c` | — |
+| B16 | The cumulative standing invariants (`soak-checks.sh`, R8.a to R8.y) are not on the 0.6 line, so SR.7 and SW.2 have no tool (1179) | open | port to the instance model, or an owner decision per standing runbook section 6 |
 
 Also open: the notice to external members about the four-weight rule (1124); the
 `judging` banner (1115, merged) and admin items (1123, merged) need only the R7 spot check.
@@ -224,6 +243,17 @@ R2.4 Save, with the dump: row counts of `swarm_sessions`, `swarm_recommendations
 size; the AUM figure the site publishes (copy the number and its date from the page). These are the
 postflight comparison baseline.
 
+R2.5 **Log baseline** (standing check SP.5): what is already broken in production's logs, triaged
+before anything changes. Read-only.
+
+```bash
+bun run prod:gate --mode baseline --instance rm_prod
+```
+
+Every unclassified line is a decision: classify it with evidence in
+`scripts/lib/gate/log-classifications.json`, or file the defect. Keep the report with the dump.
+R7.3a is compared against it.
+
 ## 7. R3 Stage rehearsal (policy §§4.4, 4.5) — stage hosts only, never production
 
 Run on a stage host (`rm-frontend-stage-2`, `stage.robotmoney-labs.dev`, or stage-1).
@@ -269,6 +299,19 @@ bun run verify:live --instance rehearse-060 --tier full --emit-receipt=R3.verify
 
 Exit 0 = pass; 1 = product wrong; 2 = nothing asserted. A WARN is not a pass. List which
 invariants this target could not exercise. Passed 2026-10-05 on `7d69d17c` with the full roster: 9/9 PASS, exit 0 (receipt `R3.verify-twin-8seats.json`). Every leg must PASS; `twin-roster:every-active-member-seated` is the twin's own seating proof (B12).
+
+R3.4a **Twin gate** (standing check SR.4), after R3.4 and after the roster has published
+sessions. It reads every container log (participants included), default deny:
+
+```bash
+bun run twin:gate --instance rehearse-060 --wait 35
+```
+
+Exit 0 only when every check passes. A gate run on a twin whose participants cannot authenticate
+(for example after R3.8's rebind, before the participants are recreated) fails by design: run it
+on a twin in a healthy state, and keep the report. First run 2026-10-05 on `7a4f19ac`: failed on
+a broken twin and listed an unclassified coin-price `DEGRADED` warning. Classify it with evidence
+or fix it before the RC.
 
 R3.5 Prove the schema gates on the twin (the lines from spec §10 this release depends on):
 migrations all recorded once; `deployment_identity.kind = 'rehearsal'`; `schema_manifest`
@@ -333,7 +376,7 @@ is NOT refused (B13).
 
 R3.10 Rehearsal report (policy §4.5): RC SHA, dump identity, plan id, preflight and
 readiness receipts, participant results, `verify:live` output, interruption results, what
-could not be covered (the log gates, until B7 closes), and a go/no-go signed by the operator.
+could not be covered (the cumulative standing invariants, SR.7, until issue 1179 closes), the `twin:gate` report (R3.4a), and a go/no-go signed by the operator. Every standing check in the standing runbook is accounted for by ID.
 
 ### R3.11 Cut the RC tag (only after R3.10 is a go)
 
@@ -469,6 +512,14 @@ bun run verify:live --instance rm_prod --emit-receipt=R7.verify-prod
 ```
 
 R7.4 Read the result: 0 pass, 1 wrong, 2 nothing asserted. WARN is not pass.
+
+R7.3a **Log verdict after the release** (standing check SV.4):
+
+```bash
+bun run prod:gate --mode post-release --instance rm_prod
+```
+
+What the release was meant to fix is fixed and nothing new is unclassified. Compare with R2.5.
 
 R7.4a Schedule parity (owner rule: an upgrade does not change usual schedules): every
 active subject reads `epoch_duration_seconds = 21600`; each session that was in flight at
