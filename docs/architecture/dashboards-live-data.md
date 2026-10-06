@@ -123,8 +123,9 @@ interface Buybacks {
 - **Source of truth**: `config.robotmoney` — `totalSupply` via
   `callTotalSupply` (18dp), `priceUsd` via `fetchAssetPriceUsd` (GeckoTerminal,
   `resolvePriceSource()`), `marketCapUsd = totalSupply * priceUsd`. `feeSplit`
-  is a fixed Clanker-pool config constant (Protocol 57 / Bankr 40 / Clanker 3);
-  it is `managed`/static, not a chain read — label its `source` accordingly but
+  is the fixed beneficiary shares of the token's Doppler pool (Protocol 57 /
+  Bankr 36.1 / Doppler 5 / Ecosystem 1.9; `bun scripts/token-fees.ts` reads them
+  live); it is `managed`/static, not a chain read — label its `source` accordingly but
   keep it in the DTO so the frontend stops baking it.
 - **Postgres**: none required for the live read; may reuse
   `vault_share_price_history`-style persistence if a `stale` fallback is added
@@ -140,7 +141,7 @@ interface TokenMetrics {
     totalSupply: number | null;  // token count, 18dp normalized (e.g. 5.5e10)
     marketCapUsd: number | null; // priceUsd * totalSupply
   };
-  feeSplit: { label: string; pct: number }[]; // fixed Clanker pool config
+  feeSplit: { label: string; pct: number }[]; // fixed Doppler pool shares
   asOf: string;
   source: "live" | "stub";
   stale: boolean;
@@ -153,8 +154,9 @@ interface TokenMetrics {
   "robotmoney": { "priceUsd": 0.00000451, "totalSupply": 55000000000, "marketCapUsd": 248050 },
   "feeSplit": [
     { "label": "Protocol", "pct": 57 },
-    { "label": "Bankr", "pct": 40 },
-    { "label": "Clanker", "pct": 3 }
+    { "label": "Bankr", "pct": 36.1 },
+    { "label": "Doppler", "pct": 5 },
+    { "label": "Ecosystem", "pct": 1.9 }
   ],
   "asOf": "2026-07-09T12:04:40.696Z",
   "source": "stub",

@@ -1228,8 +1228,8 @@
           </div>
           <div class="token__spec">
             <span class="token__spec-label">LP Lock</span>
-            <div class="token__spec-value">Until 2100</div>
-            <span class="token__spec-sub">Permanent lock</span>
+            <div class="token__spec-value">Permanent</div>
+            <span class="token__spec-sub">No unlock date</span>
           </div>
           <div class="token__spec">
             <span class="token__spec-label">Team Alloc</span>
@@ -1243,7 +1243,7 @@
       <div class="token__mechanisms">
         <!-- Fee routing — LIVE split from GET /api/dashboards/token-metrics
              (`feeSplit`) via feeChart(): Creator share = the Protocol leg;
-             Interface & Protocol = Bankr + Clanker summed. No baked 57/43. -->
+             Interface & Protocol = Bankr + Doppler + Ecosystem summed. No baked 57/43. -->
         <div class="token__card" x-data="feeChart()">
           <h3 class="token__card-title token__card-title--accent">Fee Routing</h3>
           <div class="token__fees">
@@ -1261,7 +1261,7 @@
               <span class="token__fee-pct" x-text="pctLabel(feeInterfacePct())">—</span>
               <div class="token__fee-body">
                 <div class="token__fee-label">Interface &amp; Protocol</div>
-                <div class="token__fee-dest">Bankr / Clanker</div>
+                <div class="token__fee-dest">Bankr / Doppler</div>
               </div>
               <div class="token__fee-bar" :style="pctWidth(feeInterfacePct())">
                 <div class="token__fee-bar-fill"></div>

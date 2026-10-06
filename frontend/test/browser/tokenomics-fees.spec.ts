@@ -1,6 +1,6 @@
 // Render test for the LIVE fee-split section of /tokenomics: the fee-distribution
 // legend + per-partner breakdown cards are bound by the feeChart() factory to
-// GET /api/dashboards/token-metrics (`feeSplit`) — the Protocol/Bankr/Clanker %
+// GET /api/dashboards/token-metrics (`feeSplit`) — the Protocol/Bankr/Doppler/Ecosystem %
 // literals are no longer baked into the view. Same harness pattern as
 // vault-view.spec.ts: the SPA + view HTML are served by the backend at
 // baseURL (a preview server replaying goldens/api-goldens.json), vendor CDN
@@ -69,7 +69,7 @@ test("tokenomics fee-split legend + breakdown cards render FROM GET /api/dashboa
   expect(hit).toBe(true); // the endpoint was actually fetched
 });
 
-test("tokenomics fee-split reflects the SERVED percentages, not baked 57/40/3 literals", async ({ page }) => {
+test("tokenomics fee-split reflects the SERVED percentages, not baked 57/36.1/5/1.9 literals", async ({ page }) => {
   const golden = loadTokenMetricsGolden();
   // Deliberately different percentages: if the DOM shows 50/45/5 they can only
   // have come from this response, proving the view is not rendering baked % text.
@@ -78,7 +78,7 @@ test("tokenomics fee-split reflects the SERVED percentages, not baked 57/40/3 li
     feeSplit: [
       { label: "Protocol", pct: 50 },
       { label: "Bankr", pct: 45 },
-      { label: "Clanker", pct: 5 },
+      { label: "Doppler", pct: 5 },
     ],
   };
   await stubEnvironment(page, mutated);

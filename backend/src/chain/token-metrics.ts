@@ -11,9 +11,9 @@
 //   every address). This keeps the hermetic smoke's marketCap sensible without a
 //   live network and without a fabricated live-looking number.
 // - marketCapUsd = priceUsd * totalSupply (null if either leg is null).
-// - feeSplit: a FIXED Clanker-pool config constant (Protocol 57 / Bankr 40 /
-//   Clanker 3) — static/managed, not a chain read; kept in the DTO so the
-//   frontend stops baking it.
+// - feeSplit: the FIXED beneficiary shares of the token's Doppler pool (Protocol
+//   57 / Bankr 36.1 / Doppler 5 / Ecosystem 1.9) — static/managed, not a chain
+//   read; kept in the DTO so the frontend stops baking it.
 //
 // Honesty (#50): a failed supply or price leg degrades that field to null +
 // stale:true — never a fabricated price. 'stub' payloads are never labelled live.
@@ -34,11 +34,18 @@ const WEI_18 = 1e18;
 // (55B ROBOTMONEY) so the smoke's marketCap is reproducible without a live read.
 const STUB_TOTAL_SUPPLY = 55_000_000_000;
 
-// Fixed Clanker-pool fee split. Static config, NOT a chain read.
+// Fixed fee split. Static config, NOT a chain read. $ROBOTMONEY launched through
+// Bankr on Doppler, not Clanker: the pool's swap fees are shared by the
+// beneficiaries stored at launch in Doppler's locker (DecayMulticurveInitializer
+// 0xd59ce43e53d69f190e15d9822fb4540dccc91178, getShares(poolId, beneficiary)).
+// Protocol is the primary prop wallet, Bankr is the launch's integrator, Doppler
+// is its protocol owner, and Ecosystem is the leg Bankr reserved at launch.
+// `bun scripts/token-fees.ts` reads the live shares.
 const FEE_SPLIT: { label: string; pct: number }[] = [
   { label: "Protocol", pct: 57 },
-  { label: "Bankr", pct: 40 },
-  { label: "Clanker", pct: 3 },
+  { label: "Bankr", pct: 36.1 },
+  { label: "Doppler", pct: 5 },
+  { label: "Ecosystem", pct: 1.9 },
 ];
 
 export interface TokenMetrics {

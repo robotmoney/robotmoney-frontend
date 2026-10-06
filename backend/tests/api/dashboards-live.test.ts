@@ -198,7 +198,7 @@ test("token-metrics: stub source → fixture supply + stub price + computed mark
   expect(r.robotmoney.totalSupply).toBe(55_000_000_000);
   expect(r.robotmoney.priceUsd).toBeCloseTo(0.00001, 12);
   expect(r.robotmoney.marketCapUsd).toBeCloseTo(Math.round(55_000_000_000 * 0.00001 * 100) / 100, 6);
-  expect(r.feeSplit).toEqual([{ label: "Protocol", pct: 57 }, { label: "Bankr", pct: 40 }, { label: "Clanker", pct: 3 }]);
+  expect(r.feeSplit).toEqual([{ label: "Protocol", pct: 57 }, { label: "Bankr", pct: 36.1 }, { label: "Doppler", pct: 5 }, { label: "Ecosystem", pct: 1.9 }]);
   expect(r.stale).toBe(false);
 });
 

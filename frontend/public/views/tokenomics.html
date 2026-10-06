@@ -84,7 +84,7 @@
           <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="1.5"><path d="M12 3c0 2-2 4-2 6s2 4 2 6"/><path d="M12 3c0 2 2 4 2 6s-2 4-2 6"/><path d="M8 15c0 2 2 3 4 3s4-1 4-3"/></svg>
           <h3 class="tok__card-title">Supply Reduction</h3>
           <p class="tok__card-body">
-            Live. The protocol's only revenue is its share of the 1% fee on every $ROBOTMONEY swap. There is no management fee. When that revenue covers a purchase, the protocol buys $ROBOTMONEY on the open market and burns it. The buyback record is below.
+            Live. The protocol's only revenue is its share of the 1.2% fee on every $ROBOTMONEY swap. There is no management fee. When that revenue covers a purchase, the protocol buys $ROBOTMONEY on the open market and burns it. The buyback record is below.
           </p>
         </a>
       </div>
@@ -106,14 +106,14 @@
           <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="1.5"><path d="M12 2c0 0-6 4-6 10v4l-2 2h16l-2-2v-4c0-6-6-10-6-10z"/><path d="M12 14v4"/></svg>
           <h3 class="tok__card-title tok__card-title--sm">Fair launch</h3>
           <p class="tok__card-body">
-            No team allocation. No pre-sale. No insider tranche. All tokens entered the Uniswap v4 pool through Clanker's liquidity staircase at launch.
+            No team allocation. No pre-sale. No insider tranche. All tokens entered the Uniswap v4 pool at launch, through Bankr on Doppler.
           </p>
         </div>
         <div class="tok__card" style="border-color:rgba(139,92,246,0.3);">
           <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
           <h3 class="tok__card-title tok__card-title--sm">Permanent liquidity</h3>
           <p class="tok__card-body">
-            LP locked until 2100 via Clanker's locker contract. The protocol earns swap fees from its own pool rather than paying inflationary rewards to mercenary LPs.
+            Liquidity is locked for good: Doppler's locker contract has no way to withdraw it. The protocol earns swap fees from its own pool rather than paying inflationary rewards to mercenary LPs.
           </p>
         </div>
         <div class="tok__card" style="border-color:rgba(59,130,246,0.3);">
@@ -207,7 +207,7 @@
       <span class="tok__eyebrow">04 / Buybacks</span>
       <h2 class="tok__h2">Discretionary <span class="tok__grad">Buybacks</span></h2>
       <p class="tok__intro">
-        Buybacks are funded by one thing: the protocol's share of the 1% fee on every $ROBOTMONEY swap. There is no management fee, and the 0.25% vault exit fee stays in the vault with the remaining depositors, so it is not protocol revenue either. That income is thin at this size, which is why buybacks are occasional and discretionary rather than scheduled. Purchased tokens are sent to the dead address (0x000&hellip;dEaD) and removed from circulation permanently.
+        Buybacks are funded by one thing: the protocol's share of the 1.2% fee on every $ROBOTMONEY swap. There is no management fee, and the 0.25% vault exit fee stays in the vault with the remaining depositors, so it is not protocol revenue either. That income is thin at this size, which is why buybacks are occasional and discretionary rather than scheduled. Purchased tokens are sent to the dead address (0x000&hellip;dEaD) and removed from circulation permanently.
       </p>
 
       <div class="tok__grid tok__grid--2">
@@ -273,13 +273,15 @@
       <span class="tok__eyebrow">05 / Economics</span>
       <h2 class="tok__h2">Fees &amp; <span class="tok__grad">Revenue</span></h2>
       <p class="tok__intro">
-        $ROBOTMONEY trades on Uniswap v4. Each swap incurs a 1% fee, split as follows:
+        $ROBOTMONEY trades on Uniswap v4. Each swap incurs a 1.2% fee, split as follows:
       </p>
 
       <!-- Fee split is LIVE from GET /api/dashboards/token-metrics (`feeSplit`,
-           a fixed Clanker-pool config constant) via feeChart(); the pie, the
-           custom legend, and the breakdown-card percentages all bind to it —
-           no baked 57/40/3 literals. Colours are presentation-only. -->
+           the fixed beneficiary shares of the token's Doppler pool) via
+           feeChart(); the pie, the custom legend, and the breakdown-card
+           percentages all bind to it — no baked 57/36.1/5/1.9 literals. The
+           legend and cards render one row per served leg. Colours are
+           presentation-only. -->
       <div class="tok__grid tok__grid--2">
         <!-- Fee distribution pie (Chart.js via feeChart() factory) -->
         <div class="tok__card">
@@ -291,29 +293,21 @@
             </template>
           </div>
           <div class="tok__legend">
-            <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#10b981;"></span><span x-text="feeLegend(0)">—</span></div>
-            <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#e8a640;"></span><span x-text="feeLegend(1)">—</span></div>
-            <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#7e889e;"></span><span x-text="feeLegend(2)">—</span></div>
+            <template x-for="(f, i) in feeRows()" :key="f.label">
+              <div class="tok__legend-item"><span class="tok__legend-dot" :style="'background:' + feeColor(i)"></span><span x-text="feeLegend(i)">—</span></div>
+            </template>
           </div>
         </div>
 
-        <!-- Fee breakdown cards -->
+        <!-- Fee breakdown cards: one per served leg, in the served order. -->
         <div class="tok__fee-stack">
-          <div class="tok__fee-card">
-            <div class="tok__fee-head"><span class="tok__legend-dot" style="background:#10b981;"></span><span class="tok__fee-pct" x-text="feePctLabel(0)">—</span></div>
-            <div class="tok__fee-name">Protocol wallet</div>
-            <div class="tok__fee-note">Creator share &mdash; funds buybacks</div>
-          </div>
-          <div class="tok__fee-card">
-            <div class="tok__fee-head"><span class="tok__legend-dot" style="background:#e8a640;"></span><span class="tok__fee-pct" x-text="feePctLabel(1)">—</span></div>
-            <div class="tok__fee-name">Bankr</div>
-            <div class="tok__fee-note">Interface &mdash; distribution partner</div>
-          </div>
-          <div class="tok__fee-card">
-            <div class="tok__fee-head"><span class="tok__legend-dot" style="background:#7e889e;"></span><span class="tok__fee-pct" x-text="feePctLabel(2)">—</span></div>
-            <div class="tok__fee-name">Clanker Protocol</div>
-            <div class="tok__fee-note">Infrastructure</div>
-          </div>
+          <template x-for="(f, i) in feeRows()" :key="f.label">
+            <div class="tok__fee-card">
+              <div class="tok__fee-head"><span class="tok__legend-dot" :style="'background:' + feeColor(i)"></span><span class="tok__fee-pct" x-text="feePctLabel(i)">—</span></div>
+              <div class="tok__fee-name" x-text="feeName(f)"></div>
+              <div class="tok__fee-note" x-text="feeNote(f)"></div>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -325,7 +319,7 @@
                breakdown cards bind to (feeChart() now scopes the whole #fees
                section), so this row cannot drift from the served split. -->
           <div class="tok__rev-row">
-            <div><div class="tok__rev-name">Token Swap Fees</div><div class="tok__rev-mech"><span x-text="feePctLabel(0)">—</span> of the 1% fee on every $ROBOTMONEY swap</div></div>
+            <div><div class="tok__rev-name">Token Swap Fees</div><div class="tok__rev-mech"><span x-text="feePctLabel(0)">—</span> of the 1.2% fee on every $ROBOTMONEY swap</div></div>
             <span class="tok__rev-to">Protocol wallets</span>
           </div>
           <div class="tok__rev-row">
@@ -404,7 +398,7 @@
           <div class="tok__part-block">
             <span class="tok__part-label">How</span>
             <p class="tok__card-body">
-              Buy $ROBOTMONEY on Uniswap v4 (Base) via the Clanker pool, Bankr, or any Base DEX aggregator.
+              Buy $ROBOTMONEY on Uniswap v4 (Base) through Bankr or any Base DEX aggregator.
             </p>
           </div>
           <div class="tok__part-block">
