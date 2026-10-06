@@ -78,6 +78,15 @@ export const MIGRATE_FLAG = "--migrate";
  */
 export const SEED_FLAG = "--seed";
 
+/**
+ * Boot on the smoke-twin a previous run of this instance restored and kept, instead of
+ * restoring the dump again (runbook R3.8, issue 1174). A modifier of `--local dump`
+ * only: the default stays a fresh restore, because a second boot on a migrated copy
+ * rehearses nothing of the upgrade. The one rehearsal that needs the migrated copy
+ * again is the boot after `prod-init rebind-members`.
+ */
+export const REUSE_FLAG = "--reuse";
+
 /** How long `bun smoke` waits behind another holder of the target lock (§2). */
 export const LOCK_TIMEOUT_FLAG = "--lock-timeout";
 export const LOCK_TIMEOUT_DEFAULT_SECONDS = 60;
@@ -241,6 +250,7 @@ export const DEMO_FLAGS: readonly FlagSpec[] = Object.freeze([
   Object.freeze({ flag: LOCAL_FLAG, arity: 1 as const }),
   Object.freeze({ flag: MIGRATE_FLAG, arity: 0 as const }),
   Object.freeze({ flag: SEED_FLAG, arity: 0 as const }),
+  Object.freeze({ flag: REUSE_FLAG, arity: 0 as const }),
   Object.freeze({ flag: CADENCE_FLAG, arity: 1 as const }),
   Object.freeze({ flag: "--static-port", arity: 0 as const }),
   // AC-ID-05: a path to a compose overlay pinning every image to an artifact
@@ -454,6 +464,11 @@ export function requestsMigrate(argv: readonly string[]): boolean {
   return argv.slice(2).includes(MIGRATE_FLAG);
 }
 
+/** Does this argv ask to boot on the kept smoke-twin? A bare switch, never implied. */
+export function requestsReuse(argv: readonly string[]): boolean {
+  return argv.slice(2).includes(REUSE_FLAG);
+}
+
 /** Does this argv ask to seed demo data? A bare switch, never implied. */
 export function requestsSeed(argv: readonly string[]): boolean {
   return argv.slice(2).includes(SEED_FLAG);
@@ -542,6 +557,9 @@ export function parseDataPath(argv: readonly string[], opts: { envFilePath: stri
     );
   }
   const cadence = cadenceOverride(argv);
+  if (has(argv, REUSE_FLAG) && !(has(argv, LOCAL_FLAG) && parseLocalMode(valueOf(argv, LOCAL_FLAG)!).mode === "dump")) {
+    throw new Error(`${REUSE_FLAG} boots on the kept smoke-twin and applies only to ${LOCAL_FLAG} dump. Nothing was started.`);
+  }
 
   if (!has(argv, LOCAL_FLAG)) {
     // The default: the remote database in $HOME/.env. Delegate to the resolver,

@@ -25,11 +25,15 @@
 // restored copy of production, including admin password hashes, session tokens
 // and member access keys, stays on this host until somebody reclaims it.
 //
-// EVERY BOOT RESTORES FRESH. Reattaching to a surviving smoke-twin is NOT supported,
-// and that is the point: the first boot MIGRATES the copy, so a second boot
-// against the same volume would rehearse an already-upgraded database and go
-// green for a reason that has nothing to do with the upgrade under test.
-import { restoreBackupIntoContainer, resolveBackupFiles, teardownContainer } from "./restore-container.ts";
+// EVERY BOOT RESTORES FRESH, unless the operator asks otherwise with `--reuse`
+// (adoptKeptTwin below). The default stays fresh on purpose: the first boot
+// MIGRATES the copy, so a second boot against the same volume would rehearse an
+// already-upgraded database and go green for a reason that has nothing to do
+// with the upgrade under test. `--reuse` exists for the one rehearsal that needs
+// the migrated copy again: the boot after `prod-init rebind-members` (runbook
+// R3.8), where the credential file's keys changed and so did the plan.
+import { restartKeptTwinContainer, restoreBackupIntoContainer, resolveBackupFiles, teardownContainer } from "./restore-container.ts";
+import type { StackStateRecord } from "./smoke-state.ts";
 import { redactPostgresUrl } from "./smoke-external-pg.ts";
 import type { DataPathRequest, ResolvedDataPath } from "./smoke-db-mode.ts";
 
@@ -243,4 +247,42 @@ export function smokeTwinUrlFromContainer(
   if (!user || !password || !database) return null;
 
   return `postgres://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${database}`;
+}
+
+/**
+ * `--local dump --reuse`: the kept twin this instance recorded, instead of a fresh
+ * restore. A live recorded container is adopted as it is. A container that is gone
+ * but whose volume was kept is started again on that volume. Refuses, naming the
+ * way out, when the instance records no twin or the dump asked for is another one
+ * than the twin kept.
+ */
+export async function adoptKeptTwin(
+  record: StackStateRecord | null,
+  stamp: string,
+  project: string,
+  log: (m: string) => void,
+  deps: { urlOf: (container: string) => string | null; restart: typeof restartKeptTwinContainer; gateway: () => string } = {
+    urlOf: (c) => smokeTwinUrlFromContainer(c),
+    restart: restartKeptTwinContainer,
+    gateway: bridgeGateway,
+  },
+): Promise<{ container: string; url: string }> {
+  if (!record || record.db !== "smoke-twin" || !record.smokeTwinVolume) {
+    throw new Error("--reuse: this instance records no smoke-twin to reuse. Boot it once with `--local dump` first, or drop --reuse.");
+  }
+  if (record.smokeTwinBackupStamp !== stamp) {
+    throw new Error(`--reuse: the kept twin restored backup ${record.smokeTwinBackupStamp ?? "(unrecorded)"}, not ${stamp}. Drop --reuse to restore ${stamp} fresh.`);
+  }
+  const live = record.smokeTwinContainer ? deps.urlOf(record.smokeTwinContainer) : null;
+  if (live && record.smokeTwinContainer) {
+    log(`--reuse: adopted the running smoke-twin ${record.smokeTwinContainer}; nothing is restored`);
+    return { container: record.smokeTwinContainer, url: live };
+  }
+  const started = await deps.restart({ volume: record.smokeTwinVolume, stamp, project, bindHost: deps.gateway(), log });
+  if ("error" in started) {
+    if (started.container) teardownContainer(started.container, log);
+    throw new Error(`--reuse: ${started.error}`);
+  }
+  const url = `postgres://${started.username}:${started.password}@${started.host}:${started.port}/${started.database}`;
+  return { container: started.container, url };
 }

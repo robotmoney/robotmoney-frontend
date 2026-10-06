@@ -5,7 +5,7 @@ import { resolveSmokeEnv } from "./smoke-env.ts";
 import { hostname } from "node:os";
 import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { databaseName, homeEnvFilePath, urlForRole } from "./env-role.ts";
-import { ALLOW_INSECURE_FLAG, bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
+import { ALLOW_INSECURE_FLAG, bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, requestsReuse, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
 import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, missingProdSettingNotes, refuseAllowInsecureOnProd, refuseProdWithoutProjectsSource, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
 import { resolveBackupFiles } from "./restore-container.ts";
 import { resolveDeploymentPolicy, resolveRmEnv } from "./smoke-env-policy.ts";
@@ -13,7 +13,7 @@ import { requireRehearsalTarget } from "./smoke-identity.ts";
 import { dumpOwnershipSql, hostReadTargetState, instanceRolePasswords, localSuperuserSql, operatorTerminal, prepareChildEnv, roleUrl, runPrepareStep, superuserSqlSettled, type HostTarget, type PrepareStep } from "./smoke-database.ts";
 import { acquireTargetLock, assertStillHeld, readTargetState, type TargetLock, type TargetState } from "../../backend/src/db/target-lock.ts";
 import type { GeneratedRolePasswords } from "./smoke-state.ts";
-import { assertSmokeTwinIsTarget, bringUpTwin, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration, smokeTwinUrlFromContainer, smokeTwinVolumeName } from "./smoke-twin.ts";
+import { adoptKeptTwin, assertSmokeTwinIsTarget, bringUpTwin, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration, smokeTwinUrlFromContainer, smokeTwinVolumeName } from "./smoke-twin.ts";
 import { retimeAdoptedWindows, teardownContainer } from "./restore-container.ts";
 import { listSmokeVolumes, makeDockerRunner, purgeSmokeEvalContainers, removeSmokeVolumes } from "./smoke-volumes.ts";
 import { OPERATOR_TOKEN_FILE_ENV } from "./operator-token.ts";
@@ -1341,7 +1341,8 @@ async function main(): Promise<void> {
   // the record below is rewritten: this run's `dataPath.container` is still
   // the "" placeholder, so rewriting first erased the one pointer the reattach
   // branch needs, and a same-plan rerun refused with "its container  is gone".
-  const recordedTwin = requestedDataPath.kind === "smoke-twin" && committedSteps.has("prepare:restore") ? readStackState(paths) : null;
+  const reuseTwin = requestsReuse(process.argv);
+  const recordedTwin = requestedDataPath.kind === "smoke-twin" && (committedSteps.has("prepare:restore") || reuseTwin) ? readStackState(paths) : null;
   // The stack record FIRST, before any compose call or container: the compose
   // project is fixed by the instance, and `smoke:status` / `smoke:down` find a
   // stack only through this record.
@@ -1362,8 +1363,9 @@ async function main(): Promise<void> {
     // §7: database create/restore after the plan and the deployment lock. A
     // rerun of the SAME plan whose restore already committed reattaches the
     // restored copy it recorded and never restores into it again.
-    const recorded = recordedTwin?.smokeTwinContainer || undefined;
-    const reattachUrl = recorded ? smokeTwinUrlFromContainer(recorded) : null;
+    const adopted = reuseTwin ? await adoptKeptTwin(recordedTwin, twinBackup!.stamp, project, (m) => log(m)) : null;
+    const recorded = adopted?.container ?? (recordedTwin?.smokeTwinContainer || undefined);
+    const reattachUrl = adopted?.url ?? (recorded ? smokeTwinUrlFromContainer(recorded) : null);
     if (committedSteps.has("prepare:restore") && (!recorded || !reattachUrl)) {
       throw new Error(
         `--local dump: this plan's restore already committed, and its container ${recorded ?? "(unrecorded)"} is gone. ` +
@@ -1380,7 +1382,7 @@ async function main(): Promise<void> {
       // The record names the reattached copy again, so a later rerun of this
       // plan finds it however this one ends.
       writeStateFile();
-      log(`--local dump: reattached the restored copy ${recorded} this plan committed; nothing is restored again`);
+      log(`--local dump: reattached the restored copy ${recorded}; nothing is restored again`);
     } else {
       await begin("prepare", "restore");
       const twin = await bringUpTwin({ backupDir: requestedDataPath.backupDir, project, log: (m) => log(m) });
