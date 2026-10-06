@@ -340,8 +340,15 @@ The rule is default deny. Every distinct error in every log must match a
 classification in `scripts/lib/gate/log-classifications.json` with a written
 reason, or the gate fails. A new failure mode is added to that file only with
 evidence and a reason, never to make a run pass. A model timeout or a rejected
-take is a model outcome and is reported. A dead judge, or a session that
-published without a model judgement and a receipt, fails.
+take is a model outcome and is reported. A session that publishes
+`no_consensus` is an acceptable outcome (owner, 2026-10-06): the gates list it as
+a warning and never count it as a good session. The scheduler also publishes
+`no_consensus` when the judge is disconnected at the deadline
+([smoke production spec](./smoke-production-spec.md) §10), so a dead judge is
+caught by the other checks, not by that outcome: every subject still needs its
+minimum of good sessions (judged, with an applied judgement and a receipt), a
+session published as `not_judged`, or `judged` without a judgement or a
+receipt, fails, and the judge participant must be running and never restarted.
 
 ### 4.8. Recovery and rollback
 
