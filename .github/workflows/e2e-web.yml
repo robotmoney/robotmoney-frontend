@@ -37,6 +37,19 @@ jobs:
           browser: "true"
           opencode-api-key: ${{ secrets.OPENCODE_API_KEY }}
           agent-model: ${{ vars.AGENT_MODEL || '' }}
+      # The specs read the published swarm sessions the session driver files
+      # (spa.spec.ts resolves the seeded "woon" session, swarm-receipts.spec.ts a
+      # server-verified take). The blank boot has none, so this domain runs the
+      # driver first, as the old single e2e job did. The first live run failed
+      # without it.
+      - name: Swarm session (seeds the published sessions the specs read)
+        run: bun --no-env-file scripts/smoke-ci-checks.ts --check swarm-session
+        env:
+          CI: "true"
+          RM_ENV: stage
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
       - name: Core-surface checks (smoke-frontend-check)
         run: bun --no-env-file scripts/smoke-ci-checks.ts --check frontend
         env:
