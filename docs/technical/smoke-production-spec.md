@@ -165,7 +165,7 @@ Both share three rules. 0081's DDL, its `schema_migrations` row and the identity
 
 ### 4.4 No smoke overlay
 
-There is no `docker-compose.smoke.yml`. Its one surviving knob is an explicit flag, `--allow-insecure`, that is a refusal when `RM_ENV=prod`. There is no `--schedules-off`: scheduling has no off state. Stage runs the real `system-scheduler` against subjects whose epoch and judging durations were set short through the admin API ([`system-scheduler-spec.md`](./system-scheduler-spec.md) §2.3, §8). Parity with production is a tested property.
+There is no `docker-compose.smoke.yml`. Its one surviving knob is an explicit flag, `--allow-insecure`, that is a refusal when `RM_ENV=prod`. There is no `--schedules-off`: scheduling has no off state. Stage runs the real `system-scheduler` against subjects whose epoch and judging durations were set short through the admin API ([`system-scheduler-spec.md`](./system-scheduler-spec.md) §2.3, §8). On a twin the operator does it with `bun run twin:accelerate` after READY (standing check SR.9): the subjects' durations through the admin API, the twin's restored open windows pulled in on its own container, and a scheduler restart, because an `updated` subject change re-arms no timer. The boot itself still changes no scheduling column. Parity with production is a tested property.
 
 ## 5. Local Postgres (stage override)
 
