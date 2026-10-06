@@ -181,6 +181,8 @@ There is no `docker-compose.smoke.yml`. Its one surviving knob is an explicit fl
 
 `--reuse` is a modifier of `dump` only (amended 2026-10-06, issue 1174). A `dump` boot restores fresh by default, so a second boot never rehearses an already-migrated copy. With `--reuse`, the boot uses the smoke-twin this instance recorded and kept: a live container is adopted, a container that is gone is started again on its kept volume, and nothing is restored. It refuses when the instance records no twin or the twin came from another backup. It exists for the one rehearsal that needs the migrated copy again: the boot after `prod-init rebind-members` (runbook R3.8).
 
+**Which dump (owner, 2026-10-06).** A rehearsal restores a dump captured from production for that run, unless the operator names one. It never picks up a dump or twin left on the host. `--reuse`, `volume` and an earlier capture serve a rapid turnaround between test runs only, and only while the capture is at most 24 hours old (`manifest.json` `capturedAt`). Release policy [§4.3](./release-runbooks.md#43-backup-and-restore-proof).
+
 A **twin** is a use case, not a mode: a production-shaped database used for rehearsal, usually `--local dump`, sometimes a remote connection to a restored database.
 
 `--seed` creates demo data on a blank database. It is explicit, refuses a populated database, requires `rehearsal`, and is never implied by any mode.
