@@ -73,13 +73,14 @@ export function containerLogs(name: string, since: string): RawLine[] {
 export function dbQuery<T = Record<string, unknown>>(
   apiContainer: string,
   query: string,
-  opts: { observeServerDefault?: boolean } = {},
+  opts: { observeServerDefault?: boolean; statementTimeoutMs?: number } = {},
 ): T[] {
   // observeServerDefault: open the session WITHOUT forcing read-only, so a
   // `SHOW default_transaction_read_only` reports the SERVER's setting (a forced
   // session would always say "on"). Only for SHOW; it is still a read.
   if (opts.observeServerDefault && !/^\s*SHOW\s+\w+\s*;?\s*$/i.test(query)) throw new Error("observeServerDefault is for a single SHOW statement only");
-  const connection = opts.observeServerDefault ? "{}" : "{ default_transaction_read_only: true }";
+  const timeout = opts.statementTimeoutMs && Number.isInteger(opts.statementTimeoutMs) && opts.statementTimeoutMs > 0 ? `, statement_timeout: ${opts.statementTimeoutMs}` : "";
+  const connection = opts.observeServerDefault ? "{}" : `{ default_transaction_read_only: true${timeout} }`;
   const script =
     'import postgres from "postgres";' +
     `const sql = postgres(process.env.DATABASE_URL, { max: 1, connect_timeout: 15, onnotice: () => {}, connection: ${connection} });` +
@@ -88,4 +89,19 @@ export function dbQuery<T = Record<string, unknown>>(
   const line = r.out.split("\n").reverse().find((l) => l.startsWith("["));
   if (r.code !== 0 || !line) throw new Error(`gate query failed in ${apiContainer}: ${r.out.trim().slice(0, 400)}`);
   return JSON.parse(line) as T[];
+}
+
+/**
+ * A container's configured environment, from `docker inspect` (a read: nothing is exec'd inside it).
+ * The standing checks use it for presence and for non-secret settings (a cron). Callers must never print a value.
+ */
+export function containerEnv(name: string): Record<string, string> | null {
+  const r = sh(["docker", "inspect", name, "--format", "{{json .Config.Env}}"]);
+  if (r.code !== 0) return null;
+  try {
+    const list = JSON.parse(r.out.trim()) as string[] | null;
+    const out: Record<string, string> = {};
+    for (const kv of list ?? []) { const i = kv.indexOf("="); if (i > 0) out[kv.slice(0, i)] = kv.slice(i + 1); }
+    return out;
+  } catch { return null; }
 }
