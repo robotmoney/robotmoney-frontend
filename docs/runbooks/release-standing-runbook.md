@@ -63,7 +63,8 @@ during the session. The owner picks what moves to each one afterwards.
 
 | ID | Check | Tool | Target | Status |
 |---|---|---|---|---|
-| SR.1 | Restored production dump boots to READY on the RC commit, with every active member seated | `bun smoke --local dump` | stage | script |
+| SR.0 | A production dump captured for this run (policy 4.3 fresh dump rule): unless the operator names one, never a dump already on the host; a reused copy only for rapid turnaround and at most 24 hours old | `bun smoke:capture --out <new dir>` | capture host | script |
+| SR.1 | The SR.0 dump boots to READY on the RC commit, with every active member seated | `bun smoke --local dump` | stage | script |
 | SR.2 | Readiness: api, pipeline worker, analytics-producer, scheduler | `bun smoke:status` | stage | script |
 | SR.3 | Product verification, full tier | `bun run verify:live --tier full` | stage | script |
 | SR.4 | Twin gate: sessions judged (a `no_consensus` publish is a warning, owner 2026-10-06), participants never restarted, judge on, no dead job, containers healthy, every log error classified, no FATAL | `bun run twin:gate` | stage | script |

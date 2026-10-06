@@ -20,7 +20,7 @@ The standing checks this release's steps map to:
 | Phase | Standing checks | Where it runs below |
 |---|---|---|
 | Preflight and baseline | SP.1 to SP.7 | R1, R2, `bun smoke` preflight; **SP.5 `prod:gate --mode baseline` is R2.5** |
-| Stage rehearsal | SR.1 to SR.8 | R3.2 to R3.10; **SR.4 `twin:gate` is R3.4a**, **SR.7 `soak:checks` is R3.4b** |
+| Stage rehearsal | SR.0 to SR.8 | SR.0 before R3.2, R3.2 to R3.10; **SR.4 `twin:gate` is R3.4a**, **SR.7 `soak:checks` is R3.4b** |
 | Cutover and verification | SC.1, SC.2, SV.1 to SV.6 | R6, R7; **SV.4 `prod:gate --mode post-release` is R7.3a** |
 | Watch | SW.1 to SW.3 | R7.6, R7.8; **SW.2 `soak:checks` is R7.3b** |
 
@@ -258,7 +258,12 @@ R7.3a is compared against it.
 ## 7. R3 Stage rehearsal (policy §§4.4, 4.5) — stage hosts only, never production
 
 Run on a stage host (`rm-frontend-stage-2`, `stage.robotmoney-labs.dev`, or stage-1).
-The twin is **`--local dump`**: Docker Postgres that smoke owns, restored from the R2 dump.
+The twin is **`--local dump`**: Docker Postgres that smoke owns, restored from a dump
+captured from production **for this run** (policy §4.3 fresh dump rule, owner 2026-10-06).
+Unless the operator names a dump, capture a new one before R3.2. Never boot from whatever dump
+or twin is already on the host. `--reuse`, `--local volume` or an earlier capture serve only a
+rapid turnaround between test runs, and only while the capture is at most 24 hours old
+(`manifest.json` `capturedAt`).
 A pre-0081 dump gets its identity-first pass automatically, but only when its ledger equals
 a supported baseline (spec §9.1). A dump that does not match refuses, which is the same
 as B1 and proves it on stage before production sees it.
@@ -279,9 +284,18 @@ R3.2 Prepare a rehearsal credential file with **spoofed** keys, never the produc
 `credential.json`:
 
 ```bash
+# stage-2's ~/.env holds rm_readonly against production's read replica; capture refuses anything else
+DUMP=$HOME/rm-backup-prod-$(date -u +%Y%m%dT%H%M%SZ)
+bun smoke:capture --out "$DUMP"
+```
+
+A capture of the 2026-10-06 production database took about 7 minutes on stage-2 (357 MB
+encrypted, against 229 MB on 2026-10-01).
+
+```bash
 export RM_ENV=stage
 export PROJECTS_SOURCE=live   # --static-port runs the containers as prod; without this the boot refuses (R6.2a)
-bun smoke --local dump=<R2 dump dir> --instance rehearse-060 \
+bun smoke --local dump="$DUMP" --instance rehearse-060 \
   --credentials rehearsal-creds.json --spoof-keys --migrate --static-port
 ```
 

@@ -202,6 +202,14 @@ The adopted [smoke production spec](./smoke-production-spec.md) defines
 `bun smoke:capture` as the read-only replica capture path. A future runbook may
 use it only after confirming that the release code implements that interface.
 
+**Fresh dump rule (owner, 2026-10-06).** Unless the operator names a specific dump, every
+rehearsal starts from a dump captured from production for that run: `bun smoke:capture --out
+<new directory>` on the capture host, then `--local dump=<that directory>`. Never restore
+whatever dump or twin happens to be on the host. Reusing an existing copy (`--reuse`,
+`--local volume`, or an earlier capture) is allowed only for a rapid turnaround between test
+runs, and only while that copy's capture (`manifest.json` `capturedAt`) is at most 24 hours
+old. Past 24 hours, capture again. The rehearsal report names the dump's stamp and capture time.
+
 ### 4.4. Isolated release rehearsal
 
 Rehearse the release on an isolated copy of production data using the adopted
