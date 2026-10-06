@@ -65,12 +65,30 @@ jobs:
       scripts: ${{ steps.filter.outputs.scripts }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
         id: filter
         with:
           filters: |
             scripts:
-              - 'scripts/**'
+              # Everything under scripts/ EXCEPT scripts/tests/unit/**: a unit
+              # test cannot change what an integration test sees. Listed
+              # positively because a `some` filter cannot subtract; the unit
+              # test ci-gate-path-filters.test.ts fails if a new scripts/ or
+              # scripts/tests/ directory is neither listed here nor named there
+              # as skipped, so an unclassified directory cannot silently skip.
+              - 'scripts/*'
+              - 'scripts/agent/**'
+              - 'scripts/audits/**'
+              - 'scripts/checks/**'
+              - 'scripts/fusion/**'
+              - 'scripts/lib/**'
+              - 'scripts/ops/**'
+              - 'scripts/prompts/**'
+              - 'scripts/stack/**'
+              - 'scripts/web-client/**'
+              - 'scripts/tests/fixtures/**'
+              - 'scripts/tests/integration/**'
+              - 'scripts/tests/support/**'
               - 'evals/**'
               - '.github/**'
               - 'tsconfig.json'
