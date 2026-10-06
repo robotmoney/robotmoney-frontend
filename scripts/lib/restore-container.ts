@@ -8,6 +8,7 @@
 // Uses Bun.spawn for docker/gpg/pg_restore/psql — there is no JS-native
 // pg_dump-format reader.
 
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -432,12 +433,28 @@ export async function restoreBackupIntoContainer(
   if (globalsExit !== 0) return { error: "globals load failed", container };
 
   log("restoring dump");
-  const gpgDump = Bun.spawn(
-    ["gpg", "--batch", "--yes", "--passphrase-file", backup.passphraseFile, "--decrypt", backup.dumpEnc],
-    { stdout: "pipe", stderr: "inherit" },
-  );
-  const pgRestore = Bun.spawn(restoreDumpArgv(container), { stdin: gpgDump.stdout, stdout: "inherit", stderr: "inherit" });
-  const restoreExit = await pgRestore.exited;
+  // The decrypted archive is piped into pg_restore through node streams, with
+  // the EPIPE a late write meets handled. Handing Bun.spawn the gpg stream as
+  // `stdin` makes Bun pump it, and pg_restore may exit before it has read the
+  // archive's last bytes: the pump's next write then fails with EPIPE as an
+  // unhandled error that kills the whole boot (exit 1) at a random later
+  // moment, after the restore reported success (issue 1178).
+  const gpgDump = spawn("gpg", ["--batch", "--yes", "--passphrase-file", backup.passphraseFile, "--decrypt", backup.dumpEnc], {
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  const [restoreCmd, ...restoreArgs] = restoreDumpArgv(container);
+  const pgRestore = spawn(restoreCmd!, restoreArgs, { stdio: ["pipe", "inherit", "inherit"] });
+  // pg_restore stopped reading: its exit code, not this pipe, says how the restore went.
+  pgRestore.stdin!.on("error", () => {});
+  gpgDump.stdout!.on("error", () => {});
+  // gpg could not start: pg_restore then reads an empty archive and fails, which is the verdict.
+  gpgDump.on("error", (e) => log(`gpg failed to start: ${e.message}`));
+  gpgDump.stdout!.pipe(pgRestore.stdin!);
+  const restoreExit = await new Promise<number>((resolve) => {
+    pgRestore.on("error", () => resolve(1));
+    pgRestore.on("exit", (code, signal) => resolve(code ?? (signal ? 128 : 1)));
+  });
+  gpgDump.kill();
   log(`pg_restore exit=${restoreExit}`);
   if (restoreExit !== 0) return { error: "pg_restore failed", container };
 

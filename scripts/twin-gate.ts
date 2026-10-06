@@ -19,7 +19,9 @@
 //                   sessions that published after the boot started (T0) with
 //                   judging outcome `judged`, an applied model/enforce
 //                   judgement, a consensus receipt and enough takes. A session
-//                   that published unjudged FAILS. A session open longer than
+//                   that published unjudged FAILS; one that published
+//                   `no_consensus` is an acceptable outcome (a warning, never
+//                   counted as good). A session open longer than
 //                   --stuck-after minutes is stuck.
 //   2. participants At least one judge and one agent participant container is
 //                   running and has never restarted.

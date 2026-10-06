@@ -31,7 +31,7 @@ const sink: AcquisitionSink = { saveSourceAcquisition };
 /** The source variants fetchOne actually branches on, read from its own switch
  *  so this file cannot drift out of step with the adapter registry. */
 async function enumeratedSourceVariants(): Promise<string[]> {
-  const src = await Bun.file(new URL("../src/analytics/extract/sources.ts", import.meta.url)).text();
+  const src = await Bun.file(new URL("../../packages/analyst-sdk/src/extract/sources.ts", import.meta.url)).text();
   const body = src.slice(src.indexOf("export async function fetchOne"), src.indexOf("export async function fetchAll"));
   const variants = [...body.matchAll(/case "([a-z_]+)":/g)].map((m) => m[1]!);
   expect(variants.length).toBeGreaterThan(7);

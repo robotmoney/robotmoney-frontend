@@ -1,0 +1,25 @@
+-- compat: additive
+-- metadata_version: 1
+--
+-- rm_app may SELECT analytics_overwrite_events — issue #1095, decision D58.
+--
+-- WHY. GET /api/public/analytics/overwrite-events serves the recorded
+-- revisions, and the api reads as rm_app. 0056 revoked ALL on the table from
+-- rm_app and rm_worker so that neither could write the evidence, and left
+-- SELECT to rm_readonly alone. That also took away the READ, so the route had
+-- no role to run as. The write protection is not touched: this grants SELECT
+-- and nothing else, and the table's UPDATE guard (0056) and the absence of
+-- INSERT, UPDATE, DELETE and TRUNCATE for every runtime role stay exactly as
+-- they were. Rows are still appended only by 0056's SECURITY DEFINER trigger.
+--
+-- backend/schema/grants.sql `select_for_runtime` re-asserts this grant on
+-- every migrate run (the table stays in `read_only_for_runtime`, which revokes
+-- ALL first).
+--
+-- ADDITIVE (spec §8.4): it widens one privilege; code built before it runs
+-- beside it unchanged. IDEMPOTENT: a GRANT already held is a no-op
+-- (tests/prod-baseline.test.ts re-applies the newest migration).
+--
+-- rm_worker is NOT granted: nothing in the worker reads this table.
+
+GRANT SELECT ON analytics_overwrite_events TO rm_app;

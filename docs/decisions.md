@@ -4909,3 +4909,182 @@ versions, far more than the ~172k points the ledger describes:
 the fixed writers, relabels included) and
 `backend/tests/analytics-ledger-repair.test.ts` (an irregular coordinate
 becomes one chain; guards armed; tables smaller on disk).
+
+---
+
+## D57 — `packages/analyst-sdk` is a second shared seam beside `contract/` (refines D10, D23, D43; issue #1095)
+
+**Decision.** The pure regime compute moves out of `backend/src/analytics/` into
+`packages/analyst-sdk/`, and the backend imports it from there. The package
+holds `analyze/{backtest,compute,correlations,indicators,regime-eq-comparison,
+regime-versions,research,research-signals,weighting-comparison,tool}.ts`,
+`transform/*`, `types.ts` and `access/provider.ts`, plus a loader for a
+raw-indicator-history CSV (`date,indicator,value,source`) or the equivalent
+JSON, and a `bun run regime` entry. `contract/` stays the shared seam for route
+paths and DTO types. `packages/analyst-sdk` is the second, and it is a different
+kind of seam: shared **compute**, not shared types.
+
+- **One source of truth, shims at the old paths.** Each moved file is replaced
+  in `backend/src/analytics/` by a one-line `export * from` into the package.
+  Every existing importer, and the three fidelity tests, keep their import
+  lines. `backend/src/api` imports nothing from `packages/` directly, only
+  through those analytics shims.
+- **The package is pure and installs alone.** No `node:fs`, `postgres`,
+  `bun:sqlite`, no `/db/`, `/chain/`, `/store/` or `/cutover/` path, no
+  `process.env`, no import from `backend/`, and no `file:` dependency. Reading a
+  file is the entry script's job (`bin/regime.ts`), outside `src/`. Its tests run
+  with `globalThis.fetch` replaced by a thrower. Enforced by
+  `scripts/tests/unit/analyst-sdk-purity.test.ts`, which also runs the scanner
+  against planted violations.
+- **`analyze/regime.ts` stays in the backend.** Its own header calls it dead in
+  production, and the claim holds: the only references under `backend/src` are
+  comments, and its importers are the tests `analytics.test.ts`, `store.test.ts`,
+  `report.test.ts` and `regime-thresholds.test.ts`. It imports
+  `@robotmoney/contract` through a `file:` dependency, which would break a
+  standalone checkout. Moving it would also put a second, different classifier in
+  the package an analyst reads to audit the real one (`compute.ts`'s `bucketFn`).
+- **The image copies the package.** `backend/Dockerfile` copies
+  `packages/analyst-sdk` to `/packages/analyst-sdk`, where the shims'
+  `../../../../packages/...` path resolves, the same way `contract/` sits at
+  `/contract`.
+- **CI follows the code.** `backend.yml`'s path filter adds `packages/**`, so a
+  change that touches only the package still runs the backend job. The new
+  `analyst-sdk.yml` runs the package's own tests and a standalone-install check.
+
+**Why.** An analyst or agent auditing the regime calculation had to check out and
+install the whole backend, whose CI filters, Dockerfile and tsconfig all assume
+the compute lives inside it. A package that installs alone and reads a CSV makes
+the calculation auditable without a database or any credential, and the shims keep
+the backend from growing a second copy that could drift.
+
+**Rejected.** Bun workspaces: nothing here uses them, and the root `postinstall`
+installs `backend/` on its own. Publishing the package to npm: out of scope,
+analysts clone it (shallow, see its README). Copying the files instead of moving
+them: two copies of the classifier is the drift D56's fidelity tests exist to
+prevent.
+
+---
+
+## D58 — Raw analytics data is readable without a token, under `/api/public/analytics/` (refines D52; issue #1095)
+
+**Decision.** Four read-only routes serve the raw analytics inputs to anyone, with
+no credential: `raw-history` (`raw_indicator_history`), `asset-prices`
+(`asset_prices`; the `prices` table from migration 0002 is dead and is not served),
+`vintages` (`analytics_data_vintages` joined to `analytics_ledger_runs` and
+`analytics_ledger_methodology_versions`, with `analytics_vintage_members` id ranges
+expanded) and `overwrite-events` (`analytics_overwrite_events`). Until now these
+were readable only with a store token carrying `analytics_ingestion` (the
+analytics-provider role, D52), or by an admin. That stays true of `/api/analytics/`
+and `/api/admin/`. This decision adds a second, public read path beside them and
+changes nothing about who may write.
+
+- **Its own prefix.** `/api/public/analytics/`, not under `/api/analytics/`: the
+  auth gate for that one is a `startsWith` match in `api/index.ts`, and its CORS
+  prefix in `api/cors.ts` is credentialed. A public route under it would inherit
+  both. GET only; every other method is `405`. A bearer token, if sent, is ignored:
+  the body is the same with or without it. No write route will ever exist under this
+  prefix.
+- **A contract of its own.** `ROUTES.publicAnalytics` in `contract/`, and one JSON
+  schema per route in `contract/src/schemas/`, each requiring `schemaVersion` (1).
+  A breaking change to a body bumps it.
+- **Bounded reads.** Every list route takes `limit` (default 100, cap 1000, a larger
+  value clamped) and an opaque keyset `cursor`. Responses carry
+  `Cache-Control: public, max-age=300` and a weak `ETag` (a matching `If-None-Match`
+  is `304`), and a body over 256 KB is gzip-encoded for a client that accepts it.
+  `overwrite-events` rows carry whole stored rows, so that page is also bounded in SQL
+  by the stored size of the rows it returns (about 1 MiB, at least one row), with a
+  `nextCursor` when it stops short.
+  Vintage members are served one vintage at a time (`include=members` with `run_key`
+  and `tool_id`), because a production vintage has ~170k member ids.
+- **Rate limit.** One sliding window per client ip, shared by the four routes: 100
+  requests a minute, then `429` with `Retry-After`. It lives in the api process's
+  memory, so it is **per process**. One api replica runs today. A second replica
+  would double every client's allowance, and the limiter would move behind a shared
+  store before that happens. Its key map holds at most 10,000 client keys and evicts the
+  oldest-seen first, so a flood of distinct ips cannot grow it without bound.
+- **Client ip.** `resolveClientIp` reads `CF-Connecting-IP` when `TRUST_PROXY=1`
+  and honors `X-Forwarded-For` (last hop) only from a loopback peer. Before this,
+  any peer's `X-Forwarded-For` was trusted whenever `TRUST_PROXY=1`, so a sender
+  that reached the api could pick the identity the limiter saw. Cloudflare (D13)
+  sets `CF-Connecting-IP` on every proxied request and nginx passes it through.
+  A stack with no Cloudflare in front now resolves every client to its proxy's
+  address, so on such a stack (a local smoke) the limiter and the comments and
+  submissions `ip_hash` see one client. That is the safe direction to be wrong in
+  for the no-Cloudflare case only. The api port is unreachable except through the
+  Cloudflare to nginx path, so `CF-Connecting-IP` is always the value Cloudflare
+  wrote and a client cannot choose its own rate-limit bucket or `ip_hash`.
+- **Regime outputs are not duplicated.** They and the correlations stay on
+  `GET /api/dashboards/regime-snapshots?include=backtest`. That response now states
+  `source`, `regime_snapshots` or `ledger`, which says which read path
+  (`report/projections.ts`, `fetchRegimeSnapshots`) produced it.
+- **One grant.** `analytics_overwrite_events` was readable only by `rm_readonly`:
+  migration 0056 revoked ALL from `rm_app`, which took the read with the write.
+  Migration 0112 grants `rm_app` SELECT on it and nothing else, and
+  `schema/grants.sql` re-asserts it on every migrate run. No runtime role gains any
+  write, and `rm_worker` still has no access. The EXPLAIN check
+  (`backend/tests/analytics-public-explain.test.ts`) found every query served by an
+  existing index, so no index migration is needed.
+
+**Yahoo-sourced data is served.** The repo operator, Lucas Geiger, signed off on
+serving Yahoo-sourced data publicly (decision by the repo operator Lucas Geiger,
+2026-10-02). Yahoo-sourced rows are served from `raw-history`, `asset-prices`, the
+vintage members and `overwrite-events` like every other row. No filter, switch or
+denylist withholds any provider.
+
+**Provider terms.** The implementer did not review any provider's terms of use for
+redistribution. The operator accepts responsibility for serving this data.
+
+**Why.** An analyst or agent auditing the regime calculation needs the raw inputs,
+the prices, the frozen vintage a run used and every revision of a stored row, and
+had to be handed a credential meant for the producer to read them. Reading is
+public information about a public product. Writing is not, and stays gated.
+
+**Rejected.** Opening `/api/analytics/` reads to anonymous callers: that prefix
+mixes reads and writes behind one gate, and its CORS is credentialed. Duplicating regime outputs under the public prefix: two copies of
+the classifier's output can disagree, and the dashboards endpoint already serves
+them. A shared rate-limit store now: one replica runs, and a store is a new moving
+part with its own failure mode.
+
+**Enforced by** `backend/tests/api/public-analytics.test.ts` (every route 200
+without a token and valid against its schema, 405 for each non-GET, `limit=1001`
+clamped with a cursor that yields the seeded set once, the
+overwrite event produced by the 0056 trigger, vintage fields and expanded members,
+gzip and `304`, the 101st request a `429`, `*` CORS, and the same over a real api
+process), `backend/tests/api/client-ip.test.ts`,
+`backend/tests/analytics-public-explain.test.ts`, and
+`scripts/tests/unit/analyst-sdk-readme-links.test.ts` (every route the SDK README
+lists exists in `contract/`, and every contract route is listed).
+
+---
+
+<a id="d59"></a>
+## D59 — One orchestration seam: `prepareRegimeInputs` is the only place the axis, alignment, transforms and forward-fill ages are built (refines D57; issue #1095)
+
+**Decision.** `packages/analyst-sdk/src/prepare.ts` exports `prepareRegimeInputs`.
+It is the only place the date axis (start..as-of), per-indicator alignment,
+transforms and forward-fill ages are built. `backend/src/analytics/index.ts`
+(production) and `runRegime` in the SDK both call it, so the two cannot drift.
+The backend reaches it through the shim `backend/src/analytics/prepare.ts`.
+
+**Why.** The audit of run 390 found the shipped `runRegime` (a7dbae26) ended its axis
+at the newest input date instead of the as-of day and passed no forward-fill ages,
+each a second copy of logic production owned. Only the axis end changed current
+figures (through the `MNA` row dated 2026-10-31, which moves the forced weight
+refresh); the missing ages had no effect on current data. The research comparisons
+(`regime-eq-comparison`, `weighting-comparison`) and the goldens regenerator now go
+through the seam too.
+
+**Rejected.** Keeping a second copy of the axis and alignment in `runRegime`
+behind a parity test: the audit found that copy had already drifted (axis end,
+missing ages) while the parity tests it had were green. A seam the backend only
+calls through its shim, with the SDK's copy deleted: that is what was done.
+
+**Enforced by** `backend/tests/regime-sdk-equivalence.test.ts`, which runs both
+paths on one input and compares every day exactly, including a stale series,
+indicator rows dated after the as-of day and extras rows dated after it. The seam
+covers axis, alignment, transforms and ages; backtest extras are cut at the as-of day
+by `cutAtAsof` from the same module in both callers (issue #1162 Part 0, landed in
+PR #1109). `scripts/tests/unit/regime-seam-guard.test.ts` fails on any other call to
+the axis or alignment primitives for regime inputs. Seam internals are pinned by
+`packages/analyst-sdk/tests/prepare.test.ts`. The run semantics are in
+[`docs/technical/regime-engine.md` §8.1](technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay).

@@ -7,6 +7,23 @@
 > that moved. Policy: [`release-runbooks.md`](../technical/release-runbooks.md).
 > Mechanism: [`smoke-production-spec.md`](../technical/smoke-production-spec.md) (D47).
 
+## Inherits the standing runbook
+
+This runbook runs **every check in [`release-standing-runbook.md`](./release-standing-runbook.md)**
+(written against the commit that adds it) and adds the 0.6.0-specific checks below. It cites
+standing checks by ID. **Exceptions:** none granted. Two standing rows are `gap` and block the
+cutover until they close: SR.7 and SW.2 (the cumulative standing invariants, issue 1179, B16).
+
+Where the standing runbook says to run a check and a step below does not repeat it, run it anyway.
+The standing checks this release's steps map to:
+
+| Phase | Standing checks | Where it runs below |
+|---|---|---|
+| Preflight and baseline | SP.1 to SP.7 | R1, R2, `bun smoke` preflight; **SP.5 `prod:gate --mode baseline` is R2.5** |
+| Stage rehearsal | SR.1 to SR.8 | R3.2 to R3.10; **SR.4 `twin:gate` is R3.4a** |
+| Cutover and verification | SC.1, SC.2, SV.1 to SV.6 | R6, R7; **SV.4 `prod:gate --mode post-release` is R7.3a** |
+| Watch | SW.1 to SW.3 | R7.6, R7.8 |
+
 ## Why this runbook is not like the 0.5.x ones
 
 Every 0.5.x runbook drove one stack with `bun run smoke:stage`, shipped images with
@@ -25,7 +42,8 @@ onto the adopted design (spec §9.3).
 | Roster by `--agents` | The roster is `credential.json` (`RM_CREDENTIALS`) |
 | Site shipped with the API (`static:assemble`) | Own release unit: `bun smoke:web`, checked against `apiRange` |
 | Per-release `upgrades/A-to-B/*.ts` | None exist for 0.6.0. Gates are the spec's, run by the tools below. `verify:live` is the product check |
-| `twin:gate`, `prod:gate`, `soak-checks.sh` | Decided: ported to main's instance model (1071). Blocker B7 until they land |
+| `twin:gate`, `prod:gate` | Ported to main's instance model (1071, B7 merged). Run at R2.5, R3.4a, R7.3a |
+| `soak-checks.sh` (cumulative R8 invariants) | **Not ported.** Issue 1179, blocker B16. Standing runbook rows SR.7 and SW.2 |
 
 ## 0. Rule, decisions and blockers
 
@@ -52,13 +70,14 @@ on stage-2 with the real restored dump, plus the three open rows below.
 | B6 | Production parity: judge retry (1117), judge model from the database (1118), verified receipt path (1119), today's regime (1108), in-house seats keep their operator (1120), absence savepoint (1122) | merged | R7 checks. **Persona-voiced sectioned takes (1116): PR 1131 open, waiting on the owner's decision** |
 | B7 | Log gates `twin:gate` and `prod:gate` ported (1071) | merged | first live run will show unclassified lines; add a rule only with evidence |
 | B8 | Mid-window dump adoption and the first-epoch bound (1121) | merged | `e2e` green on the RC commit |
-| B9 | `release:v0.6.0` tracking issue | open | to file |
+| B9 | `release:v0.6.0` tracking issue | exists (1147), updated 2026-10-06 | — |
 | B10 | `rebind-members` order on the breaking-migration path | none | settled by R3.8; the twin route needed PR 1176 (prod-init targets the twin) and is bounded by 1174 (no cold re-boot of a twin) |
 | B11 | The buyback indexer ran in the worker as `rm_worker` while its `buyback_scan_state`/`buyback_swaps` sites declared `rm_app`, so every sweep on the migrated dump was refused and swallowed; production's v0.5.x worker holds the api's URL under `RM_ENV=smoke`, which is why buybacks work there today (1150) | fixed (1171), verified on `90f00c8b`: rm_worker holds INSERT/SELECT/UPDATE on `buyback_scan_state`, no `live index failed` line, the sweep scans | R3/R7: `docker logs <project>-worker-analytics-1 \| grep "live index failed"` empty, and `buyback_scan_state.updated_at` advancing on the twin |
 | B12 | The twin seated only `credential.json` members; the verify leg `twin-roster:every-active-member-seated` caught it (1152) | fixed (1164), verified: 7 of 7 seated on `7d69d17c` | — |
 | B13 | The old checkout's `bun run migrate` runs clean against the migrated database and re-seeds the `swarm.*` job_schedules 0089 deleted (1155) | closed, no action (owner 2026-10-05) | section 8 says: never run the old checkout after R6.3; R6.1 renames it |
 | B14 | A resume after replace could not start participants from the pruned api image id (1160) | fixed (1161), verified on `62ec5920` | — |
 | B15 | A failed take re-ran on the next tick with no delay; seven seats hammered the shared Zen key (see the issue). The take one-shot also could not find its script from the per-take workspace (1166) | fixed: backoff (1168) and give-up after 5 failed takes (1169, owner rule), verified on `7d69d17c` | — |
+| B16 | The cumulative standing invariants (`soak-checks.sh`, R8.a to R8.y) are not on the 0.6 line, so SR.7 and SW.2 have no tool (1179) | open | port to the instance model, or an owner decision per standing runbook section 6 |
 
 Also open: the notice to external members about the four-weight rule (1124); the
 `judging` banner (1115, merged) and admin items (1123, merged) need only the R7 spot check.
@@ -112,6 +131,7 @@ point is a database restore (section 8).
 | `rm_owner` | Becomes `LOGIN` (one-time, via `doadmin`). Password typed per run, never stored | R6.2b |
 | Service tokens | Three (`system-scheduler`, `analytics-producer`, operator admin) in the api's token store; secrets in per-instance files under `~/.local/state/robotmoney-smoke/rm_prod/tokens/<holder>/token`. Replaces `ADMIN_TOKEN` | R6.5 |
 | Participants | Standing containers from `credential.json`. The judge is a participant (`themis`), no inline judging, no fallback path | R6.2, R6.7 |
+| In-house keys | **One-time credential migration (this release only).** The three seated agents and the judge move from the committed fixture keys to the keys in `credential.json`. It runs once, at the cutover, and never on a later boot. See R6.7 | R6.7 |
 | Sessions | Timed by `system-scheduler` per subject epoch. No schedule rows, nothing to enable. The host driver is retired | Stop the driver at R6.1 |
 | Deletes | No runtime role deletes. Pruning is `bun run prune` (typed `rm_owner`, 7-day floor) | Not part of the cutover |
 | Site | Own unit. `bun smoke:web` refuses a site whose `apiRange` excludes the running api, and `bun smoke` refuses an api outside the live site's range | R6.10 |
@@ -224,6 +244,17 @@ R2.4 Save, with the dump: row counts of `swarm_sessions`, `swarm_recommendations
 size; the AUM figure the site publishes (copy the number and its date from the page). These are the
 postflight comparison baseline.
 
+R2.5 **Log baseline** (standing check SP.5): what is already broken in production's logs, triaged
+before anything changes. Read-only.
+
+```bash
+bun run prod:gate --mode baseline --instance rm_prod
+```
+
+Every unclassified line is a decision: classify it with evidence in
+`scripts/lib/gate/log-classifications.json`, or file the defect. Keep the report with the dump.
+R7.3a is compared against it.
+
 ## 7. R3 Stage rehearsal (policy §§4.4, 4.5) — stage hosts only, never production
 
 Run on a stage host (`rm-frontend-stage-2`, `stage.robotmoney-labs.dev`, or stage-1).
@@ -269,6 +300,19 @@ bun run verify:live --instance rehearse-060 --tier full --emit-receipt=R3.verify
 
 Exit 0 = pass; 1 = product wrong; 2 = nothing asserted. A WARN is not a pass. List which
 invariants this target could not exercise. Passed 2026-10-05 on `7d69d17c` with the full roster: 9/9 PASS, exit 0 (receipt `R3.verify-twin-8seats.json`). Every leg must PASS; `twin-roster:every-active-member-seated` is the twin's own seating proof (B12).
+
+R3.4a **Twin gate** (standing check SR.4), after R3.4 and after the roster has published
+sessions. It reads every container log (participants included), default deny:
+
+```bash
+bun run twin:gate --instance rehearse-060 --wait 35
+```
+
+Exit 0 only when every check passes. A gate run on a twin whose participants cannot authenticate
+(for example after R3.8's rebind, before the participants are recreated) fails by design: run it
+on a twin in a healthy state, and keep the report. First run 2026-10-05 on `7a4f19ac`: failed on
+a broken twin and listed a coin-price `DEGRADED` warning. That is a warning, not an error: the gate
+reports an unclassified warning and does not fail on it, and the owner decided no issue is filed for it.
 
 R3.5 Prove the schema gates on the twin (the lines from spec §10 this release depends on):
 migrations all recorded once; `deployment_identity.kind = 'rehearsal'`; `schema_manifest`
@@ -333,7 +377,7 @@ is NOT refused (B13).
 
 R3.10 Rehearsal report (policy §4.5): RC SHA, dump identity, plan id, preflight and
 readiness receipts, participant results, `verify:live` output, interruption results, what
-could not be covered (the log gates, until B7 closes), and a go/no-go signed by the operator.
+could not be covered (the cumulative standing invariants, SR.7, until issue 1179 closes), the `twin:gate` report (R3.4a), and a go/no-go signed by the operator. Every standing check in the standing runbook is accounted for by ID.
 
 ### R3.11 Cut the RC tag (only after R3.10 is a go)
 
@@ -423,10 +467,23 @@ receipts it. It writes nothing.
 R6.5 `bun scripts/prod-init.ts provision-tokens` — typed `rm_owner`, `y`. Mints the three
 service tokens. Re-running is a rotation.
 
-R6.7 **Bring the stack up** (the exact order for `rebind-members` is set by R3.8):
+R6.7 **Bring the stack up, then run the one-time credential migration.** This release moves the
+in-house members from the committed fixture keys to the keys in `credential.json`. That move is
+the **rebind**, and it is a release-specific, one-time step:
+
+- It runs **once, at this cutover**. It is spec section 9.1 step 6, a one-time initialization,
+  and it is never part of `bun smoke` or of any later boot.
+- It touches only the in-house roster in `credential.json` (agents `athena`, `noop-analyst`,
+  `robot-money`; judge `themis`). No external member is rebound.
+- It is **one-way**. The old fixture keys stop working at once. Running participants answer 401
+  until they are recreated (R3.8).
+- It is **not a standing check**. It belongs to this runbook only. A later release repeats it only
+  if that release changes who holds which key, and says so in its own runbook.
+
+Order, proven on stage-2 (R3.8):
 
 ```bash
-bun smoke --static-port       # prints plan, takes locks, preflight, replaces services, exits
+bun smoke --static-port       # boot 1: prints plan, takes locks, preflight, replaces services, exits
 bun smoke:status
 ```
 
@@ -436,7 +493,15 @@ Then, with the api up, rotate each seated member from fixture keys to `credentia
 bun scripts/prod-init.ts rebind-members
 ```
 
-Re-run `bun smoke --static-port` now. It is required: R3.8 showed every running participant answers 401 after the rebind until a new plan recreates it with the new bearers.
+Then boot again. This is required, and it is a new plan, not a resume, because the rebind changed
+the credential file's key fingerprints. On production's remote database a new plan restores nothing
+and recreates the participants with the new bearers:
+
+```bash
+bun smoke --static-port       # boot 2: recreates the participants on the new bearers
+```
+
+From here on, every boot is a normal boot. Nothing is rebound again.
 
 R6.8 Preflight must pass at boot. If it refuses, the printed check number names the cause
 (1 role auth, 2 privileges, 3a manifest, 3b compat, 4 `~/.env` keys, 5 identity, 6 subject
@@ -469,6 +534,14 @@ bun run verify:live --instance rm_prod --emit-receipt=R7.verify-prod
 ```
 
 R7.4 Read the result: 0 pass, 1 wrong, 2 nothing asserted. WARN is not pass.
+
+R7.3a **Log verdict after the release** (standing check SV.4):
+
+```bash
+bun run prod:gate --mode post-release --instance rm_prod
+```
+
+What the release was meant to fix is fixed and nothing new is unclassified. Compare with R2.5.
 
 R7.4a Schedule parity (owner rule: an upgrade does not change usual schedules): every
 active subject reads `epoch_duration_seconds = 21600`; each session that was in flight at

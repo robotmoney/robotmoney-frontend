@@ -40,6 +40,11 @@ const CREDENTIAL_HEADERS = ["authorization", "x-admin-token", "x-automation-toke
 // Every route prefix that is credential-gated even without necessarily
 // requiring the header on THIS request (e.g. an admin GET probed
 // anonymously still must not become cross-origin readable).
+//
+// /api/public/analytics/ (issue #1095) is deliberately NOT listed: it is the
+// tokenless read API, answers every caller identically and accepts GET only, so
+// it is a public read like the dashboards. It is not a `startsWith` match for
+// "/api/analytics/" above, which is why it lives under /api/public/.
 const CREDENTIALED_PREFIXES = ["/api/admin/", "/api/swarm/admin/", "/api/analytics/"];
 
 // A request this API will answer identically for every caller, so opening it
@@ -129,7 +134,7 @@ export function withCors(res: Response, req: Request, pathname: string): Respons
     addVaryOrigin(headers);
   } else if (publicRead) {
     headers.set("Access-Control-Allow-Origin", "*");
-    headers.set("Access-Control-Expose-Headers", "Content-Length, Content-Type, Date, Cache-Control");
+    headers.set("Access-Control-Expose-Headers", "Content-Length, Content-Type, Date, Cache-Control, ETag, Retry-After");
   } else {
     addVaryOrigin(headers);
   }

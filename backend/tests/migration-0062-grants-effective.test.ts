@@ -105,7 +105,7 @@ describe("after the full migration set, every reader role can read everything", 
   test("the write grant did NOT leak onto the rest of the schema", async () => {
     // An allow-list that quietly became a blanket grant would be the worse
     // bug. rm_worker's writable set must be exactly 0054's list plus 0061's,
-    // 0062's and 0109's additions, and no more.
+    // 0062's, 0109's and 0113's additions, and no more.
     const rows = (await sql`
       WITH t AS MATERIALIZED (
         SELECT c.oid, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -134,6 +134,10 @@ describe("after the full migration set, every reader role can read everything", 
       // rewriting it. INSERT only (asserted just below); 0037's guard refuses
       // an UPDATE anyway.
       "wallet_balance_sample_evidence", "wallet_sleeve_sample_evidence",
+      // 0113_rm_worker_buyback_indexer_grants' additions (runbook B11): the
+      // buyback indexer runs on the rm_worker connection and writes its scan
+      // cursor (INSERT, UPDATE) and the swaps it finds (INSERT).
+      "buyback_scan_state", "buyback_swaps",
     ];
     expect([...writable].filter((t) => !allowed.includes(t))).toEqual([]);
     // The evidence is INSERT-only for rm_worker, never UPDATE.

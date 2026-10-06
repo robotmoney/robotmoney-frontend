@@ -351,7 +351,10 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     };
     const ledgerBrief = await getBriefBySession(session.id);
 
-    expect(ledgerRegime).toEqual(compatRegime);
+    // `source` is the one field that MUST differ: it states which read path answered
+    // (issue #1095), so the equivalence is over everything else.
+    expect([compatRegime.source, ledgerRegime.source]).toEqual(["regime_snapshots", "ledger"]);
+    expect({ ...ledgerRegime, source: compatRegime.source }).toEqual(compatRegime);
     expect(ledgerSummary).toEqual(compatSummary);
     expect(ledgerSignal).toEqual(compatSignal);
     expect(ledgerSignalSeries).toEqual(compatSignalSeries);
@@ -385,7 +388,8 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     await fixtureDb`UPDATE regime_snapshots SET composite = ${DRIFT} WHERE date = ${date}`;
     const stillLedger = await getRegimeSnapshots(new URL("http://x?range=10"));
     expect(JSON.stringify(stillLedger), "ledger mode must ignore a legacy-table edit").not.toContain(String(DRIFT));
-    expect(stillLedger).toEqual(compatRegime);
+    expect(stillLedger.source).toBe("ledger");
+    expect({ ...stillLedger, source: compatRegime.source }).toEqual(compatRegime);
 
     await setAnalyticsReadMode("compatibility", "test");
     expect(await getAnalyticsReadMode()).toBe("compatibility");
