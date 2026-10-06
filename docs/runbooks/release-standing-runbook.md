@@ -64,7 +64,7 @@ unverified, not satisfied.
 | SR.4 | Twin gate: sessions judged (a `no_consensus` publish is a warning, owner 2026-10-06), participants never restarted, judge on, no dead job, containers healthy, every log error classified, no FATAL | `bun run twin:gate` | stage | script |
 | SR.5 | Interruption at a phase boundary resumes, before and after replace | release runbook R3.6 | stage | manual |
 | SR.6 | Rollback rehearsal: restore time recorded, and the old code's behavior against the new schema recorded | release runbook R3.9 | stage | manual |
-| SR.7 | Cumulative standing invariants (the 0.5.x R8 list, section 7) | none | stage | gap, issue 1179 |
+| SR.7 | Cumulative standing invariants (the 0.5.x R8 list, section 7) | `bun run soak:checks --instance NAME --since T0 --full` (`--record` once at READY) | stage | script |
 | SR.8 | Rehearsal report: RC SHA, dump identity, plan id, receipts, results, what could not be covered, operator go/no-go | policy 4.5 | stage | manual |
 
 ## 5. Phase C, V, W — cutover, verification, watch
@@ -80,7 +80,7 @@ unverified, not satisfied.
 | SV.5 | Row counts only grow, AUM did not step, the ledger did not balloon | release runbook R7.5 | prod | manual |
 | SV.6 | No container mounts a Docker socket, `~/.env` holds only allowed keys, token files are mode 0600 | `docker inspect`, per release runbook | prod | manual |
 | SW.1 | Watch one full session cycle: every subject opens, agents submit, the judge submits, consensus publishes or reads `no_consensus` | release runbook | prod | manual |
-| SW.2 | Cumulative standing invariants over the soak window (section 7) | none | prod | gap, issue 1179 |
+| SW.2 | Cumulative standing invariants over the soak window (section 7) | `bun run soak:checks --instance rm_prod --since T0 --full` (`--record` once at READY) | prod | script |
 | SW.3 | Tag the running commit and file the production report | policy 4.9 | prod | manual |
 
 ## 6. Changing this file
@@ -91,35 +91,46 @@ unverified, not satisfied.
   never reused.
 - A row going from `gap` or `manual` to `script` is an edit of its Status cell and Tool cell only.
 
-## 7. The 0.5.x standing invariants that must come back (gap, issue 1179)
+## 7. The 0.5.x standing invariants, ported (issue 1179)
 
-The 0.5.3-to-0.5.4 `soak-checks.sh` ran these read-only checks at every gate. The script is
-not on the 0.6 line. Each row is a standing check owed by SR.7 and SW.2. Source: the script
-header at tag `v0.5.4`.
+The 0.5.3-to-0.5.4 `soak-checks.sh` ran these read-only checks at every gate. They are owed by
+SR.7 and SW.2 and now run as ONE instance-aware script, `bun run soak:checks`
+(`scripts/standing-soak.ts`, decisions in `scripts/lib/gate/standing.ts`), beside `twin:gate` and
+`prod:gate`. Like the gates it takes `--instance`, reads the stack record, runs every query through
+the instance's api container on a read-only session, reads container logs and `docker inspect`, and
+holds no admin token, no superuser and no Docker socket. T0 is the instant the stack became READY
+(`--since`). Run it once with `--record` at READY: R8.d and R8.p compare with that baseline
+(without one R8.p FAILS and R8.d is unverified). `--full` adds the slow vintage join of R8.l.
+Every check has a unit test with a red control (`scripts/tests/unit/standing-soak.test.ts`).
+Source of the old list: the script header at tag `v0.5.4`.
 
-| Old id | Invariant |
-|---|---|
-| R8.a, R8.b | Scheduled regime (:30) and research (:00) runs each produced their output artifact |
-| R8.d | Ledger growth stays inside the recorded baseline |
-| R8.e | Writers record only real changes: no noise-only revisions, no `unchanged` rows |
-| R8.f | Parity sweeps: none dead, longest under the api statement timeout |
-| R8.g | Website server errors: none, or only warned |
-| R8.h, R8.i | Quorum excludes the judge. Every published session has takes, a judgement and a receipt |
-| R8.j | No session wedged past its window plus grace |
-| R8.k, R8.k2 | Every ledger guard armed. The old payload table stays gone |
-| R8.l | Newest vintage: run lengths add up to the member count |
-| R8.m | No connection-pool starvation (sessions idle in a transaction) |
-| R8.n | Host disk |
-| R8.p | `schema_migrations` equals the shipped baseline |
-| R8.q | Judge config: enforce, pinned model, third parties off |
-| R8.r | Role and grant integrity: `rm_worker` INSERTs, the api connects as `rm_app`, `rm_readonly` reads sequences |
-| R8.s | `/health` and the judgements route answer 200 |
-| R8.t | Every published session has `openedAt` |
-| R8.u | Api: no cut-off at the request limit on a reader, every slow request listed |
-| R8.v | The buyback scan never fails on a refused range |
-| R8.w | Gecko tier matches the key, no 429/401/403, the key is in no ledger row or api/website environment |
-| R8.x | The regime day is logged by the driver |
-| R8.o | Informational: error-like lines per container |
+| Old id | Invariant | Status | Note on the port |
+|---|---|---|---|
+| R8.a, R8.b | Scheduled regime and research runs each produced their output artifact | script | The cron is read from the `analytics-producer` container's `PRODUCER_REGIME_CRON` and `PRODUCER_RESEARCH_CRON`. Compose defaults to daily (22:30, 23:00). 0.5.x production ran every 3 h (:30, :00), so the 3 h cadence holds only if the deploy sets those variables. A cron the script cannot expand is a WARN |
+| R8.c | No producer failure line since T0 | script | Also matches the day-roll regime failure line (1108) |
+| R8.d | Ledger growth stays inside the recorded baseline | script | Baseline from `--record`, in the instance state directory (`soak-baseline.json`) |
+| R8.e | Writers record only real changes: no noise-only revisions, no `unchanged` rows | script | |
+| R8.f | Parity sweeps: none dead, longest under the api statement timeout | script | |
+| R8.g | Website server errors: none, or only warned | script | |
+| R8.h, R8.i | Quorum excludes the judge. Every published session has takes, a judgement and a receipt | script | |
+| R8.j | No session wedged past its window plus grace | script | |
+| R8.k, R8.k2 | Every ledger guard armed. The old payload table stays gone | script | |
+| R8.l | Newest vintage: run lengths add up to the member count | script | |
+| R8.m | No connection-pool starvation (sessions idle in a transaction) | script | `pg_stat_activity` shows the api role only its own sessions, so the detail says how many of the open sessions it could see |
+| R8.n | Host disk | script | `df /` on the host the script runs on |
+| R8.p | `schema_migrations` equals the shipped baseline | script | Baseline recorded at READY with `--record`, so a release's own migrations are in it |
+| R8.q | Judge config: enforce, pinned model, third parties off | script | The pin is `deepseek-v4.1-flash` (migration 0111). The two pre-0111 ids are a WARN, valid only before 0111 applies |
+| R8.r | Role and grant integrity: `rm_worker` INSERTs, the api connects as `rm_app`, `rm_readonly` reads sequences | script | Graded on a production (`external`) stack only. A twin's dump carries no grants, as in 0.5.x |
+| R8.s | `/health` and the judgements route answer 200 | script | Probes the api at the stack record's port. `--base-url` probes the public origin instead |
+| R8.t | Every published session has `openedAt` | script | Sessions dated on or after `--opened-at-from` (default 2026-09-22), as in 0.5.x |
+| R8.u | Api: no cut-off at the request limit on a reader, every slow request listed | script | R8.u2 lists slow requests as a WARN |
+| R8.v | The buyback scan never fails on a refused range | script | Reads every `worker-*` lane, not one named container |
+| R8.w | Gecko tier matches the key, no 429/401/403, the key is in no ledger row or api/website environment | script | Key presence is read from `docker inspect`; no value is ever printed. R8.w2 and R8.w3 are its error and containment halves |
+| R8.x | The regime day is logged | script | 0.5.x read a host driver log. Main logs `regime asof D` from the `analytics-producer` container, so each line is compared with its own Docker timestamp |
+| R8.o | Informational: error-like lines per container | script | INFO by design: it never fails. The gates classify the lines |
+
+The old script had no R8.y. Its R8.z (a query that errored must never read as a pass) is built in:
+a read that fails is a FAIL of the check that needed it.
 
 ## 8. What was lost between 0.5.x and 0.6.0, and where it stands
 
@@ -127,7 +138,7 @@ Recorded 2026-10-06 so the loss is not found twice.
 
 | Lost | Where it was | Status |
 |---|---|---|
-| Cumulative standing invariants script | `upgrades/0.5.3-to-0.5.4/soak-checks.sh` | gap, issue 1179 |
+| Cumulative standing invariants script | `upgrades/0.5.3-to-0.5.4/soak-checks.sh` | ported, issue 1179: `bun run soak:checks` (section 7) |
 | Release-independent procedure (position probe, backup proof, twin, rollback limits) | `docs/runbooks/rollout-procedure.md` | not carried, issue 1180 |
 | Environment and credential inventory | `docs/runbooks/deployment.md` | not carried, issue 1180 |
 | Per-release `preflight.ts` and `postflight.ts` | `backend/scripts/upgrades/<from>-to-<to>/` | their stack-level checks became SP.4 and SV.2. Release-level schema checks are `manual` rows SP.3 and SV.5 |

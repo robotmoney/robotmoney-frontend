@@ -38,6 +38,7 @@
     "verify:live": "bun run scripts/verify-live.ts",
     "twin:gate": "bun scripts/twin-gate.ts",
     "prod:gate": "bun scripts/prod-gate.ts",
+    "soak:checks": "bun scripts/standing-soak.ts",
     "smoke:capture": "bun run --cwd backend scripts/smoke-twin-capture.ts",
     "credentials": "bun scripts/gitops-credentials.ts",
     "credentials:check": "bun scripts/gitops-credentials.ts --check",

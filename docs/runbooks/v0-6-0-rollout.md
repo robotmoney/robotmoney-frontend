@@ -11,8 +11,8 @@
 
 This runbook runs **every check in [`release-standing-runbook.md`](./release-standing-runbook.md)**
 (written against the commit that adds it) and adds the 0.6.0-specific checks below. It cites
-standing checks by ID. **Exceptions:** none granted. Two standing rows are `gap` and block the
-cutover until they close: SR.7 and SW.2 (the cumulative standing invariants, issue 1179, B16).
+standing checks by ID. **Exceptions:** none granted. No standing row is `gap` once the port of issue 1179 merges. Two standing rows were `gap` and blocked the
+cutover until they close: none. SR.7 and SW.2 (the cumulative standing invariants, issue 1179, B16) were `gap` and are `script` (`bun run soak:checks`) once the port merges.
 
 Where the standing runbook says to run a check and a step below does not repeat it, run it anyway.
 The standing checks this release's steps map to:
@@ -20,9 +20,9 @@ The standing checks this release's steps map to:
 | Phase | Standing checks | Where it runs below |
 |---|---|---|
 | Preflight and baseline | SP.1 to SP.7 | R1, R2, `bun smoke` preflight; **SP.5 `prod:gate --mode baseline` is R2.5** |
-| Stage rehearsal | SR.1 to SR.8 | R3.2 to R3.10; **SR.4 `twin:gate` is R3.4a** |
+| Stage rehearsal | SR.1 to SR.8 | R3.2 to R3.10; **SR.4 `twin:gate` is R3.4a**, **SR.7 `soak:checks` is R3.4b** |
 | Cutover and verification | SC.1, SC.2, SV.1 to SV.6 | R6, R7; **SV.4 `prod:gate --mode post-release` is R7.3a** |
-| Watch | SW.1 to SW.3 | R7.6, R7.8 |
+| Watch | SW.1 to SW.3 | R7.6, R7.8; **SW.2 `soak:checks` is R7.3b** |
 
 ## Why this runbook is not like the 0.5.x ones
 
@@ -43,7 +43,7 @@ onto the adopted design (spec §9.3).
 | Site shipped with the API (`static:assemble`) | Own release unit: `bun smoke:web`, checked against `apiRange` |
 | Per-release `upgrades/A-to-B/*.ts` | None exist for 0.6.0. Gates are the spec's, run by the tools below. `verify:live` is the product check |
 | `twin:gate`, `prod:gate` | Ported to main's instance model (1071, B7 merged). Run at R2.5, R3.4a, R7.3a |
-| `soak-checks.sh` (cumulative R8 invariants) | **Not ported.** Issue 1179, blocker B16. Standing runbook rows SR.7 and SW.2 |
+| `soak-checks.sh` (cumulative R8 invariants) | Ported to the instance model as `bun run soak:checks` (1179, B16). Standing runbook rows SR.7 and SW.2. Record the baseline once at READY (`--record`), then run at R3.4b and R7.3b |
 
 ## 0. Rule, decisions and blockers
 
@@ -77,7 +77,7 @@ on stage-2 with the real restored dump, plus the three open rows below.
 | B13 | The old checkout's `bun run migrate` runs clean against the migrated database and re-seeds the `swarm.*` job_schedules 0089 deleted (1155) | closed, no action (owner 2026-10-05) | section 8 says: never run the old checkout after R6.3; R6.1 renames it |
 | B14 | A resume after replace could not start participants from the pruned api image id (1160) | fixed (1161), verified on `62ec5920` | — |
 | B15 | A failed take re-ran on the next tick with no delay; seven seats hammered the shared Zen key (see the issue). The take one-shot also could not find its script from the per-take workspace (1166) | fixed: backoff (1168) and give-up after 5 failed takes (1169, owner rule), verified on `7d69d17c` | — |
-| B16 | The cumulative standing invariants (`soak-checks.sh`, R8.a to R8.y) are not on the 0.6 line, so SR.7 and SW.2 have no tool (1179) | open | port to the instance model, or an owner decision per standing runbook section 6 |
+| B16 | The cumulative standing invariants (`soak-checks.sh`, R8.a to R8.y) are not on the 0.6 line, so SR.7 and SW.2 have no tool (1179) | ported (1179), closes when the port merges | — |
 
 Also open: the notice to external members about the four-weight rule (1124); the
 `judging` banner (1115, merged) and admin items (1123, merged) need only the R7 spot check.
@@ -314,6 +314,18 @@ on a twin in a healthy state, and keep the report. First run 2026-10-05 on `7a4f
 a broken twin and listed a coin-price `DEGRADED` warning. That is a warning, not an error: the gate
 reports an unclassified warning and does not fail on it, and the owner decided no issue is filed for it.
 
+R3.4b **Standing soak checks** (standing check SR.7), after R3.4a. Record the baseline once at
+READY (`--record`, with `--since` the boot's READY instant), then run the checks over the rehearsal window:
+
+```bash
+bun run soak:checks --instance rehearse-060 --since "$READY_ISO" --record
+bun run soak:checks --instance rehearse-060 --since "$READY_ISO" --full
+```
+
+Exit 0 only when no check FAILs, and a WARN is not a pass: read it. R8.a and R8.b follow the
+`analytics-producer` container's cron, which is the compose default (daily) unless the boot sets
+`PRODUCER_REGIME_CRON`.
+
 R3.5 Prove the schema gates on the twin (the lines from spec §10 this release depends on):
 migrations all recorded once; `deployment_identity.kind = 'rehearsal'`; `schema_manifest`
 hash matches the ledger; `rm_app`/`rm_worker`/`rm_readonly` hold no `DELETE`/`TRUNCATE`
@@ -377,7 +389,7 @@ is NOT refused (B13).
 
 R3.10 Rehearsal report (policy §4.5): RC SHA, dump identity, plan id, preflight and
 readiness receipts, participant results, `verify:live` output, interruption results, what
-could not be covered (the cumulative standing invariants, SR.7, until issue 1179 closes), the `twin:gate` report (R3.4a), and a go/no-go signed by the operator. Every standing check in the standing runbook is accounted for by ID.
+could not be covered (none expected: the cumulative standing invariants, SR.7, run as R3.4b), the `twin:gate` report (R3.4a), the `soak:checks` report (R3.4b), and a go/no-go signed by the operator. Every standing check in the standing runbook is accounted for by ID.
 
 ### R3.11 Cut the RC tag (only after R3.10 is a go)
 
@@ -542,6 +554,14 @@ bun run prod:gate --mode post-release --instance rm_prod
 ```
 
 What the release was meant to fix is fixed and nothing new is unclassified. Compare with R2.5.
+
+R7.3b **Standing soak checks** (standing checks SW.2). Record the baseline once when production is
+READY after the cutover, then run the checks at each watch point and at close (read-only):
+
+```bash
+bun run soak:checks --instance rm_prod --since "$READY_ISO" --record   # once, at READY
+bun run soak:checks --instance rm_prod --since "$READY_ISO" --full
+```
 
 R7.4a Schedule parity (owner rule: an upgrade does not change usual schedules): every
 active subject reads `epoch_duration_seconds = 21600`; each session that was in flight at
