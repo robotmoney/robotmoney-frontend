@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_EPOCH_SECONDS, MIN_EPOCH_SECONDS, parseArgs, planCloses, refusal, RETIME_SQL } from "../../twin-accelerate.ts";
+import { DEFAULT_EPOCH_SECONDS, MIN_EPOCH_SECONDS, parseArgs, planCloses, refusal, RETIME_SQL, retimeArgv } from "../../twin-accelerate.ts";
 
 describe("arguments", () => {
   test("default epoch, explicit epoch and judging", () => {
@@ -29,6 +29,14 @@ describe("the plan", () => {
     expect(RETIME_SQL).toContain("state = 'collecting'");
     expect(RETIME_SQL).toContain("subject_id = :'sid'");
     expect(RETIME_SQL).toContain("window_closes_at > :'close'::timestamptz");
+  });
+  test("the SQL reaches psql on stdin, where :'var' is substituted (never through -c)", () => {
+    const argv = retimeArgv("twin", "2026-10-07T00:00:00.000Z", "vault");
+    expect(argv).not.toContain("-c");
+    expect(argv.slice(-2)).toEqual(["-f", "-"]);
+    expect(argv.slice(0, 3)).toEqual(["docker", "exec", "-i"]);
+    expect(argv).toContain("close=2026-10-07T00:00:00.000Z");
+    expect(argv).toContain("sid=vault");
   });
 });
 
