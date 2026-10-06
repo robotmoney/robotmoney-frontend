@@ -19,7 +19,8 @@
 #   - `pull_request.types` includes `ready_for_review` so flipping a draft to
 #     ready re-triggers the workflow (default PR types would not).
 #   - the job `if:` guard skips the run while the PR is still a draft.
-#   - `paths-ignore: ['**.md','**.txt']` bypasses this code check on docs-only PRs.
+#   - the `changes` job below bypasses this code check on docs-only and copy-only
+#     PRs (see "Path gating"); it reports a real `skipped` to the Checks API.
 # A NIGHTLY SCHEDULE IS ADDED HERE (issue #373), and smoke-live-smoke-nightly.yml
 # is retired. That nightly booted the same LIVE stack and ran the same
 # scripts/smoke-live-smoke.ts assertions this job does; its own header said its
@@ -139,13 +140,22 @@
 #       on a plain push to main has no effect: ONBOARDING_REAL_EVAL no longer
 #       resolves to "1" there, so the eval that would have consumed it does not
 #       run.
+#
+# Path gating (D45, amended): a `pull_request` run whose changed files are ALL
+# on the skip list in the `changes` job below skips the job body. The list is
+# an allowlist of paths that cannot change what the live stack does: Markdown
+# and text, docs, brand assets, the site's copy (views, data, skills, images),
+# the browser specs, the unit tests, the web-client's own scripts, and the
+# goldens. Anything else, including a path nobody thought about, RUNS e2e, so a
+# new directory fails safe. `push` to a protected branch, the nightly, and a
+# manual dispatch are never path-filtered. Copy and view changes are held to
+# web-client.yml, which runs the view specs against the assembled site.
 name: e2e
 env:
   CI_CLASS: system-correctness
 on:
   push:
     branches: [main, "releases-*", "fusion/**"]
-    paths-ignore: ['**.md', '**.txt']
   # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
   # runs on `push: branches: [main]` also runs on a nightly schedule, and
   # nothing else does — so a red nightly means exactly what a red merge would
@@ -159,7 +169,7 @@ on:
   # `schedule`, below). Since issue #803 removed `push` from that expression,
   # `schedule` is this measurement's only continuously-recurring route. One
   # admission a night, read off run history, is a larger denominator than the
-  # bespoke K=5 sweep #280/#367 proposed — at no extra cost. `paths-ignore` is
+  # bespoke K=5 sweep #280/#367 proposed — at no extra cost. The path gate is
   # deliberately absent here: a schedule event carries no file list, so a
   # docs-only day still gets a full mirror run.
   schedule:
@@ -171,7 +181,6 @@ on:
     # unlabelled PRs: the job `if:` below drops any `labeled` event carrying a
     # different label before a runner is allocated.
     types: [opened, synchronize, reopened, ready_for_review, labeled]
-    paths-ignore: ['**.md', '**.txt']
   # Manual re-run of the whole gate, with an explicit opt-in for the paid
   # real-inference onboarding eval. NOTE: GitHub reads these input definitions
   # from the DEFAULT BRANCH's copy of this file, so `real_eval` is only
@@ -185,14 +194,56 @@ on:
         default: false
 
 jobs:
+  # ── change detection ───────────────────────────────────────────────────────
+  changes:
+    # Plumbing, not an assurance job: it must run in every context so the e2e
+    # job below has a filter output to gate on.
+    env:
+      CI_CLASS: ignore
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      e2e: ${{ steps.filter.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@v4
+      # `every`: a file is relevant only if it matches ALL patterns, i.e. it is
+      # a path (`**`) that is on none of the skip entries (`!...`). The filter
+      # is true when ANY changed file is relevant.
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
+        id: filter
+        with:
+          predicate-quantifier: every
+          filters: |
+            e2e:
+              - '**'
+              - '!**/*.md'
+              - '!**/*.txt'
+              - '!docs/**'
+              - '!brand-assets/**'
+              - '!goldens/**'
+              - '!frontend/test/**'
+              - '!frontend/public/views/**'
+              - '!frontend/public/data/**'
+              - '!frontend/public/skills/**'
+              - '!frontend/public/blog/**'
+              - '!frontend/public/avatars/**'
+              - '!frontend/public/assets/img/**'
+              - '!scripts/tests/unit/**'
+              - '!scripts/web-client/**'
+
   e2e:
-    # Two guards, both evaluated before a runner is allocated:
+    needs: [changes]
+    # Three guards, all evaluated before a runner is allocated:
     #   1. Deferred until ready-for-review: run on push/dispatch (non-PR) and on
     #      non-draft PRs; skip while the PR is still a draft.
     #   2. A `labeled` event only proceeds when the label added is the
     #      `real-eval` opt-in. Without this, `types: [..., labeled]` above would
     #      boot the full ~40-minute live stack every time anyone tagged a PR.
-    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event.action != 'labeled' || github.event.label.name == 'real-eval') }}
+    #   3. Path-gated ONLY on pull_request: a push, the nightly and a dispatch
+    #      always run regardless of needs.changes' output.
+    if: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true')) && (github.event.action != 'labeled' || github.event.label.name == 'real-eval') }}
     runs-on: ubuntu-latest
     env:
       # Read by scripts/lib/rmpc-fetch.ts's fetchRmpc() for the real-inference

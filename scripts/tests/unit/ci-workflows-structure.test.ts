@@ -31,7 +31,7 @@ interface Workflow {
 }
 const parse = (name: string): Workflow => Bun.YAML.parse(read(name)) as Workflow;
 
-const PATHS_FILTER_SHA = "de90cc6fb38fc0963ad72b210f1f284cd68cea36";
+const PATHS_FILTER_SHA = "ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d";
 
 /**
  * Workflows expected to carry their OWN dorny/paths-filter change-detection
@@ -55,6 +55,7 @@ const PATH_GATED_WORKFLOWS = [
   "web-client.yml",
   "research-pipeline.yml",
   "onboarding-eval-rails.yml",
+  "e2e.yml",
 ];
 
 describe("split CI workflows retain taxonomy declarations and guard wiring", () => {
