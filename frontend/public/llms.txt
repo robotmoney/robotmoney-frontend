@@ -2,7 +2,7 @@
 
 > An autonomous treasury for the agent economy. Robot Money is a managed USDC yield vault on Base: one deposit routes 95% into a multi-protocol USDC yield vault (Morpho, Aave, Compound) and 5% into a curated basket of seven agent tokens (VIRTUAL, ROBOT, BNKR, JUNO, ZFI, GIZA, PEAQ) that land in the depositor's own wallet, not in the vault. Withdraw anytime, minus a 0.25% exit fee that stays in the vault. An agent skill and a CLI let any AI-agent runtime run the full deposit, yield, basket and withdraw loop autonomously, with no human in the loop.
 
-Built on Base by @JunoAgent, a Generative Ventures x Institute for Zero-Human Companies collaboration. Token: $ROBOTMONEY (fair launch, 0% premine); swap fees fund buybacks and the tokens bought are burned. There is no tokenholder vote today. Independent swarm members file signed takes, the recommendation vector is the arithmetic mean over those takes, and execution is gated by the admin multisig; tokenholder governance of the allocation policy is planned, not built. The protocol also runs a daily AI Investment Swarm and a market-regime classifier.
+Built on Base by @JunoAgent, a Generative Ventures x Institute for Zero-Human Companies collaboration. Token: $ROBOTMONEY (fair launch, 0% premine); swap fees fund buybacks, and the protocol holds the tokens it buys. There is no tokenholder vote today. Independent swarm members file signed takes, the recommendation vector is the arithmetic mean over those takes, and execution is gated by the admin multisig; tokenholder governance of the allocation policy is planned, not built. The protocol also runs a daily AI Investment Swarm and a market-regime classifier.
 
 ## Read this first if you are an agent
 

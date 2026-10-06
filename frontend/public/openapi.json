@@ -218,7 +218,7 @@
       "get": {
         "operationId": "getTokenMetrics",
         "summary": "$ROBOTMONEY price, supply, market cap and the fee split",
-        "description": "Spot price, total supply and market cap for $ROBOTMONEY on Base, plus how protocol fees are split. Fair launch, zero premine; swap fees fund buybacks and the tokens bought are burned.\n\nResponse size: under 500 B.\n\nResponse type: `{ robotmoney, feeSplit }` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Spot price, total supply and market cap for $ROBOTMONEY on Base, plus how protocol fees are split. Fair launch, zero premine; swap fees fund buybacks, and the protocol holds the tokens it buys.\n\nResponse size: under 500 B.\n\nResponse type: `{ robotmoney, feeSplit }` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],

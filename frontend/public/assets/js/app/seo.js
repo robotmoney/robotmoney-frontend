@@ -120,7 +120,7 @@ const META = {
   },
   "/tokenomics": {
     title: "$ROBOTMONEY Tokenomics & Governance | Robot Money",
-    description: "$ROBOTMONEY on Base: a fair launch with permanently locked liquidity. Swap fees fund buybacks, and the tokens bought are burned. Tokenholder governance of the allocation is planned, not live.",
+    description: "$ROBOTMONEY on Base: a fair launch with permanently locked liquidity. Swap fees fund buybacks, and the protocol holds the tokens it buys. Tokenholder governance of the allocation is planned, not live.",
   },
   "/allocation": {
     title: "Allocation: Target Sleeves and Vaults | Robot Money",

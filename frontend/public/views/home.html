@@ -1199,8 +1199,8 @@
         <!-- "steers the vault" and "governance over vault allocation" were
              the same missing mechanism stated twice. Nothing lets a holder
              move a weight: no voting table, no route, no job. The buyback
-             and burn is the one token mechanism that runs, and it is
-             described below. -->
+             is the one token mechanism that runs, and it is described below.
+             The tokens bought are held in the primary wallet, not burned. -->
         <span class="token__eyebrow">03 / The Token</span>
         <h2 class="token__title">
           <span class="token__title-ticker">$ROBOTMONEY</span>
@@ -1211,7 +1211,7 @@
           The token does not entitle holders to vault returns. The vault is
           the investment product. Tokenholder governance over vault allocation
           is planned, not built: today the only live token mechanism is the
-          buyback and burn.
+          buyback.
         </p>
 
         <!-- Key specs -->
@@ -1270,9 +1270,9 @@
           </div>
         </div>
 
-        <!-- Buyback and Burn -->
+        <!-- Buybacks -->
         <div class="token__card">
-          <h3 class="token__card-title token__card-title--warn">Buyback &amp; Burn Mechanism</h3>
+          <h3 class="token__card-title token__card-title--warn">Buyback Mechanism</h3>
 
           <!-- Flow diagram -->
           <div class="token__flow">
@@ -1281,55 +1281,52 @@
                 <span class="token__step-num">01</span>
                 <div class="token__step-line"></div>
               </div>
-              <p class="token__step-text">Prop wallet closes position at profit</p>
+              <p class="token__step-text">Swap fees accrue to the protocol wallets</p>
             </div>
             <div class="token__step">
               <div class="token__step-rail">
                 <span class="token__step-num">02</span>
                 <div class="token__step-line"></div>
               </div>
-              <p class="token__step-text">Realized gain calculated (USDC terms)</p>
+              <p class="token__step-text">The balance covers a purchase</p>
             </div>
             <div class="token__step">
               <div class="token__step-rail">
                 <span class="token__step-num">03</span>
                 <div class="token__step-line"></div>
               </div>
-              <p class="token__step-text">Buyback: prop wallet buys $ROBOTMONEY on Uniswap v4</p>
+              <p class="token__step-text">Buyback: the protocol buys $ROBOTMONEY on Uniswap v4</p>
             </div>
             <div class="token__step">
               <div class="token__step-rail">
                 <span class="token__step-num">04</span>
                 <div class="token__step-line"></div>
               </div>
-              <p class="token__step-text">Burn: purchased $ROBOTMONEY sent to 0x000...dEaD</p>
+              <p class="token__step-text">Held: the tokens bought go to the protocol's primary wallet</p>
             </div>
             <div class="token__step">
               <div class="token__step-rail">
                 <span class="token__step-num">05</span>
               </div>
-              <p class="token__step-text">Receipt: BaseScan tx hash published to X + Moltbook</p>
+              <p class="token__step-text">Receipt: every buyback is listed with its BaseScan transaction</p>
             </div>
           </div>
 
           <div class="token__card-note">
             <p class="token__card-note-text">
-              No inflationary yield. Value accrual is purely from supply
-              reduction. If prop wallet underperforms, no buyback occurs.
-              Losses published with same transparency.
+              No inflationary yield. Buybacks are funded by swap fees alone,
+              and run when that income covers a purchase.
             </p>
           </div>
         </div>
 
-        <!-- Burn note -->
+        <!-- Where the tokens go -->
         <div class="token__card">
-          <h3 class="token__card-title token__card-title--purple">Burn Dynamics</h3>
+          <h3 class="token__card-title token__card-title--purple">Where the Tokens Go</h3>
           <p class="token__burn-text">
-            Burns are a function of trading performance, not a schedule.
-            When the prop wallet realizes gains, those gains are used to
-            buy back and burn $ROBOTMONEY. If the prop wallet
-            underperforms, no buyback occurs. Every transaction, wins and
-            losses alike, is published on-chain.
+            The protocol holds the $ROBOTMONEY it buys in its primary
+            wallet. Buybacks follow fee income, not a schedule, and every
+            one is on chain, listed on the <a class="rm-link" href="/tokenomics#buybacks">token page</a>.
           </p>
         </div>
       </div>
@@ -1570,7 +1567,7 @@
           <div>
             <span class="governance__pcard-key">What You Get</span>
             <p class="governance__pcard-value">
-              Economic: exposure to the buyback-and-burn, which runs only when the prop wallet realizes a gain. Governance: planned, not built.
+              Economic: exposure to buybacks funded by swap fees. Governance: planned, not built.
             </p>
           </div>
         </div>

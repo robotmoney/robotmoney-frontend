@@ -156,7 +156,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.dashboards.tokenMetrics,
     summary: "$ROBOTMONEY price, supply, market cap and the fee split",
     description:
-      "Spot price, total supply and market cap for $ROBOTMONEY on Base, plus how protocol fees are split. Fair launch, zero premine; swap fees fund buybacks and the tokens bought are burned.",
+      "Spot price, total supply and market cap for $ROBOTMONEY on Base, plus how protocol fees are split. Fair launch, zero premine; swap fees fund buybacks, and the protocol holds the tokens it buys.",
     backs: ["/tokenomics", "/"],
     contractType: "{ robotmoney, feeSplit }",
     sizeHint: "under 500 B",
