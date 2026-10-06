@@ -20,7 +20,7 @@
         <p class="faq__lede">
           Robot Money is an ERC-4626 vault on Base where an AI agent deposits
           USDC once and holds a share of a book spread across lending venues,
-          redeemable at NAV at any time, minus a 0.25% exit fee.
+          redeemable at market value at any time, minus a 0.25% exit fee.
         </p>
       </div>
     </header>
@@ -34,7 +34,7 @@
           Robot Money is an autonomous treasury protocol for the agent economy:
           an ERC-4626 vault on the Base blockchain where an AI agent (or a human
           operator) makes a single USDC deposit and receives shares redeemable at
-          net asset value (NAV) at any time, minus a 0.25% exit fee. The
+          market value at any time, minus a 0.25% exit fee. The
           vault&apos;s USDC sits with lending protocols on Base: Morpho, Aave, and
           Compound. The published allocation framework it is measured against has
           four sleeves, and the weight each carries is on
@@ -56,7 +56,7 @@
           sleeves are a framework, not four pots on chain: the agent-token sleeve
           is bought by the Robot Money skill at deposit time and lands in the
           depositor&apos;s own wallet, not in the vault. Shares are redeemable at
-          NAV at any time.
+          market value at any time.
         </div>
       </section>
 
@@ -269,7 +269,7 @@
           call that deposits USDC into the vault on Base, with no individual DeFi
           protocol integrations and no trading infrastructure to build or maintain.
           The vault issues ERC-4626 shares representing the position, and the
-          holder can withdraw at net asset value (NAV) at any time. For developers,
+          holder can withdraw at market value at any time. For developers,
           the integration is one contract interaction: approve USDC, deposit, and
           receive vault shares. Withdrawal costs a 0.25% exit fee, which stays in
           the vault. Placing the vault&apos;s USDC with lending venues is handled
@@ -372,13 +372,11 @@
       </section>
 
       <section class="faq__qa">
-        <h2 class="faq__q">What is NAV and how are withdrawals handled?</h2>
+        <h2 class="faq__q">How are withdrawals handled?</h2>
         <div class="faq__a">
-          NAV stands for Net Asset Value: the total value of the vault&apos;s
-          underlying assets divided by the total number of shares outstanding.
           When a holder withdraws, they burn their ERC-4626 shares and receive
-          USDC proportional to their share of the NAV, minus a 0.25% exit fee that
-          stays in the vault. There is no management fee. Withdrawals are
+          the market value of their share of the vault&apos;s assets in USDC,
+          minus any slippage and a 0.25% exit fee that stays in the vault. There is no management fee. Withdrawals are
           permissionless and can be initiated at any time by any share holder,
           with no lockup and no human approval. Share accounting is done by the
           vault contract itself, which is the part ERC-4626 standardises.
@@ -457,7 +455,7 @@
           interactions. The process is: (1) approve the vault contract to spend
           USDC, (2) call deposit() with the USDC amount, (3) receive vault shares.
           Withdrawal is the reverse: call redeem() or withdraw() and receive USDC
-          back at the current NAV. Because the vault is ERC-4626, any wallet,
+          back at market value. Because the vault is ERC-4626, any wallet,
           DeFi aggregator, or AI agent framework that supports the standard can
           integrate without custom adapters. Contract addresses and integration
           examples are in the
