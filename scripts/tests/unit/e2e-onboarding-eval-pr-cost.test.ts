@@ -445,15 +445,25 @@ export function realEvalSpendIsOptIn(expr: string): string | null {
  * event for an unrelated label boot the full live stack.
  */
 export function jobGuardIsLabelNarrowed(expr: string): string | null {
+  // The job is path-gated by its `changes` job: `needs.changes.outputs.e2e` is
+  // 'true' when a changed file is off the skip list. Every context below
+  // supplies it as 'true' unless the case is about the skip itself.
+  const withPaths = (ctx: Ctx, e2e: string): Ctx => ({ ...ctx, needs: { changes: { outputs: { e2e } } } });
   const cases: Array<[string, Ctx, boolean]> = [
-    ["a push to the default branch", CTX.push, true],
-    ["the nightly schedule mirror", CTX.schedule, true],
-    ["a non-draft pull_request", CTX.prPlain, true],
-    ["a draft pull_request", CTX.prDraft, false],
-    [`adding the '${OPT_IN_LABEL}' label`, CTX.prLabeledOptIn, true],
-    ["adding an unrelated label", CTX.prLabeledOther, false],
-    [`adding '${OPT_IN_LABEL}' to a DRAFT pull_request`, CTX.prLabeledOptInDraft, false],
-    ["a manual workflow_dispatch", CTX.dispatchOn, true],
+    ["a push to the default branch", withPaths(CTX.push, "true"), true],
+    ["the nightly schedule mirror", withPaths(CTX.schedule, "true"), true],
+    ["a non-draft pull_request", withPaths(CTX.prPlain, "true"), true],
+    ["a draft pull_request", withPaths(CTX.prDraft, "true"), false],
+    [`adding the '${OPT_IN_LABEL}' label`, withPaths(CTX.prLabeledOptIn, "true"), true],
+    ["adding an unrelated label", withPaths(CTX.prLabeledOther, "true"), false],
+    [`adding '${OPT_IN_LABEL}' to a DRAFT pull_request`, withPaths(CTX.prLabeledOptInDraft, "true"), false],
+    ["a manual workflow_dispatch", withPaths(CTX.dispatchOn, "true"), true],
+    // The path gate: a PR that changed only skip-listed paths skips the stack,
+    // while a push, the nightly and a dispatch run whatever the filter said.
+    ["a non-draft pull_request that touched only skip-listed paths", withPaths(CTX.prPlain, "false"), false],
+    ["a push whose (irrelevant) path filter said false", withPaths(CTX.push, "false"), true],
+    ["the nightly whose (irrelevant) path filter said false", withPaths(CTX.schedule, "false"), true],
+    ["a dispatch whose (irrelevant) path filter said false", withPaths(CTX.dispatchOn, "false"), true],
   ];
   for (const [what, ctx, want] of cases) {
     let got: boolean;

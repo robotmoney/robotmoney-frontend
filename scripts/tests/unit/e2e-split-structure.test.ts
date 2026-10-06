@@ -19,9 +19,11 @@ interface Step {
   run?: string;
   shell?: string;
   if?: string;
+  needs?: string[];
 }
 interface Job {
   if?: string;
+  needs?: string[];
   "timeout-minutes"?: number;
   steps?: Step[];
 }
@@ -50,11 +52,19 @@ describe("e2e is split by domain, with no single e2e.yml left", () => {
 
     describe(f, () => {
       const wf = parse(f);
-      const jobs = Object.entries(wf.jobs ?? {});
+      // `changes` is the path-filter plumbing job (D45); the domain job is the other one.
+      const jobs = Object.entries(wf.jobs ?? {}).filter(([id]) => id !== "changes");
 
       test("its workflow name, its single job id and its file name agree, so the check reads as the domain", () => {
         expect(wf.name).toBe(name);
         expect(jobs.map(([id]) => id)).toEqual([name]);
+      });
+
+      test("its domain job is path-gated on a pull_request through the changes job", () => {
+        const [, job] = jobs[0]!;
+        expect(Object.keys(wf.jobs ?? {})).toContain("changes");
+        expect(job.needs).toEqual(["changes"]);
+        expect(job.if ?? "").toContain("needs.changes.outputs.e2e == 'true'");
       });
 
       test("it is a system-correctness workflow", () => {

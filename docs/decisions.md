@@ -3673,6 +3673,49 @@ intercepting GETs, keeps that guarantee absolute regardless of `?api=`.
 - **Block the merge on the prod/stage sweep too** — rejected above; a live
   host's availability is not a property of the PR's diff.
 
+**Amendment (2026-10-06): the gate now matches the decision.** Two jobs had
+drifted past D45's "a client-only PR never waits on `e2e.yml`'s live smoke
+boot". `e2e.yml` skipped only `**.md`/`**.txt`, so a view, data or image change
+booted the full stack (~18 min), and `integration.yml` selected on all of
+`scripts/**`, so a PR that touched only `scripts/tests/unit/**` ran its ~20 min
+suite. The unit tier and `repo-guards` still run on every PR (they are cheap).
+
+- **e2e is an allowlist of what may skip it, not a list of what runs it.**
+  `e2e.yml`'s `changes` job uses `predicate-quantifier: every` over `**` minus
+  the skip entries: Markdown and text, `docs/`, `brand-assets/`, `goldens/`,
+  `frontend/test/`, the site's copy (`frontend/public/{views,data,skills,blog,
+  avatars,assets/img}`), `scripts/tests/unit/`, and `scripts/web-client/`.
+  Anything else, including a path nobody thought of, runs e2e. A push, the
+  nightly and a dispatch are never filtered, so every suite still runs against
+  `main` and every night (D26).
+- **The view specs moved their PR coverage to web-client.** 41 of the 50
+  browser specs stub `/api/**` themselves and need only a static page, so
+  `bun run --cwd frontend check:static` runs them against the assembled site
+  (`scripts/web-client/static-site-server.ts`, nginx's fallback rule, no api, no
+  Docker). The five that need a real api are named, with a reason each, in
+  `scripts/web-client/static-specs.ts` (`NOT_STATIC`) and run in e2e only. Every
+  other spec joins the web-client gate by default.
+- **Client CODE still selects e2e.** `frontend/public/assets/**` (js, css),
+  `website-server/`, and everything under `backend/`, `contract/`, `packages/`,
+  compose and the lockfiles run the live stack. The five api-backed specs have
+  no other PR-time home, so a copy change skips them and a code change does not.
+  Making them stub their calls, so they can join the web-client gate, is the
+  follow-up that would let client code skip e2e too.
+- **integration drops `scripts/tests/unit/**`.** Its filter lists the `scripts/`
+  directories positively, because a `some` filter cannot subtract.
+  `ci-gate-path-filters.test.ts` fails if a new `scripts/` or `scripts/tests/`
+  directory is neither listed nor named as skipped, so a new directory cannot
+  silently skip the job.
+- `dorny/paths-filter` moves from v3.0.2 to v4.0.3 (every workflow, one pin):
+  `predicate-quantifier` first ships after v3.0.2.
+
+**Alternatives rejected.** A `skip-e2e` label (depends on memory, hides risk).
+Running e2e only after merge (backend and money-path PRs would lose their
+pre-merge bar). A single orchestrator workflow with one filter job (the
+fan-in gate removed after the PR 316 incident, tracked in issue 348). Test
+selection from the import graph (precise, but weeks of work for a gain the
+allowlist already captures).
+
 <a id="d46"></a>
 
 ## D46 — Prior smoke migration design (superseded by D47)
