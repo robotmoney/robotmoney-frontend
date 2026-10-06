@@ -322,13 +322,29 @@ export function participantContainerIds(project: string, run: DockerRun): Map<st
   return ids;
 }
 
+/** How long `fetchMemberRoles` keeps retrying a transport failure before it refuses. */
+export const MEMBER_ROLES_DEADLINE_MS = 60_000;
+
 /**
  * The database's role for every member, as the running API reports it on the
  * admin members route (`swarm_members.role`), for credential-file.ts's role
  * check (spec §6.1, D52). Read with the operator's service token (§3), over
  * HTTP: this process holds no database credential of its own at this phase.
  *
- * Refusals: the route does not answer 200 with a `members` list. The roles
+ * THE API MAY NOT BE LISTENING YET. The participants phase follows the replace
+ * phase by well under a second, and Docker publishes the api's host port the
+ * moment the container starts: docker-proxy accepts the connection and closes
+ * it when nothing inside listens. On stage-2 (2026-10-05, c74aa2a7) that read
+ * went out 244 ms before the api logged `listening`, Bun reported "The socket
+ * connection was closed unexpectedly", and the boot's failure path then
+ * stopped the writers it had just started. A boot with no roster never made
+ * this call, which is why the 2026-10-02 rehearsal did not see it. So a
+ * TRANSPORT failure (the fetch throws: closed, refused, reset) is retried until
+ * `deadlineMs`; an HTTP answer is never retried, because the api that answered
+ * is the api, and its answer stands.
+ *
+ * Refusals: the route does not answer 200 with a `members` list, or no answer
+ * arrives before the deadline (the last transport error is named). The roles
  * decide whether the boot may start anyone, so an unknown answer is never
  * read as "no members".
  */
@@ -336,10 +352,30 @@ export async function fetchMemberRoles(
   apiUrl: string,
   operatorToken: string,
   fetchImpl: typeof fetch = fetch,
+  clock: { deadlineMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
 ): Promise<ReadonlyMap<string, { role: string }>> {
-  const res = await fetchImpl(`${apiUrl.replace(/\/+$/, "")}${ROUTES.swarm.admin.members}`, {
-    headers: { "X-Automation-Token": operatorToken },
-  });
+  const deadlineMs = clock.deadlineMs ?? MEMBER_ROLES_DEADLINE_MS;
+  const now = clock.now ?? (() => Date.now());
+  const sleep = clock.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const url = `${apiUrl.replace(/\/+$/, "")}${ROUTES.swarm.admin.members}`;
+  const started = now();
+  let res: Response | undefined;
+  let attempts = 0;
+  while (res === undefined) {
+    attempts += 1;
+    try {
+      res = await fetchImpl(url, { headers: { "X-Automation-Token": operatorToken } });
+    } catch (err) {
+      const elapsed = now() - started;
+      if (elapsed >= deadlineMs) {
+        throw new Error(
+          `${ROUTES.swarm.admin.members} gave no answer in ${attempts} attempt(s) over ${elapsed} ms ` +
+            `(last: ${err instanceof Error ? err.message : String(err)}); the roster's roles cannot be checked, so no participant is started`,
+        );
+      }
+      await sleep(Math.min(500, deadlineMs - elapsed));
+    }
+  }
   if (!res.ok) throw new Error(`${ROUTES.swarm.admin.members} answered HTTP ${res.status}; the roster's roles cannot be checked, so no participant is started`);
   const body = (await res.json()) as { members?: { id?: unknown; role?: unknown }[] };
   if (!Array.isArray(body.members)) throw new Error(`${ROUTES.swarm.admin.members} answered without a members list`);
@@ -348,6 +384,82 @@ export async function fetchMemberRoles(
     if (typeof m?.id === "string" && typeof m.role === "string") roles.set(m.id, { role: m.role });
   }
   return roles;
+}
+
+/**
+ * The image the participants run. "Participants run the image `api` runs"
+ * (spec §6.2): the running api container's image id, as long as Docker still
+ * holds it. A rerun that resumes after replace (§1.4) rebuilds the images in
+ * its prepare phase, moves `<project>-api:latest` to the new id and prunes the
+ * old one, while the kept api container still reports the old id — on stage-2
+ * (2026-10-05, 62ec5920) compose then tried to PULL that id and the resume
+ * failed at participants (issue #1160). So an id Docker no longer has falls
+ * back to the project's api tag, which is the same sources the resume just
+ * built, and the caller logs and receipts the fallback.
+ */
+export function resolveParticipantImage(
+  runningApiImage: string,
+  projectApiTag: string,
+  imagePresent: (ref: string) => boolean,
+): { image: string; fallback: string | null } {
+  if (runningApiImage !== "" && imagePresent(runningApiImage)) return { image: runningApiImage, fallback: null };
+  if (!imagePresent(projectApiTag)) {
+    throw new Error(
+      `participants: neither the running api's image ${runningApiImage || "(none)"} nor ${projectApiTag} exists; ` +
+        "there is no image to start them from",
+    );
+  }
+  return {
+    image: projectApiTag,
+    fallback: `the running api's image ${runningApiImage || "(none)"} is no longer in Docker (a resume rebuilt it); participants start from ${projectApiTag}`,
+  };
+}
+
+/**
+ * The twin's seating invariant, as a value: active non-judge members of the
+ * restored roster that this boot's agents roster does not name. A twin exists
+ * to rehearse the swarm it restored; a seat count below the roster count is a
+ * SILENT defect — a session with two of seven members looks, on the page, like
+ * five members had nothing to say (issue #1152, the v0.5.x twin's 3-of-7).
+ * Matched by handle, case-insensitively, the way the credential file names
+ * members. A judge is never seated, so never unseated.
+ */
+export function unseatedTwinMembers(
+  members: readonly { id: string; handle?: string | null; status: string; role?: string | null }[],
+  desiredAgentNames: readonly string[],
+): string[] {
+  const desired = new Set(desiredAgentNames.map((n) => n.trim().toLowerCase()));
+  const out: string[] = [];
+  for (const m of members) {
+    if (m.status !== "active" || m.role === "judge") continue;
+    const handle = (m.handle ?? m.id).trim().toLowerCase();
+    if (!desired.has(handle)) out.push(m.handle ?? m.id);
+  }
+  return out.sort();
+}
+
+/**
+ * The twin's seating refusal: on an owned twin (smoke-mode.ts
+ * resolveSeatAllRestored) an active non-judge member the agents roster does
+ * not name refuses the boot, naming them — the silent 2-of-7 twin of issue
+ * #1152 becomes a loud one. Read from the public members list, like the
+ * verify leg that caught it.
+ */
+export async function assertTwinSeatsEveryActiveMember(
+  apiUrl: string,
+  desiredAgentNames: readonly string[],
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const res = await fetchImpl(`${apiUrl.replace(/\/+$/, "")}${ROUTES.swarm.members}`, { signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`participants: ${ROUTES.swarm.members} answered HTTP ${res.status}; the twin cannot prove it seats every active member`);
+  const body = (await res.json()) as { members?: { id: string; handle?: string | null; status: string; role?: string | null }[] };
+  const unseated = unseatedTwinMembers(body.members ?? [], desiredAgentNames);
+  if (unseated.length > 0) {
+    throw new Error(
+      `participants: this twin leaves ${unseated.length} active member(s) unseated: ${unseated.join(", ")}. ` +
+        "A twin seats every active restored member (spec §6.4 owned-twin exception): list them in the rehearsal credential file and boot with --spoof-keys.",
+    );
+  }
 }
 
 /** What `applyParticipantPlan` needs to run compose for the participants overlay. */

@@ -116,7 +116,7 @@ INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, la
 -- Data for Name: swarm_judge_config; Type: TABLE DATA; Schema: public; Owner: rm_owner
 --
 
-INSERT INTO public.swarm_judge_config (id, mode, min_takes, model, updated_at, third_party_enabled, policy_updated_at) VALUES (1, 'off', 3, 'deepseek-v4-flash', '2026-09-23 04:55:52.930498+00', false, '2026-09-23 04:55:52.930498+00');
+INSERT INTO public.swarm_judge_config (id, mode, min_takes, model, updated_at, third_party_enabled, policy_updated_at) VALUES (1, 'off', 3, 'deepseek-v4.1-flash', '2026-09-23 04:55:52.930498+00', false, '2026-09-23 04:55:52.930498+00');
 
 
 --

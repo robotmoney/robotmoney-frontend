@@ -49,6 +49,7 @@ import {
   sendSignedSubmission,
   SIGNED_SUBMISSION_FILE,
   submitTake,
+  resolveOneShotArgv,
 } from "../../agent/participant/take-runner.ts";
 import type { ParticipantConfig, PendingWork } from "../../agent/participant/main.ts";
 
@@ -927,11 +928,14 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
 
   test("THE RENDERED TAKE COMMAND, for real: author-take.ts reads the member, regime and brief, asks the model on the member's OWN key, and the chain submits its draft", async () => {
     // The argv every rendered agent carries (scripts/lib/participant-compose.ts
-    // PARTICIPANT_TAKE_COMMAND), with the script path absolute because this test
-    // runs from the repository root rather than the image's /app.
+    // PARTICIPANT_TAKE_COMMAND), EXACTLY as rendered: a relative script path.
+    // The one-shot runs in a fresh workspace elsewhere, so this only works when
+    // take-runner resolves it against the participant's start directory (here
+    // the repository root, in the image /app) — the stage-2 2026-10-05 defect.
     const { PARTICIPANT_TAKE_COMMAND } = await import("../../lib/participant-compose.ts");
     expect(PARTICIPANT_TAKE_COMMAND).toEqual(["bun", "run", "scripts/agent/participant/author-take.ts"]);
-    const takeCommand = ["bun", "run", join(import.meta.dir, "..", "..", "agent", "participant", "author-take.ts")];
+    expect(process.cwd()).toBe(join(import.meta.dir, "..", "..", ".."));
+    const takeCommand = [...PARTICIPANT_TAKE_COMMAND];
     const seen: { auth: string | null; model: unknown; prompt: string }[] = [];
     const memos: { auth: string | null; body: Record<string, unknown> }[] = [];
     const server = Bun.serve({
@@ -965,7 +969,7 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
           workspaceRoot: root,
           apiUrl: `http://127.0.0.1:${server.port}`,
           inferenceUrl: `http://127.0.0.1:${server.port}/v1`,
-          inferenceWireId: "deepseek-v4-flash",
+          inferenceWireId: "deepseek-v4.1-flash",
           modelKey: "athena-own-model-key-0123456789",
           takeCommand,
         }),
@@ -973,7 +977,7 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
       );
       expect({ oneShot: outcome.oneShot, submission: outcome.submission, reason: outcome.reason }).toEqual({ oneShot: "ok", submission: "submitted", reason: undefined });
       // ONE model call, on this member's own key, for the model the boot resolved.
-      expect(seen.map((c) => ({ auth: c.auth, model: c.model }))).toEqual([{ auth: "Bearer athena-own-model-key-0123456789", model: "deepseek-v4-flash" }]);
+      expect(seen.map((c) => ({ auth: c.auth, model: c.model }))).toEqual([{ auth: "Bearer athena-own-model-key-0123456789", model: "deepseek-v4.1-flash" }]);
       // The prompt is production's persona prompt: this member's lens, the regime numbers, the sections.
       expect(seen[0]?.prompt).toContain("through a macro risk lens");
       expect(seen[0]?.prompt).toContain("Composite 0.412");
@@ -1137,3 +1141,14 @@ describe("take-runner.ts holds no container rail — a take is a PROCESS", () =>
     }
   });
 });
+
+describe("resolveOneShotArgv — a relative script path means the participant's start directory, not the take's workspace", () => {
+  const exists = (have: string[]) => (p: string) => have.includes(p);
+  test("the rendered take command resolves under the start directory", () => {
+    expect(resolveOneShotArgv(["bun", "run", "scripts/agent/participant/author-take.ts"], "/app", exists(["/app/scripts/agent/participant/author-take.ts"]))).toEqual(["bun", "run", "/app/scripts/agent/participant/author-take.ts"]);
+  });
+  test("an absolute path, the command word, and arguments that are not files pass through", () => {
+    expect(resolveOneShotArgv(["/bin/false", "--flag", "/abs/x.ts", "scripts/missing.ts"], "/app", exists(["/app/scripts/agent/participant/author-take.ts"]))).toEqual(["/bin/false", "--flag", "/abs/x.ts", "scripts/missing.ts"]);
+  });
+});
+

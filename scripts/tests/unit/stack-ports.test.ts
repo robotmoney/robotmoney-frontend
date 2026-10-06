@@ -331,3 +331,58 @@ describe("no host port is named anywhere except the stage overlay", () => {
     expect(ports).toContain("export async function assertStageWebPortFree");
   });
 });
+
+// ── The pre-flight accepts this instance's own containers (resume after replace) ──
+//
+// stage-2, 2026-10-05: a run interrupted after the replace phase leaves its
+// website-server on 48787 by design, and the rerun refused on it before it
+// could read its journal. The only holder the pre-flight waves through is a
+// container labelled with THIS instance's compose project.
+import { createServer as createTcpServer } from "node:net";
+import { heldOnlyByOwnInstance, assertStageWebPortFree as assertFree, PortUnavailableError as PortTaken } from "../../stack/ports.ts";
+
+describe("heldOnlyByOwnInstance", () => {
+  const runner = (stdout: string, exitCode = 0) => (cmd: string[]) => {
+    expect(cmd.slice(0, 4)).toEqual(["docker", "ps", "--filter", "publish=48787"]);
+    return { exitCode, stdout, stderr: "" };
+  };
+  test("one holder, our project: ours", () => {
+    expect(heldOnlyByOwnInstance(48787, { project: "rm_smoke_stack_d04bd9437e", run: runner("rm_smoke_stack_d04bd9437e\trm_smoke_stack_d04bd9437e-website-server-1\n") })).toBe(true);
+  });
+  test("a holder from another project is a conflict", () => {
+    expect(heldOnlyByOwnInstance(48787, { project: "rm_smoke_stack_d04bd9437e", run: runner("rm_smoke_stack_9d1ee8db25\trm_smoke_stack_9d1ee8db25-website-server-1\n") })).toBe(false);
+  });
+  test("ours plus another's is a conflict", () => {
+    expect(heldOnlyByOwnInstance(48787, { project: "rm_a", run: runner("rm_a\tx\nrm_b\ty\n") })).toBe(false);
+  });
+  test("no container holds it (a plain process does): a conflict", () => {
+    expect(heldOnlyByOwnInstance(48787, { project: "rm_a", run: runner("") })).toBe(false);
+  });
+  test("docker itself failing is a conflict, never a pass", () => {
+    expect(heldOnlyByOwnInstance(48787, { project: "rm_a", run: runner("", 1) })).toBe(false);
+  });
+});
+
+describe("assertStageWebPortFree with an own-instance holder", () => {
+  async function withHeldPort<T>(body: (port: number) => Promise<T>): Promise<T> {
+    const server = createTcpServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+    try {
+      return await body(port);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }
+  test("a held port whose only holder is our project passes", async () => {
+    await withHeldPort(async (port) => {
+      await expect(assertFree(port, "test", { project: "rm_me", run: () => ({ exitCode: 0, stdout: "rm_me\tweb\n", stderr: "" }) })).resolves.toBeUndefined();
+    });
+  });
+  test("a held port with another holder still refuses, naming the port", async () => {
+    await withHeldPort(async (port) => {
+      await expect(assertFree(port, "test", { project: "rm_me", run: () => ({ exitCode: 0, stdout: "rm_other\tweb\n", stderr: "" }) })).rejects.toThrow(PortTaken);
+      await expect(assertFree(port, "test")).rejects.toThrow(`host port ${port} is already in use`);
+    });
+  });
+});

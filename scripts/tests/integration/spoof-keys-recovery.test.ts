@@ -106,6 +106,7 @@ function request(root: string, instance: string, lock: TargetLock, names: readon
     lock: { backendPid: lock.backendPid, holder: { ...lock.holder } },
     names,
     flagExplicit: true,
+    seatAll: false,
     rmEnv: "stage",
     credentialPath: null,
   };

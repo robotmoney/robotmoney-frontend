@@ -50,12 +50,18 @@ DECLARE
   ];
   -- Written by the price workers (0054). The same privileges as worker_dml now
   -- that neither list carries DELETE; kept apart because 0054 granted them apart.
-  worker_insert_update text[] := ARRAY['asset_price_floors', 'asset_prices'];
+  -- buyback_scan_state (B11, issue #1150, 2026-10-05): the buybacks job
+  -- handler runs the indexer on the worker's pool, and its cursor upsert is an
+  -- INSERT ... ON CONFLICT DO UPDATE.
+  worker_insert_update text[] := ARRAY['asset_price_floors', 'asset_prices', 'buyback_scan_state'];
   -- The wallet repair pass's immutable evidence (0037): it copies a day's
   -- samples here before rewriting the day, so it INSERTs, and 0037's guard
   -- refuses every UPDATE. Granted by 0109; 0054's allowlist had left it out,
   -- and the repair of every incomplete day failed 42501 on the copy.
-  worker_insert_only text[] := ARRAY['wallet_balance_sample_evidence', 'wallet_sleeve_sample_evidence'];
+  -- buyback_swaps (B11): the indexer INSERTs a decoded swap, idempotent on
+  -- tx_hash, and never updates one; its serial is already in
+  -- worker_sequence_usage (0054).
+  worker_insert_only text[] := ARRAY['wallet_balance_sample_evidence', 'wallet_sleeve_sample_evidence', 'buyback_swaps'];
   -- The serial sequences behind rm_worker's inserts (0054, 0061); every other
   -- sequence is SELECT only for it (0062).
   worker_sequence_usage text[] := ARRAY[

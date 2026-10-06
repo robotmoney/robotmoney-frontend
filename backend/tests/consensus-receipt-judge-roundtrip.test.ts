@@ -182,7 +182,7 @@ async function throughTheRunner(status: number, body: string) {
   writeFileSync(promptFile, renderJudgePrompt(input));
   try {
     return await runJudge({
-      promptFile, endpoint: `http://127.0.0.1:${server.port}`, model: "deepseek-v4-flash", apiKey: "k", timeoutMs: 5_000,
+      promptFile, endpoint: `http://127.0.0.1:${server.port}`, model: "deepseek-v4.1-flash", apiKey: "k", timeoutMs: 5_000,
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });

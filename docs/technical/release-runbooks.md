@@ -46,6 +46,15 @@ progress through the runbook, not to duplicate or replace its content.
 No release may skip a gate described here unless the release tracking issue
 explicitly records the exception, the reason for it, and operator sign-off.
 
+**Two layers of runbook, and the second adds to the first.** The global
+[standing runbook](../runbooks/release-standing-runbook.md) lists the checks every
+release runs, by phase, and is cumulative: a check enters it when a release needs
+it and leaves only by a recorded owner decision. A per-release runbook
+inherits all of it and adds its own release-specific checks. It never copies a
+standing check, never replaces one, and records any exception (reason, approving
+owner, issue that restores it). A release whose runbook omits a standing check
+without an exception is not ready.
+
 ## 2. Release branch
 
 Each release ships from a branch named `releases-A.B.x`:
@@ -367,6 +376,12 @@ release branch.
 Each release has an operator runbook committed under `docs/runbooks/`. The
 runbook must:
 
+- open with an **Inherits the standing runbook** section that names the commit of
+  [`release-standing-runbook.md`](../runbooks/release-standing-runbook.md) it was
+  written against and lists every **Exception** with reason, approving owner and
+  restoring issue (§1). Standing checks are cited by ID, never restated,
+- add only **release-specific** checks of its own, each placed after the standing
+  check of the same phase,
 - state the release identity and the delta it introduces,
 - list go/no-go gates that map directly to §4,
 - provide a preflight script or checklist,

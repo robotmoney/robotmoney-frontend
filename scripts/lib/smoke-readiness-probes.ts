@@ -181,11 +181,21 @@ export function readProducerAuth(run: ProbeRunner, id: string | undefined): Prod
   return parseProducerHealth(r.stdout);
 }
 
-/** One worker container: its health and its last startup-preflight line. */
+/**
+ * One worker container: its health and its last startup-preflight line.
+ *
+ * THE WHOLE LOG, NOT A TAIL. The worker prints its `startup_preflight` line
+ * once, first, and then works: on a production-sized dump the buyback indexer
+ * alone wrote 580 lines in the readiness window (eth_getLogs 413 splits and a
+ * refused write's stack trace), so a `--tail 400` read never contained line 1
+ * and readiness timed out on stage-2 (2026-10-05, 4b453cd7) with the line
+ * sitting in the log. The log is bounded by the boot's own age, and this read
+ * happens only while readiness polls.
+ */
 export function readWorkerStartup(run: ProbeRunner, project: string, service: string): WorkerStartupReading {
   const id = serviceContainerId(run, project, service);
   if (!id) return { service, health: "missing", line: null };
-  const logs = run(["logs", "--tail", "400", id]);
+  const logs = run(["logs", id]);
   return { service, health: containerHealth(run, id), line: lastStartupPreflightLine(`${logs.stdout}\n${logs.stderr}`) };
 }
 

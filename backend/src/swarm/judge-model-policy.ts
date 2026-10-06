@@ -39,7 +39,7 @@
 import { isAcceptanceJudgeEnv, type InferencePathOptions } from "../acceptance-path.ts";
 
 /** The wire id AC-MODEL-01 pins, without the `opencode/` prefix Zen's REST endpoint rejects. */
-export const PINNED_JUDGE_MODEL = "deepseek-v4-flash";
+export const PINNED_JUDGE_MODEL = "deepseek-v4.1-flash";
 
 /**
  * Zen's keyless family, mirrored from scripts/lib/model-registry.ts's `free`

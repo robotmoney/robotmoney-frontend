@@ -44,6 +44,7 @@ import {
   DEFAULT_STACK_DATABASE,
   describePortHolders,
   composeArgs,
+  heldOnlyByOwnInstance,
   dockerClientHostEnv,
   hostBackendUrl,
   internalDatabaseUrl,
@@ -54,6 +55,7 @@ import {
   stalePortEnvWarnings,
   STAGE_COMPOSE_FILE,
   STAGE_WEB_PORT,
+  STAGE_WEB_PORT_PURPOSE,
   type Stack,
   type StackConfig,
   type StackEvent,
@@ -101,7 +103,19 @@ import {
 import { CredentialFileRefusal, loadCredentialFile, planParticipants, resolveCredentialPath, type CredentialEntry, type CredentialPathResolution } from "./swarm/credential-file.ts";
 import { runSpoofRebind, SpoofKeysRefusal, spoofKeysRequest } from "./swarm/spoof-keys.ts";
 import { planConfiguration } from "./smoke-plan-configuration.ts";
-import { applyParticipantPlan, fetchMemberRoles, listRunningParticipants, participantContainerIds, renderParticipantServices, summarizeParticipantApply, writeParticipantFiles, type DockerRun, type ParticipantsReconciled } from "./participant-compose.ts";
+import {
+  applyParticipantPlan,
+  assertTwinSeatsEveryActiveMember,
+  fetchMemberRoles,
+  listRunningParticipants,
+  participantContainerIds,
+  renderParticipantServices,
+  resolveParticipantImage,
+  summarizeParticipantApply,
+  type DockerRun,
+  type ParticipantsReconciled,
+  writeParticipantFiles,
+} from "./participant-compose.ts";
 import { ZEN_API_BASE_URL } from "./opencode-key.ts";
 import { resolveAgentModel, ZEN_PREFIX } from "./model-registry.ts";
 
@@ -211,9 +225,14 @@ if (staticPortMode) {
 // opaque, and silent about WHO holds the port. This check runs BEFORE `compose
 // up` so the operator gets the actionable version: name the holder, refuse to
 // boot, exit non-zero. A diagnostic, not an allocation.
-async function stagePreflight(): Promise<void> {
+async function stagePreflight(ownProject: string): Promise<void> {
+  // A rerun after replace resumes over this instance's own website-server (ports.ts heldOnlyByOwnInstance); any other holder refuses.
+  const own = { project: ownProject, run: makeCommandRunner(process.env) };
   try {
-    await assertStageWebPortFree();
+    await assertStageWebPortFree(STAGE_WEB_PORT, STAGE_WEB_PORT_PURPOSE, own);
+    if (heldOnlyByOwnInstance(STAGE_WEB_PORT, own)) {
+      console.error(`[smoke] :${STAGE_WEB_PORT} is held by this instance's own containers (project ${ownProject}); resuming over them`);
+    }
   } catch (err) {
     if (err instanceof PortUnavailableError) {
       console.error(`[smoke] FATAL: ${err.message}`);
@@ -303,7 +322,6 @@ const allowInsecureRequested = process.argv.includes(ALLOW_INSECURE_FLAG);
   const refusal = refuseAllowInsecureOnProd(policy, allowInsecureRequested);
   if (refusal !== null) fatal(refusal);
 }
-if (staticPortMode) await stagePreflight();
 // The containers' RM_ENV: the policy, and `prod` on the standing stack by rule.
 const stackRmEnv: RmEnv = stackRmEnvFor(staticPortMode, policy);
 // Issue #1113: a prod boot without PROJECTS_SOURCE=live refuses here, before
@@ -366,6 +384,8 @@ const stackEnvironment = resolveStackEnvironment(process.env, { seed: instance.n
 // used to be overridable by an exported SMOKE_PROJECT; spec §1 retires that
 // with no alias (refused at the top of this file).
 const project = stackProjectName("stack", stackEnvironment);
+// Here, not earlier: the pre-flight needs the project name to tell this instance's own website-server (a resume) from a conflict.
+if (staticPortMode) await stagePreflight(project);
 /** The pgdata volume compose creates for this instance's own postgres. */
 const instanceVolume = `${project}_pgdata`;
 
@@ -1164,9 +1184,14 @@ async function reconcileParticipants(apiUrl: string): Promise<ParticipantsReconc
     memberRole: (memberId) => roles.get(memberId),
   });
   const desired = [...planned.start, ...planned.keep];
+  // A twin seats the WHOLE restored roster (smoke-mode.ts resolveSeatAllRestored, issue #1152).
+  if (seatAllRestored && credentialResolution.configured) await assertTwinSeatsEveryActiveMember(apiUrl, desired.filter((d) => d.kind === "agent").map((d) => d.name));
   // Participants run the image `api` runs (backend/Dockerfile carries them).
-  const apiImage = runningServices().api ?? "";
-  if (desired.length > 0 && apiImage === "") throw new Error("participants: the api container is not running, so there is no image to start them from");
+  const runningApiImage = runningServices().api ?? "";
+  if (desired.length > 0 && runningApiImage === "") throw new Error("participants: the api container is not running, so there is no image to start them from");
+  const chosenImage = desired.length > 0 ? resolveParticipantImage(runningApiImage, `${project}-api:latest`, (ref) => dockerRunIn(process.env)(["image", "inspect", ref]).exitCode === 0) : { image: runningApiImage, fallback: null };
+  if (chosenImage.fallback) log(`participants: ${chosenImage.fallback}`);
+  const apiImage = chosenImage.image;
   // The one model every participant calls, from the single selection signal.
   // No host key is asked for here: each participant spends its OWN model key.
   const model = desired.length > 0 ? resolveAgentModel(process.env) : "";
@@ -1537,6 +1562,7 @@ async function main(): Promise<void> {
         lock: { backendPid: targetLock!.backendPid, holder: { ...targetLock!.holder } },
         names: spoofRequest.names,
         flagExplicit: spoofRequest.explicit,
+        seatAll: seatAllRestored,
         rmEnv: policy,
         credentialPath: credentialResolution.configured ? credentialResolution.path : null,
       }, prepareChildEnv(process.env));

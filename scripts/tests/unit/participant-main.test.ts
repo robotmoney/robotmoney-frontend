@@ -52,6 +52,9 @@ import {
   type ParticipantConfig,
   type ParticipantLoops,
   type StartupDiagnostic,
+  takeRetryPolicy,
+  TAKE_MAX_ATTEMPTS,
+  TAKE_RETRY_MAX_MS,
 } from "../../agent/participant/main.ts";
 import type { JudgeClientConfig } from "../../agent/participant/judge-client.ts";
 import { DB_CREDENTIAL_KEYS } from "../../lib/db-credential-keys.ts";
@@ -74,7 +77,7 @@ const ENV = {
   RM_TAKE_COMMAND: JSON.stringify(TAKE_COMMAND),
   RM_INFERENCE_KEY: "athena-own-model-key",
   RM_INFERENCE_URL: "https://models.example/v1",
-  RM_INFERENCE_WIRE_ID: "deepseek-v4-flash",
+  RM_INFERENCE_WIRE_ID: "deepseek-v4.1-flash",
   RM_POLL_INTERVAL_MS: "5000",
   RM_TAKE_TIMEOUT_MS: "600000",
   RM_WORKSPACE_ROOT: "/var/lib/rm/takes",
@@ -89,7 +92,7 @@ const config = (over: Partial<ParticipantConfig> = {}): ParticipantConfig => ({
   identity: IDENTITY,
   modelKey: "athena-own-model-key",
   inferenceUrl: "https://models.example/v1",
-  inferenceWireId: "deepseek-v4-flash",
+  inferenceWireId: "deepseek-v4.1-flash",
   takeCommand: TAKE_COMMAND,
   pollIntervalMs: 5_000,
   takeTimeoutMs: 600_000,
@@ -733,5 +736,24 @@ describe("runParticipant — the namespace decides the loop", () => {
     const main = MAIN_SOURCE.slice(MAIN_SOURCE.indexOf("if (import.meta.main)"));
     expect(main).toContain("await runParticipant(process.env, { signal: controller.signal });");
     expect(main).not.toContain("runParticipantLoop(");
+  });
+});
+
+describe("takeRetryPolicy — a take that did not submit backs off, and the seat gives up on the session after TAKE_MAX_ATTEMPTS (owner 2026-10-05: fail instead of spending)", () => {
+  test("a submitted take resets: nothing to retry", () => {
+    expect(takeRetryPolicy({ submission: "submitted" }, 4, 5_000)).toEqual({ kind: "submitted" });
+  });
+  test("a crashed one-shot doubles from the poll interval per prior failure of the session", () => {
+    expect([0, 1, 2, 3].map((n) => takeRetryPolicy({ submission: null }, n, 5_000))).toEqual([
+      { kind: "retry", delayMs: 5_000 }, { kind: "retry", delayMs: 10_000 }, { kind: "retry", delayMs: 20_000 }, { kind: "retry", delayMs: 40_000 },
+    ]);
+  });
+  test("the fifth failure gives the session up: five model calls per seat per session, no more", () => {
+    expect(TAKE_MAX_ATTEMPTS).toBe(5);
+    expect(takeRetryPolicy({ submission: null }, TAKE_MAX_ATTEMPTS - 1, 5_000)).toEqual({ kind: "give-up" });
+    expect(takeRetryPolicy({ submission: "unconfirmed" }, 40, 5_000)).toEqual({ kind: "give-up" });
+  });
+  test("a retry delay never exceeds five minutes, whatever the poll interval", () => {
+    expect(takeRetryPolicy({ submission: null }, 3, 120_000)).toEqual({ kind: "retry", delayMs: TAKE_RETRY_MAX_MS });
   });
 });

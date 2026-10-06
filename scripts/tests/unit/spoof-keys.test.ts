@@ -1122,6 +1122,45 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
     }
   });
 
+  test("owned twin (seatAll): no names means every ACTIVE member, third parties and judges included; an inactive one is left", async () => {
+    const dir = tempDir();
+    const out = genFile(dir);
+    try {
+      const outcome = await spoofKeys({
+        guards: allowed(),
+        instance: "rm_twin",
+        stateRoot: dir,
+        names: [],
+        seatAll: true,
+        members: [...IN_HOUSE, THIRD_PARTY, { ...THIRD_PARTY, name: "retired", memberId: "m-retired", status: "retired" }],
+        db: fakeDb(null).deps,
+      });
+      expect([...outcome.rebound].sort()).toEqual(["athena", "outsider", "robot-money"]);
+      expect(outcome.rebound).not.toContain("retired");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("owned twin (seatAll): a named third party is spoofed — the copy is throwaway, nobody real is re-keyed", async () => {
+    const dir = tempDir();
+    const out = genFile(dir);
+    try {
+      const outcome = await spoofKeys({
+        guards: allowed(),
+        instance: "rm_twin",
+        stateRoot: dir,
+        names: ["outsider"],
+        seatAll: true,
+        members: [...IN_HOUSE, THIRD_PARTY],
+        db: fakeDb(null).deps,
+      });
+      expect(outcome.rebound).toEqual(["outsider"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("an EXPLICIT name list still never reaches a third party's member — their key is theirs", async () => {
     const dir = tempDir();
     const out = genFile(dir);

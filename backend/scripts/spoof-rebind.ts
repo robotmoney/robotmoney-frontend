@@ -69,7 +69,7 @@ const readMembers = registerQuery({
   site: "scripts/spoof-rebind:readMembers",
   purpose: "Resolve every member's id, handle and operator under the target lock, so --spoof-keys spoofs in-house members by id and never a third party's.",
   callers: [SPOOF_CLI],
-  probe: { statement: "SELECT id, handle, operator FROM swarm_members ORDER BY id" },
+  probe: { statement: "SELECT id, handle, operator, status FROM swarm_members ORDER BY id" },
 });
 
 const readActiveGenerations = registerQuery({
@@ -191,6 +191,8 @@ export interface SpoofRebindOptions {
   readonly stateRoot: string;
   readonly names: readonly string[];
   readonly flagExplicit: boolean;
+  /** The owned-twin exception (spoof-keys.ts SpoofKeysOptions.seatAll); absent means false. */
+  readonly seatAll?: boolean;
   readonly rmEnv: "prod" | "stage" | null;
   readonly credentialPath: string | null;
   /** A lock the caller holds; proven held immediately before the fenced write. */
@@ -215,8 +217,8 @@ export async function spoofRebind(options: SpoofRebindOptions): Promise<SpoofKey
   const owner = postgres(options.ownerUrl, { max: 1, onnotice: () => {} });
   try {
     const state = await readTargetState(owner);
-    const members = await on(owner, readMembers)<{ id: string; handle: string | null; operator: string | null }>`SELECT id, handle, operator FROM swarm_members ORDER BY id`;
-    const resolved = members.map((m) => ({ name: m.handle ?? m.id, memberId: m.id, operator: m.operator ?? "" }));
+    const members = await on(owner, readMembers)<{ id: string; handle: string | null; operator: string | null; status: string }>`SELECT id, handle, operator, status FROM swarm_members ORDER BY id`;
+    const resolved = members.map((m) => ({ name: m.handle ?? m.id, memberId: m.id, operator: m.operator ?? "", status: m.status }));
     const db = spoofRebindDeps({
       ownerUrl: options.ownerUrl,
       reader: owner,
@@ -233,6 +235,7 @@ export async function spoofRebind(options: SpoofRebindOptions): Promise<SpoofKey
       },
       instance: options.instance,
       stateRoot: options.stateRoot,
+      seatAll: options.seatAll === true,
       names: options.names,
       members: resolved,
       db,
@@ -286,6 +289,7 @@ async function main(request: SpoofRebindRequest): Promise<SpoofKeysOutcome> {
       stateRoot: request.stateRoot,
       names: request.names,
       flagExplicit: request.flagExplicit,
+      seatAll: request.seatAll === true,
       rmEnv: request.rmEnv,
       credentialPath: request.credentialPath,
       lock,
