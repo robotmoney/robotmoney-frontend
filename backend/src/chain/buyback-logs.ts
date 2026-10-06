@@ -411,6 +411,33 @@ async function wethSpentForTx(
   return matched ? Number(raw) / WEI_18 : null;
 }
 
+// The provider's eth_getLogs block-range cap, once it has said what it is (RM-156). mainnet.base.org, the
+// BASE_RPC_URL default, now caps a range at 500 blocks and answers anything wider with HTTP 413 and "eth_getLogs is
+// limited to a 500 range". Halving a 9000-block window gets under that only after five levels, about 31 refused
+// requests per window, each spending the shared rate budget. Read from the answer instead, the cap sizes every later
+// window in this process: one refusal, then windows the provider takes. Process-wide, because the provider does
+// not change between runs; null until a provider has named one.
+let learnedRangeCap: number | null = null;
+const RANGE_CAP_RE = /limited to a (\d+) range/i;
+
+/** The provider's range cap as an RPC error states it, or null when it does not. */
+export function rangeCapFromError(err: unknown): number | null {
+  if (!(err instanceof BaseRpcHttpError) || err.status !== 413) return null;
+  const m = RANGE_CAP_RE.exec(err.detail);
+  const cap = m ? Number(m[1]) : NaN;
+  return Number.isInteger(cap) && cap > 0 ? cap : null;
+}
+
+/** The window the scan reads in: the provider's cap once known, BUYBACK_LOG_CHUNK until then. */
+export function buybackLogWindow(): number {
+  return learnedRangeCap != null ? Math.min(learnedRangeCap, BUYBACK_LOG_CHUNK) : BUYBACK_LOG_CHUNK;
+}
+
+/** Test-only: forget the learned cap. */
+export function _resetBuybackRangeCapForTests(): void {
+  learnedRangeCap = null;
+}
+
 /**
  * `eth_getLogs` over [from, to], halving the range when the provider answers HTTP 413 (the response would be too big).
  *
@@ -429,6 +456,15 @@ async function getLogsSplittingOn413(
     return await ethGetLogs({ ...filter, fromBlock: "0x" + from.toString(16), toBlock: "0x" + to.toString(16) }, rpcOpts());
   } catch (err) {
     if (!(err instanceof BaseRpcHttpError) || err.status !== 413 || from >= to) throw err;
+    // A 413 that names the provider's range cap: read [from, to] in windows of that size, and remember it.
+    const cap = rangeCapFromError(err);
+    if (cap != null && to - from + 1 > cap) {
+      learnedRangeCap = cap;
+      console.warn(`[buyback-logs] the provider caps eth_getLogs at ${cap} blocks; reading ${from}-${to} in windows of ${cap}`);
+      const logs: EthLog[] = [];
+      for (let lo = from; lo <= to; lo += cap) logs.push(...(await getLogsSplittingOn413(filter, lo, Math.min(lo + cap - 1, to))));
+      return logs;
+    }
     const mid = from + Math.floor((to - from) / 2);
     console.warn(`[buyback-logs] eth_getLogs ${from}-${to} answered HTTP 413; reading ${from}-${mid} and ${mid + 1}-${to} separately`);
     const low = await getLogsSplittingOn413(filter, from, mid);
@@ -461,10 +497,13 @@ export async function indexBuybacks(db: RegistryDb = sql): Promise<IndexResult> 
   // of empty eth_getLogs calls before reaching the buyback era. With no env read
   // there is no value to malform, so the old NaN path — which slipped past the
   // `floor <= 0` warning and froze the chunk loop permanently — cannot recur.
-  // The chunk/maxChunks constants are the committed scan-window bounds; 9000 sits
-  // under the common 10k eth_getLogs provider cap (see config.ts).
-  const chunk = BUYBACK_LOG_CHUNK;
-  const maxChunks = BUYBACK_MAX_CHUNKS;
+  // The chunk/maxChunks constants are the committed scan-window bounds (see
+  // config.ts); a provider that caps ranges lower names its cap, and the
+  // window follows it (buybackLogWindow).
+  // One run's reach is BUYBACK_MAX_CHUNKS windows of BUYBACK_LOG_CHUNK blocks. When the provider caps ranges
+  // below the chunk (RM-156), the window shrinks to its cap and the run reads more, smaller windows, so a run still
+  // covers the same blocks: the budget is the blocks, and the windows are how the provider will take them.
+  const blockBudget = BUYBACK_LOG_CHUNK * BUYBACK_MAX_CHUNKS;
   const floor = cfg.fromBlock;
 
   // One run, one working set. See resetBuybackScanCaches for why these are scoped to
@@ -499,8 +538,9 @@ export async function indexBuybacks(db: RegistryDb = sql): Promise<IndexResult> 
     // is a fabricated value_usd — ~13.5% wrong at the seeded buybacks alone
     // (~$1,884.55 today vs ~$2,179.3 then). Each row is priced from its own
     // block's day candle below, cached per day so a many-swap day costs one call.
-    for (let c = 0; c < maxChunks && from <= latest; c++) {
-      const to = Math.min(from + chunk - 1, latest);
+    for (let scanned = 0; scanned < blockBudget && from <= latest; ) {
+      const to = Math.min(from + buybackLogWindow() - 1, latest);
+      scanned += to - from + 1;
       const logs: EthLog[] = await getLogsSplittingOn413(
         { address: cfg.robotmoneyToken, topics: [TRANSFER_TOPIC, null, topicAddress(cfg.primaryWallet)] },
         from,

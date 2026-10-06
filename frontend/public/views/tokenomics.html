@@ -81,7 +81,9 @@
       <span class="rr-meta__i">Price <b x-text="priceLabel()">—</b></span>
       <span class="rr-meta__i">Market cap <b x-text="marketCapLabel()">—</b></span>
       <span class="rr-meta__i">Supply <b x-text="supplyLabel()">—</b></span>
-      <span class="rr-meta__i">Swap fee <b>1.2%</b></span>
+      <span class="rr-meta__i">Held by the protocol <b x-text="heldLabel()">—</b></span>
+      <span class="rr-meta__i">Liquidity <b x-text="liquidityLabel()">—</b></span>
+      <span class="rr-meta__i">24h volume <b x-text="volumeLabel()">—</b></span>
       <span class="rr-meta__i">LP lock <b>Permanent</b></span>
     </div>
 
@@ -110,6 +112,11 @@
         <h2 class="rr-sec__h" id="fees-h">Swap fees</h2>
       </div>
       <p class="tok__intro">Every swap in the token's Uniswap v4 pool pays 1.2%.</p>
+      <div class="rr-meta rr-meta--lead tok__earned">
+        <span class="rr-meta__i rr-meta__i--list">Earned by the protocol since launch, at today's prices <b x-text="feesLifetimeLabel()">—</b></span>
+        <span class="rr-meta__i rr-meta__i--list">Paid as <b x-text="feesPaidInLabel()">—</b></span>
+        <span class="rr-meta__i">Last 30 days, estimated <b x-text="fees30dLabel()">—</b></span>
+      </div>
       <div class="rr-x">
         <div class="rr-mix">
           <figure class="rr-ring tok__ring">
@@ -244,6 +251,13 @@
           <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="governance-a" @click="open = !open"><span>What governance is planned for $ROBOTMONEY?</span></button>
           <div class="rr-disc__anim" id="governance-a" role="region" aria-label="What governance is planned for $ROBOTMONEY?" :inert="!open">
             <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>None of it is built, and it has no ship date. A published quantitative filter would decide which tokens are eligible, and holders would vote their weights, so projects that want inclusion would hold $ROBOTMONEY. The vote would cover sleeve weights and nothing else: not the protocol wallets, marketing or operations. The design borrows Curve's gauge voting, with the filter in place of emissions, and Botto's allocation-only vote.</p></div></div>
+          </div>
+        </div>
+
+        <div class="rr-disc" id="risks" x-data="{ open: location.hash === '#risks' }" @hashchange.window="if (location.hash === '#risks') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="risks-a" @click="open = !open"><span>What are the risks of holding $ROBOTMONEY?</span></button>
+          <div class="rr-disc__anim" id="risks-a" role="region" aria-label="What are the risks of holding $ROBOTMONEY?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>Its price can fall to zero, and its pool is small, so a large trade moves the price. The protocol's own wallets hold part of the supply and could sell it. The token has no claim on the vault's returns and no vote yet, and buybacks depend on swap fees, which fall when trading does. It runs on Doppler's and Uniswap's contracts, and a flaw in either could lose funds.</p></div></div>
           </div>
         </div>
 

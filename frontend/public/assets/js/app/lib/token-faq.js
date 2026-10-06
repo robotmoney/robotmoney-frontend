@@ -59,6 +59,11 @@ export const TOKEN_FAQ = [
     a: "None of it is built, and it has no ship date. A published quantitative filter would decide which tokens are eligible, and holders would vote their weights, so projects that want inclusion would hold $ROBOTMONEY. The vote would cover sleeve weights and nothing else: not the protocol wallets, marketing or operations. The design borrows Curve's gauge voting, with the filter in place of emissions, and Botto's allocation-only vote.",
   },
   {
+    id: "risks",
+    q: "What are the risks of holding $ROBOTMONEY?",
+    a: "Its price can fall to zero, and its pool is small, so a large trade moves the price. The protocol's own wallets hold part of the supply and could sell it. The token has no claim on the vault's returns and no vote yet, and buybacks depend on swap fees, which fall when trading does. It runs on Doppler's and Uniswap's contracts, and a flaw in either could lose funds.",
+  },
+  {
     id: "participation",
     q: "How do I buy $ROBOTMONEY?",
     a: `In its Uniswap v4 pool on Base, directly, through Bankr or through any DEX aggregator. Check the contract address, ${TOKEN_CONTRACT}, before you trade.`,

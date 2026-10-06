@@ -581,7 +581,12 @@ async function backoffOrGiveUp(waitMs: number, deadline: number, method: string,
 
 /** A non-2xx answer the transport did not retry (or ran out of retries for). The message is the one callers have always seen. */
 export class BaseRpcHttpError extends Error {
-  constructor(readonly status: number) {
+  // `detail` is the start of the provider's own answer, kept because a status
+  // alone hides what a caller can act on: mainnet.base.org answers an
+  // over-wide eth_getLogs with HTTP 413 and "eth_getLogs is limited to a 500
+  // range" (RM-156), which buyback-logs.ts reads to size its window. The
+  // message stays the status alone, as callers and tests match it.
+  constructor(readonly status: number, readonly detail: string = "") {
     super(`Base RPC HTTP ${status}`);
     this.name = "BaseRpcHttpError";
   }
@@ -674,8 +679,10 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
         continue;
       }
       // Exhausted / non-transient: THROW so the caller degrades to stale. Never
-      // fabricate, never report live off a dead endpoint.
-      throw new BaseRpcHttpError(res.status);
+      // fabricate, never report live off a dead endpoint. The answer's first
+      // 300 characters ride along as `detail`; a body that cannot be read is "".
+      const detail = await res.text().then((t) => t.slice(0, 300), () => "");
+      throw new BaseRpcHttpError(res.status, detail);
     }
   }
 }

@@ -64,6 +64,25 @@ export function registerFeeChart(Alpine) {
       const v = this.metrics?.robotmoney?.totalSupply;
       return v == null ? "—" : `${Math.round(v / 1e9).toLocaleString("en-US")}B`;
     },
+    // RM-156: the supply the protocol's wallets hold, the pool's market, and
+    // what the protocol has earned from swap fees. Any field the API leaves
+    // out (an older API, a degraded read) reads "—".
+    heldLabel() {
+      const h = this.metrics?.protocolHoldings;
+      if (h?.robotmoney == null) return "—";
+      const pct = h.pctOfSupply == null ? "" : ` (${h.pctOfSupply.toFixed(1)}%)`;
+      return `${(h.robotmoney / 1e9).toFixed(2)}B${pct}`;
+    },
+    usdLabel(v) { return v == null ? "—" : `$${Math.round(v).toLocaleString("en-US")}`; },
+    liquidityLabel() { return this.usdLabel(this.metrics?.market?.liquidityUsd); },
+    volumeLabel() { return this.usdLabel(this.metrics?.market?.volume24hUsd); },
+    feesLifetimeLabel() { return this.usdLabel(this.metrics?.feeIncome?.lifetimeUsd); },
+    feesPaidInLabel() {
+      const f = this.metrics?.feeIncome;
+      if (f?.lifetimeWeth == null || f?.lifetimeRobotmoney == null) return "—";
+      return `${f.lifetimeWeth.toFixed(2)} WETH + ${(f.lifetimeRobotmoney / 1e9).toFixed(2)}B $ROBOTMONEY`;
+    },
+    fees30dLabel() { return this.usdLabel(this.metrics?.feeIncome?.last30DaysUsd); },
     // Home fee-routing card: Creator share = the Protocol leg; Interface &
     // Protocol = every other leg (Bankr + Doppler + Ecosystem) summed.
     feeCreatorPct() { const fs = this.feeSplit(); return fs.length ? fs[0].pct : null; },

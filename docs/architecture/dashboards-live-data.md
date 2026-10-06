@@ -127,6 +127,15 @@ interface Buybacks {
   Bankr 36.1 / Doppler 5 / Ecosystem 1.9; `bun scripts/token-fees.ts` reads them
   live); it is `managed`/static, not a chain read — label its `source` accordingly but
   keep it in the DTO so the frontend stops baking it.
+- **RM-156 additions** (additive, no migration): `protocolHoldings` and
+  `feeIncome` come from ONE Multicall3 eth_call (`chain/token-fee-income.ts`)
+  over Doppler's locker and hook (`config.ts` `ROBOTMONEY_DOPPLER`) and the prop
+  wallets' `balanceOf`. Lifetime fees are the prop wallets' share of the
+  locker's running totals, exact, in WETH and ROBOTMONEY, with their value at
+  today's prices; `last30DaysUsd` is an estimate, the pool's 30-day volume ×
+  its swap fee × the protocol's share. `market` is GeckoTerminal's reading of
+  the pool (`fetchGeckoPoolStatsUsd`), cached ten minutes. Each leg degrades to
+  `null` + `stale: true` on its own; stub sources serve fixtures.
 - **Postgres**: none required for the live read; may reuse
   `vault_share_price_history`-style persistence if a `stale` fallback is added
   (optional — otherwise degrade price/supply legs to `null`).
@@ -142,6 +151,9 @@ interface TokenMetrics {
     marketCapUsd: number | null; // priceUsd * totalSupply
   };
   feeSplit: { label: string; pct: number }[]; // fixed Doppler pool shares
+  protocolHoldings: { robotmoney: number | null; pctOfSupply: number | null };
+  market: { liquidityUsd: number | null; volume24hUsd: number | null };
+  feeIncome: { lifetimeWeth: number | null; lifetimeRobotmoney: number | null; lifetimeUsd: number | null; last30DaysUsd: number | null };
   asOf: string;
   source: "live" | "stub";
   stale: boolean;
