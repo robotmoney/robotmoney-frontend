@@ -102,8 +102,9 @@ a contract, so the addresses here are the deployed ones.
    - **An agent wallet**, for an agent that holds its own funds. MetaMask's
      agent wallet (the `metamask-agent-wallet` skill) is one example: you send
      through it, inside its Guard mode allowlist.
-   - **`rmpc`**, one option among these, which needs a gateway set up to match
-     it (see `deposit` below).
+   - **`rmpc`**, one option among these. It signs with its default software
+     keystore, with HSM or KMS as optional backends, and needs a corresponding
+     gateway set up (see `deposit` below).
 4. **Gas.** Read the owner's ETH balance (`cast balance "$OWNER" --rpc-url
    "$RPC" --ether`). A deposit is two transactions and costs a few cents on
    Base. With no ETH, stop and ask the owner to send some to `OWNER` first.
@@ -283,10 +284,9 @@ Send them in order: the approve must be confirmed before the deposit.
   wallet: it signs calls to the Robot Money gateway and nothing else, by
   design. To use it, the owner must have a corresponding gateway set up. The
   owner authorizes its key once, under a policy with limits, and it deposits
-  through the gateway, which sends the vault tokens to the owner. `rmpc` can
-  hold its key in an optional HSM or KMS backend. On Base, writes need such a
-  production-grade backend: do not use `rmpc`'s software keystore to deposit on
-  Base. Until this file lists the gateway, do not use `rmpc` for deposits.
+  through the gateway, which sends the vault tokens to the owner. `rmpc`
+  signs with its default software keystore. An HSM or KMS backend is
+  optional. Until this file lists the gateway, do not use `rmpc` for deposits.
 
 After the deposit confirms, run `position` and report the shares received
 per vault.
