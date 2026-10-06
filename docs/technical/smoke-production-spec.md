@@ -217,7 +217,7 @@ Each roster entry is one long-lived container (`restart: unless-stopped`) that b
 
 **The judge is a participant** exactly like an agent. No component of the stack judges inline, and nothing but the admin route writes `swarm_judge_config`.
 
-**Third-party gate.** A judgement from a judge whose member `operator` is `robotmoney` is in-house and is accepted whatever `swarm_judge_config.third_party_enabled` says. A judgement from any other judge is refused while that flag is false.
+**Third-party gate.** A judgement from an in-house judge is accepted whatever `swarm_judge_config.third_party_enabled` says. In-house means the member's `operator` is `robotmoney`, or the member holds one of the four in-house seats by handle (`athena`, `noop-analyst`, `robot-money`, `themis`) whatever its `operator` text says (owner, 2026-10-06: production's admin set themis's operator to "RM Protocol Labs" on 2026-09-29, and a gate keyed on the literal alone served the real judge nothing). Handles are admin-managed, so no member can make itself a seat. A judgement from any other judge is refused while that flag is false, and such a judge is served no pending session.
 
 ### 6.3 Sessions are independent
 

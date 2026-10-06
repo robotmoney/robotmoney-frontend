@@ -25,6 +25,8 @@
 //   3. Flag on â†’ the third-party judge is accepted and its row names it.
 //   4. The flag is read inside the write transaction.
 //   5. A member cannot make itself in-house through self-service.
+//   6. An in-house seat (admin-managed handle) is in-house whatever its operator
+//      text says (owner, 2026-10-06).
 import { expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import * as admin from "../src/swarm/admin.ts";
@@ -104,6 +106,28 @@ test("the in-house judge (operator 'robotmoney') is accepted with the flag off â
   expect(result.judgeOfRecord).toBe(true);
   expect(result.state).toBe("judged");
   expect(await judgementRows(sessionId)).toEqual([{ judged_by: inHouse.id, judged_by_member_id: inHouse.id }]);
+});
+
+test("an in-house SEAT is in-house whatever its operator says: production's themis reads 'RM Protocol Labs' (owner, 2026-10-06)", async () => {
+  // Production's admin set themis's operator to a display name on 2026-09-29.
+  // Keyed on the literal alone, the gate served the real judge nothing and every
+  // session published no_consensus. The seat (an admin-managed handle) decides.
+  expect((await getJudgeConfig()).thirdPartyEnabled).toBe(false);
+  const taken = new Set(((await sql`SELECT handle FROM swarm_members WHERE handle = ANY(${[...ic.IN_HOUSE_SEAT_HANDLES]}::text[])`) as any[]).map((r) => r.handle));
+  const seat = ic.IN_HOUSE_SEAT_HANDLES.find((h) => !taken.has(h));
+  if (!seat) throw new Error("every in-house seat handle is already taken in the test database");
+  const judge = await seatJudge({ prefix: "seat", operator: "RM Protocol Labs" });
+  await sql`UPDATE swarm_members SET handle = ${seat} WHERE id = ${judge.id}`;
+  // The control: the same operator text on a member that is not a seat stays third-party.
+  const lookalike = await seatJudge({ prefix: "lookalike", operator: "RM Protocol Labs" });
+  const sessionId = await judging("in_house_seat");
+
+  expect((await ic.pendingJudgingFor(judge.id)).map((p) => p.sessionId)).toEqual([sessionId]);
+  expect(await ic.pendingJudgingFor(lookalike.id)).toEqual([]);
+  expect(await ic.submitJudgement(lookalike.token, await signedJudgement(lookalike, sessionId)))
+    .toEqual({ ok: false, status: 403, error: "third_party_judging_disabled" });
+  const result = await ic.submitJudgement(judge.token, await signedJudgement(judge, sessionId));
+  expect(result).toMatchObject({ ok: true, judgeOfRecord: true, state: "judged" });
 });
 
 test("while the flag is off a third-party judge is not the judge of record, even with the lowest member id", async () => {
