@@ -39,9 +39,8 @@ start of every run.
 
 - **The owner's funds, the owner's signature.** You prepare transactions;
   the depositor signs them with whatever they choose, a Safe's signers
-  included. Humans can also deposit in the web interface on the Robot Money
-  dapp. An agent may sign through an agent wallet inside the limits its owner
-  set (MetaMask's agent wallet in Guard mode is one example) or through
+  included. An agent may sign through an agent wallet inside the limits its
+  owner set (MetaMask's agent wallet in Guard mode is one example) or through
   `rmpc` under its gateway policy.
 - **Confirmation is a setting, `confirm`, on unless the owner turns it
   off.** On: show the split, the fees and the gas, and wait for a yes. A
@@ -88,9 +87,8 @@ a contract, so the addresses here are the deployed ones.
    from getfoundry.sh. Do not install it yourself.
 2. **The owner's address** (`OWNER`): the wallet that will sign and receive
    the vault tokens.
-3. **How they sign.** The depositor can use whatever they want. A human can
-   deposit in the web interface on the Robot Money dapp, with no agent
-   involved. An agent can use any wallet on Base. Ask once and remember:
+3. **How they sign.** The depositor can use whatever they want. An agent can
+   use any wallet on Base. Ask once and remember:
    - **A Safe multisig**, the usual home of a treasury. `OWNER` is the Safe's
      address: it holds the USDC and receives the vault tokens. You prepare one
      batch; the Safe's signers approve it up to its threshold, and one of them
