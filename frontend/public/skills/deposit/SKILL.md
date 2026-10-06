@@ -6,8 +6,9 @@ description: >
   Robot Money?", "withdraw from Robot Money", or "rebalance my Robot Money
   position". Reads the allocation and each vault on chain, previews the split
   before anything is signed, prepares exact-amount transactions for any
-  wallet on Base (a Safe multisig, a Ledger or Trezor, MetaMask, Rabby) or
-  sends them through MetaMask's agent wallet, and reports the vault tokens
+  wallet on Base (a Safe multisig, a Ledger or Trezor, MetaMask, Rabby), sends
+  them through an agent wallet such as MetaMask's, or deposits through `rmpc`
+  when the owner has a matching gateway, and reports the vault tokens
   received. Never holds a key,
   never approves more than the deposit, never swaps outside the vaults.
 ---
@@ -37,9 +38,11 @@ start of every run.
 ## Ground rules
 
 - **The owner's funds, the owner's signature.** You prepare transactions;
-  the owner's wallet signs them, a Safe's signers included. The one
-  exception is MetaMask's agent wallet, which signs inside the limits its
-  owner set in Guard mode.
+  the depositor signs them with whatever they choose, a Safe's signers
+  included. Humans can also deposit in the web interface on the Robot Money
+  dapp. An agent may sign through an agent wallet inside the limits its owner
+  set (MetaMask's agent wallet in Guard mode is one example) or through
+  `rmpc` under its gateway policy.
 - **Confirmation is a setting, `confirm`, on unless the owner turns it
   off.** On: show the split, the fees and the gas, and wait for a yes. A
   wallet the owner signs with always shows them the transactions anyway. Off
@@ -59,7 +62,7 @@ start of every run.
 ## Contracts on Base (chain id 8453)
 
 ```bash
-RPC="${BASE_RPC_URL:-https://mainnet.base.org}"
+RPC="${BASE_RPC_URL:?set BASE_RPC_URL to a Base mainnet RPC endpoint}"
 USDC=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
 ROUTER=           # PortfolioRouter: not on Base yet
 RMUSDC=0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd
@@ -69,6 +72,10 @@ RMRWA=            # not on Base yet
 REGISTRY=         # VaultRegistry: not on Base yet
 GATEWAY=          # the gateway rmpc deposits through: not on Base yet
 ```
+
+There is no default RPC endpoint. The reader supplies `BASE_RPC_URL`, an
+endpoint they trust for Base mainnet. If it is unset, stop and ask the owner
+for one.
 
 An empty address is a vault (or the router) that is not live. This file is
 served by the Robot Money site and updated in the same release that deploys
@@ -81,7 +88,9 @@ a contract, so the addresses here are the deployed ones.
    from getfoundry.sh. Do not install it yourself.
 2. **The owner's address** (`OWNER`): the wallet that will sign and receive
    the vault tokens.
-3. **How they sign.** Ask once and remember:
+3. **How they sign.** The depositor can use whatever they want. A human can
+   deposit in the web interface on the Robot Money dapp, with no agent
+   involved. An agent can use any wallet on Base. Ask once and remember:
    - **A Safe multisig**, the usual home of a treasury. `OWNER` is the Safe's
      address: it holds the USDC and receives the vault tokens. You prepare one
      batch; the Safe's signers approve it up to its threshold, and one of them
@@ -90,9 +99,11 @@ a contract, so the addresses here are the deployed ones.
      Frame, or from a terminal with `cast --ledger` or `cast --trezor`.
    - **Any other wallet on Base** (MetaMask, Rabby, Coinbase Wallet): you
      prepare, they sign.
-   - **MetaMask's agent wallet** (the `metamask-agent-wallet` skill), for an
-     agent that holds its own funds: you send through it, inside its Guard
-     mode allowlist.
+   - **An agent wallet**, for an agent that holds its own funds. MetaMask's
+     agent wallet (the `metamask-agent-wallet` skill) is one example: you send
+     through it, inside its Guard mode allowlist.
+   - **`rmpc`**, one option among these, which needs a gateway set up to match
+     it (see `deposit` below).
 4. **Gas.** Read the owner's ETH balance (`cast balance "$OWNER" --rpc-url
    "$RPC" --ether`). A deposit is two transactions and costs a few cents on
    Base. With no ETH, stop and ask the owner to send some to `OWNER` first.
@@ -261,16 +272,21 @@ Send them in order: the approve must be confirmed before the deposit.
 - **Any other wallet.** Hand over the prepared transactions, to sign one at
   a time. A smart account that supports EIP-5792 takes both as one batch.
 
-- **MetaMask's agent wallet.** Send each prepared transaction with the
+- **An agent wallet, such as MetaMask's.** Any agent wallet that sends a
+  transaction to a chosen address works. For MetaMask's agent wallet, send
+  each prepared transaction with the
   `metamask-agent-wallet` skill's send-transaction, chain 8453, its `to` and
   `data`, value 0. Its Guard mode must allowlist USDC, the router and the live
   vaults; if it refuses, show the owner the refusal and stop.
 
-- **`rmpc`, once the gateway on Base points at the router.** `rmpc` is not
-  a wallet: it signs calls to the Robot Money gateway and nothing else, by
-  design. The owner authorizes its key once, under a policy with limits, and
-  it deposits through the gateway, which sends the vault tokens to the owner.
-  Until this file lists the gateway, do not use `rmpc` for deposits.
+- **`rmpc`, one option, which needs a matching gateway.** `rmpc` is not a
+  wallet: it signs calls to the Robot Money gateway and nothing else, by
+  design. To use it, the owner must have a corresponding gateway set up. The
+  owner authorizes its key once, under a policy with limits, and it deposits
+  through the gateway, which sends the vault tokens to the owner. `rmpc` can
+  hold its key in an optional HSM or KMS backend. On Base, writes need such a
+  production-grade backend: do not use `rmpc`'s software keystore to deposit on
+  Base. Until this file lists the gateway, do not use `rmpc` for deposits.
 
 After the deposit confirms, run `position` and report the shares received
 per vault.
