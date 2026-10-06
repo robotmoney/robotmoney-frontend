@@ -15,9 +15,10 @@
 //      read as rm_readonly refused: "deployment_identity carries neither a
 //      `kind` nor an `identity` column".
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { restoreDumpArgv, teardownArgv } from "../../lib/restore-container.ts";
+import { restoreDumpArgv, restorePipelineArgv, teardownArgv } from "../../lib/restore-container.ts";
 import { dumpOwnershipSql, TARGET_STATE_TABLES } from "../../lib/smoke-database.ts";
 
 const PASSWORDS = { rm_owner: "o_pw", rm_app: "a_pw", rm_worker: "w_pw", rm_readonly: "r_pw" };
@@ -35,6 +36,30 @@ describe("restore-container: the archive is read by the restore container's own 
     for (const flag of ["--no-owner", "--no-privileges", "--exit-on-error"]) expect(argv).toContain(flag);
     // Over the container's local socket: no host, port or password travels in argv.
     expect(argv.some((a) => a.startsWith("--host") || a.startsWith("--port") || a.includes("PGPASSWORD"))).toBe(false);
+  });
+
+  test("gpg pipes into pg_restore through one bash pipe, never a JS pump (1178; stage-2 2026-10-06)", () => {
+    const argv = restorePipelineArgv("/b/.backup-passphrase", "/b/rm dump.gpg", "c");
+    expect(argv.slice(0, 2)).toEqual(["bash", "-c"]);
+    // Paths are positional arguments, so a space or quote in them cannot change the script.
+    expect(argv[2]).toBe('gpg --batch --yes --passphrase-file "$1" --decrypt "$2" | "${@:3}"');
+    expect(argv.slice(4, 6)).toEqual(["/b/.backup-passphrase", "/b/rm dump.gpg"]);
+    expect(argv.slice(6)).toEqual(restoreDumpArgv("c"));
+    // pg_restore's status is the verdict: no pipefail.
+    expect(argv[2]).not.toContain("pipefail");
+  });
+
+  test("the pipeline delivers every byte and exits with the reader's status", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "restore-pipe-"));
+    // A fake gpg on PATH writes 8 MiB; a slow reader counts it. A JS pump dropped the tail here.
+    writeFileSync(join(dir, "gpg"), "#!/bin/bash\nhead -c 8388608 /dev/zero\n", { mode: 0o755 });
+    const argv = restorePipelineArgv("p", "d", "c").slice(0, 6);
+    const proc = Bun.spawn([...argv, "bash", "-c", "sleep 0.2; wc -c; exit 3"], {
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+      stdout: "pipe",
+    });
+    expect(await proc.exited).toBe(3);
+    expect((await new Response(proc.stdout).text()).trim()).toBe("8388608");
   });
 
   test("teardown removes the container's anonymous data volume with it (-v)", () => {
