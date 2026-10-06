@@ -52,9 +52,13 @@ export interface SessionVerdict {
 /**
  * PURE. Grade the sessions of the window.
  *
- *  - published without outcome `judged`, an applied model judgement or a
- *    consensus receipt FAILS: an unjudged publish is a platform failure, whether
- *    the epoch decided `no_consensus` or the judge was switched off;
+ *  - published `no_consensus` is an acceptable outcome (owner, 2026-10-06; runbook
+ *    R7.6): it is a WARNING, it needs no judgement or receipt, and it is never
+ *    counted as a good session, so a judge that never forms a consensus still
+ *    fails the per-subject minimum and the participants check;
+ *  - published with any other outcome than `judged` (judge off, `not_judged`, none)
+ *    FAILS, as does `judged` without an applied model judgement or a consensus
+ *    receipt: an unjudged publish is a platform failure;
  *  - a session still open past `stuckAfterMin` FAILS;
  *  - a session under the attendance bar is a WARNING, not a failure: a take that
  *    timed out or was rejected is a model outcome;
@@ -74,9 +78,13 @@ export function evaluateSessions(
   const goodBySubject = new Map(subjects.map((s) => [s, 0]));
   for (const r of rows) {
     if (r.state === "published") {
-      if (r.outcome !== "judged") failures.push(`session ${r.id} (${r.subject}) published unjudged (judging outcome '${r.outcome ?? "none"}')`);
-      if (!r.judged) failures.push(`session ${r.id} (${r.subject}) published without an applied model/enforce judgement`);
-      if (!r.receipt) failures.push(`session ${r.id} (${r.subject}) published without a consensus receipt`);
+      if (r.outcome === "no_consensus") {
+        warnings.push(`session ${r.id} (${r.subject}) published no_consensus: an acceptable outcome, not counted as a good session`);
+      } else {
+        if (r.outcome !== "judged") failures.push(`session ${r.id} (${r.subject}) published unjudged (judging outcome '${r.outcome ?? "none"}')`);
+        if (!r.judged) failures.push(`session ${r.id} (${r.subject}) published without an applied model/enforce judgement`);
+        if (!r.receipt) failures.push(`session ${r.id} (${r.subject}) published without a consensus receipt`);
+      }
       if (r.takes < need) warnings.push(`session ${r.id} (${r.subject}) published with ${r.takes} take(s), under ${need} of ${activeAnalysts} active`);
       if (r.outcome === "judged" && r.judged && r.receipt && r.takes >= need) goodBySubject.set(r.subject, (goodBySubject.get(r.subject) ?? 0) + 1);
     } else if (r.state !== "cancelled" && r.ageMin > opts.stuckAfterMin) {
