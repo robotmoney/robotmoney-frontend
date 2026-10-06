@@ -458,6 +458,75 @@ export async function restoreBackupIntoContainer(
 }
 
 /**
+ * Start a smoke-twin container on a volume a PREVIOUS run restored and kept, with no
+ * restore (`--local dump --reuse`, runbook R3.8, issue 1174).
+ *
+ * The cluster already holds the twin's roles and data, and the postgres image
+ * ignores POSTGRES_PASSWORD for an initialised data directory, so the password the
+ * previous container had is not recoverable from the volume. The restore superuser
+ * connects over the container's own local socket (trust, as the image configures
+ * it), so this sets a NEW password for it and hands that back, exactly the shape
+ * {@link restoreBackupIntoContainer} returns. Never run while another container
+ * still mounts the volume: two postgres servers on one data directory are two
+ * writers on one cluster (the caller adopts a live holder instead).
+ */
+export async function restartKeptTwinContainer(opts: {
+  volume: string;
+  stamp: string;
+  project: string;
+  bindHost: string;
+  log: (m: string) => void;
+}): Promise<RestoredContainer | { error: string; container?: string }> {
+  const { log } = opts;
+  if ((await run(["docker", "volume", "inspect", opts.volume], { log: () => {} })) !== 0) {
+    return { error: `the kept volume ${opts.volume} is gone; drop --reuse to restore the dump fresh` };
+  }
+  const holders = Bun.spawnSync(["docker", "ps", "-q", "--filter", `volume=${opts.volume}`]);
+  if (new TextDecoder().decode(holders.stdout).trim() !== "") {
+    return { error: `the kept volume ${opts.volume} is still mounted by a running container; stop it first (bun smoke:down), never with -v` };
+  }
+  const container = `rm-restore-${opts.stamp}-${Math.random().toString(36).slice(2, 8)}`;
+  const environment = resolveStackEnvironment(process.env);
+  const labels = { ...stackLabels(environment, opts.project), [ROLE_LABEL]: TWIN_ROLE };
+  const password = generateLocalPassword();
+  log(`starting the kept smoke-twin on volume ${opts.volume} (${IMAGE}, no restore)`);
+  const runCode = await run(
+    [
+      "docker", "run", "-d", "--name", container,
+      "-e", `POSTGRES_USER=${LOCAL_USER}`, "-e", `POSTGRES_PASSWORD=${password}`, "-e", `POSTGRES_DB=${LOCAL_DB}`,
+      "-p", `${opts.bindHost}::5432`,
+      ...SHM_FLAGS, ...dockerLabelFlags(labels),
+      "-v", `${opts.volume}:/var/lib/postgresql`,
+      IMAGE,
+    ],
+    { log },
+  );
+  if (runCode !== 0) return { error: "docker run failed" };
+
+  const portOut = Bun.spawnSync(["docker", "inspect", "-f", '{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}', container]);
+  const hostPort = new TextDecoder().decode(portOut.stdout).trim();
+  const literal = `'${password.replaceAll("'", "''")}'`;
+  log("waiting for the kept cluster to accept connections");
+  let reset = false;
+  for (let i = 0; i < 90 && !reset; i++) {
+    const r = Bun.spawnSync(["docker", "exec", container, "psql", "-U", LOCAL_USER, "-d", LOCAL_DB, "-X", "-Atc", `ALTER ROLE ${LOCAL_USER} PASSWORD ${literal}`]);
+    if (r.exitCode === 0) reset = true;
+    else await Bun.sleep(1000);
+  }
+  if (!reset) return { error: "the kept cluster never accepted a connection", container };
+  const env = { ...process.env, PGPASSWORD: password };
+  for (let i = 0; i < 30; i++) {
+    const check = Bun.spawnSync(["psql", `--host=${opts.bindHost}`, `--port=${hostPort}`, `--username=${LOCAL_USER}`, `--dbname=${LOCAL_DB}`, "-X", "-Atc", "SELECT 1"], { env });
+    if (check.exitCode === 0) {
+      log(`kept smoke-twin ready on ${opts.bindHost}:${hostPort}`);
+      return { container, host: opts.bindHost, port: Number(hostPort), username: LOCAL_USER, password, database: LOCAL_DB };
+    }
+    await Bun.sleep(1000);
+  }
+  return { error: "the kept smoke-twin never became reachable from the host", container };
+}
+
+/**
  * The pg_restore that reads the decrypted archive: the RESTORE CONTAINER'S own
  * client, over its local socket, never the host's.
  *
