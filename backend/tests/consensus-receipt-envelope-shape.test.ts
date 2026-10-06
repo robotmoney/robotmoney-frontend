@@ -1,10 +1,9 @@
 // THE READ-TIME ENVELOPE IS A PINNED SHAPE, NOT A ROUTE-LOCAL CONVENTION (T24).
 //
-// GET /api/swarm/sessions/:id/consensus-receipt/verified serves a read-time
-// verification envelope around the receipt. (Its sibling — the ANCHORED path
-// without /verified — serves the bare canonical bytes since decision D10;
-// consensus-receipt-bare-bytes.test.ts owns that one, and the two files
-// together are what stops the envelope and the anchor being confused again.)
+// GET /api/swarm/sessions/:id/consensus-receipt serves a read-time
+// verification envelope around the receipt, exactly the body production v0.5.4
+// serves at that path. (Its sibling, .../consensus-receipt/canonical, serves the
+// bare canonical bytes; consensus-receipt-bare-bytes.test.ts owns that one.)
 // Every consumer
 // downstream — rmpc, the devnet acceptance gate, robotmoney-core's shell
 // helpers, the dapp — has to parse that shape, and before
@@ -65,7 +64,7 @@ async function seedStoredReceipt(): Promise<void> {
 
 test("the served envelope IS consensus-receipt.envelope.json, key for key and value for value", async () => {
   await seedStoredReceipt();
-  const res = (await get(path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: ENVELOPE.sessionId }))) as {
+  const res = (await get(path(ROUTES.swarm.sessionConsensusReceipt, { id: ENVELOPE.sessionId }))) as {
     status: number;
     body: Record<string, unknown>;
   };
@@ -77,6 +76,13 @@ test("the served envelope IS consensus-receipt.envelope.json, key for key and va
   // written out one by one by the route, so their order is the route's choice
   // and a reorder there is a real change to what consumers receive.
   expect(Object.keys(res.body)).toEqual(Object.keys(ENVELOPE));
+  // PRODUCTION'S KEY LIST, written out by hand from v0.5.4's handler
+  // (backend/src/api/routes/swarm/receipts.ts at tag v0.5.4) so that a fixture
+  // edit cannot move the pin along with the route.
+  expect(Object.keys(res.body)).toEqual([
+    "sessionId", "subjectId", "schemaVersion", "publishedAt", "receipt",
+    "canonicalBytes", "verified", "signatures", "unverifiedReasons",
+  ]);
 });
 
 test("the RECEIPT's key order is NOT preserved through storage — and that is why canonicalBytes exists", async () => {
@@ -92,7 +98,7 @@ test("the RECEIPT's key order is NOT preserved through storage — and that is w
   // a `text` column, and re-canonicalizing the served receipt reproduces it —
   // asserted below, so the claim is checked rather than argued.
   await seedStoredReceipt();
-  const res = (await get(path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: ENVELOPE.sessionId }))) as {
+  const res = (await get(path(ROUTES.swarm.sessionConsensusReceipt, { id: ENVELOPE.sessionId }))) as {
     status: number;
     body: any;
   };
@@ -144,7 +150,7 @@ test("`verified` is RECOMPUTED on the read, not echoed from storage", async () =
     VALUES (${sessionId}, ${ENVELOPE.subjectId}, ${ENVELOPE.schemaVersion}, ${judgement!.id}, 1,
             ${sql.json(tampered)}, ${canonicalBytes}, ${ENVELOPE.publishedAt})`;
 
-  const res = (await get(path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: sessionId }))) as { status: number; body: any };
+  const res = (await get(path(ROUTES.swarm.sessionConsensusReceipt, { id: sessionId }))) as { status: number; body: any };
   // SERVED, NOT WITHHELD, and not passed off as valid: the envelope shape is
   // unchanged, `verified` is false, and the reason names the member.
   expect(res.status).toBe(200);

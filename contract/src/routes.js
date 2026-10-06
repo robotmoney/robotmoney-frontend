@@ -158,21 +158,18 @@ export const ROUTES = {
     // digest. The path is derived from the session id alone, so it survives
     // every redeploy and every rebuild of the frontend.
     //
-    // THIS IS THE ANCHORED URL, AND IT SERVES THE ANCHORED BYTES (decision
-    // D10). `robotmoney-core` writes this path on chain as `payloadUri` beside
-    // `payloadDigest`, so a GET here returns the BARE canonical receipt — the
-    // exact keccak256 preimage, `application/json`, byte-stable — and nothing
-    // wrapped around it. It used to answer the read-time verification envelope,
-    // whose keccak256 is not the anchored digest; a third party reading only
-    // the chain then had to know, from nowhere on chain, to unwrap `.receipt`
-    // and re-canonicalize. The envelope moved to `sessionConsensusReceiptVerified`.
-    sessionConsensusReceipt: "/api/swarm/sessions/:id/consensus-receipt", // GET — public, BARE canonical bytes (anchored as payloadUri)
-    // The read-time VERIFICATION envelope for the same receipt: the receipt
-    // plus `verified`, the per-signature verdicts and `unverifiedReasons`, all
-    // recomputed on the request. A sibling of the anchored path rather than a
-    // query parameter on it, so that "the anchored URL" stays a whole URL a
-    // verifier can compare for equality. Nothing anchors this path.
-    sessionConsensusReceiptVerified: "/api/swarm/sessions/:id/consensus-receipt/verified", // GET — public, read-time-verified envelope
+    // This path answers the read-time VERIFICATION ENVELOPE, exactly as
+    // production (v0.5.4) does: the receipt plus `verified`, the per-signature
+    // verdicts and `unverifiedReasons`, all recomputed on the request. The
+    // deployment refactor does not change what the product serves (owner rule,
+    // 2026-10-03), so this URL keeps its production body.
+    sessionConsensusReceipt: "/api/swarm/sessions/:id/consensus-receipt", // GET — public, read-time-verified envelope
+    // The BARE canonical bytes of the same receipt: the keccak256 preimage of
+    // `payloadDigest` minus its pinned domain prefix, `application/json`,
+    // byte-stable. A sibling path rather than a query parameter, so each URL
+    // stays a whole URL a verifier can compare for equality. Added after
+    // v0.5.4; production has no such path.
+    sessionConsensusReceiptCanonical: "/api/swarm/sessions/:id/consensus-receipt/canonical", // GET — public, BARE canonical bytes
     // GET — the session's PUBLIC judgements: one per judging party (its newest
     // opinion that reached the session in `enforce`), newest first, and only
     // once the session is published. `shadow` opinions are never served here —
@@ -249,6 +246,10 @@ export const ROUTES = {
       // spend { inputTokens?, outputTokens?, totalTokens?, costUsd? } (D55
       // decision 3), outside the signed bytes.
       judgement: "/api/swarm/participants/judgement",
+      // POST (judge bearer) { sessionId, reason, detail?, attempt? } — a judge
+      // reporting that one attempt submitted nothing, by its D-A7 name. It
+      // decides nothing: the admin overview reads it to say WHY (issue #1117).
+      judgeRefusal: "/api/swarm/participants/judge/refusal",
     },
 
     // Admin lifecycle (X-Admin-Token). The backend registers ONE dispatcher at
@@ -351,8 +352,24 @@ export const ROUTES = {
     },
   },
 
-  // Analytics-provider ingestion boundary (issue #106). Every route requires the
-  // ANALYTICS_TOKEN bearer (analytics-provider role); updater processes call
+  // Issue #1095: the tokenless, read-only analytics data API. A SEPARATE prefix
+  // from `analytics` below on purpose: that one is credential-gated by a
+  // `startsWith("/api/analytics/")` match in the api and is a credentialed-CORS
+  // prefix, so a public route under it would inherit both. GET only; every other
+  // method answers 405. Each list route takes ?limit= (default 100, cap 1000)
+  // and ?cursor= (opaque, from the previous page's `nextCursor`), and its body
+  // carries a `schemaVersion` and validates against the JSON schema of the same
+  // name in contract/src/schemas/. Regime outputs and correlations are NOT
+  // here: they stay on `dashboards.regimeSnapshots` (?include=backtest).
+  publicAnalytics: {
+    rawHistory: "/api/public/analytics/raw-history", // GET ?indicator=&from=&to=&limit=&cursor= → raw_indicator_history rows
+    assetPrices: "/api/public/analytics/asset-prices", // GET ?symbol=&from=&to=&limit=&cursor= → asset_prices rows
+    vintages: "/api/public/analytics/vintages", // GET ?run_key=&tool_id=&include=members&limit=&cursor= → frozen data vintages
+    overwriteEvents: "/api/public/analytics/overwrite-events", // GET ?table_name=&limit=&cursor= → recorded revisions
+  },
+
+  // Analytics-provider ingestion boundary (issue #106). Every route requires an
+  // analytics-provider store token (D52); updater processes call
   // these instead of writing SQL. Mutations validate the whole payload before
   // opening a transaction and are idempotent on their natural keys. There is NO
   // generic SQL-over-HTTP endpoint.

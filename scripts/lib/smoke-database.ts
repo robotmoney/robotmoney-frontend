@@ -143,7 +143,7 @@ ${PROVISIONING_DEFAULT_PRIVILEGES_SQL}`;
  * nor an `identity` column" (the first real `--local dump` boot, scripts/tests/
  * integration/smoke-dump-lifecycle.test.ts). So the runtime roles get back
  * exactly the read the schema itself declares on those three tables — SELECT,
- * as 0063 grants it on `deployment_identity` and backend/schema/grants.sql's
+ * as 0081 grants it on `deployment_identity` and backend/schema/grants.sql's
  * `select_for_runtime` on all three — on whichever of them the restored
  * version has, and nothing else. Every other grant is the roles-and-grants
  * reconciliation's, run by `--migrate` as `rm_owner` (§8.1, §8.3); no write,
@@ -283,8 +283,8 @@ export function superuserSql(container: string, user: string, database: string, 
   return run.exitCode === 0 ? null : (run.stderr?.toString() ?? "").trim() || `psql exited ${run.exitCode}`;
 }
 
-/** What a Postgres that is still initializing answers (including the connection dropped when the init server stops mid-statement) — not a failure of the SQL. */
-const NOT_UP_YET = /the database system is (starting up|shutting down)|could not connect|No such file or directory|Connection refused|server closed the connection unexpectedly/;
+/** What a Postgres that is still initializing answers (including the connection dropped when the init server stops mid-statement, and the instant after it accepts connections but before the entrypoint has created POSTGRES_DB) — not a failure of the SQL. */
+const NOT_UP_YET = /the database system is (starting up|shutting down)|database "[^"]*" does not exist|could not connect|No such file or directory|Connection refused|server closed the connection unexpectedly/;
 
 /**
  * {@link superuserSql}, waiting out a server that is still initializing. The

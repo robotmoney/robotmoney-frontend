@@ -48,7 +48,7 @@ export const ROUTES: {
     session: string;
     sessionById: string;
     sessionConsensusReceipt: string;
-    sessionConsensusReceiptVerified: string;
+    sessionConsensusReceiptCanonical: string;
     sessionJudgements: string;
     take: string;
     takePermalink: string;
@@ -76,6 +76,7 @@ export const ROUTES: {
       pending: string;
       judgeSubscribe: string;
       judgement: string;
+      judgeRefusal: string;
     };
     admin: {
       action: string;
@@ -111,6 +112,12 @@ export const ROUTES: {
       sessionConsensusReceipt: string;
       audit: string;
     };
+  };
+  publicAnalytics: {
+    rawHistory: string;
+    assetPrices: string;
+    vintages: string;
+    overwriteEvents: string;
   };
   analytics: {
     readiness: string;

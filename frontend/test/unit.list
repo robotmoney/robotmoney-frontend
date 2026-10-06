@@ -12,11 +12,13 @@
 
 # Executes client JS
 scripts/tests/unit/admin-api-error-text.test.ts
+scripts/tests/unit/admin-nits-1123.test.ts
 scripts/tests/unit/ask-roboto-matcher.test.ts
 scripts/tests/unit/dash-color-css-lockstep.test.ts
 scripts/tests/unit/dash-format.test.ts
 scripts/tests/unit/docs-parity-354.test.ts
 scripts/tests/unit/e2e-route-rename-guard.test.ts
+scripts/tests/unit/session-takes-sectioned-body.test.ts
 scripts/tests/unit/frontend-routes.test.ts
 scripts/tests/unit/camel-session.test.ts
 scripts/tests/unit/member-avatar-precedence.test.ts
@@ -25,6 +27,7 @@ scripts/tests/unit/prerender-content.test.ts
 scripts/tests/unit/prerender-routes.test.ts
 scripts/tests/unit/seo-legacy-aliases.test.ts
 scripts/tests/unit/seo-research.test.ts
+scripts/tests/unit/session-phase.test.ts
 scripts/tests/unit/site-nav.test.ts
 scripts/tests/unit/stamp-assets.test.ts
 scripts/tests/unit/smart-contract-risks-data.test.ts

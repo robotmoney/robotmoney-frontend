@@ -1,7 +1,7 @@
 # Research-pipeline tier (issue #275 addendum): the GeckoTerminal/analytics-fetch
 # surface, split out of the coarse `backend` category. Confirmed via grep that
-# this surface lives entirely under backend/src/analytics/** and
-# backend/src/chain/** (extract/geckoterminal.ts, extract/sources.ts,
+# this surface lives under backend/src/analytics/**, backend/src/chain/** and,
+# since issue #1095, packages/analyst-sdk/** (the extractors moved there) (extract/geckoterminal.ts, extract/sources.ts,
 # analyze/indicators.ts, chain/token-prices.ts, chain/token-metrics.ts,
 # chain/wallet-valuation.ts, chain/wallet-balances.ts, chain/buyback-logs.ts).
 #
@@ -47,7 +47,7 @@ on:
   # runs on `push: branches: [main]` also runs on a nightly schedule, and
   # nothing else does — so a red nightly means exactly what a red merge would
   # have meant, with no required reading. Cron minutes are staggered across the
-  # ten mirrors. The invariant is enforced mechanically by
+  # eleven mirrors. The invariant is enforced mechanically by
   # scripts/tests/unit/nightly-mirrors-merge-set.test.ts, not by convention.
   schedule:
     - cron: "45 3 * * *"
@@ -79,6 +79,9 @@ jobs:
             research_pipeline:
               - 'backend/src/analytics/**'
               - 'backend/src/chain/**'
+              # The extractors and indicator math moved to the SDK (issue #1095);
+              # backend/src/analytics/extract/* are now wrappers around them.
+              - 'packages/analyst-sdk/**'
 
   research-pipeline:
     needs: [changes]

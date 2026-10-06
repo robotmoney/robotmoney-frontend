@@ -13,13 +13,15 @@
 //
 //   baseline             production's observed ledger, the one supported
 //                        baseline (D55 (8), backend/src/db/supported-releases.ts):
-//                        the v0.5.0 tag's 72 files plus
-//                        0062_rm_readonly_sequence_select.sql with the c3a68812
-//                        bytes production ran (backend/tests/fixtures/releases/
-//                        production-2026-09-25/). What a capture of today's
-//                        production restores. It predates 0063, so it has NO
+//                        the v0.5.0 tag's 72 files plus four more, each with
+//                        the bytes production ran: 0061_rm_worker_wallet_backfill_grant,
+//                        0062_rm_readonly_sequence_select (c3a68812),
+//                        0063_swarm_judge_model_default and
+//                        0080_analytics_ledger_compaction (backend/tests/fixtures/
+//                        releases/production-2026-10-01/). What a capture of
+//                        today's production restores. It predates 0081, so it has NO
 //                        deployment_identity table.
-//   v0.5.0               the v0.5.0 tag's schema alone: one file short of the
+//   v0.5.0               the v0.5.0 tag's schema alone: four files short of the
 //                        production baseline, the "any other pre-identity
 //                        ledger" a `--local dump` refuses (D55 (10)).
 // Both are rebuilt from their OWN migration bytes by the release's own runner
@@ -55,7 +57,7 @@ const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const BACKEND = join(REPO_ROOT, "backend");
 const MIGRATIONS_DIR = join(BACKEND, "migrations");
 const RELEASE_DIR = join(BACKEND, "tests", "fixtures", "releases", "v0.5.0");
-const BASELINE_DIR = join(BACKEND, "tests", "fixtures", "releases", "production-2026-09-25");
+const BASELINE_DIR = join(BACKEND, "tests", "fixtures", "releases", "production-2026-10-01");
 const DB = "robotmoney";
 
 /** The `comments.page` of the row every source carries, so a restore can be shown to carry data. */
@@ -103,8 +105,8 @@ function must(what: string, r: { code: number; out: string }): void {
 /**
  * A release-shaped source's migration list, in filename order, each file's
  * bytes as its target ran them: v0.5.0's from the tag (the verbatim copy when
- * the branch edited it), and — for the baseline — the out-of-band file's
- * archived bytes (baseline.json).
+ * the branch edited it), and — for the baseline — the bytes of the four files it
+ * adds (baseline.json).
  */
 function releaseMigrations(source: "baseline" | "v0.5.0"): { file: string; path: string }[] {
   const release = JSON.parse(readFileSync(join(RELEASE_DIR, "release.json"), "utf8")) as { migrations: { file: string; sha256: string }[] };
@@ -256,7 +258,7 @@ export async function makeEncryptedBackup(source: BackupSource): Promise<Encrypt
     const identityRead = q("SELECT CASE WHEN to_regclass('public.deployment_identity') IS NULL THEN '' ELSE (SELECT kind FROM deployment_identity) END").stdout.trim();
     const identity = identityRead === "production" ? "production" : null;
     if (source === "production-identity" && identity !== "production") throw new Error(`make-encrypted-backup: the source reads identity ${identityRead || "(none)"}, not production`);
-    if (source !== "production-identity" && identityRead !== "") throw new Error(`make-encrypted-backup: a ${source} source must predate 0063's deployment_identity`);
+    if (source !== "production-identity" && identityRead !== "") throw new Error(`make-encrypted-backup: a ${source} source must predate 0081's deployment_identity`);
 
     // THE CAPTURE — smoke:capture's two commands, read-only, as rm_readonly
     // (the container's local socket trusts it, which is all a dump inside it

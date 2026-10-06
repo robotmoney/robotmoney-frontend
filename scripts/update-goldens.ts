@@ -63,6 +63,9 @@ async function main(): Promise<void> {
   // D54: main.js checks this against the site's apiRange before any other call.
   routes[ROUTES.apiVersion] = await get(ROUTES.apiVersion);
   routes[ROUTES.dashboards.regimeSnapshots] = await get(`${ROUTES.dashboards.regimeSnapshots}?range=180`);
+  // Issue #1095: the tokenless analytics data API. A small page of each, because
+  // a golden freezes a SHAPE; the full history is what the live route is for.
+  for (const route of Object.values(ROUTES.publicAnalytics)) routes[route] = await get(`${route}?limit=3`);
   routes[ROUTES.dashboards.vaultEconomics] = await get(ROUTES.dashboards.vaultEconomics);
   routes[ROUTES.dashboards.walletBalances] = await get(ROUTES.dashboards.walletBalances);
   routes[ROUTES.dashboards.buybacks] = await get(ROUTES.dashboards.buybacks);

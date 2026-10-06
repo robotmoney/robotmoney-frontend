@@ -8,6 +8,7 @@
 // Uses Bun.spawn for docker/gpg/pg_restore/psql — there is no JS-native
 // pg_dump-format reader.
 
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -114,6 +115,40 @@ function generateLocalPassword(): string {
 // and which nothing here checks anyway. Allowlist rather than fight it line
 // by line.
 const RESTORE_ROLES = ["rm_readonly", "rm_worker"] as const;
+
+/**
+ * PURE. The twin's schedule for the sessions it restored mid-window.
+ *
+ * A restored dump carries production's open sessions with production's
+ * deadlines, up to six hours out. The driver refuses an epoch whose window
+ * closes beyond the twin's cadence, so the twin sets its OWN schedule on its
+ * OWN copy at boot: any restored `collecting` session whose deadline lies
+ * beyond one twin window now closes one twin window from boot. It only moves a
+ * deadline EARLIER, never later, and it runs against the restored container,
+ * never a deployment's database. (Production's twin did this in v0.5.x.)
+ */
+export function retimeAdoptedWindowsSql(windowMs: number): string {
+  if (!Number.isInteger(windowMs) || windowMs <= 0) throw new Error(`retimeAdoptedWindowsSql needs a positive window, got ${windowMs}`);
+  return `UPDATE swarm_sessions SET window_closes_at = now() + interval '${windowMs} milliseconds'
+ WHERE state = 'collecting' AND window_closes_at > now() + interval '${windowMs} milliseconds'
+ RETURNING id, subject_id, window_closes_at`;
+}
+
+/** Apply retimeAdoptedWindowsSql inside the twin's restore container; logs each re-timed session. */
+export function retimeAdoptedWindows(container: string, windowMs: number, log: (m: string) => void): number {
+  const r = Bun.spawnSync(
+    ["docker", "exec", container, "psql", "-U", LOCAL_USER, "-d", LOCAL_DB, "-X", "-A", "-t", "-F", "\t", "-v", "ON_ERROR_STOP=1", "-c", retimeAdoptedWindowsSql(windowMs)],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  if (r.exitCode !== 0) throw new Error(`twin: re-timing restored open windows failed: ${r.stderr.toString().trim()}`);
+  const rows = r.stdout.toString().split("\n").filter((l) => /^[0-9a-f-]{36}\t/.test(l));
+  for (const row of rows) {
+    const [id, subject, closes] = row.split("\t");
+    log(`twin: restored session ${id} (${subject}) was mid-window; its window now closes ${closes} (the twin's ${windowMs / 60_000}-min cadence)`);
+  }
+  if (rows.length === 0) log("twin: no restored session was mid-window; nothing to re-time");
+  return rows.length;
+}
 
 /**
  * The smoke-twin's stand-in for the production primary's bootstrap login.
@@ -398,12 +433,28 @@ export async function restoreBackupIntoContainer(
   if (globalsExit !== 0) return { error: "globals load failed", container };
 
   log("restoring dump");
-  const gpgDump = Bun.spawn(
-    ["gpg", "--batch", "--yes", "--passphrase-file", backup.passphraseFile, "--decrypt", backup.dumpEnc],
-    { stdout: "pipe", stderr: "inherit" },
-  );
-  const pgRestore = Bun.spawn(restoreDumpArgv(container), { stdin: gpgDump.stdout, stdout: "inherit", stderr: "inherit" });
-  const restoreExit = await pgRestore.exited;
+  // The decrypted archive is piped into pg_restore through node streams, with
+  // the EPIPE a late write meets handled. Handing Bun.spawn the gpg stream as
+  // `stdin` makes Bun pump it, and pg_restore may exit before it has read the
+  // archive's last bytes: the pump's next write then fails with EPIPE as an
+  // unhandled error that kills the whole boot (exit 1) at a random later
+  // moment, after the restore reported success (issue 1178).
+  const gpgDump = spawn("gpg", ["--batch", "--yes", "--passphrase-file", backup.passphraseFile, "--decrypt", backup.dumpEnc], {
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  const [restoreCmd, ...restoreArgs] = restoreDumpArgv(container);
+  const pgRestore = spawn(restoreCmd!, restoreArgs, { stdio: ["pipe", "inherit", "inherit"] });
+  // pg_restore stopped reading: its exit code, not this pipe, says how the restore went.
+  pgRestore.stdin!.on("error", () => {});
+  gpgDump.stdout!.on("error", () => {});
+  // gpg could not start: pg_restore then reads an empty archive and fails, which is the verdict.
+  gpgDump.on("error", (e) => log(`gpg failed to start: ${e.message}`));
+  gpgDump.stdout!.pipe(pgRestore.stdin!);
+  const restoreExit = await new Promise<number>((resolve) => {
+    pgRestore.on("error", () => resolve(1));
+    pgRestore.on("exit", (code, signal) => resolve(code ?? (signal ? 128 : 1)));
+  });
+  gpgDump.kill();
   log(`pg_restore exit=${restoreExit}`);
   if (restoreExit !== 0) return { error: "pg_restore failed", container };
 

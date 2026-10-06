@@ -121,7 +121,7 @@ test("T0.2: a quarantined day reads as a GAP, so the operator surface and the AP
   // would never be told to look at it.
   const def = getSeriesDef("wallet_balance_samples")!;
   await sql.begin(async (tx) => {
-    // superseded_at mirrors the real table (migration 0086): the detector
+    // superseded_at mirrors the real table (migration 0104): the detector
     // filters it (SeriesDef.tombstoneColumn, D55 (6)), and every row here is live.
     await tx`CREATE TEMP TABLE wallet_balance_samples (sample_date date, symbol text, provenance text, superseded_at timestamptz) ON COMMIT DROP`;
     const expectedSymbols = def.expectedKeys!.resolve().map(([symbol]) => symbol!);

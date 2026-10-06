@@ -6,11 +6,11 @@
 //   {production, rehearsal}`, writable only by `rm_owner`. `production` is
 //   written once by production initialization (§9.1)."
 //   §9.1 step 4: "`deployment_identity = production` — via `rm_owner`, written
-//   by the first migrate in the same transaction as 0063 (D55 (9))."
+//   by the first migrate in the same transaction as 0081 (D55 (9))."
 //
 // SO THIS STEP WRITES NOTHING. Under D55 (9) the first production migrate
 // (`bun run migrate`, backend/scripts/migrate-run.ts applyIdentityFirst) commits
-// 0063's DDL, its ledger row and `production` in one fenced transaction, so no
+// 0081's DDL, its ledger row and `production` in one fenced transaction, so no
 // committed state holds the table without its row. What is left for step 4 is
 // the operator's receipted confirmation that the row is there: this command
 // reads it, as rm_owner, inside the §2 fence (so no competitor can move it

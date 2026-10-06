@@ -1,4 +1,4 @@
-// Migration 0083 clears only a self-written `robotmoney` operator, once per
+// Migration 0101 clears only a self-written `robotmoney` operator, once per
 // database — issue #1026 criterion 166, decision D55 (2).
 //
 // D55 (2): "The owner approved clearing one forged value: a self-written
@@ -30,7 +30,7 @@ import { activeMember } from "./support/epoch-fixtures.ts";
 
 useCleanDatabase(import.meta.file);
 
-const FILE = "0083_clear_forged_member_operator.sql";
+const FILE = "0101_clear_forged_member_operator.sql";
 const MIGRATION = readFileSync(join(import.meta.dir, "..", "migrations", FILE), "utf8");
 
 const ids: Record<string, string> = {};
@@ -43,7 +43,7 @@ const versionOf = async (id: string): Promise<number> =>
 const cleared = async (): Promise<{ target_id: string; before_state: unknown }[]> =>
   (await sql`
     SELECT target_id, before_state FROM audit_log
-     WHERE actor = 'migration 0083' AND action = 'member_operator_cleared'
+     WHERE actor = 'migration 0101' AND action = 'member_operator_cleared'
      ORDER BY id`) as unknown as { target_id: string; before_state: unknown }[];
 
 /** A pre-#925 self-write, exactly as that code left it. */
@@ -52,7 +52,7 @@ async function selfWrite(id: string, operator: string): Promise<void> {
   await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${id}, 'update_profile', ${sql.json({ memberId: id } as never)})`;
 }
 
-/** 0083's text, as the migrate step applies it, returning its NOTICEs. */
+/** 0101's text, as the migrate step applies it, returning its NOTICEs. */
 async function applyMigration(): Promise<string[]> {
   const notices: string[] = [];
   const url = new URL(process.env.DATABASE_URL!);
@@ -153,8 +153,8 @@ test("a self-written robotmoney is cleared whatever its case and spacing; acme, 
   }
 });
 
-test("it applies once per database: the migrate step never replays a recorded 0083", async () => {
-  // A forged row planted AFTER the database recorded 0083 is not the
+test("it applies once per database: the migrate step never replays a recorded 0101", async () => {
+  // A forged row planted AFTER the database recorded 0101 is not the
   // migration's to clear: the runner never re-applies a recorded file.
   const late = await activeMember();
   await selfWrite(late.id, "robotmoney");

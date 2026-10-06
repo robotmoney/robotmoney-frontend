@@ -7,19 +7,21 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // SUPPORTED_RELEASES (backend/src/db/supported-releases.ts) is one baseline:
-// production's observed ledger, read 2026-09-25 — the 72 files of v0.5.0 plus
-// 0062_rm_readonly_sequence_select.sql, applied out of band from the archived
-// 0.5.x line on 2026-09-22 (owner-ruled ground truth; D55 (8), corrected on
-// 2026-09-25, names it, where its first text said "v0.5.0 alone"). An upgrade path from anything else is one no database will
-// take. That module pins the baseline's filename list; the tests below fail
+// production's observed ledger, read 2026-10-01 — the 72 files of v0.5.0 plus
+// four: 0062_rm_readonly_sequence_select.sql (applied out of band from the
+// archived 0.5.x line on 2026-09-22), 0061_rm_worker_wallet_backfill_grant.sql
+// and 0063_swarm_judge_model_default.sql (v0.5.1) and
+// 0080_analytics_ledger_compaction.sql (v0.5.2); owner-ruled ground truth, D55
+// (8), replaced on 2026-10-03 (issue 1097). An upgrade path from anything else
+// is one no database will take. That module pins the baseline's filename list; the tests below fail
 // when it disagrees with the observed ledger in
-// fixtures/releases/production-2026-09-25/baseline.json or with v0.5.0's
-// release.json plus the out-of-band file. Adding a baseline is a new decision,
+// fixtures/releases/production-2026-10-01/baseline.json or with v0.5.0's
+// release.json plus the four extra files. Adding a baseline is a new decision,
 // one fixture directory and one entry there ONLY for a target built by v0.5.0's runner
 // loop (`applyAsReleaseRunner`), which records no compat declaration. A release
-// whose own runner recorded compat (anything shipped with 0064's runMigrate)
+// whose own runner recorded compat (anything shipped with 0082's runMigrate)
 // also needs that runner modelled here, or its ledger rows above the baseline
-// read NULL. What depends on whether the release predates 0063 — the first
+// read NULL. What depends on whether the release predates 0081 — the first
 // production migrate's exception, the "compat is NULL" boot refusal — is gated
 // on it (`predatesIdentity`), not assumed.
 //
@@ -43,14 +45,14 @@
 // THE UPGRADE IS THE OPERATOR'S: THE FIRST PRODUCTION MIGRATE
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// The baseline predates 0063, so its database has no `deployment_identity`
+// The baseline predates 0081, so its database has no `deployment_identity`
 // table and no row to enroll it. The upgrade runs exactly as production's will (spec
 // §9.1, D55 (5)): `bun run migrate` as a PROCESS under a terminal, RM_ENV=prod,
 // the rm_owner password typed at the masked prompt, an explicit `y` — the one
 // run §4.3 allows without the row, because the ledger equals the baseline's
-// filename list exactly. It applies 0063 FIRST, with `production` in 0063's own
+// filename list exactly. It applies 0081 FIRST, with `production` in 0081's own
 // transaction (D55 (9)), then EVERY other pending file in filename order,
-// including the pre-compat ones at or below 0063 (their compat stays NULL,
+// including the pre-compat ones at or below 0081 (their compat stays NULL,
 // D53 decision 3), reconciles grants,
 // compares the live schema with the snapshot (§9.1 step 2) and publishes the
 // first manifest. Nothing is applied around the command. The refusals that
@@ -64,6 +66,9 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
+import * as client from "../src/db/client.ts";
+import * as epoch from "../src/swarm/epoch.ts";
+import * as domain from "../src/swarm/domain.ts";
 import { adminConnection, adminUrl, harnessUrl, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import {
   checkSchemaCompatibility,
@@ -158,29 +163,35 @@ async function enroll(db: postgres.Sql<{}>, kind: "rehearsal" | "production"): P
 //
 // Chosen so every data-reshaping migration between v0.5.0 and the branch has
 // something to reshape, and so every row it must NOT touch is beside one it
-// must: two collecting sessions for one subject (0068 closes the older), a
-// member with two revisions of one take (0075 marks the newest final — D51
-// keeps both), swarm.* schedule rows and jobs beside a vault one (0072), a
-// notification job (0066), a judge enabled with no model (0056), and history
+// must: two collecting sessions for one subject (0086 closes the older), a
+// member with two revisions of one take (0092 marks the newest final — D51
+// keeps both), swarm.* schedule rows and jobs beside a vault one (0089), a
+// notification job (0084), a judge enabled with no model (0056), and history
 // rows in append-only tables.
 
 /**
- * The swarm.* schedule kinds 0072 says it deletes, parsed from the migration — used ONLY
+ * The swarm.* schedule kinds 0089 says it deletes, parsed from the migration — used ONLY
  * to check the migration against what the release seeded, never to decide what
  * to seed (that would make the data assertion circular: a kind the release
- * seeded and 0072 forgot would be neither seeded nor checked).
+ * seeded and 0089 forgot would be neither seeded nor checked).
  */
-function scheduleKindsDeletedBy0072(): string[] {
-  const text = readFileSync(join(MIGRATIONS_DIR, "0072_drop_swarm_schedules.sql"), "utf8");
+function scheduleKindsDeletedBy0089(): string[] {
+  const text = readFileSync(join(MIGRATIONS_DIR, "0089_drop_swarm_schedules.sql"), "utf8");
   const list = /DELETE FROM job_schedules\s+WHERE kind IN \(([^)]*)\)/.exec(text)?.[1] ?? "";
   const kinds = [...list.matchAll(/'([^']+)'/g)].map((m) => m[1]!);
-  if (kinds.length === 0) throw new Error("0072_drop_swarm_schedules.sql no longer names the schedule kinds it deletes");
+  if (kinds.length === 0) throw new Error("0089_drop_swarm_schedules.sql no longer names the schedule kinds it deletes");
   return kinds;
 }
 
 const SESSION_PUBLISHED = "00000000-0000-4000-8000-00000000a001";
 const SESSION_OLD_OPEN = "00000000-0000-4000-8000-00000000a002";
 const SESSION_NEW_OPEN = "00000000-0000-4000-8000-00000000a003";
+// In flight on a v0.5.4 database (issue 1111): the cron driver closed, aggregated
+// and judged these, and none of them is published. SESSION_OLD_OPEN becomes the
+// `window_closed` one (0086 closes the older of two collecting sessions).
+const SESSION_AGGREGATED = "00000000-0000-4000-8000-00000000a004";
+const SESSION_JUDGED_ENFORCE = "00000000-0000-4000-8000-00000000a005";
+const SESSION_JUDGED_SHADOW = "00000000-0000-4000-8000-00000000a006";
 
 /** The release's populated data. Every swarm.* schedule row the release
  *  seeded, and a pending job of every swarm.* kind it could queue, come from
@@ -202,8 +213,14 @@ INSERT INTO audit_log (actor, action, scope) VALUES
 INSERT INTO swarm_subjects (id, name) VALUES ('subj-1', 'Subject One');
 INSERT INTO swarm_sessions (id, subject_id, subject_name, state, window_closes_at, convened_at, published_at) VALUES
   ('${SESSION_PUBLISHED}', 'subj-1', 'Subject One', 'published',  '2026-09-01T12:00:00Z', '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'),
-  ('${SESSION_OLD_OPEN}',  'subj-1', 'Subject One', 'collecting', '2026-09-20T12:00:00Z', '2026-09-20T11:00:00Z', NULL),
-  ('${SESSION_NEW_OPEN}',  'subj-1', 'Subject One', 'collecting', '2026-09-21T12:00:00Z', '2026-09-21T11:00:00Z', NULL);
+  ('${SESSION_OLD_OPEN}',  'subj-1', 'Subject One', 'collecting', '2026-09-20T12:00:00Z', '2026-09-20T06:00:00Z', NULL),
+  ('${SESSION_NEW_OPEN}',  'subj-1', 'Subject One', 'collecting', '2026-09-21T12:00:00Z', '2026-09-21T06:00:00Z', NULL),
+  ('${SESSION_AGGREGATED}', 'subj-1', 'Subject One', 'aggregated', '2026-09-10T12:00:00Z', '2026-09-10T11:00:00Z', NULL),
+  ('${SESSION_JUDGED_ENFORCE}', 'subj-1', 'Subject One', 'judged', '2026-09-11T12:00:00Z', '2026-09-11T11:00:00Z', NULL),
+  ('${SESSION_JUDGED_SHADOW}', 'subj-1', 'Subject One', 'judged', '2026-09-12T12:00:00Z', '2026-09-12T11:00:00Z', NULL);
+INSERT INTO swarm_session_judgements (session_id, mode, source, fallback_reason, prompt_hash, inputs_digest, take_count, min_takes, opinion, created_at) VALUES
+  ('${SESSION_JUDGED_ENFORCE}', 'enforce', 'fallback', 'model_unconfigured', 'ph', 'id', 1, 3, '{"rationale":"x"}', '2026-09-11T12:30:00Z'),
+  ('${SESSION_JUDGED_SHADOW}',  'shadow',  'fallback', 'model_unconfigured', 'ph', 'id', 1, 3, '{"rationale":"x"}', '2026-09-12T12:30:00Z');
 INSERT INTO swarm_recommendations (session_id, member_id, subject_id, date, nonce, stance, payload, signature, verified, revision) VALUES
   ('${SESSION_PUBLISHED}', 'm-alpha', 'subj-1', '2026-09-01', 'n-alpha-1', 'buy',  '{"take":"alpha r1"}', 'sig-alpha-1', true, 1),
   ('${SESSION_PUBLISHED}', 'm-alpha', 'subj-1', '2026-09-01', 'n-alpha-2', 'hold', '{"take":"alpha r2"}', 'sig-alpha-2', true, 2),
@@ -227,9 +244,9 @@ INSERT INTO swarm_waitlist (email, email_norm, notified_at) VALUES ('Wait@Exampl
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("the baseline fixtures are the targets' own ledgers and bytes", () => {
-  test("SUPPORTED_RELEASES is production's observed ledger alone (2026-09-25), and it has a fixture", () => {
+  test("SUPPORTED_RELEASES is production's observed ledger alone (2026-10-01), and it has a fixture", () => {
     expect(SUPPORTED_RELEASES.map((r) => r.name)).toEqual([
-      "v0.5.0+0062_rm_readonly_sequence_select (production ledger 2026-09-25)",
+      "v0.5.0+0061+0062+0063+0080 (production ledger 2026-10-01)",
     ]);
   });
 
@@ -240,11 +257,11 @@ describe("the baseline fixtures are the targets' own ledgers and bytes", () => {
       // refuse production, or admit a ledger production never wrote.
       const baseline = loadBaseline(tag);
       expect([...migrations]).toEqual(baseline.ledger.map((row) => row.file));
-      expect(baseline.ledger.length).toBe(73);
+      expect(baseline.ledger.length).toBe(76);
       expect(baseline.release).toBe(releaseTag);
     });
 
-    test(`${tag}: it is its release's filename list plus exactly its out-of-band files`, () => {
+    test(`${tag}: it is its release's filename list plus exactly its extra files`, () => {
       const released = loadRelease(releaseTag).migrations.map((m) => m.file);
       expect(outOfBand.filter((file) => released.includes(file))).toEqual([]);
       expect([...migrations].sort()).toEqual([...released, ...outOfBand].sort());
@@ -263,7 +280,7 @@ describe("the baseline fixtures are the targets' own ledgers and bytes", () => {
       expect(drifted).toEqual([]);
     });
 
-    test(`${tag}: the branch's copy of each out-of-band file runs the same SQL as the archived one`, () => {
+    test(`${tag}: the branch's copy of each extra file runs the same SQL as the one production ran`, () => {
       // The reference database applies the branch's copy; the upgraded one
       // recorded the archived copy. They must differ in comments alone, or the
       // catalog comparison below compares two different post-states.
@@ -282,13 +299,13 @@ describe("the baseline fixtures are the targets' own ledgers and bytes", () => {
       }
     });
 
-    test(`${tag}: it records the swarm schedule and job kinds it seeded, and 0072 deletes every one of them`, () => {
+    test(`${tag}: it records the swarm schedule and job kinds it seeded, and 0089 deletes every one of them`, () => {
       const { scheduleKinds, jobKinds } = loadBaseline(tag).swarm;
       expect(scheduleKinds.length).toBeGreaterThan(0);
       // Every schedule kind is also a job kind: a seeded row only enqueues
       // kinds a handler was registered for.
       expect(scheduleKinds.filter((kind) => !jobKinds.includes(kind))).toEqual([]);
-      const deletedSchedules = scheduleKindsDeletedBy0072();
+      const deletedSchedules = scheduleKindsDeletedBy0089();
       expect(scheduleKinds.filter((kind) => !deletedSchedules.includes(kind))).toEqual([]);
     });
 
@@ -354,7 +371,7 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
     let db: postgres.Sql<{}>;
     let release: ReleaseFixture;
     let appliedByRun: readonly string[] = [];
-    /** True when the release predates 0063 — it has no deployment_identity
+    /** True when the release predates 0081 — it has no deployment_identity
      *  table, so its upgrade is the first production migrate of §9.1. */
     let predatesIdentity = false;
 
@@ -380,7 +397,7 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
         await runner.end({ timeout: 5 });
       }
       db = connect(name);
-      predatesIdentity = Math.max(...release.migrations.map((m) => migrationNumber(m.file))) < migrationNumber("0063_deployment_identity.sql");
+      predatesIdentity = Math.max(...release.migrations.map((m) => migrationNumber(m.file))) < migrationNumber("0081_deployment_identity.sql");
 
       // §9.1 step 1 through the provisioning login, and the host's rm_readonly
       // line: what the operator's `bun run migrate` logs in with.
@@ -392,7 +409,7 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
       await db?.end({ timeout: 5 });
     });
 
-    test("no caller but the operator's confirmed first production migrate reaches a release that predates 0063", async () => {
+    test("no caller but the operator's confirmed first production migrate reaches a release that predates 0081", async () => {
       const [table] = (await db`SELECT to_regclass('public.deployment_identity') IS NOT NULL AS present`) as unknown as {
         present: boolean;
       }[];
@@ -417,7 +434,7 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
     });
 
     test("`bun run migrate` — RM_ENV=prod, a typed rm_owner, y — reaches the branch's version in one run", async () => {
-      // A release past 0063 would be enrolled already (§9.1 step 4); only one
+      // A release past 0081 would be enrolled already (§9.1 step 4); only one
       // that predates the table takes the pre-identity path.
       if (!predatesIdentity) await enroll(db, "production");
       const run = await migrateAtTerminal({
@@ -439,9 +456,9 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
       };
       appliedByRun = receipt.applied;
       const recorded = new Set(release.migrations.map((m) => m.file));
-      // Every pending file, the pre-compat ones at or below 0063 included: no
+      // Every pending file, the pre-compat ones at or below 0081 included: no
       // file is applied around the command any more. A release that predates
-      // 0063 takes the identity-first pass (D55 (9)): 0063 first, then the rest
+      // 0081 takes the identity-first pass (D55 (9)): 0081 first, then the rest
       // in filename order.
       const pending = HEAD_FILES.filter((file) => !recorded.has(file));
       expect(receipt.applied).toEqual(
@@ -469,7 +486,7 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
       for (const row of rows) {
         const header = parsePendingHeader(row.name, readFileSync(join(MIGRATIONS_DIR, row.name), "utf8"));
         // A file above the pre-compat baseline always carries a header
-        // (parsePendingHeader throws when one does not), and runs after 0064
+        // (parsePendingHeader throws when one does not), and runs after 0082
         // added the columns, so the run records it. At or below the baseline
         // (D53 decision 3) the run applied it before those columns existed —
         // or the release did — and the row stays NULL, declared or not.
@@ -514,37 +531,53 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
       expect(await rows(db`SELECT actor, action, target_id FROM audit_log WHERE actor = 'release-fixture'`)).toEqual([
         { actor: "release-fixture", action: "member.activate", target_id: "m-alpha" },
       ]);
-      // 0066 drops `notified_at` (it is `breaking`); the row itself stays.
+      // 0084 drops `notified_at` (it is `breaking`); the row itself stays.
       expect(await rows(db`SELECT email, email_norm FROM swarm_waitlist`)).toEqual([
         { email: "Wait@Example.com", email_norm: "wait@example.com" },
       ]);
     });
 
-    test("the subject gains its grid: defaults for the durations, the anchor from its open window (0067, 0073)", async () => {
+    test("the subject keeps production's six-hour schedule: 21600 s, and the next three closes are the instants v0.5.4's driver would have used (0085, 0090, issue 1112)", async () => {
       const [subject] = (await db`
         SELECT epoch_duration_seconds, judging_duration_seconds, epoch_anchor FROM swarm_subjects WHERE id = 'subj-1'`) as unknown as {
         epoch_duration_seconds: number;
         judging_duration_seconds: number;
         epoch_anchor: Date;
       }[];
-      expect(subject?.epoch_duration_seconds).toBe(3600);
+      // v0.5.4 ran one session per subject every six hours, window = interval
+      // (scripts/lib/smoke-schedule.ts, REALISTIC). An upgrade does not change it.
+      expect(subject?.epoch_duration_seconds).toBe(21600);
       expect(subject?.judging_duration_seconds).toBe(900);
-      // 0068 leaves ONE collecting session per subject (the newest); 0073
+      // 0086 leaves ONE collecting session per subject (the newest); 0090
       // anchors the grid on that window's close.
       expect(subject?.epoch_anchor.toISOString()).toBe("2026-09-21T12:00:00.000Z");
+      // The open window is 06:00 -> 12:00 (six hours). Production's driver opens
+      // the next session at 12:00 and walks 6 h slots, so the next three closes
+      // are 18:00, 00:00 and 06:00. The grid the scheduler will use, read back
+      // from the migrated columns, must produce exactly those.
+      const grid = (await db`
+        SELECT to_char(epoch_anchor + k * make_interval(secs => epoch_duration_seconds),
+                       'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at
+          FROM swarm_subjects, generate_series(1, 3) AS k
+         WHERE id = 'subj-1' ORDER BY k`) as unknown as { at: string }[];
+      expect(grid.map((g) => g.at)).toEqual(["2026-09-21T18:00:00Z", "2026-09-22T00:00:00Z", "2026-09-22T06:00:00Z"]);
     });
 
-    test("one collecting session per subject: the older is closed, the newest stays open, history untouched (0068)", async () => {
+    test("one collecting session per subject: the older is closed, the newest stays open, history untouched (0086)", async () => {
       expect(
         await rows(db`SELECT id, state, published_at IS NOT NULL AS published FROM swarm_sessions ORDER BY convened_at`),
       ).toEqual([
         { id: SESSION_PUBLISHED, state: "published", published: true },
+        { id: SESSION_AGGREGATED, state: "aggregated", published: false },
+        { id: SESSION_JUDGED_ENFORCE, state: "judged", published: false },
+        // A `shadow` judgement never reached its session: back to `aggregated` (0091).
+        { id: SESSION_JUDGED_SHADOW, state: "aggregated", published: false },
         { id: SESSION_OLD_OPEN, state: "window_closed", published: false },
         { id: SESSION_NEW_OPEN, state: "collecting", published: false },
       ]);
     });
 
-    test("every take and every revision survives with its signed content; the newest per member is final (0075, D51)", async () => {
+    test("every take and every revision survives with its signed content; the newest per member is final (0092, D51)", async () => {
       expect(
         await rows(db`
           SELECT member_id, revision, nonce, stance, payload, signature, verified, final
@@ -556,16 +589,16 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
       ]);
     });
 
-    test("the vault schedule and its job survive; every swarm schedule row the release seeded is gone; no swarm job it queued is left pending; history stays (0066, 0072)", async () => {
+    test("the vault schedule and its job survive; every swarm schedule row the release seeded is gone; no swarm job it queued is left pending; history stays (0084, 0089)", async () => {
       const { scheduleKinds, jobKinds } = release.swarm;
       // Only the vault row survives — so every seeded swarm.* row is gone,
-      // whatever list 0072 happens to carry.
+      // whatever list 0089 happens to carry.
       expect(await rows(db`SELECT kind, cron, payload, enabled FROM job_schedules ORDER BY kind`)).toEqual([
         { kind: "vault.sample_share_price", cron: "0 * * * *", payload: { vault: "v1" }, enabled: true },
       ]);
       // A pending job whose handler is gone never settles: every swarm.* kind
       // the release could queue must leave the pending state, by deletion
-      // (0072) or cancellation (0066).
+      // (0089) or cancellation (0084).
       expect(
         await rows(db`SELECT kind FROM jobs WHERE dedupe_key LIKE 'rel-pending-%' AND status = 'pending' ORDER BY kind`),
       ).toEqual([]);
@@ -593,16 +626,16 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
       ]);
     });
 
-    test("0072 is recorded `breaking`: it deletes rows code at 0070 seeded and read (D55 (7))", async () => {
-      // The release predates 0072, so this run applied it and recorded the
+    test("0089 is recorded `breaking`: it deletes rows code at 0088 seeded and read (D55 (7))", async () => {
+      // The release predates 0089, so this run applied it and recorded the
       // header it carries now. §8.4: removing a bootstrap row old code relies
       // on is not additive.
       expect(
-        await rows(db`SELECT name, compat, metadata_version FROM schema_migrations WHERE name = '0072_drop_swarm_schedules.sql'`),
-      ).toEqual([{ name: "0072_drop_swarm_schedules.sql", compat: "breaking", metadata_version: 1 }]);
+        await rows(db`SELECT name, compat, metadata_version FROM schema_migrations WHERE name = '0089_drop_swarm_schedules.sql'`),
+      ).toEqual([{ name: "0089_drop_swarm_schedules.sql", compat: "breaking", metadata_version: 1 }]);
     });
 
-    test("a self-written operator is cleared and recorded; an admin-written one is kept (0083, D55 (2))", async () => {
+    test("a self-written operator is cleared and recorded; an admin-written one is kept (0101, D55 (2))", async () => {
       // The release's own code logged a member's profile write as
       // `update_profile` with only { memberId }, so `m-forged`'s `robotmoney`
       // is a self-write with no admin behind it. `m-partner` also self-wrote,
@@ -615,11 +648,11 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
       expect(
         await rows(db`
           SELECT target_id, before_state FROM audit_log
-           WHERE actor = 'migration 0083' AND action = 'member_operator_cleared' ORDER BY target_id`),
+           WHERE actor = 'migration 0101' AND action = 'member_operator_cleared' ORDER BY target_id`),
       ).toEqual([{ target_id: "m-forged", before_state: { operator: "robotmoney" } }]);
     });
 
-    test("the event log is numbered from its counter row, seeded from the log, and the job ledger is gone (0079-0081)", async () => {
+    test("the event log is numbered from its counter row, seeded from the log, and the job ledger is gone (0096-0098)", async () => {
       expect(await rows(db`SELECT id, seq::int AS seq FROM swarm_stream_head`)).toEqual([{ id: true, seq: 0 }]);
       expect(await rows(db`SELECT to_regclass('public.swarm_scheduler_jobs')::text AS reg`)).toEqual([{ reg: null }]);
     });
@@ -631,9 +664,11 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
         model: string | null;
         stamped: boolean;
       }[];
-      // Switched off by 0056, then given the CI/driver model by 0063 and the
-      // bare wire id by 0081: off, but not model-less.
-      expect(config).toEqual({ mode: "off", model: "deepseek-v4.1-flash", stamped: true });
+      // Switched off by 0056. 0063 (which gives the judge the CI/driver model)
+      // is part of this baseline now, so it ran before the row was planted and
+      // does not fill it again: the repair is 0056's alone, and the row stays
+      // model-less until an operator sets { mode, model } together.
+      expect(config).toEqual({ mode: "off", model: null, stamped: true });
     });
 
     // ── Code at N against N+additive ──────────────────────────────────────
@@ -648,12 +683,12 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
     // (§8.4's definition of additive). No older registry exists to execute —
     // the registry is this branch's — so that half is a reviewed claim per
     // migration. One such claim was wrong, surfaced by the data test above:
-    // 0072 declared `compat: additive` while deleting the swarm.* job_schedules
-    // rows and pending swarm.* jobs that code built at 0070 seeded and read.
+    // 0089 declared `compat: additive` while deleting the swarm.* job_schedules
+    // rows and pending swarm.* jobs that code built at 0088 seeded and read.
     // §8.4: additive means "no bootstrap row it relies on is removed". D55 (7)
     // relabelled it `breaking`, so this run records `breaking` for it and code
-    // at 0070 is refused by check 3b. A ledger that recorded 0072 before the
-    // relabel keeps `additive`; 0079-0081, all `breaking`, close that rollback.
+    // at 0088 is refused by check 3b. A ledger that recorded 0089 before the
+    // relabel keeps `additive`; 0096-0098, all `breaking`, close that rollback.
 
     function context(codeFilenames: readonly string[]): PreflightContext {
       return { env: "stage", connection: "local", roles: ["rm_app"], codeFilenames, envFilePath: "/nonexistent/.env" };
@@ -717,6 +752,143 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
       expect(messages.some((m) => m.includes("compat is NULL"))).toBe(lacksPreCompat);
       if (lacksBreaking) expect(messages.some((m) => m.startsWith(`${lastBreaking()}: declared breaking`))).toBe(true);
     });
+
+    // ── Sessions in flight at the upgrade (issue 1111) ────────────────────
+    //
+    // A v0.5.4 database holds sessions the cron driver had closed, aggregated
+    // or judged and not yet published. The epoch scheduler refuses a session
+    // whose judge_mode was never captured, and 0089 has just deleted the
+    // pending swarm.* jobs that would have finished them. The owner rule
+    // (2026-10-03): they finish on their normal timing, with no operator step.
+    // Everything below runs on the database the real migrate run produced, and
+    // drives epoch.ts exactly as the scheduler's API client does.
+
+    async function withUpgradedDatabase<T>(run: () => Promise<T>): Promise<T> {
+      const previous = process.env.DATABASE_URL!;
+      await client.setDatabase(urlFor(name));
+      try {
+        return await run();
+      } finally {
+        await client.setDatabase(previous);
+      }
+    }
+
+    /** Aggregate, request judging, and finalize one session as the scheduler's chain does. */
+    async function settleAsScheduler(sessionId: string): Promise<{ requested: string; outcome?: string }> {
+      const agg = await epoch.aggregateEpoch(sessionId);
+      expect(agg.ok).toBe(true);
+      const req = await epoch.requestJudging(sessionId);
+      if (!req.ok) {
+        // `off`: nothing waits, `aggregated -> publish` with `not_judged` (spec 4.4).
+        expect(req.error).toBe("judge_mode_off");
+        const fin = await epoch.finalizeEpoch(sessionId);
+        expect(fin.ok).toBe(true);
+        return { requested: "off", outcome: (fin as { outcome: string }).outcome };
+      }
+      return { requested: "judging" };
+    }
+
+    test("every in-flight session carries a captured judge mode and judging duration, and its timestamps are unchanged (0091)", async () => {
+      const captured = await rows(db`
+        SELECT id, state, judge_mode, judging_duration_seconds,
+               judging_requested_at IS NOT NULL AS requested, judging_deadline_at IS NOT NULL AS has_deadline,
+               consensus_recorded_at IS NOT NULL AS consensus
+          FROM swarm_sessions
+         WHERE id IN (${SESSION_OLD_OPEN}, ${SESSION_AGGREGATED}, ${SESSION_JUDGED_ENFORCE}, ${SESSION_JUDGED_SHADOW}, ${SESSION_NEW_OPEN})
+         ORDER BY convened_at`);
+      expect(captured).toEqual([
+        // aggregated: mode in force (0056 switched the planted judge off), subject duration
+        { id: SESSION_AGGREGATED, state: "aggregated", judge_mode: "off", judging_duration_seconds: 900, requested: false, has_deadline: false, consensus: false },
+        // judged under an enforce judgement: keeps that mode and settles by it
+        { id: SESSION_JUDGED_ENFORCE, state: "judged", judge_mode: "enforce", judging_duration_seconds: 900, requested: true, has_deadline: true, consensus: true },
+        // judged under shadow: the judge never reached the session, back to aggregated, mode off
+        { id: SESSION_JUDGED_SHADOW, state: "aggregated", judge_mode: "off", judging_duration_seconds: 900, requested: false, has_deadline: false, consensus: false },
+        // window_closed
+        { id: SESSION_OLD_OPEN, state: "window_closed", judge_mode: "off", judging_duration_seconds: 900, requested: false, has_deadline: false, consensus: false },
+        // collecting: the turnover captures at close, so nothing yet
+        { id: SESSION_NEW_OPEN, state: "collecting", judge_mode: null, judging_duration_seconds: null, requested: false, has_deadline: false, consensus: false },
+      ]);
+      const stamps = await rows(db`
+        SELECT id, window_closes_at, convened_at FROM swarm_sessions
+         WHERE id IN (${SESSION_AGGREGATED}, ${SESSION_JUDGED_ENFORCE}, ${SESSION_JUDGED_SHADOW}, ${SESSION_OLD_OPEN}) ORDER BY convened_at`);
+      expect(stamps.map((r) => [r.id, (r.window_closes_at as Date).toISOString(), (r.convened_at as Date).toISOString()])).toEqual([
+        [SESSION_AGGREGATED, "2026-09-10T12:00:00.000Z", "2026-09-10T11:00:00.000Z"],
+        [SESSION_JUDGED_ENFORCE, "2026-09-11T12:00:00.000Z", "2026-09-11T11:00:00.000Z"],
+        [SESSION_JUDGED_SHADOW, "2026-09-12T12:00:00.000Z", "2026-09-12T11:00:00.000Z"],
+        [SESSION_OLD_OPEN, "2026-09-20T12:00:00.000Z", "2026-09-20T06:00:00.000Z"],
+      ]);
+      // The enforce judgement's own instant becomes the request and the consensus; the deadline is that plus the duration.
+      const [je] = await rows(db`
+        SELECT judging_requested_at, judging_deadline_at, consensus_recorded_at FROM swarm_sessions WHERE id = ${SESSION_JUDGED_ENFORCE}`);
+      expect([je!.judging_requested_at, je!.judging_deadline_at, je!.consensus_recorded_at].map((d) => (d as Date).toISOString())).toEqual([
+        "2026-09-11T12:30:00.000Z",
+        "2026-09-11T12:45:00.000Z",
+        "2026-09-11T12:30:00.000Z",
+      ]);
+    });
+
+    test("the scheduler's own calls publish the window_closed, aggregated and judged sessions and the collecting one turns over and settles, with no operator step", async () => {
+      await withUpgradedDatabase(async () => {
+        // window_closed and both aggregated (the shadow-judged one was returned to aggregated): judge off, so not_judged.
+        for (const id of [SESSION_OLD_OPEN, SESSION_AGGREGATED, SESSION_JUDGED_SHADOW]) {
+          expect(await settleAsScheduler(id)).toEqual({ requested: "off", outcome: "not_judged" });
+        }
+        // judged under enforce: finalize decides `judged` from the stored instants (consensus at or before the deadline).
+        const fin = await epoch.finalizeEpoch(SESSION_JUDGED_ENFORCE);
+        expect(fin).toMatchObject({ ok: true, state: "published", outcome: "judged" });
+        // collecting: its window closed on the subject's grid long ago, the turnover captures and the chain settles it.
+        const turned = await epoch.turnOverEpoch("subj-1", SESSION_NEW_OPEN);
+        expect(turned.ok).toBe(true);
+        expect(await settleAsScheduler(SESSION_NEW_OPEN)).toEqual({ requested: "off", outcome: "not_judged" });
+      });
+      const states = await rows(db`
+        SELECT id, state, judging_outcome FROM swarm_sessions
+         WHERE id IN (${SESSION_OLD_OPEN}, ${SESSION_AGGREGATED}, ${SESSION_JUDGED_ENFORCE}, ${SESSION_JUDGED_SHADOW}, ${SESSION_NEW_OPEN})
+         ORDER BY convened_at`);
+      expect(states).toEqual([
+        { id: SESSION_AGGREGATED, state: "published", judging_outcome: "not_judged" },
+        { id: SESSION_JUDGED_ENFORCE, state: "published", judging_outcome: "judged" },
+        { id: SESSION_JUDGED_SHADOW, state: "published", judging_outcome: "not_judged" },
+        { id: SESSION_OLD_OPEN, state: "published", judging_outcome: "not_judged" },
+        { id: SESSION_NEW_OPEN, state: "published", judging_outcome: "not_judged" },
+      ]);
+    });
+
+    test("a session the old driver was judging when 0089 deleted its swarm.judge job reaches the judge through the stream under enforce, and publishes when the deadline passes", async () => {
+      // The planted judge was switched off by 0056, so this run's sessions took
+      // `off`. A production judge in `enforce` needs the same migration run
+      // against the same shapes, so the migration's own backfill block is
+      // executed here, from the file, over fresh legacy-shaped rows.
+      const sqlText = readFileSync(join(MIGRATIONS_DIR, "0091_session_judging_duration.sql"), "utf8");
+      const block = /\nDO \$\$[\s\S]*?\n\$\$;/.exec(sqlText)?.[0];
+      expect(block).toBeDefined();
+      const legacyWindowClosed = "00000000-0000-4000-8000-00000000a0b1";
+      const legacyAggregated = "00000000-0000-4000-8000-00000000a0b2";
+      await db.begin(async (tx) => {
+        await tx.unsafe("SET LOCAL ROLE rm_owner");
+        await tx`UPDATE swarm_judge_config SET mode = 'enforce', model = 'test/model' WHERE id = 1`;
+        await tx`UPDATE swarm_members SET operator = 'robotmoney' WHERE id = 'm-judge'`;
+        await tx`INSERT INTO swarm_sessions (id, subject_id, subject_name, state, window_closes_at, convened_at) VALUES
+          (${legacyWindowClosed}, 'subj-1', 'Subject One', 'window_closed', '2026-09-13T12:00:00Z', '2026-09-13T11:00:00Z'),
+          (${legacyAggregated},   'subj-1', 'Subject One', 'aggregated',   '2026-09-14T12:00:00Z', '2026-09-14T11:00:00Z')`;
+        await tx`INSERT INTO swarm_recommendations (session_id, member_id, subject_id, date, nonce, stance, payload, signature, verified, revision) VALUES
+          (${legacyWindowClosed}, 'm-alpha', 'subj-1', '2026-09-13', 'n-lc-1', 'buy', '{"take":"a"}', 'sig-lc-1', true, 1),
+          (${legacyAggregated},   'm-alpha', 'subj-1', '2026-09-14', 'n-lc-2', 'buy', '{"take":"a"}', 'sig-lc-2', true, 1)`;
+        await tx.unsafe(block!);
+      });
+      await withUpgradedDatabase(async () => {
+        expect(await settleAsScheduler(legacyWindowClosed)).toEqual({ requested: "judging" });
+        expect(await settleAsScheduler(legacyAggregated)).toEqual({ requested: "judging" });
+        const pending = (await domain.pendingJudgingFor("m-judge")).map((p) => p.sessionId);
+        expect(pending).toContain(legacyWindowClosed);
+        expect(pending).toContain(legacyAggregated);
+        // No judge answers: the stored deadline is the scheduler's only timer.
+        await db`UPDATE swarm_sessions SET judging_deadline_at = now() - interval '1 second' WHERE id IN (${legacyWindowClosed}, ${legacyAggregated})`;
+        for (const id of [legacyWindowClosed, legacyAggregated]) {
+          expect(await epoch.finalizeEpoch(id)).toMatchObject({ ok: true, state: "published", outcome: "no_consensus" });
+        }
+      });
+    }, 60_000);
   });
 }
 

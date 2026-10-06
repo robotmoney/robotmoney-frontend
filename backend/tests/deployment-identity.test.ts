@@ -4,7 +4,7 @@
 // §4.2 makes the one-row enrollment "writable only by rm_owner": it is the row
 // that decides whether production guards arm (§4.3), so a runtime role that
 // could write it could enrol a production database as a rehearsal and switch
-// every production guard off from inside the application. Migration 0063
+// every production guard off from inside the application. Migration 0081
 // revokes ALL from the three runtime roles and grants SELECT back, and
 // backend/schema/grants.sql re-asserts that on every reconciliation.
 //

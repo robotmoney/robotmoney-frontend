@@ -112,14 +112,14 @@ export function resolveRmEnv(
 export const PRE_IDENTITY_TWIN_RUNBOOK = "docs/runbooks/pre-identity-remote-twin.md";
 
 /**
- * D55 (10): no tool turns a pre-0063 production dump into a remote twin, so
+ * D55 (10): no tool turns a pre-0081 production dump into a remote twin, so
  * every stage tool that reads a remote target with no `deployment_identity`
  * table (or row) refuses, changes nothing, and names the one intervention that
  * can enrol it: a receipted `rm_owner` hand step, or `bun smoke --local dump`.
  * One sentence, shared, so the twin tooling and every stage tool say the same.
  */
 export const PRE_IDENTITY_TWIN_INTERVENTION =
-  `If this is a production dump restored from before migration 0063, no tool enrols it as a remote twin: ` +
+  `If this is a production dump restored from before migration 0081, no tool enrols it as a remote twin: ` +
   `run the one-off, receipted rm_owner intervention in ${PRE_IDENTITY_TWIN_RUNBOOK}, or use \`bun smoke --local dump\` instead.`;
 
 function describeIdentity(identity: PolicyInput["identity"]): string {

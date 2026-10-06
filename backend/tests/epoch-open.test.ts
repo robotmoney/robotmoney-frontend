@@ -318,7 +318,7 @@ test("GET /api/swarm/sessions answers nextSessionAt from the EPOCH, never from j
   // Conflicting schedule rows, EARLIER than the epoch's close: every enabled
   // `job_schedules` row is made to say "next run in five minutes", the shape
   // the retired cron scheduler's session-opening row had. (Its own kind is
-  // gone from the system — migration 0072 deleted it and
+  // gone from the system — migration 0089 deleted it and
   // no-swarm-cron.test.ts keeps the name out of the tree — so the conflict is
   // planted on the rows that remain.) If the field still read the table, this
   // is what the answer would be.

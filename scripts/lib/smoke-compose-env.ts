@@ -97,6 +97,46 @@ export function dropShellMigrationCredential(env: Record<string, string | undefi
   );
 }
 
+/**
+ * The refusal text when a boot whose containers run `RM_ENV=prod` has no
+ * `PROJECTS_SOURCE=live` to hand them; null when nothing refuses (issue #1113).
+ *
+ * `selectProjectsDataSource()` throws under `RM_ENV=prod` unless
+ * `PROJECTS_SOURCE=live`, so every projects job dies one tick after a boot that
+ * forgot it. v0.5.x got the value from the checkout `.env`; the boot now runs
+ * `--no-env-file`, so the only path is the shell. Judged on the value the
+ * passthrough will actually forward (set and non-empty), not on mere presence.
+ */
+export function refuseProdWithoutProjectsSource(
+  stackRmEnv: RmEnv,
+  env: Record<string, string | undefined>,
+): string | null {
+  if (stackRmEnv !== "prod") return null;
+  if (env.PROJECTS_SOURCE === "live") return null;
+  return (
+    "PROJECTS_SOURCE=live is required for a boot whose containers run RM_ENV=prod, and it is " +
+    (env.PROJECTS_SOURCE ? `\`${env.PROJECTS_SOURCE}\`` : "not set") +
+    ". Every projects pipeline throws without it. `bun smoke` ignores the checkout `.env`: " +
+    "export PROJECTS_SOURCE=live in the shell, then boot again. Nothing was started."
+  );
+}
+
+/**
+ * Names of the settings production's containers used to get from the checkout
+ * `.env` that are unset in this boot's shell. A note, never a refusal: each has
+ * a working built-in default, but the default is not what v0.5.x ran.
+ */
+export function missingProdSettingNotes(stackRmEnv: RmEnv, env: Record<string, string | undefined>): string[] {
+  if (stackRmEnv !== "prod") return [];
+  return ["BASE_RPC_URL", "WEBAUTHN_ORIGIN"]
+    .filter((k) => env[k] === undefined || env[k] === "")
+    .map(
+      (k) =>
+        `NOTE: ${k} is not set in the shell. v0.5.x read it from the checkout .env; the containers fall back to ` +
+        `their built-in default. Export it before \`bun smoke\` if production relied on it.`,
+    );
+}
+
 export function smokePassthroughEnv(env: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const k of DEMO_COMPOSE_PASSTHROUGH) {

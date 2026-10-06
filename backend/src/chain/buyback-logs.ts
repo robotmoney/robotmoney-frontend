@@ -20,7 +20,7 @@ import {
   type BaseRpcSource,
 } from "../config.ts";
 import { sql } from "../db/client.ts";
-import { on, registerQuery } from "../db/registry.ts";
+import { on, registerQuery, type RegistryDb } from "../db/registry.ts";
 import {
   BaseRpcHttpError,
   decodeUint256,
@@ -82,9 +82,15 @@ function num(v: string | null): number {
 }
 
 // Registered queries (smoke-production-spec.md §7.1). The read serves GET
-// /api/dashboards/buybacks; the indexer's cursor reads and writes run in the
-// buybacks job handler, which issues them on the api's pool (db/client.ts),
-// so every site declares rm_app.
+// /api/dashboards/buybacks on the api's pool (rm_app). The indexer's cursor
+// reads and writes run in the buybacks job handler, which hands `indexBuybacks`
+// the WORKER's pool (db/worker-client.ts, rm_worker): under spec §3 the worker
+// container holds no rm_app credential. Those four sites therefore declare
+// rm_worker, and grants.sql lists buyback_scan_state (insert+update) and
+// buyback_swaps (insert) on its allowlists. Before 2026-10-05 (B11, issue
+// #1150) they declared rm_app and ran on whatever pool db/client.ts built —
+// rm_app on the v0.5.x host (RM_ENV=smoke handed the worker the api's URL),
+// rm_worker on a 0.6 twin, where every sweep was refused and swallowed.
 const DASHBOARDS = "src/api/routes/dashboards";
 const BUYBACKS_HANDLER = "src/worker/handlers/buybacks";
 
@@ -102,7 +108,7 @@ const swapRows = registerQuery({
 });
 
 const scanCursor = registerQuery({
-  role: "rm_app",
+  role: "rm_worker",
   object: "buyback_scan_state",
   privileges: ["SELECT"],
   site: "src/chain/buyback-logs:indexBuybacks.cursor",
@@ -112,7 +118,7 @@ const scanCursor = registerQuery({
 });
 
 const maxIndexedBlock = registerQuery({
-  role: "rm_app",
+  role: "rm_worker",
   object: "buyback_swaps",
   privileges: ["SELECT"],
   site: "src/chain/buyback-logs:indexBuybacks.maxBlock",
@@ -122,7 +128,7 @@ const maxIndexedBlock = registerQuery({
 });
 
 const insertSwap = registerQuery({
-  role: "rm_app",
+  role: "rm_worker",
   object: "buyback_swaps",
   // SELECT because ON CONFLICT (tx_hash) reads the arbiter column.
   privileges: ["INSERT", "SELECT"],
@@ -139,7 +145,7 @@ const insertSwap = registerQuery({
 });
 
 const advanceCursor = registerQuery({
-  role: "rm_app",
+  role: "rm_worker",
   object: "buyback_scan_state",
   // UPDATE for ON CONFLICT DO UPDATE; SELECT because the conflict target and
   // EXCLUDED are read.
@@ -437,7 +443,12 @@ export interface IndexResult {
   scannedToBlock: number | null;
 }
 
-export async function indexBuybacks(): Promise<IndexResult> {
+/**
+ * @param db the pool the indexer's sites run on: the worker's (rm_worker) from
+ *   the buybacks handler; the api's by default, for tests and the dashboards
+ *   process. The four indexer sites declare rm_worker.
+ */
+export async function indexBuybacks(db: RegistryDb = sql): Promise<IndexResult> {
   const cfg = resolveBuybackConfig();
   if (cfg.source !== "live") {
     // Hermetic smoke / CI: never reach a live log indexer; the seeded rows stand.
@@ -470,8 +481,8 @@ export async function indexBuybacks(): Promise<IndexResult> {
     // MAX(block_number), so the old row-derived cursor never advanced). We also
     // never resume before the highest already-indexed live block.
     const [cursorRow, maxRow] = await Promise.all([
-      on(sql, scanCursor)<{ b: string | null }>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`,
-      on(sql, maxIndexedBlock)<{ mx: string | null }>`SELECT MAX(block_number)::text AS mx FROM buyback_swaps`,
+      on(db, scanCursor)<{ b: string | null }>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`,
+      on(db, maxIndexedBlock)<{ mx: string | null }>`SELECT MAX(block_number)::text AS mx FROM buyback_swaps`,
     ]);
     const cursor = cursorRow[0]?.b == null ? null : Number(cursorRow[0].b);
     const persistedMax = maxRow[0]?.mx == null ? null : Number(maxRow[0].mx);
@@ -526,7 +537,7 @@ export async function indexBuybacks(): Promise<IndexResult> {
         // duplicates a swap. NOTE: a single tx emitting multiple ROBOTMONEY-in
         // legs records only the first (robotmoney_received slightly undercounts
         // such txs); acceptable for the buyback pattern, tracked as a follow-up.
-        const res = await on(sql, insertSwap)`
+        const res = await on(db, insertSwap)`
           INSERT INTO buyback_swaps
             (block_number, tx_hash, log_index, occurred_on, weth_spent, value_usd, robotmoney_received, provenance)
           VALUES
@@ -538,7 +549,7 @@ export async function indexBuybacks(): Promise<IndexResult> {
       // Advance + persist the scan cursor for THIS window regardless of hits, so
       // the next run resumes past it. scannedToBlock reflects real coverage.
       scannedToBlock = to;
-      await on(sql, advanceCursor)`
+      await on(db, advanceCursor)`
         INSERT INTO buyback_scan_state (id, last_scanned_block, updated_at)
         VALUES (1, ${to}, now())
         ON CONFLICT (id) DO UPDATE SET last_scanned_block = EXCLUDED.last_scanned_block, updated_at = now()

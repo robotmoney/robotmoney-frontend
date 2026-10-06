@@ -8,6 +8,7 @@
 import { sql } from "../db/client.ts";
 import { on, registerQuery } from "../db/registry.ts";
 import { getNextSwarmSession } from "../swarm/domain.ts";
+import { describeJudgeRefusal, latestRefusals, refusalsForSession } from "../swarm/judge-refusals.ts";
 import { computeRegimeSnapshotStaleness, type RegimeStaleness } from "../analytics/report/regime-projection.ts";
 import { loadRosterSeedManifest } from "../projects/seed/roster-seed.ts";
 import {
@@ -492,6 +493,17 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
       level: "failed",
       source: "swarm.consensus_receipt",
       message: `missing-receipt detection failed: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  }
+
+  // ── Why a judge did not submit (issue #1117) ────────────────────────────
+  // The reasons judge containers reported for refused attempts. In memory and
+  // read-only here: they decide nothing, and an API restart forgets them.
+  for (const r of latestRefusals()) {
+    alerts.push({
+      level: "degraded",
+      source: `swarm.judge_refusal:${r.sessionId}`,
+      message: describeJudgeRefusal(r, refusalsForSession(r.sessionId).length),
     });
   }
 

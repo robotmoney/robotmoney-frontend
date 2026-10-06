@@ -21,6 +21,7 @@ import { handleSwarm } from "./routes/swarm.ts";
 import { handleAdmin } from "./routes/admin.ts";
 import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
+import { handlePublicAnalytics } from "./routes/public-analytics.ts";
 import { schedulerStreamWebSocket, upgradeSchedulerStream, type SchedulerStreamSocketData } from "./routes/swarm-stream.ts";
 import { corsPreflightResponse, withCors } from "./cors.ts";
 import { resolveClientIp } from "./client-ip.ts";
@@ -131,6 +132,9 @@ await assertAnalyticsLedgerGuardArmed();
   }
 }
 
+/** Seconds the parity-sweep request may run before Bun closes it (Bun's cap is 255). */
+export const PARITY_SWEEP_REQUEST_TIMEOUT_S = 240;
+
 const server = Bun.serve<SchedulerStreamSocketData, never>({
   port: config.apiPort,
   // Explicit, not Bun's 10 s default (issue 1060). See API_IDLE_TIMEOUT_SECONDS in config.ts.
@@ -141,6 +145,14 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
   async fetch(req, server) {
     const url = new URL(req.url);
     const { pathname } = url;
+
+    // TEMPORARY exemption (smoke-production-spec section 3; exit owned by
+    // issue 1079). The parity sweep re-derives every domain's row counts and
+    // checksums inside this one request, and on a production-sized ledger that
+    // runs 17-25 s: past the 10 s limit the connection was cut mid-sweep and
+    // production recorded 24 dead sweeps in 24 h (2026-09-25). Lift the limit
+    // for this request only; every other route keeps API_IDLE_TIMEOUT_SECONDS.
+    if (pathname === ROUTES.analytics.paritySweep && req.method === "POST") server.timeout(req, PARITY_SWEEP_REQUEST_TIMEOUT_S);
 
     if (req.method === "OPTIONS") return corsPreflightResponse(req, pathname);
 
@@ -163,7 +175,7 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
     // the trust/parsing rules — TRUST_PROXY=1 only when a known proxy (now
     // website-server, issue #892) sits in front of this process.
     const peer = server.requestIP(req)?.address || "";
-    const clientIp = resolveClientIp(peer, config.trustProxy, req.headers.get("x-forwarded-for"));
+    const clientIp = resolveClientIp(peer, config.trustProxy, req.headers.get("x-forwarded-for"), req.headers.get("cf-connecting-ip"));
 
     try {
       return withCors(await withRequestTiming(req, pathname, () => route(req, url, pathname, clientIp)), req, pathname);
@@ -407,6 +419,14 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
       // untouched rather than being re-wrapped by json().
       if (r instanceof Response) return r;
       if (r) return json(r.body, r.status);
+    }
+
+    // Tokenless public analytics reads (issue #1095, D58). Its own prefix, NOT
+    // under /api/analytics/ below: that one is auth-gated by a startsWith match
+    // and is a credentialed-CORS prefix. GET only (405 otherwise), rate limited
+    // per ip, and the handler answers every request itself.
+    if (pathname.startsWith("/api/public/analytics/")) {
+      return handlePublicAnalytics(req, url, clientIp);
     }
 
     // Analytics ingestion boundary (issue #106): the analytics-provider-only

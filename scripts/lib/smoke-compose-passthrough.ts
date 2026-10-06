@@ -45,6 +45,27 @@ export const DEMO_COMPOSE_PASSTHROUGH = [
   // into the worker lane, where projects.refresh_coins sends it to the
   // Pro host. Without this entry an exported key reached no container.
   "COINGECKO_API_KEY",
+  // SETTINGS PRODUCTION'S CONTAINERS GOT FROM THE CHECKOUT `.env` (issue #1113).
+  // v0.5.x booted with `bun run smoke:archive`, so Bun loaded the checkout's
+  // `.env` into the boot's environment and the compose file interpolated it.
+  // The boot now runs `--no-env-file`, so each of these has ONE delivery path:
+  // `export NAME=value` in the shell before `bun smoke --static-port`. None is
+  // a secret and none belongs in `~/.env` (its allowlist is credentials only;
+  // preflight check 4 refuses anything else on prod). Every one has a
+  // `${NAME:-}` interpolation in docker-compose.yml, so unset keeps the
+  // built-in default. WEBAUTHN_ORIGIN / WEBAUTHN_RP_ID: without them admin
+  // passkeys fall back to the request's own origin. The rest are the Base RPC
+  // budget, the wallet-backfill bounds, the GeckoTerminal spacing and the
+  // handle-namespace guard timeout. RM_ALLOW_HANDLE_NAMESPACE_VIOLATION is a
+  // weakening flag and stays off this list on purpose.
+  "WEBAUTHN_ORIGIN",
+  "WEBAUTHN_RP_ID",
+  "BASE_RPC_MAX_CALLS_PER_SEC",
+  "BASE_RPC_RATE_BURST",
+  "WALLET_BACKFILL_MAX_DAYS_PER_RUN",
+  "WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY",
+  "GECKO_OHLCV_MIN_INTERVAL_MS",
+  "PG_NAMESPACE_GUARD_TIMEOUT_MS",
   // NO "RM_ENV". It is a first-class StackConfig field now (`rmEnv`,
   // scripts/stack/config.ts) resolved from the KIND of boot by
   // resolveStackRmEnv(), and buildComposeEnv() refuses to see it in the extras

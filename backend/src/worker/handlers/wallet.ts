@@ -202,7 +202,7 @@ export async function sampleWalletBalances(payload: Record<string, unknown> = {}
       // amount*price product a caller may need before the join lands its row.
       //
       // D55 (6): a key the wallet repair pass superseded (ops/wallet-backfill.ts,
-      // migration 0086) is live again once the sampler writes it, as the row
+      // migration 0104) is live again once the sampler writes it, as the row
       // the old delete-and-insert would have let this INSERT create fresh.
       // "Fresh" is every column, not just the tombstone. A superseded row was
       // archived to evidence under its id while it was live, and the evidence

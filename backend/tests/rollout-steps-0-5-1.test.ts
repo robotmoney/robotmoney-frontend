@@ -130,117 +130,118 @@ describe("v0.5.1 applies 0061 and 0063; 0062 was recorded before it", () => {
     // From main, a grant repair found after v0.5.1 went out.
     "0062_rm_worker_analytics_ledger_read_grant.sql",
     // From main, the bare wire id for the judge model (issue #1064).
-    "0081_swarm_judge_model_bare_id.sql",
+    "0099_swarm_judge_model_bare_id.sql",
     // From main, the analytics ledger compaction and vintage repair (#1035,
-    // #1046, #1050, #1051, decision D56). It shares the number 0080 with the
-    // deployment refactor's 0080_stream_events_grant_only.sql; the runner
-    // orders by file name, so the two do not collide.
+    // #1046, #1050, #1051, decision D56). Production records it, so every
+    // deployment refactor file is numbered above it (0081 on, issue 1097).
     "0080_analytics_ledger_compaction.sql",
     // The deployment refactor (#1026 / D47, smoke-production-spec.md). All
     // three are owed to the next release's manifest, and none of them can be
     // added to v0.5.0's or v0.5.1's: those releases shipped before the spec was
     // adopted, and their directories are a record of what actually went out.
-    //   0063 — §4.2's one-row `deployment_identity` target enrollment.
-    //   0064 — §8.3's `schema_manifest` plus §8.2's `compat` /
+    //   0081 — §4.2's one-row `deployment_identity` target enrollment.
+    //   0082 — §8.3's `schema_manifest` plus §8.2's `compat` /
     //          `metadata_version` columns on the ledger.
-    //   0065 — §9.1 step 2's grant transition, revoking DELETE/TRUNCATE on the
+    //   0083 — §9.1 step 2's grant transition, revoking DELETE/TRUNCATE on the
     //          append-only tables from rm_app/rm_worker. Preflight check 2
     //          fails until it lands.
-    //   0066 — W5's removal of the swarm email feature (decision D50,
+    //   0084 — W5's removal of the swarm email feature (decision D50,
     //          reversing D30): drops `swarm_notification_outbox` and
     //          `swarm_waitlist.notified_at`.
-    "0063_deployment_identity.sql",
-    "0064_schema_manifest.sql",
-    "0065_append_only_grant_transition.sql",
-    //   0067 — W4.1's `swarm_subjects.epoch_duration_seconds`, the subject's
+    "0081_deployment_identity.sql",
+    "0082_schema_manifest.sql",
+    "0083_append_only_grant_transition.sql",
+    //   0085 — W4.1's `swarm_subjects.epoch_duration_seconds`, the subject's
     //          one scheduling parameter (scheduler spec §2.2).
-    //   0068 — W4.2/W4.3's epoch lifecycle on `swarm_sessions`: the captured
+    //   0086 — W4.2/W4.3's epoch lifecycle on `swarm_sessions`: the captured
     //          judge mode, the stored judging request instant and absolute
     //          deadline, the consensus acceptance instant, the judging
     //          outcome, the successor link turnover is bound by, and the
     //          at-most-one-`collecting`-per-subject unique index (§2.1).
-    //   0069 — W4.5's `automation_tokens`, the API automation-credential store
+    //   0087 — W4.5's `automation_tokens`, the API automation-credential store
     //          (smoke spec §3): a hash and the rights, never the secret.
-    //   0070 — W4.4's `swarm_scheduler_jobs`, the ad-hoc jobs the API once
+    //   0088 — W4.4's `swarm_scheduler_jobs`, the ad-hoc jobs the API once
     //          pushed on the scheduler subscription. Job pushes are gone (§6.3
-    //          as amended by D52) and 0079 drops the table; 0070 stays on disk
+    //          as amended by D52) and 0096 drops the table; 0088 stays on disk
     //          because it may have reached a shared database (criterion 105).
-    //   0072 — W4's removal half: it DELETES the five retired `swarm.*`
+    //   0089 — W4's removal half: it DELETES the five retired `swarm.*`
     //          `job_schedules` rows (scheduler spec §12; there are no schedule
-    //          rows any more) and made 0068's and 0070's logs append-only
-    //          (both since released: 0079 and 0080). `breaking` (D55 (7)):
-    //          code at 0070 seeded and read the rows it deletes.
-    "0066_drop_swarm_notifications.sql",
-    "0067_subject_epoch_duration.sql",
-    "0068_session_epoch_lifecycle.sql",
-    "0069_automation_tokens.sql",
-    "0070_swarm_scheduler_jobs.sql",
-    "0072_drop_swarm_schedules.sql",
-    //   0073 — the subject's `epoch_anchor` and `judging_duration_seconds`
+    //          rows any more) and made 0086's and 0088's logs append-only
+    //          (both since released: 0096 and 0097). `breaking` (D55 (7)):
+    //          code at 0088 seeded and read the rows it deletes.
+    "0084_drop_swarm_notifications.sql",
+    "0085_subject_epoch_duration.sql",
+    "0086_session_epoch_lifecycle.sql",
+    "0087_automation_tokens.sql",
+    "0088_swarm_scheduler_jobs.sql",
+    "0089_drop_swarm_schedules.sql",
+    //   0090 — the subject's `epoch_anchor` and `judging_duration_seconds`
     //          (scheduler spec §2.2, D53 decision 7).
-    //   0074 — `swarm_sessions.judging_duration_seconds`, captured at
+    //   0091 — `swarm_sessions.judging_duration_seconds`, captured at
     //          turnover (scheduler spec §4.4).
-    //   0075 — the take's `final` flag, its backfill and partial unique index,
+    //   0092 — the take's `final` flag, its backfill and partial unique index,
     //          and rm_app's column-only UPDATE (D51).
-    //   0076 — the ledger's INSERT/UPDATE revoked from the runtime roles
+    //   0093 — the ledger's INSERT/UPDATE revoked from the runtime roles
     //          (smoke spec §8.3).
-    //   0077 — the immutable analytics ledgers narrowed back to SELECT,
+    //   0094 — the immutable analytics ledgers narrowed back to SELECT,
     //          INSERT for rm_app (D53 decision 6).
-    //   0078 — `automation_tokens` keyed on (instance, holder) for the three
+    //   0095 — `automation_tokens` keyed on (instance, holder) for the three
     //          service-token holders (smoke spec §3, D52).
-    "0073_subject_grid_columns.sql",
-    "0074_session_judging_duration.sql",
-    "0075_swarm_recommendations_final.sql",
-    "0076_ledger_write_revoke.sql",
-    "0077_immutable_ledger_grants.sql",
-    "0078_automation_token_holders.sql",
-    //   0079 — drops `swarm_scheduler_jobs` with the job pushes (§6.3, D52;
-    //          criteria 94, 105). `breaking`: 0070-0078 code writes it.
-    //   0080 — `swarm_stream_events` loses 0072's triggers and is protected by
+    "0090_subject_grid_columns.sql",
+    "0091_session_judging_duration.sql",
+    "0092_swarm_recommendations_final.sql",
+    "0093_ledger_write_revoke.sql",
+    "0094_immutable_ledger_grants.sql",
+    "0095_automation_token_holders.sql",
+    //   0096 — drops `swarm_scheduler_jobs` with the job pushes (§6.3, D52;
+    //          criteria 94, 105). `breaking`: 0088-0095 code writes it.
+    //   0097 — `swarm_stream_events` loses 0089's triggers and is protected by
     //          grant alone, prunable only by rm_owner (D53 (2)). `breaking`.
-    //   0081 — `swarm_stream_head`, the one counter row event numbers come
+    //   0098 — `swarm_stream_head`, the one counter row event numbers come
     //          from (§6.3). `breaking`: MAX + 1 writers would collide.
-    //   0082 — `swarm_judge_config.mode` admits off | enforce (D53 (1)).
-    //   0083 — clears self-written member operators (D55 (2)).
-    "0079_drop_swarm_scheduler_jobs.sql",
-    "0080_stream_events_grant_only.sql",
-    "0081_stream_event_counter.sql",
-    "0082_judge_config_two_modes.sql",
-    "0083_clear_forged_member_operator.sql",
-    //   0084 — admin session and passkey `revoked_at` tombstones (D55 (6)).
-    //   0085 — admin WebAuthn challenge `consumed_at` tombstone (D55 (6)).
-    //   0086 — wallet samples' `superseded_at` and live-row keys (D55 (6)).
-    //   0087 — `swarm_member_keys.spoof_generation_id` (smoke spec §6.4).
+    //   0100 — `swarm_judge_config.mode` admits off | enforce (D53 (1)).
+    //   0101 — clears self-written member operators (D55 (2)).
+    "0096_drop_swarm_scheduler_jobs.sql",
+    "0097_stream_events_grant_only.sql",
+    "0098_stream_event_counter.sql",
+    "0100_judge_config_two_modes.sql",
+    "0101_clear_forged_member_operator.sql",
+    //   0102 — admin session and passkey `revoked_at` tombstones (D55 (6)).
+    //   0103 — admin WebAuthn challenge `consumed_at` tombstone (D55 (6)).
+    //   0104 — wallet samples' `superseded_at` and live-row keys (D55 (6)).
+    //   0105 — `swarm_member_keys.spoof_generation_id` (smoke spec §6.4).
     //          All four `additive`: the code that writes them lands in wave 5.
-    "0084_admin_revocation_tombstones.sql",
-    "0085_webauthn_challenge_consumed_at.sql",
-    "0086_wallet_sample_superseded_at.sql",
-    "0087_member_key_spoof_generation.sql",
-    //   0088 — the 32 fixed WebAuthn challenge slots (D55 (6)). `breaking`:
+    "0102_admin_revocation_tombstones.sql",
+    "0103_webauthn_challenge_consumed_at.sql",
+    "0104_wallet_sample_superseded_at.sql",
+    "0105_member_key_spoof_generation.sql",
+    //   0106 — the 32 fixed WebAuthn challenge slots (D55 (6)). `breaking`:
     //          older code INSERTs and DELETEs challenges.
-    //   0089 — DELETE and TRUNCATE revoked from every runtime role on every
+    //   0107 — DELETE and TRUNCATE revoked from every runtime role on every
     //          table (D55 (6), smoke spec §9.1 step 3). `breaking`.
-    //   0090 — `swarm_stream_events`' comment names the 7-day prune window
+    //   0108 — `swarm_stream_events`' comment names the 7-day prune window
     //          (D55 (12)).
-    //   0091 — rm_worker INSERT on the two wallet evidence tables, which the
+    //   0109 — rm_worker INSERT on the two wallet evidence tables, which the
     //          wallet repair pass copies a day into before rewriting it.
-    "0088_webauthn_challenge_slots.sql",
-    "0089_revoke_runtime_delete.sql",
-    "0090_stream_events_retention_comment.sql",
-    "0091_rm_worker_wallet_evidence_insert.sql",
-    "0092_drop_swarm_judge_fault_injection.sql",
-    "0093_swarm_judge_model_deepseek_v4_1_flash.sql",
+    "0106_webauthn_challenge_slots.sql",
+    "0107_revoke_runtime_delete.sql",
+    "0108_stream_events_retention_comment.sql",
+    "0109_rm_worker_wallet_evidence_insert.sql",
+    "0110_drop_swarm_judge_fault_injection.sql",
+    "0111_swarm_judge_model_deepseek_v4_1_flash.sql",
+    "0112_rm_app_overwrite_events_read.sql",
+    "0113_rm_worker_buyback_indexer_grants.sql",
   ];
 
-  test("the job ledger 0070 created is dropped by a later file, never by deleting 0070 (criterion 105)", () => {
-    // 0070 may already be recorded on a shared database, so it stays on disk
+  test("the job ledger 0088 created is dropped by a later file, never by deleting 0088 (criterion 105)", () => {
+    // 0088 may already be recorded on a shared database, so it stays on disk
     // and a forward migration removes what it made. Nothing may create the
     // table again after that.
     const dir = join(import.meta.dir, "..", "migrations");
     const onDisk = readdirSync(dir).filter((n) => n.endsWith(".sql")).sort();
-    expect(onDisk).toContain("0070_swarm_scheduler_jobs.sql");
+    expect(onDisk).toContain("0088_swarm_scheduler_jobs.sql");
     const drops = onDisk.filter((n) => /DROP TABLE IF EXISTS swarm_scheduler_jobs\b/.test(readFileSync(join(dir, n), "utf8")));
-    expect(drops).toEqual(["0079_drop_swarm_scheduler_jobs.sql"]);
+    expect(drops).toEqual(["0096_drop_swarm_scheduler_jobs.sql"]);
     const recreates = onDisk.filter(
       (n) => n > drops[0]! && /CREATE TABLE[^;]*swarm_scheduler_jobs/.test(readFileSync(join(dir, n), "utf8")),
     );

@@ -178,7 +178,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.dashboards.regimeSnapshots,
     summary: "Daily cross-asset risk-on / risk-off classifier",
     description:
-      "The regime classifier: a composite score in 0..1 per day, its 3-year rolling percentile, the label (risk_off, neutral or risk_on, bucketed on the percentile at 0.33 and 0.67), the macro / onchain / equity-factor indicator panels behind it, and, on request, the backtests. If all you want is today's reading it is `latest.composite` and `latest.regime`. `range` trims the history; the correlation matrices ride on `latest` whatever the range, and the backtests come only with `include=backtest`.",
+      "The regime classifier: a composite score in 0..1 per day, its 3-year rolling percentile, the label (risk_off, neutral or risk_on, bucketed on the percentile at 0.33 and 0.67), the macro / onchain / equity-factor indicator panels behind it, and, on request, the backtests. If all you want is today's reading it is `latest.composite` and `latest.regime`. `range` trims the history; the correlation matrices ride on `latest` whatever the range, and the backtests come only with `include=backtest`. `source` says which read path produced the response: `regime_snapshots` (the current-view table) or `ledger` (the immutable run ledger). This is where regime outputs live; the raw inputs are under /api/public/analytics/.",
     backs: ["/regime", "/regime/indicators", "/regime-detection"],
     params: [
       {
@@ -194,8 +194,78 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
         example: "backtest",
       },
     ],
-    contractType: "{ latest: RegimeSnapshot, history: RegimeSnapshot[] }",
+    contractType: "RegimeSnapshotsResponse",
     sizeHint: "about 125 KB at the default 180 days and 33 KB at `?range=1`; `&include=backtest` adds about 125 KB of backtests",
+  },
+  {
+    id: "getPublicRawHistory",
+    method: "GET",
+    path: ROUTES.publicAnalytics.rawHistory,
+    summary: "Raw indicator history the regime is computed from",
+    description:
+      "Every stored raw indicator point as date, indicator, value and source, ordered by date then indicator. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.",
+    backs: [],
+    params: [
+      { name: "indicator", in: "query", description: "One indicator id, for example T10Y2Y.", example: "T10Y2Y" },
+      { name: "from", in: "query", description: "First date, YYYY-MM-DD, inclusive.", example: "2024-01-01" },
+      { name: "to", in: "query", description: "Last date, YYYY-MM-DD, inclusive.", example: "2024-12-31" },
+      { name: "limit", in: "query", description: "Rows per page, 1 to 1000 (default 100; a larger value is clamped).", example: "100" },
+      { name: "cursor", in: "query", description: "The previous page's `nextCursor`; omit for the first page.", example: "" },
+    ],
+    contractType: "PublicRawHistoryResponse",
+    sizeHint: "about 80 B a row; 8 KB at the default 100",
+  },
+  {
+    id: "getPublicAssetPrices",
+    method: "GET",
+    path: ROUTES.publicAnalytics.assetPrices,
+    summary: "Daily USD closes of the tracked assets",
+    description:
+      "One row per asset per UTC day with the price, the provider, the pool it came from and when it was observed and fetched. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.",
+    backs: [],
+    params: [
+      { name: "symbol", in: "query", description: "One asset symbol.", example: "ROBOTMONEY" },
+      { name: "from", in: "query", description: "First date, YYYY-MM-DD, inclusive.", example: "2026-03-01" },
+      { name: "to", in: "query", description: "Last date, YYYY-MM-DD, inclusive.", example: "2026-04-01" },
+      { name: "limit", in: "query", description: "Rows per page, 1 to 1000 (default 100; a larger value is clamped).", example: "100" },
+      { name: "cursor", in: "query", description: "The previous page's `nextCursor`; omit for the first page.", example: "" },
+    ],
+    contractType: "PublicAssetPricesResponse",
+    sizeHint: "about 400 B a row",
+  },
+  {
+    id: "getPublicVintages",
+    method: "GET",
+    path: ROUTES.publicAnalytics.vintages,
+    summary: "Frozen data vintages an analytics run committed to",
+    description:
+      "Each vintage: the run key, tool, as-of date, knowledge-time and market-time cutoffs, manifest digest, member count, build identity and methodology. With `include=members` and a `run_key` and `tool_id` naming one vintage, `limit` and `cursor` page that vintage's members, one row per stored source value id (about 170,000 for a production vintage). Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.",
+    backs: [],
+    params: [
+      { name: "run_key", in: "query", description: "The run key, a UUID.", example: "00000000-0000-4000-8000-000000000000" },
+      { name: "tool_id", in: "query", description: "The analytics tool id.", example: "regime" },
+      { name: "include", in: "query", description: "`members` adds the vintage's members; needs run_key and tool_id.", example: "members" },
+      { name: "limit", in: "query", description: "Rows per page, 1 to 1000 (default 100; a larger value is clamped).", example: "100" },
+      { name: "cursor", in: "query", description: "The previous page's `nextCursor`; omit for the first page.", example: "" },
+    ],
+    contractType: "PublicVintagesResponse",
+    sizeHint: "about 600 B a vintage; members about 70 B a row",
+  },
+  {
+    id: "getPublicOverwriteEvents",
+    method: "GET",
+    path: ROUTES.publicAnalytics.overwriteEvents,
+    summary: "Every recorded revision of a stored analytics row",
+    description:
+      "Each time a raw indicator, regime snapshot or research signal row was replaced or removed, the row as it was and as it became, in the order recorded. A page can hold fewer rows than `limit` when the rows are large. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.",
+    backs: [],
+    params: [
+      { name: "table_name", in: "query", description: "`raw_indicator_history`, `regime_snapshots` or `research_signals`.", example: "raw_indicator_history" },
+      { name: "limit", in: "query", description: "Rows per page, 1 to 1000 (default 100; a larger value is clamped).", example: "100" },
+      { name: "cursor", in: "query", description: "The previous page's `nextCursor`; omit for the first page.", example: "" },
+    ],
+    contractType: "PublicOverwriteEventsResponse",
+    sizeHint: "from 300 B a row for raw history to about 0.5 MB for a regime snapshot",
   },
   {
     id: "getResearchSignal",
@@ -356,24 +426,24 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     id: "getConsensusReceipt",
     method: "GET",
     path: ROUTES.swarm.sessionConsensusReceipt,
-    summary: "The anchored consensus receipt bytes for a session",
-    description:
-      "The aggregate receipt for one session: the signed consensus over the member takes. THIS IS THE ANCHORED URL — it is what robotmoney-core writes on chain as `payloadUri`, and it returns the BARE canonical receipt, byte-stable, with nothing wrapped around it. To check the on-chain commitment, prepend the domain separator `robotmoney:consensus-receipt:v1\\n` to the body exactly as received and keccak256 the result: that is `payloadDigest`. Addressed by session id rather than by content digest, so it survives redeploys and a reader holding only a session id can reach it. A receipt is only published for a session that reached the judged state, so most sessions do not have one. For the read-time verification verdict, fetch the `/verified` sibling.",
-    backs: ["/swarm"],
-    params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
-    contractType: "ConsensusReceipt",
-    sizeHint: "a few KB",
-  },
-  {
-    id: "getConsensusReceiptVerified",
-    method: "GET",
-    path: ROUTES.swarm.sessionConsensusReceiptVerified,
     summary: "The consensus receipt with a read-time verification verdict",
     description:
-      "The same receipt as its parent path, wrapped in a verification envelope recomputed on every request: the receipt, the canonical bytes it was published as, `verified`, a per-signature verdict, and `unverifiedReasons` when it is not. Served even when it does not verify — never withheld and never passed off as valid. This URL is NOT the anchored one: the envelope's keccak256 is not `payloadDigest`, so verify the commitment against the parent path instead.",
+      "The aggregate receipt for one session: the signed consensus over the member takes, wrapped in a verification envelope recomputed on every request: the receipt, the canonical bytes it was published as, `verified`, a per-signature verdict, and `unverifiedReasons` when it is not. Served even when it does not verify, never withheld and never passed off as valid. Addressed by session id rather than by content digest, so it survives redeploys and a reader holding only a session id can reach it. A receipt is only published for a session that reached the judged state, so most sessions do not have one. The envelope's keccak256 is not `payloadDigest`: to check the on-chain commitment, fetch the `/canonical` sibling.",
     backs: ["/swarm"],
     params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
     contractType: "SwarmConsensusReceiptResponse",
+    sizeHint: "a few KB",
+  },
+  {
+    id: "getConsensusReceiptCanonical",
+    method: "GET",
+    path: ROUTES.swarm.sessionConsensusReceiptCanonical,
+    summary: "The canonical consensus receipt bytes for a session",
+    description:
+      "The same receipt as its parent path, as the BARE canonical bytes, byte-stable, with nothing wrapped around them. To check the on-chain commitment, prepend the domain separator `robotmoney:consensus-receipt:v1\\n` to the body exactly as received and keccak256 the result: that is `payloadDigest`.",
+    backs: ["/swarm"],
+    params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
+    contractType: "ConsensusReceipt",
     sizeHint: "a few KB",
   },
   {
@@ -620,6 +690,7 @@ export const EXCLUDED_ROUTES: Record<string, string> = {
   [ROUTES.swarm.participants.pending]: "participant work queue; requires that member's own bearer and answers only about itself",
   [ROUTES.swarm.participants.judgeSubscribe]: "judge participant bearer only; a long-lived event-stream of that judge's own work",
   [ROUTES.swarm.participants.judgement]: "judge participant write flow; requires a judge's member bearer",
+  [ROUTES.swarm.participants.judgeRefusal]: "judge participant report of a refused attempt; requires a judge's member bearer and decides nothing",
 };
 
 /** Absolute URL for an endpoint, path params left as :name placeholders. */

@@ -6,7 +6,7 @@ import { hostname } from "node:os";
 import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { databaseName, homeEnvFilePath, urlForRole } from "./env-role.ts";
 import { ALLOW_INSECURE_FLAG, bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, refuseAllowInsecureOnProd, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
+import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, missingProdSettingNotes, refuseAllowInsecureOnProd, refuseProdWithoutProjectsSource, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
 import { resolveBackupFiles } from "./restore-container.ts";
 import { resolveDeploymentPolicy, resolveRmEnv } from "./smoke-env-policy.ts";
 import { requireRehearsalTarget } from "./smoke-identity.ts";
@@ -14,7 +14,7 @@ import { dumpOwnershipSql, hostReadTargetState, instanceRolePasswords, localSupe
 import { acquireTargetLock, assertStillHeld, readTargetState, type TargetLock, type TargetState } from "../../backend/src/db/target-lock.ts";
 import type { GeneratedRolePasswords } from "./smoke-state.ts";
 import { assertSmokeTwinIsTarget, bringUpTwin, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration, smokeTwinUrlFromContainer, smokeTwinVolumeName } from "./smoke-twin.ts";
-import { teardownContainer } from "./restore-container.ts";
+import { retimeAdoptedWindows, teardownContainer } from "./restore-container.ts";
 import { listSmokeVolumes, makeDockerRunner, purgeSmokeEvalContainers, removeSmokeVolumes } from "./smoke-volumes.ts";
 import { OPERATOR_TOKEN_FILE_ENV } from "./operator-token.ts";
 import { readServiceToken, runTokenProvisioning, tokenReuseRefusal } from "./smoke-secret.ts";
@@ -44,6 +44,7 @@ import {
   DEFAULT_STACK_DATABASE,
   describePortHolders,
   composeArgs,
+  heldOnlyByOwnInstance,
   dockerClientHostEnv,
   hostBackendUrl,
   internalDatabaseUrl,
@@ -54,6 +55,7 @@ import {
   stalePortEnvWarnings,
   STAGE_COMPOSE_FILE,
   STAGE_WEB_PORT,
+  STAGE_WEB_PORT_PURPOSE,
   type Stack,
   type StackConfig,
   type StackEvent,
@@ -100,7 +102,20 @@ import {
 } from "./smoke-journal.ts";
 import { CredentialFileRefusal, loadCredentialFile, planParticipants, resolveCredentialPath, type CredentialEntry, type CredentialPathResolution } from "./swarm/credential-file.ts";
 import { runSpoofRebind, SpoofKeysRefusal, spoofKeysRequest } from "./swarm/spoof-keys.ts";
-import { applyParticipantPlan, fetchMemberRoles, listRunningParticipants, participantContainerIds, renderParticipantServices, summarizeParticipantApply, writeParticipantFiles, type DockerRun, type ParticipantsReconciled } from "./participant-compose.ts";
+import { planConfiguration } from "./smoke-plan-configuration.ts";
+import {
+  applyParticipantPlan,
+  assertTwinSeatsEveryActiveMember,
+  fetchMemberRoles,
+  listRunningParticipants,
+  participantContainerIds,
+  renderParticipantServices,
+  resolveParticipantImage,
+  summarizeParticipantApply,
+  type DockerRun,
+  type ParticipantsReconciled,
+  writeParticipantFiles,
+} from "./participant-compose.ts";
 import { ZEN_API_BASE_URL } from "./opencode-key.ts";
 import { resolveAgentModel, ZEN_PREFIX } from "./model-registry.ts";
 
@@ -210,9 +225,14 @@ if (staticPortMode) {
 // opaque, and silent about WHO holds the port. This check runs BEFORE `compose
 // up` so the operator gets the actionable version: name the holder, refuse to
 // boot, exit non-zero. A diagnostic, not an allocation.
-async function stagePreflight(): Promise<void> {
+async function stagePreflight(ownProject: string): Promise<void> {
+  // A rerun after replace resumes over this instance's own website-server (ports.ts heldOnlyByOwnInstance); any other holder refuses.
+  const own = { project: ownProject, run: makeCommandRunner(process.env) };
   try {
-    await assertStageWebPortFree();
+    await assertStageWebPortFree(STAGE_WEB_PORT, STAGE_WEB_PORT_PURPOSE, own);
+    if (heldOnlyByOwnInstance(STAGE_WEB_PORT, own)) {
+      console.error(`[smoke] :${STAGE_WEB_PORT} is held by this instance's own containers (project ${ownProject}); resuming over them`);
+    }
   } catch (err) {
     if (err instanceof PortUnavailableError) {
       console.error(`[smoke] FATAL: ${err.message}`);
@@ -302,9 +322,15 @@ const allowInsecureRequested = process.argv.includes(ALLOW_INSECURE_FLAG);
   const refusal = refuseAllowInsecureOnProd(policy, allowInsecureRequested);
   if (refusal !== null) fatal(refusal);
 }
-if (staticPortMode) await stagePreflight();
 // The containers' RM_ENV: the policy, and `prod` on the standing stack by rule.
 const stackRmEnv: RmEnv = stackRmEnvFor(staticPortMode, policy);
+// Issue #1113: a prod boot without PROJECTS_SOURCE=live refuses here, before
+// any credential is minted or container created.
+{
+  const refusal = refuseProdWithoutProjectsSource(stackRmEnv, process.env);
+  if (refusal !== null) fatal(refusal);
+  for (const note of missingProdSettingNotes(stackRmEnv, process.env)) console.warn(`[smoke] ${note}`);
+}
 // …and this process's own, so every host-side reader of RM_ENV (the inference
 // preflight below, the drivers this boot starts) judges the boot by the policy
 // the matrix resolved — an unset RM_ENV under `--local` is `stage` (§4.3), a
@@ -358,6 +384,8 @@ const stackEnvironment = resolveStackEnvironment(process.env, { seed: instance.n
 // used to be overridable by an exported SMOKE_PROJECT; spec §1 retires that
 // with no alias (refused at the top of this file).
 const project = stackProjectName("stack", stackEnvironment);
+// Here, not earlier: the pre-flight needs the project name to tell this instance's own website-server (a resume) from a conflict.
+if (staticPortMode) await stagePreflight(project);
 /** The pgdata volume compose creates for this instance's own postgres. */
 const instanceVolume = `${project}_pgdata`;
 
@@ -707,20 +735,17 @@ const plan: DeploymentPlan = (() => {
       target: planTarget(),
       images: Object.fromEntries(Object.entries(sources).map(([service, source]) => [service, { source, digest: null }])),
       roster: roster.members,
-      // Every non-secret value that changes what this boot does. Not the compose
-      // project (derived from the instance, and random-looking enough that the
-      // redaction check would rightly refuse it), not a URL (a Base RPC URL can
-      // carry an API key in its path).
-      configuration: {
-        RM_ENV: stackRmEnv,
-        SMOKE_CADENCE: cadence.profile,
-        STATIC_PORT: String(staticPortMode),
-        SHIPPED_IMAGES: String(Boolean(imagesOverride)),
-        ANALYTICS_SOURCE: smokeEnv.analyticsSource,
-        ANALYTICS_FLOOR_SEED: smokeEnv.analyticsFloorSeed,
-        // Which members `--spoof-keys` names; every in-house one when bare.
-        ...(spoofRequest.explicit ? { SPOOF_KEYS: spoofRequest.names.join(",") || "operator=robotmoney" } : {}),
-      },
+      // Every non-secret value that changes what this boot does
+      // (smoke-plan-configuration.ts says what is left out, and why).
+      configuration: planConfiguration({
+        stackRmEnv,
+        cadenceProfile: cadence.profile,
+        staticPortMode,
+        shippedImages: Boolean(imagesOverride),
+        analyticsSource: smokeEnv.analyticsSource,
+        analyticsFloorSeed: smokeEnv.analyticsFloorSeed,
+        spoofRequest,
+      }),
       mutations: [
         ...(requestsMigrate(process.argv) ? (["migrate"] as const) : []),
         ...(shouldSeed(process.argv) ? (["seed"] as const) : []),
@@ -1159,9 +1184,14 @@ async function reconcileParticipants(apiUrl: string): Promise<ParticipantsReconc
     memberRole: (memberId) => roles.get(memberId),
   });
   const desired = [...planned.start, ...planned.keep];
+  // A twin seats the WHOLE restored roster (smoke-mode.ts resolveSeatAllRestored, issue #1152).
+  if (seatAllRestored && credentialResolution.configured) await assertTwinSeatsEveryActiveMember(apiUrl, desired.filter((d) => d.kind === "agent").map((d) => d.name));
   // Participants run the image `api` runs (backend/Dockerfile carries them).
-  const apiImage = runningServices().api ?? "";
-  if (desired.length > 0 && apiImage === "") throw new Error("participants: the api container is not running, so there is no image to start them from");
+  const runningApiImage = runningServices().api ?? "";
+  if (desired.length > 0 && runningApiImage === "") throw new Error("participants: the api container is not running, so there is no image to start them from");
+  const chosenImage = desired.length > 0 ? resolveParticipantImage(runningApiImage, `${project}-api:latest`, (ref) => dockerRunIn(process.env)(["image", "inspect", ref]).exitCode === 0) : { image: runningApiImage, fallback: null };
+  if (chosenImage.fallback) log(`participants: ${chosenImage.fallback}`);
+  const apiImage = chosenImage.image;
   // The one model every participant calls, from the single selection signal.
   // No host key is asked for here: each participant spends its OWN model key.
   const model = desired.length > 0 ? resolveAgentModel(process.env) : "";
@@ -1532,6 +1562,7 @@ async function main(): Promise<void> {
         lock: { backendPid: targetLock!.backendPid, holder: { ...targetLock!.holder } },
         names: spoofRequest.names,
         flagExplicit: spoofRequest.explicit,
+        seatAll: seatAllRestored,
         rmEnv: policy,
         credentialPath: credentialResolution.configured ? credentialResolution.path : null,
       }, prepareChildEnv(process.env));
@@ -1740,6 +1771,9 @@ async function runCiScenario(stack: Stack): Promise<never> {
     // restored personas, (3) imported history still serves under #498's
     // archival semantics. No judge coverage: nothing on this stack judges
     // inline (D48/D53) — it returns with the participant judge.
+    // The twin's schedule, set at boot on its own copy: a dump captured mid-window
+    // restores production's open window (hours out), which the driver refuses.
+    if (smokeTwinContainer) retimeAdoptedWindows(smokeTwinContainer, cadence.swarmWindowMs, (m) => console.log(`[smoke] ${m}`));
     console.log("\n[smoke] dump: running one live swarm session with the restored personas…");
     process.env.BACKEND_URL = backendUrl;
     const session = await import(join(repoRoot, "scripts", "lib", "swarm", "session.ts"));

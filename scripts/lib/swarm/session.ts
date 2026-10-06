@@ -25,7 +25,7 @@ import { runAgent, enroll, railFromEnv } from "./agent.ts";
 import type { AgentStage, SessionRail } from "./agent.ts";
 import { resolveSmokeCadence } from "../smoke-cadence.ts";
 import type { SmokeCadence } from "../smoke-cadence.ts";
-import { missingSectionLeadIns } from "./inference.ts";
+import { judgeShortfalls } from "./inference.ts";
 import { generateKeyPair } from "./crypto.ts";
 // The one builder for a compose prefix — argv topology AND the `--env-file`
 // that keeps the repo's own `.env` out of an interpolated container.
@@ -126,10 +126,9 @@ export function settledAttendance(
 }
 
 // An allocation session is the one whose recommendation is a weight vector;
-// its takes carry REGIME and ALLOCATION, every other subject's REGIME and
-// SUBJECT. The recommendation's type alone decides it: any take may attach
-// optional weights, and one that does must not change which sections the
-// house members' takes are held to.
+// its takes carry a weight vector. The recommendation's type alone decides it:
+// any take may attach optional weights, and one that does must not change what
+// the house members' takes are held to.
 export function sessionRequiresWeights(pub: any): boolean {
   return pub?.session?.swarmRecommendation?.type === "bucket_weights";
 }
@@ -140,9 +139,9 @@ export function assertAuthoredTakes(
   attendance: AbsenceReport,
   observedAbsent: readonly string[],
   fulfilledMemberIds: readonly string[],
-  // Which sections a take must carry follows the subject (inference.ts
-  // takeSectionLeadIns): an allocation session's, or any other subject's.
-  sections: { requireWeights?: boolean } = {},
+  // Retained for callers; a take is held to what the judge reads (inference.ts
+  // judgeShortfalls), whatever the subject, so this no longer changes any check.
+  _subject: { requireWeights?: boolean } = {},
 ) {
   // Present-member takes are the ones that actually posted a body; absent
   // no-shows enrolled but never submitted, so they carry no body.
@@ -196,8 +195,8 @@ export function assertAuthoredTakes(
     if (OLD_TEMPLATE_RE.test(t.body)) {
       throw new Error(`${tag}: take for ${who} matches the retired template fingerprint — not a real inference body`);
     }
-    for (const lead of missingSectionLeadIns(t.body, sections)) {
-      throw new Error(`${tag}: take for ${who} is missing the ${lead} lead-in`);
+    for (const shortfall of judgeShortfalls(t.body)) {
+      throw new Error(`${tag}: take for ${who} is not judge-ready: ${shortfall}`);
     }
     if (!VALID_STANCES.has(String(t.stance))) {
       throw new Error(`${tag}: take for ${who} has stance '${t.stance}' outside {${[...STANCES].join(",")}}`);
@@ -595,7 +594,7 @@ export function epochDurationSecondsFor(cadence: SmokeCadence): number {
   if (!Number.isInteger(seconds) || seconds <= 0) {
     throw new Error(
       `cadence profile '${cadence.profile}' has swarmWindowMs=${cadence.swarmWindowMs}, which is not a ` +
-        "positive whole number of seconds; migration 0067's CHECK refuses it",
+        "positive whole number of seconds; migration 0085's CHECK refuses it",
     );
   }
   return seconds;

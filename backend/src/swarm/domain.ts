@@ -911,7 +911,7 @@ export async function getMemberTakes(memberId: string, limit?: number) {
   // not three — and the LIMIT is a count of sessions, so without this it would
   // silently start returning fewer sessions than asked for. The flag, not
   // `ORDER BY revision`, says which row counts: the partial unique index
-  // `swarm_recommendations_one_final_per_member` (migration 0075) makes it one.
+  // `swarm_recommendations_one_final_per_member` (migration 0092) makes it one.
   const rows = await on(sql, memberTakesTakes, memberTakesSessions, memberTakesMembers, memberTakesKeys)<any>`
     SELECT r.id, r.member_id, m.handle AS member_handle, m.name AS member_name,
            r.stance, r.confidence, r.body,
@@ -1046,7 +1046,7 @@ export async function getSessionById(
 // member_id)`), each its own immutable signed row. This is a session's CURRENT
 // reading, so it selects the rows flagged final — exactly one per member, which
 // the partial unique index `swarm_recommendations_one_final_per_member`
-// (migration 0075) makes structural. Without the flag the session page would
+// (migration 0092) makes structural. Without the flag the session page would
 // render one card per amendment, and its stance/confidence table would count
 // one member several times.
 //
@@ -1971,7 +1971,7 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
     // lose on the constraint and be answered with a 409 in the catch below, and
     // NO in-place edit of the winner's content ever happens.
     //
-    // THE FINAL FLAG IS SET BY THE DATABASE, not here. Migration 0075's
+    // THE FINAL FLAG IS SET BY THE DATABASE, not here. Migration 0092's
     // BEFORE INSERT trigger clears the member's previous final take and marks
     // the new row final when it is the newest revision — which, inside the
     // lock, it always is. One implementation of D51's acceptance rule, in the
@@ -4448,7 +4448,7 @@ export async function loadFrozenTakeSet(sessionId: string, h: DbHandle = sql): P
   // A superseded body reaching that snapshot would publish, permanently, a
   // sentence the member has already withdrawn. The set is selected on the
   // flag, never by ordering on `revision`: the flag is what the accepting
-  // transaction set, and migration 0075's partial unique index makes it one row
+  // transaction set, and migration 0092's partial unique index makes it one row
   // per member, so the aggregator, the judge's digest and the receipt all read
   // the one take per member that counts.
   // The outer `ORDER BY received_at` is the ordering this query has always had
@@ -5017,7 +5017,7 @@ export async function updateMemberProfile(token: string, memberRef: string, patc
 // carries change events only. Every piece of work the scheduler does follows
 // from an event or a timer; there is no ad-hoc job kind for the API to push,
 // ack or redeliver." The job ledger, its push/ack functions, the `job` frame
-// and the ack route were deleted with migration 0079, which drops the table.
+// and the ack route were deleted with migration 0096, which drops the table.
 
 /**
  * How a connection behaves. Every value is a default a test may shorten; NONE
@@ -5321,6 +5321,15 @@ export interface PendingJudging {
   judgingDeadlineAt: string;
   judgingRequestedAt: string | null;
   /**
+   * The model the judge is to run, read from `swarm_judge_config.model` at the
+   * moment this frame is built (issue 1118). The participant holds no database
+   * credential, so the API hands it the configured wire id here; a change made
+   * through the admin route reaches the next judging with no restart. `null`
+   * when the row names none: the judge then refuses `model_unconfigured`
+   * rather than run some other model the admin surface does not report.
+   */
+  model: string | null;
+  /**
    * EXACTLY what the judge is to read: the session's frozen take set, its
    * brief and its rollup facts, as `judgeInputFromFrozen` builds them.
    *
@@ -5427,6 +5436,15 @@ const pendingJudgingTakes = registerQuery({
   callers: [JUDGE_ROUTE],
   probe: PENDING_JUDGING_PROBE,
 });
+const pendingJudgingModel = registerQuery({
+  role: "rm_app",
+  object: "swarm_judge_config",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:pendingJudgingFor.model",
+  purpose: "Read the configured judge model, which the judge participant runs at judging time.",
+  callers: [JUDGE_ROUTE],
+  probe: { statement: "SELECT model FROM swarm_judge_config WHERE id = 1" },
+});
 export async function pendingJudgingFor(memberId: string): Promise<PendingJudging[]> {
   const rows = await on(sql, pendingJudgingSessions, pendingJudgingMembers, pendingJudgingConfig, pendingJudgingJudgements, pendingJudgingTakes)<
     { id: string; subject_id: string; date: Date | string; judging_deadline_at: Date; judging_requested_at: Date | null }
@@ -5447,6 +5465,8 @@ export async function pendingJudgingFor(memberId: string): Promise<PendingJudgin
           WHERE r.session_id = s.id AND r.member_id = ${memberId})
      ORDER BY s.judging_deadline_at`;
   const minTakes = await judgeMinTakes(sql);
+  const [modelRow] = await on(sql, pendingJudgingModel)<{ model: string | null }>`SELECT model FROM swarm_judge_config WHERE id = 1`;
+  const model = modelRow?.model == null || String(modelRow.model).trim() === "" ? null : String(modelRow.model).trim();
   const pending: PendingJudging[] = [];
   for (const r of rows) {
     const frozen = await loadFrozenTakeSet(String(r.id));
@@ -5457,6 +5477,7 @@ export async function pendingJudgingFor(memberId: string): Promise<PendingJudgin
       date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10),
       judgingDeadlineAt: new Date(r.judging_deadline_at).toISOString(),
       judgingRequestedAt: r.judging_requested_at ? new Date(r.judging_requested_at).toISOString() : null,
+      model,
       input: await judgeInputFromFrozen(frozen, minTakes),
     });
   }
@@ -6253,13 +6274,19 @@ export interface JudgeStreamOptions {
   keepaliveMs?: number;
   /** How often this connection recomputes the judge's pending set. */
   refreshMs?: number;
+  /**
+   * How often the pending set is re-sent even though it has not changed. A
+   * judge retries a refused item on its own backoff, and a frame is what wakes
+   * it (issue #1117).
+   */
+  resendMs?: number;
 }
 
 // Under `Bun.serve`'s 10-second default idle timeout: a quiet SSE connection
 // has to write something first, or the server cuts it. The
 // keepalive threshold sits under the refresh interval, so an unchanged pending
 // set still writes a keepalive on every refresh — at most five seconds apart.
-const JUDGE_STREAM_DEFAULTS = { keepaliveMs: 4_000, refreshMs: 5_000 } as const;
+const JUDGE_STREAM_DEFAULTS = { keepaliveMs: 4_000, refreshMs: 5_000, resendMs: 30_000 } as const;
 
 /**
  * Hold a judge's subscription open, serving its pending set.
@@ -6271,9 +6298,12 @@ const JUDGE_STREAM_DEFAULTS = { keepaliveMs: 4_000, refreshMs: 5_000 } as const;
  *
  * While the connection lives, the set is recomputed and re-sent whenever it
  * CHANGES — a new request appears, or this judge's own submission clears one.
- * Resending an unchanged set would be noise, and sending nothing at all would
- * make a judge that connected a second before a request wait for its own
- * reconnect.
+ * An unchanged non-empty set is also re-sent every `resendMs` (issue #1117).
+ * A judge whose model call failed submits nothing and the set does not change,
+ * so without this it would never be told again, and one provider timeout would
+ * end the session `no_consensus`. The set is STATE, so a repeat is harmless:
+ * the judge decides from its own backoff and the item's deadline whether to
+ * try again, and the server decides nothing from a resend.
  *
  * Like the scheduler's stream, everything here belongs to the open connection
  * and stops with it. Nothing runs when no judge is connected.
@@ -6281,6 +6311,7 @@ const JUDGE_STREAM_DEFAULTS = { keepaliveMs: 4_000, refreshMs: 5_000 } as const;
 export function openJudgeStream(memberId: string, opts: JudgeStreamOptions = {}): Response {
   const keepaliveMs = opts.keepaliveMs ?? JUDGE_STREAM_DEFAULTS.keepaliveMs;
   const refreshMs = opts.refreshMs ?? JUDGE_STREAM_DEFAULTS.refreshMs;
+  const resendMs = opts.resendMs ?? JUDGE_STREAM_DEFAULTS.resendMs;
   let live = true;
 
   const body = new ReadableStream<Uint8Array>({
@@ -6297,15 +6328,19 @@ export function openJudgeStream(memberId: string, opts: JudgeStreamOptions = {})
 
       let lastServed = "";
       let lastFrameAt = 0;
+      let lastPendingAt = 0;
       void (async () => {
         while (live) {
           const pending = await pendingJudgingFor(memberId).catch(() => null);
           if (pending) {
-            const fingerprint = JSON.stringify(pending.map((p) => p.sessionId));
-            if (fingerprint !== lastServed) {
+            // The model is part of the fingerprint: a switch made while a
+            // session waits must re-serve it, or the judge keeps the old one.
+            const fingerprint = JSON.stringify(pending.map((p) => [p.sessionId, p.model]));
+            if (fingerprint !== lastServed || (pending.length > 0 && Date.now() - lastPendingAt >= resendMs)) {
               lastServed = fingerprint;
               send("pending", { pending });
               lastFrameAt = Date.now();
+              lastPendingAt = lastFrameAt;
             } else if (Date.now() - lastFrameAt >= keepaliveMs) {
               send("keepalive", {});
               lastFrameAt = Date.now();

@@ -511,7 +511,7 @@ export interface SpoofRebindDeps {
   /**
    * The generation id the database currently records for `generation`'s
    * members: the id every one of their active keys carries, or `null` when
-   * they do not all carry one and the same id (migration 0087
+   * they do not all carry one and the same id (migration 0105
    * `spoof_generation_id`, written only by the rebind's INSERT).
    */
   readInstalledGeneration(generation: SpoofGeneration): Promise<string | null>;
@@ -573,14 +573,24 @@ export interface SpoofKeysOptions {
    */
   instance: string;
   stateRoot: string;
-  /** Explicit names from `--spoof-keys=a,b`; empty means every in-house member. */
+  /** Explicit names from `--spoof-keys=a,b`; empty means every in-house member, or every ACTIVE member under `seatAll`. */
   names: readonly string[];
+  /**
+   * The owned-twin exception (spec §6.4 as amended 2026-10-05, D55 amendment):
+   * this boot owns a throwaway copy of production (`--local dump`/`volume`,
+   * `deployment_identity = rehearsal`, resolveSeatAllRestored), so re-keying a
+   * third party's member here reaches nobody real, and a twin that seats only
+   * the in-house members rehearses 2 of 7 silently (issue #1152). Under it the
+   * third-party refusal is lifted and the default selection is every ACTIVE
+   * member, judges included. Never set outside that gate.
+   */
+  seatAll?: boolean;
   /**
    * The target's members, resolved under the target lock after revalidation
    * (spec §2). `name` is the member's HANDLE, the key the credential file and
    * the generation file both use.
    */
-  members: readonly { name: string; memberId: string; operator: string }[];
+  members: readonly { name: string; memberId: string; operator: string; status?: string }[];
   db: SpoofRebindDeps;
 }
 
@@ -610,7 +620,7 @@ export interface SpoofKeysOutcome {
 export async function spoofKeys(options: SpoofKeysOptions): Promise<SpoofKeysOutcome> {
   const generationPath = instancePaths(options.stateRoot, options.instance).spoofGenerationFile;
   assertSpoofKeysAllowed(options.guards, generationPath);
-  const targets = selectSpoofTargets(options.names, options.members);
+  const targets = selectSpoofTargets(options.names, options.members, options.seatAll === true);
 
   // (1) A persisted generation is REUSED, never replaced: minting a second one
   // while the database may already hold the first strands the members. Reuse
@@ -673,18 +683,22 @@ function assertSameSpoofTargets(
  * The members this run spoofs: the explicit names, or every in-house member.
  *
  * A third party's member is NEVER spoofed, named or not — their key is theirs,
- * and rebinding it would let this host sign as them.
+ * and rebinding it would let this host sign as them — EXCEPT on an owned twin
+ * (`seatAll`, SpoofKeysOptions): a throwaway copy of production, where the
+ * default is every ACTIVE member so the twin seats the whole restored roster.
  */
-function selectSpoofTargets(
+export function selectSpoofTargets(
   names: readonly string[],
-  members: readonly { name: string; memberId: string; operator: string }[],
+  members: readonly { name: string; memberId: string; operator: string; status?: string }[],
+  seatAll = false,
 ): { name: string; memberId: string; operator: string }[] {
   const inHouse = (m: { operator: string }) => m.operator === "robotmoney";
-  if (names.length === 0) return members.filter(inHouse);
+  const active = (m: { status?: string }) => m.status === undefined || m.status === "active";
+  if (names.length === 0) return seatAll ? members.filter(active) : members.filter(inHouse);
   return names.map((name) => {
     const member = members.find((m) => m.name.trim().toLowerCase() === name.trim().toLowerCase());
     if (!member) throw new Error(`--spoof-keys names "${name}", which is not a member of this target`);
-    if (!inHouse(member)) {
+    if (!seatAll && !inHouse(member)) {
       throw new Error(
         `--spoof-keys refuses "${name}": it belongs to operator ${member.operator}, and a third party's key is theirs`,
       );
@@ -729,6 +743,8 @@ export interface SpoofRebindRequest {
   readonly lock: { readonly backendPid: number; readonly holder: Record<string, unknown> };
   readonly names: readonly string[];
   readonly flagExplicit: boolean;
+  /** The owned-twin exception: every active member may be spoofed (SpoofKeysOptions.seatAll). */
+  readonly seatAll: boolean;
   readonly rmEnv: "prod" | "stage" | null;
   /** The resolved credential-file path, compared as a file against the generation's. */
   readonly credentialPath: string | null;

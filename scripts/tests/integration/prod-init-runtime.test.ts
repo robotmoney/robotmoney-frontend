@@ -22,7 +22,7 @@
 //   - the operator at the terminal, typing rm_owner and `y`.
 //
 // set-identity (§9.1 step 4). Under D55 (9) the first production migrate
-// writes `production` in 0063's own transaction (backend/tests/
+// writes `production` in 0081's own transaction (backend/tests/
 // identity-first-pass.test.ts proves that write). So the target here is
 // enrolled `production` before the command runs — by the container's
 // superuser, doadmin's stand-in — and set-identity must REPORT the row, read

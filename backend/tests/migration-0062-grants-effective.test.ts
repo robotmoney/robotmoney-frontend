@@ -92,7 +92,7 @@ describe("after the full migration set, every reader role can read everything", 
     `) as unknown as { relname: string; ins: boolean; upd: boolean; del: boolean }[];
     expect(rows.map((r) => r.relname)).toEqual(["asset_price_floors", "asset_prices", "chain_address_floors"]);
     // DELETE is denied on all three. `chain_address_floors` was the exception
-    // until migration 0089: 0061_rm_worker_wallet_backfill_grant granted
+    // until migration 0107: 0061_rm_worker_wallet_backfill_grant granted
     // INSERT/UPDATE/DELETE on the wallet-backfill driver's tables, and D55 (6)
     // took DELETE and TRUNCATE from every runtime role on every table.
     const deletable = new Set<string>();
@@ -105,7 +105,7 @@ describe("after the full migration set, every reader role can read everything", 
   test("the write grant did NOT leak onto the rest of the schema", async () => {
     // An allow-list that quietly became a blanket grant would be the worse
     // bug. rm_worker's writable set must be exactly 0054's list plus 0061's,
-    // 0062's and 0091's additions, and no more.
+    // 0062's, 0109's and 0113's additions, and no more.
     const rows = (await sql`
       WITH t AS MATERIALIZED (
         SELECT c.oid, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -129,11 +129,15 @@ describe("after the full migration set, every reader role can read everything", 
       // connection and writes its own two tables, which 0054's allow-list
       // missed. `chain_address_floors` is its third and is already above.
       "chain_day_blocks", "wallet_backfill_state",
-      // 0091_rm_worker_wallet_evidence_insert's additions: the same repair
+      // 0109_rm_worker_wallet_evidence_insert's additions: the same repair
       // driver copies a day's samples into the immutable evidence tables before
       // rewriting it. INSERT only (asserted just below); 0037's guard refuses
       // an UPDATE anyway.
       "wallet_balance_sample_evidence", "wallet_sleeve_sample_evidence",
+      // 0113_rm_worker_buyback_indexer_grants' additions (runbook B11): the
+      // buyback indexer runs on the rm_worker connection and writes its scan
+      // cursor (INSERT, UPDATE) and the swaps it finds (INSERT).
+      "buyback_scan_state", "buyback_swaps",
     ];
     expect([...writable].filter((t) => !allowed.includes(t))).toEqual([]);
     // The evidence is INSERT-only for rm_worker, never UPDATE.

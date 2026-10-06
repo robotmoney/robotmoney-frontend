@@ -27,7 +27,7 @@
 // arm asserts its D-A7 NAME — the thing an operator acts on — and that NO POST
 // was made, because an implementation that submitted a placeholder AND
 // reported a refusal would pass a weaker assertion.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { canonicalizeJudgement, ROUTES } from "@robotmoney/contract";
 import {
@@ -57,13 +57,21 @@ const IDENTITY = {
   privateJwk: (await crypto.subtle.exportKey("jwk", keyPair.privateKey)) as Record<string, unknown>,
 };
 
+// The model policy reads RM_ENV when a request is judged. These fixtures use stub
+// model ids, which only a development environment allows (judge-model-policy.ts).
+const RM_ENV_BEFORE = process.env.RM_ENV;
+process.env.RM_ENV = "ephemeral";
+afterAll(() => {
+  if (RM_ENV_BEFORE === undefined) delete process.env.RM_ENV;
+  else process.env.RM_ENV = RM_ENV_BEFORE;
+});
+
 const CONFIG: JudgeClientConfig = {
   apiUrl: "http://api:3000",
   token: "judge-bearer",
   memberId: "m-judge",
   name: "judge-one",
   identity: IDENTITY,
-  model: "vendor/model-x",
   endpoint: "https://models.example/v1",
   apiKey: "key",
   timeoutMs: 1_000,
@@ -91,6 +99,7 @@ const PENDING: PendingJudging = {
   date: "2026-09-24",
   judgingDeadlineAt: "2026-09-24T10:00:00.000Z",
   judgingRequestedAt: "2026-09-24T09:45:00.000Z",
+  model: "vendor/model-x",
   input: INPUT,
 };
 
@@ -142,6 +151,54 @@ async function judgeWith(answer: JudgeAnswer) {
   return { outcome, posts: calls.filter((c) => c.method === "POST") };
 }
 
+describe("the model is the one swarm_judge_config names, served with the request (issue 1118)", () => {
+  const modelsAsked = async (pending: PendingJudging, env: Record<string, string | undefined> = { RM_ENV: "ephemeral" }) => {
+    const asked: string[] = [];
+    const { calls, impl } = recordingFetch({ [ROUTES.swarm.participants.judgement]: accepted });
+    const outcome = await judgeOne(CONFIG, pending, {
+      fetchImpl: impl,
+      env,
+      runJudgeImpl: async (run) => {
+        asked.push(run.model);
+        return { kind: "ok", body: ANSWER };
+      },
+    });
+    return { outcome, asked, posts: calls.filter((c) => c.method === "POST") };
+  };
+
+  test("the model called and the model recorded are the served one, and a switch takes effect on the next request", async () => {
+    const first = await modelsAsked({ ...PENDING, model: "vendor/model-a" });
+    const second = await modelsAsked({ ...PENDING, model: "vendor/model-b" });
+    expect(first.asked).toEqual(["vendor/model-a"]);
+    expect((first.posts[0]!.body as { model: string }).model).toBe("vendor/model-a");
+    expect(second.asked).toEqual(["vendor/model-b"]);
+    expect((second.posts[0]!.body as { model: string }).model).toBe("vendor/model-b");
+  });
+
+  test("no configured model is `model_unconfigured`: nothing is asked and nothing is submitted", async () => {
+    for (const model of [null, undefined, "  "]) {
+      const { outcome, asked, posts } = await modelsAsked({ ...PENDING, model });
+      expect(outcome).toMatchObject({ kind: "refused", reason: "model_unconfigured" });
+      expect(asked).toEqual([]);
+      expect(posts).toEqual([]);
+    }
+  });
+
+  test("a keyless free-family model is `model_disallowed`, in every environment", async () => {
+    for (const RM_ENV of ["ephemeral", "prod", undefined]) {
+      const { outcome, asked, posts } = await modelsAsked({ ...PENDING, model: "nemotron-3-ultra-free" }, { RM_ENV });
+      expect(outcome).toMatchObject({ kind: "refused", reason: "model_disallowed" });
+      expect(asked).toEqual([]);
+      expect(posts).toEqual([]);
+    }
+  });
+
+  test("on an acceptance path only the pinned model is allowed", async () => {
+    expect((await modelsAsked({ ...PENDING, model: "kimi-k3" }, { RM_ENV: "prod" })).outcome).toMatchObject({ kind: "refused", reason: "model_disallowed" });
+    expect((await modelsAsked({ ...PENDING, model: "deepseek-v4.1-flash" }, { RM_ENV: "prod" })).outcome.kind).toBe("submitted");
+  });
+});
+
 describe("configuration refuses at startup, by the D-A7 name", () => {
   const base = {
     RM_API_URL: "http://api",
@@ -149,7 +206,6 @@ describe("configuration refuses at startup, by the D-A7 name", () => {
     RM_MEMBER_ID: "m",
     RM_MEMBER_NAME: "n",
     RM_MEMBER_IDENTITY: JSON.stringify(IDENTITY),
-    RM_JUDGE_MODEL: "vendor/m",
     RM_JUDGE_BASE_URL: "https://x",
     RM_INFERENCE_KEY: "k",
     // A development environment, where any non-keyless model is allowed.
@@ -170,25 +226,13 @@ describe("configuration refuses at startup, by the D-A7 name", () => {
     expect(config.identity.publicKeyB64).toBe(IDENTITY.publicKeyB64);
   });
 
-  test("no model is `model_unconfigured`", () => {
-    const err = refusal({ ...base, RM_JUDGE_MODEL: "" });
-    expect(err).toBeInstanceOf(JudgeClientConfigError);
-    expect(err.reason).toBe("model_unconfigured");
-  });
-
   test("a model with no credential is `credential_unconfigured`", () => {
     expect(refusal({ ...base, RM_INFERENCE_KEY: "" }).reason).toBe("credential_unconfigured");
   });
 
-  test("a keyless free-family model is `model_disallowed`, in every environment", () => {
-    for (const RM_ENV of ["ephemeral", "prod", undefined]) {
-      expect(refusal({ ...base, RM_ENV, RM_JUDGE_MODEL: "nemotron-3-ultra-free" }).reason).toBe("model_disallowed");
-    }
-  });
-
-  test("on an acceptance path only the pinned model is allowed", () => {
-    expect(refusal({ ...base, RM_ENV: "prod", RM_JUDGE_MODEL: "kimi-k3" }).reason).toBe("model_disallowed");
-    expect(() => readJudgeClientConfig({ ...base, RM_ENV: "prod", RM_JUDGE_MODEL: "deepseek-v4.1-flash" })).not.toThrow();
+  test("the model is not read from the environment: a stale RM_JUDGE_MODEL changes nothing (issue 1118)", () => {
+    const config = readJudgeClientConfig({ ...base, RM_JUDGE_MODEL: "nemotron-3-ultra-free" });
+    expect("model" in config).toBe(false);
   });
 
   test("a missing endpoint, bearer or signing identity refuses by the variable's name", () => {
@@ -489,6 +533,8 @@ describe("the subscription", () => {
     const done = runJudgeClient(CONFIG, controller.signal, {
       fetchImpl: impl,
       log: () => {},
+      // The fixture's deadline is fixed; judge as of a moment before it.
+      now: () => Date.parse(PENDING.judgingDeadlineAt) - 60_000,
       runJudgeImpl: async () => ({ kind: "ok", body: ANSWER }),
     });
     // One pass through the stream is enough; stop before it reconnects.
@@ -510,5 +556,91 @@ describe("the subscription", () => {
   test("a 403 on the subscription is terminal, not something to reconnect through", async () => {
     const impl = (async () => new Response("{}", { status: 403 })) as unknown as typeof globalThis.fetch;
     await expect(runJudgeClient(CONFIG, undefined, { fetchImpl: impl, log: () => {} })).rejects.toThrow("403");
+  });
+});
+
+describe("a refused judgement is retried until the deadline (#1117)", () => {
+  const DEADLINE = Date.parse(PENDING.judgingDeadlineAt);
+
+  /** A subscription that serves the same pending set `frames` times, then closes. */
+  function harness(frames: number) {
+    const calls: Recorded[] = [];
+    const impl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const headers = new Headers(init?.headers as HeadersInit);
+      let body: unknown = null;
+      if (typeof init?.body === "string") body = JSON.parse(init.body);
+      calls.push({ method: (init?.method ?? "GET").toUpperCase(), path: url.pathname, body, auth: headers.get("Authorization") });
+      if (url.pathname === ROUTES.swarm.participants.judgeSubscribe) {
+        const frame = `event: pending\ndata: ${JSON.stringify({ pending: [PENDING] })}\n\n`;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              for (let i = 0; i < frames; i += 1) c.enqueue(new TextEncoder().encode(frame));
+              c.close();
+            },
+          }),
+        );
+      }
+      if (url.pathname === ROUTES.swarm.participants.judgement) {
+        return Response.json({ sessionId: "s-1", judgementId: 3, duplicate: false, lateEvidence: false });
+      }
+      return Response.json({ ok: true });
+    }) as unknown as typeof globalThis.fetch;
+    return { calls, impl };
+  }
+
+  async function run(h: ReturnType<typeof harness>, answers: JudgeAnswer[], clock: () => number) {
+    const controller = new AbortController();
+    let n = 0;
+    let closed!: () => void;
+    const streamClosed = new Promise<void>((r) => (closed = r));
+    const done = runJudgeClient({ ...CONFIG, reconnectMs: 10_000, retryBaseMs: 1_000 }, controller.signal, {
+      fetchImpl: h.impl,
+      log: (m) => {
+        if (m === "subscription closed") closed();
+      },
+      now: clock,
+      runJudgeImpl: async () => answers[Math.min(n++, answers.length - 1)]!,
+    });
+    // The stream closes after its frames; the client then sleeps `reconnectMs`.
+    await streamClosed;
+    controller.abort();
+    await done;
+    return n;
+  }
+
+  test("a first call that times out is retried on the next frame and submits before the deadline", async () => {
+    const h = harness(3);
+    let t = DEADLINE - 600_000;
+    // Each clock read moves 2 s on: past the 1 s backoff, far from the deadline.
+    const asked = await run(h, [{ kind: "timeout", timeoutMs: 1_000 }, { kind: "ok", body: ANSWER }], () => (t += 2_000));
+    expect(asked).toBe(2);
+    expect(h.calls.filter((c) => c.path === ROUTES.swarm.participants.judgement)).toHaveLength(1);
+    // The refusal reason reached the API for the overview.
+    const report = h.calls.find((c) => c.path === ROUTES.swarm.participants.judgeRefusal);
+    expect(report?.body).toMatchObject({ sessionId: "s-1", reason: "model_timeout", attempt: 1 });
+    expect(report?.auth).toBe("Bearer judge-bearer");
+  });
+
+  test("a frame that arrives inside the backoff does not trigger another call", async () => {
+    const h = harness(3);
+    const t = DEADLINE - 600_000; // the clock never moves, so the backoff never ends
+    const asked = await run(h, [{ kind: "timeout", timeoutMs: 1_000 }, { kind: "ok", body: ANSWER }], () => t);
+    expect(asked).toBe(1);
+    expect(h.calls.filter((c) => c.path === ROUTES.swarm.participants.judgement)).toHaveLength(0);
+  });
+
+  test("nothing is retried after the judging deadline", async () => {
+    const h = harness(3);
+    let t = DEADLINE - 1_000;
+    // The first read is before the deadline; every later read is past it.
+    const asked = await run(h, [{ kind: "timeout", timeoutMs: 1_000 }, { kind: "ok", body: ANSWER }], () => {
+      const v = t;
+      t += 60_000;
+      return v;
+    });
+    expect(asked).toBe(1);
+    expect(h.calls.filter((c) => c.path === ROUTES.swarm.participants.judgement)).toHaveLength(0);
   });
 });

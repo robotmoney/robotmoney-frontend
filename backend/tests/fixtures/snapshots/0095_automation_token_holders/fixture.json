@@ -1,0 +1,23 @@
+{
+  "last": "0095_automation_token_holders.sql",
+  "commit": "bd87fc592c38c3e51b52eaab4f3e767eb38a3e63",
+  "source": "The last snapshot before wave 3 of issue #1026 added the table drop that is now 0096_drop_swarm_scheduler_jobs: the newest commit whose backend/schema/snapshot.json ended at 0078_automation_token_holders.sql, which issue 1097 renumbered to 0095_automation_token_holders.sql (the never-shipped 0063..0092 became 0081..0110, in order). No release commit carries backend/schema/ (v0.5.0 predates it), so the fixture is pinned from a named commit. bootstrap-data.sql, grants.sql and snapshot.sql are `git show <commit>:backend/schema/<file>`, byte for byte, never edited. snapshot.json is that commit's file with ONE change: its filename list carries the renumbered names, sorted, and its contentHash is recomputed over them (the catalog fingerprint is unchanged). Without the rename the fixture would record names no migration file has. How the fixture advances: docs/technical/smoke-production-spec.md §8.4. Issue 1112 then changed ONE value in snapshot.sql and snapshot.json: swarm_subjects.epoch_duration_seconds DEFAULT 3600 became 21600, because migration 0085 (never shipped) now defaults to production's six-hour cadence; the contentHash is recomputed over it.",
+  "files": [
+    {
+      "file": "schema/bootstrap-data.sql",
+      "sha256": "65731cf7cb8e454054f971d8f071e9be9e779b95685615eac0892aa0feeb014d"
+    },
+    {
+      "file": "schema/grants.sql",
+      "sha256": "5ee49b49f08bdb50303d771d1a3d199e705014b271042c922b1c5bf819fa170b"
+    },
+    {
+      "file": "schema/snapshot.json",
+      "sha256": "529e860c082039073e87f9720b2d4e5e016832a2cbd574bb8e586c8c82595d84"
+    },
+    {
+      "file": "schema/snapshot.sql",
+      "sha256": "fda325c7804c29f38f9cbb829b14cdd19e434f0f979422d46c6d79c99892086d"
+    }
+  ]
+}

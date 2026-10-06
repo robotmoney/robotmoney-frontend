@@ -49,6 +49,7 @@ import {
   sendSignedSubmission,
   SIGNED_SUBMISSION_FILE,
   submitTake,
+  resolveOneShotArgv,
 } from "../../agent/participant/take-runner.ts";
 import type { ParticipantConfig, PendingWork } from "../../agent/participant/main.ts";
 
@@ -925,14 +926,18 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
     expect(readFileSync(join(markers, "model-key"), "utf8")).toBe("athena-key-only-hers-42");
   }, 30_000);
 
-  test("THE RENDERED TAKE COMMAND, for real: author-take.ts reads the brief, asks the model on the member's OWN key, and the chain submits its draft", async () => {
+  test("THE RENDERED TAKE COMMAND, for real: author-take.ts reads the member, regime and brief, asks the model on the member's OWN key, and the chain submits its draft", async () => {
     // The argv every rendered agent carries (scripts/lib/participant-compose.ts
-    // PARTICIPANT_TAKE_COMMAND), with the script path absolute because this test
-    // runs from the repository root rather than the image's /app.
+    // PARTICIPANT_TAKE_COMMAND), EXACTLY as rendered: a relative script path.
+    // The one-shot runs in a fresh workspace elsewhere, so this only works when
+    // take-runner resolves it against the participant's start directory (here
+    // the repository root, in the image /app) — the stage-2 2026-10-05 defect.
     const { PARTICIPANT_TAKE_COMMAND } = await import("../../lib/participant-compose.ts");
     expect(PARTICIPANT_TAKE_COMMAND).toEqual(["bun", "run", "scripts/agent/participant/author-take.ts"]);
-    const takeCommand = ["bun", "run", join(import.meta.dir, "..", "..", "agent", "participant", "author-take.ts")];
-    const seen: { auth: string | null; model: unknown }[] = [];
+    expect(process.cwd()).toBe(join(import.meta.dir, "..", "..", ".."));
+    const takeCommand = [...PARTICIPANT_TAKE_COMMAND];
+    const seen: { auth: string | null; model: unknown; prompt: string }[] = [];
+    const memos: { auth: string | null; body: Record<string, unknown> }[] = [];
     const server = Bun.serve({
       port: 0,
       async fetch(req) {
@@ -940,10 +945,18 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
         if (url.pathname === ROUTES.swarm.brief) {
           return Response.json({ body: { subject: { recommendationType: "stance" }, prompt: "Assess woon." }, reportSnapshotId: "rs-7" });
         }
+        if (url.pathname === ROUTES.dashboards.regimeSnapshots) return Response.json({ latest: { composite: 0.412, regime: "neutral" } });
+        if (url.pathname.startsWith("/api/swarm/members/")) return Response.json({ id: MEMBER_ID, lens: "macro risk" });
+        if (url.pathname === ROUTES.swarm.memos) {
+          memos.push({ auth: req.headers.get("authorization"), body: (await req.json()) as Record<string, unknown> });
+          return Response.json({ ok: true, url: "https://example.test/memo/9" });
+        }
         if (url.pathname === "/v1/chat/completions") {
-          const body = (await req.json()) as { model?: unknown };
-          seen.push({ auth: req.headers.get("authorization"), model: body.model });
-          return Response.json({ choices: [{ message: { content: `{"stance":"constructive","confidence":0.72,"body":"The treasury is well covered."}` } }] });
+          const body = (await req.json()) as { model?: unknown; messages?: { content?: string }[] };
+          seen.push({ auth: req.headers.get("authorization"), model: body.model, prompt: String(body.messages?.[0]?.content) });
+          return Response.json({
+            choices: [{ message: { content: `**REGIME**\n- composite 0.41\n\n**ALLOCATION**\n- hold the targets\n\n**SUBJECT**\n- The treasury is well covered. ${Array.from({ length: 45 }, (_, i) => `word${i}`).join(" ")}\n\nSTANCE: constructive | CONFIDENCE: 0.72` } }],
+          });
         }
         return new Response("not found", { status: 404 });
       },
@@ -964,9 +977,17 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
       );
       expect({ oneShot: outcome.oneShot, submission: outcome.submission, reason: outcome.reason }).toEqual({ oneShot: "ok", submission: "submitted", reason: undefined });
       // ONE model call, on this member's own key, for the model the boot resolved.
-      expect(seen).toEqual([{ auth: "Bearer athena-own-model-key-0123456789", model: "deepseek-v4.1-flash" }]);
+      expect(seen.map((c) => ({ auth: c.auth, model: c.model }))).toEqual([{ auth: "Bearer athena-own-model-key-0123456789", model: "deepseek-v4.1-flash" }]);
+      // The prompt is production's persona prompt: this member's lens, the regime numbers, the sections.
+      expect(seen[0]?.prompt).toContain("through a macro risk lens");
+      expect(seen[0]?.prompt).toContain("Composite 0.412");
+      expect(seen[0]?.prompt).toContain("**SUBJECT**");
+      // The memo is posted on the member's own bearer, and the signed draft carries its url.
+      expect(memos).toHaveLength(1);
+      expect(memos[0]?.body).toMatchObject({ sessionId: SESSION_ID });
       // The signed draft is what the model authored, bound to the brief's report.
-      expect(api.signingDrafts[0]).toMatchObject({ memberId: MEMBER_ID, subjectId: "woon", date: "2026-09-23", stance: "constructive", confidence: 0.72, reportSnapshotId: "rs-7" });
+      expect(api.signingDrafts[0]).toMatchObject({ memberId: MEMBER_ID, subjectId: "woon", date: "2026-09-23", stance: "constructive", confidence: 0.72, reportSnapshotId: "rs-7", memoUrl: "https://example.test/memo/9" });
+      expect(String(api.signingDrafts[0]?.body)).toContain("**SUBJECT**");
     } finally {
       server.stop(true);
     }
@@ -980,6 +1001,7 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
         const url = new URL(req.url);
         if (url.pathname === ROUTES.swarm.brief) return new Response("no brief yet", { status: 404 });
         if (url.pathname.startsWith("/api/swarm/subjects/")) return Response.json({ recommendationType: null });
+        if (url.pathname === ROUTES.dashboards.regimeSnapshots) return Response.json({ latest: {} });
         if (url.pathname === "/v1/chat/completions") return Response.json({ choices: [{ message: { content: "I would rather not." } }] });
         return new Response("not found", { status: 404 });
       },
@@ -992,7 +1014,7 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
         work,
       );
       expect(outcome.oneShot).toBe("crashed");
-      expect(outcome.reason).toContain("no JSON object");
+      expect(outcome.reason).toContain("control line");
       expect(api.submits).toEqual([]);
       expect(api.signingDrafts).toEqual([]);
     } finally {
@@ -1119,3 +1141,14 @@ describe("take-runner.ts holds no container rail — a take is a PROCESS", () =>
     }
   });
 });
+
+describe("resolveOneShotArgv — a relative script path means the participant's start directory, not the take's workspace", () => {
+  const exists = (have: string[]) => (p: string) => have.includes(p);
+  test("the rendered take command resolves under the start directory", () => {
+    expect(resolveOneShotArgv(["bun", "run", "scripts/agent/participant/author-take.ts"], "/app", exists(["/app/scripts/agent/participant/author-take.ts"]))).toEqual(["bun", "run", "/app/scripts/agent/participant/author-take.ts"]);
+  });
+  test("an absolute path, the command word, and arguments that are not files pass through", () => {
+    expect(resolveOneShotArgv(["/bin/false", "--flag", "/abs/x.ts", "scripts/missing.ts"], "/app", exists(["/app/scripts/agent/participant/author-take.ts"]))).toEqual(["/bin/false", "--flag", "/abs/x.ts", "scripts/missing.ts"]);
+  });
+});
+

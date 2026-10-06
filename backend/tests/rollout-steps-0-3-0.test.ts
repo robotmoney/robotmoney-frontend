@@ -335,8 +335,8 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
 
   test("the roster names neither epoch-scheduler log: the job ledger is dropped, the event log is grant-only", () => {
     // Postflight compares live triggers against this roster. `swarm_scheduler_jobs`
-    // no longer exists (migration 0079, no job pushes) and `swarm_stream_events`
-    // carries no 0032 trigger (0080, D53 (2)), so either name here would fail
+    // no longer exists (migration 0096, no job pushes) and `swarm_stream_events`
+    // carries no 0032 trigger (0097, D53 (2)), so either name here would fail
     // postflight on every correctly migrated database.
     for (const table of ["swarm_scheduler_jobs", "swarm_stream_events"]) {
       expect({ table, listed: (APPEND_ONLY_TABLES as readonly string[]).includes(table) }).toEqual({ table, listed: false });

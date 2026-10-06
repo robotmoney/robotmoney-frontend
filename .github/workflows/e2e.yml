@@ -150,7 +150,7 @@ on:
   # runs on `push: branches: [main]` also runs on a nightly schedule, and
   # nothing else does — so a red nightly means exactly what a red merge would
   # have meant, with no required reading. Cron minutes are staggered across the
-  # ten mirrors. The invariant is enforced mechanically by
+  # eleven mirrors. The invariant is enforced mechanically by
   # scripts/tests/unit/nightly-mirrors-merge-set.test.ts, not by convention.
   #
   # This one keeps 04:37 UTC, the slot the retired swarm-opencode-nightly.yml

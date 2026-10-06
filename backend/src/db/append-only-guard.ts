@@ -199,7 +199,7 @@ export type AppendOnlyDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<
  *    Since D55 (6) no runtime role deletes them either: a session is revoked
  *    by a `revoked_at` tombstone every read filters on, and a WebAuthn
  *    challenge is consumed by a single-use conditional UPDATE in one of 32
- *    fixed slots (migration 0088), so a consumed challenge is never a replay
+ *    fixed slots (migration 0106), so a consumed challenge is never a replay
  *    window.
  *  - `jobs`, `job_runs`, `job_schedules` — queue and coordination churn, and
  *    the queue is periodically pruned by design. NOTE the cost, recorded in
@@ -256,7 +256,7 @@ export const APPEND_ONLY_TABLES = [
   "regime_snapshots",
   "schema_migrations",
   "analytics_overwrite_events",
-  // Issue #1026 W4's two scheduler logs were here, opted in by 0072, and have
+  // Issue #1026 W4's two scheduler logs were here, opted in by 0089, and have
   // both left: see APPEND_ONLY_RELEASED below for where each went and why.
 ] as const;
 
@@ -281,7 +281,7 @@ export const APPEND_ONLY_MIGRATIONS = [
   "0042_swarm_consensus_receipts.sql",
   "0050_swarm_member_keys_append_only.sql",
   "0056_analytics_overwrite_events.sql",
-  "0072_drop_swarm_schedules.sql",
+  "0089_drop_swarm_schedules.sql",
 ] as const;
 
 /**
@@ -335,7 +335,7 @@ export const APPEND_ONLY_TABLE_MIGRATION: Record<
 
 /**
  * Tables a migration once opted in and a LATER migration took out again, each
- * by a decision that says so. An applied migration is frozen, so 0072's array
+ * by a decision that says so. An applied migration is frozen, so 0089's array
  * still names both of these; this record is what lets the union pin above tell
  * "released on purpose, by this file" from "forgotten". A table appears here
  * only with the migration that removed its triggers, and never also in
@@ -344,24 +344,24 @@ export const APPEND_ONLY_TABLE_MIGRATION: Record<
  *  - `swarm_stream_events` — D53 (2): rm_owner prunes it (as corrected by
  *    D55 (12), only with the manual, receipted `bun run prune`, and only rows
  *    older than a retention window of at least 7 days), which the 0032
- *    triggers refused for every role. Migration 0080 drops them. DELETE
+ *    triggers refused for every role. Migration 0097 drops them. DELETE
  *    and TRUNCATE stay revoked from every runtime role, re-asserted by
  *    backend/schema/grants.sql's revoke sweep over every relation (D55 (6))
  *    and refused by preflight check 2 (RUNTIME_DELETE_REVOKED_TABLES in
  *    ./preflight.ts gives it its own reason).
  *  - `swarm_scheduler_jobs` — scheduler spec §6.3 as amended by D52: no job
- *    pushes. Migration 0079 drops the table, and its triggers with it.
+ *    pushes. Migration 0096 drops the table, and its triggers with it.
  */
 export const APPEND_ONLY_RELEASED: Readonly<
   Record<string, { readonly declaredBy: (typeof APPEND_ONLY_MIGRATIONS)[number]; readonly releasedBy: string }>
 > = {
   swarm_stream_events: {
-    declaredBy: "0072_drop_swarm_schedules.sql",
-    releasedBy: "0080_stream_events_grant_only.sql",
+    declaredBy: "0089_drop_swarm_schedules.sql",
+    releasedBy: "0097_stream_events_grant_only.sql",
   },
   swarm_scheduler_jobs: {
-    declaredBy: "0072_drop_swarm_schedules.sql",
-    releasedBy: "0079_drop_swarm_scheduler_jobs.sql",
+    declaredBy: "0089_drop_swarm_schedules.sql",
+    releasedBy: "0096_drop_swarm_scheduler_jobs.sql",
   },
 };
 

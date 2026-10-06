@@ -52,6 +52,9 @@ import {
   type ParticipantConfig,
   type ParticipantLoops,
   type StartupDiagnostic,
+  takeRetryPolicy,
+  TAKE_MAX_ATTEMPTS,
+  TAKE_RETRY_MAX_MS,
 } from "../../agent/participant/main.ts";
 import type { JudgeClientConfig } from "../../agent/participant/judge-client.ts";
 import { DB_CREDENTIAL_KEYS } from "../../lib/db-credential-keys.ts";
@@ -682,7 +685,6 @@ describe("runParticipant — the namespace decides the loop", () => {
     RM_MEMBER_ID: "m-themis",
     RM_MEMBER_TOKEN: "themis-bearer",
     RM_INFERENCE_KEY: "themis-own-model-key",
-    RM_JUDGE_MODEL: "deepseek-v4.1-flash",
     RM_JUDGE_BASE_URL: "https://models.example/v1",
     RM_ENV: "stage",
   };
@@ -713,21 +715,12 @@ describe("runParticipant — the namespace decides the loop", () => {
     expect(config.memberId).toBe("m-themis");
     expect(config.token).toBe("themis-bearer");
     expect(config.apiKey).toBe("themis-own-model-key");
-    expect(config.model).toBe("deepseek-v4.1-flash");
     expect(config.identity).toEqual(IDENTITY);
   });
 
   test("a judge whose token or identity fails the HTTP diagnostic never subscribes", async () => {
     const { ran, loops } = recordingLoops({ ...GREEN, serverMemberId: "m-someone-else", identityMatchesRoster: false });
     await expect(runParticipant(JUDGE_ENV, { loops, read: { dockerSocketProbePaths: [] } })).rejects.toThrow(/refuses to subscribe/);
-    expect(ran).toEqual([]);
-  });
-
-  test("a judge with no usable model refuses by its D-A7 name before anything connects", async () => {
-    const { ran, loops } = recordingLoops();
-    await expect(
-      runParticipant({ ...JUDGE_ENV, RM_JUDGE_MODEL: "nemotron-3-ultra-free" }, { loops, read: { dockerSocketProbePaths: [] } }),
-    ).rejects.toThrow(/model_disallowed/);
     expect(ran).toEqual([]);
   });
 
@@ -743,5 +736,24 @@ describe("runParticipant — the namespace decides the loop", () => {
     const main = MAIN_SOURCE.slice(MAIN_SOURCE.indexOf("if (import.meta.main)"));
     expect(main).toContain("await runParticipant(process.env, { signal: controller.signal });");
     expect(main).not.toContain("runParticipantLoop(");
+  });
+});
+
+describe("takeRetryPolicy — a take that did not submit backs off, and the seat gives up on the session after TAKE_MAX_ATTEMPTS (owner 2026-10-05: fail instead of spending)", () => {
+  test("a submitted take resets: nothing to retry", () => {
+    expect(takeRetryPolicy({ submission: "submitted" }, 4, 5_000)).toEqual({ kind: "submitted" });
+  });
+  test("a crashed one-shot doubles from the poll interval per prior failure of the session", () => {
+    expect([0, 1, 2, 3].map((n) => takeRetryPolicy({ submission: null }, n, 5_000))).toEqual([
+      { kind: "retry", delayMs: 5_000 }, { kind: "retry", delayMs: 10_000 }, { kind: "retry", delayMs: 20_000 }, { kind: "retry", delayMs: 40_000 },
+    ]);
+  });
+  test("the fifth failure gives the session up: five model calls per seat per session, no more", () => {
+    expect(TAKE_MAX_ATTEMPTS).toBe(5);
+    expect(takeRetryPolicy({ submission: null }, TAKE_MAX_ATTEMPTS - 1, 5_000)).toEqual({ kind: "give-up" });
+    expect(takeRetryPolicy({ submission: "unconfirmed" }, 40, 5_000)).toEqual({ kind: "give-up" });
+  });
+  test("a retry delay never exceeds five minutes, whatever the poll interval", () => {
+    expect(takeRetryPolicy({ submission: null }, 3, 120_000)).toEqual({ kind: "retry", delayMs: TAKE_RETRY_MAX_MS });
   });
 });

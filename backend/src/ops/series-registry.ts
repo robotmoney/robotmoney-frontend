@@ -57,7 +57,7 @@ export interface SeriesDef {
    *
    *  D55 (6): the wallet repair pass (ops/wallet-backfill.ts) no longer
    *  deletes the rows it stops writing; it sets `superseded_at` on them
-   *  (migration 0086) and every read filters `superseded_at IS NULL`. The
+   *  (migration 0104) and every read filters `superseded_at IS NULL`. The
    *  detector is one of those reads — without this a superseded row would keep
    *  its slot looking covered after the delete it replaces would have opened
    *  the gap. */

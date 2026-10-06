@@ -42,11 +42,16 @@
 //                     public key and the operator's service token, then write
 //                     the bearer the route returns into that entry, atomically
 //                     (scripts/lib/swarm/credential-file.ts). No rm_owner: it
-//                     writes through the API.
+//                     writes through the API. Under `RM_ENV=stage` it may
+//                     address the instance's own smoke-owned twin (runbook
+//                     R3.8): the twin's generated `rm_readonly` is the target
+//                     then, not `~/.env`, which on a stage host names
+//                     production's read replica.
 //
 // THE GATES, in order, each refusing before anything changes: the command; the
-// policy (`RM_ENV=prod`, or `stage` for provision-tokens against a rehearsal
-// target); the remote connection in `~/.env` (§3); the instance (§1.1); the
+// policy (`RM_ENV=prod`, or `stage` for provision-tokens and rebind-members
+// against a rehearsal target); the instance (§1.1); the connection (`~/.env`,
+// §3, or the instance's twin); the
 // target's `deployment_identity`; a terminal; the typed rm_owner password
 // (never stored, D47) or the operator token; a literal `y`; the target lock
 // (§2), revalidated against the read that planned the run. Every mutation
@@ -57,7 +62,7 @@ import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homeEnvFilePath, loadEnvFile, redactedTarget, urlForRole } from "./lib/env-role.ts";
-import { instanceFlag, instancePaths, readStackState, resolveInstance, stateRoot as resolveStateRoot, type InstancePaths } from "./lib/smoke-state.ts";
+import { instanceFlag, instancePaths, readRolePasswords, readStackState, resolveInstance, stateRoot as resolveStateRoot, type InstancePaths } from "./lib/smoke-state.ts";
 import { readServiceToken } from "./lib/smoke-secret.ts";
 import { loadCredentialFile, resolveCredentialPath, writeCredentialBearer, type CredentialEntry, type ParticipantKind } from "./lib/swarm/credential-file.ts";
 import { resolveStackEnvironment } from "./stack/naming.ts";
@@ -134,26 +139,21 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
   const rest = argv.slice(1);
 
   // §4.1/§4.3: the policy. Production initialization runs under `prod`; the
-  // one stage use is provisioning a remote REHEARSAL target's tokens (§5).
+  // stage uses are provisioning a REHEARSAL target's tokens (§5) and, since
+  // 2026-10-05 (owner, runbook R3.8/B10), rebinding a REHEARSAL target's
+  // seated members: the rebind order is the one cutover step that can only be
+  // learned by running it, it writes through the API with the operator token,
+  // and on a rehearsal target every key is throwaway. set-identity stays
+  // prod's: it reports `production`, which a rehearsal target never holds.
   const rmEnv = deps.env.RM_ENV ?? deps.homeEnv?.RM_ENV;
-  if (command === "provision-tokens") {
+  if (command === "provision-tokens" || command === "rebind-members") {
     if (rmEnv !== "prod" && rmEnv !== "stage") {
-      refuse(`provision-tokens requires RM_ENV=prod (production, §9.1 step 5) or RM_ENV=stage against a remote rehearsal target (§5); RM_ENV is ${rmEnv === undefined ? "unset" : `"${rmEnv}"`}.`);
+      refuse(`${command} requires RM_ENV=prod (production, §9.1) or RM_ENV=stage against a rehearsal target (§5, R3.8); RM_ENV is ${rmEnv === undefined ? "unset" : `"${rmEnv}"`}.`);
     }
   } else if (rmEnv !== "prod") {
     refuse(`${command} requires RM_ENV=prod (§9.1, §4.3); RM_ENV is ${rmEnv === undefined ? "unset" : `"${rmEnv}"`}.`);
   }
   const policy = rmEnv as "prod" | "stage";
-
-  // §3: the remote connection is `~/.env`'s. Production and a remote rehearsal
-  // target are both remote; a local Postgres is `bun smoke`'s, which provisions
-  // its own tokens.
-  const homeEnv = deps.homeEnv;
-  const readerUrl = homeEnv ? urlForRole(homeEnv, "rm_readonly") : undefined;
-  if (!homeEnv || !readerUrl) {
-    refuse(`the remote connection (host, port, database or dbname, sslmode) and the rm_readonly line must be in ${deps.homeEnvPath} (§3).`);
-  }
-  const target = redactedTarget(readerUrl, "rm_readonly");
 
   // §1.1: which instance's state directory the tokens and the receipt go to.
   let paths: InstancePaths;
@@ -170,6 +170,21 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
   } catch (error) {
     return refuse(error instanceof Error ? error.message : String(error));
   }
+
+  // §3: the target. Under `prod` it is `~/.env`'s remote connection, always.
+  // Under `stage`, rebind-members may address the instance's own smoke-owned
+  // twin (`bun smoke --local dump`, runbook R3.8): its `rm_readonly` is the
+  // generated one in the instance's role-passwords file, never `~/.env`'s,
+  // which on a stage host names production's read replica (R3.1). Only when
+  // the instance records no twin does `~/.env` name a remote rehearsal target.
+  const homeEnv = deps.homeEnv;
+  const twinUrl = policy === "stage" && command === "rebind-members" ? twinReaderUrl(paths) : undefined;
+  const readerUrl = twinUrl ?? (homeEnv ? urlForRole(homeEnv, "rm_readonly") : undefined);
+  if (!readerUrl) {
+    refuse(`the remote connection (host, port, database or dbname, sslmode) and the rm_readonly line must be in ${deps.homeEnvPath} (§3).`);
+  }
+  const target = redactedTarget(readerUrl, "rm_readonly");
+  if (twinUrl) deps.log(`target: instance ${instanceName}'s own twin, ${target} (not ${deps.homeEnvPath})`);
 
   // §4.2/§4.3: what the target is enrolled for, read before any prompt.
   let state: TargetState;
@@ -191,7 +206,7 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
   } else if (policy === "prod" && state.identity !== "production") {
     refuse(`${command} under RM_ENV=prod requires ${target} enrolled \`production\`; it reads \`${state.identity}\` (run set-identity first, §9.1 step 4).`);
   } else if (policy === "stage" && state.identity !== "rehearsal") {
-    refuse(`provision-tokens under RM_ENV=stage requires ${target} enrolled \`rehearsal\` (§4.3: stage policy never touches production data); it reads \`${state.identity}\`.`);
+    refuse(`${command} under RM_ENV=stage requires ${target} enrolled \`rehearsal\` (§4.3: stage policy never touches production data); it reads \`${state.identity}\`.`);
   }
 
   if (!deps.isTerminal) {
@@ -214,7 +229,7 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
     } catch (error) {
       refuse(`${error instanceof Error ? error.message : String(error)}.`);
     }
-    const resolution = resolveCredentialPath({ RM_CREDENTIALS: homeEnv!.RM_CREDENTIALS ?? deps.env.RM_CREDENTIALS }, flag(rest, "--credentials"));
+    const resolution = resolveCredentialPath({ RM_CREDENTIALS: homeEnv?.RM_CREDENTIALS ?? deps.env.RM_CREDENTIALS }, flag(rest, "--credentials"));
     if (!resolution.configured) refuse("no credential file is configured: set RM_CREDENTIALS in ~/.env or pass --credentials <path> (§6.1).");
     credentialPath = (resolution as { path: string }).path;
     try {
@@ -237,9 +252,10 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
     apiUrl = flag(rest, "--api") ?? (recorded?.apiPort ? `http://127.0.0.1:${recorded.apiPort}` : undefined);
     if (!apiUrl) refuse(`no api address: instance ${instanceName} records no running stack; pass --api <url>.`);
   } else {
+    if (!homeEnv) refuse(`the remote connection must be in ${deps.homeEnvPath} (§3).`);
     const password = await deps.promptSecret("rm_owner password");
     if (password === "") refuse("no rm_owner password was typed (§3: it is typed for the one run that needs it).");
-    ownerUrl = urlForRole({ ...homeEnv!, rm_owner: password }, "rm_owner");
+    ownerUrl = urlForRole({ ...homeEnv, rm_owner: password }, "rm_owner");
   }
 
   const what = {
@@ -335,6 +351,33 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
   deps.log(`receipt: ${receiptFile}`);
   if (failure !== undefined) throw failure;
   return receipt;
+}
+
+/**
+ * The instance's own smoke-owned twin as a reader URL, or undefined when the
+ * instance records no twin (no stack state, an external database, or no
+ * generated role passwords). The twin's connection is stack state's
+ * `databaseUrl` with the generated `rm_readonly` login (runbook section 3:
+ * a twin's credentials are generated, nobody types them).
+ */
+function twinReaderUrl(paths: InstancePaths): string | undefined {
+  let recorded;
+  try {
+    recorded = readStackState(paths);
+  } catch {
+    return undefined;
+  }
+  if (!recorded || recorded.db !== "smoke-twin" || !recorded.databaseUrl) return undefined;
+  let url: URL;
+  try {
+    url = new URL(recorded.databaseUrl);
+  } catch {
+    return undefined;
+  }
+  const passwords = readRolePasswords(paths);
+  url.username = "rm_readonly";
+  url.password = passwords.rm_readonly;
+  return url.toString();
 }
 
 function operatorName(): string {

@@ -24,6 +24,13 @@ WORKDIR /app
 
 # Install backend deps with the contract resolvable at ../contract.
 COPY contract/ /contract/
+# The pure regime compute lives in packages/analyst-sdk (issue #1095) and the
+# backend re-exports it through shims at the old analytics/ paths. From
+# /app/src/analytics/<dir>/ the shims reach `../../../../packages/analyst-sdk`,
+# which is /packages/analyst-sdk here, the same way contract/ sits at /contract.
+# src and package.json only: tests/ (fixtures, goldens, ~4.7 MB) are not runtime.
+COPY packages/analyst-sdk/package.json /packages/analyst-sdk/package.json
+COPY packages/analyst-sdk/src/ /packages/analyst-sdk/src/
 COPY backend/package.json backend/bun.lock* /app/
 RUN bun install
 

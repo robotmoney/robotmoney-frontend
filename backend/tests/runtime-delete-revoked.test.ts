@@ -6,7 +6,7 @@
 // `DELETE` or `TRUNCATE` on any table, append-only or not." §9.1 step 3: "Grant
 // transition — migrations revoking `DELETE` and `TRUNCATE` on every table from
 // every runtime role (0053 granted `DELETE` on all tables)." That transition is
-// migration 0089; backend/schema/grants.sql re-asserts it on every migrate run.
+// migration 0107; backend/schema/grants.sql re-asserts it on every migrate run.
 //
 // THE TWO DATABASES, each built the way real ones are:
 //   blank      — backend/schema/ bootstrapped by rm_owner, the `--local blank`
@@ -14,11 +14,11 @@
 //                createSnapshotTemplate).
 //   upgraded   — production's observed ledger, the one supported upgrade
 //                source (D55 (8), backend/tests/fixtures/releases/
-//                production-2026-09-25), rebuilt from its own migration bytes
+//                production-2026-10-01), rebuilt from its own migration bytes
 //                by its own runner loop, then taken to this branch by the real
 //                `bun run migrate` under a terminal: RM_ENV=prod, the typed
 //                rm_owner password and an explicit `y` — the first production
-//                migrate (§9.1, D55 (5)), which applies 0089. Before that run
+//                migrate (§9.1, D55 (5)), which applies 0107. Before that run
 //                the release really does grant the runtime roles DELETE (its
 //                0053), which is asserted, so the pass after it is the
 //                migration's doing.
@@ -59,7 +59,7 @@ const created: string[] = [];
 const homes: string[] = [];
 /** Held DELETE/TRUNCATE on the release, before the upgrade ran: the red control. */
 let heldBeforeUpgrade: string[] = [];
-/** The wallet repair pass's evidence copy: rm_worker's INSERT, before the upgrade (0091's red control). */
+/** The wallet repair pass's evidence copy: rm_worker's INSERT, before the upgrade (0109's red control). */
 let evidenceInsertBeforeUpgrade: Record<string, boolean> = {};
 const EVIDENCE_TABLES = ["wallet_balance_sample_evidence", "wallet_sleeve_sample_evidence"] as const;
 
@@ -173,7 +173,7 @@ afterAll(async () => {
 describe("the grant (catalog): no runtime role holds DELETE or TRUNCATE on any table", () => {
   test("RED CONTROL: the production baseline, before the upgrade, grants the runtime roles DELETE (its 0053)", () => {
     // If the release granted nothing, the pass below would prove nothing about
-    // 0089. It granted rm_app DELETE on every ordinary table and rm_worker
+    // 0107. It granted rm_app DELETE on every ordinary table and rm_worker
     // DELETE on its allowlist.
     expect(heldBeforeUpgrade.filter((item) => item.startsWith("rm_app ") && item.endsWith(" DELETE")).length).toBeGreaterThan(40);
     expect(heldBeforeUpgrade).toContain("rm_app jobs DELETE");
@@ -203,18 +203,18 @@ describe("the grant (catalog): no runtime role holds DELETE or TRUNCATE on any t
     });
   }
 
-  test("the upgrade recorded 0089 as breaking, and 0088 with it", async () => {
+  test("the upgrade recorded 0107 as breaking, and 0106 with it", async () => {
     const db = harnessConnection(UPGRADED_DB);
     try {
       const rows = (await db`
         SELECT name, compat FROM schema_migrations
-         WHERE name IN ('0088_webauthn_challenge_slots.sql', '0089_revoke_runtime_delete.sql') ORDER BY name`) as unknown as {
+         WHERE name IN ('0106_webauthn_challenge_slots.sql', '0107_revoke_runtime_delete.sql') ORDER BY name`) as unknown as {
         name: string;
         compat: string;
       }[];
       expect(rows).toEqual([
-        { name: "0088_webauthn_challenge_slots.sql", compat: "breaking" },
-        { name: "0089_revoke_runtime_delete.sql", compat: "breaking" },
+        { name: "0106_webauthn_challenge_slots.sql", compat: "breaking" },
+        { name: "0107_revoke_runtime_delete.sql", compat: "breaking" },
       ]);
     } finally {
       await db.end({ timeout: 5 });
@@ -256,7 +256,7 @@ describe("the executor (real logins): each runtime role gets 42501, and rm_owner
   }
 });
 
-describe("rm_worker may INSERT the wallet repair pass's evidence, and nothing more on it (0091)", () => {
+describe("rm_worker may INSERT the wallet repair pass's evidence, and nothing more on it (0109)", () => {
   test("RED CONTROL: the production baseline, before the upgrade, gives rm_worker no INSERT on either evidence table", () => {
     // 0054's allowlist left both off; so the repair pass's evidence copy (src/ops/
     // wallet-backfill.ts repairResolvedDay) failed 42501 for every incomplete day.

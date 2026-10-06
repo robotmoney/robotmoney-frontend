@@ -31,7 +31,7 @@ import { join } from "node:path";
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 
 /** Every workspace whose `package.json` can define a documented script. */
-const MANIFESTS = ["package.json", "backend/package.json", "contract/package.json", "frontend/package.json"];
+const MANIFESTS = ["package.json", "backend/package.json", "contract/package.json", "frontend/package.json", "packages/analyst-sdk/package.json"];
 
 /** Documents and sources that describe how the repo works TODAY. */
 const CURRENT = [

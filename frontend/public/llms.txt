@@ -57,6 +57,10 @@ Every number on this site is served by these endpoints. They answer a plain GET 
 - [https://robotmoney.network/api/dashboards/token-metrics](https://robotmoney.network/api/dashboards/token-metrics): $ROBOTMONEY price, supply, market cap and the fee split. Under 500 B.
 - [https://robotmoney.network/api/dashboards/buybacks](https://robotmoney.network/api/dashboards/buybacks): $ROBOTMONEY buyback history. About 2 KB.
 - [https://robotmoney.network/api/dashboards/regime-snapshots](https://robotmoney.network/api/dashboards/regime-snapshots): Daily cross-asset risk-on / risk-off classifier. About 125 KB at the default 180 days and 33 KB at `?range=1`; `&include=backtest` adds about 125 KB of backtests.
+- [https://robotmoney.network/api/public/analytics/raw-history](https://robotmoney.network/api/public/analytics/raw-history): Raw indicator history the regime is computed from. About 80 B a row; 8 KB at the default 100.
+- [https://robotmoney.network/api/public/analytics/asset-prices](https://robotmoney.network/api/public/analytics/asset-prices): Daily USD closes of the tracked assets. About 400 B a row.
+- [https://robotmoney.network/api/public/analytics/vintages](https://robotmoney.network/api/public/analytics/vintages): Frozen data vintages an analytics run committed to. About 600 B a vintage; members about 70 B a row.
+- [https://robotmoney.network/api/public/analytics/overwrite-events](https://robotmoney.network/api/public/analytics/overwrite-events): Every recorded revision of a stored analytics row. From 300 B a row for raw history to about 0.5 MB for a regime snapshot.
 - `https://robotmoney.network/api/dashboards/research-signals/{key}`: One named research signal series. 330 KB to 650 KB depending on the key.
 - [https://robotmoney.network/api/swarm/members](https://robotmoney.network/api/swarm/members): The Investment Swarm roster. About 20 KB.
 - `https://robotmoney.network/api/swarm/members/{id}`: One swarm member's profile. Under 1 KB.
@@ -69,8 +73,8 @@ Every number on this site is served by these endpoints. They answer a plain GET 
 - `https://robotmoney.network/api/swarm/takes/{id}`: One signed take, verified at read time. About 4 KB.
 - `https://robotmoney.network/api/swarm/sessions/{id}/judgements`: The consensus judge's public opinion on one session. About 2 KB per judgement.
 - `https://robotmoney.network/api/swarm/judgements/{id}`: One public judgement. About 2 KB.
-- `https://robotmoney.network/api/swarm/sessions/{id}/consensus-receipt`: The anchored consensus receipt bytes for a session. A few KB.
-- `https://robotmoney.network/api/swarm/sessions/{id}/consensus-receipt/verified`: The consensus receipt with a read-time verification verdict. A few KB.
+- `https://robotmoney.network/api/swarm/sessions/{id}/consensus-receipt`: The consensus receipt with a read-time verification verdict. A few KB.
+- `https://robotmoney.network/api/swarm/sessions/{id}/consensus-receipt/canonical`: The canonical consensus receipt bytes for a session. A few KB.
 - [https://robotmoney.network/api/swarm/brief](https://robotmoney.network/api/swarm/brief): The brief a session published. About 980 KB, of which 976 KB is body.researchSignals.
 - `https://robotmoney.network/api/swarm/subjects/{id}`: One swarm subject. About 2 KB.
 - `https://robotmoney.network/api/swarm/subjects/{id}/snapshots`: Portfolio snapshots for a subject. About 115 KB for a long-running subject.

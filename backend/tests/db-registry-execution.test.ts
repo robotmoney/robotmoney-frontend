@@ -81,14 +81,14 @@ const PROBE_PENDING_CEILING = 0;
  * as sites are added. Lower it only in the change that deletes a registering
  * module, saying which.
  */
-const EXECUTED_FLOOR = 281;
+const EXECUTED_FLOOR = 288;
 
 /**
  * The number of `on(...)` call sites the static reader resolved when it was
  * last extended (a JOIN is one call site naming several declarations, so this
  * is below the site count). Same rule as EXECUTED_FLOOR.
  */
-const CALL_SITE_FLOOR = 235;
+const CALL_SITE_FLOOR = 240;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Static enumeration: what the source says is registered.

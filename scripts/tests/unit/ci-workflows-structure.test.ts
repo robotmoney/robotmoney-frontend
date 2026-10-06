@@ -50,6 +50,7 @@ const PATHS_FILTER_SHA = "de90cc6fb38fc0963ad72b210f1f284cd68cea36";
 const PATH_GATED_WORKFLOWS = [
   "backend.yml",
   "contract.yml",
+  "analyst-sdk.yml",
   "integration.yml",
   "web-client.yml",
   "research-pipeline.yml",
@@ -425,6 +426,10 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
       patterns.filter((p) => p.startsWith(`${EVIDENCE_DIR}/`)),
       `backend.yml's filter names ${EVIDENCE_DIR}/ — patterns were [${patterns.join(", ")}]`,
     ).not.toEqual([]);
+    // Issue #1095: backend/src/analytics re-exports packages/analyst-sdk through
+    // shims and backend/Dockerfile copies it in, so a PR touching only the SDK
+    // must still run the backend job as well as analyst-sdk.yml's.
+    expect(patterns, "backend.yml's filter selects PRs that touch only packages/").toContain("packages/**");
     // The pattern must be recursive: the allowed-signers file sits at the root
     // of the tree and the receipts one level down, and both have to select the job.
     expect(patterns).toContain(`${EVIDENCE_DIR}/**`);

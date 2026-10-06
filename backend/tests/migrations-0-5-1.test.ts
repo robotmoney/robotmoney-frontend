@@ -31,7 +31,7 @@ describe("0061 — rm_worker may write the wallet-backfill driver's own tables",
   });
 
   for (const table of ["wallet_backfill_state", "chain_day_blocks", "chain_address_floors"]) {
-    // No DELETE: 0089 (D55) leaves DELETE and TRUNCATE to rm_owner alone.
+    // No DELETE: 0107 (D55) leaves DELETE and TRUNCATE to rm_owner alone.
     for (const priv of ["INSERT", "UPDATE"]) {
       test(`${priv} on ${table}`, async () => {
         const [row] = await worker`SELECT has_table_privilege(current_user, ${`public.${table}`}, ${priv}) AS ok`;
@@ -49,7 +49,7 @@ describe("0061 — rm_worker may write the wallet-backfill driver's own tables",
 describe("0063 — the judge has a model", () => {
   const ddl = readFileSync(join(MIGRATIONS, "0063_swarm_judge_model_default.sql"), "utf8");
 
-  test("a migrated database carries the CI/driver model (0081 strips its `opencode/` prefix, 0093 renames it)", async () => {
+  test("a migrated database carries the CI/driver model (0099 strips its `opencode/` prefix, 0111 renames it)", async () => {
     const [row] = await sql`SELECT model FROM swarm_judge_config WHERE id = 1`;
     expect(row!.model).toBe("deepseek-v4.1-flash");
   });
@@ -80,8 +80,8 @@ describe("0063 — the judge has a model", () => {
   });
 });
 
-describe("0081 — the judge model is stored as the bare wire id ", () => {
-  const ddl = readFileSync(join(MIGRATIONS, "0081_swarm_judge_model_bare_id.sql"), "utf8");
+describe("0099 — the judge model is stored as the bare wire id ", () => {
+  const ddl = readFileSync(join(MIGRATIONS, "0099_swarm_judge_model_bare_id.sql"), "utf8");
 
   test("strips a leading `opencode/` and leaves mode alone", async () => {
     await sql`UPDATE swarm_judge_config SET mode = 'enforce', model = 'opencode/deepseek-v4-flash' WHERE id = 1`;
@@ -116,7 +116,7 @@ describe("0081 — the judge model is stored as the bare wire id ", () => {
 });
 
 describe("0093 — the judge model follows the provider's rename (2026-10-05)", () => {
-  const ddl = readFileSync(join(MIGRATIONS, "0093_swarm_judge_model_deepseek_v4_1_flash.sql"), "utf8");
+  const ddl = readFileSync(join(MIGRATIONS, "0111_swarm_judge_model_deepseek_v4_1_flash.sql"), "utf8");
 
   test("converts the bare and the provider-qualified retired id, leaves mode alone, and is idempotent", async () => {
     for (const old of ["deepseek-v4-flash", "opencode/deepseek-v4-flash"]) {

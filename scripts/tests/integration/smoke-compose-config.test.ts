@@ -83,6 +83,9 @@ function baseEnv(): Record<string, string> {
       "AUM_PRODUCER_REVISION", "RM_BUILD_COMMIT", "RM_BUILD_TAG",
       // The paid CoinGecko key (issue #1047) is asserted set and unset below.
       "COINGECKO_API_KEY",
+      // The checkout-.env settings delivered by shell export (issue #1113).
+      "PROJECTS_SOURCE", "WEBAUTHN_ORIGIN", "WEBAUTHN_RP_ID", "BASE_RPC_MAX_CALLS_PER_SEC", "BASE_RPC_RATE_BURST",
+      "WALLET_BACKFILL_MAX_DAYS_PER_RUN", "WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY", "GECKO_OHLCV_MIN_INTERVAL_MS",
     ].includes(k)) continue;
     env[k] = v;
   }
@@ -147,6 +150,19 @@ const ALL_COMPOSITIONS: ReadonlyArray<readonly string[]> = [
 // into a sibling.
 const renderCache = new Map<string, string>();
 let prewarmed = false;
+// Settings production's containers got from the checkout `.env` (issue #1113).
+const CHECKOUT_ENV_SETTINGS: Record<string, string> = {
+  PROJECTS_SOURCE: "live",
+  BASE_RPC_URL: "https://rpc.example.invalid",
+  WEBAUTHN_ORIGIN: "https://admin.example.invalid",
+  WEBAUTHN_RP_ID: "example.invalid",
+  BASE_RPC_MAX_CALLS_PER_SEC: "7",
+  BASE_RPC_RATE_BURST: "11",
+  WALLET_BACKFILL_MAX_DAYS_PER_RUN: "3",
+  WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY: "4",
+  GECKO_OHLCV_MIN_INTERVAL_MS: "5000",
+};
+
 /** Renders that missed the prewarm — see the regression guard at end of file. */
 const coldRendersAfterPrewarm: string[] = [];
 
@@ -234,6 +250,8 @@ const PREWARM: readonly RenderArgs[] = [
     { knobs: { TRUST_PROXY: "0" }, files },
     // "the paid CoinGecko key reaches the worker lanes only" (issue #1047).
     { knobs: { COINGECKO_API_KEY: "cg-compose-test-key" }, files },
+    // "settings production got from the checkout .env reach the containers" (issue #1113).
+    { knobs: smokePassthroughEnv(CHECKOUT_ENV_SETTINGS), files },
   ]),
   // "production capability TTLs" — explicit TTLs, base composition only.
   {
@@ -1011,6 +1029,34 @@ describe("boot-guard operator controls reach the api container (issue #602)", ()
         .toBe(`${key}:false`);
     }
   });
+});
+
+// Issue #1113: v0.5.x got these from the checkout `.env`; the boot now runs
+// `--no-env-file`, so a shell export is the delivery path. The knobs go through
+// smokePassthroughEnv, the exact filter smoke-main.ts applies, so a key missing
+// from DEMO_COMPOSE_PASSTHROUGH never reaches the render.
+describe("settings production got from the checkout .env reach the containers by shell export (issue #1113)", () => {
+  for (const [label, files] of [["base", BASE_COMPOSE_FILES], ["stage", STAGE_COMPOSE_FILES]] as const) {
+    test(`the ${label} composition delivers PROJECTS_SOURCE=live to the api and the worker lane`, () => {
+      const cfg = composeConfig(smokePassthroughEnv(CHECKOUT_ENV_SETTINGS), files);
+      for (const svc of ["api", "worker-analytics"]) {
+        expect(`${label}:${svc}:${serviceEnv(cfg, svc).PROJECTS_SOURCE ?? "missing"}`).toBe(`${label}:${svc}:live`);
+      }
+    });
+
+    test(`the ${label} composition delivers the RPC budget, backfill bounds and Gecko spacing to the worker lane`, () => {
+      const env = serviceEnv(composeConfig(smokePassthroughEnv(CHECKOUT_ENV_SETTINGS), files), "worker-analytics");
+      expect([
+        env.BASE_RPC_URL, env.BASE_RPC_MAX_CALLS_PER_SEC, env.BASE_RPC_RATE_BURST,
+        env.WALLET_BACKFILL_MAX_DAYS_PER_RUN, env.WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY, env.GECKO_OHLCV_MIN_INTERVAL_MS,
+      ]).toEqual(["https://rpc.example.invalid", "7", "11", "3", "4", "5000"]);
+    });
+
+    test(`the ${label} composition delivers the passkey origin and RP id to the api`, () => {
+      const env = serviceEnv(composeConfig(smokePassthroughEnv(CHECKOUT_ENV_SETTINGS), files), "api");
+      expect([env.WEBAUTHN_ORIGIN, env.WEBAUTHN_RP_ID]).toEqual(["https://admin.example.invalid", "example.invalid"]);
+    });
+  }
 });
 
 // The paid CoinGecko key (issues #1047, #1062). projects.refresh_coins and the token-price lookups run in the worker
