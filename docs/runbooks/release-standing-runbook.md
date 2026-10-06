@@ -61,7 +61,7 @@ unverified, not satisfied.
 | SR.1 | Restored production dump boots to READY on the RC commit, with every active member seated | `bun smoke --local dump` | stage | script |
 | SR.2 | Readiness: api, pipeline worker, analytics-producer, scheduler | `bun smoke:status` | stage | script |
 | SR.3 | Product verification, full tier | `bun run verify:live --tier full` | stage | script |
-| SR.4 | Twin gate: sessions judged, participants never restarted, judge on, no dead job, containers healthy, every log error classified, no FATAL | `bun run twin:gate` | stage | script |
+| SR.4 | Twin gate: sessions judged (a `no_consensus` publish is a warning, owner 2026-10-06), participants never restarted, judge on, no dead job, containers healthy, every log error classified, no FATAL | `bun run twin:gate` | stage | script |
 | SR.5 | Interruption at a phase boundary resumes, before and after replace | release runbook R3.6 | stage | manual |
 | SR.6 | Rollback rehearsal: restore time recorded, and the old code's behavior against the new schema recorded | release runbook R3.9 | stage | manual |
 | SR.7 | Cumulative standing invariants (the 0.5.x R8 list, section 7) | none | stage | gap, issue 1179 |
