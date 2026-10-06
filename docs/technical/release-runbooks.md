@@ -224,6 +224,13 @@ steps, and all checks exercised. It must cover:
   participants;
 - product verification and evidence of any approved exceptions.
 
+On a twin the rehearsal deploys the system against the restored copy (never the remote
+database), seats every active member on a spoofed key as its own participant container, and,
+once the checks that need production's schedule are recorded, runs the sessions on an
+accelerated schedule: short epochs set through the admin API (`bun run twin:accelerate`,
+standing check SR.9), so the lifecycle checks see sessions publish and the judge judge within
+minutes.
+
 A restored rehearsal target is disposable by explicit operator action; the
 smoke boot itself exits after readiness and leaves services running. Capture
 service evidence for the rehearsal window where available, and report missing

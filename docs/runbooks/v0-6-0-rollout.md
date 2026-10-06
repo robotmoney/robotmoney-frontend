@@ -20,7 +20,7 @@ The standing checks this release's steps map to:
 | Phase | Standing checks | Where it runs below |
 |---|---|---|
 | Preflight and baseline | SP.1 to SP.7 | R1, R2, `bun smoke` preflight; **SP.5 `prod:gate --mode baseline` is R2.5** |
-| Stage rehearsal | SR.0 to SR.8 | SR.0 before R3.2, R3.2 to R3.10; **SR.4 `twin:gate` is R3.4a**, **SR.7 `soak:checks` is R3.4b** |
+| Stage rehearsal | SR.0 to SR.9 | SR.0 before R3.2, R3.2 to R3.10; **SR.9 `twin:accelerate` is R3.3a**; **SR.4 `twin:gate` is R3.4a**, **SR.7 `soak:checks` is R3.4b** |
 | Cutover and verification | SC.1, SC.2, SV.1 to SV.6 | R6, R7; **SV.4 `prod:gate --mode post-release` is R7.3a** |
 | Watch | SW.1 to SW.3 | R7.6, R7.8; **SW.2 `soak:checks` is R7.3b** |
 
@@ -81,6 +81,8 @@ on stage-2 with the real restored dump, plus the three open rows below.
 | B17 | The judge gate counted only operator `robotmoney` as in-house. Production's admin set themis's operator to "RM Protocol Labs" on 2026-09-29, so the twin's judge was served nothing and the dump's in-flight session published `no_consensus` with no judgement | fixed on the QA branch (1201): in-house by seat (owner 2026-10-06) | a session judged by themis on the fresh twin (first windows close 00:25 to 00:38 UTC 2026-10-07) |
 | B18 | The 1178 restore pipe dropped the dump's tail: every `--local dump` boot at `f4e8a798` failed `pg_restore: could not read from input file: end of file` | fixed on the QA branch (1193): one bash pipe | verified: both dumps restore, exit 0 |
 | B19 | A `--reuse` boot minted new service tokens under a scheduler it did not recreate: readiness HTTP 403 | fixed on the QA branch (1202) | verified by R3.8 at `3cdc883b` |
+| B20 | Sessions in flight at the cutover were convened by v0.5.x with no expected roster (`swarm_session_members`) and no `brief_opens_at`; the 0.6 take queue offers such a session to no one, so each subject's in-flight session gets no 0.6 take and may publish under `min_takes`. All 32 production sessions of 2026-09-27 to 2026-10-06 have no roster rows | none | owner decision: seat the active roster on in-flight sessions at the first migrate, or accept one short session per subject at the cutover |
+| B21 | The twin ran production's 6 h epochs: no runbook step set short epochs, so nothing published for hours and the twin gate, soak window and judge were never exercised | fixed on the QA branch: `bun run twin:accelerate`, R3.3a, standing SR.9 | the 2026-10-06 second run |
 
 Also open: the notice to external members about the four-weight rule (1124); the
 `judging` banner (1115, merged) and admin items (1123, merged) need only the R7 spot check.
@@ -309,6 +311,24 @@ Record the **plan id**. Expect a journal and receipt under
 R3.3 `bun smoke:status --instance rehearse-060`. Receipt must show preflight and all nine
 readiness checks, including scheduler readiness (spec §6.3).
 
+R3.3a **Accelerated schedule** (standing check SR.9). A restored twin keeps production's 6 h
+epochs (B3), so without this step nothing publishes for hours and the twin gate, the soak window
+and the judge are never exercised (seen 2026-10-06). First record the realistic grid, which is
+B3's proof on the twin: every active subject reads `epoch_duration_seconds = 21600`, and each open
+window closes on the grid continued from that subject's last production close. Then:
+
+```bash
+bun run twin:accelerate --instance rehearse-060 --epoch 900
+```
+
+It sets each active subject's epoch to 900 s through the admin API (anchor at its new close),
+pulls the twin's open windows in so the subjects close spread across one epoch, restarts the
+system-scheduler so it rebuilds its timers, and writes a receipt in the instance state directory.
+It refuses on anything but a smoke-twin and under `RM_ENV=prod`. Cost: every epoch is one model
+call per seated agent plus one judge call; 900 s with 7 agents and the judge on four subjects is
+about 128 calls an hour. Re-run it after every fresh boot (R3.6, R3.8's boot 1, the final boot);
+R3.8's `--reuse` boot 2 keeps the shortened subjects.
+
 R3.4 Product verification, a **separate process**, twin may use the full tier:
 
 ```bash
@@ -318,7 +338,7 @@ bun run verify:live --instance rehearse-060 --tier full --emit-receipt=R3.verify
 Exit 0 = pass; 1 = product wrong; 2 = nothing asserted. A WARN is not a pass. List which
 invariants this target could not exercise. Passed 2026-10-05 on `7d69d17c` with the full roster: 9/9 PASS, exit 0 (receipt `R3.verify-twin-8seats.json`). Passed 2026-10-06 on the fresh dump (`20261006T195424Z`) at `df5a4aa7`: 9/9 PASS, exit 0 (receipt `R3.verify-twin-fresh.json`); R3.3 readiness 9/9 and R3.5 (114 ledger rows, no duplicates, identity `rehearsal`, manifest equals the ledger, no runtime DELETE/TRUNCATE, 32 WebAuthn slots) pass on the same boot. Every leg must PASS; `twin-roster:every-active-member-seated` is the twin's own seating proof (B12).
 
-R3.4a **Twin gate** (standing check SR.4), after R3.4 and after the roster has published
+R3.4a **Twin gate** (standing check SR.4), after R3.3a and R3.4, and after the roster has published
 sessions. It reads every container log (participants included), default deny:
 
 ```bash
@@ -328,10 +348,9 @@ bun run twin:gate --instance rehearse-060 --wait 35
 Exit 0 only when every check passes. A gate run on a twin whose participants cannot authenticate
 (for example after R3.8's rebind, before the participants are recreated) fails by design: run it
 on a twin in a healthy state, and keep the report. **Timing:** the gate waits for a published
-session on every active subject, and a twin keeps production's 6 h epochs (B3), so the first
-publish can be up to 6 h after READY. Size `--wait` to the grid, or start the gate after the
-earliest `window_closes_at`. On 2026-10-06 the fresh dump's windows closed 00:25 to 00:38 UTC,
-4 h after READY, so a 35-minute wait could not pass. First run 2026-10-05 on `7a4f19ac`: failed on
+session on every active subject. On production's 6 h epochs that is hours; after R3.3a (900 s)
+`--wait 35` covers one full epoch plus judging. On 2026-10-06 the first run skipped R3.3a, the
+windows closed 4 h after READY, and the gate could not pass. First run 2026-10-05 on `7a4f19ac`: failed on
 a broken twin and listed a coin-price `DEGRADED` warning. That is a warning, not an error: the gate
 reports an unclassified warning and does not fail on it, and the owner decided no issue is filed for it.
 
