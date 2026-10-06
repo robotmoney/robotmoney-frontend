@@ -24,7 +24,7 @@ allocation:
 | rmUSDC | Fixed Income | USDC lent on Morpho, Aave and Compound |
 | rmAGENT | Small Cap Tokens | Tokens of the agents that hold $ROBOTMONEY |
 | rmPROTO | Protocol Tokens | Large-cap crypto assets |
-| rmRWA | Real World Assets | A tokenised equity index and gold |
+| rmRWA | Real World Assets | A tokenised equity index |
 
 The owner receives each vault's token (an ERC-4626 share) in their own
 wallet. The number of tokens stays the same; their value moves with what
@@ -144,8 +144,8 @@ cast call "$V" "tvlCap()(uint256)" --rpc-url "$RPC"
 cast call "$V" "totalAssets()(uint256)" --rpc-url "$RPC"
 ```
 
-A vault whose `asset()` is not USDC, or that is paused, shut down or
-retired, takes no deposit. Say so; do not work around it.
+A vault whose `asset()` is not USDC, whose deposits are paused, or that is
+shut down or retired, takes no deposit. Say so; do not work around it.
 
 ### `position`: what the owner holds
 
@@ -166,8 +166,9 @@ cast call "$ROUTER" "previewDeposit(uint256)((address,uint256,uint256,uint256,bo
 ```
 
 Each leg is `(vault, weightBps, legAmount, estShares, unavailable)`. A leg
-marked `unavailable` (paused, retired or over its cap) gets nothing, and the
-router spreads its share over the others: `legAmount` is already that.
+marked `unavailable` (deposits paused, retired or over its cap) gets
+nothing, and the router spreads its share over the others: `legAmount` is
+already that.
 
 **Without the router (today):** deposit into the live vaults directly.
 While rmUSDC is the only one, the whole deposit goes to rmUSDC, and you tell
@@ -212,8 +213,9 @@ DEPOSIT=$(cast calldata "deposit(uint256,uint256[])" "$AMOUNT" "[$MIN1,$MIN2]")
 `deposit(assets, receiver)`. A direct deposit has no minimum-shares bound, so
 refuse it if the vault's preview is below what its share price implies
 (`convertToShares`) by more than the same tolerance. With a registry on Base, also read the vault's
-status there (`getVault(vault)`) and refuse unless it is Active: a vault the
-registry has paused can still take a direct deposit, so the check is yours.
+status there (`getVault(vault)`) and refuse unless it is Active: a vault
+whose deposits the registry has paused can still take a direct deposit, so
+the check is yours.
 
 ```bash
 APPROVE=$(cast calldata "approve(address,uint256)" "$V" "$AMOUNT")
@@ -306,6 +308,11 @@ The token vaults (rmAGENT, rmPROTO, rmRWA) only redeem; they refuse
 `withdraw`. rmUSDC takes either. If a large rmUSDC redeem reverts because a
 lending market is short of free USDC, redeem in parts or try again later.
 
+A pause stops deposits only: it never blocks a redeem from the token vaults.
+rmUSDC is older and the one exception. Before an rmUSDC redeem, read
+`cast call "$RMUSDC" "withdrawalsPaused()(bool)" --rpc-url "$RPC"`; if it is
+true, tell the owner rmUSDC's withdrawals are paused, and stop.
+
 Show the owner the USDC out and the fee per vault, and wait for a yes, as
 for a deposit. One transaction per vault; no approval.
 
@@ -335,8 +342,9 @@ match the new allocation:
 | `TVLCapExceeded` | The vault is full | Deposit less, or later |
 | `VaultCapExceeded`, `RouterCapExceeded` | A leg or the deposit is over the router's cap | Deposit less |
 | `SlippageExceeded` | A leg would mint less than its minimum | Preview again; nothing moved |
-| `VaultNotActive` | A vault is paused or retired | Preview again: the router skips it |
-| `DepositsPaused`, `WithdrawalsPaused` | The vault is paused | Stop and tell the owner; nothing moved |
+| `VaultNotActive` | A vault's deposits are paused, or it is retired | Preview again: the router skips it |
+| `DepositsPaused`, `DepositsArePaused` | The vault's deposits are paused | Stop and tell the owner; nothing moved |
+| `WithdrawalsPaused` | rmUSDC's withdrawals are paused | Stop and tell the owner; nothing moved |
 | `VaultShutdown`, `VaultRetired` | The vault takes no new deposits | Redeem still works; deposit elsewhere |
 
 ## Leaving the old skill
