@@ -1,7 +1,7 @@
-// Render test for the LIVE fee-split section of /tokenomics: the fee-distribution
-// legend + per-partner breakdown cards are bound by the feeChart() factory to
-// GET /api/dashboards/token-metrics (`feeSplit`) — the Protocol/Bankr/Doppler/Ecosystem %
-// literals are no longer baked into the view. Same harness pattern as
+// Render test for the LIVE fee-split section of /tokenomics: the fee ring's
+// legend (one row per leg: name, share, note) is bound by the feeChart() factory
+// to GET /api/dashboards/token-metrics (`feeSplit`) — the Protocol/Bankr/Doppler/
+// Ecosystem % literals are no longer baked into the view. Same harness pattern as
 // vault-view.spec.ts: the SPA + view HTML are served by the backend at
 // baseURL (a preview server replaying goldens/api-goldens.json), vendor CDN
 // scripts are fulfilled from node_modules, and the endpoint under test is stubbed.
@@ -48,7 +48,7 @@ async function stubEnvironment(page: Page, metrics: TokenMetrics, onHit?: () => 
   });
 }
 
-test("tokenomics fee-split legend + breakdown cards render FROM GET /api/dashboards/token-metrics golden feeSplit", async ({ page }) => {
+test("tokenomics fee-split ring legend renders FROM GET /api/dashboards/token-metrics golden feeSplit", async ({ page }) => {
   const metrics = loadTokenMetricsGolden();
   const fs = metrics.feeSplit;
   expect(fs.length).toBeGreaterThan(0);
@@ -57,13 +57,13 @@ test("tokenomics fee-split legend + breakdown cards render FROM GET /api/dashboa
   await page.goto("/");
   await navigate(page, "/tokenomics");
 
-  const legend = page.locator(".tok__legend-item");
-  const pctCards = page.locator(".tok__fee-pct");
+  const legend = page.locator("#fees .rr-legend li");
+  const pctCards = page.locator("#fees .rr-legend li b");
   await expect(legend).toHaveCount(fs.length);
   await expect(pctCards).toHaveCount(fs.length);
   for (let i = 0; i < fs.length; i++) {
-    // feeLegend(i) === "Protocol (57%)"; feePctLabel(i) === "57%".
-    await expect(legend.nth(i)).toContainText(`${fs[i]!.label} (${fs[i]!.pct}%)`);
+    // A row names its leg ("Protocol wallet" for Protocol) and reads feePctLabel(i) === "57%".
+    await expect(legend.nth(i)).toContainText(fs[i]!.label);
     await expect(pctCards.nth(i)).toHaveText(`${fs[i]!.pct}%`);
   }
   expect(hit).toBe(true); // the endpoint was actually fetched
@@ -85,27 +85,28 @@ test("tokenomics fee-split reflects the SERVED percentages, not baked 57/36.1/5/
   await page.goto("/");
   await navigate(page, "/tokenomics");
 
-  const pctCards = page.locator(".tok__fee-pct");
+  const pctCards = page.locator("#fees .rr-legend li b");
   await expect(pctCards.nth(0)).toHaveText("50%");
   await expect(pctCards.nth(1)).toHaveText("45%");
   await expect(pctCards.nth(2)).toHaveText("5%");
   // Never the retired baked Protocol=57% literal.
   await expect(pctCards.nth(0)).not.toHaveText("57%");
-  await expect(page.locator(".tok__legend-item").nth(0)).toContainText("Protocol (50%)");
+  await expect(page.locator("#fees .rr-legend li").nth(0)).toContainText("Protocol");
+  await expect(page.locator("#fees .rr-ring figcaption b")).toHaveText("50%");
 });
 
-// A failed read leaves no split to draw, and the pie's canvas used to stay
-// blank with nothing saying why. It now carries the empty chart (.rm-nodata)
-// over its own box. The later-registered route wins over stubEnvironment's.
-test("a failed token-metrics read shows the empty chart where the fee pie would be", async ({ page }) => {
+// A failed read leaves no split to draw. The ring keeps its box and carries
+// the empty chart (.rm-nodata) in it, and every share reads "—". The
+// later-registered route wins over stubEnvironment's.
+test("a failed token-metrics read shows the empty chart where the fee ring would be", async ({ page }) => {
   await stubEnvironment(page, loadTokenMetricsGolden());
   await page.route("**/api/dashboards/token-metrics", (route) =>
     route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "database unavailable" }) }));
   await page.goto("/");
   await navigate(page, "/tokenomics");
 
-  await expect(page.locator("#fees .tok__donut-wrap .rm-nodata__h")).toHaveText("No data available");
-  await expect(page.locator(".tok__fee-pct").first()).toHaveText("—");
+  await expect(page.locator("#fees .rr-ring .rm-nodata__h")).toHaveText("No data available");
+  await expect(page.locator("#fees .rr-legend li b").first()).toHaveText("—");
 });
 
 // ── Migrated from allocation-view.spec.ts (issue #800, Cluster A) ────────────
@@ -147,25 +148,28 @@ test("Buyback History rows + totals render FROM GET /api/dashboards/buybacks, no
   // One row per served buyback. The loading and empty placeholder <tr>s carry
   // no date cell content, so scope to the rendered rows by their tbody
   // position: x-for emits exactly rows.length of them between the two.
-  const table = page.locator("#buybacks .tok__table");
+  const table = page.locator("#buybacks .rr-table");
   const dataRows = table.locator("tbody tr").filter({ hasText: buybacks.rows[0]!.date.slice(0, 4) });
   await expect(dataRows).toHaveCount(buybacks.rows.length);
   expect(hit).toBe(true); // the endpoint was actually fetched
 
   // Every column of the first row comes from the served DTO, not a literal.
+  // The date is the row's header cell; the figures follow it.
+  await expect(dataRows.first().locator("th")).toHaveText(buybacks.rows[0]!.date);
   const first = dataRows.first().locator("td");
-  await expect(first.nth(0)).toHaveText(buybacks.rows[0]!.date);
-  await expect(first.nth(1)).toHaveText(fmtWeth(buybacks.rows[0]!.wethSpent));
-  await expect(first.nth(2)).toHaveText(fmtUsd0(buybacks.rows[0]!.valueUsd));
-  await expect(first.nth(3)).toHaveText(fmtRmoney(buybacks.rows[0]!.robotmoneyReceived));
+  await expect(first.nth(0)).toHaveText(fmtWeth(buybacks.rows[0]!.wethSpent));
+  await expect(first.nth(1)).toHaveText(fmtUsd0(buybacks.rows[0]!.valueUsd));
+  await expect(first.nth(2)).toHaveText(fmtRmoney(buybacks.rows[0]!.robotmoneyReceived));
+  // Each buyback links to its swap on BaseScan.
+  await expect(first.nth(3).locator("a")).toHaveAttribute("href", `https://basescan.org/tx/${buybacks.rows[0]!.txHash}`);
 
-  // Total-spent chip + tfoot totals are computed by the API and echoed verbatim.
+  // Total spent + tfoot totals are computed by the API and echoed verbatim.
   const wethLabel = fmtWethLabel(buybacks.totals.wethSpent);
-  await expect(page.locator("#buybacks .tok__bb-summary-val")).toHaveText(wethLabel);
+  await expect(page.locator("#buybacks .tok__bb-total")).toHaveText(wethLabel);
   const totalRow = table.locator("tfoot tr").locator("td");
-  await expect(totalRow.nth(1)).toHaveText(wethLabel);
-  await expect(totalRow.nth(2)).toHaveText(fmtUsd0(buybacks.totals.valueUsd));
-  await expect(totalRow.nth(3)).toHaveText(fmtRmoney(buybacks.totals.robotmoneyReceived));
+  await expect(totalRow.nth(0)).toHaveText(wethLabel);
+  await expect(totalRow.nth(1)).toHaveText(fmtUsd0(buybacks.totals.valueUsd));
+  await expect(totalRow.nth(2)).toHaveText(fmtRmoney(buybacks.totals.robotmoneyReceived));
 });
 
 test("Buyback History reflects the SERVED rows, not the goldens it usually matches", async ({ page }) => {
@@ -182,10 +186,10 @@ test("Buyback History reflects the SERVED rows, not the goldens it usually match
   await page.goto("/");
   await navigate(page, "/tokenomics");
 
-  const table = page.locator("#buybacks .tok__table");
+  const table = page.locator("#buybacks .rr-table");
   const row = table.locator("tbody tr").filter({ hasText: "2026-01-02" }).locator("td");
-  await expect(row.nth(1)).toHaveText("9.5000");
-  await expect(row.nth(2)).toHaveText("$12,345");
-  await expect(row.nth(3)).toHaveText("7.00M");
-  await expect(page.locator("#buybacks .tok__bb-summary-val")).toHaveText("9.500000 WETH");
+  await expect(row.nth(0)).toHaveText("9.5000");
+  await expect(row.nth(1)).toHaveText("$12,345");
+  await expect(row.nth(2)).toHaveText("7.00M");
+  await expect(page.locator("#buybacks .tok__bb-total")).toHaveText("9.500000 WETH");
 });

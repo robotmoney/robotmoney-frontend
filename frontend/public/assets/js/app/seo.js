@@ -119,8 +119,8 @@ const META = {
     description: "Robot Money's agent skills: the deposit skill (robotmoney-cli) for depositing into and withdrawing from the vault, and the swarm onboarding skill for taking a seat in the investment swarm.",
   },
   "/tokenomics": {
-    title: "$ROBOTMONEY Tokenomics & Governance — Robot Money",
-    description: "$ROBOTMONEY directs allocation of the Robot Money USDC vault on Base. Holders vote which agent tokens it holds; protocol revenue funds buybacks and burns.",
+    title: "$ROBOTMONEY Tokenomics & Governance | Robot Money",
+    description: "$ROBOTMONEY on Base: a fair launch with permanently locked liquidity. Swap fees fund buybacks, and the tokens bought are burned. Tokenholder governance of the allocation is planned, not live.",
   },
   "/allocation": {
     title: "Allocation: Target Sleeves and Vaults | Robot Money",
