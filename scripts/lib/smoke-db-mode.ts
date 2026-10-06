@@ -469,6 +469,18 @@ export function requestsReuse(argv: readonly string[]): boolean {
   return argv.slice(2).includes(REUSE_FLAG);
 }
 
+/**
+ * Does this boot mint the three service tokens (`prepare (tokens)`)? Only for a
+ * database it created or restored: `blank`, or `dump` WITHOUT `--reuse`. A
+ * `--reuse` boot adopts a twin that already holds this instance's tokens, so it
+ * reuses the files like `volume` and a remote target. Minting there rotated the
+ * tokens under a scheduler that was not recreated, and readiness failed with
+ * HTTP 403 (R3.8 on stage-2, 2026-10-06).
+ */
+export function mintsServiceTokens(mode: string | null, reuse: boolean): boolean {
+  return mode === "blank" || (mode === "dump" && !reuse);
+}
+
 /** Does this argv ask to seed demo data? A bare switch, never implied. */
 export function requestsSeed(argv: readonly string[]): boolean {
   return argv.slice(2).includes(SEED_FLAG);

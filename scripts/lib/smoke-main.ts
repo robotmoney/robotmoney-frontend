@@ -5,7 +5,7 @@ import { resolveSmokeEnv } from "./smoke-env.ts";
 import { hostname } from "node:os";
 import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { databaseName, homeEnvFilePath, urlForRole } from "./env-role.ts";
-import { ALLOW_INSECURE_FLAG, bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, requestsReuse, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
+import { ALLOW_INSECURE_FLAG, bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, mintsServiceTokens, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, requestsReuse, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
 import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, missingProdSettingNotes, refuseAllowInsecureOnProd, refuseProdWithoutProjectsSource, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
 import { resolveBackupFiles } from "./restore-container.ts";
 import { resolveDeploymentPolicy, resolveRmEnv } from "./smoke-env-policy.ts";
@@ -541,13 +541,13 @@ const researchKeys = ["channel-divergence", "late-cycle-signals"];
 // per-instance file under `tokens/<holder>/`, provisioned once by the one entry
 // module that writes the token store (backend/scripts/provision-tokens.ts) and
 // mounted into its holder alone. `--local blank|dump` provisions them as the
-// journaled `prepare (tokens)` step below. A remote target and a `--local
-// volume` reattach NEVER mint: they reuse the files the instance holds, and
+// journaled `prepare (tokens)` step below. A remote target, a `--local
+// volume` reattach and a `--local dump --reuse` boot NEVER mint: they reuse the files the instance holds, and
 // absent files refuse HERE, before any mutation — a remote target's tokens come
 // only from an explicit `bun scripts/prod-init.ts provision-tokens` (§5,
 // criterion 43). This process reads the operator's token (the admin right) for
 // its own admin calls and hands a child only the file's PATH.
-if (remote || (requestedDataPath.kind === "ephemeral" && requestedDataPath.reattach)) {
+if (remote || (requestedDataPath.kind === "ephemeral" && requestedDataPath.reattach) || (requestedDataPath.kind === "smoke-twin" && requestsReuse(process.argv))) {
   const refusal = tokenReuseRefusal(paths, remote ? "remote" : "volume");
   if (refusal) fatal(refusal);
 }
@@ -1529,8 +1529,9 @@ async function main(): Promise<void> {
     // THE THREE SERVICE TOKENS (§3, §5): provisioned unattended for a database
     // this boot created or restored, once per plan — a rerun of the same plan
     // finds the step committed and reuses the files, never rotating them
-    // (§1.3). Every other boot reuses the instance's files and never mints.
-    if ((mode === "blank" || mode === "dump") && !committedSteps.has("prepare:tokens")) {
+    // (§1.3). Every other boot, `--reuse` included, reuses the instance's
+    // files and never mints.
+    if (mintsServiceTokens(mode, reuseTwin) && !committedSteps.has("prepare:tokens")) {
       await begin("prepare", "tokens");
       const provisioned = await runTokenProvisioning(repoRoot, {
         instance: instance.name,
