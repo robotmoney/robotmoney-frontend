@@ -5380,7 +5380,7 @@ const PENDING_JUDGING_PROBE = {
        AND EXISTS (
          SELECT 1 FROM swarm_members m
           WHERE m.id = $1
-            AND (m.operator = $2
+            AND (m.operator = $2 OR m.handle = ANY(string_to_array($5, ','))
                  OR COALESCE((SELECT c.third_party_enabled FROM swarm_judge_config c WHERE c.id = 1), false)))
        AND NOT EXISTS (
          SELECT 1 FROM swarm_session_judgements j
@@ -5389,7 +5389,7 @@ const PENDING_JUDGING_PROBE = {
          SELECT 1 FROM swarm_recommendations r
           WHERE r.session_id = s.id AND r.member_id = $4)
      ORDER BY s.judging_deadline_at`,
-    params: ["probe", "robotmoney", "probe", "probe"],
+    params: ["probe", "robotmoney", "probe", "probe", "athena,noop-analyst,robot-money,themis"],
   } as const;
 const pendingJudgingSessions = registerQuery({
   role: "rm_app",
@@ -5455,7 +5455,7 @@ export async function pendingJudgingFor(memberId: string): Promise<PendingJudgin
        AND EXISTS (
          SELECT 1 FROM swarm_members m
           WHERE m.id = ${memberId}
-            AND (m.operator = ${IN_HOUSE_OPERATOR}
+            AND (m.operator = ${IN_HOUSE_OPERATOR} OR m.handle = ANY(string_to_array(${IN_HOUSE_SEAT_HANDLES.join(",")}, ','))
                  OR COALESCE((SELECT c.third_party_enabled FROM swarm_judge_config c WHERE c.id = 1), false)))
        AND NOT EXISTS (
          SELECT 1 FROM swarm_session_judgements j
@@ -5602,6 +5602,16 @@ const refuseSubmission = (status: number, error: string): SubmitJudgementResult 
 /** The operator literal that marks an in-house member (smoke-production-spec.md §6.2). */
 export const IN_HOUSE_OPERATOR = "robotmoney";
 
+/**
+ * The in-house SEATS, in-house by handle whatever their `operator` text says
+ * (owner, 2026-10-06; smoke-production-spec.md §6.2). Production's admin set
+ * themis's operator to "RM Protocol Labs" on 2026-09-29, so a gate keyed only
+ * on the literal served the real judge nothing and every session published
+ * no_consensus. Handles are unique and admin-managed (no member can set its
+ * own), and these are the four seats migration 0101 already exempts.
+ */
+export const IN_HOUSE_SEAT_HANDLES: readonly string[] = Object.freeze(["athena", "noop-analyst", "robot-money", "themis"]);
+
 /** The raw answer a judge may submit. Far above any real answer; a bound, not a budget. */
 const MAX_JUDGEMENT_CHARS = 100_000;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -5655,12 +5665,12 @@ export async function isJudgeMember(memberId: string): Promise<boolean> {
 const JUDGE_OF_RECORD_PROBE = {
     statement: `SELECT m.id FROM swarm_members m
      WHERE m.role = 'judge' AND m.status = 'active'
-       AND (m.operator = $1
+       AND (m.operator = $1 OR m.handle = ANY(string_to_array($3, ','))
             OR COALESCE((SELECT c.third_party_enabled FROM swarm_judge_config c WHERE c.id = 1), false))
        AND NOT EXISTS (SELECT 1 FROM swarm_recommendations r
                         WHERE r.session_id = $2 AND r.member_id = m.id)
      ORDER BY m.id LIMIT 1`,
-    params: ["robotmoney", SAMPLE_ID],
+    params: ["robotmoney", SAMPLE_ID, "athena,noop-analyst,robot-money,themis"],
   } as const;
 const judgeOfRecordMembers = registerQuery({
   role: "rm_app",
@@ -5693,7 +5703,7 @@ export async function judgeOfRecordTx(tx: DbHandle, sessionId: string): Promise<
   const [row] = await on(tx, judgeOfRecordMembers, judgeOfRecordConfig, judgeOfRecordTakes)<{ id: string }>`
     SELECT m.id FROM swarm_members m
      WHERE m.role = 'judge' AND m.status = 'active'
-       AND (m.operator = ${IN_HOUSE_OPERATOR}
+       AND (m.operator = ${IN_HOUSE_OPERATOR} OR m.handle = ANY(string_to_array(${IN_HOUSE_SEAT_HANDLES.join(",")}, ','))
             OR COALESCE((SELECT c.third_party_enabled FROM swarm_judge_config c WHERE c.id = 1), false))
        AND NOT EXISTS (SELECT 1 FROM swarm_recommendations r
                         WHERE r.session_id = ${sessionId} AND r.member_id = m.id)
@@ -5780,7 +5790,7 @@ const judgeMember = registerQuery({
   site: "src/swarm/domain:submitJudgement.member",
   purpose: "Hold the judge's member row FOR SHARE while its status, role and operator are checked.",
   callers: [JUDGE_ROUTE],
-  probe: { statement: "SELECT status, role, operator FROM swarm_members WHERE id = $1 FOR SHARE", params: ["probe"] },
+  probe: { statement: "SELECT status, role, operator, handle FROM swarm_members WHERE id = $1 FOR SHARE", params: ["probe"] },
 });
 const judgeConfig = registerQuery({
   role: "rm_app",
@@ -5957,18 +5967,20 @@ export async function submitJudgement(
     // ── ELIGIBILITY, read inside the write transaction ──────────────────────
     // An admin revoking the judge, or turning third-party judging off, while
     // its model was thinking is observed before any row can land.
-    const [member] = await on(tx, judgeMember)<{ status: string; role: string; operator: string | null }>`
-      SELECT status, role, operator FROM swarm_members WHERE id = ${memberId} FOR SHARE`;
+    const [member] = await on(tx, judgeMember)<{ status: string; role: string; operator: string | null; handle: string | null }>`
+      SELECT status, role, operator, handle FROM swarm_members WHERE id = ${memberId} FOR SHARE`;
     if (!member || member.status !== "active") return refuseSubmission(403, "judge_member_inactive");
     if (member.role !== "judge") return refuseSubmission(403, "judge_role_required");
     const [cfg] = await on(tx, judgeConfig)<{ third_party_enabled: boolean; min_takes: number }>`
       SELECT third_party_enabled, min_takes FROM swarm_judge_config WHERE id = 1`;
     const thirdPartyEnabled = cfg?.third_party_enabled === true;
-    // THE THIRD-PARTY GATE, KEYED ON OPERATOR (§6.2, D52). `operator` is only
+    // THE THIRD-PARTY GATE (§6.2, D52, owner 2026-10-06): in-house is the
+    // operator literal OR an in-house seat's handle. `operator` is only
     // trustworthy because no non-admin writer may set it to the in-house
     // literal: `updateMemberProfile` refuses it (the #925 forgery), and apply
-    // and registration never write the column at all.
-    if (member.operator !== IN_HOUSE_OPERATOR && !thirdPartyEnabled) {
+    // and registration never write the column at all. A handle is admin-managed.
+    const inHouse = member.operator === IN_HOUSE_OPERATOR || (member.handle !== null && IN_HOUSE_SEAT_HANDLES.includes(member.handle));
+    if (!inHouse && !thirdPartyEnabled) {
       return refuseSubmission(403, "third_party_judging_disabled");
     }
     const [take] = await on(tx, judgeTake)`
