@@ -190,4 +190,13 @@ hardcoded in `alpine/views.js`.
   `/allocation` hero total and the `/performance` wallet-performance chart,
   replacing the retired static figures.
 
+### 10.2 Depositor signing
+
+A depositor signs with any signer they choose
+([D60](../decisions.md#d60)). Humans deposit through the dapp's web interface.
+Agents use any wallet, such as MetaMask's agentic wallet, a Safe or a hardware
+wallet, or they use `rmpc`. `rmpc` signs with its software keystore by default,
+with HSM or KMS as optional backends, and it needs a corresponding gateway set
+up.
+
 ---
