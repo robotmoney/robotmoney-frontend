@@ -447,6 +447,8 @@ export async function restoreBackupIntoContainer(
   // pg_restore stopped reading: its exit code, not this pipe, says how the restore went.
   pgRestore.stdin!.on("error", () => {});
   gpgDump.stdout!.on("error", () => {});
+  // gpg could not start: pg_restore then reads an empty archive and fails, which is the verdict.
+  gpgDump.on("error", (e) => log(`gpg failed to start: ${e.message}`));
   gpgDump.stdout!.pipe(pgRestore.stdin!);
   const restoreExit = await new Promise<number>((resolve) => {
     pgRestore.on("error", () => resolve(1));
