@@ -179,6 +179,8 @@ There is no `docker-compose.smoke.yml`. Its one surviving knob is an explicit fl
 | `dump[=<path>]` | restored from a production `pg_dump`, then `deployment_identity = rehearsal`; `bun smoke:capture` (read-only, `rm_readonly`, against a node that serves reads; a standby that serves none does not qualify) takes a fresh dump |
 | `volume[=<name>]` | reattaches a Docker volume from a previous run of this instance with its saved credentials |
 
+`--reuse` is a modifier of `dump` only (amended 2026-10-06, issue 1174). A `dump` boot restores fresh by default, so a second boot never rehearses an already-migrated copy. With `--reuse`, the boot uses the smoke-twin this instance recorded and kept: a live container is adopted, a container that is gone is started again on its kept volume, and nothing is restored. It refuses when the instance records no twin or the twin came from another backup. It exists for the one rehearsal that needs the migrated copy again: the boot after `prod-init rebind-members` (runbook R3.8).
+
 A **twin** is a use case, not a mode: a production-shaped database used for rehearsal, usually `--local dump`, sometimes a remote connection to a restored database.
 
 `--seed` creates demo data on a blank database. It is explicit, refuses a populated database, requires `rehearsal`, and is never implied by any mode.
