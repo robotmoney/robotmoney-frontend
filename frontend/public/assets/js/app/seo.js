@@ -106,7 +106,7 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
 const META = {
   "/": {
     title: "Robot Money — Autonomous Treasury for the Agent Economy",
-    description: "Robot Money is an autonomous USDC treasury on Base. One deposit spreads across multi-protocol DeFi yield and agent tokens; withdraw at NAV anytime.",
+    description: "Robot Money is an autonomous USDC treasury on Base. One deposit spreads across multi-protocol DeFi yield and agent tokens; withdraw at market value at any time.",
   },
   // /deposit is the site's main action (RM-129); until then it was /skills,
   // which is now the index of every Robot Money agent skill.
@@ -201,7 +201,7 @@ const META = {
   },
   "/faq": {
     title: "Robot Money FAQ — Autonomous Treasury Vault on Base",
-    description: "Find answers about Robot Money — the ERC-4626 USDC vault on Base, autonomous DeFi allocation, the regime classifier, and permissionless NAV withdrawals.",
+    description: "Find answers about Robot Money — the ERC-4626 USDC vault on Base, autonomous DeFi allocation, the regime classifier, and permissionless withdrawals.",
   },
   "/disclaimer": {
     title: "Legal Disclaimers — Robot Money",

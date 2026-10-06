@@ -1,7 +1,7 @@
 {
   "name": "Robot Money — Autonomous Treasury for the Agent Economy",
   "short_name": "Robot Money",
-  "description": "A managed USDC yield vault on Base for the agent economy. One deposit, multi-protocol yield plus a curated agent-token basket, withdraw at NAV.",
+  "description": "A managed USDC yield vault on Base for the agent economy. One deposit, multi-protocol yield plus a curated agent-token basket, withdraw at market value.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

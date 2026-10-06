@@ -28,7 +28,7 @@
              the contract rather than a number that can drift. -->
         <p class="hero__lede animate-fade-in-up" style="animation-delay:0.5s;opacity:0">
           An autonomous treasury for the agent economy. One USDC deposit,
-          allocated across the published sleeves. Withdraw at NAV anytime.
+          allocated across the published sleeves. Withdraw at market value at any time.
         </p>
         <div class="hero__stats animate-fade-in-up" style="animation-delay:0.65s;opacity:0">
           <div class="stat"><div class="stat__value">ERC-4626</div><div class="stat__label">Vault Standard</div></div>
@@ -693,7 +693,7 @@
             vault contract and hold rmUSDC, backed by USDC lent across Aave,
             Morpho and Compound. The published allocation sets the target
             weight of every sleeve, and those weights are on the page below.
-            Withdraw at NAV anytime.
+            Withdraw at market value at any time.
           </p>
         </div>
         <div class="problem__badge-wrap">
@@ -1165,7 +1165,7 @@
               <!-- Not "pro-rata bucket exposure": a redeem burns rmUSDC and
                    returns USDC in one transaction. The sleeves are target
                    weights, not things the vault hands back. -->
-              <p class="architecture__step-text">Withdraw at NAV in one transaction, minus the 0.25% exit fee</p>
+              <p class="architecture__step-text">Withdraw at market value in one transaction, minus the 0.25% exit fee</p>
             </div>
             <div class="architecture__step">
               <div class="architecture__step-marker">
@@ -1548,7 +1548,7 @@
                  diagram this page no longer draws. The vault holds USDC; the
                  sleeves are target weights over it. -->
             <p class="governance__pcard-value">
-              rmUSDC vault shares against a published sleeve allocation. Withdraw at NAV minus a 0.25% exit fee, which stays in the vault.
+              rmUSDC vault shares against a published sleeve allocation. Withdraw at market value minus a 0.25% exit fee, which stays in the vault.
             </p>
           </div>
         </div>
