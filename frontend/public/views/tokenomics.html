@@ -1,4 +1,4 @@
-<!-- Token Economics
+<!-- $ROBOTMONEY, the token page
      Buildless SPA fragment: no inline <script>. Built on the regime and vault
      pages' components (.rr-*): a facts row under the hero, sections divided by
      their rule, the fee split as the ring every weight mix on the site uses, a
@@ -25,8 +25,13 @@
      The page is the token's alone. How the vault's allocation is set is on
      the swarm and allocation pages; the vault's fees are on the deposit page;
      the site footer carries the legal notice. #what-it-does, #fees and
-     #buybacks are sections; #launch, #burn, #governance (and the older
-     #precedents) and #participation are FAQ rows, and a link to one opens it.
+     #buybacks are sections; every FAQ row is an id too (and #precedents opens
+     #governance), and a link to one opens it.
+
+     THE FAQ IS STRUCTURED DATA. Its questions and answers are
+     lib/token-faq.js, word for word, which seo.js publishes as a FAQPage;
+     edit both together (scripts/tests/unit/seo-token-faq.test.ts fails on any
+     drift).
 -->
 
 <section class="tok" x-data="feeChart()">
@@ -35,7 +40,7 @@
     <div class="tok__hero-art" x-data="tokHero()" aria-hidden="true"></div>
     <div class="tok__hero-inner">
       <div class="tok__hero-copy">
-        <h1 class="tok__h1">Token Economics</h1>
+        <h1 class="tok__h1">$ROBOTMONEY</h1>
         <p class="tok__lede">Robot Money's token on Base: a fair launch with no premine, liquidity locked for good, and swap fees that fund buybacks.</p>
       </div>
 
@@ -143,7 +148,7 @@
         </thead>
         <tbody>
           <tr x-show="loading"><th scope="row">Loading…</th><td class="q">—</td><td class="q">—</td><td class="q">—</td><td class="q">—</td></tr>
-          <template x-for="b in rows()" :key="b.txHash">
+          <template x-for="b in pageRows()" :key="b.txHash">
             <tr>
               <th scope="row" x-text="b.date"></th>
               <td class="q" x-text="fmtWeth(b.wethSpent)"></td>
@@ -167,6 +172,15 @@
           </tr>
         </tfoot>
       </table></div>
+      <template x-if="paged()">
+        <nav class="rr-pager" aria-label="Buyback pages">
+          <span role="status" x-text="pageRange()"></span>
+          <div>
+            <button type="button" class="rr-btn" :disabled="page === 0" @click="page -= 1">Newer</button>
+            <button type="button" class="rr-btn" :disabled="!older()" @click="page += 1">Older</button>
+          </div>
+        </nav>
+      </template>
       <p class="rr-note" x-show="nonLive()" x-cloak>Demo data: a hermetic stub, not live chain data.</p>
     </section>
 
@@ -177,6 +191,20 @@
         <h2 class="rr-sec__h" id="faq-h">FAQ</h2>
       </div>
       <div class="tok__faq">
+        <div class="rr-disc" id="what-is-robotmoney" x-data="{ open: location.hash === '#what-is-robotmoney' }" @hashchange.window="if (location.hash === '#what-is-robotmoney') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="what-is-robotmoney-a" @click="open = !open"><span>What is $ROBOTMONEY?</span></button>
+          <div class="rr-disc__anim" id="what-is-robotmoney-a" role="region" aria-label="What is $ROBOTMONEY?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>$ROBOTMONEY is the token of Robot Money, the treasury layer for the agent economy. It trades on Base, and the protocol's share of its swap fees buys it back.</p></div></div>
+          </div>
+        </div>
+
+        <div class="rr-disc" id="contract" x-data="{ open: location.hash === '#contract' }" @hashchange.window="if (location.hash === '#contract') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="contract-a" @click="open = !open"><span>What is the $ROBOTMONEY contract address?</span></button>
+          <div class="rr-disc__anim" id="contract-a" role="region" aria-label="What is the $ROBOTMONEY contract address?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p><span class="tok__mono">0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3</span>, an ERC-20 on Base. Its source code is <a href="https://repo.sourcify.dev/8453/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">verified on Sourcify</a>.</p></div></div>
+          </div>
+        </div>
+
         <div class="rr-disc" id="launch" x-data="{ open: location.hash === '#launch' }" @hashchange.window="if (location.hash === '#launch') open = true" :class="open ? 'is-open' : ''">
           <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="launch-a" @click="open = !open"><span>How was $ROBOTMONEY launched?</span></button>
           <div class="rr-disc__anim" id="launch-a" role="region" aria-label="How was $ROBOTMONEY launched?" :inert="!open">
@@ -184,16 +212,37 @@
           </div>
         </div>
 
+        <div class="rr-disc" id="supply" x-data="{ open: location.hash === '#supply' }" @hashchange.window="if (location.hash === '#supply') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="supply-a" @click="open = !open"><span>Can the $ROBOTMONEY supply grow?</span></button>
+          <div class="rr-disc__anim" id="supply-a" role="region" aria-label="Can the $ROBOTMONEY supply grow?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>No. The supply is 100 billion. Doppler's token contract carries a 2% yearly mint rate, but minting can only start when the pool migrates, and a locked pool cannot migrate, so no token has been minted since launch.</p></div></div>
+          </div>
+        </div>
+
+        <div class="rr-disc" id="swap-fee" x-data="{ open: location.hash === '#swap-fee' }" @hashchange.window="if (location.hash === '#swap-fee') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="swap-fee-a" @click="open = !open"><span>What fee does a $ROBOTMONEY swap pay?</span></button>
+          <div class="rr-disc__anim" id="swap-fee-a" role="region" aria-label="What fee does a $ROBOTMONEY swap pay?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>1.2%, on every swap in its Uniswap v4 pool. The protocol's primary wallet receives 57% and uses it to fund buybacks, Bankr 36.1%, Doppler 5%, and an ecosystem share Bankr reserved at launch 1.9%.</p></div></div>
+          </div>
+        </div>
+
         <div class="rr-disc" id="burn" x-data="{ open: location.hash === '#burn' }" @hashchange.window="if (location.hash === '#burn') open = true" :class="open ? 'is-open' : ''">
           <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="burn-a" @click="open = !open"><span>Are bought-back tokens burned?</span></button>
           <div class="rr-disc__anim" id="burn-a" role="region" aria-label="Are bought-back tokens burned?" :inert="!open">
-            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>No. They are held in the protocol's primary wallet, <a href="https://basescan.org/address/0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6" target="_blank" rel="noopener noreferrer">0xfbc2…c9d6</a>.</p></div></div>
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>No. They are held in the protocol's primary wallet, <a class="tok__mono" href="https://basescan.org/address/0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6" target="_blank" rel="noopener noreferrer">0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6</a>.</p></div></div>
+          </div>
+        </div>
+
+        <div class="rr-disc" id="vault-returns" x-data="{ open: location.hash === '#vault-returns' }" @hashchange.window="if (location.hash === '#vault-returns') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="vault-returns-a" @click="open = !open"><span>Does holding $ROBOTMONEY earn the vault's returns?</span></button>
+          <div class="rr-disc__anim" id="vault-returns-a" role="region" aria-label="Does holding $ROBOTMONEY earn the vault&#x27;s returns?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>No. The token has no claim on the vault's returns. To earn the vault's yield, deposit USDC on <a href="/deposit">the deposit page</a>.</p></div></div>
           </div>
         </div>
 
         <span id="precedents" class="tok__alias" aria-hidden="true"></span><div class="rr-disc" id="governance" x-data="{ open: location.hash === '#governance' || location.hash === '#precedents' }" @hashchange.window="if (location.hash === '#governance' || location.hash === '#precedents') open = true" :class="open ? 'is-open' : ''">
-          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="governance-a" @click="open = !open"><span>What governance is planned?</span></button>
-          <div class="rr-disc__anim" id="governance-a" role="region" aria-label="What governance is planned?" :inert="!open">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="governance-a" @click="open = !open"><span>What governance is planned for $ROBOTMONEY?</span></button>
+          <div class="rr-disc__anim" id="governance-a" role="region" aria-label="What governance is planned for $ROBOTMONEY?" :inert="!open">
             <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>None of it is built, and it has no ship date. A published quantitative filter would decide which tokens are eligible, and holders would vote their weights, so projects that want inclusion would hold $ROBOTMONEY. The vote would cover sleeve weights and nothing else: not the protocol wallets, marketing or operations. The design borrows Curve's gauge voting, with the filter in place of emissions, and Botto's allocation-only vote.</p></div></div>
           </div>
         </div>
@@ -201,7 +250,7 @@
         <div class="rr-disc" id="participation" x-data="{ open: location.hash === '#participation' }" @hashchange.window="if (location.hash === '#participation') open = true" :class="open ? 'is-open' : ''">
           <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="participation-a" @click="open = !open"><span>How do I buy $ROBOTMONEY?</span></button>
           <div class="rr-disc__anim" id="participation-a" role="region" aria-label="How do I buy $ROBOTMONEY?" :inert="!open">
-            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>In its Uniswap v4 pool on Base, directly, through Bankr or through any DEX aggregator. The token has no claim on vault returns: to earn the vault's yield, deposit USDC on <a href="/deposit">the deposit page</a>.</p></div></div>
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>In its Uniswap v4 pool on Base, directly, through Bankr or through any DEX aggregator. Check the contract address, <span class="tok__mono">0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3</span>, before you trade.</p></div></div>
           </div>
         </div>
       </div>
@@ -332,6 +381,7 @@
 /* The last question draws no rule under itself: the footer's rule follows. */
 .tok__faq .rr-disc:last-child > .rr-disc__btn { border-bottom: 0; }
 .tok__alias { display: block; height: 0; }
+.tok__mono { font-family: var(--font-mono); font-size: 0.8125rem; overflow-wrap: anywhere; }
 .tok__faq-a p { margin: 0; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
 
 @media (max-width: 640px) {
