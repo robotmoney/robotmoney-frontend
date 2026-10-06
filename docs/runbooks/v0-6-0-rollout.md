@@ -165,7 +165,7 @@ waited on the operator for a twin's password.)
 
 - B1–B10 each closed, with the decision written in the tracking issue.
 - `release:v0.6.0` tracking issue exists, scope frozen, Phases complete (policy §6).
-- Every intended commit is on `releases-0.6.x`: `git log --oneline origin/main..releases-0.6.x` and the reverse are empty or fully explained.
+- Every intended commit is on `releases-0.6.x`: `git log --oneline origin/main..releases-0.6.x` and the reverse are empty or fully explained. The QA branch commits the owner picked are merged into `releases-0.6.x` (policy §4.6 step 5), and the rc commit's tree is the tree that passed stage.
 - `gh run list --branch releases-0.6.x` shows green `e2e`, `unit`, `backend`, `integration`, `contract`, `web-client`, `repo-guards`, `docs-lint`.
 - Operator names the cutover window and the rollback authority.
 
@@ -263,7 +263,7 @@ A pre-0081 dump gets its identity-first pass automatically, but only when its le
 a supported baseline (spec §9.1). A dump that does not match refuses, which is the same
 as B1 and proves it on stage before production sees it.
 
-R3.1 Check out the RC commit as a clean checkout of a pushed commit. `git status --porcelain` must be empty and `git log origin/releases-0.6.x..HEAD` must be empty. **Never edit or commit on the stage host.** A blocker is fixed in a dev worktree branched from `releases-0.6.x`, merged there, and the host is re-checked-out at the new tip (policy §4.6). A host that ran other code proves nothing.
+R3.1 Check out the session's QA branch as a clean checkout of a pushed commit (policy §4.6). The 2026-10-06 session runs `qa/0.6.x-2026-10-06`, cut from `releases-0.6.x` at `f4e8a798`. `git status --porcelain` must be empty and `git log origin/qa/0.6.x-2026-10-06..HEAD` must be empty. **Never edit or commit on the stage host.** A blocker is fixed in a dev worktree branched from the QA branch, merged into the QA branch, and the host is re-checked-out at the new tip. `releases-0.6.x` and `main` take no commit during the session; the owner decides afterwards what moves to each. A host that ran other code proves nothing.
 
 Prerequisites found on stage-2 (2026-10-02):
 

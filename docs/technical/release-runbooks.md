@@ -71,8 +71,8 @@ Feature PRs never target `releases-A.B.x` directly — ordinary feature work is
 reviewed and merged via PR against `main`, exactly as this document's intro
 paragraph says. Once a release's scope is decided, the branch receives only
 (a) the specific commits cherry-picked from `main` that the release needs,
-and (b) small incidental nit-fix commits made directly on the branch while
-getting it out the door (see §7, Backporting). A release is **never tagged
+and (b) the QA-branch commits the owner selects at the end of a QA session
+(§4.6). No commit lands on the release branch during a QA session. A release is **never tagged
 directly on `main`** — the tag lands on the `releases-A.B.x` branch, so
 `main` keeps moving with ordinary merges while the release line is frozen
 except for the fixes it specifically needs. This applies to every tag the
@@ -249,21 +249,32 @@ execution. Fix it as follows, then follow §3's tag sequence.
 A fix is developed in a development environment and never on a rehearsal,
 stage or production host. A host runs a clean checkout of a pushed commit
 (`git status --porcelain` empty, no host-side commits). A rehearsal on a host
-whose code differs from the release branch is not evidence for the release.
+whose code differs from the branch under test is not evidence for the release.
 
-1. Branch the fix from the release branch (`releases-A.B.x`), not from `main`.
-2. Develop and test the fix in a local worktree.
-3. Open a PR into the release branch and merge it there. A change to a
+**QA branch rule (owner, 2026-10-06).** A QA session never commits to the
+release branch or to `main`. Both stay clean for the whole session.
+
+1. At the start of the session, cut one QA branch from the release branch tip:
+   `qa/A.B.x-<YYYY-MM-DD>` (example: `qa/0.6.x-2026-10-06`). Push it. Every
+   patch of the session lands there, and nowhere else.
+2. Switch the development checkout and the stage host to the QA branch. The
+   stage host runs a clean checkout of the QA branch tip, never a fix branch.
+3. Develop and test each fix in a local worktree branched from the QA branch.
+   Open the PR into the QA branch and merge it there. Runbook and doc
+   corrections found during the session land there too. A change to a
    supported baseline needs the owner's decision first (D55 (8)).
-4. Redeploy a clean checkout of the new release-branch tip to the stage host.
-   If no candidate has yet been deployed to production, leave the corrected
-   branch tip untagged and repeat stage preflight and rehearsal. A stage failure
-   does not consume an rc number. If a deployed candidate failed postflight,
-   cut the next rc only after the corrected tip passes stage.
-5. Resume the sequence in §3 at the applicable step.
+4. Redeploy a clean checkout of the new QA branch tip to the stage host and
+   repeat the affected stage steps. A stage failure does not consume an rc
+   number.
+5. When the session ends, the owner decides which QA commits reach the release
+   branch and which reach `main`. Only then does a PR carry them. The rc tag is
+   cut on the release branch after that merge, and stage is re-run on that tip
+   if its tree differs from the tree that passed on the QA branch.
+6. Resume the sequence in §3 at the applicable step.
 
 Runbook corrections that change release instructions must be committed and
-reviewed on the release branch. Re-run any gate whose evidence or operator
+reviewed on the QA branch during a session, and reach the release branch with
+the owner's merge decision (step 5). Re-run any gate whose evidence or operator
 action the correction affects. Rc numbering follows §3: stage-only retries and
 documentation fixes do not consume an rc; a corrected candidate consumes the
 next rc only after a deployed candidate fails postflight.
