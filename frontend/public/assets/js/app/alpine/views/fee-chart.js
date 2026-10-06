@@ -18,8 +18,8 @@ export function registerFeeChart(Alpine) {
   // Each leg's name and note, keyed by the split label. A leg the API adds
   // later still renders, under its own label and with no note.
   const FEE_COPY = {
-    Protocol: { name: "Protocol wallet", note: "Paid to the protocol's primary wallet, funds buybacks" },
-    Bankr: { name: "Bankr", note: "Interface, distribution partner" },
+    Protocol: { name: "Protocol wallet", note: "Funds buybacks" },
+    Bankr: { name: "Bankr", note: "Launch platform" },
     Doppler: { name: "Doppler", note: "Launch protocol" },
     Ecosystem: { name: "Ecosystem", note: "Reserved by Bankr at launch" },
   };

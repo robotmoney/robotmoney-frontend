@@ -163,9 +163,8 @@ test("Buyback History rows + totals render FROM GET /api/dashboards/buybacks, no
   // Each buyback links to its swap on BaseScan.
   await expect(first.nth(3).locator("a")).toHaveAttribute("href", `https://basescan.org/tx/${buybacks.rows[0]!.txHash}`);
 
-  // Total spent + tfoot totals are computed by the API and echoed verbatim.
+  // The tfoot totals are computed by the API and echoed verbatim.
   const wethLabel = fmtWethLabel(buybacks.totals.wethSpent);
-  await expect(page.locator("#buybacks .tok__bb-total")).toHaveText(wethLabel);
   const totalRow = table.locator("tfoot tr").locator("td");
   await expect(totalRow.nth(0)).toHaveText(wethLabel);
   await expect(totalRow.nth(1)).toHaveText(fmtUsd0(buybacks.totals.valueUsd));
@@ -191,5 +190,5 @@ test("Buyback History reflects the SERVED rows, not the goldens it usually match
   await expect(row.nth(0)).toHaveText("9.5000");
   await expect(row.nth(1)).toHaveText("$12,345");
   await expect(row.nth(2)).toHaveText("7.00M");
-  await expect(page.locator("#buybacks .tok__bb-total")).toHaveText("9.500000 WETH");
+  await expect(table.locator("tfoot td").first()).toHaveText("9.500000 WETH");
 });
