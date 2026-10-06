@@ -71,13 +71,16 @@ on stage-2 with the real restored dump, plus the three open rows below.
 | B7 | Log gates `twin:gate` and `prod:gate` ported (1071) | merged | first live run will show unclassified lines; add a rule only with evidence |
 | B8 | Mid-window dump adoption and the first-epoch bound (1121) | merged | `e2e` green on the RC commit |
 | B9 | `release:v0.6.0` tracking issue | exists (1147), updated 2026-10-06 | — |
-| B10 | `rebind-members` order on the breaking-migration path | none | settled by R3.8; the twin route needed PR 1176 (prod-init targets the twin) and is bounded by 1174 (no cold re-boot of a twin) |
+| B10 | `rebind-members` order on the breaking-migration path | twin route: PR 1176, `--reuse` (1186, ported to the QA branch by 1195), tokens kept on `--reuse` (1202) | settled on the twin 2026-10-06 at `3cdc883b` on the fresh dump: boot, rebind 8 of 8, boot 2 with `--reuse` reaches READY and the participants take on the new keys (R3.8) |
 | B11 | The buyback indexer ran in the worker as `rm_worker` while its `buyback_scan_state`/`buyback_swaps` sites declared `rm_app`, so every sweep on the migrated dump was refused and swallowed; production's v0.5.x worker holds the api's URL under `RM_ENV=smoke`, which is why buybacks work there today (1150) | fixed (1171), verified on `90f00c8b`: rm_worker holds INSERT/SELECT/UPDATE on `buyback_scan_state`, no `live index failed` line, the sweep scans | R3/R7: `docker logs <project>-worker-analytics-1 \| grep "live index failed"` empty, and `buyback_scan_state.updated_at` advancing on the twin |
 | B12 | The twin seated only `credential.json` members; the verify leg `twin-roster:every-active-member-seated` caught it (1152) | fixed (1164), verified: 7 of 7 seated on `7d69d17c` | — |
 | B13 | The old checkout's `bun run migrate` runs clean against the migrated database and re-seeds the `swarm.*` job_schedules 0089 deleted (1155) | closed, no action (owner 2026-10-05) | section 8 says: never run the old checkout after R6.3; R6.1 renames it |
 | B14 | A resume after replace could not start participants from the pruned api image id (1160) | fixed (1161), verified on `62ec5920` | — |
 | B15 | A failed take re-ran on the next tick with no delay; seven seats hammered the shared Zen key (see the issue). The take one-shot also could not find its script from the per-take workspace (1166) | fixed: backoff (1168) and give-up after 5 failed takes (1169, owner rule), verified on `7d69d17c` | — |
-| B16 | The cumulative standing invariants (`soak-checks.sh`, R8.a to R8.y) are not on the 0.6 line, so SR.7 and SW.2 have no tool (1179) | ported (1179), closes when the port merges | — |
+| B16 | The cumulative standing invariants (`soak-checks.sh`, R8.a to R8.y) are not on the 0.6 line, so SR.7 and SW.2 have no tool (1179) | ported (1189 on main; on the QA branch by 1195) | `soak:checks --record` at READY: 0 FAIL, 0 WARN on the fresh dump (2026-10-06); the run over the soak window is still owed |
+| B17 | The judge gate counted only operator `robotmoney` as in-house. Production's admin set themis's operator to "RM Protocol Labs" on 2026-09-29, so the twin's judge was served nothing and the dump's in-flight session published `no_consensus` with no judgement | fixed on the QA branch (1201): in-house by seat (owner 2026-10-06) | a session judged by themis on the fresh twin (first windows close 00:25 to 00:38 UTC 2026-10-07) |
+| B18 | The 1178 restore pipe dropped the dump's tail: every `--local dump` boot at `f4e8a798` failed `pg_restore: could not read from input file: end of file` | fixed on the QA branch (1193): one bash pipe | verified: both dumps restore, exit 0 |
+| B19 | A `--reuse` boot minted new service tokens under a scheduler it did not recreate: readiness HTTP 403 | fixed on the QA branch (1202) | verified by R3.8 at `3cdc883b` |
 
 Also open: the notice to external members about the four-weight rule (1124); the
 `judging` banner (1115, merged) and admin items (1123, merged) need only the R7 spot check.
@@ -313,7 +316,7 @@ bun run verify:live --instance rehearse-060 --tier full --emit-receipt=R3.verify
 ```
 
 Exit 0 = pass; 1 = product wrong; 2 = nothing asserted. A WARN is not a pass. List which
-invariants this target could not exercise. Passed 2026-10-05 on `7d69d17c` with the full roster: 9/9 PASS, exit 0 (receipt `R3.verify-twin-8seats.json`). Every leg must PASS; `twin-roster:every-active-member-seated` is the twin's own seating proof (B12).
+invariants this target could not exercise. Passed 2026-10-05 on `7d69d17c` with the full roster: 9/9 PASS, exit 0 (receipt `R3.verify-twin-8seats.json`). Passed 2026-10-06 on the fresh dump (`20261006T195424Z`) at `df5a4aa7`: 9/9 PASS, exit 0 (receipt `R3.verify-twin-fresh.json`); R3.3 readiness 9/9 and R3.5 (114 ledger rows, no duplicates, identity `rehearsal`, manifest equals the ledger, no runtime DELETE/TRUNCATE, 32 WebAuthn slots) pass on the same boot. Every leg must PASS; `twin-roster:every-active-member-seated` is the twin's own seating proof (B12).
 
 R3.4a **Twin gate** (standing check SR.4), after R3.4 and after the roster has published
 sessions. It reads every container log (participants included), default deny:
@@ -324,7 +327,11 @@ bun run twin:gate --instance rehearse-060 --wait 35
 
 Exit 0 only when every check passes. A gate run on a twin whose participants cannot authenticate
 (for example after R3.8's rebind, before the participants are recreated) fails by design: run it
-on a twin in a healthy state, and keep the report. First run 2026-10-05 on `7a4f19ac`: failed on
+on a twin in a healthy state, and keep the report. **Timing:** the gate waits for a published
+session on every active subject, and a twin keeps production's 6 h epochs (B3), so the first
+publish can be up to 6 h after READY. Size `--wait` to the grid, or start the gate after the
+earliest `window_closes_at`. On 2026-10-06 the fresh dump's windows closed 00:25 to 00:38 UTC,
+4 h after READY, so a 35-minute wait could not pass. First run 2026-10-05 on `7a4f19ac`: failed on
 a broken twin and listed a coin-price `DEGRADED` warning. That is a warning, not an error: the gate
 reports an unclassified warning and does not fail on it, and the owner decided no issue is filed for it.
 
@@ -350,7 +357,11 @@ under the same plan id: it resumes. Repeat once after replace began. Done 2026-1
 (stopped before preflight, resumed to READY) passes; after replace (stopped before participants) resumes
 and then fails on B14. A `--static-port` rerun over this instance's own website-server is accepted since #1157. Kill `bun run migrate`
 between two commits (the stage form: `bun smoke --local volume --migrate`): the rerun
-resumes. Record the journal phase each time.
+resumes. Record the journal phase each time. Done 2026-10-06 at `3cdc883b` on the fresh dump (script
+`~/qa-0.6.x-2026-10-06/r36-qa.sh`): a SIGKILL inside `prepare (migrate)` left the ledger at 77 rows
+(0081 committed, no manifest yet); the same command resumed and finished the migration to 114 rows;
+a SIGINT at `prepare (images)` stopped before preflight and a SIGINT at `participants` stopped before
+readiness; each rerun resumed plan `45777480e01d` and the last reached READY. Pass.
 
 R3.7 **Site.** Build and switch the site, then roll back:
 
@@ -385,11 +396,18 @@ The twin route, on stage-2, run 2026-10-05 at `7a4f19ac` (script `r38c.sh`):
 5. **Observed:** that re-run is a NEW plan, never a resume. The plan id includes the
    credential file's key fingerprints, and the rebind just changed them.
 
-Limit of the twin route: step 5 cannot finish on a twin. A new plan under `--local dump`
-restores a fresh copy beside the live twin and fails with `Postgres never became ready`;
-`--local volume` cannot reattach a dump twin (issue 1174). So the twin proves steps 1 to 4
-and the order. The second boot is only rehearsable on a remote stage database, or once
-1174 closes. Never run `bun run migrate` on stage-2: its `~/.env` points at production's
+Step 5 on the twin uses `--reuse` (spec §5, issue 1174): boot 2 is production-shaped, with no
+`--spoof-keys` and no `--migrate`:
+
+```bash
+bun smoke --local dump="$DUMP" --reuse --instance rehearse-060 \
+  --credentials ~/rehearsal-creds.json --static-port
+```
+
+Run 2026-10-06 at `3cdc883b` on the fresh dump (script `~/qa-0.6.x-2026-10-06/r38-qa.sh`): rebind 8 of 8;
+the running participants answered 401 (`tokenValid=false`); boot 2 adopted the live twin, restored
+nothing, kept the service tokens (B19) and reached READY; athena, zyfai and dualmint took on the new
+keys within 90 s. **Pass.** The order in R6.7 (boot, rebind, boot again) is the one proven here. Never run `bun run migrate` on stage-2: its `~/.env` points at production's
 read replica.
 Write down the exact order that works for `rebind-members` and whether the participants
 need a second `bun smoke --static-port` afterwards. Edit R6.7 to match, in a commit on
@@ -399,7 +417,9 @@ R3.9 **Rollback rehearsal.** Restore the R2 dump into a fresh local database and
 **old** (v0.5.4) code refuses or cannot run against the migrated one only in the ways
 section 8 states. Record the restore time. Done 2026-10-05: restore of the 2026-10-01 dump takes
 2 min 10 s on stage-2; runtime DELETEs as `rm_app`/`rm_worker` are refused; the old `bun run migrate`
-is NOT refused (B13).
+is NOT refused (B13). Repeated 2026-10-06 on the fresh dump: restore takes 2 min 55 s (357 MB
+encrypted); runtime DELETEs as `rm_app`/`rm_worker` are refused; the old `bun run migrate` exits 0,
+reports 76 files current and re-seeds the 5 `swarm.*` schedules (B13, unchanged).
 
 R3.10 Rehearsal report (policy §4.5): RC SHA, dump identity, plan id, preflight and
 readiness receipts, participant results, `verify:live` output, interruption results, what
