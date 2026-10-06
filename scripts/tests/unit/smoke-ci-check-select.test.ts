@@ -55,11 +55,14 @@ describe("every check is run by some e2e-*.yml workflow", () => {
     expect(texts.length).toBeGreaterThan(1);
   });
 
+  // e2e-web specs read the sessions the swarm driver files: the one declared prerequisite.
+  const PREREQUISITE_OWNERS: Record<string, number> = { "swarm-session": 2 };
+
   for (const name of CHECK_NAMES) {
-    test(`\`--check ${name}\` appears in exactly one e2e-*.yml (a check in two domains runs twice, in none never runs)`, () => {
+    test(`\`--check ${name}\` appears in exactly ${PREREQUISITE_OWNERS[name] ?? 1} e2e-*.yml (an undeclared check in two domains runs twice, in none never runs)`, () => {
       const pattern = new RegExp(`smoke-ci-checks\\.ts --check ${name}(?![\\w-])`);
       const owners = texts.filter((t) => pattern.test(t));
-      expect(owners.length).toBe(1);
+      expect(owners.length).toBe(PREREQUISITE_OWNERS[name] ?? 1);
     });
   }
 });
