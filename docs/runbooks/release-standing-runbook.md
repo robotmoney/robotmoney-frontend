@@ -56,6 +56,11 @@ unverified, not satisfied.
 
 ## 4. Phase R — stage rehearsal (policy 4.4 and 4.5)
 
+**QA branch (policy 4.6, owner 2026-10-06).** Every stage session runs on its own
+`qa/A.B.x-<YYYY-MM-DD>` branch cut from the release branch tip. All the session's patches,
+runbook fixes included, merge into that branch. The release branch and `main` take no commit
+during the session. The owner picks what moves to each one afterwards.
+
 | ID | Check | Tool | Target | Status |
 |---|---|---|---|---|
 | SR.1 | Restored production dump boots to READY on the RC commit, with every active member seated | `bun smoke --local dump` | stage | script |
