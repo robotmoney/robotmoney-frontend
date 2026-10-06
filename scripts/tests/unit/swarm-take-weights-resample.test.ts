@@ -22,7 +22,8 @@ let fakeOpenCode = "";
 let counterFile = "";
 const originalBin = process.env.OPENCODE_BIN;
 
-const PROSE = ["**REGIME**", "- one", "**ALLOCATION**", "- two", "**SUBJECT**", "- three"].join("\n");
+const FILLER = Array.from({ length: 45 }, (_, i) => `word${i}`).join(" ");
+const PROSE = ["**REGIME**", "- one", "**ALLOCATION**", "- two", "**SUBJECT**", `- three ${FILLER}`].join("\n");
 const GOOD_WEIGHTS = "WEIGHTS: agent_tokens=0.15 | conservative_defi_yield=0.70 | protocol_tokens=0.10 | real_world_assets=0.05";
 const STANCE = "STANCE: bullish | CONFIDENCE: 0.8";
 

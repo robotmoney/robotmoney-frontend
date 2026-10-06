@@ -50,7 +50,7 @@ import { DEFAULT_AGENT_MODEL } from "../model-registry.ts";
 import { ZEN_KEY_ENV, zenApiKey } from "../opencode-key.ts";
 import { redactTelemetryText } from "../onboarding-telemetry.ts";
 import {
-  missingSectionLeadIns,
+  judgeShortfalls,
   parseStanceFromBody,
   parseWeightsFromBody,
   promptFor,
@@ -554,11 +554,11 @@ export async function authorTake(
     const parsed = parseStanceFromBody(authored.text);
     // THE ALLOCATION IS PART OF THE STRUCTURE CONTRACT, and is read FIRST —
     // `parseStanceFromBody` uncovered the WEIGHTS line by stripping the STANCE
-    // line, and `missingSectionLeadIns` must run against the body the member
+    // line, and `judgeShortfalls` must run against the body the member
     // will actually STORE, i.e. with the WEIGHTS line already removed.
     //
     // A malformed vector RE-SAMPLES rather than throwing on the first attempt,
-    // which is the `missingSectionLeadIns` rule and deliberately not the
+    // which is the `judgeShortfalls` rule and deliberately not the
     // `parseStanceFromBody` one: a dropped section and a dropped control line
     // are both unlucky samples, while a stance OUTSIDE the vocabulary is a model
     // saying something else entirely. Nothing is ever patched into compliance.
@@ -575,7 +575,7 @@ export async function authorTake(
         continue;
       }
     }
-    const missing = missingSectionLeadIns(body, { requireWeights: options.requireWeights });
+    const missing = judgeShortfalls(body);
     if (missing.length === 0) {
       // A `requireWeights` take NEVER leaves here without its vector. The
       // branch above already re-samples a malformed WEIGHTS line, so this is
@@ -592,9 +592,9 @@ export async function authorTake(
       }
       return { ...parsed, body, ...(weights ? { weights } : {}), model: authored.model, spend: authored.spend };
     }
-    shortfall = `omitted the ${missing.join(", ")} section${missing.length === 1 ? "" : "s"}`;
+    shortfall = missing.join("; ");
     console.warn(
-      `[inference] ${p.memberId}: take attempt ${attempt}/${attempts} omitted ${missing.join(", ")} — re-sampling`,
+      `[inference] ${p.memberId}: take attempt ${attempt}/${attempts}: ${shortfall} — re-sampling`,
     );
   }
 

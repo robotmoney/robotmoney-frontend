@@ -2,8 +2,8 @@
 //
 // Production's analysts wrote persona-voiced, sectioned takes with a memo:
 // the prompt carries the member's lens and bias, the regime numbers and the
-// bold sections, a take missing a section marks the member absent, and every
-// take posts a memo whose url rides the signed draft. The one-shot used to ask
+// three bold sections (guidance, owner 2026-10-06), a take the judge cannot read
+// marks the member absent, and every take posts a memo whose url rides the signed draft. The one-shot used to ask
 // one generic "your reasoning in plain prose" question. These tests pin the
 // production shape at the one-shot's own seams, with a stubbed `fetch`.
 //
@@ -17,7 +17,7 @@ import {
   STRUCTURE_ATTEMPTS,
   takePrompt,
 } from "../../agent/participant/author-take.ts";
-import { IN_HOUSE_PERSONAS, promptFor } from "../../agent/participant/take-prompt.ts";
+import { IN_HOUSE_PERSONAS, judgeShortfalls, MIN_TAKE_WORDS, promptFor, takeSectionLeadIns } from "../../agent/participant/take-prompt.ts";
 import { DEMO_MEMBERS } from "../../lib/smoke-mode.ts";
 
 const ENV = {
@@ -34,8 +34,11 @@ const ENV = {
 };
 
 const WEIGHTS_LINE = `WEIGHTS: ${RECEIPT_CANONICAL_BUCKET_ORDER.map((b, i) => `${b}=${[0.55, 0.15, 0.2, 0.1][i]}`).join(" | ")}`;
-const GOOD_SUBJECT = "**REGIME**\n- composite 0.41\n\n**SUBJECT**\n- Woon is long beta into a cautious tape.\n\nSTANCE: cautious | CONFIDENCE: 0.6";
-const GOOD_ALLOCATION = `**REGIME**\n- composite 0.41\n\n**ALLOCATION**\n- Tilt to yield.\n\n${WEIGHTS_LINE}\nSTANCE: cautious | CONFIDENCE: 0.6`;
+/** A body of `n` words of plain prose: enough for the judge to read a position from. */
+const prose = (n: number): string => Array.from({ length: n }, (_, i) => (i % 9 === 8 ? "cautious," : "tape")).join(" ");
+const ENOUGH = prose(MIN_TAKE_WORDS + 20);
+const GOOD_SUBJECT = `**REGIME**\n- composite 0.41\n\n**ALLOCATION**\n- Tilt to yield.\n\n**SUBJECT**\n- Woon is long beta into a cautious tape: ${ENOUGH}\n\nSTANCE: cautious | CONFIDENCE: 0.6`;
+const GOOD_ALLOCATION = `**REGIME**\n- composite 0.41\n\n**ALLOCATION**\n- Tilt to yield: ${ENOUGH}\n\n${WEIGHTS_LINE}\nSTANCE: cautious | CONFIDENCE: 0.6`;
 
 interface Api {
   recommendationType: string;
@@ -87,15 +90,16 @@ describe("the take prompt is production's persona prompt", () => {
     expect(prompt).toBe(
       promptFor({ memberId: "athena", name: "Athena", lens: "macro risk", bias: -0.1 }, context.regime, "woon", {
         requireWeights: false,
-        targets: [],
+        targets: context.targets,
       }),
     );
     expect(prompt).toContain("You are Athena, an autonomous voice on the Robot Money Investment Swarm.");
     expect(prompt).toContain("through a macro risk lens");
     expect(prompt).toContain("leans cautious");
     expect(prompt).toContain("Composite 0.412");
-    expect(prompt).toContain("**REGIME**");
-    expect(prompt).toContain("**SUBJECT**");
+    // Three sections for every take, production's (owner 2026-10-06), whatever the subject.
+    for (const section of ["**REGIME**", "**ALLOCATION**", "**SUBJECT**"]) expect(prompt).toContain(section);
+    expect(prompt).toContain("exactly three bulleted sections");
     expect(prompt).not.toContain("your reasoning in plain prose");
   });
 
@@ -104,7 +108,7 @@ describe("the take prompt is production's persona prompt", () => {
     const context = await readTakeContext(cfg, fakeFetch(newApi([], "bucket_weights")));
     expect(context.requireWeights).toBe(true);
     const prompt = takePrompt(cfg, context);
-    expect(prompt).toContain("**ALLOCATION**");
+    for (const section of ["**REGIME**", "**ALLOCATION**", "**SUBJECT**"]) expect(prompt).toContain(section);
     expect(prompt).toContain("Sleeve targets in force: Agent Tokens 5% (Virtuals)");
     for (const bucket of RECEIPT_CANONICAL_BUCKET_ORDER) expect(prompt).toContain(`${bucket}=<0-1>`);
   });
@@ -117,15 +121,22 @@ describe("the take prompt is production's persona prompt", () => {
   });
 });
 
-describe("the one-shot refuses a take that is not sectioned, and posts a memo for one that is", () => {
-  test("a sectionless answer is asked for again, then refused: no memo, no draft", async () => {
-    const api = newApi(["Athena thinks it is fine.\nSTANCE: cautious | CONFIDENCE: 0.6", "Still no sections.\nSTANCE: cautious | CONFIDENCE: 0.6"]);
-    await expect(authorTakeDraft(ENV, fakeFetch(api))).rejects.toThrow(/omitted the \*\*REGIME\*\*, \*\*SUBJECT\*\* sections/);
+describe("the one-shot refuses a take the judge cannot read, and posts a memo for one it can", () => {
+  test("a stub is asked for again, then refused: no memo, no draft", async () => {
+    const api = newApi(["Athena thinks it is fine.\nSTANCE: cautious | CONFIDENCE: 0.6", "Still a stub.\nSTANCE: cautious | CONFIDENCE: 0.6"]);
+    await expect(authorTakeDraft(ENV, fakeFetch(api))).rejects.toThrow(new RegExp(`at least ${MIN_TAKE_WORDS}`));
     expect(api.calls.model).toBe(STRUCTURE_ATTEMPTS);
     expect(api.calls.memos).toEqual([]);
   });
 
-  test("a take that drops one section is re-sampled, and the second sample is published", async () => {
+  test("a take with no section headers is NOT refused for that: sections are guidance, the judge reads the prose", async () => {
+    const api = newApi([`${ENOUGH}\nSTANCE: cautious | CONFIDENCE: 0.6`]);
+    const draft = await authorTakeDraft(ENV, fakeFetch(api));
+    expect(api.calls.model).toBe(1);
+    expect(draft).toMatchObject({ memberId: "athena", stance: "cautious", confidence: 0.6, memoUrl: "https://example.test/memo/1" });
+  });
+
+  test("a stub is re-sampled, and the second, readable sample is published", async () => {
     const api = newApi(["**REGIME**\n- only this\n\nSTANCE: cautious | CONFIDENCE: 0.6", GOOD_SUBJECT]);
     const draft = await authorTakeDraft(ENV, fakeFetch(api));
     expect(api.calls.model).toBe(2);
@@ -154,14 +165,14 @@ describe("the one-shot refuses a take that is not sectioned, and posts a memo fo
     expect(draft.weights).toEqual(RECEIPT_CANONICAL_BUCKET_ORDER.map((bucket, i) => ({ bucket, weight: [0.55, 0.15, 0.2, 0.1][i] })));
     expect(String(draft.body)).not.toContain("WEIGHTS");
 
-    const noWeights = "**REGIME**\n- x\n\n**ALLOCATION**\n- y\n\nSTANCE: cautious | CONFIDENCE: 0.6";
+    const noWeights = `**REGIME**\n- x\n\n**ALLOCATION**\n- ${ENOUGH}\n\nSTANCE: cautious | CONFIDENCE: 0.6`;
     const bad = newApi([noWeights, noWeights], "bucket_weights");
     await expect(authorTakeDraft(ENV, fakeFetch(bad))).rejects.toThrow(/WEIGHTS/);
     expect(bad.calls.memos).toEqual([]);
   });
 
   test("a missing control line is not re-sampled: the member is absent", async () => {
-    const api = newApi(["**REGIME**\n- x\n\n**SUBJECT**\n- y"]);
+    const api = newApi([`**REGIME**\n- x\n\n**SUBJECT**\n- ${ENOUGH}`]);
     await expect(authorTakeDraft(ENV, fakeFetch(api))).rejects.toThrow(/control line/);
     expect(api.calls.model).toBe(1);
   });
@@ -173,5 +184,21 @@ describe("the one-shot refuses a take that is not sectioned, and posts a memo fo
     expect(api.calls.memos[0]?.body).toBe(draft.body);
     const other = await authorTakeDraft(ENV, fakeFetch(newApi([GOOD_SUBJECT])));
     expect(String(other.body)).not.toContain("Provenance");
+  });
+});
+
+describe("judgeShortfalls: what a take must carry is what the judge reads", () => {
+  test("the word floor is the whole body check: at the floor passes, one under fails", () => {
+    expect(judgeShortfalls(prose(MIN_TAKE_WORDS))).toEqual([]);
+    expect(judgeShortfalls(prose(MIN_TAKE_WORDS - 1))).toEqual([
+      `the take body has ${MIN_TAKE_WORDS - 1} word(s); the judge needs at least ${MIN_TAKE_WORDS} to read a position from`,
+    ]);
+    expect(judgeShortfalls("   \n  ")).toHaveLength(1);
+  });
+
+  test("no section header is required, whatever the subject, and the prompt still asks for all three", () => {
+    expect(judgeShortfalls(prose(MIN_TAKE_WORDS + 5))).toEqual([]);
+    expect(takeSectionLeadIns({ requireWeights: true })).toEqual(["**REGIME**", "**ALLOCATION**", "**SUBJECT**"]);
+    expect(takeSectionLeadIns({ requireWeights: false })).toEqual(["**REGIME**", "**ALLOCATION**", "**SUBJECT**"]);
   });
 });

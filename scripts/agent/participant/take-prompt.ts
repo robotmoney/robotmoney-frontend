@@ -27,25 +27,57 @@ export interface RegimeContext {
 // The bold section headers `promptFor` demands, and the ONLY definition of
 // them. session.ts's post-session `assertAuthoredTakes` reads the same sets, so
 // the prompt, the author-time check, and the harness assertion can never drift
-// into disagreeing about what a well-formed take looks like.
+// into disagreeing about what the model is asked for. What a take must CARRY is
+// `judgeShortfalls`, not these headers.
 //
-// THE SECTIONS FOLLOW THE SUBJECT. An allocation session (`bucket_weights`)
-// reviews the sleeve targets: REGIME, then ALLOCATION. Every other subject
-// reviews its own book: REGIME, then SUBJECT. Asking every take for all three
-// put an ALLOCATION section, about the vault's framework, into takes on
-// portfolios the framework does not describe.
-const ALLOCATION_TAKE_SECTIONS: readonly string[] = Object.freeze(["**REGIME**", "**ALLOCATION**"]);
-const SUBJECT_TAKE_SECTIONS: readonly string[] = Object.freeze(["**REGIME**", "**SUBJECT**"]);
+// THREE SECTIONS FOR EVERY TAKE (owner, 2026-10-06): REGIME, ALLOCATION, then
+// SUBJECT, exactly production's v0.5.4 prompt. main's #1025 had made them follow
+// the subject (two sections); the owner chose production's three. They shape what
+// the model is asked for and are NOT enforced: see `judgeShortfalls`.
+const TAKE_SECTIONS: readonly string[] = Object.freeze(["**REGIME**", "**ALLOCATION**", "**SUBJECT**"]);
 
-/** The section headers a take on this kind of subject must carry, in order. */
-export function takeSectionLeadIns(options: { requireWeights?: boolean } = {}): readonly string[] {
-  return options.requireWeights ? ALLOCATION_TAKE_SECTIONS : SUBJECT_TAKE_SECTIONS;
+/** The section headers every take is asked for, in order. `options` is kept for callers and changes nothing. */
+export function takeSectionLeadIns(_options: { requireWeights?: boolean } = {}): readonly string[] {
+  return TAKE_SECTIONS;
 }
 
-// Which required section headers a take body is missing ([] when well-formed).
-// Pure and exported so the unit suite can pin it without a spawn.
+// Which section headers a take body lacks ([] when it has them all). GUIDANCE ONLY
+// since 2026-10-06 (owner): the sections shape what the model is asked for, and
+// nothing refuses a take for omitting one. What a take MUST carry is what the
+// judge reads, `judgeShortfalls` below. In production (2026-09-26/27) Woon's
+// takes carried no SUBJECT header and a header check threw after the session had
+// already published, judged, with a receipt.
 export function missingSectionLeadIns(body: string, options: { requireWeights?: boolean } = {}): readonly string[] {
   return takeSectionLeadIns(options).filter((lead) => !body.includes(lead));
+}
+
+/**
+ * The fewest words a take body may have. The judge quotes a member's position as
+ * evidence and finds disagreements between positions, so a stub gives it nothing
+ * to read. Production's takes run about 140 to 180 words; this is a floor against
+ * stubs, not a target.
+ */
+export const MIN_TAKE_WORDS = 40;
+
+/**
+ * THE JUDGE-READY CONTRACT (owner, 2026-10-06: "enforce not by section but by
+ * what the judge needs"). The judge (backend/src/swarm/judge.ts) reads, per take,
+ * the stance, the confidence, the body and the member's own proposed weights. It
+ * needs each take to state a position it can quote and compare. What a take must
+ * carry, and who checks it:
+ *
+ *  - a stance in the vocabulary and a confidence in [0, 1]: `parseStanceFromBody`
+ *    (a missing control line is a member who cannot state a stance, not re-sampled);
+ *  - on an allocation session, a valid four-bucket weight vector: `parseWeightsFromBody`;
+ *  - a body of at least {@link MIN_TAKE_WORDS} words of prose: this function.
+ *
+ * Returns the reasons this body is not judge-ready ([] when it is). Pure, so the
+ * unit suite can pin it, and the ONLY body check the author-time paths and the
+ * post-session harness share.
+ */
+export function judgeShortfalls(body: string): string[] {
+  const words = body.trim().split(/\s+/).filter((w) => w.length > 0).length;
+  return words >= MIN_TAKE_WORDS ? [] : [`the take body has ${words} word(s); the judge needs at least ${MIN_TAKE_WORDS} to read a position from`];
 }
 
 // A sleeve target in force, as the session's own brief carried it
@@ -434,22 +466,21 @@ export function promptFor(
         `This session asks for a NUMBER as well as a view. State your own target split across ALL FOUR Robot Money vault buckets — ${TAKE_WEIGHT_BUCKETS.join(", ")} — as your ${TAKE_WEIGHTS_LEAD_IN} line below. Every bucket must appear exactly once, shares are non-negative, and they must not all be zero; write the split you would actually run, not the targets in force restated. Do not put these numbers anywhere else in the take.`,
       ]
     : [];
-  // The second section: the targets on an allocation session, the subject's
-  // own book on any other (see takeSectionLeadIns).
-  const secondSection = options.requireWeights
-    ? [
-        `**ALLOCATION**`,
-        `- What tilt the regime implies for the sleeve targets${inForce ? " in force" : ""}, and why`,
-        `- Which sleeve or constituent moves first, and the mechanism`,
-        `- The one flip trigger that would change the read`,
-      ]
-    : [
-        `**SUBJECT**`,
-        `- Where ${subjectId} is over- or under-exposed for this regime, against its own holdings and mandate`,
-        `- The specific concentration or mechanism risk you underwrite`,
-        `- The first move you would make, with a trigger`,
-      ];
-  const [first, second] = takeSectionLeadIns(options);
+  // Production's ALLOCATION and SUBJECT sections, asked of every take. The sleeve
+  // targets come from the session's own brief when it carries them (main's 1025),
+  // where production wrote 95/5/0/0 into the prompt whatever the brief said.
+  const allocationSection = [
+    `**ALLOCATION**`,
+    `- What tilt the regime implies for the sleeve targets${inForce ? " in force" : ""}, and why`,
+    `- Which sleeve or constituent moves first and the mechanism`,
+    `- The one flip trigger that would change the read`,
+  ];
+  const subjectSection = [
+    `**SUBJECT**`,
+    `- Where ${subjectId} is over- or under-exposed vs the regime-appropriate allocation`,
+    `- The specific concentration or mechanism risk you underwrite`,
+    `- The first move you would make, with a trigger`,
+  ];
   return [
     `You are ${p.name}, an autonomous voice on the Robot Money Investment Swarm.`,
     `You read every session through a ${p.lens} lens — that lens, not the headline composite, sets your conviction.`,
@@ -462,17 +493,19 @@ export function promptFor(
     `  Macro panel:    ${pct(regime.macroPercentile, comp + 0.08)} percentile, bucket ${regime.macroRegime ?? "n/a"}`,
     `  On-chain panel: ${pct(regime.onchainPercentile, comp - 0.2)} percentile, bucket ${regime.onchainRegime ?? "n/a"}`,
     `  Equity factor:  ${pct(regime.factorPercentile, comp + 0.15)} percentile, bucket ${regime.factorRegime ?? "n/a"}`,
-    ...(options.requireWeights && inForce ? [`Sleeve targets in force: ${inForce}.`] : []),
+    ...(inForce ? [`Sleeve targets in force: ${inForce}.`] : []),
     ``,
     `# Your task`,
-    `Write a structured take in exactly two bulleted sections, ${first} then ${second}, ~140-180 words total. Each section is a bold header line followed by 3 bullets, one claim per bullet. Reply with ONLY the take (no preamble, no tool calls). Format exactly:`,
+    `Write a structured take in exactly three bulleted sections, ~180-220 words total. Each section is a bold header line followed by 3 bullets, one claim per bullet. Reply with ONLY the take (no preamble, no tool calls). Format exactly:`,
     ``,
     `**REGIME**`,
     `- One concrete number from the brief and what it means through your lens`,
     `- The macro vs on-chain (or factor) divergence, if the panels disagree`,
     `- The trailing direction you read`,
     ``,
-    ...secondSection,
+    ...allocationSection,
+    ``,
+    ...subjectSection,
     ``,
     ...weightsBrief,
     ``,

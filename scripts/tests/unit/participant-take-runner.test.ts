@@ -955,7 +955,7 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
           const body = (await req.json()) as { model?: unknown; messages?: { content?: string }[] };
           seen.push({ auth: req.headers.get("authorization"), model: body.model, prompt: String(body.messages?.[0]?.content) });
           return Response.json({
-            choices: [{ message: { content: "**REGIME**\n- composite 0.41\n\n**SUBJECT**\n- The treasury is well covered.\n\nSTANCE: constructive | CONFIDENCE: 0.72" } }],
+            choices: [{ message: { content: `**REGIME**\n- composite 0.41\n\n**ALLOCATION**\n- hold the targets\n\n**SUBJECT**\n- The treasury is well covered. ${Array.from({ length: 45 }, (_, i) => `word${i}`).join(" ")}\n\nSTANCE: constructive | CONFIDENCE: 0.72` } }],
           });
         }
         return new Response("not found", { status: 404 });

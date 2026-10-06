@@ -13,9 +13,10 @@
 //      credential-file entry, D52), at the endpoint and model id the boot
 //      resolved (`RM_INFERENCE_URL`, `RM_INFERENCE_WIRE_ID`). The prompt is
 //      production's persona prompt (take-prompt.ts `promptFor`): lens, bias,
-//      regime numbers, bold REGIME / ALLOCATION-or-SUBJECT sections, and a
-//      STANCE control line. A take missing a section is asked for once more,
-//      then refused.
+//      regime numbers, bold REGIME / ALLOCATION-or-SUBJECT sections (guidance),
+//      and a STANCE control line. A take the judge cannot read (stance, weights
+//      on an allocation session, a body past the word floor) is asked for once
+//      more, then refused. Sections are never what refuses it.
 //   3. Posts the take as the member's memo, then prints exactly one
 //      `RM_TAKE_DRAFT {json}` line: memberId, date, subjectId, stance,
 //      confidence, body, memoUrl — plus the allocation weights when the session
@@ -31,7 +32,7 @@
 import { classifyRegime, ROUTES, path as routePath } from "@robotmoney/contract";
 import {
   IN_HOUSE_PERSONAS,
-  missingSectionLeadIns,
+  judgeShortfalls,
   parseStanceFromBody,
   parseWeightsFromBody,
   promptFor,
@@ -148,12 +149,12 @@ export function takePrompt(cfg: AuthorTakeEnv, context: TakeContext): string {
 }
 
 /**
- * A readable answer that omits a required section or the allocation: an
+ * A readable answer the judge cannot use (too short, or no allocation): an
  * unlucky sample, so the caller asks again and refuses once attempts run out.
  */
 export class ShortTakeError extends Error {}
 
-/** How many times the model is asked for a take that carries every section. Production's number. */
+/** How many times the model is asked for a take the judge can read. Production's number. */
 export const STRUCTURE_ATTEMPTS = 2;
 
 /** The draft the take runner signs, or a refusal naming what was wrong. */
@@ -176,10 +177,8 @@ export function parseTakeAnswer(
       throw new ShortTakeError(err instanceof Error ? err.message : String(err));
     }
   }
-  const missing = missingSectionLeadIns(body, { requireWeights: context.requireWeights });
-  if (missing.length > 0) {
-    throw new ShortTakeError(`the take omitted the ${missing.join(", ")} section${missing.length === 1 ? "" : "s"}`);
-  }
+  const shortfalls = judgeShortfalls(body);
+  if (shortfalls.length > 0) throw new ShortTakeError(shortfalls.join("; "));
   // Production's one provenance footnote, from the shared classifier.
   if (cfg.memberId === "cygnus") {
     body += `\n\n_Provenance: RM classifier: composite ${context.regime.composite.toFixed(3)} → ${classifyRegime(context.regime.composite)}_`;
