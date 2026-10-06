@@ -255,9 +255,10 @@ describe("a remote rehearsal target's tokens come only from the explicit command
     expect(remoteCheck).toBeGreaterThan(-1);
     // …and it runs before the plan's first mutation.
     expect(remoteCheck).toBeLessThan(smokeMain.indexOf("async function main("));
-    // The one provisioning call in the boot is for a database it created.
+    // The one provisioning call in the boot is for a database it created or
+    // restored (`mintsServiceTokens`: blank, or dump without --reuse).
     const provision = smokeMain.indexOf("runTokenProvisioning(");
-    expect(smokeMain.lastIndexOf('(mode === "blank" || mode === "dump")', provision)).toBeGreaterThan(-1);
+    expect(smokeMain.lastIndexOf("if (mintsServiceTokens(mode, reuseTwin)", provision)).toBeGreaterThan(-1);
   });
 
   test("the explicit command provisions a rehearsal target under RM_ENV=stage, receipted", async () => {

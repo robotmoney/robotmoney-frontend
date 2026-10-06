@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseDataPath, requestsReuse, REUSE_FLAG, validateArgv } from "../../lib/smoke-db-mode.ts";
+import { mintsServiceTokens, parseDataPath, requestsReuse, REUSE_FLAG, validateArgv } from "../../lib/smoke-db-mode.ts";
 import { adoptKeptTwin } from "../../lib/smoke-twin.ts";
 import type { StackStateRecord } from "../../lib/smoke-state.ts";
 import type { restartKeptTwinContainer } from "../../lib/restore-container.ts";
@@ -96,5 +96,16 @@ describe("adoptKeptTwin", () => {
       restart: (async () => ({ error: "the kept volume vol is gone; drop --reuse to restore the dump fresh" })) as unknown as typeof restartKeptTwinContainer,
     });
     await expect(adoptKeptTwin(recorded(), STAMP, "p", () => {}, d.deps)).rejects.toThrow(/--reuse: the kept volume vol is gone/);
+  });
+});
+
+describe("a --reuse boot keeps the twin's service tokens (R3.8, stage-2 2026-10-06)", () => {
+  test("only a database this boot created or restored mints tokens", () => {
+    expect(mintsServiceTokens("blank", false)).toBe(true);
+    expect(mintsServiceTokens("dump", false)).toBe(true);
+    // Minting here rotated the tokens under a scheduler that was not recreated: HTTP 403 at readiness.
+    expect(mintsServiceTokens("dump", true)).toBe(false);
+    expect(mintsServiceTokens("volume", false)).toBe(false);
+    expect(mintsServiceTokens("remote", false)).toBe(false);
   });
 });
