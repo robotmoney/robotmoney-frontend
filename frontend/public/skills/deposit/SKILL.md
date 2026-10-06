@@ -6,11 +6,11 @@ description: >
   Robot Money?", "withdraw from Robot Money", or "rebalance my Robot Money
   position". Reads the allocation and each vault on chain, previews the split
   before anything is signed, prepares exact-amount transactions for any
-  wallet on Base (a Safe multisig, a Ledger or Trezor, MetaMask, Rabby), sends
-  them through an agent wallet such as MetaMask's, or deposits through `rmpc`
-  when the owner has a matching gateway, and reports the vault tokens
-  received. Never holds a key,
-  never approves more than the deposit, never swaps outside the vaults.
+  wallet on Base (a Safe multisig, a Ledger or Trezor, an agent wallet such
+  as MetaMask's), sends a human with a browser wallet to the Robot Money
+  dapp, or deposits through `rmpc` once its gateway is set up, and reports
+  the vault tokens received. Never holds a key, never approves more than the
+  deposit, never swaps outside the vaults.
 ---
 
 # Robot Money: deposit
@@ -39,9 +39,10 @@ start of every run.
 
 - **The owner's funds, the owner's signature.** You prepare transactions;
   the depositor signs them with whatever they choose, a Safe's signers
-  included. An agent may sign through an agent wallet inside the limits its
-  owner set (MetaMask's agent wallet in Guard mode is one example) or through
-  `rmpc` under its gateway policy.
+  included. A human who signs in a browser wallet such as MetaMask does it
+  in the Robot Money dapp. An agent may sign through an agent wallet inside
+  the limits its owner set (MetaMask's agent wallet in Guard mode is one
+  example) or through `rmpc` under its gateway policy.
 - **Confirmation is a setting, `confirm`, on unless the owner turns it
   off.** On: show the split, the fees and the gas, and wait for a yes. A
   wallet the owner signs with always shows them the transactions anyway. Off
@@ -93,16 +94,20 @@ a contract, so the addresses here are the deployed ones.
      address: it holds the USDC and receives the vault tokens. You prepare one
      batch; the Safe's signers approve it up to its threshold, and one of them
      executes it.
-   - **A hardware wallet** (Ledger, Trezor), through MetaMask, Rabby or
-     Frame, or from a terminal with `cast --ledger` or `cast --trezor`.
-   - **Any other wallet on Base** (MetaMask, Rabby, Coinbase Wallet): you
-     prepare, they sign.
+   - **A hardware wallet** (Ledger, Trezor), from a terminal with
+     `cast --ledger` or `cast --trezor`. Connected to a browser wallet, it
+     goes through the dapp like one.
+   - **A browser wallet** (MetaMask, Rabby, Coinbase Wallet), for a human:
+     they deposit in the Robot Money dapp. You preview; the dapp sends.
    - **An agent wallet**, for an agent that holds its own funds. MetaMask's
      agent wallet (the `metamask-agent-wallet` skill) is one example: you send
      through it, inside its Guard mode allowlist.
+   - **Any other wallet that takes a prepared transaction**: you prepare,
+     it signs.
    - **`rmpc`**, one option among these. It signs with its default software
-     keystore, with HSM or KMS as optional backends, and needs a corresponding
-     gateway set up (see `deposit` below).
+     keystore, with HSM or KMS as optional backends. Before its first
+     deposit, the owner sets it up with one transaction on the gateway (see
+     `deposit` below).
 4. **Gas.** Read the owner's ETH balance (`cast balance "$OWNER" --rpc-url
    "$RPC" --ether`). A deposit is two transactions and costs a few cents on
    Base. With no ETH, stop and ask the owner to send some to `OWNER` first.
@@ -261,17 +266,24 @@ Send them in order: the approve must be confirmed before the deposit.
   }
   ```
 
-- **A hardware wallet.** Through MetaMask, Rabby or Frame, hand over the
-  prepared transactions; the device shows each one to approve. From a
-  terminal (use `--trezor` for a Trezor):
+- **A hardware wallet**, from a terminal (use `--trezor` for a Trezor); the
+  device shows each transaction to approve. Connected to a browser wallet,
+  it goes through the dapp, as below.
 
   ```bash
   cast send "$USDC" "approve(address,uint256)" "$SPENDER" "$AMOUNT" --ledger --rpc-url "$RPC"
   cast send "$ROUTER" "deposit(uint256,uint256[])" "$AMOUNT" "[$MIN1,$MIN2]" --ledger --rpc-url "$RPC"
   ```
 
-- **Any other wallet.** Hand over the prepared transactions, to sign one at
-  a time. A smart account that supports EIP-5792 takes both as one batch.
+- **A browser wallet such as MetaMask, for a human.** Show them the preview,
+  then send them to the Robot Money dapp: they connect the wallet there and
+  deposit. Do not hand a human calldata to paste into a wallet. The dapp's
+  address is not in this file yet; until it is, offer a Safe or a hardware
+  wallet from a terminal instead.
+
+- **Any other wallet that takes a prepared transaction.** Hand over the
+  prepared transactions, to sign one at a time. A smart account that
+  supports EIP-5792 takes both as one batch.
 
 - **An agent wallet, such as MetaMask's.** Any agent wallet that sends a
   transaction to a chosen address works. For MetaMask's agent wallet, send
@@ -282,11 +294,13 @@ Send them in order: the approve must be confirmed before the deposit.
 
 - **`rmpc`, one option, which needs a matching gateway.** `rmpc` is not a
   wallet: it signs calls to the Robot Money gateway and nothing else, by
-  design. To use it, the owner must have a corresponding gateway set up. The
-  owner authorizes its key once, under a policy with limits, and it deposits
-  through the gateway, which sends the vault tokens to the owner. `rmpc`
-  signs with its default software keystore. An HSM or KMS backend is
-  optional. Until this file lists the gateway, do not use `rmpc` for deposits.
+  design. Before its first deposit, the owner sends one transaction to the
+  gateway that authorizes `rmpc`'s key under a policy with limits. Any
+  wallet can send it, the same as a deposit: a human with a browser wallet
+  does it in the dapp. After that, `rmpc` deposits through the gateway, which
+  sends the vault tokens to the owner. `rmpc` signs with its default software
+  keystore. An HSM or KMS backend is optional. Until this file lists the
+  gateway, do not use `rmpc` for deposits.
 
 After the deposit confirms, run `position` and report the shares received
 per vault.
