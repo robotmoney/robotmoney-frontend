@@ -310,8 +310,8 @@ bun run twin:gate --instance rehearse-060 --wait 35
 Exit 0 only when every check passes. A gate run on a twin whose participants cannot authenticate
 (for example after R3.8's rebind, before the participants are recreated) fails by design: run it
 on a twin in a healthy state, and keep the report. First run 2026-10-05 on `7a4f19ac`: failed on
-a broken twin and listed an unclassified coin-price `DEGRADED` warning. Classify it with evidence
-or fix it before the RC.
+a broken twin and listed a coin-price `DEGRADED` warning. That is a warning, not an error: the gate
+reports an unclassified warning and does not fail on it, and the owner decided no issue is filed for it.
 
 R3.5 Prove the schema gates on the twin (the lines from spec §10 this release depends on):
 migrations all recorded once; `deployment_identity.kind = 'rehearsal'`; `schema_manifest`
