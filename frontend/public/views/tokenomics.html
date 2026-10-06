@@ -3,8 +3,8 @@
      pages' components (.rr-*): a facts row under the hero, sections divided by
      their rule, the fee split as the ring every weight mix on the site uses, a
      table for the buyback record, and a FAQ at the bottom. The hero flock
-     canvas is the boot-registered tokHero() factory (alpine/heroes.js); Copy
-     uses the global [data-copy] handler in main.js. The facts row and the fee
+     canvas is the boot-registered tokHero() factory (alpine/heroes.js). The
+     contract card mirrors the deposit page's install card. The facts row and the fee
      ring are LIVE from GET /api/dashboards/token-metrics via feeChart(), and
      the buybacks from GET /api/dashboards/buybacks via buybackSummary(): no
      baked fee % or buyback rows remain.
@@ -34,14 +34,39 @@
   <header class="tok__hero">
     <div class="tok__hero-art" x-data="tokHero()" aria-hidden="true"></div>
     <div class="tok__hero-inner">
-      <h1 class="tok__h1">Token Economics</h1>
-      <p class="tok__lede">Robot Money's token on Base: a fair launch with no premine, liquidity locked for good, and swap fees that fund buybacks.</p>
-      <!-- The address, beside the headline: what a reader comes here for
-           first. Three buttons of one family; Copy shows what it copies. -->
-      <div class="tok__actions">
-        <button type="button" class="rr-btn tok__copy" data-copy="0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" data-copied-text="Copied" aria-label="Copy the contract address, 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3"><span data-copy-label>Copy</span><span class="tok__addr" aria-hidden="true">0x6502…bEbA3</span></button>
-        <a class="rr-btn tok__btn" href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">BaseScan</a>
-        <a class="rr-btn tok__btn" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener</a>
+      <div class="tok__hero-copy">
+        <h1 class="tok__h1">Token Economics</h1>
+        <p class="tok__lede">Robot Money's token on Base: a fair launch with no premine, liquidity locked for good, and swap fees that fund buybacks.</p>
+      </div>
+
+      <!-- The contract card sits beside the headline, as the install card does
+           on the deposit page: the address is what a reader comes here for
+           first. Same anatomy: a labelled head, the value with an icon copy
+           button, then the ways out. -->
+      <div class="tok__card" x-data="{ copied: false }">
+        <div class="tok__card-head">
+          <span class="tok__card-label">Contract address on Base</span>
+        </div>
+        <div class="tok__card-body">
+          <code class="tok__card-addr">0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3</code>
+          <!-- Icon only, as on the deposit page: aria-label carries the meaning,
+               and it flips to a tick on success so the state is not colour-only. -->
+          <button type="button" class="tok__card-copy" :class="copied && 'is-copied'"
+            @click="navigator.clipboard.writeText('0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3'); copied = true; setTimeout(() => copied = false, 2000)"
+            :aria-label="copied ? 'Address copied' : 'Copy the contract address'">
+            <svg x-show="!copied" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="5.5" y="5.5" width="9" height="9" stroke="currentColor" />
+              <path d="M11 3.5H2.5v8.5" stroke="currentColor" />
+            </svg>
+            <svg x-show="copied" x-cloak width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M2.5 8.5l4 4 7-9" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+          </button>
+        </div>
+        <div class="tok__card-links">
+          <a class="rr-btn" href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">BaseScan</a>
+          <a class="rr-btn" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener</a>
+        </div>
       </div>
     </div>
   </header>
@@ -208,26 +233,77 @@
 }
 .tok__hero-art { position: absolute; inset: 0; z-index: 0; }
 .tok__hero > *:not(.tok__hero-art) { position: relative; z-index: 1; }
-.tok__hero-inner { position: relative; z-index: 1; width: 100%; max-width: 80rem; margin-inline: auto; padding: 2.5rem 1.5rem; }
+.tok__hero-inner {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 80rem;
+  margin-inline: auto;
+  padding: 2.5rem 1.5rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2rem;
+  /* start, not center: centring the copy against a taller facing card
+     drops the headline below the offset every other hero pins it to. */
+  align-items: start;
+}
+@media (min-width: 60rem) {
+  /* Wide enough that the address sits on one line. */
+  .tok__hero-inner { grid-template-columns: minmax(0, 1fr) minmax(0, 30rem); gap: 2.5rem; }
+}
+.tok__hero-copy { min-width: 0; }
 .tok__h1 {
   font-family: var(--font-display);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: -0.01em;
   line-height: 1.05;
-  margin: 0 0 1rem;
+  margin: 0 0 1.25rem;
 }
-.tok__lede { margin: 0; font-size: 1.05rem; line-height: 1.6; color: var(--color-text-soft); max-width: 42rem; }
+.tok__lede { margin: 0; font-size: 1.0625rem; line-height: 1.65; color: var(--color-text-muted); max-width: 44rem; }
 
-/* Three buttons of the one outlined family, on the void so the art does not
-   show through them. Copy carries the address it copies, in the figure face
-   and its own case; its label holds the width of "Copied" so the swap does
-   not move its neighbours. */
-.tok__actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 2rem; }
-.tok__actions .rr-btn { display: inline-flex; align-items: center; gap: 0.75rem; background: var(--color-void); text-decoration: none; }
-.tok__copy [data-copy-label] { min-width: 6ch; text-align: left; }
-.tok__addr { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--color-text-soft); }
-.tok__copy.is-copied { border-color: var(--color-text); }
+/* The contract card: the deposit page's install card (.sk__install-card,
+   deposit.html), value for value, so the two heroes read as one system. */
+.tok__card { background: var(--color-surface); border: 1px solid var(--color-border); min-width: 0; }
+.tok__card-head { padding: 0.6rem 1rem; border-bottom: 1px solid var(--color-border); }
+.tok__card-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-muted);
+}
+.tok__card-body { display: flex; align-items: center; gap: 0.6rem; padding: 1rem; }
+.tok__card-addr {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+.tok__card-copy {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  background: none;
+  border: 1px solid var(--color-border-light);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+/* The frame goes to the text colour on hover, never to cyan. Copied is the
+   tick, not a hue, so it holds the hover state rather than a colour. */
+.tok__card-copy:hover,
+.tok__card-copy.is-copied { border-color: var(--color-text); }
+/* The card's two ways out, side by side at its width: the outlined family,
+   since neither is the page's one call to action. */
+.tok__card-links { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; padding: 0 1rem 1rem; }
+.tok__card-links .rr-btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 
 /* Body: the site column, as the regime page's. */
 .tok__body { max-width: 80rem; margin: 0 auto; padding: 0 1.5rem; overflow-x: clip; }
