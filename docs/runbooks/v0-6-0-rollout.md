@@ -131,6 +131,7 @@ point is a database restore (section 8).
 | `rm_owner` | Becomes `LOGIN` (one-time, via `doadmin`). Password typed per run, never stored | R6.2b |
 | Service tokens | Three (`system-scheduler`, `analytics-producer`, operator admin) in the api's token store; secrets in per-instance files under `~/.local/state/robotmoney-smoke/rm_prod/tokens/<holder>/token`. Replaces `ADMIN_TOKEN` | R6.5 |
 | Participants | Standing containers from `credential.json`. The judge is a participant (`themis`), no inline judging, no fallback path | R6.2, R6.7 |
+| In-house keys | **One-time credential migration (this release only).** The three seated agents and the judge move from the committed fixture keys to the keys in `credential.json`. It runs once, at the cutover, and never on a later boot. See R6.7 | R6.7 |
 | Sessions | Timed by `system-scheduler` per subject epoch. No schedule rows, nothing to enable. The host driver is retired | Stop the driver at R6.1 |
 | Deletes | No runtime role deletes. Pruning is `bun run prune` (typed `rm_owner`, 7-day floor) | Not part of the cutover |
 | Site | Own unit. `bun smoke:web` refuses a site whose `apiRange` excludes the running api, and `bun smoke` refuses an api outside the live site's range | R6.10 |
@@ -466,10 +467,23 @@ receipts it. It writes nothing.
 R6.5 `bun scripts/prod-init.ts provision-tokens` — typed `rm_owner`, `y`. Mints the three
 service tokens. Re-running is a rotation.
 
-R6.7 **Bring the stack up** (the exact order for `rebind-members` is set by R3.8):
+R6.7 **Bring the stack up, then run the one-time credential migration.** This release moves the
+in-house members from the committed fixture keys to the keys in `credential.json`. That move is
+the **rebind**, and it is a release-specific, one-time step:
+
+- It runs **once, at this cutover**. It is spec section 9.1 step 6, a one-time initialization,
+  and it is never part of `bun smoke` or of any later boot.
+- It touches only the in-house roster in `credential.json` (agents `athena`, `noop-analyst`,
+  `robot-money`; judge `themis`). No external member is rebound.
+- It is **one-way**. The old fixture keys stop working at once. Running participants answer 401
+  until they are recreated (R3.8).
+- It is **not a standing check**. It belongs to this runbook only. A later release repeats it only
+  if that release changes who holds which key, and says so in its own runbook.
+
+Order, proven on stage-2 (R3.8):
 
 ```bash
-bun smoke --static-port       # prints plan, takes locks, preflight, replaces services, exits
+bun smoke --static-port       # boot 1: prints plan, takes locks, preflight, replaces services, exits
 bun smoke:status
 ```
 
@@ -479,7 +493,15 @@ Then, with the api up, rotate each seated member from fixture keys to `credentia
 bun scripts/prod-init.ts rebind-members
 ```
 
-Re-run `bun smoke --static-port` now. It is required: R3.8 showed every running participant answers 401 after the rebind until a new plan recreates it with the new bearers.
+Then boot again. This is required, and it is a new plan, not a resume, because the rebind changed
+the credential file's key fingerprints. On production's remote database a new plan restores nothing
+and recreates the participants with the new bearers:
+
+```bash
+bun smoke --static-port       # boot 2: recreates the participants on the new bearers
+```
+
+From here on, every boot is a normal boot. Nothing is rebound again.
 
 R6.8 Preflight must pass at boot. If it refuses, the printed check number names the cause
 (1 role auth, 2 privileges, 3a manifest, 3b compat, 4 `~/.env` keys, 5 identity, 6 subject
