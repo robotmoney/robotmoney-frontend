@@ -1,6 +1,6 @@
 // The pure decisions both gates share (scripts/lib/gate/grade.ts), including the
 // model-outcome rule: a model timeout or rejected take is reported, a dead judge
-// or an unjudged publish fails.
+// or an unjudged publish fails; a no_consensus publish is a warning (owner, 2026-10-06).
 import { describe, expect, test } from "bun:test";
 import { evaluateContainers, evaluateJudgeConfig, evaluateParticipants, evaluateSessions, type SessionRow } from "../../lib/gate/grade.ts";
 import type { ContainerState } from "../../lib/gate/io.ts";
@@ -20,11 +20,24 @@ describe("evaluateSessions", () => {
     expect(v.warnings).toEqual([]);
   });
 
-  test("a session that published no_consensus fails: an unjudged publish is a platform failure", () => {
+  test("a session that published no_consensus is a warning, not a failure, and never counts as good", () => {
+    const v = evaluateSessions(
+      [good("1", "a"), good("2", "b"), good("3", "b", { outcome: "no_consensus", judged: false, receipt: false })],
+      subjects, 8, opts,
+    );
+    expect(v.failures).toEqual([]);
+    expect(v.warnings).toEqual(["session 3 (b) published no_consensus: an acceptable outcome, not counted as a good session"]);
+    expect(v.goodBySubject.get("b")).toBe(1);
+  });
+
+  test("a subject whose only session is no_consensus still fails the per-subject minimum", () => {
     const v = evaluateSessions([good("1", "a"), good("2", "b", { outcome: "no_consensus", judged: false, receipt: false })], subjects, 8, opts);
-    expect(v.failures).toContain("session 2 (b) published unjudged (judging outcome 'no_consensus')");
-    expect(v.failures).toContain("session 2 (b) published without an applied model/enforce judgement");
-    expect(v.failures.join("\n")).toContain("subject b: 0 published, judged, attended session(s)");
+    expect(v.failures).toEqual(["subject b: 0 published, judged, attended session(s) in the window; need 1"]);
+  });
+
+  test("judged without a receipt still fails even beside a no_consensus session", () => {
+    const v = evaluateSessions([good("1", "a", { receipt: false }), good("2", "b", { outcome: "no_consensus", judged: false, receipt: false })], subjects, 8, opts);
+    expect(v.failures).toContain("session 1 (a) published without a consensus receipt");
   });
 
   test("a judge switched off (not_judged) fails the same way", () => {

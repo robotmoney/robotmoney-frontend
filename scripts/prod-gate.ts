@@ -33,8 +33,9 @@
 //   sessions      baseline: no session stuck past --stuck-after; post-release:
 //                 every subject publishes --min-sessions judged, attended
 //                 sessions in the window, and sessions have not stopped. A
-//                 session that published unjudged (no_consensus, not_judged, no
-//                 model judgement, no receipt) fails
+//                 session that published unjudged (not_judged, no model
+//                 judgement, no receipt) fails; `no_consensus` is an acceptable
+//                 outcome, listed as a warning and never counted as good
 //   inventory     every distinct error/warning of every container, default deny
 //
 // Read-only by construction: every query runs through the api container on a
