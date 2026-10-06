@@ -363,7 +363,9 @@ describe("no runtime path deletes (spec §10 W2, D55 (6))", () => {
       "src/api/routes/submissions.ts",
       "src/chain/historical-prices.ts",
       "src/chain/token-prices.ts",
-      "src/analytics/analyze/tool.ts",
+      // Moved to packages/analyst-sdk (issue #1095); src/analytics/analyze/tool.ts
+      // is now a re-export shim. The SDK is pure (no SQL tag can import there).
+      "../packages/analyst-sdk/src/analyze/tool.ts",
     ];
     for (const file of named) {
       expect(/\.delete\(/.test(readFileSync(join(BACKEND, file), "utf8")), file).toBe(true);

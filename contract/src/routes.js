@@ -352,8 +352,24 @@ export const ROUTES = {
     },
   },
 
-  // Analytics-provider ingestion boundary (issue #106). Every route requires the
-  // ANALYTICS_TOKEN bearer (analytics-provider role); updater processes call
+  // Issue #1095: the tokenless, read-only analytics data API. A SEPARATE prefix
+  // from `analytics` below on purpose: that one is credential-gated by a
+  // `startsWith("/api/analytics/")` match in the api and is a credentialed-CORS
+  // prefix, so a public route under it would inherit both. GET only; every other
+  // method answers 405. Each list route takes ?limit= (default 100, cap 1000)
+  // and ?cursor= (opaque, from the previous page's `nextCursor`), and its body
+  // carries a `schemaVersion` and validates against the JSON schema of the same
+  // name in contract/src/schemas/. Regime outputs and correlations are NOT
+  // here: they stay on `dashboards.regimeSnapshots` (?include=backtest).
+  publicAnalytics: {
+    rawHistory: "/api/public/analytics/raw-history", // GET ?indicator=&from=&to=&limit=&cursor= → raw_indicator_history rows
+    assetPrices: "/api/public/analytics/asset-prices", // GET ?symbol=&from=&to=&limit=&cursor= → asset_prices rows
+    vintages: "/api/public/analytics/vintages", // GET ?run_key=&tool_id=&include=members&limit=&cursor= → frozen data vintages
+    overwriteEvents: "/api/public/analytics/overwrite-events", // GET ?table_name=&limit=&cursor= → recorded revisions
+  },
+
+  // Analytics-provider ingestion boundary (issue #106). Every route requires an
+  // analytics-provider store token (D52); updater processes call
   // these instead of writing SQL. Mutations validate the whole payload before
   // opening a transaction and are idempotent on their natural keys. There is NO
   // generic SQL-over-HTTP endpoint.

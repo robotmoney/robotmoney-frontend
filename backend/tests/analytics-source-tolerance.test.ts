@@ -21,8 +21,10 @@ const repoRoot = join(import.meta.dir, "..", "..");
 
 function extractorFiles(): string[] {
   const out: string[] = [];
-  for (const dir of ["extract", "access"]) {
-    for (const f of readdirSync(join(srcDir, dir))) if (f.endsWith(".ts")) out.push(join(srcDir, dir, f));
+  // The indicator capture call site moved to the SDK with sources.ts (issue #1095 part B).
+  const dirs = [join(srcDir, "extract"), join(srcDir, "access"), join(repoRoot, "packages", "analyst-sdk", "src", "extract")];
+  for (const dir of dirs) {
+    for (const f of readdirSync(dir)) if (f.endsWith(".ts")) out.push(join(dir, f));
   }
   return out;
 }
@@ -49,7 +51,8 @@ function extractorSourceKeys(): Set<string> {
     // is data-source.ts's local `acquire` wrapper forwarding its parameter; the
     // keys it forwards are read from the acquire(...) calls below.
     for (const m of text.matchAll(/sourceKey:\s*("[^"]*"|`[^`]*`|[\w.]+)/g)) {
-      if (m[1]!.trim() === "key") continue;
+      // `string` is the AcquisitionMeta type declaration in the SDK, not a call site.
+      if (m[1]!.trim() === "key" || m[1]!.trim() === "string") continue;
       for (const k of resolve(m[1]!, file)) keys.add(k);
     }
     // acquire("<provider>", <key>, ...)

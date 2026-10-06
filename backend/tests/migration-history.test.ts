@@ -146,6 +146,7 @@ const NOT_IN_PRODUCTION = [
   "0109_rm_worker_wallet_evidence_insert.sql",
   "0110_drop_swarm_judge_fault_injection.sql",
   "0111_swarm_judge_model_deepseek_v4_1_flash.sql",
+  "0112_rm_app_overwrite_events_read.sql",
 ] as const;
 
 useCleanDatabase(import.meta.file);

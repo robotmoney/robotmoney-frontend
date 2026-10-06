@@ -229,6 +229,7 @@ describe("v0.5.1 applies 0061 and 0063; 0062 was recorded before it", () => {
     "0109_rm_worker_wallet_evidence_insert.sql",
     "0110_drop_swarm_judge_fault_injection.sql",
     "0111_swarm_judge_model_deepseek_v4_1_flash.sql",
+    "0112_rm_app_overwrite_events_read.sql",
   ];
 
   test("the job ledger 0088 created is dropped by a later file, never by deleting 0088 (criterion 105)", () => {

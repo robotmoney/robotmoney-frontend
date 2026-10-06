@@ -129,6 +129,14 @@ operated until its tools are implemented.
 
 For frontend-only work, use [preview mode](#preview-mode--view-the-site-with-no-backend).
 
+## Public data API
+
+Raw indicator history, asset prices, data vintages and revisions are readable without
+a token under `/api/public/analytics/` (GET only, rate limited). The route list, curl
+examples, paging rules and per-source data terms are in
+[`packages/analyst-sdk/README.md`](packages/analyst-sdk/README.md#public-data-api).
+Regime outputs stay on `GET /api/dashboards/regime-snapshots?include=backtest`.
+
 ## Useful commands
 
 ```bash

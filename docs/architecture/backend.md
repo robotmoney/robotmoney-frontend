@@ -85,5 +85,20 @@ Four distinctions, kept deliberately separate:
   the API boundary is backed by database permissions. Migration
   `0007_committee_rls_stub.sql` documents deferred Postgres RLS; it is
   intentionally not active until requests use transaction-scoped database roles.
+- **Raw analytics reads are public** (D58, issue #1095). Raw indicator history,
+  asset prices, data vintages and overwrite events are readable without a
+  credential under `/api/public/analytics/`, a prefix of its own (not under
+  `/api/analytics/`, which stays analytics-provider-only and credentialed). The
+  routes are GET only, rate limited per client ip per process, cacheable, gzip
+  over 256 KB; regime outputs stay on
+  `GET /api/dashboards/regime-snapshots`, which states its `source`. Reading
+  `analytics_overwrite_events` as `rm_app` is migration 0112's one grant. The
+  write side is unchanged: only the analytics provider writes this data.
+  Raw keys are never deleted, but a value is revised in place when a fetched
+  value differs beyond its source's D56 tolerance; each revision lands in
+  `analytics_overwrite_events` and `source_value_versions`.
+  `regime_snapshots` is a current view; the ledger (from 2026-09-21, migrations
+  0058/0059) is the record of what was published. Regime ledger runs are idempotent
+  per `run_key`; vintages per (run_id, tool_id). Restoring missed as-of days is tracked in #1162.
 
 ---

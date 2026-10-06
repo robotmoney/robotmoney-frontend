@@ -113,6 +113,12 @@ export const ROUTES: {
       audit: string;
     };
   };
+  publicAnalytics: {
+    rawHistory: string;
+    assetPrices: string;
+    vintages: string;
+    overwriteEvents: string;
+  };
   analytics: {
     readiness: string;
     rawHistory: string;
