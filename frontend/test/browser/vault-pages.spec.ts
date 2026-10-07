@@ -1066,7 +1066,9 @@ async function covenantFindings(page: Page, root: string): Promise<string[]> {
         const hued = paints.filter((p) => (HUES as string[]).includes(p));
         if (el.getAttribute("data-mark") === "series") {
           if (!hued.length) out.push(`series mark off the vault hues on ${tag}: ${paints.join(" / ")}`);
-        } else if (hued.length) {
+        } else if (hued.length && !el.matches(".rm-pulse")) {
+          // The live mark is green by decision (David, 2026-10-06), and it is a
+          // state, not a series: the beat tells it from a swatch.
           out.push(`vault hue with no data-mark on ${tag}: ${hued.join(" / ")}`);
         }
       }
