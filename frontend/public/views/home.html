@@ -1,6 +1,6 @@
 <!-- Home route view — injected into <main id="view"> by the client router.
-     Order mirrors robotmoney-site/src/app/page.tsx:
-     Hero (substrate + terminal), Disclaimer, divider, Problem, Architecture,
+     Order follows robotmoney-site/src/app/page.tsx, minus its disclaimer band:
+     Hero (substrate + terminal), divider, Problem, Architecture,
      Token, divider, Contract, Governance. The Footer lives in the SPA shell. -->
 
 <!-- ── Hero ── -->
@@ -65,25 +65,6 @@
       <span class="hero__scroll-label">Scroll</span>
       <div class="hero__scroll-line"></div>
     </div>
-  </div>
-</section>
-
-<!-- ── Disclaimer ── -->
-<section class="disclaimer">
-  <div class="disclaimer__inner">
-    <!-- The launch-era sentence is gone. "A design document and first
-         experiment" understates a vault that is deployed on Base with the
-         exit fee enforced in the contract, and "likely to take 6-12 months"
-         is a countdown nobody restarts, so it is wrong the day after it is
-         written. The /changelog link went with it: the hero CTA above and
-         the footer both already point there. /disclaimer stays in prose
-         because it is worth one click from the top of the page. -->
-    <p class="disclaimer__text">
-      The protocol is built in public and still being built. Parts of what
-      follows are live and parts are planned; where a mechanism is not built,
-      the page says so. Consider the <a href="/disclaimer">disclaimer</a> herein.
-    </p>
-    <p class="disclaimer__sub">Implementation details below are subject to change as development progresses.</p>
   </div>
 </section>
 

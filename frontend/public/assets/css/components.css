@@ -1,6 +1,6 @@
 /* Semantic component classes replacing the original Tailwind utility soup.
-   Ported from src/components/Navigation.tsx and src/app/page.tsx (hero +
-   disclaimer). Mobile-first; lg breakpoint = 1024px, md = 768px. */
+   Ported from src/components/Navigation.tsx and src/app/page.tsx (hero).
+   Mobile-first; lg breakpoint = 1024px, md = 768px. */
 
 [x-cloak] { display: none !important; }
 
@@ -467,17 +467,6 @@
   .hero__cols { grid-template-columns: 1fr 1fr; gap: 5rem; }
   .hero__title { font-size: 4.5rem; }
 }
-
-/* ════════ Disclaimer ════════ */
-.disclaimer { background: #1a1408; border-block: 1px solid rgba(245, 166, 35, 0.3); }
-.disclaimer__inner { max-width: 56rem; margin-inline: auto; padding: 1.5rem; text-align: center; }
-.disclaimer__text { font-size: 0.875rem; font-family: var(--font-sans); color: #f5a623; margin: 0; }
-.disclaimer__text a { color: var(--color-link); text-decoration: underline;
-  text-decoration-color: var(--color-link-line); text-decoration-thickness: 1px;
-  text-underline-offset: 3px; }
-.disclaimer__text a:hover { text-decoration-color: var(--color-link); }
-.disclaimer__sub { font-size: 0.75rem; font-family: var(--font-sans); color: rgba(245, 166, 35, 0.5); margin: 0.5rem 0 0; }
-@media (min-width: 768px) { .disclaimer__text { font-size: 1rem; } }
 
 /* The footer lives in sections/footer.css, which is the real port of the
    original site's markup. A stub predating that port used to sit here and drew

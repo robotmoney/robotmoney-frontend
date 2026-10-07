@@ -42,10 +42,12 @@
 // - zyfai.png       Supplied by the team on an opaque #0C131C plate. The
 //                   plate is lifted out (edge pixels un-mixed against it) for
 //                   the same reason as shodai's; the mark itself is untouched.
-// - robot-money.svg Our own brand-assets/mark.svg, unchanged.
+// - robot-money.svg Our own brand-assets/mark.svg, unchanged. Themis wears it
+//                   too (RM-172): the judge is ours as well, and its Judge role
+//                   pill tells it apart from the member named Robot Money.
 //
 // Athena, Noop Analyst and Maximus deliberately keep derived marks. Athena and
-// Noop Analyst are house personas, and giving them the house mark would make
+// Noop Analyst are house analysts, and giving them the house mark would make
 // them indistinguishable from the member literally named Robot Money.
 //
 // Keyed on `handle`, not `id`: the handle is the stable public URL segment and
@@ -58,6 +60,7 @@ export const MEMBER_LOGOS = {
   woon: "/avatars/swarm/peaq.png",
   zyfai: "/avatars/swarm/zyfai.png",
   "robot-money": "/avatars/swarm/robot-money.svg",
+  themis: "/avatars/swarm/robot-money.svg",
 };
 
 /**

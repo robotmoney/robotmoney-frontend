@@ -1,8 +1,9 @@
 // The consensus judge's public record: a judgement is its own record with its
 // own page, as a take is, and a judge's member page lists its judgements. A
-// session has one judge (the house judge by default, one picked at random
-// when several are seated, never one related to the session's subject or
-// members), and its page shows that judge's opinion.
+// session has one judge of record: the active judge with the lowest member id
+// that filed no take in it, an outside judge only once the third-party gate is
+// on. Another judge's judgement stays on file and forms no consensus. The
+// session's page shows the judge of record's opinion.
 //
 // What a judgement is NOT, and what every surface below must not imply: it
 // never edits or scores a take, and it never sets a weight (the weights are
@@ -12,33 +13,16 @@
 // "safe" never prints: on a page about money the word reads as a safety claim.
 import { api, ROUTES, path } from "./api.js";
 
-// THE THREE PATHS, AND WHETHER THEY ARE SERVED (RM-130). The frontend's route
-// table is the vendored contract (contract/routes.js), and the backend serves
-// exactly the contract's routes, so a route it does not declare has nothing
-// behind it: the vault loader reads the four-vault route the same way
-// (lib/vault-source.js declaredVaultsRoute). A release that holds #1017 back
-// ships without these three, and a 404 from a declared one means the same.
-//
-// Not served is not "none yet". A judge's page that said "No judgement
-// published yet" while its judgements could not be read would be false, so a
-// loader answers null for "not served" and [] for "none", and asks nothing of
-// a route the contract does not declare. Revert with the release that ships
-// #1017.
+// THE THREE PATHS, as the vendored contract (contract/routes.js) names them.
 const SWARM = /** @type {Record<string, string>} */ (/** @type {unknown} */ (ROUTES.swarm));
 export const JUDGEMENT_ROUTES = {
-  session: SWARM.sessionJudgements || null,
-  one: SWARM.judgement || null,
-  member: SWARM.memberJudgements || null,
+  session: SWARM.sessionJudgements,
+  one: SWARM.judgement,
+  member: SWARM.memberJudgements,
 };
 
-// A declared route that answered "not here" stays not here for the visit, so
-// one 404 is all a reader's console ever shows.
-let judgementsAbsent = false;
-/** For tests. */
-export function _resetJudgementProbe() { judgementsAbsent = false; }
-
 /** @param {any} e */
-const routeAbsent = (e) => e?.status === 404 || e?.code === "not_json";
+const noRecord = (e) => e?.status === 404 || e?.code === "not_json";
 
 // The house's own judge, as the backend spells it when no seated member
 // judged, by the company that runs it (RM-97): "Robot Money" already names too
@@ -92,45 +76,42 @@ export function normalizeJudgement(raw) {
 }
 
 // ── loaders ──────────────────────────────────────────────────────────────
-// A list: the judgements, [] when there are none, and null when they are not
-// served (the route undeclared, absent, or failing), so its page can leave
-// the record out rather than call it empty.
-/** @param {string | null} route @param {Record<string, string>} [query] */
+// A list: the judgements, [] when there are none, and null when the read
+// failed. A failed read is not "none yet": a judge's page that said "No
+// judgement published yet" while its judgements could not be read would be
+// false, so its page leaves the record out instead.
+/** @param {string} route @param {Record<string, string>} [query] */
 async function listFrom(route, query) {
-  if (!route || judgementsAbsent) return null;
   try {
     const res = await api.get(route, query);
     return (Array.isArray(res?.judgements) ? res.judgements : []).map(normalizeJudgement).filter(Boolean);
-  } catch (e) {
-    if (routeAbsent(e)) judgementsAbsent = true;
+  } catch (_) {
     return null;
   }
 }
 
 /** @param {string | null | undefined} sessionId @returns {Promise<any[] | null>} */
 export function loadSessionJudgements(sessionId) {
-  if (!sessionId || !JUDGEMENT_ROUTES.session) return Promise.resolve(sessionId ? null : []);
-  return listFrom(path(JUDGEMENT_ROUTES.session, { id: sessionId }));
+  return sessionId ? listFrom(path(JUDGEMENT_ROUTES.session, { id: sessionId })) : Promise.resolve([]);
 }
 
 /** @param {string | null | undefined} memberRef @returns {Promise<any[] | null>} */
 export function loadMemberJudgements(memberRef) {
-  if (!memberRef || !JUDGEMENT_ROUTES.member) return Promise.resolve(memberRef ? null : []);
-  return listFrom(path(JUDGEMENT_ROUTES.member, { id: memberRef }), { limit: String(MEMBER_JUDGEMENTS_MAX) });
+  return memberRef
+    ? listFrom(path(JUDGEMENT_ROUTES.member, { id: memberRef }), { limit: String(MEMBER_JUDGEMENTS_MAX) })
+    : Promise.resolve([]);
 }
 
-// One judgement: null when there is no such public record (404, a host whose
-// static fallback answered in the API's place, or a release that does not
-// serve judgements), and a throw for any other failure, so its page can tell
-// "not found" from "could not load".
+// One judgement: null when there is no such public record (404, or a host
+// whose static fallback answered in the API's place), and a throw for any
+// other failure, so its page can tell "not found" from "could not load".
 /** @param {string} id */
 export async function loadJudgement(id) {
-  if (!JUDGEMENT_ROUTES.one || judgementsAbsent) return null;
   try {
     return normalizeJudgement(await api.get(path(JUDGEMENT_ROUTES.one, { id })));
   } catch (e) {
     const err = /** @type {any} */ (e);
-    if (routeAbsent(err)) return null;
+    if (noRecord(err)) return null;
     throw e;
   }
 }
