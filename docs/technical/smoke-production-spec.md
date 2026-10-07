@@ -165,7 +165,7 @@ Both share three rules. 0081's DDL, its `schema_migrations` row and the identity
 
 ### 4.4 No smoke overlay
 
-There is no `docker-compose.smoke.yml`. Its one surviving knob is an explicit flag, `--allow-insecure`, that is a refusal when `RM_ENV=prod`. There is no `--schedules-off`: scheduling has no off state. Stage runs the real `system-scheduler` against subjects whose epoch and judging durations were set short through the admin API ([`system-scheduler-spec.md`](./system-scheduler-spec.md) §2.3, §8). Parity with production is a tested property.
+There is no `docker-compose.smoke.yml`. Its one surviving knob is an explicit flag, `--allow-insecure`, that is a refusal when `RM_ENV=prod`. There is no `--schedules-off`: scheduling has no off state. Stage runs the real `system-scheduler` against subjects whose epoch and judging durations were set short through the admin API ([`system-scheduler-spec.md`](./system-scheduler-spec.md) §2.3, §8). On a twin the operator does it with `bun run twin:accelerate` after READY (standing check SR.9): the subjects' durations through the admin API, the twin's restored open windows pulled in on its own container, and a scheduler restart, because an `updated` subject change re-arms no timer. The boot itself still changes no scheduling column. Parity with production is a tested property.
 
 ## 5. Local Postgres (stage override)
 
@@ -180,6 +180,8 @@ There is no `docker-compose.smoke.yml`. Its one surviving knob is an explicit fl
 | `volume[=<name>]` | reattaches a Docker volume from a previous run of this instance with its saved credentials |
 
 `--reuse` is a modifier of `dump` only (amended 2026-10-06, issue 1174). A `dump` boot restores fresh by default, so a second boot never rehearses an already-migrated copy. With `--reuse`, the boot uses the smoke-twin this instance recorded and kept: a live container is adopted, a container that is gone is started again on its kept volume, and nothing is restored. It refuses when the instance records no twin or the twin came from another backup. It exists for the one rehearsal that needs the migrated copy again: the boot after `prod-init rebind-members` (runbook R3.8).
+
+**Which dump (owner, 2026-10-06).** A rehearsal restores a dump captured from production for that run, unless the operator names one. It never picks up a dump or twin left on the host. `--reuse`, `volume` and an earlier capture serve a rapid turnaround between test runs only, and only while the capture is at most 24 hours old (`manifest.json` `capturedAt`). Release policy [§4.3](./release-runbooks.md#43-backup-and-restore-proof).
 
 A **twin** is a use case, not a mode: a production-shaped database used for rehearsal, usually `--local dump`, sometimes a remote connection to a restored database.
 
@@ -211,9 +213,11 @@ Each roster entry is one long-lived container (`restart: unless-stopped`) that b
 
 **Idempotent submission, one final take.** A submission is identified by its signed `nonce`. A participant writes its signed submission into its workspace before sending it, so a crash-restart resends the same bytes. A resubmission whose nonce is already recorded for that member and session is a retry: it returns the existing record and the participant treats it as success. A new nonce is an intentional amendment, allowed while the window is open: each is its own signed row, and accepting one marks it final and unsets the member's previous one ([D51](../decisions.md#d51)). A partial unique index on `(session, member) WHERE final` makes two final takes impossible even when two submissions race, and `rm_app` may `UPDATE` only the `final` column of `swarm_recommendations`. An old and a new container overlapping during a roster change can therefore produce an amendment, never a second final take. One take in flight per participant.
 
+**What a take must carry (owner, 2026-10-06).** The judge reads, per take, the stance, the confidence, the body and the member's own proposed weights, and needs a position it can quote and compare. So a take is refused only when the judge cannot read it: no `STANCE`/`CONFIDENCE` control line (the member is absent, not re-sampled), no valid four-bucket weight vector on an allocation session (`bucket_weights`), or a body under 40 words (re-sampled once, then the member is absent). Section headers are **prompt guidance, not a gate**: every take is asked for production's three sections, REGIME, ALLOCATION and SUBJECT, in the member's own voice, with the sleeve targets taken from the session's brief, and no take is refused for omitting a header. One function (`judgeShortfalls`, `scripts/agent/participant/take-prompt.ts`) holds the body check for the participant one-shot, the in-process `authorTake` and the post-session harness. The API does not yet apply it at submission, so a take from outside our containers is not held to the word floor (open decision: whether the API rejects a short take from every source).
+
 **The judge is a participant** exactly like an agent. No component of the stack judges inline, and nothing but the admin route writes `swarm_judge_config`.
 
-**Third-party gate.** A judgement from a judge whose member `operator` is `robotmoney` is in-house and is accepted whatever `swarm_judge_config.third_party_enabled` says. A judgement from any other judge is refused while that flag is false.
+**Third-party gate.** A judgement from an in-house judge is accepted whatever `swarm_judge_config.third_party_enabled` says. In-house means the member's `operator` is `robotmoney`, or the member holds one of the four in-house seats by handle (`athena`, `noop-analyst`, `robot-money`, `themis`) whatever its `operator` text says (owner, 2026-10-06: production's admin set themis's operator to "RM Protocol Labs" on 2026-09-29, and a gate keyed on the literal alone served the real judge nothing). Handles are admin-managed, so no member can make itself a seat. A judgement from any other judge is refused while that flag is false, and such a judge is served no pending session.
 
 ### 6.3 Sessions are independent
 

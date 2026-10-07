@@ -8,7 +8,6 @@
 // Uses Bun.spawn for docker/gpg/pg_restore/psql — there is no JS-native
 // pg_dump-format reader.
 
-import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -433,28 +432,18 @@ export async function restoreBackupIntoContainer(
   if (globalsExit !== 0) return { error: "globals load failed", container };
 
   log("restoring dump");
-  // The decrypted archive is piped into pg_restore through node streams, with
-  // the EPIPE a late write meets handled. Handing Bun.spawn the gpg stream as
-  // `stdin` makes Bun pump it, and pg_restore may exit before it has read the
-  // archive's last bytes: the pump's next write then fails with EPIPE as an
-  // unhandled error that kills the whole boot (exit 1) at a random later
-  // moment, after the restore reported success (issue 1178).
-  const gpgDump = spawn("gpg", ["--batch", "--yes", "--passphrase-file", backup.passphraseFile, "--decrypt", backup.dumpEnc], {
-    stdio: ["ignore", "pipe", "inherit"],
+  // gpg and pg_restore are joined by a kernel pipe inside one bash, so no JS
+  // code copies the archive. Both JS pumps failed on stage-2 (Bun 1.3.14):
+  // Bun.spawn's `stdin: stream` pump threw an unhandled EPIPE after a
+  // successful restore (issue 1178), and node:child_process `.pipe()` into a
+  // slow reader dropped the archive's tail, so pg_restore read "end of file"
+  // after 21 s on every run. The pipeline's exit status is pg_restore's.
+  const pipeline = Bun.spawn(restorePipelineArgv(backup.passphraseFile, backup.dumpEnc, container), {
+    stdin: "ignore",
+    stdout: "inherit",
+    stderr: "inherit",
   });
-  const [restoreCmd, ...restoreArgs] = restoreDumpArgv(container);
-  const pgRestore = spawn(restoreCmd!, restoreArgs, { stdio: ["pipe", "inherit", "inherit"] });
-  // pg_restore stopped reading: its exit code, not this pipe, says how the restore went.
-  pgRestore.stdin!.on("error", () => {});
-  gpgDump.stdout!.on("error", () => {});
-  // gpg could not start: pg_restore then reads an empty archive and fails, which is the verdict.
-  gpgDump.on("error", (e) => log(`gpg failed to start: ${e.message}`));
-  gpgDump.stdout!.pipe(pgRestore.stdin!);
-  const restoreExit = await new Promise<number>((resolve) => {
-    pgRestore.on("error", () => resolve(1));
-    pgRestore.on("exit", (code, signal) => resolve(code ?? (signal ? 128 : 1)));
-  });
-  gpgDump.kill();
+  const restoreExit = await pipeline.exited;
   log(`pg_restore exit=${restoreExit}`);
   if (restoreExit !== 0) return { error: "pg_restore failed", container };
 
@@ -552,6 +541,19 @@ export async function restartKeptTwinContainer(opts: {
  * client reads any archive production can produce. Its local socket trusts the
  * container's own superuser, so no password travels here either.
  */
+/**
+ * One bash: `gpg --decrypt <dump> | pg_restore ...`. The paths and the
+ * restore argv travel as positional arguments, never spliced into the script.
+ * Without pipefail the status is pg_restore's: gpg meeting a closed pipe after
+ * pg_restore finished is not a failed restore.
+ */
+export function restorePipelineArgv(passphraseFile: string, dumpEnc: string, container: string): string[] {
+  return [
+    "bash", "-c", 'gpg --batch --yes --passphrase-file "$1" --decrypt "$2" | "${@:3}"', "restore-pipeline",
+    passphraseFile, dumpEnc, ...restoreDumpArgv(container),
+  ];
+}
+
 export function restoreDumpArgv(container: string): string[] {
   return [
     "docker", "exec", "-i", container,
