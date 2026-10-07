@@ -55,3 +55,13 @@ test("the scheduler's first-connect failure is expected only when the api did no
   expect(re.test("[system-scheduler] initial connect failed: Unable to connect. Is the computer able to access the url?")).toBe(true);
   expect(re.test("[system-scheduler] initial connect failed: API rejected the automation token (HTTP <n>)")).toBe(false);
 });
+
+test("a cancelled autovacuum is expected only from the twin's own database container", () => {
+  const r = rules.find((x) => x.id === "expected-twin-autovacuum-cancel") as unknown as { match: string; source: string };
+  const line = "<ts> UTC [<n>] ERROR: canceling autovacuum task";
+  expect(new RegExp(r.match, "i").test(line)).toBe(true);
+  expect(new RegExp(r.source, "i").test("rm-restore-20261007T015352Z-9cobr5")).toBe(true);
+  expect(new RegExp(r.source, "i").test("rm_smoke_stack_d04bd9437e-api-1")).toBe(false);
+  // A real statement cancellation is a different line and still fails the gate.
+  expect(new RegExp(r.match, "i").test("<ts> UTC [<n>] ERROR: canceling statement due to statement timeout")).toBe(false);
+});

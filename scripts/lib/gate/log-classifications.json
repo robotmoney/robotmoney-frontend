@@ -66,6 +66,13 @@
     "reason": "The scheduler's first stream connect (scripts/lib/system-scheduler/runtime.ts start()) ran before the api listened; it then takes the same reconnect loop as every later drop (spec §3.2). An api that never answers fails readiness scheduler-initial-rebuild and the gate's healthy-container check. Seen once at boot on stage-2, 2026-10-07."
   },
   {
+    "id": "expected-twin-autovacuum-cancel",
+    "match": "ERROR: canceling autovacuum task$",
+    "source": "^rm-restore-",
+    "class": "expected",
+    "reason": "Postgres cancels its own background autovacuum when a statement needs a conflicting lock; on the twin the migrate step's DDL does that on the freshly restored tables (seen once at 02:59:00Z on analytics_overwrite_events, stage-2, 2026-10-07). No query fails and the vacuum reruns later. Bound to the twin's restore container: production's managed Postgres is not a scanned source."
+  },
+  {
     "id": "expected-fetch-floor-fallback",
     "match": "fetch returned <n> rows — using persisted <n> rows",
     "class": "expected",
