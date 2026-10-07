@@ -153,9 +153,8 @@
              stance is (a Hold or Update badge), how many questions it found
              the takes apart on where a take's confidence is, then for a hold
              its reason, its own account, and the way to the judgement. -->
-        <!-- Left out, not called empty, while judgements are not served
-             (RM-130: a release without #1017). -->
-        <template x-if="isJudge(member) && judgementsServed">
+        <!-- Left out, not called empty, when the judgements could not be read. -->
+        <template x-if="isJudge(member) && judgementsRead">
         <section class="rr-sec" id="record" aria-labelledby="record-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="record-h">Track record</h2>

@@ -1,8 +1,8 @@
 // The consensus judge's public record, as the frontend words and counts it
 // (frontend/public/assets/js/app/lib/judgements.js). The release call is
 // advice, worded, and a "safe" call prints nothing; a seated judge is neither
-// absent from a session nor a seat in its "n of m"; and a judgement route the
-// contract does not declare, or that answers 404, is not served (RM-130).
+// absent from a session nor a seat in its "n of m"; and a judgement list that
+// could not be read is kept apart from an empty one.
 import { afterAll, describe, expect, test } from "bun:test";
 import { setsWeights, adviceCall,
   adviceLine,
@@ -19,7 +19,6 @@ import { setsWeights, adviceCall,
   loadJudgement,
   loadMemberJudgements,
   loadSessionJudgements,
-  _resetJudgementProbe,
 } from "../../../frontend/public/assets/js/app/lib/judgements.js";
 
 // api.js reads the API origin from window.RM_CONFIG at call time; "" is the
@@ -45,36 +44,23 @@ const ROSTER = [
   { id: "m-themis", handle: "themis", name: "Themis", role: "judge" },
 ];
 
-// RM-130: a release that holds #1017 back serves no judgement route. Not
-// served (null) is kept apart from none yet ([]), so a judge's page can leave
-// its record out rather than say nothing was published.
-describe("whether judgements are served", () => {
-  test("a route the contract does not declare is not asked, and reads as not served", async () => {
-    _resetJudgementProbe();
-    const saved = { ...JUDGEMENT_ROUTES };
-    const asked = answer(200, { judgements: [] });
-    Object.assign(JUDGEMENT_ROUTES, { session: null, one: null, member: null });
-    try {
-      expect(await loadMemberJudgements("themis")).toBeNull();
-      expect(await loadSessionJudgements("s-1")).toBeNull();
-      expect(await loadJudgement("41")).toBeNull();
-      expect(asked).toEqual([]);
-    } finally {
-      Object.assign(JUDGEMENT_ROUTES, saved);
-    }
-  });
-
-  test("a 404 reads as not served, and is not asked again in the visit", async () => {
-    _resetJudgementProbe();
-    const asked = answer(404, { error: "not_found" });
+// A list that could not be read (null) is kept apart from an empty one ([]),
+// so a judge's page can leave its record out rather than say nothing was
+// published.
+describe("reading judgements", () => {
+  test("a failed read is null, and the next read asks again", async () => {
+    const asked = answer(500, { error: "internal" });
     expect(await loadMemberJudgements("themis")).toBeNull();
     expect(await loadSessionJudgements("s-1")).toBeNull();
-    expect(await loadJudgement("41")).toBeNull();
-    expect(asked.length).toBe(1);
+    expect(asked.length).toBe(2);
   });
 
-  test("served and empty is none yet, not unserved", async () => {
-    _resetJudgementProbe();
+  test("a judgement that is not there is null", async () => {
+    answer(404, { error: "not_found" });
+    expect(await loadJudgement("41")).toBeNull();
+  });
+
+  test("an empty list is none yet, not a failed read", async () => {
     answer(200, { judgements: [] });
     expect(await loadMemberJudgements("themis")).toEqual([]);
     expect(await loadSessionJudgements(null)).toEqual([]);

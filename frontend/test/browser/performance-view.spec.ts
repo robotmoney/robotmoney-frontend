@@ -191,21 +191,16 @@ test("performance view discloses the unrecoverable gap window (issue #614 AC5)",
   expect(text).toMatch(/\d+ days? in this range (is|are) in process of being retrieved/); // the ~91-day gap
 });
 
-// issue #862 (RM-116): SP500's position size is an owner-asserted constant,
-// never read from a wallet or venue API — until it is read, the Wallet Total
-// figure (which sums it in) must not present it identically to every other,
-// genuinely-read leg. The stub's SP500 holding carries sizeVerifiedAt
-// "2026-03-01" (see walletStub() above); this must render a visible
-// disclosure alongside the wallet total, not silently sum it in.
-test("performance view discloses that SP500's position size is asserted, not read (issue #862)", async ({ page }) => {
+// The SP500 note (#862) is retired (RM-172): the holding still carries
+// sizeVerifiedAt (see walletStub() above), and the page prints nothing of it.
+test("performance view prints no note about the SP500 position's size", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/");
   await navigate(page, "/performance");
 
   const seam = page.locator(".a2-seam");
   await expect(seam).toBeVisible();
-  const text = await seam.textContent();
-  expect(text).toMatch(/SP500 position size is asserted, not read from a live position — last confirmed March 2026\./);
+  await expect(seam).not.toContainText("SP500");
 });
 
 // A chart with nothing to draw says so (.rm-nodata) over its own box, and the

@@ -2906,9 +2906,9 @@ export function registerStaticViews(Alpine) {
     // A judge's record: its public judgements, newest first. A judge files no
     // takes, so its page lists these where a member's lists takes.
     judgements: [],
-    // Whether the judgements are served at all (RM-130): a release without
-    // #1017 serves none, and then the record is left out, not called empty.
-    judgementsServed: false,
+    // Whether the judgements were read: a failed read leaves the record out,
+    // not called empty.
+    judgementsRead: false,
     // subject id → the subject record's name. A take row carries the name its
     // session was filed under, which can lag a rename; /swarm and the subject
     // page print the record's name, so this page does too.
@@ -2989,7 +2989,7 @@ export function registerStaticViews(Alpine) {
         }
         if (isJudge(this.member)) {
           const judgements = await loadMemberJudgements(memberId);
-          this.judgementsServed = judgements !== null;
+          this.judgementsRead = judgements !== null;
           this.judgements = judgements || [];
         } else this.rows = await this.loadRows(memberId);
         try {
@@ -3478,16 +3478,15 @@ export function registerStaticViews(Alpine) {
     // The session's public judgements (lib/judgements.js). Asked for only when
     // the recommendation carries a judge block: a judgement is public once it
     // has reached the published session, and reaching it is what writes that
-    // block, so a session without one has none to show. Asking anyway would put
-    // a 404 in every reader's console for as long as production runs a backend
-    // without the route. The one case this passes over is a session whose
-    // aggregation was re-run after judging, which replaces the block; its
-    // judgements stay on their own pages and on the judge's.
+    // block, so a session without one has none to show. The one case this
+    // passes over is a session whose aggregation was re-run after judging,
+    // which replaces the block; its judgements stay on their own pages and on
+    // the judge's.
     async loadJudgements() {
       const s = this.session;
       if (this.source !== "api" || !s?.id || s.state !== "published" || !s.swarmRecommendation?.judge) return;
-      // Not served (RM-130) reads as none: the opinion the recommendation
-      // carries still shows, with no way to a judgement page.
+      // A failed read reads as none: the opinion the recommendation carries
+      // still shows, with no way to a judgement page.
       this.judgements = (await loadSessionJudgements(s.id)) || [];
     },
     isFramework() { return this.subject?.source?.type === "framework"; },
