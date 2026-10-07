@@ -17,6 +17,7 @@ import { sessionWhen as whenOf } from "../../lib/session-when.js";
 // portfolios instead of four subjects, real session counts, and a member
 // register.
 import { api, ROUTES, path } from "../../lib/api.js";
+import { loadArchiveBrief } from "../../lib/swarm-archive.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
 import { ALLOCATION_SUBJECT_ID } from "../../lib/allocation-subject.js";
 import { sessionSummary } from "../../lib/session-summary.js";
@@ -256,7 +257,7 @@ export function registerSwarmView(Alpine) {
         const b = await api.get(ROUTES.swarm.brief, { session: s.id }).catch(() => null);
         if (b && !b.error) return b;
       }
-      return fetch(`/data/swarm/briefs/${s.date}-${s.subjectId}.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      return loadArchiveBrief(s.date, s.subjectId);
     },
 
     // ── the research record's pieces (RM-121) ────────────────────────────

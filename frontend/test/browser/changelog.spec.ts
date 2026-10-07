@@ -96,7 +96,7 @@ test("/changelog is a shipped-work log, not a roadmap", async ({ page }) => {
     const iframe = document.querySelector("#frame") as HTMLIFrameElement;
     return iframe.contentDocument?.title ?? "";
   });
-  expect(title).toBe("Changelog — Robot Money");
+  expect(title).toBe("Changelog | Robot Money");
 
   // The filter factory is `changelogPage()`, not an inline object: arrow
   // functions in an attribute contain `>`, which a naive HTML-to-text strip

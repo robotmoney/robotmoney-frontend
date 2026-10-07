@@ -194,15 +194,27 @@ describe("_shell.html, the fallback for routes that cannot be prerendered", () =
     expect(html).not.toContain("<!--AGENT-DATA-->");
   });
 
-  test("robots.txt keeps it out of the index, under User-agent: *", () => {
-    // A Disallow only binds the group it appears under. Assert the line sits
-    // in the * group specifically, not merely that the literal string exists
-    // somewhere in the file (it could sit under a single crawler's group and
-    // bind nothing else).
+  test("robots.txt keeps it out of the index, for * and for every crawler it names", () => {
+    // A Disallow only binds the group it appears under, and a crawler named in
+    // a group of its own ignores `*`. A group is a run of User-agent lines and
+    // the rules under it, so every group, not merely the * one, has to carry
+    // the line: a named crawler in an Allow-only group may crawl the shell.
     const robotsTxt = readFileSync(join(publicDir, "robots.txt"), "utf8");
-    const starGroup = robotsTxt.split(/^User-agent: /m).find((block) => block.startsWith("*"));
-    expect(starGroup).toBeDefined();
-    expect(starGroup).toContain("Disallow: /_shell.html");
+    const lines = robotsTxt.split("\n").map((l) => l.replace(/#.*/, "").trim()).filter(Boolean);
+    const groups: { agents: string[]; rules: string[] }[] = [];
+    for (const line of lines) {
+      const [key, ...rest] = line.split(":");
+      const value = rest.join(":").trim();
+      if (/^user-agent$/i.test(key)) {
+        const last = groups.at(-1);
+        if (last && !last.rules.length) last.agents.push(value);
+        else groups.push({ agents: [value], rules: [] });
+      } else if (groups.length && /^(allow|disallow)$/i.test(key)) {
+        groups.at(-1)!.rules.push(`${key}: ${value}`);
+      }
+    }
+    expect(groups.some((g) => g.agents.includes("*"))).toBe(true);
+    for (const g of groups) expect({ agents: g.agents, rules: g.rules }).toEqual({ agents: g.agents, rules: expect.arrayContaining(["Disallow: /_shell.html", "Disallow: /admin"]) });
   });
 
   test("carries a noindex meta of its own, on top of robots.txt", () => {

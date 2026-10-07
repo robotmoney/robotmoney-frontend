@@ -502,7 +502,7 @@ test("an unknown vault slug renders not found", async ({ page }) => {
   await stubSaved(page);
   await page.goto("/vault/nope");
   await expect(page.locator("#view")).toContainText("Page not found");
-  expect(await page.title()).toBe("Page Not Found — Robot Money");
+  expect(await page.title()).toBe("Page Not Found | Robot Money");
 });
 
 test("bare /vault moves to /allocation#vaults, scrolled to it, canonical /allocation", async ({ page }) => {
