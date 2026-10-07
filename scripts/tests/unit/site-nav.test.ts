@@ -32,6 +32,7 @@ describe("navSectionFor", () => {
     ["/vault/rmagent", "vaults"],
     ["/vault", "vaults"],
     ["/allocation", "vaults"],
+    ["/treasury", "company"],
     ["/performance", "company"],
     ["/swarm/subjects/robotmoney-vault", "vaults"],
     ["/swarm", "swarm"],

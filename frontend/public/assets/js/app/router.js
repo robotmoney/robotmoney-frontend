@@ -69,6 +69,12 @@ async function render(pathname) {
     history.replaceState(history.state, "", "/allocation" + location.search + "#vaults");
     pathname = "/allocation";
   }
+  // The protocol wallets' page moved to /treasury (RM-157); its old addresses
+  // move there too, query and fragment kept.
+  if (pathname === "/performance" || pathname === "/allocation2") {
+    history.replaceState(history.state, "", "/treasury" + location.search + location.hash);
+    pathname = "/treasury";
+  }
   const host = viewEl();
   if (!host) return;
   stopSettling();

@@ -455,7 +455,7 @@ test("rmAGENT on Base is not live: every frame drawn, each saying it holds nothi
   await page.goto("/index.html");
   await navigate(page, "/vault/rmagent");
   // "Coming soon", in the pill, beside the Network fact that names Base.
-  await expect(fact(page, "Status").locator(".rm-pill")).toHaveText("Coming soon");
+  await expect(fact(page, "Status").locator(".rm-soon")).toHaveText("Coming soon");
   await expect(fact(page, "Network").locator("b")).toHaveText("Base");
   await expect(fact(page, "Share price")).toHaveCount(0);
   // Holdings and Activity keep their frames, as the vault subject's do: $0,
@@ -677,7 +677,7 @@ test("the switch carries from /allocation to a vault by its link, survives a rel
     await expect(page.locator("#view")).not.toContainText(devnetOnly);
   }
   await navigate(page, "/vault/rmagent");
-  await expect(fact(page, "Status").locator(".rm-pill")).toHaveText("Coming soon");
+  await expect(fact(page, "Status").locator(".rm-soon")).toHaveText("Coming soon");
   await expect(page.locator("#holdings .rr-stat__v")).toHaveText("$0");
   await expectNoBrowserErrors(errors);
 });

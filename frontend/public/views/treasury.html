@@ -1,0 +1,365 @@
+<!-- Treasury (RM-157): Robot Money's own money, the protocol wallets on Base,
+     read live. It replaces /performance ("Wallet Performance"), which now
+     resolves here (routes.js) and is rewritten to /treasury (router.js).
+
+     WHOSE MONEY THIS PAGE SHOWS: the protocol wallets and only those. Not one
+     dollar of depositor capital; the vaults are on the allocation page.
+
+     ACCURACY RULES, do not relax them:
+     • Only what is read on chain counts. The backend also values an S&P 500
+       position from a hard-coded size (config.ts SP500_SIZE); it is left out
+       of today's figures and every day of the history (treasury.js OFF_CHAIN).
+     • Wallets are named by what they are, not by their configured names: the
+       "Stablecoin Strategy" wallets hold WETH and USDC, and each one's
+       strategy account (Zyfai, Giza) is shown with what it holds, empty when
+       it holds nothing.
+     • No target. Nothing in the codebase or the docs sets one; the page shows
+       what the treasury holds and what moves through it.
+
+     Built on the regime and vault pages' components (.rr-*): the ring for
+     today's mix, the vault page's value area (alpine/tvl-chart.js) and its
+     share-over-time bands (lib/share-chart.js). Factory: treasuryView()
+     (alpine/views/treasury.js). The hero canvas is constructivistHero()
+     (alpine/heroes.js).
+-->
+
+<section class="trs" x-data="treasuryView()">
+
+  <header class="a2-hero">
+    <div class="a2-hero__viz" x-data="constructivistHero()" aria-hidden="true"></div>
+    <div class="a2-hero__inner">
+      <h1 class="a2-hero__title">Treasury</h1>
+      <p class="a2-hero__lede">Robot Money's own money: three wallets on Base, read live from the chain.</p>
+    </div>
+  </header>
+
+  <div class="trs__body rr">
+    <p class="rm-visually-hidden" role="status" x-show="loading">Loading the treasury</p>
+
+    <div class="rr-meta trs__meta">
+      <span class="rr-meta__i">Value <b x-text="totalLabel()">—</b></span>
+      <span class="rr-meta__i">Change over 30 days <b><span class="alp__mv" :class="change30dClass()" x-text="change30dLabel()">—</span></b></span>
+      <span class="rr-meta__i">Fee income over 30 days <b x-text="fees30dLabel()">—</b></span>
+      <span class="rr-meta__i">As of <b x-text="asOfLabel()">—</b></span>
+    </div>
+
+    <!-- ── Holdings: today's mix as the ring, then each wallet's positions. -->
+    <section class="rr-sec" id="holdings" aria-labelledby="hold-h">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="hold-h">Holdings</h2>
+      </div>
+      <div class="rr-x">
+        <div class="rr-mix">
+          <figure class="rr-ring trs__ring">
+            <span class="sv__wdonut-host" role="img" :aria-label="ringLabel()" x-html="ringSvg()"></span>
+            <template x-if="totalUsd()">
+              <figcaption><b x-text="totalLabel()"></b><span>On chain</span></figcaption>
+            </template>
+            <template x-if="holdingsEmptyTitle()">
+              <div class="rm-nodata rm-nodata--fill rm-nodata--ring"><p class="rm-nodata__h" x-text="holdingsEmptyTitle()"></p></div>
+            </template>
+          </figure>
+          <ul class="rr-legend trs__legend">
+            <template x-for="h in holdings()" :key="h.symbol">
+              <li>
+                <i data-mark="series" :style="`background:${hueOf(h.symbol)}`" aria-hidden="true"></i>
+                <span x-text="h.name"></span>
+                <b x-text="weightOf(h.valueUsd)"></b>
+                <small x-text="fmtUsd(h.valueUsd)"></small>
+              </li>
+            </template>
+          </ul>
+        </div>
+      </div>
+
+      <div class="rr-block trs__block">
+        <div class="rr-subhead">
+          <h3 class="rr-subhead__h">By wallet</h3>
+        </div>
+        <div class="rr-tablewrap"><table class="rr-table rr-table--compact trs__wallets">
+          <thead>
+            <tr><th scope="col">Position</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Price</th><th scope="col" class="q">Value</th><th scope="col" class="q">Weight</th></tr>
+          </thead>
+          <template x-for="w in wallets()" :key="w.address">
+            <tbody>
+              <tr class="trs__wallet">
+                <th scope="rowgroup" colspan="3">
+                  <span x-text="w.name"></span>
+                  <template x-if="addrHref(w.address)"><a class="rr-lnk trs__addr" :href="addrHref(w.address)" target="_blank" rel="noopener noreferrer" x-text="shortAddr(w.address)"></a></template>
+                  <template x-if="w.note"><small x-text="w.note"></small></template>
+                </th>
+                <td class="q" x-text="fmtUsd(w.totalUsd)"></td>
+                <td class="q" x-text="weightOf(w.totalUsd)"></td>
+              </tr>
+              <template x-for="r in w.rows" :key="`${w.address}-${r.symbol}`">
+                <tr>
+                  <th scope="row"><i data-mark="series" :style="`background:${hueOf(r.symbol)}`" aria-hidden="true"></i><span x-text="r.name"></span></th>
+                  <td class="q" x-text="amountLabel(r.amount, r.symbol)"></td>
+                  <td class="q" x-text="priceLabel(r.priceUsd)"></td>
+                  <td class="q" x-text="fmtUsd(r.valueUsd)"></td>
+                  <td class="q" x-text="weightOf(r.valueUsd)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </template>
+          <template x-if="!wallets().length">
+            <tbody><tr><td class="rr-table__empty" colspan="5"><span class="rr-empty__t" x-text="loading ? 'Loading' : walletsEmptyText()"></span></td></tr></tbody>
+          </template>
+        </table></div>
+      </div>
+    </section>
+
+    <!-- ── Over time: the value as an area, then the mix as bands. -->
+    <section class="rr-sec" id="history" aria-labelledby="hist-h">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="hist-h">Over time</h2>
+      </div>
+
+      <template x-if="!tvl().points.length">
+        <figure class="rr-area">
+          <figcaption class="rr-area__head"><h3 class="rr-subhead__h">Value</h3></figcaption>
+          <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="loading ? 'Loading' : historyEmptyTitle()"></p></div>
+        </figure>
+      </template>
+      <template x-if="tvl().points.length">
+        <figure class="rr-area">
+          <figcaption class="rr-area__head">
+            <h3 class="rr-subhead__h">Value</h3>
+            <span class="rr-sec__aside" x-text="tvlChange()"></span>
+          </figcaption>
+          <div class="rr-area__frame">
+            <div class="rr-area__y" aria-hidden="true">
+              <template x-for="t in tvlYTicks()" :key="t.key"><span :style="`top:${t.top}%`" x-text="t.label"></span></template>
+            </div>
+            <div class="rr-area__plot" tabindex="0" role="img" :aria-label="tvlLabel()"
+                 @pointermove="tvlMove($event)" @pointerdown="tvlMove($event)" @pointerleave="tvlAt = null" @keydown="tvlKey($event)" @blur="tvlAt = null">
+              <div class="rr-area__svg" x-html="tvlSvg()"></div>
+              <template x-for="p in tvlDots()" :key="p.key">
+                <i class="rr-area__pt" :style="`left:${p.left}%;top:${p.top}%;background:var(--color-green)`" aria-hidden="true"></i>
+              </template>
+              <template x-if="tvlPoint(tvlAt)">
+                <div class="rr-area__cross" :style="`left:${tvlPoint(tvlAt).left}%`"></div>
+              </template>
+              <template x-if="tvlPoint(tvlAt)">
+                <i class="rr-area__pt is-on" :style="`left:${tvlPoint(tvlAt).left}%;top:${tvlPoint(tvlAt).top}%;background:var(--color-green)`" aria-hidden="true"></i>
+              </template>
+              <template x-if="tvlPoint(tvlAt)">
+                <div class="rr-area__tip" :class="tvlPoint(tvlAt).left > 62 ? 'is-left' : ''" :style="`left:${tvlPoint(tvlAt).left}%`">
+                  <p class="rr-area__tip-h" style="margin:0"><b x-text="tvlPoint(tvlAt).date"></b><span x-text="tvlPoint(tvlAt).value"></span></p>
+                </div>
+              </template>
+            </div>
+            <div class="rr-area__x" aria-hidden="true">
+              <template x-for="t in tvlXTicks()" :key="t.key"><span :class="[t.cls, t.i === tvlAt ? 'is-on' : '']" :style="`left:${t.left}%`" x-text="t.label"></span></template>
+            </div>
+          </div>
+        </figure>
+      </template>
+
+      <template x-if="!posModel()">
+        <figure class="rr-area trs__block">
+          <figcaption class="rr-area__head"><h3 class="rr-subhead__h">By asset</h3></figcaption>
+          <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="loading ? 'Loading' : historyEmptyTitle()"></p></div>
+        </figure>
+      </template>
+      <template x-if="posModel()">
+        <figure class="rr-area trs__block">
+          <figcaption class="rr-area__head"><h3 class="rr-subhead__h">By asset</h3></figcaption>
+          <div class="rr-area__frame">
+            <div class="rr-area__y" aria-hidden="true">
+              <template x-for="t in [100, 75, 50, 25, 0]" :key="t"><span :style="`top:${100 - t}%`" x-text="`${t}%`"></span></template>
+            </div>
+            <div class="rr-area__plot" tabindex="0" role="img" :aria-label="posLabel()"
+                 @pointermove="posMove($event)" @pointerdown="posMove($event)" @pointerleave="posAt = null" @keydown="posKey($event)" @blur="posAt = null">
+              <div class="rr-area__svg" x-html="posSvg()" x-effect="posFocus; $nextTick(() => posSync($el))"></div>
+              <template x-if="posPoint(posAt)">
+                <div class="rr-area__cross" :style="`left:${posPoint(posAt).left}%`"></div>
+              </template>
+              <template x-if="posPoint(posAt)">
+                <div class="rr-area__tip" :class="posPoint(posAt).left > 62 ? 'is-left' : ''" :style="`left:${posPoint(posAt).left}%`">
+                  <p class="rr-area__tip-h"><b x-text="posPoint(posAt).date"></b><span x-text="posPoint(posAt).total"></span></p>
+                  <ul>
+                    <template x-for="it in posPoint(posAt).items" :key="it.token">
+                      <li :class="posFocus && posFocus !== it.token ? 'is-muted' : ''"><i :style="`background:${it.color}`"></i><span x-text="it.label"></span><b x-text="it.pct"></b></li>
+                    </template>
+                  </ul>
+                </div>
+              </template>
+            </div>
+            <div class="rr-area__x" aria-hidden="true">
+              <template x-for="t in posTicks()" :key="t.key"><span :class="[t.cls, t.i === posAt ? 'is-on' : '']" :style="`left:${t.left}%`" x-text="t.label"></span></template>
+            </div>
+          </div>
+          <ul class="rr-area__legend">
+            <template x-for="l in posLegend()" :key="l.token">
+              <li :class="posFocus && posFocus !== l.token ? 'is-muted' : ''" @pointerenter="posFocus = l.token" @pointerleave="posFocus = null">
+                <i :style="`background:${l.color}`" aria-hidden="true"></i><span x-text="l.label"></span>
+              </li>
+            </template>
+          </ul>
+        </figure>
+      </template>
+
+      <div class="rr-block trs__block">
+        <div class="rr-subhead">
+          <h3 class="rr-subhead__h">Daily</h3>
+        </div>
+        <div class="rr-tablewrap"><table class="rr-table rr-table--compact trs__daily">
+          <thead>
+            <tr>
+              <th scope="col">Date</th>
+              <template x-for="s in historyAssets()" :key="s"><th scope="col" class="q"><i data-mark="series" :style="`background:${hueOf(s)}`" aria-hidden="true"></i><span x-text="nameOf(s)"></span></th></template>
+              <th scope="col" class="q">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="r in historyPageRows()" :key="r.date">
+              <tr>
+                <th scope="row" x-text="dayLabel(r.date)"></th>
+                <template x-for="s in historyAssets()" :key="`${r.date}-${s}`"><td class="q" x-text="cellUsd(r, s)"></td></template>
+                <td class="q" x-text="fmtUsd(r.total)"></td>
+              </tr>
+            </template>
+            <template x-if="!historyRows().length">
+              <tr><td class="rr-table__empty" :colspan="historyAssets().length + 2"><span class="rr-empty__t" x-text="loading ? 'Loading' : historyEmptyTitle()"></span></td></tr>
+            </template>
+          </tbody>
+        </table></div>
+        <template x-if="historyPaged()">
+          <nav class="rr-pager" aria-label="Daily pages">
+            <span role="status" x-text="historyRange()"></span>
+            <div>
+              <button type="button" class="rr-btn" :disabled="historyPage === 0" @click="historyPage -= 1">Newer</button>
+              <button type="button" class="rr-btn" :disabled="!historyOlder()" @click="historyPage += 1">Older</button>
+            </div>
+          </nav>
+        </template>
+      </div>
+    </section>
+
+    <!-- ── Money in and out: the swap-fee share the primary wallet earns, and
+         the buybacks it has made. The detail is on the token page. -->
+    <section class="rr-sec" id="flows" aria-labelledby="flows-h">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="flows-h">In and out</h2>
+      </div>
+      <div class="rr-split rr-split--rule trs__flows">
+        <div class="trs__flow">
+          <h3 class="rr-subhead__h">Swap fees in</h3>
+          <div class="rr-stat">
+            <p class="rr-stat__v" x-text="feesLifetimeLabel()">—</p>
+            <p class="rr-stat__sub">Since launch, at today's prices</p>
+          </div>
+          <dl class="rr-dl">
+            <div><dt>Paid in WETH</dt><dd x-text="feesWethLabel()">—</dd></div>
+            <div><dt>Paid in $ROBOTMONEY</dt><dd x-text="feesRobotmoneyLabel()">—</dd></div>
+            <div><dt>Primary wallet's share</dt><dd x-text="feesShareLabel()">—</dd></div>
+          </dl>
+          <a class="rr-lnk" href="/tokenomics#fees">The fee split</a>
+        </div>
+        <div class="trs__flow">
+          <h3 class="rr-subhead__h">Buybacks out</h3>
+          <div class="rr-stat">
+            <p class="rr-stat__v" x-text="buybackUsdLabel()">—</p>
+            <p class="rr-stat__sub">At the price of each buyback</p>
+          </div>
+          <dl class="rr-dl">
+            <div><dt>Buybacks</dt><dd x-text="buybackCountLabel()">—</dd></div>
+            <div><dt>Last buyback</dt><dd x-text="lastBuybackLabel()">—</dd></div>
+            <div><dt>Spent</dt><dd x-text="buybackWethLabel()">—</dd></div>
+            <div><dt>Share of the WETH earned</dt><dd x-text="buybackOfFeesLabel()">—</dd></div>
+            <div><dt>$ROBOTMONEY bought, held in the primary wallet</dt><dd x-text="buybackBoughtLabel()">—</dd></div>
+          </dl>
+          <a class="rr-lnk" href="/tokenomics#buybacks">The buyback record</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── FAQ: always-mounted rows (.rr-disc); a link to a row's id opens it. -->
+    <section class="rr-sec" id="faq" aria-labelledby="faq-h">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="faq-h">FAQ</h2>
+      </div>
+      <div class="trs__faq">
+        <div class="rr-disc" id="what-is-the-treasury" x-data="{ open: location.hash === '#what-is-the-treasury' }" @hashchange.window="if (location.hash === '#what-is-the-treasury') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="what-is-the-treasury-a" @click="open = !open"><span>What is the treasury?</span></button>
+          <div class="rr-disc__anim" id="what-is-the-treasury-a" role="region" aria-label="What is the treasury?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body trs__faq-a"><p>Robot Money's own money, kept apart from what depositors hold in the vaults. It is three wallets on Base, and every figure here is read from them on chain.</p></div></div>
+          </div>
+        </div>
+        <div class="rr-disc" id="why-robotmoney" x-data="{ open: location.hash === '#why-robotmoney' }" @hashchange.window="if (location.hash === '#why-robotmoney') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="why-robotmoney-a" @click="open = !open"><span>Why does it hold $ROBOTMONEY?</span></button>
+          <div class="rr-disc__anim" id="why-robotmoney-a" role="region" aria-label="Why does it hold $ROBOTMONEY?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body trs__faq-a"><p>Part of the protocol's swap-fee income is paid in $ROBOTMONEY, and the protocol keeps it. The tokens its buybacks bought stay in the primary wallet too.</p></div></div>
+          </div>
+        </div>
+        <div class="rr-disc" id="strategy-wallets" x-data="{ open: location.hash === '#strategy-wallets' }" @hashchange.window="if (location.hash === '#strategy-wallets') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="strategy-wallets-a" @click="open = !open"><span>What are the strategy wallets?</span></button>
+          <div class="rr-disc__anim" id="strategy-wallets-a" role="region" aria-label="What are the strategy wallets?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body trs__faq-a"><p>Two wallets set up to hand stablecoins to Zyfai and Giza, which manage them for yield through a strategy account each. A wallet's row shows what it holds itself and what its strategy account holds.</p></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</section>
+
+<style>
+.trs { background: var(--color-void); color: var(--color-text); padding: 0 0 5rem; font-family: var(--font-sans); }
+
+/* Hero: full-bleed and flat, as the other heroes (no gradient fade). The
+   shared rules in components.css pin its headline's size and offset. */
+.a2-hero {
+  position: relative;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  min-height: 52vh;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-void);
+}
+.a2-hero__viz { position: absolute; inset: 0; z-index: 0; }
+.a2-hero__viz canvas { display: block; width: 100%; height: 100%; }
+.a2-hero__inner { position: relative; z-index: 2; width: 100%; max-width: 80rem; margin-inline: auto; padding: 2.5rem 1.5rem; }
+.a2-hero__title { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; line-height: 1.05; margin: 0 0 1.25rem; }
+.a2-hero__lede { margin: 0; max-width: 44rem; font-size: 1.0625rem; line-height: 1.65; color: var(--color-text-muted); }
+.a2-hero__lede a { color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line); text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.a2-hero__lede a:hover { text-decoration-color: var(--color-link); }
+
+/* Body: the site column, as the regime and token pages'. */
+.trs__body { max-width: 80rem; margin: 0 auto; padding: 0 1.5rem; overflow-x: clip; }
+.trs__meta { border-top: 0; }
+.trs__block { margin-top: 2.25rem; }
+.trs__ring { width: 11.5rem; height: 11.5rem; }
+.trs__legend li:last-of-type { border-bottom: 0; }
+
+/* The wallets table: a wallet's row heads its positions, with its total. */
+.trs__wallets, .trs__daily { min-width: 36rem; }
+.trs__wallets th, .trs__wallets td, .trs__daily th, .trs__daily td { white-space: nowrap; }
+.trs__wallet th, .trs__wallet td { padding-top: 1rem; font-weight: 500; color: var(--color-text); }
+.trs__wallet th { font-size: 0.875rem; }
+.trs__wallet small { margin-left: 0.75rem; font-family: var(--font-mono); font-size: 0.6875rem; font-weight: 400; color: var(--color-text-muted); }
+.trs__addr { margin-left: 0.75rem; font-family: var(--font-mono); font-size: 0.75rem; font-weight: 400; }
+.trs__wallets tbody th[scope="row"] { padding-left: 1.5rem; font-weight: 400; font-size: 0.8125rem; }
+.trs__wallets i, .trs__daily thead i { display: inline-block; width: 0.4375rem; height: 0.4375rem; margin-right: 0.5rem; vertical-align: 0.1em; }
+/* Rules divide, never close: no rule under the last tbody's last row. */
+.trs__wallets tbody:last-of-type tr:last-of-type > * { border-bottom: 0; }
+
+/* In and out: two equal columns, a figure each, the facts under it. */
+@media (min-width: 861px) { .trs__flows { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.trs__flow .rr-stat { margin: 0.75rem 0 1rem; }
+.trs__flow .rr-dl > div { grid-template-columns: minmax(0, 1fr) auto; }
+.trs__flow .rr-dl dd { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.trs__flow .rr-dl > div:last-of-type { border-bottom: 0; }
+.trs__flow > .rr-lnk { display: inline-block; margin-top: 0.75rem; font-size: 0.8125rem; }
+
+.trs__faq .rr-disc { scroll-margin-top: 6rem; }
+.trs__faq .rr-disc:last-child > .rr-disc__btn { border-bottom: 0; }
+.trs__faq-a p { margin: 0; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
+
+@media (max-width: 640px) {
+}
+</style>

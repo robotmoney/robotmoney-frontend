@@ -44,7 +44,7 @@
                wears the pill. -->
           <span class="rr-meta__i">Status
             <template x-if="status() === 'Live'"><b class="rm-live"><i class="rm-pulse" aria-hidden="true"></i>Live</b></template>
-            <template x-if="status() === 'Coming soon'"><span class="rm-pill">Coming soon</span></template>
+            <template x-if="status() === 'Coming soon'"><span class="rm-soon">Coming soon</span></template>
             <template x-if="status() !== 'Live' && status() !== 'Coming soon'"><b x-text="status()"></b></template>
           </span>
           <span class="rr-meta__i">Deposit asset <b><a class="rr-lnk" :href="depositAssetHref()" target="_blank" rel="noopener noreferrer">USDC</a></b></span>

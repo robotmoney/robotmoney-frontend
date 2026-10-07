@@ -12,7 +12,7 @@
 import { registerProjectsView } from "./views/projects.js";
 import { registerRegimeView } from "./views/regime.js";
 import { registerResearchView } from "./views/research.js";
-import { registerWalletPerfView } from "./views/wallet-perf.js";
+import { registerTreasuryView } from "./views/treasury.js";
 import { registerFeeChart } from "./views/fee-chart.js";
 import { registerBlogCharts } from "./views/blog-charts.js";
 import { registerBuybackSummary } from "./views/buyback-summary.js";
@@ -48,7 +48,7 @@ export function registerViews(Alpine) {
   registerProjectsView(Alpine);
   registerRegimeView(Alpine);
   registerResearchView(Alpine);
-  registerWalletPerfView(Alpine);
+  registerTreasuryView(Alpine);
   registerFeeChart(Alpine);
   registerBlogCharts(Alpine);
   registerBuybackSummary(Alpine);

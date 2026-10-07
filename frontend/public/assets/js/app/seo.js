@@ -162,9 +162,9 @@ const META = {
     description: "rmRWA, the Robot Money vault for the Real World Assets sleeve.",
     robots: "noindex, follow",
   },
-  "/performance": {
-    title: "Wallet Performance & AUM History | Robot Money",
-    description: "Track Robot Money's historical AUM and allocation since inception. Daily portfolio snapshots across all strategy wallets, drawn from live onchain data.",
+  "/treasury": {
+    title: "Treasury: Robot Money's Own Wallets | Robot Money",
+    description: "Robot Money's own money: three wallets on Base, read live. What they hold by asset and by wallet, their value since March 2026, and the swap fees and buybacks that move through them.",
   },
   "/regime": {
     title: "Regime Classifier: Daily Risk-On or Risk-Off | Robot Money",
@@ -611,7 +611,9 @@ const LEGACY_ALIASES = [
   // treasury-allocation blog post served under "Page Not Found" and
   // `noindex, follow`, on a URL that is still live on robotmoney.network and
   // cited inline by the archived swarm sessions (routes.js:152,161).
-  ["/allocation2", "/performance"],
+  ["/allocation2", "/treasury"],
+  // RM-157: the protocol wallets' page moved from /performance to /treasury.
+  ["/performance", "/treasury", "exact"],
   ["/articles/treasury-allocation", "/blog/treasury-allocation"],
   // /vault renders views/allocation.html (RM-115). Without an entry here both
   // addresses return 200 with the same page and neither names the other
