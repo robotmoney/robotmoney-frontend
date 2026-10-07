@@ -108,9 +108,10 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
   // classification for any path below is caught here.
   //
   // The four e2e-*.yml domains each carry an ALLOW LIST: the shared boot (every
-  // domain) plus the paths that domain exercises. So a backend api route runs
-  // all four, a swarm module runs the three domains that drive the swarm, and a
-  // frontend file runs e2e-web alone.
+  // domain) plus the paths that domain exercises. Lifecycle, swarm and web take
+  // the whole backend (web's specs read live data any backend module can
+  // break), onboarding takes only the swarm and api code, and a frontend file
+  // runs e2e-web alone.
   const CASES: Array<[string, string[]]> = [
     ["backend/src/api/routes.ts", ["backend.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     // Issue #602: a compose file must ALSO select integration.yml. That job
@@ -122,11 +123,14 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
     // The stage overlay is appended only by `bun run smoke -- --static-port`,
     // which no e2e boot passes, so it selects no e2e domain.
     ["docker-compose.stage.yml", ["backend.yml", "integration.yml"]],
-    // Backend internals the boot does not import: the domains that run the
-    // whole backend (lifecycle, swarm), never web or onboarding.
-    ["backend/src/analytics/extract/geckoterminal.ts", ["backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml"]],
-    ["backend/src/chain/token-prices.ts", ["backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml"]],
-    ["backend/src/swarm/apply.ts", ["backend.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-onboarding.yml"]],
+    // Backend internals the boot does not import: the domains that take the
+    // whole backend (lifecycle, swarm, web), never onboarding unless it is
+    // swarm or api code.
+    ["backend/src/analytics/extract/geckoterminal.ts", ["backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    ["backend/src/analytics/x.ts", ["backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    ["backend/src/chain/token-prices.ts", ["backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    ["backend/src/swarm/apply.ts", ["backend.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["backend/src/swarm/x.ts", ["backend.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     // Backend files the boot itself imports or runs select every domain.
     ["backend/src/db/target-lock.ts", ["backend.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     ["backend/migrations/0001_backends.sql", ["backend.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
@@ -134,9 +138,9 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
     // The backend image copies contract/ and the checks import it.
     ["contract/src/index.ts", ["contract.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     // Issue #1095: the SDK is its own gated workflow AND the backend's, because
-    // the backend re-exports it and copies it into its image. Only the domains
-    // that run the whole backend take it.
-    ["packages/analyst-sdk/src/run.ts", ["analyst-sdk.yml", "backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml"]],
+    // the backend re-exports it and copies it into its image. The domains that
+    // take the whole backend take it too.
+    ["packages/analyst-sdk/src/run.ts", ["analyst-sdk.yml", "backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
     // A unit test cannot change what the integration suite or the live stack
     // sees, so a PR touching only unit tests selects neither (unit.yml, which
     // is not path-gated, still runs it).

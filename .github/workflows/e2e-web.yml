@@ -38,13 +38,14 @@ jobs:
       - uses: actions/checkout@v4
       # ALLOW LIST, owned by the WEB domain. dorny's default `some` quantifier:
       # the job runs when ANY changed file matches ANY pattern, and a path on no
-      # list (docs, unit tests, backend internals outside the api) skips it.
+      # list (docs, unit tests, the scheduler and swarm entry scripts) skips it.
       # This domain is the only e2e that reads the client, so a frontend-only
       # change boots this one stack and no other. It takes all of frontend/
       # (the specs in frontend/test included), the website-server origin, the
-      # api routes the client calls, the static assembly the boot serves, the
-      # Playwright config, scripts/web-client, and the goldens the specs answer
-      # /api from. Each e2e-*.yml carries its own list;
+      # static assembly the boot serves, the Playwright config, scripts/
+      # web-client, and the goldens the specs answer /api from. It also takes
+      # the WHOLE backend and the analyst SDK the backend image runs: the specs
+      # read live data, and any backend module can break what they read. Each e2e-*.yml carries its own list;
       # scripts/tests/unit/ci-gate-path-filters.test.ts pins which paths select
       # which domain.
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
@@ -88,7 +89,8 @@ jobs:
               # The web client's own surface.
               - 'frontend/**'
               - 'website-server/**'
-              - 'backend/src/api/**'
+              - 'backend/**'
+              - 'packages/analyst-sdk/**'
               - 'playwright.config.ts'
               - 'scripts/static-assembly.sh'
               - 'scripts/prerender.ts'
