@@ -116,30 +116,58 @@ jobs:
       e2e: ${{ steps.filter.outputs.e2e }}
     steps:
       - uses: actions/checkout@v4
-      # `every`: a file is relevant only if it matches ALL patterns, i.e. it is
-      # a path (`**`) that is on none of the skip entries (`!...`). The filter
-      # is true when ANY changed file is relevant.
+      # ALLOW LIST, owned by the ONBOARDING domain. dorny's default `some`
+      # quantifier: the job runs when ANY changed file matches ANY pattern, and
+      # a path on no list (docs, copy, the web client, unit tests) skips it.
+      # A member agent reads the swarm-onboarding skill and registers through
+      # the api, so this domain takes the swarm and api backend code, that one
+      # skill, and the evals. The member-agent image and the eval driver live
+      # in scripts/lib and scripts/agent, which the shared base already lists.
+      # Each e2e-*.yml carries its own list; scripts/tests/unit/
+      # ci-gate-path-filters.test.ts pins which paths select which domain.
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
         id: filter
         with:
-          predicate-quantifier: every
           filters: |
             e2e:
-              - '**'
-              - '!**/*.md'
-              - '!**/*.txt'
-              - '!docs/**'
-              - '!brand-assets/**'
-              - '!goldens/**'
-              - '!frontend/test/**'
-              - '!frontend/public/views/**'
-              - '!frontend/public/data/**'
-              - '!frontend/public/skills/**'
-              - '!frontend/public/blog/**'
-              - '!frontend/public/avatars/**'
-              - '!frontend/public/assets/img/**'
-              - '!scripts/tests/unit/**'
-              - '!scripts/web-client/**'
+              # The stack every domain boots: the shared setup/teardown actions, this
+              # file, the root install, the compose model and the images it builds, the
+              # host-side boot (scripts/smoke*.ts, scripts/stack, scripts/lib and the
+              # scripts/agent modules they import), the backend files the boot itself
+              # imports or runs (migrations, schema, seed data, backend/scripts), the
+              # shared contract (the backend image copies it and the checks import it),
+              # and the fixtures the boot seats.
+              - 'stacks/**'
+              - '.github/actions/e2e-setup/**'
+              - '.github/actions/e2e-teardown/**'
+              - '.github/workflows/e2e-onboarding.yml'
+              - 'package.json'
+              - 'bun.lock'
+              - 'docker-compose.yml'
+              - 'backend/Dockerfile'
+              - 'backend/package.json'
+              - 'backend/bun.lock'
+              - 'backend/migrations/**'
+              - 'backend/schema/**'
+              - 'backend/seed-data/**'
+              - 'backend/scripts/**'
+              - 'backend/src/acceptance-path.ts'
+              - 'backend/src/deploy-policy.ts'
+              - 'backend/src/db/target-lock.ts'
+              - 'website-server/Dockerfile'
+              - 'contract/**'
+              - 'scripts/smoke*.ts'
+              - 'scripts/smoke-ci-checks.ts'
+              - 'scripts/stack/**'
+              - 'scripts/lib/**'
+              - 'scripts/agent/**'
+              - 'test-fixtures/**'
+              - 'shared-fixtures/**'
+              # The onboarding admission's own surface.
+              - 'backend/src/swarm/**'
+              - 'backend/src/api/**'
+              - 'evals/**'
+              - 'frontend/public/skills/swarm-onboarding/**'
 
   e2e-onboarding:
     needs: [changes]

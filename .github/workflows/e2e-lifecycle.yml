@@ -18,6 +18,12 @@
 # e2e-setup and e2e-teardown. Which domain owns which `scripts/smoke-ci-checks.ts
 # --check` is enforced by scripts/tests/unit/smoke-ci-check-select.test.ts.
 #
+# Each domain also owns its own path filter: an ALLOW LIST of the shared boot
+# plus the paths that domain exercises, in its own `changes` job. A PR runs only
+# the domains its files touch, so a frontend-only change boots the e2e-web stack
+# and no other. Which paths select which domain is pinned by
+# scripts/tests/unit/ci-gate-path-filters.test.ts.
+#
 # CI taxonomy class: system-correctness. Per the taxonomy gating matrix this is
 # DEFERRED until a PR is ready for review: it must SKIP on draft PRs and RUN once
 # the PR is marked ready-for-review, plus on push to the default branch and on
@@ -50,30 +56,56 @@ jobs:
       e2e: ${{ steps.filter.outputs.e2e }}
     steps:
       - uses: actions/checkout@v4
-      # `every`: a file is relevant only if it matches ALL patterns, i.e. it is
-      # a path (`**`) that is on none of the skip entries (`!...`). The filter
-      # is true when ANY changed file is relevant.
+      # ALLOW LIST, owned by the LIFECYCLE domain. dorny's default `some`
+      # quantifier: the job runs when ANY changed file matches ANY pattern, and
+      # a path on no list (docs, copy, the web client, unit tests) skips it.
+      # This domain runs the scheduler and the participant containers, so it
+      # takes the whole backend (every service image is built from it), the
+      # analyst SDK the backend image copies in, and the scheduler entry point.
+      # Each e2e-*.yml carries its own list; scripts/tests/unit/
+      # ci-gate-path-filters.test.ts pins which paths select which domain.
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
         id: filter
         with:
-          predicate-quantifier: every
           filters: |
             e2e:
-              - '**'
-              - '!**/*.md'
-              - '!**/*.txt'
-              - '!docs/**'
-              - '!brand-assets/**'
-              - '!goldens/**'
-              - '!frontend/test/**'
-              - '!frontend/public/views/**'
-              - '!frontend/public/data/**'
-              - '!frontend/public/skills/**'
-              - '!frontend/public/blog/**'
-              - '!frontend/public/avatars/**'
-              - '!frontend/public/assets/img/**'
-              - '!scripts/tests/unit/**'
-              - '!scripts/web-client/**'
+              # The stack every domain boots: the shared setup/teardown actions, this
+              # file, the root install, the compose model and the images it builds, the
+              # host-side boot (scripts/smoke*.ts, scripts/stack, scripts/lib and the
+              # scripts/agent modules they import), the backend files the boot itself
+              # imports or runs (migrations, schema, seed data, backend/scripts), the
+              # shared contract (the backend image copies it and the checks import it),
+              # and the fixtures the boot seats.
+              - 'stacks/**'
+              - '.github/actions/e2e-setup/**'
+              - '.github/actions/e2e-teardown/**'
+              - '.github/workflows/e2e-lifecycle.yml'
+              - 'package.json'
+              - 'bun.lock'
+              - 'docker-compose.yml'
+              - 'backend/Dockerfile'
+              - 'backend/package.json'
+              - 'backend/bun.lock'
+              - 'backend/migrations/**'
+              - 'backend/schema/**'
+              - 'backend/seed-data/**'
+              - 'backend/scripts/**'
+              - 'backend/src/acceptance-path.ts'
+              - 'backend/src/deploy-policy.ts'
+              - 'backend/src/db/target-lock.ts'
+              - 'website-server/Dockerfile'
+              - 'contract/**'
+              - 'scripts/smoke*.ts'
+              - 'scripts/smoke-ci-checks.ts'
+              - 'scripts/stack/**'
+              - 'scripts/lib/**'
+              - 'scripts/agent/**'
+              - 'test-fixtures/**'
+              - 'shared-fixtures/**'
+              # The lifecycle's own surface.
+              - 'backend/**'
+              - 'packages/analyst-sdk/**'
+              - 'scripts/system-scheduler.ts'
 
   e2e-lifecycle:
     needs: [changes]
