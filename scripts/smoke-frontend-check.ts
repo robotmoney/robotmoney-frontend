@@ -118,12 +118,11 @@ async function main() {
     "rr-holdings",
     "data-vault-label",
   ]);
-  // The wallet-performance charts (walletPerfView(), formerly embedded in
-  // allocation.html) live on their own page under the
-  // pixel-perfect lift (#39); "rm-chartcard" was renamed to "a2-card" there.
-  await checkView("/views/performance.html", [
-    "x-data=\"walletPerfView()\"",
-    "a2-card",  // shared chart-card component
+  // The protocol wallets' page (RM-157, formerly /performance): its factory
+  // and the shared value chart it draws in.
+  await checkView("/views/treasury.html", [
+    "x-data=\"treasuryView()\"",
+    "rr-area",  // the site's chart frame
   ]);
   await checkView("/views/swarm/member.html", [
     "x-data=\"memberProfile()\"",

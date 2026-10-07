@@ -315,8 +315,7 @@ export function resolveStrategyVaults(): StrategyVaultConfig[] {
 // Why not a prop-wallet aave leg via resolveAaveATokens: that would surface the
 // position as its OWN top-level series, splitting one account's NAV across two
 // chart lines and turning the eight fixed labelled series into nine (a shape
-// asserted in frontend/test/browser/performance-view.spec.ts and the
-// WalletBalances DTO). GIZA-SS1's aToken balance is part of GIZA-SS1's NAV, so
+// the WalletBalances DTO fixes). GIZA-SS1's aToken balance is part of GIZA-SS1's NAV, so
 // it belongs inside that leg. See docs/decisions.md D37.
 //
 // cUSDCv3 (0xb125e6687d4313864e53df431d5425969c15eb2f) is deliberately ABSENT

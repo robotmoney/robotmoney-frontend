@@ -132,9 +132,9 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   await expect(page.locator("#vaults #vault")).toBeVisible();
   await expect(page.locator("#allocation")).toBeVisible();
 
-  // Test performance page with Wallet Performance heading
-  await navigate(page, "/performance");
-  await expect(page.getByRole("heading", { name: /Wallet Performance/, exact: false })).toBeVisible();
+  // The protocol wallets' page, at its address since RM-157.
+  await navigate(page, "/treasury");
+  await expect(page.getByRole("heading", { name: "Treasury", exact: true, level: 1 })).toBeVisible();
 
   // A member's page is a research record now (RM-121); its h1 still carries
   // .profile-name. The tagline under it (.profile-role) shows only what the
@@ -340,22 +340,20 @@ test("navigation destroys Chart.js and p5 resources from the previous view", asy
   const errors = failOnBrowserErrors(page);
 
   await page.goto("/");
-  // /performance rather than /allocation. Both view factories build Chart.js
-  // canvases, so either proves the teardown; this one moved here in #802 when
-  // /allocation briefly resolved to an inline-SVG page, and there is no reason
-  // to move it back now that it does not.
-  await navigate(page, "/performance");
-  const perfCanvas = page.locator(".a2-chart canvas").first();
+  // A research page: since RM-157 the treasury draws in SVG, and the research
+  // series are among the views that still build Chart.js canvases.
+  await navigate(page, "/research/channel-divergence");
+  const perfCanvas = page.locator(".rs__series-canvas canvas").first();
   await expect(perfCanvas).toBeVisible();
   const chartId = await perfCanvas.evaluate((canvas) => {
     const chart = window.Chart?.getChart(canvas as HTMLCanvasElement);
-    if (!chart) throw new Error("performance Chart.js instance was not created");
+    if (!chart) throw new Error("research Chart.js instance was not created");
     return chart.id;
   });
 
   // The logo is the way home: the nav has no Home link (RM-124).
   await page.locator(".nav__logo").click();
-  await expect(page.locator(".a2-chart canvas")).toHaveCount(0);
+  await expect(page.locator(".rs__series-canvas canvas")).toHaveCount(0);
   await expect.poll(() =>
     page.evaluate((id) => Boolean(window.Chart?.instances?.[id]), chartId)
   ).toBe(false);

@@ -110,7 +110,7 @@ describe("prerendered routes carry their own content", () => {
     for (const [route, marker] of [
       ["/regime", "Regime Classifier"],
       ["/allocation", "Asset Allocation"],
-      ["/performance", "Wallet Performance"],
+      ["/treasury", "Treasury"],
       ["/swarm", "Investment Swarm"],
     ] as const) {
       // Matched against EXTRACTED TEXT, not raw HTML: these headings are split
