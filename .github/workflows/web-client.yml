@@ -30,7 +30,7 @@
 # summary): a live host being unreachable says nothing about this PR's client
 # code, so it must never block the merge it has nothing to do with. Backend/
 # db/api changes get their own robust coverage of the client surfaces in
-# backend.yml/integration.yml/e2e.yml — this workflow is deliberately narrow.
+# backend.yml/integration.yml/e2e-*.yml — this workflow is deliberately narrow.
 #
 # CI taxonomy class: feature-correctness. No Docker; the blocking steps never
 # leave localhost; the advisory steps reach the network but cannot fail the

@@ -15,7 +15,7 @@
 //   bun run smoke:reap -- --dry-run                    # see the plan, change nothing
 //   bun run smoke:reap -- --dry-run --older-than 30m   # widen the window, still read-only
 //   bun run smoke:reap                                  # reap, default threshold 6h
-//   bun run smoke:reap -- --env-class ci                # CI leftovers only (what e2e.yml runs)
+//   bun run smoke:reap -- --env-class ci                # CI leftovers only (what e2e-*.yml runs)
 //
 // Flags (all CLI ARGUMENTS, never env vars — same rule as `--pg-data` /
 // `--stage`, so nothing a shell exports can silently widen a sweep):
@@ -60,7 +60,7 @@ function flagValue(name: string): string | undefined {
 const dryRun = process.argv.includes("--dry-run");
 
 // The default is DELIBERATELY longer than the e2e job's own ceiling (105
-// minutes, e2e.yml `timeout-minutes`). A threshold shorter than the longest
+// minutes, e2e-*.yml `timeout-minutes`). A threshold shorter than the longest
 // legitimate job would let one CI run reap another's live stack — the age gate
 // is only a safety property if no honest container can reach it.
 const DEFAULT_OLDER_THAN = "6h";

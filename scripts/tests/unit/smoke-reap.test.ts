@@ -15,7 +15,7 @@
 // each guard has BOTH a "refuses to act" case and a "still acts when the guard
 // does not apply" case — otherwise a guard that always fires would look green.
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -639,12 +639,27 @@ describe("executeReap", () => {
 // the workflows. None of that is reachable from a unit test any other way (each
 // needs Docker and a runner), so it is asserted against the real files.
 describe("the fix is wired into every workflow that boots a smoke stack", () => {
-  // Issue #373 retired swarm-opencode-nightly.yml — the same real-inference
-  // admission e2e.yml already spends on a push to main, and e2e.yml now also
-  // holds the nightly `schedule` that workflow used to. e2e.yml is the only
-  // workflow left that boots a smoke stack.
-  const workflows = ["e2e.yml"];
-  const workflow = (w: string) => readFileSync(join(repoRoot, ".github", "workflows", w), "utf8");
+  // Every e2e-*.yml boots its own smoke stack (issue #373 retired the other
+  // workflow that did), and every one ends with the SAME shared teardown action,
+  // .github/actions/e2e-teardown, called under `if: always()`. The teardown and
+  // reap STEPS therefore live in that action; the per-workflow guard below is
+  // that each e2e-*.yml actually calls it, always.
+  const teardownAction = readFileSync(join(repoRoot, ".github", "actions", "e2e-teardown", "action.yml"), "utf8");
+  const workflows = ["e2e-teardown/action.yml"];
+  const workflow = (w: string) => (w === "e2e-teardown/action.yml" ? teardownAction : readFileSync(join(repoRoot, ".github", "workflows", w), "utf8"));
+  const e2eWorkflowFiles = readdirSync(join(repoRoot, ".github", "workflows")).filter((f) => /^e2e-.+\.ya?ml$/.test(f));
+
+  test("every e2e-*.yml ends with the shared teardown, under `if: always()`", () => {
+    expect(e2eWorkflowFiles.length).toBeGreaterThan(1);
+    for (const f of e2eWorkflowFiles) {
+      const text = workflow(f);
+      const at = text.indexOf("uses: ./.github/actions/e2e-teardown");
+      expect({ workflow: f, calls: at >= 0 }).toEqual({ workflow: f, calls: true });
+      // The step's own `if:` precedes its `uses:` within the same step block.
+      const stepStart = text.lastIndexOf("- name:", at);
+      expect({ workflow: f, always: /\bif:.*always\(\)/.test(text.slice(stepStart, at)) }).toEqual({ workflow: f, always: true });
+    }
+  });
 
   test("the CLI discovers managed networks before deciding an empty container list means no work", () => {
     const cli = readFileSync(join(repoRoot, "scripts", "smoke-reap.ts"), "utf8");
@@ -684,10 +699,11 @@ describe("the fix is wired into every workflow that boots a smoke stack", () => 
     expect(pkg.scripts["smoke:reap"]).toBe("bun --no-env-file scripts/smoke-reap.ts");
   });
 
-  test("the CI reap threshold is longer than the e2e job's own ceiling — otherwise one run could reap another's live stack", () => {
-    const text = workflow("e2e.yml");
-    const threshold = /smoke-reap\.ts --env-class ci --older-than (\S+)/.exec(text)![1]!;
-    const ceilingMinutes = Math.max(...[...text.matchAll(/timeout-minutes:\s*(\d+)/g)].map((m) => Number(m[1])));
-    expect(parseDuration(threshold)).toBeGreaterThan(ceilingMinutes * 60_000);
+  test("the CI reap threshold is longer than every e2e job's own ceiling — otherwise one run could reap another's live stack", () => {
+    const threshold = /smoke-reap\.ts --env-class ci --older-than (\S+)/.exec(teardownAction)![1]!;
+    // A composite step cannot carry `timeout-minutes`, so each e2e-*.yml's JOB does.
+    const ceilings = e2eWorkflowFiles.flatMap((f) => [...workflow(f).matchAll(/timeout-minutes:\s*(\d+)/g)].map((m) => Number(m[1])));
+    expect(ceilings.length, "every e2e-*.yml declares a job timeout").toBeGreaterThanOrEqual(e2eWorkflowFiles.length);
+    expect(parseDuration(threshold)).toBeGreaterThan(Math.max(...ceilings) * 60_000);
   });
 });

@@ -254,7 +254,7 @@ depends on). They are NOT on a schedule: issue #378 retired
 `runtime` reports `skill-install`/`toolchain`/`keygen-signing` as
 `not-measured`, never `failed` (`evals/onboarding/support/gating.ts`) — when
 `runtime` is green the three are mutually independent. Layer 4 (admission) runs
-in `.github/workflows/e2e.yml`, on every push to `main` and on that workflow's
+in `.github/workflows/e2e-onboarding.yml`, on every push to `main` and on that workflow's
 nightly `schedule` mirror of it (E6).
 
 **E4 — Scored by sampling.** Layer 4 runs K samples with a fresh identity and
@@ -426,7 +426,7 @@ set's work, not extra work. Cron minutes are staggered so the mirrors do not all
 start at once, and every scheduled workflow declares exactly one cron entry.
 
 The real-inference admission's scheduled home is therefore
-`.github/workflows/e2e.yml` itself, on the `schedule: 37 4 * * *` slot the
+`.github/workflows/e2e-onboarding.yml` itself, on the `schedule: 37 4 * * *` slot the
 retired `swarm-opencode-nightly.yml` used to hold: `ONBOARDING_REAL_EVAL`
 resolves to `"1"` on a `schedule` event exactly as it does on a `push`, so a
 nightly spends **one** real admission. That is a smaller per-night sweep than the
@@ -440,7 +440,7 @@ scorecard module, no second stack bring-up. The isolated eval harness
 classifies the run with the existing `scripts/agent/classify-outcome.ts` and
 renders a small structured record — outcome, resolved model id, duration, member
 id, agent-liveness counts, and whether the sample belongs in the admission-rate
-denominator — which `e2e.yml` folds into `$GITHUB_STEP_SUMMARY` and uploads as an
+denominator — which `e2e-onboarding.yml` folds into `$GITHUB_STEP_SUMMARY` and uploads as an
 artifact with `if: always()`, on green and red runs alike. A `harness-error`
 renders **distinctly** from a `refused` and is excluded from the denominator: it
 measured nothing about the product. The renderer is pure and is unit-tested from

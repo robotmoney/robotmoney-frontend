@@ -24,7 +24,7 @@ const read = (name: string) => readFileSync(join(wfDir, name), "utf8");
 // PATH_GATED_WORKFLOWS — duplicated rather than imported, per this repo's
 // convention that sibling unit files stay independent of each other's
 // internals (see that file's own header comment).
-const PATH_GATED_WORKFLOWS = ["backend.yml", "contract.yml", "analyst-sdk.yml", "integration.yml", "web-client.yml", "research-pipeline.yml", "onboarding-eval-rails.yml", "e2e.yml"];
+const PATH_GATED_WORKFLOWS = ["backend.yml", "contract.yml", "analyst-sdk.yml", "integration.yml", "web-client.yml", "research-pipeline.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"];
 
 interface FilterStep {
   uses?: string;
@@ -134,47 +134,47 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
   // list), so an edit to a workflow's filters: block that changes
   // classification for any path below is caught here.
   const CASES: Array<[string, string[]]> = [
-    ["backend/src/api/routes.ts", ["backend.yml", "e2e.yml"]],
+    ["backend/src/api/routes.ts", ["backend.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     // Issue #602: a compose file must ALSO select integration.yml. That job
     // owns scripts/tests/integration/smoke-compose-config.test.ts, the only
     // suite that renders `docker compose config` and asserts what the api
     // service is handed — so a PR touching nothing but a compose file has to
     // run it, or the assertions covering that very file are skipped pre-merge.
-    ["docker-compose.yml", ["backend.yml", "integration.yml", "e2e.yml"]],
-    ["docker-compose.stage.yml", ["backend.yml", "integration.yml", "e2e.yml"]],
-    ["backend/src/analytics/extract/geckoterminal.ts", ["backend.yml", "research-pipeline.yml", "e2e.yml"]],
-    ["backend/src/chain/token-prices.ts", ["backend.yml", "research-pipeline.yml", "e2e.yml"]],
-    ["backend/src/swarm/apply.ts", ["backend.yml", "onboarding-eval-rails.yml", "e2e.yml"]],
-    ["contract/src/index.ts", ["contract.yml", "e2e.yml"]],
+    ["docker-compose.yml", ["backend.yml", "integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["docker-compose.stage.yml", ["backend.yml", "integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["backend/src/analytics/extract/geckoterminal.ts", ["backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["backend/src/chain/token-prices.ts", ["backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["backend/src/swarm/apply.ts", ["backend.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["contract/src/index.ts", ["contract.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     // Issue #1095: the SDK is its own gated workflow AND the backend's, because
     // the backend re-exports it and copies it into its image.
-    ["packages/analyst-sdk/src/run.ts", ["analyst-sdk.yml", "backend.yml", "research-pipeline.yml", "e2e.yml"]],
+    ["packages/analyst-sdk/src/run.ts", ["analyst-sdk.yml", "backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     // A unit test cannot change what the integration suite or the live stack
     // sees, so a PR touching only unit tests selects neither (unit.yml, which
     // is not path-gated, still runs it).
     ["scripts/tests/unit/smoke-env.test.ts", []],
-    ["scripts/tests/integration/smoke-compose-config.test.ts", ["integration.yml", "e2e.yml"]],
-    ["scripts/tests/support/dead-docker.ts", ["integration.yml", "e2e.yml"]],
-    ["scripts/smoke.ts", ["integration.yml", "e2e.yml"]],
-    ["scripts/lib/swarm/inference.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e.yml"]],
-    ["scripts/lib/member-agent/Dockerfile", ["integration.yml", "onboarding-eval-rails.yml", "e2e.yml"]],
-    ["scripts/lib/rmpc-fetch.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e.yml"]],
-    ["scripts/lib/onboarding-eval.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e.yml"]],
-    ["evals/onboarding/isolated.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e.yml"]],
-    [".github/workflows/unit.yml", ["integration.yml", "e2e.yml"]],
-    ["tsconfig.json", ["integration.yml", "e2e.yml"]],
-    ["package.json", ["integration.yml", "e2e.yml"]],
-    ["bun.lock", ["integration.yml", "e2e.yml"]],
+    ["scripts/tests/integration/smoke-compose-config.test.ts", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/tests/support/dead-docker.ts", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/smoke.ts", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/lib/swarm/inference.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/lib/member-agent/Dockerfile", ["integration.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/lib/rmpc-fetch.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/lib/onboarding-eval.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["evals/onboarding/isolated.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    [".github/workflows/unit.yml", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["tsconfig.json", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["package.json", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["bun.lock", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     // The web client's own scripts: web-client runs them, integration keeps
     // them because static-assembly.sh (exercised there) imports version.ts.
     ["scripts/web-client/browser.ts", ["integration.yml", "web-client.yml"]],
-    ["scripts/static-assembly.sh", ["integration.yml", "web-client.yml", "e2e.yml"]],
-    ["website-server/nginx.conf", ["web-client.yml", "e2e.yml"]],
+    ["scripts/static-assembly.sh", ["integration.yml", "web-client.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["website-server/nginx.conf", ["web-client.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     // Client CODE selects the live stack: the specs that need a real api
     // (scripts/web-client/static-specs.ts NOT_STATIC) only run there.
-    ["frontend/public/assets/js/app.js", ["web-client.yml", "e2e.yml"]],
-    ["frontend/public/assets/css/site.css", ["web-client.yml", "e2e.yml"]],
-    ["playwright.config.ts", ["web-client.yml", "e2e.yml"]],
+    ["frontend/public/assets/js/app.js", ["web-client.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["frontend/public/assets/css/site.css", ["web-client.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["playwright.config.ts", ["web-client.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     // Copy and the specs that read it: web-client only. This is the point of
     // the e2e skip list — a marketing change never boots the live stack.
     ["frontend/public/views/home.html", ["web-client.yml"]],
@@ -226,8 +226,8 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
   // skip entry must turn a skipped path back into a run, and the matcher must
   // honour the quantifier (under `some`, `!docs/**` would match everything).
   test("e2e's filter is an `every` allowlist: removing a skip entry makes that path run — red control", () => {
-    expect(quantifierFor("e2e.yml")).toBe("every");
-    const real = extractFilters("e2e.yml")["e2e"]!;
+    expect(quantifierFor("e2e-web.yml")).toBe("every");
+    const real = extractFilters("e2e-web.yml")["e2e"]!;
     expect(real).toContain("**");
     expect(real).toContain("!frontend/public/views/**");
     const without = real.filter((p) => p !== "!frontend/public/views/**");

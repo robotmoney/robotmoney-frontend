@@ -822,7 +822,7 @@ visible provenance notice** until its "live when" condition holds.
 5. **Cost control** (single Blacksmith runner, hours-long e2e cycles): visual
    goldens limited to the 7 shots above; per-view functional specs grouped
    ~3 views per spec file where routes share a phase; `frontend.yml` keeps
-   running only preview-smoke; the full suite stays inside `e2e.yml`.
+   running only preview-smoke; the full suite stays inside `e2e-web.yml`.
 
 ---
 

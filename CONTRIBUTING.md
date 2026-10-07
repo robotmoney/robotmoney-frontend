@@ -35,7 +35,7 @@ review; stop it with Ctrl-C.
 The static client (`frontend/public` + `frontend/preview`) has its own
 manifest and version, `frontend/package.json` (`@robotmoney/web-client`) —
 independent of `backend/package.json` and `contract/package.json`. Its merge
-gate is `.github/workflows/web-client.yml`, not `backend.yml`/`e2e.yml`: only
+gate is `.github/workflows/web-client.yml`, not `backend.yml`/`e2e-*.yml`: only
 the client's own unit tests, the static assembly build, and a fixtures-mode
 Playwright sweep of every route can block a client PR. See
 [decisions.md D45](./docs/decisions.md#d45--the-web-client-gets-its-own-manifest-version-and-merge-gate--narrow-and-fast-separate-from-apibackend-ci-lucas-2026-09-17)
