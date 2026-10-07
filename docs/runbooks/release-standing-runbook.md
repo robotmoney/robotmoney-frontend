@@ -56,12 +56,19 @@ unverified, not satisfied.
 
 ## 4. Phase R — stage rehearsal (policy 4.4 and 4.5)
 
+**QA branch (policy 4.6, owner 2026-10-06).** Every stage session runs on its own
+`qa/A.B.x-<YYYY-MM-DD>` branch cut from the release branch tip. All the session's patches,
+runbook fixes included, merge into that branch. The release branch and `main` take no commit
+during the session. The owner picks what moves to each one afterwards.
+
 | ID | Check | Tool | Target | Status |
 |---|---|---|---|---|
-| SR.1 | Restored production dump boots to READY on the RC commit, with every active member seated | `bun smoke --local dump` | stage | script |
+| SR.0 | A production dump captured for this run (policy 4.3 fresh dump rule): unless the operator names one, never a dump already on the host; a reused copy only for rapid turnaround and at most 24 hours old | `bun smoke:capture --out <new dir>` | capture host | script |
+| SR.1 | The SR.0 dump boots to READY on the RC commit as a twin (`--local dump`, never the remote database), every active member seated on a **spoofed** key and running as its own participant container (agents and the judge) | `bun smoke --local dump --spoof-keys --credentials <file listing every active member>` | stage | script |
+| SR.9 | **Accelerated schedule.** After the checks that need production's epochs (the restored grid), the twin's subjects get short epochs through the admin API, its open windows are pulled in, and the scheduler rebuilds its timers. Every check that needs sessions to publish (SR.4, the SR.7 window, the judge) runs after it. Re-run it after every fresh boot | `bun run twin:accelerate --instance NAME [--epoch 900]` | stage | script |
 | SR.2 | Readiness: api, pipeline worker, analytics-producer, scheduler | `bun smoke:status` | stage | script |
 | SR.3 | Product verification, full tier | `bun run verify:live --tier full` | stage | script |
-| SR.4 | Twin gate: sessions judged (a `no_consensus` publish is a warning, owner 2026-10-06), participants never restarted, judge on, no dead job, containers healthy, every log error classified, no FATAL | `bun run twin:gate` | stage | script |
+| SR.4 | Twin gate, after SR.9: sessions judged (a `no_consensus` publish is a warning, owner 2026-10-06), participants never restarted, judge on, no dead job, containers healthy, every log error classified, no FATAL | `bun run twin:gate` | stage | script |
 | SR.5 | Interruption at a phase boundary resumes, before and after replace | release runbook R3.6 | stage | manual |
 | SR.6 | Rollback rehearsal: restore time recorded, and the old code's behavior against the new schema recorded | release runbook R3.9 | stage | manual |
 | SR.7 | Cumulative standing invariants (the 0.5.x R8 list, section 7) | `bun run soak:checks --instance NAME --since T0 --full` (`--record` once at READY) | stage | script |

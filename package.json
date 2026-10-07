@@ -37,6 +37,7 @@
     "smoke:reap": "bun --no-env-file scripts/smoke-reap.ts",
     "verify:live": "bun run scripts/verify-live.ts",
     "twin:gate": "bun scripts/twin-gate.ts",
+    "twin:accelerate": "bun scripts/twin-accelerate.ts",
     "prod:gate": "bun scripts/prod-gate.ts",
     "soak:checks": "bun scripts/standing-soak.ts",
     "smoke:capture": "bun run --cwd backend scripts/smoke-twin-capture.ts",

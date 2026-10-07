@@ -71,8 +71,8 @@ Feature PRs never target `releases-A.B.x` directly — ordinary feature work is
 reviewed and merged via PR against `main`, exactly as this document's intro
 paragraph says. Once a release's scope is decided, the branch receives only
 (a) the specific commits cherry-picked from `main` that the release needs,
-and (b) small incidental nit-fix commits made directly on the branch while
-getting it out the door (see §7, Backporting). A release is **never tagged
+and (b) the QA-branch commits the owner selects at the end of a QA session
+(§4.6). No commit lands on the release branch during a QA session. A release is **never tagged
 directly on `main`** — the tag lands on the `releases-A.B.x` branch, so
 `main` keeps moving with ordinary merges while the release line is frozen
 except for the fixes it specifically needs. This applies to every tag the
@@ -202,6 +202,14 @@ The adopted [smoke production spec](./smoke-production-spec.md) defines
 `bun smoke:capture` as the read-only replica capture path. A future runbook may
 use it only after confirming that the release code implements that interface.
 
+**Fresh dump rule (owner, 2026-10-06).** Unless the operator names a specific dump, every
+rehearsal starts from a dump captured from production for that run: `bun smoke:capture --out
+<new directory>` on the capture host, then `--local dump=<that directory>`. Never restore
+whatever dump or twin happens to be on the host. Reusing an existing copy (`--reuse`,
+`--local volume`, or an earlier capture) is allowed only for a rapid turnaround between test
+runs, and only while that copy's capture (`manifest.json` `capturedAt`) is at most 24 hours
+old. Past 24 hours, capture again. The rehearsal report names the dump's stamp and capture time.
+
 ### 4.4. Isolated release rehearsal
 
 Rehearse the release on an isolated copy of production data using the adopted
@@ -215,6 +223,13 @@ steps, and all checks exercised. It must cover:
 - W3 participant roster and submission behavior when the release affects
   participants;
 - product verification and evidence of any approved exceptions.
+
+On a twin the rehearsal deploys the system against the restored copy (never the remote
+database), seats every active member on a spoofed key as its own participant container, and,
+once the checks that need production's schedule are recorded, runs the sessions on an
+accelerated schedule: short epochs set through the admin API (`bun run twin:accelerate`,
+standing check SR.9), so the lifecycle checks see sessions publish and the judge judge within
+minutes.
 
 A restored rehearsal target is disposable by explicit operator action; the
 smoke boot itself exits after readiness and leaves services running. Capture
@@ -249,21 +264,32 @@ execution. Fix it as follows, then follow §3's tag sequence.
 A fix is developed in a development environment and never on a rehearsal,
 stage or production host. A host runs a clean checkout of a pushed commit
 (`git status --porcelain` empty, no host-side commits). A rehearsal on a host
-whose code differs from the release branch is not evidence for the release.
+whose code differs from the branch under test is not evidence for the release.
 
-1. Branch the fix from the release branch (`releases-A.B.x`), not from `main`.
-2. Develop and test the fix in a local worktree.
-3. Open a PR into the release branch and merge it there. A change to a
+**QA branch rule (owner, 2026-10-06).** A QA session never commits to the
+release branch or to `main`. Both stay clean for the whole session.
+
+1. At the start of the session, cut one QA branch from the release branch tip:
+   `qa/A.B.x-<YYYY-MM-DD>` (example: `qa/0.6.x-2026-10-06`). Push it. Every
+   patch of the session lands there, and nowhere else.
+2. Switch the development checkout and the stage host to the QA branch. The
+   stage host runs a clean checkout of the QA branch tip, never a fix branch.
+3. Develop and test each fix in a local worktree branched from the QA branch.
+   Open the PR into the QA branch and merge it there. Runbook and doc
+   corrections found during the session land there too. A change to a
    supported baseline needs the owner's decision first (D55 (8)).
-4. Redeploy a clean checkout of the new release-branch tip to the stage host.
-   If no candidate has yet been deployed to production, leave the corrected
-   branch tip untagged and repeat stage preflight and rehearsal. A stage failure
-   does not consume an rc number. If a deployed candidate failed postflight,
-   cut the next rc only after the corrected tip passes stage.
-5. Resume the sequence in §3 at the applicable step.
+4. Redeploy a clean checkout of the new QA branch tip to the stage host and
+   repeat the affected stage steps. A stage failure does not consume an rc
+   number.
+5. When the session ends, the owner decides which QA commits reach the release
+   branch and which reach `main`. Only then does a PR carry them. The rc tag is
+   cut on the release branch after that merge, and stage is re-run on that tip
+   if its tree differs from the tree that passed on the QA branch.
+6. Resume the sequence in §3 at the applicable step.
 
 Runbook corrections that change release instructions must be committed and
-reviewed on the release branch. Re-run any gate whose evidence or operator
+reviewed on the QA branch during a session, and reach the release branch with
+the owner's merge decision (step 5). Re-run any gate whose evidence or operator
 action the correction affects. Rc numbering follows §3: stage-only retries and
 documentation fixes do not consume an rc; a corrected candidate consumes the
 next rc only after a deployed candidate fails postflight.
@@ -340,8 +366,15 @@ The rule is default deny. Every distinct error in every log must match a
 classification in `scripts/lib/gate/log-classifications.json` with a written
 reason, or the gate fails. A new failure mode is added to that file only with
 evidence and a reason, never to make a run pass. A model timeout or a rejected
-take is a model outcome and is reported. A dead judge, or a session that
-published without a model judgement and a receipt, fails.
+take is a model outcome and is reported. A session that publishes
+`no_consensus` is an acceptable outcome (owner, 2026-10-06): the gates list it as
+a warning and never count it as a good session. The scheduler also publishes
+`no_consensus` when the judge is disconnected at the deadline
+([smoke production spec](./smoke-production-spec.md) §10), so a dead judge is
+caught by the other checks, not by that outcome: every subject still needs its
+minimum of good sessions (judged, with an applied judgement and a receipt), a
+session published as `not_judged`, or `judged` without a judgement or a
+receipt, fails, and the judge participant must be running and never restarted.
 
 ### 4.8. Recovery and rollback
 
