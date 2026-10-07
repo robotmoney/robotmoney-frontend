@@ -112,6 +112,9 @@ test("a gap in the history is drawn as a gap, not bridged", async ({ page }) => 
   await page.goto("/");
   await navigate(page, "/treasury");
   // Two unbroken runs (the eight days, then the four): two edges, two fills.
+  // The span runs first day to last, gap included: 45,400 to 46,500 (SP500 out).
+  await expect(page.locator(".trs__span")).toHaveText(/Sep 1, 2026\s*\$45,400\s*Sep 21, 2026\s*\$46,500\s*Change\s*\+\$1,100 \(\+2\.4%\)/);
+  await expect(page.locator(".trs__span .alp__mv")).toHaveClass(/\bup\b/);
   const value = page.locator("#history .rr-area__svg").first();
   await expect(value.locator("polyline")).toHaveCount(2);
   await expect(value.locator("polygon")).toHaveCount(2);

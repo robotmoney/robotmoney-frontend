@@ -236,6 +236,24 @@ export function registerTreasuryView(Alpine) {
       if (!start || !start.total) return null;
       return { usd: last.total - start.total, pct: ((last.total - start.total) / start.total) * 100 };
     },
+    // The value chart's whole span, start to end, signed as the 30-day change
+    // is. The vault's TVL leaves out the percentage because deposits move it;
+    // the treasury holds no depositors' money, so here the percentage reads true.
+    tvlSpan() {
+      const pts = this.tvl().points;
+      if (pts.length < 2) return null;
+      const a = pts[0];
+      const b = pts[pts.length - 1];
+      const usd = b.value - a.value;
+      const sign = usd > 0 ? "+" : usd < 0 ? "−" : "";
+      const pct = a.value ? ` (${sign}${Math.abs((usd / a.value) * 100).toFixed(1)}%)` : "";
+      return {
+        fromDate: fmtDate(a.t), from: fmtUsd(a.value),
+        toDate: fmtDate(b.t), to: fmtUsd(b.value),
+        delta: `${sign}${fmtUsd(Math.abs(usd))}${pct}`,
+        cls: !usd ? "flat" : usd > 0 ? "up" : "down",
+      };
+    },
     change30dLabel() {
       const c = this.change30d();
       if (!c) return "—";

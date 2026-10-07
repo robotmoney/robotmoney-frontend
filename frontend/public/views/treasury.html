@@ -125,7 +125,13 @@
         <figure class="rr-area">
           <figcaption class="rr-area__head">
             <h3 class="rr-subhead__h">Value</h3>
-            <span class="rr-sec__aside" x-text="tvlChange()"></span>
+            <template x-if="tvlSpan()">
+              <p class="rr-meta trs__span">
+                <span class="rr-meta__i"><span x-text="tvlSpan().fromDate"></span> <b x-text="tvlSpan().from"></b></span>
+                <span class="rr-meta__i"><span x-text="tvlSpan().toDate"></span> <b x-text="tvlSpan().to"></b></span>
+                <span class="rr-meta__i">Change <b><span class="alp__mv" :class="tvlSpan().cls" x-text="tvlSpan().delta"></span></b></span>
+              </p>
+            </template>
           </figcaption>
           <div class="rr-area__frame">
             <div class="rr-area__y" aria-hidden="true">
@@ -333,6 +339,8 @@
 .trs__body { max-width: 80rem; margin: 0 auto; padding: 0 1.5rem; overflow-x: clip; }
 .trs__meta { border-top: 0; }
 .trs__block { margin-top: 2.25rem; }
+/* The value chart's span: where it starts, where it ends, the change. */
+.trs__span { margin: 0; padding: 0; border: 0; gap: 0.25rem 1.25rem; font-size: 0.75rem; }
 .trs__ring { width: 11.5rem; height: 11.5rem; }
 .trs__legend li:last-of-type { border-bottom: 0; }
 
