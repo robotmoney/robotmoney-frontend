@@ -1,0 +1,123 @@
+# e2e, domain 2 of 4: the SWARM. Does the swarm pipeline publish, and does the
+# stack reach a healthy LIVE steady state? Against its own freshly booted stack:
+# the swarm session driver (two live sessions through the real worker queue, the
+# cross-role denials), the repo-native starter agent (with its two missing-
+# credential guards), the live steady-state assertions (issue #128: at least two
+# published sessions, a fresh regime snapshot, live wallet/vault provenance, both
+# research signals), and the product invariants (verify-live, tier readonly).
+#
+# The live-smoke and verify-live checks assert what the session driver
+# publishes, so they stay in this domain and run after it. See e2e-lifecycle.yml
+# for how the four e2e-*.yml domains divide the old e2e.yml, and for the CI
+# taxonomy class and draft deferral that apply here too.
+name: e2e-swarm
+env:
+  CI_CLASS: system-correctness
+on:
+  push:
+    branches: [main, "releases-*", "fusion/**"]
+  schedule:
+    - cron: "17 4 * * *"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+jobs:
+  # ── change detection ───────────────────────────────────────────────────────
+  changes:
+    # Plumbing, not an assurance job: it must run in every context so the e2e
+    # job below has a filter output to gate on.
+    env:
+      CI_CLASS: ignore
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      e2e: ${{ steps.filter.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@v4
+      # `every`: a file is relevant only if it matches ALL patterns, i.e. it is
+      # a path (`**`) that is on none of the skip entries (`!...`). The filter
+      # is true when ANY changed file is relevant.
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
+        id: filter
+        with:
+          predicate-quantifier: every
+          filters: |
+            e2e:
+              - '**'
+              - '!**/*.md'
+              - '!**/*.txt'
+              - '!docs/**'
+              - '!brand-assets/**'
+              - '!goldens/**'
+              - '!frontend/test/**'
+              - '!frontend/public/views/**'
+              - '!frontend/public/data/**'
+              - '!frontend/public/skills/**'
+              - '!frontend/public/blog/**'
+              - '!frontend/public/avatars/**'
+              - '!frontend/public/assets/img/**'
+              - '!scripts/tests/unit/**'
+              - '!scripts/web-client/**'
+
+  e2e-swarm:
+    needs: [changes]
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true') }}
+    runs-on: ubuntu-latest
+    # The ceiling for the whole job. The session driver took ~5 minutes live; the
+    # rest is headroom for a slow model or provider.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Boot a LIVE smoke stack
+        id: stack
+        uses: ./.github/actions/e2e-setup
+        with:
+          opencode-api-key: ${{ secrets.OPENCODE_API_KEY }}
+          agent-model: ${{ vars.AGENT_MODEL || '' }}
+      - name: Swarm session (two live sessions, the cross-role denials)
+        run: bun --no-env-file scripts/smoke-ci-checks.ts --check swarm-session
+        env:
+          CI: "true"
+          RM_ENV: stage
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+      - name: Starter agent (REST, with its two missing-credential guards)
+        run: bun --no-env-file scripts/smoke-ci-checks.ts --check starter-agent
+        env:
+          CI: "true"
+          RM_ENV: stage
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+      # The paid CoinGecko key (issue #1062). GeckoTerminal is CoinGecko's: with
+      # the key, the new_pools sweep and token-price lookups use
+      # pro-api.coingecko.com/api/v3/onchain instead of the keyless host, which
+      # allows ~10 calls a minute per IP and 429s in CI. It reaches the containers
+      # through DEMO_COMPOSE_PASSTHROUGH. On a fork PR GitHub supplies an empty
+      # secret and the smoke falls back to the keyless host. The source ledger
+      # redacts the key header, so it is not saved in the database or an artifact.
+      - name: Live steady state (published sessions, regime, wallets, vaults, research)
+        run: bun --no-env-file scripts/smoke-ci-checks.ts --check live-smoke
+        env:
+          CI: "true"
+          RM_ENV: stage
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+      - name: Product invariants (verify-live, tier readonly)
+        run: bun --no-env-file scripts/smoke-ci-checks.ts --check verify-live
+        env:
+          CI: "true"
+          RM_ENV: stage
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+      - name: Tear down this job's smoke stack
+        if: always()
+        uses: ./.github/actions/e2e-teardown
+        with:
+          smoke-project: ${{ steps.stack.outputs.smoke-project }}

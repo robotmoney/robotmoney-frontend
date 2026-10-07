@@ -1,4 +1,4 @@
-# Onboarding-eval infra rails (issue #275 addendum): split out of the e2e.yml
+# Onboarding-eval infra rails (issue #275 addendum): split out of the old single e2e.yml
 # monolith. This is the inference-OFF rails check for the real-inference
 # onboarding eval (scripts/lib/onboarding-eval.ts, docs/architecture.md §11
 # R8): it proves the member-agent image builds and starts, reaches the
@@ -17,9 +17,9 @@
 # minute LIVE smoke boot when only paths in the filter below changed.
 #
 # The REAL-INFERENCE eval itself (the one that spends a model token) stays
-# INSIDE e2e.yml's "Full-stack smoke" step, unchanged: it deliberately reuses
-# that already-booted LIVE stack rather than standing up a second one (see
-# e2e.yml's own header). Only the inference-off rails check moved here.
+# in e2e-onboarding.yml, which boots its own LIVE stack through the shared e2e-setup action: it deliberately uses
+# a full LIVE stack rather than this minimal postgres+api one (see
+# e2e-onboarding.yml's own header). Only the inference-off rails check lives here.
 #
 # Same Docker requirement as the rest of this rails check always had: a
 # missing/unusable Docker daemon THROWS out of stack.up()'s
@@ -71,7 +71,7 @@ jobs:
       onboarding_eval_rails: ${{ steps.filter.outputs.onboarding_eval_rails }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
         id: filter
         with:
           filters: |
@@ -107,7 +107,7 @@ jobs:
           VERSION=$(bun -e 'import("./scripts/lib/rmpc-fetch.ts").then((m) => console.log(m.RMPC_VERSION))')
           echo "resolved rmpc version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-      # Same cache key pattern as e2e.yml's identical step — GitHub Actions
+      # Same cache key pattern as e2e-onboarding.yml's identical step — GitHub Actions
       # cache is shared across workflow files by key, so whichever workflow
       # runs first for a given rmpc version populates it for the other.
       - name: Cache rmpc release binary

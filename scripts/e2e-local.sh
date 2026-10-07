@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-command local reproduction of .github/workflows/e2e.yml's required job.
+# One-command local reproduction of the .github/workflows/e2e-*.yml required jobs
 # Skips the CI-runner-only provisioning (setup-bun, setup-node, pinned opencode
 # CLI download) since a dev shell already has those; runs the same checks the
 # workflow gates on: bun run scripts/smoke.ts, which internally runs
@@ -30,7 +30,7 @@ fi
 
 PINNED_OPENCODE_VERSION="1.18.1"
 if ! command -v opencode >/dev/null 2>&1; then
-  echo "opencode CLI not on PATH — install v${PINNED_OPENCODE_VERSION} (see e2e.yml's 'Install opencode CLI' step)" >&2
+  echo "opencode CLI not on PATH — install v${PINNED_OPENCODE_VERSION} (see the 'Install opencode CLI' step of .github/actions/e2e-setup)" >&2
   exit 1
 fi
 LOCAL_OPENCODE_VERSION="$(opencode --version 2>&1 | tr -d '\n')"

@@ -141,7 +141,7 @@ the GitHub UI, not something automatable from this repo.
   (`evals/**`, `scripts/lib/member-agent/**`, `scripts/lib/rmpc-fetch.ts`,
   `scripts/lib/onboarding-eval.ts`, `scripts/lib/swarm/**`,
   `backend/src/swarm/**`). The REAL-inference eval (the one that spends a
-  model token) stays inside `e2e.yml`'s "Full-stack smoke" step, unchanged — it
+  model token) stays inside `e2e-*.yml`'s "Full-stack smoke" step, unchanged — it
   deliberately reuses that already-booted LIVE stack rather than standing up a
   second one.
 - `web-client` (issue #275 addendum, critical-bug fix — see "No fan-in gate"
@@ -158,7 +158,7 @@ the GitHub UI, not something automatable from this repo.
   every `sitemap.xml` route inside the FIXTURES-mode preview (goldens answer
   `/api/*`, `scripts/preview-server.ts` — no `BACKEND_URL`, no Docker), plus
   the pre-existing `preview-smoke.spec.ts` and `api-unreachable.spec.ts` — a
-  fast, feature-correctness-class addition, not a substitute: `e2e.yml`'s
+  fast, feature-correctness-class addition, not a substitute: `e2e-*.yml`'s
   `test:browser` step still runs the ENTIRE `frontend/test/browser/` suite,
   including specs that need the live backend the full smoke boot provides.
   The preview wrapper's `?api=` switch can also point `/api/*` at a live prod
@@ -167,7 +167,7 @@ the GitHub UI, not something automatable from this repo.
   but ADVISORY only (`continue-on-error: true`, reported in the job summary) —
   a live host being unreachable says nothing about the PR's client code, so it
   can never block the merge. Backend/db/api changes get their own coverage of
-  the client surfaces in `backend.yml`/`integration.yml`/`e2e.yml`, unchanged.
+  the client surfaces in `backend.yml`/`integration.yml`/`e2e-*.yml`, unchanged.
 
 System-correctness workflows (`backend`, `research-pipeline`, `integration`,
 `onboarding-eval-rails`, `e2e`) defer on draft PRs; the feature-correctness

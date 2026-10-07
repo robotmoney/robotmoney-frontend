@@ -17,7 +17,7 @@
 // 'stale' — never rethrow, never fabricate (the same honest-degrade path BNKR
 // uses; original #202 AC3).
 //
-// Demo-readiness gate (AC2): the gate is e2e.yml's "Full-stack smoke" step
+// Demo-readiness gate (AC2): the gate is the e2e-setup action's "Full-stack smoke" step
 // (scripts/smoke.ts → scripts/lib/smoke-main.ts), which reaches READY when
 // postgres + migrations/seed + api/mcp /health + the EDGAR bootstrap complete
 // AND the worker lanes stay up. The ONLY step in that boot sequence that
