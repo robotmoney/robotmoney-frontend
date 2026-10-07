@@ -13,7 +13,7 @@
 // paths classifies against them exactly as CI would, plus a typoed-filter red
 // control proving the table can actually catch a broken pattern.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
@@ -24,7 +24,7 @@ const read = (name: string) => readFileSync(join(wfDir, name), "utf8");
 // PATH_GATED_WORKFLOWS — duplicated rather than imported, per this repo's
 // convention that sibling unit files stay independent of each other's
 // internals (see that file's own header comment).
-const PATH_GATED_WORKFLOWS = ["backend.yml", "contract.yml", "analyst-sdk.yml", "integration.yml", "web-client.yml", "research-pipeline.yml", "onboarding-eval-rails.yml"];
+const PATH_GATED_WORKFLOWS = ["backend.yml", "contract.yml", "analyst-sdk.yml", "integration.yml", "web-client.yml", "research-pipeline.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"];
 
 interface FilterStep {
   uses?: string;
@@ -102,13 +102,23 @@ function compilePattern(glob: string): RegExp {
   return new RegExp(anchored ? `^${out}$` : `(^|/)${out}$`);
 }
 
-function pathMatches(path: string, patterns: string[]): boolean {
-  return patterns.some((p) => compilePattern(p).test(path));
+function pathMatches(path: string, patterns: string[], quantifier: "some" | "every" = "some"): boolean {
+  if (quantifier === "some") return patterns.some((p) => compilePattern(p).test(path));
+  // `every` (dorny's predicate-quantifier): ALL patterns must hold, and a
+  // leading `!` inverts one, so `['**', '!docs/**']` reads "any path not in docs".
+  return patterns.every((p) => (p.startsWith("!") ? !compilePattern(p.slice(1)).test(path) : compilePattern(p).test(path)));
+}
+
+/** The `predicate-quantifier` a workflow's filter step declares (dorny default: some). */
+function quantifierFor(file: string): "some" | "every" {
+  const wf = Bun.YAML.parse(read(file)) as { jobs?: Record<string, { steps?: Array<{ uses?: string; with?: Record<string, string> }> }> };
+  const step = (wf.jobs?.changes?.steps ?? []).find((s) => (s.uses ?? "").startsWith("dorny/paths-filter@"));
+  return step?.with?.["predicate-quantifier"] === "every" ? "every" : "some";
 }
 
 /** Every PATH_GATED_WORKFLOWS file whose real filter would trigger for `path`. */
 function classify(path: string): string[] {
-  return PATH_GATED_WORKFLOWS.filter((f) => pathMatches(path, patternsFor(f)));
+  return PATH_GATED_WORKFLOWS.filter((f) => pathMatches(path, patternsFor(f), quantifierFor(f)));
 }
 
 describe("ci-gate path-filter classification (distributed dorny/paths-filter — no ci-gate.yml; see issue #348)", () => {
@@ -124,35 +134,59 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
   // list), so an edit to a workflow's filters: block that changes
   // classification for any path below is caught here.
   const CASES: Array<[string, string[]]> = [
-    ["backend/src/api/routes.ts", ["backend.yml"]],
+    ["backend/src/api/routes.ts", ["backend.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     // Issue #602: a compose file must ALSO select integration.yml. That job
     // owns scripts/tests/integration/smoke-compose-config.test.ts, the only
     // suite that renders `docker compose config` and asserts what the api
     // service is handed — so a PR touching nothing but a compose file has to
     // run it, or the assertions covering that very file are skipped pre-merge.
-    ["docker-compose.yml", ["backend.yml", "integration.yml"]],
-    ["docker-compose.stage.yml", ["backend.yml", "integration.yml"]],
-    ["backend/src/analytics/extract/geckoterminal.ts", ["backend.yml", "research-pipeline.yml"]],
-    ["backend/src/chain/token-prices.ts", ["backend.yml", "research-pipeline.yml"]],
-    ["backend/src/swarm/apply.ts", ["backend.yml", "onboarding-eval-rails.yml"]],
-    ["contract/src/index.ts", ["contract.yml"]],
+    ["docker-compose.yml", ["backend.yml", "integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["docker-compose.stage.yml", ["backend.yml", "integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["backend/src/analytics/extract/geckoterminal.ts", ["backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["backend/src/chain/token-prices.ts", ["backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["backend/src/swarm/apply.ts", ["backend.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["contract/src/index.ts", ["contract.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     // Issue #1095: the SDK is its own gated workflow AND the backend's, because
     // the backend re-exports it and copies it into its image.
-    ["packages/analyst-sdk/src/run.ts", ["analyst-sdk.yml", "backend.yml", "research-pipeline.yml"]],
-    ["scripts/tests/unit/smoke-env.test.ts", ["integration.yml"]],
-    ["scripts/lib/swarm/inference.ts", ["integration.yml", "onboarding-eval-rails.yml"]],
-    ["scripts/lib/member-agent/Dockerfile", ["integration.yml", "onboarding-eval-rails.yml"]],
-    ["scripts/lib/rmpc-fetch.ts", ["integration.yml", "onboarding-eval-rails.yml"]],
-    ["scripts/lib/onboarding-eval.ts", ["integration.yml", "onboarding-eval-rails.yml"]],
-    ["evals/onboarding/isolated.ts", ["integration.yml", "onboarding-eval-rails.yml"]],
-    [".github/workflows/unit.yml", ["integration.yml"]],
-    ["tsconfig.json", ["integration.yml"]],
-    ["package.json", ["integration.yml"]],
-    ["bun.lock", ["integration.yml"]],
-    ["frontend/public/assets/js/app.js", ["web-client.yml"]],
-    ["playwright.config.ts", ["web-client.yml"]],
+    ["packages/analyst-sdk/src/run.ts", ["analyst-sdk.yml", "backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    // A unit test cannot change what the integration suite or the live stack
+    // sees, so a PR touching only unit tests selects neither (unit.yml, which
+    // is not path-gated, still runs it).
+    ["scripts/tests/unit/smoke-env.test.ts", []],
+    ["scripts/tests/integration/smoke-compose-config.test.ts", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/tests/support/dead-docker.ts", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/smoke.ts", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/lib/swarm/inference.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/lib/member-agent/Dockerfile", ["integration.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/lib/rmpc-fetch.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/lib/onboarding-eval.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["evals/onboarding/isolated.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    [".github/workflows/unit.yml", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["tsconfig.json", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["package.json", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["bun.lock", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    // The web client's own scripts: web-client runs them, integration keeps
+    // them because static-assembly.sh (exercised there) imports version.ts.
+    ["scripts/web-client/browser.ts", ["integration.yml", "web-client.yml"]],
+    ["scripts/static-assembly.sh", ["integration.yml", "web-client.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["website-server/nginx.conf", ["web-client.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    // Client CODE selects the live stack: the specs that need a real api
+    // (scripts/web-client/static-specs.ts NOT_STATIC) only run there.
+    ["frontend/public/assets/js/app.js", ["web-client.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["frontend/public/assets/css/site.css", ["web-client.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["playwright.config.ts", ["web-client.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    // Copy and the specs that read it: web-client only. This is the point of
+    // the e2e skip list — a marketing change never boots the live stack.
+    ["frontend/public/views/home.html", ["web-client.yml"]],
+    ["frontend/public/views/docs/investment-swarm/index.html", ["web-client.yml"]],
+    ["frontend/public/data/deposit/vaults.json", ["web-client.yml"]],
+    ["frontend/public/skills/deposit/SKILL.md", ["web-client.yml"]],
+    ["frontend/public/blog/post.html", ["web-client.yml"]],
+    ["frontend/public/assets/img/hero.png", ["web-client.yml"]],
+    ["frontend/test/browser/about-view.spec.ts", ["web-client.yml"]],
     ["goldens/api-goldens.json", ["web-client.yml"]],
     ["docs/architecture.md", []],
+    ["brand-assets/logo.svg", []],
     ["README.md", []],
   ];
 
@@ -179,13 +213,47 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
     const real = extractFilters("integration.yml");
     const key = Object.keys(real)[0]!;
     const realPatterns = real[key]!;
-    expect(realPatterns).toContain("scripts/**");
-    const typoedPatterns = realPatterns.map((p) => (p === "scripts/**" ? "scropts/**" : p));
+    expect(realPatterns).toContain("scripts/lib/**");
+    const typoedPatterns = realPatterns.map((p) => (p === "scripts/lib/**" ? "scropts/lib/**" : p));
     expect(typoedPatterns).not.toEqual(realPatterns);
 
-    const path = "scripts/tests/unit/smoke-env.test.ts";
+    const path = "scripts/lib/swarm/inference.ts";
     expect(pathMatches(path, realPatterns)).toBe(true);
     expect(pathMatches(path, typoedPatterns)).toBe(false);
+  });
+
+  // Same idea for the e2e skip list, which is an `every` filter: dropping one
+  // skip entry must turn a skipped path back into a run, and the matcher must
+  // honour the quantifier (under `some`, `!docs/**` would match everything).
+  test("e2e's filter is an `every` allowlist: removing a skip entry makes that path run — red control", () => {
+    expect(quantifierFor("e2e-web.yml")).toBe("every");
+    const real = extractFilters("e2e-web.yml")["e2e"]!;
+    expect(real).toContain("**");
+    expect(real).toContain("!frontend/public/views/**");
+    const without = real.filter((p) => p !== "!frontend/public/views/**");
+    const path = "frontend/public/views/home.html";
+    expect(pathMatches(path, real, "every")).toBe(false);
+    expect(pathMatches(path, without, "every")).toBe(true);
+    expect(pathMatches(path, real, "some"), "the some-quantifier reading would run e2e for everything").toBe(true);
+  });
+
+  // ── unclassified-directory guard ───────────────────────────────────────────
+  // integration.yml lists scripts/ subdirectories positively (a `some` filter
+  // cannot subtract), so a NEW directory would silently skip the job. Every
+  // directory under scripts/ and scripts/tests/ must either match a pattern in
+  // integration's filter or be named here as deliberately skipped.
+  test("every scripts/ and scripts/tests/ directory is selected by integration or deliberately skipped", () => {
+    const SKIPPED_BY_INTEGRATION = new Set(["scripts/tests/unit"]);
+    const patterns = patternsFor("integration.yml");
+    const dirs = [
+      ...readdirSync(join(repoRoot, "scripts"), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => `scripts/${d.name}`),
+      ...readdirSync(join(repoRoot, "scripts", "tests"), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => `scripts/tests/${d.name}`),
+    ].filter((d) => d !== "scripts/tests");
+    const unclassified = dirs.filter((d) => !SKIPPED_BY_INTEGRATION.has(d) && !pathMatches(`${d}/x`, patterns));
+    expect(unclassified, `add these directories to integration.yml's filter, or to SKIPPED_BY_INTEGRATION with a reason: ${unclassified.join(", ")}`).toEqual([]);
+    for (const skipped of SKIPPED_BY_INTEGRATION) {
+      expect(pathMatches(`${skipped}/x`, patterns), `${skipped} is listed as skipped but integration's filter selects it`).toBe(false);
+    }
   });
 
   // ── extractor negative controls: it must be able to FAIL loudly, never return silently empty ──

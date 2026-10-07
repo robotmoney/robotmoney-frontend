@@ -8,7 +8,7 @@
 // used to mint four private name shapes and the answer was no, which is why
 // nothing could be reaped without risking the live site.
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CI_IDENTITY_VARS,
@@ -230,29 +230,47 @@ describe("the scheme is actually wired into every spawner", () => {
     expect(src).toContain("...labelFlags");
   });
 
-  test("the workflow NAMES the boot's project through the helper, and never pins it into the boot", () => {
+  test("the workflows NAME the boot's project through the helper, and never pin it into the boot", () => {
     // Spec §1 retires SMOKE_PROJECT with no alias (issue #1026): the boot
     // derives its project from the job's identity and refuses an exported one.
-    // So e2e.yml resolves the name with the SAME helper before the boot, and
-    // its later steps (billing diagnostic, always() teardown) read that step's
-    // output. e2e.yml is the only workflow that boots a smoke (issue #373
-    // retired swarm-opencode-nightly.yml).
-    const src = readFileSync(join(repoRoot, ".github", "workflows", "e2e.yml"), "utf8");
-    const values: string[] = [];
-    for (const line of src.split("\n")) {
-      const m = /^\s*SMOKE_PROJECT:\s*(\S.*)$/.exec(line);
-      if (m) values.push(m[1]!.trim());
-    }
+    // So the shared e2e-setup action resolves the name with the SAME helper
+    // before the boot and returns it as an output; the shared e2e-teardown action
+    // (billing diagnostic, always() teardown) reads it back through an input.
+    // Every e2e-*.yml only passes that output along. The e2e-*.yml set is the
+    // only place that boots a smoke (issue #373 retired swarm-opencode-nightly.yml).
+    const actions = join(repoRoot, ".github", "actions");
+    const setup = readFileSync(join(actions, "e2e-setup", "action.yml"), "utf8");
+    const teardown = readFileSync(join(actions, "e2e-teardown", "action.yml"), "utf8");
+
+    const pinned = (src: string): string[] => {
+      const values: string[] = [];
+      for (const line of src.split("\n")) {
+        const m = /^\s*SMOKE_PROJECT:\s*(\S.*)$/.exec(line);
+        if (m) values.push(m[1]!.trim());
+      }
+      return values;
+    };
     // The diagnostic and the teardown each read the resolved name, and nothing
     // else sets it: a literal would drift from what the boot derived.
-    expect(values).toEqual(["${{ steps.smoke-project.outputs.name }}", "${{ steps.smoke-project.outputs.name }}"]);
-    expect(src).toContain("id: smoke-project");
-    expect(src).toContain("scripts/stack/print-project-name.ts");
+    expect(pinned(teardown)).toEqual(["${{ inputs.smoke-project }}", "${{ inputs.smoke-project }}"]);
+    expect(pinned(setup)).toEqual([]);
+    expect(setup).toContain("id: smoke-project");
+    expect(setup).toContain("scripts/stack/print-project-name.ts");
+    expect(setup).toContain("value: ${{ steps.smoke-project.outputs.name }}");
     // The boot step itself carries no SMOKE_PROJECT: its env block ends at the
-    // next step, and the boot would refuse the variable anyway.
-    const boot = src.slice(src.indexOf("- name: Full-stack smoke"), src.indexOf("- name: Diagnose OpenCode billing exhaustion"));
+    // end of the action, and the boot would refuse the variable anyway.
+    const boot = setup.slice(setup.indexOf("- name: Full-stack smoke"));
     expect(boot).toContain("scripts/smoke.ts --local blank");
     expect(boot).not.toMatch(/^\s*SMOKE_PROJECT:/m);
+
+    const workflows = readdirSync(join(repoRoot, ".github", "workflows")).filter((f) => /^e2e-.+\.ya?ml$/.test(f));
+    expect(workflows.length).toBeGreaterThan(1);
+    for (const f of workflows) {
+      const text = readFileSync(join(repoRoot, ".github", "workflows", f), "utf8");
+      expect({ workflow: f, pins: pinned(text) }).toEqual({ workflow: f, pins: [] });
+      expect({ workflow: f, boots: text.includes("uses: ./.github/actions/e2e-setup") }).toEqual({ workflow: f, boots: true });
+      expect({ workflow: f, passes: text.includes("smoke-project: ${{ steps.stack.outputs.smoke-project }}") }).toEqual({ workflow: f, passes: true });
+    }
   });
 
   test("the helper the workflow runs prints the boot's exact CI project, which carries the CI prefix", () => {

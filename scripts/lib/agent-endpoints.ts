@@ -51,6 +51,13 @@ export interface AgentEndpoint {
    */
   description: string;
   /**
+   * For an endpoint that answers a bare GET with 400 because it needs a query
+   * (the brief needs a session or a date and subject): the query to show in
+   * llms.txt, written as code there rather than as a link a crawler would
+   * request and record as an error.
+   */
+  requiredQuery?: string;
+  /**
    * Indexed site routes this endpoint fills. Drives the per-route alternate
    * links and the <noscript> block scripts/prerender.ts injects.
    *
@@ -148,7 +155,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
       "Every tracked protocol wallet, every holding in it, and the daily total-value history since inception. Each holding carries a `provenance` field (live, stub, stale, seed, backfilled): treat anything other than `live` as an estimate. Days with no persisted snapshot are absent from the history rather than interpolated, so gaps are real gaps.",
     backs: ["/performance", "/allocation"],
     contractType: "WalletBalances",
-    sizeHint: "about 45 KB, the largest of the treasury reads",
+    sizeHint: "about 55 KB, the largest of the treasury reads",
   },
   {
     id: "getTokenMetrics",
@@ -347,7 +354,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
       { name: "full", in: "query", description: "Set to 1 to return every field rather than the light index projection.", example: "1" },
     ],
     contractType: "SwarmSessionListResponse",
-    sizeHint: "about 80 KB for the default page of 20 rows; pass limit to shrink it",
+    sizeHint: "about 160 KB for the default page of 20 rows; pass limit to shrink it",
   },
   {
     id: "getSwarmSessionById",
@@ -459,6 +466,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
       { name: "date", in: "query", description: "UTC date, YYYY-MM-DD. Use with subject.", example: "2026-09-03" },
       { name: "subject", in: "query", description: "Subject id. Use with date.", example: "robotmoney-treasury" },
     ],
+    requiredQuery: "?session={id}",
     contractType: "SwarmBrief",
     sizeHint: "about 980 KB, of which 976 KB is body.researchSignals",
   },

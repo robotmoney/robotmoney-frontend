@@ -30,7 +30,7 @@
 # summary): a live host being unreachable says nothing about this PR's client
 # code, so it must never block the merge it has nothing to do with. Backend/
 # db/api changes get their own robust coverage of the client surfaces in
-# backend.yml/integration.yml/e2e.yml — this workflow is deliberately narrow.
+# backend.yml/integration.yml/e2e-*.yml — this workflow is deliberately narrow.
 #
 # CI taxonomy class: feature-correctness. No Docker; the blocking steps never
 # leave localhost; the advisory steps reach the network but cannot fail the
@@ -70,7 +70,7 @@ jobs:
       web-client: ${{ steps.filter.outputs.web-client }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
         id: filter
         with:
           filters: |
@@ -84,6 +84,14 @@ jobs:
               - 'contract/package.json'
               - 'scripts/web-client/**'
               - 'scripts/lib/api-range.ts'
+              # The view specs run against the assembled site, so the scripts
+              # that assemble it select this gate too.
+              - 'scripts/static-assembly.sh'
+              - 'scripts/prerender.ts'
+              - 'scripts/stamp-assets.ts'
+              - 'scripts/static-manifest.ts'
+              - 'scripts/preview-server.ts'
+              - 'website-server/**'
 
   web-client:
     needs: [changes]
@@ -131,6 +139,14 @@ jobs:
       # ── (c)+(d) BLOCKING: preview loads, console stays clean ────────────
       - name: Preview checks (fixtures — goldens answer /api/*)
         run: bun run --cwd frontend check -- --reporter=line
+
+      # ── (e) BLOCKING: the view specs, against the assembled site ────────
+      # Every spec that stubs /api/** itself runs here, with no api and no
+      # Docker, so a view/copy PR gets its page coverage without waiting on
+      # e2e.yml's live smoke boot (D45). The few specs that need a real api are
+      # named in scripts/web-client/static-specs.ts and still run in e2e.yml.
+      - name: View specs (assembled site, no api)
+        run: bun run --cwd frontend check:static -- --reporter=line
 
       # ── ADVISORY: live prod/stage, never blocks this PR's merge ─────────
       - name: Preview route sweep against production (advisory)

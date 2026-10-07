@@ -13,13 +13,11 @@ const ORIGIN = "https://robotmoney.network";
 
 const repoRoot = join(import.meta.dir, "..");
 const sitemapPath = join(repoRoot, "frontend/public/sitemap.xml");
-// WHICH assembly to prerender in place. There are two hosts and one
-// prerenderer (docs/decisions.md D29): `_site` is the Cloudflare Pages deploy
-// dir `scripts/cloudflare-statics.sh` assembles, and `PRERENDER_DIR` points
-// this at the api process's STATIC_DIR assembly instead
-// (scripts/static-assembly.sh). Both read the SAME metadata table — seo.js's
-// `metaFor` — so the two hosts can never disagree, and neither can disagree
-// with the JS path that runs after hydration.
+// WHICH assembly to prerender in place: `_site` by default, or the directory
+// `PRERENDER_DIR` names (scripts/static-assembly.sh passes the STATIC_DIR
+// assembly the web server serves). Every page reads the SAME metadata table,
+// seo.js's `metaFor`, so the prerendered HTML can never disagree with the JS
+// path that runs after hydration.
 const siteDir = resolve(repoRoot, process.env.PRERENDER_DIR || "_site");
 const shellPath = join(siteDir, "index.html");
 

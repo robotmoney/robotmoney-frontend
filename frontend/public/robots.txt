@@ -1,30 +1,32 @@
-# Robot Money — https://robotmoney.network
-# Autonomous treasury for the agent economy.
+# Robot Money: https://robotmoney.network
+# The treasury layer for the agent economy.
+#
+# Every public page is open to every crawler, AI crawlers included: the site is
+# meant to be read and cited. Two paths are closed: the operator dashboards,
+# and the empty shell the server answers an address with when it has no page
+# of its own for it (no content of its own; not a page).
+#
+# A crawler obeys only the most specific User-agent group that names it and
+# ignores `*` once it has one, so the AI crawlers sit in the same group as `*`
+# and read the same Disallows. In groups of their own holding only `Allow: /`,
+# they were free to crawl both closed paths.
 
 User-agent: *
+User-agent: GPTBot
+User-agent: OAI-SearchBot
+User-agent: ChatGPT-User
+User-agent: ClaudeBot
+User-agent: Claude-SearchBot
+User-agent: Claude-User
+User-agent: anthropic-ai
+User-agent: PerplexityBot
+User-agent: Perplexity-User
+User-agent: Google-Extended
+User-agent: Applebot-Extended
 Allow: /
-# Operator dashboards are not for indexing.
 Disallow: /admin
 Disallow: /admin/
-# The SPA fallback shell backend/src/api/static.ts serves for client routes it
-# cannot prerender. No content of its own; not a page. A Disallow only binds
-# the User-agent group it appears under, so this has to sit here rather than
-# after the per-crawler Allow list below.
 Disallow: /_shell.html
-
-# AI / LLM crawlers are welcome — the site content is public and meant to be cited.
-User-agent: GPTBot
-Allow: /
-User-agent: OAI-SearchBot
-Allow: /
-User-agent: ClaudeBot
-Allow: /
-User-agent: anthropic-ai
-Allow: /
-User-agent: PerplexityBot
-Allow: /
-User-agent: Google-Extended
-Allow: /
 
 # Pages are prerendered, so a plain fetch returns each page's text. The live
 # figures on the data pages come from the JSON API, described by these two:

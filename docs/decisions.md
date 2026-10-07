@@ -3673,6 +3673,49 @@ intercepting GETs, keeps that guarantee absolute regardless of `?api=`.
 - **Block the merge on the prod/stage sweep too** — rejected above; a live
   host's availability is not a property of the PR's diff.
 
+**Amendment (2026-10-06): the gate now matches the decision.** Two jobs had
+drifted past D45's "a client-only PR never waits on `e2e.yml`'s live smoke
+boot". `e2e.yml` skipped only `**.md`/`**.txt`, so a view, data or image change
+booted the full stack (~18 min), and `integration.yml` selected on all of
+`scripts/**`, so a PR that touched only `scripts/tests/unit/**` ran its ~20 min
+suite. The unit tier and `repo-guards` still run on every PR (they are cheap).
+
+- **e2e is an allowlist of what may skip it, not a list of what runs it.**
+  `e2e.yml`'s `changes` job uses `predicate-quantifier: every` over `**` minus
+  the skip entries: Markdown and text, `docs/`, `brand-assets/`, `goldens/`,
+  `frontend/test/`, the site's copy (`frontend/public/{views,data,skills,blog,
+  avatars,assets/img}`), `scripts/tests/unit/`, and `scripts/web-client/`.
+  Anything else, including a path nobody thought of, runs e2e. A push, the
+  nightly and a dispatch are never filtered, so every suite still runs against
+  `main` and every night (D26).
+- **The view specs moved their PR coverage to web-client.** 41 of the 50
+  browser specs stub `/api/**` themselves and need only a static page, so
+  `bun run --cwd frontend check:static` runs them against the assembled site
+  (`scripts/web-client/static-site-server.ts`, nginx's fallback rule, no api, no
+  Docker). The five that need a real api are named, with a reason each, in
+  `scripts/web-client/static-specs.ts` (`NOT_STATIC`) and run in e2e only. Every
+  other spec joins the web-client gate by default.
+- **Client CODE still selects e2e.** `frontend/public/assets/**` (js, css),
+  `website-server/`, and everything under `backend/`, `contract/`, `packages/`,
+  compose and the lockfiles run the live stack. The five api-backed specs have
+  no other PR-time home, so a copy change skips them and a code change does not.
+  Making them stub their calls, so they can join the web-client gate, is the
+  follow-up that would let client code skip e2e too.
+- **integration drops `scripts/tests/unit/**`.** Its filter lists the `scripts/`
+  directories positively, because a `some` filter cannot subtract.
+  `ci-gate-path-filters.test.ts` fails if a new `scripts/` or `scripts/tests/`
+  directory is neither listed nor named as skipped, so a new directory cannot
+  silently skip the job.
+- `dorny/paths-filter` moves from v3.0.2 to v4.0.3 (every workflow, one pin):
+  `predicate-quantifier` first ships after v3.0.2.
+
+**Alternatives rejected.** A `skip-e2e` label (depends on memory, hides risk).
+Running e2e only after merge (backend and money-path PRs would lose their
+pre-merge bar). A single orchestrator workflow with one filter job (the
+fan-in gate removed after the PR 316 incident, tracked in issue 348). Test
+selection from the import graph (precise, but weeks of work for a gain the
+allowlist already captures).
+
 <a id="d46"></a>
 
 ## D46 — Prior smoke migration design (superseded by D47)
@@ -5088,3 +5131,70 @@ PR #1109). `scripts/tests/unit/regime-seam-guard.test.ts` fails on any other cal
 the axis or alignment primitives for regime inputs. Seam internals are pinned by
 `packages/analyst-sdk/tests/prepare.test.ts`. The run semantics are in
 [`docs/technical/regime-engine.md` §8.1](technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay).
+
+<a id="d60"></a>
+
+## D60 — The live-stack e2e gate is one workflow per domain, `e2e-*.yml`, sharing setup through composite actions (refines D26, D45)
+
+> Earlier decisions and the code review notes name `e2e.yml`. That is the
+> workflow this decision replaces, so read those as the four workflows below.
+
+**Decision.** There is no `e2e.yml`. Four workflows replace it, and each is its own
+check with its own live stack:
+
+| Workflow | Domain | What it runs (`scripts/smoke-ci-checks.ts --check …`) |
+|---|---|---|
+| `e2e-lifecycle.yml` | the stack runs itself | `scripts/smoke-e2e.ts --attached --keep`: the scheduler, the participants, one turnover |
+| `e2e-swarm.yml` | the swarm publishes | `swarm-session`, `starter-agent`, `live-smoke`, `verify-live` |
+| `e2e-web.yml` | the web client on a live api | `frontend` (core surfaces), `browser` (the Playwright specs) |
+| `e2e-onboarding.yml` | admission by a live model | `onboarding` (the §11 R8 real-inference sweep), opt-in |
+
+The setup and the teardown are shared, not copied: `.github/actions/e2e-setup`
+(toolchain, host deps, the unattended `bun smoke --local blank --migrate --seed`
+boot, and the resolved project name as an output) and `.github/actions/e2e-teardown`
+(`smoke:down`, the billing diagnostic, the scoped `compose down` plus `smoke-clean`,
+the CI reaper), always called under `if: always()`. Each domain runs one check per
+step, so the red step names the failing check.
+
+**Why.** One job booted one stack and ran every check in one step, 15 of its 17
+minutes. A red `e2e` said nothing about which domain broke, and a reader had to open
+the log and find a `[ci-checks]` line. The boot is about a minute, so a stack per
+domain is cheap: the domains run in parallel and the wall time falls from the sum of
+the domains to the longest one (the Playwright specs, about 10 minutes, against 5 for
+the swarm session driver and 1 for the lifecycle).
+
+**What stays the same.** Every trigger: push to `main`, `releases-*` and `fusion/**`,
+the nightly mirror (D26, one staggered cron each, `e2e-onboarding.yml` keeping the
+`37 4 * * *` slot of the real-inference measurement), and draft deferral. The
+onboarding eval keeps its opt-in (the `real-eval` label, a dispatch, the nightly), its
+`ONBOARDING_REAL_EVAL` expression and its job-summary notice. That job still runs on
+an ordinary PR and push so the notice is written ("DELIBERATELY NOT RUN"), and it
+boots a stack only when the eval was requested. No test was dropped: the checks moved
+between files and each runs exactly once.
+
+**Constraints the split forced.**
+- A composite action cannot read `secrets`, so each workflow passes
+  `OPENCODE_API_KEY` in as an input. It cannot set a step `timeout-minutes`, so each
+  job carries its own ceiling, and the CI reap threshold (6 hours) stays longer than
+  every one (`scripts/tests/unit/smoke-reap.test.ts`). Its `failure()` sees only its
+  own steps, so the billing diagnostic runs under `always()` and writes nothing unless
+  the typed marker is there.
+- Each workflow is its own `GITHUB_WORKFLOW`, so `scripts/stack/naming.ts` derives a
+  different project name for each domain and two domains on one host cannot collide.
+- `live-smoke` and `verify-live` assert what the session driver publishes, so they run
+  in `e2e-swarm.yml` after it. The Playwright specs stay in `e2e-web.yml` whole.
+
+**Rejected.**
+- Keep one job and split only the steps: the check name is still `e2e`, and the
+  domains still run in series.
+- One reusable workflow called by four thin files: the checks then read
+  `e2e-swarm / run`, and the step list lives in a place the domain's own file does not
+  show.
+- Share one booted stack across jobs: a Docker stack does not survive a job boundary.
+
+**Enforced by** `scripts/tests/unit/e2e-split-structure.test.ts` (no `e2e.yml`; the
+four domains; name, job id and file agree; shared setup and teardown; no copy of the
+boot), `scripts/tests/unit/smoke-ci-check-select.test.ts` (each `--check` is run by
+exactly one workflow, so a check cannot run twice or never), and the retargeted
+`nightly-mirrors-merge-set`, `stack-naming`, `smoke-reap`, `admission-record`,
+`evals-guard` and `e2e-onboarding-eval-pr-cost` tests.

@@ -9,7 +9,8 @@
     "preview": "bun ../scripts/preview-server.ts",
     "assemble": "bash ../scripts/static-assembly.sh",
     "check": "bun ../scripts/web-client/browser.ts",
-    "check:prod": "bun ../scripts/web-client/browser.ts --api prod",
+    "check:static": "bun ../scripts/web-client/browser.ts --api static",
+    "check:prod":"bun ../scripts/web-client/browser.ts --api prod",
     "check:stage": "bun ../scripts/web-client/browser.ts --api stage",
     "version:json": "bun ../scripts/web-client/version.ts"
   }

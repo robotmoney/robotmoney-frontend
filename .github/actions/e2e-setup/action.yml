@@ -1,0 +1,134 @@
+name: e2e-setup
+description: >-
+  The shared setup of every e2e-*.yml workflow: toolchain, host-side deps, and
+  the unattended LIVE smoke boot (`bun smoke --local blank --migrate --seed`).
+  Each e2e domain boots its OWN stack, so the domains run in parallel and a red
+  check names the domain that failed. Pair every use with ./e2e-teardown in an
+  `if: always()` step. The caller must `actions/checkout` first.
+
+inputs:
+  browser:
+    description: "Install Node and Chromium (Playwright). Only the browser domain needs them."
+    required: false
+    default: "false"
+  opencode-api-key:
+    description: >-
+      OPENCODE_API_KEY for the boot's live swarm authoring. A composite action
+      cannot read the secrets context, so the caller passes the repo secret in.
+      On an untrusted fork GitHub supplies an empty secret and the session fails
+      loudly rather than fabricating a template take.
+    required: false
+    default: ""
+  agent-model:
+    description: "AGENT_MODEL for the boot; empty means the repo default (scripts/lib/model-registry.ts)."
+    required: false
+    default: ""
+
+outputs:
+  smoke-project:
+    description: "The compose project this job's boot uses (derived by scripts/stack/naming.ts); pass it to ./e2e-teardown."
+    value: ${{ steps.smoke-project.outputs.name }}
+
+runs:
+  using: composite
+  steps:
+    # Instance state (tokens, journal, receipt) lives outside the checkout (smoke
+    # spec §1.1) and, on a shared runner, in a directory of this job alone, so
+    # the checks find exactly one instance. The `runner` context is not available
+    # in a job-level `env`, so the path is exported from a step.
+    - name: Set the smoke state root
+      shell: bash
+      run: echo "RM_SMOKE_STATE_ROOT=$RUNNER_TEMP/smoke-state" >> "$GITHUB_ENV"
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: "1.3.5"
+    # Playwright's CLI/transform runs on Node.js (its bin is `#!/usr/bin/env
+    # node`); `bun run test:browser` shells out to it and `setup-bun` does NOT
+    # provide node, so without this every spec fails to build.
+    - uses: actions/setup-node@v4
+      if: ${{ inputs.browser == 'true' }}
+      with:
+        node-version: "20"
+    - name: Install root tooling
+      shell: bash
+      run: bun install --frozen-lockfile
+    # Browser binary only: the `--with-deps` variant shells out to `sudo
+    # apt-get`, which a runner without passwordless sudo and a TTY cannot do.
+    - name: Install Chromium
+      if: ${{ inputs.browser == 'true' }}
+      shell: bash
+      run: bunx playwright install chromium
+    # Needed BEFORE the boot (issue #108): scripts/lib/smoke-main.ts spawns
+    # backend/scripts/edgar-seed-bootstrap.ts host-side (cwd: backend/) after API
+    # health, which needs backend's own node_modules (@robotmoney/contract)
+    # resolvable on the runner. The api container installs its own copy at image
+    # build time, which is invisible to a host-side `bun run`.
+    - name: Install backend deps (for the host-side EDGAR seed bootstrap step)
+      shell: bash
+      working-directory: backend
+      run: bun install --frozen-lockfile
+    # Needed BEFORE the boot (issue #301): scripts/lib/swarm/inference.ts's
+    # runOpencode() Bun.spawn()s the bare `opencode` binary HOST-SIDE for every
+    # swarm session the stack makes, and there is no template fallback, so a
+    # runner without this CLI fails loudly. Same pinned release + checksum as
+    # scripts/lib/member-agent/Dockerfile's baked-in copy (OPENCODE_VERSION /
+    # OPENCODE_LINUX_X64_SHA256); bump both together.
+    - name: Install opencode CLI (swarm takes require live inference)
+      shell: bash
+      env:
+        OPENCODE_VERSION: "1.18.1"
+        OPENCODE_LINUX_X64_SHA256: "9ecce27cf529ade5f177fab478b4876b5c31d9ddc8216b994816acf192159511"
+      run: |
+        set -euo pipefail
+        curl -fsSLo "$RUNNER_TEMP/opencode.tar.gz" \
+          "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64.tar.gz"
+        echo "${OPENCODE_LINUX_X64_SHA256}  $RUNNER_TEMP/opencode.tar.gz" | sha256sum -c -
+        mkdir -p "$RUNNER_TEMP/opencode-bin"
+        tar -xzf "$RUNNER_TEMP/opencode.tar.gz" -C "$RUNNER_TEMP/opencode-bin"
+        rm "$RUNNER_TEMP/opencode.tar.gz"
+        echo "$RUNNER_TEMP/opencode-bin" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/opencode-bin/opencode" --version
+    - name: Set up Docker builder
+      uses: docker/setup-buildx-action@v3
+    # The compose project this job's boot will use. NOT chosen here: `bun smoke`
+    # derives it from the job's own identity (scripts/stack/naming.ts, `class:
+    # "ci"`, hashed from GITHUB_WORKFLOW/RUN_ID/RUN_ATTEMPT/JOB) and refuses an
+    # exported SMOKE_PROJECT. Every e2e-*.yml is its own workflow, so each domain
+    # resolves a different project. This step asks the same helper BEFORE the
+    # boot so the teardown can name the project even when the boot is killed.
+    - name: Resolve this run's smoke project
+      id: smoke-project
+      shell: bash
+      run: bun --no-env-file scripts/stack/print-project-name.ts >> "$GITHUB_OUTPUT"
+    # The boot IS the smoke readiness gate. It boots the full LIVE smoke stack
+    # (issue #147: no hermetic mode exists; every boot resolves live external
+    # providers: public Base mainnet RPC, FRED/Coin Metrics/GeckoTerminal/Yahoo/
+    # EDGAR) and stops at readiness: the fixture credential file seats the
+    # standing participants and the scheduler, so there is no host-side session
+    # driver here. A provider that is unreachable after real retries fails the
+    # job loudly, never a silent fallback to a fixture.
+    #
+    # `--local blank --migrate --seed`: its own fresh local stack, migrated, with
+    # demo data, never production. `--no-env-file`: the boot refuses an
+    # environment bun filled from the checkout's `.env`.
+    #
+    # UNATTENDED (spec §10 W2): RM_ENV=stage is the policy, stdin is closed, and
+    # a local mode has no terminal prompt. A boot that asked for rm_owner or a
+    # y/n would be waiting on nobody, so the transcript is checked for either
+    # prompt and the step fails if one appeared.
+    - name: Full-stack smoke (smoke readiness gate)
+      shell: bash
+      run: |
+        set -o pipefail
+        bun --no-env-file scripts/smoke.ts --local blank --migrate --seed --credentials test-fixtures/smoke/empty-roster.credentials.json < /dev/null 2>&1 | tee "$RUNNER_TEMP/e2e-smoke.log"
+        if grep -Eq "rm_owner password|type y to continue" "$RUNNER_TEMP/e2e-smoke.log"; then
+          echo "::error::the unattended CI boot printed an interactive prompt (spec §5: no terminal prompt exists in local modes)"
+          exit 1
+        fi
+      env:
+        CI: "true"
+        RM_ENV: stage
+        # Swarm takes are always live-authored through opencode: a missing
+        # credential, CLI, or model response fails the job loudly.
+        OPENCODE_API_KEY: ${{ inputs.opencode-api-key }}
+        AGENT_MODEL: ${{ inputs.agent-model }}

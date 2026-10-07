@@ -908,7 +908,7 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
 }
 
 // ── The admission RECORD (issue #373) ───────────────────────────────────────
-// Reporting rides on the admission that already runs. `.github/workflows/e2e.yml`
+// Reporting rides on the admission that already runs. `.github/workflows/e2e-onboarding.yml`
 // spends exactly one real admission on a push to main and — since #373 made
 // nightly a mirror of the merge-to-main set — exactly one more on its nightly
 // `schedule` run. Thirty nights is thirty samples, a larger denominator than
@@ -923,7 +923,7 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
 // the only way a reporting path gets executed-in-CI coverage at all.
 /**
  * Repo-root-relative path the smoke writes the rendered record to. ONE
- * definition: scripts/lib/smoke-main.ts writes it, `.github/workflows/e2e.yml`
+ * definition: scripts/lib/smoke-main.ts writes it, `.github/workflows/e2e-onboarding.yml`
  * reads and uploads it, and scripts/tests/unit/admission-record.test.ts pins
  * that the workflow names this exact path.
  */

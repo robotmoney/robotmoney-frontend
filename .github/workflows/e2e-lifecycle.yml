@@ -1,0 +1,109 @@
+# e2e, domain 1 of 4: the LIFECYCLE. Does the stack run itself? The real
+# scheduler, one collecting session per active subject, an agent and a judge
+# running as containers under `restart: unless-stopped`, and ONE turnover after
+# one short epoch (the first session published, the second collecting). It then
+# removes the scheduler's token file and stops its container to see the failures
+# name it (issue #1026, smoke spec §10 W1/W3, scheduler spec §10). Fixture keys
+# only: test-fixtures/smoke.
+#
+# The old single e2e.yml booted one stack and ran every domain against it in one
+# 15-minute step, so a red X said "e2e" and nothing else. Each e2e-*.yml now
+# boots its own stack (the boot is about a minute), runs one domain, and is its
+# own check:
+#   e2e-lifecycle   this file: scheduler, participants, turnover
+#   e2e-swarm       the swarm session driver, the starter agent, the live steady state
+#   e2e-web         the core-surface checks and the Playwright specs on the live stack
+#   e2e-onboarding  the opt-in real-inference onboarding eval (§11 R8)
+# The shared setup and teardown are the composite actions in .github/actions/
+# e2e-setup and e2e-teardown. Which domain owns which `scripts/smoke-ci-checks.ts
+# --check` is enforced by scripts/tests/unit/smoke-ci-check-select.test.ts.
+#
+# CI taxonomy class: system-correctness. Per the taxonomy gating matrix this is
+# DEFERRED until a PR is ready for review: it must SKIP on draft PRs and RUN once
+# the PR is marked ready-for-review, plus on push to the default branch and on
+# the nightly mirror (issue #373, enforced by
+# scripts/tests/unit/nightly-mirrors-merge-set.test.ts).
+name: e2e-lifecycle
+env:
+  CI_CLASS: system-correctness
+on:
+  push:
+    branches: [main, "releases-*", "fusion/**"]
+  schedule:
+    - cron: "7 4 * * *"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+jobs:
+  # ── change detection ───────────────────────────────────────────────────────
+  changes:
+    # Plumbing, not an assurance job: it must run in every context so the e2e
+    # job below has a filter output to gate on.
+    env:
+      CI_CLASS: ignore
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      e2e: ${{ steps.filter.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@v4
+      # `every`: a file is relevant only if it matches ALL patterns, i.e. it is
+      # a path (`**`) that is on none of the skip entries (`!...`). The filter
+      # is true when ANY changed file is relevant.
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
+        id: filter
+        with:
+          predicate-quantifier: every
+          filters: |
+            e2e:
+              - '**'
+              - '!**/*.md'
+              - '!**/*.txt'
+              - '!docs/**'
+              - '!brand-assets/**'
+              - '!goldens/**'
+              - '!frontend/test/**'
+              - '!frontend/public/views/**'
+              - '!frontend/public/data/**'
+              - '!frontend/public/skills/**'
+              - '!frontend/public/blog/**'
+              - '!frontend/public/avatars/**'
+              - '!frontend/public/assets/img/**'
+              - '!scripts/tests/unit/**'
+              - '!scripts/web-client/**'
+
+  e2e-lifecycle:
+    needs: [changes]
+    # Deferred until ready-for-review: run on push, schedule and dispatch, and on
+    # non-draft PRs; skip while the PR is still a draft.
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true') }}
+    runs-on: ubuntu-latest
+    # The ceiling for the whole job: a composite step cannot carry its own. The
+    # boot is ~1 min and the lifecycle ~1 min; the rest is headroom for a slow
+    # live provider.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Boot a LIVE smoke stack
+        id: stack
+        uses: ./.github/actions/e2e-setup
+        with:
+          opencode-api-key: ${{ secrets.OPENCODE_API_KEY }}
+          agent-model: ${{ vars.AGENT_MODEL || '' }}
+      # The stack the boot left running, checked for the lifecycle above. It
+      # leaves the stack up (`--keep`); the teardown below ends it.
+      - name: Lifecycle (scheduler, participants, one turnover)
+        run: bun --no-env-file scripts/smoke-e2e.ts --attached --keep
+        env:
+          CI: "true"
+          RM_ENV: stage
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+      - name: Tear down this job's smoke stack
+        if: always()
+        uses: ./.github/actions/e2e-teardown
+        with:
+          smoke-project: ${{ steps.stack.outputs.smoke-project }}

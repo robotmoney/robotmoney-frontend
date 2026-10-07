@@ -7,7 +7,7 @@
 // end-to-end through POST /api/swarm/apply — all without spending a single
 // model token. (D21: the MCP transport is retired; the agent and this rails
 // check use the REST API.) It is wired as an early fail-fast step ahead of the
-// real-inference gate in .github/workflows/e2e.yml.
+// real-inference gate in .github/workflows/e2e-onboarding.yml.
 //
 // The bring-up is the SHARED scripts/stack module on its `core` profile
 // (postgres + api — docs/architecture.md §11.3 E5, docs/decisions.md D22):
@@ -327,7 +327,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         ]);
         expect(r.exitCode, `${asset.path}: ${r.stderr}`).toBe(0);
         expect(r.stdout).toContain(asset.marker);
-        expect(r.stdout).not.toContain("<title>Robot Money — Autonomous Treasury for the Agent Economy</title>");
+        expect(r.stdout).not.toContain("<title>Robot Money: The Treasury Layer for the Agent Economy</title>");
       }
     },
     TEST_TIMEOUT_MS,
