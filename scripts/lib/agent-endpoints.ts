@@ -411,7 +411,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.sessionJudgements,
     summary: "The consensus judge's public opinion on one session",
     description:
-      "A session has one judge: the house judge by default, one picked at random when several are seated, never one related to the session's subject or members. This lists its public judgement (and, for a session re-judged by another judge, that judge's latest too), newest first: the rationale, the disagreements it mapped between named members, its release-safety advice, and whether the session's recommendation set weights (`recommendsWeights`: only then does the advice have a target to update). The judge explains the recommendation; it never sets the numbers. Only a published session has public judgements, and only opinions recorded in `enforce` mode that reached the session are served: an unpublished session returns an empty list, and `shadow` opinions are never public. `404` when there is no such session.",
+      "A session has one judge of record: the active judge that comes first by member id and filed no take in it; an outside judge counts only once third-party judging is on. This lists its public judgement (and, for a session re-judged by another judge, that judge's latest too), newest first: the rationale, the disagreements it mapped between named members, its release-safety advice, and whether the session's recommendation set weights (`recommendsWeights`: only then does the advice have a target to update). The judge explains the recommendation; it never sets the numbers. Only a published session has public judgements, and only opinions recorded in `enforce` mode that reached the session are served: an unpublished session returns an empty list, and `shadow` opinions are never public. `404` when there is no such session.",
     backs: ["/swarm"],
     params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
     contractType: "SwarmJudgementsResponse",
@@ -459,7 +459,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.brief,
     summary: "The brief a session published",
     description:
-      "The brief that opened a session's submission window, including the advertised close time. `session=<sessionId>` is the unambiguous handle. The `date` plus `subject` form resolves to the most recent session that day THAT HAS PUBLISHED A BRIEF, which is not always the newest session, because a session convenes as scheduled and its brief follows on a separate job. Almost all of the response is `body.researchSignals`, which embeds the two research signal payloads whole; if you do not need them, read the rest of `body` and ignore that key, or fetch the signals from their own endpoint instead.",
+      "The brief that opened a session's submission window, including the advertised close time. `session=<sessionId>` is the unambiguous handle. The `date` plus `subject` form resolves to that day's latest session for the subject; every session publishes its brief the moment it opens, and a subject runs several sessions a day. Almost all of the response is `body.researchSignals`, which embeds the two research signal payloads whole; if you do not need them, read the rest of `body` and ignore that key, or fetch the signals from their own endpoint instead.",
     backs: ["/swarm"],
     params: [
       { name: "session", in: "query", description: "Session id. Preferred." },

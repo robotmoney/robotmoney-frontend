@@ -57,7 +57,7 @@
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'partnerships')" @click="toggle('partnerships')">Partnerships</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'documentation')" @click="toggle('documentation')">Documentation</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'infrastructure')" @click="toggle('infrastructure')">Infrastructure</button>
-        <span class="cl__count" x-text="countLabel">37 releases</span>
+        <span class="cl__count" x-text="countLabel">38 releases</span>
       </div>
 
       <div class="cl__log" x-ref="log">
@@ -72,17 +72,26 @@
           <div class="cl__links"><a class="cl__lnk" href="/swarm/apply">Apply for a seat</a><a class="cl__lnk" href="/swarm">The swarm</a></div>
         </article>
 
+        <article class="cl__entry" id="next-the-regimes-data-is-public" data-tags="research" data-release="pending" x-show="has($el)">
+          <div class="cl__meta"><span class="cl__pending" data-release="pending">Next release</span><span class="cl__sep">/</span><span>Research</span></div>
+          <h3 class="cl__title"><a href="#next-the-regimes-data-is-public">The regime's data is public</a></h3>
+          <p>Anyone can read, with no key, the raw indicator history the regime is computed from, the data vintage each run committed to and every revision of a stored value, along with the daily closing prices of the assets the protocol tracks. The regime's analytics ship as a package that runs on that data, so an analyst or an agent can check a reading or build on it.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/regime">The regime page</a><a class="cl__lnk" href="https://github.com/robotmoney/robotmoney-frontend/tree/main/packages/analyst-sdk" target="_blank" rel="noopener noreferrer">The analytics package</a></div>
+        </article>
+
         <div class="cl__also" data-release="pending" x-show="!tag">
           <h3 class="cl__also-h">Also in the next release</h3>
           <h4 class="cl__also-k">Improvements</h4>
           <ul>
             <li>A session's receipt downloads as the exact record its members signed, so any copy, on chain or off, can be checked against it byte for byte. The verified receipt has its own link.</li>
             <li>The API reports the exact build it runs, so anyone can check which release is live.</li>
+            <li>Every public page has a title and description of its own, so a search result or a shared link says which page it is. The index the site keeps for agents lists every public page and both agent skills.</li>
             <li>The token page takes the rest of the site's design and keeps to the token: its contract address, price, market cap and supply, the share the protocol holds, the pool's liquidity and volume, what the protocol has earned in swap fees, the fee split as a ring, and every buyback with its transaction on BaseScan. A FAQ answers what people ask about $ROBOTMONEY, from the launch and the supply to fees, buybacks and the planned governance, and search engines and agents read it as structured data.</li>
           </ul>
           <h4 class="cl__also-k">Fixes</h4>
           <ul>
             <li>A session's list of absent members fits a phone's screen. It had run off the edge.</li>
+            <li>The site says what a withdrawal pays: the market value of its shares, less slippage and the 0.25% exit fee. It had said withdrawals are at NAV.</li>
             <li>The tokenomics and home pages show the token's real fee split: 57% to the protocol, 36.1% to Bankr, 5% to Doppler and 1.9% to an ecosystem share. They had shown 57, 40 and 3 with Clanker as the launch protocol, a 1% swap fee instead of 1.2%, and a liquidity lock ending in 2100. The lock has no end date.</li>
             <li>The token and home pages say where bought-back $ROBOTMONEY goes: the protocol's primary wallet, which holds it. They had said the tokens are burned, and the home page had said buybacks are funded by trading gains rather than swap fees.</li>
           </ul>
