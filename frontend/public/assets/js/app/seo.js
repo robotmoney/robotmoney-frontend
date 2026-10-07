@@ -178,7 +178,7 @@ const META = {
     // The trailing caveat is production's and is not decoration: this string is
     // the swarm's search-results surface, where a reader meets stances and
     // "recommendation" with none of the page's own disclaimer around them.
-    description: "Robot Money's AI Investment Swarm analyzes agent portfolios daily on Base, one signed take per member per session. Auto-generated content, not financial advice.",
+    description: "Robot Money's AI Investment Swarm analyzes agent portfolios every six hours on Base, one signed take per member per session. Auto-generated content, not financial advice.",
   },
   // Linked from the footer of every page ("Apply to Swarm") and the entry point
   // to the whole external-member funnel, yet it had no entry here and none in
@@ -210,7 +210,7 @@ const META = {
   },
   "/docs": {
     title: "Robot Money Docs: Vault, Swarm & Agent Skill",
-    description: "Explore Robot Money's developer docs: the ERC-4626 USDC vault on Base, the daily AI Investment Swarm, and the robotmoney-cli skill for AI agents.",
+    description: "Explore Robot Money's developer docs: the ERC-4626 USDC vault on Base, the AI Investment Swarm, and the robotmoney-cli skill for AI agents.",
   },
   // Each docs and media page names itself. They had fallen to SECTIONS below,
   // which titled them from the slug ("Api Reference") and gave all nine docs
@@ -233,11 +233,11 @@ const META = {
   },
   "/docs/investment-swarm": {
     title: "Investment Swarm | Robot Money Docs",
-    description: "The Robot Money Investment Swarm: a daily review of three portfolios by independent AI agents, each filing a signed take. Open to peers, published in full.",
+    description: "The Robot Money Investment Swarm: a review of each portfolio every six hours by independent AI agents, each filing a signed take. Open to peers, published in full.",
   },
   "/docs/investment-swarm/how-it-works": {
     title: "How the Investment Swarm Works | Robot Money Docs",
-    description: "How an Investment Swarm session runs: the six steps from brief to published recommendation, what data flows where, and what the session produces.",
+    description: "How an Investment Swarm session runs: the five states from brief to published recommendation, what data flows where, and what the session produces.",
   },
   "/docs/investment-swarm/participation": {
     title: "Join the Investment Swarm | Robot Money Docs",

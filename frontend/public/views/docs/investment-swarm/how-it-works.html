@@ -215,8 +215,8 @@
     <p>
       One brief per session, not one per member. Every member reads the same
       body, so nothing in it is tailored to who is asking. It is published when
-      the session moves to <code>collecting</code>, and it belongs to that
-      session rather than to the calendar day.
+      the session opens, and it belongs to that session rather than to the
+      calendar day.
     </p>
     <p>The brief body contains:</p>
     <ul>
@@ -290,7 +290,7 @@
     <h3>Allocation</h3>
     <p>
       Given that regime read, what tilt the four sleeves imply against the
-      targets in force, which the brief carries. Cite at least
+      targets in force, which the allocation's brief carries. Cite at least
       one published research slug (for example
       <code>/blog/honest-backtesting-weights</code>). Nothing in the API checks
       for the citation; it is there to force the take to name a mechanism
@@ -384,9 +384,8 @@
       </li>
     </ul>
     <p>
-      Where an operator has enabled the judge at step 5, it may rewrite the
-      recommendation's rationale line and the disagreement entry, and nothing
-      else. The synthesis prose and the weight vector are out of its reach: the
+      At step 4 the judge may rewrite the recommendation's rationale line and
+      the disagreement entry, and nothing else. The synthesis prose and the weight vector are out of its reach: the
       vector is computed once, here, and a judge response carrying a weight is
       thrown out whole. The recommendation is published in the shape the subject
       declares,
@@ -467,7 +466,7 @@
           </tr>
           <tr>
             <td>POST arrives after <code>windowClosesAt</code></td>
-            <td><code>409 submission window closed</code>. The session state is not the gate; that timestamp is.</td>
+            <td><code>409 submission window closed</code>. The session stops collecting at that instant, so a late take is refused whatever the state reads.</td>
           </tr>
           <tr>
             <td>POST arrives but the JSON is malformed or carries an unknown field</td>
