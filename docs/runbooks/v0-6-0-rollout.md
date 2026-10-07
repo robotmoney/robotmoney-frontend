@@ -81,7 +81,7 @@ on stage-2 with the real restored dump, plus the three open rows below.
 | B17 | The judge gate counted only operator `robotmoney` as in-house. Production's admin set themis's operator to "RM Protocol Labs" on 2026-09-29, so the twin's judge was served nothing and the dump's in-flight session published `no_consensus` with no judgement | fixed on the QA branch (1201): in-house by seat (owner 2026-10-06) | a session judged by themis on the fresh twin (first windows close 00:25 to 00:38 UTC 2026-10-07) |
 | B18 | The 1178 restore pipe dropped the dump's tail: every `--local dump` boot at `f4e8a798` failed `pg_restore: could not read from input file: end of file` | fixed on the QA branch (1193): one bash pipe | verified: both dumps restore, exit 0 |
 | B19 | A `--reuse` boot minted new service tokens under a scheduler it did not recreate: readiness HTTP 403 | fixed on the QA branch (1202) | verified by R3.8 at `3cdc883b` |
-| B20 | Sessions in flight at the cutover were convened by v0.5.x with no expected roster (`swarm_session_members`) and no `brief_opens_at`; the 0.6 take queue offers such a session to no one, so each subject's in-flight session gets no 0.6 take and may publish under `min_takes`. All 32 production sessions of 2026-09-27 to 2026-10-06 have no roster rows | none | owner decision: seat the active roster on in-flight sessions at the first migrate, or accept one short session per subject at the cutover |
+| B20 | Sessions in flight at the cutover were convened by v0.5.x with no expected roster (`swarm_session_members`) and no `brief_opens_at`; the 0.6 take queue offers such a session to no one, so each subject's in-flight session gets no 0.6 take and may publish under `min_takes`. All 32 production sessions of 2026-09-27 to 2026-10-06 have no roster rows | merged (1215): migration `0114_seat_in_flight_unrostered_sessions` seats the active roster on every v0.5.x session still collecting at the first migrate | verified 2026-10-07 (`qa/0.6.x-2026-10-07-2` at `a502de30`, fresh dump `20261007T192833Z`): the treasury session v0.5.x convened at 18:50Z got 7 roster rows, 7 takes, a judgement and a consensus receipt; `twin:gate` check 1 and soak R8.i pass. Still owed: R7.4a on production |
 | B21 | The twin ran production's 6 h epochs: no runbook step set short epochs, so nothing published for hours and the twin gate, soak window and judge were never exercised | fixed on the QA branch: `bun run twin:accelerate`, R3.3a, standing SR.9 | the 2026-10-06 second run |
 
 Also open: the notice to external members about the four-weight rule (1124); the
@@ -107,7 +107,7 @@ git rev-parse HEAD            # record as RC_SHA; do not tag yet
 bun install --force && bun install --force --cwd backend   # re-run after every switch/checkout
 ```
 
-### 1.1 Pending migrations (36 files, from the 76-name ledger)
+### 1.1 Pending migrations (39 files, from the 76-name ledger)
 
 > **Owner, 2026-10-05 (1173):** from v0.6.0 the migration strategy is to become ONE idempotent,
 > lossless schema file runnable at any database version. That is filed, not started; this
@@ -118,7 +118,7 @@ Classification is each file's own `compat:` header at `d20429ca`. Re-derive at t
 
 - **No `compat:` header (6, they predate the runner's metadata):** `0056_swarm_judge_requires_model`, `0057_swarm_judge_policy_stamp`, `0058_swarm_judge_fault_injection`, `0059_swarm_judgement_completion_usage`, `0062_rm_worker_analytics_ledger_read_grant`, `0081_deployment_identity`. `0081` is applied first by the guarded pass (R6.3). A `NULL` compat refuses an older image (spec §8.4); confirm the runner treats these as the spec requires at R3.
 - **Breaking (8):** `0084` (drops the notification outbox table), `0089_drop_swarm_schedules`, `0096_drop_swarm_scheduler_jobs`, `0097_stream_events_grant_only`, `0098_stream_event_counter`, `0106_webauthn_challenge_slots`, `0107_revoke_runtime_delete`, `0110_drop_swarm_judge_fault_injection`.
-- **Additive:** the rest (`0082`–`0083`, `0085`–`0095`, `0099_swarm_judge_model_bare_id`, `0100`–`0105`, `0108`, `0109`).
+- **Additive:** the rest (`0082`–`0083`, `0085`–`0095`, `0099_swarm_judge_model_bare_id`, `0100`–`0105`, `0108`, `0109`, and since the cut `0111`–`0114`). Re-derived 2026-10-07 at `a502de30` against that day's production ledger: 39 pending, 6 with no header, 8 breaking, 25 additive.
 
 Because any pending migration is `breaking`, the order is fixed by spec §8.5:
 **`bun smoke:down` → `bun run migrate` → `bun smoke --static-port`.** There is no rolling variant.
@@ -522,8 +522,8 @@ then every other pending file in filename order (including the five below 0081).
 bun run migrate               # RM_ENV=prod; receipt + journal land in ~/.local/state/robotmoney-smoke/rm_prod/
 ```
 
-Pass = the receipt records the pre-identity state, the matched baseline, and 36 applied
-files (35 plus `0111_swarm_judge_model_deepseek_v4_1_flash` since the merge of main's #1159). A refusal here changes nothing; read the message (B1 is the expected one).
+Pass = the receipt records the pre-identity state, the matched baseline, and 39 applied
+files (35 at the cut, plus `0111` to `0114` merged since; section 1.1). The 2026-10-07 twin recorded 115 ledger rows, which is 76 plus 39. A refusal here changes nothing; read the message (B1 is the expected one).
 If interrupted after 0081 committed, rerun the same command (normal path, resumes).
 
 R6.4 `bun scripts/prod-init.ts set-identity` — reads `production` through `rm_owner` and
