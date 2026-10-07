@@ -36,30 +36,69 @@ jobs:
       e2e: ${{ steps.filter.outputs.e2e }}
     steps:
       - uses: actions/checkout@v4
-      # `every`: a file is relevant only if it matches ALL patterns, i.e. it is
-      # a path (`**`) that is on none of the skip entries (`!...`). The filter
-      # is true when ANY changed file is relevant.
+      # ALLOW LIST, owned by the WEB domain. dorny's default `some` quantifier:
+      # the job runs when ANY changed file matches ANY pattern, and a path on no
+      # list (docs, unit tests, the scheduler and swarm entry scripts) skips it.
+      # This domain is the only e2e that reads the client, so a frontend-only
+      # change boots this one stack and no other. It takes all of frontend/
+      # (the specs in frontend/test included), the website-server origin, the
+      # static assembly the boot serves, the Playwright config, scripts/
+      # web-client, and the goldens the specs answer /api from. It also takes
+      # the WHOLE backend and the analyst SDK the backend image runs: the specs
+      # read live data, and any backend module can break what they read. Each e2e-*.yml carries its own list;
+      # scripts/tests/unit/ci-gate-path-filters.test.ts pins which paths select
+      # which domain.
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
         id: filter
         with:
-          predicate-quantifier: every
           filters: |
             e2e:
-              - '**'
-              - '!**/*.md'
-              - '!**/*.txt'
-              - '!docs/**'
-              - '!brand-assets/**'
-              - '!goldens/**'
-              - '!frontend/test/**'
-              - '!frontend/public/views/**'
-              - '!frontend/public/data/**'
-              - '!frontend/public/skills/**'
-              - '!frontend/public/blog/**'
-              - '!frontend/public/avatars/**'
-              - '!frontend/public/assets/img/**'
-              - '!scripts/tests/unit/**'
-              - '!scripts/web-client/**'
+              # The stack every domain boots: the shared setup/teardown actions, this
+              # file, the root install, the compose model and the images it builds, the
+              # host-side boot (scripts/smoke*.ts, scripts/stack, scripts/lib and the
+              # scripts/agent modules they import), the backend files the boot itself
+              # imports or runs (migrations, schema, seed data, backend/scripts), the
+              # shared contract (the backend image copies it and the checks import it),
+              # and the fixtures the boot seats.
+              - 'stacks/**'
+              - '.github/actions/e2e-setup/**'
+              - '.github/actions/e2e-teardown/**'
+              - '.github/workflows/e2e-web.yml'
+              - 'package.json'
+              - 'bun.lock'
+              - 'docker-compose.yml'
+              - 'backend/Dockerfile'
+              - 'backend/package.json'
+              - 'backend/bun.lock'
+              - 'backend/migrations/**'
+              - 'backend/schema/**'
+              - 'backend/seed-data/**'
+              - 'backend/scripts/**'
+              - 'backend/src/acceptance-path.ts'
+              - 'backend/src/deploy-policy.ts'
+              - 'backend/src/db/target-lock.ts'
+              - 'website-server/Dockerfile'
+              - 'contract/**'
+              - 'scripts/smoke*.ts'
+              - 'scripts/smoke-ci-checks.ts'
+              - 'scripts/stack/**'
+              - 'scripts/lib/**'
+              - 'scripts/agent/**'
+              - 'test-fixtures/**'
+              - 'shared-fixtures/**'
+              # The web client's own surface.
+              - 'frontend/**'
+              - 'website-server/**'
+              - 'backend/**'
+              - 'packages/analyst-sdk/**'
+              - 'playwright.config.ts'
+              - 'scripts/static-assembly.sh'
+              - 'scripts/prerender.ts'
+              - 'scripts/stamp-assets.ts'
+              - 'scripts/static-manifest.ts'
+              - 'scripts/preview-server.ts'
+              - 'scripts/web-client/**'
+              - 'goldens/**'
 
   e2e-web:
     needs: [changes]
