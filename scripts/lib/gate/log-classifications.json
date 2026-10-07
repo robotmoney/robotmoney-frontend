@@ -42,6 +42,18 @@
     "reason": "Postgres context lines for the guard probes' own DELETE ... WHERE false statements."
   },
   {
+    "id": "expected-guard-probe-privilege",
+    "match": "permission denied for table (swarm_members|swarm_recommendations|swarm_memos|swarm_sessions|swarm_briefs|swarm_subjects|swarm_session_events|swarm_session_members|swarm_subject_snapshots|swarm_session_judgements|swarm_consensus_receipts|swarm_member_keys|swarm_applications|audit_log|agent_activity_log|regime_snapshots|schema_migrations|analytics_overwrite_events)\\b",
+    "class": "expected",
+    "reason": "The boot's append-only guard probes each APPEND_ONLY_TABLES table (backend/src/db/append-only-guard.ts) with DELETE ... WHERE false as the runtime role; since D55 (6) the answer every runtime role must give is 42501, which the guard REQUIRES (PRIVILEGE_REFUSED). Seen on every 0.6 twin boot (stage-2, 2026-10-07). Limited to that table list so a missing grant elsewhere (B11) still fails; an INSERT/UPDATE denial on one of these tables is caught by verify:live and soak R8.r, not by this log line."
+  },
+  {
+    "id": "expected-scheduler-startup-retry",
+    "match": "\\[system-scheduler\\] startup check: API unreachable at .* staying up and reporting unhealthy while the connect loop retries",
+    "class": "expected",
+    "reason": "The scheduler starts beside the api in the replace phase and retries until the api answers ('startup check passed' follows; stage-2, 2026-10-07). An api that never answers fails readiness scheduler-authenticated and the gate's healthy-container check."
+  },
+  {
     "id": "expected-fetch-floor-fallback",
     "match": "fetch returned <n> rows — using persisted <n> rows",
     "class": "expected",
