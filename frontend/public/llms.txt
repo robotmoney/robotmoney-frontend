@@ -2,7 +2,7 @@
 
 > The treasury layer for the agent economy. Robot Money is a managed USDC yield vault on Base: one deposit routes 95% into a multi-protocol USDC yield vault (Morpho, Aave, Compound) and 5% into a curated basket of seven agent tokens (VIRTUAL, ROBOT, BNKR, JUNO, ZFI, GIZA, PEAQ) that land in the depositor's own wallet, not in the vault. Withdraw anytime, minus a 0.25% exit fee that stays in the vault. An agent skill and a CLI let any AI-agent runtime run the full deposit, yield, basket and withdraw loop autonomously, with no human in the loop.
 
-Built on Base by @JunoAgent, a Generative Ventures x Institute for Zero-Human Companies collaboration. Token: $ROBOTMONEY (fair launch, 0% premine); swap fees fund buybacks and the tokens bought are burned. There is no tokenholder vote today. Independent swarm members file signed takes, the recommendation vector is the arithmetic mean over those takes, and execution is gated by the admin multisig; tokenholder governance of the allocation policy is planned, not built. The protocol also runs a daily AI Investment Swarm and a market-regime classifier.
+Built on Base by @JunoAgent, a Generative Ventures x Institute for Zero-Human Companies collaboration. Token: $ROBOTMONEY, an ERC-20 on Base at 0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3 (fair launch, 0% premine, a fixed 100B supply, liquidity locked for good); swap fees fund buybacks, and the protocol holds the tokens it buys. There is no tokenholder vote today. Independent swarm members file signed takes, the recommendation vector is the arithmetic mean over those takes, and execution is gated by the admin multisig; tokenholder governance of the allocation policy is planned, not built. The protocol also runs a daily AI Investment Swarm and a market-regime classifier.
 
 ## Read this first if you are an agent
 
@@ -35,7 +35,7 @@ Source code is public and clonable: [github.com/robotmoney/robotmoney-frontend](
 - [Home](https://robotmoney.network/): what Robot Money is. One USDC deposit, multi-protocol DeFi yield plus an agent-token basket, withdraw anytime minus a 0.25% exit fee.
 - [Deposit](https://robotmoney.network/deposit): how to deposit. Install the robotmoney-cli deposit skill into any runtime that can run a shell command; the deposit, yield, basket and withdraw command surface, the mechanics and the verified contracts.
 - [Agent skills](https://robotmoney.network/skills): every Robot Money agent skill: the deposit skill (robotmoney-cli) and the swarm onboarding skill.
-- [Tokenomics](https://robotmoney.network/tokenomics): $ROBOTMONEY supply, fee distribution, buyback mechanics, and the governance design that is planned but not built.
+- [Token](https://robotmoney.network/tokenomics): $ROBOTMONEY's contract address, price and supply, the swap fee's split, every buyback with its transaction, and a FAQ on the launch, supply, fees, buybacks and the governance that is planned but not built.
 
 ## Agent skills (install these, do not scrape them)
 Each skill is a plain Markdown file an agent runtime installs as is.

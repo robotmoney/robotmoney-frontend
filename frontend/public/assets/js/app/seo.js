@@ -15,6 +15,9 @@
 // The smart contract risks page's cases and categories, written from its view
 // by scripts/build-smart-contract-risks-data.ts (RM-138).
 import { SMART_CONTRACT_RISKS } from "./lib/smart-contract-risks-index.js";
+// The token page's FAQ and its two addresses: the page's structured data
+// repeats the FAQ word for word (seo-token-faq.test.ts holds them together).
+import { TOKEN_FAQ, TOKEN_CONTRACT } from "./lib/token-faq.js";
 
 const ORIGIN = "https://robotmoney.network";
 const SITE_NAME = "Robot Money";
@@ -86,6 +89,10 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
 //   nodes       the page's further @graph nodes, given its URL.
 //   downloads   static files the page publishes beside its text, which the
 //               prerender links from its <head> (routeDownloads).
+// and, for a page that is mainly a FAQ rather than research (RM-156):
+//   faq         its questions and answers, word for word as the page shows
+//               them; the route's JSON-LD is then a FAQPage (faqGraph).
+//   crumb       its breadcrumb name, when the nav calls it something else.
 /**
  * @typedef {{
  *   title: string;
@@ -99,6 +106,8 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
  *   mainEntity?: string;
  *   nodes?: (url: string) => Record<string, unknown>[];
  *   downloads?: { path: string; title: string; type: string }[];
+ *   faq?: { id: string; q: string; a: string }[];
+ *   crumb?: string;
  * }} RouteMeta
  */
 /** @type {Record<string, RouteMeta>} */
@@ -117,9 +126,14 @@ const META = {
     title: "Agent Skills | Robot Money",
     description: "Robot Money's agent skills: robotmoney-cli to deposit into and withdraw from the vault, and the swarm onboarding skill to take a seat in the investment swarm.",
   },
+  // Not research, so no `type`: its structured data is the FAQ (faqGraph).
   "/tokenomics": {
-    title: "$ROBOTMONEY Tokenomics & Governance | Robot Money",
-    description: "$ROBOTMONEY supply, fee split and buybacks: swap fees buy the token back and burn it. Tokenholder governance of the allocation is planned, not built.",
+    title: "$ROBOTMONEY Token: Contract, Fees and Buybacks | Robot Money",
+    description: "$ROBOTMONEY is Robot Money's token on Base: a fair launch, a fixed 100B supply, liquidity locked for good, and swap fees that fund buybacks.",
+    name: "$ROBOTMONEY",
+    crumb: "Token",
+    faq: TOKEN_FAQ,
+    nodes: tokenNodes,
   },
   "/allocation": {
     title: "Allocation: Target Sleeves and Vaults | Robot Money",
@@ -827,7 +841,8 @@ export function researchRoutes() {
 /**
  * The schema.org JSON-LD for a route, or null when the route has none.
  *
- * Only the research pages carry any (their `type` in META or POST_META), and
+ * The research pages carry it (their `type` in META or POST_META), and so
+ * does the token page, as its FAQ (`faq`, see faqGraph). Either way
  * every value in it comes from those tables, never from the request path: the
  * api's shell fallback hands renderMeta() arbitrary paths, and nothing it
  * could put in a URL reaches this output.
@@ -845,6 +860,7 @@ export function researchRoutes() {
 export function routeStructuredData(pathname) {
   const p = canonicalPath(pathname);
   const m = META[p] || POST_META[p];
+  if (m?.faq) return faqGraph(p, { ...m, faq: m.faq });
   if (!m || !m.type) return null;
   const url = ORIGIN + p;
   const name = m.name || String(m.title).split(/\s+\|\s+/)[0];
@@ -919,6 +935,99 @@ export function routeStructuredData(pathname) {
     };
   }
   return { "@context": "https://schema.org", "@graph": [node, ...(m.nodes ? m.nodes(url) : []), breadcrumb] };
+}
+
+/**
+ * A page that is mainly its FAQ (the token page): a FAQPage whose questions
+ * are the page's own rows, each by its id on the page, the nodes the FAQ is
+ * about, and a breadcrumb from Home. Not research, so it is outside
+ * researchRoutes() and the blog index, and its og:type stays "website".
+ *
+ * @param {string} p canonical path
+ * @param {RouteMeta & { faq: { id: string; q: string; a: string }[] }} m
+ * @returns {Record<string, unknown>}
+ */
+function faqGraph(p, m) {
+  const url = ORIGIN + p;
+  const name = m.name || String(m.title).split(/\s+\|\s+/)[0];
+  const nodes = m.nodes ? m.nodes(url) : [];
+  const about = nodes.find((n) => n["@type"] === "Thing");
+  return {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "FAQPage",
+        "@id": url + "#faq",
+        name: m.headline || name,
+        description: m.description,
+        url,
+        inLanguage: "en",
+        isPartOf: { "@id": ORIGIN + "/#website" },
+        publisher: ORG,
+        ...(about ? { about: { "@id": about["@id"] } } : {}),
+        mainEntity: m.faq.map((f) => ({
+          "@type": "Question",
+          "@id": `${url}#${f.id}`,
+          name: f.q,
+          acceptedAnswer: { "@type": "Answer", text: f.a },
+        })),
+      },
+      ...nodes,
+      {
+        "@type": "BreadcrumbList",
+        "@id": url + "#breadcrumb",
+        itemListElement: [
+          { "@type": "ListItem", position: 1, name: "Home", item: ORIGIN + "/" },
+          { "@type": "ListItem", position: 2, name: m.crumb || name, item: url },
+        ],
+      },
+    ],
+  };
+}
+
+// The buyback record's JSON: ROUTES.dashboards.buybacks in contract/src/routes.js,
+// on the site's own origin (seo-token-faq.test.ts checks the two agree).
+const BUYBACKS_DATA_URL = ORIGIN + "/api/dashboards/buybacks";
+
+/**
+ * What the token page's FAQ is about: the token itself, named by its contract
+ * address and the explorer pages that list it, and its buyback record as a
+ * Dataset with the endpoint that serves it. For agents first: schema.org has
+ * no token type, so the token is a Thing identified by its address.
+ *
+ * @param {string} url the page's canonical URL
+ * @returns {Record<string, unknown>[]}
+ */
+function tokenNodes(url) {
+  return [
+    {
+      "@type": "Thing",
+      "@id": url + "#token",
+      name: "$ROBOTMONEY",
+      alternateName: ["ROBOTMONEY", "Robot Money token"],
+      description: "Robot Money's token, an ERC-20 on Base with a fixed supply of 100 billion. The protocol's share of its swap fees buys it back.",
+      url,
+      identifier: { "@type": "PropertyValue", propertyID: "ERC-20 contract address on Base (chain 8453)", value: TOKEN_CONTRACT },
+      sameAs: [
+        `https://basescan.org/token/${TOKEN_CONTRACT}`,
+        `https://dexscreener.com/base/${TOKEN_CONTRACT}`,
+        `https://repo.sourcify.dev/8453/${TOKEN_CONTRACT}`,
+      ],
+      subjectOf: { "@id": url + "#faq" },
+    },
+    {
+      "@type": "Dataset",
+      "@id": url + "#buyback-record",
+      name: "$ROBOTMONEY buybacks",
+      description: "Every $ROBOTMONEY buyback by the Robot Money protocol: its date, the WETH spent, its US dollar value, the $ROBOTMONEY bought and its transaction on Base.",
+      url: url + "#buybacks",
+      creator: { "@id": ORG_ID },
+      publisher: { "@id": ORG_ID },
+      isAccessibleForFree: true,
+      about: { "@id": url + "#token" },
+      distribution: [{ "@type": "DataDownload", encodingFormat: "application/json", contentUrl: BUYBACKS_DATA_URL }],
+    },
+  ];
 }
 
 /**

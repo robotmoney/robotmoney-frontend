@@ -466,6 +466,21 @@ export interface BuybackConfig {
 // cannot be supplied cannot be malformed.
 export const BUYBACK_FROM_BLOCK = 43_741_600;
 
+// $ROBOTMONEY's Doppler pool (RM-156). The token launched through Bankr on
+// Doppler, not Clanker: its liquidity sits in Doppler's locker (the pool's
+// DecayMulticurveInitializer), which shares the pool's swap fees between the
+// beneficiaries stored at launch and keeps a running total of every fee it has
+// collected. IMMUTABLE MAINNET FACTS read off the launch transaction
+// (0xf7d157013065523e9616e58f83e0cb45d004ed4b0bdd8165e7e5a6302d7a377f), so
+// committed constants with no env override, as BUYBACK_FROM_BLOCK is: nothing
+// legitimately varies them per environment. chain/token-fee-income.ts reads
+// them; scripts/token-fees.ts reads the same contracts by hand.
+export const ROBOTMONEY_DOPPLER = Object.freeze({
+  locker: "0xd59ce43e53d69f190e15d9822fb4540dccc91178", // DecayMulticurveInitializer (Sourcify-verified)
+  hook: "0xbb7784a4d481184283ed89619a3e3ed143e1adc0", // DecayMulticurveInitializerHook: the pool's fee schedule
+  poolId: "0xcece56fd6eb8fcbc6c45af8181bfe71ea6057770630490cac36dbbc4aa27a4a6", // Uniswap v4 PoolId: currency0 WETH, currency1 ROBOTMONEY
+});
+
 // The deepest Base WETH/USDC pool (~$111M reserve), used ONLY to read HISTORICAL
 // daily WETH/USD candles when the buyback indexer prices a swap at its own block
 // time (chain/token-prices.ts fetchGeckoDailyCloseUsd). Baked like every other
@@ -536,14 +551,16 @@ export function resolveBuybackConfig(
 // nothing can turn is not configuration; it is a constant with a misleading
 // spelling.
 //
-// WHY 9000. `eth_getLogs` is range-capped by the provider, and 10,000 blocks is
-// the cap the common public endpoints impose (including https://mainnet.base.org,
-// the BASE_RPC_URL default). 9000 sits under it with margin rather than at it, so
-// an off-by-one in the inclusive `[from, from + chunk - 1]` window below can
-// never turn a working scan into a provider-side range error. THIS IS THE NUMBER
-// TO REVISIT — and the only one — if BASE_RPC_URL is ever re-pointed at a
-// provider with a different cap: lower it to that provider's cap minus a similar
-// margin. MAX_CHUNKS bounds one run's wall-clock and RPC spend; the persisted
+// WHY 9000. `eth_getLogs` is range-capped by the provider, and 10,000 blocks was
+// the cap the common public endpoints imposed when this was set. 9000 sits under
+// it with margin rather than at it, so an off-by-one in the inclusive
+// `[from, from + chunk - 1]` window below can never turn a working scan into a
+// provider-side range error. By 2026-10 https://mainnet.base.org, the
+// BASE_RPC_URL default, caps a range at 500 and says so in its HTTP 413; the
+// scan reads that cap and narrows its window to it (buyback-logs.ts
+// buybackLogWindow), keeping a run's reach at CHUNK × MAX_CHUNKS blocks. So
+// this is the WIDEST window the scan asks for: lower it only for a provider
+// that refuses wide ranges without naming its cap. MAX_CHUNKS bounds one run's wall-clock and RPC spend; the persisted
 // scan cursor (buyback_scan_state) carries progress across runs, so a lower value
 // costs catch-up latency, never coverage.
 export const BUYBACK_LOG_CHUNK = 9000;

@@ -123,9 +123,19 @@ interface Buybacks {
 - **Source of truth**: `config.robotmoney` — `totalSupply` via
   `callTotalSupply` (18dp), `priceUsd` via `fetchAssetPriceUsd` (GeckoTerminal,
   `resolvePriceSource()`), `marketCapUsd = totalSupply * priceUsd`. `feeSplit`
-  is a fixed Clanker-pool config constant (Protocol 57 / Bankr 40 / Clanker 3);
-  it is `managed`/static, not a chain read — label its `source` accordingly but
+  is the fixed beneficiary shares of the token's Doppler pool (Protocol 57 /
+  Bankr 36.1 / Doppler 5 / Ecosystem 1.9; `bun scripts/token-fees.ts` reads them
+  live); it is `managed`/static, not a chain read — label its `source` accordingly but
   keep it in the DTO so the frontend stops baking it.
+- **RM-156 additions** (additive, no migration): `protocolHoldings` and
+  `feeIncome` come from ONE Multicall3 eth_call (`chain/token-fee-income.ts`)
+  over Doppler's locker and hook (`config.ts` `ROBOTMONEY_DOPPLER`) and the prop
+  wallets' `balanceOf`. Lifetime fees are the prop wallets' share of the
+  locker's running totals, exact, in WETH and ROBOTMONEY, with their value at
+  today's prices; `last30DaysUsd` is an estimate, the pool's 30-day volume ×
+  its swap fee × the protocol's share. `market` is GeckoTerminal's reading of
+  the pool (`fetchGeckoPoolStatsUsd`), cached ten minutes. Each leg degrades to
+  `null` + `stale: true` on its own; stub sources serve fixtures.
 - **Postgres**: none required for the live read; may reuse
   `vault_share_price_history`-style persistence if a `stale` fallback is added
   (optional — otherwise degrade price/supply legs to `null`).
@@ -140,7 +150,10 @@ interface TokenMetrics {
     totalSupply: number | null;  // token count, 18dp normalized (e.g. 5.5e10)
     marketCapUsd: number | null; // priceUsd * totalSupply
   };
-  feeSplit: { label: string; pct: number }[]; // fixed Clanker pool config
+  feeSplit: { label: string; pct: number }[]; // fixed Doppler pool shares
+  protocolHoldings: { robotmoney: number | null; pctOfSupply: number | null };
+  market: { liquidityUsd: number | null; volume24hUsd: number | null };
+  feeIncome: { lifetimeWeth: number | null; lifetimeRobotmoney: number | null; lifetimeUsd: number | null; last30DaysUsd: number | null };
   asOf: string;
   source: "live" | "stub";
   stale: boolean;
@@ -153,8 +166,9 @@ interface TokenMetrics {
   "robotmoney": { "priceUsd": 0.00000451, "totalSupply": 55000000000, "marketCapUsd": 248050 },
   "feeSplit": [
     { "label": "Protocol", "pct": 57 },
-    { "label": "Bankr", "pct": 40 },
-    { "label": "Clanker", "pct": 3 }
+    { "label": "Bankr", "pct": 36.1 },
+    { "label": "Doppler", "pct": 5 },
+    { "label": "Ecosystem", "pct": 1.9 }
   ],
   "asOf": "2026-07-09T12:04:40.696Z",
   "source": "stub",

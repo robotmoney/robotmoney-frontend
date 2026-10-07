@@ -17,7 +17,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
-import { indexBuybacks, _resetBuybackScanCachesForTests } from "../src/chain/buyback-logs.ts";
+import { indexBuybacks, _resetBuybackScanCachesForTests, _resetBuybackRangeCapForTests, rangeCapFromError } from "../src/chain/buyback-logs.ts";
+import { BaseRpcHttpError } from "../src/chain/base-rpc-client.ts";
 import { _resetRpcConcurrencyForTests, _resetRpcRateLimiterForTests } from "../src/chain/base-rpc-client.ts";
 import { _resetRateLimitStateForTests } from "../src/chain/gecko-rate-limit.ts";
 
@@ -57,7 +58,7 @@ let posts: { method: string; batched: boolean }[] = [];
 let scanReads: { from: number; to: number; status: number }[] = [];
 
 /** A node that answers the scan's three method shapes, single or batched. */
-function serve(opts: { dropBatchEntries?: boolean; maxScanRange?: number; maxScanRangeEverywhere?: boolean } = {}): void {
+function serve(opts: { dropBatchEntries?: boolean; maxScanRange?: number; maxScanRangeEverywhere?: boolean; nameTheCap?: boolean } = {}): void {
   const answerOne = (method: string, params: unknown[]): unknown => {
     if (method === "eth_blockNumber") return hex(43_742_000);
     if (method === "eth_getBlockByNumber") {
@@ -106,6 +107,10 @@ function serve(opts: { dropBatchEntries?: boolean; maxScanRange?: number; maxSca
       const to = parseInt(body.params[0].toBlock, 16);
       const tooBig = opts.maxScanRange !== undefined && to - from + 1 > opts.maxScanRange;
       scanReads.push({ from, to, status: tooBig ? 413 : 200 });
+      // nameTheCap answers as mainnet.base.org does (RM-156): the 413 carries a JSON-RPC error naming the cap.
+      if (tooBig && opts.nameTheCap) {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, error: { code: -32614, message: `eth_getLogs is limited to a ${opts.maxScanRange} range` } }), { status: 413 });
+      }
       if (tooBig) return new Response("request entity too large", { status: 413 });
     }
     const batched = Array.isArray(body);
@@ -132,6 +137,7 @@ beforeEach(async () => {
   posts = [];
   scanReads = [];
   _resetBuybackScanCachesForTests();
+  _resetBuybackRangeCapForTests();
   process.env.BASE_RPC_SOURCE = "live";
   process.env.PRICE_SOURCE = "live";
   process.env.BASE_RPC_MAX_CALLS_PER_SEC = "0"; // pacing is not what this file measures
@@ -232,6 +238,37 @@ test("a scan read the provider refuses as too large (413) is halved until it fit
   for (const r of accepted) expect(r.to - r.from + 1).toBeLessThanOrEqual(100);
   for (let i = 1; i < accepted.length; i++) expect(accepted[i]!.from).toBeGreaterThan(accepted[i - 1]!.to);
   expect(scanReads.some((r) => r.status === 413)).toBe(true);
+});
+
+// RM-156. mainnet.base.org caps eth_getLogs at 500 blocks and says so in its 413. Halving a 9000-block window gets
+// under that only after five levels, spending the shared rate budget on ~31 refusals per window; the scan reads
+// the cap from the first refusal instead and sizes every later window to it.
+test("a 413 that names the provider's range cap is refused once: every later window is read at that size", async () => {
+  serve({ maxScanRange: 100, nameTheCap: true });
+  const res = await indexBuybacks();
+  expect(res.skipped).toBeNull();
+  const rows = await sql<{ tx_hash: string }[]>`
+    SELECT tx_hash FROM buyback_swaps WHERE tx_hash = ANY(${SWAPS.map((s) => s.tx.toLowerCase())}::text[])`;
+  expect(rows.map((r) => r.tx_hash).sort()).toEqual(SWAPS.map((s) => s.tx.toLowerCase()).sort());
+
+  expect(scanReads.filter((r) => r.status === 413).length).toBe(1);
+  const accepted = scanReads.filter((r) => r.status === 200).sort((a, b) => a.from - b.from);
+  for (const r of accepted) expect(r.to - r.from + 1).toBeLessThanOrEqual(100);
+  for (let i = 1; i < accepted.length; i++) expect(accepted[i]!.from).toBe(accepted[i - 1]!.to + 1);
+
+  // The next run knows the cap before it asks: no refusal at all.
+  scanReads = [];
+  await fixtureDb`DELETE FROM buyback_scan_state WHERE id = 1`;
+  await indexBuybacks();
+  expect(scanReads.length).toBeGreaterThan(0);
+  expect(scanReads.filter((r) => r.status === 413).length).toBe(0);
+});
+
+test("rangeCapFromError reads the cap only from a 413 that names one", () => {
+  expect(rangeCapFromError(new BaseRpcHttpError(413, '{"error":{"code":-32614,"message":"eth_getLogs is limited to a 500 range"}}'))).toBe(500);
+  expect(rangeCapFromError(new BaseRpcHttpError(413, "request entity too large"))).toBeNull();
+  expect(rangeCapFromError(new BaseRpcHttpError(429, "eth_getLogs is limited to a 500 range"))).toBeNull();
+  expect(rangeCapFromError(new Error("eth_getLogs is limited to a 500 range"))).toBeNull();
 });
 
 test("a scan read the provider accepts is one request: nothing is split", async () => {

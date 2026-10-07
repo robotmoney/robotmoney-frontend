@@ -28,6 +28,7 @@ import { decodeAggregate3Calls, encodeAggregate3Result, type Aggregate3Result } 
 import { getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation } from "../../src/api/routes/dashboards.ts";
 import { _resetBuybackCacheForTests, indexBuybacks } from "../../src/chain/buyback-logs.ts";
 import { _resetTokenMetricsCacheForTests } from "../../src/chain/token-metrics.ts";
+import { TOKEN_FEE_INCOME_SELECTORS } from "../../src/chain/token-fee-income.ts";
 import { sampleWalletSleeves } from "../../src/worker/handlers/wallet.ts";
 import {
   _resetWalletSleevesCacheForTests,
@@ -79,7 +80,15 @@ const BALANCE_OF = "0x70a08231";
 const CONVERT_TO_ASSETS = "0x07a2d13a";
 const GET_ETH_BALANCE = "0x4d2301cc"; // Multicall3 getEthBalance(address)
 const AGGREGATE3 = "0x82ad56cb"; // Multicall3 aggregate3(Call3[])
-function mockChain(opts: { totalSupply?: bigint; failPrice?: boolean; failCall?: boolean; failBalanceOfTargets?: string[] } = {}) {
+// The Doppler locker and hook reads behind token-metrics' fee income (RM-156).
+const { getCumulatedFees0: CUM_FEES0, getCumulatedFees1: CUM_FEES1, getShares: GET_SHARES, getFeeScheduleOf: FEE_SCHEDULE } = TOKEN_FEE_INCOME_SELECTORS;
+// Fixture locker state: 100 WETH and 10B ROBOTMONEY collected since launch,
+// the primary prop wallet holding the 57% share, the pool at 1.2%.
+const FIXTURE_CUM0 = 100n * 10n ** 18n;
+const FIXTURE_CUM1 = 10_000_000_000n * 10n ** 18n;
+const FIXTURE_SHARE = 570_000_000_000_000_000n;
+const FIXTURE_END_FEE = 12_000n;
+function mockChain(opts: { totalSupply?: bigint; failPrice?: boolean; failCall?: boolean; failBalanceOfTargets?: string[]; failFeeIncome?: boolean } = {}) {
   const counter = { aggregateCalls: 0 };
   // One aggregate3 sub-call, answered with the same fixtures the single-call
   // branch serves; a target in failBalanceOfTargets reverts (success:false).
@@ -91,12 +100,29 @@ function mockChain(opts: { totalSupply?: bigint; failPrice?: boolean; failCall?:
       return { success: true, returnData: word(1_000_000n) };
     }
     if (sel === CONVERT_TO_ASSETS) return { success: true, returnData: word(4_500_000_000n) };
+    if (sel === CUM_FEES0) return { success: true, returnData: word(FIXTURE_CUM0) };
+    if (sel === CUM_FEES1) return { success: true, returnData: word(FIXTURE_CUM1) };
+    if (sel === FEE_SCHEDULE) return { success: true, returnData: word(1n) + word(800_000n).slice(2) + word(FIXTURE_END_FEE).slice(2) + word(FIXTURE_END_FEE).slice(2) + word(10n).slice(2) };
+    if (sel === GET_SHARES) {
+      if (opts.failFeeIncome) return { success: false, returnData: "0x" };
+      // Only the primary prop wallet holds a share, as on chain.
+      const holder = "0x" + callData.slice(10 + 64 + 24, 10 + 128);
+      return { success: true, returnData: word(holder === resolvePropWallets()[0] ? FIXTURE_SHARE : 0n) };
+    }
     throw new Error(`mockChain: unexpected sub-call selector ${sel}`);
   };
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
     const u = String(url);
     if (u.includes("geckoterminal.com") || u.includes("finance.yahoo.com")) {
       if (opts.failPrice) throw new Error("mockChain: forced price failure");
+      // One pool's reading and its daily candles (token-metrics' market leg).
+      if (u.includes("/ohlcv/day")) {
+        const candles = Array.from({ length: 30 }, (_, i) => [1_700_000_000 + i * 86_400, 1, 1, 1, 1, 1_000]);
+        return new Response(JSON.stringify({ data: { attributes: { ohlcv_list: candles } } }), { status: 200 });
+      }
+      if (u.includes("/networks/base/pools/")) {
+        return new Response(JSON.stringify({ data: { attributes: { reserve_in_usd: "168000.5", volume_usd: { h24: "2274.25" } } } }), { status: 200 });
+      }
       // token_price takes a comma-separated address list (token-prices.ts
       // micro-batches same-burst legs into one request) — answer every
       // requested address at the fixed fixture price.
@@ -198,8 +224,43 @@ test("token-metrics: stub source → fixture supply + stub price + computed mark
   expect(r.robotmoney.totalSupply).toBe(55_000_000_000);
   expect(r.robotmoney.priceUsd).toBeCloseTo(0.00001, 12);
   expect(r.robotmoney.marketCapUsd).toBeCloseTo(Math.round(55_000_000_000 * 0.00001 * 100) / 100, 6);
-  expect(r.feeSplit).toEqual([{ label: "Protocol", pct: 57 }, { label: "Bankr", pct: 40 }, { label: "Clanker", pct: 3 }]);
+  expect(r.feeSplit).toEqual([{ label: "Protocol", pct: 57 }, { label: "Bankr", pct: 36.1 }, { label: "Doppler", pct: 5 }, { label: "Ecosystem", pct: 1.9 }]);
+  // RM-156 legs serve their fixtures under stub sources, never a live read.
+  expect(r.protocolHoldings).toEqual({ robotmoney: 7_000_000_000, pctOfSupply: 12.73 });
+  expect(r.market).toEqual({ liquidityUsd: 150_000, volume24hUsd: 4_000 });
+  // 30 WETH × $1,600 + 8B × $0.00001; 30-day volume $120,000 × 1.2% × 57%.
+  expect(r.feeIncome).toEqual({ lifetimeWeth: 30, lifetimeRobotmoney: 8_000_000_000, lifetimeUsd: 128_000, last30DaysUsd: 820.8 });
   expect(r.stale).toBe(false);
+});
+
+test("token-metrics: LIVE fee income is the prop wallets' share of the locker's lifetime totals, valued at today's prices, in one eth_call", async () => {
+  process.env.BASE_RPC_SOURCE = "live";
+  process.env.PRICE_SOURCE = "live";
+  const counter = mockChain({ totalSupply: 100_000_000_000n * 10n ** 18n });
+  const r = await getTokenMetrics();
+  // 57% of 100 WETH and of 10B ROBOTMONEY; every price is the mock's $0.50.
+  expect(r.feeIncome.lifetimeWeth).toBeCloseTo(57, 9);
+  expect(r.feeIncome.lifetimeRobotmoney).toBeCloseTo(5_700_000_000, 0);
+  expect(r.feeIncome.lifetimeUsd).toBeCloseTo(57 * 0.5 + 5_700_000_000 * 0.5, 2);
+  // 30 candles × $1,000 × 1.2% × 57%.
+  expect(r.feeIncome.last30DaysUsd).toBeCloseTo(30_000 * 0.012 * 0.57, 2);
+  expect(r.market).toEqual({ liquidityUsd: 168000.5, volume24hUsd: 2274.25 });
+  // Every prop wallet's balanceOf is the mock's 1e6 wei.
+  expect(r.protocolHoldings.robotmoney).toBeCloseTo((resolvePropWallets().length * 1_000_000) / 1e18, 24);
+  expect(counter.aggregateCalls).toBe(1);
+  expect(r.stale).toBe(false);
+});
+
+test("token-metrics: a locker read that does not answer degrades fee income and holdings to null with stale:true; supply and price stand", async () => {
+  process.env.BASE_RPC_SOURCE = "live";
+  process.env.PRICE_SOURCE = "stub";
+  mockChain({ totalSupply: 100_000_000_000n * 10n ** 18n, failFeeIncome: true });
+  const r = await getTokenMetrics();
+  expect(r.feeIncome).toEqual({ lifetimeWeth: null, lifetimeRobotmoney: null, lifetimeUsd: null, last30DaysUsd: null });
+  expect(r.protocolHoldings).toEqual({ robotmoney: null, pctOfSupply: null });
+  expect(r.robotmoney.totalSupply).toBeCloseTo(100_000_000_000, 0);
+  expect(r.robotmoney.priceUsd).toBeCloseTo(0.00001, 12);
+  expect(r.stale).toBe(true);
 });
 
 test("token-metrics: a LIVE supply read is decoded from the chain (callTotalSupply path executes, 18dp normalized)", async () => {
@@ -220,6 +281,11 @@ test("token-metrics: a failed live price leg degrades priceUsd + marketCap to nu
   expect(r.robotmoney.totalSupply).toBe(55_000_000_000); // supply still resolves
   expect(r.robotmoney.priceUsd).toBeNull();
   expect(r.robotmoney.marketCapUsd).toBeNull();
+  // The pool reads the same price host, so it degrades with it; fee income in
+  // tokens still stands (stub chain), its USD value does not.
+  expect(r.market).toEqual({ liquidityUsd: null, volume24hUsd: null });
+  expect(r.feeIncome.lifetimeWeth).toBe(30);
+  expect(r.feeIncome.lifetimeUsd).toBeNull();
   expect(r.stale).toBe(true);
 });
 

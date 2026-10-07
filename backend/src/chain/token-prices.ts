@@ -380,6 +380,48 @@ export async function fetchGeckoTokenPriceUsd(address: string, timeoutMs = 8000)
   }
 }
 
+// --- One pool's market (RM-156) ---------------------------------------------
+// The token page's liquidity and volume: GeckoTerminal's own reading of ONE
+// pool, from the same keyless vendor, on the same retry budget (geckoFetchJson)
+// and the same on-disk fetch cache as the prices above.
+//   GET /networks/base/pools/{pool}
+//     → data.attributes.reserve_in_usd, data.attributes.volume_usd.h24
+//   GET /networks/base/pools/{pool}/ohlcv/day?aggregate=1&limit=30&currency=usd
+//     → data.attributes.ohlcv_list: [[ts, open, high, low, close, volumeUsd], ...]
+// The last 30 daily candles include today's, still filling, so the 30-day
+// volume reads a little short of thirty full days; callers say "about". A field
+// the vendor leaves out is null, never a zero.
+export interface GeckoPoolStats {
+  liquidityUsd: number | null;
+  volume24hUsd: number | null;
+  volume30dUsd: number | null;
+}
+
+const toNumberOrNull = (v: unknown): number | null => {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+export async function fetchGeckoPoolStatsUsd(pool: string, timeoutMs = 15_000): Promise<GeckoPoolStats> {
+  const id = pool.toLowerCase();
+  const infoUrl = geckoUrl("pool", `/networks/base/pools/${id}`);
+  const candlesUrl = geckoUrl("ohlcv", `/networks/base/pools/${id}/ohlcv/day?aggregate=1&limit=30&currency=usd`);
+  const info = (await withFetchCache("json", infoUrl, () => geckoFetchJson(infoUrl, timeoutMs, `pool ${id}`))) as {
+    data?: { attributes?: { reserve_in_usd?: unknown; volume_usd?: { h24?: unknown } } };
+  };
+  const candles = (await withFetchCache("json", candlesUrl, () => geckoFetchJson(candlesUrl, timeoutMs, `30-day volume for ${id}`))) as {
+    data?: { attributes?: { ohlcv_list?: unknown[] } };
+  };
+  const list = candles?.data?.attributes?.ohlcv_list;
+  const volumes = Array.isArray(list) ? list.map((c) => (Array.isArray(c) ? toNumberOrNull(c[5]) : null)) : [];
+  return {
+    liquidityUsd: toNumberOrNull(info?.data?.attributes?.reserve_in_usd),
+    volume24hUsd: toNumberOrNull(info?.data?.attributes?.volume_usd?.h24),
+    volume30dUsd: volumes.length && volumes.every((v) => v != null) ? volumes.reduce((a: number, v) => a + (v as number), 0) : null,
+  };
+}
+
 // Latest Yahoo close for the SP500 ticker (reuses analytics/extract/yahoo.ts).
 export async function fetchSp500PriceUsd(ticker: string, timeoutMs = 15000): Promise<number> {
   const points = await fetchYahoo(ticker, 0, Math.floor(Date.now() / 1000), timeoutMs);

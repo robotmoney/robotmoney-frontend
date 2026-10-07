@@ -95,7 +95,7 @@ export async function getBuybacks() {
 }
 
 // GET /api/dashboards/token-metrics → ROBOTMONEY price/supply/marketCap +
-// fixed Clanker-pool fee split. A failed supply/price leg → that field null +
+// fixed Doppler-pool fee split. A failed supply/price leg → that field null +
 // stale:true, never a fabricated price.
 export async function getTokenMetrics() {
   return fetchTokenMetrics();

@@ -87,7 +87,7 @@ function buildTerminalLines(bucketLines) {
     // spacing its parts out invites the reader to weigh them separately.
     ...bucketLines.map((b) => ({ text: `  ✓ ${b}`, beat: 260 })),
     { text: "  Launching $ROBOTMONEY on Base...", beat: 560 },
-    { text: "  ✓ LP locked until 2100", beat: 820 },
+    { text: "  ✓ LP locked permanently", beat: 820 },
     { text: "  ✓ Prop wallet initialized", beat: 260 },
     { text: "", beat: 200 },
     { text: "  Ready. Accepting deposits.", beat: 650 },

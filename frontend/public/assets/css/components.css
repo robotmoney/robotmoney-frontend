@@ -851,10 +851,10 @@
 .rm-sphase--open, .rm-sphase--aggregating { color: var(--color-warm); }
 
 /* A live state: a square beating slowly, so it cannot be read as the static
-   verified mark (a member's Active, a vault's Live). Hueless: green is a
-   constructive stance and rmUSDC's own hue, and a live mark in it read as the
-   vault's swatch (the covenant above). The beat carries the meaning. */
-.rm-pulse { display: inline-block; width: 0.4rem; height: 0.4rem; background: var(--color-text);
+   verified mark (a member's Active, a vault's Live). Green, as a published
+   session's mark is (David, 2026-10-06: grey read as inert); the beat, not the
+   hue, is what tells it from a swatch. */
+.rm-pulse { display: inline-block; width: 0.4rem; height: 0.4rem; background: var(--color-green);
   flex: 0 0 auto; vertical-align: middle; animation: rm-pulse-beat 2.4s ease-in-out infinite; }
 .rm-live { display: inline-flex; align-items: center; gap: 0.5rem; }
 @keyframes rm-pulse-beat { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }

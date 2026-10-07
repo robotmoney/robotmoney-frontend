@@ -1,432 +1,274 @@
-<!-- Token Economics
-     Ported from robotmoney-site/src/app/tokenomics/page.tsx
-     Buildless SPA fragment: no inline <script>. The hero flock canvas is the
-     boot-registered tokHero() factory (assets/js/app/alpine/heroes.js); the
-     Copy button uses the global [data-copy] handler in main.js. The fee
-     distribution pie + legend + breakdown-card percentages are LIVE from
-     GET /api/dashboards/token-metrics (`feeSplit`) via the feeChart() factory,
-     and the Buyback History card is LIVE from GET /api/dashboards/buybacks via
-     the buybackSummary() factory — no baked fee % or buyback rows remain.
+<!-- $ROBOTMONEY, the token page
+     Buildless SPA fragment: no inline <script>. Built on the regime and vault
+     pages' components (.rr-*): a facts row under the hero, sections divided by
+     their rule, the fee split as the ring every weight mix on the site uses, a
+     table for the buyback record, and a FAQ at the bottom. The hero flock
+     canvas is the boot-registered tokHero() factory (alpine/heroes.js). The
+     contract card mirrors the deposit page's install card. The facts row and the fee
+     ring are LIVE from GET /api/dashboards/token-metrics via feeChart(), and
+     the buybacks from GET /api/dashboards/buybacks via buybackSummary(): no
+     baked fee % or buyback rows remain.
 
      COPY TRUTH, do not "restore" the old text:
-     • There is NO tokenholder vote. No ballot, no quorum, no eligibility
-       filter, no on-chain rebalance job. What runs is the swarm: members file
-       signed takes, the recommendation is the arithmetic mean over the take
-       set, and applying it is gated by the admin multisig. Every governance
-       claim on this page is therefore labelled planned.
-     • There is NO management fee. The only fee is 0.25% on withdrawal and it
-       stays in the vault (see views/allocation.html, Notes 1), so it is not
-       protocol revenue. Buybacks are funded by swap fees only.
-     • The allocation is FOUR sleeves, not three buckets. Weights live at
-       /allocation, bound to GET /api/dashboards/allocation. Never bake one in.
+     • There is NO tokenholder vote: no ballot, no quorum, no eligibility
+       filter. The swarm proposes the vault's allocation and the admin
+       multisig applies it. Every governance claim here is labelled planned.
+     • Buybacks are funded by the protocol's share of swap fees only. There is
+       no management fee, and the vault's exit fee stays in the vault.
+     • Bought-back tokens are NOT burned. They go to the protocol's primary
+       wallet (0xfbc2…c9d6) and stay there. Do not restore "buyback and burn"
+       until a burn happens on chain.
+     • $ROBOTMONEY launched through Bankr on Doppler, not Clanker, on 12 Mar
+       2026. Swaps pay 1.2%, and the pool is Locked: its liquidity can never
+       be withdrawn, so the lock has no end date (not "until 2100").
+
+     The page is the token's alone. How the vault's allocation is set is on
+     the swarm and allocation pages; the vault's fees are on the deposit page;
+     the site footer carries the legal notice. #what-it-does, #fees and
+     #buybacks are sections; every FAQ row is an id too (and #precedents opens
+     #governance), and a link to one opens it.
+
+     THE FAQ IS STRUCTURED DATA. Its questions and answers are
+     lib/token-faq.js, word for word, which seo.js publishes as a FAQPage;
+     edit both together (scripts/tests/unit/seo-token-faq.test.ts fails on any
+     drift).
 -->
 
-<section class="tok">
-  <div class="tok__container">
+<section class="tok" x-data="feeChart()">
 
-    <!-- 01 / Hero -->
-    <header class="tok__hero">
-      <div class="tok__hero-art" x-data="tokHero()"></div>
-      <div class="tok__hero-inner">
-        <div class="tok__hero-copy">
-          <h1 class="tok__h1">
-            Token <span class="tok__grad">Economics</span>
-          </h1>
-          <p class="tok__lede">
-            Fair launch via Bankr on Base, 0% premine. Swap fees on its own pool fund buybacks. Tokenholder control of the allocation is planned, not live.
-          </p>
-        </div>
-
-        <!-- The contract address and the two explorer links belong beside the
-             headline, not in a strip under the hero. They are what a reader
-             comes to this page for first, and below the band they read as page
-             content rather than as the page's own identity. -->
-        <div class="tok__hero-actions">
-          <div class="tok__contract">
-            <span class="tok__contract-label">Contract address</span>
-            <!-- The address is its own link to the explorer, which is what a
-                 reader would click it expecting to do, so the separate BaseScan
-                 button is redundant and is gone. -->
-            <a class="tok__contract-addr" href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">0x65021a79AeEF...8618bEbA3</a>
-            <button type="button" class="tok__copy" data-copy="0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" data-copied-text="Copied!"><span data-copy-label>Copy</span></button>
-          </div>
-          <div class="tok__hero-links">
-            <a class="tok__btn tok__btn--ghost" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener</a>
-          </div>
-        </div>
-      </div>
-    </header>
-
-    <!-- 02 / Utility -->
-    <div class="tok__section" id="what-it-does">
-      <span class="tok__eyebrow">02 / Utility</span>
-      <h2 class="tok__h2">What $ROBOTMONEY <span class="tok__grad">Does</span></h2>
-      <p class="tok__intro">
-        One mechanism runs today: swap fees fund buybacks, and the tokens bought are burned. The two governance mechanisms below are designed, not built. Each card says which it is.
-      </p>
-
-      <div class="tok__grid tok__grid--3">
-        <a class="tok__card tok__card--link" href="#governance">
-          <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><path d="M12 3L3 9v12h18V9L12 3z"/><path d="M12 12l-4-2"/><path d="M12 12l4-2"/><path d="M12 12v6"/></svg>
-          <h3 class="tok__card-title">Allocation Authority (planned)</h3>
-          <p class="tok__card-body">
-            Not live. There is no ballot, no quorum and no vote contract. Allocation changes are proposed by the swarm and executed by the admin multisig. Moving that authority to holders is planned, with no ship date.
-          </p>
-        </a>
-        <a class="tok__card tok__card--link" href="#governance">
-          <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 12h4"/><path d="M13 12h4"/></svg>
-          <h3 class="tok__card-title">Inclusion Demand (planned)</h3>
-          <p class="tok__card-body">
-            Not live, and downstream of the vote above. The design: a token clears a published eligibility filter, then holders weight it, so ecosystems and agent treasuries would hold $ROBOTMONEY to push for inclusion. No filter and no ballot exist yet, so neither does the demand.
-          </p>
-        </a>
-        <a class="tok__card tok__card--link" href="#buybacks">
-          <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="1.5"><path d="M12 3c0 2-2 4-2 6s2 4 2 6"/><path d="M12 3c0 2 2 4 2 6s-2 4-2 6"/><path d="M8 15c0 2 2 3 4 3s4-1 4-3"/></svg>
-          <h3 class="tok__card-title">Supply Reduction</h3>
-          <p class="tok__card-body">
-            Live. The protocol's only revenue is its share of the 1% fee on every $ROBOTMONEY swap. There is no management fee. When that revenue covers a purchase, the protocol buys $ROBOTMONEY on the open market and burns it. The buyback record is below.
-          </p>
-        </a>
+  <header class="tok__hero">
+    <div class="tok__hero-art" x-data="tokHero()" aria-hidden="true"></div>
+    <div class="tok__hero-inner">
+      <div class="tok__hero-copy">
+        <h1 class="tok__h1">$ROBOTMONEY</h1>
+        <p class="tok__lede">Robot Money's token on Base: a fair launch with no premine, liquidity locked for good, and swap fees that fund buybacks.</p>
       </div>
 
-      <div class="tok__flow">
-        <span class="tok__flow-step">SWAP FEE</span>
-        <span class="tok__flow-arrow">&rarr;</span>
-        <span class="tok__flow-step">BUY BACK</span>
-        <span class="tok__flow-arrow">&rarr;</span>
-        <span class="tok__flow-step">BURN</span>
-      </div>
-
-      <span class="tok__eyebrow">02b / Principles</span>
-      <h3 class="tok__h3">Design <span class="tok__grad">Principles</span></h3>
-      <p class="tok__intro">The protocol is structured around four principles.</p>
-
-      <div class="tok__grid tok__grid--4">
-        <div class="tok__card" style="border-color:rgba(16,185,129,0.3);">
-          <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="1.5"><path d="M12 2c0 0-6 4-6 10v4l-2 2h16l-2-2v-4c0-6-6-10-6-10z"/><path d="M12 14v4"/></svg>
-          <h3 class="tok__card-title tok__card-title--sm">Fair launch</h3>
-          <p class="tok__card-body">
-            No team allocation. No pre-sale. No insider tranche. All tokens entered the Uniswap v4 pool through Clanker's liquidity staircase at launch.
-          </p>
+      <!-- The contract card sits beside the headline, as the install card does
+           on the deposit page: the address is what a reader comes here for
+           first. Same anatomy: a labelled head, the value with an icon copy
+           button, then the ways out. -->
+      <div class="tok__card" x-data="{ copied: false }">
+        <div class="tok__card-head">
+          <span class="tok__card-label">Contract address on Base</span>
         </div>
-        <div class="tok__card" style="border-color:rgba(139,92,246,0.3);">
-          <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-          <h3 class="tok__card-title tok__card-title--sm">Permanent liquidity</h3>
-          <p class="tok__card-body">
-            LP locked until 2100 via Clanker's locker contract. The protocol earns swap fees from its own pool rather than paying inflationary rewards to mercenary LPs.
-          </p>
+        <div class="tok__card-body">
+          <code class="tok__card-addr">0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3</code>
+          <!-- Icon only, as on the deposit page: aria-label carries the meaning,
+               and it flips to a tick on success so the state is not colour-only. -->
+          <button type="button" class="tok__card-copy" :class="copied && 'is-copied'"
+            @click="navigator.clipboard.writeText('0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3'); copied = true; setTimeout(() => copied = false, 2000)"
+            :aria-label="copied ? 'Address copied' : 'Copy the contract address'">
+            <svg x-show="!copied" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="5.5" y="5.5" width="9" height="9" stroke="currentColor" />
+              <path d="M11 3.5H2.5v8.5" stroke="currentColor" />
+            </svg>
+            <svg x-show="copied" x-cloak width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M2.5 8.5l4 4 7-9" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+          </button>
         </div>
-        <div class="tok__card" style="border-color:rgba(59,130,246,0.3);">
-          <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><path d="M12 2L4 6v6c0 5.5 3.4 10.7 8 12 4.6-1.3 8-6.5 8-12V6l-8-4z"/></svg>
-          <h3 class="tok__card-title tok__card-title--sm">Open vault</h3>
-          <p class="tok__card-body">
-            Vault logic is open and verifiable on Base. Allocation changes are proposed by the swarm and executed by the admin multisig. Handing that authority to token holders is planned, not built.
-          </p>
-        </div>
-        <div class="tok__card" style="border-color:rgba(139,92,246,0.3);">
-          <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>
-          <h3 class="tok__card-title tok__card-title--sm">Bounded governance</h3>
-          <p class="tok__card-body">
-            When holder governance ships, it covers sleeve weights and nothing else. No vote on the protocol wallets, no marketing vote, no operations vote. The constraint is written down now, before there is anything to vote on.
-          </p>
+        <div class="tok__card-links">
+          <a class="rr-btn" href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">BaseScan</a>
+          <a class="rr-btn" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener</a>
         </div>
       </div>
     </div>
+  </header>
 
-    <!-- 03 / Governance -->
-    <div class="tok__section tok__section--deep" id="governance">
-      <span class="tok__eyebrow">03 / Governance</span>
-      <h2 class="tok__h2">The swarm proposes. <span class="tok__grad">The multisig executes.</span></h2>
-      <p class="tok__intro">Two parties move the allocation today: an independent swarm that files signed takes, and the admin multisig that decides whether to apply the result. Token holders are not in that loop yet.</p>
-
-      <div class="tok__grid tok__grid--3">
-        <div class="tok__card">
-          <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M8 2v4"/><path d="M16 2v4"/></svg>
-          <h3 class="tok__card-title">Daily Swarm Review</h3>
-          <p class="tok__card-body">
-            The swarm runs on a daily cadence and reviews one portfolio per session. The Robot Money allocation is one of the portfolios it reviews. Members file signed takes independently and cannot read each other's until the window closes. The recommendation vector is the arithmetic mean over the take set, so anyone holding the published takes can recompute it and check the number. Applying it to the vault is gated by the admin multisig. Sessions and takes are at <a class="tok__inline-link" href="/swarm">/swarm</a>.
-          </p>
-        </div>
-        <div class="tok__card">
-          <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 3"/></svg>
-          <h3 class="tok__card-title">Standing Weights</h3>
-          <p class="tok__card-body">
-            Nothing moves on its own. The current weights stand until the multisig applies a new proposal, so the fund always has a stated allocation. There is no quorum rule here, because there is no vote.
-          </p>
-        </div>
-        <div class="tok__card">
-          <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><path d="M12 3v18"/><circle cx="7" cy="14" r="3"/><circle cx="17" cy="10" r="3"/><path d="M7 11V8"/><path d="M17 13v4"/></svg>
-          <h3 class="tok__card-title">Four Sleeves</h3>
-          <p class="tok__card-body">
-            The allocation is four sleeves, not three buckets: Fixed Income, Small Cap Tokens, Protocol Tokens, Real World Assets. Live weights and the date they were set are published at <a class="tok__inline-link" href="/allocation">/allocation</a>. No monthly holder vote sets them. Tokenholder voting on sleeve weights is planned.
-          </p>
-        </div>
-      </div>
-
-      <!-- Governance flow -->
-      <div class="tok__gov-flow">
-        <div class="tok__gov-node"><span class="tok__gov-dot" style="background:var(--color-accent);"></span><span>Swarm Files Takes</span></div>
-        <span class="tok__flow-arrow">&rarr;</span>
-        <div class="tok__gov-node"><span class="tok__gov-dot" style="background:#10b981;"></span><span>Mean Over The Take Set</span></div>
-        <span class="tok__flow-arrow">&rarr;</span>
-        <div class="tok__gov-node"><span class="tok__gov-dot" style="background:var(--color-warn);"></span><span>Multisig Applies</span></div>
-      </div>
-
-      <!-- Inclusion Economy -->
-      <div class="tok__panel">
-        <h3 class="tok__panel-title">The Inclusion Economy (planned)</h3>
-        <p class="tok__panel-lede">
-          None of this is built. It is the intended shape of tokenholder governance, written down so it can be checked against what ships. Two parts.
-        </p>
-        <div class="tok__grid tok__grid--2">
-          <div class="tok__numbered">
-            <span class="tok__num">01</span>
-            <div>
-              <h4 class="tok__num-title">The filter would set the eligible set.</h4>
-              <p class="tok__card-body">
-                A token would have to clear a published quantitative filter before any holder could weight it, and holders could not add one that fails. No such filter runs today.
-              </p>
-            </div>
-          </div>
-          <div class="tok__numbered">
-            <span class="tok__num">02</span>
-            <div>
-              <h4 class="tok__num-title">The vote would set the weighting within that set.</h4>
-              <p class="tok__card-body">
-                Ecosystems, agent treasuries and holders that wanted a qualifying token weighted would hold $ROBOTMONEY and vote on it. That is where structural demand for the token would come from. There is no vote contract, so today it does not.
-              </p>
-            </div>
-          </div>
-        </div>
-        <p class="tok__panel-foot">The filter would govern eligibility. Holders would govern weighting. Both would be public. Neither exists yet.</p>
-      </div>
+  <div class="tok__body rr">
+    <div class="rr-meta tok__meta">
+      <span class="rr-meta__i">Price <b x-text="priceLabel()">—</b></span>
+      <span class="rr-meta__i">Market cap <b x-text="marketCapLabel()">—</b></span>
+      <span class="rr-meta__i">Supply <b x-text="supplyLabel()">—</b></span>
+      <span class="rr-meta__i">Held by the protocol <b x-text="heldLabel()">—</b></span>
+      <span class="rr-meta__i">Liquidity <b x-text="liquidityLabel()">—</b></span>
+      <span class="rr-meta__i">24h volume <b x-text="volumeLabel()">—</b></span>
+      <span class="rr-meta__i">LP lock <b>Permanent</b></span>
     </div>
 
-    <!-- 04 / Buybacks -->
-    <div class="tok__section" id="buybacks">
-      <span class="tok__eyebrow">04 / Buybacks</span>
-      <h2 class="tok__h2">Discretionary <span class="tok__grad">Buybacks</span></h2>
-      <p class="tok__intro">
-        Buybacks are funded by one thing: the protocol's share of the 1% fee on every $ROBOTMONEY swap. There is no management fee, and the 0.25% vault exit fee stays in the vault with the remaining depositors, so it is not protocol revenue either. That income is thin at this size, which is why buybacks are occasional and discretionary rather than scheduled. Purchased tokens are sent to the dead address (0x000&hellip;dEaD) and removed from circulation permanently.
-      </p>
-
-      <div class="tok__grid tok__grid--2">
-        <!-- Mechanism steps -->
-        <div class="tok__card tok__card--glow">
-          <h4 class="tok__mini-title">Mechanism</h4>
-          <ol class="tok__steps">
-            <li><span class="tok__step-num">01</span><span>Swap fees accrue to the Robot Money protocol wallets.</span></li>
-            <li><span class="tok__step-num">02</span><span>When the balance covers a purchase, a buyback is initiated.</span></li>
-            <li><span class="tok__step-num">03</span><span>$ROBOTMONEY is purchased on the Uniswap v4 pool.</span></li>
-            <li><span class="tok__step-num">04</span><span>Purchased tokens are burned to 0x000&hellip;dEaD.</span></li>
-          </ol>
-        </div>
-
-        <!-- Buyback history — live from GET /api/dashboards/buybacks
-             (buybackSummary() factory in alpine/views.js). No baked rows; a
-             stub feed is flagged and a failed fetch degrades to an empty state. -->
-        <div class="tok__card tok__card--glow" x-data="buybackSummary()">
-          <h4 class="tok__mini-title">Buyback History</h4>
-          <div class="tok__bb-summary">
-            <span class="tok__bb-summary-label">Total Spent on Buybacks</span>
-            <span class="tok__bb-summary-val" x-text="fmtWethLabel(totals()?.wethSpent)">—</span>
-          </div>
-          <div class="tok__table-wrap">
-            <table class="tok__table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th class="tok__r">WETH</th>
-                  <th class="tok__r">Value</th>
-                  <th class="tok__r">$RM</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr x-show="loading"><td>Loading…</td><td class="tok__r">—</td><td class="tok__r">—</td><td class="tok__r">—</td></tr>
-                <template x-for="b in rows()" :key="b.txHash">
-                  <tr>
-                    <td x-text="b.date"></td>
-                    <td class="tok__r tok__warn" x-text="fmtWeth(b.wethSpent)"></td>
-                    <td class="tok__r" x-text="fmtUsd0(b.valueUsd)"></td>
-                    <td class="tok__r tok__acc" x-text="fmtRmoney(b.robotmoneyReceived)"></td>
-                  </tr>
-                </template>
-                <tr x-show="!loading && !rows().length"><td colspan="4">No live buyback data available.</td></tr>
-              </tbody>
-              <tfoot x-show="rows().length" x-cloak>
-                <tr>
-                  <td class="tok__bold">TOTAL</td>
-                  <td class="tok__r tok__bold tok__warn" x-text="fmtWethLabel(totals()?.wethSpent)"></td>
-                  <td class="tok__r tok__bold tok__acc" x-text="fmtUsd0(totals()?.valueUsd)"></td>
-                  <td class="tok__r tok__bold tok__acc" x-text="fmtRmoney(totals()?.robotmoneyReceived)"></td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-          <p x-show="nonLive()" x-cloak style="font-family:var(--font-mono);font-size:0.7rem;color:var(--color-warn);margin:0.5rem 0 0;">Demo data — hermetic stub, not live chain data.</p>
-        </div>
+    <section class="rr-sec" id="what-it-does" aria-labelledby="does-h">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="does-h">What the token does</h2>
       </div>
-    </div>
+      <dl class="rr-dl tok__qa">
+        <div>
+          <dt><a class="rr-lnk" href="#buybacks">Buybacks</a><b class="rm-live"><i class="rm-pulse" aria-hidden="true"></i>Live</b></dt>
+          <dd>The protocol's share of swap fees buys $ROBOTMONEY on the open market, and the protocol holds what it buys.</dd>
+        </div>
+        <div>
+          <dt><a class="rr-lnk" href="#governance">Allocation vote</a><span class="rm-pill">Planned</span></dt>
+          <dd>Holders would set the vault's <a href="/allocation">sleeve weights</a>. Today <a href="/swarm">the swarm</a> proposes them and the admin multisig applies them.</dd>
+        </div>
+        <div>
+          <dt><a class="rr-lnk" href="#governance">Inclusion demand</a><span class="rm-pill">Planned</span></dt>
+          <dd>Projects would hold $ROBOTMONEY to vote their own tokens into the vault.</dd>
+        </div>
+      </dl>
+    </section>
 
-    <!-- 05 / Economics -->
-    <div class="tok__section tok__section--deep" id="fees" x-data="feeChart()">
-      <span class="tok__eyebrow">05 / Economics</span>
-      <h2 class="tok__h2">Fees &amp; <span class="tok__grad">Revenue</span></h2>
-      <p class="tok__intro">
-        $ROBOTMONEY trades on Uniswap v4. Each swap incurs a 1% fee, split as follows:
-      </p>
-
-      <!-- Fee split is LIVE from GET /api/dashboards/token-metrics (`feeSplit`,
-           a fixed Clanker-pool config constant) via feeChart(); the pie, the
-           custom legend, and the breakdown-card percentages all bind to it —
-           no baked 57/40/3 literals. Colours are presentation-only. -->
-      <div class="tok__grid tok__grid--2">
-        <!-- Fee distribution pie (Chart.js via feeChart() factory) -->
-        <div class="tok__card">
-          <h4 class="tok__mini-title">Fee Distribution</h4>
-          <div class="tok__donut-wrap">
-            <canvas x-ref="fee"></canvas>
+    <section class="rr-sec" id="fees" aria-labelledby="fees-h">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="fees-h">Swap fees</h2>
+      </div>
+      <p class="tok__intro">Every swap in the token's Uniswap v4 pool pays 1.2%.</p>
+      <div class="rr-meta rr-meta--lead tok__earned">
+        <span class="rr-meta__i rr-meta__i--list">Earned by the protocol since launch, at today's prices <b x-text="feesLifetimeLabel()">—</b></span>
+        <span class="rr-meta__i rr-meta__i--list">Paid as <b x-text="feesPaidInLabel()">—</b></span>
+        <span class="rr-meta__i">Last 30 days, estimated <b x-text="fees30dLabel()">—</b></span>
+      </div>
+      <div class="rr-x">
+        <div class="rr-mix">
+          <figure class="rr-ring tok__ring">
+            <span class="sv__wdonut-host" role="img" :aria-label="feeSplit().length ? `The swap fee's split: ${feeRingLabel()}` : 'The swap fee\'s split'" x-html="feeRingSvg()"></span>
+            <template x-if="feeSplit().length">
+              <figcaption><b x-text="feePctLabel(0)"></b><span x-text="feeName(feeSplit()[0])"></span></figcaption>
+            </template>
             <template x-if="feeEmptyTitle()">
               <div class="rm-nodata rm-nodata--fill rm-nodata--ring"><p class="rm-nodata__h" x-text="feeEmptyTitle()"></p></div>
             </template>
+          </figure>
+          <ul class="rr-legend tok__legend">
+            <template x-for="(f, i) in feeRows()" :key="f.label">
+              <li>
+                <i data-mark="series" :style="`background:${feeHue(i)}`" aria-hidden="true"></i>
+                <span x-text="feeName(f)"></span>
+                <b x-text="feePctLabel(i)">—</b>
+                <small x-text="feeNote(f)"></small>
+              </li>
+            </template>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- A stub feed is labelled; a failed read keeps the table, its one row
+         saying so. -->
+    <section class="rr-sec" id="buybacks" aria-labelledby="bb-h" x-data="buybackSummary()">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="bb-h">Buybacks</h2>
+      </div>
+      <p class="tok__intro">Funded only by the protocol's share of swap fees, and run when that income covers a purchase, not on a schedule. The protocol holds the tokens it buys.</p>
+      <div class="rr-tablewrap"><table class="rr-table rr-table--compact tok__bb">
+        <thead>
+          <tr><th scope="col">Date</th><th scope="col" class="q">WETH spent</th><th scope="col" class="q">Value</th><th scope="col" class="q">$ROBOTMONEY bought</th><th scope="col" class="q">Transaction</th></tr>
+        </thead>
+        <tbody>
+          <tr x-show="loading"><th scope="row">Loading…</th><td class="q">—</td><td class="q">—</td><td class="q">—</td><td class="q">—</td></tr>
+          <template x-for="b in pageRows()" :key="b.txHash">
+            <tr>
+              <th scope="row" x-text="b.date"></th>
+              <td class="q" x-text="fmtWeth(b.wethSpent)"></td>
+              <td class="q" x-text="fmtUsd0(b.valueUsd)"></td>
+              <td class="q" x-text="fmtRmoney(b.robotmoneyReceived)"></td>
+              <td class="q">
+                <template x-if="txHref(b)"><a class="rr-lnk" :href="txHref(b)" target="_blank" rel="noopener noreferrer" x-text="shortHash(b.txHash)"></a></template>
+                <template x-if="!txHref(b)"><span>—</span></template>
+              </td>
+            </tr>
+          </template>
+          <tr x-show="!loading && !rows().length"><td class="rr-table__empty" colspan="5"><span class="rr-empty__t">No live buyback data available.</span></td></tr>
+        </tbody>
+        <tfoot x-show="rows().length" x-cloak>
+          <tr>
+            <th scope="row">Total</th>
+            <td class="q" x-text="fmtWethLabel(totals()?.wethSpent)"></td>
+            <td class="q" x-text="fmtUsd0(totals()?.valueUsd)"></td>
+            <td class="q" x-text="fmtRmoney(totals()?.robotmoneyReceived)"></td>
+            <td class="q"></td>
+          </tr>
+        </tfoot>
+      </table></div>
+      <template x-if="paged()">
+        <nav class="rr-pager" aria-label="Buyback pages">
+          <span role="status" x-text="pageRange()"></span>
+          <div>
+            <button type="button" class="rr-btn" :disabled="page === 0" @click="page -= 1">Newer</button>
+            <button type="button" class="rr-btn" :disabled="!older()" @click="page += 1">Older</button>
           </div>
-          <div class="tok__legend">
-            <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#10b981;"></span><span x-text="feeLegend(0)">—</span></div>
-            <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#e8a640;"></span><span x-text="feeLegend(1)">—</span></div>
-            <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#7e889e;"></span><span x-text="feeLegend(2)">—</span></div>
+        </nav>
+      </template>
+      <p class="rr-note" x-show="nonLive()" x-cloak>Demo data: a hermetic stub, not live chain data.</p>
+    </section>
+
+    <!-- Each row is always mounted and opens on a 0fr/1fr grid row
+         (.rr-disc); a link to its id opens it. -->
+    <section class="rr-sec" id="faq" aria-labelledby="faq-h">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="faq-h">FAQ</h2>
+      </div>
+      <div class="tok__faq">
+        <div class="rr-disc" id="what-is-robotmoney" x-data="{ open: location.hash === '#what-is-robotmoney' }" @hashchange.window="if (location.hash === '#what-is-robotmoney') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="what-is-robotmoney-a" @click="open = !open"><span>What is $ROBOTMONEY?</span></button>
+          <div class="rr-disc__anim" id="what-is-robotmoney-a" role="region" aria-label="What is $ROBOTMONEY?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>$ROBOTMONEY is the token of Robot Money, the treasury layer for the agent economy. It trades on Base, and the protocol's share of its swap fees buys it back.</p></div></div>
           </div>
         </div>
 
-        <!-- Fee breakdown cards -->
-        <div class="tok__fee-stack">
-          <div class="tok__fee-card">
-            <div class="tok__fee-head"><span class="tok__legend-dot" style="background:#10b981;"></span><span class="tok__fee-pct" x-text="feePctLabel(0)">—</span></div>
-            <div class="tok__fee-name">Protocol wallet</div>
-            <div class="tok__fee-note">Creator share &mdash; funds buybacks</div>
+        <div class="rr-disc" id="contract" x-data="{ open: location.hash === '#contract' }" @hashchange.window="if (location.hash === '#contract') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="contract-a" @click="open = !open"><span>What is the $ROBOTMONEY contract address?</span></button>
+          <div class="rr-disc__anim" id="contract-a" role="region" aria-label="What is the $ROBOTMONEY contract address?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p><span class="tok__mono">0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3</span>, an ERC-20 on Base. Its source code is <a href="https://repo.sourcify.dev/8453/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">verified on Sourcify</a>.</p></div></div>
           </div>
-          <div class="tok__fee-card">
-            <div class="tok__fee-head"><span class="tok__legend-dot" style="background:#e8a640;"></span><span class="tok__fee-pct" x-text="feePctLabel(1)">—</span></div>
-            <div class="tok__fee-name">Bankr</div>
-            <div class="tok__fee-note">Interface &mdash; distribution partner</div>
+        </div>
+
+        <div class="rr-disc" id="launch" x-data="{ open: location.hash === '#launch' }" @hashchange.window="if (location.hash === '#launch') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="launch-a" @click="open = !open"><span>How was $ROBOTMONEY launched?</span></button>
+          <div class="rr-disc__anim" id="launch-a" role="region" aria-label="How was $ROBOTMONEY launched?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>As a fair launch through Bankr on Doppler, on 12 March 2026. There was no team allocation, pre-sale or insider tranche: all 100 billion tokens went into the Uniswap v4 pool, and Doppler's contract locks that liquidity with no way to withdraw it.</p></div></div>
           </div>
-          <div class="tok__fee-card">
-            <div class="tok__fee-head"><span class="tok__legend-dot" style="background:#7e889e;"></span><span class="tok__fee-pct" x-text="feePctLabel(2)">—</span></div>
-            <div class="tok__fee-name">Clanker Protocol</div>
-            <div class="tok__fee-note">Infrastructure</div>
+        </div>
+
+        <div class="rr-disc" id="supply" x-data="{ open: location.hash === '#supply' }" @hashchange.window="if (location.hash === '#supply') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="supply-a" @click="open = !open"><span>Can the $ROBOTMONEY supply grow?</span></button>
+          <div class="rr-disc__anim" id="supply-a" role="region" aria-label="Can the $ROBOTMONEY supply grow?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>No. The supply is 100 billion. Doppler's token contract carries a 2% yearly mint rate, but minting can only start when the pool migrates, and a locked pool cannot migrate, so no token has been minted since launch.</p></div></div>
+          </div>
+        </div>
+
+        <div class="rr-disc" id="swap-fee" x-data="{ open: location.hash === '#swap-fee' }" @hashchange.window="if (location.hash === '#swap-fee') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="swap-fee-a" @click="open = !open"><span>What fee does a $ROBOTMONEY swap pay?</span></button>
+          <div class="rr-disc__anim" id="swap-fee-a" role="region" aria-label="What fee does a $ROBOTMONEY swap pay?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>1.2%, on every swap in its Uniswap v4 pool. The protocol's primary wallet receives 57% and uses it to fund buybacks, Bankr 36.1%, Doppler 5%, and an ecosystem share Bankr reserved at launch 1.9%.</p></div></div>
+          </div>
+        </div>
+
+        <div class="rr-disc" id="burn" x-data="{ open: location.hash === '#burn' }" @hashchange.window="if (location.hash === '#burn') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="burn-a" @click="open = !open"><span>Are bought-back tokens burned?</span></button>
+          <div class="rr-disc__anim" id="burn-a" role="region" aria-label="Are bought-back tokens burned?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>No. They are held in the protocol's primary wallet, <a class="tok__mono" href="https://basescan.org/address/0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6" target="_blank" rel="noopener noreferrer">0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6</a>.</p></div></div>
+          </div>
+        </div>
+
+        <div class="rr-disc" id="vault-returns" x-data="{ open: location.hash === '#vault-returns' }" @hashchange.window="if (location.hash === '#vault-returns') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="vault-returns-a" @click="open = !open"><span>Does holding $ROBOTMONEY earn the vault's returns?</span></button>
+          <div class="rr-disc__anim" id="vault-returns-a" role="region" aria-label="Does holding $ROBOTMONEY earn the vault&#x27;s returns?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>No. The token has no claim on the vault's returns. To earn the vault's yield, deposit USDC on <a href="/deposit">the deposit page</a>.</p></div></div>
+          </div>
+        </div>
+
+        <span id="precedents" class="tok__alias" aria-hidden="true"></span><div class="rr-disc" id="governance" x-data="{ open: location.hash === '#governance' || location.hash === '#precedents' }" @hashchange.window="if (location.hash === '#governance' || location.hash === '#precedents') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="governance-a" @click="open = !open"><span>What governance is planned for $ROBOTMONEY?</span></button>
+          <div class="rr-disc__anim" id="governance-a" role="region" aria-label="What governance is planned for $ROBOTMONEY?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>None of it is built, and it has no ship date. A published quantitative filter would decide which tokens are eligible, and holders would vote their weights, so projects that want inclusion would hold $ROBOTMONEY. The vote would cover sleeve weights and nothing else: not the protocol wallets, marketing or operations. The design borrows Curve's gauge voting, with the filter in place of emissions, and Botto's allocation-only vote.</p></div></div>
+          </div>
+        </div>
+
+        <div class="rr-disc" id="risks" x-data="{ open: location.hash === '#risks' }" @hashchange.window="if (location.hash === '#risks') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="risks-a" @click="open = !open"><span>What are the risks of holding $ROBOTMONEY?</span></button>
+          <div class="rr-disc__anim" id="risks-a" role="region" aria-label="What are the risks of holding $ROBOTMONEY?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>Its price can fall to zero, and its pool is small, so a large trade moves the price. The protocol's own wallets hold part of the supply and could sell it. The token has no claim on the vault's returns and no vote yet, and buybacks depend on swap fees, which fall when trading does. It runs on Doppler's and Uniswap's contracts, and a flaw in either could lose funds.</p></div></div>
+          </div>
+        </div>
+
+        <div class="rr-disc" id="participation" x-data="{ open: location.hash === '#participation' }" @hashchange.window="if (location.hash === '#participation') open = true" :class="open ? 'is-open' : ''">
+          <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="participation-a" @click="open = !open"><span>How do I buy $ROBOTMONEY?</span></button>
+          <div class="rr-disc__anim" id="participation-a" role="region" aria-label="How do I buy $ROBOTMONEY?" :inert="!open">
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>In its Uniswap v4 pool on Base, directly, through Bankr or through any DEX aggregator. Check the contract address, <span class="tok__mono">0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3</span>, before you trade.</p></div></div>
           </div>
         </div>
       </div>
-
-      <!-- Revenue streams -->
-      <div class="tok__panel">
-        <h3 class="tok__panel-title tok__panel-title--warn">Revenue Streams</h3>
-        <div class="tok__rev-list">
-          <!-- The swap-fee share is the SAME live feeSplit[0] the pie and the
-               breakdown cards bind to (feeChart() now scopes the whole #fees
-               section), so this row cannot drift from the served split. -->
-          <div class="tok__rev-row">
-            <div><div class="tok__rev-name">Token Swap Fees</div><div class="tok__rev-mech"><span x-text="feePctLabel(0)">—</span> of the 1% fee on every $ROBOTMONEY swap</div></div>
-            <span class="tok__rev-to">Protocol wallets</span>
-          </div>
-          <div class="tok__rev-row">
-            <div><div class="tok__rev-name">Management Fee</div><div class="tok__rev-mech">None. The vault has never charged one</div></div>
-            <span class="tok__rev-to">Not charged</span>
-          </div>
-          <div class="tok__rev-row">
-            <div><div class="tok__rev-name">Vault Exit Fee</div><div class="tok__rev-mech">0.25% of withdrawal amount, not protocol revenue</div></div>
-            <span class="tok__rev-to">Stays in vault for remaining depositors</span>
-          </div>
-          <div class="tok__rev-row">
-            <div><div class="tok__rev-name">Buybacks</div><div class="tok__rev-mech">Funded by swap fees, when they cover a purchase</div></div>
-            <span class="tok__rev-to">Burned $ROBOTMONEY</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 06 / Precedents -->
-    <div class="tok__section" id="precedents">
-      <span class="tok__eyebrow">06 / Precedents</span>
-      <h2 class="tok__h2">Mechanism <span class="tok__grad">Precedents</span></h2>
-      <p class="tok__intro">Two established protocols inform the design.</p>
-      <div class="tok__grid tok__grid--2">
-        <div class="tok__card">
-          <div class="tok__prec-head">
-            <span class="tok__prec-badge" style="border-color:rgba(0,229,255,0.3);color:var(--color-accent);">C</span>
-            <h3 class="tok__card-title">Curve</h3>
-          </div>
-          <p class="tok__card-body">
-            Gauge-style allocation voting. Token holders direct where capital flows; projects acquire and hold the governance token to influence inclusion. Robot Money's planned governance borrows the pattern, and would gate the eligible set by an independent quantitative filter rather than by emissions, so influence could not compound through lock-up schemes that reward incumbents. The gauge vote itself is not built.
-          </p>
-        </div>
-        <div class="tok__card">
-          <div class="tok__prec-head">
-            <span class="tok__prec-badge" style="border-color:rgba(0,229,255,0.3);color:var(--color-accent);">B</span>
-            <h3 class="tok__card-title">Botto</h3>
-          </div>
-          <p class="tok__card-body">
-            Minimal governance surface. Holders vote on allocation only, not on treasury, marketing or operations, and the agent executes a default if quorum is not met. Robot Money carries the same constraint into its planned governance, and the vault is open to third-party deposits, so the capital base is not bounded by the token's market cap.
-          </p>
-        </div>
-      </div>
-    </div>
-
-    <!-- 07 / Participation -->
-    <div class="tok__section tok__section--deep" id="participation">
-      <span class="tok__eyebrow">07 / Participation</span>
-      <h2 class="tok__h2">How to <span class="tok__grad">Participate</span></h2>
-      <p class="tok__intro">Two paths. Both use the same on-chain infrastructure.</p>
-      <div class="tok__grid tok__grid--2">
-        <div class="tok__card">
-          <div class="tok__part-head">
-            <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M7 12h3"/><path d="M14 12h3"/></svg>
-            <h4 class="tok__card-title tok__card-title--sm">Vault Depositor</h4>
-          </div>
-          <div class="tok__part-block">
-            <span class="tok__part-label">How</span>
-            <p class="tok__card-body">
-              Deposit USDC to the vault contract via any Base-compatible wallet, via Bankr, or programmatically via the OpenClaw skill.
-            </p>
-          </div>
-          <div class="tok__part-block">
-            <span class="tok__part-label">What You Get</span>
-            <p class="tok__card-body">
-              Vault shares. The vault holds USDC deployed across Aave, Morpho and Compound. Withdraw at market value at any time, minus a 0.25% exit fee that stays in the vault. The published allocation is four sleeves, with live weights at <a class="tok__inline-link" href="/allocation">/allocation</a>.
-            </p>
-          </div>
-          <a class="tok__btn tok__btn--ghost tok__btn--block" href="/deposit">OpenClaw Skill &rarr;</a>
-        </div>
-        <div class="tok__card">
-          <div class="tok__part-head">
-            <svg class="tok__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7e889e" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v10"/><path d="M9 9.5c1.5-.5 4.5-.5 6 0"/><path d="M9 14.5c1.5.5 4.5.5 6 0"/></svg>
-            <h4 class="tok__card-title tok__card-title--sm">Token Holder</h4>
-          </div>
-          <div class="tok__part-block">
-            <span class="tok__part-label">How</span>
-            <p class="tok__card-body">
-              Buy $ROBOTMONEY on Uniswap v4 (Base) via the Clanker pool, Bankr, or any Base DEX aggregator.
-            </p>
-          </div>
-          <div class="tok__part-block">
-            <span class="tok__part-label">What You Get</span>
-            <p class="tok__card-body">
-              Exposure to supply reduction from buybacks funded by swap fees. Governance is planned, not live: there is no vote to join today.
-            </p>
-          </div>
-          <a class="tok__btn tok__btn--ghost tok__btn--block" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener &rarr;</a>
-        </div>
-      </div>
-    </div>
-
-    <!-- 08 / Disclaimer -->
-    <div class="tok__section">
-      <div class="tok__disclaimer">
-        <p>
-          Robot Money is not a registered investment vehicle. This page describes a protocol mechanism. The token has no claim on vault returns. Consult legal counsel before participating.
-        </p>
-      </div>
-    </div>
-
+    </section>
   </div>
 </section>
 
@@ -434,15 +276,12 @@
 .tok {
   background: var(--color-void);
   color: var(--color-text);
-  padding: 0 1.5rem 5rem;
+  padding: 0 0 5rem;
   font-family: var(--font-sans);
 }
-.tok__container {
-  max-width: 80rem;
-  margin: 0 auto;
-}
 
-/* Hero — full-bleed (breaks out of the 1280px .tok__container band) */
+/* Hero: full-bleed, flat like the other heroes (no gradient fade). The
+   shared rules in components.css pin its headline's size and offset. */
 .tok__hero {
   position: relative;
   width: 100vw;
@@ -454,13 +293,9 @@
   align-items: center;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-void);
-  margin-bottom: 3rem;
 }
 .tok__hero-art { position: absolute; inset: 0; z-index: 0; }
 .tok__hero > *:not(.tok__hero-art) { position: relative; z-index: 1; }
-/* Inner wrapper re-applies the page's content max-width so hero text/CTA
-   stays aligned with the 1280px .tok__container band while the art is
-   full-bleed. */
 .tok__hero-inner {
   position: relative;
   z-index: 1;
@@ -469,533 +304,101 @@
   margin-inline: auto;
   padding: 2.5rem 1.5rem;
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: 2rem;
   /* start, not center: centring the copy against a taller facing card
      drops the headline below the offset every other hero pins it to. */
   align-items: start;
 }
 @media (min-width: 60rem) {
-  /* Sized so the truncated address, its Copy control and the two explorer
-     buttons all sit on their own rows without wrapping. */
-  .tok__hero-inner { grid-template-columns: minmax(0, 1fr) minmax(0, 30rem); gap: 3rem; }
+  /* Wide enough that the address sits on one line. */
+  .tok__hero-inner { grid-template-columns: minmax(0, 1fr) minmax(0, 30rem); gap: 2.5rem; }
 }
 .tok__hero-copy { min-width: 0; }
-.tok__hero::after {
-  content: "";
-  position: absolute;
-  left: 0; right: 0; bottom: 0;
-  height: 120px;
-  background: linear-gradient(to top, var(--color-void), transparent);
-  z-index: 0;
-  pointer-events: none;
-}
-.tok__eyebrow {
-  display: block;
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.3em;
-  color: var(--color-accent);
-  margin-bottom: 0.75rem;
-}
 .tok__h1 {
   font-family: var(--font-display);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: -0.01em;
-  font-size: 2.75rem;
   line-height: 1.05;
-  margin: 0 0 1rem;
+  margin: 0 0 1.25rem;
 }
-.tok__grad {
-  font-family: var(--font-display);
-  font-style: normal;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-  color: var(--color-text);
-}
-.tok__lede {
-  font-size: 1.05rem;
-  line-height: 1.6;
-  color: var(--color-text-muted);
-  max-width: 40rem;
-  margin: 0 0 2rem;
-}
-.tok__hero-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-.tok__contract {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  padding: 1rem;
-}
-.tok__contract-label {
-  font-family: var(--font-mono);
-  font-size: 0.6rem;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-  color: var(--color-text-muted);
-}
-/* A link like every other on the site: lettered in the text colour over a
-   neutral rule that goes to full text colour on hover. The rule is there at
-   rest, because an address that only underlines on hover has nothing marking
-   it as a link until the pointer finds it. */
-.tok__contract-addr {
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  color: var(--color-link);
-  text-decoration: none;
-  border-bottom: 1px solid var(--color-link-line);
-  transition: border-color 0.2s;
-  /* The address is already elided in the markup, so it never needs to break;
-     break-all shattered it one character per line in the narrower column. */
-  white-space: nowrap;
-}
-.tok__contract-addr:hover { border-bottom-color: var(--color-link); }
-.tok__contract-addr:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
-/* Secondary button. "Copied!" is the label swap, so the copied state holds
-   the hover frame rather than a colour of its own. */
-.tok__copy {
-  flex-shrink: 0; margin-left: auto;
-  padding: 0.5rem 1rem;
-  font-family: var(--font-mono); font-size: 0.65rem; font-weight: 500;
-  text-transform: uppercase; letter-spacing: 0.1em;
-  color: var(--color-text);
-  background: transparent; border: 1px solid var(--color-border-light);
-  cursor: pointer; transition: border-color 0.2s;
-}
-.tok__copy:hover, .tok__copy.is-copied { border-color: var(--color-text); }
-.tok__hero-links {
-  display: flex;
-  gap: 0.75rem;
-}
-.tok__btn {
-  display: inline-block;
-  text-align: center;
-  padding: 0.7rem 1.25rem;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  text-decoration: none;
-  transition: all 0.3s var(--ease-out-expo);
-  flex: 1;
-}
-/* Secondary: outlined, the frame goes to the text colour on hover. None of
-   these is filled: the two Participation paths are parallel, so neither is the
-   page's one call to action. */
-.tok__btn--ghost {
-  border: 1px solid var(--color-border-light);
-  color: var(--color-text);
-}
-.tok__btn--ghost:hover { border-color: var(--color-text); }
-.tok__btn--block {
-  display: block;
-  margin-top: 1.25rem;
-}
+.tok__lede { margin: 0; font-size: 1.0625rem; line-height: 1.65; color: var(--color-text-muted); max-width: 44rem; }
 
-/* Sections */
-.tok__section {
-  position: relative;
-  padding: 2.5rem 0;
-}
-.tok__section--deep {
-  background: var(--color-deep);
-  padding: 2.5rem 1.5rem;
-  margin: 1.5rem 0;
-}
-.tok__h2 {
-  font-family: var(--font-display);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-  font-size: 2rem;
-  line-height: 1.05;
-  margin: 0 0 1rem;
-}
-.tok__h3 {
-  font-family: var(--font-display);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-  font-size: 1.5rem;
-  line-height: 1.05;
-  margin: 2rem 0 0.75rem;
-}
-.tok__intro {
-  font-size: 1rem;
-  line-height: 1.6;
-  color: var(--color-text-muted);
-  max-width: 42rem;
-  margin: 0 0 2rem;
-}
-
-/* Grids */
-.tok__grid {
-  display: grid;
-  gap: 1rem;
-  margin-bottom: 1.5rem;
-}
-.tok__grid--2 { grid-template-columns: 1fr; }
-.tok__grid--3 { grid-template-columns: 1fr; }
-.tok__grid--4 { grid-template-columns: 1fr; }
-
-/* Cards */
-.tok__card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  padding: 1.5rem;
-}
-.tok__card--link {
-  text-decoration: none;
-  color: inherit;
-  display: block;
-  transition: border-color 0.3s var(--ease-out-expo);
-}
-.tok__card--link:hover { border-color: var(--color-link); }
-.tok__card--glow { box-shadow: 0 0 24px rgba(16,185,129,0.06); }
-.tok__icon-dot {
-  width: 14px;
-  height: 14px;
-  margin-bottom: 1rem;
-}
-.tok__icon { display:block; margin-bottom: 1rem; }
-.tok__part-head .tok__icon { margin-bottom: 0; }
-.tok__card-title {
-  font-size: 1.05rem;
-  font-weight: 600;
-  margin: 0 0 0.75rem;
-  color: var(--color-text);
-}
-.tok__card-title--sm { font-size: 0.95rem; }
-.tok__card-body {
-  font-size: 0.85rem;
-  line-height: 1.6;
-  color: var(--color-text-muted);
-  margin: 0;
-}
-
-/* Flow */
-.tok__flow {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  margin: 0 0 3rem;
+/* The contract card: the deposit page's install card (.sk__install-card,
+   deposit.html), value for value, so the two heroes read as one system. */
+.tok__card { background: var(--color-surface); border: 1px solid var(--color-border); min-width: 0; }
+.tok__card-head { padding: 0.6rem 1rem; border-bottom: 1px solid var(--color-border); }
+.tok__card-label {
   font-family: var(--font-mono);
   font-size: 0.65rem;
-  letter-spacing: 0.15em;
-  color: var(--color-accent);
-  opacity: 0.6;
-}
-.tok__flow-arrow { color: var(--color-accent); opacity: 0.5; }
-.tok__gov-flow {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.75rem;
-  margin: 2rem 0 2.5rem;
-}
-.tok__gov-node {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  padding: 0.75rem 1.25rem;
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--color-text);
-}
-.tok__gov-dot { width: 8px; height: 8px; border-radius: 50%; }
-
-/* Panel */
-.tok__panel {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  padding: 1.5rem;
-  margin-top: 1rem;
-}
-.tok__panel-title {
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--color-accent);
-  margin: 0 0 1rem;
-}
-.tok__panel-title--warn { color: var(--color-warn); }
-.tok__panel-lede {
-  font-size: 0.95rem;
-  line-height: 1.6;
+  letter-spacing: 0.2em;
   color: var(--color-text-muted);
-  margin: 0 0 1.5rem;
 }
-.tok__panel-foot {
-  font-size: 0.85rem;
-  color: var(--color-text-muted);
-  margin: 1.5rem 0 0;
-  padding-top: 1rem;
-  border-top: 1px solid var(--color-border);
-}
-.tok__numbered { display: flex; gap: 0.75rem; align-items: flex-start; }
-.tok__num {
+.tok__card-body { display: flex; align-items: center; gap: 0.6rem; padding: 1rem; }
+.tok__card-addr {
+  flex: 1;
+  min-width: 0;
   font-family: var(--font-mono);
-  font-size: 0.85rem;
-  font-weight: 700;
-  color: var(--color-accent);
-}
-.tok__num-title {
-  font-size: 0.9rem;
-  font-weight: 600;
-  margin: 0 0 0.35rem;
-}
-
-/* Buyback steps + table */
-.tok__mini-title {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--color-text-muted);
-  margin: 0 0 1rem;
-}
-.tok__steps {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
-}
-.tok__steps li {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
   font-size: 0.85rem;
   line-height: 1.5;
-  color: var(--color-text-muted);
-}
-.tok__step-num {
-  flex-shrink: 0;
-  width: 1.75rem;
-  height: 1.75rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  font-weight: 700;
-  border: 1px solid rgba(255,102,68,0.3);
-  color: var(--color-warn);
-}
-.tok__bb-summary {
-  background: var(--color-deep);
-  border: 1px solid var(--color-border);
-  padding: 1rem;
-  margin-bottom: 1rem;
-}
-.tok__bb-summary-label {
-  display: block;
-  font-family: var(--font-mono);
-  font-size: 0.6rem;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-  color: var(--color-text-muted);
-  margin-bottom: 0.35rem;
-}
-.tok__bb-summary-val {
-  font-family: var(--font-mono);
-  font-size: 1.25rem;
-  font-weight: 700;
-  color: var(--color-accent);
-}
-.tok__table-wrap { overflow-x: auto; }
-.tok__table {
-  width: 100%;
-  border-collapse: collapse;
-}
-.tok__table th {
-  text-align: left;
-  padding: 0.65rem;
-  font-family: var(--font-mono);
-  font-size: 0.6rem;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
-  color: var(--color-text-muted);
-  border-bottom: 1px solid var(--color-border);
-}
-.tok__table td {
-  padding: 0.65rem;
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
   color: var(--color-text);
-  border-bottom: 1px solid var(--color-border);
+  overflow-wrap: anywhere;
 }
-.tok__table tfoot td {
-  border-top: 2px solid var(--color-border);
-  background: var(--color-void);
-}
-.tok__r { text-align: right; }
-.tok__bold { font-weight: 700; }
-.tok__warn { color: var(--color-warn); }
-.tok__acc { color: var(--color-accent); }
-.tok__bb-foot {
-  padding-top: 0.85rem;
-  text-align: center;
-}
-.tok__inline-link {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--color-link);
-  text-decoration: underline;
-  text-decoration-color: var(--color-link-line);
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
-}
-.tok__inline-link:hover { text-decoration-color: var(--color-link); }
-
-/* Donut */
-.tok__donut-wrap {
-  position: relative;
-  height: 220px;
-  padding: 1rem 0;
-}
-.tok__donut-wrap canvas { width: 100% !important; height: 100% !important; }
-.tok__legend {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-top: 1rem;
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--color-text-muted);
-}
-.tok__legend-item { display: flex; align-items: center; gap: 0.5rem; }
-.tok__legend-dot {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
+.tok__card-copy {
   flex-shrink: 0;
-}
-
-/* Fee cards */
-.tok__fee-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-.tok__fee-card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  padding: 1.25rem;
-}
-.tok__fee-head {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 0.5rem;
-}
-.tok__fee-pct {
-  font-family: var(--font-mono);
-  font-size: 1.4rem;
-  font-weight: 700;
-  color: var(--color-accent);
-}
-.tok__fee-name { font-size: 0.9rem; font-weight: 500; margin-bottom: 0.25rem; }
-.tok__fee-note { font-size: 0.75rem; color: var(--color-text-muted); }
-
-/* Revenue list */
-.tok__rev-list { display: flex; flex-direction: column; }
-.tok__rev-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.75rem 0;
-  border-bottom: 1px solid rgba(34,42,56,0.5);
-}
-.tok__rev-name { font-size: 0.9rem; font-weight: 500; }
-.tok__rev-mech { font-size: 0.75rem; color: var(--color-text-muted); margin-top: 0.15rem; }
-.tok__rev-to {
-  font-family: var(--font-mono);
-  font-size: 0.6rem;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
-  color: var(--color-accent);
-  text-align: right;
-  flex-shrink: 0;
-}
-
-/* Precedents */
-.tok__prec-head { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
-.tok__prec-badge {
-  width: 2.5rem;
-  height: 2.5rem;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  font-weight: 700;
+  width: 1.9rem;
+  height: 1.9rem;
+  background: none;
+  border: 1px solid var(--color-border-light);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: border-color 0.2s;
 }
+/* The frame goes to the text colour on hover, never to cyan. Copied is the
+   tick, not a hue, so it holds the hover state rather than a colour. */
+.tok__card-copy:hover,
+.tok__card-copy.is-copied { border-color: var(--color-text); }
+/* The card's two ways out, side by side at its width: the outlined family,
+   since neither is the page's one call to action. */
+.tok__card-links { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; padding: 0 1rem 1rem; }
+.tok__card-links .rr-btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 
-/* Participation */
-.tok__part-head { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
-.tok__part-head .tok__icon-dot { margin-bottom: 0; }
-.tok__part-block { margin-bottom: 1rem; }
-.tok__part-label {
-  font-family: var(--font-mono);
-  font-size: 0.6rem;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-  color: var(--color-text-muted);
-}
-.tok__part-block .tok__card-body { margin-top: 0.35rem; }
+/* Body: the site column, as the regime page's. */
+.tok__body { max-width: 80rem; margin: 0 auto; padding: 0 1.5rem; overflow-x: clip; }
+/* Under the hero's own rule, the facts row draws only its lower one. */
+.tok__meta { border-top: 0; }
+.tok__intro { margin: 0 0 1.5rem; font-size: 0.9375rem; line-height: 1.7; color: var(--color-text-soft); }
 
-/* Disclaimer */
-.tok__disclaimer {
-  background: var(--color-deep);
-  border: 1px solid var(--color-border);
-  padding: 1.5rem;
-}
-.tok__disclaimer p {
-  font-size: 0.85rem;
-  line-height: 1.6;
-  color: var(--color-text-muted);
-  margin: 0;
-}
+/* A term, its status, and one line on it. */
+.tok__qa > div { grid-template-columns: 16rem minmax(0, 1fr); }
+.tok__qa dt { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; color: var(--color-text); }
+.tok__qa dt .rm-live { font-family: var(--font-mono); font-size: 0.625rem; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text-soft); }
+.tok__qa dd { color: var(--color-text-soft); line-height: 1.6; }
+.tok__qa > div:last-of-type { border-bottom: 0; }
 
-/* Responsive */
-/* Only below the two-column breakpoint. Above it the actions block is the
-   hero's right-hand column and has to stay stacked. */
-@media (min-width: 640px) and (max-width: 59.99rem) {
-  .tok__hero-actions { flex-direction: row; align-items: center; justify-content: space-between; }
-  .tok__hero-links { flex: 0 0 auto; }
-}
-@media (min-width: 768px) {
-  .tok { padding: 0 2rem 5rem; }
-  .tok__h1 { font-size: 3.5rem; }
-  .tok__h2 { font-size: 2.5rem; }
-  .tok__section--deep { padding: 3rem 2rem; }
-  .tok__grid--2 { grid-template-columns: 1fr 1fr; }
-  .tok__grid--3 { grid-template-columns: repeat(3, 1fr); }
-  .tok__grid--4 { grid-template-columns: repeat(2, 1fr); }
-  .tok__gov-flow { flex-direction: row; justify-content: center; }
-}
-@media (min-width: 1024px) {
-  .tok { padding: 0 2rem 6rem; }
-  .tok__h1 { font-size: 4rem; }
-  .tok__grid--4 { grid-template-columns: repeat(4, 1fr); }
+/* The fee ring holds its size before the split lands and after a failed
+   read, so the empty state sits where the ring would. */
+.tok__ring { width: 11.5rem; height: 11.5rem; }
+.tok__legend li:last-of-type { border-bottom: 0; }
+
+/* The total closes the table with one rule above it, none below. Dates,
+   figures and hashes never break: on a phone the table scrolls in its wrap. */
+.tok__bb tfoot th, .tok__bb tfoot td { border-top: 1px solid var(--color-border); border-bottom: 0; }
+.tok__bb th, .tok__bb td { white-space: nowrap; }
+
+.tok__faq .rr-disc, .tok__alias { scroll-margin-top: 6rem; }
+/* The last question draws no rule under itself: the footer's rule follows. */
+.tok__faq .rr-disc:last-child > .rr-disc__btn { border-bottom: 0; }
+.tok__alias { display: block; height: 0; }
+.tok__mono { font-family: var(--font-mono); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.tok__faq-a p { margin: 0; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
+
+@media (max-width: 640px) {
+  .tok__qa > div { grid-template-columns: minmax(0, 1fr); gap: 0.35rem; }
 }
 </style>
