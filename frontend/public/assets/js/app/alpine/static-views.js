@@ -3995,15 +3995,13 @@ export function registerStaticViews(Alpine) {
         || this.judgeBlocks().length > 0;
     },
     // ── the judge ────────────────────────────────────────────────────────
-    // ONE JUDGE PER SESSION (agreed with the backend owner, 2026-09-21): the
-    // house judge by default, one picked at random when several are seated,
-    // never one related to the session's subject or members. The page shows
-    // the judge whose opinion the recommendation carries (its judge.judged_by),
-    // else the newest public judgement, which covers a re-judged session; each
-    // judgement keeps its own page. On a
-    // backend that does not serve judgements, the opinion the recommendation
-    // carries stands in, under the judge it names, when a model wrote it; the
-    // fallback judge writes the aggregator's templates.
+    // ONE JUDGE OF RECORD PER SESSION: how it is chosen is in lib/judgements.js.
+    // The page shows the judge whose opinion the recommendation carries (its
+    // judge.judged_by), else the newest public judgement, which covers a
+    // re-judged session; each judgement keeps its own page. When no judgement
+    // was read (a failed read, or a page not reading the API), the opinion the
+    // recommendation carries stands in, under the judge it names, when a model
+    // wrote it; the fallback judge writes the aggregator's templates.
     judgeBlocks() {
       const rec = this.session?.swarmRecommendation;
       if (this.judgements.length) {

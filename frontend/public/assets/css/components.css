@@ -1,6 +1,6 @@
 /* Semantic component classes replacing the original Tailwind utility soup.
-   Ported from src/components/Navigation.tsx and src/app/page.tsx (hero +
-   disclaimer). Mobile-first; lg breakpoint = 1024px, md = 768px. */
+   Ported from src/components/Navigation.tsx and src/app/page.tsx (hero).
+   Mobile-first; lg breakpoint = 1024px, md = 768px. */
 
 [x-cloak] { display: none !important; }
 

@@ -55,6 +55,15 @@ describe("reading judgements", () => {
     expect(asked.length).toBe(2);
   });
 
+  test("a 404 on a list is null for that read only: the next reads ask again", async () => {
+    const asked = answer(404, { error: "not_found" });
+    expect(await loadMemberJudgements("themis")).toBeNull();
+    expect(await loadSessionJudgements("s-1")).toBeNull();
+    expect(asked.length).toBe(2);
+    answer(200, { judgements: [] });
+    expect(await loadMemberJudgements("themis")).toEqual([]);
+  });
+
   test("a judgement that is not there is null", async () => {
     answer(404, { error: "not_found" });
     expect(await loadJudgement("41")).toBeNull();
