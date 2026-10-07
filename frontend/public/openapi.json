@@ -168,7 +168,7 @@
         ],
         "x-backs-pages": [
           "https://robotmoney.network/allocation",
-          "https://robotmoney.network/performance"
+          "https://robotmoney.network/treasury"
         ],
         "x-contract-type": "WalletSleeves",
         "responses": {
@@ -195,7 +195,7 @@
           "public-read"
         ],
         "x-backs-pages": [
-          "https://robotmoney.network/performance",
+          "https://robotmoney.network/treasury",
           "https://robotmoney.network/allocation"
         ],
         "x-contract-type": "WalletBalances",

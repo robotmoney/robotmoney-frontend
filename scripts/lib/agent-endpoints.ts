@@ -142,7 +142,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "Per-wallet holdings grouped into the allocation sleeves",
     description:
       "What each Robot Money protocol wallet actually holds, grouped into the same sleeves that `allocation` sets targets for. This is the realised side of the target/actual pair.",
-    backs: ["/allocation", "/performance"],
+    backs: ["/allocation", "/treasury"],
     contractType: "WalletSleeves",
     sizeHint: "about 2 KB",
   },
@@ -153,7 +153,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "Live protocol wallet valuation plus daily history",
     description:
       "Every tracked protocol wallet, every holding in it, and the daily total-value history since inception. Each holding carries a `provenance` field (live, stub, stale, seed, backfilled): treat anything other than `live` as an estimate. Days with no persisted snapshot are absent from the history rather than interpolated, so gaps are real gaps.",
-    backs: ["/performance", "/allocation"],
+    backs: ["/treasury", "/allocation"],
     contractType: "WalletBalances",
     sizeHint: "about 55 KB, the largest of the treasury reads",
   },
