@@ -148,6 +148,7 @@ const NOT_IN_PRODUCTION = [
   "0111_swarm_judge_model_deepseek_v4_1_flash.sql",
   "0112_rm_app_overwrite_events_read.sql",
   "0113_rm_worker_buyback_indexer_grants.sql",
+  "0114_seat_in_flight_unrostered_sessions.sql",
 ] as const;
 
 useCleanDatabase(import.meta.file);

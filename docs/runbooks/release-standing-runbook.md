@@ -59,7 +59,9 @@ unverified, not satisfied.
 **QA branch (policy 4.6, owner 2026-10-06).** Every stage session runs on its own
 `qa/A.B.x-<YYYY-MM-DD>` branch cut from the release branch tip. All the session's patches,
 runbook fixes included, merge into that branch. The release branch and `main` take no commit
-during the session. The owner picks what moves to each one afterwards.
+during the session. The owner picks what moves to each one afterwards. A pushed QA branch is
+never rewritten (owner 2026-10-07): when the session needs a new base, cut a new branch
+(`qa/A.B.x-<YYYY-MM-DD>-2` on the same day) and leave the old one as it is.
 
 | ID | Check | Tool | Target | Status |
 |---|---|---|---|---|

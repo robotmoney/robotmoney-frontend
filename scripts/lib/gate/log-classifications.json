@@ -54,6 +54,25 @@
     "reason": "The scheduler starts beside the api in the replace phase and retries until the api answers ('startup check passed' follows; stage-2, 2026-10-07). An api that never answers fails readiness scheduler-authenticated and the gate's healthy-container check."
   },
   {
+    "id": "expected-ledger-guard-probe-privilege",
+    "match": "permission denied for table (source_acquisitions|source_acquisition_events|source_fetches|source_value_versions|analytics_ledger_methodology_versions|analytics_ledger_runs|analytics_ledger_run_events|analytics_data_vintages|analytics_vintage_members|analytics_output_snapshots|analytics_report_snapshots|swarm_brief_revisions|analytics_parity_observations)$",
+    "class": "expected",
+    "reason": "The boot's analytics ledger guard probes each LEDGER_FAMILIES table (backend/src/db/analytics-ledger-guard.ts) with UPDATE/DELETE ... WHERE false as rm_app, which holds no UPDATE or DELETE on the ledgers (0077, D55 (6)); 42501 is the conclusive answer the guard accepts (isPrivilegeRefusal). Seen ×3 per table at every boot on stage-2, 2026-10-07."
+  },
+  {
+    "id": "expected-scheduler-first-connect-retry",
+    "match": "^\\[system-scheduler\\] initial connect failed: Unable to connect\\. Is the computer able to access the url\\?$",
+    "class": "expected",
+    "reason": "The scheduler's first stream connect (scripts/lib/system-scheduler/runtime.ts start()) ran before the api listened; it then takes the same reconnect loop as every later drop (spec §3.2). An api that never answers fails readiness scheduler-initial-rebuild and the gate's healthy-container check. Seen once at boot on stage-2, 2026-10-07."
+  },
+  {
+    "id": "expected-twin-autovacuum-cancel",
+    "match": "ERROR: canceling autovacuum task$",
+    "source": "^rm-restore-",
+    "class": "expected",
+    "reason": "Postgres cancels its own background autovacuum when a statement needs a conflicting lock; on the twin the migrate step's DDL does that on the freshly restored tables (seen once at 02:59:00Z on analytics_overwrite_events, stage-2, 2026-10-07). No query fails and the vacuum reruns later. Bound to the twin's restore container: production's managed Postgres is not a scanned source."
+  },
+  {
     "id": "expected-fetch-floor-fallback",
     "match": "fetch returned <n> rows — using persisted <n> rows",
     "class": "expected",

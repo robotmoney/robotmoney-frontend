@@ -272,6 +272,17 @@ release branch or to `main`. Both stay clean for the whole session.
 1. At the start of the session, cut one QA branch from the release branch tip:
    `qa/A.B.x-<YYYY-MM-DD>` (example: `qa/0.6.x-2026-10-06`). Push it. Every
    patch of the session lands there, and nowhere else.
+
+   **A pushed QA branch is never rewritten (owner, 2026-10-07).** No force
+   push, no reset, no rebase. If the session needs a different base (the
+   release branch tip moved, or the branch was cut from the wrong commit), cut
+   a NEW QA branch from the new base and push it. A second branch on the same
+   day takes a suffix: `qa/A.B.x-<YYYY-MM-DD>-2`, then `-3`. Leave the old
+   branch as it is, and name in the session report which branch each piece of
+   evidence ran on. Switch the stage host to the new branch (step 2). Seen
+   2026-10-07: `releases-0.6.x` was reset to `main` after
+   `qa/0.6.x-2026-10-07` was cut, and the QA branch was force-pushed to match
+   instead of a new branch being cut.
 2. Switch the development checkout and the stage host to the QA branch. The
    stage host runs a clean checkout of the QA branch tip, never a fix branch.
 3. Develop and test each fix in a local worktree branched from the QA branch.
