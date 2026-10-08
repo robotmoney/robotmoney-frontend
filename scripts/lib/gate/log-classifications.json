@@ -350,5 +350,29 @@
     "issue": "parity-sweep-timeout",
     "fixedIn": "0.5.1",
     "reason": "The same sweep timeout, as the dead job's own last_error (prod:gate grades dead jobs by their stored error)."
+  },
+  {
+    "id": "known-projects-fixture-wallet-live-read",
+    "match": "\\[projects\\.refresh_wallets\\] wallet \\S+ live read failed, keeping last-persisted balance \\(degraded\\): invalid address: 0xwallet0+(aaa|bbb|ccc|ddd)$",
+    "class": "known-issue",
+    "issue": "1208",
+    "reason": "Production v0.5.4 ran RM_ENV=smoke without PROJECTS_SOURCE=live, so the projects worker persisted the hermetic fixture dataset (backend/src/projects/fixtures/dataset.ts): 4 projects, 4 tracked_wallets and 2 agent_vaults since 2026-08-07. On 0.6 (PROJECTS_SOURCE=live) the live refresh rejects each fixture placeholder address and keeps the last-persisted row. Seen on the production-shaped stage run after the v0.6.0 cutover (worker-analytics), once per fixture wallet (…aaa, …bbb, …ccc, …ddd).",
+    "tolerateAfterRelease": "Owner decision 2026-10-08 for issue 1208: guard only, no purge in v0.6.0. The fixture rows stay in production, so this line recurs on every cron until the purge part of issue 1208 ships; every gate reports it as a warning. The match is only the fixture's placeholder addresses (0xwallet0…/0xvault0…, never 40 hex digits); the same failure on a real address stays unclassified and fails."
+  },
+  {
+    "id": "known-projects-fixture-vault-extractor",
+    "match": "\\[projects\\.fetch_vaults\\] extractor failed — keeping last-persisted rows \\(degraded\\): invalid address: 0xvault0+(aaa|bbb)$",
+    "class": "known-issue",
+    "issue": "1208",
+    "reason": "Production v0.5.4 ran RM_ENV=smoke without PROJECTS_SOURCE=live, so the projects worker persisted the hermetic fixture dataset (backend/src/projects/fixtures/dataset.ts): 4 projects, 4 tracked_wallets and 2 agent_vaults since 2026-08-07. On 0.6 (PROJECTS_SOURCE=live) the live refresh rejects each fixture placeholder address and keeps the last-persisted row. Seen on the production-shaped stage run after the v0.6.0 cutover (worker-analytics) on the first fixture vault (…aaa).",
+    "tolerateAfterRelease": "Owner decision 2026-10-08 for issue 1208: guard only, no purge in v0.6.0. The fixture rows stay in production, so this line recurs on every cron until the purge part of issue 1208 ships; every gate reports it as a warning. The match is only the fixture's placeholder addresses (0xwallet0…/0xvault0…, never 40 hex digits); the same failure on a real address stays unclassified and fails."
+  },
+  {
+    "id": "known-projects-fixture-vault-job-degraded",
+    "match": "job \\S+ \\(projects\\.fetch_vaults\\) DEGRADED — kept last-persisted[^:]*: invalid address: 0xvault0+(aaa|bbb)$",
+    "class": "known-issue",
+    "issue": "1208",
+    "reason": "Production v0.5.4 ran RM_ENV=smoke without PROJECTS_SOURCE=live, so the projects worker persisted the hermetic fixture dataset (backend/src/projects/fixtures/dataset.ts): 4 projects, 4 tracked_wallets and 2 agent_vaults since 2026-08-07. On 0.6 (PROJECTS_SOURCE=live) the live refresh rejects each fixture placeholder address and keeps the last-persisted row. The worker loop's summary line for the same fetch_vaults degradation (backend/src/worker/loop.ts). Seen on the production-shaped stage run after the v0.6.0 cutover (worker-analytics).",
+    "tolerateAfterRelease": "Owner decision 2026-10-08 for issue 1208: guard only, no purge in v0.6.0. The fixture rows stay in production, so this line recurs on every cron until the purge part of issue 1208 ships; every gate reports it as a warning. The match is only the fixture's placeholder addresses (0xwallet0…/0xvault0…, never 40 hex digits); the same failure on a real address stays unclassified and fails."
   }
 ]
