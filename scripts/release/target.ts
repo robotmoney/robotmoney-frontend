@@ -83,6 +83,13 @@ export interface ReleaseTarget {
   readonly instance: string;
   /** The public origin, for the identity check (R7.1). */
   readonly publicOrigin: string;
+  /**
+   * W1's `prod:gate --min-attendance`: the share of active members a good session needs.
+   * Default 0.5, the gate's own default. A target where some active members cannot file
+   * (stage: the external members run against production, never the stage database)
+   * sets it lower in its file, with the reason in `$comment`.
+   */
+  readonly watchMinAttendance: number;
   readonly capture: CaptureHost;
   readonly legacy: LegacyStack;
   /** `host:port/database`; every write's `--confirm-target`. */
@@ -90,7 +97,7 @@ export interface ReleaseTarget {
   readonly bootEnv: Readonly<Record<string, string>>;
 }
 
-const TOP_KEYS = ["release", "commit", "tag", "rmEnv", "host", "checkout", "home", "instance", "publicOrigin", "capture", "legacy", "confirmTarget", "bootEnv", "$comment"];
+const TOP_KEYS = ["release", "commit", "tag", "rmEnv", "host", "checkout", "home", "instance", "publicOrigin", "watchMinAttendance", "capture", "legacy", "confirmTarget", "bootEnv", "$comment"];
 const CAPTURE_KEYS = ["host", "home", "checkout"];
 const LEGACY_KEYS = ["checkout", "tmuxSession", "composeProject", "composeFiles", "startedBy", "version", "commit", "log"];
 
@@ -169,6 +176,12 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
     }
   }
 
+  let watchMinAttendance = 0.5;
+  if (raw.watchMinAttendance !== undefined) {
+    const v = raw.watchMinAttendance;
+    if (typeof v !== "number" || !(v > 0 && v <= 1)) errors.push(`${name}.watchMinAttendance must be a number in (0, 1]`);
+    else watchMinAttendance = v;
+  }
   const bootEnv: Record<string, string> = {};
   if (raw.bootEnv !== undefined) {
     if (!isObj(raw.bootEnv)) errors.push(`${name}.bootEnv must be an object`);
@@ -186,7 +199,7 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
     target: {
       name, release: release!, ...(commit ? { commit } : {}), ...(tag ? { tag } : {}),
       rmEnv: rmEnv as "stage" | "prod", host: host!, checkout: checkout!, home: home!, instance: instance!,
-      publicOrigin: publicOrigin!, capture: capture!, legacy: legacy!, confirmTarget: confirmTarget!, bootEnv,
+      publicOrigin: publicOrigin!, watchMinAttendance, capture: capture!, legacy: legacy!, confirmTarget: confirmTarget!, bootEnv,
     },
   };
 }
