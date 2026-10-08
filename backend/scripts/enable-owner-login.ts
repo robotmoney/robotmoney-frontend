@@ -20,7 +20,43 @@
 // the driver is scrubbed of both passwords before it leaves this module.
 // The caller (scripts/prod-init.ts) holds the §2 target lock and passes it to
 // be proven held before the ALTER.
+//
+// THE REGISTRY (spec §7.1). All three statements are registered, so none is a
+// raw statement: steps 1 and 2 are the closed `PROVISIONING_SHAPES` list,
+// declared as `doadmin`, which the registry admits from this module only
+// (D61: "`doadmin` is used by one command only"). Step 3 is the object-less
+// `connectionCheck` shape, declared as `rm_owner`.
+import { onStatement, PROVISIONING_SHAPES, registerStatement } from "../src/db/registry.ts";
 import type { HeldTargetLock } from "../src/db/target-lock.ts";
+
+const MODULE = "scripts/enable-owner-login";
+
+/** Step 1, as doadmin: a CATALOG read of rm_owner's `rolcanlogin`. */
+const readOwnerCanLogin = registerStatement({
+  role: "doadmin",
+  shape: "ownerCanLogin",
+  site: "scripts/enable-owner-login:readCanLogin",
+  purpose: "Reads whether rm_owner exists and may log in, before deciding whether the ALTER is needed (spec §9.1 step 1, D61).",
+  callers: [MODULE],
+});
+
+/** Step 2, as doadmin: the one DDL statement, run only on a NOLOGIN rm_owner. */
+const alterOwnerLogin = registerStatement({
+  role: "doadmin",
+  shape: "ownerLoginEnable",
+  site: "scripts/enable-owner-login:alterLogin",
+  purpose: "Makes rm_owner LOGIN without touching its password, because the runner never re-applies migration 0053 (spec §9.1 step 1, D61).",
+  callers: [MODULE],
+});
+
+/** Step 3, as rm_owner: the login proof. */
+const proveOwner = registerStatement({
+  role: "rm_owner",
+  shape: "connectionCheck",
+  site: "scripts/enable-owner-login:proveOwnerLogin",
+  purpose: "Proves rm_owner logs in with the password in ~/.env once it is LOGIN (spec §9.1 step 1, D61).",
+  callers: [MODULE],
+});
 
 export interface EnableOwnerLoginOptions {
   /** A `doadmin` URL from `~/.env`. Never logged. */
@@ -51,9 +87,9 @@ export interface EnableOwnerLoginSeam {
   assertLockHeld(): Promise<void>;
 }
 
-/** The SQL the command runs, and no other DDL. */
-export const ALTER_OWNER_LOGIN_SQL = "ALTER ROLE rm_owner LOGIN";
-export const READ_OWNER_LOGIN_SQL = "SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'";
+/** The SQL the command runs, and no other DDL: the registry's provisioning shapes. */
+export const ALTER_OWNER_LOGIN_SQL: string = PROVISIONING_SHAPES.ownerLoginEnable;
+export const READ_OWNER_LOGIN_SQL: string = PROVISIONING_SHAPES.ownerCanLogin;
 
 /** The decision, over a seam: read, ALTER only on NOLOGIN, then verify. */
 export async function enableOwnerLoginWith(seam: EnableOwnerLoginSeam): Promise<EnableOwnerLoginResult> {
@@ -103,16 +139,16 @@ export async function enableOwnerLogin(options: EnableOwnerLoginOptions): Promis
   try {
     return await enableOwnerLoginWith({
       async readCanLogin() {
-        const rows = (await admin.unsafe(READ_OWNER_LOGIN_SQL)) as unknown as { rolcanlogin: boolean }[];
+        const rows = await onStatement(admin, readOwnerCanLogin)<{ rolcanlogin: boolean }>`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`;
         return rows[0] === undefined ? null : rows[0].rolcanlogin === true;
       },
       async alterLogin() {
-        await admin.unsafe(ALTER_OWNER_LOGIN_SQL);
+        await onStatement(admin, alterOwnerLogin)`ALTER ROLE rm_owner LOGIN`;
       },
       async proveOwnerLogin() {
         const owner = postgres(options.ownerUrl, { max: 1, onnotice: () => {}, connect_timeout: 10 });
         try {
-          await owner.unsafe("SELECT 1");
+          await onStatement(owner, proveOwner)`SELECT 1`;
         } finally {
           await owner.end({ timeout: 5 }).catch(() => undefined);
         }
