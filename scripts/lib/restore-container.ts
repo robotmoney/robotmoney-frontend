@@ -547,17 +547,28 @@ export async function restartKeptTwinContainer(opts: {
  * Without pipefail the status is pg_restore's: gpg meeting a closed pipe after
  * pg_restore finished is not a failed restore.
  */
-export function restorePipelineArgv(passphraseFile: string, dumpEnc: string, container: string): string[] {
+export function restorePipelineArgv(
+  passphraseFile: string,
+  dumpEnc: string,
+  container: string,
+  user: string = LOCAL_USER,
+  database: string = LOCAL_DB,
+): string[] {
   return [
     "bash", "-c", 'gpg --batch --yes --passphrase-file "$1" --decrypt "$2" | "${@:3}"', "restore-pipeline",
-    passphraseFile, dumpEnc, ...restoreDumpArgv(container),
+    passphraseFile, dumpEnc, ...restoreDumpArgv(container, user, database),
   ];
 }
 
-export function restoreDumpArgv(container: string): string[] {
+/**
+ * `user` and `database` default to this module's throwaway twin. The stage
+ * target (scripts/release/stage-target.ts) restores the same archive into its
+ * own long-lived container, under its own superuser and into `defaultdb`.
+ */
+export function restoreDumpArgv(container: string, user: string = LOCAL_USER, database: string = LOCAL_DB): string[] {
   return [
     "docker", "exec", "-i", container,
-    "pg_restore", `--username=${LOCAL_USER}`, `--dbname=${LOCAL_DB}`, "--no-owner", "--no-privileges", "--exit-on-error",
+    "pg_restore", `--username=${user}`, `--dbname=${database}`, "--no-owner", "--no-privileges", "--exit-on-error",
   ];
 }
 
