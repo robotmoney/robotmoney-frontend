@@ -56,7 +56,7 @@ unverified, not satisfied.
 | SP.5 | Log baseline: what is already broken, triaged before the cutover | `bun run prod:gate --mode baseline` | prod | script |
 | SP.6 | Product baseline: row counts, published AUM, database size, recorded for the postflight comparison | release runbook R2.4 | prod | manual |
 | SP.7 | Code gate on the RC commit: root and backend typecheck and unit, as CI runs them | release runbook R1 | stage | script |
-| SP.8 | A stage run of the same step list (same step-list hash) at the same commit passed before production starts (D61 rule 2) | `bun run release:run --target prod --stage-journal <path>` refuses otherwise | prod | gap, issue agent-executed runbooks (1225) |
+| SP.8 | Production runs only what stage passed: a stage run journal with the same step-list hash, at the same commit, with every step ok (D61 rule 2) | `bun run release:run --target prod --stage-journal <dir>` ([`release-run.md`](./release-run.md)) | prod | script |
 
 ## 4. Phase R — stage rehearsal (policy 4.4 and 4.5)
 

@@ -1,0 +1,26 @@
+{
+  "$comment": "Stage target for bun run release:run (D61 rule 2): the same steps as prod.json, against a remote stage database restored from a fresh production capture. HOME is a dedicated directory whose .env names that database. Fill confirmTarget with host:port/database from /home/stage-server/stage-target/.env before the run.",
+  "release": "v0.6.0",
+  "commit": "a502de30068e0c1cc2e232a76098364e0b709033",
+  "rmEnv": "stage",
+  "host": "rm-frontend-stage-2",
+  "checkout": "/home/stage-server/rm-stage-target",
+  "home": "/home/stage-server/stage-target",
+  "instance": "stage_target",
+  "publicOrigin": "https://stage.robotmoney-labs.dev",
+  "capture": {
+    "host": "rm-frontend-stage-2",
+    "home": "/home/stage-server",
+    "checkout": "/home/stage-server/rm-stage-target"
+  },
+  "legacy": {
+    "checkout": "/home/stage-server/rm-stage-legacy",
+    "tmuxSession": "stage-driver",
+    "composeProject": "rm_stage_legacy",
+    "composeFiles": [],
+    "startedBy": "SMOKE_PROJECT=rm_stage_legacy bun run smoke:archive in tmux session stage-driver, from the v0.5.4 checkout",
+    "version": "v0.5.4"
+  },
+  "confirmTarget": "FILL-ME:host:port/database-from-the-host-env",
+  "bootEnv": {}
+}
