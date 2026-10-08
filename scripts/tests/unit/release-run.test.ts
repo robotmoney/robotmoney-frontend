@@ -563,6 +563,12 @@ describe("host guards, legacy stop and identity (R6.1, S8.1, R7.1, R7.7)", () =>
   test("identity: the commit must be served, without +dirty", () => {
     expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: SHA }), `{"commit":"${SHA}"}`, SHA)).toEqual([]);
     expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: OTHER_SHA }), `{"commit":"${SHA}+dirty"}`, SHA).length).toBe(2);
+    // The site stamps a short commit: a 7+ hex prefix of the release commit names it.
+    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), `{"version":"0.1.0","commit":"${SHA.slice(0, 8)}","apiRange":"^0.5.0"}`, SHA)).toEqual([]);
+    // red controls: a short commit of another release, a 6-character prefix, a non-JSON body.
+    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), `{"commit":"${OTHER_SHA.slice(0, 8)}"}`, SHA)).toHaveLength(1);
+    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), `{"commit":"${SHA.slice(0, 6)}"}`, SHA)).toHaveLength(1);
+    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), `<html>${SHA}</html>`, SHA)).toHaveLength(1);
     expect(identityProblems(null, null, SHA).length).toBe(2);
   });
 });
