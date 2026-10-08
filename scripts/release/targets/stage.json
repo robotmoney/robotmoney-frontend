@@ -1,7 +1,7 @@
 {
   "$comment": "Stage target for bun run release:run (D61 rule 2): the same steps as prod.json, against the stage target database that scripts/release/stage-target.ts up restores before the run. HOME is a dedicated directory whose .env names that database. The legacy stack is the v0.5.4 checkout booted against it (PR 1229).",
   "release": "v0.6.0",
-  "commit": "c79b69080ed41fe88df8b818f3cbe6b16a9c3833",
+  "commit": "642a0057d55bd8806ce462dace9ee1674718bd20",
   "rmEnv": "stage",
   "host": "rm-frontend-stage-2",
   "checkout": "/home/stage-server/rm-stage-target",
