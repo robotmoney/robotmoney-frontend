@@ -138,6 +138,9 @@ describe("after the full migration set, every reader role can read everything", 
       // buyback indexer runs on the rm_worker connection and writes its scan
       // cursor (INSERT, UPDATE) and the swaps it finds (INSERT).
       "buyback_scan_state", "buyback_swaps",
+      // 0115_token_market_samples (v0.6.0 release finding, 2026-10-08): the
+      // wallet.sample_balances tick upserts the token page's market reading.
+      "token_market_samples",
     ];
     expect([...writable].filter((t) => !allowed.includes(t))).toEqual([]);
     // The evidence is INSERT-only for rm_worker, never UPDATE.

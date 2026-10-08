@@ -37,6 +37,7 @@ import {
 } from "../../src/chain/wallet-sleeves.ts";
 import { _resetAllocationFrameworkCacheForTests, ALLOCATION_FRAMEWORK_SEED } from "../../src/chain/allocation-framework.ts";
 import { _resetTokenPriceCacheForTests } from "../../src/chain/token-prices.ts";
+import { _resetTokenMarketForTests, sampleTokenMarket } from "../../src/worker/handlers/token-market.ts";
 import { useCleanDatabase } from "../support/clean-db.ts";
 
 // The buyback fixture rows are DATA a migration inserts (the snapshot's bootstrap data
@@ -54,6 +55,8 @@ async function resetCaches() {
   _resetWalletSleevesCacheForTests();
   _resetAllocationFrameworkCacheForTests();
   _resetTokenPriceCacheForTests();
+  _resetTokenMarketForTests();
+  await fixtureDb`DELETE FROM token_market_samples`;
   await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   await fixtureDb`DELETE FROM vault_adapter_samples`;
 }
@@ -237,6 +240,8 @@ test("token-metrics: LIVE fee income is the prop wallets' share of the locker's 
   process.env.BASE_RPC_SOURCE = "live";
   process.env.PRICE_SOURCE = "live";
   const counter = mockChain({ totalSupply: 100_000_000_000n * 10n ** 18n });
+  // The prices and the pool come from the worker's reading (token-market.ts).
+  expect(await sampleTokenMarket()).toEqual({ price: "ok", weth: "ok", pool: "ok" });
   const r = await getTokenMetrics();
   // 57% of 100 WETH and of 10B ROBOTMONEY; every price is the mock's $0.50.
   expect(r.feeIncome.lifetimeWeth).toBeCloseTo(57, 9);
@@ -277,6 +282,8 @@ test("token-metrics: a failed live price leg degrades priceUsd + marketCap to nu
   process.env.BASE_RPC_SOURCE = "stub"; // supply from the fixture
   process.env.PRICE_SOURCE = "live"; // price leg goes live and is forced to fail
   mockChain({ failPrice: true });
+  // The worker's reads fail, so it has no reading to persist for any leg.
+  expect(await sampleTokenMarket()).toEqual({ price: "failed", weth: "failed", pool: "failed" });
   const r = await getTokenMetrics();
   expect(r.robotmoney.totalSupply).toBe(55_000_000_000); // supply still resolves
   expect(r.robotmoney.priceUsd).toBeNull();

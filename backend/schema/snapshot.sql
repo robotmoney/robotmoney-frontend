@@ -2865,6 +2865,31 @@ CREATE TABLE public.swarm_waitlist (
 
 
 --
+-- Name: token_market_samples; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.token_market_samples (
+    token text NOT NULL,
+    price_usd numeric,
+    price_at timestamp with time zone,
+    weth_usd numeric,
+    weth_at timestamp with time zone,
+    liquidity_usd numeric,
+    volume_24h_usd numeric,
+    volume_30d_usd numeric,
+    pool_at timestamp with time zone,
+    sampled_at timestamp with time zone NOT NULL,
+    CONSTRAINT token_market_samples_liquidity_usd_check CHECK ((liquidity_usd >= (0)::numeric)),
+    CONSTRAINT token_market_samples_price_at_check CHECK (((price_usd IS NULL) = (price_at IS NULL))),
+    CONSTRAINT token_market_samples_price_usd_check CHECK ((price_usd > (0)::numeric)),
+    CONSTRAINT token_market_samples_volume_24h_usd_check CHECK ((volume_24h_usd >= (0)::numeric)),
+    CONSTRAINT token_market_samples_volume_30d_usd_check CHECK ((volume_30d_usd >= (0)::numeric)),
+    CONSTRAINT token_market_samples_weth_at_check CHECK (((weth_usd IS NULL) = (weth_at IS NULL))),
+    CONSTRAINT token_market_samples_weth_usd_check CHECK ((weth_usd > (0)::numeric))
+);
+
+
+--
 -- Name: tracked_wallets; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4415,6 +4440,14 @@ ALTER TABLE ONLY public.swarm_subjects
 
 ALTER TABLE ONLY public.swarm_waitlist
     ADD CONSTRAINT swarm_waitlist_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: token_market_samples token_market_samples_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.token_market_samples
+    ADD CONSTRAINT token_market_samples_pkey PRIMARY KEY (token);
 
 
 --

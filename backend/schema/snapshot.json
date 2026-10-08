@@ -115,7 +115,8 @@
     "0111_swarm_judge_model_deepseek_v4_1_flash.sql",
     "0112_rm_app_overwrite_events_read.sql",
     "0113_rm_worker_buyback_indexer_grants.sql",
-    "0114_seat_in_flight_unrostered_sessions.sql"
+    "0114_seat_in_flight_unrostered_sessions.sql",
+    "0115_token_market_samples.sql"
   ],
   "exclusions": {
     "roles": [
@@ -127,7 +128,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "a32216281fdf2c915191aefc18edb24283394d716fc987496f0452b840e361ff",
+  "contentHash": "6008a6f7aab9a7ab3722cedc08872342972bb262ba86bb53109a8fe19e244d41",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -3097,6 +3098,46 @@
       "type": "text",
       "notnull": "no"
     },
+    "column public.token_market_samples.liquidity_usd": {
+      "type": "numeric",
+      "notnull": "no"
+    },
+    "column public.token_market_samples.pool_at": {
+      "type": "timestamp with time zone",
+      "notnull": "no"
+    },
+    "column public.token_market_samples.price_at": {
+      "type": "timestamp with time zone",
+      "notnull": "no"
+    },
+    "column public.token_market_samples.price_usd": {
+      "type": "numeric",
+      "notnull": "no"
+    },
+    "column public.token_market_samples.sampled_at": {
+      "type": "timestamp with time zone",
+      "notnull": "yes"
+    },
+    "column public.token_market_samples.token": {
+      "type": "text",
+      "notnull": "yes"
+    },
+    "column public.token_market_samples.volume_24h_usd": {
+      "type": "numeric",
+      "notnull": "no"
+    },
+    "column public.token_market_samples.volume_30d_usd": {
+      "type": "numeric",
+      "notnull": "no"
+    },
+    "column public.token_market_samples.weth_at": {
+      "type": "timestamp with time zone",
+      "notnull": "no"
+    },
+    "column public.token_market_samples.weth_usd": {
+      "type": "numeric",
+      "notnull": "no"
+    },
     "column public.tracked_wallets.address": {
       "type": "text",
       "notnull": "no"
@@ -4640,6 +4681,30 @@
     "constraint public.swarm_waitlist.swarm_waitlist_pkey": {
       "definition": "PRIMARY KEY (id)"
     },
+    "constraint public.token_market_samples.token_market_samples_liquidity_usd_check": {
+      "definition": "CHECK ((liquidity_usd >= (0)::numeric))"
+    },
+    "constraint public.token_market_samples.token_market_samples_pkey": {
+      "definition": "PRIMARY KEY (token)"
+    },
+    "constraint public.token_market_samples.token_market_samples_price_at_check": {
+      "definition": "CHECK (((price_usd IS NULL) = (price_at IS NULL)))"
+    },
+    "constraint public.token_market_samples.token_market_samples_price_usd_check": {
+      "definition": "CHECK ((price_usd > (0)::numeric))"
+    },
+    "constraint public.token_market_samples.token_market_samples_volume_24h_usd_check": {
+      "definition": "CHECK ((volume_24h_usd >= (0)::numeric))"
+    },
+    "constraint public.token_market_samples.token_market_samples_volume_30d_usd_check": {
+      "definition": "CHECK ((volume_30d_usd >= (0)::numeric))"
+    },
+    "constraint public.token_market_samples.token_market_samples_weth_at_check": {
+      "definition": "CHECK (((weth_usd IS NULL) = (weth_at IS NULL)))"
+    },
+    "constraint public.token_market_samples.token_market_samples_weth_usd_check": {
+      "definition": "CHECK ((weth_usd > (0)::numeric))"
+    },
     "constraint public.tracked_wallets.tracked_wallets_pkey": {
       "definition": "PRIMARY KEY (id)"
     },
@@ -5434,6 +5499,9 @@
     "index public.swarm_waitlist_pkey": {
       "definition": "CREATE UNIQUE INDEX swarm_waitlist_pkey ON public.swarm_waitlist USING btree (id)"
     },
+    "index public.token_market_samples_pkey": {
+      "definition": "CREATE UNIQUE INDEX token_market_samples_pkey ON public.token_market_samples USING btree (token)"
+    },
     "index public.tracked_wallets_pkey": {
       "definition": "CREATE UNIQUE INDEX tracked_wallets_pkey ON public.tracked_wallets USING btree (id)"
     },
@@ -6189,6 +6257,9 @@
       "owner": "rm_owner"
     },
     "table public.swarm_waitlist": {
+      "owner": "rm_owner"
+    },
+    "table public.token_market_samples": {
       "owner": "rm_owner"
     },
     "table public.tracked_wallets": {
