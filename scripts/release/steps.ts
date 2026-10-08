@@ -187,6 +187,11 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
       "--legacy-checkout", "{legacyCheckout}", "--compose-files", "{legacyComposeFiles}", "--receipt-dir", RUN_DIR]],
   },
   {
+    id: "R6.2a", standing: [], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("credentials-init.json")],
+    description: "Write the in-house roster's credential.json (fresh keys, the model key from ~/.env, placeholder bearers for R6.7c) and RM_CREDENTIALS; an existing file with the same roster is kept",
+    cmds: [["bun", "scripts/release/credentials-init.ts", "--receipt-dir", RUN_DIR]],
+  },
+  {
     id: "R6.2", standing: ["SV.6"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("env-rewrite.json")],
     description: "Rewrite ~/.env to the D61 allowlist; every other key moves to ~/.env.retired-<ts> (mode 0600); key names only",
     cmds: [["bun", "scripts/release/env-rewrite.ts", "--run", "{runTs}", "--receipt-dir", RUN_DIR]],
