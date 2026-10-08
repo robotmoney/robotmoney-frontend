@@ -134,6 +134,7 @@ runner copies back only the receipts written after that marker.
 | R2.5 | target, legacy checkout | `bun run prod:gate --mode baseline --state-file <legacy>/.agents/smoke-state.json` (the legacy checkout's own gate) | no | SP.5 |
 | R5.rc | control, prod only | `bun scripts/release/tag.ts rc --release <r> --commit <sha>` (the next free `<r>-rc.N`, unless one points at the commit) | no | — |
 | R6.1 | target | `bun scripts/release/stop-legacy.ts stop …` | **yes** | SC.2 |
+| R6.2a | target | `bun scripts/release/credentials-init.ts`: the in-house roster's `credential.json` and `RM_CREDENTIALS` (before R6.2 moves the model key out) | no | — |
 | R6.2 | target | `bun scripts/release/env-rewrite.ts --run <run-ts>` | no | SV.6 |
 | R6.2b | target | `bun scripts/prod-init.ts enable-owner-login --instance <i> --confirm-target <T>` | no | SC.2 |
 | R6.3 | target | `bun run migrate --instance <i> --confirm-target <T>` | **yes** | SC.2 |
@@ -177,6 +178,7 @@ counts as done for the run's status and for SP.8. No other step differs by targe
 | `scripts/release/stop-legacy.ts` | R6.1, S8.1 | `stop`: kills the tmux driver, then `docker compose down` from the old checkout, never `-v`, and proves no container of the project remains. `retire`: renames the old checkout, then moves its `.env` lines that hold a database URL with a password, `MIGRATE_DATABASE_URL`, `WORKER_DATABASE_URL`, `OPENCODE_API_KEY` or another known secret to `~/.env.legacy-retired-<run-ts>` (0600). Key names only |
 | `scripts/release/tag.ts` | R5.rc, W3 | On the control machine: `rc` tags the next free rc at the commit unless one points there; `final` tags the release at the commit, or confirms it already does; each pushes its tag |
 | `scripts/release/schedule-parity.ts` | R7.4a | Every active subject has 6 h epochs; every session in flight at R2.3 published within its judging time plus 30 min of its unmoved close; the analytics-producer's regime cron runs at minute 30; reports the last parity sweep and fails a dead one |
+| `scripts/release/credentials-init.ts` | R6.2a | Reads the member ids of `athena`, `noop-analyst`, `robot-money` (agents) and `themis` (judge) through `rm_readonly`, and refuses a handle that is missing, not `active` or of the wrong role. Writes `<HOME>/.config/robotmoney/credential.json` (dir 0700, file 0600): one entry per member with a fresh Ed25519 key, the model key from `~/.env`'s `OPENCODE_API_KEY`, and a placeholder bearer that R6.7c replaces. Appends `RM_CREDENTIALS` to `~/.env` when absent. An existing file with the same roster and member ids is kept. A different roster refuses. Prints handles and key names only |
 | `scripts/release/env-rewrite.ts` | R6.2 | Moves every `~/.env` key outside the D61 allowlist to `~/.env.retired-<run-ts>` (mode 0600). Refuses when `rm_owner`, `doadmin` or `RM_CREDENTIALS` is missing. Prints key names only |
 | `scripts/release/identity-check.ts` | R7.1 | `/api/version` and `/version.json` carry the commit, with no `+dirty` or `+unknown` |
 | `scripts/release/compare-baseline.ts` | R7.5 | Every R2.4 count only grew; the database size is within the bound |
