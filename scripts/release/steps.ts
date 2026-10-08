@@ -297,7 +297,7 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   {
     id: "W1", standing: ["SW.1"], host: "target", notBefore: WATCH, irreversible: false, expectExit: 0, receipts: [runReceipts("prod-gate-watch.*")],
     description: "One full session cycle: prod:gate post-release since READY, sessions graded (every subject publishes judged sessions, the judge never restarted)",
-    cmds: [["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--report", `${RUN_DIR}/prod-gate-watch.md`]],
+    cmds: [["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--report", `${RUN_DIR}/prod-gate-watch.md`]],
   },
   {
     id: "R7.4a", standing: ["SW.1"], host: "target", notBefore: WATCH, irreversible: false, expectExit: 0, receipts: [runReceipts("schedule-parity.json")],
@@ -340,6 +340,7 @@ export function templateValues(target: ReleaseTarget, commit: string, runTs: str
     captureCheckout: target.capture.checkout,
     confirmTarget: target.confirmTarget,
     publicOrigin: target.publicOrigin,
+    watchMinAttendance: String(target.watchMinAttendance),
     legacyCheckout: target.legacy.checkout,
     legacySession: target.legacy.tmuxSession,
     legacyProject: target.legacy.composeProject,

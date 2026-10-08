@@ -699,3 +699,24 @@ describe("legacy secret cleanup (S8.1) and the postgres URL guard (R7.7)", () =>
     expect(othersCanTraverse([0o40755, 0o40750, 0o40755])).toBe(false);
   });
 });
+
+describe("W1's attendance threshold is target data, not a template change", () => {
+  const targetsDir = join(import.meta.dir, "../../release/targets");
+  const w1 = RELEASE_STEPS.find((s) => s.id === "W1")!;
+  const render = (name: string) => {
+    const t = loadTarget(join(targetsDir, `${name}.json`));
+    return renderStep(w1, t, templateValues(t, "a".repeat(40), "20261008T000000Z", "2026-10-08T00:00:00.000Z")).remote;
+  };
+  test("prod keeps the gate's default 0.5; stage passes 0.4, because external members never file against stage", () => {
+    expect(render("prod")).toContain("--min-attendance 0.5");
+    expect(render("stage")).toContain("--min-attendance 0.4");
+  });
+  test("red control: a threshold outside (0, 1] refuses the target file", () => {
+    const raw = JSON.parse(readFileSync(join(targetsDir, "stage.json"), "utf8"));
+    expect("errors" in validateTarget("stage", raw)).toBe(false);
+    raw.watchMinAttendance = 0;
+    expect("errors" in validateTarget("stage", raw)).toBe(true);
+    raw.watchMinAttendance = 1.5;
+    expect("errors" in validateTarget("stage", raw)).toBe(true);
+  });
+});

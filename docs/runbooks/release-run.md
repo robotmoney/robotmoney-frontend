@@ -74,13 +74,14 @@ unknown key refuses. The committed targets are `prod.json` and `stage.json`.
 | `publicOrigin` | The origin R7.1 checks | `https://robotmoney.network` | `https://stage.robotmoney-labs.dev` |
 | `capture` | Capture host, its `HOME` and its checkout | `rm-frontend-stage-2` | `rm-frontend-stage-2` |
 | `legacy` | The old stack: checkout, commit, tmux session, compose project, compose files, how it started, its log, version | `/root/robotmoney-frontend` at `1cda4085`, `driver`, `rm_prod`, `/root/smoke-archive-v0.5.4.log` | `/home/stage-server/rm-stage-legacy` at `1cda4085`, `stage-driver`, `stage_target`, `/home/stage-server/stage-target/smoke-archive-v0.5.4.log` |
-| `confirmTarget` | `host:port/database`; every write's `--confirm-target` | placeholder | `172.17.0.1:25060/defaultdb` |
+| `confirmTarget` | `host:port/database`; every write's `--confirm-target` | the primary's `host:25060/defaultdb` | `172.17.0.1:25060/defaultdb` |
+| `watchMinAttendance` | W1's `--min-attendance` | 0.5 (default) | 0.4: the external members never file against stage |
 | `bootEnv` | Non-secret boot settings from R6.2a (`WEBAUTHN_ORIGIN`, `WEBAUTHN_RP_ID`, the RPC and backfill budgets) | `{}` | `{}` |
 
 Both legacy stacks were started by `SMOKE_PROJECT=<project> bun run smoke:archive -- --no-tui`
 (`bun scripts/smoke.ts --smoke --static-port --db external`) in their tmux session.
 
-Prod's `confirmTarget` ships as a placeholder. The runner refuses a live run until it is filled.
+A placeholder `confirmTarget` refuses a live run.
 Step R1.2 resolves `host:port/database` from the host's `~/.env` and refuses a
 different value. `bootEnv` refuses `BASE_RPC_URL`: a private RPC URL carries its key,
 and a secret never goes in a process argument.
@@ -240,7 +241,6 @@ an `.env` file, a credential file, a passphrase or a dump.
 
 ## Open items on 2026-10-08
 
-- **Prod's `confirmTarget` is still the placeholder.** Fill it from `/root/.env` before the go. R1.2 refuses a value that differs from what the host resolves.
 - **`git fetch` runs with the target's `HOME`.** On stage that is `/home/stage-server/stage-target`. A credential helper or `.gitconfig` in the login home is not seen there. R1.1 fails loudly if the fetch needs one.
 - **`BASE_RPC_URL` has no delivery path.** It stays out of `bootEnv`. A private RPC URL carries its key, and a secret never goes in a process argument. If production uses a private RPC, the boot needs another way to receive it.
 - **The legacy stack must be a production boot.** The legacy gate refuses a stack whose `.agents/smoke-state.json` is not a `--db external` boot. On stage, the legacy stack must be booted that way against the stage target's database.
