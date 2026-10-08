@@ -95,13 +95,18 @@ export interface StepTemplate {
    */
   readonly maxMinutes?: number;
   /**
-   * A capture-host step that repeats a target-host step in the same checkout.
-   * When the capture host and checkout are the target's (the stage target),
-   * the step is recorded `skipped: same checkout as <id>`; the named step
-   * already did the work there. Production's hosts differ, so it runs.
+   * The step creates its checkout when it is missing: before it cds in, it
+   * runs `git clone <cloneFrom> <checkout>` unless `<checkout>/.git` exists.
+   * Only R1.4 sets it: the capture checkout is the release runner's own folder
+   * (CAPTURE_CHECKOUT, ./target.ts), so a fresh capture host or a deleted folder
+   * heals instead of failing. A folder that exists without `.git` is never
+   * touched: the clone refuses a non-empty directory, and the step fails.
    */
-  readonly sameCheckoutAs?: string;
+  readonly cloneFrom?: string;
 }
+
+/** The repository every checkout fetches from; R1.4 clones a missing capture checkout from it. */
+export const RELEASE_REPO_URL = "git@github.com:robotmoney/robotmoney-frontend.git";
 
 /** The time a step may take unless it names its own `maxMinutes`. */
 export const DEFAULT_MAX_MINUTES = 10;
@@ -167,17 +172,17 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     cmds: [["bun", "install", "--force"], ["bun", "install", "--force", "--cwd", "backend"]],
   },
   {
-    id: "R1.4", standing: ["SP.1"], host: "capture", sameCheckoutAs: "R1.1", irreversible: false, expectExit: 0, receipts: [],
-    description: "Capture checkout: fetch, then detach at the release commit",
+    id: "R1.4", standing: ["SP.1"], host: "capture", cloneFrom: RELEASE_REPO_URL, irreversible: false, expectExit: 0, receipts: [],
+    description: "Capture checkout (runner-owned, never a release checkout): clone it when missing, fetch, then detach at the release commit",
     cmds: [["git", "fetch", "--tags", "origin"], ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{commit}"]],
   },
   {
-    id: "R1.5", standing: ["SP.1"], host: "capture", sameCheckoutAs: "R1.2", irreversible: false, expectExit: 0, receipts: [{ dir: CAPTURE_RUN_DIR, pattern: "host-identity.json", required: true }],
+    id: "R1.5", standing: ["SP.1"], host: "capture", irreversible: false, expectExit: 0, receipts: [{ dir: CAPTURE_RUN_DIR, pattern: "host-identity.json", required: true }],
     description: "Capture identity: HEAD is the commit and the tree is clean",
     cmds: [["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--receipt-dir", CAPTURE_RUN_DIR]],
   },
   {
-    id: "R1.6", standing: ["SP.1"], host: "capture", sameCheckoutAs: "R1.3", irreversible: false, expectExit: 0, receipts: [],
+    id: "R1.6", standing: ["SP.1"], host: "capture", irreversible: false, expectExit: 0, receipts: [],
     description: "Capture install: bun install --force, root and backend",
     cmds: [["bun", "install", "--force"], ["bun", "install", "--force", "--cwd", "backend"]],
   },
@@ -409,7 +414,6 @@ export interface RenderedStep {
   readonly onlyFor?: "prod";
   readonly notBefore?: NotBefore;
   readonly maxMillis: number;
-  readonly sameCheckoutAs?: string;
 }
 
 /** Turn one template into the command a host runs. */
@@ -418,7 +422,7 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
     id: step.id, standing: step.standing, description: step.description, hostRole: step.host,
     irreversible: step.irreversible, expectExit: step.expectExit,
     receipts: step.receipts.map((r) => ({ ...r, dir: fill(r.dir, values) })),
-    onlyFor: step.onlyFor, notBefore: notBeforeOf(step, target), maxMillis: maxMillisOf(step), sameCheckoutAs: step.sameCheckoutAs,
+    onlyFor: step.onlyFor, notBefore: notBeforeOf(step, target), maxMillis: maxMillisOf(step),
   };
   if (step.host === "control") {
     // The control machine: its own checkout and its own environment (the git
@@ -441,8 +445,12 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
   if (!onCapture && !legacy) envPairs.push(`RM_ENV=${shellQuote(target.rmEnv)}`);
   for (const [k, v] of Object.entries(step.env ?? {})) envPairs.push(`${k}=${shellQuote(fill(v, values))}`);
   if (step.bootEnv) for (const [k, v] of Object.entries(target.bootEnv).sort()) envPairs.push(`${k}=${shellQuote(v)}`);
-  const commands = step.cmds.map((argv) => `env -i ${envPairs.join(" ")} ${argv.map((a) => shellQuote(fill(a, values))).join(" ")}`);
-  const remote = [`mkdir -p ${shellQuote(runDir)}`, `touch ${shellQuote(marker)}`, `cd ${shellQuote(checkout)}`, ...commands].join(" && ");
+  const envCmd = (argv: readonly string[]) => `env -i ${envPairs.join(" ")} ${argv.map((a) => shellQuote(fill(a, values))).join(" ")}`;
+  const commands = step.cmds.map(envCmd);
+  // A step that owns its checkout clones it first when it is missing (R1.4).
+  const clone = step.cloneFrom === undefined ? []
+    : [`{ test -e ${shellQuote(`${checkout}/.git`)} || ${envCmd(["git", "clone", "--quiet", step.cloneFrom, checkout])}; }`];
+  const remote = [`mkdir -p ${shellQuote(runDir)}`, `touch ${shellQuote(marker)}`, ...clone, `cd ${shellQuote(checkout)}`, ...commands].join(" && ");
   return { ...common, host, remote, marker };
 }
 
@@ -455,7 +463,7 @@ export function stepListHash(steps: readonly StepTemplate[] = RELEASE_STEPS): st
   const canonical = steps.map((s) => ({
     id: s.id, standing: s.standing, description: s.description, host: s.host, checkout: s.checkout ?? "release", cmds: s.cmds,
     env: s.env ?? {}, bootEnv: s.bootEnv ?? false, expectExit: s.expectExit, receipts: s.receipts, irreversible: s.irreversible,
-    onlyFor: s.onlyFor ?? null, notBefore: s.notBefore ?? null, triage: s.triage ?? false,
+    onlyFor: s.onlyFor ?? null, notBefore: s.notBefore ?? null, triage: s.triage ?? false, cloneFrom: s.cloneFrom ?? null,
   }));
   // The base environment is part of every remote command, so it is part of the list.
   const base = { envClear: true, env: BASE_ENV, runDir: RUN_DIR, captureRunDir: CAPTURE_RUN_DIR };

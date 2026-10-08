@@ -19,8 +19,8 @@ const hostOf = (s: StepTemplate) => {
   const base = s.host === "control" ? "control" : s.checkout === "legacy" ? `${s.host}, legacy checkout` : s.host;
   const only = s.onlyFor ? `, ${s.onlyFor} only` : "";
   const wait = s.notBefore ? `, not before ${s.notBefore.afterStep} + ${s.notBefore.hours === "watchHours" ? "`watchHours`" : `${s.notBefore.hours} h`}` : "";
-  const same = s.sameCheckoutAs ? `; skipped when it is ${s.sameCheckoutAs}'s checkout` : "";
-  return `${base}${only}${wait}${same}`;
+  const clone = s.cloneFrom ? "; clones the checkout when missing" : "";
+  return `${base}${only}${wait}${clone}`;
 };
 const cmdOf = (s: StepTemplate) => s.cmds.map((argv) => `\`${argv.join(" ").replace(/\|/g, "\\|")}\``).join("; ");
 const cell = (t: string) => t.replace(/\|/g, "\\|").replace(/\n/g, " ");

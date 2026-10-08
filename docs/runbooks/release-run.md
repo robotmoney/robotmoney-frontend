@@ -40,7 +40,7 @@ bun run release:run --target stage --abandon <run-ts>   # a run killed mid-step 
 - `--after-preflight <dir>` continues from a green preflight ended within the last 60 minutes, at the same commit and step list. The run takes the preflight's run stamp. R1.1 to R2.5 are its records, so the run starts at R5.rc with one dump, not two. An older or red preflight refuses.
 - `--abandon <run-ts>` marks a run that still reads `running` as failed, step by step, with the time. A run killed mid-step never ends on its own. Until it is abandoned, the preflight's `P.busy` is red.
 - Every step has a bound (`maxMinutes` in `steps.ts`, 10 by default; the dump 30, the restore proof 20, each boot 15). Past it the runner kills its ssh, records `timed out`, and stops. The remote command may still run to its end, so look at the host before a resume.
-- R1.4 to R1.6 repeat R1.1 to R1.3 on the capture host. When the capture host and checkout are the target's (stage), they are recorded `skipped: same checkout as R1.x`. On prod the hosts differ, so they run.
+- R1.4 to R1.6 repeat R1.1 to R1.3 on the capture checkout. They run on every target: stage rehearses them as prod runs them. See [the capture checkout convention](#capture-checkout-convention).
 - The journal records `downtimeSeconds`, R6.1's start to R6.9's end. Stage run `20261008T042158Z` measured 149 s. The recovery matrix names the ceiling.
 - A watch step (W1, R7.4a) runs no earlier than R6.9's end plus the target's `watchHours` (10 h on prod, 15 min on stage). Reaching it early, the runner stops with exit 3 and prints when it becomes runnable. `--run <run-ts>` resumes it then.
 - The target's `watchSessions` says how the watch treats sessions. It renders as `--sessions graded` or `--sessions deferred` on W1 and R7.4a. Prod is always `graded`. Stage is `deferred` (owner decision 2026-10-08): its watch is a 15-minute check, and no 6 h epoch closes in 15 minutes. Stage epochs stay 6 h.
@@ -112,13 +112,29 @@ release commit: a top-level `commit` or `tag` refuses, because the go file names
 | `home` | `HOME` for every command; its `.env` is the target's credential file | `/root` | `/home/stage-server/stage-target` |
 | `instance` | The smoke instance | `rm_prod` | `stage_target` |
 | `publicOrigin` | The origin R7.1 checks | `https://robotmoney.network` | `https://stage.robotmoney-labs.dev` |
-| `capture` | Capture host, its `HOME` and its checkout | `rm-frontend-stage-2` | `rm-frontend-stage-2` |
+| `capture` | Capture host, its `HOME` and its checkout | `rm-frontend-stage-2`, `/home/stage-server`, `/home/stage-server/rm-capture` | `rm-frontend-stage-2`, `/home/stage-server`, `/home/stage-server/rm-capture` |
 | `legacy` | The old stack: checkout, commit, tmux session, compose project, compose files, how it started, its log, version | `/root/robotmoney-frontend` at `1cda4085`, `driver`, `rm_prod`, `/root/smoke-archive-v0.5.4.log` | `/home/stage-server/rm-stage-legacy` at `1cda4085`, `stage-driver`, `stage_target`, `/home/stage-server/stage-target/smoke-archive-v0.5.4.log` |
 | `confirmTarget` | `host:port/database`; every write's `--confirm-target` | the primary's `host:25060/defaultdb` | `172.17.0.1:25060/defaultdb` |
 | `watchMinAttendance` | W1's `--min-attendance` | 0.5 (default) | 0.4: the external members never file against stage |
 | `watchHours` | Hours after R6.9 before W1 and R7.4a run. Prod, and any target that grades sessions, may set it longer, never below the derived 10 h. A target that defers sessions may set any positive value | 10 (default) | 0.25 (15 min, owner decision 2026-10-08) |
 | `watchSessions` | `graded` or `deferred`, rendered as W1's and R7.4a's `--sessions`. `graded`: W1 check 7 needs every subject to publish one good session, and R7.4a needs every session in flight at R2.3 to publish on its normal close. `deferred`: W1 skips check 7, and R7.4a checks only that no in-flight session vanished or had its close moved. Prod must be `graded` | `graded` (default) | `deferred` |
 | `bootEnv` | Non-secret boot settings from R6.2a (`WEBAUTHN_ORIGIN`, `WEBAUTHN_RP_ID`, the RPC and backfill budgets) | `{}` | `{}` |
+
+### Capture checkout convention
+
+The capture checkout is a dedicated folder the release runner owns:
+`/home/stage-server/rm-capture` on `rm-frontend-stage-2`, the same for every target
+(`CAPTURE_CHECKOUT` in `scripts/release/target.ts`). It is never a release checkout.
+R1.4 clones it from `git@github.com:robotmoney/robotmoney-frontend.git` when
+`<checkout>/.git` is missing. Then it fetches and detaches at the commit. So a fresh capture
+host or a deleted folder heals on the next run. A folder that exists without `.git` is not
+touched: the clone refuses it, and R1.4 fails. The stage target (`stage-target up`, `down`,
+`up --replace`) never creates or removes it. The target schema refuses a `capture.checkout`
+that is the stage target's checkout (`/home/stage-server/rm-stage-target`), or the target's own
+`checkout` on the same host. Why: on 2026-10-08 prod's capture checkout was the stage target's
+checkout. `stage-target down` removed it after the stage rehearsal, and the production
+preflight's R1.4 failed with `cd: /home/stage-server/rm-stage-target: No such file or directory`.
+Stage shared that folder with its own R1.1, so it skipped R1.4 to R1.6 and never rehearsed them.
 
 Both legacy stacks were started by `SMOKE_PROJECT=<project> bun run smoke:archive -- --no-tui`
 (`bun scripts/smoke.ts --smoke --static-port --db external`) in their tmux session.
@@ -189,9 +205,9 @@ The table below is generated from `scripts/release/steps.ts` by `bun scripts/rel
 | R1.1 | target | Target checkout: fetch, then detach at the release commit | `git fetch --tags origin`; `git -c advice.detachedHead=false checkout --detach {commit}` | no | 10 min | SP.1 |
 | R1.2 | target | Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger is a supported baseline, its identity is absent or matches RM_ENV; before R6.1, ~/.env holds a non-empty rm_owner line and rm_owner logs in (SELECT 1, read-only; refuses with "run bun run role-passwords --target <target> first"); no release step reads doadmin; RM_CREDENTIALS is not required (R6.2a writes it) | `bun scripts/release/host-identity.ts --commit {commit} --confirm-target {confirmTarget} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SP.1 |
 | R1.3 | target | Target install: bun install --force, root and backend | `bun install --force`; `bun install --force --cwd backend` | no | 10 min | SP.1 |
-| R1.4 | capture; skipped when it is R1.1's checkout | Capture checkout: fetch, then detach at the release commit | `git fetch --tags origin`; `git -c advice.detachedHead=false checkout --detach {commit}` | no | 10 min | SP.1 |
-| R1.5 | capture; skipped when it is R1.2's checkout | Capture identity: HEAD is the commit and the tree is clean | `bun scripts/release/host-identity.ts --commit {commit} --receipt-dir {captureHome}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SP.1 |
-| R1.6 | capture; skipped when it is R1.3's checkout | Capture install: bun install --force, root and backend | `bun install --force`; `bun install --force --cwd backend` | no | 10 min | SP.1 |
+| R1.4 | capture; clones the checkout when missing | Capture checkout (runner-owned, never a release checkout): clone it when missing, fetch, then detach at the release commit | `git fetch --tags origin`; `git -c advice.detachedHead=false checkout --detach {commit}` | no | 10 min | SP.1 |
+| R1.5 | capture | Capture identity: HEAD is the commit and the tree is clean | `bun scripts/release/host-identity.ts --commit {commit} --receipt-dir {captureHome}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SP.1 |
+| R1.6 | capture | Capture install: bun install --force, root and backend | `bun install --force`; `bun install --force --cwd backend` | no | 10 min | SP.1 |
 | R2.1 | capture | Fresh capture from production's read replica into a new dated directory (never a reused dump) | `bun run smoke:capture --out {captureHome}/rm-backup-{target}-{runTs}` | no | 30 min | SR.0, SP.2 |
 | R2.2 | capture | Record the sha256 of the encrypted dump files beside the manifest | `sh -c cd {captureHome}/rm-backup-{target}-{runTs} && sha256sum -- *.gpg > SHA256SUMS` | no | 10 min | SP.2 |
 | R2.4r | capture | Restore proof: restore the R2.1 dump into a throwaway local Postgres container, record the restore time, drop the container | `bun scripts/release/restore-proof.ts --dump {captureHome}/rm-backup-{target}-{runTs} --receipt-dir {captureHome}/.local/state/robotmoney-release/{target}/{runTs}` | no | 20 min | SP.2 |

@@ -17,6 +17,8 @@ import {
   pgHbaConf,
   provisionTaxonomyScript,
   precutoverProblems,
+  removalRefusal,
+  stageTargetDirs,
   PROD_HOME_ENV_KEYS,
   PROD_LEGACY_CHECKOUT_ENV_KEYS,
   roleShapeProblems,
@@ -24,6 +26,8 @@ import {
   STAGE_TARGET,
   type StageHomeEnv,
 } from "../../release/stage-target-lib.ts";
+import { CAPTURE_CHECKOUT } from "../../release/target.ts";
+import { RELEASE_REPO_URL } from "../../release/steps.ts";
 
 const VALUES: StageHomeEnv = {
   rm_app: "app-pw",
@@ -258,5 +262,31 @@ describe("the legacy replay and driver", () => {
     expect(script).toContain(`SMOKE_PROJECT=${STAGE_TARGET.legacyProject} bun run smoke:archive -- --no-tui`);
     expect(script).toContain(`tee "$HOME/${STAGE_TARGET.driverLog}"`);
     expect(script).not.toMatch(/doadmin-pw|PASSWORD=[^"$]/);
+  });
+});
+
+describe("the capture checkout is the release runner's, never the stage target's", () => {
+  const keep = [CAPTURE_CHECKOUT.checkout];
+
+  test("the stage target's folders and the capture checkout are distinct, and none holds it", () => {
+    const own = [...stageTargetDirs(), STAGE_TARGET.referenceClone, STAGE_TARGET.toolDir];
+    for (const dir of own) {
+      expect(dir).not.toBe(CAPTURE_CHECKOUT.checkout);
+      expect(CAPTURE_CHECKOUT.checkout.startsWith(`${dir}/`)).toBe(false);
+    }
+    expect(STAGE_TARGET.host).toBe(CAPTURE_CHECKOUT.host);
+    expect(STAGE_TARGET.repoUrl).toBe(RELEASE_REPO_URL);
+  });
+
+  test("down removes its own folders and refuses the capture checkout or a folder holding it", () => {
+    for (const dir of stageTargetDirs(["/home/stage-server/rm-stage-legacy.v0.5.4-retired"])) {
+      expect(removalRefusal(dir, ["/home/stage-server/rm-stage-legacy.v0.5.4-retired"], keep)).toBeUndefined();
+    }
+    expect(removalRefusal(CAPTURE_CHECKOUT.checkout, [], keep)).toBe("refusing to remove /home/stage-server/rm-capture: not a stage-target path");
+    // Even if a future edit listed it (or its parent) as a stage-target folder, the keep list refuses it.
+    expect(removalRefusal(CAPTURE_CHECKOUT.checkout, [CAPTURE_CHECKOUT.checkout], keep)).toBe(
+      "refusing to remove /home/stage-server/rm-capture: it holds /home/stage-server/rm-capture, the release runner's capture checkout",
+    );
+    expect(removalRefusal("/home/stage-server", ["/home/stage-server"], keep)).toContain("it holds /home/stage-server/rm-capture");
   });
 });

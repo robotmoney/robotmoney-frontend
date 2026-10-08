@@ -73,6 +73,29 @@ export const STAGE_TARGET = {
 } as const;
 
 /**
+ * PURE. The folders the stage target owns: `up` creates them, `down` (and
+ * `up --replace`) removes them. `retired` is the legacy checkouts a previous
+ * run's S8.1 renamed. The release runner's capture checkout
+ * (CAPTURE_CHECKOUT, ./target.ts) is never one of them.
+ */
+export function stageTargetDirs(retired: readonly string[] = []): string[] {
+  return [STAGE_TARGET.home, STAGE_TARGET.checkout, STAGE_TARGET.legacyCheckout, ...retired];
+}
+
+/**
+ * PURE. Why `down` may not remove `dir`, or undefined when it may. It removes
+ * only its own folders, and never a folder in `keep` or one holding it (the
+ * capture checkout the release runner owns).
+ */
+export function removalRefusal(dir: string, retired: readonly string[], keep: readonly string[]): string | undefined {
+  if (!stageTargetDirs(retired).includes(dir)) return `refusing to remove ${dir}: not a stage-target path`;
+  for (const k of keep) {
+    if (k === dir || k.startsWith(`${dir}/`)) return `refusing to remove ${dir}: it holds ${k}, the release runner's capture checkout`;
+  }
+  return undefined;
+}
+
+/**
  * The key names of production's `~/.env` (`/root/.env`), in file order, read
  * from the prod host on 2026-10-08 with `cut -d= -f1`. The cutover's env
  * rewrite (R6.2) must move `SWARM_SCHEDULES_ENABLED` and `OPENCODE_API_KEY`

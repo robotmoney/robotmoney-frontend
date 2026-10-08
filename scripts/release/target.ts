@@ -19,7 +19,20 @@
 // test (scripts/tests/unit/release-run.test.ts).
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
+import { STAGE_TARGET } from "./stage-target-lib.ts";
 import { DEFAULT_WATCH_HOURS, WATCH_SESSIONS, type WatchSessions } from "./watch.ts";
+
+/**
+ * The capture checkout convention (owner decision 2026-10-08). The capture
+ * checkout is a dedicated folder the release runner owns: R1.4 clones it when
+ * it is missing, then fetches and detaches it at the commit. It is the same
+ * folder for every target. It is never a release checkout: the stage target
+ * (./stage-target.ts) removes its own checkout on every `down`, and a capture
+ * checkout that was the stage checkout vanished with it (the v0.6.0 production
+ * preflight's R1.4 failure, 2026-10-08). stage-target never creates or removes
+ * this folder.
+ */
+export const CAPTURE_CHECKOUT = Object.freeze({ host: "rm-frontend-stage-2", checkout: "/home/stage-server/rm-capture" });
 
 /** The value a target file carries until the operator fills in the real database. */
 export const CONFIRM_TARGET_PLACEHOLDER = "FILL-ME:host:port/database-from-the-host-env";
@@ -67,7 +80,11 @@ export interface CaptureHost {
   readonly host: string;
   /** HOME on the capture host: its `~/.env` holds `rm_readonly` against production's replica. */
   readonly home: string;
-  /** A checkout on the capture host at the same commit. */
+  /**
+   * The runner-owned checkout on the capture host (CAPTURE_CHECKOUT). R1.4
+   * clones it when missing. Never the stage target's checkout, never this
+   * target's own checkout on the same host.
+   */
   readonly checkout: string;
 }
 
@@ -169,7 +186,10 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
     const h = str(raw.capture, "host", `${name}.capture`, HOST_RE);
     const ch = str(raw.capture, "home", `${name}.capture`, ABS_PATH_RE);
     const cc = str(raw.capture, "checkout", `${name}.capture`, ABS_PATH_RE);
-    if (h && ch && cc) capture = { host: h, home: ch, checkout: cc };
+    if (h && ch && cc) {
+      capture = { host: h, home: ch, checkout: cc };
+      errors.push(...captureCheckoutProblems(name, capture, host, checkout));
+    }
   }
 
   let legacy: LegacyStack | undefined;
@@ -239,6 +259,26 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
       publicOrigin: publicOrigin!, watchMinAttendance, watchHours, watchSessions, capture: capture!, legacy: legacy!, confirmTarget: confirmTarget!, bootEnv,
     },
   };
+}
+
+/**
+ * PURE. The capture checkout rule: the capture checkout is the release
+ * runner's own folder. It may not be the stage target's checkout on the stage
+ * host (`stage-target down` removes that folder), and it may not be this
+ * target's own `checkout` on the same host (R1.1 and R1.4 would share one
+ * folder, so stage would never rehearse the capture checkout steps).
+ */
+export function captureCheckoutProblems(name: string, capture: CaptureHost, host: string | undefined, checkout: string | undefined): string[] {
+  const out: string[] = [];
+  const rule = "the capture checkout is a dedicated folder the release runner owns " +
+    `(convention: ${CAPTURE_CHECKOUT.host}:${CAPTURE_CHECKOUT.checkout}), never a release checkout`;
+  if (capture.host === STAGE_TARGET.host && capture.checkout === STAGE_TARGET.checkout) {
+    out.push(`${name}.capture.checkout ${capture.checkout} is the stage target's checkout, which stage-target down removes: ${rule}`);
+  }
+  if (host !== undefined && checkout !== undefined && capture.host === host && capture.checkout === checkout) {
+    out.push(`${name}.capture.checkout ${capture.checkout} is this target's own checkout on ${host}: ${rule}`);
+  }
+  return out;
 }
 
 /** Read and validate `<path>`; the target's name is the file's base name. Throws with every problem listed. */

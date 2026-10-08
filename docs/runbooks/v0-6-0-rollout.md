@@ -290,7 +290,7 @@ date: <yyyy-mm-dd>
 | R1.1 | target | `git fetch`, then detach at the commit in `/root/rm-060` | no | stdout: HEAD at the commit |
 | R1.2 | target | `host-identity.ts`: HEAD and clean tree; `bun`, `docker`, `tmux`, `git` resolve; no inherited `DATABASE_*`; `~/.env` resolves to `confirmTarget`; the database answers; its ledger is a supported baseline; its identity is absent; `~/.env` holds a non-empty `rm_owner` line and `rm_owner` logs in (`SELECT 1`, read-only), else it refuses naming `bun run role-passwords --target prod` | no | `host-identity.json`: tool paths, resolved target, ledger match, `ownerLogin` |
 | R1.3 | target | `bun install --force`, root and backend | no | exit 0 |
-| R1.4 | capture | the same checkout on `rm-frontend-stage-2` | no | stdout |
+| R1.4 | capture | the runner-owned capture checkout `/home/stage-server/rm-capture` on `rm-frontend-stage-2`: clone it when missing, `git fetch`, then detach at the commit | no | stdout |
 | R1.5 | capture | `host-identity.ts` without the database checks | no | `host-identity.json` |
 | R1.6 | capture | `bun install --force`, root and backend | no | exit 0 |
 

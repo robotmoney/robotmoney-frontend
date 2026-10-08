@@ -47,6 +47,7 @@ import { parseEnvFile } from "../lib/env-role.ts";
 import { POSTGRES_IMAGE } from "../lib/postgres-image.ts";
 import { resolveBackupFiles, restorePipelineArgv, SHM_FLAGS } from "../lib/restore-container.ts";
 import { instanceStackProject } from "../lib/smoke-state.ts";
+import { CAPTURE_CHECKOUT } from "./target.ts";
 import {
   ACL_EXPORT_SQL,
   ACL_FINGERPRINT_SQL,
@@ -71,11 +72,13 @@ import {
   PROD_LEGACY_CHECKOUT_ENV_KEYS,
   PROVISION_TAXONOMY_FILE,
   provisionTaxonomyScript,
+  removalRefusal,
   ROLE_SHAPE_QUERY,
   roleShapeProblems,
   rolePasswordSql,
   shellQuote,
   STAGE_TARGET as T,
+  stageTargetDirs,
   tlsSettingsSql,
   type GeneratedPasswordRole,
   type StageHomeEnv,
@@ -202,7 +205,7 @@ function existingPieces(): string[] {
   const pieces: string[] = [];
   if (dockerNames("container", `name=^${T.pgContainer}$`).length) pieces.push(`container ${T.pgContainer}`);
   if (dockerNames("volume", `name=^${T.pgVolume}$`).length) pieces.push(`volume ${T.pgVolume}`);
-  for (const dir of [T.home, T.checkout, T.legacyCheckout, ...retiredLegacyCheckouts()]) if (existsSync(dir)) pieces.push(`directory ${dir}`);
+  for (const dir of stageTargetDirs(retiredLegacyCheckouts())) if (existsSync(dir)) pieces.push(`directory ${dir}`);
   if (tmuxHasSession()) pieces.push(`tmux session ${T.driverSession}`);
   for (const c of projectContainers()) pieces.push(`container ${c}`);
   return pieces;
@@ -548,9 +551,10 @@ async function remoteUp(args: string[]): Promise<number> {
 // down
 // ---------------------------------------------------------------------------
 
+/** `down` removes only its own folders, never the release runner's capture checkout. */
 function assertOwnPath(dir: string): void {
-  const allowed = [T.home, T.checkout, T.legacyCheckout, ...retiredLegacyCheckouts()] as string[];
-  if (!allowed.includes(dir)) throw new Error(`refusing to remove ${dir}: not a stage-target path`);
+  const refusal = removalRefusal(dir, retiredLegacyCheckouts(), [CAPTURE_CHECKOUT.checkout]);
+  if (refusal !== undefined) throw new Error(refusal);
 }
 
 async function remoteDown(): Promise<number> {
@@ -594,6 +598,7 @@ async function remoteDown(): Promise<number> {
     log(`removing volume ${T.pgVolume}`);
     run(["docker", "volume", "rm", T.pgVolume]);
   }
+  // Never the capture checkout (CAPTURE_CHECKOUT): the release runner owns it.
   for (const dir of [T.legacyCheckout, ...retiredLegacyCheckouts(), T.checkout, T.home]) {
     assertOwnPath(dir);
     if (existsSync(dir)) {

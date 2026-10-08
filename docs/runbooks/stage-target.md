@@ -20,6 +20,7 @@ The target file names these fields:
 | `HOME` | `/home/stage-server/stage-target` | `/root` |
 | checkout | `/home/stage-server/rm-stage-target` | the release checkout |
 | legacy checkout | `/home/stage-server/rm-stage-legacy` | `/root/robotmoney-frontend` |
+| capture checkout | `/home/stage-server/rm-capture`, owned by the release runner, not by the stage target | the same folder on `rm-frontend-stage-2` |
 | instance | `stage_target` | `rm_prod` |
 | driver tmux session | `stage-driver` | `driver` |
 | `RM_ENV` | `stage` | `prod` |
@@ -145,9 +146,16 @@ The release's own R2.1 still captures a new backup during the run.
 
 `up` refuses a dump older than 24 hours. `up` refuses when any piece already exists,
 unless `--replace` is given. `--replace` runs `down` first. `down` removes the
-container, the volume, the legacy stack, both checkouts, the tmux session, the
+container, the volume, the legacy stack, both checkouts (`rm-stage-target` and
+`rm-stage-legacy`, with any retired legacy checkout), the tmux session, the
 target `HOME` and any v0.6 stack the instance booted. It never touches stage-2's
-own `~/.env`, `~/rm-060`, other checkouts or the dump directories.
+own `~/.env`, `~/rm-060`, the capture checkout `/home/stage-server/rm-capture`,
+other checkouts or the dump directories.
+
+The capture checkout belongs to the release runner, for both targets. Its R1.4
+clones it when it is missing. `up` never creates it. `down` refuses to remove it, or
+any folder holding it (`removalRefusal` in `stage-target-lib.ts`). See
+[the capture checkout convention](release-run.md#capture-checkout-convention).
 
 A full `up` takes about 15 minutes. The restore takes about 3. The legacy image
 build takes most of the rest.
