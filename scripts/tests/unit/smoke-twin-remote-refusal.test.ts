@@ -1,8 +1,9 @@
-// D55 (10), issue #1026 [smoke-twin-remote-refusal]: a production dump from
-// before 0081 cannot become a remote twin through any tool. The twin tooling
+// D55 (10), issue #1026 [smoke-twin-remote-refusal], as amended by D61: a production dump from
+// before 0081 becomes a remote twin only through the remote rehearsal pass. The twin tooling
 // only ever restores into a local container, and every stage tool that reads a
 // remote target with no `deployment_identity` table refuses, changes nothing,
-// and names the one-off intervention in the runbook.
+// and names what can enrol it: since D61 (rule 2) the remote rehearsal pass of
+// `RM_ENV=stage bun run migrate --confirm-target …`, or `bun smoke --local dump`.
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -22,7 +23,8 @@ describe("a remote target with no deployment_identity refuses and names the runb
       expect(verdict.allow).toBe(false);
       if (verdict.allow) return;
       expect(verdict.reason).toContain(PRE_IDENTITY_TWIN_RUNBOOK);
-      expect(verdict.reason).toContain("rm_owner");
+      // D61 rule 2: the pointer is the remote rehearsal pass of `bun run migrate`.
+      expect(verdict.reason).toContain("RM_ENV=stage bun run migrate --confirm-target");
       expect(verdict.reason).toContain("bun smoke --local dump");
     });
   }

@@ -8,6 +8,13 @@
 //   but `y` refuses and changes nothing. A second run with no row still
 //   refuses."
 //
+// As amended by D61: the typed `rm_owner` is `~/.env`'s `rm_owner` line and
+// the `y` is `--confirm-target <host:port/database>`. A missing line, no flag
+// and a wrong flag each refuse and change nothing. `RM_ENV=stage` on this
+// state is now the remote rehearsal pass (D61 rule 2), which writes
+// `rehearsal`; identity-first-pass.test.ts holds it. Here, stage on the
+// baseline is only shown NOT to write `production`.
+//
 // And the next bullet's first half (D55 (9)): "Identity first: the production
 // pass applies 0081 and commits its DDL, its ledger row and `production` in
 // the same transaction, before any other migration." Its kill-and-rerun half
@@ -21,12 +28,11 @@
 // backend/src/db/supported-releases.ts.
 //
 // EVERY CASE IS THE OPERATOR'S COMMAND, AS A PROCESS. `bun run migrate` runs
-// under a pseudo-terminal (tests/fixtures/releases/release-fixture.ts
-// `migrateAtTerminal`), reading its target from a `$HOME/.env` that holds an
-// `rm_readonly` line and nothing that can migrate, prompting for rm_owner with
-// the real masked prompt and asking the real `y/n`. A refusal is judged by what
-// the terminal showed, the journal the command left beside its receipt, and a
-// database compared before and after — never by a module call.
+// with no terminal (tests/fixtures/releases/release-fixture.ts
+// `runMigrateCommand`), reading its target and its `rm_owner` line from a
+// `$HOME/.env` and its confirmation from `--confirm-target` (D61). A refusal is
+// judged by what the command printed, the journal the command left beside its
+// receipt, and a database compared before and after — never by a module call.
 //
 // WHICH LEDGER IS "v0.5.0's". The gate's text predates the read of
 // production's ledger: production holds v0.5.0's 72 files plus
@@ -63,15 +69,15 @@ import {
   applyAsReleaseRunner,
   loadBaseline,
   loadRelease,
-  migrateAtTerminal,
+  operatorTarget,
   releaseSteps,
   restoreLogins,
   restoreRoles,
   revokeLoginDefaults,
+  runMigrateCommand,
   saveRoles,
+  type MigrateRun,
   type SavedRole,
-  type TerminalRun,
-  type TerminalStep,
 } from "./fixtures/releases/release-fixture.ts";
 import { withTargetLock } from "./support/target-lock.ts";
 
@@ -149,20 +155,26 @@ async function readFingerprint(db: postgres.Sql<{}>): Promise<{ ledger: string[]
   });
 }
 
-async function operator(database: string, rmEnv: string, steps: readonly TerminalStep[]): Promise<TerminalRun> {
-  const run = await migrateAtTerminal({ databaseUrl: urlFor(database), readonlyPassword: READONLY_PASSWORD, rmEnv, steps });
+/** What the operator's ~/.env and argv carry (D61): the rm_owner line, or
+ *  `null` for none; the --confirm-target, exact by default, `null` for none. */
+interface Authority {
+  readonly owner?: string | null;
+  readonly confirm?: string | null;
+}
+
+async function operator(database: string, rmEnv: string, authority: Authority = {}): Promise<MigrateRun> {
+  const run = await runMigrateCommand({
+    databaseUrl: urlFor(database),
+    readonlyPassword: READONLY_PASSWORD,
+    ownerPassword: authority.owner === undefined ? OWNER_PASSWORD : authority.owner,
+    rmEnv,
+    ...(authority.confirm === undefined ? {} : { confirmTarget: authority.confirm }),
+  });
   homes.push(run.home);
   return run;
 }
 
-const PASSWORD_PROMPT = "rm_owner password (not echoed";
-const CONFIRM_PROMPT = "type y to continue";
-const typed = (answer: string): TerminalStep[] => [
-  { await: PASSWORD_PROMPT, send: OWNER_PASSWORD },
-  { await: CONFIRM_PROMPT, send: answer },
-];
-
-function journalOf(run: TerminalRun): MigrateJournalFile {
+function journalOf(run: MigrateRun): MigrateJournalFile {
   const names = readdirSync(run.receiptDir).filter((name) => name.startsWith("migrate-journal-"));
   expect(names.length).toBe(1);
   return JSON.parse(readFileSync(join(run.receiptDir, names[0]!), "utf8")) as MigrateJournalFile;
@@ -171,7 +183,7 @@ function journalOf(run: TerminalRun): MigrateJournalFile {
 /** A refusal, judged the three ways the header names. */
 async function expectRefusedAndUnchanged(
   database: string,
-  run: TerminalRun,
+  run: MigrateRun,
   before: Awaited<ReturnType<typeof fingerprint>>,
   phase: string,
 ): Promise<void> {
@@ -226,8 +238,8 @@ beforeAll(async () => {
     await tablenorow.end({ timeout: 5 });
   }
 
-  // §9.1 step 1, through the provisioning login: rm_owner LOGIN with a password
-  // the operator will type. And the rm_readonly line the host's ~/.env holds.
+  // §9.1 step 1, through the provisioning login: rm_owner LOGIN with the
+  // password the host's ~/.env holds (D61), and the rm_readonly line beside it.
   await admin.unsafe(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
   await admin.unsafe(`ALTER ROLE rm_readonly LOGIN PASSWORD '${READONLY_PASSWORD}'`);
 }, 180_000);
@@ -292,44 +304,41 @@ describe("the baseline is production's state, not only its ledger", () => {
 });
 
 describe("§10 W2 — First production migrate", () => {
-  test("RM_ENV=stage refuses at the gates, before any password is asked for, and changes nothing", async () => {
+  test("RM_ENV=stage never writes `production`: on this state it is the remote rehearsal pass (D61), held here to a wrong target so nothing changes", async () => {
     const before = await fingerprint(DB.exact);
-    const run = await operator(DB.exact, "stage", typed("y"));
-    expect(run.screen).toContain("no deployment_identity row");
-    expect(run.screen).toContain("needs RM_ENV=prod, and this run is RM_ENV=stage");
-    expect(run.screen).not.toContain(PASSWORD_PROMPT);
-    await expectRefusedAndUnchanged(DB.exact, run, before, "gates");
+    const run = await operator(DB.exact, "stage", { confirm: "not-this-target:5432/x" });
+    expect(run.screen).toContain("REMOTE REHEARSAL PASS");
+    expect(run.screen).toContain("writes `rehearsal`");
+    expect(run.screen).not.toContain("FIRST PRODUCTION MIGRATE");
+    await expectRefusedAndUnchanged(DB.exact, run, before, "confirm");
   });
 
   test("a ledger with one file MORE refuses at the gates, naming the extra file, and changes nothing", async () => {
     const before = await fingerprint(DB.more);
-    const run = await operator(DB.more, "prod", typed("y"));
+    const run = await operator(DB.more, "prod");
     expect(run.screen).toContain(`1 extra (${FIRST_UNSHIPPED})`);
-    expect(run.screen).not.toContain(PASSWORD_PROMPT);
     await expectRefusedAndUnchanged(DB.more, run, before, "gates");
   });
 
   test("a ledger with one file LESS (75 names) refuses at the gates, naming the missing file, and changes nothing", async () => {
     const before = await fingerprint(DB.less);
-    const run = await operator(DB.less, "prod", typed("y"));
+    const run = await operator(DB.less, "prod");
     expect(run.screen).toContain(`1 missing (${LAST})`);
-    expect(run.screen).not.toContain(PASSWORD_PROMPT);
     await expectRefusedAndUnchanged(DB.less, run, before, "gates");
   });
 
   test("v0.5.0's pure list refuses at the gates, naming the four files it lacks, and changes nothing", async () => {
     const before = await fingerprint(DB.v050);
-    const run = await operator(DB.v050, "prod", typed("y"));
+    const run = await operator(DB.v050, "prod");
     expect(run.screen).toContain(
       "4 missing (0061_rm_worker_wallet_backfill_grant.sql, 0062_rm_readonly_sequence_select.sql, 0063_swarm_judge_model_default.sql, 0080_analytics_ledger_compaction.sql)",
     );
-    expect(run.screen).not.toContain(PASSWORD_PROMPT);
     await expectRefusedAndUnchanged(DB.v050, run, before, "gates");
   });
 
   test("a ledger with one file RENAMED refuses at the gates, naming both names, and changes nothing", async () => {
     const before = await fingerprint(DB.renamed);
-    const run = await operator(DB.renamed, "prod", typed("y"));
+    const run = await operator(DB.renamed, "prod");
     expect(run.screen).toContain(`1 missing (${LAST})`);
     expect(run.screen).toContain(`1 extra (${RENAMED})`);
     await expectRefusedAndUnchanged(DB.renamed, run, before, "gates");
@@ -340,35 +349,43 @@ describe("§10 W2 — First production migrate", () => {
     // predates 0081, so a table with no row was made out of band; the pass
     // would refuse it under its fence, so the gates refuse it first.
     const before = await fingerprint(DB.tablenorow);
-    const run = await operator(DB.tablenorow, "prod", typed("y"));
+    const run = await operator(DB.tablenorow, "prod");
     expect(run.screen).toContain("deployment_identity exists with no row");
-    expect(run.screen).not.toContain(PASSWORD_PROMPT);
     await expectRefusedAndUnchanged(DB.tablenorow, run, before, "gates");
   });
 
-  test("a missing owner password refuses and changes nothing", async () => {
+  test("D61: a missing rm_owner line in ~/.env refuses, naming the key and the file, and changes nothing", async () => {
     const before = await fingerprint(DB.exact);
-    const run = await operator(DB.exact, "prod", [{ await: PASSWORD_PROMPT, send: "" }]);
-    expect(run.screen).toContain("no rm_owner password entered");
-    expect(run.screen).not.toContain(CONFIRM_PROMPT);
+    const run = await operator(DB.exact, "prod", { owner: null });
+    expect(run.screen).toContain(`${join(run.home, ".env")} has no rm_owner line`);
     await expectRefusedAndUnchanged(DB.exact, run, before, "owner");
   });
 
-  for (const answer of ["n", "yes", "Y", ""]) {
-    test(`the answer ${JSON.stringify(answer)} — anything but y — refuses and changes nothing`, async () => {
+  test("D61: no --confirm-target refuses and changes nothing", async () => {
+    const before = await fingerprint(DB.exact);
+    const run = await operator(DB.exact, "prod", { confirm: null });
+    expect(run.screen).toContain("FIRST PRODUCTION MIGRATE");
+    expect(run.screen).toContain("no --confirm-target was given");
+    await expectRefusedAndUnchanged(DB.exact, run, before, "confirm");
+  });
+
+  for (const wrong of ["db.example.invalid:25060/robotmoney", "UPPER", ""]) {
+    test(`D61: --confirm-target ${JSON.stringify(wrong)} — anything but the exact target — refuses, prints both, and changes nothing`, async () => {
       const before = await fingerprint(DB.exact);
-      const run = await operator(DB.exact, "prod", typed(answer));
-      // The question named what the y would have confirmed.
+      const confirm = wrong === "UPPER" ? operatorTarget(urlFor(DB.exact)).toUpperCase() : wrong;
+      const run = await operator(DB.exact, "prod", { confirm });
+      // The warning named what the flag would have confirmed.
       expect(run.screen).toContain("FIRST PRODUCTION MIGRATE");
       expect(run.screen).toContain(`equals ${TAG}'s ${RELEASE_FILES.length} files`);
-      expect(run.screen).toContain("an explicit y is required");
+      expect(run.screen).toContain(JSON.stringify(operatorTarget(urlFor(DB.exact))));
       await expectRefusedAndUnchanged(DB.exact, run, before, "confirm");
     });
   }
 
-  test("red control: the run itself, reached around the command with no typed y, refuses on a qualifying database", async () => {
-    // `runMigrate` is exported; a caller that skipped `migrateCommand`'s prompt
-    // and `y` would otherwise get the exception from the gates alone.
+  test("red control: the run itself, reached around the command with no confirmation, refuses on a qualifying database", async () => {
+    // `runMigrate` is exported; a caller that skipped `migrateCommand`'s owner
+    // line and `--confirm-target` would otherwise get the exception from the
+    // gates alone.
     const before = await fingerprint(DB.exact);
     const owner = postgres(urlFor(DB.exact, { name: "rm_owner", password: OWNER_PASSWORD }).toString(), {
       max: 1,
@@ -377,17 +394,17 @@ describe("§10 W2 — First production migrate", () => {
     try {
       await expect(
         withTargetLock(urlFor(DB.exact).toString(), (lock) =>
-          runMigrate(owner, { caller: "operator", env: "prod", connection: "remote", nonInteractive: false, lock }),
+          runMigrate(owner, { caller: "operator", env: "prod", connection: "remote", lock }),
         ),
-      ).rejects.toThrow("no operator confirmed it");
+      ).rejects.toThrow("no run confirmed it");
     } finally {
       await owner.end({ timeout: 5 });
     }
     expect(await fingerprint(DB.exact)).toEqual(before);
   });
 
-  test("no row, production's exact observed ledger, RM_ENV=prod, a typed rm_owner and y: migrates once, identity first, and receipts the pre-identity state", async () => {
-    const run = await operator(DB.exact, "prod", typed("y"));
+  test("no row, production's exact observed ledger, RM_ENV=prod, ~/.env's rm_owner and the exact --confirm-target: migrates once, identity first, and receipts the pre-identity state", async () => {
+    const run = await operator(DB.exact, "prod");
     expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-3000) }).toEqual({ code: 0, tail: "" });
     expect(run.screen).not.toContain(OWNER_PASSWORD);
 
@@ -450,7 +467,7 @@ describe("§10 W2 — First production migrate", () => {
   }, 180_000);
 
   test("the next run is an ordinary one: the row exists, so no exception is taken and nothing is pending", async () => {
-    const run = await operator(DB.exact, "prod", typed("y"));
+    const run = await operator(DB.exact, "prod");
     expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-3000) }).toEqual({ code: 0, tail: "" });
     expect(run.screen).not.toContain("FIRST PRODUCTION MIGRATE");
     const receipt = JSON.parse(readFileSync(run.receiptPath, "utf8")) as {
@@ -476,10 +493,9 @@ describe("§10 W2 — First production migrate", () => {
       await owner.end({ timeout: 5 });
     }
     const before = await fingerprint(DB.norow);
-    const run = await operator(DB.norow, "prod", typed("y"));
+    const run = await operator(DB.norow, "prod");
     expect(run.screen).toContain("no deployment_identity row");
     expect(run.screen).toContain("matches none");
-    expect(run.screen).not.toContain(PASSWORD_PROMPT);
     await expectRefusedAndUnchanged(DB.norow, run, before, "gates");
   });
 });

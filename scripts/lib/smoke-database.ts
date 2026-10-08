@@ -15,8 +15,9 @@
 //     provisions the schema; the api gets `rm_app`, the pipeline worker
 //     `rm_worker`, preflight reads through `rm_readonly`.
 //   - the remote database: `~/.env`'s connection values and its `rm_app`,
-//     `rm_worker` and `rm_readonly` passwords. `rm_owner` is typed at the
-//     terminal by the one preparation that needs it and never stored.
+//     `rm_worker` and `rm_readonly` passwords. `rm_owner` is `~/.env`'s
+//     `rm_owner` line (D61), read only by the preparation child that writes as
+//     the owner; no container ever receives it.
 //
 // THE HOST DOES THE DATABASE WORK. Every read and write below runs from the host
 // over a direct connection — the target lock, the identity read, the bootstrap,
@@ -221,7 +222,8 @@ export interface PrepareStep {
     | { readonly source: "home-env"; readonly file: string };
   readonly lock: { readonly backendPid: number; readonly holder: LockHolder };
   readonly stateDir: string;
-  readonly nonInteractive: boolean;
+  /** A remote step's `--confirm-target` (D61). Not a secret. */
+  readonly confirmTarget?: string;
   readonly note?: string;
 }
 
@@ -232,10 +234,9 @@ export type PrepareOutcome =
 /**
  * Run one preparation step in its own HOST process and return its result.
  *
- * The child's stdio is the boot's own, so a remote rm_owner prompt and the
- * `y/n` reach the operator's terminal; it stays in the boot's process group
- * for the same reason (a background process group cannot read the terminal).
- * It ignores the terminal's SIGINT itself (smoke-prepare.ts): a stop lands on
+ * The child's stdio is the boot's own, so its warnings reach the boot's
+ * output. Nothing in it prompts (D61). It stays in the boot's process group
+ * and ignores the terminal's SIGINT itself (smoke-prepare.ts): a stop lands on
  * the boot, which honours it at the next phase boundary, never in the middle
  * of a fenced write. The result comes back through a file in the instance's
  * directory, never through the environment.
@@ -307,16 +308,6 @@ export async function superuserSqlSettled(
     if (error === null || !NOT_UP_YET.test(error) || Date.now() >= deadline) return error;
     await Bun.sleep(500);
   }
-}
-
-/**
- * Whether an operator is at a terminal to answer a remote preparation's
- * rm_owner prompt and its `y/n` (§8.5). Not a TUI decision — `bun smoke` draws
- * none (§1) — only whether a prompt may be asked at all: without a terminal a
- * remote `--migrate` or `--seed` refuses rather than wait on nobody.
- */
-export function operatorTerminal(): boolean {
-  return process.stdin.isTTY === true;
 }
 
 /**

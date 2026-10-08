@@ -68,11 +68,10 @@ function urlFor(database: string): string {
 
 /** The smoke `--migrate` caller against a rehearsal database this file owns.
  *  It runs under the §2 target lock a tool would hold (tests/support/target-lock.ts). */
-const MIGRATE_OPTIONS: MigrateGateOptions & { nonInteractive: boolean } = {
+const MIGRATE_OPTIONS: MigrateGateOptions = {
   caller: "smoke_flag",
   env: "stage",
   connection: "local",
-  nonInteractive: true,
 };
 
 const suffix = crypto.randomUUID().slice(0, 8);

@@ -5,12 +5,13 @@ import { resolveSmokeEnv } from "./smoke-env.ts";
 import { hostname } from "node:os";
 import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { databaseName, homeEnvFilePath, urlForRole } from "./env-role.ts";
+import { confirmTargetField, requireRemoteOwnerPreparation } from "./privileged-env.ts";
 import { ALLOW_INSECURE_FLAG, bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, mintsServiceTokens, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, requestsReuse, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
 import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, missingProdSettingNotes, refuseAllowInsecureOnProd, refuseProdWithoutProjectsSource, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
 import { resolveBackupFiles } from "./restore-container.ts";
 import { resolveDeploymentPolicy, resolveRmEnv } from "./smoke-env-policy.ts";
 import { requireRehearsalTarget } from "./smoke-identity.ts";
-import { dumpOwnershipSql, hostReadTargetState, instanceRolePasswords, localSuperuserSql, operatorTerminal, prepareChildEnv, roleUrl, runPrepareStep, superuserSqlSettled, type HostTarget, type PrepareStep } from "./smoke-database.ts";
+import { dumpOwnershipSql, hostReadTargetState, instanceRolePasswords, localSuperuserSql, prepareChildEnv, roleUrl, runPrepareStep, superuserSqlSettled, type HostTarget, type PrepareStep } from "./smoke-database.ts";
 import { acquireTargetLock, assertStillHeld, readTargetState, type TargetLock, type TargetState } from "../../backend/src/db/target-lock.ts";
 import type { GeneratedRolePasswords } from "./smoke-state.ts";
 import { adoptKeptTwin, assertSmokeTwinIsTarget, bringUpTwin, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration, smokeTwinUrlFromContainer, smokeTwinVolumeName } from "./smoke-twin.ts";
@@ -308,13 +309,15 @@ for (const warning of earlyVerdict.warnings) console.warn(`[smoke] ${warning}`);
 const policy = earlyVerdict.env;
 // §4.3, §8.5: `--migrate` and `--seed` are rehearsal-only and refuse on
 // RM_ENV=prod, whatever the database says — so that refusal needs no database
-// and comes before anything connects, and long before any owner prompt.
+// and comes before anything connects, and long before the owner logs in.
 // `--spoof-keys` (§6.4) joins them: explicit on argv or not requested at all.
 const spoofRequest = spoofKeysRequest(process.argv);
 for (const [requested, preparation] of [[requestsMigrate(process.argv), "migrate"], [shouldSeed(process.argv), "seed"], [spoofRequest.explicit, "spoof-keys"]] as const) {
   const gate = requested && policy === "prod" ? requireRehearsalTarget({ preparation, rmEnv: "prod", identity: "rehearsal", explicitlyRequested: true }) : null;
   if (gate && !gate.allow) fatal(gate.reason);
 }
+// D61: a remote `--migrate` or `--seed` needs `--confirm-target` and `~/.env`'s rm_owner line.
+if (connection === "remote" && (requestsMigrate(process.argv) || shouldSeed(process.argv))) try { requireRemoteOwnerPreparation(homeEnv, homeEnvFilePath(), process.argv.slice(2)); } catch (err) { fatal(err); }
 // §4.4: `--allow-insecure` is explicit, and a refusal under RM_ENV=prod. Refused
 // here, before any credential is minted or container created.
 const allowInsecureRequested = process.argv.includes(ALLOW_INSECURE_FLAG);
@@ -678,9 +681,7 @@ function urlPassword(url: string | undefined): string[] {
  * shape heuristic alone misses a shapeless secret, which is why the VALUES are
  * passed. Role passwords: the instance's saved set (§5, rm_owner's included),
  * the remote database's three from `~/.env`, a restored dump's superuser
- * (added once it is restored). A TYPED owner password never enters this
- * process at all: the preparation child that prompts for it uses it and exits
- * (backend/scripts/smoke-prepare.ts). Service tokens: whatever the instance
+ * (added once it is restored), and `~/.env`'s unused `rm_owner`/`doadmin` (D61). Service tokens: whatever the instance
  * already holds, plus each one `prepare (tokens)` provisions. Participant keys:
  * every credential-file entry's key, bearer and model key.
  */
@@ -689,6 +690,7 @@ const runSecrets: string[] = [
   ...urlPassword(dataPath.kind === "external" ? dataPath.url : undefined),
   ...urlPassword(remote?.readerUrl),
   ...urlPassword(remote?.workerUrl),
+  ...[homeEnv.rm_owner, homeEnv.doadmin].filter((value): value is string => value !== undefined && value !== ""),
   ...(() => {
     if (!existsSync(paths.rolePasswordsFile)) return [];
     try {
@@ -1455,8 +1457,7 @@ async function main(): Promise<void> {
     credentials: remote ? { source: "home-env", file: homeEnvFilePath() } : { source: "instance", stateRoot: statesRoot, instance: instance.name },
     lock: { backendPid: targetLock!.backendPid, holder: targetLock!.holder },
     stateDir: paths.dir,
-    // §5: "No terminal prompt exists in local modes"; a remote run prompts only on a terminal.
-    nonInteractive: !operatorTerminal(),
+    ...(remote ? confirmTargetField(process.argv.slice(2)) : {}), // D61: nothing prompts; held to --confirm-target
     ...(note ? { note } : {}),
   });
   const prepare = async (action: PrepareStep["action"], note?: string): Promise<Record<string, unknown>> => {

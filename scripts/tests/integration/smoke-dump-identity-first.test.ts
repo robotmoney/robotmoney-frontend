@@ -187,7 +187,6 @@ async function rerunStep(h: BootHarness, action: "enroll" | "migrate"): Promise<
       credentials: { source: "instance", stateRoot: h.root, instance: h.instance },
       lock: { backendPid: acquired.lock.backendPid, holder: acquired.lock.holder },
       stateDir: h.paths.dir,
-      nonInteractive: true,
       ...(action === "enroll" ? { note: `--local dump ${dump.stamp}` } : {}),
     };
     return await runPrepareStep(repoRoot, step, { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", RM_SMOKE_STATE_ROOT: h.root });
@@ -383,7 +382,6 @@ describe("pointed at a REMOTE database with no identity table and the baseline l
           credentials: { source: "instance", stateRoot: root, instance },
           lock: { backendPid: acquired.lock.backendPid, holder: acquired.lock.holder },
           stateDir: dir,
-          nonInteractive: true,
           note: "--local dump remote-refusal",
           ...over,
         },
@@ -466,7 +464,6 @@ describe("pointed at a REMOTE database with no identity table and the baseline l
               credentials: { source: "instance", stateRoot: instance.root, instance: instance.name },
               lock: { backendPid: acquired.lock.backendPid, holder: acquired.lock.holder },
               stateDir: instancePaths(instance.root, instance.name).dir,
-              nonInteractive: true,
               note: `--local dump ${dump.stamp}`,
             },
             { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", RM_SMOKE_STATE_ROOT: instance.root },

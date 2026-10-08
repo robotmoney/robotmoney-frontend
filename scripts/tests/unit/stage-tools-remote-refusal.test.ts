@@ -46,7 +46,7 @@ describe("each stage tool refuses a remote target with no identity table, naming
 
   test("migrate-run gates, for the operator and for `--migrate`", async () => {
     for (const caller of ["operator", "smoke_flag"] as const) {
-      const options = { caller, env: "stage", connection: "remote", nonInteractive: true } as unknown as Parameters<typeof checkMigrateGates>[1];
+      const options = { caller, env: "stage", connection: "remote" } as unknown as Parameters<typeof checkMigrateGates>[1];
       const refusals = await checkMigrateGates(dbWithoutIdentityTable() as Parameters<typeof checkMigrateGates>[0], options);
       expect(refusals.length).toBeGreaterThan(0);
       expect(refusals.map((r) => r.message).join(" ")).toContain(PRE_IDENTITY_TWIN_RUNBOOK);
