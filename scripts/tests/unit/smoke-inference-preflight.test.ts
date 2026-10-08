@@ -75,6 +75,37 @@ describe("the standing stack resolves its credential from all three sources", ()
   });
 });
 
+describe("an agent-run boot (D61, env -i) proves the participants' own model key", () => {
+  const FAKE_CREDENTIAL_KEY = "sk-not-a-real-key-credential";
+  const withCredential = (env: Record<string, string | undefined>) => {
+    const logged: string[] = [];
+    const composeEnv = preflightInference({
+      standingStack: true, repoRoot: root, env, log: (m) => logged.push(m),
+      credentialModelKey: () => ({ key: FAKE_CREDENTIAL_KEY, source: "the credential file's agents.athena.modelKey" }),
+    });
+    return { composeEnv, logged, env };
+  };
+
+  test("with no host-wide key, the credential file's modelKey is used, and its value is never printed", () => {
+    const { composeEnv, logged } = withCredential({ AGENT_MODEL: "deepseek", RM_ENV: "prod" });
+    expect(composeEnv[ZEN_KEY_ENV]).toBe(FAKE_CREDENTIAL_KEY);
+    expect(logged.join("\n")).toContain("agents.athena.modelKey");
+    expect(logged.join("\n")).not.toContain(FAKE_CREDENTIAL_KEY);
+  });
+
+  test("a host-wide key still wins over the credential file", () => {
+    expect(withCredential({ [ZEN_KEY_ENV]: FAKE_KEY, AGENT_MODEL: "deepseek", RM_ENV: "prod" }).composeEnv[ZEN_KEY_ENV]).toBe(FAKE_KEY);
+  });
+
+  test("red control: no host-wide key and no credential key still refuses, naming the credential file", () => {
+    let thrown: unknown;
+    try {
+      preflightInference({ standingStack: true, repoRoot: root, env: { AGENT_MODEL: "deepseek", RM_ENV: "prod" }, log: () => {}, credentialModelKey: () => null });
+    } catch (err) { thrown = err; }
+    expect(String((thrown as Error)?.message ?? "")).toContain("RM_CREDENTIALS");
+  });
+});
+
 describe("the standing stack refuses to boot rather than produce nothing", () => {
   test("no credential anywhere: the refusal names all three places", () => {
     let thrown: unknown;

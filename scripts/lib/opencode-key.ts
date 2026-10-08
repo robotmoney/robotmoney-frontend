@@ -101,6 +101,7 @@ export type ZenCredential = { key: string; source: string } | { error: string };
 export function resolveStackZenKey(
   repoRoot: string,
   env: Record<string, string | undefined> = process.env,
+  credentialModelKey: () => { key: string; source: string } | null = () => null,
 ): ZenCredential {
   const fromEnv = env[ZEN_KEY_ENV]?.trim();
   if (fromEnv) return { key: fromEnv, source: "process environment" };
@@ -108,10 +109,16 @@ export function resolveStackZenKey(
     const found = readDotenvKey(join(repoRoot, file), ZEN_KEY_ENV);
     if (found) return { key: found, source: `./${file}` };
   }
+  // D61: an agent-run boot (`env -i`, no checkout .env) holds no host-wide key.
+  // The participants' own model key, from the credential file, is the key the
+  // stack will actually spend, so it is the one the preflight should prove.
+  const fromCredentials = credentialModelKey();
+  if (fromCredentials) return fromCredentials;
   return {
     error:
       `${ZEN_KEY_ENV} is not set, so this stack cannot reach a funded model. It is read from the ` +
-      `process environment, then ./${ENV_FILE}, then ./${READONLY_ENV_FILE} — add it to one of them ` +
+      `process environment, then ./${ENV_FILE}, then ./${READONLY_ENV_FILE}, then a participant's modelKey in ` +
+      `the credential file (RM_CREDENTIALS) — add it to one of them ` +
       "and boot again. Do NOT work around this with AGENT_MODEL=free: the keyless free family is " +
       "disqualified for acceptance (AC-MODEL-01), and a stack that publishes free-tier or " +
       "model_unconfigured judgements produces no evidence at all.",

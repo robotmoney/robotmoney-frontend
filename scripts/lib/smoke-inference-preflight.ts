@@ -61,6 +61,8 @@ export interface InferencePreflightOptions {
   /** Mutated in place on success — the stack's compose env is built from it. */
   env: Record<string, string | undefined>;
   log?: (m: string) => void;
+  /** A participant's modelKey from the credential file, when one is configured (D61). */
+  credentialModelKey?: () => { key: string; source: string } | null;
 }
 
 /**
@@ -83,9 +85,9 @@ export function preflightInference(opts: InferencePreflightOptions): Record<stri
   const log = opts.log ?? ((m: string) => console.log(m));
   const composeEnv: Record<string, string> = {};
   if (opts.standingStack) {
-    const zen = resolveStackZenKey(opts.repoRoot, opts.env);
+    const zen = resolveStackZenKey(opts.repoRoot, opts.env, opts.credentialModelKey);
     if ("error" in zen) throw new Error(zen.error);
-    // The VALUE is never printed — only which of the three places held it.
+    // The VALUE is never printed — only which place held it.
     log(`[smoke] inference credential: ${ZEN_KEY_ENV} from ${zen.source}`);
     opts.env[ZEN_KEY_ENV] = zen.key;
     composeEnv[ZEN_KEY_ENV] = zen.key;
