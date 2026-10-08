@@ -460,9 +460,10 @@ describe("env rewrite key partition (R6.2)", () => {
     const p = partitionEnv("host=h\ndatabase=d\nrm_readonly=r\n");
     expect(p.missingRequired).toEqual(["rm_owner", "doadmin", "RM_CREDENTIALS"]);
   });
-  test("the D61 allowlist is preflight check 4's list plus rm_owner and doadmin", () => {
-    for (const k of ENV_FILE_ALLOWED_KEYS) expect(D61_ENV_ALLOWLIST).toContain(k);
-    expect(D61_ENV_ALLOWLIST.filter((k) => !ENV_FILE_ALLOWED_KEYS.includes(k)).sort()).toEqual(["doadmin", "rm_owner"]);
+  test("the D61 allowlist is exactly preflight check 4's list, which holds rm_owner and doadmin", () => {
+    expect([...D61_ENV_ALLOWLIST].sort()).toEqual([...ENV_FILE_ALLOWED_KEYS].sort());
+    expect(D61_ENV_ALLOWLIST).toContain("rm_owner");
+    expect(D61_ENV_ALLOWLIST).toContain("doadmin");
   });
   test("the confirm target is host:port/database from ~/.env", () => {
     expect(confirmTargetOf({ host: "h", port: "25060", database: "d" })).toBe("h:25060/d");

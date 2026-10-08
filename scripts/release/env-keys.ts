@@ -1,10 +1,11 @@
 // scripts/release/env-keys.ts — the D61 `~/.env` allowlist and the target a
 // host's `~/.env` names.
 //
-// D61 adds `rm_owner` and `doadmin` to the keys spec §3 allows (preflight
-// check 4's ENV_FILE_ALLOWED_KEYS in backend/src/db/preflight.ts). The release
-// runner's env rewrite (R6.2) and host guard (R7.7) use this list.
-// scripts/tests/unit/release-run.test.ts pins it as a superset of check 4's.
+// The keys spec §3 allows, with D61's `rm_owner` and `doadmin`: a copy of
+// preflight check 4's ENV_FILE_ALLOWED_KEYS (backend/src/db/preflight.ts), kept
+// literal so the runner reads it before `bun install`. The release runner's env
+// rewrite (R6.2) and host guard (R7.7) use it.
+// scripts/tests/unit/release-run.test.ts pins it equal to check 4's list.
 //
 // Pure: no file read, no environment read.
 import { databaseName } from "../lib/env-role.ts";
