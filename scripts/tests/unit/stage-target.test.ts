@@ -195,12 +195,13 @@ describe("role DDL from the captured globals", () => {
 });
 
 describe("the checks", () => {
-  test("role shape: production's pre-cutover rows pass; a superuser doadmin or a LOGIN rm_owner fails", () => {
+  test("role shape: production's pre-cutover rows pass; a superuser doadmin fails; rm_owner may be either", () => {
     const rows = ["doadmin|f|t|t|t|t", "rm_app|f|f|f|t|t", "rm_owner|f|f|f|f|t", "rm_readonly|f|f|f|t|t", "rm_worker|f|f|f|t|t"].join("\n");
     const admin = "rm_app\nrm_owner\nrm_readonly\nrm_worker\n";
     expect(roleShapeProblems(rows, admin)).toEqual([]);
     expect(roleShapeProblems(rows.replace("doadmin|f", "doadmin|t"), admin)).toEqual(["doadmin rolsuper=true, production has false"]);
-    expect(roleShapeProblems(rows.replace("rm_owner|f|f|f|f", "rm_owner|f|f|f|t"), admin)).toEqual(["rm_owner rolcanlogin=true, production has false"]);
+    // role-passwords makes production's rm_owner LOGIN before its dump.
+    expect(roleShapeProblems(rows.replace("rm_owner|f|f|f|f", "rm_owner|f|f|f|t"), admin)).toEqual([]);
     expect(roleShapeProblems(rows, "rm_app\n")).toHaveLength(3);
   });
 
@@ -208,6 +209,7 @@ describe("the checks", () => {
     const baseline = ["0001_a.sql", "0002_b.sql"];
     const ok = { ledger: "2", identity_table: "none", rm_owner_login: "false", doadmin_super: "false", doadmin_createrole: "true", ssl: "on" };
     expect(precutoverProblems(ok, baseline, baseline)).toEqual([]);
+    expect(precutoverProblems({ ...ok, rm_owner_login: "true" }, baseline, baseline)).toEqual([]);
     expect(precutoverProblems({ ...ok, identity_table: "deployment_identity" }, baseline, baseline)).toHaveLength(1);
     expect(precutoverProblems({ ...ok, ledger: "3" }, [...baseline, "0081_deployment_identity.sql"], baseline)).toHaveLength(2);
   });

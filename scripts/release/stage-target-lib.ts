@@ -338,7 +338,9 @@ export function doadminPasswordSql(password: string): string {
 /** The shape production holds before the cutover, checked after every build. */
 export const EXPECTED_ROLE_SHAPE = {
   doadmin: { super: false, createrole: true, createdb: true, login: true },
-  rm_owner: { super: false, createrole: false, createdb: false, login: false },
+  // Either: NOLOGIN since 0053, or LOGIN once `role-passwords` ran on production
+  // before its dump (2026-10-08). The restored globals carry production's value.
+  rm_owner: { super: false, createrole: false, createdb: false, login: null },
   rm_app: { super: false, createrole: false, createdb: false, login: true },
   rm_worker: { super: false, createrole: false, createdb: false, login: true },
   rm_readonly: { super: false, createrole: false, createdb: false, login: true },
@@ -375,7 +377,7 @@ export function roleShapeProblems(rows: string, adminOver: string): string[] {
     if (sup !== want.super) problems.push(`${role} rolsuper=${sup}, production has ${want.super}`);
     if (createrole !== want.createrole) problems.push(`${role} rolcreaterole=${createrole}, production has ${want.createrole}`);
     if (createdb !== want.createdb) problems.push(`${role} rolcreatedb=${createdb}, production has ${want.createdb}`);
-    if (login !== want.login) problems.push(`${role} rolcanlogin=${login}, production has ${want.login}`);
+    if (want.login !== null && login !== want.login) problems.push(`${role} rolcanlogin=${login}, production has ${want.login}`);
     if (!hasPassword) problems.push(`${role} has no password`);
   }
   const admin = new Set(adminOver.split("\n").map((r) => r.trim()).filter(Boolean));
@@ -667,7 +669,7 @@ export function precutoverProblems(state: Record<string, string>, ledger: readon
   for (const f of baseline) if (!have.has(f)) problems.push(`ledger lacks ${f}`);
   for (const f of ledger) if (!want.has(f)) problems.push(`ledger has ${f}, which the baseline does not`);
   if (state.identity_table !== "none") problems.push(`deployment_identity exists (${state.identity_table}); production has none before the cutover`);
-  if (state.rm_owner_login !== "false") problems.push(`rm_owner rolcanlogin=${state.rm_owner_login}; production's is false`);
+  if (state.rm_owner_login !== "false" && state.rm_owner_login !== "true") problems.push(`rm_owner rolcanlogin=${state.rm_owner_login}; production's is false, or true once role-passwords ran`);
   if (state.doadmin_super !== "false") problems.push(`doadmin rolsuper=${state.doadmin_super}; production's is false`);
   if (state.doadmin_createrole !== "true") problems.push(`doadmin rolcreaterole=${state.doadmin_createrole}; production's is true`);
   if (state.ssl !== "on") problems.push(`ssl=${state.ssl}; production requires TLS`);

@@ -387,8 +387,10 @@ function checkDatabase(passwords: Record<GeneratedPasswordRole, string>, baselin
     const r = hostPsql(role, passwords[role], "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid();");
     if (r.code !== 0 || r.stdout.trim() !== "t") problems.push(`${role} cannot log in over TLS from the host (${r.stderr.trim().split("\n")[0] ?? ""})`);
   }
-  const owner = hostPsql("rm_owner", passwords.rm_owner, "SELECT 1;");
-  if (owner.code === 0) problems.push("rm_owner logged in; production's rm_owner is NOLOGIN");
+  if (state.rm_owner_login === "false") {
+    const owner = hostPsql("rm_owner", passwords.rm_owner, "SELECT 1;");
+    if (owner.code === 0) problems.push("rm_owner logged in; production's rm_owner is NOLOGIN");
+  }
   const su = run(["psql", "-X", "-At", `host=${T.pgBindHost} port=${T.pgPort} dbname=${T.database} user=${T.superuser} sslmode=require connect_timeout=5`, "-c", "SELECT 1"], { env: { PGPASSWORD: "x" } });
   if (su.code === 0) problems.push("the container superuser logged in over the network");
   const plain = run(["psql", "-X", "-At", `host=${T.pgBindHost} port=${T.pgPort} dbname=${T.database} user=rm_app sslmode=disable connect_timeout=5`, "-c", "SELECT 1"], { env: { PGPASSWORD: passwords.rm_app } });

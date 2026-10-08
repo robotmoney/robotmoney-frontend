@@ -42,8 +42,9 @@ It builds these pieces, in order:
 4. **Roles.** The tool reads the roles from the dump's own globals file. It keeps
    every role that is not a superuser, with DigitalOcean's exact attribute line.
    `doadmin` is `LOGIN CREATEROLE CREATEDB`, never a superuser. It holds ADMIN over
-   `rm_owner`, `rm_app`, `rm_worker` and `rm_readonly`. `rm_owner` is `NOLOGIN` and
-   has a password nobody keeps. The tool generates every password on the host.
+   `rm_owner`, `rm_app`, `rm_worker` and `rm_readonly`. `rm_owner` carries
+   production's login attribute: `NOLOGIN` before `role-passwords` ever ran on
+   production, `LOGIN` after (production, 2026-10-08). The check accepts either. The tool generates every password on the host.
    It holds the `doadmin` password in memory for the checks and then drops it:
    doadmin is stored in no file ([D61](../decisions.md), owner 2026-10-08).
 5. **Owners and grants.** The capture carries no owners and no grants. So the tool
