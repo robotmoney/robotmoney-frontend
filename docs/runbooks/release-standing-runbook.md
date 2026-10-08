@@ -78,7 +78,7 @@ never rewritten (owner 2026-10-07): when the session needs a new base, cut a new
 | SR.5 | Interruption at a phase boundary resumes, before and after replace | release runbook R3.6 | stage | manual |
 | SR.6 | Rollback rehearsal: restore time recorded, and the old code's behavior against the new schema recorded | release runbook R3.9 | stage | manual |
 | SR.7 | Cumulative standing invariants (the 0.5.x R8 list, section 7) | `bun run soak:checks --instance NAME --since T0 --full` (`--record` once at READY) | stage | script |
-| SR.10 | Cutover rehearsal: the production step list runs unmodified and unattended against the production-shaped stage target (D61), twice, each from a dump under 24 hours old (SR.0). A release runbook may record an owner exception to the count (v0.6.0: one run) | `bun run release:run --target stage` | stage | gap, issue agent-executed runbooks (1225) |
+| SR.10 | Cutover rehearsal: the production step list runs unmodified and unattended against the production-shaped stage target (D61), once, from a dump under 24 hours old (SR.0) (the standing rule since 2026-10-08; a release runbook may ask for more) | `bun run release:run --target stage` | stage | gap, issue agent-executed runbooks (1225) |
 | SR.8 | Rehearsal report: RC SHA, dump identity, plan id, receipts, results, what could not be covered, operator go/no-go | policy 4.5 | stage | manual |
 
 ## 5. Phase C, V, W — cutover, verification, watch

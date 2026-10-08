@@ -20,8 +20,8 @@ This runbook runs **every check in [`release-standing-runbook.md`](./release-sta
 as it stands at `d84f4a2c`. It adds the 0.6.0-specific checks below. It cites standing checks by ID.
 **Exceptions** (owner, 2026-10-08): SP.6 and SV.5 for the published AUM figure, and SW.2 over the
 watch window. v0.6.0 ships with those rows unscripted. Issue agent-executed runbooks (1225) brings
-them back as runner steps. Two more owner exceptions, also 2026-10-08: v0.6.0 gets **one** stage
-rehearsal, not two (SR.10), and the stage watch is a **15-minute check with sessions deferred**.
+them back as runner steps. One more owner exception, also 2026-10-08: the stage watch is a **15-minute check with sessions deferred**.
+SR.10 is one stage rehearsal from a dump under 24 hours old (SR.0), the standing rule since 2026-10-08.
 Production's W1 is therefore the first full session proof (section 7.2). The twin is **not** waived: the owner chose a short twin rerun at the
 release commit (section 7.3).
 
@@ -39,7 +39,7 @@ Each standing ID maps to the runner steps that satisfy it (the `standing` field 
 | SP.8 prod runs only what stage passed | the runner's start check | `--stage-journal` names a passed stage run |
 | SR.0 dump | R2.1 | Production's backup: a new dated directory every run. The stage target starts from the newest dump under 24 hours old |
 | SR.1 twin boots, every member seated | none | The short twin rerun (section 7.3), required for v0.6.0 |
-| SR.2 readiness | R6.7b, R6.9, R7.2 on the stage target | |
+| SR.2 readiness | R6.7b, R6.9 on the stage target | |
 | SR.3 product verification | R7.3 on the stage target | Readonly tier. The full tier runs on the short twin rerun (section 7.3) |
 | SR.4 log gate on stage | W1 on the stage target | `prod:gate --mode post-release` since READY. `twin:gate` runs on the optional twin only |
 | SR.5 interruption resumes | the runner's resume (`--run`, `--from`) | Evidence of 2026-10-06 and 2026-10-07 stands (section 7.4) |
@@ -47,12 +47,12 @@ Each standing ID maps to the runner steps that satisfy it (the `standing` field 
 | SR.7 standing invariants | R7.3b on the stage target | |
 | SR.8 rehearsal report | the passed stage journal | Section 7.2 |
 | SR.9 accelerated schedule | none | The short twin rerun (section 7.3), required for v0.6.0. The stage target keeps 6 h epochs |
-| SR.10 cutover rehearsal, twice | one stage run, all steps | Owner exception for v0.6.0: one run, not two (section 7) |
+| SR.10 cutover rehearsal | one stage run, all steps | Section 7 |
 | SC.1 recovery matrix signed | the go file's `recovery:` key | Section 8 |
 | SC.2 | retired 2026-10-08 (D61) | |
 | SC.3 operator's go recorded | the go file | Section 4 |
 | SV.1 identity | R7.1 | |
-| SV.2 status receipt | R6.7b, R6.9, R7.2 | |
+| SV.2 status receipt | R6.7b, R6.9 | R7.2 was a third `smoke:status` 9 s after R6.9; dropped 2026-10-08 |
 | SV.3 product verification, readonly | R7.3 | |
 | SV.4 log verdict after release | R7.3a | |
 | SV.5 counts only grow | R7.5 | The published AUM figure: owner exception for v0.6.0 |
@@ -65,8 +65,6 @@ Gaps against the standing runbook, each decided by the owner on 2026-10-08:
 
 - **AUM (SP.6, SV.5).** No step records or compares the published AUM figure. Recorded exception.
 - **SW.2 over the window.** R7.3b runs `soak:checks` at READY. No step reruns it at the watch. Recorded exception.
-- **One stage rehearsal (SR.10).** The standing rule asks for two runs, each from a fresh dump. v0.6.0
-  runs one. Recorded exception.
 - **Short stage watch (SW.1 on stage).** `stage.json` sets `watchHours: 0.25` and
   `watchSessions: deferred`. W1 runs `prod:gate --sessions deferred`, so it skips check 7. R7.4a
   checks the 6 h epochs, the regime cron, the parity sweep, and that no in-flight session vanished or
@@ -261,14 +259,18 @@ target file's `confirmTarget`. R1.2 refuses a value that differs from what `~/.e
 
 The owner writes the go only when all of these hold:
 
+- `bun run release:run --target prod --preflight --triage <triage file>` is green apart from the
+  pending go ([`release-run.md`](./release-run.md#the-preflight)). That one command is the R0
+  evidence: CI green on the commit with every required workflow, the commit on origin, a passed
+  stage run of this step list at this commit (SP.8), no run in flight, no live release checkout,
+  and R1.1 to R2.5 green on production without changing anything a running service uses.
 - B1–B27 each closed, with the decision written in the tracking issue.
 - `release:v0.6.0` tracking issue exists, scope frozen, Phases complete (policy §6).
-- The QA commits the owner picked are merged into `releases-0.6.x` (policy §4.6 step 5). The go's
-  commit's tree is the tree that passed stage.
-- CI on the go's commit is green: `e2e`, `unit`, `backend`, `integration`, `contract`,
-  `web-client`, `repo-guards`, `docs-lint` (standing SP.7).
-- Two stage runs passed (section 7). The prod run names the second one.
-- The recovery matrix (section 8) is signed. The window and the maximum write loss are named in it.
+- The QA commits the owner picked are merged into `releases-0.6.x` (policy §4.6 step 5). The go
+  names the commit the stage run passed at.
+- The recovery matrix (section 8) is signed. The window, its ceiling and the maximum write loss are
+  named in it. Stage measured 149 s from R6.1 to R6.9 (`downtimeSeconds` in the journal).
+
 
 The go file lives on the control machine. Its format is in [`release-run.md`](./release-run.md#the-go-file):
 
@@ -339,10 +341,9 @@ production dump, DigitalOcean's role shape, a `~/.env` with production's key nam
 legacy v0.5.4 stack running against it the way production runs it. The runner runs production's
 step list against it unmodified (D61 rule 2). Only `scripts/release/targets/stage.json` differs.
 
-### 7.1 The run, once (standing SR.10, owner exception for v0.6.0)
+### 7.1 The run, once (standing SR.10)
 
-Everything runs from the control machine. Run this sequence once, from a dump under 24 hours old. The standing rule
-asks for two runs. The owner decided on 2026-10-08 that v0.6.0 gets one.
+Everything runs from the control machine. Run this sequence once, from a dump under 24 hours old.
 
 1. **Pick the dump.** Use the newest production dump on stage-2 if it is under 24 hours old (owner, 2026-10-08).
    Capture one only when none is: [`stage-target.md`](./stage-target.md#rebuild-it-for-each-rehearsal) step 1
@@ -360,7 +361,7 @@ asks for two runs. The owner decided on 2026-10-08 that v0.6.0 gets one.
 3. **Run the release** against it:
 
    ```bash
-   bun run release:run --target stage --dry-run
+   bun run release:run --target stage --preflight
    bun run release:run --target stage --go <stage go file> --triage <triage file>
    ```
 
@@ -436,6 +437,9 @@ These checks ran on the twin and are not repeated by the runner:
 
 The go's `recovery:` key names the signed copy of this matrix. The journal records its sha256.
 
+The window, R6.1 to R6.9, measured 149 s on stage. Its ceiling for the go is 300 s. Every step has a
+bound (`maxMinutes`), so a hung step fails instead of hanging the window open.
+
 | Where it stops | State | Recovery |
 |---|---|---|
 | Before R6.1 | Nothing changed | Fix and resume the run (`--run <run-ts> --from <step>`) |
@@ -455,9 +459,12 @@ write loss it implies. Do not delete history rows to tidy a failed run (append-o
 Run from the control machine, at the go's commit, with a clean checkout:
 
 ```bash
-bun run release:run --target prod --go <go file> --dry-run
-bun run release:run --target prod --go <go file> --triage <triage file> --stage-journal <passed stage journal dir>
+bun run release:run --target prod --preflight [--go <go file>] --triage <triage file>
+bun run release:run --target prod --go <go file> --triage <triage file> --stage-journal <passed stage journal dir> --after-preflight <green preflight dir>
 ```
+
+`--after-preflight` continues from a preflight ended within the hour: one dump, and the run starts
+at R5.rc. Without it the run repeats R1.1 to R2.5.
 
 The runner prints the plan: target, commit, step-list hash and every remote command. It refuses to
 start unless the stage journal has the same hash and commit with every step ok (SP.8). It stops at
@@ -489,7 +496,7 @@ The journal is under `~/.local/state/robotmoney-release/prod/<run-ts>/`. Each st
 | R6.7b | `smoke:status` after boot 1 | no | stdout: every service ready |
 | R6.7c | `prod-init rebind-members`: the one-time credential migration. The in-house members move from fixture keys to `credential.json`. No external member is rebound | **yes**: one-way, old keys stop at once | `rebind-members-*.json`: the in-house members rebound, no external one |
 | R6.7d | Boot 2: a new plan, never a resume, because the rebind changed the key fingerprints. Recreates the participants on the new bearers | no | stdout: a new plan id, participants ready |
-| R6.9 | `smoke:status` after boot 2. Its end is READY, the start of the 10 h watch | no | stdout: the receipt as history, the daemon as now |
+| R6.9 | `smoke:status` after boot 2. Its end is READY, the start of the 10 h watch, the end of the downtime window | no | stdout: the receipt as history, the daemon as now |
 | R6.10 | `bun smoke:web`: the site, after the api is in range. Restarts no api or worker | no | stdout: the site's `apiRange` accepted |
 
 The rebind (R6.7c) runs **once, at this cutover**. It is spec §9.1 step 6, never part of `bun smoke`
@@ -504,7 +511,6 @@ If preflight refuses at R6.7a or R6.7d, the printed check number names the cause
 | Step | Does | Irreversible | Read in the receipt |
 |---|---|---|---|
 | R7.1 | `identity-check.ts`: `/api/version` and `/version.json` at `https://robotmoney.network` carry the commit (the site's short stamp accepted). No `+dirty` or `+unknown` | no | `identity-check.json` |
-| R7.2 | `smoke:status`: preflight green; readiness green for `api`, the pipeline worker, `analytics-producer` (seed done) and the scheduler (authenticated, stream synced, every active subject holding a `collecting` session) | no | stdout |
 | R7.3 | `verify:live`, **readonly tier only** | no | `R7.verify` receipt: exit 0 pass, 1 wrong, 2 nothing asserted. A WARN is not a pass. List what it could not exercise |
 | R7.3a | `prod:gate --mode post-release --defer-sessions`: nothing new is unclassified. Sessions are graded later at W1 | no | `prod-gate-post-release.md`. Compare with R2.5. The 402 and the 404 must not recur |
 | R7.3b | `soak:checks --record` at READY, then `--full` | no | `soak-record.md`, `soak-full.md`: 0 FAIL. Read every WARN. R8.u lists slow api requests (the 5 s line) |

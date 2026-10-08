@@ -26,7 +26,11 @@ import { checkResume, checkStageJournal, runStatus, selectSteps, type RunJournal
 import { lineScrubber, scrubSecrets, forbiddenReceiptPath } from "../../release/scrub.ts";
 import { REMOTE_PATH, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
 import { CONFIRM_TARGET_PLACEHOLDER, loadTarget, validateTarget } from "../../release/target.ts";
-import { COMMIT_FROM_GO, parseArgs, receiptPathsInOutput, runRelease, type RunnerDeps } from "../../release/run.ts";
+import { parseArgs, receiptPathsInOutput, runRelease, type RunnerDeps } from "../../release/run.ts";
+import { checkAfterPreflight, ciProblems, laneOf, preflightOrder, preflightSteps, REQUIRED_CI, type PreflightReport } from "../../release/preflight.ts";
+import { TIMED_OUT } from "../../release/step-exec.ts";
+import { downtimeSeconds, skipReason } from "../../release/run.ts";
+import { DEFAULT_MAX_MINUTES, maxMillisOf } from "../../release/steps.ts";
 import { partitionEnv } from "../../release/env-rewrite.ts";
 import { compareBaseline } from "../../release/compare-baseline.ts";
 import { exposesPostgresUrl, keysOutsideAllowlist, othersCanTraverse, scanForPostgresUrls, socketMounts, tokenFileProblems } from "../../release/host-guards.ts";
@@ -330,7 +334,17 @@ function fixture(rmEnv: "stage" | "prod" = "stage", overrides: Record<string, un
   return { dir, targetFile, goFile, journalRoot: join(dir, "journal") };
 }
 
-function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string } = {}) {
+/** What the control machine and the live-checkout probe answer in a preflight, by command fragment. */
+const GREEN_CI = REQUIRED_CI.map((n) => `${n}\tcompleted\tsuccess`).join("\n");
+const PREFLIGHT_ANSWERS: Record<string, { code: number; stdout: string }> = {
+  "git rev-parse HEAD": { code: 0, stdout: `${SHA}\n` },
+  "git status --porcelain": { code: 0, stdout: "" },
+  "git branch -r --contains": { code: 0, stdout: "  origin/releases-0.6.x\n" },
+  "gh api": { code: 0, stdout: `${GREEN_CI}\n` },
+  "docker ps -q": { code: 0, stdout: "0\n" },
+};
+
+function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string; answers?: Record<string, { code: number; stdout: string }> } = {}) {
   const ran: string[] = [];
   const logs: string[] = [];
   const deps: RunnerDeps = {
@@ -346,6 +360,9 @@ function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string } =
     async collect(_host, remote) {
       if (remote.startsWith("find ")) return { code: 0, stdout: opts.receipt === undefined ? "" : "/remote/r/receipt.json\n" };
       if (remote.startsWith("cat ")) return { code: 0, stdout: opts.receipt ?? "" };
+      const answers = { ...PREFLIGHT_ANSWERS, ...opts.answers };
+      const hit = Object.keys(answers).find((k) => remote.includes(k));
+      if (hit !== undefined) return answers[hit]!;
       return { code: 1, stdout: "" };
     },
     readText: (p) => { try { return readFileSync(p, "utf8"); } catch { return undefined; } },
@@ -358,7 +375,7 @@ function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string } =
 }
 
 describe("runRelease", () => {
-  test("refuses without a go file, and with a go for another target; --dry-run needs none", async () => {
+  test("refuses without a go file, and with a go for another target; --preflight needs none", async () => {
     const f = fixture();
     const a = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(2);
@@ -369,25 +386,27 @@ describe("runRelease", () => {
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], b.deps, TINY)).toBe(2);
     expect(b.ran).toEqual([]);
     const c = fakeDeps();
-    expect(await runRelease(["--target", f.targetFile, "--dry-run"], c.deps, TINY)).toBe(0);
-    expect(c.ran).toEqual([]);
-    expect(c.logs.join("\n")).toContain("ssh -T rm-frontend-stage-2");
+    expect(await runRelease(["--target", f.targetFile, "--preflight", "--journal-root", f.journalRoot], c.deps, TINY)).toBe(0);
+    expect(c.ran).toEqual(["T1"]);
+    expect(c.logs.join("\n")).toMatch(/PENDING\s+P\.go/);
   });
 
-  test("the go's commit is rendered into every {commit}; a dry run without a go renders the placeholder", async () => {
+  test("the go's commit is rendered into every {commit}; a preflight without a go uses the control checkout's HEAD", async () => {
     const CHECKOUT: StepTemplate[] = [
       { id: "C1", standing: [], description: "detach", host: "target", cmds: [["checkout", "--detach", "{commit}"]], expectExit: 0, receipts: [], irreversible: false },
     ];
     const f = fixture();
+    const seen: string[] = [];
     const a = fakeDeps();
-    expect(await runRelease(["--target", f.targetFile, "--dry-run"], a.deps, CHECKOUT)).toBe(0);
-    expect(a.logs.join("\n")).toContain(`--detach ${COMMIT_FROM_GO}`);
-    expect(a.logs.join("\n").split("\n").filter((l) => l.includes("--detach")).join()).not.toMatch(/[0-9a-f]{40}/);
+    const exec = a.deps.exec;
+    a.deps.exec = async (h, r, o, e) => { seen.push(r); return exec(h, r, o, e); };
+    expect(await runRelease(["--target", f.targetFile, "--dry-run", "--journal-root", f.journalRoot], a.deps, CHECKOUT)).toBe(0);
+    expect(seen.join()).toContain(`--detach ${SHA}`);
     writeFileSync(f.goFile, `release: v0.6.0\ncommit: ${OTHER_SHA}\ntarget: stage\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
+    // A go naming another commit than the control checkout's HEAD is red: the printed step list is not that commit's.
     const b = fakeDeps();
-    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--dry-run"], b.deps, CHECKOUT)).toBe(0);
-    expect(b.logs.join("\n")).toContain(`--detach ${OTHER_SHA}`);
-    expect(b.logs.join("\n")).not.toContain(COMMIT_FROM_GO);
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--preflight", "--journal-root", f.journalRoot], b.deps, CHECKOUT)).toBe(2);
+    expect(b.logs.join("\n")).toMatch(/RED\s+P\.commit/);
     // A live run journals the go's commit.
     const c = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], c.deps, CHECKOUT)).toBe(0);
@@ -944,5 +963,264 @@ describe("the cutover's ~/.env keys are proven at R1.2, before the first irrever
       expect(x.receipt).toContain(`"ownerLogin": "failed"`);
       clean(x);
     }, 60_000);
+  });
+});
+
+// ── the preflight (--preflight, alias --dry-run): every check green, nothing live changes ──
+describe("preflight", () => {
+  const LANES: StepTemplate[] = [
+    { id: "A1", standing: [], description: "target one", host: "target", cmds: [["echo", "A1"]], expectExit: 0, receipts: [], irreversible: false },
+    { id: "A2", standing: [], description: "target two", host: "target", cmds: [["echo", "A2"]], expectExit: 0, receipts: [], irreversible: false },
+    { id: "B1", standing: [], description: "capture", host: "capture", cmds: [["echo", "B1"]], expectExit: 0, receipts: [], irreversible: false },
+    { id: "L1", standing: [], description: "legacy gate", host: "target", checkout: "legacy", cmds: [["echo", "L1"]], expectExit: 0, receipts: [], irreversible: false },
+    { id: "K1", standing: [], description: "tag", host: "control", cmds: [["echo", "K1"]], expectExit: 0, receipts: [], irreversible: false },
+    { id: "X1", standing: [], description: "cutover", host: "target", cmds: [["echo", "X1"]], expectExit: 0, receipts: [], irreversible: true },
+    { id: "A3", standing: [], description: "after", host: "target", cmds: [["echo", "A3"]], expectExit: 0, receipts: [], irreversible: false },
+  ];
+  const preflight = (f: ReturnType<typeof fixture>, deps: RunnerDeps, extra: string[] = [], steps = LANES) =>
+    runRelease(["--target", f.targetFile, "--preflight", "--journal-root", f.journalRoot, ...extra], deps, steps);
+  const report = (f: ReturnType<typeof fixture>, target = "stage") =>
+    JSON.parse(readFileSync(join(f.journalRoot, target, "preflight-20261008T120000Z", "preflight.json"), "utf8")) as { exit: number; checks: { id: string; status: string; detail: string }[] };
+  const status = (r: ReturnType<typeof report>, id: string) => r.checks.find((c) => c.id === id)?.status;
+
+  test("the real step list: the preflight runs R1.1 to R2.5, never R5.rc, R6.1 or anything after", () => {
+    const ids = preflightSteps(RELEASE_STEPS).map((s) => s.id);
+    expect(ids).toEqual(["R1.1", "R1.2", "R1.3", "R1.4", "R1.5", "R1.6", "R2.1", "R2.2", "R2.4r", "R2.3", "R2.5"]);
+    expect(preflightSteps(RELEASE_STEPS).some((s) => s.irreversible || s.host === "control")).toBe(false);
+  });
+
+  test("without a go: runs only the remote steps before the first irreversible one, the go is pending, exit 0, no run journal", async () => {
+    const f = fixture();
+    const a = fakeDeps();
+    expect(await preflight(f, a.deps)).toBe(0);
+    // Stage: the legacy lane first, then the one lane target and capture share, in the run's order.
+    expect(a.ran).toEqual(["L1", "A1", "A2", "B1"]);
+    const r = report(f);
+    expect(status(r, "P.go")).toBe("pending");
+    expect(status(r, "P.recovery")).toBe("pending");
+    expect(status(r, "P.commit")).toBe("green");
+    expect(status(r, "P.ci")).toBe("green");
+    expect(r.checks.find((c) => c.id === "P.stage")).toBeUndefined();
+    expect(readdirSync(join(f.journalRoot, "stage"))).toEqual(["preflight-20261008T120000Z"]);
+  });
+
+  test("with a valid go: the go and the recovery matrix are green", async () => {
+    const f = fixture();
+    const a = fakeDeps();
+    expect(await preflight(f, a.deps, ["--go", f.goFile])).toBe(0);
+    expect(status(report(f), "P.go")).toBe("green");
+    expect(status(report(f), "P.recovery")).toBe("green");
+  });
+
+  test("red: a go whose recovery matrix cannot be read", async () => {
+    const f = fixture();
+    writeFileSync(f.goFile, `release: v0.6.0\ncommit: ${SHA}\ntarget: stage\nrecovery: ${join(f.dir, "missing.md")}\n`);
+    expect(await preflight(f, fakeDeps().deps, ["--go", f.goFile])).toBe(2);
+    expect(status(report(f), "P.recovery")).toBe("red");
+  });
+
+  test("red: no CI on the commit, a commit on no origin branch, a dirty control checkout", async () => {
+    const f = fixture();
+    const a = fakeDeps({ answers: { "gh api": { code: 0, stdout: "" }, "git branch -r --contains": { code: 0, stdout: "" }, "git status --porcelain": { code: 0, stdout: " M x.ts\n" } } });
+    expect(await preflight(f, a.deps)).toBe(2);
+    const r = report(f);
+    expect(status(r, "P.ci")).toBe("red");
+    expect(status(r, "P.origin")).toBe("red");
+    expect(status(r, "P.commit")).toBe("red");
+  });
+
+  test("red: a live release checkout blocks its steps; the legacy gate and the other host still run", async () => {
+    const f = fixture();
+    const a = fakeDeps({ answers: { "docker ps -q": { code: 0, stdout: "3\n" } } });
+    expect(await preflight(f, a.deps)).toBe(2);
+    expect(a.ran).toEqual(["L1"]);
+    const r = report(f);
+    expect(status(r, "P.live.target")).toBe("red");
+    expect(status(r, "A1")).toBe("blocked");
+    expect(status(r, "B1")).toBe("blocked");
+  });
+
+  test("red: a target whose release checkout is the legacy checkout refuses before any check", async () => {
+    const f = fixture("stage", { checkout: "/home/stage-server/rm-stage-legacy" });
+    const a = fakeDeps();
+    expect(await preflight(f, a.deps)).toBe(2);
+    expect(a.ran).toEqual([]);
+    expect(a.logs.join("\n")).toContain("the legacy checkout cannot be the release checkout");
+  });
+
+  test("red: a run of the same target in flight blocks every remote step", async () => {
+    const f = fixture();
+    // A run that stops before its watch window stays incomplete; one killed mid-step reads running.
+    const r = fakeDeps({ fail: new Set(["T2"]), receipt: "{}" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], r.deps, TINY)).toBe(1);
+    const runFile = join(f.journalRoot, "stage", "20261008T120000Z", "run.json");
+    writeFileSync(runFile, JSON.stringify({ ...JSON.parse(readFileSync(runFile, "utf8")), status: "running" }));
+    const a = fakeDeps();
+    a.deps.now = () => new Date("2026-10-08T12:00:01Z");
+    expect(await preflight(f, a.deps)).toBe(2);
+    expect(a.ran).toEqual([]);
+    const rep = JSON.parse(readFileSync(join(f.journalRoot, "stage", "preflight-20261008T120001Z", "preflight.json"), "utf8")) as ReturnType<typeof report>;
+    expect(status(rep, "P.busy")).toBe("red");
+    expect(status(rep, "A1")).toBe("blocked");
+    expect(status(rep, "L1")).toBe("blocked");
+  });
+
+  test("a failed step blocks the rest of its lane only (prod: the capture host is another lane)", async () => {
+    const f = fixture("prod");
+    const a = fakeDeps({ fail: new Set(["A1"]) });
+    expect(await preflight(f, a.deps)).toBe(2);
+    expect(a.ran).toEqual(["L1", "A1", "B1"]);
+    const r = report(f, "prod");
+    expect(status(r, "A1")).toBe("red");
+    expect(status(r, "A2")).toBe("blocked");
+    expect(status(r, "B1")).toBe("green");
+  });
+
+  test("lanes: host plus checkout path; cheap lanes first; stage merges target and capture into one lane", () => {
+    const stage = loadTarget(join(targetsDir, "stage.json"));
+    const prod = loadTarget(join(targetsDir, "prod.json"));
+    expect(laneOf({ host: "target" }, stage)).toBe(laneOf({ host: "capture" }, stage));
+    expect(laneOf({ host: "target" }, prod)).not.toBe(laneOf({ host: "capture" }, prod));
+    expect(laneOf({ host: "target", checkout: "legacy" }, prod)).toBe("rm-frontend-prod-1:/root/robotmoney-frontend");
+    expect(preflightOrder(RELEASE_STEPS, prod).map((s) => s.id)).toEqual(["R2.5", "R1.1", "R1.2", "R1.3", "R2.3", "R1.4", "R1.5", "R1.6", "R2.1", "R2.2", "R2.4r"]);
+    expect(preflightOrder(RELEASE_STEPS, stage).map((s) => s.id)).toEqual(["R2.5", "R1.1", "R1.2", "R1.3", "R1.4", "R1.5", "R1.6", "R2.1", "R2.2", "R2.4r", "R2.3"]);
+  });
+
+  test("a capture step in the target's checkout is skipped on stage and runs on prod (sameCheckoutAs)", async () => {
+    const stage = loadTarget(join(targetsDir, "stage.json"));
+    const prod = loadTarget(join(targetsDir, "prod.json"));
+    const r14 = RELEASE_STEPS.find((s) => s.id === "R1.4")!;
+    expect(skipReason(r14, stage)).toContain("same checkout as R1.1");
+    expect(skipReason(r14, prod)).toBeUndefined();
+    expect(RELEASE_STEPS.filter((s) => s.sameCheckoutAs).map((s) => s.id)).toEqual(["R1.4", "R1.5", "R1.6"]);
+    // Through the runner: the stage run records them skipped, and the run still passes.
+    const SHARED: StepTemplate[] = [
+      { id: "T1", standing: [], description: "target", host: "target", cmds: [["echo", "T1"]], expectExit: 0, receipts: [], irreversible: false },
+      { id: "C1", standing: [], description: "capture", host: "capture", sameCheckoutAs: "T1", cmds: [["echo", "C1"]], expectExit: 0, receipts: [], irreversible: false },
+    ];
+    const f = fixture("stage");
+    const a = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, SHARED)).toBe(0);
+    expect(a.ran).toEqual(["T1"]);
+    const j = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    expect(j.steps.C1!.status).toBe("skipped");
+    expect(j.status).toBe("passed");
+  });
+
+  test("a step that runs past its bound is failed as timed out; the bound is in the rendered step", async () => {
+    expect(maxMillisOf({})).toBe(DEFAULT_MAX_MINUTES * 60_000);
+    expect(maxMillisOf({ maxMinutes: 30 })).toBe(30 * 60_000);
+    expect(RELEASE_STEPS.find((s) => s.id === "R2.1")!.maxMinutes).toBe(30);
+    const f = fixture();
+    const a = fakeDeps();
+    const bounds: (number | undefined)[] = [];
+    a.deps.exec = async (_h, _r, _o, _e, timeoutMs) => { bounds.push(timeoutMs); return TIMED_OUT; };
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(1);
+    expect(bounds).toEqual([DEFAULT_MAX_MINUTES * 60_000]);
+    const j = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    expect(j.steps.T1!.status).toBe("failed");
+    expect(j.steps.T1!.error).toContain("timed out after 10 min");
+  });
+
+  test("--abandon marks a dead run failed, so P.busy clears; it refuses a run that is not running", async () => {
+    const f = fixture();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], fakeDeps({ fail: new Set(["T2"]), receipt: "{}" }).deps, TINY)).toBe(1);
+    const runFile = join(f.journalRoot, "stage", "20261008T120000Z", "run.json");
+    const dead = JSON.parse(readFileSync(runFile, "utf8")) as RunJournal;
+    dead.status = "running";
+    dead.steps.T2!.status = "running";
+    writeFileSync(runFile, JSON.stringify(dead));
+    const a = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--journal-root", f.journalRoot, "--abandon", "20261008T120000Z"], a.deps, TINY)).toBe(0);
+    const j = JSON.parse(readFileSync(runFile, "utf8")) as RunJournal;
+    expect(j.status).toBe("failed");
+    expect(j.steps.T2!.status).toBe("failed");
+    expect(j.steps.T2!.error).toContain("abandoned");
+    expect(await runRelease(["--target", f.targetFile, "--journal-root", f.journalRoot, "--abandon", "20261008T120000Z"], fakeDeps().deps, TINY)).toBe(2);
+    const b = fakeDeps();
+    b.deps.now = () => new Date("2026-10-08T12:00:01Z");
+    expect(await preflight(f, b.deps, [], TINY)).toBe(0);
+    expect(parseArgs(["--target", "stage", "--abandon", "20261008T120000Z", "--go", "x"])).toHaveProperty("error");
+    expect(parseArgs(["--target", "stage", "--abandon", "nope"])).toHaveProperty("error");
+  });
+
+  test("--after-preflight continues a run from a green preflight within the hour: same run stamp, R-steps carried, nothing repeated", async () => {
+    const f = fixture();
+    const BEFORE_AND_AFTER: StepTemplate[] = [...TINY.slice(0, 1), { ...TINY[1]!, receipts: [] }, TINY[2]!];
+    const pre = fakeDeps();
+    expect(await preflight(f, pre.deps, [], BEFORE_AND_AFTER)).toBe(0);
+    expect(pre.ran).toEqual(["T1"]);
+    const preDir = join(f.journalRoot, "stage", "preflight-20261008T120000Z");
+    const run = fakeDeps();
+    run.deps.now = () => new Date("2026-10-08T12:30:00Z");
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--after-preflight", preDir], run.deps, BEFORE_AND_AFTER)).toBe(0);
+    expect(run.ran).toEqual(["T2", "T3"]);
+    const j = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    expect(j.runTs).toBe("20261008T120000Z");
+    expect(j.status).toBe("passed");
+    expect(j.steps.T1!.status).toBe("ok");
+    expect(j.afterPreflight?.runTs).toBe("20261008T120000Z");
+    // red controls: too old, another commit, another list, a red preflight.
+    const rep = JSON.parse(readFileSync(join(preDir, "preflight.json"), "utf8")) as PreflightReport;
+    const exp = { target: "stage", commit: SHA, stepListHash: rep.stepListHash, stepIds: ["T1", "T2", "T3"] };
+    expect(checkAfterPreflight(rep, exp, new Date("2026-10-08T12:59:00Z"))).toEqual([]);
+    expect(checkAfterPreflight(rep, exp, new Date("2026-10-08T13:01:00Z")).join()).toContain("more than 60 min");
+    expect(checkAfterPreflight(rep, { ...exp, commit: OTHER_SHA }, new Date("2026-10-08T12:30:00Z")).join()).toContain("the go names");
+    expect(checkAfterPreflight(rep, { ...exp, stepListHash: "0".repeat(64) }, new Date("2026-10-08T12:30:00Z")).join()).toContain("step list");
+    expect(checkAfterPreflight({ ...rep, checks: [{ id: "P.ci", status: "red", detail: "" }] }, exp, new Date("2026-10-08T12:30:00Z")).join()).toContain("not green: P.ci");
+    expect(checkAfterPreflight(undefined, exp, new Date()).join()).toContain("no preflight.json");
+    const late = fakeDeps();
+    late.deps.now = () => new Date("2026-10-08T14:00:00Z");
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", join(f.dir, "j2"), "--after-preflight", preDir], late.deps, BEFORE_AND_AFTER)).toBe(2);
+    expect(late.ran).toEqual([]);
+    expect(parseArgs(["--target", "stage", "--after-preflight", "x", "--run", "20261008T000000Z"])).toHaveProperty("error");
+  });
+
+  test("the downtime window is R6.1's start to R6.9's end, journaled once both passed", () => {
+    const ok = (startedAt: string, endedAt: string) => ({ id: "x", status: "ok" as const, exit: 0, expectExit: 0, startedAt, endedAt, receipts: [], attempt: 1 });
+    expect(downtimeSeconds({ steps: { "R6.1": ok("2026-10-08T12:00:00Z", "2026-10-08T12:00:27Z"), "R6.9": ok("2026-10-08T12:02:26Z", "2026-10-08T12:02:29Z") } })).toBe(149);
+    expect(downtimeSeconds({ steps: { "R6.1": ok("2026-10-08T12:00:00Z", "2026-10-08T12:00:27Z") } })).toBeUndefined();
+  });
+
+  test("prod: P.stage is red without a passed stage run, green when one exists under the journal root", async () => {
+    const f = fixture("prod");
+    const a = fakeDeps({ receipt: "{}" });
+    expect(await preflight(f, a.deps, [], TINY)).toBe(2);
+    expect(status(report(f, "prod"), "P.stage")).toBe("red");
+    // A passed stage run of the same list at the same commit, in the same journal root.
+    const s = fixture("stage");
+    expect(await runRelease(["--target", s.targetFile, "--go", s.goFile, "--journal-root", f.journalRoot], fakeDeps({ receipt: "{}" }).deps, TINY)).toBe(0);
+    const b = fakeDeps({ receipt: "{}" });
+    b.deps.now = () => new Date("2026-10-08T12:00:01Z");
+    expect(await preflight(f, b.deps, [], TINY)).toBe(0);
+    const r = JSON.parse(readFileSync(join(f.journalRoot, "prod", "preflight-20261008T120001Z", "preflight.json"), "utf8")) as ReturnType<typeof report>;
+    expect(r.checks.find((c) => c.id === "P.stage")).toMatchObject({ status: "green" });
+    expect(r.checks.find((c) => c.id === "P.stage")!.detail).toContain(join(f.journalRoot, "stage", "20261008T120000Z"));
+  });
+
+  test("a preflight journal is never a stage run: SP.8 refuses it", async () => {
+    const s = fixture("stage");
+    expect(await preflight(s, fakeDeps({ receipt: "{}" }).deps, [], TINY)).toBe(0);
+    const f = fixture("prod");
+    const a = fakeDeps({ receipt: "{}" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--stage-journal", join(s.journalRoot, "stage", "preflight-20261008T120000Z")], a.deps, TINY)).toBe(2);
+    expect(a.ran).toEqual([]);
+  });
+
+  test("--preflight and --dry-run are one flag; neither takes --run or --only", () => {
+    expect(parseArgs(["--target", "stage", "--dry-run"])).toMatchObject({ preflight: true });
+    expect(parseArgs(["--target", "stage", "--preflight"])).toMatchObject({ preflight: true });
+    expect(parseArgs(["--target", "stage", "--preflight", "--run", "20261008T000000Z"])).toHaveProperty("error");
+    expect(parseArgs(["--target", "stage", "--preflight", "--only", "R1.2"])).toHaveProperty("error");
+  });
+
+  test("ciProblems: green, a missing required workflow, a failure, a run still in progress", () => {
+    const green = REQUIRED_CI.map((n) => `${n}\tcompleted\tsuccess`);
+    expect(ciProblems(green)).toEqual([]);
+    expect(ciProblems(["e2e-web\tcompleted\tsuccess", ...green.slice(1)])).toEqual([]);
+    expect(ciProblems(green.slice(1)).join()).toContain("no e2e check run");
+    expect(ciProblems([...green, "unit\tcompleted\tfailure"]).join()).toContain("unit concluded failure");
+    expect(ciProblems([...green, "backend\tin_progress\t"]).join()).toContain("backend is in_progress");
+    expect(ciProblems([])).toEqual(["no check run on the commit: CI never ran there"]);
   });
 });

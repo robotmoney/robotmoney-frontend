@@ -7,18 +7,22 @@
 // operation is a committed script with a receipt (rule 3). The operator's
 // authority is one go file, read before the run (rule 1).
 //
-//   bun run release:run --target <stage|prod|path.json> --dry-run [--go <go file>]
+//   bun run release:run --target <stage|prod|path.json> --preflight [--go <go file>] [--triage <file>] [--stage-journal <dir>]
 //   bun run release:run --target stage --go <go file>
 //   bun run release:run --target prod  --go <go file> --stage-journal <stage run dir>
 //   bun run release:run --target prod  --go <go file> --stage-journal <dir> --run <run-ts> --from <step>
 //   bun run release:run --target stage --go <go file> --only <step> [--run <run-ts>]
+//   bun run release:run --target <t> --go <go file> --after-preflight <preflight dir>   (continue from a green preflight, within 1 h)
+//   bun run release:run --target <t> --abandon <run-ts>                                  (mark a dead run failed so P.busy clears)
 //
 // What it does, in order: load and validate the target; read the go file, which
 // names this release and target and is the one source of the release commit
 // (a target file names none); print the plan (target, commit, step-list hash,
-// every step and its remote command); stop there under --dry-run. A dry run
-// without --go renders {commit} as COMMIT-FROM-GO. Otherwise: refuse without a
-// go file; refuse a placeholder confirmTarget;
+// every step and its remote command). `--preflight` (`--dry-run` is the same
+// flag) needs no go: it runs every check the run needs and every step before
+// the first irreversible one, changes nothing a running service uses, and
+// exits 0 only when every check is green (./preflight.ts). Otherwise: refuse
+// without a go file; refuse a placeholder confirmTarget;
 // under RM_ENV=prod refuse unless --stage-journal names a passed stage run of
 // the same step list at the same commit (SP.8); then run the steps in order,
 // journal each one locally (./journal.ts), copy its receipts back, and stop at
@@ -28,18 +32,17 @@
 // It never prints a secret value. Output and receipts pass through
 // ./scrub.ts before they reach the console or the journal.
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateGo, type GoRecord } from "./go.ts";
-import { applyTriage, failedFindings, parseTriage } from "./triage.ts";
 import {
   checkResume, checkStageJournal, firstNotOk, journalRoot, readJournal, resumeCommand, runStamp, runStatus, RUN_TS_RE,
-  selectSteps, writeJournal, type ReceiptRecord, type RunJournal, type StepRecord,
+  selectSteps, writeJournal, type RunJournal, type StepRecord,
 } from "./journal.ts";
-import { forbiddenReceiptPath, lineScrubber, scrubSecrets } from "./scrub.ts";
+import { checkAfterPreflight, runPreflight, type PreflightReport } from "./preflight.ts";
+import { executeStep, readRecovery, TIMED_OUT, type RunnerDeps } from "./step-exec.ts";
 import {
   CONTROL_HOST, notBeforeOf, READY_PENDING, RELEASE_STEPS, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
 } from "./steps.ts";
@@ -48,42 +51,38 @@ import {
 const READY_STEP = "R6.9";
 import { confirmTargetFilled, loadTarget, type ReleaseTarget } from "./target.ts";
 
+export { receiptPathsInOutput, type RunnerDeps } from "./step-exec.ts";
+
 const NAME = "release:run";
 const HERE = dirname(fileURLToPath(import.meta.url));
-
-export interface RunnerDeps {
-  /** Run a remote command; stream its output; resolve to the exit code. */
-  exec(host: string, remote: string, onStdout: (s: string) => void, onStderr: (s: string) => void): Promise<number>;
-  /** Run a short remote command and collect stdout (receipt listing and copy). */
-  collect(host: string, remote: string): Promise<{ code: number; stdout: string }>;
-  readText(path: string): string | undefined;
-  now(): Date;
-  log(line: string): void;
-  error(line: string): void;
-  home: string;
-}
 
 export interface RunArgs {
   target?: string;
   go?: string;
-  dryRun: boolean;
+  /** `--preflight`, or its alias `--dry-run`: ./preflight.ts. */
+  preflight: boolean;
   from?: string;
   only?: string;
   run?: string;
   stageJournal?: string;
   journalRoot?: string;
   triage?: string;
+  /** A green preflight's directory this run continues from. */
+  afterPreflight?: string;
+  /** A run stamp to mark failed: the operator says it is dead. */
+  abandon?: string;
 }
 
 export function parseArgs(argv: readonly string[]): RunArgs | { error: string } {
-  const out: RunArgs = { dryRun: false };
+  const out: RunArgs = { preflight: false };
   const valued: Record<string, keyof RunArgs> = {
     "--target": "target", "--go": "go", "--from": "from", "--only": "only", "--run": "run",
     "--stage-journal": "stageJournal", "--journal-root": "journalRoot", "--triage": "triage",
+    "--after-preflight": "afterPreflight", "--abandon": "abandon",
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
-    if (a === "--dry-run") { out.dryRun = true; continue; }
+    if (a === "--preflight" || a === "--dry-run") { out.preflight = true; continue; }
     const key = valued[a];
     if (!key) return { error: `unknown argument "${a}"` };
     const v = argv[i + 1];
@@ -95,6 +94,10 @@ export function parseArgs(argv: readonly string[]): RunArgs | { error: string } 
   if (out.run !== undefined && !RUN_TS_RE.test(out.run)) return { error: `--run takes a run stamp like 20261008T142233Z, got "${out.run}"` };
   if (out.from !== undefined && out.run === undefined) return { error: "--from resumes a run: name it with --run <run-ts> (the failed run prints the command)" };
   if (out.from !== undefined && out.only !== undefined) return { error: "--from and --only cannot be combined" };
+  if (out.preflight && (out.run !== undefined || out.only !== undefined)) return { error: "--preflight checks a run before it starts: it takes no --run, --from or --only" };
+  if (out.afterPreflight !== undefined && (out.run !== undefined || out.only !== undefined || out.preflight)) return { error: "--after-preflight starts a new run from a green preflight: it takes no --run, --from, --only or --preflight" };
+  if (out.abandon !== undefined && !RUN_TS_RE.test(out.abandon)) return { error: `--abandon takes a run stamp like 20261008T142233Z, got "${out.abandon}"` };
+  if (out.abandon !== undefined && (out.go !== undefined || out.run !== undefined || out.preflight || out.afterPreflight !== undefined)) return { error: "--abandon takes only --target and the run stamp" };
   return out;
 }
 
@@ -102,9 +105,6 @@ export function parseArgs(argv: readonly string[]): RunArgs | { error: string } 
 export function targetPath(arg: string): string {
   return arg.includes("/") || arg.endsWith(".json") ? resolve(arg) : join(HERE, "targets", `${arg}.json`);
 }
-
-/** What `{commit}` renders as in a dry run without a go file: never a real SHA. */
-export const COMMIT_FROM_GO = "COMMIT-FROM-GO";
 
 /** The plan, as printed before anything runs. */
 export function renderPlan(target: ReleaseTarget, commit: string, hash: string, steps: readonly RenderedStep[]): string {
@@ -129,52 +129,6 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
   return lines.join("\n");
 }
 
-/** Receipt paths a step's output names (`receipt: /path`, `receipt → /path`, `report: /path`). */
-export function receiptPathsInOutput(text: string): string[] {
-  const out = new Set<string>();
-  for (const m of text.matchAll(/\b(?:receipt|report)\s*(?::|→|->)\s*(\/[^\s()]+)/gi)) out.add(m[1]!.replace(/[.,;]+$/, ""));
-  return [...out];
-}
-
-async function pullReceipts(
-  step: RenderedStep, stepDir: string, stdoutText: string, deps: RunnerDeps,
-): Promise<{ receipts: ReceiptRecord[]; missingRequired: string[] }> {
-  const receipts: ReceiptRecord[] = [];
-  const missingRequired: string[] = [];
-  const wanted = new Set<string>();
-  for (const spec of step.receipts) {
-    const listing = await deps.collect(
-      step.host,
-      `find ${shellQuote(spec.dir)} -maxdepth 1 -type f -name ${shellQuote(spec.pattern)} -newer ${shellQuote(step.marker)} -print 2>/dev/null; true`,
-    );
-    const found = listing.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
-    if (found.length === 0) {
-      receipts.push({ remote: `${spec.dir}/${spec.pattern}`, missing: true });
-      if (spec.required) missingRequired.push(`${spec.dir}/${spec.pattern}`);
-    }
-    for (const f of found) wanted.add(f);
-  }
-  for (const p of receiptPathsInOutput(stdoutText)) wanted.add(p);
-  const dir = join(stepDir, "receipts");
-  for (const remote of wanted) {
-    if (forbiddenReceiptPath(remote)) {
-      receipts.push({ remote, missing: true });
-      continue;
-    }
-    const got = await deps.collect(step.host, `cat -- ${shellQuote(remote)}`);
-    if (got.code !== 0) {
-      receipts.push({ remote, missing: true });
-      continue;
-    }
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    let local = join(dir, basename(remote));
-    for (let n = 2; existsSync(local); n++) local = join(dir, `${n}-${basename(remote)}`);
-    writeFileSync(local, scrubSecrets(got.stdout), { mode: 0o600 });
-    receipts.push({ remote, local });
-  }
-  return { receipts, missingRequired };
-}
-
 /** The whole run. Returns the process exit code. */
 export async function runRelease(argv: readonly string[], deps: RunnerDeps, steps: readonly StepTemplate[] = RELEASE_STEPS): Promise<number> {
   const args = parseArgs(argv);
@@ -188,6 +142,26 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   } catch (error) {
     deps.error(`[${NAME}] ${error instanceof Error ? error.message : String(error)}`);
     return 2;
+  }
+
+  // The operator marks a dead run (killed mid-step, still `running`) failed, so P.busy clears and the journal tells the truth.
+  if (args.abandon !== undefined) {
+    const dir = join(args.journalRoot ?? journalRoot(deps.home), target.name, args.abandon);
+    const j = readJournal(dir);
+    if (j === undefined) { deps.error(`[${NAME}] refusing: no journal at ${dir}.`); return 2; }
+    if (j.status !== "running") { deps.error(`[${NAME}] refusing: run ${args.abandon} is ${j.status}, not running; nothing to abandon.`); return 2; }
+    const now = deps.now().toISOString();
+    for (const rec of Object.values(j.steps)) {
+      if (rec.status !== "running") continue;
+      rec.status = "failed";
+      rec.endedAt = now;
+      rec.error = `abandoned by the operator at ${now} (--abandon); the remote command may still have run to its end`;
+    }
+    j.status = "failed";
+    j.updatedAt = now;
+    writeJournal(dir, j);
+    deps.log(`[${NAME}] run ${args.abandon} marked failed (abandoned). Resume it with --run ${args.abandon} --from <step> once the host is quiet, or start a new run.`);
+    return 0;
   }
 
   // Rule 1: the one recorded go. It is the only source of the release commit.
@@ -204,14 +178,21 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       return 2;
     }
     go = goResult.go;
-  } else if (!args.dryRun) {
+  } else if (!args.preflight) {
     deps.error(`[${NAME}] refusing: no --go <file>. The operator's go names the release, the commit and the target (D61 rule 1).`);
     return 2;
   }
-  const commit = go?.commit ?? COMMIT_FROM_GO;
   const ids = stepIds(steps);
   const hash = stepListHash(steps);
   const root = args.journalRoot ?? journalRoot(deps.home);
+  if (args.preflight) {
+    return runPreflight({
+      target, go, goPath: args.go, stageJournal: args.stageJournal ? resolve(args.stageJournal) : undefined, triage: args.triage,
+      steps, ids, hash, root, runTs: runStamp(deps.now()), renderPlan: (c, r) => renderPlan(target, c, hash, r),
+    }, deps);
+  }
+  if (go === undefined) return 2;
+  const commit = go.commit;
 
   let selected: string[];
   try {
@@ -221,28 +202,30 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     return 2;
   }
 
-  const runTs = args.run ?? runStamp(deps.now());
+  // A run within an hour of a green preflight continues from it: same run stamp,
+  // so every path the preflight's steps wrote ({runTs}) is this run's, and R1.1
+  // to R2.5 are its records. Policy 4.3 holds: the dump is this run's.
+  let preflight: PreflightReport | undefined;
+  if (args.afterPreflight !== undefined) {
+    const path = join(resolve(args.afterPreflight), "preflight.json");
+    const text = deps.readText(path);
+    try { preflight = text === undefined ? undefined : JSON.parse(text) as PreflightReport; } catch { preflight = undefined; }
+    const refusals = checkAfterPreflight(preflight, { target: target.name, commit, stepListHash: hash, stepIds: ids }, deps.now());
+    if (refusals.length > 0) {
+      deps.error(`[${NAME}] refusing --after-preflight ${args.afterPreflight}:\n  - ${refusals.join("\n  - ")}`);
+      return 2;
+    }
+  }
+  const runTs = args.run ?? preflight?.runTs ?? runStamp(deps.now());
   const values = templateValues(target, commit, runTs);
   const rendered = steps.map((s) => renderStep(s, target, values));
   deps.log(renderPlan(target, commit, hash, rendered));
 
-  if (args.dryRun || go === undefined) {
-    const from = go ? `the go's commit ${commit}` : `${COMMIT_FROM_GO} for {commit} (pass --go <file> to render the go's commit)`;
-    deps.log(`\n[${NAME}] --dry-run: nothing ran. Commit: ${from}. Steps that would run: ${selected.join(", ")}`);
-    return 0;
-  }
-
   // SC.1: the signed recovery matrix the go names. A path must be readable; its sha256 is journaled.
-  let recovery: { ref: string; sha256: string | null };
-  if (/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(go.recovery)) recovery = { ref: go.recovery, sha256: null };
-  else {
-    const path = go.recovery.startsWith("~/") ? join(deps.home, go.recovery.slice(2)) : resolve(go.recovery);
-    const text = deps.readText(path);
-    if (text === undefined) {
-      deps.error(`[${NAME}] refusing: the go names the recovery matrix ${go.recovery}, which cannot be read (SC.1).`);
-      return 2;
-    }
-    recovery = { ref: path, sha256: createHash("sha256").update(text).digest("hex") };
+  const recovery = readRecovery(go, deps);
+  if ("error" in recovery) {
+    deps.error(`[${NAME}] refusing: ${recovery.error}.`);
+    return 2;
   }
 
   if (!confirmTargetFilled(target)) {
@@ -290,6 +273,16 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       return 2;
     }
     journal = newJournal(target, commit, hash, ids, go, runTs, deps.now());
+    if (preflight !== undefined) {
+      for (const id of ids) {
+        const rec = preflight.steps[id];
+        if (rec !== undefined && (rec.status === "ok" || rec.status === "skipped")) journal.steps[id] = { ...rec, receipts: [...rec.receipts] };
+      }
+      journal.afterPreflight = { path: resolve(args.afterPreflight!), runTs: preflight.runTs };
+      const next = firstNotOk(journal, ids);
+      selected = next === undefined ? [] : ids.slice(ids.indexOf(next));
+      deps.log(`[${NAME}] continuing from preflight ${preflight.runTs}: ${Object.keys(journal.steps).join(", ")} carried over; starting at ${next ?? "(nothing left)"}`);
+    }
   }
   if (stageRecord) journal.stageJournal = stageRecord;
   journal.recovery = recovery;
@@ -302,16 +295,18 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     mkdirSync(stepDir, { recursive: true, mode: 0o700 });
 
     // A prod-only step (the release tags) is recorded skipped on any other policy.
-    if (template.onlyFor !== undefined && template.onlyFor !== target.rmEnv) {
+    // A capture step whose checkout is the target's is recorded skipped too (stage).
+    const skip = skipReason(template, target);
+    if (skip !== undefined) {
       const now = deps.now().toISOString();
       journal.steps[id] = {
-        id, status: "skipped", skipped: target.rmEnv, exit: null, expectExit: template.expectExit, startedAt: now, endedAt: now,
+        id, status: "skipped", skipped: skip, exit: null, expectExit: template.expectExit, startedAt: now, endedAt: now,
         durationMs: 0, receipts: [], attempt: (journal.steps[id]?.attempt ?? 0) + 1,
       };
       writeFileSync(join(stepDir, "result.json"), `${JSON.stringify(journal.steps[id], null, 2)}\n`, { mode: 0o600 });
       journal.status = runStatus(journal, ids);
       writeJournal(runDir, journal);
-      deps.log(`\n[${NAME}] ── ${id} skipped: ${target.rmEnv} (runs only for ${template.onlyFor})`);
+      deps.log(`\n[${NAME}] ── ${id} skipped: ${skip}${template.onlyFor ? ` (runs only for ${template.onlyFor})` : ""}`);
       continue;
     }
 
@@ -346,48 +341,10 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     writeJournal(runDir, journal);
     deps.log(`\n[${NAME}] ── ${id}${step.irreversible ? " (IRREVERSIBLE)" : ""} on ${step.host}: ${step.description}`);
 
-    const out = lineScrubber();
-    const err = lineScrubber();
-    let stdoutText = "";
-    let stderrText = "";
-    let exit: number;
-    try {
-      exit = await deps.exec(
-        step.host, step.remote,
-        (s) => { const t = out.push(s); if (t) { stdoutText += t; deps.log(t.replace(/\n$/, "")); } },
-        (s) => { const t = err.push(s); if (t) { stderrText += t; deps.error(t.replace(/\n$/, "")); } },
-      );
-    } catch (error) {
-      exit = -1;
-      record.error = error instanceof Error ? error.message : String(error);
-    }
-    stdoutText += out.end();
-    stderrText += err.end();
-    writeFileSync(join(stepDir, "stdout.log"), stdoutText, { mode: 0o600 });
-    writeFileSync(join(stepDir, "stderr.log"), stderrText, { mode: 0o600 });
-
-    const pulled = await pullReceipts(step, stepDir, stdoutText, deps);
-    const ended = deps.now();
-    record.exit = exit;
-    record.endedAt = ended.toISOString();
-    record.durationMs = ended.getTime() - started.getTime();
-    record.receipts = pulled.receipts;
-    let ok = exit === step.expectExit && pulled.missingRequired.length === 0;
-    if (!ok && template.triage && exit !== step.expectExit && pulled.missingRequired.length === 0) {
-      const verdict = triageStep(stepDir, args.triage, deps);
-      if (verdict.accepted) {
-        ok = true;
-        record.triage = verdict.record;
-        deps.log(`[${NAME}] ${id} exited ${exit}; every failed finding is in the owner's triage ${verdict.record.file} (sha256 ${verdict.record.sha256.slice(0, 12)}):`);
-        for (const e of verdict.record.used) deps.log(`  - ${e.check}: "${e.fragment}" (${e.reason})`);
-      } else if (verdict.message) record.error = verdict.message;
-    }
-    if (!ok && exit === step.expectExit) record.error = `required receipt missing: ${pulled.missingRequired.join(", ")}`;
-    if (!ok && exit !== step.expectExit) record.error ??= `exit ${exit}, expected ${step.expectExit}`;
-    record.status = ok ? "ok" : "failed";
+    const ok = await executeStep(step, template.triage, record, started, stepDir, args.triage, deps);
     writeFileSync(join(stepDir, "result.json"), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
     journal.status = runStatus(journal, ids);
-    journal.updatedAt = ended.toISOString();
+    journal.updatedAt = record.endedAt!;
     writeJournal(runDir, journal);
 
     if (!ok) {
@@ -396,42 +353,32 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       deps.error(`[${NAME}] resume with:\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: id, stageJournal: args.stageJournal })}`);
       return 1;
     }
-    deps.log(`[${NAME}] ${id} ok (${Math.round(record.durationMs / 1000)} s, ${pulled.receipts.filter((r) => r.local).length} receipt(s))`);
+    deps.log(`[${NAME}] ${id} ok (${Math.round(record.durationMs! / 1000)} s, ${record.receipts.filter((r) => r.local).length} receipt(s))`);
   }
 
   journal.status = runStatus(journal, ids);
+  journal.downtimeSeconds = downtimeSeconds(journal);
   writeJournal(runDir, journal);
+  if (journal.downtimeSeconds !== undefined) deps.log(`[${NAME}] downtime window R6.1 to R6.9: ${journal.downtimeSeconds} s`);
   deps.log(`\n[${NAME}] run ${runTs}: ${journal.status}. Step list ${hash}. Journal ${runDir}`);
   return journal.status === "passed" || args.only !== undefined ? 0 : 1;
 }
 
-/** R2.5: read the step's pulled gate report and the owner's triage file; accept only full coverage. */
-function triageStep(stepDir: string, triagePath: string | undefined, deps: RunnerDeps):
-  { accepted: true; record: NonNullable<StepRecord["triage"]> } | { accepted: false; message?: string } {
-  const reportPath = join(stepDir, "receipts", "prod-gate-baseline.json");
-  const reportText = deps.readText(reportPath);
-  if (reportText === undefined) return { accepted: false, message: `the gate failed and wrote no ${reportPath} to triage` };
-  let report: unknown;
-  try { report = JSON.parse(reportText); } catch { return { accepted: false, message: `the gate report ${reportPath} is not JSON` }; }
-  const findings = failedFindings(report) ?? [];
-  const listing = findings.map((f) => `${f.check}: ${f.detail.slice(0, 160)}`).join("\n  - ");
-  if (triagePath === undefined) {
-    return { accepted: false, message: `the baseline gate failed. Each finding needs the owner's triage (--triage <file>, scripts/release/triage.ts):\n  - ${listing}` };
+/** PURE. Why a step does not run on this target, or undefined when it runs. */
+export function skipReason(step: StepTemplate, target: ReleaseTarget): string | undefined {
+  if (step.onlyFor !== undefined && step.onlyFor !== target.rmEnv) return target.rmEnv;
+  if (step.sameCheckoutAs !== undefined && target.capture.host === target.host && target.capture.checkout === target.checkout) {
+    return `same checkout as ${step.sameCheckoutAs} (${target.host}:${target.checkout})`;
   }
-  const path = triagePath.startsWith("~/") ? join(deps.home, triagePath.slice(2)) : resolve(triagePath);
-  const text = deps.readText(path);
-  if (text === undefined) return { accepted: false, message: `the triage file ${path} cannot be read` };
-  const parsed = parseTriage(text);
-  if ("errors" in parsed) return { accepted: false, message: `the triage file ${path} is malformed:\n  - ${parsed.errors.join("\n  - ")}` };
-  const result = applyTriage(report, parsed.entries);
-  if (!result.accepted) {
-    const left = result.unmatched.map((f) => `${f.check}: ${f.detail.slice(0, 160)}`).join("\n  - ");
-    return { accepted: false, message: `the triage file ${path} does not cover:\n  - ${left || "(the report names no failed check)"}` };
-  }
-  return {
-    accepted: true,
-    record: { file: path, sha256: createHash("sha256").update(text).digest("hex"), used: result.used.map((e) => ({ ...e })) },
-  };
+  return undefined;
+}
+
+/** PURE. The downtime window: R6.1's start to R6.9's end, in seconds, once both are ok. */
+export function downtimeSeconds(journal: Pick<RunJournal, "steps">): number | undefined {
+  const a = journal.steps["R6.1"];
+  const b = journal.steps[READY_STEP];
+  if (a?.status !== "ok" || b?.status !== "ok" || !b.endedAt) return undefined;
+  return Math.round((Date.parse(b.endedAt) - Date.parse(a.startedAt)) / 1000);
 }
 
 function newJournal(target: ReleaseTarget, commit: string, hash: string, ids: readonly string[], go: GoRecord, runTs: string, now: Date): RunJournal {
@@ -446,14 +393,17 @@ const SSH_OPTS = ["-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30"];
 /** The real dependencies: ssh with stdin closed and no tty. */
 export function realDeps(): RunnerDeps {
   return {
-    exec(host, remote, onStdout, onStderr) {
+    exec(host, remote, onStdout, onStderr, timeoutMs) {
       return new Promise((done, fail) => {
         const argv = host === CONTROL_HOST ? ["sh", ["-c", remote]] as const : ["ssh", [...SSH_OPTS, host, remote]] as const;
         const child = spawn(argv[0], [...argv[1]], { stdio: ["ignore", "pipe", "pipe"] });
+        let timedOut = false;
+        // The bound kills the local ssh. The remote command may outlive it; the step is failed either way.
+        const timer = timeoutMs ? setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, timeoutMs) : undefined;
         child.stdout.setEncoding("utf8").on("data", onStdout);
         child.stderr.setEncoding("utf8").on("data", onStderr);
-        child.on("error", fail);
-        child.on("close", (code, signal) => done(code ?? (signal ? 128 : 1)));
+        child.on("error", (e) => { if (timer) clearTimeout(timer); fail(e); });
+        child.on("close", (code, signal) => { if (timer) clearTimeout(timer); done(timedOut ? TIMED_OUT : code ?? (signal ? 128 : 1)); });
       });
     },
     async collect(host, remote) {

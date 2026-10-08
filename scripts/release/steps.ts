@@ -88,6 +88,27 @@ export interface StepTemplate {
    * failed finding of its JSON report (scripts/release/triage.ts). Only R2.5.
    */
   readonly triage?: boolean;
+  /**
+   * The step fails when its command runs longer than this. A hung ssh or a
+   * stuck dump never hangs the run. Default DEFAULT_MAX_MINUTES; the dump, the
+   * restore proof and the boots name their own.
+   */
+  readonly maxMinutes?: number;
+  /**
+   * A capture-host step that repeats a target-host step in the same checkout.
+   * When the capture host and checkout are the target's (the stage target),
+   * the step is recorded `skipped: same checkout as <id>`; the named step
+   * already did the work there. Production's hosts differ, so it runs.
+   */
+  readonly sameCheckoutAs?: string;
+}
+
+/** The time a step may take unless it names its own `maxMinutes`. */
+export const DEFAULT_MAX_MINUTES = 10;
+
+/** PURE. A step's bound in milliseconds. */
+export function maxMillisOf(step: Pick<StepTemplate, "maxMinutes">): number {
+  return (step.maxMinutes ?? DEFAULT_MAX_MINUTES) * 60_000;
 }
 
 /** The remote journal directory of one run on the target host. */
@@ -146,23 +167,23 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     cmds: [["bun", "install", "--force"], ["bun", "install", "--force", "--cwd", "backend"]],
   },
   {
-    id: "R1.4", standing: ["SP.1"], host: "capture", irreversible: false, expectExit: 0, receipts: [],
+    id: "R1.4", standing: ["SP.1"], host: "capture", sameCheckoutAs: "R1.1", irreversible: false, expectExit: 0, receipts: [],
     description: "Capture checkout: fetch, then detach at the release commit",
     cmds: [["git", "fetch", "--tags", "origin"], ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{commit}"]],
   },
   {
-    id: "R1.5", standing: ["SP.1"], host: "capture", irreversible: false, expectExit: 0, receipts: [{ dir: CAPTURE_RUN_DIR, pattern: "host-identity.json", required: true }],
+    id: "R1.5", standing: ["SP.1"], host: "capture", sameCheckoutAs: "R1.2", irreversible: false, expectExit: 0, receipts: [{ dir: CAPTURE_RUN_DIR, pattern: "host-identity.json", required: true }],
     description: "Capture identity: HEAD is the commit and the tree is clean",
     cmds: [["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--receipt-dir", CAPTURE_RUN_DIR]],
   },
   {
-    id: "R1.6", standing: ["SP.1"], host: "capture", irreversible: false, expectExit: 0, receipts: [],
+    id: "R1.6", standing: ["SP.1"], host: "capture", sameCheckoutAs: "R1.3", irreversible: false, expectExit: 0, receipts: [],
     description: "Capture install: bun install --force, root and backend",
     cmds: [["bun", "install", "--force"], ["bun", "install", "--force", "--cwd", "backend"]],
   },
   // ── R2 baseline and backup ────────────────────────────────────────────────
   {
-    id: "R2.1", standing: ["SR.0", "SP.2"], host: "capture", irreversible: false, expectExit: 0,
+    id: "R2.1", standing: ["SR.0", "SP.2"], host: "capture", irreversible: false, expectExit: 0, maxMinutes: 30,
     receipts: [{ dir: CAPTURE_DIR, pattern: "manifest.json", required: true }],
     description: "Fresh capture from production's read replica into a new dated directory (never a reused dump)",
     cmds: [["bun", "run", "smoke:capture", "--out", CAPTURE_DIR]],
@@ -174,7 +195,7 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     cmds: [["sh", "-c", `cd ${CAPTURE_DIR} && sha256sum -- *.gpg > SHA256SUMS`]],
   },
   {
-    id: "R2.4r", standing: ["SP.2"], host: "capture", irreversible: false, expectExit: 0,
+    id: "R2.4r", standing: ["SP.2"], host: "capture", irreversible: false, expectExit: 0, maxMinutes: 20,
     receipts: [{ dir: CAPTURE_RUN_DIR, pattern: "restore-proof.json", required: true }],
     description: "Restore proof: restore the R2.1 dump into a throwaway local Postgres container, record the restore time, drop the container",
     cmds: [["bun", "scripts/release/restore-proof.ts", "--dump", CAPTURE_DIR, "--receipt-dir", CAPTURE_RUN_DIR]],
@@ -235,7 +256,7 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     cmds: [prodInit("provision-tokens")],
   },
   {
-    id: "R6.7a", standing: ["SP.4"], host: "target", irreversible: false, expectExit: 0, receipts: [], env: BOOT_ENV, bootEnv: true,
+    id: "R6.7a", standing: ["SP.4"], host: "target", irreversible: false, expectExit: 0, receipts: [], env: BOOT_ENV, bootEnv: true, maxMinutes: 15,
     description: "Boot 1: bun smoke --static-port (preflight, replace, readiness, exit)",
     cmds: [boot()],
   },
@@ -250,7 +271,7 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     cmds: [prodInit("rebind-members")],
   },
   {
-    id: "R6.7d", standing: ["SP.4"], host: "target", irreversible: false, expectExit: 0, receipts: [], env: BOOT_ENV, bootEnv: true,
+    id: "R6.7d", standing: ["SP.4"], host: "target", irreversible: false, expectExit: 0, receipts: [], env: BOOT_ENV, bootEnv: true, maxMinutes: 15,
     description: "Boot 2: a new plan that recreates the participants on the new bearers",
     cmds: [boot()],
   },
@@ -269,11 +290,6 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     id: "R7.1", standing: ["SV.1"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("identity-check.json")],
     description: "Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown",
     cmds: [["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--receipt-dir", RUN_DIR]],
-  },
-  {
-    id: "R7.2", standing: ["SV.2"], host: "target", irreversible: false, expectExit: 0, receipts: [],
-    description: "Status: preflight green, readiness green",
-    cmds: [status()],
   },
   {
     id: "R7.3", standing: ["SV.3"], host: "target", irreversible: false, expectExit: 0, receipts: [],
@@ -392,6 +408,8 @@ export interface RenderedStep {
   readonly receipts: readonly ReceiptSpec[];
   readonly onlyFor?: "prod";
   readonly notBefore?: NotBefore;
+  readonly maxMillis: number;
+  readonly sameCheckoutAs?: string;
 }
 
 /** Turn one template into the command a host runs. */
@@ -400,7 +418,7 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
     id: step.id, standing: step.standing, description: step.description, hostRole: step.host,
     irreversible: step.irreversible, expectExit: step.expectExit,
     receipts: step.receipts.map((r) => ({ ...r, dir: fill(r.dir, values) })),
-    onlyFor: step.onlyFor, notBefore: notBeforeOf(step, target),
+    onlyFor: step.onlyFor, notBefore: notBeforeOf(step, target), maxMillis: maxMillisOf(step), sameCheckoutAs: step.sameCheckoutAs,
   };
   if (step.host === "control") {
     // The control machine: its own checkout and its own environment (the git

@@ -32,7 +32,9 @@ import {
   main,
   majorOf,
   parseArgs,
+  dumpConnection,
   pgDumpArgs,
+  readOnlyDumpEnv,
   probeCaptureTarget,
   READ_ONLY_PGOPTIONS,
   TWIN_SLIM_EXCLUDED_TABLE_DATA,
@@ -100,6 +102,19 @@ describe("parseArgs", () => {
       if ("error" in a) throw new Error(a.error);
       expect(a.out).toMatch(/rm-backup-v022$/);
     });
+  });
+});
+
+describe("the password never reaches an argv", () => {
+  test("dumpConnection strips the password into PGPASSWORD; pg_dump's --dbname carries none", () => {
+    const c = dumpConnection("postgres://rm_readonly:p%40ss*w@db.example.com:25060/defaultdb?sslmode=require");
+    expect(c.url).toBe("postgres://rm_readonly@db.example.com:25060/defaultdb?sslmode=require");
+    expect(c.env).toEqual({ PGPASSWORD: "p@ss*w" });
+    const a = pgDumpArgs("postgres://rm_readonly:secret@db.example.com:25060/defaultdb", "/tmp/d", false);
+    expect(a.join(" ")).not.toContain("secret");
+    expect(a[2]).toBe("postgres://rm_readonly@db.example.com:25060/defaultdb");
+    expect(readOnlyDumpEnv("postgres://u:secret@h/d")).toEqual({ PGOPTIONS: "-c default_transaction_read_only=on", PGPASSWORD: "secret" });
+    expect(dumpConnection("postgres://u@h/d").env).toEqual({});
   });
 });
 
@@ -565,7 +580,7 @@ describe("smoke:capture against a real hot standby — the node that serves read
           [
             "#!/bin/sh",
             `printf '%s\\t%s\\t%s\\n' '${tool}' "$1" "$PGOPTIONS" >> '${log}'`,
-            `exec docker run --rm --network host --user ${uid}:${gid} -e HOME=/tmp -e PGOPTIONS ` +
+            `exec docker run --rm --network host --user ${uid}:${gid} -e HOME=/tmp -e PGOPTIONS -e PGPASSWORD ` +
               `-v '${out}:${out}' ${POSTGRES_IMAGE} ${tool} "$@"`,
             "",
           ].join("\n"),
