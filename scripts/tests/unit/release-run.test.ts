@@ -63,7 +63,8 @@ describe("target schema", () => {
     expect(prod.legacy.checkout).toBe("/root/robotmoney-frontend");
     expect(prod.legacy.tmuxSession).toBe("driver");
     expect(prod.capture.host).toBe("rm-frontend-stage-2");
-    expect(prod.confirmTarget).toBe(CONFIRM_TARGET_PLACEHOLDER);
+    expect(prod.confirmTarget).not.toBe(CONFIRM_TARGET_PLACEHOLDER);
+    expect(prod.confirmTarget).toMatch(/^[a-z0-9.-]+:25060\/defaultdb$/);
     expect(stage.rmEnv).toBe("stage");
     expect(stage.home).toBe("/home/stage-server/stage-target");
     expect(stage.instance).toBe("stage_target");

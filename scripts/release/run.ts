@@ -32,6 +32,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateGo, type GoRecord } from "./go.ts";
+import { applyTriage, failedFindings, parseTriage } from "./triage.ts";
 import {
   checkResume, checkStageJournal, firstNotOk, journalRoot, readJournal, resumeCommand, runStamp, runStatus, RUN_TS_RE,
   selectSteps, writeJournal, type ReceiptRecord, type RunJournal, type StepRecord,
@@ -71,13 +72,14 @@ export interface RunArgs {
   run?: string;
   stageJournal?: string;
   journalRoot?: string;
+  triage?: string;
 }
 
 export function parseArgs(argv: readonly string[]): RunArgs | { error: string } {
   const out: RunArgs = { dryRun: false };
   const valued: Record<string, keyof RunArgs> = {
     "--target": "target", "--go": "go", "--from": "from", "--only": "only", "--run": "run",
-    "--stage-journal": "stageJournal", "--journal-root": "journalRoot",
+    "--stage-journal": "stageJournal", "--journal-root": "journalRoot", "--triage": "triage",
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -376,7 +378,16 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     record.endedAt = ended.toISOString();
     record.durationMs = ended.getTime() - started.getTime();
     record.receipts = pulled.receipts;
-    const ok = exit === step.expectExit && pulled.missingRequired.length === 0;
+    let ok = exit === step.expectExit && pulled.missingRequired.length === 0;
+    if (!ok && template.triage && exit !== step.expectExit && pulled.missingRequired.length === 0) {
+      const verdict = triageStep(stepDir, args.triage, deps);
+      if (verdict.accepted) {
+        ok = true;
+        record.triage = verdict.record;
+        deps.log(`[${NAME}] ${id} exited ${exit}; every failed finding is in the owner's triage ${verdict.record.file} (sha256 ${verdict.record.sha256.slice(0, 12)}):`);
+        for (const e of verdict.record.used) deps.log(`  - ${e.check}: "${e.fragment}" (${e.reason})`);
+      } else if (verdict.message) record.error = verdict.message;
+    }
     if (!ok && exit === step.expectExit) record.error = `required receipt missing: ${pulled.missingRequired.join(", ")}`;
     if (!ok && exit !== step.expectExit) record.error ??= `exit ${exit}, expected ${step.expectExit}`;
     record.status = ok ? "ok" : "failed";
@@ -398,6 +409,35 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   writeJournal(runDir, journal);
   deps.log(`\n[${NAME}] run ${runTs}: ${journal.status}. Step list ${hash}. Journal ${runDir}`);
   return journal.status === "passed" || args.only !== undefined ? 0 : 1;
+}
+
+/** R2.5: read the step's pulled gate report and the owner's triage file; accept only full coverage. */
+function triageStep(stepDir: string, triagePath: string | undefined, deps: RunnerDeps):
+  { accepted: true; record: NonNullable<StepRecord["triage"]> } | { accepted: false; message?: string } {
+  const reportPath = join(stepDir, "receipts", "prod-gate-baseline.json");
+  const reportText = deps.readText(reportPath);
+  if (reportText === undefined) return { accepted: false, message: `the gate failed and wrote no ${reportPath} to triage` };
+  let report: unknown;
+  try { report = JSON.parse(reportText); } catch { return { accepted: false, message: `the gate report ${reportPath} is not JSON` }; }
+  const findings = failedFindings(report) ?? [];
+  const listing = findings.map((f) => `${f.check}: ${f.detail.slice(0, 160)}`).join("\n  - ");
+  if (triagePath === undefined) {
+    return { accepted: false, message: `the baseline gate failed. Each finding needs the owner's triage (--triage <file>, scripts/release/triage.ts):\n  - ${listing}` };
+  }
+  const path = triagePath.startsWith("~/") ? join(deps.home, triagePath.slice(2)) : resolve(triagePath);
+  const text = deps.readText(path);
+  if (text === undefined) return { accepted: false, message: `the triage file ${path} cannot be read` };
+  const parsed = parseTriage(text);
+  if ("errors" in parsed) return { accepted: false, message: `the triage file ${path} is malformed:\n  - ${parsed.errors.join("\n  - ")}` };
+  const result = applyTriage(report, parsed.entries);
+  if (!result.accepted) {
+    const left = result.unmatched.map((f) => `${f.check}: ${f.detail.slice(0, 160)}`).join("\n  - ");
+    return { accepted: false, message: `the triage file ${path} does not cover:\n  - ${left || "(the report names no failed check)"}` };
+  }
+  return {
+    accepted: true,
+    record: { file: path, sha256: createHash("sha256").update(text).digest("hex"), used: result.used.map((e) => ({ ...e })) },
+  };
 }
 
 function newJournal(target: ReleaseTarget, commit: string, hash: string, ids: readonly string[], go: GoRecord, runTs: string, now: Date): RunJournal {
