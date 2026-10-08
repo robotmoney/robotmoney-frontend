@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ALTER_OWNER_LOGIN_SQL,
+  READ_OWNER_LOGIN_SQL,
   enableOwnerLoginWith,
   scrub,
   type EnableOwnerLoginSeam,
@@ -70,9 +71,29 @@ describe("enableOwnerLoginWith", () => {
     expect(ALTER_OWNER_LOGIN_SQL).toBe("ALTER ROLE rm_owner LOGIN");
     const source = readFileSync(join(import.meta.dir, "../../../backend/scripts/enable-owner-login.ts"), "utf8");
     expect(source).not.toMatch(/PASSWORD\s*'/i);
-    // The driver runs only the two declared statements and a SELECT 1.
-    const unsafe = [...source.matchAll(/\.unsafe\(([^)]*)\)/g)].map((m) => m[1]);
-    expect(unsafe).toEqual(["READ_OWNER_LOGIN_SQL", "ALTER_OWNER_LOGIN_SQL", '"SELECT 1"']);
+    // The driver runs only the two declared statements and a SELECT 1, all
+    // through the registry (spec §7.1): no raw statement at all.
+    expect(source).not.toMatch(/\.unsafe\(/);
+    const issued = [...source.matchAll(/onStatement\((\w+), (\w+)\)(?:<[^>]*>)?`([^`]*)`/g)].map((m) => [m[1], m[2], m[3]]);
+    expect(issued).toEqual([
+      ["admin", "readOwnerCanLogin", READ_OWNER_LOGIN_SQL],
+      ["admin", "alterOwnerLogin", ALTER_OWNER_LOGIN_SQL],
+      ["owner", "proveOwner", "SELECT 1"],
+    ]);
+  });
+
+  test("the two doadmin statements are the registry's provisioning shapes, and the login proof is rm_owner's", async () => {
+    const { registeredStatements, PROVISIONING_SHAPES } = await import("../../../backend/src/db/registry.ts");
+    expect(READ_OWNER_LOGIN_SQL).toBe(PROVISIONING_SHAPES.ownerCanLogin);
+    expect(ALTER_OWNER_LOGIN_SQL).toBe(PROVISIONING_SHAPES.ownerLoginEnable);
+    const mine = registeredStatements()
+      .filter((d) => d.site.startsWith("scripts/enable-owner-login:"))
+      .map((d) => [d.site, d.role, d.shape]);
+    expect(mine).toEqual([
+      ["scripts/enable-owner-login:readCanLogin", "doadmin", "ownerCanLogin"],
+      ["scripts/enable-owner-login:alterLogin", "doadmin", "ownerLoginEnable"],
+      ["scripts/enable-owner-login:proveOwnerLogin", "rm_owner", "connectionCheck"],
+    ]);
   });
 });
 

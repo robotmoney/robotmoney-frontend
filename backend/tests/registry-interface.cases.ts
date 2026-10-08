@@ -441,6 +441,35 @@ describe("registerStatement — the object-less kind (D55 (13)), a closed list o
     expect(() => registerStatement(statement({ callers: ["not a module"] }))).toThrow("caller");
   });
 
+  test("D61: doadmin declares a provisioning shape from scripts/enable-owner-login only, and nobody else may", () => {
+    const provisioning = (over: Partial<StatementDeclaration> = {}): StatementDeclaration =>
+      statement({
+        role: "doadmin",
+        shape: "ownerCanLogin",
+        site: `scripts/enable-owner-login:fixture_${++seq}`,
+        callers: ["scripts/enable-owner-login"],
+        ...over,
+      });
+    // The one admitted shape of a doadmin declaration registers and runs its text.
+    const ok = registerStatement(provisioning());
+    expect(ok.declaration.role).toBe("doadmin");
+    // doadmin on an object-less shape, from another module, with another or an
+    // extra caller: each refused.
+    expect(() => registerStatement(provisioning({ shape: "connectionCheck" }))).toThrow("used by one command only");
+    expect(() => registerStatement(provisioning({ site: site("doadmin_elsewhere") }))).toThrow("used by one command only");
+    expect(() => registerStatement(provisioning({ callers: ["scripts/prod-bootstrap"] }))).toThrow("used by one command only");
+    expect(() =>
+      registerStatement(provisioning({ callers: ["scripts/enable-owner-login", "scripts/prod-bootstrap"] })),
+    ).toThrow("used by one command only");
+    // A provisioning shape under any §3 role is refused: it is doadmin's alone.
+    for (const role of TAXONOMY_ROLES) {
+      expect(() => registerStatement(provisioning({ role, shape: "ownerLoginEnable" }))).toThrow("doadmin's alone");
+    }
+    // A role that is neither, and a query declaring doadmin, are refused too.
+    expect(() => registerStatement(statement({ role: "rm_migrator" as unknown as RmRole }))).toThrow("not a §3 role");
+    expect(() => registerQuery(declaration({ role: "doadmin" as unknown as RmRole }))).toThrow("declares no query");
+  });
+
   test("a different re-registration of one site is refused, an identical one is not", () => {
     const decl = statement({ site: site("re") });
     const first = registerStatement(decl);
