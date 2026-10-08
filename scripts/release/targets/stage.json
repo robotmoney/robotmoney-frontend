@@ -1,7 +1,7 @@
 {
   "$comment": "Stage target for bun run release:run (D61 rule 2): the same steps as prod.json, against the stage target database that scripts/release/stage-target.ts up restores before the run. HOME is a dedicated directory whose .env names that database. The legacy stack is the v0.5.4 checkout booted against it (PR 1229). watchMinAttendance is 0.4 on stage: the four external members file against production, never against the stage database, so a stage session holds at most the three in-house takes of seven active members (3/7 = 0.43). Production keeps the gate's default 0.5 (owner-visible, 2026-10-08).",
   "release": "v0.6.0",
-  "commit": "9d30b960fcb01a20e12a9118dd46dfd5c8f85eac",
+  "commit": "9e9a664666c2c064844e2ed24f0ac88b17eb934f",
   "rmEnv": "stage",
   "host": "rm-frontend-stage-2",
   "checkout": "/home/stage-server/rm-stage-target",

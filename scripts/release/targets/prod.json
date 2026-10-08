@@ -1,7 +1,7 @@
 {
   "$comment": "Production target for bun run release:run (D61). Set commit to the release commit the stage run passed at. Fill confirmTarget with host:port/database from rm-frontend-prod-1's /root/.env before the run. The run refuses the placeholder, and R1.2 refuses a value that differs from what the host resolves.",
   "release": "v0.6.0",
-  "commit": "9d30b960fcb01a20e12a9118dd46dfd5c8f85eac",
+  "commit": "9e9a664666c2c064844e2ed24f0ac88b17eb934f",
   "rmEnv": "prod",
   "host": "rm-frontend-prod-1",
   "checkout": "/root/rm-060",
