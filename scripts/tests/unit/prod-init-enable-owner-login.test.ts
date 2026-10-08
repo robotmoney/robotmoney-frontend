@@ -14,7 +14,9 @@ import {
   ALTER_OWNER_LOGIN_SQL,
   READ_OWNER_LOGIN_SQL,
   enableOwnerLoginWith,
+  proveDoadminLogin,
   scrub,
+  type DoadminConnection,
   type EnableOwnerLoginSeam,
 } from "../../../backend/scripts/enable-owner-login.ts";
 
@@ -76,6 +78,7 @@ describe("enableOwnerLoginWith", () => {
     expect(source).not.toMatch(/\.unsafe\(/);
     const issued = [...source.matchAll(/onStatement\((\w+), (\w+)\)(?:<[^>]*>)?`([^`]*)`/g)].map((m) => [m[1], m[2], m[3]]);
     expect(issued).toEqual([
+      ["doadmin", "proveDoadmin", "SELECT 1"],
       ["admin", "readOwnerCanLogin", READ_OWNER_LOGIN_SQL],
       ["admin", "alterOwnerLogin", ALTER_OWNER_LOGIN_SQL],
       ["owner", "proveOwner", "SELECT 1"],
@@ -93,6 +96,7 @@ describe("enableOwnerLoginWith", () => {
       ["scripts/enable-owner-login:readCanLogin", "doadmin", "ownerCanLogin"],
       ["scripts/enable-owner-login:alterLogin", "doadmin", "ownerLoginEnable"],
       ["scripts/enable-owner-login:proveOwnerLogin", "rm_owner", "connectionCheck"],
+      ["scripts/enable-owner-login:proveDoadminLogin", "doadmin", "doadminLoginCheck"],
     ]);
   });
 });
@@ -105,5 +109,39 @@ describe("scrub", () => {
 
   test("red control: an empty secret list leaves the text alone", () => {
     expect(scrub("nothing secret", [""])).toBe("nothing secret");
+  });
+});
+
+describe("proveDoadminLogin (release step R1.2)", () => {
+  const PW = "doadmin-s3cret/pw";
+  const URL_ = `postgres://doadmin:${encodeURIComponent(PW)}@db.example:25060/rm?sslmode=require`;
+  function fake(fail?: string): { issued: string[]; closed: () => boolean; connect: (url: string) => DoadminConnection } {
+    const issued: string[] = [];
+    let closed = false;
+    const tag = (strings: TemplateStringsArray) => {
+      issued.push(strings.join("?"));
+      return fail ? Promise.reject(new Error(fail)) : Promise.resolve([{ "?column?": 1 }]);
+    };
+    return {
+      issued,
+      closed: () => closed,
+      connect: () => ({ db: tag as unknown as DoadminConnection["db"], close: async () => { closed = true; } }),
+    };
+  }
+
+  test("issues exactly SELECT 1 as doadmin and closes the connection", async () => {
+    const f = fake();
+    await proveDoadminLogin(URL_, f.connect);
+    expect(f.issued).toEqual(["SELECT 1"]);
+    expect(f.closed()).toBe(true);
+  });
+
+  test("red: a failed login throws without the URL or the password, and still closes", async () => {
+    const f = fake(`password authentication failed for ${URL_} (${PW})`);
+    const err = await proveDoadminLogin(URL_, f.connect).then(() => null, (e: Error) => e);
+    expect(err?.message).toContain("doadmin could not log in");
+    expect(err?.message).not.toContain(PW);
+    expect(err?.message).not.toContain(encodeURIComponent(PW));
+    expect(f.closed()).toBe(true);
   });
 });

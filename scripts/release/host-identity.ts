@@ -13,16 +13,29 @@
 // the database answers, its ledger equals a supported baseline, and its
 // deployment_identity is absent or the kind RM_ENV implies.
 //
+// With --confirm-target it also proves what the cutover needs later, before
+// R6.1 stops the legacy stack (the run's first irreversible step):
+//   - `~/.env` holds a non-empty `doadmin` line (./env-keys.ts
+//     PRE_CUTOVER_REQUIRED_KEYS). R6.2 checks it again.
+//   - the doadmin password logs in: `SELECT 1` through the registry's
+//     provisioning shape `doadminLoginCheck`, declared in
+//     backend/scripts/enable-owner-login.ts (proveDoadminLogin).
+// `rm_owner` is optional: absent, R6.2b generates it; present, R6.2b keeps it
+// (an empty line refuses). Its password cannot be proven here: rm_owner is
+// NOLOGIN until R6.2b. `RM_CREDENTIALS` is not required here: R6.2a writes it.
+//
 // Writes host-identity.json to --receipt-dir. Prints key names, never values.
 // Runs before `bun install`, so it imports only node built-ins and local
-// modules with no package import.
+// modules with no package import (the registry imports `postgres` as a type
+// only; proveDoadminLogin connects through Bun's built-in client).
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
-import { homeEnvFilePath, loadEnvFile } from "../lib/env-role.ts";
+import { proveDoadminLogin } from "../../backend/scripts/enable-owner-login.ts";
+import { homeEnvFilePath, loadEnvFile, urlForRole } from "../lib/env-role.ts";
 import { openReadOnly } from "./db-read.ts";
-import { confirmTargetOf } from "./env-keys.ts";
+import { confirmTargetOf, preCutoverKeyProblems, rmOwnerPlan } from "./env-keys.ts";
 import { preconditionProblems } from "./precondition.ts";
 
 function flag(name: string): string | undefined {
@@ -65,8 +78,10 @@ async function main(): Promise<number> {
       resolvedTarget = confirmTargetOf(env);
       if (resolvedTarget === undefined) problems.push(`${envPath} names no host and database`);
       else if (resolvedTarget !== confirm) problems.push(`${envPath} names ${resolvedTarget}; the target file confirms ${confirm}`);
+      problems.push(...preCutoverKeyProblems(env, envPath));
     }
   }
+  const rmOwner = confirm !== undefined && env !== undefined ? rmOwnerPlan(env) : null;
   let precondition: { ledgerCount: number; identity: string | null; problems: string[] } | null = null;
   if (confirm !== undefined && resolvedTarget !== undefined && resolvedTarget === confirm) {
     try {
@@ -83,6 +98,19 @@ async function main(): Promise<number> {
       }
     } catch (error) {
       problems.push(`target precondition: the database ${resolvedTarget} cannot be read as rm_readonly (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
+  // The doadmin login proof, read-only. Only on the target ~/.env names, and
+  // only with a doadmin line (its absence is already a problem above).
+  let doadminLogin: "proven" | "failed" | "not-tried" = "not-tried";
+  const doadminUrl = env ? urlForRole(env, "doadmin") : undefined;
+  if (confirm !== undefined && resolvedTarget !== undefined && resolvedTarget === confirm && doadminUrl !== undefined) {
+    try {
+      await proveDoadminLogin(doadminUrl);
+      doadminLogin = "proven";
+    } catch (error) {
+      doadminLogin = "failed";
+      problems.push(`doadmin login: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   const receipt = {
@@ -103,6 +131,8 @@ async function main(): Promise<number> {
     resolvedTarget: resolvedTarget ?? null,
     confirmTarget: confirm ?? null,
     precondition,
+    doadminLogin,
+    rmOwner,
     problems,
     at: new Date().toISOString(),
   };
@@ -111,6 +141,9 @@ async function main(): Promise<number> {
   writeFileSync(file, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
   console.log(`[host-identity] ${hostname()} HEAD ${head}${resolvedTarget ? `, ~/.env names ${resolvedTarget}` : ""}`);
   if (precondition) console.log(`[host-identity] target: ledger ${precondition.ledgerCount} names, identity ${precondition.identity ?? "absent"}`);
+  if (doadminLogin === "proven") console.log("[host-identity] doadmin: login proven (SELECT 1)");
+  if (rmOwner === "generated-at-R6.2b") console.log("[host-identity] rm_owner: no line in ~/.env; rm_owner will be generated at R6.2b");
+  if (rmOwner === "kept") console.log("[host-identity] rm_owner: the ~/.env line will be kept at R6.2b; it cannot be proven before R6.2b makes the role LOGIN");
   console.log(`[host-identity] receipt: ${file}`);
   for (const p of problems) console.error(`[host-identity] REFUSE: ${p}`);
   return problems.length === 0 ? 0 : 1;

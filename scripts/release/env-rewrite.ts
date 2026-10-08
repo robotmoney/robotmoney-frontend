@@ -7,8 +7,11 @@
 // key is outside the list moves, unchanged, to `$HOME/.env.retired-<run-ts>`
 // (mode 0600, created exclusively, never overwritten); the rest stays, in
 // order, comments included. Moving aside rather than deleting is runbook
-// R6.2's rule. It refuses, changing nothing, when `rm_owner`, `doadmin` or
-// `RM_CREDENTIALS` is missing: the cutover's writes would stop halfway.
+// R6.2's rule. It refuses, changing nothing, when `doadmin` or
+// `RM_CREDENTIALS` is missing: the cutover's writes would stop halfway. It
+// does not require `rm_owner`: R6.2b runs after it and generates that line
+// when it is absent. An existing `rm_owner` line is on the allowlist, so it
+// stays, and a line R6.2b writes later is never retired.
 //
 // A second run with nothing to retire changes nothing, so a resumed run
 // passes. It prints and records key NAMES only, never a value.

@@ -35,7 +35,7 @@ import { epochProblems, inFlightProblems, paritySweep, regimeCronProblems } from
 import { baselineProblems, WOULD_CLEAR_SQL } from "../../release/baseline.ts";
 import { identityProblems } from "../../release/identity-check.ts";
 import { IDENTITY_MIGRATION, preconditionProblems } from "../../release/precondition.ts";
-import { D61_ENV_ALLOWLIST, confirmTargetOf } from "../../release/env-keys.ts";
+import { D61_ENV_ALLOWLIST, D61_REQUIRED_KEYS, PRE_CUTOVER_REQUIRED_KEYS, RUN_WRITTEN_KEYS, confirmTargetOf, preCutoverKeyProblems, rmOwnerPlan } from "../../release/env-keys.ts";
 import { SUPPORTED_RELEASES } from "../../../backend/src/db/supported-releases.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
@@ -504,9 +504,15 @@ describe("env rewrite key partition (R6.2)", () => {
     expect(p.retiredText).toBe("OPENCODE_API_KEY=z\nexport ADMIN_TOKEN=t\na bare value\n");
     expect(p.missingRequired).toEqual([]);
   });
-  test("red: a file without rm_owner, doadmin or RM_CREDENTIALS reports them", () => {
+  test("red: a file without doadmin or RM_CREDENTIALS reports them; rm_owner is not required (R6.2b writes it after R6.2)", () => {
     const p = partitionEnv("host=h\ndatabase=d\nrm_readonly=r\n");
-    expect(p.missingRequired).toEqual(["rm_owner", "doadmin", "RM_CREDENTIALS"]);
+    expect(p.missingRequired).toEqual(["doadmin", "RM_CREDENTIALS"]);
+    expect(partitionEnv("host=h\ndatabase=d\ndoadmin=x\nRM_CREDENTIALS=/c\n").missingRequired).toEqual([]);
+  });
+  test("an existing rm_owner line stays through R6.2, so R6.3 still finds it", () => {
+    const p = partitionEnv("host=h\ndatabase=d\nrm_owner=o\ndoadmin=x\nRM_CREDENTIALS=/c\n");
+    expect(p.keptKeys).toContain("rm_owner");
+    expect(p.retiredKeys).toEqual([]);
   });
   test("the D61 allowlist is exactly preflight check 4's list, which holds rm_owner and doadmin", () => {
     expect([...D61_ENV_ALLOWLIST].sort()).toEqual([...ENV_FILE_ALLOWED_KEYS].sort());
@@ -718,5 +724,146 @@ describe("W1's attendance threshold is target data, not a template change", () =
     expect("errors" in validateTarget("stage", raw)).toBe(true);
     raw.watchMinAttendance = 1.5;
     expect("errors" in validateTarget("stage", raw)).toBe(true);
+  });
+});
+
+// R1.2 proves every ~/.env key the cutover needs before R6.1 stops the legacy
+// stack: production's /root/.env once lacked them, and a run that stopped the
+// site and then refused at R6.2 would have left it down.
+describe("the cutover's ~/.env keys are proven at R1.2, before the first irreversible step", () => {
+  const ENV_PATH = "/root/.env";
+  const SECRET = "Sup3r-s3cret-value";
+
+  test("doadmin present passes; rm_owner absent or present both pass", () => {
+    expect(preCutoverKeyProblems({ doadmin: SECRET }, ENV_PATH)).toEqual([]);
+    expect(preCutoverKeyProblems({ doadmin: SECRET, rm_owner: SECRET }, ENV_PATH)).toEqual([]);
+    expect(rmOwnerPlan({ doadmin: SECRET })).toBe("generated-at-R6.2b");
+    expect(rmOwnerPlan({ doadmin: SECRET, rm_owner: SECRET })).toBe("kept");
+  });
+
+  test("red: doadmin missing, doadmin empty, doadmin blank, and an empty rm_owner line each refuse", () => {
+    for (const env of [{}, { rm_owner: SECRET }, { doadmin: "" }, { doadmin: "   " }]) {
+      const problems = preCutoverKeyProblems(env, ENV_PATH);
+      expect(problems.length, JSON.stringify(env)).toBe(1);
+      expect(problems[0]).toContain("doadmin");
+      expect(problems[0]).toContain(ENV_PATH);
+    }
+    const emptyOwner = preCutoverKeyProblems({ doadmin: SECRET, rm_owner: "" }, ENV_PATH);
+    expect(emptyOwner).toHaveLength(1);
+    expect(emptyOwner[0]).toContain("rm_owner");
+    // Both wrong: both named.
+    expect(preCutoverKeyProblems({ rm_owner: "" }, ENV_PATH).join("\n")).toMatch(/doadmin[\s\S]*rm_owner/);
+  });
+
+  test("a refusal never holds a value", () => {
+    for (const env of [{ rm_owner: SECRET }, { doadmin: "", rm_owner: SECRET }, { doadmin: SECRET, rm_owner: "" }]) {
+      expect(preCutoverKeyProblems(env, ENV_PATH).join("\n")).not.toContain(SECRET);
+    }
+  });
+
+  test("RM_CREDENTIALS and rm_owner are not required before the run: the run writes them, each before the step that needs it", () => {
+    expect([...PRE_CUTOVER_REQUIRED_KEYS]).toEqual(["doadmin"]);
+    expect(RUN_WRITTEN_KEYS).toEqual({ RM_CREDENTIALS: "R6.2a", rm_owner: "R6.2b" });
+    expect([...D61_REQUIRED_KEYS]).toEqual(["doadmin", "RM_CREDENTIALS"]);
+    const ids = stepIds();
+    const at = (id: string) => ids.indexOf(id);
+    // R6.2 requires RM_CREDENTIALS: R6.2a writes it first.
+    expect(at("R6.2a")).toBeLessThan(at("R6.2"));
+    // rm_owner is needed from R6.3 (the first migrate): R6.2b writes it first, after R6.2 rewrote ~/.env.
+    expect(at("R6.2")).toBeLessThan(at("R6.2b"));
+    expect(at("R6.2b")).toBeLessThan(at("R6.3"));
+    // R6.2 keeps rm_owner: it is on the allowlist.
+    expect(D61_ENV_ALLOWLIST).toContain("rm_owner");
+    for (const [key, writer] of Object.entries(RUN_WRITTEN_KEYS)) expect(ids, key).toContain(writer);
+  });
+
+  /** The index of the step that checks the pre-cutover keys: host-identity with --confirm-target. */
+  const keyCheckIndex = (steps: readonly StepTemplate[]) =>
+    steps.findIndex((s) => s.cmds.some((c) => c.includes("scripts/release/host-identity.ts") && c.includes("--confirm-target")));
+  const firstIrreversible = (steps: readonly StepTemplate[]) => steps.findIndex((s) => s.irreversible);
+  const keysCheckedFirst = (steps: readonly StepTemplate[]) => {
+    const check = keyCheckIndex(steps);
+    return check >= 0 && check < firstIrreversible(steps);
+  };
+
+  test("every pre-cutover key check precedes the first irreversible step (R6.1)", () => {
+    expect(RELEASE_STEPS[keyCheckIndex(RELEASE_STEPS)]?.id).toBe("R1.2");
+    expect(RELEASE_STEPS[firstIrreversible(RELEASE_STEPS)]?.id).toBe("R6.1");
+    expect(keysCheckedFirst(RELEASE_STEPS)).toBe(true);
+    // R6.2, the defence-in-depth check, needs only keys R1.2 checked or the run wrote.
+    for (const key of D61_REQUIRED_KEYS) expect(PRE_CUTOVER_REQUIRED_KEYS.includes(key) || key in RUN_WRITTEN_KEYS, key).toBe(true);
+    // The R1.2 description says rm_owner cannot be proven and RM_CREDENTIALS is not required.
+    const r12 = RELEASE_STEPS.find((s) => s.id === "R1.2")!;
+    expect(r12.description).toContain("doadmin logs in");
+    expect(r12.description).toContain("cannot be proven");
+    expect(r12.description).toContain("RM_CREDENTIALS is not required");
+  });
+
+  test("red: R1.2 moved after R6.1, or R1.2 without --confirm-target, fails the order check", () => {
+    const r12 = RELEASE_STEPS.find((s) => s.id === "R1.2")!;
+    const without = RELEASE_STEPS.filter((s) => s.id !== "R1.2");
+    const r61 = without.findIndex((s) => s.id === "R6.1");
+    expect(keysCheckedFirst([...without.slice(0, r61 + 1), r12, ...without.slice(r61 + 1)])).toBe(false);
+    const noConfirm = { ...r12, cmds: [r12.cmds[0]!.filter((a, i, all) => a !== "--confirm-target" && all[i - 1] !== "--confirm-target")] };
+    expect(keysCheckedFirst(RELEASE_STEPS.map((s) => (s.id === "R1.2" ? noConfirm : s)))).toBe(false);
+  });
+
+  // The real script, end to end, against an unreachable database: the key
+  // refusals, the rm_owner report and the doadmin login failure all print
+  // key names and never a value.
+  describe("host-identity.ts prints key names, never values", () => {
+    const OWNER = "owner-Pw-9f3a1c";
+    const ADMIN = "admin-Pw-7b2e4d";
+    function run(envText: string): { out: string; receipt: string; code: number | null } {
+      const work = mkdtempSync(join(tmpdir(), "rm-host-identity-"));
+      const home = join(work, "home");
+      const repo = join(work, "repo");
+      const receipts = join(work, "receipts");
+      for (const d of [home, repo]) spawnSync("mkdir", ["-p", d]);
+      writeFileSync(join(home, ".env"), envText, { mode: 0o600 });
+      const vcs = (...args: string[]) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo, encoding: "utf8" });
+      vcs("init", "-q");
+      vcs("commit", "-q", "--allow-empty", "-m", "x");
+      const sha = vcs("rev-parse", "HEAD").stdout.trim();
+      const env: Record<string, string> = { HOME: home, PATH: process.env.PATH ?? "/usr/bin:/bin", LANG: "C.UTF-8", RM_ENV: "prod" };
+      const r = spawnSync("bun", [join(repoRoot, "scripts/release/host-identity.ts"), "--commit", sha, "--confirm-target", "127.0.0.1:1/rm", "--receipt-dir", receipts],
+        { cwd: repo, env, encoding: "utf8", timeout: 60_000 });
+      let receipt = "";
+      try { receipt = readFileSync(join(receipts, "host-identity.json"), "utf8"); } catch { /* none */ }
+      return { out: `${r.stdout}\n${r.stderr}`, receipt, code: r.status };
+    }
+    const conn = "host=127.0.0.1\nport=1\ndatabase=rm\nsslmode=disable\nrm_readonly=ro-Pw-1\n";
+    const clean = (x: { out: string; receipt: string }) => {
+      for (const v of [OWNER, ADMIN, encodeURIComponent(OWNER), encodeURIComponent(ADMIN)]) {
+        expect(x.out).not.toContain(v);
+        expect(x.receipt).not.toContain(v);
+      }
+    };
+
+    test("red: doadmin missing refuses, naming doadmin; the rm_owner value never prints", () => {
+      const x = run(`${conn}rm_owner=${OWNER}\n`);
+      expect(x.code).toBe(1);
+      expect(x.out).toMatch(/REFUSE: .*has no non-empty doadmin line/);
+      expect(x.out).toContain("rm_owner: the ~/.env line will be kept at R6.2b");
+      expect(x.receipt).toContain(`"rmOwner": "kept"`);
+      expect(x.receipt).toContain(`"doadminLogin": "not-tried"`);
+      clean(x);
+    }, 60_000);
+
+    test("red: an empty doadmin line refuses like a missing one", () => {
+      const x = run(`${conn}doadmin=\nrm_owner=${OWNER}\n`);
+      expect(x.out).toMatch(/REFUSE: .*has no non-empty doadmin line/);
+      clean(x);
+    }, 60_000);
+
+    test("doadmin present, rm_owner absent: no key refusal, rm_owner will be generated, the doadmin login is tried and its failure holds no password", () => {
+      const x = run(`${conn}doadmin=${ADMIN}\n`);
+      expect(x.out).not.toMatch(/REFUSE: .*(non-empty doadmin|rm_owner line)/);
+      expect(x.out).toContain("rm_owner will be generated at R6.2b");
+      expect(x.out).toMatch(/REFUSE: doadmin login: doadmin could not log in/);
+      expect(x.receipt).toContain(`"doadminLogin": "failed"`);
+      expect(x.receipt).toContain(`"rmOwner": "generated-at-R6.2b"`);
+      clean(x);
+    }, 60_000);
   });
 });

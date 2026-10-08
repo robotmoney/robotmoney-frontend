@@ -39,6 +39,7 @@ import {
 const PINNED_PROVISIONING_SHAPES: Readonly<Record<string, string>> = {
   ownerCanLogin: "SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'",
   ownerLoginEnable: "ALTER ROLE rm_owner LOGIN",
+  doadminLoginCheck: "SELECT 1",
 };
 
 /** The four roles of spec §3. There is no `rm_migrator` (D46/D47) and `doadmin`
@@ -1087,6 +1088,17 @@ describe("doadmin is used by one command only (D61) — the provisioning shapes"
     expect(/\b(join|into|update|delete|insert|truncate)\b/i.test(PROVISIONING_SHAPES.ownerCanLogin)).toBe(false);
     expect(PROVISIONING_SHAPES.ownerLoginEnable).toBe("ALTER ROLE rm_owner LOGIN");
     expect(PROVISIONING_SHAPES.ownerLoginEnable).not.toMatch(/password/i);
+    // The login proof release step R1.2 runs is exactly SELECT 1: it reads nothing and writes nothing.
+    expect(PROVISIONING_SHAPES.doadminLoginCheck).toBe("SELECT 1");
+  });
+
+  test("the caller list stays one module: R1.2 reaches the doadmin login proof through enable-owner-login, never by declaring it", () => {
+    // Red control: host-identity (repo-root scripts/release) is not a caller id and declares nothing.
+    expect([PROVISIONING_CALLER]).toEqual(["scripts/enable-owner-login"]);
+    const hostIdentity = readFileSync(join(BACKEND, "..", "scripts", "release", "host-identity.ts"), "utf8");
+    expect(hostIdentity).not.toMatch(/\brole\s*:\s*["'`]doadmin["'`]/);
+    expect(hostIdentity).not.toMatch(/registerStatement|onStatement/);
+    expect(hostIdentity).toMatch(/import \{ proveDoadminLogin \} from "\.\.\/\.\.\/backend\/scripts\/enable-owner-login\.ts"/);
   });
 
   test("no module but scripts/enable-owner-login names doadmin as a role, read from source", () => {
@@ -1102,7 +1114,7 @@ describe("doadmin is used by one command only (D61) — the provisioning shapes"
     expect(declaring).toEqual([join("scripts", "enable-owner-login.ts")]);
   });
 
-  test("the doadmin declarations a process holds are exactly the two enable-owner-login sites", () => {
+  test("the doadmin declarations a process holds are exactly the three enable-owner-login sites", () => {
     const script = join(mkdtempSync(join(tmpdir(), "rm-registry-doadmin-")), "enumerate.ts");
     writeFileSync(script, [
       `await import(${JSON.stringify(join(BACKEND, "scripts", "enable-owner-login.ts"))});`,
@@ -1117,6 +1129,7 @@ describe("doadmin is used by one command only (D61) — the provisioning shapes"
       expect(statements.filter((s) => s.role === "doadmin").map((s) => [s.site, s.shape, s.callers])).toEqual([
         ["scripts/enable-owner-login:readCanLogin", "ownerCanLogin", ["scripts/enable-owner-login"]],
         ["scripts/enable-owner-login:alterLogin", "ownerLoginEnable", ["scripts/enable-owner-login"]],
+        ["scripts/enable-owner-login:proveDoadminLogin", "doadminLoginCheck", ["scripts/enable-owner-login"]],
       ]);
     } finally {
       rmSync(dirname(script), { recursive: true, force: true });

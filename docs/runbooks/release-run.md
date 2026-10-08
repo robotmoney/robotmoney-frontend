@@ -101,6 +101,14 @@ Step R1.2 checks the precondition on every target, read-only, through `rm_readon
 
 With the identity row present, the ledger may also record `0081_deployment_identity.sql`. A remote twin prepared by [`pre-identity-remote-twin.md`](./pre-identity-remote-twin.md) has that shape. A database already migrated by this release fails the check. A failed run resumes with `--from`. It never restarts at R1.
 
+Step R1.2 also proves, before R6.1 stops the legacy stack, the `~/.env` keys the cutover needs later:
+
+- a non-empty `doadmin` line, and a doadmin login with `SELECT 1`. It is read-only. The statement is the registry's provisioning shape `doadminLoginCheck`, declared in `backend/scripts/enable-owner-login.ts`;
+- `rm_owner` is optional. Absent, R6.2b generates it. Present, R6.2b keeps it. An empty line refuses. Its password cannot be proven at R1.2: the role is NOLOGIN until R6.2b;
+- `RM_CREDENTIALS` is not required. R6.2a writes it.
+
+R6.2 checks `doadmin` and `RM_CREDENTIALS` again, as defence in depth.
+
 ## The step list
 
 Every remote step runs as
@@ -123,7 +131,7 @@ runner copies back only the receipts written after that marker.
 | Id | Host | Command | Irreversible | Standing |
 |---|---|---|---|---|
 | R1.1 | target | `git fetch --tags origin`; `git checkout --detach <commit>` | no | SP.1 |
-| R1.2 | target | `bun scripts/release/host-identity.ts --commit <sha> --confirm-target <T>` (identity and target precondition) | no | SP.1 |
+| R1.2 | target | `bun scripts/release/host-identity.ts --commit <sha> --confirm-target <T>` (identity, target precondition, and the cutover's `~/.env` keys: a non-empty `doadmin` line whose login is proven read-only; `rm_owner` optional) | no | SP.1 |
 | R1.3 | target | `bun install --force`; `bun install --force --cwd backend` | no | SP.1 |
 | R1.4 | capture | `git fetch --tags origin`; `git checkout --detach <commit>` | no | SP.1 |
 | R1.5 | capture | `bun scripts/release/host-identity.ts --commit <sha>` | no | SP.1 |
@@ -173,14 +181,14 @@ counts as done for the run's status and for SP.8. No other step differs by targe
 
 | Script | Step | What it does |
 |---|---|---|
-| `scripts/release/host-identity.ts` | R1.2, R1.5 | HEAD equals the commit; the tree is clean; `bun`, `docker`, `tmux` and `git` resolve under the fixed `PATH`; no `DATABASE_*` variable was inherited; `~/.env` resolves to `confirmTarget`; the target precondition holds (R1.2 only) |
+| `scripts/release/host-identity.ts` | R1.2, R1.5 | HEAD equals the commit; the tree is clean; `bun`, `docker`, `tmux` and `git` resolve under the fixed `PATH`; no `DATABASE_*` variable was inherited; `~/.env` resolves to `confirmTarget`; the target precondition holds, `~/.env` has a non-empty `doadmin` line and doadmin logs in with `SELECT 1` (R1.2 only) |
 | `scripts/release/baseline.ts` | R2.3 | Through `rm_readonly` on a proven read-only session: the ledger, `deployment_identity`, the five roles, migration 0101's would-clear list (the R2.3 query, verbatim), `matchSupportedRelease`, the R2.4 counts and the database size. Refuses an in-house seat in the would-clear list and a ledger that matches no supported baseline |
 | `scripts/release/restore-proof.ts` | R2.4r | Restores the run's capture into a throwaway local Postgres container through `scripts/lib/restore-container.ts`, counts its ledger, records the restore time, and always drops the container |
 | `scripts/release/stop-legacy.ts` | R6.1, S8.1 | `stop`: kills the tmux driver, then `docker compose down` from the old checkout, never `-v`, and proves no container of the project remains. `retire`: renames the old checkout, then moves its `.env` lines that hold a database URL with a password, `MIGRATE_DATABASE_URL`, `WORKER_DATABASE_URL`, `OPENCODE_API_KEY` or another known secret to `~/.env.legacy-retired-<run-ts>` (0600). Key names only |
 | `scripts/release/tag.ts` | R5.rc, W3 | On the control machine: `rc` tags the next free rc at the commit unless one points there; `final` tags the release at the commit, or confirms it already does; each pushes its tag |
 | `scripts/release/schedule-parity.ts` | R7.4a | Every active subject has 6 h epochs; every session in flight at R2.3 published within its judging time plus 30 min of its unmoved close; the analytics-producer's regime cron runs at minute 30; reports the last parity sweep and fails a dead one |
 | `scripts/release/credentials-init.ts` | R6.2a | Reads the member ids of `athena`, `noop-analyst`, `robot-money` (agents) and `themis` (judge) through `rm_readonly`, and refuses a handle that is missing, not `active` or of the wrong role. Writes `<HOME>/.config/robotmoney/credential.json` (dir 0700, file 0600): one entry per member with a fresh Ed25519 key, the model key from `~/.env`'s `OPENCODE_API_KEY`, and a placeholder bearer that R6.7c replaces. Appends `RM_CREDENTIALS` to `~/.env` when absent. An existing file with the same roster and member ids is kept. A different roster refuses. Prints handles and key names only |
-| `scripts/release/env-rewrite.ts` | R6.2 | Moves every `~/.env` key outside the D61 allowlist to `~/.env.retired-<run-ts>` (mode 0600). Refuses when `rm_owner`, `doadmin` or `RM_CREDENTIALS` is missing. Prints key names only |
+| `scripts/release/env-rewrite.ts` | R6.2 | Moves every `~/.env` key outside the D61 allowlist to `~/.env.retired-<run-ts>` (mode 0600). Refuses when `doadmin` or `RM_CREDENTIALS` is missing. Does not require `rm_owner`: R6.2b runs after it and writes that line when absent. Prints key names only |
 | `scripts/release/identity-check.ts` | R7.1 | `/api/version` and `/version.json` carry the commit, with no `+dirty` or `+unknown` |
 | `scripts/release/compare-baseline.ts` | R7.5 | Every R2.4 count only grew; the database size is within the bound |
 | `scripts/release/host-guards.ts` | R7.7 | No container of the instance mounts a Docker socket; `~/.env` keys are within the allowlist; the three token files are mode 0600; no world-readable file under `HOME` or the retired checkout holds a postgres URL with a password |

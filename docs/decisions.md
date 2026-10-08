@@ -5228,6 +5228,11 @@ for them reads them from there. They stay out of everything else:
   No container, compose file, image or log receives `rm_owner` or `doadmin`.
 - They never appear in a receipt, a journal, a process argument or command output.
 - `doadmin` is used by one command only, `prod-init enable-owner-login`.
+  Amended 2026-10-08: release step R1.2 also logs in as `doadmin` and runs
+  `SELECT 1`, read-only, so a bad password refuses the run before R6.1 stops the
+  legacy stack. The statement is declared in the same module
+  (`backend/scripts/enable-owner-login.ts`), which stays the one place a
+  `doadmin` statement is declared.
 
 **The confirmation.** The literal `y` becomes `--confirm-target <host:port/database>`.
 A command that writes refuses unless the flag names exactly the target it resolved
