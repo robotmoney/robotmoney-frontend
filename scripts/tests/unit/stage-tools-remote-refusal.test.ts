@@ -123,6 +123,7 @@ const NOT_A_REMOTE_STAGE_TOOL: Readonly<Record<string, string>> = {
   "scripts/lib/smoke-journal.ts": "names the table in a journal record",
   "scripts/lib/swarm/spoof-keys.ts": "rehearsal-only, requireRehearsalTarget",
   "scripts/prod-init.ts": "production initialisation; refuses a non-production target by its own rule",
+  "scripts/release/baseline.ts": "the release baseline (R2.3); reads whether the table exists through rm_readonly on a read-only session and writes nothing",
 };
 
 describe("a stage tool added without going through the policy is caught", () => {
