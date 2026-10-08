@@ -1107,7 +1107,10 @@ export interface SchemaIdentity {
 /**
  * The keys §3 allows in `~/.env`, and nothing else: "the remote connection
  * (host, port, dbname); the runtime role passwords `rm_app`, `rm_worker` and
- * `rm_readonly`; `RM_ENV`; `RM_CREDENTIALS`; and `COINGECKO_API_KEY`."
+ * `rm_readonly`; `RM_ENV`; `RM_CREDENTIALS`; and `COINGECKO_API_KEY`." D61 adds
+ * the two privileged passwords: `rm_owner` (read by `bun run migrate`, `bun run
+ * prune`, a remote `bun smoke --migrate/--seed` and `prod-init`) and `doadmin`
+ * (read by `prod-init enable-owner-login` alone). No container receives either.
  *
  * The connection keys are spelled the way scripts/lib/env-role.ts's
  * `CONNECTION_TOKENS` reads them — the DigitalOcean panel's `host`, `port`,
@@ -1132,6 +1135,8 @@ export const ENV_FILE_ALLOWED_KEYS: readonly string[] = Object.freeze([
   "rm_app",
   "rm_worker",
   "rm_readonly",
+  "rm_owner",
+  "doadmin",
   "RM_ENV",
   "RM_CREDENTIALS",
   "COINGECKO_API_KEY",
@@ -1146,8 +1151,9 @@ export const ENV_FILE_ALLOWED_KEYS: readonly string[] = Object.freeze([
  * AN ALLOWLIST, NOT A DENYLIST. Spec §7 check 4: "`~/.env` holds only the keys
  * §3 lists. Any other key warns on `stage` and refuses on `prod`; an
  * `rm_owner`, `doadmin` or superuser credential is named in the message." §3
- * lists what else it "must not contain": "`rm_owner`, `doadmin`, a superuser
- * token, a service token, a signing key or a model key". Those are open-ended
+ * lists what else it "must not contain": a superuser token, a service token, a
+ * signing key or a model key (D61 moved `rm_owner` and `doadmin` from that list
+ * into the allowlist). Those are open-ended
  * categories — `OPENCODE_API_KEY`, `ADMIN_TOKEN`, a participant's signing key
  * pasted in by mistake — and a denylist of names would pass each new one until
  * someone thought to add it. So every key outside `ENV_FILE_ALLOWED_KEYS` is a
@@ -1155,8 +1161,8 @@ export const ENV_FILE_ALLOWED_KEYS: readonly string[] = Object.freeze([
  * (`dangerousKeyReason`).
  *
  * The point is that every credential lives in exactly one place (§3, "Why this
- * shape"): `rm_owner`'s password is "typed at the terminal for the one run that
- * needs it and never stored", participant keys live in `credential.json`, and
+ * shape"): the database passwords, `rm_owner`'s and `doadmin`'s included (D61),
+ * live in `~/.env`, participant keys live in `credential.json`, and
  * service tokens are files the boot places per instance. A copy in `~/.env`
  * turns each of those boundaries into a formality, silently.
  *
@@ -1208,8 +1214,8 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
         check: "env_credentials",
         severity,
         message:
-          `${path} line ${line.number} is not a KEY = VALUE line (it has no \`=\`): §3 allows only the connection values, the three ` +
-          "runtime role passwords, RM_ENV, RM_CREDENTIALS and COINGECKO_API_KEY, and a bare value is none of them",
+          `${path} line ${line.number} is not a KEY = VALUE line (it has no \`=\`): §3 allows only the connection values, the database ` +
+          "role passwords (rm_app, rm_worker, rm_readonly, rm_owner, doadmin), RM_ENV, RM_CREDENTIALS and COINGECKO_API_KEY, and a bare value is none of them",
       });
       continue;
     }
@@ -1223,7 +1229,7 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
         message:
           `${path} line ${line.number} has a key that is not a plain name, ` +
           `${reason === null ? "so it is none of the keys §3 lists" : `and it names ${reason}`} — §3 allows only the connection values ` +
-          "(host, port, database/dbname, sslmode), the rm_app, rm_worker and rm_readonly passwords, RM_ENV, " +
+          "(host, port, database/dbname, sslmode), the rm_app, rm_worker, rm_readonly, rm_owner and doadmin passwords, RM_ENV, " +
           "RM_CREDENTIALS and COINGECKO_API_KEY",
       });
       continue;
@@ -1234,7 +1240,7 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
       severity,
       message:
         `${path} holds ${line.key}, ${reason ?? "a key §3 does not list"} — §3 allows only the connection values ` +
-        "(host, port, database/dbname, sslmode), the rm_app, rm_worker and rm_readonly passwords, RM_ENV, " +
+        "(host, port, database/dbname, sslmode), the rm_app, rm_worker, rm_readonly, rm_owner and doadmin passwords, RM_ENV, " +
         "RM_CREDENTIALS and COINGECKO_API_KEY",
     });
   }
@@ -1300,13 +1306,12 @@ function dangerousTokenReason(key: string): string | null {
 }
 
 /** What a disallowed key IS, when it is one of the credentials §7 check 4 says
- *  must be named in the message: `rm_owner`, `doadmin`, a superuser, or the
- *  cluster's `postgres` login. `null` for any other disallowed key, which is
- *  still a finding — only its wording is generic. */
+ *  must be named in the message: a superuser, or the cluster's `postgres`
+ *  login. `null` for any other disallowed key, which is still a finding — only
+ *  its wording is generic. `rm_owner` and `doadmin` are allowed keys since D61,
+ *  so they never reach this function under their exact spelling. */
 function dangerousKeyReason(key: string): string | null {
   const name = key.toLowerCase();
-  if (name === "rm_owner") return "the migration credential (§3: typed for one run, never stored)";
-  if (name === "doadmin") return "the cluster provisioning credential (§3: doadmin is provisioning only)";
   if (name.includes("superuser")) return "a superuser credential";
   if (name === "postgres" || /(^|_)postgres_(user|password|url|superuser)/.test(name)) {
     return "a cluster superuser credential";
