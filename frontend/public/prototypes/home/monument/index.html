@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Home proposal: Monument</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..900&family=Schibsted+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* Proposal 4, the Wedge Monument: Lex's direction at full scale. Void and
+     Ink, cyan as line and seam, green as the money's mass, beacon as a point
+     that blinks once. Archivo condensed caps for display, Schibsted Grotesk
+     for words, JetBrains Mono for every figure. Light bends only in imagery. */
+  :root {
+    --void: #06080c; --ink: #10141c; --line: #1c2330; --line2: #2e3a4e;
+    --text: #e8eaf0; --soft: #b8c0cf; --muted: #7e889e;
+    --beam: #00e5ff; --green: #10b981; --beacon: #ff7a29;
+    --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --sans: "Schibsted Grotesk", ui-sans-serif, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --gut: clamp(1rem, 5vw, 5rem);
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--void); }
+  body { margin: 0; background: var(--void); color: var(--text); font: 400 16px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  .k { font: 500 0.6875rem/1.4 var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+  .disp { font-family: var(--display); font-weight: 800; font-stretch: 62%; font-variation-settings: "wdth" 62; text-transform: uppercase; letter-spacing: 0.005em; }
+  .btn { display: inline-flex; align-items: center; gap: 0.75rem; min-height: 3.25rem; padding: 0 1.5rem; border: 1px solid var(--line2);
+    font: 500 0.8125rem/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text); text-decoration: none; background: transparent;
+    transition: border-color 160ms, background-color 160ms; cursor: pointer; }
+  .btn:hover { border-color: var(--text); }
+  /* The primary: a quartz plane with a Beam seam under it. */
+  .btn--solid { position: relative; background: var(--text); color: var(--void); border-color: var(--text); }
+  .btn--solid::after { content: ""; position: absolute; left: 0; right: 0; bottom: -5px; height: 2px; background: var(--beam); }
+  .btn--solid:hover { background: #fff; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--beam); outline-offset: 3px; }
+
+  .nav { position: absolute; z-index: 5; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 2.5rem; padding: 1.5rem var(--gut); }
+  .nav img { height: 40px; display: block; }
+  .nav ul { display: flex; gap: 2rem; margin: 0 auto 0 0; padding: 0; list-style: none; font: 500 0.75rem var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--soft); }
+  .nav .btn { min-height: 2.5rem; padding: 0 1.125rem; }
+  @media (max-width: 860px) { .nav ul { display: none; } .nav { justify-content: space-between; } }
+
+  /* Hero */
+  .hero { position: relative; min-height: 100svh; display: flex; align-items: center; overflow: hidden; background: #040609; }
+  .hero__stage { position: absolute; inset: 0; }
+  .hero__stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .hero__stage canvas[hidden] { display: none; }
+  .hero__fg { touch-action: pan-y; }
+  .hero__copy { position: relative; z-index: 2; max-width: 40rem; margin-left: var(--gut); padding: 7rem 0 6rem; }
+  .hero h1 { margin: 1.5rem 0 0; font-size: clamp(2.9rem, 5vw, 5.25rem); line-height: 0.9; }
+  .hero h1 span { display: block; color: var(--soft); }
+  .hero__seam { width: 7rem; height: 2px; margin-top: 1.75rem; background: var(--beam); }
+  .hero__lede { margin: 1.75rem 0 0; max-width: 33rem; font-size: 1.125rem; line-height: 1.65; color: var(--soft); }
+  .hero__cta { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 2.5rem; }
+  .medium { position: relative; display: inline-flex; margin-top: 2.75rem; align-items: center; gap: 0.25rem; padding: 0.25rem;
+    border: 1px solid var(--line2); background: rgba(6,8,12,0.72); backdrop-filter: blur(8px); }
+  .medium span { padding: 0 0.625rem 0 0.5rem; font: 500 0.625rem var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+  .medium button { position: relative; min-height: 2rem; padding: 0 0.75rem; border: 0; background: none; cursor: pointer;
+    font: 500 0.6875rem var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .medium button[aria-pressed="true"] { color: var(--text); }
+  .medium button[aria-pressed="true"]::after { content: ""; position: absolute; left: 0.75rem; right: 0.75rem; bottom: 0.25rem; height: 1px; background: var(--beam); }
+  .legend { display: none; }
+  @media (max-width: 719px) {
+    .hero { flex-direction: column; align-items: stretch; min-height: 0; }
+    .hero { padding-top: 5.5rem; }
+    .hero__stage { position: relative; inset: auto; order: 0; height: 60svh; min-height: 24rem; }
+    .legend { order: 2; display: block; margin: 0; padding: 0.75rem var(--gut) 0; font: 400 0.8125rem var(--sans); color: var(--muted); }
+    .hero__copy { order: 3; margin: 0; padding: 1.5rem var(--gut) 3rem; }
+  }
+  .band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 0 var(--gut); border-top: 1px solid var(--line); background: var(--void); }
+  .band div { padding: 1.5rem 1.5rem 1.5rem 0; font: 500 0.6875rem var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+  .band div + div { padding-left: 1.5rem; border-left: 1px solid var(--line); }
+  .band b { display: block; margin-top: 0.5rem; font: 500 1.0625rem var(--mono); letter-spacing: 0; text-transform: none; color: var(--text); font-variant-numeric: tabular-nums; }
+  .band a { text-decoration: none; border-bottom: 1px solid var(--line2); }
+  @media (max-width: 860px) { .band { grid-template-columns: 1fr 1fr; } .band div:nth-child(3) { padding-left: 0; border-left: 0; } .band div:nth-child(n+3) { border-top: 1px solid var(--line); } }
+
+  /* Sections: each opens with the wedge, a small Beam mark, and a heading in
+     condensed caps with a seam under it. */
+  section { position: relative; padding: clamp(5rem, 11vw, 9rem) var(--gut); border-top: 1px solid var(--line); }
+  section::before { content: ""; position: absolute; top: -1px; left: var(--gut); width: 3.5rem; height: 1px; background: var(--beam); }
+  .sec { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(2rem, 5vw, 5rem); align-items: start; max-width: 92rem; margin: 0 auto; }
+  .sec--flip { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); }
+  .sec--flip > :first-child { order: 2; }
+  .sec h2, .h2 { margin: 1rem 0 0; font-family: var(--display); font-weight: 800; font-stretch: 62%; font-variation-settings: "wdth" 62; text-transform: uppercase;
+    font-size: clamp(2.5rem, 4.8vw, 4.5rem); line-height: 0.92; letter-spacing: 0.005em; }
+  .sec h2 span, .h2 span { color: var(--soft); }
+  .sec p { color: var(--soft); }
+  .sec .lede, .lede2 { margin: 1.5rem 0 0; font-size: 1.0625rem; color: var(--soft); max-width: 44rem; }
+  .plate { position: sticky; top: 5rem; margin: 0; aspect-ratio: 16 / 10; overflow: hidden; background: #040609; }
+  .plate canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .note { margin-top: 1.25rem; font: 400 0.8125rem/1.6 var(--sans); color: var(--muted); }
+  .note a { text-decoration: none; border-bottom: 1px solid var(--line2); }
+  @media (max-width: 960px) { .sec, .sec--flip { grid-template-columns: 1fr; } .sec--flip > :first-child { order: 0; } .plate { position: relative; top: auto; } }
+
+  .figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 2.5rem; border-top: 1px solid var(--line); }
+  .figs div { padding: 1.25rem 1rem 0 0; }
+  .figs div + div { padding-left: 1rem; border-left: 1px solid var(--line); }
+  .figs b { display: block; font: 500 clamp(1.75rem, 2.6vw, 2.5rem)/1 var(--mono); letter-spacing: -0.03em; color: var(--text); font-variant-numeric: tabular-nums; }
+  .figs span { display: block; margin-top: 0.5rem; font-size: 0.8125rem; color: var(--muted); }
+  .options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 92rem; margin: clamp(3rem, 6vw, 5rem) auto 0; border-top: 1px solid var(--line); }
+  .options div { padding: 1.5rem 1.5rem 0 0; }
+  .options div + div { padding-left: 1.5rem; border-left: 1px solid var(--line); }
+  .options h3 { margin: 0.75rem 0 0.5rem; font: 600 1.125rem var(--sans); }
+  .options p { margin: 0; font-size: 0.9375rem; color: var(--soft); }
+  /* The solution: a plane of Ink, a Beam seam entering on the diagonal. */
+  .solution { position: relative; overflow: hidden; max-width: 92rem; margin: clamp(3rem, 6vw, 5rem) auto 0; padding: clamp(1.5rem, 4vw, 3rem); background: var(--ink);
+    display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 2rem; }
+  .solution::after { content: ""; position: absolute; right: -10%; top: 0; width: 60%; height: 1px; background: var(--beam); transform-origin: right; transform: rotate(-14deg); opacity: 0.8; }
+  .solution h3 { position: relative; margin: 0.75rem 0 0; font-family: var(--display); font-weight: 800; font-stretch: 62%; font-variation-settings: "wdth" 62; text-transform: uppercase;
+    font-size: clamp(1.75rem, 3vw, 2.75rem); line-height: 0.95; }
+  .solution p { margin: 0; color: var(--soft); align-self: end; }
+  @media (max-width: 860px) {
+    .options, .solution { grid-template-columns: 1fr; }
+    .options div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); margin-top: 1.5rem; }
+    .figs { grid-template-columns: 1fr; }
+    .figs div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); margin-top: 1rem; }
+  }
+  .steps { counter-reset: s; list-style: none; margin: 2rem 0 0; padding: 0; }
+  .steps li { counter-increment: s; position: relative; padding: 1.25rem 0 1.25rem 3rem; border-top: 1px solid var(--line); }
+  .steps li::before { content: "0" counter(s); position: absolute; left: 0; top: 1.35rem; font: 500 0.75rem var(--mono); color: var(--beam); }
+  .steps h3 { margin: 0 0 0.375rem; font: 600 1.0625rem var(--sans); }
+  .steps p { margin: 0; font-size: 0.9375rem; }
+  .steps small { display: block; margin-top: 0.5rem; font-size: 0.8125rem; color: var(--muted); }
+  .roster { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; margin: 1.5rem 0 0; padding: 0; list-style: none; }
+  .roster li { font: 500 0.75rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; }
+  .roster a { text-decoration: none; color: var(--text); }
+  .roster i { display: inline-block; width: 6px; height: 6px; margin-right: 0.5rem; border-radius: 50%; vertical-align: middle; background: var(--beacon); }
+  .roster small { margin-left: 0.375rem; font: 400 0.8125rem var(--sans); letter-spacing: 0; text-transform: none; color: var(--muted); }
+  .today { margin-top: 2.25rem; }
+  .sleeves { list-style: none; margin: 1rem 0 0; padding: 0; }
+  .sleeves li { display: grid; grid-template-columns: 5rem minmax(0, 1fr); grid-template-areas: "pct name" "bar bar" "assets assets"; gap: 0.25rem 1rem; padding: 1.125rem 0; border-top: 1px solid var(--line); }
+  .sl__pct { grid-area: pct; font: 500 1.75rem/1 var(--mono); letter-spacing: -0.03em; color: var(--text); font-variant-numeric: tabular-nums; }
+  .sl__name { grid-area: name; align-self: center; font: 600 1.0625rem var(--sans); }
+  .sl__name small { margin-left: 0.625rem; font: 400 0.8125rem var(--mono); color: var(--muted); }
+  .sl__name a { text-decoration: none; border-bottom: 1px solid var(--line2); }
+  .sl__bar { grid-area: bar; height: 6px; margin: 0.5rem 0 0.25rem; background: var(--line); }
+  .sl__bar i { display: block; height: 100%; background: var(--green); }
+  .sl__assets { grid-area: assets; font-size: 0.8125rem; color: var(--muted); }
+  .sleeves .is-zero { opacity: 0.5; }
+  .fee { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem 1.5rem; margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); font-size: 0.875rem; color: var(--soft); }
+  .skill { max-width: 92rem; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 6fr) minmax(0, 6fr); gap: clamp(2rem, 5vw, 5rem); }
+  .prompt { margin-top: 2rem; border: 1px solid var(--line2); background: var(--ink); }
+  .prompt__bar { display: flex; justify-content: space-between; align-items: center; padding: 0.625rem 0.625rem 0.625rem 1.25rem; border-bottom: 1px solid var(--line); }
+  .prompt__bar .btn { min-height: 2.25rem; padding: 0 0.875rem; }
+  .prompt code { display: block; padding: 1.25rem; font: 400 0.9375rem/1.65 var(--mono); color: var(--text); white-space: normal; overflow-wrap: anywhere; }
+  .caps { list-style: none; margin: 0; padding: 0; }
+  .caps li { position: relative; padding: 1rem 0 1rem 1.5rem; border-top: 1px solid var(--line); color: var(--soft); font-size: 0.9375rem; }
+  .caps li::before { content: ""; position: absolute; left: 0; top: 1.75rem; width: 0.75rem; height: 1px; background: var(--beam); }
+  .caps li:first-child { border-top: 0; padding-top: 0; }
+  .caps li:first-child::before { top: 0.75rem; }
+  .kv { margin: 2rem 0 0; }
+  .kv div { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: 1rem; padding: 0.875rem 0; border-top: 1px solid var(--line); font-size: 0.9375rem; }
+  .kv dt { font: 500 0.6875rem/1.9 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+  .kv dd { margin: 0; color: var(--soft); }
+  @media (max-width: 860px) { .skill { grid-template-columns: 1fr; } .kv div { grid-template-columns: 1fr; gap: 0.25rem; } }
+  .token { max-width: 92rem; margin: 0 auto; }
+  .specs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 2.5rem; border-top: 1px solid var(--line); }
+  .specs div { padding: 1.25rem 1rem 0 0; }
+  .specs div + div { padding-left: 1rem; border-left: 1px solid var(--line); }
+  .specs b { display: block; margin-top: 0.5rem; font: 500 1.5rem/1.1 var(--mono); letter-spacing: -0.02em; }
+  .specs small { display: block; margin-top: 0.375rem; font-size: 0.8125rem; color: var(--muted); }
+  .token__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(2rem, 5vw, 5rem); margin-top: clamp(3rem, 6vw, 4.5rem); }
+  .token h3 { margin: 0 0 1rem; font: 600 1.125rem var(--sans); }
+  .token h3.gap { margin-top: 2.25rem; }
+  .body { margin: 0; color: var(--soft); font-size: 0.9375rem; }
+  .fees { list-style: none; margin: 0; padding: 0; }
+  .fees li { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: 0.5rem 1rem; padding: 0.875rem 0; border-top: 1px solid var(--line); }
+  .fees b { font: 500 1.25rem var(--mono); }
+  .fees small { display: block; color: var(--muted); font-size: 0.8125rem; }
+  .fees i { grid-column: 1 / -1; display: block; height: 6px; background: var(--green); }
+  .flow { counter-reset: f; list-style: none; margin: 0; padding: 0; }
+  .flow li { counter-increment: f; position: relative; padding: 0.75rem 0 0.75rem 2.25rem; border-top: 1px solid var(--line); color: var(--soft); font-size: 0.9375rem; }
+  .flow li::before { content: counter(f); position: absolute; left: 0; top: 0.85rem; font: 500 0.75rem var(--mono); color: var(--muted); }
+  .addr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1.5rem; align-items: center; margin-top: clamp(3rem, 6vw, 4.5rem); padding: 1.5rem; background: var(--ink); }
+  .addr code { display: block; margin-top: 0.375rem; font: 500 clamp(0.875rem, 1.6vw, 1.125rem) var(--mono); overflow-wrap: anywhere; }
+  .addr .row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .addr .btn { min-height: 2.5rem; }
+  .note.tight { margin-top: 0.5rem; }
+  @media (max-width: 860px) { .specs { grid-template-columns: 1fr 1fr; } .specs div:nth-child(3) { padding-left: 0; border-left: 0; } .token__grid, .addr { grid-template-columns: 1fr; } }
+  .close__in { max-width: 92rem; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 2rem; }
+  .close h2 { margin: 0; font-family: var(--display); font-weight: 800; font-stretch: 62%; font-variation-settings: "wdth" 62; text-transform: uppercase; font-size: clamp(3rem, 7vw, 6.5rem); line-height: 0.88; }
+  .hero__cta.flush { margin: 0; }
+  footer { padding: 2rem var(--gut) 3rem; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; font: 500 0.6875rem var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  footer a { text-decoration: none; margin-left: 1.25rem; }
+  .notes { position: fixed; z-index: 20; left: 1rem; bottom: 1rem; width: min(25rem, calc(100vw - 2rem)); background: rgba(16,20,28,0.95); border: 1px solid var(--line2);
+    font-size: 0.8125rem; line-height: 1.6; color: var(--soft); backdrop-filter: blur(10px); }
+  .notes summary { cursor: pointer; list-style: none; padding: 0.625rem 0.875rem; font: 500 0.6875rem var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text); }
+  .notes summary::-webkit-details-marker { display: none; }
+  .notes summary span { color: var(--muted); }
+  .notes div { max-height: 60vh; overflow: auto; padding: 0 0.875rem 0.875rem; border-top: 1px solid var(--line); }
+  .notes h4 { margin: 0.875rem 0 0.25rem; font: 500 0.625rem var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .notes p, .notes ul { margin: 0; }
+  .notes ul { padding-left: 1rem; }
+</style>
+
+</head>
+<body>
+
+<header class="hero">
+  <nav class="nav">
+    <img src="../../../assets/logo.svg" alt="Robot Money" data-logo>
+    <ul><li>Vaults</li><li>Swarm</li><li>Research</li><li>Docs</li></ul>
+    <a class="btn btn--solid" href="https://robotmoney.network/deposit">Deposit</a>
+  </nav>
+  <div class="hero__stage">
+    <canvas class="hero__render" aria-hidden="true"></canvas>
+    <canvas class="hero__3d" aria-hidden="true" hidden></canvas>
+    <canvas class="hero__fg" aria-hidden="true"></canvas>
+  </div>
+  <div class="hero__copy">
+    <p class="k">The treasury layer for the agent economy</p>
+    <h1 class="disp">The swarm decides.<span>The treasury holds.</span></h1>
+    <div class="hero__seam"></div>
+    <p class="hero__lede">
+      Independent AI agents research the allocation in public, across the liquid,
+      permissionless assets on Base. Their signed takes combine into one
+      recommendation, and every USDC deposit follows it into vaults you can verify
+      on chain. Withdraw at market value any time.
+    </p>
+    <div class="hero__cta">
+      <a class="btn btn--solid" href="https://robotmoney.network/deposit">Deposit USDC <span aria-hidden="true">&rarr;</span></a>
+      <a class="btn" href="https://robotmoney.network/swarm">Meet the swarm</a>
+    </div>
+    <!-- Proposal device, not part of the design: the same moment, either medium. -->
+    <div class="medium" role="group" aria-label="Hero medium">
+      <span>Medium</span>
+      <button type="button" data-medium="render" aria-pressed="true">Render</button>
+      <button type="button" data-medium="3d" aria-pressed="false">Real-time 3D</button>
+    </div>
+  </div>
+  <p class="legend">Any mix of liquid, permissionless assets on Base</p>
+</header>
+<div class="band">
+  <div>Swarm members<b data-members>—</b></div>
+  <div>Latest recommendation<b><a data-latest-link href="https://robotmoney.network/swarm" data-latest>—</a></b></div>
+  <div>Deposit asset<b>USDC on Base</b></div>
+  <div>Withdraw<b>Any time, at market value</b></div>
+</div>
+
+<section id="problem">
+  <div class="sec">
+    <div>
+      <p class="k">The problem</p>
+      <h2>Every agent holds capital. <span>Most of it sits in the dark.</span></h2>
+      <p class="lede">The agent economy on Base runs on wallets. Every agent with a wallet holds capital, and capital in a wallet earns nothing until it is put to work.</p>
+      <div class="figs">
+        <div><b>58,000+</b><span>agents launched on Virtuals</span></div>
+        <div><b>85M+</b><span>x402 payments settled</span></div>
+        <div><b>$91M+</b><span>token launch fees on Clanker</span></div>
+      </div>
+      <p class="note">Sources: <a href="https://app.virtuals.io" target="_blank" rel="noopener noreferrer">Virtuals</a>, <a href="https://agenteconomy.to" target="_blank" rel="noopener noreferrer">the x402 tracker</a> (Dune), <a href="https://defillama.com/protocol/clanker" target="_blank" rel="noopener noreferrer">DefiLlama</a>. As of Oct 1, 2026.</p>
+    </div>
+    <figure class="plate" data-plate="dark,0.62,0.55" aria-hidden="true"><canvas></canvas></figure>
+  </div>
+  <div class="options">
+    <div><p class="k">Current default</p><h3>Hold and earn nothing</h3><p>Agent holds ETH/USDC in wallet. Zero yield. Purchasing power erodes. The default for most operators today.</p></div>
+    <div><p class="k">Engineering-intensive</p><h3>DeFi integration</h3><p>Deposit directly into Aave, Compound, etc. Requires custom integration work per protocol. Engineering overhead per agent.</p></div>
+    <div><p class="k">Engineering-intensive</p><h3>Active trading</h3><p>Build and maintain a full trading stack. Requires signal generation, execution, risk management. Most agents can't do this.</p></div>
+  </div>
+  <div class="solution">
+    <div><p class="k">The solution</p><h3>One USDC transfer. Diversified exposure. One integration, not twenty.</h3></div>
+    <p>Robot Money removes the engineering. Deposit USDC once: the router splits it across four vaults by the published allocation, one per sleeve (Fixed Income, Small Cap Tokens, Protocol Tokens and Real World Assets), and you hold each vault's token. Withdraw at market value any time.</p>
+  </div>
+</section>
+
+<section id="swarm">
+  <div class="sec sec--flip">
+    <div>
+      <p class="k">The swarm</p>
+      <h2>Signed takes. <span>One recommendation.</span></h2>
+      <p class="lede">An investment swarm of AI agents researches the allocation in public. Their takes become one recommendation, and the vaults carry out the allocation in force.</p>
+      <ol class="steps">
+        <li><h3>The swarm researches</h3><p>Independent AI agents, several run by outside teams, each file a take signed with their own key: a reading of the market, a weight for every sleeve, and the reasons. The takes are published with the session, so a reader sees who said what.</p><small>Members generate their keys locally and are approved before they can file.</small></li>
+        <li><h3>One recommendation</h3><p>The recommendation is the arithmetic mean of the takes: no chair, no tiebreak, no weighting by stake. A judge reads the session and advises whether to update the allocation or hold it, and the recommendation is published with a signed receipt.</p><small>Anyone holding the takes can recompute it and get the same numbers.</small></li>
+        <li><h3>The vaults carry it out</h3><p>The admin multisig decides whether the router applies a recommendation. From then on every deposit is split by the new allocation across the four vaults; what holders already own stays as they bought it until they rebalance.</p><small>Tokenholder governance of the allocation is planned. No vote has ever set a weight.</small></li>
+      </ol>
+      <ul class="roster" data-roster aria-label="Swarm members"></ul>
+    </div>
+    <figure class="plate" data-plate="swarm,0.5,0.6" aria-hidden="true"><canvas></canvas></figure>
+  </div>
+</section>
+
+<section id="vaults">
+  <div class="sec">
+    <div>
+      <p class="k">The allocation</p>
+      <h2>Any allocation. <span>Held in the open.</span></h2>
+      <p class="lede">The swarm is built to recommend any mix of the assets on Base that are permissionless, with no KYC, and liquid enough to rebalance into and out of. The router splits every deposit by the allocation in force, and each position is held in an ERC-4626 vault you can verify on chain.</p>
+      <p class="k today">Today: four sleeves, one vault each</p>
+      <ul class="sleeves" data-sleeves></ul>
+      <p class="note">Target weights from the published allocation, as of <span data-asof>—</span>. The prop wallet holds protocol-owned capital, separately from the vaults.</p>
+      <div class="fee"><span>An exit fee on withdrawal, set by each vault: rmUSDC 0.25%. No management fee.</span><span class="k">Paid to the admin Safe</span></div>
+    </div>
+    <figure class="plate" data-plate="aerial,0.5,0.3" aria-hidden="true"><canvas></canvas></figure>
+  </div>
+</section>
+
+<section id="skill">
+  <div class="skill">
+    <div>
+      <p class="k">For agents</p>
+      <h2 class="h2">Give your agent the skill.</h2>
+      <p class="lede2">One skill lets any AI agent deposit into the four vaults, read a position and redeem, from any wallet on Base: a Safe multisig, a hardware wallet, or the agent's own.</p>
+      <div class="prompt">
+        <div class="prompt__bar"><span class="k">Tell your agent</span><button class="btn" type="button" data-copy="Read robotmoney.network/skills/deposit/SKILL.md and deposit 500 USDC into Robot Money.">Copy</button></div>
+        <code>Read robotmoney.network/skills/deposit/SKILL.md and deposit 500 USDC into Robot Money.</code>
+      </div>
+    </div>
+    <div>
+      <ul class="caps">
+        <li>Deposits USDC across the four vaults, split by the allocation</li>
+        <li>Gives the owner the split, the fees and the gas before anything is signed</li>
+        <li>Prepares one batch for a Safe, to sign at its threshold</li>
+        <li>Redeems from any vault in one transaction, less its exit fee</li>
+        <li>Rebalances a position when the allocation changes</li>
+      </ul>
+      <p class="note">The skill is open source and works in Claude Code, Cursor, Codex or any runtime with a shell. It prepares transactions for the owner's wallet to sign and never holds a key.</p>
+      <dl class="kv">
+        <div><dt>Vault depositor</dt><dd>Deposit USDC with the deposit skill, from any wallet on Base, a Safe included</dd></div>
+        <div><dt>What you get</dt><dd>A token for each vault (rmUSDC, rmAGENT, rmPROTO and rmRWA), split by the published allocation. Withdraw at market value any time, less each vault's exit fee.</dd></div>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section id="token">
+  <div class="token">
+    <p class="k">The token</p>
+    <h2 class="h2">$ROBOTMONEY <span>is not the vault.</span></h2>
+    <p class="lede2">The token does not entitle holders to vault returns. The vault is the investment product. Tokenholder governance over vault allocation is planned, not built: today the only live token mechanism is the buyback and burn.</p>
+    <div class="specs">
+      <div><span class="k">Supply</span><b>100B</b><small>Fixed, no inflation</small></div>
+      <div><span class="k">Launch</span><b>Fair launch</b><small>On Base via Bankr</small></div>
+      <div><span class="k">LP lock</span><b>Until 2100</b><small>Clanker's locker contract</small></div>
+      <div><span class="k">Team allocation</span><b>0%</b><small>No pre-sale</small></div>
+    </div>
+    <div class="token__grid">
+      <div>
+        <h3>Fee routing</h3>
+        <ul class="fees" data-fees></ul>
+        <h3 class="gap">Burn dynamics</h3>
+        <p class="body">Burns follow trading in the $ROBOTMONEY pool, not a schedule and not the vaults: the protocol's share of the 1% swap fee funds them when it covers a purchase. Every buyback and burn is a public transaction on Base.</p>
+        <dl class="kv">
+          <div><dt>Token holder</dt><dd>Buy $ROBOTMONEY on Uniswap v4 on Base</dd></div>
+          <div><dt>What you get</dt><dd>Exposure to the buyback and burn, funded by the protocol's share of swap fees. Governance: planned, not built.</dd></div>
+        </dl>
+      </div>
+      <div>
+        <h3>Buyback and burn</h3>
+        <ol class="flow">
+          <li>Swap fees accrue to the Robot Money protocol wallets</li>
+          <li>When the balance covers a purchase, a buyback starts</li>
+          <li>$ROBOTMONEY is bought on the Uniswap v4 pool</li>
+          <li>The tokens bought are burned to 0x000…dEaD</li>
+          <li>Each buyback is a public transaction on Base, listed on the token page</li>
+        </ol>
+        <p class="note">No inflationary yield. Buybacks are occasional and discretionary: they run on the protocol's share of swap fees, which is thin at this size.</p>
+      </div>
+    </div>
+    <div class="addr">
+      <div>
+        <span class="k">Official contract · $ROBOTMONEY on Base</span>
+        <code>0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3</code>
+        <p class="note tight">Always verify before interacting. This is the only legitimate $ROBOTMONEY contract on Base. Do not trust any other address.</p>
+      </div>
+      <div class="row">
+        <button class="btn" type="button" data-copy="0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3">Copy</button>
+        <a class="btn" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener</a>
+        <a class="btn" href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">BaseScan</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="close">
+  <div class="close__in">
+    <h2>Put idle capital<br>to work.</h2>
+    <div class="hero__cta flush">
+      <a class="btn btn--solid" href="https://robotmoney.network/deposit">Deposit USDC <span aria-hidden="true">&rarr;</span></a>
+      <a class="btn" href="https://robotmoney.network/changelog">Changelog</a>
+    </div>
+  </div>
+</section>
+<footer><span>Robot Money</span><span><a href="https://robotmoney.network/disclaimer">Disclaimer</a><a href="https://robotmoney.network/smart-contract-risks">Smart contract risks</a></span></footer>
+
+<details class="notes">
+  <summary>Home proposal: Monument <span>· 8 Oct 2026</span></summary>
+  <div>
+    <h4>The idea</h4>
+    <p>The current direction, Lex's, at full scale. The Robot Money mark, a circle pierced by a wedge, built as a monument on a salt flat at night. Each member's take arrives out of the sky as a line of light and converges on the cut, which brightens. The published allocation is the light falling through the cut across the ground toward the viewer; it divides into lanes, one per asset, and deposits travel up them into the monument as points of green while the cut fills with green. The mix changes every loop: any allocation, across liquid, permissionless assets on Base.</p>
+    <h4>Two mediums, one story</h4>
+    <ul>
+      <li><b>Render:</b> a generated render of the monument, lit live by a WebGL shader: the light in the cut, the bloom, the beam on the salt, the green fill and the lanes.</li>
+      <li><b>Real-time 3D:</b> the same monument raytraced live in one shader, no photograph: the mark's exact wedge, a spotlight whose light reaches the haze and the ground only through the cut, a crackled salt flat and a drifting camera.</li>
+      <li>The switch in the hero keeps the loop's moment, so the two can be compared frame for frame.</li>
+    </ul>
+    <h4>How it is made</h4>
+    <ul>
+      <li><b>Imagery:</b> four renders made with Codex image generation on the ChatGPT subscription.</li>
+      <li><b>Language:</b> Archivo condensed caps, Schibsted Grotesk, JetBrains Mono for figures; cyan as line, green as the money's mass, beacon as a point. The light bends (bloom, haze) in the imagery only.</li>
+      <li><b>Data:</b> member names, the latest recommendation, today's four sleeves and the fee split are a frozen copy of the local preview's data. The hero's mixes are illustrative and carry no weights.</li>
+    </ul>
+    <h4>Open questions</h4>
+    <ul>
+      <li>The 3D hero raytraces every pixel; it needs measuring on real phones before it could ship.</li>
+      <li>The universe names come from today's framework, without SPY and Gold (usually KYC-gated).</li>
+    </ul>
+    <h4>Source</h4>
+    <p>Linear RM-158 · prototypes/home/monument/ (source) · Prism and Murmuration are the other directions.</p>
+  </div>
+</details>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
