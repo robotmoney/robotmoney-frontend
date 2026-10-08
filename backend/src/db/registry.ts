@@ -565,12 +565,9 @@ export type ObjectlessShape = keyof typeof OBJECTLESS_SHAPES;
 // D61, as it amends spec §3: "`doadmin` is used by one command only, `prod-init
 // enable-owner-login`." That command (scripts/enable-owner-login.ts, spec §9.1
 // step 1) issues two statements as `doadmin`: a CATALOG read of `pg_roles` and
-// one DDL statement on a role. The same module holds a third: the read-only
-// login proof `SELECT 1`, which release step R1.2 (scripts/release/
-// host-identity.ts) calls through it, so the doadmin password is proven before
-// the cutover's first irreversible step (D61 amendment, 2026-10-08). None
-// touches a relation in `public`, so none has a `(role, object, privilege)`
-// for check 2, and all are fixed texts. They are object-less statements in that sense, with one difference
+// one DDL statement on a role. Neither touches a relation in `public`, so
+// neither has a `(role, object, privilege)` for check 2, and both are fixed
+// texts. They are object-less statements in that sense, with one difference
 // from `OBJECTLESS_SHAPES`: they belong to the provisioning role and nobody
 // else.
 //
@@ -594,8 +591,6 @@ export const PROVISIONING_SHAPES = Object.freeze({
   ownerCanLogin: "SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'",
   /** DDL: make `rm_owner` LOGIN. No password clause: the role keeps the password it has. */
   ownerLoginEnable: "ALTER ROLE rm_owner LOGIN",
-  /** LOGIN PROOF: the doadmin password in `~/.env` logs in. Read-only; release step R1.2 runs it before the cutover. */
-  doadminLoginCheck: "SELECT 1",
 } as const);
 
 export type ProvisioningShape = keyof typeof PROVISIONING_SHAPES;

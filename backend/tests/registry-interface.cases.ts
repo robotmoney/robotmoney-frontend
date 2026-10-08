@@ -456,11 +456,6 @@ describe("registerStatement — the object-less kind (D55 (13)), a closed list o
     // doadmin on an object-less shape, from another module, with another or an
     // extra caller: each refused.
     expect(() => registerStatement(provisioning({ shape: "connectionCheck" }))).toThrow("used by one command only");
-    // The R1.2 login proof is admitted the same way, and refused from anywhere else.
-    expect(registerStatement(provisioning({ shape: "doadminLoginCheck" })).declaration.shape).toBe("doadminLoginCheck");
-    expect(() => registerStatement(provisioning({ shape: "doadminLoginCheck", callers: ["scripts/release/host-identity"] }))).toThrow("used by one command only");
-    expect(() => registerStatement(provisioning({ shape: "doadminLoginCheck", site: site("doadmin_r12") }))).toThrow("used by one command only");
-    expect(() => registerStatement(provisioning({ role: "rm_readonly", shape: "doadminLoginCheck" }))).toThrow("doadmin's alone");
     expect(() => registerStatement(provisioning({ site: site("doadmin_elsewhere") }))).toThrow("used by one command only");
     expect(() => registerStatement(provisioning({ callers: ["scripts/prod-bootstrap"] }))).toThrow("used by one command only");
     expect(() =>

@@ -194,13 +194,16 @@ point is a database restore (section 8).
 
 ## 2. What changes for the operator
 
-The operator gives one go and reads receipts. The operator types nothing on a host.
+The operator gives one go and reads receipts. The operator types nothing on a host during the run.
+The one human input of the release process comes before it, in provisioning: the admin types the
+`doadmin` password into `bun run role-passwords --target prod` (D61 amendment, owner, 2026-10-08).
 
 | Area | Effect | Step |
 |---|---|---|
-| Credentials | `~/.env` holds only the D61 allowlist: `host`, `port`, `database`, `dbname`, `sslmode`, `rm_app`, `rm_worker`, `rm_readonly`, `rm_owner`, `doadmin`, `RM_ENV`, `RM_CREDENTIALS`, `COINGECKO_API_KEY`. Anything else refuses the boot on prod (preflight check 4) | R6.2 moves every other key to `~/.env.retired-<run-ts>` (0600) |
-| `rm_owner`, `doadmin` | Lines in the host's `~/.env` (D61). They must be there before the run. R6.2 refuses without them. No container, receipt, journal or argument receives them | R6.2b, R6.3 read them |
-| `rm_owner` login | Becomes `LOGIN` once, through `doadmin` | R6.2b |
+| Credentials | `~/.env` holds only the D61 allowlist: `host`, `port`, `database`, `dbname`, `sslmode`, `rm_app`, `rm_worker`, `rm_readonly`, `rm_owner`, `RM_ENV`, `RM_CREDENTIALS`, `COINGECKO_API_KEY`. Anything else refuses the boot on prod (preflight check 4). A `doadmin` line refuses, named as the provisioning credential | R6.2 moves every other key, a stray `doadmin` line included, to `~/.env.retired-<run-ts>` (0600) |
+| `rm_owner` | A line in the host's `~/.env` (D61). The runbook uses `rm_owner` only. No container, receipt, journal or argument receives it | R1.2 proves it logs in (`SELECT 1`, read-only) before R6.1. R6.2 refuses without it. R6.3 and later read it |
+| `rm_owner` password and login | Set before the run by the provisioning step `bun run role-passwords --target prod`. It is idempotent: it sets the password and `LOGIN` as `doadmin` and writes the `rm_owner` line. R1.2 refuses with "rm_owner cannot log in; run `bun run role-passwords --target prod` first" | Before R1, not a runbook step |
+| `doadmin` | Stored in no file. The admin types it at the hidden prompt of `bun run role-passwords`. It lives only in that process's memory. No release step reads it | Provisioning only |
 | `credential.json` | Written by the runner at `~/.config/robotmoney/credential.json` (dir 0700, file 0600). It holds the in-house roster (agents `athena`, `noop-analyst`, `robot-money`; judge `themis`), fresh keys, the model key from `~/.env`, and placeholder bearers. It appends `RM_CREDENTIALS` to `~/.env` | R6.2a, before R6.2 moves the model key out |
 | Service tokens | Three (`system-scheduler`, `analytics-producer`, operator admin) in the api's token store. Secrets in per-instance files under `~/.local/state/robotmoney-smoke/rm_prod/tokens/<holder>/token`. Replaces `ADMIN_TOKEN` | R6.5 |
 | Participants | Standing containers from `credential.json`. The judge is a participant (`themis`). No inline judging, no fallback path | R6.7a, R6.7d |
@@ -230,7 +233,7 @@ forwarded.
 | R2.1 capture | `rm_readonly` against the **read replica** | the capture host's `~/.env` |
 | R1.2, R2.3, R6.2a | `rm_readonly`, read-only session | the target's `~/.env` |
 | R2.5 | none. It reads container logs | — |
-| R6.2b | `doadmin` | `~/.env`, plus `--confirm-target` |
+| R1.2 owner login proof | `rm_owner`, `SELECT 1` only | `~/.env` |
 | R6.3 migrate | `rm_owner` | `~/.env`, plus `--confirm-target` |
 | R6.4, R6.5 | `rm_owner` | `~/.env`, plus `--confirm-target` |
 | R6.7c rebind | operator admin token | the R6.5 token file, plus `--confirm-target` |
@@ -271,7 +274,7 @@ date: <yyyy-mm-dd>
 | Step | Host | Does | Irreversible | Read in the receipt |
 |---|---|---|---|---|
 | R1.1 | target | `git fetch`, then detach at the commit in `/root/rm-060` | no | stdout: HEAD at the commit |
-| R1.2 | target | `host-identity.ts`: HEAD and clean tree; `bun`, `docker`, `tmux`, `git` resolve; no inherited `DATABASE_*`; `~/.env` resolves to `confirmTarget`; the database answers; its ledger is a supported baseline; its identity is absent | no | `host-identity.json`: tool paths, resolved target, ledger match |
+| R1.2 | target | `host-identity.ts`: HEAD and clean tree; `bun`, `docker`, `tmux`, `git` resolve; no inherited `DATABASE_*`; `~/.env` resolves to `confirmTarget`; the database answers; its ledger is a supported baseline; its identity is absent; `~/.env` holds a non-empty `rm_owner` line and `rm_owner` logs in (`SELECT 1`, read-only), else it refuses naming `bun run role-passwords --target prod` | no | `host-identity.json`: tool paths, resolved target, ledger match, `ownerLogin` |
 | R1.3 | target | `bun install --force`, root and backend | no | exit 0 |
 | R1.4 | capture | the same checkout on `rm-frontend-stage-2` | no | stdout |
 | R1.5 | capture | `host-identity.ts` without the database checks | no | `host-identity.json` |
@@ -296,7 +299,7 @@ What to check in R2.3's receipt:
 - The ledger has 76 rows. It matches `v0.5.0+0061+0062+0063+0080 (production ledger 2026-10-01)`.
   Any other match means production's ledger moved. The step refuses.
 - `deployment_identity` is absent (pre-0081).
-- `rm_owner` reads `rolcanlogin = f` on an existing cluster. R6.2b fixes that.
+- `rm_owner` reads `rolcanlogin = t`: `bun run role-passwords --target prod` ran before the release, and R1.2 proved the login.
 - The would-clear list (D55 (2), issue 1120) names only members you accept losing `robotmoney` for.
   An in-house seat (`athena`, `noop-analyst`, `robot-money`, `themis`) refuses the step.
 - The counts of `swarm_sessions`, `swarm_recommendations`, `swarm_consensus_receipts`,
@@ -460,8 +463,7 @@ The journal is under `~/.local/state/robotmoney-release/prod/<run-ts>/`. Each st
 | R5.rc | Tags the next free `v0.6.0-rc.N` at the commit and pushes it, on the control machine. Keeps an rc that already points there | no | stdout: the tag name |
 | R6.1 | `stop-legacy.ts stop`: kills tmux `driver`, then `docker compose down` for `rm_prod` (never `-v`), proves no legacy container remains | **yes**: the stack is down from here | `stop-legacy.json`: session and project stopped, zero containers left |
 | R6.2a | `credentials-init.ts`: reads the four in-house member ids through `rm_readonly`, writes `credential.json` and `RM_CREDENTIALS`. Keeps an existing file with the same roster | no | `credentials-init.json`: handles and key names only |
-| R6.2 | `env-rewrite.ts`: `~/.env` to the D61 allowlist. Other keys move to `~/.env.retired-<run-ts>` (0600) | no | `env-rewrite.json`: kept and moved key names |
-| R6.2b | `prod-init enable-owner-login`: as `doadmin`, `ALTER ROLE rm_owner LOGIN` when needed, then proves an `rm_owner` login | no | `enable-owner-login-*.json`: `rolcanlogin` before, whether it altered, the login proven |
+| R6.2 | `env-rewrite.ts`: `~/.env` to the D61 allowlist. Other keys, a stray `doadmin` line included, move to `~/.env.retired-<run-ts>` (0600). Refuses without `rm_owner` or `RM_CREDENTIALS` | no | `env-rewrite.json`: kept and moved key names |
 | R6.3 | `bun run migrate`: `0081_deployment_identity` first with `production` in the same transaction, then every pending file in filename order | **yes**: no code-only rollback after this | `migrate-receipt-*.json`: pre-identity state, matched baseline, **40 applied files**, ledger at 116 rows (76 + 40) |
 | S8.1 | `stop-legacy.ts retire`: renames the old checkout to `/root/robotmoney-frontend.v0.5.4-retired`, `chmod -R go-rwx`, moves its `.env` secret lines to `~/.env.legacy-retired-<run-ts>` (0600) | no | `retire-legacy.json`: new path, moved key names |
 | R6.4 | `prod-init set-identity`: reads the identity the migrate wrote. Writes nothing | no | `set-identity-*.json`: kind `production` |

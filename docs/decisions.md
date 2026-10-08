@@ -5228,11 +5228,6 @@ for them reads them from there. They stay out of everything else:
   No container, compose file, image or log receives `rm_owner` or `doadmin`.
 - They never appear in a receipt, a journal, a process argument or command output.
 - `doadmin` is used by one command only, `prod-init enable-owner-login`.
-  Amended 2026-10-08: release step R1.2 also logs in as `doadmin` and runs
-  `SELECT 1`, read-only, so a bad password refuses the run before R6.1 stops the
-  legacy stack. The statement is declared in the same module
-  (`backend/scripts/enable-owner-login.ts`), which stays the one place a
-  `doadmin` statement is declared.
 
 **The confirmation.** The literal `y` becomes `--confirm-target <host:port/database>`.
 A command that writes refuses unless the flag names exactly the target it resolved
@@ -5261,3 +5256,32 @@ credential.
 production host. Its stage leg (a `--local dump` twin) took a different path from the
 production leg, so the production steps were never actually rehearsed. On 2026-10-07
 the cutover could not proceed without a person logging in to type two passwords.
+
+**Amendment (owner, 2026-10-08).** The release runbooks use `rm_owner` only. No
+release step reads, requires or uses `doadmin`.
+
+- `doadmin` is stored in no file. The admin types it into one tool, the idempotent
+  password script: the `role-passwords` package script with `--target <stage|prod>`
+  on the control machine (a hidden prompt, sent to the host over ssh stdin), or
+  `prod-init role-passwords` with its own hidden prompt on the host. It lives only in that
+  process's memory. That is the one human input of the release process. It belongs
+  to provisioning, run before a release, not to the runbook.
+- The script sets the `rm_owner` password and `LOGIN` as `doadmin`, and writes the
+  `rm_owner` line of `~/.env`. A second run changes nothing.
+- Release step R1.2 requires a non-empty `rm_owner` line and proves an `rm_owner`
+  login with `SELECT 1`, read-only, before R6.1 stops the legacy stack. A failure
+  refuses with "rm_owner cannot log in", naming the `role-passwords` script for
+  that target. Step R6.2b (`prod-init enable-owner-login`) leaves the runbook.
+- `doadmin` leaves the `~/.env` allowlist. Preflight check 4 refuses a `doadmin`
+  line on prod again, naming it as the provisioning credential. R6.2 moves a stray
+  `doadmin` line to `~/.env.retired-<run-ts>`.
+
+This replaces "`doadmin` is used by one command only, `prod-init
+enable-owner-login`" above, and the `doadmin` half of "the `rm_owner` password and
+the `doadmin` password are lines in the host's `~/.env`".
+
+**Why the amendment.** Production's `/root/.env` had neither privileged line. A run
+that checked them only at R6.2 would have stopped the live site at R6.1 and then
+refused. Keeping `doadmin` out of every file removes the strongest credential from
+the host. Proving `rm_owner` at R1.2 means every precondition holds before the first
+irreversible step.

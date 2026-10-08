@@ -26,18 +26,7 @@
 // declared as `doadmin`, which the registry admits from this module only
 // (D61: "`doadmin` is used by one command only"). Step 3 is the object-less
 // `connectionCheck` shape, declared as `rm_owner`.
-//
-// THE DOADMIN LOGIN PROOF (release step R1.2). `proveDoadminLogin` logs in as
-// `doadmin` and runs `SELECT 1`, nothing else. Release step R1.2
-// (scripts/release/host-identity.ts) calls it, read-only, before the cutover's
-// first irreversible step, so a wrong or missing doadmin password refuses the
-// run while the legacy site still serves (D61 amendment, 2026-10-08). It is
-// declared HERE, not in host-identity, so this module stays the one place a
-// doadmin statement is declared and PROVISIONING_CALLER stays one module:
-// host-identity reaches it the way scripts/prod-init.ts reaches the rest. It
-// connects through Bun's built-in SQL client, not `postgres`, because R1.2
-// runs before `bun install` (R1.3).
-import { onStatement, PROVISIONING_SHAPES, registerStatement, type RegistryDb } from "../src/db/registry.ts";
+import { onStatement, PROVISIONING_SHAPES, registerStatement } from "../src/db/registry.ts";
 import type { HeldTargetLock } from "../src/db/target-lock.ts";
 
 const MODULE = "scripts/enable-owner-login";
@@ -68,45 +57,6 @@ const proveOwner = registerStatement({
   purpose: "Proves rm_owner logs in with the password in ~/.env once it is LOGIN (spec §9.1 step 1, D61).",
   callers: [MODULE],
 });
-
-/** R1.2, as doadmin: the read-only login proof. */
-const proveDoadmin = registerStatement({
-  role: "doadmin",
-  shape: "doadminLoginCheck",
-  site: "scripts/enable-owner-login:proveDoadminLogin",
-  purpose: "Proves the doadmin password in ~/.env logs in, read-only, at release step R1.2 before the cutover's first irreversible step (D61).",
-  callers: [MODULE],
-});
-
-/** A connection for the doadmin login proof. Tests hand in a fake. */
-export interface DoadminConnection {
-  readonly db: RegistryDb;
-  close(): Promise<void>;
-}
-
-/** Bun's built-in client: R1.2 runs before `bun install`, so no package import. */
-function bunConnect(url: string): DoadminConnection {
-  const sql = new Bun.SQL(url, { max: 1, connectionTimeout: 10 });
-  return { db: sql as unknown as RegistryDb, close: () => sql.close() };
-}
-
-/**
- * Log in as doadmin and run `SELECT 1`. Throws when the login fails; the
- * message never holds the URL or the password.
- */
-export async function proveDoadminLogin(doadminUrl: string, connect: (url: string) => DoadminConnection = bunConnect): Promise<void> {
-  const secrets = [doadminUrl, passwordOf(doadminUrl)];
-  let conn: DoadminConnection | undefined;
-  try {
-    conn = connect(doadminUrl);
-    const doadmin = conn.db;
-    await onStatement(doadmin, proveDoadmin)`SELECT 1`;
-  } catch (error) {
-    throw new Error(`doadmin could not log in with the password in $HOME/.env (${scrub(error instanceof Error ? error.message : String(error), secrets)})`);
-  } finally {
-    await conn?.close().catch(() => undefined);
-  }
-}
 
 export interface EnableOwnerLoginOptions {
   /** A `doadmin` URL from `~/.env`. Never logged. */

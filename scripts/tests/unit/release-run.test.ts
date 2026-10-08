@@ -35,7 +35,7 @@ import { epochProblems, inFlightProblems, paritySweep, regimeCronProblems } from
 import { baselineProblems, WOULD_CLEAR_SQL } from "../../release/baseline.ts";
 import { identityProblems } from "../../release/identity-check.ts";
 import { IDENTITY_MIGRATION, preconditionProblems } from "../../release/precondition.ts";
-import { D61_ENV_ALLOWLIST, D61_REQUIRED_KEYS, PRE_CUTOVER_REQUIRED_KEYS, RUN_WRITTEN_KEYS, confirmTargetOf, preCutoverKeyProblems, rmOwnerPlan } from "../../release/env-keys.ts";
+import { D61_ENV_ALLOWLIST, D61_REQUIRED_KEYS, PRE_CUTOVER_REQUIRED_KEYS, RUN_WRITTEN_KEYS, confirmTargetOf, preCutoverKeyProblems } from "../../release/env-keys.ts";
 import { SUPPORTED_RELEASES } from "../../../backend/src/db/supported-releases.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
@@ -104,7 +104,7 @@ describe("one step list for every target (D61 rule 2)", () => {
   test("the hash is the same for stage and prod, and the list covers the runbook ids", () => {
     expect(stepListHash()).toMatch(/^[0-9a-f]{64}$/);
     const ids = stepIds();
-    for (const id of ["R1.1", "R2.1", "R2.3", "R2.5", "R6.1", "R6.2", "R6.2b", "R6.3", "S8.1", "R6.4", "R6.5", "R6.7a", "R6.7c", "R6.7d", "R6.10", "R7.1", "R7.3", "R7.3a", "R7.3b", "R7.5", "R7.7"]) {
+    for (const id of ["R1.1", "R2.1", "R2.3", "R2.5", "R6.1", "R6.2", "R6.3", "S8.1", "R6.4", "R6.5", "R6.7a", "R6.7c", "R6.7d", "R6.10", "R7.1", "R7.3", "R7.3a", "R7.3b", "R7.5", "R7.7"]) {
       expect(ids).toContain(id);
     }
     expect(ids.indexOf("S8.1")).toBe(ids.indexOf("R6.3") + 1);
@@ -498,26 +498,28 @@ describe("env rewrite key partition (R6.2)", () => {
 
   test("allowlisted keys and comments stay; everything else moves", () => {
     const p = partitionEnv(text);
-    expect(p.keptKeys).toEqual(["host", "port", "database", "sslmode", "rm_app", "rm_worker", "rm_readonly", "rm_owner", "doadmin", "RM_CREDENTIALS"]);
-    expect(p.retiredKeys).toEqual(["OPENCODE_API_KEY", "ADMIN_TOKEN", "(line 14)"]);
+    expect(p.keptKeys).toEqual(["host", "port", "database", "sslmode", "rm_app", "rm_worker", "rm_readonly", "rm_owner", "RM_CREDENTIALS"]);
+    // A stray doadmin line moves out like any other key off the list (D61 amendment).
+    expect(p.retiredKeys).toEqual(["doadmin", "OPENCODE_API_KEY", "ADMIN_TOKEN", "(line 14)"]);
     expect(p.keptText).toContain("# connection");
-    expect(p.retiredText).toBe("OPENCODE_API_KEY=z\nexport ADMIN_TOKEN=t\na bare value\n");
+    expect(p.keptText).not.toContain("doadmin");
+    expect(p.retiredText).toBe("doadmin=d\nOPENCODE_API_KEY=z\nexport ADMIN_TOKEN=t\na bare value\n");
     expect(p.missingRequired).toEqual([]);
   });
-  test("red: a file without doadmin or RM_CREDENTIALS reports them; rm_owner is not required (R6.2b writes it after R6.2)", () => {
-    const p = partitionEnv("host=h\ndatabase=d\nrm_readonly=r\n");
-    expect(p.missingRequired).toEqual(["doadmin", "RM_CREDENTIALS"]);
-    expect(partitionEnv("host=h\ndatabase=d\ndoadmin=x\nRM_CREDENTIALS=/c\n").missingRequired).toEqual([]);
+  test("red: a file without rm_owner or RM_CREDENTIALS reports them; doadmin is never required", () => {
+    const p = partitionEnv("host=h\ndatabase=d\nrm_readonly=r\ndoadmin=x\n");
+    expect(p.missingRequired).toEqual(["rm_owner", "RM_CREDENTIALS"]);
+    expect(partitionEnv("host=h\ndatabase=d\nrm_owner=o\nRM_CREDENTIALS=/c\n").missingRequired).toEqual([]);
   });
-  test("an existing rm_owner line stays through R6.2, so R6.3 still finds it", () => {
-    const p = partitionEnv("host=h\ndatabase=d\nrm_owner=o\ndoadmin=x\nRM_CREDENTIALS=/c\n");
+  test("the rm_owner line stays through R6.2, so R6.3 (the migrate) still finds it", () => {
+    const p = partitionEnv("host=h\ndatabase=d\nrm_owner=o\nRM_CREDENTIALS=/c\n");
     expect(p.keptKeys).toContain("rm_owner");
     expect(p.retiredKeys).toEqual([]);
   });
-  test("the D61 allowlist is exactly preflight check 4's list, which holds rm_owner and doadmin", () => {
+  test("the D61 allowlist is exactly preflight check 4's list: rm_owner on it, doadmin off it", () => {
     expect([...D61_ENV_ALLOWLIST].sort()).toEqual([...ENV_FILE_ALLOWED_KEYS].sort());
     expect(D61_ENV_ALLOWLIST).toContain("rm_owner");
-    expect(D61_ENV_ALLOWLIST).toContain("doadmin");
+    expect(D61_ENV_ALLOWLIST).not.toContain("doadmin");
   });
   test("the confirm target is host:port/database from ~/.env", () => {
     expect(confirmTargetOf({ host: "h", port: "25060", database: "d" })).toBe("h:25060/d");
@@ -727,53 +729,46 @@ describe("W1's attendance threshold is target data, not a template change", () =
   });
 });
 
+
 // R1.2 proves every ~/.env key the cutover needs before R6.1 stops the legacy
-// stack: production's /root/.env once lacked them, and a run that stopped the
-// site and then refused at R6.2 would have left it down.
+// stack: production's /root/.env once lacked rm_owner, and a run that stopped
+// the site and then refused at R6.2 would have left it down. The runbook uses
+// rm_owner only; no release step reads doadmin (D61 amendment, owner, 2026-10-08).
 describe("the cutover's ~/.env keys are proven at R1.2, before the first irreversible step", () => {
   const ENV_PATH = "/root/.env";
   const SECRET = "Sup3r-s3cret-value";
 
-  test("doadmin present passes; rm_owner absent or present both pass", () => {
-    expect(preCutoverKeyProblems({ doadmin: SECRET }, ENV_PATH)).toEqual([]);
-    expect(preCutoverKeyProblems({ doadmin: SECRET, rm_owner: SECRET }, ENV_PATH)).toEqual([]);
-    expect(rmOwnerPlan({ doadmin: SECRET })).toBe("generated-at-R6.2b");
-    expect(rmOwnerPlan({ doadmin: SECRET, rm_owner: SECRET })).toBe("kept");
+  test("a non-empty rm_owner line passes", () => {
+    expect(preCutoverKeyProblems({ rm_owner: SECRET }, ENV_PATH)).toEqual([]);
   });
 
-  test("red: doadmin missing, doadmin empty, doadmin blank, and an empty rm_owner line each refuse", () => {
-    for (const env of [{}, { rm_owner: SECRET }, { doadmin: "" }, { doadmin: "   " }]) {
+  test("red: rm_owner missing, empty or blank refuses, naming the key, the file and the fix; doadmin alone does not satisfy it", () => {
+    for (const env of [{}, { doadmin: SECRET }, { rm_owner: "" }, { rm_owner: "   " }]) {
       const problems = preCutoverKeyProblems(env, ENV_PATH);
       expect(problems.length, JSON.stringify(env)).toBe(1);
-      expect(problems[0]).toContain("doadmin");
+      expect(problems[0]).toContain("rm_owner");
       expect(problems[0]).toContain(ENV_PATH);
+      expect(problems[0]).toContain("bun run role-passwords --target <target>");
     }
-    const emptyOwner = preCutoverKeyProblems({ doadmin: SECRET, rm_owner: "" }, ENV_PATH);
-    expect(emptyOwner).toHaveLength(1);
-    expect(emptyOwner[0]).toContain("rm_owner");
-    // Both wrong: both named.
-    expect(preCutoverKeyProblems({ rm_owner: "" }, ENV_PATH).join("\n")).toMatch(/doadmin[\s\S]*rm_owner/);
   });
 
   test("a refusal never holds a value", () => {
-    for (const env of [{ rm_owner: SECRET }, { doadmin: "", rm_owner: SECRET }, { doadmin: SECRET, rm_owner: "" }]) {
+    for (const env of [{ doadmin: SECRET }, { rm_owner: "", doadmin: SECRET }]) {
       expect(preCutoverKeyProblems(env, ENV_PATH).join("\n")).not.toContain(SECRET);
     }
   });
 
-  test("RM_CREDENTIALS and rm_owner are not required before the run: the run writes them, each before the step that needs it", () => {
-    expect([...PRE_CUTOVER_REQUIRED_KEYS]).toEqual(["doadmin"]);
-    expect(RUN_WRITTEN_KEYS).toEqual({ RM_CREDENTIALS: "R6.2a", rm_owner: "R6.2b" });
-    expect([...D61_REQUIRED_KEYS]).toEqual(["doadmin", "RM_CREDENTIALS"]);
-    const ids = stepIds();
-    const at = (id: string) => ids.indexOf(id);
+  test("no release step reads doadmin, and R6.2b (enable-owner-login) is gone", () => {
+    expect(stepIds()).not.toContain("R6.2b");
+    for (const s of RELEASE_STEPS) {
+      for (const c of s.cmds) expect(c.join(" "), s.id).not.toMatch(/doadmin|enable-owner-login|role-passwords/);
+    }
+    expect([...PRE_CUTOVER_REQUIRED_KEYS]).toEqual(["rm_owner"]);
+    expect(RUN_WRITTEN_KEYS).toEqual({ RM_CREDENTIALS: "R6.2a" });
+    expect([...D61_REQUIRED_KEYS]).toEqual(["rm_owner", "RM_CREDENTIALS"]);
     // R6.2 requires RM_CREDENTIALS: R6.2a writes it first.
-    expect(at("R6.2a")).toBeLessThan(at("R6.2"));
-    // rm_owner is needed from R6.3 (the first migrate): R6.2b writes it first, after R6.2 rewrote ~/.env.
-    expect(at("R6.2")).toBeLessThan(at("R6.2b"));
-    expect(at("R6.2b")).toBeLessThan(at("R6.3"));
-    // R6.2 keeps rm_owner: it is on the allowlist.
-    expect(D61_ENV_ALLOWLIST).toContain("rm_owner");
+    const ids = stepIds();
+    expect(ids.indexOf("R6.2a")).toBeLessThan(ids.indexOf("R6.2"));
     for (const [key, writer] of Object.entries(RUN_WRITTEN_KEYS)) expect(ids, key).toContain(writer);
   });
 
@@ -786,16 +781,14 @@ describe("the cutover's ~/.env keys are proven at R1.2, before the first irrever
     return check >= 0 && check < firstIrreversible(steps);
   };
 
-  test("every pre-cutover key check precedes the first irreversible step (R6.1)", () => {
+  test("every precondition check precedes the first irreversible step (R6.1)", () => {
     expect(RELEASE_STEPS[keyCheckIndex(RELEASE_STEPS)]?.id).toBe("R1.2");
     expect(RELEASE_STEPS[firstIrreversible(RELEASE_STEPS)]?.id).toBe("R6.1");
     expect(keysCheckedFirst(RELEASE_STEPS)).toBe(true);
     // R6.2, the defence-in-depth check, needs only keys R1.2 checked or the run wrote.
     for (const key of D61_REQUIRED_KEYS) expect(PRE_CUTOVER_REQUIRED_KEYS.includes(key) || key in RUN_WRITTEN_KEYS, key).toBe(true);
-    // The R1.2 description says rm_owner cannot be proven and RM_CREDENTIALS is not required.
     const r12 = RELEASE_STEPS.find((s) => s.id === "R1.2")!;
-    expect(r12.description).toContain("doadmin logs in");
-    expect(r12.description).toContain("cannot be proven");
+    expect(r12.description).toContain("rm_owner logs in");
     expect(r12.description).toContain("RM_CREDENTIALS is not required");
   });
 
@@ -809,8 +802,7 @@ describe("the cutover's ~/.env keys are proven at R1.2, before the first irrever
   });
 
   // The real script, end to end, against an unreachable database: the key
-  // refusals, the rm_owner report and the doadmin login failure all print
-  // key names and never a value.
+  // refusal and the rm_owner login failure print key names, never a value.
   describe("host-identity.ts prints key names, never values", () => {
     const OWNER = "owner-Pw-9f3a1c";
     const ADMIN = "admin-Pw-7b2e4d";
@@ -840,29 +832,26 @@ describe("the cutover's ~/.env keys are proven at R1.2, before the first irrever
       }
     };
 
-    test("red: doadmin missing refuses, naming doadmin; the rm_owner value never prints", () => {
-      const x = run(`${conn}rm_owner=${OWNER}\n`);
-      expect(x.code).toBe(1);
-      expect(x.out).toMatch(/REFUSE: .*has no non-empty doadmin line/);
-      expect(x.out).toContain("rm_owner: the ~/.env line will be kept at R6.2b");
-      expect(x.receipt).toContain(`"rmOwner": "kept"`);
-      expect(x.receipt).toContain(`"doadminLogin": "not-tried"`);
-      clean(x);
-    }, 60_000);
-
-    test("red: an empty doadmin line refuses like a missing one", () => {
-      const x = run(`${conn}doadmin=\nrm_owner=${OWNER}\n`);
-      expect(x.out).toMatch(/REFUSE: .*has no non-empty doadmin line/);
-      clean(x);
-    }, 60_000);
-
-    test("doadmin present, rm_owner absent: no key refusal, rm_owner will be generated, the doadmin login is tried and its failure holds no password", () => {
+    test("red: rm_owner missing refuses, naming rm_owner and the fix; a doadmin line is not read and never prints", () => {
       const x = run(`${conn}doadmin=${ADMIN}\n`);
-      expect(x.out).not.toMatch(/REFUSE: .*(non-empty doadmin|rm_owner line)/);
-      expect(x.out).toContain("rm_owner will be generated at R6.2b");
-      expect(x.out).toMatch(/REFUSE: doadmin login: doadmin could not log in/);
-      expect(x.receipt).toContain(`"doadminLogin": "failed"`);
-      expect(x.receipt).toContain(`"rmOwner": "generated-at-R6.2b"`);
+      expect(x.code).toBe(1);
+      expect(x.out).toMatch(/REFUSE: .*has no non-empty rm_owner line; run `bun run role-passwords --target <target>` first/);
+      expect(x.receipt).toContain(`"ownerLogin": "not-tried"`);
+      clean(x);
+    }, 60_000);
+
+    test("red: an empty rm_owner line refuses like a missing one", () => {
+      const x = run(`${conn}rm_owner=\n`);
+      expect(x.out).toMatch(/REFUSE: .*has no non-empty rm_owner line/);
+      expect(x.receipt).toContain(`"ownerLogin": "not-tried"`);
+      clean(x);
+    }, 60_000);
+
+    test("rm_owner present: no key refusal; the login is tried, and its failure names role-passwords for the target and holds no password", () => {
+      const x = run(`${conn}rm_owner=${OWNER}\n`);
+      expect(x.out).not.toMatch(/non-empty rm_owner line/);
+      expect(x.out).toContain("REFUSE: rm_owner login: rm_owner cannot log in; run `bun run role-passwords --target prod` first");
+      expect(x.receipt).toContain(`"ownerLogin": "failed"`);
       clean(x);
     }, 60_000);
   });

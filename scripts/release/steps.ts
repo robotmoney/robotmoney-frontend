@@ -120,7 +120,7 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "R1.2", standing: ["SP.1"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("host-identity.json")],
-    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger is a supported baseline, its identity is absent or matches RM_ENV; before R6.1, ~/.env holds a non-empty doadmin line and doadmin logs in (SELECT 1, read-only); rm_owner is optional (absent: R6.2b generates it; present: kept; it cannot be proven while NOLOGIN); RM_CREDENTIALS is not required (R6.2a writes it)",
+    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger is a supported baseline, its identity is absent or matches RM_ENV; before R6.1, ~/.env holds a non-empty rm_owner line and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no release step reads doadmin; RM_CREDENTIALS is not required (R6.2a writes it)",
     cmds: [["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--receipt-dir", RUN_DIR]],
   },
   {
@@ -193,13 +193,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "R6.2", standing: ["SV.6"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("env-rewrite.json")],
-    description: "Rewrite ~/.env to the D61 allowlist; every other key moves to ~/.env.retired-<ts> (mode 0600); key names only",
+    description: "Rewrite ~/.env to the D61 allowlist (rm_owner, never doadmin); every other key, a stray doadmin line included, moves to ~/.env.retired-<ts> (mode 0600); refuses without rm_owner or RM_CREDENTIALS; key names only",
     cmds: [["bun", "scripts/release/env-rewrite.ts", "--run", "{runTs}", "--receipt-dir", RUN_DIR]],
-  },
-  {
-    id: "R6.2b", standing: ["SC.2"], host: "target", irreversible: false, expectExit: 0, receipts: [prodInitReceipt("enable-owner-login")],
-    description: "rm_owner becomes LOGIN through doadmin (prod-init enable-owner-login)",
-    cmds: [prodInit("enable-owner-login")],
   },
   {
     id: "R6.3", standing: ["SC.2"], host: "target", irreversible: true, expectExit: 0,
