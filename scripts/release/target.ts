@@ -11,6 +11,10 @@
 // The schema is closed: an unknown key refuses. A key nobody reads is a value
 // an operator believes changes the run while it changes nothing.
 //
+// A target never names the release commit. The operator's go file is the one
+// source of the commit (./go.ts, owner decision 2026-10-08): a `commit` or
+// `tag` here would be a second pin that drifts from the go with every QA fix.
+//
 // Pure apart from loadTarget's one readFileSync, so every refusal is a unit
 // test (scripts/tests/unit/release-run.test.ts).
 import { readFileSync } from "node:fs";
@@ -70,10 +74,6 @@ export interface ReleaseTarget {
   /** From the file name: `targets/<name>.json`. */
   readonly name: string;
   readonly release: string;
-  /** Full 40-hex SHA. Required unless `tag` is given. */
-  readonly commit?: string;
-  /** A tag that must resolve to `commit` when both are given. */
-  readonly tag?: string;
   readonly rmEnv: "stage" | "prod";
   /** The ssh host alias. */
   readonly host: string;
@@ -97,7 +97,7 @@ export interface ReleaseTarget {
   readonly bootEnv: Readonly<Record<string, string>>;
 }
 
-const TOP_KEYS = ["release", "commit", "tag", "rmEnv", "host", "checkout", "home", "instance", "publicOrigin", "watchMinAttendance", "capture", "legacy", "confirmTarget", "bootEnv", "$comment"];
+const TOP_KEYS = ["release", "rmEnv", "host", "checkout", "home", "instance", "publicOrigin", "watchMinAttendance", "capture", "legacy", "confirmTarget", "bootEnv", "$comment"];
 const CAPTURE_KEYS = ["host", "home", "checkout"];
 const LEGACY_KEYS = ["checkout", "tmuxSession", "composeProject", "composeFiles", "startedBy", "version", "commit", "log"];
 
@@ -125,11 +125,11 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
     return v;
   };
 
-  unknown(raw, TOP_KEYS, name);
+  unknown(raw, TOP_KEYS.concat("commit", "tag"), name);
   const release = str(raw, "release", name, /^v\d+\.\d+\.\d+(-rc\.\d+)?$/);
-  const commit = str(raw, "commit", name, SHA_RE, true);
-  const tag = str(raw, "tag", name, /^v[0-9A-Za-z.+-]+$/, true);
-  if (commit === undefined && tag === undefined) errors.push(`${name}: give commit (full SHA) or tag`);
+  for (const key of ["commit", "tag"]) {
+    if (key in raw) errors.push(`${name}: "${key}" is not a target key; the release commit comes from the go file's commit: line`);
+  }
   const rmEnv = str(raw, "rmEnv", name);
   if (rmEnv !== undefined && rmEnv !== "stage" && rmEnv !== "prod") errors.push(`${name}.rmEnv must be stage or prod`);
   const host = str(raw, "host", name, HOST_RE);
@@ -197,7 +197,7 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
   if (errors.length > 0) return { errors };
   return {
     target: {
-      name, release: release!, ...(commit ? { commit } : {}), ...(tag ? { tag } : {}),
+      name, release: release!,
       rmEnv: rmEnv as "stage" | "prod", host: host!, checkout: checkout!, home: home!, instance: instance!,
       publicOrigin: publicOrigin!, watchMinAttendance, capture: capture!, legacy: legacy!, confirmTarget: confirmTarget!, bootEnv,
     },

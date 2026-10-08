@@ -3,11 +3,12 @@
 //
 // What is pinned, each with a red control:
 //   - the target schema: both committed targets are valid; an unknown key, a
-//     bad commit, a secret boot setting and a prod target on another instance
-//     refuse;
+//     release commit or tag pin, a secret boot setting and a prod target on
+//     another instance refuse;
 //   - D61 rule 2: the step list is one list, and its hash is the same for
 //     stage and prod; the rendered commands differ only by target values;
-//   - D61 rule 1: the go file must name this release, commit and target;
+//   - D61 rule 1: the go file must name this release and target, and its
+//     commit is the one source of every {commit};
 //   - SP.8: prod refuses without a passed stage journal of the same step-list
 //     hash at the same commit;
 //   - resume: a failed run prints the resume command, and `--from` runs that
@@ -25,7 +26,7 @@ import { checkResume, checkStageJournal, runStatus, selectSteps, type RunJournal
 import { lineScrubber, scrubSecrets, forbiddenReceiptPath } from "../../release/scrub.ts";
 import { REMOTE_PATH, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
 import { CONFIRM_TARGET_PLACEHOLDER, loadTarget, validateTarget } from "../../release/target.ts";
-import { parseArgs, receiptPathsInOutput, runRelease, type RunnerDeps } from "../../release/run.ts";
+import { COMMIT_FROM_GO, parseArgs, receiptPathsInOutput, runRelease, type RunnerDeps } from "../../release/run.ts";
 import { partitionEnv } from "../../release/env-rewrite.ts";
 import { compareBaseline } from "../../release/compare-baseline.ts";
 import { exposesPostgresUrl, keysOutsideAllowlist, othersCanTraverse, scanForPostgresUrls, socketMounts, tokenFileProblems } from "../../release/host-guards.ts";
@@ -82,12 +83,18 @@ describe("target schema", () => {
     expect("errors" in r && r.errors.join()).toContain('prod.legacy: unknown key "volumes"');
   });
 
-  test("red: a short commit, no commit or tag, a prod target on another instance, a secret boot setting", () => {
+  test("a target names no release commit: the go file is its one source", () => {
+    expect(prodRaw()).not.toHaveProperty("commit");
+    expect(prodRaw()).not.toHaveProperty("tag");
+    expect(loadTarget(join(targetsDir, "stage.json"))).not.toHaveProperty("commit");
+    // the legacy stack's commit stays: it is the old stack, not the release.
+    expect(loadTarget(join(targetsDir, "prod.json")).legacy.commit).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  test("red: a commit or tag pin, a prod target on another instance, a secret boot setting", () => {
     const bad = (patch: Record<string, unknown>) => validateTarget("prod", { ...prodRaw(), ...patch });
-    expect("errors" in bad({ commit: "a502de30" })).toBe(true);
-    const noCommit = prodRaw();
-    delete noCommit.commit;
-    expect("errors" in validateTarget("prod", noCommit)).toBe(true);
+    expect(bad({ commit: SHA })).toEqual({ errors: ['prod: "commit" is not a target key; the release commit comes from the go file\'s commit: line'] });
+    expect("errors" in bad({ tag: "v0.6.0" })).toBe(true);
     expect("errors" in bad({ instance: "stage_target" })).toBe(true);
     expect("errors" in bad({ bootEnv: { BASE_RPC_URL: "https://x" } })).toBe(true);
     expect("errors" in bad({ confirmTarget: "not a target" })).toBe(true);
@@ -220,21 +227,24 @@ describe("the target precondition (R1.2)", () => {
 });
 
 describe("the go file (D61 rule 1)", () => {
-  const expected = { release: "v0.6.0", commit: SHA, target: "prod" };
+  const expected = { release: "v0.6.0", target: "prod" };
   const good = `# owner go, 2026-10-08\nrelease: v0.6.0\ncommit: ${SHA}\ntarget: prod\nrecovery: /root/recovery-matrix-v0.6.0.signed.md\noperator: lucas\n`;
 
-  test("a go naming this release, commit and target passes, with its hash", () => {
+  test("a go naming this release and target passes, with its hash; its commit is the run's commit", () => {
     const r = validateGo(good, expected);
     expect("go" in r && r.go.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect("go" in r && r.go.commit).toBe(SHA);
+    const other = validateGo(good.replace(SHA, OTHER_SHA), expected);
+    expect("go" in other && other.go.commit).toBe(OTHER_SHA);
   });
 
-  test("red: another commit, target or release; an unknown or missing key; a short sha", () => {
-    expect("errors" in validateGo(good.replace(SHA, OTHER_SHA), expected)).toBe(true);
+  test("red: another target or release; an unknown or missing key; a short sha", () => {
+    expect(validateGo(good.replace(/commit: .*\n/, ""), expected)).toEqual({ errors: ["the go names no commit"] });
     expect("errors" in validateGo(good.replace("target: prod", "target: stage"), expected)).toBe(true);
     expect("errors" in validateGo(good.replace("v0.6.0", "v0.6.1"), expected)).toBe(true);
     expect("errors" in validateGo(`${good}skip: R2.5\n`, expected)).toBe(true);
     expect("errors" in validateGo(good.replace(/target: prod\n/, ""), expected)).toBe(true);
-    expect("errors" in validateGo(good.replace(SHA, "a502de30"), { ...expected, commit: "a502de30" })).toBe(true);
+    expect("errors" in validateGo(good.replace(SHA, "a502de30"), expected)).toBe(true);
     // SC.1: no recovery matrix, or a recovery that is neither a path nor a sha.
     expect(validateGo(good.replace(/recovery: .*\n/, ""), expected)).toEqual({ errors: ["the go names no recovery"] });
     expect("errors" in validateGo(good.replace(/recovery: .*\n/, "recovery: signed\n"), expected)).toBe(true);
@@ -308,7 +318,6 @@ function fixture(rmEnv: "stage" | "prod" = "stage") {
   const dir = mkdtempSync(join(tmpdir(), "release-run-"));
   const raw = rmEnv === "prod" ? prodRaw() : JSON.parse(readFileSync(join(targetsDir, "stage.json"), "utf8"));
   raw.confirmTarget = "db.example.com:25060/rm";
-  raw.commit = SHA;
   const name = rmEnv === "prod" ? "prod" : "stage";
   const targetFile = join(dir, `${name}.json`);
   writeFileSync(targetFile, JSON.stringify(raw));
@@ -337,7 +346,6 @@ function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string } =
       if (remote.startsWith("cat ")) return { code: 0, stdout: opts.receipt ?? "" };
       return { code: 1, stdout: "" };
     },
-    resolveTag: () => undefined,
     readText: (p) => { try { return readFileSync(p, "utf8"); } catch { return undefined; } },
     now: () => new Date("2026-10-08T12:00:00Z"),
     log: (l) => logs.push(l),
@@ -348,13 +356,13 @@ function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string } =
 }
 
 describe("runRelease", () => {
-  test("refuses without a go file, and with a go for another commit; --dry-run needs none", async () => {
+  test("refuses without a go file, and with a go for another target; --dry-run needs none", async () => {
     const f = fixture();
     const a = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(2);
     expect(a.ran).toEqual([]);
     expect(a.logs.join("\n")).toContain("no --go");
-    writeFileSync(f.goFile, `release: v0.6.0\ncommit: ${OTHER_SHA}\ntarget: stage\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
+    writeFileSync(f.goFile, `release: v0.6.0\ncommit: ${SHA}\ntarget: prod\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
     const b = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], b.deps, TINY)).toBe(2);
     expect(b.ran).toEqual([]);
@@ -362,6 +370,27 @@ describe("runRelease", () => {
     expect(await runRelease(["--target", f.targetFile, "--dry-run"], c.deps, TINY)).toBe(0);
     expect(c.ran).toEqual([]);
     expect(c.logs.join("\n")).toContain("ssh -T rm-frontend-stage-2");
+  });
+
+  test("the go's commit is rendered into every {commit}; a dry run without a go renders the placeholder", async () => {
+    const CHECKOUT: StepTemplate[] = [
+      { id: "C1", standing: [], description: "detach", host: "target", cmds: [["checkout", "--detach", "{commit}"]], expectExit: 0, receipts: [], irreversible: false },
+    ];
+    const f = fixture();
+    const a = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--dry-run"], a.deps, CHECKOUT)).toBe(0);
+    expect(a.logs.join("\n")).toContain(`--detach ${COMMIT_FROM_GO}`);
+    expect(a.logs.join("\n").split("\n").filter((l) => l.includes("--detach")).join()).not.toMatch(/[0-9a-f]{40}/);
+    writeFileSync(f.goFile, `release: v0.6.0\ncommit: ${OTHER_SHA}\ntarget: stage\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
+    const b = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--dry-run"], b.deps, CHECKOUT)).toBe(0);
+    expect(b.logs.join("\n")).toContain(`--detach ${OTHER_SHA}`);
+    expect(b.logs.join("\n")).not.toContain(COMMIT_FROM_GO);
+    // A live run journals the go's commit.
+    const c = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], c.deps, CHECKOUT)).toBe(0);
+    const j = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    expect(j.commit).toBe(OTHER_SHA);
   });
 
   test("red: a placeholder confirmTarget refuses a live run", async () => {
@@ -450,6 +479,13 @@ describe("runRelease", () => {
     const c = fakeDeps({ receipt: "{}" });
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", join(f.dir, "j2"), "--stage-journal", stageDir], c.deps, TINY.slice(0, 2))).toBe(2);
     expect(c.ran).toEqual([]);
+
+    // red control: a prod go at another commit than the stage run passed at refuses (SP.8).
+    writeFileSync(f.goFile, `release: v0.6.0\ncommit: ${OTHER_SHA}\ntarget: prod\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
+    const d = fakeDeps({ receipt: "{}" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", join(f.dir, "j3"), "--stage-journal", stageDir], d.deps, TINY)).toBe(2);
+    expect(d.ran).toEqual([]);
+    expect(d.logs.join("\n")).toContain("commit");
   });
 });
 

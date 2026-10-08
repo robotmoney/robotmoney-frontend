@@ -3,8 +3,10 @@
 // "The operator's authority is one recorded go for the release, given before
 // the run, never a keystroke during it." The go is a small text file the
 // operator writes and the runner reads. It names the release, the commit and
-// the target; a go for a different release, commit or target refuses. The
-// runner journals its sha256, and a resumed run must present the same file.
+// the target; a go for a different release or target refuses. The go is the
+// one source of the release commit: the target files name none, and the runner
+// renders every `{commit}` from the go's `commit:` line. The runner journals
+// the go's sha256, and a resumed run must present the same file.
 //
 //   release: v0.6.0
 //   commit:  <40-hex sha>
@@ -35,10 +37,10 @@ const REQUIRED = ["release", "commit", "target", "recovery"] as const;
 export const RECOVERY_REF_RE = /^([0-9a-f]{40}|[0-9a-f]{64}|[/~.][^\s]*)$/;
 const OPTIONAL = ["operator", "date", "note"] as const;
 
-/** Parse and check a go file against what the run is about to do. */
+/** Parse and check a go file against the release and target the run acts on. */
 export function validateGo(
   text: string,
-  expected: { release: string; commit: string; target: string },
+  expected: { release: string; target: string },
 ): { go: GoRecord } | { errors: string[] } {
   const errors: string[] = [];
   const fields: Record<string, string> = {};
@@ -62,7 +64,6 @@ export function validateGo(
   for (const key of REQUIRED) if (!fields[key]) errors.push(`the go names no ${key}`);
   if (fields.commit && !/^[0-9a-f]{40}$/.test(fields.commit)) errors.push(`the go's commit must be a full 40-hex SHA`);
   if (fields.release && fields.release !== expected.release) errors.push(`the go is for release ${fields.release}; this run is ${expected.release}`);
-  if (fields.commit && fields.commit !== expected.commit) errors.push(`the go is for commit ${fields.commit}; this run is ${expected.commit}`);
   if (fields.target && fields.target !== expected.target) errors.push(`the go is for target ${fields.target}; this run is ${expected.target}`);
   if (fields.recovery && !RECOVERY_REF_RE.test(fields.recovery)) errors.push("the go's recovery must be the path or the sha of the signed recovery matrix (SC.1)");
   if (errors.length > 0) return { errors };

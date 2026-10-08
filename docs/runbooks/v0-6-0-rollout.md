@@ -33,7 +33,7 @@ Each standing ID maps to the runner steps that satisfy it (the `standing` field 
 | SP.4 smoke preflight | R6.7a, R6.7d | Preflight runs inside each boot |
 | SP.5 log baseline | R2.5 | Passes on a non-zero exit only with `--triage` covering every finding |
 | SP.6 product baseline | R2.3 | Counts and size. The published AUM figure: owner exception for v0.6.0 |
-| SP.7 code gate | none | CI on the pinned commit, read before the go (section 4) |
+| SP.7 code gate | none | CI on the go's commit, read before the go (section 4) |
 | SP.8 prod runs only what stage passed | the runner's start check | `--stage-journal` names a passed stage run |
 | SR.0 fresh dump | R2.1 | A new dated directory every run |
 | SR.1 twin boots, every member seated | none | The short twin rerun (section 7.3), required for v0.6.0 |
@@ -114,7 +114,7 @@ before the run. The owner triages the R2.5 baseline in a file.
 | B5 | Parity sweep keeps its 240 s exemption (1114) | merged | R7.4a reports the last sweep's duration |
 | B6 | Production parity: judge retry (1117), judge model from the database (1118), verified receipt path (1119), today's regime (1108), in-house seats keep their operator (1120), absence savepoint (1122) | merged. Persona-voiced sectioned takes (1116) merged by PR 1131 | R7 and W1 |
 | B7 | Log gates `twin:gate` and `prod:gate` ported (1071) | merged | first live run will show unclassified lines; add a rule only with evidence |
-| B8 | Mid-window dump adoption and the first-epoch bound (1121) | merged | `e2e` green on the pinned commit |
+| B8 | Mid-window dump adoption and the first-epoch bound (1121) | merged | `e2e` green on the go's commit |
 | B9 | `release:v0.6.0` tracking issue | exists (1147), updated 2026-10-06 | — |
 | B10 | `rebind-members` order on the breaking-migration path | PR 1176, `--reuse` (1186, 1195), tokens kept on `--reuse` (1202) | settled on the twin 2026-10-06 at `3cdc883b`: boot, rebind 8 of 8, boot 2 reaches READY, the participants take the new keys. The runner encodes the order as R6.7a to R6.7d |
 | B11 | The buyback indexer ran in the worker as `rm_worker` while its `buyback_scan_state`/`buyback_swaps` sites declared `rm_app`, so every sweep on the migrated dump was refused and swallowed (1150) | fixed (1171), migration 0113 | R7.3b: soak check R8.v reads every `worker-*` lane for a refused scan |
@@ -162,7 +162,7 @@ other user reaches it. S8.1 moves its secret lines out anyway.
 |---|---|
 | Release branch | `releases-0.6.x` |
 | QA branch | `qa/0.6.x-2026-10-08`. Every fix of the session lands here (policy §4.6) |
-| Release commit | `9d30b960fcb01a20e12a9118dd46dfd5c8f85eac`, the `commit` in `scripts/release/targets/prod.json` and `stage.json`. A new pin is a commit to both files |
+| Release commit | The go file's `commit:` line, a full 40-hex SHA. The target files name none (owner decision 2026-10-08). A new commit is a new go file, never a commit to the target files |
 | From (production today) | v0.5.4 at `1cda4085`, the target file's `legacy`: checkout `/root/robotmoney-frontend`, tmux session `driver`, compose project `rm_prod`, 76-name ledger (R2.3 confirms) |
 | To | v0.6.0 in `/root/rm-060`, instance `rm_prod` |
 | RC tag | R5.rc tags the next free `v0.6.0-rc.N` at the commit, prod run only. A stage run tags nothing |
@@ -254,9 +254,9 @@ The owner writes the go only when all of these hold:
 
 - B1–B27 each closed, with the decision written in the tracking issue.
 - `release:v0.6.0` tracking issue exists, scope frozen, Phases complete (policy §6).
-- The QA commits the owner picked are merged into `releases-0.6.x` (policy §4.6 step 5). The pinned
+- The QA commits the owner picked are merged into `releases-0.6.x` (policy §4.6 step 5). The go's
   commit's tree is the tree that passed stage.
-- CI on the pinned commit is green: `e2e`, `unit`, `backend`, `integration`, `contract`,
+- CI on the go's commit is green: `e2e`, `unit`, `backend`, `integration`, `contract`,
   `web-client`, `repo-guards`, `docs-lint` (standing SP.7).
 - Two stage runs passed (section 7). The prod run names the second one.
 - The recovery matrix (section 8) is signed. The window and the maximum write loss are named in it.
@@ -265,7 +265,7 @@ The go file lives on the control machine. Its format is in [`release-run.md`](./
 
 ```text
 release: v0.6.0
-commit: 9d30b960fcb01a20e12a9118dd46dfd5c8f85eac
+commit: <40-hex sha: the commit the stage run passed at>
 target: prod
 recovery: ~/recovery-matrix-v0.6.0.signed.md
 operator: <name>
@@ -283,7 +283,7 @@ date: <yyyy-mm-dd>
 | R1.5 | capture | `host-identity.ts` without the database checks | no | `host-identity.json` |
 | R1.6 | capture | `bun install --force`, root and backend | no | exit 0 |
 
-The code gate (standing SP.7) is CI on the pinned commit. The runner does not run tests on a host.
+The code gate (standing SP.7) is CI on the go's commit. The runner does not run tests on a host.
 A test suite that names `upgrade-from-release`, `first-production-migrate` and
 `identity-first-pass` is the CI evidence policy §8.1 asks for. Cite it in the report.
 
@@ -374,7 +374,7 @@ Everything runs from the control machine. Repeat this sequence twice, each time 
    starts again at step 1.
 
 A failure stops the run at the failed step. The fix lands in a worktree branched from the QA branch,
-merges into the QA branch, and the target files are re-pinned to the new commit. The step-list hash
+merges into the QA branch, and the operator writes a new stage go naming the new commit. The step-list hash
 or the commit then differs, so the run starts again from step 1 on a new dump. A stage failure does
 not consume an rc number.
 
@@ -427,7 +427,7 @@ The go's `recovery:` key names the signed copy of this matrix. The journal recor
 | Before R6.1 | Nothing changed | Fix and resume the run (`--run <run-ts> --from <step>`) |
 | After R6.1, before R6.3 commits | Legacy stack down, database untouched | Restart the legacy stack as the target file's `legacy.startedBy` says. No runner step does this yet. It is the operator's recorded decision |
 | R6.3 fails or is killed | Ledger partly ahead of manifest ("in progress"); the boot refuses it | **Resume at R6.3** (`--from R6.3`). The migrate validates committed work and resumes (spec §8.3). Do not edit rows. Do not boot |
-| Migrate done, a boot or preflight refuses | New schema, no service running | Fix forward: a new commit, re-pinned, re-run on stage, then resume. The journal names the phase |
+| Migrate done, a boot or preflight refuses | New schema, no service running | Fix forward: a new commit, a new go, re-run on stage, then resume. The journal names the phase |
 | Migrate done, product wrong | New schema, new code live | **No code-only rollback** (0107, section 1.1). Either fix forward on a new rc, or restore the R2.1 dump into a fresh primary and repoint, which loses everything written after the dump |
 | Any step after R6.3, old checkout present | The old `bun run migrate` (as `rm_owner`) does NOT refuse the migrated database: it reports its 76 files current and re-seeds the `swarm.*` job_schedules 0089 deleted (B13). Only the old api/worker's runtime DELETEs are refused (0107) | Never run anything from the old checkout after R6.3. S8.1 renames it right after R6.3 |
 | After R6.7a began | The old services are gone | R6.7b or R6.9's status shows new and old per service. Resume at the failed step |
@@ -438,10 +438,10 @@ write loss it implies. Do not delete history rows to tidy a failed run (append-o
 
 ## 9. Production run, IRREVERSIBLE from R6.1
 
-Run from the control machine, at the pinned commit, with a clean checkout:
+Run from the control machine, at the go's commit, with a clean checkout:
 
 ```bash
-bun run release:run --target prod --dry-run
+bun run release:run --target prod --go <go file> --dry-run
 bun run release:run --target prod --go <go file> --triage <triage file> --stage-journal <passed stage journal dir>
 ```
 

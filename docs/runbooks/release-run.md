@@ -20,7 +20,7 @@ machine. Every step runs on a host over ssh. No person logs in to a host.
 ## Commands
 
 ```bash
-bun run release:run --target stage --dry-run
+bun run release:run --target stage --dry-run [--go ~/go-v0.6.0-stage.txt]
 bun run release:run --target stage --go ~/go-v0.6.0-stage.txt
 bun run release:run --target prod  --go ~/go-v0.6.0-prod.txt --stage-journal ~/.local/state/robotmoney-release/stage/<run-ts>
 bun run release:run --target prod  --go ~/go-v0.6.0-prod.txt --stage-journal <dir> --run <run-ts> --from R6.4
@@ -29,7 +29,7 @@ bun run release:run --target prod  --go ~/go-v0.6.0-prod.txt --stage-journal <di
 ```
 
 - The runner prints the full plan first: the target, the commit, the step-list hash and every remote command.
-- `--dry-run` prints the plan and stops. It needs no go file.
+- `--dry-run` prints the plan and stops. It needs no go file. Without one, every `{commit}` renders as `COMMIT-FROM-GO`. With `--go <file>`, it renders the go's commit.
 - `--go <file>` is required for any real run.
 - `--from <step>` resumes a run. It needs `--run <run-ts>`. The failed run prints the exact command.
 - `--only <step>` runs one step.
@@ -40,7 +40,12 @@ bun run release:run --target prod  --go ~/go-v0.6.0-prod.txt --stage-journal <di
 ## The go file
 
 The go is the operator's one recorded authorization for the release. It names the
-release, the commit, the target and the signed recovery matrix. A go for anything else refuses.
+release, the commit, the target and the signed recovery matrix. A go for another release or target refuses.
+
+The go is the only place the release commit is named. The target files name none. The runner
+renders every `{commit}` (R1.1, R1.2, R1.4, R1.5, R5.rc, R7.1, W3) from the go's `commit:` line.
+A new commit after a QA fix means a new go file, never a commit to the target files. SP.8 still
+refuses a prod go whose commit differs from the passed stage run's commit.
 
 ```text
 release: v0.6.0
@@ -60,12 +65,13 @@ the same file.
 ## Target files
 
 A target file is `scripts/release/targets/<name>.json`. The schema is closed: an
-unknown key refuses. The committed targets are `prod.json` and `stage.json`.
+unknown key refuses. The committed targets are `prod.json` and `stage.json`. A target names no
+release commit: a top-level `commit` or `tag` refuses, because the go file names it.
+`legacy.commit` stays: it is the old stack's commit, not the release.
 
 | Key | Meaning | prod | stage |
 |---|---|---|---|
 | `release` | The release name the go must match | `v0.6.0` | `v0.6.0` |
-| `commit` or `tag` | The release commit (full SHA), or a tag that resolves to it | the release commit | the same commit |
 | `rmEnv` | `stage` or `prod` | `prod` | `stage` |
 | `host` | The ssh host alias | `rm-frontend-prod-1` | `rm-frontend-stage-2` |
 | `checkout` | The release checkout on the host | `/root/rm-060` | `/home/stage-server/rm-stage-target` |

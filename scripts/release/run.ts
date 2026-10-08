@@ -7,16 +7,18 @@
 // operation is a committed script with a receipt (rule 3). The operator's
 // authority is one go file, read before the run (rule 1).
 //
-//   bun run release:run --target <stage|prod|path.json> --dry-run
+//   bun run release:run --target <stage|prod|path.json> --dry-run [--go <go file>]
 //   bun run release:run --target stage --go <go file>
 //   bun run release:run --target prod  --go <go file> --stage-journal <stage run dir>
 //   bun run release:run --target prod  --go <go file> --stage-journal <dir> --run <run-ts> --from <step>
 //   bun run release:run --target stage --go <go file> --only <step> [--run <run-ts>]
 //
-// What it does, in order: load and validate the target; resolve the commit;
-// print the plan (target, commit, step-list hash, every step and its remote
-// command); stop there under --dry-run. Otherwise: refuse without a go file
-// naming this release, commit and target; refuse a placeholder confirmTarget;
+// What it does, in order: load and validate the target; read the go file, which
+// names this release and target and is the one source of the release commit
+// (a target file names none); print the plan (target, commit, step-list hash,
+// every step and its remote command); stop there under --dry-run. A dry run
+// without --go renders {commit} as COMMIT-FROM-GO. Otherwise: refuse without a
+// go file; refuse a placeholder confirmTarget;
 // under RM_ENV=prod refuse unless --stage-journal names a passed stage run of
 // the same step list at the same commit (SP.8); then run the steps in order,
 // journal each one locally (./journal.ts), copy its receipts back, and stop at
@@ -54,8 +56,6 @@ export interface RunnerDeps {
   exec(host: string, remote: string, onStdout: (s: string) => void, onStderr: (s: string) => void): Promise<number>;
   /** Run a short remote command and collect stdout (receipt listing and copy). */
   collect(host: string, remote: string): Promise<{ code: number; stdout: string }>;
-  /** `git rev-parse <tag>^{commit}` on the control machine; undefined when it does not resolve. */
-  resolveTag(tag: string): string | undefined;
   readText(path: string): string | undefined;
   now(): Date;
   log(line: string): void;
@@ -103,17 +103,8 @@ export function targetPath(arg: string): string {
   return arg.includes("/") || arg.endsWith(".json") ? resolve(arg) : join(HERE, "targets", `${arg}.json`);
 }
 
-/** The commit a target names, from `commit`, `tag`, or both (which must agree). */
-export function resolveCommit(target: ReleaseTarget, resolveTag: (tag: string) => string | undefined): string {
-  const fromTag = target.tag !== undefined ? resolveTag(target.tag) : undefined;
-  if (target.tag !== undefined && fromTag === undefined) throw new Error(`tag ${target.tag} does not resolve on this machine (git fetch --tags first)`);
-  if (target.commit !== undefined && fromTag !== undefined && target.commit !== fromTag) {
-    throw new Error(`target names commit ${target.commit} and tag ${target.tag}, which is ${fromTag}`);
-  }
-  const commit = target.commit ?? fromTag;
-  if (!commit) throw new Error("target names no commit");
-  return commit;
-}
+/** What `{commit}` renders as in a dry run without a go file: never a real SHA. */
+export const COMMIT_FROM_GO = "COMMIT-FROM-GO";
 
 /** The plan, as printed before anything runs. */
 export function renderPlan(target: ReleaseTarget, commit: string, hash: string, steps: readonly RenderedStep[]): string {
@@ -192,14 +183,32 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     return 2;
   }
   let target: ReleaseTarget;
-  let commit: string;
   try {
     target = loadTarget(targetPath(args.target!));
-    commit = resolveCommit(target, deps.resolveTag);
   } catch (error) {
     deps.error(`[${NAME}] ${error instanceof Error ? error.message : String(error)}`);
     return 2;
   }
+
+  // Rule 1: the one recorded go. It is the only source of the release commit.
+  let go: GoRecord | undefined;
+  if (args.go) {
+    const goText = deps.readText(args.go);
+    if (goText === undefined) {
+      deps.error(`[${NAME}] refusing: the go file ${args.go} cannot be read.`);
+      return 2;
+    }
+    const goResult = validateGo(goText, { release: target.release, target: target.name });
+    if ("errors" in goResult) {
+      deps.error(`[${NAME}] refusing: the go file does not authorize this run:\n  - ${goResult.errors.join("\n  - ")}`);
+      return 2;
+    }
+    go = goResult.go;
+  } else if (!args.dryRun) {
+    deps.error(`[${NAME}] refusing: no --go <file>. The operator's go names the release, the commit and the target (D61 rule 1).`);
+    return 2;
+  }
+  const commit = go?.commit ?? COMMIT_FROM_GO;
   const ids = stepIds(steps);
   const hash = stepListHash(steps);
   const root = args.journalRoot ?? journalRoot(deps.home);
@@ -217,27 +226,11 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   const rendered = steps.map((s) => renderStep(s, target, values));
   deps.log(renderPlan(target, commit, hash, rendered));
 
-  if (args.dryRun) {
-    deps.log(`\n[${NAME}] --dry-run: nothing ran. Steps that would run: ${selected.join(", ")}`);
+  if (args.dryRun || go === undefined) {
+    const from = go ? `the go's commit ${commit}` : `${COMMIT_FROM_GO} for {commit} (pass --go <file> to render the go's commit)`;
+    deps.log(`\n[${NAME}] --dry-run: nothing ran. Commit: ${from}. Steps that would run: ${selected.join(", ")}`);
     return 0;
   }
-
-  // Rule 1: the one recorded go.
-  if (!args.go) {
-    deps.error(`[${NAME}] refusing: no --go <file>. The operator's go names the release, the commit and the target (D61 rule 1).`);
-    return 2;
-  }
-  const goText = deps.readText(args.go);
-  if (goText === undefined) {
-    deps.error(`[${NAME}] refusing: the go file ${args.go} cannot be read.`);
-    return 2;
-  }
-  const goResult = validateGo(goText, { release: target.release, commit, target: target.name });
-  if ("errors" in goResult) {
-    deps.error(`[${NAME}] refusing: the go file does not authorize this run:\n  - ${goResult.errors.join("\n  - ")}`);
-    return 2;
-  }
-  const go: GoRecord = goResult.go;
 
   // SC.1: the signed recovery matrix the go names. A path must be readable; its sha256 is journaled.
   let recovery: { ref: string; sha256: string | null };
@@ -334,7 +327,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
         journal.status = runStatus(journal, ids);
         writeJournal(runDir, journal);
         deps.log(`\n[${NAME}] ${id} becomes runnable at ${earliest.toISOString()} (${template.notBefore.afterStep} ended ${anchor.endedAt} + ${template.notBefore.hours} h).`);
-        deps.log(`[${NAME}] resume then with:\n  ${resumeCommand({ target: args.target!, go: args.go, runTs, stepId: id, stageJournal: args.stageJournal })}`);
+        deps.log(`[${NAME}] resume then with:\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: id, stageJournal: args.stageJournal })}`);
         return 3;
       }
     }
@@ -399,7 +392,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     if (!ok) {
       deps.error(`[${NAME}] ${id} FAILED: ${record.error}. Nothing after it ran.`);
       if (step.irreversible) deps.error(`[${NAME}] ${id} is irreversible: read runbook section 8 (recovery matrix) before any retry.`);
-      deps.error(`[${NAME}] resume with:\n  ${resumeCommand({ target: args.target!, go: args.go, runTs, stepId: id, stageJournal: args.stageJournal })}`);
+      deps.error(`[${NAME}] resume with:\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: id, stageJournal: args.stageJournal })}`);
       return 1;
     }
     deps.log(`[${NAME}] ${id} ok (${Math.round(record.durationMs / 1000)} s, ${pulled.receipts.filter((r) => r.local).length} receipt(s))`);
@@ -466,10 +459,6 @@ export function realDeps(): RunnerDeps {
       const [cmd, cmdArgs] = host === CONTROL_HOST ? ["sh", ["-c", remote]] : ["ssh", [...SSH_OPTS, host, remote]];
       const r = spawnSync(cmd, cmdArgs, { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
       return { code: r.status ?? 1, stdout: r.stdout ?? "" };
-    },
-    resolveTag(tag) {
-      const r = spawnSync("git", ["rev-parse", "--verify", "--quiet", `${tag}^{commit}`], { encoding: "utf8" });
-      return r.status === 0 ? r.stdout.trim() : undefined;
     },
     readText(path) {
       try { return readFileSync(path, "utf8"); } catch { return undefined; }
