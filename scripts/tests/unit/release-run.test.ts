@@ -31,6 +31,7 @@ import { keysOutsideAllowlist, socketMounts, tokenFileProblems } from "../../rel
 import { composeDownArgv, retiredPath } from "../../release/stop-legacy.ts";
 import { baselineProblems, WOULD_CLEAR_SQL } from "../../release/baseline.ts";
 import { identityProblems } from "../../release/identity-check.ts";
+import { IDENTITY_MIGRATION, preconditionProblems } from "../../release/precondition.ts";
 import { D61_ENV_ALLOWLIST, confirmTargetOf } from "../../release/env-keys.ts";
 import { SUPPORTED_RELEASES } from "../../../backend/src/db/supported-releases.ts";
 
@@ -138,6 +139,41 @@ describe("one step list for every target (D61 rule 2)", () => {
       expect(r.remote).toContain("HOME=");
       expect(r.remote).not.toMatch(/(^|\s)-v(\s|$)|--volumes|rm_owner=|doadmin=|PGPASSWORD/);
     }
+  });
+});
+
+describe("R2.5 grades the legacy stack with the legacy checkout's own gate", () => {
+  test("it runs from the legacy checkout, with HOME and no RM_ENV, on both targets", () => {
+    for (const t of [loadTarget(join(targetsDir, "prod.json")), loadTarget(join(targetsDir, "stage.json"))]) {
+      const r = renderStep(RELEASE_STEPS.find((s) => s.id === "R2.5")!, t, templateValues(t, SHA, "20261008T000000Z"));
+      expect(r.remote).toContain(`cd ${t.legacy.checkout} && env HOME=${t.home} bun run prod:gate --mode baseline --state-file ${t.legacy.checkout}/.agents/smoke-state.json`);
+      expect(r.remote).not.toContain("RM_ENV=");
+    }
+  });
+  test("red: every other target step runs from the release checkout", () => {
+    const t = loadTarget(join(targetsDir, "prod.json"));
+    const values = templateValues(t, SHA, "20261008T000000Z");
+    for (const s of RELEASE_STEPS.filter((x) => x.host === "target" && x.id !== "R2.5")) {
+      expect(renderStep(s, t, values).remote).toContain(`cd ${t.checkout} && `);
+    }
+  });
+});
+
+describe("the target precondition (R1.2)", () => {
+  const baseline = SUPPORTED_RELEASES[0]!.migrations;
+  test("a supported ledger with no identity row passes on both policies", () => {
+    expect(preconditionProblems({ rmEnv: "prod", ledger: baseline, identity: null })).toEqual([]);
+    expect(preconditionProblems({ rmEnv: "stage", ledger: baseline, identity: null })).toEqual([]);
+  });
+  test("a stage twin with 0081 and identity rehearsal passes", () => {
+    expect(preconditionProblems({ rmEnv: "stage", ledger: [...baseline, IDENTITY_MIGRATION], identity: "rehearsal" })).toEqual([]);
+  });
+  test("red: the wrong identity, an unsupported ledger, 0081 without a row, no RM_ENV", () => {
+    expect(preconditionProblems({ rmEnv: "prod", ledger: baseline, identity: "rehearsal" }).join()).toContain("rehearsal");
+    expect(preconditionProblems({ rmEnv: "stage", ledger: baseline, identity: "production" }).join()).toContain("production");
+    expect(preconditionProblems({ rmEnv: "prod", ledger: baseline.slice(1), identity: null }).join()).toContain("no supported baseline");
+    expect(preconditionProblems({ rmEnv: "prod", ledger: [...baseline, IDENTITY_MIGRATION], identity: null }).join()).toContain("no supported baseline");
+    expect(preconditionProblems({ rmEnv: undefined, ledger: baseline, identity: null }).length).toBe(1);
   });
 });
 

@@ -5,9 +5,10 @@
 // sets the session read-only and PROVES it with `SHOW transaction_read_only`
 // before the first query. D61 rule 3: every database read a runbook needs is a
 // committed script, never a hand-typed psql line.
-import { join } from "node:path";
+//
+// It imports only node built-ins and env-role, because the R1.2 precondition
+// (./host-identity.ts) runs it before `bun install`.
 import { homeEnvFilePath, loadEnvFile, redactedTarget, urlForRole } from "../lib/env-role.ts";
-import { instancePaths, stateRoot } from "../lib/smoke-state.ts";
 
 /** The R2.4 tables whose row counts are the postflight comparison baseline. */
 export const BASELINE_TABLES: readonly string[] = Object.freeze([
@@ -57,9 +58,4 @@ export async function readCounts(db: ReadOnlySession): Promise<Record<string, nu
 export async function readDatabaseSize(db: ReadOnlySession): Promise<number> {
   const rows = await db.query<{ n: string | number }>("SELECT pg_database_size(current_database())::bigint AS n");
   return Number(rows[0]?.n ?? 0);
-}
-
-/** `<state root>/<instance>/release/<run>`, the release run's files in the instance state directory. */
-export function releaseStateDir(instance: string, run: string, env: Record<string, string | undefined> = process.env): string {
-  return join(instancePaths(stateRoot(env), instance).dir, "release", run);
 }

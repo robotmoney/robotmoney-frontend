@@ -37,6 +37,12 @@ export interface StepTemplate {
   readonly standing: readonly string[];
   readonly description: string;
   readonly host: StepHost;
+  /**
+   * `legacy` runs the step from the target's LEGACY checkout, with HOME set and
+   * no RM_ENV: the old code grades the old stack it started (R2.5). Default:
+   * the release checkout.
+   */
+  readonly checkout?: "release" | "legacy";
   /** Commands as argv templates; they run in order joined by `&&`. */
   readonly cmds: readonly (readonly string[])[];
   /** Extra non-secret environment for every command, templated. */
@@ -78,7 +84,7 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "R1.2", standing: ["SP.1"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("host-identity.json")],
-    description: "Target identity: HEAD is the commit, the tree is clean, the tools exist, and ~/.env resolves to confirmTarget",
+    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger is a supported baseline, its identity is absent or matches RM_ENV",
     cmds: [["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--receipt-dir", RUN_DIR]],
   },
   {
@@ -121,9 +127,9 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     cmds: [["bun", "scripts/release/baseline.ts", "--instance", "{instance}", "--run", "{runTs}"]],
   },
   {
-    id: "R2.5", standing: ["SP.5"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("prod-gate-baseline.*")],
-    description: "Log baseline of the running stack (prod:gate --mode baseline)",
-    cmds: [["bun", "run", "prod:gate", "--mode", "baseline", "--instance", "{instance}", "--report", `${RUN_DIR}/prod-gate-baseline.md`]],
+    id: "R2.5", standing: ["SP.5"], host: "target", checkout: "legacy", irreversible: false, expectExit: 0, receipts: [runReceipts("prod-gate-baseline.*")],
+    description: "Log baseline of the running legacy stack, graded by the legacy checkout's own prod:gate (its .agents/smoke-state.json names the stack)",
+    cmds: [["bun", "run", "prod:gate", "--mode", "baseline", "--state-file", "{legacyCheckout}/.agents/smoke-state.json", "--report", `${RUN_DIR}/prod-gate-baseline.md`]],
   },
   // ── R6 cutover ────────────────────────────────────────────────────────────
   {
@@ -297,12 +303,13 @@ export interface RenderedStep {
 export function renderStep(step: StepTemplate, target: ReleaseTarget, values: TemplateValues): RenderedStep {
   const onCapture = step.host === "capture";
   const host = onCapture ? target.capture.host : target.host;
-  const checkout = onCapture ? target.capture.checkout : target.checkout;
+  const legacy = !onCapture && step.checkout === "legacy";
+  const checkout = onCapture ? target.capture.checkout : legacy ? target.legacy.checkout : target.checkout;
   const home = onCapture ? target.capture.home : target.home;
   const runDir = fill(onCapture ? CAPTURE_RUN_DIR : RUN_DIR, values);
   const marker = `${runDir}/.step-${step.id}`;
   const envPairs: string[] = [`HOME=${shellQuote(home)}`];
-  if (!onCapture) envPairs.push(`RM_ENV=${shellQuote(target.rmEnv)}`);
+  if (!onCapture && !legacy) envPairs.push(`RM_ENV=${shellQuote(target.rmEnv)}`);
   for (const [k, v] of Object.entries(step.env ?? {})) envPairs.push(`${k}=${shellQuote(fill(v, values))}`);
   if (step.bootEnv) for (const [k, v] of Object.entries(target.bootEnv).sort()) envPairs.push(`${k}=${shellQuote(v)}`);
   const commands = step.cmds.map((argv) => `env ${envPairs.join(" ")} ${argv.map((a) => shellQuote(fill(a, values))).join(" ")}`);
@@ -321,7 +328,7 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
  */
 export function stepListHash(steps: readonly StepTemplate[] = RELEASE_STEPS): string {
   const canonical = steps.map((s) => ({
-    id: s.id, standing: s.standing, description: s.description, host: s.host, cmds: s.cmds,
+    id: s.id, standing: s.standing, description: s.description, host: s.host, checkout: s.checkout ?? "release", cmds: s.cmds,
     env: s.env ?? {}, bootEnv: s.bootEnv ?? false, expectExit: s.expectExit, receipts: s.receipts, irreversible: s.irreversible,
   }));
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");

@@ -8,16 +8,22 @@
 // of a pushed commit). Checks that bun, docker and tmux are on PATH. With
 // --confirm-target, resolves `host:port/database` from `$HOME/.env` and
 // refuses unless it equals the flag: the run's confirmTarget is the database
-// this host actually names, before any write is attempted.
+// this host actually names, before any write is attempted. Then it checks the
+// target precondition (./precondition.ts), read-only through `rm_readonly`:
+// the database answers, its ledger equals a supported baseline, and its
+// deployment_identity is absent or the kind RM_ENV implies.
 //
 // Writes host-identity.json to --receipt-dir. Prints key names, never values.
-// Runs before `bun install`, so it imports only node built-ins and env-role.
+// Runs before `bun install`, so it imports only node built-ins and local
+// modules with no package import.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
 import { homeEnvFilePath, loadEnvFile } from "../lib/env-role.ts";
+import { openReadOnly } from "./db-read.ts";
 import { confirmTargetOf } from "./env-keys.ts";
+import { preconditionProblems } from "./precondition.ts";
 
 function flag(name: string): string | undefined {
   const at = process.argv.indexOf(name);
@@ -26,7 +32,7 @@ function flag(name: string): string | undefined {
 
 const sh = (cmd: string, args: string[]) => spawnSync(cmd, args, { encoding: "utf8" });
 
-function main(): number {
+async function main(): Promise<number> {
   const commit = flag("--commit");
   const confirm = flag("--confirm-target");
   const receiptDir = flag("--receipt-dir");
@@ -57,6 +63,24 @@ function main(): number {
       else if (resolvedTarget !== confirm) problems.push(`${envPath} names ${resolvedTarget}; the target file confirms ${confirm}`);
     }
   }
+  let precondition: { ledgerCount: number; identity: string | null; problems: string[] } | null = null;
+  if (confirm !== undefined && resolvedTarget !== undefined && resolvedTarget === confirm) {
+    try {
+      const db = await openReadOnly();
+      try {
+        const ledger = (await db.query<{ name: string }>(`SELECT name FROM schema_migrations ORDER BY name COLLATE "C"`)).map((r) => r.name);
+        const table = (await db.query<{ t: string | null }>("SELECT to_regclass('public.deployment_identity')::text AS t"))[0]?.t ?? null;
+        const identity = table ? (await db.query<{ kind: string }>("SELECT kind FROM deployment_identity"))[0]?.kind ?? null : null;
+        const found = preconditionProblems({ rmEnv: process.env.RM_ENV, ledger, identity });
+        precondition = { ledgerCount: ledger.length, identity, problems: found };
+        problems.push(...found.map((p) => `target precondition: ${p}`));
+      } finally {
+        await db.close();
+      }
+    } catch (error) {
+      problems.push(`target precondition: the database ${resolvedTarget} cannot be read as rm_readonly (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
   const receipt = {
     step: "host-identity",
     host: hostname(),
@@ -71,6 +95,7 @@ function main(): number {
     envKeys: env ? Object.keys(env).sort() : null,
     resolvedTarget: resolvedTarget ?? null,
     confirmTarget: confirm ?? null,
+    precondition,
     problems,
     at: new Date().toISOString(),
   };
@@ -78,9 +103,10 @@ function main(): number {
   const file = join(receiptDir, "host-identity.json");
   writeFileSync(file, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
   console.log(`[host-identity] ${hostname()} HEAD ${head}${resolvedTarget ? `, ~/.env names ${resolvedTarget}` : ""}`);
+  if (precondition) console.log(`[host-identity] target: ledger ${precondition.ledgerCount} names, identity ${precondition.identity ?? "absent"}`);
   console.log(`[host-identity] receipt: ${file}`);
   for (const p of problems) console.error(`[host-identity] REFUSE: ${p}`);
   return problems.length === 0 ? 0 : 1;
 }
 
-process.exitCode = main();
+process.exitCode = await main();

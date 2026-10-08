@@ -12,7 +12,8 @@
 // beside the baseline. Exit 1 on any problem.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { openReadOnly, readCounts, readDatabaseSize, releaseStateDir } from "./db-read.ts";
+import { openReadOnly, readCounts, readDatabaseSize } from "./db-read.ts";
+import { releaseStateDir } from "./release-state.ts";
 
 export interface BaselineFigures {
   readonly counts: Readonly<Record<string, number | null>>;

@@ -21,7 +21,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describeUnmatchedLedger, matchSupportedRelease } from "../../backend/src/db/supported-releases.ts";
-import { openReadOnly, readCounts, readDatabaseSize, releaseStateDir } from "./db-read.ts";
+import { openReadOnly, readCounts, readDatabaseSize } from "./db-read.ts";
+import { releaseStateDir } from "./release-state.ts";
 
 /** The in-house seats migration 0101 must never clear (runbook R2.3). */
 export const IN_HOUSE_HANDLES: readonly string[] = Object.freeze(["athena", "noop-analyst", "robot-money", "themis"]);

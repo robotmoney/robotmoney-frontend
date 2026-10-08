@@ -76,18 +76,34 @@ Step R1.2 resolves `host:port/database` from the host's `~/.env` and refuses a
 different value. `bootEnv` refuses `BASE_RPC_URL`: a private RPC URL carries its key,
 and a secret never goes in a process argument.
 
+## Target preconditions
+
+A release run does not create its database. The database exists before the run.
+
+- **Production.** The production database exists. The legacy stack runs from the legacy checkout.
+- **Stage.** `scripts/release/stage-target.ts up --dump <dir>` sets the stage target up before the run. It restores a production dump into the stage target's database. This is target setup, as production's database is. It is not a step.
+
+Step R1.2 checks the precondition on every target, read-only, through `rm_readonly`:
+
+- the database `~/.env` names answers;
+- its ledger equals a supported baseline;
+- `deployment_identity` is absent, or holds the kind `RM_ENV` implies (`prod` means `production`, `stage` means `rehearsal`).
+
+With the identity row present, the ledger may also record `0081_deployment_identity.sql`. A remote twin prepared by [`pre-identity-remote-twin.md`](./pre-identity-remote-twin.md) has that shape. A database already migrated by this release fails the check. A failed run resumes with `--from`. It never restarts at R1.
+
 ## The step list
 
 Every step runs as
 `cd <checkout> && env HOME=<home> RM_ENV=<rmEnv> <command>` on the target host, or
 `cd <capture checkout> && env HOME=<capture home> <command>` on the capture host.
-Each step first touches a marker in the run's remote directory. The runner copies back
+R2.5 alone runs from the legacy checkout, with `HOME` and no `RM_ENV`: the old code
+grades the old stack it started. Each step first touches a marker in the run's remote directory. The runner copies back
 only the receipts written after that marker.
 
 | Id | Host | Command | Irreversible | Standing |
 |---|---|---|---|---|
 | R1.1 | target | `git fetch --tags origin`; `git checkout --detach <commit>` | no | SP.1 |
-| R1.2 | target | `bun scripts/release/host-identity.ts --commit <sha> --confirm-target <T>` | no | SP.1 |
+| R1.2 | target | `bun scripts/release/host-identity.ts --commit <sha> --confirm-target <T>` (identity and target precondition) | no | SP.1 |
 | R1.3 | target | `bun install --force`; `bun install --force --cwd backend` | no | SP.1 |
 | R1.4 | capture | `git fetch --tags origin`; `git checkout --detach <commit>` | no | SP.1 |
 | R1.5 | capture | `bun scripts/release/host-identity.ts --commit <sha>` | no | SP.1 |
@@ -95,7 +111,7 @@ only the receipts written after that marker.
 | R2.1 | capture | `bun run smoke:capture --out <capture home>/rm-backup-<target>-<run-ts>` | no | SR.0, SP.2 |
 | R2.2 | capture | `sha256sum` of the `.gpg` files into `SHA256SUMS` | no | SP.2 |
 | R2.3 | target | `bun scripts/release/baseline.ts --instance <i> --run <run-ts>` | no | SP.3, SP.6 |
-| R2.5 | target | `bun run prod:gate --mode baseline --instance <i>` | no | SP.5 |
+| R2.5 | target, legacy checkout | `bun run prod:gate --mode baseline --state-file <legacy>/.agents/smoke-state.json` (the legacy checkout's own gate) | no | SP.5 |
 | R6.1 | target | `bun scripts/release/stop-legacy.ts stop …` | **yes** | SC.2 |
 | R6.2 | target | `bun scripts/release/env-rewrite.ts --run <run-ts>` | no | SV.6 |
 | R6.2b | target | `bun scripts/prod-init.ts enable-owner-login --instance <i> --confirm-target <T>` | no | SC.2 |
@@ -125,7 +141,7 @@ SW.1 and SW.3. They stay in the release report.
 
 | Script | Step | What it does |
 |---|---|---|
-| `scripts/release/host-identity.ts` | R1.2, R1.5 | HEAD equals the commit; the tree is clean; `bun`, `docker`, `tmux` and `git` are on the non-interactive `PATH`; `~/.env` resolves to `confirmTarget` |
+| `scripts/release/host-identity.ts` | R1.2, R1.5 | HEAD equals the commit; the tree is clean; `bun`, `docker`, `tmux` and `git` are on the non-interactive `PATH`; `~/.env` resolves to `confirmTarget`; the target precondition holds (R1.2 only) |
 | `scripts/release/baseline.ts` | R2.3 | Through `rm_readonly` on a proven read-only session: the ledger, `deployment_identity`, the five roles, migration 0101's would-clear list (the R2.3 query, verbatim), `matchSupportedRelease`, the R2.4 counts and the database size. Refuses an in-house seat in the would-clear list and a ledger that matches no supported baseline |
 | `scripts/release/stop-legacy.ts` | R6.1, S8.1 | `stop`: kills the tmux driver, then `docker compose down` from the old checkout, never `-v`, and proves no container of the project remains. `retire`: renames the old checkout |
 | `scripts/release/env-rewrite.ts` | R6.2 | Moves every `~/.env` key outside the D61 allowlist to `~/.env.retired-<run-ts>` (mode 0600). Refuses when `rm_owner`, `doadmin` or `RM_CREDENTIALS` is missing. Prints key names only |
@@ -169,11 +185,8 @@ reach the console or the journal: a known secret key with a value, a postgres UR
 password and a bearer token. It never copies back a token file, a role-password file,
 an `.env` file, a credential file, a passphrase or a dump.
 
-## Known gaps on 2026-10-08
+## Open items on 2026-10-08
 
-These are open. A run hits each one at the named step.
-
-- **R2.5 cannot run before the cutover.** `prod:gate` grades only an instance with a smoke stack record. The legacy stack was not booted by the new `bun smoke`, so the gate exits 2 on both targets. The step stays in the list. It does not fake a pass.
-- **R6.4 refuses under `RM_ENV=stage`.** `prod-init set-identity` runs only under `prod` and refuses a `rehearsal` target. Stage stops there until the command accepts a rehearsal target.
-- **The stage database is a precondition.** The stage target's database must hold a pre-identity copy of production before R2.3. No committed script restores a dump into a remote database. The runner does not restore it.
-- **The confirm-target interface is new.** `--confirm-target`, `enable-owner-login` and the `rm_owner`/`doadmin` lines in `~/.env` land in the credentials branch. Steps R6.2b to R6.7c need that branch.
+- **The confirm-target interface is new.** `--confirm-target`, `enable-owner-login`, the `rm_owner` and `doadmin` lines in `~/.env`, and the `prod-init` commands under `RM_ENV=stage` against a `rehearsal` target land in the credentials branch. Steps R6.2b to R6.7c need that branch.
+- **`BASE_RPC_URL` has no delivery path.** It stays out of `bootEnv`. A private RPC URL carries its key, and a secret never goes in a process argument. If production uses a private RPC, the boot needs another way to receive it.
+- **The legacy stack must be a production boot.** The legacy gate refuses a stack whose `.agents/smoke-state.json` is not a `--db external` boot. On stage, the legacy stack must be booted that way against the stage target's database.
