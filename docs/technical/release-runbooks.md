@@ -43,6 +43,14 @@ release — not the tracking issue (§6), and not tribal knowledge held by
 whoever last did a rollout. The tracking issue's checklists exist to gate
 progress through the runbook, not to duplicate or replace its content.
 
+**Agent-executed, end to end ([D61](../decisions.md#d61), owner 2026-10-08).** Four rules bind
+every runbook. (1) No human in the loop: an agent executes every step, and the operator's
+authority is one recorded go given before the run. (2) The production runbook is rehearsed
+unmodified on stage: the same runner, commit and step list, with only the target file
+different. (3) Every database operation is a committed script with a receipt. (4) Everything
+runs from the control machine over SSH with `bun run release:run`; no step asks a person to log
+in to a host and type. A step that breaks a rule is a `gap` that blocks the release.
+
 No release may skip a gate described here unless the release tracking issue
 explicitly records the exception, the reason for it, and operator sign-off.
 
@@ -212,9 +220,13 @@ old. Past 24 hours, capture again. The rehearsal report names the dump's stamp a
 
 ### 4.4. Isolated release rehearsal
 
-Rehearse the release on an isolated copy of production data using the adopted
-[local dump](./smoke-production-spec.md#5-local-postgres-stage-override) path
-when that implementation is available. The runbook must identify the exact
+Rehearse the release twice, on two kinds of target. **The cutover rehearsal** runs the
+production step list unmodified (D61 rule 2) with `bun run release:run --target stage` against
+the production-shaped stage target ([`stage-target.md`](../runbooks/stage-target.md)): a remote
+Postgres restored from a fresh production dump, with the legacy release running against it the
+way production runs it. **The twin rehearsal** uses the adopted
+[local dump](./smoke-production-spec.md#5-local-postgres-stage-override) path for the checks
+that need a seated roster and an accelerated schedule. The runbook must identify the exact
 release commit, target identity, operator actions, migration and initialization
 steps, and all checks exercised. It must cover:
 
@@ -309,14 +321,15 @@ next rc only after a deployed candidate fails postflight.
 
 Once the stage rehearsal gate passes, run the actual cutover and postflight
 on a production machine. Follow the per-release runbook step by step. Every
-destructive or irreversible step must be explicitly marked in the runbook and
-authorized by the operator before execution.
+destructive or irreversible step must be explicitly marked in the runbook. The operator
+authorizes the run once, with a recorded go that names the release, the commit and the target
+(D61). The runner refuses to start without it, and stops at the first failed step.
 
 **The cutover is a sequence of receipted steps with credentials limited to the
 step's job.** The adopted [smoke production spec](./smoke-production-spec.md)
 separates production migration and initialization from boot, then requires
-preflight, readiness and durable evidence. Production migration prompts for
-`rm_owner`; boot receives runtime credentials only. The old separate migration
+preflight, readiness and durable evidence. Production migration reads
+`rm_owner` from the host's `~/.env` (D61); boot receives runtime credentials only. The old separate migration
 role, `migrate:external`, ownership-based auto-migration and `smoke:archive` plans are
 deprecated and must not guide new implementation. A legacy release procedure must
 state its exact code identity and limitations; it is not a second target design.
@@ -325,12 +338,12 @@ Preflight must be re-run or re-confirmed on production before the cutover
 begins, even if the isolated rehearsal passed, to ensure the production
 environment matches the rehearsal assumptions.
 
-The upgrade is agent-executed through the verified runbook, with operator
-release authorization and receipt review. The adopted design explicitly requires
-an operator to enter the privileged credential and confirm production migration
-or initialization. That interaction is part of the named tool step, not permission
-to bypass gates or substitute undocumented production-shell work. Do not store the
-owner credential to make the previous noninteractive D46 mechanism work.
+The upgrade is agent-executed through the verified runbook, with one operator go and
+receipt review (D61). The privileged credentials (`rm_owner`, `doadmin`) are lines in the
+host's `~/.env`. A write names its target with `--confirm-target`, and the command refuses a
+target that differs from the one it resolved. No container receives a privileged credential,
+and no receipt, journal or log line prints one. Production runs only after a stage run of the
+same step list at the same commit passed (standing check SP.8).
 
 ### 4.7.1. Product verification (separate from postflight, and from the deploy)
 
@@ -432,9 +445,12 @@ runbook must:
 - provide step-by-step cutover commands, with destructive or irreversible
   steps explicitly marked,
 - provide post-cutover verification steps,
-- be written so it can be executed top to bottom, every command
-  copy-pasteable, every claim verified against a specific commit SHA rather
-  than described from memory,
+- be executed by `bun run release:run` from the control machine (D61). The runbook describes
+  the runner's steps; it lists no command for a person to paste on a host. Every step names
+  its script, its standing check IDs, and whether it is irreversible. Every claim is
+  verified against a specific commit SHA rather than described from memory,
+- run every database operation through a committed script with a receipt. A hand-written
+  `psql` line is a missing script,
 - **use the adopted spec's database interface for new tooling**, rather than
   reconstructing a rehearsal with ad hoc lower-level commands. Remote connection
   is the default; `--local blank|dump|volume` selects local state. A twin is a use
