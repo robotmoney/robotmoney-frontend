@@ -1,0 +1,28 @@
+{
+  "$comment": "Stage target for bun run release:run (D61 rule 2): the same steps as prod.json, against the stage target database that scripts/release/stage-target.ts up restores before the run. HOME is a dedicated directory whose .env names that database. The legacy stack is the v0.5.4 checkout booted against it (PR 1229).",
+  "release": "v0.6.0",
+  "commit": "a502de30068e0c1cc2e232a76098364e0b709033",
+  "rmEnv": "stage",
+  "host": "rm-frontend-stage-2",
+  "checkout": "/home/stage-server/rm-stage-target",
+  "home": "/home/stage-server/stage-target",
+  "instance": "stage_target",
+  "publicOrigin": "https://stage.robotmoney-labs.dev",
+  "capture": {
+    "host": "rm-frontend-stage-2",
+    "home": "/home/stage-server",
+    "checkout": "/home/stage-server/rm-stage-target"
+  },
+  "legacy": {
+    "checkout": "/home/stage-server/rm-stage-legacy",
+    "commit": "1cda4085d235b55bf171735ac77618155e6b1647",
+    "tmuxSession": "stage-driver",
+    "composeProject": "stage_target",
+    "composeFiles": [],
+    "startedBy": "SMOKE_PROJECT=stage_target bun run smoke:archive -- --no-tui (= bun scripts/smoke.ts --smoke --static-port --db external) in tmux session stage-driver",
+    "log": "/home/stage-server/stage-target/smoke-archive-v0.5.4.log",
+    "version": "v0.5.4"
+  },
+  "confirmTarget": "172.17.0.1:25060/defaultdb",
+  "bootEnv": {}
+}

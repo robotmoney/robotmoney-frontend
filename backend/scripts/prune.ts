@@ -12,8 +12,8 @@
 //
 // WHY IT EXISTS. D55 (6) took DELETE and TRUNCATE from every runtime role on
 // every table (migration 0107), so the only way a row leaves the database is an
-// rm_owner run, and rm_owner is typed at the terminal and never stored (§3,
-// D47). This is that run: the one pruning path, for the tables whose rows stop
+// rm_owner run. D61 moved the "typed" password above into `~/.env`'s
+// `rm_owner` line and the `y` into `--confirm-target`. This is that run: the one pruning path, for the tables whose rows stop
 // mattering after a while.
 //
 // WHAT IT PRUNES, AND NOTHING ELSE (PRUNE_TARGETS below, a closed constant):
@@ -42,21 +42,30 @@
 //
 // THE SEQUENCE, like `bun run migrate` (backend/scripts/migrate.ts):
 //   plan (read the target) → lock (the §2 session lock, revalidated) → gates
-//   (the §4.3 matrix) → owner (typed rm_owner, refused without a terminal) →
-//   confirm (an explicit `y`, nothing else) → prune (ONE transaction, fenced
+//   (the §4.3 matrix) → owner (`~/.env`'s rm_owner line, proven by a login;
+//   a missing line refuses naming the key and the file) → confirm
+//   (`--confirm-target` equal to the target `~/.env` resolves, D61) → prune (ONE transaction, fenced
 //   with `pg_advisory_xact_lock` on the target key, as rm_owner) → receipt.
 // Beside the receipt a journal records the phase every run reached, refused
 // and interrupted runs included (§2: a losing tool "journals the phase and
 // exits non-zero").
 //
-// usage: bun run prune [--retention-days <n>] [--instance <name>] [--receipt <path>] [--lock-timeout <seconds>]
+// usage: bun run prune --confirm-target <host:port/database> [--retention-days <n>] [--instance <name>] [--receipt <path>] [--lock-timeout <seconds>]
+//
+// Nothing prompts and no terminal is needed (D61 rule 1).
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import postgres from "postgres";
 import type postgresTypes from "postgres";
-import { hiddenPrompt } from "../../scripts/lib/smoke-external-migrate.ts";
 import { homeEnvFilePath, loadEnvFile, urlForRole } from "../../scripts/lib/env-role.ts";
+import {
+  confirmTargetFlag,
+  homeEnvTarget,
+  requireConfirmTarget,
+  requirePrivilegedPassword,
+  type RemoteAuthority,
+} from "../../scripts/lib/privileged-env.ts";
 import { PRODUCTION_INSTANCE, instancePaths, stateRoot } from "../../scripts/lib/smoke-state.ts";
 import { resolveDeploymentPolicy, resolveRmEnv } from "../src/deploy-policy.ts";
 import { on, registerQuery } from "../src/db/registry.ts";
@@ -345,29 +354,6 @@ export function pruneJournalPath(dir: string, startedAt: Date): string {
 
 // ── The command ─────────────────────────────────────────────────────────────
 
-/**
- * The operator's terminal. The owner password and the `y` come from here and
- * nowhere else (§3: typed at the terminal for the one run that needs it, never
- * stored). A test hands in its own; the command hands in the real one.
- */
-export interface PruneTerminal {
-  /** `process.stdin.isTTY`: without a terminal there is nobody to type. */
-  readonly interactive: boolean;
-  ownerPassword(): Promise<string>;
-  /** Print `question`, read one line. */
-  answer(question: string): Promise<string>;
-}
-
-export const PROCESS_TERMINAL: PruneTerminal = {
-  interactive: process.stdin.isTTY === true,
-  ownerPassword: () => hiddenPrompt("rm_owner password (not echoed, not stored)"),
-  async answer(question) {
-    process.stdout.write(question);
-    for await (const chunk of process.stdin) return Buffer.from(chunk as Uint8Array).toString("utf8").replace(/[\r\n]+$/, "");
-    return "";
-  },
-};
-
 /** Password-free `host:port/dbname`, the only form of a target this command prints. */
 function redacted(url: string): string {
   const u = new URL(url);
@@ -405,7 +391,9 @@ export async function pruneCommand(input: {
   readonly lockTimeoutMs: number;
   readonly receiptPath: string;
   readonly journal: PruneJournal;
-  readonly terminal: PruneTerminal;
+  /** `~/.env`'s rm_owner line, the file, `--confirm-target` and the target the
+   *  file resolves to (D61). Never logged, never written. */
+  readonly authority: RemoteAuthority;
   readonly log: (message: string) => void;
 }): Promise<{ readonly receipt: string; readonly tables: readonly PrunedTable[] }> {
   const startedAt = new Date();
@@ -461,37 +449,34 @@ export async function pruneCommand(input: {
     input.log(`target ${target} (${expected.identity}) under ${describeHolderText(held.holder)}`);
 
     await phase("owner");
-    if (!input.terminal.interactive) {
-      throw new PruneRefused(
-        "Refusing: `bun run prune` needs the rm_owner password typed at the terminal, and this run is " +
-          "non-interactive (stdin is not a terminal). Spec §3 keeps that password out of files and environment " +
-          "variables, so there is nothing for an unattended run to read.",
-      );
+    let password: string;
+    try {
+      password = requirePrivilegedPassword({ rm_owner: input.authority.ownerPassword }, "rm_owner", input.authority.envFile);
+    } catch (error) {
+      throw new PruneRefused((error as Error).message);
     }
-    const password = await input.terminal.ownerPassword().catch((error: unknown) => {
-      throw new PruneRefused(`Refusing: ${(error as Error).message}`);
-    });
-    if (password === "") throw new PruneRefused("Refusing: no rm_owner password entered.");
-    // Prove the login before asking for the `y`: a connection is opened and
+    // Prove the login before the confirmation: a connection is opened and
     // authenticated, and no statement is issued on it until the fenced prune.
     owner = postgres(asOwner(input.readerUrl, password), { max: 1, onnotice: () => {} });
     try {
       (await owner.reserve()).release();
     } catch (error) {
-      throw new PruneRefused(`Refusing: the rm_owner credential was not accepted by this database (${(error as Error).message}).`);
+      const message = (error as Error).message.split(password).join("***");
+      throw new PruneRefused(`Refusing: the rm_owner credential was not accepted by this database (${message}).`);
     }
 
     await phase("confirm");
     const plan = PRUNE_TARGETS.map((t) => `  ${t.table}: ${t.predicate}`).join("\n");
-    const answer = await input.terminal.answer(
-      `[prune] WARNING: this deletes rows from ${target} as rm_owner, with a ${input.windowDays}-day window ` +
+    input.log(
+      `WARNING: this deletes rows from ${target} as rm_owner, with a ${input.windowDays}-day window ` +
         "(<cutoff> = the database's now() minus the window):\n" +
         `${plan}\n` +
-        "[prune] Nothing else is touched: no security tombstone, no audit history.\n" +
-        "[prune] type y to continue, anything else to stop: ",
+        "Nothing else is touched: no security tombstone, no audit history.",
     );
-    if (answer !== "y") {
-      throw new PruneRefused(`Refusing: the prune of ${target} was not confirmed (an explicit y is required).`);
+    try {
+      requireConfirmTarget(input.authority.confirmTarget, input.authority.resolvedTarget, "this prune");
+    } catch (error) {
+      throw new PruneRefused((error as Error).message);
     }
 
     await phase("prune");
@@ -553,6 +538,7 @@ async function main(): Promise<never> {
   }
   const receiptFlag = flag("--receipt");
   const instanceFlag = flag("--instance");
+  const confirmTarget = confirmTargetFlag(process.argv.slice(2));
   const lockTimeoutSeconds = Number(flag("--lock-timeout") ?? 60);
   if (!Number.isFinite(lockTimeoutSeconds) || lockTimeoutSeconds < 0) refuse("--lock-timeout needs a number of seconds");
 
@@ -579,13 +565,6 @@ async function main(): Promise<never> {
   journal.begin("config");
 
   if (!env) refuse(`no readable $HOME/.env (${envPath}).`);
-  const forbidden = ["rm_owner", "doadmin"].filter((key) => env![key] !== undefined);
-  if (forbidden.length > 0) {
-    refuse(
-      `$HOME/.env holds a ${forbidden.join(" and a ")} line. Spec §3 keeps both out of it: the rm_owner password is ` +
-        "typed at the terminal for the one run that needs it and never stored. Remove the line and rerun.",
-    );
-  }
   const readerUrl = urlForRole(env!, "rm_readonly");
   if (!readerUrl) {
     refuse("$HOME/.env cannot assemble an rm_readonly connection (host, port, database, sslmode and an rm_readonly line).");
@@ -601,7 +580,7 @@ async function main(): Promise<never> {
       lockTimeoutMs: lockTimeoutSeconds * 1000,
       receiptPath,
       journal,
-      terminal: PROCESS_TERMINAL,
+      authority: { ownerPassword: env!.rm_owner, envFile: envPath, confirmTarget, resolvedTarget: homeEnvTarget(env!)! },
       log,
     });
     log(`pruned ${tables.reduce((n, t) => n + t.rows, 0)} row(s) across ${tables.length} table(s)`);

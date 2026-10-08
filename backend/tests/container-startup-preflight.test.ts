@@ -231,7 +231,7 @@ describe("criterion 61 — a failure between two commits, injected as a real int
         withTargetLock(databaseUrl(name), (lock) =>
           runMigrate(
             owner,
-            { caller: "smoke_flag", env: "stage", connection: "local", nonInteractive: true, lock },
+            { caller: "smoke_flag", env: "stage", connection: "local", lock },
             {
               migrationsDir: dir,
               afterCommit: (file) => {

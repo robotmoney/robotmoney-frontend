@@ -29,6 +29,10 @@ import {
   type RunningBoot,
 } from "./smoke-boot-harness.ts";
 
+/** backend/src/db/target-lock.ts TARGET_LOCK_KEY, the one key every tool fences on (§2). Spelled out
+ *  here because that module validates the backend config at import. */
+const FENCE_KEY = "7726322199513601";
+
 let h: BootHarness | undefined;
 let holder: RunningBoot | undefined;
 
@@ -146,16 +150,17 @@ describe("the deployment lock, across two `bun smoke` processes (criterion 15)",
 //   2. the smoke's lock connection is killed mid-phase (pg_terminate_backend):
 //      the boot proves the lock at its next boundary, journals that phase
 //      failed, and exits non-zero — no phase proceeds on a lock it cannot prove;
-//   3. a `bun run migrate` holds the lock (parked at its rm_owner prompt, on a
-//      terminal); a `bun smoke` on the same database waits its --lock-timeout,
-//      journals the `lock` preparation failed and exits non-zero, naming the
-//      migrate and "no plan id";
+//   3. a `bun run migrate` holds the lock (parked at the mutation fence of its
+//      reconcile, which the test holds — nothing prompts since D61); a `bun
+//      smoke` on the same database waits its --lock-timeout, journals the
+//      `lock` preparation failed and exits non-zero, naming the migrate and
+//      "no plan id";
 //   4. migrate as the LOSER: a `bun run migrate` that has taken the lock, run
-//      its gates and had rm_owner typed has its lock connection killed
-//      (pg_terminate_backend) while it waits at the `y`; answered `y`, it proves
-//      the lock at its next boundary, journals that the phase `migrate: start`
-//      failed, and exits non-zero with nothing applied and no receipt — and the
-//      next run recovers to a published manifest.
+//      its gates, logged in as rm_owner from ~/.env and passed
+//      `--confirm-target` has its lock connection killed (pg_terminate_backend)
+//      while it is parked at the fence; let go, it proves the lock at its next
+//      boundary, journals that phase failed, and exits non-zero with no
+//      receipt — and the next run recovers to a published manifest.
 describe("`bun run migrate` and `bun smoke` contend on the target lock as processes (criteria 18, 36, 39)", () => {
   let x: BootHarness | undefined;
   let smokeRun: RunningBoot | undefined;
@@ -176,20 +181,86 @@ describe("`bun run migrate` and `bun smoke` contend on the target lock as proces
     return Number(out.split("\n")[0]!.split(":").at(-1));
   }
 
-  /** A `$HOME/.env` for `bun run migrate` against the boot's database, under `host`. */
+  /** A `$HOME/.env` for `bun run migrate` against the boot's database, under
+   *  `host`: the rm_readonly and rm_owner lines (D61). */
   function migrateEnv(host: string): Record<string, string> {
     const passwords = JSON.parse(readFileSync(x!.paths.rolePasswordsFile, "utf8")) as Record<string, string>;
     const migrateHome = mkdtempSync(join(tmpdir(), "rm-lock-migrate-home-"));
     migrateHomes.push(migrateHome);
     writeFileSync(
       join(migrateHome, ".env"),
-      [`host = ${host}`, `port = ${pgPort(x!.project)}`, "database = robotmoney", "sslmode = disable", `rm_readonly = ${passwords.rm_readonly}`, ""].join("\n"),
+      [
+        `host = ${host}`,
+        `port = ${pgPort(x!.project)}`,
+        "database = robotmoney",
+        "sslmode = disable",
+        `rm_readonly = ${passwords.rm_readonly}`,
+        `rm_owner = ${passwords.rm_owner}`,
+        "",
+      ].join("\n"),
     );
-    return { PATH: process.env.PATH ?? "", HOME: migrateHome, RM_ENV: "stage", TERM: "dumb" };
+    return { PATH: process.env.PATH ?? "", HOME: migrateHome, RM_ENV: "stage" };
+  }
+
+  /** `--confirm-target` for the boot's database under `host` (D61). */
+  const confirmArgs = (host: string): string[] => ["--confirm-target", `${host}:${pgPort(x!.project)}/robotmoney`];
+
+  /**
+   * Hold the §2 mutation FENCE (`pg_advisory_xact_lock` on the target key) in
+   * an open transaction on the boot's postgres, until `release()`. The fence
+   * is a different lock object from the session lock, so a `bun run migrate`
+   * still acquires the session lock, runs its gates, logs in and passes
+   * `--confirm-target` — and then parks at its first fenced write, holding the
+   * session lock. That is how this file parks a migrate since D61 removed the
+   * prompts it used to park at.
+   */
+  async function holdFence(): Promise<{ release(): Promise<void> }> {
+    const id = Bun.spawnSync(
+      ["docker", "ps", "-q", "--filter", `label=com.docker.compose.project=${x!.project}`, "--filter", "label=com.docker.compose.service=postgres"],
+      { stdout: "pipe" },
+    ).stdout.toString().trim().split("\n")[0]!;
+    const psql = Bun.spawn(["docker", "exec", "-i", id, "psql", "-X", "-q", "-U", "robotmoney", "-d", "robotmoney"], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    psql.stdin.write(`BEGIN; SET application_name = 'rm-test-fence'; SELECT pg_advisory_xact_lock(${FENCE_KEY}::bigint);\n`);
+    await psql.stdin.flush();
+    await waitFor(
+      () =>
+        bootQuery(
+          x!.project,
+          "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1 AND a.application_name = 'rm-test-fence'",
+        ) === "1",
+      30_000,
+      "the test to hold the mutation fence",
+    );
+    return {
+      async release() {
+        psql.stdin.write("ROLLBACK;\n");
+        await psql.stdin.flush();
+        psql.stdin.end();
+        await psql.exited;
+      },
+    };
+  }
+
+  /** Wait until a `bun run migrate` is parked at the fence: an rm_owner backend waiting on an advisory lock. */
+  async function waitParkedAtFence(migrate: { screen: () => string }): Promise<void> {
+    const deadline = Date.now() + 60_000;
+    while (
+      bootQuery(
+        x!.project,
+        "SELECT count(*) FROM pg_stat_activity WHERE usename = 'rm_owner' AND wait_event_type = 'Lock' AND wait_event = 'advisory'",
+      ) !== "1"
+    ) {
+      if (Date.now() > deadline) throw new Error(`migrate never parked at the fence:\n${migrate.screen()}`);
+      await Bun.sleep(50);
+    }
   }
 
   function runMigrate(env: Record<string, string>, lockTimeoutSeconds: number): { code: number; out: string } {
-    const r = Bun.spawnSync(["bun", "scripts/migrate.ts", "--instance", x!.instance, "--lock-timeout", String(lockTimeoutSeconds)], {
+    const r = Bun.spawnSync(["bun", "scripts/migrate.ts", "--instance", x!.instance, "--lock-timeout", String(lockTimeoutSeconds), ...confirmArgs("localhost")], {
       cwd: join(repoRoot, "backend"),
       env,
       stdin: "ignore",
@@ -261,28 +332,15 @@ describe("`bun run migrate` and `bun smoke` contend on the target lock as proces
     expect(smokeRun.output()).toContain("The lock is not re-acquired");
   }, BOOT_TIMEOUT_MS);
 
-  test("3 — a `bun run migrate` holding the lock at its prompt makes `bun smoke` wait, then journal `lock` failed and exit non-zero, naming migrate", async () => {
+  test("3 — a `bun run migrate` holding the lock (parked at the fence) makes `bun smoke` wait, then journal `lock` failed and exit non-zero, naming migrate", async () => {
     expect(x).toBeDefined();
-    // The migrate command, on a terminal, parked at its rm_owner prompt: it
-    // acquired the lock (and ran its gates) before asking.
-    const env = migrateEnv("127.0.0.1");
-    const migrate = Bun.spawn(["script", "-qefc", `bun scripts/migrate.ts --instance ${x!.instance} --lock-timeout 5`, "/dev/null"], {
-      cwd: join(repoRoot, "backend"),
-      env,
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    let screen = "";
-    const pump = (async () => {
-      for await (const chunk of migrate.stdout) screen += new TextDecoder().decode(chunk);
-    })();
+    // The migrate command, with no terminal (D61), parked at the fence of its
+    // reconcile: it acquired the session lock, ran its gates, logged in as
+    // rm_owner from ~/.env and passed --confirm-target before it got there.
+    const fence = await holdFence();
+    const migrate = migrateProcess();
     try {
-      const deadline = Date.now() + 60_000;
-      while (!screen.includes("rm_owner password (not echoed")) {
-        if (migrate.exitCode !== null || Date.now() > deadline) throw new Error(`migrate never reached its prompt:\n${screen}`);
-        await Bun.sleep(50);
-      }
+      await waitParkedAtFence(migrate);
       // A reattach of the same instance's volume: its own create step, then the lock.
       const second = spawnBoot(x!, ["--credentials", x!.emptyRoster, "--lock-timeout", "3"], { local: "volume" });
       const code = await second.exited;
@@ -292,52 +350,37 @@ describe("`bun run migrate` and `bun smoke` contend on the target lock as proces
       const last = journalNow(x!)!.phases.at(-1)!;
       expect([last.phase, last.step, last.status]).toEqual(["prepare", "lock", "failed"]);
     } finally {
-      migrate.kill("SIGKILL");
+      migrate.kill();
       await migrate.exited;
-      await pump;
+      await fence.release();
     }
   }, BOOT_TIMEOUT_MS);
 
-  /** `bun run migrate` on a terminal, against the boot's database, receipting
-   *  into the instance's own state directory — an operator on this host. */
-  function migrateOnTerminal(): {
-    readonly waitFor: (text: string) => Promise<void>;
-    readonly type: (text: string) => Promise<void>;
+  /** `bun run migrate` with no terminal (D61), against the boot's database,
+   *  receipting into the instance's own state directory — the release runbook
+   *  on this host. */
+  function migrateProcess(): {
     readonly exited: Promise<number>;
     readonly screen: () => string;
     readonly kill: () => void;
   } {
     const env = { ...migrateEnv("127.0.0.1"), RM_SMOKE_STATE_ROOT: x!.root };
-    const child = Bun.spawn(["script", "-qefc", `bun scripts/migrate.ts --instance ${x!.instance} --lock-timeout 5`, "/dev/null"], {
+    const child = Bun.spawn(["bun", "scripts/migrate.ts", "--instance", x!.instance, "--lock-timeout", "5", ...confirmArgs("127.0.0.1")], {
       cwd: join(repoRoot, "backend"),
       env,
-      stdin: "pipe",
+      stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
     });
     let screen = "";
-    let from = 0;
-    const pump = (async () => {
-      for await (const chunk of child.stdout) screen += new TextDecoder().decode(chunk);
-    })();
+    const pump = async (stream: ReadableStream<Uint8Array>): Promise<void> => {
+      for await (const chunk of stream) screen += new TextDecoder().decode(chunk);
+    };
+    const pumps = Promise.all([pump(child.stdout), pump(child.stderr)]);
     return {
-      async waitFor(text) {
-        const deadline = Date.now() + 60_000;
-        let at = screen.indexOf(text, from);
-        while (at < 0) {
-          if (child.exitCode !== null || Date.now() > deadline) throw new Error(`migrate never showed "${text}":\n${screen}`);
-          await Bun.sleep(25);
-          at = screen.indexOf(text, from);
-        }
-        from = at + text.length;
-      },
-      async type(text) {
-        child.stdin.write(`${text}\r`);
-        await child.stdin.flush();
-      },
       exited: (async () => {
         const code = await child.exited;
-        await pump;
+        await pumps;
         return code;
       })(),
       screen: () => screen,
@@ -353,18 +396,21 @@ describe("`bun run migrate` and `bun smoke` contend on the target lock as proces
   }
 
   // WHAT TEST 4 PROVES AND WHAT IT DOES NOT. It kills migrate's lock connection
-  // while the operator process waits at its `y`, on a database with nothing
-  // pending, so the loss is found at `migrate: start`, before any mutation, and
-  // the rerun has nothing to resume: its `applied` and `resumedAndVerified` are
-  // both empty, and this test asserts that rather than implying more. A loss
-  // BETWEEN TWO COMMITS, and a rerun that resumes the committed file from the
-  // §8.3 in-progress state, is proved in process only
-  // (backend/tests/migrate-run.test.ts, "the lock connection killed between two
-  // commits"): the operator process reads the repository's own
-  // backend/migrations, and this file has no pending migration to give it
+  // while the operator process is parked at the fence of its reconcile (the
+  // first fenced write: nothing is pending), so the loss is found at the next
+  // boundary, `receipt`, and no receipt is written. The reconcile itself
+  // commits under the fence once the test lets it go — the fence, not the
+  // session lock, is what makes a write safe (§2) — and with nothing pending it
+  // republishes the same manifest. The rerun has nothing to resume: its
+  // `applied` and `resumedAndVerified` are both empty, and this test asserts
+  // that rather than implying more. A loss BETWEEN TWO COMMITS, and a rerun
+  // that resumes the committed file from the §8.3 in-progress state, is proved
+  // in process only (backend/tests/migrate-run.test.ts, "the lock connection
+  // killed between two commits"): the operator process reads the repository's
+  // own backend/migrations, and this file has no pending migration to give it
   // without a migrations-directory override on a production mutation tool,
   // which it will not add for a test.
-  test("4 — migrate as the loser: its lock connection dies while it waits at the `y`; it journals the phase that could not start, exits non-zero, and a rerun completes (nothing was pending, so nothing is resumed)", async () => {
+  test("4 — migrate as the loser: its lock connection dies while it is parked at the fence; it journals the phase that could not start, exits non-zero, and a rerun completes (nothing was pending, so nothing is resumed)", async () => {
     expect(x).toBeDefined();
     const ownerPassword = (JSON.parse(readFileSync(x!.paths.rolePasswordsFile, "utf8")) as Record<string, string>).rm_owner!;
     const manifestBefore = bootQuery(x!.project, "SELECT content_hash FROM schema_manifest");
@@ -373,33 +419,35 @@ describe("`bun run migrate` and `bun smoke` contend on the target lock as proces
     const journalsBefore = migrateRecords("migrate-journal-");
     const receiptsBefore = migrateRecords("migrate-receipt-");
 
-    // Lock, gates, the typed owner password: the command is mid-run, in its
-    // `confirm` phase, holding the target lock on its own connection.
-    const loser = migrateOnTerminal();
+    // Lock, gates, rm_owner from ~/.env, --confirm-target: the command is
+    // mid-run, parked at its reconcile's fence, holding the target lock on its
+    // own connection.
+    const fence = await holdFence();
+    const loser = migrateProcess();
     try {
-      await loser.waitFor("rm_owner password (not echoed");
-      await loser.type(ownerPassword);
-      await loser.waitFor("type y to continue");
+      await waitParkedAtFence(loser);
       const backend = bootQuery(x!.project, "SELECT pid FROM pg_stat_activity WHERE application_name LIKE 'rm-tl:migrate|%' LIMIT 1") ?? "";
       expect(backend).toMatch(/^\d+$/);
       expect(bootQuery(x!.project, `SELECT pg_terminate_backend(${backend})`)).toBe("t");
-      await loser.type("y");
+      await fence.release();
       expect(await loser.exited).not.toBe(0);
     } finally {
       loser.kill();
+      await fence.release().catch(() => undefined);
     }
     expect(loser.screen()).toContain("cannot be proven held");
     expect(loser.screen()).toContain("The lock is not re-acquired");
+    expect(loser.screen()).not.toContain(ownerPassword);
 
-    // Its journal names the phase: `confirm` committed, and `migrate: start` —
-    // the next boundary, where the loss was found — failed and never ran.
+    // Its journal names the phase: the reconcile committed under its fence,
+    // and `receipt` — the next boundary, where the loss was found — failed.
     const journals = migrateRecords("migrate-journal-").filter((name) => !journalsBefore.includes(name));
     expect(journals.length).toBe(1);
     const journal = JSON.parse(readFileSync(join(x!.paths.dir, journals[0]!), "utf8")) as MigrateJournalFile;
     expect(journal.outcome).toBe("failed");
     expect(journal.phases.map((r) => [r.phase, r.status]).slice(-2)).toEqual([
-      ["confirm", "committed"],
-      ["migrate: start", "failed"],
+      ["migrate: reconcile and publish", "committed"],
+      ["receipt", "failed"],
     ]);
     expect(journal.phases.at(-1)?.reason).toContain("cannot be proven held");
     expect(journal.receipt).toBeNull();
@@ -414,16 +462,8 @@ describe("`bun run migrate` and `bun smoke` contend on the target lock as proces
     // The next run completes: the whole sequence, to a receipt and a published
     // manifest. Nothing was pending and nothing committed before the loss, so
     // it applies nothing and resumes nothing (see the note above the test).
-    const next = migrateOnTerminal();
-    try {
-      await next.waitFor("rm_owner password (not echoed");
-      await next.type(ownerPassword);
-      await next.waitFor("type y to continue");
-      await next.type("y");
-      expect({ code: await next.exited, screen: next.screen().slice(-2000) }).toEqual({ code: 0, screen: expect.any(String) });
-    } finally {
-      next.kill();
-    }
+    const next = migrateProcess();
+    expect({ code: await next.exited, screen: next.screen().slice(-2000) }).toEqual({ code: 0, screen: expect.any(String) });
     const receipts = migrateRecords("migrate-receipt-").filter((name) => !receiptsBefore.includes(name));
     expect(receipts.length).toBe(1);
     const recovered = migrateRecords("migrate-journal-").filter((name) => !journalsBefore.includes(name) && !journals.includes(name));

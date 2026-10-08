@@ -207,6 +207,28 @@ describe("redactPostgresUrl + redactedTarget — the only forms safe to print", 
   });
 });
 
+describe("D61 — the privileged lines in ~/.env", () => {
+  const env = parseEnvFile(
+    ["host = db.example.com", "port = 25060", "database = defaultdb", "sslmode = require", "rm_readonly = ro-pw", "rm_owner = owner-pw", "doadmin = admin-pw"].join("\n"),
+  );
+
+  test("urlForRole assembles rm_owner and doadmin from their own lines, one role per call", () => {
+    expect(urlForRole(env, "rm_owner")).toBe("postgres://rm_owner:owner-pw@db.example.com:25060/defaultdb?sslmode=require");
+    expect(urlForRole(env, "doadmin")).toBe("postgres://doadmin:admin-pw@db.example.com:25060/defaultdb?sslmode=require");
+    expect(urlForRole(env, "rm_readonly")).toBe("postgres://rm_readonly:ro-pw@db.example.com:25060/defaultdb?sslmode=require");
+  });
+
+  test("ROLES stays the three runtime roles: the privileged lines are read by name, never iterated with them", () => {
+    expect([...ROLES]).toEqual(["rm_app", "rm_worker", "rm_readonly"]);
+  });
+
+  test("redactedTarget of an owner URL names the role and never the password", () => {
+    const text = redactedTarget(urlForRole(env, "rm_owner"), "rm_owner");
+    expect(text).toBe("rm_owner@db.example.com:25060/defaultdb");
+    expect(text).not.toContain("owner-pw");
+  });
+});
+
 describe("loadEnvFile — reads only on request", () => {
   test("a missing file is undefined, not a throw", () => {
     expect(loadEnvFile("/nonexistent/.env")).toBeUndefined();

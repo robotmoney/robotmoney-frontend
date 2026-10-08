@@ -37,7 +37,6 @@ const MIGRATE_OPTIONS = {
   caller: "smoke_flag",
   env: "stage",
   connection: "local",
-  nonInteractive: true,
 } as const;
 
 /**

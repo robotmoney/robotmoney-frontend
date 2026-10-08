@@ -1009,7 +1009,7 @@ describe("every fenced mutation's REAL path waits on a competitor's fence, holdi
       for (const file of readdirSync(migrations)) if (file.endsWith(".sql")) symlinkSync(join(migrations, file), join(dir, file));
       const lock = await holdTargetLock(url);
       try {
-        const options = { caller: "smoke_flag" as const, env: "stage" as const, connection: "local" as const, nonInteractive: true, lock };
+        const options = { caller: "smoke_flag" as const, env: "stage" as const, connection: "local" as const, lock };
         await runMigrate(owner, options);
         writeFileSync(join(dir, "0999_fence_probe.sql"), "-- compat: additive\n-- metadata_version: 1\n--\nCREATE TABLE rm_fence_probe (id integer);\n");
         const order = await competitorBlocks(url, "schema_migrations", () => runMigrate(owner, options, { migrationsDir: dir }));

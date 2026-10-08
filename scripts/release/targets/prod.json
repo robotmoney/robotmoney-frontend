@@ -1,0 +1,28 @@
+{
+  "$comment": "Production target for bun run release:run (D61). Set commit to the release commit the stage run passed at. Fill confirmTarget with host:port/database from rm-frontend-prod-1's /root/.env before the run. The run refuses the placeholder, and R1.2 refuses a value that differs from what the host resolves.",
+  "release": "v0.6.0",
+  "commit": "a502de30068e0c1cc2e232a76098364e0b709033",
+  "rmEnv": "prod",
+  "host": "rm-frontend-prod-1",
+  "checkout": "/root/rm-060",
+  "home": "/root",
+  "instance": "rm_prod",
+  "publicOrigin": "https://robotmoney.network",
+  "capture": {
+    "host": "rm-frontend-stage-2",
+    "home": "/home/stage-server",
+    "checkout": "/home/stage-server/rm-stage-target"
+  },
+  "legacy": {
+    "checkout": "/root/robotmoney-frontend",
+    "commit": "1cda4085d235b55bf171735ac77618155e6b1647",
+    "tmuxSession": "driver",
+    "composeProject": "rm_prod",
+    "composeFiles": [],
+    "startedBy": "SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui (= bun scripts/smoke.ts --smoke --static-port --db external) in tmux session driver",
+    "log": "/root/smoke-archive-v0.5.4.log",
+    "version": "v0.5.4"
+  },
+  "confirmTarget": "private-dbaas-db-8115298-do-user-39489996-0.g.db.ondigitalocean.com:25060/defaultdb",
+  "bootEnv": {}
+}
