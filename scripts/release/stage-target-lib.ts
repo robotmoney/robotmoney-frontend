@@ -169,13 +169,15 @@ export function postgresUrl(role: string, password: string, host: string, port: 
  * The legacy checkout's `.env`, with production's key names in production's
  * order. Each URL names the role production's names (rm_app, rm_worker,
  * doadmin), pointed at the stage database. `MIGRATE_DATABASE_URL` keeps
- * production's key and role, but its password is `inertDoadminPassword`: a
- * random value doadmin does not have, because doadmin is stored in no file
- * (D61, owner 2026-10-08). The legacy stack never uses that URL while it runs.
+ * production's key, role and a working password, as production's v0.5.4
+ * legacy file does: the v0.5.4 boot runs its migrations through it, so an
+ * inert value stops the legacy stack at startup (28P01, stage 2026-10-08).
+ * The release's R6.2 moves the line out of the live env and S8.1 locks the
+ * retired checkout; no release step reads it.
  */
-export function composeLegacyCheckoutEnv(v: StageHomeEnv, inertDoadminPassword: string): string {
+export function composeLegacyCheckoutEnv(v: StageHomeEnv, doadminPassword: string): string {
   const at = (role: "rm_app" | "rm_worker" | "doadmin") =>
-    postgresUrl(role, assertLineValue(role, role === "doadmin" ? inertDoadminPassword : v[role]), v.host, v.port, v.database, v.sslmode);
+    postgresUrl(role, assertLineValue(role, role === "doadmin" ? doadminPassword : v[role]), v.host, v.port, v.database, v.sslmode);
   return [
     "# postgres",
     `DATABASE_URL=${at("rm_app")}`,

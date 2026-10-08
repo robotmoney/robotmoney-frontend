@@ -74,8 +74,9 @@ It builds these pieces, in order:
    that Bun loads into the legacy driver. The stage copy has the same key names:
    `DATABASE_URL`, `WORKER_DATABASE_URL`, `username`, `password`, `host`, `port`,
    `database`, `sslmode`, `OPENCODE_API_KEY`, `SWARM_SCHEDULES_ENABLED` and
-   `MIGRATE_DATABASE_URL` (a `doadmin` URL, as on production, with an inert
-   random password doadmin does not have).
+   `MIGRATE_DATABASE_URL` (a working `doadmin` URL, as on production: the v0.5.4
+   boot runs its migrations through it). `stage-target doadmin` rotates the stage
+   doadmin right after `up`, so that copy goes stale before the release runs.
 10. **The legacy stack and its driver.** tmux session `stage-driver` runs
     `$HOME/legacy-launch.sh` in the legacy checkout. The script runs production's
     line: `SMOKE_PROJECT=stage_target bun run smoke:archive -- --no-tui`, piped

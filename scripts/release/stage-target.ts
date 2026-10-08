@@ -370,8 +370,10 @@ function writeEnvFiles(passwords: Record<GeneratedPasswordRole, string>): StageH
   writeFileSync(homeEnv, composeStageHomeEnv(values), { mode: 0o600 });
   chmodSync(homeEnv, 0o600);
   const legacyEnv = join(T.legacyCheckout, ".env");
-  // An inert doadmin password: production's key and role, a value doadmin does not have.
-  writeFileSync(legacyEnv, composeLegacyCheckoutEnv(values, generatePassword()), { mode: 0o600 });
+  // Production's legacy .env holds a working doadmin URL, and the v0.5.4 boot
+  // migrates through it. The stage legacy file mirrors that with the stage
+  // doadmin's password; R6.2 moves the line out and S8.1 locks the checkout.
+  writeFileSync(legacyEnv, composeLegacyCheckoutEnv(values, passwords.doadmin), { mode: 0o600 });
   chmodSync(legacyEnv, 0o600);
   log(`wrote ${homeEnv} (0600): ${envKeyNames(readFileSync(homeEnv, "utf8")).join(", ")}`);
   log(`wrote ${legacyEnv} (0600): ${envKeyNames(readFileSync(legacyEnv, "utf8")).join(", ")}`);

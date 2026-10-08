@@ -109,11 +109,11 @@ describe("the stage target's ~/.env", () => {
 
 describe("the legacy checkout .env", () => {
   test("its key names are production's legacy checkout key names", () => {
-    expect(envKeyNames(composeLegacyCheckoutEnv(VALUES, "inert-pw"))).toEqual([...PROD_LEGACY_CHECKOUT_ENV_KEYS]);
+    expect(envKeyNames(composeLegacyCheckoutEnv(VALUES, "doadmin-pw"))).toEqual([...PROD_LEGACY_CHECKOUT_ENV_KEYS]);
   });
 
   test("each URL names production's role and points at the stage database over TLS", () => {
-    const env = parseEnvFile(composeLegacyCheckoutEnv(VALUES, "inert-pw"));
+    const env = parseEnvFile(composeLegacyCheckoutEnv(VALUES, "doadmin-pw"));
     expect(new URL(env.DATABASE_URL!).username).toBe("rm_app");
     expect(new URL(env.WORKER_DATABASE_URL!).username).toBe("rm_worker");
     expect(new URL(env.MIGRATE_DATABASE_URL!).username).toBe("doadmin");
@@ -124,22 +124,26 @@ describe("the legacy checkout .env", () => {
       expect(u.searchParams.get("sslmode")).toBe("require");
     }
     expect(env.SWARM_SCHEDULES_ENABLED).toBe("0");
-    // doadmin is stored in no file: the URL carries the inert value it was handed, never a real password.
-    expect(decodeURIComponent(new URL(env.MIGRATE_DATABASE_URL!).password)).toBe("inert-pw");
+    // Production's legacy file holds a working doadmin URL; the v0.5.4 boot migrates through it.
+    expect(decodeURIComponent(new URL(env.MIGRATE_DATABASE_URL!).password)).toBe("doadmin-pw");
   });
 });
 
-describe("stage doadmin is stored in no file (D61, owner 2026-10-08)", () => {
-  test("`stage-target doadmin` sets one statement through psql's stdin and prints only the password; up writes doadmin nowhere", async () => {
+describe("stage doadmin is stored in no release file (D61, owner 2026-10-08)", () => {
+  test("`stage-target doadmin` sets one statement through psql's stdin and prints only the password; up writes doadmin only into the legacy file", async () => {
     expect(doadminPasswordSql("p'w")).toBe("ALTER ROLE doadmin PASSWORD 'p''w';\n");
     expect(() => doadminPasswordSql("")).toThrow(/doadmin/);
     const source = await Bun.file(new URL("../../release/stage-target.ts", import.meta.url)).text();
     const doadmin = source.slice(source.indexOf("function remoteDoadmin"), source.indexOf("// The control machine"));
     expect(doadmin).toContain("psql(doadminPasswordSql(password), { secret: true })");
     expect(doadmin).not.toMatch(/writeFileSync|appendFileSync|console\.log|log\(/);
-    // up: the only files it writes with a password are ~/.env (no doadmin key) and the legacy .env (an inert value).
+    // up: ~/.env gets no doadmin key; the legacy .env mirrors production's v0.5.4
+    // file, whose MIGRATE_DATABASE_URL works (the v0.5.4 boot migrates through it).
+    // `stage-target doadmin` rotates doadmin right after, so that copy goes stale.
     const writeEnv = source.slice(source.indexOf("function writeEnvFiles"), source.indexOf("function checkDatabase"));
-    expect(writeEnv).not.toMatch(/passwords\.doadmin|passwords\.rm_owner/);
+    expect(writeEnv).not.toMatch(/passwords\.rm_owner/);
+    expect(writeEnv.match(/passwords\.doadmin/g)).toHaveLength(1);
+    expect(writeEnv).toContain("composeLegacyCheckoutEnv(values, passwords.doadmin)");
   });
 });
 
