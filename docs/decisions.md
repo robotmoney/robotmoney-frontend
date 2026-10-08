@@ -5256,3 +5256,34 @@ credential.
 production host. Its stage leg (a `--local dump` twin) took a different path from the
 production leg, so the production steps were never actually rehearsed. On 2026-10-07
 the cutover could not proceed without a person logging in to type two passwords.
+
+**Amendment (owner, 2026-10-08).** The release runbooks use `rm_owner` only. No
+release step reads, requires or uses `doadmin`.
+
+- `doadmin` is stored in no file. The admin types it into one tool, the idempotent
+  password script `bun run role-passwords --target <stage|prod>` on the control
+  machine. It asks at a hidden prompt and sends the password over ssh stdin to
+  `bun scripts/prod-init.ts role-passwords --doadmin-stdin` on the host. It lives
+  only in that process's memory. That is the one human input of the release
+  process. It belongs to provisioning, run before a release, not to the runbook.
+- The script sets the four role passwords as `doadmin` and makes `rm_owner` `LOGIN`.
+  A working `~/.env` line is kept. An absent one is generated on the host, sent to
+  the server only as its SCRAM-SHA-256 verifier, and written to `~/.env`. A line
+  that fails refuses unless `--rotate` names it. A second run changes nothing.
+- Release step R1.2 requires a non-empty `rm_owner` line and proves an `rm_owner`
+  login with `SELECT 1`, read-only, before R6.1 stops the legacy stack. A failure
+  refuses with "rm_owner cannot log in", naming the `role-passwords` script for
+  that target. Step R6.2b (`prod-init enable-owner-login`) leaves the runbook.
+- `doadmin` leaves the `~/.env` allowlist. Preflight check 4 refuses a `doadmin`
+  line on prod again, naming it as the provisioning credential. R6.2 moves a stray
+  `doadmin` line to `~/.env.retired-<run-ts>`.
+
+This replaces "`doadmin` is used by one command only, `prod-init
+enable-owner-login`" above, and the `doadmin` half of "the `rm_owner` password and
+the `doadmin` password are lines in the host's `~/.env`".
+
+**Why the amendment.** Production's `/root/.env` had neither privileged line. A run
+that checked them only at R6.2 would have stopped the live site at R6.1 and then
+refused. Keeping `doadmin` out of every file removes the strongest credential from
+the host. Proving `rm_owner` at R1.2 means every precondition holds before the first
+irreversible step.

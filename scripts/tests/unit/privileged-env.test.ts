@@ -77,9 +77,10 @@ describe("requireConfirmTarget — the D61 replacement for the `y`", () => {
 });
 
 describe("requirePrivilegedPassword — from the ~/.env line only", () => {
-  test("returns the line's value", () => {
+  test("returns the line's value", async () => {
     expect(requirePrivilegedPassword({ rm_owner: "pw" }, "rm_owner", ENV_FILE)).toBe("pw");
-    expect(requirePrivilegedPassword({ doadmin: "da" }, "doadmin", ENV_FILE)).toBe("da");
+    // doadmin is stored in no file (D61 amendment): this module has no key for it.
+    expect([...(await import("../../lib/privileged-env.ts")).PRIVILEGED_KEYS]).toEqual(["rm_owner"]);
   });
 
   test("a missing or empty line, or no file, refuses naming the key and the file", () => {
@@ -87,14 +88,13 @@ describe("requirePrivilegedPassword — from the ~/.env line only", () => {
       expect(() => requirePrivilegedPassword(env, "rm_owner", ENV_FILE)).toThrow(PrivilegedCredentialMissing);
       expect(() => requirePrivilegedPassword(env, "rm_owner", ENV_FILE)).toThrow(`${ENV_FILE} has no rm_owner line`);
     }
-    expect(() => requirePrivilegedPassword({ rm_owner: "pw" }, "doadmin", ENV_FILE)).toThrow(`${ENV_FILE} has no doadmin line`);
   });
 
   test("a refusal never holds another line's value", () => {
     const secret = "the-rm-owner-value";
     let message = "";
     try {
-      requirePrivilegedPassword({ rm_owner: secret }, "doadmin", ENV_FILE);
+      requirePrivilegedPassword({ other: secret }, "rm_owner", ENV_FILE);
     } catch (error) {
       message = (error as Error).message;
     }

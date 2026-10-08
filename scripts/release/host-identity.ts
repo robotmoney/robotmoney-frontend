@@ -13,16 +13,30 @@
 // the database answers, its ledger equals a supported baseline, and its
 // deployment_identity is absent or the kind RM_ENV implies.
 //
+// With --confirm-target it also proves what the cutover needs later, before
+// R6.1 stops the legacy stack (the run's first irreversible step):
+//   - `~/.env` holds a non-empty `rm_owner` line (./env-keys.ts
+//     PRE_CUTOVER_REQUIRED_KEYS). R6.2 checks it again.
+//   - rm_owner logs in: `SELECT 1`, read-only, through the registry's
+//     object-less `connectionCheck` shape declared as rm_owner in
+//     backend/scripts/owner-login-check.ts (proveOwnerLogin).
+// A failure refuses with "rm_owner cannot log in; run `bun run
+// role-passwords --target <target>` first". No release step reads or uses
+// `doadmin` (D61 amendment, owner, 2026-10-08). `RM_CREDENTIALS` is not required here:
+// R6.2a writes it.
+//
 // Writes host-identity.json to --receipt-dir. Prints key names, never values.
 // Runs before `bun install`, so it imports only node built-ins and local
-// modules with no package import.
+// modules with no package import (the registry imports `postgres` as a type
+// only; proveOwnerLogin connects through Bun's built-in client).
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
-import { homeEnvFilePath, loadEnvFile } from "../lib/env-role.ts";
+import { proveOwnerLogin } from "../../backend/scripts/owner-login-check.ts";
+import { homeEnvFilePath, loadEnvFile, urlForRole } from "../lib/env-role.ts";
 import { openReadOnly } from "./db-read.ts";
-import { confirmTargetOf } from "./env-keys.ts";
+import { confirmTargetOf, preCutoverKeyProblems } from "./env-keys.ts";
 import { preconditionProblems } from "./precondition.ts";
 
 function flag(name: string): string | undefined {
@@ -65,6 +79,7 @@ async function main(): Promise<number> {
       resolvedTarget = confirmTargetOf(env);
       if (resolvedTarget === undefined) problems.push(`${envPath} names no host and database`);
       else if (resolvedTarget !== confirm) problems.push(`${envPath} names ${resolvedTarget}; the target file confirms ${confirm}`);
+      problems.push(...preCutoverKeyProblems(env, envPath));
     }
   }
   let precondition: { ledgerCount: number; identity: string | null; problems: string[] } | null = null;
@@ -85,6 +100,19 @@ async function main(): Promise<number> {
       problems.push(`target precondition: the database ${resolvedTarget} cannot be read as rm_readonly (${error instanceof Error ? error.message : String(error)})`);
     }
   }
+  // The rm_owner login proof, read-only. Only on the target ~/.env names, and
+  // only with an rm_owner line (its absence is already a problem above).
+  let ownerLogin: "proven" | "failed" | "not-tried" = "not-tried";
+  const ownerUrl = env ? urlForRole(env, "rm_owner") : undefined;
+  if (confirm !== undefined && resolvedTarget !== undefined && resolvedTarget === confirm && ownerUrl !== undefined) {
+    try {
+      await proveOwnerLogin(ownerUrl, process.env.RM_ENV === "prod" || process.env.RM_ENV === "stage" ? process.env.RM_ENV : "<target>");
+      ownerLogin = "proven";
+    } catch (error) {
+      ownerLogin = "failed";
+      problems.push(`rm_owner login: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   const receipt = {
     step: "host-identity",
     host: hostname(),
@@ -103,6 +131,7 @@ async function main(): Promise<number> {
     resolvedTarget: resolvedTarget ?? null,
     confirmTarget: confirm ?? null,
     precondition,
+    ownerLogin,
     problems,
     at: new Date().toISOString(),
   };
@@ -111,6 +140,7 @@ async function main(): Promise<number> {
   writeFileSync(file, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
   console.log(`[host-identity] ${hostname()} HEAD ${head}${resolvedTarget ? `, ~/.env names ${resolvedTarget}` : ""}`);
   if (precondition) console.log(`[host-identity] target: ledger ${precondition.ledgerCount} names, identity ${precondition.identity ?? "absent"}`);
+  if (ownerLogin === "proven") console.log("[host-identity] rm_owner: login proven (SELECT 1, read-only)");
   console.log(`[host-identity] receipt: ${file}`);
   for (const p of problems) console.error(`[host-identity] REFUSE: ${p}`);
   return problems.length === 0 ? 0 : 1;

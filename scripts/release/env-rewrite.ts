@@ -7,8 +7,10 @@
 // key is outside the list moves, unchanged, to `$HOME/.env.retired-<run-ts>`
 // (mode 0600, created exclusively, never overwritten); the rest stays, in
 // order, comments included. Moving aside rather than deleting is runbook
-// R6.2's rule. It refuses, changing nothing, when `rm_owner`, `doadmin` or
+// R6.2's rule. It refuses, changing nothing, when `rm_owner` or
 // `RM_CREDENTIALS` is missing: the cutover's writes would stop halfway.
+// `doadmin` is off the list (D61 amendment, owner, 2026-10-08), so a stray
+// `doadmin` line moves out like any other key: no release step uses it.
 //
 // A second run with nothing to retire changes nothing, so a resumed run
 // passes. It prints and records key NAMES only, never a value.
@@ -84,7 +86,7 @@ function main(): number {
   }
   const part = partitionEnv(readFileSync(envPath, "utf8"));
   if (part.missingRequired.length > 0) {
-    console.error(`[env-rewrite] REFUSE: ${envPath} lacks ${part.missingRequired.join(", ")} (D61: the privileged credentials live in the host's ~/.env). Nothing changed.`);
+    console.error(`[env-rewrite] REFUSE: ${envPath} lacks ${part.missingRequired.join(", ")} (D61: rm_owner lives in the host's ~/.env; run bun run role-passwords --target <target> for it). Nothing changed.`);
     return 1;
   }
   let retiredFile: string | null = null;

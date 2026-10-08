@@ -24,7 +24,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
 import { CONNECTION_TOKENS, ROLES, homeEnvFilePath } from "../../scripts/lib/env-role.ts";
-import { PRIVILEGED_KEYS } from "../../scripts/lib/privileged-env.ts";
 import { config } from "../src/config.ts";
 import { APPEND_ONLY_TABLES, LEDGER_IMMUTABLE_FAMILIES } from "../src/db/append-only-guard.ts";
 import { sql } from "../src/db/client.ts";
@@ -1414,12 +1413,12 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
   test("the allowlist is exactly §3's keys, spelled the way env-role.ts reads the connection and the roles", () => {
     // §3: "the remote connection (host, port, dbname); the runtime role
     // passwords rm_app, rm_worker and rm_readonly; RM_ENV; and RM_CREDENTIALS."
-    // D61 adds the two privileged passwords, `rm_owner` and `doadmin`, read by
-    // name through scripts/lib/privileged-env.ts's PRIVILEGED_KEYS.
+    // D61 adds the owner password `rm_owner`. `doadmin` is not allowed (D61
+    // amendment, owner, 2026-10-08): it is never stored in a file.
     // env-role.ts is the one resolver the host-side tools use, so its
     // CONNECTION_TOKENS and ROLES are pinned here; `dbname` is §3's own
     // spelling of `database` and is accepted beside it.
-    const expected = [...CONNECTION_TOKENS, "dbname", ...ROLES, ...PRIVILEGED_KEYS, "RM_ENV", "RM_CREDENTIALS", "COINGECKO_API_KEY"];
+    const expected = [...CONNECTION_TOKENS, "dbname", ...ROLES, "rm_owner", "RM_ENV", "RM_CREDENTIALS", "COINGECKO_API_KEY"];
     expect([...ENV_FILE_ALLOWED_KEYS].sort()).toEqual([...new Set(expected)].sort());
   });
 
@@ -1575,10 +1574,20 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
     expect(result.findings).toEqual([]);
   });
 
-  test("D61: a doadmin line passes on prod, with no finding", async () => {
+  test("D61 amendment: a doadmin line refuses on prod, named as the provisioning credential, value never printed", async () => {
     const envFilePath = writeEnvFile("doadmin.env", [...SAFE, "doadmin=cluster-admin-password"]);
     const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
-    expect(result.findings).toEqual([]);
+    expect(refusals(result.findings)).toHaveLength(1);
+    expect(result.findings[0]?.message).toContain("holds doadmin, the cluster provisioning credential");
+    expect(result.findings[0]?.message).not.toContain("cluster-admin-password");
+    expect(ENV_FILE_ALLOWED_KEYS).not.toContain("doadmin");
+  });
+
+  test("D61 amendment: a doadmin line warns on stage", async () => {
+    const envFilePath = writeEnvFile("doadmin-stage.env", [...SAFE, "doadmin=cluster-admin-password"]);
+    const result = await checkEnvCredentials(context({ env: "stage", envFilePath }));
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.severity).toBe("warn");
   });
 
   test("D61 red control: the exact spelling only — `RM_OWNER` and `DOADMIN` are keys nothing reads, and refuse on prod", async () => {
@@ -1640,7 +1649,8 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
     const text = result.findings.map((f) => f.message).join("\n");
     expect(text).toContain("POSTGRES_SUPERUSER_URL");
     expect(text).toContain("holds postgres,");
-    expect(refusals(result.findings)).toHaveLength(2);
+    expect(text).toContain("holds doadmin,");
+    expect(refusals(result.findings)).toHaveLength(3);
   });
 });
 
