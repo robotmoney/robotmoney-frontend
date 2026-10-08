@@ -200,6 +200,7 @@ describe("the cluster superuser is reached only by a pinned list of files", () =
     "pre-revoke-boot-refusal.test.ts",
     "prod-baseline.test.ts",
     "prune-command.test.ts",
+    "role-passwords.test.ts",
     "runtime-delete-revoked.test.ts",
     "schema-additive-backfills.test.ts",
     "schema-compat.test.ts",
