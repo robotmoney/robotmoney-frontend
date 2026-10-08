@@ -53,6 +53,9 @@
 // functions this one composes, resolveModelConfig() and resolveStackZenKey().
 import { resolveModelConfig } from "./onboarding-eval.ts";
 import { resolveStackZenKey, ZEN_KEY_ENV } from "./opencode-key.ts";
+import { homeEnvFilePath } from "./env-role.ts";
+import { loadEnvFile } from "./smoke-external-pg.ts";
+import { loadCredentialFile, resolveCredentialPath } from "./swarm/credential-file.ts";
 
 export interface InferencePreflightOptions {
   /** The `--static-port` boot: the standing/public stack, i.e. staging. */
@@ -114,5 +117,28 @@ export function preflightInferenceOrExit(opts: InferencePreflightOptions): Recor
   } catch (err) {
     console.error(`[smoke] FATAL: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
+  }
+}
+
+/**
+ * The first participant's modelKey from the configured credential file, or null
+ * (D61: an agent-run boot under `env -i` holds no host-wide key). The path comes
+ * from `--credentials`, else `RM_CREDENTIALS` in `$HOME/.env`. A missing or bad
+ * file is null here: the boot's roster step reports it with its own refusal.
+ */
+export function credentialFileModelKey(credentialsFlag: string | undefined): { key: string; source: string } | null {
+  try {
+    const resolution = resolveCredentialPath({ RM_CREDENTIALS: loadEnvFile(homeEnvFilePath())?.RM_CREDENTIALS }, credentialsFlag);
+    if (!resolution.configured) return null;
+    const file = loadCredentialFile(resolution.path);
+    for (const [kind, entries] of [["agents", file.agents], ["judges", file.judges]] as const) {
+      for (const [name, entry] of Object.entries(entries)) {
+        const key = entry.modelKey?.trim();
+        if (key) return { key, source: `the credential file's ${kind}.${name}.modelKey` };
+      }
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
