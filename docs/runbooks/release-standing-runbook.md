@@ -69,7 +69,7 @@ never rewritten (owner 2026-10-07): when the session needs a new base, cut a new
 
 | ID | Check | Tool | Target | Status |
 |---|---|---|---|---|
-| SR.0 | A production dump captured for this run (policy 4.3 fresh dump rule): unless the operator names one, never a dump already on the host; a reused copy only for rapid turnaround and at most 24 hours old | `bun smoke:capture --out <new dir>` | capture host | script |
+| SR.0 | The stage target's starting dump (policy 4.3): by default the newest production dump already on the capture host, if it is under 24 hours old; capture a new one only when none is. Production's own backup (R2.1) is always captured new, right before the cutover (owner, 2026-10-08) | `bun smoke:capture --out <new dir>` | capture host | script |
 | SR.1 | The SR.0 dump boots to READY on the RC commit as a twin (`--local dump`, never the remote database), every active member seated on a **spoofed** key and running as its own participant container (agents and the judge) | `bun smoke --local dump --spoof-keys --credentials <file listing every active member>` | stage | script |
 | SR.9 | **Accelerated schedule.** After the checks that need production's epochs (the restored grid), the twin's subjects get short epochs through the admin API, its open windows are pulled in, and the scheduler rebuilds its timers. Every check that needs sessions to publish (SR.4, the SR.7 window, the judge) runs after it. Re-run it after every fresh boot | `bun run twin:accelerate --instance NAME [--epoch 900]` | stage | script |
 | SR.2 | Readiness: api, pipeline worker, analytics-producer, scheduler | `bun smoke:status` | stage | script |
@@ -78,7 +78,7 @@ never rewritten (owner 2026-10-07): when the session needs a new base, cut a new
 | SR.5 | Interruption at a phase boundary resumes, before and after replace | release runbook R3.6 | stage | manual |
 | SR.6 | Rollback rehearsal: restore time recorded, and the old code's behavior against the new schema recorded | release runbook R3.9 | stage | manual |
 | SR.7 | Cumulative standing invariants (the 0.5.x R8 list, section 7) | `bun run soak:checks --instance NAME --since T0 --full` (`--record` once at READY) | stage | script |
-| SR.10 | Cutover rehearsal: the production step list runs unmodified and unattended against the production-shaped stage target (D61), twice from a fresh dump. A release runbook may record an owner exception to the count (v0.6.0: one run) | `bun run release:run --target stage` | stage | gap, issue agent-executed runbooks (1225) |
+| SR.10 | Cutover rehearsal: the production step list runs unmodified and unattended against the production-shaped stage target (D61), twice, each from a dump under 24 hours old (SR.0). A release runbook may record an owner exception to the count (v0.6.0: one run) | `bun run release:run --target stage` | stage | gap, issue agent-executed runbooks (1225) |
 | SR.8 | Rehearsal report: RC SHA, dump identity, plan id, receipts, results, what could not be covered, operator go/no-go | policy 4.5 | stage | manual |
 
 ## 5. Phase C, V, W — cutover, verification, watch

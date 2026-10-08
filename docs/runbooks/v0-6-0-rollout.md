@@ -37,7 +37,7 @@ Each standing ID maps to the runner steps that satisfy it (the `standing` field 
 | SP.6 product baseline | R2.3 | Counts and size. The published AUM figure: owner exception for v0.6.0 |
 | SP.7 code gate | none | CI on the go's commit, read before the go (section 4) |
 | SP.8 prod runs only what stage passed | the runner's start check | `--stage-journal` names a passed stage run |
-| SR.0 fresh dump | R2.1 | A new dated directory every run |
+| SR.0 dump | R2.1 | Production's backup: a new dated directory every run. The stage target starts from the newest dump under 24 hours old |
 | SR.1 twin boots, every member seated | none | The short twin rerun (section 7.3), required for v0.6.0 |
 | SR.2 readiness | R6.7b, R6.9, R7.2 on the stage target | |
 | SR.3 product verification | R7.3 on the stage target | Readonly tier. The full tier runs on the short twin rerun (section 7.3) |
@@ -341,11 +341,12 @@ step list against it unmodified (D61 rule 2). Only `scripts/release/targets/stag
 
 ### 7.1 The run, once (standing SR.10, owner exception for v0.6.0)
 
-Everything runs from the control machine. Run this sequence once, from a new dump. The standing rule
+Everything runs from the control machine. Run this sequence once, from a dump under 24 hours old. The standing rule
 asks for two runs. The owner decided on 2026-10-08 that v0.6.0 gets one.
 
-1. **Capture a fresh dump** on stage-2 from production's replica. [`stage-target.md`](./stage-target.md#rebuild-it-for-each-rehearsal)
-   step 1 gives the control-machine ssh line. Never reuse a dump already on the host (policy §4.3).
+1. **Pick the dump.** Use the newest production dump on stage-2 if it is under 24 hours old (owner, 2026-10-08).
+   Capture one only when none is: [`stage-target.md`](./stage-target.md#rebuild-it-for-each-rehearsal) step 1
+   gives the control-machine ssh line. R2.1 captures production's own backup new, during the run.
 2. **Rebuild the stage target** from that dump:
 
    ```bash
@@ -385,7 +386,7 @@ asks for two runs. The owner decided on 2026-10-08 that v0.6.0 gets one.
 
 A failure stops the run at the failed step. The fix lands in a worktree branched from the QA branch,
 merges into the QA branch, and the operator writes a new stage go naming the new commit. The step-list hash
-or the commit then differs, so the run starts again from step 1 on a new dump. A stage failure does
+or the commit then differs, so the run starts again from step 1, on the same dump while it is under 24 hours old. A stage failure does
 not consume an rc number.
 
 ### 7.2 What the stage journals prove

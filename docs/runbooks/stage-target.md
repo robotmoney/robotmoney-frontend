@@ -115,9 +115,11 @@ Read on 2026-10-08 from `rm-frontend-prod-1`, read-only:
 
 ## Rebuild it for each rehearsal
 
-A rehearsal needs a fresh dump, so the target is rebuilt each time.
+Each rehearsal rebuilds the target. By default it restores the newest production dump
+already on stage-2 (`ls -d ~/rm-backup-prod-*`), if it is under 24 hours old (owner, 2026-10-08).
+The release's own R2.1 still captures a new backup during the run.
 
-1. Capture a fresh dump on stage-2. It reads production's replica as `rm_readonly`:
+1. Only when no dump on stage-2 is under 24 hours old, capture one. It reads production's replica as `rm_readonly`:
 
    ```bash
    ssh rm-frontend-stage-2 'cd ~/rm-060 && RM_ENV=stage bun smoke:capture --out ~/rm-backup-prod-$(date -u +%Y%m%dT%H%M%SZ)' </dev/null
