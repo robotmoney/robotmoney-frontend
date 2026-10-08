@@ -16,8 +16,8 @@
 //                source (D55 (8), backend/tests/fixtures/releases/
 //                production-2026-10-01), rebuilt from its own migration bytes
 //                by its own runner loop, then taken to this branch by the real
-//                `bun run migrate` under a terminal: RM_ENV=prod, the typed
-//                rm_owner password and an explicit `y` — the first production
+//                `bun run migrate` with no terminal: RM_ENV=prod, ~/.env's
+//                rm_owner line and the exact `--confirm-target` — the first production
 //                migrate (§9.1, D55 (5)), which applies 0107. Before that run
 //                the release really does grant the runtime roles DELETE (its
 //                0053), which is asserted, so the pass after it is the
@@ -36,11 +36,11 @@ import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
 import {
   applyAsReleaseRunner,
   loadBaseline,
-  migrateAtTerminal,
   releaseSteps,
   restoreLogins,
   restoreRoles,
   revokeLoginDefaults,
+  runMigrateCommand,
   saveRoles,
   type SavedRole,
 } from "./fixtures/releases/release-fixture.ts";
@@ -147,14 +147,11 @@ beforeAll(async () => {
   for (const role of ["rm_owner", ...RUNTIME]) await admin.unsafe(`ALTER ROLE ${role} LOGIN PASSWORD '${PASSWORD}'`);
 
   // The first production migrate, as the operator runs it.
-  const run = await migrateAtTerminal({
+  const run = await runMigrateCommand({
     databaseUrl: new URL(databaseUrl(UPGRADED_DB)),
     readonlyPassword: PASSWORD,
+    ownerPassword: PASSWORD,
     rmEnv: "prod",
-    steps: [
-      { await: "rm_owner password (not echoed", send: PASSWORD },
-      { await: "type y to continue", send: "y" },
-    ],
   });
   homes.push(run.home);
   if (run.code !== 0) throw new Error(`bun run migrate failed (exit ${run.code}):\n${run.screen.slice(-3000)}`);

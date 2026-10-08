@@ -1,10 +1,10 @@
 // `bun run migrate` — the operator's migrate run (smoke-production-spec.md §8.5).
 //
 // "In production an upgrade is an operator intervention: `bun run migrate`,
-// prompting for `rm_owner`, planned per release, receipted. It is never part of
-// the boot." This file is that command's argv, `~/.env` and exit handling. The
-// sequence itself — plan, target lock, gates, owner prompt, `y`, run, receipt —
-// is `migrateCommand` in ./migrate-run.ts, the same function `bun smoke
+// planned per release, receipted. It is never part of the boot." This file is
+// that command's argv, `~/.env` and exit handling. The sequence itself — plan,
+// target lock, gates, owner login, `--confirm-target`, run, receipt — is
+// `migrateCommand` in ./migrate-run.ts, the same function `bun smoke
 // --migrate` runs (backend/scripts/smoke-prepare.ts).
 //
 // THE TARGET LOCK (§2, D52). This command takes the ONE session lock every tool
@@ -18,13 +18,19 @@
 // and refuses if any moved while it waited. The lock is released explicitly on
 // exit, on SIGINT and on SIGTERM.
 //
-// `~/.env` holds the connection values and the three runtime role passwords
-// (§3). This command reads the target and connects as `rm_readonly` for the
-// lock, the plan and the gates; it refuses a file that holds `rm_owner` or
-// `doadmin` — a host that stores an owner password has no reason left to type
-// one — and then logs in as `rm_owner` with the password typed at the terminal.
+// `~/.env` holds the connection values, the three runtime role passwords and,
+// since D61, the `rm_owner` password. This command reads the target and
+// connects as `rm_readonly` for the lock, the plan and the gates, then logs in
+// as `rm_owner` with the `rm_owner = …` line of the same file. It never
+// prompts and needs no terminal (D61 rule 1). A file with no `rm_owner` line
+// refuses, naming the key and the file. It never reads `doadmin`.
 //
-// usage: bun run migrate [--instance <name>] [--receipt <path>] [--lock-timeout <seconds>]
+// THE CONFIRMATION (D61). The interactive `y` is `--confirm-target
+// <host:port/database>`: the run refuses unless the flag equals exactly the
+// target `~/.env` names (`host`, `port` or 5432, `database` or `dbname`, as
+// spelled there). A mismatch prints both. Nothing is normalized.
+//
+// usage: bun run migrate --confirm-target <host:port/database> [--instance <name>] [--receipt <path>] [--lock-timeout <seconds>]
 //
 // `--instance` defaults to the production instance under RM_ENV=prod. Any other
 // policy must name where the receipt goes, because a receipt written to a
@@ -44,10 +50,12 @@
 // names that state, the run applies 0081 first with `production` in its
 // transaction (migrate-run.ts applyIdentityFirst), and the receipt records the
 // pre-identity state and the row. A run killed after that transaction reruns
-// as an ordinary `bun run migrate`.
+// as an ordinary `bun run migrate`. Under RM_ENV=stage the same state takes
+// the remote rehearsal pass (D61 rule 2): the same steps, writing `rehearsal`.
 import { hostname } from "node:os";
 import { dirname, resolve } from "node:path";
 import { homeEnvFilePath, loadEnvFile, urlForRole } from "../../scripts/lib/env-role.ts";
+import { confirmTargetFlag, homeEnvTarget } from "../../scripts/lib/privileged-env.ts";
 import { resolveRmEnv } from "../src/deploy-policy.ts";
 import { PRODUCTION_INSTANCE, instancePaths, stateRoot } from "../../scripts/lib/smoke-state.ts";
 import { MigrateJournal, migrateJournalPath } from "./migrate-journal.ts";
@@ -77,6 +85,7 @@ function flag(name: string): string | undefined {
 }
 
 const receiptFlag = flag("--receipt");
+const confirmTarget = confirmTargetFlag(process.argv.slice(2));
 const instanceFlag = flag("--instance");
 const lockTimeoutSeconds = Number(flag("--lock-timeout") ?? DEFAULT_LOCK_TIMEOUT_SECONDS);
 if (!Number.isFinite(lockTimeoutSeconds) || lockTimeoutSeconds < 0) refuse("--lock-timeout needs a number of seconds");
@@ -107,7 +116,7 @@ if (receiptFlag === undefined) {
 
 // THE JOURNAL (§2), beside the receipt, from here to exit. Every exit below —
 // a refusal, a lost lock, a crash, SIGINT/SIGTERM through the lock's release
-// handler, Ctrl-C at the password prompt — closes it naming the phase it
+// handler — closes it naming the phase it
 // stopped in; the `exit` handler catches the ones that leave without closing.
 // Nothing before this point connected to anything or had a place to journal.
 journal = MigrateJournal.open(migrateJournalPath(receiptDir, startedAt), { caller: "operator", env: rmEnv, startedAt });
@@ -116,14 +125,6 @@ journal.begin("config");
 
 if (!env) refuse(`no readable $HOME/.env (${envPath}).`);
 
-// §3: "It must not contain `rm_owner`, `doadmin`, a superuser token ...".
-const forbidden = ["rm_owner", "doadmin"].filter((key) => env[key] !== undefined);
-if (forbidden.length > 0) {
-  refuse(
-    `$HOME/.env holds a ${forbidden.join(" and a ")} line. Spec §3 keeps both out of it: the rm_owner password is ` +
-      "typed at the terminal for the one run that needs it and never stored. Remove the line and rerun.",
-  );
-}
 
 // The lock, the plan and the gates go through the least-privileged role that
 // can read `deployment_identity`: §3 puts `rm_readonly` in `~/.env` and 0081
@@ -132,6 +133,8 @@ const readonlyUrl = urlForRole(env, "rm_readonly");
 if (!readonlyUrl) {
   refuse(`$HOME/.env cannot assemble an rm_readonly connection (host, port, database, sslmode and an rm_readonly line).`);
 }
+// The target the flag must name, exactly as the file spells it (D61).
+const resolvedTarget = homeEnvTarget(env)!;
 
 // backend/src/config.ts validates at IMPORT, and the run's modules import it
 // (append-only-guard.ts → db/client.ts). It requires DATABASE_URL: this
@@ -153,7 +156,8 @@ try {
     // `bun smoke --migrate`, which uses smoke's generated password (§8.5).
     connection: "remote",
     readerUrl: readonlyUrl,
-    nonInteractive: !process.stdin.isTTY,
+    // D61: rm_owner from ~/.env, held to --confirm-target. Never a prompt.
+    remote: { ownerPassword: env.rm_owner, envFile: envPath, confirmTarget, resolvedTarget },
     lock: {
       acquire: {
         holder: { tool: NAME, planId: null, instance: instanceFlag ?? null, host: hostname(), pid: process.pid },
@@ -171,9 +175,10 @@ try {
   log(`grants repaired on ${result.grantsRepaired.length} relation(s)`);
   if (result.baselined) log("first manifest: the live schema matched the snapshot (spec §9.1 step 2)");
   if (result.preIdentity && result.identityWritten) {
+    const pass = result.identityWritten.kind === "production" ? "first production migrate" : "remote rehearsal pass";
     log(
-      `first production migrate from ${result.preIdentity.release}: ${result.applied[0]} and deployment_identity = ` +
-        `${result.identityWritten.kind} committed first, in one transaction (spec §9.1 step 4, D55 (9))`,
+      `${pass} from ${result.preIdentity.release}: ${result.applied[0]} and deployment_identity = ` +
+        `${result.identityWritten.kind} committed first, in one transaction (spec §9.1 step 4, D55 (9), D61)`,
     );
   }
   if (result.resumedAfterIdentityPass) {

@@ -13,15 +13,15 @@
 //   §10 W2: "Applying 0081 out of order outside the three passes of §4.3
 //   refuses."
 //
-// This file holds the PRODUCTION pass's kill-and-rerun (`bun run migrate`) and
-// the normal path's acceptance rule. The `--local dump` pass's kill-and-rerun is
-// scripts/tests/integration/smoke-dump-identity-first.test.ts's; the remote
-// twin pass is not built (issue #1026, the owner question
-// 'remote-twin-restore').
+// This file holds the PRODUCTION pass's kill-and-rerun (`bun run migrate`),
+// the REMOTE REHEARSAL pass (D61 rule 2: the same command under RM_ENV=stage
+// writes `rehearsal`), and the normal path's acceptance rule. The `--local
+// dump` pass's kill-and-rerun is
+// scripts/tests/integration/smoke-dump-identity-first.test.ts's.
 //
-// A KILL IS A CRASH. `bun run migrate` runs as a process under a
-// pseudo-terminal (fixtures/releases/release-fixture.ts
-// `startMigrateAtTerminal`), the operator types rm_owner and `y`, and the test
+// A KILL IS A CRASH. `bun run migrate` runs as a process with no terminal
+// (fixtures/releases/release-fixture.ts `startMigrate`), `~/.env` holding
+// rm_owner and the command taking `--confirm-target` (D61), and the test
 // SIGKILLs the migrate process while one of its statements is blocked on a lock
 // the test holds: no exit handler, no lock release, no journal close runs.
 //   - BEFORE 0081 COMMITS: the test holds an uncommitted ledger row under
@@ -46,7 +46,7 @@ import { readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
 import { adminUrl, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
-import { applyIdentityFirst, IDENTITY_MIGRATION, readPreIdentityLedger, runMigrate } from "../scripts/migrate-run.ts";
+import { applyIdentityFirst, identityFirstKind, IDENTITY_MIGRATION, readPreIdentityLedger, runMigrate } from "../scripts/migrate-run.ts";
 import type { MigrateJournalFile } from "../scripts/migrate-journal.ts";
 import { readManifest } from "../src/db/schema-manifest.ts";
 import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
@@ -56,14 +56,14 @@ import {
   applyAsReleaseRunner,
   loadBaseline,
   loadRelease,
-  migrateAtTerminal,
   releaseSteps,
   restoreLogins,
   restoreRoles,
   revokeLoginDefaults,
+  runMigrateCommand,
   saveRoles,
-  startMigrateAtTerminal,
-  type LiveTerminal,
+  startMigrate,
+  type LiveMigrate,
   type SavedRole,
 } from "./fixtures/releases/release-fixture.ts";
 import { withTargetLock } from "./support/target-lock.ts";
@@ -176,7 +176,7 @@ async function holdLock(database: string, lockSql: string): Promise<{ release():
 }
 
 /** Wait until an rm_owner backend on `database` is blocked on a lock in a statement matching `pattern`. */
-async function waitBlocked(database: string, pattern: string, run: LiveTerminal): Promise<void> {
+async function waitBlocked(database: string, pattern: string, run: LiveMigrate): Promise<void> {
   const deadline = Date.now() + 120_000;
   for (;;) {
     const rows = (await admin`
@@ -206,26 +206,19 @@ async function waitOwnerGone(database: string): Promise<void> {
   }
 }
 
-/** Start the operator's command and answer its two prompts. */
-async function startTyped(database: string): Promise<LiveTerminal> {
-  const run = startMigrateAtTerminal({ databaseUrl: urlFor(database), readonlyPassword: READONLY_PASSWORD, rmEnv: "prod" });
+/** Start the operator's command: ~/.env's rm_owner, the exact --confirm-target (D61). */
+async function startConfirmed(database: string): Promise<LiveMigrate> {
+  const run = startMigrate({ databaseUrl: urlFor(database), readonlyPassword: READONLY_PASSWORD, ownerPassword: OWNER_PASSWORD, rmEnv: "prod" });
   homes.push(run.home);
-  let at = await run.waitFor("rm_owner password (not echoed");
-  await run.type(`${OWNER_PASSWORD}\r`);
-  at = await run.waitFor("type y to continue", at);
-  await run.type("y\r");
   return run;
 }
 
-async function rerun(database: string) {
-  const run = await migrateAtTerminal({
+async function rerun(database: string, rmEnv = "prod") {
+  const run = await runMigrateCommand({
     databaseUrl: urlFor(database),
     readonlyPassword: READONLY_PASSWORD,
-    rmEnv: "prod",
-    steps: [
-      { await: "rm_owner password (not echoed", send: OWNER_PASSWORD },
-      { await: "type y to continue", send: "y" },
-    ],
+    ownerPassword: OWNER_PASSWORD,
+    rmEnv,
   });
   homes.push(run.home);
   expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-3000) }).toEqual({ code: 0, tail: "" });
@@ -242,7 +235,7 @@ async function rerun(database: string) {
   };
 }
 
-function journalOf(run: LiveTerminal): MigrateJournalFile {
+function journalOf(run: { receiptDir: string }): MigrateJournalFile {
   const names = readdirSync(run.receiptDir).filter((name) => name.startsWith("migrate-journal-"));
   expect(names.length).toBe(1);
   return JSON.parse(readFileSync(join(run.receiptDir, names[0]!), "utf8")) as MigrateJournalFile;
@@ -292,9 +285,9 @@ describe("§10 W2 — kill the production pass and rerun it (`bun run migrate`, 
     // privilege probe passes it, and the pass's INSERT of the same key waits
     // on this transaction — after 0081's DDL, inside 0081's transaction.
     const blocker = await holdLock(name, `INSERT INTO schema_migrations (name) VALUES ('${IDENTITY_MIGRATION}')`);
-    let run: LiveTerminal | undefined;
+    let run: LiveMigrate | undefined;
     try {
-      run = await startTyped(name);
+      run = await startConfirmed(name);
       // Blocked on 0081's ledger INSERT, inside 0081's transaction, after its DDL.
       await waitBlocked(name, "%INSERT INTO schema_migrations%", run);
       expect(run.screen()).toContain("FIRST PRODUCTION MIGRATE");
@@ -325,10 +318,10 @@ describe("§10 W2 — kill the production pass and rerun it (`bun run migrate`, 
   test("killed AFTER 0081 commits: 0081 holds its row, and the rerun resumes through the normal path, the five lower files first", async () => {
     const name = await copyOf(TEMPLATE, "killafter");
     const blocker = await holdLock(name, "LOCK TABLE swarm_judge_config IN SHARE MODE");
-    let run: LiveTerminal | undefined;
+    let run: LiveMigrate | undefined;
     let whileBlocked: State;
     try {
-      run = await startTyped(name);
+      run = await startConfirmed(name);
       // Blocked in 0056_swarm_judge_requires_model's transaction: 0081's has committed.
       await waitBlocked(name, "%swarm_judge_config%", run);
       // The committed state at this instant: 0081 WITH its row, nothing else.
@@ -360,6 +353,111 @@ describe("§10 W2 — kill the production pass and rerun it (`bun run migrate`, 
   }, 240_000);
 });
 
+describe("D61 rule 2 — the remote rehearsal pass (`RM_ENV=stage bun run migrate --confirm-target …`)", () => {
+  // A production dump restored into a REMOTE stage Postgres: no
+  // deployment_identity table, the production baseline ledger. Stage rehearses
+  // the production cutover on it with the same command; the pass writes
+  // `rehearsal`, never `production`.
+  test("the kind is the policy's alone: stage writes rehearsal, prod writes production, unset never production", () => {
+    expect(identityFirstKind("stage")).toBe("rehearsal");
+    expect(identityFirstKind("prod")).toBe("production");
+    expect(identityFirstKind(null)).toBe("rehearsal");
+  });
+
+  test("stage + no table + the baseline ledger: 0081 first with `rehearsal` in its transaction, then the rest, receipted", async () => {
+    const name = await copyOf(TEMPLATE, "stagepass");
+    const { run, receipt } = await rerun(name, "stage");
+    expect(run.screen).toContain("REMOTE REHEARSAL PASS");
+    expect(run.screen).not.toContain("FIRST PRODUCTION MIGRATE");
+    expect(run.screen).not.toContain(OWNER_PASSWORD);
+    expect(receipt.preIdentity).toEqual({ identity: "no table", release: TAG, ledger: BASELINE_FILES });
+    expect(receipt.identityWritten).toMatchObject({ kind: "rehearsal" });
+    expect(receipt.applied[0]).toBe(IDENTITY_MIGRATION);
+    expect(receipt.applied.slice(1, 6)).toEqual(LOWER_FIVE);
+    expect(receipt.baselined).toBe(true);
+    expect(readFileSync(run.receiptPath, "utf8")).not.toContain(OWNER_PASSWORD);
+    expect(await stateOf(name)).toEqual({ ledger: HEAD_FILES, table: true, identity: ["rehearsal"], manifest: true });
+    await withDb(name, async (db) => {
+      const [same] = (await db`
+        SELECT (SELECT xmin::text FROM schema_migrations WHERE name = ${IDENTITY_MIGRATION})
+             = (SELECT xmin::text FROM deployment_identity) AS one_transaction,
+               (SELECT written_by FROM deployment_identity) AS written_by`) as unknown as { one_transaction: boolean; written_by: string }[];
+      expect({ ...same }).toEqual({ one_transaction: true, written_by: "rm_owner" });
+    });
+
+    // A second run, with the row present, takes the normal path: no pass, nothing pending.
+    const { run: second, receipt: again } = await rerun(name, "stage");
+    expect(second.screen).not.toContain("REMOTE REHEARSAL PASS");
+    expect(again).toMatchObject({ applied: [], preIdentity: null, identityWritten: null });
+    expect((await stateOf(name)).identity).toEqual(["rehearsal"]);
+  }, 240_000);
+
+  test("RED CONTROL: stage + no table + v0.5.0's ledger (not a supported baseline) refuses at the gates and changes nothing", async () => {
+    const name = await copyOf(V050_TEMPLATE, "stagev050");
+    const before = await stateOf(name);
+    const run = await runMigrateCommand({
+      databaseUrl: urlFor(name),
+      readonlyPassword: READONLY_PASSWORD,
+      ownerPassword: OWNER_PASSWORD,
+      rmEnv: "stage",
+    });
+    homes.push(run.home);
+    expect(run.code).not.toBe(0);
+    expect(run.screen).toContain("matches none");
+    expect(journalOf(run).phases.at(-1)).toMatchObject({ phase: "gates", status: "refused" });
+    expect(await stateOf(name)).toEqual(before);
+  }, 120_000);
+
+  test("RED CONTROL: stage + no table + the baseline, with a wrong --confirm-target, refuses and changes nothing", async () => {
+    const name = await copyOf(TEMPLATE, "stagewrongtarget");
+    const before = await stateOf(name);
+    const run = await runMigrateCommand({
+      databaseUrl: urlFor(name),
+      readonlyPassword: READONLY_PASSWORD,
+      ownerPassword: OWNER_PASSWORD,
+      rmEnv: "stage",
+      confirmTarget: `${urlFor(name).hostname}:1/${name}`,
+    });
+    homes.push(run.home);
+    expect(run.code).not.toBe(0);
+    expect(run.screen).toContain("REMOTE REHEARSAL PASS");
+    expect(journalOf(run).phases.at(-1)).toMatchObject({ phase: "confirm", status: "refused" });
+    expect(await stateOf(name)).toEqual(before);
+  }, 120_000);
+
+  test("RED CONTROL: the stage run, reached around the command with no confirmed state, refuses on a qualifying database", async () => {
+    const name = await copyOf(TEMPLATE, "stagearound");
+    const before = await stateOf(name);
+    const owner = connect(name, asOwner);
+    try {
+      await expect(
+        withTargetLock(urlFor(name).toString(), (lock) =>
+          runMigrate(owner, { caller: "operator", env: "stage", connection: "remote", lock }),
+        ),
+      ).rejects.toThrow("no run confirmed it");
+    } finally {
+      await owner.end({ timeout: 5 });
+    }
+    expect(await stateOf(name)).toEqual(before);
+  }, 60_000);
+
+  test("RED CONTROL: `bun smoke --migrate` (the smoke_flag caller) never takes the remote pass", async () => {
+    const name = await copyOf(TEMPLATE, "stagesmokeflag");
+    const before = await stateOf(name);
+    const owner = connect(name, asOwner);
+    try {
+      await expect(
+        withTargetLock(urlFor(name).toString(), (lock) =>
+          runMigrate(owner, { caller: "smoke_flag", env: "stage", connection: "remote", lock }),
+        ),
+      ).rejects.toThrow(/Refusing the migrate run/);
+    } finally {
+      await owner.end({ timeout: 5 });
+    }
+    expect(await stateOf(name)).toEqual(before);
+  }, 60_000);
+});
+
 /**
  * A pass's result built by hand on a copy, as rm_owner: 0081's DDL, its ledger
  * row and `kind`, in one transaction, on top of whatever ledger the copy has.
@@ -381,7 +479,7 @@ async function passShape(database: string, kind: "production" | "rehearsal"): Pr
 function operatorRun(database: string) {
   const owner = connect(database, asOwner);
   return withTargetLock(urlFor(database).toString(), (lock) =>
-    runMigrate(owner, { caller: "operator", env: "prod", connection: "remote", nonInteractive: true, lock }),
+    runMigrate(owner, { caller: "operator", env: "prod", connection: "remote", lock }),
   ).finally(() => owner.end({ timeout: 5 }));
 }
 
@@ -528,7 +626,7 @@ describe("the identity-first pass itself (applyIdentityFirst), on the fenced pat
     const owner2 = connect(name, asOwner);
     try {
       const result = await withTargetLock(urlFor(name).toString(), (lock) =>
-        runMigrate(owner2, { caller: "smoke_flag", env: "stage", connection: "local", nonInteractive: true, lock }),
+        runMigrate(owner2, { caller: "smoke_flag", env: "stage", connection: "local", lock }),
       );
       expect(result.applied.slice(0, 5)).toEqual(LOWER_FIVE);
       expect(result.resumedAfterIdentityPass).toBe(TAG);

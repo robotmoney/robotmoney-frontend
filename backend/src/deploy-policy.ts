@@ -108,19 +108,24 @@ export function resolveRmEnv(
   };
 }
 
-/** The runbook a refused pre-identity remote twin is pointed at (D55 (10)). */
+/** The runbook a refused pre-identity remote twin is pointed at (D55 (10)).
+ *  Since D61 it records the retired hand step and points at the remote
+ *  rehearsal pass. */
 export const PRE_IDENTITY_TWIN_RUNBOOK = "docs/runbooks/pre-identity-remote-twin.md";
 
 /**
- * D55 (10): no tool turns a pre-0081 production dump into a remote twin, so
- * every stage tool that reads a remote target with no `deployment_identity`
- * table (or row) refuses, changes nothing, and names the one intervention that
- * can enrol it: a receipted `rm_owner` hand step, or `bun smoke --local dump`.
- * One sentence, shared, so the twin tooling and every stage tool say the same.
+ * Every stage tool that reads a remote target with no `deployment_identity`
+ * table (or row) refuses, changes nothing, and names what can enrol it. Since
+ * D61 (rule 2) that is the remote rehearsal pass of `bun run migrate` under
+ * RM_ENV=stage (backend/scripts/migrate-run.ts readPreIdentityState), which
+ * applies 0081 and writes `rehearsal` in one transaction when the ledger
+ * equals a supported baseline; or `bun smoke --local dump`. One sentence,
+ * shared, so the twin tooling and every stage tool say the same.
  */
 export const PRE_IDENTITY_TWIN_INTERVENTION =
-  `If this is a production dump restored from before migration 0081, no tool enrols it as a remote twin: ` +
-  `run the one-off, receipted rm_owner intervention in ${PRE_IDENTITY_TWIN_RUNBOOK}, or use \`bun smoke --local dump\` instead.`;
+  `If this is a production dump restored from before migration 0081, enrol it with the remote rehearsal pass: ` +
+  `\`RM_ENV=stage bun run migrate --confirm-target <host:port/database>\` applies 0081 and writes \`rehearsal\` in one ` +
+  `transaction when the ledger equals a supported baseline (D61; ${PRE_IDENTITY_TWIN_RUNBOOK}). Or use \`bun smoke --local dump\` instead.`;
 
 function describeIdentity(identity: PolicyInput["identity"]): string {
   if (identity === null) return "no identity row";

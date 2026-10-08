@@ -65,8 +65,8 @@ export const CADENCE_FLAG = "--cadence";
  * database only when it was told to. It runs the migrate run of §8.3 as
  * rm_owner under the boot's target lock (backend/scripts/smoke-prepare.ts →
  * migrate-run.ts migrateCommand): a local mode uses the owner password smoke
- * generated; on the remote database the rm_owner password is typed at the
- * terminal, never read from an env var or `.env`.
+ * generated; on the remote database the rm_owner password is `~/.env`'s
+ * `rm_owner` line, with `--confirm-target` naming the target (D61).
  */
 export const MIGRATE_FLAG = "--migrate";
 
@@ -269,6 +269,10 @@ export const DEMO_FLAGS: readonly FlagSpec[] = Object.freeze([
   // Spec §4.4: the one knob the deleted compose overlay left behind. Explicit or
   // absent, and a refusal under RM_ENV=prod (backend/src/deploy-policy.ts).
   Object.freeze({ flag: ALLOW_INSECURE_FLAG, arity: 0 as const }),
+  // D61: the `y` a remote `--migrate` or `--seed` asked for, as a flag that must
+  // name exactly the `host:port/database` `~/.env` resolves to
+  // (scripts/lib/privileged-env.ts).
+  Object.freeze({ flag: "--confirm-target", arity: 1 as const }),
 ]);
 
 

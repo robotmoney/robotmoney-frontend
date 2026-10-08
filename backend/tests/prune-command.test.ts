@@ -7,17 +7,19 @@
 // command lists exactly the tables it may prune ... It never prunes a security
 // tombstone or audit history."
 //
-// THE COMMAND IS RUN AS A PROCESS wherever the claim is about the command: the
-// window refusal, the refusal without a terminal, and — under a real
-// pseudo-terminal (`script`), so `process.stdin.isTTY` is true and the real
-// masked prompt runs — the wrong password, the missing `y` and the whole
+// D61 moved the typed password into `~/.env`'s `rm_owner` line and the `y`
+// into `--confirm-target <host:port/database>`. Nothing prompts.
+//
+// THE COMMAND IS RUN AS A PROCESS wherever the claim is about the command, with
+// stdin closed: the window refusal, the missing `rm_owner` line, the wrong
+// password, the missing and the wrong `--confirm-target`, and the whole
 // successful run with its receipt and journal. The lock case drives
 // `pruneCommand` in this process, because it has to hold the competing lock
 // itself and watch the prune wait behind it.
 //
 // THE DATABASE is this file's own (useCleanDatabase), enrolled `rehearsal` by
-// rm_owner and run under RM_ENV=stage, with `$HOME/.env` holding only the
-// connection and an rm_readonly password, as §3 says a host's does. The rows
+// rm_owner and run under RM_ENV=stage, with `$HOME/.env` holding the
+// connection, an rm_readonly password and (per test) an rm_owner line. The rows
 // planted, by age:
 //   events      8 days old (pruned), 6 days old and new (kept);
 //   sessions    expired 10 days ago and never revoked (pruned); expired 10
@@ -70,8 +72,14 @@ function readerUrl(): string {
   return url.toString();
 }
 
-/** `$HOME` for one operator run: a `.env` with the connection and rm_readonly only. */
-function operatorHome(): string {
+/** The `host:port/database` the command resolves from {@link operatorHome}'s file. */
+function target(): string {
+  const url = new URL(process.env.DATABASE_URL!);
+  return `${url.hostname}:${url.port || "5432"}/${database}`;
+}
+
+/** `$HOME` for one operator run: a `.env` with the connection, rm_readonly and, unless `null`, an rm_owner line. */
+function operatorHome(ownerLine: string | null): string {
   const home = tmp("home");
   const url = new URL(process.env.DATABASE_URL!);
   writeFileSync(
@@ -82,6 +90,7 @@ function operatorHome(): string {
       `database = ${database}`,
       "sslmode = disable",
       `rm_readonly = ${READONLY_PASSWORD}`,
+      ...(ownerLine === null ? [] : [`rm_owner = ${ownerLine}`]),
       "",
     ].join("\n"),
     "utf8",
@@ -89,9 +98,14 @@ function operatorHome(): string {
   return home;
 }
 
-/** The command with no terminal: stdin ignored. */
-async function runCommand(args: readonly string[]): Promise<{ code: number; out: string; home: string }> {
-  const home = operatorHome();
+/** The command with no terminal: stdin ignored. `owner` is the rm_owner line's value, or `null` for no line. */
+async function runCommand(
+  args: readonly string[],
+  owner: string | null = OWNER_PASSWORD,
+): Promise<{ code: number; out: string; home: string }> {
+  const home = operatorHome(owner);
+  // The password is never an argument (D61).
+  if (owner !== null && args.join(" ").includes(owner)) throw new Error("a password reached argv");
   const child = Bun.spawn(["bun", "scripts/prune.ts", ...args], {
     cwd: BACKEND,
     env: { PATH: process.env.PATH ?? "", HOME: home, RM_ENV: "stage" },
@@ -105,52 +119,6 @@ async function runCommand(args: readonly string[]): Promise<{ code: number; out:
     child.exited,
   ]);
   return { code, out: stdout + stderr, home };
-}
-
-/** The command under a real pseudo-terminal, typing `steps` as their prompts appear. */
-async function runAtTerminal(
-  args: readonly string[],
-  steps: readonly { await: string; send: string }[],
-): Promise<{ code: number; screen: string; home: string }> {
-  const home = operatorHome();
-  const child = Bun.spawn(["script", "-qefc", ["bun", "scripts/prune.ts", ...args].join(" "), "/dev/null"], {
-    cwd: BACKEND,
-    env: { PATH: process.env.PATH ?? "", HOME: home, RM_ENV: "stage", TERM: "dumb" },
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  let screen = "";
-  const decoder = new TextDecoder();
-  const pump = (async () => {
-    for await (const chunk of child.stdout) screen += decoder.decode(chunk);
-  })();
-  const deadline = Date.now() + 60_000;
-  try {
-    let from = 0;
-    for (const step of steps) {
-      let at = screen.indexOf(step.await, from);
-      while (at < 0 && child.exitCode === null) {
-        if (Date.now() > deadline) throw new Error(`timed out waiting for "${step.await}"; terminal so far:\n${screen}`);
-        await Bun.sleep(25);
-        at = screen.indexOf(step.await, from);
-      }
-      if (at < 0) break;
-      from = at + step.await.length;
-      child.stdin.write(`${step.send}\r`);
-      await child.stdin.flush();
-    }
-    const code = await child.exited;
-    await pump;
-    return { code, screen, home };
-  } finally {
-    if (child.exitCode === null) child.kill("SIGKILL");
-    try {
-      child.stdin.end();
-    } catch {
-      // already closed with the process
-    }
-  }
 }
 
 // ── the planted rows ────────────────────────────────────────────────────────
@@ -271,13 +239,12 @@ describe("refusals: nothing is deleted", () => {
     expect(await state()).toEqual(before);
   });
 
-  test("with no terminal it refuses rather than read an owner password from anywhere, and journals the owner phase", async () => {
+  test("D61: with no rm_owner line in ~/.env it refuses naming the key and the file, and journals the owner phase", async () => {
     const before = await state();
     const receiptDir = tmp("receipt");
-    const { code, out } = await runCommand(["--receipt", join(receiptDir, "receipt.json")]);
+    const { code, out, home } = await runCommand(["--receipt", join(receiptDir, "receipt.json"), "--confirm-target", target()], null);
     expect(code).toBe(1);
-    expect(out).toContain("non-interactive (stdin is not a terminal)");
-    expect(out).not.toContain("password (not echoed");
+    expect(out).toContain(`${join(home, ".env")} has no rm_owner line`);
     expect(await state()).toEqual(before);
     const journals = readdirSync(receiptDir).filter((f) => f.startsWith("prune-journal-"));
     expect(journals.length).toBe(1);
@@ -290,33 +257,41 @@ describe("refusals: nothing is deleted", () => {
     expect(readdirSync(receiptDir).filter((f) => f.startsWith("receipt"))).toEqual([]);
   }, 60_000);
 
-  test("a mistyped rm_owner password refuses before the y is asked for", async () => {
+  test("a wrong rm_owner line refuses before the confirmation, and the refusal does not hold it", async () => {
     const before = await state();
     const receiptDir = tmp("receipt");
-    const run = await runAtTerminal(
-      ["--receipt", join(receiptDir, "receipt.json")],
-      [{ await: "rm_owner password (not echoed", send: "not-the-owner-password" }],
-    );
-    expect(run.code).toBe(1);
-    expect(run.screen).toContain("the rm_owner credential was not accepted");
-    expect(run.screen).not.toContain("type y to continue");
+    const wrong = `not-the-owner-${randomBytes(4).toString("hex")}`;
+    const { code, out } = await runCommand(["--receipt", join(receiptDir, "receipt.json"), "--confirm-target", target()], wrong);
+    expect(code).toBe(1);
+    expect(out).toContain("the rm_owner credential was not accepted");
+    expect(out).not.toContain(wrong);
     expect(await state()).toEqual(before);
   }, 60_000);
 
-  test("anything but an explicit y refuses: `yes` is not `y`", async () => {
+  test("D61: no --confirm-target refuses, naming the target to confirm, and deletes nothing", async () => {
     const before = await state();
     const receiptDir = tmp("receipt");
-    const run = await runAtTerminal(
-      ["--receipt", join(receiptDir, "receipt.json")],
-      [
-        { await: "rm_owner password (not echoed", send: OWNER_PASSWORD },
-        { await: "type y to continue", send: "yes" },
-      ],
-    );
-    expect(run.code).toBe(1);
-    expect(run.screen).toContain("was not confirmed (an explicit y is required)");
+    const { code, out } = await runCommand(["--receipt", join(receiptDir, "receipt.json")]);
+    expect(code).toBe(1);
+    expect(out).toContain(`no --confirm-target was given. Pass --confirm-target ${target()}`);
     expect(await state()).toEqual(before);
     expect(readdirSync(receiptDir).filter((f) => f.startsWith("receipt"))).toEqual([]);
+  }, 60_000);
+
+  test("D61: a wrong --confirm-target refuses, prints both, deletes nothing and writes no receipt", async () => {
+    const before = await state();
+    const receiptDir = tmp("receipt");
+    const wrong = target().replace(/\/[^/]*$/, "/robotmoney");
+    const { code, out } = await runCommand(["--receipt", join(receiptDir, "receipt.json"), "--confirm-target", wrong]);
+    expect(code).toBe(1);
+    expect(out).toContain(JSON.stringify(wrong));
+    expect(out).toContain(JSON.stringify(target()));
+    expect(out).not.toContain(OWNER_PASSWORD);
+    expect(await state()).toEqual(before);
+    expect(readdirSync(receiptDir).filter((f) => f.startsWith("receipt"))).toEqual([]);
+    const [journalName] = readdirSync(receiptDir).filter((f) => f.startsWith("prune-journal-"));
+    const journal = JSON.parse(readFileSync(join(receiptDir, journalName!), "utf8")) as PruneJournalFile;
+    expect(journal.phases.at(-1)).toMatchObject({ phase: "confirm", status: "refused" });
   }, 60_000);
 });
 
@@ -338,7 +313,7 @@ describe("the fence: a competing lock holder blocks the prune", () => {
         lockTimeoutMs: 3_000,
         receiptPath: join(dir, "receipt.json"),
         journal,
-        terminal: { interactive: true, ownerPassword: async () => OWNER_PASSWORD, answer: async () => "y" },
+        authority: { ownerPassword: OWNER_PASSWORD, envFile: "/fixture/.env", confirmTarget: "t:1/d", resolvedTarget: "t:1/d" },
         log: () => {},
       });
       // It is queued behind the competitor on its own lock connection.
@@ -378,7 +353,7 @@ describe("the fence: a competing lock holder blocks the prune", () => {
       lockTimeoutMs: 30_000,
       receiptPath: join(dir, "receipt.json"),
       journal,
-      terminal: { interactive: true, ownerPassword: async () => OWNER_PASSWORD, answer: async () => "y" },
+      authority: { ownerPassword: OWNER_PASSWORD, envFile: "/fixture/.env", confirmTarget: "t:1/d", resolvedTarget: "t:1/d" },
       log: () => {},
     });
     let settled = false;
@@ -397,18 +372,13 @@ describe("the fence: a competing lock holder blocks the prune", () => {
   }, 60_000);
 });
 
-describe("the run: typed rm_owner, y, fenced prune, receipt", () => {
+describe("the run: ~/.env's rm_owner, --confirm-target, fenced prune, receipt (D61)", () => {
   test("prunes only rows older than the window, never a tombstone or audit history, and writes the receipt and journal", async () => {
     const before = await state();
     const receiptDir = tmp("receipt");
     const receiptPath = join(receiptDir, "receipt.json");
-    const run = await runAtTerminal(
-      ["--receipt", receiptPath],
-      [
-        { await: "rm_owner password (not echoed", send: OWNER_PASSWORD },
-        { await: "type y to continue", send: "y" },
-      ],
-    );
+    const { code, out, home } = await runCommand(["--receipt", receiptPath, "--confirm-target", target()]);
+    const run = { code, screen: out, home };
     expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-2000) }).toEqual({ code: 0, tail: "" });
     expect(run.screen).toContain("swarm_stream_events: committed_at < <cutoff>");
     expect(run.screen).toContain("no security tombstone, no audit history");
@@ -455,6 +425,8 @@ describe("the run: typed rm_owner, y, fenced prune, receipt", () => {
     expect(run.screen).not.toContain(OWNER_PASSWORD);
     for (const file of readdirSync(run.home, { recursive: true }) as string[]) {
       const path = join(run.home, file);
+      // The ~/.env fixture is the one place the password lives (D61).
+      if (path === join(run.home, ".env")) continue;
       try {
         expect(readFileSync(path, "utf8")).not.toContain(OWNER_PASSWORD);
       } catch (error) {

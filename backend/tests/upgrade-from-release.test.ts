@@ -47,8 +47,8 @@
 //
 // The baseline predates 0081, so its database has no `deployment_identity`
 // table and no row to enroll it. The upgrade runs exactly as production's will (spec
-// §9.1, D55 (5)): `bun run migrate` as a PROCESS under a terminal, RM_ENV=prod,
-// the rm_owner password typed at the masked prompt, an explicit `y` — the one
+// §9.1, D55 (5), D61): `bun run migrate` as a PROCESS with no terminal,
+// RM_ENV=prod, `~/.env`'s rm_owner line and the exact `--confirm-target` — the one
 // run §4.3 allows without the row, because the ledger equals the baseline's
 // filename list exactly. It applies 0081 FIRST, with `production` in 0081's own
 // transaction (D55 (9)), then EVERY other pending file in filename order,
@@ -58,7 +58,7 @@
 // first manifest. Nothing is applied around the command. The refusals that
 // guard that exception are first-production-migrate.test.ts's subject; the one
 // pinned here is that no other caller reaches a release: `--migrate` and a run
-// with no typed confirmation refuse it before applying anything.
+// with no confirmation refuse it before applying anything.
 //
 // Everything asserted about data below is asserted AFTER that real run.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -86,11 +86,11 @@ import {
   fixtureBytes,
   loadBaseline,
   loadRelease,
-  migrateAtTerminal,
   releaseSteps,
   restoreLogins,
   restoreRoles,
   revokeLoginDefaults,
+  runMigrateCommand,
   saveRoles,
   type ReleaseFixture,
   type SavedRole,
@@ -118,11 +118,10 @@ function connect(database: string, role?: { name: string; password: string }): p
   return postgres(urlFor(database, role), { max: 1, onnotice: () => {} });
 }
 
-const MIGRATE_OPTIONS: MigrateGateOptions & { nonInteractive: boolean } = {
+const MIGRATE_OPTIONS: MigrateGateOptions = {
   caller: "smoke_flag",
   env: "stage",
   connection: "local",
-  nonInteractive: true,
 };
 
 /**
@@ -417,14 +416,14 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
       if (!predatesIdentity) return;
       // `--migrate` never has §4.3's exception.
       await expect(migrateAsOwner(db, name)).rejects.toThrow("no deployment_identity row");
-      // The run reached around the command, with no typed y behind it.
+      // The run reached around the command, with no confirmation behind it.
       const owner = connect(name, { name: "rm_owner", password: OWNER_PASSWORD });
       try {
         await expect(
           withTargetLock(urlFor(name), (lock) =>
-            runMigrate(owner, { caller: "operator", env: "prod", connection: "remote", nonInteractive: false, lock }),
+            runMigrate(owner, { caller: "operator", env: "prod", connection: "remote", lock }),
           ),
-        ).rejects.toThrow("no operator confirmed it");
+        ).rejects.toThrow("no run confirmed it");
       } finally {
         await owner.end({ timeout: 5 });
       }
@@ -433,18 +432,15 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
       expect(ledger.map((r) => r.name)).toEqual(release.migrations.map((m) => m.file));
     });
 
-    test("`bun run migrate` — RM_ENV=prod, a typed rm_owner, y — reaches the branch's version in one run", async () => {
+    test("`bun run migrate` — RM_ENV=prod, ~/.env's rm_owner, --confirm-target — reaches the branch's version in one run", async () => {
       // A release past 0081 would be enrolled already (§9.1 step 4); only one
       // that predates the table takes the pre-identity path.
       if (!predatesIdentity) await enroll(db, "production");
-      const run = await migrateAtTerminal({
+      const run = await runMigrateCommand({
         databaseUrl: new URL(urlFor(name)),
         readonlyPassword: READONLY_PASSWORD,
+        ownerPassword: OWNER_PASSWORD,
         rmEnv: "prod",
-        steps: [
-          { await: "rm_owner password (not echoed", send: OWNER_PASSWORD },
-          { await: "type y to continue", send: "y" },
-        ],
       });
       homes.push(run.home);
       expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-3000) }).toEqual({ code: 0, tail: "" });

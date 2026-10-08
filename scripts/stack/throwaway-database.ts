@@ -117,7 +117,6 @@ export async function prepareThrowawayDatabase(ctx: ThrowawayDatabaseContext): P
       credentials: { source: "instance", stateRoot, instance: ctx.instance.name },
       lock: held,
       stateDir: ctx.instance.stateDir,
-      nonInteractive: true,
     }, prepareChildEnv(process.env));
     if (!bootstrapped.ok) throw new Error(`bootstrap: ${bootstrapped.error}`);
     ctx.log(`schema bootstrapped from the snapshot (manifest ${String(bootstrapped.detail.manifest).slice(0, 12)})`);

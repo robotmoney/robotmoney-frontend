@@ -87,7 +87,7 @@ never rewritten (owner 2026-10-07): when the session needs a new base, cut a new
 |---|---|---|---|---|
 | SC.1 | Recovery matrix decided and signed before the cutover | policy 4.8 | prod | manual |
 | SC.2 | retired 2026-10-08: no human in the loop; the operator's authority is one recorded go (SC.3), decided by the owner, D61, issue agent-executed runbooks (1225) | — | — | — |
-| SC.3 | The operator's go for the run is recorded: release, commit and target, given before the run | `bun run release:run --go <file>` refuses without it | prod | gap, issue agent-executed runbooks (1225) |
+| SC.3 | The operator's go for the run is recorded: release, commit and target, given before the run | `bun run release:run --go <file>` refuses without it ([`release-run.md`](./release-run.md)) | prod | script |
 | SV.1 | Identity: `/api/version` equals the RC's `{api, commit}` | `curl` per release runbook | prod | manual |
 | SV.2 | `bun smoke:status` receipt: preflight green, readiness green | `bun smoke:status` | prod | script |
 | SV.3 | Product verification, **readonly tier only** | `bun run verify:live --instance rm_prod` | prod | script |

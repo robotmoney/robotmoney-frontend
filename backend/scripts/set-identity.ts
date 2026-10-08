@@ -26,16 +26,24 @@
 //                   step;
 //   - no table      refuses, naming the first migrate that creates it.
 //
+// UNDER RM_ENV=stage (D61 rule 2). The stage cutover rehearsal runs the same
+// step against a remote target the remote rehearsal pass enrolled
+// `rehearsal`: `expected: "rehearsal"` reads and reports that row the same way,
+// under the fence, and refuses anything else. The kind is the policy's: prod
+// expects `production`, stage expects `rehearsal`, never crosswise.
+//
 // Its caller holds the §2 session target lock and passes it here to be proven
-// held immediately before the read. The typed owner password arrives in the
-// URL and is never stored (§3, D47).
+// held immediately before the read. The owner password arrives in the URL
+// (read from `~/.env`, D61) and is never stored.
 import type { HeldTargetLock } from "../src/db/target-lock.ts";
 import type { DeploymentIdentityRow } from "../../scripts/lib/smoke-identity.ts";
 
 export interface SetIdentityOptions {
-  /** An `rm_owner` URL on a direct connection, carrying the typed password. Never logged. */
+  /** An `rm_owner` URL on a direct connection, carrying `~/.env`'s password. Never logged. */
   readonly ownerUrl: string;
-  /** The resolved `RM_ENV`; enrollAsProduction refuses anything but `prod`. */
+  /** The kind the policy names: `production` under prod (the default), `rehearsal` under stage (D61). */
+  readonly expected?: "production" | "rehearsal";
+  /** The resolved `RM_ENV`. `production` requires `prod`; `rehearsal` requires `stage`. */
   readonly rmEnv: string | undefined;
   /** The operator's explicit `y`. */
   readonly confirmed: boolean;
@@ -45,8 +53,8 @@ export interface SetIdentityOptions {
 }
 
 export interface SetIdentityResult {
-  /** What the row said: always `production`, the first migrate's write. */
-  readonly before: "production";
+  /** What the row said: the expected kind, the first migrate's write. */
+  readonly before: "production" | "rehearsal";
   /** The row as read, unchanged. */
   readonly row: DeploymentIdentityRow;
   /** Always false: step 4's write is the first migrate's (D55 (9)). */
@@ -61,6 +69,14 @@ export interface SetIdentityResult {
  * says `rehearsal`; the lock cannot be proven held.
  */
 export async function setProductionIdentity(options: SetIdentityOptions): Promise<SetIdentityResult> {
+  const expected = options.expected ?? "production";
+  const policy = expected === "production" ? "prod" : "stage";
+  if (options.rmEnv !== policy) {
+    throw new Error(
+      `deployment_identity: set-identity confirms \`${expected}\` only under RM_ENV=${policy} (D61: never crosswise); ` +
+        `RM_ENV is ${options.rmEnv === undefined ? "unset" : `"${options.rmEnv}"`}. Nothing was written.`,
+    );
+  }
   const { assertStillHeld, withMutationFence } = await import("../src/db/target-lock.ts");
   const { enrollAsProduction, isLoopbackHost, transactionIdentityStore } = await import("../../scripts/lib/smoke-identity.ts");
   if (options.lock) await assertStillHeld(options.lock, "set-identity");
@@ -81,10 +97,16 @@ export async function setProductionIdentity(options: SetIdentityOptions): Promis
           "set-identity never writes the row; find out how it went missing first. Nothing was written.",
       );
     }
-    if (before.row.kind !== "production") {
+    if (before.row.kind !== expected) {
       throw new Error(
-        "deployment_identity: this database is enrolled as `rehearsal`; promoting a rehearsal database to `production` is not a step of §9.1.",
+        expected === "production"
+          ? "deployment_identity: this database is enrolled as `rehearsal`; promoting a rehearsal database to `production` is not a step of §9.1."
+          : "deployment_identity: this database is enrolled as `production`; RM_ENV=stage never confirms a production database (§4.3, D61). Nothing was written.",
       );
+    }
+    if (expected === "rehearsal") {
+      // Read, reported, never rewritten: the row is the remote rehearsal pass's.
+      return { before: "rehearsal", row: before.row, written: false };
     }
     // The gates (RM_ENV=prod, the confirmation) and the no-rewrite rule are
     // enrollAsProduction's: on a `production` row it returns that row as found.

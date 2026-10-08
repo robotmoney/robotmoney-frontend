@@ -51,7 +51,7 @@ import {
   type BootHarness,
   type RunningBoot,
 } from "./smoke-boot-harness.ts";
-import { holdTokenFiles, onTerminal, repoRoot, startRemoteDb, type Operator, type RemoteDb } from "./remote-db-harness.ts";
+import { holdTokenFiles, repoRoot, startRemoteDb, type Operator, type RemoteDb } from "./remote-db-harness.ts";
 import { makeEncryptedBackup } from "../support/make-encrypted-backup.ts";
 import { instancePaths, PRODUCTION_INSTANCE, readStackState } from "../../lib/smoke-state.ts";
 import { readJournal } from "../../lib/smoke-journal.ts";
@@ -202,21 +202,19 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
     }, 120_000);
   }
 
-  test("criterion 46: a stage run WITH a typed owner password, on a terminal, refuses against production identity before the password is ever asked for", async () => {
-    // The typed password is not an input to the decision: the matrix refuses
-    // on the target's own answer, and the prompt that would take the password
-    // is never reached.
+  test("criterion 46: a stage run WITH the owner password (~/.env's rm_owner line and the exact --confirm-target, D61) refuses against production identity before the owner ever logs in", async () => {
+    // The owner password is not an input to the decision: the matrix refuses
+    // on the target's own answer, under the lock, and the migrate step that
+    // would use the password is never reached.
     db.setIdentity("production");
-    const op = db.operator("stage_typed");
-    const boot = onTerminal(remoteArgv(op, "rm_it_matrix_typed", ["--migrate"]), { ...op.env, RM_ENV: "stage" });
-    try {
-      const code = await boot.exited();
-      expect(code).not.toBe(0);
-      expect(boot.screen()).toContain("whose deployment_identity is production");
-      expectRefusedAtTheLock(op, "rm_it_matrix_typed", boot.screen());
-    } finally {
-      boot.kill();
-    }
+    const op = db.operator("stage_typed", [`rm_owner = ${db.passwords.rm_owner}`]);
+    const argv = remoteArgv(op, "rm_it_matrix_typed", ["--migrate", "--confirm-target", `${db.host}:${db.port}/${db.database}`]);
+    const r = Bun.spawnSync(argv, { cwd: repoRoot, env: { ...op.env, RM_ENV: "stage" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const out = `${r.stdout.toString()}${r.stderr.toString()}`;
+    expect(r.exitCode).not.toBe(0);
+    expect(out).toContain("whose deployment_identity is production");
+    expect(out).not.toContain(db.passwords.rm_owner);
+    expectRefusedAtTheLock(op, "rm_it_matrix_typed", out);
   }, 120_000);
 
   test("unset × remote: refuses before any connection or step, even against a rehearsal target", () => {

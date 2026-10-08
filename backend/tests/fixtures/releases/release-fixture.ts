@@ -22,12 +22,12 @@
 // (backend/src/db/migrate.ts at the tag) applies each file in its own
 // transaction and switches to `SET LOCAL ROLE rm_owner` from 0054 on.
 //
-// HOW IT IS MIGRATED. Through the operator's command, as a PROCESS under a
-// pseudo-terminal (`script`), so `process.stdin.isTTY` is true and the real
-// masked rm_owner prompt and the real `y/n` run: `migrateAtTerminal`, or
-// `startMigrateAtTerminal` for a run the test drives step by step and may
-// SIGKILL mid-run (identity-first-pass.test.ts). Nothing here reaches past the
-// command into the run.
+// HOW IT IS MIGRATED. Through the operator's command, as a PROCESS with no
+// terminal, the way the release runbook runs it (D61): `~/.env` holds the
+// `rm_owner` line and the command takes `--confirm-target`. `runMigrateCommand`
+// runs it to its end; `startMigrate` starts a run the test may SIGKILL mid-run
+// (identity-first-pass.test.ts). Nothing here reaches past the command into
+// the run.
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -197,16 +197,10 @@ export async function revokeLoginDefaults(db: postgres.Sql<{}>, login: string): 
   await db.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`);
 }
 
-/** What the operator types, in order: wait for `await` on the screen, then
- *  type `send` and Enter. */
-export interface TerminalStep {
-  readonly await: string;
-  readonly send: string;
-}
-
-export interface TerminalRun {
+/** A finished `bun run migrate`. */
+export interface MigrateRun {
   readonly code: number;
-  /** Everything the terminal showed, prompts included. */
+  /** Everything the command printed, stdout and stderr. */
   readonly screen: string;
   /** The operator's `$HOME`, holding the `.env`; the caller removes it. */
   readonly home: string;
@@ -215,41 +209,50 @@ export interface TerminalRun {
   readonly receiptPath: string;
 }
 
-/** The options every `bun run migrate` at a terminal takes. */
-export interface OperatorTerminalOptions {
+/** The options every `bun run migrate` takes here. */
+export interface OperatorOptions {
   readonly databaseUrl: URL;
   readonly readonlyPassword: string;
+  /** The `rm_owner = …` line of `~/.env` (D61), or `null` for no line. */
+  readonly ownerPassword: string | null;
   readonly rmEnv: string;
+  /** `--confirm-target`: the exact target by default, `null` for no flag,
+   *  or any other string to pass as given. */
+  readonly confirmTarget?: string | null;
+}
+
+/** The `host:port/database` `bun run migrate` resolves from the `.env` this fixture writes. */
+export function operatorTarget(url: URL): string {
+  return `${url.hostname}:${url.port || "5432"}/${url.pathname.slice(1)}`;
 }
 
 /**
- * A `bun run migrate` still running at its terminal: what it has shown so far,
- * a way to type into it, and a way to KILL it — SIGKILL to the migrate process
- * itself, found by its unique `--receipt` path, so no exit handler, lock
+ * A `bun run migrate` still running: what it has printed so far, and a way to
+ * KILL it — SIGKILL to the migrate process itself, so no exit handler, lock
  * release or journal close runs. That is a crash, not an interruption: the
  * kill-and-rerun gates of spec §10 W2 (D55 (9)) need the process to die
  * between two statements the way a lost host would.
  */
-export interface LiveTerminal {
+export interface LiveMigrate {
   readonly home: string;
   readonly receiptDir: string;
   readonly receiptPath: string;
   screen(): string;
   /** Wait for `text` to appear after offset `from`; returns where it ended. */
   waitFor(text: string, from?: number, timeoutMs?: number): Promise<number>;
-  type(text: string): Promise<void>;
-  /** SIGKILL the migrate process; resolves once the terminal has exited. */
+  /** SIGKILL the migrate process; resolves once it has exited. */
   kill(): Promise<void>;
   readonly exited: Promise<number>;
 }
 
 /**
- * Start `bun run migrate` (backend/scripts/migrate.ts) as an operator runs it:
- * a `$HOME/.env` holding the connection values and an `rm_readonly` line,
- * RM_ENV in the environment, a real terminal (`script`, so
- * `process.stdin.isTTY` is true and the real masked prompt and `y/n` run).
+ * Start `bun run migrate` (backend/scripts/migrate.ts) as the release runbook
+ * runs it (D61): no terminal (stdin closed), a `$HOME/.env` holding the
+ * connection values, an `rm_readonly` line and the `rm_owner` line, RM_ENV in
+ * the environment, and `--confirm-target` on the command line. The password
+ * is never an argument.
  */
-export function startMigrateAtTerminal(options: OperatorTerminalOptions): LiveTerminal {
+export function startMigrate(options: OperatorOptions): LiveMigrate {
   const home = mkdtempSync(join(tmpdir(), "rm-operator-"));
   const url = options.databaseUrl;
   writeFileSync(
@@ -260,33 +263,34 @@ export function startMigrateAtTerminal(options: OperatorTerminalOptions): LiveTe
       `database = ${url.pathname.slice(1)}`,
       "sslmode = disable",
       `rm_readonly = ${options.readonlyPassword}`,
+      ...(options.ownerPassword === null ? [] : [`rm_owner = ${options.ownerPassword}`]),
       "",
     ].join("\n"),
     "utf8",
   );
   const receiptDir = join(home, "receipts");
   const receiptPath = join(receiptDir, "migrate-receipt.json");
-  const command = `bun scripts/migrate.ts --receipt ${receiptPath}`;
-  const child = Bun.spawn(["script", "-qefc", command, "/dev/null"], {
+  const confirm = options.confirmTarget === undefined ? operatorTarget(url) : options.confirmTarget;
+  const argv = ["bun", "scripts/migrate.ts", "--receipt", receiptPath, ...(confirm === null ? [] : ["--confirm-target", confirm])];
+  if (options.ownerPassword !== null && argv.join(" ").includes(options.ownerPassword)) {
+    throw new Error("the owner password reached argv");
+  }
+  const child = Bun.spawn(argv, {
     cwd: BACKEND_DIR,
-    env: { PATH: process.env.PATH ?? "", HOME: home, RM_ENV: options.rmEnv, TERM: "dumb" },
-    stdin: "pipe",
+    env: { PATH: process.env.PATH ?? "", HOME: home, RM_ENV: options.rmEnv },
+    stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
   });
   let screen = "";
   const decoder = new TextDecoder();
-  const pump = (async () => {
-    for await (const chunk of child.stdout) screen += decoder.decode(chunk);
-  })();
+  const pump = async (stream: ReadableStream<Uint8Array>): Promise<void> => {
+    for await (const chunk of stream) screen += decoder.decode(chunk);
+  };
+  const pumps = Promise.all([pump(child.stdout), pump(child.stderr)]);
   const exited = (async () => {
     const code = await child.exited;
-    await pump;
-    try {
-      child.stdin.end();
-    } catch {
-      // already closed with the process
-    }
+    await pumps;
     return code;
   })();
   return {
@@ -299,28 +303,13 @@ export function startMigrateAtTerminal(options: OperatorTerminalOptions): LiveTe
       let at = screen.indexOf(text, from);
       while (at < 0) {
         if (child.exitCode !== null) throw new Error(`bun run migrate exited ${child.exitCode} before "${text}":\n${screen}`);
-        if (Date.now() > deadline) throw new Error(`timed out waiting for "${text}"; terminal so far:\n${screen}`);
+        if (Date.now() > deadline) throw new Error(`timed out waiting for "${text}"; output so far:\n${screen}`);
         await Bun.sleep(25);
         at = screen.indexOf(text, from);
       }
       return at + text.length;
     },
-    async type(text) {
-      child.stdin.write(text);
-      await child.stdin.flush();
-    },
     async kill() {
-      // The migrate process is `script`'s grandchild, in the pty's own session,
-      // so it is found by its command line, which carries this run's unique
-      // receipt path.
-      const found = Bun.spawnSync(["pgrep", "-f", `scripts/migrate.ts --receipt ${receiptPath}`], { stdout: "pipe" });
-      for (const pid of found.stdout.toString().split(/\s+/).filter(Boolean).map(Number)) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // already gone
-        }
-      }
       if (child.exitCode === null) child.kill("SIGKILL");
       await exited;
     },
@@ -328,47 +317,23 @@ export function startMigrateAtTerminal(options: OperatorTerminalOptions): LiveTe
   };
 }
 
-/**
- * `bun run migrate` run to its end at a terminal. Each step waits for its
- * prompt and types its answer; a process that exits before a prompt it would
- * have shown simply leaves the remaining steps untyped — which is how a
- * refusal at the gates looks from the terminal.
- */
-export async function migrateAtTerminal(
-  options: OperatorTerminalOptions & { readonly steps: readonly TerminalStep[]; readonly timeoutMs?: number },
-): Promise<TerminalRun> {
-  const run = startMigrateAtTerminal(options);
-  const deadline = Date.now() + (options.timeoutMs ?? 120_000);
+/** `bun run migrate` run to its end, with no terminal (D61 rule 1). */
+export async function runMigrateCommand(options: OperatorOptions & { readonly timeoutMs?: number }): Promise<MigrateRun> {
+  const run = startMigrate(options);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`bun run migrate did not exit in time; output so far:\n${run.screen()}`)),
+      options.timeoutMs ?? 120_000,
+    );
+  });
   let finished = false;
   try {
-    let from = 0;
-    for (const step of options.steps) {
-      let end: number;
-      try {
-        end = await run.waitFor(step.await, from, Math.max(0, deadline - Date.now()));
-      } catch (error) {
-        if ((error as Error).message.startsWith("bun run migrate exited")) break;
-        throw error;
-      }
-      from = end;
-      await run.type(`${step.send}\r`);
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const late = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`bun run migrate did not exit in time; terminal so far:\n${run.screen()}`)),
-        Math.max(0, deadline - Date.now()),
-      );
-    });
-    let code: number;
-    try {
-      code = await Promise.race([run.exited, late]);
-    } finally {
-      clearTimeout(timer);
-    }
+    const code = await Promise.race([run.exited, late]);
     finished = true;
     return { code, screen: run.screen(), home: run.home, receiptDir: run.receiptDir, receiptPath: run.receiptPath };
   } finally {
+    clearTimeout(timer);
     if (!finished) await run.kill();
   }
 }
