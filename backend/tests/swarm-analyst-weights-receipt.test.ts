@@ -47,6 +47,9 @@ import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { activeSubject, rid, sessionDate, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
 import { inHouseJudge, submitSigned, STUB_JUDGE_REPLY } from "./support/stub-judge.ts";
 import { provisionSchedulerToken, schedulerHeaders } from "./support/automation-auth.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // Per TEST: every scenario seats its own members, and SWARM_ROSTER_CAP is
 // enforced on each admission.
@@ -383,4 +386,127 @@ test("a rollup vector that is not the canonical four keeps its OWN, more specifi
   const res = await finalizeOverHttp(sessionId);
   expect(res.body.consensusReceipt.reason).toBe("weights_not_canonical_four");
   expect(res.body.receiptFailed).toBe(true);
+});
+
+// ── B20 at the cutover: a v0.5.x vault session holding a weightless take ────
+//
+// v0.5.4 accepted takes with no weight vector into `bucket_weights` sessions.
+// Migration 0114 seats a roster on a session v0.5.x left open, and (owner
+// decision, 2026-10-08) seats a member whose final take there carries no
+// canonical-four vector as `excused`, so the take leaves the frozen set the
+// rollup, the judge digest and the receipt all read. On the production-shaped
+// stage run of 2026-10-08 the in-flight `robotmoney-vault` session published
+// with no receipt (`weights_not_authored_by_every_take`) because 0114 seated
+// such filers `expected`. Both cases below take the real path: 0114's own text,
+// signed 0.6 takes, turnover, aggregate, the judge of record, finalize over HTTP.
+
+const MIGRATION_0114 = readFileSync(
+  join(import.meta.dir, "..", "migrations", "0114_seat_in_flight_unrostered_sessions.sql"),
+  "utf8",
+);
+
+/** 0114's text, as the migrate step applies it: one transaction, as rm_owner. */
+async function applyMigration0114(): Promise<void> {
+  const { default: postgres } = await import("postgres");
+  const db = postgres(process.env.DATABASE_URL!, { max: 1, onnotice: () => {} });
+  try {
+    await db.begin(async (tx) => {
+      await tx.unsafe("SET LOCAL ROLE rm_owner");
+      await tx.unsafe(MIGRATION_0114);
+    });
+  } finally {
+    await db.end({ timeout: 5 });
+  }
+}
+
+/**
+ * A `bucket_weights` session as v0.5.x left it at the cutover (no roster rows,
+ * no `brief_opens_at`, collecting, window open) holding one take v0.5.4
+ * accepted with no weight vector. 0114 is applied, two members file signed 0.6
+ * takes carrying the canonical four, and the session is closed, aggregated and
+ * put into judging. `beforeClose` runs between the migration and the 0.6 takes.
+ */
+async function legacyVaultSession(prefix: string, beforeClose?: (weightless: string) => Promise<void>) {
+  await setJudgeMode("enforce");
+  await sql`UPDATE swarm_judge_config SET min_takes = 2 WHERE id = 1`;
+  const subjectId = await activeSubject(prefix, 3600);
+  await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${subjectId}`;
+  const weightless = await member();
+  const weighted = [await member(), await member()];
+  const [row] = (await fixtureDb`
+    INSERT INTO swarm_sessions (subject_id, subject_name, state, window_closes_at)
+    VALUES (${subjectId}, ${subjectId}, 'collecting', now() + interval '6 hours')
+    RETURNING id`) as unknown as { id: string }[];
+  const sessionId = row!.id;
+  await fixtureDb`
+    INSERT INTO swarm_recommendations (session_id, member_id, subject_id, date, nonce, stance, confidence, body, payload, signature, verified)
+    SELECT id, ${weightless.id}, subject_id, date, ${rid("n")}, 'neutral', 0.5, 'a v0.5.4 take with prose only',
+           ${fixtureDb.json({ stance: "neutral", confidence: 0.5, body: "a v0.5.4 take with prose only" })}, 'sig', true
+      FROM swarm_sessions WHERE id = ${sessionId}`;
+
+  await applyMigration0114();
+  const seats = await sql<{ member_id: string; status: string }[]>`
+    SELECT member_id, status FROM swarm_session_members WHERE session_id = ${sessionId}`;
+  if (beforeClose) await beforeClose(weightless.id);
+
+  const date = sessionDate(await sessionRow(sessionId));
+  await submit(weighted[0]!, date, subjectId, full([0.25, 0.25, 0.25, 0.25]));
+  await submit(weighted[1]!, date, subjectId, full([0.4, 0.3, 0.2, 0.1]));
+
+  const turned = await epoch.turnOverEpoch(subjectId, sessionId);
+  if (!turned.ok) throw new Error(`turnOverEpoch: ${JSON.stringify(turned)}`);
+  const aggregated = await epoch.aggregateEpoch(sessionId);
+  if (!aggregated.ok) throw new Error(`aggregateEpoch: ${JSON.stringify(aggregated)}`);
+  const requested = await epoch.requestJudging(sessionId);
+  if (!requested.ok) throw new Error(`requestJudging: ${JSON.stringify(requested)}`);
+  return { sessionId, weightless: weightless.id, weighted: weighted.map((m) => m.id), seats };
+}
+
+test("B20: 0114 excuses the v0.5.x weightless filer, so the in-flight vault session publishes its receipt", async () => {
+  const { sessionId, weightless, weighted, seats } = await legacyVaultSession("b20-vault");
+  await judgedByRecord(sessionId);
+
+  const res = await finalizeOverHttp(sessionId);
+  expect(res.status).toBe(200);
+  expect(res.body.outcome).toBe("judged");
+  expect(res.body.consensusReceipt, JSON.stringify(res.body)).toEqual({ published: true });
+  expect(res.body.receiptFailed).toBeUndefined();
+
+  // As 0114 seated them, before any 0.6 take: the weightless filer excused, the rest expected.
+  expect(seats.find((s) => s.member_id === weightless)?.status).toBe("excused");
+  for (const id of weighted) expect(seats.find((s) => s.member_id === id)?.status).toBe("expected");
+
+  const stored = await getConsensusReceipt(sessionId);
+  expect(stored!.verified).toBe(true);
+  const receipt = stored!.receipt as {
+    weights: { bucket: string; weight_bps: number }[];
+    analyst_signatures: { canonical_submission: string }[];
+  };
+  expect(receipt.weights.reduce((n, w) => n + w.weight_bps, 0)).toBe(10_000);
+  // The receipt attests to the two weighted takes, and the excused take is not among them.
+  expect(receipt.analyst_signatures.length).toBe(2);
+  for (const entry of receipt.analyst_signatures) {
+    expect((JSON.parse(entry.canonical_submission) as { memberId?: string }).memberId).not.toBe(weightless);
+  }
+  // The excuse is audited the way the forced excuse is.
+  const [audit] = await sql<{ actor: string; scope: { sessionId: string; memberId: string; state: string } }[]>`
+    SELECT actor, scope FROM audit_log WHERE action = 'roster_excuse_forced' AND scope->>'sessionId' = ${sessionId}`;
+  expect(audit!.actor).toBe("migration 0114");
+  expect(audit!.scope.memberId).toBe(weightless);
+  expect(audit!.scope.state).toBe("collecting");
+});
+
+test("B20 red control: the same session with the weightless filer seated expected is refused weights_not_authored_by_every_take", async () => {
+  const { sessionId } = await legacyVaultSession("b20-vault-red", async (weightless) => {
+    // What 0114 did before the owner decision: every filer seated expected.
+    await fixtureDb`
+      UPDATE swarm_session_members SET status = 'expected', excused_at = NULL, reason = NULL
+       WHERE member_id = ${weightless}`;
+  });
+  await judgedByRecord(sessionId);
+
+  const res = await finalizeOverHttp(sessionId);
+  expect(res.body.consensusReceipt).toEqual({ published: false, reason: "weights_not_authored_by_every_take" });
+  expect(res.body.receiptFailed).toBe(true);
+  expect((await sql`SELECT 1 FROM swarm_consensus_receipts WHERE session_id = ${sessionId}`).length).toBe(0);
 });
