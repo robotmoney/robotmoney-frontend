@@ -8,18 +8,25 @@
 //   the operator's admin service token instead. None is reachable through
 //   `bun smoke`."
 //
+// As amended by D61: the typed `rm_owner` is `~/.env`'s `rm_owner` line, and
+// the `y/n` is `--confirm-target <host:port/database>`. Nothing prompts.
+//
 // scripts/tests/unit/prod-init.test.ts grades every gate with the effects
 // injected. This file runs the COMMAND — `bun scripts/prod-init.ts <command>`,
-// as a process under a pseudo-terminal, through `realDeps` — against real
-// services, and reads what it left:
+// as a process with no terminal, through `realDeps` — against real services,
+// and reads what it left:
 //
 //   - a Postgres the policy treats as REMOTE (./remote-db-harness.ts: published
 //     on the Docker bridge address, provisioned as §9.1 leaves production), its
-//     connection in the operator's `$HOME/.env` with an `rm_readonly` line and
-//     nothing that can write;
+//     connection in the operator's `$HOME/.env` with the `rm_readonly`,
+//     `rm_owner` and `doadmin` lines (D61);
 //   - the real api (`bun run src/api/index.ts`, logged in as rm_app), for the
-//     `rotate-key` admin route;
-//   - the operator at the terminal, typing rm_owner and `y`.
+//     `rotate-key` admin route.
+//
+// enable-owner-login (§9.1 step 1, D61): rm_owner made NOLOGIN by the
+// container's superuser, then the command run as `doadmin` (a superuser role
+// made for this file, the provider's stand-in): one `ALTER ROLE rm_owner
+// LOGIN`, the login proved, a receipt; run again, it alters nothing.
 //
 // set-identity (§9.1 step 4). Under D55 (9) the first production migrate
 // writes `production` in 0081's own transaction (backend/tests/
@@ -46,7 +53,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { join } from "node:path";
-import { onTerminal, repoRoot, startRemoteDb, type Operator, type RemoteDb } from "./remote-db-harness.ts";
+import { repoRoot, startRemoteDb, type Operator, type RemoteDb } from "./remote-db-harness.ts";
 import { instancePaths, PRODUCTION_INSTANCE, SERVICE_TOKEN_HOLDERS } from "../../lib/smoke-state.ts";
 
 const BACKEND = join(repoRoot, "backend");
@@ -68,9 +75,14 @@ let apiPort = 0;
 let api: ReturnType<typeof Bun.spawn> | null = null;
 const apiLog: string[] = [];
 
+/** The doadmin stand-in's password: a `doadmin` line in ~/.env (D61). */
+const DOADMIN_PASSWORD = `doadmin-${Math.random().toString(36).slice(2)}`;
+
 beforeAll(async () => {
   db = await startRemoteDb("prodinit");
-  op = db.operator("prodinit");
+  // The provider's doadmin, stood in for by a superuser role of that name.
+  db.superuser(`CREATE ROLE doadmin LOGIN SUPERUSER PASSWORD '${DOADMIN_PASSWORD}';`);
+  op = db.operator("prodinit", [`rm_owner = ${db.passwords.rm_owner}`, `doadmin = ${DOADMIN_PASSWORD}`]);
 }, 180_000);
 
 afterAll(async () => {
@@ -81,26 +93,19 @@ afterAll(async () => {
   db?.close();
 });
 
-/** `bun scripts/prod-init.ts <argv>` at a terminal under RM_ENV=prod, answering its prompts. */
-async function prodInit(
-  argv: readonly string[],
-  answers: { readonly password?: string; readonly y?: string },
-): Promise<{ code: number; screen: string }> {
-  const term = onTerminal(["bun", "--no-env-file", "scripts/prod-init.ts", ...argv], { ...op.env, RM_ENV: "prod" });
-  try {
-    if (answers.password !== undefined) {
-      await term.waitFor("rm_owner password");
-      await term.type(`${answers.password}\r`);
-    }
-    if (answers.y !== undefined) {
-      await term.waitFor("Type y to continue");
-      await term.type(`${answers.y}\r`);
-    }
-    const code = await term.exited();
-    return { code, screen: term.screen() };
-  } finally {
-    term.kill();
-  }
+/** The target ~/.env resolves to, as the harness writes it. */
+const target = (): string => `${db.host}:${db.port}/${db.database}`;
+
+/** `bun scripts/prod-init.ts <argv>` with no terminal under RM_ENV=prod (D61).
+ *  `confirm` is `--confirm-target`: the exact target by default, `null` for none. */
+async function prodInit(argv: readonly string[], confirm: string | null = target()): Promise<{ code: number; screen: string }> {
+  const full = ["bun", "--no-env-file", "scripts/prod-init.ts", ...argv, ...(confirm === null ? [] : ["--confirm-target", confirm])];
+  for (const secret of [db.passwords.rm_owner, DOADMIN_PASSWORD]) expect(full.join(" ")).not.toContain(secret);
+  const child = Bun.spawn(full, { cwd: repoRoot, env: { ...op.env, RM_ENV: "prod" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  const screen = stdout + stderr;
+  for (const secret of [db.passwords.rm_owner, DOADMIN_PASSWORD]) expect(screen).not.toContain(secret);
+  return { code, screen };
 }
 
 const paths = () => instancePaths(op.root, PRODUCTION_INSTANCE);
@@ -115,31 +120,31 @@ function receipts(command: string): Record<string, any>[] {
 }
 
 describe("§9.1 step 4 — `prod-init set-identity` confirms the production row and never writes one", () => {
-  test("a table with NO row refuses before any prompt, and writes nothing", async () => {
+  test("a table with NO row refuses before anything is written", async () => {
     db.setIdentity(null);
-    const run = await prodInit(["set-identity"], {});
+    const run = await prodInit(["set-identity"]);
     expect(run.code).not.toBe(0);
     expect(run.screen).toContain("reads `missing`");
     expect(run.screen).toContain("bun run migrate");
-    expect(run.screen).not.toContain("rm_owner password");
     expect(db.superuser("SELECT count(*) FROM deployment_identity")).toBe("0");
     expect(receipts("set-identity")).toEqual([]);
   }, 120_000);
 
-  test("an answer that is not y refuses after the password, and writes nothing", async () => {
+  test("D61: a wrong --confirm-target refuses, prints both, and writes nothing", async () => {
     db.setIdentity("production");
     const before = db.superuser("SELECT written_at::text FROM deployment_identity");
-    const run = await prodInit(["set-identity"], { password: db.passwords.rm_owner, y: "yes" });
+    const wrong = `${db.host}:${db.port}/${db.database}_other`;
+    const run = await prodInit(["set-identity"], wrong);
     expect(run.code).not.toBe(0);
-    expect(run.screen).toContain("not y");
-    expect(run.screen).not.toContain(db.passwords.rm_owner);
+    expect(run.screen).toContain(JSON.stringify(wrong));
+    expect(run.screen).toContain(JSON.stringify(target()));
     expect(db.superuser("SELECT written_at::text FROM deployment_identity")).toBe(before);
     expect(receipts("set-identity")).toEqual([]);
   }, 120_000);
 
-  test("RM_ENV=prod, a typed rm_owner, y and the target lock: the row is read through rm_owner inside the fence, reported, unchanged, and receipted", async () => {
+  test("RM_ENV=prod, ~/.env's rm_owner, the exact --confirm-target and the target lock: the row is read through rm_owner inside the fence, reported, unchanged, and receipted", async () => {
     const before = db.superuser("SELECT kind || '|' || written_by || '|' || written_at::text FROM deployment_identity");
-    const run = await prodInit(["set-identity"], { password: db.passwords.rm_owner, y: "y" });
+    const run = await prodInit(["set-identity"]);
     expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-2000) }).toEqual({ code: 0, tail: "" });
     expect(run.screen).not.toContain(db.passwords.rm_owner);
     // Not rewritten: the same row, to the microsecond.
@@ -158,9 +163,46 @@ describe("§9.1 step 4 — `prod-init set-identity` confirms the production row 
   }, 120_000);
 });
 
+describe("§9.1 step 1 — `prod-init enable-owner-login` flips rm_owner to LOGIN through doadmin (D61)", () => {
+  const canLogin = (): string => db.superuser("SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'");
+
+  test("a NOLOGIN rm_owner: one ALTER ROLE rm_owner LOGIN, the login proved with ~/.env's password, a receipt", async () => {
+    db.setIdentity("production");
+    db.superuser("ALTER ROLE rm_owner NOLOGIN;");
+    expect(canLogin()).toBe("f");
+    const run = await prodInit(["enable-owner-login"]);
+    expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-2000) }).toEqual({ code: 0, tail: "" });
+    expect(canLogin()).toBe("t");
+    const [receipt] = receipts("enable-owner-login");
+    expect(receipt).toMatchObject({ command: "enable-owner-login", outcome: "completed", detail: { rolcanloginBefore: false, altered: true, verified: true } });
+    const text = JSON.stringify(receipt);
+    expect(text).not.toContain(db.passwords.rm_owner);
+    expect(text).not.toContain(DOADMIN_PASSWORD);
+  }, 120_000);
+
+  test("already LOGIN: verified only, nothing altered, a second receipt", async () => {
+    const run = await prodInit(["enable-owner-login"]);
+    expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-2000) }).toEqual({ code: 0, tail: "" });
+    expect(receipts("enable-owner-login").at(-1)).toMatchObject({ detail: { rolcanloginBefore: true, altered: false, verified: true } });
+  }, 120_000);
+
+  test("a wrong --confirm-target refuses and alters nothing", async () => {
+    db.superuser("ALTER ROLE rm_owner NOLOGIN;");
+    try {
+      const count = receipts("enable-owner-login").length;
+      const run = await prodInit(["enable-owner-login"], "elsewhere:5432/robotmoney");
+      expect(run.code).not.toBe(0);
+      expect(canLogin()).toBe("f");
+      expect(receipts("enable-owner-login")).toHaveLength(count);
+    } finally {
+      db.superuser("ALTER ROLE rm_owner LOGIN;");
+    }
+  }, 120_000);
+});
+
 describe("§9.1 step 5 — `prod-init provision-tokens` writes the three holders' rows and token files", () => {
-  test("a typed rm_owner, y and the target lock: three rows in the store, three 0600 files whose hashes are the rows', one receipt", async () => {
-    const run = await prodInit(["provision-tokens"], { password: db.passwords.rm_owner, y: "y" });
+  test("~/.env's rm_owner, the exact --confirm-target and the target lock: three rows in the store, three 0600 files whose hashes are the rows', one receipt", async () => {
+    const run = await prodInit(["provision-tokens"]);
     expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-2000) }).toEqual({ code: 0, tail: "" });
     const rows = db
       .superuser(`SELECT holder || '|' || token_hash || '|' || created_by FROM automation_tokens WHERE instance = '${PRODUCTION_INSTANCE}' ORDER BY holder`)
@@ -290,7 +332,7 @@ describe("§9.1 step 6 — `prod-init rebind-members` rotates each member to its
     writeFileSync(credentialPath, JSON.stringify({ agents: entriesOf("agent"), judges: entriesOf("judge") }, null, 2), { mode: 0o600 });
     chmodSync(credentialPath, 0o600);
 
-    const run = await prodInit(["rebind-members", "--credentials", credentialPath, "--api", `http://127.0.0.1:${apiPort}`], { y: "y" });
+    const run = await prodInit(["rebind-members", "--credentials", credentialPath, "--api", `http://127.0.0.1:${apiPort}`]);
     expect({ code: run.code, tail: run.code === 0 ? "" : `${run.screen.slice(-2000)}\n${apiLog.join("").slice(-2000)}` }).toEqual({ code: 0, tail: "" });
     // No rm_owner for an API write (§4.3).
     expect(run.screen).not.toContain("rm_owner password");
