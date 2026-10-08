@@ -18,8 +18,10 @@
 
 This runbook runs **every check in [`release-standing-runbook.md`](./release-standing-runbook.md)**
 as it stands at `d84f4a2c`. It adds the 0.6.0-specific checks below. It cites standing checks by ID.
-**Exceptions:** none granted by the owner. The gaps listed under the table are open. Each one needs
-a tool or a recorded owner exception before the production go.
+**Exceptions** (owner, 2026-10-08): SP.6 and SV.5 for the published AUM figure, and SW.2 over the
+watch window. v0.6.0 ships with those rows unscripted. Issue agent-executed runbooks (1225) brings
+them back as runner steps. The twin is **not** waived: the owner chose a short twin rerun at the
+release commit (section 7.3).
 
 Each standing ID maps to the runner steps that satisfy it (the `standing` field in `steps.ts`):
 
@@ -30,19 +32,19 @@ Each standing ID maps to the runner steps that satisfy it (the `standing` field 
 | SP.3 real ledger | R2.3 | `baseline.ts` through `rm_readonly` |
 | SP.4 smoke preflight | R6.7a, R6.7d | Preflight runs inside each boot |
 | SP.5 log baseline | R2.5 | Passes on a non-zero exit only with `--triage` covering every finding |
-| SP.6 product baseline | R2.3 | Counts and size. The published AUM figure has no step (gap) |
+| SP.6 product baseline | R2.3 | Counts and size. The published AUM figure: owner exception for v0.6.0 |
 | SP.7 code gate | none | CI on the pinned commit, read before the go (section 4) |
 | SP.8 prod runs only what stage passed | the runner's start check | `--stage-journal` names a passed stage run |
 | SR.0 fresh dump | R2.1 | A new dated directory every run |
-| SR.1 twin boots, every member seated | none | The optional twin (section 7.3) |
+| SR.1 twin boots, every member seated | none | The short twin rerun (section 7.3), required for v0.6.0 |
 | SR.2 readiness | R6.7b, R6.9, R7.2 on the stage target | |
-| SR.3 product verification | R7.3 on the stage target | Readonly tier. The full tier runs on the optional twin only |
+| SR.3 product verification | R7.3 on the stage target | Readonly tier. The full tier runs on the short twin rerun (section 7.3) |
 | SR.4 log gate on stage | W1 on the stage target | `prod:gate --mode post-release` since READY. `twin:gate` runs on the optional twin only |
 | SR.5 interruption resumes | the runner's resume (`--run`, `--from`) | Evidence of 2026-10-06 and 2026-10-07 stands (section 7.4) |
 | SR.6 rollback rehearsal | R2.4r, S8.1 | Restore time per run. Old-code behavior is B13 |
 | SR.7 standing invariants | R7.3b on the stage target | |
 | SR.8 rehearsal report | the two passed stage journals | Section 7.2 |
-| SR.9 accelerated schedule | none | The optional twin (section 7.3). The stage target keeps 6 h epochs |
+| SR.9 accelerated schedule | none | The short twin rerun (section 7.3), required for v0.6.0. The stage target keeps 6 h epochs |
 | SR.10 cutover rehearsal, twice | two stage runs, all steps | Section 7 |
 | SC.1 recovery matrix signed | the go file's `recovery:` key | Section 8 |
 | SC.2 | retired 2026-10-08 (D61) | |
@@ -51,19 +53,18 @@ Each standing ID maps to the runner steps that satisfy it (the `standing` field 
 | SV.2 status receipt | R6.7b, R6.9, R7.2 | |
 | SV.3 product verification, readonly | R7.3 | |
 | SV.4 log verdict after release | R7.3a | |
-| SV.5 counts only grow | R7.5 | The published AUM figure has no step (gap) |
+| SV.5 counts only grow | R7.5 | The published AUM figure: owner exception for v0.6.0 |
 | SV.6 host guards | R6.2, R7.7 | |
 | SW.1 one full session cycle | W1, R7.4a | Not before R6.9 plus 6 h |
-| SW.2 invariants over the window | R7.3b | Runs at READY only (gap: no watch-time run) |
+| SW.2 invariants over the window | R7.3b | Runs at READY only. The watch-time run: owner exception for v0.6.0 |
 | SW.3 tag and report | W3 | The report stays manual (section 11) |
 
-Open gaps against the standing runbook:
+Gaps against the standing runbook, each decided by the owner on 2026-10-08:
 
-- **AUM (SP.6, SV.5).** No step records or compares the published AUM figure.
-- **SW.2 over the window.** R7.3b runs `soak:checks` at READY. No step reruns it at the watch.
-- **SR.1, SR.9 and the full tier of SR.3.** Only the twin exercises them. D61 does not require the
-  twin. Policy §4.4 still names a twin rehearsal. Either the owner records an exception, or the
-  optional twin of section 7.3 runs.
+- **AUM (SP.6, SV.5).** No step records or compares the published AUM figure. Recorded exception.
+- **SW.2 over the window.** R7.3b runs `soak:checks` at READY. No step reruns it at the watch. Recorded exception.
+- **SR.1, SR.9 and the full tier of SR.3.** Only the twin exercises them. The owner chose a short twin
+  rerun at the release commit: accelerated epochs for about 45 minutes, then torn down.
 
 ## Why this runbook is not like the 0.5.x ones
 
@@ -381,11 +382,14 @@ operator's go/no-go.
 The stage target keeps production's 6 h epochs. W1 and R7.4a therefore grade the real schedule:
 B2, B3, B5 and B20 are proven there.
 
-### 7.3 Optional: the twin rehearsal (not required by D61)
+### 7.3 The short twin rerun (required for v0.6.0, owner 2026-10-08)
 
 The twin is a `--local dump` instance: Docker Postgres that smoke owns, restored from a fresh dump,
 every active member seated on a spoofed key, with short epochs set by `twin:accelerate` (standing
-SR.1, SR.9). It is an extra for roster and judge checks that the 6 h stage target sees only slowly:
+SR.1, SR.9). It covers the roster and judge checks that the 6 h stage target cannot: the four external members
+never reach a stage database, so only the twin seats every active member. For v0.6.0 it runs once at
+the release commit, accelerated to 900 s epochs for about 45 minutes, then it is torn down (owner rule:
+no stage stack keeps spending inference credits). It checks:
 every member seated (`twin-roster:every-active-member-seated`), the full verify tier (SR.3), the
 twin gate (SR.4) and the judge on short epochs (B17). It is not the cutover rehearsal and proves
 nothing about production's step list. The standing runbook's SR rows name its tools. Tear it down
