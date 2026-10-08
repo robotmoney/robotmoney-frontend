@@ -140,9 +140,28 @@
   },
   {
     "id": "external-wallet-balances-live-read-degraded",
-    "match": "wallet-balances: \\w+ live read failed, degrading to last-persisted sample",
+    "match": "wallet-balances: [\\w<>-]+ live read failed, degrading to last-persisted sample",
     "class": "external",
-    "reason": "A wallet-balances live price read failed (production 2026-10-01: GeckoTerminal HTTP 429, retry budget exhausted, the keyless tier v0.5.4 replaces) and the code degrades to the last persisted sample. The cause is on its own stack lines, which the inventory does not join to this headline."
+    "reason": "A wallet-balances leg could not be valued and the code degrades it to the last persisted sample (backend/src/chain/wallet-balances.ts). Two causes seen: a live price read failing (production 2026-10-01: GeckoTerminal HTTP 429, retry budget exhausted, the keyless tier v0.5.4 replaces), and the Base RPC multicall timing out (stage 2026-10-08T09:03:12Z: every leg of one sample, the strategy sleeves ZYFAI-SS1 and GIZA-SS1 included). The symbol may hold a hyphen and digits. The cause is on its own lines, which the inventory does not join to this headline."
+  },
+  {
+    "id": "external-wallet-balances-multicall-degraded",
+    "match": "^\\s*wallet-balances: batched round-[\\w<>]+( NAV)? multicall failed, degrading all chain legs to stale:",
+    "class": "external",
+    "reason": "The wallet-balances sampler's one Base RPC multicall request threw (stage 2026-10-08T09:03:12Z: the request was aborted at its timeout, a DOMException AbortError). The code marks every chain leg of that sample stale and each leg then degrades to its last persisted sample (backend/src/chain/wallet-valuation.ts aggregateAcrossBlocks); nothing is fabricated and the next scheduled sample reads again. A provider timeout, not a defect."
+  },
+  {
+    "id": "external-wallet-balances-chain-read-unavailable",
+    "match": "^\\s*error: [\\w<>-]+ chain read unavailable$",
+    "class": "external",
+    "reason": "The Error a wallet-balances leg carries when its chain read degraded upstream (backend/src/chain/wallet-valuation.ts valueLeg: new Error(`${symbol} chain read unavailable`)); bun prints it under the 'live read failed, degrading to last-persisted sample' headline, which is classified on its own. Only that one code path builds this message."
+  },
+  {
+    "id": "fragment-wallet-balances-abort-domexception",
+    "match": "^\\s*(stack: \"abort@\\[native code\\]\"|message: \"The operation was aborted\\.\"),$",
+    "source": "worker-analytics",
+    "class": "fragment",
+    "reason": "Two fields of the DOMException AbortError bun prints under the 'wallet-balances: batched round-1 multicall failed' headline when the Base RPC request hits its timeout (stage 2026-10-08T09:03:12Z). The headline is classified on its own. The inventory cannot join a field to its headline, so this rule is held to the exact two field lines and to the worker-analytics container, the only service that runs the live wallet-balances sampler (the api serves persisted samples)."
   },
   {
     "id": "external-market-data-timeout",
