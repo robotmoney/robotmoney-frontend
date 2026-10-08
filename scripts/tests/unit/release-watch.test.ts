@@ -42,16 +42,48 @@ describe("the watch length is target data; the step list stays one list", () => 
     expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours]))
       .toEqual([["W1", "R6.9", "watchHours"], ["R7.4a", "R6.9", "watchHours"]]);
   });
-  test("stage and prod both resolve to the derived 10 h, in the template and in the rendered step", () => {
-    for (const name of ["stage", "prod"]) {
+  test("prod waits the derived 10 h graded; stage waits 15 minutes deferred (owner decision 2026-10-08)", () => {
+    for (const [name, hours, sessions] of [["prod", 10, "graded"], ["stage", 0.25, "deferred"]] as const) {
       const t = loadTarget(join(targetsDir, `${name}.json`));
-      expect(t.watchHours).toBe(DEFAULT_WATCH_HOURS);
+      expect(t.watchHours).toBe(hours);
+      expect(t.watchSessions).toBe(sessions);
       for (const id of ["W1", "R7.4a"]) {
         const step = RELEASE_STEPS.find((s) => s.id === id)!;
-        expect(notBeforeOf(step, t)).toEqual({ afterStep: "R6.9", hours: 10 });
-        expect(renderStep(step, t, templateValues(t, "a".repeat(40), "20261008T000000Z")).notBefore).toEqual({ afterStep: "R6.9", hours: 10 });
+        expect(notBeforeOf(step, t)).toEqual({ afterStep: "R6.9", hours });
+        expect(renderStep(step, t, templateValues(t, "a".repeat(40), "20261008T000000Z")).notBefore).toEqual({ afterStep: "R6.9", hours });
       }
     }
+  });
+  test("W1 and R7.4a render --sessions from the target: graded on prod, deferred on stage", () => {
+    const rendered = (name: string, id: string) => {
+      const t = loadTarget(join(targetsDir, `${name}.json`));
+      return renderStep(RELEASE_STEPS.find((s) => s.id === id)!, t, templateValues(t, "a".repeat(40), "20261008T000000Z")).remote;
+    };
+    for (const id of ["W1", "R7.4a"]) {
+      expect(rendered("prod", id)).toContain(" --sessions graded ");
+      expect(rendered("prod", id)).not.toContain("deferred");
+      expect(rendered("stage", id)).toContain(" --sessions deferred ");
+    }
+    expect(rendered("prod", "W1")).toContain("bun run prod:gate --mode post-release");
+    expect(rendered("prod", "W1")).not.toContain("--defer-sessions");
+    expect(rendered("stage", "R7.4a")).toContain("bun scripts/release/schedule-parity.ts");
+  });
+  test("the step-list hash is the same for both targets: the templates carry {watchSessions}, never its value", () => {
+    for (const s of RELEASE_STEPS) {
+      const text = JSON.stringify(s.cmds);
+      expect(text).not.toContain("graded");
+      expect(text).not.toContain("\"deferred\"");
+    }
+    const before = stepListHash();
+    // Rendering for either target leaves the hash untouched; it takes no target at all.
+    for (const name of ["stage", "prod"]) {
+      const t = loadTarget(join(targetsDir, `${name}.json`));
+      for (const s of RELEASE_STEPS) renderStep(s, t, templateValues(t, "a".repeat(40), "20261008T000000Z"));
+    }
+    expect(stepListHash()).toBe(before);
+    // red control: hard-coding the value into the template changes the hash.
+    const forked = RELEASE_STEPS.map((s) => (s.id === "W1" ? { ...s, cmds: [s.cmds[0]!.map((a) => (a === "{watchSessions}" ? "deferred" : a))] } : s));
+    expect(stepListHash(forked)).not.toBe(before);
   });
   test("a fixed-hours wait resolves to itself; a step without a wait resolves to none", () => {
     expect(notBeforeOf({ notBefore: { afterStep: "X", hours: 3 } }, { watchHours: 99 })).toEqual({ afterStep: "X", hours: 3 });
@@ -66,15 +98,45 @@ describe("the watch length is target data; the step list stays one list", () => 
     const r = validateTarget("stage", raw);
     expect("target" in r && r.target.watchHours).toBe(12);
   });
-  test("red: a target file may lengthen the watch, never shorten it below the derived bound", () => {
+  test("red: production may lengthen the watch, never shorten it below the derived bound", () => {
     const raw = JSON.parse(readFileSync(join(targetsDir, "prod.json"), "utf8"));
     raw.confirmTarget = "db.example.com:25060/rm";
-    for (const bad of [6, 9.5, 0, -1, "10"]) {
+    for (const bad of [0.25, 6, 9.5, 0, -1, "10"]) {
       raw.watchHours = bad;
       const r = validateTarget("prod", raw);
       expect("errors" in r && r.errors.join("\n")).toContain("watchHours");
     }
     raw.watchHours = 10;
     expect("errors" in validateTarget("prod", raw)).toBe(false);
+    raw.watchHours = 12;
+    expect("errors" in validateTarget("prod", raw)).toBe(false);
+  });
+  test("red: production never defers sessions, even with a long watch", () => {
+    const raw = JSON.parse(readFileSync(join(targetsDir, "prod.json"), "utf8"));
+    raw.watchHours = 24;
+    raw.watchSessions = "deferred";
+    const r = validateTarget("prod", raw);
+    expect("errors" in r && r.errors.join("\n")).toContain("watchSessions");
+    raw.watchSessions = "skip";
+    expect("errors" in validateTarget("prod", raw)).toBe(true);
+  });
+  test("stage: any positive watch with sessions deferred; a graded stage watch keeps the 10 h floor", () => {
+    const raw = JSON.parse(readFileSync(join(targetsDir, "stage.json"), "utf8"));
+    for (const ok of [0.25, 1, 10]) {
+      raw.watchHours = ok;
+      expect("errors" in validateTarget("stage", raw)).toBe(false);
+    }
+    for (const bad of [0, -0.25, Number.NaN, "0.25"]) {
+      raw.watchHours = bad;
+      const r = validateTarget("stage", raw);
+      expect("errors" in r && r.errors.join("\n")).toContain("watchHours");
+    }
+    // red control: a short watch that grades sessions would fail check 7 on every first epoch.
+    raw.watchHours = 0.25;
+    raw.watchSessions = "graded";
+    const r = validateTarget("stage", raw);
+    expect("errors" in r && r.errors.join("\n")).toContain("watchHours");
+    delete raw.watchSessions;
+    expect("errors" in validateTarget("stage", raw)).toBe(true);
   });
 });

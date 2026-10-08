@@ -19,6 +19,12 @@
 // A subject whose window was already open at boot closes it within one epoch
 // (6 h), well inside that bound. The old 6 h watch only covered that case.
 //
+// Production watches that long and grades sessions. A stage target may watch
+// for less (owner decision 2026-10-08: 15 minutes) only with sessions
+// deferred: W1 runs prod:gate --sessions deferred and R7.4a skips the
+// in-flight publish check, because no 6 h epoch can close in that time.
+// The target file sets both (./target.ts); the step list never changes.
+//
 // Pure. Unit tests: scripts/tests/unit/release-watch.test.ts.
 
 /** Production's epoch, every active subject (B3; migration 0085's default). */
@@ -56,3 +62,7 @@ export const DEFAULT_WATCH_HOURS = watchHoursFor({
   judgingSeconds: DEFAULT_JUDGING_SECONDS,
   graceSeconds: PUBLISH_GRACE_SECONDS,
 });
+
+/** How the watch treats sessions: graded (production) or deferred (a short stage watch). */
+export const WATCH_SESSIONS = ["graded", "deferred"] as const;
+export type WatchSessions = (typeof WATCH_SESSIONS)[number];

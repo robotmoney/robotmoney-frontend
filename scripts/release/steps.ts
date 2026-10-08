@@ -308,13 +308,13 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   // ── W watch: every subject publishes once after READY ─────────────────────
   {
     id: "W1", standing: ["SW.1"], host: "target", notBefore: WATCH, irreversible: false, expectExit: 0, receipts: [runReceipts("prod-gate-watch.*")],
-    description: "Every subject publishes once: prod:gate post-release since READY, sessions graded (every subject publishes judged sessions, the judge never restarted)",
-    cmds: [["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--report", `${RUN_DIR}/prod-gate-watch.md`]],
+    description: "The watch since READY: prod:gate post-release with sessions as the target's watchSessions says (prod graded: every subject publishes a judged session, the judge never restarted; stage deferred)",
+    cmds: [["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--sessions", "{watchSessions}", "--report", `${RUN_DIR}/prod-gate-watch.md`]],
   },
   {
     id: "R7.4a", standing: ["SW.1"], host: "target", notBefore: WATCH, irreversible: false, expectExit: 0, receipts: [runReceipts("schedule-parity.json")],
-    description: "Schedule parity: 6 h epochs, every session in flight at R2.3 published on its normal close, the regime run at :30, the last parity sweep's duration",
-    cmds: [["bun", "scripts/release/schedule-parity.ts", "--instance", "{instance}", "--run", "{runTs}", "--receipt-dir", RUN_DIR]],
+    description: "Schedule parity: 6 h epochs, every session in flight at R2.3 published on its normal close (graded; deferred checks only that no close moved), the regime run at :30, the last parity sweep's duration",
+    cmds: [["bun", "scripts/release/schedule-parity.ts", "--instance", "{instance}", "--run", "{runTs}", "--sessions", "{watchSessions}", "--receipt-dir", RUN_DIR]],
   },
   {
     id: "W3", standing: ["SW.3"], host: "control", onlyFor: "prod", irreversible: false, expectExit: 0, receipts: [],
@@ -353,6 +353,7 @@ export function templateValues(target: ReleaseTarget, commit: string, runTs: str
     confirmTarget: target.confirmTarget,
     publicOrigin: target.publicOrigin,
     watchMinAttendance: String(target.watchMinAttendance),
+    watchSessions: target.watchSessions,
     legacyCheckout: target.legacy.checkout,
     legacySession: target.legacy.tmuxSession,
     legacyProject: target.legacy.composeProject,

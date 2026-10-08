@@ -19,7 +19,7 @@
 // test (scripts/tests/unit/release-run.test.ts).
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
-import { DEFAULT_WATCH_HOURS } from "./watch.ts";
+import { DEFAULT_WATCH_HOURS, WATCH_SESSIONS, type WatchSessions } from "./watch.ts";
 
 /** The value a target file carries until the operator fills in the real database. */
 export const CONFIRM_TARGET_PLACEHOLDER = "FILL-ME:host:port/database-from-the-host-env";
@@ -94,10 +94,20 @@ export interface ReleaseTarget {
   /**
    * Hours after READY (R6.9's end) before the watch steps W1 and R7.4a run.
    * Default DEFAULT_WATCH_HOURS (./watch.ts): the longest first epoch plus its
-   * judging and publish grace, so every subject can publish once. A file may
-   * set it longer, never shorter.
+   * judging and publish grace, so every subject can publish once. Production,
+   * and any target that grades sessions, may set it longer, never shorter. A
+   * stage target that defers sessions may set any positive value (owner
+   * decision 2026-10-08: stage watches 15 minutes).
    */
   readonly watchHours: number;
+  /**
+   * Whether the watch grades sessions (W1 check 7, R7.4a's in-flight publish
+   * check) or defers them. Rendered into W1 and R7.4a as
+   * `--sessions {watchSessions}`, so the step list stays one list. Default
+   * "graded"; production is always graded. Stage sets "deferred": a 15-minute
+   * watch cannot see a 6 h epoch close.
+   */
+  readonly watchSessions: WatchSessions;
   readonly capture: CaptureHost;
   readonly legacy: LegacyStack;
   /** `host:port/database`; every write's `--confirm-target`. */
@@ -105,7 +115,7 @@ export interface ReleaseTarget {
   readonly bootEnv: Readonly<Record<string, string>>;
 }
 
-const TOP_KEYS = ["release", "rmEnv", "host", "checkout", "home", "instance", "publicOrigin", "watchMinAttendance", "watchHours", "capture", "legacy", "confirmTarget", "bootEnv", "$comment"];
+const TOP_KEYS = ["release", "rmEnv", "host", "checkout", "home", "instance", "publicOrigin", "watchMinAttendance", "watchHours", "watchSessions", "capture", "legacy", "confirmTarget", "bootEnv", "$comment"];
 const CAPTURE_KEYS = ["host", "home", "checkout"];
 const LEGACY_KEYS = ["checkout", "tmuxSession", "composeProject", "composeFiles", "startedBy", "version", "commit", "log"];
 
@@ -190,12 +200,24 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
     if (typeof v !== "number" || !(v > 0 && v <= 1)) errors.push(`${name}.watchMinAttendance must be a number in (0, 1]`);
     else watchMinAttendance = v;
   }
+  let watchSessions: WatchSessions = "graded";
+  if (raw.watchSessions !== undefined) {
+    const v = raw.watchSessions;
+    if (typeof v !== "string" || !(WATCH_SESSIONS as readonly string[]).includes(v)) errors.push(`${name}.watchSessions must be ${WATCH_SESSIONS.join(" or ")}`);
+    else watchSessions = v as WatchSessions;
+  }
+  if (rmEnv === "prod" && watchSessions !== "graded") errors.push(`${name}: production grades sessions in its watch (watchSessions must be graded)`);
   let watchHours = DEFAULT_WATCH_HOURS;
   if (raw.watchHours !== undefined) {
     const v = raw.watchHours;
-    if (typeof v !== "number" || !Number.isFinite(v) || v < DEFAULT_WATCH_HOURS) {
-      errors.push(`${name}.watchHours must be a number of hours at least ${DEFAULT_WATCH_HOURS} (the slowest subject's first publish after READY)`);
-    } else watchHours = v;
+    if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) errors.push(`${name}.watchHours must be a positive number of hours`);
+    else watchHours = v;
+  }
+  // A graded watch must last until the slowest subject's first publish after
+  // READY. Production is always graded, so production never watches less than
+  // the derived bound. Only a deferred (stage) watch may be shorter.
+  if (watchHours < DEFAULT_WATCH_HOURS && (rmEnv === "prod" || watchSessions === "graded")) {
+    errors.push(`${name}.watchHours must be at least ${DEFAULT_WATCH_HOURS} (the slowest subject's first publish after READY) on ${rmEnv === "prod" ? "production" : "a target that grades sessions"}`);
   }
   const bootEnv: Record<string, string> = {};
   if (raw.bootEnv !== undefined) {
@@ -214,7 +236,7 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
     target: {
       name, release: release!,
       rmEnv: rmEnv as "stage" | "prod", host: host!, checkout: checkout!, home: home!, instance: instance!,
-      publicOrigin: publicOrigin!, watchMinAttendance, watchHours, capture: capture!, legacy: legacy!, confirmTarget: confirmTarget!, bootEnv,
+      publicOrigin: publicOrigin!, watchMinAttendance, watchHours, watchSessions, capture: capture!, legacy: legacy!, confirmTarget: confirmTarget!, bootEnv,
     },
   };
 }

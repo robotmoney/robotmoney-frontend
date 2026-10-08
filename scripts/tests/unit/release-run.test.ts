@@ -32,7 +32,7 @@ import { compareBaseline } from "../../release/compare-baseline.ts";
 import { exposesPostgresUrl, keysOutsideAllowlist, othersCanTraverse, scanForPostgresUrls, socketMounts, tokenFileProblems } from "../../release/host-guards.ts";
 import { composeDownArgv, partitionLegacyEnv, retiredPath } from "../../release/stop-legacy.ts";
 import { nextRcTag, rcTagsAt } from "../../release/tag.ts";
-import { epochProblems, inFlightProblems, paritySweep, regimeCronProblems } from "../../release/schedule-parity.ts";
+import { epochProblems, inFlightCloseProblems, inFlightProblems, inFlightProblemsFor, parseSessionsFlag, paritySweep, regimeCronProblems } from "../../release/schedule-parity.ts";
 import { baselineProblems, WOULD_CLEAR_SQL } from "../../release/baseline.ts";
 import { identityProblems } from "../../release/identity-check.ts";
 import { IDENTITY_MIGRATION, preconditionProblems } from "../../release/precondition.ts";
@@ -184,9 +184,10 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(ids.indexOf("R2.4r")).toBe(ids.indexOf("R2.2") + 1);
     expect(ids.slice(-3)).toEqual(["W1", "R7.4a", "W3"]);
     expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["W1", "R6.9", "watchHours"], ["R7.4a", "R6.9", "watchHours"]]);
-    // red control: W1 must grade sessions (no --defer-sessions) since READY.
+    // red control: W1 never hard-codes deferral; the target's watchSessions decides, since READY.
     const w1 = RELEASE_STEPS.find((s) => s.id === "W1")!.cmds[0]!;
     expect(w1).not.toContain("--defer-sessions");
+    expect(w1.join(" ")).toContain("--sessions {watchSessions}");
     expect(w1).toContain("{readyIso}");
   });
 });
@@ -314,10 +315,11 @@ const TINY: StepTemplate[] = [
   { id: "T3", standing: [], description: "three", host: "capture", cmds: [["echo", "three"]], expectExit: 0, receipts: [], irreversible: false },
 ];
 
-function fixture(rmEnv: "stage" | "prod" = "stage") {
+function fixture(rmEnv: "stage" | "prod" = "stage", overrides: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "release-run-"));
   const raw = rmEnv === "prod" ? prodRaw() : JSON.parse(readFileSync(join(targetsDir, "stage.json"), "utf8"));
   raw.confirmTarget = "db.example.com:25060/rm";
+  Object.assign(raw, overrides);
   const name = rmEnv === "prod" ? "prod" : "stage";
   const targetFile = join(dir, `${name}.json`);
   writeFileSync(targetFile, JSON.stringify(raw));
@@ -670,7 +672,8 @@ describe("watch steps, prod-only steps and the recovery go key", () => {
 
   test("a watchHours wait takes the target's watch length: READY + 10 h, not + 6 h", async () => {
     const steps: StepTemplate[] = WATCHED.map((s) => (s.id === "W1" ? { ...s, notBefore: { afterStep: "R6.9", hours: "watchHours" } } : s));
-    const f = fixture("stage");
+    // A graded watch at the derived length, as production runs it.
+    const f = fixture("stage", { watchHours: 10, watchSessions: "graded" });
     const early = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], early.deps, steps)).toBe(3);
     expect(early.logs.join("\n")).toContain("W1 becomes runnable at 2026-10-08T22:00:00.000Z");
@@ -682,6 +685,23 @@ describe("watch steps, prod-only steps and the recovery go key", () => {
     expect(six.ran).toEqual([]);
     const later = fakeDeps();
     later.deps.now = () => new Date("2026-10-08T22:00:01Z");
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], later.deps, steps)).toBe(0);
+    expect(later.ran).toEqual(["W1"]);
+  });
+
+  test("the committed stage target watches 15 minutes (owner decision 2026-10-08)", async () => {
+    const steps: StepTemplate[] = WATCHED.map((s) => (s.id === "W1" ? { ...s, notBefore: { afterStep: "R6.9", hours: "watchHours" } } : s));
+    const f = fixture("stage");
+    const early = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], early.deps, steps)).toBe(3);
+    expect(early.logs.join("\n")).toContain("W1 becomes runnable at 2026-10-08T12:15:00.000Z");
+    // red control: one second before READY + 15 min nothing runs.
+    const before = fakeDeps();
+    before.deps.now = () => new Date("2026-10-08T12:14:59Z");
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], before.deps, steps)).toBe(3);
+    expect(before.ran).toEqual([]);
+    const later = fakeDeps();
+    later.deps.now = () => new Date("2026-10-08T12:15:01Z");
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], later.deps, steps)).toBe(0);
     expect(later.ran).toEqual(["W1"]);
   });
@@ -723,6 +743,22 @@ describe("schedule parity (R7.4a)", () => {
     expect(inFlightProblems(base, [{ id: "s1", state: "published", window_closes_at: close, published_at: "2026-10-08T14:00:00.000Z", judging_duration_seconds: 900 }]).join()).toContain("120 min after");
     expect(regimeCronProblems("0 */3 * * *").length).toBe(1);
     expect(paritySweep({ status: "dead", secs: 240 }).problems.length).toBe(1);
+  });
+  test("deferred (stage's 15-minute watch): a still-collecting in-flight session passes; graded fails it", () => {
+    const collecting = [{ id: "s1", state: "collecting", window_closes_at: close, published_at: null, judging_duration_seconds: 900 }];
+    expect(inFlightProblemsFor("deferred", base, collecting)).toEqual([]);
+    expect(inFlightProblemsFor("graded", base, collecting).join()).toContain("not published");
+  });
+  test("red: deferred still fails a gone session and a moved close", () => {
+    expect(inFlightCloseProblems(base, []).join()).toContain("gone");
+    expect(inFlightCloseProblems(base, [{ id: "s1", state: "collecting", window_closes_at: "2026-10-08T13:00:00.000Z", published_at: null, judging_duration_seconds: 900 }]).join()).toContain("close moved");
+    expect(inFlightCloseProblems(base, [{ id: "s1", state: "collecting", window_closes_at: null, published_at: null, judging_duration_seconds: 900 }]).join()).toContain("close moved");
+  });
+  test("--sessions: absent is graded; an unknown value refuses", () => {
+    expect(parseSessionsFlag(undefined)).toBe("graded");
+    expect(parseSessionsFlag("deferred")).toBe("deferred");
+    expect(parseSessionsFlag("")).toHaveProperty("error");
+    expect(parseSessionsFlag("skip")).toHaveProperty("error");
   });
 });
 

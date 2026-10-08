@@ -78,7 +78,7 @@ never rewritten (owner 2026-10-07): when the session needs a new base, cut a new
 | SR.5 | Interruption at a phase boundary resumes, before and after replace | release runbook R3.6 | stage | manual |
 | SR.6 | Rollback rehearsal: restore time recorded, and the old code's behavior against the new schema recorded | release runbook R3.9 | stage | manual |
 | SR.7 | Cumulative standing invariants (the 0.5.x R8 list, section 7) | `bun run soak:checks --instance NAME --since T0 --full` (`--record` once at READY) | stage | script |
-| SR.10 | Cutover rehearsal: the production step list runs unmodified and unattended against the production-shaped stage target (D61), twice from a fresh dump | `bun run release:run --target stage` | stage | gap, issue agent-executed runbooks (1225) |
+| SR.10 | Cutover rehearsal: the production step list runs unmodified and unattended against the production-shaped stage target (D61), twice from a fresh dump. A release runbook may record an owner exception to the count (v0.6.0: one run) | `bun run release:run --target stage` | stage | gap, issue agent-executed runbooks (1225) |
 | SR.8 | Rehearsal report: RC SHA, dump identity, plan id, receipts, results, what could not be covered, operator go/no-go | policy 4.5 | stage | manual |
 
 ## 5. Phase C, V, W — cutover, verification, watch
@@ -94,7 +94,7 @@ never rewritten (owner 2026-10-07): when the session needs a new base, cut a new
 | SV.4 | Log verdict after the release: what the release was meant to fix is fixed, nothing new is unclassified | `bun run prod:gate --mode post-release` | prod | script |
 | SV.5 | Row counts only grow, AUM did not step, the ledger did not balloon | release runbook R7.5 | prod | manual |
 | SV.6 | No container mounts a Docker socket, `~/.env` holds only allowed keys (D61 adds `rm_owner`; a `doadmin` line is not allowed, amendment 2026-10-08), no container's environment holds `rm_owner` or `doadmin`, token files are mode 0600 | `scripts/release/host-guards.ts` | prod | gap, issue agent-executed runbooks (1225) |
-| SW.1 | Watch until every subject publishes once: every subject opens, agents submit, the judge submits, consensus publishes or reads `no_consensus` | `bun run release:run` W1 (`prod:gate --mode post-release` since READY) and R7.4a (`scripts/release/schedule-parity.ts`), not before READY + the target's `watchHours` (10 h: the longest first epoch, 1.5 × 6 h, plus judging and publish grace; `scripts/release/watch.ts`) | prod | script |
+| SW.1 | Watch until every subject publishes once: every subject opens, agents submit, the judge submits, consensus publishes or reads `no_consensus` | `bun run release:run` W1 (`prod:gate --mode post-release` since READY) and R7.4a (`scripts/release/schedule-parity.ts`), not before READY + the target's `watchHours` (10 h: the longest first epoch, 1.5 × 6 h, plus judging and publish grace; `scripts/release/watch.ts`), sessions graded. A stage target may watch shorter only with `watchSessions: deferred`, which does not satisfy this row | prod | script |
 | SW.2 | Cumulative standing invariants over the soak window (section 7) | `bun run soak:checks --instance rm_prod --since T0 --full` (`--record` once at READY) | prod | script |
 | SW.3 | Tag the running commit and file the production report | `bun run release:run` W3 tags the commit; the report is policy 4.9 | prod | manual |
 

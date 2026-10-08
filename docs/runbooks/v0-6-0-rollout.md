@@ -20,7 +20,9 @@ This runbook runs **every check in [`release-standing-runbook.md`](./release-sta
 as it stands at `d84f4a2c`. It adds the 0.6.0-specific checks below. It cites standing checks by ID.
 **Exceptions** (owner, 2026-10-08): SP.6 and SV.5 for the published AUM figure, and SW.2 over the
 watch window. v0.6.0 ships with those rows unscripted. Issue agent-executed runbooks (1225) brings
-them back as runner steps. The twin is **not** waived: the owner chose a short twin rerun at the
+them back as runner steps. Two more owner exceptions, also 2026-10-08: v0.6.0 gets **one** stage
+rehearsal, not two (SR.10), and the stage watch is a **15-minute check with sessions deferred**.
+Production's W1 is therefore the first full session proof (section 7.2). The twin is **not** waived: the owner chose a short twin rerun at the
 release commit (section 7.3).
 
 Each standing ID maps to the runner steps that satisfy it (the `standing` field in `steps.ts`):
@@ -43,9 +45,9 @@ Each standing ID maps to the runner steps that satisfy it (the `standing` field 
 | SR.5 interruption resumes | the runner's resume (`--run`, `--from`) | Evidence of 2026-10-06 and 2026-10-07 stands (section 7.4) |
 | SR.6 rollback rehearsal | R2.4r, S8.1 | Restore time per run. Old-code behavior is B13 |
 | SR.7 standing invariants | R7.3b on the stage target | |
-| SR.8 rehearsal report | the two passed stage journals | Section 7.2 |
+| SR.8 rehearsal report | the passed stage journal | Section 7.2 |
 | SR.9 accelerated schedule | none | The short twin rerun (section 7.3), required for v0.6.0. The stage target keeps 6 h epochs |
-| SR.10 cutover rehearsal, twice | two stage runs, all steps | Section 7 |
+| SR.10 cutover rehearsal, twice | one stage run, all steps | Owner exception for v0.6.0: one run, not two (section 7) |
 | SC.1 recovery matrix signed | the go file's `recovery:` key | Section 8 |
 | SC.2 | retired 2026-10-08 (D61) | |
 | SC.3 operator's go recorded | the go file | Section 4 |
@@ -55,7 +57,7 @@ Each standing ID maps to the runner steps that satisfy it (the `standing` field 
 | SV.4 log verdict after release | R7.3a | |
 | SV.5 counts only grow | R7.5 | The published AUM figure: owner exception for v0.6.0 |
 | SV.6 host guards | R6.2, R7.7 | |
-| SW.1 every subject publishes once | W1, R7.4a | Not before R6.9 plus `watchHours` (10 h) |
+| SW.1 every subject publishes once | W1, R7.4a on prod | Not before R6.9 plus `watchHours` (10 h), sessions graded. The stage run watches 15 min with sessions deferred: owner exception for v0.6.0 |
 | SW.2 invariants over the window | R7.3b | Runs at READY only. The watch-time run: owner exception for v0.6.0 |
 | SW.3 tag and report | W3 | The report stays manual (section 11) |
 
@@ -63,6 +65,13 @@ Gaps against the standing runbook, each decided by the owner on 2026-10-08:
 
 - **AUM (SP.6, SV.5).** No step records or compares the published AUM figure. Recorded exception.
 - **SW.2 over the window.** R7.3b runs `soak:checks` at READY. No step reruns it at the watch. Recorded exception.
+- **One stage rehearsal (SR.10).** The standing rule asks for two runs, each from a fresh dump. v0.6.0
+  runs one. Recorded exception.
+- **Short stage watch (SW.1 on stage).** `stage.json` sets `watchHours: 0.25` and
+  `watchSessions: deferred`. W1 runs `prod:gate --sessions deferred`, so it skips check 7. R7.4a
+  checks the 6 h epochs, the regime cron, the parity sweep, and that no in-flight session vanished or
+  had its close moved. It does not wait for those sessions to publish. Prod keeps the 10 h graded
+  watch. Recorded exception.
 - **SR.1, SR.9 and the full tier of SR.3.** Only the twin exercises them. The owner chose a short twin
   rerun at the release commit: accelerated epochs for about 45 minutes, then torn down.
 
@@ -123,11 +132,11 @@ before the run. The owner triages the R2.5 baseline in a file.
 | B14 | A resume after replace could not start participants from the pruned api image id (1160) | fixed (1161), verified on `62ec5920` | — |
 | B15 | A failed take re-ran on the next tick with no delay; seven seats hammered the shared Zen key. The take one-shot could not find its script from the per-take workspace (1166) | fixed: backoff (1168), give-up after 5 failed takes (1169), verified on `7d69d17c` | — |
 | B16 | The cumulative standing invariants were not on the 0.6 line (1179) | ported (1189, 1195) | R7.3b on each stage run |
-| B17 | The judge gate counted only operator `robotmoney` as in-house; themis's operator is "RM Protocol Labs" since 2026-09-29 | fixed (1201): in-house by seat (owner 2026-10-06) | W1 on a stage run: sessions judged by themis |
+| B17 | The judge gate counted only operator `robotmoney` as in-house; themis's operator is "RM Protocol Labs" since 2026-09-29 | fixed (1201): in-house by seat (owner 2026-10-06) | W1 on the prod run: sessions judged by themis (the stage watch defers sessions) |
 | B18 | The restore pipe dropped the dump's tail (`pg_restore: could not read from input file`) | fixed (1193) | verified: both dumps restore, exit 0 |
 | B19 | A `--reuse` boot minted new service tokens under a scheduler it did not recreate: readiness HTTP 403 | fixed (1202) | verified at `3cdc883b` |
-| B20 | Sessions in flight at the cutover were convened by v0.5.x with no expected roster and no `brief_opens_at`, so the 0.6 take queue offered them to no one | fixed: migration 0114 seats the active roster on each open unrostered session (PR 1215, rule "production's behavior wins"). In a `bucket_weights` session it seats a filer whose final v0.5.x take has no canonical-four weight vector as `excused` (owner 2026-10-08, PR 1245): the 2026-10-08 stage watch saw the in-flight vault session publish without a receipt, refused `weights_not_authored_by_every_take` over Woon's and ShodAI's weightless takes | R7.4a and W1 on a stage run: each in-flight session publishes with a receipt |
-| B21 | The twin ran production's 6 h epochs, so nothing published for hours | fixed: `bun run twin:accelerate`, standing SR.9 | applies to the optional twin only. The stage target keeps 6 h epochs and waits out W1 |
+| B20 | Sessions in flight at the cutover were convened by v0.5.x with no expected roster and no `brief_opens_at`, so the 0.6 take queue offered them to no one | fixed: migration 0114 seats the active roster on each open unrostered session (PR 1215, rule "production's behavior wins"). In a `bucket_weights` session it seats a filer whose final v0.5.x take has no canonical-four weight vector as `excused` (owner 2026-10-08, PR 1245): the 2026-10-08 stage watch saw the in-flight vault session publish without a receipt, refused `weights_not_authored_by_every_take` over Woon's and ShodAI's weightless takes | R7.4a and W1 on the prod run: each in-flight session publishes with a receipt (the stage watch defers sessions) |
+| B21 | The twin ran production's 6 h epochs, so nothing published for hours | fixed: `bun run twin:accelerate`, standing SR.9 | applies to the optional twin only. The stage target keeps 6 h epochs. Its watch is 15 min with sessions deferred |
 | B22 | R2.5 had no recorded decision path for a baseline failure | fixed: `--triage` (PR 1232) | finding 8 |
 | B23 | Production has no `credential.json` and no `RM_CREDENTIALS` | fixed: step R6.2a, `credentials-init.ts` (PR 1233) | finding 3 |
 | B24 | The standing boot needed `OPENCODE_API_KEY` in the process environment, an old hand export | fixed: preflight reads a participant's `modelKey` from `credential.json` (PR 1235) | finding 4 |
@@ -330,9 +339,10 @@ production dump, DigitalOcean's role shape, a `~/.env` with production's key nam
 legacy v0.5.4 stack running against it the way production runs it. The runner runs production's
 step list against it unmodified (D61 rule 2). Only `scripts/release/targets/stage.json` differs.
 
-### 7.1 The run, twice (standing SR.10)
+### 7.1 The run, once (standing SR.10, owner exception for v0.6.0)
 
-Everything runs from the control machine. Repeat this sequence twice, each time from a new dump.
+Everything runs from the control machine. Run this sequence once, from a new dump. The standing rule
+asks for two runs. The owner decided on 2026-10-08 that v0.6.0 gets one.
 
 1. **Capture a fresh dump** on stage-2 from production's replica. [`stage-target.md`](./stage-target.md#rebuild-it-for-each-rehearsal)
    step 1 gives the control-machine ssh line. Never reuse a dump already on the host (policy §4.3).
@@ -355,9 +365,9 @@ Everything runs from the control machine. Repeat this sequence twice, each time 
 
    The stage go names `target: stage`, the same commit and a `recovery:` file. Pass `--triage`
    only when R2.5 fails on the stage legacy stack. The run stops before W1
-   with exit 3 and prints when W1 becomes runnable (R6.9 plus 10 h). R5.rc and W3 record
-   `skipped: stage`.
-4. **Resume for the watch** after the 10 h:
+   with exit 3 and prints when W1 becomes runnable (R6.9 plus 15 min, `stage.json`'s
+   `watchHours: 0.25`). R5.rc and W3 record `skipped: stage`.
+4. **Resume for the watch** after the 15 min:
 
    ```bash
    bun run release:run --target stage --go <stage go file> --run <run-ts>
@@ -381,14 +391,17 @@ not consume an rc number.
 ### 7.2 What the stage journals prove
 
 Each run journals on the control machine under `~/.local/state/robotmoney-release/stage/<run-ts>/`.
-The prod run names the second passed run with `--stage-journal`. The rehearsal report (policy §4.5,
-standing SR.8) cites both journals: commit, step-list hash, dump identity (`manifest.json`,
+The prod run names the passed run with `--stage-journal`. The rehearsal report (policy §4.5,
+standing SR.8) cites that journal: commit, step-list hash, dump identity (`manifest.json`,
 `SHA256SUMS`), restore time (R2.4r), R6.3's migrate receipt, the boot plans and readiness, R7.3's
 verify output, the R7.3a and W1 gate reports, R7.3b's soak reports, R7.4a's parity receipt, and the
 operator's go/no-go.
 
-The stage target keeps production's 6 h epochs. W1 and R7.4a therefore grade the real schedule:
-B2, B3, B5 and B20 are proven there.
+The stage target keeps production's 6 h epochs. Its watch is 15 minutes with sessions deferred
+(owner exception, section 0). So the stage run proves B3 (6 h epochs) and B5 (the parity sweep), and
+that no in-flight session lost its close. It does **not** prove that sessions publish after the
+cutover. B2, B17 and B20 are first proven by production's W1 and R7.4a, at READY plus 10 h. Read
+those two receipts before W3 tags the release.
 
 ### 7.3 The short twin rerun (required for v0.6.0, owner 2026-10-08)
 
@@ -496,8 +509,8 @@ If preflight refuses at R6.7a or R6.7d, the printed check number names the cause
 | R7.3b | `soak:checks --record` at READY, then `--full` | no | `soak-record.md`, `soak-full.md`: 0 FAIL. Read every WARN. R8.u lists slow api requests (the 5 s line) |
 | R7.5 | `compare-baseline.ts`: every R2.3 count only grew; database size within 1.5× | no | `compare-baseline.json` |
 | R7.7 | `host-guards.ts`: no container mounts `docker.sock`; `~/.env` keys within the allowlist; token files 0600; no file other users can reach under `HOME` or the retired checkout holds a postgres URL with a password | no | `host-guards.json` |
-| W1 | Not before R6.9 plus 10 h. `prod:gate --mode post-release --since <READY>`, sessions graded | no | `prod-gate-watch.md` |
-| R7.4a | Not before R6.9 plus 10 h. `schedule-parity.ts` | no | `schedule-parity.json` |
+| W1 | Not before R6.9 plus 10 h. `prod:gate --mode post-release --since <READY> --sessions graded` | no | `prod-gate-watch.md` |
+| R7.4a | Not before R6.9 plus 10 h. `schedule-parity.ts --sessions graded` | no | `schedule-parity.json` |
 | W3 | Tags `v0.6.0` at the commit and pushes it, on the control machine | no | stdout: the tag |
 
 **R7.4a, schedule parity** (owner rule: an upgrade does not change usual schedules). Every active
@@ -517,7 +530,7 @@ Fixes go in the next patch version from `-rc.0`.
 
 ## 11. Report (policy §4.9)
 
-The report cites the prod journal and the two stage journals. It names: the rc and final tags; the
+The report cites the prod journal and the stage journal. It names: the rc and final tags; the
 commit and step-list hash; the R2.1 manifest and `SHA256SUMS`; the R2.4r restore time; the go's and
 the triage's sha256; R6.3's migrate receipt and timing; the boot plans; which blockers closed and
 how; R7.3's verify output and its unexercised invariants; the gate, soak and parity reports; the
