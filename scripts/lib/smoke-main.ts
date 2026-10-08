@@ -35,7 +35,7 @@ import {
 } from "./onboarding-eval.ts";
 import type { RmEnv } from "../../backend/src/acceptance-path.ts";
 import { decideImagesOverride } from "./smoke-images-override.ts";
-import { preflightInferenceOrExit } from "./smoke-inference-preflight.ts";
+import { credentialFileModelKey, preflightInferenceOrExit } from "./smoke-inference-preflight.ts";
 import { adoptRestoredRoster, credentialHandlesOf, resolveSeatAllRestored, scenarioPlan } from "./smoke-mode.ts";
 import {
   assertStageWebPortFree,
@@ -572,24 +572,7 @@ const operatorTokenEnv = (): Record<string, string> => ({ [OPERATOR_TOKEN_FILE_E
 // standing stack refuses, and why: scripts/lib/smoke-inference-preflight.ts.
 const smokeEnv = resolveSmokeEnv(process.env, { stage: staticPortMode, cadence: cadence.profile });
 const inferenceComposeEnv: Record<string, string> = {}; // filled by the preflight; buildSpawnEnv() drops process.env
-/** The first participant's modelKey from the configured credential file, or null (D61: an agent-run boot has no host-wide key). */
-const credentialModelKey = (): { key: string; source: string } | null => {
-  try {
-    const resolution = resolveCredentialPath({ RM_CREDENTIALS: loadEnvFile(homeEnvFilePath())?.RM_CREDENTIALS }, flagValue("--credentials"));
-    if (!resolution.configured) return null;
-    const file = loadCredentialFile(resolution.path);
-    for (const [kind, entries] of [["agents", file.agents], ["judges", file.judges]] as const) {
-      for (const [name, entry] of Object.entries(entries)) {
-        const key = entry.modelKey?.trim();
-        if (key) return { key, source: `the credential file's ${kind}.${name}.modelKey` };
-      }
-    }
-    return null;
-  } catch {
-    return null; // the roster step below reports a bad credential file with its own refusal
-  }
-};
-Object.assign(inferenceComposeEnv, preflightInferenceOrExit({ standingStack: staticPortMode, repoRoot, env: process.env, credentialModelKey }));
+Object.assign(inferenceComposeEnv, preflightInferenceOrExit({ standingStack: staticPortMode, repoRoot, env: process.env, credentialModelKey: () => credentialFileModelKey(flagValue("--credentials")) }));
 
 // Per-instance append log: every orchestrator line lands here as well as on the
 // console, for post-mortem. Opened for every LOCAL run (CI keeps pure console).
