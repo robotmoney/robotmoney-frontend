@@ -75,6 +75,11 @@ const PINNED: Record<string, string> = {
     "seeds exactly that and proves 0089 and 0084 clear it — history, not a live seed",
   "scripts/tests/unit/swarm-session-window.test.ts":
     "it asserts the ABSENCE of `SWARM_WINDOW_MINUTES` from the session driver, so it has to name it",
+  "scripts/release/stage-target.ts":
+    "the D61 stage target boots the LEGACY v0.5.4 stack, whose checkout .env still carries the flag; it writes it 0 so the legacy driver stays production-shaped",
+  "scripts/release/stage-target-lib.ts":
+    "names the legacy v0.5.4 checkout .env keys, including this flag, so the R6.2 rewrite and the stage target can move it",
+  "scripts/tests/unit/stage-target.test.ts": "pins the stage target's legacy .env, which names the flag",
 };
 
 /**
