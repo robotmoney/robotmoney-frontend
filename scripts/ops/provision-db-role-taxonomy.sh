@@ -489,13 +489,15 @@ VERIFY
 
 echo
 echo "Roles provisioned and VERIFIED."
-# rm_owner is LOGIN now, but this script never gives it a password: spec §3
-# keeps that password out of every file, so it is set by hand, once.
-echo "Next (spec §9.1 step 1): rm_owner is LOGIN but has no password from this script."
-echo "  Through doadmin, run: ALTER ROLE rm_owner LOGIN PASSWORD '<password>';"
-echo "  then verify one login as rm_owner. Store the password nowhere on this host."
-echo "Then remove any doadmin line from \$HOME/.env and run \`bun run migrate\` from the repo root."
-echo "  It prompts for the rm_owner password and refuses a \$HOME/.env that holds a doadmin or rm_owner line."
+# This script never sets rm_owner's password. D61 (2026-10-08) keeps that
+# password in $HOME/.env as an `rm_owner = …` line, beside a `doadmin = …`
+# line, and every later step reads both from there.
+echo "Next (spec §9.1 step 1, D61): keep the doadmin line in \$HOME/.env and add an rm_owner = <password> line."
+echo "  Then run: bun scripts/prod-init.ts enable-owner-login --confirm-target <host:port/database>"
+echo "  It runs ALTER ROLE rm_owner LOGIN only when the role is NOLOGIN, then proves the rm_owner login."
+echo "  doadmin stays in \$HOME/.env; enable-owner-login is the only command that uses it."
+echo "Then run \`bun run migrate --confirm-target <host:port/database>\` from the repo root."
+echo "  It reads the rm_owner password from \$HOME/.env and never prompts."
 if [[ "$set_passwords" -eq 1 ]]; then
   echo "You rotated passwords: update each host's \$HOME/.env with a '<role> = <password>' line"
   echo "(see .env.example) or that host's next backup will fail to authenticate."

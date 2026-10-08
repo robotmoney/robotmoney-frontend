@@ -81,7 +81,7 @@ never rewritten (owner 2026-10-07): when the session needs a new base, cut a new
 | ID | Check | Tool | Target | Status |
 |---|---|---|---|---|
 | SC.1 | Recovery matrix decided and signed before the cutover | policy 4.8 | prod | manual |
-| SC.2 | Every irreversible step authorized by the operator, one at a time | release runbook | prod | manual |
+| SC.2 | The operator's one recorded go for the release exists before the run; every irreversible step names its target with `--confirm-target` (D61) | release runbook | prod | manual |
 | SV.1 | Identity: `/api/version` equals the RC's `{api, commit}` | `curl` per release runbook | prod | manual |
 | SV.2 | `bun smoke:status` receipt: preflight green, readiness green | `bun smoke:status` | prod | script |
 | SV.3 | Product verification, **readonly tier only** | `bun run verify:live --instance rm_prod` | prod | script |

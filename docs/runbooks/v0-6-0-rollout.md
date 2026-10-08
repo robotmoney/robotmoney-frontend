@@ -37,7 +37,7 @@ onto the adopted design (spec §9.3).
 |---|---|
 | `bun run smoke:stage`, `smoke:archive`, `--db`, `--smoke`, `--agents`, `--twin` | `bun smoke --static-port` (retired flags refuse and name the replacement) |
 | Stack stays attached; sessions driven by a host driver in tmux | `bun smoke` boots and **exits**; Docker keeps the containers; `system-scheduler` times sessions |
-| Migrations run at boot or by a migrate role | `bun run migrate`, `rm_owner` password **typed**, `y`, receipt. Never part of a boot |
+| Migrations run at boot or by a migrate role | `bun run migrate --confirm-target <host:port/database>`, `rm_owner` from `~/.env`, receipt. Never part of a boot (D61) |
 | `ADMIN_TOKEN`, `.env` in the checkout, `agent-launcher` with the Docker socket | `~/.env` (exact key list), per-instance service-token files, `credential.json`; **no container holds a Docker socket** |
 | Roster by `--agents` | The roster is `credential.json` (`RM_CREDENTIALS`) |
 | Site shipped with the API (`static:assemble`) | Own release unit: `bun smoke:web`, checked against `apiRange` |
@@ -132,13 +132,13 @@ point is a database restore (section 8).
 
 | Area | Effect | Operator action |
 |---|---|---|
-| Credentials | `~/.env` may hold only: remote connection (`host`,`port`,`database`,`sslmode`), `rm_app`/`rm_worker`/`rm_readonly` passwords, `RM_ENV`, `RM_CREDENTIALS`. Anything else **refuses the boot on prod** (preflight check 4) | Clean `~/.env` at R6.2. Template: `.env.example` |
-| `rm_owner` | Becomes `LOGIN` (one-time, via `doadmin`). Password typed per run, never stored | R6.2b |
+| Credentials | `~/.env` may hold only: remote connection (`host`,`port`,`database`,`sslmode`), `rm_app`/`rm_worker`/`rm_readonly` passwords, `rm_owner` and `doadmin` (D61), `RM_ENV`, `RM_CREDENTIALS`, `COINGECKO_API_KEY`. Anything else **refuses the boot on prod** (preflight check 4) | Clean `~/.env` at R6.2. Template: `.env.example` |
+| `rm_owner` | Becomes `LOGIN` (one-time, `prod-init enable-owner-login`). Password is the `rm_owner` line of `~/.env` (D61) | R6.2b |
 | Service tokens | Three (`system-scheduler`, `analytics-producer`, operator admin) in the api's token store; secrets in per-instance files under `~/.local/state/robotmoney-smoke/rm_prod/tokens/<holder>/token`. Replaces `ADMIN_TOKEN` | R6.5 |
 | Participants | Standing containers from `credential.json`. The judge is a participant (`themis`), no inline judging, no fallback path | R6.2, R6.7 |
 | In-house keys | **One-time credential migration (this release only).** The three seated agents and the judge move from the committed fixture keys to the keys in `credential.json`. It runs once, at the cutover, and never on a later boot. See R6.7 | R6.7 |
 | Sessions | Timed by `system-scheduler` per subject epoch. No schedule rows, nothing to enable. The host driver is retired | Stop the driver at R6.1 |
-| Deletes | No runtime role deletes. Pruning is `bun run prune` (typed `rm_owner`, 7-day floor) | Not part of the cutover |
+| Deletes | No runtime role deletes. Pruning is `bun run prune --confirm-target …` (`rm_owner` from `~/.env`, 7-day floor) | Not part of the cutover |
 | Site | Own unit. `bun smoke:web` refuses a site whose `apiRange` excludes the running api, and `bun smoke` refuses an api outside the live site's range | R6.10 |
 | API limit | Explicit 10 s request limit; a request over 5 s is logged | Read in R7 |
 | Gecko | The paid key is on the `~/.env` allowlist and forwarded to the worker lanes (1098) | None |
@@ -150,20 +150,21 @@ point is a database restore (section 8).
 |---|---|---|
 | R2 capture | `rm_readonly` against the **read replica** | `~/.env` on the capture host |
 | R3 rehearsal | generated local passwords (`--local dump`) | smoke generates them in the instance state dir |
-| R6.2b | `doadmin` | typed once, not stored |
-| R6.3 migrate | `rm_owner` | **typed** at the terminal, plus a literal `y` |
-| R6.5, R6.7 prod-init | `rm_owner` (tokens); operator token (rebind) | typed / token file |
+| R6.2b | `doadmin` | `~/.env` (used by `enable-owner-login` only) |
+| R6.3 migrate | `rm_owner` | `~/.env`, plus `--confirm-target` |
+| R6.5, R6.7 prod-init | `rm_owner` (tokens); operator token (rebind) | `~/.env` / token file, plus `--confirm-target` |
 | R6.8 boot | `rm_app`, `rm_worker`, `rm_readonly` | `~/.env` |
 
-An agent may run every command below up to a prompt. **The operator types the
-`rm_owner` and `doadmin` passwords and each `y`.** No step reads them from a file,
-pipe or environment.
+**No step prompts** ([D61](../decisions.md#d61), 2026-10-08). An agent runs every command below.
+The `rm_owner` and `doadmin` passwords are lines in the host's `~/.env`. Each write names its
+target with `--confirm-target <host:port/database>`, which must equal what `~/.env` resolves to.
+The operator's authority is one recorded go for the release, given before the run.
 
 **On a twin there is no human in the loop.** A `--local dump`/`--local volume` instance
 owns a throwaway copy, and smoke generated its `rm_owner` password into the instance state
 directory (`role-passwords.json`); smoke's own `enroll`, `migrate` and `tokens` phases type it
-for you. Every R3 step, R3.8 included, is therefore runnable by an agent on a stage host; the
-typed-at-the-keyboard rule binds R6 on production only. (Clarified 2026-10-05 after an agent
+for you. Every R3 step, R3.8 included, is therefore runnable by an agent on a stage host; since D61 no
+step binds a person to the keyboard on production either. (Clarified 2026-10-05 after an agent
 waited on the operator for a twin's password.)
 
 ## 4. R0 Go/no-go (policy §4.1)
@@ -510,16 +511,17 @@ schedules and judge settings no longer exist in the stack.
 `RM_ALLOW_HANDLE_NAMESPACE_VIOLATION` is never forwarded.
 
 R6.2b **One-time role step**, before R6.3 needs the login. If R2.3 showed `rm_owner`
-`rolcanlogin = f` (expected on an existing cluster), the operator runs, as `doadmin`:
-`ALTER ROLE rm_owner LOGIN PASSWORD '<new>'`, then proves it with a verification login.
-Spec §9.1 step 1. The password is not written to any file.
+`rolcanlogin = f` (expected on an existing cluster), run
+`bun scripts/prod-init.ts enable-owner-login --confirm-target <host:port/database>`. It connects as
+`doadmin` from `~/.env`, runs `ALTER ROLE rm_owner LOGIN` (password unchanged), then proves a login
+with the `rm_owner` line of `~/.env`. Spec §9.1 step 1. A role already `LOGIN` is only verified.
 
-R6.3 **The first production migrate.** Typed `rm_owner`, then `y`. It applies
+R6.3 **The first production migrate.** `rm_owner` from `~/.env`, `--confirm-target`. It applies
 `0081_deployment_identity` **first** with `production` written in the same transaction,
 then every other pending file in filename order (including the five below 0081).
 
 ```bash
-bun run migrate               # RM_ENV=prod; receipt + journal land in ~/.local/state/robotmoney-smoke/rm_prod/
+bun run migrate --confirm-target <host:port/database>   # RM_ENV=prod; receipt + journal land in ~/.local/state/robotmoney-smoke/rm_prod/
 ```
 
 Pass = the receipt records the pre-identity state, the matched baseline, and 36 applied
@@ -529,7 +531,7 @@ If interrupted after 0081 committed, rerun the same command (normal path, resume
 R6.4 `bun scripts/prod-init.ts set-identity` — reads `production` through `rm_owner` and
 receipts it. It writes nothing.
 
-R6.5 `bun scripts/prod-init.ts provision-tokens` — typed `rm_owner`, `y`. Mints the three
+R6.5 `bun scripts/prod-init.ts provision-tokens --confirm-target <host:port/database>` — `rm_owner` from `~/.env`. Mints the three
 service tokens. Re-running is a rotation.
 
 R6.7 **Bring the stack up, then run the one-time credential migration.** This release moves the

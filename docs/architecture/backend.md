@@ -28,8 +28,8 @@ them — this repo's own local dev/smoke/e2e harness included.
 - `src/lib/` — small helpers (e.g. `keys.ts`, sha256 access-key hashing).
 - `migrations/` — forward-only numbered `*.sql`, applied once each, tracked in
   `schema_migrations`. In production a migration is its own operator step
-  (`bun run migrate`, with the `rm_owner` password typed at the terminal and
-  receipted), never part of a boot; the `--migrate` flag is a rehearsal-only
+  (`bun run migrate --confirm-target <host:port/database>`, with the `rm_owner`
+  password read from `~/.env` and receipted, [D61](../decisions.md#d61)), never part of a boot; the `--migrate` flag is a rehearsal-only
   convenience for stage, test and CI. See
   [smoke-production-spec §8.5](../technical/smoke-production-spec.md#85---migrate-and-production-upgrades)
   and [§9](../technical/smoke-production-spec.md#9-production).

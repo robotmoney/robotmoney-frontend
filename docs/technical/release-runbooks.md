@@ -325,12 +325,16 @@ Preflight must be re-run or re-confirmed on production before the cutover
 begins, even if the isolated rehearsal passed, to ensure the production
 environment matches the rehearsal assumptions.
 
-The upgrade is agent-executed through the verified runbook, with operator
-release authorization and receipt review. The adopted design explicitly requires
-an operator to enter the privileged credential and confirm production migration
-or initialization. That interaction is part of the named tool step, not permission
-to bypass gates or substitute undocumented production-shell work. Do not store the
-owner credential to make the previous noninteractive D46 mechanism work.
+The upgrade is agent-executed end to end through the verified runbook, from the
+control machine over SSH ([D61](../decisions.md#d61), 2026-10-08). The operator's
+authority is one recorded go for the release, given before the run, never a
+keystroke during it. The privileged credentials `rm_owner` and `doadmin` are lines
+in the host's `~/.env`. Every write names its target with
+`--confirm-target <host:port/database>`, which must equal the target the command
+resolved from `~/.env`. That flag is part of the named tool step, not permission to
+bypass gates or substitute undocumented production-shell work. Every database
+operation is a committed script with a receipt; no step runs a hand-written `psql`
+line. The production runbook is rehearsed unmodified on stage.
 
 ### 4.7.1. Product verification (separate from postflight, and from the deploy)
 
