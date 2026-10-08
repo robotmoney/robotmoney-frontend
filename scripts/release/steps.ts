@@ -81,6 +81,11 @@ export interface StepTemplate {
    * stops there, prints when it becomes runnable, and `--run <ts>` resumes it.
    */
   readonly notBefore?: { readonly afterStep: string; readonly hours: number };
+  /**
+   * A baseline gate: a non-zero exit passes when `--triage <file>` covers every
+   * failed finding of its JSON report (scripts/release/triage.ts). Only R2.5.
+   */
+  readonly triage?: boolean;
 }
 
 /** The remote journal directory of one run on the target host. */
@@ -164,7 +169,7 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     cmds: [["bun", "scripts/release/baseline.ts", "--instance", "{instance}", "--run", "{runTs}"]],
   },
   {
-    id: "R2.5", standing: ["SP.5"], host: "target", checkout: "legacy", irreversible: false, expectExit: 0, receipts: [runReceipts("prod-gate-baseline.*")],
+    id: "R2.5", standing: ["SP.5"], host: "target", checkout: "legacy", irreversible: false, expectExit: 0, triage: true, receipts: [runReceipts("prod-gate-baseline.*")],
     description: "Log baseline of the running legacy stack, graded by the legacy checkout's own prod:gate (its .agents/smoke-state.json names the stack)",
     cmds: [["bun", "run", "prod:gate", "--mode", "baseline", "--state-file", "{legacyCheckout}/.agents/smoke-state.json", "--report", `${RUN_DIR}/prod-gate-baseline.md`]],
   },
@@ -413,7 +418,7 @@ export function stepListHash(steps: readonly StepTemplate[] = RELEASE_STEPS): st
   const canonical = steps.map((s) => ({
     id: s.id, standing: s.standing, description: s.description, host: s.host, checkout: s.checkout ?? "release", cmds: s.cmds,
     env: s.env ?? {}, bootEnv: s.bootEnv ?? false, expectExit: s.expectExit, receipts: s.receipts, irreversible: s.irreversible,
-    onlyFor: s.onlyFor ?? null, notBefore: s.notBefore ?? null,
+    onlyFor: s.onlyFor ?? null, notBefore: s.notBefore ?? null, triage: s.triage ?? false,
   }));
   // The base environment is part of every remote command, so it is part of the list.
   const base = { envClear: true, env: BASE_ENV, runDir: RUN_DIR, captureRunDir: CAPTURE_RUN_DIR };

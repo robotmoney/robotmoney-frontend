@@ -44,6 +44,8 @@ export interface StepRecord {
   error?: string;
   /** Why a step did not run on this target: `stage` for a prod-only step. */
   skipped?: string;
+  /** A baseline gate's failures accepted by the owner's triage file (R2.5). */
+  triage?: { file: string; sha256: string; used: { check: string; fragment: string; reason: string }[] };
 }
 
 export interface RunJournal {

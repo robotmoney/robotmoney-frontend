@@ -197,6 +197,24 @@ Production refuses to start unless `--stage-journal` names such a journal (stand
 check SP.8). A different hash, a different commit, a failed or missing step, or a
 journal from a prod run all refuse.
 
+## Triage of the baseline gate
+
+R2.5 grades the running legacy stack before anything changes. A failure there is
+what is already broken, and each one is an owner decision before the cutover. The
+decision is a triage file, passed with `--triage <file>`:
+
+```text
+# check | fragment of the gate's detail line | reason, issue or decision
+jobs | model_unavailable:judge model responded 402 | Zen balance empty until the 2026-10-08 top-up
+```
+
+- Only R2.5 reads it. A post-release gate never does.
+- R2.5 passes on a non-zero exit only when every detail line of every `FAIL` check in the
+  gate's JSON report contains the fragment of an entry for that check.
+- A finding the file does not name still stops the run, and the runner lists it.
+- The journal records the file's path, its sha256 and the entries it used.
+- The triage file is not the go. A run resumes with a new triage and the same go.
+
 ## The journal
 
 The runner journals on the control machine under
