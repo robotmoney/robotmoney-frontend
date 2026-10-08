@@ -52,6 +52,10 @@ async function main(): Promise<number> {
     if (r.status !== 0) problems.push(`${tool} is not on PATH for a non-interactive ssh command`);
     else tools[tool] = r.stdout.trim();
   }
+  // The runner starts every command under `env -i` with one fixed PATH (steps.ts REMOTE_PATH); record where each tool resolved.
+  const toolPaths = sh("sh", ["-c", "for t in bun docker tmux git; do printf '%s=%s\\n' \"$t\" \"$(command -v $t)\"; done"]).stdout.trim().split("\n");
+  const inherited = Object.keys(process.env).filter((k) => k.startsWith("DATABASE_"));
+  if (inherited.length > 0) problems.push(`the command inherited ${inherited.join(", ")}: it did not start under env -i`);
   let resolvedTarget: string | undefined;
   const envPath = homeEnvFilePath(process.env.HOME);
   const env = loadEnvFile(envPath);
@@ -91,6 +95,9 @@ async function main(): Promise<number> {
     expectedCommit: commit,
     clean: porcelain.status === 0 && porcelain.stdout.trim() === "",
     tools,
+    path: process.env.PATH ?? null,
+    toolPaths,
+    inheritedDatabaseEnv: inherited,
     envFile: envPath,
     envKeys: env ? Object.keys(env).sort() : null,
     resolvedTarget: resolvedTarget ?? null,

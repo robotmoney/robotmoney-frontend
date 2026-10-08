@@ -13,7 +13,8 @@
 //   - who migration 0101 would clear (D55 (2), issue 1120), with the query
 //     copied verbatim from runbook R2.3 (baseline-would-clear.txt);
 //   - matchSupportedRelease's answer (backend/src/db/supported-releases.ts);
-//   - the R2.4 row counts and the database size.
+//   - the R2.4 row counts and the database size;
+//   - the sessions in flight, with their window close (R7.4a's parity input).
 // It writes baseline.json beside them in `<instance state dir>/release/<run-ts>/`.
 //
 // It REFUSES (exit 1, after writing the record) when an in-house handle is in
@@ -25,6 +26,12 @@ import { openReadOnly, readCounts, readDatabaseSize } from "./db-read.ts";
 import { releaseStateDir } from "./release-state.ts";
 
 /** The in-house seats migration 0101 must never clear (runbook R2.3). */
+/** Sessions in flight at the baseline; R7.4a checks each one published on its normal close. */
+export const IN_FLIGHT_SQL = `SELECT id::text AS id, subject_id::text AS subject, state, window_closes_at
+  FROM swarm_sessions WHERE state NOT IN ('published', 'cancelled') ORDER BY window_closes_at NULLS LAST, id`;
+
+export interface InFlightSession { readonly id: string; readonly subject: string; readonly state: string; readonly window_closes_at: string | Date | null }
+
 export const IN_HOUSE_HANDLES: readonly string[] = Object.freeze(["athena", "noop-analyst", "robot-money", "themis"]);
 
 /** Runbook R2.3's would-clear query, verbatim. Read-only; it mirrors migration 0101's rule. */
@@ -86,6 +93,9 @@ async function main(): Promise<number> {
     );
     const wouldClear = await db.query<WouldClearRow>(WOULD_CLEAR_SQL);
     const counts = await readCounts(db);
+    const inFlight = (await db.query<InFlightSession>(IN_FLIGHT_SQL)).map((r) => ({
+      ...r, window_closes_at: r.window_closes_at === null ? null : new Date(r.window_closes_at).toISOString(),
+    }));
     const sizeBytes = await readDatabaseSize(db);
     const matched = matchSupportedRelease(ledger);
     const problems = baselineProblems(ledger, wouldClear);
@@ -112,6 +122,7 @@ async function main(): Promise<number> {
       supportedBaseline: matched ? matched.name : null,
       unmatched: matched ? null : describeUnmatchedLedger(ledger),
       counts,
+      inFlight,
       databaseSizeBytes: sizeBytes,
       problems,
     };

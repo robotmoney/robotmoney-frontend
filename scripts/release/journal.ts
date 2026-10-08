@@ -18,7 +18,12 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export type StepStatus = "ok" | "failed" | "running";
+export type StepStatus = "ok" | "failed" | "running" | "skipped";
+
+/** A step is done when it passed, or when its template skips this policy (`onlyFor`). */
+export function stepDone(status: StepStatus | undefined): boolean {
+  return status === "ok" || status === "skipped";
+}
 
 export interface ReceiptRecord {
   readonly remote: string;
@@ -37,6 +42,8 @@ export interface StepRecord {
   receipts: ReceiptRecord[];
   readonly attempt: number;
   error?: string;
+  /** Why a step did not run on this target: `stage` for a prod-only step. */
+  skipped?: string;
 }
 
 export interface RunJournal {
@@ -55,6 +62,8 @@ export interface RunJournal {
   steps: Record<string, StepRecord>;
   /** The stage journal production checked (SP.8), for the record. */
   stageJournal?: { path: string; runTs: string; stepListHash: string; commit: string };
+  /** The signed recovery matrix the go names (SC.1): its reference and, for a file, its sha256. */
+  recovery?: { ref: string; sha256: string | null };
 }
 
 /** `~/.local/state/robotmoney-release`, on the control machine. */
@@ -73,7 +82,7 @@ export const RUN_TS_RE = /^\d{8}T\d{6}Z$/;
 export function runStatus(journal: Pick<RunJournal, "steps">, ids: readonly string[]): RunJournal["status"] {
   if (ids.some((id) => journal.steps[id]?.status === "failed")) return "failed";
   if (ids.some((id) => journal.steps[id]?.status === "running")) return "running";
-  return ids.every((id) => journal.steps[id]?.status === "ok") ? "passed" : "incomplete";
+  return ids.every((id) => stepDone(journal.steps[id]?.status)) ? "passed" : "incomplete";
 }
 
 /**
@@ -93,7 +102,7 @@ export function checkStageJournal(
   if (journal.commit !== expected.commit) out.push(`SP.8: the stage run was at commit ${journal.commit}; this run is ${expected.commit}`);
   const status = runStatus(journal, expected.stepIds);
   if (status !== "passed") {
-    const notOk = expected.stepIds.filter((id) => journal.steps[id]?.status !== "ok");
+    const notOk = expected.stepIds.filter((id) => !stepDone(journal.steps[id]?.status));
     out.push(`SP.8: the stage run did not pass (${status}; not ok: ${notOk.join(", ")})`);
   }
   return out;
@@ -132,7 +141,7 @@ export function checkResume(
   const start = opts.only ?? opts.from;
   if (start !== undefined) {
     const at = expected.stepIds.indexOf(start);
-    const notOk = expected.stepIds.slice(0, Math.max(at, 0)).filter((id) => journal.steps[id]?.status !== "ok");
+    const notOk = expected.stepIds.slice(0, Math.max(at, 0)).filter((id) => !stepDone(journal.steps[id]?.status));
     if (opts.from !== undefined && notOk.length > 0) out.push(`--from ${start} skips steps that are not ok: ${notOk.join(", ")}`);
   }
   return out;
@@ -140,7 +149,7 @@ export function checkResume(
 
 /** The first step of the list that is not ok, or undefined when all are. */
 export function firstNotOk(journal: Pick<RunJournal, "steps">, ids: readonly string[]): string | undefined {
-  return ids.find((id) => journal.steps[id]?.status !== "ok");
+  return ids.find((id) => !stepDone(journal.steps[id]?.status));
 }
 
 /** Read `<dir>/run.json` (or the file itself). undefined when missing or unparseable. */

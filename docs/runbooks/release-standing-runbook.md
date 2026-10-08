@@ -50,7 +50,7 @@ unverified, not satisfied.
 | ID | Check | Tool | Target | Status |
 |---|---|---|---|---|
 | SP.1 | Position: which release, which commit, which phase | `bun smoke:status` and the release runbook's section 1 | both | script |
-| SP.2 | Backup taken and **restore proven** into a fresh local database, with the restore time recorded | release runbook R2 and the twin restore | both | manual |
+| SP.2 | Backup taken and **restore proven** into a fresh local database, with the restore time recorded | `bun run release:run` R2.1, R2.2 and R2.4r (`scripts/release/restore-proof.ts`) | both | script |
 | SP.3 | Production's real migration ledger read from the replica and equal to the shipped baseline | `rm_readonly` query, per release runbook | prod | manual |
 | SP.4 | Smoke preflight: 1 role auth, 2 privileges, 3a manifest, 3b compat, 4 `~/.env` keys, 5 identity, 6 subject scheduling columns | `bun smoke` (runs at boot) | both | script |
 | SP.5 | Log baseline: what is already broken, triaged before the cutover | `bun run prod:gate --mode baseline` | prod | script |
@@ -85,7 +85,7 @@ never rewritten (owner 2026-10-07): when the session needs a new base, cut a new
 
 | ID | Check | Tool | Target | Status |
 |---|---|---|---|---|
-| SC.1 | Recovery matrix decided and signed before the cutover | policy 4.8 | prod | manual |
+| SC.1 | Recovery matrix decided and signed before the cutover | the go file's required `recovery` key, read and hashed by `bun run release:run` | prod | script |
 | SC.2 | retired 2026-10-08: no human in the loop; the operator's authority is one recorded go (SC.3), decided by the owner, D61, issue agent-executed runbooks (1225) | — | — | — |
 | SC.3 | The operator's go for the run is recorded: release, commit and target, given before the run | `bun run release:run --go <file>` refuses without it ([`release-run.md`](./release-run.md)) | prod | script |
 | SV.1 | Identity: `/api/version` equals the RC's `{api, commit}` | `curl` per release runbook | prod | manual |
@@ -94,9 +94,9 @@ never rewritten (owner 2026-10-07): when the session needs a new base, cut a new
 | SV.4 | Log verdict after the release: what the release was meant to fix is fixed, nothing new is unclassified | `bun run prod:gate --mode post-release` | prod | script |
 | SV.5 | Row counts only grow, AUM did not step, the ledger did not balloon | release runbook R7.5 | prod | manual |
 | SV.6 | No container mounts a Docker socket, `~/.env` holds only allowed keys (D61 adds `rm_owner` and `doadmin`), no container's environment holds `rm_owner` or `doadmin`, token files are mode 0600 | `scripts/release/host-guards.ts` | prod | gap, issue agent-executed runbooks (1225) |
-| SW.1 | Watch one full session cycle: every subject opens, agents submit, the judge submits, consensus publishes or reads `no_consensus` | release runbook | prod | manual |
+| SW.1 | Watch one full session cycle: every subject opens, agents submit, the judge submits, consensus publishes or reads `no_consensus` | `bun run release:run` W1 (`prod:gate --mode post-release` since READY) and R7.4a (`scripts/release/schedule-parity.ts`), not before READY + 6 h | prod | script |
 | SW.2 | Cumulative standing invariants over the soak window (section 7) | `bun run soak:checks --instance rm_prod --since T0 --full` (`--record` once at READY) | prod | script |
-| SW.3 | Tag the running commit and file the production report | policy 4.9 | prod | manual |
+| SW.3 | Tag the running commit and file the production report | `bun run release:run` W3 tags the commit; the report is policy 4.9 | prod | manual |
 
 ## 6. Changing this file
 

@@ -7,15 +7,49 @@
 // The guards the 0.6 design added, checked on the live host:
 //   1. no container of the instance's compose project mounts a Docker socket;
 //   2. every `$HOME/.env` key is on the D61 allowlist (./env-keys.ts);
+//   4. no world-readable file under HOME or the retired legacy checkout
+//      (--legacy-retired) holds a postgres URL with a password (D61: doadmin
+//      only in ~/.env, which is not world-readable). node_modules, .bun, .cache
+//      and the VCS directory are not walked; files over 1 MB are not read.
 //   3. the three service-token files exist under the instance state
 //      directory, mode 0600.
 // Key names only, never a value. Writes host-guards.json to --receipt-dir.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, statSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homeEnvFilePath, loadEnvFile } from "../lib/env-role.ts";
 import { instancePaths, readStackState, stateRoot } from "../lib/smoke-state.ts";
 import { D61_ENV_ALLOWLIST } from "./env-keys.ts";
+import { POSTGRES_URL_WITH_PASSWORD } from "./stop-legacy.ts";
+
+const SKIP_DIRS = new Set(["node_modules", ".bun", ".cache", ".git", ".npm"]);
+
+/** PURE. Whether a file's mode lets any user read it, and its text names a postgres URL with a password. */
+export function exposesPostgresUrl(mode: number, text: string): boolean {
+  return (mode & 0o004) !== 0 && POSTGRES_URL_WITH_PASSWORD.test(text);
+}
+
+/** World-readable files under `roots` that hold a postgres URL with a password. Never follows a symlink. */
+export function scanForPostgresUrls(roots: readonly string[], maxDepth = 5): string[] {
+  const found: string[] = [];
+  const walk = (dir: string, depth: number) => {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = join(dir, e.name);
+      if (e.isSymbolicLink()) continue;
+      if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name) && depth < maxDepth) walk(p, depth + 1); continue; }
+      if (!e.isFile()) continue;
+      try {
+        const st = lstatSync(p);
+        if (st.size > 1024 * 1024 || (st.mode & 0o004) === 0) continue;
+        if (exposesPostgresUrl(st.mode, readFileSync(p, "utf8"))) found.push(p);
+      } catch { /* unreadable */ }
+    }
+  };
+  for (const r of roots) walk(r, 0);
+  return found;
+}
 
 interface InspectMount { Source?: string; Destination?: string }
 interface Inspect { Name?: string; Mounts?: InspectMount[]; HostConfig?: { Binds?: string[] | null } }
@@ -48,8 +82,9 @@ function flag(name: string): string | undefined {
 function main(): number {
   const instance = flag("--instance");
   const receiptDir = flag("--receipt-dir");
+  const legacyRetired = flag("--legacy-retired");
   if (!instance || !receiptDir) {
-    console.error("usage: bun scripts/release/host-guards.ts --instance <name> --receipt-dir <dir>");
+    console.error("usage: bun scripts/release/host-guards.ts --instance <name> [--legacy-retired <dir>] --receipt-dir <dir>");
     return 2;
   }
   const problems: string[] = [];
@@ -86,11 +121,16 @@ function main(): number {
   });
   problems.push(...tokenFileProblems(tokenFiles));
 
+  const scanRoots = [process.env.HOME ?? "/root", ...(legacyRetired ? [legacyRetired] : [])];
+  const exposed = scanForPostgresUrls(scanRoots);
+  if (exposed.length > 0) problems.push(`world-readable files hold a postgres URL with a password: ${exposed.join(", ")}`);
+
   mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
   const file = join(receiptDir, "host-guards.json");
   writeFileSync(file, `${JSON.stringify({
     step: "R7.7", instance, project: record?.project ?? null, containers: containers.length, socketMounts: mounting,
     envKeys: keys, keysOutsideAllowlist: outside,
+    scanRoots, exposedPostgresUrls: exposed,
     tokenFiles: tokenFiles.map((t) => ({ path: t.path, mode: t.mode === null ? null : (t.mode & 0o777).toString(8) })),
     problems, at: new Date().toISOString(),
   }, null, 2)}\n`, { mode: 0o600 });

@@ -1,5 +1,5 @@
 {
-  "$comment": "Stage target for bun run release:run (D61 rule 2): the same steps as prod.json, against a remote stage database restored from a fresh production capture. HOME is a dedicated directory whose .env names that database. Fill confirmTarget with host:port/database from /home/stage-server/stage-target/.env before the run.",
+  "$comment": "Stage target for bun run release:run (D61 rule 2): the same steps as prod.json, against the stage target database that scripts/release/stage-target.ts up restores before the run. HOME is a dedicated directory whose .env names that database. The legacy stack is the v0.5.4 checkout booted against it (PR 1229).",
   "release": "v0.6.0",
   "commit": "a502de30068e0c1cc2e232a76098364e0b709033",
   "rmEnv": "stage",
@@ -15,12 +15,14 @@
   },
   "legacy": {
     "checkout": "/home/stage-server/rm-stage-legacy",
+    "commit": "1cda4085d235b55bf171735ac77618155e6b1647",
     "tmuxSession": "stage-driver",
-    "composeProject": "rm_stage_legacy",
+    "composeProject": "stage_target",
     "composeFiles": [],
-    "startedBy": "SMOKE_PROJECT=rm_stage_legacy bun run smoke:archive in tmux session stage-driver, from the v0.5.4 checkout",
+    "startedBy": "SMOKE_PROJECT=stage_target bun run smoke:archive -- --no-tui (= bun scripts/smoke.ts --smoke --static-port --db external) in tmux session stage-driver",
+    "log": "/home/stage-server/stage-target/smoke-archive-v0.5.4.log",
     "version": "v0.5.4"
   },
-  "confirmTarget": "FILL-ME:host:port/database-from-the-host-env",
+  "confirmTarget": "172.17.0.1:25060/defaultdb",
   "bootEnv": {}
 }

@@ -8,7 +8,7 @@
 // passed stage journal with that hash exists (standing check SP.8, ./journal.ts).
 //
 // Each step runs on the target host or on the capture host, over ssh, as
-//   ssh -T -o BatchMode=yes <host> 'mkdir -p <run dir> && touch <marker> && cd <checkout> && env HOME=<home> RM_ENV=<env> <cmd>'
+//   ssh -T -o BatchMode=yes <host> 'mkdir -p <run dir> && touch <marker> && cd <checkout> && env -i HOME=<home> PATH=<REMOTE_PATH> LANG=C.UTF-8 RM_ENV=<env> <cmd>'
 // with stdin closed. The marker lets the runner copy back only the receipts a
 // step wrote (find -newer).
 //
@@ -17,9 +17,26 @@
 // legacy rename, R7 the postflight. `standing` names the standing runbook rows
 // each step satisfies (docs/runbooks/release-standing-runbook.md).
 import { createHash } from "node:crypto";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ReleaseTarget } from "./target.ts";
 
-export type StepHost = "target" | "capture";
+/**
+ * Where a step runs: the target host, the capture host, or the control
+ * machine itself (the release tags, R5.rc and W3).
+ */
+export type StepHost = "target" | "capture" | "control";
+
+/** The runner's host name for a control-machine step; never an ssh alias. */
+export const CONTROL_HOST = "(control)";
+
+/**
+ * The one PATH every remote command runs with (`env -i`), the same on every
+ * host. It finds bun in either host user's ~/.bun/bin, and docker, tmux and git
+ * in the system directories. R1.2 and R1.5 prove each tool resolves under it
+ * and record where.
+ */
+export const REMOTE_PATH = "/root/.bun/bin:/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 /** Files a step leaves behind that the runner copies into the local journal. */
 export interface ReceiptSpec {
@@ -53,6 +70,17 @@ export interface StepTemplate {
   readonly receipts: readonly ReceiptSpec[];
   /** Past this step a code-only rollback is impossible (runbook section 8). */
   readonly irreversible: boolean;
+  /**
+   * The step runs only for this policy and is recorded `skipped: <rmEnv>` on
+   * any other. It is data in the template, so the hash is the same for every
+   * target. Only the release tags (R5.rc, W3) use it: a stage run tags nothing.
+   */
+  readonly onlyFor?: "prod";
+  /**
+   * The step may not start before `afterStep` ended plus `hours`. The runner
+   * stops there, prints when it becomes runnable, and `--run <ts>` resumes it.
+   */
+  readonly notBefore?: { readonly afterStep: string; readonly hours: number };
 }
 
 /** The remote journal directory of one run on the target host. */
@@ -69,6 +97,9 @@ const BOOT_ENV = { PROJECTS_SOURCE: "live" } as const;
 const runReceipts = (pattern: string, required = true): ReceiptSpec => ({ dir: RUN_DIR, pattern, required });
 const stateReceipts = (pattern: string, required = true): ReceiptSpec => ({ dir: STATE_DIR, pattern, required });
 const prodInitReceipt = (command: string): ReceiptSpec => ({ dir: `${STATE_DIR}/prod-init`, pattern: `${command}-*.json`, required: true });
+
+/** The watch window after READY: one full epoch of production's 6 h grid (B3). */
+const WATCH = { afterStep: "R6.9", hours: 6 } as const;
 
 const prodInit = (command: string): string[] => ["bun", "scripts/prod-init.ts", command, "--instance", "{instance}", "--confirm-target", "{confirmTarget}"];
 const status = (): string[] => ["bun", "run", "smoke:status", "--instance", "{instance}"];
@@ -121,6 +152,12 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     cmds: [["sh", "-c", `cd ${CAPTURE_DIR} && sha256sum -- *.gpg > SHA256SUMS`]],
   },
   {
+    id: "R2.4r", standing: ["SP.2"], host: "capture", irreversible: false, expectExit: 0,
+    receipts: [{ dir: CAPTURE_RUN_DIR, pattern: "restore-proof.json", required: true }],
+    description: "Restore proof: restore the R2.1 dump into a throwaway local Postgres container, record the restore time, drop the container",
+    cmds: [["bun", "scripts/release/restore-proof.ts", "--dump", CAPTURE_DIR, "--receipt-dir", CAPTURE_RUN_DIR]],
+  },
+  {
     id: "R2.3", standing: ["SP.3", "SP.6"], host: "target", irreversible: false, expectExit: 0,
     receipts: [{ dir: `${STATE_DIR}/release/{runTs}`, pattern: "baseline*", required: true }],
     description: "Baseline through rm_readonly: ledger, identity, roles, migration 0101's would-clear list, supported-baseline match, R2.4 counts and size",
@@ -130,6 +167,12 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     id: "R2.5", standing: ["SP.5"], host: "target", checkout: "legacy", irreversible: false, expectExit: 0, receipts: [runReceipts("prod-gate-baseline.*")],
     description: "Log baseline of the running legacy stack, graded by the legacy checkout's own prod:gate (its .agents/smoke-state.json names the stack)",
     cmds: [["bun", "run", "prod:gate", "--mode", "baseline", "--state-file", "{legacyCheckout}/.agents/smoke-state.json", "--report", `${RUN_DIR}/prod-gate-baseline.md`]],
+  },
+  // ── R5 release candidate tag (prod only; stage records it skipped) ────────
+  {
+    id: "R5.rc", standing: [], host: "control", onlyFor: "prod", irreversible: false, expectExit: 0, receipts: [],
+    description: "Tag the release candidate at the commit (the next free <release>-rc.N) unless one already points there; push it",
+    cmds: [["bun", "scripts/release/tag.ts", "rc", "--release", "{release}", "--commit", "{commit}"]],
   },
   // ── R6 cutover ────────────────────────────────────────────────────────────
   {
@@ -156,8 +199,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "S8.1", standing: [], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("retire-legacy.json")],
-    description: "Rename the legacy checkout to <path>.<version>-retired so nothing runs from it after the migrate",
-    cmds: [["bun", "scripts/release/stop-legacy.ts", "retire", "--legacy-checkout", "{legacyCheckout}", "--version", "{legacyVersion}", "--receipt-dir", RUN_DIR]],
+    description: "Rename the legacy checkout to <path>.<version>-retired, then move its .env secrets (database URLs, model keys) to ~/.env.legacy-retired-<ts> and make that .env 0600",
+    cmds: [["bun", "scripts/release/stop-legacy.ts", "retire", "--legacy-checkout", "{legacyCheckout}", "--version", "{legacyVersion}", "--run", "{runTs}", "--receipt-dir", RUN_DIR]],
   },
   {
     id: "R6.4", standing: [], host: "target", irreversible: false, expectExit: 0, receipts: [prodInitReceipt("set-identity")],
@@ -237,10 +280,35 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "R7.7", standing: ["SV.6"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("host-guards.json")],
-    description: "Host guards: no container mounts docker.sock, ~/.env keys within the allowlist, token files 0600",
-    cmds: [["bun", "scripts/release/host-guards.ts", "--instance", "{instance}", "--receipt-dir", RUN_DIR]],
+    description: "Host guards: no container mounts docker.sock, ~/.env keys within the allowlist, token files 0600, no world-readable file under home or the retired checkout holds a postgres URL with a password",
+    cmds: [["bun", "scripts/release/host-guards.ts", "--instance", "{instance}", "--legacy-retired", "{legacyCheckout}.{legacyVersion}-retired", "--receipt-dir", RUN_DIR]],
+  },
+  // ── W watch: one full epoch after READY ───────────────────────────────────
+  {
+    id: "W1", standing: ["SW.1"], host: "target", notBefore: WATCH, irreversible: false, expectExit: 0, receipts: [runReceipts("prod-gate-watch.*")],
+    description: "One full session cycle: prod:gate post-release since READY, sessions graded (every subject publishes judged sessions, the judge never restarted)",
+    cmds: [["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--report", `${RUN_DIR}/prod-gate-watch.md`]],
+  },
+  {
+    id: "R7.4a", standing: ["SW.1"], host: "target", notBefore: WATCH, irreversible: false, expectExit: 0, receipts: [runReceipts("schedule-parity.json")],
+    description: "Schedule parity: 6 h epochs, every session in flight at R2.3 published on its normal close, the regime run at :30, the last parity sweep's duration",
+    cmds: [["bun", "scripts/release/schedule-parity.ts", "--instance", "{instance}", "--run", "{runTs}", "--receipt-dir", RUN_DIR]],
+  },
+  {
+    id: "W3", standing: ["SW.3"], host: "control", onlyFor: "prod", irreversible: false, expectExit: 0, receipts: [],
+    description: "Tag the running commit with the release tag and push it (prod only)",
+    cmds: [["bun", "scripts/release/tag.ts", "final", "--release", "{release}", "--commit", "{commit}"]],
   },
 ] satisfies StepTemplate[]);
+
+/** The control machine's checkout, where control steps run. */
+export const CONTROL_REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/** The environment every remote command starts from: `env -i` plus exactly these. */
+export const BASE_ENV: Readonly<Record<string, string>> = Object.freeze({ PATH: REMOTE_PATH, LANG: "C.UTF-8" });
+
+/** What the not-yet-known READY instant renders as in a plan. */
+export const READY_PENDING = "READY-ISO-FROM-R6.9";
 
 /** The values a template may name. */
 export interface TemplateValues {
@@ -248,8 +316,9 @@ export interface TemplateValues {
 }
 
 /** The template values of one run of one target. */
-export function templateValues(target: ReleaseTarget, commit: string, runTs: string): TemplateValues {
+export function templateValues(target: ReleaseTarget, commit: string, runTs: string, readyIso: string = READY_PENDING): TemplateValues {
   return {
+    readyIso,
     target: target.name,
     release: target.release,
     commit,
@@ -297,10 +366,24 @@ export interface RenderedStep {
   /** The marker file the step touches first; receipts newer than it are this step's. */
   readonly marker: string;
   readonly receipts: readonly ReceiptSpec[];
+  readonly onlyFor?: "prod";
+  readonly notBefore?: { readonly afterStep: string; readonly hours: number };
 }
 
 /** Turn one template into the command a host runs. */
 export function renderStep(step: StepTemplate, target: ReleaseTarget, values: TemplateValues): RenderedStep {
+  const common = {
+    id: step.id, standing: step.standing, description: step.description, hostRole: step.host,
+    irreversible: step.irreversible, expectExit: step.expectExit,
+    receipts: step.receipts.map((r) => ({ ...r, dir: fill(r.dir, values) })),
+    onlyFor: step.onlyFor, notBefore: step.notBefore,
+  };
+  if (step.host === "control") {
+    // The control machine: its own checkout and its own environment (the git
+    // credentials that push a tag live there, never on a host).
+    const commands = step.cmds.map((argv) => argv.map((a) => shellQuote(fill(a, values))).join(" "));
+    return { ...common, host: CONTROL_HOST, remote: [`cd ${shellQuote(CONTROL_REPO)}`, ...commands].join(" && "), marker: "" };
+  }
   const onCapture = step.host === "capture";
   const host = onCapture ? target.capture.host : target.host;
   const legacy = !onCapture && step.checkout === "legacy";
@@ -308,17 +391,17 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
   const home = onCapture ? target.capture.home : target.home;
   const runDir = fill(onCapture ? CAPTURE_RUN_DIR : RUN_DIR, values);
   const marker = `${runDir}/.step-${step.id}`;
+  // `env -i`: nothing the login shell exports reaches a command. Production's
+  // /etc/environment exports a doadmin DATABASE_URL and its parts; stage's
+  // does not. Only these variables exist, the same names on every host.
   const envPairs: string[] = [`HOME=${shellQuote(home)}`];
+  for (const [k, v] of Object.entries(BASE_ENV)) envPairs.push(`${k}=${shellQuote(v)}`);
   if (!onCapture && !legacy) envPairs.push(`RM_ENV=${shellQuote(target.rmEnv)}`);
   for (const [k, v] of Object.entries(step.env ?? {})) envPairs.push(`${k}=${shellQuote(fill(v, values))}`);
   if (step.bootEnv) for (const [k, v] of Object.entries(target.bootEnv).sort()) envPairs.push(`${k}=${shellQuote(v)}`);
-  const commands = step.cmds.map((argv) => `env ${envPairs.join(" ")} ${argv.map((a) => shellQuote(fill(a, values))).join(" ")}`);
+  const commands = step.cmds.map((argv) => `env -i ${envPairs.join(" ")} ${argv.map((a) => shellQuote(fill(a, values))).join(" ")}`);
   const remote = [`mkdir -p ${shellQuote(runDir)}`, `touch ${shellQuote(marker)}`, `cd ${shellQuote(checkout)}`, ...commands].join(" && ");
-  return {
-    id: step.id, standing: step.standing, description: step.description, host, hostRole: step.host,
-    irreversible: step.irreversible, expectExit: step.expectExit, remote, marker,
-    receipts: step.receipts.map((r) => ({ ...r, dir: fill(r.dir, values) })),
-  };
+  return { ...common, host, remote, marker };
 }
 
 /**
@@ -330,8 +413,11 @@ export function stepListHash(steps: readonly StepTemplate[] = RELEASE_STEPS): st
   const canonical = steps.map((s) => ({
     id: s.id, standing: s.standing, description: s.description, host: s.host, checkout: s.checkout ?? "release", cmds: s.cmds,
     env: s.env ?? {}, bootEnv: s.bootEnv ?? false, expectExit: s.expectExit, receipts: s.receipts, irreversible: s.irreversible,
+    onlyFor: s.onlyFor ?? null, notBefore: s.notBefore ?? null,
   }));
-  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+  // The base environment is part of every remote command, so it is part of the list.
+  const base = { envClear: true, env: BASE_ENV, runDir: RUN_DIR, captureRunDir: CAPTURE_RUN_DIR };
+  return createHash("sha256").update(JSON.stringify({ base, steps: canonical })).digest("hex");
 }
 
 /** Step ids, in order. Duplicate ids throw. */

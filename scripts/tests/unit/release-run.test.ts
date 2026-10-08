@@ -16,19 +16,22 @@
 //   - the env rewrite's key partition, the baseline comparison, the host guards.
 // Nothing here opens an ssh connection: the runner's exec is injected.
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateGo } from "../../release/go.ts";
 import { checkResume, checkStageJournal, runStatus, selectSteps, type RunJournal } from "../../release/journal.ts";
 import { lineScrubber, scrubSecrets, forbiddenReceiptPath } from "../../release/scrub.ts";
-import { RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
+import { REMOTE_PATH, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
 import { CONFIRM_TARGET_PLACEHOLDER, loadTarget, validateTarget } from "../../release/target.ts";
 import { parseArgs, receiptPathsInOutput, runRelease, type RunnerDeps } from "../../release/run.ts";
 import { partitionEnv } from "../../release/env-rewrite.ts";
 import { compareBaseline } from "../../release/compare-baseline.ts";
-import { keysOutsideAllowlist, socketMounts, tokenFileProblems } from "../../release/host-guards.ts";
-import { composeDownArgv, retiredPath } from "../../release/stop-legacy.ts";
+import { exposesPostgresUrl, keysOutsideAllowlist, scanForPostgresUrls, socketMounts, tokenFileProblems } from "../../release/host-guards.ts";
+import { composeDownArgv, partitionLegacyEnv, retiredPath } from "../../release/stop-legacy.ts";
+import { nextRcTag, rcTagsAt } from "../../release/tag.ts";
+import { epochProblems, inFlightProblems, paritySweep, regimeCronProblems } from "../../release/schedule-parity.ts";
 import { baselineProblems, WOULD_CLEAR_SQL } from "../../release/baseline.ts";
 import { identityProblems } from "../../release/identity-check.ts";
 import { IDENTITY_MIGRATION, preconditionProblems } from "../../release/precondition.ts";
@@ -131,14 +134,52 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(() => fill("bun x --db {databse}", templateValues(prod, SHA, "20261008T000000Z"))).toThrow("{databse}");
   });
 
-  test("every remote command runs from the checkout with HOME set, and no step carries a secret or -v", () => {
+  test("every remote command starts under env -i with HOME, the fixed PATH and LANG; no step carries a secret or -v", () => {
     const values = templateValues(prod, SHA, "20261008T000000Z");
     for (const s of RELEASE_STEPS) {
       const r = renderStep(s, prod, values);
       expect(r.remote).toContain("cd ");
-      expect(r.remote).toContain("HOME=");
-      expect(r.remote).not.toMatch(/(^|\s)-v(\s|$)|--volumes|rm_owner=|doadmin=|PGPASSWORD/);
+      expect(r.remote).not.toMatch(/(^|\s)-v(\s|$)|--volumes|rm_owner=|doadmin=|PGPASSWORD|DATABASE_/);
+      if (s.host === "control") continue;
+      const commands = r.remote.split(" && ").filter((c) => c.startsWith("env "));
+      expect(commands.length).toBe(s.cmds.length);
+      for (const c of commands) {
+        expect(c.startsWith(`env -i HOME=${s.host === "capture" ? prod.capture.home : prod.home} PATH=${REMOTE_PATH} LANG=C.UTF-8 `)).toBe(true);
+      }
     }
+  });
+
+  test("a rendered command never inherits DATABASE_*: run it under a polluted environment", () => {
+    const step: StepTemplate = { id: "X", standing: [], description: "x", host: "target", cmds: [["sh", "-c", "env"]], expectExit: 0, receipts: [], irreversible: false };
+    const scratch = mkdtempSync(join(tmpdir(), "release-env-"));
+    const t = { ...prod, home: scratch, checkout: scratch };
+    const r = renderStep(step, t, templateValues(t, SHA, "20261008T000000Z"));
+    const polluted = { ...process.env, DATABASE_URL: "postgres://doadmin:x@h/d", DATABASE_PASSWORD: "x" };
+    const out = spawnSync("sh", ["-c", r.remote], { env: polluted, encoding: "utf8" });
+    expect(out.status).toBe(0);
+    expect(out.stdout).not.toContain("DATABASE_");
+    expect(out.stdout).toContain(`HOME=${scratch}`);
+    expect(out.stdout).toContain("RM_ENV=prod");
+    // red control: the same command without env -i inherits it.
+    const leaky = spawnSync("sh", ["-c", r.remote.replace(/env -i /g, "env ")], { env: polluted, encoding: "utf8" });
+    expect(leaky.stdout).toContain("DATABASE_URL=");
+  });
+
+  test("the prod-only tags are data: the hash is shared, and dropping onlyFor changes it", () => {
+    const tags = RELEASE_STEPS.filter((s) => s.onlyFor === "prod").map((s) => s.id);
+    expect(tags).toEqual(["R5.rc", "W3"]);
+    expect(RELEASE_STEPS.filter((s) => s.host === "control").map((s) => s.id)).toEqual(["R5.rc", "W3"]);
+    const unmarked = RELEASE_STEPS.map((s) => (s.id === "W3" ? { ...s, onlyFor: undefined } : s));
+    expect(stepListHash(unmarked)).not.toBe(stepListHash());
+    const ids = stepIds();
+    expect(ids.indexOf("R5.rc")).toBe(ids.indexOf("R6.1") - 1);
+    expect(ids.indexOf("R2.4r")).toBe(ids.indexOf("R2.2") + 1);
+    expect(ids.slice(-3)).toEqual(["W1", "R7.4a", "W3"]);
+    expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["W1", "R6.9", 6], ["R7.4a", "R6.9", 6]]);
+    // red control: W1 must grade sessions (no --defer-sessions) since READY.
+    const w1 = RELEASE_STEPS.find((s) => s.id === "W1")!.cmds[0]!;
+    expect(w1).not.toContain("--defer-sessions");
+    expect(w1).toContain("{readyIso}");
   });
 });
 
@@ -146,7 +187,7 @@ describe("R2.5 grades the legacy stack with the legacy checkout's own gate", () 
   test("it runs from the legacy checkout, with HOME and no RM_ENV, on both targets", () => {
     for (const t of [loadTarget(join(targetsDir, "prod.json")), loadTarget(join(targetsDir, "stage.json"))]) {
       const r = renderStep(RELEASE_STEPS.find((s) => s.id === "R2.5")!, t, templateValues(t, SHA, "20261008T000000Z"));
-      expect(r.remote).toContain(`cd ${t.legacy.checkout} && env HOME=${t.home} bun run prod:gate --mode baseline --state-file ${t.legacy.checkout}/.agents/smoke-state.json`);
+      expect(r.remote).toContain(`cd ${t.legacy.checkout} && env -i HOME=${t.home} PATH=${REMOTE_PATH} LANG=C.UTF-8 bun run prod:gate --mode baseline --state-file ${t.legacy.checkout}/.agents/smoke-state.json`);
       expect(r.remote).not.toContain("RM_ENV=");
     }
   });
@@ -179,7 +220,7 @@ describe("the target precondition (R1.2)", () => {
 
 describe("the go file (D61 rule 1)", () => {
   const expected = { release: "v0.6.0", commit: SHA, target: "prod" };
-  const good = `# owner go, 2026-10-08\nrelease: v0.6.0\ncommit: ${SHA}\ntarget: prod\noperator: lucas\n`;
+  const good = `# owner go, 2026-10-08\nrelease: v0.6.0\ncommit: ${SHA}\ntarget: prod\nrecovery: /root/recovery-matrix-v0.6.0.signed.md\noperator: lucas\n`;
 
   test("a go naming this release, commit and target passes, with its hash", () => {
     const r = validateGo(good, expected);
@@ -193,6 +234,10 @@ describe("the go file (D61 rule 1)", () => {
     expect("errors" in validateGo(`${good}skip: R2.5\n`, expected)).toBe(true);
     expect("errors" in validateGo(good.replace(/target: prod\n/, ""), expected)).toBe(true);
     expect("errors" in validateGo(good.replace(SHA, "a502de30"), { ...expected, commit: "a502de30" })).toBe(true);
+    // SC.1: no recovery matrix, or a recovery that is neither a path nor a sha.
+    expect(validateGo(good.replace(/recovery: .*\n/, ""), expected)).toEqual({ errors: ["the go names no recovery"] });
+    expect("errors" in validateGo(good.replace(/recovery: .*\n/, "recovery: signed\n"), expected)).toBe(true);
+    expect("go" in validateGo(good.replace(/recovery: .*\n/, `recovery: ${"a".repeat(64)}\n`), expected)).toBe(true);
   });
 });
 
@@ -267,7 +312,9 @@ function fixture(rmEnv: "stage" | "prod" = "stage") {
   const targetFile = join(dir, `${name}.json`);
   writeFileSync(targetFile, JSON.stringify(raw));
   const goFile = join(dir, "go.txt");
-  writeFileSync(goFile, `release: v0.6.0\ncommit: ${SHA}\ntarget: ${name}\n`);
+  const recovery = join(dir, "recovery-matrix.md");
+  writeFileSync(recovery, "signed recovery matrix\n");
+  writeFileSync(goFile, `release: v0.6.0\ncommit: ${SHA}\ntarget: ${name}\nrecovery: ${recovery}\n`);
   return { dir, targetFile, goFile, journalRoot: join(dir, "journal") };
 }
 
@@ -276,7 +323,7 @@ function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string } =
   const logs: string[] = [];
   const deps: RunnerDeps = {
     async exec(_host, remote, onStdout) {
-      const id = /\.step-([A-Za-z0-9.]+)/.exec(remote)![1]!;
+      const id = (/\.step-([A-Za-z0-9.]+)/.exec(remote) ?? /echo ([A-Za-z0-9.]+)$/.exec(remote))![1]!;
       ran.push(id);
       if (opts.out) {
         onStdout(opts.out.slice(0, 7));
@@ -306,7 +353,7 @@ describe("runRelease", () => {
     expect(await runRelease(["--target", f.targetFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(2);
     expect(a.ran).toEqual([]);
     expect(a.logs.join("\n")).toContain("no --go");
-    writeFileSync(f.goFile, `release: v0.6.0\ncommit: ${OTHER_SHA}\ntarget: stage\n`);
+    writeFileSync(f.goFile, `release: v0.6.0\ncommit: ${OTHER_SHA}\ntarget: stage\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
     const b = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], b.deps, TINY)).toBe(2);
     expect(b.ran).toEqual([]);
@@ -516,5 +563,117 @@ describe("host guards, legacy stop and identity (R6.1, S8.1, R7.1, R7.7)", () =>
     expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: SHA }), `{"commit":"${SHA}"}`, SHA)).toEqual([]);
     expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: OTHER_SHA }), `{"commit":"${SHA}+dirty"}`, SHA).length).toBe(2);
     expect(identityProblems(null, null, SHA).length).toBe(2);
+  });
+});
+
+// ── the scripted watch, tags, recovery and legacy cleanup ─────────────────────
+const WATCHED: StepTemplate[] = [
+  { id: "R6.9", standing: [], description: "ready", host: "target", cmds: [["echo", "ready"]], expectExit: 0, receipts: [], irreversible: false },
+  { id: "W1", standing: [], description: "watch", host: "target", notBefore: { afterStep: "R6.9", hours: 6 }, cmds: [["echo", "{readyIso}"]], expectExit: 0, receipts: [], irreversible: false },
+  { id: "W3", standing: [], description: "tag", host: "control", onlyFor: "prod", cmds: [["echo", "W3"]], expectExit: 0, receipts: [], irreversible: false },
+];
+
+describe("watch steps, prod-only steps and the recovery go key", () => {
+  test("a watch step waits for READY + 6 h, prints when it becomes runnable, and --run resumes it then", async () => {
+    const f = fixture("stage");
+    const early = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], early.deps, WATCHED)).toBe(3);
+    expect(early.ran).toEqual(["R6.9"]);
+    expect(early.logs.join("\n")).toContain("W1 becomes runnable at 2026-10-08T18:00:00.000Z");
+    // red control: still early, a resume does not run it either.
+    const again = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], again.deps, WATCHED)).toBe(3);
+    expect(again.ran).toEqual([]);
+    const later = fakeDeps();
+    later.deps.now = () => new Date("2026-10-08T18:00:01Z");
+    const seen: string[] = [];
+    const exec = later.deps.exec;
+    later.deps.exec = async (h, r, o, e) => { seen.push(r); return exec(h, r, o, e); };
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], later.deps, WATCHED)).toBe(0);
+    expect(seen[0]).toContain("2026-10-08T12:00:00.000Z");
+    const j = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    expect(j.status).toBe("passed");
+    expect(j.steps.W3!.status).toBe("skipped");
+    expect(j.steps.W3!.skipped).toBe("stage");
+    expect(j.recovery?.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("a prod-only step runs on prod; a stage journal with it skipped still satisfies SP.8", async () => {
+    const s = fixture("stage");
+    const st = fakeDeps();
+    st.deps.now = () => new Date("2026-10-08T12:00:00Z");
+    await runRelease(["--target", s.targetFile, "--go", s.goFile, "--journal-root", s.journalRoot], st.deps, WATCHED);
+    const st2 = fakeDeps();
+    st2.deps.now = () => new Date("2026-10-08T19:00:00Z");
+    expect(await runRelease(["--target", s.targetFile, "--go", s.goFile, "--journal-root", s.journalRoot, "--run", "20261008T120000Z"], st2.deps, WATCHED)).toBe(0);
+    expect(st2.ran).toEqual(["W1"]);
+    const p = fixture("prod");
+    const pr = fakeDeps();
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", join(s.journalRoot, "stage", "20261008T120000Z")], pr.deps, WATCHED)).toBe(3);
+    expect(pr.ran).toEqual(["R6.9"]);
+    const pr2 = fakeDeps();
+    pr2.deps.now = () => new Date("2026-10-08T19:00:00Z");
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", join(s.journalRoot, "stage", "20261008T120000Z"), "--run", "20261008T120000Z"], pr2.deps, WATCHED)).toBe(0);
+    expect(pr2.ran).toEqual(["W1", "W3"]);
+  });
+
+  test("red: a go whose recovery file cannot be read refuses before anything runs", async () => {
+    const f = fixture("stage");
+    writeFileSync(f.goFile, `release: v0.6.0\ncommit: ${SHA}\ntarget: stage\nrecovery: ${join(f.dir, "missing.md")}\n`);
+    const a = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, WATCHED)).toBe(2);
+    expect(a.ran).toEqual([]);
+    expect(a.logs.join("\n")).toContain("SC.1");
+  });
+});
+
+describe("release tags (R5.rc, W3)", () => {
+  test("the next rc number follows the existing tags; rc tags at a commit are found", () => {
+    expect(nextRcTag("v0.6.0", [])).toBe("v0.6.0-rc.0");
+    expect(nextRcTag("v0.6.0", ["v0.6.0-rc.0", "v0.6.0-rc.2", "v0.5.4-rc.7", "v0.6.0"])).toBe("v0.6.0-rc.3");
+    expect(rcTagsAt("v0.6.0", ["v0.6.0-rc.1", "v0.6.0", "v0.6.01-rc.1"])).toEqual(["v0.6.0-rc.1"]);
+    // red control: another release's rc never counts.
+    expect(nextRcTag("v0.6.0", ["v0.6.1-rc.4"])).toBe("v0.6.0-rc.0");
+  });
+});
+
+describe("schedule parity (R7.4a)", () => {
+  const close = "2026-10-08T12:00:00.000Z";
+  const base = [{ id: "s1", subject: "eth", state: "collecting", window_closes_at: close }];
+  test("6 h epochs, an on-time publish, a :30 regime cron and a live sweep pass", () => {
+    expect(epochProblems([{ id: "eth", epoch_duration_seconds: 21600 }])).toEqual([]);
+    expect(inFlightProblems(base, [{ id: "s1", state: "published", window_closes_at: close, published_at: "2026-10-08T12:10:00.000Z", judging_duration_seconds: 900 }])).toEqual([]);
+    expect(regimeCronProblems("30 */3 * * *")).toEqual([]);
+    expect(paritySweep({ status: "succeeded", secs: 21.5 })).toEqual({ problems: [], detail: "last parity sweep succeeded in 21.5 s" });
+  });
+  test("red: a short epoch, a moved close, a late or missing publish, a :00 cron, a dead sweep", () => {
+    expect(epochProblems([{ id: "eth", epoch_duration_seconds: 900 }]).length).toBe(1);
+    expect(inFlightProblems(base, []).join()).toContain("gone");
+    expect(inFlightProblems(base, [{ id: "s1", state: "collecting", window_closes_at: close, published_at: null, judging_duration_seconds: 900 }]).join()).toContain("not published");
+    expect(inFlightProblems(base, [{ id: "s1", state: "published", window_closes_at: "2026-10-08T11:00:00.000Z", published_at: "2026-10-08T11:05:00.000Z", judging_duration_seconds: 900 }]).join()).toContain("close moved");
+    expect(inFlightProblems(base, [{ id: "s1", state: "published", window_closes_at: close, published_at: "2026-10-08T14:00:00.000Z", judging_duration_seconds: 900 }]).join()).toContain("120 min after");
+    expect(regimeCronProblems("0 */3 * * *").length).toBe(1);
+    expect(paritySweep({ status: "dead", secs: 240 }).problems.length).toBe(1);
+  });
+});
+
+describe("legacy secret cleanup (S8.1) and the postgres URL guard (R7.7)", () => {
+  test("database URLs and model keys move; settings stay", () => {
+    const text = "PROJECTS_SOURCE=live\nMIGRATE_DATABASE_URL=postgresql://doadmin:pw@db:25060/defaultdb\nWORKER_DATABASE_URL=x\nOPENCODE_API_KEY=k\nSOME_URL=postgres://u:p@h/d\n# note\n";
+    const p = partitionLegacyEnv(text);
+    expect(p.movedKeys).toEqual(["MIGRATE_DATABASE_URL", "WORKER_DATABASE_URL", "OPENCODE_API_KEY", "SOME_URL"]);
+    expect(p.kept).toBe("PROJECTS_SOURCE=live\n# note\n");
+    expect(p.moved).not.toContain("PROJECTS_SOURCE");
+    // red control: a URL without a password and a plain setting stay.
+    expect(partitionLegacyEnv("BASE=postgres://h/d\nX=1\n").movedKeys).toEqual([]);
+  });
+  test("a world-readable file with a postgres password is found; a 0600 one is not", () => {
+    expect(exposesPostgresUrl(0o100644, "MIGRATE_DATABASE_URL=postgresql://doadmin:pw@h/d")).toBe(true);
+    expect(exposesPostgresUrl(0o100600, "MIGRATE_DATABASE_URL=postgresql://doadmin:pw@h/d")).toBe(false);
+    expect(exposesPostgresUrl(0o100644, "url=postgres://h:5432/d")).toBe(false);
+    const dir = mkdtempSync(join(tmpdir(), "release-scan-"));
+    writeFileSync(join(dir, "open.env"), "U=postgres://a:b@h/d\n", { mode: 0o644 });
+    writeFileSync(join(dir, "closed.env"), "U=postgres://a:b@h/d\n", { mode: 0o600 });
+    expect(scanForPostgresUrls([dir])).toEqual([join(dir, "open.env")]);
   });
 });

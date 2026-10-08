@@ -15,10 +15,17 @@
 // retire (runbook section 8, after R6.3). Renames the old checkout to
 // `<dir>.<version>-retired`, so the old `bun run migrate` cannot run against
 // the migrated database (B13). Already renamed is recorded, not refused.
+// Then it moves the retired checkout's `.env` secret lines (database URLs with
+// a password, model and admin keys) to `$HOME/.env.legacy-retired-<run-ts>`
+// (mode 0600) and makes that `.env` 0600: D61 keeps doadmin in `~/.env` only.
+// It prints key names, never values.
+//
+//   bun scripts/release/stop-legacy.ts retire --legacy-checkout <dir> --version <vX.Y.Z> --run <run-ts> --receipt-dir <dir>
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { composeArgs } from "../stack/config.ts";
+import { lineKey } from "./env-rewrite.ts";
 
 function flag(name: string): string | undefined {
   const at = process.argv.indexOf(name);
@@ -110,12 +117,60 @@ function stop(): number {
   return problems.length === 0 ? 0 : 1;
 }
 
+/** Keys in the legacy checkout's `.env` that carry a secret, whatever their value looks like. */
+export const LEGACY_SECRET_KEYS: readonly string[] = Object.freeze([
+  "MIGRATE_DATABASE_URL", "WORKER_DATABASE_URL", "DATABASE_URL", "OPENCODE_API_KEY", "ADMIN_TOKEN", "COINGECKO_API_KEY",
+]);
+
+/** A postgres URL that carries a password. */
+export const POSTGRES_URL_WITH_PASSWORD = /postgres(?:ql)?:\/\/[^:\s\/@]+:[^@\s]+@/i;
+
+/**
+ * PURE. Split the legacy checkout's `.env`: lines whose key is a known secret,
+ * or whose value is a postgres URL with a password, move; the rest stay.
+ */
+export function partitionLegacyEnv(text: string): { kept: string; moved: string; movedKeys: string[] } {
+  const kept: string[] = [];
+  const moved: string[] = [];
+  const movedKeys: string[] = [];
+  const lines = text.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  for (const line of lines) {
+    const key = lineKey(line);
+    const secret = key !== null && (LEGACY_SECRET_KEYS.includes(key) || POSTGRES_URL_WITH_PASSWORD.test(line));
+    if (secret) { moved.push(line); movedKeys.push(key === "" ? "(no key)" : key); } else kept.push(line);
+  }
+  const asText = (xs: string[]) => (xs.length > 0 ? `${xs.join("\n")}\n` : "");
+  return { kept: asText(kept), moved: asText(moved), movedKeys };
+}
+
+/** Move the retired checkout's `.env` secrets to `$HOME/.env.legacy-retired-<run>` (0600) and make the `.env` 0600. */
+function cleanLegacyEnv(retired: string, run: string): { file: string | null; movedKeys: string[]; movedTo: string | null; problem?: string } {
+  const envFile = join(retired, ".env");
+  if (!existsSync(envFile)) return { file: null, movedKeys: [], movedTo: null };
+  const part = partitionLegacyEnv(readFileSync(envFile, "utf8"));
+  let movedTo: string | null = null;
+  if (part.movedKeys.length > 0) {
+    movedTo = join(process.env.HOME ?? "/root", `.env.legacy-retired-${run}`);
+    try {
+      writeFileSync(movedTo, part.moved, { mode: 0o600, flag: "wx" });
+    } catch (error) {
+      return { file: envFile, movedKeys: part.movedKeys, movedTo, problem: `cannot create ${movedTo}: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    chmodSync(movedTo, 0o600);
+    writeFileSync(envFile, part.kept, { mode: 0o600 });
+  }
+  chmodSync(envFile, 0o600);
+  return { file: envFile, movedKeys: part.movedKeys, movedTo };
+}
+
 function retire(): number {
   const checkout = flag("--legacy-checkout");
   const version = flag("--version");
+  const run = flag("--run");
   const receiptDir = flag("--receipt-dir");
-  if (!checkout || !version || !/^v\d+\.\d+\.\d+$/.test(version) || !receiptDir) {
-    console.error("usage: stop-legacy.ts retire --legacy-checkout DIR --version vX.Y.Z --receipt-dir DIR");
+  if (!checkout || !version || !/^v\d+\.\d+\.\d+$/.test(version) || !run || !/^\d{8}T\d{6}Z$/.test(run) || !receiptDir) {
+    console.error("usage: stop-legacy.ts retire --legacy-checkout DIR --version vX.Y.Z --run <run-ts> --receipt-dir DIR");
     return 2;
   }
   const dest = retiredPath(checkout, version);
@@ -135,8 +190,17 @@ function retire(): number {
     outcome = `refused: neither ${checkout} nor ${dest} exists`;
     code = 1;
   }
-  const file = writeReceipt(receiptDir, "retire-legacy.json", { step: "retire-legacy", checkout, retiredAs: dest, outcome });
+  // D61: doadmin lives only in ~/.env. The old checkout's .env (0644 on prod)
+  // held MIGRATE_DATABASE_URL as doadmin; its secret lines leave it now.
+  const env = code === 0 ? cleanLegacyEnv(dest, run) : { file: null, movedKeys: [], movedTo: null };
+  if ("problem" in env && env.problem) code = 1;
+  const file = writeReceipt(receiptDir, "retire-legacy.json", {
+    step: "retire-legacy", checkout, retiredAs: dest, outcome, legacyEnv: env.file, movedKeys: env.movedKeys, movedTo: env.movedTo,
+    problem: "problem" in env ? env.problem ?? null : null,
+  });
   (code === 0 ? console.log : console.error)(`[stop-legacy] ${checkout} → ${dest}: ${outcome}`);
+  if (env.file) console.log(`[stop-legacy] ${env.file}: ${env.movedKeys.length ? `moved ${env.movedKeys.join(", ")} to ${env.movedTo}` : "no secret line"}; mode 0600`);
+  if ("problem" in env && env.problem) console.error(`[stop-legacy] FAIL: ${env.problem}`);
   console.log(`[stop-legacy] receipt: ${file}`);
   return code;
 }

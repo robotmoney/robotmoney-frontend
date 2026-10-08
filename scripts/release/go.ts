@@ -9,6 +9,7 @@
 //   release: v0.6.0
 //   commit:  <40-hex sha>
 //   target:  prod
+//   recovery: <path or sha256 of the signed recovery matrix>   (SC.1, runbook section 8)
 //   operator: <name>          (optional)
 //   date:     2026-10-08      (optional)
 //   note:     <free text>     (optional)
@@ -20,13 +21,18 @@ export interface GoRecord {
   readonly release: string;
   readonly commit: string;
   readonly target: string;
+  /** The signed recovery matrix (SC.1): a file path, or the sha (40 or 64 hex) of the signed file. */
+  readonly recovery: string;
   readonly operator?: string;
   readonly date?: string;
   readonly note?: string;
   readonly sha256: string;
 }
 
-const REQUIRED = ["release", "commit", "target"] as const;
+const REQUIRED = ["release", "commit", "target", "recovery"] as const;
+
+/** A recovery reference is a sha (40 or 64 hex) or a path (absolute, ~/ or ./). */
+export const RECOVERY_REF_RE = /^([0-9a-f]{40}|[0-9a-f]{64}|[/~.][^\s]*)$/;
 const OPTIONAL = ["operator", "date", "note"] as const;
 
 /** Parse and check a go file against what the run is about to do. */
@@ -58,10 +64,11 @@ export function validateGo(
   if (fields.release && fields.release !== expected.release) errors.push(`the go is for release ${fields.release}; this run is ${expected.release}`);
   if (fields.commit && fields.commit !== expected.commit) errors.push(`the go is for commit ${fields.commit}; this run is ${expected.commit}`);
   if (fields.target && fields.target !== expected.target) errors.push(`the go is for target ${fields.target}; this run is ${expected.target}`);
+  if (fields.recovery && !RECOVERY_REF_RE.test(fields.recovery)) errors.push("the go's recovery must be the path or the sha of the signed recovery matrix (SC.1)");
   if (errors.length > 0) return { errors };
   return {
     go: {
-      release: fields.release!, commit: fields.commit!, target: fields.target!,
+      release: fields.release!, commit: fields.commit!, target: fields.target!, recovery: fields.recovery!,
       ...(fields.operator ? { operator: fields.operator } : {}),
       ...(fields.date ? { date: fields.date } : {}),
       ...(fields.note ? { note: fields.note } : {}),

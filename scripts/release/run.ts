@@ -26,6 +26,7 @@
 // It never prints a secret value. Output and receipts pass through
 // ./scrub.ts before they reach the console or the journal.
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -36,7 +37,12 @@ import {
   selectSteps, writeJournal, type ReceiptRecord, type RunJournal, type StepRecord,
 } from "./journal.ts";
 import { forbiddenReceiptPath, lineScrubber, scrubSecrets } from "./scrub.ts";
-import { RELEASE_STEPS, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate } from "./steps.ts";
+import {
+  CONTROL_HOST, READY_PENDING, RELEASE_STEPS, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
+} from "./steps.ts";
+
+/** The step whose end is READY: the watch steps count their window from it, and W1 grades sessions since it. */
+const READY_STEP = "R6.9";
 import { confirmTargetFilled, loadTarget, type ReleaseTarget } from "./target.ts";
 
 const NAME = "release:run";
@@ -114,16 +120,18 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
     `  target        ${target.name} (RM_ENV=${target.rmEnv}, instance ${target.instance})`,
     `  host          ${target.host}  checkout ${target.checkout}  HOME ${target.home}`,
     `  capture host  ${target.capture.host}  checkout ${target.capture.checkout}  HOME ${target.capture.home}`,
-    `  legacy stack  ${target.legacy.checkout} (${target.legacy.version}), tmux ${target.legacy.tmuxSession}, compose project ${target.legacy.composeProject}`,
+    `  legacy stack  ${target.legacy.checkout} (${target.legacy.version}${target.legacy.commit ? ` at ${target.legacy.commit.slice(0, 8)}` : ""}), tmux ${target.legacy.tmuxSession}, compose project ${target.legacy.composeProject}${target.legacy.log ? `, log ${target.legacy.log}` : ""}`,
     `  release       ${target.release} at ${commit}`,
     `  confirm       ${target.confirmTarget}`,
     `  step list     ${hash}`,
     "",
   ];
   for (const s of steps) {
-    lines.push(`  [${s.id}]${s.irreversible ? " IRREVERSIBLE" : ""} on ${s.host}: ${s.description}`);
+    const skip = s.onlyFor !== undefined && s.onlyFor !== target.rmEnv ? ` SKIPPED (only ${s.onlyFor})` : "";
+    const wait = s.notBefore ? ` not before ${s.notBefore.afterStep} + ${s.notBefore.hours} h` : "";
+    lines.push(`  [${s.id}]${s.irreversible ? " IRREVERSIBLE" : ""}${skip}${wait} on ${s.host}: ${s.description}`);
     if (s.standing.length > 0) lines.push(`      standing: ${s.standing.join(", ")}`);
-    lines.push(`      $ ssh -T ${s.host} ${shellQuote(s.remote)}`);
+    lines.push(s.host === CONTROL_HOST ? `      $ sh -c ${shellQuote(s.remote)}` : `      $ ssh -T ${s.host} ${shellQuote(s.remote)}`);
   }
   return lines.join("\n");
 }
@@ -229,6 +237,19 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
   const go: GoRecord = goResult.go;
 
+  // SC.1: the signed recovery matrix the go names. A path must be readable; its sha256 is journaled.
+  let recovery: { ref: string; sha256: string | null };
+  if (/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(go.recovery)) recovery = { ref: go.recovery, sha256: null };
+  else {
+    const path = go.recovery.startsWith("~/") ? join(deps.home, go.recovery.slice(2)) : resolve(go.recovery);
+    const text = deps.readText(path);
+    if (text === undefined) {
+      deps.error(`[${NAME}] refusing: the go names the recovery matrix ${go.recovery}, which cannot be read (SC.1).`);
+      return 2;
+    }
+    recovery = { ref: path, sha256: createHash("sha256").update(text).digest("hex") };
+  }
+
   if (!confirmTargetFilled(target)) {
     deps.error(`[${NAME}] refusing: ${target.name}.confirmTarget is the placeholder. Write host:port/database from ${target.host}:${target.home}/.env into the target file.`);
     return 2;
@@ -276,13 +297,48 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     journal = newJournal(target, commit, hash, ids, go, runTs, deps.now());
   }
   if (stageRecord) journal.stageJournal = stageRecord;
+  journal.recovery = recovery;
   writeJournal(runDir, journal);
   deps.log(`\n[${NAME}] go ${go.sha256.slice(0, 12)} for ${go.release} ${go.commit} on ${go.target}; journal ${runDir}`);
 
   for (const id of selected) {
-    const step = rendered[ids.indexOf(id)]!;
+    const template = steps[ids.indexOf(id)]!;
     const stepDir = join(runDir, id);
     mkdirSync(stepDir, { recursive: true, mode: 0o700 });
+
+    // A prod-only step (the release tags) is recorded skipped on any other policy.
+    if (template.onlyFor !== undefined && template.onlyFor !== target.rmEnv) {
+      const now = deps.now().toISOString();
+      journal.steps[id] = {
+        id, status: "skipped", skipped: target.rmEnv, exit: null, expectExit: template.expectExit, startedAt: now, endedAt: now,
+        durationMs: 0, receipts: [], attempt: (journal.steps[id]?.attempt ?? 0) + 1,
+      };
+      writeFileSync(join(stepDir, "result.json"), `${JSON.stringify(journal.steps[id], null, 2)}\n`, { mode: 0o600 });
+      journal.status = runStatus(journal, ids);
+      writeJournal(runDir, journal);
+      deps.log(`\n[${NAME}] ── ${id} skipped: ${target.rmEnv} (runs only for ${template.onlyFor})`);
+      continue;
+    }
+
+    // A watch step waits for its window after READY.
+    if (template.notBefore !== undefined) {
+      const anchor = journal.steps[template.notBefore.afterStep];
+      if (anchor?.status !== "ok" || !anchor.endedAt) {
+        deps.error(`[${NAME}] ${id} runs only after ${template.notBefore.afterStep} passed in this run; it has not.`);
+        return 2;
+      }
+      const earliest = new Date(Date.parse(anchor.endedAt) + template.notBefore.hours * 3_600_000);
+      if (deps.now().getTime() < earliest.getTime()) {
+        journal.status = runStatus(journal, ids);
+        writeJournal(runDir, journal);
+        deps.log(`\n[${NAME}] ${id} becomes runnable at ${earliest.toISOString()} (${template.notBefore.afterStep} ended ${anchor.endedAt} + ${template.notBefore.hours} h).`);
+        deps.log(`[${NAME}] resume then with:\n  ${resumeCommand({ target: args.target!, go: args.go, runTs, stepId: id, stageJournal: args.stageJournal })}`);
+        return 3;
+      }
+    }
+
+    const readyIso = journal.steps[READY_STEP]?.status === "ok" ? journal.steps[READY_STEP]!.endedAt : undefined;
+    const step = renderStep(template, target, templateValues(target, commit, runTs, readyIso ?? READY_PENDING));
     const started = deps.now();
     const record: StepRecord = {
       id, status: "running", exit: null, expectExit: step.expectExit, startedAt: started.toISOString(),
@@ -358,7 +414,8 @@ export function realDeps(): RunnerDeps {
   return {
     exec(host, remote, onStdout, onStderr) {
       return new Promise((done, fail) => {
-        const child = spawn("ssh", [...SSH_OPTS, host, remote], { stdio: ["ignore", "pipe", "pipe"] });
+        const argv = host === CONTROL_HOST ? ["sh", ["-c", remote]] as const : ["ssh", [...SSH_OPTS, host, remote]] as const;
+        const child = spawn(argv[0], [...argv[1]], { stdio: ["ignore", "pipe", "pipe"] });
         child.stdout.setEncoding("utf8").on("data", onStdout);
         child.stderr.setEncoding("utf8").on("data", onStderr);
         child.on("error", fail);
@@ -366,7 +423,8 @@ export function realDeps(): RunnerDeps {
       });
     },
     async collect(host, remote) {
-      const r = spawnSync("ssh", [...SSH_OPTS, host, remote], { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+      const [cmd, cmdArgs] = host === CONTROL_HOST ? ["sh", ["-c", remote]] : ["ssh", [...SSH_OPTS, host, remote]];
+      const r = spawnSync(cmd, cmdArgs, { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
       return { code: r.status ?? 1, stdout: r.stdout ?? "" };
     },
     resolveTag(tag) {
