@@ -169,7 +169,7 @@ other user reaches it. S8.1 moves its secret lines out anyway.
 | Final tag | W3 tags `v0.6.0` at the same commit, after the watch passes |
 | Window | **Long and breaking.** Pending migrations include `breaking` ones, so the stack is **down** from R6.1 until R6.7a reaches READY. The api, the site and every participant are unavailable in between |
 
-### 1.1 Pending migrations (39 files, from the 76-name ledger)
+### 1.1 Pending migrations (40 files, from the 76-name ledger)
 
 > **Owner, 2026-10-05 (1173):** from v0.6.0 the migration strategy is to become ONE idempotent,
 > lossless schema file runnable at any database version. That is filed, not started. This
@@ -180,7 +180,9 @@ the live ledger. R6.3's receipt lists the files it applied.
 
 - **No `compat:` header (6, they predate the runner's metadata):** `0056_swarm_judge_requires_model`, `0057_swarm_judge_policy_stamp`, `0058_swarm_judge_fault_injection`, `0059_swarm_judgement_completion_usage`, `0062_rm_worker_analytics_ledger_read_grant`, `0081_deployment_identity`. `0081` is applied first by the guarded pass (R6.3). A `NULL` compat refuses an older image (spec §8.4).
 - **Breaking (8):** `0084` (drops the notification outbox table), `0089_drop_swarm_schedules`, `0096_drop_swarm_scheduler_jobs`, `0097_stream_events_grant_only`, `0098_stream_event_counter`, `0106_webauthn_challenge_slots`, `0107_revoke_runtime_delete`, `0110_drop_swarm_judge_fault_injection`.
-- **Additive (25):** `0082`, `0083`, `0085`–`0088`, `0090`–`0095`, `0099`–`0105`, `0108`, `0109`, `0111_swarm_judge_model_deepseek_v4_1_flash`, `0112_rm_app_overwrite_events_read`, `0113_rm_worker_buyback_indexer_grants`, `0114_seat_in_flight_unrostered_sessions`.
+- **Additive (26):** `0082`, `0083`, `0085`–`0088`, `0090`–`0095`, `0099`–`0105`, `0108`, `0109`, `0111_swarm_judge_model_deepseek_v4_1_flash`, `0112_rm_app_overwrite_events_read`, `0113_rm_worker_buyback_indexer_grants`, `0114_seat_in_flight_unrostered_sessions`, `0115_token_market_samples`.
+
+After R6.3 the ledger holds 116 rows: the 76 recorded names plus these 40 files.
 
 Because a pending migration is `breaking`, spec §8.5 fixes the order: stop (R6.1), migrate (R6.3),
 boot (R6.7a). There is no rolling variant.
@@ -460,7 +462,7 @@ The journal is under `~/.local/state/robotmoney-release/prod/<run-ts>/`. Each st
 | R6.2a | `credentials-init.ts`: reads the four in-house member ids through `rm_readonly`, writes `credential.json` and `RM_CREDENTIALS`. Keeps an existing file with the same roster | no | `credentials-init.json`: handles and key names only |
 | R6.2 | `env-rewrite.ts`: `~/.env` to the D61 allowlist. Other keys move to `~/.env.retired-<run-ts>` (0600) | no | `env-rewrite.json`: kept and moved key names |
 | R6.2b | `prod-init enable-owner-login`: as `doadmin`, `ALTER ROLE rm_owner LOGIN` when needed, then proves an `rm_owner` login | no | `enable-owner-login-*.json`: `rolcanlogin` before, whether it altered, the login proven |
-| R6.3 | `bun run migrate`: `0081_deployment_identity` first with `production` in the same transaction, then every pending file in filename order | **yes**: no code-only rollback after this | `migrate-receipt-*.json`: pre-identity state, matched baseline, **39 applied files** |
+| R6.3 | `bun run migrate`: `0081_deployment_identity` first with `production` in the same transaction, then every pending file in filename order | **yes**: no code-only rollback after this | `migrate-receipt-*.json`: pre-identity state, matched baseline, **40 applied files**, ledger at 116 rows (76 + 40) |
 | S8.1 | `stop-legacy.ts retire`: renames the old checkout to `/root/robotmoney-frontend.v0.5.4-retired`, `chmod -R go-rwx`, moves its `.env` secret lines to `~/.env.legacy-retired-<run-ts>` (0600) | no | `retire-legacy.json`: new path, moved key names |
 | R6.4 | `prod-init set-identity`: reads the identity the migrate wrote. Writes nothing | no | `set-identity-*.json`: kind `production` |
 | R6.5 | `prod-init provision-tokens`: mints the three service tokens. A rerun is a rotation | no | `provision-tokens-*.json`: three holders |
