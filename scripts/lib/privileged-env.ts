@@ -12,7 +12,7 @@
 //   - backend/scripts/smoke-prepare.ts (a remote `bun smoke --migrate/--seed`),
 //   - backend/scripts/prune.ts (`bun run prune`),
 //   - scripts/prod-init.ts (set-identity, provision-tokens, rebind-members,
-//     enable-owner-login).
+//     role-passwords).
 //
 // WHAT IT NEVER DOES. It never prints, logs or returns a password inside a
 // message. A refusal names the KEY and the FILE, never the value. It never

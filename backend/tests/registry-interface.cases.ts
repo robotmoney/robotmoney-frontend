@@ -441,13 +441,13 @@ describe("registerStatement — the object-less kind (D55 (13)), a closed list o
     expect(() => registerStatement(statement({ callers: ["not a module"] }))).toThrow("caller");
   });
 
-  test("D61: doadmin declares a provisioning shape from scripts/enable-owner-login only, and nobody else may", () => {
+  test("D61: doadmin declares a provisioning shape from scripts/role-passwords only, and nobody else may", () => {
     const provisioning = (over: Partial<StatementDeclaration> = {}): StatementDeclaration =>
       statement({
         role: "doadmin",
-        shape: "ownerCanLogin",
-        site: `scripts/enable-owner-login:fixture_${++seq}`,
-        callers: ["scripts/enable-owner-login"],
+        shape: "rolesLoginState",
+        site: `scripts/role-passwords:fixture_${++seq}`,
+        callers: ["scripts/role-passwords"],
         ...over,
       });
     // The one admitted shape of a doadmin declaration registers and runs its text.
@@ -459,7 +459,7 @@ describe("registerStatement — the object-less kind (D55 (13)), a closed list o
     expect(() => registerStatement(provisioning({ site: site("doadmin_elsewhere") }))).toThrow("used by one command only");
     expect(() => registerStatement(provisioning({ callers: ["scripts/prod-bootstrap"] }))).toThrow("used by one command only");
     expect(() =>
-      registerStatement(provisioning({ callers: ["scripts/enable-owner-login", "scripts/prod-bootstrap"] })),
+      registerStatement(provisioning({ callers: ["scripts/role-passwords", "scripts/prod-bootstrap"] })),
     ).toThrow("used by one command only");
     // A provisioning shape under any §3 role is refused: it is doadmin's alone.
     for (const role of TAXONOMY_ROLES) {

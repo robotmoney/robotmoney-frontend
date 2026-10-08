@@ -43,7 +43,9 @@ It builds these pieces, in order:
    every role that is not a superuser, with DigitalOcean's exact attribute line.
    `doadmin` is `LOGIN CREATEROLE CREATEDB`, never a superuser. It holds ADMIN over
    `rm_owner`, `rm_app`, `rm_worker` and `rm_readonly`. `rm_owner` is `NOLOGIN` and
-   has a password. The tool generates every password on the host.
+   has a password nobody keeps. The tool generates every password on the host.
+   It holds the `doadmin` password in memory for the checks and then drops it:
+   doadmin is stored in no file ([D61](../decisions.md), owner 2026-10-08).
 5. **Owners and grants.** The capture carries no owners and no grants. So the tool
    replays production's 76 ledger files in a scratch database. It applies them the
    way the legacy runner did: as `doadmin`, with `SET LOCAL ROLE rm_owner` from 0054
@@ -64,13 +66,15 @@ It builds these pieces, in order:
 8. **`~/.env`.** The file `/home/stage-server/stage-target/.env` has mode 0600. It
    holds production's key names in production's order: `rm_app`, `rm_worker`,
    `rm_readonly`, `SWARM_SCHEDULES_ENABLED`, `host`, `port`, `database`, `sslmode`,
-   `OPENCODE_API_KEY`, `COINGECKO_API_KEY`. It adds the two D61 lines, `rm_owner`
-   and `doadmin`. The two model and data keys come from stage-2's own `~/.env`.
+   `OPENCODE_API_KEY`, `COINGECKO_API_KEY`. It has no `rm_owner` line and no
+   `doadmin` line: that is production's state before `role-passwords` runs. The
+   two model and data keys come from stage-2's own `~/.env`.
 9. **The legacy checkout `.env`.** Production's legacy checkout holds a `.env`
    that Bun loads into the legacy driver. The stage copy has the same key names:
    `DATABASE_URL`, `WORKER_DATABASE_URL`, `username`, `password`, `host`, `port`,
    `database`, `sslmode`, `OPENCODE_API_KEY`, `SWARM_SCHEDULES_ENABLED` and
-   `MIGRATE_DATABASE_URL` (a `doadmin` URL, as on production).
+   `MIGRATE_DATABASE_URL` (a `doadmin` URL, as on production, with an inert
+   random password doadmin does not have).
 10. **The legacy stack and its driver.** tmux session `stage-driver` runs
     `$HOME/legacy-launch.sh` in the legacy checkout. The script runs production's
     line: `SMOKE_PROJECT=stage_target bun run smoke:archive -- --no-tui`, piped
@@ -83,6 +87,11 @@ It builds these pieces, in order:
 
 `bun scripts/release/stage-target.ts status` reports each piece.
 `bun scripts/release/stage-target.ts down` removes each piece.
+`bun scripts/release/stage-target.ts doadmin` gives the stage `doadmin` a fresh
+password and prints it, alone, to stdout, for a pipe into `role-passwords`. It
+sets the password through the container's local superuser socket and writes it to
+no file. It exists only because the stage database is disposable. Production has
+no such command: there the admin types the doadmin password.
 
 ## How production runs the legacy stack
 
@@ -118,7 +127,17 @@ A rehearsal needs a fresh dump, so the target is rebuilt each time.
    bun scripts/release/stage-target.ts up --dump /home/stage-server/rm-backup-prod-<stamp> --replace
    ```
 
-3. Read `status`. Then run the release runner against the target.
+3. Set the role passwords, the same precondition production runs before its release:
+
+   ```bash
+   bun scripts/release/stage-target.ts doadmin | bun run role-passwords --target stage --doadmin-stdin
+   ```
+
+   It keeps the working runtime lines, makes `rm_owner` LOGIN, generates its
+   password and writes the `rm_owner` line into the stage `~/.env`. A rerun keeps
+   every role.
+
+4. Read `status`. Then run the release runner against the target.
 
 `up` refuses a dump older than 24 hours. `up` refuses when any piece already exists,
 unless `--replace` is given. `--replace` runs `down` first. `down` removes the
@@ -143,5 +162,7 @@ build takes most of the rest.
 | `/etc/environment` cannot be written without root. | `legacy-launch.sh` exports the same `DATABASE_*` names from the stage `~/.env` before it starts the driver. An ssh session on stage does not get them. An ssh session on production does. |
 | The legacy checkout `.env` has mode 0600. | Production's has 0644. A stage file is not made weaker on purpose. |
 | The stage `~/.env` has no `RM_ENV` line. | Production's has none either. The cutover adds it. |
+| `legacy-launch.sh` exports an inert `DATABASE_PASSWORD`. | Production's `/etc/environment` holds the real doadmin password. Stage stores doadmin in no file (D61, owner 2026-10-08), so the script draws a random value doadmin does not have. The v0.5.4 driver builds its own container URLs and does not connect with it. |
+| `stage-target doadmin` prints a doadmin password. | The stage database is disposable. Production has no such command; its admin types the password at `role-passwords`' hidden prompt. |
 | The model key is stage-2's own key. | No production secret leaves production. |
 | The container has 1 GB of shared memory and stage-2's 4 CPUs and 7 GB. | Production's managed primary is sized by DigitalOcean. |

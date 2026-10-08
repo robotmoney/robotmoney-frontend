@@ -1110,7 +1110,7 @@ export interface SchemaIdentity {
  * `rm_readonly`; `RM_ENV`; `RM_CREDENTIALS`; and `COINGECKO_API_KEY`." D61 adds
  * the two privileged passwords: `rm_owner` (read by `bun run migrate`, `bun run
  * prune`, a remote `bun smoke --migrate/--seed` and `prod-init`) and `doadmin`
- * (read by `prod-init enable-owner-login` alone). No container receives either.
+ * (read by `prod-init role-passwords` alone). No container receives either.
  *
  * The connection keys are spelled the way scripts/lib/env-role.ts's
  * `CONNECTION_TOKENS` reads them — the DigitalOcean panel's `host`, `port`,

@@ -88,7 +88,7 @@
 // decisions" (§8.3) and only the schema owner writes them. Migration 0053
 // creates `rm_owner` LOGIN on a fresh cluster; an EXISTING database recorded
 // 0053 when it said NOLOGIN, so there spec §9.1 step 1 is a one-time `doadmin`
-// step (`bun scripts/prod-init.ts enable-owner-login`, D61), and the refusal
+// step (`bun scripts/prod-init.ts role-passwords`, D61), and the refusal
 // says which of the two situations it is in.
 //
 // ─────────────────────────────────────────────────────────────────────────────
@@ -870,7 +870,7 @@ export function urlAsRole(targetUrl: string, role: string, password: string): st
  * Refusals: a local run with no generated password handed in; a remote run
  * whose `~/.env` has no `rm_owner` line (naming the key and the file); a login
  * that fails — and when `pg_roles` says `rm_owner` is NOLOGIN, the refusal
- * names `bun scripts/prod-init.ts enable-owner-login`.
+ * names `bun scripts/prod-init.ts role-passwords`.
  */
 export async function resolveOwnerPassword(
   options: MigrateGateOptions & { readonly localOwnerPassword?: string; readonly remote?: RemoteAuthority },
@@ -902,7 +902,7 @@ export async function resolveOwnerPassword(
  * Verify the owner login, and tell the two failures apart. "Password
  * authentication failed" against a NOLOGIN role is the least useful sentence
  * available: on a database that recorded 0053 when it said NOLOGIN the role
- * cannot log in until `prod-init enable-owner-login` has run through `doadmin`.
+ * cannot log in until `prod-init role-passwords` has run through `doadmin`.
  * The driver's error text is scrubbed of the password before it is reported.
  */
 async function assertOwnerLoginWorks(targetUrl: string, password: string): Promise<void> {
@@ -914,8 +914,8 @@ async function assertOwnerLoginWorks(targetUrl: string, password: string): Promi
     if (await ownerIsNologin(targetUrl)) {
       throw new Error(
         "Refusing: rm_owner cannot log in to this database (it is NOLOGIN). Run " +
-          "`bun scripts/prod-init.ts enable-owner-login --confirm-target <host:port/database>`, which connects as " +
-          "doadmin from $HOME/.env, runs `ALTER ROLE rm_owner LOGIN` and proves the login, then retry. This " +
+          "`bun scripts/prod-init.ts role-passwords --confirm-target <host:port/database>`, which connects as " +
+          "doadmin from $HOME/.env, makes rm_owner LOGIN (generating its password into $HOME/.env when the line is absent) and proves the login, then retry. This " +
           "database recorded migration 0053 when it created the role NOLOGIN, and the runner never re-applies a " +
           "recorded file, so no migration can perform this step (decision D61).",
       );

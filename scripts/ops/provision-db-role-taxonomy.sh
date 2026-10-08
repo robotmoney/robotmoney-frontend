@@ -489,13 +489,14 @@ VERIFY
 
 echo
 echo "Roles provisioned and VERIFIED."
-# This script never sets rm_owner's password. D61 (2026-10-08) keeps that
-# password in $HOME/.env as an `rm_owner = …` line, beside a `doadmin = …`
-# line, and every later step reads both from there.
-echo "Next (spec §9.1 step 1, D61): keep the doadmin line in \$HOME/.env and add an rm_owner = <password> line."
-echo "  Then run: bun scripts/prod-init.ts enable-owner-login --confirm-target <host:port/database>"
-echo "  It runs ALTER ROLE rm_owner LOGIN only when the role is NOLOGIN, then proves the rm_owner login."
-echo "  doadmin stays in \$HOME/.env; enable-owner-login is the only command that uses it."
+# This script sets no password the host keeps. D61 (owner, 2026-10-08): the
+# four role passwords are set by `prod-init role-passwords`, idempotently, and
+# kept as `<role> = …` lines in $HOME/.env. doadmin is stored in no file.
+echo "Next (spec §9.1 step 1, D61): from the control machine, run"
+echo "  bun run role-passwords --target <stage|prod>"
+echo "  It asks for the doadmin password (hidden; never stored) and runs prod-init role-passwords on the host."
+echo "  It keeps each working <role> line in \$HOME/.env, generates an absent one (sent to the server as a"
+echo "  SCRAM verifier, written to \$HOME/.env 0600), makes rm_owner LOGIN, and proves every login."
 echo "Then run \`bun run migrate --confirm-target <host:port/database>\` from the repo root."
 echo "  It reads the rm_owner password from \$HOME/.env and never prompts."
 if [[ "$set_passwords" -eq 1 ]]; then

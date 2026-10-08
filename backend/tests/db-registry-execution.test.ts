@@ -63,6 +63,13 @@ import {
   type TablePrivilege,
 } from "../src/db/registry.ts";
 import { adminConnection, adminExec, harnessConnection, ROLE_PASSWORD, roleUrl } from "./support/cluster.ts";
+import { passwordVerifierLiteral, scramSha256Verifier } from "../src/db/scram-verifier.ts";
+
+/** A provisioning shape as runnable text: the password slot gets a vetted verifier literal, as onStatement fills it. */
+function provisioningProbeText(shape: ProvisioningShape): string {
+  const text: string = PROVISIONING_SHAPES[shape];
+  return text.includes("$1") ? text.replace("$1", passwordVerifierLiteral(scramSha256Verifier("probe-password")).sql) : text;
+}
 
 const BACKEND = join(import.meta.dir, "..");
 const SRC = join(BACKEND, "src");
@@ -133,7 +140,7 @@ function declaringModules(): Map<string, number> {
 
 /** Every module under scripts/ that calls `registerStatement(...)`. An operator
  *  command that issues only object-less or provisioning statements (D61's
- *  scripts/enable-owner-login) is reached by no entry graph and by no
+ *  scripts/role-passwords) is reached by no entry graph and by no
  *  `registerQuery` scan, so it is imported for its statements by this list. */
 function statementScripts(): string[] {
   return tsFilesUnder(SCRIPTS).filter((file) => readFileSync(file, "utf8").includes("registerStatement("));
@@ -518,7 +525,10 @@ beforeAll(async () => {
     await superuser.unsafe(`CREATE ROLE ${SCRATCH} LOGIN NOINHERIT PASSWORD '${ROLE_PASSWORD()}'`);
     await superuser.unsafe(`DROP ROLE IF EXISTS ${DOADMIN_STANDIN}`);
     await superuser.unsafe(`CREATE ROLE ${DOADMIN_STANDIN} LOGIN CREATEROLE NOINHERIT PASSWORD '${ROLE_PASSWORD()}'`);
-    await superuser.unsafe(`GRANT rm_owner TO ${DOADMIN_STANDIN} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`);
+    // The provider's doadmin holds ADMIN on each §3 role it created.
+    for (const role of ["rm_owner", "rm_app", "rm_worker", "rm_readonly"]) {
+      await superuser.unsafe(`GRANT ${role} TO ${DOADMIN_STANDIN} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`);
+    }
     // A blank database owned by rm_owner (since Postgres 15 only the database
     // owner may CREATE in `public`), copied from template0 so nothing the
     // suite's migration-built template holds comes with it.
@@ -737,16 +747,26 @@ describe("every registered query runs as its declared role on a disposable datab
     expect([...new Set(statements.map((s) => s.shape as string))].sort()).toEqual(Object.keys(PROVISIONING_SHAPES).sort());
     const failures: string[] = [];
     for (const statement of statements) {
-      const shape = PROVISIONING_SHAPES[statement.shape as ProvisioningShape];
+      // A password shape's slot is a vetted verifier literal, inlined (a
+      // utility statement takes no bound parameter). The probe rolls back, so
+      // every role keeps the suite's password.
+      const shape = provisioningProbeText(statement.shape as ProvisioningShape);
       const outcome = await runProbe(login(DOADMIN_STANDIN), { statement: shape });
       if (!outcome.ok) failures.push(`${statement.site}: as the doadmin stand-in → ${outcome.code} ${outcome.message}`);
     }
     expect(failures).toEqual([]);
     // Red control: the DDL needs what only the provisioning role holds. Every
     // §3 role is refused it, so the stand-in's success above is a real grant.
+    // (Postgres lets any role change its OWN password, so a runtime role's
+    // own password shape is left out; rm_owner's adds LOGIN, which it may not
+    // grant itself, so it stays in.)
+    const own: Record<string, string> = { rm_app: "appPasswordSet", rm_worker: "workerPasswordSet", rm_readonly: "readonlyPasswordSet" };
     for (const role of ROLES) {
-      const outcome = await runProbe(login(role), { statement: PROVISIONING_SHAPES.ownerLoginEnable });
-      expect(outcome.ok ? "ran" : outcome.code, role).toBe("42501");
+      for (const shape of ["ownerLoginEnable", "ownerPasswordSet", "appPasswordSet", "workerPasswordSet", "readonlyPasswordSet"] as const) {
+        if (own[role] === shape) continue;
+        const outcome = await runProbe(login(role), { statement: provisioningProbeText(shape) });
+        expect(outcome.ok ? "ran" : outcome.code, `${role} ${shape}`).toBe("42501");
+      }
     }
   });
 

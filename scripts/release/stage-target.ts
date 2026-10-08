@@ -5,6 +5,7 @@
 //   bun scripts/release/stage-target.ts up --dump <dir on stage-2> [--replace]
 //   bun scripts/release/stage-target.ts status
 //   bun scripts/release/stage-target.ts down
+//   bun scripts/release/stage-target.ts doadmin   (stage only: a fresh doadmin password on stdout, for a pipe)
 //
 // Run from the CONTROL machine. It bundles itself, copies the bundle to the
 // stage host and runs it there over ssh with stdin closed (`remote <command>`).
@@ -18,14 +19,26 @@
 //   3. a long-lived Postgres 18 container over TLS on a fixed port, its data in
 //      a named volume;
 //   4. DigitalOcean's role shape from the dump's own globals, with generated
-//      passwords (rm_owner NOLOGIN with a password, doadmin CREATEROLE);
+//      passwords (rm_owner NOLOGIN with a password nobody keeps, doadmin
+//      CREATEROLE with a password held in memory for the checks, then dropped);
 //   5. production's owners and grants, from a replay of the 76 ledger files in
 //      a scratch database (the capture carries none);
 //   6. the restored dump, with those owners and grants, checked against the
 //      pre-cutover shape (ledger 76, no deployment_identity);
-//   7. `~/.env` with production's key names plus rm_owner and doadmin, and the
-//      legacy checkout `.env` with production's key names;
+//   7. `~/.env` with production's key names only (no rm_owner line, no
+//      doadmin: production's pre-state), and the legacy checkout `.env` with
+//      production's key names;
 //   8. the legacy stack and its driver in tmux, started as production's are.
+//
+// doadmin is stored in no file (D61, owner 2026-10-08). After `up`, the stage
+// sequence is production's: `up`, then
+//
+//   bun scripts/release/stage-target.ts doadmin | bun run role-passwords --target stage --doadmin-stdin
+//
+// then `release:run`. `doadmin` gives the stage doadmin a fresh password
+// through the container's local superuser socket and prints it to stdout, for
+// that pipe and nothing else. It exists because this is a disposable stage
+// database; production has no such command (its doadmin is typed by the admin).
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -40,8 +53,8 @@ import {
   bindDatabase,
   composeLegacyCheckoutEnv,
   composeStageHomeEnv,
-  D61_HOME_ENV_KEYS,
   DOADMIN_ADMIN_QUERY,
+  doadminPasswordSql,
   dumpAgeHours,
   envKeyNames,
   fingerprintDiff,
@@ -350,8 +363,6 @@ function writeEnvFiles(passwords: Record<GeneratedPasswordRole, string>): StageH
     port: String(T.pgPort),
     database: T.database,
     sslmode: "require",
-    rm_owner: passwords.rm_owner,
-    doadmin: passwords.doadmin,
     OPENCODE_API_KEY: stageDefault.OPENCODE_API_KEY!,
     COINGECKO_API_KEY: stageDefault.COINGECKO_API_KEY!,
   };
@@ -359,7 +370,8 @@ function writeEnvFiles(passwords: Record<GeneratedPasswordRole, string>): StageH
   writeFileSync(homeEnv, composeStageHomeEnv(values), { mode: 0o600 });
   chmodSync(homeEnv, 0o600);
   const legacyEnv = join(T.legacyCheckout, ".env");
-  writeFileSync(legacyEnv, composeLegacyCheckoutEnv(values), { mode: 0o600 });
+  // An inert doadmin password: production's key and role, a value doadmin does not have.
+  writeFileSync(legacyEnv, composeLegacyCheckoutEnv(values, generatePassword()), { mode: 0o600 });
   chmodSync(legacyEnv, 0o600);
   log(`wrote ${homeEnv} (0600): ${envKeyNames(readFileSync(homeEnv, "utf8")).join(", ")}`);
   log(`wrote ${legacyEnv} (0600): ${envKeyNames(readFileSync(legacyEnv, "utf8")).join(", ")}`);
@@ -620,9 +632,11 @@ async function remoteStatus(): Promise<number> {
   const homeEnv = join(T.home, ".env");
   if (existsSync(homeEnv)) {
     const keys = envKeyNames(readFileSync(homeEnv, "utf8"));
-    const want = [...PROD_HOME_ENV_KEYS, ...D61_HOME_ENV_KEYS];
-    const same = keys.length === want.length && want.every((k) => keys.includes(k));
-    line("~/.env", `${homeEnv} keys: ${keys.join(" ")} (${same ? "production's key names + rm_owner, doadmin" : "DIFFERS from production's"})`);
+    const want: readonly string[] = PROD_HOME_ENV_KEYS;
+    const pre = keys.length === want.length && want.every((k) => keys.includes(k));
+    const after = keys.length === want.length + 1 && want.every((k) => keys.includes(k)) && keys.includes("rm_owner");
+    line("~/.env", `${homeEnv} keys: ${keys.join(" ")} (${pre ? "production's key names: role-passwords not yet run" : after ? "production's key names + the rm_owner line role-passwords wrote" : "DIFFERS from production's"})`);
+    if (keys.includes("doadmin")) line("", "REFUSE: ~/.env holds a doadmin line; doadmin is stored in no file (D61)");
   } else line("~/.env", "absent");
   const legacyEnv = join(T.legacyCheckout, ".env");
   if (existsSync(legacyEnv)) {
@@ -646,6 +660,22 @@ async function remoteStatus(): Promise<number> {
   for (const c of containers.split("\n").filter(Boolean)) line("", c);
   const site = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", `http://127.0.0.1:${T.legacyWebPort}/`]).stdout.trim();
   line("legacy site", `http://127.0.0.1:${T.legacyWebPort}/ -> ${site || "no answer"}`);
+  return 0;
+}
+
+/**
+ * Stage only: give the stage doadmin a fresh password and print it, alone, to
+ * stdout, for `| bun run role-passwords --target stage --doadmin-stdin`. It is
+ * set through the container's local superuser socket (psql reads the statement
+ * on stdin, never argv) and written to no file. A disposable stage credential:
+ * production has no such command.
+ */
+function remoteDoadmin(): number {
+  const running = run(["docker", "inspect", "-f", "{{.State.Status}}", T.pgContainer]);
+  if (running.code !== 0 || !running.stdout.startsWith("running")) throw new Refusal(`${T.pgContainer} is not running: run \`stage-target up\` first`);
+  const password = generatePassword();
+  psql(doadminPasswordSql(password), { secret: true });
+  process.stdout.write(`${password}\n`);
   return 0;
 }
 
@@ -674,7 +704,7 @@ async function control(command: string, args: string[]): Promise<number> {
   return await p.exited;
 }
 
-const USAGE = `usage: bun scripts/release/stage-target.ts up --dump <dir on ${T.host}> [--replace] | status | down`;
+const USAGE = `usage: bun scripts/release/stage-target.ts up --dump <dir on ${T.host}> [--replace] | status | down | doadmin`;
 
 async function main(argv: string[]): Promise<number> {
   const [first, ...rest] = argv;
@@ -684,10 +714,11 @@ async function main(argv: string[]): Promise<number> {
       if (command === "up") return await remoteUp(args);
       if (command === "down") return await remoteDown();
       if (command === "status") return await remoteStatus();
+      if (command === "doadmin") return remoteDoadmin();
       console.error(USAGE);
       return 2;
     }
-    if (first === "up" || first === "down" || first === "status") return await control(first, rest);
+    if (first === "up" || first === "down" || first === "status" || first === "doadmin") return await control(first, rest);
     console.error(USAGE);
     return 2;
   } catch (e) {
