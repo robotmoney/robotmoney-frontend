@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // scripts/release/schedule-parity.ts — release step R7.4a, run ON THE TARGET HOST
-// one full epoch after READY. Owner rule (v0-6-0-rollout.md section 0): an
+// the watch length after READY (./watch.ts). Owner rule (v0-6-0-rollout.md section 0): an
 // upgrade does not change usual schedules.
 //
 //   bun scripts/release/schedule-parity.ts --instance <name> --run <run-ts> --receipt-dir <dir>
@@ -22,12 +22,12 @@ import { join } from "node:path";
 import { instancePaths, readStackState, stateRoot } from "../lib/smoke-state.ts";
 import { openReadOnly } from "./db-read.ts";
 import { releaseStateDir } from "./release-state.ts";
+import { PRODUCTION_EPOCH_SECONDS, PUBLISH_GRACE_SECONDS } from "./watch.ts";
 
-export const PRODUCTION_EPOCH_SECONDS = 21600;
+// One source for the epoch and the grace: the watch length (./watch.ts) is derived from them.
+export { PRODUCTION_EPOCH_SECONDS, PUBLISH_GRACE_SECONDS };
 /** docker-compose.yml's default when PRODUCER_REGIME_CRON is unset (scripts/standing-soak.ts DEFAULT_REGIME_CRON). */
 export const DEFAULT_REGIME_CRON = "30 22 * * *";
-/** Slack after close + judging before a publish counts as late. */
-export const PUBLISH_GRACE_SECONDS = 1800;
 
 export interface BaselineSession { readonly id: string; readonly subject: string; readonly state: string; readonly window_closes_at: string | null }
 export interface CurrentSession {

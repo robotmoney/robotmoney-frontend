@@ -41,7 +41,7 @@ import {
 } from "./journal.ts";
 import { forbiddenReceiptPath, lineScrubber, scrubSecrets } from "./scrub.ts";
 import {
-  CONTROL_HOST, READY_PENDING, RELEASE_STEPS, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
+  CONTROL_HOST, notBeforeOf, READY_PENDING, RELEASE_STEPS, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
 } from "./steps.ts";
 
 /** The step whose end is READY: the watch steps count their window from it, and W1 grades sessions since it. */
@@ -315,18 +315,19 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       continue;
     }
 
-    // A watch step waits for its window after READY.
-    if (template.notBefore !== undefined) {
-      const anchor = journal.steps[template.notBefore.afterStep];
+    // A watch step waits for its window after READY (the target's watchHours).
+    const notBefore = notBeforeOf(template, target);
+    if (notBefore !== undefined) {
+      const anchor = journal.steps[notBefore.afterStep];
       if (anchor?.status !== "ok" || !anchor.endedAt) {
-        deps.error(`[${NAME}] ${id} runs only after ${template.notBefore.afterStep} passed in this run; it has not.`);
+        deps.error(`[${NAME}] ${id} runs only after ${notBefore.afterStep} passed in this run; it has not.`);
         return 2;
       }
-      const earliest = new Date(Date.parse(anchor.endedAt) + template.notBefore.hours * 3_600_000);
+      const earliest = new Date(Date.parse(anchor.endedAt) + notBefore.hours * 3_600_000);
       if (deps.now().getTime() < earliest.getTime()) {
         journal.status = runStatus(journal, ids);
         writeJournal(runDir, journal);
-        deps.log(`\n[${NAME}] ${id} becomes runnable at ${earliest.toISOString()} (${template.notBefore.afterStep} ended ${anchor.endedAt} + ${template.notBefore.hours} h).`);
+        deps.log(`\n[${NAME}] ${id} becomes runnable at ${earliest.toISOString()} (${notBefore.afterStep} ended ${anchor.endedAt} + ${notBefore.hours} h).`);
         deps.log(`[${NAME}] resume then with:\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: id, stageJournal: args.stageJournal })}`);
         return 3;
       }

@@ -35,7 +35,8 @@ bun run release:run --target prod  --go ~/go-v0.6.0-prod.txt --stage-journal <di
 - `--only <step>` runs one step.
 - `--run <run-ts>` without `--from` continues at the first step that is not ok.
 - `--stage-journal <dir>` is required when the target is `prod`.
-- A watch step (W1, R7.4a) runs no earlier than R6.9's end plus 6 hours. Reaching it early, the runner stops with exit 3 and prints when it becomes runnable. `--run <run-ts>` resumes it then.
+- A watch step (W1, R7.4a) runs no earlier than R6.9's end plus the target's `watchHours` (10 h). Reaching it early, the runner stops with exit 3 and prints when it becomes runnable. `--run <run-ts>` resumes it then.
+- Why 10 h: W1 needs every subject to publish one good session after READY. A subject with no open window at boot gets a first epoch, which lasts up to 1.5 epochs (system-scheduler-spec §2.2). That is 9 h at 6 h epochs. Judging (15 min) and R7.4a's publish grace (30 min) bring it to 9.75 h, rounded up. `scripts/release/watch.ts` derives it. The old 6 h watch failed check 7 on stage run `20261008T042158Z`: treasury and woon were still collecting.
 
 ## The go file
 
@@ -82,6 +83,7 @@ release commit: a top-level `commit` or `tag` refuses, because the go file names
 | `legacy` | The old stack: checkout, commit, tmux session, compose project, compose files, how it started, its log, version | `/root/robotmoney-frontend` at `1cda4085`, `driver`, `rm_prod`, `/root/smoke-archive-v0.5.4.log` | `/home/stage-server/rm-stage-legacy` at `1cda4085`, `stage-driver`, `stage_target`, `/home/stage-server/stage-target/smoke-archive-v0.5.4.log` |
 | `confirmTarget` | `host:port/database`; every write's `--confirm-target` | the primary's `host:25060/defaultdb` | `172.17.0.1:25060/defaultdb` |
 | `watchMinAttendance` | W1's `--min-attendance` | 0.5 (default) | 0.4: the external members never file against stage |
+| `watchHours` | Hours after R6.9 before W1 and R7.4a run. A file may set it longer, never below the derived 10 h | 10 (default) | 10 (default) |
 | `bootEnv` | Non-secret boot settings from R6.2a (`WEBAUTHN_ORIGIN`, `WEBAUTHN_RP_ID`, the RPC and backfill budgets) | `{}` | `{}` |
 
 Both legacy stacks were started by `SMOKE_PROJECT=<project> bun run smoke:archive -- --no-tui`
@@ -179,8 +181,8 @@ runner copies back only the receipts written after that marker.
 | R7.3b | target | `bun run soak:checks --instance <i> --record`; then `--full` | no | SW.2 |
 | R7.5 | target | `bun scripts/release/compare-baseline.ts --instance <i> --run <run-ts> --max-size-ratio 1.5` | no | SV.5 |
 | R7.7 | target | `bun scripts/release/host-guards.ts --instance <i> --legacy-retired <dir>` | no | SV.6 |
-| W1 | target, not before R6.9 + 6 h | `bun run prod:gate --mode post-release --instance <i> --since <R6.9 end>` (sessions graded) | no | SW.1 |
-| R7.4a | target, not before R6.9 + 6 h | `bun scripts/release/schedule-parity.ts --instance <i> --run <run-ts>` | no | SW.1 |
+| W1 | target, not before R6.9 + `watchHours` (10 h) | `bun run prod:gate --mode post-release --instance <i> --since <R6.9 end>` (sessions graded) | no | SW.1 |
+| R7.4a | target, not before R6.9 + `watchHours` (10 h) | `bun scripts/release/schedule-parity.ts --instance <i> --run <run-ts>` | no | SW.1 |
 | W3 | control, prod only | `bun scripts/release/tag.ts final --release <r> --commit <sha>` | no | SW.3 |
 
 The go file stands for SC.1 (its `recovery` key) and SC.2 (D61 replaces the operator's
@@ -217,7 +219,7 @@ The D61 `~/.env` allowlist is `host`, `port`, `database`, `dbname`, `sslmode`, `
 
 The step list is one constant, `RELEASE_STEPS` in `scripts/release/steps.ts`. It does
 not branch on the target. The step-list hash is sha256 over the templates, so it never
-sees a target value. The runner prints the hash and records it in the journal.
+sees a target value. The watch steps' `notBefore` is in the hash as `{ afterStep: "R6.9", hours: "watchHours" }`, so changing the wait's form changes the hash, while a target's `watchHours` does not. The runner prints the hash and records it in the journal.
 
 A stage run that passes every step leaves a journal with that hash and the commit.
 Production refuses to start unless `--stage-journal` names such a journal (standing

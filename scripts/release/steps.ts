@@ -79,8 +79,10 @@ export interface StepTemplate {
   /**
    * The step may not start before `afterStep` ended plus `hours`. The runner
    * stops there, prints when it becomes runnable, and `--run <ts>` resumes it.
+   * `hours: "watchHours"` names the target's watch length (./watch.ts), so the
+   * template, and the step-list hash, stay the same for every target.
    */
-  readonly notBefore?: { readonly afterStep: string; readonly hours: number };
+  readonly notBefore?: NotBeforeTemplate;
   /**
    * A baseline gate: a non-zero exit passes when `--triage <file>` covers every
    * failed finding of its JSON report (scripts/release/triage.ts). Only R2.5.
@@ -103,8 +105,23 @@ const runReceipts = (pattern: string, required = true): ReceiptSpec => ({ dir: R
 const stateReceipts = (pattern: string, required = true): ReceiptSpec => ({ dir: STATE_DIR, pattern, required });
 const prodInitReceipt = (command: string): ReceiptSpec => ({ dir: `${STATE_DIR}/prod-init`, pattern: `${command}-*.json`, required: true });
 
-/** The watch window after READY: one full epoch of production's 6 h grid (B3). */
-const WATCH = { afterStep: "R6.9", hours: 6 } as const;
+/**
+ * The watch window after READY: the target's `watchHours`, by default long
+ * enough for the slowest subject's first epoch to publish (./watch.ts).
+ */
+const WATCH = { afterStep: "R6.9", hours: "watchHours" } as const;
+
+/** A step's wait as the template states it: fixed hours, or the target's watch length. */
+export interface NotBeforeTemplate { readonly afterStep: string; readonly hours: number | "watchHours" }
+/** The wait resolved against one target. */
+export interface NotBefore { readonly afterStep: string; readonly hours: number }
+
+/** Resolve a step's wait for a target. PURE. */
+export function notBeforeOf(step: { readonly notBefore?: NotBeforeTemplate }, target: Pick<ReleaseTarget, "watchHours">): NotBefore | undefined {
+  const nb = step.notBefore;
+  if (nb === undefined) return undefined;
+  return { afterStep: nb.afterStep, hours: nb.hours === "watchHours" ? target.watchHours : nb.hours };
+}
 
 const prodInit = (command: string): string[] => ["bun", "scripts/prod-init.ts", command, "--instance", "{instance}", "--confirm-target", "{confirmTarget}"];
 const status = (): string[] => ["bun", "run", "smoke:status", "--instance", "{instance}"];
@@ -288,10 +305,10 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     description: "Host guards: no container mounts docker.sock, ~/.env keys within the allowlist, token files 0600, no world-readable file under home or the retired checkout holds a postgres URL with a password",
     cmds: [["bun", "scripts/release/host-guards.ts", "--instance", "{instance}", "--legacy-retired", "{legacyCheckout}.{legacyVersion}-retired", "--receipt-dir", RUN_DIR]],
   },
-  // ── W watch: one full epoch after READY ───────────────────────────────────
+  // ── W watch: every subject publishes once after READY ─────────────────────
   {
     id: "W1", standing: ["SW.1"], host: "target", notBefore: WATCH, irreversible: false, expectExit: 0, receipts: [runReceipts("prod-gate-watch.*")],
-    description: "One full session cycle: prod:gate post-release since READY, sessions graded (every subject publishes judged sessions, the judge never restarted)",
+    description: "Every subject publishes once: prod:gate post-release since READY, sessions graded (every subject publishes judged sessions, the judge never restarted)",
     cmds: [["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--report", `${RUN_DIR}/prod-gate-watch.md`]],
   },
   {
@@ -373,7 +390,7 @@ export interface RenderedStep {
   readonly marker: string;
   readonly receipts: readonly ReceiptSpec[];
   readonly onlyFor?: "prod";
-  readonly notBefore?: { readonly afterStep: string; readonly hours: number };
+  readonly notBefore?: NotBefore;
 }
 
 /** Turn one template into the command a host runs. */
@@ -382,7 +399,7 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
     id: step.id, standing: step.standing, description: step.description, hostRole: step.host,
     irreversible: step.irreversible, expectExit: step.expectExit,
     receipts: step.receipts.map((r) => ({ ...r, dir: fill(r.dir, values) })),
-    onlyFor: step.onlyFor, notBefore: step.notBefore,
+    onlyFor: step.onlyFor, notBefore: notBeforeOf(step, target),
   };
   if (step.host === "control") {
     // The control machine: its own checkout and its own environment (the git

@@ -55,7 +55,7 @@ Each standing ID maps to the runner steps that satisfy it (the `standing` field 
 | SV.4 log verdict after release | R7.3a | |
 | SV.5 counts only grow | R7.5 | The published AUM figure: owner exception for v0.6.0 |
 | SV.6 host guards | R6.2, R7.7 | |
-| SW.1 one full session cycle | W1, R7.4a | Not before R6.9 plus 6 h |
+| SW.1 every subject publishes once | W1, R7.4a | Not before R6.9 plus `watchHours` (10 h) |
 | SW.2 invariants over the window | R7.3b | Runs at READY only. The watch-time run: owner exception for v0.6.0 |
 | SW.3 tag and report | W3 | The report stays manual (section 11) |
 
@@ -355,9 +355,9 @@ Everything runs from the control machine. Repeat this sequence twice, each time 
 
    The stage go names `target: stage`, the same commit and a `recovery:` file. Pass `--triage`
    only when R2.5 fails on the stage legacy stack. The run stops before W1
-   with exit 3 and prints when W1 becomes runnable (R6.9 plus 6 h). R5.rc and W3 record
+   with exit 3 and prints when W1 becomes runnable (R6.9 plus 10 h). R5.rc and W3 record
    `skipped: stage`.
-4. **Resume for the watch** after the 6 h:
+4. **Resume for the watch** after the 10 h:
 
    ```bash
    bun run release:run --target stage --go <stage go file> --run <run-ts>
@@ -450,7 +450,7 @@ start unless the stage journal has the same hash and commit with every step ok (
 the first failed step and prints the resume command. Past an irreversible step it points at
 section 8.
 
-The run stops before W1 with exit 3. Resume it after R6.9 plus 6 h:
+The run stops before W1 with exit 3. Resume it after R6.9 plus 10 h:
 
 ```bash
 bun run release:run --target prod --go <go file> --stage-journal <passed stage journal dir> --run <run-ts>
@@ -475,7 +475,7 @@ The journal is under `~/.local/state/robotmoney-release/prod/<run-ts>/`. Each st
 | R6.7b | `smoke:status` after boot 1 | no | stdout: every service ready |
 | R6.7c | `prod-init rebind-members`: the one-time credential migration. The in-house members move from fixture keys to `credential.json`. No external member is rebound | **yes**: one-way, old keys stop at once | `rebind-members-*.json`: the in-house members rebound, no external one |
 | R6.7d | Boot 2: a new plan, never a resume, because the rebind changed the key fingerprints. Recreates the participants on the new bearers | no | stdout: a new plan id, participants ready |
-| R6.9 | `smoke:status` after boot 2. Its end is READY, the start of the 6 h watch | no | stdout: the receipt as history, the daemon as now |
+| R6.9 | `smoke:status` after boot 2. Its end is READY, the start of the 10 h watch | no | stdout: the receipt as history, the daemon as now |
 | R6.10 | `bun smoke:web`: the site, after the api is in range. Restarts no api or worker | no | stdout: the site's `apiRange` accepted |
 
 The rebind (R6.7c) runs **once, at this cutover**. It is spec §9.1 step 6, never part of `bun smoke`
@@ -496,8 +496,8 @@ If preflight refuses at R6.7a or R6.7d, the printed check number names the cause
 | R7.3b | `soak:checks --record` at READY, then `--full` | no | `soak-record.md`, `soak-full.md`: 0 FAIL. Read every WARN. R8.u lists slow api requests (the 5 s line) |
 | R7.5 | `compare-baseline.ts`: every R2.3 count only grew; database size within 1.5× | no | `compare-baseline.json` |
 | R7.7 | `host-guards.ts`: no container mounts `docker.sock`; `~/.env` keys within the allowlist; token files 0600; no file other users can reach under `HOME` or the retired checkout holds a postgres URL with a password | no | `host-guards.json` |
-| W1 | Not before R6.9 plus 6 h. `prod:gate --mode post-release --since <READY>`, sessions graded | no | `prod-gate-watch.md` |
-| R7.4a | Not before R6.9 plus 6 h. `schedule-parity.ts` | no | `schedule-parity.json` |
+| W1 | Not before R6.9 plus 10 h. `prod:gate --mode post-release --since <READY>`, sessions graded | no | `prod-gate-watch.md` |
+| R7.4a | Not before R6.9 plus 10 h. `schedule-parity.ts` | no | `schedule-parity.json` |
 | W3 | Tags `v0.6.0` at the commit and pushes it, on the control machine | no | stdout: the tag |
 
 **R7.4a, schedule parity** (owner rule: an upgrade does not change usual schedules). Every active
@@ -505,7 +505,10 @@ subject reads `epoch_duration_seconds = 21600` (B3). Every session in flight at 
 its unmoved close, within its judging time plus 30 minutes (B2, B20). The regime cron has minute 30.
 The last parity sweep's duration is reported, and a dead sweep fails (B5).
 
-**W1, one full session cycle** (what the old R7.6 watched by eye). Every subject opens a session on
+**W1, every subject publishes once** (what the old R7.6 watched by eye). The watch is 10 h, not one
+6 h epoch: a subject with no open window at boot gets a first epoch of up to 9 h (system-scheduler-spec
+§2.2), plus 15 min judging and 30 min publish grace (`scripts/release/watch.ts`). Stage run
+`20261008T042158Z` failed check 7 at 6 h because treasury and woon were still collecting. Every subject opens a session on
 its grid. Agents submit one final take each. `themis` submits a judgement and is never restarted. A
 consensus receipt publishes, or the session reads `no_consensus`, which is a warning, not a failure.
 

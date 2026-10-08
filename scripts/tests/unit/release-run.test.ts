@@ -183,7 +183,7 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(ids.indexOf("R5.rc")).toBe(ids.indexOf("R6.1") - 1);
     expect(ids.indexOf("R2.4r")).toBe(ids.indexOf("R2.2") + 1);
     expect(ids.slice(-3)).toEqual(["W1", "R7.4a", "W3"]);
-    expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["W1", "R6.9", 6], ["R7.4a", "R6.9", 6]]);
+    expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["W1", "R6.9", "watchHours"], ["R7.4a", "R6.9", "watchHours"]]);
     // red control: W1 must grade sessions (no --defer-sessions) since READY.
     const w1 = RELEASE_STEPS.find((s) => s.id === "W1")!.cmds[0]!;
     expect(w1).not.toContain("--defer-sessions");
@@ -666,6 +666,24 @@ describe("watch steps, prod-only steps and the recovery go key", () => {
     pr2.deps.now = () => new Date("2026-10-08T19:00:00Z");
     expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", join(s.journalRoot, "stage", "20261008T120000Z"), "--run", "20261008T120000Z"], pr2.deps, WATCHED)).toBe(0);
     expect(pr2.ran).toEqual(["W1", "W3"]);
+  });
+
+  test("a watchHours wait takes the target's watch length: READY + 10 h, not + 6 h", async () => {
+    const steps: StepTemplate[] = WATCHED.map((s) => (s.id === "W1" ? { ...s, notBefore: { afterStep: "R6.9", hours: "watchHours" } } : s));
+    const f = fixture("stage");
+    const early = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], early.deps, steps)).toBe(3);
+    expect(early.logs.join("\n")).toContain("W1 becomes runnable at 2026-10-08T22:00:00.000Z");
+    expect(early.logs.join("\n")).toContain("+ 10 h");
+    // red control: READY + 6 h is no longer enough.
+    const six = fakeDeps();
+    six.deps.now = () => new Date("2026-10-08T18:00:01Z");
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], six.deps, steps)).toBe(3);
+    expect(six.ran).toEqual([]);
+    const later = fakeDeps();
+    later.deps.now = () => new Date("2026-10-08T22:00:01Z");
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], later.deps, steps)).toBe(0);
+    expect(later.ran).toEqual(["W1"]);
   });
 
   test("red: a go whose recovery file cannot be read refuses before anything runs", async () => {
