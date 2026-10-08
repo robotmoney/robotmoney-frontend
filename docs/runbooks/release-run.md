@@ -92,9 +92,19 @@ A release run does not create its database. The database exists before the run.
 
 - **Production.** The production database exists. The legacy stack runs from the legacy checkout.
 - **Stage.** `scripts/release/stage-target.ts up --dump <dir>` sets the stage target up before the run. It restores a production dump into the stage target's database. This is target setup, as production's database is. It is not a step.
-- **Role passwords, both targets.** `bun run role-passwords --target <stage|prod>` runs on the control machine before the run. It is provisioning, not a runbook step. It is idempotent. It sets the `rm_owner` password and `LOGIN` as `doadmin`, and it writes the `rm_owner` line of the host's `~/.env`. The admin types the `doadmin` password at its hidden prompt. That is the one human input of the release process. The password goes to the host over ssh stdin and lives only in process memory. It is never stored in a file. No release step reads `doadmin` (D61 amendment, owner, 2026-10-08).
+- **Role passwords, both targets.** `bun run role-passwords --target <stage|prod>` runs on the control machine before the run. It is provisioning, not a runbook step. It is idempotent. As `doadmin` it sets the four role passwords and `rm_owner`'s `LOGIN`, and it writes each missing role line of the host's `~/.env`. The admin types the `doadmin` password at its hidden prompt. That is the one human input of the release process. The password goes to the host over ssh stdin and lives only in process memory. It is never stored in a file. No release step reads `doadmin` (D61 amendment, owner, 2026-10-08).
+  - It asks for the `doadmin` password at a hidden prompt, or reads one line from its stdin with `--doadmin-stdin`. It passes the password to `bun scripts/prod-init.ts role-passwords --confirm-target <T> --doadmin-stdin` on the host over ssh's stdin. The password is never stored in a file, an argument, an environment variable or any output, on either machine.
+  - For each of `rm_owner`, `rm_app`, `rm_worker` and `rm_readonly`, a `~/.env` line that logs in is `kept` and no `ALTER` runs. An absent line is `set`: the host generates a password and sends the server only its SCRAM-SHA-256 verifier. The host then writes `<role> = <password>` into `~/.env` (atomic, 0600) and proves the login. A line that does not log in refuses. Only `--rotate <role>` replaces a line, and it keeps the old one in `~/.env.retired-<ts>` (0600). An empty `<role>=` line refuses. `rm_owner` also becomes `LOGIN`. A runtime role's attributes never change.
+  - A rerun reports every role `kept`. The receipt (`prod-init/role-passwords-*.json`) lists role → `kept`, `set` or `rotated`, never a value.
+  - Never pass `--rotate` for a runtime role while the legacy stack runs: it would lock the legacy stack out.
+  - Stage runs it the same way, fed by the disposable stage credential. The stage sequence is production's:
+    1. `bun scripts/release/stage-target.ts up --dump <dir>`;
+    2. `bun scripts/release/stage-target.ts doadmin | bun run role-passwords --target stage --doadmin-stdin`;
+    3. `bun run release:run --target stage`.
 
-Step R1.2 checks the precondition on every target, read-only, through `rm_readonly`:
+    Production has no `stage-target doadmin`: there the admin types the password at the prompt.
+
+Step R1.2 checks the database precondition on every target, read-only, through `rm_readonly`:
 
 - the database `~/.env` names answers;
 - its ledger equals a supported baseline;

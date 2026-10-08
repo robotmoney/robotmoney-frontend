@@ -1,9 +1,11 @@
 // scripts/lib/privileged-env.ts — the privileged credentials in `$HOME/.env`
 // and the `--confirm-target` check (decision D61).
 //
-// D61: "The `rm_owner` password and the `doadmin` password are lines in the
-// host's `~/.env`, beside the runtime role passwords. Every command that
-// prompted for them reads them from there." And: "The literal `y` becomes
+// D61: the `rm_owner` password is a line in the host's `~/.env`, beside the
+// runtime role passwords, and every command that prompted for it reads it from
+// there. `doadmin` is NOT a `~/.env` line (D61 amendment, owner 2026-10-08): it
+// is stored in no file, and `prod-init role-passwords` takes it from a hidden
+// prompt or stdin (scripts/lib/doadmin-input.ts), never through this module. And: "The literal `y` becomes
 // `--confirm-target <host:port/database>`. A command that writes refuses unless
 // the flag names exactly the target it resolved from `~/.env`."
 //
@@ -12,7 +14,7 @@
 //   - backend/scripts/smoke-prepare.ts (a remote `bun smoke --migrate/--seed`),
 //   - backend/scripts/prune.ts (`bun run prune`),
 //   - scripts/prod-init.ts (set-identity, provision-tokens, rebind-members,
-//     enable-owner-login).
+//     role-passwords).
 //
 // WHAT IT NEVER DOES. It never prints, logs or returns a password inside a
 // message. A refusal names the KEY and the FILE, never the value. It never
@@ -32,8 +34,8 @@ import { databaseName } from "./env-role.ts";
 /** The flag that replaces the interactive `y` on every remote write. */
 export const CONFIRM_TARGET_FLAG = "--confirm-target";
 
-/** The two privileged keys D61 moves into `~/.env`. */
-export const PRIVILEGED_KEYS = ["rm_owner", "doadmin"] as const;
+/** The privileged key D61 keeps in `~/.env`. `doadmin` is never one: it is stored in no file. */
+export const PRIVILEGED_KEYS = ["rm_owner"] as const;
 export type PrivilegedKey = (typeof PRIVILEGED_KEYS)[number];
 
 /**
@@ -112,7 +114,7 @@ export function requirePrivilegedPassword(
   const value = env?.[key];
   if (value === undefined || value === "") {
     throw new PrivilegedCredentialMissing(
-      `Refusing: ${envFile} has no ${key} line. ${key === "rm_owner" ? "The rm_owner password" : "The doadmin password"} ` +
+      `Refusing: ${envFile} has no ${key} line. The ${key} password ` +
         `is read from \`${key} = <password>\` in that file and nowhere else: never a prompt, a pipe, an environment ` +
         "variable or an argument (decision D61). Add the line and rerun. Nothing was changed.",
     );

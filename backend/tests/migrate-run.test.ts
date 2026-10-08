@@ -587,13 +587,13 @@ describe("rm_owner — LOGIN, the migration login, the only session the run acce
     }
   });
 
-  test("an existing database's NOLOGIN rm_owner refuses naming `prod-init enable-owner-login`, then migrates once LOGIN is restored", async () => {
+  test("an existing database's NOLOGIN rm_owner refuses naming `prod-init role-passwords`, then migrates once LOGIN is restored", async () => {
     await setIdentity("rehearsal");
     await adminExec("ALTER ROLE rm_owner NOLOGIN PASSWORD NULL");
     try {
       await expect(
         resolveOwnerPassword({ ...options({ connection: "local" }), localOwnerPassword: OWNER_PASSWORD }, urlFor(fileDb)),
-      ).rejects.toThrow("bun scripts/prod-init.ts enable-owner-login");
+      ).rejects.toThrow("bun scripts/prod-init.ts role-passwords");
 
       // Spec §9.1 step 1, through the provisioning login: LOGIN plus a
       // password, then a verification login — which here is the run itself.

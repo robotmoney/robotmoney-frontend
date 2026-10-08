@@ -91,10 +91,13 @@ export const PROD_HOME_ENV_KEYS = [
   "COINGECKO_API_KEY",
 ] as const;
 
-/** The two lines D61 adds to the host `~/.env`, beside the runtime role passwords. */
-export const D61_HOME_ENV_KEYS = ["rm_owner", "doadmin"] as const;
-
-export type StageHomeEnvKey = (typeof PROD_HOME_ENV_KEYS)[number] | (typeof D61_HOME_ENV_KEYS)[number];
+/**
+ * The stage `~/.env` holds production's key names and nothing more: no
+ * `rm_owner` line (production's pre-state: `prod-init role-passwords` writes
+ * it) and never `doadmin` (D61, owner 2026-10-08: doadmin is typed each run
+ * and stored in no file).
+ */
+export type StageHomeEnvKey = (typeof PROD_HOME_ENV_KEYS)[number];
 export type StageHomeEnv = Record<StageHomeEnvKey, string>;
 
 /**
@@ -132,7 +135,8 @@ function assertLineValue(key: string, value: string | undefined): string {
 /**
  * The stage target's `~/.env`. Production's layout, line for line: the same
  * comment headers, the same `key = value` spacing on the DigitalOcean panel
- * keys, the same order. The two D61 lines follow the runtime role lines.
+ * keys, the same order. No `rm_owner` line and no `doadmin` line: role-passwords
+ * adds the first, and the second is never stored.
  */
 export function composeStageHomeEnv(v: StageHomeEnv): string {
   const line = (key: StageHomeEnvKey, sep: " = " | "=") => `${key}${sep}${assertLineValue(key, v[key])}`;
@@ -146,9 +150,6 @@ export function composeStageHomeEnv(v: StageHomeEnv): string {
     line("port", " = "),
     line("database", " = "),
     line("sslmode", " = "),
-    "# D61: the privileged credentials live beside the runtime role passwords.",
-    line("rm_owner", " = "),
-    line("doadmin", " = "),
     "",
     "# inference",
     line("OPENCODE_API_KEY", "="),
@@ -167,11 +168,14 @@ export function postgresUrl(role: string, password: string, host: string, port: 
 /**
  * The legacy checkout's `.env`, with production's key names in production's
  * order. Each URL names the role production's names (rm_app, rm_worker,
- * doadmin), pointed at the stage database.
+ * doadmin), pointed at the stage database. `MIGRATE_DATABASE_URL` keeps
+ * production's key and role, but its password is `inertDoadminPassword`: a
+ * random value doadmin does not have, because doadmin is stored in no file
+ * (D61, owner 2026-10-08). The legacy stack never uses that URL while it runs.
  */
-export function composeLegacyCheckoutEnv(v: StageHomeEnv): string {
+export function composeLegacyCheckoutEnv(v: StageHomeEnv, inertDoadminPassword: string): string {
   const at = (role: "rm_app" | "rm_worker" | "doadmin") =>
-    postgresUrl(role, assertLineValue(role, v[role]), v.host, v.port, v.database, v.sslmode);
+    postgresUrl(role, assertLineValue(role, role === "doadmin" ? inertDoadminPassword : v[role]), v.host, v.port, v.database, v.sslmode);
   return [
     "# postgres",
     `DATABASE_URL=${at("rm_app")}`,
@@ -319,11 +323,16 @@ export function globalsToRoleSql(globals: string): RoleSqlResult {
 
 /**
  * The generated passwords. `rm_owner` keeps its NOLOGIN attribute: production's
- * `rm_owner` has a password and cannot log in until R6.2b's
- * `prod-init enable-owner-login`. Never logged.
+ * `rm_owner` has a password nobody holds and cannot log in until
+ * `prod-init role-passwords` (run before `release:run`) sets one. Never logged.
  */
 export function rolePasswordSql(passwords: Record<GeneratedPasswordRole, string>): string {
   return `${GENERATED_PASSWORD_ROLES.map((r) => `ALTER ROLE ${r} PASSWORD ${sqlLiteral(assertLineValue(r, passwords[r]))};`).join("\n")}\n`;
+}
+
+/** `stage-target doadmin`: the stage doadmin's fresh password, as one statement. Never logged. */
+export function doadminPasswordSql(password: string): string {
+  return `ALTER ROLE doadmin PASSWORD ${sqlLiteral(assertLineValue("doadmin", password))};\n`;
 }
 
 /** The shape production holds before the cutover, checked after every build. */
@@ -681,6 +690,10 @@ export function precutoverProblems(state: Record<string, string>, ledger: readon
  * `COINGECKO_API_KEY` exported in that shell. A user without root cannot write
  * `/etc/environment`, so the script exports the same names from the stage
  * `~/.env` before it starts. Bun loads the checkout `.env` itself, as on prod.
+ * The doadmin password is stored in no file (D61, owner 2026-10-08), so
+ * `DATABASE_PASSWORD` is an inert random value drawn at launch: production's
+ * names, a value doadmin does not have. The v0.5.4 driver builds its own
+ * container URLs and does not connect with these variables.
  */
 export function legacyLaunchScript(t: { home: string; legacyCheckout: string; legacyProject: string; driverLog: string }): string {
   return `#!/bin/bash
@@ -692,7 +705,8 @@ val() { sed -n "s/^$1[[:space:]]*=[[:space:]]*//p" "$HOME/.env" | head -n1; }
 # Production's /etc/environment: the doadmin connection, as DATABASE_*.
 export DATABASE_PROTOCOL=postgresql
 export DATABASE_HOST="$(val host)" DATABASE_PORT="$(val port)" DATABASE_DB="$(val database)"
-export DATABASE_USERNAME=doadmin DATABASE_PASSWORD="$(val doadmin)"
+# doadmin is stored in no file (D61): an inert value, drawn now, that doadmin does not have.
+export DATABASE_USERNAME=doadmin DATABASE_PASSWORD="$(head -c 18 /dev/urandom | base64 | tr '+/' '-_')"
 export DATABASE_URL="postgresql://doadmin:$DATABASE_PASSWORD@$DATABASE_HOST:$DATABASE_PORT/$DATABASE_DB?sslmode=require"
 # Production's driver shell exported the paid CoinGecko key.
 export COINGECKO_API_KEY="$(val COINGECKO_API_KEY)"

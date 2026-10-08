@@ -83,6 +83,7 @@
 // would be invisible to that enumeration and to preflight; registrations are
 // module-level by convention, and the test pins that from the source too.
 import type postgresTypes from "postgres";
+import { isVettedVerifierLiteral } from "./scram-verifier.ts";
 
 /**
  * The four roles of spec §3. There is no `rm_migrator` — spec §3 says so in
@@ -102,7 +103,7 @@ const RM_ROLES: readonly RmRole[] = Object.freeze(["rm_owner", "rm_app", "rm_wor
  * object-less kind admits it only for the closed `PROVISIONING_SHAPES` list.
  *
  * WHY IT IS HERE AT ALL. D61 amends §3: "`doadmin` is used by one command
- * only, `prod-init enable-owner-login`." That command's statements are
+ * only", `prod-init role-passwords`. That command's statements are
  * database statements like any other, and the registry is the one place a
  * statement may be issued from. So they are declared, under a role only that
  * one command may name. `PROVISIONING_SHAPES` says how that is held.
@@ -562,14 +563,26 @@ export type ObjectlessShape = keyof typeof OBJECTLESS_SHAPES;
 // THE PROVISIONING SHAPES (D61) — the only statements `doadmin` may issue
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// D61, as it amends spec §3: "`doadmin` is used by one command only, `prod-init
-// enable-owner-login`." That command (scripts/enable-owner-login.ts, spec §9.1
-// step 1) issues two statements as `doadmin`: a CATALOG read of `pg_roles` and
-// one DDL statement on a role. Neither touches a relation in `public`, so
-// neither has a `(role, object, privilege)` for check 2, and both are fixed
-// texts. They are object-less statements in that sense, with one difference
-// from `OBJECTLESS_SHAPES`: they belong to the provisioning role and nobody
-// else.
+// D61, as it amends spec §3: "`doadmin` is used by one command only." That
+// command is `prod-init role-passwords` (scripts/role-passwords.ts, spec §9.1
+// step 1). It issues, as `doadmin`: a CATALOG read of `pg_roles` for the four
+// §3 roles, `ALTER ROLE rm_owner LOGIN`, and one password ALTER per §3 role.
+// None touches a relation in `public`, so none has a `(role, object,
+// privilege)` for check 2. They are object-less statements in that sense, with
+// one difference from `OBJECTLESS_SHAPES`: they belong to the provisioning role
+// and nobody else.
+//
+// THE PASSWORD SHAPES. A password ALTER carries a password, so it cannot be a
+// fixed literal. Postgres takes no bound parameter in a utility statement, so
+// it cannot be a `$1` value either. The registry pins each statement's shape,
+// one per role with the role name fixed (`ALTER ROLE rm_app WITH PASSWORD $1`),
+// and `onStatement` fills its one slot only with a literal
+// src/db/scram-verifier.ts vetted: a SCRAM-SHA-256 verifier, never a plaintext,
+// checked against the strict verifier format and quoted by that module. Any
+// other value in the slot refuses before the database sees anything, and a
+// vetted literal in any other shape refuses too (`VERIFIER_SLOT_SHAPES`).
+// Only rm_owner's shape adds LOGIN. A runtime role's shape sets the password
+// and nothing else, so it never widens the role's attributes.
 //
 // So they are a second closed list, held apart from the first, and the binding
 // is checked at registration in both directions:
@@ -577,26 +590,42 @@ export type ObjectlessShape = keyof typeof OBJECTLESS_SHAPES;
 //     `PROVISIONING_CALLER` as its caller, and carry a site id in that module;
 //   - a provisioning shape may be declared by `doadmin` only.
 // tests/db-registry.test.ts pins this list by equality and reads the source to
-// prove scripts/enable-owner-login.ts is the only module that declares
-// `doadmin`, so widening its reach is an edit to two places and a failing test.
+// prove scripts/role-passwords.ts is the only module that declares `doadmin`,
+// so widening its reach is an edit to two places and a failing test.
 //
 // `doadmin` is still not an `RmRole`. tests/db-registry-execution.test.ts runs
 // these shapes as a stand-in for the provider's role (a CREATEROLE login
-// holding ADMIN on `rm_owner`, which is what the provider's role holds over the
-// roles it created), in a transaction it rolls back.
+// holding ADMIN on the four roles, which is what the provider's role holds over
+// the roles it created), in a transaction it rolls back.
 
 /** The closed list of statements the provisioning role may issue, by name. */
 export const PROVISIONING_SHAPES = Object.freeze({
-  /** CATALOG: does `rm_owner` exist, and may it log in (spec §9.1 step 1)? */
-  ownerCanLogin: "SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'",
+  /** CATALOG: which of the four §3 roles exist, and which may log in (spec §9.1 step 1)? */
+  rolesLoginState: "SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname IN ('rm_owner', 'rm_app', 'rm_worker', 'rm_readonly') ORDER BY rolname",
   /** DDL: make `rm_owner` LOGIN. No password clause: the role keeps the password it has. */
   ownerLoginEnable: "ALTER ROLE rm_owner LOGIN",
+  /** DDL: rm_owner LOGIN with a new password, in one statement. `$1` is a vetted SCRAM verifier literal, never a plaintext. */
+  ownerPasswordSet: "ALTER ROLE rm_owner WITH LOGIN PASSWORD $1",
+  /** DDL: rm_app's password and nothing else. `$1` is a vetted SCRAM verifier literal. */
+  appPasswordSet: "ALTER ROLE rm_app WITH PASSWORD $1",
+  /** DDL: rm_worker's password and nothing else. `$1` is a vetted SCRAM verifier literal. */
+  workerPasswordSet: "ALTER ROLE rm_worker WITH PASSWORD $1",
+  /** DDL: rm_readonly's password and nothing else. `$1` is a vetted SCRAM verifier literal. */
+  readonlyPasswordSet: "ALTER ROLE rm_readonly WITH PASSWORD $1",
 } as const);
 
 export type ProvisioningShape = keyof typeof PROVISIONING_SHAPES;
 
+/** The password shapes: their one `$1` slot takes only a vetted verifier literal, inlined (scram-verifier.ts). */
+export const VERIFIER_SLOT_SHAPES: readonly ProvisioningShape[] = Object.freeze([
+  "ownerPasswordSet",
+  "appPasswordSet",
+  "workerPasswordSet",
+  "readonlyPasswordSet",
+] as const);
+
 /** The one entry module that may declare a provisioning statement (D61). */
-export const PROVISIONING_CALLER = "scripts/enable-owner-login";
+export const PROVISIONING_CALLER = "scripts/role-passwords";
 
 /** Every shape `registerStatement` admits, by name. The two lists share no key. */
 const ALL_SHAPES: Readonly<Record<string, string>> = Object.freeze({ ...OBJECTLESS_SHAPES, ...PROVISIONING_SHAPES });
@@ -681,7 +710,7 @@ function assertStatementRole(declaration: StatementDeclaration): void {
     if (!provisioning || !onlyCaller || !declaration.site.startsWith(`${PROVISIONING_CALLER}:`)) {
       throw new Error(
         `registry: statement site ${declaration.site} declared role doadmin — doadmin is used by one command only, ` +
-          `\`prod-init enable-owner-login\` (D61): a provisioning shape, declared in ${PROVISIONING_CALLER} with that ` +
+          `\`prod-init role-passwords\` (D61): a provisioning shape, declared in ${PROVISIONING_CALLER} with that ` +
           "module as its only caller.",
       );
     }
@@ -727,7 +756,22 @@ export function onStatement(db: RegistryDb, statement: RegisteredStatement) {
           "— an object-less statement equals a listed shape exactly (D55 (13)).",
       );
     }
-    return (db as unknown as (s: TemplateStringsArray, ...v: readonly unknown[]) => Promise<RegistryRows<T>>)(strings, ...values);
+    // The password shape (D61): its one slot is a vetted SCRAM verifier
+    // literal, inlined as a fragment, because a utility statement takes no
+    // bound parameter. Nothing else may fill it, and it fills nothing else.
+    let bound: readonly unknown[] = values;
+    if ((VERIFIER_SLOT_SHAPES as readonly string[]).includes(statement.declaration.shape)) {
+      if (values.length !== 1 || !isVettedVerifierLiteral(values[0])) {
+        throw new Error(
+          `registry: site ${site} filled the password slot of ${statement.declaration.shape} with a value ` +
+            "src/db/scram-verifier.ts did not vet — only passwordVerifierLiteral() may (D61). The value is not printed.",
+        );
+      }
+      bound = [(db as unknown as { unsafe(text: string): unknown }).unsafe(values[0].sql)];
+    } else if (values.some(isVettedVerifierLiteral)) {
+      throw new Error(`registry: site ${site} passed a verifier literal to ${statement.declaration.shape}, which has no password slot (D61).`);
+    }
+    return (db as unknown as (s: TemplateStringsArray, ...v: readonly unknown[]) => Promise<RegistryRows<T>>)(strings, ...bound);
   };
 }
 

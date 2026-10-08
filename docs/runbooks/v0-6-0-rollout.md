@@ -202,6 +202,8 @@ The one human input of the release process comes before it, in provisioning: the
 |---|---|---|
 | Credentials | `~/.env` holds only the D61 allowlist: `host`, `port`, `database`, `dbname`, `sslmode`, `rm_app`, `rm_worker`, `rm_readonly`, `rm_owner`, `RM_ENV`, `RM_CREDENTIALS`, `COINGECKO_API_KEY`. Anything else refuses the boot on prod (preflight check 4). A `doadmin` line refuses, named as the provisioning credential | R6.2 moves every other key, a stray `doadmin` line included, to `~/.env.retired-<run-ts>` (0600) |
 | `rm_owner` | A line in the host's `~/.env` (D61). The runbook uses `rm_owner` only. No container, receipt, journal or argument receives it | R1.2 proves it logs in (`SELECT 1`, read-only) before R6.1. R6.2 refuses without it. R6.3 and later read it |
+| `rm_owner` password | Nobody types or pastes it. `role-passwords` generates it on the host when `~/.env` has no `rm_owner` line. It sets the password through `doadmin` as a SCRAM-SHA-256 verifier, so the plaintext never reaches the server. It writes `rm_owner = <password>` into `~/.env` (atomic, 0600) and proves the login. A working line is kept. An empty line refuses. A line that does not log in refuses: only `--rotate rm_owner` replaces it, keeping the old one in `~/.env.retired-<ts>` | Before the run: `role-passwords`. R6.3 to R6.5 read it |
+| `rm_app`, `rm_worker`, `rm_readonly` | `role-passwords` keeps each working line and runs no `ALTER`. It generates an absent one. It never rotates one without `--rotate`, which would lock out the legacy stack while it runs | Before the run: `role-passwords` |
 | `rm_owner` password and login | Set before the run by the provisioning step `bun run role-passwords --target prod`. It is idempotent: it sets the password and `LOGIN` as `doadmin` and writes the `rm_owner` line. R1.2 refuses with "rm_owner cannot log in; run `bun run role-passwords --target prod` first" | Before R1, not a runbook step |
 | `doadmin` | Stored in no file. The admin types it at the hidden prompt of `bun run role-passwords`. It lives only in that process's memory. No release step reads it | Provisioning only |
 | `credential.json` | Written by the runner at `~/.config/robotmoney/credential.json` (dir 0700, file 0600). It holds the in-house roster (agents `athena`, `noop-analyst`, `robot-money`; judge `themis`), fresh keys, the model key from `~/.env`, and placeholder bearers. It appends `RM_CREDENTIALS` to `~/.env` | R6.2a, before R6.2 moves the model key out |
@@ -234,6 +236,7 @@ forwarded.
 | R1.2, R2.3, R6.2a | `rm_readonly`, read-only session | the target's `~/.env` |
 | R2.5 | none. It reads container logs | — |
 | R1.2 owner login proof | `rm_owner`, `SELECT 1` only | `~/.env` |
+| `role-passwords` (before the run, not a step) | `doadmin` | typed at a hidden prompt on the control machine, then ssh's stdin, plus `--confirm-target`. Never a file |
 | R6.3 migrate | `rm_owner` | `~/.env`, plus `--confirm-target` |
 | R6.4, R6.5 | `rm_owner` | `~/.env`, plus `--confirm-target` |
 | R6.7c rebind | operator admin token | the R6.5 token file, plus `--confirm-target` |

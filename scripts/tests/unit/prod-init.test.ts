@@ -19,7 +19,7 @@
 // a real database and a real api in
 // scripts/tests/integration/prod-init-runtime.test.ts.
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { PROD_INIT_COMMANDS, ProdInitRefusal, runProdInit, type ProdInitDeps } from "../../prod-init.ts";
@@ -36,6 +36,8 @@ afterEach(() => {
 
 const OWNER_PASSWORD = "home-env-owner-secret-7f3a";
 const DOADMIN_PASSWORD = "home-env-doadmin-secret-91c2";
+/** What the admin types (or pipes) for role-passwords. A doadmin line in ~/.env (DOADMIN_PASSWORD) is never read. */
+const TYPED_DOADMIN = "typed-doadmin-secret-55e1";
 const HOME_ENV: Record<string, string> = { host: "db.example.internal", port: "25060", database: "defaultdb", sslmode: "require", rm_readonly: "ro-pw", rm_owner: OWNER_PASSWORD, doadmin: DOADMIN_PASSWORD, RM_ENV: "prod" };
 /** The target ~/.env resolves to, exactly as D61's --confirm-target must name it. */
 const TARGET = "db.example.internal:25060/defaultdb";
@@ -47,7 +49,7 @@ interface Recorder {
   root: string;
 }
 
-/** The supported baseline's ledger: the pre-identity state enable-owner-login accepts (D61). */
+/** The supported baseline's ledger: the pre-identity state role-passwords accepts (D61). */
 const BASELINE_LEDGER = [...SUPPORTED_RELEASES[0]!.migrations];
 
 /** A full set of fake effects that records every call, with overrides. */
@@ -91,10 +93,15 @@ function fake(over: Partial<ProdInitDeps> & { identity?: TargetState["identity"]
       calls.push(`rotateKey:${memberId}`);
       return { status: 200, token: `tok_${memberId}_new` };
     },
-    enableOwnerLogin: async (options) => {
-      calls.push(`enableOwnerLogin:${new URL(options.doadminUrl).username}:${new URL(options.ownerUrl).username}`);
-      const before = over.canLogin ?? false;
-      return { rolcanloginBefore: before, altered: !before, verified: true };
+    readDoadmin: async () => {
+      calls.push("readDoadmin");
+      return TYPED_DOADMIN;
+    },
+    rolePasswords: async (options) => {
+      calls.push(`rolePasswords:${new URL(options.doadminUrl).username}:${options.roles.join(",")}`);
+      const roles = Object.fromEntries(options.roles.map((r) => [r, "kept"]));
+      for (const r of options.roles) options.report?.(r, "kept");
+      return { roles, ownerLoginBefore: options.roles.includes("rm_owner") ? (over.canLogin ?? false) : null };
     },
     now: () => new Date("2026-09-25T12:00:00.000Z"),
     log: () => {},
@@ -104,7 +111,7 @@ function fake(over: Partial<ProdInitDeps> & { identity?: TargetState["identity"]
 }
 
 /** The mutating effects: none of these may run when a gate refuses. */
-const MUTATIONS = /^(acquireLock|setIdentity|provisionTokens|rotateKey|enableOwnerLogin|release)/;
+const MUTATIONS = /^(acquireLock|setIdentity|provisionTokens|rotateKey|rolePasswords|release|readDoadmin)/;
 
 async function refused(argv: string[], rec: Recorder, message: string | RegExp): Promise<void> {
   let error: unknown;
@@ -124,7 +131,7 @@ async function refused(argv: string[], rec: Recorder, message: string | RegExp):
 
 describe("every command refuses before anything changes", () => {
   test("an unknown command refuses with the usage", async () => {
-    await refused(["enable-schedules"], fake(), /unknown command.*enable-owner-login\|set-identity\|provision-tokens\|rebind-members/);
+    await refused(["enable-schedules"], fake(), /unknown command.*role-passwords\|set-identity\|provision-tokens\|rebind-members/);
   });
 
   test("RM_ENV unset refuses each command", async () => {
@@ -449,7 +456,7 @@ describe("rebind-members targets the instance's own twin under RM_ENV=stage", ()
 });
 
 // ---------------------------------------------------------------------------
-// D61: no prompt. rm_owner (and doadmin, for enable-owner-login only) come from
+// D61: no prompt. rm_owner (and doadmin, for role-passwords only) come from
 // ~/.env; the `y` is --confirm-target, which must name exactly the target
 // ~/.env resolves to. Neither password reaches a receipt, a log or a message.
 // ---------------------------------------------------------------------------
@@ -516,7 +523,7 @@ describe("D61: --confirm-target replaces the y", () => {
   test("a missing --confirm-target refuses each ~/.env command, naming the resolved target", async () => {
     await refused(["set-identity"], fake(), new RegExp(`no --confirm-target was given.*${TARGET}`));
     await refused(["provision-tokens"], fake(), /no --confirm-target/);
-    await refused(["enable-owner-login"], fake({ identity: "missing" }), /no --confirm-target/);
+    await refused(["role-passwords"], fake({ identity: "missing" }), /no --confirm-target/);
     const rec = fake();
     const { credentialPath } = setup(rec);
     await refused(["rebind-members", "--credentials", credentialPath, "--api", "http://127.0.0.1:9"], rec, /no --confirm-target/);
@@ -564,51 +571,179 @@ describe("D61: --confirm-target replaces the y", () => {
   });
 });
 
-describe("D61: enable-owner-login", () => {
-  test("NOLOGIN: the doadmin and rm_owner URLs from ~/.env reach the dep inside the lock; ALTER then verify, receipted", async () => {
-    const rec = fake({ identity: "missing", canLogin: false });
-    const urls: { doadmin: string; owner: string }[] = [];
-    const inner = rec.deps.enableOwnerLogin;
-    rec.deps.enableOwnerLogin = async (options) => {
-      urls.push({ doadmin: decodeURIComponent(new URL(options.doadminUrl).password), owner: decodeURIComponent(new URL(options.ownerUrl).password) });
+describe("D61: role-passwords", () => {
+  test("the typed doadmin and the ~/.env connection reach the dep inside the lock; the receipt lists role → outcome only", async () => {
+    const rec = fake({ identity: "missing" });
+    const seen: { doadmin: string; username: string; host: string }[] = [];
+    const inner = rec.deps.rolePasswords;
+    rec.deps.rolePasswords = async (options) => {
+      const u = new URL(options.doadminUrl);
+      seen.push({ doadmin: decodeURIComponent(u.password), username: u.username, host: `${u.hostname}:${u.port}${u.pathname}` });
       return inner(options);
     };
-    const { logs, error } = await runCaptured(["enable-owner-login", ...CONFIRM], rec);
+    const { logs, error } = await runCaptured(["role-passwords", ...CONFIRM], rec);
     expect(error).toBeUndefined();
-    expect(rec.calls).toEqual(["readTarget", "acquireLock:prod-init:enable-owner-login", "enableOwnerLogin:doadmin:rm_owner", "release"]);
-    expect(urls).toEqual([{ doadmin: DOADMIN_PASSWORD, owner: OWNER_PASSWORD }]);
+    expect(rec.calls).toEqual(["readTarget", "readDoadmin", "acquireLock:prod-init:role-passwords", "rolePasswords:doadmin:rm_owner,rm_app,rm_worker,rm_readonly", "release"]);
+    expect(seen).toEqual([{ doadmin: TYPED_DOADMIN, username: "doadmin", host: "db.example.internal:25060/defaultdb" }]);
     const dir = join(rec.root, "rm_prod", "prod-init");
-    const receipt = JSON.parse(readFileSync(join(dir, readdirSync(dir).find((f) => f.startsWith("enable-owner-login"))!), "utf8"));
-    expect(receipt).toMatchObject({ command: "enable-owner-login", outcome: "completed", identityBefore: "missing", detail: { rolcanloginBefore: false, altered: true, verified: true } });
+    const receiptText = readFileSync(join(dir, readdirSync(dir).find((f) => f.startsWith("role-passwords"))!), "utf8");
+    expect(JSON.parse(receiptText)).toMatchObject({
+      command: "role-passwords", outcome: "completed", identityBefore: "missing",
+      detail: { roles: { rm_owner: "kept", rm_app: "kept", rm_worker: "kept", rm_readonly: "kept" }, ownerLoginBefore: false },
+    });
+    for (const text of [receiptText, ...logs]) expect(text).not.toContain(TYPED_DOADMIN);
     assertNoSecret(rec, logs, error);
   });
 
-  test("already LOGIN: verify only, the receipt says no ALTER ran", async () => {
-    const rec = fake({ identity: "production", canLogin: true });
-    const receipt = await runProdInit(["enable-owner-login", ...CONFIRM], rec.deps);
-    expect(receipt.detail).toEqual({ rolcanloginBefore: true, altered: false, verified: true });
+  test("RED CONTROL: a doadmin line in ~/.env is never read; the typed value is the only doadmin", async () => {
+    const rec = fake({ identity: "missing", homeEnv: { ...HOME_ENV, doadmin: DOADMIN_PASSWORD } });
+    let used = "";
+    rec.deps.rolePasswords = async (options) => {
+      used = decodeURIComponent(new URL(options.doadminUrl).password);
+      return { roles: {}, ownerLoginBefore: null };
+    };
+    await runProdInit(["role-passwords", ...CONFIRM], rec.deps);
+    expect(used).toBe(TYPED_DOADMIN);
+    expect(used).not.toBe(DOADMIN_PASSWORD);
+    const source = readFileSync(join(REPO, "scripts/prod-init.ts"), "utf8");
+    expect(source).not.toMatch(/homeEnv[!?]?\.doadmin|homeEnv[!?]?\[["']doadmin["']\]|requirePrivilegedPassword\([^)]*"doadmin"/);
+    expect(source).not.toMatch(/process\.env\.(DOADMIN|doadmin)/i);
   });
 
-  test("a wrong --confirm-target refuses: no lock, no dep call, no receipt", async () => {
-    await refused(["enable-owner-login", "--confirm-target", "db.example.internal:25060/postgres"], fake({ identity: "missing" }), /Resolved target/);
+  test("no doadmin input (no terminal, no --doadmin-stdin) refuses before the lock, changing nothing", async () => {
+    const rec = fake({ identity: "missing" });
+    rec.deps.readDoadmin = async () => {
+      throw new Error("no terminal to prompt on and no --doadmin-stdin.");
+    };
+    await refused(["role-passwords", ...CONFIRM], rec, /no terminal to prompt on/);
   });
 
-  test("a missing doadmin line refuses, naming doadmin and the file", async () => {
-    const { doadmin: _d, ...noDoadmin } = HOME_ENV;
-    await refused(["enable-owner-login", ...CONFIRM], fake({ homeEnv: noDoadmin, identity: "missing" }), /\/home\/operator\/\.env has no doadmin line/);
+  test("the prompt comes after every other gate: a wrong --confirm-target never asks for doadmin", async () => {
+    const rec = fake({ identity: "missing" });
+    await refused(["role-passwords", "--confirm-target", "db.example.internal:25060/postgres"], rec, /Resolved target/);
+    expect(rec.calls).not.toContain("readDoadmin");
   });
 
-  test("a missing rm_owner line refuses it too: the login it proves is the ~/.env one", async () => {
-    const { rm_owner: _o, ...noOwner } = HOME_ENV;
-    await refused(["enable-owner-login", ...CONFIRM], fake({ homeEnv: noOwner, identity: "missing" }), /has no rm_owner line/);
+  test("--roles and --rotate reach the dep; unknown roles, a rotation outside --roles, and the flags on another command refuse", async () => {
+    const rec = fake({ identity: "missing" });
+    let got: { roles: readonly string[]; rotate: readonly string[] } | undefined;
+    rec.deps.rolePasswords = async (options) => {
+      got = { roles: options.roles, rotate: options.rotate };
+      return { roles: {}, ownerLoginBefore: null };
+    };
+    await runProdInit(["role-passwords", ...CONFIRM, "--roles", "rm_owner,rm_app", "--rotate", "rm_app"], rec.deps);
+    expect(got).toEqual({ roles: ["rm_owner", "rm_app"], rotate: ["rm_app"] });
+    await refused(["role-passwords", ...CONFIRM, "--roles", "rm_owner,doadmin"], fake({ identity: "missing" }), /--roles takes a comma-separated list/);
+    await refused(["role-passwords", ...CONFIRM, "--roles", "rm_owner", "--rotate", "rm_app"], fake({ identity: "missing" }), /--rotate names rm_app, which --roles leaves out/);
+    await refused(["set-identity", ...CONFIRM, "--rotate", "rm_owner"], fake(), /belong to role-passwords only/);
+    await refused(["set-identity", ...CONFIRM, "--doadmin-stdin"], fake(), /belong to role-passwords only/);
+  });
+
+  test("an EMPTY role line refuses: it is a mistake to report, not a password to generate over", async () => {
+    await refused(["role-passwords", ...CONFIRM], fake({ homeEnv: { ...HOME_ENV, rm_owner: "" }, identity: "missing" }), /empty rm_owner line/);
+    await refused(["role-passwords", ...CONFIRM, "--rotate", "rm_app"], fake({ homeEnv: { ...HOME_ENV, rm_app: "" }, identity: "missing" }), /empty rm_app line/);
+  });
+
+  /** A real ~/.env on disk, and a fake database half that sets the absent roles the way the real one does. */
+  const GENERATED = (role: string) => `generated-${role}-Zq9vXk2LmP0aB7cD4eF6gH8iJ1kL3mN5o`;
+  function onDisk(homeEnv: Record<string, string>, fileText: string, failing: string[] = []) {
+    const rec = fake({ homeEnv, identity: "missing" });
+    // Outside the state root, which assertNoSecret walks: ~/.env holds the secrets on purpose.
+    const home = mkdtempSync(join(tmpdir(), "rm-prod-init-home-"));
+    roots.push(home);
+    const homeEnvPath = join(home, ".env");
+    writeFileSync(homeEnvPath, fileText, { mode: 0o644 });
+    rec.deps = { ...rec.deps, homeEnvPath };
+    const proofs: Record<string, string> = {};
+    rec.deps.rolePasswords = async (options) => {
+      rec.calls.push("rolePasswords");
+      const failed = options.roles.filter((r) => options.currentUrl(r) && failing.includes(r) && !options.rotate.includes(r));
+      if (failed.length) throw new Error(`${failed.join(",")} could not log in with the password in $HOME/.env (bad). Nothing was changed. rerun with --rotate ${failed.join(",")}`);
+      const roles: Record<string, string> = {};
+      for (const r of options.roles) {
+        if (options.currentUrl(r) && !options.rotate.includes(r)) {
+          roles[r] = "kept";
+          continue;
+        }
+        const retire = options.rotate.includes(r) && options.currentUrl(r) !== undefined;
+        await options.persist(r, GENERATED(r), retire);
+        proofs[r] = options.urlWith(r, GENERATED(r));
+        roles[r] = retire ? "rotated" : "set";
+        options.report?.(r, roles[r] as never);
+      }
+      return { roles, ownerLoginBefore: false };
+    };
+    return { rec, homeEnvPath, proofs };
+  }
+  const FILE_NO_OWNER = "# panel paste\nhost = db.example.internal\nport = 25060\n\ndatabase = defaultdb\nsslmode = require\nrm_readonly = ro-pw\nrm_app = app-pw\nrm_worker = worker-pw\nRM_ENV=prod\n";
+  const ENV_NO_OWNER: Record<string, string> = { host: "db.example.internal", port: "25060", database: "defaultdb", sslmode: "require", rm_readonly: "ro-pw", rm_app: "app-pw", rm_worker: "worker-pw", RM_ENV: "prod" };
+
+  test("a missing rm_owner line is set: written to ~/.env, every other line kept, mode 0600; the receipt says set, never the value", async () => {
+    const { rec, homeEnvPath, proofs } = onDisk(ENV_NO_OWNER, FILE_NO_OWNER);
+    const { logs, error } = await runCaptured(["role-passwords", ...CONFIRM], rec);
+    expect(error).toBeUndefined();
+    expect(decodeURIComponent(new URL(proofs.rm_owner!).password)).toBe(GENERATED("rm_owner"));
+    expect(new URL(proofs.rm_owner!).username).toBe("rm_owner");
+    expect(readFileSync(homeEnvPath, "utf8")).toBe(`${FILE_NO_OWNER}rm_owner = ${GENERATED("rm_owner")}\n`);
+    expect(statSync(homeEnvPath).mode & 0o777).toBe(0o600);
+    const dir = join(rec.root, "rm_prod", "prod-init");
+    const receiptText = readFileSync(join(dir, readdirSync(dir).find((f) => f.startsWith("role-passwords"))!), "utf8");
+    expect(JSON.parse(receiptText).detail.roles).toEqual({ rm_owner: "set", rm_app: "kept", rm_worker: "kept", rm_readonly: "kept" });
+    for (const text of [receiptText, ...logs]) {
+      expect(text).not.toContain(GENERATED("rm_owner"));
+      expect(text).not.toContain("app-pw");
+    }
+    assertNoSecret(rec, logs, error);
+    // Idempotent: the rerun reads the line it wrote; every role is kept and ~/.env is unchanged.
+    const rerun = onDisk({ ...ENV_NO_OWNER, rm_owner: GENERATED("rm_owner") }, readFileSync(homeEnvPath, "utf8"));
+    const second = await runProdInit(["role-passwords", ...CONFIRM], rerun.rec.deps);
+    expect(second.detail).toMatchObject({ roles: { rm_owner: "kept", rm_app: "kept", rm_worker: "kept", rm_readonly: "kept" } });
+    expect(readFileSync(rerun.homeEnvPath, "utf8")).toBe(`${FILE_NO_OWNER}rm_owner = ${GENERATED("rm_owner")}\n`);
+  });
+
+  test("a line whose proof fails refuses, names --rotate, and leaves ~/.env alone", async () => {
+    const text = `${FILE_NO_OWNER}rm_owner = ${OWNER_PASSWORD}\n`;
+    const { rec, homeEnvPath } = onDisk({ ...ENV_NO_OWNER, rm_owner: OWNER_PASSWORD }, text, ["rm_app"]);
+    const { logs, error } = await runCaptured(["role-passwords", ...CONFIRM], rec);
+    expect(error?.message).toMatch(/--rotate rm_app/);
+    expect(readFileSync(homeEnvPath, "utf8")).toBe(text);
+    expect(readdirSync(dirname(homeEnvPath))).toEqual([".env"]);
+    assertNoSecret(rec, logs, error);
+  });
+
+  test("--rotate replaces the line in place and keeps the old one in ~/.env.retired-<ts>, both 0600", async () => {
+    const text = `host = db.example.internal\nrm_owner = ${OWNER_PASSWORD}\nport = 25060\ndatabase = defaultdb\n`;
+    const { rec, homeEnvPath } = onDisk({ host: "db.example.internal", port: "25060", database: "defaultdb", rm_owner: OWNER_PASSWORD, rm_readonly: "ro-pw", RM_ENV: "prod" }, text);
+    const { logs, error } = await runCaptured(["role-passwords", ...CONFIRM, "--roles", "rm_owner", "--rotate", "rm_owner"], rec);
+    expect(error).toBeUndefined();
+    expect(readFileSync(homeEnvPath, "utf8")).toBe(`host = db.example.internal\nrm_owner = ${GENERATED("rm_owner")}\nport = 25060\ndatabase = defaultdb\n`);
+    const retired = readdirSync(dirname(homeEnvPath)).filter((f) => f.startsWith(".env.retired-"));
+    expect(retired.length).toBe(1);
+    const retiredPath = join(dirname(homeEnvPath), retired[0]!);
+    expect(readFileSync(retiredPath, "utf8")).toContain(`rm_owner = ${OWNER_PASSWORD}\n`);
+    expect(statSync(retiredPath).mode & 0o777).toBe(0o600);
+    expect(statSync(homeEnvPath).mode & 0o777).toBe(0o600);
+    for (const line of logs) {
+      expect(line).not.toContain(GENERATED("rm_owner"));
+      expect(line).not.toContain(OWNER_PASSWORD);
+    }
+    const dir = join(rec.root, "rm_prod", "prod-init");
+    const receipt = JSON.parse(readFileSync(join(dir, readdirSync(dir).find((f) => f.startsWith("role-passwords"))!), "utf8"));
+    expect(receipt.detail.roles).toEqual({ rm_owner: "rotated" });
+  });
+
+  test("no password reaches argv: the command and its modules spawn nothing", () => {
+    for (const file of ["scripts/prod-init.ts", "scripts/lib/home-env-secret.ts", "scripts/lib/doadmin-input.ts", "backend/scripts/role-passwords.ts", "backend/src/db/scram-verifier.ts"]) {
+      const source = readFileSync(join(REPO, file), "utf8");
+      expect(source, file).not.toMatch(/\b(spawn|spawnSync|execSync|execFile|exec)\s*\(|Bun\.spawn|child_process/);
+    }
   });
 
   test("the identity gate refuses the cross: prod against rehearsal, stage against production", async () => {
-    await refused(["enable-owner-login", ...CONFIRM], fake({ identity: "rehearsal" }), /RM_ENV=prod requires .* enrolled `production`; it reads `rehearsal`/);
-    await refused(["enable-owner-login", ...CONFIRM], fake({ env: { RM_ENV: "stage" }, identity: "production" }), /RM_ENV=stage requires .* enrolled `rehearsal`; it reads `production`/);
-    // Red controls: stage against a pre-identity or rehearsal target proceeds.
+    await refused(["role-passwords", ...CONFIRM], fake({ identity: "rehearsal" }), /RM_ENV=prod requires .* enrolled `production`; it reads `rehearsal`/);
+    await refused(["role-passwords", ...CONFIRM], fake({ env: { RM_ENV: "stage" }, identity: "production" }), /RM_ENV=stage requires .* enrolled `rehearsal`; it reads `production`/);
     for (const identity of ["missing", "rehearsal"] as const) {
-      const receipt = await runProdInit(["enable-owner-login", ...CONFIRM], fake({ env: { RM_ENV: "stage" }, identity }).deps);
+      const receipt = await runProdInit(["role-passwords", ...CONFIRM], fake({ env: { RM_ENV: "stage" }, identity }).deps);
       expect(receipt.outcome).toBe("completed");
     }
   });
@@ -616,13 +751,16 @@ describe("D61: enable-owner-login", () => {
   test("a driver error carrying a password is scrubbed from the receipt and the rethrown message", async () => {
     const rec = fake({
       identity: "missing",
-      enableOwnerLogin: async () => {
-        throw new Error(`connect failed for postgres://doadmin:${DOADMIN_PASSWORD}@h/db and rm_owner ${encodeURIComponent(OWNER_PASSWORD)}`);
+      rolePasswords: async () => {
+        throw new Error(`connect failed for postgres://doadmin:${TYPED_DOADMIN}@h/db and rm_owner ${encodeURIComponent(OWNER_PASSWORD)}`);
       },
     });
-    const { logs, error } = await runCaptured(["enable-owner-login", ...CONFIRM], rec);
+    const { logs, error } = await runCaptured(["role-passwords", ...CONFIRM], rec);
     expect(error?.message).toContain("connect failed");
+    expect(error?.message).not.toContain(TYPED_DOADMIN);
     assertNoSecret(rec, logs, error);
+    const dir = join(rec.root, "rm_prod", "prod-init");
+    for (const f of readdirSync(dir)) expect(readFileSync(join(dir, f), "utf8")).not.toContain(TYPED_DOADMIN);
   });
 });
 
@@ -671,17 +809,17 @@ describe("D61: every command runs prod against `production` and stage against `r
     expect(receipt.detail).toMatchObject({ before: "rehearsal", after: "rehearsal", written: false });
   });
 
-  test("enable-owner-login on a pre-identity target proceeds under either policy when the ledger is a supported baseline", async () => {
+  test("role-passwords on a pre-identity target proceeds under either policy when the ledger is a supported baseline", async () => {
     for (const rmEnv of ["prod", "stage"] as const) {
-      const receipt = await runProdInit(["enable-owner-login", ...CONFIRM], fake({ env: { RM_ENV: rmEnv }, identity: "missing" }).deps);
+      const receipt = await runProdInit(["role-passwords", ...CONFIRM], fake({ env: { RM_ENV: rmEnv }, identity: "missing" }).deps);
       expect(receipt.outcome).toBe("completed");
     }
   });
 
-  test("enable-owner-login on a pre-identity target: RED CONTROL — a ledger that is not a supported baseline refuses under either policy", async () => {
+  test("role-passwords on a pre-identity target: RED CONTROL — a ledger that is not a supported baseline refuses under either policy", async () => {
     for (const rmEnv of ["prod", "stage"] as const) {
       for (const ledger of [["0001_init.sql"], BASELINE_LEDGER.slice(0, -1), [...BASELINE_LEDGER, "0081_deployment_identity.sql"]]) {
-        await refused(["enable-owner-login", ...CONFIRM], fake({ env: { RM_ENV: rmEnv }, identity: "missing", ledger }), /requires a ledger exactly equal to a supported baseline/);
+        await refused(["role-passwords", ...CONFIRM], fake({ env: { RM_ENV: rmEnv }, identity: "missing", ledger }), /requires a ledger exactly equal to a supported baseline/);
       }
     }
   });
@@ -695,7 +833,7 @@ describe("D61: every command runs prod against `production` and stage against `r
   });
 });
 
-describe("D61: doadmin is read by enable-owner-login and nothing else", () => {
+describe("D61: doadmin is read by role-passwords and nothing else", () => {
   test("set-identity, provision-tokens and rebind-members run with no doadmin line, and no dep of theirs sees a doadmin URL", async () => {
     const { doadmin: _d, ...noDoadmin } = HOME_ENV;
     const seen: string[] = [];
@@ -730,18 +868,13 @@ describe("D61: doadmin is read by enable-owner-login and nothing else", () => {
     await runProdInit(["rebind-members", "--credentials", credentialPath, "--api", "http://127.0.0.1:9", ...CONFIRM], rec.deps);
     expect(seen.length).toBeGreaterThan(5);
     expect(seen).not.toContain("doadmin");
-    expect(rec.calls.filter((c) => c.startsWith("enableOwnerLogin"))).toEqual([]);
+    expect(rec.calls.filter((c) => c.startsWith("rolePasswords") || c === "readDoadmin")).toEqual([]);
   });
 
-  test("the source reads doadmin in exactly two lines, both inside the enable-owner-login branch", () => {
+  test("the source names doadmin only to build role-passwords' URL from the typed value", () => {
     const source = readFileSync(join(REPO, "scripts/prod-init.ts"), "utf8");
-    const lines = source.split("\n").filter((l) => /"doadmin"/.test(l) && !l.trim().startsWith("//") && !l.includes("as const"));
-    expect(lines.map((l) => l.trim())).toEqual([
-      'requirePrivilegedPassword(homeEnv, "doadmin", deps.homeEnvPath);',
-      'doadminUrl = urlForRole(homeEnv!, "doadmin");',
-    ]);
-    const branch = source.indexOf('if (command === "enable-owner-login") {\n        requirePrivilegedPassword(homeEnv, "doadmin"');
-    expect(branch).toBeGreaterThan(-1);
+    const lines = source.split("\n").filter((l) => /\bdoadmin\b/.test(l) && !l.trim().startsWith("//") && !l.trim().startsWith("*") && !l.trim().startsWith("/**") && !l.includes("as const"));
+    expect(lines.map((l) => l.trim()).filter((l) => /urlForRole/.test(l))).toEqual(['doadminUrl = urlForRole({ ...homeEnv!, doadmin: doadminPassword! }, "doadmin");']);
   });
 
   test("no successful command logs or receipts either password", async () => {
