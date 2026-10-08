@@ -99,6 +99,18 @@ if [ -n "$migrator_hits" ]; then
   done <<<"$migrator_hits"
 fi
 
+# 6. the release runbook's step table is generated from scripts/release/steps.ts
+#    (bun scripts/release/steps-table.ts), and no runbook row names a step the
+#    list lacks. Skipped when bun is absent; the unit suite holds the same rule
+#    (scripts/tests/unit/release-steps-table.test.ts). Skipped too in a
+#    docs-only copy of the tree, where the tool is absent.
+if command -v bun >/dev/null 2>&1 && [ -f scripts/release/steps-table.ts ] && [ -f docs/runbooks/release-run.md ]; then
+  bun scripts/release/steps-table.ts --check docs/runbooks/release-run.md >/dev/null || err "docs/runbooks/release-run.md: stale step table (bun scripts/release/steps-table.ts --write docs/runbooks/release-run.md)"
+  for f in docs/runbooks/release-run.md docs/runbooks/v0-6-0-rollout.md; do
+    bun scripts/release/steps-table.ts --check-ids "$f" >/dev/null || err "$f names a step that is not in scripts/release/steps.ts"
+  done
+fi
+
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi

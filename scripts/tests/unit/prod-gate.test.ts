@@ -43,6 +43,16 @@ describe("parseProdGateArgs", () => {
     expect(parseProdGateArgs(["--mode", "post-release", "--defer-sessions", "--db-capacity-gb", "25"])).toMatchObject({ mode: "post-release", deferSessions: true, capacityGb: 25 });
   });
 
+  test("--sessions graded|deferred is the value form the release run renders from target data", () => {
+    expect(parseProdGateArgs(["--mode", "post-release", "--sessions", "deferred"])).toMatchObject({ deferSessions: true });
+    expect(parseProdGateArgs(["--mode", "post-release", "--sessions", "graded"])).toMatchObject({ deferSessions: false });
+    expect(parseProdGateArgs(["--mode", "post-release", "--defer-sessions", "--sessions", "deferred"])).toMatchObject({ deferSessions: true });
+    // red: an unknown value, or a contradiction, refuses.
+    expect(parseProdGateArgs(["--sessions", "later"])).toHaveProperty("error");
+    expect(parseProdGateArgs(["--sessions", "graded", "--defer-sessions"])).toHaveProperty("error");
+    expect(parseProdGateArgs(["--defer-sessions", "--sessions", "graded"])).toHaveProperty("error");
+  });
+
   test("selects the stack by --instance; the old state-file, driver-log and SMOKE_PROJECT routes are gone", () => {
     expect(parseProdGateArgs(["--instance", "rm_prod", "--mode", "post-release"])).toMatchObject({ mode: "post-release" });
     expect(parseProdGateArgs(["--state-file", "/x/smoke-state.json"])).toEqual({ error: 'unknown argument "--state-file".' });

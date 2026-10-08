@@ -191,7 +191,6 @@ async function prepareStep(
         lock: { backendPid: acquired.lock.backendPid, holder: acquired.lock.holder },
         stateDir: paths.dir,
         resultFile,
-        nonInteractive: true,
         ...(note ? { note } : {}),
       };
       const child = Bun.spawnSync(["bun", "--no-env-file", "scripts/smoke-prepare.ts"], {

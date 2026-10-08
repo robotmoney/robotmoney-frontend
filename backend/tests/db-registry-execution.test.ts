@@ -52,8 +52,24 @@ import { dirname, join } from "node:path";
 import postgres from "postgres";
 import ts from "typescript";
 import { bootstrapBlankDatabase, loadSnapshot } from "../src/db/schema-snapshot.ts";
-import { OBJECTLESS_SHAPES, type QueryDeclaration, type RmRole, type StatementDeclaration, type TablePrivilege } from "../src/db/registry.ts";
+import {
+  OBJECTLESS_SHAPES,
+  PROVISIONING_SHAPES,
+  type ObjectlessShape,
+  type ProvisioningShape,
+  type QueryDeclaration,
+  type RmRole,
+  type StatementDeclaration,
+  type TablePrivilege,
+} from "../src/db/registry.ts";
 import { adminConnection, adminExec, harnessConnection, ROLE_PASSWORD, roleUrl } from "./support/cluster.ts";
+import { passwordVerifierLiteral, scramSha256Verifier } from "../src/db/scram-verifier.ts";
+
+/** A provisioning shape as runnable text: the password slot gets a vetted verifier literal, as onStatement fills it. */
+function provisioningProbeText(shape: ProvisioningShape): string {
+  const text: string = PROVISIONING_SHAPES[shape];
+  return text.includes("$1") ? text.replace("$1", passwordVerifierLiteral(scramSha256Verifier("probe-password")).sql) : text;
+}
 
 const BACKEND = join(import.meta.dir, "..");
 const SRC = join(BACKEND, "src");
@@ -120,6 +136,14 @@ function declaringModules(): Map<string, number> {
     if (calls > 0) found.set(file, calls);
   }
   return found;
+}
+
+/** Every module under scripts/ that calls `registerStatement(...)`. An operator
+ *  command that issues only object-less or provisioning statements (D61's
+ *  scripts/role-passwords) is reached by no entry graph and by no
+ *  `registerQuery` scan, so it is imported for its statements by this list. */
+function statementScripts(): string[] {
+  return tsFilesUnder(SCRIPTS).filter((file) => readFileSync(file, "utf8").includes("registerStatement("));
 }
 
 /** Every relative module an entry file imports, as absolute paths: the
@@ -465,6 +489,14 @@ const CATALOG_ONLY_STATEMENTS: readonly string[] = [
 /** A LOGIN role that holds nothing but what the exactness check hands it. */
 const SCRATCH = "rm_registry_probe_scratch";
 
+/**
+ * The provider's `doadmin`, stood in for (D61's provisioning shapes): a LOGIN
+ * role with CREATEROLE and ADMIN on `rm_owner`, which is what the provider's
+ * role holds over the roles it created, and not a superuser. It inherits and
+ * may SET nothing, so it reaches no relation of `rm_owner`'s.
+ */
+const DOADMIN_STANDIN = "rm_registry_doadmin_standin";
+
 const database = `rm_registry_exec_${crypto.randomUUID().slice(0, 8)}`;
 /** The schema owner's handle on the disposable database (rm_owner, via the fixture login). */
 let owner: postgres.Sql<{}>;
@@ -491,6 +523,12 @@ beforeAll(async () => {
   try {
     await superuser.unsafe(`DROP ROLE IF EXISTS ${SCRATCH}`);
     await superuser.unsafe(`CREATE ROLE ${SCRATCH} LOGIN NOINHERIT PASSWORD '${ROLE_PASSWORD()}'`);
+    await superuser.unsafe(`DROP ROLE IF EXISTS ${DOADMIN_STANDIN}`);
+    await superuser.unsafe(`CREATE ROLE ${DOADMIN_STANDIN} LOGIN CREATEROLE NOINHERIT PASSWORD '${ROLE_PASSWORD()}'`);
+    // The provider's doadmin holds ADMIN on each §3 role it created.
+    for (const role of ["rm_owner", "rm_app", "rm_worker", "rm_readonly"]) {
+      await superuser.unsafe(`GRANT ${role} TO ${DOADMIN_STANDIN} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`);
+    }
     // A blank database owned by rm_owner (since Postgres 15 only the database
     // owner may CREATE in `public`), copied from template0 so nothing the
     // suite's migration-built template holds comes with it.
@@ -518,6 +556,7 @@ afterAll(async () => {
   try {
     await superuser.unsafe(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
     await superuser.unsafe(`DROP ROLE IF EXISTS ${SCRATCH}`);
+    await superuser.unsafe(`DROP ROLE IF EXISTS ${DOADMIN_STANDIN}`);
   } finally {
     await superuser.end({ timeout: 5 });
   }
@@ -620,7 +659,9 @@ let enumerated: Enumerated | undefined;
 async function childSites(): Promise<Enumerated> {
   if (enumerated) return enumerated;
   const declaring = declaringModules();
-  const modules = [...new Set([...entryImports(API_ENTRY), ...entryImports(WORKER_ENTRY), ...declaring.keys()])];
+  const modules = [
+    ...new Set([...entryImports(API_ENTRY), ...entryImports(WORKER_ENTRY), ...declaring.keys(), ...statementScripts()]),
+  ];
   const dir = mkdtempSync(join(tmpdir(), "rm-registry-exec-"));
   const script = join(dir, "enumerate.ts");
   writeFileSync(
@@ -683,7 +724,9 @@ describe("every registered query runs as its declared role on a disposable datab
   });
 
   test("every object-less statement (D55 (13)) runs as its declared LOGIN role", async () => {
-    const { statements } = await childSites();
+    const statements = (await childSites()).statements.filter(
+      (s): s is StatementDeclaration & { role: RmRole; shape: ObjectlessShape } => s.role !== "doadmin",
+    );
     // Non-vacuous, and the whole closed list is exercised, not a subset of it.
     expect(statements.length).toBeGreaterThan(0);
     expect([...new Set(statements.map((s) => s.shape as string))].sort()).toEqual(Object.keys(OBJECTLESS_SHAPES).sort());
@@ -696,6 +739,35 @@ describe("every registered query runs as its declared role on a disposable datab
       if (!outcome.ok) failures.push(`${statement.site}: as ${statement.role} → ${outcome.code} ${outcome.message}`);
     }
     expect(failures).toEqual([]);
+  });
+
+  test("every provisioning statement (D61) runs as the doadmin stand-in, and no §3 role can run the DDL", async () => {
+    const statements = (await childSites()).statements.filter((s) => s.role === "doadmin");
+    // Non-vacuous, and the whole closed provisioning list is exercised.
+    expect([...new Set(statements.map((s) => s.shape as string))].sort()).toEqual(Object.keys(PROVISIONING_SHAPES).sort());
+    const failures: string[] = [];
+    for (const statement of statements) {
+      // A password shape's slot is a vetted verifier literal, inlined (a
+      // utility statement takes no bound parameter). The probe rolls back, so
+      // every role keeps the suite's password.
+      const shape = provisioningProbeText(statement.shape as ProvisioningShape);
+      const outcome = await runProbe(login(DOADMIN_STANDIN), { statement: shape });
+      if (!outcome.ok) failures.push(`${statement.site}: as the doadmin stand-in → ${outcome.code} ${outcome.message}`);
+    }
+    expect(failures).toEqual([]);
+    // Red control: the DDL needs what only the provisioning role holds. Every
+    // §3 role is refused it, so the stand-in's success above is a real grant.
+    // (Postgres lets any role change its OWN password, so a runtime role's
+    // own password shape is left out; rm_owner's adds LOGIN, which it may not
+    // grant itself, so it stays in.)
+    const own: Record<string, string> = { rm_app: "appPasswordSet", rm_worker: "workerPasswordSet", rm_readonly: "readonlyPasswordSet" };
+    for (const role of ROLES) {
+      for (const shape of ["ownerLoginEnable", "ownerPasswordSet", "appPasswordSet", "workerPasswordSet", "readonlyPasswordSet"] as const) {
+        if (own[role] === shape) continue;
+        const outcome = await runProbe(login(role), { statement: provisioningProbeText(shape) });
+        expect(outcome.ok ? "ran" : outcome.code, `${role} ${shape}`).toBe("42501");
+      }
+    }
   });
 
   test("every site outside PROBE_PENDING carries a probe, and the backlog only shrinks", async () => {

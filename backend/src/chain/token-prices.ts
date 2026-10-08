@@ -108,8 +108,18 @@ let geckoOpenBatch: GeckoBatch | null = null;
 // gate exists purely for batch coalescing.
 let batchChain: Promise<void> = Promise.resolve();
 
+// When a whole token_price request last failed (retries exhausted, hard status
+// or timeout), 0 if never. A follow-on reader in the same tick (the worker's
+// token-market sample, worker/handlers/token-market.ts) checks it so a host that
+// just refused the wallet sampler is not asked again a moment later.
+let lastGeckoPriceFailureAt = 0;
+export function lastGeckoPriceFailureAtMs(): number {
+  return lastGeckoPriceFailureAt;
+}
+
 // Test-only cache/gate hygiene. Production callers never reset live prices.
 export function _resetTokenPriceCacheForTests(): void {
+  lastGeckoPriceFailureAt = 0;
   geckoPending.clear();
   geckoPriceCache.reset();
   geckoOpenBatch = null;
@@ -354,6 +364,7 @@ async function runGeckoBatch(batch: GeckoBatch): Promise<void> {
       }
     }
   } catch (err) {
+    lastGeckoPriceFailureAt = Date.now();
     for (const waiter of batch.waiters.values()) waiter.reject(err);
   } finally {
     release();

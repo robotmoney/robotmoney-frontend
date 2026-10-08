@@ -9,8 +9,8 @@
 //   `bun run migrate` (backend/scripts/migrate.ts) — the operator's command. It
 //     reads the target from `~/.env`, acquires the §2 target lock ITSELF over a
 //     direct connection (TARGET_LOCK_KEY, the constant every tool shares),
-//     prompts for `rm_owner`, confirms a remote target with an explicit `y`,
-//     runs, writes the receipt and releases the lock on exit.
+//     reads `rm_owner` from `~/.env`, holds the run to `--confirm-target`
+//     (D61), runs, writes the receipt and releases the lock on exit.
 //   `bun smoke --migrate` (backend/scripts/smoke-prepare.ts, a child of
 //     scripts/lib/smoke-main.ts) — the stage/test/CI convenience. The smoke
 //     process already holds the target lock for its whole run (§2: "from
@@ -18,9 +18,11 @@
 //     OBSERVES that lock (target-lock.ts observeTargetLock) and proves at every
 //     boundary that its parent still holds it. In a local mode the owner
 //     password is the one smoke generated for the instance (§8.5); on a remote
-//     rehearsal it is typed, exactly as `bun run migrate` types it.
+//     rehearsal it is `~/.env`'s `rm_owner` line, exactly as `bun run migrate`
+//     reads it, with the same `--confirm-target` (D61).
 //
-// Neither ever connects as `doadmin` or reads an owner password from a file.
+// Neither ever connects as `doadmin`. Neither prompts: no step reads a
+// terminal (D61 rule 1).
 //
 // Governed by smoke-production-spec.md §8.3 (the run), §8.5 (`--migrate` and
 // production upgrades), §9.1 step 2 (the production baseline), §2 (the lock and
@@ -78,15 +80,16 @@
 // WHO RUNS IT
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// `rm_owner`, and nothing that merely may become it. Spec §3: "**`rm_owner` is
-// `LOGIN`.** Its password is typed at the terminal for the one run that needs it
-// and never stored." `assertOwnerIsSession` requires `current_user = rm_owner`:
+// `rm_owner`, and nothing that merely may become it. Spec §3 makes `rm_owner`
+// `LOGIN`; D61 puts its password in the host's `~/.env`, read by the run and
+// never written anywhere else. `assertOwnerIsSession` requires `current_user = rm_owner`:
 // a superuser session or a mere member of the role is refused, because the
 // manifest and the ledger's compat columns are "trusted inputs to boot
 // decisions" (§8.3) and only the schema owner writes them. Migration 0053
 // creates `rm_owner` LOGIN on a fresh cluster; an EXISTING database recorded
 // 0053 when it said NOLOGIN, so there spec §9.1 step 1 is a one-time `doadmin`
-// step, and the refusal says which of the two situations it is in.
+// step (`bun scripts/prod-init.ts role-passwords`, D61), and the refusal
+// says which of the two situations it is in.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // THE ONE RUN WITHOUT AN IDENTITY ROW
@@ -96,12 +99,19 @@
 // files (its observed 76-name ledger, ../src/db/supported-releases.ts), which predates
 // the `deployment_identity` table (0081), so the first `bun run migrate` there
 // meets no row and no table. It may run anyway exactly when RM_ENV=prod, the
-// ledger's filename list equals one SUPPORTED_RELEASES baseline's list exactly, `rm_owner` is typed at the terminal, and
-// the operator answers an explicit `y`. `readPreIdentityState` decides the
-// first two; the typed password and the `y` are the remote path of
-// `migrateCommand`, and the state the operator said `y` to is handed to
-// `runMigrate`, which re-reads it on the owner connection and refuses unless it
-// is the same one. The receipt records it.
+// ledger's filename list equals one SUPPORTED_RELEASES baseline's list exactly,
+// `~/.env` holds the `rm_owner` line, and `--confirm-target` names the target
+// exactly (D61). `readPreIdentityState` decides the first two; the owner line
+// and the flag are the remote path of `migrateCommand`, and the state the flag
+// confirmed is handed to `runMigrate`, which re-reads it on the owner
+// connection and refuses unless it is the same one. The receipt records it.
+//
+// THE REMOTE REHEARSAL PASS (D61 rule 2). Stage rehearses that run unmodified:
+// a production dump restored into a REMOTE stage Postgres has the same state,
+// and the same `bun run migrate --confirm-target …` under RM_ENV=stage takes
+// the same pass, writing `rehearsal` instead of `production`
+// (`identityFirstKind`). It never writes `production`; any other pre-identity
+// ledger refuses; a second run, with the row present, takes the normal path.
 //
 // IDENTITY FIRST (D55 (9), §9.1). The pass applies `0081_deployment_identity`
 // BEFORE any other pending file, out of filename order, and 0081's DDL, its
@@ -145,7 +155,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import type postgresTypes from "postgres";
-import { hiddenPrompt } from "../../scripts/lib/smoke-external-migrate.ts";
+import { requireConfirmTarget, requirePrivilegedPassword, type RemoteAuthority } from "../../scripts/lib/privileged-env.ts";
 import {
   enrollAsProduction,
   enrollAsRehearsal,
@@ -263,7 +273,7 @@ export interface MigrateGateOptions {
    *  row). */
   readonly env: "prod" | "stage" | null;
   /** Remote connection or a Postgres container smoke owns (§5). Drives the
-   *  warning and the `y/n`, and where the owner password comes from. */
+   *  warning and `--confirm-target`, and where the owner password comes from. */
   readonly connection: "remote" | "local";
 }
 
@@ -275,12 +285,9 @@ export interface MigrateRunOptions extends MigrateGateOptions {
    * lock is two migration runs waiting to happen.
    */
   readonly lock: HeldTargetLock;
-  /** Skip every prompt and refuse rather than ask. An unattended run that
-   *  would have blocked on a terminal must fail fast. */
-  readonly nonInteractive: boolean;
   /**
-   * The pre-identity state (§9.1, D55 (5)) the operator confirmed with a typed
-   * `rm_owner` and an explicit `y`, or absent. The run re-reads the state on the
+   * The pre-identity state (§9.1, D55 (5)) the run confirmed with `~/.env`'s
+   * `rm_owner` and a matching `--confirm-target` (D61), or absent. The run re-reads the state on the
    * owner connection: a database that qualifies for the exception runs only
    * when this is the very state it reads, and a database that no longer
    * qualifies refuses when this is set.
@@ -455,8 +462,8 @@ export async function runMigrate(
   const afterPass = preIdentity === null && firstManifest ? await readIdentityPassRemainder(db) : null;
   if (preIdentity !== null && !plan.pending.includes(IDENTITY_MIGRATION)) {
     throw new Error(
-      `Refusing the migrate run: the first production migrate applies ${IDENTITY_MIGRATION} first (spec §9.1, ` +
-        "D55 (9)), and it is not pending on this database. Nothing was applied.",
+      `Refusing the migrate run: a remote identity-first pass applies ${IDENTITY_MIGRATION} first (spec §9.1, ` +
+        "D55 (9), D61), and it is not pending on this database. Nothing was applied.",
     );
   }
 
@@ -492,12 +499,20 @@ export async function runMigrate(
   let identityWritten: DeploymentIdentityRow | null = null;
   if (preIdentity !== null) {
     await boundary(options, `migrate: identity-first ${IDENTITY_MIGRATION}`);
+    // The kind is the policy's and nothing else's: `production` under prod,
+    // `rehearsal` under stage (D61 rule 2). Each enrollment refuses the other
+    // policy again inside the pass.
+    const kind = identityFirstKind(options.env);
     const pass = await applyIdentityFirst(db, {
-      kind: "production",
+      kind,
       rmEnv: options.env,
       remote: options.connection === "remote",
+      ...(kind === "rehearsal" ? { remoteRehearsalConfirmed: true } : {}),
       expected: preIdentity,
-      note: `bun run migrate: the first production migrate from ${preIdentity.release} (spec §9.1, D55 (5), (9))`,
+      note:
+        kind === "production"
+          ? `bun run migrate: the first production migrate from ${preIdentity.release} (spec §9.1, D55 (5), (9))`
+          : `bun run migrate: the remote rehearsal pass from ${preIdentity.release} (D61 rule 2, D55 (9))`,
       migrationsDir,
     });
     identityWritten = pass.row;
@@ -563,23 +578,23 @@ async function boundary(options: MigrateRunOptions, phase: string): Promise<void
 }
 
 /**
- * The first production migrate runs only on the state the operator confirmed
- * (§9.1, D55 (5)). The caller's gates read the pre-identity state before the
- * password was typed and the `y` was given; this run reads it again on the
- * owner connection. Refused: a qualifying database with no confirmation handed
- * in (every caller but `migrateCommand`'s remote path), a confirmation of a
- * different state (the ledger moved while the operator typed), and a
+ * A remote identity-first pass runs only on the state its run confirmed
+ * (§9.1, D55 (5), D61). The caller's gates read the pre-identity state before
+ * the owner logged in and `--confirm-target` was checked; this run reads it
+ * again on the owner connection. Refused: a qualifying database with no
+ * confirmation handed in (every caller but `migrateCommand`'s remote path), a
+ * confirmation of a different state (the ledger moved meanwhile), and a
  * confirmation handed to a database that no longer qualifies.
  */
 function assertPreIdentityConfirmed(observed: PreIdentityState | null, confirmed: PreIdentityState | undefined): void {
   if (observed === null && confirmed === undefined) return;
   if (observed !== null && confirmed !== undefined && samePreIdentity(observed, confirmed)) return;
   const seen = observed === null ? "does not qualify for it now" : `now reads ${describePreIdentity(observed)}`;
-  const said = confirmed === undefined ? "no operator confirmed it" : `the operator confirmed ${describePreIdentity(confirmed)}`;
+  const said = confirmed === undefined ? "no run confirmed it" : `the run confirmed ${describePreIdentity(confirmed)}`;
   throw new Error(
-    "Refusing the migrate run: the first production migrate (spec §9.1, D55 (5)) runs once, with no " +
-      "deployment_identity row, only on the state an operator confirmed with a typed rm_owner password and an " +
-      `explicit y. This database ${seen}, and ${said}. Nothing was applied.`,
+    "Refusing the migrate run: a remote identity-first pass (spec §9.1, D55 (5), D61) runs once, with no " +
+      "deployment_identity row, only on the state its run confirmed with ~/.env's rm_owner and a matching " +
+      `--confirm-target. This database ${seen}, and ${said}. Nothing was applied.`,
   );
 }
 
@@ -838,59 +853,57 @@ export function urlAsRole(targetUrl: string, role: string, password: string): st
  * Obtain the `rm_owner` password for this one run and prove it logs in.
  *
  * Inputs: the options, a URL to the target under any credential (a runtime
- * role's — used to name a NOLOGIN owner, never to migrate), and, in a local
- * mode, the owner password smoke generated for the instance. Output: the
- * password.
+ * role's — used to name a NOLOGIN owner, never to migrate), and the password
+ * source for the connection mode. Output: the password.
  *
- * Two sources, by connection mode, per §8.5: "In local modes it uses the owner
- * password smoke generated. On a remote connection it prompts for `rm_owner`."
- * The local password comes from the caller because only the smoke knows the
- * instance whose state directory holds it (scripts/lib/smoke-state.ts
- * generateRolePasswords); this module never invents one.
+ * Two sources, by connection mode. In a local mode it is the owner password
+ * smoke generated for the instance (§5, §8.5), handed in by the caller because
+ * only the smoke knows the instance whose state directory holds it
+ * (scripts/lib/smoke-state.ts generateRolePasswords). On a remote connection
+ * it is the `rm_owner = …` line of `$HOME/.env` (D61), handed in by the caller
+ * as a {@link RemoteAuthority}. Nothing is ever prompted for: no step of a
+ * runbook reads a terminal (D61 rule 1).
  *
- * The prompt is masked and the value is never written anywhere, never logged,
- * and never placed in an environment variable. §3: "typed at the terminal for
- * the one run that needs it and never stored."
+ * The value is never logged, never written, never placed in an environment
+ * variable or an argument, and never part of a refusal.
  *
- * Refusals: a remote run that is `nonInteractive`; a local run with no
- * generated password handed in; an empty password; a login that fails — and
- * when `pg_roles` says `rm_owner` is NOLOGIN, the refusal names spec §9.1 step 1
- * (`ALTER ROLE rm_owner LOGIN PASSWORD …` through `doadmin`).
+ * Refusals: a local run with no generated password handed in; a remote run
+ * whose `~/.env` has no `rm_owner` line (naming the key and the file); a login
+ * that fails — and when `pg_roles` says `rm_owner` is NOLOGIN, the refusal
+ * names `bun scripts/prod-init.ts role-passwords`.
  */
-export async function promptOwnerPassword(
-  options: MigrateGateOptions & { readonly nonInteractive: boolean; readonly localOwnerPassword?: string },
+export async function resolveOwnerPassword(
+  options: MigrateGateOptions & { readonly localOwnerPassword?: string; readonly remote?: RemoteAuthority },
   targetUrl: string,
 ): Promise<string> {
   if (options.connection === "local") {
-    // §5: "No terminal prompt exists in local modes."
     const generated = options.localOwnerPassword;
     if (generated === undefined || generated === "") {
       throw new Error(
         "Refusing: a local migrate run uses the rm_owner password smoke generated for the instance (spec §5, " +
-          "§8.5), and none was handed to this run. There is no prompt in a local mode.",
+          "§8.5), and none was handed to this run.",
       );
     }
     await assertOwnerLoginWorks(targetUrl, generated);
     return generated;
   }
-  if (options.nonInteractive) {
+  if (options.remote === undefined) {
     throw new Error(
-      "Refusing: a remote migrate run needs the rm_owner password typed at the terminal, and this run is " +
-        "non-interactive (stdin is not a terminal). Spec §3 keeps that password out of files and " +
-        "environment variables, so there is nothing for an unattended run to read.",
+      "Refusing: a remote migrate run reads the rm_owner password from $HOME/.env (decision D61), and no " +
+        "~/.env authority was handed to this run.",
     );
   }
-  const typed = await hiddenPrompt("rm_owner password (not echoed, not stored)");
-  if (typed === "") throw new Error("Refusing: no rm_owner password entered.");
-  await assertOwnerLoginWorks(targetUrl, typed);
-  return typed;
+  const password = requirePrivilegedPassword({ rm_owner: options.remote.ownerPassword }, "rm_owner", options.remote.envFile);
+  await assertOwnerLoginWorks(targetUrl, password);
+  return password;
 }
 
 /**
  * Verify the owner login, and tell the two failures apart. "Password
  * authentication failed" against a NOLOGIN role is the least useful sentence
  * available: on a database that recorded 0053 when it said NOLOGIN the role
- * cannot log in until spec §9.1 step 1 has been performed through `doadmin`.
+ * cannot log in until `prod-init role-passwords` has run through `doadmin`.
+ * The driver's error text is scrubbed of the password before it is reported.
  */
 async function assertOwnerLoginWorks(targetUrl: string, password: string): Promise<void> {
   const attempt = postgres(urlAsRole(targetUrl, "rm_owner", password), { max: 1, onnotice: () => {}, connect_timeout: 5 });
@@ -900,18 +913,27 @@ async function assertOwnerLoginWorks(targetUrl: string, password: string): Promi
   } catch (error) {
     if (await ownerIsNologin(targetUrl)) {
       throw new Error(
-        "Refusing: rm_owner cannot log in to this database — spec §9.1 step 1 has not been applied here. " +
-          "Through doadmin, run `ALTER ROLE rm_owner LOGIN PASSWORD '<password>'` and verify the login, then " +
-          "retry. This database recorded migration 0053 when it created the role NOLOGIN, and the runner " +
-          "never re-applies a recorded file, so no migration can perform this step.",
+        "Refusing: rm_owner cannot log in to this database (it is NOLOGIN). Run " +
+          "`bun scripts/prod-init.ts role-passwords --confirm-target <host:port/database>`, which connects as " +
+          "doadmin from $HOME/.env, makes rm_owner LOGIN (generating its password into $HOME/.env when the line is absent) and proves the login, then retry. This " +
+          "database recorded migration 0053 when it created the role NOLOGIN, and the runner never re-applies a " +
+          "recorded file, so no migration can perform this step (decision D61).",
       );
     }
     throw new Error(
-      `Refusing: the rm_owner credential was not accepted by this database (${(error as Error).message}).`,
+      `Refusing: the rm_owner credential was not accepted by this database (${scrubSecret((error as Error).message, password)}).`,
     );
   } finally {
     await attempt.end({ timeout: 5 }).catch(() => undefined);
   }
+}
+
+/** A driver message with every occurrence of `secret` removed. Postgres never
+ *  echoes a password, but a message is printed and journaled, so this holds
+ *  the rule whatever the driver does. */
+export function scrubSecret(message: string, secret: string): string {
+  if (secret === "") return message;
+  return message.split(secret).join("***").split(encodeURIComponent(secret)).join("***");
 }
 
 /** Read `rolcanlogin` through the runtime credential the caller named. If even
@@ -932,53 +954,36 @@ async function ownerIsNologin(targetUrl: string): Promise<boolean> {
 }
 
 /**
- * Warn about a remote target and require an explicit `y`.
+ * Warn about a remote target and hold the run to `--confirm-target`.
  *
- * Spec §8.5: "On a remote connection it prompts for `rm_owner`, warns, and asks
- * `y/n`." The warning exists because a remote target is the one case where the
- * operator's mental model and the connection string can disagree without
- * anything looking wrong, and `deployment_identity` is an "accidental-target
- * safeguard, not proof the data is disposable" (§4.2).
+ * D61: "The literal `y` becomes `--confirm-target <host:port/database>`. A
+ * command that writes refuses unless the flag names exactly the target it
+ * resolved from `~/.env`." The warning is still printed: a remote target is the
+ * one case where the operator's mental model and the connection string can
+ * disagree without anything looking wrong, and `deployment_identity` is an
+ * "accidental-target safeguard, not proof the data is disposable" (§4.2).
  *
- * Refusals: anything but an explicit `y` (empty input is `n`; `yes` is not `y`
- * — there is no default and no synonym, because a confirmation that can be
- * reached by accident is not one); `nonInteractive` on a remote connection.
- * Local connections skip it entirely (§5: "No terminal prompt exists in local
- * modes").
+ * Refusals: no flag; a flag that is not exactly `remote.resolvedTarget` (both
+ * printed); a remote connection with no authority handed in. A local
+ * connection skips it entirely: a Postgres smoke owns needs no flag.
  */
-export async function confirmRemoteTarget(
-  options: Pick<MigrateGateOptions, "connection"> & { readonly nonInteractive: boolean },
-  redactedTarget: string,
-  /** Extra warning lines printed before the question — the first production
-   *  migrate names the pre-identity state the `y` confirms. */
+export function confirmRemoteTarget(
+  options: Pick<MigrateGateOptions, "connection"> & { readonly remote?: RemoteAuthority },
+  /** Extra warning lines printed before the check — the first production
+   *  migrate names the pre-identity state the flag confirms. */
   notice: readonly string[] = [],
-): Promise<void> {
+  write: (text: string) => void = (text) => void process.stdout.write(text),
+): void {
   if (options.connection === "local") return;
-
-  if (options.nonInteractive) {
-    throw new Error(
-      `Refusing: this run would migrate the remote target ${redactedTarget}, and a non-interactive run may ` +
-        "not confirm that on the operator's behalf. deployment_identity is an accidental-target safeguard, " +
-        "not proof the data is disposable (spec §4.2).",
-    );
+  if (options.remote === undefined) {
+    throw new Error("Refusing: a remote run needs --confirm-target, and no ~/.env authority was handed to this run (D61).");
   }
-
-  process.stdout.write(
-    `[migrate] WARNING: this will apply pending migrations to the REMOTE target ${redactedTarget} as rm_owner.\n` +
+  write(
+    `[migrate] WARNING: this writes the REMOTE target ${options.remote.resolvedTarget} as rm_owner.\n` +
       "[migrate] deployment_identity is an accidental-target safeguard, not proof the data is disposable.\n" +
-      notice.map((line) => `[migrate] ${line}\n`).join("") +
-      "[migrate] type y to continue, anything else to stop: ",
+      notice.map((line) => `[migrate] ${line}\n`).join(""),
   );
-  const answer = (await readLine()).replace(/[\r\n]+$/, "");
-  if (answer !== "y") {
-    throw new Error(`Refusing: the migrate run against ${redactedTarget} was not confirmed (an explicit y is required).`);
-  }
-}
-
-/** One line from stdin. Unmasked on purpose — the answer is `y`, not a secret. */
-async function readLine(): Promise<string> {
-  for await (const chunk of process.stdin) return Buffer.from(chunk as Uint8Array).toString("utf8");
-  return "";
+  requireConfirmTarget(options.remote.confirmTarget, options.remote.resolvedTarget, "this run");
 }
 
 /** A refusal, as a reason and an operator-readable sentence. */
@@ -1010,15 +1015,16 @@ export interface MigrateRefusal {
  * guards" — `requireRehearsalTarget`, the same gate `--seed` and `--spoof-keys`
  * share. For `caller: "operator"`, production is allowed under the policy that
  * names it and nothing else: a stage policy "never touches production data",
- * typed owner password or not.
+ * owner password or not.
  *
  * §4.3's FIRST NAMED EXCEPTION: an operator run under RM_ENV=prod against a remote
  * database with no deployment_identity table, whose ledger equals one
  * SUPPORTED_RELEASES entry exactly, is not refused here
- * (`readPreIdentityState`). A missing row that fails any of those guards
+ * (`readPreIdentityState`). Nor is the same run under RM_ENV=stage, the remote
+ * rehearsal pass (D61 rule 2). A missing row that fails any of those guards
  * refuses as `identity_missing`, and the refusal names the guard it failed.
  *
- * Serves spec §10 W2 "`RM_ENV=stage` + typed owner password against
+ * Serves spec §10 W2 "`RM_ENV=stage` + owner password against
  * `deployment_identity = production` refuses."
  */
 export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions): Promise<readonly MigrateRefusal[]> {
@@ -1047,7 +1053,9 @@ export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions)
   // it applies, the identity half of the matrix has nothing to judge — there
   // is no row — and every other guard of the exception is either checked here
   // (RM_ENV=prod, the exact ledger) or is the remote path of `migrateCommand`
-  // (the typed owner, the `y`), which `runMigrate` holds it to.
+  // (`~/.env`'s owner, `--confirm-target`), which `runMigrate` holds it to.
+  // The remote rehearsal pass (D61 rule 2) is the same state under
+  // RM_ENV=stage, and writes `rehearsal` instead.
   if (await readPreIdentityState(db, options)) return refusals;
 
   // §8.5: `--migrate` is a stage/test/CI convenience.
@@ -1110,18 +1118,34 @@ export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions)
 }
 
 /**
- * The first production migrate's state, when this run qualifies for §4.3's one
- * exception (§9.1, D55 (5)), else `null`.
+ * The pre-identity state of a remote identity-first pass, when this run
+ * qualifies for one, else `null`.
  *
- * Qualifies: the operator caller (`bun run migrate`), RM_ENV=prod, a remote
- * connection, no `deployment_identity` table at all, and a ledger
- * whose filename list equals one SUPPORTED_RELEASES entry's exactly. The typed
- * owner and the `y` are not decided here: they are what `migrateCommand` asks
- * for next, and `runMigrate` refuses a qualifying database without them.
+ * Two passes share this state, told apart by the policy alone:
+ *   - RM_ENV=prod: the first production migrate (§9.1, D55 (5)). It writes
+ *     `production`.
+ *   - RM_ENV=stage: the remote rehearsal pass (D61 rule 2). A production dump
+ *     restored into a remote stage Postgres has the same pre-identity state,
+ *     and stage rehearses the production cutover on it unmodified. It writes
+ *     `rehearsal`, never `production` (`identityFirstKind`).
+ *
+ * Qualifies: the operator caller (`bun run migrate`), RM_ENV=prod or stage, a
+ * remote connection, no `deployment_identity` table at all, and a ledger whose
+ * filename list equals one SUPPORTED_RELEASES entry's exactly. `~/.env`'s
+ * owner and `--confirm-target` are not decided here: they are what
+ * `migrateCommand` checks next, and `runMigrate` refuses a qualifying database
+ * without the confirmed state.
  */
 export async function readPreIdentityState(db: ReadDb, options: MigrateGateOptions): Promise<PreIdentityState | null> {
-  if (options.caller !== "operator" || options.env !== "prod" || options.connection !== "remote") return null;
+  if (options.caller !== "operator" || options.connection !== "remote") return null;
+  if (options.env !== "prod" && options.env !== "stage") return null;
   return readPreIdentityLedger(db);
+}
+
+/** What a remote identity-first pass writes: `production` under prod, `rehearsal`
+ *  under stage. Nothing else ever decides it (D61 rule 2). */
+export function identityFirstKind(env: MigrateGateOptions["env"]): "production" | "rehearsal" {
+  return env === "prod" ? "production" : "rehearsal";
 }
 
 /**
@@ -1175,9 +1199,13 @@ export interface IdentityFirstPass {
    *  (enrollAsRehearsal). */
   readonly rmEnv: "prod" | "stage" | null;
   /** Whether the pass's connection is a remote one. The rehearsal write
-   *  refuses a remote connection, and no acknowledgement is ever passed for
-   *  it (D55 (9): "whatever `RM_ENV`, password or acknowledgement says"). */
+   *  refuses a remote connection unless `remoteRehearsalConfirmed` is set. */
   readonly remote: boolean;
+  /** The remote rehearsal pass only (D61 rule 2): `bun run migrate` under
+   *  RM_ENV=stage held the run to `--confirm-target` before it got here. The
+   *  `--local dump` pass never sets it, so its rule (D55 (9): never remote)
+   *  holds unchanged. */
+  readonly remoteRehearsalConfirmed?: boolean;
   /** The state the pass was admitted on. The pass re-reads it under its fence
    *  and refuses unless it is the same one. */
   readonly expected: PreIdentityState;
@@ -1217,10 +1245,10 @@ export interface IdentityFirstResult {
  * own guards (production: RM_ENV=prod; rehearsal:
  * not prod, and never a remote connection).
  *
- * Callers: `runMigrate`'s first production migrate (`production`) and
- * backend/scripts/smoke-prepare.ts's `--local dump` enroll step (`rehearsal`).
- * Each proves its own pass's guards before calling it. The remote twin pass
- * (D55 (10)) is not built.
+ * Callers: `runMigrate`'s first production migrate (`production`, RM_ENV=prod),
+ * `runMigrate`'s remote rehearsal pass (`rehearsal`, RM_ENV=stage, D61 rule 2)
+ * and backend/scripts/smoke-prepare.ts's `--local dump` enroll step
+ * (`rehearsal`). Each proves its own pass's guards before calling it.
  */
 export async function applyIdentityFirst(db: MigrateDb, pass: IdentityFirstPass): Promise<IdentityFirstResult> {
   const migrationsDir = pass.migrationsDir ?? MIGRATIONS_DIR;
@@ -1242,7 +1270,10 @@ export async function applyIdentityFirst(db: MigrateDb, pass: IdentityFirstPass)
     const row =
       pass.kind === "production"
         ? await enrollAsProduction(store, { rmEnv: pass.rmEnv ?? undefined, confirmed: true, note: pass.note })
-        : await enrollAsRehearsal(store, { note: pass.note, remoteAcknowledged: false });
+        : await enrollAsRehearsal(store, {
+            note: pass.note,
+            remoteAcknowledged: pass.remote && pass.remoteRehearsalConfirmed === true,
+          });
     if (row.kind !== pass.kind) {
       throw new Error(`Refusing the identity-first pass: the row reads ${row.kind} after writing ${pass.kind}. Nothing was applied.`);
     }
@@ -1298,9 +1329,13 @@ async function describeWhyNoPreIdentityException(
   options: MigrateGateOptions,
   identity: "production" | "rehearsal" | null | "unreadable" | "no table",
 ): Promise<string> {
-  const lead = "The one run allowed without the row, the first production migrate (spec §9.1, D55 (5)), needs";
-  if (options.env !== "prod") return `${lead} RM_ENV=prod, and this run is RM_ENV=${options.env ?? "(unset)"}.`;
-  if (options.connection !== "remote") return `${lead} a remote production target.`;
+  const lead =
+    "The runs allowed without the row, the first production migrate (spec §9.1, D55 (5)) and the remote " +
+    "rehearsal pass (D61), need";
+  if (options.env !== "prod" && options.env !== "stage") {
+    return `${lead} RM_ENV=prod or RM_ENV=stage, and this run is RM_ENV=${options.env ?? "(unset)"}.`;
+  }
+  if (options.connection !== "remote") return `${lead} a remote target.`;
   const ledger = await ledgerOf(db);
   if (identity === null) {
     const also = matchSupportedRelease(ledger) === null ? ` Its ledger also matches none — ${describeUnmatchedLedger(ledger)}.` : "";
@@ -1449,25 +1484,27 @@ export class MigrateRefused extends Error {}
  *      and waiting at most `lockTimeoutMs` behind another holder; or prove the
  *      parent's lock (`bun smoke`). §2: after create/restore, "before the first
  *      read used for a decision".
- *   3. The gates, read under the lock, BEFORE the owner password is requested,
- *      so a refused run never has a password typed into it. The first
- *      production migrate's pre-identity state is read here too.
- *   4. The owner password: typed (remote) or smoke's generated one (local).
+ *   3. The gates, read under the lock, BEFORE the owner password is used, so a
+ *      refused run never logs in as the owner. A remote identity-first pass's
+ *      pre-identity state is read here too.
+ *   4. The owner password: `~/.env`'s `rm_owner` line (remote, D61) or smoke's
+ *      generated one (local), proven by a login.
  *   5. `confirmRemoteTarget`: warn — naming the pre-identity state when there
- *      is one — then an explicit `y`.
+ *      is one — then hold the run to `--confirm-target` (remote only).
  *   6. `runMigrate` as `rm_owner`, under the lock, holding it to the state the
- *      `y` confirmed.
+ *      flag confirmed.
  *   7. The receipt. The lock is released on every exit path.
  *
  * With a `journal`, every step is a journaled phase (§2), begun before the lock
  * is proven for it, and the run closes the journal on its way out: `succeeded`
  * with the receipt, or `refused` / `failed` naming the phase it stopped in. The
  * lock is proven at every boundary after it is held, so a lock connection that
- * died while the operator typed is found at the next phase, and that phase does
+ * died between phases is found at the next phase, and that phase does
  * not start.
  *
  * Refusals throw {@link MigrateRefused}: a held lock past the timeout (naming
- * the holder and its plan id), a revalidation mismatch, a gate, a prompt.
+ * the holder and its plan id), a revalidation mismatch, a gate, a missing
+ * `rm_owner` line, a missing or mismatched `--confirm-target`.
  */
 export async function migrateCommand(input: {
   readonly caller: MigrateCaller;
@@ -1475,7 +1512,9 @@ export async function migrateCommand(input: {
   readonly connection: MigrateGateOptions["connection"];
   /** The target under a runtime credential that cannot migrate (`rm_readonly` from `~/.env`, or smoke's). */
   readonly readerUrl: string;
-  readonly nonInteractive: boolean;
+  /** A remote connection's `~/.env` authority: the owner password, the file,
+   *  `--confirm-target` and the target the file resolves to (D61). */
+  readonly remote?: RemoteAuthority;
   readonly localOwnerPassword?: string;
   /** Acquire the lock here, or prove the one the parent process holds. */
   readonly lock:
@@ -1535,18 +1574,22 @@ export async function migrateCommand(input: {
     const refusals = await checkMigrateGates(reader, gateOptions);
     if (refusals.length > 0) throw new MigrateRefused(refusals.map((r) => r.message).join("\n"));
     const preIdentity = await readPreIdentityState(reader, gateOptions);
+    const passName =
+      identityFirstKind(input.env) === "production"
+        ? "first production migrate (spec §9.1, D55 (5))"
+        : "remote rehearsal pass (D61 rule 2, D55 (9))";
     if (preIdentity) {
       input.log(
-        `first production migrate (spec §9.1, D55 (5)): deployment_identity has ${preIdentity.identity}, and the ` +
+        `${passName}: deployment_identity has ${preIdentity.identity}, and the ` +
           `ledger equals ${preIdentity.release}'s ${preIdentity.ledger.length} files`,
       );
     }
 
-    // 4–5. The owner credential for this one run, then the explicit y.
+    // 4–5. The owner credential for this one run, then --confirm-target.
     await phase("owner");
     input.log(`RM_ENV=${input.env ?? "(unset)"}, ${input.connection} target ${target}`);
-    const password = await promptOwnerPassword(
-      { ...gateOptions, nonInteractive: input.nonInteractive, localOwnerPassword: input.localOwnerPassword },
+    const password = await resolveOwnerPassword(
+      { ...gateOptions, localOwnerPassword: input.localOwnerPassword, remote: input.remote },
       input.readerUrl,
     ).catch((error: unknown) => {
       throw new MigrateRefused((error as Error).message);
@@ -1554,27 +1597,25 @@ export async function migrateCommand(input: {
     await phase("confirm");
     const notice = preIdentity
       ? [
-          `this is the FIRST PRODUCTION MIGRATE: deployment_identity has ${preIdentity.identity}, and the ledger ` +
-            `equals ${preIdentity.release}'s ${preIdentity.ledger.length} files (spec §9.1, D55 (5)).`,
+          `this is the ${passName.toUpperCase()}: deployment_identity has ${preIdentity.identity}, and the ledger ` +
+            `equals ${preIdentity.release}'s ${preIdentity.ledger.length} files. It writes ` +
+            `\`${identityFirstKind(input.env)}\` in 0081's transaction.`,
           "It runs once. Every later run of every tool requires the identity row.",
         ]
       : [];
-    await confirmRemoteTarget(
-      { connection: input.connection, nonInteractive: input.nonInteractive },
-      target,
-      notice,
-    ).catch((error: unknown) => {
+    try {
+      confirmRemoteTarget({ connection: input.connection, remote: input.remote }, notice);
+    } catch (error) {
       throw new MigrateRefused((error as Error).message);
-    });
+    }
     owner = postgres(urlAsRole(input.readerUrl, "rm_owner", password), { max: 1, onnotice: () => {} });
 
-    // 6. The run, as rm_owner, under the lock, on the state the y confirmed.
+    // 6. The run, as rm_owner, under the lock, on the state the flag confirmed.
     const result = await runMigrate(
       owner,
       {
         ...gateOptions,
         lock: heldLock,
-        nonInteractive: input.nonInteractive,
         ...(preIdentity ? { confirmedPreIdentity: preIdentity } : {}),
         onPhase: (name) => journal?.begin(name),
       },

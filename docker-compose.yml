@@ -147,8 +147,8 @@ x-worker-base: &worker-base
   healthcheck: *worker-healthcheck
 
 # Shared worker env. The worker RUNS the projects.* cron pipelines, so a prod
-# worker needs PROJECTS_SOURCE=live (fail-closed — unset throws in prod; unset
-# elsewhere = offline fixture).
+# worker needs PROJECTS_SOURCE=live (fail-closed — unset throws under RM_ENV
+# smoke, stage and prod; the offline fixture is ephemeral-only, issue #1208).
 x-worker-env: &worker-env
   # THE PIPELINE WORKER HOLDS rm_worker AND NOTHING ELSE (smoke-production-spec
   # §7.2: "the pipeline worker running the vault, wallet, buyback and project
@@ -366,10 +366,10 @@ services:
       # proxy) boot but wrong behind the tunnel. See .env.example.
       WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-}
       WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
-      # Projects data source (backend/src/projects/access/select.ts). Unset →
-      # offline fixture source (demo/dev). FAIL-CLOSED IN PROD: RM_ENV=prod
-      # REQUIRES PROJECTS_SOURCE=live — the projects pipelines throw rather
-      # than serve fixture data as production. See .env.example.
+      # Projects data source (backend/src/projects/access/select.ts).
+      # FAIL-CLOSED ON EVERY DEPLOYED ENV (issue #1208): RM_ENV smoke, stage and
+      # prod REQUIRE PROJECTS_SOURCE=live — the projects pipelines throw rather
+      # than persist fixture data. The fixture is ephemeral-only. See .env.example.
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
       # Optional capability TTLs. Blank/unset preserves backend defaults.
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}

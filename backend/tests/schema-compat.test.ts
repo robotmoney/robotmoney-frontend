@@ -920,7 +920,7 @@ async function databaseMigratedToM(compat: "additive" | "breaking", snapshotDir:
     const result = await withTargetLock(roleDatabaseUrl(name), (lock) =>
       runMigrate(
         owner,
-        { caller: "smoke_flag", env: "stage", connection: "local", nonInteractive: true, lock },
+        { caller: "smoke_flag", env: "stage", connection: "local", lock },
         { migrationsDir, snapshotDir },
       ),
     );

@@ -140,9 +140,28 @@
   },
   {
     "id": "external-wallet-balances-live-read-degraded",
-    "match": "wallet-balances: \\w+ live read failed, degrading to last-persisted sample",
+    "match": "wallet-balances: [\\w<>-]+ live read failed, degrading to last-persisted sample",
     "class": "external",
-    "reason": "A wallet-balances live price read failed (production 2026-10-01: GeckoTerminal HTTP 429, retry budget exhausted, the keyless tier v0.5.4 replaces) and the code degrades to the last persisted sample. The cause is on its own stack lines, which the inventory does not join to this headline."
+    "reason": "A wallet-balances leg could not be valued and the code degrades it to the last persisted sample (backend/src/chain/wallet-balances.ts). Two causes seen: a live price read failing (production 2026-10-01: GeckoTerminal HTTP 429, retry budget exhausted, the keyless tier v0.5.4 replaces), and the Base RPC multicall timing out (stage 2026-10-08T09:03:12Z: every leg of one sample, the strategy sleeves ZYFAI-SS1 and GIZA-SS1 included). The symbol may hold a hyphen and digits. The cause is on its own lines, which the inventory does not join to this headline."
+  },
+  {
+    "id": "external-wallet-balances-multicall-degraded",
+    "match": "^\\s*wallet-balances: batched round-[\\w<>]+( NAV)? multicall failed, degrading all chain legs to stale:",
+    "class": "external",
+    "reason": "The wallet-balances sampler's one Base RPC multicall request threw (stage 2026-10-08T09:03:12Z: the request was aborted at its timeout, a DOMException AbortError). The code marks every chain leg of that sample stale and each leg then degrades to its last persisted sample (backend/src/chain/wallet-valuation.ts aggregateAcrossBlocks); nothing is fabricated and the next scheduled sample reads again. A provider timeout, not a defect."
+  },
+  {
+    "id": "external-wallet-balances-chain-read-unavailable",
+    "match": "^\\s*error: [\\w<>-]+ chain read unavailable$",
+    "class": "external",
+    "reason": "The Error a wallet-balances leg carries when its chain read degraded upstream (backend/src/chain/wallet-valuation.ts valueLeg: new Error(`${symbol} chain read unavailable`)); bun prints it under the 'live read failed, degrading to last-persisted sample' headline, which is classified on its own. Only that one code path builds this message."
+  },
+  {
+    "id": "fragment-wallet-balances-abort-domexception",
+    "match": "^\\s*(stack: \"abort@\\[native code\\]\"|message: \"The operation was aborted\\.\"),$",
+    "source": "worker-analytics",
+    "class": "fragment",
+    "reason": "Two fields of the DOMException AbortError bun prints under the 'wallet-balances: batched round-1 multicall failed' headline when the Base RPC request hits its timeout (stage 2026-10-08T09:03:12Z). The headline is classified on its own. The inventory cannot join a field to its headline, so this rule is held to the exact two field lines and to the worker-analytics container, the only service that runs the live wallet-balances sampler (the api serves persisted samples)."
   },
   {
     "id": "external-market-data-timeout",
@@ -350,5 +369,29 @@
     "issue": "parity-sweep-timeout",
     "fixedIn": "0.5.1",
     "reason": "The same sweep timeout, as the dead job's own last_error (prod:gate grades dead jobs by their stored error)."
+  },
+  {
+    "id": "known-projects-fixture-wallet-live-read",
+    "match": "\\[projects\\.refresh_wallets\\] wallet \\S+ live read failed, keeping last-persisted balance \\(degraded\\): invalid address: 0xwallet0+(aaa|bbb|ccc|ddd)$",
+    "class": "known-issue",
+    "issue": "1208",
+    "reason": "Production v0.5.4 ran RM_ENV=smoke without PROJECTS_SOURCE=live, so the projects worker persisted the hermetic fixture dataset (backend/src/projects/fixtures/dataset.ts): 4 projects, 4 tracked_wallets and 2 agent_vaults since 2026-08-07. On 0.6 (PROJECTS_SOURCE=live) the live refresh rejects each fixture placeholder address and keeps the last-persisted row. Seen on the production-shaped stage run after the v0.6.0 cutover (worker-analytics), once per fixture wallet (…aaa, …bbb, …ccc, …ddd).",
+    "tolerateAfterRelease": "Owner decision 2026-10-08 for issue 1208: guard only, no purge in v0.6.0. The fixture rows stay in production, so this line recurs on every cron until the purge part of issue 1208 ships; every gate reports it as a warning. The match is only the fixture's placeholder addresses (0xwallet0…/0xvault0…, never 40 hex digits); the same failure on a real address stays unclassified and fails."
+  },
+  {
+    "id": "known-projects-fixture-vault-extractor",
+    "match": "\\[projects\\.fetch_vaults\\] extractor failed — keeping last-persisted rows \\(degraded\\): invalid address: 0xvault0+(aaa|bbb)$",
+    "class": "known-issue",
+    "issue": "1208",
+    "reason": "Production v0.5.4 ran RM_ENV=smoke without PROJECTS_SOURCE=live, so the projects worker persisted the hermetic fixture dataset (backend/src/projects/fixtures/dataset.ts): 4 projects, 4 tracked_wallets and 2 agent_vaults since 2026-08-07. On 0.6 (PROJECTS_SOURCE=live) the live refresh rejects each fixture placeholder address and keeps the last-persisted row. Seen on the production-shaped stage run after the v0.6.0 cutover (worker-analytics) on the first fixture vault (…aaa).",
+    "tolerateAfterRelease": "Owner decision 2026-10-08 for issue 1208: guard only, no purge in v0.6.0. The fixture rows stay in production, so this line recurs on every cron until the purge part of issue 1208 ships; every gate reports it as a warning. The match is only the fixture's placeholder addresses (0xwallet0…/0xvault0…, never 40 hex digits); the same failure on a real address stays unclassified and fails."
+  },
+  {
+    "id": "known-projects-fixture-vault-job-degraded",
+    "match": "job \\S+ \\(projects\\.fetch_vaults\\) DEGRADED — kept last-persisted[^:]*: invalid address: 0xvault0+(aaa|bbb)$",
+    "class": "known-issue",
+    "issue": "1208",
+    "reason": "Production v0.5.4 ran RM_ENV=smoke without PROJECTS_SOURCE=live, so the projects worker persisted the hermetic fixture dataset (backend/src/projects/fixtures/dataset.ts): 4 projects, 4 tracked_wallets and 2 agent_vaults since 2026-08-07. On 0.6 (PROJECTS_SOURCE=live) the live refresh rejects each fixture placeholder address and keeps the last-persisted row. The worker loop's summary line for the same fetch_vaults degradation (backend/src/worker/loop.ts). Seen on the production-shaped stage run after the v0.6.0 cutover (worker-analytics).",
+    "tolerateAfterRelease": "Owner decision 2026-10-08 for issue 1208: guard only, no purge in v0.6.0. The fixture rows stay in production, so this line recurs on every cron until the purge part of issue 1208 ships; every gate reports it as a warning. The match is only the fixture's placeholder addresses (0xwallet0…/0xvault0…, never 40 hex digits); the same failure on a real address stays unclassified and fails."
   }
 ]

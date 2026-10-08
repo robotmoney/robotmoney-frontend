@@ -5198,3 +5198,92 @@ boot), `scripts/tests/unit/smoke-ci-check-select.test.ts` (each `--check` is run
 exactly one workflow, so a check cannot run twice or never), and the retargeted
 `nightly-mirrors-merge-set`, `stack-naming`, `smoke-reap`, `admission-record`,
 `evals-guard` and `e2e-onboarding-eval-pr-cost` tests.
+
+---
+
+## D61 — Release runbooks are executed end to end by an agent from the control machine; the privileged credentials live in the host's `~/.env` (supersedes parts of D47 §3, D55 (5) and policy §4.7; owner, 2026-10-08)
+
+**Status.** Accepted 2026-10-08. Implementation tracked on the v0.6.0 QA branch.
+
+**Decision.** Four rules bind every release runbook, from v0.6.0 on:
+
+1. **No human in the loop.** Every step of a runbook is executed by an agent. The
+   operator's authority is one recorded go for the release, given before the run,
+   never a keystroke during it.
+2. **The production runbook is rehearsed unmodified on stage.** Stage runs the same
+   script, at the same commit, with the same steps. Only the target file differs
+   (host, checkout, instance, `RM_ENV`, home directory). A stage leg that takes a
+   different code path from production is not a rehearsal of production.
+3. **Every database operation is scripted.** No step runs a hand-written `psql`
+   line. A query a runbook needs is a committed script with a receipt.
+4. **Everything runs from the control machine over SSH.** The control machine (the
+   developer machine with SSH access to the hosts) runs `bun run release:run`.
+   No step requires a person to log in to a host and type at a terminal.
+
+**The credentials.** The `rm_owner` password and the `doadmin` password are lines in
+the host's `~/.env`, beside the runtime role passwords. Every command that prompted
+for them reads them from there. They stay out of everything else:
+
+- `bun smoke` forwards only `rm_app`, `rm_worker` and `rm_readonly` to containers.
+  No container, compose file, image or log receives `rm_owner` or `doadmin`.
+- They never appear in a receipt, a journal, a process argument or command output.
+- `doadmin` is used by one command only, `prod-init enable-owner-login`.
+
+**The confirmation.** The literal `y` becomes `--confirm-target <host:port/database>`.
+A command that writes refuses unless the flag names exactly the target it resolved
+from `~/.env`. The protection the `y` gave (a person reads the target before a write)
+is kept as a check the agent must satisfy, not removed.
+
+**What this supersedes.** Spec §3's "typed at the terminal for the one run that needs
+it and never stored", the `~/.env` rule that it must not contain `rm_owner` or
+`doadmin`, and preflight check 4's refusal of those two keys. D55 (5)'s "typed
+`rm_owner` and `y`" for the first production migrate becomes "`rm_owner` from
+`~/.env` and `--confirm-target`". Policy §4.7's paragraph on entering the privileged
+credential, and standing check SC.2's operator authorization one step at a time.
+
+**What stays.** The target lock, the gates, the journals, the receipts, the
+supported-baseline match, `RM_ENV` and the identity matrix, and the refusal of a
+transaction-mode pooler. A runtime role still holds no DDL. Recovery after the
+migrate is still the operator's recorded decision (policy §4.8).
+
+**The trade-off, stated once.** A host that stores the owner password can rewrite the
+schema without a person present. The owner accepted that on 2026-10-08 in exchange
+for a cutover that is rehearsed exactly and run without hand steps. The mitigations are
+the confirm-target check, the target lock and the rule that no container receives the
+credential.
+
+**Why.** The v0.6.0 runbook mixed agent steps with operator keystrokes on the
+production host. Its stage leg (a `--local dump` twin) took a different path from the
+production leg, so the production steps were never actually rehearsed. On 2026-10-07
+the cutover could not proceed without a person logging in to type two passwords.
+
+**Amendment (owner, 2026-10-08).** The release runbooks use `rm_owner` only. No
+release step reads, requires or uses `doadmin`.
+
+- `doadmin` is stored in no file. The admin types it into one tool, the idempotent
+  password script `bun run role-passwords --target <stage|prod>` on the control
+  machine. It asks at a hidden prompt and sends the password over ssh stdin to
+  `bun scripts/prod-init.ts role-passwords --doadmin-stdin` on the host. It lives
+  only in that process's memory. That is the one human input of the release
+  process. It belongs to provisioning, run before a release, not to the runbook.
+- The script sets the four role passwords as `doadmin` and makes `rm_owner` `LOGIN`.
+  A working `~/.env` line is kept. An absent one is generated on the host, sent to
+  the server only as its SCRAM-SHA-256 verifier, and written to `~/.env`. A line
+  that fails refuses unless `--rotate` names it. A second run changes nothing.
+- Release step R1.2 requires a non-empty `rm_owner` line and proves an `rm_owner`
+  login with `SELECT 1`, read-only, before R6.1 stops the legacy stack. A failure
+  refuses with "rm_owner cannot log in", naming the `role-passwords` script for
+  that target. Step R6.2b (`prod-init enable-owner-login`) leaves the runbook.
+- `doadmin` leaves the `~/.env` allowlist. Preflight check 4 refuses a `doadmin`
+  line on prod again, naming it as the provisioning credential. R6.2 moves a stray
+  `doadmin` line to `~/.env.retired-<run-ts>`.
+
+This replaces "`doadmin` is used by one command only, `prod-init
+enable-owner-login`" above, and the `doadmin` half of "the `rm_owner` password and
+the `doadmin` password are lines in the host's `~/.env`".
+
+**Why the amendment.** Production's `/root/.env` had neither privileged line. A run
+that checked them only at R6.2 would have stopped the live site at R6.1 and then
+refused. Keeping `doadmin` out of every file removes the strongest credential from
+the host. Proving `rm_owner` at R1.2 means every precondition holds before the first
+irreversible step.

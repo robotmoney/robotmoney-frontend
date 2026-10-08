@@ -133,7 +133,7 @@ async function withDatabase(
 /** The operator's run, as `bun run migrate` performs it against production. */
 function operatorRun(owner: postgres.Sql<{}>, name: string): ReturnType<typeof runMigrate> {
   return withTargetLock(harnessUrl(name), (lock) =>
-    runMigrate(owner, { caller: "operator", env: "prod", connection: "remote", nonInteractive: true, lock }),
+    runMigrate(owner, { caller: "operator", env: "prod", connection: "remote", lock }),
   );
 }
 
@@ -249,7 +249,7 @@ describe("§9.1 step 2 — the first manifest is published only over a live sche
         const before = await ledger(db);
         await expect(
           withTargetLock(harnessUrl(name), (lock) =>
-            runMigrate(owner, { caller: "operator", env: "prod", connection: "remote", nonInteractive: true, lock }, { migrationsDir: dir }),
+            runMigrate(owner, { caller: "operator", env: "prod", connection: "remote", lock }, { migrationsDir: dir }),
           ),
         ).rejects.toThrow("the pending 9999_planted_additive.sql is not embodied by the snapshot");
         expect(await ledger(db)).toEqual(before);

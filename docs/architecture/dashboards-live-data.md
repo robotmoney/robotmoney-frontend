@@ -121,8 +121,8 @@ interface Buybacks {
 - **Method**: GET (no query params).
 - **Module/function**: `backend/src/chain/token-metrics.ts` → `getTokenMetrics()`.
 - **Source of truth**: `config.robotmoney` — `totalSupply` via
-  `callTotalSupply` (18dp), `priceUsd` via `fetchAssetPriceUsd` (GeckoTerminal,
-  `resolvePriceSource()`), `marketCapUsd = totalSupply * priceUsd`. `feeSplit`
+  `callTotalSupply` (18dp), `priceUsd` from the worker's GeckoTerminal reading
+  in `token_market_samples` (below), `marketCapUsd = totalSupply * priceUsd`. `feeSplit`
   is the fixed beneficiary shares of the token's Doppler pool (Protocol 57 /
   Bankr 36.1 / Doppler 5 / Ecosystem 1.9; `bun scripts/token-fees.ts` reads them
   live); it is `managed`/static, not a chain read — label its `source` accordingly but
@@ -134,13 +134,23 @@ interface Buybacks {
   locker's running totals, exact, in WETH and ROBOTMONEY, with their value at
   today's prices; `last30DaysUsd` is an estimate, the pool's 30-day volume ×
   its swap fee × the protocol's share. `market` is GeckoTerminal's reading of
-  the pool (`fetchGeckoPoolStatsUsd`), cached ten minutes. Each leg degrades to
+  the pool (`fetchGeckoPoolStatsUsd`). Each leg degrades to
   `null` + `stale: true` on its own; stub sources serve fixtures.
-- **Postgres**: none required for the live read; may reuse
-  `vault_share_price_history`-style persistence if a `stale` fallback is added
-  (optional — otherwise degrade price/supply legs to `null`).
-- **Degrade**: a failed supply or price leg → that field `null` +
-  `stale: true`; never a fabricated price.
+- **No GeckoTerminal call on the request path** (v0.6.0 release finding,
+  2026-10-08). The api holds no CoinGecko key (runbook R8.w), so its reads went
+  to the keyless host and failed on HTTP 429. The worker now reads ROBOTMONEY's
+  price, WETH's price and the pool on the `wallet.sample_balances` tick
+  (`backend/src/worker/handlers/token-market.ts`) and upserts one row into
+  `token_market_samples` (migration 0115). With `COINGECKO_API_KEY` set the two
+  prices go to the Pro host; the pool and its candles are not in our plan and
+  stay on the keyless host, read at most once every ten minutes. A failed leg
+  keeps its last good reading and that reading's time.
+- **Postgres**: `token_market_samples`, one row for ROBOTMONEY. The api serves a
+  price no older than 15 minutes and a pool reading no older than 45 minutes
+  (`PRICE_MAX_AGE_MS`, `POOL_MAX_AGE_MS` in `chain/token-metrics.ts`). Supply
+  and fee income are still Base RPC reads on the request path.
+- **Degrade**: a failed supply leg, or a price or pool reading that is missing
+  or past its bound → that field `null` + `stale: true`; never a fabricated price.
 
 **DTO**
 ```ts

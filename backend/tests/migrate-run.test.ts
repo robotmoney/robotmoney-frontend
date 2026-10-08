@@ -59,8 +59,8 @@ import {
   MigrateRefused,
   migrateCommand,
   migrateReceiptPath,
-  promptOwnerPassword,
   readPreIdentityState,
+  resolveOwnerPassword,
   runMigrate,
   writeMigrateReceipt,
   type MigrateGateOptions,
@@ -78,10 +78,8 @@ const BACKEND = join(import.meta.dir, "..");
 const LOGIN = new URL(adminUrl()).username;
 
 /** The gate half of the options: the `--migrate` caller on a local stage target by default. */
-function options(over: Partial<MigrateGateOptions & { nonInteractive: boolean }> = {}): MigrateGateOptions & {
-  nonInteractive: boolean;
-} {
-  return { caller: "smoke_flag", env: "stage", connection: "local", nonInteractive: true, ...over };
+function options(over: Partial<MigrateGateOptions> = {}): MigrateGateOptions {
+  return { caller: "smoke_flag", env: "stage", connection: "local", ...over };
 }
 
 // The REAL enrollment table, migration 0081's: one row at most (its key is a
@@ -187,7 +185,7 @@ let owner: postgres.Sql<{}>;
 async function migrate(
   db: postgres.Sql<{}>,
   database: string,
-  over: Partial<MigrateGateOptions & { nonInteractive: boolean }> = {},
+  over: Partial<MigrateGateOptions> = {},
   seams: MigrateRunSeams = {},
 ): Promise<Awaited<ReturnType<typeof runMigrate>>> {
   return withTargetLock(urlFor(database), (lock) => runMigrate(db, { ...options(over), lock }, seams));
@@ -294,7 +292,7 @@ describe("checkMigrateGates — §8.5 and the ONE §4.3 matrix, before the owner
     await setIdentity("production");
     const refusals = await checkMigrateGates(
       sql,
-      options({ caller: "operator", env: "stage", connection: "remote", nonInteractive: false }),
+      options({ caller: "operator", env: "stage", connection: "remote" }),
     );
     expect(refusals.map((r) => r.reason)).toContain("identity_not_rehearsal");
     // The words are resolveDeploymentPolicy's (backend/src/deploy-policy.ts):
@@ -367,22 +365,30 @@ describe("the first production migrate's exception does not reach a ledger that 
     expect(refusals[0]?.message).toContain(`against ${SUPPORTED_RELEASES[0]!.name}:`);
   });
 
-  test("operator, RM_ENV=stage, no row: identity_missing, naming RM_ENV=prod as the guard it failed", async () => {
+  test("operator, RM_ENV=stage, a table with no row: identity_missing, naming the missing-table guard it failed", async () => {
+    // The remote rehearsal pass (D61 rule 2) runs only where deployment_identity
+    // does not exist at all. A table with no row is not that state.
     await setIdentity(null);
     const gate = options({ caller: "operator", env: "stage", connection: "remote" });
     expect(await readPreIdentityState(sql, gate)).toBeNull();
     const refusals = await checkMigrateGates(sql, gate);
     expect(refusals.map((r) => r.reason)).toEqual(["identity_missing"]);
-    expect(refusals[0]?.message).toContain("needs RM_ENV=prod, and this run is RM_ENV=stage");
+    expect(refusals[0]?.message).toContain("no deployment_identity table at all");
   });
 
-  test("D55 (10): a remote stage target with no identity row refuses and names the pre-identity twin runbook, for the operator and for `--migrate`", async () => {
+  test("operator, RM_ENV unset, a table with no row: identity_missing, naming RM_ENV=prod or stage as the guard it failed", async () => {
+    await setIdentity(null);
+    const refusals = await checkMigrateGates(sql, options({ caller: "operator", env: null, connection: "remote" }));
+    expect(refusals.map((r) => r.message).join(" ")).toContain("RM_ENV=prod or RM_ENV=stage");
+  });
+
+  test("D55 (10), D61: a remote stage target with no identity row refuses and names the remote rehearsal pass, for the operator and for `--migrate`", async () => {
     await setIdentity(null);
     for (const caller of ["operator", "smoke_flag"] as const) {
       const refusals = await checkMigrateGates(sql, options({ caller, env: "stage", connection: "remote" }));
       const text = refusals.map((r) => r.message).join(" ");
       expect(text).toContain("docs/runbooks/pre-identity-remote-twin.md");
-      expect(text).toContain("rm_owner");
+      expect(text).toContain("remote rehearsal pass");
     }
   });
 
@@ -417,40 +423,69 @@ describe("the first production migrate's exception does not reach a ledger that 
 // The credential and the remote confirmation
 // ───────────────────────────────────────────────────────────────────────────
 
-describe("promptOwnerPassword — typed for one run, never stored", () => {
-  test("refuses in nonInteractive mode when a prompt would be needed", async () => {
-    // Failing fast beats a CI job hanging on an invisible prompt.
+describe("resolveOwnerPassword — ~/.env's rm_owner remotely, smoke's generated one locally, never a prompt (D61)", () => {
+  const ENV_FILE = "/home/operator/.env";
+  const remote = (ownerPassword: string | undefined) => ({
+    ownerPassword,
+    envFile: ENV_FILE,
+    confirmTarget: undefined,
+    resolvedTarget: "unused:5432/unused",
+  });
+
+  test("a remote run with no rm_owner line refuses, naming the key and the file, and never the value of anything", async () => {
+    const refusal = resolveOwnerPassword({ ...options({ connection: "remote" }), remote: remote(undefined) }, urlFor(fileDb));
+    await expect(refusal).rejects.toThrow(`${ENV_FILE} has no rm_owner line`);
+  });
+
+  test("an empty rm_owner line refuses the same way", async () => {
     await expect(
-      promptOwnerPassword(options({ connection: "remote", nonInteractive: true }), urlFor(fileDb)),
-    ).rejects.toThrow(/non-?interactive|terminal/i);
+      resolveOwnerPassword({ ...options({ connection: "remote" }), remote: remote("") }, urlFor(fileDb)),
+    ).rejects.toThrow("has no rm_owner line");
+  });
+
+  test("red control: the same remote run WITH the rm_owner line logs in and returns it, with no terminal", async () => {
+    const password = await resolveOwnerPassword(
+      { ...options({ connection: "remote" }), remote: remote(OWNER_PASSWORD) },
+      urlFor(fileDb),
+    );
+    expect(password).toBe(OWNER_PASSWORD);
+  });
+
+  test("a wrong rm_owner line refuses by name, and the refusal does not hold the wrong value", async () => {
+    const wrong = `wrong-${randomBytes(6).toString("hex")}`;
+    const refusal = resolveOwnerPassword({ ...options({ connection: "remote" }), remote: remote(wrong) }, urlFor(fileDb));
+    await expect(refusal).rejects.toThrow(/rm_owner credential was not accepted/);
+    const message = await refusal.catch((e: Error) => e.message);
+    expect(message).not.toContain(wrong);
+  });
+
+  test("a remote run with no ~/.env authority at all refuses", async () => {
+    await expect(resolveOwnerPassword(options({ connection: "remote" }), urlFor(fileDb))).rejects.toThrow(/\$HOME\/\.env/);
   });
 
   test("uses the password smoke generated in local modes, verified by a real login, with no prompt at all", async () => {
-    // §5: smoke "generates the four role passwords and saves them in the
-    // instance's state directory beside the volume" and "No terminal prompt
-    // exists in local modes" — the smoke hands the saved one in.
-    const password = await promptOwnerPassword(
-      { ...options({ connection: "local", nonInteractive: true }), localOwnerPassword: OWNER_PASSWORD },
+    const password = await resolveOwnerPassword(
+      { ...options({ connection: "local" }), localOwnerPassword: OWNER_PASSWORD },
       urlFor(fileDb),
     );
     expect(password).toBe(OWNER_PASSWORD);
   });
 
   test("a local run with no generated password refuses: this module never invents one", async () => {
-    await expect(promptOwnerPassword(options({ connection: "local" }), urlFor(fileDb))).rejects.toThrow(
+    await expect(resolveOwnerPassword(options({ connection: "local" }), urlFor(fileDb))).rejects.toThrow(
       /generated for the instance/,
     );
   });
 
   test("a wrong local password refuses by name rather than being used", async () => {
     await expect(
-      promptOwnerPassword({ ...options({ connection: "local" }), localOwnerPassword: "not-the-owner" }, urlFor(fileDb)),
+      resolveOwnerPassword({ ...options({ connection: "local" }), localOwnerPassword: "not-the-owner" }, urlFor(fileDb)),
     ).rejects.toThrow(/rm_owner credential was not accepted/);
   });
 
   test("never leaves the owner password in the process environment", async () => {
-    const password = await promptOwnerPassword(
-      { ...options({ connection: "local" }), localOwnerPassword: OWNER_PASSWORD },
+    const password = await resolveOwnerPassword(
+      { ...options({ connection: "remote" }), remote: remote(OWNER_PASSWORD) },
       urlFor(fileDb),
     );
     for (const [key, value] of Object.entries(process.env)) {
@@ -460,23 +495,51 @@ describe("promptOwnerPassword — typed for one run, never stored", () => {
   });
 });
 
-describe("confirmRemoteTarget — the y/n in front of a remote run", () => {
-  test("skips entirely on a local connection", async () => {
-    await expect(confirmRemoteTarget(options({ connection: "local" }), "localhost:5432/robotmoney")).resolves
-      .toBeUndefined();
+describe("confirmRemoteTarget — --confirm-target in front of a remote run (D61)", () => {
+  const TARGET = "db.example.invalid:25060/robotmoney";
+  const remote = (confirmTarget: string | undefined) => ({
+    ownerPassword: OWNER_PASSWORD,
+    envFile: "/home/operator/.env",
+    confirmTarget,
+    resolvedTarget: TARGET,
+  });
+  const quiet = (): void => {};
+
+  test("skips entirely on a local connection, with no flag", () => {
+    expect(() => confirmRemoteTarget(options({ connection: "local" }), [], quiet)).not.toThrow();
   });
 
-  test("refuses nonInteractive on a remote connection — an unattended run may not confirm for the operator", async () => {
-    await expect(
-      confirmRemoteTarget(options({ connection: "remote", nonInteractive: true }), "db.example.invalid:25060/rm"),
-    ).rejects.toThrow(/non-?interactive|confirm/i);
+  test("a remote run with no --confirm-target refuses, naming the target it resolved", () => {
+    expect(() => confirmRemoteTarget({ connection: "remote", remote: remote(undefined) }, [], quiet)).toThrow(
+      `no --confirm-target was given. Pass --confirm-target ${TARGET}`,
+    );
   });
 
-  test("prints the redacted target and never a password", async () => {
-    const redacted = "db.example.invalid:25060/robotmoney";
-    await expect(
-      confirmRemoteTarget(options({ connection: "remote", nonInteractive: true }), redacted),
-    ).rejects.toThrow(redacted);
+  test("a wrong --confirm-target refuses and prints both", () => {
+    let message = "";
+    try {
+      confirmRemoteTarget({ connection: "remote", remote: remote("db.example.invalid:25060/other") }, [], quiet);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain('"db.example.invalid:25060/other"');
+    expect(message).toContain(`"${TARGET}"`);
+  });
+
+  test("nothing is normalized: a different case, a trailing slash or a missing port refuses", () => {
+    for (const near of [TARGET.toUpperCase(), `${TARGET}/`, "db.example.invalid/robotmoney", ` ${TARGET}`]) {
+      expect(() => confirmRemoteTarget({ connection: "remote", remote: remote(near) }, [], quiet)).toThrow(/Refusing/);
+    }
+  });
+
+  test("red control: the exact target proceeds, after the warning names it and never a password", () => {
+    let printed = "";
+    confirmRemoteTarget({ connection: "remote", remote: remote(TARGET) }, ["a notice line"], (text) => {
+      printed += text;
+    });
+    expect(printed).toContain(`REMOTE target ${TARGET}`);
+    expect(printed).toContain("a notice line");
+    expect(printed).not.toContain(OWNER_PASSWORD);
   });
 });
 
@@ -524,13 +587,13 @@ describe("rm_owner — LOGIN, the migration login, the only session the run acce
     }
   });
 
-  test("an existing database's NOLOGIN rm_owner refuses as `§9.1 step 1 has not been applied`, then migrates once it has", async () => {
+  test("an existing database's NOLOGIN rm_owner refuses naming `prod-init role-passwords`, then migrates once LOGIN is restored", async () => {
     await setIdentity("rehearsal");
     await adminExec("ALTER ROLE rm_owner NOLOGIN PASSWORD NULL");
     try {
       await expect(
-        promptOwnerPassword({ ...options({ connection: "local" }), localOwnerPassword: OWNER_PASSWORD }, urlFor(fileDb)),
-      ).rejects.toThrow("ALTER ROLE rm_owner LOGIN PASSWORD");
+        resolveOwnerPassword({ ...options({ connection: "local" }), localOwnerPassword: OWNER_PASSWORD }, urlFor(fileDb)),
+      ).rejects.toThrow("bun scripts/prod-init.ts role-passwords");
 
       // Spec §9.1 step 1, through the provisioning login: LOGIN plus a
       // password, then a verification login — which here is the run itself.
@@ -684,7 +747,6 @@ describe("migrateCommand — plan, lock, gates, owner, run, receipt, release", (
         env: "stage",
         connection: "local",
         readerUrl: urlFor(fileDb),
-        nonInteractive: true,
         localOwnerPassword: OWNER_PASSWORD,
         lock: { acquire: { holder: { tool: "migrate", planId: null, instance: null, host: "h", pid: process.pid }, timeoutMs: 700 } },
         receiptPath: join(mkdtempSync(join(tmpdir(), "rm-migrate-cmd-")), "r.json"),
@@ -715,7 +777,6 @@ describe("migrateCommand — plan, lock, gates, owner, run, receipt, release", (
       env: "stage",
       connection: "local",
       readerUrl: urlFor(fileDb),
-      nonInteractive: true,
       localOwnerPassword: OWNER_PASSWORD,
       lock: { acquire: { holder: { tool: "migrate", planId: null, instance: null, host: "h", pid: process.pid }, timeoutMs: 20_000 } },
       receiptPath: join(mkdtempSync(join(tmpdir(), "rm-migrate-cmd-")), "r.json"),
@@ -743,7 +804,6 @@ describe("migrateCommand — plan, lock, gates, owner, run, receipt, release", (
       env: "stage",
       connection: "local",
       readerUrl: urlFor(fileDb),
-      nonInteractive: true,
       localOwnerPassword: OWNER_PASSWORD,
       lock: { acquire: { holder: { tool: "migrate", planId: null, instance: null, host: "h", pid: process.pid }, timeoutMs: 5_000 } },
       receiptPath: join(dir, "receipt.json"),
@@ -785,7 +845,6 @@ describe("the migrate journal — written before each phase, closed on every exi
       env: "stage",
       connection: "local",
       readerUrl: urlFor(database),
-      nonInteractive: true,
       localOwnerPassword: OWNER_PASSWORD,
       lock: { acquire: { holder: { tool: "migrate", planId: null, instance: null, host: "h", pid: process.pid }, timeoutMs: 5_000 } },
       receiptPath: migrateReceiptPath(dir, new Date()),
@@ -937,6 +996,12 @@ describe("`bun run migrate` (backend/scripts/migrate.ts)", () => {
     return { ...(await done), home };
   }
 
+  /** The `host:port/database` the command resolves from {@link envFileFor}'s file. */
+  function targetFor(host?: string): string {
+    const url = new URL(adminUrl());
+    return `${host ?? url.hostname}:${url.port || "5432"}/${fileDb}`;
+  }
+
   async function envFileFor(extraLines = "", host?: string): Promise<string> {
     const url = new URL(adminUrl());
     return [
@@ -953,19 +1018,20 @@ describe("`bun run migrate` (backend/scripts/migrate.ts)", () => {
     await adminExec(`ALTER ROLE rm_readonly WITH LOGIN PASSWORD '${READONLY_PASSWORD}'`);
   });
 
-  test("refuses a ~/.env that holds an rm_owner line, before connecting to anything", async () => {
-    const { code, out } = await runCommand(await envFileFor("rm_owner = stored-owner-password"), { rmEnv: "prod" });
-    expect(code).not.toBe(0);
-    expect(out).toContain("rm_owner");
-    expect(out).toContain("§3");
-    expect(out).not.toContain("stored-owner-password");
-  });
-
-  test("refuses a ~/.env that holds a doadmin line — it never logs in as doadmin", async () => {
-    const { code, out } = await runCommand(await envFileFor("doadmin = provisioning-password"), { rmEnv: "prod" });
-    expect(code).not.toBe(0);
-    expect(out).toContain("doadmin");
-  });
+  test("D61: a ~/.env with rm_owner and doadmin lines is accepted; the command never logs in as doadmin", async () => {
+    // The doadmin line holds a value that logs in as nothing. A run that used
+    // it would fail; this one succeeds on rm_owner alone.
+    await setIdentity("rehearsal");
+    await migrate(owner, fileDb);
+    const doadminValue = `doadmin-${randomBytes(6).toString("hex")}`;
+    const { code, out } = await runCommand(await envFileFor(`rm_owner = ${OWNER_PASSWORD}\ndoadmin = ${doadminValue}`), {
+      rmEnv: "stage",
+      args: ["--instance", "rm_it_cli", "--confirm-target", targetFor()],
+    });
+    expect({ code, out }).toEqual({ code: 0, out: expect.stringContaining("[migrate] receipt ") });
+    expect(out).not.toContain(doadminValue);
+    expect(out).not.toContain(OWNER_PASSWORD);
+  }, 60_000);
 
   test("runs the gates first: RM_ENV=stage against a production identity refuses without asking for a password", async () => {
     await setIdentity("production");
@@ -989,17 +1055,19 @@ describe("`bun run migrate` (backend/scripts/migrate.ts)", () => {
     });
   });
 
-  test("with the gates passed and no terminal, it refuses rather than read an owner password from anywhere", async () => {
+  test("D61: with the gates passed and no rm_owner line, it refuses naming the key and the file, and writes nothing", async () => {
     await setIdentity("production");
     const before = await ledgerNames();
-    const { code, out, home } = await runCommand(await envFileFor(), { rmEnv: "prod" });
+    const { code, out, home } = await runCommand(await envFileFor(), {
+      rmEnv: "prod",
+      args: ["--confirm-target", targetFor()],
+    });
     expect(code).not.toBe(0);
-    expect(out).toMatch(/non-interactive|stdin is not a terminal/);
+    expect(out).toContain(`${join(home, ".env")} has no rm_owner line`);
     expect(await readManifest(sql)).toBeNull();
     expect(await ledgerNames()).toEqual(before);
-    // The production instance's state directory now holds exactly one record
-    // of this run: its journal, closed `refused` in the `owner` phase (§2). No
-    // receipt — nothing ran — and no password, since none was ever read.
+    // The production instance's state directory holds exactly one record of
+    // this run: its journal, closed `refused` in the `owner` phase (§2).
     const stateDir = join(home, ".local", "state", "robotmoney-smoke", "rm_prod");
     const files = readdirSync(stateDir);
     expect(files.map((name) => name.replace(/\d.*$/, ""))).toEqual(["migrate-journal-"]);
@@ -1009,10 +1077,46 @@ describe("`bun run migrate` (backend/scripts/migrate.ts)", () => {
     expect(journal.receipt).toBeNull();
   });
 
+  test("D61: a wrong --confirm-target refuses, prints both targets, and writes nothing", async () => {
+    await setIdentity("rehearsal");
+    const before = await ledgerNames();
+    const manifestBefore = await readManifest(sql);
+    const wrong = `${targetFor()}x`;
+    const receiptDir = mkdtempSync(join(tmpdir(), "rm-migrate-r-"));
+    plantedDirs.push(receiptDir);
+    const { code, out } = await runCommand(await envFileFor(`rm_owner = ${OWNER_PASSWORD}`), {
+      rmEnv: "stage",
+      args: ["--receipt", join(receiptDir, "receipt.json"), "--confirm-target", wrong],
+    });
+    expect(code).not.toBe(0);
+    expect(out).toContain(JSON.stringify(wrong));
+    expect(out).toContain(JSON.stringify(targetFor()));
+    expect(out).not.toContain(OWNER_PASSWORD);
+    expect(await ledgerNames()).toEqual(before);
+    expect(await readManifest(sql)).toEqual(manifestBefore);
+    const [journalName] = readdirSync(receiptDir).filter((name) => name.startsWith("migrate-journal-"));
+    const journal = JSON.parse(readFileSync(join(receiptDir, journalName!), "utf8")) as MigrateJournalFile;
+    expect(journal.phases.at(-1)).toMatchObject({ phase: "confirm", status: "refused" });
+    expect(readdirSync(receiptDir).some((name) => name === "receipt.json")).toBe(false);
+  });
+
+  test("D61: no --confirm-target refuses on a remote target, naming the target to confirm", async () => {
+    await setIdentity("rehearsal");
+    const { code, out } = await runCommand(await envFileFor(`rm_owner = ${OWNER_PASSWORD}`), {
+      rmEnv: "stage",
+      args: ["--instance", "rm_it_cli"],
+    });
+    expect(code).not.toBe(0);
+    expect(out).toContain(`no --confirm-target was given. Pass --confirm-target ${targetFor()}`);
+  });
+
   test("a refusal of its own ~/.env is journaled too, once the receipt's directory is known", async () => {
     const receiptDir = mkdtempSync(join(tmpdir(), "rm-migrate-r-"));
     plantedDirs.push(receiptDir);
-    const { code } = await runCommand(await envFileFor("doadmin = provisioning-password"), {
+    // No rm_readonly line: the command cannot assemble its reader.
+    const url = new URL(adminUrl());
+    const envFile = [`host = ${url.hostname}`, `port = ${url.port || "5432"}`, `database = ${fileDb}`, "sslmode = disable", "doadmin = provisioning-password"].join("\n");
+    const { code } = await runCommand(envFile, {
       rmEnv: "prod",
       args: ["--receipt", join(receiptDir, "receipt.json")],
     });
@@ -1089,67 +1193,47 @@ describe("`bun run migrate` (backend/scripts/migrate.ts)", () => {
     await setIdentity("rehearsal");
   }, 40_000);
 
-  test("under a real terminal the whole sequence runs: gates, masked rm_owner prompt, y, run, receipt", async () => {
-    // Criterion 70 as a PROCESS, not a module call. `script` gives the command
-    // a pseudo-terminal, so `process.stdin.isTTY` is true and the real
-    // hiddenPrompt and confirmation run.
+  test("D61: with no terminal at all the whole sequence runs: gates, ~/.env's rm_owner, --confirm-target, run, receipt", async () => {
+    // Criterion 70 as a PROCESS, not a module call, with stdin closed: nothing
+    // in the sequence reads a terminal (D61 rule 1).
     await setIdentity("rehearsal");
     await migrate(owner, fileDb);
     const manifestBefore = await readManifest(sql);
 
-    const home = mkdtempSync(join(tmpdir(), "rm-migrate-pty-"));
+    const home = mkdtempSync(join(tmpdir(), "rm-migrate-noterm-"));
     plantedDirs.push(home);
-    writeFileSync(join(home, ".env"), await envFileFor(), "utf8");
+    writeFileSync(join(home, ".env"), await envFileFor(`rm_owner = ${OWNER_PASSWORD}`), "utf8");
     const receipt = join(home, "receipts", "migrate.json");
+    const argv = ["bun", "scripts/migrate.ts", "--receipt", receipt, "--confirm-target", targetFor()];
+    // The password is never an argument (D61).
+    expect(argv.join(" ")).not.toContain(OWNER_PASSWORD);
 
-    const child = Bun.spawn(["script", "-qefc", `bun scripts/migrate.ts --receipt ${receipt}`, "/dev/null"], {
+    const child = Bun.spawn(argv, {
       cwd: BACKEND,
-      env: { PATH: process.env.PATH ?? "", HOME: home, RM_ENV: "stage", TERM: "dumb" },
-      stdin: "pipe",
+      env: { PATH: process.env.PATH ?? "", HOME: home, RM_ENV: "stage" },
+      stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
     });
-    let screen = "";
-    const decoder = new TextDecoder();
-    const pump = (async () => {
-      for await (const chunk of child.stdout) screen += decoder.decode(chunk);
-    })();
-    const waitFor = async (text: string): Promise<void> => {
-      const deadline = Date.now() + 20_000;
-      while (!screen.includes(text)) {
-        if (Date.now() > deadline) throw new Error(`timed out waiting for "${text}"; terminal so far:\n${screen}`);
-        await Bun.sleep(25);
-      }
-    };
-
-    try {
-      await waitFor("rm_owner password (not echoed");
-      child.stdin.write(`${OWNER_PASSWORD}\r`);
-      await child.stdin.flush();
-      await waitFor("type y to continue");
-      expect(screen).toContain("WARNING: this will apply pending migrations to the REMOTE target");
-      child.stdin.write("y\r");
-      await child.stdin.flush();
-      await waitFor("[migrate] receipt ");
-      const code = await child.exited;
-      await pump;
-      expect({ code, screen }).toEqual({ code: 0, screen: expect.any(String) });
-    } finally {
-      if (child.exitCode === null) child.kill();
-      try {
-        child.stdin.end();
-      } catch {
-        // already closed with the process
-      }
-    }
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    const screen = stdout + stderr;
+    expect({ code, screen }).toEqual({ code: 0, screen: expect.stringContaining("[migrate] receipt ") });
+    expect(screen).toContain(`WARNING: this writes the REMOTE target ${targetFor()}`);
 
     const text = readFileSync(receipt, "utf8");
     const written = JSON.parse(text) as { kind: string; manifest: { contentHash: string; filenames: string[] } };
     expect(written.kind).toBe("migrate-receipt");
     expect(text).not.toContain(OWNER_PASSWORD);
     expect(screen).not.toContain(OWNER_PASSWORD);
+    // Every file the run wrote is free of it: the receipt, the journal. The
+    // ~/.env fixture itself is the one place it lives.
     for (const file of readdirSync(home, { recursive: true }) as string[]) {
       const path = join(home, file);
+      if (path === join(home, ".env")) continue;
       if (statSync(path).isFile()) expect(readFileSync(path, "utf8")).not.toContain(OWNER_PASSWORD);
     }
 

@@ -102,9 +102,22 @@ export const TWIN_SLIM_EXCLUDED_TABLE_DATA = [
   "source_fetches",
 ] as const;
 
-/** PURE. The pg_dump argv for one capture. */
+/**
+ * PURE. Split a connection URL into the argv-safe URL and the password env.
+ * The password never goes on a command line: `ps` on the capture host shows
+ * every argument to every user, and the release runner logs the argv. pg_dump
+ * and pg_dumpall read PGPASSWORD instead.
+ */
+export function dumpConnection(url: string): { url: string; env: Record<string, string> } {
+  const u = new URL(url);
+  const password = decodeURIComponent(u.password);
+  u.password = "";
+  return { url: u.toString(), env: password ? { PGPASSWORD: password } : {} };
+}
+
+/** PURE. The pg_dump argv for one capture. The URL carries no password (dumpConnection). */
 export function pgDumpArgs(url: string, file: string, twinSlim: boolean): string[] {
-  const args = ["pg_dump", "--dbname", url, "--format=custom", `--compress=${twinSlim ? 1 : 9}`, "--no-owner", "--no-privileges"];
+  const args = ["pg_dump", "--dbname", dumpConnection(url).url, "--format=custom", `--compress=${twinSlim ? 1 : 9}`, "--no-owner", "--no-privileges"];
   if (twinSlim) for (const t of TWIN_SLIM_EXCLUDED_TABLE_DATA) args.push(`--exclude-table-data=public.${t}`);
   args.push(`--file=${file}`);
   return args;
@@ -199,8 +212,8 @@ export const READ_ONLY_PGOPTIONS = "-c default_transaction_read_only=on";
 /** The environment overlay for pg_dump and pg_dumpall. It REPLACES any
  *  PGOPTIONS the operator exported: an inherited
  *  `-c default_transaction_read_only=off` must not reach the dump. */
-export function readOnlyDumpEnv(): Record<string, string> {
-  return { PGOPTIONS: READ_ONLY_PGOPTIONS };
+export function readOnlyDumpEnv(url?: string): Record<string, string> {
+  return { PGOPTIONS: READ_ONLY_PGOPTIONS, ...(url ? dumpConnection(url).env : {}) };
 }
 
 /** What the probe session learned about the credential and the node. */
@@ -557,7 +570,7 @@ export async function main(argv: string[]): Promise<number> {
     log(`dumping (this is the long step) -> ${dumpPlain}`);
     const dump = run(
       pgDumpArgs(url, dumpPlain, twinSlim),
-      readOnlyDumpEnv(),
+      readOnlyDumpEnv(url),
     );
     if (dump.code !== 0) {
       err(`pg_dump exited ${dump.code}: ${dump.stderr}`);
@@ -581,8 +594,8 @@ export async function main(argv: string[]): Promise<number> {
     const database = new URL(url).pathname.replace(/^\//, "") || "defaultdb";
     log(`dumping globals (through ${database}, never template1) -> ${globalsPlain}`);
     const globals = run(
-      ["pg_dumpall", "--dbname", url, "-l", database, "--globals-only", "--no-role-passwords", `--file=${globalsPlain}`],
-      readOnlyDumpEnv(),
+      ["pg_dumpall", "--dbname", dumpConnection(url).url, "-l", database, "--globals-only", "--no-role-passwords", `--file=${globalsPlain}`],
+      readOnlyDumpEnv(url),
     );
     if (globals.code !== 0) {
       err(`pg_dumpall exited ${globals.code}: ${globals.stderr}`);

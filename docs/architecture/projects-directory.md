@@ -57,9 +57,15 @@ from this repo's own tables and pipelines instead of Supabase.
     run instead of degrading alone).
   - A fresh deploy with no `PROJECTS_SOURCE=live` opt-in serves an empty
     directory (`{ projects: [] }`), not synthetic data — `selectProjectsDataSource()`
-    (`backend/src/projects/access/select.ts`) is fail-safe toward the hermetic
-    fixture source, and fails closed (refuses to boot the pipeline) if `prod`
-    lacks the explicit live opt-in.
+    (`backend/src/projects/access/select.ts`) selects the hermetic fixture
+    source only under `RM_ENV=ephemeral`, and fails closed (every projects
+    pipeline throws) under `smoke`, `stage` and `prod` without the explicit
+    live opt-in. Issue #1208: production v0.5.4 ran `smoke` without the opt-in,
+    when the refusal covered `prod` only, and persisted the fixture's 4
+    projects, 4 tracked wallets and 2 agent vaults. Those rows stay until the
+    purge part of issue #1208 ships (owner decision 2026-10-08: guard only, no
+    purge in v0.6.0); the gates report their live-refresh failures as known
+    issue 1208.
 - **Degrade/honesty contract (issue #98, extended by #346).** Every pipeline
   handler extracts from its provider(s) *before* writing anything; on any
   failure it logs loudly, writes nothing (last-persisted rows are left

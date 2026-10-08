@@ -7,6 +7,7 @@ import * as projects from "./projects.ts";
 import { backfillWalletDay, backfillWalletWindow, repairGaps } from "./repair.ts";
 import { sampleSharePrice, sampleVaultAdapters } from "./vault.ts";
 import { sampleWalletBalances, sampleWalletSleeves } from "./wallet.ts";
+import { sampleTokenMarket } from "./token-market.ts";
 import { backfillAssetPricesForCleanDays } from "../../ops/asset-prices.ts";
 // Issue #979 fix: NEVER import analytics/cutover/parity.ts here — it imports
 // db/client.ts (the rm_app-credentialed API pool), and worker/** must never
@@ -38,7 +39,28 @@ export const handlers: Record<string, JobHandler> = {
   "vault.sample_share_price": sampleSharePrice,
   "vault.sample_adapters": sampleVaultAdapters,
   // daily prop-wallet balance sample (feeds the /performance history + last-live fallback)
-  "wallet.sample_balances": sampleWalletBalances,
+  //
+  // The same tick then samples the token page's market reading (prices and the
+  // pool, token-market.ts), so the api serves it from Postgres and never calls
+  // GeckoTerminal itself (v0.6.0 release finding, 2026-10-08). It rides this
+  // existing, already-scheduled kind on purpose: a new kind would need a new
+  // job_schedules row on every live database. It runs after the wallet sample,
+  // whose price reads it reuses from the 30-second cache, and it runs even when
+  // the wallet sample throws. Its own failure is recorded in the result and
+  // never fails the wallet job.
+  "wallet.sample_balances": async (payload) => {
+    let tokenMarket: unknown;
+    let balances: unknown;
+    try {
+      balances = await sampleWalletBalances(payload);
+    } finally {
+      // In finally so a wallet failure still samples the market, and the
+      // wallet error stays what the job records.
+      tokenMarket = await sampleTokenMarket().catch((err) => ({ error: String(err) }));
+    }
+    // The wallet result keeps its shape; the market outcome is one more field.
+    return balances !== null && typeof balances === "object" ? { ...balances, tokenMarket } : { result: balances, tokenMarket };
+  },
   "wallet.sample_sleeves": sampleWalletSleeves,
   // The self-healing pair (issue #709). `ops.repair_gaps` is the dispatcher of
   // docs/technical/markets-asset-pricing-ingest.md §4.1 — it asks the gap detector what is

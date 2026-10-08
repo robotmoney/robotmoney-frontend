@@ -1247,7 +1247,7 @@ async function migrateAsOwner(database: string): Promise<void> {
   try {
     await owner.unsafe("SET ROLE rm_owner");
     await withTargetLock(databaseUrl(database), (lock) =>
-      runMigrate(owner, { caller: "smoke_flag", env: "stage", connection: "local", nonInteractive: true, lock }),
+      runMigrate(owner, { caller: "smoke_flag", env: "stage", connection: "local", lock }),
     );
   } finally {
     await owner.end({ timeout: 5 });
@@ -1413,10 +1413,12 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
   test("the allowlist is exactly §3's keys, spelled the way env-role.ts reads the connection and the roles", () => {
     // §3: "the remote connection (host, port, dbname); the runtime role
     // passwords rm_app, rm_worker and rm_readonly; RM_ENV; and RM_CREDENTIALS."
+    // D61 adds the owner password `rm_owner`. `doadmin` is not allowed (D61
+    // amendment, owner, 2026-10-08): it is never stored in a file.
     // env-role.ts is the one resolver the host-side tools use, so its
     // CONNECTION_TOKENS and ROLES are pinned here; `dbname` is §3's own
     // spelling of `database` and is accepted beside it.
-    const expected = [...CONNECTION_TOKENS, "dbname", ...ROLES, "RM_ENV", "RM_CREDENTIALS", "COINGECKO_API_KEY"];
+    const expected = [...CONNECTION_TOKENS, "dbname", ...ROLES, "rm_owner", "RM_ENV", "RM_CREDENTIALS", "COINGECKO_API_KEY"];
     expect([...ENV_FILE_ALLOWED_KEYS].sort()).toEqual([...new Set(expected)].sort());
   });
 
@@ -1511,11 +1513,11 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
   });
 
   test("an `export` prefix does not hide a key", async () => {
-    const envFilePath = writeEnvFile("export-owner.env", [...SAFE, "export rm_owner=typed-once-never-stored"]);
+    const envFilePath = writeEnvFile("export-superuser.env", [...SAFE, "export POSTGRES_SUPERUSER_URL=postgres://x"]);
     const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
     expect(refusals(result.findings)).toHaveLength(1);
-    expect(result.findings[0]?.message).toContain("rm_owner");
-    expect(result.findings[0]?.message).toContain("the migration credential");
+    expect(result.findings[0]?.message).toContain("POSTGRES_SUPERUSER_URL");
+    expect(result.findings[0]?.message).toContain("superuser credential");
   });
 
   test("a line that is not KEY = VALUE is reported by line number, never by content", async () => {
@@ -1528,63 +1530,97 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
   });
 
   test("the key is everything before the first `=`, as env-role.ts reads it — an allowed prefix cannot hide a key", async () => {
-    // `host:OPENCODE_API_KEY=…` and `rm_worker: rm_owner=…` start with an
-    // allowed key, but parseEnvFile stores them under the keys
-    // `host:OPENCODE_API_KEY` and `rm_worker: rm_owner`, neither of which §3
-    // allows. Each is its own refusal on prod, by line number, and neither
-    // the value nor the key text is printed.
+    // `host:OPENCODE_API_KEY=…` and `rm_worker: postgres_superuser=…` start
+    // with an allowed key, but parseEnvFile stores them under the keys
+    // `host:OPENCODE_API_KEY` and `rm_worker: postgres_superuser`, neither of
+    // which §3 allows. Each is its own refusal on prod, by line number, and
+    // neither the value nor the key text is printed. `rm_worker: rm_owner` is
+    // refused the same way: an allowed key name inside a non-plain key is
+    // still not that key.
     const modelKey = "sk-live-secret-behind-an-allowed-prefix";
+    const superPassword = "superuser-password-behind-an-allowed-prefix";
     const ownerPassword = "owner-password-behind-an-allowed-prefix";
     const envFilePath = writeEnvFile("colon-prefix.env", [
       ...SAFE,
       `host:OPENCODE_API_KEY=${modelKey}`,
+      `rm_worker: postgres_superuser=${superPassword}`,
       `rm_worker: rm_owner=${ownerPassword}`,
     ]);
     const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
     const refused = refusals(result.findings);
-    expect(refused).toHaveLength(2);
+    expect(refused).toHaveLength(3);
     expect(refused[0]?.message).toContain(`line ${SAFE.length + 1}`);
     expect(refused[1]?.message).toContain(`line ${SAFE.length + 2}`);
-    expect(refused[1]?.message).toContain("the migration credential");
+    expect(refused[1]?.message).toContain("a superuser credential");
+    expect(refused[2]?.message).toContain(`line ${SAFE.length + 3}`);
     const text = result.findings.map((f) => f.message).join("\n");
     expect(text).not.toContain(modelKey);
+    expect(text).not.toContain(superPassword);
     expect(text).not.toContain(ownerPassword);
     expect(text).not.toContain("host:OPENCODE_API_KEY");
   });
 
   test("a `key: value` line with no `=` is still a stored credential — refused by line number", async () => {
-    const envFilePath = writeEnvFile("colon-only.env", [...SAFE, "rm_owner: typed-once-never-stored"]);
+    const envFilePath = writeEnvFile("colon-only.env", [...SAFE, "rm_owner: stored-without-an-equals"]);
     const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
     expect(refusals(result.findings)).toHaveLength(1);
     expect(result.findings[0]?.message).toContain(`line ${SAFE.length + 1}`);
-    expect(result.findings[0]?.message).not.toContain("typed-once-never-stored");
+    expect(result.findings[0]?.message).not.toContain("stored-without-an-equals");
   });
 
-  test("refuses an rm_owner token on prod", async () => {
-    const envFilePath = writeEnvFile("owner.env", [...SAFE, "rm_owner=super-secret-owner-token"]);
+  test("D61: an rm_owner line passes on prod, with no finding", async () => {
+    const envFilePath = writeEnvFile("owner.env", [...SAFE, "rm_owner=owner-password"]);
+    const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    expect(result.findings).toEqual([]);
+  });
+
+  test("D61 amendment: a doadmin line refuses on prod, named as the provisioning credential, value never printed", async () => {
+    const envFilePath = writeEnvFile("doadmin.env", [...SAFE, "doadmin=cluster-admin-password"]);
     const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
     expect(refusals(result.findings)).toHaveLength(1);
-    expect(result.findings[0]?.message).toContain("rm_owner");
+    expect(result.findings[0]?.message).toContain("holds doadmin, the cluster provisioning credential");
+    expect(result.findings[0]?.message).not.toContain("cluster-admin-password");
+    expect(ENV_FILE_ALLOWED_KEYS).not.toContain("doadmin");
   });
 
-  test("refuses a doadmin token on prod", async () => {
-    const envFilePath = writeEnvFile("doadmin.env", [...SAFE, "doadmin=cluster-admin-token"]);
-    const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
-    expect(refusals(result.findings)).toHaveLength(1);
-    expect(result.findings[0]?.message).toContain("doadmin");
-  });
-
-  test("warns and proceeds on stage (§7 check 4), still naming an owner credential", async () => {
-    const envFilePath = writeEnvFile("owner-stage.env", [...SAFE, "rm_owner=super-secret-owner-token"]);
+  test("D61 amendment: a doadmin line warns on stage", async () => {
+    const envFilePath = writeEnvFile("doadmin-stage.env", [...SAFE, "doadmin=cluster-admin-password"]);
     const result = await checkEnvCredentials(context({ env: "stage", envFilePath }));
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.severity).toBe("warn");
-    expect(result.findings[0]?.message).toContain("rm_owner");
+  });
+
+  test("D61 red control: the exact spelling only — `RM_OWNER` and `DOADMIN` are keys nothing reads, and refuse on prod", async () => {
+    const envFilePath = writeEnvFile("owner-upper.env", [...SAFE, "RM_OWNER=x", "DOADMIN=y"]);
+    const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    expect(refusals(result.findings)).toHaveLength(2);
+  });
+
+  test("still refuses a superuser credential on prod, naming it", async () => {
+    const envFilePath = writeEnvFile("superuser.env", [...SAFE, "POSTGRES_SUPERUSER_URL=postgres://postgres@host/db"]);
+    const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    expect(refusals(result.findings)).toHaveLength(1);
+    expect(result.findings[0]?.message).toContain("superuser credential");
+  });
+
+  test("still refuses the cluster's postgres login on prod, naming it", async () => {
+    const envFilePath = writeEnvFile("postgres.env", [...SAFE, "postgres=cluster-superuser-password"]);
+    const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    expect(refusals(result.findings)).toHaveLength(1);
+    expect(result.findings[0]?.message).toContain("a cluster superuser credential");
+  });
+
+  test("warns and proceeds on stage (§7 check 4), still naming a superuser credential", async () => {
+    const envFilePath = writeEnvFile("superuser-stage.env", [...SAFE, "POSTGRES_SUPERUSER_URL=postgres://x"]);
+    const result = await checkEnvCredentials(context({ env: "stage", envFilePath }));
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.severity).toBe("warn");
+    expect(result.findings[0]?.message).toContain("superuser credential");
     expect(refusals(result.findings)).toEqual([]);
   });
 
   test("unset RM_ENV refuses against a remote and warns under --local, per §4.3's unset row", async () => {
-    const envFilePath = writeEnvFile("owner-unset.env", [...SAFE, "rm_owner=super-secret-owner-token"]);
+    const envFilePath = writeEnvFile("superuser-unset.env", [...SAFE, "POSTGRES_SUPERUSER_URL=postgres://x"]);
     const remote = await checkEnvCredentials(context({ env: null, connection: "remote", envFilePath }));
     expect(remote.findings[0]?.severity).toBe("refuse");
     const local = await checkEnvCredentials(context({ env: null, connection: "local", envFilePath }));
@@ -1592,12 +1628,13 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
   });
 
   test("names the offending KEY and never the value — it does not log, hash or compare a secret", async () => {
-    const secret = "an-owner-password-that-must-never-be-printed";
-    const envFilePath = writeEnvFile("redaction.env", [...SAFE, `rm_owner=${secret}`]);
+    const secret = "a-superuser-password-that-must-never-be-printed";
+    const envFilePath = writeEnvFile("redaction.env", [...SAFE, `rm_owner=owner-not-printed`, `POSTGRES_PASSWORD=${secret}`]);
     const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
     const text = result.findings.map((f) => f.message).join("\n");
-    expect(text).toContain("rm_owner");
+    expect(text).toContain("POSTGRES_PASSWORD");
     expect(text).not.toContain(secret);
+    expect(text).not.toContain("owner-not-printed");
   });
 
   test("reports every dangerous key present, not the first", async () => {
@@ -1606,12 +1643,14 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
       "rm_owner=x",
       "doadmin=y",
       "POSTGRES_SUPERUSER_URL=postgres://postgres@host/db",
+      "postgres=z",
     ]);
     const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
     const text = result.findings.map((f) => f.message).join("\n");
-    expect(text).toContain("rm_owner");
-    expect(text).toContain("doadmin");
-    expect(refusals(result.findings).length).toBeGreaterThanOrEqual(2);
+    expect(text).toContain("POSTGRES_SUPERUSER_URL");
+    expect(text).toContain("holds postgres,");
+    expect(text).toContain("holds doadmin,");
+    expect(refusals(result.findings)).toHaveLength(3);
   });
 });
 
@@ -1904,7 +1943,7 @@ describe("runPreflight — one library, three callers (§7.2)", () => {
   });
 
   test("warnings neither clear nor set `passed`", async () => {
-    const envFilePath = writeEnvFile("warn-only.env", ["rm_app=a", "rm_owner=b"]);
+    const envFilePath = writeEnvFile("warn-only.env", ["rm_app=a", "POSTGRES_SUPERUSER_URL=b"]);
     const report = await runPreflight(sql, context({ env: "stage", envFilePath }), "full", tokens());
     const warnings = report.results.flatMap((r) => r.findings).filter((f) => f.severity === "warn");
     expect(warnings.length).toBeGreaterThan(0);

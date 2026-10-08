@@ -47,6 +47,7 @@ import { _resetRateLimitStateForTests } from "../src/chain/gecko-rate-limit.ts";
 import { getWalletBalances } from "../src/api/routes/dashboards.ts";
 import { processOneJob } from "../src/worker/loop.ts";
 import { LANES } from "../src/worker/lanes.ts";
+import { _resetTokenMarketForTests } from "../src/worker/handlers/token-market.ts";
 
 const realFetch = globalThis.fetch;
 const realConsoleError = console.error;
@@ -65,8 +66,17 @@ const ENV_KEYS = [
 // wallet feeds' same-tick gecko fan-out coalesces into a single request).
 const MAX_RETRIES = 2;
 const EXPECTED_GECKO_ATTEMPTS = MAX_RETRIES + 1;
+// The wallet.sample_balances JOB also samples the token page's market
+// (worker/handlers/token-market.ts, v0.6.0 release finding 2026-10-08). Its two
+// price reads make NO upstream call here: the wallet sample's token_price
+// request has just failed, so it holds off (PRICE_FAILURE_HOLDOFF_MS). Its pool
+// read is on its own ten-minute interval and spends one bounded budget on the
+// pool endpoint, then stops before the candles. So the job costs exactly two
+// budgets, never one per price leg.
+const EXPECTED_JOB_GECKO_ATTEMPTS = 2 * EXPECTED_GECKO_ATTEMPTS;
 
 beforeEach(async () => {
+  _resetTokenMarketForTests();
   process.env.BASE_RPC_SOURCE = "live"; // real batched-multicall path against the mocked transport
   process.env.PRICE_SOURCE = "live"; // real GeckoTerminal/Yahoo path against the mocked transport
   process.env.GECKO_PRICE_MAX_RETRIES = String(MAX_RETRIES);
@@ -226,8 +236,10 @@ test("smoke-readiness gate reaches ready under persistent 429s: the boot's cold-
     // escaping) IS the worker surviving — the original #202 defect mode.
     expect(await processOneJob({ lane: LANES.analytics, workerId: "test-429-analytics" })).toBe(true);
 
-    // The price feed really was exercised through the real retry budget.
-    expect(counters.gecko).toBe(EXPECTED_GECKO_ATTEMPTS);
+    // The price feed really was exercised through the real retry budget, and
+    // the token-market sample added only its pool budget (see
+    // EXPECTED_JOB_GECKO_ATTEMPTS).
+    expect(counters.gecko).toBe(EXPECTED_JOB_GECKO_ATTEMPTS);
 
     // The job settled 'succeeded' — NOT failed/dead/degraded — because the
     // sampler honest-degrades under 429-exhaustion instead of throwing, so

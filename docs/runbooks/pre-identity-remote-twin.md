@@ -1,9 +1,14 @@
 # Pre-identity remote twin: the one-off intervention
 
-> **Authority.** [D55](../decisions.md#d55) (10), Lucas's call of 2026-09-28,
-> and [smoke production spec](../technical/smoke-production-spec.md) §4.2.
-> A production dump from before migration 0081 cannot become a remote twin
-> through any tool. This runbook is the one hand step that makes it one.
+> **Retired 2026-10-08 by [D61](../decisions.md#d61).** Do not run this hand step.
+> A stage `bun run migrate` now prepares the remote twin: run
+> `RM_ENV=stage bun run migrate --confirm-target <host:port/database>` against the
+> restored dump. It applies 0081 and writes `rehearsal` in one fenced transaction,
+> then migrates the rest ([smoke production spec](../technical/smoke-production-spec.md)
+> §4.2, §4.3). A database this runbook already prepared is still accepted. The text
+> below is kept for audit only.
+>
+> **Former authority.** [D55](../decisions.md#d55) (10), Lucas's call of 2026-09-28.
 
 ## When to use it
 
@@ -190,10 +195,10 @@ Keep the receipt. It records the pre-identity state, the ledger match, the
 
 Run this on the host whose `$HOME/.env` names this twin, never on a host
 whose `$HOME/.env` names production. `bun run migrate` reads the target from
-that file, and it prompts for `rm_owner` and a `y`.
+that file. It reads `rm_owner` from that file and takes `--confirm-target` (D61).
 
 ```bash
-RM_ENV=stage bun run migrate --instance "$TWIN_INSTANCE"
+RM_ENV=stage bun run migrate --instance "$TWIN_INSTANCE" --confirm-target <host:port/database>
 ```
 
 It applies `0056_swarm_judge_requires_model`, `0057_swarm_judge_policy_stamp`,

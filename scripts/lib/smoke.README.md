@@ -101,13 +101,14 @@ Unset `RM_ENV` refuses on a remote target and defaults to stage only for local m
 
 A remote database is reached with the roles in `$HOME/.env`: `rm_app`,
 `rm_worker`, `rm_readonly`. `rm_owner` — the schema owner and the only
-migration login — is never in that file; its password is typed at the
-terminal for the one run that needs it. A local database uses passwords
-smoke generates itself, so no prompt is needed there.
+migration login — is a line in that file too (D61). A remote `--migrate` or
+`--seed` reads it there and takes `--confirm-target <host:port/database>`. No
+container ever receives it. A local database uses passwords smoke generates
+itself, so no flag is needed there.
 
-`$HOME/.env` on a production host must hold nothing beyond its listed keys —
-no `rm_owner`, `doadmin` or superuser credential, no service token, signing key
-or model key. The boot's preflight refuses any other key on production.
+`$HOME/.env` on a production host must hold nothing beyond its listed keys.
+`rm_owner` and `doadmin` are listed. No other superuser credential, no service
+token, signing key or model key. The boot's preflight refuses any other key on production.
 
 Three service tokens — `system-scheduler`'s, `analytics-producer`'s and the
 operator's admin token — are per-instance files in the state directory. The

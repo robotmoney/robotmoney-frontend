@@ -149,6 +149,7 @@ const NOT_IN_PRODUCTION = [
   "0112_rm_app_overwrite_events_read.sql",
   "0113_rm_worker_buyback_indexer_grants.sql",
   "0114_seat_in_flight_unrostered_sessions.sql",
+  "0115_token_market_samples.sql",
 ] as const;
 
 useCleanDatabase(import.meta.file);

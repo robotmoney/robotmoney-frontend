@@ -2,17 +2,18 @@
 //
 // GeckoTerminal is CoinGecko's. Keyless, it is `api.geckoterminal.com/api/v2` at about 10 calls a minute per IP. With a
 // paid CoinGecko plan the same data is served from `pro-api.coingecko.com/api/v3/onchain/...` under the
-// `x-cg-pro-api-key` header, and the paths after the base are the same. Which calls a plan includes depends on the plan:
-// OUR plan is Basic, which covers new_pools, tokens/{address}/pools and simple/.../token_price but NOT the pool OHLCV
-// endpoint (Analyst and above). So OHLCV always goes to the free host. Moving to Analyst is one line in PRO_CALLS.
+// `x-cg-pro-api-key` header, and the paths after the base are the same. Which calls a plan includes depends on the plan.
+// Our key answers every call here on the Pro host, the pool reading and pool OHLCV included (verified 2026-10-08:
+// HTTP 200 with data for tokens/{address}/pools, pools/{address} and pools/{address}/ohlcv/day with the production key),
+// so every call is in PRO_CALLS. A call the plan stops covering gets 401/403 and falls back to the free host (below).
 //
 // COINGECKO_API_KEY unset or blank → every URL and header is exactly what it was before this module.
 //
 // A 401 or 403 from the Pro host (a plan that lacks the endpoint, a revoked key) must not stop data: the caller falls
 // back to the free host for the same request, and this module remembers for ten minutes so the next calls do not each
 // pay a failed round trip. The key only ever lands in the request headers; nothing here logs or returns it.
-// `pool` is one pool's own reading (liquidity, volume), used by the token page (RM-156); like OHLCV it stays on the
-// free host until it is added to PRO_CALLS.
+// `pool` is one pool's own reading (liquidity, volume), used by the token page (RM-156) and read by the worker
+// (worker/handlers/token-market.ts), never the api.
 export type GeckoCall = "new_pools" | "token_pools" | "token_price" | "ohlcv" | "pool";
 
 const FREE_BASE = "https://api.geckoterminal.com/api/v2";
@@ -20,8 +21,8 @@ const PRO_BASE = "https://pro-api.coingecko.com/api/v3/onchain";
 const PRO_HOST = new URL(PRO_BASE).host;
 const FREE_HOST = new URL(FREE_BASE).host;
 
-/** The calls our CoinGecko plan (Basic) includes on the Pro host. */
-export const PRO_CALLS: ReadonlySet<GeckoCall> = new Set<GeckoCall>(["new_pools", "token_pools", "token_price"]);
+/** The calls our CoinGecko plan includes on the Pro host: all of them (verified with the production key, 2026-10-08). */
+export const PRO_CALLS: ReadonlySet<GeckoCall> = new Set<GeckoCall>(["new_pools", "token_pools", "token_price", "ohlcv", "pool"]);
 
 export const PRO_REJECTED_COOLDOWN_MS = 10 * 60_000;
 

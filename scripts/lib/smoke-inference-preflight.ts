@@ -53,6 +53,9 @@
 // functions this one composes, resolveModelConfig() and resolveStackZenKey().
 import { resolveModelConfig } from "./onboarding-eval.ts";
 import { resolveStackZenKey, ZEN_KEY_ENV } from "./opencode-key.ts";
+import { homeEnvFilePath } from "./env-role.ts";
+import { loadEnvFile } from "./smoke-external-pg.ts";
+import { loadCredentialFile, resolveCredentialPath } from "./swarm/credential-file.ts";
 
 export interface InferencePreflightOptions {
   /** The `--static-port` boot: the standing/public stack, i.e. staging. */
@@ -61,6 +64,8 @@ export interface InferencePreflightOptions {
   /** Mutated in place on success — the stack's compose env is built from it. */
   env: Record<string, string | undefined>;
   log?: (m: string) => void;
+  /** A participant's modelKey from the credential file, when one is configured (D61). */
+  credentialModelKey?: () => { key: string; source: string } | null;
 }
 
 /**
@@ -83,9 +88,9 @@ export function preflightInference(opts: InferencePreflightOptions): Record<stri
   const log = opts.log ?? ((m: string) => console.log(m));
   const composeEnv: Record<string, string> = {};
   if (opts.standingStack) {
-    const zen = resolveStackZenKey(opts.repoRoot, opts.env);
+    const zen = resolveStackZenKey(opts.repoRoot, opts.env, opts.credentialModelKey);
     if ("error" in zen) throw new Error(zen.error);
-    // The VALUE is never printed — only which of the three places held it.
+    // The VALUE is never printed — only which place held it.
     log(`[smoke] inference credential: ${ZEN_KEY_ENV} from ${zen.source}`);
     opts.env[ZEN_KEY_ENV] = zen.key;
     composeEnv[ZEN_KEY_ENV] = zen.key;
@@ -112,5 +117,28 @@ export function preflightInferenceOrExit(opts: InferencePreflightOptions): Recor
   } catch (err) {
     console.error(`[smoke] FATAL: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
+  }
+}
+
+/**
+ * The first participant's modelKey from the configured credential file, or null
+ * (D61: an agent-run boot under `env -i` holds no host-wide key). The path comes
+ * from `--credentials`, else `RM_CREDENTIALS` in `$HOME/.env`. A missing or bad
+ * file is null here: the boot's roster step reports it with its own refusal.
+ */
+export function credentialFileModelKey(credentialsFlag: string | undefined): { key: string; source: string } | null {
+  try {
+    const resolution = resolveCredentialPath({ RM_CREDENTIALS: loadEnvFile(homeEnvFilePath())?.RM_CREDENTIALS }, credentialsFlag);
+    if (!resolution.configured) return null;
+    const file = loadCredentialFile(resolution.path);
+    for (const [kind, entries] of [["agents", file.agents], ["judges", file.judges]] as const) {
+      for (const [name, entry] of Object.entries(entries)) {
+        const key = entry.modelKey?.trim();
+        if (key) return { key, source: `the credential file's ${kind}.${name}.modelKey` };
+      }
+    }
+    return null;
+  } catch {
+    return null;
   }
 }

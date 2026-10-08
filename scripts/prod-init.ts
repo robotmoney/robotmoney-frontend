@@ -1,29 +1,67 @@
 #!/usr/bin/env bun
-// PRODUCTION INITIALIZATION — smoke-production-spec.md §9.1 steps 4-6, §4.3,
-// §2, §3; D47, D52, D55 (5)/(6). Issue #1026 criteria 42 and 43.
+// PRODUCTION INITIALIZATION — smoke-production-spec.md §9.1 steps 1 and 4-6,
+// §4.3, §2, §3; D47, D52, D55 (5)/(6), D61. Issue #1026 criteria 42 and 43.
 //
-//   bun scripts/prod-init.ts set-identity      [--instance <name>]
-//   bun scripts/prod-init.ts provision-tokens  [--instance <name>]
-//   bun scripts/prod-init.ts rebind-members    [--instance <name>] [--credentials <path>] [--api <url>]
+//   bun scripts/prod-init.ts role-passwords     --confirm-target <host:port/database> [--instance <name>] [--roles <role,…>] [--rotate <role,…>]
+//   bun scripts/prod-init.ts set-identity       --confirm-target <host:port/database> [--instance <name>]
+//   bun scripts/prod-init.ts provision-tokens   --confirm-target <host:port/database> [--instance <name>]
+//   bun scripts/prod-init.ts rebind-members     --confirm-target <host:port/database> [--instance <name>] [--credentials <path>] [--api <url>]
 //
-// §9.1 is "one-time initialization (receipted, never via `bun smoke`)", and
-// §4.3 says what gates each command: "a set of separate commands allowed on
-// `production`, each gated by `RM_ENV=prod`, `y/n`, a receipt and the target
-// lock. A command that writes the database directly also requires a typed
-// `rm_owner`; the key rotation of §9.1 step 6 goes through the admin API with
-// the operator's admin service token instead. None is reachable through
-// `bun smoke`." (scripts/tests/unit/prod-init.test.ts walks smoke-main's and
-// scripts/stack's imports to hold that last sentence.)
+// rebind-members against the instance's own smoke-owned twin (RM_ENV=stage,
+// runbook R3.8) takes no --confirm-target. A local twin needs no confirmation,
+// as it never needed a `y`.
+//
+// D61: no command prompts. The `rm_owner` password is a line in `$HOME/.env`
+// (scripts/lib/privileged-env.ts). The `doadmin` password is stored nowhere:
+// role-passwords, the one command that uses it, takes it from a hidden prompt
+// or from stdin with `--doadmin-stdin` (scripts/lib/doadmin-input.ts), and it
+// lives only in this process's memory. The interactive `y` is
+// `--confirm-target`, which must equal exactly the `host:port/database` the
+// command resolved from `~/.env`. A mismatch refuses and prints both. Neither
+// password ever reaches a receipt, a log line, an error message or argv.
+//
+// §4.3 still holds for the rest: each command is gated by its RM_ENV, the
+// confirmation, a receipt and the target lock. None is reachable through
+// `bun smoke` (scripts/tests/unit/prod-init.test.ts walks smoke-main's and
+// scripts/stack's imports to hold that).
 //
 // WHAT EACH COMMAND DOES.
-//   set-identity      §9.1 step 4. Confirms `deployment_identity = production`
-//                     and receipts it: the first production migrate already
-//                     wrote the row, in the transaction that created the table
-//                     (D55 (9)), so this command reads it through rm_owner
+//   role-passwords    §9.1 step 1, D61. The four §3 roles' passwords, as
+//                     `doadmin`, typed at a hidden prompt or piped with
+//                     `--doadmin-stdin` (never a file), against the target
+//                     `~/.env` names (backend/scripts/role-passwords.ts,
+//                     scripts/lib/home-env-secret.ts). For each role in
+//                     `--roles` (default: rm_owner, rm_app, rm_worker,
+//                     rm_readonly): a `~/.env` line that logs in is `kept`
+//                     with no ALTER; an absent line is `set` (a password
+//                     generated on the host, sent to the server only as its
+//                     SCRAM-SHA-256 verifier, written into `~/.env` atomically,
+//                     then proven); a line that does not log in refuses, never
+//                     rotating on its own; `--rotate <role,…>` gives a role a new
+//                     password and keeps the old line in `~/.env.retired-<ts>`
+//                     (`rotated`). An empty `<role>=` line refuses. rm_owner
+//                     also gets LOGIN. A runtime role's attributes never
+//                     change. So nobody writes a role password by hand, and
+//                     a rerun reports every role `kept`. It is the ONE command
+//                     that reads `doadmin`. It is a provisioning precondition
+//                     run before `release:run`, not a release step. It runs under RM_ENV=prod,
+//                     and under RM_ENV=stage too, because D61 rule 2 rehearses
+//                     the production runbook unmodified on stage. It runs
+//                     before the first migrate, so it accepts a PRE-IDENTITY
+//                     target (no identity row) under either policy, guarded by
+//                     the ledger: it must equal a supported baseline exactly
+//                     (backend/src/db/supported-releases.ts). A target with a
+//                     row must match the policy, like every other command.
+//   set-identity      §9.1 step 4. Confirms the identity the policy names and
+//                     receipts it: `production` under RM_ENV=prod, `rehearsal`
+//                     under RM_ENV=stage (D61 rule 2: the stage rehearsal runs
+//                     step R6.4 unmodified). The first migrate already wrote
+//                     the row, in the transaction that created the table
+//                     (D55 (9), D61), so this command reads it through rm_owner
 //                     inside the §2 fence and REPORTS it, unchanged
 //                     (backend/scripts/set-identity.ts). It writes no row: a
-//                     target that is not enrolled `production` refuses before
-//                     any prompt.
+//                     target enrolled otherwise refuses before any credential
+//                     is read.
 //   provision-tokens  §9.1 step 5. The three service tokens — hash and rights in
 //                     the store, the secret in `tokens/<holder>/token` under the
 //                     instance's state directory — through the one module that
@@ -48,16 +86,20 @@
 //                     then, not `~/.env`, which on a stage host names
 //                     production's read replica.
 //
+// THE IDENTITY RULE (D61). Every command runs under RM_ENV=prod against a
+// `production` target or under RM_ENV=stage against a `rehearsal` target, and
+// never crosswise. The one exception is role-passwords on a pre-identity
+// target whose ledger is a supported baseline.
+//
 // THE GATES, in order, each refusing before anything changes: the command; the
-// policy (`RM_ENV=prod`, or `stage` for provision-tokens and rebind-members
-// against a rehearsal target); the instance (§1.1); the connection (`~/.env`,
-// §3, or the instance's twin); the
-// target's `deployment_identity`; a terminal; the typed rm_owner password
-// (never stored, D47) or the operator token; a literal `y`; the target lock
-// (§2), revalidated against the read that planned the run. Every mutation
-// happens inside the lock and, for a database write, inside the fence. The
-// receipt — what ran, against what, by whom, and what it changed; never a
-// secret — is written under the instance's state directory.
+// policy; the instance (§1.1); the connection (`~/.env`, §3, or the instance's
+// twin); the target's `deployment_identity`; the credential (`rm_owner`, and
+// `doadmin` for role-passwords, typed or piped, never stored; the operator token for
+// rebind-members); `--confirm-target`; the target lock (§2), revalidated
+// against the read that planned the run. Every mutation happens inside the
+// lock and, for a database write, inside the fence. The receipt — what ran,
+// against what, by whom, and what it changed; never a secret — is written
+// under the instance's state directory.
 import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -66,11 +108,20 @@ import { instanceFlag, instancePaths, readRolePasswords, readStackState, resolve
 import { readServiceToken } from "./lib/smoke-secret.ts";
 import { loadCredentialFile, resolveCredentialPath, writeCredentialBearer, type CredentialEntry, type ParticipantKind } from "./lib/swarm/credential-file.ts";
 import { resolveStackEnvironment } from "./stack/naming.ts";
+import { describeUnmatchedLedger, matchSupportedRelease } from "../backend/src/db/supported-releases.ts";
 import type { HeldTargetLock, LockHolder, TargetState } from "../backend/src/db/target-lock.ts";
 import type { SetIdentityOptions, SetIdentityResult } from "../backend/scripts/set-identity.ts";
 import type { ProvisionOptions } from "../backend/scripts/provision-tokens.ts";
+import type { PasswordRole, RolePasswordsOptions, RolePasswordsResult, RoleOutcome } from "../backend/scripts/role-passwords.ts";
+import { confirmTargetFlag, homeEnvTarget, requireConfirmTarget, requirePrivilegedPassword } from "./lib/privileged-env.ts";
+import { writeEnvSecret } from "./lib/home-env-secret.ts";
+import { DOADMIN_STDIN_FLAG, readDoadminPassword } from "./lib/doadmin-input.ts";
 
-export const PROD_INIT_COMMANDS = ["set-identity", "provision-tokens", "rebind-members"] as const;
+/** The roles role-passwords manages, in order (backend/scripts/role-passwords.ts PASSWORD_ROLES; repeated
+ *  here because that module is loaded lazily, and pinned equal by scripts/tests/unit/prod-init-role-passwords.test.ts). */
+export const ROLE_PASSWORD_ROLES = ["rm_owner", "rm_app", "rm_worker", "rm_readonly"] as const;
+
+export const PROD_INIT_COMMANDS = ["role-passwords", "set-identity", "provision-tokens", "rebind-members"] as const;
 export type ProdInitCommand = (typeof PROD_INIT_COMMANDS)[number];
 
 /** A refusal: nothing was changed, and the message says why. */
@@ -82,15 +133,16 @@ export interface ProdInitDeps {
   /** `~/.env`, parsed; undefined when absent. */
   readonly homeEnv: Record<string, string> | undefined;
   readonly homeEnvPath: string;
+  /** role-passwords only: the doadmin password, from a hidden prompt or `--doadmin-stdin`. Never a file. */
+  readDoadmin(argv: readonly string[]): Promise<string>;
   readonly stateRoot: string;
-  readonly isTerminal: boolean;
-  promptSecret(question: string): Promise<string>;
-  promptLine(question: string): Promise<string>;
   readTarget(readerUrl: string): Promise<TargetState>;
   acquireLock(readerUrl: string, holder: Omit<LockHolder, "acquiredAt">, expected: TargetState): Promise<{ lock: HeldTargetLock; release(): Promise<void> } | { refusal: string }>;
   setIdentity(options: SetIdentityOptions): Promise<SetIdentityResult>;
   provisionTokens(options: ProvisionOptions & { readonly readerUrl: string; readonly rmEnv: string }): Promise<{ holders: string[]; files: Record<string, string> }>;
   rotateKey(apiUrl: string, operatorToken: string, memberId: string, publicKey: string): Promise<{ status: number; token?: string; error?: string }>;
+  /** role-passwords' database half: the ONLY dep that receives a doadmin URL. */
+  rolePasswords(options: RolePasswordsOptions): Promise<RolePasswordsResult>;
   now(): Date;
   log(line: string): void;
 }
@@ -113,7 +165,7 @@ export interface ProdInitReceipt {
   readonly receiptFile: string;
 }
 
-const USAGE = `usage: bun scripts/prod-init.ts <${PROD_INIT_COMMANDS.join("|")}> [--instance <name>] [--credentials <path>] [--api <url>]`;
+const USAGE = `usage: bun scripts/prod-init.ts <${PROD_INIT_COMMANDS.join("|")}> --confirm-target <host:port/database> [--instance <name>] [--credentials <path>] [--api <url>] [--roles <role,…>] [--rotate <role,…>] [${DOADMIN_STDIN_FLAG}]`;
 
 function flag(argv: readonly string[], name: string): string | undefined {
   for (let i = 0; i < argv.length; i++) {
@@ -137,21 +189,36 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
   const command = argv[0] as ProdInitCommand;
   if (!(PROD_INIT_COMMANDS as readonly string[]).includes(command)) refuse(`unknown command "${argv[0] ?? ""}". ${USAGE}.`);
   const rest = argv.slice(1);
+  // role-passwords' role set and its explicit rotations, checked before anything is read.
+  const roleList = (name: string, fallback: readonly PasswordRole[]): PasswordRole[] => {
+    const raw = flag(rest, name);
+    if (raw === undefined) return [...fallback];
+    const names = raw.split(",").map((r) => r.trim()).filter(Boolean);
+    const unknown = names.filter((r) => !(ROLE_PASSWORD_ROLES as readonly string[]).includes(r));
+    if (names.length === 0 || unknown.length > 0) {
+      refuse(`${name} takes a comma-separated list of ${ROLE_PASSWORD_ROLES.join(", ")}; it got ${JSON.stringify(raw)}.`);
+    }
+    return names as PasswordRole[];
+  };
+  if (command !== "role-passwords" && (flag(rest, "--roles") !== undefined || flag(rest, "--rotate") !== undefined || rest.includes(DOADMIN_STDIN_FLAG))) {
+    refuse(`--roles, --rotate and ${DOADMIN_STDIN_FLAG} belong to role-passwords only.`);
+  }
+  const passwordRoles = command === "role-passwords" ? roleList("--roles", ROLE_PASSWORD_ROLES) : [];
+  const rotateRoles = command === "role-passwords" ? roleList("--rotate", []) : [];
+  const outside = rotateRoles.filter((r) => !passwordRoles.includes(r));
+  if (outside.length > 0) refuse(`--rotate names ${outside.join(", ")}, which --roles leaves out.`);
 
   // §4.1/§4.3: the policy. Production initialization runs under `prod`; the
   // stage uses are provisioning a REHEARSAL target's tokens (§5) and, since
   // 2026-10-05 (owner, runbook R3.8/B10), rebinding a REHEARSAL target's
   // seated members: the rebind order is the one cutover step that can only be
   // learned by running it, it writes through the API with the operator token,
-  // and on a rehearsal target every key is throwaway. set-identity stays
-  // prod's: it reports `production`, which a rehearsal target never holds.
+  // and on a rehearsal target every key is throwaway. Since D61 (rule 2:
+  // stage runs the production runbook unmodified) every command runs under
+  // both: prod against `production`, stage against `rehearsal` (below).
   const rmEnv = deps.env.RM_ENV ?? deps.homeEnv?.RM_ENV;
-  if (command === "provision-tokens" || command === "rebind-members") {
-    if (rmEnv !== "prod" && rmEnv !== "stage") {
-      refuse(`${command} requires RM_ENV=prod (production, §9.1) or RM_ENV=stage against a rehearsal target (§5, R3.8); RM_ENV is ${rmEnv === undefined ? "unset" : `"${rmEnv}"`}.`);
-    }
-  } else if (rmEnv !== "prod") {
-    refuse(`${command} requires RM_ENV=prod (§9.1, §4.3); RM_ENV is ${rmEnv === undefined ? "unset" : `"${rmEnv}"`}.`);
+  if (rmEnv !== "prod" && rmEnv !== "stage") {
+    refuse(`${command} requires RM_ENV=prod (production, §9.1) or RM_ENV=stage against a rehearsal target (§5, R3.8, D61); RM_ENV is ${rmEnv === undefined ? "unset" : `"${rmEnv}"`}.`);
   }
   const policy = rmEnv as "prod" | "stage";
 
@@ -186,36 +253,44 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
   const target = redactedTarget(readerUrl, "rm_readonly");
   if (twinUrl) deps.log(`target: instance ${instanceName}'s own twin, ${target} (not ${deps.homeEnvPath})`);
 
-  // §4.2/§4.3: what the target is enrolled for, read before any prompt.
+  // §4.2/§4.3: what the target is enrolled for, read before any credential.
   let state: TargetState;
   try {
     state = await deps.readTarget(readerUrl!);
   } catch (error) {
     return refuse(`the target ${target} could not be read: ${error instanceof Error ? error.message : String(error)}.`);
   }
-  if (command === "set-identity") {
-    if (state.identity === "rehearsal") {
-      refuse(`${target} is enrolled \`rehearsal\`; set-identity reports a production database the first migrate upgraded, never a rehearsal one (§9.1).`);
-    }
-    if (state.identity !== "production") {
+  // D61: the identity must be the one the policy names — `production` under
+  // prod, `rehearsal` under stage — never crosswise.
+  const expected = policy === "prod" ? "production" : "rehearsal";
+  const crosswise = `${command} under RM_ENV=${policy} requires ${target} enrolled \`${expected}\`; it reads \`${state.identity}\` (§4.3, D61: never crosswise).`;
+  if (command === "role-passwords" && state.identity === "missing") {
+    // §9.1 step 1 precedes the first migrate, so the target has no identity
+    // row yet. The guard is the ledger: exactly a supported baseline, the
+    // state the first migrate (prod) or the remote rehearsal pass (stage)
+    // starts from.
+    if (matchSupportedRelease(state.ledger) === null) {
       refuse(
-        `${target} reads \`${state.identity}\`. The first production migrate writes \`production\` in the transaction that ` +
-          "creates deployment_identity (§9.1 step 4, D55 (9)), and set-identity only reports that row: run `bun run migrate` first.",
+        `${command} on ${target}, which has no deployment_identity row, requires a ledger exactly equal to a supported ` +
+          `baseline (the pre-identity state the first migrate starts from); ${describeUnmatchedLedger(state.ledger)}.`,
       );
     }
-  } else if (policy === "prod" && state.identity !== "production") {
-    refuse(`${command} under RM_ENV=prod requires ${target} enrolled \`production\`; it reads \`${state.identity}\` (run set-identity first, §9.1 step 4).`);
-  } else if (policy === "stage" && state.identity !== "rehearsal") {
-    refuse(`${command} under RM_ENV=stage requires ${target} enrolled \`rehearsal\` (§4.3: stage policy never touches production data); it reads \`${state.identity}\`.`);
+  } else if (state.identity !== expected) {
+    if (command === "set-identity" && state.identity === "missing") {
+      refuse(
+        `${target} reads \`missing\`. The first migrate writes \`${expected}\` in the transaction that creates ` +
+          "deployment_identity (§9.1 step 4, D55 (9), D61), and set-identity only reports that row: run `bun run migrate` first.",
+      );
+    }
+    refuse(crosswise);
   }
 
-  if (!deps.isTerminal) {
-    refuse(`${command} needs an operator at a terminal: it asks for ${command === "rebind-members" ? "an explicit y" : "the rm_owner password and an explicit y"}, and neither is ever read from a file, a pipe or the environment (§3, D47).`);
-  }
-
-  // The credential this command acts with: a typed rm_owner for a direct
-  // database write, the operator's service token for the admin API.
+  // The credential this command acts with (D61): rm_owner from `~/.env` for a
+  // direct database write, doadmin (typed or piped) for role-passwords only,
+  // the operator's service token for the admin API. Never a prompt.
   let ownerUrl: string | undefined;
+  let doadminUrl: string | undefined;
+  let doadminPassword: string | undefined;
   let operatorToken: string | undefined;
   // Every seated member the file names, agents then judges, each by name. Read
   // straight off the validated file: rebinding is not participant
@@ -253,18 +328,68 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
     if (!apiUrl) refuse(`no api address: instance ${instanceName} records no running stack; pass --api <url>.`);
   } else {
     if (!homeEnv) refuse(`the remote connection must be in ${deps.homeEnvPath} (§3).`);
-    const password = await deps.promptSecret("rm_owner password");
-    if (password === "") refuse("no rm_owner password was typed (§3: it is typed for the one run that needs it).");
-    ownerUrl = urlForRole({ ...homeEnv, rm_owner: password }, "rm_owner");
+    try {
+      if (command !== "role-passwords") {
+        // Only these need the line up front: role-passwords generates a
+        // missing role line (D61).
+        requirePrivilegedPassword(homeEnv, "rm_owner", deps.homeEnvPath);
+      }
+    } catch (error) {
+      refuse((error as Error).message.replace(/^Refusing: /, "").replace(/ Nothing was changed\.$/, ""));
+    }
+    // A MISSING role line means "generate one". An EMPTY one is a mistake to
+    // report, never a password to replace (R1.2 refuses an empty rm_owner too).
+    if (command === "role-passwords") {
+      const empty = passwordRoles.filter((role) => Object.hasOwn(homeEnv!, role) && homeEnv![role] === "");
+      if (empty.length > 0) {
+        refuse(
+          `${deps.homeEnvPath} has an empty ${empty.join(", ")} line. Remove the line to let role-passwords generate the ` +
+            "password, or put the role's password on it (D61).",
+        );
+      }
+    }
+    ownerUrl = urlForRole(homeEnv!, "rm_owner");
+    if (command === "role-passwords" ? !homeEnvTarget(homeEnv!) : !ownerUrl) {
+      refuse(`the remote connection (host, port, database or dbname, sslmode) must be in ${deps.homeEnvPath} (§3).`);
+    }
   }
 
   const what = {
-    "set-identity": `confirm and receipt ${target}'s \`production\` enrollment (it is read, never rewritten)`,
+    "role-passwords":
+      `as doadmin on ${target}, for ${passwordRoles.join(", ")}: keep each ${deps.homeEnvPath} line that logs in, generate and set ` +
+      `each absent one (sent as a SCRAM verifier, written to ${deps.homeEnvPath})` +
+      (rotateRoles.length > 0 ? `, and rotate ${rotateRoles.join(", ")} (the old lines retired)` : "") +
+      (passwordRoles.includes("rm_owner") ? "; rm_owner also becomes LOGIN" : ""),
+    "set-identity": `confirm and receipt ${target}'s \`${expected}\` enrollment (it is read, never rewritten)`,
     "provision-tokens": `provision the three service tokens for instance ${instanceName} on ${target} (a re-run rotates them; restart the holders after)`,
     "rebind-members": `rotate ${roster.length} member key(s) from ${credentialPath} through ${apiUrl} and write each new bearer into its entry`,
   }[command];
-  const answer = (await deps.promptLine(`About to ${what}. Type y to continue`)).trim();
-  if (answer !== "y") refuse(`the answer was "${answer}", not y.`);
+  deps.log(`about to ${what}`);
+
+  // D61: the `y` is `--confirm-target`. A target resolved from `~/.env` needs
+  // the flag to name it exactly. The instance's own local twin needs none.
+  if (!twinUrl) {
+    const resolved = homeEnv ? homeEnvTarget(homeEnv) : undefined;
+    if (!resolved) refuse(`the remote connection (host, port, database or dbname) must be in ${deps.homeEnvPath} (§3).`);
+    try {
+      requireConfirmTarget(confirmTargetFlag(rest), resolved!, command);
+    } catch (error) {
+      refuse((error as Error).message.replace(/^Refusing: /, "").replace(/ Nothing was changed\.$/, ""));
+    }
+  }
+
+  // role-passwords: the doadmin password, read last of all the gates so a
+  // refusal above never asks for it. Typed or piped; never a file, an
+  // environment variable, argv or ~/.env (D61). Held in memory only.
+  if (command === "role-passwords") {
+    try {
+      doadminPassword = await deps.readDoadmin(rest);
+    } catch (error) {
+      refuse(`${(error as Error).message}`);
+    }
+    doadminUrl = urlForRole({ ...homeEnv!, doadmin: doadminPassword! }, "doadmin");
+    if (!doadminUrl) refuse(`the remote connection (host, port, database or dbname, sslmode) must be in ${deps.homeEnvPath} (§3).`);
+  }
 
   // §2: the session target lock, after which the target is re-read and held
   // to the read above.
@@ -272,14 +397,41 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
   const acquired = await deps.acquireLock(readerUrl!, holder, state);
   if ("refusal" in acquired) return refuse(acquired.refusal);
 
+
   const startedAt = deps.now().toISOString();
   let detail: Record<string, unknown> = {};
   let failure: unknown;
   try {
     switch (command) {
+      case "role-passwords": {
+        const env = homeEnv!;
+        // role → kept / set / rotated, filled as each role finishes, so a
+        // failure part-way still receipts what changed. Never a password (D61).
+        const roles: Partial<Record<PasswordRole, RoleOutcome>> = {};
+        detail = { roles };
+        const result = await deps.rolePasswords({
+          doadminUrl: doadminUrl!,
+          roles: passwordRoles,
+          rotate: rotateRoles,
+          lock: acquired.lock,
+          currentUrl: (role) => (env[role] ? urlForRole(env, role) : undefined),
+          urlWith: (role, password) => urlForRole({ ...env, [role]: password }, role)!,
+          persist: (role, password, retire) => {
+            const written = writeEnvSecret(deps.homeEnvPath, role, password, { retire, now: deps.now() });
+            if (written.retiredFile) deps.log(`the old ${role} line is kept in ${written.retiredFile} (mode 0600)`);
+          },
+          report: (role, outcome) => {
+            roles[role] = outcome;
+            deps.log(`${role}: ${outcome}`);
+          },
+        });
+        detail = { roles: result.roles, ownerLoginBefore: result.ownerLoginBefore };
+        break;
+      }
       case "set-identity": {
         const result = await deps.setIdentity({
           ownerUrl: ownerUrl!,
+          expected,
           rmEnv: policy,
           confirmed: true,
           note: `bun scripts/prod-init.ts set-identity by ${operatorName()}@${hostname()}`,
@@ -323,7 +475,9 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
       }
     }
   } catch (error) {
-    failure = error;
+    // Neither privileged password may leave in a receipt or a message (D61),
+    // whatever a driver put in its error.
+    failure = new Error(scrubSecrets(error instanceof Error ? error.message : String(error), { ...homeEnv, doadmin: doadminPassword ?? "" }));
   } finally {
     await acquired.release();
   }
@@ -380,6 +534,19 @@ function twinReaderUrl(paths: InstancePaths): string | undefined {
   return url.toString();
 }
 
+/** Replace the `~/.env` role and doadmin passwords, raw or URL-encoded, with `***`. */
+function scrubSecrets(text: string, homeEnv: Record<string, string> | undefined): string {
+  let out = text;
+  for (const key of ["rm_owner", "doadmin", "rm_app", "rm_worker", "rm_readonly"] as const) {
+    const secret = homeEnv?.[key];
+    if (!secret) continue;
+    out = out.split(secret).join("***");
+    const encoded = encodeURIComponent(secret);
+    if (encoded !== secret) out = out.split(encoded).join("***");
+  }
+  return out;
+}
+
 function operatorName(): string {
   try {
     return userInfo().username;
@@ -388,27 +555,18 @@ function operatorName(): string {
   }
 }
 
-/** The real effects: the terminal, the target database, the admin API. */
+/** The real effects: `~/.env`, the target database, the admin API. No terminal. */
 export function realDeps(env: Record<string, string | undefined> = process.env): ProdInitDeps {
   const homeEnvPath = homeEnvFilePath();
   return {
     env,
     homeEnv: loadEnvFile(homeEnvPath),
     homeEnvPath,
+    readDoadmin: (argv) => readDoadminPassword(argv, process.stdin, process.stderr),
     stateRoot: resolveStateRoot(env),
-    isTerminal: process.stdin.isTTY === true,
-    async promptSecret(question) {
-      const { hiddenPrompt } = await import("./lib/smoke-external-migrate.ts");
-      return hiddenPrompt(question);
-    },
-    async promptLine(question) {
-      const { createInterface } = await import("node:readline/promises");
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      try {
-        return await rl.question(`${question}: `);
-      } finally {
-        rl.close();
-      }
+    async rolePasswords(options) {
+      const { rolePasswords } = await import("../backend/scripts/role-passwords.ts");
+      return rolePasswords(options);
     },
     async readTarget(readerUrl) {
       const { readTargetStateAt } = await import("../backend/src/db/target-lock.ts");
@@ -425,7 +583,7 @@ export function realDeps(env: Record<string, string | undefined> = process.env):
     },
     async provisionTokens(options) {
       // backend/src/config.ts validates at import: the read-only role, which
-      // can write nothing. The typed owner password stays in the URL it came in.
+      // can write nothing. The ~/.env owner password stays in the URL it came in.
       process.env.DATABASE_URL = options.readerUrl;
       process.env.WORKER_DATABASE_URL = options.readerUrl;
       process.env.RM_ENV = options.rmEnv;

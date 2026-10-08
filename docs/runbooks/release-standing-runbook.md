@@ -39,6 +39,9 @@ never silently drops one. It points here and then lists only what is new.
 | Target | `stage` (twin or stage host), `prod` (production, read-only unless stated), or `both` |
 | Status | `script` runs today. `manual` has steps but no assertion tool. `gap` has neither (issue named) |
 
+Every row runs through `bun run release:run` from the control machine (D61). A row whose tool
+needs a person at a host terminal is a `gap`.
+
 Exit rule for every row: a WARN is not a pass. A check with nothing to assert is
 unverified, not satisfied.
 
@@ -47,12 +50,13 @@ unverified, not satisfied.
 | ID | Check | Tool | Target | Status |
 |---|---|---|---|---|
 | SP.1 | Position: which release, which commit, which phase | `bun smoke:status` and the release runbook's section 1 | both | script |
-| SP.2 | Backup taken and **restore proven** into a fresh local database, with the restore time recorded | release runbook R2 and the twin restore | both | manual |
+| SP.2 | Backup taken and **restore proven** into a fresh local database, with the restore time recorded | `bun run release:run` R2.1, R2.2 and R2.4r (`scripts/release/restore-proof.ts`) | both | script |
 | SP.3 | Production's real migration ledger read from the replica and equal to the shipped baseline | `rm_readonly` query, per release runbook | prod | manual |
 | SP.4 | Smoke preflight: 1 role auth, 2 privileges, 3a manifest, 3b compat, 4 `~/.env` keys, 5 identity, 6 subject scheduling columns | `bun smoke` (runs at boot) | both | script |
 | SP.5 | Log baseline: what is already broken, triaged before the cutover | `bun run prod:gate --mode baseline` | prod | script |
 | SP.6 | Product baseline: row counts, published AUM, database size, recorded for the postflight comparison | release runbook R2.4 | prod | manual |
 | SP.7 | Code gate on the RC commit: root and backend typecheck and unit, as CI runs them | release runbook R1 | stage | script |
+| SP.8 | Production runs only what stage passed: a stage run journal with the same step-list hash, at the same commit, with every step ok (D61 rule 2) | `bun run release:run --target prod --stage-journal <dir>` ([`release-run.md`](./release-run.md)) | prod | script |
 
 ## 4. Phase R — stage rehearsal (policy 4.4 and 4.5)
 
@@ -65,7 +69,7 @@ never rewritten (owner 2026-10-07): when the session needs a new base, cut a new
 
 | ID | Check | Tool | Target | Status |
 |---|---|---|---|---|
-| SR.0 | A production dump captured for this run (policy 4.3 fresh dump rule): unless the operator names one, never a dump already on the host; a reused copy only for rapid turnaround and at most 24 hours old | `bun smoke:capture --out <new dir>` | capture host | script |
+| SR.0 | The stage target's starting dump (policy 4.3): by default the newest production dump already on the capture host, if it is under 24 hours old; capture a new one only when none is. Production's own backup (R2.1) is always captured new, right before the cutover (owner, 2026-10-08) | `bun smoke:capture --out <new dir>` | capture host | script |
 | SR.1 | The SR.0 dump boots to READY on the RC commit as a twin (`--local dump`, never the remote database), every active member seated on a **spoofed** key and running as its own participant container (agents and the judge) | `bun smoke --local dump --spoof-keys --credentials <file listing every active member>` | stage | script |
 | SR.9 | **Accelerated schedule.** After the checks that need production's epochs (the restored grid), the twin's subjects get short epochs through the admin API, its open windows are pulled in, and the scheduler rebuilds its timers. Every check that needs sessions to publish (SR.4, the SR.7 window, the judge) runs after it. Re-run it after every fresh boot | `bun run twin:accelerate --instance NAME [--epoch 900]` | stage | script |
 | SR.2 | Readiness: api, pipeline worker, analytics-producer, scheduler | `bun smoke:status` | stage | script |
@@ -74,23 +78,25 @@ never rewritten (owner 2026-10-07): when the session needs a new base, cut a new
 | SR.5 | Interruption at a phase boundary resumes, before and after replace | release runbook R3.6 | stage | manual |
 | SR.6 | Rollback rehearsal: restore time recorded, and the old code's behavior against the new schema recorded | release runbook R3.9 | stage | manual |
 | SR.7 | Cumulative standing invariants (the 0.5.x R8 list, section 7) | `bun run soak:checks --instance NAME --since T0 --full` (`--record` once at READY) | stage | script |
+| SR.10 | Cutover rehearsal: the production step list runs unmodified and unattended against the production-shaped stage target (D61), once, from a dump under 24 hours old (SR.0) (the standing rule since 2026-10-08; a release runbook may ask for more) | `bun run release:run --target stage` | stage | gap, issue agent-executed runbooks (1225) |
 | SR.8 | Rehearsal report: RC SHA, dump identity, plan id, receipts, results, what could not be covered, operator go/no-go | policy 4.5 | stage | manual |
 
 ## 5. Phase C, V, W — cutover, verification, watch
 
 | ID | Check | Tool | Target | Status |
 |---|---|---|---|---|
-| SC.1 | Recovery matrix decided and signed before the cutover | policy 4.8 | prod | manual |
-| SC.2 | Every irreversible step authorized by the operator, one at a time | release runbook | prod | manual |
+| SC.1 | Recovery matrix decided and signed before the cutover | the go file's required `recovery` key, read and hashed by `bun run release:run` | prod | script |
+| SC.2 | retired 2026-10-08: no human in the loop; the operator's authority is one recorded go (SC.3), decided by the owner, D61, issue agent-executed runbooks (1225) | — | — | — |
+| SC.3 | The operator's go for the run is recorded: release, commit and target, given before the run | `bun run release:run --go <file>` refuses without it ([`release-run.md`](./release-run.md)) | prod | script |
 | SV.1 | Identity: `/api/version` equals the RC's `{api, commit}` | `curl` per release runbook | prod | manual |
 | SV.2 | `bun smoke:status` receipt: preflight green, readiness green | `bun smoke:status` | prod | script |
 | SV.3 | Product verification, **readonly tier only** | `bun run verify:live --instance rm_prod` | prod | script |
 | SV.4 | Log verdict after the release: what the release was meant to fix is fixed, nothing new is unclassified | `bun run prod:gate --mode post-release` | prod | script |
 | SV.5 | Row counts only grow, AUM did not step, the ledger did not balloon | release runbook R7.5 | prod | manual |
-| SV.6 | No container mounts a Docker socket, `~/.env` holds only allowed keys, token files are mode 0600 | `docker inspect`, per release runbook | prod | manual |
-| SW.1 | Watch one full session cycle: every subject opens, agents submit, the judge submits, consensus publishes or reads `no_consensus` | release runbook | prod | manual |
+| SV.6 | No container mounts a Docker socket, `~/.env` holds only allowed keys (D61 adds `rm_owner`; a `doadmin` line is not allowed, amendment 2026-10-08), no container's environment holds `rm_owner` or `doadmin`, token files are mode 0600 | `scripts/release/host-guards.ts` | prod | gap, issue agent-executed runbooks (1225) |
+| SW.1 | Watch until every subject publishes once: every subject opens, agents submit, the judge submits, consensus publishes or reads `no_consensus` | `bun run release:run` W1 (`prod:gate --mode post-release` since READY) and R7.4a (`scripts/release/schedule-parity.ts`), not before READY + the target's `watchHours` (10 h: the longest first epoch, 1.5 × 6 h, plus judging and publish grace; `scripts/release/watch.ts`), sessions graded. A stage target may watch shorter only with `watchSessions: deferred`, which does not satisfy this row | prod | script |
 | SW.2 | Cumulative standing invariants over the soak window (section 7) | `bun run soak:checks --instance rm_prod --since T0 --full` (`--record` once at READY) | prod | script |
-| SW.3 | Tag the running commit and file the production report | policy 4.9 | prod | manual |
+| SW.3 | Tag the running commit and file the production report | `bun run release:run` W3 tags the commit; the report is policy 4.9 | prod | manual |
 
 ## 6. Changing this file
 

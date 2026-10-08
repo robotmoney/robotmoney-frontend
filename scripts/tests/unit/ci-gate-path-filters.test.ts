@@ -274,7 +274,9 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
   // directory under scripts/ and scripts/tests/ must either match a pattern in
   // integration's filter or be named here as deliberately skipped.
   test("every scripts/ and scripts/tests/ directory is selected by integration or deliberately skipped", () => {
-    const SKIPPED_BY_INTEGRATION = new Set(["scripts/tests/unit"]);
+    // scripts/release: the release runner (D61) runs on the control machine over ssh;
+    // its logic is unit-tested (release-run.test.ts) and no integration suite boots it.
+    const SKIPPED_BY_INTEGRATION = new Set(["scripts/tests/unit", "scripts/release"]);
     const patterns = patternsFor("integration.yml");
     const dirs = [
       ...readdirSync(join(repoRoot, "scripts"), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => `scripts/${d.name}`),

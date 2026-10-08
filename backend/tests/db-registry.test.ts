@@ -25,7 +25,26 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import ts from "typescript";
-import { OBJECTLESS_SHAPES, registeredSites, type QueryDeclaration, type RmRole } from "../src/db/registry.ts";
+import {
+  OBJECTLESS_SHAPES,
+  PROVISIONING_CALLER,
+  PROVISIONING_SHAPES,
+  VERIFIER_SLOT_SHAPES,
+  registeredSites,
+  type QueryDeclaration,
+  type RmRole,
+} from "../src/db/registry.ts";
+
+/** THE PROVISIONING LIST (D61): the only statements doadmin may issue. Widening
+ *  it is an edit here AND in src/db/registry.ts, in the same change. */
+const PINNED_PROVISIONING_SHAPES: Readonly<Record<string, string>> = {
+  rolesLoginState: "SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname IN ('rm_owner', 'rm_app', 'rm_worker', 'rm_readonly') ORDER BY rolname",
+  ownerLoginEnable: "ALTER ROLE rm_owner LOGIN",
+  ownerPasswordSet: "ALTER ROLE rm_owner WITH LOGIN PASSWORD $1",
+  appPasswordSet: "ALTER ROLE rm_app WITH PASSWORD $1",
+  workerPasswordSet: "ALTER ROLE rm_worker WITH PASSWORD $1",
+  readonlyPasswordSet: "ALTER ROLE rm_readonly WITH PASSWORD $1",
+};
 
 /** The four roles of spec §3. There is no `rm_migrator` (D46/D47) and `doadmin`
  *  is cluster provisioning only (§3, §9.1), so neither may ever appear. */
@@ -986,7 +1005,7 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
             calls.push({
               where: `${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`,
               text: literal.replace(/\s+/g, " ").trim(),
-              expected: shapeName === undefined ? undefined : (OBJECTLESS_SHAPES as Record<string, string>)[shapeName],
+              expected: shapeName === undefined ? undefined : ({ ...OBJECTLESS_SHAPES, ...PROVISIONING_SHAPES } as Record<string, string>)[shapeName],
             });
           }
           ts.forEachChild(node, (child) => visit(child, ts.isFunctionLike(node) ? depth + 1 : depth));
@@ -1002,7 +1021,11 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
     // Non-vacuous: the kind is in use, so a rewrite that drops it fails here.
     expect(registrations.length).toBeGreaterThan(0);
     expect(registrations.filter((r) => r.nested).map((r) => r.file)).toEqual([]);
-    expect(registrations.filter((r) => r.shape === undefined || !(r.shape in PINNED_SHAPES)).map((r) => r.file)).toEqual([]);
+    expect(
+      registrations
+        .filter((r) => r.shape === undefined || !(r.shape in PINNED_SHAPES || r.shape in PINNED_PROVISIONING_SHAPES))
+        .map((r) => r.file),
+    ).toEqual([]);
   });
 
   test("every onStatement template equals the shape of the site it runs, read from source", () => {
@@ -1012,7 +1035,9 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
     expect(calls.filter((c) => c.expected !== undefined && c.text !== c.expected).map((c) => `${c.where}: ${c.text}`)).toEqual([]);
   });
 
-  test("every object-less declaration names a §3 role and entry modules that exist", () => {
+  /** Every object-less declaration a child process holds after importing each
+   *  module that registers one, and nothing else. */
+  function enumerateStatements(): { role: string; shape: string; site: string; callers: string[] }[] {
     const modules = [...new Set(usage().registrations.map((r) => r.file.replace(/\.ts$/, "")))];
     const script = join(mkdtempSync(join(tmpdir(), "rm-registry-stmt-")), "enumerate.ts");
     writeFileSync(script, [
@@ -1024,17 +1049,102 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
       const child = Bun.spawnSync(["bun", "run", script], { env: process.env });
       const line = child.stdout.toString().split("\n").find((l) => l.startsWith("RM_REGISTRY_STATEMENTS "));
       if (child.exitCode !== 0 || !line) throw new Error(`statement enumeration child failed:\n${child.stderr.toString()}`);
-      const statements = JSON.parse(line.slice("RM_REGISTRY_STATEMENTS ".length)) as {
-        role: RmRole; shape: string; site: string; callers: string[];
-      }[];
-      expect(statements.length).toBeGreaterThan(0);
-      const bad: string[] = [];
-      for (const s of statements) {
-        if (!TAXONOMY_ROLES.includes(s.role)) bad.push(`${s.site}: role ${s.role}`);
+      return JSON.parse(line.slice("RM_REGISTRY_STATEMENTS ".length)) as { role: string; shape: string; site: string; callers: string[] }[];
+    } finally {
+      rmSync(dirname(script), { recursive: true, force: true });
+    }
+  }
+
+  test("every object-less declaration names a §3 role (or doadmin on a provisioning shape) and entry modules that exist", () => {
+    const statements = enumerateStatements();
+    expect(statements.length).toBeGreaterThan(0);
+    const bad: string[] = [];
+    for (const s of statements) {
+      if (s.role === "doadmin") {
+        if (!(s.shape in PINNED_PROVISIONING_SHAPES)) bad.push(`${s.site}: doadmin on shape ${s.shape}`);
+      } else {
+        if (!TAXONOMY_ROLES.includes(s.role as RmRole)) bad.push(`${s.site}: role ${s.role}`);
         if (!(s.shape in PINNED_SHAPES)) bad.push(`${s.site}: shape ${s.shape}`);
-        for (const caller of s.callers) if (!existsSync(join(BACKEND, `${caller}.ts`))) bad.push(`${s.site}: caller ${caller} is not a module`);
       }
-      expect(bad).toEqual([]);
+      for (const caller of s.callers) if (!existsSync(join(BACKEND, `${caller}.ts`))) bad.push(`${s.site}: caller ${caller} is not a module`);
+    }
+    expect(bad).toEqual([]);
+  });
+});
+
+// D61, as it amends smoke-production-spec §3: "`doadmin` is used by one
+// command only, `prod-init role-passwords`." The registry admits doadmin
+// for the closed PROVISIONING_SHAPES list from scripts/role-passwords only
+// (src/db/registry.ts). These tests pin that from three sides: the list, the
+// registry's refusals, and the source and enumeration of every module.
+describe("doadmin is used by one command only (D61) — the provisioning shapes", () => {
+  const BACKEND = join(import.meta.dir, "..");
+
+  test("the provisioning list equals the pinned list exactly, and shares no name with the object-less list", () => {
+    expect({ ...PROVISIONING_SHAPES } as Record<string, string>).toEqual({ ...PINNED_PROVISIONING_SHAPES });
+    expect(Object.isFrozen(PROVISIONING_SHAPES)).toBe(true);
+    expect(PROVISIONING_CALLER).toBe("scripts/role-passwords");
+    for (const name of Object.keys(PROVISIONING_SHAPES)) expect(name in OBJECTLESS_SHAPES, name).toBe(false);
+  });
+
+  test("the catalog read touches pg_roles alone, and the DDL touches rm_owner alone with no password clause", () => {
+    expect(/\bfrom\s+(\w+)/i.exec(PROVISIONING_SHAPES.rolesLoginState)?.[1]).toBe("pg_roles");
+    expect(/\b(join|into|update|delete|insert|truncate)\b/i.test(PROVISIONING_SHAPES.rolesLoginState)).toBe(false);
+    expect(PROVISIONING_SHAPES.ownerLoginEnable).toBe("ALTER ROLE rm_owner LOGIN");
+    expect(PROVISIONING_SHAPES.ownerLoginEnable).not.toMatch(/password/i);
+  });
+
+  test("each password DDL names one fixed §3 role, has exactly one slot, and only rm_owner's adds an attribute (LOGIN)", () => {
+    expect([...VERIFIER_SLOT_SHAPES]).toEqual(["ownerPasswordSet", "appPasswordSet", "workerPasswordSet", "readonlyPasswordSet"]);
+    expect(Object.isFrozen(VERIFIER_SLOT_SHAPES)).toBe(true);
+    for (const name of VERIFIER_SLOT_SHAPES) {
+      const text = PROVISIONING_SHAPES[name];
+      expect([...text.matchAll(/\$\d+/g)].map((m) => m[0]), name).toEqual(["$1"]);
+      expect(text, name).toMatch(/^ALTER ROLE rm_(owner|app|worker|readonly) WITH (LOGIN )?PASSWORD \$1$/);
+      expect(text, name).not.toMatch(/SUPERUSER|CREATEROLE|CREATEDB|REPLICATION|BYPASSRLS|INHERIT/);
+      if (name !== "ownerPasswordSet") expect(text, name).not.toMatch(/LOGIN/);
+    }
+    // Every other provisioning shape is a fixed text with no slot.
+    for (const [name, text] of Object.entries(PROVISIONING_SHAPES)) {
+      if (!(VERIFIER_SLOT_SHAPES as readonly string[]).includes(name)) expect(text, name).not.toMatch(/\$\d/);
+    }
+  });
+
+  test("no module but scripts/role-passwords names doadmin as a role, read from source", () => {
+    const declaring: string[] = [];
+    for (const root of ["src", "scripts"]) {
+      const files = (readdirSync(join(BACKEND, root), { recursive: true, encoding: "utf8" }) as string[]).filter((f) => f.endsWith(".ts"));
+      for (const rel of files) {
+        const file = join(root, rel);
+        if (file === join("src", "db", "registry.ts")) continue;
+        if (/\brole\s*:\s*["'`]doadmin["'`]/.test(readFileSync(join(BACKEND, file), "utf8"))) declaring.push(file);
+      }
+    }
+    expect(declaring).toEqual([join("scripts", "role-passwords.ts")]);
+    // enable-owner-login is absorbed: its module is gone.
+    expect(existsSync(join(BACKEND, "scripts", "enable-owner-login.ts"))).toBe(false);
+  });
+
+  test("the doadmin declarations a process holds are exactly the six role-passwords sites", () => {
+    const script = join(mkdtempSync(join(tmpdir(), "rm-registry-doadmin-")), "enumerate.ts");
+    writeFileSync(script, [
+      `await import(${JSON.stringify(join(BACKEND, "scripts", "role-passwords.ts"))});`,
+      `const { registeredStatements } = await import(${JSON.stringify(join(BACKEND, "src", "db", "registry.ts"))});`,
+      `console.log("RM_REGISTRY_STATEMENTS " + JSON.stringify(registeredStatements()));`,
+    ].join("\n"));
+    try {
+      const child = Bun.spawnSync(["bun", "run", script], { env: process.env });
+      const line = child.stdout.toString().split("\n").find((l) => l.startsWith("RM_REGISTRY_STATEMENTS "));
+      if (child.exitCode !== 0 || !line) throw new Error(`doadmin enumeration child failed:\n${child.stderr.toString()}`);
+      const statements = JSON.parse(line.slice("RM_REGISTRY_STATEMENTS ".length)) as { role: string; shape: string; site: string; callers: string[] }[];
+      expect(statements.filter((s) => s.role === "doadmin").map((s) => [s.site, s.shape, s.callers])).toEqual([
+        ["scripts/role-passwords:readLoginState", "rolesLoginState", ["scripts/role-passwords"]],
+        ["scripts/role-passwords:enableOwnerLogin", "ownerLoginEnable", ["scripts/role-passwords"]],
+        ["scripts/role-passwords:setOwnerPassword", "ownerPasswordSet", ["scripts/role-passwords"]],
+        ["scripts/role-passwords:setAppPassword", "appPasswordSet", ["scripts/role-passwords"]],
+        ["scripts/role-passwords:setWorkerPassword", "workerPasswordSet", ["scripts/role-passwords"]],
+        ["scripts/role-passwords:setReadonlyPassword", "readonlyPasswordSet", ["scripts/role-passwords"]],
+      ]);
     } finally {
       rmSync(dirname(script), { recursive: true, force: true });
     }

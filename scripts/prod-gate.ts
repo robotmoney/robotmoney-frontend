@@ -75,9 +75,16 @@ export interface ProdGateArgs {
 
 export function parseProdGateArgs(argv: readonly string[]): ProdGateArgs | { error: string } {
   const out: ProdGateArgs = { mode: "baseline", windowHours: 24, deferSessions: false, minSessions: 1, minAttendance: 0.5, stuckAfterMin: 780, release: "v0.6.0", livenessHours: 12 };
+  // `--sessions graded|deferred` is the value form of `--defer-sessions`: the
+  // release run renders it from target data (`watchSessions`), so one step
+  // template grades on production and defers on stage (D61 rule 2).
+  let sessionsFlag: "graded" | "deferred" | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
-    if (a === "--defer-sessions") { out.deferSessions = true; continue; }
+    if (a === "--defer-sessions") {
+      if (sessionsFlag === "graded") return { error: "--defer-sessions contradicts --sessions graded." };
+      out.deferSessions = true; sessionsFlag = "deferred"; continue;
+    }
     const v = argv[i + 1];
     if (v === undefined || v.startsWith("--")) return { error: `${a} requires a value.` };
     const num = Number(v);
@@ -113,6 +120,12 @@ export function parseProdGateArgs(argv: readonly string[]): ProdGateArgs | { err
         break;
       case "--release":
         out.release = v;
+        break;
+      case "--sessions":
+        if (v !== "graded" && v !== "deferred") return { error: `--sessions is graded or deferred, got "${v}".` };
+        if (sessionsFlag !== undefined && sessionsFlag !== v) return { error: `--sessions ${v} contradicts an earlier sessions flag.` };
+        sessionsFlag = v;
+        out.deferSessions = v === "deferred";
         break;
       default:
         return { error: `unknown argument "${a}".` };
@@ -164,7 +177,7 @@ async function main(): Promise<number> {
   const args = parseProdGateArgs(process.argv.slice(2));
   if ("error" in args) {
     console.error(`[${NAME}] ${args.error}`);
-    console.error(`[${NAME}] usage: bun run prod:gate --mode baseline|post-release --db-capacity-gb N [--instance NAME] [--since ISO] [--defer-sessions] [--window-hours H] [--report FILE.md] [--min-sessions N] [--min-attendance 0..1] [--stuck-after MIN] [--release VERSION]`);
+    console.error(`[${NAME}] usage: bun run prod:gate --mode baseline|post-release --db-capacity-gb N [--instance NAME] [--since ISO] [--defer-sessions | --sessions graded|deferred] [--window-hours H] [--report FILE.md] [--min-sessions N] [--min-attendance 0..1] [--stuck-after MIN] [--release VERSION]`);
     return 2;
   }
   let stack;
