@@ -150,13 +150,13 @@ test("the worker sends the price read to the Pro host with the paid key, and the
     expect(c.url.startsWith("https://pro-api.coingecko.com/api/v3/onchain/")).toBe(true);
     expect(c.key).toBe("test-paid-key");
   }
-  // The pool endpoints are not in our plan (gecko-endpoint.ts PRO_CALLS): the
-  // keyless host, and never with the key.
+  // The pool endpoints are in our plan too (gecko-endpoint.ts PRO_CALLS): the
+  // Pro host, with the key.
   const poolCalls = seen.filter((s) => s.url.includes("/pools/"));
   expect(poolCalls.length).toBe(2);
   for (const c of poolCalls) {
-    expect(c.url.startsWith("https://api.geckoterminal.com/api/v2/")).toBe(true);
-    expect(c.key).toBeNull();
+    expect(c.url.startsWith("https://pro-api.coingecko.com/api/v3/onchain/")).toBe(true);
+    expect(c.key).toBe("test-paid-key");
   }
 
   const [row] = await fixtureDb<{ price_usd: string; weth_usd: string; liquidity_usd: string; volume_30d_usd: string }[]>`

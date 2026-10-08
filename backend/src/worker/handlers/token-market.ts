@@ -13,9 +13,9 @@
 // wallet.sample_balances tick (worker/handlers/index.ts), right after the wallet
 // sampler, so the two price reads are usually answered by the 30-second price
 // cache that sampler just filled (chain/token-prices.ts): no extra upstream
-// call. With the key set, token_price goes to the Pro host (chain/gecko-endpoint.ts
-// PRO_CALLS). The pool reading (`pool` and `ohlcv`) is not in our plan, so it
-// stays on the keyless host; it is read at most once every POOL_INTERVAL_MS,
+// call. With the key set, token_price and the pool reading (`pool` and `ohlcv`)
+// go to the Pro host (chain/gecko-endpoint.ts PRO_CALLS); a 401/403 there falls
+// back to the keyless host. The pool reading is read at most once every POOL_INTERVAL_MS,
 // whatever the outcome, so a run of 429s costs a handful of calls an hour, never
 // one per tick.
 //

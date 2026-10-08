@@ -45,12 +45,13 @@ test("a blank or whitespace key is no key", () => {
   }
 });
 
-test("with a key, the calls the Basic plan includes go to the Pro host; OHLCV, which it does not, stays free", () => {
-  expect([...PRO_CALLS].map(String).sort()).toEqual(["new_pools", "token_pools", "token_price"]);
+test("with a key, every call goes to the Pro host (the plan covers the pool reading and OHLCV, verified 2026-10-08)", () => {
+  expect([...PRO_CALLS].map(String).sort()).toEqual(["new_pools", "ohlcv", "pool", "token_pools", "token_price"]);
   expect(geckoUrl("new_pools", "/networks/new_pools?page=2", { key: KEY, log: quiet })).toBe(`${PRO}/networks/new_pools?page=2`);
   expect(geckoUrl("token_pools", "/networks/base/tokens/0xabc/pools", { key: KEY, log: quiet })).toBe(`${PRO}/networks/base/tokens/0xabc/pools`);
   expect(geckoUrl("token_price", "/simple/networks/base/token_price/0xabc", { key: KEY, log: quiet })).toBe(`${PRO}/simple/networks/base/token_price/0xabc`);
-  expect(geckoUrl("ohlcv", "/networks/base/pools/0xp/ohlcv/day?limit=1", { key: KEY, log: quiet })).toBe(`${FREE}/networks/base/pools/0xp/ohlcv/day?limit=1`);
+  expect(geckoUrl("ohlcv", "/networks/base/pools/0xp/ohlcv/day?limit=1", { key: KEY, log: quiet })).toBe(`${PRO}/networks/base/pools/0xp/ohlcv/day?limit=1`);
+  expect(geckoUrl("pool", "/networks/base/pools/0xp", { key: KEY, log: quiet })).toBe(`${PRO}/networks/base/pools/0xp`);
 });
 
 test("the key header is sent to a Pro URL and to no other URL", () => {
