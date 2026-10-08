@@ -232,6 +232,7 @@ describe("v0.5.1 applies 0061 and 0063; 0062 was recorded before it", () => {
     "0112_rm_app_overwrite_events_read.sql",
     "0113_rm_worker_buyback_indexer_grants.sql",
     "0114_seat_in_flight_unrostered_sessions.sql",
+    "0115_token_market_samples.sql",
   ];
 
   test("the job ledger 0088 created is dropped by a later file, never by deleting 0088 (criterion 105)", () => {

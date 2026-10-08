@@ -53,7 +53,9 @@ DECLARE
   -- buyback_scan_state (B11, issue #1150, 2026-10-05): the buybacks job
   -- handler runs the indexer on the worker's pool, and its cursor upsert is an
   -- INSERT ... ON CONFLICT DO UPDATE.
-  worker_insert_update text[] := ARRAY['asset_price_floors', 'asset_prices', 'buyback_scan_state'];
+  -- token_market_samples (0115, 2026-10-08): the token page's market reading,
+  -- upserted by the wallet.sample_balances tick (worker/handlers/token-market.ts).
+  worker_insert_update text[] := ARRAY['asset_price_floors', 'asset_prices', 'buyback_scan_state', 'token_market_samples'];
   -- The wallet repair pass's immutable evidence (0037): it copies a day's
   -- samples here before rewriting the day, so it INSERTs, and 0037's guard
   -- refuses every UPDATE. Granted by 0109; 0054's allowlist had left it out,

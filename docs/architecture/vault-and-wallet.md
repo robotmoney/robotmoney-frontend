@@ -142,6 +142,16 @@ hardcoded in `alpine/views.js`.
   chain SDK, same buildless-dependency discipline as §10's vault-economics
   client. A 30s in-process cache on the **sampler** keeps back-to-back worker
   runs cheap; it plays no part in serving requests.
+- **The token page's market reading rides the same tick** (v0.6.0 release
+  finding, 2026-10-08). After the wallet sample, the job runs
+  `sampleTokenMarket()` (`backend/src/worker/handlers/token-market.ts`): it
+  reads ROBOTMONEY's and WETH's prices (from the 30s cache the wallet sample
+  just filled, else one batched `token_price` call on the Pro host when
+  `COINGECKO_API_KEY` is set) and, at most every ten minutes, the token pool's
+  liquidity and volume (keyless host). It upserts them into
+  `token_market_samples` (migration 0115). `GET /api/dashboards/token-metrics`
+  reads that row and calls no Gecko host, since the api holds no key (runbook
+  R8.w). See [dashboards-live-data.md §2](dashboards-live-data.md).
 - **Per-holding degrade, batched reads.** All on-chain amounts of a sample are
   fetched in at most **two `multicall3Aggregate3()` batches** (one
   `balanceOf`/`getEthBalance` sub-call per asset × wallet, then one

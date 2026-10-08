@@ -2,8 +2,8 @@
 // contract §2). Replaces the baked price/supply/marketCap + fee-split numbers in
 // the frontend allocation view.
 //
-// - priceUsd: keyless GeckoTerminal spot via token-prices.ts (the same vendor +
-//   hermetic-stub path as wallet-balances), pinned per priceKind.
+// - priceUsd: the worker's last GeckoTerminal reading, from Postgres
+//   (token_market_samples, migration 0115). See "No GeckoTerminal call" below.
 // - totalSupply: ERC-20 totalSupply() via base-rpc-client callTotalSupply (18dp),
 //   EXCEPT under a hermetic 'stub' source where — mirroring token-prices.ts's
 //   STUB_PRICES — a deterministic fixture supply is served instead of routing to
@@ -17,10 +17,20 @@
 //   fees are paid in, valued at today's prices; the last 30 days are an
 //   estimate, the pool's 30-day volume × its swap fee × the protocol's share.
 // - market (RM-156): the pool's liquidity and 24h volume, as GeckoTerminal
-//   reads it, cached ten minutes.
+//   reads it, from the same Postgres row.
 // - feeSplit: the FIXED beneficiary shares of the token's Doppler pool (Protocol
 //   57 / Bankr 36.1 / Doppler 5 / Ecosystem 1.9) — static/managed, not a chain
 //   read; kept in the DTO so the frontend stops baking it.
+//
+// No GeckoTerminal call on the request path (v0.6.0 release finding,
+// 2026-10-08). The api holds no CoinGecko key (runbook R8.w), so a read from
+// here went to the keyless, rate-limited host and failed on HTTP 429. The
+// worker, which holds the key, reads ROBOTMONEY's price, WETH's price and the
+// pool on the wallet.sample_balances tick and upserts them into
+// token_market_samples (worker/handlers/token-market.ts). This module reads
+// that one row. A leg the worker has never read, or last read longer ago than
+// its MAX_AGE, is null + stale:true here, as a failed live read was before.
+// Supply and fee income are Base RPC reads and stay on the request path.
 //
 // Honesty (#50): a failed supply or price leg degrades that field to null +
 // stale:true — never a fabricated price. 'stub' payloads are never labelled live.
@@ -29,13 +39,14 @@ import {
   resolveBaseRpcSource,
   resolvePriceSource,
   resolveTrackedAssets,
-  ROBOTMONEY_DOPPLER,
   type BaseRpcSource,
 } from "../config.ts";
 import { callTotalSupply, type RpcCallOptions } from "./base-rpc-client.ts";
 import { readTokenFeeIncome, type TokenFeeIncomeRead } from "./token-fee-income.ts";
-import { fetchAssetPriceUsd, fetchGeckoPoolStatsUsd, type GeckoPoolStats } from "./token-prices.ts";
+import { fetchAssetPriceUsd, type GeckoPoolStats } from "./token-prices.ts";
 import { ttlCached } from "./ttl-cache.ts";
+import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 
 const WEI_18 = 1e18;
 
@@ -54,11 +65,68 @@ const STUB_FEE_INCOME: TokenFeeIncomeRead = {
 };
 const STUB_POOL: GeckoPoolStats = { liquidityUsd: 150_000, volume24hUsd: 4_000, volume30dUsd: 120_000 };
 
-// The pool's market moves slowly, and GeckoTerminal's keyless tier is shared
-// with every price read: ten minutes keeps this to a handful of calls an hour.
-// A failed read is not cached (ttlCached), so the next request tries again.
-const POOL_TTL_MS = 10 * 60_000;
-const readPoolStats = ttlCached(() => fetchGeckoPoolStatsUsd(ROBOTMONEY_DOPPLER.poolId), POOL_TTL_MS);
+// How old a worker reading may be and still be served. The prices are read
+// every minute and the pool every ten (worker/handlers/token-market.ts), so
+// these allow several missed reads before a leg goes null.
+export const PRICE_MAX_AGE_MS = 15 * 60_000;
+export const POOL_MAX_AGE_MS = 45 * 60_000;
+
+const MARKET_TOKEN = "ROBOTMONEY";
+
+const readMarketRow = registerQuery({
+  role: "rm_app",
+  object: "token_market_samples",
+  privileges: ["SELECT"],
+  site: "src/chain/token-metrics:readTokenMarket",
+  purpose: "Read the worker's last market reading for the token page (prices and pool), with each leg's age.",
+  callers: ["src/api/routes/dashboards", "src/projects/entities-projections"],
+  probe: {
+    statement: `SELECT price_usd, weth_usd, liquidity_usd, volume_24h_usd, volume_30d_usd,
+        (price_at > now() - $2::bigint * interval '1 millisecond') AS price_fresh,
+        (weth_at > now() - $2::bigint * interval '1 millisecond') AS weth_fresh,
+        (pool_at > now() - $3::bigint * interval '1 millisecond') AS pool_fresh
+      FROM token_market_samples WHERE token = $1`,
+    params: [MARKET_TOKEN, PRICE_MAX_AGE_MS, POOL_MAX_AGE_MS],
+  },
+});
+
+export interface TokenMarketReading {
+  priceUsd: number | null;
+  wethUsd: number | null;
+  pool: GeckoPoolStats | null;
+}
+
+const numOrNull = (v: string | null): number | null => (v == null ? null : Number(v));
+
+// The worker's last reading, each leg null when absent or older than its bound.
+// The age is judged by Postgres's clock, the clock that stamped it. Throws only
+// when Postgres does; the caller degrades.
+export async function readTokenMarket(): Promise<TokenMarketReading> {
+  const [row] = await on(sql, readMarketRow)<{
+    price_usd: string | null;
+    weth_usd: string | null;
+    liquidity_usd: string | null;
+    volume_24h_usd: string | null;
+    volume_30d_usd: string | null;
+    price_fresh: boolean | null;
+    weth_fresh: boolean | null;
+    pool_fresh: boolean | null;
+  }>`
+    SELECT price_usd, weth_usd, liquidity_usd, volume_24h_usd, volume_30d_usd,
+        (price_at > now() - ${PRICE_MAX_AGE_MS}::bigint * interval '1 millisecond') AS price_fresh,
+        (weth_at > now() - ${PRICE_MAX_AGE_MS}::bigint * interval '1 millisecond') AS weth_fresh,
+        (pool_at > now() - ${POOL_MAX_AGE_MS}::bigint * interval '1 millisecond') AS pool_fresh
+      FROM token_market_samples WHERE token = ${MARKET_TOKEN}
+  `;
+  if (!row) return { priceUsd: null, wethUsd: null, pool: null };
+  return {
+    priceUsd: row.price_fresh ? numOrNull(row.price_usd) : null,
+    wethUsd: row.weth_fresh ? numOrNull(row.weth_usd) : null,
+    pool: row.pool_fresh
+      ? { liquidityUsd: numOrNull(row.liquidity_usd), volume24hUsd: numOrNull(row.volume_24h_usd), volume30dUsd: numOrNull(row.volume_30d_usd) }
+      : null,
+  };
+}
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
@@ -102,6 +170,16 @@ function rpcOpts(): RpcCallOptions {
 
 const CACHE_TTL_MS = 30_000;
 
+// The three GeckoTerminal-derived values. Under a stub price source they are
+// the hermetic fixtures (no network, no database); otherwise the worker's row.
+async function marketReading(stub: boolean): Promise<TokenMarketReading> {
+  if (!stub) return readTokenMarket();
+  const rm = resolveTrackedAssets().find((a) => a.symbol === "ROBOTMONEY");
+  const weth = resolveTrackedAssets().find((a) => a.symbol === "WETH");
+  if (!rm || !weth) throw new Error("token-metrics: ROBOTMONEY or WETH tracked asset not resolved");
+  return { priceUsd: await fetchAssetPriceUsd(rm, "stub"), wethUsd: await fetchAssetPriceUsd(weth, "stub"), pool: STUB_POOL };
+}
+
 async function computeTokenMetrics(): Promise<TokenMetrics> {
   const now = Date.now();
 
@@ -110,7 +188,6 @@ async function computeTokenMetrics(): Promise<TokenMetrics> {
   // marker must refuse loudly, never degrade into a payload claiming 'live'.
   const source = resolveBaseRpcSource();
   const priceSource = resolvePriceSource();
-  const rmAsset = resolveTrackedAssets().find((a) => a.symbol === "ROBOTMONEY");
 
   let stale = false;
 
@@ -129,16 +206,16 @@ async function computeTokenMetrics(): Promise<TokenMetrics> {
     }
   }
 
-  // Price leg. Reuses the shared keyless price path (pinned/stub/gecko).
-  let priceUsd: number | null;
+  // Price, WETH price and pool legs: one Postgres read (see file header).
+  let market: TokenMarketReading;
   try {
-    if (!rmAsset) throw new Error("token-metrics: ROBOTMONEY tracked asset not resolved");
-    priceUsd = await fetchAssetPriceUsd(rmAsset, priceSource);
+    market = await marketReading(priceSource === "stub");
   } catch (err) {
-    console.error("token-metrics: price read failed, degrading to null:", err);
-    priceUsd = null;
-    stale = true;
+    console.error("token-metrics: market reading failed, degrading prices and pool to null:", err);
+    market = { priceUsd: null, wethUsd: null, pool: null };
   }
+  const { priceUsd, pool } = market;
+  if (priceUsd == null || pool == null) stale = true;
 
   const marketCapUsd =
     priceUsd != null && totalSupply != null ? Math.round(priceUsd * totalSupply * 100) / 100 : null;
@@ -157,32 +234,9 @@ async function computeTokenMetrics(): Promise<TokenMetrics> {
     }
   }
 
-  // Pool leg: GeckoTerminal, on the price source like the price leg.
-  let pool: GeckoPoolStats | null;
-  if (priceSource === "stub") {
-    pool = STUB_POOL;
-  } else {
-    try {
-      pool = await readPoolStats();
-    } catch (err) {
-      console.error("token-metrics: pool read failed, degrading to null:", err);
-      pool = null;
-      stale = true;
-    }
-  }
-
-  // WETH's price values the WETH side of the fees; only read when there is one.
-  let wethUsd: number | null = null;
-  if (income) {
-    try {
-      const weth = resolveTrackedAssets().find((a) => a.symbol === "WETH");
-      if (!weth) throw new Error("token-metrics: WETH tracked asset not resolved");
-      wethUsd = await fetchAssetPriceUsd(weth, priceSource);
-    } catch (err) {
-      console.error("token-metrics: WETH price read failed, degrading the fees' USD value to null:", err);
-      stale = true;
-    }
-  }
+  // WETH's price values the WETH side of the fees; it only matters when there is one.
+  const wethUsd = income ? market.wethUsd : null;
+  if (income && wethUsd == null) stale = true;
 
   const lifetimeUsd =
     income && wethUsd != null && priceUsd != null
@@ -215,5 +269,4 @@ export const getTokenMetrics = ttlCached(computeTokenMetrics, CACHE_TTL_MS);
 
 export function _resetTokenMetricsCacheForTests(): void {
   getTokenMetrics._resetForTests();
-  readPoolStats._resetForTests();
 }

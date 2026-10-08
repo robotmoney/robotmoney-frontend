@@ -11,8 +11,8 @@
 // A 401 or 403 from the Pro host (a plan that lacks the endpoint, a revoked key) must not stop data: the caller falls
 // back to the free host for the same request, and this module remembers for ten minutes so the next calls do not each
 // pay a failed round trip. The key only ever lands in the request headers; nothing here logs or returns it.
-// `pool` is one pool's own reading (liquidity, volume), used by the token page (RM-156); like OHLCV it stays on the
-// free host until it is added to PRO_CALLS.
+// `pool` is one pool's own reading (liquidity, volume), used by the token page (RM-156) and read by the worker
+// (worker/handlers/token-market.ts), never the api; like OHLCV it stays on the free host until it is added to PRO_CALLS.
 export type GeckoCall = "new_pools" | "token_pools" | "token_price" | "ohlcv" | "pool";
 
 const FREE_BASE = "https://api.geckoterminal.com/api/v2";
