@@ -23,6 +23,6 @@
     "log": "/root/smoke-archive-v0.5.4.log",
     "version": "v0.5.4"
   },
-  "confirmTarget": "FILL-ME:host:port/database-from-the-host-env",
+  "confirmTarget": "private-dbaas-db-8115298-do-user-39489996-0.g.db.ondigitalocean.com:25060/defaultdb",
   "bootEnv": {}
 }
