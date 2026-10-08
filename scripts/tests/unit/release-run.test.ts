@@ -17,7 +17,7 @@
 // Nothing here opens an ssh connection: the runner's exec is injected.
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateGo } from "../../release/go.ts";
@@ -28,7 +28,7 @@ import { CONFIRM_TARGET_PLACEHOLDER, loadTarget, validateTarget } from "../../re
 import { parseArgs, receiptPathsInOutput, runRelease, type RunnerDeps } from "../../release/run.ts";
 import { partitionEnv } from "../../release/env-rewrite.ts";
 import { compareBaseline } from "../../release/compare-baseline.ts";
-import { exposesPostgresUrl, keysOutsideAllowlist, scanForPostgresUrls, socketMounts, tokenFileProblems } from "../../release/host-guards.ts";
+import { exposesPostgresUrl, keysOutsideAllowlist, othersCanTraverse, scanForPostgresUrls, socketMounts, tokenFileProblems } from "../../release/host-guards.ts";
 import { composeDownArgv, partitionLegacyEnv, retiredPath } from "../../release/stop-legacy.ts";
 import { nextRcTag, rcTagsAt } from "../../release/tag.ts";
 import { epochProblems, inFlightProblems, paritySweep, regimeCronProblems } from "../../release/schedule-parity.ts";
@@ -675,6 +675,21 @@ describe("legacy secret cleanup (S8.1) and the postgres URL guard (R7.7)", () =>
     const dir = mkdtempSync(join(tmpdir(), "release-scan-"));
     writeFileSync(join(dir, "open.env"), "U=postgres://a:b@h/d\n", { mode: 0o644 });
     writeFileSync(join(dir, "closed.env"), "U=postgres://a:b@h/d\n", { mode: 0o600 });
-    expect(scanForPostgresUrls([dir])).toEqual([join(dir, "open.env")]);
+    // red control: inside a 0700 directory even a 0644 file is not exposed.
+    chmodSync(dir, 0o700);
+    expect(scanForPostgresUrls([dir])).toEqual([]);
+    // Opened up, the world-readable file is found, if this machine's tmpdir is itself traversable by others.
+    chmodSync(dir, 0o755);
+    const tmpTraversable = tmpdir().split("/").reduce<{ p: string; ok: boolean }>((acc, part) => {
+      const p = part === "" ? "/" : join(acc.p, part);
+      return { p, ok: acc.ok && (statSync(p).mode & 0o001) !== 0 };
+    }, { p: "/", ok: true }).ok;
+    if (tmpTraversable) expect(scanForPostgresUrls([dir])).toEqual([join(dir, "open.env")]);
+  });
+  test("a path is exposed only when every directory above it lets others traverse it", () => {
+    expect(othersCanTraverse([0o40755, 0o41777, 0o40755])).toBe(true);
+    // red controls: a 0700 home (prod's /root) or a 0750 home (stage-2) hides everything below it.
+    expect(othersCanTraverse([0o40755, 0o40700, 0o40755])).toBe(false);
+    expect(othersCanTraverse([0o40755, 0o40750, 0o40755])).toBe(false);
   });
 });

@@ -15,7 +15,8 @@
 // retire (runbook section 8, after R6.3). Renames the old checkout to
 // `<dir>.<version>-retired`, so the old `bun run migrate` cannot run against
 // the migrated database (B13). Already renamed is recorded, not refused.
-// Then it moves the retired checkout's `.env` secret lines (database URLs with
+// Then it removes group and world access from the whole retired checkout, and
+// moves the retired checkout's `.env` secret lines (database URLs with
 // a password, model and admin keys) to `$HOME/.env.legacy-retired-<run-ts>`
 // (mode 0600) and makes that `.env` 0600: D61 keeps doadmin in `~/.env` only.
 // It prints key names, never values.
@@ -194,8 +195,16 @@ function retire(): number {
   // held MIGRATE_DATABASE_URL as doadmin; its secret lines leave it now.
   const env = code === 0 ? cleanLegacyEnv(dest, run) : { file: null, movedKeys: [], movedTo: null };
   if ("problem" in env && env.problem) code = 1;
+  // The retired checkout keeps the old stack's state, logs and compose overlays,
+  // which name the database with its password. Nobody but the owner reads it now.
+  let lockedDown = false;
+  if (code === 0) {
+    const r = spawnSync("chmod", ["-R", "go-rwx", dest], { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" });
+    lockedDown = r.status === 0;
+    if (!lockedDown) code = 1;
+  }
   const file = writeReceipt(receiptDir, "retire-legacy.json", {
-    step: "retire-legacy", checkout, retiredAs: dest, outcome, legacyEnv: env.file, movedKeys: env.movedKeys, movedTo: env.movedTo,
+    step: "retire-legacy", checkout, retiredAs: dest, outcome, lockedDown, legacyEnv: env.file, movedKeys: env.movedKeys, movedTo: env.movedTo,
     problem: "problem" in env ? env.problem ?? null : null,
   });
   (code === 0 ? console.log : console.error)(`[stop-legacy] ${checkout} → ${dest}: ${outcome}`);

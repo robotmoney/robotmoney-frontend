@@ -16,7 +16,7 @@
 // Key names only, never a value. Writes host-guards.json to --receipt-dir.
 import { spawnSync } from "node:child_process";
 import { lstatSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { homeEnvFilePath, loadEnvFile } from "../lib/env-role.ts";
 import { instancePaths, readStackState, stateRoot } from "../lib/smoke-state.ts";
 import { D61_ENV_ALLOWLIST } from "./env-keys.ts";
@@ -29,10 +29,38 @@ export function exposesPostgresUrl(mode: number, text: string): boolean {
   return (mode & 0o004) !== 0 && POSTGRES_URL_WITH_PASSWORD.test(text);
 }
 
-/** World-readable files under `roots` that hold a postgres URL with a password. Never follows a symlink. */
+/**
+ * PURE. Whether a user other than the owner and the group can reach a path: every
+ * ancestor directory lets others traverse it (o+x). A world-readable file inside a
+ * 0700 directory is not exposed; the scan judges that, not the file's mode alone.
+ */
+export function othersCanTraverse(ancestorModes: readonly number[]): boolean {
+  return ancestorModes.every((m) => (m & 0o001) !== 0);
+}
+
+/** The modes of every directory from `/` down to `dir`, inclusive. */
+function ancestorModes(dir: string): number[] {
+  const modes: number[] = [];
+  let p = resolve(dir);
+  for (;;) {
+    try { modes.push(lstatSync(p).mode); } catch { modes.push(0); }
+    const parent = dirname(p);
+    if (parent === p) break;
+    p = parent;
+  }
+  return modes;
+}
+
+/**
+ * Files under `roots` that another user can actually read and that hold a postgres URL
+ * with a password: the file is world-readable AND every directory above it is
+ * world-traversable. Never follows a symlink.
+ */
 export function scanForPostgresUrls(roots: readonly string[], maxDepth = 5): string[] {
   const found: string[] = [];
   const walk = (dir: string, depth: number) => {
+    // A directory others cannot traverse hides everything below it.
+    if (!othersCanTraverse(ancestorModes(dir))) return;
     let entries;
     try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
