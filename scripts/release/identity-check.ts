@@ -22,7 +22,14 @@ export function identityProblems(apiText: string | null, siteText: string | null
   }
   if (siteText === null) out.push("/version.json did not answer 200");
   else {
-    if (!siteText.includes(commit)) out.push(`/version.json does not name ${commit}`);
+    // The site's build stamps its short commit (`"commit":"642a0057"`): a prefix of
+    // at least 7 hex characters names the release commit; any other value does not.
+    let site: { commit?: unknown } | null = null;
+    try { site = JSON.parse(siteText) as { commit?: unknown }; } catch { out.push("/version.json is not JSON"); }
+    const siteCommit = site && typeof site.commit === "string" ? site.commit.replace(/\+.*$/, "") : "";
+    if (site && !(siteCommit.length >= 7 && /^[0-9a-f]+$/.test(siteCommit) && commit.startsWith(siteCommit))) {
+      out.push(`/version.json commit is ${String(site.commit)}, which does not name ${commit}`);
+    }
     if (/\+(dirty|unknown)/.test(siteText)) out.push("/version.json carries +dirty or +unknown");
   }
   return out;
