@@ -28,7 +28,7 @@
 //   8. the legacy stack and its driver in tmux, started as production's are.
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { parseEnvFile } from "../lib/env-role.ts";
 import { POSTGRES_IMAGE } from "../lib/postgres-image.ts";
@@ -176,11 +176,20 @@ function projectContainers(): string[] {
   return [...names];
 }
 
+/** Retired legacy checkouts a previous run's S8.1 left beside the legacy checkout (`<legacy>.<version>-retired`). */
+function retiredLegacyCheckouts(): string[] {
+  const parent = dirname(T.legacyCheckout);
+  const prefix = `${basename(T.legacyCheckout)}.`;
+  let names: string[] = [];
+  try { names = readdirSync(parent); } catch { return []; }
+  return names.filter((n) => n.startsWith(prefix) && /^v\d+\.\d+\.\d+-retired$/.test(n.slice(prefix.length))).map((n) => join(parent, n));
+}
+
 function existingPieces(): string[] {
   const pieces: string[] = [];
   if (dockerNames("container", `name=^${T.pgContainer}$`).length) pieces.push(`container ${T.pgContainer}`);
   if (dockerNames("volume", `name=^${T.pgVolume}$`).length) pieces.push(`volume ${T.pgVolume}`);
-  for (const dir of [T.home, T.checkout, T.legacyCheckout]) if (existsSync(dir)) pieces.push(`directory ${dir}`);
+  for (const dir of [T.home, T.checkout, T.legacyCheckout, ...retiredLegacyCheckouts()]) if (existsSync(dir)) pieces.push(`directory ${dir}`);
   if (tmuxHasSession()) pieces.push(`tmux session ${T.driverSession}`);
   for (const c of projectContainers()) pieces.push(`container ${c}`);
   return pieces;
@@ -524,7 +533,7 @@ async function remoteUp(args: string[]): Promise<number> {
 // ---------------------------------------------------------------------------
 
 function assertOwnPath(dir: string): void {
-  const allowed = [T.home, T.checkout, T.legacyCheckout] as string[];
+  const allowed = [T.home, T.checkout, T.legacyCheckout, ...retiredLegacyCheckouts()] as string[];
   if (!allowed.includes(dir)) throw new Error(`refusing to remove ${dir}: not a stage-target path`);
 }
 
@@ -569,7 +578,7 @@ async function remoteDown(): Promise<number> {
     log(`removing volume ${T.pgVolume}`);
     run(["docker", "volume", "rm", T.pgVolume]);
   }
-  for (const dir of [T.legacyCheckout, T.checkout, T.home]) {
+  for (const dir of [T.legacyCheckout, ...retiredLegacyCheckouts(), T.checkout, T.home]) {
     assertOwnPath(dir);
     if (existsSync(dir)) {
       log(`removing ${dir}`);
