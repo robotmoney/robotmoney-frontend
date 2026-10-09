@@ -5287,3 +5287,29 @@ that checked them only at R6.2 would have stopped the live site at R6.1 and then
 refused. Keeping `doadmin` out of every file removes the strongest credential from
 the host. Proving `rm_owner` at R1.2 means every precondition holds before the first
 irreversible step.
+
+---
+
+## D62 — A release branch takes changes only from `main`, or from a QA branch when the change is incompatible with `main` or fixes a regression on `main` (refines policy §2 and §4.6; owner, 2026-10-09)
+
+**Status.** Accepted 2026-10-09.
+
+**Decision.**
+
+1. **Default route.** A fix lands on `main` by PR. It reaches `releases-A.B.x` by
+   cherry-pick or merge from `main`.
+2. **Exception.** A PR from the `qa/A.B.x-<YYYY-MM-DD>` branch directly onto
+   `releases-A.B.x` is allowed only when the change is incompatible with `main`
+   or fixes a regression that exists on `main`. The PR body names which of the
+   two conditions applies.
+3. **QA sessions are unchanged.** Patches still land on the QA branch first. The
+   release branch and `main` stay clean during a session. Only how a QA commit
+   reaches the release branch afterwards changes.
+4. **Force-push.** A release branch is force-pushed only on an explicit owner
+   instruction, after the archive tag `archive/releases-A.B.x-<YYYY-MM-DD>` is
+   pushed first. Precedent: `releases-0.6.x` was realigned to the production
+   commit `e96d4598` on 2026-10-09 (tag `v0.6.0` is its tip), and
+   `releases-0.5.x` on 2026-09-24.
+
+**Why.** A release line stays reviewable and main-first. Every change on it is
+either already on `main` or has a named reason it cannot be.
