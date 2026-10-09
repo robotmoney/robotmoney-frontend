@@ -77,10 +77,17 @@ Example: `releases-0.2.x` for the 0.2 line.
 
 Feature PRs never target `releases-A.B.x` directly — ordinary feature work is
 reviewed and merged via PR against `main`, exactly as this document's intro
-paragraph says. Once a release's scope is decided, the branch receives only
-(a) the specific commits cherry-picked from `main` that the release needs,
-and (b) the QA-branch commits the owner selects at the end of a QA session
-(§4.6). No commit lands on the release branch during a QA session. A release is **never tagged
+paragraph says. Once a release's scope is decided, the branch receives changes
+only by these routes (owner, 2026-10-09, D62):
+(a) default: the fix lands on `main` by PR, then reaches `releases-A.B.x` by
+cherry-pick or merge from `main`;
+(b) exception: a PR from the `qa/A.B.x-<YYYY-MM-DD>` branch directly onto
+`releases-A.B.x`, allowed only when the change is incompatible with `main` or
+fixes a regression that exists on `main`. The PR body names which of those two
+conditions applies (§4.6).
+No commit lands on the release branch during a QA session. A release branch is
+force-pushed only on an explicit owner instruction, after the archive tag
+`archive/releases-A.B.x-<YYYY-MM-DD>` is pushed first. A release is **never tagged
 directly on `main`** — the tag lands on the `releases-A.B.x` branch, so
 `main` keeps moving with ordinary merges while the release line is frozen
 except for the fixes it specifically needs. This applies to every tag the
@@ -305,14 +312,18 @@ release branch or to `main`. Both stay clean for the whole session.
    repeat the affected stage steps. A stage failure does not consume an rc
    number.
 5. When the session ends, the owner decides which QA commits reach the release
-   branch and which reach `main`. Only then does a PR carry them. The rc tag is
+   branch and which reach `main`. Only then does a PR carry them. The default
+   route is a PR to `main`, then a cherry-pick or merge to the release branch.
+   A PR from the QA branch directly onto the release branch is allowed only when
+   the change is incompatible with `main` or fixes a regression on `main`, and
+   its body names which condition applies (D62). The rc tag is
    cut on the release branch after that merge, and stage is re-run on that tip
    if its tree differs from the tree that passed on the QA branch.
 6. Resume the sequence in §3 at the applicable step.
 
 Runbook corrections that change release instructions must be committed and
-reviewed on the QA branch during a session, and reach the release branch with
-the owner's merge decision (step 5). Re-run any gate whose evidence or operator
+reviewed on the QA branch during a session, and reach the release branch by the
+route in step 5 on the owner's merge decision. Re-run any gate whose evidence or operator
 action the correction affects. Rc numbering follows §3: stage-only retries and
 documentation fixes do not consume an rc; a corrected candidate consumes the
 next rc only after a deployed candidate fails postflight.
