@@ -456,7 +456,7 @@ async function startV060Stack(): Promise<void> {
   const receipts = join(T.home, ".local", "state", "robotmoney-release", "stage-target-up");
   mkdirSync(receipts, { recursive: true });
   const confirm = `${T.pgBindHost}:${T.pgPort}/${T.database}`;
-  const env = ["env", "-i", `HOME=${T.home}`, "PATH=/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8", "RM_ENV=stage"];
+  const env = ["env", "-i", `HOME=${T.home}`, "PATH=/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8", "RM_ENV=stage", "PROJECTS_SOURCE=live"];
   const steps: [string, string[]][] = [
     ["credentials", ["bun", "scripts/release/credentials-init.ts", "--receipt-dir", receipts]],
     ["env rewrite", ["bun", "scripts/release/env-rewrite.ts", "--run", new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z"), "--receipt-dir", receipts]],
