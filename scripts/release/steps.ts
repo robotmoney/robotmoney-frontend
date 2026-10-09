@@ -230,11 +230,6 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
       "--legacy-checkout", "{legacyCheckout}", "--compose-files", "{legacyComposeFiles}", "--receipt-dir", RUN_DIR]],
   },
   {
-    id: "R6.2a", standing: [], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("credentials-init.json")],
-    description: "Write the in-house roster's credential.json (fresh keys, the model key from ~/.env, placeholder bearers for R6.7c) and RM_CREDENTIALS; an existing file with the same roster is kept",
-    cmds: [["bun", "scripts/release/credentials-init.ts", "--receipt-dir", RUN_DIR]],
-  },
-  {
     id: "R6.2", standing: ["SV.6"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("env-rewrite.json")],
     description: "Rewrite ~/.env to the D61 allowlist (rm_owner, never doadmin); every other key, a stray doadmin line included, moves to ~/.env.retired-<ts> (mode 0600); refuses without rm_owner or RM_CREDENTIALS; key names only",
     cmds: [["bun", "scripts/release/env-rewrite.ts", "--run", "{runTs}", "--receipt-dir", RUN_DIR]],
@@ -269,16 +264,6 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     id: "R6.7b", standing: ["SV.2"], host: "target", irreversible: false, expectExit: 0, receipts: [],
     description: "Status after boot 1",
     cmds: [status()],
-  },
-  {
-    id: "R6.7c", standing: [], host: "target", irreversible: true, expectExit: 0, receipts: [prodInitReceipt("rebind-members")],
-    description: "One-time credential migration: rebind the in-house members to credential.json (one-way)",
-    cmds: [prodInit("rebind-members")],
-  },
-  {
-    id: "R6.7d", standing: ["SP.4"], host: "target", irreversible: false, expectExit: 0, receipts: [], env: BOOT_ENV, bootEnv: true, maxMinutes: 15,
-    description: "Boot 2: a new plan that recreates the participants on the new bearers",
-    cmds: [boot()],
   },
   {
     id: "R6.9", standing: ["SV.2"], host: "target", irreversible: false, expectExit: 0, receipts: [],

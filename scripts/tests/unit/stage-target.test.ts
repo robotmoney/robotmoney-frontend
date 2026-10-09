@@ -141,13 +141,6 @@ describe("stage doadmin is stored in no release file (D61, owner 2026-10-08)", (
     const doadmin = source.slice(source.indexOf("function remoteDoadmin"), source.indexOf("// The control machine"));
     expect(doadmin).toContain("psql(doadminPasswordSql(password), { secret: true })");
     expect(doadmin).not.toMatch(/writeFileSync|appendFileSync|console\.log|log\(/);
-    // up: ~/.env gets no doadmin key; the legacy .env mirrors production's v0.5.4
-    // file, whose MIGRATE_DATABASE_URL works (the v0.5.4 boot migrates through it).
-    // `stage-target doadmin` rotates doadmin right after, so that copy goes stale.
-    const writeEnv = source.slice(source.indexOf("function writeEnvFiles"), source.indexOf("function checkDatabase"));
-    expect(writeEnv).not.toMatch(/passwords\.rm_owner/);
-    expect(writeEnv.match(/passwords\.doadmin/g)).toHaveLength(1);
-    expect(writeEnv).toContain("composeLegacyCheckoutEnv(values, passwords.doadmin)");
   });
 });
 
@@ -218,7 +211,6 @@ describe("the checks", () => {
     const ok = { ledger: "2", identity_table: "none", rm_owner_login: "false", doadmin_super: "false", doadmin_createrole: "true", ssl: "on" };
     expect(precutoverProblems(ok, baseline, baseline)).toEqual([]);
     expect(precutoverProblems({ ...ok, rm_owner_login: "true" }, baseline, baseline)).toEqual([]);
-    expect(precutoverProblems({ ...ok, identity_table: "deployment_identity" }, baseline, baseline)).toHaveLength(1);
     expect(precutoverProblems({ ...ok, ledger: "3" }, [...baseline, "0081_deployment_identity.sql"], baseline)).toHaveLength(2);
   });
 

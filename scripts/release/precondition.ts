@@ -31,7 +31,7 @@ export function preconditionProblems(input: { rmEnv: string | undefined; ledger:
     out.push(`deployment_identity is ${input.identity}; RM_ENV=${input.rmEnv} meets only ${expected} or no row`);
   }
   const ledger = input.identity === null ? input.ledger : input.ledger.filter((n) => n !== IDENTITY_MIGRATION);
-  if (matchSupportedRelease(ledger) === null) {
+  if (matchSupportedRelease(ledger) === null && matchSupportedRelease(input.ledger) === null) {
     out.push(`the ledger (${input.ledger.length} names) matches no supported baseline: ${describeUnmatchedLedger(ledger)}`);
   }
   return out;

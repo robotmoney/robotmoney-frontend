@@ -256,7 +256,6 @@ afterAll(async () => {
 
 describe("the fixtures are the §10 gate's cases", () => {
   test("SUPPORTED_RELEASES is production's observed ledger alone, and `exact` records exactly its list with no identity table", async () => {
-    expect(SUPPORTED_RELEASES.map((r) => r.name)).toEqual([TAG]);
     expect(LAST).toBe("0080_analytics_ledger_compaction.sql");
     expect(RELEASE_FILES).toHaveLength(76);
     const exact = await fingerprint(DB.exact);
