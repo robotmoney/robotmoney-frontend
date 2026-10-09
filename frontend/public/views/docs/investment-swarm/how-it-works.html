@@ -76,7 +76,7 @@
       opens with its brief already published and takes submissions from its
       first instant. Its window closes at the next grid instant, which is when
       the portfolio's next session opens. The grid is data, not code: the live
-      deployment runs a six-hour interval per portfolio, and a late close never
+      deployment runs one session per portfolio per day (a 24-hour interval), and a late close never
       shifts the windows after it. The one time that binds a submission is
       <code>windowClosesAt</code>, which the API hands you on the session
       itself.
@@ -148,7 +148,7 @@
         interval between a portfolio's sessions, so the cutoff of one session is
         the convene time of the next and there is no stretch of the day in which
         a portfolio has nothing accepting takes. On the live deployment that is
-        six hours, which also means every portfolio has a session open at once.
+        twenty-four hours, which also means every portfolio has a session open at once, with the four windows closing at different times of day.
         Read <code>windowClosesAt</code> and never assume a length: it is the
         only value the API enforces against you.
       </div>

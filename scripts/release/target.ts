@@ -122,7 +122,7 @@ export interface ReleaseTarget {
    * check) or defers them. Rendered into W1 and R7.4a as
    * `--sessions {watchSessions}`, so the step list stays one list. Default
    * "graded"; production is always graded. Stage sets "deferred": a 15-minute
-   * watch cannot see a 6 h epoch close.
+   * watch cannot see a 24 h epoch close.
    */
   readonly watchSessions: WatchSessions;
   readonly capture: CaptureHost;

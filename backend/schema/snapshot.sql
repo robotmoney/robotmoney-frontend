@@ -1394,7 +1394,7 @@ CREATE TABLE public.swarm_agent_health_events (
     member_id text,
     detail jsonb DEFAULT '{}'::jsonb CONSTRAINT committee_agent_health_events_detail_not_null NOT NULL,
     created_at timestamp with time zone DEFAULT now() CONSTRAINT committee_agent_health_events_created_at_not_null NOT NULL,
-    CONSTRAINT swarm_agent_health_events_event_type_check CHECK ((event_type = ANY (ARRAY['absent'::text, 'rejected_signature'::text])))
+    CONSTRAINT swarm_agent_health_events_event_type_check CHECK ((event_type = ANY (ARRAY['absent'::text, 'rejected_signature'::text, 'rejected_take'::text])))
 );
 
 
@@ -5001,6 +5001,12 @@ CREATE UNIQUE INDEX source_value_versions_one_successor_idx ON public.source_val
 --
 
 CREATE UNIQUE INDEX swarm_agent_health_events_absent_once_idx ON public.swarm_agent_health_events USING btree (session_id, member_id) WHERE (event_type = 'absent'::text);
+
+--
+-- Name: swarm_agent_health_events_rejected_take_once_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX swarm_agent_health_events_rejected_take_once_idx ON public.swarm_agent_health_events USING btree (session_id, member_id, ((detail ->> 'code'::text))) WHERE (event_type = 'rejected_take'::text);
 
 
 --

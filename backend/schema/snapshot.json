@@ -116,7 +116,11 @@
     "0112_rm_app_overwrite_events_read.sql",
     "0113_rm_worker_buyback_indexer_grants.sql",
     "0114_seat_in_flight_unrostered_sessions.sql",
-    "0115_token_market_samples.sql"
+    "0115_token_market_samples.sql",
+    "0116_vault_subject_position_actions.sql",
+    "0117_subject_daily_epochs.sql",
+    "0118_purge_projects_fixture_rows.sql",
+    "0119_rejected_take_health_event.sql"
   ],
   "exclusions": {
     "roles": [
@@ -128,7 +132,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "6008a6f7aab9a7ab3722cedc08872342972bb262ba86bb53109a8fe19e244d41",
+  "contentHash": "9790d249fa52b85fbca9e0e80cffd23226bca4774850a745c24ae96f745d23ff",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -4391,7 +4395,7 @@
       "definition": "FOREIGN KEY (session_id) REFERENCES public.swarm_sessions(id) ON DELETE CASCADE"
     },
     "constraint public.swarm_agent_health_events.swarm_agent_health_events_event_type_check": {
-      "definition": "CHECK ((event_type = ANY (ARRAY['absent'::text, 'rejected_signature'::text])))"
+      "definition": "CHECK ((event_type = ANY (ARRAY['absent'::text, 'rejected_signature'::text, 'rejected_take'::text])))"
     },
     "constraint public.swarm_agent_health_events.swarm_agent_health_events_pkey": {
       "definition": "PRIMARY KEY (id)"
@@ -5351,6 +5355,9 @@
     },
     "index public.swarm_agent_health_events_pkey": {
       "definition": "CREATE UNIQUE INDEX swarm_agent_health_events_pkey ON public.swarm_agent_health_events USING btree (id)"
+    },
+    "index public.swarm_agent_health_events_rejected_take_once_idx": {
+      "definition": "CREATE UNIQUE INDEX swarm_agent_health_events_rejected_take_once_idx ON public.swarm_agent_health_events USING btree (session_id, member_id, ((detail ->> 'code'::text))) WHERE (event_type = 'rejected_take'::text)"
     },
     "index public.swarm_agent_health_events_session_idx": {
       "definition": "CREATE INDEX swarm_agent_health_events_session_idx ON public.swarm_agent_health_events USING btree (session_id, created_at DESC)"

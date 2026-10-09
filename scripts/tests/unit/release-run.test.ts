@@ -755,21 +755,21 @@ describe("watch steps, prod-only steps and the recovery go key", () => {
     expect(pr2.ran).toEqual(["W1", "W3"]);
   });
 
-  test("a watchHours wait takes the target's watch length: READY + 10 h, not + 6 h", async () => {
+  test("a watchHours wait takes the target's watch length: READY + 37 h, not + 6 h", async () => {
     const steps: StepTemplate[] = WATCHED.map((s) => (s.id === "W1" ? { ...s, notBefore: { afterStep: "R6.9", hours: "watchHours" } } : s));
     // A graded watch at the derived length, as production runs it.
-    const f = fixture("stage", { watchHours: 10, watchSessions: "graded" });
+    const f = fixture("stage", { watchHours: 37, watchSessions: "graded" });
     const early = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], early.deps, steps)).toBe(3);
-    expect(early.logs.join("\n")).toContain("W1 becomes runnable at 2026-10-08T22:00:00.000Z");
-    expect(early.logs.join("\n")).toContain("+ 10 h");
+    expect(early.logs.join("\n")).toContain("W1 becomes runnable at 2026-10-10T01:00:00.000Z");
+    expect(early.logs.join("\n")).toContain("+ 37 h");
     // red control: READY + 6 h is no longer enough.
     const six = fakeDeps();
     six.deps.now = () => new Date("2026-10-08T18:00:01Z");
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], six.deps, steps)).toBe(3);
     expect(six.ran).toEqual([]);
     const later = fakeDeps();
-    later.deps.now = () => new Date("2026-10-08T22:00:01Z");
+    later.deps.now = () => new Date("2026-10-10T01:00:01Z");
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], later.deps, steps)).toBe(0);
     expect(later.ran).toEqual(["W1"]);
   });
@@ -814,8 +814,9 @@ describe("release tags (R5.rc, W3)", () => {
 describe("schedule parity (R7.4a)", () => {
   const close = "2026-10-08T12:00:00.000Z";
   const base = [{ id: "s1", subject: "eth", state: "collecting", window_closes_at: close }];
-  test("6 h epochs, an on-time publish, a :30 regime cron and a live sweep pass", () => {
-    expect(epochProblems([{ id: "eth", epoch_duration_seconds: 21600 }])).toEqual([]);
+  test("24 h epochs, an on-time publish, a :30 regime cron and a live sweep pass", () => {
+    expect(epochProblems([{ id: "eth", epoch_duration_seconds: 86400 }])).toEqual([]);
+    expect(epochProblems([{ id: "eth", epoch_duration_seconds: 21600 }]).length).toBe(1);
     expect(inFlightProblems(base, [{ id: "s1", state: "published", window_closes_at: close, published_at: "2026-10-08T12:10:00.000Z", judging_duration_seconds: 900 }])).toEqual([]);
     expect(regimeCronProblems("30 */3 * * *")).toEqual([]);
     expect(paritySweep({ status: "succeeded", secs: 21.5 })).toEqual({ problems: [], detail: "last parity sweep succeeded in 21.5 s" });

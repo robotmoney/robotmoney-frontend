@@ -618,7 +618,7 @@ export interface SwarmAgentHealthEvent {
   id: string;
   memberId: string;
   sessionId: string | null;
-  eventType: "absence" | "rejected_signature";
+  eventType: "absence" | "rejected_signature" | "rejected_take";
   reason: string;
   detail: Record<string, unknown> | null;
   occurredAt: string;
