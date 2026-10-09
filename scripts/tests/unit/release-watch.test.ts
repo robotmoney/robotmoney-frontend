@@ -17,18 +17,18 @@ const targetsDir = join(import.meta.dir, "../../release/targets");
 const HOUR = 3600;
 
 describe("watchHoursFor: the slowest subject's first publish after READY", () => {
-  test("production cadence: 1.5 × 6 h + 15 min judging + 30 min grace = 9.75 h, rounded up to 10 h", () => {
-    expect(watchHoursFor({ epochSeconds: PRODUCTION_EPOCH_SECONDS, judgingSeconds: DEFAULT_JUDGING_SECONDS, graceSeconds: PUBLISH_GRACE_SECONDS })).toBe(10);
-    expect(DEFAULT_WATCH_HOURS).toBe(10);
+  test("production cadence: 1.5 × 24 h + 15 min judging + 30 min grace = 36.75 h, rounded up to 37 h", () => {
+    expect(watchHoursFor({ epochSeconds: PRODUCTION_EPOCH_SECONDS, judgingSeconds: DEFAULT_JUDGING_SECONDS, graceSeconds: PUBLISH_GRACE_SECONDS })).toBe(37);
+    expect(DEFAULT_WATCH_HOURS).toBe(37);
   });
   test("it rounds up, never down", () => {
     expect(watchHoursFor({ epochSeconds: 4 * HOUR, judgingSeconds: 0, graceSeconds: 0 })).toBe(6);
     expect(watchHoursFor({ epochSeconds: 4 * HOUR, judgingSeconds: 1, graceSeconds: 0 })).toBe(7);
   });
-  test("red control: the old 6 h watch is shorter than a first epoch can last", () => {
+  test("red control: a one-epoch watch is shorter than a first epoch can last", () => {
     // The stage run's treasury and woon sessions opened at boot (04:34:22Z) and
     // were still collecting at READY (04:35:25Z) + 6 h.
-    expect(watchHoursFor({ epochSeconds: PRODUCTION_EPOCH_SECONDS, judgingSeconds: 0, graceSeconds: 0 })).toBeGreaterThan(6);
+    expect(watchHoursFor({ epochSeconds: PRODUCTION_EPOCH_SECONDS, judgingSeconds: 0, graceSeconds: 0 })).toBeGreaterThan(24);
   });
   test("red: a zero, negative or non-finite input throws", () => {
     expect(() => watchHoursFor({ epochSeconds: 0, judgingSeconds: 0, graceSeconds: 0 })).toThrow();
@@ -42,8 +42,8 @@ describe("the watch length is target data; the step list stays one list", () => 
     expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours]))
       .toEqual([["W1", "R6.9", "watchHours"], ["R7.4a", "R6.9", "watchHours"]]);
   });
-  test("prod waits the derived 10 h graded; stage waits 15 minutes deferred (owner decision 2026-10-08)", () => {
-    for (const [name, hours, sessions] of [["prod", 10, "graded"], ["stage", 0.25, "deferred"]] as const) {
+  test("prod waits the derived 37 h graded; stage waits 15 minutes deferred (owner decision 2026-10-08)", () => {
+    for (const [name, hours, sessions] of [["prod", 37, "graded"], ["stage", 0.25, "deferred"]] as const) {
       const t = loadTarget(join(targetsDir, `${name}.json`));
       expect(t.watchHours).toBe(hours);
       expect(t.watchSessions).toBe(sessions);
@@ -101,14 +101,14 @@ describe("the watch length is target data; the step list stays one list", () => 
   test("red: production may lengthen the watch, never shorten it below the derived bound", () => {
     const raw = JSON.parse(readFileSync(join(targetsDir, "prod.json"), "utf8"));
     raw.confirmTarget = "db.example.com:25060/rm";
-    for (const bad of [0.25, 6, 9.5, 0, -1, "10"]) {
+    for (const bad of [0.25, 6, 10, 24, 36.5, 0, -1, "37"]) {
       raw.watchHours = bad;
       const r = validateTarget("prod", raw);
       expect("errors" in r && r.errors.join("\n")).toContain("watchHours");
     }
-    raw.watchHours = 10;
+    raw.watchHours = 37;
     expect("errors" in validateTarget("prod", raw)).toBe(false);
-    raw.watchHours = 12;
+    raw.watchHours = 40;
     expect("errors" in validateTarget("prod", raw)).toBe(false);
   });
   test("red: production never defers sessions, even with a long watch", () => {

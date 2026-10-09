@@ -150,6 +150,10 @@ const NOT_IN_PRODUCTION = [
   "0113_rm_worker_buyback_indexer_grants.sql",
   "0114_seat_in_flight_unrostered_sessions.sql",
   "0115_token_market_samples.sql",
+  "0116_vault_subject_position_actions.sql",
+  "0117_subject_daily_epochs.sql",
+  "0118_purge_projects_fixture_rows.sql",
+  "0119_rejected_take_health_event.sql",
 ] as const;
 
 useCleanDatabase(import.meta.file);

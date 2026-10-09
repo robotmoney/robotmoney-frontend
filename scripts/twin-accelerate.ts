@@ -2,9 +2,9 @@
 // `bun run twin:accelerate` — put a stage twin's sessions on an accelerated schedule.
 //
 // WHY THIS EXISTS. A twin restored from production carries production's subjects, and
-// with them production's 6 h epochs (B3 keeps them, and a boot on a populated database
-// changes no scheduling column: system-scheduler-spec.md §8). So a rehearsal waited up
-// to six hours for its first publish, and every lifecycle check (judge, receipt,
+// with them production's 24 h epochs (owner decision 2026-10-09, and a boot on a populated
+// database changes no scheduling column: system-scheduler-spec.md §8). So a rehearsal waited
+// up to a day for its first publish, and every lifecycle check (judge, receipt,
 // twin:gate, the soak window) waited with it. The specs name the remedy:
 // "A rehearsal that wants short epochs or a short judging wait on a copy of production
 // changes the subjects through the admin API" (system-scheduler-spec.md §2.3, §8;

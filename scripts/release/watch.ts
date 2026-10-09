@@ -12,23 +12,24 @@
 // closes on the first grid instant at least half a duration after now, so the
 // window lasts up to one and a half epochs. Then judging may take up to the
 // subject's judging duration, and R7.4a allows a publish grace after that.
-// Every subject runs 6 h epochs (migration 0085, checked by R7.4a), so:
+// Every subject runs 24 h epochs (owner decision 2026-10-09: one session per
+// subject per day, as production ran before v0.6.0; checked by R7.4a), so:
 //
-//   1.5 × 6 h + 900 s judging + 1800 s grace = 9.75 h, rounded up to 10 h.
+//   1.5 × 24 h + 900 s judging + 1800 s grace = 36.75 h, rounded up to 37 h.
 //
 // A subject whose window was already open at boot closes it within one epoch
-// (6 h), well inside that bound. The old 6 h watch only covered that case.
+// (24 h), well inside that bound.
 //
 // Production watches that long and grades sessions. A stage target may watch
 // for less (owner decision 2026-10-08: 15 minutes) only with sessions
 // deferred: W1 runs prod:gate --sessions deferred and R7.4a skips the
-// in-flight publish check, because no 6 h epoch can close in that time.
+// in-flight publish check, because no 24 h epoch can close in that time.
 // The target file sets both (./target.ts); the step list never changes.
 //
 // Pure. Unit tests: scripts/tests/unit/release-watch.test.ts.
 
-/** Production's epoch, every active subject (B3; migration 0085's default). */
-export const PRODUCTION_EPOCH_SECONDS = 21600;
+/** Production's epoch, every active subject (owner decision 2026-10-09). */
+export const PRODUCTION_EPOCH_SECONDS = 86400;
 /** The default judging wait a subject carries (migration 0090). */
 export const DEFAULT_JUDGING_SECONDS = 900;
 /** Slack after close + judging before a publish counts as late (R7.4a). */
@@ -56,7 +57,7 @@ export function watchHoursFor(inputs: WatchInputs): number {
   return Math.ceil((FIRST_EPOCH_FACTOR * epochSeconds + judgingSeconds + graceSeconds) / 3600);
 }
 
-/** The watch every target gets unless its file sets a longer `watchHours`: 10 h. */
+/** The watch every target gets unless its file sets a longer `watchHours`: 37 h. */
 export const DEFAULT_WATCH_HOURS = watchHoursFor({
   epochSeconds: PRODUCTION_EPOCH_SECONDS,
   judgingSeconds: DEFAULT_JUDGING_SECONDS,

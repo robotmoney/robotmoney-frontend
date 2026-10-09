@@ -54,6 +54,7 @@ export const ROUTES: {
     takePermalink: string;
     judgement: string;
     openSession: string;
+    openSessions: string;
     brief: string;
     signingPayload: string;
     memos: string;

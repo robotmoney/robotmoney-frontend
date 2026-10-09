@@ -334,7 +334,7 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "R7.4a", standing: ["SW.1"], host: "target", notBefore: WATCH, irreversible: false, expectExit: 0, receipts: [runReceipts("schedule-parity.json")],
-    description: "Schedule parity: 6 h epochs, every session in flight at R2.3 published on its normal close (graded; deferred checks only that no close moved), the regime run at :30, the last parity sweep's duration",
+    description: "Schedule parity: 24 h epochs, every session in flight at R2.3 published on its normal close (graded; deferred checks only that no close moved), the regime run at :30, the last parity sweep's duration",
     cmds: [["bun", "scripts/release/schedule-parity.ts", "--instance", "{instance}", "--run", "{runTs}", "--sessions", "{watchSessions}", "--receipt-dir", RUN_DIR]],
   },
   {
