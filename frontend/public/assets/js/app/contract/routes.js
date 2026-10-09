@@ -180,6 +180,9 @@ export const ROUTES = {
     takePermalink: "/swarm/takes/:id", // rendered public verification receipt
     judgement: "/api/swarm/judgements/:id", // GET — one public judgement; 404 unless sessionJudgements would serve it
     openSession: "/api/swarm/open-session", // GET → session currently collecting, if any
+    // GET → EVERY collecting session, soonest close first: { sessions: [...] }, each in openSession's shape. openSession returns only the newest one, and since
+    // v0.6.0 several subjects collect at once (post-mortem 2026-10-09, finding 5).
+    openSessions: "/api/swarm/open-sessions",
     // GET the brief a session published. `?session=<sessionId>` is the
     // unambiguous handle — since migration 0028 a brief is keyed on its session
     // rather than its day, so every session of a multi-session day keeps its own

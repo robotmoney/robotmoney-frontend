@@ -394,6 +394,17 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     sizeHint: "under 500 B",
   },
   {
+    id: "getOpenSessions",
+    method: "GET",
+    path: ROUTES.swarm.openSessions,
+    summary: "Every session collecting takes, soonest close first",
+    description:
+      "Every session whose submission window is open right now, soonest close first, each in the shape `open-session` returns. Several subjects collect at once, and `open-session` names only the newest of them. An external member agent that serves more than one subject polls this endpoint, not `open-session`.",
+    backs: ["/swarm"],
+    contractType: "{ sessions: SwarmSession[] }",
+    sizeHint: "under 2 KB",
+  },
+  {
     id: "getSwarmTake",
     method: "GET",
     path: ROUTES.swarm.take,

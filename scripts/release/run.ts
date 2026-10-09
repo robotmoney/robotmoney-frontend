@@ -295,7 +295,6 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     mkdirSync(stepDir, { recursive: true, mode: 0o700 });
 
     // A prod-only step (the release tags) is recorded skipped on any other policy.
-    // A capture step whose checkout is the target's is recorded skipped too (stage).
     const skip = skipReason(template, target);
     if (skip !== undefined) {
       const now = deps.now().toISOString();
@@ -367,9 +366,6 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
 /** PURE. Why a step does not run on this target, or undefined when it runs. */
 export function skipReason(step: StepTemplate, target: ReleaseTarget): string | undefined {
   if (step.onlyFor !== undefined && step.onlyFor !== target.rmEnv) return target.rmEnv;
-  if (step.sameCheckoutAs !== undefined && target.capture.host === target.host && target.capture.checkout === target.checkout) {
-    return `same checkout as ${step.sameCheckoutAs} (${target.host}:${target.checkout})`;
-  }
   return undefined;
 }
 

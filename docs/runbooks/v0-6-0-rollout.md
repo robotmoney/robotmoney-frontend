@@ -57,7 +57,7 @@ Each standing ID maps to the runner steps that satisfy it (the `standing` field 
 | SV.4 log verdict after release | R7.3a | |
 | SV.5 counts only grow | R7.5 | The published AUM figure: owner exception for v0.6.0 |
 | SV.6 host guards | R6.2, R7.7 | |
-| SW.1 every subject publishes once | W1, R7.4a on prod | Not before R6.9 plus `watchHours` (10 h), sessions graded. The stage run watches 15 min with sessions deferred: owner exception for v0.6.0 |
+| SW.1 every subject publishes once | W1, R7.4a on prod | Not before R6.9 plus `watchHours` (37 h at 24 h epochs), sessions graded. The stage run watches 15 min with sessions deferred: owner exception for v0.6.0 |
 | SW.2 invariants over the window | R7.3b | Runs at READY only. The watch-time run: owner exception for v0.6.0 |
 | SW.3 tag and report | W3 | The report stays manual (section 11) |
 
@@ -67,8 +67,8 @@ Gaps against the standing runbook, each decided by the owner on 2026-10-08:
 - **SW.2 over the window.** R7.3b runs `soak:checks` at READY. No step reruns it at the watch. Recorded exception.
 - **Short stage watch (SW.1 on stage).** `stage.json` sets `watchHours: 0.25` and
   `watchSessions: deferred`. W1 runs `prod:gate --sessions deferred`, so it skips check 7. R7.4a
-  checks the 6 h epochs, the regime cron, the parity sweep, and that no in-flight session vanished or
-  had its close moved. It does not wait for those sessions to publish. Prod keeps the 10 h graded
+  checks the 24 h epochs, the regime cron, the parity sweep, and that no in-flight session vanished or
+  had its close moved. It does not wait for those sessions to publish. Prod keeps the 37 h graded
   watch. Recorded exception.
 - **SR.1, SR.9 and the full tier of SR.3.** Only the twin exercises them. The owner chose a short twin
   rerun at the release commit: accelerated epochs for about 45 minutes, then torn down.
@@ -116,7 +116,7 @@ before the run. The owner triages the R2.5 baseline in a file.
 |---|---|---|---|
 | B1 | Baseline: production's 76-name ledger replaces the old one; unreleased migrations renumbered 0081-0110 so no pending file sorts inside the recorded range (1097) | merged | R6.3 on the stage target restored from a fresh dump. R2.3 reads the live ledger |
 | B2 | In-flight sessions finish on their normal timing, no drain step (1111) | merged | R7.4a on a stage run: every session in flight at R2.3 published |
-| B3 | Existing subjects stay on 6 h epochs, grid continued from each subject's last close (1112) | merged | R7.4a. The owner confirms the grid against prod session history |
+| B3 | Existing subjects stay on 6 h epochs, grid continued from each subject's last close (1112) | merged, then reversed 2026-10-09 | R7.4a. Wrong premise: v0.5.x prod gave each subject one 6 h window a day, in rotation, so the cutover made 16 sessions a day instead of 4. Owner decision 2026-10-09: one session per subject per day. Applied on prod through the admin subject route as 24 h epochs, anchored to the old rotation: vault closes 00:52, woon 06:58, allocation 13:00, treasury 19:03 UTC |
 | B4 | Settings reach the containers; prod refuses without `PROJECTS_SOURCE=live` (1113) | merged. The runner sets `PROJECTS_SOURCE=live` on R6.7a and R6.7d | the target file's `bootEnv` (section 2) |
 | B5 | Parity sweep keeps its 240 s exemption (1114) | merged | R7.4a reports the last sweep's duration |
 | B6 | Production parity: judge retry (1117), judge model from the database (1118), verified receipt path (1119), today's regime (1108), in-house seats keep their operator (1120), absence savepoint (1122) | merged. Persona-voiced sectioned takes (1116) merged by PR 1131 | R7 and W1 |
@@ -176,7 +176,7 @@ other user reaches it. S8.1 moves its secret lines out anyway.
 | Final tag | W3 tags `v0.6.0` at the same commit, after the watch passes |
 | Window | **Long and breaking.** Pending migrations include `breaking` ones, so the stack is **down** from R6.1 until R6.7a reaches READY. The api, the site and every participant are unavailable in between |
 
-### 1.1 Pending migrations (40 files, from the 76-name ledger)
+### 1.1 Pending migrations (44 files, from the 76-name ledger)
 
 > **Owner, 2026-10-05 (1173):** from v0.6.0 the migration strategy is to become ONE idempotent,
 > lossless schema file runnable at any database version. That is filed, not started. This
@@ -187,9 +187,11 @@ the live ledger. R6.3's receipt lists the files it applied.
 
 - **No `compat:` header (6, they predate the runner's metadata):** `0056_swarm_judge_requires_model`, `0057_swarm_judge_policy_stamp`, `0058_swarm_judge_fault_injection`, `0059_swarm_judgement_completion_usage`, `0062_rm_worker_analytics_ledger_read_grant`, `0081_deployment_identity`. `0081` is applied first by the guarded pass (R6.3). A `NULL` compat refuses an older image (spec §8.4).
 - **Breaking (8):** `0084` (drops the notification outbox table), `0089_drop_swarm_schedules`, `0096_drop_swarm_scheduler_jobs`, `0097_stream_events_grant_only`, `0098_stream_event_counter`, `0106_webauthn_challenge_slots`, `0107_revoke_runtime_delete`, `0110_drop_swarm_judge_fault_injection`.
-- **Additive (26):** `0082`, `0083`, `0085`–`0088`, `0090`–`0095`, `0099`–`0105`, `0108`, `0109`, `0111_swarm_judge_model_deepseek_v4_1_flash`, `0112_rm_app_overwrite_events_read`, `0113_rm_worker_buyback_indexer_grants`, `0114_seat_in_flight_unrostered_sessions`, `0115_token_market_samples`.
+- **Additive (30):** `0082`, `0083`, `0085`–`0088`, `0090`–`0095`, `0099`–`0105`, `0108`, `0109`, `0111_swarm_judge_model_deepseek_v4_1_flash`, `0112_rm_app_overwrite_events_read`, `0113_rm_worker_buyback_indexer_grants`, `0114_seat_in_flight_unrostered_sessions`, `0115_token_market_samples`, `0116_vault_subject_position_actions`, `0117_subject_daily_epochs`, `0118_purge_projects_fixture_rows`, `0119_rejected_take_health_event`.
 
-After R6.3 the ledger holds 116 rows: the 76 recorded names plus these 40 files.
+> **Added after the 2026-10-08 cutover (owner, 2026-10-09):** `0116` (vault take carries no weight vector), `0119` (refused takes become an agent-health event), `0117` (one session per subject per day; production already holds these values from a hand edit and the file is a no-op there) and `0118` (the projects fixture purge, issue 1208, as a migration because production data changes only by migration). Production applies them on its next deploy, not at R6.3.
+
+After R6.3 the ledger holds 120 rows: the 76 recorded names plus these 44 files.
 
 Because a pending migration is `breaking`, spec §8.5 fixes the order: stop (R6.1), migrate (R6.3),
 boot (R6.7a). There is no rolling variant.
@@ -290,7 +292,7 @@ date: <yyyy-mm-dd>
 | R1.1 | target | `git fetch`, then detach at the commit in `/root/rm-060` | no | stdout: HEAD at the commit |
 | R1.2 | target | `host-identity.ts`: HEAD and clean tree; `bun`, `docker`, `tmux`, `git` resolve; no inherited `DATABASE_*`; `~/.env` resolves to `confirmTarget`; the database answers; its ledger is a supported baseline; its identity is absent; `~/.env` holds a non-empty `rm_owner` line and `rm_owner` logs in (`SELECT 1`, read-only), else it refuses naming `bun run role-passwords --target prod` | no | `host-identity.json`: tool paths, resolved target, ledger match, `ownerLogin` |
 | R1.3 | target | `bun install --force`, root and backend | no | exit 0 |
-| R1.4 | capture | the same checkout on `rm-frontend-stage-2` | no | stdout |
+| R1.4 | capture | the runner-owned capture checkout `/home/stage-server/rm-capture` on `rm-frontend-stage-2`: clone it when missing, `git fetch`, then detach at the commit | no | stdout |
 | R1.5 | capture | `host-identity.ts` without the database checks | no | `host-identity.json` |
 | R1.6 | capture | `bun install --force`, root and backend | no | exit 0 |
 
@@ -488,7 +490,7 @@ The journal is under `~/.local/state/robotmoney-release/prod/<run-ts>/`. Each st
 | R6.1 | `stop-legacy.ts stop`: kills tmux `driver`, then `docker compose down` for `rm_prod` (never `-v`), proves no legacy container remains | **yes**: the stack is down from here | `stop-legacy.json`: session and project stopped, zero containers left |
 | R6.2a | `credentials-init.ts`: reads the four in-house member ids through `rm_readonly`, writes `credential.json` and `RM_CREDENTIALS`. Keeps an existing file with the same roster | no | `credentials-init.json`: handles and key names only |
 | R6.2 | `env-rewrite.ts`: `~/.env` to the D61 allowlist. Other keys, a stray `doadmin` line included, move to `~/.env.retired-<run-ts>` (0600). Refuses without `rm_owner` or `RM_CREDENTIALS` | no | `env-rewrite.json`: kept and moved key names |
-| R6.3 | `bun run migrate`: `0081_deployment_identity` first with `production` in the same transaction, then every pending file in filename order | **yes**: no code-only rollback after this | `migrate-receipt-*.json`: pre-identity state, matched baseline, **40 applied files**, ledger at 116 rows (76 + 40) |
+| R6.3 | `bun run migrate`: `0081_deployment_identity` first with `production` in the same transaction, then every pending file in filename order | **yes**: no code-only rollback after this | `migrate-receipt-*.json`: pre-identity state, matched baseline, **44 applied files**, ledger at 120 rows (76 + 44) |
 | S8.1 | `stop-legacy.ts retire`: renames the old checkout to `/root/robotmoney-frontend.v0.5.4-retired`, `chmod -R go-rwx`, moves its `.env` secret lines to `~/.env.legacy-retired-<run-ts>` (0600) | no | `retire-legacy.json`: new path, moved key names |
 | R6.4 | `prod-init set-identity`: reads the identity the migrate wrote. Writes nothing | no | `set-identity-*.json`: kind `production` |
 | R6.5 | `prod-init provision-tokens`: mints the three service tokens. A rerun is a rotation | no | `provision-tokens-*.json`: three holders |
@@ -521,12 +523,12 @@ If preflight refuses at R6.7a or R6.7d, the printed check number names the cause
 | W3 | Tags `v0.6.0` at the commit and pushes it, on the control machine | no | stdout: the tag |
 
 **R7.4a, schedule parity** (owner rule: an upgrade does not change usual schedules). Every active
-subject reads `epoch_duration_seconds = 21600` (B3). Every session in flight at R2.3 published on
+subject reads `epoch_duration_seconds = 86400` (B3 as reversed 2026-10-09). Every session in flight at R2.3 published on
 its unmoved close, within its judging time plus 30 minutes (B2, B20). The regime cron has minute 30.
 The last parity sweep's duration is reported, and a dead sweep fails (B5).
 
-**W1, every subject publishes once** (what the old R7.6 watched by eye). The watch is 10 h, not one
-6 h epoch: a subject with no open window at boot gets a first epoch of up to 9 h (system-scheduler-spec
+**W1, every subject publishes once** (what the old R7.6 watched by eye). The watch is 37 h, not one
+24 h epoch: a subject with no open window at boot gets a first epoch of up to 36 h (system-scheduler-spec
 §2.2), plus 15 min judging and 30 min publish grace (`scripts/release/watch.ts`). Stage run
 `20261008T042158Z` failed check 7 at 6 h because treasury and woon were still collecting. Every subject opens a session on
 its grid. Agents submit one final take each. `themis` submits a judgement and is never restarted. A

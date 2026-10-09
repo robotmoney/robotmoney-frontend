@@ -63,7 +63,7 @@ unverified, not satisfied.
 **QA branch (policy 4.6, owner 2026-10-06).** Every stage session runs on its own
 `qa/A.B.x-<YYYY-MM-DD>` branch cut from the release branch tip. All the session's patches,
 runbook fixes included, merge into that branch. The release branch and `main` take no commit
-during the session. The owner picks what moves to each one afterwards. A pushed QA branch is
+during the session. The owner picks what moves afterwards. It reaches the release branch from `main` by cherry-pick or merge. A direct PR from the QA branch onto the release branch is allowed only when the change is incompatible with `main` or fixes a regression on `main`, and the PR body names which (D62). A pushed QA branch is
 never rewritten (owner 2026-10-07): when the session needs a new base, cut a new branch
 (`qa/A.B.x-<YYYY-MM-DD>-2` on the same day) and leave the old one as it is.
 
@@ -94,7 +94,7 @@ never rewritten (owner 2026-10-07): when the session needs a new base, cut a new
 | SV.4 | Log verdict after the release: what the release was meant to fix is fixed, nothing new is unclassified | `bun run prod:gate --mode post-release` | prod | script |
 | SV.5 | Row counts only grow, AUM did not step, the ledger did not balloon | release runbook R7.5 | prod | manual |
 | SV.6 | No container mounts a Docker socket, `~/.env` holds only allowed keys (D61 adds `rm_owner`; a `doadmin` line is not allowed, amendment 2026-10-08), no container's environment holds `rm_owner` or `doadmin`, token files are mode 0600 | `scripts/release/host-guards.ts` | prod | gap, issue agent-executed runbooks (1225) |
-| SW.1 | Watch until every subject publishes once: every subject opens, agents submit, the judge submits, consensus publishes or reads `no_consensus` | `bun run release:run` W1 (`prod:gate --mode post-release` since READY) and R7.4a (`scripts/release/schedule-parity.ts`), not before READY + the target's `watchHours` (10 h: the longest first epoch, 1.5 × 6 h, plus judging and publish grace; `scripts/release/watch.ts`), sessions graded. A stage target may watch shorter only with `watchSessions: deferred`, which does not satisfy this row | prod | script |
+| SW.1 | Watch until every subject publishes once: every subject opens, agents submit, the judge submits, consensus publishes or reads `no_consensus` | `bun run release:run` W1 (`prod:gate --mode post-release` since READY) and R7.4a (`scripts/release/schedule-parity.ts`), not before READY + the target's `watchHours` (37 h: the longest first epoch, 1.5 × 24 h, plus judging and publish grace; `scripts/release/watch.ts`), sessions graded. A stage target may watch shorter only with `watchSessions: deferred`, which does not satisfy this row | prod | script |
 | SW.2 | Cumulative standing invariants over the soak window (section 7) | `bun run soak:checks --instance rm_prod --since T0 --full` (`--record` once at READY) | prod | script |
 | SW.3 | Tag the running commit and file the production report | `bun run release:run` W3 tags the commit; the report is policy 4.9 | prod | manual |
 

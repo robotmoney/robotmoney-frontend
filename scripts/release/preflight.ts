@@ -95,8 +95,9 @@ export function laneOf(step: Pick<StepTemplate, "host" | "checkout">, target: Re
 
 /**
  * PURE. The preflight's order: lanes from cheapest to dearest (legacy gate,
- * target checkout, capture), each lane in the run's order. A lane two roles
- * share (stage) is one lane in the run's order.
+ * target checkout, capture), each lane in the run's order. The capture lane
+ * is never the target's: the target schema refuses a capture checkout that is
+ * the target's own checkout (./target.ts, captureCheckoutProblems).
  */
 export function preflightOrder(steps: readonly StepTemplate[], target: ReleaseTarget): StepTemplate[] {
   const rank = (s: StepTemplate) => (s.checkout === "legacy" ? 0 : s.host === "capture" ? 2 : 1);

@@ -1066,6 +1066,33 @@
         }
       }
     },
+    "/api/swarm/open-sessions": {
+      "get": {
+        "operationId": "getOpenSessions",
+        "summary": "Every session collecting takes, soonest close first",
+        "description": "Every session whose submission window is open right now, soonest close first, each in the shape `open-session` returns. Several subjects collect at once, and `open-session` names only the newest of them. An external member agent that serves more than one subject polls this endpoint, not `open-session`.\n\nResponse size: under 2 KB.\n\nResponse type: `{ sessions: SwarmSession[] }` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "tags": [
+          "public-read"
+        ],
+        "x-backs-pages": [
+          "https://robotmoney.network/swarm"
+        ],
+        "x-contract-type": "{ sessions: SwarmSession[] }",
+        "responses": {
+          "200": {
+            "description": "Every session collecting takes, soonest close first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "{ sessions: SwarmSession[] }"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/swarm/takes/{id}": {
       "get": {
         "operationId": "getSwarmTake",

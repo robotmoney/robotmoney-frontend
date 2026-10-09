@@ -7,7 +7,7 @@
 //
 // Read-only (rm_readonly on a proven read-only session, ./db-read.ts; docker
 // inspect for one container's environment). It checks:
-//   1. every active subject reads epoch_duration_seconds = 21600 (B3);
+//   1. every active subject reads epoch_duration_seconds = 86400 (owner decision 2026-10-09);
 //   2. every session in flight at R2.3 (baseline.json `inFlight`) published,
 //      its window close unmoved, within its judging duration plus a grace
 //      after that close;
@@ -71,7 +71,7 @@ export function inFlightProblems(baseline: readonly BaselineSession[], current: 
 /**
  * PURE. The deferred form of check 2: every in-flight baseline session still
  * exists and its window close did not move. Whether it published is left to
- * a graded watch: a 6 h epoch cannot close inside a short stage watch.
+ * a graded watch: a 24 h epoch cannot close inside a short stage watch.
  */
 export function inFlightCloseProblems(baseline: readonly BaselineSession[], current: readonly CurrentSession[]): string[] {
   const out: string[] = [];

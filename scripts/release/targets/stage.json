@@ -1,5 +1,5 @@
 {
-  "$comment": "Stage target for bun run release:run (D61 rule 2): the same steps as prod.json, against the stage target database that scripts/release/stage-target.ts up restores before the run. No release commit here: the go file's commit: line names it. HOME is a dedicated directory whose .env names that database. The legacy stack is the v0.5.4 checkout booted against it (PR 1229). watchMinAttendance is 0.4 on stage: the four external members file against production, never against the stage database, so a stage session holds at most the three in-house takes of seven active members (3/7 = 0.43). Production keeps the gate's default 0.5 (owner-visible, 2026-10-08). watchHours 0.25 and watchSessions deferred: the owner decided on 2026-10-08 that the stage watch is a 15-minute check. W1 runs prod:gate with --sessions deferred and R7.4a skips the in-flight publish check, because no 6 h epoch closes in 15 minutes. Stage epochs stay 6 h. Production keeps the 10 h graded watch, so production's W1 is the first full session proof.",
+  "$comment": "Stage target for bun run release:run (D61 rule 2): the same steps as prod.json, against the stage target database that scripts/release/stage-target.ts up restores before the run. No release commit here: the go file's commit: line names it. HOME is a dedicated directory whose .env names that database. The legacy stack is the v0.5.4 checkout booted against it (PR 1229). watchMinAttendance is 0.4 on stage: the four external members file against production, never against the stage database, so a stage session holds at most the three in-house takes of seven active members (3/7 = 0.43). Production keeps the gate's default 0.5 (owner-visible, 2026-10-08). watchHours 0.25 and watchSessions deferred: the owner decided on 2026-10-08 that the stage watch is a 15-minute check. W1 runs prod:gate with --sessions deferred and R7.4a skips the in-flight publish check, because no 24 h epoch closes in 15 minutes. Stage epochs are production's (24 h since 2026-10-09). Production keeps the 37 h graded watch, so production's W1 is the first full session proof.",
   "release": "v0.6.0",
   "rmEnv": "stage",
   "host": "rm-frontend-stage-2",
@@ -13,7 +13,7 @@
   "capture": {
     "host": "rm-frontend-stage-2",
     "home": "/home/stage-server",
-    "checkout": "/home/stage-server/rm-stage-target"
+    "checkout": "/home/stage-server/rm-capture"
   },
   "legacy": {
     "checkout": "/home/stage-server/rm-stage-legacy",

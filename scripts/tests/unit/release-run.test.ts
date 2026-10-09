@@ -24,8 +24,9 @@ import { join } from "node:path";
 import { validateGo } from "../../release/go.ts";
 import { checkResume, checkStageJournal, runStatus, selectSteps, type RunJournal } from "../../release/journal.ts";
 import { lineScrubber, scrubSecrets, forbiddenReceiptPath } from "../../release/scrub.ts";
-import { REMOTE_PATH, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
-import { CONFIRM_TARGET_PLACEHOLDER, loadTarget, validateTarget } from "../../release/target.ts";
+import { REMOTE_PATH, RELEASE_REPO_URL, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
+import { CAPTURE_CHECKOUT, CONFIRM_TARGET_PLACEHOLDER, loadTarget, validateTarget } from "../../release/target.ts";
+import { STAGE_TARGET } from "../../release/stage-target-lib.ts";
 import { parseArgs, receiptPathsInOutput, runRelease, type RunnerDeps } from "../../release/run.ts";
 import { checkAfterPreflight, ciProblems, laneOf, preflightOrder, preflightSteps, REQUIRED_CI, type PreflightReport } from "../../release/preflight.ts";
 import { TIMED_OUT } from "../../release/step-exec.ts";
@@ -76,6 +77,41 @@ describe("target schema", () => {
     expect(stage.checkout).toBe("/home/stage-server/rm-stage-target");
     expect(stage.legacy.checkout).toBe("/home/stage-server/rm-stage-legacy");
     expect(stage.legacy.tmuxSession).toBe("stage-driver");
+    // The capture checkout convention: one runner-owned folder on stage-2 for both targets.
+    for (const t of [prod, stage]) {
+      expect(t.capture.host).toBe(CAPTURE_CHECKOUT.host);
+      expect(t.capture.checkout).toBe(CAPTURE_CHECKOUT.checkout);
+    }
+    expect(CAPTURE_CHECKOUT.checkout).toBe("/home/stage-server/rm-capture");
+  });
+
+  test("red: a capture checkout that is the stage target's checkout or the target's own refuses, with the rule", () => {
+    // prod: the stage target's checkout on stage-2 (the 2026-10-08 R1.4 failure).
+    const p = prodRaw();
+    (p.capture as Record<string, unknown>).checkout = STAGE_TARGET.checkout;
+    const rp = validateTarget("prod", p);
+    expect("errors" in rp && rp.errors).toEqual([
+      "prod.capture.checkout /home/stage-server/rm-stage-target is the stage target's checkout, which stage-target down removes: " +
+        "the capture checkout is a dedicated folder the release runner owns (convention: rm-frontend-stage-2:/home/stage-server/rm-capture), never a release checkout",
+    ]);
+    // stage: the old stage.json named both rules at once.
+    const s = JSON.parse(readFileSync(join(targetsDir, "stage.json"), "utf8")) as Record<string, unknown>;
+    (s.capture as Record<string, unknown>).checkout = s.checkout;
+    const rs = validateTarget("stage", s);
+    const errs = "errors" in rs ? rs.errors : [];
+    expect(errs).toHaveLength(2);
+    expect(errs[1]).toContain("stage.capture.checkout /home/stage-server/rm-stage-target is this target's own checkout on rm-frontend-stage-2");
+    // its own checkout on the same host, away from the stage target's path.
+    const own = prodRaw();
+    own.host = "rm-frontend-stage-2";
+    (own.capture as Record<string, unknown>).checkout = own.checkout;
+    const ro = validateTarget("prod", own);
+    expect("errors" in ro && ro.errors.join()).toContain("is this target's own checkout on rm-frontend-stage-2");
+    // green controls: the same path on another host is not the target's own; the convention passes.
+    const other = prodRaw();
+    (other.capture as Record<string, unknown>).checkout = other.checkout;
+    expect("target" in validateTarget("prod", other)).toBe(true);
+    expect("target" in validateTarget("prod", prodRaw())).toBe(true);
   });
 
   test("red: an unknown key refuses, top level and nested", () => {
@@ -111,6 +147,36 @@ describe("target schema", () => {
 describe("one step list for every target (D61 rule 2)", () => {
   const prod = loadTarget(join(targetsDir, "prod.json"));
   const stage = loadTarget(join(targetsDir, "stage.json"));
+
+  test("R1.4 clones the capture checkout when it is missing, then fetches and detaches; the same command on both targets", () => {
+    const r14 = RELEASE_STEPS.find((s) => s.id === "R1.4")!;
+    expect(r14.cloneFrom).toBe(RELEASE_REPO_URL);
+    expect(RELEASE_STEPS.filter((s) => s.cloneFrom).map((s) => s.id)).toEqual(["R1.4"]);
+    const env = `env -i HOME=/home/stage-server PATH=${REMOTE_PATH} LANG=C.UTF-8`;
+    const render = (t: typeof prod) => renderStep(r14, t, templateValues(t, SHA, "20261008T000000Z"));
+    const rp = render(prod);
+    expect(rp.host).toBe("rm-frontend-stage-2");
+    expect(rp.remote).toBe([
+      "mkdir -p /home/stage-server/.local/state/robotmoney-release/prod/20261008T000000Z",
+      "touch /home/stage-server/.local/state/robotmoney-release/prod/20261008T000000Z/.step-R1.4",
+      `{ test -e /home/stage-server/rm-capture/.git || ${env} git clone --quiet git@github.com:robotmoney/robotmoney-frontend.git /home/stage-server/rm-capture; }`,
+      "cd /home/stage-server/rm-capture",
+      `${env} git fetch --tags origin`,
+      `${env} git -c advice.detachedHead=false checkout --detach ${SHA}`,
+    ].join(" && "));
+    // Stage renders the same command; only the run directory's target name differs.
+    expect(render(stage).remote).toBe(rp.remote.replaceAll("/robotmoney-release/prod/", "/robotmoney-release/stage/"));
+    // Idempotent: the clone runs only when .git is missing, the fetch and detach run every time.
+    expect(rp.remote.indexOf("test -e")).toBeLessThan(rp.remote.indexOf("cd /home/stage-server/rm-capture"));
+    // No other step clones.
+    const r11 = renderStep(RELEASE_STEPS.find((s) => s.id === "R1.1")!, prod, templateValues(prod, SHA, "20261008T000000Z"));
+    expect(r11.remote).not.toContain("git clone");
+  });
+
+  test("the clone source is part of the step-list hash", () => {
+    const without = RELEASE_STEPS.map((s) => (s.id === "R1.4" ? { ...s, cloneFrom: undefined } : s));
+    expect(stepListHash(without)).not.toBe(stepListHash());
+  });
 
   test("the hash is the same for stage and prod, and the list covers the runbook ids", () => {
     expect(stepListHash()).toMatch(/^[0-9a-f]{64}$/);
@@ -689,21 +755,21 @@ describe("watch steps, prod-only steps and the recovery go key", () => {
     expect(pr2.ran).toEqual(["W1", "W3"]);
   });
 
-  test("a watchHours wait takes the target's watch length: READY + 10 h, not + 6 h", async () => {
+  test("a watchHours wait takes the target's watch length: READY + 37 h, not + 6 h", async () => {
     const steps: StepTemplate[] = WATCHED.map((s) => (s.id === "W1" ? { ...s, notBefore: { afterStep: "R6.9", hours: "watchHours" } } : s));
     // A graded watch at the derived length, as production runs it.
-    const f = fixture("stage", { watchHours: 10, watchSessions: "graded" });
+    const f = fixture("stage", { watchHours: 37, watchSessions: "graded" });
     const early = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], early.deps, steps)).toBe(3);
-    expect(early.logs.join("\n")).toContain("W1 becomes runnable at 2026-10-08T22:00:00.000Z");
-    expect(early.logs.join("\n")).toContain("+ 10 h");
+    expect(early.logs.join("\n")).toContain("W1 becomes runnable at 2026-10-10T01:00:00.000Z");
+    expect(early.logs.join("\n")).toContain("+ 37 h");
     // red control: READY + 6 h is no longer enough.
     const six = fakeDeps();
     six.deps.now = () => new Date("2026-10-08T18:00:01Z");
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], six.deps, steps)).toBe(3);
     expect(six.ran).toEqual([]);
     const later = fakeDeps();
-    later.deps.now = () => new Date("2026-10-08T22:00:01Z");
+    later.deps.now = () => new Date("2026-10-10T01:00:01Z");
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], later.deps, steps)).toBe(0);
     expect(later.ran).toEqual(["W1"]);
   });
@@ -748,8 +814,9 @@ describe("release tags (R5.rc, W3)", () => {
 describe("schedule parity (R7.4a)", () => {
   const close = "2026-10-08T12:00:00.000Z";
   const base = [{ id: "s1", subject: "eth", state: "collecting", window_closes_at: close }];
-  test("6 h epochs, an on-time publish, a :30 regime cron and a live sweep pass", () => {
-    expect(epochProblems([{ id: "eth", epoch_duration_seconds: 21600 }])).toEqual([]);
+  test("24 h epochs, an on-time publish, a :30 regime cron and a live sweep pass", () => {
+    expect(epochProblems([{ id: "eth", epoch_duration_seconds: 86400 }])).toEqual([]);
+    expect(epochProblems([{ id: "eth", epoch_duration_seconds: 21600 }]).length).toBe(1);
     expect(inFlightProblems(base, [{ id: "s1", state: "published", window_closes_at: close, published_at: "2026-10-08T12:10:00.000Z", judging_duration_seconds: 900 }])).toEqual([]);
     expect(regimeCronProblems("30 */3 * * *")).toEqual([]);
     expect(paritySweep({ status: "succeeded", secs: 21.5 })).toEqual({ problems: [], detail: "last parity sweep succeeded in 21.5 s" });
@@ -1076,35 +1143,36 @@ describe("preflight", () => {
     expect(status(r, "B1")).toBe("green");
   });
 
-  test("lanes: host plus checkout path; cheap lanes first; stage merges target and capture into one lane", () => {
+  test("lanes: host plus checkout path; cheap lanes first; the capture lane is its own on both targets", () => {
     const stage = loadTarget(join(targetsDir, "stage.json"));
     const prod = loadTarget(join(targetsDir, "prod.json"));
-    expect(laneOf({ host: "target" }, stage)).toBe(laneOf({ host: "capture" }, stage));
+    expect(laneOf({ host: "target" }, stage)).not.toBe(laneOf({ host: "capture" }, stage));
     expect(laneOf({ host: "target" }, prod)).not.toBe(laneOf({ host: "capture" }, prod));
+    expect(laneOf({ host: "capture" }, stage)).toBe(laneOf({ host: "capture" }, prod));
     expect(laneOf({ host: "target", checkout: "legacy" }, prod)).toBe("rm-frontend-prod-1:/root/robotmoney-frontend");
-    expect(preflightOrder(RELEASE_STEPS, prod).map((s) => s.id)).toEqual(["R2.5", "R1.1", "R1.2", "R1.3", "R2.3", "R1.4", "R1.5", "R1.6", "R2.1", "R2.2", "R2.4r"]);
-    expect(preflightOrder(RELEASE_STEPS, stage).map((s) => s.id)).toEqual(["R2.5", "R1.1", "R1.2", "R1.3", "R1.4", "R1.5", "R1.6", "R2.1", "R2.2", "R2.4r", "R2.3"]);
+    // Stage rehearses prod's preflight order exactly.
+    const order = ["R2.5", "R1.1", "R1.2", "R1.3", "R2.3", "R1.4", "R1.5", "R1.6", "R2.1", "R2.2", "R2.4r"];
+    expect(preflightOrder(RELEASE_STEPS, prod).map((s) => s.id)).toEqual(order);
+    expect(preflightOrder(RELEASE_STEPS, stage).map((s) => s.id)).toEqual(order);
   });
 
-  test("a capture step in the target's checkout is skipped on stage and runs on prod (sameCheckoutAs)", async () => {
+  test("the capture checkout steps R1.4 to R1.6 run on stage as on prod: no step is skipped for a shared checkout", async () => {
     const stage = loadTarget(join(targetsDir, "stage.json"));
     const prod = loadTarget(join(targetsDir, "prod.json"));
-    const r14 = RELEASE_STEPS.find((s) => s.id === "R1.4")!;
-    expect(skipReason(r14, stage)).toContain("same checkout as R1.1");
-    expect(skipReason(r14, prod)).toBeUndefined();
-    expect(RELEASE_STEPS.filter((s) => s.sameCheckoutAs).map((s) => s.id)).toEqual(["R1.4", "R1.5", "R1.6"]);
-    // Through the runner: the stage run records them skipped, and the run still passes.
-    const SHARED: StepTemplate[] = [
+    for (const id of ["R1.4", "R1.5", "R1.6"]) {
+      const step = RELEASE_STEPS.find((s) => s.id === id)!;
+      expect(skipReason(step, stage)).toBeUndefined();
+      expect(skipReason(step, prod)).toBeUndefined();
+    }
+    // Through the runner: a stage run runs its capture step.
+    const SPLIT: StepTemplate[] = [
       { id: "T1", standing: [], description: "target", host: "target", cmds: [["echo", "T1"]], expectExit: 0, receipts: [], irreversible: false },
-      { id: "C1", standing: [], description: "capture", host: "capture", sameCheckoutAs: "T1", cmds: [["echo", "C1"]], expectExit: 0, receipts: [], irreversible: false },
+      { id: "C1", standing: [], description: "capture", host: "capture", cmds: [["echo", "C1"]], expectExit: 0, receipts: [], irreversible: false },
     ];
     const f = fixture("stage");
     const a = fakeDeps();
-    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, SHARED)).toBe(0);
-    expect(a.ran).toEqual(["T1"]);
-    const j = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
-    expect(j.steps.C1!.status).toBe("skipped");
-    expect(j.status).toBe("passed");
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, SPLIT)).toBe(0);
+    expect(a.ran).toEqual(["T1", "C1"]);
   });
 
   test("a step that runs past its bound is failed as timed out; the bound is in the rendered step", async () => {

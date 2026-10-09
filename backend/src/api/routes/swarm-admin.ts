@@ -496,8 +496,8 @@ export async function handleSwarmAdmin(
   if (segs[0] === "agent-health" && m === "GET") {
     const limitRaw = url.searchParams.get("limit");
     const eventTypeRaw = url.searchParams.get("eventType") ?? undefined;
-    if (eventTypeRaw !== undefined && eventTypeRaw !== "absent" && eventTypeRaw !== "rejected_signature") {
-      return { status: 400, body: { error: "eventType must be absent|rejected_signature" } };
+    if (eventTypeRaw !== undefined && eventTypeRaw !== "absent" && eventTypeRaw !== "rejected_signature" && eventTypeRaw !== "rejected_take") {
+      return { status: 400, body: { error: "eventType must be absent|rejected_signature|rejected_take" } };
     }
     return {
       status: 200,

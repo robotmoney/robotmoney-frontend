@@ -159,6 +159,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     }
   }
   if (m === "GET" && p === C.openSession) return { status: 200, body: await ic.getOpenSession() };
+  if (m === "GET" && p === C.openSessions) return { status: 200, body: { sessions: await ic.getOpenSessions() } };
   if (m === "GET" && RE_SESSION_BY_ID.test(p)) {
     const id = p.split("/").pop() ?? "";
     const r = await ic.getSessionById(decodeURIComponent(id));
@@ -214,6 +215,10 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
   if (m === "POST" && p === C.signingPayload) {
     const res = validateSigningDraft(await readJsonObject(req));
     if (!res.ok) return { status: 400, body: { error: res.error } };
+    // The same weights rule submit applies (ic.weightsRefusal), so a draft this
+    // route signs is not one submit then refuses for its weights.
+    const refused = await ic.weightsRefusal(res.data.subjectId, res.data.weights);
+    if (refused) return { status: refused.status, body: { error: refused.error } };
     return { status: 200, body: { canonical: canonicalizeSubmission(res.data) } };
   }
 

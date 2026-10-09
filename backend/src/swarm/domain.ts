@@ -962,6 +962,35 @@ export async function getOpenSession() {
   return r[0] ? toSession(r[0]) : null;
 }
 
+const openSessionsRead = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:getOpenSessions",
+  purpose: "Read every collecting session, soonest close first.",
+  callers: [SWARM_ROUTE],
+  probe: {
+    statement: `SELECT id, date, subject_id, subject_name, state, window_closes_at
+                      FROM swarm_sessions WHERE state = 'collecting'
+                      ORDER BY window_closes_at ASC NULLS LAST, subject_id`,
+  },
+});
+/**
+ * Every session collecting now, each in getOpenSession's shape, soonest close
+ * first. getOpenSession answers one session (the newest by generated_at), which
+ * was the whole truth under the old one-subject-at-a-time rotation. With
+ * several subjects collecting at once it hid the rest: over 10-09 00:00 to
+ * 17:00 UTC it showed treasury 91.6% of the time and woon 0.4%, and an agent
+ * built on it (ShodAI) never reached a subject that took a take without a
+ * weight vector. Additive: the single-session route is unchanged.
+ */
+export async function getOpenSessions() {
+  const r = await on(sql, openSessionsRead)<any>`SELECT id, date, subject_id, subject_name, state, window_closes_at
+                      FROM swarm_sessions WHERE state = 'collecting'
+                      ORDER BY window_closes_at ASC NULLS LAST, subject_id`;
+  return r.map((row) => toSession(row));
+}
+
 const SESSION_BY_DATE_PROBE = {
   statement: `SELECT *, (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = swarm_sessions.id) AS opened_at FROM swarm_sessions
                        WHERE date = $1 AND subject_id = $2
@@ -1473,6 +1502,42 @@ export type SubmitTakeResult =
     }
   | { ok: false; status: number; error: string; verified?: undefined };
 
+/**
+ * The allocation ask, as ONE rule for the two routes that apply it: a take on a
+ * `bucket_weights` subject must carry exactly the four canonical buckets. Both
+ * POST /api/swarm/submit (submitRecommendation) and POST /api/swarm/signing-payload
+ * call this, so a draft the signing route accepts is never one the submit route
+ * then refuses for its weights (post-mortem 2026-10-09, finding 10). Returns the
+ * refusal, or null when the draft passes or the subject takes no vector.
+ */
+export async function weightsRefusal(
+  subjectId: string,
+  vector: { bucket: string; weight: number }[] | undefined | null,
+): Promise<{ ok: false; status: 400; error: string } | null> {
+  const subjectRow = (await on(sql, submitSubject)<{ recommendation_type: string | null }>`
+    SELECT recommendation_type FROM swarm_subjects WHERE id = ${subjectId}`)[0];
+  if (subjectRow?.recommendation_type !== "bucket_weights") return null;
+  if (vector == null || vector.length === 0) {
+    return {
+      ok: false,
+      status: 400,
+      error: `weights_required_for_bucket_weights_subject: ${subjectId} convenes for an allocation, so a take must carry the four-bucket weight vector (${[...RECEIPT_CANONICAL_BUCKET_ORDER].join(", ")}). ` +
+        "A weightless take cannot support the receipt this session must publish, and once the window closes the refusal is no longer recoverable — so it is refused now, while amending is still possible.",
+    };
+  }
+  const named = new Set(vector.map((w) => w.bucket));
+  if (named.size !== RECEIPT_CANONICAL_BUCKET_ORDER.length ||
+      !RECEIPT_CANONICAL_BUCKET_ORDER.every((bucket) => named.has(bucket))) {
+    return {
+      ok: false,
+      status: 400,
+      error: `weights_not_canonical_four: this take names {${[...named].join(", ")}}, and a bucket_weights take must name exactly {${[...RECEIPT_CANONICAL_BUCKET_ORDER].join(", ")}} — one entry each. ` +
+        "A partial vector is NOT padded with zeros: a bucket a member never named would otherwise be signed as that member's explicit 0.00 vote.",
+    };
+  }
+  return null;
+}
+
 const SUBMIT_INSERT_PROBE = {
   statement: `INSERT INTO swarm_recommendations
           (session_id, member_id, subject_id, date, nonce, stance, confidence, body, memo_url, payload, signature, verified, revision, signing_key_id, report_snapshot_id, received_at)
@@ -1717,14 +1782,11 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   // Signed-date agreement. A stale agent that woke with yesterday's brief must
   // not have its take filed against today's session.
   if (sub.date && day(session.date) !== sub.date) {
-    return {
-      ok: false,
-      status: 409,
-      error: `signed date ${sub.date} does not match the open session for ${sub.subjectId} (${day(session.date)})`,
-    };
+    return refuseTake(session.id, memberId, sub.subjectId, 409, "signed_date_mismatch",
+      `signed date ${sub.date} does not match the open session for ${sub.subjectId} (${day(session.date)})`);
   }
   if (session.window_passed === true || session.state !== "collecting") {
-    return { ok: false, status: 409, error: "submission window closed" };
+    return refuseTake(session.id, memberId, sub.subjectId, 409, "submission_window_closed", "submission window closed");
   }
 
 // Report-snapshot binding (issue #978 AC6). Once this session's brief is
@@ -1747,18 +1809,12 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   const boundReportSnapshotId = brief?.report_snapshot_id != null ? String(brief.report_snapshot_id) : null;
   if (boundReportSnapshotId === null) {
     if (sub.reportSnapshotId != null) {
-      return {
-        ok: false,
-        status: 409,
-        error: "this session's brief is bound to no analytics report snapshot; submit no reportSnapshotId",
-      };
+      return refuseTake(session.id, memberId, sub.subjectId, 409, "report_snapshot_unbound",
+        "this session's brief is bound to no analytics report snapshot; submit no reportSnapshotId");
     }
   } else if (sub.reportSnapshotId !== boundReportSnapshotId) {
-    return {
-      ok: false,
-      status: 409,
-      error: `reportSnapshotId does not match this session's brief (expected ${boundReportSnapshotId})`,
-    };
+    return refuseTake(session.id, memberId, sub.subjectId, 409, "report_snapshot_mismatch",
+      `reportSnapshotId does not match this session's brief (expected ${boundReportSnapshotId})`);
   }
   // Roster gate (issue #152, AC6). An epoch seats its expected roster in the
   // transaction that opens it (insertEpoch), and the roster is immutable from
@@ -1783,8 +1839,8 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   if (rosterRows.length > 0 || !legacyUnrostered) {
     const mine = (await on(sql, submitSeat)<{ status: string }>`
       SELECT status FROM swarm_session_members WHERE session_id = ${session.id} AND member_id = ${memberId}`)[0];
-    if (!mine) return { ok: false, status: 403, error: "member is not on this session's expected roster" };
-    if (mine.status === "excused") return { ok: false, status: 403, error: "member is excused from this session" };
+    if (!mine) return refuseTake(session.id, memberId, sub.subjectId, 403, "not_on_roster", "member is not on this session's expected roster");
+    if (mine.status === "excused") return refuseTake(session.id, memberId, sub.subjectId, 403, "excused", "member is excused from this session");
   }
 
   // ── CHEAP REFUSALS, BEFORE THE ED25519 VERIFY (issue #573) ───────────────
@@ -1819,11 +1875,8 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   // where TAKES_AMENDABLE_STATES used to be). What an amendment still meets
   // that a first take cannot is the cap.
   if (priorCount >= SWARM_TAKE_REVISION_CAP) {
-    return {
-      ok: false,
-      status: 409,
-      error: `amendment cap reached (${SWARM_TAKE_REVISION_CAP} takes per member per session)`,
-    };
+    return refuseTake(session.id, memberId, sub.subjectId, 409, "amendment_cap_reached",
+      `amendment cap reached (${SWARM_TAKE_REVISION_CAP} takes per member per session)`);
   }
 
   // A replayed nonce never reaches this point: the retry lookup at the top of
@@ -1856,28 +1909,10 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   // THE TYPE IS READ OFF THE SUBJECT, not off the session's rollup: the rollup
   // does not exist yet while takes are being collected, and the subject is what
   // the brief was built from (`publishBrief`, takeSchema.weights.optional).
-  const subjectRow = (await on(sql, submitSubject)<{ recommendation_type: string | null }>`
-    SELECT recommendation_type FROM swarm_subjects WHERE id = ${sub.subjectId}`)[0];
-  if (subjectRow?.recommendation_type === "bucket_weights") {
-    const vector = sub.weights;
-    if (vector == null || vector.length === 0) {
-      return {
-        ok: false,
-        status: 400,
-        error: `weights_required_for_bucket_weights_subject: ${sub.subjectId} convenes for an allocation, so a take must carry the four-bucket weight vector (${[...RECEIPT_CANONICAL_BUCKET_ORDER].join(", ")}). ` +
-          "A weightless take cannot support the receipt this session must publish, and once the window closes the refusal is no longer recoverable — so it is refused now, while amending is still possible.",
-      };
-    }
-    const named = new Set(vector.map((w) => w.bucket));
-    if (named.size !== RECEIPT_CANONICAL_BUCKET_ORDER.length ||
-        !RECEIPT_CANONICAL_BUCKET_ORDER.every((bucket) => named.has(bucket))) {
-      return {
-        ok: false,
-        status: 400,
-        error: `weights_not_canonical_four: this take names {${[...named].join(", ")}}, and a bucket_weights take must name exactly {${[...RECEIPT_CANONICAL_BUCKET_ORDER].join(", ")}} — one entry each. ` +
-          "A partial vector is NOT padded with zeros: a bucket a member never named would otherwise be signed as that member's explicit 0.00 vote.",
-      };
-    }
+  const weightsRefused = await weightsRefusal(sub.subjectId, sub.weights);
+  if (weightsRefused) {
+    return refuseTake(session.id, memberId, sub.subjectId, weightsRefused.status,
+      weightsRefused.error.split(":")[0]!, weightsRefused.error);
   }
 
   const key = await activeKeyFor(memberId);
@@ -3775,6 +3810,50 @@ const healthRecord = registerQuery({
     params: ["absent", SAMPLE_ID, "probe", "{}"],
   },
 });
+const healthRecordRefusal = registerQuery({
+  role: "rm_app",
+  object: "swarm_agent_health_events",
+  privileges: ["INSERT"],
+  site: "src/swarm/domain:recordRefusedTake",
+  purpose: "Record a refused take once per (session, member, refusal code), so a looping agent writes one row, not one per attempt.",
+  callers: [SWARM_ROUTE],
+  probe: {
+    statement: `INSERT INTO swarm_agent_health_events (event_type, session_id, member_id, detail)
+    SELECT 'rejected_take', $1, $2, $3::jsonb WHERE false
+    ON CONFLICT DO NOTHING`,
+    params: [SAMPLE_ID, "probe", "{}"],
+  },
+});
+
+/**
+ * A refused take, made visible. The API used to answer a 4xx and leave nothing
+ * behind: the access log holds a status and a byte count, and a refusal looked
+ * to an operator like an ordinary absence (post-mortem 2026-10-09). This logs
+ * one line per refusal (member, subject, status, code: never the signature or
+ * the body) and records one `rejected_take` health event per (session, member,
+ * code). The event is a courtesy: a failure to write it never turns a refusal
+ * into a 500.
+ */
+async function refuseTake(
+  sessionId: string,
+  memberId: string,
+  subjectId: string,
+  status: number,
+  code: string,
+  error: string,
+): Promise<{ ok: false; status: number; error: string }> {
+  console.warn(`[swarm] take refused member=${memberId} subject=${subjectId} session=${sessionId} status=${status} code=${code}`);
+  try {
+    await on(sql, healthRecordRefusal)`
+      INSERT INTO swarm_agent_health_events (event_type, session_id, member_id, detail)
+      VALUES ('rejected_take', ${sessionId}, ${memberId}, ${sql.json({ status, code, subjectId } as any)})
+      ON CONFLICT DO NOTHING`;
+  } catch (e) {
+    console.error(`[swarm] could not record the refused take as a health event: ${e instanceof Error ? e.message : e}`);
+  }
+  return { ok: false, status, error };
+}
+
 async function recordAgentHealthEvent(
   eventType: "absent" | "rejected_signature",
   sessionId: string | null,
@@ -3791,7 +3870,7 @@ async function recordAgentHealthEvent(
 export interface AgentHealthFilter {
   sessionId?: string;
   memberId?: string;
-  eventType?: "absent" | "rejected_signature";
+  eventType?: "absent" | "rejected_signature" | "rejected_take";
   limit?: number;
 }
 

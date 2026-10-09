@@ -10,7 +10,7 @@
   "capture": {
     "host": "rm-frontend-stage-2",
     "home": "/home/stage-server",
-    "checkout": "/home/stage-server/rm-stage-target"
+    "checkout": "/home/stage-server/rm-capture"
   },
   "legacy": {
     "checkout": "/root/robotmoney-frontend",
