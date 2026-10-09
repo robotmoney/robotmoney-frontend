@@ -213,8 +213,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "R2.5", standing: ["SP.5"], host: "target", checkout: "legacy", irreversible: false, expectExit: 0, triage: true, receipts: [runReceipts("prod-gate-baseline.*")],
-    description: "Log baseline of the running legacy stack, graded by the legacy checkout's own prod:gate (its .agents/smoke-state.json names the stack)",
-    cmds: [["bun", "run", "prod:gate", "--mode", "baseline", "--state-file", "{legacyCheckout}/.agents/smoke-state.json", "--report", `${RUN_DIR}/prod-gate-baseline.md`]],
+    description: "Log baseline of the running legacy stack, graded by the legacy checkout's own prod:gate for the instance",
+    cmds: [["bun", "run", "prod:gate", "--mode", "baseline", "--instance", "{instance}", "--report", `${RUN_DIR}/prod-gate-baseline.md`]],
   },
   // ── R5 release candidate tag (prod only; stage records it skipped) ────────
   {

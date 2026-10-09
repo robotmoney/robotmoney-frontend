@@ -253,7 +253,7 @@ describe("R2.5 grades the legacy stack with the legacy checkout's own gate", () 
   test("it runs from the legacy checkout, with HOME and no RM_ENV, on both targets", () => {
     for (const t of [loadTarget(join(targetsDir, "prod.json")), loadTarget(join(targetsDir, "stage.json"))]) {
       const r = renderStep(RELEASE_STEPS.find((s) => s.id === "R2.5")!, t, templateValues(t, SHA, "20261008T000000Z"));
-      expect(r.remote).toContain(`cd ${t.legacy.checkout} && env -i HOME=${t.home} PATH=${REMOTE_PATH} LANG=C.UTF-8 bun run prod:gate --mode baseline --state-file ${t.legacy.checkout}/.agents/smoke-state.json`);
+      expect(r.remote).toContain(`cd ${t.legacy.checkout} && env -i HOME=${t.home} PATH=${REMOTE_PATH} LANG=C.UTF-8 bun run prod:gate --mode baseline --instance ${t.instance}`);
       expect(r.remote).not.toContain("RM_ENV=");
     }
   });
