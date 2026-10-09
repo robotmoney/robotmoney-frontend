@@ -32,7 +32,7 @@ import { randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
 import postgres from "postgres";
 import { adminUrl, harnessConnection, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
-import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
+import { PRE_IDENTITY_RELEASES } from "../src/db/supported-releases.ts";
 import {
   applyAsReleaseRunner,
   loadBaseline,
@@ -122,7 +122,7 @@ beforeAll(async () => {
   created.push(blankDb);
 
   // The production baseline, as its own runner built it.
-  const release = loadBaseline(SUPPORTED_RELEASES[0]!.name);
+  const release = loadBaseline(PRE_IDENTITY_RELEASES[0]!.name);
   await admin.unsafe(`CREATE DATABASE ${UPGRADED_DB}`);
   created.push(UPGRADED_DB);
   // cluster admin: the release runner replays a baseline whose 0053 alters roles (superuser-only).

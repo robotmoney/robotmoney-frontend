@@ -62,7 +62,7 @@ import postgres from "postgres";
 import { adminUrl, harnessConnection, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import { IDENTITY_MIGRATION, runMigrate } from "../scripts/migrate-run.ts";
 import type { MigrateJournalFile } from "../scripts/migrate-journal.ts";
-import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
+import { PRE_IDENTITY_RELEASES } from "../src/db/supported-releases.ts";
 import {
   HEAD_FILES,
   MIGRATIONS_DIR,
@@ -81,7 +81,7 @@ import {
 } from "./fixtures/releases/release-fixture.ts";
 import { withTargetLock } from "./support/target-lock.ts";
 
-const TAG = SUPPORTED_RELEASES[0]!.name;
+const TAG = PRE_IDENTITY_RELEASES[0]!.name;
 const release = loadBaseline(TAG);
 const RELEASE_FILES = release.migrations.map((m) => m.file);
 const LAST = RELEASE_FILES.at(-1)!;
@@ -255,18 +255,18 @@ afterAll(async () => {
 });
 
 describe("the fixtures are the §10 gate's cases", () => {
-  test("SUPPORTED_RELEASES is production's observed ledger alone, and `exact` records exactly its list with no identity table", async () => {
-    expect(SUPPORTED_RELEASES.map((r) => r.name)).toEqual([TAG]);
+  test("PRE_IDENTITY_RELEASES is production's observed ledger alone, and `exact` records exactly its list with no identity table", async () => {
+    expect(PRE_IDENTITY_RELEASES.map((r) => r.name)).toEqual([TAG]);
     expect(LAST).toBe("0080_analytics_ledger_compaction.sql");
     expect(RELEASE_FILES).toHaveLength(76);
     const exact = await fingerprint(DB.exact);
-    expect(exact.ledger).toEqual([...SUPPORTED_RELEASES[0]!.migrations]);
+    expect(exact.ledger).toEqual([...PRE_IDENTITY_RELEASES[0]!.migrations]);
     expect(exact.relations).not.toContain("deployment_identity");
     expect(exact.relations).not.toContain("schema_manifest");
   });
 
   test("each variant differs from the baseline's list by exactly one file, and `v050` is v0.5.0's pure list", async () => {
-    const list = SUPPORTED_RELEASES[0]!.migrations;
+    const list = PRE_IDENTITY_RELEASES[0]!.migrations;
     expect((await fingerprint(DB.less)).ledger).toEqual(list.filter((file) => file !== LAST));
     expect((await fingerprint(DB.v050)).ledger).toEqual(loadRelease("v0.5.0").migrations.map((m) => m.file));
     expect((await fingerprint(DB.more)).ledger).toEqual([...list, FIRST_UNSHIPPED].sort());

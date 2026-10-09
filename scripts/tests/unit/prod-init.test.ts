@@ -26,7 +26,7 @@ import { PROD_INIT_COMMANDS, ProdInitRefusal, runProdInit, type ProdInitDeps } f
 import { instancePaths, writeStackState } from "../../lib/smoke-state.ts";
 import { PROVISION_TOKENS_COMMAND, tokenReuseRefusal } from "../../lib/smoke-secret.ts";
 import type { TargetState } from "../../../backend/src/db/target-lock.ts";
-import { SUPPORTED_RELEASES } from "../../../backend/src/db/supported-releases.ts";
+import { PRE_IDENTITY_RELEASES } from "../../../backend/src/db/supported-releases.ts";
 
 const REPO = join(import.meta.dir, "..", "..", "..");
 const roots: string[] = [];
@@ -50,7 +50,7 @@ interface Recorder {
 }
 
 /** The supported baseline's ledger: the pre-identity state role-passwords accepts (D61). */
-const BASELINE_LEDGER = [...SUPPORTED_RELEASES[0]!.migrations];
+const BASELINE_LEDGER = [...PRE_IDENTITY_RELEASES[0]!.migrations];
 
 /** A full set of fake effects that records every call, with overrides. */
 

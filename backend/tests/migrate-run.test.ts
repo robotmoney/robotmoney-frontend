@@ -67,7 +67,7 @@ import {
   type MigrateRunSeams,
 } from "../scripts/migrate-run.ts";
 import { MigrateJournal, migrateJournalPath, type MigrateJournalFile } from "../scripts/migrate-journal.ts";
-import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
+import { PRE_IDENTITY_RELEASES } from "../src/db/supported-releases.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { holdTargetLock, withTargetLock } from "./support/target-lock.ts";
 
@@ -362,7 +362,7 @@ describe("the first production migrate's exception does not reach a ledger that 
     expect(refusals.map((r) => r.reason)).toEqual(["identity_missing"]);
     expect(refusals[0]?.message).toContain("first production migrate");
     expect(refusals[0]?.message).toContain("matches none");
-    expect(refusals[0]?.message).toContain(`against ${SUPPORTED_RELEASES[0]!.name}:`);
+    expect(refusals[0]?.message).toContain(`against ${PRE_IDENTITY_RELEASES[0]!.name}:`);
   });
 
   test("operator, RM_ENV=stage, a table with no row: identity_missing, naming the missing-table guard it failed", async () => {
@@ -408,7 +408,7 @@ describe("the first production migrate's exception does not reach a ledger that 
   test("a run handed a pre-identity confirmation on a database that does not qualify refuses before applying anything", async () => {
     await setIdentity("production");
     const ledgerBefore = await ledgerNames();
-    const confirmed = { identity: "no table" as const, release: SUPPORTED_RELEASES[0]!.name, ledger: SUPPORTED_RELEASES[0]!.migrations };
+    const confirmed = { identity: "no table" as const, release: PRE_IDENTITY_RELEASES[0]!.name, ledger: PRE_IDENTITY_RELEASES[0]!.migrations };
     await expect(
       withTargetLock(urlFor(fileDb), (lock) =>
         runMigrate(owner, { ...options({ caller: "operator", env: "prod", connection: "remote" }), lock, confirmedPreIdentity: confirmed }),

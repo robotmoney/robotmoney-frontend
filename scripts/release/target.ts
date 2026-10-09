@@ -58,22 +58,19 @@ export const BOOT_ENV_KEYS: readonly string[] = Object.freeze([
 ]);
 
 export interface LegacyStack {
-  /** The old checkout. Section 8 renames it after the migrate. */
+  /**
+   * The checkout the running stack was started from: the previous release's.
+   * Its own `prod:gate` grades the stack it started (R2.5) and its own
+   * `smoke:down` stops it (R6.1). Section 8 renames it after the migrate (S8.1).
+   * Never the release checkout.
+   */
   readonly checkout: string;
-  /** The tmux session that drives the old stack. */
-  readonly tmuxSession: string;
-  /** The old stack's compose project name. */
-  readonly composeProject: string;
-  /** Compose files, relative to the old checkout, when `-p` alone is not enough. */
-  readonly composeFiles: readonly string[];
-  /** How the old stack was started, for the plan and the report. */
+  /** How the running stack was started, for the plan and the report. */
   readonly startedBy: string;
   /** The release the old checkout runs; the rename suffix is `.<version>-retired`. */
   readonly version: string;
   /** The commit the old checkout runs (full SHA), for the plan and the report. */
   readonly commit?: string;
-  /** The old driver's tee'd log, for the plan and the report. */
-  readonly log?: string;
 }
 
 export interface CaptureHost {
@@ -134,13 +131,12 @@ export interface ReleaseTarget {
 
 const TOP_KEYS = ["release", "rmEnv", "host", "checkout", "home", "instance", "publicOrigin", "watchMinAttendance", "watchHours", "watchSessions", "capture", "legacy", "confirmTarget", "bootEnv", "$comment"];
 const CAPTURE_KEYS = ["host", "home", "checkout"];
-const LEGACY_KEYS = ["checkout", "tmuxSession", "composeProject", "composeFiles", "startedBy", "version", "commit", "log"];
+const LEGACY_KEYS = ["checkout", "startedBy", "version", "commit"];
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
 const HOST_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const ABS_PATH_RE = /^\/[A-Za-z0-9._\/-]*$/;
-const TMUX_RE = /^[A-Za-z0-9_.-]+$/;
 
 /** One problem per line; empty means the file is valid. */
 export function validateTarget(name: string, raw: unknown): { target: ReleaseTarget } | { errors: string[] } {
@@ -198,19 +194,12 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
     const l = raw.legacy;
     unknown(l, LEGACY_KEYS, `${name}.legacy`);
     const lc = str(l, "checkout", `${name}.legacy`, ABS_PATH_RE);
-    const ts = str(l, "tmuxSession", `${name}.legacy`, TMUX_RE);
-    const cp = str(l, "composeProject", `${name}.legacy`, /^[a-z0-9][a-z0-9_-]*$/);
     const sb = str(l, "startedBy", `${name}.legacy`);
     const lv = str(l, "version", `${name}.legacy`, /^v\d+\.\d+\.\d+$/);
     const lcommit = str(l, "commit", `${name}.legacy`, SHA_RE, true);
-    const llog = str(l, "log", `${name}.legacy`, ABS_PATH_RE, true);
-    const files = l.composeFiles ?? [];
-    if (!Array.isArray(files) || files.some((f) => typeof f !== "string" || !/^[A-Za-z0-9._\/-]+$/.test(f) || f.startsWith("/"))) {
-      errors.push(`${name}.legacy.composeFiles must be a list of paths relative to the old checkout`);
-    }
     if (lc && checkout && lc === checkout) errors.push(`${name}: the legacy checkout cannot be the release checkout`);
-    if (lc && ts && cp && sb && lv && Array.isArray(files)) {
-      legacy = { checkout: lc, tmuxSession: ts, composeProject: cp, composeFiles: files as string[], startedBy: sb, version: lv, ...(lcommit ? { commit: lcommit } : {}), ...(llog ? { log: llog } : {}) };
+    if (lc && sb && lv) {
+      legacy = { checkout: lc, startedBy: sb, version: lv, ...(lcommit ? { commit: lcommit } : {}) };
     }
   }
 

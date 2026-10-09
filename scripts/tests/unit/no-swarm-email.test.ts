@@ -51,6 +51,8 @@ const PINNED: Record<string, string> = {
   "backend/migrations/0033_swarm_member_uuid_ids.sql": "applied history: remapped member ids",
   "backend/migrations/0084_drop_swarm_notifications.sql": "the migration that removes it names what it removes",
   "docs/technical/bill-of-materials.html": "cites 0084 by filename while stating that no email is sent",
+  "backend/src/db/supported-releases.ts": "the supported baseline is a filename list of applied migrations, 0084 included (D63)",
+  "backend/tests/fixtures/releases/production-v0.6.0/baseline.json": "the pinned v0.6.0 ledger names 0084 by filename (D63)",
   "backend/schema/snapshot.json": "the snapshot's identity is its migration filename list, 0084 included",
   "backend/tests/fixtures/snapshots/0095_automation_token_holders/schema/snapshot.json":
     "byte-for-byte copy of the 0095 snapshot.json (snapshot N, spec §8.4); its identity is the same filename list, 0084 included",

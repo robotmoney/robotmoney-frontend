@@ -6,7 +6,7 @@
 // WHICH RELEASES, AND WHERE THEIR SCHEMA COMES FROM
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// SUPPORTED_RELEASES (backend/src/db/supported-releases.ts) is one baseline:
+// PRE_IDENTITY_RELEASES (backend/src/db/supported-releases.ts) is one baseline:
 // production's observed ledger, read 2026-10-01 — the 72 files of v0.5.0 plus
 // four: 0062_rm_readonly_sequence_select.sql (applied out of band from the
 // archived 0.5.x line on 2026-09-22), 0061_rm_worker_wallet_backfill_grant.sql
@@ -77,7 +77,7 @@ import {
 } from "../src/db/preflight.ts";
 import { COMPAT_HEADER_BASELINE, migrationNumber, parsePendingHeader } from "../src/db/schema-compat.ts";
 import { readManifest } from "../src/db/schema-manifest.ts";
-import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
+import { PRE_IDENTITY_RELEASES } from "../src/db/supported-releases.ts";
 import { IDENTITY_MIGRATION, runMigrate, type MigrateGateOptions } from "../scripts/migrate-run.ts";
 import {
   HEAD_FILES,
@@ -243,14 +243,14 @@ INSERT INTO swarm_waitlist (email, email_norm, notified_at) VALUES ('Wait@Exampl
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("the baseline fixtures are the targets' own ledgers and bytes", () => {
-  test("SUPPORTED_RELEASES is production's observed ledger alone (2026-10-01), and it has a fixture", () => {
-    expect(SUPPORTED_RELEASES.map((r) => r.name)).toEqual([
+  test("PRE_IDENTITY_RELEASES is production's observed ledger alone (2026-10-01), and it has a fixture", () => {
+    expect(PRE_IDENTITY_RELEASES.map((r) => r.name)).toEqual([
       "v0.5.0+0061+0062+0063+0080 (production ledger 2026-10-01)",
     ]);
   });
 
-  for (const { name: tag, release: releaseTag, outOfBand, migrations } of SUPPORTED_RELEASES) {
-    test(`${tag}: SUPPORTED_RELEASES pins exactly the ledger read from the target`, () => {
+  for (const { name: tag, release: releaseTag, outOfBand, migrations } of PRE_IDENTITY_RELEASES) {
+    test(`${tag}: PRE_IDENTITY_RELEASES pins exactly the ledger read from the target`, () => {
       // The first production migrate matches a ledger against this list (§9.1,
       // D55 (5)); a list that drifted from what production recorded would
       // refuse production, or admit a ledger production never wrote.
@@ -364,7 +364,7 @@ afterAll(async () => {
   }
 });
 
-for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
+for (const [index, { name: tag }] of PRE_IDENTITY_RELEASES.entries()) {
   describe(`upgrade from ${tag}, populated`, () => {
     const name = `rm_upgrade_${index}_${suffix}`;
     let db: postgres.Sql<{}>;

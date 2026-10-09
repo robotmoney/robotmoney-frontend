@@ -97,15 +97,6 @@ describe("the file it writes", () => {
 });
 
 describe("the step", () => {
-  test("R6.2a runs before R6.2, on the target, with no secret in its command", () => {
-    const ids = stepIds();
-    expect(ids.indexOf("R6.2a")).toBe(ids.indexOf("R6.2") - 1);
-    const step = RELEASE_STEPS.find((s) => s.id === "R6.2a")!;
-    expect(step.host).toBe("target");
-    expect(step.onlyFor).toBeUndefined();
-    expect(JSON.stringify(step.cmds)).not.toMatch(/OPENCODE|modelKey|bearer/);
-  });
-
   test("a run never prints or receipts a key, a bearer or the model key", () => {
     // Drive the pure plan and the receipt shape the script writes: the receipt
     // is built from the plan's path, the roster and the rows, never from the file.

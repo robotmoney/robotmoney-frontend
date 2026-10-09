@@ -5313,3 +5313,7 @@ irreversible step.
 
 **Why.** A release line stays reviewable and main-first. Every change on it is
 either already on `main` or has a named reason it cannot be.
+
+## D63 — The supported baseline is production's v0.6.0 ledger (replaces D55 (8)'s 76-name ledger; owner, 2026-10-09)
+
+`SUPPORTED_RELEASES` holds one baseline: the 116 migration files of tag `v0.6.0` (commit `e96d4598`), the ledger production holds since its cutover of 2026-10-08. Its sha256 per file is pinned in `backend/tests/fixtures/releases/production-v0.6.0/baseline.json`. The release runner (R1.2, R2.3, `prod-init`) refuses any other ledger, the 76-name one included. The identity-first pass (D55 (9)) keeps matching the frozen `PRE_IDENTITY_RELEASES` list. The v0.6.0-only steps R6.2a, R6.7c and R6.7d leave the step list: the v0.6.0 cutover already wrote the credential file and rebound the members.

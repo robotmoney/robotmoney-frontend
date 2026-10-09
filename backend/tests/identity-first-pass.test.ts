@@ -49,7 +49,7 @@ import { adminUrl, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import { applyIdentityFirst, identityFirstKind, IDENTITY_MIGRATION, readPreIdentityLedger, runMigrate } from "../scripts/migrate-run.ts";
 import type { MigrateJournalFile } from "../scripts/migrate-journal.ts";
 import { readManifest } from "../src/db/schema-manifest.ts";
-import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
+import { PRE_IDENTITY_RELEASES } from "../src/db/supported-releases.ts";
 import {
   HEAD_FILES,
   MIGRATIONS_DIR,
@@ -68,7 +68,7 @@ import {
 } from "./fixtures/releases/release-fixture.ts";
 import { withTargetLock } from "./support/target-lock.ts";
 
-const TAG = SUPPORTED_RELEASES[0]!.name;
+const TAG = PRE_IDENTITY_RELEASES[0]!.name;
 const BASELINE = loadBaseline(TAG);
 const BASELINE_FILES = BASELINE.migrations.map((m) => m.file);
 /** The five files production lacks below 0081, in the order the normal path applies them. */
@@ -272,7 +272,7 @@ afterAll(async () => {
 describe("the template is production's baseline: no table, the 76-name ledger", () => {
   test("the baseline template records exactly the supported baseline and has no deployment_identity table", async () => {
     const state = await stateOf(TEMPLATE);
-    expect(state).toEqual({ ledger: [...SUPPORTED_RELEASES[0]!.migrations], table: false, identity: [], manifest: false });
+    expect(state).toEqual({ ledger: [...PRE_IDENTITY_RELEASES[0]!.migrations], table: false, identity: [], manifest: false });
     expect(BASELINE_FILES.filter((f) => LOWER_FIVE.includes(f))).toEqual([]);
     expect(HEAD_FILES).toEqual(expect.arrayContaining(LOWER_FIVE));
   });

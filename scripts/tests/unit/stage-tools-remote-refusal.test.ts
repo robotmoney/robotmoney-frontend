@@ -112,6 +112,7 @@ const NOT_A_REMOTE_STAGE_TOOL: Readonly<Record<string, string>> = {
   "backend/scripts/smoke-prepare.ts": "runs behind smoke-main's policy call and the migrate and seed gates above",
   "backend/scripts/spoof-rebind.ts": "rehearsal-only, local container",
   "backend/src/db/automation-tokens.ts": "token minting names the table in a comment or a rehearsal guard, not a target read",
+  "backend/src/db/supported-releases.ts": "a filename list of applied migrations; 0081_deployment_identity is a name in it, not a read of the table",
   "backend/src/db/schema-snapshot.ts": "reads the row for the seed gate and the snapshot bootstrap",
   "backend/src/db/seed.ts": "the --seed gate (requireRehearsalTarget), covered by behaviour above",
   "backend/src/db/target-lock.ts": "the lock's own state read, not a policy decision",

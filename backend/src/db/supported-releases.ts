@@ -1,3 +1,9 @@
+// REPLACED 2026-10-09 (D63, owner): SUPPORTED_RELEASES holds production's ledger
+// as v0.6.0 left it, the 116 files of tag v0.6.0 (e96d4598). The 76-name ledger
+// described below is kept as PRE_IDENTITY_RELEASES, for the identity-first pass
+// alone. The text below is the history of D55 (8) and still explains WHY a
+// baseline is a filename list and not a number.
+//
 // The releases a production database may be upgraded FROM — spec §8.4's
 // `SUPPORTED_RELEASES`, and the one list the first production migrate of §9.1
 // matches a pre-identity ledger against (D55 (5), (8)).
@@ -143,8 +149,155 @@ const V0_5_0_MIGRATIONS: readonly string[] = [
   "0061_source_value_provenance.sql",
 ];
 
-/** Production's observed ledger (see the header). Adding one takes an owner decision. */
+/** The 116 files of the v0.6.0 tag (e96d4598), in filename order: production's ledger since the cutover of 2026-10-08. */
+const V0_6_0_MIGRATIONS: readonly string[] = [
+  "0001_backends.sql",
+  "0002_dashboards.sql",
+  "0003_task_queue.sql",
+  "0004_committee.sql",
+  "0005_job_schedules_seed.sql",
+  "0006_committee_reconcile.sql",
+  "0007_committee_rls_stub.sql",
+  "0008_committee_memos.sql",
+  "0009_analytics_v2.sql",
+  "0010_backtest_correlations.sql",
+  "0011_regime_dashboard_extras.sql",
+  "0012_vault_share_price_history.sql",
+  "0013_projects.sql",
+  "0014_projects_pipelines.sql",
+  "0014_wallet_balance_samples.sql",
+  "0015_buyback_swaps.sql",
+  "0016_worker_role.sql",
+  "0017_admin_surface.sql",
+  "0018_research_telemetry.sql",
+  "0019_committee_self_serve_claim.sql",
+  "0020_committee_agent_health.sql",
+  "0021_chain_indexer_samples.sql",
+  "0021_committee_waitlist.sql",
+  "0022_committee_application_received_notification.sql",
+  "0022_committee_session_convened_at.sql",
+  "0023_agent_activity_log.sql",
+  "0023_analytics_submissions.sql",
+  "0023_list2_leaderboard.sql",
+  "0024_analytics_provenance_source.sql",
+  "0025_swarm_rename.sql",
+  "0026_swarm_sessions_legacy_takes.sql",
+  "0027_drop_swarm_sessions_legacy_takes.sql",
+  "0028_admin_credential.sql",
+  "0028_swarm_briefs_session_key.sql",
+  "0028_swarm_take_revisions.sql",
+  "0029_admin_auth_recovery.sql",
+  "0029_admin_passkey.sql",
+  "0030_swarm_member_handle.sql",
+  "0031_swarm_member_handle_namespace.sql",
+  "0032_append_only_history.sql",
+  "0032_wallet_balance_samples_strategy_nav_idle_only.sql",
+  "0033_swarm_member_uuid_ids.sql",
+  "0033_wallet_backfill.sql",
+  "0034_job_schedules_catchup_policy.sql",
+  "0035_swarm_member_avatar_bytes.sql",
+  "0036_quarantine_backfilled_samples.sql",
+  "0037_aum_repairable_quarantine.sql",
+  "0038_wallet_aum_snapshot_foundation.sql",
+  "0039_swarm_judge.sql",
+  "0040_swarm_judgements_append_only.sql",
+  "0041_swarm_judgement_soak_record.sql",
+  "0042_swarm_consensus_receipts.sql",
+  "0043_swarm_member_judges.sql",
+  "0044_wallet_backfill_leg_terminal.sql",
+  "0045_chain_address_floors.sql",
+  "0046_asset_prices.sql",
+  "0047_swarm_session_subject_name_backfill.sql",
+  "0048_swarm_judge_third_party_flag.sql",
+  "0049_swarm_recommendations_signing_key.sql",
+  "0050_swarm_member_keys_append_only.sql",
+  "0051_swarm_vault_recommendation_type_repair.sql",
+  "0052_swarm_judgement_digest_scheme.sql",
+  "0053_database_role_taxonomy.sql",
+  "0054_rm_worker_allowlist.sql",
+  "0055_swarm_recommendations_member_received_idx.sql",
+  "0056_analytics_overwrite_events.sql",
+  "0056_swarm_judge_requires_model.sql",
+  "0057_source_acquisition_ledger.sql",
+  "0057_swarm_judge_policy_stamp.sql",
+  "0058_analytics_run_ledger.sql",
+  "0058_swarm_judge_fault_injection.sql",
+  "0059_analytics_output_and_report_snapshots.sql",
+  "0059_swarm_framework_subject_snapshot_cleanup.sql",
+  "0059_swarm_judgement_completion_usage.sql",
+  "0060_analytics_ledger_cutover.sql",
+  "0061_rm_worker_wallet_backfill_grant.sql",
+  "0061_source_value_provenance.sql",
+  "0062_rm_readonly_sequence_select.sql",
+  "0062_rm_worker_analytics_ledger_read_grant.sql",
+  "0063_swarm_judge_model_default.sql",
+  "0080_analytics_ledger_compaction.sql",
+  "0081_deployment_identity.sql",
+  "0082_schema_manifest.sql",
+  "0083_append_only_grant_transition.sql",
+  "0084_drop_swarm_notifications.sql",
+  "0085_subject_epoch_duration.sql",
+  "0086_session_epoch_lifecycle.sql",
+  "0087_automation_tokens.sql",
+  "0088_swarm_scheduler_jobs.sql",
+  "0089_drop_swarm_schedules.sql",
+  "0090_subject_grid_columns.sql",
+  "0091_session_judging_duration.sql",
+  "0092_swarm_recommendations_final.sql",
+  "0093_ledger_write_revoke.sql",
+  "0094_immutable_ledger_grants.sql",
+  "0095_automation_token_holders.sql",
+  "0096_drop_swarm_scheduler_jobs.sql",
+  "0097_stream_events_grant_only.sql",
+  "0098_stream_event_counter.sql",
+  "0099_swarm_judge_model_bare_id.sql",
+  "0100_judge_config_two_modes.sql",
+  "0101_clear_forged_member_operator.sql",
+  "0102_admin_revocation_tombstones.sql",
+  "0103_webauthn_challenge_consumed_at.sql",
+  "0104_wallet_sample_superseded_at.sql",
+  "0105_member_key_spoof_generation.sql",
+  "0106_webauthn_challenge_slots.sql",
+  "0107_revoke_runtime_delete.sql",
+  "0108_stream_events_retention_comment.sql",
+  "0109_rm_worker_wallet_evidence_insert.sql",
+  "0110_drop_swarm_judge_fault_injection.sql",
+  "0111_swarm_judge_model_deepseek_v4_1_flash.sql",
+  "0112_rm_app_overwrite_events_read.sql",
+  "0113_rm_worker_buyback_indexer_grants.sql",
+  "0114_seat_in_flight_unrostered_sessions.sql",
+  "0115_token_market_samples.sql",
+];
+
+/**
+ * The one supported upgrade source: production's ledger as v0.6.0 left it (D63,
+ * owner, 2026-10-09). It replaces the 76-name ledger of D55 (8): no database
+ * takes a path from an older release. Adding or changing a baseline takes an
+ * owner decision.
+ */
 export const SUPPORTED_RELEASES: readonly SupportedRelease[] = [
+  {
+    name: "v0.6.0 (production ledger 2026-10-09)",
+    release: "v0.6.0",
+    outOfBand: [],
+    provenance:
+      "the 116 migration files of tag v0.6.0 (commit e96d4598, the commit production runs since its cutover of " +
+      "2026-10-08 22:10 UTC): every file 0001 to 0115. Each file's sha256 is pinned in " +
+      "backend/tests/fixtures/releases/production-v0.6.0/baseline.json",
+    migrations: [...V0_6_0_MIGRATIONS],
+  },
+];
+
+/**
+ * Production's pre-identity ledger of 2026-10-01 (the 76 names). FROZEN and
+ * NOT a supported upgrade source since D63 (owner, 2026-10-09): production
+ * runs v0.6.0 and holds `deployment_identity`. It stays only because the
+ * identity-first pass (backend/scripts/migrate-run.ts, D55 (9)) and its tests
+ * still match a database that has no identity table against it. No release
+ * tool treats it as a baseline: R1.2, R2.3 and `prod-init` read
+ * SUPPORTED_RELEASES.
+ */
+export const PRE_IDENTITY_RELEASES: readonly SupportedRelease[] = [
   {
     name: "v0.5.0+0061+0062+0063+0080 (production ledger 2026-10-01)",
     release: "v0.5.0",

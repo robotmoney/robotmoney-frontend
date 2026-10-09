@@ -15,15 +15,14 @@
 //
 // With --confirm-target it also proves what the cutover needs later, before
 // R6.1 stops the legacy stack (the run's first irreversible step):
-//   - `~/.env` holds a non-empty `rm_owner` line (./env-keys.ts
+//   - `~/.env` holds a non-empty `rm_owner` and `RM_CREDENTIALS` line (./env-keys.ts
 //     PRE_CUTOVER_REQUIRED_KEYS). R6.2 checks it again.
 //   - rm_owner logs in: `SELECT 1`, read-only, through the registry's
 //     object-less `connectionCheck` shape declared as rm_owner in
 //     backend/scripts/owner-login-check.ts (proveOwnerLogin).
 // A failure refuses with "rm_owner cannot log in; run `bun run
 // role-passwords --target <target>` first". No release step reads or uses
-// `doadmin` (D61 amendment, owner, 2026-10-08). `RM_CREDENTIALS` is not required here:
-// R6.2a writes it.
+// `doadmin` (D61 amendment, owner, 2026-10-08).
 //
 // Writes host-identity.json to --receipt-dir. Prints key names, never values.
 // Runs before `bun install`, so it imports only node built-ins and local

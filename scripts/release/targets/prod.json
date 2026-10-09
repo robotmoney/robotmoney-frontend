@@ -1,9 +1,9 @@
 {
-  "$comment": "Production target for bun run release:run (D61). No release commit here: the go file's commit: line names it, and SP.8 refuses a commit the stage run did not pass at. Fill confirmTarget with host:port/database from rm-frontend-prod-1's /root/.env before the run. The run refuses the placeholder, and R1.2 refuses a value that differs from what the host resolves.",
-  "release": "v0.6.0",
+  "$comment": "Production target for bun run release:run (D61). No release commit here: the go file's commit: line names it, and SP.8 refuses a commit the stage run did not pass at. Since D63 the run upgrades the v0.6.0 stack production runs: legacy.checkout is the checkout it was started from (/root/rm-060 at v0.6.0, e96d4598), and the release checkout /root/rm-061 is cloned by R1.1 when missing. confirmTarget is the host:port/database /root/.env names; R1.2 refuses a value that differs from what the host resolves.",
+  "release": "v0.6.1",
   "rmEnv": "prod",
   "host": "rm-frontend-prod-1",
-  "checkout": "/root/rm-060",
+  "checkout": "/root/rm-061",
   "home": "/root",
   "instance": "rm_prod",
   "publicOrigin": "https://robotmoney.network",
@@ -13,14 +13,10 @@
     "checkout": "/home/stage-server/rm-capture"
   },
   "legacy": {
-    "checkout": "/root/robotmoney-frontend",
-    "commit": "1cda4085d235b55bf171735ac77618155e6b1647",
-    "tmuxSession": "driver",
-    "composeProject": "rm_prod",
-    "composeFiles": [],
-    "startedBy": "SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui (= bun scripts/smoke.ts --smoke --static-port --db external) in tmux session driver",
-    "log": "/root/smoke-archive-v0.5.4.log",
-    "version": "v0.5.4"
+    "checkout": "/root/rm-060",
+    "commit": "e96d4598678346260282e37ffd5a10df286186ba",
+    "startedBy": "bun run smoke --static-port --instance rm_prod from /root/rm-060 at v0.6.0 (e96d4598), 2026-10-08 22:10 UTC; Docker keeps the stack running (compose project rm_smoke_stack_d8f827cd30), there is no tmux driver",
+    "version": "v0.6.0"
   },
   "confirmTarget": "private-dbaas-db-8115298-do-user-39489996-0.g.db.ondigitalocean.com:25060/defaultdb",
   "bootEnv": {}

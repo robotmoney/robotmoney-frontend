@@ -12,23 +12,28 @@
 // Every secret is generated and written on the host: no password crosses ssh,
 // appears in a process argument or reaches this terminal.
 //
+// Since D63 (owner, 2026-10-09) the target is production as it runs v0.6.0.
 // What `up` builds, in order:
-//   1. the two checkouts: legacy v0.5.4 at production's commit, v0.6.0 at the
-//      release commit;
+//   1. the two checkouts, both at v0.6.0 (e96d4598): the legacy checkout, where
+//      the running stack is started, and the release checkout, which the runner
+//      moves to the release commit (R1.1);
 //   2. `$HOME` for the target, with a self-signed TLS certificate;
 //   3. a long-lived Postgres 18 container over TLS on a fixed port, its data in
 //      a named volume;
 //   4. DigitalOcean's role shape from the dump's own globals, with generated
-//      passwords (rm_owner NOLOGIN with a password nobody keeps, doadmin
-//      CREATEROLE with a password held in memory for the checks, then dropped);
-//   5. production's owners and grants, from a replay of the 76 ledger files in
-//      a scratch database (the capture carries none);
-//   6. the restored dump, with those owners and grants, checked against the
-//      pre-cutover shape (ledger 76, no deployment_identity);
-//   7. `~/.env` with production's key names only (no rm_owner line, no
-//      doadmin: production's pre-state), and the legacy checkout `.env` with
-//      production's key names;
-//   8. the legacy stack and its driver in tmux, started as production's are.
+//      passwords (rm_owner with LOGIN, as production's since `role-passwords`,
+//      doadmin CREATEROLE with a password held in memory for the checks, then
+//      dropped);
+//   5. production's owners and grants, from a replay of the 116 ledger files in
+//      a scratch database in production's order (the capture carries none);
+//   6. the restored dump with those owners and grants, its deployment_identity
+//      row re-enrolled `rehearsal` (a stage target is never `production`), and
+//      checked against the baseline (ledger 116, identity present);
+//   7. `~/.env` with production's key names;
+//   8. the v0.6.0 stack, brought up the way the v0.6.0 cutover did: a fresh
+//      credential.json and the rebind of the in-house members to it (setup of a
+//      disposable database), the service tokens, and `bun smoke --static-port`
+//      from the legacy checkout. Docker keeps the stack running, as on production.
 //
 // doadmin is stored in no file (D61, owner 2026-10-08). After `up`, the stage
 // sequence is production's: `up`, then
@@ -47,32 +52,35 @@ import { parseEnvFile } from "../lib/env-role.ts";
 import { POSTGRES_IMAGE } from "../lib/postgres-image.ts";
 import { resolveBackupFiles, restorePipelineArgv, SHM_FLAGS } from "../lib/restore-container.ts";
 import { instanceStackProject } from "../lib/smoke-state.ts";
+import { PRE_IDENTITY_RELEASES, SUPPORTED_RELEASES } from "../../backend/src/db/supported-releases.ts";
+import { IDENTITY_MIGRATION } from "./precondition.ts";
 import { CAPTURE_CHECKOUT } from "./target.ts";
 import {
   ACL_EXPORT_SQL,
   ACL_FINGERPRINT_SQL,
   bindDatabase,
-  composeLegacyCheckoutEnv,
   composeStageHomeEnv,
   DOADMIN_ADMIN_QUERY,
   doadminPasswordSql,
   dumpAgeHours,
+  ENROLL_REHEARSAL_SQL,
   envKeyNames,
   fingerprintDiff,
   GENERATED_PASSWORD_ROLES,
   globalsToRoleSql,
+  GRANTS_RECONCILE_FILE,
+  grantsReconcileScript,
   LEGACY_LEDGER_TABLE_SQL,
-  legacyLaunchScript,
   legacyMigrationScript,
+  legacyStackCommands,
   parseKeyValues,
   pgHbaConf,
-  PRECUTOVER_STATE_QUERY,
-  precutoverProblems,
   PROD_HOME_ENV_KEYS,
-  PROD_LEGACY_CHECKOUT_ENV_KEYS,
   PROVISION_TAXONOMY_FILE,
   provisionTaxonomyScript,
   removalRefusal,
+  RESTORED_STATE_QUERY,
+  restoredDatabaseProblems,
   ROLE_SHAPE_QUERY,
   roleShapeProblems,
   rolePasswordSql,
@@ -80,6 +88,7 @@ import {
   STAGE_TARGET as T,
   stageTargetDirs,
   tlsSettingsSql,
+  upReceiptDir,
   type GeneratedPasswordRole,
   type StageHomeEnv,
 } from "./stage-target-lib.ts";
@@ -174,13 +183,9 @@ function dockerNames(kind: "container" | "volume", filter: string): string[] {
   return run(argv).stdout.split("\n").map((s) => s.trim()).filter(Boolean);
 }
 
-function tmuxHasSession(): boolean {
-  return run(["tmux", "has-session", "-t", `=${T.driverSession}`]).code === 0;
-}
-
-/** The compose projects this target's stacks may run under: the legacy one and v0.6's for the instance. */
+/** The compose projects this target's stacks may run under: the instance's. */
 function targetProjects(): string[] {
-  return [...new Set([T.legacyProject, instanceStackProject(T.instance, {})])];
+  return [instanceStackProject(T.instance, {})];
 }
 
 function projectContainers(): string[] {
@@ -206,7 +211,6 @@ function existingPieces(): string[] {
   if (dockerNames("container", `name=^${T.pgContainer}$`).length) pieces.push(`container ${T.pgContainer}`);
   if (dockerNames("volume", `name=^${T.pgVolume}$`).length) pieces.push(`volume ${T.pgVolume}`);
   for (const dir of stageTargetDirs(retiredLegacyCheckouts())) if (existsSync(dir)) pieces.push(`directory ${dir}`);
-  if (tmuxHasSession()) pieces.push(`tmux session ${T.driverSession}`);
   for (const c of projectContainers()) pieces.push(`container ${c}`);
   return pieces;
 }
@@ -319,9 +323,15 @@ function applyRoles(globals: string, passwords: Record<GeneratedPasswordRole, st
 }
 
 /**
- * Replay production's ledger in a scratch database, as the legacy runner did,
- * and return the statements that give the restored copy the same owners and
- * grants, with the reference fingerprint.
+ * Replay production's ledger in a scratch database, in the order production
+ * applied it, and return the statements that give the restored copy the same
+ * owners and grants, with the reference fingerprint.
+ *
+ * Production's history, which the replay follows: the first 76 files (the
+ * v0.5 ledger, PRE_IDENTITY_RELEASES) as the legacy runner applied them, then
+ * the out-of-band taxonomy provisioning, then the v0.6.0 cutover: 0081 first,
+ * then every other file in filename order, then the grant reconciliation the
+ * cutover's migrate closed with.
  */
 function referenceGrants(baseline: readonly string[]): { statements: string; fingerprint: string } {
   const dir = join(T.legacyCheckout, "backend", "migrations");
@@ -331,15 +341,21 @@ function referenceGrants(baseline: readonly string[]): { statements: string; fin
   if (missing.length || extra.length) {
     throw new Error(`the legacy checkout's migrations are not production's ledger: missing ${missing.join(",") || "none"}, extra ${extra.join(",") || "none"}`);
   }
-  log(`replaying production's ${files.length} ledger files as doadmin in ${T.referenceDatabase}`);
+  const first = new Set(PRE_IDENTITY_RELEASES[0]!.migrations);
+  const v05 = files.filter((f) => first.has(f));
+  const cutover = [IDENTITY_MIGRATION, ...files.filter((f) => !first.has(f) && f !== IDENTITY_MIGRATION)];
+  log(`replaying production's ${files.length} ledger files as doadmin in ${T.referenceDatabase} (${v05.length} before the v0.6.0 cutover, ${cutover.length} at it)`);
   psql(`DROP DATABASE IF EXISTS ${T.referenceDatabase};`);
   psql(`CREATE DATABASE ${T.referenceDatabase} OWNER doadmin;`);
   psql(LEGACY_LEDGER_TABLE_SQL, { user: "doadmin", db: T.referenceDatabase });
-  for (const f of files) {
+  const apply = (f: string) =>
     psql(legacyMigrationScript(f, readFileSync(join(dir, f), "utf8")), { user: "doadmin", db: T.referenceDatabase, single: true });
-  }
+  for (const f of v05) apply(f);
   log("applying the out-of-band taxonomy provisioning (0053 alone, as provision-db-role-taxonomy.sh did)");
   psql(provisionTaxonomyScript(readFileSync(join(dir, PROVISION_TAXONOMY_FILE), "utf8")), { user: "doadmin", db: T.referenceDatabase, single: true });
+  for (const f of cutover) apply(f);
+  log(`applying the cutover migrate's closing grant reconciliation (${GRANTS_RECONCILE_FILE})`);
+  psql(grantsReconcileScript(readFileSync(join(T.legacyCheckout, GRANTS_RECONCILE_FILE), "utf8")), { user: "doadmin", db: T.referenceDatabase, single: true });
   const statements = psql(ACL_EXPORT_SQL, { db: T.referenceDatabase, tuples: true });
   const fingerprint = psql(ACL_FINGERPRINT_SQL, { db: T.referenceDatabase, tuples: true });
   psql(`DROP DATABASE ${T.referenceDatabase};`);
@@ -347,9 +363,9 @@ function referenceGrants(baseline: readonly string[]): { statements: string; fin
   return { statements, fingerprint };
 }
 
+/** The supported baseline (D63): the ledger the restored dump must equal. */
 function readBaseline(): string[] {
-  const baseline = JSON.parse(readFileSync(join(T.checkout, T.baselineFile), "utf8")) as { ledger: { file: string }[] };
-  return baseline.ledger.map((l) => l.file);
+  return [...SUPPORTED_RELEASES[0]!.migrations];
 }
 
 function writeEnvFiles(passwords: Record<GeneratedPasswordRole, string>): StageHomeEnv {
@@ -361,7 +377,7 @@ function writeEnvFiles(passwords: Record<GeneratedPasswordRole, string>): StageH
     rm_app: passwords.rm_app,
     rm_worker: passwords.rm_worker,
     rm_readonly: passwords.rm_readonly,
-    SWARM_SCHEDULES_ENABLED: "0",
+    rm_owner: passwords.rm_owner,
     host: T.pgBindHost,
     port: String(T.pgPort),
     database: T.database,
@@ -372,35 +388,25 @@ function writeEnvFiles(passwords: Record<GeneratedPasswordRole, string>): StageH
   const homeEnv = join(T.home, ".env");
   writeFileSync(homeEnv, composeStageHomeEnv(values), { mode: 0o600 });
   chmodSync(homeEnv, 0o600);
-  const legacyEnv = join(T.legacyCheckout, ".env");
-  // Production's legacy .env holds a working doadmin URL, and the v0.5.4 boot
-  // migrates through it. The stage legacy file mirrors that with the stage
-  // doadmin's password; R6.2 moves the line out and S8.1 locks the checkout.
-  writeFileSync(legacyEnv, composeLegacyCheckoutEnv(values, passwords.doadmin), { mode: 0o600 });
-  chmodSync(legacyEnv, 0o600);
   log(`wrote ${homeEnv} (0600): ${envKeyNames(readFileSync(homeEnv, "utf8")).join(", ")}`);
-  log(`wrote ${legacyEnv} (0600): ${envKeyNames(readFileSync(legacyEnv, "utf8")).join(", ")}`);
   return values;
 }
 
-function checkDatabase(passwords: Record<GeneratedPasswordRole, string>, baseline: readonly string[]): string[] {
-  const state = parseKeyValues(psql(PRECUTOVER_STATE_QUERY, { tuples: true }));
+/** `expectedKind` null: straight from the dump, before the re-enrollment. */
+function checkDatabase(passwords: Record<GeneratedPasswordRole, string>, baseline: readonly string[], expectedKind: string | null): string[] {
+  const state = parseKeyValues(psql(RESTORED_STATE_QUERY, { tuples: true }));
   const ledger = psql("SELECT name FROM schema_migrations ORDER BY name COLLATE \"C\";", { tuples: true }).split("\n").filter(Boolean);
-  const problems = precutoverProblems(state, ledger, baseline);
+  const problems = restoredDatabaseProblems(state, ledger, baseline, expectedKind);
   problems.push(...roleShapeProblems(psql(ROLE_SHAPE_QUERY, { tuples: true }), psql(DOADMIN_ADMIN_QUERY, { tuples: true })));
-  for (const role of ["doadmin", "rm_app", "rm_worker", "rm_readonly"] as const) {
+  for (const role of ["doadmin", "rm_owner", "rm_app", "rm_worker", "rm_readonly"] as const) {
     const r = hostPsql(role, passwords[role], "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid();");
     if (r.code !== 0 || r.stdout.trim() !== "t") problems.push(`${role} cannot log in over TLS from the host (${r.stderr.trim().split("\n")[0] ?? ""})`);
-  }
-  if (state.rm_owner_login === "false") {
-    const owner = hostPsql("rm_owner", passwords.rm_owner, "SELECT 1;");
-    if (owner.code === 0) problems.push("rm_owner logged in; production's rm_owner is NOLOGIN");
   }
   const su = run(["psql", "-X", "-At", `host=${T.pgBindHost} port=${T.pgPort} dbname=${T.database} user=${T.superuser} sslmode=require connect_timeout=5`, "-c", "SELECT 1"], { env: { PGPASSWORD: "x" } });
   if (su.code === 0) problems.push("the container superuser logged in over the network");
   const plain = run(["psql", "-X", "-At", `host=${T.pgBindHost} port=${T.pgPort} dbname=${T.database} user=rm_app sslmode=disable connect_timeout=5`, "-c", "SELECT 1"], { env: { PGPASSWORD: passwords.rm_app } });
   if (plain.code === 0) problems.push("rm_app logged in without TLS");
-  log(`database: ledger=${state.ledger} identity=${state.identity_table} rm_owner_login=${state.rm_owner_login} doadmin_super=${state.doadmin_super} doadmin_createrole=${state.doadmin_createrole} ssl=${state.ssl} server=${state.server_version}`);
+  log(`database: ledger=${state.ledger} identity=${state.identity_table}/${state.identity_kind} rm_owner_login=${state.rm_owner_login} doadmin_super=${state.doadmin_super} doadmin_createrole=${state.doadmin_createrole} ssl=${state.ssl} server=${state.server_version}`);
   return problems;
 }
 
@@ -432,61 +438,47 @@ async function buildDatabase(backup: ReturnType<typeof readDumpPreflight>, basel
     throw new Error(`owners and grants differ from the replayed ledger: ${diff.onlyReference.length} and ${diff.onlyRestored.length} lines`);
   }
   log(`owners and grants equal the replayed ledger (${restored.split("\n").filter(Boolean).length} lines)`);
+  // The dump carries production's identity row. A stage target is never `production` (spec §4.2, D61).
+  const fromDump = parseKeyValues(psql("SELECT 'identity_kind=' || COALESCE(string_agg(kind::text, ','), 'none') FROM deployment_identity;", { tuples: true }));
+  log(`the dump's deployment_identity reads ${fromDump.identity_kind}; enrolling the copy ${T.identityKind}`);
+  const enrolled = parseKeyValues(psql(ENROLL_REHEARSAL_SQL, { tuples: true }));
+  if (enrolled.identity_kind !== T.identityKind) throw new Error(`the identity row reads ${enrolled.identity_kind} after the enrollment`);
   psql("ANALYZE;");
   return passwords;
 }
 
-function startDriver(): void {
-  const script = join(T.home, "legacy-launch.sh");
-  writeFileSync(script, legacyLaunchScript(T), { mode: 0o700 });
-  log(`starting tmux session ${T.driverSession}: bash ${script}`);
-  must([
-    "tmux", "new-session", "-d", "-s", T.driverSession, "-c", T.legacyCheckout, "-e", `HOME=${T.home}`,
-    `bash ${shellQuote(script)}; exec bash`,
-  ], "tmux new-session");
+/** One command of the v0.6.0 bring-up, run in the legacy checkout under `env -i` as the release runner runs a step. */
+async function runInLegacyCheckout(name: string, argv: string[], env: Record<string, string>): Promise<void> {
+  log(`v0.6.0 stack: ${name} (cd ${T.legacyCheckout} && ${argv.join(" ")})`);
+  const p = Bun.spawn(["env", "-i", ...Object.entries(env).map(([k, v]) => `${k}=${v}`), ...argv], {
+    cwd: T.legacyCheckout, stdin: "ignore", stdout: "inherit", stderr: "inherit",
+  });
+  const code = await p.exited;
+  if (code !== 0) throw new Error(`v0.6.0 stack: ${name} failed (exit ${code})`);
 }
 
-/** The legacy driver: production's runs as `bun scripts/smoke.ts --smoke --static-port --db external --no-tui`. */
-function driverPid(): string | null {
-  const r = run(["pgrep", "-u", T.user, "-f", "^bun scripts/smoke.ts --smoke --static-port --db external"]);
-  for (const pid of r.stdout.split("\n").filter(Boolean)) {
-    const cwd = run(["readlink", `/proc/${pid}/cwd`]).stdout.trim();
-    if (cwd === T.legacyCheckout) return pid;
+/**
+ * Bring the v0.6.0 stack up as the v0.6.0 cutover did, from the legacy checkout
+ * (scripts/release/stage-target-lib.ts legacyStackCommands). `bun smoke` exits
+ * once the stack is ready and Docker keeps it running, as on production.
+ */
+async function startLegacyStack(): Promise<void> {
+  const runTs = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "");
+  mkdirSync(upReceiptDir(T.home), { recursive: true, mode: 0o700 });
+  for (const c of legacyStackCommands({ home: T.home, instance: T.instance, confirmTarget: `${T.pgBindHost}:${T.pgPort}/${T.database}`, runTs })) {
+    await runInLegacyCheckout(c.name, c.argv, c.env);
   }
-  return null;
-}
-
-/** After the site answers, the driver must still be running, as production's is. */
-async function driverStaysUp(): Promise<boolean> {
-  for (let i = 0; i < 9; i++) {
-    await Bun.sleep(10_000);
-    if (!driverPid()) {
-      const tail = readFileSync(join(T.home, T.driverLog), "utf8").split("\n").filter((l) => /FAIL|FATAL|exited with code/.test(l)).slice(-5);
-      for (const l of tail) log(`  driver: ${l.slice(0, 240)}`);
-      log("the legacy driver exited after the boot; production's keeps running");
-      return false;
-    }
-  }
-  log(`the legacy driver is running (pid ${driverPid()}) 90 s after the site answered`);
-  return true;
 }
 
 async function waitForLegacySite(): Promise<boolean> {
-  const deadline = Date.now() + 45 * 60_000;
-  let lastNote = 0;
+  const deadline = Date.now() + 10 * 60_000;
   while (Date.now() < deadline) {
     const r = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", `http://127.0.0.1:${T.legacyWebPort}/`]);
     if (r.stdout.trim() === "200") {
-      log(`legacy site answers 200 on :${T.legacyWebPort}`);
+      log(`the v0.6.0 site answers 200 on :${T.legacyWebPort}`);
       return true;
     }
-    if (!tmuxHasSession()) throw new Error(`tmux session ${T.driverSession} is gone`);
-    if (Date.now() - lastNote > 120_000) {
-      lastNote = Date.now();
-      const tail = run(["tmux", "capture-pane", "-p", "-t", T.driverSession]).stdout.split("\n").filter(Boolean).slice(-2);
-      log(`waiting for :${T.legacyWebPort} (${r.stdout.trim() || "no answer"}); driver: ${tail.join(" | ").slice(0, 300)}`);
-    }
-    await Bun.sleep(10_000);
+    await Bun.sleep(5_000);
   }
   return false;
 }
@@ -515,16 +507,16 @@ async function remoteUp(args: string[]): Promise<number> {
   cloneAt(T.checkout, T.checkoutCommit);
   const baseline = readBaseline();
   log(`production baseline: ${baseline.length} ledger files`);
-  await bunInstall(T.legacyCheckout, ["."]);
+  await bunInstall(T.legacyCheckout, [".", "backend"]);
   await bunInstall(T.checkout, [".", "backend"]);
 
   const passwords = await buildDatabase(backup, baseline);
-  const problems = checkDatabase(passwords, baseline);
+  const problems = checkDatabase(passwords, baseline, T.identityKind);
   if (problems.length) {
     for (const p of problems) log(`  PROBLEM: ${p}`);
-    throw new Error(`the stage database does not match production's pre-cutover shape (${problems.length} problems)`);
+    throw new Error(`the stage database does not match production's shape since the v0.6.0 cutover (${problems.length} problems)`);
   }
-  log("the stage database matches production's pre-cutover shape");
+  log("the stage database matches production's shape since the v0.6.0 cutover");
   writeEnvFiles(passwords);
   writeFileSync(join(T.home, "stage-target.json"), `${JSON.stringify({
     builtAt: new Date().toISOString(),
@@ -535,13 +527,13 @@ async function remoteUp(args: string[]): Promise<number> {
     pg: `${T.pgContainer} ${POSTGRES_IMAGE} ${T.pgBindHost}:${T.pgPort}/${T.database}`,
   }, null, 2)}\n`, { mode: 0o600 });
 
-  startDriver();
-  const up = (await waitForLegacySite()) && (await driverStaysUp());
-  const after = checkDatabase(passwords, baseline);
-  for (const p of after) log(`  PROBLEM after the legacy boot: ${p}`);
+  await startLegacyStack();
+  const up = await waitForLegacySite();
+  const after = checkDatabase(passwords, baseline, T.identityKind);
+  for (const p of after) log(`  PROBLEM after the v0.6.0 boot: ${p}`);
   await remoteStatus();
   if (!up) {
-    log(`the legacy site did not answer on :${T.legacyWebPort}; read the driver: tmux capture-pane -p -t ${T.driverSession}`);
+    log(`the v0.6.0 site did not answer on :${T.legacyWebPort}; read the stack: bun run smoke:status --instance ${T.instance} in ${T.legacyCheckout}`);
     return 1;
   }
   return after.length ? 1 : 0;
@@ -558,21 +550,13 @@ function assertOwnPath(dir: string): void {
 }
 
 async function remoteDown(): Promise<number> {
-  if (tmuxHasSession()) {
-    log(`stopping the driver in tmux session ${T.driverSession}`);
-    run(["tmux", "send-keys", "-t", `=${T.driverSession}`, "C-c"]);
-    for (let i = 0; i < 30; i++) {
-      const pane = run(["tmux", "list-panes", "-t", `=${T.driverSession}`, "-F", "#{pane_current_command}"]).stdout.trim();
-      if (pane === "bash") break;
-      await Bun.sleep(1000);
+  // The v0.6.0 stack, by its own tool and state: the legacy checkout started it, a rehearsal's boot may have replaced it.
+  const stackState = join(T.home, ".local", "state", "robotmoney-smoke", T.instance);
+  for (const dir of [T.checkout, T.legacyCheckout, ...retiredLegacyCheckouts()]) {
+    if (existsSync(stackState) && existsSync(join(dir, "package.json"))) {
+      log(`bun smoke:down --instance ${T.instance} (from ${dir})`);
+      run(["bun", "smoke:down", "--instance", T.instance], { cwd: dir, env: { HOME: T.home, RM_ENV: "stage" } });
     }
-    run(["tmux", "kill-session", "-t", `=${T.driverSession}`]);
-  }
-  // The v0.6 stack, if a rehearsal booted one, by its own tool and state.
-  const v06State = join(T.home, ".local", "state", "robotmoney-smoke", T.instance);
-  if (existsSync(v06State) && existsSync(join(T.checkout, "package.json"))) {
-    log(`bun smoke:down --instance ${T.instance}`);
-    run(["bun", "smoke:down", "--instance", T.instance], { cwd: T.checkout, env: { HOME: T.home, RM_ENV: "stage" } });
   }
   const containers = projectContainers();
   if (containers.length) {
@@ -607,7 +591,7 @@ async function remoteDown(): Promise<number> {
     }
   }
   for (const name of readdirSync(tmpdir())) {
-    if (name.startsWith(`robotmoney-smoke-${T.legacyProject}-secrets-`)) rmSync(join(tmpdir(), name), { recursive: true, force: true });
+    if (name.startsWith(`robotmoney-smoke-${T.instance}-secrets-`)) rmSync(join(tmpdir(), name), { recursive: true, force: true });
   }
   log("down: nothing of the stage target is left");
   return 0;
@@ -627,12 +611,9 @@ async function remoteStatus(): Promise<number> {
   line("postgres", pg.code === 0 ? `${T.pgContainer} ${pg.stdout.trim()} on ${T.pgBindHost}:${T.pgPort}` : "absent");
   if (pg.code === 0 && pg.stdout.startsWith("running")) {
     try {
-      const s = parseKeyValues(psql(PRECUTOVER_STATE_QUERY, { tuples: true }));
-      line("database", `ledger=${s.ledger} deployment_identity=${s.identity_table} ssl=${s.ssl} server=${s.server_version}`);
+      const s = parseKeyValues(psql(RESTORED_STATE_QUERY, { tuples: true }));
+      line("database", `ledger=${s.ledger} deployment_identity=${s.identity_table} (${s.identity_kind}) ssl=${s.ssl} server=${s.server_version}`);
       line("roles", `rm_owner login=${s.rm_owner_login}; doadmin super=${s.doadmin_super} createrole=${s.doadmin_createrole}`);
-      if (s.identity_table !== "none") {
-        line("identity row", psql("SELECT string_agg(kind::text, ',') FROM deployment_identity;", { tuples: true }).trim());
-      }
     } catch (e) {
       line("database", `unreadable: ${(e as Error).message}`);
     }
@@ -642,33 +623,19 @@ async function remoteStatus(): Promise<number> {
   if (existsSync(homeEnv)) {
     const keys = envKeyNames(readFileSync(homeEnv, "utf8"));
     const want: readonly string[] = PROD_HOME_ENV_KEYS;
-    const pre = keys.length === want.length && want.every((k) => keys.includes(k));
-    const after = keys.length === want.length + 1 && want.every((k) => keys.includes(k)) && keys.includes("rm_owner");
-    line("~/.env", `${homeEnv} keys: ${keys.join(" ")} (${pre ? "production's key names: role-passwords not yet run" : after ? "production's key names + the rm_owner line role-passwords wrote" : "DIFFERS from production's"})`);
+    const same = keys.length === want.length && want.every((k) => keys.includes(k));
+    line("~/.env", `${homeEnv} keys: ${keys.join(" ")} (${same ? "production's key names" : "DIFFERS from production's"})`);
     if (keys.includes("doadmin")) line("", "REFUSE: ~/.env holds a doadmin line; doadmin is stored in no file (D61)");
   } else line("~/.env", "absent");
-  const legacyEnv = join(T.legacyCheckout, ".env");
-  if (existsSync(legacyEnv)) {
-    const keys = envKeyNames(readFileSync(legacyEnv, "utf8"));
-    const same = keys.length === PROD_LEGACY_CHECKOUT_ENV_KEYS.length && PROD_LEGACY_CHECKOUT_ENV_KEYS.every((k) => keys.includes(k));
-    line("legacy checkout .env", `${same ? "production's key names" : "DIFFERS"}: ${keys.join(" ")}`);
-  }
-  for (const [name, dir] of [["legacy checkout", T.legacyCheckout], ["v0.6.0 checkout", T.checkout]] as const) {
+  for (const [name, dir] of [["legacy checkout", T.legacyCheckout], ["release checkout", T.checkout]] as const) {
     const head = existsSync(dir) ? run(["git", "-C", dir, "log", "-1", "--format=%h %s"]).stdout.trim() : "";
     line(name, head ? `${dir} at ${head.slice(0, 100)}` : "absent");
   }
-  if (tmuxHasSession()) {
-    const cmd = run(["tmux", "list-panes", "-t", `=${T.driverSession}`, "-F", "#{pane_current_command} in #{pane_current_path}"]).stdout.trim();
-    const pid = driverPid();
-    line("driver", `tmux ${T.driverSession}: ${cmd}; smoke:archive ${pid ? `running (pid ${pid})` : "NOT running"}`);
-    const tail = run(["tmux", "capture-pane", "-p", "-t", T.driverSession]).stdout.split("\n").filter(Boolean).slice(-3);
-    for (const t of tail) line("", t.slice(0, 160));
-  } else line("driver", "no tmux session");
-  const containers = run(["docker", "ps", "-a", "--filter", `label=com.docker.compose.project=${T.legacyProject}`, "--format", "{{.Names}} {{.Status}} {{.Ports}}"]).stdout.trim();
-  line("legacy stack", containers ? "" : "no containers");
-  for (const c of containers.split("\n").filter(Boolean)) line("", c);
+  const containers = projectContainers().map((n) => run(["docker", "inspect", "-f", "{{.Name}} {{.State.Status}}", n]).stdout.trim());
+  line("v0.6.0 stack", containers.length ? "" : "no containers");
+  for (const c of containers) line("", c);
   const site = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", `http://127.0.0.1:${T.legacyWebPort}/`]).stdout.trim();
-  line("legacy site", `http://127.0.0.1:${T.legacyWebPort}/ -> ${site || "no answer"}`);
+  line("site", `http://127.0.0.1:${T.legacyWebPort}/ -> ${site || "no answer"}`);
   return 0;
 }
 

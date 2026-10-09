@@ -1,19 +1,22 @@
 // The pure half of scripts/release/stage-target.ts (D61 rule 2).
 //
 // WHAT IT IS. Everything the stage-target builder decides that can be decided
-// without a host: where each piece lives, which key names the two env files
-// carry, which role statements a captured `pg_dumpall --globals-only` becomes,
+// without a host: where each piece lives, which key names the env file
+// carries, which role statements a captured `pg_dumpall --globals-only` becomes,
 // the pg_hba rules, the SQL that copies ownership and grants from a reference
-// database, and the legacy driver's launch script. stage-target.ts does the
-// I/O; scripts/tests/unit/stage-target.test.ts drives these directly.
+// database, and the commands that start the previous release's stack.
+// stage-target.ts does the I/O; scripts/tests/unit/stage-target.test.ts drives
+// these directly.
 //
 // WHY A STAGE TARGET. D61 rule 2: the production runbook is rehearsed
 // unmodified on stage. Only the target file differs. So stage must hold what
-// production holds before the v0.6.0 cutover: a remote Postgres 18 over TLS with
-// DigitalOcean's role shape, production's 76-name ledger and no
-// deployment_identity, a `~/.env` with production's key names plus the two
-// D61 lines, and the legacy v0.5.4 stack driven from tmux. Each constant below
-// names the production fact it mirrors.
+// production holds before the release: since D63 (owner, 2026-10-09) that is
+// production as it runs v0.6.0, a remote Postgres 18 over TLS with
+// DigitalOcean's role shape, production's 116-name ledger and its
+// deployment_identity row (enrolled `rehearsal` here, never `production`), a
+// `~/.env` with production's key names, and the v0.6.0 stack that
+// `bun smoke --static-port` started and Docker keeps running. Each constant
+// below names the production fact it mirrors.
 
 /** Where the target lives on stage-2. These are the release target file's fields. */
 export const STAGE_TARGET = {
@@ -25,20 +28,14 @@ export const STAGE_TARGET = {
   home: "/home/stage-server/stage-target",
   /** The checkout the runner checks out at the release commit. */
   checkout: "/home/stage-server/rm-stage-target",
-  /** The commit the v0.6.0 checkout starts at. */
-  checkoutCommit: "a502de30068e0c1cc2e232a76098364e0b709033",
-  /** The legacy checkout. Production's is `/root/robotmoney-frontend`. */
+  /** The commit the release checkout starts at: v0.6.0. The runner moves it to the release commit (R1.1). */
+  checkoutCommit: "e96d4598678346260282e37ffd5a10df286186ba",
+  /** The legacy checkout, where the running v0.6.0 stack is started. Production's is `/root/rm-060`. */
   legacyCheckout: "/home/stage-server/rm-stage-legacy",
-  /** Production's legacy commit (v0.5.4), read from the prod host 2026-10-08. */
-  legacyCommit: "1cda4085d235b55bf171735ac77618155e6b1647",
+  /** Production's running commit (v0.6.0), read from the prod host 2026-10-09. */
+  legacyCommit: "e96d4598678346260282e37ffd5a10df286186ba",
   /** The smoke instance. Production's is `rm_prod`. */
   instance: "stage_target",
-  /** The legacy compose project (`SMOKE_PROJECT`). Production's equals its instance, `rm_prod`. */
-  legacyProject: "stage_target",
-  /** The tmux session of the legacy host driver. Production's is `driver`. */
-  driverSession: "stage-driver",
-  /** The legacy driver log under `$HOME`. Production's is `/root/smoke-archive-v0.5.4.log`. */
-  driverLog: "smoke-archive-v0.5.4.log",
   /** The long-lived Postgres container and its named data volume. */
   pgContainer: "rm-stage-target-pg",
   pgVolume: "rm-stage-target-pgdata",
@@ -56,7 +53,7 @@ export const STAGE_TARGET = {
   superuser: "rm_stage_super",
   /** The scratch database the reference ledger is replayed into, dropped afterwards. */
   referenceDatabase: "rm_stage_acl_ref",
-  /** The fixed web port the legacy `--static-port` boot pins (legacy scripts/stack/ports.ts). */
+  /** The fixed web port the `--static-port` boot pins (scripts/stack/ports.ts). */
   legacyWebPort: 48787,
   /** The label on everything stage-target.ts creates outside compose. */
   label: "robotmoney.stage-target=1",
@@ -66,8 +63,8 @@ export const STAGE_TARGET = {
   referenceClone: "/home/stage-server/rm-060",
   /** The repository. */
   repoUrl: "git@github.com:robotmoney/robotmoney-frontend.git",
-  /** The production baseline the restored ledger must equal (spec §9.1, D55 (8)). */
-  baselineFile: "backend/tests/fixtures/releases/production-2026-10-01/baseline.json",
+  /** The stage target's identity row: a restored copy of production is enrolled `rehearsal` (spec §5, D61). */
+  identityKind: "rehearsal",
   /** The longest a dump may have been captured before `up` (runbook §7, fresh-dump rule). */
   maxDumpAgeHours: 24,
 } as const;
@@ -96,16 +93,34 @@ export function removalRefusal(dir: string, retired: readonly string[], keep: re
 }
 
 /**
- * The key names of production's `~/.env` (`/root/.env`), in file order, read
- * from the prod host on 2026-10-08 with `cut -d= -f1`. The cutover's env
- * rewrite (R6.2) must move `SWARM_SCHEDULES_ENABLED` and `OPENCODE_API_KEY`
- * aside, so the stage file carries them too.
+ * The key names of production's `~/.env` (`/root/.env`) after the v0.6.0
+ * cutover, read from the prod host on 2026-10-09 with `cut -d= -f1`: the D61
+ * allowlist's keys the host holds (no `RM_ENV`, no `doadmin`).
  */
 export const PROD_HOME_ENV_KEYS = [
+  "COINGECKO_API_KEY",
+  "RM_CREDENTIALS",
+  "database",
+  "host",
+  "port",
+  "rm_app",
+  "rm_owner",
+  "rm_readonly",
+  "rm_worker",
+  "sslmode",
+] as const;
+
+/**
+ * What `up` writes before it starts the v0.6.0 stack: production's keys, minus
+ * `RM_CREDENTIALS` (credentials-init appends it), plus `OPENCODE_API_KEY`
+ * (credentials-init reads the model key from it, and env-rewrite moves it out,
+ * as the v0.6.0 cutover did). Never `doadmin` (D61, owner 2026-10-08).
+ */
+export const STAGE_UP_ENV_KEYS = [
   "rm_app",
   "rm_worker",
   "rm_readonly",
-  "SWARM_SCHEDULES_ENABLED",
+  "rm_owner",
   "host",
   "port",
   "database",
@@ -113,39 +128,10 @@ export const PROD_HOME_ENV_KEYS = [
   "OPENCODE_API_KEY",
   "COINGECKO_API_KEY",
 ] as const;
-
-/**
- * The stage `~/.env` holds production's key names and nothing more: no
- * `rm_owner` line (production's pre-state: `prod-init role-passwords` writes
- * it) and never `doadmin` (D61, owner 2026-10-08: doadmin is typed each run
- * and stored in no file).
- */
-export type StageHomeEnvKey = (typeof PROD_HOME_ENV_KEYS)[number];
+export type StageHomeEnvKey = (typeof STAGE_UP_ENV_KEYS)[number];
 export type StageHomeEnv = Record<StageHomeEnvKey, string>;
 
-/**
- * The key names of production's legacy checkout `.env`
- * (`/root/robotmoney-frontend/.env`), read 2026-10-08. Bun loads this file into
- * the legacy driver when it starts in the checkout, so the legacy stack reads
- * `WORKER_DATABASE_URL`, `MIGRATE_DATABASE_URL` (a `doadmin` URL),
- * `OPENCODE_API_KEY` and `SWARM_SCHEDULES_ENABLED` from it. Runbook R6.2a reads
- * these names at the cutover.
- */
-export const PROD_LEGACY_CHECKOUT_ENV_KEYS = [
-  "DATABASE_URL",
-  "WORKER_DATABASE_URL",
-  "username",
-  "password",
-  "host",
-  "port",
-  "database",
-  "sslmode",
-  "OPENCODE_API_KEY",
-  "SWARM_SCHEDULES_ENABLED",
-  "MIGRATE_DATABASE_URL",
-] as const;
-
-/** The login roles whose passwords the builder generates. `rm_owner` gets one too, and stays NOLOGIN. */
+/** The login roles whose passwords the builder generates. `rm_owner` gets one too: production's logs in since `role-passwords` ran. */
 export const GENERATED_PASSWORD_ROLES = ["doadmin", "rm_owner", "rm_app", "rm_worker", "rm_readonly"] as const;
 export type GeneratedPasswordRole = (typeof GENERATED_PASSWORD_ROLES)[number];
 
@@ -156,10 +142,11 @@ function assertLineValue(key: string, value: string | undefined): string {
 }
 
 /**
- * The stage target's `~/.env`. Production's layout, line for line: the same
- * comment headers, the same `key = value` spacing on the DigitalOcean panel
- * keys, the same order. No `rm_owner` line and no `doadmin` line: role-passwords
- * adds the first, and the second is never stored.
+ * The stage target's `~/.env` as `up` writes it before the v0.6.0 stack's first
+ * boot. Production's key names; no `doadmin` line (stored in no file, D61).
+ * `OPENCODE_API_KEY` is temporary: credentials-init copies it into
+ * `credential.json` and env-rewrite moves it to `~/.env.retired-<ts>`, so the
+ * file the release run meets has production's keys exactly.
  */
 export function composeStageHomeEnv(v: StageHomeEnv): string {
   const line = (key: StageHomeEnvKey, sep: " = " | "=") => `${key}${sep}${assertLineValue(key, v[key])}`;
@@ -168,58 +155,17 @@ export function composeStageHomeEnv(v: StageHomeEnv): string {
     line("rm_app", " = "),
     line("rm_worker", " = "),
     line("rm_readonly", " = "),
-    line("SWARM_SCHEDULES_ENABLED", "="),
+    line("rm_owner", " = "),
     line("host", " = "),
     line("port", " = "),
     line("database", " = "),
     line("sslmode", " = "),
     "",
-    "# inference",
+    "# inference (moved out by env-rewrite once credential.json holds it)",
     line("OPENCODE_API_KEY", "="),
     "",
     "# research",
     line("COINGECKO_API_KEY", "="),
-    "",
-  ].join("\n");
-}
-
-/** A postgres URL. Never logged: it carries a password. */
-export function postgresUrl(role: string, password: string, host: string, port: number | string, database: string, sslmode: string): string {
-  return `postgresql://${encodeURIComponent(role)}:${encodeURIComponent(password)}@${host}:${port}/${database}?sslmode=${sslmode}`;
-}
-
-/**
- * The legacy checkout's `.env`, with production's key names in production's
- * order. Each URL names the role production's names (rm_app, rm_worker,
- * doadmin), pointed at the stage database. `MIGRATE_DATABASE_URL` keeps
- * production's key, role and a working password, as production's v0.5.4
- * legacy file does: the v0.5.4 boot runs its migrations through it, so an
- * inert value stops the legacy stack at startup (28P01, stage 2026-10-08).
- * The release's R6.2 moves the line out of the live env and S8.1 locks the
- * retired checkout; no release step reads it.
- */
-export function composeLegacyCheckoutEnv(v: StageHomeEnv, doadminPassword: string): string {
-  const at = (role: "rm_app" | "rm_worker" | "doadmin") =>
-    postgresUrl(role, assertLineValue(role, role === "doadmin" ? doadminPassword : v[role]), v.host, v.port, v.database, v.sslmode);
-  return [
-    "# postgres",
-    `DATABASE_URL=${at("rm_app")}`,
-    `WORKER_DATABASE_URL=${at("rm_worker")}`,
-    "username = rm_app",
-    `password = ${assertLineValue("rm_app", v.rm_app)}`,
-    `host = ${v.host}`,
-    `port = ${v.port}`,
-    `database = ${v.database}`,
-    `sslmode = ${v.sslmode}`,
-    "",
-    "# inference",
-    `OPENCODE_API_KEY=${assertLineValue("OPENCODE_API_KEY", v.OPENCODE_API_KEY)}`,
-    "",
-    "# v0.4.0 rollout §4: required for the static-port production driver.",
-    `SWARM_SCHEDULES_ENABLED=${assertLineValue("SWARM_SCHEDULES_ENABLED", v.SWARM_SCHEDULES_ENABLED)}`,
-    "",
-    "# Break-glass admin URL for the migrate step ONLY (production carries a doadmin URL here).",
-    `MIGRATE_DATABASE_URL=${at("doadmin")}`,
     "",
   ].join("\n");
 }
@@ -631,10 +577,12 @@ export function fingerprintDiff(reference: string, restored: string): { onlyRefe
 }
 
 /**
- * One ledger file as the legacy runner (1cda4085 backend/src/db/migrate.ts)
- * applied it: in one transaction, as the connecting login, with `SET LOCAL ROLE
- * rm_owner` from 0054 on, and its ledger row in the same transaction. psql runs
- * it with `-1`.
+ * One ledger file as production applied it: in one transaction, as the
+ * connecting login, with `SET LOCAL ROLE rm_owner` from 0054 on, and its ledger
+ * row in the same transaction. psql runs it with `-1`. The v0.5 runner
+ * (1cda4085 backend/src/db/migrate.ts) did exactly this for the first 76 files;
+ * the owner-role runner of the v0.6.0 cutover leaves the same owners, so the
+ * replay applies the other 40 the same way.
  */
 export function legacyMigrationScript(file: string, ddl: string): string {
   const role = file >= "0054_rm_worker_allowlist.sql" ? "SET LOCAL ROLE rm_owner;\n" : "";
@@ -643,7 +591,8 @@ export function legacyMigrationScript(file: string, ddl: string): string {
 
 /**
  * The out-of-band run of `scripts/ops/provision-db-role-taxonomy.sh` (legacy
- * tree), modelled after the ledger replay: 0053's SQL as the bootstrap login,
+ * tree), modelled after the first 76 ledger files, which is where it ran in
+ * production's history (before the v0.6.0 cutover applied the other 40): 0053's SQL as the bootstrap login,
  * with no ledger row, then the script's two rm_readonly sequence grants.
  *
  * Why it is modelled last. 0057 and 0058 grant rm_app only SELECT and INSERT on
@@ -660,15 +609,31 @@ export function provisionTaxonomyScript(ddl0053: string): string {
 
 export const PROVISION_TAXONOMY_FILE = "0053_database_role_taxonomy.sql";
 
+/** The grant reconciliation the migrate runs after its last pending file (backend/scripts/migrate-run.ts, spec §8.3). */
+export const GRANTS_RECONCILE_FILE = "backend/schema/grants.sql";
+
+/**
+ * The reconciliation `bun run migrate` ends every run with: `backend/schema/grants.sql`,
+ * as the owner, outside any ledger row. It is what gives production's
+ * `rm_owner` default privileges their runtime-role SELECT grants (so a table
+ * created by a later migration, like 0115's token_market_samples, is readable
+ * by rm_app and rm_worker), and what takes DELETE back (0107). The cutover's
+ * migrate ran it once; the replay runs it after the cutover's files.
+ */
+export function grantsReconcileScript(grantsSql: string): string {
+  return `SET LOCAL ROLE rm_owner;\n${grantsSql}\n`;
+}
+
 export const LEGACY_LEDGER_TABLE_SQL = `CREATE TABLE IF NOT EXISTS schema_migrations (
   name text PRIMARY KEY,
   applied_at timestamptz NOT NULL DEFAULT now()
 );\n`;
 
-/** The pre-cutover database facts, one `key=value` per line. */
-export const PRECUTOVER_STATE_QUERY = `
+/** The restored database's facts, one `key=value` per line. */
+export const RESTORED_STATE_QUERY = `
 SELECT 'ledger=' || (SELECT count(*) FROM schema_migrations)
 UNION ALL SELECT 'identity_table=' || COALESCE(to_regclass('public.deployment_identity')::text, 'none')
+UNION ALL SELECT 'identity_kind=' || COALESCE((SELECT string_agg(kind::text, ',') FROM deployment_identity), 'none')
 UNION ALL SELECT 'rm_owner_login=' || (SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner')
 UNION ALL SELECT 'doadmin_super=' || (SELECT rolsuper FROM pg_roles WHERE rolname = 'doadmin')
 UNION ALL SELECT 'doadmin_createrole=' || (SELECT rolcreaterole FROM pg_roles WHERE rolname = 'doadmin')
@@ -685,61 +650,79 @@ export function parseKeyValues(text: string): Record<string, string> {
   return out;
 }
 
-/** What `up` requires of the restored database before it writes any env file. */
-export function precutoverProblems(state: Record<string, string>, ledger: readonly string[], baseline: readonly string[]): string[] {
+/**
+ * What `up` requires of the restored database before it writes any env file:
+ * production's shape as it stands since the v0.6.0 cutover (D63). The ledger
+ * equals the supported baseline, `deployment_identity` holds the one row, and
+ * `rm_owner` logs in (production's does since `role-passwords` ran).
+ * `identityKind` is what the copy is enrolled as: `production` straight from
+ * the dump (`expectedKind` null), `rehearsal` once `up` has re-enrolled it.
+ */
+export function restoredDatabaseProblems(
+  state: Record<string, string>,
+  ledger: readonly string[],
+  baseline: readonly string[],
+  expectedKind: string | null,
+): string[] {
   const problems: string[] = [];
   if (state.ledger !== String(baseline.length)) problems.push(`ledger has ${state.ledger} rows, production's baseline has ${baseline.length}`);
   const have = new Set(ledger);
   const want = new Set(baseline);
   for (const f of baseline) if (!have.has(f)) problems.push(`ledger lacks ${f}`);
   for (const f of ledger) if (!want.has(f)) problems.push(`ledger has ${f}, which the baseline does not`);
-  if (state.identity_table !== "none") problems.push(`deployment_identity exists (${state.identity_table}); production has none before the cutover`);
-  if (state.rm_owner_login !== "false" && state.rm_owner_login !== "true") problems.push(`rm_owner rolcanlogin=${state.rm_owner_login}; production's is false, or true once role-passwords ran`);
+  if (state.identity_table === "none") problems.push("deployment_identity is missing; production has it since the v0.6.0 cutover");
+  else if (expectedKind !== null && state.identity_kind !== expectedKind) {
+    problems.push(`deployment_identity reads ${state.identity_kind}; the stage target is enrolled ${expectedKind}`);
+  }
+  if (state.rm_owner_login !== "true") problems.push(`rm_owner rolcanlogin=${state.rm_owner_login}; production's is true since role-passwords ran`);
   if (state.doadmin_super !== "false") problems.push(`doadmin rolsuper=${state.doadmin_super}; production's is false`);
   if (state.doadmin_createrole !== "true") problems.push(`doadmin rolcreaterole=${state.doadmin_createrole}; production's is true`);
   if (state.ssl !== "on") problems.push(`ssl=${state.ssl}; production requires TLS`);
   return problems;
 }
 
+/** The statement that enrolls the restored copy: a stage target is never `production` (spec §4.2, D61). */
+export const ENROLL_REHEARSAL_SQL = `UPDATE deployment_identity SET kind = 'rehearsal', written_at = now(), written_by = current_user,
+  note = 'stage-target up: a restored production dump, enrolled rehearsal (D61 rule 2, D63)' WHERE id;
+SELECT 'identity_kind=' || string_agg(kind::text, ',') FROM deployment_identity;`;
+
 // ---------------------------------------------------------------------------
-// The legacy driver
+// The previous release's stack
 // ---------------------------------------------------------------------------
 
+/** The fixed PATH `up` gives the v0.6.0 tools, the runner's own (scripts/release/steps.ts REMOTE_PATH). */
+export const STACK_PATH = "/root/.bun/bin:/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+/** The directory the build's own receipts go to, beside the release runs' (`<home>/.local/state/robotmoney-release/stage-target-up`). */
+export function upReceiptDir(home: string): string {
+  return `${home}/.local/state/robotmoney-release/stage-target-up`;
+}
+
 /**
- * The legacy driver's launch script. Production's tmux session `driver` runs
- * `/root/r64-launch.sh`'s line in an interactive bash in the legacy checkout:
+ * The commands that bring the v0.6.0 stack up the way the v0.6.0 cutover did
+ * (steps R6.2a, R6.2, R6.5, R6.7a, R6.7c and R6.7d of the v0.6.0 runner, whose
+ * tools the legacy checkout still holds), each run in the legacy checkout under
+ * `env -i`, as the release runner runs a step. The copy of production has
+ * members whose keys belong to production's `credential.json`, which no stage
+ * host holds, so the sequence writes a fresh `credential.json` and rebinds the
+ * in-house members to it. That is stage-only setup on a disposable database.
  *
- *   SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui 2>&1 | <timestamp> | tee /root/smoke-archive-v0.5.4.log
- *
- * (`smoke:archive` is `bun scripts/smoke.ts --smoke --static-port --db
- * external`.) Its environment also carries what the droplet's
- * `/etc/environment` sets (`DATABASE_*`, the doadmin connection) and a
- * `COINGECKO_API_KEY` exported in that shell. A user without root cannot write
- * `/etc/environment`, so the script exports the same names from the stage
- * `~/.env` before it starts. Bun loads the checkout `.env` itself, as on prod.
- * The doadmin password is stored in no file (D61, owner 2026-10-08), so
- * `DATABASE_PASSWORD` is an inert random value drawn at launch: production's
- * names, a value doadmin does not have. The v0.5.4 driver builds its own
- * container URLs and does not connect with these variables.
+ * Returns the argv of each command, in order, with the env it runs under.
  */
-export function legacyLaunchScript(t: { home: string; legacyCheckout: string; legacyProject: string; driverLog: string }): string {
-  return `#!/bin/bash
-# GENERATED by scripts/release/stage-target.ts. The stage twin of production's
-# /root/r64-launch.sh: the legacy v0.5.4 stack and its host driver, in one process.
-export HOME=${t.home}
-cd ${t.legacyCheckout} || exit 1
-val() { sed -n "s/^$1[[:space:]]*=[[:space:]]*//p" "$HOME/.env" | head -n1; }
-# Production's /etc/environment: the doadmin connection, as DATABASE_*.
-export DATABASE_PROTOCOL=postgresql
-export DATABASE_HOST="$(val host)" DATABASE_PORT="$(val port)" DATABASE_DB="$(val database)"
-# doadmin is stored in no file (D61): an inert value, drawn now, that doadmin does not have.
-export DATABASE_USERNAME=doadmin DATABASE_PASSWORD="$(head -c 18 /dev/urandom | base64 | tr '+/' '-_')"
-export DATABASE_URL="postgresql://doadmin:$DATABASE_PASSWORD@$DATABASE_HOST:$DATABASE_PORT/$DATABASE_DB?sslmode=require"
-# Production's driver shell exported the paid CoinGecko key.
-export COINGECKO_API_KEY="$(val COINGECKO_API_KEY)"
-echo "CI=[$CI] HEAD=$(git rev-parse --short HEAD) $(git describe --tags 2>/dev/null)"
-SMOKE_PROJECT=${t.legacyProject} bun run smoke:archive -- --no-tui 2>&1 | while IFS= read -r l; do printf '%s %s\\n' "$(date -u +%T)" "$l"; done | tee "$HOME/${t.driverLog}"
-`;
+export function legacyStackCommands(t: { home: string; instance: string; confirmTarget: string; runTs: string }): { name: string; argv: string[]; env: Record<string, string> }[] {
+  const receipts = upReceiptDir(t.home);
+  const base = { HOME: t.home, PATH: STACK_PATH, LANG: "C.UTF-8", RM_ENV: "stage" };
+  const boot = { ...base, PROJECTS_SOURCE: "live" };
+  const prodInit = (command: string) => ["bun", "scripts/prod-init.ts", command, "--instance", t.instance, "--confirm-target", t.confirmTarget];
+  const smoke = ["bun", "run", "smoke", "--static-port", "--instance", t.instance];
+  return [
+    { name: "credentials-init", argv: ["bun", "scripts/release/credentials-init.ts", "--receipt-dir", receipts], env: base },
+    { name: "env-rewrite", argv: ["bun", "scripts/release/env-rewrite.ts", "--run", t.runTs, "--receipt-dir", receipts], env: base },
+    { name: "provision-tokens", argv: prodInit("provision-tokens"), env: base },
+    { name: "boot 1", argv: smoke, env: boot },
+    { name: "rebind-members", argv: prodInit("rebind-members"), env: base },
+    { name: "boot 2", argv: smoke, env: boot },
+  ];
 }
 
 /** Single-quote a word for a POSIX shell. */

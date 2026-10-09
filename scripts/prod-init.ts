@@ -108,7 +108,7 @@ import { instanceFlag, instancePaths, readRolePasswords, readStackState, resolve
 import { readServiceToken } from "./lib/smoke-secret.ts";
 import { loadCredentialFile, resolveCredentialPath, writeCredentialBearer, type CredentialEntry, type ParticipantKind } from "./lib/swarm/credential-file.ts";
 import { resolveStackEnvironment } from "./stack/naming.ts";
-import { describeUnmatchedLedger, matchSupportedRelease } from "../backend/src/db/supported-releases.ts";
+import { describeUnmatchedLedger, matchSupportedRelease, PRE_IDENTITY_RELEASES } from "../backend/src/db/supported-releases.ts";
 import type { HeldTargetLock, LockHolder, TargetState } from "../backend/src/db/target-lock.ts";
 import type { SetIdentityOptions, SetIdentityResult } from "../backend/scripts/set-identity.ts";
 import type { ProvisionOptions } from "../backend/scripts/provision-tokens.ts";
@@ -269,10 +269,10 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
     // row yet. The guard is the ledger: exactly a supported baseline, the
     // state the first migrate (prod) or the remote rehearsal pass (stage)
     // starts from.
-    if (matchSupportedRelease(state.ledger) === null) {
+    if (matchSupportedRelease(state.ledger, PRE_IDENTITY_RELEASES) === null) {
       refuse(
         `${command} on ${target}, which has no deployment_identity row, requires a ledger exactly equal to a supported ` +
-          `baseline (the pre-identity state the first migrate starts from); ${describeUnmatchedLedger(state.ledger)}.`,
+          `baseline (the pre-identity state the first migrate starts from); ${describeUnmatchedLedger(state.ledger, PRE_IDENTITY_RELEASES)}.`,
       );
     }
   } else if (state.identity !== expected) {

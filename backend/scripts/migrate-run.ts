@@ -182,7 +182,7 @@ import {
 } from "../src/db/schema-manifest.ts";
 import { loadSnapshot, type Snapshot } from "../src/db/schema-snapshot.ts";
 import { on, registerQuery } from "../src/db/registry.ts";
-import { describeUnmatchedLedger, matchSupportedRelease } from "../src/db/supported-releases.ts";
+import { describeUnmatchedLedger, matchSupportedRelease, PRE_IDENTITY_RELEASES } from "../src/db/supported-releases.ts";
 import type { MigrateJournal } from "./migrate-journal.ts";
 import {
   acquireTargetLock,
@@ -1163,7 +1163,7 @@ export async function readPreIdentityLedger(db: ReadDb): Promise<PreIdentityStat
   const identity = await readDeploymentIdentity(db);
   if (identity.kind !== "read" || identity.value !== "no table") return null;
   const ledger = await ledgerOf(db);
-  const release = matchSupportedRelease(ledger);
+  const release = matchSupportedRelease(ledger, PRE_IDENTITY_RELEASES);
   if (release === null) return null;
   return { identity: "no table", release: release.name, ledger };
 }
@@ -1185,7 +1185,7 @@ export async function describeUnmatchedPreIdentity(db: ReadDb): Promise<string> 
   if (identity.kind === "read" && identity.value === null) return TABLE_WITHOUT_ROW;
   return (
     "its ledger matches no supported baseline exactly (D55 (8)) — " +
-    `${describeUnmatchedLedger(await ledgerOf(db))}. A dump with any other pre-identity ledger refuses`
+    `${describeUnmatchedLedger(await ledgerOf(db), PRE_IDENTITY_RELEASES)}. A dump with any other pre-identity ledger refuses`
   );
 }
 
@@ -1317,7 +1317,7 @@ export async function readIdentityPassRemainder(db: ReadDb): Promise<IdentityPas
       ORDER BY m.name`) as unknown as { name: string; side: "before" | "after" | "same" }[];
   if (rows.length === 0 || rows.some((row) => row.side === "same")) return null;
   const baseline = rows.filter((row) => row.side === "before").map((row) => row.name);
-  const release = matchSupportedRelease(baseline);
+  const release = matchSupportedRelease(baseline, PRE_IDENTITY_RELEASES);
   if (release === null) return null;
   return { release: release.name, baseline, appliedAfter: rows.filter((row) => row.side === "after").map((row) => row.name) };
 }
@@ -1338,12 +1338,12 @@ async function describeWhyNoPreIdentityException(
   if (options.connection !== "remote") return `${lead} a remote target.`;
   const ledger = await ledgerOf(db);
   if (identity === null) {
-    const also = matchSupportedRelease(ledger) === null ? ` Its ledger also matches none — ${describeUnmatchedLedger(ledger)}.` : "";
+    const also = matchSupportedRelease(ledger, PRE_IDENTITY_RELEASES) === null ? ` Its ledger also matches none — ${describeUnmatchedLedger(ledger, PRE_IDENTITY_RELEASES)}.` : "";
     return `${lead} no deployment_identity table at all: ${TABLE_WITHOUT_ROW}.${also}`;
   }
   return (
     `${lead} a ledger exactly equal to one supported baseline's filename list, and this one matches none — ` +
-    `${describeUnmatchedLedger(ledger)}. A partly migrated or hand-edited ledger is repaired first.`
+    `${describeUnmatchedLedger(ledger, PRE_IDENTITY_RELEASES)}. A partly migrated or hand-edited ledger is repaired first.`
   );
 }
 

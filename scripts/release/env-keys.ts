@@ -34,14 +34,18 @@ export const D61_ENV_ALLOWLIST: readonly string[] = Object.freeze([
 
 /**
  * Keys `~/.env` must hold before a run (`bun run role-passwords --target
- * <target>` writes `rm_owner`). R1.2 refuses without them, before R6.1 stops the legacy
- * stack: a run that stopped the site and then found one missing would leave
- * the site down.
+ * <target>` writes `rm_owner`; the v0.6.0 cutover wrote `RM_CREDENTIALS`). R1.2
+ * refuses without them, before R6.1 stops the running stack: a run that stopped
+ * the site and then found one missing would leave the site down.
  */
-export const PRE_CUTOVER_REQUIRED_KEYS: readonly string[] = Object.freeze(["rm_owner"]);
+export const PRE_CUTOVER_REQUIRED_KEYS: readonly string[] = Object.freeze(["rm_owner", "RM_CREDENTIALS"]);
 
-/** Keys the run writes itself, and the step that writes each, before R6.2 checks it. */
-export const RUN_WRITTEN_KEYS: Readonly<Record<string, string>> = Object.freeze({ RM_CREDENTIALS: "R6.2a" });
+/**
+ * Keys the run writes itself, and the step that writes each. None since D63
+ * (owner, 2026-10-09): the v0.6.0 cutover wrote `RM_CREDENTIALS` (R6.2a, no
+ * longer in the list), so the host holds it before the run starts.
+ */
+export const RUN_WRITTEN_KEYS: Readonly<Record<string, string>> = Object.freeze({});
 
 /** Keys R6.2 (the env rewrite) requires again, as defence in depth. */
 export const D61_REQUIRED_KEYS: readonly string[] = Object.freeze([...PRE_CUTOVER_REQUIRED_KEYS, ...Object.keys(RUN_WRITTEN_KEYS)]);
@@ -58,7 +62,7 @@ export function preCutoverKeyProblems(env: Record<string, string | undefined>, e
   if (missing.length === 0) return [];
   return [
     `${envPath} has no non-empty ${missing.join(" or ")} line; run \`bun run role-passwords --target <target>\` first. ` +
-      "R6.1 stops the legacy stack, so this is checked before it",
+      "R6.1 stops the running stack, so this is checked before it",
   ];
 }
 

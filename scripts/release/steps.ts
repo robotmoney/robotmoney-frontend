@@ -163,7 +163,7 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "R1.2", standing: ["SP.1"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("host-identity.json")],
-    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger is a supported baseline, its identity is absent or matches RM_ENV; before R6.1, ~/.env holds a non-empty rm_owner line and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no release step reads doadmin; RM_CREDENTIALS is not required (R6.2a writes it)",
+    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger is a supported baseline, its identity is absent or matches RM_ENV; before R6.1, ~/.env holds a non-empty rm_owner and RM_CREDENTIALS line and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no release step reads doadmin",
     cmds: [["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--receipt-dir", RUN_DIR]],
   },
   {
@@ -213,8 +213,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "R2.5", standing: ["SP.5"], host: "target", checkout: "legacy", irreversible: false, expectExit: 0, triage: true, receipts: [runReceipts("prod-gate-baseline.*")],
-    description: "Log baseline of the running legacy stack, graded by the legacy checkout's own prod:gate (its .agents/smoke-state.json names the stack)",
-    cmds: [["bun", "run", "prod:gate", "--mode", "baseline", "--state-file", "{legacyCheckout}/.agents/smoke-state.json", "--report", `${RUN_DIR}/prod-gate-baseline.md`]],
+    description: "Log baseline of the running stack, graded by the previous release's own prod:gate from the legacy checkout",
+    cmds: [["bun", "run", "prod:gate", "--mode", "baseline", "--instance", "{instance}", "--report", `${RUN_DIR}/prod-gate-baseline.md`]],
   },
   // ── R5 release candidate tag (prod only; stage records it skipped) ────────
   {
@@ -225,14 +225,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   // ── R6 cutover ────────────────────────────────────────────────────────────
   {
     id: "R6.1", standing: ["SC.2"], host: "target", irreversible: true, expectExit: 0, receipts: [runReceipts("stop-legacy.json")],
-    description: "Stop the legacy stack: its tmux driver, then docker compose down (never -v); prove no legacy container remains",
-    cmds: [["bun", "scripts/release/stop-legacy.ts", "stop", "--session", "{legacySession}", "--project", "{legacyProject}",
-      "--legacy-checkout", "{legacyCheckout}", "--compose-files", "{legacyComposeFiles}", "--receipt-dir", RUN_DIR]],
-  },
-  {
-    id: "R6.2a", standing: [], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("credentials-init.json")],
-    description: "Write the in-house roster's credential.json (fresh keys, the model key from ~/.env, placeholder bearers for R6.7c) and RM_CREDENTIALS; an existing file with the same roster is kept",
-    cmds: [["bun", "scripts/release/credentials-init.ts", "--receipt-dir", RUN_DIR]],
+    description: "Stop the running stack: bun smoke:down from the legacy checkout (never -v); prove no container of its compose project remains",
+    cmds: [["bun", "scripts/release/stop-legacy.ts", "stop", "--instance", "{instance}", "--legacy-checkout", "{legacyCheckout}", "--receipt-dir", RUN_DIR]],
   },
   {
     id: "R6.2", standing: ["SV.6"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("env-rewrite.json")],
@@ -271,18 +265,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     cmds: [status()],
   },
   {
-    id: "R6.7c", standing: [], host: "target", irreversible: true, expectExit: 0, receipts: [prodInitReceipt("rebind-members")],
-    description: "One-time credential migration: rebind the in-house members to credential.json (one-way)",
-    cmds: [prodInit("rebind-members")],
-  },
-  {
-    id: "R6.7d", standing: ["SP.4"], host: "target", irreversible: false, expectExit: 0, receipts: [], env: BOOT_ENV, bootEnv: true, maxMinutes: 15,
-    description: "Boot 2: a new plan that recreates the participants on the new bearers",
-    cmds: [boot()],
-  },
-  {
     id: "R6.9", standing: ["SV.2"], host: "target", irreversible: false, expectExit: 0, receipts: [],
-    description: "Status after boot 2: the receipt as history, the daemon as now",
+    description: "Status after the boot: the receipt as history, the daemon as now",
     cmds: [status()],
   },
   {
@@ -376,9 +360,6 @@ export function templateValues(target: ReleaseTarget, commit: string, runTs: str
     watchMinAttendance: String(target.watchMinAttendance),
     watchSessions: target.watchSessions,
     legacyCheckout: target.legacy.checkout,
-    legacySession: target.legacy.tmuxSession,
-    legacyProject: target.legacy.composeProject,
-    legacyComposeFiles: target.legacy.composeFiles.join(","),
     legacyVersion: target.legacy.version,
   };
 }

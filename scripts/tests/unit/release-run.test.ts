@@ -35,12 +35,12 @@ import { DEFAULT_MAX_MINUTES, maxMillisOf } from "../../release/steps.ts";
 import { partitionEnv } from "../../release/env-rewrite.ts";
 import { compareBaseline } from "../../release/compare-baseline.ts";
 import { exposesPostgresUrl, keysOutsideAllowlist, othersCanTraverse, scanForPostgresUrls, socketMounts, tokenFileProblems } from "../../release/host-guards.ts";
-import { composeDownArgv, partitionLegacyEnv, retiredPath } from "../../release/stop-legacy.ts";
+import { partitionLegacyEnv, retiredPath, smokeDownArgv } from "../../release/stop-legacy.ts";
 import { nextRcTag, rcTagsAt } from "../../release/tag.ts";
 import { epochProblems, inFlightCloseProblems, inFlightProblems, inFlightProblemsFor, parseSessionsFlag, paritySweep, regimeCronProblems } from "../../release/schedule-parity.ts";
 import { baselineProblems, WOULD_CLEAR_SQL } from "../../release/baseline.ts";
 import { identityProblems } from "../../release/identity-check.ts";
-import { IDENTITY_MIGRATION, preconditionProblems } from "../../release/precondition.ts";
+import { preconditionProblems } from "../../release/precondition.ts";
 import { D61_ENV_ALLOWLIST, D61_REQUIRED_KEYS, PRE_CUTOVER_REQUIRED_KEYS, RUN_WRITTEN_KEYS, confirmTargetOf, preCutoverKeyProblems } from "../../release/env-keys.ts";
 import { SUPPORTED_RELEASES } from "../../../backend/src/db/supported-releases.ts";
 
@@ -64,10 +64,13 @@ describe("target schema", () => {
     const stage = loadTarget(join(targetsDir, "stage.json"));
     expect(prod.rmEnv).toBe("prod");
     expect(prod.host).toBe("rm-frontend-prod-1");
-    expect(prod.checkout).toBe("/root/rm-060");
+    expect(prod.release).toBe("v0.6.1");
+    expect(prod.checkout).toBe("/root/rm-061");
     expect(prod.instance).toBe("rm_prod");
-    expect(prod.legacy.checkout).toBe("/root/robotmoney-frontend");
-    expect(prod.legacy.tmuxSession).toBe("driver");
+    // D63: the running stack is v0.6.0, started from the previous release's checkout.
+    expect(prod.legacy.checkout).toBe("/root/rm-060");
+    expect(prod.legacy.version).toBe("v0.6.0");
+    expect(prod.legacy.commit).toBe("e96d4598678346260282e37ffd5a10df286186ba");
     expect(prod.capture.host).toBe("rm-frontend-stage-2");
     expect(prod.confirmTarget).not.toBe(CONFIRM_TARGET_PLACEHOLDER);
     expect(prod.confirmTarget).toMatch(/^[a-z0-9.-]+:25060\/defaultdb$/);
@@ -76,7 +79,9 @@ describe("target schema", () => {
     expect(stage.instance).toBe("stage_target");
     expect(stage.checkout).toBe("/home/stage-server/rm-stage-target");
     expect(stage.legacy.checkout).toBe("/home/stage-server/rm-stage-legacy");
-    expect(stage.legacy.tmuxSession).toBe("stage-driver");
+    expect(stage.release).toBe("v0.6.1");
+    expect(stage.legacy.version).toBe("v0.6.0");
+    expect(stage.legacy.commit).toBe(prod.legacy.commit);
     // The capture checkout convention: one runner-owned folder on stage-2 for both targets.
     for (const t of [prod, stage]) {
       expect(t.capture.host).toBe(CAPTURE_CHECKOUT.host);
@@ -181,11 +186,13 @@ describe("one step list for every target (D61 rule 2)", () => {
   test("the hash is the same for stage and prod, and the list covers the runbook ids", () => {
     expect(stepListHash()).toMatch(/^[0-9a-f]{64}$/);
     const ids = stepIds();
-    for (const id of ["R1.1", "R2.1", "R2.3", "R2.5", "R6.1", "R6.2", "R6.3", "S8.1", "R6.4", "R6.5", "R6.7a", "R6.7c", "R6.7d", "R6.10", "R7.1", "R7.3", "R7.3a", "R7.3b", "R7.5", "R7.7"]) {
+    for (const id of ["R1.1", "R2.1", "R2.3", "R2.5", "R6.1", "R6.2", "R6.3", "S8.1", "R6.4", "R6.5", "R6.7a", "R6.7b", "R6.9", "R6.10", "R7.1", "R7.3", "R7.3a", "R7.3b", "R7.5", "R7.7"]) {
       expect(ids).toContain(id);
     }
     expect(ids.indexOf("S8.1")).toBe(ids.indexOf("R6.3") + 1);
-    expect(RELEASE_STEPS.filter((s) => s.irreversible).map((s) => s.id)).toEqual(["R6.1", "R6.3", "R6.7c"]);
+    // D63: the v0.6.0-only credential and rebind steps are gone, and their ids are not reused.
+    for (const gone of ["R6.2a", "R6.7c", "R6.7d"]) expect(ids).not.toContain(gone);
+    expect(RELEASE_STEPS.filter((s) => s.irreversible).map((s) => s.id)).toEqual(["R6.1", "R6.3"]);
   });
 
   test("the rendered commands differ only by the target's values", () => {
@@ -262,11 +269,11 @@ describe("one step list for every target (D61 rule 2)", () => {
   });
 });
 
-describe("R2.5 grades the legacy stack with the legacy checkout's own gate", () => {
+describe("R2.5 grades the running v0.6.0 stack with the legacy checkout's own gate", () => {
   test("it runs from the legacy checkout, with HOME and no RM_ENV, on both targets", () => {
     for (const t of [loadTarget(join(targetsDir, "prod.json")), loadTarget(join(targetsDir, "stage.json"))]) {
       const r = renderStep(RELEASE_STEPS.find((s) => s.id === "R2.5")!, t, templateValues(t, SHA, "20261008T000000Z"));
-      expect(r.remote).toContain(`cd ${t.legacy.checkout} && env -i HOME=${t.home} PATH=${REMOTE_PATH} LANG=C.UTF-8 bun run prod:gate --mode baseline --state-file ${t.legacy.checkout}/.agents/smoke-state.json`);
+      expect(r.remote).toContain(`cd ${t.legacy.checkout} && env -i HOME=${t.home} PATH=${REMOTE_PATH} LANG=C.UTF-8 bun run prod:gate --mode baseline --instance ${t.instance}`);
       expect(r.remote).not.toContain("RM_ENV=");
     }
   });
@@ -281,25 +288,22 @@ describe("R2.5 grades the legacy stack with the legacy checkout's own gate", () 
 
 describe("the target precondition (R1.2)", () => {
   const baseline = SUPPORTED_RELEASES[0]!.migrations;
-  test("a supported ledger with no identity row passes on both policies", () => {
-    expect(preconditionProblems({ rmEnv: "prod", ledger: baseline, identity: null })).toEqual([]);
-    expect(preconditionProblems({ rmEnv: "stage", ledger: baseline, identity: null })).toEqual([]);
+  test("the v0.6.0 ledger with the identity RM_ENV implies passes on both policies", () => {
+    expect(preconditionProblems({ rmEnv: "prod", ledger: baseline, identity: "production" })).toEqual([]);
+    expect(preconditionProblems({ rmEnv: "stage", ledger: baseline, identity: "rehearsal" })).toEqual([]);
   });
-  test("a stage twin with 0081 and identity rehearsal passes", () => {
-    expect(preconditionProblems({ rmEnv: "stage", ledger: [...baseline, IDENTITY_MIGRATION], identity: "rehearsal" })).toEqual([]);
-  });
-  test("red: the wrong identity, an unsupported ledger, 0081 without a row, no RM_ENV", () => {
+  test("red: the wrong identity, an unsupported ledger, no RM_ENV", () => {
     expect(preconditionProblems({ rmEnv: "prod", ledger: baseline, identity: "rehearsal" }).join()).toContain("rehearsal");
     expect(preconditionProblems({ rmEnv: "stage", ledger: baseline, identity: "production" }).join()).toContain("production");
-    expect(preconditionProblems({ rmEnv: "prod", ledger: baseline.slice(1), identity: null }).join()).toContain("no supported baseline");
-    expect(preconditionProblems({ rmEnv: "prod", ledger: [...baseline, IDENTITY_MIGRATION], identity: null }).join()).toContain("no supported baseline");
-    expect(preconditionProblems({ rmEnv: undefined, ledger: baseline, identity: null }).length).toBe(1);
+    expect(preconditionProblems({ rmEnv: "prod", ledger: baseline.slice(1), identity: "production" }).join()).toContain("no supported baseline");
+    expect(preconditionProblems({ rmEnv: "stage", ledger: [...baseline, "0116_vault_subject_position_actions.sql"], identity: "rehearsal" }).join()).toContain("no supported baseline");
+    expect(preconditionProblems({ rmEnv: undefined, ledger: baseline, identity: "production" }).length).toBe(1);
   });
 });
 
 describe("the go file (D61 rule 1)", () => {
-  const expected = { release: "v0.6.0", target: "prod" };
-  const good = `# owner go, 2026-10-08\nrelease: v0.6.0\ncommit: ${SHA}\ntarget: prod\nrecovery: /root/recovery-matrix-v0.6.0.signed.md\noperator: lucas\n`;
+  const expected = { release: "v0.6.1", target: "prod" };
+  const good = `# owner go, 2026-10-08\nrelease: v0.6.1\ncommit: ${SHA}\ntarget: prod\nrecovery: /root/recovery-matrix-v0.6.1.signed.md\noperator: lucas\n`;
 
   test("a go naming this release and target passes, with its hash; its commit is the run's commit", () => {
     const r = validateGo(good, expected);
@@ -312,7 +316,7 @@ describe("the go file (D61 rule 1)", () => {
   test("red: another target or release; an unknown or missing key; a short sha", () => {
     expect(validateGo(good.replace(/commit: .*\n/, ""), expected)).toEqual({ errors: ["the go names no commit"] });
     expect("errors" in validateGo(good.replace("target: prod", "target: stage"), expected)).toBe(true);
-    expect("errors" in validateGo(good.replace("v0.6.0", "v0.6.1"), expected)).toBe(true);
+    expect("errors" in validateGo(good.replace("release: v0.6.1", "release: v0.6.0"), expected)).toBe(true);
     expect("errors" in validateGo(`${good}skip: R2.5\n`, expected)).toBe(true);
     expect("errors" in validateGo(good.replace(/target: prod\n/, ""), expected)).toBe(true);
     expect("errors" in validateGo(good.replace(SHA, "a502de30"), expected)).toBe(true);
@@ -326,7 +330,7 @@ describe("the go file (D61 rule 1)", () => {
 function journal(patch: Partial<RunJournal> = {}): RunJournal {
   const ids = stepIds();
   return {
-    version: 1, target: "stage", rmEnv: "stage", release: "v0.6.0", commit: SHA, stepListHash: stepListHash(), stepIds: ids,
+    version: 1, target: "stage", rmEnv: "stage", release: "v0.6.1", commit: SHA, stepListHash: stepListHash(), stepIds: ids,
     goSha256: "g", runTs: "20261008T000000Z", startedAt: "", updatedAt: "", status: "passed",
     steps: Object.fromEntries(ids.map((id) => [id, { id, status: "ok", exit: 0, expectExit: 0, startedAt: "", receipts: [], attempt: 1 }])),
     ...patch,
@@ -396,7 +400,7 @@ function fixture(rmEnv: "stage" | "prod" = "stage", overrides: Record<string, un
   const goFile = join(dir, "go.txt");
   const recovery = join(dir, "recovery-matrix.md");
   writeFileSync(recovery, "signed recovery matrix\n");
-  writeFileSync(goFile, `release: v0.6.0\ncommit: ${SHA}\ntarget: ${name}\nrecovery: ${recovery}\n`);
+  writeFileSync(goFile, `release: v0.6.1\ncommit: ${SHA}\ntarget: ${name}\nrecovery: ${recovery}\n`);
   return { dir, targetFile, goFile, journalRoot: join(dir, "journal") };
 }
 
@@ -447,7 +451,7 @@ describe("runRelease", () => {
     expect(await runRelease(["--target", f.targetFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(2);
     expect(a.ran).toEqual([]);
     expect(a.logs.join("\n")).toContain("no --go");
-    writeFileSync(f.goFile, `release: v0.6.0\ncommit: ${SHA}\ntarget: prod\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
+    writeFileSync(f.goFile, `release: v0.6.1\ncommit: ${SHA}\ntarget: prod\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
     const b = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], b.deps, TINY)).toBe(2);
     expect(b.ran).toEqual([]);
@@ -468,7 +472,7 @@ describe("runRelease", () => {
     a.deps.exec = async (h, r, o, e) => { seen.push(r); return exec(h, r, o, e); };
     expect(await runRelease(["--target", f.targetFile, "--dry-run", "--journal-root", f.journalRoot], a.deps, CHECKOUT)).toBe(0);
     expect(seen.join()).toContain(`--detach ${SHA}`);
-    writeFileSync(f.goFile, `release: v0.6.0\ncommit: ${OTHER_SHA}\ntarget: stage\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
+    writeFileSync(f.goFile, `release: v0.6.1\ncommit: ${OTHER_SHA}\ntarget: stage\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
     // A go naming another commit than the control checkout's HEAD is red: the printed step list is not that commit's.
     const b = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--preflight", "--journal-root", f.journalRoot], b.deps, CHECKOUT)).toBe(2);
@@ -568,7 +572,7 @@ describe("runRelease", () => {
     expect(c.ran).toEqual([]);
 
     // red control: a prod go at another commit than the stage run passed at refuses (SP.8).
-    writeFileSync(f.goFile, `release: v0.6.0\ncommit: ${OTHER_SHA}\ntarget: prod\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
+    writeFileSync(f.goFile, `release: v0.6.1\ncommit: ${OTHER_SHA}\ntarget: prod\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
     const d = fakeDeps({ receipt: "{}" });
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", join(f.dir, "j3"), "--stage-journal", stageDir], d.deps, TINY)).toBe(2);
     expect(d.ran).toEqual([]);
@@ -684,12 +688,12 @@ describe("host guards, legacy stop and identity (R6.1, S8.1, R7.1, R7.7)", () =>
     expect(keysOutsideAllowlist(["host", "rm_owner", "ADMIN_TOKEN"])).toEqual(["ADMIN_TOKEN"]);
     expect(tokenFileProblems([{ path: "a", mode: 0o100600 }, { path: "b", mode: 0o100644 }, { path: "c", mode: null }])).toEqual(["b is mode 644, not 600", "c is missing"]);
   });
-  test("compose down never removes volumes; the retired path carries the version", () => {
-    const argv = composeDownArgv("rm_prod", ["docker-compose.yml"]);
-    expect(argv).toEqual(["compose", "--env-file", "/dev/null", "-p", "rm_prod", "-f", "docker-compose.yml", "down", "--remove-orphans"]);
+  test("the stop is the previous release's own smoke:down, never removing volumes; the retired path carries the version", () => {
+    const argv = smokeDownArgv("rm_prod");
+    expect(argv).toEqual(["bun", "run", "smoke:down", "--instance", "rm_prod"]);
     expect(argv).not.toContain("-v");
     expect(argv).not.toContain("--volumes");
-    expect(retiredPath("/root/robotmoney-frontend/", "v0.5.4")).toBe("/root/robotmoney-frontend.v0.5.4-retired");
+    expect(retiredPath("/root/rm-060/", "v0.6.0")).toBe("/root/rm-060.v0.6.0-retired");
   });
   test("identity: the commit must be served, without +dirty", () => {
     expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: SHA }), `{"commit":"${SHA}"}`, SHA)).toEqual([]);
@@ -793,7 +797,7 @@ describe("watch steps, prod-only steps and the recovery go key", () => {
 
   test("red: a go whose recovery file cannot be read refuses before anything runs", async () => {
     const f = fixture("stage");
-    writeFileSync(f.goFile, `release: v0.6.0\ncommit: ${SHA}\ntarget: stage\nrecovery: ${join(f.dir, "missing.md")}\n`);
+    writeFileSync(f.goFile, `release: v0.6.1\ncommit: ${SHA}\ntarget: stage\nrecovery: ${join(f.dir, "missing.md")}\n`);
     const a = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, WATCHED)).toBe(2);
     expect(a.ran).toEqual([]);
@@ -914,12 +918,12 @@ describe("the cutover's ~/.env keys are proven at R1.2, before the first irrever
   const ENV_PATH = "/root/.env";
   const SECRET = "Sup3r-s3cret-value";
 
-  test("a non-empty rm_owner line passes", () => {
-    expect(preCutoverKeyProblems({ rm_owner: SECRET }, ENV_PATH)).toEqual([]);
+  test("a non-empty rm_owner and RM_CREDENTIALS line pass", () => {
+    expect(preCutoverKeyProblems({ rm_owner: SECRET, RM_CREDENTIALS: "/root/.config/robotmoney/credential.json" }, ENV_PATH)).toEqual([]);
   });
 
   test("red: rm_owner missing, empty or blank refuses, naming the key, the file and the fix; doadmin alone does not satisfy it", () => {
-    for (const env of [{}, { doadmin: SECRET }, { rm_owner: "" }, { rm_owner: "   " }]) {
+    for (const env of [{ RM_CREDENTIALS: "/c" }, { doadmin: SECRET, RM_CREDENTIALS: "/c" }, { rm_owner: "", RM_CREDENTIALS: "/c" }, { rm_owner: "   ", RM_CREDENTIALS: "/c" }]) {
       const problems = preCutoverKeyProblems(env, ENV_PATH);
       expect(problems.length, JSON.stringify(env)).toBe(1);
       expect(problems[0]).toContain("rm_owner");
@@ -939,12 +943,11 @@ describe("the cutover's ~/.env keys are proven at R1.2, before the first irrever
     for (const s of RELEASE_STEPS) {
       for (const c of s.cmds) expect(c.join(" "), s.id).not.toMatch(/doadmin|enable-owner-login|role-passwords/);
     }
-    expect([...PRE_CUTOVER_REQUIRED_KEYS]).toEqual(["rm_owner"]);
-    expect(RUN_WRITTEN_KEYS).toEqual({ RM_CREDENTIALS: "R6.2a" });
+    // D63: the host already holds RM_CREDENTIALS (the v0.6.0 cutover wrote it), so R1.2 requires both lines and no step writes one.
+    expect([...PRE_CUTOVER_REQUIRED_KEYS]).toEqual(["rm_owner", "RM_CREDENTIALS"]);
+    expect(RUN_WRITTEN_KEYS).toEqual({});
     expect([...D61_REQUIRED_KEYS]).toEqual(["rm_owner", "RM_CREDENTIALS"]);
-    // R6.2 requires RM_CREDENTIALS: R6.2a writes it first.
     const ids = stepIds();
-    expect(ids.indexOf("R6.2a")).toBeLessThan(ids.indexOf("R6.2"));
     for (const [key, writer] of Object.entries(RUN_WRITTEN_KEYS)) expect(ids, key).toContain(writer);
   });
 
@@ -965,7 +968,7 @@ describe("the cutover's ~/.env keys are proven at R1.2, before the first irrever
     for (const key of D61_REQUIRED_KEYS) expect(PRE_CUTOVER_REQUIRED_KEYS.includes(key) || key in RUN_WRITTEN_KEYS, key).toBe(true);
     const r12 = RELEASE_STEPS.find((s) => s.id === "R1.2")!;
     expect(r12.description).toContain("rm_owner logs in");
-    expect(r12.description).toContain("RM_CREDENTIALS is not required");
+    expect(r12.description).toContain("RM_CREDENTIALS line");
   });
 
   test("red: R1.2 moved after R6.1, or R1.2 without --confirm-target, fails the order check", () => {
@@ -1011,21 +1014,21 @@ describe("the cutover's ~/.env keys are proven at R1.2, before the first irrever
     test("red: rm_owner missing refuses, naming rm_owner and the fix; a doadmin line is not read and never prints", () => {
       const x = run(`${conn}doadmin=${ADMIN}\n`);
       expect(x.code).toBe(1);
-      expect(x.out).toMatch(/REFUSE: .*has no non-empty rm_owner line; run `bun run role-passwords --target <target>` first/);
+      expect(x.out).toMatch(/REFUSE: .*has no non-empty rm_owner or RM_CREDENTIALS line; run `bun run role-passwords --target <target>` first/);
       expect(x.receipt).toContain(`"ownerLogin": "not-tried"`);
       clean(x);
     }, 60_000);
 
     test("red: an empty rm_owner line refuses like a missing one", () => {
-      const x = run(`${conn}rm_owner=\n`);
+      const x = run(`${conn}rm_owner=\nRM_CREDENTIALS=/c\n`);
       expect(x.out).toMatch(/REFUSE: .*has no non-empty rm_owner line/);
       expect(x.receipt).toContain(`"ownerLogin": "not-tried"`);
       clean(x);
     }, 60_000);
 
     test("rm_owner present: no key refusal; the login is tried, and its failure names role-passwords for the target and holds no password", () => {
-      const x = run(`${conn}rm_owner=${OWNER}\n`);
-      expect(x.out).not.toMatch(/non-empty rm_owner line/);
+      const x = run(`${conn}rm_owner=${OWNER}\nRM_CREDENTIALS=/c\n`);
+      expect(x.out).not.toMatch(/non-empty rm_owner/);
       expect(x.out).toContain("REFUSE: rm_owner login: rm_owner cannot log in; run `bun run role-passwords --target prod` first");
       expect(x.receipt).toContain(`"ownerLogin": "failed"`);
       clean(x);
@@ -1081,7 +1084,7 @@ describe("preflight", () => {
 
   test("red: a go whose recovery matrix cannot be read", async () => {
     const f = fixture();
-    writeFileSync(f.goFile, `release: v0.6.0\ncommit: ${SHA}\ntarget: stage\nrecovery: ${join(f.dir, "missing.md")}\n`);
+    writeFileSync(f.goFile, `release: v0.6.1\ncommit: ${SHA}\ntarget: stage\nrecovery: ${join(f.dir, "missing.md")}\n`);
     expect(await preflight(f, fakeDeps().deps, ["--go", f.goFile])).toBe(2);
     expect(status(report(f), "P.recovery")).toBe("red");
   });
@@ -1149,7 +1152,7 @@ describe("preflight", () => {
     expect(laneOf({ host: "target" }, stage)).not.toBe(laneOf({ host: "capture" }, stage));
     expect(laneOf({ host: "target" }, prod)).not.toBe(laneOf({ host: "capture" }, prod));
     expect(laneOf({ host: "capture" }, stage)).toBe(laneOf({ host: "capture" }, prod));
-    expect(laneOf({ host: "target", checkout: "legacy" }, prod)).toBe("rm-frontend-prod-1:/root/robotmoney-frontend");
+    expect(laneOf({ host: "target", checkout: "legacy" }, prod)).toBe("rm-frontend-prod-1:/root/rm-060");
     // Stage rehearses prod's preflight order exactly.
     const order = ["R2.5", "R1.1", "R1.2", "R1.3", "R2.3", "R1.4", "R1.5", "R1.6", "R2.1", "R2.2", "R2.4r"];
     expect(preflightOrder(RELEASE_STEPS, prod).map((s) => s.id)).toEqual(order);

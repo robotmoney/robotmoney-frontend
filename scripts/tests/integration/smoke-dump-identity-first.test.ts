@@ -45,11 +45,11 @@ import { buildReleaseDatabase, makeEncryptedBackup, type EncryptedBackup } from 
 import { instancePaths, readRolePasswords, readStackState } from "../../lib/smoke-state.ts";
 import { roleUrl, runPrepareStep, type HostTarget, type PrepareStep } from "../../lib/smoke-database.ts";
 import { smokeTwinUrlFromContainer } from "../../lib/smoke-twin.ts";
-import { SUPPORTED_RELEASES } from "../../../backend/src/db/supported-releases.ts";
+import { PRE_IDENTITY_RELEASES } from "../../../backend/src/db/supported-releases.ts";
 import { acquireTargetLock, readTargetStateAt } from "../../../backend/src/db/target-lock.ts";
 
 const IDENTITY_MIGRATION = "0081_deployment_identity.sql";
-const BASELINE = SUPPORTED_RELEASES[0]!;
+const BASELINE = PRE_IDENTITY_RELEASES[0]!;
 const LOWER_FIVE = [
   "0056_swarm_judge_requires_model.sql",
   "0057_swarm_judge_policy_stamp.sql",
