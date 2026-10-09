@@ -459,7 +459,7 @@ async function startV060Stack(): Promise<void> {
   const env = ["env", "-i", `HOME=${T.home}`, "PATH=/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8", "RM_ENV=stage"];
   const steps: [string, string[]][] = [
     ["credentials", ["bun", "scripts/release/credentials-init.ts", "--receipt-dir", receipts]],
-    ["env rewrite", ["bun", "scripts/release/env-rewrite.ts", "--run", "stage-target-up", "--receipt-dir", receipts]],
+    ["env rewrite", ["bun", "scripts/release/env-rewrite.ts", "--run", new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z"), "--receipt-dir", receipts]],
     ["tokens", ["bun", "scripts/prod-init.ts", "provision-tokens", "--instance", T.instance, "--confirm-target", confirm]],
     ["boot 1", ["bun", "run", "smoke", "--static-port", "--instance", T.instance]],
     ["rebind", ["bun", "scripts/prod-init.ts", "rebind-members", "--instance", T.instance, "--confirm-target", confirm]],
