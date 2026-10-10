@@ -5313,3 +5313,25 @@ irreversible step.
 
 **Why.** A release line stays reviewable and main-first. Every change on it is
 either already on `main` or has a named reason it cannot be.
+
+## D63 — A release that reached production gets its version tag unless it was rolled back; failed checks are ticketed against the next patch version (refines policy §3; owner, 2026-10-10)
+
+**Status.** Accepted 2026-10-10.
+
+**Decision.**
+
+1. A commit deployed to production gets the final tag `vA.B.C`, unless the
+   release was rolled back. A failed postflight or watch does not withhold it.
+2. Every failed check becomes an issue against the next patch version
+   `vA.B.(C+1)`. Its fixes start at `vA.B.(C+1)-rc.0`.
+3. A rollback withholds the tag. The next attempt is `vA.B.C-rc.(N+1)`.
+4. When the runner stops at a failed step after R6.1, the operator tags the
+   running commit with `bun scripts/release/tag.ts final`.
+
+**Why.** Production must never run a commit that no version names. The owner
+applied this rule to v0.5.1 (2026-09-28) and v0.6.0 (2026-10-09). Policy §3 still
+said the opposite, that a failed postflight consumes another rc of the same
+version. On 2026-10-10 the v0.6.1 production run failed R7.3a on one boot-race
+log line (issue 1280). Production was healthy on `v0.6.1-rc.0`, and the runner
+could not reach W3.
+
