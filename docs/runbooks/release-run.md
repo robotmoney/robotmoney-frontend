@@ -81,6 +81,26 @@ renders every `{commit}` (R1.1, R1.2, R1.4, R1.5, R5.rc, R7.1, W3) from the go's
 A new commit after a QA fix means a new go file, never a commit to the target files. SP.8 still
 refuses a prod go whose commit differs from the passed stage run's commit.
 
+**What each target runs (D64, owner, 2026-10-10).**
+
+1. Stage runs a commit on `releases-A.B.x`: its go names that commit. Never a PR
+   head or a QA branch commit.
+2. When the stage run passes, cut the rc at that commit on the control machine:
+   `bun scripts/release/tag.ts rc --release <release> --commit <stage commit>`.
+3. The production go names the rc tag, `tag: vA.B.C-rc.N`, never a branch or a
+   bare commit. The run resolves the tag to its commit and refuses a tag that is
+   not the stage-passed commit or not reachable from `releases-A.B.x`.
+
+Until the runner reads a `tag:` key (issue 1284), the production go carries the
+rc tag's commit in `commit:`, and the operator checks that `git rev-parse
+vA.B.C-rc.N^{commit}` equals it before the run. R5.rc then finds the rc already
+at that commit and tags nothing new.
+
+Why: on 2026-10-10 the v0.6.1 stage and production runs used a PR head
+(`bca5186e`). The squash merges carried its tree to `main` and `releases-0.6.x`
+under other hashes, so production and both v0.6.1 tags named a commit outside
+the release branch until an empty-diff merge brought it in.
+
 ```text
 release: v0.6.0
 commit: <40-hex sha>

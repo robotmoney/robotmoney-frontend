@@ -121,12 +121,19 @@ from 0.
 
 The cycle, run entirely on the release's `releases-A.B.x` branch (§2):
 
-1. Prepare the tip you intend to ship, on `releases-A.B.x`, untagged.
-2. Run stage preflight and stage rehearsal against that commit. **Either
-   fails** → fix, return to step 2 against the corrected commit. A stage
-   failure consumes no rc number — nothing has been tagged yet to increment.
-3. **Both pass** → cut `vA.B.C-rc.N` at that exact commit (`N` counting from
-   0), and deploy that rc to production.
+1. Prepare the tip you intend to ship, on `releases-A.B.x`, untagged. Fixes
+   reach the branch first (D62). Stage never runs a PR head, a QA branch or any
+   commit that is not on `releases-A.B.x`: a squash merge re-hashes a PR head,
+   and the commit stage proved would then sit outside the release branch.
+2. Run stage preflight and stage rehearsal against that release-branch commit.
+   **Either fails** → fix on the branch, return to step 2 against the new tip.
+   A stage failure consumes no rc number — nothing has been tagged yet to
+   increment.
+3. **Both pass** → cut `vA.B.C-rc.N` at that exact release-branch commit (`N`
+   counting from 0), and push it. Production runs **only by that rc tag**
+   ([D64](../decisions.md), owner, 2026-10-10): the production go names the
+   tag, never a branch name or a bare commit. A tag that does not point at the
+   stage-passed commit, or is not reachable from `releases-A.B.x`, refuses.
 4. Run postflight and the watch.
 5. **Not rolled back** → tag `vA.B.C` at the exact commit that is running in
    production, the deployed rc's commit, whether postflight and the watch
