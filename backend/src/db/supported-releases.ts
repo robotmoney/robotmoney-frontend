@@ -1,3 +1,5 @@
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 // The releases a production database may be upgraded FROM — spec §8.4's
 // `SUPPORTED_RELEASES`, and the one list the first production migrate of §9.1
 // matches a pre-identity ledger against (D55 (5), (8)).
@@ -143,6 +145,14 @@ const V0_5_0_MIGRATIONS: readonly string[] = [
   "0061_source_value_provenance.sql",
 ];
 
+/** v0.6.0 shipped every migration file through this one; later files are newer releases'. */
+const V0_6_0_LAST_FILE = "0115_token_market_samples.sql";
+const MIGRATIONS_DIR = join(import.meta.dir, "..", "..", "migrations");
+/** Read from the checkout's migrations folder. Empty where the folder is absent (a bundled tool). */
+const V0_6_0_MIGRATIONS: readonly string[] = existsSync(MIGRATIONS_DIR)
+  ? readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql") && f <= V0_6_0_LAST_FILE).sort()
+  : [];
+
 /** Production's observed ledger (see the header). Adding one takes an owner decision. */
 export const SUPPORTED_RELEASES: readonly SupportedRelease[] = [
   {
@@ -166,6 +176,13 @@ export const SUPPORTED_RELEASES: readonly SupportedRelease[] = [
       "0063_swarm_judge_model_default.sql",
       "0080_analytics_ledger_compaction.sql",
     ].sort(),
+  },
+  {
+    name: "v0.6.0 (production ledger 2026-10-09)",
+    release: "v0.6.0",
+    outOfBand: [],
+    provenance: "production runs v0.6.0 (e96d4598) since 2026-10-08: its ledger is every file of that tree, through " + V0_6_0_LAST_FILE,
+    migrations: V0_6_0_MIGRATIONS,
   },
 ];
 
