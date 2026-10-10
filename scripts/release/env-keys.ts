@@ -38,13 +38,13 @@ export const D61_ENV_ALLOWLIST: readonly string[] = Object.freeze([
  * stack: a run that stopped the site and then found one missing would leave
  * the site down.
  */
-export const PRE_CUTOVER_REQUIRED_KEYS: readonly string[] = Object.freeze(["rm_owner"]);
+export const PRE_CUTOVER_REQUIRED_KEYS: readonly string[] = Object.freeze(["rm_owner", "RM_CREDENTIALS"]);
 
-/** Keys the run writes itself, and the step that writes each, before R6.2 checks it. */
-export const RUN_WRITTEN_KEYS: Readonly<Record<string, string>> = Object.freeze({ RM_CREDENTIALS: "R6.2a" });
+/** Keys the run writes itself, and the step that writes each. None since v0.6.0: the cutover wrote RM_CREDENTIALS. */
+export const RUN_WRITTEN_KEYS: Readonly<Record<string, string>> = Object.freeze({});
 
 /** Keys R6.2 (the env rewrite) requires again, as defence in depth. */
-export const D61_REQUIRED_KEYS: readonly string[] = Object.freeze([...PRE_CUTOVER_REQUIRED_KEYS, ...Object.keys(RUN_WRITTEN_KEYS)]);
+export const D61_REQUIRED_KEYS: readonly string[] = Object.freeze([...PRE_CUTOVER_REQUIRED_KEYS]);
 
 /**
  * PURE. The R1.2 refusal about `~/.env` keys: a missing or empty pre-cutover

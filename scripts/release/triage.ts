@@ -58,7 +58,7 @@ export interface GateFinding {
   readonly detail: string;
 }
 
-/** Every detail line of every FAIL check in a gate's JSON report. */
+/** Every finding line of every FAIL check in a gate's JSON report. */
 export function failedFindings(report: unknown): GateFinding[] | undefined {
   const checks = (report as { checks?: unknown })?.checks;
   if (!Array.isArray(checks)) return undefined;
@@ -67,7 +67,8 @@ export function failedFindings(report: unknown): GateFinding[] | undefined {
     if (c.status !== "FAIL") continue;
     const check = c.id ?? c.name ?? "?";
     const details = Array.isArray(c.detail) ? c.detail.map(String) : [String(c.detail ?? "")];
-    for (const detail of details) out.push({ check, detail });
+    // The gate's warnings and its summary line ride along a FAIL check; they are not findings.
+    for (const detail of details) if (!/^warn: |^\d+ distinct message\(s\)/.test(detail)) out.push({ check, detail });
   }
   return out;
 }
