@@ -238,6 +238,21 @@ The table below is generated from `scripts/release/steps.ts` by `bun scripts/rel
 The go file stands for SC.1 (its `recovery` key) and SC.2 (D61 replaces the operator's
 step-by-step authorization). Every standing row of the cutover has a step.
 
+### The final tag after a failed check (D63)
+
+A production run that passes its first irreversible step (R6.1) and is not
+rolled back gets the release tag, even when a later step fails. The runner
+stops at the failed step and never skips it, so W3 does not run. The operator
+then tags the running commit from the control checkout:
+
+```bash
+bun scripts/release/tag.ts final --release <release> --commit <go commit>
+```
+
+Each failed check becomes an issue against the next patch version. Its fixes
+start at the next version's `-rc.0`. Only a rollback leaves the release
+untagged.
+
 ### The one target difference: the release tags
 
 R5.rc and W3 tag the release. They carry `onlyFor: "prod"` in the template. A stage run

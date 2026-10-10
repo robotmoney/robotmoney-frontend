@@ -101,10 +101,12 @@ the cut.
 
 ## 3. Version tags and release candidates
 
-A version tag `vA.B.C` is **never** cut before **both** a completed preflight
-and a completed postflight. The version tag records what has been *proven in
-production*, not what is *intended for release*. Everything before that point
-is a release candidate, tagged `vA.B.C-rc.N`, `N` counting from 0.
+A version tag `vA.B.C` names what production runs. A commit that reached
+production gets the version tag unless the release was rolled back. A failed
+postflight or watch does not withhold the tag: each failure is ticketed against
+the next patch version ([D63](../decisions.md), owner, 2026-10-10). Before the
+deploy, a commit is a release candidate, tagged `vA.B.C-rc.N`, `N` counting
+from 0.
 
 > **Revised 2026-09-11, effective from v0.5.0.** Through v0.4.0 the rc tag was
 > cut FIRST — "at the tip you intend to ship" — and stage preflight/rehearsal
@@ -125,12 +127,13 @@ The cycle, run entirely on the release's `releases-A.B.x` branch (§2):
    failure consumes no rc number — nothing has been tagged yet to increment.
 3. **Both pass** → cut `vA.B.C-rc.N` at that exact commit (`N` counting from
    0), and deploy that rc to production.
-4. Run postflight. **Postflight fails** → patch, and go back through a fresh
-   stage pass (step 2) on the corrected commit before cutting
-   `vA.B.C-rc.(N+1)` and deploying again. Every patch needed to reach a
-   correct system consumes another rc number.
-5. **Postflight clean** → tag `vA.B.C` at the exact commit that is running and
-   verified in production — i.e. the final rc's commit.
+4. Run postflight and the watch.
+5. **Not rolled back** → tag `vA.B.C` at the exact commit that is running in
+   production, the deployed rc's commit, whether postflight and the watch
+   passed or not. Open an issue for every failed check, against the next patch
+   version `vA.B.(C+1)`. Its fixes start at `vA.B.(C+1)-rc.0`.
+6. **Rolled back** → no `vA.B.C` tag. Production runs the previous version.
+   Fix, return to step 2, and cut `vA.B.C-rc.(N+1)`.
 
 Three consequences, stated outright because each one looks like a mistake and
 none is:
@@ -138,12 +141,15 @@ none is:
 - **`vA.B.C` and the final `vA.B.C-rc.N` point at the same commit.** That is
   expected and correct, not duplication to clean up. Step 5 has no other
   commit available to it — the version tag names what production is running.
-- **`vA.B.C` can never be cut at a commit that was not actually deployed and
-  verified.** A fix that lands after the last deployed rc requires a new rc
-  and another pass through steps 2–4; it cannot be "rolled into the final
-  tag."
-- **An rc number now only ever counts production postflight failures, never
-  stage failures.** Under the pre-v0.5.0 order a rejected stage rehearsal
+- **`vA.B.C` can never be cut at a commit that was not actually deployed.** A
+  fix that lands after the deploy belongs to the next patch version; it cannot
+  be "rolled into the final tag."
+- **Production never runs an untagged commit after a release.** Withholding
+  the tag after a deploy would leave production on a commit no version names.
+  Only a rollback withholds it, because then production runs the previous
+  version again.
+- **An rc number now only ever counts rollbacks, never stage failures or
+  postflight failures.** Under the pre-v0.5.0 order a rejected stage rehearsal
   still consumed an rc number (the tag already existed); under this order it
   does not, because step 2 can repeat freely before anything is tagged. A
   release that needed five stage attempts and shipped clean on its first
@@ -431,7 +437,8 @@ rollout report covering at least:
 - the release candidate deployed,
 - cutover and postflight results (or rollback results),
 - any issues encountered and their resolution,
-- the final version tag applied,
+- the final version tag applied (every deploy that was not rolled back),
+- the issues opened against the next patch version for failed checks,
 - backport TODOs (§7),
 - operator sign-off.
 
