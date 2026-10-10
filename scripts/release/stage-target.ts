@@ -39,7 +39,7 @@
 // through the container's local superuser socket and prints it to stdout, for
 // that pipe and nothing else. It exists because this is a disposable stage
 // database; production has no such command (its doadmin is typed by the admin).
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -47,6 +47,8 @@ import { parseEnvFile } from "../lib/env-role.ts";
 import { POSTGRES_IMAGE } from "../lib/postgres-image.ts";
 import { resolveBackupFiles, restorePipelineArgv, SHM_FLAGS } from "../lib/restore-container.ts";
 import { instanceStackProject } from "../lib/smoke-state.ts";
+import { SUPPORTED_RELEASES } from "../../backend/src/db/supported-releases.ts";
+import { IDENTITY_MIGRATION } from "./precondition.ts";
 import { CAPTURE_CHECKOUT } from "./target.ts";
 import {
   ACL_EXPORT_SQL,
@@ -57,8 +59,11 @@ import {
   DOADMIN_ADMIN_QUERY,
   doadminPasswordSql,
   dumpAgeHours,
+  ENROLL_REHEARSAL_SQL,
   envKeyNames,
   fingerprintDiff,
+  GRANTS_RECONCILE_FILE,
+  grantsReconcileScript,
   GENERATED_PASSWORD_ROLES,
   globalsToRoleSql,
   LEGACY_LEDGER_TABLE_SQL,
@@ -331,15 +336,22 @@ function referenceGrants(baseline: readonly string[]): { statements: string; fin
   if (missing.length || extra.length) {
     throw new Error(`the legacy checkout's migrations are not production's ledger: missing ${missing.join(",") || "none"}, extra ${extra.join(",") || "none"}`);
   }
-  log(`replaying production's ${files.length} ledger files as doadmin in ${T.referenceDatabase}`);
+  // Production's order: the v0.5 files, the taxonomy provisioning, then the
+  // v0.6.0 cutover (0081 first, the rest in filename order, then grants.sql).
+  const first = new Set(SUPPORTED_RELEASES[0]!.migrations);
+  const v05 = files.filter((f) => first.has(f));
+  const cutover = [IDENTITY_MIGRATION, ...files.filter((f) => !first.has(f) && f !== IDENTITY_MIGRATION)];
+  log(`replaying production's ${files.length} ledger files as doadmin in ${T.referenceDatabase} (${v05.length} before the v0.6.0 cutover, ${cutover.length} at it)`);
   psql(`DROP DATABASE IF EXISTS ${T.referenceDatabase};`);
   psql(`CREATE DATABASE ${T.referenceDatabase} OWNER doadmin;`);
   psql(LEGACY_LEDGER_TABLE_SQL, { user: "doadmin", db: T.referenceDatabase });
-  for (const f of files) {
+  const apply = (f: string) =>
     psql(legacyMigrationScript(f, readFileSync(join(dir, f), "utf8")), { user: "doadmin", db: T.referenceDatabase, single: true });
-  }
+  for (const f of v05) apply(f);
   log("applying the out-of-band taxonomy provisioning (0053 alone, as provision-db-role-taxonomy.sh did)");
   psql(provisionTaxonomyScript(readFileSync(join(dir, PROVISION_TAXONOMY_FILE), "utf8")), { user: "doadmin", db: T.referenceDatabase, single: true });
+  for (const f of cutover) apply(f);
+  psql(grantsReconcileScript(readFileSync(join(T.legacyCheckout, GRANTS_RECONCILE_FILE), "utf8")), { user: "doadmin", db: T.referenceDatabase, single: true });
   const statements = psql(ACL_EXPORT_SQL, { db: T.referenceDatabase, tuples: true });
   const fingerprint = psql(ACL_FINGERPRINT_SQL, { db: T.referenceDatabase, tuples: true });
   psql(`DROP DATABASE ${T.referenceDatabase};`);
@@ -348,8 +360,8 @@ function referenceGrants(baseline: readonly string[]): { statements: string; fin
 }
 
 function readBaseline(): string[] {
-  const baseline = JSON.parse(readFileSync(join(T.checkout, T.baselineFile), "utf8")) as { ledger: { file: string }[] };
-  return baseline.ledger.map((l) => l.file);
+  // Production runs the legacy commit: its ledger is that checkout's migrations folder.
+  return readdirSync(join(T.legacyCheckout, "backend", "migrations")).filter((f) => f.endsWith(".sql")).sort();
 }
 
 function writeEnvFiles(passwords: Record<GeneratedPasswordRole, string>): StageHomeEnv {
@@ -372,14 +384,9 @@ function writeEnvFiles(passwords: Record<GeneratedPasswordRole, string>): StageH
   const homeEnv = join(T.home, ".env");
   writeFileSync(homeEnv, composeStageHomeEnv(values), { mode: 0o600 });
   chmodSync(homeEnv, 0o600);
-  const legacyEnv = join(T.legacyCheckout, ".env");
-  // Production's legacy .env holds a working doadmin URL, and the v0.5.4 boot
-  // migrates through it. The stage legacy file mirrors that with the stage
-  // doadmin's password; R6.2 moves the line out and S8.1 locks the checkout.
-  writeFileSync(legacyEnv, composeLegacyCheckoutEnv(values, passwords.doadmin), { mode: 0o600 });
-  chmodSync(legacyEnv, 0o600);
+  // Production's ~/.env holds rm_owner since role-passwords ran (2026-10-08).
+  appendFileSync(homeEnv, `rm_owner = ${passwords.rm_owner}\n`);
   log(`wrote ${homeEnv} (0600): ${envKeyNames(readFileSync(homeEnv, "utf8")).join(", ")}`);
-  log(`wrote ${legacyEnv} (0600): ${envKeyNames(readFileSync(legacyEnv, "utf8")).join(", ")}`);
   return values;
 }
 
@@ -432,8 +439,33 @@ async function buildDatabase(backup: ReturnType<typeof readDumpPreflight>, basel
     throw new Error(`owners and grants differ from the replayed ledger: ${diff.onlyReference.length} and ${diff.onlyRestored.length} lines`);
   }
   log(`owners and grants equal the replayed ledger (${restored.split("\n").filter(Boolean).length} lines)`);
+  const enrolled = parseKeyValues(psql(ENROLL_REHEARSAL_SQL, { tuples: true }));
+  if (enrolled.identity_kind !== "rehearsal") throw new Error(`the identity row reads ${enrolled.identity_kind} after the enrollment`);
+  log("deployment_identity enrolled rehearsal");
   psql("ANALYZE;");
   return passwords;
+}
+
+/**
+ * Bring the v0.6.0 stack up the way production's v0.6.0 cutover did, from the
+ * legacy checkout under `env -i`: credential.json, the ~/.env rewrite, the
+ * service tokens, boot, the rebind of the in-house members, boot again.
+ * Docker keeps the stack running, as on production.
+ */
+async function startV060Stack(): Promise<void> {
+  const receipts = join(T.home, ".local", "state", "robotmoney-release", "stage-target-up");
+  mkdirSync(receipts, { recursive: true });
+  const confirm = `${T.pgBindHost}:${T.pgPort}/${T.database}`;
+  const env = ["env", "-i", `HOME=${T.home}`, "PATH=/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8", "RM_ENV=stage", "PROJECTS_SOURCE=live"];
+  const steps: [string, string[]][] = [
+    ["credentials", ["bun", "scripts/release/credentials-init.ts", "--receipt-dir", receipts]],
+    ["env rewrite", ["bun", "scripts/release/env-rewrite.ts", "--run", new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z"), "--receipt-dir", receipts]],
+    ["tokens", ["bun", "scripts/prod-init.ts", "provision-tokens", "--instance", T.instance, "--confirm-target", confirm]],
+    ["boot 1", ["bun", "run", "smoke", "--static-port", "--instance", T.instance]],
+    ["rebind", ["bun", "scripts/prod-init.ts", "rebind-members", "--instance", T.instance, "--confirm-target", confirm]],
+    ["boot 2", ["bun", "run", "smoke", "--static-port", "--instance", T.instance]],
+  ];
+  for (const [name, argv] of steps) await stream([...env, ...argv], `v0.6.0 stack: ${name}`, { cwd: T.legacyCheckout });
 }
 
 function startDriver(): void {
@@ -480,11 +512,9 @@ async function waitForLegacySite(): Promise<boolean> {
       log(`legacy site answers 200 on :${T.legacyWebPort}`);
       return true;
     }
-    if (!tmuxHasSession()) throw new Error(`tmux session ${T.driverSession} is gone`);
     if (Date.now() - lastNote > 120_000) {
       lastNote = Date.now();
-      const tail = run(["tmux", "capture-pane", "-p", "-t", T.driverSession]).stdout.split("\n").filter(Boolean).slice(-2);
-      log(`waiting for :${T.legacyWebPort} (${r.stdout.trim() || "no answer"}); driver: ${tail.join(" | ").slice(0, 300)}`);
+      log(`waiting for :${T.legacyWebPort} (${r.stdout.trim() || "no answer"})`);
     }
     await Bun.sleep(10_000);
   }
@@ -515,7 +545,7 @@ async function remoteUp(args: string[]): Promise<number> {
   cloneAt(T.checkout, T.checkoutCommit);
   const baseline = readBaseline();
   log(`production baseline: ${baseline.length} ledger files`);
-  await bunInstall(T.legacyCheckout, ["."]);
+  await bunInstall(T.legacyCheckout, [".", "backend"]);
   await bunInstall(T.checkout, [".", "backend"]);
 
   const passwords = await buildDatabase(backup, baseline);
@@ -535,13 +565,13 @@ async function remoteUp(args: string[]): Promise<number> {
     pg: `${T.pgContainer} ${POSTGRES_IMAGE} ${T.pgBindHost}:${T.pgPort}/${T.database}`,
   }, null, 2)}\n`, { mode: 0o600 });
 
-  startDriver();
-  const up = (await waitForLegacySite()) && (await driverStaysUp());
+  await startV060Stack();
+  const up = await waitForLegacySite();
   const after = checkDatabase(passwords, baseline);
   for (const p of after) log(`  PROBLEM after the legacy boot: ${p}`);
   await remoteStatus();
   if (!up) {
-    log(`the legacy site did not answer on :${T.legacyWebPort}; read the driver: tmux capture-pane -p -t ${T.driverSession}`);
+    log(`the v0.6.0 site did not answer on :${T.legacyWebPort}`);
     return 1;
   }
   return after.length ? 1 : 0;

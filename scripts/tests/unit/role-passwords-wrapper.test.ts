@@ -72,7 +72,7 @@ describe("bun run role-passwords", () => {
   test("the remote command is the release's own env -i shape, with --doadmin-stdin and the target's names only", () => {
     const remote = remoteCommand(STAGE, { target: "stage", doadminStdin: true, roles: "rm_owner,rm_app", rotate: "rm_app" });
     expect(remote).toBe(
-      "cd /home/stage-server/rm-stage-target && env -i HOME=/home/stage-server/stage-target " +
+      `cd ${STAGE.legacy.checkout} && env -i HOME=${STAGE.home} ` +
         "PATH=/root/.bun/bin:/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 RM_ENV=stage " +
         "bun scripts/prod-init.ts role-passwords --instance stage_target --confirm-target 172.17.0.1:25060/defaultdb --doadmin-stdin " +
         "--roles rm_owner,rm_app --rotate rm_app",

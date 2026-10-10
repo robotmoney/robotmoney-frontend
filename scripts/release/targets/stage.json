@@ -1,6 +1,6 @@
 {
   "$comment": "Stage target for bun run release:run (D61 rule 2): the same steps as prod.json, against the stage target database that scripts/release/stage-target.ts up restores before the run. No release commit here: the go file's commit: line names it. HOME is a dedicated directory whose .env names that database. The legacy stack is the v0.5.4 checkout booted against it (PR 1229). watchMinAttendance is 0.4 on stage: the four external members file against production, never against the stage database, so a stage session holds at most the three in-house takes of seven active members (3/7 = 0.43). Production keeps the gate's default 0.5 (owner-visible, 2026-10-08). watchHours 0.25 and watchSessions deferred: the owner decided on 2026-10-08 that the stage watch is a 15-minute check. W1 runs prod:gate with --sessions deferred and R7.4a skips the in-flight publish check, because no 24 h epoch closes in 15 minutes. Stage epochs are production's (24 h since 2026-10-09). Production keeps the 37 h graded watch, so production's W1 is the first full session proof.",
-  "release": "v0.6.0",
+  "release": "v0.6.1",
   "rmEnv": "stage",
   "host": "rm-frontend-stage-2",
   "checkout": "/home/stage-server/rm-stage-target",
@@ -17,13 +17,12 @@
   },
   "legacy": {
     "checkout": "/home/stage-server/rm-stage-legacy",
-    "commit": "1cda4085d235b55bf171735ac77618155e6b1647",
+    "commit": "e96d4598678346260282e37ffd5a10df286186ba",
     "tmuxSession": "stage-driver",
-    "composeProject": "stage_target",
+    "composeProject": "rm_smoke_stack_75e6ee6b55",
     "composeFiles": [],
-    "startedBy": "SMOKE_PROJECT=stage_target bun run smoke:archive -- --no-tui (= bun scripts/smoke.ts --smoke --static-port --db external) in tmux session stage-driver",
-    "log": "/home/stage-server/stage-target/smoke-archive-v0.5.4.log",
-    "version": "v0.5.4"
+    "startedBy": "bun run smoke --static-port --instance stage_target from the legacy checkout (scripts/release/stage-target.ts up), as production started v0.6.0",
+    "version": "v0.6.0"
   },
   "confirmTarget": "172.17.0.1:25060/defaultdb",
   "bootEnv": {}

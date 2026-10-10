@@ -74,7 +74,7 @@ export function remoteCommand(target: ReleaseTarget, args: WrapperArgs): string 
     ...(args.roles ? ["--roles", args.roles] : []),
     ...(args.rotate ? ["--rotate", args.rotate] : []),
   ];
-  return `cd ${shellQuote(target.checkout)} && env -i ${env.join(" ")} ${argv.map(shellQuote).join(" ")}`;
+  return `cd ${shellQuote(target.legacy.checkout)} && env -i ${env.join(" ")} ${argv.map(shellQuote).join(" ")}`;
 }
 
 /** The ssh argv: the host and the remote command. */

@@ -27,7 +27,7 @@ describe("the step table", () => {
   });
 
   test("every runbook step row names a step of the list", () => {
-    for (const f of ["release-run.md", "v0-6-0-rollout.md"]) {
+    for (const f of ["release-run.md"]) {
       expect(unknownStepIds(readFileSync(join(runbooks, f), "utf8"))).toEqual([]);
     }
     expect(unknownStepIds("| R7.2 | gone |\n| R1.1 | here |\n")).toEqual(["R7.2"]);

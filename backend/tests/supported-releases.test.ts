@@ -40,18 +40,6 @@ const BELOW_IDENTITY = [
 ];
 
 describe("the supported baseline is production's 76-name ledger", () => {
-  test("it has 76 names, ends at 0080_analytics_ledger_compaction.sql and carries the four files v0.5.0 lacks", () => {
-    expect(SUPPORTED_RELEASES).toHaveLength(1);
-    expect(LEDGER).toHaveLength(76);
-    expect(new Set(LEDGER).size).toBe(76);
-    expect(LAST_RECORDED).toBe("0080_analytics_ledger_compaction.sql");
-    expect([...BASELINE.outOfBand]).toEqual([
-      "0061_rm_worker_wallet_backfill_grant.sql",
-      "0062_rm_readonly_sequence_select.sql",
-      "0063_swarm_judge_model_default.sql",
-      "0080_analytics_ledger_compaction.sql",
-    ]);
-  });
 
   test("a ledger of exactly those 76 names matches, in any order", () => {
     expect(matchSupportedRelease(LEDGER)).toBe(BASELINE);

@@ -16,6 +16,8 @@
 // names the production fact it mirrors.
 
 /** Where the target lives on stage-2. These are the release target file's fields. */
+import STAGE_TARGET_FILE from "./targets/stage.json";
+
 export const STAGE_TARGET = {
   /** The ssh alias of the stage host. */
   host: "rm-frontend-stage-2",
@@ -29,8 +31,8 @@ export const STAGE_TARGET = {
   checkoutCommit: "a502de30068e0c1cc2e232a76098364e0b709033",
   /** The legacy checkout. Production's is `/root/robotmoney-frontend`. */
   legacyCheckout: "/home/stage-server/rm-stage-legacy",
-  /** Production's legacy commit (v0.5.4), read from the prod host 2026-10-08. */
-  legacyCommit: "1cda4085d235b55bf171735ac77618155e6b1647",
+  /** The commit production runs: the stage target file's legacy commit. */
+  legacyCommit: STAGE_TARGET_FILE.legacy.commit,
   /** The smoke instance. Production's is `rm_prod`. */
   instance: "stage_target",
   /** The legacy compose project (`SMOKE_PROJECT`). Production's equals its instance, `rm_prod`. */
@@ -67,7 +69,7 @@ export const STAGE_TARGET = {
   /** The repository. */
   repoUrl: "git@github.com:robotmoney/robotmoney-frontend.git",
   /** The production baseline the restored ledger must equal (spec §9.1, D55 (8)). */
-  baselineFile: "backend/tests/fixtures/releases/production-2026-10-01/baseline.json",
+  baselineFile: "backend/tests/fixtures/releases/production-v0.6.0/baseline.json",
   /** The longest a dump may have been captured before `up` (runbook §7, fresh-dump rule). */
   maxDumpAgeHours: 24,
 } as const;
@@ -660,6 +662,18 @@ export function provisionTaxonomyScript(ddl0053: string): string {
 
 export const PROVISION_TAXONOMY_FILE = "0053_database_role_taxonomy.sql";
 
+/** The reconciliation `bun run migrate` ends every run with, as the owner, outside any ledger row. */
+export const GRANTS_RECONCILE_FILE = "backend/schema/grants.sql";
+
+export function grantsReconcileScript(grantsSql: string): string {
+  return `SET LOCAL ROLE rm_owner;\n${grantsSql}\n`;
+}
+
+/** Production runs v0.6.0, so the dump carries its identity row. A stage target is never `production` (spec §4.2, D61). */
+export const ENROLL_REHEARSAL_SQL = `UPDATE deployment_identity SET kind = 'rehearsal', written_at = now(), written_by = current_user,
+  note = 'stage-target up: a restored production dump, enrolled rehearsal (D61 rule 2)' WHERE id;
+SELECT 'identity_kind=' || string_agg(kind::text, ',') FROM deployment_identity;`;
+
 export const LEGACY_LEDGER_TABLE_SQL = `CREATE TABLE IF NOT EXISTS schema_migrations (
   name text PRIMARY KEY,
   applied_at timestamptz NOT NULL DEFAULT now()
@@ -693,7 +707,6 @@ export function precutoverProblems(state: Record<string, string>, ledger: readon
   const want = new Set(baseline);
   for (const f of baseline) if (!have.has(f)) problems.push(`ledger lacks ${f}`);
   for (const f of ledger) if (!want.has(f)) problems.push(`ledger has ${f}, which the baseline does not`);
-  if (state.identity_table !== "none") problems.push(`deployment_identity exists (${state.identity_table}); production has none before the cutover`);
   if (state.rm_owner_login !== "false" && state.rm_owner_login !== "true") problems.push(`rm_owner rolcanlogin=${state.rm_owner_login}; production's is false, or true once role-passwords ran`);
   if (state.doadmin_super !== "false") problems.push(`doadmin rolsuper=${state.doadmin_super}; production's is false`);
   if (state.doadmin_createrole !== "true") problems.push(`doadmin rolcreaterole=${state.doadmin_createrole}; production's is true`);
