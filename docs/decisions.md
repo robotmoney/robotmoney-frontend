@@ -5335,3 +5335,26 @@ version. On 2026-10-10 the v0.6.1 production run failed R7.3a on one boot-race
 log line (issue 1280). Production was healthy on `v0.6.1-rc.0`, and the runner
 could not reach W3.
 
+## D64 — Stage runs a release-branch commit; once it passes, the rc tag is cut there, and production runs only by that rc tag (refines policy §3 and D61; owner, 2026-10-10)
+
+**Status.** Accepted 2026-10-10.
+
+**Decision.**
+
+1. Stage runs a commit on `releases-A.B.x`. Never a PR head, a QA branch commit
+   or any commit the release branch does not contain.
+2. When the stage run passes, `vA.B.C-rc.N` is cut at that exact commit and
+   pushed.
+3. The production go names that rc tag. Production never runs from a branch name
+   or a bare commit.
+4. A production run refuses a tag that does not point at the stage-passed commit
+   or is not reachable from `releases-A.B.x`.
+
+**Why.** On 2026-10-10 the v0.6.1 runs used the head of PR 1274 (`bca5186e`).
+Its squash merges gave `main` and `releases-0.6.x` the same tree under other
+hashes. `/health` on production then reported a commit that neither branch
+contained, and both v0.6.1 tags pointed outside the release branch. An
+empty-diff merge (`83985379`) repaired the branch. Cutting the rc on the release
+branch after stage, and deploying only that tag, makes the deployed commit, the
+tags and the branch agree by construction.
+
