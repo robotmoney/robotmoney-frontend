@@ -1,0 +1,8 @@
+{
+  "description": "Cloudflare custom error pages for the production zone (issue 1220 (e)). Config-as-code: the operator applies it to the live zone; CI only validates this descriptor and the page it names.",
+  "page": "ops/cloudflare/offhost-fallback.html",
+  "customPages": [
+    { "errorClass": "5xx", "page": "ops/cloudflare/offhost-fallback.html" },
+    { "errorCode": 1033, "page": "ops/cloudflare/offhost-fallback.html" }
+  ]
+}

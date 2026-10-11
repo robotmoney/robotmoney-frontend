@@ -15,6 +15,7 @@ import { start } from "./router.js";
 import { startAnalytics } from "./analytics.js";
 import { api, apiUrl, gateApiOn, ROUTES } from "./lib/api.js";
 import { checkApiCompat, renderReloadNotice } from "./lib/api-compat.js";
+import { showMaintenance } from "./lib/maintenance-notice.js";
 
 // Is the API one this page was built for? (D54) Started first, before the
 // router renders anything or Alpine asks for data, and every lib/api.js call
@@ -26,6 +27,10 @@ gateApiOn(apiCompat.then((r) => r.status !== "incompatible"));
 apiCompat.then((r) => {
   if (r.status === "incompatible") renderReloadNotice(document, r);
 });
+
+// A planned or active maintenance window (issue 1220): a banner before it, a
+// maintenance view during it. Independent of the compat gate and never blocks.
+showMaintenance(document, apiUrl(ROUTES.status.maintenance));
 
 // The real vault (source of truth: robotmoney-site config, Base mainnet). This
 // is a public on-chain address, not a fabricated demo value.
