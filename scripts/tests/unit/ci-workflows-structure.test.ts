@@ -54,7 +54,6 @@ const PATH_GATED_WORKFLOWS = [
   "integration.yml",
   "web-client.yml",
   "research-pipeline.yml",
-  "onboarding-eval-rails.yml",
   "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml",
 ];
 

@@ -31,7 +31,7 @@ function runtimeRecording(calls: string[][]): StackRuntime {
     },
     async run(argv) {
       calls.push(argv);
-      return 0;
+      return { exitCode: 0, outputTail: "" };
     },
     async probe() {
       return { ok: true, detail: "ok" };

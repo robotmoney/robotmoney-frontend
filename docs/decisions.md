@@ -5358,3 +5358,33 @@ empty-diff merge (`83985379`) repaired the branch. Cutting the rc on the release
 branch after stage, and deploying only that tag, makes the deployed commit, the
 tags and the branch agree by construction.
 
+
+## D65 — CI caches nothing, and a test that needs a build runs in one job per push (owner, 2026-09-24)
+
+**Status.** Accepted 2026-09-24. Recorded with issue 1040.
+
+**Decision.**
+
+1. No workflow caches anything. No step uses `actions/cache`, no step sets
+   buildx `cache-from` or `cache-to`, and no job pulls a pre-built project
+   image.
+2. Every `oven-sh/setup-bun` step sets `no-cache: true`. Every
+   `docker/setup-buildx-action` step sets `cache-binary: false`. No
+   `actions/setup-node` step sets a `cache` input.
+3. A test that builds an image runs in exactly one push-triggered job. The
+   inference-off rails test, `onboarding-eval-infra.test.ts`, runs in
+   `integration.yml` only.
+4. A failed compose step reports the tail of its own output, and the downloads
+   in the member-agent image retry. A network blip is retried in the build. It
+   is not hidden by a cache.
+
+**Why.** A cache hit hides a change in the dependency universe, and CI exists to
+catch that change. On 2026-09-24 main went red twice with a bare
+`compose build member-agent failed (exit 1)`. The image downloads without
+retries, the stack module never read the child's output, and the same test ran
+twice per push. The fix makes the failure visible and repeatable instead of
+caching around it.
+
+**Enforcement.** `scripts/tests/unit/ci-no-cache.test.ts`,
+`scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts` and
+`scripts/tests/unit/member-agent-dockerfile-retries.test.ts`.

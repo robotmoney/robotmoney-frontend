@@ -33,13 +33,13 @@ ARG BUN_LINUX_X64_SHA256=7051d86a924aefea3e0b96213b5fd8f79c0793f9cae6534233e627e
 
 FROM ubuntu:24.04
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl tar git jq bash unzip \
+RUN apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates curl tar git jq bash unzip \
     && rm -rf /var/lib/apt/lists/*
 
 ARG OPENCODE_VERSION
 ARG OPENCODE_LINUX_X64_SHA256
-RUN curl -fsSLo /tmp/opencode.tar.gz \
+RUN curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 -o /tmp/opencode.tar.gz \
       "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64.tar.gz" \
     && echo "${OPENCODE_LINUX_X64_SHA256}  /tmp/opencode.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin \
@@ -47,7 +47,7 @@ RUN curl -fsSLo /tmp/opencode.tar.gz \
 
 ARG BUN_VERSION
 ARG BUN_LINUX_X64_SHA256
-RUN curl -fsSLo /tmp/bun.zip \
+RUN curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 -o /tmp/bun.zip \
       "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip" \
     && echo "${BUN_LINUX_X64_SHA256}  /tmp/bun.zip" | sha256sum -c - \
     && unzip -j -q /tmp/bun.zip -d /usr/local/bin bun-linux-x64/bun \

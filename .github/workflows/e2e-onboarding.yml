@@ -8,8 +8,8 @@
 #
 # This workflow does NOT spend a real model call on an ORDINARY `pull_request`
 # run. Exactly what runs where:
-#   - EVERY PR, drafts and forks included, via the separate
-#     .github/workflows/onboarding-eval-rails.yml (issue #275 addendum): the
+#   - EVERY push and every non-draft PR its path filter selects, via the
+#     `integration` job of .github/workflows/integration.yml (issue #1040): the
 #     inference-off infra-rails check, scripts/tests/integration/
 #     onboarding-eval-infra.test.ts. It proves every rail the real eval rides on
 #     (member-agent image builds and starts, reaches the swarm REST API over the
@@ -185,12 +185,6 @@ jobs:
     # raising this would move the truncation from the eval to the job, which
     # reports as an infra kill rather than the honest `timed-out` outcome.
     timeout-minutes: 120
-    env:
-      # Read by scripts/lib/rmpc-fetch.ts's fetchRmpc() for the eval. The infra-
-      # rails check in onboarding-eval-rails.yml uses the SAME cache key
-      # pattern, so GitHub Actions' cross-workflow cache sharing (scoped by key,
-      # not by workflow file) avoids a redundant download.
-      RMPC_CACHE_DIR: ${{ github.workspace }}/.rmpc-cache
     steps:
       - uses: actions/checkout@v4
       # Resolves, and RECORDS, what the real-inference eval does on this run. When
@@ -216,11 +210,11 @@ jobs:
           else
             echo "requested=false" >> "$GITHUB_OUTPUT"
             if [ "$IS_PULL_REQUEST" = "true" ]; then
-              MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent. Off by default, not removed: issue #289 (an exhaustible free tier) plus the runner time per-PR evals cost against a stochastic metric. TO OPT THIS PR IN: add the label 'real-eval' to the pull request — that re-triggers this workflow at once and every subsequent run of the PR spends a real eval until the label is removed. Where it ALSO runs: THIS SAME WORKFLOW's nightly schedule mirror at 04:37 UTC (cron '37 4 * * *'), plus workflow_dispatch with real_eval=true — a plain push to main no longer spends it (issue #803). Issue #373 retired .github/workflows/swarm-opencode-nightly.yml, which used to hold that slot: each of those runs now spends exactly one real admission and writes an admission record to the job summary and an uploaded artifact, so the admission rate over time is read off run history — thirty nights is thirty samples. What this PR run DID assert about that surface: the separate, inference-off .github/workflows/onboarding-eval-rails.yml workflow (issue #275 addendum), which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full whenever its own path filter matches."
+              MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent. Off by default, not removed: issue #289 (an exhaustible free tier) plus the runner time per-PR evals cost against a stochastic metric. TO OPT THIS PR IN: add the label 'real-eval' to the pull request — that re-triggers this workflow at once and every subsequent run of the PR spends a real eval until the label is removed. Where it ALSO runs: THIS SAME WORKFLOW's nightly schedule mirror at 04:37 UTC (cron '37 4 * * *'), plus workflow_dispatch with real_eval=true — a plain push to main no longer spends it (issue #803). Issue #373 retired .github/workflows/swarm-opencode-nightly.yml, which used to hold that slot: each of those runs now spends exactly one real admission and writes an admission record to the job summary and an uploaded artifact, so the admission rate over time is read off run history — thirty nights is thirty samples. What this PR run DID assert about that surface: the inference-off scripts/tests/integration/onboarding-eval-infra.test.ts, which the integration job in .github/workflows/integration.yml executes in full on every push and every non-draft PR its path filter selects (issue #1040)."
             elif [ "$IS_PUSH" = "true" ]; then
               MSG="§11 R8 real-inference onboarding eval: **NOT RUN** on this push — issue #803 moved the real-inference admission off push-to-main because its ~50/50 30-minute-attempt timeout rate (see #304) turned an unrelated change red on a report nobody reads before the next push. ZERO model tokens are spent here. The measurement's home is now THIS SAME WORKFLOW's nightly schedule mirror at 04:37 UTC (cron '37 4 * * *'), read as a trend over run history — thirty nights is thirty samples. Opt a specific PR in with the 'real-eval' label, or spend one on demand via workflow_dispatch with real_eval=true."
             else
-              MSG="§11 R8 real-inference onboarding eval: NOT REQUESTED on this manual run — re-dispatch this workflow with real_eval=true to spend one. ZERO model tokens are spent here. The separate onboarding-eval-rails.yml workflow still covers the inference-off rails check."
+              MSG="§11 R8 real-inference onboarding eval: NOT REQUESTED on this manual run — re-dispatch this workflow with real_eval=true to spend one. ZERO model tokens are spent here. The integration workflow (integration.yml) still covers the inference-off rails check."
             fi
           fi
           echo "$MSG"
@@ -232,23 +226,6 @@ jobs:
         with:
           opencode-api-key: ${{ secrets.OPENCODE_API_KEY }}
           agent-model: ${{ vars.AGENT_MODEL || '' }}
-      # The pinned rmpc release binary (scripts/lib/rmpc-fetch.ts), cached by tag
-      # so a GitHub Releases asset is not re-downloaded on every run for a binary
-      # that only changes when RMPC_VERSION is bumped. Needs the repo installed,
-      # so it follows the boot.
-      - name: Resolve pinned rmpc release version (cache key)
-        id: rmpc-version
-        if: ${{ steps.onboarding-gate.outputs.requested == 'true' }}
-        run: |
-          VERSION=$(bun -e 'import("./scripts/lib/rmpc-fetch.ts").then((m) => console.log(m.RMPC_VERSION))')
-          echo "resolved rmpc version: $VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-      - name: Cache rmpc release binary
-        if: ${{ steps.onboarding-gate.outputs.requested == 'true' }}
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/.rmpc-cache
-          key: rmpc-${{ steps.rmpc-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
       - name: Onboarding eval (real-inference admission sweep)
         if: ${{ steps.onboarding-gate.outputs.requested == 'true' }}
         run: bun --no-env-file scripts/smoke-ci-checks.ts --check onboarding
