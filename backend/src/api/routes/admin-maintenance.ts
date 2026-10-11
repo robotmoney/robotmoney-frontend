@@ -39,7 +39,10 @@ function instantOf(raw: unknown, name: string): Date {
   return d;
 }
 
-const ID = /^\/api\/admin\/maintenance\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(start|end|cancel)$/;
+// The id segment is matched loosely so an unauthenticated caller is refused for
+// any id; a non-UUID id is rejected after the credential check.
+const ID = /^\/api\/admin\/maintenance\/([^/]+)\/(start|end|cancel)$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export async function handleAdminMaintenance(req: Request, url: URL): Promise<Result | null> {
   const p = url.pathname;
@@ -47,6 +50,7 @@ export async function handleAdminMaintenance(req: Request, url: URL): Promise<Re
   const m = ID.exec(p);
   if (req.method !== "POST" || (!isSchedule && !m)) return null;
   if (!await isPrivileged(req)) return FORBIDDEN;
+  if (m && !UUID.test(m[1]!)) return { status: 404, body: { error: "maintenance window not found" } } as Result;
   try {
     const body = await req.json().catch(() => null);
     return isSchedule ? await schedule(body) : await transition(m![1]!, m![2] as "start" | "end" | "cancel", body);
