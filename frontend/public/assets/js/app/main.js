@@ -29,8 +29,11 @@ apiCompat.then((r) => {
 });
 
 // A planned or active maintenance window (issue 1220): a banner before it, a
-// maintenance view during it. Independent of the compat gate and never blocks.
-showMaintenance(document, apiUrl(ROUTES.status.maintenance));
+// maintenance view during it. Never blocks. It waits on the compat verdict like
+// every other /api/* call, so an out-of-range page makes no further request.
+apiCompat.then((r) => {
+  if (r.status !== "incompatible") showMaintenance(document, apiUrl(ROUTES.status.maintenance));
+});
 
 // The real vault (source of truth: robotmoney-site config, Base mainnet). This
 // is a public on-chain address, not a fabricated demo value.
