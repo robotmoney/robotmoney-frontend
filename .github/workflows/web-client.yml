@@ -103,6 +103,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.5"
+          no-cache: true
       # Playwright's CLI/transform runs on Node.js; `bunx playwright test`
       # shells out to it. `setup-bun` does NOT provide node.
       - uses: actions/setup-node@v4

@@ -42,6 +42,7 @@ runs:
     - uses: oven-sh/setup-bun@v2
       with:
         bun-version: "1.3.5"
+        no-cache: true
     # Playwright's CLI/transform runs on Node.js (its bin is `#!/usr/bin/env
     # node`); `bun run test:browser` shells out to it and `setup-bun` does NOT
     # provide node, so without this every spec fails to build.
@@ -90,6 +91,8 @@ runs:
         "$RUNNER_TEMP/opencode-bin/opencode" --version
     - name: Set up Docker builder
       uses: docker/setup-buildx-action@v3
+      with:
+        cache-binary: false
     # The compose project this job's boot will use. NOT chosen here: `bun smoke`
     # derives it from the job's own identity (scripts/stack/naming.ts, `class:
     # "ci"`, hashed from GITHUB_WORKFLOW/RUN_ID/RUN_ATTEMPT/JOB) and refuses an

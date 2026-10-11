@@ -95,6 +95,56 @@ export interface StackIo {
   stderr?: number | "inherit" | "pipe" | "ignore";
 }
 
+/**
+ * What an async child left behind. `outputTail` is the bounded tail of the
+ * piped stdout and stderr (see `tailOf`), and is "" when the caller routed the
+ * output elsewhere (a file descriptor, "inherit", "ignore") because it already
+ * lives there. Issue #1040: a failed `compose build` used to throw only its
+ * exit code, so nobody could tell which download had failed.
+ */
+export interface RunResult {
+  exitCode: number;
+  outputTail: string;
+}
+
+/** Lines kept per stream, and the cap on each line, so a failure message stays bounded. */
+export const TAIL_LINES = 100;
+export const TAIL_LINE_CHARS = 300;
+
+/** The last TAIL_LINES lines of `text`, each capped at TAIL_LINE_CHARS. */
+export function tailOf(text: string): string {
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines
+    .slice(-TAIL_LINES)
+    .map((l) => (l.length > TAIL_LINE_CHARS ? `${l.slice(0, TAIL_LINE_CHARS)}…` : l))
+    .join("\n");
+}
+
+/**
+ * Read a piped stream to its end, holding only a bounded window of it. The read
+ * is what keeps a large build from blocking on a full pipe: nothing else
+ * consumes these streams.
+ */
+async function drainTail(stream: ReadableStream<Uint8Array> | number | undefined | null): Promise<string> {
+  if (!stream || typeof stream === "number") return "";
+  const WINDOW = TAIL_LINES * (TAIL_LINE_CHARS + 1) * 4;
+  const decoder = new TextDecoder();
+  let buf = "";
+  const reader = stream.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    if (buf.length > WINDOW * 2) buf = buf.slice(-WINDOW);
+  }
+  return tailOf(buf + decoder.decode());
+}
+
+function failureMessage(headline: string, outputTail: string): string {
+  return outputTail ? `${headline}\n${outputTail}` : headline;
+}
+
 export interface ComposeResult {
   exitCode: number;
   stdout: string;
@@ -245,7 +295,7 @@ export interface StackRuntime {
    * `bun install` and an install that ran in the wrong directory would report
    * success while leaving the stale copy exactly where it was.
    */
-  run(argv: string[], io: StackIo, cwd?: string): Promise<number>;
+  run(argv: string[], io: StackIo, cwd?: string): Promise<RunResult>;
   probe(url: string): Promise<{ ok: boolean; detail: string }>;
 }
 
@@ -336,7 +386,17 @@ export function createStack(
         stderr: (io.stderr ?? "pipe") as "pipe",
         detached: true,
       });
-      return (await proc.exited) ?? -1;
+      // Both pipes are drained while the child runs. Streams routed anywhere
+      // else (fd, inherit, ignore) are not pipes, and yield "".
+      const [out, err, code] = await Promise.all([
+        drainTail(proc.stdout as ReadableStream<Uint8Array> | number | undefined),
+        drainTail(proc.stderr as ReadableStream<Uint8Array> | number | undefined),
+        proc.exited,
+      ]);
+      const outputTail = [err && `stderr (last lines):\n${err}`, out && `stdout (last lines):\n${out}`]
+        .filter(Boolean)
+        .join("\n");
+      return { exitCode: code ?? -1, outputTail };
     },
     async probe(url) {
       try {
@@ -353,8 +413,8 @@ export function createStack(
   }
 
   async function composeAsync(args: string[], label: string, io: StackIo = defaultIo): Promise<void> {
-    const code = await runtime.run(["docker", ...prefix, ...args], io);
-    if (code !== 0) throw new Error(`${label} failed (exit ${code})`);
+    const r = await runtime.run(["docker", ...prefix, ...args], io);
+    if (r.exitCode !== 0) throw new Error(failureMessage(`${label} failed (exit ${r.exitCode})`, r.outputTail));
   }
 
   function assertDockerAvailable(): void {
@@ -466,8 +526,10 @@ export function createStack(
     // module reaches outside itself — a spawn that bypassed the seam is a spawn
     // that cannot be tested, which is exactly how it broke `up()`'s ordering
     // test on a runner whose allowlisted PATH could not resolve `bash`.
-    const code = await runtime.run(["bash", join(cfg.repoRoot, "scripts", "static-assembly.sh")], defaultIo);
-    if (code !== 0) throw new Error(`static assembly failed (scripts/static-assembly.sh exited ${code})`);
+    const r = await runtime.run(["bash", join(cfg.repoRoot, "scripts", "static-assembly.sh")], defaultIo);
+    if (r.exitCode !== 0) {
+      throw new Error(failureMessage(`static assembly failed (scripts/static-assembly.sh exited ${r.exitCode})`, r.outputTail));
+    }
   }
 
   async function waitForPostgres(timeoutMs = 60_000): Promise<void> {
@@ -595,7 +657,7 @@ export function createStack(
     // asking an operator to remember — and re-verifies, so a repair that did
     // not work fails here instead of three frames deep in the prerenderer.
     await ensureContractInstallFresh(cfg.repoRoot, async (argv, cwd) =>
-      runtime.run(argv, defaultIo, cwd),
+      runtime.run(argv, defaultIo, cwd).then((r) => r.exitCode),
     );
     // Both the static manifest (T26) and any build below report the identity of
     // THIS tree, and they must not be able to disagree about it.

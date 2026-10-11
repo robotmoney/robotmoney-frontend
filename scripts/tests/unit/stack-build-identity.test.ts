@@ -174,7 +174,7 @@ describe("the stack actually wires it into the build", () => {
       },
       async run(a) {
         argv.push(a);
-        return 0;
+        return { exitCode: 0, outputTail: "" };
       },
       async probe() {
         return { ok: true, detail: "ok" };

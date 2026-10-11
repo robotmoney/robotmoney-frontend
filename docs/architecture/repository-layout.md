@@ -72,7 +72,7 @@ network, or a real model call never shares a directory with a pure unit test.
 **CI fan-in.** Per-PR assurance is split into one workflow per assurance domain
 (issue #275): `unit` (root typecheck and unit tests), `repo-guards`, `contract`,
 `integration` (the `scripts/tests/integration` cost class), `backend`,
-`research-pipeline`, `web-client`, `onboarding-eval-rails`, and `e2e`. Each of
+`research-pipeline`, `web-client`, and `e2e`. Each of
 these is **directly required** in branch protection — there is no fan-in/gate
 workflow aggregating them (see "No fan-in gate" below for why, and for what
 used to be here).
@@ -114,7 +114,7 @@ polling-for-an-external-commit class of bug entirely) for if/when one is
 needed again. Flipping the actual branch-protection required-check list to
 list these workflows individually (`unit`, `backend`, `contract`, `web-client`,
 `integration`, `e2e`, `repo-guards`, `research-pipeline`,
-`onboarding-eval-rails`, `docs-lint`) is an out-of-band administrative step in
+`docs-lint`) is an out-of-band administrative step in
 the GitHub UI, not something automatable from this repo.
 
 - `research-pipeline` (issue #275 addendum) narrows the coarse `backend`
@@ -131,19 +131,17 @@ the GitHub UI, not something automatable from this repo.
   `backend/tests/api/dashboards-live.test.ts`) stay in the general `backend`
   suite, since narrowing them to this filter would regress their non-analytics
   coverage.
-- `onboarding-eval-rails` (issue #275 addendum) is the inference-off
-  member-agent rails check
-  (`scripts/tests/integration/onboarding-eval-infra.test.ts`), split out of the
-  `e2e` monolith: it brings up its own minimal `core`-profile stack
-  (postgres + api only, via the shared `scripts/stack` module) and never needed
-  `e2e`'s full LIVE smoke boot. It stays system-correctness (Docker-backed,
-  deferred on draft PRs), gated on the paths that surface actually depends on
-  (`evals/**`, `scripts/lib/member-agent/**`, `scripts/lib/rmpc-fetch.ts`,
-  `scripts/lib/onboarding-eval.ts`, `scripts/lib/swarm/**`,
-  `backend/src/swarm/**`). The REAL-inference eval (the one that spends a
-  model token) stays inside `e2e-*.yml`'s "Full-stack smoke" step, unchanged — it
-  deliberately reuses that already-booted LIVE stack rather than standing up a
-  second one.
+- The inference-off member-agent rails check
+  (`scripts/tests/integration/onboarding-eval-infra.test.ts`) runs inside
+  `integration`, once per push (issue #1040). It used to have a workflow of its
+  own, `onboarding-eval-rails`, which ran the same file a second time and paid
+  a second member-agent build per push. It brings up its own minimal
+  `core`-profile stack (postgres + api only, via the shared `scripts/stack`
+  module). `integration`'s path filter therefore covers `backend/**` and
+  `contract/**`, the inputs of the api image it builds. The REAL-inference eval
+  (the one that spends a model token) stays inside `e2e-*.yml`'s "Full-stack
+  smoke" step, unchanged: it deliberately reuses that already-booted LIVE stack
+  rather than standing up a second one.
 - `web-client` (issue #275 addendum, critical-bug fix — see "No fan-in gate"
   above for what backed this requirement before it was removed; superseded and
   renamed from `frontend.yml`/`name: frontend`, 2026-09-17, D45) is the web
@@ -170,7 +168,7 @@ the GitHub UI, not something automatable from this repo.
   the client surfaces in `backend.yml`/`integration.yml`/`e2e-*.yml`, unchanged.
 
 System-correctness workflows (`backend`, `research-pipeline`, `integration`,
-`onboarding-eval-rails`, `e2e`) defer on draft PRs; the feature-correctness
+`e2e`) defer on draft PRs; the feature-correctness
 workflows (`unit`, `repo-guards`, `contract`, `frontend`) continue to execute
 there — cheap enough (no Docker) to gate early regardless of draft state.
 
