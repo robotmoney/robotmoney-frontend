@@ -595,3 +595,11 @@ export interface SwarmAuditListResponse {
 
 // ── Re-exported for callers that only need the member/subject base shape ────
 export type { SwarmMember, SwarmSubject };
+
+/** `GET ROUTES.status.maintenance` (issue 1220). */
+export interface MaintenanceStatus {
+  state: "none" | "scheduled" | "active";
+  startsAt: string | null;
+  expectedEnd: string | null;
+  message: string | null;
+}

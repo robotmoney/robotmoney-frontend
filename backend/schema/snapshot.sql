@@ -1758,6 +1758,44 @@ CREATE TABLE public.lobster_coins (
 
 
 --
+-- Name: maintenance_windows; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.maintenance_windows (
+    id bigint NOT NULL,
+    window_id uuid NOT NULL,
+    event text NOT NULL,
+    starts_at timestamp with time zone NOT NULL,
+    expected_end timestamp with time zone NOT NULL,
+    message text DEFAULT ''::text NOT NULL,
+    actor text NOT NULL,
+    at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT maintenance_windows_event_check CHECK ((event = ANY (ARRAY['scheduled'::text, 'started'::text, 'ended'::text, 'cancelled'::text]))),
+    CONSTRAINT maintenance_windows_message_check CHECK ((char_length(message) <= 500)),
+    CONSTRAINT maintenance_windows_times_check CHECK ((expected_end > starts_at))
+);
+
+
+--
+-- Name: maintenance_windows_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.maintenance_windows_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: maintenance_windows_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.maintenance_windows_id_seq OWNED BY public.maintenance_windows.id;
+
+
+--
 -- Name: openclaw_agents; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3428,6 +3466,13 @@ ALTER TABLE ONLY public.audit_log ALTER COLUMN id SET DEFAULT nextval('public.au
 
 
 --
+-- Name: maintenance_windows id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.maintenance_windows ALTER COLUMN id SET DEFAULT nextval('public.maintenance_windows_id_seq'::regclass);
+
+
+--
 -- Name: buyback_swaps id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -4048,6 +4093,14 @@ ALTER TABLE ONLY public.jobs
 
 ALTER TABLE ONLY public.lobster_coins
     ADD CONSTRAINT lobster_coins_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: maintenance_windows maintenance_windows_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.maintenance_windows
+    ADD CONSTRAINT maintenance_windows_pkey PRIMARY KEY (id);
 
 
 --
@@ -4875,6 +4928,13 @@ CREATE INDEX lobster_coins_project_idx ON public.lobster_coins USING btree (proj
 --
 
 CREATE UNIQUE INDEX lobster_coins_project_name_idx ON public.lobster_coins USING btree (project_id, name);
+
+
+--
+-- Name: maintenance_windows_window_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX maintenance_windows_window_idx ON public.maintenance_windows USING btree (window_id, id DESC);
 
 
 --

@@ -39,6 +39,14 @@ export const ROUTES = {
   // existing /api/ proxy carries it with no new nginx rule.
   apiVersion: "/api/version",
 
+  status: {
+    // GET — the maintenance window's public state (issue 1220): `{state:
+    // "none"|"scheduled"|"active", startsAt, expectedEnd, message}`, times
+    // ISO-8601 or null. Unauthenticated. While the api is down, website-server
+    // answers it from the maintenance.json the rollout tool wrote.
+    maintenance: "/api/status/maintenance",
+  },
+
   comments: {
     list: "/api/comments", // GET ?page=
     create: "/api/comments", // POST
@@ -472,6 +480,10 @@ export const ROUTES = {
     jobRetry: "/api/admin/jobs/:id/retry", // POST — clone a dead job into a new pending job (US-Q1)
     runs: "/api/admin/runs", // GET ?kind=&status=&limit=&cursor= — recent job_runs feed (the logs)
     schedule: "/api/admin/schedules/:id", // PATCH — legacy analytics rows fail closed; non-analytics rows are not accepted
+    maintenanceSchedule: "/api/admin/maintenance", // POST { startsAt, expectedEnd, message?, reason } — schedule a maintenance window (issue 1220)
+    maintenanceStart: "/api/admin/maintenance/:id/start", // POST { reason, expectedEnd? } — scheduled → active
+    maintenanceEnd: "/api/admin/maintenance/:id/end", // POST { reason } — active → ended
+    maintenanceCancel: "/api/admin/maintenance/:id/cancel", // POST { reason } — scheduled → cancelled
     audit: "/api/admin/audit", // GET ?actor=&action=&targetType=&targetId=&from=&to=&limit=&cursor= — redacted, filtered audit_log feed (issue #155)
     // Research pipeline telemetry admin surface (issue #151, consumed by the
     // #157 operator UI per docs/architecture.md US-R1..US-R4).

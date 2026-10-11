@@ -11,6 +11,7 @@ import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/h
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
 import { buildIdentityJson } from "../ops/build-identity.ts";
 import { apiVersionResponse } from "../ops/api-version.ts";
+import { maintenanceStatus } from "../ops/maintenance.ts";
 import { analyticsLedgerGuardOutcome, assertAnalyticsLedgerGuardArmed } from "../db/analytics-ledger-guard.ts";
 import { runStartupPreflight } from "../db/preflight.ts";
 import { createComment, listComments } from "./routes/comments.ts";
@@ -253,6 +254,11 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
       // The site reports itself at /version.json and the api's contract
       // version is at /api/version (D55 (1)).
       return json(buildIdentityJson());
+    }
+
+    // Maintenance window status (issue 1220): public, no credential.
+    if (pathname === ROUTES.status.maintenance && req.method === "GET") {
+      return json(await maintenanceStatus());
     }
 
     if (pathname === ROUTES.comments.list && req.method === "GET") {

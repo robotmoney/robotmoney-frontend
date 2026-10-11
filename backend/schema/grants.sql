@@ -139,7 +139,7 @@ DECLARE
     'analytics_ledger_methodology_versions', 'analytics_ledger_runs', 'analytics_ledger_run_events',
     'analytics_data_vintages', 'analytics_vintage_members',
     'analytics_output_snapshots', 'analytics_report_snapshots', 'swarm_brief_revisions',
-    'analytics_parity_observations'
+    'analytics_parity_observations', 'maintenance_windows'
   ];
   rel record;
   usurped text;
