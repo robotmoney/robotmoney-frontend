@@ -13,7 +13,7 @@ machine. Every step runs on a host over ssh. No person logs in to a host.
 | D61 rule | The runner |
 |---|---|
 | 1. No human in the loop | One go file, read before the run. Nothing prompts during the run |
-| 2. Prod is rehearsed unmodified on stage | One step list for every target. Only the target file differs. Prod refuses to start without a passed stage run of the same list at the same commit (SP.8) |
+| 2. Prod is rehearsed unmodified on stage | One step list for every target. Only the target file differs. Prod refuses to start without a passed stage run of the same list at the same commit (SP.8). Stage runs a `releases-A.B.x` commit; the rc is cut there once stage passes; prod runs only by that rc tag (D64) |
 | 3. Every database operation is scripted | Each read or write is a committed script with a receipt. No step runs `psql` |
 | 4. Everything runs from the control machine | Each step is `ssh -T -o BatchMode=yes <host> '<command>'` with stdin closed |
 
@@ -22,6 +22,7 @@ machine. Every step runs on a host over ssh. No person logs in to a host.
 ```bash
 bun run release:run --target prod  --preflight [--go ~/go-v0.6.0-prod.txt] [--triage <file>] [--stage-journal <dir>]
 bun run release:run --target stage --go ~/go-v0.6.0-stage.txt
+bun scripts/release/tag.ts rc --release v0.6.0 --commit <the stage run's commit>   # after the stage run passed: cut the rc the production go names (D64)
 bun run release:run --target prod  --go ~/go-v0.6.0-prod.txt --stage-journal ~/.local/state/robotmoney-release/stage/<run-ts>
 bun run release:run --target prod  --go ~/go-v0.6.0-prod.txt --stage-journal <dir> --run <run-ts> --from R6.4
 bun run release:run --target stage --go ~/go-v0.6.0-stage.txt --only R7.7
@@ -31,14 +32,15 @@ bun run release:run --target stage --abandon <run-ts>   # a run killed mid-step 
 bun run release:run --target prod  --run <run-ts> --accept R7.3a --reason "boot-race line, stack healthy" --issue 1280   # record the owner's acceptance of one failed step
 ```
 
-- The runner prints the full plan first: the target, the commit, the step-list hash and every remote command.
+- The runner prints the full plan first: the target, the commit, the step-list hash and every remote command. A production go names the rc tag; the runner resolves it to its commit on the control machine first (`git fetch --tags origin`, `git rev-parse <tag>^{commit}`) and refuses a tag origin does not have.
+- Every live run refuses a commit that is not on `origin/releases-A.B.x`, the release's branch (D64). The preflight reports the same as `P.origin`.
 - `--preflight` checks everything the run needs, before the go. `--dry-run` is the same flag. It needs no go file. It changes nothing a running service uses, on any host. It exits 0 only when no check is red. See [the preflight](#the-preflight).
 - `--go <file>` is required for any real run.
 - `--from <step>` resumes a run. It needs `--run <run-ts>`. The failed run prints the exact command.
 - `--only <step>` runs one step.
 - `--run <run-ts>` without `--from` continues at the first step that is not ok.
 - `--stage-journal <dir>` is required when the target is `prod`.
-- `--after-preflight <dir>` continues from a green preflight ended within the last 60 minutes, at the same commit and step list. The run takes the preflight's run stamp. R1.1 to R2.5 are its records, so the run starts at R5.rc with one dump, not two. An older or red preflight refuses.
+- `--after-preflight <dir>` continues from a green preflight ended within the last 60 minutes, at the same commit and step list. The run takes the preflight's run stamp. R1.1 to R2.5 are its records, so the run starts at R6.1 with one dump, not two. An older or red preflight refuses.
 - `--abandon <run-ts>` marks a run that still reads `running` as failed, step by step, with the time. A run killed mid-step never ends on its own. Until it is abandoned, the preflight's `P.busy` is red.
 - `--accept <step> --reason "<why>" --issue <n>` with `--run <run-ts>` records the owner's acceptance of one failed step. See [accepting a failed step](#accepting-a-failed-step).
 - Every step has a bound (`maxMinutes` in `steps.ts`, 10 by default; the dump 30, the restore proof 20, each boot 15). Past it the runner kills its ssh, records `timed out`, and stops. The remote command may still run to its end, so look at the host before a resume.
@@ -59,14 +61,14 @@ bun run release:run --target prod  --run <run-ts> --accept R7.3a --reason "boot-
 | `P.go` | the go file is valid for this release and target. Pending without `--go` |
 | `P.recovery` | the go's signed recovery matrix is readable (SC.1). Pending without `--go` |
 | `P.commit` | the commit is the control checkout's clean HEAD. Without a go, HEAD is the candidate commit the go must name |
-| `P.origin` | the commit is on a branch of origin |
+| `P.origin` | the commit is on `origin/releases-A.B.x`, the release's branch (D64). A commit on `main`, a QA branch or a PR head only is red |
 | `P.ci` | every check run on the commit completed green, and `e2e`, `unit`, `backend`, `integration`, `contract`, `web-client`, `repo-guards` and `docs-lint` are present (R0, SP.7) |
 | `P.stage` | prod only: a passed stage run of this step list at this commit exists (SP.8). It names the directory to pass as `--stage-journal` |
 | `P.live.target`, `P.live.capture` | no running container on the host was started from the release checkout |
 | P.busy | no run of this target still reads `running` under the journal root (`--abandon` clears a dead one) |
 | R1.1 to R2.5 | the step passes, run exactly as the run runs it. R2.5 takes `--triage` the same way |
 
-The remote steps are every step before the first irreversible one, minus the control machine's rc tag. They check out and install the release checkout, capture a fresh dump from the read replica into a new directory, restore it into a throwaway container, and read the database and the legacy logs. None stops a service or writes a database.
+The remote steps are every step before the first irreversible one. They check out and install the release checkout, capture a fresh dump from the read replica into a new directory, restore it into a throwaway container, and read the database and the legacy logs. None stops a service or writes a database.
 
 They run lane by lane. A lane is one host and one checkout path. The cheap lanes go first: the legacy gate R2.5 (10 s), then the target checkout R1.1 to R1.3 and R2.3 (20 s), then the capture lane with its dump and restore proof (10 min). A red R2.5 shows in seconds. Within a lane the run's order holds. A failed step blocks the rest of its lane. On stage the target and capture lanes are one directory, so they are one lane.
 
@@ -76,36 +78,43 @@ A green preflight is the evidence the owner reads before writing the go. A run s
 ## The go file
 
 The go is the operator's one recorded authorization for the release. It names the
-release, the commit, the target and the signed recovery matrix. A go for another release or target refuses.
+release, the ref, the target and the signed recovery matrix. A go for another release or target refuses.
 
-The go is the only place the release commit is named. The target files name none. The runner
-renders every `{commit}` (R1.1, R1.2, R1.4, R1.5, R5.rc, R7.1, W3) from the go's `commit:` line.
-A new commit after a QA fix means a new go file, never a commit to the target files. SP.8 still
-refuses a prod go whose commit differs from the passed stage run's commit.
+The go is the only place the release ref is named. The target files name none. A stage go
+carries `commit: <40-hex sha>`; a production go carries `tag: vA.B.C-rc.N`. The runner resolves a
+tag to its commit on the control machine and renders every `{commit}` (R1.2, R1.5, R7.1, W3) from
+it; `{ref}` (R1.1, R1.4, R7.1) is the tag or the commit as the go wrote it. A new commit after a
+QA fix means a new go file, never a commit to the target files. SP.8 still refuses a prod go
+whose tag resolves to another commit than the passed stage run's.
 
 **What each target runs (D64, owner, 2026-10-10).**
 
-1. Stage runs a commit on `releases-A.B.x`: its go names that commit. Never a PR
-   head or a QA branch commit.
+1. Stage runs a commit on `releases-A.B.x`: its go names that commit. A go with
+   a `tag:` refuses on stage. The run refuses a commit that is not on the release
+   branch: never a PR head or a QA branch commit.
 2. When the stage run passes, cut the rc at that commit on the control machine:
    `bun scripts/release/tag.ts rc --release <release> --commit <stage commit>`.
+   It refuses a commit off the release branch and keeps an rc that already
+   points there. The rc is no step of the run.
 3. The production go names the rc tag, `tag: vA.B.C-rc.N`, never a branch or a
-   bare commit. The run resolves the tag to its commit and refuses a tag that is
-   not the stage-passed commit or not reachable from `releases-A.B.x`.
-
-Until the runner reads a `tag:` key (issue 1284), the production go carries the
-rc tag's commit in `commit:`, and the operator checks that `git rev-parse
-vA.B.C-rc.N^{commit}` equals it before the run. R5.rc then finds the rc already
-at that commit and tags nothing new.
+   bare commit (a `commit:` refuses on prod). The run resolves the tag to its
+   commit, refuses a tag origin does not have, refuses a commit off the release
+   branch, and SP.8 refuses a tag that is not at the stage-passed commit.
+4. R1.1 and R1.4 fetch the tags and detach at the ref, so the host holds the rc
+   tag before the boot. The boot's identity (`git describe --tags --exact-match`)
+   sets `RM_BUILD_TAG`, and `/health` and `/api/version` report the tag. R7.1
+   fails a production boot whose `/api/version` does not carry the go's tag.
 
 Why: on 2026-10-10 the v0.6.1 stage and production runs used a PR head
 (`bca5186e`). The squash merges carried its tree to `main` and `releases-0.6.x`
 under other hashes, so production and both v0.6.1 tags named a commit outside
-the release branch until an empty-diff merge brought it in.
+the release branch until an empty-diff merge brought it in. `/api/version` said
+`"tag": null`: the old R5.rc pushed the rc after R1.1 had fetched.
 
 ```text
 release: v0.6.0
-commit: <40-hex sha>
+commit: <40-hex sha>      # stage
+tag: v0.6.0-rc.0          # prod
 target: prod
 recovery: ~/recovery-matrix-v0.6.0.signed.md
 operator: <name>
@@ -215,7 +224,7 @@ It is part of the template, so the hash covers it. R1.2 and R1.5 record where `b
 `DATABASE_*` variable.
 
 R2.5 alone runs from the legacy checkout, with no `RM_ENV`: the old code grades the old
-stack it started. Control steps (R5.rc, W3) run on the control machine from the runner's
+stack it started. The control step (W3) runs on the control machine from the runner's
 own checkout. Each remote step first touches a marker in the run's remote directory. The
 runner copies back only the receipts written after that marker.
 
@@ -224,10 +233,10 @@ The table below is generated from `scripts/release/steps.ts` by `bun scripts/rel
 <!-- steps-table:begin -->
 | Id | Host | Does | Command | Irreversible | Bound | Standing |
 |---|---|---|---|---|---|---|
-| R1.1 | target; clones the checkout when missing | Target checkout: clone it when missing, fetch, then detach at the release commit | `git fetch --tags origin`; `git -c advice.detachedHead=false checkout --detach {commit}` | no | 10 min | SP.1 |
+| R1.1 | target; clones the checkout when missing | Target checkout: clone it when missing, fetch the tags, then detach at the go's ref (the rc tag on prod, the commit on stage), so the host holds the tag the boot reports (D64) | `git fetch --tags origin`; `git -c advice.detachedHead=false checkout --detach {ref}` | no | 10 min | SP.1 |
 | R1.2 | target | Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger is a supported baseline, its identity is absent or matches RM_ENV; before R6.1, ~/.env holds a non-empty rm_owner line and rm_owner logs in (SELECT 1, read-only; refuses with "run bun run role-passwords --target <target> first"); no release step reads doadmin; RM_CREDENTIALS is not required (R6.2a writes it) | `bun scripts/release/host-identity.ts --commit {commit} --confirm-target {confirmTarget} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SP.1 |
 | R1.3 | target | Target install: bun install --force, root and backend | `bun install --force`; `bun install --force --cwd backend` | no | 10 min | SP.1 |
-| R1.4 | capture; clones the checkout when missing | Capture checkout (runner-owned, never a release checkout): clone it when missing, fetch, then detach at the release commit | `git fetch --tags origin`; `git -c advice.detachedHead=false checkout --detach {commit}` | no | 10 min | SP.1 |
+| R1.4 | capture; clones the checkout when missing | Capture checkout (runner-owned, never a release checkout): clone it when missing, fetch the tags, then detach at the go's ref | `git fetch --tags origin`; `git -c advice.detachedHead=false checkout --detach {ref}` | no | 10 min | SP.1 |
 | R1.5 | capture | Capture identity: HEAD is the commit and the tree is clean | `bun scripts/release/host-identity.ts --commit {commit} --receipt-dir {captureHome}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SP.1 |
 | R1.6 | capture | Capture install: bun install --force, root and backend | `bun install --force`; `bun install --force --cwd backend` | no | 10 min | SP.1 |
 | R2.1 | capture | Fresh capture from production's read replica into a new dated directory (never a reused dump) | `bun run smoke:capture --out {captureHome}/rm-backup-{target}-{runTs}` | no | 30 min | SR.0, SP.2 |
@@ -235,7 +244,6 @@ The table below is generated from `scripts/release/steps.ts` by `bun scripts/rel
 | R2.4r | capture | Restore proof: restore the R2.1 dump into a throwaway local Postgres container, record the restore time, drop the container | `bun scripts/release/restore-proof.ts --dump {captureHome}/rm-backup-{target}-{runTs} --receipt-dir {captureHome}/.local/state/robotmoney-release/{target}/{runTs}` | no | 20 min | SP.2 |
 | R2.3 | target | Baseline through rm_readonly: ledger, identity, roles, migration 0101's would-clear list, supported-baseline match, R2.4 counts and size | `bun scripts/release/baseline.ts --instance {instance} --run {runTs}` | no | 10 min | SP.3, SP.6 |
 | R2.5 | target, legacy checkout | Log baseline of the running legacy stack, graded by the legacy checkout's own prod:gate for the instance | `bun run prod:gate --mode baseline --instance {instance} --report {home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-baseline.md` | no | 10 min | SP.5 |
-| R5.rc | control, prod only | Tag the release candidate at the commit (the next free <release>-rc.N) unless one already points there; push it | `bun scripts/release/tag.ts rc --release {release} --commit {commit}` | no | 10 min | — |
 | R6.1 | target | Stop the legacy stack: its tmux driver, then docker compose down (never -v); prove no legacy container remains | `bun scripts/release/stop-legacy.ts stop --session {legacySession} --project {legacyProject} --legacy-checkout {legacyCheckout} --compose-files {legacyComposeFiles} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | **yes** | 10 min | SC.2 |
 | R6.2 | target | Rewrite ~/.env to the D61 allowlist (rm_owner, never doadmin); every other key, a stray doadmin line included, moves to ~/.env.retired-<ts> (mode 0600); refuses without rm_owner or RM_CREDENTIALS; key names only | `bun scripts/release/env-rewrite.ts --run {runTs} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SV.6 |
 | R6.3 | target | The first migrate: 0081 first with the identity RM_ENV implies, then every pending file | `bun run migrate --instance {instance} --confirm-target {confirmTarget}` | **yes** | 10 min | SC.2 |
@@ -246,7 +254,7 @@ The table below is generated from `scripts/release/steps.ts` by `bun scripts/rel
 | R6.7b | target | Status after boot 1 | `bun run smoke:status --instance {instance}` | no | 10 min | SV.2 |
 | R6.9 | target | Status after boot 2: the receipt as history, the daemon as now | `bun run smoke:status --instance {instance}` | no | 10 min | SV.2 |
 | R6.10 | target | Site: bun smoke:web (refuses a site whose apiRange excludes the api) | `bun run smoke:web --instance {instance}` | no | 10 min | — |
-| R7.1 | target | Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown | `bun scripts/release/identity-check.ts --origin {publicOrigin} --commit {commit} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SV.1 |
+| R7.1 | target | Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown; when the go's ref is the rc tag, /api/version carries it as tag (RM_BUILD_TAG) | `bun scripts/release/identity-check.ts --origin {publicOrigin} --commit {commit} --ref {ref} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SV.1 |
 | R7.3 | target | Product verification, readonly tier | `bun run verify:live --instance {instance} --emit-receipt=R7.verify` | no | 10 min | SV.3 |
 | R7.3a | target | Log verdict after the release (sessions graded later: the first one publishes hours after the cutover) | `bun run prod:gate --mode post-release --defer-sessions --instance {instance} --report {home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md` | no | 10 min | SV.4 |
 | R7.3b | target | Standing soak checks: record the baseline at READY, then the full run | `bun run soak:checks --instance {instance} --record --report {home}/.local/state/robotmoney-release/{target}/{runTs}/soak-record.md`; `bun run soak:checks --instance {instance} --full --report {home}/.local/state/robotmoney-release/{target}/{runTs}/soak-full.md` | no | 10 min | SW.2 |
@@ -275,12 +283,13 @@ Each failed check becomes an issue against the next patch version. Its fixes
 start at the next version's `-rc.0`. Only a rollback leaves the release
 untagged.
 
-### The one target difference: the release tags
+### The one target difference: the release tag
 
-R5.rc and W3 tag the release. They carry `onlyFor: "prod"` in the template. A stage run
-records each as `skipped: stage` and tags nothing. The skip is data in the one list, not
+W3 tags the release. It carries `onlyFor: "prod"` in the template. A stage run
+records it as `skipped: stage` and tags nothing. The skip is data in the one list, not
 a second list, so the step-list hash is the same for stage and prod. A skipped step
-counts as done for the run's status and for SP.8. No other step differs by target.
+counts as done for the run's status and for SP.8. No other step differs by target: R1.1,
+R1.4 and R7.1 take `{ref}`, a value, which is the rc tag on prod and the commit on stage.
 
 ### The scripts the runner adds
 
@@ -290,11 +299,11 @@ counts as done for the run's status and for SP.8. No other step differs by targe
 | `scripts/release/baseline.ts` | R2.3 | Through `rm_readonly` on a proven read-only session: the ledger, `deployment_identity`, the five roles, migration 0101's would-clear list (the R2.3 query, verbatim), `matchSupportedRelease`, the R2.4 counts and the database size. Refuses an in-house seat in the would-clear list and a ledger that matches no supported baseline |
 | `scripts/release/restore-proof.ts` | R2.4r | Restores the run's capture into a throwaway local Postgres container through `scripts/lib/restore-container.ts`, counts its ledger, records the restore time, and always drops the container |
 | `scripts/release/stop-legacy.ts` | R6.1, S8.1 | `stop`: kills the tmux driver, then `docker compose down` from the old checkout, never `-v`, and proves no container of the project remains. `retire`: renames the old checkout, then moves its `.env` lines that hold a database URL with a password, `MIGRATE_DATABASE_URL`, `WORKER_DATABASE_URL`, `OPENCODE_API_KEY` or another known secret to `~/.env.legacy-retired-<run-ts>` (0600). Key names only |
-| `scripts/release/tag.ts` | R5.rc, W3 | On the control machine: `rc` tags the next free rc at the commit unless one points there; `final` tags the release at the commit, or confirms it already does; each pushes its tag |
+| `scripts/release/tag.ts` | after stage (rc), W3 | On the control machine: `rc` refuses a commit off `origin/releases-A.B.x`, then tags the next free rc at the commit unless one points there; `final` tags the release at the commit, or confirms it already does; each pushes its tag |
 | `scripts/release/schedule-parity.ts` | R7.4a | Every active subject has 24 h epochs; every session in flight at R2.3 published within its judging time plus 30 min of its unmoved close (with `--sessions deferred`: only that each still exists with its close unmoved); the analytics-producer's regime cron runs at minute 30; reports the last parity sweep and fails a dead one |
 | `scripts/release/credentials-init.ts` | R6.2a | Reads the member ids of `athena`, `noop-analyst`, `robot-money` (agents) and `themis` (judge) through `rm_readonly`, and refuses a handle that is missing, not `active` or of the wrong role. Writes `<HOME>/.config/robotmoney/credential.json` (dir 0700, file 0600): one entry per member with a fresh Ed25519 key, the model key from `~/.env`'s `OPENCODE_API_KEY`, and a placeholder bearer that R6.7c replaces. Appends `RM_CREDENTIALS` to `~/.env` when absent. An existing file with the same roster and member ids is kept. A different roster refuses. Prints handles and key names only |
 | `scripts/release/env-rewrite.ts` | R6.2 | Moves every `~/.env` key outside the D61 allowlist to `~/.env.retired-<run-ts>` (mode 0600). A stray `doadmin` line moves too. Refuses when `rm_owner` or `RM_CREDENTIALS` is missing. Prints key names only |
-| `scripts/release/identity-check.ts` | R7.1 | `/api/version` and `/version.json` carry the commit, with no `+dirty` or `+unknown` |
+| `scripts/release/identity-check.ts` | R7.1 | `/api/version` and `/version.json` carry the commit, with no `+dirty` or `+unknown`; with the rc tag as `--ref`, `/api/version` carries it as `tag` |
 | `scripts/release/compare-baseline.ts` | R7.5 | Every R2.4 count only grew; the database size is within the bound |
 | `scripts/release/host-guards.ts` | R7.7 | No container of the instance mounts a Docker socket; `~/.env` keys are within the allowlist; the three token files are mode 0600; no world-readable file under `HOME` or the retired checkout holds a postgres URL with a password |
 
@@ -360,7 +369,7 @@ bun run release:run --target prod --run <run-ts> --accept R7.3a --reason "<why>"
 The runner journals on the control machine under
 `~/.local/state/robotmoney-release/<target>/<run-ts>/`.
 
-- `run.json` holds the target, the commit, the step-list hash, the go's sha256 and each step's outcome.
+- `run.json` holds the target, the commit, the rc tag on a production run, the step-list hash, the go's sha256 and each step's outcome.
 - `<step>/stdout.log` and `<step>/stderr.log` hold the step's output.
 - `<step>/result.json` holds the exit code, the timings and the receipts.
 - `<step>/receipts/` holds the receipts copied back from the host.

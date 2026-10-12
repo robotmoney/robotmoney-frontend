@@ -17,9 +17,11 @@
 //   bun run release:run --target <t> --run <run-ts> --accept <step> --reason "<why>" --issue <n>   (record the owner's acceptance of one failed step)
 //
 // What it does, in order: load and validate the target; read the go file, which
-// names this release and target and is the one source of the release commit
-// (a target file names none); print the plan (target, commit, step-list hash,
-// every step and its remote command). `--preflight` (`--dry-run` is the same
+// names this release and target and is the one source of the release ref (a
+// target file names none): a stage go names a commit, a production go names
+// the rc tag, which the runner resolves to its commit on the control machine
+// (D64); refuse a commit that is not on the release branch; print the plan
+// (target, commit, step-list hash, every step and its remote command). `--preflight` (`--dry-run` is the same
 // flag) needs no go: it runs every check the run needs and every step before
 // the first irreversible one, changes nothing a running service uses, and
 // exits 0 only when every check is green (./preflight.ts). Otherwise: refuse
@@ -37,7 +39,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { validateGo, type GoRecord } from "./go.ts";
+import { goRef, originProblems, validateGo, type GoRecord, type ResolvedGo } from "./go.ts";
 import {
   acceptCommand, acceptStep, checkResume, checkStageJournal, firstNotOk, journalRoot, readJournal, resumeCommand, runStamp, runStatus, RUN_TS_RE,
   selectSteps, writeJournal, type RunJournal, type StepRecord,
@@ -45,7 +47,7 @@ import {
 import { checkAfterPreflight, runPreflight, type PreflightReport } from "./preflight.ts";
 import { executeStep, readRecovery, TIMED_OUT, type RunnerDeps } from "./step-exec.ts";
 import {
-  CONTROL_HOST, notBeforeOf, READY_PENDING, RELEASE_STEPS, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
+  CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, RELEASE_STEPS, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
 } from "./steps.ts";
 
 /** The step whose end is READY: the watch steps count their window from it, and W1 grades sessions since it. */
@@ -194,20 +196,25 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     return 0;
   }
 
-  // Rule 1: the one recorded go. It is the only source of the release commit.
-  let go: GoRecord | undefined;
+  // Rule 1: the one recorded go. It is the only source of the release ref.
+  let go: ResolvedGo | undefined;
   if (args.go) {
     const goText = deps.readText(args.go);
     if (goText === undefined) {
       deps.error(`[${NAME}] refusing: the go file ${args.go} cannot be read.`);
       return 2;
     }
-    const goResult = validateGo(goText, { release: target.release, target: target.name });
+    const goResult = validateGo(goText, { release: target.release, target: target.name, rmEnv: target.rmEnv });
     if ("errors" in goResult) {
       deps.error(`[${NAME}] refusing: the go file does not authorize this run:\n  - ${goResult.errors.join("\n  - ")}`);
       return 2;
     }
-    go = goResult.go;
+    const resolved = await resolveGo(goResult.go, deps);
+    if ("error" in resolved) {
+      deps.error(`[${NAME}] refusing: ${resolved.error}.`);
+      return 2;
+    }
+    go = resolved.go;
   } else if (!args.preflight) {
     deps.error(`[${NAME}] refusing: no --go <file>. The operator's go names the release, the commit and the target (D61 rule 1).`);
     return 2;
@@ -223,6 +230,14 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
   if (go === undefined) return 2;
   const commit = go.commit;
+
+  // D64: the commit is on the release branch, whatever the go wrote (a tag resolves there too).
+  const branches = await deps.collect(CONTROL_HOST, `cd ${shellQuote(CONTROL_REPO)} && git fetch -q origin && git branch -r --contains ${commit}`);
+  const origin = branches.code === 0 ? originProblems(target.release, commit, branches.stdout) : [`git could not list the origin branches containing ${commit}`];
+  if (origin.length > 0) {
+    deps.error(`[${NAME}] refusing: ${origin.join("; ")}.`);
+    return 2;
+  }
 
   let selected: string[];
   try {
@@ -247,7 +262,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     }
   }
   const runTs = args.run ?? preflight?.runTs ?? runStamp(deps.now());
-  const values = templateValues(target, commit, runTs);
+  const values = templateValues(target, commit, runTs, READY_PENDING, go.ref);
   const rendered = steps.map((s) => renderStep(s, target, values));
   deps.log(renderPlan(target, commit, hash, rendered));
 
@@ -317,7 +332,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   if (stageRecord) journal.stageJournal = stageRecord;
   journal.recovery = recovery;
   writeJournal(runDir, journal);
-  deps.log(`\n[${NAME}] go ${go.sha256.slice(0, 12)} for ${go.release} ${go.commit} on ${go.target}; journal ${runDir}`);
+  deps.log(`\n[${NAME}] go ${go.sha256.slice(0, 12)} for ${go.release} ${go.ref}${go.tag ? ` (${commit})` : ""} on ${go.target}; journal ${runDir}`);
 
   for (const id of selected) {
     const template = steps[ids.indexOf(id)]!;
@@ -358,7 +373,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     }
 
     const readyIso = journal.steps[READY_STEP]?.status === "ok" ? journal.steps[READY_STEP]!.endedAt : undefined;
-    const step = renderStep(template, target, templateValues(target, commit, runTs, readyIso ?? READY_PENDING));
+    const step = renderStep(template, target, templateValues(target, commit, runTs, readyIso ?? READY_PENDING, go.ref));
     const started = deps.now();
     const record: StepRecord = {
       id, status: "running", exit: null, expectExit: step.expectExit, startedAt: started.toISOString(),
@@ -394,6 +409,21 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   return journal.status === "passed" || args.only !== undefined ? 0 : 1;
 }
 
+/**
+ * D64: the go's ref as a commit. A stage go's commit is taken as written. A
+ * production go's rc tag resolves on the control machine after a tag fetch; a
+ * tag origin does not have refuses. The commit's branch is checked by the
+ * caller (originProblems), once the commit is known.
+ */
+export async function resolveGo(go: GoRecord, deps: Pick<RunnerDeps, "collect">): Promise<{ go: ResolvedGo } | { error: string }> {
+  const ref = goRef(go);
+  if (go.tag === undefined) return { go: { ...go, commit: go.commit!, ref } };
+  const r = await deps.collect(CONTROL_HOST, `cd ${shellQuote(CONTROL_REPO)} && git fetch -q --tags origin && git rev-parse --verify --quiet ${shellQuote(`${go.tag}^{commit}`)}`);
+  const commit = r.stdout.trim();
+  if (r.code !== 0 || !/^[0-9a-f]{40}$/.test(commit)) return { error: `the go names ${go.tag}, which origin has no tag for; cut it at the stage-passed commit first (bun scripts/release/tag.ts rc --release ${go.release} --commit <stage commit>)` };
+  return { go: { ...go, commit, ref } };
+}
+
 /** PURE. Why a step does not run on this target, or undefined when it runs. */
 export function skipReason(step: StepTemplate, target: ReleaseTarget): string | undefined {
   if (step.onlyFor !== undefined && step.onlyFor !== target.rmEnv) return target.rmEnv;
@@ -408,9 +438,9 @@ export function downtimeSeconds(journal: Pick<RunJournal, "steps">): number | un
   return Math.round((Date.parse(b.endedAt) - Date.parse(a.startedAt)) / 1000);
 }
 
-function newJournal(target: ReleaseTarget, commit: string, hash: string, ids: readonly string[], go: GoRecord, runTs: string, now: Date): RunJournal {
+function newJournal(target: ReleaseTarget, commit: string, hash: string, ids: readonly string[], go: ResolvedGo, runTs: string, now: Date): RunJournal {
   return {
-    version: 1, target: target.name, rmEnv: target.rmEnv, release: target.release, commit, stepListHash: hash, stepIds: ids,
+    version: 1, target: target.name, rmEnv: target.rmEnv, release: target.release, commit, ...(go.tag ? { tag: go.tag } : {}), stepListHash: hash, stepIds: ids,
     goSha256: go.sha256, runTs, startedAt: now.toISOString(), updatedAt: now.toISOString(), status: "running", steps: {},
   };
 }

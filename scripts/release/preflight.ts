@@ -11,7 +11,7 @@
 //     P.recovery   the go's signed recovery matrix is readable (SC.1). Pending without --go
 //     P.commit     the commit (the go's, else the control checkout's HEAD) is the
 //                  control checkout's clean HEAD, so the printed step list is that commit's
-//     P.origin     the commit is on a branch of origin (R1.1 fetches it there)
+//     P.origin     the commit is on origin's release branch, releases-A.B.x (D64; R1.1 fetches it there)
 //     P.ci         CI on the commit: every check run completed and green, and each
 //                  required workflow present (runbook R0, standing SP.7)
 //     P.stage      prod only: a passed stage journal of this step list at this
@@ -41,11 +41,11 @@
 // continues from it instead of repeating R1.1 to R2.5 (./run.ts).
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { GoRecord } from "./go.ts";
+import { originProblems, type ResolvedGo } from "./go.ts";
 import { checkStageJournal, readJournal, RUN_TS_RE, type StepRecord } from "./journal.ts";
 import { executeStep, readRecovery, type RunnerDeps } from "./step-exec.ts";
 import { skipReason } from "./run.ts";
-import { CONTROL_HOST, CONTROL_REPO, renderStep, shellQuote, templateValues, type RenderedStep, type StepTemplate } from "./steps.ts";
+import { CONTROL_HOST, CONTROL_REPO, READY_PENDING, renderStep, shellQuote, templateValues, type RenderedStep, type StepTemplate } from "./steps.ts";
 import { confirmTargetFilled, type ReleaseTarget } from "./target.ts";
 
 const NAME = "release:run";
@@ -180,7 +180,7 @@ const inRepo = (cmd: string) => `cd ${shellQuote(CONTROL_REPO)} && ${cmd}`;
 
 export interface PreflightInput {
   readonly target: ReleaseTarget;
-  readonly go: GoRecord | undefined;
+  readonly go: ResolvedGo | undefined;
   readonly goPath: string | undefined;
   readonly stageJournal: string | undefined;
   readonly triage: string | undefined;
@@ -204,7 +204,7 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
 
   add("P.target", confirmTargetFilled(target) ? "green" : "red",
     confirmTargetFilled(target) ? `confirmTarget ${target.confirmTarget}` : `confirmTarget is the placeholder: write host:port/database from ${target.host}:${target.home}/.env into the target file`);
-  if (go) add("P.go", "green", `${input.goPath}: ${go.release} at ${go.commit} on ${go.target} (sha256 ${go.sha256.slice(0, 12)})`);
+  if (go) add("P.go", "green", `${input.goPath}: ${go.release} at ${go.ref}${go.tag ? ` (${go.commit})` : ""} on ${go.target} (sha256 ${go.sha256.slice(0, 12)})`);
   else add("P.go", "pending", "no --go: the run needs the owner's go file (D61 rule 1)");
   if (go) {
     const rec = readRecovery(go, deps);
@@ -225,9 +225,8 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
 
   if (/^[0-9a-f]{40}$/.test(commit)) {
     const branches = await deps.collect(CONTROL_HOST, inRepo(`git fetch -q origin && git branch -r --contains ${commit}`));
-    const on = lines(branches.stdout);
-    add("P.origin", branches.code === 0 && on.length > 0 ? "green" : "red",
-      branches.code === 0 && on.length > 0 ? `on ${on.join(", ")}` : `${commit} is on no branch of origin: push it, R1.1 fetches it from there`);
+    const origin = branches.code === 0 ? originProblems(target.release, commit, branches.stdout) : [`git could not list the origin branches containing ${commit}`];
+    add("P.origin", origin.length === 0 ? "green" : "red", origin.length === 0 ? `on ${lines(branches.stdout).join(", ")}` : origin.join("; "));
     const ci = await deps.collect(CONTROL_HOST, inRepo(`gh api ${shellQuote(`repos/{owner}/{repo}/commits/${commit}/check-runs?per_page=100`)} --paginate --jq '.check_runs[] | "\\(.name)\\t\\(.status)\\t\\(.conclusion)"'`));
     if (ci.code !== 0) add("P.ci", "red", "gh could not read the commit's check runs");
     else {
@@ -275,7 +274,7 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
   const dir = join(input.root, target.name, `preflight-${input.runTs}`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const runnable = /^[0-9a-f]{40}$/.test(commit);
-  const values = templateValues(target, runnable ? commit : "COMMIT-UNKNOWN", input.runTs);
+  const values = templateValues(target, runnable ? commit : "COMMIT-UNKNOWN", input.runTs, READY_PENDING, go?.ref);
   writeFileSync(join(dir, "plan.txt"), `${input.renderPlan(commit || "COMMIT-UNKNOWN", input.steps.map((s) => renderStep(s, target, values)))}\n`, { mode: 0o600 });
   const blockedBy = new Map<string, string>();
   const stepRecords: Record<string, StepRecord> = {};

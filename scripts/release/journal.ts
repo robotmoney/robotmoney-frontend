@@ -57,6 +57,8 @@ export interface RunJournal {
   readonly rmEnv: "stage" | "prod";
   readonly release: string;
   readonly commit: string;
+  /** The rc tag the go named (a production run, D64); the commit is its resolution. */
+  readonly tag?: string;
   readonly stepListHash: string;
   readonly stepIds: readonly string[];
   readonly goSha256: string;
