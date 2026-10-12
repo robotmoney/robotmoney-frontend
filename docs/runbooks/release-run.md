@@ -128,7 +128,7 @@ release commit: a top-level `commit` or `tag` refuses, because the go file names
 | `release` | The release name the go must match | `v0.6.0` | `v0.6.0` |
 | `rmEnv` | `stage` or `prod` | `prod` | `stage` |
 | `host` | The ssh host alias | `rm-frontend-prod-1` | `rm-frontend-stage-2` |
-| `checkout` | The release checkout on the host | `/root/rm-060` | `/home/stage-server/rm-stage-target` |
+| `checkout` | The release checkout on the host. Every release names a new one. R1.1 clones it from `git@github.com:robotmoney/robotmoney-frontend.git` when `<checkout>/.git` is missing (a plain clone, never `--reference` the legacy checkout: S8.1 renames that folder). Why: the v0.6.1 production preflight's R1.1 failed with `cd: /root/rm-061: No such file or directory` (2026-10-10) | `/root/rm-061` | `/home/stage-server/rm-stage-target` |
 | `home` | `HOME` for every command; its `.env` is the target's credential file | `/root` | `/home/stage-server/stage-target` |
 | `instance` | The smoke instance | `rm_prod` | `stage_target` |
 | `publicOrigin` | The origin R7.1 checks | `https://robotmoney.network` | `https://stage.robotmoney-labs.dev` |
@@ -222,7 +222,7 @@ The table below is generated from `scripts/release/steps.ts` by `bun scripts/rel
 <!-- steps-table:begin -->
 | Id | Host | Does | Command | Irreversible | Bound | Standing |
 |---|---|---|---|---|---|---|
-| R1.1 | target | Target checkout: fetch, then detach at the release commit | `git fetch --tags origin`; `git -c advice.detachedHead=false checkout --detach {commit}` | no | 10 min | SP.1 |
+| R1.1 | target; clones the checkout when missing | Target checkout: clone it when missing, fetch, then detach at the release commit | `git fetch --tags origin`; `git -c advice.detachedHead=false checkout --detach {commit}` | no | 10 min | SP.1 |
 | R1.2 | target | Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger is a supported baseline, its identity is absent or matches RM_ENV; before R6.1, ~/.env holds a non-empty rm_owner line and rm_owner logs in (SELECT 1, read-only; refuses with "run bun run role-passwords --target <target> first"); no release step reads doadmin; RM_CREDENTIALS is not required (R6.2a writes it) | `bun scripts/release/host-identity.ts --commit {commit} --confirm-target {confirmTarget} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SP.1 |
 | R1.3 | target | Target install: bun install --force, root and backend | `bun install --force`; `bun install --force --cwd backend` | no | 10 min | SP.1 |
 | R1.4 | capture; clones the checkout when missing | Capture checkout (runner-owned, never a release checkout): clone it when missing, fetch, then detach at the release commit | `git fetch --tags origin`; `git -c advice.detachedHead=false checkout --detach {commit}` | no | 10 min | SP.1 |

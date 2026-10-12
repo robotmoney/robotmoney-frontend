@@ -97,15 +97,20 @@ export interface StepTemplate {
   /**
    * The step creates its checkout when it is missing: before it cds in, it
    * runs `git clone <cloneFrom> <checkout>` unless `<checkout>/.git` exists.
-   * Only R1.4 sets it: the capture checkout is the release runner's own folder
-   * (CAPTURE_CHECKOUT, ./target.ts), so a fresh capture host or a deleted folder
-   * heals instead of failing. A folder that exists without `.git` is never
-   * touched: the clone refuses a non-empty directory, and the step fails.
+   * R1.1 sets it: every release names a new release checkout on the host
+   * (`/root/rm-060`, `/root/rm-061`), and the v0.6.1 production preflight's
+   * R1.1 failed with `cd: /root/rm-061: No such file or directory`
+   * (2026-10-10). R1.4 sets it: the capture checkout is the release runner's
+   * own folder (CAPTURE_CHECKOUT, ./target.ts), so a fresh capture host or a
+   * deleted folder heals instead of failing. A folder that exists without
+   * `.git` is never touched: the clone refuses a non-empty directory, and the
+   * step fails. The clone is plain, never `--reference <legacy checkout>`:
+   * S8.1 renames the legacy checkout, which would break an alternates pointer.
    */
   readonly cloneFrom?: string;
 }
 
-/** The repository every checkout fetches from; R1.4 clones a missing capture checkout from it. */
+/** The repository every checkout fetches from; R1.1 and R1.4 clone a missing checkout from it. */
 export const RELEASE_REPO_URL = "git@github.com:robotmoney/robotmoney-frontend.git";
 
 /** The time a step may take unless it names its own `maxMinutes`. */
@@ -157,8 +162,8 @@ const boot = (): string[] => ["bun", "run", "smoke", "--static-port", "--instanc
 export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   // ── R1 release identity, on both hosts ────────────────────────────────────
   {
-    id: "R1.1", standing: ["SP.1"], host: "target", irreversible: false, expectExit: 0, receipts: [],
-    description: "Target checkout: fetch, then detach at the release commit",
+    id: "R1.1", standing: ["SP.1"], host: "target", cloneFrom: RELEASE_REPO_URL, irreversible: false, expectExit: 0, receipts: [],
+    description: "Target checkout: clone it when missing, fetch, then detach at the release commit",
     cmds: [["git", "fetch", "--tags", "origin"], ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{commit}"]],
   },
   {
@@ -432,7 +437,7 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
   if (step.bootEnv) for (const [k, v] of Object.entries(target.bootEnv).sort()) envPairs.push(`${k}=${shellQuote(v)}`);
   const envCmd = (argv: readonly string[]) => `env -i ${envPairs.join(" ")} ${argv.map((a) => shellQuote(fill(a, values))).join(" ")}`;
   const commands = step.cmds.map(envCmd);
-  // A step that owns its checkout clones it first when it is missing (R1.4).
+  // A step that owns its checkout clones it first when it is missing (R1.1, R1.4).
   const clone = step.cloneFrom === undefined ? []
     : [`{ test -e ${shellQuote(`${checkout}/.git`)} || ${envCmd(["git", "clone", "--quiet", step.cloneFrom, checkout])}; }`];
   const remote = [`mkdir -p ${shellQuote(runDir)}`, `touch ${shellQuote(marker)}`, ...clone, `cd ${shellQuote(checkout)}`, ...commands].join(" && ");

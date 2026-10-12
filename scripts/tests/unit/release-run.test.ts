@@ -142,7 +142,7 @@ describe("one step list for every target (D61 rule 2)", () => {
   test("R1.4 clones the capture checkout when it is missing, then fetches and detaches; the same command on both targets", () => {
     const r14 = RELEASE_STEPS.find((s) => s.id === "R1.4")!;
     expect(r14.cloneFrom).toBe(RELEASE_REPO_URL);
-    expect(RELEASE_STEPS.filter((s) => s.cloneFrom).map((s) => s.id)).toEqual(["R1.4"]);
+    expect(RELEASE_STEPS.filter((s) => s.cloneFrom).map((s) => s.id)).toEqual(["R1.1", "R1.4"]);
     const env = `env -i HOME=/home/stage-server PATH=${REMOTE_PATH} LANG=C.UTF-8`;
     const render = (t: typeof prod) => renderStep(r14, t, templateValues(t, SHA, "20261008T000000Z"));
     const rp = render(prod);
@@ -159,9 +159,30 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(render(stage).remote).toBe(rp.remote.replaceAll("/robotmoney-release/prod/", "/robotmoney-release/stage/"));
     // Idempotent: the clone runs only when .git is missing, the fetch and detach run every time.
     expect(rp.remote.indexOf("test -e")).toBeLessThan(rp.remote.indexOf("cd /home/stage-server/rm-capture"));
-    // No other step clones.
-    const r11 = renderStep(RELEASE_STEPS.find((s) => s.id === "R1.1")!, prod, templateValues(prod, SHA, "20261008T000000Z"));
-    expect(r11.remote).not.toContain("git clone");
+  });
+
+  test("R1.1 clones the release checkout when it is missing, then fetches and detaches (the v0.6.1 preflight: cd /root/rm-061 failed, 2026-10-10)", () => {
+    const r11 = RELEASE_STEPS.find((s) => s.id === "R1.1")!;
+    expect(r11.cloneFrom).toBe(RELEASE_REPO_URL);
+    const render = (t: typeof prod) => renderStep(r11, t, templateValues(t, SHA, "20261008T000000Z"));
+    const rp = render(prod);
+    expect(rp.host).toBe(prod.host);
+    const envp = `env -i HOME=${prod.home} PATH=${REMOTE_PATH} LANG=C.UTF-8 RM_ENV=prod`;
+    expect(rp.remote).toBe([
+      `mkdir -p ${prod.home}/.local/state/robotmoney-release/prod/20261008T000000Z`,
+      `touch ${prod.home}/.local/state/robotmoney-release/prod/20261008T000000Z/.step-R1.1`,
+      `{ test -e ${prod.checkout}/.git || ${envp} git clone --quiet git@github.com:robotmoney/robotmoney-frontend.git ${prod.checkout}; }`,
+      `cd ${prod.checkout}`,
+      `${envp} git fetch --tags origin`,
+      `${envp} git -c advice.detachedHead=false checkout --detach ${SHA}`,
+    ].join(" && "));
+    // A plain clone: never --reference the legacy checkout, which S8.1 renames later in the run.
+    expect(rp.remote).not.toContain("--reference");
+    expect(rp.remote).not.toContain(prod.legacy!.checkout);
+    // Stage renders the same shape on its own host and checkout.
+    const rs = render(stage);
+    expect(rs.host).toBe(stage.host);
+    expect(rs.remote).toContain(`{ test -e ${stage.checkout}/.git || env -i HOME=${stage.home} PATH=${REMOTE_PATH} LANG=C.UTF-8 RM_ENV=stage git clone --quiet git@github.com:robotmoney/robotmoney-frontend.git ${stage.checkout}; } && cd ${stage.checkout} && `);
   });
 
   test("the clone source is part of the step-list hash", () => {
