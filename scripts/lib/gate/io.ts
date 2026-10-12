@@ -24,6 +24,15 @@ export interface ContainerState {
   oneShot: boolean;
   /** `agent` or `judge` for a standing participant container, else null. */
   participantKind: string | null;
+  /** The last stop's record, kept by Docker across a restart: the only trace of why it restarted (issue 1279). */
+  lastStop?: { exitCode: number; oomKilled: boolean; error: string; finishedAt: string };
+}
+
+/** One line naming the last stop of a container that restarted, so a report says why. */
+export function describeLastStop(c: ContainerState): string {
+  const s = c.lastStop;
+  if (!s) return "last stop unknown";
+  return `last stop ${s.finishedAt || "?"}, exit code ${s.exitCode}, oom-killed ${s.oomKilled}${s.error ? `, docker error '${s.error}'` : ""}`;
 }
 
 /** Every container of a compose project, one-shots included while Docker still has them. */
@@ -32,8 +41,8 @@ export function projectContainers(project: string): ContainerState[] {
     .out.split("\n").filter(Boolean);
   return names.map((name) => {
     const r = sh(["docker", "inspect", name, "--format",
-      `{{.State.Running}}\t{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}\t{{.RestartCount}}\t{{.State.StartedAt}}\t{{index .Config.Labels "${PARTICIPANT_KIND_LABEL}"}}`]);
-    const [running, health, restarts, startedAt, kind] = r.out.trim().split("\t");
+      `{{.State.Running}}\t{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}\t{{.RestartCount}}\t{{.State.StartedAt}}\t{{index .Config.Labels "${PARTICIPANT_KIND_LABEL}"}}\t{{.State.ExitCode}}\t{{.State.OOMKilled}}\t{{.State.FinishedAt}}\t{{.State.Error}}`]);
+    const [running, health, restarts, startedAt, kind, exitCode, oom, finishedAt, error] = r.out.trim().split("\t");
     // A `run` container (the typed migrate) exits by design: its logs are read,
     // its running/health state is not graded. A participant is a standing
     // service, so its stderr is simply its container's log.
@@ -45,6 +54,7 @@ export function projectContainers(project: string): ContainerState[] {
       startedAt: startedAt ?? "",
       oneShot: /-run-/.test(name),
       participantKind: kind ? kind : null,
+      lastStop: exitCode === undefined ? undefined : { exitCode: Number(exitCode), oomKilled: oom === "true", error: error ?? "", finishedAt: finishedAt ?? "" },
     };
   });
 }

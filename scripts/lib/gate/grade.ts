@@ -8,7 +8,7 @@
 //   - a dead judge, or a session that published without a model judgement and a
 //     receipt, is a platform failure and always fails.
 
-import type { ContainerState } from "./io.ts";
+import { describeLastStop, type ContainerState } from "./io.ts";
 
 export type CheckStatus = "PASS" | "FAIL" | "WARN";
 export interface CheckRecord { id: string; title: string; status: CheckStatus; detail: string[] }
@@ -149,7 +149,7 @@ export function evaluateContainers(containers: readonly ContainerState[], projec
   for (const c of services) {
     if (!c.running) failures.push(`${c.name}: not running`);
     if (c.health !== "none" && c.health !== "healthy") failures.push(`${c.name}: health '${c.health}'`);
-    if (c.restarts > 0) (strictRestarts ? failures : warnings).push(`${c.name}: restarted ${c.restarts} time(s)`);
+    if (c.restarts > 0) (strictRestarts ? failures : warnings).push(`${c.name}: restarted ${c.restarts} time(s) (${describeLastStop(c)})`);
   }
   return { failures, warnings, services };
 }
