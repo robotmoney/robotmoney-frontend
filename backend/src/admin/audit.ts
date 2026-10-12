@@ -17,7 +17,7 @@ const insertAuditRow = registerQuery({
   privileges: ["INSERT", "SELECT"],
   site: "src/admin/audit:recordAudit",
   purpose: "Append one admin-mutation audit row in the same transaction as the change it records.",
-  callers: ["src/api/routes/admin"],
+  callers: ["src/api/routes/admin", "src/api/routes/admin-maintenance"],
   probe: {
     statement: `INSERT INTO audit_log (actor, action, scope, target_type, target_id, reason,
                              before_state, after_state, outcome, job_id, session_id)

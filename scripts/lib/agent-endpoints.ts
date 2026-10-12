@@ -114,6 +114,17 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     sizeHint: "under 100 B",
   },
   {
+    id: "getMaintenanceStatus",
+    method: "GET",
+    path: ROUTES.status.maintenance,
+    summary: "Whether a maintenance window is scheduled or under way",
+    description:
+      "Returns `state` (`none`, `scheduled` or `active`), `startsAt` and `expectedEnd` as ISO-8601 instants, and a short `message`; the times and message are null when `state` is `none`. During a window the site stays up and shows the expected end. Needs no credential.",
+    backs: [],
+    contractType: "MaintenanceStatus",
+    sizeHint: "under 300 B",
+  },
+  {
     id: "getVaultEconomics",
     method: "GET",
     path: ROUTES.dashboards.vaultEconomics,

@@ -158,3 +158,20 @@ Recorded 2026-10-06 so the loss is not found twice.
 | Environment and credential inventory | `docs/runbooks/deployment.md` | not carried, issue 1180 |
 | Per-release `preflight.ts` and `postflight.ts` | `backend/scripts/upgrades/<from>-to-<to>/` | their stack-level checks became SP.4 and SV.2. Release-level schema checks are `manual` rows SP.3 and SV.5 |
 | Log gates | `twin:gate`, `prod:gate` | kept, ported to the instance model (1071). Never run on a healthy 0.6.0 stack before 2026-10-06 |
+
+## 9. Keeping the site up through a release (issue 1220)
+
+The website is its own release unit (D54), so a release does not stop it.
+
+Order of units, one at a time: the website, then the api and workers, then the migrate, then the participants. `bun scripts/rollout-probe.ts plan <plan.json>` refuses a plan that is out of order. It also refuses a step that stops website-server unless the step carries an `ownerDecision` naming the owner decision that allows it.
+
+Before a window that takes the api down:
+
+1. Schedule it with `POST /api/admin/maintenance`. The site shows a banner with the start and expected end.
+2. Start the probe: `bun scripts/rollout-probe.ts run <site-url> <receipts.jsonl>`. It asks for `/` every 15 s.
+3. At the start, call `POST /api/admin/maintenance/:id/start`, then write `maintenance.json` into the instance web directory (`writeMaintenanceFile`, `scripts/lib/maintenance-file.ts`). website-server serves it for `/api/status/maintenance` and answers other `/api/` calls with a 503 maintenance body while the api is down.
+4. At the end, call `POST /api/admin/maintenance/:id/end` and remove `maintenance.json` (`clearMaintenanceFile`).
+
+Postflight: `bun scripts/rollout-probe.ts grade <receipts.jsonl> <startMs> <endMs>` fails on any non-200 answer or any gap over 15 s.
+
+Host or tunnel loss is covered off-host: `ops/cloudflare/offhost-fallback.html` and `ops/cloudflare/error-pages.json` (5xx and 1033). Applying them to the Cloudflare zone is an operator step.

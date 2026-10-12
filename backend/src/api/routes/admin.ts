@@ -20,6 +20,7 @@ import { recordAudit, redactAuditRow } from "../../admin/audit.ts";
 import { getOverviewProjection, PRODUCTION_KINDS } from "../../admin/overview.ts";
 import { detectAllGaps } from "../../ops/gap-detector.ts";
 import { isPrivileged } from "../auth.ts";
+import { handleAdminMaintenance } from "./admin-maintenance.ts";
 import { hashKey } from "../../lib/keys.ts";
 import { getAnalyticsReadMode } from "../../analytics/cutover/read-mode.ts";
 import { ledgerCurrentRawIndicatorSeries, ledgerCurrentResearchSignals } from "../../analytics/cutover/ledger-current.ts";
@@ -457,6 +458,12 @@ export async function handleAdmin(
 ): Promise<{ status: number; body: unknown } | null> {
   const p = url.pathname;
   const m = req.method;
+
+  // Maintenance windows (issue 1220): schedule, start, end, cancel.
+  if (p.startsWith("/api/admin/maintenance")) {
+    const r = await handleAdminMaintenance(req, url);
+    if (r) return r;
+  }
 
   // POST /api/admin/auth — the login form validates the password here (200 iff
   // authorized; the guard below returns 403 otherwise). No body needed.

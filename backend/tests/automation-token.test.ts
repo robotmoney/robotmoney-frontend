@@ -369,7 +369,7 @@ const MEMBER = new Set([
 ]);
 // Public reads and the unauthenticated onboarding doors.
 const PUBLIC = new Set([
-  "health", "version", "apiVersion",
+  "health", "version", "apiVersion", "status.maintenance",
   "projects.list", "projects.detail",
   "swarm.members", "swarm.waitlist", "swarm.member", "swarm.memberTakes", "swarm.memberJudgements",
   "swarm.memberAvatar", "swarm.subject", "swarm.subjectSnapshots", "swarm.sessions", "swarm.session",

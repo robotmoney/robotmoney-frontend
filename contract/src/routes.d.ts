@@ -4,6 +4,7 @@ export const ROUTES: {
   health: string;
   version: string;
   apiVersion: string;
+  status: { maintenance: string };
   comments: { list: string; create: string };
   dashboards: {
     regimeSnapshots: string;
@@ -148,6 +149,10 @@ export const ROUTES: {
     jobRetry: string;
     runs: string;
     schedule: string;
+    maintenanceSchedule: string;
+    maintenanceStart: string;
+    maintenanceEnd: string;
+    maintenanceCancel: string;
     audit: string;
     researchRuns: string;
     researchRun: string;
