@@ -14,6 +14,7 @@
 //   bun run release:run --target stage --go <go file> --only <step> [--run <run-ts>]
 //   bun run release:run --target <t> --go <go file> --after-preflight <preflight dir>   (continue from a green preflight, within 1 h)
 //   bun run release:run --target <t> --abandon <run-ts>                                  (mark a dead run failed so P.busy clears)
+//   bun run release:run --target <t> --run <run-ts> --accept <step> --reason "<why>" --issue <n>   (record the owner's acceptance of one failed step)
 //
 // What it does, in order: load and validate the target; read the go file, which
 // names this release and target and is the one source of the release commit
@@ -38,7 +39,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateGo, type GoRecord } from "./go.ts";
 import {
-  checkResume, checkStageJournal, firstNotOk, journalRoot, readJournal, resumeCommand, runStamp, runStatus, RUN_TS_RE,
+  acceptCommand, acceptStep, checkResume, checkStageJournal, firstNotOk, journalRoot, readJournal, resumeCommand, runStamp, runStatus, RUN_TS_RE,
   selectSteps, writeJournal, type RunJournal, type StepRecord,
 } from "./journal.ts";
 import { checkAfterPreflight, runPreflight, type PreflightReport } from "./preflight.ts";
@@ -71,6 +72,10 @@ export interface RunArgs {
   afterPreflight?: string;
   /** A run stamp to mark failed: the operator says it is dead. */
   abandon?: string;
+  /** A failed step the owner accepts, with `--reason` and `--issue`, in the run `--run` names. */
+  accept?: string;
+  reason?: string;
+  issue?: string;
 }
 
 export function parseArgs(argv: readonly string[]): RunArgs | { error: string } {
@@ -78,7 +83,7 @@ export function parseArgs(argv: readonly string[]): RunArgs | { error: string } 
   const valued: Record<string, keyof RunArgs> = {
     "--target": "target", "--go": "go", "--from": "from", "--only": "only", "--run": "run",
     "--stage-journal": "stageJournal", "--journal-root": "journalRoot", "--triage": "triage",
-    "--after-preflight": "afterPreflight", "--abandon": "abandon",
+    "--after-preflight": "afterPreflight", "--abandon": "abandon", "--accept": "accept", "--reason": "reason", "--issue": "issue",
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -98,6 +103,14 @@ export function parseArgs(argv: readonly string[]): RunArgs | { error: string } 
   if (out.afterPreflight !== undefined && (out.run !== undefined || out.only !== undefined || out.preflight)) return { error: "--after-preflight starts a new run from a green preflight: it takes no --run, --from, --only or --preflight" };
   if (out.abandon !== undefined && !RUN_TS_RE.test(out.abandon)) return { error: `--abandon takes a run stamp like 20261008T142233Z, got "${out.abandon}"` };
   if (out.abandon !== undefined && (out.go !== undefined || out.run !== undefined || out.preflight || out.afterPreflight !== undefined)) return { error: "--abandon takes only --target and the run stamp" };
+  if (out.accept !== undefined) {
+    if (out.run === undefined) return { error: "--accept names a step of a run: name the run with --run <run-ts>" };
+    if (!out.reason?.trim()) return { error: "--accept needs --reason \"<why the owner accepts this failure>\"" };
+    if (out.issue === undefined || !/^[1-9]\d*$/.test(out.issue)) return { error: `--accept needs --issue <n>, the issue that records the failure; got "${out.issue ?? ""}"` };
+    if (out.go !== undefined || out.from !== undefined || out.only !== undefined || out.preflight || out.afterPreflight !== undefined || out.abandon !== undefined) {
+      return { error: "--accept takes only --target, --run, the step, --reason and --issue" };
+    }
+  } else if (out.reason !== undefined || out.issue !== undefined) return { error: "--reason and --issue go with --accept <step>" };
   return out;
 }
 
@@ -161,6 +174,23 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     j.updatedAt = now;
     writeJournal(dir, j);
     deps.log(`[${NAME}] run ${args.abandon} marked failed (abandoned). Resume it with --run ${args.abandon} --from <step> once the host is quiet, or start a new run.`);
+    return 0;
+  }
+
+  // The owner's recorded acceptance of one failed step (issue 1282): the journal keeps the step's
+  // failure, exit and output, plus why the owner accepts it and the issue; the run continues past it.
+  if (args.accept !== undefined) {
+    const dir = join(args.journalRoot ?? journalRoot(deps.home), target.name, args.run!);
+    const j = readJournal(dir);
+    if (j === undefined) { deps.error(`[${NAME}] refusing: no journal at ${dir}.`); return 2; }
+    const at = deps.now().toISOString();
+    const refusal = acceptStep(j, args.accept, { reason: args.reason!.trim(), issue: Number(args.issue), at }, {
+      ids: stepIds(steps), irreversible: (id) => steps.find((s) => s.id === id)?.irreversible === true,
+    });
+    if (refusal !== undefined) { deps.error(`[${NAME}] refusing: ${refusal}.`); return 2; }
+    writeFileSync(join(dir, args.accept, "result.json"), `${JSON.stringify(j.steps[args.accept], null, 2)}\n`, { mode: 0o600 });
+    writeJournal(dir, j);
+    deps.log(`[${NAME}] ${args.accept} of run ${args.run} accepted by the owner at ${at} (issue ${args.issue}): ${args.reason!.trim()}. The run is ${j.status}; continue it with --run ${args.run} [--from <step>].`);
     return 0;
   }
 
@@ -350,6 +380,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       deps.error(`[${NAME}] ${id} FAILED: ${record.error}. Nothing after it ran.`);
       if (step.irreversible) deps.error(`[${NAME}] ${id} is irreversible: read runbook section 8 (recovery matrix) before any retry.`);
       deps.error(`[${NAME}] resume with:\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: id, stageJournal: args.stageJournal })}`);
+      if (!step.irreversible) deps.error(`[${NAME}] or record the owner's acceptance of this failure, then resume at the next step:\n  ${acceptCommand({ target: args.target!, runTs, stepId: id })}`);
       return 1;
     }
     deps.log(`[${NAME}] ${id} ok (${Math.round(record.durationMs! / 1000)} s, ${record.receipts.filter((r) => r.local).length} receipt(s))`);

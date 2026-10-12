@@ -1215,6 +1215,79 @@ describe("preflight", () => {
     expect(parseArgs(["--target", "stage", "--abandon", "nope"])).toHaveProperty("error");
   });
 
+  test("--accept records the owner's acceptance of one failed step in the journal, and --from then runs past it (issue 1282)", async () => {
+    const f = fixture();
+    const first = fakeDeps({ fail: new Set(["T1"]), receipt: "{}" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], first.deps, TINY)).toBe(1);
+    expect(first.logs.join("\n")).toContain("--accept T1 --reason");
+    const runDir = join(f.journalRoot, "stage", "20261008T120000Z");
+    // red control: without an acceptance, --from past the failed step refuses and runs nothing.
+    const refused = fakeDeps({ receipt: "{}" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z", "--from", "T2"], refused.deps, TINY)).toBe(2);
+    expect(refused.ran).toEqual([]);
+    expect(refused.logs.join("\n")).toContain("skips steps that are not ok: T1");
+
+    const accept = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z", "--accept", "T1", "--reason", "boot race, stack healthy", "--issue", "1280"], accept.deps, TINY)).toBe(0);
+    expect(accept.ran).toEqual([]);
+    const j1 = JSON.parse(readFileSync(join(runDir, "run.json"), "utf8")) as RunJournal;
+    expect(j1.steps.T1!.status).toBe("accepted");
+    expect(j1.steps.T1!.accepted).toEqual({ reason: "boot race, stack healthy", issue: 1280, at: "2026-10-08T12:00:00.000Z" });
+    expect(j1.steps.T1!.exit).toBe(1);
+    expect(j1.status).toBe("incomplete");
+    const result = JSON.parse(readFileSync(join(runDir, "T1", "result.json"), "utf8")) as RunJournal["steps"][string];
+    expect(result.status).toBe("accepted");
+    expect(result.accepted?.issue).toBe(1280);
+
+    const second = fakeDeps({ receipt: "{}" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z", "--from", "T2"], second.deps, TINY)).toBe(0);
+    expect(second.ran).toEqual(["T2", "T3"]);
+    const j2 = JSON.parse(readFileSync(join(runDir, "run.json"), "utf8")) as RunJournal;
+    expect(j2.status).toBe("passed");
+    expect(j2.steps.T1!.status).toBe("accepted");
+
+    // red controls: an ok step, an unknown step and an already accepted step refuse; the journal is unchanged.
+    for (const step of ["T2", "T9", "T1"]) {
+      const r = fakeDeps();
+      expect(await runRelease(["--target", f.targetFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z", "--accept", step, "--reason", "x", "--issue", "1"], r.deps, TINY)).toBe(2);
+    }
+    expect(readFileSync(join(runDir, "run.json"), "utf8")).toBe(JSON.stringify(j2, null, 2) + "\n");
+  });
+
+  test("red: --accept refuses an irreversible step, a running run, a missing journal, and malformed arguments", async () => {
+    const f = fixture();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], fakeDeps({ fail: new Set(["T2"]), receipt: "{}" }).deps, TINY)).toBe(1);
+    const runFile = join(f.journalRoot, "stage", "20261008T120000Z", "run.json");
+    const args = ["--target", f.targetFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z", "--accept", "T2", "--reason", "x", "--issue", "1"];
+    const irreversible = fakeDeps();
+    expect(await runRelease(args, irreversible.deps, TINY)).toBe(2);
+    expect(irreversible.logs.join("\n")).toContain("irreversible");
+    expect((JSON.parse(readFileSync(runFile, "utf8")) as RunJournal).steps.T2!.status).toBe("failed");
+    const dead = JSON.parse(readFileSync(runFile, "utf8")) as RunJournal;
+    dead.status = "running";
+    dead.steps.T2!.status = "running";
+    writeFileSync(runFile, JSON.stringify(dead));
+    const running = fakeDeps();
+    expect(await runRelease(args, running.deps, TINY)).toBe(2);
+    expect(running.logs.join("\n")).toContain("running");
+    expect(await runRelease([...args.slice(0, 5), "20261008T000000Z", ...args.slice(6)], fakeDeps().deps, TINY)).toBe(2);
+    expect(parseArgs(["--target", "stage", "--accept", "T1", "--reason", "x", "--issue", "1"])).toHaveProperty("error");
+    expect(parseArgs(["--target", "stage", "--run", "20261008T120000Z", "--accept", "T1", "--issue", "1"])).toHaveProperty("error");
+    expect(parseArgs(["--target", "stage", "--run", "20261008T120000Z", "--accept", "T1", "--reason", "x", "--issue", "x"])).toHaveProperty("error");
+    expect(parseArgs(["--target", "stage", "--run", "20261008T120000Z", "--accept", "T1", "--reason", "x", "--issue", "1", "--go", "g"])).toHaveProperty("error");
+    expect(parseArgs(["--target", "stage", "--run", "20261008T120000Z", "--reason", "x"])).toHaveProperty("error");
+    expect(parseArgs(["--target", "stage", "--run", "20261008T120000Z", "--accept", "T1", "--reason", "x", "--issue", "1"])).not.toHaveProperty("error");
+  });
+
+  test("SP.8: a stage run with an accepted step does not authorize production", () => {
+    const j = journal();
+    j.steps["R7.3a"]!.status = "accepted";
+    const refusals = checkStageJournal(j, { stepListHash: stepListHash(), commit: SHA, stepIds: stepIds() });
+    expect(refusals.join("\n")).toContain("accepted a failure");
+    expect(refusals.join("\n")).toContain("R7.3a");
+    expect(runStatus(j, stepIds())).toBe("passed");
+  });
+
   test("--after-preflight continues a run from a green preflight within the hour: same run stamp, R-steps carried, nothing repeated", async () => {
     const f = fixture();
     const BEFORE_AND_AFTER: StepTemplate[] = [...TINY.slice(0, 1), { ...TINY[1]!, receipts: [] }, TINY[2]!];
