@@ -95,6 +95,7 @@ export interface ReleaseTarget {
   readonly rmEnv: "stage" | "prod";
   /** The ssh host alias. */
   readonly host: string;
+  /** The release checkout on the host. Every release names a new one; R1.1 clones it when missing. */
   readonly checkout: string;
   /** HOME on the host for every command. Its `.env` is the target's credential file. */
   readonly home: string;
