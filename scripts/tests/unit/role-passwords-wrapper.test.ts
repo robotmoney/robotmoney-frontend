@@ -69,14 +69,18 @@ describe("bun run role-passwords", () => {
     expect(d.stderr.join("")).not.toContain(SECRET);
   });
 
-  test("the remote command is the release's own env -i shape, with --doadmin-stdin and the target's names only", () => {
+  test("the remote command is the release's own env -i shape from the release checkout (cloned and installed when missing), with --doadmin-stdin and the target's names only", () => {
     const remote = remoteCommand(STAGE, { target: "stage", doadminStdin: true, roles: "rm_owner,rm_app", rotate: "rm_app" });
+    const env = `env -i HOME=${STAGE.home} PATH=/root/.bun/bin:/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 RM_ENV=stage`;
     expect(remote).toBe(
-      `cd ${STAGE.legacy.checkout} && env -i HOME=${STAGE.home} ` +
-        "PATH=/root/.bun/bin:/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 RM_ENV=stage " +
-        "bun scripts/prod-init.ts role-passwords --instance stage_target --confirm-target 172.17.0.1:25060/defaultdb --doadmin-stdin " +
+      `{ test -e ${STAGE.checkout}/.git || ${env} git clone --quiet git@github.com:robotmoney/robotmoney-frontend.git ${STAGE.checkout}; } && ` +
+        `cd ${STAGE.checkout} && ` +
+        `{ test -e node_modules -a -e backend/node_modules || { ${env} bun install --force && ${env} bun install --force --cwd backend; }; } && ` +
+        `${env} bun scripts/prod-init.ts role-passwords --instance stage_target --confirm-target 172.17.0.1:25060/defaultdb --doadmin-stdin ` +
         "--roles rm_owner,rm_app --rotate rm_app",
     );
+    // A target holds no running-stack checkout (issue 1272): the command names the release checkout only.
+    expect(remote).not.toContain("legacy");
     expect(sshArgv(STAGE, { target: "stage", doadminStdin: false }).slice(0, 5)).toEqual(["ssh", "-T", "-o", "BatchMode=yes", "rm-frontend-stage-2"]);
   });
 

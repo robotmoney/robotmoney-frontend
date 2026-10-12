@@ -71,7 +71,7 @@ export interface RunJournal {
   stageJournal?: { path: string; runTs: string; stepListHash: string; commit: string };
   /** The signed recovery matrix the go names (SC.1): its reference and, for a file, its sha256. */
   recovery?: { ref: string; sha256: string | null };
-  /** R6.1's start to R6.9's end, once both passed: the window the legacy stack was down. */
+  /** R6.1's start to R6.9's end, once both passed: the window the running stack was down. */
   downtimeSeconds?: number;
   /** The preflight this run continued from (`--after-preflight`), when it did. */
   afterPreflight?: { path: string; runTs: string };

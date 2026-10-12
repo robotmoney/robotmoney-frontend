@@ -10,20 +10,20 @@
 // refuses unless it equals the flag: the run's confirmTarget is the database
 // this host actually names, before any write is attempted. Then it checks the
 // target precondition (./precondition.ts), read-only through `rm_readonly`:
-// the database answers, its ledger equals a supported baseline, and its
-// deployment_identity is absent or the kind RM_ENV implies.
+// the database answers, its ledger is a prefix of backend/migrations by
+// filename set (./ledger.ts), and its deployment_identity is absent or the
+// kind RM_ENV implies.
 //
 // With --confirm-target it also proves what the cutover needs later, before
-// R6.1 stops the legacy stack (the run's first irreversible step):
-//   - `~/.env` holds a non-empty `rm_owner` line (./env-keys.ts
-//     PRE_CUTOVER_REQUIRED_KEYS). R6.2 checks it again.
+// R6.1 stops the running stack (the run's first irreversible step):
+//   - `~/.env` holds non-empty `rm_owner` and `RM_CREDENTIALS` lines
+//     (./env-keys.ts PRE_CUTOVER_REQUIRED_KEYS). R6.2 checks them again.
 //   - rm_owner logs in: `SELECT 1`, read-only, through the registry's
 //     object-less `connectionCheck` shape declared as rm_owner in
 //     backend/scripts/owner-login-check.ts (proveOwnerLogin).
 // A failure refuses with "rm_owner cannot log in; run `bun run
 // role-passwords --target <target>` first". No release step reads or uses
-// `doadmin` (D61 amendment, owner, 2026-10-08). `RM_CREDENTIALS` is not required here:
-// R6.2a writes it.
+// `doadmin` (D61 amendment, owner, 2026-10-08).
 //
 // Writes host-identity.json to --receipt-dir. Prints key names, never values.
 // Runs before `bun install`, so it imports only node built-ins and local

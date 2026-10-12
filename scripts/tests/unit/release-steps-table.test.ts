@@ -6,8 +6,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { BEGIN, END, replaceRegion, stepsTable, unknownStepIds } from "../../release/steps-table.ts";
-import { RELEASE_STEPS } from "../../release/steps.ts";
+import { BEGIN, END, recordedHash, replaceHash, replaceRegion, stepsTable, unknownStepIds } from "../../release/steps-table.ts";
+import { RELEASE_STEPS, stepListHash } from "../../release/steps.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const runbooks = join(repoRoot, "docs", "runbooks");
@@ -31,6 +31,25 @@ describe("the step table", () => {
       expect(unknownStepIds(readFileSync(join(runbooks, f), "utf8"))).toEqual([]);
     }
     expect(unknownStepIds("| R7.2 | gone |\n| R1.1 | here |\n")).toEqual(["R7.2"]);
+  });
+
+  test("the recorded hash equals the computed one; a stale line is rewritten; a doc without the line is refused", () => {
+    const doc = readFileSync(join(runbooks, "release-run.md"), "utf8");
+    expect(recordedHash(doc)).toBe(stepListHash());
+    expect(replaceHash(doc, stepListHash())).toBe(doc);
+    const stale = doc.replace(stepListHash(), "0".repeat(64));
+    expect(recordedHash(stale)).toBe("0".repeat(64));
+    expect(replaceHash(stale, stepListHash())).toBe(doc);
+    expect(replaceHash("no line", stepListHash())).toBeUndefined();
+  });
+
+  test("no row names a one-time v0.6.0 step; R6.1's row names smoke:down (issue 1272)", () => {
+    const table = stepsTable();
+    for (const gone of ["R6.2a", "R6.7c", "R6.7d", "S8.1"]) expect(table).not.toContain(`| ${gone} |`);
+    const r61 = table.split("\n").find((l) => l.startsWith("| R6.1 |"))!;
+    expect(r61).toContain("smoke:down");
+    expect(r61).not.toMatch(/tmux|legacy checkout/);
+    expect(table).not.toContain("legacy checkout");
   });
 
   test("the table names every step once, with its bound and irreversibility", () => {

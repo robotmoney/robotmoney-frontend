@@ -1,29 +1,29 @@
 // The pure half of the stage target (scripts/release/stage-target-lib.ts, D61
-// rule 2): the env files carry production's key names, and a captured globals
-// file becomes DigitalOcean's role shape without its superusers.
+// rule 2): the env file carries production's key names, a captured globals
+// file becomes DigitalOcean's role shape without its superusers, and the `up`
+// plan replays the dump's own ledger at the tag and commit production reports,
+// with no past-upgrade constant in the tool (issue 1272).
 import { describe, expect, test } from "bun:test";
 
 import { parseEnvFile } from "../../lib/env-role.ts";
 import {
   bindDatabase,
-  composeLegacyCheckoutEnv,
   composeStageHomeEnv,
   doadminPasswordSql,
   envKeyNames,
   fingerprintDiff,
   globalsToRoleSql,
-  legacyLaunchScript,
-  legacyMigrationScript,
+  parseRunningVersion,
   pgHbaConf,
-  provisionTaxonomyScript,
-  precutoverProblems,
+  replayMigrationScript,
+  restoredProblems,
   removalRefusal,
   stageTargetDirs,
   PROD_HOME_ENV_KEYS,
-  PROD_LEGACY_CHECKOUT_ENV_KEYS,
   roleShapeProblems,
   rolePasswordSql,
   STAGE_TARGET,
+  upPlan,
   type StageHomeEnv,
 } from "../../release/stage-target-lib.ts";
 import { CAPTURE_CHECKOUT } from "../../release/target.ts";
@@ -93,7 +93,7 @@ describe("the stage target's ~/.env", () => {
     expect(keys).not.toContain("doadmin");
   });
 
-  test("it carries the legacy extras the cutover's env rewrite must move aside", () => {
+  test("it carries the extras the env rewrite (R6.2) must move aside", () => {
     const keys = envKeyNames(composeStageHomeEnv(VALUES));
     expect(keys).toContain("SWARM_SCHEDULES_ENABLED");
     expect(keys).toContain("OPENCODE_API_KEY");
@@ -111,30 +111,8 @@ describe("the stage target's ~/.env", () => {
   });
 });
 
-describe("the legacy checkout .env", () => {
-  test("its key names are production's legacy checkout key names", () => {
-    expect(envKeyNames(composeLegacyCheckoutEnv(VALUES, "doadmin-pw"))).toEqual([...PROD_LEGACY_CHECKOUT_ENV_KEYS]);
-  });
-
-  test("each URL names production's role and points at the stage database over TLS", () => {
-    const env = parseEnvFile(composeLegacyCheckoutEnv(VALUES, "doadmin-pw"));
-    expect(new URL(env.DATABASE_URL!).username).toBe("rm_app");
-    expect(new URL(env.WORKER_DATABASE_URL!).username).toBe("rm_worker");
-    expect(new URL(env.MIGRATE_DATABASE_URL!).username).toBe("doadmin");
-    for (const k of ["DATABASE_URL", "WORKER_DATABASE_URL", "MIGRATE_DATABASE_URL"]) {
-      const u = new URL(env[k]!);
-      expect(u.host).toBe("172.17.0.1:25060");
-      expect(u.pathname).toBe("/defaultdb");
-      expect(u.searchParams.get("sslmode")).toBe("require");
-    }
-    expect(env.SWARM_SCHEDULES_ENABLED).toBe("0");
-    // Production's legacy file holds a working doadmin URL; the v0.5.4 boot migrates through it.
-    expect(decodeURIComponent(new URL(env.MIGRATE_DATABASE_URL!).password)).toBe("doadmin-pw");
-  });
-});
-
 describe("stage doadmin is stored in no release file (D61, owner 2026-10-08)", () => {
-  test("`stage-target doadmin` sets one statement through psql's stdin and prints only the password; up writes doadmin only into the legacy file", async () => {
+  test("`stage-target doadmin` sets one statement through psql's stdin and prints only the password; up writes doadmin into no file", async () => {
     expect(doadminPasswordSql("p'w")).toBe("ALTER ROLE doadmin PASSWORD 'p''w';\n");
     expect(() => doadminPasswordSql("")).toThrow(/doadmin/);
     const source = await Bun.file(new URL("../../release/stage-target.ts", import.meta.url)).text();
@@ -206,12 +184,15 @@ describe("the checks", () => {
     expect(roleShapeProblems(rows, "rm_app\n")).toHaveLength(3);
   });
 
-  test("pre-cutover state: ledger equal to the baseline, no identity, TLS on", () => {
-    const baseline = ["0001_a.sql", "0002_b.sql"];
-    const ok = { ledger: "2", identity_table: "none", rm_owner_login: "false", doadmin_super: "false", doadmin_createrole: "true", ssl: "on" };
-    expect(precutoverProblems(ok, baseline, baseline)).toEqual([]);
-    expect(precutoverProblems({ ...ok, rm_owner_login: "true" }, baseline, baseline)).toEqual([]);
-    expect(precutoverProblems({ ...ok, ledger: "3" }, [...baseline, "0081_deployment_identity.sql"], baseline)).toHaveLength(2);
+  test("restored state: the ledger equals what the replay applied, the identity table exists, TLS on", () => {
+    const replayed = ["0001_a.sql", "0002_b.sql"];
+    const ok = { ledger: "2", identity_table: "public.deployment_identity", rm_owner_login: "false", doadmin_super: "false", doadmin_createrole: "true", ssl: "on" };
+    expect(restoredProblems(ok, replayed, replayed)).toEqual([]);
+    expect(restoredProblems({ ...ok, rm_owner_login: "true" }, replayed, replayed)).toEqual([]);
+    // red controls: a count that disagrees with the names read, a replayed file the ledger lacks, a missing identity table.
+    expect(restoredProblems({ ...ok, ledger: "3" }, replayed, replayed)).toHaveLength(1);
+    expect(restoredProblems(ok, replayed, [...replayed, "0003_c.sql"]).join()).toContain("ledger lacks 0003_c.sql");
+    expect(restoredProblems({ ...ok, identity_table: "none" }, replayed, replayed).join()).toContain("deployment_identity is absent");
   });
 
   test("pg_hba: TLS for every network login, never the superuser over the network", () => {
@@ -231,29 +212,61 @@ describe("the checks", () => {
   });
 });
 
-describe("the legacy replay and driver", () => {
-  test("a ledger file runs as the legacy runner ran it: SET LOCAL ROLE rm_owner from 0054 on", () => {
-    expect(legacyMigrationScript("0053_database_role_taxonomy.sql", "SELECT 1;")).not.toContain("SET LOCAL ROLE");
-    const s = legacyMigrationScript("0054_rm_worker_allowlist.sql", "SELECT 1;");
+describe("the replay and the up plan (issue 1272)", () => {
+  test("a ledger file runs as the migrate applied it: SET LOCAL ROLE rm_owner from 0054 on", () => {
+    expect(replayMigrationScript("0053_database_role_taxonomy.sql", "SELECT 1;")).not.toContain("SET LOCAL ROLE");
+    const s = replayMigrationScript("0054_rm_worker_allowlist.sql", "SELECT 1;");
     expect(s.startsWith("SET LOCAL ROLE rm_owner;")).toBe(true);
     expect(s).toContain("INSERT INTO schema_migrations (name) VALUES ('0054_rm_worker_allowlist.sql');");
   });
 
-  test("the provisioning run re-applies 0053 with no ledger row, then rm_readonly's sequence grants", () => {
-    const s = provisionTaxonomyScript("SELECT 53;");
-    expect(s.startsWith("SELECT 53;")).toBe(true);
-    expect(s).not.toContain("schema_migrations");
-    expect(s).not.toContain("SET LOCAL ROLE");
-    expect(s).toContain("GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO rm_readonly;");
+  const SHA = "a502de30068e0c1cc2e232a76098364e0b709033";
+  /** A fixture dump manifest: the dump's ledger in applied order (0081 first at the cutover), and what production reports. */
+  const manifest = {
+    ledger: ["0001_a.sql", "0002_b.sql", "0081_deployment_identity.sql", "0082_c.sql", "0083_d.sql"],
+    running: { commit: SHA, tag: "v0.6.0" },
+  };
+  const repo = ["0001_a.sql", "0002_b.sql", "0081_deployment_identity.sql", "0082_c.sql", "0083_d.sql", "0084_pending.sql"];
+
+  test("the up plan replays exactly the manifest's filenames, in its order, and detaches at the reported tag", () => {
+    const plan = upPlan(manifest, repo);
+    expect("errors" in plan).toBe(false);
+    if ("errors" in plan) return;
+    expect(plan.replay).toEqual(manifest.ledger);
+    expect(plan.ref).toBe("v0.6.0");
+    expect(plan.commit).toBe(SHA);
+    // An untagged boot detaches at the commit.
+    const untagged = upPlan({ ...manifest, running: { commit: SHA, tag: null } }, repo);
+    expect("errors" in untagged ? undefined : untagged.ref).toBe(SHA);
+    // Red controls: a ledger name the running checkout lacks, a skipped file, an empty ledger.
+    expect(upPlan({ ...manifest, ledger: [...manifest.ledger, "0999_x.sql"] }, repo)).toHaveProperty("errors");
+    expect(upPlan({ ...manifest, ledger: ["0001_a.sql", "0083_d.sql"] }, repo)).toHaveProperty("errors");
+    expect(upPlan({ ...manifest, ledger: [] }, repo)).toHaveProperty("errors");
   });
 
-  test("the launch script starts smoke:archive in the legacy checkout with the stage HOME and project", () => {
-    const script = legacyLaunchScript(STAGE_TARGET);
-    expect(script).toContain(`export HOME=${STAGE_TARGET.home}`);
-    expect(script).toContain(`cd ${STAGE_TARGET.legacyCheckout} || exit 1`);
-    expect(script).toContain(`SMOKE_PROJECT=${STAGE_TARGET.legacyProject} bun run smoke:archive -- --no-tui`);
-    expect(script).toContain(`tee "$HOME/${STAGE_TARGET.driverLog}"`);
-    expect(script).not.toMatch(/doadmin-pw|PASSWORD=[^"$]/);
+  test("/api/version is read for the running commit and tag; a dirty or short commit refuses", () => {
+    expect(parseRunningVersion(JSON.stringify({ api: "1.0.0", commit: SHA, tag: "v0.6.0" }))).toEqual({ commit: SHA, tag: "v0.6.0" });
+    expect(parseRunningVersion(JSON.stringify({ commit: SHA, tag: null }))).toEqual({ commit: SHA, tag: null });
+    expect(parseRunningVersion(JSON.stringify({ commit: `${SHA}+dirty` }))).toHaveProperty("error");
+    expect(parseRunningVersion(JSON.stringify({ commit: "abc" }))).toHaveProperty("error");
+    expect(parseRunningVersion(null)).toHaveProperty("error");
+    expect(parseRunningVersion("<html>")).toHaveProperty("error");
+  });
+
+  test("STAGE_TARGET holds no past-upgrade constant: no legacy commit or checkout, no driver log, no fixed migration list", () => {
+    const keys = Object.keys(STAGE_TARGET);
+    for (const gone of ["legacyCommit", "legacyCheckout", "legacyProject", "driverSession", "driverLog", "checkoutCommit", "baselineFile", "legacyWebPort"]) {
+      expect(keys).not.toContain(gone);
+    }
+    for (const [k, v] of Object.entries(STAGE_TARGET)) {
+      expect(Array.isArray(v), k).toBe(false);
+      if (typeof v === "string") {
+        expect(v, k).not.toMatch(/^[0-9a-f]{40}$/);
+        expect(v, k).not.toMatch(/v0\.5\.4|smoke-archive|tmux/);
+      }
+    }
+    expect(STAGE_TARGET.runningCheckout).not.toBe(STAGE_TARGET.checkout);
+    expect(STAGE_TARGET.productionOrigin).toBe("https://robotmoney.network");
   });
 });
 
@@ -270,15 +283,12 @@ describe("the capture checkout is the release runner's, never the stage target's
     expect(STAGE_TARGET.repoUrl).toBe(RELEASE_REPO_URL);
   });
 
-  test("down removes its own folders and refuses the capture checkout or a folder holding it", () => {
-    for (const dir of stageTargetDirs(["/home/stage-server/rm-stage-legacy.v0.5.4-retired"])) {
-      expect(removalRefusal(dir, ["/home/stage-server/rm-stage-legacy.v0.5.4-retired"], keep)).toBeUndefined();
-    }
-    expect(removalRefusal(CAPTURE_CHECKOUT.checkout, [], keep)).toBe("refusing to remove /home/stage-server/rm-capture: not a stage-target path");
-    // Even if a future edit listed it (or its parent) as a stage-target folder, the keep list refuses it.
-    expect(removalRefusal(CAPTURE_CHECKOUT.checkout, [CAPTURE_CHECKOUT.checkout], keep)).toBe(
-      "refusing to remove /home/stage-server/rm-capture: it holds /home/stage-server/rm-capture, the release runner's capture checkout",
-    );
-    expect(removalRefusal("/home/stage-server", ["/home/stage-server"], keep)).toContain("it holds /home/stage-server/rm-capture");
+  test("down removes its own folders and refuses the capture checkout", () => {
+    expect(stageTargetDirs()).toEqual([STAGE_TARGET.home, STAGE_TARGET.checkout, STAGE_TARGET.runningCheckout]);
+    for (const dir of stageTargetDirs()) expect(removalRefusal(dir, keep)).toBeUndefined();
+    expect(removalRefusal(CAPTURE_CHECKOUT.checkout, keep)).toBe("refusing to remove /home/stage-server/rm-capture: not a stage-target path");
+    expect(removalRefusal("/home/stage-server", keep)).toBe("refusing to remove /home/stage-server: not a stage-target path");
+    // The keep rule itself: a stage-target folder that held the capture checkout would refuse.
+    expect(removalRefusal(STAGE_TARGET.home, [`${STAGE_TARGET.home}/rm-capture`])).toContain("it holds");
   });
 });

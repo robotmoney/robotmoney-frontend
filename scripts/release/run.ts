@@ -47,7 +47,7 @@ import {
 import { checkAfterPreflight, runPreflight, type PreflightReport } from "./preflight.ts";
 import { executeStep, readRecovery, TIMED_OUT, type RunnerDeps } from "./step-exec.ts";
 import {
-  CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, RELEASE_STEPS, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
+  CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, stepsFor, templateValues, type RenderedStep, type StepTemplate,
 } from "./steps.ts";
 
 /** The step whose end is READY: the watch steps count their window from it, and W1 grades sessions since it. */
@@ -128,7 +128,7 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
     `  target        ${target.name} (RM_ENV=${target.rmEnv}, instance ${target.instance})`,
     `  host          ${target.host}  checkout ${target.checkout}  HOME ${target.home}`,
     `  capture host  ${target.capture.host}  checkout ${target.capture.checkout}  HOME ${target.capture.home}`,
-    `  legacy stack  ${target.legacy.checkout} (${target.legacy.version}${target.legacy.commit ? ` at ${target.legacy.commit.slice(0, 8)}` : ""}), tmux ${target.legacy.tmuxSession}, compose project ${target.legacy.composeProject}${target.legacy.log ? `, log ${target.legacy.log}` : ""}`,
+    `  running stack whatever ${target.host}'s smoke state names for instance ${target.instance} (R6.1 stops it with bun run smoke:down)`,
     `  release       ${target.release} at ${commit}`,
     `  confirm       ${target.confirmTarget}`,
     `  step list     ${hash}`,
@@ -144,16 +144,22 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
   return lines.join("\n");
 }
 
-/** The whole run. Returns the process exit code. */
-export async function runRelease(argv: readonly string[], deps: RunnerDeps, steps: readonly StepTemplate[] = RELEASE_STEPS): Promise<number> {
+/**
+ * The whole run. Returns the process exit code. `stepList` is the generic
+ * list; the release's delta steps (RELEASE_DELTAS) join it once the target
+ * names the release.
+ */
+export async function runRelease(argv: readonly string[], deps: RunnerDeps, stepList?: readonly StepTemplate[]): Promise<number> {
   const args = parseArgs(argv);
   if ("error" in args) {
     deps.error(`[${NAME}] ${args.error}`);
     return 2;
   }
   let target: ReleaseTarget;
+  let steps: readonly StepTemplate[];
   try {
     target = loadTarget(targetPath(args.target!));
+    steps = stepsFor(target.release, stepList);
   } catch (error) {
     deps.error(`[${NAME}] ${error instanceof Error ? error.message : String(error)}`);
     return 2;

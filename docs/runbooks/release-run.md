@@ -1,12 +1,22 @@
 # Release run — the agent-executed runbook runner
 
-> **Authority.** [D61](../decisions.md) (owner, 2026-10-08). Policy:
+> **Authority.** [D61](../decisions.md) (owner, 2026-10-08), amended for issue 1272
+> (the runner holds no past-upgrade fact). Policy:
 > [`release-runbooks.md`](../technical/release-runbooks.md). Standing checks:
-> [`release-standing-runbook.md`](./release-standing-runbook.md). The steps it runs
-> come from [`v0-6-0-rollout.md`](./v0-6-0-rollout.md).
+> [`release-standing-runbook.md`](./release-standing-runbook.md). The step ids keep the
+> shape [`v0-6-0-rollout.md`](./v0-6-0-rollout.md) introduced; that runbook is history and
+> the tool reads nothing from it.
 
 `bun run release:run` executes a release runbook end to end. It runs on the control
 machine. Every step runs on a host over ssh. No person logs in to a host.
+
+The same step list runs any patch from the version production actually runs, with no
+per-release code edit. The runner reads the running system: the ledger from the database,
+reconciled by filename set against `backend/migrations`; the running stack from the host's
+smoke state and from `/api/version`; the pending set as the repository minus the ledger. It
+holds no fact of a past upgrade: no supported-baseline constant, no previous commit, no tmux
+session, no one-time cutover step. A release that needs a one-time action declares it as a
+[delta step](#delta-steps) in its own delta runbook.
 
 ## What D61 asks, and where the runner does it
 
@@ -68,9 +78,9 @@ bun run release:run --target prod  --run <run-ts> --accept R7.3a --reason "boot-
 | P.busy | no run of this target still reads `running` under the journal root (`--abandon` clears a dead one) |
 | R1.1 to R2.5 | the step passes, run exactly as the run runs it. R2.5 takes `--triage` the same way |
 
-The remote steps are every step before the first irreversible one. They check out and install the release checkout, capture a fresh dump from the read replica into a new directory, restore it into a throwaway container, and read the database and the legacy logs. None stops a service or writes a database.
+The remote steps are every step before the first irreversible one. They check out and install the release checkout, capture a fresh dump from the read replica into a new directory, restore it into a throwaway container, and read the database and the running stack's logs. None stops a service or writes a database.
 
-They run lane by lane. A lane is one host and one checkout path. The cheap lanes go first: the legacy gate R2.5 (10 s), then the target checkout R1.1 to R1.3 and R2.3 (20 s), then the capture lane with its dump and restore proof (10 min). A red R2.5 shows in seconds. Within a lane the run's order holds. A failed step blocks the rest of its lane. On stage the target and capture lanes are one directory, so they are one lane.
+They run lane by lane. A lane is one host and one checkout path. The cheap lane goes first: the target checkout R1.1 to R1.3, R2.3 and R2.5 (30 s), then the capture lane with its dump and restore proof (10 min). A red target step shows in seconds. Within a lane the run's order holds. A failed step blocks the rest of its lane. The capture lane is its own on both targets: the schema refuses a capture checkout that is the target's.
 
 The journal is `~/.local/state/robotmoney-release/<target>/preflight-<ts>/`: `preflight.json`, `plan.txt` with every remote command, and each step's logs and receipts. It is never a run journal: SP.8 and `--run` refuse it.
 
@@ -130,26 +140,28 @@ the same file.
 ## Target files
 
 A target file is `scripts/release/targets/<name>.json`. The schema is closed: an
-unknown key refuses. The committed targets are `prod.json` and `stage.json`. A target names no
-release commit: a top-level `commit` or `tag` refuses, because the go file names it.
-`legacy.commit` stays: it is the old stack's commit, not the release.
+unknown key refuses. The committed targets are `prod.json` and `stage.json`. A target names
+where the target lives and nothing of what runs there. A top-level `commit` or `tag` refuses,
+because the go file names the release. A `legacy` block or a `tmuxSession` refuses too
+(`PAST_FACT_KEYS` in `scripts/release/target.ts`): the running stack is whatever the host's
+smoke state names for the instance, and R6.1 stops that. Neither committed file holds a commit
+hash or a past version string; a unit test keeps it so.
 
 | Key | Meaning | prod | stage |
 |---|---|---|---|
 | `release` | The release name the go must match | `v0.6.0` | `v0.6.0` |
 | `rmEnv` | `stage` or `prod` | `prod` | `stage` |
 | `host` | The ssh host alias | `rm-frontend-prod-1` | `rm-frontend-stage-2` |
-| `checkout` | The release checkout on the host. Every release names a new one. R1.1 clones it from `git@github.com:robotmoney/robotmoney-frontend.git` when `<checkout>/.git` is missing (a plain clone, never `--reference` the legacy checkout: S8.1 renames that folder). Why: the v0.6.1 production preflight's R1.1 failed with `cd: /root/rm-061: No such file or directory` (2026-10-10) | `/root/rm-061` | `/home/stage-server/rm-stage-target` |
+| `checkout` | The release checkout on the host. Every release names a new one. R1.1 clones it from `git@github.com:robotmoney/robotmoney-frontend.git` when `<checkout>/.git` is missing (a plain clone, never `--reference` another checkout). Why: the v0.6.1 production preflight's R1.1 failed with `cd: /root/rm-061: No such file or directory` (2026-10-10) | `/root/rm-061` | `/home/stage-server/rm-stage-target` |
 | `home` | `HOME` for every command; its `.env` is the target's credential file | `/root` | `/home/stage-server/stage-target` |
 | `instance` | The smoke instance | `rm_prod` | `stage_target` |
 | `publicOrigin` | The origin R7.1 checks | `https://robotmoney.network` | `https://stage.robotmoney-labs.dev` |
 | `capture` | Capture host, its `HOME` and its checkout | `rm-frontend-stage-2`, `/home/stage-server`, `/home/stage-server/rm-capture` | `rm-frontend-stage-2`, `/home/stage-server`, `/home/stage-server/rm-capture` |
-| `legacy` | The old stack: checkout, commit, tmux session, compose project, compose files, how it started, its log, version | `/root/robotmoney-frontend` at `1cda4085`, `driver`, `rm_prod`, `/root/smoke-archive-v0.5.4.log` | `/home/stage-server/rm-stage-legacy` at `1cda4085`, `stage-driver`, `stage_target`, `/home/stage-server/stage-target/smoke-archive-v0.5.4.log` |
 | `confirmTarget` | `host:port/database`; every write's `--confirm-target` | the primary's `host:25060/defaultdb` | `172.17.0.1:25060/defaultdb` |
 | `watchMinAttendance` | W1's `--min-attendance` | 0.5 (default) | 0.4: the external members never file against stage |
 | `watchHours` | Hours after R6.9 before W1 and R7.4a run. Prod, and any target that grades sessions, may set it longer, never below the derived 37 h. A target that defers sessions may set any positive value | 37 (default) | 0.25 (15 min, owner decision 2026-10-08) |
 | `watchSessions` | `graded` or `deferred`, rendered as W1's and R7.4a's `--sessions`. `graded`: W1 check 7 needs every subject to publish one good session, and R7.4a needs every session in flight at R2.3 to publish on its normal close. `deferred`: W1 skips check 7, and R7.4a checks only that no in-flight session vanished or had its close moved. Prod must be `graded` | `graded` (default) | `deferred` |
-| `bootEnv` | Non-secret boot settings from R6.2a (`WEBAUTHN_ORIGIN`, `WEBAUTHN_RP_ID`, the RPC and backfill budgets) | `{}` | `{}` |
+| `bootEnv` | Non-secret boot settings the boots export (`WEBAUTHN_ORIGIN`, `WEBAUTHN_RP_ID`, the RPC and backfill budgets) | `{}` | `{}` |
 
 ### Capture checkout convention
 
@@ -167,9 +179,6 @@ checkout. `stage-target down` removed it after the stage rehearsal, and the prod
 preflight's R1.4 failed with `cd: /home/stage-server/rm-stage-target: No such file or directory`.
 Stage shared that folder with its own R1.1, so it skipped R1.4 to R1.6 and never rehearsed them.
 
-Both legacy stacks were started by `SMOKE_PROJECT=<project> bun run smoke:archive -- --no-tui`
-(`bun scripts/smoke.ts --smoke --static-port --db external`) in their tmux session.
-
 A placeholder `confirmTarget` refuses a live run.
 Step R1.2 resolves `host:port/database` from the host's `~/.env` and refuses a
 different value. `bootEnv` refuses `BASE_RPC_URL`: a private RPC URL carries its key,
@@ -179,13 +188,14 @@ and a secret never goes in a process argument.
 
 A release run does not create its database. The database exists before the run.
 
-- **Production.** The production database exists. The legacy stack runs from the legacy checkout.
-- **Stage.** `scripts/release/stage-target.ts up --dump <dir>` sets the stage target up before the run. It restores a production dump into the stage target's database. This is target setup, as production's database is. It is not a step.
+- **Production.** The production database exists. The running stack is the one `bun smoke --static-port` last booted for `rm_prod`, recorded in the host's smoke state (`/root/.local/state/robotmoney-smoke/rm_prod/`). The runner never names its checkout or commit; `/api/version` reports them.
+- **Stage.** `scripts/release/stage-target.ts up --dump <dir>` sets the stage target up before the run: it restores a production dump and boots the stack production runs, at the tag and commit production's `/api/version` reports ([`stage-target.md`](./stage-target.md)). This is target setup, as production's database is. It is not a step.
 - **Role passwords, both targets.** `bun run role-passwords --target <stage|prod>` runs on the control machine before the run. It is provisioning, not a runbook step. It is idempotent. As `doadmin` it sets the four role passwords and `rm_owner`'s `LOGIN`, and it writes each missing role line of the host's `~/.env`. The admin types the `doadmin` password at its hidden prompt. That is the one human input of the release process. The password goes to the host over ssh stdin and lives only in process memory. It is never stored in a file. No release step reads `doadmin` (D61 amendment, owner, 2026-10-08).
   - It asks for the `doadmin` password at a hidden prompt, or reads one line from its stdin with `--doadmin-stdin`. It passes the password to `bun scripts/prod-init.ts role-passwords --confirm-target <T> --doadmin-stdin` on the host over ssh's stdin. The password is never stored in a file, an argument, an environment variable or any output, on either machine.
   - For each of `rm_owner`, `rm_app`, `rm_worker` and `rm_readonly`, a `~/.env` line that logs in is `kept` and no `ALTER` runs. An absent line is `set`: the host generates a password and sends the server only its SCRAM-SHA-256 verifier. The host then writes `<role> = <password>` into `~/.env` (atomic, 0600) and proves the login. A line that does not log in refuses. Only `--rotate <role>` replaces a line, and it keeps the old one in `~/.env.retired-<ts>` (0600). An empty `<role>=` line refuses. `rm_owner` also becomes `LOGIN`. A runtime role's attributes never change.
   - A rerun reports every role `kept`. The receipt (`prod-init/role-passwords-*.json`) lists role → `kept`, `set` or `rotated`, never a value.
-  - Never pass `--rotate` for a runtime role while the legacy stack runs: it would lock the legacy stack out.
+  - Never pass `--rotate` for a runtime role while the stack runs: it would lock the running stack out.
+  - It runs from the target's release checkout, the one R1.1 fetches later, and clones and installs it when it is missing. It never names the running stack's checkout.
   - Stage runs it the same way, fed by the disposable stage credential. The stage sequence is production's:
     1. `bun scripts/release/stage-target.ts up --dump <dir>`;
     2. `bun scripts/release/stage-target.ts doadmin | bun run role-passwords --target stage --doadmin-stdin`;
@@ -196,16 +206,15 @@ A release run does not create its database. The database exists before the run.
 Step R1.2 checks the database precondition on every target, read-only, through `rm_readonly`:
 
 - the database `~/.env` names answers;
-- its ledger equals a supported baseline;
-- `deployment_identity` is absent, or holds the kind `RM_ENV` implies (`prod` means `production`, `stage` means `rehearsal`).
+- its ledger is a prefix of `backend/migrations` by filename set (`scripts/release/ledger.ts`): every recorded name is a repository file, and no repository file below the newest recorded one is missing. A count is never judged. An unknown name refuses with that name; a skipped file refuses with that file. The pending set, what R6.3 applies, is the repository minus the ledger;
+- `deployment_identity` is absent, or holds the kind `RM_ENV` implies (`prod` means `production`, `stage` means `rehearsal`). A ledger that records `0081_deployment_identity.sql` without the row refuses.
 
-With the identity row present, the ledger may also record `0081_deployment_identity.sql`. A remote twin prepared by [`pre-identity-remote-twin.md`](./pre-identity-remote-twin.md) has that shape. A database already migrated by this release fails the check. A failed run resumes with `--from`. It never restarts at R1.
+A remote twin prepared by [`pre-identity-remote-twin.md`](./pre-identity-remote-twin.md) has the pre-identity shape. A database already migrated by this release passes the ledger check with nothing pending. A failed run resumes with `--from`. It never restarts at R1.
 
-Step R1.2 also proves, before R6.1 stops the legacy stack, what the cutover needs later:
+Step R1.2 also proves, before R6.1 stops the running stack, what the cutover needs later:
 
-- a non-empty `rm_owner` line in `~/.env`;
-- an `rm_owner` login with `SELECT 1`. It is read-only. The statement is the registry's object-less `connectionCheck` shape, declared as `rm_owner` in `backend/scripts/owner-login-check.ts`. A failure refuses with "rm_owner cannot log in; run `bun run role-passwords --target <target>` first";
-- `RM_CREDENTIALS` is not required. R6.2a writes it.
+- non-empty `rm_owner` and `RM_CREDENTIALS` lines in `~/.env` (`RM_CREDENTIALS` has named the credential file since v0.6.0; the generic list writes no `~/.env` key);
+- an `rm_owner` login with `SELECT 1`. It is read-only. The statement is the registry's object-less `connectionCheck` shape, declared as `rm_owner` in `backend/scripts/owner-login-check.ts`. A failure refuses with "rm_owner cannot log in; run `bun run role-passwords --target <target>` first".
 
 R6.2 checks `rm_owner` and `RM_CREDENTIALS` again, as defence in depth. The migrate (R6.3) and the later steps use `rm_owner` from `~/.env`.
 
@@ -223,18 +232,20 @@ It is part of the template, so the hash covers it. R1.2 and R1.5 record where `b
 `docker`, `tmux` and `git` resolve under it, and refuse a command that inherited a
 `DATABASE_*` variable.
 
-R2.5 alone runs from the legacy checkout, with no `RM_ENV`: the old code grades the old
-stack it started. The control step (W3) runs on the control machine from the runner's
-own checkout. Each remote step first touches a marker in the run's remote directory. The
+Every target step runs from the release checkout, R2.5 included: `prod:gate --mode baseline`
+grades the running stack the instance's smoke state names. The control step (W3) runs on the
+control machine from the runner's own checkout. Each remote step first touches a marker in the run's remote directory. The
 runner copies back only the receipts written after that marker.
 
-The table below is generated from `scripts/release/steps.ts` by `bun scripts/release/steps-table.ts --write docs/runbooks/release-run.md`. The docs lint fails when it is stale.
+The table below and the hash line are generated from `scripts/release/steps.ts` by `bun scripts/release/steps-table.ts --write docs/runbooks/release-run.md`. The docs lint fails when either is stale. The hash is the one SP.8 compares a stage journal and a production run by; it changes only when the list changes, and the change is recorded here on purpose.
+
+Step-list hash: `1177675c57f27024434a764abaf054a943a6b0e31975ea21ee8c59a9d09d5497`
 
 <!-- steps-table:begin -->
 | Id | Host | Does | Command | Irreversible | Bound | Standing |
 |---|---|---|---|---|---|---|
 | R1.1 | target; clones the checkout when missing | Target checkout: clone it when missing, fetch the tags, then detach at the go's ref (the rc tag on prod, the commit on stage), so the host holds the tag the boot reports (D64) | `git fetch --tags origin`; `git -c advice.detachedHead=false checkout --detach {ref}` | no | 10 min | SP.1 |
-| R1.2 | target | Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger is a supported baseline, its identity is absent or matches RM_ENV; before R6.1, ~/.env holds a non-empty rm_owner line and rm_owner logs in (SELECT 1, read-only; refuses with "run bun run role-passwords --target <target> first"); no release step reads doadmin; RM_CREDENTIALS is not required (R6.2a writes it) | `bun scripts/release/host-identity.ts --commit {commit} --confirm-target {confirmTarget} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SP.1 |
+| R1.2 | target | Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger is a prefix of backend/migrations by filename set (no unknown or skipped name, never a count), its identity is absent or matches RM_ENV; before R6.1, ~/.env holds non-empty rm_owner and RM_CREDENTIALS lines and rm_owner logs in (SELECT 1, read-only; refuses with "run bun run role-passwords --target <target> first"); no release step reads doadmin | `bun scripts/release/host-identity.ts --commit {commit} --confirm-target {confirmTarget} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SP.1 |
 | R1.3 | target | Target install: bun install --force, root and backend | `bun install --force`; `bun install --force --cwd backend` | no | 10 min | SP.1 |
 | R1.4 | capture; clones the checkout when missing | Capture checkout (runner-owned, never a release checkout): clone it when missing, fetch the tags, then detach at the go's ref | `git fetch --tags origin`; `git -c advice.detachedHead=false checkout --detach {ref}` | no | 10 min | SP.1 |
 | R1.5 | capture | Capture identity: HEAD is the commit and the tree is clean | `bun scripts/release/host-identity.ts --commit {commit} --receipt-dir {captureHome}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SP.1 |
@@ -242,12 +253,11 @@ The table below is generated from `scripts/release/steps.ts` by `bun scripts/rel
 | R2.1 | capture | Fresh capture from production's read replica into a new dated directory (never a reused dump) | `bun run smoke:capture --out {captureHome}/rm-backup-{target}-{runTs}` | no | 30 min | SR.0, SP.2 |
 | R2.2 | capture | Record the sha256 of the encrypted dump files beside the manifest | `sh -c cd {captureHome}/rm-backup-{target}-{runTs} && sha256sum -- *.gpg > SHA256SUMS` | no | 10 min | SP.2 |
 | R2.4r | capture | Restore proof: restore the R2.1 dump into a throwaway local Postgres container, record the restore time, drop the container | `bun scripts/release/restore-proof.ts --dump {captureHome}/rm-backup-{target}-{runTs} --receipt-dir {captureHome}/.local/state/robotmoney-release/{target}/{runTs}` | no | 20 min | SP.2 |
-| R2.3 | target | Baseline through rm_readonly: ledger, identity, roles, migration 0101's would-clear list, supported-baseline match, R2.4 counts and size | `bun scripts/release/baseline.ts --instance {instance} --run {runTs}` | no | 10 min | SP.3, SP.6 |
-| R2.5 | target, legacy checkout | Log baseline of the running legacy stack, graded by the legacy checkout's own prod:gate for the instance | `bun run prod:gate --mode baseline --instance {instance} --report {home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-baseline.md` | no | 10 min | SP.5 |
-| R6.1 | target | Stop the legacy stack: its tmux driver, then docker compose down (never -v); prove no legacy container remains | `bun scripts/release/stop-legacy.ts stop --session {legacySession} --project {legacyProject} --legacy-checkout {legacyCheckout} --compose-files {legacyComposeFiles} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | **yes** | 10 min | SC.2 |
+| R2.3 | target | Baseline through rm_readonly: ledger, identity, roles, migration 0101's would-clear list, the pending set (backend/migrations minus the ledger), R2.4 counts and size | `bun scripts/release/baseline.ts --instance {instance} --run {runTs}` | no | 10 min | SP.3, SP.6 |
+| R2.5 | target | Log baseline of the running stack the instance's smoke state names, graded by prod:gate from the release checkout | `bun run prod:gate --mode baseline --instance {instance} --report {home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-baseline.md` | no | 10 min | SP.5 |
+| R6.1 | target | Stop the running stack: the one the instance's smoke state names, with bun run smoke:down --instance {instance} (never -v); refuses when the state names no stack; proves no container of its project remains | `bun scripts/release/stop-legacy.ts stop --instance {instance} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | **yes** | 10 min | SC.2 |
 | R6.2 | target | Rewrite ~/.env to the D61 allowlist (rm_owner, never doadmin); every other key, a stray doadmin line included, moves to ~/.env.retired-<ts> (mode 0600); refuses without rm_owner or RM_CREDENTIALS; key names only | `bun scripts/release/env-rewrite.ts --run {runTs} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SV.6 |
 | R6.3 | target | The first migrate: 0081 first with the identity RM_ENV implies, then every pending file | `bun run migrate --instance {instance} --confirm-target {confirmTarget}` | **yes** | 10 min | SC.2 |
-| S8.1 | target | Rename the legacy checkout to <path>.<version>-retired, then move its .env secrets (database URLs, model keys) to ~/.env.legacy-retired-<ts> and make that .env 0600 | `bun scripts/release/stop-legacy.ts retire --legacy-checkout {legacyCheckout} --version {legacyVersion} --run {runTs} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | — |
 | R6.4 | target | Report the deployment identity the migrate wrote (prod-init set-identity) | `bun scripts/prod-init.ts set-identity --instance {instance} --confirm-target {confirmTarget}` | no | 10 min | — |
 | R6.5 | target | Mint the three service tokens (prod-init provision-tokens) | `bun scripts/prod-init.ts provision-tokens --instance {instance} --confirm-target {confirmTarget}` | no | 10 min | — |
 | R6.7a | target | Boot 1: bun smoke --static-port (preflight, replace, readiness, exit) | `bun run smoke --static-port --instance {instance}` | no | 15 min | SP.4 |
@@ -259,7 +269,7 @@ The table below is generated from `scripts/release/steps.ts` by `bun scripts/rel
 | R7.3a | target | Log verdict after the release (sessions graded later: the first one publishes hours after the cutover) | `bun run prod:gate --mode post-release --defer-sessions --instance {instance} --report {home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md` | no | 10 min | SV.4 |
 | R7.3b | target | Standing soak checks: record the baseline at READY, then the full run | `bun run soak:checks --instance {instance} --record --report {home}/.local/state/robotmoney-release/{target}/{runTs}/soak-record.md`; `bun run soak:checks --instance {instance} --full --report {home}/.local/state/robotmoney-release/{target}/{runTs}/soak-full.md` | no | 10 min | SW.2 |
 | R7.5 | target | Compare with the R2.3 baseline: row counts only grow, database size within the bound | `bun scripts/release/compare-baseline.ts --instance {instance} --run {runTs} --max-size-ratio 1.5` | no | 10 min | SV.5 |
-| R7.7 | target | Host guards: no container mounts docker.sock, ~/.env keys within the allowlist, token files 0600, no world-readable file under home or the retired checkout holds a postgres URL with a password | `bun scripts/release/host-guards.ts --instance {instance} --legacy-retired {legacyCheckout}.{legacyVersion}-retired --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SV.6 |
+| R7.7 | target | Host guards: no container mounts docker.sock, ~/.env keys within the allowlist, token files 0600, no world-readable file under home holds a postgres URL with a password | `bun scripts/release/host-guards.ts --instance {instance} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SV.6 |
 | W1 | target, not before R6.9 + `watchHours` | The watch since READY: prod:gate post-release with sessions as the target's watchSessions says (prod graded: every subject publishes a judged session, the judge never restarted; stage deferred) | `bun run prod:gate --mode post-release --instance {instance} --since {readyIso} --min-attendance {watchMinAttendance} --sessions {watchSessions} --report {home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-watch.md` | no | 10 min | SW.1 |
 | R7.4a | target, not before R6.9 + `watchHours` | Schedule parity: 24 h epochs, every session in flight at R2.3 published on its normal close (graded; deferred checks only that no close moved), the regime run at :30, the last parity sweep's duration | `bun scripts/release/schedule-parity.ts --instance {instance} --run {runTs} --sessions {watchSessions} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SW.1 |
 | W3 | control, prod only | Tag the running commit with the release tag and push it (prod only) | `bun scripts/release/tag.ts final --release {release} --commit {commit}` | no | 10 min | SW.3 |
@@ -296,16 +306,16 @@ R1.4 and R7.1 take `{ref}`, a value, which is the rc tag on prod and the commit 
 | Script | Step | What it does |
 |---|---|---|
 | `scripts/release/host-identity.ts` | R1.2, R1.5 | HEAD equals the commit; the tree is clean; `bun`, `docker`, `tmux` and `git` resolve under the fixed `PATH`; no `DATABASE_*` variable was inherited; `~/.env` resolves to `confirmTarget`; the target precondition holds, `~/.env` has a non-empty `rm_owner` line and `rm_owner` logs in with `SELECT 1` (R1.2 only) |
-| `scripts/release/baseline.ts` | R2.3 | Through `rm_readonly` on a proven read-only session: the ledger, `deployment_identity`, the five roles, migration 0101's would-clear list (the R2.3 query, verbatim), `matchSupportedRelease`, the R2.4 counts and the database size. Refuses an in-house seat in the would-clear list and a ledger that matches no supported baseline |
+| `scripts/release/baseline.ts` | R2.3 | Through `rm_readonly` on a proven read-only session: the ledger, `deployment_identity`, the five roles, migration 0101's would-clear list (the R2.3 query, verbatim), the pending set against `backend/migrations`, the R2.4 counts and the database size. Refuses an in-house seat in the would-clear list and a ledger with an unknown or skipped name |
 | `scripts/release/restore-proof.ts` | R2.4r | Restores the run's capture into a throwaway local Postgres container through `scripts/lib/restore-container.ts`, counts its ledger, records the restore time, and always drops the container |
-| `scripts/release/stop-legacy.ts` | R6.1, S8.1 | `stop`: kills the tmux driver, then `docker compose down` from the old checkout, never `-v`, and proves no container of the project remains. `retire`: renames the old checkout, then moves its `.env` lines that hold a database URL with a password, `MIGRATE_DATABASE_URL`, `WORKER_DATABASE_URL`, `OPENCODE_API_KEY` or another known secret to `~/.env.legacy-retired-<run-ts>` (0600). Key names only |
+| `scripts/release/stop-legacy.ts` | R6.1 | `stop --instance <name>`: reads the instance's smoke state, refuses with a non-zero exit when it names no stack, else runs `bun run smoke:down --instance <name>` (never `-v`) and proves no container of the record's project remains. No tmux session, compose project or checkout argument |
 | `scripts/release/tag.ts` | after stage (rc), W3 | On the control machine: `rc` refuses a commit off `origin/releases-A.B.x`, then tags the next free rc at the commit unless one points there; `final` tags the release at the commit, or confirms it already does; each pushes its tag |
 | `scripts/release/schedule-parity.ts` | R7.4a | Every active subject has 24 h epochs; every session in flight at R2.3 published within its judging time plus 30 min of its unmoved close (with `--sessions deferred`: only that each still exists with its close unmoved); the analytics-producer's regime cron runs at minute 30; reports the last parity sweep and fails a dead one |
-| `scripts/release/credentials-init.ts` | R6.2a | Reads the member ids of `athena`, `noop-analyst`, `robot-money` (agents) and `themis` (judge) through `rm_readonly`, and refuses a handle that is missing, not `active` or of the wrong role. Writes `<HOME>/.config/robotmoney/credential.json` (dir 0700, file 0600): one entry per member with a fresh Ed25519 key, the model key from `~/.env`'s `OPENCODE_API_KEY`, and a placeholder bearer that R6.7c replaces. Appends `RM_CREDENTIALS` to `~/.env` when absent. An existing file with the same roster and member ids is kept. A different roster refuses. Prints handles and key names only |
+| `scripts/release/credentials-init.ts` | none (stage target setup) | The v0.6.0 cutover's one-time credential file write. No step of the generic list. `stage-target up` runs it once when it builds the stage world; a release that needs it again declares a delta step gated on the file's absence |
 | `scripts/release/env-rewrite.ts` | R6.2 | Moves every `~/.env` key outside the D61 allowlist to `~/.env.retired-<run-ts>` (mode 0600). A stray `doadmin` line moves too. Refuses when `rm_owner` or `RM_CREDENTIALS` is missing. Prints key names only |
 | `scripts/release/identity-check.ts` | R7.1 | `/api/version` and `/version.json` carry the commit, with no `+dirty` or `+unknown`; with the rc tag as `--ref`, `/api/version` carries it as `tag` |
 | `scripts/release/compare-baseline.ts` | R7.5 | Every R2.4 count only grew; the database size is within the bound |
-| `scripts/release/host-guards.ts` | R7.7 | No container of the instance mounts a Docker socket; `~/.env` keys are within the allowlist; the three token files are mode 0600; no world-readable file under `HOME` or the retired checkout holds a postgres URL with a password |
+| `scripts/release/host-guards.ts` | R7.7 | No container of the instance mounts a Docker socket; `~/.env` keys are within the allowlist; the three token files are mode 0600; no world-readable file under `HOME` holds a postgres URL with a password |
 
 The D61 `~/.env` allowlist is `host`, `port`, `database`, `dbname`, `sslmode`, `rm_app`,
 `rm_worker`, `rm_readonly`, `rm_owner`, `RM_ENV`, `RM_CREDENTIALS` and
@@ -322,9 +332,28 @@ Production refuses to start unless `--stage-journal` names such a journal (stand
 check SP.8). A different hash, a different commit, a failed or missing step, or a
 journal from a prod run all refuse.
 
+The hash changed once, deliberately, for issue 1272: the one-time v0.6.0 steps R6.2a,
+R6.7c, R6.7d and S8.1 left the list, R6.1 became the smoke:down stop, R2.5 moved to the
+release checkout and R7.7 lost its retired-checkout argument. The recorded hash above is
+that list's. Every earlier stage journal is refused by SP.8, as it should be: those runs
+rehearsed a list that no longer exists.
+
+### Delta steps
+
+A release that needs a one-time action (the v0.6.0 credential file, a member rebind, a
+second boot) declares it as a **delta step** in `RELEASE_DELTAS` (`scripts/release/steps.ts`),
+keyed by the release name the target carries, with the runbook text in that release's delta
+runbook. `stepsFor(release)` inserts it after its `after` step for that release only. A delta
+step carries `gateAbsent`: a file whose absence proves the action has not run (for example
+`{home}/.config/robotmoney/credential.json`). The rendered command runs the action only while
+the file is absent, and records `skipped: <path> exists` otherwise, so a second run of the
+same list never repeats it. The hash is taken over the list with the delta, so stage and
+production of that release share it, and the generic list's hash is untouched. The generic
+list holds no delta today.
+
 ## Triage of the baseline gate
 
-R2.5 grades the running legacy stack before anything changes. A failure there is
+R2.5 grades the running stack before anything changes. A failure there is
 what is already broken, and each one is an owner decision before the cutover. The
 decision is a triage file, passed with `--triage <file>`:
 
@@ -390,4 +419,4 @@ an `.env` file, a credential file, a passphrase or a dump.
 
 - **`git fetch` runs with the target's `HOME`.** On stage that is `/home/stage-server/stage-target`. A credential helper or `.gitconfig` in the login home is not seen there. R1.1 fails loudly if the fetch needs one.
 - **`BASE_RPC_URL` has no delivery path.** It stays out of `bootEnv`. A private RPC URL carries its key, and a secret never goes in a process argument. If production uses a private RPC, the boot needs another way to receive it.
-- **The legacy stack must be a production boot.** The legacy gate refuses a stack whose `.agents/smoke-state.json` is not a `--db external` boot. On stage, the legacy stack must be booted that way against the stage target's database.
+- **The running stack must be a production boot.** `prod:gate` refuses an instance whose smoke state is not an external-database boot. On stage, `stage-target up` boots the stack that way (`bun smoke --static-port`) against the stage target's database.

@@ -1,5 +1,10 @@
 #!/usr/bin/env bun
-// scripts/release/credentials-init.ts — release step R6.2a, run ON THE TARGET HOST,
+// scripts/release/credentials-init.ts — the one-time credential file write of the
+// v0.6.0 cutover (its runbook step R6.2a), run ON A HOST. It is no step of the
+// generic release list (issue 1272): the stage target builder runs it once when
+// it builds the stage world (scripts/release/stage-target.ts up), and a release
+// that needs it again declares a delta step gated on this file's absence.
+// Originally
 // before R6.2 moves OPENCODE_API_KEY out of ~/.env. D61 rule 3: the old runbook
 // left "credential.json exists at RM_CREDENTIALS with the in-house roster" as an
 // operator preparation; this is that preparation, scripted.

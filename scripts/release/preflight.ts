@@ -29,9 +29,9 @@
 //     from the read replica into a new directory, a restore into a throwaway
 //     container, and read-only queries and log reads. A control-machine step
 //     (the rc tag push) is not run. The steps run lane by lane, a lane being
-//     one host and one checkout path: the cheap lanes first (the legacy gate,
-//     then the target checkout), the capture lane with its 10 min dump last,
-//     so a red R2.5 shows in seconds. Within a lane the run's order holds.
+//     one host and one checkout path: the target lane first, the capture lane
+//     with its 10 min dump last, so a red target step shows in seconds.
+//     Within a lane the run's order holds.
 //     After a failed step, the rest of its lane is reported blocked.
 //
 // The journal is `<journal root>/<target>/preflight-<ts>/`: preflight.json
@@ -88,19 +88,19 @@ export function preflightSteps(steps: readonly StepTemplate[]): StepTemplate[] {
 }
 
 /** PURE. A step's lane: the host and the checkout path it runs in. */
-export function laneOf(step: Pick<StepTemplate, "host" | "checkout">, target: ReleaseTarget): string {
+export function laneOf(step: Pick<StepTemplate, "host">, target: ReleaseTarget): string {
   if (step.host === "capture") return `${target.capture.host}:${target.capture.checkout}`;
-  return `${target.host}:${step.checkout === "legacy" ? target.legacy.checkout : target.checkout}`;
+  return `${target.host}:${target.checkout}`;
 }
 
 /**
- * PURE. The preflight's order: lanes from cheapest to dearest (legacy gate,
- * target checkout, capture), each lane in the run's order. The capture lane
+ * PURE. The preflight's order: lanes from cheapest to dearest (target
+ * checkout, then capture), each lane in the run's order. The capture lane
  * is never the target's: the target schema refuses a capture checkout that is
  * the target's own checkout (./target.ts, captureCheckoutProblems).
  */
 export function preflightOrder(steps: readonly StepTemplate[], target: ReleaseTarget): StepTemplate[] {
-  const rank = (s: StepTemplate) => (s.checkout === "legacy" ? 0 : s.host === "capture" ? 2 : 1);
+  const rank = (s: StepTemplate) => (s.host === "capture" ? 1 : 0);
   const lanes = new Map<string, { rank: number; steps: StepTemplate[] }>();
   for (const s of preflightSteps(steps)) {
     const key = laneOf(s, target);
@@ -255,8 +255,8 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
   if (busy.length > 0) add("P.busy", "red", `run ${busy.map((b) => `${b.runTs} (updated ${b.updatedAt})`).join(", ")} of ${target.name} is in flight: wait for it to end, or mark a dead one`);
   else add("P.busy", "green", `no ${target.name} run in flight under ${join(input.root, target.name)}`);
 
-  // The release checkouts must not be live: a running compose project started from one.
-  // (The target schema already refuses a release checkout that is the legacy one.)
+  // The release checkouts must not be live: a running compose project started from one
+  // (the running stack boots from the previous release's checkout, never this one).
   const live = new Set<string>();
   for (const [role, host, checkout] of [["target", target.host, target.checkout], ["capture", target.capture.host, target.capture.checkout]] as const) {
     const probe = await deps.collect(host, `docker ps -q --filter ${shellQuote(`label=com.docker.compose.project.working_dir=${checkout}`)} | wc -l`);
@@ -289,7 +289,7 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
     }
     const why = !runnable ? "no commit to check out"
       : busy.length > 0 ? "P.busy is red"
-      : template.checkout !== "legacy" && live.has(template.host) ? `P.live.${template.host} is red`
+      : live.has(template.host) ? `P.live.${template.host} is red`
       : blockedBy.get(lane);
     if (why !== undefined) {
       add(template.id, "blocked", `not run: ${why}`);

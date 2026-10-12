@@ -4438,6 +4438,24 @@ first-migrate exception accepts only the 76-name ledger. Adding a baseline to
 the list takes a new decision. `backend/src/db/supported-releases.ts` holds the
 list, and `backend/tests/fixtures/releases/production-2026-10-01/` pins it.
 
+<a id="d55-8-amendment-1272"></a>
+**Amendment to decision 8 (issue 1272, 2026-10-12).** The release runner no longer
+reads `SUPPORTED_RELEASES`. Steps R1.2 (`scripts/release/precondition.ts`) and R2.3
+(`scripts/release/baseline.ts`) judge the ledger by filename set against
+`backend/migrations` (`scripts/release/ledger.ts`): every recorded name must be a
+repository file and no repository file below the newest recorded one may be
+missing; a count is never judged, and the pending set is the repository minus the
+ledger. Production's 116-row ledger after v0.6.0 passes the same check the 76-row
+ledger passed before it, and the ledger after the next patch will pass it too, with
+no new constant. The list in `backend/src/db/supported-releases.ts` stays what it
+is for the backend's own importers (the migrate's first-migrate exception, the
+upgrade tests, `smoke-prepare`); retiring it there is a later decision. Why: the
+runner was written for one upgrade and refused the system it had to upgrade
+(the v0.6.1 preflight, 2026-10-10: production holds 116 rows, the constant holds
+76). The owner wants the fact removed, not retyped each release (the closed simplify
+attempt pr (1271)). See [D61's amendment](#d61-amendment-1272) for the rest of the
+removal.
+
 Production records `0080_analytics_ledger_compaction`, so a pending file
 numbered 0063 to 0079 sorts below the last recorded row and the gap rule
 refuses it as out of band. The owner kept the rule strict and renumbered the
@@ -5201,6 +5219,7 @@ exactly one workflow, so a check cannot run twice or never), and the retargeted
 
 ---
 
+<a id="d61"></a>
 ## D61 — Release runbooks are executed end to end by an agent from the control machine; the privileged credentials live in the host's `~/.env` (supersedes parts of D47 §3, D55 (5) and policy §4.7; owner, 2026-10-08)
 
 **Status.** Accepted 2026-10-08. Implementation tracked on the v0.6.0 QA branch.
@@ -5289,6 +5308,42 @@ the host. Proving `rm_owner` at R1.2 means every precondition holds before the f
 irreversible step.
 
 ---
+
+<a id="d61-amendment-1272"></a>
+**Amendment (issue 1272, 2026-10-12): the runner holds no past-upgrade fact.** The
+text above names the legacy tmux stack, R6.2a, the supported-baseline match and
+"before R6.1 stops the legacy stack". Those were facts of the v0.5.4 to v0.6.0
+upgrade, typed into the tool. They are gone:
+
+- The target files (`scripts/release/targets/{prod,stage}.json`) carry no `legacy`
+  block: no previous checkout, commit, tmux session, compose project or driver log.
+  A `legacy`, `commit`, `tag` or `tmuxSession` key refuses by name. A target names
+  where it lives and nothing of what runs there.
+- R6.1 stops whatever stack the host's smoke state names for the instance, with
+  `bun run smoke:down --instance <instance>` (never `-v`), and refuses with a
+  non-zero exit when the state names no stack. No release step drives or kills a
+  tmux session. S8.1 (the legacy checkout rename) and R7.7's retired-checkout scan
+  left with it: a checkout booted by `bun smoke` holds no credential (`~/.env`
+  does), so there is nothing to retire.
+- R6.2a, R6.7c and R6.7d, the one-time v0.6.0 cutover actions, left the generic
+  list. A release that needs a one-time action declares a delta step
+  (`RELEASE_DELTAS`, `stepsFor` in `scripts/release/steps.ts`) in its own delta
+  runbook, gated on a precondition receipt that proves it has not run.
+- R2.5 runs from the release checkout, like every other target step, and grades the
+  running stack the instance's smoke state names.
+- R1.2 and R2.3 judge the ledger against `backend/migrations` by filename set
+  ([D55 decision 8's amendment](#d55-8-amendment-1272)). R1.2 requires the
+  `RM_CREDENTIALS` line before the first irreversible step, since no step writes it.
+- `stage-target up --dump <dir>` builds the target from the dump's own ledger and
+  the tag and commit production's `/api/version` reports, replaying exactly that
+  ledger; `STAGE_TARGET` holds no previous commit, fixed ledger or driver script.
+- The step-list hash changed once, deliberately; `docs/runbooks/release-run.md`
+  records it, `steps-table.ts --write` keeps it, and a unit test holds the record
+  equal to the computed one. Every earlier stage journal is refused by SP.8.
+
+Rules 1 to 4 stand. The trade-off and the 2026-10-08 amendment stand. Why: the
+same list must run any patch from the version production actually runs, with no
+per-release code edit (owner, 2026-10-09, during the v0.6.1 QA session).
 
 ## D62 — A release branch takes changes only from `main`, or from a QA branch when the change is incompatible with `main` or fixes a regression on `main` (refines policy §2 and §4.6; owner, 2026-10-09)
 

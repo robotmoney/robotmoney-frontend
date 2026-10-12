@@ -2,18 +2,21 @@
 //
 // A target file names WHERE a release run acts: the host, the checkout, the
 // instance, the policy (`RM_ENV`), the home directory whose `~/.env` the
-// commands read, the capture host, the legacy stack it replaces and the
-// database the writes must confirm. It never names WHAT runs: the step list
-// (./steps.ts) is one list for every target. Stage and production differ only
-// in their target file, which is what makes a stage run a rehearsal of the
-// production run.
+// commands read, the capture host and the database the writes must confirm.
+// It never names WHAT runs: the step list (./steps.ts) is one list for every
+// target. Stage and production differ only in their target file, which is
+// what makes a stage run a rehearsal of the production run.
 //
 // The schema is closed: an unknown key refuses. A key nobody reads is a value
 // an operator believes changes the run while it changes nothing.
 //
-// A target never names the release commit. The operator's go file is the one
-// source of the commit (./go.ts, owner decision 2026-10-08): a `commit` or
-// `tag` here would be a second pin that drifts from the go with every QA fix.
+// A target holds no past-upgrade fact (issue 1272). It never names the
+// release commit: the operator's go file is the one source of the commit
+// (./go.ts, owner decision 2026-10-08), and a `commit` or `tag` here would be
+// a second pin that drifts from the go with every QA fix. It never names the
+// running stack either: no `legacy` block, no previous commit, no tmux session,
+// no driver log. The running stack is what the host's smoke state names
+// (scripts/lib/smoke-state.ts) and what /api/version reports; R6.1 stops that.
 //
 // Pure apart from loadTarget's one readFileSync, so every refusal is a unit
 // test (scripts/tests/unit/release-run.test.ts).
@@ -41,8 +44,7 @@ export const CONFIRM_TARGET_PLACEHOLDER = "FILL-ME:host:port/database-from-the-h
 export const CONFIRM_TARGET_RE = /^[A-Za-z0-9.-]+:[0-9]{1,5}\/[A-Za-z0-9_.-]+$/;
 
 /**
- * Non-secret settings the boot exports to the containers (runbook R6.2a, issue
- * 1113). A secret never goes here: the values reach a process argument, and
+ * Non-secret settings the boot exports to the containers (issue 1113). A secret never goes here: the values reach a process argument, and
  * D61 keeps every secret out of process arguments. `BASE_RPC_URL` is left out
  * for that reason, because a private RPC URL carries its key.
  */
@@ -56,25 +58,6 @@ export const BOOT_ENV_KEYS: readonly string[] = Object.freeze([
   "GECKO_OHLCV_MIN_INTERVAL_MS",
   "PG_NAMESPACE_GUARD_TIMEOUT_MS",
 ]);
-
-export interface LegacyStack {
-  /** The old checkout. Section 8 renames it after the migrate. */
-  readonly checkout: string;
-  /** The tmux session that drives the old stack. */
-  readonly tmuxSession: string;
-  /** The old stack's compose project name. */
-  readonly composeProject: string;
-  /** Compose files, relative to the old checkout, when `-p` alone is not enough. */
-  readonly composeFiles: readonly string[];
-  /** How the old stack was started, for the plan and the report. */
-  readonly startedBy: string;
-  /** The release the old checkout runs; the rename suffix is `.<version>-retired`. */
-  readonly version: string;
-  /** The commit the old checkout runs (full SHA), for the plan and the report. */
-  readonly commit?: string;
-  /** The old driver's tee'd log, for the plan and the report. */
-  readonly log?: string;
-}
 
 export interface CaptureHost {
   readonly host: string;
@@ -127,21 +110,27 @@ export interface ReleaseTarget {
    */
   readonly watchSessions: WatchSessions;
   readonly capture: CaptureHost;
-  readonly legacy: LegacyStack;
   /** `host:port/database`; every write's `--confirm-target`. */
   readonly confirmTarget: string;
   readonly bootEnv: Readonly<Record<string, string>>;
 }
 
-const TOP_KEYS = ["release", "rmEnv", "host", "checkout", "home", "instance", "publicOrigin", "watchMinAttendance", "watchHours", "watchSessions", "capture", "legacy", "confirmTarget", "bootEnv", "$comment"];
+const TOP_KEYS = ["release", "rmEnv", "host", "checkout", "home", "instance", "publicOrigin", "watchMinAttendance", "watchHours", "watchSessions", "capture", "confirmTarget", "bootEnv", "$comment"];
 const CAPTURE_KEYS = ["host", "home", "checkout"];
-const LEGACY_KEYS = ["checkout", "tmuxSession", "composeProject", "composeFiles", "startedBy", "version", "commit", "log"];
+/**
+ * Keys a target once carried and may never carry again: each is a past-upgrade
+ * fact the go file or the host's own state names instead (issue 1272).
+ */
+export const PAST_FACT_KEYS: Readonly<Record<string, string>> = Object.freeze({
+  commit: "the release commit comes from the go file's commit: line",
+  tag: "the rc tag comes from the go file's tag: line",
+  legacy: "the running stack is what the host's smoke state names; R6.1 stops it with bun run smoke:down",
+  tmuxSession: "no release step drives or stops a tmux session",
+});
 
-const SHA_RE = /^[0-9a-f]{40}$/;
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
 const HOST_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const ABS_PATH_RE = /^\/[A-Za-z0-9._\/-]*$/;
-const TMUX_RE = /^[A-Za-z0-9_.-]+$/;
 
 /** One problem per line; empty means the file is valid. */
 export function validateTarget(name: string, raw: unknown): { target: ReleaseTarget } | { errors: string[] } {
@@ -161,10 +150,10 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
     return v;
   };
 
-  unknown(raw, TOP_KEYS.concat("commit", "tag"), name);
+  unknown(raw, TOP_KEYS.concat(Object.keys(PAST_FACT_KEYS)), name);
   const release = str(raw, "release", name, /^v\d+\.\d+\.\d+(-rc\.\d+)?$/);
-  for (const key of ["commit", "tag"]) {
-    if (key in raw) errors.push(`${name}: "${key}" is not a target key; the release commit comes from the go file's commit: line`);
+  for (const [key, why] of Object.entries(PAST_FACT_KEYS)) {
+    if (key in raw) errors.push(`${name}: "${key}" is not a target key; ${why}`);
   }
   const rmEnv = str(raw, "rmEnv", name);
   if (rmEnv !== undefined && rmEnv !== "stage" && rmEnv !== "prod") errors.push(`${name}.rmEnv must be stage or prod`);
@@ -190,28 +179,6 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
     if (h && ch && cc) {
       capture = { host: h, home: ch, checkout: cc };
       errors.push(...captureCheckoutProblems(name, capture, host, checkout));
-    }
-  }
-
-  let legacy: LegacyStack | undefined;
-  if (!isObj(raw.legacy)) errors.push(`${name}.legacy must be an object`);
-  else {
-    const l = raw.legacy;
-    unknown(l, LEGACY_KEYS, `${name}.legacy`);
-    const lc = str(l, "checkout", `${name}.legacy`, ABS_PATH_RE);
-    const ts = str(l, "tmuxSession", `${name}.legacy`, TMUX_RE);
-    const cp = str(l, "composeProject", `${name}.legacy`, /^[a-z0-9][a-z0-9_-]*$/);
-    const sb = str(l, "startedBy", `${name}.legacy`);
-    const lv = str(l, "version", `${name}.legacy`, /^v\d+\.\d+\.\d+$/);
-    const lcommit = str(l, "commit", `${name}.legacy`, SHA_RE, true);
-    const llog = str(l, "log", `${name}.legacy`, ABS_PATH_RE, true);
-    const files = l.composeFiles ?? [];
-    if (!Array.isArray(files) || files.some((f) => typeof f !== "string" || !/^[A-Za-z0-9._\/-]+$/.test(f) || f.startsWith("/"))) {
-      errors.push(`${name}.legacy.composeFiles must be a list of paths relative to the old checkout`);
-    }
-    if (lc && checkout && lc === checkout) errors.push(`${name}: the legacy checkout cannot be the release checkout`);
-    if (lc && ts && cp && sb && lv && Array.isArray(files)) {
-      legacy = { checkout: lc, tmuxSession: ts, composeProject: cp, composeFiles: files as string[], startedBy: sb, version: lv, ...(lcommit ? { commit: lcommit } : {}), ...(llog ? { log: llog } : {}) };
     }
   }
 
@@ -257,7 +224,7 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
     target: {
       name, release: release!,
       rmEnv: rmEnv as "stage" | "prod", host: host!, checkout: checkout!, home: home!, instance: instance!,
-      publicOrigin: publicOrigin!, watchMinAttendance, watchHours, watchSessions, capture: capture!, legacy: legacy!, confirmTarget: confirmTarget!, bootEnv,
+      publicOrigin: publicOrigin!, watchMinAttendance, watchHours, watchSessions, capture: capture!, confirmTarget: confirmTarget!, bootEnv,
     },
   };
 }

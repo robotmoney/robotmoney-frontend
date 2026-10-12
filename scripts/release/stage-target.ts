@@ -12,23 +12,27 @@
 // Every secret is generated and written on the host: no password crosses ssh,
 // appears in a process argument or reaches this terminal.
 //
-// What `up` builds, in order:
-//   1. the two checkouts: legacy v0.5.4 at production's commit, v0.6.0 at the
-//      release commit;
+// What `up` builds, in order. It holds no past-upgrade fact (issue 1272):
+// the tag and commit come from production's /api/version, the ledger from the
+// dump itself, and the running checkout is whatever production runs.
+//   1. the running checkout, at the tag production reports (else its commit);
 //   2. `$HOME` for the target, with a self-signed TLS certificate;
 //   3. a long-lived Postgres 18 container over TLS on a fixed port, its data in
 //      a named volume;
 //   4. DigitalOcean's role shape from the dump's own globals, with generated
-//      passwords (rm_owner NOLOGIN with a password nobody keeps, doadmin
-//      CREATEROLE with a password held in memory for the checks, then dropped);
-//   5. production's owners and grants, from a replay of the 76 ledger files in
-//      a scratch database (the capture carries none);
-//   6. the restored dump, with those owners and grants, checked against the
-//      pre-cutover shape (ledger 76, no deployment_identity);
-//   7. `~/.env` with production's key names only (no rm_owner line, no
-//      doadmin: production's pre-state), and the legacy checkout `.env` with
-//      production's key names;
-//   8. the legacy stack and its driver in tmux, started as production's are.
+//      passwords (rm_owner with a password nobody keeps, doadmin CREATEROLE
+//      with a password held in memory for the checks, then dropped);
+//   5. the restored dump, then its own ledger read back in applied order;
+//   6. production's owners and grants, from a replay of exactly that ledger
+//      in a scratch database (the capture carries none), copied onto the
+//      restored copy and compared line by line; the identity row enrolled
+//      rehearsal;
+//   7. `~/.env` with production's key names plus the rm_owner line;
+//   8. the stack, booted the production way from the running checkout:
+//      credential file, env rewrite, service tokens, boot, the in-house
+//      members rebound onto the stage keys, boot again. Docker keeps it
+//      running, as on production. The release checkout is not made here: R1.1
+//      clones it.
 //
 // doadmin is stored in no file (D61, owner 2026-10-08). After `up`, the stage
 // sequence is production's: `up`, then
@@ -41,20 +45,18 @@
 // database; production has no such command (its doadmin is typed by the admin).
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 
 import { parseEnvFile } from "../lib/env-role.ts";
 import { POSTGRES_IMAGE } from "../lib/postgres-image.ts";
 import { resolveBackupFiles, restorePipelineArgv, SHM_FLAGS } from "../lib/restore-container.ts";
 import { instanceStackProject } from "../lib/smoke-state.ts";
-import { SUPPORTED_RELEASES } from "../../backend/src/db/supported-releases.ts";
-import { IDENTITY_MIGRATION } from "./precondition.ts";
+import { repoMigrations } from "./ledger.ts";
 import { CAPTURE_CHECKOUT } from "./target.ts";
 import {
   ACL_EXPORT_SQL,
   ACL_FINGERPRINT_SQL,
   bindDatabase,
-  composeLegacyCheckoutEnv,
   composeStageHomeEnv,
   DOADMIN_ADMIN_QUERY,
   doadminPasswordSql,
@@ -66,18 +68,15 @@ import {
   grantsReconcileScript,
   GENERATED_PASSWORD_ROLES,
   globalsToRoleSql,
-  LEGACY_LEDGER_TABLE_SQL,
-  legacyLaunchScript,
-  legacyMigrationScript,
+  LEDGER_TABLE_SQL,
   parseKeyValues,
+  parseRunningVersion,
   pgHbaConf,
-  PRECUTOVER_STATE_QUERY,
-  precutoverProblems,
   PROD_HOME_ENV_KEYS,
-  PROD_LEGACY_CHECKOUT_ENV_KEYS,
-  PROVISION_TAXONOMY_FILE,
-  provisionTaxonomyScript,
   removalRefusal,
+  replayMigrationScript,
+  RESTORED_STATE_QUERY,
+  restoredProblems,
   ROLE_SHAPE_QUERY,
   roleShapeProblems,
   rolePasswordSql,
@@ -85,8 +84,11 @@ import {
   STAGE_TARGET as T,
   stageTargetDirs,
   tlsSettingsSql,
+  upPlan,
   type GeneratedPasswordRole,
+  type RunningVersion,
   type StageHomeEnv,
+  type UpPlan,
 } from "./stage-target-lib.ts";
 
 const decoder = new TextDecoder();
@@ -179,39 +181,24 @@ function dockerNames(kind: "container" | "volume", filter: string): string[] {
   return run(argv).stdout.split("\n").map((s) => s.trim()).filter(Boolean);
 }
 
-function tmuxHasSession(): boolean {
-  return run(["tmux", "has-session", "-t", `=${T.driverSession}`]).code === 0;
-}
-
-/** The compose projects this target's stacks may run under: the legacy one and v0.6's for the instance. */
-function targetProjects(): string[] {
-  return [...new Set([T.legacyProject, instanceStackProject(T.instance, {})])];
+/** The compose project the instance's stack runs under. */
+function targetProject(): string {
+  return instanceStackProject(T.instance, {});
 }
 
 function projectContainers(): string[] {
   const names = new Set<string>();
-  for (const p of targetProjects()) {
-    for (const n of dockerNames("container", `label=com.docker.compose.project=${p}`)) names.add(n);
-    for (const n of dockerNames("container", `label=robotmoney.smoke.project=${p}`)) names.add(n);
-  }
+  const p = targetProject();
+  for (const n of dockerNames("container", `label=com.docker.compose.project=${p}`)) names.add(n);
+  for (const n of dockerNames("container", `label=robotmoney.smoke.project=${p}`)) names.add(n);
   return [...names];
-}
-
-/** Retired legacy checkouts a previous run's S8.1 left beside the legacy checkout (`<legacy>.<version>-retired`). */
-function retiredLegacyCheckouts(): string[] {
-  const parent = dirname(T.legacyCheckout);
-  const prefix = `${basename(T.legacyCheckout)}.`;
-  let names: string[] = [];
-  try { names = readdirSync(parent); } catch { return []; }
-  return names.filter((n) => n.startsWith(prefix) && /^v\d+\.\d+\.\d+-retired$/.test(n.slice(prefix.length))).map((n) => join(parent, n));
 }
 
 function existingPieces(): string[] {
   const pieces: string[] = [];
   if (dockerNames("container", `name=^${T.pgContainer}$`).length) pieces.push(`container ${T.pgContainer}`);
   if (dockerNames("volume", `name=^${T.pgVolume}$`).length) pieces.push(`volume ${T.pgVolume}`);
-  for (const dir of stageTargetDirs(retiredLegacyCheckouts())) if (existsSync(dir)) pieces.push(`directory ${dir}`);
-  if (tmuxHasSession()) pieces.push(`tmux session ${T.driverSession}`);
+  for (const dir of stageTargetDirs()) if (existsSync(dir)) pieces.push(`directory ${dir}`);
   for (const c of projectContainers()) pieces.push(`container ${c}`);
   return pieces;
 }
@@ -225,8 +212,9 @@ function portHolder(port: number): string | null {
 // up
 // ---------------------------------------------------------------------------
 
-function cloneAt(dir: string, commit: string): void {
-  log(`cloning ${commit.slice(0, 8)} into ${dir}`);
+/** Clone the repository into `dir` and detach it at `ref`: the tag production reports, else its commit. */
+function cloneAt(dir: string, ref: string): void {
+  log(`cloning ${ref} into ${dir}`);
   const cloned = run(["git", "clone", "--quiet", "--reference-if-able", T.referenceClone, "--dissociate", T.repoUrl, dir]);
   if (cloned.code !== 0) {
     log(`clone from ${T.repoUrl} failed (${cloned.stderr.trim().split("\n").pop()}); cloning from ${T.referenceClone} instead`);
@@ -234,9 +222,22 @@ function cloneAt(dir: string, commit: string): void {
     must(["git", "clone", "--quiet", "--no-hardlinks", T.referenceClone, dir], "git clone");
     must(["git", "-C", dir, "remote", "set-url", "origin", T.repoUrl], "git remote set-url");
   }
-  const has = run(["git", "-C", dir, "cat-file", "-e", `${commit}^{commit}`]);
-  if (has.code !== 0) must(["git", "-C", dir, "fetch", "--quiet", "origin"], "git fetch");
-  must(["git", "-C", dir, "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", commit], `git checkout ${commit}`);
+  must(["git", "-C", dir, "fetch", "--quiet", "--tags", "origin"], "git fetch --tags");
+  must(["git", "-C", dir, "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", ref], `git checkout ${ref}`);
+}
+
+/** What production runs, from its /api/version: the commit the dump's world is at, and the tag the boot carried. */
+async function readRunningVersion(): Promise<RunningVersion> {
+  const url = `${T.productionOrigin}/api/version`;
+  let text: string | null = null;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000), headers: { "cache-control": "no-cache" } });
+    text = res.ok ? await res.text() : null;
+  } catch { text = null; }
+  const v = parseRunningVersion(text);
+  if ("error" in v) throw new Refusal(`${url}: ${v.error}`);
+  log(`production runs ${v.commit.slice(0, 8)}${v.tag ? ` (${v.tag})` : " (no tag)"} per ${url}`);
+  return v;
 }
 
 async function bunInstall(dir: string, cwds: string[]): Promise<void> {
@@ -324,34 +325,21 @@ function applyRoles(globals: string, passwords: Record<GeneratedPasswordRole, st
 }
 
 /**
- * Replay production's ledger in a scratch database, as the legacy runner did,
- * and return the statements that give the restored copy the same owners and
- * grants, with the reference fingerprint.
+ * Replay the dump's own ledger (the plan's list, in the dump's order) from
+ * the running checkout in a scratch database, as the migrate applied it, then
+ * the grants reconcile, and return the statements that give the restored copy
+ * the same owners and grants, with the reference fingerprint.
  */
-function referenceGrants(baseline: readonly string[]): { statements: string; fingerprint: string } {
-  const dir = join(T.legacyCheckout, "backend", "migrations");
-  const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
-  const missing = baseline.filter((f) => !files.includes(f));
-  const extra = files.filter((f) => !baseline.includes(f));
-  if (missing.length || extra.length) {
-    throw new Error(`the legacy checkout's migrations are not production's ledger: missing ${missing.join(",") || "none"}, extra ${extra.join(",") || "none"}`);
-  }
-  // Production's order: the v0.5 files, the taxonomy provisioning, then the
-  // v0.6.0 cutover (0081 first, the rest in filename order, then grants.sql).
-  const first = new Set(SUPPORTED_RELEASES[0]!.migrations);
-  const v05 = files.filter((f) => first.has(f));
-  const cutover = [IDENTITY_MIGRATION, ...files.filter((f) => !first.has(f) && f !== IDENTITY_MIGRATION)];
-  log(`replaying production's ${files.length} ledger files as doadmin in ${T.referenceDatabase} (${v05.length} before the v0.6.0 cutover, ${cutover.length} at it)`);
+function referenceGrants(plan: UpPlan): { statements: string; fingerprint: string } {
+  const dir = join(T.runningCheckout, "backend", "migrations");
+  log(`replaying the dump's ${plan.replay.length} ledger files as doadmin in ${T.referenceDatabase}, in the dump's order`);
   psql(`DROP DATABASE IF EXISTS ${T.referenceDatabase};`);
   psql(`CREATE DATABASE ${T.referenceDatabase} OWNER doadmin;`);
-  psql(LEGACY_LEDGER_TABLE_SQL, { user: "doadmin", db: T.referenceDatabase });
-  const apply = (f: string) =>
-    psql(legacyMigrationScript(f, readFileSync(join(dir, f), "utf8")), { user: "doadmin", db: T.referenceDatabase, single: true });
-  for (const f of v05) apply(f);
-  log("applying the out-of-band taxonomy provisioning (0053 alone, as provision-db-role-taxonomy.sh did)");
-  psql(provisionTaxonomyScript(readFileSync(join(dir, PROVISION_TAXONOMY_FILE), "utf8")), { user: "doadmin", db: T.referenceDatabase, single: true });
-  for (const f of cutover) apply(f);
-  psql(grantsReconcileScript(readFileSync(join(T.legacyCheckout, GRANTS_RECONCILE_FILE), "utf8")), { user: "doadmin", db: T.referenceDatabase, single: true });
+  psql(LEDGER_TABLE_SQL, { user: "doadmin", db: T.referenceDatabase });
+  for (const f of plan.replay) {
+    psql(replayMigrationScript(f, readFileSync(join(dir, f), "utf8")), { user: "doadmin", db: T.referenceDatabase, single: true });
+  }
+  psql(grantsReconcileScript(readFileSync(join(T.runningCheckout, GRANTS_RECONCILE_FILE), "utf8")), { user: "doadmin", db: T.referenceDatabase, single: true });
   const statements = psql(ACL_EXPORT_SQL, { db: T.referenceDatabase, tuples: true });
   const fingerprint = psql(ACL_FINGERPRINT_SQL, { db: T.referenceDatabase, tuples: true });
   psql(`DROP DATABASE ${T.referenceDatabase};`);
@@ -359,9 +347,9 @@ function referenceGrants(baseline: readonly string[]): { statements: string; fin
   return { statements, fingerprint };
 }
 
-function readBaseline(): string[] {
-  // Production runs the legacy commit: its ledger is that checkout's migrations folder.
-  return readdirSync(join(T.legacyCheckout, "backend", "migrations")).filter((f) => f.endsWith(".sql")).sort();
+/** The restored database's ledger, in the order it was applied: the dump's own list, never a constant. */
+function readRestoredLedger(): string[] {
+  return psql(`SELECT name FROM schema_migrations ORDER BY applied_at, name COLLATE "C";`, { tuples: true }).split("\n").filter(Boolean);
 }
 
 function writeEnvFiles(passwords: Record<GeneratedPasswordRole, string>): StageHomeEnv {
@@ -390,10 +378,10 @@ function writeEnvFiles(passwords: Record<GeneratedPasswordRole, string>): StageH
   return values;
 }
 
-function checkDatabase(passwords: Record<GeneratedPasswordRole, string>, baseline: readonly string[]): string[] {
-  const state = parseKeyValues(psql(PRECUTOVER_STATE_QUERY, { tuples: true }));
-  const ledger = psql("SELECT name FROM schema_migrations ORDER BY name COLLATE \"C\";", { tuples: true }).split("\n").filter(Boolean);
-  const problems = precutoverProblems(state, ledger, baseline);
+function checkDatabase(passwords: Record<GeneratedPasswordRole, string>, replayed: readonly string[]): string[] {
+  const state = parseKeyValues(psql(RESTORED_STATE_QUERY, { tuples: true }));
+  const ledger = readRestoredLedger();
+  const problems = restoredProblems(state, ledger, replayed);
   problems.push(...roleShapeProblems(psql(ROLE_SHAPE_QUERY, { tuples: true }), psql(DOADMIN_ADMIN_QUERY, { tuples: true })));
   for (const role of ["doadmin", "rm_app", "rm_worker", "rm_readonly"] as const) {
     const r = hostPsql(role, passwords[role], "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid();");
@@ -411,7 +399,13 @@ function checkDatabase(passwords: Record<GeneratedPasswordRole, string>, baselin
   return problems;
 }
 
-async function buildDatabase(backup: ReturnType<typeof readDumpPreflight>, baseline: readonly string[]): Promise<Record<GeneratedPasswordRole, string>> {
+/**
+ * The database: roles from the globals, the restored dump, its own ledger
+ * read back, the running checkout cloned at production's ref (so it holds
+ * every file that ledger names), the plan, the reference replay and its
+ * owners and grants copied onto the restored copy.
+ */
+async function buildDatabase(backup: ReturnType<typeof readDumpPreflight>, running: RunningVersion): Promise<{ passwords: Record<GeneratedPasswordRole, string>; plan: UpPlan }> {
   startPostgres();
   await waitForPostgres();
   enableTls();
@@ -419,9 +413,6 @@ async function buildDatabase(backup: ReturnType<typeof readDumpPreflight>, basel
   const globals = decryptGlobals(backup);
   applyRoles(globals, passwords);
   psql(`ALTER DATABASE ${T.database} OWNER TO doadmin;`);
-  const reference = referenceGrants(baseline);
-  // The replay ran 0053, whose ALTER ROLE lines are cluster-wide: put production's attribute lines back.
-  applyRoles(globals, passwords);
   log(`restoring ${backup.dumpEnc} into ${T.database} (the long step)`);
   const started = Date.now();
   const pipeline = Bun.spawn(restorePipelineArgv(backup.passphraseFile, backup.dumpEnc, T.pgContainer, T.superuser, T.database), {
@@ -430,6 +421,13 @@ async function buildDatabase(backup: ReturnType<typeof readDumpPreflight>, basel
   const restoreExit = await pipeline.exited;
   if (restoreExit !== 0) throw new Error(`pg_restore failed (exit ${restoreExit})`);
   log(`restore done in ${Math.round((Date.now() - started) / 1000)} s`);
+  const ledger = readRestoredLedger();
+  log(`the dump's ledger: ${ledger.length} rows, newest ${ledger.at(-1)}`);
+  const planned = upPlan({ ledger, running }, repoMigrations(join(T.runningCheckout, "backend", "migrations")));
+  if ("errors" in planned) throw new Error(`the dump cannot be replayed from the running checkout: ${planned.errors.join("; ")}`);
+  const reference = referenceGrants(planned);
+  // The replay ran 0053, whose ALTER ROLE lines are cluster-wide: put production's attribute lines back.
+  applyRoles(globals, passwords);
   psql(bindDatabase(reference.statements, T.database), { single: true });
   const restored = psql(ACL_FINGERPRINT_SQL, { tuples: true });
   const diff = fingerprintDiff(reference.fingerprint, restored);
@@ -443,16 +441,18 @@ async function buildDatabase(backup: ReturnType<typeof readDumpPreflight>, basel
   if (enrolled.identity_kind !== "rehearsal") throw new Error(`the identity row reads ${enrolled.identity_kind} after the enrollment`);
   log("deployment_identity enrolled rehearsal");
   psql("ANALYZE;");
-  return passwords;
+  return { passwords, plan: planned };
 }
 
 /**
- * Bring the v0.6.0 stack up the way production's v0.6.0 cutover did, from the
- * legacy checkout under `env -i`: credential.json, the ~/.env rewrite, the
- * service tokens, boot, the rebind of the in-house members, boot again.
- * Docker keeps the stack running, as on production.
+ * Bring the stack up the production way, from the running checkout under
+ * `env -i`: the credential file for the in-house members (fresh stage keys),
+ * the ~/.env rewrite, the service tokens, boot, the rebind of the in-house
+ * members onto those keys (the dump holds production's), boot again. Docker
+ * keeps the stack running, as on production. This builds the stage world; it
+ * is no release step.
  */
-async function startV060Stack(): Promise<void> {
+async function startStack(): Promise<void> {
   const receipts = join(T.home, ".local", "state", "robotmoney-release", "stage-target-up");
   mkdirSync(receipts, { recursive: true });
   const confirm = `${T.pgBindHost}:${T.pgPort}/${T.database}`;
@@ -465,60 +465,30 @@ async function startV060Stack(): Promise<void> {
     ["rebind", ["bun", "scripts/prod-init.ts", "rebind-members", "--instance", T.instance, "--confirm-target", confirm]],
     ["boot 2", ["bun", "run", "smoke", "--static-port", "--instance", T.instance]],
   ];
-  for (const [name, argv] of steps) await stream([...env, ...argv], `v0.6.0 stack: ${name}`, { cwd: T.legacyCheckout });
+  for (const [name, argv] of steps) await stream([...env, ...argv], `stack: ${name}`, { cwd: T.runningCheckout });
 }
 
-function startDriver(): void {
-  const script = join(T.home, "legacy-launch.sh");
-  writeFileSync(script, legacyLaunchScript(T), { mode: 0o700 });
-  log(`starting tmux session ${T.driverSession}: bash ${script}`);
-  must([
-    "tmux", "new-session", "-d", "-s", T.driverSession, "-c", T.legacyCheckout, "-e", `HOME=${T.home}`,
-    `bash ${shellQuote(script)}; exec bash`,
-  ], "tmux new-session");
-}
-
-/** The legacy driver: production's runs as `bun scripts/smoke.ts --smoke --static-port --db external --no-tui`. */
-function driverPid(): string | null {
-  const r = run(["pgrep", "-u", T.user, "-f", "^bun scripts/smoke.ts --smoke --static-port --db external"]);
-  for (const pid of r.stdout.split("\n").filter(Boolean)) {
-    const cwd = run(["readlink", `/proc/${pid}/cwd`]).stdout.trim();
-    if (cwd === T.legacyCheckout) return pid;
-  }
-  return null;
-}
-
-/** After the site answers, the driver must still be running, as production's is. */
-async function driverStaysUp(): Promise<boolean> {
-  for (let i = 0; i < 9; i++) {
-    await Bun.sleep(10_000);
-    if (!driverPid()) {
-      const tail = readFileSync(join(T.home, T.driverLog), "utf8").split("\n").filter((l) => /FAIL|FATAL|exited with code/.test(l)).slice(-5);
-      for (const l of tail) log(`  driver: ${l.slice(0, 240)}`);
-      log("the legacy driver exited after the boot; production's keeps running");
-      return false;
-    }
-  }
-  log(`the legacy driver is running (pid ${driverPid()}) 90 s after the site answered`);
-  return true;
-}
-
-async function waitForLegacySite(): Promise<boolean> {
+async function waitForSite(): Promise<boolean> {
   const deadline = Date.now() + 45 * 60_000;
   let lastNote = 0;
   while (Date.now() < deadline) {
-    const r = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", `http://127.0.0.1:${T.legacyWebPort}/`]);
+    const r = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", `http://127.0.0.1:${T.webPort}/`]);
     if (r.stdout.trim() === "200") {
-      log(`legacy site answers 200 on :${T.legacyWebPort}`);
+      log(`the site answers 200 on :${T.webPort}`);
       return true;
     }
     if (Date.now() - lastNote > 120_000) {
       lastNote = Date.now();
-      log(`waiting for :${T.legacyWebPort} (${r.stdout.trim() || "no answer"})`);
+      log(`waiting for :${T.webPort} (${r.stdout.trim() || "no answer"})`);
     }
     await Bun.sleep(10_000);
   }
   return false;
+}
+
+/** What the booted stack reports, for the record and the status. */
+function servedVersion(): string {
+  return run(["curl", "-s", "--max-time", "5", `http://127.0.0.1:${T.webPort}/api/version`]).stdout.trim() || "(no answer)";
 }
 
 async function remoteUp(args: string[]): Promise<number> {
@@ -527,6 +497,7 @@ async function remoteUp(args: string[]): Promise<number> {
   if (!dumpDir) throw new Refusal("up needs --dump <dir on the stage host>");
   const replace = args.includes("--replace");
   const backup = readDumpPreflight(dumpDir);
+  const running = await readRunningVersion();
 
   const existing = existingPieces();
   if (existing.length) {
@@ -534,44 +505,42 @@ async function remoteUp(args: string[]): Promise<number> {
     log(`--replace: taking the existing target down first`);
     await remoteDown();
   }
-  for (const port of [T.pgPort, T.legacyWebPort]) {
+  for (const port of [T.pgPort, T.webPort]) {
     const holder = portHolder(port);
     if (holder) throw new Refusal(`port ${port} is held: ${holder}`);
   }
 
   mkdirSync(T.home, { recursive: true, mode: 0o700 });
   chmodSync(T.home, 0o700);
-  cloneAt(T.legacyCheckout, T.legacyCommit);
-  cloneAt(T.checkout, T.checkoutCommit);
-  const baseline = readBaseline();
-  log(`production baseline: ${baseline.length} ledger files`);
-  await bunInstall(T.legacyCheckout, [".", "backend"]);
-  await bunInstall(T.checkout, [".", "backend"]);
+  cloneAt(T.runningCheckout, running.tag ?? running.commit);
+  const head = run(["git", "-C", T.runningCheckout, "rev-parse", "HEAD"]).stdout.trim();
+  if (head !== running.commit) throw new Error(`the running checkout is at ${head}, but production's ${running.tag ?? "commit"} is ${running.commit}`);
+  await bunInstall(T.runningCheckout, [".", "backend"]);
 
-  const passwords = await buildDatabase(backup, baseline);
-  const problems = checkDatabase(passwords, baseline);
+  const { passwords, plan } = await buildDatabase(backup, running);
+  const problems = checkDatabase(passwords, plan.replay);
   if (problems.length) {
     for (const p of problems) log(`  PROBLEM: ${p}`);
-    throw new Error(`the stage database does not match production's pre-cutover shape (${problems.length} problems)`);
+    throw new Error(`the stage database does not match the dump's shape (${problems.length} problems)`);
   }
-  log("the stage database matches production's pre-cutover shape");
+  log("the stage database matches the dump's shape");
   writeEnvFiles(passwords);
   writeFileSync(join(T.home, "stage-target.json"), `${JSON.stringify({
     builtAt: new Date().toISOString(),
     dump: dumpDir,
     stamp: backup.stamp,
-    legacyCommit: T.legacyCommit,
-    checkoutCommit: T.checkoutCommit,
+    running: { commit: running.commit, tag: running.tag, ref: plan.ref },
+    ledger: plan.replay.length,
     pg: `${T.pgContainer} ${POSTGRES_IMAGE} ${T.pgBindHost}:${T.pgPort}/${T.database}`,
   }, null, 2)}\n`, { mode: 0o600 });
 
-  await startV060Stack();
-  const up = await waitForLegacySite();
-  const after = checkDatabase(passwords, baseline);
-  for (const p of after) log(`  PROBLEM after the legacy boot: ${p}`);
+  await startStack();
+  const up = await waitForSite();
+  const after = checkDatabase(passwords, plan.replay);
+  for (const p of after) log(`  PROBLEM after the boot: ${p}`);
   await remoteStatus();
   if (!up) {
-    log(`the v0.6.0 site did not answer on :${T.legacyWebPort}`);
+    log(`the site did not answer on :${T.webPort}`);
     return 1;
   }
   return after.length ? 1 : 0;
@@ -583,33 +552,24 @@ async function remoteUp(args: string[]): Promise<number> {
 
 /** `down` removes only its own folders, never the release runner's capture checkout. */
 function assertOwnPath(dir: string): void {
-  const refusal = removalRefusal(dir, retiredLegacyCheckouts(), [CAPTURE_CHECKOUT.checkout]);
+  const refusal = removalRefusal(dir, [CAPTURE_CHECKOUT.checkout]);
   if (refusal !== undefined) throw new Error(refusal);
 }
 
 async function remoteDown(): Promise<number> {
-  if (tmuxHasSession()) {
-    log(`stopping the driver in tmux session ${T.driverSession}`);
-    run(["tmux", "send-keys", "-t", `=${T.driverSession}`, "C-c"]);
-    for (let i = 0; i < 30; i++) {
-      const pane = run(["tmux", "list-panes", "-t", `=${T.driverSession}`, "-F", "#{pane_current_command}"]).stdout.trim();
-      if (pane === "bash") break;
-      await Bun.sleep(1000);
-    }
-    run(["tmux", "kill-session", "-t", `=${T.driverSession}`]);
-  }
-  // The v0.6 stack, if a rehearsal booted one, by its own tool and state.
-  const v06State = join(T.home, ".local", "state", "robotmoney-smoke", T.instance);
-  if (existsSync(v06State) && existsSync(join(T.checkout, "package.json"))) {
-    log(`bun smoke:down --instance ${T.instance}`);
-    run(["bun", "smoke:down", "--instance", T.instance], { cwd: T.checkout, env: { HOME: T.home, RM_ENV: "stage" } });
+  // The stack, by its own tool and state, from whichever checkout still holds the tool.
+  const state = join(T.home, ".local", "state", "robotmoney-smoke", T.instance);
+  const tool = [T.runningCheckout, T.checkout].find((d) => existsSync(join(d, "package.json")));
+  if (existsSync(state) && tool !== undefined) {
+    log(`bun smoke:down --instance ${T.instance} (from ${tool})`);
+    run(["bun", "smoke:down", "--instance", T.instance], { cwd: tool, env: { HOME: T.home, RM_ENV: "stage" } });
   }
   const containers = projectContainers();
   if (containers.length) {
     log(`removing ${containers.length} stack container(s)`);
     run(["docker", "rm", "-f", "-v", ...containers]);
   }
-  for (const p of targetProjects()) {
+  for (const p of [targetProject()]) {
     const nets = run(["docker", "network", "ls", "-q", "--filter", `label=com.docker.compose.project=${p}`]).stdout.split("\n").filter(Boolean);
     if (nets.length) run(["docker", "network", "rm", ...nets]);
     const vols = [
@@ -629,7 +589,7 @@ async function remoteDown(): Promise<number> {
     run(["docker", "volume", "rm", T.pgVolume]);
   }
   // Never the capture checkout (CAPTURE_CHECKOUT): the release runner owns it.
-  for (const dir of [T.legacyCheckout, ...retiredLegacyCheckouts(), T.checkout, T.home]) {
+  for (const dir of [T.runningCheckout, T.checkout, T.home]) {
     assertOwnPath(dir);
     if (existsSync(dir)) {
       log(`removing ${dir}`);
@@ -637,7 +597,7 @@ async function remoteDown(): Promise<number> {
     }
   }
   for (const name of readdirSync(tmpdir())) {
-    if (name.startsWith(`robotmoney-smoke-${T.legacyProject}-secrets-`)) rmSync(join(tmpdir(), name), { recursive: true, force: true });
+    if (name.startsWith(`robotmoney-smoke-${targetProject()}-secrets-`)) rmSync(join(tmpdir(), name), { recursive: true, force: true });
   }
   log("down: nothing of the stage target is left");
   return 0;
@@ -657,7 +617,7 @@ async function remoteStatus(): Promise<number> {
   line("postgres", pg.code === 0 ? `${T.pgContainer} ${pg.stdout.trim()} on ${T.pgBindHost}:${T.pgPort}` : "absent");
   if (pg.code === 0 && pg.stdout.startsWith("running")) {
     try {
-      const s = parseKeyValues(psql(PRECUTOVER_STATE_QUERY, { tuples: true }));
+      const s = parseKeyValues(psql(RESTORED_STATE_QUERY, { tuples: true }));
       line("database", `ledger=${s.ledger} deployment_identity=${s.identity_table} ssl=${s.ssl} server=${s.server_version}`);
       line("roles", `rm_owner login=${s.rm_owner_login}; doadmin super=${s.doadmin_super} createrole=${s.doadmin_createrole}`);
       if (s.identity_table !== "none") {
@@ -677,28 +637,17 @@ async function remoteStatus(): Promise<number> {
     line("~/.env", `${homeEnv} keys: ${keys.join(" ")} (${pre ? "production's key names: role-passwords not yet run" : after ? "production's key names + the rm_owner line role-passwords wrote" : "DIFFERS from production's"})`);
     if (keys.includes("doadmin")) line("", "REFUSE: ~/.env holds a doadmin line; doadmin is stored in no file (D61)");
   } else line("~/.env", "absent");
-  const legacyEnv = join(T.legacyCheckout, ".env");
-  if (existsSync(legacyEnv)) {
-    const keys = envKeyNames(readFileSync(legacyEnv, "utf8"));
-    const same = keys.length === PROD_LEGACY_CHECKOUT_ENV_KEYS.length && PROD_LEGACY_CHECKOUT_ENV_KEYS.every((k) => keys.includes(k));
-    line("legacy checkout .env", `${same ? "production's key names" : "DIFFERS"}: ${keys.join(" ")}`);
-  }
-  for (const [name, dir] of [["legacy checkout", T.legacyCheckout], ["v0.6.0 checkout", T.checkout]] as const) {
+  for (const [name, dir] of [["running checkout", T.runningCheckout], ["release checkout", T.checkout]] as const) {
     const head = existsSync(dir) ? run(["git", "-C", dir, "log", "-1", "--format=%h %s"]).stdout.trim() : "";
-    line(name, head ? `${dir} at ${head.slice(0, 100)}` : "absent");
+    const tag = existsSync(dir) ? run(["git", "-C", dir, "describe", "--tags", "--exact-match"]).stdout.trim() : "";
+    line(name, head ? `${dir} at ${head.slice(0, 100)}${tag ? ` (${tag})` : ""}` : "absent");
   }
-  if (tmuxHasSession()) {
-    const cmd = run(["tmux", "list-panes", "-t", `=${T.driverSession}`, "-F", "#{pane_current_command} in #{pane_current_path}"]).stdout.trim();
-    const pid = driverPid();
-    line("driver", `tmux ${T.driverSession}: ${cmd}; smoke:archive ${pid ? `running (pid ${pid})` : "NOT running"}`);
-    const tail = run(["tmux", "capture-pane", "-p", "-t", T.driverSession]).stdout.split("\n").filter(Boolean).slice(-3);
-    for (const t of tail) line("", t.slice(0, 160));
-  } else line("driver", "no tmux session");
-  const containers = run(["docker", "ps", "-a", "--filter", `label=com.docker.compose.project=${T.legacyProject}`, "--format", "{{.Names}} {{.Status}} {{.Ports}}"]).stdout.trim();
-  line("legacy stack", containers ? "" : "no containers");
+  const containers = run(["docker", "ps", "-a", "--filter", `label=com.docker.compose.project=${targetProject()}`, "--format", "{{.Names}} {{.Status}} {{.Ports}}"]).stdout.trim();
+  line("stack", containers ? `project ${targetProject()}` : "no containers");
   for (const c of containers.split("\n").filter(Boolean)) line("", c);
-  const site = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", `http://127.0.0.1:${T.legacyWebPort}/`]).stdout.trim();
-  line("legacy site", `http://127.0.0.1:${T.legacyWebPort}/ -> ${site || "no answer"}`);
+  const site = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", `http://127.0.0.1:${T.webPort}/`]).stdout.trim();
+  line("site", `http://127.0.0.1:${T.webPort}/ -> ${site || "no answer"}`);
+  line("/api/version", servedVersion().slice(0, 200));
   return 0;
 }
 
