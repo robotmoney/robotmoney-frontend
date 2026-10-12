@@ -28,6 +28,7 @@ bun run release:run --target stage --go ~/go-v0.6.0-stage.txt --only R7.7
 bun run release:run --target prod  --go ~/go-v0.6.0-prod.txt --stage-journal <dir> --run <run-ts>   # after the watch window
 bun run release:run --target prod  --go ~/go-v0.6.0-prod.txt --stage-journal <dir> --after-preflight ~/.local/state/robotmoney-release/prod/preflight-<ts>
 bun run release:run --target stage --abandon <run-ts>   # a run killed mid-step still reads running; mark it failed
+bun run release:run --target prod  --run <run-ts> --accept R7.3a --reason "boot-race line, stack healthy" --issue 1280   # record the owner's acceptance of one failed step
 ```
 
 - The runner prints the full plan first: the target, the commit, the step-list hash and every remote command.
@@ -39,6 +40,7 @@ bun run release:run --target stage --abandon <run-ts>   # a run killed mid-step 
 - `--stage-journal <dir>` is required when the target is `prod`.
 - `--after-preflight <dir>` continues from a green preflight ended within the last 60 minutes, at the same commit and step list. The run takes the preflight's run stamp. R1.1 to R2.5 are its records, so the run starts at R5.rc with one dump, not two. An older or red preflight refuses.
 - `--abandon <run-ts>` marks a run that still reads `running` as failed, step by step, with the time. A run killed mid-step never ends on its own. Until it is abandoned, the preflight's `P.busy` is red.
+- `--accept <step> --reason "<why>" --issue <n>` with `--run <run-ts>` records the owner's acceptance of one failed step. See [accepting a failed step](#accepting-a-failed-step).
 - Every step has a bound (`maxMinutes` in `steps.ts`, 10 by default; the dump 30, the restore proof 20, each boot 15). Past it the runner kills its ssh, records `timed out`, and stops. The remote command may still run to its end, so look at the host before a resume.
 - R1.4 to R1.6 repeat R1.1 to R1.3 on the capture checkout. They run on every target: stage rehearses them as prod runs them. See [the capture checkout convention](#capture-checkout-convention).
 - The journal records `downtimeSeconds`, R6.1's start to R6.9's end. Stage run `20261008T042158Z` measured 149 s. The recovery matrix names the ceiling.
@@ -329,6 +331,30 @@ jobs | model_unavailable:judge model responded 402 | Zen balance empty until the
 - The journal records the file's path, its sha256 and the entries it used.
 - The triage file is not the go. A run resumes with a new triage and the same go.
 
+## Accepting a failed step
+
+A post-release gate reads from the stack's boot, so a rerun of a failed R7.3a reads the
+same line and fails again (issue 1282: v0.6.1 run `20261010T004257Z`, one boot-race line,
+issue 1280, production healthy). Without a record, `--from W1` refuses, and W1, R7.4a and
+W3 never run. The owner's decision is a journal record:
+
+```bash
+bun run release:run --target prod --run <run-ts> --accept R7.3a --reason "<why>" --issue <n>
+```
+
+- It takes no go file and runs nothing on any host. The failed run prints the command.
+- The step's status becomes `accepted`. Its exit, output and receipts stay. `run.json` and
+  `<step>/result.json` record `accepted: { reason, issue, at }`.
+- An accepted step counts as done: `--from <later step>` no longer refuses because of it,
+  `--run <run-ts>` without `--from` continues after it, and the run reads `passed` once
+  every other step is ok, skipped or accepted.
+- It refuses a step that is not `failed` (ok, skipped, running or never run), a step not in
+  the list, a run that still reads `running` (abandon it first), an irreversible step (a
+  failure there is the recovery matrix's, section 8), a missing reason, or an issue that is
+  not a positive integer.
+- SP.8 stays strict: a stage run with an accepted step does not authorize production. The
+  refusal names the step.
+
 ## The journal
 
 The runner journals on the control machine under
@@ -340,8 +366,9 @@ The runner journals on the control machine under
 - `<step>/receipts/` holds the receipts copied back from the host.
 
 The runner stops at the first step whose exit differs from the expected exit, or whose
-required receipt is missing. It prints the resume command. Past an irreversible step it
-also points at the recovery matrix (runbook section 8).
+required receipt is missing. It prints the resume command and, for a reversible step, the
+accept command. Past an irreversible step it also points at the recovery matrix (runbook
+section 8).
 
 ## Secrets
 
