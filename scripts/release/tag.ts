@@ -1,20 +1,23 @@
 #!/usr/bin/env bun
-// scripts/release/tag.ts — release steps R5.rc and W3, run ON THE CONTROL MACHINE.
-// Standing check SW.3 (W3). Policy §3: rc tags, then the final tag on the
-// commit production runs.
+// scripts/release/tag.ts — the rc tag after a passed stage run, and release
+// step W3, run ON THE CONTROL MACHINE. Standing check SW.3 (W3). Policy §3 and
+// D64: the rc is cut on the release branch once stage passes; production runs
+// only by that rc tag; the final tag goes on the commit production runs.
 //
-//   bun scripts/release/tag.ts rc    --release v0.6.0 --commit <sha>
+//   bun scripts/release/tag.ts rc    --release v0.6.0 --commit <stage-passed sha>
 //   bun scripts/release/tag.ts final --release v0.6.0 --commit <sha>
 //
-// rc: after `git fetch --tags origin`, if a `<release>-rc.N` tag already points
-// at the commit, it records that tag and changes nothing. Otherwise it tags
-// the next free N (0 when none exists) and pushes it.
+// rc: after `git fetch --tags origin`, refuses a commit that is not on
+// origin/releases-A.B.x (D64). If a `<release>-rc.N` tag already points at the
+// commit, it records that tag and changes nothing. Otherwise it tags the next
+// free N (0 when none exists) and pushes it. It is no step of the run: the
+// operator runs it after the stage run passes, then writes `tag:` into the
+// production go.
 // final: if `<release>` exists it must point at the commit (anything else
-// refuses); otherwise it tags the commit and pushes it.
-//
-// Both are prod-only steps (`onlyFor: "prod"`): a stage run records them
-// skipped and tags nothing.
+// refuses); otherwise it tags the commit and pushes it. W3 is a prod-only step
+// (`onlyFor: "prod"`): a stage run records it skipped and tags nothing.
 import { spawnSync } from "node:child_process";
+import { originProblems } from "./go.ts";
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 
@@ -60,6 +63,9 @@ function main(): number {
   if (git(["cat-file", "-e", `${commit}^{commit}`]).status !== 0) { console.error(`[tag] ${commit} is not a commit here`); return 1; }
 
   if (mode === "rc") {
+    const branches = git(["branch", "-r", "--contains", commit]);
+    const origin = branches.status === 0 ? originProblems(release, commit, branches.stdout) : [`git branch -r --contains ${commit} failed: ${branches.stderr.trim()}`];
+    if (origin.length > 0) { console.error(`[tag] refusing: ${origin.join("; ")}`); return 1; }
     const at = rcTagsAt(release, lines(git(["tag", "--points-at", commit]).stdout));
     if (at.length > 0) { console.log(`[tag] ${at.join(", ")} already points at ${commit}; nothing to do`); return 0; }
     return createAndPush(nextRcTag(release, lines(git(["tag", "--list", `${release}-rc.*`]).stdout)), commit);

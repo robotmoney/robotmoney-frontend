@@ -8,7 +8,10 @@
 //   - D61 rule 2: the step list is one list, and its hash is the same for
 //     stage and prod; the rendered commands differ only by target values;
 //   - D61 rule 1: the go file must name this release and target, and its
-//     commit is the one source of every {commit};
+//     ref is the one source of every {commit}: a stage go names a commit, a
+//     production go names the rc tag, resolved on the control machine (D64);
+//   - D64: the commit must be on origin/releases-A.B.x, in the preflight and
+//     in the live run; the rc is no step;
 //   - SP.8: prod refuses without a passed stage journal of the same step-list
 //     hash at the same commit;
 //   - resume: a failed run prints the resume command, and `--from` runs that
@@ -21,13 +24,13 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { validateGo } from "../../release/go.ts";
+import { originProblems, releaseBranch, validateGo } from "../../release/go.ts";
 import { checkResume, checkStageJournal, runStatus, selectSteps, type RunJournal } from "../../release/journal.ts";
 import { lineScrubber, scrubSecrets, forbiddenReceiptPath } from "../../release/scrub.ts";
-import { REMOTE_PATH, RELEASE_REPO_URL, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
+import { READY_PENDING, REMOTE_PATH, RELEASE_REPO_URL, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
 import { CAPTURE_CHECKOUT, CONFIRM_TARGET_PLACEHOLDER, loadTarget, validateTarget } from "../../release/target.ts";
 import { STAGE_TARGET } from "../../release/stage-target-lib.ts";
-import { parseArgs, receiptPathsInOutput, runRelease, type RunnerDeps } from "../../release/run.ts";
+import { parseArgs, receiptPathsInOutput, resolveGo, runRelease, type RunnerDeps } from "../../release/run.ts";
 import { checkAfterPreflight, ciProblems, laneOf, preflightOrder, preflightSteps, REQUIRED_CI, type PreflightReport } from "../../release/preflight.ts";
 import { TIMED_OUT } from "../../release/step-exec.ts";
 import { downtimeSeconds, skipReason } from "../../release/run.ts";
@@ -50,6 +53,8 @@ const targetsDir = join(repoRoot, "scripts", "release", "targets");
 const RELEASE = loadTarget(join(targetsDir, "prod.json")).release;
 const SHA = "a502de30068e0c1cc2e232a76098364e0b709033";
 const OTHER_SHA = "0".repeat(40);
+/** The rc tag a production go names (D64); the fake control machine resolves it to SHA. */
+const TAG = `${RELEASE}-rc.0`;
 
 // preflight.ts loads the backend config at import, so its check 4 list is read from the source text.
 const ENV_FILE_ALLOWED_KEYS: string[] = (() => {
@@ -138,6 +143,22 @@ describe("target schema", () => {
 describe("one step list for every target (D61 rule 2)", () => {
   const prod = loadTarget(join(targetsDir, "prod.json"));
   const stage = loadTarget(join(targetsDir, "stage.json"));
+
+  test("R1.1 and R1.4 detach at the go's ref: the rc tag on prod, the commit on stage; one template, one hash (D64)", () => {
+    for (const id of ["R1.1", "R1.4"]) {
+      const step = RELEASE_STEPS.find((s) => s.id === id)!;
+      expect(step.cmds).toEqual([["git", "fetch", "--tags", "origin"], ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{ref}"]]);
+      expect(renderStep(step, prod, templateValues(prod, SHA, "20261008T000000Z", READY_PENDING, TAG)).remote).toContain(`checkout --detach ${TAG}`);
+      expect(renderStep(step, stage, templateValues(stage, SHA, "20261008T000000Z", READY_PENDING, SHA)).remote).toContain(`checkout --detach ${SHA}`);
+    }
+    // The tag fetch precedes the detach, so the host holds the rc tag the boot reports as RM_BUILD_TAG.
+    const r11 = renderStep(RELEASE_STEPS.find((s) => s.id === "R1.1")!, prod, templateValues(prod, SHA, "20261008T000000Z", READY_PENDING, TAG)).remote;
+    expect(r11.indexOf("git fetch --tags origin")).toBeLessThan(r11.indexOf(`checkout --detach ${TAG}`));
+    // red control: the ref defaults to the commit, and never to anything a target names.
+    expect(templateValues(prod, SHA, "20261008T000000Z").ref).toBe(SHA);
+    // R7.1 checks the ref: a production boot must serve the rc tag.
+    expect(renderStep(RELEASE_STEPS.find((s) => s.id === "R7.1")!, prod, templateValues(prod, SHA, "20261008T000000Z", READY_PENDING, TAG)).remote).toContain(`--commit ${SHA} --ref ${TAG}`);
+  });
 
   test("R1.4 clones the capture checkout when it is missing, then fetches and detaches; the same command on both targets", () => {
     const r14 = RELEASE_STEPS.find((s) => s.id === "R1.4")!;
@@ -251,14 +272,15 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(leaky.stdout).toContain("DATABASE_URL=");
   });
 
-  test("the prod-only tags are data: the hash is shared, and dropping onlyFor changes it", () => {
+  test("the prod-only tag is data: the hash is shared, and dropping onlyFor changes it; the rc is no step (D64)", () => {
     const tags = RELEASE_STEPS.filter((s) => s.onlyFor === "prod").map((s) => s.id);
-    expect(tags).toEqual(["R5.rc", "W3"]);
-    expect(RELEASE_STEPS.filter((s) => s.host === "control").map((s) => s.id)).toEqual(["R5.rc", "W3"]);
+    expect(tags).toEqual(["W3"]);
+    expect(RELEASE_STEPS.filter((s) => s.host === "control").map((s) => s.id)).toEqual(["W3"]);
+    expect(RELEASE_STEPS.some((s) => s.id === "R5.rc" || s.cmds.some((c) => c.includes("rc")))).toBe(false);
     const unmarked = RELEASE_STEPS.map((s) => (s.id === "W3" ? { ...s, onlyFor: undefined } : s));
     expect(stepListHash(unmarked)).not.toBe(stepListHash());
     const ids = stepIds();
-    expect(ids.indexOf("R5.rc")).toBe(ids.indexOf("R6.1") - 1);
+    expect(ids.indexOf("R2.5")).toBe(ids.indexOf("R6.1") - 1);
     expect(ids.indexOf("R2.4r")).toBe(ids.indexOf("R2.2") + 1);
     expect(ids.slice(-3)).toEqual(["W1", "R7.4a", "W3"]);
     expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["W1", "R6.9", "watchHours"], ["R7.4a", "R6.9", "watchHours"]]);
@@ -305,24 +327,56 @@ describe("the target precondition (R1.2)", () => {
   });
 });
 
-describe("the go file (D61 rule 1)", () => {
-  const expected = { release: "v0.6.0", target: "prod" };
-  const good = `# owner go, 2026-10-08\nrelease: v0.6.0\ncommit: ${SHA}\ntarget: prod\nrecovery: /root/recovery-matrix-v0.6.0.signed.md\noperator: lucas\n`;
+describe("the go file (D61 rule 1, D64)", () => {
+  const expected = { release: "v0.6.0", target: "stage", rmEnv: "stage" as const };
+  const good = `# owner go, 2026-10-08\nrelease: v0.6.0\ncommit: ${SHA}\ntarget: stage\nrecovery: /root/recovery-matrix-v0.6.0.signed.md\noperator: lucas\n`;
+  const prodExpected = { release: "v0.6.0", target: "prod", rmEnv: "prod" as const };
+  const prodGood = good.replace(`commit: ${SHA}`, "tag: v0.6.0-rc.3").replace("target: stage", "target: prod");
 
-  test("a go naming this release and target passes, with its hash; its commit is the run's commit", () => {
+  test("a stage go naming this release and target passes, with its hash; its commit is the run's commit", () => {
     const r = validateGo(good, expected);
     expect("go" in r && r.go.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect("go" in r && r.go.commit).toBe(SHA);
+    expect("go" in r && r.go.tag).toBeUndefined();
     const other = validateGo(good.replace(SHA, OTHER_SHA), expected);
     expect("go" in other && other.go.commit).toBe(OTHER_SHA);
   });
 
+  test("a production go names the rc tag of its release, never a commit (D64)", () => {
+    const r = validateGo(prodGood, prodExpected);
+    expect("go" in r && r.go.tag).toBe("v0.6.0-rc.3");
+    expect("go" in r && r.go.commit).toBeUndefined();
+    // red controls: a bare commit, both keys, neither key, another release's rc, a final tag, a branch name.
+    const bare = validateGo(good.replace("target: stage", "target: prod"), prodExpected);
+    expect("errors" in bare && bare.errors.join()).toContain("a bare commit does not authorize a production run");
+    expect("errors" in validateGo(`${prodGood}commit: ${SHA}\n`, prodExpected) && (validateGo(`${prodGood}commit: ${SHA}\n`, prodExpected) as { errors: string[] }).errors.join()).toContain("both commit and tag");
+    expect("errors" in validateGo(prodGood.replace(/tag: .*\n/, ""), prodExpected)).toBe(true);
+    expect("errors" in validateGo(prodGood.replace("v0.6.0-rc.3", "v0.6.1-rc.0"), prodExpected)).toBe(true);
+    expect("errors" in validateGo(prodGood.replace("v0.6.0-rc.3", "v0.6.0"), prodExpected)).toBe(true);
+    expect("errors" in validateGo(prodGood.replace("v0.6.0-rc.3", "releases-0.6.x"), prodExpected)).toBe(true);
+    // A stage go never names a tag: the rc is cut after stage passes.
+    const stageTag = validateGo(good.replace(`commit: ${SHA}`, "tag: v0.6.0-rc.3"), expected);
+    expect("errors" in stageTag && stageTag.errors.join()).toContain("never names a tag");
+  });
+
+  test("the release branch and the origin rule (D64): releases-A.B.x must contain the commit", () => {
+    expect(releaseBranch("v0.6.1")).toBe("releases-0.6.x");
+    expect(releaseBranch("v1.12.0")).toBe("releases-1.12.x");
+    expect(() => releaseBranch("main")).toThrow();
+    expect(originProblems("v0.6.1", SHA, "  origin/main\n  origin/releases-0.6.x\n")).toEqual([]);
+    expect(originProblems("v0.6.1", SHA, "  origin/main\n").join()).toContain("not on origin/releases-0.6.x");
+    expect(originProblems("v0.6.1", SHA, "  origin/qa/0.6.x-2026-10-10\n").join()).toContain("never a PR head or a QA branch");
+    expect(originProblems("v0.6.1", SHA, "").join()).toContain("no branch of origin");
+    // red control: another release's branch does not satisfy it.
+    expect(originProblems("v0.7.0", SHA, "  origin/releases-0.6.x\n")).toHaveLength(1);
+  });
+
   test("red: another target or release; an unknown or missing key; a short sha", () => {
-    expect(validateGo(good.replace(/commit: .*\n/, ""), expected)).toEqual({ errors: ["the go names no commit"] });
-    expect("errors" in validateGo(good.replace("target: prod", "target: stage"), expected)).toBe(true);
+    expect(validateGo(good.replace(/commit: .*\n/, ""), expected)).toEqual({ errors: ["the go names no commit; a stage go names a commit on releases-0.6.x (D64)"] });
+    expect("errors" in validateGo(good.replace("target: stage", "target: prod"), expected)).toBe(true);
     expect("errors" in validateGo(good.replace("v0.6.0", "v0.6.1"), expected)).toBe(true);
     expect("errors" in validateGo(`${good}skip: R2.5\n`, expected)).toBe(true);
-    expect("errors" in validateGo(good.replace(/target: prod\n/, ""), expected)).toBe(true);
+    expect("errors" in validateGo(good.replace(/target: stage\n/, ""), expected)).toBe(true);
     expect("errors" in validateGo(good.replace(SHA, "a502de30"), expected)).toBe(true);
     // SC.1: no recovery matrix, or a recovery that is neither a path nor a sha.
     expect(validateGo(good.replace(/recovery: .*\n/, ""), expected)).toEqual({ errors: ["the go names no recovery"] });
@@ -404,7 +458,7 @@ function fixture(rmEnv: "stage" | "prod" = "stage", overrides: Record<string, un
   const goFile = join(dir, "go.txt");
   const recovery = join(dir, "recovery-matrix.md");
   writeFileSync(recovery, "signed recovery matrix\n");
-  writeFileSync(goFile, `release: ${RELEASE}\ncommit: ${SHA}\ntarget: ${name}\nrecovery: ${recovery}\n`);
+  writeFileSync(goFile, `release: ${RELEASE}\n${rmEnv === "prod" ? `tag: ${TAG}` : `commit: ${SHA}`}\ntarget: ${name}\nrecovery: ${recovery}\n`);
   return { dir, targetFile, goFile, journalRoot: join(dir, "journal") };
 }
 
@@ -413,7 +467,9 @@ const GREEN_CI = REQUIRED_CI.map((n) => `${n}\tcompleted\tsuccess`).join("\n");
 const PREFLIGHT_ANSWERS: Record<string, { code: number; stdout: string }> = {
   "git rev-parse HEAD": { code: 0, stdout: `${SHA}\n` },
   "git status --porcelain": { code: 0, stdout: "" },
-  "git branch -r --contains": { code: 0, stdout: "  origin/releases-0.6.x\n" },
+  "git branch -r --contains": { code: 0, stdout: `  origin/${releaseBranch(RELEASE)}\n` },
+  // The control machine resolves the production go's rc tag (D64).
+  [`git rev-parse --verify --quiet '${TAG}^{commit}'`]: { code: 0, stdout: `${SHA}\n` },
   "gh api": { code: 0, stdout: `${GREEN_CI}\n` },
   "docker ps -q": { code: 0, stdout: "0\n" },
 };
@@ -575,12 +631,58 @@ describe("runRelease", () => {
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", join(f.dir, "j2"), "--stage-journal", stageDir], c.deps, TINY.slice(0, 2))).toBe(2);
     expect(c.ran).toEqual([]);
 
-    // red control: a prod go at another commit than the stage run passed at refuses (SP.8).
-    writeFileSync(f.goFile, `release: ${RELEASE}\ncommit: ${OTHER_SHA}\ntarget: prod\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
-    const d = fakeDeps({ receipt: "{}" });
+    // red control: a prod go naming an rc at another commit than the stage run passed at refuses (SP.8).
+    writeFileSync(f.goFile, `release: ${RELEASE}\ntag: ${RELEASE}-rc.1\ntarget: prod\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
+    const d = fakeDeps({ receipt: "{}", answers: { [`git rev-parse --verify --quiet '${RELEASE}-rc.1^{commit}'`]: { code: 0, stdout: `${OTHER_SHA}\n` } } });
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", join(f.dir, "j3"), "--stage-journal", stageDir], d.deps, TINY)).toBe(2);
     expect(d.ran).toEqual([]);
     expect(d.logs.join("\n")).toContain("commit");
+  });
+
+  test("D64: a production go's tag resolves on the control machine; a tag origin lacks refuses before any step", async () => {
+    const f = fixture("prod");
+    const seen: string[] = [];
+    const a = fakeDeps({ receipt: "{}" });
+    const collect = a.deps.collect;
+    a.deps.collect = async (h, r) => { seen.push(r); return collect(h, r); };
+    const r = await resolveGo({ release: RELEASE, tag: TAG, target: "prod", recovery: "x", sha256: "s" }, a.deps);
+    expect("go" in r && r.go.commit).toBe(SHA);
+    expect("go" in r && r.go.ref).toBe(TAG);
+    expect(seen[0]).toContain("git fetch -q --tags origin");
+    // A stage go resolves without git.
+    expect(await resolveGo({ release: RELEASE, commit: SHA, target: "stage", recovery: "x", sha256: "s" }, { collect: async () => { throw new Error("never"); } })).toEqual({ go: { release: RELEASE, commit: SHA, target: "stage", recovery: "x", sha256: "s", ref: SHA } });
+    // red control: an unknown tag refuses the run, and nothing ran.
+    writeFileSync(f.goFile, `release: ${RELEASE}\ntag: ${RELEASE}-rc.9\ntarget: prod\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
+    const b = fakeDeps({ receipt: "{}" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], b.deps, TINY)).toBe(2);
+    expect(b.ran).toEqual([]);
+    expect(b.logs.join("\n")).toContain(`${RELEASE}-rc.9, which origin has no tag for`);
+  });
+
+  test("D64: the live run refuses a commit off the release branch, on stage and on prod; the journal records the tag", async () => {
+    const s = fixture("stage");
+    const off = fakeDeps({ receipt: "{}", answers: { "git branch -r --contains": { code: 0, stdout: "  origin/main\n  origin/qa/0.6.x-2026-10-10\n" } } });
+    expect(await runRelease(["--target", s.targetFile, "--go", s.goFile, "--journal-root", s.journalRoot], off.deps, TINY)).toBe(2);
+    expect(off.ran).toEqual([]);
+    expect(off.logs.join("\n")).toContain(`not on origin/${releaseBranch(RELEASE)}`);
+    // Green: on the release branch the stage run passes, and prod runs the rc at the same commit.
+    const st = fakeDeps({ receipt: "{}" });
+    expect(await runRelease(["--target", s.targetFile, "--go", s.goFile, "--journal-root", s.journalRoot], st.deps, TINY)).toBe(0);
+    const stageDir = join(s.journalRoot, "stage", "20261008T120000Z");
+    expect((JSON.parse(readFileSync(join(stageDir, "run.json"), "utf8")) as RunJournal).tag).toBeUndefined();
+    const p = fixture("prod");
+    const pOff = fakeDeps({ receipt: "{}", answers: { "git branch -r --contains": { code: 0, stdout: "  origin/main\n" } } });
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir], pOff.deps, TINY)).toBe(2);
+    expect(pOff.ran).toEqual([]);
+    const seen: string[] = [];
+    const pr = fakeDeps({ receipt: "{}" });
+    const exec = pr.deps.exec;
+    pr.deps.exec = async (h, r, o, e) => { seen.push(r); return exec(h, r, o, e); };
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir], pr.deps, TINY)).toBe(0);
+    const j = JSON.parse(readFileSync(join(p.journalRoot, "prod", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    expect(j.commit).toBe(SHA);
+    expect(j.tag).toBe(TAG);
+    expect(pr.logs.join("\n")).toContain(`for ${RELEASE} ${TAG} (${SHA}) on prod`);
   });
 });
 
@@ -709,6 +811,12 @@ describe("host guards, legacy stop and identity (R6.1, S8.1, R7.1, R7.7)", () =>
     expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), `{"commit":"${SHA.slice(0, 6)}"}`, SHA)).toHaveLength(1);
     expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), `<html>${SHA}</html>`, SHA)).toHaveLength(1);
     expect(identityProblems(null, null, SHA).length).toBe(2);
+    // D64: with the rc tag as the ref, /api/version must carry it as tag (RM_BUILD_TAG).
+    expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: SHA, tag: TAG }), `{"commit":"${SHA}"}`, SHA, TAG)).toEqual([]);
+    expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: SHA, tag: null }), `{"commit":"${SHA}"}`, SHA, TAG).join()).toContain(`tag is null, expected ${TAG}`);
+    expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: SHA, tag: `${RELEASE}-rc.1` }), `{"commit":"${SHA}"}`, SHA, TAG)).toHaveLength(1);
+    // A commit ref (stage) asks nothing of the tag.
+    expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: SHA, tag: null }), `{"commit":"${SHA}"}`, SHA, SHA)).toEqual([]);
   });
 });
 
@@ -809,7 +917,7 @@ describe("watch steps, prod-only steps and the recovery go key", () => {
   });
 });
 
-describe("release tags (R5.rc, W3)", () => {
+describe("release tags (tag.ts rc after stage, W3)", () => {
   test("the next rc number follows the existing tags; rc tags at a commit are found", () => {
     expect(nextRcTag("v0.6.0", [])).toBe("v0.6.0-rc.0");
     expect(nextRcTag("v0.6.0", ["v0.6.0-rc.0", "v0.6.0-rc.2", "v0.5.4-rc.7", "v0.6.0"])).toBe("v0.6.0-rc.3");
@@ -1053,7 +1161,7 @@ describe("preflight", () => {
     JSON.parse(readFileSync(join(f.journalRoot, target, "preflight-20261008T120000Z", "preflight.json"), "utf8")) as { exit: number; checks: { id: string; status: string; detail: string }[] };
   const status = (r: ReturnType<typeof report>, id: string) => r.checks.find((c) => c.id === id)?.status;
 
-  test("the real step list: the preflight runs R1.1 to R2.5, never R5.rc, R6.1 or anything after", () => {
+  test("the real step list: the preflight runs R1.1 to R2.5, never R6.1 or anything after", () => {
     const ids = preflightSteps(RELEASE_STEPS).map((s) => s.id);
     expect(ids).toEqual(["R1.1", "R1.2", "R1.3", "R1.4", "R1.5", "R1.6", "R2.1", "R2.2", "R2.4r", "R2.3", "R2.5"]);
     expect(preflightSteps(RELEASE_STEPS).some((s) => s.irreversible || s.host === "control")).toBe(false);

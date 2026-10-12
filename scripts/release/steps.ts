@@ -23,7 +23,7 @@ import type { ReleaseTarget } from "./target.ts";
 
 /**
  * Where a step runs: the target host, the capture host, or the control
- * machine itself (the release tags, R5.rc and W3).
+ * machine itself (the release tag, W3).
  */
 export type StepHost = "target" | "capture" | "control";
 
@@ -73,7 +73,9 @@ export interface StepTemplate {
   /**
    * The step runs only for this policy and is recorded `skipped: <rmEnv>` on
    * any other. It is data in the template, so the hash is the same for every
-   * target. Only the release tags (R5.rc, W3) use it: a stage run tags nothing.
+   * target. Only the release tag (W3) uses it: a stage run tags nothing. The
+   * rc is no step (D64): it is cut after the stage run passes, before the
+   * production go names it (`bun scripts/release/tag.ts rc`).
    */
   readonly onlyFor?: "prod";
   /**
@@ -163,8 +165,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   // ── R1 release identity, on both hosts ────────────────────────────────────
   {
     id: "R1.1", standing: ["SP.1"], host: "target", cloneFrom: RELEASE_REPO_URL, irreversible: false, expectExit: 0, receipts: [],
-    description: "Target checkout: clone it when missing, fetch, then detach at the release commit",
-    cmds: [["git", "fetch", "--tags", "origin"], ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{commit}"]],
+    description: "Target checkout: clone it when missing, fetch the tags, then detach at the go's ref (the rc tag on prod, the commit on stage), so the host holds the tag the boot reports (D64)",
+    cmds: [["git", "fetch", "--tags", "origin"], ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{ref}"]],
   },
   {
     id: "R1.2", standing: ["SP.1"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("host-identity.json")],
@@ -178,8 +180,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "R1.4", standing: ["SP.1"], host: "capture", cloneFrom: RELEASE_REPO_URL, irreversible: false, expectExit: 0, receipts: [],
-    description: "Capture checkout (runner-owned, never a release checkout): clone it when missing, fetch, then detach at the release commit",
-    cmds: [["git", "fetch", "--tags", "origin"], ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{commit}"]],
+    description: "Capture checkout (runner-owned, never a release checkout): clone it when missing, fetch the tags, then detach at the go's ref",
+    cmds: [["git", "fetch", "--tags", "origin"], ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{ref}"]],
   },
   {
     id: "R1.5", standing: ["SP.1"], host: "capture", irreversible: false, expectExit: 0, receipts: [{ dir: CAPTURE_RUN_DIR, pattern: "host-identity.json", required: true }],
@@ -220,12 +222,6 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     id: "R2.5", standing: ["SP.5"], host: "target", checkout: "legacy", irreversible: false, expectExit: 0, triage: true, receipts: [runReceipts("prod-gate-baseline.*")],
     description: "Log baseline of the running legacy stack, graded by the legacy checkout's own prod:gate for the instance",
     cmds: [["bun", "run", "prod:gate", "--mode", "baseline", "--instance", "{instance}", "--report", `${RUN_DIR}/prod-gate-baseline.md`]],
-  },
-  // ── R5 release candidate tag (prod only; stage records it skipped) ────────
-  {
-    id: "R5.rc", standing: [], host: "control", onlyFor: "prod", irreversible: false, expectExit: 0, receipts: [],
-    description: "Tag the release candidate at the commit (the next free <release>-rc.N) unless one already points there; push it",
-    cmds: [["bun", "scripts/release/tag.ts", "rc", "--release", "{release}", "--commit", "{commit}"]],
   },
   // ── R6 cutover ────────────────────────────────────────────────────────────
   {
@@ -283,8 +279,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   // ── R7 postflight ─────────────────────────────────────────────────────────
   {
     id: "R7.1", standing: ["SV.1"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("identity-check.json")],
-    description: "Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown",
-    cmds: [["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--receipt-dir", RUN_DIR]],
+    description: "Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown; when the go's ref is the rc tag, /api/version carries it as tag (RM_BUILD_TAG)",
+    cmds: [["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--receipt-dir", RUN_DIR]],
   },
   {
     id: "R7.3", standing: ["SV.3"], host: "target", irreversible: false, expectExit: 0, receipts: [],
@@ -348,13 +344,18 @@ export interface TemplateValues {
   readonly [key: string]: string;
 }
 
-/** The template values of one run of one target. */
-export function templateValues(target: ReleaseTarget, commit: string, runTs: string, readyIso: string = READY_PENDING): TemplateValues {
+/**
+ * The template values of one run of one target. `ref` is what the go wrote
+ * (the rc tag on prod, the commit on stage, D64); R1.1 and R1.4 detach at it,
+ * R7.1 checks it. It defaults to the commit.
+ */
+export function templateValues(target: ReleaseTarget, commit: string, runTs: string, readyIso: string = READY_PENDING, ref: string = commit): TemplateValues {
   return {
     readyIso,
     target: target.name,
     release: target.release,
     commit,
+    ref,
     runTs,
     instance: target.instance,
     home: target.home,
