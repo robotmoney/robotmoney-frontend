@@ -66,6 +66,13 @@
     "reason": "The scheduler's first stream connect (scripts/lib/system-scheduler/runtime.ts start()) ran before the api listened; it then takes the same reconnect loop as every later drop (spec §3.2). An api that never answers fails readiness scheduler-initial-rebuild and the gate's healthy-container check. Seen once at boot on stage-2, 2026-10-07."
   },
   {
+    "id": "expected-worker-job-first-connect-retry",
+    "match": "^job \\S+ \\([\\w.]+\\) failed, retry in <n>s: Unable to connect\\. Is the computer able to access the url\\?$",
+    "source": "worker-",
+    "class": "expected",
+    "reason": "A worker job's first api call ran before the api listened after a boot (backend/src/worker/loop.ts: the job is re-queued with a backoff, 'failed, retry in <n>s'); the same boot race as expected-scheduler-first-connect-retry, on the worker side. Seen once on worker-analytics (analytics.parity_sweep) right after boot 2 of the v0.6.1 production run 20261010T004257Z, accepted by the owner on 2026-10-10 (issue 1280), and ×2 on the v0.5.4 run. Held to the retrying form: a job whose retries run out logs '— DEAD' instead, which stays unclassified and fails, and the dead job's stored last_error is graded on its own ('jobs:' source). Any other message behind the same job line stays unclassified."
+  },
+  {
     "id": "expected-twin-autovacuum-cancel",
     "match": "ERROR: canceling autovacuum task$",
     "source": "^rm-restore-",
