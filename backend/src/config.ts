@@ -1,7 +1,8 @@
 // Central environment configuration. The only required input is DATABASE_URL.
-// RM_ENV selects behavior hints (ephemeral | smoke | prod) but the connection
-// itself is always driven by DATABASE_URL so the same code runs everywhere.
-import { RM_ENV_VALUES } from "./acceptance-path.ts";
+// There is no environment class here (issue #973 retired RM_ENV from the
+// runtime): the connection is always driven by DATABASE_URL, every protected
+// route always requires its configured credential, and the test-only paths are
+// opened by backend/src/test-seam.ts, never by an environment value.
 
 function required(name: string): string {
   const v = process.env[name];
@@ -637,29 +638,19 @@ export function resolveSwarmPublicBaseUrl(
   return (env.SWARM_PUBLIC_BASE_URL || SWARM_PUBLIC_BASE_URL_DEFAULT).replace(/\/+$/, "");
 }
 
-// Fail-closed: default to "prod" when RM_ENV is unset, and REFUSE to start on an
-// unrecognized value (so a typo like "production" can never silently select a
-// non-production policy). No RM_ENV value, and no RM_ALLOW_INSECURE flag, opens
-// a privileged route: every service credential is a row in the API's
-// automation-token store (smoke-production-spec.md §3, D52 (1)), validated in
-// backend/src/api/auth.ts in every env alike.
-//
-// `stage` is the §4.1 deployment policy for stage, test and CI; `bun smoke` and
-// `bun run migrate` start backend code under it (smoke-production-spec.md §4,
-// #1026 criterion 13). It is "outside prod" exactly as `smoke` is. The list is
-// backend/src/acceptance-path.ts's RM_ENV_VALUES, so the two cannot disagree.
-const VALID_ENVS = RM_ENV_VALUES;
-const RM_ENV = process.env.RM_ENV ?? "prod";
-if (!(VALID_ENVS as readonly string[]).includes(RM_ENV)) {
-  throw new Error(`invalid RM_ENV "${RM_ENV}" — expected one of ${VALID_ENVS.join(" | ")}`);
-}
+// No environment value, and no insecure flag, opens a privileged route:
+// every service credential is a row in the API's automation-token store
+// (smoke-production-spec.md §3, D52 (1)), validated in backend/src/api/auth.ts
+// the same way in every deployed stack. Issue #973 retired both variables from
+// the runtime, so there is no env field here to branch on. The one connection
+// rule that used to hang off `RM_ENV=prod` holds everywhere: the api never
+// runs as the cluster superuser.
 const databaseUrl = required("DATABASE_URL");
-if (RM_ENV === "prod" && new URL(databaseUrl).username === "doadmin") {
-  throw new Error("DATABASE_URL must use the rm_app runtime role in production, never doadmin");
+if (new URL(databaseUrl).username === "doadmin") {
+  throw new Error("DATABASE_URL must use the rm_app runtime role, never doadmin");
 }
 
 export const config = {
-  env: RM_ENV as (typeof VALID_ENVS)[number],
   // Trust X-Forwarded-For for client-ip (rate limiting) only behind a known proxy.
   trustProxy: process.env.TRUST_PROXY === "1",
   databaseUrl,

@@ -77,7 +77,7 @@ function baseEnv(): Record<string, string> {
       // Boot-guard operator controls (issue #602): the cases below assert both
       // the set and the unset resolution, so neither may be inherited.
       "RM_ALLOW_HANDLE_NAMESPACE_VIOLATION", "PG_NAMESPACE_GUARD_TIMEOUT_MS",
-      // The api's allow-insecure is asserted set and unset below (§4.4).
+      // Retired (issue #973); asserted absent from every service below.
       "RM_ALLOW_INSECURE",
       // Build identity is asserted set and unset below; never inherit it.
       "AUM_PRODUCER_REVISION", "RM_BUILD_COMMIT", "RM_BUILD_TAG",
@@ -284,9 +284,8 @@ const PREWARM: readonly RenderArgs[] = [
   { knobs: {}, files: DEMO_COMPOSE_FILES, profiles: ["member-agent"] },
   // "the controls are scoped to the api".
   { knobs: { RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "1" }, files: DEMO_COMPOSE_FILES },
-  // §4.4 allow-insecure: what buildComposeEnv emits for a stage boot and a prod one.
+  // Issue #973: a shell that still exports the retired RM_ALLOW_INSECURE delivers it to no service.
   { knobs: { RM_ALLOW_INSECURE: "1" }, files: DEMO_COMPOSE_FILES },
-  { knobs: { RM_ALLOW_INSECURE: "" }, files: DEMO_COMPOSE_FILES },
 ];
 
 // The whole file's Docker cost, paid once, outside any case's budget.
@@ -1157,14 +1156,16 @@ describe("the paid CoinGecko key reaches the worker lane and the analytics-produ
 // DELIVERED, since the api service's `environment:` block is an allowlist and
 // a key missing from it is never sent to the container regardless of what the
 // host shell exports.
-describe("api allow-insecure is the boot's decision, never a compose file's pin (§4.4, criterion 46)", () => {
-  test("a prod boot's empty RM_ALLOW_INSECURE reaches api empty; a stage boot's 1 reaches it as 1", () => {
-    expect(serviceEnv(composeConfig({ RM_ALLOW_INSECURE: "" }), "api").RM_ALLOW_INSECURE).toBe("");
-    expect(serviceEnv(composeConfig({ RM_ALLOW_INSECURE: "1" }), "api").RM_ALLOW_INSECURE).toBe("1");
+describe("RM_ALLOW_INSECURE is retired: no service receives it, even from a shell that exports it (issue #973)", () => {
+  test("an exported RM_ALLOW_INSECURE=1 reaches no service", () => {
+    const rendered = composeConfig({ RM_ALLOW_INSECURE: "1" });
+    for (const service of Object.keys(rendered.services ?? {})) {
+      expect(serviceEnv(rendered, service).RM_ALLOW_INSECURE).toBeUndefined();
+    }
   });
 
-  test("with nothing emitted the api resolves empty — no compose file pins an insecure default", () => {
-    expect(serviceEnv(composeConfig({}), "api").RM_ALLOW_INSECURE ?? "").toBe("");
+  test("with nothing exported, no service carries the key at all", () => {
+    expect("RM_ALLOW_INSECURE" in serviceEnv(composeConfig({}), "api")).toBe(false);
   });
 });
 

@@ -810,8 +810,11 @@ only the `admin` right, and every epoch lifecycle route refuses it
 ([scheduler spec §4.6](../technical/system-scheduler-spec.md#46-transition-calls-that-fail)).
 
 The generic existing `/api/swarm/admin/:action` endpoints remain for smoke
-compatibility but the new browser must not call them. Mark `reset` and
-`subject_fixtures` dev/smoke-only and return 403 for them when `RM_ENV=prod`.
+compatibility but the new browser must not call them. `reset` and
+`subject_fixtures` require the admin credential like every other action; there
+is no environment class to key a 403 on (issue #973), and `subject_fixtures`
+writes synthetic regime history only in the armed test harness, never on a
+deployed stack (`backend/src/swarm/domain.ts` `backfillRegimeHistory`).
 
 ### 6.4 Required domain corrections
 

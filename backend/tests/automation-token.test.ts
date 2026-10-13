@@ -431,7 +431,7 @@ beforeAll(async () => {
   scheduler = await provisionSchedulerToken();
   analytics = await provisionAnalyticsToken();
   operator = await provisionOperatorToken();
-  api = await bootApi({ env: { ...LEGACY, RM_ALLOW_INSECURE: "1", RM_ENV: "ephemeral" } });
+  api = await bootApi({ env: { ...LEGACY, RM_ALLOW_INSECURE: "1" } });
 });
 afterAll(() => api?.stop());
 
@@ -575,7 +575,7 @@ test("118 RED CONTROL: with the scheduler's token admitted to the admin routes a
     "} else if (!(await isPrivileged(req))) {",
     '} else if (!(await isPrivileged(req) || await hasAutomationRight(req, "read_subjects"))) {',
   );
-  const broken = await bootApi({ env: { RM_ENV: "ephemeral" }, preload });
+  const broken = await bootApi({ preload });
   try {
     const leaks = await substitutions(broken, scheduler, ["admin"]);
     expect(leaks.length).toBeGreaterThan(0);

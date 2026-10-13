@@ -147,7 +147,7 @@ It marks what the target is enrolled for. It is an accidental-target safeguard, 
 | `prod` | remote | anything else | refuse |
 | `prod` | `--local` | any | refuse |
 | `stage` | remote | `rehearsal` | stage |
-| `stage` | remote | anything else | refuse; stage policy (incl. `--allow-insecure`) never touches production data |
+| `stage` | remote | anything else | refuse; stage policy never touches production data |
 | `stage` | `--local blank`/`dump` | written by smoke as `rehearsal` | stage |
 | `stage` | `--local volume` | `rehearsal` | stage |
 | `stage` | `--local volume` | anything else | refuse; a reattached volume gets no weaker policy than a remote |
@@ -168,7 +168,7 @@ All three share three rules. 0081's DDL, its `schema_migrations` row and the ide
 
 ### 4.4 No smoke overlay
 
-There is no `docker-compose.smoke.yml`. Its one surviving knob is an explicit flag, `--allow-insecure`, that is a refusal when `RM_ENV=prod`. There is no `--schedules-off`: scheduling has no off state. Stage runs the real `system-scheduler` against subjects whose epoch and judging durations were set short through the admin API ([`system-scheduler-spec.md`](./system-scheduler-spec.md) §2.3, §8). On a twin the operator does it with `bun run twin:accelerate` after READY (standing check SR.9): the subjects' durations through the admin API, the twin's restored open windows pulled in on its own container, and a scheduler restart, because an `updated` subject change re-arms no timer. The boot itself still changes no scheduling column. Parity with production is a tested property.
+There is no `docker-compose.smoke.yml`, and no knob of it survives: `--allow-insecure` and `RM_ALLOW_INSECURE` are retired (issue #973), so every stack requires its configured credentials and the api has no insecure mode. There is no `--schedules-off`: scheduling has no off state. Stage runs the real `system-scheduler` against subjects whose epoch and judging durations were set short through the admin API ([`system-scheduler-spec.md`](./system-scheduler-spec.md) §2.3, §8). On a twin the operator does it with `bun run twin:accelerate` after READY (standing check SR.9): the subjects' durations through the admin API, the twin's restored open windows pulled in on its own container, and a scheduler restart, because an `updated` subject change re-arms no timer. The boot itself still changes no scheduling column. Parity with production is a tested property.
 
 ## 5. Local Postgres (stage override)
 
@@ -391,7 +391,7 @@ Each is an executable release gate. Cutover requires all three workstreams green
 - A blank bootstrap seeds the pipeline worker's schedule rows and no session schedule row.
 
 **W2 schema and privilege verification**
-- `RM_ENV=stage` + the `rm_owner` line against `deployment_identity = production` refuses; plain stage boot incl. `--allow-insecure` against production identity refuses.
+- `RM_ENV=stage` + the `rm_owner` line against `deployment_identity = production` refuses; plain stage boot against production identity refuses.
 - Snapshot bootstrap then `--migrate`; snapshot bootstrap boots without `--seed`.
 - Old code boots after an additive change to an existing table while genuine drift on the same database still fails.
 - Old release reads compat metadata written by a newer one and refuses unknown `metadata_version`.

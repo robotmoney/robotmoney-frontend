@@ -550,8 +550,8 @@ test("audit: cursor pagination walks distinct pages", async () => {
   expect(p2.items[0].id).not.toBe(p1.items[0].id);
 });
 
-test("RM_ENV=ephemeral no longer opens the new admin routes without a credential (D52 (1))", async () => {
-  expect(process.env.RM_ENV).toBe("ephemeral");
+test("the test harness no longer opens the new admin routes without a credential (D52 (1))", async () => {
+  expect(process.env.RM_ENV).toBeUndefined(); // issue #973: the harness declares no env class, and the runtime reads none
   const res = await call(req("GET", "/api/admin/overview"));
   expect(res?.status).toBe(403);
   const auditRes = await call(req("GET", "/api/admin/audit"));

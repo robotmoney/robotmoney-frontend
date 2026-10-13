@@ -3,8 +3,9 @@
 // source under CI even if PROJECTS_SOURCE=live leaks into the env, and (2) the
 // full pipeline runs to completion with global fetch REPLACED by a throwing stub
 // — so any live socket a handler opened would fail this test loudly. Runs against
-// the preload's ephemeral Postgres (RM_ENV=ephemeral), so it also fails red when
-// Postgres is absent.
+// the preload's ephemeral Postgres, so it also fails red when Postgres is absent.
+// The fixture source is INJECTED by tests/preload.ts through the armed test seam
+// (issue #973); no environment value selects it.
 import { test, expect, afterAll } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { selectProjectsDataSource } from "../src/projects/access/select.ts";
@@ -25,7 +26,7 @@ afterAll(() => {
 });
 
 test("selectProjectsDataSource is hermetic under CI even when PROJECTS_SOURCE=live leaks in", () => {
-  // RM_ENV=ephemeral (preload) forces the fixture source regardless of the knob.
+  // The injected fixture source (preload, through the test seam) wins over the knob.
   const src = selectProjectsDataSource({ PROJECTS_SOURCE: "live" });
   expect(src.kind).toBe("fixture");
 });

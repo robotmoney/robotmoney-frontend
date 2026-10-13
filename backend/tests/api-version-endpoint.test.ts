@@ -19,8 +19,11 @@
 // property of the nginx image and is graded against a real container in
 // scripts/tests/integration/website-server-api-version.test.ts.
 import { afterAll, describe, expect, test } from "bun:test";
-import net from "node:net";
 import { readFileSync } from "node:fs";
+import postgres from "postgres";
+import { sql } from "../src/db/client.ts";
+import { bootApi as bootStackApi, type ApiProcess } from "./support/automation-auth.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ROUTES } from "@robotmoney/contract";
@@ -58,42 +61,19 @@ describe("apiVersionBody", () => {
 });
 
 // ── 2. The real process, over HTTP ──────────────────────────────────────────
-function freePort(): Promise<number> {
-  return new Promise((res, rej) => {
-    const s = net.createServer();
-    s.on("error", rej);
-    s.listen(0, () => {
-      const p = (s.address() as net.AddressInfo).port;
-      s.close(() => res(p));
-    });
-  });
-}
+// Booted as a stack boots it (tests/support/automation-auth.ts bootApi): as
+// rm_app, on this file's own database, through the real startup preflight.
+// There is no harness exception in the entrypoint (issue #973). Per TEST: one
+// case drops its database under the running api.
+useCleanDatabasePerTest(import.meta.file);
 
-const spawned: ReturnType<typeof Bun.spawn>[] = [];
-afterAll(() => { for (const p of spawned) p.kill(); });
+const spawned: ApiProcess[] = [];
+afterAll(() => { for (const p of spawned) p.stop(); });
 
 async function bootApi(extraEnv: Record<string, string>): Promise<number> {
-  const port = await freePort();
-  const proc = Bun.spawn(["bun", "run", "src/api/index.ts"], {
-    cwd: backendDir,
-    env: { ...process.env, API_PORT: String(port), ...extraEnv },
-    stdout: "ignore",
-    stderr: "pipe",
-  });
-  spawned.push(proc);
-  const deadline = Date.now() + 60_000;
-  for (;;) {
-    if (proc.exitCode !== null) {
-      throw new Error(`api exited with ${proc.exitCode}:\n${await new Response(proc.stderr as ReadableStream).text()}`);
-    }
-    try {
-      // /health answers 200 whatever the database state (its body says `db`),
-      // so it is the readiness probe in both boots below.
-      if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) return port;
-    } catch { /* not listening yet */ }
-    if (Date.now() > deadline) throw new Error(`api never served /health on :${port}`);
-    await new Promise((r) => setTimeout(r, 200));
-  }
+  const api = await bootStackApi({ env: extraEnv });
+  spawned.push(api);
+  return Number(new URL(api.base).port);
 }
 
 describe("GET /api/version on the running api", () => {
@@ -121,18 +101,22 @@ describe("GET /api/version on the running api", () => {
     const identity = await (await fetch(`http://127.0.0.1:${port}${ROUTES.version}`)).json();
     expect(identity.commit).toBe(COMMIT);
     expect(identity).not.toHaveProperty("api");
-  });
+  }, 60_000);
 
   test("still answers while every database query throws, and a database route beside it does not", async () => {
-    // Nothing listens on port 1, so every query this process attempts fails
-    // with a connection error — the "sql handle that throws on any query". The
-    // boot guards are bounded and report `unchecked` rather than refusing
-    // (api-boot-handle-namespace-guard.test.ts), so the process serves.
-    const port = await bootApi({
-      DATABASE_URL: "postgres://unused:unused@127.0.0.1:1/unused",
-      PG_NAMESPACE_GUARD_TIMEOUT_MS: "1000",
-      [BUILD_COMMIT_ENV]: "",
-    });
+    // A stack's api refuses to BOOT against a database it cannot reach (§7.2,
+    // container-startup-preflight.test.ts), so the outage is staged AFTER the
+    // boot: this test's own database is dropped under the running process,
+    // its sessions terminated with it, so every query the process attempts
+    // from then on fails — the "sql handle that throws on any query".
+    const port = await bootApi({ [BUILD_COMMIT_ENV]: "" });
+    const [{ db }] = await sql<{ db: string }[]>`SELECT current_database() AS db`;
+    const admin = postgres(process.env.RM_TEST_ADMIN_URL!, { max: 1, onnotice: () => {} });
+    try {
+      await admin.unsafe(`DROP DATABASE "${db}" WITH (FORCE)`);
+    } finally {
+      await admin.end({ timeout: 5 });
+    }
 
     const health = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
     expect(health.db).toBe("down");
@@ -141,14 +125,16 @@ describe("GET /api/version on the running api", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ api: CONTRACT_VERSION, commit: null });
 
-    // The control: a route that reads the database answers the outage, so the
-    // 200 above is not an artefact of a database that happened to be up.
-    // (/api/projects, not /api/comments: the comments list degrades to an
-    // empty page on a query error rather than surfacing it.)
+    // The control: a route that reads the database answers the outage with an
+    // error, so the 200 above is not an artefact of a database that happened
+    // to be up. (/api/projects, not /api/comments: the comments list degrades
+    // to an empty page on a query error rather than surfacing it.) A dropped
+    // database answers `invalid_catalog_name`, which the api reports as its
+    // generic 500; a refused socket would be the 503 "database unavailable".
     const projects = await fetch(`http://127.0.0.1:${port}${ROUTES.projects.list}`);
-    expect(projects.status).toBe(503);
-    expect(await projects.json()).toEqual({ error: "database unavailable" });
-  });
+    expect([500, 503]).toContain(projects.status);
+    expect(await projects.json()).toHaveProperty("error");
+  }, 60_000);
 });
 
 // ── D55 (1): the api no longer reports the site ─────────────────────────────
@@ -164,7 +150,7 @@ describe("the api reports itself only (D55 (1))", () => {
       const text = readFileSync(join(backendDir, file), "utf8");
       expect(text).not.toMatch(/staticDir|STATIC_DIR|static-identity|matches_image/);
     }
-  });
+  }, 60_000);
 });
 
 // ── 3. The import graph ─────────────────────────────────────────────────────

@@ -20,8 +20,9 @@
 //
 // FAIL-CLOSED, WITH NO OPT-OUT. A service token is valid when, and only when,
 // its hash is a row in `automation_tokens` carrying the right asked for. No env
-// value is consulted, and no deployment flag (`RM_ALLOW_INSECURE`,
-// `RM_ENV=ephemeral`) stands in for a missing or wrong credential: "a file on
+// value is consulted, and no deployment flag stands in for a missing or wrong
+// credential (issue #973 retired the insecure flag and the environment class
+// from the runtime, so the api has no env to be lenient in): "a file on
 // disk establishes nothing by itself" (smoke spec §3), and neither does the
 // absence of one. Each check asks for ONE right, so no holder's token
 // substitutes for another's — the scheduler's cannot administer, the

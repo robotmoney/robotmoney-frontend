@@ -108,9 +108,10 @@ serving `/api/admin/*`, and the buildless `/admin` frontend view
 All four are PRIVILEGED with the same guard the swarm/projects admin routes
 use: the operator's admin service token presented as `X-Admin-Token` and
 validated against the API's token store (smoke spec §3; this replaces the
-`ADMIN_TOKEN` environment variable), or —
-only outside prod — the `config.allowInsecure` convenience path. Fail-closed: the
-403 check runs before any DB work. The `/admin` view is intentionally NOT in the
+`ADMIN_TOKEN` environment variable). There is no convenience path: issue #973
+retired `config.allowInsecure` and the runtime's environment class, so every
+stack requires the credential. Fail-closed: the 403 check runs before any DB
+work. The `/admin` view is intentionally NOT in the
 public nav; the token is kept in `sessionStorage` for the tab. The old smoke
 TUI's per-boot token display is a legacy implementation detail and is not part
 of the adopted deployment design. Use the adopted credential model for future
@@ -416,8 +417,9 @@ are NEVER in the seed; they are fetched live per
   degrades, and last-persisted rows keep serving). Recover with
   `git checkout backend/src/projects/seed/v0-roster-data.json
   backend/src/projects/seed/v0-roster-data.manifest.json`; the next 02:00 cron
-  re-runs on its own. `ROSTER_SEED_PATH` / `ROSTER_SEED_MANIFEST_PATH` are
-  test-only overrides and are REFUSED under `RM_ENV=prod`.
+  re-runs on its own. There is no environment override of the seed path
+  (issue #973 retired `ROSTER_SEED_PATH` / `ROSTER_SEED_MANIFEST_PATH`); only
+  an explicit argument reads another file.
 - **Review expectations:** same as the EDGAR seed — a PR that regenerates this
   seed is a data change, not a code change. Check the manifest's counts against
   its `upstreamTotals`/`skipped`, confirm `generatedAt` moved forward, and treat

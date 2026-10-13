@@ -22,7 +22,7 @@
 // enforced by tests/analytics-api-boundary.test.ts.
 import postgres from "postgres";
 import type postgresTypes from "postgres";
-import { config } from "../config.ts";
+import { testSeamArmed, testSeamRefusal } from "../test-seam.ts";
 
 const WORKER_URL = process.env.WORKER_DATABASE_URL;
 if (!WORKER_URL) {
@@ -79,18 +79,19 @@ export let sql = makePool(WORKER_URL);
 // database this process must now use, and tests never provision the
 // restricted `rm_worker` role's URL.
 //
-// Which is exactly why this REFUSES OUTSIDE `ephemeral`. Replacing the URL is
-// a privilege change, not just a redirect: a call in a deployed worker would
-// move the process off the restricted `rm_worker` role
+// Which is exactly why this REFUSES UNLESS THE TEST SEAM IS ARMED
+// (backend/src/test-seam.ts, armed by backend/tests/preload.ts only). Replacing
+// the URL is a privilege change, not just a redirect: a call in a deployed
+// worker would move the process off the restricted `rm_worker` role
 // (migrations/0016_worker_role.sql:42) and onto whatever role `url` names —
 // silently undoing the analytics write boundary that
-// tests/analytics-worker-role.test.ts exists to prove. `config.env` fails
-// closed to "prod" when RM_ENV is unset (config.ts).
+// tests/analytics-worker-role.test.ts exists to prove. No environment value
+// opens it (issue #973).
 export async function setDatabase(url: string): Promise<void> {
-  if (config.env !== "ephemeral") {
-    throw new Error(
-      `db/worker-client.setDatabase() is a test-only seam and refuses to run under RM_ENV=${config.env}. ` +
-        "Point the worker at a different database with WORKER_DATABASE_URL and restart it.",
+  if (!testSeamArmed()) {
+    throw testSeamRefusal(
+      "db/worker-client.setDatabase()",
+      "Point the worker at a different database with WORKER_DATABASE_URL and restart it.",
     );
   }
   const previous = sql;

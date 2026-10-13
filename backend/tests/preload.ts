@@ -149,7 +149,16 @@ process.env.RM_TEST_MIGRATED_TEMPLATE_DB = "robotmoney_migrated_tmpl";
 // to match POSTGRES_MAJOR (the host's pg_dump may be an older major, which
 // cannot dump from a newer server at all).
 process.env.RM_TEST_PG_CONTAINER = name;
-process.env.RM_ENV = "ephemeral";
+// THE TEST SEAM (issue #973). This process is the harness, and it says so by
+// arming backend/src/test-seam.ts: the one thing that lets db/client.ts and
+// db/worker-client.ts re-point their pools (used below and by
+// tests/support/clean-db.ts), lets swarm/domain.ts write synthetic regime rows,
+// and lets the fixture projects source be injected. No environment value does
+// any of that any more: `RM_ENV` is not set here and not read by the runtime.
+{
+  const { armTestSeam } = await import("../src/test-seam.ts");
+  armTestSeam();
+}
 
 const up = Bun.spawnSync([
   "docker", "run", "-d", "--rm", "--name", name,
@@ -330,6 +339,17 @@ const client = await import("../src/db/client.ts");
     `CREATE DATABASE "${process.env.RM_TEST_MIGRATED_TEMPLATE_DB}" TEMPLATE robotmoney_migrated`,
   );
   await client.setDatabase(baseUrl);
+}
+
+// The projects pipelines run against the OFFLINE fixture source in this
+// process, injected through the seam (projects/access/select.ts): the per-PR
+// suite never reaches a live provider, whatever `PROJECTS_SOURCE` says
+// (tests/projects-hermeticity.test.ts). A deployed process has no injection
+// and refuses without `PROJECTS_SOURCE=live` (tests/projects-source-select.test.ts).
+{
+  const { injectProjectsDataSource } = await import("../src/projects/access/select.ts");
+  const { fixtureProjectsDataSource } = await import("../src/projects/access/fixture-source.ts");
+  injectProjectsDataSource(fixtureProjectsDataSource);
 }
 
 // Report the SERVER's own version, not the tag we asked for, and refuse to run

@@ -82,7 +82,7 @@ async function expectRunFailure(cmd: string[], env: Record<string, string>, labe
 // the check that failed is then the step that is red, not a line in one log.
 
 async function swarmSession(): Promise<void> {
-  // No RM_ALLOW_INSECURE: the driver presents the operator's token for its admin
+  // No insecure flag: the driver presents the operator's token for its admin
   // calls and asserts that a member token is REFUSED on the role-gated routes.
   // The stack's compose env + COMPOSE_FILE ride along because the driver
   // launches one member-agent container per present member.

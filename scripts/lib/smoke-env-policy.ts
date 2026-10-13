@@ -16,11 +16,10 @@
 //
 // Acceptance gates served (spec §10): W1 "Unset `RM_ENV` against a remote target
 // refuses."; W2 "`RM_ENV=stage` + typed owner password against
-// `deployment_identity = production` refuses; plain stage boot incl.
-// `--allow-insecure` against production identity refuses."
+// `deployment_identity = production` refuses; plain stage boot against
+// production identity refuses."
 export {
   describePolicyVerdict,
-  refuseWeakeningFlagsOnProd,
   resolveDeploymentPolicy,
   resolveRmEnv,
   RM_ENV_UNSET_WARNING,

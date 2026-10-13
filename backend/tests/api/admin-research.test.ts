@@ -84,8 +84,8 @@ test("wrong token → 403", async () => {
   expect((await call(req("GET", "/api/admin/research/runs", { token: "nope" })))?.status).toBe(403);
 });
 
-test("RM_ENV=ephemeral does not open the surface without a credential (D52 (1))", async () => {
-  expect(process.env.RM_ENV).toBe("ephemeral");
+test("the test harness does not open the surface without a credential (D52 (1))", async () => {
+  expect(process.env.RM_ENV).toBeUndefined(); // issue #973: the harness declares no env class, and the runtime reads none
   const res = await call(req("GET", "/api/admin/research/runs"));
   expect(res?.status).toBe(403);
 });

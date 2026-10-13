@@ -15,7 +15,7 @@ import {
   ROUTES,
   STANCES,
 } from "@robotmoney/contract";
-import { config } from "../config.ts";
+import { testSeamArmed } from "../test-seam.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { on, onStatement, registerQuery, registerStatement } from "../db/registry.ts";
 import { hashKey } from "../lib/keys.ts";
@@ -3178,12 +3178,14 @@ function syntheticRegimePoint(date: string, t: number, rng: () => number) {
 // `endDate` so downstream sparklines always have enough points. ON CONFLICT DO
 // NOTHING preserves any REAL analytics rows — this only fills gaps.
 //
-// DEMO-ONLY synthesis (finding 009): regime_snapshots is owned by the analytics
-// classifier; synthetic rows may be seeded only for smoke fixtures, never on a
-// live/prod deployment. Gated on RM_ENV: a prod backend refuses to write
-// synthetic rows (a sparse prod table stays sparse and visibly so). The live
-// aggregation path (buildRegimeSummary) no longer calls this at all — only the
-// smoke fixture seeding path (ensureSmokeSubjectFixtures) does.
+// TEST-ONLY synthesis (finding 009, issue #973): regime_snapshots is owned by
+// the analytics classifier; synthetic rows may be written only by the test
+// harness, never by a deployed process. Gated on the test seam
+// (backend/src/test-seam.ts): a process that is not the harness writes nothing
+// (a sparse table stays sparse and visibly so), whatever its environment says.
+// The live aggregation path (buildRegimeSummary) no longer calls this at all —
+// only the smoke fixture seeding path (ensureSmokeSubjectFixtures) does, and on
+// a stack that path upserts the subject and leaves the regime history alone.
 const backfillCount = registerQuery({
   role: "rm_app",
   object: "regime_snapshots",
@@ -3213,7 +3215,7 @@ const backfillInsert = registerQuery({
   },
 });
 export async function backfillRegimeHistory(endDate: string, minPoints = 8): Promise<void> {
-  if (config.env === "prod") return; // never write synthetic rows on the live deployment
+  if (!testSeamArmed()) return; // never write synthetic rows outside the test harness
   const existing = await on(sql, backfillCount)<{ n: number }>`SELECT count(*)::int AS n FROM regime_snapshots`;
   if (Number(existing[0]?.n ?? 0) >= minPoints) return;
   const span = Math.max(minPoints, 14);

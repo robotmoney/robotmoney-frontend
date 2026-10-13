@@ -5601,3 +5601,45 @@ removing the session-less fallback.
 on-time and wrong-subject named takes, and the unchanged issue 570 cases),
 `backend/tests/validation.test.ts`, `backend/tests/signing.test.ts`, and
 `scripts/tests/unit/member-session-client-http.test.ts`.
+
+---
+
+## D69 — The runtime has no environment class: `RM_ENV` and the insecure flag are retired from every container, and the test harness opens test-only paths through one in-process seam (refines D52 (1) and policy §4.4; owner, 2026-10-13)
+
+**Status.** Accepted 2026-10-13. Recorded with issue 973.
+
+**Decision.**
+
+1. No process in a container reads `RM_ENV`. `backend/src/config.ts` has no
+   `env` field. The api's and the workers' startup preflight takes no policy
+   value. The health payload and the boot log lines report no environment.
+2. `RM_ALLOW_INSECURE`, `config.allowInsecure` and `bun smoke --allow-insecure`
+   are retired. No compose file, launcher or stack configuration defines or
+   forwards the variable, and a stack configuration that is handed it refuses.
+   Every privileged route requires its configured credential on every stack
+   (D52 (1)), with no opt-out of any kind.
+3. The test-only paths that `RM_ENV=ephemeral` used to open — re-pointing the
+   db pools, serving the fixture projects source, writing synthetic regime rows
+   — are opened by `backend/src/test-seam.ts`, armed by
+   `backend/tests/preload.ts` in the `bun test` process and by nothing else. A
+   process that is not the armed harness refuses each of them whatever its
+   environment says. The fixture projects source is injected by the harness;
+   a deployed process selects the live source with `PROJECTS_SOURCE=live` or
+   refuses. There is no environment override of the roster seed path.
+4. `RM_ENV` remains the operator's §4.1 policy input to the operator tools
+   (`bun run migrate`, `prod-init`, `bun smoke`'s boot gates, D61) and the
+   stack's declared acceptance path (`backend/src/acceptance-path.ts`). Whether
+   those two readers survive is a separate decision (the follow-ups filed with
+   issue 973); this decision retires the runtime class only.
+5. A repository guard (`scripts/tests/unit/retired-env-guard.test.ts`) fails
+   on a new read of `RM_ENV` outside the policy readers, on any mention of the
+   retired names in a process, compose file or workflow, and on a second
+   caller of the seam.
+
+**Why.** A deployment's identity used to alter runtime authority and
+data-safety behaviour: `smoke`, `stage` and `ephemeral` each relaxed something,
+and an environment variable reaches a deployed process through a compose
+default, a shell export or a profile line. Production v0.5.4 ran as `smoke` and
+persisted fixture projects (issue 1208). Tests take their isolation from an
+ephemeral Postgres and injected credentials; they do not need the server to
+fail open, and a seam armed in one process is a claim the process can verify.

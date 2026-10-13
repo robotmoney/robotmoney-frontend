@@ -171,7 +171,7 @@ export type ApiBoot =
 
 /**
  * Spawn `bun run src/api/index.ts` — docker-compose.yml's api command — with
- * `DATABASE_URL` and `RM_ENV` as given, and wait until it either answers
+ * `DATABASE_URL` and `env` as given, and wait until it either answers
  * /health (served) or exits. Never both: an exit is final, and a served boot
  * is only reported once the port answered.
  */
@@ -179,7 +179,6 @@ export async function bootApi(dbUrl: string, env: Record<string, string> = {}): 
   const port = await freePort();
   const run = spawnEntrypoint("src/api/index.ts", {
     ...process.env,
-    RM_ENV: "stage",
     ...env,
     DATABASE_URL: dbUrl,
     API_PORT: String(port),

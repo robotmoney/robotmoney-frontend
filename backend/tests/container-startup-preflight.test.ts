@@ -17,9 +17,10 @@
 // through its afterCommit seam — a throw after one migration committed, where a
 // killed process would stop — and then boots the api against that database.
 //
-// RM_ENV is `stage` here (and `prod` in one case), the values a stack hands the
-// api. `ephemeral`, the in-process harness's env, reports the same refusals
-// and serves; one case pins that exception so it cannot widen unnoticed.
+// The entrypoint reads no `RM_ENV` (issue #973): a refusal exits 1 whatever the
+// environment says, and the old `ephemeral` exception that served past a
+// refusal is gone. One case hands it each retired value and proves none opens
+// a listener.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -170,31 +171,18 @@ describe("api startup preflight — checks 1-3 as rm_app, refuse to serve on fai
     );
   }, 120_000);
 
-  test("RM_ENV=prod refuses exactly as stage does", async () => {
-    const name = await freshCopy("csp_prod");
-    const boot = await bootApi(databaseUrl(name, { name: "rm_app", password: "wrong-under-prod" }), { RM_ENV: "prod" });
-    await expectRefused(boot, 1);
-  }, 120_000);
-
-  test("PINNED EXCEPTION: RM_ENV=ephemeral (the in-process harness's env) logs the same refusal and serves", async () => {
-    // The only env that serves past a refusal, because the harness spawns this
-    // entrypoint against superuser-built databases for tests about other
-    // things. The line still says what refused, and says why it served.
-    const name = await freshCopy("csp_eph");
-    const boot = await bootApi(databaseUrl(name, { name: "rm_app", password: "wrong-under-ephemeral" }), {
-      RM_ENV: "ephemeral",
-    });
-    try {
-      if (boot.outcome !== "served") throw new Error(`api exited ${boot.code}:\n${boot.run.stderr()}`);
-      const lines = startupLines(boot.run);
-      expect(lines.some((line) => line.startsWith("startup_preflight: refused check 1: "))).toBe(true);
-      expect(lines).toContain(
-        "startup_preflight: serving anyway: RM_ENV=ephemeral is the test harness's env, never a stack's",
-      );
-    } finally {
-      await boot.run.stop();
+  test("no RM_ENV value is an exception: prod, stage, ephemeral, smoke and unset all refuse and leave no listener (issue #973)", async () => {
+    // `ephemeral` used to serve past a refusal ("the harness's env"). The
+    // entrypoint no longer reads the variable at all, so every value is the
+    // same refusal, and no line claims to serve anyway.
+    for (const rmEnv of ["prod", "stage", "ephemeral", "smoke", undefined]) {
+      const name = await freshCopy(`csp_env_${rmEnv ?? "unset"}`);
+      const env: Record<string, string> = rmEnv === undefined ? {} : { RM_ENV: rmEnv };
+      const boot = await bootApi(databaseUrl(name, { name: "rm_app", password: `wrong-under-${rmEnv ?? "unset"}` }), env);
+      const lines = await expectRefused(boot, 1);
+      expect(lines.join("\n")).not.toContain("serving anyway");
     }
-  }, 120_000);
+  }, 300_000);
 });
 
 // ───────────────────────────────────────────────────────────────────────────

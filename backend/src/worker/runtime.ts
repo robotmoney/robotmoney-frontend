@@ -8,7 +8,6 @@
 // owned by this worker back to 'pending' — a stopped worker never leaves an
 // orphaned 'running' row, and the ownership-guarded terminal writes in loop.ts
 // discard a hung handler's eventual result (no duplicate job_runs).
-import { config } from "../config.ts";
 import { processOneJob, releaseOwnedJobs } from "./loop.ts";
 import { tickScheduler } from "./scheduler.ts";
 import { reapStuckJobs } from "./reaper.ts";
@@ -259,7 +258,7 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
   // Lane-aware health/status line: names the lane and its claim allowlist so an
   // operator reading logs (or `docker compose logs worker-<lane>`) can see
   // exactly which kinds this worker may claim.
-  console.log(`worker ${workerId} starting (lane=${lane.name}, claims: ${describeLane(lane)}, env=${config.env}, heartbeat=${heartbeatFile} idle<=${idleProgressTimeoutMs}ms job<=${jobProgressTimeoutMs}ms)`);
+  console.log(`worker ${workerId} starting (lane=${lane.name}, claims: ${describeLane(lane)}, heartbeat=${heartbeatFile} idle<=${idleProgressTimeoutMs}ms job<=${jobProgressTimeoutMs}ms)`);
 
   // Every lane runs the scheduler + reaper too — both are concurrency-safe
   // (SKIP LOCKED / idempotent UPDATE), so N workers ticking them is harmless
