@@ -85,8 +85,8 @@ lifecycle, the scheduler spec governs and this list only summarizes it:
 - There are no swarm schedule rows, cron strings or enable switches in the
   target. A topic's grid (epoch duration and anchor) and judging duration are
   its whole schedule: set by bootstrap data
-  on a blank database, changed afterwards only through the admin API (US-C1),
-  and never disabled. Schedule toggles in this UI concern analytics rows only.
+  on a blank database, changed afterwards by migration on a deployed stack or
+  through the admin API on an ephemeral one (US-C1, D66), and never disabled. Schedule toggles in this UI concern analytics rows only.
   See [smoke-production-spec §6.3](../technical/smoke-production-spec.md#63-sessions-are-independent)
   and [scheduler spec §2](../technical/system-scheduler-spec.md#2-epochs).
 
