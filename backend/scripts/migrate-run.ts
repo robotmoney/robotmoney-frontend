@@ -182,6 +182,7 @@ import {
 } from "../src/db/schema-manifest.ts";
 import { loadSnapshot, type Snapshot } from "../src/db/schema-snapshot.ts";
 import { on, registerQuery } from "../src/db/registry.ts";
+import { describeReconcile, runReconcile, type ReconcileReceipt } from "../src/db/ledger-reconcile.ts";
 import { describeUnmatchedLedger, matchSupportedRelease } from "../src/db/supported-releases.ts";
 import type { MigrateJournal } from "./migrate-journal.ts";
 import {
@@ -1413,6 +1414,8 @@ export interface MigrateReceiptContext {
   readonly startedAt: Date;
   /** The session target lock the run proceeded under, as `describeHolderText` names it. */
   readonly lock?: string;
+  /** The ledger reconciliation the command ran as its precondition (D66), when it did. */
+  readonly reconcile?: ReconcileReceipt;
 }
 
 /** The receipt's filename inside an instance's state directory. One file per
@@ -1442,6 +1445,9 @@ export async function writeMigrateReceipt(
     env: context.env,
     target: context.target,
     ...(context.lock ? { targetLock: context.lock } : {}),
+    // D66: the precondition's receipt, with the pending set and, under
+    // --pin-ref, each applied file's bytes against the pin.
+    reconcile: context.reconcile ?? null,
     applied: result.applied,
     resumedAndVerified: result.resumedAndVerified,
     grantsRepaired: result.grantsRepaired,
@@ -1525,6 +1531,9 @@ export async function migrateCommand(input: {
    *  whose parent journals the preparation. */
   readonly journal?: MigrateJournal;
   readonly seams?: MigrateRunSeams;
+  /** `--pin-ref`: the release tag or commit the applied files' bytes are held
+   *  to (D66, check 3). Checks 1 and 2 run on every command. */
+  readonly pinRef?: string;
   readonly log: (message: string) => void;
 }): Promise<{ readonly result: MigrateRunResult; readonly receipt: string }> {
   const startedAt = new Date();
@@ -1573,6 +1582,25 @@ export async function migrateCommand(input: {
     const gateOptions: MigrateGateOptions = { caller: input.caller, env: input.env, connection: input.connection };
     const refusals = await checkMigrateGates(reader, gateOptions);
     if (refusals.length > 0) throw new MigrateRefused(refusals.map((r) => r.message).join("\n"));
+
+    // 3b. THE LEDGER RECONCILIATION (D66), read-only on the reader, before any
+    //     password exists: every recorded name is a file of this checkout
+    //     (check 1), the pending set is the checkout minus the ledger (check
+    //     2), and, under --pin-ref, every applied file's bytes are the pin's
+    //     (check 3). Any verdict but `ok` refuses with nothing applied.
+    await phase("reconcile");
+    const reconciled = await runReconcile({
+      migrationsDir: input.seams?.migrationsDir ?? MIGRATIONS_DIR,
+      db: reader,
+      ...(input.pinRef === undefined ? {} : { pinRef: input.pinRef }),
+    });
+    if (reconciled.verdict !== "ok") {
+      throw new MigrateRefused(
+        `Refusing: the ledger does not reconcile with ${reconciled.migrationsDir} (${reconciled.verdict}): ` +
+          `${describeReconcile(reconciled)}. Receipt: ${JSON.stringify(reconciled)}. Nothing was applied.`,
+      );
+    }
+    input.log(`reconciled: ${describeReconcile(reconciled)}`);
     const preIdentity = await readPreIdentityState(reader, gateOptions);
     const passName =
       identityFirstKind(input.env) === "production"
@@ -1630,6 +1658,7 @@ export async function migrateCommand(input: {
       target,
       startedAt,
       lock: describeHolderText(heldLock.holder),
+      reconcile: reconciled,
     });
     journal?.close("succeeded", null, receipt);
     return { result, receipt };

@@ -1,16 +1,21 @@
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-// The releases a production database may be upgraded FROM — spec §8.4's
-// `SUPPORTED_RELEASES`, and the one list the first production migrate of §9.1
-// matches a pre-identity ledger against (D55 (5), (8)).
+// The one pre-identity baseline the identity-first pass starts from — spec
+// §9.1's `SUPPORTED_RELEASES`, the list the first production migrate and the
+// remote rehearsal pass match a pre-identity ledger against (D55 (5), (8)).
 //
-// Governed by smoke-production-spec.md §8.4 ("an upgrade from a populated
-// database of each supported release (`SUPPORTED_RELEASES`: production's
-// observed 76-name ledger, v0.5.0 plus four files) passes its data
-// assertions") and §9.1 ("The first production migrate runs before the
-// identity row exists"). The spec and D55 (8) first said "v0.5.0 alone", then
-// named the 73-name ledger read on 2026-09-25; both now name the 76-name ledger
-// read on 2026-10-01 (see WHICH BASELINE).
+// WHAT THIS IS NOT (D66). It is NOT the release preflight's guard. R1.2 and
+// R2.3 (scripts/release/precondition.ts, baseline.ts) and `bun run migrate`'s
+// precondition reconcile the ledger with backend/migrations and the release
+// tag's bytes (./ledger-reconcile.ts), so no per-release constant is retyped
+// after a release. This list exists for one database state only: a ledger that
+// predates the `deployment_identity` table (0081), which no enrolled database
+// has any more. Production enrolled on 2026-10-08 (v0.6.0), so today only a
+// pre-0081 dump restored for the `--local dump` or remote rehearsal pass meets
+// it (D55 (10), D61 rule 2). It is not extended for later releases.
+//
+// Governed by smoke-production-spec.md §9.1 ("The first production migrate
+// runs before the identity row exists") and D55 (8). The spec and D55 (8)
+// first said "v0.5.0 alone", then named the 73-name ledger read on 2026-09-25;
+// both now name the 76-name ledger read on 2026-10-01 (see WHICH BASELINE).
 //
 // WHY THE FILENAME LIST, AND NOT A TAG OR A NUMBER. §8.1: "the exact filename
 // list of the migrations it embodies (a number alone is not an identity)". This
@@ -22,9 +27,9 @@ import { join } from "node:path";
 // that is a prefix, a superset or a near miss is a partly migrated or
 // hand-edited database, and the one guarded exception of §4.3 is not for it.
 //
-// WHICH BASELINE: WHAT PRODUCTION'S LEDGER ACTUALLY HOLDS. D55 (8) named
-// v0.5.0 as the release production runs. Production's `schema_migrations`,
-// read on 2026-10-01 (the capture restored on stage-2), holds 76 rows: all 72
+// WHICH BASELINE: WHAT PRODUCTION'S LEDGER HELD BEFORE 0081. D55 (8) named
+// v0.5.0 as the release production ran. Production's `schema_migrations`,
+// read on 2026-10-01 (the capture restored on stage-2), held 76 rows: all 72
 // files of the v0.5.0 tag plus four more.
 //   - 0062_rm_readonly_sequence_select.sql, applied 2026-09-22 03:35 UTC. It is
 //     in neither v0.5.0 nor the current releases-0.5.x line as production ran
@@ -38,13 +43,13 @@ import { join } from "node:path";
 //     2026-09-25 21:38 UTC.
 //   - 0080_analytics_ledger_compaction.sql, shipped by v0.5.2 and applied
 //     2026-09-29 20:46 UTC.
-// Production has since shipped v0.5.3 and v0.5.4 with no migration, so the
-// ledger is the same at v0.5.4. Lucas, the owner, replaced the 73-name
-// baseline of 2026-09-25 with this one on 2026-10-03 (issue 1097, D55 (8)):
-// the one supported baseline is the exact set production holds, named for its
-// provenance. A pure v0.5.0 ledger, and the old 73-name ledger, are NOT
-// supported: no database holds them, and each is the "files missing" case the
-// first production migrate refuses.
+// Production shipped v0.5.3 and v0.5.4 with no migration, so the ledger was
+// the same at v0.5.4, the state the v0.6.0 cutover started from. Lucas, the
+// owner, replaced the 73-name baseline of 2026-09-25 with this one on
+// 2026-10-03 (issue 1097, D55 (8)): the one supported baseline is the exact
+// set production held, named for its provenance. A pure v0.5.0 ledger, and
+// the old 73-name ledger, are NOT supported: no database holds them, and each
+// is the "files missing" case the identity-first pass refuses.
 //
 // The list is pinned twice, and a test fails when either disagrees: the v0.5.0
 // part in backend/tests/fixtures/releases/v0.5.0/release.json with a sha256 per
@@ -145,15 +150,7 @@ const V0_5_0_MIGRATIONS: readonly string[] = [
   "0061_source_value_provenance.sql",
 ];
 
-/** v0.6.0 shipped every migration file through this one; later files are newer releases'. */
-const V0_6_0_LAST_FILE = "0115_token_market_samples.sql";
-const MIGRATIONS_DIR = join(import.meta.dir, "..", "..", "migrations");
-/** Read from the checkout's migrations folder. Empty where the folder is absent (a bundled tool). */
-const V0_6_0_MIGRATIONS: readonly string[] = existsSync(MIGRATIONS_DIR)
-  ? readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql") && f <= V0_6_0_LAST_FILE).sort()
-  : [];
-
-/** Production's observed ledger (see the header). Adding one takes an owner decision. */
+/** Production's pre-identity ledger (see the header). The one entry; adding one takes an owner decision. */
 export const SUPPORTED_RELEASES: readonly SupportedRelease[] = [
   {
     name: "v0.5.0+0061+0062+0063+0080 (production ledger 2026-10-01)",
@@ -176,13 +173,6 @@ export const SUPPORTED_RELEASES: readonly SupportedRelease[] = [
       "0063_swarm_judge_model_default.sql",
       "0080_analytics_ledger_compaction.sql",
     ].sort(),
-  },
-  {
-    name: "v0.6.0 (production ledger 2026-10-09)",
-    release: "v0.6.0",
-    outOfBand: [],
-    provenance: "production runs v0.6.0 (e96d4598) since 2026-10-08: its ledger is every file of that tree, through " + V0_6_0_LAST_FILE,
-    migrations: V0_6_0_MIGRATIONS,
   },
 ];
 

@@ -30,7 +30,14 @@
 // target `~/.env` names (`host`, `port` or 5432, `database` or `dbname`, as
 // spelled there). A mismatch prints both. Nothing is normalized.
 //
-// usage: bun run migrate --confirm-target <host:port/database> [--instance <name>] [--receipt <path>] [--lock-timeout <seconds>]
+// usage: bun run migrate --confirm-target <host:port/database> [--instance <name>] [--receipt <path>] [--lock-timeout <seconds>] [--pin-ref <tag|commit>]
+//
+// THE PRECONDITION (D66). Before the owner password is read, the command
+// reconciles the ledger with backend/migrations read-only (src/db/
+// ledger-reconcile.ts): every recorded name must be a file of this checkout,
+// the pending set is the checkout minus the ledger, and under `--pin-ref` (the
+// version production reports) every applied file's bytes must equal the pin's.
+// Any other verdict refuses with nothing applied; the receipt records it.
 //
 // `--instance` defaults to the production instance under RM_ENV=prod. Any other
 // policy must name where the receipt goes, because a receipt written to a
@@ -88,6 +95,7 @@ const receiptFlag = flag("--receipt");
 const confirmTarget = confirmTargetFlag(process.argv.slice(2));
 const instanceFlag = flag("--instance");
 const lockTimeoutSeconds = Number(flag("--lock-timeout") ?? DEFAULT_LOCK_TIMEOUT_SECONDS);
+const pinRef = flag("--pin-ref");
 if (!Number.isFinite(lockTimeoutSeconds) || lockTimeoutSeconds < 0) refuse("--lock-timeout needs a number of seconds");
 
 const envPath = homeEnvFilePath();
@@ -166,6 +174,7 @@ try {
     },
     receiptPath,
     journal,
+    ...(pinRef === undefined ? {} : { pinRef }),
     log,
   });
   log(`applied ${result.applied.length} migration(s)${result.applied.length ? `: ${result.applied.join(", ")}` : ""}`);

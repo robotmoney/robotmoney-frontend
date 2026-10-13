@@ -4352,6 +4352,11 @@ these holds:
 - the operator types the `rm_owner` password;
 - the operator answers an explicit `y`.
 
+Amended on 2026-10-12 ([D66](#d66)): the exact match against
+`SUPPORTED_RELEASES` is this pass's guard alone. Every other `bun run migrate`
+and the release preflight reconcile the ledger with the migration files and
+the release tag's bytes, and name no per-release constant.
+
 Its receipt records the pre-identity state: that no identity row existed, the
 release the ledger matched, and that ledger's filename list. The pass writes
 `production` with 0081 (decision 9,
@@ -4455,6 +4460,13 @@ runner was written for one upgrade and refused the system it had to upgrade
 76). The owner wants the fact removed, not retyped each release (the closed simplify
 attempt pr (1271)). See [D61's amendment](#d61-amendment-1272) for the rest of the
 removal.
+
+Amended again on 2026-10-13 ([D66](#d66)), superseding the gap rule of the 1272 amendment above: this list is the pre-identity baseline
+of decision 5 only, the state a pre-0081 dump restored for a rehearsal pass
+holds. It is not the release preflight's guard and is not extended for later
+releases: production enrolled on 2026-10-08, and from v0.6.0 on the preflight
+and the normal migrate path reconcile the ledger with the files and the
+release tag's bytes, and `scripts/release/ledger.ts`'s "no repository file below the newest recorded one may be missing" rule goes with it, because the checks read no number order. The v0.6.0 entry added on 2026-10-09 is removed.
 
 Production records `0080_analytics_ledger_compaction`, so a pending file
 numbered 0063 to 0079 sorts below the last recorded row and the gap rule
@@ -5488,3 +5500,57 @@ whether it ran.
 `scripts/tests/unit/docs-migration-rule-decision.test.ts` require this entry
 and refuse any current doc that still names the admin API as the sole way a
 subject's scheduling columns change.
+
+## D66 — The ledger is reconciled with the migration files and the release tag's bytes, never matched against a per-release constant; new migration prefixes are unique and strictly increasing (owner, 2026-10-09)
+
+**Status.** Accepted 2026-10-09. Recorded with issue 1273, after the v0.6.1 QA
+session. Amends [D55](#d55) (5) and (8).
+
+**Decision.**
+
+1. One deterministic read-only check, `backend/src/db/ledger-reconcile.ts`,
+   compares the ledger with the files. Check 1: every name in
+   `schema_migrations` exists in `backend/migrations/` (else
+   `ledger-not-subset`). Check 2: pending is exactly the repository minus the
+   ledger, by filename; a caller that names the list it intends to apply gets
+   `unexpected-pending` on any difference. Check 3: for each applied name the
+   sha256 of the checked-out file equals the sha256 of the same path at the
+   pin ref (`bytes-differ` with both hashes; `unpinned` when the ref lacks
+   it). No check reads a 4-digit prefix or the `applied_at` order.
+2. The pin ref is the caller's. The database records no release tag, so the
+   runner takes `--pin-ref <tag|commit>`, the version production reports,
+   resolves it with `git rev-parse --verify` in the checkout, and refuses with
+   `pin-ref-unresolved` when it is absent. It never falls back to `HEAD` or to
+   the checkout.
+3. The release preflight's R1.2 and R2.3 and `bun run migrate`'s normal path
+   call this runner and refuse on any verdict but `ok`. `bun run migrate` runs
+   checks 1 and 2 before applying anything and check 3 under `--pin-ref`.
+   `bun run --cwd backend reconcile --pin-ref <ref> --json` prints the
+   receipt and exits 0 only on `ok`.
+4. `SUPPORTED_RELEASES` shrinks to the pre-identity baseline of D55 (5) and
+   (8), the one state the identity-first pass starts from. It is not retyped
+   per release. The supported-releases bump pr (1271) and its issue (1270),
+   which would have made it the 116-name v0.6.1 ledger, were closed unmerged.
+5. A new migration file takes the 4-digit prefix one above the highest prefix
+   present. The fourteen prefixes already carrying more than one file and the
+   `0064` to `0079` gap are grandfathered by the explicit allowlist in
+   `backend/tests/migration-numbering.test.ts`. No existing file is renamed.
+
+**Why.** `backend/migrations` holds 122 files; fourteen prefixes are used more
+than once and sixteen are skipped, so a number is neither a key nor a
+sequence. Production's ledger applied seven files out of number order and the
+ledger keys on the full filename, which is the only reason the duplicates do
+no harm. The preflight's exact match against a hard-coded list of the
+previous release's filenames refused a healthy production database after
+every release until someone edited the constant, and never checked the SQL
+bytes that ran, so an edited applied file passed unnoticed. Migrations are the
+one path production data may change by, so the check must be sound and must
+need no upkeep: the repository is the only file list, and the tag production
+reports is the only source of the bytes. The single-file migration strategy
+(issue 1173, folded into 1220) is a separate, later direction.
+
+**Enforcement.** `backend/tests/migration-numbering.test.ts`,
+`backend/tests/ledger-reconcile.test.ts`,
+`backend/tests/ledger-reconcile-runner.test.ts`, the reconcile cases of
+`backend/tests/migrate-run.test.ts`, and the R1.2 and R2.3 cases of
+`scripts/tests/unit/release-run.test.ts`.
