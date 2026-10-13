@@ -12,10 +12,17 @@
 // with stdin closed. The marker lets the runner copy back only the receipts a
 // step wrote (find -newer).
 //
-// The ids follow the v0.6.0 runbook (docs/runbooks/v0-6-0-rollout.md): R1 the
-// release identity, R2 the baseline, R6 the cutover, S8 the recovery matrix's
-// legacy rename, R7 the postflight. `standing` names the standing runbook rows
-// each step satisfies (docs/runbooks/release-standing-runbook.md).
+// The ids keep the shape the v0.6.0 runbook introduced: R1 the release
+// identity, R2 the baseline, R6 the cutover, R7 the postflight, W the watch.
+// `standing` names the standing runbook rows each step satisfies
+// (docs/runbooks/release-standing-runbook.md).
+//
+// The list holds no past-upgrade fact (issue 1272): it reads the running
+// system (the ledger against backend/migrations, the stack the host's smoke
+// state names, /api/version) and runs any patch from the version production
+// actually runs. A one-time action one release needs is a delta step
+// (RELEASE_DELTAS, stepsFor), gated on a precondition receipt that proves it
+// has not run; it never joins this list.
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,17 +61,11 @@ export interface StepTemplate {
   readonly standing: readonly string[];
   readonly description: string;
   readonly host: StepHost;
-  /**
-   * `legacy` runs the step from the target's LEGACY checkout, with HOME set and
-   * no RM_ENV: the old code grades the old stack it started (R2.5). Default:
-   * the release checkout.
-   */
-  readonly checkout?: "release" | "legacy";
   /** Commands as argv templates; they run in order joined by `&&`. */
   readonly cmds: readonly (readonly string[])[];
   /** Extra non-secret environment for every command, templated. */
   readonly env?: Readonly<Record<string, string>>;
-  /** The step also exports the target's `bootEnv` (runbook R6.2a). */
+  /** The step also exports the target's `bootEnv` (the boots). */
   readonly bootEnv?: boolean;
   readonly expectExit: number;
   readonly receipts: readonly ReceiptSpec[];
@@ -106,10 +107,53 @@ export interface StepTemplate {
    * own folder (CAPTURE_CHECKOUT, ./target.ts), so a fresh capture host or a
    * deleted folder heals instead of failing. A folder that exists without
    * `.git` is never touched: the clone refuses a non-empty directory, and the
-   * step fails. The clone is plain, never `--reference <legacy checkout>`:
-   * S8.1 renames the legacy checkout, which would break an alternates pointer.
+   * step fails. The clone is plain, never `--reference <another checkout>`:
+   * a checkout that later moves would break an alternates pointer.
    */
   readonly cloneFrom?: string;
+  /**
+   * A delta step's gate: the step runs only while this file (templated) is
+   * absent on its host, and is recorded `skipped: <path> exists` once it is
+   * there. A one-time action proves it has not run by the receipt it leaves
+   * (for example credential.json), so a second run of the same list never
+   * repeats it. Only a delta step (RELEASE_DELTAS) carries it.
+   */
+  readonly gateAbsent?: string;
+}
+
+/**
+ * A release-specific step: a one-time action one release's delta runbook
+ * declares, inserted after `after` in the generic list for that release only.
+ * It carries a gate (`gateAbsent`), so it is idempotent by construction.
+ */
+export interface DeltaStep extends StepTemplate {
+  readonly after: string;
+  readonly gateAbsent: string;
+}
+
+/**
+ * The delta steps by release name (the target's `release`). The generic list
+ * holds none; a release that needs a one-time action declares it here, with
+ * its delta runbook, and it leaves when the release ships. Empty today.
+ */
+export const RELEASE_DELTAS: Readonly<Record<string, readonly DeltaStep[]>> = Object.freeze({});
+
+/**
+ * PURE. The step list of one release: the generic list with that release's
+ * delta steps inserted after their `after` step. An `after` the list lacks,
+ * or a delta id the list already holds, throws. The hash is taken over the
+ * result, so stage and prod of one release share it and a delta changes it.
+ */
+export function stepsFor(release: string, base: readonly StepTemplate[] = RELEASE_STEPS, deltas: Readonly<Record<string, readonly DeltaStep[]>> = RELEASE_DELTAS): StepTemplate[] {
+  const out: StepTemplate[] = [...base];
+  for (const d of deltas[release] ?? []) {
+    const at = out.findIndex((s) => s.id === d.after);
+    if (at < 0) throw new Error(`delta step ${d.id} of ${release} runs after ${d.after}, which the list lacks`);
+    if (out.some((s) => s.id === d.id)) throw new Error(`delta step ${d.id} of ${release} is already a step of the list`);
+    const { after: _after, ...step } = d;
+    out.splice(at + 1, 0, step);
+  }
+  return out;
 }
 
 /** The repository every checkout fetches from; R1.1 and R1.4 clone a missing checkout from it. */
@@ -170,7 +214,7 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "R1.2", standing: ["SP.1"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("host-identity.json")],
-    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger is a supported baseline, its identity is absent or matches RM_ENV; before R6.1, ~/.env holds a non-empty rm_owner line and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no release step reads doadmin; RM_CREDENTIALS is not required (R6.2a writes it)",
+    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger is a prefix of backend/migrations by filename set (no unknown or skipped name, never a count), its identity is absent or matches RM_ENV; before R6.1, ~/.env holds non-empty rm_owner and RM_CREDENTIALS lines and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no release step reads doadmin",
     cmds: [["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--receipt-dir", RUN_DIR]],
   },
   {
@@ -215,20 +259,19 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   {
     id: "R2.3", standing: ["SP.3", "SP.6"], host: "target", irreversible: false, expectExit: 0,
     receipts: [{ dir: `${STATE_DIR}/release/{runTs}`, pattern: "baseline*", required: true }],
-    description: "Baseline through rm_readonly: ledger, identity, roles, migration 0101's would-clear list, supported-baseline match, R2.4 counts and size",
+    description: "Baseline through rm_readonly: ledger, identity, roles, migration 0101's would-clear list, the pending set (backend/migrations minus the ledger), R2.4 counts and size",
     cmds: [["bun", "scripts/release/baseline.ts", "--instance", "{instance}", "--run", "{runTs}"]],
   },
   {
-    id: "R2.5", standing: ["SP.5"], host: "target", checkout: "legacy", irreversible: false, expectExit: 0, triage: true, receipts: [runReceipts("prod-gate-baseline.*")],
-    description: "Log baseline of the running legacy stack, graded by the legacy checkout's own prod:gate for the instance",
+    id: "R2.5", standing: ["SP.5"], host: "target", irreversible: false, expectExit: 0, triage: true, receipts: [runReceipts("prod-gate-baseline.*")],
+    description: "Log baseline of the running stack the instance's smoke state names, graded by prod:gate from the release checkout",
     cmds: [["bun", "run", "prod:gate", "--mode", "baseline", "--instance", "{instance}", "--report", `${RUN_DIR}/prod-gate-baseline.md`]],
   },
   // ── R6 cutover ────────────────────────────────────────────────────────────
   {
     id: "R6.1", standing: ["SC.2"], host: "target", irreversible: true, expectExit: 0, receipts: [runReceipts("stop-legacy.json")],
-    description: "Stop the legacy stack: its tmux driver, then docker compose down (never -v); prove no legacy container remains",
-    cmds: [["bun", "scripts/release/stop-legacy.ts", "stop", "--session", "{legacySession}", "--project", "{legacyProject}",
-      "--legacy-checkout", "{legacyCheckout}", "--compose-files", "{legacyComposeFiles}", "--receipt-dir", RUN_DIR]],
+    description: "Stop the running stack: the one the instance's smoke state names, with bun run smoke:down --instance {instance} (never -v); refuses when the state names no stack; proves no container of its project remains",
+    cmds: [["bun", "scripts/release/stop-legacy.ts", "stop", "--instance", "{instance}", "--receipt-dir", RUN_DIR]],
   },
   {
     id: "R6.2", standing: ["SV.6"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("env-rewrite.json")],
@@ -240,11 +283,6 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     receipts: [stateReceipts("migrate-receipt-*.json"), stateReceipts("migrate-journal-*.json", false)],
     description: "The first migrate: 0081 first with the identity RM_ENV implies, then every pending file",
     cmds: [["bun", "run", "migrate", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]],
-  },
-  {
-    id: "S8.1", standing: [], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("retire-legacy.json")],
-    description: "Rename the legacy checkout to <path>.<version>-retired, then move its .env secrets (database URLs, model keys) to ~/.env.legacy-retired-<ts> and make that .env 0600",
-    cmds: [["bun", "scripts/release/stop-legacy.ts", "retire", "--legacy-checkout", "{legacyCheckout}", "--version", "{legacyVersion}", "--run", "{runTs}", "--receipt-dir", RUN_DIR]],
   },
   {
     id: "R6.4", standing: [], host: "target", irreversible: false, expectExit: 0, receipts: [prodInitReceipt("set-identity")],
@@ -309,8 +347,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "R7.7", standing: ["SV.6"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("host-guards.json")],
-    description: "Host guards: no container mounts docker.sock, ~/.env keys within the allowlist, token files 0600, no world-readable file under home or the retired checkout holds a postgres URL with a password",
-    cmds: [["bun", "scripts/release/host-guards.ts", "--instance", "{instance}", "--legacy-retired", "{legacyCheckout}.{legacyVersion}-retired", "--receipt-dir", RUN_DIR]],
+    description: "Host guards: no container mounts docker.sock, ~/.env keys within the allowlist, token files 0600, no world-readable file under home holds a postgres URL with a password",
+    cmds: [["bun", "scripts/release/host-guards.ts", "--instance", "{instance}", "--receipt-dir", RUN_DIR]],
   },
   // ── W watch: every subject publishes once after READY ─────────────────────
   {
@@ -366,11 +404,6 @@ export function templateValues(target: ReleaseTarget, commit: string, runTs: str
     publicOrigin: target.publicOrigin,
     watchMinAttendance: String(target.watchMinAttendance),
     watchSessions: target.watchSessions,
-    legacyCheckout: target.legacy.checkout,
-    legacySession: target.legacy.tmuxSession,
-    legacyProject: target.legacy.composeProject,
-    legacyComposeFiles: target.legacy.composeFiles.join(","),
-    legacyVersion: target.legacy.version,
   };
 }
 
@@ -423,8 +456,7 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
   }
   const onCapture = step.host === "capture";
   const host = onCapture ? target.capture.host : target.host;
-  const legacy = !onCapture && step.checkout === "legacy";
-  const checkout = onCapture ? target.capture.checkout : legacy ? target.legacy.checkout : target.checkout;
+  const checkout = onCapture ? target.capture.checkout : target.checkout;
   const home = onCapture ? target.capture.home : target.home;
   const runDir = fill(onCapture ? CAPTURE_RUN_DIR : RUN_DIR, values);
   const marker = `${runDir}/.step-${step.id}`;
@@ -433,7 +465,7 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
   // does not. Only these variables exist, the same names on every host.
   const envPairs: string[] = [`HOME=${shellQuote(home)}`];
   for (const [k, v] of Object.entries(BASE_ENV)) envPairs.push(`${k}=${shellQuote(v)}`);
-  if (!onCapture && !legacy) envPairs.push(`RM_ENV=${shellQuote(target.rmEnv)}`);
+  if (!onCapture) envPairs.push(`RM_ENV=${shellQuote(target.rmEnv)}`);
   for (const [k, v] of Object.entries(step.env ?? {})) envPairs.push(`${k}=${shellQuote(fill(v, values))}`);
   if (step.bootEnv) for (const [k, v] of Object.entries(target.bootEnv).sort()) envPairs.push(`${k}=${shellQuote(v)}`);
   const envCmd = (argv: readonly string[]) => `env -i ${envPairs.join(" ")} ${argv.map((a) => shellQuote(fill(a, values))).join(" ")}`;
@@ -441,7 +473,10 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
   // A step that owns its checkout clones it first when it is missing (R1.1, R1.4).
   const clone = step.cloneFrom === undefined ? []
     : [`{ test -e ${shellQuote(`${checkout}/.git`)} || ${envCmd(["git", "clone", "--quiet", step.cloneFrom, checkout])}; }`];
-  const remote = [`mkdir -p ${shellQuote(runDir)}`, `touch ${shellQuote(marker)}`, ...clone, `cd ${shellQuote(checkout)}`, ...commands].join(" && ");
+  // A delta step runs only while its gate file is absent: its own receipt proves the one-time action ran.
+  const body = step.gateAbsent === undefined ? commands
+    : [`{ if test -e ${shellQuote(fill(step.gateAbsent, values))}; then echo ${shellQuote(`[release] ${step.id} skipped: ${fill(step.gateAbsent, values)} exists`)}; else ${commands.join(" && ")}; fi; }`];
+  const remote = [`mkdir -p ${shellQuote(runDir)}`, `touch ${shellQuote(marker)}`, ...clone, `cd ${shellQuote(checkout)}`, ...body].join(" && ");
   return { ...common, host, remote, marker };
 }
 
@@ -452,9 +487,9 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
  */
 export function stepListHash(steps: readonly StepTemplate[] = RELEASE_STEPS): string {
   const canonical = steps.map((s) => ({
-    id: s.id, standing: s.standing, description: s.description, host: s.host, checkout: s.checkout ?? "release", cmds: s.cmds,
+    id: s.id, standing: s.standing, description: s.description, host: s.host, cmds: s.cmds,
     env: s.env ?? {}, bootEnv: s.bootEnv ?? false, expectExit: s.expectExit, receipts: s.receipts, irreversible: s.irreversible,
-    onlyFor: s.onlyFor ?? null, notBefore: s.notBefore ?? null, triage: s.triage ?? false, cloneFrom: s.cloneFrom ?? null,
+    onlyFor: s.onlyFor ?? null, notBefore: s.notBefore ?? null, triage: s.triage ?? false, cloneFrom: s.cloneFrom ?? null, gateAbsent: s.gateAbsent ?? null,
   }));
   // The base environment is part of every remote command, so it is part of the list.
   const base = { envClear: true, env: BASE_ENV, runDir: RUN_DIR, captureRunDir: CAPTURE_RUN_DIR };

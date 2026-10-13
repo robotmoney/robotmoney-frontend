@@ -1,6 +1,13 @@
 # v0.6.0 production rollout — the first cutover on the smoke production design
 
-> **Status: executed by `bun run release:run` ([D61](../decisions.md), the last decision).** No person types on a
+> **History (frozen 2026-10-12, issue 1272).** This runbook records the v0.6.0 cutover as it
+> ran. The release runner reads nothing from it: the step list, the step-list hash and the
+> ledger check live in `scripts/release/` and are described in
+> [`release-run.md`](./release-run.md). The one-time steps named here (R6.2a, R6.7c, R6.7d,
+> S8.1) and the 76/44 split were v0.6.0's and are no longer in the generic list. Numbers
+> below are as of the cutover and are not kept current.
+>
+> **Status: executed by `bun run release:run` ([D61](../decisions.md)).** No person types on a
 > host. Production runs only with three things in hand:
 >
 > 1. a passed stage journal of the same step-list hash and the same commit (standing check SP.8);

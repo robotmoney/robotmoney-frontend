@@ -7,8 +7,8 @@
 // The guards the 0.6 design added, checked on the live host:
 //   1. no container of the instance's compose project mounts a Docker socket;
 //   2. every `$HOME/.env` key is on the D61 allowlist (./env-keys.ts);
-//   4. no world-readable file under HOME or the retired legacy checkout
-//      (--legacy-retired) holds a postgres URL with a password (D61: doadmin
+//   4. no world-readable file under HOME, or under an optional extra root
+//      (--scan <dir>), holds a postgres URL with a password (D61: doadmin
 //      only in ~/.env, which is not world-readable). node_modules, .bun, .cache
 //      and the VCS directory are not walked; files over 1 MB are not read.
 //   3. the three service-token files exist under the instance state
@@ -20,7 +20,8 @@ import { dirname, join, resolve } from "node:path";
 import { homeEnvFilePath, loadEnvFile } from "../lib/env-role.ts";
 import { instancePaths, readStackState, stateRoot } from "../lib/smoke-state.ts";
 import { D61_ENV_ALLOWLIST } from "./env-keys.ts";
-import { POSTGRES_URL_WITH_PASSWORD } from "./stop-legacy.ts";
+/** A postgres URL that carries a password. */
+export const POSTGRES_URL_WITH_PASSWORD = /postgres(?:ql)?:\/\/[^:\s\/@]+:[^@\s]+@/i;
 
 const SKIP_DIRS = new Set(["node_modules", ".bun", ".cache", ".git", ".npm"]);
 
@@ -110,9 +111,9 @@ function flag(name: string): string | undefined {
 function main(): number {
   const instance = flag("--instance");
   const receiptDir = flag("--receipt-dir");
-  const legacyRetired = flag("--legacy-retired");
+  const legacyRetired = flag("--scan");
   if (!instance || !receiptDir) {
-    console.error("usage: bun scripts/release/host-guards.ts --instance <name> [--legacy-retired <dir>] --receipt-dir <dir>");
+    console.error("usage: bun scripts/release/host-guards.ts --instance <name> [--scan <dir>] --receipt-dir <dir>");
     return 2;
   }
   const problems: string[] = [];

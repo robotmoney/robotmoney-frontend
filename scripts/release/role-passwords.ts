@@ -11,7 +11,8 @@
 // from its own stdin with `--doadmin-stdin`, so an agent or the stage rehearsal
 // can pipe it), then runs on the target host
 //
-//   ssh -T -o BatchMode=yes <host> 'cd <checkout> && env -i HOME=<home> PATH=<path> LANG=C.UTF-8 RM_ENV=<env> \
+//   ssh -T -o BatchMode=yes <host> '{ test -e <checkout>/.git || git clone <repo> <checkout>; } && cd <checkout> \
+//     && { test -e node_modules || bun install --force ...; } && env -i HOME=<home> PATH=<path> LANG=C.UTF-8 RM_ENV=<env> \
 //     bun scripts/prod-init.ts role-passwords --instance <i> --confirm-target <T> --doadmin-stdin [...]'
 //
 // and writes the password, with one newline, to that ssh process's stdin and
@@ -20,12 +21,17 @@
 // the same `env -i` environment every release step runs with
 // (scripts/release/steps.ts BASE_ENV), and the flags.
 //
+// It runs from the target's release checkout, the one R1.1 fetches and
+// detaches later: provisioning precedes the run, so the wrapper clones and
+// installs that checkout when it is missing, as R1.1 and R1.3 would. It never
+// names the running stack's checkout: a target holds no such fact (issue 1272).
+//
 // The target comes from the same files `release:run` reads
 // (scripts/release/targets/<name>.json), so the host, checkout, home,
 // instance and `--confirm-target` are the ones the release itself will use.
 import { DOADMIN_STDIN_FLAG, readDoadminPassword, type SecretInput, type SecretOutput } from "../lib/doadmin-input.ts";
 import { targetPath } from "./run.ts";
-import { BASE_ENV, shellQuote } from "./steps.ts";
+import { BASE_ENV, RELEASE_REPO_URL, shellQuote } from "./steps.ts";
 import { loadTarget, type ReleaseTarget } from "./target.ts";
 
 const USAGE = "usage: bun run role-passwords --target <stage|prod|path> [--doadmin-stdin] [--roles <role,…>] [--rotate <role,…>]";
@@ -66,6 +72,7 @@ export function parseWrapperArgs(argv: readonly string[]): WrapperArgs | { error
 /** The remote shell command: names and flags only, never a secret. */
 export function remoteCommand(target: ReleaseTarget, args: WrapperArgs): string {
   const env = [`HOME=${shellQuote(target.home)}`, ...Object.entries(BASE_ENV).map(([k, v]) => `${k}=${shellQuote(v)}`), `RM_ENV=${shellQuote(target.rmEnv)}`];
+  const envCmd = (argv: readonly string[]) => `env -i ${env.join(" ")} ${argv.map(shellQuote).join(" ")}`;
   const argv = [
     "bun", "scripts/prod-init.ts", "role-passwords",
     "--instance", target.instance,
@@ -74,7 +81,13 @@ export function remoteCommand(target: ReleaseTarget, args: WrapperArgs): string 
     ...(args.roles ? ["--roles", args.roles] : []),
     ...(args.rotate ? ["--rotate", args.rotate] : []),
   ];
-  return `cd ${shellQuote(target.legacy.checkout)} && env -i ${env.join(" ")} ${argv.map(shellQuote).join(" ")}`;
+  const checkout = shellQuote(target.checkout);
+  return [
+    `{ test -e ${shellQuote(`${target.checkout}/.git`)} || ${envCmd(["git", "clone", "--quiet", RELEASE_REPO_URL, target.checkout])}; }`,
+    `cd ${checkout}`,
+    `{ test -e node_modules -a -e backend/node_modules || { ${envCmd(["bun", "install", "--force"])} && ${envCmd(["bun", "install", "--force", "--cwd", "backend"])}; }; }`,
+    envCmd(argv),
+  ].join(" && ");
 }
 
 /** The ssh argv: the host and the remote command. */

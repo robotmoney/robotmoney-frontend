@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 // scripts/release/baseline.ts — release step R2.3 (with R2.4), run ON THE TARGET HOST.
-// Standing checks SP.3 (the real ledger equals a shipped baseline) and SP.6
-// (the product baseline for the postflight comparison).
+// Standing checks SP.3 (the real ledger is a prefix of backend/migrations by
+// filename set, ./ledger.ts) and SP.6 (the product baseline for the postflight
+// comparison).
 //
 //   bun scripts/release/baseline.ts --instance <name> --run <run-ts>
 //
@@ -12,17 +13,21 @@
 //   - rm_owner, rm_app, rm_worker, rm_readonly and doadmin: rolcanlogin, rolcreaterole;
 //   - who migration 0101 would clear (D55 (2), issue 1120), with the query
 //     copied verbatim from runbook R2.3 (baseline-would-clear.txt);
-//   - matchSupportedRelease's answer (backend/src/db/supported-releases.ts);
+//   - the ledger reconciliation against backend/migrations (./ledger.ts): the
+//     pending set, and every unknown or skipped name;
 //   - the R2.4 row counts and the database size;
 //   - the sessions in flight, with their window close (R7.4a's parity input).
 // It writes baseline.json beside them in `<instance state dir>/release/<run-ts>/`.
 //
 // It REFUSES (exit 1, after writing the record) when an in-house handle is in
-// the would-clear list, or when the ledger matches no supported baseline.
+// the would-clear list, or when the ledger records a name backend/migrations
+// does not hold or skips one below its newest row. It never judges a count:
+// the same step runs any patch from the ledger production actually holds
+// (issue 1272).
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describeUnmatchedLedger, matchSupportedRelease } from "../../backend/src/db/supported-releases.ts";
 import { openReadOnly, readCounts, readDatabaseSize } from "./db-read.ts";
+import { ledgerProblems, pendingMigrations, repoMigrations } from "./ledger.ts";
 import { releaseStateDir } from "./release-state.ts";
 
 /** The in-house seats migration 0101 must never clear (runbook R2.3). */
@@ -62,12 +67,12 @@ export interface WouldClearRow {
   readonly admin_write_audit_id: string | number | null;
 }
 
-/** PURE. The refusals R2.3 names, empty when the baseline may stand. */
-export function baselineProblems(ledger: readonly string[], wouldClear: readonly Pick<WouldClearRow, "handle">[]): string[] {
+/** PURE. The refusals R2.3 names, empty when the baseline may stand. `repo` defaults to backend/migrations. */
+export function baselineProblems(ledger: readonly string[], wouldClear: readonly Pick<WouldClearRow, "handle">[], repo: readonly string[] = repoMigrations()): string[] {
   const out: string[] = [];
   const inHouse = wouldClear.filter((r) => IN_HOUSE_HANDLES.includes(r.handle)).map((r) => r.handle);
   if (inHouse.length > 0) out.push(`migration 0101 would clear in-house seats: ${inHouse.join(", ")} (a defect: stop)`);
-  if (matchSupportedRelease(ledger) === null) out.push(`the ledger matches no supported baseline: ${describeUnmatchedLedger(ledger)}`);
+  out.push(...ledgerProblems(ledger, repo));
   return out;
 }
 
@@ -97,8 +102,9 @@ async function main(): Promise<number> {
       ...r, window_closes_at: r.window_closes_at === null ? null : new Date(r.window_closes_at).toISOString(),
     }));
     const sizeBytes = await readDatabaseSize(db);
-    const matched = matchSupportedRelease(ledger);
-    const problems = baselineProblems(ledger, wouldClear);
+    const repo = repoMigrations();
+    const pending = pendingMigrations(ledger, repo);
+    const problems = baselineProblems(ledger, wouldClear, repo);
 
     const dir = releaseStateDir(instance, run);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -119,8 +125,9 @@ async function main(): Promise<number> {
       deploymentIdentity: { table: identityTable !== null, kind: identity },
       roles,
       wouldClear,
-      supportedBaseline: matched ? matched.name : null,
-      unmatched: matched ? null : describeUnmatchedLedger(ledger),
+      repoMigrations: repo.length,
+      pending: { count: pending.length, names: pending },
+      ledgerProblems: ledgerProblems(ledger, repo),
       counts,
       inFlight,
       databaseSizeBytes: sizeBytes,
@@ -128,7 +135,7 @@ async function main(): Promise<number> {
     };
     const file = join(dir, "baseline.json");
     writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-    console.log(`[baseline] ${db.target}: ledger ${ledger.length} names, identity ${identityTable ? identity : "absent"}, baseline ${matched?.name ?? "NONE"}`);
+    console.log(`[baseline] ${db.target}: ledger ${ledger.length} names, identity ${identityTable ? identity : "absent"}, repo ${repo.length} files, pending ${pending.length}`);
     console.log(`[baseline] roles: ${roles.map((r) => `${r.rolname} login=${r.rolcanlogin}`).join(", ")}`);
     console.log(`[baseline] would-clear: ${wouldClear.length} row(s)${wouldClear.length ? `: ${wouldClear.map((r) => r.handle).join(", ")}` : ""}`);
     console.log(`[baseline] counts: ${Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(", ")}; size ${sizeBytes} bytes`);

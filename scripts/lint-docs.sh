@@ -69,6 +69,21 @@ for f in "${ic_docs[@]}"; do
   fi
 done
 
+# 4b. Every in-document anchor link in docs/decisions.md resolves: `(#x)` must
+#     name an `<a id="x">` anchor or a heading whose slug is `x`. An amendment
+#     that links to a decision or another amendment fails loudly when the anchor
+#     it names is missing (issue 1272).
+decisions_doc="docs/decisions.md"
+if [ -f "$decisions_doc" ]; then
+  anchors="$(grep -o '<a id="[^"]*"></a>' "$decisions_doc" | sed 's/<a id="\([^"]*\)"><\/a>/\1/')"
+  headings="$(grep -E '^#{1,6} ' "$decisions_doc" | sed -E 's/^#+ //' | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9 _-]//g; s/ /-/g')"
+  for ref in $(grep -o '](#[^)]*)' "$decisions_doc" | sed 's/](#\(.*\))/\1/' | sort -u); do
+    if ! printf '%s\n' "$anchors" | grep -qx "$ref" && ! printf '%s\n' "$headings" | grep -q "^$ref"; then
+      err "$decisions_doc links to #$ref, which no anchor or heading provides"
+    fi
+  done
+fi
+
 # 5. `rm_migrator` appears only in D46/D47 history and smoke-production-spec §3.
 #    The allowed ranges are found by anchor and heading, not by line number, so
 #    an edit above them does not move the goalposts. A missing anchor or heading

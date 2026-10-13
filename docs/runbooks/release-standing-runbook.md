@@ -21,7 +21,10 @@ never silently drops one. It points here and then lists only what is new.
 3. A release runbook adds checks as **release-specific rows** in its own sections.
    They run after the standing row of the same phase.
    One-time migrations that only one release performs (for example 0.6.0's credential
-   rebind of the in-house members, R6.7) belong to that release's runbook, never here.
+   rebind of the in-house members, R6.7) belong to that release's runbook, never here. In
+   the runner they are delta steps of that release (`RELEASE_DELTAS` in
+   `scripts/release/steps.ts`, [`release-run.md`](./release-run.md#delta-steps)), gated on a
+   precondition receipt, never rows of the generic list.
 4. The checks are **cumulative**. A check a past release needed stays here after
    that release ships. A check leaves only through section 6, with an owner decision
    that says why.
@@ -51,7 +54,7 @@ unverified, not satisfied.
 |---|---|---|---|---|
 | SP.1 | Position: which release, which commit, which phase | `bun smoke:status` and the release runbook's section 1 | both | script |
 | SP.2 | Backup taken and **restore proven** into a fresh local database, with the restore time recorded | `bun run release:run` R2.1, R2.2 and R2.4r (`scripts/release/restore-proof.ts`) | both | script |
-| SP.3 | Production's real migration ledger read from the replica and equal to the shipped baseline | `rm_readonly` query, per release runbook | prod | manual |
+| SP.3 | Production's real migration ledger, read through `rm_readonly`, is a prefix of `backend/migrations` by filename set: no unknown name, no skipped file, never a count (issue 1272; it was "equal to the shipped baseline" until 2026-10-12) | `bun run release:run` R1.2 and R2.3 (`scripts/release/ledger.ts`) | both | script |
 | SP.4 | Smoke preflight: 1 role auth, 2 privileges, 3a manifest, 3b compat, 4 `~/.env` keys, 5 identity, 6 subject scheduling columns | `bun smoke` (runs at boot) | both | script |
 | SP.5 | Log baseline: what is already broken, triaged before the cutover | `bun run prod:gate --mode baseline` | prod | script |
 | SP.6 | Product baseline: row counts, published AUM, database size, recorded for the postflight comparison | release runbook R2.4 | prod | manual |
