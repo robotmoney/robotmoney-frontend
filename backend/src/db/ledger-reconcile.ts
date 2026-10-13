@@ -26,8 +26,8 @@
 //      absent at the pin ref is `unpinned` (reported under `bytes-differ`:
 //      the bytes the tag holds are not the bytes that ran).
 //
-// THE PIN REF. The database records no release tag (schema_migrations,
-// deployment_identity and schema_manifest hold none), so the caller passes
+// THE PIN REF. The database records no release tag (neither the ledger, the
+// identity row nor the manifest holds one), so the caller passes
 // `--pin-ref <tag|commit>`: the version production reports. It is resolved with
 // `git rev-parse --verify` in the checkout; an absent ref is
 // `pin-ref-unresolved`, never a silent fallback. Checks 1 and 2 run without a

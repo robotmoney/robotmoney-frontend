@@ -7,8 +7,8 @@
 // precondition reconcile the ledger with backend/migrations and the release
 // tag's bytes (./ledger-reconcile.ts), so no per-release constant is retyped
 // after a release. This list exists for one database state only: a ledger that
-// predates the `deployment_identity` table (0081), which no enrolled database
-// has any more. Production enrolled on 2026-10-08 (v0.6.0), so today only a
+// predates the identity table (0081), which no enrolled database holds any
+// more. Production enrolled on 2026-10-08 (v0.6.0), so today only a
 // pre-0081 dump restored for the `--local dump` or remote rehearsal pass meets
 // it (D55 (10), D61 rule 2). It is not extended for later releases.
 //
