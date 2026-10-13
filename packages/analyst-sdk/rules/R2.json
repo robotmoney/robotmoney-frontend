@@ -1,0 +1,107 @@
+{
+  "id": "R2",
+  "name": "R1 plus Lex's two research previews as tilts on the Bitcoin sleeve",
+  "author": "Lex (the previews and their thresholds: channel divergence, late-cycle signals). Rule form and the 0.80 threshold on the three non-concentration gauges: Claude, 2026-10-08.",
+  "date": "2026-10-08",
+  "status": "hypothesis",
+  "description": "R1, plus two tilts that only act in risk_on. Channel divergence (macro panel > 0.70 while BTC beta < 0.5x its trailing 3-year median, or BTC/QQQ percentile < 0.30, or stablecoin-minus-QQQ 90-day flow negative for 90 days): the Bitcoin sleeve takes the neutral weight. Late cycle (at least 3 of 4 gauges above the 0.80 percentile: SPY/RSP concentration, S-4 deal count, margin-debt YoY, consumer confidence): the Bitcoin sleeve moves halfway back to neutral. Freed weight goes to the yield book pro rata.",
+  "label": "composite",
+  "states": {
+    "risk_off": {
+      "USDC": 5,
+      "SUSDS": 27,
+      "SPARK": 8,
+      "GT": 12,
+      "STEAK": 2,
+      "AAVE": 35,
+      "COMP": 5,
+      "GOLD": 6,
+      "BTC": 0
+    },
+    "neutral": {
+      "USDC": 2,
+      "SUSDS": 24,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 28,
+      "COMP": 5,
+      "GOLD": 6,
+      "BTC": 5
+    },
+    "risk_on": {
+      "USDC": 2,
+      "SUSDS": 22,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 27,
+      "COMP": 5,
+      "GOLD": 4,
+      "BTC": 10
+    }
+  },
+  "yieldBook": [
+    "USDC",
+    "SUSDS",
+    "SPARK",
+    "GT",
+    "STEAK",
+    "AAVE",
+    "COMP"
+  ],
+  "hardAssetVolBudget": {
+    "risk_off": 1.0,
+    "neutral": 2.5,
+    "risk_on": 4.5
+  },
+  "caps": {
+    "Sky": 35,
+    "Aave": 35,
+    "Morpho": 30,
+    "MorphoPerCurator": 12,
+    "MorphoV2": 12,
+    "Compound": 10,
+    "Bitcoin": 10,
+    "Gold": 6
+  },
+  "tilts": [
+    {
+      "id": "channel_divergence",
+      "sleeve": "BTC",
+      "signal": "channel_divergence",
+      "action": "down_one_notch",
+      "onlyIn": [
+        "risk_on"
+      ],
+      "params": {
+        "macroLoud": 0.7,
+        "betaFrac": 0.5,
+        "ratioPct": 0.3,
+        "flowDays": 90,
+        "medianDays": 756
+      },
+      "reason": "The on-chain panel reads crypto activity in isolation; when the macro tailwind is not reaching crypto, the composite overstates risk-on for Bitcoin (channel-divergence preview)."
+    },
+    {
+      "id": "late_cycle",
+      "sleeve": "BTC",
+      "signal": "late_cycle",
+      "action": "halfway_to_neutral",
+      "onlyIn": [
+        "risk_on"
+      ],
+      "params": {
+        "saturated": 0.8,
+        "minGauges": 3,
+        "mnaLagDays": 14,
+        "marginLagDays": 70,
+        "confLagDays": 28
+      },
+      "reason": "A loud risk-on composite with saturated late-cycle gauges is where trimming into strength beats chasing (late-cycle preview)."
+    }
+  ],
+  "driftPtsBySeries": {
+    "BTC": 3
+  }
+}

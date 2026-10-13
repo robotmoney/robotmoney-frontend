@@ -1,0 +1,52 @@
+{
+  "id": "P-B",
+  "name": "B: multi-chain permissionless, fixed weights",
+  "author": "the four proposals, first version of the page (Oct 8, 2026)",
+  "date": "2026-10-08",
+  "status": "ablation",
+  "description": "Dollar yield 62, S&P 500 (SPYx) 15, gold (PAXG, XAUT) 15, Bitcoin 8. Held still; trades only on drift.",
+  "label": "composite",
+  "states": {
+    "risk_off": {
+      "SUSDS": 23,
+      "USDC": 2,
+      "GT": 12,
+      "SPARK": 12,
+      "AAVE": 13,
+      "SPY": 15,
+      "GOLD": 15,
+      "BTC": 8
+    },
+    "neutral": {
+      "SUSDS": 23,
+      "USDC": 2,
+      "GT": 12,
+      "SPARK": 12,
+      "AAVE": 13,
+      "SPY": 15,
+      "GOLD": 15,
+      "BTC": 8
+    },
+    "risk_on": {
+      "SUSDS": 23,
+      "USDC": 2,
+      "GT": 12,
+      "SPARK": 12,
+      "AAVE": 13,
+      "SPY": 15,
+      "GOLD": 15,
+      "BTC": 8
+    }
+  },
+  "yieldBook": [
+    "USDC",
+    "SUSDS",
+    "SPARK",
+    "GT",
+    "AAVE"
+  ],
+  "frozen": "neutral",
+  "driftPtsBySeries": {
+    "BTC": 3
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "id": "S-on",
+  "name": "static at R1's risk_on weights (Bitcoin 10%)",
+  "author": "ablation row, not a proposal",
+  "date": "2026-10-08",
+  "status": "ablation",
+  "description": "R1's risk_on weight set held every week. Lex's own comparison: the overlay against its top state.",
+  "label": "composite",
+  "states": {
+    "risk_off": {
+      "USDC": 2,
+      "SUSDS": 22,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 27,
+      "COMP": 5,
+      "GOLD": 4,
+      "BTC": 10
+    },
+    "neutral": {
+      "USDC": 2,
+      "SUSDS": 22,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 27,
+      "COMP": 5,
+      "GOLD": 4,
+      "BTC": 10
+    },
+    "risk_on": {
+      "USDC": 2,
+      "SUSDS": 22,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 27,
+      "COMP": 5,
+      "GOLD": 4,
+      "BTC": 10
+    }
+  },
+  "yieldBook": [
+    "USDC",
+    "SUSDS",
+    "SPARK",
+    "GT",
+    "STEAK",
+    "AAVE",
+    "COMP"
+  ],
+  "hardAssetVolBudget": {
+    "risk_off": 1.0,
+    "neutral": 2.5,
+    "risk_on": 4.5
+  },
+  "caps": {
+    "Sky": 35,
+    "Aave": 35,
+    "Morpho": 30,
+    "MorphoPerCurator": 12,
+    "MorphoV2": 12,
+    "Compound": 10,
+    "Bitcoin": 10,
+    "Gold": 6
+  },
+  "frozen": "neutral",
+  "driftPtsBySeries": {
+    "BTC": 3
+  }
+}

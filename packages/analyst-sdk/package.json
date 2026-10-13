@@ -11,7 +11,8 @@
     "regime": "bun run bin/regime.ts",
     "golden:regenerate": "bun run scripts/golden-regenerate.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "allocate": "bun run bin/allocate.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",

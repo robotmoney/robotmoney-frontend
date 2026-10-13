@@ -1,0 +1,72 @@
+{
+  "id": "S-avg",
+  "name": "static at R1's average weights (Bitcoin 5.7%, gold 5.1%)",
+  "author": "ablation row, not a proposal",
+  "date": "2026-10-08",
+  "status": "ablation",
+  "description": "A's dollar-book mix scaled to 89.2%, Bitcoin 5.7% and gold 5.1%: R1's average weights over 8 years, held still. Separates exposure from timing.",
+  "label": "composite",
+  "states": {
+    "risk_off": {
+      "USDC": 2.0045,
+      "SUSDS": 24.0539,
+      "SPARK": 11.0247,
+      "GT": 12.027,
+      "STEAK": 7.0157,
+      "AAVE": 28.063,
+      "COMP": 5.0112,
+      "GOLD": 5.1,
+      "BTC": 5.7
+    },
+    "neutral": {
+      "USDC": 2.0045,
+      "SUSDS": 24.0539,
+      "SPARK": 11.0247,
+      "GT": 12.027,
+      "STEAK": 7.0157,
+      "AAVE": 28.063,
+      "COMP": 5.0112,
+      "GOLD": 5.1,
+      "BTC": 5.7
+    },
+    "risk_on": {
+      "USDC": 2.0045,
+      "SUSDS": 24.0539,
+      "SPARK": 11.0247,
+      "GT": 12.027,
+      "STEAK": 7.0157,
+      "AAVE": 28.063,
+      "COMP": 5.0112,
+      "GOLD": 5.1,
+      "BTC": 5.7
+    }
+  },
+  "yieldBook": [
+    "USDC",
+    "SUSDS",
+    "SPARK",
+    "GT",
+    "STEAK",
+    "AAVE",
+    "COMP"
+  ],
+  "hardAssetVolBudget": {
+    "risk_off": 1.0,
+    "neutral": 2.5,
+    "risk_on": 4.5
+  },
+  "caps": {
+    "Sky": 35,
+    "Aave": 35,
+    "Morpho": 30,
+    "MorphoPerCurator": 12,
+    "MorphoV2": 12,
+    "Compound": 10,
+    "Bitcoin": 10,
+    "Gold": 6
+  },
+  "frozen": "neutral",
+  "driftPtsBySeries": {
+    "BTC": 3
+  }
+}

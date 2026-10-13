@@ -1,0 +1,71 @@
+{
+  "id": "R1-conservative",
+  "name": "R1 on Lex's conservative panel vote",
+  "author": "Lex (method: the 3-state rule in backtest.ts and the May 2026 treasury post; bucket behavior from the swarm manifest, 2026-06-02). Numeric translation: Claude, 2026-10-08, using only the page's floors, targets and caps.",
+  "date": "2026-10-08",
+  "status": "ablation",
+  "description": "R1 with the state picked by the conservative vote from backtest.ts instead of the composite label. Sensitivity row.",
+  "label": "conservative",
+  "states": {
+    "risk_off": {
+      "USDC": 5,
+      "SUSDS": 27,
+      "SPARK": 8,
+      "GT": 12,
+      "STEAK": 2,
+      "AAVE": 35,
+      "COMP": 5,
+      "GOLD": 6,
+      "BTC": 0
+    },
+    "neutral": {
+      "USDC": 2,
+      "SUSDS": 24,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 28,
+      "COMP": 5,
+      "GOLD": 6,
+      "BTC": 5
+    },
+    "risk_on": {
+      "USDC": 2,
+      "SUSDS": 22,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 27,
+      "COMP": 5,
+      "GOLD": 4,
+      "BTC": 10
+    }
+  },
+  "yieldBook": [
+    "USDC",
+    "SUSDS",
+    "SPARK",
+    "GT",
+    "STEAK",
+    "AAVE",
+    "COMP"
+  ],
+  "hardAssetVolBudget": {
+    "risk_off": 1.0,
+    "neutral": 2.5,
+    "risk_on": 4.5
+  },
+  "caps": {
+    "Sky": 35,
+    "Aave": 35,
+    "Morpho": 30,
+    "MorphoPerCurator": 12,
+    "MorphoV2": 12,
+    "Compound": 10,
+    "Bitcoin": 10,
+    "Gold": 6
+  },
+  "driftPtsBySeries": {
+    "BTC": 3
+  }
+}
