@@ -140,12 +140,15 @@ fi
 if ! grep -qE '^## D66 — Production data changes only through a migration \(owner, 2026-10-09\)' docs/decisions.md 2>/dev/null; then
   err "docs/decisions.md lacks the D66 entry recording the 2026-10-09 migration rule (issue 1312)"
 fi
-admin_api_hits="$(git grep -n -i -E 'only (through|via|by) the \*{0,2}admin API' -- docs ':!docs/archive' ':!docs/post-mortems' 2>/dev/null || true)"
-if [ -n "$admin_api_hits" ]; then
-  while IFS=: read -r f line _; do
-    err "$f:$line says scheduling columns change only through the admin API; on a deployed stack they change by migration (D66, issue 1312)"
-  done <<<"$admin_api_hits"
-fi
+#    The phrase is matched across a line wrap: each file is read with
+#    newlines folded to spaces before the grep, so "only through the admin\n
+#    API" is caught too.
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  if tr '\n' ' ' <"$f" | grep -q -i -E 'only (through|via|by) the +\*{0,2}admin +API'; then
+    err "$f says scheduling columns change only through the admin API; on a deployed stack they change by migration (D66, issue 1312)"
+  fi
+done <<<"$(git ls-files -- 'docs/*.md' 'docs/**/*.md' ':!docs/archive' ':!docs/post-mortems' 2>/dev/null || true)"
 
 if [ "$fail" -ne 0 ]; then
   exit 1

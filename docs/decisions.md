@@ -5468,8 +5468,9 @@ Carried into the release standing runbook as rule 7 by the v0.6.1 runbook pr
    data delta.
 4. The admin API remains the way an **ephemeral** stack (a smoke run, a CI
    stack, a rehearsal copy of production) changes a subject's scheduling
-   columns. The route has no deployment guard; the rule, not the code, keeps it
-   off production and stage.
+   columns. That write is `backend/src/swarm/admin.ts`, reached through
+   `backend/src/api/routes/swarm-admin.ts`; it has no deployment guard. The
+   rule, not the code, keeps it off production and stage.
 
 **Why.** On 2026-10-09 an operator set the 24 h epoch duration on production by
 hand through the admin route at 16:55 UTC. The change was correct and still left

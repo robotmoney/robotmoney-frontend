@@ -30,24 +30,23 @@ const LINT_DOCS = "scripts/lint-docs.sh";
 /** The heading check 7 of lint-docs.sh greps for, verbatim. */
 const D66_HEADING = /^## D66 — Production data changes only through a migration \(owner, 2026-10-09\)$/m;
 
-/** The stale phrasing, as check 7 greps for it. */
-const STALE = /only (through|via|by) the \*{0,2}admin API/i;
+/** The stale phrasing, as check 7 greps for it, with whitespace (a line wrap included) folded. */
+const STALE = /only (through|via|by) the\s+\*{0,2}admin\s+API/i;
 
 function hasDecision(root: string): boolean {
   return D66_HEADING.test(readFileSync(join(root, DECISIONS), "utf8"));
 }
 
-/** `file:line` of every current doc line with the stale phrasing. */
+/** Every current tracked doc whose text (line wraps folded) has the stale phrasing. */
 function staleHits(root: string): string[] {
   const proc = Bun.spawnSync(
-    ["git", "grep", "-n", "-i", "-E", STALE.source, "--", "docs", ":!docs/archive", ":!docs/post-mortems"],
+    ["git", "ls-files", "--", "docs/*.md", "docs/**/*.md", ":!docs/archive", ":!docs/post-mortems"],
     { cwd: root },
   );
-  const out = proc.stdout.toString().trim();
-  if (out === "" && proc.exitCode === 1) return [];
   expect(proc.stderr.toString()).toBe("");
   expect(proc.exitCode).toBe(0);
-  return out.split("\n").map((row) => row.replace(/^([^:]+:\d+):.*$/, "$1"));
+  const files = proc.stdout.toString().trim().split("\n").filter((f) => f !== "");
+  return files.filter((f) => STALE.test(readFileSync(join(root, f), "utf8")));
 }
 
 function lintDocs(root: string): { exitCode: number; stderr: string } {
@@ -130,10 +129,26 @@ describe("D66 records the 2026-10-09 migration rule and the scheduler docs agree
         "# Planted\n\nThe scheduling columns are changed only through the admin API.\n",
       );
     });
-    expect(staleHits(root)).toEqual(["docs/runbooks/planted.md:3"]);
+    expect(staleHits(root)).toEqual(["docs/runbooks/planted.md"]);
     const { exitCode, stderr } = lintDocs(root);
     expect(exitCode).toBe(1);
-    expect(stderr).toContain("FAIL: docs/runbooks/planted.md:3 says scheduling columns change only through the admin API");
+    expect(stderr).toContain("FAIL: docs/runbooks/planted.md says scheduling columns change only through the admin API");
+  });
+
+  test("red control: the stale sentence wrapped across a line break is refused by both checks", () => {
+    // data-model.md once carried exactly this wrap ("...the admin\n  API"), and a
+    // single-line grep let it through.
+    const root = fixtureRepo((r) => {
+      mkdirSync(join(r, "docs", "architecture"), { recursive: true });
+      writeFileSync(
+        join(r, "docs", "architecture", "planted.md"),
+        "# Planted\n\n  set by bootstrap data and changed only through the admin\n  API\n  (see the spec).\n",
+      );
+    });
+    expect(staleHits(root)).toEqual(["docs/architecture/planted.md"]);
+    const { exitCode, stderr } = lintDocs(root);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("FAIL: docs/architecture/planted.md says scheduling columns change only through the admin API");
   });
 
   test("a hit under docs/post-mortems or docs/archive is history and is not scanned", () => {

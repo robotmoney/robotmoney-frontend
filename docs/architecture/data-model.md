@@ -31,8 +31,8 @@ CSV/JSON, Upstash Redis (comments), and GitHub-as-DB (swarm). Full schema in
   `job_schedules` rows are bootstrap data in the schema snapshot. Under the
   adopted design the swarm session lifecycle has no rows here: a subject's
   scheduling columns (epoch duration, epoch anchor, judging duration) live on
-  `swarm_subjects`, set by bootstrap data and changed only through the admin
-  API
+  `swarm_subjects`, set by bootstrap data and changed afterwards by migration
+  on a deployed stack or through the admin API on an ephemeral one (D66)
   ([system-scheduler-spec §2.3](../technical/system-scheduler-spec.md#23-where-it-lives-and-who-sets-it);
   [smoke-production-spec §8.1](../technical/smoke-production-spec.md#81-snapshot)).
 

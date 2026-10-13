@@ -58,7 +58,7 @@ The grid keeps windows from drifting. A late turnover does not push later window
 
 - On a **blank database** they are set by the bootstrap data in the schema snapshot (`smoke-production-spec.md` §8.1), once, at initial migration.
 - On a **deployed stack** (production, and stage as its rehearsal) they are changed afterwards only by a **migration** under `backend/migrations`, applied by the release's migrate step ([D66](../decisions.md#d66); owner, 2026-10-09). Migration 0117 set the daily epochs; 0121 set the closes six hours apart.
-- On an **ephemeral stack** (a smoke run, a CI stack, a throwaway copy of production) they are changed through the **admin API**, as an ordinary authenticated update to the subject. The route carries no deployment guard; the rule keeps it off deployed stacks.
+- On an **ephemeral stack** (a smoke run, a CI stack, a throwaway copy of production) they are changed through the **admin API**, as an ordinary authenticated update to the subject (`backend/src/swarm/admin.ts`, through `backend/src/api/routes/swarm-admin.ts`). The route carries no deployment guard; the rule keeps it off deployed stacks.
 
 No environment variable sets them. No seed command sets them. No boot overwrites them on a populated database. A rehearsal that wants short epochs or a short judging wait on a throwaway copy of production changes the subjects through the admin API; a change meant for production is a migration, rehearsed on stage first.
 
