@@ -1632,7 +1632,7 @@ describe("MigrateRunSeams — migrationsDir with snapshotDir publishes M's manif
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// The ledger reconciliation precondition (D66; spec §8.1, §9.1)
+// The ledger reconciliation precondition (D67; spec §8.1, §9.1)
 // ───────────────────────────────────────────────────────────────────────────
 //
 // Before the owner password is read, `migrateCommand` reconciles the ledger
@@ -1640,7 +1640,7 @@ describe("MigrateRunSeams — migrationsDir with snapshotDir publishes M's manif
 // check 1 (every recorded name is a file here) and check 2 (the pending set)
 // on every run, check 3 (the applied bytes against --pin-ref) only when a pin
 // ref is given. The receipt carries the reconciliation.
-describe("migrateCommand — the reconcile precondition runs after the gates and before the owner (D66)", () => {
+describe("migrateCommand — the reconcile precondition runs after the gates and before the owner (D67)", () => {
   const log = (): void => {};
   type ReconcileField = { verdict: string; pending: string[]; pinRef: string | null; pinCommit: string | null; perFile: { name: string; verdict: string }[] };
 

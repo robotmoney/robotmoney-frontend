@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // scripts/release/baseline.ts — release step R2.3 (with R2.4), run ON THE TARGET HOST.
 // Standing checks SP.3 (the real ledger reconciles with backend/migrations and
-// the bytes at the tag the running stack reports, ./ledger.ts, D66) and SP.6
+// the bytes at the tag the running stack reports, ./ledger.ts, D67) and SP.6
 // (the product baseline for the postflight comparison).
 //
 //   bun scripts/release/baseline.ts --instance <name> --run <run-ts> --origin <url>
@@ -90,7 +90,7 @@ async function main(): Promise<number> {
     console.error("usage: bun scripts/release/baseline.ts --instance <name> --run <run-ts> --origin <url>");
     return 2;
   }
-  // The pin ref (D66): the tag the running stack reports, else its commit.
+  // The pin ref (D67): the tag the running stack reports, else its commit.
   const version = await readRunningVersion(origin);
   const pinRef = "error" in version ? null : runningPinRef(version);
   const db = await openReadOnly();

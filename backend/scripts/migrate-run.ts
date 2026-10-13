@@ -1414,7 +1414,7 @@ export interface MigrateReceiptContext {
   readonly startedAt: Date;
   /** The session target lock the run proceeded under, as `describeHolderText` names it. */
   readonly lock?: string;
-  /** The ledger reconciliation the command ran as its precondition (D66), when it did. */
+  /** The ledger reconciliation the command ran as its precondition (D67), when it did. */
   readonly reconcile?: ReconcileReceipt;
 }
 
@@ -1445,7 +1445,7 @@ export async function writeMigrateReceipt(
     env: context.env,
     target: context.target,
     ...(context.lock ? { targetLock: context.lock } : {}),
-    // D66: the precondition's receipt, with the pending set and, under
+    // D67: the precondition's receipt, with the pending set and, under
     // --pin-ref, each applied file's bytes against the pin.
     reconcile: context.reconcile ?? null,
     applied: result.applied,
@@ -1532,7 +1532,7 @@ export async function migrateCommand(input: {
   readonly journal?: MigrateJournal;
   readonly seams?: MigrateRunSeams;
   /** `--pin-ref`: the release tag or commit the applied files' bytes are held
-   *  to (D66, check 3). Checks 1 and 2 run on every command. */
+   *  to (D67, check 3). Checks 1 and 2 run on every command. */
   readonly pinRef?: string;
   readonly log: (message: string) => void;
 }): Promise<{ readonly result: MigrateRunResult; readonly receipt: string }> {
@@ -1583,7 +1583,7 @@ export async function migrateCommand(input: {
     const refusals = await checkMigrateGates(reader, gateOptions);
     if (refusals.length > 0) throw new MigrateRefused(refusals.map((r) => r.message).join("\n"));
 
-    // 3b. THE LEDGER RECONCILIATION (D66), read-only on the reader, before any
+    // 3b. THE LEDGER RECONCILIATION (D67), read-only on the reader, before any
     //     password exists: every recorded name is a file of this checkout
     //     (check 1), the pending set is the checkout minus the ledger (check
     //     2), and, under --pin-ref, every applied file's bytes are the pin's

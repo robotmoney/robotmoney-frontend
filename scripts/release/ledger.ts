@@ -1,6 +1,6 @@
 // scripts/release/ledger.ts — the ledger judgement R1.2 and R2.3 share: the
 // database's `schema_migrations` reconciled with backend/migrations and the
-// bytes at the tag the running stack reports (D66; issues 1272, 1273).
+// bytes at the tag the running stack reports (D67; issues 1272, 1273).
 //
 // The release runner holds no past-upgrade fact. It never asks whether the
 // ledger equals one shipped baseline (that was backend/src/db/supported-releases.ts,

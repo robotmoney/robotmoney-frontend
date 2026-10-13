@@ -1,5 +1,5 @@
 // The reconciliation RUNNER and the `bun run reconcile` command
-// (backend/src/db/ledger-reconcile.ts, backend/scripts/reconcile.ts; D66):
+// (backend/src/db/ledger-reconcile.ts, backend/scripts/reconcile.ts; D67):
 // against a clean migration-built Postgres and a temp git repository that
 // holds a copy of backend/migrations committed and tagged.
 //

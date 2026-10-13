@@ -1,6 +1,6 @@
 // Reconcile the migration ledger with the migration files: three deterministic
 // read-only checks and one JSON receipt (smoke-production-spec.md §8.1, §8.4,
-// §9.1; D55 (5), (8); D66).
+// §9.1; D55 (5), (8); D67).
 //
 // WHY A SET CHECK, AND NOT A PER-RELEASE CONSTANT. `schema_migrations.name` is
 // the primary key (./migrate.ts), so the ledger is a set of filenames. The
@@ -197,7 +197,7 @@ const qReadLedger = registerQuery({
   object: "schema_migrations",
   privileges: ["SELECT"],
   site: "src/db/ledger-reconcile:readLedger",
-  purpose: "Read the ledger of applied migration filenames, read-only, to reconcile it with the migrations directory (D66).",
+  purpose: "Read the ledger of applied migration filenames, read-only, to reconcile it with the migrations directory (D67).",
   callers: ["scripts/reconcile", "scripts/migrate-run"],
   probe: { statement: LEDGER_SQL },
 });

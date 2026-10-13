@@ -2,7 +2,7 @@
 // §9.1's `SUPPORTED_RELEASES`, the list the first production migrate and the
 // remote rehearsal pass match a pre-identity ledger against (D55 (5), (8)).
 //
-// WHAT THIS IS NOT (D66). It is NOT the release preflight's guard. R1.2 and
+// WHAT THIS IS NOT (D67). It is NOT the release preflight's guard. R1.2 and
 // R2.3 (scripts/release/precondition.ts, baseline.ts) and `bun run migrate`'s
 // precondition reconcile the ledger with backend/migrations and the release
 // tag's bytes (./ledger-reconcile.ts), so no per-release constant is retyped

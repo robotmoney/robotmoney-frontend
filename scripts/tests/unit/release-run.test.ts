@@ -374,7 +374,7 @@ describe("R2.5 grades the running stack from the release checkout; every target 
 });
 
 // The ledger is reconciled with backend/migrations and the bytes at the tag the
-// running stack reports (D66; issues 1272, 1273): a 116-row ledger passes, an
+// running stack reports (D67; issues 1272, 1273): a 116-row ledger passes, an
 // unknown name refuses by name, an edited applied file refuses with both
 // hashes, a count never decides, and neither does the number order. R1.2 and
 // R2.3 share one helper; precondition.ts stays pure over its receipt.
@@ -429,7 +429,7 @@ describe("the ledger reconciliation (R1.2, R2.3): 116 rows pass, an unknown name
     expect(at([], "v0.6.0").verdict).toBe("ok");
   });
 
-  test("no number order (D66): a ledger that skips a file below its newest row passes, and so does production's out-of-order set", () => {
+  test("no number order (D67): a ledger that skips a file below its newest row passes, and so does production's out-of-order set", () => {
     // The 1272 gap rule refused this; the issue 1273 rule reads no number.
     const gapped = ledger116.filter((n) => n !== ledger116[3]);
     const receipt = at(gapped, "v0.6.0");

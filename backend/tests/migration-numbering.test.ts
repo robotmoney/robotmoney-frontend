@@ -1,5 +1,5 @@
 // The numbering rule for NEW migration files (smoke-production-spec.md §8.1,
-// D66): a new file takes the 4-digit prefix one above the highest prefix
+// D67): a new file takes the 4-digit prefix one above the highest prefix
 // present, so prefixes are unique and strictly increasing from here on.
 //
 // The ledger keys on the full filename (`schema_migrations.name` is the primary

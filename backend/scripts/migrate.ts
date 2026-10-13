@@ -32,7 +32,7 @@
 //
 // usage: bun run migrate --confirm-target <host:port/database> [--instance <name>] [--receipt <path>] [--lock-timeout <seconds>] [--pin-ref <tag|commit>]
 //
-// THE PRECONDITION (D66). Before the owner password is read, the command
+// THE PRECONDITION (D67). Before the owner password is read, the command
 // reconciles the ledger with backend/migrations read-only (src/db/
 // ledger-reconcile.ts): every recorded name must be a file of this checkout,
 // the pending set is the checkout minus the ledger, and under `--pin-ref` (the

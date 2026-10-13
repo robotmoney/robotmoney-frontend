@@ -4352,7 +4352,7 @@ these holds:
 - the operator types the `rm_owner` password;
 - the operator answers an explicit `y`.
 
-Amended on 2026-10-12 ([D66](#d66)): the exact match against
+Amended on 2026-10-12 ([D67](#d67)): the exact match against
 `SUPPORTED_RELEASES` is this pass's guard alone. Every other `bun run migrate`
 and the release preflight reconcile the ledger with the migration files and
 the release tag's bytes, and name no per-release constant.
@@ -4461,7 +4461,7 @@ runner was written for one upgrade and refused the system it had to upgrade
 attempt pr (1271)). See [D61's amendment](#d61-amendment-1272) for the rest of the
 removal.
 
-Amended again on 2026-10-13 ([D66](#d66)), superseding the gap rule of the 1272 amendment above: this list is the pre-identity baseline
+Amended again on 2026-10-13 ([D67](#d67)), superseding the gap rule of the 1272 amendment above: this list is the pre-identity baseline
 of decision 5 only, the state a pre-0081 dump restored for a rehearsal pass
 holds. It is not the release preflight's guard and is not extended for later
 releases: production enrolled on 2026-10-08, and from v0.6.0 on the preflight
@@ -5501,7 +5501,10 @@ whether it ran.
 and refuse any current doc that still names the admin API as the sole way a
 subject's scheduling columns change.
 
-## D66 — The ledger is reconciled with the migration files and the release tag's bytes, never matched against a per-release constant; new migration prefixes are unique and strictly increasing (owner, 2026-10-09)
+---
+
+<a id="d67"></a>
+## D67 — The ledger is reconciled with the migration files and the release tag's bytes, never matched against a per-release constant; new migration prefixes are unique and strictly increasing (owner, 2026-10-09)
 
 **Status.** Accepted 2026-10-09. Recorded with issue 1273, after the v0.6.1 QA
 session. Amends [D55](#d55) (5) and (8).

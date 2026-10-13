@@ -241,7 +241,7 @@ describe("the replay and the up plan (issue 1272)", () => {
     // Red controls: a ledger name the running checkout lacks, an empty ledger.
     expect(upPlan({ ...manifest, ledger: [...manifest.ledger, "0999_x.sql"] }, repo)).toHaveProperty("errors");
     expect(upPlan({ ...manifest, ledger: [] }, repo)).toHaveProperty("errors");
-    // A skipped number is not judged (D66): the dump's ledger is replayed as it is.
+    // A skipped number is not judged (D67): the dump's ledger is replayed as it is.
     const skipped = upPlan({ ...manifest, ledger: ["0001_a.sql", "0083_d.sql"] }, repo);
     expect("errors" in skipped ? skipped.errors : skipped.replay).toEqual(["0001_a.sql", "0083_d.sql"]);
   });

@@ -1,4 +1,4 @@
-// `bun run reconcile` — the ledger reconciliation as a command (D66;
+// `bun run reconcile` — the ledger reconciliation as a command (D67;
 // smoke-production-spec.md §8.1, §9.1). Read-only: one SELECT on
 // schema_migrations, the migrations directory, git.
 //

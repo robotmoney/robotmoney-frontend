@@ -7,7 +7,7 @@
 // read-only, that the database `~/.env` names is one this repository upgrades:
 //   - it answers through `rm_readonly`;
 //   - its ledger reconciles with backend/migrations and the bytes at the tag
-//     the running stack reports (./ledger.ts, D66): no recorded name the
+//     the running stack reports (./ledger.ts, D67): no recorded name the
 //     repository lacks, no applied file whose bytes differ from the pin's;
 //     the pending set is the repository minus the ledger. Never a count,
 //     never a number order;

@@ -1,6 +1,6 @@
 // The three reconciliation checks over fixtures, and the receipt's shape
 // (backend/src/db/ledger-reconcile.ts; smoke-production-spec.md §8.1, §9.1;
-// D66). No database and no git: the pure `reconcile` takes the lists and
+// D67). No database and no git: the pure `reconcile` takes the lists and
 // hash maps the runner would read. The runner itself is proved in
 // ledger-reconcile-runner.test.ts.
 //

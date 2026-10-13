@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ledger-reconcile receipt (backend/src/db/ledger-reconcile.ts, D66)",
+  "title": "ledger-reconcile receipt (backend/src/db/ledger-reconcile.ts, D67)",
   "type": "object",
   "additionalProperties": false,
   "required": [

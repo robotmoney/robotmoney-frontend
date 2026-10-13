@@ -111,7 +111,7 @@ export interface UpPlan {
  * ledger, in its order: never a constant list, never a split typed in from a
  * past upgrade. `repo` is the running checkout's backend/migrations; a ledger
  * name it lacks refuses, because the replay could not read that file. A gap
- * in the numbers is not judged (D66): the dump's ledger is replayed as it is.
+ * in the numbers is not judged (D67): the dump's ledger is replayed as it is.
  */
 export function upPlan(manifest: DumpManifest, repo: readonly string[]): UpPlan | { errors: string[] } {
   const unknown = ledgerNotInRepo(manifest.ledger, repo);

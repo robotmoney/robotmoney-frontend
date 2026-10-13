@@ -12,7 +12,7 @@
 // target precondition (./precondition.ts), read-only through `rm_readonly`:
 // the database answers, its ledger reconciles with backend/migrations and the
 // bytes at the tag the running stack reports at `--origin`/api/version
-// (./ledger.ts, D66), and its deployment_identity is absent or the kind RM_ENV
+// (./ledger.ts, D67), and its deployment_identity is absent or the kind RM_ENV
 // implies. A running stack that reports no version refuses: there is nothing
 // to pin the applied bytes to, and nothing is assumed in its place.
 //
@@ -88,7 +88,7 @@ async function main(): Promise<number> {
   }
   let precondition: { ledgerCount: number; identity: string | null; running: { origin: string; pinRef: string } | null; reconcile: ReconcileReceipt; problems: string[] } | null = null;
   if (confirm !== undefined && resolvedTarget !== undefined && resolvedTarget === confirm) {
-    // The pin ref (D66): the tag the running stack reports, else its commit.
+    // The pin ref (D67): the tag the running stack reports, else its commit.
     // Read before the database, so a stack that reports nothing refuses by name.
     let running: { origin: string; pinRef: string } | null = null;
     if (origin === undefined) problems.push("target precondition: no --origin was given, so the running stack's version cannot pin the applied migration bytes");
