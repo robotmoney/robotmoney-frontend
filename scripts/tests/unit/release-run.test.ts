@@ -46,7 +46,7 @@ import { compareBaseline } from "../../release/compare-baseline.ts";
 import { exposesPostgresUrl, keysOutsideAllowlist, othersCanTraverse, scanForPostgresUrls, socketMounts, tokenFileProblems } from "../../release/host-guards.ts";
 import { noStackRefusal, runStop, smokeDownArgv, type StopDeps } from "../../release/stop-legacy.ts";
 import type { StackStateRecord } from "../../lib/smoke-state.ts";
-import { ledgerProblems, pendingMigrations, repoMigrations } from "../../release/ledger.ts";
+import { ledgerNotInRepo, ledgerProblems, parseRunningVersion, reconcileLedger, repoMigrations, runningPinRef } from "../../release/ledger.ts";
 import { recordedHash } from "../../release/steps-table.ts";
 import { RELEASE_DELTAS, stepsFor, type DeltaStep } from "../../release/steps.ts";
 import { nextRcTag, rcTagsAt } from "../../release/tag.ts";
@@ -373,13 +373,28 @@ describe("R2.5 grades the running stack from the release checkout; every target 
   });
 });
 
-// The ledger is judged against backend/migrations by filename set (issue 1272):
-// a 116-row prefix passes, an unknown name refuses by name, a count never decides.
-describe("the ledger reconciliation (R1.2, R2.3): a prefix of backend/migrations passes, an unknown name refuses", () => {
+// The ledger is reconciled with backend/migrations and the bytes at the tag the
+// running stack reports (D67; issues 1272, 1273): a 116-row ledger passes, an
+// unknown name refuses by name, an edited applied file refuses with both
+// hashes, a count never decides, and neither does the number order. R1.2 and
+// R2.3 share one helper; precondition.ts stays pure over its receipt.
+describe("the ledger reconciliation (R1.2, R2.3): 116 rows pass, an unknown name refuses, the bytes are pinned, no number order", () => {
   const repo = repoMigrations();
   /** A 116-row ledger: the first 116 repository files, as production held after v0.6.0. */
   const ledger116 = repo.slice(0, 116);
   const UNKNOWN = "0999_never_shipped.sql";
+  /** The checkout's own tree, tagged, so check 3 has a pin to resolve. */
+  const work = mkdtempSync(join(tmpdir(), "rm-release-ledger-"));
+  const migrationsDir = join(work, "backend", "migrations");
+  spawnSync("mkdir", ["-p", migrationsDir]);
+  spawnSync("cp", ["-r", `${join(repoRoot, "backend", "migrations")}/.`, migrationsDir]);
+  const vcs = (...args: string[]) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", ...args], { cwd: work, encoding: "utf8" });
+  vcs("init", "-q", "-b", "main");
+  vcs("add", ".");
+  vcs("commit", "-q", "-m", "release");
+  vcs("tag", "v0.6.0");
+  const TAG_COMMIT = vcs("rev-parse", "v0.6.0^{commit}").stdout.trim();
+  const at = (ledger: readonly string[], pinRef?: string) => reconcileLedger(ledger, { migrationsDir, ...(pinRef ? { pinRef } : {}) });
 
   test("the repository holds at least 116 migrations, so the fixture is a real prefix", () => {
     expect(repo.length).toBeGreaterThanOrEqual(116);
@@ -387,38 +402,95 @@ describe("the ledger reconciliation (R1.2, R2.3): a prefix of backend/migrations
     expect(ledger116).toContain(IDENTITY_MIGRATION);
   });
 
-  test("a 116-row prefix ledger passes R1.2 and R2.3; the pending set is the rest of the repository", () => {
-    expect(ledgerProblems(ledger116, repo)).toEqual([]);
-    expect(preconditionProblems({ rmEnv: "prod", ledger: ledger116, identity: "production" })).toEqual([]);
-    expect(preconditionProblems({ rmEnv: "stage", ledger: ledger116, identity: "rehearsal" })).toEqual([]);
-    expect(baselineProblems(ledger116, [])).toEqual([]);
-    expect(pendingMigrations(ledger116, repo)).toEqual(repo.slice(116));
-    // The whole repository recorded: nothing pending, still a prefix.
-    expect(ledgerProblems(repo, repo)).toEqual([]);
-    expect(pendingMigrations(repo, repo)).toEqual([]);
-    // A shorter prefix passes too: the count never decides.
-    expect(ledgerProblems(repo.slice(0, 76), repo)).toEqual([]);
+  test("a 116-row ledger passes R1.2 and R2.3 against the tag; the pending set is the rest of the repository", () => {
+    const receipt = at(ledger116, "v0.6.0");
+    expect(receipt.verdict).toBe("ok");
+    expect(receipt.pinCommit).toBe(TAG_COMMIT);
+    expect(receipt.perFile).toHaveLength(116);
+    expect(receipt.pending).toEqual(repo.slice(116));
+    expect(ledgerProblems(receipt)).toEqual([]);
+    expect(preconditionProblems({ rmEnv: "prod", ledger: ledger116, identity: "production", reconcile: receipt })).toEqual([]);
+    expect(preconditionProblems({ rmEnv: "stage", ledger: ledger116, identity: "rehearsal", reconcile: receipt })).toEqual([]);
+    expect(baselineProblems(receipt, [])).toEqual([]);
+    // The whole repository recorded: nothing pending. A shorter ledger passes too: the count never decides.
+    expect(at(repo, "v0.6.0").pending).toEqual([]);
+    expect(at(repo.slice(0, 76), "v0.6.0").verdict).toBe("ok");
   });
 
-  test("red: one filename backend/migrations lacks refuses, naming it; a skipped file refuses", () => {
+  test("red: one filename backend/migrations lacks refuses, naming it (R1.2 and R2.3)", () => {
     const withUnknown = [...ledger116, UNKNOWN];
-    expect(ledgerProblems(withUnknown, repo).join()).toContain(UNKNOWN);
-    expect(preconditionProblems({ rmEnv: "prod", ledger: withUnknown, identity: "production" }).join()).toContain(UNKNOWN);
-    expect(baselineProblems(withUnknown, []).join()).toContain(UNKNOWN);
+    const receipt = at(withUnknown, "v0.6.0");
+    expect(receipt.verdict).toBe("ledger-not-subset");
+    expect(ledgerProblems(receipt).join()).toContain(UNKNOWN);
+    expect(preconditionProblems({ rmEnv: "prod", ledger: withUnknown, identity: "production", reconcile: receipt }).join()).toContain(UNKNOWN);
+    expect(baselineProblems(receipt, []).join()).toContain(UNKNOWN);
+    expect(ledgerNotInRepo(withUnknown, repo)).toEqual([UNKNOWN]);
+    // green control: an empty ledger reconciles; the identity rules still apply.
+    expect(at([], "v0.6.0").verdict).toBe("ok");
+  });
+
+  test("no number order (D67): a ledger that skips a file below its newest row passes, and so does production's out-of-order set", () => {
+    // The 1272 gap rule refused this; the issue 1273 rule reads no number.
     const gapped = ledger116.filter((n) => n !== ledger116[3]);
-    expect(ledgerProblems(gapped, repo).join()).toContain(`skips 1 repository file(s) below its newest row ${ledger116[115]}: ${ledger116[3]}`);
-    // green control: an empty ledger is a (trivial) prefix; the identity rules still apply.
-    expect(ledgerProblems([], repo)).toEqual([]);
+    const receipt = at(gapped, "v0.6.0");
+    expect(receipt.verdict).toBe("ok");
+    expect(receipt.pending).toContain(ledger116[3]!);
+    // 0032 after 0033, 0061 after 0062, 0056 to 0062 after 0081: the names alone are read.
+    const shuffled = [...ledger116].reverse();
+    expect(at(shuffled, "v0.6.0").verdict).toBe("ok");
+  });
+
+  test("red: an applied file edited after the tag refuses with both hashes; a pending file edited does not", () => {
+    const applied = ledger116[0]!;
+    writeFileSync(join(migrationsDir, applied), `${readFileSync(join(migrationsDir, applied), "utf8")}\n-- edited after it ran\n`);
+    try {
+      const receipt = at(ledger116, "v0.6.0");
+      expect(receipt.verdict).toBe("bytes-differ");
+      const file = receipt.perFile.find((f) => f.name === applied)!;
+      expect(file.verdict).toBe("bytes-differ");
+      expect(file.pinSha256).not.toBeNull();
+      expect(file.pinSha256).not.toBe(file.sha256);
+      expect(ledgerProblems(receipt).join()).toContain(applied);
+      // The same edit on a file the ledger does not record is not an applied-bytes difference.
+      expect(at(ledger116.filter((n) => n !== applied), "v0.6.0").verdict).toBe("ok");
+    } finally {
+      vcs("checkout", "--", join("backend", "migrations", applied));
+    }
+  });
+
+  test("red: an unresolvable pin ref refuses with pin-ref-unresolved and no fallback; no pin ref skips check 3 and says so", () => {
+    const unresolved = at(ledger116, "v9.9.9");
+    expect(unresolved.verdict).toBe("pin-ref-unresolved");
+    expect({ pinCommit: unresolved.pinCommit, perFile: unresolved.perFile }).toEqual({ pinCommit: null, perFile: [] });
+    expect(preconditionProblems({ rmEnv: "prod", ledger: ledger116, identity: "production", reconcile: unresolved }).join()).toContain("pin-ref-unresolved");
+    const unpinned = at(ledger116);
+    expect({ verdict: unpinned.verdict, pinRef: unpinned.pinRef, perFile: unpinned.perFile }).toEqual({ verdict: "ok", pinRef: null, perFile: [] });
+  });
+
+  test("the pin ref is the running stack's tag, else its commit; a stack reporting no version gives none", () => {
+    const sha = "a".repeat(40);
+    expect(runningPinRef({ commit: sha, tag: "v0.6.0" })).toBe("v0.6.0");
+    expect(runningPinRef({ commit: sha, tag: null })).toBe(sha);
+    const parsed = parseRunningVersion(JSON.stringify({ commit: sha, tag: "v0.6.0" }));
+    expect("error" in parsed ? parsed : runningPinRef(parsed)).toBe("v0.6.0");
+    expect(parseRunningVersion(null)).toHaveProperty("error");
+    expect(parseRunningVersion(JSON.stringify({ commit: `${sha}+dirty` }))).toHaveProperty("error");
+    // R1.2 and R2.3 hand the running stack's origin to their scripts.
+    for (const id of ["R1.2", "R2.3"]) {
+      const cmd = RELEASE_STEPS.find((s) => s.id === id)!.cmds[0]!;
+      expect(cmd[cmd.indexOf("--origin") + 1]).toBe("{publicOrigin}");
+    }
   });
 
   test("red: the wrong identity, 0081 without a row, no RM_ENV", () => {
-    expect(preconditionProblems({ rmEnv: "prod", ledger: ledger116, identity: "rehearsal" }).join()).toContain("rehearsal");
-    expect(preconditionProblems({ rmEnv: "stage", ledger: ledger116, identity: "production" }).join()).toContain("production");
-    expect(preconditionProblems({ rmEnv: "prod", ledger: ledger116, identity: null }).join()).toContain(`${IDENTITY_MIGRATION} but deployment_identity has no row`);
-    expect(preconditionProblems({ rmEnv: undefined, ledger: ledger116, identity: null }).length).toBe(1);
+    const receipt = at(ledger116, "v0.6.0");
+    expect(preconditionProblems({ rmEnv: "prod", ledger: ledger116, identity: "rehearsal", reconcile: receipt }).join()).toContain("rehearsal");
+    expect(preconditionProblems({ rmEnv: "stage", ledger: ledger116, identity: "production", reconcile: receipt }).join()).toContain("production");
+    expect(preconditionProblems({ rmEnv: "prod", ledger: ledger116, identity: null, reconcile: receipt }).join()).toContain(`${IDENTITY_MIGRATION} but deployment_identity has no row`);
+    expect(preconditionProblems({ rmEnv: undefined, ledger: ledger116, identity: null, reconcile: receipt }).length).toBe(1);
     // A pre-identity ledger with no row passes: the first migrate writes the row.
     const before81 = repo.filter((n) => n < IDENTITY_MIGRATION);
-    expect(preconditionProblems({ rmEnv: "prod", ledger: before81, identity: null })).toEqual([]);
+    expect(preconditionProblems({ rmEnv: "prod", ledger: before81, identity: null, reconcile: at(before81, "v0.6.0") })).toEqual([]);
   });
 });
 
@@ -868,11 +940,11 @@ describe("baseline and comparison (R2.3, R7.5)", () => {
     expect(p.join("\n")).toContain("gone_later");
     expect(p.join("\n")).toContain("1.5x");
   });
-  test("the baseline refuses an in-house seat and an unknown ledger name; a prefix ledger passes", () => {
+  test("the baseline refuses an in-house seat and an unknown ledger name; a reconciled ledger passes", () => {
     const repo = repoMigrations();
-    expect(baselineProblems(repo.slice(0, 100), [])).toEqual([]);
-    expect(baselineProblems([...repo.slice(0, 100), "0999_x.sql"], []).join()).toContain("0999_x.sql");
-    expect(baselineProblems(repo.slice(0, 100), [{ handle: "themis" }]).join()).toContain("themis");
+    expect(baselineProblems(reconcileLedger(repo.slice(0, 100)), [])).toEqual([]);
+    expect(baselineProblems(reconcileLedger([...repo.slice(0, 100), "0999_x.sql"]), []).join()).toContain("0999_x.sql");
+    expect(baselineProblems(reconcileLedger(repo.slice(0, 100)), [{ handle: "themis" }]).join()).toContain("themis");
     expect(WOULD_CLEAR_SQL).toContain("m.handle <> ALL (ARRAY['athena','noop-analyst','robot-money','themis'])");
   });
 });

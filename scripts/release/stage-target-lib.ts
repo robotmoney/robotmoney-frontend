@@ -18,7 +18,7 @@
 // (issue 1272). Each constant names the production fact it mirrors.
 import PROD_TARGET_FILE from "./targets/prod.json";
 import { STAGE_WEB_PORT } from "../stack/ports.ts";
-import { ledgerProblems } from "./ledger.ts";
+import { ledgerNotInRepo } from "./ledger.ts";
 
 /** Where the target lives on stage-2. These are the release target file's fields. */
 export const STAGE_TARGET = {
@@ -110,10 +110,12 @@ export interface UpPlan {
  * PURE. The plan from a dump manifest. The replay is exactly the manifest's
  * ledger, in its order: never a constant list, never a split typed in from a
  * past upgrade. `repo` is the running checkout's backend/migrations; a ledger
- * name it lacks refuses, because the replay could not read that file.
+ * name it lacks refuses, because the replay could not read that file. A gap
+ * in the numbers is not judged (D67): the dump's ledger is replayed as it is.
  */
 export function upPlan(manifest: DumpManifest, repo: readonly string[]): UpPlan | { errors: string[] } {
-  const errors = ledgerProblems(manifest.ledger, repo).map((p) => `the running checkout at ${manifest.running.commit.slice(0, 8)}: ${p}`);
+  const unknown = ledgerNotInRepo(manifest.ledger, repo);
+  const errors = unknown.length === 0 ? [] : [`the running checkout at ${manifest.running.commit.slice(0, 8)} lacks ${unknown.length} ledger file(s) the replay would read: ${unknown.join(", ")}`];
   if (manifest.ledger.length === 0) errors.push("the dump's ledger is empty");
   if (errors.length > 0) return { errors };
   return { ref: manifest.running.tag ?? manifest.running.commit, commit: manifest.running.commit, replay: [...manifest.ledger] };

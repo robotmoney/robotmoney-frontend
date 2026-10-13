@@ -64,7 +64,7 @@ unverified, not satisfied.
 |---|---|---|---|---|
 | SP.1 | Position: which release, which commit, which phase | `bun smoke:status` and the release runbook's section 1 | both | script |
 | SP.2 | Backup taken and **restore proven** into a fresh local database, with the restore time recorded | `bun run release:run` R2.1, R2.2 and R2.4r (`scripts/release/restore-proof.ts`) | both | script |
-| SP.3 | Production's real migration ledger, read through `rm_readonly`, is a prefix of `backend/migrations` by filename set: no unknown name, no skipped file, never a count (issue 1272; it was "equal to the shipped baseline" until 2026-10-12) | `bun run release:run` R1.2 and R2.3 (`scripts/release/ledger.ts`) | both | script |
+| SP.3 | Production's real migration ledger, read through `rm_readonly`, reconciles with `backend/migrations` and the bytes at the version the running stack reports: no recorded name the repository lacks, no applied file whose bytes differ from the tag's, never a count or a number order (D67, issue 1273; "a prefix by filename set" from 2026-10-12 under issue 1272, "equal to the shipped baseline" before that) | `bun run release:run` R1.2 and R2.3 (`scripts/release/ledger.ts`) | both | script |
 | SP.4 | Smoke preflight: 1 role auth, 2 privileges, 3a manifest, 3b compat, 4 `~/.env` keys, 5 identity, 6 subject scheduling columns | `bun smoke` (runs at boot) | both | script |
 | SP.5 | Log baseline: what is already broken, triaged before the cutover | `bun run prod:gate --mode baseline` | prod | script |
 | SP.6 | Product baseline: row counts, published AUM, database size, recorded for the postflight comparison | release runbook R2.4 | prod | manual |

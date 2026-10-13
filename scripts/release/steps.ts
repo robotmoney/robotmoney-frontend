@@ -214,8 +214,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "R1.2", standing: ["SP.1"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("host-identity.json")],
-    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger is a prefix of backend/migrations by filename set (no unknown or skipped name, never a count), its identity is absent or matches RM_ENV; before R6.1, ~/.env holds non-empty rm_owner and RM_CREDENTIALS lines and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no release step reads doadmin",
-    cmds: [["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--receipt-dir", RUN_DIR]],
+    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger reconciles with backend/migrations and the bytes at the version the running stack reports (no recorded name the repository lacks, no applied file whose bytes differ from the tag's; never a count or a number order), its identity is absent or matches RM_ENV; before R6.1, ~/.env holds non-empty rm_owner and RM_CREDENTIALS lines and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no release step reads doadmin",
+    cmds: [["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--origin", "{publicOrigin}", "--receipt-dir", RUN_DIR]],
   },
   {
     id: "R1.3", standing: ["SP.1"], host: "target", irreversible: false, expectExit: 0, receipts: [],
@@ -259,8 +259,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   {
     id: "R2.3", standing: ["SP.3", "SP.6"], host: "target", irreversible: false, expectExit: 0,
     receipts: [{ dir: `${STATE_DIR}/release/{runTs}`, pattern: "baseline*", required: true }],
-    description: "Baseline through rm_readonly: ledger, identity, roles, migration 0101's would-clear list, the pending set (backend/migrations minus the ledger), R2.4 counts and size",
-    cmds: [["bun", "scripts/release/baseline.ts", "--instance", "{instance}", "--run", "{runTs}"]],
+    description: "Baseline through rm_readonly: ledger, identity, roles, migration 0101's would-clear list, the ledger reconciliation (the pending set, every applied file's bytes against the version the running stack reports), R2.4 counts and size",
+    cmds: [["bun", "scripts/release/baseline.ts", "--instance", "{instance}", "--run", "{runTs}", "--origin", "{publicOrigin}"]],
   },
   {
     id: "R2.5", standing: ["SP.5"], host: "target", irreversible: false, expectExit: 0, triage: true, receipts: [runReceipts("prod-gate-baseline.*")],

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ledger-reconcile receipt (backend/src/db/ledger-reconcile.ts, D67)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "readAt",
+    "migrationsDir",
+    "pinRef",
+    "pinCommit",
+    "ledgerSize",
+    "repoSize",
+    "pending",
+    "missingFromRepo",
+    "unexpectedPending",
+    "perFile",
+    "verdict"
+  ],
+  "properties": {
+    "readAt": { "type": "string" },
+    "migrationsDir": { "type": "string" },
+    "pinRef": { "type": ["string", "null"] },
+    "pinCommit": { "type": ["string", "null"] },
+    "ledgerSize": { "type": "integer" },
+    "repoSize": { "type": "integer" },
+    "pending": { "type": "array", "items": { "type": "string" } },
+    "missingFromRepo": { "type": "array", "items": { "type": "string" } },
+    "unexpectedPending": { "type": "array", "items": { "type": "string" } },
+    "perFile": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "sha256", "pinSha256", "verdict"],
+        "properties": {
+          "name": { "type": "string" },
+          "sha256": { "type": "string" },
+          "pinSha256": { "type": ["string", "null"] },
+          "verdict": { "enum": ["match", "bytes-differ", "unpinned"] }
+        }
+      }
+    },
+    "verdict": { "enum": ["ok", "ledger-not-subset", "unexpected-pending", "bytes-differ", "pin-ref-unresolved"] }
+  }
+}
