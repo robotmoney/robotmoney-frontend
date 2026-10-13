@@ -1160,7 +1160,8 @@ describe("RM_ALLOW_INSECURE is retired: no service receives it, even from a shel
   test("an exported RM_ALLOW_INSECURE=1 reaches no service", () => {
     const rendered = composeConfig({ RM_ALLOW_INSECURE: "1" });
     for (const service of Object.keys(rendered.services ?? {})) {
-      expect(serviceEnv(rendered, service).RM_ALLOW_INSECURE).toBeUndefined();
+      // A service with no environment block at all cannot receive it either.
+      expect(rendered.services[service]?.environment?.RM_ALLOW_INSECURE).toBeUndefined();
     }
   });
 
