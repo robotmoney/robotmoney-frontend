@@ -1,4 +1,4 @@
-// scripts/tests/unit/release-schedule-spacing.test.ts — R7.4a check 1's spacing
+// scripts/tests/unit/schedule-parity.test.ts — R7.4a check 1's spacing
 // assertion (issue 1310): the four production subjects' anchor times of day are
 // exactly 21600 s apart in the order vault, woon, allocation, treasury
 // (migration 0121, scheduler spec §2.2). The drifted pre-0121 grid fails, the
