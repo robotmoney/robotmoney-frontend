@@ -27,6 +27,8 @@ import { CATEGORICAL } from "../../lib/chart-theme.js";
 import { loadAllocationDto } from "../../lib/allocation-framework.js";
 import { loadVaultDetail, loadVaultOverview, VAULT_UNAVAILABLE } from "../../lib/vault-source.js";
 import {
+  GOVERNING_SAFE,
+  TIMELOCK_DELAY_SEC,
   VAULTS,
   contractNetworks,
   explorerLink,
@@ -497,6 +499,13 @@ export function registerDepositView(Alpine) {
     admins() {
       const seen = [...new Set(this.deployed().map((v) => v.onBase?.admin).filter(Boolean))];
       return seen.map((a) => ({ address: a, short: shortAddress(a), href: explorerLink(BASE, a) }));
+    },
+    // The Safe multisig that proposes every admin change to the timelock and
+    // receives the exit fees.
+    safe() { return { address: GOVERNING_SAFE, short: shortAddress(GOVERNING_SAFE), href: explorerLink(BASE, GOVERNING_SAFE) }; },
+    timelockDelay() {
+      const m = Math.round(TIMELOCK_DELAY_SEC / 60);
+      return m >= 120 && m % 60 === 0 ? `${m / 60} hours` : `${m} minutes`;
     },
     audits() {
       return this.deployed().filter((v) => v.onBase?.audit).map((v) => ({ symbol: v.symbol, status: v.onBase?.audit.status, href: v.onBase?.audit.href }));

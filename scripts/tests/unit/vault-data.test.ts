@@ -51,6 +51,12 @@ import {
   portfolioTwr,
   ROUTER,
   USDC_BASE,
+  AGENT_PRICE_RECORDER,
+  GOVERNING_SAFE,
+  LEGACY_V0,
+  TIMELOCK,
+  TIMELOCK_DELAY_SEC,
+  VAULT_REGISTRY,
   isVaultBookReading,
 } from "../../../frontend/public/assets/js/app/lib/vault-data.js";
 import {
@@ -151,45 +157,70 @@ describe("vault identity", () => {
     expect(m![1].split("|")).toEqual(VAULT_SLUGS);
   });
 
-  test("the rmUSDC Base address is the one skill.md publishes; no other vault has one", () => {
-    const skill = readFileSync(join(publicDir, "skill.md"), "utf8");
-    expect(skill).toContain(`\`${VAULTS[0].baseAddress}\``);
-    expect(VAULTS.slice(1).every((v) => v.baseAddress === null)).toBe(true);
+  // The four-vault deployment (RM-176): one set of addresses for the site and
+  // the backend, so the definitive deployment changes both in one diff.
+  test("every vault and the router are on Base, at the backend's addresses (config.ts ROBOTMONEY_VAULTS)", () => {
+    const cfg = readFileSync(join(repoRoot, "backend/src/config.ts"), "utf8");
+    const block = cfg.slice(cfg.indexOf("export const ROBOTMONEY_VAULTS"), cfg.indexOf("} as const;", cfg.indexOf("export const ROBOTMONEY_VAULTS")));
+    const addressOf = (key: RegExp) => (block.match(key)?.[1] ?? "").toLowerCase();
+    for (const v of VAULTS) {
+      expect(v.baseAddress, v.slug).toBe(addressOf(new RegExp(`slug: "${v.slug}"[^}]*address: "(0x[0-9a-fA-F]{40})"`)));
+    }
+    expect(ROUTER.baseAddress).toBe(addressOf(/router: "(0x[0-9a-fA-F]{40})"/));
+    expect(VAULT_REGISTRY).toBe(addressOf(/registry: "(0x[0-9a-fA-F]{40})"/));
+    expect(AGENT_PRICE_RECORDER).toBe(addressOf(/priceRecorder: "(0x[0-9a-fA-F]{40})"/));
   });
 
-  test("what rmUSDC's contract sets is what skill.md says; a vault not on Base sets nothing", () => {
+  test("what each vault's contract sets: caps, a zero exit fee, rmUSDC's three venues at equal weight, the timelock as admin, no audit yet", () => {
+    const caps = Object.fromEntries(VAULTS.map((v) => [v.slug, v.onBase?.caps]));
+    expect(caps).toEqual({
+      rmusdc: { tvlCap: 1000, perDepositCap: 100 },
+      rmagent: { tvlCap: 100, perDepositCap: 15 },
+      rmproto: { tvlCap: 1000, perDepositCap: 100 },
+      rmrwa: { tvlCap: 1000, perDepositCap: 100 },
+    });
+    for (const v of VAULTS) {
+      expect(v.onBase?.exitFeeBps, v.slug).toBe(0);
+      expect(v.onBase?.admin, v.slug).toBe(TIMELOCK);
+      expect(v.onBase?.audit, v.slug).toEqual({ status: "Not audited yet", href: "https://github.com/robotmoney/robotmoney-core/blob/dev/docs/audits.md" });
+    }
+    const usdc = VAULTS[0].onBase!;
+    expect(usdc.venues).toEqual(["Moonwell Flagship USDC (Morpho)", "Aave V3", "Compound III"]);
+    expect(usdc.equalWeight).toBe(true);
+    expect(usdc.adapters.map((a) => a.name)).toEqual(["MorphoAdapter", "AaveV3Adapter", "CompoundV3Adapter"]);
+    for (const v of VAULTS.slice(1)) expect(v.onBase?.adapters, v.slug).toEqual([]);
+    expect(explorerLink({ chainId: 8453 }, GOVERNING_SAFE)).not.toBeNull();
+    expect(TIMELOCK_DELAY_SEC).toBe(1800);
+  });
+
+  test("the v0 vault the legacy feed reports keeps its own facts, the ones skill.md publishes", () => {
     const skill = readFileSync(join(publicDir, "skill.md"), "utf8");
-    const facts = VAULTS[0].onBase!;
-    for (const a of facts.adapters) expect(skill).toContain(`| ${a.name} | \`${a.address}\` |`);
+    expect(skill).toContain(`\`${LEGACY_V0.address}\``);
+    for (const a of LEGACY_V0.adapters) expect(skill).toContain(`| ${a.name} | \`${a.address}\` |`);
     expect(skill).toContain(`\`${USDC_BASE}\``);
     expect(skill).toContain("minus a 0.25% exit fee");
-    expect(facts.exitFeeBps).toBe(25);
+    expect(LEGACY_V0.exitFeeBps).toBe(25);
     expect(skill).toContain("TVL cap ($100,000)");
     expect(skill).toContain("per-deposit cap ($5,000)");
-    expect(facts.caps).toEqual({ tvlCap: 100000, perDepositCap: 5000 });
+    expect(LEGACY_V0.caps).toEqual({ tvlCap: 100000, perDepositCap: 5000 });
     expect(skill).toContain("Morpho Gauntlet USDC Prime, Aave V3, and Compound V3 by dynamic equal weight");
-    expect(facts.venues).toEqual(["Morpho Gauntlet USDC Prime", "Aave V3", "Compound V3"]);
-    expect(facts.equalWeight).toBe(true);
-    expect(explorerLink({ chainId: 8453 }, facts.admin)).not.toBeNull();
-    expect(facts.audit).toEqual({ status: "Audited", href: "https://github.com/robotmoney/robotmoney-core/blob/dev/docs/audits.md" });
-    expect(VAULTS.slice(1).every((v) => v.onBase === null)).toBe(true);
-    expect(ROUTER.baseAddress).toBeNull();
+    expect(LEGACY_V0.venues).toEqual(["Morpho Gauntlet USDC Prime", "Aave V3", "Compound V3"]);
+    expect(LEGACY_V0.audit).toEqual({ status: "Audited", href: "https://github.com/robotmoney/robotmoney-core/blob/dev/docs/audits.md" });
+    expect(VAULTS.every((v) => v.baseAddress !== LEGACY_V0.address)).toBe(true);
   });
 
-  test("the contracts on Base: rmUSDC, its adapters and its admin; the router and the other three not on Base", () => {
+  test("the contracts on Base: the router and registry, the four vaults and rmUSDC's adapters, the price recorder, the timelock and the Safe", () => {
     const [base, ...rest] = contractNetworks();
     expect(rest).toEqual([]);
     expect(base.label).toBe("Base");
     expect(base.chainId).toBe(8453);
     expect(base.contracts.map((c) => c.name)).toEqual([
-      "RobotMoneyVault (rmUSDC)", "MorphoAdapter", "AaveV3Adapter", "CompoundV3Adapter", "Multisig (Admin)",
-      "Router", "Vault (rmAGENT)", "Vault (rmPROTO)", "Vault (rmRWA)",
+      "PortfolioRouter", "VaultRegistry",
+      "RobotMoneyVault (rmUSDC)", "MorphoAdapter", "AaveV3Adapter", "CompoundV3Adapter",
+      "AgentTokenVault (rmAGENT)", "ProtocolAssetVault (rmPROTO)", "RwaBasketVault (rmRWA)",
+      "Price recorder (rmAGENT)", "Timelock (Admin)", "Multisig (proposes to the timelock)",
     ]);
-    const deployed = base.contracts.filter((c) => c.address);
-    expect(deployed.map((c) => c.address)).toEqual([
-      VAULTS[0].baseAddress, ...VAULTS[0].onBase!.adapters.map((a) => a.address), VAULTS[0].onBase!.admin,
-    ]);
-    for (const c of deployed) expect(explorerLink({ chainId: 8453 }, c.address), c.name).not.toBeNull();
+    for (const c of base.contracts) expect(explorerLink({ chainId: 8453 }, c.address), c.name).not.toBeNull();
     expect(new Set(base.contracts.map((c) => c.key)).size).toBe(base.contracts.length);
   });
 
@@ -414,13 +445,13 @@ describe("the Base feed as an overview", () => {
     expect(usdc.availability).toBe("live");
     expect(usdc.actualBps).toBe(10000);
     expect(usdc.tvlUsd).toBe(199.697519);
-    expect(usdc.address).toBe(VAULTS[0].baseAddress);
+    expect(usdc.address).toBe(LEGACY_V0.address);
     expect(usdc.exitFeeBps).toBe(25);
     // What its contract sets, from the registry: the feed carries none of it.
     expect(usdc.auditStatus).toBe("Audited");
     expect(usdc.auditHref).toBe("https://github.com/robotmoney/robotmoney-core/blob/dev/docs/audits.md");
     expect(usdc.caps).toEqual({ tvlCap: 100000, perDepositCap: 5000 });
-    expect(usdc.admin).toBe(VAULTS[0].onBase?.admin);
+    expect(usdc.admin).toBe(LEGACY_V0.admin);
     expect(usdc.mechanics.venues).toEqual(["Morpho Gauntlet USDC Prime", "Aave V3", "Compound V3"]);
     expect(usdc.sharePrice).toBeCloseTo(1.01196, 4);
     for (const slug of ["rmagent", "rmproto", "rmrwa"]) {
@@ -489,20 +520,25 @@ describe("canDeposit", () => {
   const legacy = normalizeOverview(legacyRaw(GOLDEN_ECONOMICS));
   const usdc = bySlug(legacy, "rmusdc");
 
-  test("the production rmUSDC vault on Base", () => {
-    expect(canDeposit(usdc, legacy.network)).toBe(true);
+  const base = { chainId: 8453, label: "Base", testData: false };
+  const row = (v: (typeof VAULTS)[number]) => ({ slug: v.slug, availability: "live", status: "active", address: v.baseAddress });
+
+  test("each of the four vaults on Base, at its own registry address", () => {
+    for (const v of VAULTS) expect(canDeposit(row(v), base), v.slug).toBe(true);
   });
 
-  test("never another address, test data, the devnet, another vault, or a pause", () => {
-    expect(canDeposit({ ...usdc, address: "0x" + "1".repeat(40) }, { chainId: 8453, label: "Base", testData: false })).toBe(false);
-    expect(canDeposit(usdc, { ...legacy.network, testData: true })).toBe(false);
+  test("never the v0 vault, another address, test data, the devnet, a swapped vault, or a pause", () => {
+    expect(canDeposit(usdc, legacy.network)).toBe(false);
+    const r = row(VAULTS[0]);
+    expect(canDeposit({ ...r, address: "0x" + "1".repeat(40) }, base)).toBe(false);
+    expect(canDeposit(r, { ...base, testData: true })).toBe(false);
     const devnet = normalizeOverview(DEVNET);
     expect(canDeposit(bySlug(devnet, "rmusdc"), devnet.network)).toBe(false);
-    expect(canDeposit(usdc, legacy.network, { depositsPaused: true })).toBe(false);
-    expect(canDeposit(usdc, legacy.network, { shutdown: true })).toBe(false);
-    expect(canDeposit({ ...usdc, status: "paused" }, legacy.network)).toBe(false);
-    expect(canDeposit({ ...usdc, slug: "rmagent" }, legacy.network)).toBe(false);
-    expect(canDeposit({ ...usdc, availability: "unavailable" }, legacy.network)).toBe(false);
+    expect(canDeposit(r, base, { depositsPaused: true })).toBe(false);
+    expect(canDeposit(r, base, { shutdown: true })).toBe(false);
+    expect(canDeposit({ ...r, status: "paused" }, base)).toBe(false);
+    expect(canDeposit({ ...r, slug: "rmagent" }, base)).toBe(false);
+    expect(canDeposit({ ...r, availability: "unavailable" }, base)).toBe(false);
   });
 });
 
@@ -1031,7 +1067,7 @@ describe("the shipped fixtures", () => {
   test("the vault subject manifest names its wallet as the rmUSDC vault", () => {
     const manifest = readJson("data/swarm/manifests/subjects/robotmoney-vault.json");
     expect(manifest.wallets).toEqual([
-      { address: VAULTS[0].baseAddress, chain: "base", label: "vault", kind: "vault", vault: "rmusdc", sleeve: "conservative_defi_yield" },
+      { address: LEGACY_V0.address, chain: "base", label: "vault", kind: "vault", vault: "rmusdc", sleeve: "conservative_defi_yield" },
     ]);
   });
 

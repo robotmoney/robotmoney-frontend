@@ -28,17 +28,16 @@
            screen, not after a scroll. -->
       <div class="sk__install-card" x-data="{ copied: false }">
         <div class="sk__install-head">
-          <span class="sk__install-label">install the deposit skill</span>
+          <span class="sk__install-label">give your agent the deposit skill</span>
         </div>
         <div class="sk__install-body">
-          <span class="sk__install-prompt" aria-hidden="true">$</span>
-          <code class="sk__install-cmd">npx skills add robotmoney/robotmoney-skills-v0 --skill robotmoney-cli</code>
+          <code class="sk__install-cmd">Read https://robotmoney.network/skills/deposit/SKILL.md and use it to deposit USDC into Robot Money.</code>
           <!-- Icon only: the label cost the width the command needs to stay on
                one line. aria-label carries the meaning, and it flips to a tick
                on success so the state is not colour-only. -->
           <button type="button" class="sk__install-copy" :class="copied && 'is-copied'"
-            @click="navigator.clipboard.writeText('npx skills add robotmoney/robotmoney-skills-v0 --skill robotmoney-cli'); copied = true; setTimeout(() => copied = false, 2000)"
-            :aria-label="copied ? 'Command copied' : 'Copy the install command'">
+            @click="navigator.clipboard.writeText('Read https://robotmoney.network/skills/deposit/SKILL.md and use it to deposit USDC into Robot Money.'); copied = true; setTimeout(() => copied = false, 2000)"
+            :aria-label="copied ? 'Prompt copied' : 'Copy the prompt'">
             <svg x-show="!copied" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <rect x="5.5" y="5.5" width="9" height="9" stroke="currentColor" />
               <path d="M11 3.5H2.5v8.5" stroke="currentColor" />
@@ -49,10 +48,9 @@
           </button>
         </div>
         <p class="sk__install-note">
-          Works with Claude Code, Cursor, Codex, and any agent runtime that can run a
-          shell command.
+          Works with any agent that can read a web page and prepare a transaction on Base.
         </p>
-        <a class="sk__cta" href="https://github.com/robotmoney/robotmoney-skills-v0" target="_blank" rel="noopener noreferrer">Install Skill</a>
+        <a class="sk__cta" href="/skills/deposit/SKILL.md">Read the skill</a>
       </div>
     </div>
   </header>
@@ -98,7 +96,7 @@
         </div>
       </div>
 
-      <p class="dp__more"><a class="rr-lnk" href="/docs/skill/commands">Every command the skill runs</a></p>
+      <p class="dp__more"><a class="rr-lnk" href="/skills/deposit/SKILL.md">Every step the skill takes</a></p>
     </section>
 
     <!-- ── What you buy: the target in force, sleeve by sleeve, and the
@@ -393,7 +391,7 @@
                   <template x-for="a in audits()" :key="a.symbol">
                     <span class="dp__fact"><b x-text="a.symbol"></b> <a :href="a.href" target="_blank" rel="noopener noreferrer"><span x-text="a.status"></span></a></span>
                   </template>
-                  <span class="dp__line">Audited code can still fail. <a href="/smart-contract-risks">How DeFi protocols have lost funds</a>.</span>
+                  <span class="dp__line">Smart contract code can fail, audited or not. <a href="/smart-contract-risks">How DeFi protocols have lost funds</a>.</span>
                 </dd>
               </div>
               <div>
@@ -408,9 +406,10 @@
                 <dt>Admin</dt>
                 <dd>
                   <template x-for="a in admins()" :key="a.address">
-                    <span class="dp__fact">Safe multisig <a :href="a.href" target="_blank" rel="noopener noreferrer"><span class="dp__mono" x-text="a.short"></span></a></span>
+                    <span class="dp__fact">Timelock <a :href="a.href" target="_blank" rel="noopener noreferrer"><span class="dp__mono" x-text="a.short"></span></a></span>
                   </template>
-                  <span class="dp__line">It can pause deposits and withdrawals, set the exit fee up to 1%, and receives the exit fee.</span>
+                  <span class="dp__fact">Safe multisig <a :href="safe().href" target="_blank" rel="noopener noreferrer"><span class="dp__mono" x-text="safe().short"></span></a></span>
+                  <span class="dp__line" x-text="`Every admin change, from the exit fee (up to 1%) and the caps to the router's default split, waits ${timelockDelay()} in the timelock, proposed by the Safe. The exit fee goes to the Safe. An emergency role can pause new deposits; withdrawals stay open.`"></span>
                 </dd>
               </div>
             </dl>
@@ -442,9 +441,7 @@
     </section>
 
     <nav class="rr-recnav rr-recnav--flow" aria-label="Related">
-      <a href="https://github.com/robotmoney/robotmoney-skills-v0" target="_blank" rel="noopener noreferrer">The skill on GitHub</a>
-      <a href="/skill.md">SKILL.md</a>
-      <a href="/docs/skill/commands">Every command</a>
+      <a href="/skills/deposit/SKILL.md">The deposit skill</a>
       <template x-for="l in vaultLinks()" :key="l.symbol">
         <a :href="l.href" target="_blank" rel="noopener noreferrer" x-text="`${l.symbol} on BaseScan`"></a>
       </template>

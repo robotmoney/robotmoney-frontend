@@ -28,7 +28,7 @@ const CATEGORICAL_RGB = ["rgb(16, 185, 129)", "rgb(0, 229, 255)", "rgb(232, 166,
 const CYAN = ["rgb(0, 229, 255)", "rgb(0, 184, 212)"];
 const BEACON = "rgb(255, 122, 41)";
 
-const INSTALL = "npx skills add robotmoney/robotmoney-skills-v0 --skill robotmoney-cli";
+const INSTALL = "Read https://robotmoney.network/skills/deposit/SKILL.md and use it to deposit USDC into Robot Money.";
 const SYMBOLS = ["rmUSDC", "rmAGENT", "rmPROTO", "rmRWA"];
 const SLEEVES = ["Fixed Income", "Small Cap Tokens", "Protocol Tokens", "Real World Assets"];
 const HEADINGS = ["How it works", "What you buy", "What you receive", "What it earns", "TVL and liquidity", "FAQ"];
@@ -51,11 +51,51 @@ async function stubLive(page: Page) {
   // Every /api down first (later routes take precedence), then the two reads
   // the page makes answered with the goldens.
   await page.route("**/api/**", (route) => route.fulfill({ status: 503, body: "down" }));
+  // A backend without the four-vault read (RM-176): the v0 vault's feed.
+  await page.route("**/api/dashboards/robotmoney-vaults**", (route) => route.fulfill(json({ error: "not found" }, 404)));
   await page.route("**/api/dashboards/vault-economics", (route) => route.fulfill(json(ECONOMICS)));
   await page.route("**/api/dashboards/allocation", (route) => route.fulfill(json(ALLOCATION)));
 }
 
 // The mode as a reader's earlier ?vaults= left it, in this tab's storage.
+// The four-vault read (RM-176): the router and the four vaults on Base, as
+// the backend serves them from the hourly tick.
+const FOUR = {
+  rmusdc: { address: "0x28bf6e6edad526191e8652ee631b56ead4ce7435", bucket: "conservative_defi_yield", applied: 8550, tvl: 1.000214, price: 1.000214 },
+  rmagent: { address: "0x22bd48c56c34a2c1c1bac77bd7c4e636a6f10d57", bucket: "agent_tokens", applied: 575, tvl: 0, price: null },
+  rmproto: { address: "0x28c5ca4df0107679bfcc9b0ad4c2f3f209b8f797", bucket: "protocol_tokens", applied: 525, tvl: 0.051959, price: 0.9969 },
+  rmrwa: { address: "0x37be372bd32f9e63a94c7db3ab415996658bcd50", bucket: "real_world_assets", applied: 350, tvl: 0, price: null },
+} as const;
+type Slug = keyof typeof FOUR;
+const ROUTER_ADDRESS = "0xb3a8e66d9e2980b54ac0e70e0e236486d1dcb356";
+const NET = { chainId: 8453, label: "Base", testData: false };
+const fourRow = (slug: Slug) => ({
+  slug, bucket: FOUR[slug].bucket, availability: "live", status: "active", address: FOUR[slug].address,
+  tvlUsd: FOUR[slug].tvl, sharePrice: FOUR[slug].price, exitFeeBps: 0, recommendedBps: null, appliedBps: FOUR[slug].applied, actualBps: null, gaps: null,
+});
+async function stubFourVaults(page: Page) {
+  await stubLive(page);
+  await page.route("**/api/dashboards/robotmoney-vaults", (route) => route.fulfill(json({
+    asOf: "2026-10-13T17:00:00.000Z", network: NET, freshness: { blockNumber: 52561835, indexedAt: "2026-10-13T17:00:00.000Z", stale: false },
+    combined: { tvlUsd: 1.052173, vaultsLive: 4 }, trackingErrorBps: null,
+    router: { address: ROUTER_ADDRESS, availability: "live", appliedAt: "2026-10-11T23:00:00.000Z" }, recommendation: null,
+    vaults: (Object.keys(FOUR) as Slug[]).map(fourRow),
+  })));
+  await page.route("**/api/dashboards/robotmoney-vaults/*", (route) => {
+    const slug = new URL(route.request().url()).pathname.split("/").pop() as Slug;
+    if (!FOUR[slug]) return route.fulfill(json({ error: "not found" }, 404));
+    return route.fulfill(json({
+      ...fourRow(slug), network: NET, holdingsAsOf: "2026-10-13T17:00:00.000Z",
+      flags: { depositsPaused: false, withdrawalsPaused: false, shutdown: false },
+      caps: slug === "rmagent" ? { tvlCap: 100, perDepositCap: 15, utilizationBps: 0 } : { tvlCap: 1000, perDepositCap: 100, utilizationBps: 0 },
+      apy: null, depositors: null, guards: null, auditStatus: null, priceRecorder: null,
+      contracts: { vault: FOUR[slug].address, router: ROUTER_ADDRESS, registry: "0x686ebefda732dffa988253ecf9c012946b8066a3" },
+      mechanics: { redeemOnly: false, maxSlippageBps: null, venues: [] },
+      holdings: [], history: { tvl: [], sharePrice: [], weights: [], receipts: [] }, activity: [],
+    }));
+  });
+}
+
 async function setMode(page: Page, mode: "base" | "devnet") {
   await page.addInitScript((m) => {
     try { sessionStorage.setItem("rm.vaults", m); } catch { /* storage blocked */ }
@@ -96,22 +136,20 @@ const sideways = (page: Page) => page.evaluate(() => document.documentElement.sc
 const usd = (v: number) => `$${Math.round(v).toLocaleString("en-US")}`;
 const faqRow = (page: Page, q: string) => page.locator(".dp__faq details").filter({ has: page.locator("summary", { hasText: q }) });
 
-test("the hero keeps the install card beside the headline, and the facts row reads the vault feed", async ({ page }) => {
+test("the hero keeps the install card beside the headline, and the facts row reads the four-vault read", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
-  await stubLive(page);
+  await stubFourVaults(page);
   await setMode(page, "base");
   await openDeposit(page);
 
   await expect(page.locator(".sk__install-cmd")).toHaveText(INSTALL);
   const cta = page.locator(".sk__cta");
-  await expect(cta).toHaveAttribute("href", "https://github.com/robotmoney/robotmoney-skills-v0");
-  // One arrow: the label types none, the site's new-tab rule draws ↗ (RM-150).
-  await expect(cta).toHaveText("Install Skill");
-  expect(await cta.evaluate((a) => getComputedStyle(a, "::after").content)).toContain("↗");
+  // The skill this site serves: a same-tab link, so no arrow (RM-150).
+  await expect(cta).toHaveAttribute("href", "/skills/deposit/SKILL.md");
+  await expect(cta).toHaveText("Read the skill");
 
-  await expect(fact(page, "TVL")).toHaveText(usd(ECONOMICS.tvlUsd));
-  await expect(fact(page, "Vaults live")).toHaveText("1 of 4");
-  await expect(fact(page, "Exit fee")).toHaveText("0.25%");
+  await expect(fact(page, "Vaults live")).toHaveText("4 of 4");
+  await expect(fact(page, "Exit fee")).toHaveText("0%");
 
   await expect(page.locator(".dp h2")).toHaveText(HEADINGS);
   // The sections other pages link into, and the old page's ids kept as
@@ -120,7 +158,7 @@ test("the hero keeps the install card beside the headline, and the facts row rea
     await expect(page.locator(`#view #${id}`), id).toHaveCount(1);
   }
   await expect(page.locator("#how-it-works .rr-steps > div")).toHaveCount(4);
-  await expect(page.locator('#how-it-works a[href="/docs/skill/commands"]')).toBeVisible();
+  await expect(page.locator('#how-it-works a[href="/skills/deposit/SKILL.md"]')).toBeVisible();
   await expectNoBrowserErrors(errors);
 });
 
@@ -151,19 +189,20 @@ test("what you buy: the allocation's ring, and each sleeve's assets", async ({ p
   await expectNoBrowserErrors(errors);
 });
 
-test("what you receive: one token per vault, rmUSDC live with its address on Base", async ({ page }) => {
+test("what you receive: one token per vault, all four live at their addresses on Base", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
-  await stubLive(page);
+  await stubFourVaults(page);
   await setMode(page, "base");
   await openDeposit(page);
 
   const rows = page.locator("#tokens tbody tr");
   await expect(rows.locator("th a")).toHaveText(SYMBOLS);
   await expect(rows.locator("td:nth-of-type(1)")).toHaveText(SLEEVES);
-  await expect(rows.locator("td:nth-of-type(2)")).toHaveText(["Live", "Coming soon", "Coming soon", "Coming soon"]);
-  await expect(rows.nth(0).locator("td:nth-of-type(3)")).toHaveText(Number(ECONOMICS.sharePrice).toFixed(4));
-  await expect(rows.nth(0).locator("td:nth-of-type(4) a")).toHaveAttribute("href", /basescan\.org\/address\/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd/i);
-  for (const i of [1, 2, 3]) await expect(rows.nth(i).locator("td:nth-of-type(4)")).toHaveText("—");
+  await expect(rows.locator("td:nth-of-type(2)")).toHaveText(["Live", "Live", "Live", "Live"]);
+  await expect(rows.nth(0).locator("td:nth-of-type(3)")).toHaveText(FOUR.rmusdc.price.toFixed(4));
+  for (const [i, slug] of (["rmusdc", "rmagent", "rmproto", "rmrwa"] as Slug[]).entries()) {
+    await expect(rows.nth(i).locator("td:nth-of-type(4) a")).toHaveAttribute("href", new RegExp(`basescan\\.org/address/${FOUR[slug].address}`, "i"));
+  }
   await expectNoBrowserErrors(errors);
 });
 
@@ -190,7 +229,7 @@ test("the simulator: the value today beside the benchmark, the chart, and return
 
   // A deposit over a vault's per-deposit cap says so.
   await sim.locator(".dp__field input").fill("10000");
-  await expect(sim.locator(".rr-note").filter({ hasText: "capped" })).toHaveText("A single deposit into rmUSDC is capped at $5,000.");
+  await expect(sim.locator(".rr-note").filter({ hasText: "capped" })).toHaveText("A single deposit into rmUSDC is capped at $100. A single deposit into rmAGENT is capped at $15.");
 
   // The returns table: every sleeve, the deposit, and the benchmark, over
   // five periods.
@@ -256,13 +295,13 @@ test("the FAQ: every row closed, a click opens and closes one, and a link on the
 
 test("a link from another page to /deposit#contracts lands on the contracts, open", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
-  await stubLive(page);
+  await stubFourVaults(page);
   await setMode(page, "base");
   await openDeposit(page, "/deposit#contracts");
   await expect(page.locator("#contracts")).toHaveJSProperty("open", true);
   await expect.poll(() => page.locator("#contracts").evaluate((d) => Math.round(d.getBoundingClientRect().top))).toBeLessThan(844);
-  await expect(page.locator("#contracts tbody th").first()).toHaveText("RobotMoneyVault (rmUSDC)");
-  await expect(page.locator("#contracts tbody td a").first()).toHaveAttribute("href", /basescan\.org\/address\/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd/i);
+  await expect(page.locator("#contracts tbody th").first()).toHaveText("PortfolioRouter");
+  await expect(page.locator("#contracts tbody td a").first()).toHaveAttribute("href", new RegExp(`basescan\\.org/address/${ROUTER_ADDRESS}`, "i"));
   await expectNoBrowserErrors(errors);
 });
 
