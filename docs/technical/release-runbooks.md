@@ -455,8 +455,13 @@ release branch.
 
 ## 5. Per-release runbook format
 
-Each release has an operator runbook committed under `docs/runbooks/`. The
-runbook must:
+Each release has an operator runbook committed under `docs/runbooks/`. The split
+(issue 1261): [`release-standing-runbook.md`](../runbooks/release-standing-runbook.md)
+holds what every release repeats, the release's `vX-Y-Z-rollout.md` holds only that
+release's delta (identity, migrations, new routes and checks, exceptions, owner
+decisions), and a shipped release's runbook freezes as history when its final tag is
+cut. Every production data change ships as a migration (owner, 2026-10-09), so a
+release's data delta is its migration list. The runbook must:
 
 - open with an **Inherits the standing runbook** section that names the commit of
   [`release-standing-runbook.md`](../runbooks/release-standing-runbook.md) it was

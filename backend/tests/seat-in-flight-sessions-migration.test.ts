@@ -1,5 +1,5 @@
 // Migration 0114 seats a roster on every session v0.5.x convened and left open —
-// runbook blocker B20 (docs/runbooks/v0-6-0-rollout.md section 0).
+// runbook blocker B20 (`git show v0.6.0:docs/runbooks/v0-6-0-rollout.md`, section 0).
 //
 // v0.5.x convened epochs with no swarm_session_members rows and no brief_opens_at,
 // and its submit path let any member file into them. 0.6 keys the roster bypass on
