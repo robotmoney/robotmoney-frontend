@@ -181,6 +181,7 @@ describe("the cluster superuser is reached only by a pinned list of files", () =
     "admin-revocation.test.ts",
     "analytics-ledger-restore.test.ts",
     "analytics-worker-role.test.ts",
+    "api-version-endpoint.test.ts", // drops its own database under the running api (issue #973)
     "append-only-replication.test.ts",
     "automation-token-provision.test.ts",
     "container-startup-preflight.test.ts",

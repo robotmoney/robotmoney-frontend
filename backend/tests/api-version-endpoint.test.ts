@@ -20,8 +20,8 @@
 // scripts/tests/integration/website-server-api-version.test.ts.
 import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import postgres from "postgres";
 import { sql } from "../src/db/client.ts";
+import { adminConnection } from "./support/cluster.ts";
 import { bootApi as bootStackApi, type ApiProcess } from "./support/automation-auth.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { dirname, join, resolve } from "node:path";
@@ -111,7 +111,8 @@ describe("GET /api/version on the running api", () => {
     // from then on fails — the "sql handle that throws on any query".
     const port = await bootApi({ [BUILD_COMMIT_ENV]: "" });
     const [{ db }] = await sql<{ db: string }[]>`SELECT current_database() AS db`;
-    const admin = postgres(process.env.RM_TEST_ADMIN_URL!, { max: 1, onnotice: () => {} });
+    // cluster admin: DROP DATABASE is the admin's job (tests/support/cluster.ts).
+    const admin = adminConnection();
     try {
       await admin.unsafe(`DROP DATABASE "${db}" WITH (FORCE)`);
     } finally {
