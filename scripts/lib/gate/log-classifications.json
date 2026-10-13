@@ -73,6 +73,13 @@
     "reason": "A worker job's first api call ran before the api listened after a boot (backend/src/worker/loop.ts: the job is re-queued with a backoff, 'failed, retry in <n>s'); the same boot race as expected-scheduler-first-connect-retry, on the worker side. Seen once on worker-analytics (analytics.parity_sweep) right after boot 2 of the v0.6.1 production run 20261010T004257Z, accepted by the owner on 2026-10-10 (issue 1280), and ×2 on the v0.5.4 run. Held to the retrying form: a job whose retries run out logs '— DEAD' instead, which stays unclassified and fails, and the dead job's stored last_error is graded on its own ('jobs:' source). Any other message behind the same job line stays unclassified."
   },
   {
+    "id": "expected-judge-subscribe-connect-retry",
+    "match": "^\\[judge:[^\\]]+\\] subscription error: Unable to connect\\. Is the computer able to access the url\\?$",
+    "source": "participant-judge-",
+    "class": "expected",
+    "reason": "The judge participant's SSE subscribe (scripts/agent/participant/judge-client.ts runJudgeClient) could not reach the api; the client sleeps reconnectMs and subscribes again, exactly as it does after any stream drop, so one such line is a reconnect, not a dead judge. The same connect race as expected-scheduler-first-connect-retry and expected-worker-job-first-connect-retry, on the judge side. Seen once on participant-judge-themis-1 during the v0.6.1 production R2.5 baseline on 2026-10-10 (issue 1278), followed by 'subscribed'. Held to that one message and to judge participant containers: a refused token (HTTP 401/403) makes the client exit, which the participants check catches as a restart; 'judge subscription failed: HTTP <n>' and every other subscription error stay unclassified and fail; a judge that never reconnects fails the sessions check as an unjudged publish."
+  },
+  {
     "id": "expected-twin-autovacuum-cancel",
     "match": "ERROR: canceling autovacuum task$",
     "source": "^rm-restore-",
@@ -108,6 +115,13 @@
     "match": "^\\S+ - - \\[[^\\]]+\\] \"(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) [^\"]*\" [23][0-9][0-9] ",
     "class": "expected",
     "reason": "An nginx access-log line for a successful request; it matched an error word only through its URL, referrer or user agent (e.g. ?state=failed, a bot's .invalid URL)."
+  },
+  {
+    "id": "expected-website-access-line-4xx",
+    "match": "^\\S+ - \\S+ \\[[^\\]]+\\] \"[^\"]*\" 4[0-9][0-9] \\d+ \"",
+    "source": "website-server",
+    "class": "expected",
+    "reason": "An nginx access-log line (combined format: addr - user [time] \"request\" status bytes \"referer\" \"agent\"; website-server/nginx.conf sets no log_format) for a request the website refused with a 4xx. The request, referrer and user agent are the client's words, so an access-log line is classified by its shape and status, never by words in it. On production the clients are internet scanners (GET /error.php?SERVER_NAME=<script>…, /admin/public/login.jsp?error=…, POST /rails/actions?error=ActiveRecord::PendingMigrationError…) and the onboarding dead-path control (GET /skills/swarm-onboarding/this-path-cannot-exist.md, scripts/production-drift-audit.ts), all 404 by design; seen on website-server-1 during the v0.6.1 production R2.5 baseline on 2026-10-10 (issue 1278). Held to 4xx on the website-server container: a 5xx is the website or its upstream failing a client and stays unclassified, an nginx error-log line has a different shape and stays unclassified, and 2xx/3xx keep expected-nginx-access-line-2xx-3xx."
   },
   {
     "id": "known-api-slow-request",
