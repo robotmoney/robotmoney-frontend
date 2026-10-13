@@ -3,9 +3,11 @@
 > **Authority.** [D61](../decisions.md) (owner, 2026-10-08), amended for issue 1272
 > (the runner holds no past-upgrade fact). Policy:
 > [`release-runbooks.md`](../technical/release-runbooks.md). Standing checks:
-> [`release-standing-runbook.md`](./release-standing-runbook.md). The step ids keep the
-> shape [`v0-6-0-rollout.md`](./v0-6-0-rollout.md) introduced; that runbook is history and
-> the tool reads nothing from it.
+> [`release-standing-runbook.md`](./release-standing-runbook.md). The live delta runbook is
+> the newest `vX-Y-Z-rollout.md` ([`v0-6-2-rollout.md`](./v0-6-2-rollout.md) today): it holds
+> only what that release changes. The step ids keep the shape
+> [`v0-6-0-rollout.md`](./v0-6-0-rollout.md) introduced; that runbook and
+> [`v0-6-1-rollout.md`](./v0-6-1-rollout.md) are history and the tool reads nothing from them.
 
 `bun run release:run` executes a release runbook end to end. It runs on the control
 machine. Every step runs on a host over ssh. No person logs in to a host.

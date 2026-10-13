@@ -121,7 +121,8 @@ fi
 #    docs-only copy of the tree, where the tool is absent.
 if command -v bun >/dev/null 2>&1 && [ -f scripts/release/steps-table.ts ] && [ -f docs/runbooks/release-run.md ]; then
   bun scripts/release/steps-table.ts --check docs/runbooks/release-run.md >/dev/null || err "docs/runbooks/release-run.md: stale step table (bun scripts/release/steps-table.ts --write docs/runbooks/release-run.md)"
-  for f in docs/runbooks/release-run.md; do
+  for f in docs/runbooks/release-run.md docs/runbooks/v0-6-1-rollout.md docs/runbooks/v0-6-2-rollout.md; do
+    [ -f "$f" ] || { err "$f is missing (issue 1261: the delta runbooks)"; continue; }
     bun scripts/release/steps-table.ts --check-ids "$f" >/dev/null || err "$f names a step that is not in scripts/release/steps.ts"
   done
 fi
