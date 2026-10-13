@@ -1,0 +1,135 @@
+{
+  "id": "E1",
+  "name": "Engine v1: composite tilts, today's caps",
+  "author": "Claude, 2026-10-13, on the pattern in robotmoney.network/regime-detection (Lex). Prototype for Lex to react to.",
+  "date": "2026-10-13",
+  "status": "hypothesis",
+  "description": "Bitcoin 0 to 10% by tanh of the composite; gold 6% down to 2% as the composite rises; dollar book by the yield program.",
+  "label": "composite",
+  "states": {
+    "risk_off": {
+      "USDC": 2,
+      "SUSDS": 24,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 28,
+      "COMP": 5,
+      "GOLD": 6,
+      "BTC": 5
+    },
+    "neutral": {
+      "USDC": 2,
+      "SUSDS": 24,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 28,
+      "COMP": 5,
+      "GOLD": 6,
+      "BTC": 5
+    },
+    "risk_on": {
+      "USDC": 2,
+      "SUSDS": 24,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 28,
+      "COMP": 5,
+      "GOLD": 6,
+      "BTC": 5
+    }
+  },
+  "yieldBook": [
+    "USDC",
+    "SUSDS",
+    "SPARK",
+    "GT",
+    "STEAK",
+    "AAVE",
+    "COMP"
+  ],
+  "engine": {
+    "tilts": [
+      {
+        "series": "BTC",
+        "signal": "composite",
+        "saa": 5,
+        "min": 0,
+        "max": 10,
+        "k": 1
+      },
+      {
+        "series": "GOLD",
+        "signal": "counter_composite",
+        "saa": 6,
+        "min": 2,
+        "max": 6,
+        "k": 1
+      }
+    ],
+    "buffer": {
+      "series": "USDC",
+      "weight": 2
+    },
+    "yieldBook": {
+      "instruments": [
+        {
+          "series": "AAVE",
+          "cap": 35
+        },
+        {
+          "series": "SUSDS",
+          "cap": 35
+        },
+        {
+          "series": "GT",
+          "cap": 12
+        },
+        {
+          "series": "SPARK",
+          "cap": 12
+        },
+        {
+          "series": "STEAK",
+          "cap": 12
+        },
+        {
+          "series": "COMP",
+          "cap": 5
+        }
+      ],
+      "groups": [
+        {
+          "id": "sky",
+          "members": [
+            "SUSDS",
+            "SPARK"
+          ],
+          "cap": 35
+        },
+        {
+          "id": "morpho",
+          "members": [
+            "GT",
+            "SPARK",
+            "STEAK"
+          ],
+          "cap": 30
+        },
+        {
+          "id": "morpho_v2",
+          "members": [
+            "STEAK"
+          ],
+          "cap": 12
+        }
+      ],
+      "trailingDays": 30
+    }
+  },
+  "driftPtsBySeries": {
+    "BTC": 3
+  }
+}

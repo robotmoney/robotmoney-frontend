@@ -10,6 +10,7 @@ import { validateRuleFile, weightsFor, turnover } from "../src/allocate/rules.ts
 import { computeResearchSeries, channelDivergenceFires, lateCycleFires, type ResearchSeries } from "../src/allocate/research-tilts.ts";
 import { runPath, stats, phaseStats, type Series } from "../src/allocate/allocation-backtest.ts";
 import type { RuleFile, State, Weights, Decision } from "../src/allocate/types.ts";
+import { engineWeights } from "../src/allocate/engine.ts";
 
 const args = process.argv.slice(2);
 const val = (f: string, d?: string) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1]! : d; };
@@ -111,7 +112,19 @@ for (const [wn, from] of Object.entries(windows)) benchStats[wn] = stats(runPath
 
 for (const file of RULES) {
   const rule = JSON.parse(await Bun.file(file).text()) as RuleFile;
-  validateRuleFile(rule);
+  if (!rule.engine) validateRuleFile(rule);
+  const trailingYield = (asof: string, days: number): Record<string, number> => {
+    const out: Record<string, number> = {};
+    const i1 = idx.get(asof); if (i1 === undefined) return out;
+    for (const ins of rule.engine?.yieldBook.instruments ?? []) {
+      const xs = series.values["APY_" + ins.series]; if (!xs) continue;
+      let s = 0, n = 0;
+      for (let i = Math.max(0, i1 - days + 1); i <= i1; i++) if (Number.isFinite(xs[i]!)) { s += xs[i]!; n++; }
+      out[ins.series] = n ? s / n : NaN;
+    }
+    return out;
+  };
+  const traces: string[] = [];
   const decisions: Decision[] = [];
   const dmap = new Map<string, Weights>();
   let prev: Weights | null = null, stateChanges = 0, prevState: State | null = null;
@@ -129,7 +142,24 @@ for (const file of RULES) {
       }
     }
     // no label (data gap): hold last week's weights
-    const w: { state: State; weights: Weights } = label === null && prev ? { state: prevState ?? "neutral", weights: prev } : weightsFor(rule, label, fired);
+    let w: { state: State; weights: Weights };
+    if (rule.engine) {
+      const yieldsNow = trailingYield(asof < days[0]! ? days[0]! : asof, rule.engine.yieldBook.trailingDays);
+      const realizedVol: Record<string, number> = {};
+      for (const t of rule.engine.tilts) {
+        const xs = series.values[t.series]; const i1 = idx.get(asof < days[0]! ? days[0]! : asof);
+        if (!xs || i1 === undefined || i1 < 61) continue;
+        const r: number[] = [];
+        for (let i = i1 - 59; i <= i1; i++) r.push(Math.log(xs[i]! / xs[i - 1]!));
+        const mu = r.reduce((a, b) => a + b, 0) / r.length;
+        realizedVol[t.series] = Math.sqrt(r.reduce((a, b) => a + (b - mu) ** 2, 0) / (r.length - 1)) * Math.sqrt(365) * 100;
+      }
+      const out = engineWeights(rule.engine, { compositePercentile: L.compositePercentile, macroPercentile: L.macroPercentile, onchainPercentile: L.onchainPercentile, signed: L.signed ?? {}, realizedVol }, yieldsNow);
+      w = { state: L.composite ?? "neutral", weights: out.weights };
+      traces.push([d, ...Object.entries(out.trace).map(([k, t]) => `${k}:p=${t.p?.toFixed(3) ?? "na"}:tilt=${t.tilt.toFixed(3)}:w=${t.weight.toFixed(2)}`)].join(","));
+    } else {
+      w = label === null && prev ? { state: prevState ?? "neutral", weights: prev } : weightsFor(rule, label, fired);
+    }
     if (prevState !== null && w.state !== prevState) stateChanges++;
     prevState = w.state; prev = w.weights;
     dmap.set(d, w.weights);
@@ -141,17 +171,18 @@ for (const file of RULES) {
   const csv = ["date,asof,state,composite,macro,onchain,composite_pct,tilts," + keys.join(",")];
   for (const x of decisions) csv.push([x.date, x.asof, x.label, x.composite, x.macro, x.onchain, x.compositePercentile?.toFixed(3) ?? "", x.tiltsFired.join("|"), ...keys.map((k) => (x.weights[k] ?? 0).toFixed(2))].join(","));
   await Bun.write(`${OUT}/weights-${rule.id}.csv`, csv.join("\n") + "\n");
+  if (traces.length) await Bun.write(`${OUT}/trace-${rule.id}.csv`, traces.join("\n") + "\n");
 
   const r: Record<string, unknown> = { id: rule.id, name: rule.name, status: rule.status, author: rule.author, label: rule.label, frozen: rule.frozen ?? null,
     stateChanges, tiltWeeks: decisions.filter((x) => x.tiltsFired.length).length,
     stateShare: Object.fromEntries((["risk_off", "neutral", "risk_on"] as State[]).map((s) => [s, decisions.filter((x) => x.label === s).length / decisions.length])),
     windows: {}, phases: {} };
   for (const [wn, from] of Object.entries(windows)) {
-    const p = runPath(series, dmap, idx.get(from)!, E, COST, BAND_PTS, BAND_REL, rule.driftPtsBySeries ?? {}); const st = stats(p.nav); const b = benchStats[wn]!;
+    const p = runPath(series, dmap, idx.get(from)!, E, COST, BAND_PTS, BAND_REL, rule.driftPtsBySeries ?? {}, !rule.engine); const st = stats(p.nav); const b = benchStats[wn]!;
     (r.windows as Record<string, unknown>)[wn] = { ...st, vsAave: st.cagr - b.cagr, exPerVol: st.vol > 0.5 ? (st.cagr - b.cagr) / st.vol : null, costBps: p.costs * 1e4, turnoverPct: p.turnover, rebalances: p.rebalances };
     table.push([wn, rule.id.padEnd(16), st.total.toFixed(1).padStart(6), st.cagr.toFixed(2).padStart(6), st.vol.toFixed(1).padStart(5), st.maxdd.toFixed(1).padStart(6), (st.cagr - b.cagr).toFixed(2).padStart(7), (p.costs * 1e4).toFixed(1).padStart(5), p.turnover.toFixed(0).padStart(5), String(p.rebalances).padStart(4)].join(" "));
   }
-  const full = runPath(series, dmap, 0, E, COST, BAND_PTS, BAND_REL, rule.driftPtsBySeries ?? {});
+  const full = runPath(series, dmap, 0, E, COST, BAND_PTS, BAND_REL, rule.driftPtsBySeries ?? {}, !rule.engine);
   navs.set(rule.id, full.nav);
   const bfull = runPath(series, benchmark, 0, E, COST);
   for (const [name, from, to] of phases) {

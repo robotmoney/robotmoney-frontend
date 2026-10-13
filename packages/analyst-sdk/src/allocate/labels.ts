@@ -19,6 +19,9 @@ export interface AsofLabel {
   compositePercentile: number | null;
   macroPercentile: number | null;
   onchainPercentile: number | null;
+  // Sign-aligned percentile rank of each indicator on the as-of day (0..1, high =
+  // risk-on), for engine signals that read indicators rather than panels.
+  signed: Record<string, number>;
   // What a single full-history run (current view) says for the same day. Reported
   // so the page can state how many labels differ between as-of and current view.
 }
@@ -46,6 +49,7 @@ export function asofLabel(raw: RawIndicatorHistory, asof: string, start?: string
     compositePercentile: at(r.compositePercentile),
     macroPercentile: at(r.panelPercentiles.macro),
     onchainPercentile: at(r.panelPercentiles.onchain),
+    signed: Object.fromEntries(Object.entries(r.signed).map(([k, xs]) => [k, xs[last]]).filter(([, v]) => v !== undefined && Number.isFinite(v as number))) as Record<string, number>,
   };
 }
 

@@ -19,7 +19,9 @@ export interface PathResult {
 // Trade only when the target changed since the last decision, or a holding drifted
 // more than max(bandPts, bandRel x target) from its target (the page's rebalance rule;
 // bandPtsBySeries overrides the points for one series, e.g. 3 for Bitcoin).
-export function runPath(series: Series, decisions: Map<string, Weights>, s: number, e: number, costBps = 10, bandPts = 2, bandRel = 0.25, bandPtsBySeries: Record<string, number> = {}): PathResult {
+// tradeOnTargetChange=false: trade on drift only, for targets that move a little every
+// week (the engine's continuous tilts), so a small target move alone never trades.
+export function runPath(series: Series, decisions: Map<string, Weights>, s: number, e: number, costBps = 10, bandPts = 2, bandRel = 0.25, bandPtsBySeries: Record<string, number> = {}, tradeOnTargetChange = true): PathResult {
   const D = series.dateAxis;
   const px = (k: string, i: number) => {
     const v = series.values[k]?.[i];
@@ -44,7 +46,7 @@ export function runPath(series: Series, decisions: Map<string, Weights>, s: numb
       const actual: Weights = {};
       for (const k in h) actual[k] = (h[k]! * px(k, i) / v) * 100;
       const t = turnover(actual, next);
-      const targetChanged = turnover(cur, next) > 1e-9;
+      const targetChanged = tradeOnTargetChange && turnover(cur, next) > 1e-9;
       const drifted = Object.keys(next).some((k) => Math.abs((actual[k] ?? 0) - next[k]!) > Math.max(bandPtsBySeries[k] ?? bandPts, bandRel * next[k]!));
       if (t > 1e-9 && (targetChanged || drifted)) {
         const c = (t / 100) * (costBps / 1e4);

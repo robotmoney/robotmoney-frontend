@@ -4,6 +4,8 @@
 export type State = "risk_off" | "neutral" | "risk_on";
 export const STATES: State[] = ["risk_off", "neutral", "risk_on"];
 
+import type { EngineSpec } from "./engine.ts";
+
 // Weights in percent of NAV, keyed by the backtest series id (AAVE, SUSDS, GOLD, BTC, ...).
 export type Weights = Record<string, number>;
 
@@ -50,6 +52,9 @@ export interface RuleFile {
   hardAssetVolBudget?: Record<State, number>;
   // Drift band in points per series, overriding the CLI default (the page's rule: 3 for Bitcoin).
   driftPtsBySeries?: Record<string, number>;
+  // When present, weights come from the engine (engine.ts) instead of `states`;
+  // `states.neutral` then only names the series the weights CSV lists.
+  engine?: EngineSpec;
 }
 
 export interface Decision {
