@@ -30,6 +30,8 @@
 
 /** Production's epoch, every active subject (owner decision 2026-10-09). */
 export const PRODUCTION_EPOCH_SECONDS = 86400;
+/** The spacing of the four production subjects' closes, times of day 6 h apart (migration 0121, issue 1286). */
+export const SUBJECT_CLOSE_SPACING_SECONDS = 21600;
 /** The default judging wait a subject carries (migration 0090). */
 export const DEFAULT_JUDGING_SECONDS = 900;
 /** Slack after close + judging before a publish counts as late (R7.4a). */

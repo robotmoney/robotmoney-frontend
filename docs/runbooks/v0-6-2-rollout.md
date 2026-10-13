@@ -75,7 +75,7 @@ R2.3 lists both as the pending set. R6.3's receipt lists them applied, so the le
 |---|---|---|---|
 | A. The maintenance window is announced before R6.1 and ended after R6.9, and the site stays up through it (standing section 8) | C | `POST /api/admin/maintenance` before the run; `bun scripts/rollout-probe.ts run` during it; `grade` after R6.9: no non-200 answer, no gap over 15 s | manual, issue 1220 |
 | B. `/api/status/maintenance` answers `none` once the window ends | V | `curl` after check A ends | manual, issue 1220 |
-| C. The four anchors' times of day are 21600 s apart and every epoch is 86400 s | V | R7.4a's receipt lists each subject's anchor and epoch; R7.4a asserts the epoch, not the spacing | gap: the spacing has no assertion, issue subject closes 6 h apart (1286) |
+| C. The four anchors' times of day are 21600 s apart and every epoch is 86400 s | V | R7.4a's receipt lists each subject's anchor and epoch; R7.4a asserts both, the epoch and the 21600 s spacing in the order vault, woon, allocation, treasury (issue 1310) | script (R7.4a) |
 | D. The one transition window per moved subject | W | W1 and R7.4a receipts, section 4 | script (R7.4a, graded) |
 
 A `manual` row is read by the operator from the journal or the public API and cited in the report

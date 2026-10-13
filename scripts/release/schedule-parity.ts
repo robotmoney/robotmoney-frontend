@@ -7,7 +7,9 @@
 //
 // Read-only (rm_readonly on a proven read-only session, ./db-read.ts; docker
 // inspect for one container's environment). It checks:
-//   1. every active subject reads epoch_duration_seconds = 86400 (owner decision 2026-10-09);
+//   1. every active subject reads epoch_duration_seconds = 86400 (owner decision 2026-10-09),
+//      and the four production subjects' epoch_anchor times of day are exactly
+//      21600 s apart in the order vault, woon, allocation, treasury (migration 0121);
 //   2. every session in flight at R2.3 (baseline.json `inFlight`) published,
 //      its window close unmoved, within its judging duration plus a grace
 //      after that close;
@@ -29,10 +31,12 @@ import { join } from "node:path";
 import { instancePaths, readStackState, stateRoot } from "../lib/smoke-state.ts";
 import { openReadOnly } from "./db-read.ts";
 import { releaseStateDir } from "./release-state.ts";
-import { PRODUCTION_EPOCH_SECONDS, PUBLISH_GRACE_SECONDS, WATCH_SESSIONS, type WatchSessions } from "./watch.ts";
+import { PRODUCTION_EPOCH_SECONDS, PUBLISH_GRACE_SECONDS, SUBJECT_CLOSE_SPACING_SECONDS, WATCH_SESSIONS, type WatchSessions } from "./watch.ts";
 
-// One source for the epoch and the grace: the watch length (./watch.ts) is derived from them.
-export { PRODUCTION_EPOCH_SECONDS, PUBLISH_GRACE_SECONDS };
+// One source for the epoch, the spacing and the grace: the watch length (./watch.ts) is derived from them.
+export { PRODUCTION_EPOCH_SECONDS, PUBLISH_GRACE_SECONDS, SUBJECT_CLOSE_SPACING_SECONDS };
+/** The four production subjects in close order; each close is 6 h after the previous (migration 0121). */
+export const SUBJECT_CLOSE_ORDER = ["robotmoney-vault", "woon", "robotmoney-allocation", "robotmoney-treasury"] as const;
 /** docker-compose.yml's default when PRODUCER_REGIME_CRON is unset (scripts/standing-soak.ts DEFAULT_REGIME_CRON). */
 export const DEFAULT_REGIME_CRON = "30 22 * * *";
 
@@ -46,6 +50,46 @@ export interface CurrentSession {
 export function epochProblems(subjects: readonly { id: string; epoch_duration_seconds: number }[]): string[] {
   return subjects.filter((s) => Number(s.epoch_duration_seconds) !== PRODUCTION_EPOCH_SECONDS)
     .map((s) => `subject ${s.id} epoch is ${s.epoch_duration_seconds} s, not ${PRODUCTION_EPOCH_SECONDS}`);
+}
+
+export interface AnchoredSubject { readonly id: string; readonly epoch_anchor: string | null }
+
+function formatGap(ms: number): string {
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  const s = ((ms % 60_000) / 1000).toFixed(3).replace(/\.?0+$/, "");
+  return `${h} h ${String(m).padStart(2, "0")} m${s === "0" ? "" : ` ${s} s`}`;
+}
+
+/**
+ * PURE. The four production subjects' anchor times of day are 6 h apart, in
+ * SUBJECT_CLOSE_ORDER, treasury wrapping to vault. A gap is the difference of
+ * two times of day modulo the epoch, exact to the millisecond. Other active
+ * subjects are not on the grid and are left alone. Not gated by `--sessions`.
+ */
+export function closeSpacingProblems(subjects: readonly AnchoredSubject[]): string[] {
+  const epochMs = PRODUCTION_EPOCH_SECONDS * 1000;
+  const spacingMs = SUBJECT_CLOSE_SPACING_SECONDS * 1000;
+  const byId = new Map(subjects.map((s) => [s.id, s]));
+  const out: string[] = [];
+  const todOf = new Map<string, number>();
+  for (const id of SUBJECT_CLOSE_ORDER) {
+    const s = byId.get(id);
+    const at = s?.epoch_anchor ? Date.parse(s.epoch_anchor) : NaN;
+    if (!s) out.push(`subject ${id} is not active, so the 6 h close grid is incomplete`);
+    else if (Number.isNaN(at)) out.push(`subject ${id} has no readable epoch_anchor (${s.epoch_anchor})`);
+    else todOf.set(id, ((at % epochMs) + epochMs) % epochMs);
+  }
+  for (let i = 0; i < SUBJECT_CLOSE_ORDER.length; i++) {
+    const from = SUBJECT_CLOSE_ORDER[i]!;
+    const to = SUBJECT_CLOSE_ORDER[(i + 1) % SUBJECT_CLOSE_ORDER.length]!;
+    const a = todOf.get(from);
+    const b = todOf.get(to);
+    if (a === undefined || b === undefined) continue;
+    const gap = ((b - a) % epochMs + epochMs) % epochMs;
+    if (gap !== spacingMs) out.push(`closes of ${from} and ${to} are ${formatGap(gap)} apart, not ${formatGap(spacingMs)}`);
+  }
+  return out;
 }
 
 /** PURE. Every in-flight baseline session that did not publish on its normal close. */
@@ -150,11 +194,13 @@ async function main(): Promise<number> {
   }
   const safeIds = baseline.map((b) => b.id).filter((id) => /^[A-Za-z0-9_-]+$/.test(id));
   const db = await openReadOnly();
-  let subjects: { id: string; epoch_duration_seconds: number }[];
+  let subjects: ({ id: string; epoch_duration_seconds: number } & AnchoredSubject)[];
   let current: CurrentSession[] = [];
   let last: { status: string; secs: number | null } | undefined;
   try {
-    subjects = await db.query("SELECT id::text AS id, epoch_duration_seconds FROM swarm_subjects WHERE status = 'active' ORDER BY id");
+    subjects = (await db.query<{ id: string; epoch_duration_seconds: number; epoch_anchor: string | Date | null }>(
+      "SELECT id::text AS id, epoch_duration_seconds, epoch_anchor FROM swarm_subjects WHERE status = 'active' ORDER BY id",
+    )).map((r) => ({ ...r, epoch_anchor: r.epoch_anchor === null ? null : new Date(r.epoch_anchor).toISOString() }));
     if (safeIds.length > 0) {
       current = (await db.query<CurrentSession>(
         `SELECT s.id::text AS id, s.state, s.window_closes_at, s.published_at, sub.judging_duration_seconds
@@ -177,6 +223,7 @@ async function main(): Promise<number> {
   const sweep = paritySweep(last);
   const problems = [
     ...epochProblems(subjects),
+    ...closeSpacingProblems(subjects),
     ...inFlightProblemsFor(sessions, baseline, current),
     ...("error" in cron ? [cron.error] : regimeCronProblems(cron.cron)),
     ...sweep.problems,
