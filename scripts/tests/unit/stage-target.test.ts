@@ -238,10 +238,12 @@ describe("the replay and the up plan (issue 1272)", () => {
     // An untagged boot detaches at the commit.
     const untagged = upPlan({ ...manifest, running: { commit: SHA, tag: null } }, repo);
     expect("errors" in untagged ? undefined : untagged.ref).toBe(SHA);
-    // Red controls: a ledger name the running checkout lacks, a skipped file, an empty ledger.
+    // Red controls: a ledger name the running checkout lacks, an empty ledger.
     expect(upPlan({ ...manifest, ledger: [...manifest.ledger, "0999_x.sql"] }, repo)).toHaveProperty("errors");
-    expect(upPlan({ ...manifest, ledger: ["0001_a.sql", "0083_d.sql"] }, repo)).toHaveProperty("errors");
     expect(upPlan({ ...manifest, ledger: [] }, repo)).toHaveProperty("errors");
+    // A skipped number is not judged (D66): the dump's ledger is replayed as it is.
+    const skipped = upPlan({ ...manifest, ledger: ["0001_a.sql", "0083_d.sql"] }, repo);
+    expect("errors" in skipped ? skipped.errors : skipped.replay).toEqual(["0001_a.sql", "0083_d.sql"]);
   });
 
   test("/api/version is read for the running commit and tag; a dirty or short commit refuses", () => {

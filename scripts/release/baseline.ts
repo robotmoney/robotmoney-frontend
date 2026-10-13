@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 // scripts/release/baseline.ts — release step R2.3 (with R2.4), run ON THE TARGET HOST.
-// Standing checks SP.3 (the real ledger is a prefix of backend/migrations by
-// filename set, ./ledger.ts) and SP.6 (the product baseline for the postflight
-// comparison).
+// Standing checks SP.3 (the real ledger reconciles with backend/migrations and
+// the bytes at the tag the running stack reports, ./ledger.ts, D66) and SP.6
+// (the product baseline for the postflight comparison).
 //
-//   bun scripts/release/baseline.ts --instance <name> --run <run-ts>
+//   bun scripts/release/baseline.ts --instance <name> --run <run-ts> --origin <url>
 //
 // Read-only, through `rm_readonly` from `$HOME/.env` on a session proven
 // read-only (./db-read.ts). It reads, and records:
@@ -13,21 +13,22 @@
 //   - rm_owner, rm_app, rm_worker, rm_readonly and doadmin: rolcanlogin, rolcreaterole;
 //   - who migration 0101 would clear (D55 (2), issue 1120), with the query
 //     copied verbatim from runbook R2.3 (baseline-would-clear.txt);
-//   - the ledger reconciliation against backend/migrations (./ledger.ts): the
-//     pending set, and every unknown or skipped name;
+//   - the ledger reconciliation (./ledger.ts): the pending set, every recorded
+//     name backend/migrations lacks, and each applied file's bytes against the
+//     version the running stack reports at --origin/api/version (the receipt);
 //   - the R2.4 row counts and the database size;
 //   - the sessions in flight, with their window close (R7.4a's parity input).
 // It writes baseline.json beside them in `<instance state dir>/release/<run-ts>/`.
 //
 // It REFUSES (exit 1, after writing the record) when an in-house handle is in
-// the would-clear list, or when the ledger records a name backend/migrations
-// does not hold or skips one below its newest row. It never judges a count:
-// the same step runs any patch from the ledger production actually holds
-// (issue 1272).
+// the would-clear list, when the reconciliation's verdict is anything but
+// `ok`, or when the running stack reports no version to pin to. It never
+// judges a count or a number order: the same step runs any patch from the
+// ledger production actually holds (issues 1272, 1273).
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openReadOnly, readCounts, readDatabaseSize } from "./db-read.ts";
-import { ledgerProblems, pendingMigrations, repoMigrations } from "./ledger.ts";
+import { ledgerProblems, readRunningVersion, reconcileLedger, repoMigrations, runningPinRef, type ReconcileReceipt } from "./ledger.ts";
 import { releaseStateDir } from "./release-state.ts";
 
 /** The in-house seats migration 0101 must never clear (runbook R2.3). */
@@ -68,11 +69,11 @@ export interface WouldClearRow {
 }
 
 /** PURE. The refusals R2.3 names, empty when the baseline may stand. `repo` defaults to backend/migrations. */
-export function baselineProblems(ledger: readonly string[], wouldClear: readonly Pick<WouldClearRow, "handle">[], repo: readonly string[] = repoMigrations()): string[] {
+export function baselineProblems(reconcile: ReconcileReceipt, wouldClear: readonly Pick<WouldClearRow, "handle">[]): string[] {
   const out: string[] = [];
   const inHouse = wouldClear.filter((r) => IN_HOUSE_HANDLES.includes(r.handle)).map((r) => r.handle);
   if (inHouse.length > 0) out.push(`migration 0101 would clear in-house seats: ${inHouse.join(", ")} (a defect: stop)`);
-  out.push(...ledgerProblems(ledger, repo));
+  out.push(...ledgerProblems(reconcile));
   return out;
 }
 
@@ -84,10 +85,14 @@ function flag(name: string): string | undefined {
 async function main(): Promise<number> {
   const instance = flag("--instance");
   const run = flag("--run");
-  if (!instance || !run || !/^\d{8}T\d{6}Z$/.test(run)) {
-    console.error("usage: bun scripts/release/baseline.ts --instance <name> --run <run-ts>");
+  const origin = flag("--origin");
+  if (!instance || !run || !/^\d{8}T\d{6}Z$/.test(run) || !origin) {
+    console.error("usage: bun scripts/release/baseline.ts --instance <name> --run <run-ts> --origin <url>");
     return 2;
   }
+  // The pin ref (D66): the tag the running stack reports, else its commit.
+  const version = await readRunningVersion(origin);
+  const pinRef = "error" in version ? null : runningPinRef(version);
   const db = await openReadOnly();
   try {
     const ledger = (await db.query<{ name: string }>(`SELECT name FROM schema_migrations ORDER BY name COLLATE "C"`)).map((r) => r.name);
@@ -103,8 +108,10 @@ async function main(): Promise<number> {
     }));
     const sizeBytes = await readDatabaseSize(db);
     const repo = repoMigrations();
-    const pending = pendingMigrations(ledger, repo);
-    const problems = baselineProblems(ledger, wouldClear, repo);
+    const reconcile = reconcileLedger(ledger, pinRef === null ? {} : { pinRef });
+    const pending = reconcile.pending;
+    const problems = baselineProblems(reconcile, wouldClear);
+    if (pinRef === null) problems.push(`the running stack at ${origin} reports no version to pin the applied migration bytes to (${(version as { error: string }).error})`);
 
     const dir = releaseStateDir(instance, run);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -127,7 +134,8 @@ async function main(): Promise<number> {
       wouldClear,
       repoMigrations: repo.length,
       pending: { count: pending.length, names: pending },
-      ledgerProblems: ledgerProblems(ledger, repo),
+      running: pinRef === null ? null : { origin, pinRef },
+      reconcile,
       counts,
       inFlight,
       databaseSizeBytes: sizeBytes,
@@ -135,7 +143,7 @@ async function main(): Promise<number> {
     };
     const file = join(dir, "baseline.json");
     writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-    console.log(`[baseline] ${db.target}: ledger ${ledger.length} names, identity ${identityTable ? identity : "absent"}, repo ${repo.length} files, pending ${pending.length}`);
+    console.log(`[baseline] ${db.target}: ledger ${ledger.length} names, identity ${identityTable ? identity : "absent"}, repo ${repo.length} files, pending ${pending.length}, reconcile ${reconcile.verdict}${pinRef ? ` against ${pinRef}` : ""}`);
     console.log(`[baseline] roles: ${roles.map((r) => `${r.rolname} login=${r.rolcanlogin}`).join(", ")}`);
     console.log(`[baseline] would-clear: ${wouldClear.length} row(s)${wouldClear.length ? `: ${wouldClear.map((r) => r.handle).join(", ")}` : ""}`);
     console.log(`[baseline] counts: ${Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(", ")}; size ${sizeBytes} bytes`);

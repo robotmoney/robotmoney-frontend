@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // scripts/release/host-identity.ts — release step R1.2 / R1.5, run ON A HOST.
 //
-//   bun scripts/release/host-identity.ts --commit <sha> [--confirm-target host:port/db] --receipt-dir <dir>
+//   bun scripts/release/host-identity.ts --commit <sha> [--confirm-target host:port/db] [--origin <url>] --receipt-dir <dir>
 //
 // Proves the checkout this runs from is the release: HEAD equals --commit and
 // `git status --porcelain` is empty (policy 4.6: a host runs a clean checkout
@@ -10,9 +10,11 @@
 // refuses unless it equals the flag: the run's confirmTarget is the database
 // this host actually names, before any write is attempted. Then it checks the
 // target precondition (./precondition.ts), read-only through `rm_readonly`:
-// the database answers, its ledger is a prefix of backend/migrations by
-// filename set (./ledger.ts), and its deployment_identity is absent or the
-// kind RM_ENV implies.
+// the database answers, its ledger reconciles with backend/migrations and the
+// bytes at the tag the running stack reports at `--origin`/api/version
+// (./ledger.ts, D66), and its deployment_identity is absent or the kind RM_ENV
+// implies. A running stack that reports no version refuses: there is nothing
+// to pin the applied bytes to, and nothing is assumed in its place.
 //
 // With --confirm-target it also proves what the cutover needs later, before
 // R6.1 stops the running stack (the run's first irreversible step):
@@ -37,6 +39,7 @@ import { proveOwnerLogin } from "../../backend/scripts/owner-login-check.ts";
 import { homeEnvFilePath, loadEnvFile, urlForRole } from "../lib/env-role.ts";
 import { openReadOnly } from "./db-read.ts";
 import { confirmTargetOf, preCutoverKeyProblems } from "./env-keys.ts";
+import { readRunningVersion, reconcileLedger, runningPinRef, type ReconcileReceipt } from "./ledger.ts";
 import { preconditionProblems } from "./precondition.ts";
 
 function flag(name: string): string | undefined {
@@ -49,9 +52,10 @@ const sh = (cmd: string, args: string[]) => spawnSync(cmd, args, { encoding: "ut
 async function main(): Promise<number> {
   const commit = flag("--commit");
   const confirm = flag("--confirm-target");
+  const origin = flag("--origin");
   const receiptDir = flag("--receipt-dir");
   if (!commit || !/^[0-9a-f]{40}$/.test(commit) || !receiptDir) {
-    console.error("usage: bun scripts/release/host-identity.ts --commit <40-hex sha> [--confirm-target host:port/db] --receipt-dir <dir>");
+    console.error("usage: bun scripts/release/host-identity.ts --commit <40-hex sha> [--confirm-target host:port/db] [--origin <url>] --receipt-dir <dir>");
     return 2;
   }
   const problems: string[] = [];
@@ -82,16 +86,26 @@ async function main(): Promise<number> {
       problems.push(...preCutoverKeyProblems(env, envPath));
     }
   }
-  let precondition: { ledgerCount: number; identity: string | null; problems: string[] } | null = null;
+  let precondition: { ledgerCount: number; identity: string | null; running: { origin: string; pinRef: string } | null; reconcile: ReconcileReceipt; problems: string[] } | null = null;
   if (confirm !== undefined && resolvedTarget !== undefined && resolvedTarget === confirm) {
+    // The pin ref (D66): the tag the running stack reports, else its commit.
+    // Read before the database, so a stack that reports nothing refuses by name.
+    let running: { origin: string; pinRef: string } | null = null;
+    if (origin === undefined) problems.push("target precondition: no --origin was given, so the running stack's version cannot pin the applied migration bytes");
+    else {
+      const version = await readRunningVersion(origin);
+      if ("error" in version) problems.push(`target precondition: the running stack at ${origin} reports no version to pin the applied migration bytes to (${version.error})`);
+      else running = { origin, pinRef: runningPinRef(version) };
+    }
     try {
       const db = await openReadOnly();
       try {
         const ledger = (await db.query<{ name: string }>(`SELECT name FROM schema_migrations ORDER BY name COLLATE "C"`)).map((r) => r.name);
         const table = (await db.query<{ t: string | null }>("SELECT to_regclass('public.deployment_identity')::text AS t"))[0]?.t ?? null;
         const identity = table ? (await db.query<{ kind: string }>("SELECT kind FROM deployment_identity"))[0]?.kind ?? null : null;
-        const found = preconditionProblems({ rmEnv: process.env.RM_ENV, ledger, identity });
-        precondition = { ledgerCount: ledger.length, identity, problems: found };
+        const reconcile = reconcileLedger(ledger, running ? { pinRef: running.pinRef } : {});
+        const found = preconditionProblems({ rmEnv: process.env.RM_ENV, ledger, identity, reconcile });
+        precondition = { ledgerCount: ledger.length, identity, running, reconcile, problems: found };
         problems.push(...found.map((p) => `target precondition: ${p}`));
       } finally {
         await db.close();
