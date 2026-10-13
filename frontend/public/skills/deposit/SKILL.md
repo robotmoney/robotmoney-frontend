@@ -30,10 +30,10 @@ The owner receives each vault's token (an ERC-4626 share) in their own
 wallet. The number of tokens stays the same; their value moves with what
 each vault holds. Redeeming pays USDC back, less the vault's exit fee.
 
-**Which vaults are live is a fact you read, never one you assume.** Today
-only rmUSDC is live on Base, and the PortfolioRouter that splits a deposit
-across the four is not on Base yet. Read the contracts table below at the
-start of every run.
+**Which vaults are live is a fact you read, never one you assume.** The four
+vaults and the PortfolioRouter that splits a deposit across them are on
+Base, and any vault can be paused, shut down or retired. Read the contracts
+table below and each vault's state at the start of every run.
 
 ## Ground rules
 
@@ -64,20 +64,22 @@ start of every run.
 ```bash
 RPC="${BASE_RPC_URL:?set BASE_RPC_URL to a Base mainnet RPC endpoint}"
 USDC=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
-ROUTER=           # PortfolioRouter: not on Base yet
-RMUSDC=0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd
-RMAGENT=          # not on Base yet
-RMPROTO=          # not on Base yet
-RMRWA=            # not on Base yet
-REGISTRY=         # VaultRegistry: not on Base yet
-GATEWAY=          # the gateway rmpc deposits through: not on Base yet
+ROUTER=0xB3a8e66d9E2980B54aC0e70e0e236486D1DCb356             # PortfolioRouter
+RMUSDC=0x28Bf6E6EDAD526191e8652ee631B56EAd4cE7435             # Robot Money USDC
+RMAGENT=0x22bD48C56c34A2C1C1baC77BD7c4E636a6f10D57            # Robot Money Agent Tokens
+RMPROTO=0x28C5ca4DF0107679bFcc9b0ad4c2f3F209b8f797            # Robot Money Protocol
+RMRWA=0x37Be372Bd32f9E63A94C7DB3ab415996658bcd50              # Robot Money RWA
+REGISTRY=0x686ebefda732dffa988253ecf9c012946b8066a3           # VaultRegistry, the router's registry()
+RMAGENT_RECORDER=0x0aDc14e6521aF213F9DCe5585D530f237831E934   # rmAGENT's price recorder
+RMUSDC_V0=0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd          # v0 rmUSDC: redeem only, see "Leaving the old skill"
+GATEWAY=          # the gateway rmpc deposits through: not on Base yet, so rmpc does not deposit
 ```
 
 There is no default RPC endpoint. The reader supplies `BASE_RPC_URL`, an
 endpoint they trust for Base mainnet. If it is unset, stop and ask the owner
 for one.
 
-An empty address is a vault (or the router) that is not live. This file is
+An empty address is a contract that is not live. This file is
 served by the Robot Money site and updated in the same release that deploys
 a contract, so the addresses here are the deployed ones.
 
@@ -109,8 +111,10 @@ a contract, so the addresses here are the deployed ones.
      deposit, the owner sets it up with one transaction on the gateway (see
      `deposit` below).
 4. **Gas.** Read the owner's ETH balance (`cast balance "$OWNER" --rpc-url
-   "$RPC" --ether`). A deposit is two transactions and costs a few cents on
-   Base. With no ETH, stop and ask the owner to send some to `OWNER` first.
+   "$RPC" --ether`). A deposit is two transactions, three with rmAGENT's
+   price record (see `prepare-deposit`), and it runs under a high fixed gas
+   limit; the owner pays only the gas used. With no ETH, stop and ask the
+   owner to send some to `OWNER` first.
 5. **USDC.** Read the owner's USDC balance (`cast call "$USDC"
    "balanceOf(address)(uint256)" "$OWNER" --rpc-url "$RPC"`, 6 decimals). A
    deposit larger than the balance stops here.
@@ -121,19 +125,24 @@ Amounts in USDC have 6 decimals: `cast parse-units 500 6` is 500 USDC.
 
 ### `vaults`: what is live, and the allocation
 
-With the router on Base, its effective weights are the allocation a deposit
-is split by:
+First check the router and the registry against this file. If either
+differs, stop and say so.
+
+```bash
+cast call "$ROUTER" "registry()(address)" --rpc-url "$RPC"         # must equal $REGISTRY
+cast call "$REGISTRY" "listVaults()(address[])" --rpc-url "$RPC"   # must be the four vaults above
+```
+
+The router's effective weights are the allocation a deposit is split by,
+as `(address[] vaults, uint256[] bps)`, 10000 bps to the whole. Read them
+every run; never hard-code the split.
 
 ```bash
 cast call "$ROUTER" "getEffectiveWeights()(address[],uint256[])" --rpc-url "$RPC"
 ```
 
-Without it, the allocation is the published one at
-`https://robotmoney.network/api/dashboards/allocation` (`strategy[].targetPct`,
-in the vault order above), and the live vaults are the ones with an address
-here.
-
-For each live vault, read its state:
+For each of the four vaults (`V=$RMUSDC`, then `$RMAGENT`, `$RMPROTO`,
+`$RMRWA`), read its state:
 
 ```bash
 V=$RMUSDC
@@ -144,21 +153,34 @@ cast call "$V" "retired()(bool)" --rpc-url "$RPC"
 cast call "$V" "exitFeeBps()(uint256)" --rpc-url "$RPC"
 cast call "$V" "perDepositCap()(uint256)" --rpc-url "$RPC"
 cast call "$V" "tvlCap()(uint256)" --rpc-url "$RPC"
+cast call "$V" "maxDeposit(address)(uint256)" "$OWNER" --rpc-url "$RPC"
 cast call "$V" "totalAssets()(uint256)" --rpc-url "$RPC"
+cast call "$V" "maxSlippageBps()(uint256)" --rpc-url "$RPC"   # rmAGENT, rmPROTO, rmRWA only
 ```
 
 A vault whose `asset()` is not USDC, whose deposits are paused, or that is
 shut down or retired, takes no deposit. Say so; do not work around it.
 
+Caps are read, never stated from memory. `perDepositCap()` limits one
+deposit, `tvlCap()` the vault's total, and `maxDeposit(OWNER)` is what the
+vault takes now. A router deposit gives each leg the amount times that
+leg's weight, so the tightest leg sets the largest router deposit: the
+smallest, over the legs, of the leg's limit (the lower of `perDepositCap()`
+and `maxDeposit(OWNER)`) divided by its weight.
+
 ### `position`: what the owner holds
 
 ```bash
 cast call "$V" "balanceOf(address)(uint256)" "$OWNER" --rpc-url "$RPC"   # shares
+cast call "$V" "convertToAssets(uint256)(uint256)" <shares> --rpc-url "$RPC" # their value in USDC
 cast call "$V" "previewRedeem(uint256)(uint256)" <shares> --rpc-url "$RPC" # USDC out, after the exit fee
 ```
 
-Report each vault's shares, their USDC value after the exit fee, and its
-share of the total.
+Report each vault's value in USDC, what a redeem pays after the exit fee,
+and its share of the total. Never report raw shares: `decimals()` returns 6,
+but the vaults add an 18-decimal virtual offset (a guard against
+first-depositor inflation), so a share count is about 10^18 times the USDC
+deposited.
 
 ### `preview-deposit`: the split, before anything is signed
 
@@ -169,61 +191,87 @@ cast call "$ROUTER" "previewDeposit(uint256)((address,uint256,uint256,uint256,bo
 ```
 
 Each leg is `(vault, weightBps, legAmount, estShares, unavailable)`. A leg
-marked `unavailable` (deposits paused, retired or over its cap) gets
-nothing, and the router spreads its share over the others: `legAmount` is
-already that.
+the router skips (its vault paused or retired in the registry) is
+`unavailable` with a `legAmount` of 0, and the router spreads its weight
+over the others: their `legAmount` is already that. A leg that is
+`unavailable` with a `legAmount` above 0 is one its vault refuses, such as a
+leg over the vault's cap: the deposit would revert, so deposit less.
 
-**Without the router (today):** deposit into the live vaults directly.
-While rmUSDC is the only one, the whole deposit goes to rmUSDC, and you tell
-the owner that the other sleeves are not live yet, so this deposit holds
-Fixed Income only.
+**Into one vault** (for `rebalance`):
 
 ```bash
-cast call "$RMUSDC" "previewDeposit(uint256)(uint256)" "$AMOUNT" --rpc-url "$RPC"
+cast call "$V" "previewDeposit(uint256)(uint256)" "$AMOUNT" --rpc-url "$RPC"
 ```
 
 Then show the owner, and wait for a yes:
 
 ```
-Deposit 500 USDC into Robot Money, from 0xOwner…
-  rmUSDC   Fixed Income   500.00 USDC  →  ~<estShares> rmUSDC
-  Not live yet: Small Cap Tokens (<target>%). This deposit holds Fixed Income only.
-Exit fee when you redeem: rmUSDC <exitFeeBps / 100>%
-Two transactions: approve 500 USDC to rmUSDC, then deposit.
-Gas: ~<cast estimate × cast gas-price> ETH.
+Deposit 100 USDC into Robot Money, from 0xOwner…
+  rmUSDC    Fixed Income        <legAmount> USDC
+  rmAGENT   Small Cap Tokens    <legAmount> USDC
+  rmPROTO   Protocol Tokens     <legAmount> USDC
+  rmRWA     Real World Assets   <legAmount> USDC
+Exit fee when you redeem: rmUSDC <exitFeeBps / 100>%, rmAGENT …, rmPROTO …, rmRWA …
+rmAGENT returns about 94% of what goes in: its swaps and slippage cost the rest.
+Your wallet will show a very large balance of each vault token: a share count
+is about 10^18 times the USDC deposited. Its value in USDC is what you hold.
+Three transactions: record rmAGENT's price, approve 100 USDC to the router, then deposit.
+Gas: limit 8,000,000 for the deposit; you pay only the gas used, at most <8,000,000 × cast gas-price> ETH.
 ```
 
-Every figure comes from a read in this run: the leg amounts and shares from
-the preview, the fee from `exitFeeBps()`, the gas from `cast estimate` and
-`cast gas-price`. Never fill one in from memory or from an example.
+Every figure comes from a read in this run: the leg amounts from the
+preview, the fees from `exitFeeBps()`, the gas price from `cast gas-price`.
+Never fill one in from memory or from an example. Do not use `cast
+estimate` for a deposit: the vaults check a gas floor, so an estimate can
+come back too low and the transaction reverts.
 
 ### `prepare-deposit`: the transactions, unsigned
 
+**rmAGENT's price first.** rmAGENT refuses a deposit when its price
+recorder is stale or the recorded price is far from the live pool price,
+and nothing records it on a schedule. Before any deposit with an rmAGENT
+leg (every router deposit while rmAGENT's weight is above 0, and any direct
+rmAGENT deposit), send `record()` to the recorder, wait for it to confirm,
+then require `isFresh()` to be true. `record()` moves no funds, and any
+wallet can send it. If `isFresh()` is still false, stop and tell the owner.
+
+```bash
+RECORD=$(cast calldata "record()")                                       # to $RMAGENT_RECORDER
+cast call "$RMAGENT_RECORDER" "isFresh()(bool)" --rpc-url "$RPC"         # must be true
+```
+
 **With the router:** approve exactly `AMOUNT` to the router, then
 `deposit(amount, minSharesPerLeg)`. `minSharesPerLeg` has one entry per
-available leg, in the preview's order: that leg's `estShares` less a
-tolerance, 0.1% for rmUSDC and 1% for the token vaults (their deposits buy
-tokens, and prices move between the preview and the block). The owner can
-set another. If any leg would mint less, the router reverts every leg, and
-nothing moves.
+active leg, in the preview's order: that leg's `estShares` less the slippage
+the owner accepts, by default 0.1% for rmUSDC and 1% for the token vaults
+(their deposits buy tokens, and prices move between the preview and the
+block). An empty array skips the floor. If any leg would mint less, the
+router reverts every leg, and nothing moves. To send the vault tokens to
+another address, use `depositFor(receiver, amount, minSharesPerLeg)`.
 
 ```bash
 APPROVE=$(cast calldata "approve(address,uint256)" "$ROUTER" "$AMOUNT")
-DEPOSIT=$(cast calldata "deposit(uint256,uint256[])" "$AMOUNT" "[$MIN1,$MIN2]")
+DEPOSIT=$(cast calldata "deposit(uint256,uint256[])" "$AMOUNT" "[$MIN1,$MIN2,$MIN3,$MIN4]")
 ```
 
 **Into one vault:** approve exactly `AMOUNT` to the vault, then the ERC-4626
 `deposit(assets, receiver)`. A direct deposit has no minimum-shares bound, so
 refuse it if the vault's preview is below what its share price implies
-(`convertToShares`) by more than the same tolerance. With a registry on Base, also read the vault's
-status there (`getVault(vault)`) and refuse unless it is Active: a vault
-whose deposits the registry has paused can still take a direct deposit, so
-the check is yours.
+(`convertToShares`) by more than the same tolerance. Also read the vault's
+status in the registry (`getVault(vault)`) and refuse unless it is Active: a
+vault whose deposits the registry has paused can still take a direct
+deposit, so the check is yours.
 
 ```bash
 APPROVE=$(cast calldata "approve(address,uint256)" "$V" "$AMOUNT")
 DEPOSIT=$(cast calldata "deposit(uint256,address)" "$AMOUNT" "$OWNER")
 ```
+
+**Gas limits.** Set them; never rely on an estimate. A router deposit needs
+at least 6.8M gas at entry: pass `--gas-limit 8000000`. A direct vault
+deposit: `--gas-limit 2500000` (rmUSDC needs at least 1.6M). A redeem:
+`--gas-limit 3000000`. The depositor pays only the gas used. For a Safe,
+the same limits apply to the executed transaction.
 
 Return the result in this shape, for the owner or their wallet:
 
@@ -233,8 +281,9 @@ Return the result in this shape, for the owner or their wallet:
     "summary": "Deposit <amount> USDC into Robot Money: <legAmount> to <vault>, …",
     "chainId": 8453,
     "transactions": [
+      { "to": "<RMAGENT_RECORDER>", "data": "<RECORD>", "value": "0", "description": "Record rmAGENT's price (moves no funds)" },
       { "to": "<USDC>", "data": "<APPROVE>", "value": "0", "description": "Approve <amount> USDC to <spender>" },
-      { "to": "<ROUTER or vault>", "data": "<DEPOSIT>", "value": "0", "description": "Deposit <amount> USDC" }
+      { "to": "<ROUTER or vault>", "data": "<DEPOSIT>", "value": "0", "gas": "8000000", "description": "Deposit <amount> USDC" }
     ],
     "warnings": []
   },
@@ -244,14 +293,19 @@ Return the result in this shape, for the owner or their wallet:
 }
 ```
 
-Send them in order: the approve must be confirmed before the deposit.
+Send them in order: each must be confirmed before the next, and
+`isFresh()` must be true before the deposit. Leave out the record when no
+leg goes to rmAGENT. For a direct vault deposit, `gas` is `2500000`.
 
 ### `deposit`: signing and sending
 
 - **A Safe multisig.** Give the owner both transactions as one Transaction
   Builder batch, so the approve and the deposit execute together or not at
   all. They load it in Safe{Wallet} (Apps, Transaction Builder), the signers
-  approve it, and one executes it. Never sign for a Safe yourself.
+  approve it, and one executes it with the gas limit above. Never sign for
+  a Safe yourself. The recorder goes stale while signatures are collected:
+  send `record()` from any wallet just before the Safe executes, and check
+  `isFresh()` again.
 
   ```json
   {
@@ -271,9 +325,18 @@ Send them in order: the approve must be confirmed before the deposit.
   it goes through the dapp, as below.
 
   ```bash
+  cast send "$RMAGENT_RECORDER" "record()" --ledger --rpc-url "$RPC"
+  cast call "$RMAGENT_RECORDER" "isFresh()(bool)" --rpc-url "$RPC"      # must be true
   cast send "$USDC" "approve(address,uint256)" "$SPENDER" "$AMOUNT" --ledger --rpc-url "$RPC"
-  cast send "$ROUTER" "deposit(uint256,uint256[])" "$AMOUNT" "[$MIN1,$MIN2]" --ledger --rpc-url "$RPC"
+  cast send "$ROUTER" "deposit(uint256,uint256[])" "$AMOUNT" "[$MIN1,$MIN2,$MIN3,$MIN4]" --gas-limit 8000000 --ledger --rpc-url "$RPC"
   ```
+
+  Sending several transactions from one key in a row, a lagging public RPC
+  can hand out a nonce already used ("replacement transaction underpriced"):
+  wait a few seconds and resend, or pass `--nonce`. If you keep the signer
+  flags in a variable (`SIGN="--ledger"`), zsh passes `$SIGN` as one
+  argument: run the commands in bash, write the flags inline, or use
+  `${=SIGN}`.
 
 - **A browser wallet such as MetaMask, for a human.** Show them the preview,
   then send them to the Robot Money dapp: they connect the wallet there and
@@ -282,15 +345,17 @@ Send them in order: the approve must be confirmed before the deposit.
   wallet from a terminal instead.
 
 - **Any other wallet that takes a prepared transaction.** Hand over the
-  prepared transactions, to sign one at a time. A smart account that
-  supports EIP-5792 takes both as one batch.
+  prepared transactions, to sign one at a time, each with its gas limit. A
+  smart account that supports EIP-5792 takes the approve and the deposit as
+  one batch.
 
 - **An agent wallet, such as MetaMask's.** Any agent wallet that sends a
   transaction to a chosen address works. For MetaMask's agent wallet, send
   each prepared transaction with the
   `metamask-agent-wallet` skill's send-transaction, chain 8453, its `to` and
-  `data`, value 0. Its Guard mode must allowlist USDC, the router and the live
-  vaults; if it refuses, show the owner the refusal and stop.
+  `data`, value 0, and the gas limit above. Its Guard mode must allowlist
+  USDC, the router, the four vaults and rmAGENT's price recorder; if it
+  refuses, show the owner the refusal and stop.
 
 - **`rmpc`, one option, which needs a matching gateway.** `rmpc` is not a
   wallet: it signs calls to the Robot Money gateway and nothing else, by
@@ -302,13 +367,13 @@ Send them in order: the approve must be confirmed before the deposit.
   keystore. An HSM or KMS backend is optional. Until this file lists the
   gateway, do not use `rmpc` for deposits.
 
-After the deposit confirms, run `position` and report the shares received
-per vault.
+After the deposit confirms, run `position` and report what each vault now
+holds for the owner, in USDC.
 
 ### `prepare-redeem` and `redeem`: getting USDC back
 
 Redeem per vault, by shares. `previewRedeem` is the USDC out, after the
-exit fee.
+exit fee (`exitFeeBps()`, paid to the vault's `feeRecipient()`).
 
 ```bash
 SHARES=$(cast call "$V" "balanceOf(address)(uint256)" "$OWNER" --rpc-url "$RPC")   # all of it
@@ -320,13 +385,19 @@ The token vaults (rmAGENT, rmPROTO, rmRWA) only redeem; they refuse
 `withdraw`. rmUSDC takes either. If a large rmUSDC redeem reverts because a
 lending market is short of free USDC, redeem in parts or try again later.
 
-A pause stops deposits only: it never blocks a redeem from the token vaults.
-rmUSDC is older and the one exception. Before an rmUSDC redeem, read
-`cast call "$RMUSDC" "withdrawalsPaused()(bool)" --rpc-url "$RPC"`; if it is
-true, tell the owner rmUSDC's withdrawals are paused, and stop.
+The token vaults also redeem in kind: `redeemInKind(shares, receiver,
+owner)` pays out the vault's underlying tokens instead of swapping them to
+USDC. Offer it when the owner would rather hold the tokens.
+
+```bash
+REDEEM=$(cast calldata "redeemInKind(uint256,address,address)" "$SHARES" "$OWNER" "$OWNER")
+```
+
+A pause stops deposits only: it never blocks a redeem.
 
 Show the owner the USDC out and the fee per vault, and wait for a yes, as
-for a deposit. One transaction per vault; no approval.
+for a deposit. One transaction per vault, with `--gas-limit 3000000`; no
+approval.
 
 ### `rebalance`: when the allocation changes
 
@@ -354,18 +425,22 @@ match the new allocation:
 | `TVLCapExceeded` | The vault is full | Deposit less, or later |
 | `VaultCapExceeded`, `RouterCapExceeded` | A leg or the deposit is over the router's cap | Deposit less |
 | `SlippageExceeded` | A leg would mint less than its minimum | Preview again; nothing moved |
+| `InsufficientGas` | The gas limit was below the floor | Resend with the gas limit in `prepare-deposit` |
 | `VaultNotActive` | A vault's deposits are paused, or it is retired | Preview again: the router skips it |
 | `DepositsPaused`, `DepositsArePaused` | The vault's deposits are paused | Stop and tell the owner; nothing moved |
-| `WithdrawalsPaused` | rmUSDC's withdrawals are paused | Stop and tell the owner; nothing moved |
+| `WithdrawalsPaused` | v0 rmUSDC's withdrawals are paused | Stop and tell the owner; nothing moved |
 | `VaultShutdown`, `VaultRetired` | The vault takes no new deposits | Redeem still works; deposit elsewhere |
 
 ## Leaving the old skill
 
 The old deposit skill (`robotmoney-cli`, from `robotmoney-skills-v0`) put 95%
-into rmUSDC and bought seven agent tokens with the other 5%, straight into
-the owner's wallet. rmUSDC is the same vault: redeem it here. This skill does
-not sell those seven tokens. The old CLI still does, in one go with the rmUSDC
-redeem:
+into v0 rmUSDC (`RMUSDC_V0`) and bought seven agent tokens with the other 5%,
+straight into the owner's wallet. v0 rmUSDC is not the rmUSDC above: redeem
+it with `redeem` (`V=$RMUSDC_V0`), then deposit the USDC here. Before a v0
+rmUSDC redeem, read `cast call "$RMUSDC_V0" "withdrawalsPaused()(bool)"
+--rpc-url "$RPC"`; if it is true, tell the owner v0 rmUSDC's withdrawals are
+paused, and stop. This skill does not sell those seven tokens. The old CLI
+still does, in one go with the v0 rmUSDC redeem:
 
 ```bash
 npx @robotmoney/cli@0.3.0 prepare-redeem --chain base --user-address "$OWNER" --shares max --receiver "$OWNER" --sell-all
@@ -374,5 +449,5 @@ npx @robotmoney/cli@0.3.0 prepare-redeem --chain base --user-address "$OWNER" --
 ## Report to your owner
 
 After every operation, say what happened in one short block: what moved,
-the transactions with their BaseScan links, the shares now held per vault,
-and anything that did not happen and why.
+the transactions with their BaseScan links, what each vault now holds in
+USDC, and anything that did not happen and why.
