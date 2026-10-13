@@ -5443,3 +5443,48 @@ caching around it.
 **Enforcement.** `scripts/tests/unit/ci-no-cache.test.ts`,
 `scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts` and
 `scripts/tests/unit/member-agent-dockerfile-retries.test.ts`.
+
+---
+
+<a id="d66"></a>
+## D66 — Production data changes only through a migration (owner, 2026-10-09)
+
+**Status.** Accepted 2026-10-09 as decision 2 of the
+[v0.6.0 upgrade post-mortem](./post-mortems/2026-10-09T1704Z-0.6.0-upgrade.md#owner-decisions-record-2026-10-09).
+Carried into the release standing runbook as rule 7 by the v0.6.1 runbook pr
+(1324). Recorded here with issue 1312.
+
+**Decision.**
+
+1. Every change to production data ships as a file under `backend/migrations`
+   and is applied by the release's migrate step (R6.3). No admin-route write, no
+   SQL by hand, no one-off script.
+2. This covers operator state as much as schema: a subject's scheduling columns
+   (`epoch_duration`, `epoch_anchor`, `judging_duration`), fixture purges and
+   value retypes. Migration 0117 (daily epochs), 0118 (fixture purge) and 0121
+   (closes six hours apart) are the first three.
+3. The migration ledger (`schema_migrations`) is the record of every production
+   data change. A release runbook lists its migrations and nothing else as its
+   data delta.
+4. The admin API remains the way an **ephemeral** stack (a smoke run, a CI
+   stack, a rehearsal copy of production) changes a subject's scheduling
+   columns. That write is `backend/src/swarm/admin.ts`, reached through
+   `backend/src/api/routes/swarm-admin.ts`; it has no deployment guard. The
+   rule, not the code, keeps it off production and stage.
+
+**Why.** On 2026-10-09 an operator set the 24 h epoch duration on production by
+hand through the admin route at 16:55 UTC. The change was correct and still left
+no record a later release could read, replay on stage or roll back. The
+post-mortem's third decision kept that edit live only until migration 0117
+replaced it with the same values. The fixture purge of issue 1208 had ruled a
+migration out of scope the day before; this rule overrides that.
+
+**Rejected.** An admin-route write with an audit row: the row records the
+change but a release cannot replay it on stage before production. A one-off
+script under `scripts/`: it runs outside the ledger and leaves no proof of
+whether it ran.
+
+**Enforcement.** `scripts/lint-docs.sh` check 7 and
+`scripts/tests/unit/docs-migration-rule-decision.test.ts` require this entry
+and refuse any current doc that still names the admin API as the sole way a
+subject's scheduling columns change.
