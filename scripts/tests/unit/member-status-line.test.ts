@@ -24,9 +24,16 @@ describe("memberStatusLine", () => {
     expect(memberStatusLine(null)).toBeNull();
   });
 
-  test("an explicit threshold moves the line", () => {
-    expect(memberStatusLine({ silentSessions: 3 }, 3)).toBe("Silent: missed 3 consecutive sessions");
-    expect(memberStatusLine({ silentSessions: 2 }, 3)).toBeNull();
+  test("the served silentThreshold moves the line", () => {
+    expect(memberStatusLine({ silentSessions: 3, silentThreshold: 3 })).toBe("Silent: missed 3 consecutive sessions");
+    expect(memberStatusLine({ silentSessions: 2, silentThreshold: 3 })).toBeNull();
+    expect(memberStatusLine({ silentSessions: 7, silentThreshold: 10 })).toBeNull();
+  });
+
+  test("an absent or invalid silentThreshold falls back to 7", () => {
+    expect(memberStatusLine({ silentSessions: 6, silentThreshold: null })).toBeNull();
+    expect(memberStatusLine({ silentSessions: 7, silentThreshold: null })).toBe("Silent: missed 7 consecutive sessions");
+    expect(memberStatusLine({ silentSessions: 7, silentThreshold: 0 })).toBe("Silent: missed 7 consecutive sessions");
   });
 
   test("the backend's default threshold is the page's", () => {

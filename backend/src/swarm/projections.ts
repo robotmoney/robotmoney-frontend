@@ -14,6 +14,7 @@ import { path as routePath, ROUTES } from "@robotmoney/contract";
 import { verifyStoredSubmissionSignature } from "../lib/signing.ts";
 import { isV0ArchiveNonce } from "./v0-archive.ts";
 import { normalizedTakeWeights, takeRevision } from "./domain.ts";
+import { dormancyThresholdSessions } from "./dormancy.ts";
 
 type Row = Record<string, any>;
 
@@ -55,6 +56,9 @@ export function toMember(row: Row): SwarmMember {
     // Issue 1269: only getMember() counts it (src/swarm/dormancy.ts); every
     // other read, and every seat with no count, is null.
     silentSessions: row.silent_sessions == null ? null : Number(row.silent_sessions),
+    // The count at which the page shows the status line:
+    // SWARM_DORMANCY_THRESHOLD_SESSIONS, served so the page needs no copy of it.
+    silentThreshold: dormancyThresholdSessions(),
   };
 }
 

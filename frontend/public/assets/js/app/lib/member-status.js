@@ -7,17 +7,22 @@
 // the admin member list show one line. It is a line, never an action: the
 // member stays active, seated and keyed, and only an admin removes it.
 
-/** The default threshold, the backend's DEFAULT_SWARM_DORMANCY_THRESHOLD_SESSIONS. */
+/**
+ * The fallback threshold, the backend's DEFAULT_SWARM_DORMANCY_THRESHOLD_SESSIONS,
+ * for a payload that carries no `silentThreshold` (the static archive).
+ */
 export const SILENT_THRESHOLD_SESSIONS = 7;
 
 /**
- * `Silent: missed N consecutive sessions` once the count reaches the
- * threshold, null below it or when there is no count.
- * @param {{ silentSessions?: number | null } | null | undefined} member
- * @param {number} [threshold]
+ * `Silent: missed N consecutive sessions` once the count reaches the member's
+ * served `silentThreshold` (SWARM_DORMANCY_THRESHOLD_SESSIONS), null below it
+ * or when there is no count.
+ * @param {{ silentSessions?: number | null, silentThreshold?: number | null } | null | undefined} member
  * @returns {string | null}
  */
-export function memberStatusLine(member, threshold = SILENT_THRESHOLD_SESSIONS) {
+export function memberStatusLine(member) {
+  const t = member?.silentThreshold;
+  const threshold = typeof t === "number" && Number.isInteger(t) && t > 0 ? t : SILENT_THRESHOLD_SESSIONS;
   const n = member?.silentSessions;
   if (typeof n !== "number" || !Number.isFinite(n) || n < threshold) return null;
   return `Silent: missed ${n} consecutive sessions`;

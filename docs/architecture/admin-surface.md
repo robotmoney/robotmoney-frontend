@@ -357,7 +357,10 @@ Acceptance:
   release carrying the count was migrated). An excused session does not
   count, and a judge or inactive member has none (null). At
   `SWARM_DORMANCY_THRESHOLD_SESSIONS` (default 7) the admin list and the
-  public member page show `Silent: missed N consecutive sessions`. Nothing
+  public member page show `Silent: missed N consecutive sessions`. Both
+  responses serve that threshold as `silentThreshold` beside
+  `silentSessions`, and the page's `memberStatusLine` reads it (falling back to
+  7 when a payload has none). Nothing
   deactivates, excuses or revokes on it: the member stays `active`, keyed and
   seated as `expected`, and removal stays the explicit deactivate above.
 

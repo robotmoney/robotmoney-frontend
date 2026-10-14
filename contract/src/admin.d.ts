@@ -358,6 +358,8 @@ export interface AdminMember {
    * counted for an active member-role seat on the admin list, null otherwise
    * and on every single-member admin response. */
   silentSessions: number | null;
+  /** SWARM_DORMANCY_THRESHOLD_SESSIONS, as SwarmMember.silentThreshold. */
+  silentThreshold: number;
 }
 
 /** GET .../applications row. listApplicationsAdmin() returns raw, unprojected

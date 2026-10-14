@@ -268,6 +268,8 @@ export function camelMember(raw) {
     // Consecutive missed sessions (issue 1269): only the member route counts
     // it; the roster and the static archive carry none.
     silentSessions: typeof raw.silentSessions === "number" ? raw.silentSessions : null,
+    // The deployment's SWARM_DORMANCY_THRESHOLD_SESSIONS; the helper falls back to 7.
+    silentThreshold: typeof raw.silentThreshold === "number" ? raw.silentThreshold : null,
   };
 }
 

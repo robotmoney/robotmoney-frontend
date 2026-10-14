@@ -28,7 +28,7 @@ import { provisionOperatorToken } from "./support/automation-auth.ts";
 // module it has no declarations for.
 const MEMBER_STATUS = join(import.meta.dir, "../../frontend/public/assets/js/app/lib/member-status.js");
 const { memberStatusLine } = (await import(MEMBER_STATUS)) as {
-  memberStatusLine: (member: { silentSessions: number | null }, threshold?: number) => string | null;
+  memberStatusLine: (member: { silentSessions: number | null; silentThreshold?: number }) => string | null;
 };
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
@@ -112,15 +112,15 @@ test("three missed sessions reach the threshold and show the status line; two do
   await submit(near, first, subjectId);
   await convene(subjectId, 3); // `silent`: 3 absences; `near`: present once, then 2 absences
 
-  const threshold = dormancyThresholdSessions();
+  // The served payload carries the threshold, so the helper gets no explicit one.
   const silentMember = (await ic.getMember(silent.id))!;
   expect(silentMember.silentSessions).toBe(3);
-  expect(memberStatusLine(silentMember, threshold)).toBe("Silent: missed 3 consecutive sessions");
+  expect(silentMember.silentThreshold).toBe(3);
+  expect(memberStatusLine(silentMember)).toBe("Silent: missed 3 consecutive sessions");
 
   const nearMember = (await ic.getMember(near.id))!;
   expect(nearMember.silentSessions).toBe(2);
-  expect(nearMember.silentSessions!).toBeLessThan(threshold);
-  expect(memberStatusLine(nearMember, threshold)).toBeNull();
+  expect(memberStatusLine(nearMember)).toBeNull();
 });
 
 test("absences on sessions convened before the baseline are not counted", async () => {
@@ -207,9 +207,12 @@ test("GET /api/swarm/members/:id and the admin list serve silentSessions", async
     const p = `/api/swarm/members/${id}`;
     const res = await handleSwarm(new Request(`http://localhost${p}`), new URL(`http://localhost${p}`));
     expect(res?.status).toBe(200);
-    return res!.body as { silentSessions: unknown };
+    return res!.body as { silentSessions: number | null; silentThreshold: number };
   };
-  expect((await get(seated.id)).silentSessions).toBe(3);
+  const seatedBody = await get(seated.id);
+  expect(seatedBody.silentSessions).toBe(3);
+  expect(seatedBody.silentThreshold).toBe(3);
+  expect(memberStatusLine(seatedBody)).toBe("Silent: missed 3 consecutive sessions");
   expect((await get(gone.id)).silentSessions).toBeNull();
 
   const res = await handleSwarmAdmin(
@@ -217,8 +220,11 @@ test("GET /api/swarm/members/:id and the admin list serve silentSessions", async
     new URL("http://x/api/swarm/admin/members"),
   );
   expect(res?.status).toBe(200);
-  const members = (res!.body as { members: { id: string; silentSessions: unknown }[] }).members;
-  expect(members.find((x) => x.id === seated.id)?.silentSessions).toBe(3);
+  const members = (res!.body as { members: { id: string; silentSessions: number | null; silentThreshold: number }[] }).members;
+  const seatedRow = members.find((x) => x.id === seated.id)!;
+  expect(seatedRow.silentSessions).toBe(3);
+  expect(seatedRow.silentThreshold).toBe(3);
+  expect(memberStatusLine(seatedRow)).toBe("Silent: missed 3 consecutive sessions");
   expect(members.find((x) => x.id === gone.id)?.silentSessions).toBeNull();
 });
 

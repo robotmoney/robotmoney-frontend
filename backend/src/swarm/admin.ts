@@ -25,7 +25,7 @@ import {
 } from "./domain.ts";
 // Issue #562 — the one implementation of "what handle does this name get".
 import { deriveMemberHandle } from "./handle.ts";
-import { silentSessionsByMember } from "./dormancy.ts";
+import { dormancyThresholdSessions, silentSessionsByMember } from "./dormancy.ts";
 // Issue #752 — the consensus judge's runtime switch. A DATABASE row, not an env
 // var, because the swarm is live and an operator must be able to take the
 // judge off without restarting anything. The judge itself is a participant
@@ -690,6 +690,8 @@ function toMemberAdmin(row: Record<string, any>): AdminMember {
     // Issue 1269: counted by listMembersAdmin() only (src/swarm/dormancy.ts);
     // null on every other admin response and for a seat with no count.
     silentSessions: row.silent_sessions == null ? null : Number(row.silent_sessions),
+    // SWARM_DORMANCY_THRESHOLD_SESSIONS, the count at which the list shows the line.
+    silentThreshold: dormancyThresholdSessions(),
   };
 }
 

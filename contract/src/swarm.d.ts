@@ -94,6 +94,12 @@ export interface SwarmMember {
    * Display only: nothing deactivates a member on it.
    */
   silentSessions: number | null;
+  /**
+   * The count at which the page shows the silent status line:
+   * SWARM_DORMANCY_THRESHOLD_SESSIONS (default 7). Served on every member
+   * projection so the page reads the deployment's value.
+   */
+  silentThreshold: number;
 }
 
 export interface SwarmSubject {
