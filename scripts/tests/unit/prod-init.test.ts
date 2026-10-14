@@ -86,8 +86,8 @@ function fake(over: Partial<ProdInitDeps> & { identity?: TargetState["identity"]
       };
     },
     provisionTokens: async (options) => {
-      calls.push(`provisionTokens:${options.instance}`);
-      return { holders: ["system-scheduler", "analytics-producer", "operator"], files: options.tokenFiles };
+      calls.push(`provisionTokens:${options.instance}${options.keep ? ":keep" : ""}`);
+      return { holders: ["system-scheduler", "analytics-producer", "operator"], kept: [], files: options.tokenFiles };
     },
     rotateKey: async (_api, _token, memberId) => {
       calls.push(`rotateKey:${memberId}`);
@@ -216,10 +216,10 @@ describe("each command writes inside the lock and records a receipt, never a sec
   test("provision-tokens under prod provisions the instance's three holders inside the lock", async () => {
     const rec = fake();
     const receipt = await runProdInit(["provision-tokens", ...CONFIRM], rec.deps);
-    expect(rec.calls).toContain("provisionTokens:rm_prod");
-    expect(rec.calls.indexOf("provisionTokens:rm_prod")).toBeGreaterThan(rec.calls.indexOf("acquireLock:prod-init:provision-tokens"));
+    expect(rec.calls).toContain("provisionTokens:rm_prod:keep");
+    expect(rec.calls.indexOf("provisionTokens:rm_prod:keep")).toBeGreaterThan(rec.calls.indexOf("acquireLock:prod-init:provision-tokens"));
     expect(rec.calls.at(-1)).toBe("release");
-    expect(receipt.detail).toMatchObject({ holders: ["system-scheduler", "analytics-producer", "operator"] });
+    expect(receipt.detail).toMatchObject({ provisioned: ["system-scheduler", "analytics-producer", "operator"], kept: [] });
     receiptOf(rec, "provision-tokens");
   });
 
@@ -262,7 +262,7 @@ describe("a remote rehearsal target's tokens come only from the explicit command
   test("the explicit command provisions a rehearsal target under RM_ENV=stage, receipted", async () => {
     const rec = fake({ env: { RM_ENV: "stage" }, identity: "rehearsal" });
     const receipt = await runProdInit(["provision-tokens", "--instance", "rm_remote_rehearsal", ...CONFIRM], rec.deps);
-    expect(rec.calls).toContain("provisionTokens:rm_remote_rehearsal");
+    expect(rec.calls).toContain("provisionTokens:rm_remote_rehearsal:keep");
     expect(receipt).toMatchObject({ rmEnv: "stage", instance: "rm_remote_rehearsal", identityBefore: "rehearsal", outcome: "completed" });
     expect(existsSync(join(rec.root, "rm_remote_rehearsal", "prod-init"))).toBe(true);
   });

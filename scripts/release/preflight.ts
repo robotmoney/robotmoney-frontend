@@ -14,6 +14,8 @@
 //     P.origin     the commit is on origin's release branch, releases-A.B.x (D64; R1.1 fetches it there)
 //     P.ci         CI on the commit: every check run completed and green, and each
 //                  required workflow present (runbook R0, standing SP.7)
+//     P.lockfile   stage only: a fresh resolve of the commit gives its committed
+//                  lockfiles (./lockfile.ts; every rc carries a new lockfile)
 //     P.stage      prod only: a passed stage journal of this step list at this
 //                  commit exists (SP.8). Its path is what --stage-journal takes
 //     P.live       the release checkout on each host is not the one a running
@@ -232,6 +234,10 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
     else {
       const problems = ciProblems(lines(ci.stdout));
       add("P.ci", problems.length === 0 ? "green" : "red", problems.length === 0 ? `${lines(ci.stdout).length} check runs green, ${REQUIRED_CI.join(", ")} present` : problems.join("; "));
+    }
+    if (target.rmEnv === "stage") {
+      const lock = await deps.collect(CONTROL_HOST, inRepo(`bun scripts/release/lockfile.ts check ${commit} 2>&1`));
+      add("P.lockfile", lock.code === 0 ? "green" : "red", lock.code === 0 ? "every committed bun.lock equals a fresh resolve" : lock.stdout.trim() || "lockfile.ts check failed");
     }
     if (target.rmEnv === "prod") {
       if (input.stageJournal) {

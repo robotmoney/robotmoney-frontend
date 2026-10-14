@@ -139,7 +139,7 @@ export interface ProdInitDeps {
   readTarget(readerUrl: string): Promise<TargetState>;
   acquireLock(readerUrl: string, holder: Omit<LockHolder, "acquiredAt">, expected: TargetState): Promise<{ lock: HeldTargetLock; release(): Promise<void> } | { refusal: string }>;
   setIdentity(options: SetIdentityOptions): Promise<SetIdentityResult>;
-  provisionTokens(options: ProvisionOptions & { readonly readerUrl: string; readonly rmEnv: string }): Promise<{ holders: string[]; files: Record<string, string> }>;
+  provisionTokens(options: ProvisionOptions & { readonly readerUrl: string; readonly rmEnv: string }): Promise<{ holders: string[]; kept: string[]; files: Record<string, string> }>;
   rotateKey(apiUrl: string, operatorToken: string, memberId: string, publicKey: string): Promise<{ status: number; token?: string; error?: string }>;
   /** role-passwords' database half: the ONLY dep that receives a doadmin URL. */
   rolePasswords(options: RolePasswordsOptions): Promise<RolePasswordsResult>;
@@ -361,7 +361,7 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
       (rotateRoles.length > 0 ? `, and rotate ${rotateRoles.join(", ")} (the old lines retired)` : "") +
       (passwordRoles.includes("rm_owner") ? "; rm_owner also becomes LOGIN" : ""),
     "set-identity": `confirm and receipt ${target}'s \`${expected}\` enrollment (it is read, never rewritten)`,
-    "provision-tokens": `provision the three service tokens for instance ${instanceName} on ${target} (a re-run rotates them; restart the holders after)`,
+    "provision-tokens": `provision the service tokens for instance ${instanceName} on ${target}: keep every holder whose file still holds its current token, provision the rest`,
     "rebind-members": `rotate ${roster.length} member key(s) from ${credentialPath} through ${apiUrl} and write each new bearer into its entry`,
   }[command];
   deps.log(`about to ${what}`);
@@ -455,8 +455,12 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
           lock: acquired.lock,
           readerUrl: readerUrl!,
           rmEnv: policy,
+          keep: true,
         });
-        detail = { holders: result.holders, files: result.files, note: "restart system-scheduler and analytics-producer to load the new tokens (§3)" };
+        detail = {
+          provisioned: result.holders, kept: result.kept, files: result.files,
+          note: result.holders.length > 0 ? `restart ${result.holders.join(", ")} to load the new tokens (§3)` : "every token kept; no restart owed",
+        };
         break;
       }
       case "rebind-members": {

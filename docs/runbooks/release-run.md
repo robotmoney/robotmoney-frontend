@@ -258,17 +258,17 @@ runner copies back only the receipts written after that marker.
 
 The table below and the hash line are generated from the kitchen-sink template (`scripts/release/runbooks/templates/kitchen-sink.yaml`) by `bun scripts/release/steps-table.ts --write docs/runbooks/release-run.md`. The docs lint fails when either is stale. The hash is the one SP.8 compares a stage journal and a production run by; it changes only when the list changes, and the change is recorded here on purpose.
 
-Step-list hash: `ff53d9b73904d7030d8a189165a6466357a3cf72a43068f48e798c19e83d82fb`
+Step-list hash: `080995b8f7741b5e2e1fce8d193a33869579e1499ddf0a850eba9a98590b0f96`
 
 <!-- steps-table:begin -->
 | Id | Host | Does | Command | Irreversible | Bound | Standing |
 |---|---|---|---|---|---|---|
 | R1.1 | target; clones the checkout when missing | Target checkout: clone it when missing, fetch the tags, then detach at the go's ref (the rc tag on prod, the commit on stage), so the host holds the tag the boot reports (D64) | `git fetch --tags origin`; `git -c advice.detachedHead=false checkout --detach {ref}` | no | 10 min | SP.1 |
 | R1.2 | target | Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger reconciles with backend/migrations and the bytes at the version the running stack reports (no recorded name the repository lacks, no applied file whose bytes differ from the tag's; never a count or a number order), its identity is absent or matches RM_ENV; before R6.1, ~/.env holds non-empty rm_owner and RM_CREDENTIALS lines and rm_owner logs in (SELECT 1, read-only; refuses with "run bun run role-passwords --target <target> first"); no release step reads doadmin | `bun scripts/release/host-identity.ts --commit {commit} --confirm-target {confirmTarget} --origin {publicOrigin} --receipt-dir {home}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SP.1 |
-| R1.3 | target | Target install: bun install --force, root and backend | `bun install --force`; `bun install --force --cwd backend` | no | 10 min | SP.1 |
+| R1.3 | target | Target install: bun install --frozen-lockfile, root and backend (an install never rewrites the tree R1.2 proved clean) | `bun install --frozen-lockfile`; `bun install --frozen-lockfile --cwd backend` | no | 10 min | SP.1 |
 | R1.4 | capture; clones the checkout when missing | Capture checkout (runner-owned, never a release checkout): clone it when missing, fetch the tags, then detach at the go's ref | `git fetch --tags origin`; `git -c advice.detachedHead=false checkout --detach {ref}` | no | 10 min | SP.1 |
 | R1.5 | capture | Capture identity: HEAD is the commit and the tree is clean | `bun scripts/release/host-identity.ts --commit {commit} --receipt-dir {captureHome}/.local/state/robotmoney-release/{target}/{runTs}` | no | 10 min | SP.1 |
-| R1.6 | capture | Capture install: bun install --force, root and backend | `bun install --force`; `bun install --force --cwd backend` | no | 10 min | SP.1 |
+| R1.6 | capture | Capture install: bun install --frozen-lockfile, root and backend | `bun install --frozen-lockfile`; `bun install --frozen-lockfile --cwd backend` | no | 10 min | SP.1 |
 | R2.1 | capture | Fresh capture from production's read replica into a new dated directory (never a reused dump) | `bun run smoke:capture --out {captureHome}/rm-backup-{target}-{runTs}` | no | 30 min | SR.0, SP.2 |
 | R2.2 | capture | Record the sha256 of the encrypted dump files beside the manifest | `sh -c cd {captureHome}/rm-backup-{target}-{runTs} && sha256sum -- *.gpg > SHA256SUMS` | no | 10 min | SP.2 |
 | R2.4r | capture | Restore proof: restore the R2.1 dump into a throwaway local Postgres container, record the restore time, drop the container | `bun scripts/release/restore-proof.ts --dump {captureHome}/rm-backup-{target}-{runTs} --receipt-dir {captureHome}/.local/state/robotmoney-release/{target}/{runTs}` | no | 20 min | SP.2 |

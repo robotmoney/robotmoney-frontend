@@ -12,7 +12,7 @@
 // can pipe it), then runs on the target host
 //
 //   ssh -T -o BatchMode=yes <host> '{ test -e <checkout>/.git || git clone <repo> <checkout>; } && cd <checkout> \
-//     && { test -e node_modules || bun install --force ...; } && env -i HOME=<home> PATH=<path> LANG=C.UTF-8 RM_ENV=<env> \
+//     && { test -e node_modules || bun install --frozen-lockfile ...; } && env -i HOME=<home> PATH=<path> LANG=C.UTF-8 RM_ENV=<env> \
 //     bun scripts/prod-init.ts role-passwords --instance <i> --confirm-target <T> --doadmin-stdin [...]'
 //
 // and writes the password, with one newline, to that ssh process's stdin and
@@ -85,7 +85,7 @@ export function remoteCommand(target: ReleaseTarget, args: WrapperArgs): string 
   return [
     `{ test -e ${shellQuote(`${target.checkout}/.git`)} || ${envCmd(["git", "clone", "--quiet", RELEASE_REPO_URL, target.checkout])}; }`,
     `cd ${checkout}`,
-    `{ test -e node_modules -a -e backend/node_modules || { ${envCmd(["bun", "install", "--force"])} && ${envCmd(["bun", "install", "--force", "--cwd", "backend"])}; }; }`,
+    `{ test -e node_modules -a -e backend/node_modules || { ${envCmd(["bun", "install", "--frozen-lockfile"])} && ${envCmd(["bun", "install", "--frozen-lockfile", "--cwd", "backend"])}; }; }`,
     envCmd(argv),
   ].join(" && ");
 }

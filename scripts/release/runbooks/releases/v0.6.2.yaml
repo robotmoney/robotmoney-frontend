@@ -32,10 +32,10 @@ steps:
   - id: "R1.3"
     standing: ["SP.1"]
     host: "target"
-    description: "Target install: bun install --force, root and backend"
+    description: "Target install: bun install --frozen-lockfile, root and backend (an install never rewrites the tree R1.2 proved clean)"
     cmds:
-      - ["bun", "install", "--force"]
-      - ["bun", "install", "--force", "--cwd", "backend"]
+      - ["bun", "install", "--frozen-lockfile"]
+      - ["bun", "install", "--frozen-lockfile", "--cwd", "backend"]
     expectExit: 0
     receipts: []
     irreversible: false
@@ -63,10 +63,10 @@ steps:
   - id: "R1.6"
     standing: ["SP.1"]
     host: "capture"
-    description: "Capture install: bun install --force, root and backend"
+    description: "Capture install: bun install --frozen-lockfile, root and backend"
     cmds:
-      - ["bun", "install", "--force"]
-      - ["bun", "install", "--force", "--cwd", "backend"]
+      - ["bun", "install", "--frozen-lockfile"]
+      - ["bun", "install", "--frozen-lockfile", "--cwd", "backend"]
     expectExit: 0
     receipts: []
     irreversible: false
