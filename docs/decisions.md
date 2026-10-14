@@ -5664,3 +5664,25 @@ default, a shell export or a profile line. Production v0.5.4 ran as `smoke` and
 persisted fixture projects (issue 1208). Tests take their isolation from an
 ephemeral Postgres and injected credentials; they do not need the server to
 fail open, and a seam armed in one process is a claim the process can verify.
+
+<a id="d70"></a>
+## D70 — Depositors choose their own signer (Lucas, 2026-10-06)
+
+**Decision.** A depositor signs a deposit with whatever they want. Humans
+deposit through the dapp's web interface. Agents may use any wallet: MetaMask's
+agentic wallet is one example, and a Safe or a hardware wallet works too.
+`rmpc` is one option. It signs with its software keystore by default, and an
+HSM or KMS backend is optional. A depositor who uses `rmpc` needs a
+corresponding gateway set up. The deposit skill
+(`frontend/public/skills/deposit/SKILL.md`) follows this rule.
+
+**Why.** Owner call (Lucas, 2026-10-06): "The depositor can use whatever they
+want."
+
+**Known divergence.** robotmoney-core's `rmpc` currently refuses
+software-keystore writes on Base mainnet (chain 8453) through
+`require_production_grade_for_write` in
+`clients/rust-payment-client/src/write_path.rs` and `signer/mod.rs`, and core's
+`docs/architecture.md:1537` states that rule. This decision supersedes it for
+depositors. Core must change to match: core gets an issue, not code from this
+repo.
