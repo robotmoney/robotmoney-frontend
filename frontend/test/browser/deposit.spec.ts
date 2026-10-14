@@ -73,6 +73,10 @@ const fourRow = (slug: Slug) => ({
   slug, bucket: FOUR[slug].bucket, availability: "live", status: "active", address: FOUR[slug].address,
   tvlUsd: FOUR[slug].tvl, sharePrice: FOUR[slug].price, exitFeeBps: 0, recommendedBps: null, appliedBps: FOUR[slug].applied, actualBps: null, gaps: null,
 });
+// The page reads the four-vault route only once the contract declares it
+// (#1356). Until then the tests that need it skip, and turn on by themselves.
+const FOUR_VAULT_ROUTE_DECLARED = readFileSync(join(process.cwd(), "frontend/public/assets/js/app/contract/routes.js"), "utf8").includes("robotmoneyVaults");
+
 async function stubFourVaults(page: Page) {
   await stubLive(page);
   await page.route("**/api/dashboards/robotmoney-vaults", (route) => route.fulfill(json({
@@ -136,7 +140,22 @@ const sideways = (page: Page) => page.evaluate(() => document.documentElement.sc
 const usd = (v: number) => `$${Math.round(v).toLocaleString("en-US")}`;
 const faqRow = (page: Page, q: string) => page.locator(".dp__faq details").filter({ has: page.locator("summary", { hasText: q }) });
 
+test("without the four-vault route: the install card, and the facts row reads the v0 vault's feed", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await stubLive(page);
+  await setMode(page, "base");
+  await openDeposit(page);
+  await expect(page.locator(".sk__install-cmd")).toHaveText(INSTALL);
+  await expect(page.locator(".sk__cta")).toHaveAttribute("href", "/skills/deposit/SKILL.md");
+  await expect(fact(page, "TVL")).toHaveText(usd(ECONOMICS.tvlUsd));
+  await expect(fact(page, "Vaults live")).toHaveText("1 of 4");
+  await expect(fact(page, "Exit fee")).toHaveText("0.25%");
+  await expect(page.locator(".dp h2")).toHaveText(HEADINGS);
+  await expectNoBrowserErrors(errors);
+});
+
 test("the hero keeps the install card beside the headline, and the facts row reads the four-vault read", async ({ page }) => {
+  test.skip(!FOUR_VAULT_ROUTE_DECLARED, "needs the four-vault route (#1356)");
   const errors = failOnBrowserErrors(page);
   await stubFourVaults(page);
   await setMode(page, "base");
@@ -190,6 +209,7 @@ test("what you buy: the allocation's ring, and each sleeve's assets", async ({ p
 });
 
 test("what you receive: one token per vault, all four live at their addresses on Base", async ({ page }) => {
+  test.skip(!FOUR_VAULT_ROUTE_DECLARED, "needs the four-vault route (#1356)");
   const errors = failOnBrowserErrors(page);
   await stubFourVaults(page);
   await setMode(page, "base");
@@ -295,7 +315,7 @@ test("the FAQ: every row closed, a click opens and closes one, and a link on the
 
 test("a link from another page to /deposit#contracts lands on the contracts, open", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
-  await stubFourVaults(page);
+  await stubLive(page);
   await setMode(page, "base");
   await openDeposit(page, "/deposit#contracts");
   await expect(page.locator("#contracts")).toHaveJSProperty("open", true);

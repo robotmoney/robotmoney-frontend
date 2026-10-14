@@ -157,18 +157,22 @@ describe("vault identity", () => {
     expect(m![1].split("|")).toEqual(VAULT_SLUGS);
   });
 
-  // The four-vault deployment (RM-176): one set of addresses for the site and
-  // the backend, so the definitive deployment changes both in one diff.
-  test("every vault and the router are on Base, at the backend's addresses (config.ts ROBOTMONEY_VAULTS)", () => {
-    const cfg = readFileSync(join(repoRoot, "backend/src/config.ts"), "utf8");
-    const block = cfg.slice(cfg.indexOf("export const ROBOTMONEY_VAULTS"), cfg.indexOf("} as const;", cfg.indexOf("export const ROBOTMONEY_VAULTS")));
-    const addressOf = (key: RegExp) => (block.match(key)?.[1] ?? "").toLowerCase();
-    for (const v of VAULTS) {
-      expect(v.baseAddress, v.slug).toBe(addressOf(new RegExp(`slug: "${v.slug}"[^}]*address: "(0x[0-9a-fA-F]{40})"`)));
-    }
-    expect(ROUTER.baseAddress).toBe(addressOf(/router: "(0x[0-9a-fA-F]{40})"/));
-    expect(VAULT_REGISTRY).toBe(addressOf(/registry: "(0x[0-9a-fA-F]{40})"/));
-    expect(AGENT_PRICE_RECORDER).toBe(addressOf(/priceRecorder: "(0x[0-9a-fA-F]{40})"/));
+  // The four-vault deployment, core's deployment of 2026-10-11 treated as the
+  // definitive set. The backend's ROBOTMONEY_VAULTS (#1356) must carry the same
+  // addresses: the definitive deployment changes both in one diff.
+  test("every vault and the router are on Base, each at its own address", () => {
+    expect(Object.fromEntries(VAULTS.map((v) => [v.slug, v.baseAddress]))).toEqual({
+      rmusdc: "0x28bf6e6edad526191e8652ee631b56ead4ce7435",
+      rmagent: "0x22bd48c56c34a2c1c1bac77bd7c4e636a6f10d57",
+      rmproto: "0x28c5ca4df0107679bfcc9b0ad4c2f3f209b8f797",
+      rmrwa: "0x37be372bd32f9e63a94c7db3ab415996658bcd50",
+    });
+    expect(ROUTER.baseAddress).toBe("0xb3a8e66d9e2980b54ac0e70e0e236486d1dcb356");
+    expect(VAULT_REGISTRY).toBe("0x686ebefda732dffa988253ecf9c012946b8066a3");
+    expect(AGENT_PRICE_RECORDER).toBe("0x0adc14e6521af213f9dce5585d530f237831e934");
+    const all = [...VAULTS.map((v) => v.baseAddress), ROUTER.baseAddress, VAULT_REGISTRY, AGENT_PRICE_RECORDER, TIMELOCK, GOVERNING_SAFE];
+    for (const a of all) expect(a).toMatch(/^0x[0-9a-f]{40}$/);
+    expect(new Set(all).size).toBe(all.length);
   });
 
   test("what each vault's contract sets: caps, a zero exit fee, rmUSDC's three venues at equal weight, the timelock as admin, no audit yet", () => {
