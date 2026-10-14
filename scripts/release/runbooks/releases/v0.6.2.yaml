@@ -26,13 +26,16 @@ notes: |
   compose configuration did not, so R6.7a ships it by graceful reload into the running
   container (SC.5); the site never goes down.
 
-  Recovery. Before R6.3: fix and resume. A failed R6.3 resumes at R6.3 while v0.6.1 keeps
-  serving. After R6.3: fix forward on v0.6.3, or restore the R2.1 dump with the write
-  loss it implies. v0.6.2 is tagged at C1 either way.
-
   Member notice. The notice to woon, shodai, zyfai and dualmint about the new close times
   (vault 00:52, woon 06:52, allocation 12:52, treasury 18:52 UTC) waits on the owner's
   word. It is not a step.
+recovery: |
+  All three migrations are compat: additive and take no grant from a runtime role.
+  - Before R6.3 (preflight, baseline, backup): nothing has changed; fix on a new QA branch
+    and cut v0.6.2-rc.(N+1).
+  - A failed R6.3: resume at R6.3; v0.6.1 keeps serving, and the website stays up.
+  - After R6.3: fix forward on v0.6.3, or restore the R2.1 dump with the write loss it
+    implies. v0.6.2 is tagged at C1 either way (D70).
 steps:
   # ── R1 release identity, on both hosts ────────────────────────────────────
   - id: "R1.1"

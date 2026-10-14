@@ -10,7 +10,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import type { GoRecord } from "./go.ts";
+import { recoveryOf, releaseRunbookPath } from "./runbook.ts";
 import type { ReceiptRecord, StepRecord } from "./journal.ts";
 import { forbiddenReceiptPath, lineScrubber, scrubSecrets } from "./scrub.ts";
 import { shellQuote, type RenderedStep } from "./steps.ts";
@@ -79,14 +79,15 @@ export async function pullReceipts(
   return { receipts, missingRequired };
 }
 
-/** SC.1: the signed recovery matrix the go names. A path must be readable; its sha256 is journaled. */
-export function readRecovery(go: GoRecord, deps: Pick<RunnerDeps, "readText" | "home">):
+/** SC.1: the recovery decision in the release's runbook YAML (`recovery:`). Its path and the sha256 of the decision are journaled. */
+export function readRecovery(release: string, deps: Pick<RunnerDeps, "readText">):
   { ref: string; sha256: string | null } | { error: string } {
-  if (/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(go.recovery)) return { ref: go.recovery, sha256: null };
-  const path = go.recovery.startsWith("~/") ? join(deps.home, go.recovery.slice(2)) : resolve(go.recovery);
+  const path = releaseRunbookPath(release);
   const text = deps.readText(path);
-  if (text === undefined) return { error: `the go names the recovery matrix ${go.recovery}, which cannot be read (SC.1)` };
-  return { ref: path, sha256: createHash("sha256").update(text).digest("hex") };
+  if (text === undefined) return { error: `release ${release} has no runbook at ${path}, so no recovery decision (SC.1)` };
+  const recovery = recoveryOf(text);
+  if (recovery === undefined) return { error: `${path} records no recovery decision (recovery:, SC.1)` };
+  return { ref: `${path}#recovery`, sha256: createHash("sha256").update(recovery).digest("hex") };
 }
 
 /**

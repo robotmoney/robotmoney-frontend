@@ -239,11 +239,17 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   if (go === undefined) return 2;
   const commit = go.commit;
 
-  // D64: the commit is on the release branch, whatever the go wrote (a tag resolves there too).
+  // D70: stage runs a QA branch commit; production the release branch's rc (a tag resolves there).
   const branches = await deps.collect(CONTROL_HOST, `cd ${shellQuote(CONTROL_REPO)} && git fetch -q origin && git branch -r --contains ${commit}`);
-  const origin = branches.code === 0 ? originProblems(target.release, commit, branches.stdout) : [`git could not list the origin branches containing ${commit}`];
+  const origin = branches.code === 0 ? originProblems(target.release, commit, branches.stdout, target.rmEnv) : [`git could not list the origin branches containing ${commit}`];
   if (origin.length > 0) {
     deps.error(`[${NAME}] refusing: ${origin.join("; ")}.`);
+    return 2;
+  }
+  // The commit's tree: what SP.8 compares between the stage QA commit and the production squash commit (D70).
+  const tree = (await deps.collect(CONTROL_HOST, `cd ${shellQuote(CONTROL_REPO)} && git rev-parse ${commit}^{tree}`)).stdout.trim();
+  if (!/^[0-9a-f]{40}$/.test(tree)) {
+    deps.error(`[${NAME}] refusing: the tree of ${commit} cannot be read on the control machine.`);
     return 2;
   }
 
@@ -274,8 +280,8 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   const rendered = steps.map((s) => renderStep(s, target, values));
   deps.log(renderPlan(target, commit, hash, rendered));
 
-  // SC.1: the signed recovery matrix the go names. A path must be readable; its sha256 is journaled.
-  const recovery = readRecovery(go, deps);
+  // SC.1: the recovery decision in the release's runbook YAML; its sha256 is journaled.
+  const recovery = readRecovery(target.release, deps);
   if ("error" in recovery) {
     deps.error(`[${NAME}] refusing: ${recovery.error}.`);
     return 2;
@@ -290,12 +296,12 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   let stageRecord: RunJournal["stageJournal"];
   if (target.rmEnv === "prod") {
     const stage = args.stageJournal ? readJournal(resolve(args.stageJournal)) : undefined;
-    const refusals = checkStageJournal(stage, { stepListHash: hash, commit, stepIds: ids });
+    const refusals = checkStageJournal(stage, { stepListHash: hash, tree, stepIds: ids });
     if (refusals.length > 0) {
       deps.error(`[${NAME}] refusing:\n  - ${refusals.join("\n  - ")}`);
       return 2;
     }
-    stageRecord = { path: resolve(args.stageJournal!), runTs: stage!.runTs, stepListHash: stage!.stepListHash, commit: stage!.commit };
+    stageRecord = { path: resolve(args.stageJournal!), runTs: stage!.runTs, stepListHash: stage!.stepListHash, commit: stage!.commit, tree: stage!.tree };
   }
 
   const runDir = join(root, target.name, runTs);
@@ -339,6 +345,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
   if (stageRecord) journal.stageJournal = stageRecord;
   journal.recovery = recovery;
+  journal.tree = tree;
   writeJournal(runDir, journal);
   deps.log(`\n[${NAME}] go ${go.sha256.slice(0, 12)} for ${go.release} ${go.ref}${go.tag ? ` (${commit})` : ""} on ${go.target}; journal ${runDir}`);
 

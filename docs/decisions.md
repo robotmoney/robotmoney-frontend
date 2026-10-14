@@ -5670,8 +5670,10 @@ fail open, and a seam armed in one process is a claim the process can verify.
 <a id="d70"></a>
 ## D70 — Stage runs a QA branch; the stage-passed QA branch is squash-merged onto the release branch and the rc is cut there; production runs only by rc tags; the version tag is cut as soon as the cutover starts (supersedes D62 (1)–(2), D63 (3)–(4) and D64 (1)–(2) and (4); owner, 2026-10-14)
 
-**Status.** Accepted 2026-10-14. The runner changes it needs are open
-([`release-run.md`](./runbooks/release-run.md#pending-runner-changes-d70)).
+**Status.** Accepted 2026-10-14. Implemented by the release runbook overhaul: stage
+takes a QA commit, SP.8 and `tag.ts rc` compare trees, and step C1 tags at the cutover's
+start. The same change made the cutover rolling, the soak 30 minutes, the go only the
+ref, operator and date, and the recovery decision part of the release YAML.
 
 **Decision.**
 

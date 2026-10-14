@@ -18,7 +18,7 @@ const added = (id: string, release = "v9.9.9"): RunbookStep => ({
   id, added: release, standing: [], description: `check ${id}`, host: "target", irreversible: false, expectExit: 0, receipts: [],
   cmds: [["bun", "scripts/release/schedule-parity.ts", "--instance", "{instance}"]],
 });
-const runbook = (steps: readonly RunbookStep[], release = "v9.9.9"): ReleaseRunbook => ({ release, template: "kitchen-sink", steps });
+const runbook = (steps: readonly RunbookStep[], release = "v9.9.9"): ReleaseRunbook => ({ release, template: "kitchen-sink", recovery: "fix forward", steps });
 const ids = template.steps.map((s) => s.id);
 
 /** PURE. Numeric compare of vA.B.C names. */
@@ -80,9 +80,9 @@ describe("a release runbook only adds", () => {
   test("the template defaults to kitchen-sink; an unknown template or release name refuses", () => {
     const body = readFileSync(templatePath("kitchen-sink"), "utf8");
     const steps = body.slice(body.indexOf("\nsteps:") + 1);
-    expect(parseReleaseRunbook(`release: v9.9.9\n${steps}`, "v9.9.9").template).toBe("kitchen-sink");
-    expect(() => parseReleaseRunbook(`release: v9.9.9\ntemplate: website-only\n${steps}`, "v9.9.9")).toThrow("template website-only is not one of kitchen-sink");
-    expect(() => parseReleaseRunbook(`release: v9.9.8\n${steps}`, "v9.9.9")).toThrow("names release v9.9.8");
+    expect(parseReleaseRunbook(`release: v9.9.9\nrecovery: fix forward\n${steps}`, "v9.9.9").template).toBe("kitchen-sink");
+    expect(() => parseReleaseRunbook(`release: v9.9.9\nrecovery: fix forward\ntemplate: website-only\n${steps}`, "v9.9.9")).toThrow("template website-only is not one of kitchen-sink");
+    expect(() => parseReleaseRunbook(`release: v9.9.8\nrecovery: fix forward\n${steps}`, "v9.9.9")).toThrow("names release v9.9.8");
   });
 
   test("loading refuses a missing runbook and one that drops a step", () => {
@@ -93,11 +93,11 @@ describe("a release runbook only adds", () => {
     writeFileSync(join(dir, "templates", "kitchen-sink.yaml"), text);
     expect(() => loadReleaseRunbook("v9.9.9", dir)).toThrow("has no runbook");
     const steps = text.slice(text.indexOf("\nsteps:") + 1);
-    writeFileSync(releaseRunbookPath("v9.9.9", dir), `release: v9.9.9\ntemplate: kitchen-sink\n${steps}`);
+    writeFileSync(releaseRunbookPath("v9.9.9", dir), `release: v9.9.9\nrecovery: fix forward\ntemplate: kitchen-sink\n${steps}`);
     expect(loadReleaseRunbook("v9.9.9", dir).steps.map((s) => s.id)).toEqual(ids);
     const r25 = steps.indexOf('  - id: "R2.5"');
     const r61 = steps.indexOf("\n  # ── C/R6 cutover");
-    writeFileSync(releaseRunbookPath("v9.9.9", dir), `release: v9.9.9\n${steps.slice(0, r25)}${steps.slice(r61 + 1)}`);
+    writeFileSync(releaseRunbookPath("v9.9.9", dir), `release: v9.9.9\nrecovery: fix forward\n${steps.slice(0, r25)}${steps.slice(r61 + 1)}`);
     expect(() => loadReleaseRunbook("v9.9.9", dir)).toThrow("template step R2.5 is missing");
   });
 });

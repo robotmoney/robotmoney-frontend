@@ -84,7 +84,9 @@ The cycle (D70):
 3. **The runbook passes on stage.** Record the commit and its tree hash.
 4. **Squash the QA branch onto the release branch.** The release branch must not have moved since
    the QA branch was cut, and the squash tree must equal the stage-passed tree.
-5. **Cut `vA.B.C-rc.N` at the squash commit** with `bun scripts/release/tag.ts rc` and push it.
+5. **Cut `vA.B.C-rc.N` at the squash commit** with
+   `bun scripts/release/tag.ts rc --release vA.B.C --commit <squash> --stage-journal <passed stage run>`.
+   It refuses a commit whose tree is not the stage run's tree, and pushes the tag.
 6. **Production runs only by that rc tag.** SP.8 refuses a tag whose tree differs from the
    stage-passed tree.
 7. **A failure before the cutover** (preflight, baseline, backup, or any step before R6.3) means the
@@ -166,16 +168,16 @@ The owner writes the go once the production preflight is green apart from the go
 same step list passed on the same tree (SP.8), and the tracking issue's phases are closed:
 
 ```text
-release: vA.B.C
 tag: vA.B.C-rc.N
-target: prod
-recovery: ~/recovery-matrix-vA.B.C.signed.md
 operator: <name>
 date: <yyyy-mm-dd>
 ```
 
-A stage go names `commit:` (the QA commit) instead of `tag:`. The runner refuses a go for another
-release or target, and stops at the first failed step.
+A stage go names `commit:` (the QA commit) instead of `tag:`. The go names nothing else (owner,
+2026-10-14): the release comes from the target file and the rc tag, the target from `--target`, and
+the recovery decision from the release's YAML (`recovery:`, SC.1). The runner refuses a stage commit
+that is not on a QA branch of the release line, a production tag that is not an rc of the release
+on `releases-A.B.x`, and stops at the first failed step.
 
 The cutover never takes the website down:
 
@@ -224,7 +226,8 @@ distinct error in every log must match a classification in
 
 ### 4.8. Recovery
 
-The recovery decision is part of the release's YAML and the go names the signed matrix (SC.1).
+The recovery decision is the release YAML's `recovery:` text (SC.1). The preflight's `P.recovery`
+refuses a release without one, and the run journals its sha256.
 Before R6.3, fix and resume: nothing has changed. A failed R6.3 resumes at R6.3 while the previous
 release keeps serving. After R6.3, fix forward on the next patch version, or restore the R2.1 dump
 with the write loss it implies. The version tag stays either way (§3 step 8). Do not assume a
@@ -248,8 +251,8 @@ There are two kinds of file, and the runner runs only the second:
   (`template: kitchen-sink` when omitted), holds a full copy of the template's steps, and **only
   adds**. Every template step stays, unchanged and in order. An added step or check may sit
   anywhere, and carries `added: vA.B.C`. A one-time action is an added step gated on a receipt's
-  absence (`gateAbsent`). The file also holds the release's notes: identity, migrations,
-  exceptions, recovery and owner decisions.
+  absence (`gateAbsent`). The file also holds the release's `recovery:` decision (required) and its
+  `notes:`: identity, migrations, exceptions and owner decisions.
 
 `scripts/release/runbook.ts` refuses a release runbook that drops, edits or reorders a template
 step, and a unit test holds every in-flight release runbook to the current template, so a step
@@ -294,7 +297,7 @@ recorded owner decision.
 | SP.7 | CI green on the commit | preflight `P.ci` |
 | SP.8 | Production runs only what stage passed: same step-list hash, same tree, every step ok | preflight `P.stage` |
 | SR.0 | Stage's starting dump at most 24 hours old | `stage-target up` |
-| SC.1 | Recovery decided and signed before the cutover | the go's `recovery` |
+| SC.1 | Recovery decided before the cutover | the release YAML's `recovery:`, preflight `P.recovery` |
 | SC.3 | The operator's go is recorded before the run | `--go` |
 | SC.4 | The website never goes down: every probe answer 200, no gap | C0, C9 |
 | SC.5 | Rolling upgrade: additive migrations under the running release, services one at a time, website-server kept, valid tokens kept | R2.3, R6.3, R6.5, R6.7a, R6.10 |

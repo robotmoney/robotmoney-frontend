@@ -30,7 +30,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { originProblems, releaseBranch, validateGo } from "../../release/go.ts";
+import { originProblems, qaBranchPrefix, releaseBranch, validateGo } from "../../release/go.ts";
 import { checkResume, checkStageJournal, runStatus, selectSteps, type RunJournal } from "../../release/journal.ts";
 import { lineScrubber, scrubSecrets, forbiddenReceiptPath } from "../../release/scrub.ts";
 import { READY_PENDING, REMOTE_PATH, RELEASE_REPO_URL, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
@@ -47,7 +47,7 @@ import { exposesPostgresUrl, keysOutsideAllowlist, othersCanTraverse, scanForPos
 import type { StackStateRecord } from "../../lib/smoke-state.ts";
 import { ledgerNotInRepo, ledgerProblems, parseRunningVersion, reconcileLedger, repoMigrations, runningPinRef } from "../../release/ledger.ts";
 import { checkAddOnly, loadTemplate, type ReleaseRunbook, type RunbookStep } from "../../release/runbook.ts";
-import { nextRcTag, rcTagsAt } from "../../release/tag.ts";
+import { nextRcTag, rcStageProblems, rcTagsAt } from "../../release/tag.ts";
 import { epochProblems, inFlightCloseProblems, inFlightProblems, inFlightProblemsFor, parseSessionsFlag, paritySweep, regimeCronProblems } from "../../release/schedule-parity.ts";
 import { baselineProblems, WOULD_CLEAR_SQL } from "../../release/baseline.ts";
 import { identityProblems } from "../../release/identity-check.ts";
@@ -60,6 +60,8 @@ const targetsDir = join(repoRoot, "scripts", "release", "targets");
 const RELEASE = loadTarget(join(targetsDir, "prod.json")).release;
 const SHA = "a502de30068e0c1cc2e232a76098364e0b709033";
 const OTHER_SHA = "0".repeat(40);
+const TREE = "7".repeat(40);
+const OTHER_TREE = "8".repeat(40);
 /** The rc tag a production go names (D64); the fake control machine resolves it to SHA. */
 const TAG = `${RELEASE}-rc.0`;
 
@@ -242,12 +244,12 @@ describe("one step list for every target (D61 rule 2)", () => {
     const OLD_HASH = "7c8b4bd9a0a4c43ea92dbf4b7ef4b0c0d30c6a0a65ab6d1f40c8c7f5d0a1e9b2";
     expect(OLD_HASH).not.toBe(stepListHash());
     const journal: RunJournal = {
-      version: 1, target: "stage", rmEnv: "stage", release: RELEASE, commit: SHA, stepListHash: OLD_HASH, stepIds: ids, goSha256: "x", runTs: "20261008T000000Z",
+      version: 1, target: "stage", rmEnv: "stage", release: RELEASE, commit: SHA, tree: TREE, stepListHash: OLD_HASH, stepIds: ids, goSha256: "x", runTs: "20261008T000000Z",
       startedAt: "2026-10-08T00:00:00.000Z", updatedAt: "2026-10-08T00:00:00.000Z", status: "passed",
       steps: Object.fromEntries(ids.map((id) => [id, { id, status: "ok", exit: 0, expectExit: 0, startedAt: "2026-10-08T00:00:00.000Z", endedAt: "2026-10-08T00:00:01.000Z", receipts: [], attempt: 1 }])),
     };
-    expect(checkStageJournal(journal, { stepListHash: stepListHash(), commit: SHA, stepIds: ids }).join()).toContain(`used step list ${OLD_HASH.slice(0, 12)}`);
-    expect(checkStageJournal({ ...journal, stepListHash: stepListHash() }, { stepListHash: stepListHash(), commit: SHA, stepIds: ids })).toEqual([]);
+    expect(checkStageJournal(journal, { stepListHash: stepListHash(), tree: TREE, stepIds: ids }).join()).toContain(`used step list ${OLD_HASH.slice(0, 12)}`);
+    expect(checkStageJournal({ ...journal, stepListHash: stepListHash() }, { stepListHash: stepListHash(), tree: TREE, stepIds: ids })).toEqual([]);
   });
 
   test("no release script imports the supported-baseline constant (issue 1272)", () => {
@@ -265,7 +267,7 @@ describe("one step list for every target (D61 rule 2)", () => {
       gateAbsent: "{home}/.config/robotmoney/credential.json", cmds: [["bun", "scripts/release/credentials-init.ts", "--receipt-dir", "{home}/r"]],
     };
     const at = RELEASE_STEPS.findIndex((s) => s.id === "R6.2") + 1;
-    const runbook: ReleaseRunbook = { release: "v0.7.0", template: "kitchen-sink", steps: [...RELEASE_STEPS.slice(0, at), oneTime, ...RELEASE_STEPS.slice(at)] };
+    const runbook: ReleaseRunbook = { release: "v0.7.0", template: "kitchen-sink", recovery: "fix forward", steps: [...RELEASE_STEPS.slice(0, at), oneTime, ...RELEASE_STEPS.slice(at)] };
     expect(checkAddOnly(loadTemplate(), runbook)).toEqual([]);
     expect(stepListHash(runbook.steps)).not.toBe(stepListHash());
     const r = renderStep(oneTime, prod, templateValues(prod, SHA, "20261008T000000Z"));
@@ -485,68 +487,73 @@ describe("the ledger reconciliation (R1.2, R2.3): 116 rows pass, an unknown name
   });
 });
 
-describe("the go file (D61 rule 1, D64)", () => {
+describe("the go file (D61 rule 1, D70): the ref, the operator, the date", () => {
   const expected = { release: "v0.6.0", target: "stage", rmEnv: "stage" as const };
-  const good = `# owner go, 2026-10-08\nrelease: v0.6.0\ncommit: ${SHA}\ntarget: stage\nrecovery: /root/recovery-matrix-v0.6.0.signed.md\noperator: lucas\n`;
+  const good = `# owner go\ncommit: ${SHA}\noperator: lucas\ndate: 2026-10-14\n`;
   const prodExpected = { release: "v0.6.0", target: "prod", rmEnv: "prod" as const };
-  const prodGood = good.replace(`commit: ${SHA}`, "tag: v0.6.0-rc.3").replace("target: stage", "target: prod");
+  const prodGood = good.replace(`commit: ${SHA}`, "tag: v0.6.0-rc.3");
 
-  test("a stage go naming this release and target passes, with its hash; its commit is the run's commit", () => {
+  test("a stage go passes with its hash; the release and target come from the run, never the file", () => {
     const r = validateGo(good, expected);
     expect("go" in r && r.go.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect("go" in r && r.go.commit).toBe(SHA);
     expect("go" in r && r.go.tag).toBeUndefined();
+    expect("go" in r && [r.go.release, r.go.target, r.go.operator, r.go.date]).toEqual(["v0.6.0", "stage", "lucas", "2026-10-14"]);
     const other = validateGo(good.replace(SHA, OTHER_SHA), expected);
     expect("go" in other && other.go.commit).toBe(OTHER_SHA);
   });
 
-  test("a production go names the rc tag of its release, never a commit (D64)", () => {
+  test("a production go names the rc tag of its release, never a commit", () => {
     const r = validateGo(prodGood, prodExpected);
     expect("go" in r && r.go.tag).toBe("v0.6.0-rc.3");
     expect("go" in r && r.go.commit).toBeUndefined();
-    // red controls: a bare commit, both keys, neither key, another release's rc, a final tag, a branch name.
-    const bare = validateGo(good.replace("target: stage", "target: prod"), prodExpected);
+    const bare = validateGo(good, prodExpected);
     expect("errors" in bare && bare.errors.join()).toContain("a bare commit does not authorize a production run");
-    expect("errors" in validateGo(`${prodGood}commit: ${SHA}\n`, prodExpected) && (validateGo(`${prodGood}commit: ${SHA}\n`, prodExpected) as { errors: string[] }).errors.join()).toContain("both commit and tag");
+    expect((validateGo(`${prodGood}commit: ${SHA}\n`, prodExpected) as { errors: string[] }).errors.join()).toContain("both commit and tag");
     expect("errors" in validateGo(prodGood.replace(/tag: .*\n/, ""), prodExpected)).toBe(true);
     expect("errors" in validateGo(prodGood.replace("v0.6.0-rc.3", "v0.6.1-rc.0"), prodExpected)).toBe(true);
     expect("errors" in validateGo(prodGood.replace("v0.6.0-rc.3", "v0.6.0"), prodExpected)).toBe(true);
     expect("errors" in validateGo(prodGood.replace("v0.6.0-rc.3", "releases-0.6.x"), prodExpected)).toBe(true);
-    // A stage go never names a tag: the rc is cut after stage passes.
-    const stageTag = validateGo(good.replace(`commit: ${SHA}`, "tag: v0.6.0-rc.3"), expected);
+    const stageTag = validateGo(prodGood, expected);
     expect("errors" in stageTag && stageTag.errors.join()).toContain("never names a tag");
   });
 
-  test("the release branch and the origin rule (D64): releases-A.B.x must contain the commit", () => {
+  test("where a run's commit lives (D70): stage on a QA branch of the line, prod on the release branch", () => {
     expect(releaseBranch("v0.6.1")).toBe("releases-0.6.x");
     expect(releaseBranch("v1.12.0")).toBe("releases-1.12.x");
+    expect(qaBranchPrefix("v0.6.2")).toBe("qa/0.6.x-");
     expect(() => releaseBranch("main")).toThrow();
     expect(originProblems("v0.6.1", SHA, "  origin/main\n  origin/releases-0.6.x\n")).toEqual([]);
     expect(originProblems("v0.6.1", SHA, "  origin/main\n").join()).toContain("not on origin/releases-0.6.x");
-    expect(originProblems("v0.6.1", SHA, "  origin/qa/0.6.x-2026-10-10\n").join()).toContain("never a PR head or a QA branch");
+    expect(originProblems("v0.6.1", SHA, "  origin/qa/0.6.x-2026-10-10\n").join()).toContain("not on origin/releases-0.6.x");
     expect(originProblems("v0.6.1", SHA, "").join()).toContain("no branch of origin");
-    // red control: another release's branch does not satisfy it.
+    expect(originProblems("v0.6.1", SHA, "  origin/qa/0.6.x-2026-10-10\n", "stage")).toEqual([]);
+    expect(originProblems("v0.6.1", SHA, "  origin/qa/0.6.x-2026-10-10-2\n", "stage")).toEqual([]);
+    // red controls: stage refuses the release branch alone, a PR head, and another line's QA branch.
+    expect(originProblems("v0.6.1", SHA, "  origin/releases-0.6.x\n", "stage").join()).toContain("not on a QA branch");
+    expect(originProblems("v0.6.1", SHA, "  origin/fix/x\n", "stage")).toHaveLength(1);
+    expect(originProblems("v0.6.1", SHA, "  origin/qa/0.7.x-2026-10-10\n", "stage")).toHaveLength(1);
     expect(originProblems("v0.7.0", SHA, "  origin/releases-0.6.x\n")).toHaveLength(1);
   });
 
-  test("red: another target or release; an unknown or missing key; a short sha", () => {
-    expect(validateGo(good.replace(/commit: .*\n/, ""), expected)).toEqual({ errors: ["the go names no commit; a stage go names a commit on releases-0.6.x (D64)"] });
-    expect("errors" in validateGo(good.replace("target: stage", "target: prod"), expected)).toBe(true);
-    expect("errors" in validateGo(good.replace("v0.6.0", "v0.6.1"), expected)).toBe(true);
+  test("red: retired keys, an unknown or missing key, a short sha, a bad date", () => {
+    expect(validateGo(good.replace(/commit: .*\n/, ""), expected)).toEqual({ errors: ["the go names no commit; a stage go names a commit on a QA branch qa/0.6.x-<date> (D70)"] });
+    for (const [key, where] of [["release: v0.6.0", "target file"], ["target: stage", "--target"], ["recovery: /root/m.md", "runbook YAML"]] as const) {
+      const r = validateGo(`${good}${key}\n`, expected);
+      expect("errors" in r && r.errors.join(), key).toContain(where);
+    }
     expect("errors" in validateGo(`${good}skip: R2.5\n`, expected)).toBe(true);
-    expect("errors" in validateGo(good.replace(/target: stage\n/, ""), expected)).toBe(true);
     expect("errors" in validateGo(good.replace(SHA, "a502de30"), expected)).toBe(true);
-    // SC.1: no recovery matrix, or a recovery that is neither a path nor a sha.
-    expect(validateGo(good.replace(/recovery: .*\n/, ""), expected)).toEqual({ errors: ["the go names no recovery"] });
-    expect("errors" in validateGo(good.replace(/recovery: .*\n/, "recovery: signed\n"), expected)).toBe(true);
-    expect("go" in validateGo(good.replace(/recovery: .*\n/, `recovery: ${"a".repeat(64)}\n`), expected)).toBe(true);
+    expect(validateGo(good.replace(/operator: .*\n/, ""), expected)).toEqual({ errors: ["the go names no operator"] });
+    expect(validateGo(good.replace(/date: .*\n/, ""), expected)).toEqual({ errors: ["the go names no date"] });
+    expect("errors" in validateGo(good.replace("2026-10-14", "14 Oct"), expected)).toBe(true);
   });
 });
 
 function journal(patch: Partial<RunJournal> = {}): RunJournal {
   const ids = stepIds();
   return {
-    version: 1, target: "stage", rmEnv: "stage", release: "v0.6.0", commit: SHA, stepListHash: stepListHash(), stepIds: ids,
+    version: 1, target: "stage", rmEnv: "stage", release: "v0.6.0", commit: SHA, tree: TREE, stepListHash: stepListHash(), stepIds: ids,
     goSha256: "g", runTs: "20261008T000000Z", startedAt: "", updatedAt: "", status: "passed",
     steps: Object.fromEntries(ids.map((id) => [id, { id, status: "ok", exit: 0, expectExit: 0, startedAt: "", receipts: [], attempt: 1 }])),
     ...patch,
@@ -554,16 +561,19 @@ function journal(patch: Partial<RunJournal> = {}): RunJournal {
 }
 
 describe("SP.8: prod runs only what stage passed", () => {
-  const expected = { stepListHash: stepListHash(), commit: SHA, stepIds: stepIds() };
+  const expected = { stepListHash: stepListHash(), tree: TREE, stepIds: stepIds() };
 
-  test("a passed stage journal at the same commit and hash lets prod start", () => {
+  test("a passed stage journal on the same tree and hash lets prod start, whatever commit stage ran (D70)", () => {
     expect(checkStageJournal(journal(), expected)).toEqual([]);
+    // Stage ran the QA commit; production runs the squash commit with the same tree.
+    expect(checkStageJournal(journal({ commit: OTHER_SHA }), expected)).toEqual([]);
   });
 
-  test("red: missing, another hash, another commit, a failed step, a prod journal", () => {
+  test("red: missing, another hash, another tree, no tree, a failed step, a prod journal", () => {
     expect(checkStageJournal(undefined, expected).join()).toContain("no stage run journal");
     expect(checkStageJournal(journal({ stepListHash: "f".repeat(64) }), expected).join()).toContain("step list");
-    expect(checkStageJournal(journal({ commit: OTHER_SHA }), expected).join()).toContain("commit");
+    expect(checkStageJournal(journal({ tree: OTHER_TREE }), expected).join()).toContain("tree");
+    expect(checkStageJournal(journal({ tree: undefined }), expected).join()).toContain("records no tree");
     const failed = journal();
     failed.steps["R6.3"]!.status = "failed";
     expect(checkStageJournal(failed, expected).join()).toContain("did not pass");
@@ -614,9 +624,7 @@ function fixture(rmEnv: "stage" | "prod" = "stage", overrides: Record<string, un
   const targetFile = join(dir, `${name}.json`);
   writeFileSync(targetFile, JSON.stringify(raw));
   const goFile = join(dir, "go.txt");
-  const recovery = join(dir, "recovery-matrix.md");
-  writeFileSync(recovery, "signed recovery matrix\n");
-  writeFileSync(goFile, `release: ${RELEASE}\n${rmEnv === "prod" ? `tag: ${TAG}` : `commit: ${SHA}`}\ntarget: ${name}\nrecovery: ${recovery}\n`);
+  writeFileSync(goFile, `${rmEnv === "prod" ? `tag: ${TAG}` : `commit: ${SHA}`}\noperator: lucas\ndate: 2026-10-14\n`);
   return { dir, targetFile, goFile, journalRoot: join(dir, "journal") };
 }
 
@@ -625,7 +633,9 @@ const GREEN_CI = REQUIRED_CI.map((n) => `${n}\tcompleted\tsuccess`).join("\n");
 const PREFLIGHT_ANSWERS: Record<string, { code: number; stdout: string }> = {
   "git rev-parse HEAD": { code: 0, stdout: `${SHA}\n` },
   "git status --porcelain": { code: 0, stdout: "" },
-  "git branch -r --contains": { code: 0, stdout: `  origin/${releaseBranch(RELEASE)}\n` },
+  "git branch -r --contains": { code: 0, stdout: `  origin/${releaseBranch(RELEASE)}\n  origin/${qaBranchPrefix(RELEASE)}2026-10-14\n` },
+  // The commit's tree (D70: SP.8 compares trees).
+  "^{tree}": { code: 0, stdout: `${TREE}\n` },
   // The control machine resolves the production go's rc tag (D64).
   [`git rev-parse --verify --quiet '${TAG}^{commit}'`]: { code: 0, stdout: `${SHA}\n` },
   "gh api": { code: 0, stdout: `${GREEN_CI}\n` },
@@ -634,7 +644,7 @@ const PREFLIGHT_ANSWERS: Record<string, { code: number; stdout: string }> = {
   "lockfile.ts check": { code: 0, stdout: "fresh\n" },
 };
 
-function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string; answers?: Record<string, { code: number; stdout: string }> } = {}) {
+function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string; answers?: Record<string, { code: number; stdout: string }>; recovery?: string | null } = {}) {
   const ran: string[] = [];
   const logs: string[] = [];
   const deps: RunnerDeps = {
@@ -651,11 +661,16 @@ function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string; an
       if (remote.startsWith("find ")) return { code: 0, stdout: opts.receipt === undefined ? "" : "/remote/r/receipt.json\n" };
       if (remote.startsWith("cat ")) return { code: 0, stdout: opts.receipt ?? "" };
       const answers = { ...PREFLIGHT_ANSWERS, ...opts.answers };
-      const hit = Object.keys(answers).find((k) => remote.includes(k));
+      // A test's own answers win over the defaults, so a specific fragment can override a general one.
+      const hit = Object.keys(opts.answers ?? {}).find((k) => remote.includes(k)) ?? Object.keys(PREFLIGHT_ANSWERS).find((k) => remote.includes(k));
       if (hit !== undefined) return answers[hit]!;
       return { code: 1, stdout: "" };
     },
-    readText: (p) => { try { return readFileSync(p, "utf8"); } catch { return undefined; } },
+    readText: (p) => {
+      // The release's runbook YAML (SC.1): the fixture's recovery decision, or none.
+      if (p.endsWith(`/runbooks/releases/${RELEASE}.yaml`)) return opts.recovery === null ? `release: ${RELEASE}\n` : `release: ${RELEASE}\nrecovery: ${opts.recovery ?? "fix forward"}\n`;
+      try { return readFileSync(p, "utf8"); } catch { return undefined; }
+    },
     now: () => new Date("2026-10-08T12:00:00Z"),
     log: (l) => logs.push(l),
     error: (l) => logs.push(l),
@@ -665,13 +680,13 @@ function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string; an
 }
 
 describe("runRelease", () => {
-  test("refuses without a go file, and with a go for another target; --preflight needs none", async () => {
+  test("refuses without a go file, and with a production go on stage; --preflight needs none", async () => {
     const f = fixture();
     const a = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(2);
     expect(a.ran).toEqual([]);
     expect(a.logs.join("\n")).toContain("no --go");
-    writeFileSync(f.goFile, `release: ${RELEASE}\ncommit: ${SHA}\ntarget: prod\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
+    writeFileSync(f.goFile, `tag: ${TAG}\noperator: lucas\ndate: 2026-10-14\n`);
     const b = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], b.deps, TINY)).toBe(2);
     expect(b.ran).toEqual([]);
@@ -692,7 +707,7 @@ describe("runRelease", () => {
     a.deps.exec = async (h, r, o, e) => { seen.push(r); return exec(h, r, o, e); };
     expect(await runRelease(["--target", f.targetFile, "--dry-run", "--journal-root", f.journalRoot], a.deps, CHECKOUT)).toBe(0);
     expect(seen.join()).toContain(`--detach ${SHA}`);
-    writeFileSync(f.goFile, `release: ${RELEASE}\ncommit: ${OTHER_SHA}\ntarget: stage\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
+    writeFileSync(f.goFile, `commit: ${OTHER_SHA}\noperator: lucas\ndate: 2026-10-14\n`);
     // A go naming another commit than the control checkout's HEAD is red: the printed step list is not that commit's.
     const b = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--preflight", "--journal-root", f.journalRoot], b.deps, CHECKOUT)).toBe(2);
@@ -792,8 +807,11 @@ describe("runRelease", () => {
     expect(c.ran).toEqual([]);
 
     // red control: a prod go naming an rc at another commit than the stage run passed at refuses (SP.8).
-    writeFileSync(f.goFile, `release: ${RELEASE}\ntag: ${RELEASE}-rc.1\ntarget: prod\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
-    const d = fakeDeps({ receipt: "{}", answers: { [`git rev-parse --verify --quiet '${RELEASE}-rc.1^{commit}'`]: { code: 0, stdout: `${OTHER_SHA}\n` } } });
+    writeFileSync(f.goFile, `tag: ${RELEASE}-rc.1\noperator: lucas\ndate: 2026-10-14\n`);
+    const d = fakeDeps({ receipt: "{}", answers: {
+      [`git rev-parse --verify --quiet '${RELEASE}-rc.1^{commit}'`]: { code: 0, stdout: `${OTHER_SHA}\n` },
+      [`${OTHER_SHA}^{tree}`]: { code: 0, stdout: `${OTHER_TREE}\n` },
+    } });
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", join(f.dir, "j3"), "--stage-journal", stageDir], d.deps, TINY)).toBe(2);
     expect(d.ran).toEqual([]);
     expect(d.logs.join("\n")).toContain("commit");
@@ -805,27 +823,27 @@ describe("runRelease", () => {
     const a = fakeDeps({ receipt: "{}" });
     const collect = a.deps.collect;
     a.deps.collect = async (h, r) => { seen.push(r); return collect(h, r); };
-    const r = await resolveGo({ release: RELEASE, tag: TAG, target: "prod", recovery: "x", sha256: "s" }, a.deps);
+    const r = await resolveGo({ release: RELEASE, tag: TAG, target: "prod", operator: "lucas", date: "2026-10-14", sha256: "s" }, a.deps);
     expect("go" in r && r.go.commit).toBe(SHA);
     expect("go" in r && r.go.ref).toBe(TAG);
     expect(seen[0]).toContain("git fetch -q --tags origin");
     // A stage go resolves without git.
-    expect(await resolveGo({ release: RELEASE, commit: SHA, target: "stage", recovery: "x", sha256: "s" }, { collect: async () => { throw new Error("never"); } })).toEqual({ go: { release: RELEASE, commit: SHA, target: "stage", recovery: "x", sha256: "s", ref: SHA } });
+    expect(await resolveGo({ release: RELEASE, commit: SHA, target: "stage", operator: "lucas", date: "2026-10-14", sha256: "s" }, { collect: async () => { throw new Error("never"); } })).toEqual({ go: { release: RELEASE, commit: SHA, target: "stage", operator: "lucas", date: "2026-10-14", sha256: "s", ref: SHA } });
     // red control: an unknown tag refuses the run, and nothing ran.
-    writeFileSync(f.goFile, `release: ${RELEASE}\ntag: ${RELEASE}-rc.9\ntarget: prod\nrecovery: ${join(f.dir, "recovery-matrix.md")}\n`);
+    writeFileSync(f.goFile, `tag: ${RELEASE}-rc.9\noperator: lucas\ndate: 2026-10-14\n`);
     const b = fakeDeps({ receipt: "{}" });
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], b.deps, TINY)).toBe(2);
     expect(b.ran).toEqual([]);
     expect(b.logs.join("\n")).toContain(`${RELEASE}-rc.9, which origin has no tag for`);
   });
 
-  test("D64: the live run refuses a commit off the release branch, on stage and on prod; the journal records the tag", async () => {
+  test("D70: stage refuses a commit off a QA branch, prod one off the release branch; the journal records the tag and the tree", async () => {
     const s = fixture("stage");
-    const off = fakeDeps({ receipt: "{}", answers: { "git branch -r --contains": { code: 0, stdout: "  origin/main\n  origin/qa/0.6.x-2026-10-10\n" } } });
+    const off = fakeDeps({ receipt: "{}", answers: { "git branch -r --contains": { code: 0, stdout: `  origin/main\n  origin/${releaseBranch(RELEASE)}\n` } } });
     expect(await runRelease(["--target", s.targetFile, "--go", s.goFile, "--journal-root", s.journalRoot], off.deps, TINY)).toBe(2);
     expect(off.ran).toEqual([]);
-    expect(off.logs.join("\n")).toContain(`not on origin/${releaseBranch(RELEASE)}`);
-    // Green: on the release branch the stage run passes, and prod runs the rc at the same commit.
+    expect(off.logs.join("\n")).toContain("not on a QA branch");
+    // Green: on a QA branch the stage run passes, and prod runs the rc on the same tree.
     const st = fakeDeps({ receipt: "{}" });
     expect(await runRelease(["--target", s.targetFile, "--go", s.goFile, "--journal-root", s.journalRoot], st.deps, TINY)).toBe(0);
     const stageDir = join(s.journalRoot, "stage", "20261008T120000Z");
@@ -841,6 +859,7 @@ describe("runRelease", () => {
     expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir], pr.deps, TINY)).toBe(0);
     const j = JSON.parse(readFileSync(join(p.journalRoot, "prod", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
     expect(j.commit).toBe(SHA);
+    expect(j.tree).toBe(TREE);
     expect(j.tag).toBe(TAG);
     expect(pr.logs.join("\n")).toContain(`for ${RELEASE} ${TAG} (${SHA}) on prod`);
   });
@@ -1002,7 +1021,7 @@ const WATCHED: StepTemplate[] = [
   { id: "W3", standing: [], description: "tag", host: "control", onlyFor: "prod", cmds: [["echo", "W3"]], expectExit: 0, receipts: [], irreversible: false },
 ];
 
-describe("watch steps, prod-only steps and the recovery go key", () => {
+describe("watch steps, prod-only steps and the recovery decision", () => {
   test("a watch step waits for READY + 6 h, prints when it becomes runnable, and --run resumes it then", async () => {
     const f = fixture("stage");
     const early = fakeDeps();
@@ -1082,17 +1101,28 @@ describe("watch steps, prod-only steps and the recovery go key", () => {
     expect(later.ran).toEqual(["W1"]);
   });
 
-  test("red: a go whose recovery file cannot be read refuses before anything runs", async () => {
+  test("red: a release runbook with no recovery decision refuses before anything runs (SC.1)", async () => {
     const f = fixture("stage");
-    writeFileSync(f.goFile, `release: ${RELEASE}\ncommit: ${SHA}\ntarget: stage\nrecovery: ${join(f.dir, "missing.md")}\n`);
-    const a = fakeDeps();
+    const a = fakeDeps({ recovery: null });
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, WATCHED)).toBe(2);
     expect(a.ran).toEqual([]);
     expect(a.logs.join("\n")).toContain("SC.1");
   });
 });
 
-describe("release tags (tag.ts rc after stage, W3)", () => {
+describe("release tags (tag.ts rc after stage, C1)", () => {
+  test("rc: the stage journal must have passed, for this release, on the squash commit's tree (D70)", () => {
+    expect(rcStageProblems(journal(), "v0.6.0", TREE)).toEqual([]);
+    expect(rcStageProblems(undefined, "v0.6.0", TREE).join()).toContain("no stage run journal");
+    expect(rcStageProblems(journal(), "v0.6.0", OTHER_TREE).join()).toContain("is not this commit's tree");
+    expect(rcStageProblems(journal({ tree: undefined }), "v0.6.0", TREE).join()).toContain("records no tree");
+    expect(rcStageProblems(journal({ rmEnv: "prod" }), "v0.6.0", TREE).join()).toContain("not a stage run");
+    expect(rcStageProblems(journal(), "v0.6.1", TREE).join()).toContain("not v0.6.1");
+    const failed = journal();
+    failed.steps["R6.3"]!.status = "failed";
+    expect(rcStageProblems(failed, "v0.6.0", TREE).join()).toContain("did not pass");
+  });
+
   test("the next rc number follows the existing tags; rc tags at a commit are found", () => {
     expect(nextRcTag("v0.6.0", [])).toBe("v0.6.0-rc.0");
     expect(nextRcTag("v0.6.0", ["v0.6.0-rc.0", "v0.6.0-rc.2", "v0.5.4-rc.7", "v0.6.0"])).toBe("v0.6.0-rc.3");
@@ -1347,14 +1377,14 @@ describe("preflight", () => {
     expect(a.ran).toEqual(["A1", "A2", "B1"]);
     const r = report(f);
     expect(status(r, "P.go")).toBe("pending");
-    expect(status(r, "P.recovery")).toBe("pending");
+    expect(status(r, "P.recovery")).toBe("green");
     expect(status(r, "P.commit")).toBe("green");
     expect(status(r, "P.ci")).toBe("green");
     expect(r.checks.find((c) => c.id === "P.stage")).toBeUndefined();
     expect(readdirSync(join(f.journalRoot, "stage"))).toEqual(["preflight-20261008T120000Z"]);
   });
 
-  test("with a valid go: the go and the recovery matrix are green", async () => {
+  test("with a valid go: the go and the recovery decision are green", async () => {
     const f = fixture();
     const a = fakeDeps();
     expect(await preflight(f, a.deps, ["--go", f.goFile])).toBe(0);
@@ -1362,10 +1392,9 @@ describe("preflight", () => {
     expect(status(report(f), "P.recovery")).toBe("green");
   });
 
-  test("red: a go whose recovery matrix cannot be read", async () => {
+  test("red: a release runbook with no recovery decision", async () => {
     const f = fixture();
-    writeFileSync(f.goFile, `release: ${RELEASE}\ncommit: ${SHA}\ntarget: stage\nrecovery: ${join(f.dir, "missing.md")}\n`);
-    expect(await preflight(f, fakeDeps().deps, ["--go", f.goFile])).toBe(2);
+    expect(await preflight(f, fakeDeps({ recovery: null }).deps, ["--go", f.goFile])).toBe(2);
     expect(status(report(f), "P.recovery")).toBe("red");
   });
 
@@ -1562,7 +1591,7 @@ describe("preflight", () => {
   test("SP.8: a stage run with an accepted step does not authorize production", () => {
     const j = journal();
     j.steps["R7.3a"]!.status = "accepted";
-    const refusals = checkStageJournal(j, { stepListHash: stepListHash(), commit: SHA, stepIds: stepIds() });
+    const refusals = checkStageJournal(j, { stepListHash: stepListHash(), tree: TREE, stepIds: stepIds() });
     expect(refusals.join("\n")).toContain("accepted a failure");
     expect(refusals.join("\n")).toContain("R7.3a");
     expect(runStatus(j, stepIds())).toBe("passed");
