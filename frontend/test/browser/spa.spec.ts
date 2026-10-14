@@ -211,11 +211,11 @@ test("the deposit hero pairs the headline with the install card and runs the tre
   // /deposit since RM-129; this was /skills, now the index of every skill.
   await navigate(page, "/deposit");
 
-  // The install command is the call to action on this page, so it belongs in
+  // The prompt for the deposit skill is the call to action on this page, so it belongs in
   // the hero beside the headline rather than in a block further down.
   const hero = page.locator(".sk__head");
   await expect(hero.locator(".sk__title")).toContainText("Deposit");
-  await expect(hero.locator(".sk__install-cmd")).toContainText("npx skills add");
+  await expect(hero.locator(".sk__install-cmd")).toContainText("/skills/deposit/SKILL.md");
   await expect(hero.locator(".sk__cta")).toBeVisible();
 
   // Two columns above the breakpoint: the card sits to the right of the copy,
@@ -232,7 +232,7 @@ test("the deposit hero pairs the headline with the install card and runs the tre
   await hero.locator(".sk__install-copy").click();
   await expect(hero.locator(".sk__install-copy")).toHaveClass(/is-copied/);
   const clip = await page.evaluate(() => navigator.clipboard.readText());
-  expect(clip).toBe("npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli");
+  expect(clip).toBe("Read https://robotmoney.network/skills/deposit/SKILL.md and use it to deposit USDC into Robot Money.");
 
   await expectNoBrowserErrors(errors);
 });

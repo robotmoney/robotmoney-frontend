@@ -190,7 +190,8 @@ describe("the deposit page and the skills index", () => {
     for (const id of ["how-it-works", "capabilities", "mechanics", "contracts", "about"]) {
       expect(deposit, id).toContain(`id="${id}"`);
     }
-    expect(deposit).toContain("npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli");
+    expect(deposit).toContain("Read https://robotmoney.network/skills/deposit/SKILL.md and use it to deposit USDC into Robot Money.");
+    expect(deposit).not.toContain("robotmoney-skills-v0");
   });
 
   test("/skills lists each skill with its way in", () => {

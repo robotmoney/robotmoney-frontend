@@ -29,6 +29,23 @@ import { BUCKET_NOTES } from "./sleeve-notes.js";
  * @property {string} color       CATEGORICAL by published position: one hue everywhere.
  * @property {string} category
  * @property {string | null} baseAddress  The production contract on Base, where one exists.
+ * @property {BaseFacts | null} onBase    What its contract on Base sets, where one exists.
+ */
+
+/**
+ * What a vault's production contract on Base sets, and who runs it. The Base
+ * feed reports none of it, so legacyRaw() lays it on the vault's row, and
+ * every page reads it from there: the vault page's mechanics, /deposit's
+ * table and facts. /deposit's contracts table reads the adapters and the
+ * admin here directly.
+ * @typedef {object} BaseFacts
+ * @property {number} exitFeeBps
+ * @property {{ tvlCap: number, perDepositCap: number }} caps
+ * @property {string[]} venues          Where it lends, by the venue's own name.
+ * @property {boolean} equalWeight      Whether a deposit splits across the venues in equal parts.
+ * @property {string} admin             The timelock that holds its admin role (core's ADMIN_ROLE).
+ * @property {Array<{ name: string, address: string }>} adapters
+ * @property {{ status: string, href: string }} audit
  */
 
 /**
@@ -72,6 +89,23 @@ import { BUCKET_NOTES } from "./sleeve-notes.js";
  * }} Overview
  */
 
+// The four vaults and the router on Base, core's deployment of 2026-10-11,
+// treated as the definitive set: the definitive deployment changes the
+// addresses below and in backend/src/config.ts ROBOTMONEY_VAULTS, nothing else.
+// Every contract's admin role (core's ADMIN_ROLE) is the timelock; the Safe
+// multisig is the timelock's proposer and receives the exit fees. Caps and the
+// exit fee here are the fallback for a page without the four-vault read, which
+// serves them live. Core lists an external audit before the final deployment.
+export const TIMELOCK = "0xd65165af0fb4062ed0da5d119d4b56b92b15356b";
+export const TIMELOCK_DELAY_SEC = 1800;
+export const GOVERNING_SAFE = "0xdfdea0e1adf55a9a938bd34ead7920175b47cb4b";
+export const VAULT_REGISTRY = "0x686ebefda732dffa988253ecf9c012946b8066a3";
+export const AGENT_PRICE_RECORDER = "0x0adc14e6521af213f9dce5585d530f237831e934";
+// Each vault's contract, by core's name for it.
+/** @type {Record<string, string>} */
+const VAULT_CONTRACT = { rmusdc: "RobotMoneyVault", rmagent: "AgentTokenVault", rmproto: "ProtocolAssetVault", rmrwa: "RwaBasketVault" };
+const NOT_AUDITED = { status: "Not audited yet", href: "https://github.com/robotmoney/robotmoney-core/blob/dev/docs/audits.md" };
+
 // In the framework's published bucket order (session-summary.js BUCKET_ORDER),
 // so VAULTS[i].color === CATEGORICAL[i] === bucketHue(VAULTS[i].bucket).
 /** @type {VaultIdentity[]} */
@@ -86,8 +120,20 @@ export const VAULTS = [
     key: "defi-yield",
     color: CATEGORICAL[0],
     category: "Lending",
-    // The ERC-4626 vault on Base; source of truth frontend/public/skill.md.
-    baseAddress: "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd",
+    baseAddress: "0x28bf6e6edad526191e8652ee631b56ead4ce7435",
+    onBase: {
+      exitFeeBps: 0,
+      caps: { tvlCap: 1000, perDepositCap: 100 },
+      venues: ["Moonwell Flagship USDC (Morpho)", "Aave V3", "Compound III"],
+      equalWeight: true,
+      admin: TIMELOCK,
+      adapters: [
+        { name: "MorphoAdapter", address: "0xac2a54505229639bdab9b7708f0e7202f4feea1d" },
+        { name: "AaveV3Adapter", address: "0x271f3b322de3f9e6d1de09450ec2cc106d2a158f" },
+        { name: "CompoundV3Adapter", address: "0x82e5d09770fb95d4371fc513f3024c40cb861fe0" },
+      ],
+      audit: NOT_AUDITED,
+    },
   },
   {
     slug: "rmagent",
@@ -98,7 +144,16 @@ export const VAULTS = [
     key: "agent-tokens",
     color: CATEGORICAL[1],
     category: "Token basket",
-    baseAddress: null,
+    baseAddress: "0x22bd48c56c34a2c1c1bac77bd7c4e636a6f10d57",
+    onBase: {
+      exitFeeBps: 0,
+      caps: { tvlCap: 100, perDepositCap: 15 },
+      venues: [],
+      equalWeight: false,
+      admin: TIMELOCK,
+      adapters: [],
+      audit: NOT_AUDITED,
+    },
   },
   {
     slug: "rmproto",
@@ -108,7 +163,16 @@ export const VAULTS = [
     key: "protocol-tokens",
     color: CATEGORICAL[2],
     category: "Token basket",
-    baseAddress: null,
+    baseAddress: "0x28c5ca4df0107679bfcc9b0ad4c2f3f209b8f797",
+    onBase: {
+      exitFeeBps: 0,
+      caps: { tvlCap: 1000, perDepositCap: 100 },
+      venues: [],
+      equalWeight: false,
+      admin: TIMELOCK,
+      adapters: [],
+      audit: NOT_AUDITED,
+    },
   },
   {
     slug: "rmrwa",
@@ -118,9 +182,27 @@ export const VAULTS = [
     key: "rwa",
     color: CATEGORICAL[3],
     category: "Token basket",
-    baseAddress: null,
+    baseAddress: "0x37be372bd32f9e63a94c7db3ab415996658bcd50",
+    onBase: {
+      exitFeeBps: 0,
+      caps: { tvlCap: 1000, perDepositCap: 100 },
+      venues: [],
+      equalWeight: false,
+      admin: TIMELOCK,
+      adapters: [],
+      audit: NOT_AUDITED,
+    },
   },
 ];
+
+// The router a deposit through it goes to: it splits the USDC across the live
+// vaults by the weights in force and mints each vault's token to the
+// depositor, holding nothing and minting no token of its own.
+export const ROUTER = { name: "Router", baseAddress: "0xb3a8e66d9e2980b54ac0e70e0e236486d1dcb356" };
+
+// Circle's USDC on Base, the asset every vault takes. The staging devnet is a
+// fork of Base, so the token is the same contract there.
+export const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
 export const VAULT_SLUGS = VAULTS.map((v) => v.slug);
 
@@ -137,6 +219,28 @@ export const SLEEVE_NOTE = {
   "agent-tokens": BUCKET_NOTES.agent_tokens,
   "protocol-tokens": BUCKET_NOTES.protocol_tokens,
   rwa: BUCKET_NOTES.real_world_assets,
+};
+
+// The v0 rmUSDC vault the legacy feed (/api/dashboards/vault-economics)
+// reports: the one vault on Base before the four-vault deployment, still
+// holding its depositors' money until they redeem. legacyRaw() describes it
+// with its own facts, never the four-vault registry's, so a page that falls
+// back to the legacy feed cannot put the new vault's address, caps or fee on
+// the old vault's numbers. Source: frontend/public/skill.md and core's
+// audit ledger.
+export const LEGACY_V0 = {
+  address: "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd",
+  exitFeeBps: 25,
+  caps: { tvlCap: 100000, perDepositCap: 5000 },
+  venues: ["Morpho Gauntlet USDC Prime", "Aave V3", "Compound V3"],
+  equalWeight: true,
+  admin: "0x88bA7364cC6cE5054981d571b33f8fb3E91475A0",
+  adapters: [
+    { name: "MorphoAdapter", address: "0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9" },
+    { name: "AaveV3Adapter", address: "0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea" },
+    { name: "CompoundV3Adapter", address: "0x8247da22a59fce074c102431048d0ce7294c2652" },
+  ],
+  audit: { status: "Audited", href: "https://github.com/robotmoney/robotmoney-core/blob/dev/docs/audits.md" },
 };
 
 // vault-economics serves the protocol name only ("Morpho"), but Morpho's
@@ -555,10 +659,11 @@ function adapterNote(adapter, economics) {
 /** @param {number | null} value @param {number | null} tvl */
 const shareBps = (value, tvl) => (value !== null && tvl !== null && tvl > 0 ? round2((value / tvl) * 10000) : null);
 
-// Production today: the single rmUSDC vault from /api/dashboards/vault-economics,
-// as a raw overview DTO (normalise it with normalizeOverview). It carries no
-// router and no recommendation: the other three vaults are not on Base, and
-// nothing on Base applies weights yet.
+// The legacy feed: the v0 rmUSDC vault from /api/dashboards/vault-economics,
+// as a raw overview DTO (normalise it with normalizeOverview), for a backend
+// without the four-vault read. It carries no router and no recommendation,
+// and the other three vaults read as not on the network, because this feed
+// knows only the v0 vault.
 /** @param {any} economics */
 export function legacyRaw(economics) {
   const e = economics && typeof economics === "object" ? economics : {};
@@ -616,7 +721,7 @@ export function legacyRaw(economics) {
             bucket: v.bucket,
             availability: "live",
             status: "active",
-            address: v.baseAddress,
+            address: LEGACY_V0.address,
             tvlUsd: tvl,
             sharePrice: numberOrNull(e.sharePrice),
             // The feed's daily readings, once it serves them (the hourly
@@ -625,25 +730,28 @@ export function legacyRaw(economics) {
             ...(Array.isArray(e.history?.tvl)
               ? { history: { tvl: e.history.tvl, sharePrice: Array.isArray(e.history.sharePrice) ? e.history.sharePrice : [] } }
               : {}),
-            // skill.md: redeem returns USDC minus a 0.25% exit fee.
-            exitFeeBps: 25,
-            // changelog.html launch terms: "No management fee, and no audit."
-            auditStatus: "Not audited",
+            // What the v0 vault's contract sets (LEGACY_V0): the feed reports
+            // none of it.
+            exitFeeBps: LEGACY_V0.exitFeeBps,
+            auditStatus: LEGACY_V0.audit.status,
+            auditHref: LEGACY_V0.audit.href,
+            admin: LEGACY_V0.admin,
             recommendedBps: null,
             appliedBps: null,
             network,
             holdingsAsOf: asOf,
             holdings,
             flags: null,
-            caps: null,
+            caps: { ...LEGACY_V0.caps },
             apy: null,
             depositors: null,
             guards: null,
-            contracts: { vault: v.baseAddress, router: null, registry: null },
+            contracts: { vault: LEGACY_V0.address, router: null, registry: null },
             mechanics: {
               redeemOnly: false,
               maxSlippageBps: null,
-              venues: adapters.map((/** @type {any} */ a) => String(a?.name ?? "")).filter(Boolean),
+              venues: [...LEGACY_V0.venues],
+              equalWeight: LEGACY_V0.equalWeight,
             },
           }
         : {
@@ -717,19 +825,21 @@ export function statusLabel(row, networkLabel) {
   return "Active";
 }
 
-// The one production deposit path: rmUSDC on Base, at the address skill.md
-// names, live and accepting deposits. Anything else (another vault, test
-// data, the devnet, a different contract) gets no deposit call to action.
+// A production deposit path: one of the four vaults on Base, at the address
+// the registry names for it, live and accepting deposits. Anything else (the
+// v0 vault, test data, the devnet, a different contract) gets no deposit call
+// to action.
 /** @param {any} row @param {any} network @param {any} [flags] */
 export function canDeposit(row, network, flags) {
   const f = flags ?? row?.flags ?? null;
+  const v = vaultBySlug(row?.slug);
   return (
-    row?.slug === "rmusdc" &&
+    !!v?.baseAddress &&
     network?.chainId === BASE_CHAIN_ID &&
     network?.testData !== true &&
     row?.availability === "live" &&
     typeof row?.address === "string" &&
-    row.address.toLowerCase() === VAULTS[0].baseAddress &&
+    row.address.toLowerCase() === v.baseAddress &&
     !["paused", "retired", "shutdown"].includes(row?.status) &&
     !f?.shutdown &&
     !f?.depositsPaused
@@ -743,6 +853,36 @@ export function explorerLink(network, value, kind = "address") {
   const pattern = kind === "tx" ? /^0x[0-9a-fA-F]{64}$/ : /^0x[0-9a-fA-F]{40}$/;
   if (network?.chainId !== BASE_CHAIN_ID || !pattern.test(String(value ?? ""))) return null;
   return `https://basescan.org/${kind}/${value}`;
+}
+
+/**
+ * @typedef {{ key: string, name: string, address: string | null }} ContractRow
+ * @typedef {{ key: string, chainId: number, label: string, contracts: ContractRow[] }} ContractNetwork
+ */
+
+// The registry's contracts, one list per network: the router and the vault
+// registry, each deployed vault and its adapters, rmAGENT's price recorder,
+// then the timelock that administers them and the Safe that proposes to it.
+// A vault not deployed on a network has a null address. Base is the one
+// network with production contracts; the devnet's reset, so none are listed
+// for it.
+/** @returns {ContractNetwork[]} */
+export function contractNetworks() {
+  /** @type {ContractRow[]} */
+  const rows = [];
+  rows.push({ key: "router", name: "PortfolioRouter", address: ROUTER.baseAddress });
+  rows.push({ key: "registry", name: "VaultRegistry", address: VAULT_REGISTRY });
+  for (const v of VAULTS) {
+    if (!v.baseAddress) continue;
+    rows.push({ key: v.slug, name: `${VAULT_CONTRACT[v.slug] ?? "Vault"} (${v.symbol})`, address: v.baseAddress });
+    for (const a of v.onBase?.adapters ?? []) rows.push({ key: `${v.slug}-${a.name}`, name: a.name, address: a.address });
+  }
+  rows.push({ key: "recorder", name: "Price recorder (rmAGENT)", address: AGENT_PRICE_RECORDER });
+  const admins = [...new Set(VAULTS.map((v) => v.onBase?.admin).filter((a) => typeof a === "string"))];
+  for (const a of admins) rows.push({ key: `admin-${a}`, name: "Timelock (Admin)", address: /** @type {string} */ (a) });
+  rows.push({ key: "safe", name: "Multisig (proposes to the timelock)", address: GOVERNING_SAFE });
+  for (const v of VAULTS) if (!v.baseAddress) rows.push({ key: v.slug, name: `Vault (${v.symbol})`, address: null });
+  return [{ key: "base", chainId: BASE_CHAIN_ID, label: "Base", contracts: rows }];
 }
 
 // Bars are drawn only for a complete set of weights; otherwise figures only.

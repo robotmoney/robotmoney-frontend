@@ -367,7 +367,8 @@ async function expectRmusdcOnBase(page: Page, economics: any) {
   // The Base feed serves no history, activity or router weights. The TVL and
   // position charts and the Activity table keep their frames and say no data
   // is available; router weights, a disclosure rather than a frame, stay out.
-  expect(await page.locator("section.rr-sec").evaluateAll((els) => els.map((e) => e.id))).toEqual(["holdings", "allocation", "activity", "mechanics", "deposit"]);
+  // The v0 vault takes no new deposits from the site (RM-176): no deposit section.
+  expect(await page.locator("section.rr-sec").evaluateAll((els) => els.map((e) => e.id))).toEqual(["holdings", "allocation", "activity", "mechanics"]);
   await expect(page.locator("#holdings .rm-nodata__h")).toHaveText(["No data available", "No data available"]);
   await expect(page.locator("#activity .rr-empty__t")).toHaveText("No data available");
   await expect(page.locator(".rr-disc")).toHaveCount(0);
@@ -378,9 +379,7 @@ async function expectRmusdcOnBase(page: Page, economics: any) {
   await expect(mech).not.toContainText("Routes new deposits");
   await expect(mech).not.toContainText("Venues");
 
-  const cta = page.locator("#deposit .rr-cta");
-  await expect(cta).toHaveAttribute("href", "/deposit");
-  await expect(cta).toHaveText(/^Deposit skill\s*→$/);
+  await expect(page.locator("#deposit")).toHaveCount(0);
 
   await expect(page.locator("#view")).not.toContainText("Devnet test data");
   await expect(page.locator("#view")).not.toContainText("$72,000");
