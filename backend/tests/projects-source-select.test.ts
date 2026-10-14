@@ -1,5 +1,5 @@
 // The fixture projects source is reachable ONLY through the test seam (issue
-// #973; issue #1208, owner decision 2026-10-08: guard only, no purge).
+// #973; issue #1208). Rows already persisted are purged by migration 0118 (D66).
 //
 // Why: production v0.5.4 ran RM_ENV=smoke without PROJECTS_SOURCE=live. The
 // old selector threw only for prod, so it served the hermetic fixture and the
