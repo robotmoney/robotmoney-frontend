@@ -45,6 +45,8 @@ export interface Template {
 export interface ReleaseRunbook {
   readonly release: string;
   readonly template: TemplateName;
+  /** The release's prose: identity, migrations, exceptions, recovery and owner decisions. The runner reads none of it. */
+  readonly notes?: string;
   readonly steps: readonly RunbookStep[];
 }
 
@@ -142,13 +144,14 @@ export function parseReleaseRunbook(text: string, release: string): ReleaseRunbo
   const where = `runbook ${release}`;
   const errors: string[] = [];
   if (!isObject(doc)) throw new Error(`${where}: not a mapping`);
-  for (const k of Object.keys(doc)) if (!["release", "template", "steps"].includes(k)) errors.push(`${where}: unknown key ${k}`);
+  for (const k of Object.keys(doc)) if (!["release", "template", "notes", "steps"].includes(k)) errors.push(`${where}: unknown key ${k}`);
+  if (doc.notes !== undefined && typeof doc.notes !== "string") errors.push(`${where}: notes is text`);
   if (doc.release !== release) errors.push(`${where}: names release ${String(doc.release)}`);
   const template = doc.template ?? DEFAULT_TEMPLATE;
   if (!isTemplateName(template)) errors.push(`${where}: template ${String(template)} is not one of ${TEMPLATE_NAMES.join(", ")}`);
   const steps = parseSteps(doc.steps, where, errors);
   if (errors.length > 0) throw new Error(errors.join("\n"));
-  return { release, template: template as TemplateName, steps: deepFreeze(steps) };
+  return { release, template: template as TemplateName, ...(typeof doc.notes === "string" ? { notes: doc.notes } : {}), steps: deepFreeze(steps) };
 }
 
 /** Stable JSON: object keys sorted, so equality never depends on the order a file wrote them. */

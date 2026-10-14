@@ -22,13 +22,17 @@
 //
 // It REFUSES (exit 1, after writing the record) when an in-house handle is in
 // the would-clear list, when the reconciliation's verdict is anything but
-// `ok`, or when the running stack reports no version to pin to. It never
+// `ok`, when the running stack reports no version to pin to, or when a pending
+// migration is not `compat: additive`: a release is a rolling upgrade (owner,
+// 2026-10-14), so R6.3 migrates while the previous release still serves, and
+// only an additive change keeps that release correct. It never
 // judges a count or a number order: the same step runs any patch from the
 // ledger production actually holds (issues 1272, 1273).
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openReadOnly, readCounts, readDatabaseSize } from "./db-read.ts";
-import { ledgerProblems, readRunningVersion, reconcileLedger, repoMigrations, runningPinRef, type ReconcileReceipt } from "./ledger.ts";
+import { ledgerProblems, MIGRATIONS_DIR, readRunningVersion, reconcileLedger, repoMigrations, runningPinRef, type ReconcileReceipt } from "./ledger.ts";
+import { parsePendingHeader } from "../../backend/src/db/schema-compat.ts";
 import { releaseStateDir } from "./release-state.ts";
 
 /** The in-house seats migration 0101 must never clear (runbook R2.3). */
@@ -77,6 +81,28 @@ export function baselineProblems(reconcile: ReconcileReceipt, wouldClear: readon
   return out;
 }
 
+/**
+ * PURE. Why the pending set cannot migrate under a running previous release;
+ * empty when every pending file declares `compat: additive`. `read` returns a
+ * file's text. A file with no declaration, or one that fails to parse, refuses.
+ */
+export function rollingMigrationProblems(pending: readonly string[], read: (name: string) => string): string[] {
+  const out: string[] = [];
+  for (const name of pending) {
+    let compat: string | null;
+    try {
+      compat = parsePendingHeader(name, read(name))?.compat ?? null;
+    } catch (error) {
+      out.push(`${name}: its compat header does not parse (${error instanceof Error ? error.message : String(error)})`);
+      continue;
+    }
+    if (compat !== "additive") {
+      out.push(`${name} is ${compat ?? "undeclared"}, not additive: a rolling release migrates while the previous release serves, so a breaking migration needs its own plan`);
+    }
+  }
+  return out;
+}
+
 function flag(name: string): string | undefined {
   const at = process.argv.indexOf(name);
   return at >= 0 ? process.argv[at + 1] : undefined;
@@ -111,6 +137,7 @@ async function main(): Promise<number> {
     const reconcile = reconcileLedger(ledger, pinRef === null ? {} : { pinRef });
     const pending = reconcile.pending;
     const problems = baselineProblems(reconcile, wouldClear);
+    problems.push(...rollingMigrationProblems(pending, (name) => readFileSync(join(MIGRATIONS_DIR, name), "utf8")));
     if (pinRef === null) problems.push(`the running stack at ${origin} reports no version to pin the applied migration bytes to (${(version as { error: string }).error})`);
 
     const dir = releaseStateDir(instance, run);

@@ -129,7 +129,7 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
     `  target        ${target.name} (RM_ENV=${target.rmEnv}, instance ${target.instance})`,
     `  host          ${target.host}  checkout ${target.checkout}  HOME ${target.home}`,
     `  capture host  ${target.capture.host}  checkout ${target.capture.checkout}  HOME ${target.capture.home}`,
-    `  running stack whatever ${target.host}'s smoke state names for instance ${target.instance} (R6.1 stops it with bun run smoke:down)`,
+    `  running stack whatever ${target.host}'s smoke state names for instance ${target.instance} (the rolling boot replaces it one service at a time; website-server is kept)`,
     `  release       ${target.release} at ${commit}`,
     `  confirm       ${target.confirmTarget}`,
     `  step list     ${hash}`,
@@ -410,9 +410,9 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
 
   journal.status = runStatus(journal, ids);
-  journal.downtimeSeconds = downtimeSeconds(journal);
+  journal.cutoverSeconds = cutoverSeconds(journal);
   writeJournal(runDir, journal);
-  if (journal.downtimeSeconds !== undefined) deps.log(`[${NAME}] downtime window R6.1 to R6.9: ${journal.downtimeSeconds} s`);
+  if (journal.cutoverSeconds !== undefined) deps.log(`[${NAME}] cutover window R6.3 to READY (R6.9): ${journal.cutoverSeconds} s; the website stayed up (C9)`);
   deps.log(`\n[${NAME}] run ${runTs}: ${journal.status}. Step list ${hash}. Journal ${runDir}`);
   return journal.status === "passed" || args.only !== undefined ? 0 : 1;
 }
@@ -438,9 +438,12 @@ export function skipReason(step: StepTemplate, target: ReleaseTarget): string | 
   return undefined;
 }
 
-/** PURE. The downtime window: R6.1's start to R6.9's end, in seconds, once both are ok. */
-export function downtimeSeconds(journal: Pick<RunJournal, "steps">): number | undefined {
-  const a = journal.steps["R6.1"];
+/** The cutover's first irreversible step: the migrate under the running release. */
+const CUTOVER_STEP = "R6.3";
+
+/** PURE. The cutover window: R6.3's start to READY (R6.9's end), in seconds, once both are ok. The website stays up through it (C9). */
+export function cutoverSeconds(journal: Pick<RunJournal, "steps">): number | undefined {
+  const a = journal.steps[CUTOVER_STEP];
   const b = journal.steps[READY_STEP];
   if (a?.status !== "ok" || b?.status !== "ok" || !b.endedAt) return undefined;
   return Math.round((Date.parse(b.endedAt) - Date.parse(a.startedAt)) / 1000);

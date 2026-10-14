@@ -1,592 +1,355 @@
-# Release process — foundational runbook policy
+# Release process — runbook policy
 
-> **Agent Note:** To find info quickly, see the TOC below. §9 explains when to create a release-specific runbook. There is no active unnumbered deployment plan in this document.
+> **Status: in effect.** This is the one prose document for releases. It holds the rules. The
+> steps are YAML: the general runbook templates in `scripts/release/runbooks/templates/`, and each
+> release's own add-only copy in `scripts/release/runbooks/releases/` (§5). The runner,
+> `bun run release:run`, executes a release's YAML. Older per-release Markdown runbooks were
+> removed on 2026-10-14; recover one from Git (`git show v0.6.1:docs/runbooks/v0-6-1-rollout.md`)
+> only when an audit needs the exact record.
 >
-> **Table of Contents:**
-> - [1. Scope and authority](#1-scope-and-authority)
-> - [2. Release branch](#2-release-branch)
-> - [3. Version tags and release candidates](#3-version-tags-and-release-candidates)
-> - [4. Foundational release workflow](#4-foundational-release-workflow)
-> - [5. Per-release runbook format](#5-per-release-runbook-format)
-> - [6. Per-release GitHub tracking issue](#6-per-release-github-tracking-issue)
-> - [7. Backporting](#7-backporting)
-> - [8. Compatibility contract](#8-compatibility-contract)
-> - [9. Tracking upcoming releases](#9-tracking-upcoming-releases)
+> **Contents:** [1. Scope](#1-scope-and-authority) ·
+> [2. Branches](#2-branches) · [3. Tags](#3-release-candidates-and-version-tags) ·
+> [4. Workflow](#4-the-release-workflow) · [5. Runbooks](#5-runbooks-are-yaml) ·
+> [6. Tracking issue](#6-the-tracking-issue) · [7. Backporting](#7-backporting) ·
+> [8. Compatibility](#8-compatibility-contract) · [9. Standing checks](#9-standing-check-ids) ·
+> [10. Standing invariants](#10-the-standing-invariants-sw2)
 
-> **Status: in effect.** This document defines the foundational release-runbook
-> policy for future per-release runbooks. It is not itself a runnable checklist.
-> Historical per-release procedures were retired during the 2026-09-23 docs
-> cleanup; recover them from Git if an audit requires the exact record. Create a
-> new runbook only when a release is scheduled and the tools exist at its target
-> commit (see §§5, 9).
-
-This is not the process for landing ordinary feature work — that is PR review
-against `main`, covered by [CONTRIBUTING.md](../../CONTRIBUTING.md) and the CI
-taxonomy. This document is specifically about the step where a set of
-already-merged `main` history is packaged, gated, and cut over into
-production.
+This is not the process for ordinary feature work, which is PR review against `main`
+([CONTRIBUTING.md](../../CONTRIBUTING.md)). It covers packaging a release, rehearsing it on stage
+and cutting it over in production.
 
 ## 1. Scope and authority
 
-**Deployment mechanism:** [Smoke production spec](./smoke-production-spec.md)
-is the sole adopted design (D47). Production has booted with `bun smoke --static-port`
-since v0.6.0.
-This document owns release policy: gates, phases, evidence and approval. The
-retired D46 mechanism and external `stack`/Kubernetes proposals are not alternate
-ways to implement that design. Release-specific commands must identify the
-implementation and exact commit they exercise. The mechanism updates below do
-not waive any release gate.
+[Smoke production spec](./smoke-production-spec.md) owns deployment, migration, target identity and
+schema-preflight mechanics (D47). Production has booted with `bun smoke --static-port` since
+v0.6.0. This document owns the release gates, phases, evidence and approval.
 
-Every production rollout of a numbered release must be planned, rehearsed, and
-executed from a per-release runbook that conforms to this policy. The
-per-release runbook is the **definitive, agent-executable procedure** for that
-release — not the tracking issue (§6), and not tribal knowledge held by
-whoever last did a rollout. The tracking issue's checklists exist to gate
-progress through the runbook, not to duplicate or replace its content.
+**Agent-executed, end to end ([D61](../decisions.md#d61), owner 2026-10-08).**
 
-**Agent-executed, end to end ([D61](../decisions.md#d61), owner 2026-10-08).** Four rules bind
-every runbook. (1) No human in the loop: an agent executes every step, and the operator's
-authority is one recorded go given before the run. (2) The production runbook is rehearsed
-unmodified on stage: the same runner, commit and step list, with only the target file
-different. (3) Every database operation is a committed script with a receipt. (4) Everything
-runs from the control machine over SSH with `bun run release:run`; no step asks a person to log
-in to a host and type. A step that breaks a rule is a `gap` that blocks the release.
+1. No human in the loop. An agent executes every step. The operator's authority is one recorded go
+   given before the run.
+2. Production runs what stage passed, unmodified: the same runner and the same step list, with only
+   the target file different.
+3. Every database operation is a committed script with a receipt. No step runs `psql` by hand.
+4. Everything runs from the control machine over SSH. No step asks a person to log in to a host.
 
-No release may skip a gate described here unless the release runbook's
-**Exceptions** list records it, with the reason, the approving owner and the
-issue that restores it (§5).
+**The website never goes down (owner, 2026-10-14).** Every release, on stage and on production, is a
+rolling upgrade (§4.7). No step stops the whole stack. No tmux session drives or holds any process.
 
-**Two layers of runbook, and the second adds to the first.** The global
-[standing runbook](../runbooks/release-standing-runbook.md) lists the checks every
-release runs, by phase, and is cumulative: a check enters it when a release needs
-it and leaves only by a recorded owner decision. A per-release runbook
-inherits all of it and adds its own release-specific checks. It never copies a
-standing check, never replaces one, and records any exception (reason, approving
-owner, issue that restores it). A release whose runbook omits a standing check
-without an exception is not ready.
+**Every production data change ships as a migration** ([D66](../decisions.md#d66), owner
+2026-10-09). No admin-route write, no SQL by hand, no one-off script. R6.3 is the one step that
+writes production data.
 
-## 2. Release branch
+A check with no tool is a `gap`. A gap blocks the release until it is built or the owner records an
+exception in the release's YAML (§5).
 
-Each release ships from a branch named `releases-A.B.x`:
+## 2. Branches
 
-- literal, plural **`releases`** (not `release`),
-- `A.B` are the integer major and minor version being released,
-- a literal trailing **`x`** where the patch number would go — the patch
-  number is deliberately left blank, because the branch holds the whole
-  `A.B` line, patches included.
+Each release line ships from `releases-A.B.x` (literal `releases`, the integer major and minor, a
+literal `x`). Example: `releases-0.6.x`. Feature PRs never target it.
 
-Example: `releases-0.2.x` for the 0.2 line.
+The release branch takes changes by two routes only ([D70](../decisions.md#d70), owner 2026-10-14):
 
-Feature PRs never target `releases-A.B.x` directly — ordinary feature work is
-reviewed and merged via PR against `main`, exactly as this document's intro
-paragraph says. The branch receives changes by two routes only ([D70](../decisions.md#d70),
-owner, 2026-10-14):
-(a) **scope**: before a QA session starts, the release's scope reaches
-`releases-A.B.x` from `main` by merge or cherry-pick;
-(b) **the stage-passed QA branch**: after the runbook passes on stage at a commit
-of the `qa/A.B.x-<YYYY-MM-DD>` branch, that branch is squash-merged onto
-`releases-A.B.x`. The squash commit's tree must equal the tree stage passed
-(§3). Session fixes reach `main` afterwards by a separate PR (§7).
-No commit lands on the release branch during a QA session. A release branch is
-force-pushed only on an explicit owner instruction, after the archive tag
-`archive/releases-A.B.x-<YYYY-MM-DD>` is pushed first. A release is **never tagged
-directly on `main`** — the tag lands on the `releases-A.B.x` branch, so
-`main` keeps moving with ordinary merges while the release line is frozen
-except for the fixes it specifically needs. This applies to every tag the
-release produces, release candidates included (§3).
+- **(a) Scope.** Before a QA session starts, the release's scope reaches `releases-A.B.x` from `main`
+  by merge or cherry-pick.
+- **(b) The stage-passed QA branch.** After the runbook passes on stage at a commit of
+  `qa/A.B.x-<YYYY-MM-DD>`, that branch is squash-merged onto `releases-A.B.x`. The squash commit's
+  tree must equal the tree stage passed.
 
-Cherry-picking is what the branch needs *once `main` has moved past the
-release scope*. A branch cut while the release scope is still exactly "all of
-`main`" is legitimately cut whole and kept in step by fast-forward. Selective
-cherry-pick starts at the point the branch and `main` must diverge, not at
-the cut.
+No commit lands on the release branch during a QA session. Session fixes reach `main` afterwards by
+a separate PR from the QA branch (§7). A release branch is force-pushed only on an explicit owner
+instruction, after `archive/releases-A.B.x-<YYYY-MM-DD>` is pushed. Tags land on the release
+branch, never on `main` or a QA branch.
 
-## 3. Version tags and release candidates
+**QA branches (owner, 2026-10-06 and 2026-10-07).** A QA session cuts one
+`qa/A.B.x-<YYYY-MM-DD>` branch from the release branch tip and pushes it. Every patch of the
+session, runbook corrections included, merges there by PR. A pushed QA branch is never rewritten:
+no force push, reset or rebase. A new base means a new branch, `qa/A.B.x-<YYYY-MM-DD>-2`, and the
+session report names which branch each piece of evidence ran on.
 
-A version tag `vA.B.C` names what production was cut over to. An rc tag
-`vA.B.C-rc.N` (`N` counting from 0) names a commit whose tree passed stage.
-Production runs only by an rc tag. **As soon as a production cutover starts
-(R6.1, the first irreversible step), that rc's commit also gets `vA.B.C`**, even
-when a later check fails or a defect is known ([D70](../decisions.md#d70), owner,
-2026-10-14). Every defect found after the cutover is ticketed against the next
-patch version.
+## 3. Release candidates and version tags
 
-> **Revised 2026-09-11, effective from v0.5.0.** Through v0.4.0 the rc tag was
-> cut FIRST — "at the tip you intend to ship" — and stage preflight/rehearsal
-> ran against that already-tagged commit. As of v0.5.0 the order is reversed:
-> stage preflight and rehearsal run against the untagged tip, and the rc tag
-> is cut only once both pass. An rc tag therefore now means "this exact commit
-> has already cleared stage," not "this is a candidate to be tested" — see
-> the superseded-precedent note below. Today `bun run release:run` and
-> `scripts/release/tag.ts` enforce it.
+An rc tag `vA.B.C-rc.N` (`N` from 0) names a commit whose tree passed stage. A version tag
+`vA.B.C` names what production was cut over to. Production runs only by an rc tag.
 
-The cycle (D70, owner, 2026-10-14):
+The cycle (D70):
 
-1. **Stage runs on a QA branch.** Cut `qa/A.B.x-<YYYY-MM-DD>` from the
-   `releases-A.B.x` tip (§4.6). Stage runs a clean, pushed commit of that QA
-   branch, never a PR head or a fix branch. Session fixes merge into the QA
-   branch, and stage reruns on its new tip.
-2. **The runbook passes on stage** at a QA commit. Record that commit and its
-   tree hash. A stage failure consumes no rc number.
-3. **Squash-merge the QA branch onto `releases-A.B.x`.** The release branch must
-   not have moved since the QA branch was cut. The squash commit's tree must
-   equal the stage-passed tree. A different tree means a new QA branch and a
-   new stage run.
-4. **Cut `vA.B.C-rc.N` at the squash commit** and push it. `tag.ts rc` refuses a
-   commit whose tree is not the stage-passed tree, or that is off
-   `releases-A.B.x`.
-5. **Production runs only by that rc tag.** The production go names the tag,
-   never a branch name or a bare commit. SP.8 refuses a tag whose tree differs
-   from the stage-passed tree.
-6. **A failure before the cutover** (preflight, baseline, backup or any step
-   before R6.1) means that rc never reaches production. Fix it on a **new** QA
-   branch, rerun stage (step 1), squash again and cut `vA.B.C-rc.(N+1)`.
-7. **The cutover starts (R6.1)** → tag `vA.B.C` at the rc's commit at once. A
-   later failed check, a known defect or a rollback does not withhold or move
-   it. Every defect becomes an issue against `vA.B.(C+1)`, whose first rc is
-   `vA.B.(C+1)-rc.0`.
+1. **Stage runs on a QA branch.** Stage runs a clean, pushed QA commit, never a PR head or a fix
+   branch. Fixes merge into the QA branch, and stage reruns on its new tip. A stage failure
+   consumes no rc number.
+2. **Refresh the lockfiles.** Every rc carries a freshly resolved lockfile (owner, 2026-10-14): run
+   `bun scripts/release/lockfile.ts refresh` on the QA branch and commit the result before the
+   stage run. Stage's preflight check `P.lockfile` refuses a commit whose lockfiles differ from a
+   fresh resolve. Hosts install with `--frozen-lockfile`.
+3. **The runbook passes on stage.** Record the commit and its tree hash.
+4. **Squash the QA branch onto the release branch.** The release branch must not have moved since
+   the QA branch was cut, and the squash tree must equal the stage-passed tree.
+5. **Cut `vA.B.C-rc.N` at the squash commit** with `bun scripts/release/tag.ts rc` and push it.
+6. **Production runs only by that rc tag.** SP.8 refuses a tag whose tree differs from the
+   stage-passed tree.
+7. **A failure before the cutover** (preflight, baseline, backup, or any step before R6.3) means the
+   rc never reaches production. Fix it on a new QA branch, rerun stage, squash again and cut
+   `vA.B.C-rc.(N+1)`.
+8. **The cutover starts (R6.3)** → step C1 tags `vA.B.C` at the rc's commit at once. A later failed
+   check, a known defect or a rollback never withholds or moves it. Every defect found after the
+   cutover is an issue against `vA.B.(C+1)`, whose first rc is `vA.B.(C+1)-rc.0`.
 
-Consequences, stated outright because each one looks like a mistake and none is:
+Consequences, stated because each looks like a mistake and none is:
 
-- **`vA.B.C` and the final `vA.B.C-rc.N` point at the same commit.** That is
-  expected and correct, not duplication to clean up.
-- **Stage and production run different commits with the same tree.** Stage
-  runs the QA commit and production the squash commit. `/api/version` reports
-  each target's own commit. The tree hash is what ties them together.
-- **A failure belongs before the cutover.** Every check that can stop a release
-  runs before R6.1. After R6.1 the version exists, and a fix is the next
-  patch version.
-- **An rc number counts production attempts stopped before the cutover.** A
-  release that needed five stage attempts and cut over on its first production
-  attempt is `rc.0`, not `rc.4`.
+- `vA.B.C` and the final `vA.B.C-rc.N` point at the same commit.
+- Stage and production run different commits with the same tree. `/api/version` reports each
+  target's own commit; the tree hash ties them together.
+- An rc number counts production attempts stopped before the cutover. Five stage attempts and a
+  clean first production attempt is `rc.0`.
 
-rc tags obey §2's branch rule exactly as the release tag does: they are cut on
-`releases-A.B.x`, never on `main` or a QA branch.
+## 4. The release workflow
 
-### Precedent — v0.2.1 through v0.4.0 (superseded 2026-09-11)
+Each gate blocks. A failed gate stops the release until it passes or the owner records an
+exception in the release's YAML.
 
-This was a newly written-down convention, not a newly invented one, when v0.2.1
-first ran it (tag-then-validate), undocumented (`git log -1 --format='%h %ci %s' <tag>`):
+### 4.1. Code readiness
 
-- `v0.2.1-rc.0` → `c2b9afc`, 2026-08-07
-- `v0.2.1-rc.1` → `5970f2d`, 2026-08-08
-- `v0.2.1` → `5970f2d`, 2026-08-08 — **the same commit as `rc.1`**
+Every Phase and feature issue linked from the tracking issue's Phases tasklist is closed, and the
+objective is stated (§6). Every commit expected to ship is on the release branch by §2 route (a).
+The tracking issue itself stays open until §4.9.
 
-That shared-commit final tag is still the norm §3 describes, unchanged by the
-2026-09-11 revision above — only the ORDER of "cut the rc" versus "run stage
-preflight/rehearsal" reversed, not the final-tag mechanics. One honest limit
-on the precedent, unaffected either way: v0.2.1 predates the `releases-A.B.x`
-convention and is reachable from `main`
-(`git merge-base --is-ancestor v0.2.1 origin/main` succeeds, as it does for
-both rc tags). It is precedent for the **rc numbering**, not for the branch
-placement rule — that rule starts with v0.2.2.
+### 4.2. Baseline
 
-## 4. Foundational release workflow
+Before anything changes, R2.3 records production's state through `rm_readonly`: the ledger and its
+reconciliation with `backend/migrations` ([D67](../decisions.md#d67)), identity, roles, row counts,
+the sessions in flight and the database size. R2.3 refuses any pending migration that is not
+`compat: additive` (§4.7). R2.5 grades the running stack's logs; each finding there is triaged by
+the owner before the cutover (`--triage <file>`).
 
-Every per-release runbook must implement the following workflow, in order.
-Each gate is blocking: the runbook must stop and escalate if a gate fails,
-and no later gate may be started until the current one is satisfied or
-explicitly waived by the operator with a written reason.
+### 4.3. Backup, restore proof and dumps
 
-### 4.1. Code-readiness gate
+R2.1 always captures production's backup new, from the read replica, right before the cutover. R2.4r
+restores it into a throwaway container and records the restore time.
 
-Before any rollout activity, verify both of the following:
+**Stage's starting dump (owner, 2026-10-08; SR.0).** Unless the operator names a dump, stage starts
+from the newest production dump already on the capture host if it is at most 24 hours old
+(`manifest.json` `capturedAt`), else a new capture (`bun smoke:capture --out <new directory>`).
+Never restore a dump older than 24 hours. Never point rehearsal preparation at the production
+database.
 
-1. Every Phase and feature issue linked from the release tracking issue's
-   Phases tasklist is closed, and the objective is clearly stated (§6). The
-   tracking issue itself stays open until §4.9.
-2. Every commit expected to ship in this release is present on the release
-   branch, by §2 route (a). Verify with a diff or log inspection that no
-   expected change is missing from the branch.
+### 4.4. Stage rehearsal
 
-Do not begin preflight, rehearsal, or any other rollout step while either of
-the above is incomplete.
+The cutover rehearsal runs the release's YAML unmodified with `bun run release:run --target stage`
+against the production-shaped stage target ([stage-target.md](../runbooks/stage-target.md)): a
+remote Postgres restored from a production dump, with the previous release running against it the
+way production runs it. The stage sequence:
 
-### 4.2. Pre-upgrade baseline
+1. `bun scripts/release/stage-target.ts up --dump <dir>`;
+2. `bun scripts/release/stage-target.ts doadmin | bun run role-passwords --target stage --doadmin-stdin`;
+3. `bun run release:run --target stage --preflight`, then `--go <stage go>`.
 
-Before the upgrade changes any production state, record the production
-database state using a read-only user or cluster node. Capture especially the
-properties that the upgrade will change or correct — schemas, reference data,
-configuration values, row counts, checksums, or any other state the objective
-identifies as changing.
+Checks that need a seated roster and short epochs run on a twin (`--local dump`, spoofed keys,
+`bun run twin:accelerate`, `bun run twin:gate`). Tear the stage stack down once the run passes: it
+spends inference credits.
 
-Save this baseline artifact next to the pre-upgrade backup with a clear
-filename and timestamp. It must be available for comparison during postflight
-and for use during rollback if needed.
+### 4.5. Stage report
 
-### 4.3. Backup and restore proof
+The report names the QA commit and tree, the dump identity, the step-list hash, the receipts, the
+results, what could not be covered, and the go/no-go. Reference generated artifacts instead of
+restating their values.
 
-Before rehearsal, create a fresh backup from the approved read-only source and
-restore it to an isolated rehearsal target. The release runbook must name the
-exact command and tool versions verified at the release commit. The proof must
-record source identity, replica/read-only confirmation, backup checksum, server
-and client versions, and successful restore. Never point rehearsal preparation
-at the production database.
-
-The adopted [smoke production spec](./smoke-production-spec.md) defines
-`bun smoke:capture` as the read-only replica capture path. A future runbook may
-use it only after confirming that the release code implements that interface.
-
-**Dump rule (owner, 2026-10-08; standing check SR.0).** Unless the operator names a specific
-dump, a rehearsal starts from the newest production dump already on the capture host, if its
-capture (`manifest.json` `capturedAt`) is at most 24 hours old. When none is, capture one:
-`bun smoke:capture --out <new directory>` on the capture host. Never restore a dump or twin
-older than 24 hours. Production's own backup (R2.1) is always captured new, right before the
-cutover. The rehearsal report names the dump's stamp and capture time.
-
-### 4.4. Isolated release rehearsal
-
-Rehearse the release twice, on two kinds of target. **The cutover rehearsal** runs the
-production step list unmodified (D61 rule 2) with `bun run release:run --target stage` against
-the production-shaped stage target ([`stage-target.md`](../runbooks/stage-target.md)): a remote
-Postgres restored from a fresh production dump, with the legacy release running against it the
-way production runs it. **The twin rehearsal** uses the adopted
-[local dump](./smoke-production-spec.md#5-local-postgres-stage-override) path for the checks
-that need a seated roster and an accelerated schedule. The runbook must identify the exact
-release commit, target identity, operator actions, migration and initialization
-steps, and all checks exercised. It must cover:
-
-- the W1 lifecycle, target-lock and interruption gates relevant to the release;
-- W2 schema integrity, compatibility, migration recovery and privilege checks;
-- W3 participant roster and submission behavior when the release affects
-  participants;
-- product verification and evidence of any approved exceptions.
-
-On a twin the rehearsal deploys the system against the restored copy (never the remote
-database), seats every active member on a spoofed key as its own participant container, and,
-once the checks that need production's schedule are recorded, runs the sessions on an
-accelerated schedule: short epochs set through the admin API (`bun run twin:accelerate`,
-standing check SR.9), so the lifecycle checks see sessions publish and the judge judge within
-minutes.
-
-A restored rehearsal target is disposable by explicit operator action; the
-smoke boot itself exits after readiness and leaves services running. Capture
-service evidence for the rehearsal window where available, and report missing
-coverage plainly. A green check run under broader database privileges than
-production does not prove the release's production grant path.
-
-Legacy `--db smoke-twin`, host-driven agents, and teardown-on-exit behavior are
-historical implementation details. Do not copy them into a new release runbook.
-No adopted-design command may be used before its implementation exists at the
-release commit. The future per-release runbook must use the tool interfaces
-actually implemented at its exact SHA.
-
-### 4.5. Stage rehearsal report
-
-The report must include the release commit, source backup and restore evidence,
-resolved plan and plan id, deployment identity, migration/initialization
-receipts, preflight and readiness results, participant roster and results,
-product verification, service evidence, any issues and their resolution, and a
-go/no-go decision with operator sign-off.
-
-The gate passes only when required checks pass and the operator has signed off.
-Missing, unimplemented, or unverified checks are blocking unless the operator
-records a specific written exception under §1. Reference generated artifacts
-instead of restating their values.
 ### 4.6. Fix loop
 
-If the isolated rehearsal or stage report finds an issue that affects
-production safety or acceptance criteria, do not proceed to production
-execution. Fix it as follows, then follow §3's tag sequence. The same loop
-applies when an rc fails in production before the cutover (§3 step 6).
+A fix is developed in a development worktree, never on a host. A host runs a clean checkout of a
+pushed commit (`git status --porcelain` empty). Fix on the QA branch (§2), redeploy its tip to
+stage, and rerun. The same loop applies when an rc fails in production before the cutover (§3
+step 7).
 
-A fix is developed in a development environment and never on a rehearsal,
-stage or production host. A host runs a clean checkout of a pushed commit
-(`git status --porcelain` empty, no host-side commits). A rehearsal on a host
-whose code differs from the branch under test is not evidence for the release.
+### 4.7. Production execution: a rolling upgrade
 
-**QA branch rule (owner, 2026-10-06).** A QA session never commits to the
-release branch or to `main`. Both stay clean for the whole session.
+The owner writes the go once the production preflight is green apart from the go, a stage run of the
+same step list passed on the same tree (SP.8), and the tracking issue's phases are closed:
 
-1. At the start of the session, cut one QA branch from the release branch tip:
-   `qa/A.B.x-<YYYY-MM-DD>` (example: `qa/0.6.x-2026-10-06`). Push it. Every
-   patch of the session lands there, and nowhere else.
+```text
+release: vA.B.C
+tag: vA.B.C-rc.N
+target: prod
+recovery: ~/recovery-matrix-vA.B.C.signed.md
+operator: <name>
+date: <yyyy-mm-dd>
+```
 
-   **A pushed QA branch is never rewritten (owner, 2026-10-07).** No force
-   push, no reset, no rebase. If the session needs a different base (the
-   release branch tip moved, or the branch was cut from the wrong commit), cut
-   a NEW QA branch from the new base and push it. A second branch on the same
-   day takes a suffix: `qa/A.B.x-<YYYY-MM-DD>-2`, then `-3`. Leave the old
-   branch as it is, and name in the session report which branch each piece of
-   evidence ran on. Switch the stage host to the new branch (step 2). Seen
-   2026-10-07: `releases-0.6.x` was reset to `main` after
-   `qa/0.6.x-2026-10-07` was cut, and the QA branch was force-pushed to match
-   instead of a new branch being cut.
-2. Switch the development checkout and the stage host to the QA branch. The
-   stage host runs a clean checkout of the QA branch tip, never a fix branch.
-3. Develop and test each fix in a local worktree branched from the QA branch.
-   Open the PR into the QA branch and merge it there. Runbook and doc
-   corrections found during the session land there too. A change to a
-   supported baseline needs the owner's decision first (D55 (8)).
-4. Redeploy a clean checkout of the new QA branch tip to the stage host and
-   repeat the stage run. A stage failure does not consume an rc number.
-5. When the runbook passes on stage at a QA commit, squash-merge the QA branch
-   onto the release branch (D70). The squash commit's tree must equal the
-   stage-passed tree. Cut the rc there (§3 steps 3 and 4).
-6. Carry the session's fixes to `main` by a separate PR from the QA branch
-   (§7).
+A stage go names `commit:` (the QA commit) instead of `tag:`. The runner refuses a go for another
+release or target, and stops at the first failed step.
 
-Runbook corrections that change release instructions are committed and reviewed
-on the QA branch during a session. They reach the release branch in the step 5
-squash. Re-run any gate whose evidence or operator action the correction affects.
-Rc numbering follows §3: stage retries and documentation fixes do not consume an
-rc. A new rc is cut only after a production attempt stops before the cutover.
+The cutover never takes the website down:
 
-### 4.7. Production execution
+1. **C0** starts the website probe on the control machine: the public origin's `/` and
+   `/version.json` every 2 s.
+2. **R6.3** migrates while the previous release still serves. Only `compat: additive` migrations
+   may run this way; R2.3 refused anything else. A breaking migration needs its own plan.
+3. **C1** tags `vA.B.C` (production only).
+4. **R6.5** keeps every valid service token. A running holder keeps authenticating, and only a
+   missing or stale token is minted.
+5. **R6.7a**, the rolling boot (`bun smoke --static-port`), replaces api, worker-analytics,
+   system-scheduler and analytics-producer one at a time, each healthy before the next.
+   website-server is never recreated, and the boot refuses before replacing anything if compose's
+   dry run says it would be. While the api swaps, nginx keeps serving the site and answers `/api/`
+   from its maintenance fallback.
+6. **R6.10** switches the site atomically and reloads nginx gracefully (`bun smoke:web`).
+7. **C9** stops the probe and fails the release on any answer that is not 200, or on any gap.
 
-Once the stage rehearsal gate passes, run the actual cutover and postflight
-on a production machine. Follow the per-release runbook step by step. Every
-destructive or irreversible step must be explicitly marked in the runbook. The operator
-authorizes the run once, with a recorded go that names the release, the ref and the target
-(D61). A stage go names the QA commit; a production go names the rc tag (D70). The runner
-refuses to start without it, and stops at the first failed step.
+The privileged credential `rm_owner` is a line in the host's `~/.env`. `doadmin` is stored in no
+file: the admin types it into `bun run role-passwords` before the run, and no release step reads it
+([D61's amendment](../decisions.md#d61-amendment-1272)). A write names its target with
+`--confirm-target`. No container receives a privileged credential, and no receipt, journal or log
+line prints one.
 
-**The cutover is a sequence of receipted steps with credentials limited to the
-step's job.** The adopted [smoke production spec](./smoke-production-spec.md)
-separates production migration and initialization from boot, then requires
-preflight, readiness and durable evidence. Production migration reads
-`rm_owner` from the host's `~/.env` (D61); boot receives runtime credentials only. The old separate migration
-role, `migrate:external`, ownership-based auto-migration and `smoke:archive` plans are
-deprecated and must not guide new implementation. A legacy release procedure must
-state its exact code identity and limitations; it is not a second target design.
+**Postflight and soak.** R7.1 to R7.7 verify identity, product (readonly tier), logs, the baseline
+comparison and the host guards. Then the 30-minute soak (owner, 2026-10-14): W1 grades logs since
+READY, W2 runs the standing invariants against the READY baseline, R7.4a checks schedule parity, and
+W3 copies every container's logs and `docker inspect` into the journal. Sessions are deferred in the
+soak. They are graded afterwards as a report, once 37 h have passed:
+`bun run prod:gate --mode post-release --instance rm_prod --since <READY> --sessions graded`.
 
-Preflight must be re-run or re-confirmed on production before the cutover
-begins, even if the isolated rehearsal passed, to ensure the production
-environment matches the rehearsal assumptions.
+### 4.7.1. Product verification
 
-The upgrade is agent-executed through the verified runbook, with one operator go and
-receipt review (D61). The privileged credential `rm_owner` is a line in the host's `~/.env`.
-`doadmin` is stored in no file: the admin types it into `bun run role-passwords` before the run,
-and no release step reads it ([D61's amendment](../decisions.md#d61-amendment-1272)). A write
-names its target with `--confirm-target`, and the command refuses a target that differs from
-the one it resolved. No container receives a privileged credential, and no receipt, journal or
-log line prints one. Production runs only after a stage run of the same step list passed on
-the same tree (standing check SP.8, D70).
-
-### 4.7.1. Product verification (separate from postflight, and from the deploy)
-
-**Postflight and verification answer different questions, so they are different
-steps.** Postflight asks *did the migration land* — migrations recorded, tables
-present, flags at their shipped defaults. Verification asks *is the product
-doing what it claims* — the pipeline produced decisions, and the artifacts it
-published are internally consistent.
-
-This distinction is written down because losing it has a specific failure
-shape: a release certified green on schema alone, with every product invariant
-unexamined. That is what v0.5.0's postflight was until 2026-09-18 — eight
-checks, four of which restated what the migration runner already reported.
-
-**Verification runs as a SEPARATE PROCESS against an already-live stack**, not
-inside the deploy. Under the adopted design, `bun smoke` boots and checks
-readiness; production migration is separate. Product verification is still its
-own job and must not be silently omitted by either a standing boot or a cutover.
-`scripts/verify-live.ts` attaches over HTTP after liveness and reports in the
-standard check format, emitting the same receipt JSON the rollout probe reads.
-
-**Tiering is a safety rule, not a convenience.** A `readonly` leg issues GETs;
-a `full` leg drives the product — publishes sessions, spends inference, sends
-mail. Only `readonly` may run against production: a `full` leg there would
-manufacture the very history the readonly legs exist to audit. The default is
-`readonly` so the destructive direction has to be asked for explicitly.
-
-**Reading the result.** A WARN is not a pass — an invariant with nothing to
-check is unverified, not satisfied, and a release runbook must say which
-invariants a given target cannot yet exercise. And "the product is wrong"
-(exit 1) must stay distinguishable from "nothing was asserted" (exit 2);
-collapsing them lets an unreachable stack read as a product failure.
+Verification asks whether the product does what it claims; postflight asks whether the migration
+landed. They are separate steps. Only the `readonly` tier of `verify:live` may run against
+production: a `full` leg publishes sessions and spends inference. A WARN is not a pass, and
+"nothing was asserted" (exit 2) is not "the product is wrong" (exit 1).
 
 ### 4.7.2. Log gates
 
-`verify:live` reads the product over HTTP and cannot see a log. The log gates
-do: `bun run twin:gate` grades a twin rehearsal and `bun run prod:gate` grades
-production, before (`--mode baseline`) and after (`--mode post-release`) the
-cutover. Each selects its stack by `--instance` and that instance's stack
-record, reads every container's log (participants included), and reads the
-database read-only through the api container. Neither needs an admin token.
+`bun run twin:gate` grades a twin and `bun run prod:gate` grades production, before
+(`--mode baseline`) and after (`--mode post-release`) the cutover. The rule is default deny: every
+distinct error in every log must match a classification in
+`scripts/lib/gate/log-classifications.json` with a written reason. A session that publishes
+`no_consensus` is a warning, never a good session (owner, 2026-10-06).
 
-The rule is default deny. Every distinct error in every log must match a
-classification in `scripts/lib/gate/log-classifications.json` with a written
-reason, or the gate fails. A new failure mode is added to that file only with
-evidence and a reason, never to make a run pass. A model timeout or a rejected
-take is a model outcome and is reported. A session that publishes
-`no_consensus` is an acceptable outcome (owner, 2026-10-06): the gates list it as
-a warning and never count it as a good session. The scheduler also publishes
-`no_consensus` when the judge is disconnected at the deadline
-([smoke production spec](./smoke-production-spec.md) §10), so a dead judge is
-caught by the other checks, not by that outcome: every subject still needs its
-minimum of good sessions (judged, with an applied judgement and a receipt), a
-session published as `not_judged`, or `judged` without a judgement or a
-receipt, fails, and the judge participant must be running and never restarted.
+### 4.8. Recovery
 
-### 4.8. Recovery and rollback
+The recovery decision is part of the release's YAML and the go names the signed matrix (SC.1).
+Before R6.3, fix and resume: nothing has changed. A failed R6.3 resumes at R6.3 while the previous
+release keeps serving. After R6.3, fix forward on the next patch version, or restore the R2.1 dump
+with the write loss it implies. The version tag stays either way (§3 step 8). Do not assume a
+deployment tool rolls back by itself.
 
-The release runbook must define recovery for each destructive or partially
-committed phase. It must distinguish resuming a journaled operation, restoring
-database state from a verified backup, and recovering service availability.
-Do not assume the previous services remain available after replacement begins,
-or that the deployment tool automatically rolls back.
+### 4.9. Production report
 
-Rehearse the named recovery path on the isolated target. Production recovery
-requires the operator's recorded decision and sign-off, including any deviation
-from the rehearsed path. Report the final database and service state, evidence
-used, and remaining risk.
-### 4.9. Production rollout report
+The closing artifact names the rc deployed, the cutover and postflight results, the probe grade, the
+soak and its logs, issues opened against the next patch version, backport TODOs (§7), and the
+operator's sign-off. The tracking issue closes only after the report is filed and the version tag
+exists on the release branch.
 
-After a successful cutover (or after rollback), produce a final production
-rollout report covering at least:
+## 5. Runbooks are YAML
 
-- the release candidate deployed,
-- cutover and postflight results (or rollback results),
-- any issues encountered and their resolution,
-- the final version tag applied (every release whose cutover started, rolled back or not),
-- the issues opened against the next patch version for failed checks,
-- backport TODOs (§7),
-- operator sign-off.
+There are two kinds of file, and the runner runs only the second:
 
-The report is the closing artifact of the release. The release tracking issue
-is closed only after this report is filed and the final tag exists on the
-release branch.
+- **A template** (`scripts/release/runbooks/templates/<name>.yaml`) is a general runbook: every step
+  a kind of release runs, in order. `kitchen-sink`, the full-stack release, is the default. A
+  `website-only` template joins with its runner mode.
+- **A release runbook** (`scripts/release/runbooks/releases/vA.B.C.yaml`) names its template
+  (`template: kitchen-sink` when omitted), holds a full copy of the template's steps, and **only
+  adds**. Every template step stays, unchanged and in order. An added step or check may sit
+  anywhere, and carries `added: vA.B.C`. A one-time action is an added step gated on a receipt's
+  absence (`gateAbsent`). The file also holds the release's notes: identity, migrations,
+  exceptions, recovery and owner decisions.
 
-## 5. Per-release runbook format
+`scripts/release/runbook.ts` refuses a release runbook that drops, edits or reorders a template
+step, and a unit test holds every in-flight release runbook to the current template, so a step
+added to a template reaches them in the same pull request. The step-list hash SP.8 compares is
+taken over the release runbook's steps. Every step names its standing check IDs (§9) and whether it
+is irreversible; a step a tool cannot perform is a `gap`.
 
-Each release has an operator runbook committed under `docs/runbooks/`. The split
-(issue 1261): [`release-standing-runbook.md`](../runbooks/release-standing-runbook.md)
-holds what every release repeats, the release's `vX-Y-Z-rollout.md` holds only that
-release's delta (identity, migrations, new routes and checks, exceptions, owner
-decisions), and a shipped release's runbook freezes as history when its final tag is
-cut. Every production data change ships as a migration (owner, 2026-10-09), so a
-release's data delta is its migration list. The runbook must:
+## 6. The tracking issue
 
-- open with an **Inherits the standing runbook** section that names the commit of
-  [`release-standing-runbook.md`](../runbooks/release-standing-runbook.md) it was
-  written against and lists every **Exception** with reason, approving owner and
-  restoring issue (§1). Standing checks are cited by ID, never restated,
-- add only **release-specific** checks of its own, each placed after the standing
-  check of the same phase,
-- state the release identity and the delta it introduces,
-- list go/no-go gates that map directly to §4,
-- provide a preflight script or checklist,
-- provide step-by-step cutover commands, with destructive or irreversible
-  steps explicitly marked,
-- provide post-cutover verification steps,
-- be executed by `bun run release:run` from the control machine (D61). The runbook describes
-  the runner's steps; it lists no command for a person to paste on a host. Every step names
-  its script, its standing check IDs, and whether it is irreversible. Every claim is
-  verified against a specific commit SHA rather than described from memory,
-- run every database operation through a committed script with a receipt. A hand-written
-  `psql` line is a missing script,
-- **use the adopted spec's database interface for new tooling**, rather than
-  reconstructing a rehearsal with ad hoc lower-level commands. Remote connection
-  is the default; `--local blank|dump|volume` selects local state. A twin is a use
-  case, not a `--db` mode. Legacy release commands remain tied to their exact code
-  version and must not be copied forward as design requirements,
-- **sequence tools; never let one tool stand in for another.** A runbook names
-  which tool performs each step and which role it holds
-  ([smoke production spec](./smoke-production-spec.md)). A step the runbook cannot name a tool for —
-  "watch the logs", "confirm it migrated" — is a tool that is missing, and the
-  runbook says so rather than asking an operator to do it by eye.
-
-By convention the runbook lives on the release's `releases-A.B.x` branch,
-alongside the code it describes cutting over to, so a runbook change and the
-release content it documents move together.
-
-Filenames under `docs/runbooks/` are kebab-case
-(`scripts/lint-docs.sh` enforces this repo-wide for `docs/*.md` and
-`docs/runbooks/*.md`).
-
-## 6. Per-release GitHub tracking issue
-
-Each release has one GitHub tracking issue carrying the label
-`release:vX.Y.Z`. The tracking issue states the release's **objective**: the
-end state the upgrade is meant to reach — which features should be live, what
-state the database should be in — not just a list of merged PRs.
-
-The issue carries two GitHub-checkbox checklists:
-
-- a **preflight checklist**, mirroring the runbook's go/no-go gates and
-  dry-run steps,
-- a **postflight checklist**, mirroring the runbook's post-cutover
-  verification steps.
-
-Checking a box on the tracking issue is a claim that the corresponding gate
-in the runbook was actually executed and passed — the issue is a state
-summary derived from real runbook execution, never ticked off independent of
-it.
-
-The Phases tasklist is not just status tracking: it is the hard precondition
-checked before preflight is allowed to start — see §4.1.
+Each release has one GitHub tracking issue labelled `release:vX.Y.Z`. It states the objective: the
+end state, not a list of PRs. Its Phases tasklist is the precondition §4.1 checks. A box ticked there
+claims the gate ran and passed.
 
 ## 7. Backporting
 
-**Not a go/no-go gate.** §4's workflow never checks backport debt, and an
-outstanding backport is never a reason to hold up, fail, or re-run any step
-of the rollout. Backporting is engineering hygiene owed once `vA.B.C` is
-tagged and `releases-A.B.x` stops being the active release line — it is a
-concern for whoever picks up work on `main` next, not for the agent executing
-the rollout.
-
-Every fix made on a QA branch during a release reaches `releases-A.B.x` in the
-stage-passed squash (§2 route (b)). It is carried back to `main` outside this
-runbook's flow, by a separate PR from the QA branch. It is never assumed for
-`main`: `main` may have moved past that release's lifecycle. Only after stage has
-proven the fix does that PR evaluate it against `main`.
-
----
+Not a gate. Every fix made on a QA branch reaches the release branch in the stage-passed squash
+(§2 route (b)), and reaches `main` afterwards by a separate PR from the QA branch, evaluated against
+`main` as it is then.
 
 ## 8. Compatibility contract
 
-Database schema identity, manifest integrity, migration metadata and code/schema
-compatibility are defined by [smoke production spec §§8–9](./smoke-production-spec.md#8-schema).
-This policy preserves release gates and the evidence needed to judge a change; it
-does not define a second migration runner or deployment order.
+Schema identity, manifest integrity, migration metadata and code/schema compatibility are defined by
+[smoke production spec §§8–9](./smoke-production-spec.md#8-schema). "Additive" means older supported
+code keeps its query behavior, data meaning, bootstrap assumptions and required grants; adding a
+column alone does not establish it. A rolling release depends on it: the previous release serves
+against the new schema between R6.3 and R6.7a. API changes stay additive where possible, and the
+site served during an API change must accept both API versions (`apiRange`).
 
-### 8.1 Database compatibility
+## 9. Standing check IDs
 
-Every migration declares compatibility metadata that the deployed code
-understands. “Additive” means older supported code preserves its query behavior,
-data meaning, bootstrap assumptions and required grants. Adding a column alone
-does not establish compatibility. The adopted spec's manifest and migration
-ledger are the source for schema identity and compatibility checks.
+Every step of a template names the standing checks it satisfies. A check leaves this list only by a
+recorded owner decision.
 
-A breaking migration needs an explicit release plan that identifies affected
-code, data and privileges, the order of changes, verification, and a rehearsed
-recovery path. Do not assume the database may safely run ahead of every code
-version. Do not use ordering discipline as a replacement for runtime integrity
-or compatibility checks. Migrations run transactionally as specified in §8.3;
-the old `-- no-transaction` proposal is retired.
+| ID | Check | Steps |
+|---|---|---|
+| SP.1 | Position: which release, which commit, which phase; clean checkouts | R1.1–R1.6 |
+| SP.2 | Backup taken and restore proven, with the restore time | R2.1, R2.2, R2.4r |
+| SP.3 | The ledger reconciles with `backend/migrations` and the running tag's bytes (D67) | R1.2, R2.3 |
+| SP.4 | Smoke preflight: role auth, privileges, manifest, compat, `~/.env` keys, identity | R6.7a |
+| SP.5 | Log baseline, triaged before the cutover | R2.5 |
+| SP.6 | Product baseline: row counts and database size | R2.3 |
+| SP.7 | CI green on the commit | preflight `P.ci` |
+| SP.8 | Production runs only what stage passed: same step-list hash, same tree, every step ok | preflight `P.stage` |
+| SR.0 | Stage's starting dump at most 24 hours old | `stage-target up` |
+| SC.1 | Recovery decided and signed before the cutover | the go's `recovery` |
+| SC.3 | The operator's go is recorded before the run | `--go` |
+| SC.4 | The website never goes down: every probe answer 200, no gap | C0, C9 |
+| SC.5 | Rolling upgrade: additive migrations under the running release, services one at a time, website-server kept, valid tokens kept | R2.3, R6.3, R6.5, R6.7a, R6.10 |
+| SV.1 | Identity: `/api/version` and `/version.json` carry the commit and the rc tag | R7.1 |
+| SV.2 | Smoke status: preflight and readiness green | R6.9 |
+| SV.3 | Product verification, readonly tier | R7.3 |
+| SV.4 | Log verdict after the release | R7.3a |
+| SV.5 | Row counts only grow; the database did not balloon | R7.5 |
+| SV.6 | `~/.env` allowlist, no Docker socket mount, token files 0600 | R6.2, R7.7 |
+| SW.1 | The soak: logs since READY graded, schedule parity | W1, R7.4a |
+| SW.2 | The standing invariants over the soak (§10) | R7.3b, W2 |
+| SW.3 | The version tag at the cutover's start | C1 |
+| SW.4 | Every container's logs and inspect since READY in the journal | W3 |
 
-The release runbook must cite the CI evidence required by the adopted spec:
-snapshot/migration equivalence, supported populated upgrades, and compatibility
-of older supported code with additive changes. It must not claim those checks
-passed unless the corresponding implementation and evidence exist at the release
-commit.
+Retired: SC.2 (2026-10-08, replaced by the go, D61).
 
-### 8.2 API and consumer compatibility
+## 10. The standing invariants (SW.2)
 
-Keep API response changes additive where possible. A consumer must not send a
-new request field until the accepting API is deployed. If a breaking route or
-field change is necessary, the release plan must identify affected clients and
-workers, the replacement contract, and how old consumers are handled. These are
-release compatibility principles; they do not authorize the Kubernetes/Pages
-topology or deployment sequencer described in retired proposals.
+These read-only invariants hold on every healthy stack, at every gate. They run as ONE
+instance-aware script, `bun run soak:checks` (`scripts/standing-soak.ts`, decisions in
+`scripts/lib/gate/standing.ts`), beside `twin:gate` and `prod:gate`. Like the gates it takes
+`--instance`, reads the stack record, runs every query through the instance's api container on a
+read-only session, reads container logs and `docker inspect`, and holds no admin token, no
+superuser and no Docker socket. T0 is the instant the stack became READY (`--since`). Run it once
+with `--record` at READY: R8.d and R8.p compare with that baseline (without one R8.p FAILS and
+R8.d is unverified). `--full` adds the slow vintage join of R8.l. Every check has a unit test with
+a red control (`scripts/tests/unit/standing-soak.test.ts`). The runner records the baseline at R7.3b and runs the full check over the soak at W2.
 
-### 8.3 Authority
+| Id | Invariant | Status | Note |
+|---|---|---|---|
+| R8.a, R8.b | Scheduled regime and research runs each produced their output artifact | script | The cron is read from the `analytics-producer` container's `PRODUCER_REGIME_CRON` and `PRODUCER_RESEARCH_CRON`. Compose defaults to daily (22:30, 23:00). Production runs every 3 h (:30, :00), so the 3 h cadence holds only if the boot sets those variables (the `--static-port` boot does). A cron the script cannot expand is a WARN |
+| R8.c | No producer failure line since T0 | script | Also matches the day-roll regime failure line (1108) |
+| R8.d | Ledger growth stays inside the recorded baseline | script | Baseline from `--record`, in the instance state directory (`soak-baseline.json`) |
+| R8.e | Writers record only real changes: no noise-only revisions, no `unchanged` rows | script | |
+| R8.f | Parity sweeps: none dead, longest under the api statement timeout | script | |
+| R8.g | Website server errors: none, or only warned | script | |
+| R8.h, R8.i | Quorum excludes the judge. Every published session has takes, a judgement and a receipt | script | |
+| R8.j | No session wedged past its window plus grace | script | |
+| R8.k, R8.k2 | Every ledger guard armed. The old payload table stays gone | script | |
+| R8.l | Newest vintage: run lengths add up to the member count | script | |
+| R8.m | No connection-pool starvation (sessions idle in a transaction) | script | `pg_stat_activity` shows the api role only its own sessions, so the detail says how many of the open sessions it could see |
+| R8.n | Host disk | script | `df /` on the host the script runs on |
+| R8.n2 | No container's writable layer is over 2 GB | script | `docker inspect --size` (`SizeRw`) for every project container. Issue 1258: the HTTP fetch cache grew to 20 GB in one worker's writable layer while R8.n still passed. An unreadable size is a FAIL |
+| R8.n3 | Host free disk has not fallen more than 2 GB since the baseline | script | The baseline's free space comes from `--record`. A baseline without it (recorded before this check) is a WARN until the next `--record` |
+| R8.p | `schema_migrations` equals the recorded baseline | script | Baseline recorded at READY with `--record`, so a release's own migrations are in it. §1: the ledger is the record of every data change |
+| R8.q | Judge config: enforce, pinned model, third parties off | script | The pin is `deepseek-v4.1-flash` (migration 0111). The two pre-0111 ids are a WARN, valid only before 0111 applies |
+| R8.r | Role and grant integrity: `rm_worker` INSERTs, the api connects as `rm_app`, `rm_readonly` reads sequences | script | Graded on a production (`external`) stack only. A twin's dump carries no grants |
+| R8.s | `/health` and the judgements route answer 200 | script | Probes the api at the stack record's port. `--base-url` probes the public origin instead |
+| R8.t | Every published session has `openedAt` | script | Sessions dated on or after `--opened-at-from` (default 2026-09-22) |
+| R8.u | Api: no cut-off at the request limit on a reader, every slow request listed | script | R8.u2 lists slow requests as a WARN. The api's limit is 10 s and a request over 5 s is logged |
+| R8.v | The buyback scan never fails on a refused range | script | Reads every `worker-*` lane, not one named container |
+| R8.w | Gecko tier matches the key, no 429/401/403, the key is in no ledger row or api/website environment | script | Key presence is read from `docker inspect`; no value is ever printed. R8.w2 and R8.w3 are its error and containment halves |
+| R8.x | The regime day is logged | script | `regime asof D` is logged from the `analytics-producer` container, so each line is compared with its own Docker timestamp |
+| R8.o | Informational: error-like lines per container | script | INFO by design: it never fails. The gates classify the lines |
 
-[Smoke production spec](./smoke-production-spec.md) owns deployment, migration,
-target identity and schema-preflight mechanics. This document owns release gates,
-phases, reports, approval and compatibility evidence. The exact implementation
-and its status are determined by the code at the release commit.
-
-## 9. Tracking upcoming releases
-
-The GitHub Plan issue is the canonical execution queue; this document does not
-create a parallel `next` deployment plan. Adoption of the smoke production
-specification does not schedule implementation or establish that its interfaces
-exist.
-
-Create a release-specific runbook when a release is scheduled and its tools are
-implemented. It must name the exact code commit and commands it verifies, follow
-this policy's gates, and agree with the adopted specification. Do not copy
-commands, migration procedures, or runbook templates from retired release
-runbooks. If a required tool or gate is not implemented, record that gap and
-keep the production cutover blocked.
+A query that errored never reads as a pass: a read that fails is a FAIL of the check that needed it.
+A release that adds an invariant adds a row here, with its red-control test, in the same pull request
+(§9).

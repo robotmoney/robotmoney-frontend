@@ -117,19 +117,6 @@ if [ -n "$migrator_hits" ]; then
   done <<<"$migrator_hits"
 fi
 
-# 6. the release runbook's step table is generated from the kitchen-sink template
-#    (bun scripts/release/steps-table.ts), and no runbook row names a step the
-#    list lacks. Skipped when bun is absent; the unit suite holds the same rule
-#    (scripts/tests/unit/release-steps-table.test.ts). Skipped too in a
-#    docs-only copy of the tree, where the tool is absent.
-if command -v bun >/dev/null 2>&1 && [ -f scripts/release/steps-table.ts ] && [ -f docs/runbooks/release-run.md ]; then
-  bun scripts/release/steps-table.ts --check docs/runbooks/release-run.md >/dev/null || err "docs/runbooks/release-run.md: stale step table (bun scripts/release/steps-table.ts --write docs/runbooks/release-run.md)"
-  for f in docs/runbooks/release-run.md docs/runbooks/v0-6-1-rollout.md docs/runbooks/v0-6-2-rollout.md; do
-    [ -f "$f" ] || { err "$f is missing (issue 1261: the delta runbooks)"; continue; }
-    bun scripts/release/steps-table.ts --check-ids "$f" >/dev/null || err "$f names a step that is not in the kitchen-sink template"
-  done
-fi
-
 # 7. The 2026-10-09 rule "production data changes only through a migration" is
 #    a recorded decision (D66, issue 1312), and no current doc still says a
 #    subject's scheduling columns change "only through the admin API": that

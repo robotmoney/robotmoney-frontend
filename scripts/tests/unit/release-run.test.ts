@@ -21,8 +21,8 @@
 //   - issue 1272: the runner holds no past-upgrade fact. The ledger is judged
 //     against backend/migrations by filename set, never against a baseline
 //     constant or a count; a target carries no `legacy` block, previous commit
-//     or tmux session; R6.1 stops whatever the smoke state names with
-//     smoke:down; the one-time v0.6.0 cutover steps are gone from the list;
+//     or tmux session; the cutover is rolling and stops nothing (owner,
+//     2026-10-14); the one-time v0.6.0 cutover steps are gone from the list;
 //     the recorded step-list hash in the runbook equals the computed one.
 // Nothing here opens an ssh connection: the runner's exec is injected.
 import { describe, expect, test } from "bun:test";
@@ -39,15 +39,13 @@ import { STAGE_TARGET } from "../../release/stage-target-lib.ts";
 import { parseArgs, receiptPathsInOutput, resolveGo, runRelease, type RunnerDeps } from "../../release/run.ts";
 import { checkAfterPreflight, ciProblems, laneOf, preflightOrder, preflightSteps, REQUIRED_CI, type PreflightReport } from "../../release/preflight.ts";
 import { TIMED_OUT } from "../../release/step-exec.ts";
-import { downtimeSeconds, skipReason } from "../../release/run.ts";
+import { cutoverSeconds, skipReason } from "../../release/run.ts";
 import { DEFAULT_MAX_MINUTES, maxMillisOf } from "../../release/steps.ts";
 import { partitionEnv } from "../../release/env-rewrite.ts";
 import { compareBaseline } from "../../release/compare-baseline.ts";
 import { exposesPostgresUrl, keysOutsideAllowlist, othersCanTraverse, scanForPostgresUrls, socketMounts, tokenFileProblems } from "../../release/host-guards.ts";
-import { noStackRefusal, runStop, smokeDownArgv, type StopDeps } from "../../release/stop-legacy.ts";
 import type { StackStateRecord } from "../../lib/smoke-state.ts";
 import { ledgerNotInRepo, ledgerProblems, parseRunningVersion, reconcileLedger, repoMigrations, runningPinRef } from "../../release/ledger.ts";
-import { recordedHash } from "../../release/steps-table.ts";
 import { checkAddOnly, loadTemplate, type ReleaseRunbook, type RunbookStep } from "../../release/runbook.ts";
 import { nextRcTag, rcTagsAt } from "../../release/tag.ts";
 import { epochProblems, inFlightCloseProblems, inFlightProblems, inFlightProblemsFor, parseSessionsFlag, paritySweep, regimeCronProblems } from "../../release/schedule-parity.ts";
@@ -232,7 +230,7 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(stepListHash(without)).not.toBe(stepListHash());
   });
 
-  test("the hash is the same for stage and prod; the runbook records it; the one-time v0.6.0 steps are gone (issue 1272)", () => {
+  test("the hash is the same for stage and prod; the one-time v0.6.0 steps are gone (issue 1272)", () => {
     expect(stepListHash()).toMatch(/^[0-9a-f]{64}$/);
     expect(stepListHash([...RELEASE_STEPS])).toBe(stepListHash());
     const ids = stepIds();
@@ -240,9 +238,6 @@ describe("one step list for every target (D61 rule 2)", () => {
     for (const s of RELEASE_STEPS) {
       for (const c of s.cmds) expect(c.join(" "), s.id).not.toMatch(/credentials-init|rebind-members|\bretire\b|tmux|--legacy|--session(?!s)|--project\b/);
     }
-    // The deliberate record: docs/runbooks/release-run.md carries the computed hash (steps-table.ts --write keeps it).
-    const doc = readFileSync(join(repoRoot, "docs", "runbooks", "release-run.md"), "utf8");
-    expect(recordedHash(doc)).toBe(stepListHash());
     // red control: a stage journal at the previous list's hash no longer satisfies SP.8.
     const OLD_HASH = "7c8b4bd9a0a4c43ea92dbf4b7ef4b0c0d30c6a0a65ab6d1f40c8c7f5d0a1e9b2";
     expect(OLD_HASH).not.toBe(stepListHash());
@@ -285,7 +280,7 @@ describe("one step list for every target (D61 rule 2)", () => {
       const values = templateValues(t, SHA, "20261008T000000Z");
       const own = [...Object.entries(values).filter(([k]) => k !== "target" && k !== "release").map(([, v]) => v), t.host, t.capture.host]
         .filter((v) => v.length >= 3);
-      const carriesValue = (w: string) => /^[A-Z_]+=/.test(w) || /robotmoney-release\/|rm-backup-/.test(w) || own.some((v) => w.includes(v));
+      const carriesValue = (w: string) => /^[A-Z_]+=/.test(w) || /robotmoney-release\/|rm-backup-/.test(w) || w === t.name || own.some((v) => w.includes(v));
       return steps.map((s) => renderStep(s, t, values).remote.split(" && ").map((seg) => seg.split(" ").filter((w) => !carriesValue(w)).join(" ")));
     };
     expect(shape(prod)).toEqual(shape(stage));
@@ -335,16 +330,16 @@ describe("one step list for every target (D61 rule 2)", () => {
 
   test("the prod-only tag is data: the hash is shared, and dropping onlyFor changes it; the rc is no step (D64)", () => {
     const tags = RELEASE_STEPS.filter((s) => s.onlyFor === "prod").map((s) => s.id);
-    expect(tags).toEqual(["W3"]);
-    expect(RELEASE_STEPS.filter((s) => s.host === "control").map((s) => s.id)).toEqual(["W3"]);
+    expect(tags).toEqual(["C1"]);
+    expect(RELEASE_STEPS.filter((s) => s.host === "control").map((s) => s.id)).toEqual(["C0", "C1", "C9"]);
     expect(RELEASE_STEPS.some((s) => s.id === "R5.rc" || s.cmds.some((c) => c.includes("rc")))).toBe(false);
-    const unmarked = RELEASE_STEPS.map((s) => (s.id === "W3" ? { ...s, onlyFor: undefined } : s));
+    const unmarked = RELEASE_STEPS.map((s) => (s.id === "C1" ? { ...s, onlyFor: undefined } : s));
     expect(stepListHash(unmarked)).not.toBe(stepListHash());
     const ids = stepIds();
-    expect(ids.indexOf("R2.5")).toBe(ids.indexOf("R6.1") - 1);
+    expect(ids.indexOf("R2.5")).toBe(ids.indexOf("C0") - 1);
     expect(ids.indexOf("R2.4r")).toBe(ids.indexOf("R2.2") + 1);
-    expect(ids.slice(-3)).toEqual(["W1", "R7.4a", "W3"]);
-    expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["W1", "R6.9", "watchHours"], ["R7.4a", "R6.9", "watchHours"]]);
+    expect(ids.slice(-4)).toEqual(["W1", "W2", "R7.4a", "W3"]);
+    expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["W1", "R6.9", "watchHours"], ["W2", "R6.9", "watchHours"], ["R7.4a", "R6.9", "watchHours"], ["W3", "R6.9", "watchHours"]]);
     // red control: W1 never hard-codes deferral; the target's watchSessions decides, since READY.
     const w1 = RELEASE_STEPS.find((s) => s.id === "W1")!.cmds[0]!;
     expect(w1).not.toContain("--defer-sessions");
@@ -635,6 +630,8 @@ const PREFLIGHT_ANSWERS: Record<string, { code: number; stdout: string }> = {
   [`git rev-parse --verify --quiet '${TAG}^{commit}'`]: { code: 0, stdout: `${SHA}\n` },
   "gh api": { code: 0, stdout: `${GREEN_CI}\n` },
   "docker ps -q": { code: 0, stdout: "0\n" },
+  // Stage's P.lockfile: a fresh resolve gives the committed lockfiles.
+  "lockfile.ts check": { code: 0, stdout: "fresh\n" },
 };
 
 function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string; answers?: Record<string, { code: number; stdout: string }> } = {}) {
@@ -945,7 +942,7 @@ describe("baseline and comparison (R2.3, R7.5)", () => {
   });
 });
 
-describe("host guards, the stop and identity (R6.1, R7.1, R7.7)", () => {
+describe("host guards, the rolling cutover and identity (R6.3, R7.1, R7.7)", () => {
   test("a container mounting the Docker socket is named; a clean one is not", () => {
     expect(socketMounts([
       { Name: "/rm_prod-api-1", Mounts: [{ Source: "/data", Destination: "/data" }] },
@@ -957,54 +954,28 @@ describe("host guards, the stop and identity (R6.1, R7.1, R7.7)", () => {
     expect(keysOutsideAllowlist(["host", "rm_owner", "ADMIN_TOKEN"])).toEqual(["ADMIN_TOKEN"]);
     expect(tokenFileProblems([{ path: "a", mode: 0o100600 }, { path: "b", mode: 0o100644 }, { path: "c", mode: null }])).toEqual(["b is mode 644, not 600", "c is missing"]);
   });
-  test("R6.1 renders as the stop helper over the instance, whose one command is bun run smoke:down --instance <instance>, on both targets (issue 1272)", () => {
+  test("the cutover is rolling: no step stops the stack, the probe brackets it, and the version tag follows the first irreversible step (owner, 2026-10-14)", () => {
+    const ids = RELEASE_STEPS.map((s) => s.id);
+    for (const s of RELEASE_STEPS) {
+      for (const c of s.cmds) expect(c.join(" "), s.id).not.toMatch(/smoke:down|stop-legacy|compose down|\bdown\b/);
+    }
+    expect(ids).not.toContain("R6.1");
+    expect(RELEASE_STEPS.find((s) => s.irreversible)?.id).toBe("R6.3");
+    expect(RELEASE_STEPS.filter((s) => s.irreversible).map((s) => s.id)).toEqual(["R6.3"]);
+    // The probe starts before the first irreversible step and is graded after the site switch.
+    expect(ids.indexOf("C0")).toBeLessThan(ids.indexOf("R6.3"));
+    expect(ids.indexOf("C9")).toBeGreaterThan(ids.indexOf("R6.10"));
+    expect(ids.indexOf("C9")).toBeGreaterThan(ids.indexOf("R6.7a"));
+    // The version tag is cut as soon as the cutover starts (D70), on prod only.
+    expect(ids.indexOf("C1")).toBe(ids.indexOf("R6.3") + 1);
+    expect(RELEASE_STEPS.find((s) => s.id === "C1")!.onlyFor).toBe("prod");
     for (const name of ["prod", "stage"]) {
       const t = loadTarget(join(targetsDir, `${name}.json`));
-      const r = renderStep(RELEASE_STEPS.find((s) => s.id === "R6.1")!, t, templateValues(t, SHA, "20261008T000000Z"));
-      expect(r.remote).toContain(`bun scripts/release/stop-legacy.ts stop --instance ${t.instance} --receipt-dir`);
-      expect(r.remote).not.toMatch(/--session|--project|--legacy-checkout|--compose-files|tmux/);
-      expect(smokeDownArgv(t.instance)).toEqual(["bun", "run", "smoke:down", "--instance", t.instance]);
-      expect(smokeDownArgv(t.instance).join(" ")).toBe(`bun run smoke:down --instance ${t.instance}`);
+      const boot = renderStep(RELEASE_STEPS.find((s) => s.id === "R6.7a")!, t, templateValues(t, SHA, "20261008T000000Z")).remote;
+      expect(boot).toContain(`bun run smoke --static-port --instance ${t.instance}`);
     }
-    expect(RELEASE_STEPS.find((s) => s.id === "R6.1")!.description).toContain("bun run smoke:down --instance {instance}");
-    expect(smokeDownArgv("rm_prod")).not.toContain("-v");
   });
 
-  test("the R6.1 stop helper refuses, non-zero, when the fixture state names no stack; it stops and writes a receipt when it names one", () => {
-    // The real script against a fixture state root with no stack record: exit 1, the message names the absent state.
-    const root = mkdtempSync(join(tmpdir(), "release-stop-"));
-    const receipts = join(root, "receipts");
-    const r = spawnSync("bun", [join(repoRoot, "scripts/release/stop-legacy.ts"), "stop", "--instance", "rm_fixture", "--receipt-dir", receipts],
-      { env: { ...process.env, RM_SMOKE_STATE_ROOT: join(root, "state"), HOME: root }, encoding: "utf8", timeout: 60_000 });
-    expect(r.status).toBe(1);
-    expect(r.stderr).toContain("the smoke state of instance rm_fixture names no stack");
-    expect(r.stderr).toContain("stack-state.json");
-    const receipt = JSON.parse(readFileSync(join(receipts, "stop-legacy.json"), "utf8")) as { project: string | null; downExit: number | null; problems: string[] };
-    expect(receipt.project).toBeNull();
-    expect(receipt.downExit).toBeNull();
-    expect(receipt.problems).toHaveLength(1);
-    // The helper's decision with the state naming a stack: smoke:down runs once, no container remains, no problem.
-    const ran: string[][] = [];
-    const record = { instance: "rm_prod", project: "rm_prod", composeFiles: "docker-compose.yml", createdAt: "2026-10-08T00:00:00.000Z" } as unknown as StackStateRecord;
-    const deps: StopDeps = {
-      readStack: () => ({ stateFile: "/root/.local/state/robotmoney-smoke/rm_prod/stack-state.json", record }),
-      run: (argv) => { ran.push([...argv]); return 0; },
-      projectContainers: () => [],
-      log: () => {}, error: () => {},
-    };
-    const ok = runStop("rm_prod", deps);
-    expect(ok.problems).toEqual([]);
-    expect(ok.project).toBe("rm_prod");
-    expect(ok.command).toBe("bun run smoke:down --instance rm_prod");
-    expect(ran).toEqual([["bun", "run", "smoke:down", "--instance", "rm_prod"]]);
-    // red controls: a remaining container, a failed smoke:down, and the pure refusal.
-    expect(runStop("rm_prod", { ...deps, projectContainers: () => ["rm_prod-api-1"] }).problems.join()).toContain("rm_prod-api-1");
-    expect(runStop("rm_prod", { ...deps, run: () => 3 }).problems.join()).toContain("exited 3");
-    expect(noStackRefusal("rm_prod", "/s/stack-state.json", null)).toContain("names no stack");
-    expect(noStackRefusal("rm_prod", "/s/stack-state.json", record)).toBeUndefined();
-    const none = runStop("rm_prod", { ...deps, readStack: () => ({ stateFile: "/s/stack-state.json", record: null }), run: () => { throw new Error("must not run"); } });
-    expect(none.problems).toHaveLength(1);
-  }, 60_000);
   test("identity: the commit must be served, without +dirty", () => {
     expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: SHA }), `{"commit":"${SHA}"}`, SHA)).toEqual([]);
     expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: OTHER_SHA }), `{"commit":"${SHA}+dirty"}`, SHA).length).toBe(2);
@@ -1094,19 +1065,19 @@ describe("watch steps, prod-only steps and the recovery go key", () => {
     expect(later.ran).toEqual(["W1"]);
   });
 
-  test("the committed stage target watches 15 minutes (owner decision 2026-10-08)", async () => {
+  test("the committed stage target soaks 30 minutes (owner, 2026-10-14)", async () => {
     const steps: StepTemplate[] = WATCHED.map((s) => (s.id === "W1" ? { ...s, notBefore: { afterStep: "R6.9", hours: "watchHours" } } : s));
     const f = fixture("stage");
     const early = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], early.deps, steps)).toBe(3);
-    expect(early.logs.join("\n")).toContain("W1 becomes runnable at 2026-10-08T12:15:00.000Z");
-    // red control: one second before READY + 15 min nothing runs.
+    expect(early.logs.join("\n")).toContain("W1 becomes runnable at 2026-10-08T12:30:00.000Z");
+    // red control: one second before READY + 30 min nothing runs.
     const before = fakeDeps();
-    before.deps.now = () => new Date("2026-10-08T12:14:59Z");
+    before.deps.now = () => new Date("2026-10-08T12:29:59Z");
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], before.deps, steps)).toBe(3);
     expect(before.ran).toEqual([]);
     const later = fakeDeps();
-    later.deps.now = () => new Date("2026-10-08T12:15:01Z");
+    later.deps.now = () => new Date("2026-10-08T12:30:01Z");
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], later.deps, steps)).toBe(0);
     expect(later.ran).toEqual(["W1"]);
   });
@@ -1223,9 +1194,9 @@ describe("W1's attendance threshold is target data, not a template change", () =
 });
 
 
-// R1.2 proves every ~/.env key the cutover needs before R6.1 stops the running
-// stack: production's /root/.env once lacked rm_owner, and a run that stopped
-// the site and then refused at R6.2 would have left it down. The runbook uses
+// R1.2 proves every ~/.env key the cutover needs before R6.3 starts it:
+// production's /root/.env once lacked rm_owner, and a run that migrated and
+// then refused at R6.2 would have stopped mid-cutover. The runbook uses
 // rm_owner only; no release step reads doadmin (D61 amendment, owner, 2026-10-08).
 describe("the cutover's ~/.env keys are proven at R1.2, before the first irreversible step", () => {
   const ENV_PATH = "/root/.env";
@@ -1269,9 +1240,9 @@ describe("the cutover's ~/.env keys are proven at R1.2, before the first irrever
     return check >= 0 && check < firstIrreversible(steps);
   };
 
-  test("every precondition check precedes the first irreversible step (R6.1)", () => {
+  test("every precondition check precedes the first irreversible step (R6.3)", () => {
     expect(RELEASE_STEPS[keyCheckIndex(RELEASE_STEPS)]?.id).toBe("R1.2");
-    expect(RELEASE_STEPS[firstIrreversible(RELEASE_STEPS)]?.id).toBe("R6.1");
+    expect(RELEASE_STEPS[firstIrreversible(RELEASE_STEPS)]?.id).toBe("R6.3");
     expect(keysCheckedFirst(RELEASE_STEPS)).toBe(true);
     // R6.2, the defence-in-depth check, needs only keys R1.2 checked or the run wrote.
     for (const key of D61_REQUIRED_KEYS) expect(PRE_CUTOVER_REQUIRED_KEYS.includes(key) || key in RUN_WRITTEN_KEYS, key).toBe(true);
@@ -1281,10 +1252,10 @@ describe("the cutover's ~/.env keys are proven at R1.2, before the first irrever
     expect(r12.description).not.toContain("R6.2a");
   });
 
-  test("red: R1.2 moved after R6.1, or R1.2 without --confirm-target, fails the order check", () => {
+  test("red: R1.2 moved after R6.3, or R1.2 without --confirm-target, fails the order check", () => {
     const r12 = RELEASE_STEPS.find((s) => s.id === "R1.2")!;
     const without = RELEASE_STEPS.filter((s) => s.id !== "R1.2");
-    const r61 = without.findIndex((s) => s.id === "R6.1");
+    const r61 = without.findIndex((s) => s.id === "R6.3");
     expect(keysCheckedFirst([...without.slice(0, r61 + 1), r12, ...without.slice(r61 + 1)])).toBe(false);
     const noConfirm = { ...r12, cmds: [r12.cmds[0]!.filter((a, i, all) => a !== "--confirm-target" && all[i - 1] !== "--confirm-target")] };
     expect(keysCheckedFirst(RELEASE_STEPS.map((s) => (s.id === "R1.2" ? noConfirm : s)))).toBe(false);
@@ -1362,7 +1333,7 @@ describe("preflight", () => {
     JSON.parse(readFileSync(join(f.journalRoot, target, "preflight-20261008T120000Z", "preflight.json"), "utf8")) as { exit: number; checks: { id: string; status: string; detail: string }[] };
   const status = (r: ReturnType<typeof report>, id: string) => r.checks.find((c) => c.id === id)?.status;
 
-  test("the real step list: the preflight runs R1.1 to R2.5, never R6.1 or anything after", () => {
+  test("the real step list: the preflight runs R1.1 to R2.5, never R6.3 or anything after", () => {
     const ids = preflightSteps(RELEASE_STEPS).map((s) => s.id);
     expect(ids).toEqual(["R1.1", "R1.2", "R1.3", "R1.4", "R1.5", "R1.6", "R2.1", "R2.2", "R2.4r", "R2.3", "R2.5"]);
     expect(preflightSteps(RELEASE_STEPS).some((s) => s.irreversible || s.host === "control")).toBe(false);
@@ -1629,10 +1600,10 @@ describe("preflight", () => {
     expect(parseArgs(["--target", "stage", "--after-preflight", "x", "--run", "20261008T000000Z"])).toHaveProperty("error");
   });
 
-  test("the downtime window is R6.1's start to R6.9's end, journaled once both passed", () => {
+  test("the cutover window is R6.3's start to R6.9's end, journaled once both passed", () => {
     const ok = (startedAt: string, endedAt: string) => ({ id: "x", status: "ok" as const, exit: 0, expectExit: 0, startedAt, endedAt, receipts: [], attempt: 1 });
-    expect(downtimeSeconds({ steps: { "R6.1": ok("2026-10-08T12:00:00Z", "2026-10-08T12:00:27Z"), "R6.9": ok("2026-10-08T12:02:26Z", "2026-10-08T12:02:29Z") } })).toBe(149);
-    expect(downtimeSeconds({ steps: { "R6.1": ok("2026-10-08T12:00:00Z", "2026-10-08T12:00:27Z") } })).toBeUndefined();
+    expect(cutoverSeconds({ steps: { "R6.3": ok("2026-10-08T12:00:00Z", "2026-10-08T12:00:27Z"), "R6.9": ok("2026-10-08T12:02:26Z", "2026-10-08T12:02:29Z") } })).toBe(149);
+    expect(cutoverSeconds({ steps: { "R6.3": ok("2026-10-08T12:00:00Z", "2026-10-08T12:00:27Z") } })).toBeUndefined();
   });
 
   test("prod: P.stage is red without a passed stage run, green when one exists under the journal root", async () => {

@@ -1660,6 +1660,9 @@ async function main(): Promise<void> {
     migrate: false,
     initialize: producerSeed, deferredServices: ["analytics-producer"],
     beforeStep,
+    // A standing stack (stage and prod, --static-port) is upgraded rolling: one
+    // service at a time, website-server never recreated (owner, 2026-10-14).
+    rolling: staticPortMode,
   }));
 
   // ── Readiness (§6.3) and the receipt (§1.4) ─────────────────────────────

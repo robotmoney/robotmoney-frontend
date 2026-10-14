@@ -17,7 +17,7 @@
 // The ids keep the shape the v0.6.0 runbook introduced: R1 the release
 // identity, R2 the baseline, R6 the cutover, R7 the postflight, W the watch.
 // `standing` names the standing runbook rows each step satisfies
-// (docs/runbooks/release-standing-runbook.md).
+// (docs/technical/release-runbooks.md §9).
 //
 // The list holds no past-upgrade fact (issue 1272): it reads the running
 // system (the ledger against backend/migrations, the stack the host's smoke
@@ -155,7 +155,7 @@ export function notBeforeOf(step: { readonly notBefore?: NotBeforeTemplate }, ta
  * The kitchen-sink template's steps, in order: the general runbook every
  * full-stack release copies (./runbooks/templates/kitchen-sink.yaml, read by
  * ./runbook.ts). A release runs its own runbook, which only adds to it
- * (loadReleaseRunbook). Read docs/runbooks/release-run.md for the table.
+ * (loadReleaseRunbook). The policy is docs/technical/release-runbooks.md.
  */
 export const RELEASE_STEPS: readonly StepTemplate[] = loadTemplate(DEFAULT_TEMPLATE).steps;
 

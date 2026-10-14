@@ -36,11 +36,6 @@ describe("the kitchen-sink template", () => {
     expect(template.steps.every((s) => (s as RunbookStep).added === undefined)).toBe(true);
   });
 
-  test("the runner doc records the template's step-list hash", () => {
-    const doc = readFileSync(join(repoRoot, "docs", "runbooks", "release-run.md"), "utf8");
-    expect(doc).toContain(`Step-list hash: \`${stepListHash(template.steps)}\``);
-  });
-
   test("refuses an unknown key, a missing field, an added step and a duplicate id", () => {
     const text = readFileSync(templatePath("kitchen-sink"), "utf8");
     expect(() => parseTemplate(text.replace('  - id: "R1.3"\n', '  - id: "R1.3"\n    bogus: 1\n'), "kitchen-sink")).toThrow("unknown key bogus");
@@ -66,8 +61,8 @@ describe("a release runbook only adds", () => {
     expect(checkAddOnly(template, runbook(deleted)).join()).toContain("template step R2.5 is missing");
     const edited = template.steps.map((s) => (s.id === "R6.3" ? { ...s, cmds: [[...s.cmds[0]!, "--skip-identity"]] } : s));
     expect(checkAddOnly(template, runbook(edited)).join()).toContain("R6.3 differs from the template's step");
-    const softened = template.steps.map((s) => (s.id === "R6.1" ? { ...s, irreversible: false } : s));
-    expect(checkAddOnly(template, runbook(softened)).join()).toContain("R6.1 differs");
+    const softened = template.steps.map((s) => (s.id === "R6.3" ? { ...s, irreversible: false } : s));
+    expect(checkAddOnly(template, runbook(softened)).join()).toContain("R6.3 differs");
     const reordered = [template.steps[1]!, template.steps[0]!, ...template.steps.slice(2)];
     expect(checkAddOnly(template, runbook(reordered)).join()).toContain("out of the template's order");
     const { added: _a, ...unmarked } = added("X1");
@@ -101,7 +96,7 @@ describe("a release runbook only adds", () => {
     writeFileSync(releaseRunbookPath("v9.9.9", dir), `release: v9.9.9\ntemplate: kitchen-sink\n${steps}`);
     expect(loadReleaseRunbook("v9.9.9", dir).steps.map((s) => s.id)).toEqual(ids);
     const r25 = steps.indexOf('  - id: "R2.5"');
-    const r61 = steps.indexOf("\n  # ── R6 cutover");
+    const r61 = steps.indexOf("\n  # ── C/R6 cutover");
     writeFileSync(releaseRunbookPath("v9.9.9", dir), `release: v9.9.9\n${steps.slice(0, r25)}${steps.slice(r61 + 1)}`);
     expect(() => loadReleaseRunbook("v9.9.9", dir)).toThrow("template step R2.5 is missing");
   });

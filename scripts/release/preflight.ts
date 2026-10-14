@@ -244,13 +244,13 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
         const sj = readJournal(input.stageJournal);
         const refusals = checkStageJournal(sj, { stepListHash: hash, commit, stepIds: ids });
         add("P.stage", refusals.length === 0 ? "green" : "red", refusals.length === 0
-          ? `${input.stageJournal} passed at this commit and step list${sj?.downtimeSeconds !== undefined ? `; its downtime window R6.1 to R6.9 was ${sj.downtimeSeconds} s` : ""}`
+          ? `${input.stageJournal} passed at this commit and step list${sj?.cutoverSeconds !== undefined ? `; its cutover window was ${sj.cutoverSeconds} s` : ""}`
           : refusals.join("; "));
       } else {
         const passed = passedStageJournals(input.root, hash, commit, ids);
-        const dt = passed.length > 0 ? readJournal(passed[0]!)?.downtimeSeconds : undefined;
+        const dt = passed.length > 0 ? readJournal(passed[0]!)?.cutoverSeconds : undefined;
         add("P.stage", passed.length > 0 ? "green" : "red", passed.length > 0
-          ? `passed stage run ${passed[0]} (pass it as --stage-journal)${dt !== undefined ? `; its downtime window R6.1 to R6.9 was ${dt} s` : ""}`
+          ? `passed stage run ${passed[0]} (pass it as --stage-journal)${dt !== undefined ? `; its cutover window was ${dt} s` : ""}`
           : `no passed stage run of step list ${hash.slice(0, 12)} at ${commit.slice(0, 8)} under ${join(input.root, "stage")} (SP.8)`);
       }
     }

@@ -12,8 +12,8 @@
 // carries the lockfile a fresh resolve gives. The hosts then install with
 // `--frozen-lockfile` (R1.3, R1.6): an install never rewrites the tree that
 // R1.2 proved clean. Production inherits the lockfile by tree equality (D70).
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 /** The directories that hold a committed bun.lock, relative to the repository root. */
@@ -47,7 +47,10 @@ export function refresh(root: string): void {
 
 /** Resolve `commit` afresh in a throwaway worktree of `repo`; the problems, empty when its lockfiles are fresh. */
 export function check(repo: string, commit: string): string[] {
-  const dir = mkdtempSync(join(tmpdir(), "rm-lockfile-"));
+  // Under the user's ~/tmp, never a system directory.
+  const parent = join(homedir(), "tmp");
+  mkdirSync(parent, { recursive: true });
+  const dir = mkdtempSync(join(parent, "rm-lockfile-"));
   rmSync(dir, { recursive: true, force: true });
   const add = run(["git", "worktree", "add", "--quiet", "--detach", dir, commit], repo);
   if (add.code !== 0) return [`git worktree add ${commit} failed: ${add.out.trim()}`];

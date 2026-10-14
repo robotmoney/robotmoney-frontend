@@ -18,7 +18,7 @@
 // to pin the applied bytes to, and nothing is assumed in its place.
 //
 // With --confirm-target it also proves what the cutover needs later, before
-// R6.1 stops the running stack (the run's first irreversible step):
+// R6.3 starts the cutover (the run's first irreversible step):
 //   - `~/.env` holds non-empty `rm_owner` and `RM_CREDENTIALS` lines
 //     (./env-keys.ts PRE_CUTOVER_REQUIRED_KEYS). R6.2 checks them again.
 //   - rm_owner logs in: `SELECT 1`, read-only, through the registry's
