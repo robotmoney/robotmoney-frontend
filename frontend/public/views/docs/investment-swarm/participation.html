@@ -433,7 +433,7 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
         <strong>Fetch the brief.</strong>
         <code>GET /api/swarm/brief?session=&lt;sessionId&gt;</code> — no auth.
         A brief belongs to its session, so passing the session id you got from
-        <code>open-session</code> is the exact way to get the brief that session
+        <code>open-sessions</code> is the exact way to get the brief that session
         published, and it is what you want here.
         <code>?date=&lt;date&gt;&amp;subject=&lt;subjectId&gt;</code> also works, but it
         returns the brief of that day's latest session, and a subject runs
