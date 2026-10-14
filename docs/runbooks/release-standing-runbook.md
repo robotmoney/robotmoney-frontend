@@ -69,14 +69,14 @@ unverified, not satisfied.
 | SP.5 | Log baseline: what is already broken, triaged before the cutover | `bun run prod:gate --mode baseline` | prod | script |
 | SP.6 | Product baseline: row counts, published AUM, database size, recorded for the postflight comparison | release runbook R2.4 | prod | manual |
 | SP.7 | Code gate on the RC commit: root and backend typecheck and unit, as CI runs them | release runbook R1 | stage | script |
-| SP.8 | Production runs only what stage passed: a stage run journal with the same step-list hash, at the same commit, with every step ok (D61 rule 2) | `bun run release:run --target prod --stage-journal <dir>` ([`release-run.md`](./release-run.md)) | prod | script |
+| SP.8 | Production runs only what stage passed: a stage run journal with the same step-list hash, on the same tree as the rc tag's commit, with every step ok (D61 rule 2, D70) | `bun run release:run --target prod --stage-journal <dir>` ([`release-run.md`](./release-run.md)) | prod | gap: the runner compares commits, not trees (D70, [`release-run.md`](./release-run.md#pending-runner-changes-d70)) |
 
 ## 4. Phase R — stage rehearsal (policy 4.4 and 4.5)
 
 **QA branch (policy 4.6, owner 2026-10-06).** Every stage session runs on its own
 `qa/A.B.x-<YYYY-MM-DD>` branch cut from the release branch tip. All the session's patches,
 runbook fixes included, merge into that branch. The release branch and `main` take no commit
-during the session. The owner picks what moves afterwards. It reaches the release branch from `main` by cherry-pick or merge. A direct PR from the QA branch onto the release branch is allowed only when the change is incompatible with `main` or fixes a regression on `main`, and the PR body names which (D62). A pushed QA branch is
+during the session. Stage runs a clean, pushed QA branch commit. Once the runbook passes there, the QA branch is squash-merged onto the release branch, whose tree must equal the stage-passed tree, and the rc is cut at the squash commit. The fixes reach `main` afterwards by a separate PR (D70). A pushed QA branch is
 never rewritten (owner 2026-10-07): when the session needs a new base, cut a new branch
 (`qa/A.B.x-<YYYY-MM-DD>-2` on the same day) and leave the old one as it is.
 
@@ -109,7 +109,7 @@ never rewritten (owner 2026-10-07): when the session needs a new base, cut a new
 | SV.6 | No container mounts a Docker socket, `~/.env` holds only allowed keys (D61 adds `rm_owner`; a `doadmin` line is not allowed, amendment 2026-10-08), no container's environment holds `rm_owner` or `doadmin`, token files are mode 0600 | `scripts/release/host-guards.ts` | prod | gap, issue agent-executed runbooks (1225) |
 | SW.1 | Watch until every subject publishes once: every subject opens, agents submit, the judge submits, consensus publishes or reads `no_consensus` | `bun run release:run` W1 (`prod:gate --mode post-release` since READY) and R7.4a (`scripts/release/schedule-parity.ts`), not before READY + the target's `watchHours` (37 h: the longest first epoch, 1.5 × 24 h, plus judging and publish grace; `scripts/release/watch.ts`), sessions graded. A stage target may watch shorter only with `watchSessions: deferred`, which does not satisfy this row | prod | script |
 | SW.2 | Cumulative standing invariants over the soak window (section 7) | `bun run soak:checks --instance rm_prod --since T0 --full` (`--record` once at READY) | prod | script |
-| SW.3 | Tag the running commit and file the production report | `bun run release:run` W3 tags the commit; the report is policy 4.9 | prod | manual |
+| SW.3 | Tag the rc's commit with the version tag as soon as the cutover starts (R6.1), then file the production report | `bun run release:run` W3 tags the commit; the report is policy 4.9 | prod | gap: W3 runs after the watch, not at R6.1 (D70, [`release-run.md`](./release-run.md#pending-runner-changes-d70)) |
 
 ## 6. Changing this file
 

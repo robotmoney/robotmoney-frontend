@@ -5359,7 +5359,7 @@ per-release code edit (owner, 2026-10-09, during the v0.6.1 QA session).
 
 ## D62 — A release branch takes changes only from `main`, or from a QA branch when the change is incompatible with `main` or fixes a regression on `main` (refines policy §2 and §4.6; owner, 2026-10-09)
 
-**Status.** Accepted 2026-10-09.
+**Status.** Accepted 2026-10-09. Amended 2026-10-14 by [D70](#d70).
 
 **Decision.**
 
@@ -5383,7 +5383,7 @@ either already on `main` or has a named reason it cannot be.
 
 ## D63 — A release that reached production gets its version tag unless it was rolled back; failed checks are ticketed against the next patch version (refines policy §3; owner, 2026-10-10)
 
-**Status.** Accepted 2026-10-10.
+**Status.** Accepted 2026-10-10. Amended 2026-10-14 by [D70](#d70).
 
 **Decision.**
 
@@ -5404,7 +5404,7 @@ could not reach W3.
 
 ## D64 — Stage runs a release-branch commit; once it passes, the rc tag is cut there, and production runs only by that rc tag (refines policy §3 and D61; owner, 2026-10-10)
 
-**Status.** Accepted 2026-10-10.
+**Status.** Accepted 2026-10-10. Amended 2026-10-14 by [D70](#d70).
 
 **Decision.**
 
@@ -5664,3 +5664,44 @@ default, a shell export or a profile line. Production v0.5.4 ran as `smoke` and
 persisted fixture projects (issue 1208). Tests take their isolation from an
 ephemeral Postgres and injected credentials; they do not need the server to
 fail open, and a seam armed in one process is a claim the process can verify.
+
+---
+
+<a id="d70"></a>
+## D70 — Stage runs a QA branch; the stage-passed QA branch is squash-merged onto the release branch and the rc is cut there; production runs only by rc tags; the version tag is cut as soon as the cutover starts (supersedes D62 (1)–(2), D63 (3)–(4) and D64 (1)–(2) and (4); owner, 2026-10-14)
+
+**Status.** Accepted 2026-10-14. The runner changes it needs are open
+([`release-run.md`](./runbooks/release-run.md#pending-runner-changes-d70)).
+
+**Decision.**
+
+1. **Stage runs on a QA branch.** Each stage session cuts
+   `qa/A.B.x-<YYYY-MM-DD>` from the `releases-A.B.x` tip. Stage runs a clean,
+   pushed commit of that branch, never a PR head or a fix branch. A pushed QA
+   branch is never rewritten; a new base means a new QA branch.
+2. **Squash after stage passes.** Only after the runbook passes on stage is the
+   QA branch squash-merged onto `releases-A.B.x`. The release branch must not
+   have moved since the QA branch was cut. The squash commit's tree must equal
+   the stage-passed tree.
+3. **The rc is cut at the squash commit.** `vA.B.C-rc.N` names a commit whose
+   tree passed stage. SP.8 and `tag.ts rc` compare tree hashes, not commit
+   hashes.
+4. **Production runs only by rc tags.** The production go names the rc tag.
+5. **A production failure belongs before the cutover.** An rc that fails in
+   production before R6.1 never reaches production. Its fix goes to a new QA
+   branch, stage runs again, and the next rc is `vA.B.C-rc.(N+1)`.
+6. **The cutover makes the version.** As soon as R6.1 starts on production, the
+   rc's commit gets `vA.B.C`. A later failed check, a known defect or a
+   rollback does not withhold or move it. Every defect found after the cutover
+   is an issue against `vA.B.(C+1)`.
+7. **Scope still comes from `main`.** Before a QA session, the release's scope
+   reaches `releases-A.B.x` from `main` by merge or cherry-pick. QA fixes reach
+   `main` afterwards by a separate PR from the QA branch.
+
+**Why.** QA commits are noisy, so the release branch takes one squash per
+stage-passed session. A squash re-hashes the commit, so identity is the tree.
+D64's failure (v0.6.1, 2026-10-10) came from fixes reaching `main` and the
+release branch by different squashes; comparing trees removes that failure
+without forbidding the squash. Tagging at the cutover keeps production from
+ever running a commit no version names, and makes every pre-cutover check the
+place a release can still stop.

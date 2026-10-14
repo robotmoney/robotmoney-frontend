@@ -87,6 +87,23 @@ They run lane by lane. A lane is one host and one checkout path. The cheap lane 
 The journal is `~/.local/state/robotmoney-release/<target>/preflight-<ts>/`: `preflight.json`, `plan.txt` with every remote command, and each step's logs and receipts. It is never a run journal: SP.8 and `--run` refuse it.
 
 A green preflight is the evidence the owner reads before writing the go. A run started within the hour continues from it with `--after-preflight`. A later run repeats R1.1 to R2.5.
+## Pending runner changes (D70)
+
+[D70](../decisions.md#d70) (owner, 2026-10-14) changed the release flow. Stage runs a QA
+branch commit. The stage-passed QA branch is squash-merged onto `releases-A.B.x`, and the rc
+is cut at the squash commit. The version tag is cut as soon as the production cutover starts.
+The runner described below still enforces D64 and D63. Three changes are open, and each is
+a gap that blocks the next release until it lands:
+
+1. **Stage accepts a QA commit.** `P.origin` and the live-run check refuse a stage commit
+   off `origin/releases-A.B.x`. On stage they must accept a commit on `origin/qa/A.B.x-*`.
+2. **Trees, not commits.** SP.8 and `tag.ts rc` compare the rc commit with the stage-passed
+   commit. They must compare tree hashes, and the stage journal must record the tree.
+3. **Tag at the cutover.** W3 runs after the watch. It must tag `vA.B.C` right after R6.1
+   starts, and stay tagged after any later failure or rollback.
+
+The text below describes the runner as it is until those changes land.
+
 ## The go file
 
 The go is the operator's one recorded authorization for the release. It names the

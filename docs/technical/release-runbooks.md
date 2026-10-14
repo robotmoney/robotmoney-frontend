@@ -29,7 +29,8 @@ production.
 ## 1. Scope and authority
 
 **Deployment mechanism:** [Smoke production spec](./smoke-production-spec.md)
-is the sole adopted design (D47; approved for implementation, not yet shipped).
+is the sole adopted design (D47). Production has booted with `bun smoke --static-port`
+since v0.6.0.
 This document owns release policy: gates, phases, evidence and approval. The
 retired D46 mechanism and external `stack`/Kubernetes proposals are not alternate
 ways to implement that design. Release-specific commands must identify the
@@ -51,8 +52,9 @@ different. (3) Every database operation is a committed script with a receipt. (4
 runs from the control machine over SSH with `bun run release:run`; no step asks a person to log
 in to a host and type. A step that breaks a rule is a `gap` that blocks the release.
 
-No release may skip a gate described here unless the release tracking issue
-explicitly records the exception, the reason for it, and operator sign-off.
+No release may skip a gate described here unless the release runbook's
+**Exceptions** list records it, with the reason, the approving owner and the
+issue that restores it (§5).
 
 **Two layers of runbook, and the second adds to the first.** The global
 [standing runbook](../runbooks/release-standing-runbook.md) lists the checks every
@@ -77,14 +79,14 @@ Example: `releases-0.2.x` for the 0.2 line.
 
 Feature PRs never target `releases-A.B.x` directly — ordinary feature work is
 reviewed and merged via PR against `main`, exactly as this document's intro
-paragraph says. Once a release's scope is decided, the branch receives changes
-only by these routes (owner, 2026-10-09, D62):
-(a) default: the fix lands on `main` by PR, then reaches `releases-A.B.x` by
-cherry-pick or merge from `main`;
-(b) exception: a PR from the `qa/A.B.x-<YYYY-MM-DD>` branch directly onto
-`releases-A.B.x`, allowed only when the change is incompatible with `main` or
-fixes a regression that exists on `main`. The PR body names which of those two
-conditions applies (§4.6).
+paragraph says. The branch receives changes by two routes only ([D70](../decisions.md#d70),
+owner, 2026-10-14):
+(a) **scope**: before a QA session starts, the release's scope reaches
+`releases-A.B.x` from `main` by merge or cherry-pick;
+(b) **the stage-passed QA branch**: after the runbook passes on stage at a commit
+of the `qa/A.B.x-<YYYY-MM-DD>` branch, that branch is squash-merged onto
+`releases-A.B.x`. The squash commit's tree must equal the tree stage passed
+(§3). Session fixes reach `main` afterwards by a separate PR (§7).
 No commit lands on the release branch during a QA session. A release branch is
 force-pushed only on an explicit owner instruction, after the archive tag
 `archive/releases-A.B.x-<YYYY-MM-DD>` is pushed first. A release is **never tagged
@@ -101,12 +103,13 @@ the cut.
 
 ## 3. Version tags and release candidates
 
-A version tag `vA.B.C` names what production runs. A commit that reached
-production gets the version tag unless the release was rolled back. A failed
-postflight or watch does not withhold the tag: each failure is ticketed against
-the next patch version ([D63](../decisions.md), owner, 2026-10-10). Before the
-deploy, a commit is a release candidate, tagged `vA.B.C-rc.N`, `N` counting
-from 0.
+A version tag `vA.B.C` names what production was cut over to. An rc tag
+`vA.B.C-rc.N` (`N` counting from 0) names a commit whose tree passed stage.
+Production runs only by an rc tag. **As soon as a production cutover starts
+(R6.1, the first irreversible step), that rc's commit also gets `vA.B.C`**, even
+when a later check fails or a defect is known ([D70](../decisions.md#d70), owner,
+2026-10-14). Every defect found after the cutover is ticketed against the next
+patch version.
 
 > **Revised 2026-09-11, effective from v0.5.0.** Through v0.4.0 the rc tag was
 > cut FIRST — "at the tip you intend to ship" — and stage preflight/rehearsal
@@ -114,56 +117,51 @@ from 0.
 > stage preflight and rehearsal run against the untagged tip, and the rc tag
 > is cut only once both pass. An rc tag therefore now means "this exact commit
 > has already cleared stage," not "this is a candidate to be tested" — see
-> the superseded-precedent note below. `backend/scripts/upgrades/0.4.0-to-0.5.0/steps.ts`'s
-> `P6.rc-tag` requiring `P4.preflight-live` and `P5.rehearsal` is the
-> mechanical form of this paragraph; `rollout-where.ts`'s `NEXT` is what
-> actually enforces it, by manifest order.
+> the superseded-precedent note below. Today `bun run release:run` and
+> `scripts/release/tag.ts` enforce it.
 
-The cycle, run entirely on the release's `releases-A.B.x` branch (§2):
+The cycle (D70, owner, 2026-10-14):
 
-1. Prepare the tip you intend to ship, on `releases-A.B.x`, untagged. Fixes
-   reach the branch first (D62). Stage never runs a PR head, a QA branch or any
-   commit that is not on `releases-A.B.x`: a squash merge re-hashes a PR head,
-   and the commit stage proved would then sit outside the release branch.
-2. Run stage preflight and stage rehearsal against that release-branch commit.
-   **Either fails** → fix on the branch, return to step 2 against the new tip.
-   A stage failure consumes no rc number — nothing has been tagged yet to
-   increment.
-3. **Both pass** → cut `vA.B.C-rc.N` at that exact release-branch commit (`N`
-   counting from 0), and push it. Production runs **only by that rc tag**
-   ([D64](../decisions.md), owner, 2026-10-10): the production go names the
-   tag, never a branch name or a bare commit. A tag that does not point at the
-   stage-passed commit, or is not reachable from `releases-A.B.x`, refuses.
-4. Run postflight and the watch.
-5. **Not rolled back** → tag `vA.B.C` at the exact commit that is running in
-   production, the deployed rc's commit, whether postflight and the watch
-   passed or not. Open an issue for every failed check, against the next patch
-   version `vA.B.(C+1)`. Its fixes start at `vA.B.(C+1)-rc.0`.
-6. **Rolled back** → no `vA.B.C` tag. Production runs the previous version.
-   Fix, return to step 2, and cut `vA.B.C-rc.(N+1)`.
+1. **Stage runs on a QA branch.** Cut `qa/A.B.x-<YYYY-MM-DD>` from the
+   `releases-A.B.x` tip (§4.6). Stage runs a clean, pushed commit of that QA
+   branch, never a PR head or a fix branch. Session fixes merge into the QA
+   branch, and stage reruns on its new tip.
+2. **The runbook passes on stage** at a QA commit. Record that commit and its
+   tree hash. A stage failure consumes no rc number.
+3. **Squash-merge the QA branch onto `releases-A.B.x`.** The release branch must
+   not have moved since the QA branch was cut. The squash commit's tree must
+   equal the stage-passed tree. A different tree means a new QA branch and a
+   new stage run.
+4. **Cut `vA.B.C-rc.N` at the squash commit** and push it. `tag.ts rc` refuses a
+   commit whose tree is not the stage-passed tree, or that is off
+   `releases-A.B.x`.
+5. **Production runs only by that rc tag.** The production go names the tag,
+   never a branch name or a bare commit. SP.8 refuses a tag whose tree differs
+   from the stage-passed tree.
+6. **A failure before the cutover** (preflight, baseline, backup or any step
+   before R6.1) means that rc never reaches production. Fix it on a **new** QA
+   branch, rerun stage (step 1), squash again and cut `vA.B.C-rc.(N+1)`.
+7. **The cutover starts (R6.1)** → tag `vA.B.C` at the rc's commit at once. A
+   later failed check, a known defect or a rollback does not withhold or move
+   it. Every defect becomes an issue against `vA.B.(C+1)`, whose first rc is
+   `vA.B.(C+1)-rc.0`.
 
-Three consequences, stated outright because each one looks like a mistake and
-none is:
+Consequences, stated outright because each one looks like a mistake and none is:
 
 - **`vA.B.C` and the final `vA.B.C-rc.N` point at the same commit.** That is
-  expected and correct, not duplication to clean up. Step 5 has no other
-  commit available to it — the version tag names what production is running.
-- **`vA.B.C` can never be cut at a commit that was not actually deployed.** A
-  fix that lands after the deploy belongs to the next patch version; it cannot
-  be "rolled into the final tag."
-- **Production never runs an untagged commit after a release.** Withholding
-  the tag after a deploy would leave production on a commit no version names.
-  Only a rollback withholds it, because then production runs the previous
-  version again.
-- **An rc number now only ever counts rollbacks, never stage failures or
-  postflight failures.** Under the pre-v0.5.0 order a rejected stage rehearsal
-  still consumed an rc number (the tag already existed); under this order it
-  does not, because step 2 can repeat freely before anything is tagged. A
-  release that needed five stage attempts and shipped clean on its first
-  deploy is `rc.0`, not `rc.4`.
+  expected and correct, not duplication to clean up.
+- **Stage and production run different commits with the same tree.** Stage
+  runs the QA commit and production the squash commit. `/api/version` reports
+  each target's own commit. The tree hash is what ties them together.
+- **A failure belongs before the cutover.** Every check that can stop a release
+  runs before R6.1. After R6.1 the version exists, and a fix is the next
+  patch version.
+- **An rc number counts production attempts stopped before the cutover.** A
+  release that needed five stage attempts and cut over on its first production
+  attempt is `rc.0`, not `rc.4`.
 
 rc tags obey §2's branch rule exactly as the release tag does: they are cut on
-`releases-A.B.x`, never on `main`.
+`releases-A.B.x`, never on `main` or a QA branch.
 
 ### Precedent — v0.2.1 through v0.4.0 (superseded 2026-09-11)
 
@@ -194,13 +192,12 @@ explicitly waived by the operator with a written reason.
 
 Before any rollout activity, verify both of the following:
 
-1. The release tracking issue is closed/complete — every Phase and feature
-   issue linked from its Phases tasklist is closed, and the objective is
-   clearly stated (§6).
+1. Every Phase and feature issue linked from the release tracking issue's
+   Phases tasklist is closed, and the objective is clearly stated (§6). The
+   tracking issue itself stays open until §4.9.
 2. Every commit expected to ship in this release is present on the release
-   branch. Prefer merging to `main` first and cherry-picking to
-   `releases-A.B.x`; verify with a diff or log inspection that no expected
-   change is missing from the branch.
+   branch, by §2 route (a). Verify with a diff or log inspection that no
+   expected change is missing from the branch.
 
 Do not begin preflight, rehearsal, or any other rollout step while either of
 the above is incomplete.
@@ -230,13 +227,12 @@ The adopted [smoke production spec](./smoke-production-spec.md) defines
 `bun smoke:capture` as the read-only replica capture path. A future runbook may
 use it only after confirming that the release code implements that interface.
 
-**Fresh dump rule (owner, 2026-10-06).** Unless the operator names a specific dump, every
-rehearsal starts from a dump captured from production for that run: `bun smoke:capture --out
-<new directory>` on the capture host, then `--local dump=<that directory>`. Never restore
-whatever dump or twin happens to be on the host. Reusing an existing copy (`--reuse`,
-`--local volume`, or an earlier capture) is allowed only for a rapid turnaround between test
-runs, and only while that copy's capture (`manifest.json` `capturedAt`) is at most 24 hours
-old. Past 24 hours, capture again. The rehearsal report names the dump's stamp and capture time.
+**Dump rule (owner, 2026-10-08; standing check SR.0).** Unless the operator names a specific
+dump, a rehearsal starts from the newest production dump already on the capture host, if its
+capture (`manifest.json` `capturedAt`) is at most 24 hours old. When none is, capture one:
+`bun smoke:capture --out <new directory>` on the capture host. Never restore a dump or twin
+older than 24 hours. Production's own backup (R2.1) is always captured new, right before the
+cutover. The rehearsal report names the dump's stamp and capture time.
 
 ### 4.4. Isolated release rehearsal
 
@@ -291,7 +287,8 @@ instead of restating their values.
 
 If the isolated rehearsal or stage report finds an issue that affects
 production safety or acceptance criteria, do not proceed to production
-execution. Fix it as follows, then follow §3's tag sequence.
+execution. Fix it as follows, then follow §3's tag sequence. The same loop
+applies when an rc fails in production before the cutover (§3 step 6).
 
 A fix is developed in a development environment and never on a rehearsal,
 stage or production host. A host runs a clean checkout of a pushed commit
@@ -322,32 +319,27 @@ release branch or to `main`. Both stay clean for the whole session.
    corrections found during the session land there too. A change to a
    supported baseline needs the owner's decision first (D55 (8)).
 4. Redeploy a clean checkout of the new QA branch tip to the stage host and
-   repeat the affected stage steps. A stage failure does not consume an rc
-   number.
-5. When the session ends, the owner decides which QA commits reach the release
-   branch and which reach `main`. Only then does a PR carry them. The default
-   route is a PR to `main`, then a cherry-pick or merge to the release branch.
-   A PR from the QA branch directly onto the release branch is allowed only when
-   the change is incompatible with `main` or fixes a regression on `main`, and
-   its body names which condition applies (D62). The rc tag is
-   cut on the release branch after that merge, and stage is re-run on that tip
-   if its tree differs from the tree that passed on the QA branch.
-6. Resume the sequence in §3 at the applicable step.
+   repeat the stage run. A stage failure does not consume an rc number.
+5. When the runbook passes on stage at a QA commit, squash-merge the QA branch
+   onto the release branch (D70). The squash commit's tree must equal the
+   stage-passed tree. Cut the rc there (§3 steps 3 and 4).
+6. Carry the session's fixes to `main` by a separate PR from the QA branch
+   (§7).
 
-Runbook corrections that change release instructions must be committed and
-reviewed on the QA branch during a session, and reach the release branch by the
-route in step 5 on the owner's merge decision. Re-run any gate whose evidence or operator
-action the correction affects. Rc numbering follows §3: stage-only retries and
-documentation fixes do not consume an rc; a corrected candidate consumes the
-next rc only after a deployed candidate fails postflight.
+Runbook corrections that change release instructions are committed and reviewed
+on the QA branch during a session. They reach the release branch in the step 5
+squash. Re-run any gate whose evidence or operator action the correction affects.
+Rc numbering follows §3: stage retries and documentation fixes do not consume an
+rc. A new rc is cut only after a production attempt stops before the cutover.
 
 ### 4.7. Production execution
 
 Once the stage rehearsal gate passes, run the actual cutover and postflight
 on a production machine. Follow the per-release runbook step by step. Every
 destructive or irreversible step must be explicitly marked in the runbook. The operator
-authorizes the run once, with a recorded go that names the release, the commit and the target
-(D61). The runner refuses to start without it, and stops at the first failed step.
+authorizes the run once, with a recorded go that names the release, the ref and the target
+(D61). A stage go names the QA commit; a production go names the rc tag (D70). The runner
+refuses to start without it, and stops at the first failed step.
 
 **The cutover is a sequence of receipted steps with credentials limited to the
 step's job.** The adopted [smoke production spec](./smoke-production-spec.md)
@@ -363,11 +355,13 @@ begins, even if the isolated rehearsal passed, to ensure the production
 environment matches the rehearsal assumptions.
 
 The upgrade is agent-executed through the verified runbook, with one operator go and
-receipt review (D61). The privileged credentials (`rm_owner`, `doadmin`) are lines in the
-host's `~/.env`. A write names its target with `--confirm-target`, and the command refuses a
-target that differs from the one it resolved. No container receives a privileged credential,
-and no receipt, journal or log line prints one. Production runs only after a stage run of the
-same step list at the same commit passed (standing check SP.8).
+receipt review (D61). The privileged credential `rm_owner` is a line in the host's `~/.env`.
+`doadmin` is stored in no file: the admin types it into `bun run role-passwords` before the run,
+and no release step reads it ([D61's amendment](../decisions.md#d61-amendment-1272)). A write
+names its target with `--confirm-target`, and the command refuses a target that differs from
+the one it resolved. No container receives a privileged credential, and no receipt, journal or
+log line prints one. Production runs only after a stage run of the same step list passed on
+the same tree (standing check SP.8, D70).
 
 ### 4.7.1. Product verification (separate from postflight, and from the deploy)
 
@@ -444,7 +438,7 @@ rollout report covering at least:
 - the release candidate deployed,
 - cutover and postflight results (or rollback results),
 - any issues encountered and their resolution,
-- the final version tag applied (every deploy that was not rolled back),
+- the final version tag applied (every release whose cutover started, rolled back or not),
 - the issues opened against the next patch version for failed checks,
 - backport TODOs (§7),
 - operator sign-off.
@@ -531,11 +525,11 @@ tagged and `releases-A.B.x` stops being the active release line — it is a
 concern for whoever picks up work on `main` next, not for the agent executing
 the rollout.
 
-Any fix discovered on the `releases-A.B.x` branch during rollout is carried
-back to `main` outside this runbook's flow, by whoever picks up work on
-`main` next. It is never assumed for `main`: `main` may have moved past that
-release's lifecycle. Only after stage has proven the fix, a separate PR
-evaluates the cherry-pick onto `main`.
+Every fix made on a QA branch during a release reaches `releases-A.B.x` in the
+stage-passed squash (§2 route (b)). It is carried back to `main` outside this
+runbook's flow, by a separate PR from the QA branch. It is never assumed for
+`main`: `main` may have moved past that release's lifecycle. Only after stage has
+proven the fix does that PR evaluate it against `main`.
 
 ---
 
