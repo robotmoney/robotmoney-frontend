@@ -231,7 +231,7 @@ command sees either. The only other variables are the step's own (`PROJECTS_SOUR
 and `bootEnv` for the boots). The fixed PATH is
 `/root/.bun/bin:/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`.
 It is part of the template, so the hash covers it. R1.2 and R1.5 record where `bun`,
-`docker`, `tmux` and `git` resolve under it, and refuse a command that inherited a
+`docker` and `git` resolve under it, and refuse a command that inherited a
 `DATABASE_*` variable.
 
 Every target step runs from the release checkout, R2.5 included: `prod:gate --mode baseline`
@@ -307,7 +307,7 @@ R1.4 and R7.1 take `{ref}`, a value, which is the rc tag on prod and the commit 
 
 | Script | Step | What it does |
 |---|---|---|
-| `scripts/release/host-identity.ts` | R1.2, R1.5 | HEAD equals the commit; the tree is clean; `bun`, `docker`, `tmux` and `git` resolve under the fixed `PATH`; no `DATABASE_*` variable was inherited; `~/.env` resolves to `confirmTarget`; the target precondition holds, `~/.env` has a non-empty `rm_owner` line and `rm_owner` logs in with `SELECT 1` (R1.2 only) |
+| `scripts/release/host-identity.ts` | R1.2, R1.5 | HEAD equals the commit; the tree is clean; `bun`, `docker` and `git` resolve under the fixed `PATH`; no `DATABASE_*` variable was inherited; `~/.env` resolves to `confirmTarget`; the target precondition holds, `~/.env` has a non-empty `rm_owner` line and `rm_owner` logs in with `SELECT 1` (R1.2 only) |
 | `scripts/release/baseline.ts` | R2.3 | Through `rm_readonly` on a proven read-only session: the ledger, `deployment_identity`, the five roles, migration 0101's would-clear list (the R2.3 query, verbatim), the ledger reconciliation against `backend/migrations` and the running stack's version (the receipt, D67), the R2.4 counts and the database size. Refuses an in-house seat in the would-clear list and any reconciliation verdict but `ok` |
 | `scripts/release/restore-proof.ts` | R2.4r | Restores the run's capture into a throwaway local Postgres container through `scripts/lib/restore-container.ts`, counts its ledger, records the restore time, and always drops the container |
 | `scripts/release/stop-legacy.ts` | R6.1 | `stop --instance <name>`: reads the instance's smoke state, refuses with a non-zero exit when it names no stack, else runs `bun run smoke:down --instance <name>` (never `-v`) and proves no container of the record's project remains. No tmux session, compose project or checkout argument |
