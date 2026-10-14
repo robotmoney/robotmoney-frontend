@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
 import { createAnalytics } from "../../../frontend/public/assets/js/app/analytics.js";
-import { analyticsConfig } from "../../../frontend/public/assets/js/app/analytics-config.js";
 import { CONSENT_KEY, isPrivilegedRoute, pageFields } from "../../../frontend/public/assets/js/app/analytics-policy.js";
 
 function harness(path = "/", choice = "unknown", origin = "https://robotmoney.network", config = { enabled: true, purposeId: "analytics" }) {
@@ -23,7 +22,7 @@ function harness(path = "/", choice = "unknown", origin = "https://robotmoney.ne
     createElement: () => ({}), head: { appendChild: (script: any) => scripts.push(script) } };
   const adapter = createAnalytics(win, doc, config);
   function ready() {
-    win.zaraz = { track: (event: string, fields: any) => tracks.push({ event, fields }),
+    win.zaraz = { set: (key: string, value: any) => { win[key] = value; }, track: (event: string, fields: any) => tracks.push({ event, fields }),
       consent: { APIReady: true, purposes: { analytics: {} }, set: (v: any) => { win.consent = v; } } };
     docEvents.dispatchEvent(new Event("zarazConsentAPIReady"));
     scripts[0]?.onload();
@@ -44,8 +43,7 @@ describe("consent-gated Zaraz adapter", () => {
     const h = harness(path, "accepted"); h.render(); h.ready(); expect(h.scripts).toHaveLength(0); expect(h.tracks).toHaveLength(0);
   });
   test("default or missing purpose configuration fails closed", () => {
-    expect(analyticsConfig.enabled).toBe(false);
-    for (const config of [analyticsConfig, { enabled: true, purposeId: "" }]) {
+    for (const config of [{ enabled: false, purposeId: "analytics" }, { enabled: true, purposeId: "" }]) {
       const h = harness("/", "accepted", undefined, config); h.render(); expect(h.scripts).toHaveLength(0);
     }
   });
@@ -56,6 +54,8 @@ describe("consent-gated Zaraz adapter", () => {
     h.ready(); h.ready();
     expect(h.tracks).toEqual([{ event: "rm_page_view", fields: { page_title: "Privacy", page_path: "/privacy", page_location: "https://robotmoney.network/privacy" } }]);
     expect(h.win.consent).toEqual({ analytics: true });
+    expect(h.win.google_consent_default).toEqual({ ad_storage: "denied", ad_user_data: "denied", ad_personalization: "denied", analytics_storage: "denied" });
+    expect(h.win.google_consent_update).toEqual({ ad_storage: "denied", ad_user_data: "denied", ad_personalization: "denied", analytics_storage: "granted" });
     h.win.location.pathname = "/terms"; h.doc.title = "Terms"; h.render(); expect(h.tracks).toHaveLength(2);
   });
   test("delayed readiness counts only latest rendered route", () => {

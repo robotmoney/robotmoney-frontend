@@ -16,9 +16,11 @@ isolation. Do not configure Custom HTML, ad tools, replay or unrelated scripts.
    injection must stay off permanently, including staging and privileged routes.
 2. Enable Consent Management. Create the **Analytics** purpose, associate the GA4
    tool with it, and copy the actual generated purpose ID. Disable the automatic
-   Zaraz consent modal because the site owns the accessible choice UI. Set Google
-   Consent Mode mapping: analytics_storage follows Analytics; ad_storage,
-   ad_user_data and ad_personalization are denied. Do not configure cookieless
+   Zaraz consent modal because the site owns the accessible choice UI. The adapter sets the documented Google Consent Mode v2 reserved properties
+   before its first event: all categories denied by default, then only
+   analytics_storage granted after acceptance. Keep **Set Google Consent Mode v2
+   state** enabled for a default-denied account fallback; inspect the Google-bound
+   `gcd` parameter in Zaraz Debugger. No Custom HTML mapping script is needed. Do not configure cookieless
    denied-consent collection or call `sendQueuedEvents()`.
 3. Add GA4 with the existing measurement ID. Remove the default Pageview firing
    action and any enhanced-measurement/history actions. Create exactly one firing
@@ -55,8 +57,9 @@ The loader is `/cdn-cgi/zaraz/i.js`, with `referrerpolicy="origin"`. It loads
 once per eligible document, only after an accepted version-1 preference and the
 first rendered route. It waits for `zaraz.consent.APIReady` /
 `zarazConsentAPIReady` and the configured purpose; unavailable API/loader fails
-closed. It grants that purpose via `zaraz.consent.set({ [purposeId]: true })`,
-then calls `zaraz.track("rm_page_view", fields)`.
+closed. It sets `google_consent_default` (all denied) and `google_consent_update`
+(analytics granted, ads denied) using `zaraz.set`, grants the configured purpose
+via `zaraz.consent.set({ [purposeId]: true })`, then calls `zaraz.track("rm_page_view", fields)`.
 
 | Client field | Meaning | GA4 mapping |
 | --- | --- | --- |

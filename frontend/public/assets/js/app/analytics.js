@@ -6,7 +6,7 @@ import { analyticsEligible, CONSENT_KEY, CONSENT_VERSION, readConsent, pageField
 
 /**
  * @typedef {{ APIReady: boolean, purposes: Record<string, unknown>, modal: boolean, set: (choices: Record<string, boolean>) => void }} ZarazConsent
- * @typedef {{ track: (event: string, fields: Record<string, string>) => unknown, consent: ZarazConsent }} Zaraz
+ * @typedef {{ track: (event: string, fields: Record<string, string>) => unknown, set: (key: string, value: Record<string, string>) => void, consent: ZarazConsent }} Zaraz
  * @param {Window & {zaraz?: Zaraz}} win
  * @param {Document} doc
  * @param {{enabled: boolean, purposeId: string}} config
@@ -21,17 +21,24 @@ export function createAnalytics(win, doc, config) {
   let sent = -1;
   let loaderStarted = false;
   let failed = false;
+  let googleConsentSet = false;
   /** @type {number | undefined} */
   let timer;
   const configured = config.enabled === true && typeof config.purposeId === "string" && /^[a-zA-Z0-9_-]+$/.test(config.purposeId);
   const allowed = () => configured && choice === "accepted" && analyticsEligible(win.location) && !failed;
   const ready = () => win.zaraz?.consent?.APIReady && typeof win.zaraz.track === "function"
-    && typeof win.zaraz.consent.set === "function" && !!win.zaraz.consent.purposes?.[config.purposeId];
+    && typeof win.zaraz.set === "function" && typeof win.zaraz.consent.set === "function" && !!win.zaraz.consent.purposes?.[config.purposeId];
 
   function send() {
     if (!allowed() || !rendered || !ready() || !win.zaraz || sent === revision) return;
     try {
-      win.zaraz.consent.set({ [config.purposeId]: true });
+      if (!googleConsentSet) {
+        const denied = { ad_storage: "denied", ad_user_data: "denied", ad_personalization: "denied", analytics_storage: "denied" };
+        win.zaraz.set("google_consent_default", denied);
+        win.zaraz.set("google_consent_update", { ...denied, analytics_storage: "granted" });
+        win.zaraz.consent.set({ [config.purposeId]: true });
+        googleConsentSet = true;
+      }
       win.zaraz.consent.modal = false;
       sent = revision;
       Promise.resolve(win.zaraz.track("rm_page_view", pageFields(win.location, doc.title))).catch(() => {});

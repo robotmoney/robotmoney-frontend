@@ -17,6 +17,7 @@ const VENDORS: Record<string, string> = {
   "/assets/js/vendor/p5-1.11.2.min.js": "node_modules/p5/lib/p5.min.js",
 };
 const fixture = `window.zaraz = {
+  set(key, value) { this[key] = value; },
   consent: { APIReady: true, purposes: { analytics: {} }, modal: false, set(choices) { this.choices = choices; } },
   track(event, fields) { return fetch('/cdn-cgi/zaraz/t', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({event,fields})}); }
 }; document.dispatchEvent(new Event('zarazConsentAPIReady'));`;
@@ -82,6 +83,7 @@ test("consent controls persist rejection; accepted SPA views have final sanitize
   await page.getByRole("button", { name: "Accept analytics", exact: true }).click();
   await expect.poll(() => s.events.length).toBe(1);
   expect(s.loads).toHaveLength(1);
+  expect(await page.evaluate(() => (window as any).zaraz.google_consent_update)).toEqual({ analytics_storage: "granted", ad_storage: "denied", ad_user_data: "denied", ad_personalization: "denied" });
   expect(s.events[0].fields.page_location).toBe(ORIGIN + "/privacy");
   expect(s.events[0].fields.page_title).toBe(await page.title());
   await spa(page, "/terms?email=private#secret");
