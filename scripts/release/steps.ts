@@ -1,6 +1,8 @@
-// scripts/release/steps.ts — THE step list of `bun run release:run` (D61 rule 2).
+// scripts/release/steps.ts — the step model of `bun run release:run` (D61 rule 2).
 //
-// One ordered list, identical for every target. A step names its commands as
+// The steps themselves are YAML: a template (./runbooks/templates/) and each
+// release's own copy of it (./runbooks/releases/), which only adds (./runbook.ts).
+// One ordered list per release, identical for every target. A step names its commands as
 // templates (`{instance}`, `{confirmTarget}`, …); the target file fills them.
 // Nothing in this file branches on the target. The step-list hash is taken
 // over the templates, so a stage run and a production run of the same list at
@@ -20,12 +22,13 @@
 // The list holds no past-upgrade fact (issue 1272): it reads the running
 // system (the ledger against backend/migrations, the stack the host's smoke
 // state names, /api/version) and runs any patch from the version production
-// actually runs. A one-time action one release needs is a delta step
-// (RELEASE_DELTAS, stepsFor), gated on a precondition receipt that proves it
-// has not run; it never joins this list.
+// actually runs. A one-time action one release needs is a step that release's
+// runbook adds, gated on a precondition receipt that proves it has not run
+// (`gateAbsent`); it never joins a template.
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_TEMPLATE, loadTemplate } from "./runbook.ts";
 import type { ReleaseTarget } from "./target.ts";
 
 /**
@@ -112,48 +115,13 @@ export interface StepTemplate {
    */
   readonly cloneFrom?: string;
   /**
-   * A delta step's gate: the step runs only while this file (templated) is
+   * A one-time step's gate: the step runs only while this file (templated) is
    * absent on its host, and is recorded `skipped: <path> exists` once it is
    * there. A one-time action proves it has not run by the receipt it leaves
    * (for example credential.json), so a second run of the same list never
-   * repeats it. Only a delta step (RELEASE_DELTAS) carries it.
+   * repeats it. Only a step a release's runbook adds carries it.
    */
   readonly gateAbsent?: string;
-}
-
-/**
- * A release-specific step: a one-time action one release's delta runbook
- * declares, inserted after `after` in the generic list for that release only.
- * It carries a gate (`gateAbsent`), so it is idempotent by construction.
- */
-export interface DeltaStep extends StepTemplate {
-  readonly after: string;
-  readonly gateAbsent: string;
-}
-
-/**
- * The delta steps by release name (the target's `release`). The generic list
- * holds none; a release that needs a one-time action declares it here, with
- * its delta runbook, and it leaves when the release ships. Empty today.
- */
-export const RELEASE_DELTAS: Readonly<Record<string, readonly DeltaStep[]>> = Object.freeze({});
-
-/**
- * PURE. The step list of one release: the generic list with that release's
- * delta steps inserted after their `after` step. An `after` the list lacks,
- * or a delta id the list already holds, throws. The hash is taken over the
- * result, so stage and prod of one release share it and a delta changes it.
- */
-export function stepsFor(release: string, base: readonly StepTemplate[] = RELEASE_STEPS, deltas: Readonly<Record<string, readonly DeltaStep[]>> = RELEASE_DELTAS): StepTemplate[] {
-  const out: StepTemplate[] = [...base];
-  for (const d of deltas[release] ?? []) {
-    const at = out.findIndex((s) => s.id === d.after);
-    if (at < 0) throw new Error(`delta step ${d.id} of ${release} runs after ${d.after}, which the list lacks`);
-    if (out.some((s) => s.id === d.id)) throw new Error(`delta step ${d.id} of ${release} is already a step of the list`);
-    const { after: _after, ...step } = d;
-    out.splice(at + 1, 0, step);
-  }
-  return out;
 }
 
 /** The repository every checkout fetches from; R1.1 and R1.4 clone a missing checkout from it. */
@@ -171,23 +139,6 @@ export function maxMillisOf(step: Pick<StepTemplate, "maxMinutes">): number {
 const RUN_DIR = "{home}/.local/state/robotmoney-release/{target}/{runTs}";
 /** The same on the capture host. */
 const CAPTURE_RUN_DIR = "{captureHome}/.local/state/robotmoney-release/{target}/{runTs}";
-/** The instance's smoke state directory (scripts/lib/smoke-state.ts). */
-const STATE_DIR = "{home}/.local/state/robotmoney-smoke/{instance}";
-/** The fresh capture for this run (policy 4.3 fresh dump rule: a new directory every run). */
-const CAPTURE_DIR = "{captureHome}/rm-backup-{target}-{runTs}";
-
-const BOOT_ENV = { PROJECTS_SOURCE: "live" } as const;
-
-const runReceipts = (pattern: string, required = true): ReceiptSpec => ({ dir: RUN_DIR, pattern, required });
-const stateReceipts = (pattern: string, required = true): ReceiptSpec => ({ dir: STATE_DIR, pattern, required });
-const prodInitReceipt = (command: string): ReceiptSpec => ({ dir: `${STATE_DIR}/prod-init`, pattern: `${command}-*.json`, required: true });
-
-/**
- * The watch window after READY: the target's `watchHours`, by default long
- * enough for the slowest subject's first epoch to publish (./watch.ts).
- */
-const WATCH = { afterStep: "R6.9", hours: "watchHours" } as const;
-
 /** A step's wait as the template states it: fixed hours, or the target's watch length. */
 export interface NotBeforeTemplate { readonly afterStep: string; readonly hours: number | "watchHours" }
 /** The wait resolved against one target. */
@@ -200,173 +151,13 @@ export function notBeforeOf(step: { readonly notBefore?: NotBeforeTemplate }, ta
   return { afterStep: nb.afterStep, hours: nb.hours === "watchHours" ? target.watchHours : nb.hours };
 }
 
-const prodInit = (command: string): string[] => ["bun", "scripts/prod-init.ts", command, "--instance", "{instance}", "--confirm-target", "{confirmTarget}"];
-const status = (): string[] => ["bun", "run", "smoke:status", "--instance", "{instance}"];
-const boot = (): string[] => ["bun", "run", "smoke", "--static-port", "--instance", "{instance}"];
-
-/** The release run, in order. Read docs/runbooks/release-run.md for the table. */
-export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
-  // ── R1 release identity, on both hosts ────────────────────────────────────
-  {
-    id: "R1.1", standing: ["SP.1"], host: "target", cloneFrom: RELEASE_REPO_URL, irreversible: false, expectExit: 0, receipts: [],
-    description: "Target checkout: clone it when missing, fetch the tags, then detach at the go's ref (the rc tag on prod, the commit on stage), so the host holds the tag the boot reports (D64)",
-    cmds: [["git", "fetch", "--tags", "origin"], ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{ref}"]],
-  },
-  {
-    id: "R1.2", standing: ["SP.1"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("host-identity.json")],
-    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger reconciles with backend/migrations and the bytes at the version the running stack reports (no recorded name the repository lacks, no applied file whose bytes differ from the tag's; never a count or a number order), its identity is absent or matches RM_ENV; before R6.1, ~/.env holds non-empty rm_owner and RM_CREDENTIALS lines and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no release step reads doadmin",
-    cmds: [["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--origin", "{publicOrigin}", "--receipt-dir", RUN_DIR]],
-  },
-  {
-    id: "R1.3", standing: ["SP.1"], host: "target", irreversible: false, expectExit: 0, receipts: [],
-    description: "Target install: bun install --force, root and backend",
-    cmds: [["bun", "install", "--force"], ["bun", "install", "--force", "--cwd", "backend"]],
-  },
-  {
-    id: "R1.4", standing: ["SP.1"], host: "capture", cloneFrom: RELEASE_REPO_URL, irreversible: false, expectExit: 0, receipts: [],
-    description: "Capture checkout (runner-owned, never a release checkout): clone it when missing, fetch the tags, then detach at the go's ref",
-    cmds: [["git", "fetch", "--tags", "origin"], ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{ref}"]],
-  },
-  {
-    id: "R1.5", standing: ["SP.1"], host: "capture", irreversible: false, expectExit: 0, receipts: [{ dir: CAPTURE_RUN_DIR, pattern: "host-identity.json", required: true }],
-    description: "Capture identity: HEAD is the commit and the tree is clean",
-    cmds: [["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--receipt-dir", CAPTURE_RUN_DIR]],
-  },
-  {
-    id: "R1.6", standing: ["SP.1"], host: "capture", irreversible: false, expectExit: 0, receipts: [],
-    description: "Capture install: bun install --force, root and backend",
-    cmds: [["bun", "install", "--force"], ["bun", "install", "--force", "--cwd", "backend"]],
-  },
-  // ── R2 baseline and backup ────────────────────────────────────────────────
-  {
-    id: "R2.1", standing: ["SR.0", "SP.2"], host: "capture", irreversible: false, expectExit: 0, maxMinutes: 30,
-    receipts: [{ dir: CAPTURE_DIR, pattern: "manifest.json", required: true }],
-    description: "Fresh capture from production's read replica into a new dated directory (never a reused dump)",
-    cmds: [["bun", "run", "smoke:capture", "--out", CAPTURE_DIR]],
-  },
-  {
-    id: "R2.2", standing: ["SP.2"], host: "capture", irreversible: false, expectExit: 0,
-    receipts: [{ dir: CAPTURE_DIR, pattern: "SHA256SUMS", required: true }],
-    description: "Record the sha256 of the encrypted dump files beside the manifest",
-    cmds: [["sh", "-c", `cd ${CAPTURE_DIR} && sha256sum -- *.gpg > SHA256SUMS`]],
-  },
-  {
-    id: "R2.4r", standing: ["SP.2"], host: "capture", irreversible: false, expectExit: 0, maxMinutes: 20,
-    receipts: [{ dir: CAPTURE_RUN_DIR, pattern: "restore-proof.json", required: true }],
-    description: "Restore proof: restore the R2.1 dump into a throwaway local Postgres container, record the restore time, drop the container",
-    cmds: [["bun", "scripts/release/restore-proof.ts", "--dump", CAPTURE_DIR, "--receipt-dir", CAPTURE_RUN_DIR]],
-  },
-  {
-    id: "R2.3", standing: ["SP.3", "SP.6"], host: "target", irreversible: false, expectExit: 0,
-    receipts: [{ dir: `${STATE_DIR}/release/{runTs}`, pattern: "baseline*", required: true }],
-    description: "Baseline through rm_readonly: ledger, identity, roles, migration 0101's would-clear list, the ledger reconciliation (the pending set, every applied file's bytes against the version the running stack reports), R2.4 counts and size",
-    cmds: [["bun", "scripts/release/baseline.ts", "--instance", "{instance}", "--run", "{runTs}", "--origin", "{publicOrigin}"]],
-  },
-  {
-    id: "R2.5", standing: ["SP.5"], host: "target", irreversible: false, expectExit: 0, triage: true, receipts: [runReceipts("prod-gate-baseline.*")],
-    description: "Log baseline of the running stack the instance's smoke state names, graded by prod:gate from the release checkout",
-    cmds: [["bun", "run", "prod:gate", "--mode", "baseline", "--instance", "{instance}", "--report", `${RUN_DIR}/prod-gate-baseline.md`]],
-  },
-  // ── R6 cutover ────────────────────────────────────────────────────────────
-  {
-    id: "R6.1", standing: ["SC.2"], host: "target", irreversible: true, expectExit: 0, receipts: [runReceipts("stop-legacy.json")],
-    description: "Stop the running stack: the one the instance's smoke state names, with bun run smoke:down --instance {instance} (never -v); refuses when the state names no stack; proves no container of its project remains",
-    cmds: [["bun", "scripts/release/stop-legacy.ts", "stop", "--instance", "{instance}", "--receipt-dir", RUN_DIR]],
-  },
-  {
-    id: "R6.2", standing: ["SV.6"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("env-rewrite.json")],
-    description: "Rewrite ~/.env to the D61 allowlist (rm_owner, never doadmin); every other key, a stray doadmin line included, moves to ~/.env.retired-<ts> (mode 0600); refuses without rm_owner or RM_CREDENTIALS; key names only",
-    cmds: [["bun", "scripts/release/env-rewrite.ts", "--run", "{runTs}", "--receipt-dir", RUN_DIR]],
-  },
-  {
-    id: "R6.3", standing: ["SC.2"], host: "target", irreversible: true, expectExit: 0,
-    receipts: [stateReceipts("migrate-receipt-*.json"), stateReceipts("migrate-journal-*.json", false)],
-    description: "The first migrate: 0081 first with the identity RM_ENV implies, then every pending file",
-    cmds: [["bun", "run", "migrate", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]],
-  },
-  {
-    id: "R6.4", standing: [], host: "target", irreversible: false, expectExit: 0, receipts: [prodInitReceipt("set-identity")],
-    description: "Report the deployment identity the migrate wrote (prod-init set-identity)",
-    cmds: [prodInit("set-identity")],
-  },
-  {
-    id: "R6.5", standing: [], host: "target", irreversible: false, expectExit: 0, receipts: [prodInitReceipt("provision-tokens")],
-    description: "Mint the three service tokens (prod-init provision-tokens)",
-    cmds: [prodInit("provision-tokens")],
-  },
-  {
-    id: "R6.7a", standing: ["SP.4"], host: "target", irreversible: false, expectExit: 0, receipts: [], env: BOOT_ENV, bootEnv: true, maxMinutes: 15,
-    description: "Boot 1: bun smoke --static-port (preflight, replace, readiness, exit)",
-    cmds: [boot()],
-  },
-  {
-    id: "R6.7b", standing: ["SV.2"], host: "target", irreversible: false, expectExit: 0, receipts: [],
-    description: "Status after boot 1",
-    cmds: [status()],
-  },
-  {
-    id: "R6.9", standing: ["SV.2"], host: "target", irreversible: false, expectExit: 0, receipts: [],
-    description: "Status after boot 2: the receipt as history, the daemon as now",
-    cmds: [status()],
-  },
-  {
-    id: "R6.10", standing: [], host: "target", irreversible: false, expectExit: 0, receipts: [],
-    description: "Site: bun smoke:web (refuses a site whose apiRange excludes the api)",
-    cmds: [["bun", "run", "smoke:web", "--instance", "{instance}"]],
-  },
-  // ── R7 postflight ─────────────────────────────────────────────────────────
-  {
-    id: "R7.1", standing: ["SV.1"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("identity-check.json")],
-    description: "Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown; when the go's ref is the rc tag, /api/version carries it as tag (RM_BUILD_TAG)",
-    cmds: [["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--receipt-dir", RUN_DIR]],
-  },
-  {
-    id: "R7.3", standing: ["SV.3"], host: "target", irreversible: false, expectExit: 0, receipts: [],
-    description: "Product verification, readonly tier",
-    cmds: [["bun", "run", "verify:live", "--instance", "{instance}", "--emit-receipt=R7.verify"]],
-  },
-  {
-    id: "R7.3a", standing: ["SV.4"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("prod-gate-post-release.*")],
-    description: "Log verdict after the release (sessions graded later: the first one publishes hours after the cutover)",
-    cmds: [["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--report", `${RUN_DIR}/prod-gate-post-release.md`]],
-  },
-  {
-    id: "R7.3b", standing: ["SW.2"], host: "target", irreversible: false, expectExit: 0,
-    receipts: [runReceipts("soak-record.*"), runReceipts("soak-full.*"), stateReceipts("soak-baseline.json", false)],
-    description: "Standing soak checks: record the baseline at READY, then the full run",
-    cmds: [
-      ["bun", "run", "soak:checks", "--instance", "{instance}", "--record", "--report", `${RUN_DIR}/soak-record.md`],
-      ["bun", "run", "soak:checks", "--instance", "{instance}", "--full", "--report", `${RUN_DIR}/soak-full.md`],
-    ],
-  },
-  {
-    id: "R7.5", standing: ["SV.5"], host: "target", irreversible: false, expectExit: 0,
-    receipts: [{ dir: `${STATE_DIR}/release/{runTs}`, pattern: "compare-baseline.json", required: true }],
-    description: "Compare with the R2.3 baseline: row counts only grow, database size within the bound",
-    cmds: [["bun", "scripts/release/compare-baseline.ts", "--instance", "{instance}", "--run", "{runTs}", "--max-size-ratio", "1.5"]],
-  },
-  {
-    id: "R7.7", standing: ["SV.6"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("host-guards.json")],
-    description: "Host guards: no container mounts docker.sock, ~/.env keys within the allowlist, token files 0600, no world-readable file under home holds a postgres URL with a password",
-    cmds: [["bun", "scripts/release/host-guards.ts", "--instance", "{instance}", "--receipt-dir", RUN_DIR]],
-  },
-  // ── W watch: every subject publishes once after READY ─────────────────────
-  {
-    id: "W1", standing: ["SW.1"], host: "target", notBefore: WATCH, irreversible: false, expectExit: 0, receipts: [runReceipts("prod-gate-watch.*")],
-    description: "The watch since READY: prod:gate post-release with sessions as the target's watchSessions says (prod graded: every subject publishes a judged session, the judge never restarted; stage deferred)",
-    cmds: [["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--sessions", "{watchSessions}", "--report", `${RUN_DIR}/prod-gate-watch.md`]],
-  },
-  {
-    id: "R7.4a", standing: ["SW.1"], host: "target", notBefore: WATCH, irreversible: false, expectExit: 0, receipts: [runReceipts("schedule-parity.json")],
-    description: "Schedule parity: 24 h epochs, every session in flight at R2.3 published on its normal close (graded; deferred checks only that no close moved), the regime run at :30, the last parity sweep's duration",
-    cmds: [["bun", "scripts/release/schedule-parity.ts", "--instance", "{instance}", "--run", "{runTs}", "--sessions", "{watchSessions}", "--receipt-dir", RUN_DIR]],
-  },
-  {
-    id: "W3", standing: ["SW.3"], host: "control", onlyFor: "prod", irreversible: false, expectExit: 0, receipts: [],
-    description: "Tag the running commit with the release tag and push it (prod only)",
-    cmds: [["bun", "scripts/release/tag.ts", "final", "--release", "{release}", "--commit", "{commit}"]],
-  },
-] satisfies StepTemplate[]);
+/**
+ * The kitchen-sink template's steps, in order: the general runbook every
+ * full-stack release copies (./runbooks/templates/kitchen-sink.yaml, read by
+ * ./runbook.ts). A release runs its own runbook, which only adds to it
+ * (loadReleaseRunbook). Read docs/runbooks/release-run.md for the table.
+ */
+export const RELEASE_STEPS: readonly StepTemplate[] = loadTemplate(DEFAULT_TEMPLATE).steps;
 
 /** The control machine's checkout, where control steps run. */
 export const CONTROL_REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -473,7 +264,7 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
   // A step that owns its checkout clones it first when it is missing (R1.1, R1.4).
   const clone = step.cloneFrom === undefined ? []
     : [`{ test -e ${shellQuote(`${checkout}/.git`)} || ${envCmd(["git", "clone", "--quiet", step.cloneFrom, checkout])}; }`];
-  // A delta step runs only while its gate file is absent: its own receipt proves the one-time action ran.
+  // A one-time step runs only while its gate file is absent: its own receipt proves the one-time action ran.
   const body = step.gateAbsent === undefined ? commands
     : [`{ if test -e ${shellQuote(fill(step.gateAbsent, values))}; then echo ${shellQuote(`[release] ${step.id} skipped: ${fill(step.gateAbsent, values)} exists`)}; else ${commands.join(" && ")}; fi; }`];
   const remote = [`mkdir -p ${shellQuote(runDir)}`, `touch ${shellQuote(marker)}`, ...clone, `cd ${shellQuote(checkout)}`, ...body].join(" && ");

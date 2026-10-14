@@ -18,7 +18,7 @@ reconciled by filename set against `backend/migrations`; the running stack from 
 smoke state and from `/api/version`; the pending set as the repository minus the ledger. It
 holds no fact of a past upgrade: no supported-baseline constant, no previous commit, no tmux
 session, no one-time cutover step. A release that needs a one-time action declares it as a
-[delta step](#delta-steps) in its own delta runbook.
+[step its own runbook adds](#release-runbooks-templates-and-copies).
 
 ## What D61 asks, and where the runner does it
 
@@ -239,7 +239,7 @@ grades the running stack the instance's smoke state names. The control step (W3)
 control machine from the runner's own checkout. Each remote step first touches a marker in the run's remote directory. The
 runner copies back only the receipts written after that marker.
 
-The table below and the hash line are generated from `scripts/release/steps.ts` by `bun scripts/release/steps-table.ts --write docs/runbooks/release-run.md`. The docs lint fails when either is stale. The hash is the one SP.8 compares a stage journal and a production run by; it changes only when the list changes, and the change is recorded here on purpose.
+The table below and the hash line are generated from the kitchen-sink template (`scripts/release/runbooks/templates/kitchen-sink.yaml`) by `bun scripts/release/steps-table.ts --write docs/runbooks/release-run.md`. The docs lint fails when either is stale. The hash is the one SP.8 compares a stage journal and a production run by; it changes only when the list changes, and the change is recorded here on purpose.
 
 Step-list hash: `ff53d9b73904d7030d8a189165a6466357a3cf72a43068f48e798c19e83d82fb`
 
@@ -325,7 +325,7 @@ The D61 `~/.env` allowlist is `host`, `port`, `database`, `dbname`, `sslmode`, `
 
 ## How stage and prod share it
 
-The step list is one constant, `RELEASE_STEPS` in `scripts/release/steps.ts`. It does
+The step list is the release's runbook, `scripts/release/runbooks/releases/<release>.yaml`. It does
 not branch on the target. The step-list hash is sha256 over the templates, so it never
 sees a target value. The watch steps' `notBefore` is in the hash as `{ afterStep: "R6.9", hours: "watchHours" }`, so changing the wait's form changes the hash, while a target's `watchHours` does not. W1 and R7.4a carry `--sessions {watchSessions}` as a template word, so stage's `deferred` and prod's `graded` give the same hash. The runner prints the hash and records it in the journal.
 
@@ -340,18 +340,30 @@ release checkout and R7.7 lost its retired-checkout argument. The recorded hash 
 that list's. Every earlier stage journal is refused by SP.8, as it should be: those runs
 rehearsed a list that no longer exists.
 
-### Delta steps
+### Release runbooks: templates and copies
 
-A release that needs a one-time action (the v0.6.0 credential file, a member rebind, a
-second boot) declares it as a **delta step** in `RELEASE_DELTAS` (`scripts/release/steps.ts`),
-keyed by the release name the target carries, with the runbook text in that release's delta
-runbook. `stepsFor(release)` inserts it after its `after` step for that release only. A delta
-step carries `gateAbsent`: a file whose absence proves the action has not run (for example
-`{home}/.config/robotmoney/credential.json`). The rendered command runs the action only while
-the file is absent, and records `skipped: <path> exists` otherwise, so a second run of the
-same list never repeats it. The hash is taken over the list with the delta, so stage and
-production of that release share it, and the generic list's hash is untouched. The generic
-list holds no delta today.
+The steps are YAML (`scripts/release/runbook.ts`, D70). A **template** is the general runbook:
+`scripts/release/runbooks/templates/kitchen-sink.yaml`, every step a full-stack release runs, is the
+default. A website-only template joins with its runner mode (gap Z4, issue 1305).
+
+Each release has its **own runbook**, `scripts/release/runbooks/releases/<release>.yaml`: it names
+its template (`template: kitchen-sink` when omitted) and holds a full copy of the template's steps,
+plus the steps and checks only that release needs. It **only adds**:
+
+- every template step stays, unchanged and in the template's order;
+- an added step may sit anywhere, and carries `added: <the release>` and an id the template lacks;
+- a one-time action (the v0.6.0 credential file, a member rebind, a second boot) is an added step
+  with `gateAbsent`: a file whose absence proves the action has not run (for example
+  `{home}/.config/robotmoney/credential.json`). The rendered command runs the action only while the
+  file is absent, and records `skipped: <path> exists` otherwise, so a second run of the same list
+  never repeats it.
+
+The runner reads the runbook of the release the target names. It refuses a release without one,
+and one that drops, edits or reorders a template step. A unit test
+(`scripts/tests/unit/release-runbook.test.ts`) holds every in-flight release runbook (the targets'
+release and later) to the current template, so a step added to the template reaches them in the
+same pull request. The hash is taken over the release runbook's steps: a copy with no additions has
+the template's hash, and an added step changes it, the same for stage and production.
 
 ## Triage of the baseline gate
 

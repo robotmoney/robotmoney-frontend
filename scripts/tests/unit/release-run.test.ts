@@ -48,7 +48,7 @@ import { noStackRefusal, runStop, smokeDownArgv, type StopDeps } from "../../rel
 import type { StackStateRecord } from "../../lib/smoke-state.ts";
 import { ledgerNotInRepo, ledgerProblems, parseRunningVersion, reconcileLedger, repoMigrations, runningPinRef } from "../../release/ledger.ts";
 import { recordedHash } from "../../release/steps-table.ts";
-import { RELEASE_DELTAS, stepsFor, type DeltaStep } from "../../release/steps.ts";
+import { checkAddOnly, loadTemplate, type ReleaseRunbook, type RunbookStep } from "../../release/runbook.ts";
 import { nextRcTag, rcTagsAt } from "../../release/tag.ts";
 import { epochProblems, inFlightCloseProblems, inFlightProblems, inFlightProblemsFor, parseSessionsFlag, paritySweep, regimeCronProblems } from "../../release/schedule-parity.ts";
 import { baselineProblems, WOULD_CLEAR_SQL } from "../../release/baseline.ts";
@@ -234,7 +234,7 @@ describe("one step list for every target (D61 rule 2)", () => {
 
   test("the hash is the same for stage and prod; the runbook records it; the one-time v0.6.0 steps are gone (issue 1272)", () => {
     expect(stepListHash()).toMatch(/^[0-9a-f]{64}$/);
-    expect(stepListHash(stepsFor("v0.6.1"))).toBe(stepListHash(stepsFor("v0.9.9")));
+    expect(stepListHash([...RELEASE_STEPS])).toBe(stepListHash());
     const ids = stepIds();
     for (const gone of ["R6.2a", "R6.7c", "R6.7d", "S8.1", "R6.2b", "R5.rc"]) expect(ids).not.toContain(gone);
     for (const s of RELEASE_STEPS) {
@@ -262,24 +262,20 @@ describe("one step list for every target (D61 rule 2)", () => {
     }
   });
 
-  test("a delta step joins one release's list after its step, gated on a receipt's absence; the generic list holds none", () => {
-    expect(RELEASE_DELTAS).toEqual({});
+  test("a one-time step a release's runbook adds is gated on a receipt's absence; the template holds none", () => {
+    expect(RELEASE_STEPS.some((s) => s.gateAbsent !== undefined)).toBe(false);
     const prod = loadTarget(join(targetsDir, "prod.json"));
-    const delta: DeltaStep = {
-      id: "D6.2a", after: "R6.2", standing: [], description: "one-time credential file", host: "target", irreversible: false, expectExit: 0, receipts: [],
+    const oneTime: RunbookStep = {
+      id: "D6.2a", added: "v0.7.0", standing: [], description: "one-time credential file", host: "target", irreversible: false, expectExit: 0, receipts: [],
       gateAbsent: "{home}/.config/robotmoney/credential.json", cmds: [["bun", "scripts/release/credentials-init.ts", "--receipt-dir", "{home}/r"]],
     };
-    const list = stepsFor("v0.7.0", RELEASE_STEPS, { "v0.7.0": [delta] });
-    const ids = list.map((s) => s.id);
-    expect(ids.indexOf("D6.2a")).toBe(ids.indexOf("R6.2") + 1);
-    expect(stepsFor("v0.7.1", RELEASE_STEPS, { "v0.7.0": [delta] }).map((s) => s.id)).toEqual(stepIds());
-    expect(stepListHash(list)).not.toBe(stepListHash());
-    const r = renderStep(list[ids.indexOf("D6.2a")]!, prod, templateValues(prod, SHA, "20261008T000000Z"));
+    const at = RELEASE_STEPS.findIndex((s) => s.id === "R6.2") + 1;
+    const runbook: ReleaseRunbook = { release: "v0.7.0", template: "kitchen-sink", steps: [...RELEASE_STEPS.slice(0, at), oneTime, ...RELEASE_STEPS.slice(at)] };
+    expect(checkAddOnly(loadTemplate(), runbook)).toEqual([]);
+    expect(stepListHash(runbook.steps)).not.toBe(stepListHash());
+    const r = renderStep(oneTime, prod, templateValues(prod, SHA, "20261008T000000Z"));
     expect(r.remote).toContain(`if test -e ${prod.home}/.config/robotmoney/credential.json; then echo`);
     expect(r.remote).toContain("credentials-init.ts");
-    // red controls: an unknown anchor and a duplicate id throw.
-    expect(() => stepsFor("v0.7.0", RELEASE_STEPS, { "v0.7.0": [{ ...delta, after: "R9.9" }] })).toThrow("R9.9");
-    expect(() => stepsFor("v0.7.0", RELEASE_STEPS, { "v0.7.0": [{ ...delta, id: "R6.3" }] })).toThrow("already a step");
   });
 
   test("the rendered commands differ only by the target's values", () => {
