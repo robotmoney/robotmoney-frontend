@@ -13,7 +13,7 @@ export function isProduction(location) {
 /** @param {string} pathname */
 export function isPrivilegedRoute(pathname) {
   // Normalize trailing slash/encoded segments before testing the same route policy.
-  try { pathname = decodeURIComponent(pathname).replace(/\/+$/, "") || "/"; }
+  try { pathname = decodeURIComponent(pathname).replace(/\/+/g, "/").replace(/\/+$/, "") || "/"; }
   catch { return true; }
   return /^\/(admin|dashboard|market|list|list2|list3|agents|lobster|vaults|wallets|methodology|about|ask-mr-roboto)(?:\/|$)/.test(pathname)
     || !!routeMetaFor(pathname)?.gated;
