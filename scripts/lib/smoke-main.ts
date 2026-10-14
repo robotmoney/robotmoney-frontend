@@ -1971,7 +1971,11 @@ main().catch(async (err) => {
   // LOCAL: the stack stays up for inspection, so the writers must be stopped
   // EXPLICITLY — leaving them running is what let a failed boot go on mutating
   // the database (a remote one, that no teardown can roll back).
-  const writers = dockerEnv ? quiesceWriters() : "none";
+  // A rolling boot (--static-port: the stack that serves the site) is the
+  // exception: by the time it fails, the services it replaced already serve,
+  // and stopping the api takes the site's API down (owner, 2026-10-14: the
+  // website never goes down). They keep running; the runbook's recovery decides.
+  const writers = !dockerEnv ? "none" : staticPortMode ? "kept" : quiesceWriters();
   // Failure may have happened before readiness wrote the stack record, yet the
   // containers can already be up. Write it best-effort so `smoke:down` can find
   // and tear them down. Never auto-teardown locally.
